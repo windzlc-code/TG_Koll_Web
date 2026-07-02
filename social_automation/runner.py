@@ -816,9 +816,7 @@ def _run_browse_feed(page, task, payload, screenshot_dir, logger) -> dict[str, A
 def _threads_like_buttons(page):
     selectors = [
         '[aria-label="Like"]',
-        '[aria-label*="Like" i]',
         '[aria-label*="赞"]',
-        'button:has-text("Like")',
     ]
     locators = []
     for selector in selectors:
@@ -827,6 +825,22 @@ def _threads_like_buttons(page):
         except Exception:
             continue
     return locators
+
+
+def _is_threads_like_candidate(locator) -> bool:
+    label = ""
+    text = ""
+    with contextlib.suppress(Exception):
+        label = str(locator.get_attribute("aria-label") or "")
+    with contextlib.suppress(Exception):
+        text = str(locator.inner_text(timeout=500) or "")
+    probe = f"{label} {text}".strip().lower()
+    if not probe:
+        return False
+    blocked = ("unlike", "liked", "取消", "已赞", "已按赞", "收回")
+    if any(item in probe for item in blocked):
+        return False
+    return "like" in probe or "赞" in probe
 
 
 def _click_some_threads_likes(page, logger: AutomationLogger, limit: int) -> int:
@@ -843,7 +857,11 @@ def _click_some_threads_likes(page, logger: AutomationLogger, limit: int) -> int
         for index in indices:
             try:
                 loc = group.nth(index)
-                if loc.is_visible(timeout=1000):
+                if loc.is_visible(timeout=1000) and _is_threads_like_candidate(loc):
+                    label = ""
+                    with contextlib.suppress(Exception):
+                        label = str(loc.get_attribute("aria-label") or "")
+                    logger.log("debug", "threads_like_candidate", "Selected unliked Threads like button", {"aria_label": label})
                     _human_click(page, loc, logger, "threads_like")
                     clicked += 1
                     _sleep_between(1.0, 2.5)
