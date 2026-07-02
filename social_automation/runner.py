@@ -749,26 +749,26 @@ def _slow_human_scroll(page) -> dict[str, Any]:
     roll = random.random()
     if roll < 0.12:
         direction = -1
-        total_delta = random.randint(120, 360)
-        pause_range = (0.45, 1.15)
+        total_delta = random.randint(80, 260)
+        pause_range = (0.75, 1.6)
     elif roll < 0.38:
         direction = 1
-        total_delta = random.randint(180, 460)
-        pause_range = (0.35, 1.0)
+        total_delta = random.randint(120, 360)
+        pause_range = (0.65, 1.4)
     elif roll < 0.84:
         direction = 1
-        total_delta = random.randint(480, 920)
-        pause_range = (0.28, 0.85)
+        total_delta = random.randint(360, 760)
+        pause_range = (0.55, 1.25)
     else:
         direction = 1
-        total_delta = random.randint(930, 1450)
-        pause_range = (0.22, 0.7)
+        total_delta = random.randint(760, 1120)
+        pause_range = (0.45, 1.1)
 
     remaining = total_delta
     segments = 0
     micro_reverse = 0
     while remaining > 0:
-        step = min(remaining, random.randint(55, 190))
+        step = min(remaining, random.randint(35, 125))
         page.mouse.wheel(0, direction * step)
         remaining -= step
         segments += 1
@@ -776,10 +776,10 @@ def _slow_human_scroll(page) -> dict[str, Any]:
             back_step = random.randint(25, 95)
             page.mouse.wheel(0, -back_step)
             micro_reverse += back_step
-            _sleep_between(0.18, 0.55)
+            _sleep_between(0.35, 0.9)
         _sleep_between(*pause_range)
-        if random.random() < 0.18:
-            _sleep_between(0.7, 1.8)
+        if random.random() < 0.25:
+            _sleep_between(0.9, 2.6)
     return {
         "delta": direction * total_delta,
         "direction": "up" if direction < 0 else "down",
@@ -835,10 +835,12 @@ def _click_some_threads_likes(page, logger: AutomationLogger, limit: int) -> int
         return clicked
     for group in _threads_like_buttons(page):
         try:
-            count = min(group.count(), limit - clicked)
+            total = group.count()
         except Exception:
             continue
-        for index in range(count):
+        indices = list(range(min(total, 24)))
+        random.shuffle(indices)
+        for index in indices:
             try:
                 loc = group.nth(index)
                 if loc.is_visible(timeout=1000):
@@ -850,6 +852,68 @@ def _click_some_threads_likes(page, logger: AutomationLogger, limit: int) -> int
             except Exception:
                 continue
     return clicked
+
+
+def _open_random_threads_post(page, logger: AutomationLogger) -> bool:
+    candidates = page.locator('a[href*="/post/"]')
+    try:
+        total = candidates.count()
+    except Exception:
+        return False
+    for allow_media in (False, True):
+        indices = list(range(min(total, 48)))
+        random.shuffle(indices)
+        for index in indices:
+            try:
+                link = candidates.nth(index)
+                if not link.is_visible(timeout=800):
+                    continue
+                box = link.bounding_box()
+                if not box or box["width"] < 20 or box["height"] < 12 or box["y"] < 80:
+                    continue
+                href = str(link.get_attribute("href") or "")
+                href_lower = href.lower()
+                if "/post/" not in href_lower or (not allow_media and "/media" in href_lower):
+                    continue
+                before_url = str(page.url or "")
+                _human_click(page, link, logger, "threads_open_post")
+                _sleep_between(2.0, 4.0)
+                after_url = str(page.url or "")
+                opened = after_url != before_url or "/post/" in after_url
+                if not opened:
+                    continue
+                logger.log("info", "threads_open_post", "Opened a Threads post for reading", {"url": after_url})
+                _sleep_between(6.0, 12.0)
+                if random.random() < 0.55:
+                    detail_scroll = _slow_human_scroll(page)
+                    logger.log("debug", "threads_read_post", "Browsed inside opened Threads post", detail_scroll)
+                    _sleep_between(4.0, 9.0)
+                _return_threads_feed_after_post(page, logger)
+                return True
+            except Exception:
+                continue
+    return False
+
+
+def _return_threads_feed_after_post(page, logger: AutomationLogger) -> None:
+    for _ in range(2):
+        url = str(page.url or "").lower()
+        if "/post/" not in url and "/media" not in url:
+            break
+        with contextlib.suppress(Exception):
+            page.keyboard.press("Escape")
+            _sleep_between(0.8, 1.8)
+        try:
+            page.go_back(wait_until="domcontentloaded", timeout=12000)
+        except Exception:
+            with contextlib.suppress(Exception):
+                page.keyboard.press("Alt+Left")
+        _sleep_between(2.5, 5.5)
+    final_url = str(page.url or "")
+    if "/post/" in final_url.lower() or "/media" in final_url.lower():
+        _goto(page, THREADS_HOME, logger, "threads_return_feed")
+        final_url = str(page.url or "")
+    logger.log("info", "threads_return_feed", "Returned from opened Threads post", {"url": final_url})
 
 
 def _run_threads_warmup(page, task, payload, screenshot_dir, logger) -> dict[str, Any]:
@@ -874,12 +938,18 @@ def _run_threads_warmup(page, task, payload, screenshot_dir, logger) -> dict[str
     liked = 0
     commented = 0
     browsed = 0
+    opened_posts = 0
     comment_screenshots: list[str] = []
     deadline = time.monotonic() + session_seconds
     max_cycles = max(scroll_times, int(session_seconds / 3))
     while time.monotonic() < deadline and browsed < max_cycles:
-        if like_limit > liked and browsed > 0 and random.random() < 0.36:
+        elapsed_ratio = 1 - max(0, deadline - time.monotonic()) / max(1, session_seconds)
+        should_try_like = random.random() < 0.28 or (liked == 0 and elapsed_ratio >= 0.45 and random.random() < 0.75)
+        if like_limit > liked and browsed > 0 and should_try_like:
             liked += _click_some_threads_likes(page, logger, like_limit - liked)
+        should_open_post = browsed > 0 and (random.random() < 0.12 or (opened_posts == 0 and elapsed_ratio >= 0.3))
+        if should_open_post and _open_random_threads_post(page, logger):
+            opened_posts += 1
         if max_comments > commented and comment_chance > 0 and browsed > 0 and random.randint(1, 100) <= comment_chance:
             button = _threads_reply_button(page)
             reply_text = _pick_persona_reply(payload)
@@ -900,19 +970,19 @@ def _run_threads_warmup(page, task, payload, screenshot_dir, logger) -> dict[str
         scroll = _slow_human_scroll(page)
         browsed += 1
         remaining_seconds = max(0, int(deadline - time.monotonic()))
-        logger.log("debug", "threads_warmup", "Smoothly browsed Threads feed", {"index": browsed, **scroll, "liked": liked, "commented": commented, "remaining_seconds": remaining_seconds})
+        logger.log("debug", "threads_warmup", "Smoothly browsed Threads feed", {"index": browsed, **scroll, "liked": liked, "commented": commented, "opened_posts": opened_posts, "remaining_seconds": remaining_seconds})
         if remaining_seconds <= 0:
             break
-        _sleep_between(4.5, 10.5)
+        _sleep_between(8.0, 16.0)
     shot = _screenshot(page, screenshot_dir, task, "threads_warmup", logger)
     logger.log(
         "info",
         "completion_node",
         "Threads warmup completion node detected",
-        {"url": str(page.url or ""), "liked": liked, "commented": commented, "scrolled": browsed, "target_seconds": session_seconds, "strategy_id": strategy_id, "strategy_label": strategy_label},
+        {"url": str(page.url or ""), "liked": liked, "commented": commented, "scrolled": browsed, "opened_posts": opened_posts, "target_seconds": session_seconds, "strategy_id": strategy_id, "strategy_label": strategy_label},
         shot,
     )
-    return {"ok": True, "url": page.url, "liked": liked, "commented": commented, "scrolled": browsed, "target_seconds": session_seconds, "strategy_id": strategy_id, "strategy_label": strategy_label, "commentScreenshots": comment_screenshots, "screenshot_path": shot}
+    return {"ok": True, "url": page.url, "liked": liked, "commented": commented, "scrolled": browsed, "opened_posts": opened_posts, "target_seconds": session_seconds, "strategy_id": strategy_id, "strategy_label": strategy_label, "commentScreenshots": comment_screenshots, "screenshot_path": shot}
 
 
 def _threads_reply_button(page):

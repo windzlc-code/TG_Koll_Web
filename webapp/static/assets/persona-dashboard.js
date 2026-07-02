@@ -107,7 +107,7 @@ const PD_THREADS_STRATEGIES = {
     {
       id: "warmup_custom",
       label: "自定义养号",
-      desc: "手动设置浏览条数、点赞上限、留言上限和留言模板。",
+      desc: "手动设置点赞上限、留言上限和留言模板。",
       payload: { strategy_id: "warmup_custom", strategy_label: "自定义养号", scroll_times: 80, like_limit: 0, comment_chance: 0, max_comments: 0, require_persona_relevance: true, session_minutes: "自定义", interaction_every: "自定义" },
     },
   ],
@@ -209,7 +209,6 @@ function pdThreadsStrategyParams(strategy) {
     ];
   }
   return [
-    `滑动规模：${payload.scroll_times || 0} 条`,
     `时长：${payload.session_minutes || "按页面完成节点"}`,
     `互动间隔：${payload.interaction_every || "自动判断"}`,
     `点赞上限：${payload.like_limit || 0} 个`,
@@ -1075,7 +1074,6 @@ function pdRenderAutomationPanel(persona) {
                     <select id="personaAutoWarmupStrategy" data-threads-strategy="threads_warmup">${pdThreadsStrategyOptionsHtml("threads_warmup")}</select>
                   </div>
                   ${warmupCustom ? `<div class="persona-strategy-fields">
-                    <label>浏览条数<input id="personaAutoWarmupScrolls" type="number" min="1" max="300" value="${pdEscape(warmupDefaults.scroll_times || 80)}" /></label>
                     <label>点赞上限<input id="personaAutoWarmupLikes" type="number" min="0" max="100" value="${pdEscape(warmupDefaults.like_limit || 0)}" /></label>
                     <label>留言上限<input id="personaAutoWarmupComments" type="number" min="0" max="50" value="${pdEscape(warmupDefaults.max_comments || 0)}" /></label>
                     <label class="persona-strategy-field-wide">养号留言模板<textarea id="personaAutoWarmupTemplates" rows="2" placeholder="可选，多条用换行分隔；留空则按人设自动生成"></textarea></label>
@@ -1348,7 +1346,6 @@ function pdAutomationTaskSummary(task) {
   if (payload.auto_submit) parts.push("模式：自动输入账号密码");
   if (payload.max_posts) parts.push(`最多扫描：${payload.max_posts} 条`);
   if (payload.max_replies) parts.push(`目标回复：${payload.max_replies} 条`);
-  if (payload.scroll_times) parts.push(`滚动次数：${payload.scroll_times}`);
   if (result.replied !== undefined) parts.push(`已回复：${result.replied}`);
   if (result.scannedPosts !== undefined) parts.push(`已扫描：${result.scannedPosts}`);
   if (result.completionReason) parts.push(`完成原因：${result.completionReason}`);
@@ -2040,7 +2037,6 @@ function pdApplyThreadsCustomPayload(payload, group) {
       payload.reply_templates = [replyText];
     }
   } else if (group === "threads_warmup") {
-    payload.scroll_times = pdNumberInputValue("personaAutoWarmupScrolls", payload.scroll_times || 80, 1, 300);
     payload.like_limit = pdNumberInputValue("personaAutoWarmupLikes", payload.like_limit || 0, 0, 100);
     payload.max_comments = pdNumberInputValue("personaAutoWarmupComments", payload.max_comments || 0, 0, 50);
     payload.comment_chance = payload.max_comments > 0 ? Math.max(Number(payload.comment_chance || 100), 1) : 0;
