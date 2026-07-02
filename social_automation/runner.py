@@ -782,6 +782,8 @@ def _run_threads_warmup(page, task, payload, screenshot_dir, logger) -> dict[str
     _goto(page, THREADS_HOME, logger, "threads_warmup")
     scroll_times = int(payload.get("scroll_times") or payload.get("browse_count") or 6)
     like_limit = int(payload.get("like_limit") or 0)
+    max_comments = int(payload.get("max_comments") or 0)
+    comment_chance = int(payload.get("comment_chance") or 0)
     strategy_id = str(payload.get("strategy_id") or "tg_default")
     strategy_label = str(payload.get("strategy_label") or "原 TG 默认养号")
     logger.log("info", "threads_warmup", "Starting Threads warmup from persona automation settings", {
@@ -789,25 +791,46 @@ def _run_threads_warmup(page, task, payload, screenshot_dir, logger) -> dict[str
         "strategy_label": strategy_label,
         "scroll_times": scroll_times,
         "like_limit": like_limit,
+        "max_comments": max_comments,
+        "comment_chance": comment_chance,
         "persona_name": payload.get("persona_name") or "",
     })
     liked = 0
+    commented = 0
+    comment_screenshots: list[str] = []
     for index in range(max(1, scroll_times)):
         if like_limit > liked and index % 2 == 1:
             liked += _click_some_threads_likes(page, logger, like_limit - liked)
+        if max_comments > commented and comment_chance > 0 and index % 3 == 2 and random.randint(1, 100) <= comment_chance:
+            button = _threads_reply_button(page)
+            reply_text = _pick_persona_reply(payload)
+            if button is not None and str(reply_text or "").strip():
+                _human_click(page, button, logger, "threads_warmup_reply_button")
+                _sleep_between(1.0, 2.5)
+                box = _threads_text_box(page)
+                if box is not None:
+                    _human_click(page, box, logger, "threads_warmup_reply_focus")
+                    _human_type(page, reply_text, min_delay=0.10, max_delay=0.22)
+                    posted = _click_text_button(page, logger, ["Post", "Reply", "发布", "回覆", "回复"], "threads_warmup_reply_submit")
+                    if posted:
+                        commented += 1
+                        shot_reply = _screenshot(page, screenshot_dir, task, f"threads_warmup_comment_{commented}", logger)
+                        if shot_reply:
+                            comment_screenshots.append(shot_reply)
+                        logger.log("info", "threads_warmup_comment", "Commented during Threads warmup", {"commented": commented, "text": reply_text[:80]})
         delta = random.randint(500, 950)
         page.mouse.wheel(0, delta)
-        logger.log("debug", "threads_warmup", "Scrolled Threads feed", {"index": index + 1, "delta": delta})
+        logger.log("debug", "threads_warmup", "Scrolled Threads feed", {"index": index + 1, "delta": delta, "liked": liked, "commented": commented})
         _sleep_between(2.0, 5.0)
     shot = _screenshot(page, screenshot_dir, task, "threads_warmup", logger)
     logger.log(
         "info",
         "completion_node",
         "Threads warmup completion node detected",
-        {"url": str(page.url or ""), "liked": liked, "scrolled": scroll_times, "strategy_id": strategy_id, "strategy_label": strategy_label},
+        {"url": str(page.url or ""), "liked": liked, "commented": commented, "scrolled": scroll_times, "strategy_id": strategy_id, "strategy_label": strategy_label},
         shot,
     )
-    return {"ok": True, "url": page.url, "liked": liked, "scrolled": scroll_times, "strategy_id": strategy_id, "strategy_label": strategy_label, "screenshot_path": shot}
+    return {"ok": True, "url": page.url, "liked": liked, "commented": commented, "scrolled": scroll_times, "strategy_id": strategy_id, "strategy_label": strategy_label, "commentScreenshots": comment_screenshots, "screenshot_path": shot}
 
 
 def _threads_reply_button(page):
