@@ -6424,21 +6424,21 @@ body.page-admin {
 
 .persona-auto-password-wrap input {
   width: 100%;
-  padding-right: 46px;
+  padding-right: 54px;
 }
 
 .persona-auto-eye {
   position: absolute;
-  right: 9px;
+  right: 12px;
   top: 0;
   bottom: 0;
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   margin: auto 0;
   border: 0;
   border-radius: 50%;
   background: transparent;
-  color: #334155;
+  color: #475569;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -6447,19 +6447,28 @@ body.page-admin {
 }
 
 .persona-auto-eye-icon {
-  width: 20px;
-  height: 20px;
+  width: 23px;
+  height: 23px;
   fill: none;
   stroke: currentColor;
-  stroke-width: 2;
+  stroke-width: 2.35;
   stroke-linecap: round;
   stroke-linejoin: round;
   pointer-events: none;
 }
 
+.persona-auto-eye.is-visible .persona-auto-eye-slash {
+  display: none;
+}
+
 .persona-auto-eye:hover:not(:disabled) {
-  background: #eef2ff;
+  background: #e0f2fe;
   color: #0f172a;
+}
+
+.persona-auto-eye:focus-visible {
+  outline: 2px solid #0ea5e9;
+  outline-offset: 2px;
 }
 
 .persona-auto-eye:disabled {

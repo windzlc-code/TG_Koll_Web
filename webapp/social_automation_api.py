@@ -1109,7 +1109,6 @@ def _account_public(row: Any) -> dict[str, Any]:
         "proxy_id": str(item.get("proxy_id") or ""),
         "status": str(item.get("status") or ""),
         "login_username": str(item.get("login_username") or "") or str(item.get("username") or ""),
-        "login_password": str(item.get("login_password") or ""),
         "login_password_configured": bool(str(item.get("login_password") or "")),
         "login_credentials_updated_at": int(item.get("login_credentials_updated_at") or 0),
         "last_login_check_at": int(item.get("last_login_check_at") or 0),
