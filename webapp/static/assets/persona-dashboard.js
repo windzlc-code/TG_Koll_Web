@@ -52,6 +52,7 @@ let personaDashboardVisiblePasswordAccountId = "";
 let personaDashboardSelectedAutomationAccountId = "";
 let personaDashboardPasswordDrafts = {};
 let personaDashboardPasswordDirtyAccountIds = {};
+const PERSONA_DASHBOARD_SAVED_PASSWORD_MASK = "********";
 
 const PD_LABELS = {
   likes: "点赞",
@@ -673,10 +674,11 @@ function pdRenderAutomationPanel(persona) {
   const selectedAccountId = String((selectedAccount && selectedAccount.id) || "");
   const selectedProxyId = String((selectedAccount && selectedAccount.proxy_id) || "");
   const savedLoginUsername = String((selectedAccount && selectedAccount.login_username) || (selectedAccount && selectedAccount.username) || "");
-  const savedLoginPassword = String(personaDashboardPasswordDrafts[selectedAccountId] || "");
   const hasSavedLoginPassword = !!(selectedAccount && selectedAccount.login_password_configured);
+  const savedLoginPassword = pdAutomationPasswordDisplayValue(selectedAccountId, selectedAccount);
   const savedLoginAt = Number((selectedAccount && selectedAccount.login_credentials_updated_at) || 0);
-  const passwordVisible = !!savedLoginPassword && String(personaDashboardVisiblePasswordAccountId || "") === selectedAccountId;
+  const passwordCanReveal = !!String(personaDashboardPasswordDrafts[selectedAccountId] || "");
+  const passwordVisible = passwordCanReveal && String(personaDashboardVisiblePasswordAccountId || "") === selectedAccountId;
   const readyCount = accounts.filter((account) => account.status === "ready").length;
   const platformLabel = platform === "threads" ? "Threads" : "Instagram";
   const usernamePlaceholder = platform === "threads" ? "threads username / handle" : "instagram username";
@@ -742,8 +744,8 @@ function pdRenderAutomationPanel(persona) {
           <div class="persona-auto-login-fields">
             <input id="personaAutoLoginUsername" type="text" name="persona_auto_login_${pdEscape(selectedAccountId || "none")}" placeholder="${pdEscape(platformLabel)} 登录账号/邮箱/手机号" value="${pdEscape(savedLoginUsername)}" autocomplete="off" data-lpignore="true" data-1p-ignore="true" />
             <div class="persona-auto-password-wrap">
-              <input id="personaAutoLoginPassword" type="${passwordVisible ? "text" : "password"}" name="persona_auto_password_${pdEscape(selectedAccountId || "none")}" data-account-id="${pdEscape(selectedAccountId)}" placeholder="${hasSavedLoginPassword ? "已保存密码" : "登录密码，可选择长期保存"}" value="${pdEscape(savedLoginPassword)}" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true" />
-              <button class="persona-auto-eye ${passwordVisible ? "is-visible" : ""}" type="button" id="personaAutoTogglePassword" aria-label="${passwordVisible ? "隐藏密码" : "显示密码"}" title="${passwordVisible ? "隐藏密码" : "显示密码"}">
+              <input id="personaAutoLoginPassword" type="${passwordVisible ? "text" : "password"}" name="persona_auto_password_${pdEscape(selectedAccountId || "none")}" data-account-id="${pdEscape(selectedAccountId)}" data-saved-mask="${hasSavedLoginPassword && !passwordCanReveal ? "1" : "0"}" placeholder="${hasSavedLoginPassword ? "已保存密码" : "登录密码，可选择长期保存"}" value="${pdEscape(savedLoginPassword)}" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true" />
+              <button class="persona-auto-eye ${passwordVisible ? "is-visible" : ""}" type="button" id="personaAutoTogglePassword" aria-label="${passwordVisible ? "隐藏密码" : "显示密码"}" title="${passwordCanReveal ? (passwordVisible ? "隐藏密码" : "显示密码") : "已保存密码仅显示掩码"}" ${passwordCanReveal ? "" : "disabled"}>
                 <svg class="persona-auto-eye-icon" viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path>
                   <circle cx="12" cy="12" r="3"></circle>
@@ -753,7 +755,7 @@ function pdRenderAutomationPanel(persona) {
             </div>
           </div>
           <div class="persona-auto-inline persona-auto-credential-tools">
-            <span class="persona-auto-credential-state">${hasSavedLoginPassword ? `已保存${savedLoginAt ? ` · ${pdEscape(pdDate(savedLoginAt * 1000))}` : ""}` : "未保存登录资料"}</span>
+            <span class="persona-auto-credential-state ${hasSavedLoginPassword ? "is-saved" : "is-empty"}">${hasSavedLoginPassword ? `已保存密码${savedLoginAt ? ` · ${pdEscape(pdDate(savedLoginAt * 1000))}` : ""}` : "未保存登录资料"}</span>
             <button class="ghost" type="button" id="personaAutoSaveLogin" ${accounts.length ? "" : "disabled"}>保存登录资料</button>
             <button class="ghost" type="button" id="personaAutoClearLogin" ${hasSavedLoginPassword ? "" : "disabled"}>删除登录资料</button>
           </div>
@@ -1570,17 +1572,44 @@ function pdSelectedAutomationAccount() {
   return (personaDashboardAutomation.accounts || []).find((account) => String(account.id || "") === id) || null;
 }
 
+function pdAutomationPasswordDisplayValue(accountId, account = null) {
+  const draft = String(personaDashboardPasswordDrafts[accountId] || "");
+  if (draft) return draft;
+  return account && account.login_password_configured ? PERSONA_DASHBOARD_SAVED_PASSWORD_MASK : "";
+}
+
+function pdAutomationPasswordIsSavedMask(value) {
+  return String(value || "") === PERSONA_DASHBOARD_SAVED_PASSWORD_MASK;
+}
+
+function pdAutomationTypedPassword(accountId) {
+  const input = pdEl("personaAutoLoginPassword");
+  const value = String((input && input.value) || "");
+  if (!personaDashboardPasswordDirtyAccountIds[accountId]) return "";
+  if (pdAutomationPasswordIsSavedMask(value)) return "";
+  return value;
+}
+
 function pdNormalizeAutomationPasswordField() {
   const input = pdEl("personaAutoLoginPassword");
   if (!input) return;
   const accountId = pdSelectedAutomationAccountId();
-  const expected = String(personaDashboardPasswordDrafts[accountId] || "");
+  const account = pdSelectedAutomationAccount();
+  const expected = pdAutomationPasswordDisplayValue(accountId, account);
   if (document.activeElement === input && input.value !== expected) return;
   if (input.value !== expected) input.value = expected;
+  const toggle = pdEl("personaAutoTogglePassword");
+  const hasRevealableDraft = !!String(personaDashboardPasswordDrafts[accountId] || "");
+  input.setAttribute("data-saved-mask", account && account.login_password_configured && !hasRevealableDraft ? "1" : "0");
+  if (toggle) {
+    toggle.disabled = !hasRevealableDraft;
+    toggle.classList.toggle("is-visible", hasRevealableDraft && input.type === "text");
+    toggle.setAttribute("aria-label", input.type === "text" ? "隐藏密码" : "显示密码");
+    toggle.setAttribute("title", hasRevealableDraft ? (input.type === "text" ? "隐藏密码" : "显示密码") : "已保存密码仅显示掩码");
+  }
   if (!expected) {
     input.type = "password";
     personaDashboardVisiblePasswordAccountId = "";
-    const toggle = pdEl("personaAutoTogglePassword");
     if (toggle) {
       toggle.classList.remove("is-visible");
       toggle.setAttribute("aria-label", "显示密码");
@@ -1760,11 +1789,12 @@ function pdBindAutomationEvents(persona, root) {
       const passwordInput = pdEl("personaAutoLoginPassword");
       if (usernameInput) usernameInput.value = String((account && account.login_username) || (account && account.username) || "");
       if (passwordInput) {
-        passwordInput.value = String(personaDashboardPasswordDrafts[personaDashboardSelectedAutomationAccountId] || "");
+        passwordInput.value = pdAutomationPasswordDisplayValue(personaDashboardSelectedAutomationAccountId, account);
         passwordInput.type = "password";
         passwordInput.name = `persona_auto_password_${personaDashboardSelectedAutomationAccountId || "none"}`;
         passwordInput.autocomplete = "new-password";
         passwordInput.setAttribute("data-account-id", personaDashboardSelectedAutomationAccountId);
+        passwordInput.setAttribute("data-saved-mask", account && account.login_password_configured && !personaDashboardPasswordDrafts[personaDashboardSelectedAutomationAccountId] ? "1" : "0");
         passwordInput.placeholder = account && account.login_password_configured ? "已保存密码" : "登录密码，可选择长期保存";
       }
       pdScheduleAutomationPasswordNormalize();
@@ -1772,11 +1802,17 @@ function pdBindAutomationEvents(persona, root) {
   }
   const passwordField = pdEl("personaAutoLoginPassword");
   if (passwordField) {
+    passwordField.addEventListener("focus", () => {
+      if (pdAutomationPasswordIsSavedMask(passwordField.value) && passwordField.getAttribute("data-saved-mask") === "1") {
+        passwordField.select();
+      }
+    });
     passwordField.addEventListener("input", () => {
       const accountId = pdSelectedAutomationAccountId();
       if (!accountId) return;
       personaDashboardPasswordDrafts[accountId] = String(passwordField.value || "");
       personaDashboardPasswordDirtyAccountIds[accountId] = true;
+      passwordField.setAttribute("data-saved-mask", "0");
     });
   }
   const togglePassword = pdEl("personaAutoTogglePassword");
@@ -1785,6 +1821,7 @@ function pdBindAutomationEvents(persona, root) {
       const accountId = pdSelectedAutomationAccountId();
       const passwordInput = pdEl("personaAutoLoginPassword");
       if (!passwordInput) return;
+      if (pdAutomationPasswordIsSavedMask(passwordInput.value) && passwordInput.getAttribute("data-saved-mask") === "1") return;
       const willShow = passwordInput.type === "password";
       personaDashboardVisiblePasswordAccountId = willShow ? accountId : "";
       passwordInput.type = willShow ? "text" : "password";
@@ -1799,8 +1836,7 @@ function pdBindAutomationEvents(persona, root) {
       const accountId = pdSelectedAutomationAccountId();
       const account = pdSelectedAutomationAccount();
       const loginUsername = String((pdEl("personaAutoLoginUsername") && pdEl("personaAutoLoginUsername").value) || "").trim();
-      const passwordWasTyped = !!personaDashboardPasswordDirtyAccountIds[accountId];
-      const loginPassword = passwordWasTyped ? String((pdEl("personaAutoLoginPassword") && pdEl("personaAutoLoginPassword").value) || "") : "";
+      const loginPassword = pdAutomationTypedPassword(accountId);
       if (!accountId) {
         pdSetMsg("请先选择执行账号。", "err");
         return;
@@ -1827,6 +1863,7 @@ function pdBindAutomationEvents(persona, root) {
         });
         personaDashboardVisiblePasswordAccountId = "";
         if (loginPassword) personaDashboardPasswordDrafts[accountId] = loginPassword;
+        else if (account && account.login_password_configured) delete personaDashboardPasswordDrafts[accountId];
         delete personaDashboardPasswordDirtyAccountIds[accountId];
         if (pdEl("personaAutoLoginPassword")) pdEl("personaAutoLoginPassword").type = "password";
         await pdLoadAutomationOverview();
@@ -1895,8 +1932,7 @@ function pdBindAutomationEvents(persona, root) {
       const account = pdSelectedAutomationAccount();
       const platform = pdSelectedAutomationPlatform();
       const loginUsername = String((pdEl("personaAutoLoginUsername") && pdEl("personaAutoLoginUsername").value) || (account && account.username) || "").trim();
-      const passwordWasTyped = !!personaDashboardPasswordDirtyAccountIds[accountId];
-      const loginPassword = passwordWasTyped ? String((pdEl("personaAutoLoginPassword") && pdEl("personaAutoLoginPassword").value) || "") : "";
+      const loginPassword = pdAutomationTypedPassword(accountId);
       const hasSavedLoginPassword = !!(account && account.login_password_configured);
       if (!accountId) {
         pdSetMsg("请先选择执行账号。", "err");
@@ -1931,6 +1967,7 @@ function pdBindAutomationEvents(persona, root) {
         });
         personaDashboardVisiblePasswordAccountId = "";
         if (loginPassword) personaDashboardPasswordDrafts[accountId] = loginPassword;
+        else if (hasSavedLoginPassword) delete personaDashboardPasswordDrafts[accountId];
         delete personaDashboardPasswordDirtyAccountIds[accountId];
         if (pdEl("personaAutoLoginPassword")) pdEl("personaAutoLoginPassword").type = "password";
         await pdLoadAutomationOverview();
