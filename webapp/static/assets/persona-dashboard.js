@@ -104,6 +104,12 @@ const PD_THREADS_STRATEGIES = {
       desc: "在浏览过程中加入点赞和人设留言，适合已稳定账号和回复素材较完整时。",
       payload: { strategy_id: "like_comment", strategy_label: "互动养号：点赞/留言", scroll_times: 80, like_limit: 16, comment_chance: 100, max_comments: 8, require_persona_relevance: true, session_minutes: "7-10", interaction_every: "2-3" },
     },
+    {
+      id: "warmup_custom",
+      label: "自定义养号",
+      desc: "手动设置浏览条数、点赞上限、留言上限和留言模板。",
+      payload: { strategy_id: "warmup_custom", strategy_label: "自定义养号", scroll_times: 80, like_limit: 0, comment_chance: 0, max_comments: 0, require_persona_relevance: true, session_minutes: "自定义", interaction_every: "自定义" },
+    },
   ],
   threads_comment_reply: [
     {
@@ -124,6 +130,12 @@ const PD_THREADS_STRATEGIES = {
       desc: "扩大评论查找范围，适合需要补处理历史评论时使用。",
       payload: { strategy_id: "comment_recent_7d", strategy_label: "自动回复评论：最近 7 天", reply_scope: "comments", max_posts: 5, max_replies: 3, max_age_days: 7, require_persona_relevance: true },
     },
+    {
+      id: "comment_custom",
+      label: "自定义评论回复",
+      desc: "手动设置查看天数、扫描篇数、回复上限，也可填写固定回复内容。",
+      payload: { strategy_id: "comment_custom", strategy_label: "自定义评论回复", reply_scope: "comments", max_posts: 5, max_replies: 3, max_age_days: 2, require_persona_relevance: true },
+    },
   ],
   threads_hot_reply: [
     {
@@ -143,6 +155,12 @@ const PD_THREADS_STRATEGIES = {
       label: "热点推文：千次浏览以上",
       desc: "只处理达到浏览门槛的已发布 Threads 推文，避免低价值目标。",
       payload: { strategy_id: "hot_views_1000", strategy_label: "热点推文：千次浏览以上", reply_scope: "hot_posts", max_posts: 5, max_replies: 3, max_age_days: 30, min_views: 1000, require_persona_relevance: true },
+    },
+    {
+      id: "hot_custom",
+      label: "自定义热点回复",
+      desc: "手动设置浏览门槛、目标 URL、查看范围和固定回复内容。",
+      payload: { strategy_id: "hot_custom", strategy_label: "自定义热点回复", reply_scope: "hot_posts", max_posts: 5, max_replies: 3, max_age_days: 30, min_views: 0, require_persona_relevance: true },
     },
   ],
 };
@@ -214,6 +232,10 @@ function pdThreadsStrategyDetailHtml(group) {
 function pdThreadsStrategyPayload(group) {
   const strategy = pdThreadsStrategyById(group, pdThreadsStrategySelectedId(group));
   return (strategy && strategy.payload) || {};
+}
+
+function pdThreadsStrategyIsCustom(group) {
+  return String(pdThreadsStrategySelectedId(group) || "").endsWith("_custom");
 }
 
 let personaDashboardData = null;
@@ -893,9 +915,14 @@ function pdRenderAutomationPanel(persona) {
   const readyCount = accounts.filter((account) => account.status === "ready").length;
   const platformLabel = platform === "threads" ? "Threads" : "Instagram";
   const usernamePlaceholder = platform === "threads" ? "threads username / handle" : "instagram username";
+  const activeReplyTab = localStorage.getItem("personaDashboardThreadsReplyTab") === "hot" ? "hot" : "comment";
+  const activeReplyGroup = activeReplyTab === "hot" ? "threads_hot_reply" : "threads_comment_reply";
   const commentDefaults = pdThreadsStrategyPayload("threads_comment_reply");
   const hotDefaults = pdThreadsStrategyPayload("threads_hot_reply");
   const warmupDefaults = pdThreadsStrategyPayload("threads_warmup");
+  const commentCustom = pdThreadsStrategyIsCustom("threads_comment_reply");
+  const hotCustom = pdThreadsStrategyIsCustom("threads_hot_reply");
+  const warmupCustom = pdThreadsStrategyIsCustom("threads_warmup");
   const accountOptions = accounts.map((account) => `
     <option value="${pdEscape(account.id)}">${pdEscape(account.username || account.id)} · ${pdEscape(pdAutomationStatusLabel(account.status))}</option>
   `).join("");
@@ -988,53 +1015,51 @@ function pdRenderAutomationPanel(persona) {
         <div class="persona-auto-box persona-auto-box-wide">
           ${platform === "threads" ? `
             <label>Threads 自动化方式</label>
-            <div class="small">每个功能都有独立策略和自定义参数。下拉用于快速切换预设，输入框用于覆盖本次执行参数。</div>
+            <div class="small">可直接使用预设策略；选择自定义后才会展开本次执行参数。</div>
             <div class="persona-strategy-panel">
               <div class="persona-strategy-section">
                 <div class="persona-strategy-head">
                   <div>
-                    <strong>自动回复评论</strong>
-                    <small>扫描评论入口，按当前人设回复符合条件的评论。</small>
+                    <strong>自动回复</strong>
+                    <small>评论回复和热点推文回复共用一个容器，通过左右页签切换。</small>
                   </div>
-                  <button class="primary persona-strategy-action" type="button" data-auto-task="threads_auto_reply" data-threads-group="threads_comment_reply" ${accounts.length ? "" : "disabled"}>执行评论回复</button>
+                  <button class="primary persona-strategy-action" type="button" data-auto-task="threads_auto_reply" data-threads-group="${pdEscape(activeReplyGroup)}" ${accounts.length ? "" : "disabled"}>${activeReplyTab === "hot" ? "执行热点回复" : "执行评论回复"}</button>
                 </div>
-                <div class="persona-strategy-row">
+                <div class="persona-reply-tabs" role="tablist" aria-label="自动回复分支">
+                  <button class="${activeReplyTab === "comment" ? "is-active" : ""}" type="button" role="tab" aria-selected="${activeReplyTab === "comment" ? "true" : "false"}" data-threads-reply-tab="comment">自动回复评论</button>
+                  <button class="${activeReplyTab === "hot" ? "is-active" : ""}" type="button" role="tab" aria-selected="${activeReplyTab === "hot" ? "true" : "false"}" data-threads-reply-tab="hot">自动回复热点推文</button>
+                </div>
+                ${activeReplyTab === "comment" ? `
+                <div class="persona-strategy-row persona-strategy-row-compact">
                   <div class="persona-strategy-picker">
                     <label for="personaAutoCommentStrategy">评论回复策略</label>
                     <select id="personaAutoCommentStrategy" data-threads-strategy="threads_comment_reply">${pdThreadsStrategyOptionsHtml("threads_comment_reply")}</select>
                   </div>
-                  <div class="persona-strategy-fields">
+                  ${commentCustom ? `<div class="persona-strategy-fields">
                     <label>查看天数<input id="personaAutoCommentDays" type="number" min="1" max="30" value="${pdEscape(commentDefaults.max_age_days || 2)}" /></label>
                     <label>扫描篇数<input id="personaAutoCommentPosts" type="number" min="1" max="20" value="${pdEscape(commentDefaults.max_posts || 5)}" /></label>
                     <label>回复上限<input id="personaAutoCommentReplies" type="number" min="1" max="10" value="${pdEscape(commentDefaults.max_replies || 3)}" /></label>
                     <label class="persona-strategy-field-wide">自定义回复内容<textarea id="personaAutoCommentReplyText" rows="2" placeholder="留空则按人设自动生成"></textarea></label>
-                  </div>
+                  </div>` : ""}
                   <div class="persona-strategy-detail">${pdThreadsStrategyDetailHtml("threads_comment_reply")}</div>
                 </div>
-              </div>
-              <div class="persona-strategy-section">
-                <div class="persona-strategy-head">
-                  <div>
-                    <strong>自动回复热点推文</strong>
-                    <small>从已发布和热点数据提取目标推文，打开后按人设回复。</small>
-                  </div>
-                  <button class="primary persona-strategy-action" type="button" data-auto-task="threads_auto_reply" data-threads-group="threads_hot_reply" ${accounts.length ? "" : "disabled"}>执行热点回复</button>
-                </div>
-                <div class="persona-strategy-row">
+                ` : `
+                <div class="persona-strategy-row persona-strategy-row-compact">
                   <div class="persona-strategy-picker">
                     <label for="personaAutoHotStrategy">热点回复策略</label>
                     <select id="personaAutoHotStrategy" data-threads-strategy="threads_hot_reply">${pdThreadsStrategyOptionsHtml("threads_hot_reply")}</select>
                   </div>
-                  <div class="persona-strategy-fields">
+                  ${hotCustom ? `<div class="persona-strategy-fields">
                     <label>最低浏览<input id="personaAutoHotMinViews" type="number" min="0" max="999999999" value="${pdEscape(hotDefaults.min_views || 0)}" /></label>
                     <label>查看天数<input id="personaAutoHotDays" type="number" min="1" max="365" value="${pdEscape(hotDefaults.max_age_days || 30)}" /></label>
                     <label>目标篇数<input id="personaAutoHotPosts" type="number" min="1" max="20" value="${pdEscape(hotDefaults.max_posts || 5)}" /></label>
                     <label>回复上限<input id="personaAutoHotReplies" type="number" min="1" max="10" value="${pdEscape(hotDefaults.max_replies || 3)}" /></label>
                     <label class="persona-strategy-field-wide">指定热点推文 URL<textarea id="personaAutoHotTargetUrls" rows="2" placeholder="可选，多个链接用换行或英文逗号分隔"></textarea></label>
                     <label class="persona-strategy-field-wide">自定义回复内容<textarea id="personaAutoHotReplyText" rows="2" placeholder="留空则按人设和推文自动生成"></textarea></label>
-                  </div>
+                  </div>` : ""}
                   <div class="persona-strategy-detail">${pdThreadsStrategyDetailHtml("threads_hot_reply")}</div>
                 </div>
+                `}
               </div>
               <div class="persona-strategy-section">
                 <div class="persona-strategy-head">
@@ -1044,17 +1069,17 @@ function pdRenderAutomationPanel(persona) {
                   </div>
                   <button class="ghost persona-strategy-action" type="button" data-auto-task="threads_warmup" data-threads-group="threads_warmup" ${accounts.length ? "" : "disabled"}>执行养号</button>
                 </div>
-                <div class="persona-strategy-row">
+                <div class="persona-strategy-row persona-strategy-row-compact">
                   <div class="persona-strategy-picker">
                     <label for="personaAutoWarmupStrategy">养号策略</label>
                     <select id="personaAutoWarmupStrategy" data-threads-strategy="threads_warmup">${pdThreadsStrategyOptionsHtml("threads_warmup")}</select>
                   </div>
-                  <div class="persona-strategy-fields">
+                  ${warmupCustom ? `<div class="persona-strategy-fields">
                     <label>浏览条数<input id="personaAutoWarmupScrolls" type="number" min="1" max="300" value="${pdEscape(warmupDefaults.scroll_times || 80)}" /></label>
                     <label>点赞上限<input id="personaAutoWarmupLikes" type="number" min="0" max="100" value="${pdEscape(warmupDefaults.like_limit || 0)}" /></label>
                     <label>留言上限<input id="personaAutoWarmupComments" type="number" min="0" max="50" value="${pdEscape(warmupDefaults.max_comments || 0)}" /></label>
                     <label class="persona-strategy-field-wide">养号留言模板<textarea id="personaAutoWarmupTemplates" rows="2" placeholder="可选，多条用换行分隔；留空则按人设自动生成"></textarea></label>
-                  </div>
+                  </div>` : ""}
                   <div class="persona-strategy-detail">${pdThreadsStrategyDetailHtml("threads_warmup")}</div>
                 </div>
               </div>
@@ -2409,6 +2434,13 @@ function pdBindAutomationEvents(persona, root) {
       const taskType = String(node.getAttribute("data-threads-strategy") || "");
       const selected = String(node.value || "tg_default");
       localStorage.setItem(pdThreadsStrategyStorageKey(taskType), selected);
+      pdRenderDashboard();
+    });
+  });
+  root.querySelectorAll("[data-threads-reply-tab]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const tab = String(node.getAttribute("data-threads-reply-tab") || "comment") === "hot" ? "hot" : "comment";
+      localStorage.setItem("personaDashboardThreadsReplyTab", tab);
       pdRenderDashboard();
     });
   });

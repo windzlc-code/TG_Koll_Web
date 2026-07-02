@@ -1145,6 +1145,11 @@ def _enrich_threads_task_payload(persona_id: str, task_type: str, payload: dict[
             next_payload.setdefault("max_comments", 8)
             next_payload.setdefault("comment_chance", 100)
             next_payload.setdefault("require_persona_relevance", True)
+        elif strategy_id == "warmup_custom":
+            next_payload.setdefault("strategy_label", "自定义养号")
+            next_payload.setdefault("scroll_times", 80)
+            next_payload.setdefault("like_limit", 0)
+            next_payload.setdefault("max_comments", 0)
         else:
             next_payload.setdefault("strategy_label", "默认养号：滑动 + 随机点赞")
             next_payload.setdefault("scroll_times", 80)
@@ -1165,13 +1170,22 @@ def _enrich_threads_task_payload(persona_id: str, task_type: str, payload: dict[
             next_payload.setdefault("max_replies", 3)
             next_payload.setdefault("max_age_days", 7)
             next_payload.setdefault("reply_scope", "comments")
-        elif strategy_id in {"hot_posts", "hot_recent_7d", "hot_views_1000"}:
+        elif strategy_id == "comment_custom":
+            next_payload.setdefault("strategy_label", "自定义评论回复")
+            next_payload.setdefault("max_posts", 5)
+            next_payload.setdefault("max_replies", 3)
+            next_payload.setdefault("max_age_days", 2)
+            next_payload.setdefault("reply_scope", "comments")
+        elif strategy_id in {"hot_posts", "hot_recent_7d", "hot_views_1000", "hot_custom"}:
             if strategy_id == "hot_recent_7d":
                 next_payload.setdefault("strategy_label", "热点推文：最近 7 天")
                 next_payload.setdefault("max_age_days", 7)
             elif strategy_id == "hot_views_1000":
                 next_payload.setdefault("strategy_label", "热点推文：千次浏览以上")
                 next_payload.setdefault("min_views", 1000)
+            elif strategy_id == "hot_custom":
+                next_payload.setdefault("strategy_label", "自定义热点回复")
+                next_payload.setdefault("max_age_days", 30)
             else:
                 next_payload.setdefault("strategy_label", "自动回复热点推文")
                 next_payload.setdefault("max_age_days", 30)
