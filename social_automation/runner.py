@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import os
 import random
+import re
 import time
 from pathlib import Path
 from typing import Any, Protocol
@@ -739,20 +740,70 @@ def _run_check_login(page, task, account, payload, screenshot_dir, logger, platf
 
 def _warmup_scroll(page, logger: AutomationLogger, times: int = 2) -> None:
     for index in range(max(1, times)):
-        total_delta = _slow_human_scroll(page)
-        logger.log("debug", "warmup", "Slowly browsed feed", {"index": index + 1, "delta": total_delta})
+        scroll = _slow_human_scroll(page)
+        logger.log("debug", "warmup", "Slowly browsed feed", {"index": index + 1, **scroll})
         _sleep_between(4.0, 8.0)
 
 
-def _slow_human_scroll(page) -> int:
-    total_delta = random.randint(520, 900)
+def _slow_human_scroll(page) -> dict[str, Any]:
+    roll = random.random()
+    if roll < 0.12:
+        direction = -1
+        total_delta = random.randint(120, 360)
+        pause_range = (0.45, 1.15)
+    elif roll < 0.38:
+        direction = 1
+        total_delta = random.randint(180, 460)
+        pause_range = (0.35, 1.0)
+    elif roll < 0.84:
+        direction = 1
+        total_delta = random.randint(480, 920)
+        pause_range = (0.28, 0.85)
+    else:
+        direction = 1
+        total_delta = random.randint(930, 1450)
+        pause_range = (0.22, 0.7)
+
     remaining = total_delta
+    segments = 0
+    micro_reverse = 0
     while remaining > 0:
-        step = min(remaining, random.randint(90, 180))
-        page.mouse.wheel(0, step)
+        step = min(remaining, random.randint(55, 190))
+        page.mouse.wheel(0, direction * step)
         remaining -= step
-        _sleep_between(0.35, 0.9)
-    return total_delta
+        segments += 1
+        if direction > 0 and remaining > 0 and random.random() < 0.16:
+            back_step = random.randint(25, 95)
+            page.mouse.wheel(0, -back_step)
+            micro_reverse += back_step
+            _sleep_between(0.18, 0.55)
+        _sleep_between(*pause_range)
+        if random.random() < 0.18:
+            _sleep_between(0.7, 1.8)
+    return {
+        "delta": direction * total_delta,
+        "direction": "up" if direction < 0 else "down",
+        "segments": segments,
+        "micro_reverse": micro_reverse,
+    }
+
+
+def _warmup_session_seconds(payload: dict[str, Any], default_seconds: int = 8 * 60) -> int:
+    for key in ("session_seconds", "duration_seconds"):
+        value = payload.get(key)
+        if value is None or value == "":
+            continue
+        with contextlib.suppress(Exception):
+            return max(15, min(7200, int(float(value))))
+
+    raw = str(payload.get("session_minutes") or "").strip()
+    numbers = [float(item) for item in re.findall(r"\d+(?:\.\d+)?", raw)]
+    if len(numbers) >= 2:
+        low, high = sorted(numbers[:2])
+        return max(15, min(7200, int(random.uniform(low, high) * 60)))
+    if len(numbers) == 1:
+        return max(15, min(7200, int(numbers[0] * 60)))
+    return default_seconds
 
 
 def _run_browse_feed(page, task, payload, screenshot_dir, logger) -> dict[str, Any]:
@@ -807,12 +858,14 @@ def _run_threads_warmup(page, task, payload, screenshot_dir, logger) -> dict[str
     like_limit = int(payload.get("like_limit") or 0)
     max_comments = int(payload.get("max_comments") or 0)
     comment_chance = int(payload.get("comment_chance") or 0)
+    session_seconds = _warmup_session_seconds(payload)
     strategy_id = str(payload.get("strategy_id") or "tg_default")
     strategy_label = str(payload.get("strategy_label") or "默认养号：滑动 + 随机点赞")
     logger.log("info", "threads_warmup", "Starting Threads warmup from persona automation settings", {
         "strategy_id": strategy_id,
         "strategy_label": strategy_label,
         "scroll_times": scroll_times,
+        "session_seconds": session_seconds,
         "like_limit": like_limit,
         "max_comments": max_comments,
         "comment_chance": comment_chance,
@@ -820,11 +873,14 @@ def _run_threads_warmup(page, task, payload, screenshot_dir, logger) -> dict[str
     })
     liked = 0
     commented = 0
+    browsed = 0
     comment_screenshots: list[str] = []
-    for index in range(max(1, scroll_times)):
-        if like_limit > liked and index % 2 == 1:
+    deadline = time.monotonic() + session_seconds
+    max_cycles = max(scroll_times, int(session_seconds / 3))
+    while time.monotonic() < deadline and browsed < max_cycles:
+        if like_limit > liked and browsed > 0 and random.random() < 0.36:
             liked += _click_some_threads_likes(page, logger, like_limit - liked)
-        if max_comments > commented and comment_chance > 0 and index % 3 == 2 and random.randint(1, 100) <= comment_chance:
+        if max_comments > commented and comment_chance > 0 and browsed > 0 and random.randint(1, 100) <= comment_chance:
             button = _threads_reply_button(page)
             reply_text = _pick_persona_reply(payload)
             if button is not None and str(reply_text or "").strip():
@@ -841,18 +897,22 @@ def _run_threads_warmup(page, task, payload, screenshot_dir, logger) -> dict[str
                         if shot_reply:
                             comment_screenshots.append(shot_reply)
                         logger.log("info", "threads_warmup_comment", "Commented during Threads warmup", {"commented": commented, "text": reply_text[:80]})
-        delta = _slow_human_scroll(page)
-        logger.log("debug", "threads_warmup", "Slowly browsed Threads feed", {"index": index + 1, "delta": delta, "liked": liked, "commented": commented})
-        _sleep_between(4.0, 9.0)
+        scroll = _slow_human_scroll(page)
+        browsed += 1
+        remaining_seconds = max(0, int(deadline - time.monotonic()))
+        logger.log("debug", "threads_warmup", "Smoothly browsed Threads feed", {"index": browsed, **scroll, "liked": liked, "commented": commented, "remaining_seconds": remaining_seconds})
+        if remaining_seconds <= 0:
+            break
+        _sleep_between(4.5, 10.5)
     shot = _screenshot(page, screenshot_dir, task, "threads_warmup", logger)
     logger.log(
         "info",
         "completion_node",
         "Threads warmup completion node detected",
-        {"url": str(page.url or ""), "liked": liked, "commented": commented, "scrolled": scroll_times, "strategy_id": strategy_id, "strategy_label": strategy_label},
+        {"url": str(page.url or ""), "liked": liked, "commented": commented, "scrolled": browsed, "target_seconds": session_seconds, "strategy_id": strategy_id, "strategy_label": strategy_label},
         shot,
     )
-    return {"ok": True, "url": page.url, "liked": liked, "commented": commented, "scrolled": scroll_times, "strategy_id": strategy_id, "strategy_label": strategy_label, "commentScreenshots": comment_screenshots, "screenshot_path": shot}
+    return {"ok": True, "url": page.url, "liked": liked, "commented": commented, "scrolled": browsed, "target_seconds": session_seconds, "strategy_id": strategy_id, "strategy_label": strategy_label, "commentScreenshots": comment_screenshots, "screenshot_path": shot}
 
 
 def _threads_reply_button(page):
