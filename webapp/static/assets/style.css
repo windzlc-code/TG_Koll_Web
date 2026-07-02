@@ -6561,6 +6561,18 @@ body.page-admin {
   background: rgba(255, 255, 255, 0.22);
 }
 
+.persona-auto-log-tools {
+  position: sticky;
+  top: 45px;
+  z-index: 2;
+  display: flex;
+  gap: 8px;
+  min-width: 980px;
+  padding: 6px 8px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #fff;
+}
+
 .persona-auto-table {
   width: 100%;
   border-collapse: collapse;
@@ -6570,21 +6582,26 @@ body.page-admin {
 
 .persona-auto-table th:nth-child(1),
 .persona-auto-table td:nth-child(1) {
-  width: 90px;
+  width: 58px;
 }
 
 .persona-auto-table th:nth-child(2),
 .persona-auto-table td:nth-child(2) {
-  width: 86px;
+  width: 90px;
 }
 
 .persona-auto-table th:nth-child(3),
 .persona-auto-table td:nth-child(3) {
+  width: 86px;
+}
+
+.persona-auto-table th:nth-child(4),
+.persona-auto-table td:nth-child(4) {
   width: 136px;
 }
 
-.persona-auto-table th:nth-child(5),
-.persona-auto-table td:nth-child(5) {
+.persona-auto-table th:nth-child(6),
+.persona-auto-table td:nth-child(6) {
   width: 128px;
 }
 

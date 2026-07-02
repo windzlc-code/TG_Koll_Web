@@ -188,6 +188,14 @@ def register_social_automation_routes(app: FastAPI) -> None:
     def api_social_task_get(task_id: str):
         return {"ok": True, "task": get_social_task(task_id)}
 
+    @app.delete("/api/persona_dashboard/automation/tasks")
+    def api_social_tasks_clear(persona_id: str = "", account_id: str = ""):
+        return {"ok": True, "cleared": clear_social_tasks(persona_id=persona_id, account_id=account_id)}
+
+    @app.delete("/api/persona_dashboard/automation/tasks/{task_id}")
+    def api_social_task_clear(task_id: str):
+        return {"ok": True, "cleared": clear_social_task(task_id)}
+
     @app.post("/api/persona_dashboard/automation/tasks/{task_id}/cancel")
     def api_social_task_cancel(task_id: str, payload: SocialTaskActionPayload | None = None):
         return {"ok": True, "task": cancel_social_task(task_id, (payload.reason if payload else ""))}
@@ -583,6 +591,49 @@ def list_social_tasks(*, status: str = "", account_id: str = "", limit: int = 60
             (*params, limit),
         ).fetchall()
     return [_task_public(row) for row in rows]
+
+
+def clear_social_task(task_id: str) -> int:
+    with db() as conn:
+        row = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        status = str(row["status"] or "")
+    if status in {"running", "need_manual"}:
+        _force_stop_running_task(task_id)
+    with db() as conn:
+        conn.execute("DELETE FROM social_automation_logs WHERE task_id = ?", (task_id,))
+        deleted = conn.execute("DELETE FROM social_automation_tasks WHERE id = ?", (task_id,)).rowcount
+    wake_social_automation_worker()
+    return int(deleted or 0)
+
+
+def clear_social_tasks(*, persona_id: str = "", account_id: str = "") -> int:
+    if not str(persona_id or "").strip() and not str(account_id or "").strip():
+        raise HTTPException(status_code=400, detail="清除全部日志必须指定人设或账号")
+    clauses: list[str] = []
+    params: list[Any] = []
+    if persona_id:
+        clauses.append("persona_id = ?")
+        params.append(persona_id)
+    if account_id:
+        clauses.append("account_id = ?")
+        params.append(account_id)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    with db() as conn:
+        rows = conn.execute(f"SELECT id, status FROM social_automation_tasks {where}", tuple(params)).fetchall()
+    cleared = 0
+    for row in rows:
+        task_id = str(row["id"] or "")
+        if not task_id:
+            continue
+        if str(row["status"] or "") in {"running", "need_manual"}:
+            _force_stop_running_task(task_id)
+        with db() as conn:
+            conn.execute("DELETE FROM social_automation_logs WHERE task_id = ?", (task_id,))
+            cleared += int(conn.execute("DELETE FROM social_automation_tasks WHERE id = ?", (task_id,)).rowcount or 0)
+    wake_social_automation_worker()
+    return cleared
 
 
 def cancel_social_task(task_id: str, reason: str = "") -> dict[str, Any]:

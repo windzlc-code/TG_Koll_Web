@@ -723,13 +723,15 @@ function pdRenderAutomationPanel(persona) {
   const recordCount = pdAutomationRecordsForPersona(persona).length;
   const taskRows = tasks.map((task) => `
     <tr>
+      <td><input class="persona-auto-log-check" type="checkbox" value="${pdEscape(task.id)}" data-auto-select-log="${pdEscape(task.id)}" /></td>
       <td>${pdEscape(pdAutomationStatusLabel(task.task_type))}</td>
       <td><span class="persona-auto-status persona-auto-status-${pdEscape(task.status)}">${pdEscape(pdAutomationStatusLabel(task.status))}</span></td>
       <td>${pdEscape(pdDate((task.updated_at || task.created_at || 0) * 1000))}</td>
       <td><div class="persona-auto-result" title="${pdEscape(task.error || (task.result && (task.result.url || task.result.screenshot_path)) || "-")}">${pdEscape(task.error || (task.result && (task.result.url || task.result.screenshot_path)) || "-")}</div></td>
       <td><div class="persona-auto-row-actions">
         <button class="ghost" type="button" data-auto-logs="${pdEscape(task.id)}">日志</button>
-        ${["queued", "running"].includes(String(task.status || "")) ? `<button class="ghost persona-auto-cancel" type="button" data-auto-cancel="${pdEscape(task.id)}">取消</button>` : ""}
+        <button class="ghost" type="button" data-auto-clear-log="${pdEscape(task.id)}">清除</button>
+        ${["queued", "running", "need_manual"].includes(String(task.status || "")) ? `<button class="ghost persona-auto-cancel" type="button" data-auto-cancel="${pdEscape(task.id)}">取消</button>` : ""}
       </div></td>
     </tr>
   `).join("");
@@ -833,9 +835,14 @@ function pdRenderAutomationPanel(persona) {
             <tbody>${recordRows || `<tr><td colspan="5">暂无网页发布或操作记录</td></tr>`}</tbody>
           </table>
         ` : `
+        <div class="persona-auto-log-tools">
+          <button class="ghost" type="button" id="personaAutoSelectAllLogs" ${tasks.length ? "" : "disabled"}>全选</button>
+          <button class="ghost" type="button" id="personaAutoClearSelectedLogs" ${tasks.length ? "" : "disabled"}>清除选中</button>
+          <button class="ghost" type="button" id="personaAutoClearAllLogs" ${tasks.length ? "" : "disabled"}>清除全部</button>
+        </div>
         <table class="persona-auto-table">
-          <thead><tr><th>任务</th><th>状态</th><th>更新时间</th><th>结果 / 错误</th><th>操作</th></tr></thead>
-          <tbody>${taskRows || `<tr><td colspan="5">暂无自动化任务</td></tr>`}</tbody>
+          <thead><tr><th>选择</th><th>任务</th><th>状态</th><th>更新时间</th><th>结果 / 错误</th><th>操作</th></tr></thead>
+          <tbody>${taskRows || `<tr><td colspan="6">暂无自动化任务</td></tr>`}</tbody>
         </table>
         `}
       </div>
@@ -1183,18 +1190,18 @@ function pdRenderAutomationLogModal() {
             <div class="persona-auto-log-media">${pdRenderAutomationLogMedia(task, logs)}</div>
           </section>
           <section class="persona-auto-log-panel">
-            <h4>当前步骤</h4>
+            <h4>完整过程</h4>
             <div class="persona-auto-log-list">
-              ${current ? `
+              ${logs.map((row) => `
                 <article class="persona-auto-log-item">
                   <div class="persona-auto-log-item-head">
-                    <span>${pdEscape(pdDate((current.created_at || 0) * 1000))}</span>
-                    <strong>${pdEscape(pdAutomationLogStepText(current))}</strong>
+                    <span>${pdEscape(pdDate((row.created_at || 0) * 1000))}</span>
+                    <strong>${pdEscape(pdAutomationLogStepText(row))}</strong>
                   </div>
-                  ${pdAutomationLogDetailText(current) ? `<div class="persona-auto-log-message">${pdEscape(pdAutomationLogDetailText(current))}</div>` : ""}
-                  ${pdAutomationLogScreenshot(current)}
+                  ${pdAutomationLogDetailText(row) ? `<div class="persona-auto-log-message">${pdEscape(pdAutomationLogDetailText(row))}</div>` : ""}
+                  ${pdAutomationLogScreenshot(row)}
                 </article>
-              ` : `<div class="small">暂无日志</div>`}
+              `).join("") || `<div class="small">暂无日志</div>`}
             </div>
           </section>
         </div>
@@ -2119,6 +2126,80 @@ function pdBindAutomationEvents(persona, root) {
       const taskId = String(node.getAttribute("data-auto-logs") || "");
       if (!taskId) return;
       pdOpenAutomationLogModal(taskId);
+    });
+  });
+  const selectAllLogs = pdEl("personaAutoSelectAllLogs");
+  if (selectAllLogs) {
+    selectAllLogs.addEventListener("click", () => {
+      const checks = Array.from(root.querySelectorAll("[data-auto-select-log]"));
+      const allSelected = checks.length && checks.every((item) => item.checked);
+      checks.forEach((item) => { item.checked = !allSelected; });
+    });
+  }
+  const clearSelectedLogs = pdEl("personaAutoClearSelectedLogs");
+  if (clearSelectedLogs) {
+    clearSelectedLogs.addEventListener("click", async () => {
+      const ids = Array.from(root.querySelectorAll("[data-auto-select-log]:checked")).map((item) => String(item.value || "")).filter(Boolean);
+      if (!ids.length) {
+        pdSetMsg("请先勾选要清除的日志。", "err");
+        return;
+      }
+      if (!window.confirm(`确认清除选中的 ${ids.length} 条自动化日志吗？`)) return;
+      try {
+        pdSetMsg("正在清除选中日志...", "ok");
+        for (const taskId of ids) {
+          await pdApi(`/api/persona_dashboard/automation/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" });
+        }
+        await pdLoadAutomationOverview();
+        if (ids.includes(personaDashboardAutomationLogTaskId)) {
+          personaDashboardAutomationLogTaskId = "";
+          personaDashboardAutomationLogData = null;
+          pdStopAutomationLogPoll();
+        }
+        pdSetMsg("选中日志已清除。", "ok");
+        pdRenderDashboard();
+      } catch (err) {
+        pdSetMsg(String((err && (err.detail || err.message)) || err || "清除日志失败"), "err");
+      }
+    });
+  }
+  const clearAllLogs = pdEl("personaAutoClearAllLogs");
+  if (clearAllLogs) {
+    clearAllLogs.addEventListener("click", async () => {
+      if (!window.confirm("确认清除当前人设的全部外部任务日志吗？")) return;
+      try {
+        pdSetMsg("正在清除全部日志...", "ok");
+        await pdApi(`/api/persona_dashboard/automation/tasks?persona_id=${encodeURIComponent(persona.id)}`, { method: "DELETE" });
+        await pdLoadAutomationOverview();
+        personaDashboardAutomationLogTaskId = "";
+        personaDashboardAutomationLogData = null;
+        pdStopAutomationLogPoll();
+        pdSetMsg("当前人设的外部任务日志已清除。", "ok");
+        pdRenderDashboard();
+      } catch (err) {
+        pdSetMsg(String((err && (err.detail || err.message)) || err || "清除全部日志失败"), "err");
+      }
+    });
+  }
+  root.querySelectorAll("[data-auto-clear-log]").forEach((node) => {
+    node.addEventListener("click", async () => {
+      const taskId = String(node.getAttribute("data-auto-clear-log") || "");
+      if (!taskId) return;
+      if (!window.confirm("确认清除这条自动化日志吗？")) return;
+      try {
+        pdSetMsg("正在清除日志...", "ok");
+        await pdApi(`/api/persona_dashboard/automation/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" });
+        await pdLoadAutomationOverview();
+        if (taskId === personaDashboardAutomationLogTaskId) {
+          personaDashboardAutomationLogTaskId = "";
+          personaDashboardAutomationLogData = null;
+          pdStopAutomationLogPoll();
+        }
+        pdSetMsg("日志已清除。", "ok");
+        pdRenderDashboard();
+      } catch (err) {
+        pdSetMsg(String((err && (err.detail || err.message)) || err || "清除日志失败"), "err");
+      }
     });
   });
   root.querySelectorAll("[data-auto-cancel]").forEach((node) => {
