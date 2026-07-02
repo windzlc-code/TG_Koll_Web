@@ -1013,6 +1013,114 @@ def _collect_persona_reply_templates(archive: dict[str, Any] | None) -> list[str
     return result[:8]
 
 
+def _parse_archive_time(value: Any) -> int:
+    if value in {None, ""}:
+        return 0
+    if isinstance(value, (int, float)):
+        number = int(value)
+        return number // 1000 if number > 10_000_000_000 else number
+    text = str(value or "").strip()
+    if not text:
+        return 0
+    if text.isdigit():
+        number = int(text)
+        return number // 1000 if number > 10_000_000_000 else number
+    try:
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        return int(datetime.fromisoformat(text).timestamp())
+    except Exception:
+        return 0
+
+
+def _collect_threads_hot_reply_targets(archive: dict[str, Any] | None, *, max_age_days: int = 30, min_views: int = 0, limit: int = 5) -> list[dict[str, Any]]:
+    if not archive:
+        return []
+    rows: list[dict[str, Any]] = []
+
+    def add_row(item: Any, source: str = "") -> None:
+        if not isinstance(item, dict):
+            return
+        meta = item.get("sourceMeta") if isinstance(item.get("sourceMeta"), dict) else {}
+        published_meta = item.get("publishedMeta") if isinstance(item.get("publishedMeta"), dict) else {}
+        platform = str(item.get("platform") or item.get("sourcePlatform") or item.get("publishPlatform") or "").strip().lower()
+        url = str(
+            item.get("publishedUrl")
+            or item.get("published_url")
+            or item.get("sourceUrl")
+            or item.get("source_url")
+            or item.get("postUrl")
+            or item.get("post_url")
+            or item.get("url")
+            or item.get("target_url")
+            or meta.get("publishedUrl")
+            or meta.get("sourceUrl")
+            or published_meta.get("publishedUrl")
+            or published_meta.get("sourceUrl")
+            or ""
+        ).strip()
+        if not url or "threads." not in url.lower():
+            return
+        if platform and platform not in {"threads", "thread"}:
+            return
+        view_count = int(float(item.get("view_count") or item.get("views") or item.get("post_views") or item.get("recent_views") or 0))
+        if view_count < max(0, min_views):
+            return
+        published_ts = _parse_archive_time(item.get("published_at") or item.get("publishedAt") or item.get("captured_at") or item.get("createdAt") or item.get("created_at"))
+        if max_age_days > 0 and published_ts > 0 and published_ts < _now() - max_age_days * 86400:
+            return
+        heat = view_count
+        heat += int(float(item.get("like_count") or item.get("likes") or 0))
+        heat += int(float(item.get("comment_count") or item.get("comments") or 0))
+        heat += int(float(item.get("share_count") or item.get("shares") or 0))
+        heat += int(float(item.get("repost_count") or item.get("reposts") or 0))
+        rows.append({
+            "url": url,
+            "label": str(item.get("title") or item.get("content") or item.get("caption") or source or "Threads 热点推文")[:80],
+            "view_count": view_count,
+            "heat": heat,
+            "published_at": published_ts,
+            "source": source,
+        })
+
+    for post in archive.get("posts") if isinstance(archive.get("posts"), list) else []:
+        add_row(post, "posts")
+        if isinstance(post, dict):
+            for target in post.get("publishedTargets") if isinstance(post.get("publishedTargets"), list) else []:
+                add_row(target, "publishedTargets")
+            if isinstance(post.get("sourceMeta"), dict):
+                add_row(post.get("sourceMeta"), "posts.sourceMeta")
+            if isinstance(post.get("publishedMeta"), dict):
+                add_row(post.get("publishedMeta"), "posts.publishedMeta")
+    platform_posts = archive.get("platformPosts") if isinstance(archive.get("platformPosts"), dict) else {}
+    for post in platform_posts.get("threads") if isinstance(platform_posts.get("threads"), list) else []:
+        add_row(post, "platformPosts.threads")
+    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+    for container_name in ("hotMetrics", "threadsHotMetrics"):
+        container = setup.get(container_name) if isinstance(setup.get(container_name), dict) else {}
+        for key in ("postMetrics", "posts", "publishedTargets"):
+            for item in container.get(key) if isinstance(container.get(key), list) else []:
+                add_row(item, f"setup.{container_name}.{key}")
+    for item in setup.get("publishHistory") if isinstance(setup.get("publishHistory"), list) else []:
+        add_row(item, "setup.publishHistory")
+    own_reply = ((archive.get("setup") if isinstance(archive.get("setup"), dict) else {}) or {}).get("threadsOwnPostAutoReply")
+    if isinstance(own_reply, dict):
+        for target in own_reply.get("knownPostTargets") if isinstance(own_reply.get("knownPostTargets"), list) else []:
+            add_row(target, "knownPostTargets")
+
+    seen: set[str] = set()
+    unique: list[dict[str, Any]] = []
+    for row in sorted(rows, key=lambda item: (int(item.get("heat") or 0), int(item.get("published_at") or 0)), reverse=True):
+        url = str(row.get("url") or "").rstrip("/")
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        unique.append(row)
+        if len(unique) >= max(1, limit):
+            break
+    return unique
+
+
 def _enrich_threads_task_payload(persona_id: str, task_type: str, payload: dict[str, Any]) -> dict[str, Any]:
     archive = _load_persona_archive(persona_id)
     next_payload = dict(payload or {})
@@ -1027,18 +1135,18 @@ def _enrich_threads_task_payload(persona_id: str, task_type: str, payload: dict[
         strategy_id = str(next_payload.get("strategy_id") or "tg_default")
         next_payload.setdefault("strategy_id", strategy_id)
         if strategy_id == "browse_only":
-            next_payload.setdefault("strategy_label", "TG 策略：只浏览")
+            next_payload.setdefault("strategy_label", "保守养号：只浏览")
             next_payload.setdefault("scroll_times", 80)
             next_payload.setdefault("like_limit", 0)
         elif strategy_id == "like_comment":
-            next_payload.setdefault("strategy_label", "TG 策略：点赞/留言")
+            next_payload.setdefault("strategy_label", "互动养号：点赞/留言")
             next_payload.setdefault("scroll_times", 80)
             next_payload.setdefault("like_limit", 16)
             next_payload.setdefault("max_comments", 8)
             next_payload.setdefault("comment_chance", 100)
             next_payload.setdefault("require_persona_relevance", True)
         else:
-            next_payload.setdefault("strategy_label", "TG 默认：滑动 + 随机点赞")
+            next_payload.setdefault("strategy_label", "默认养号：滑动 + 随机点赞")
             next_payload.setdefault("scroll_times", 80)
             next_payload.setdefault("like_limit", 16)
         next_payload.setdefault("comment_chance", 0)
@@ -1046,20 +1154,36 @@ def _enrich_threads_task_payload(persona_id: str, task_type: str, payload: dict[
         strategy_id = str(next_payload.get("strategy_id") or "tg_default")
         next_payload.setdefault("strategy_id", strategy_id)
         if strategy_id == "safe_1d":
-            next_payload.setdefault("strategy_label", "TG 可选：最近 1 天")
+            next_payload.setdefault("strategy_label", "自动回复评论：最近 1 天")
             next_payload.setdefault("max_posts", 5)
             next_payload.setdefault("max_replies", 3)
             next_payload.setdefault("max_age_days", 1)
         elif strategy_id == "coverage_7d":
-            next_payload.setdefault("strategy_label", "TG 可选：最近 7 天")
+            next_payload.setdefault("strategy_label", "自动回复评论：最近 7 天")
             next_payload.setdefault("max_posts", 5)
             next_payload.setdefault("max_replies", 3)
             next_payload.setdefault("max_age_days", 7)
+        elif strategy_id == "hot_posts":
+            next_payload.setdefault("strategy_label", "自动回复热点推文")
+            next_payload.setdefault("max_posts", 5)
+            next_payload.setdefault("max_replies", 3)
+            next_payload.setdefault("max_age_days", 30)
+            next_payload.setdefault("min_views", 0)
+            next_payload.setdefault("reply_scope", "hot_posts")
+            targets = _collect_threads_hot_reply_targets(
+                archive,
+                max_age_days=int(next_payload.get("max_age_days") or 30),
+                min_views=int(next_payload.get("min_views") or 0),
+                limit=int(next_payload.get("max_posts") or 5),
+            )
+            next_payload.setdefault("target_urls", [str(item.get("url") or "") for item in targets if item.get("url")])
+            next_payload.setdefault("target_summaries", targets)
         else:
-            next_payload.setdefault("strategy_label", "原 TG 默认自动回复")
+            next_payload.setdefault("strategy_label", "自动回复评论：最近 2 天")
             next_payload.setdefault("max_posts", 5)
             next_payload.setdefault("max_replies", 3)
             next_payload.setdefault("max_age_days", 2)
+        next_payload.setdefault("reply_scope", "comments")
         next_payload.setdefault("require_persona_relevance", True)
     return next_payload
 

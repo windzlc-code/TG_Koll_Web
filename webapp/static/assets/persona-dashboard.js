@@ -88,41 +88,47 @@ const PD_THREADS_STRATEGIES = {
   threads_warmup: [
     {
       id: "tg_default",
-      label: "TG 默认：滑动 + 随机点赞",
-      desc: "对齐 TG bot 默认养号规则：7-10 分钟，每 2-3 篇最多互动 1 次，少量点赞。",
-      payload: { strategy_id: "tg_default", strategy_label: "TG 默认：滑动 + 随机点赞", scroll_times: 80, like_limit: 16, comment_chance: 0, require_persona_relevance: false, session_minutes: "7-10", interaction_every: "2-3" },
+      label: "默认养号：滑动 + 随机点赞",
+      desc: "适合日常维护账号状态：7-10 分钟，每 2-3 篇最多互动 1 次，少量点赞。",
+      payload: { strategy_id: "tg_default", strategy_label: "默认养号：滑动 + 随机点赞", scroll_times: 80, like_limit: 16, comment_chance: 0, require_persona_relevance: false, session_minutes: "7-10", interaction_every: "2-3" },
     },
     {
       id: "browse_only",
-      label: "TG 策略：只浏览",
+      label: "保守养号：只浏览",
       desc: "只滑动浏览不互动，适合新账号、异常后恢复或只需要保持登录活跃时。",
-      payload: { strategy_id: "browse_only", strategy_label: "TG 策略：只浏览", scroll_times: 80, like_limit: 0, comment_chance: 0, require_persona_relevance: false, session_minutes: "7-10", interaction_every: "无互动" },
+      payload: { strategy_id: "browse_only", strategy_label: "保守养号：只浏览", scroll_times: 80, like_limit: 0, comment_chance: 0, require_persona_relevance: false, session_minutes: "7-10", interaction_every: "无互动" },
     },
     {
       id: "like_comment",
-      label: "TG 策略：点赞/留言",
-      desc: "按 TG bot 的混合互动分支执行，适合已稳定账号和人设回复素材较完整时。",
-      payload: { strategy_id: "like_comment", strategy_label: "TG 策略：点赞/留言", scroll_times: 80, like_limit: 16, comment_chance: 100, max_comments: 8, require_persona_relevance: true, session_minutes: "7-10", interaction_every: "2-3" },
+      label: "互动养号：点赞/留言",
+      desc: "在浏览过程中加入点赞和人设留言，适合已稳定账号和回复素材较完整时。",
+      payload: { strategy_id: "like_comment", strategy_label: "互动养号：点赞/留言", scroll_times: 80, like_limit: 16, comment_chance: 100, max_comments: 8, require_persona_relevance: true, session_minutes: "7-10", interaction_every: "2-3" },
     },
   ],
   threads_auto_reply: [
     {
       id: "tg_default",
-      label: "TG 默认：最近 2 天",
-      desc: "对齐 TG bot 默认分支：查看 2 天内内容，最多扫描 5 篇，最多回复 3 条。",
-      payload: { strategy_id: "tg_default", strategy_label: "原 TG 默认自动回复", max_posts: 5, max_replies: 3, max_age_days: 2, require_persona_relevance: true },
+      label: "自动回复评论：最近 2 天",
+      desc: "扫描近期评论入口，按当前人设生成自然回复。适合日常处理新增评论。",
+      payload: { strategy_id: "tg_default", strategy_label: "自动回复评论：最近 2 天", reply_scope: "comments", max_posts: 5, max_replies: 3, max_age_days: 2, require_persona_relevance: true },
     },
     {
       id: "safe_1d",
-      label: "TG 可选：最近 1 天",
+      label: "自动回复评论：最近 1 天",
       desc: "缩短查看范围，优先处理最新互动，适合账号状态不稳定或评论质量较杂时。",
-      payload: { strategy_id: "safe_1d", strategy_label: "TG 可选：最近 1 天", max_posts: 5, max_replies: 3, max_age_days: 1, require_persona_relevance: true },
+      payload: { strategy_id: "safe_1d", strategy_label: "自动回复评论：最近 1 天", reply_scope: "comments", max_posts: 5, max_replies: 3, max_age_days: 1, require_persona_relevance: true },
     },
     {
       id: "coverage_7d",
-      label: "TG 可选：最近 7 天",
-      desc: "对齐 TG bot 自定义天数上限，扩大查看范围但仍保持最多 3 条回复。",
-      payload: { strategy_id: "coverage_7d", strategy_label: "TG 可选：最近 7 天", max_posts: 5, max_replies: 3, max_age_days: 7, require_persona_relevance: true },
+      label: "自动回复评论：最近 7 天",
+      desc: "扩大评论查找范围，适合需要补处理历史评论时使用。",
+      payload: { strategy_id: "coverage_7d", strategy_label: "自动回复评论：最近 7 天", reply_scope: "comments", max_posts: 5, max_replies: 3, max_age_days: 7, require_persona_relevance: true },
+    },
+    {
+      id: "hot_posts",
+      label: "自动回复热点推文",
+      desc: "从当前人设已发布和热点数据中提取高热度 Threads 推文，打开目标推文后按人设回复评论。",
+      payload: { strategy_id: "hot_posts", strategy_label: "自动回复热点推文", reply_scope: "hot_posts", max_posts: 5, max_replies: 3, max_age_days: 30, min_views: 0, require_persona_relevance: true },
     },
   ],
 };
@@ -152,7 +158,9 @@ function pdThreadsStrategyParams(strategy) {
   const payload = (strategy && strategy.payload) || {};
   if (!strategy) return [];
   if (Object.prototype.hasOwnProperty.call(payload, "max_age_days")) {
+    const scopeText = payload.reply_scope === "hot_posts" ? "热点推文" : "评论入口";
     return [
+      `回复分支：${scopeText}`,
       `查看范围：最近 ${payload.max_age_days} 天`,
       `扫描上限：${payload.max_posts || 0} 篇`,
       `回复上限：${payload.max_replies || 0} 条`,
@@ -949,15 +957,15 @@ function pdRenderAutomationPanel(persona) {
         <div class="persona-auto-box persona-auto-box-wide">
           ${platform === "threads" ? `
             <label>Threads 自动化方式</label>
-            <div class="small">不需要手填指定内容。先选择策略并确认参数，再点击执行；自动回复会读取当前人设内容生成回复候选。</div>
+            <div class="small">不需要手填指定内容。自动回复下包含评论回复和热点推文回复两个分支；养号独立选择浏览与互动强度。</div>
             <div class="persona-strategy-panel">
               <div class="persona-strategy-row">
                 <div class="persona-strategy-picker">
-                  <label for="personaAutoReplyStrategy">自动回复策略</label>
+                  <label for="personaAutoReplyStrategy">自动回复分支</label>
                   <select id="personaAutoReplyStrategy" data-threads-strategy="threads_auto_reply">${pdThreadsStrategyOptionsHtml("threads_auto_reply")}</select>
                 </div>
                 <div class="persona-strategy-detail">${pdThreadsStrategyDetailHtml("threads_auto_reply")}</div>
-                <button class="primary" type="button" data-auto-task="threads_auto_reply" ${accounts.length ? "" : "disabled"}>确定执行自动回复</button>
+                <button class="primary persona-strategy-action" type="button" data-auto-task="threads_auto_reply" ${accounts.length ? "" : "disabled"}>确定执行自动回复</button>
               </div>
               <div class="persona-strategy-row">
                 <div class="persona-strategy-picker">
@@ -965,7 +973,7 @@ function pdRenderAutomationPanel(persona) {
                   <select id="personaAutoWarmupStrategy" data-threads-strategy="threads_warmup">${pdThreadsStrategyOptionsHtml("threads_warmup")}</select>
                 </div>
                 <div class="persona-strategy-detail">${pdThreadsStrategyDetailHtml("threads_warmup")}</div>
-                <button class="ghost" type="button" data-auto-task="threads_warmup" ${accounts.length ? "" : "disabled"}>确定执行养号</button>
+                <button class="ghost persona-strategy-action" type="button" data-auto-task="threads_warmup" ${accounts.length ? "" : "disabled"}>确定执行养号</button>
               </div>
             </div>
           ` : `

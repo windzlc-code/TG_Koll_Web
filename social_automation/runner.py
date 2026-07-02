@@ -785,7 +785,7 @@ def _run_threads_warmup(page, task, payload, screenshot_dir, logger) -> dict[str
     max_comments = int(payload.get("max_comments") or 0)
     comment_chance = int(payload.get("comment_chance") or 0)
     strategy_id = str(payload.get("strategy_id") or "tg_default")
-    strategy_label = str(payload.get("strategy_label") or "原 TG 默认养号")
+    strategy_label = str(payload.get("strategy_label") or "默认养号：滑动 + 随机点赞")
     logger.log("info", "threads_warmup", "Starting Threads warmup from persona automation settings", {
         "strategy_id": strategy_id,
         "strategy_label": strategy_label,
@@ -882,12 +882,116 @@ def _pick_persona_reply(payload: dict[str, Any]) -> str:
     return "这个角度值得继续观察。"
 
 
+def _run_threads_hot_post_auto_reply(page, task, payload, screenshot_dir, logger) -> dict[str, Any]:
+    max_posts = max(1, min(int(payload.get("max_posts") or 5), 20))
+    max_replies = max(1, min(int(payload.get("max_replies") or 3), 10))
+    strategy_id = str(payload.get("strategy_id") or "hot_posts")
+    strategy_label = str(payload.get("strategy_label") or "自动回复热点推文")
+    raw_targets = payload.get("target_urls") or []
+    if not isinstance(raw_targets, list):
+        raw_targets = []
+    target_urls = [str(item or "").strip() for item in raw_targets if str(item or "").strip()]
+    logger.log("info", "threads_hot_post_auto_reply", "Starting Threads hot-post auto reply", {
+        "strategy_id": strategy_id,
+        "strategy_label": strategy_label,
+        "target_count": len(target_urls),
+        "max_posts": max_posts,
+        "max_replies": max_replies,
+        "persona_name": payload.get("persona_name") or "",
+    })
+    if not target_urls:
+        shot = _screenshot(page, screenshot_dir, task, "threads_auto_reply_done", logger)
+        logger.log("warn", "completion_node", "No Threads hot-post targets were available", {
+            "strategy_id": strategy_id,
+            "strategy_label": strategy_label,
+        }, shot)
+        return {
+            "ok": True,
+            "url": str(page.url or THREADS_HOME),
+            "scannedPosts": 0,
+            "scannedComments": 0,
+            "replied": 0,
+            "skipped": 0,
+            "completionReason": "no_hot_post_targets",
+            "strategy_id": strategy_id,
+            "strategy_label": strategy_label,
+            "replyScreenshots": [],
+            "repliedUrls": [],
+            "screenshot_path": shot,
+        }
+
+    replied = 0
+    scanned = 0
+    reply_screenshots: list[str] = []
+    replied_urls: list[str] = []
+    completion_reason = "max_posts_scanned"
+    for url in target_urls[:max_posts]:
+        scanned += 1
+        _goto(page, url, logger, "threads_hot_post_open")
+        _sleep_between(1.5, 3.0)
+        button = _threads_reply_button(page)
+        reply_text = _pick_persona_reply(payload)
+        if not str(reply_text or "").strip():
+            completion_reason = "no_persona_relevant_reply"
+            logger.log("warn", "threads_hot_post_reply_skip", "No persona-relevant reply candidate was available", {"url": url})
+            break
+        if button is None:
+            logger.log("warn", "threads_hot_post_reply_skip", "Reply button was not visible on hot post", {"url": url})
+            continue
+        _human_click(page, button, logger, "threads_hot_post_reply_button")
+        _sleep_between(1.0, 2.5)
+        box = _threads_text_box(page)
+        if box is None:
+            logger.log("warn", "threads_hot_post_reply_box", "Reply textbox was not visible after clicking reply", {"url": url})
+            continue
+        _human_click(page, box, logger, "threads_hot_post_reply_focus")
+        _human_type(page, reply_text, min_delay=0.10, max_delay=0.22)
+        posted = _click_text_button(page, logger, ["Post", "Reply", "发布", "回覆", "回复"], "threads_hot_post_reply_submit")
+        if posted:
+            replied += 1
+            replied_urls.append(url)
+            _sleep_between(2.0, 4.0)
+            shot = _screenshot(page, screenshot_dir, task, f"threads_reply_{replied}", logger)
+            if shot:
+                reply_screenshots.append(shot)
+            logger.log("info", "threads_hot_post_auto_reply", "Replied to Threads hot post", {"reply_index": replied, "url": url, "text": reply_text[:80]})
+            if replied >= max_replies:
+                completion_reason = "target_replies_reached"
+                break
+        else:
+            logger.log("warn", "threads_hot_post_reply_submit", "Could not find Threads post/reply submit button", {"url": url})
+    shot = _screenshot(page, screenshot_dir, task, "threads_auto_reply_done", logger)
+    logger.log(
+        "info",
+        "completion_node",
+        "Threads hot-post auto-reply completion node detected",
+        {"url": str(page.url or ""), "scannedPosts": scanned, "replied": replied, "completionReason": completion_reason, "strategy_id": strategy_id, "strategy_label": strategy_label},
+        shot,
+    )
+    return {
+        "ok": True,
+        "url": page.url,
+        "scannedPosts": scanned,
+        "scannedComments": scanned,
+        "replied": replied,
+        "skipped": max(0, scanned - replied),
+        "completionReason": completion_reason,
+        "strategy_id": strategy_id,
+        "strategy_label": strategy_label,
+        "replyScreenshots": reply_screenshots,
+        "repliedUrls": replied_urls,
+        "screenshot_path": shot,
+    }
+
+
 def _run_threads_auto_reply(page, task, payload, screenshot_dir, logger) -> dict[str, Any]:
+    if str(payload.get("reply_scope") or "comments") == "hot_posts":
+        return _run_threads_hot_post_auto_reply(page, task, payload, screenshot_dir, logger)
     _goto(page, THREADS_HOME, logger, "threads_auto_reply_open")
     max_posts = max(1, min(int(payload.get("max_posts") or 5), 20))
     max_replies = max(1, min(int(payload.get("max_replies") or 3), 10))
     strategy_id = str(payload.get("strategy_id") or "tg_default")
-    strategy_label = str(payload.get("strategy_label") or "原 TG 默认自动回复")
+    strategy_label = str(payload.get("strategy_label") or "自动回复评论：最近 2 天")
     require_persona_relevance = bool(payload.get("require_persona_relevance", True))
     replied = 0
     scanned = 0
