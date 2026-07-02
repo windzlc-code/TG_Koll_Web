@@ -806,6 +806,17 @@ def _warmup_session_seconds(payload: dict[str, Any], default_seconds: int = 8 * 
     return default_seconds
 
 
+def _payload_int(payload: dict[str, Any], keys: tuple[str, ...], default: int, min_value: int, max_value: int) -> int:
+    for key in keys:
+        value = payload.get(key)
+        if value is None or value == "":
+            continue
+        with contextlib.suppress(Exception):
+            parsed = int(float(value))
+            return max(min_value, min(max_value, parsed))
+    return max(min_value, min(max_value, int(default)))
+
+
 def _run_browse_feed(page, task, payload, screenshot_dir, logger) -> dict[str, Any]:
     _goto(page, INSTAGRAM_HOME, logger, "browse_feed")
     _warmup_scroll(page, logger, int(payload.get("scroll_times") or 2))
@@ -936,17 +947,17 @@ def _return_threads_feed_after_post(page, logger: AutomationLogger) -> None:
 
 def _run_threads_warmup(page, task, payload, screenshot_dir, logger) -> dict[str, Any]:
     _goto(page, THREADS_HOME, logger, "threads_warmup")
-    scroll_times = int(payload.get("scroll_times") or payload.get("browse_count") or 6)
-    like_limit = int(payload.get("like_limit") or 0)
-    max_comments = int(payload.get("max_comments") or 0)
-    comment_chance = int(payload.get("comment_chance") or 0)
+    browse_limit = _payload_int(payload, ("browse_limit", "browse_count", "scroll_times"), 30, 1, 300)
+    like_limit = _payload_int(payload, ("like_limit",), 0, 0, 100)
+    max_comments = _payload_int(payload, ("max_comments",), 0, 0, 50)
+    comment_chance = _payload_int(payload, ("comment_chance",), 0, 0, 100)
     session_seconds = _warmup_session_seconds(payload)
     strategy_id = str(payload.get("strategy_id") or "tg_default")
     strategy_label = str(payload.get("strategy_label") or "默认养号：滑动 + 随机点赞")
     logger.log("info", "threads_warmup", "Starting Threads warmup from persona automation settings", {
         "strategy_id": strategy_id,
         "strategy_label": strategy_label,
-        "scroll_times": scroll_times,
+        "browse_limit": browse_limit,
         "session_seconds": session_seconds,
         "like_limit": like_limit,
         "max_comments": max_comments,
@@ -957,18 +968,28 @@ def _run_threads_warmup(page, task, payload, screenshot_dir, logger) -> dict[str
     commented = 0
     browsed = 0
     opened_posts = 0
+    like_backfills = 0
+    comment_backfills = 0
+    min_required_likes = _payload_int(payload, ("min_required_likes",), 1 if like_limit > 0 else 0, 0, like_limit or 0)
+    min_required_comments = _payload_int(payload, ("min_required_comments",), 1 if max_comments > 0 and comment_chance > 0 else 0, 0, max_comments or 0)
     comment_screenshots: list[str] = []
     deadline = time.monotonic() + session_seconds
-    max_cycles = max(scroll_times, int(session_seconds / 3))
-    while time.monotonic() < deadline and browsed < max_cycles:
+    while time.monotonic() < deadline and browsed < browse_limit:
         elapsed_ratio = 1 - max(0, deadline - time.monotonic()) / max(1, session_seconds)
-        should_try_like = random.random() < 0.28 or (liked == 0 and elapsed_ratio >= 0.45 and random.random() < 0.75)
+        should_backfill_like = liked < min_required_likes and elapsed_ratio >= 0.35
+        should_try_like = random.random() < 0.28 or should_backfill_like or (liked == 0 and elapsed_ratio >= 0.45 and random.random() < 0.75)
         if like_limit > liked and browsed > 0 and should_try_like:
-            liked += _click_some_threads_likes(page, logger, like_limit - liked)
+            clicked_likes = _click_some_threads_likes(page, logger, like_limit - liked)
+            if clicked_likes:
+                liked += clicked_likes
+            else:
+                like_backfills += 1
+                logger.log("warn", "threads_warmup_backfill", "补点赞失败，继续换目标", {"attempts": like_backfills, "liked": liked, "target": min_required_likes})
         should_open_post = browsed > 0 and (random.random() < 0.12 or (opened_posts == 0 and elapsed_ratio >= 0.3))
         if should_open_post and _open_random_threads_post(page, logger):
             opened_posts += 1
-        if max_comments > commented and comment_chance > 0 and browsed > 0 and random.randint(1, 100) <= comment_chance:
+        should_backfill_comment = commented < min_required_comments and elapsed_ratio >= 0.45
+        if max_comments > commented and comment_chance > 0 and browsed > 0 and (should_backfill_comment or random.randint(1, 100) <= comment_chance):
             button = _threads_reply_button(page)
             reply_text = _pick_persona_reply(payload)
             if button is not None and str(reply_text or "").strip():
@@ -985,10 +1006,19 @@ def _run_threads_warmup(page, task, payload, screenshot_dir, logger) -> dict[str
                         if shot_reply:
                             comment_screenshots.append(shot_reply)
                         logger.log("info", "threads_warmup_comment", "Commented during Threads warmup", {"commented": commented, "text": reply_text[:80]})
+                    else:
+                        comment_backfills += 1
+                        logger.log("warn", "threads_warmup_backfill", "补留言失败，继续换目标", {"attempts": comment_backfills, "commented": commented, "target": min_required_comments})
+                else:
+                    comment_backfills += 1
+                    logger.log("warn", "threads_warmup_backfill", "补留言定位失败，继续浏览", {"attempts": comment_backfills, "commented": commented, "target": min_required_comments})
+            elif max_comments > commented:
+                comment_backfills += 1
+                logger.log("warn", "threads_warmup_backfill", "补留言定位失败，继续浏览", {"attempts": comment_backfills, "commented": commented, "target": min_required_comments, "has_reply_text": bool(str(reply_text or "").strip())})
         scroll = _slow_human_scroll(page)
         browsed += 1
         remaining_seconds = max(0, int(deadline - time.monotonic()))
-        logger.log("debug", "threads_warmup", "Smoothly browsed Threads feed", {"index": browsed, **scroll, "liked": liked, "commented": commented, "opened_posts": opened_posts, "remaining_seconds": remaining_seconds})
+        logger.log("debug", "threads_warmup", "Smoothly browsed Threads feed", {"index": browsed, "browse_limit": browse_limit, **scroll, "liked": liked, "commented": commented, "opened_posts": opened_posts, "remaining_seconds": remaining_seconds})
         if remaining_seconds <= 0:
             break
         _sleep_between(8.0, 16.0)
@@ -997,10 +1027,10 @@ def _run_threads_warmup(page, task, payload, screenshot_dir, logger) -> dict[str
         "info",
         "completion_node",
         "Threads warmup completion node detected",
-        {"url": str(page.url or ""), "liked": liked, "commented": commented, "scrolled": browsed, "opened_posts": opened_posts, "target_seconds": session_seconds, "strategy_id": strategy_id, "strategy_label": strategy_label},
+        {"url": str(page.url or ""), "liked": liked, "commented": commented, "scrolled": browsed, "browse_limit": browse_limit, "opened_posts": opened_posts, "target_seconds": session_seconds, "like_backfills": like_backfills, "comment_backfills": comment_backfills, "strategy_id": strategy_id, "strategy_label": strategy_label},
         shot,
     )
-    return {"ok": True, "url": page.url, "liked": liked, "commented": commented, "scrolled": browsed, "opened_posts": opened_posts, "target_seconds": session_seconds, "strategy_id": strategy_id, "strategy_label": strategy_label, "commentScreenshots": comment_screenshots, "screenshot_path": shot}
+    return {"ok": True, "url": page.url, "liked": liked, "commented": commented, "scrolled": browsed, "browse_limit": browse_limit, "opened_posts": opened_posts, "target_seconds": session_seconds, "likeBackfills": like_backfills, "commentBackfills": comment_backfills, "strategy_id": strategy_id, "strategy_label": strategy_label, "commentScreenshots": comment_screenshots, "screenshot_path": shot}
 
 
 def _threads_reply_button(page):
@@ -1085,6 +1115,7 @@ def _run_threads_hot_post_auto_reply(page, task, payload, screenshot_dir, logger
             "scannedComments": 0,
             "replied": 0,
             "skipped": 0,
+            "replyBackfills": 0,
             "completionReason": "no_hot_post_targets",
             "strategy_id": strategy_id,
             "strategy_label": strategy_label,
@@ -1095,6 +1126,7 @@ def _run_threads_hot_post_auto_reply(page, task, payload, screenshot_dir, logger
 
     replied = 0
     scanned = 0
+    reply_backfills = 0
     reply_screenshots: list[str] = []
     replied_urls: list[str] = []
     completion_reason = "max_posts_scanned"
@@ -1109,13 +1141,15 @@ def _run_threads_hot_post_auto_reply(page, task, payload, screenshot_dir, logger
             logger.log("warn", "threads_hot_post_reply_skip", "No persona-relevant reply candidate was available", {"url": url})
             break
         if button is None:
-            logger.log("warn", "threads_hot_post_reply_skip", "Reply button was not visible on hot post", {"url": url})
+            reply_backfills += 1
+            logger.log("warn", "threads_auto_reply_backfill", "补留言定位失败，继续换目标", {"attempts": reply_backfills, "url": url})
             continue
         _human_click(page, button, logger, "threads_hot_post_reply_button")
         _sleep_between(1.0, 2.5)
         box = _threads_text_box(page)
         if box is None:
-            logger.log("warn", "threads_hot_post_reply_box", "Reply textbox was not visible after clicking reply", {"url": url})
+            reply_backfills += 1
+            logger.log("warn", "threads_auto_reply_backfill", "补留言定位失败，继续换目标", {"attempts": reply_backfills, "url": url})
             continue
         _human_click(page, box, logger, "threads_hot_post_reply_focus")
         _human_type(page, reply_text, min_delay=0.10, max_delay=0.22)
@@ -1132,13 +1166,14 @@ def _run_threads_hot_post_auto_reply(page, task, payload, screenshot_dir, logger
                 completion_reason = "target_replies_reached"
                 break
         else:
-            logger.log("warn", "threads_hot_post_reply_submit", "Could not find Threads post/reply submit button", {"url": url})
+            reply_backfills += 1
+            logger.log("warn", "threads_auto_reply_backfill", "补留言失败，继续换目标", {"attempts": reply_backfills, "url": url})
     shot = _screenshot(page, screenshot_dir, task, "threads_auto_reply_done", logger)
     logger.log(
         "info",
         "completion_node",
         "Threads hot-post auto-reply completion node detected",
-        {"url": str(page.url or ""), "scannedPosts": scanned, "replied": replied, "completionReason": completion_reason, "strategy_id": strategy_id, "strategy_label": strategy_label},
+        {"url": str(page.url or ""), "scannedPosts": scanned, "replied": replied, "reply_backfills": reply_backfills, "completionReason": completion_reason, "strategy_id": strategy_id, "strategy_label": strategy_label},
         shot,
     )
     return {
@@ -1148,6 +1183,7 @@ def _run_threads_hot_post_auto_reply(page, task, payload, screenshot_dir, logger
         "scannedComments": scanned,
         "replied": replied,
         "skipped": max(0, scanned - replied),
+        "replyBackfills": reply_backfills,
         "completionReason": completion_reason,
         "strategy_id": strategy_id,
         "strategy_label": strategy_label,
@@ -1168,6 +1204,7 @@ def _run_threads_auto_reply(page, task, payload, screenshot_dir, logger) -> dict
     require_persona_relevance = bool(payload.get("require_persona_relevance", True))
     replied = 0
     scanned = 0
+    reply_backfills = 0
     reply_screenshots: list[str] = []
     logger.log("info", "threads_auto_reply", "Starting persona-driven Threads auto reply", {
         "strategy_id": strategy_id,
@@ -1192,7 +1229,8 @@ def _run_threads_auto_reply(page, task, payload, screenshot_dir, logger) -> dict
             _sleep_between(1.0, 2.5)
             box = _threads_text_box(page)
             if box is None:
-                logger.log("warn", "threads_reply_box", "Reply textbox was not visible after clicking reply")
+                reply_backfills += 1
+                logger.log("warn", "threads_auto_reply_backfill", "补留言定位失败，继续换目标", {"attempts": reply_backfills, "index": index + 1})
             else:
                 _human_click(page, box, logger, "threads_reply_focus")
                 _human_type(page, reply_text, min_delay=0.10, max_delay=0.22)
@@ -1208,7 +1246,11 @@ def _run_threads_auto_reply(page, task, payload, screenshot_dir, logger) -> dict
                         completion_reason = "target_replies_reached"
                         break
                 else:
-                    logger.log("warn", "threads_reply_submit", "Could not find Threads post/reply submit button")
+                    reply_backfills += 1
+                    logger.log("warn", "threads_auto_reply_backfill", "补留言失败，继续换目标", {"attempts": reply_backfills, "index": index + 1})
+        else:
+            reply_backfills += 1
+            logger.log("warn", "threads_auto_reply_backfill", "补留言定位失败，继续换目标", {"attempts": reply_backfills, "index": index + 1})
         page.mouse.wheel(0, random.randint(550, 950))
         _sleep_between(2.0, 5.0)
     shot = _screenshot(page, screenshot_dir, task, "threads_auto_reply_done", logger)
@@ -1216,7 +1258,7 @@ def _run_threads_auto_reply(page, task, payload, screenshot_dir, logger) -> dict
         "info",
         "completion_node",
         "Threads auto-reply completion node detected",
-        {"url": str(page.url or ""), "scannedPosts": scanned, "replied": replied, "completionReason": completion_reason, "strategy_id": strategy_id, "strategy_label": strategy_label},
+        {"url": str(page.url or ""), "scannedPosts": scanned, "replied": replied, "reply_backfills": reply_backfills, "completionReason": completion_reason, "strategy_id": strategy_id, "strategy_label": strategy_label},
         shot,
     )
     return {
@@ -1226,6 +1268,7 @@ def _run_threads_auto_reply(page, task, payload, screenshot_dir, logger) -> dict
         "scannedComments": scanned,
         "replied": replied,
         "skipped": max(0, scanned - replied),
+        "replyBackfills": reply_backfills,
         "completionReason": completion_reason,
         "strategy_id": strategy_id,
         "strategy_label": strategy_label,

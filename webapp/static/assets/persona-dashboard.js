@@ -90,25 +90,25 @@ const PD_THREADS_STRATEGIES = {
       id: "tg_default",
       label: "默认养号：滑动 + 随机点赞",
       desc: "适合日常维护账号状态：7-10 分钟，每 2-3 篇最多互动 1 次，少量点赞。",
-      payload: { strategy_id: "tg_default", strategy_label: "默认养号：滑动 + 随机点赞", scroll_times: 80, like_limit: 16, comment_chance: 0, require_persona_relevance: false, session_minutes: "7-10", interaction_every: "2-3" },
+      payload: { strategy_id: "tg_default", strategy_label: "默认养号：滑动 + 随机点赞", browse_limit: 30, scroll_times: 30, like_limit: 16, comment_chance: 0, require_persona_relevance: false, session_minutes: "7-10", interaction_every: "2-3" },
     },
     {
       id: "browse_only",
       label: "保守养号：只浏览",
       desc: "只滑动浏览不互动，适合新账号、异常后恢复或只需要保持登录活跃时。",
-      payload: { strategy_id: "browse_only", strategy_label: "保守养号：只浏览", scroll_times: 80, like_limit: 0, comment_chance: 0, require_persona_relevance: false, session_minutes: "7-10", interaction_every: "无互动" },
+      payload: { strategy_id: "browse_only", strategy_label: "保守养号：只浏览", browse_limit: 30, scroll_times: 30, like_limit: 0, comment_chance: 0, require_persona_relevance: false, session_minutes: "7-10", interaction_every: "无互动" },
     },
     {
       id: "like_comment",
       label: "互动养号：点赞/留言",
       desc: "在浏览过程中加入点赞和人设留言，适合已稳定账号和回复素材较完整时。",
-      payload: { strategy_id: "like_comment", strategy_label: "互动养号：点赞/留言", scroll_times: 80, like_limit: 16, comment_chance: 100, max_comments: 8, require_persona_relevance: true, session_minutes: "7-10", interaction_every: "2-3" },
+      payload: { strategy_id: "like_comment", strategy_label: "互动养号：点赞/留言", browse_limit: 30, scroll_times: 30, like_limit: 16, comment_chance: 100, max_comments: 8, require_persona_relevance: true, session_minutes: "7-10", interaction_every: "2-3" },
     },
     {
       id: "warmup_custom",
       label: "自定义养号",
-      desc: "手动设置点赞上限、留言上限和留言模板。",
-      payload: { strategy_id: "warmup_custom", strategy_label: "自定义养号", scroll_times: 80, like_limit: 0, comment_chance: 0, max_comments: 0, require_persona_relevance: true, session_minutes: "自定义", interaction_every: "自定义" },
+      desc: "手动设置浏览篇数上限、点赞上限、留言上限和留言模板。",
+      payload: { strategy_id: "warmup_custom", strategy_label: "自定义养号", browse_limit: 30, scroll_times: 30, like_limit: 0, comment_chance: 0, max_comments: 0, require_persona_relevance: true, session_minutes: "自定义", interaction_every: "自定义" },
     },
   ],
   threads_comment_reply: [
@@ -210,6 +210,7 @@ function pdThreadsStrategyParams(strategy) {
   }
   return [
     `时长：${payload.session_minutes || "按页面完成节点"}`,
+    `浏览篇数上限：${payload.browse_limit || payload.browse_count || payload.scroll_times || 30} 篇`,
     `互动间隔：${payload.interaction_every || "自动判断"}`,
     `点赞上限：${payload.like_limit || 0} 个`,
     `留言上限：${payload.max_comments || 0} 条`,
@@ -1074,6 +1075,7 @@ function pdRenderAutomationPanel(persona) {
                     <select id="personaAutoWarmupStrategy" data-threads-strategy="threads_warmup">${pdThreadsStrategyOptionsHtml("threads_warmup")}</select>
                   </div>
                   ${warmupCustom ? `<div class="persona-strategy-fields">
+                    <label>浏览篇数上限<input id="personaAutoWarmupBrowseLimit" type="number" min="1" max="300" value="${pdEscape(warmupDefaults.browse_limit || warmupDefaults.browse_count || warmupDefaults.scroll_times || 30)}" /></label>
                     <label>点赞上限<input id="personaAutoWarmupLikes" type="number" min="0" max="100" value="${pdEscape(warmupDefaults.like_limit || 0)}" /></label>
                     <label>留言上限<input id="personaAutoWarmupComments" type="number" min="0" max="50" value="${pdEscape(warmupDefaults.max_comments || 0)}" /></label>
                     <label class="persona-strategy-field-wide">养号留言模板<textarea id="personaAutoWarmupTemplates" rows="2" placeholder="可选，多条用换行分隔；留空则按人设自动生成"></textarea></label>
@@ -1297,7 +1299,9 @@ function pdAutomationLogStepText(row) {
     login_complete: "登录完成，已截图",
     completion_node: "任务完成节点已识别",
     threads_warmup: "Threads 养号动作执行中",
+    threads_warmup_backfill: "正在补目标并继续换内容",
     threads_auto_reply: "Threads 自动回复执行中",
+    threads_auto_reply_backfill: "正在补回复目标",
     threads_reply_button: "正在打开回复输入框",
     threads_reply_focus: "正在聚焦回复输入框",
     threads_reply_submit: "正在提交回复",
@@ -1323,6 +1327,10 @@ function pdAutomationLogDetailText(row) {
   if (data.hold_seconds) parts.push(`保留窗口：${data.hold_seconds} 秒`);
   if (data.liked !== undefined) parts.push(`点赞：${data.liked}`);
   if (data.scrolled !== undefined) parts.push(`滚动：${data.scrolled}`);
+  if (data.browse_limit !== undefined) parts.push(`浏览篇数上限：${data.browse_limit}`);
+  if (data.like_backfills !== undefined) parts.push(`补点赞：${data.like_backfills}`);
+  if (data.comment_backfills !== undefined) parts.push(`补留言：${data.comment_backfills}`);
+  if (data.reply_backfills !== undefined) parts.push(`补回复：${data.reply_backfills}`);
   if (data.replied !== undefined) parts.push(`回复：${data.replied}`);
   if (data.scannedPosts !== undefined) parts.push(`扫描帖子：${data.scannedPosts}`);
   if (data.completionReason) parts.push(`完成原因：${data.completionReason}`);
@@ -1345,7 +1353,12 @@ function pdAutomationTaskSummary(task) {
   if (payload.login_username) parts.push(`登录账号：${payload.login_username}`);
   if (payload.auto_submit) parts.push("模式：自动输入账号密码");
   if (payload.max_posts) parts.push(`最多扫描：${payload.max_posts} 条`);
+  if (payload.browse_limit) parts.push(`浏览篇数上限：${payload.browse_limit} 篇`);
   if (payload.max_replies) parts.push(`目标回复：${payload.max_replies} 条`);
+  if (result.browse_limit) parts.push(`浏览上限：${result.browse_limit} 篇`);
+  if (result.likeBackfills) parts.push(`补点赞：${result.likeBackfills}`);
+  if (result.commentBackfills) parts.push(`补留言：${result.commentBackfills}`);
+  if (result.replyBackfills) parts.push(`补回复：${result.replyBackfills}`);
   if (result.replied !== undefined) parts.push(`已回复：${result.replied}`);
   if (result.scannedPosts !== undefined) parts.push(`已扫描：${result.scannedPosts}`);
   if (result.completionReason) parts.push(`完成原因：${result.completionReason}`);
@@ -1872,6 +1885,19 @@ async function pdLoadAutomationOverview(options = {}) {
   }
 }
 
+function pdMergeAutomationTask(task) {
+  if (!task || !task.id) return;
+  if (!personaDashboardAutomation || typeof personaDashboardAutomation !== "object") {
+    personaDashboardAutomation = { accounts: [], proxies: [], tasks: [], summary: {}, worker: {} };
+  }
+  const tasks = Array.isArray(personaDashboardAutomation.tasks) ? personaDashboardAutomation.tasks.slice() : [];
+  const taskId = String(task.id || "");
+  const index = tasks.findIndex((item) => String((item && item.id) || "") === taskId);
+  if (index >= 0) tasks[index] = { ...tasks[index], ...task };
+  else tasks.unshift(task);
+  personaDashboardAutomation.tasks = tasks;
+}
+
 async function pdOpenAutomationLogModal(taskId) {
   const id = String(taskId || "").trim();
   if (!id) return;
@@ -1895,7 +1921,14 @@ async function pdRefreshAutomationLogModal(taskId) {
       pdApi(`/api/persona_dashboard/automation/tasks/${encodeURIComponent(id)}`),
       pdApi(`/api/persona_dashboard/automation/tasks/${encodeURIComponent(id)}/logs`),
     ]);
-    personaDashboardAutomationLogData = { task: taskData.task || null, logs: logData.logs || [] };
+    const task = taskData.task || null;
+    const status = String((task && task.status) || "");
+    pdMergeAutomationTask(task);
+    if (["success", "failed", "cancelled"].includes(status)) {
+      await pdLoadAutomationOverview({ silent: true });
+      pdStopAutomationLogPoll();
+    }
+    personaDashboardAutomationLogData = { task, logs: logData.logs || [] };
     pdRenderDashboard();
     if (scrollState) {
       requestAnimationFrame(() => {
@@ -2037,6 +2070,8 @@ function pdApplyThreadsCustomPayload(payload, group) {
       payload.reply_templates = [replyText];
     }
   } else if (group === "threads_warmup") {
+    payload.browse_limit = pdNumberInputValue("personaAutoWarmupBrowseLimit", payload.browse_limit || payload.browse_count || payload.scroll_times || 30, 1, 300);
+    payload.scroll_times = payload.browse_limit;
     payload.like_limit = pdNumberInputValue("personaAutoWarmupLikes", payload.like_limit || 0, 0, 100);
     payload.max_comments = pdNumberInputValue("personaAutoWarmupComments", payload.max_comments || 0, 0, 50);
     payload.comment_chance = payload.max_comments > 0 ? Math.max(Number(payload.comment_chance || 100), 1) : 0;
@@ -2070,7 +2105,8 @@ function pdAutomationPayload(taskType, persona = null, platform = "", strategy =
   } else if (taskType === "browse_feed") {
     payload.scroll_times = 2;
   } else if (taskType === "threads_warmup") {
-    payload.scroll_times = 6;
+    payload.browse_limit = 30;
+    payload.scroll_times = 30;
     payload.like_limit = 2;
     payload.persona_name = (persona && persona.name) || "";
   } else if (taskType === "threads_auto_reply") {

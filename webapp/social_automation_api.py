@@ -1136,24 +1136,29 @@ def _enrich_threads_task_payload(persona_id: str, task_type: str, payload: dict[
         next_payload.setdefault("strategy_id", strategy_id)
         if strategy_id == "browse_only":
             next_payload.setdefault("strategy_label", "保守养号：只浏览")
-            next_payload.setdefault("scroll_times", 80)
+            next_payload.setdefault("browse_limit", 30)
+            next_payload.setdefault("scroll_times", int(next_payload.get("browse_limit") or 30))
             next_payload.setdefault("like_limit", 0)
         elif strategy_id == "like_comment":
             next_payload.setdefault("strategy_label", "互动养号：点赞/留言")
-            next_payload.setdefault("scroll_times", 80)
+            next_payload.setdefault("browse_limit", 30)
+            next_payload.setdefault("scroll_times", int(next_payload.get("browse_limit") or 30))
             next_payload.setdefault("like_limit", 16)
             next_payload.setdefault("max_comments", 8)
             next_payload.setdefault("comment_chance", 100)
             next_payload.setdefault("require_persona_relevance", True)
         elif strategy_id == "warmup_custom":
             next_payload.setdefault("strategy_label", "自定义养号")
-            next_payload.setdefault("scroll_times", 80)
+            next_payload.setdefault("browse_limit", 30)
+            next_payload.setdefault("scroll_times", int(next_payload.get("browse_limit") or 30))
             next_payload.setdefault("like_limit", 0)
             next_payload.setdefault("max_comments", 0)
         else:
             next_payload.setdefault("strategy_label", "默认养号：滑动 + 随机点赞")
-            next_payload.setdefault("scroll_times", 80)
+            next_payload.setdefault("browse_limit", 30)
+            next_payload.setdefault("scroll_times", int(next_payload.get("browse_limit") or 30))
             next_payload.setdefault("like_limit", 16)
+        next_payload.setdefault("browse_limit", int(next_payload.get("scroll_times") or 30))
         next_payload.setdefault("comment_chance", 0)
     if task_type == "threads_auto_reply":
         strategy_id = str(next_payload.get("strategy_id") or "tg_default")
