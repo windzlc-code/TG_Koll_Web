@@ -301,10 +301,23 @@ def _human_type(page, text: str, min_delay: float = 0.08, max_delay: float = 0.1
 
 def _human_click(page, locator, logger: AutomationLogger, stage: str = "click") -> None:
     locator.wait_for(state="visible", timeout=30000)
+    try:
+        locator.scroll_into_view_if_needed(timeout=5000)
+        _sleep_between(0.2, 0.5)
+    except Exception:
+        pass
     box = locator.bounding_box()
     if not box:
         locator.click(timeout=10000)
         return
+    viewport = page.viewport_size or {"width": 1280, "height": 720}
+    if box["y"] < 0 or box["y"] + box["height"] > viewport["height"] or box["x"] < 0 or box["x"] + box["width"] > viewport["width"]:
+        locator.scroll_into_view_if_needed(timeout=5000)
+        _sleep_between(0.2, 0.5)
+        box = locator.bounding_box()
+        if not box:
+            locator.click(timeout=10000)
+            return
     rel_x = random.uniform(box["width"] * 0.25, box["width"] * 0.75)
     rel_y = random.uniform(box["height"] * 0.25, box["height"] * 0.75)
     logger.log("debug", stage, "Clicking target", {"x": round(box["x"] + rel_x, 1), "y": round(box["y"] + rel_y, 1)})
@@ -726,10 +739,20 @@ def _run_check_login(page, task, account, payload, screenshot_dir, logger, platf
 
 def _warmup_scroll(page, logger: AutomationLogger, times: int = 2) -> None:
     for index in range(max(1, times)):
-        delta = random.randint(450, 900)
-        page.mouse.wheel(0, delta)
-        logger.log("debug", "warmup", "Scrolled feed", {"index": index + 1, "delta": delta})
-        _sleep_between(2.0, 5.0)
+        total_delta = _slow_human_scroll(page)
+        logger.log("debug", "warmup", "Slowly browsed feed", {"index": index + 1, "delta": total_delta})
+        _sleep_between(4.0, 8.0)
+
+
+def _slow_human_scroll(page) -> int:
+    total_delta = random.randint(520, 900)
+    remaining = total_delta
+    while remaining > 0:
+        step = min(remaining, random.randint(90, 180))
+        page.mouse.wheel(0, step)
+        remaining -= step
+        _sleep_between(0.35, 0.9)
+    return total_delta
 
 
 def _run_browse_feed(page, task, payload, screenshot_dir, logger) -> dict[str, Any]:
@@ -818,10 +841,9 @@ def _run_threads_warmup(page, task, payload, screenshot_dir, logger) -> dict[str
                         if shot_reply:
                             comment_screenshots.append(shot_reply)
                         logger.log("info", "threads_warmup_comment", "Commented during Threads warmup", {"commented": commented, "text": reply_text[:80]})
-        delta = random.randint(500, 950)
-        page.mouse.wheel(0, delta)
-        logger.log("debug", "threads_warmup", "Scrolled Threads feed", {"index": index + 1, "delta": delta, "liked": liked, "commented": commented})
-        _sleep_between(2.0, 5.0)
+        delta = _slow_human_scroll(page)
+        logger.log("debug", "threads_warmup", "Slowly browsed Threads feed", {"index": index + 1, "delta": delta, "liked": liked, "commented": commented})
+        _sleep_between(4.0, 9.0)
     shot = _screenshot(page, screenshot_dir, task, "threads_warmup", logger)
     logger.log(
         "info",
