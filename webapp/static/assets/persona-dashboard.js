@@ -50,6 +50,7 @@ let personaDashboardAutomationLogTimer = 0;
 let personaDashboardAutomationGalleryIndex = -1;
 let personaDashboardVisiblePasswordAccountId = "";
 let personaDashboardSelectedAutomationAccountId = "";
+let personaDashboardPasswordDrafts = {};
 
 const PD_LABELS = {
   likes: "点赞",
@@ -668,12 +669,13 @@ function pdRenderAutomationPanel(persona) {
     ? personaDashboardSelectedAutomationAccountId
     : String((accounts[0] && accounts[0].id) || "");
   const selectedAccount = accounts.find((account) => String(account.id || "") === preferredAccountId) || accounts[0] || null;
+  const selectedAccountId = String((selectedAccount && selectedAccount.id) || "");
   const selectedProxyId = String((selectedAccount && selectedAccount.proxy_id) || "");
   const savedLoginUsername = String((selectedAccount && selectedAccount.login_username) || (selectedAccount && selectedAccount.username) || "");
-  const savedLoginPassword = "";
+  const savedLoginPassword = String(personaDashboardPasswordDrafts[selectedAccountId] || "");
   const hasSavedLoginPassword = !!(selectedAccount && selectedAccount.login_password_configured);
   const savedLoginAt = Number((selectedAccount && selectedAccount.login_credentials_updated_at) || 0);
-  const passwordVisible = hasSavedLoginPassword && String(personaDashboardVisiblePasswordAccountId || "") === String((selectedAccount && selectedAccount.id) || "");
+  const passwordVisible = !!savedLoginPassword && String(personaDashboardVisiblePasswordAccountId || "") === selectedAccountId;
   const readyCount = accounts.filter((account) => account.status === "ready").length;
   const platformLabel = platform === "threads" ? "Threads" : "Instagram";
   const usernamePlaceholder = platform === "threads" ? "threads username / handle" : "instagram username";
@@ -1262,6 +1264,7 @@ function pdRenderPersonaTabs(visiblePersonas, selectedPersona) {
       if (nextPersonaId !== personaDashboardSelectedId) {
         personaDashboardSelectedAutomationAccountId = "";
         personaDashboardVisiblePasswordAccountId = "";
+        personaDashboardPasswordDrafts = {};
       }
       personaDashboardSelectedId = nextPersonaId;
       personaDashboardPostPage = 1;
@@ -1638,6 +1641,7 @@ function pdBindAutomationEvents(persona, root) {
       personaDashboardAccountPlatform = pdSelectedAutomationPlatform();
       personaDashboardSelectedAutomationAccountId = "";
       personaDashboardVisiblePasswordAccountId = "";
+      personaDashboardPasswordDrafts = {};
       localStorage.setItem("personaDashboardAccountPlatform", personaDashboardAccountPlatform);
       pdRenderDashboard();
     });
@@ -1717,7 +1721,7 @@ function pdBindAutomationEvents(persona, root) {
       const passwordInput = pdEl("personaAutoLoginPassword");
       if (usernameInput) usernameInput.value = String((account && account.login_username) || (account && account.username) || "");
       if (passwordInput) {
-        passwordInput.value = "";
+        passwordInput.value = String(personaDashboardPasswordDrafts[personaDashboardSelectedAutomationAccountId] || "");
         passwordInput.type = "password";
         passwordInput.placeholder = account && account.login_password_configured ? "已保存密码" : "登录密码，可选择长期保存";
       }
@@ -1765,6 +1769,7 @@ function pdBindAutomationEvents(persona, root) {
           body,
         });
         personaDashboardVisiblePasswordAccountId = "";
+        if (loginPassword) personaDashboardPasswordDrafts[accountId] = loginPassword;
         if (pdEl("personaAutoLoginPassword")) pdEl("personaAutoLoginPassword").type = "password";
         await pdLoadAutomationOverview();
         pdSetMsg("自动登录资料已保存。", "ok");
@@ -1789,6 +1794,7 @@ function pdBindAutomationEvents(persona, root) {
           body: { clear_login_credentials: true },
         });
         personaDashboardVisiblePasswordAccountId = "";
+        delete personaDashboardPasswordDrafts[accountId];
         if (pdEl("personaAutoLoginPassword")) {
           pdEl("personaAutoLoginPassword").value = "";
           pdEl("personaAutoLoginPassword").type = "password";
@@ -1860,6 +1866,7 @@ function pdBindAutomationEvents(persona, root) {
           },
         });
         personaDashboardVisiblePasswordAccountId = "";
+        if (loginPassword) personaDashboardPasswordDrafts[accountId] = loginPassword;
         if (pdEl("personaAutoLoginPassword")) pdEl("personaAutoLoginPassword").type = "password";
         await pdLoadAutomationOverview();
         pdSetMsg("自动登录任务已创建。普通账号密码会自动输入；验证码/安全验证时请在打开的窗口里人工处理。", "ok");
