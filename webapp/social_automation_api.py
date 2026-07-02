@@ -52,6 +52,9 @@ _WORKER_STATE: dict[str, Any] = {
 }
 _RUNNING_TASK_CONTROLS: dict[str, dict[str, Any]] = {}
 _RUNNING_TASK_CONTROLS_LOCK = threading.Lock()
+_EPHEMERAL_TASK_SECRETS: dict[str, dict[str, str]] = {}
+_EPHEMERAL_TASK_SECRETS_LOCK = threading.Lock()
+_TASK_SECRETS_SCRUBBED = False
 _ROOT_DIR = Path(__file__).resolve().parent.parent
 _TOOL_R18_RUNTIME_DIR = Path(
     os.getenv("TOOL_R18_RUNTIME_DIR", str(_ROOT_DIR / "tool_r18" / ".runtime" / "automatic-script"))
@@ -214,9 +217,13 @@ def register_social_automation_routes(app: FastAPI) -> None:
 
 
 def ensure_social_automation_worker_started() -> None:
-    global _WORKER_THREAD
+    global _WORKER_THREAD, _TASK_SECRETS_SCRUBBED
     enabled = str(os.getenv("SOCIAL_AUTOMATION_WORKER_ENABLED", "1")).strip().lower() not in {"0", "false", "no", "off"}
     _WORKER_STATE["enabled"] = enabled
+    if not _TASK_SECRETS_SCRUBBED:
+        with contextlib.suppress(Exception):
+            scrub_social_automation_task_secrets()
+        _TASK_SECRETS_SCRUBBED = True
     if not enabled:
         return
     if _WORKER_THREAD and _WORKER_THREAD.is_alive():
@@ -228,6 +235,22 @@ def ensure_social_automation_worker_started() -> None:
 
 def wake_social_automation_worker() -> None:
     _WORKER_WAKE.set()
+
+
+def scrub_social_automation_task_secrets() -> int:
+    changed = 0
+    with db() as conn:
+        rows = conn.execute("SELECT id, payload_json FROM social_automation_tasks").fetchall()
+        for row in rows:
+            payload = _loads(row["payload_json"], {})
+            clean = _strip_task_secrets(payload)
+            if clean != payload:
+                conn.execute(
+                    "UPDATE social_automation_tasks SET payload_json = ? WHERE id = ?",
+                    (json.dumps(clean, ensure_ascii=False), row["id"]),
+                )
+                changed += 1
+    return changed
 
 
 def build_social_automation_overview() -> dict[str, Any]:
@@ -418,6 +441,9 @@ def _looks_like_non_password_text(value: str) -> bool:
     chinese_chars = sum(1 for ch in text if 0x4E00 <= ord(ch) <= 0x9FFF)
     if chinese_chars >= 3:
         return True
+    replacement_chars = sum(1 for ch in text if ch in {"?", "\ufffd"})
+    if len(text) >= 6 and replacement_chars >= max(4, len(text) // 2):
+        return True
     lower = text.lower()
     phrases = (
         "看不到",
@@ -476,15 +502,14 @@ def create_social_task(payload: SocialTaskPayload) -> dict[str, Any]:
         if str(account["platform"] or "").strip().lower() != platform:
             raise HTTPException(status_code=400, detail="任务平台与执行账号平台不一致")
         persona_id = str(payload.persona_id or account["persona_id"] or "").strip()
+        runtime_secrets: dict[str, str] = {}
         if task_type == "open_login" and task_payload.get("auto_submit"):
             submitted_password = str(task_payload.get("login_password") or "")
             if submitted_password and _looks_like_non_password_text(submitted_password):
                 raise HTTPException(status_code=400, detail="登录密码内容看起来像说明文字，请填写真实密码")
             saved_username = str(account["login_username"] or "").strip() if "login_username" in account.keys() else ""
-            saved_password = str(account["login_password"] or "") if "login_password" in account.keys() else ""
             task_payload["login_username"] = str(task_payload.get("login_username") or saved_username or account["username"] or "").strip()
-            if not str(task_payload.get("login_password") or "") and saved_password:
-                task_payload["login_password"] = saved_password
+            task_payload, runtime_secrets = _extract_runtime_secrets(task_payload)
         if platform == "threads" and task_type in {"threads_warmup", "threads_auto_reply"}:
             task_payload = _enrich_threads_task_payload(persona_id, task_type, task_payload)
         conn.execute(
@@ -510,6 +535,9 @@ def create_social_task(payload: SocialTaskPayload) -> dict[str, Any]:
             ),
         )
         _insert_log(conn, task_id, "info", "queued", "任务已加入自动化队列", {"task_type": task_type})
+        if runtime_secrets:
+            with _EPHEMERAL_TASK_SECRETS_LOCK:
+                _EPHEMERAL_TASK_SECRETS[task_id] = runtime_secrets
         row = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
     wake_social_automation_worker()
     return _task_public(row)
@@ -654,6 +682,8 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
             proxy_row = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (account_row["proxy_id"],)).fetchone()
     account = dict(account_row)
     proxy = dict(proxy_row) if proxy_row else None
+    task = dict(task)
+    task["payload"] = _runtime_task_payload(task, account)
     from social_automation.runner import NeedManualError, UnsupportedActionError, run_social_task
 
     logger = _DbTaskLogger(task["id"])
@@ -679,6 +709,8 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
             _finish_task(task["id"], "failed", {"unsupported": True}, str(exc))
         return
     finally:
+        with _EPHEMERAL_TASK_SECRETS_LOCK:
+            _EPHEMERAL_TASK_SECRETS.pop(str(task["id"]), None)
         with _RUNNING_TASK_CONTROLS_LOCK:
             _RUNNING_TASK_CONTROLS.pop(str(task["id"]), None)
     if _is_task_cancelled(str(task["id"])):
@@ -1159,6 +1191,47 @@ def _redact_sensitive(value: Any) -> Any:
     if isinstance(value, list):
         return [_redact_sensitive(item) for item in value]
     return value
+
+
+def _strip_task_secrets(value: Any) -> Any:
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        for key, item in value.items():
+            lower = str(key or "").lower()
+            if lower in {"login_password", "password"}:
+                continue
+            result[str(key)] = _strip_task_secrets(item)
+        return result
+    if isinstance(value, list):
+        return [_strip_task_secrets(item) for item in value]
+    return value
+
+
+def _extract_runtime_secrets(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+    clean = dict(payload or {})
+    secrets: dict[str, str] = {}
+    for key in ("login_password", "password"):
+        value = str(clean.pop(key, "") or "")
+        if value and not secrets.get("login_password"):
+            secrets["login_password"] = value
+    return clean, secrets
+
+
+def _runtime_task_payload(task: dict[str, Any], account: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(task.get("payload") or {})
+    if str(task.get("task_type") or "") != "open_login" or not payload.get("auto_submit"):
+        return payload
+    task_id = str(task.get("id") or "")
+    with _EPHEMERAL_TASK_SECRETS_LOCK:
+        secrets = dict(_EPHEMERAL_TASK_SECRETS.get(task_id) or {})
+    saved_username = str(account.get("login_username") or "").strip()
+    saved_password = str(account.get("login_password") or "")
+    payload["login_username"] = str(payload.get("login_username") or saved_username or account.get("username") or "").strip()
+    if not str(payload.get("login_password") or ""):
+        runtime_password = str(secrets.get("login_password") or saved_password or "")
+        if runtime_password:
+            payload["login_password"] = runtime_password
+    return payload
 
 
 def _proxy_public(row: Any) -> dict[str, Any]:
