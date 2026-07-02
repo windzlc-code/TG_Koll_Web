@@ -871,6 +871,9 @@ def _threads_text_box(page):
 
 
 def _pick_persona_reply(payload: dict[str, Any]) -> str:
+    reply_text = str(payload.get("reply_text") or "").strip()
+    if reply_text:
+        return reply_text[:180]
     templates = [str(item or "").strip() for item in (payload.get("reply_templates") or []) if str(item or "").strip()]
     if templates:
         return random.choice(templates)[:180]

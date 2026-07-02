@@ -1153,21 +1153,30 @@ def _enrich_threads_task_payload(persona_id: str, task_type: str, payload: dict[
     if task_type == "threads_auto_reply":
         strategy_id = str(next_payload.get("strategy_id") or "tg_default")
         next_payload.setdefault("strategy_id", strategy_id)
-        if strategy_id == "safe_1d":
+        if strategy_id in {"safe_1d", "comment_recent_1d"}:
             next_payload.setdefault("strategy_label", "自动回复评论：最近 1 天")
             next_payload.setdefault("max_posts", 5)
             next_payload.setdefault("max_replies", 3)
             next_payload.setdefault("max_age_days", 1)
-        elif strategy_id == "coverage_7d":
+            next_payload.setdefault("reply_scope", "comments")
+        elif strategy_id in {"coverage_7d", "comment_recent_7d"}:
             next_payload.setdefault("strategy_label", "自动回复评论：最近 7 天")
             next_payload.setdefault("max_posts", 5)
             next_payload.setdefault("max_replies", 3)
             next_payload.setdefault("max_age_days", 7)
-        elif strategy_id == "hot_posts":
-            next_payload.setdefault("strategy_label", "自动回复热点推文")
+            next_payload.setdefault("reply_scope", "comments")
+        elif strategy_id in {"hot_posts", "hot_recent_7d", "hot_views_1000"}:
+            if strategy_id == "hot_recent_7d":
+                next_payload.setdefault("strategy_label", "热点推文：最近 7 天")
+                next_payload.setdefault("max_age_days", 7)
+            elif strategy_id == "hot_views_1000":
+                next_payload.setdefault("strategy_label", "热点推文：千次浏览以上")
+                next_payload.setdefault("min_views", 1000)
+            else:
+                next_payload.setdefault("strategy_label", "自动回复热点推文")
+                next_payload.setdefault("max_age_days", 30)
             next_payload.setdefault("max_posts", 5)
             next_payload.setdefault("max_replies", 3)
-            next_payload.setdefault("max_age_days", 30)
             next_payload.setdefault("min_views", 0)
             next_payload.setdefault("reply_scope", "hot_posts")
             targets = _collect_threads_hot_reply_targets(
@@ -1183,7 +1192,7 @@ def _enrich_threads_task_payload(persona_id: str, task_type: str, payload: dict[
             next_payload.setdefault("max_posts", 5)
             next_payload.setdefault("max_replies", 3)
             next_payload.setdefault("max_age_days", 2)
-        next_payload.setdefault("reply_scope", "comments")
+            next_payload.setdefault("reply_scope", "comments")
         next_payload.setdefault("require_persona_relevance", True)
     return next_payload
 

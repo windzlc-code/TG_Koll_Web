@@ -105,51 +105,74 @@ const PD_THREADS_STRATEGIES = {
       payload: { strategy_id: "like_comment", strategy_label: "互动养号：点赞/留言", scroll_times: 80, like_limit: 16, comment_chance: 100, max_comments: 8, require_persona_relevance: true, session_minutes: "7-10", interaction_every: "2-3" },
     },
   ],
-  threads_auto_reply: [
+  threads_comment_reply: [
     {
-      id: "tg_default",
+      id: "comment_recent_2d",
       label: "自动回复评论：最近 2 天",
       desc: "扫描近期评论入口，按当前人设生成自然回复。适合日常处理新增评论。",
-      payload: { strategy_id: "tg_default", strategy_label: "自动回复评论：最近 2 天", reply_scope: "comments", max_posts: 5, max_replies: 3, max_age_days: 2, require_persona_relevance: true },
+      payload: { strategy_id: "comment_recent_2d", strategy_label: "自动回复评论：最近 2 天", reply_scope: "comments", max_posts: 5, max_replies: 3, max_age_days: 2, require_persona_relevance: true },
     },
     {
-      id: "safe_1d",
+      id: "comment_recent_1d",
       label: "自动回复评论：最近 1 天",
       desc: "缩短查看范围，优先处理最新互动，适合账号状态不稳定或评论质量较杂时。",
-      payload: { strategy_id: "safe_1d", strategy_label: "自动回复评论：最近 1 天", reply_scope: "comments", max_posts: 5, max_replies: 3, max_age_days: 1, require_persona_relevance: true },
+      payload: { strategy_id: "comment_recent_1d", strategy_label: "自动回复评论：最近 1 天", reply_scope: "comments", max_posts: 5, max_replies: 3, max_age_days: 1, require_persona_relevance: true },
     },
     {
-      id: "coverage_7d",
+      id: "comment_recent_7d",
       label: "自动回复评论：最近 7 天",
       desc: "扩大评论查找范围，适合需要补处理历史评论时使用。",
-      payload: { strategy_id: "coverage_7d", strategy_label: "自动回复评论：最近 7 天", reply_scope: "comments", max_posts: 5, max_replies: 3, max_age_days: 7, require_persona_relevance: true },
+      payload: { strategy_id: "comment_recent_7d", strategy_label: "自动回复评论：最近 7 天", reply_scope: "comments", max_posts: 5, max_replies: 3, max_age_days: 7, require_persona_relevance: true },
     },
+  ],
+  threads_hot_reply: [
     {
       id: "hot_posts",
       label: "自动回复热点推文",
       desc: "从当前人设已发布和热点数据中提取高热度 Threads 推文，打开目标推文后按人设回复评论。",
       payload: { strategy_id: "hot_posts", strategy_label: "自动回复热点推文", reply_scope: "hot_posts", max_posts: 5, max_replies: 3, max_age_days: 30, min_views: 0, require_persona_relevance: true },
     },
+    {
+      id: "hot_recent_7d",
+      label: "热点推文：最近 7 天",
+      desc: "只处理最近 7 天内的人设热点推文，适合频繁运营的账号。",
+      payload: { strategy_id: "hot_recent_7d", strategy_label: "热点推文：最近 7 天", reply_scope: "hot_posts", max_posts: 5, max_replies: 3, max_age_days: 7, min_views: 0, require_persona_relevance: true },
+    },
+    {
+      id: "hot_views_1000",
+      label: "热点推文：千次浏览以上",
+      desc: "只处理达到浏览门槛的已发布 Threads 推文，避免低价值目标。",
+      payload: { strategy_id: "hot_views_1000", strategy_label: "热点推文：千次浏览以上", reply_scope: "hot_posts", max_posts: 5, max_replies: 3, max_age_days: 30, min_views: 1000, require_persona_relevance: true },
+    },
   ],
 };
 
-function pdThreadsStrategyStorageKey(taskType) {
-  return taskType === "threads_auto_reply" ? "personaDashboardThreadsReplyStrategy" : "personaDashboardThreadsWarmupStrategy";
+function pdThreadsStrategyStorageKey(group) {
+  return ({
+    threads_comment_reply: "personaDashboardThreadsCommentReplyStrategy",
+    threads_hot_reply: "personaDashboardThreadsHotReplyStrategy",
+    threads_warmup: "personaDashboardThreadsWarmupStrategy",
+  }[group] || "personaDashboardThreadsWarmupStrategy");
 }
 
-function pdThreadsStrategySelectedId(taskType) {
-  const key = pdThreadsStrategyStorageKey(taskType);
-  return localStorage.getItem(key) || "tg_default";
+function pdThreadsStrategyDefaultId(group) {
+  const options = PD_THREADS_STRATEGIES[group] || [];
+  return (options[0] && options[0].id) || "tg_default";
 }
 
-function pdThreadsStrategyById(taskType, id) {
-  const options = PD_THREADS_STRATEGIES[taskType] || [];
+function pdThreadsStrategySelectedId(group) {
+  const key = pdThreadsStrategyStorageKey(group);
+  return localStorage.getItem(key) || pdThreadsStrategyDefaultId(group);
+}
+
+function pdThreadsStrategyById(group, id) {
+  const options = PD_THREADS_STRATEGIES[group] || [];
   return options.find((item) => item.id === id) || options[0] || null;
 }
 
-function pdThreadsStrategyOptionsHtml(taskType) {
-  const selectedId = pdThreadsStrategySelectedId(taskType);
-  return (PD_THREADS_STRATEGIES[taskType] || []).map((item) => (
+function pdThreadsStrategyOptionsHtml(group) {
+  const selectedId = pdThreadsStrategySelectedId(group);
+  return (PD_THREADS_STRATEGIES[group] || []).map((item) => (
     `<option value="${pdEscape(item.id)}" ${item.id === selectedId ? "selected" : ""}>${pdEscape(item.label)}</option>`
   )).join("");
 }
@@ -176,8 +199,8 @@ function pdThreadsStrategyParams(strategy) {
   ];
 }
 
-function pdThreadsStrategyDetailHtml(taskType) {
-  const strategy = pdThreadsStrategyById(taskType, pdThreadsStrategySelectedId(taskType));
+function pdThreadsStrategyDetailHtml(group) {
+  const strategy = pdThreadsStrategyById(group, pdThreadsStrategySelectedId(group));
   if (!strategy) return "";
   return `
     <strong>${pdEscape(strategy.label)}</strong>
@@ -186,6 +209,11 @@ function pdThreadsStrategyDetailHtml(taskType) {
       ${pdThreadsStrategyParams(strategy).map((item) => `<span>${pdEscape(item)}</span>`).join("")}
     </div>
   `;
+}
+
+function pdThreadsStrategyPayload(group) {
+  const strategy = pdThreadsStrategyById(group, pdThreadsStrategySelectedId(group));
+  return (strategy && strategy.payload) || {};
 }
 
 let personaDashboardData = null;
@@ -865,6 +893,9 @@ function pdRenderAutomationPanel(persona) {
   const readyCount = accounts.filter((account) => account.status === "ready").length;
   const platformLabel = platform === "threads" ? "Threads" : "Instagram";
   const usernamePlaceholder = platform === "threads" ? "threads username / handle" : "instagram username";
+  const commentDefaults = pdThreadsStrategyPayload("threads_comment_reply");
+  const hotDefaults = pdThreadsStrategyPayload("threads_hot_reply");
+  const warmupDefaults = pdThreadsStrategyPayload("threads_warmup");
   const accountOptions = accounts.map((account) => `
     <option value="${pdEscape(account.id)}">${pdEscape(account.username || account.id)} · ${pdEscape(pdAutomationStatusLabel(account.status))}</option>
   `).join("");
@@ -957,23 +988,75 @@ function pdRenderAutomationPanel(persona) {
         <div class="persona-auto-box persona-auto-box-wide">
           ${platform === "threads" ? `
             <label>Threads 自动化方式</label>
-            <div class="small">不需要手填指定内容。自动回复下包含评论回复和热点推文回复两个分支；养号独立选择浏览与互动强度。</div>
+            <div class="small">每个功能都有独立策略和自定义参数。下拉用于快速切换预设，输入框用于覆盖本次执行参数。</div>
             <div class="persona-strategy-panel">
-              <div class="persona-strategy-row">
-                <div class="persona-strategy-picker">
-                  <label for="personaAutoReplyStrategy">自动回复分支</label>
-                  <select id="personaAutoReplyStrategy" data-threads-strategy="threads_auto_reply">${pdThreadsStrategyOptionsHtml("threads_auto_reply")}</select>
+              <div class="persona-strategy-section">
+                <div class="persona-strategy-head">
+                  <div>
+                    <strong>自动回复评论</strong>
+                    <small>扫描评论入口，按当前人设回复符合条件的评论。</small>
+                  </div>
+                  <button class="primary persona-strategy-action" type="button" data-auto-task="threads_auto_reply" data-threads-group="threads_comment_reply" ${accounts.length ? "" : "disabled"}>执行评论回复</button>
                 </div>
-                <div class="persona-strategy-detail">${pdThreadsStrategyDetailHtml("threads_auto_reply")}</div>
-                <button class="primary persona-strategy-action" type="button" data-auto-task="threads_auto_reply" ${accounts.length ? "" : "disabled"}>确定执行自动回复</button>
+                <div class="persona-strategy-row">
+                  <div class="persona-strategy-picker">
+                    <label for="personaAutoCommentStrategy">评论回复策略</label>
+                    <select id="personaAutoCommentStrategy" data-threads-strategy="threads_comment_reply">${pdThreadsStrategyOptionsHtml("threads_comment_reply")}</select>
+                  </div>
+                  <div class="persona-strategy-fields">
+                    <label>查看天数<input id="personaAutoCommentDays" type="number" min="1" max="30" value="${pdEscape(commentDefaults.max_age_days || 2)}" /></label>
+                    <label>扫描篇数<input id="personaAutoCommentPosts" type="number" min="1" max="20" value="${pdEscape(commentDefaults.max_posts || 5)}" /></label>
+                    <label>回复上限<input id="personaAutoCommentReplies" type="number" min="1" max="10" value="${pdEscape(commentDefaults.max_replies || 3)}" /></label>
+                    <label class="persona-strategy-field-wide">自定义回复内容<textarea id="personaAutoCommentReplyText" rows="2" placeholder="留空则按人设自动生成"></textarea></label>
+                  </div>
+                  <div class="persona-strategy-detail">${pdThreadsStrategyDetailHtml("threads_comment_reply")}</div>
+                </div>
               </div>
-              <div class="persona-strategy-row">
-                <div class="persona-strategy-picker">
-                  <label for="personaAutoWarmupStrategy">养号策略</label>
-                  <select id="personaAutoWarmupStrategy" data-threads-strategy="threads_warmup">${pdThreadsStrategyOptionsHtml("threads_warmup")}</select>
+              <div class="persona-strategy-section">
+                <div class="persona-strategy-head">
+                  <div>
+                    <strong>自动回复热点推文</strong>
+                    <small>从已发布和热点数据提取目标推文，打开后按人设回复。</small>
+                  </div>
+                  <button class="primary persona-strategy-action" type="button" data-auto-task="threads_auto_reply" data-threads-group="threads_hot_reply" ${accounts.length ? "" : "disabled"}>执行热点回复</button>
                 </div>
-                <div class="persona-strategy-detail">${pdThreadsStrategyDetailHtml("threads_warmup")}</div>
-                <button class="ghost persona-strategy-action" type="button" data-auto-task="threads_warmup" ${accounts.length ? "" : "disabled"}>确定执行养号</button>
+                <div class="persona-strategy-row">
+                  <div class="persona-strategy-picker">
+                    <label for="personaAutoHotStrategy">热点回复策略</label>
+                    <select id="personaAutoHotStrategy" data-threads-strategy="threads_hot_reply">${pdThreadsStrategyOptionsHtml("threads_hot_reply")}</select>
+                  </div>
+                  <div class="persona-strategy-fields">
+                    <label>最低浏览<input id="personaAutoHotMinViews" type="number" min="0" max="999999999" value="${pdEscape(hotDefaults.min_views || 0)}" /></label>
+                    <label>查看天数<input id="personaAutoHotDays" type="number" min="1" max="365" value="${pdEscape(hotDefaults.max_age_days || 30)}" /></label>
+                    <label>目标篇数<input id="personaAutoHotPosts" type="number" min="1" max="20" value="${pdEscape(hotDefaults.max_posts || 5)}" /></label>
+                    <label>回复上限<input id="personaAutoHotReplies" type="number" min="1" max="10" value="${pdEscape(hotDefaults.max_replies || 3)}" /></label>
+                    <label class="persona-strategy-field-wide">指定热点推文 URL<textarea id="personaAutoHotTargetUrls" rows="2" placeholder="可选，多个链接用换行或英文逗号分隔"></textarea></label>
+                    <label class="persona-strategy-field-wide">自定义回复内容<textarea id="personaAutoHotReplyText" rows="2" placeholder="留空则按人设和推文自动生成"></textarea></label>
+                  </div>
+                  <div class="persona-strategy-detail">${pdThreadsStrategyDetailHtml("threads_hot_reply")}</div>
+                </div>
+              </div>
+              <div class="persona-strategy-section">
+                <div class="persona-strategy-head">
+                  <div>
+                    <strong>养号</strong>
+                    <small>独立设置浏览、点赞和留言强度，不与自动回复混用。</small>
+                  </div>
+                  <button class="ghost persona-strategy-action" type="button" data-auto-task="threads_warmup" data-threads-group="threads_warmup" ${accounts.length ? "" : "disabled"}>执行养号</button>
+                </div>
+                <div class="persona-strategy-row">
+                  <div class="persona-strategy-picker">
+                    <label for="personaAutoWarmupStrategy">养号策略</label>
+                    <select id="personaAutoWarmupStrategy" data-threads-strategy="threads_warmup">${pdThreadsStrategyOptionsHtml("threads_warmup")}</select>
+                  </div>
+                  <div class="persona-strategy-fields">
+                    <label>浏览条数<input id="personaAutoWarmupScrolls" type="number" min="1" max="300" value="${pdEscape(warmupDefaults.scroll_times || 80)}" /></label>
+                    <label>点赞上限<input id="personaAutoWarmupLikes" type="number" min="0" max="100" value="${pdEscape(warmupDefaults.like_limit || 0)}" /></label>
+                    <label>留言上限<input id="personaAutoWarmupComments" type="number" min="0" max="50" value="${pdEscape(warmupDefaults.max_comments || 0)}" /></label>
+                    <label class="persona-strategy-field-wide">养号留言模板<textarea id="personaAutoWarmupTemplates" rows="2" placeholder="可选，多条用换行分隔；留空则按人设自动生成"></textarea></label>
+                  </div>
+                  <div class="persona-strategy-detail">${pdThreadsStrategyDetailHtml("threads_warmup")}</div>
+                </div>
               </div>
             </div>
           ` : `
@@ -1888,7 +1971,61 @@ function pdScheduleAutomationPasswordNormalize() {
   window.setTimeout(pdNormalizeAutomationPasswordField, 1000);
 }
 
-function pdAutomationPayload(taskType, persona = null, platform = "", strategy = null) {
+function pdNumberInputValue(id, fallback, min, max) {
+  const node = pdEl(id);
+  const raw = Number((node && node.value) || fallback || 0);
+  let value = Number.isFinite(raw) ? Math.round(raw) : Number(fallback || 0);
+  if (Number.isFinite(min)) value = Math.max(min, value);
+  if (Number.isFinite(max)) value = Math.min(max, value);
+  return value;
+}
+
+function pdTextAreaListValue(id) {
+  const node = pdEl(id);
+  return String((node && node.value) || "")
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function pdApplyThreadsCustomPayload(payload, group) {
+  if (group === "threads_comment_reply") {
+    payload.reply_scope = "comments";
+    payload.max_age_days = pdNumberInputValue("personaAutoCommentDays", payload.max_age_days || 2, 1, 30);
+    payload.max_posts = pdNumberInputValue("personaAutoCommentPosts", payload.max_posts || 5, 1, 20);
+    payload.max_replies = pdNumberInputValue("personaAutoCommentReplies", payload.max_replies || 3, 1, 10);
+    const replyText = String((pdEl("personaAutoCommentReplyText") && pdEl("personaAutoCommentReplyText").value) || "").trim();
+    if (replyText) {
+      payload.reply_mode = "manual";
+      payload.reply_text = replyText;
+      payload.reply_templates = [replyText];
+    }
+  } else if (group === "threads_hot_reply") {
+    payload.reply_scope = "hot_posts";
+    payload.min_views = pdNumberInputValue("personaAutoHotMinViews", payload.min_views || 0, 0, 999999999);
+    payload.max_age_days = pdNumberInputValue("personaAutoHotDays", payload.max_age_days || 30, 1, 365);
+    payload.max_posts = pdNumberInputValue("personaAutoHotPosts", payload.max_posts || 5, 1, 20);
+    payload.max_replies = pdNumberInputValue("personaAutoHotReplies", payload.max_replies || 3, 1, 10);
+    const targetUrls = pdTextAreaListValue("personaAutoHotTargetUrls");
+    if (targetUrls.length) payload.target_urls = targetUrls;
+    const replyText = String((pdEl("personaAutoHotReplyText") && pdEl("personaAutoHotReplyText").value) || "").trim();
+    if (replyText) {
+      payload.reply_mode = "manual";
+      payload.reply_text = replyText;
+      payload.reply_templates = [replyText];
+    }
+  } else if (group === "threads_warmup") {
+    payload.scroll_times = pdNumberInputValue("personaAutoWarmupScrolls", payload.scroll_times || 80, 1, 300);
+    payload.like_limit = pdNumberInputValue("personaAutoWarmupLikes", payload.like_limit || 0, 0, 100);
+    payload.max_comments = pdNumberInputValue("personaAutoWarmupComments", payload.max_comments || 0, 0, 50);
+    payload.comment_chance = payload.max_comments > 0 ? Math.max(Number(payload.comment_chance || 100), 1) : 0;
+    const templates = pdTextAreaListValue("personaAutoWarmupTemplates");
+    if (templates.length) payload.reply_templates = templates;
+  }
+  return payload;
+}
+
+function pdAutomationPayload(taskType, persona = null, platform = "", strategy = null, group = "") {
   const target = String((pdEl("personaAutoTarget") && pdEl("personaAutoTarget").value) || "").trim();
   const text = String((pdEl("personaAutoText") && pdEl("personaAutoText").value) || "").trim();
   const mediaText = String((pdEl("personaAutoMedia") && pdEl("personaAutoMedia").value) || "").trim();
@@ -1922,6 +2059,7 @@ function pdAutomationPayload(taskType, persona = null, platform = "", strategy =
     payload.persona_name = (persona && persona.name) || "";
   }
   if (strategy && strategy.payload) Object.assign(payload, strategy.payload);
+  if (platform === "threads" && group) pdApplyThreadsCustomPayload(payload, group);
   if (platform) payload.platform = platform;
   return payload;
 }
@@ -2277,16 +2415,17 @@ function pdBindAutomationEvents(persona, root) {
   root.querySelectorAll("[data-auto-task]").forEach((node) => {
     node.addEventListener("click", async () => {
       const taskType = String(node.getAttribute("data-auto-task") || "");
+      const threadsGroup = String(node.getAttribute("data-threads-group") || "");
       const accountId = pdSelectedAutomationAccountId();
       const platform = pdSelectedAutomationPlatform();
       if (!accountId) {
         pdSetMsg("请先选择执行账号。", "err");
         return;
       }
-      const strategy = platform === "threads" && ["threads_warmup", "threads_auto_reply"].includes(taskType)
-        ? pdThreadsStrategyById(taskType, pdThreadsStrategySelectedId(taskType))
+      const strategy = platform === "threads" && threadsGroup
+        ? pdThreadsStrategyById(threadsGroup, pdThreadsStrategySelectedId(threadsGroup))
         : null;
-      const payload = pdAutomationPayload(taskType, persona, platform, strategy);
+      const payload = pdAutomationPayload(taskType, persona, platform, strategy, threadsGroup);
       const validation = pdValidateAutomationPayload(taskType, payload);
       if (validation) {
         pdSetMsg(validation, "err");
