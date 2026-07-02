@@ -44,6 +44,7 @@ let personaDashboardAutoPollTimer = 0;
 let personaDashboardPostSort = localStorage.getItem("personaDashboardPostSort") || "hot_desc";
 let personaDashboardPostTypeFilter = localStorage.getItem("personaDashboardPostTypeFilter") || "all";
 let personaDashboardAutomation = { accounts: [], proxies: [], tasks: [], summary: {}, worker: {} };
+let personaDashboardAutomationPane = localStorage.getItem("personaDashboardAutomationPane") || "tasks";
 let personaDashboardAutomationLogTaskId = "";
 let personaDashboardAutomationLogData = null;
 let personaDashboardAutomationLogTimer = 0;
@@ -469,6 +470,31 @@ function pdRenderPublishHistory(persona) {
   `;
 }
 
+function pdAutomationRecordsForPersona(persona) {
+  return (persona.publish_history || []).filter((row) => String(row.automation_task_type || row.task_type || "") !== "open_login");
+}
+
+function pdRenderAutomationRecordRows(persona) {
+  const rows = pdAutomationRecordsForPersona(persona);
+  return rows.slice(0, 40).map((row) => {
+    const taskId = String(row.automation_task_id || row.automationTaskId || row.id || "");
+    return `
+      <tr>
+        <td>${pdEscape(row.platform || "-")}</td>
+        <td class="persona-auto-record-content">
+          <div>${pdEscape(row.title || pdAutomationTaskLabel(row.automation_task_type || row.task_type) || "操作记录")}</div>
+          <small>${pdEscape(String(row.content || row.source_url || "").slice(0, 160))}</small>
+        </td>
+        <td>${pdEscape(pdDate(row.published_at || row.captured_at))}</td>
+        <td><span class="persona-auto-status persona-auto-status-${pdEscape(row.status || "success")}">${pdEscape(row.status || "success")}</span></td>
+        <td><div class="persona-auto-row-actions">
+          ${taskId.startsWith("social_task_") ? `<button class="ghost" type="button" data-auto-logs="${pdEscape(taskId)}">日志</button>` : (row.published_url ? `<a class="ghost" href="${pdEscape(row.published_url)}" target="_blank" rel="noopener">打开</a>` : `<span class="small">-</span>`)}
+        </div></td>
+      </tr>
+    `;
+  }).join("");
+}
+
 function pdRenderPersonaCard(persona) {
   const hot = pdPersonaHot(persona);
   const counts = persona.counts || {};
@@ -554,7 +580,6 @@ function pdRenderPersonaCard(persona) {
       <div class="persona-content-preview">${pdEscape(persona.content || "暂无人设描述")}</div>
       <div class="persona-platform-list">${platforms || `<div class="small">暂无平台热点指标</div>`}</div>
       ${pdRenderAutomationPanel(persona)}
-      ${pdRenderPublishHistory(persona)}
       <div class="persona-table-wrap">
         <div class="persona-table-toolbar">
           <div class="persona-table-title">
@@ -693,6 +718,9 @@ function pdRenderAutomationPanel(persona) {
   const proxyOptions = proxies.map((proxy) => `
     <option value="${pdEscape(proxy.id)}" ${String(proxy.id) === selectedProxyId ? "selected" : ""}>${pdEscape(proxy.name || `${proxy.proxy_type}://${proxy.host}:${proxy.port}`)}</option>
   `).join("");
+  const activeAutomationPane = personaDashboardAutomationPane === "records" ? "records" : "tasks";
+  const recordRows = pdRenderAutomationRecordRows(persona);
+  const recordCount = pdAutomationRecordsForPersona(persona).length;
   const taskRows = tasks.map((task) => `
     <tr>
       <td>${pdEscape(pdAutomationStatusLabel(task.task_type))}</td>
@@ -794,11 +822,22 @@ function pdRenderAutomationPanel(persona) {
           `}
         </div>
       </div>
-      <div class="persona-auto-table-wrap">
+      <div class="persona-auto-table-wrap persona-auto-log-shell">
+        <div class="persona-auto-log-switch" role="tablist" aria-label="自动化日志与操作记录">
+          <button class="${activeAutomationPane === "tasks" ? "is-active" : ""}" type="button" role="tab" aria-selected="${activeAutomationPane === "tasks" ? "true" : "false"}" data-auto-pane="tasks">任务日志 <span>${pdEscape(String(tasks.length))}</span></button>
+          <button class="${activeAutomationPane === "records" ? "is-active" : ""}" type="button" role="tab" aria-selected="${activeAutomationPane === "records" ? "true" : "false"}" data-auto-pane="records">操作记录 <span>${pdEscape(String(recordCount))}</span></button>
+        </div>
+        ${activeAutomationPane === "records" ? `
+          <table class="persona-auto-table persona-auto-record-table">
+            <thead><tr><th>平台</th><th>内容</th><th>时间</th><th>状态</th><th>操作</th></tr></thead>
+            <tbody>${recordRows || `<tr><td colspan="5">暂无网页发布或操作记录</td></tr>`}</tbody>
+          </table>
+        ` : `
         <table class="persona-auto-table">
           <thead><tr><th>任务</th><th>状态</th><th>更新时间</th><th>结果 / 错误</th><th>操作</th></tr></thead>
           <tbody>${taskRows || `<tr><td colspan="5">暂无自动化任务</td></tr>`}</tbody>
         </table>
+        `}
       </div>
     </section>
   `;
@@ -1712,6 +1751,14 @@ function pdParseProxyUrl(raw) {
 }
 
 function pdBindAutomationEvents(persona, root) {
+  root.querySelectorAll("[data-auto-pane]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const pane = String(node.getAttribute("data-auto-pane") || "tasks");
+      personaDashboardAutomationPane = pane === "records" ? "records" : "tasks";
+      localStorage.setItem("personaDashboardAutomationPane", personaDashboardAutomationPane);
+      pdRenderDashboard();
+    });
+  });
   const platformSelect = pdEl("personaAutoPlatform");
   if (platformSelect) {
     platformSelect.addEventListener("change", () => {

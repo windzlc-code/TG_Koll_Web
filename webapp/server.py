@@ -16909,6 +16909,7 @@ def _compact_publish_record(record: dict[str, Any]) -> dict[str, Any]:
         "shares": _source_metric(published_meta, "shareCount", "share_count", "send_count"),
         "views": _source_metric(published_meta, "viewCount", "view_count"),
         "automation_task_type": automation_task_type,
+        "automation_task_id": record.get("automationTaskId") or record.get("automation_task_id") or published_meta.get("taskId") or published_meta.get("task_id"),
     }
 
 

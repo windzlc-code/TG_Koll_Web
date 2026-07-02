@@ -6510,6 +6510,57 @@ body.page-admin {
   background: rgba(255, 255, 255, 0.72);
 }
 
+.persona-auto-log-shell {
+  overflow: auto;
+}
+
+.persona-auto-log-switch {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  min-width: 980px;
+  padding: 6px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.persona-auto-log-switch button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 32px;
+  border: 1px solid #dbe4f0;
+  border-radius: 6px;
+  background: #fff;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.persona-auto-log-switch button.is-active {
+  border-color: #0f766e;
+  background: #0f766e;
+  color: #fff;
+}
+
+.persona-auto-log-switch button span {
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.08);
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.persona-auto-log-switch button.is-active span {
+  background: rgba(255, 255, 255, 0.22);
+}
+
 .persona-auto-table {
   width: 100%;
   border-collapse: collapse;
@@ -6537,6 +6588,11 @@ body.page-admin {
   width: 128px;
 }
 
+.persona-auto-record-table th:nth-child(2),
+.persona-auto-record-table td:nth-child(2) {
+  width: auto;
+}
+
 .persona-auto-table th,
 .persona-auto-table td {
   height: 40px;
@@ -6546,6 +6602,28 @@ body.page-admin {
   vertical-align: middle;
   font-size: 12px;
   line-height: 1.25;
+  white-space: nowrap;
+}
+
+.persona-auto-record-content {
+  white-space: normal;
+}
+
+.persona-auto-record-content div {
+  overflow: hidden;
+  color: #0f172a;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.persona-auto-record-content small {
+  display: block;
+  overflow: hidden;
+  margin-top: 2px;
+  color: #64748b;
+  line-height: 1.25;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
