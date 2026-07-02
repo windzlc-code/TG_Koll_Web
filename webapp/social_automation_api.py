@@ -385,7 +385,10 @@ def update_social_account(account_id: str, payload: SocialAccountPatchPayload) -
             updates["login_username"] = str(payload.login_username or "").strip()
             updates["login_credentials_updated_at"] = _now()
         if payload.login_password is not None:
-            updates["login_password"] = str(payload.login_password or "")
+            password = str(payload.login_password or "")
+            if _looks_like_non_password_text(password):
+                raise HTTPException(status_code=400, detail="登录密码内容看起来像说明文字，请填写真实密码")
+            updates["login_password"] = password
             updates["login_credentials_updated_at"] = _now()
     if "status" in updates and updates["status"] not in SOCIAL_ACCOUNT_STATUSES:
         raise HTTPException(status_code=400, detail="账号状态不合法")
@@ -406,6 +409,27 @@ def update_social_account(account_id: str, payload: SocialAccountPatchPayload) -
         conn.execute(f"UPDATE social_accounts SET {assignments} WHERE id = ?", (*updates.values(), account_id))
         row = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (account_id,)).fetchone()
     return _account_public(row)
+
+
+def _looks_like_non_password_text(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    chinese_chars = sum(1 for ch in text if 0x4E00 <= ord(ch) <= 0x9FFF)
+    if chinese_chars >= 3:
+        return True
+    lower = text.lower()
+    phrases = (
+        "看不到",
+        "消失",
+        "不然",
+        "怎么",
+        "为什么",
+        "should",
+        "password here",
+        "placeholder",
+    )
+    return any(phrase in lower for phrase in phrases)
 
 
 def get_social_account(account_id: str) -> dict[str, Any]:
@@ -453,6 +477,9 @@ def create_social_task(payload: SocialTaskPayload) -> dict[str, Any]:
             raise HTTPException(status_code=400, detail="任务平台与执行账号平台不一致")
         persona_id = str(payload.persona_id or account["persona_id"] or "").strip()
         if task_type == "open_login" and task_payload.get("auto_submit"):
+            submitted_password = str(task_payload.get("login_password") or "")
+            if submitted_password and _looks_like_non_password_text(submitted_password):
+                raise HTTPException(status_code=400, detail="登录密码内容看起来像说明文字，请填写真实密码")
             saved_username = str(account["login_username"] or "").strip() if "login_username" in account.keys() else ""
             saved_password = str(account["login_password"] or "") if "login_password" in account.keys() else ""
             task_payload["login_username"] = str(task_payload.get("login_username") or saved_username or account["username"] or "").strip()

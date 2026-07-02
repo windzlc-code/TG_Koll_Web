@@ -1611,6 +1611,14 @@ function pdValidateAutomationPayload(taskType, payload) {
   return "";
 }
 
+function pdLooksLikeNonPasswordText(value) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  const chineseMatches = text.match(/[\u4e00-\u9fff]/g) || [];
+  if (chineseMatches.length >= 3) return true;
+  return /(看不到|消失|不然|怎么|为什么|placeholder|password here|说明文字)/i.test(text);
+}
+
 function pdParseProxyUrl(raw) {
   const text = String(raw || "").trim();
   if (!text) return null;
@@ -1761,6 +1769,10 @@ function pdBindAutomationEvents(persona, root) {
         return;
       }
       try {
+        if (loginPassword && pdLooksLikeNonPasswordText(loginPassword)) {
+          pdSetMsg("密码框里像是说明文字，不会保存。请填写真实登录密码。", "err");
+          return;
+        }
         const body = { login_username: loginUsername };
         if (loginPassword) body.login_password = loginPassword;
         pdSetMsg("正在保存自动登录资料...", "ok");
@@ -1848,6 +1860,10 @@ function pdBindAutomationEvents(persona, root) {
       }
       try {
         pdSetMsg("正在创建自动登录任务...", "ok");
+        if (loginPassword && pdLooksLikeNonPasswordText(loginPassword)) {
+          pdSetMsg("密码框里像是说明文字，不会用于自动登录。请填写真实登录密码。", "err");
+          return;
+        }
         const created = await pdApi("/api/persona_dashboard/automation/tasks", {
           method: "POST",
           body: {
