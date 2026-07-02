@@ -6406,6 +6406,54 @@ body.page-admin {
   flex: 1 1 160px;
 }
 
+.persona-auto-password-wrap {
+  position: relative;
+  flex: 1 1 180px;
+  min-width: 180px;
+}
+
+.persona-auto-password-wrap input {
+  width: 100%;
+  padding-right: 42px;
+}
+
+.persona-auto-eye {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #64748b;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.persona-auto-eye:hover:not(:disabled) {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+.persona-auto-eye:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.persona-auto-eye svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .persona-auto-table-wrap {
   overflow-x: auto;
   max-height: 280px;

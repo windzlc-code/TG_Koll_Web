@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import os
 import random
 import time
@@ -144,6 +145,7 @@ class _BrowserContextManager:
 
         profile_dir = Path(str(self.account.get("profile_dir") or "")).expanduser().resolve()
         profile_dir.mkdir(parents=True, exist_ok=True)
+        _cleanup_stale_profile_locks(profile_dir, self.logger)
         proxy_config = _proxy_config(self.proxy)
         headless: bool | str = False
         if os.name != "nt" and str(os.getenv("SOCIAL_AUTOMATION_HEADLESS") or "").strip().lower() == "virtual":
@@ -170,6 +172,29 @@ class _BrowserContextManager:
                 self.context_control["context"] = self.context
                 self.context_control["manager"] = self.cm
         except Exception as exc:
+            with contextlib.suppress(Exception):
+                self.cm.__exit__(type(exc), exc, getattr(exc, "__traceback__", None))
+            if _should_rebuild_profile_after_launch_error(exc):
+                backup_dir = _quarantine_profile_dir(profile_dir, self.logger)
+                if backup_dir:
+                    profile_dir.mkdir(parents=True, exist_ok=True)
+                    self.logger.log(
+                        "warn",
+                        "profile_rebuild_retry",
+                        "Browser profile failed to launch; backed up stale profile and retrying with a clean profile",
+                        {"backup_dir": str(backup_dir), "profile_dir": str(profile_dir)},
+                    )
+                    self.cm = Camoufox(**kwargs)
+                    try:
+                        self.context = self.cm.__enter__()
+                        if self.context_control is not None:
+                            self.context_control["context"] = self.context
+                            self.context_control["manager"] = self.cm
+                        return self.context
+                    except Exception as retry_exc:
+                        with contextlib.suppress(Exception):
+                            self.cm.__exit__(type(retry_exc), retry_exc, getattr(retry_exc, "__traceback__", None))
+                        exc = retry_exc
             raise RuntimeError(
                 "Camoufox browser failed to launch. Run `py -3 -m camoufox fetch` on Windows "
                 "or `python -m camoufox fetch` on Linux/macOS to download the Camoufox browser build. "
@@ -188,6 +213,40 @@ class _BrowserContextManager:
 
 def _open_camoufox_context(account: dict[str, Any], proxy: dict[str, Any] | None, logger: AutomationLogger, context_control: dict[str, Any] | None = None):
     return _BrowserContextManager(account, proxy, logger, context_control)
+
+
+def _cleanup_stale_profile_locks(profile_dir: Path, logger: AutomationLogger) -> None:
+    removed: list[str] = []
+    for name in ("parent.lock", ".parentlock", "lock", ".startup-incomplete"):
+        path = profile_dir / name
+        if not path.exists():
+            continue
+        try:
+            path.unlink()
+            removed.append(name)
+        except PermissionError:
+            logger.log("warn", "profile_lock_active", "Profile lock is active; another browser may still be open", {"path": str(path)})
+        except Exception as exc:
+            logger.log("warn", "profile_lock_cleanup_failed", "Failed to clean stale profile lock", {"path": str(path), "error": str(exc)})
+    if removed:
+        logger.log("info", "profile_lock_cleanup", "Cleaned stale browser profile lock files", {"files": removed})
+
+
+def _should_rebuild_profile_after_launch_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "timeout" in text and "launch_persistent_context" in text
+
+
+def _quarantine_profile_dir(profile_dir: Path, logger: AutomationLogger) -> Path | None:
+    if not profile_dir.exists():
+        return None
+    backup = profile_dir.with_name(f"{profile_dir.name}.broken_{int(time.time())}")
+    try:
+        profile_dir.rename(backup)
+        return backup
+    except Exception as exc:
+        logger.log("warn", "profile_rebuild_failed", "Failed to back up stale browser profile", {"profile_dir": str(profile_dir), "error": str(exc)})
+        return None
 
 
 def _raise_if_cancelled(cancel_event: Any | None) -> None:
@@ -244,17 +303,12 @@ def _human_click(page, locator, logger: AutomationLogger, stage: str = "click") 
     locator.wait_for(state="visible", timeout=30000)
     box = locator.bounding_box()
     if not box:
-        locator.click()
+        locator.click(timeout=10000)
         return
-    x = box["x"] + random.uniform(box["width"] * 0.25, box["width"] * 0.75)
-    y = box["y"] + random.uniform(box["height"] * 0.25, box["height"] * 0.75)
-    steps = random.randint(16, 32)
-    logger.log("debug", stage, "Moving mouse to target", {"x": round(x, 1), "y": round(y, 1), "steps": steps})
-    page.mouse.move(x, y, steps=steps)
-    _sleep_between(0.08, 0.2)
-    page.mouse.down()
-    _sleep_between(0.04, 0.12)
-    page.mouse.up()
+    rel_x = random.uniform(box["width"] * 0.25, box["width"] * 0.75)
+    rel_y = random.uniform(box["height"] * 0.25, box["height"] * 0.75)
+    logger.log("debug", stage, "Clicking target", {"x": round(box["x"] + rel_x, 1), "y": round(box["y"] + rel_y, 1)})
+    locator.click(position={"x": rel_x, "y": rel_y}, timeout=10000)
 
 
 def _screenshot(page, screenshot_dir: Path, task: dict[str, Any], stage: str, logger: AutomationLogger) -> str:
@@ -295,9 +349,10 @@ def _check_platform_login(page, platform: str, logger: AutomationLogger) -> dict
 
 def _detect_instagram_login_state(page) -> dict[str, Any]:
     url = str(page.url or "")
-    if any(part in url for part in ("/accounts/login", "/challenge/", "/checkpoint/")):
-        status = "need_verification" if "/challenge/" in url or "/checkpoint/" in url else "cookie_expired"
-        return {"status": status, "reason": f"Instagram redirected to {url}"}
+    if _is_verification_url(url):
+        return {"status": "need_verification", "reason": "Instagram requires a verification code", "url": url}
+    if "/accounts/login" in url:
+        return {"status": "cookie_expired", "reason": "Instagram login page is visible", "url": url}
     login_inputs = page.locator(
         'input[name="username"], input[name="password"], '
         'input[aria-label*="username" i], input[aria-label*="email" i], input[aria-label*="password" i], '
@@ -313,10 +368,19 @@ def _detect_instagram_login_state(page) -> dict[str, Any]:
         body_text = page.locator("body").inner_text(timeout=5000).lower()
     except Exception:
         pass
+    invalid_markers = [
+        "login information you entered is incorrect",
+        "your password was incorrect",
+        "incorrect password",
+        "wrong password",
+        "we couldn't find an account",
+    ]
+    if any(marker in body_text for marker in invalid_markers):
+        return {"status": "invalid_credentials", "reason": "Instagram says the saved login information is incorrect", "url": url}
     login_markers = ["log into instagram", "log in with facebook", "forgot password", "create new account"]
     if any(marker in body_text for marker in login_markers):
         return {"status": "cookie_expired", "reason": "Instagram login page text is visible"}
-    challenge_markers = ["confirm it's you", "suspicious", "challenge", "verify your account", "help us confirm"]
+    challenge_markers = _verification_text_markers()
     if any(marker in body_text for marker in challenge_markers):
         return {"status": "need_verification", "reason": "Verification or challenge text is visible"}
     ready_markers = [
@@ -339,9 +403,26 @@ def _detect_instagram_login_state(page) -> dict[str, Any]:
 
 def _detect_threads_login_state(page) -> dict[str, Any]:
     url = str(page.url or "")
-    if any(part in url for part in ("/login", "/checkpoint", "/challenge")):
-        status = "need_verification" if any(part in url for part in ("/checkpoint", "/challenge")) else "cookie_expired"
-        return {"status": status, "reason": f"Threads redirected to {url}"}
+    if _is_verification_url(url):
+        return {"status": "need_verification", "reason": "Threads/Instagram requires a verification code", "url": url}
+    if "/login" in url:
+        return {"status": "cookie_expired", "reason": "Threads login page is visible", "url": url}
+    login_prompt_selectors = [
+        'text="Log in or sign up for Threads"',
+        'text="Continue with Instagram"',
+        'text="Log in with username instead"',
+        'text="Say more with Threads"',
+        '[role="dialog"] >> text="Continue with Instagram"',
+        'button:has-text("Continue with Instagram")',
+        'a:has-text("Continue with Instagram")',
+    ]
+    for selector in login_prompt_selectors:
+        try:
+            loc = page.locator(selector).first
+            if loc.count() and loc.is_visible(timeout=1500):
+                return {"status": "cookie_expired", "reason": "Threads login prompt is visible", "url": url}
+        except Exception:
+            continue
     login_inputs = page.locator(
         'input[name="username"], input[name="password"], '
         'input[autocomplete="username"], input[autocomplete="current-password"], '
@@ -357,12 +438,19 @@ def _detect_threads_login_state(page) -> dict[str, Any]:
         body_text = page.locator("body").inner_text(timeout=5000).lower()
     except Exception:
         pass
+    invalid_markers = [
+        "login information you entered is incorrect",
+        "your password was incorrect",
+        "incorrect password",
+        "wrong password",
+        "we couldn't find an account",
+    ]
+    if any(marker in body_text for marker in invalid_markers):
+        return {"status": "invalid_credentials", "reason": "Instagram/Threads says the saved login information is incorrect", "url": url}
     login_markers = ["log in", "login", "continue with instagram", "forgot password", "sign up"]
     if any(marker in body_text for marker in login_markers) and any(marker in body_text for marker in ["threads", "instagram"]):
-        ready_words = ["home", "search", "activity", "profile", "following", "for you"]
-        if not any(word in body_text for word in ready_words):
-            return {"status": "cookie_expired", "reason": "Threads login page text is visible"}
-    challenge_markers = ["confirm it's you", "suspicious", "challenge", "verify your account", "help us confirm"]
+        return {"status": "cookie_expired", "reason": "Threads login page text is visible", "url": url}
+    challenge_markers = _verification_text_markers()
     if any(marker in body_text for marker in challenge_markers):
         return {"status": "need_verification", "reason": "Verification or challenge text is visible"}
 
@@ -399,6 +487,41 @@ def _platform_name(platform: str) -> str:
     return "Threads" if platform == "threads" else "Instagram"
 
 
+def _is_verification_url(url: str) -> bool:
+    return any(
+        part in url
+        for part in (
+            "/challenge",
+            "/checkpoint",
+            "/two_step_verification",
+            "two_factor_login",
+        )
+    )
+
+
+def _verification_text_markers() -> list[str]:
+    return [
+        "verification code",
+        "enter the code",
+        "security code",
+        "two-factor",
+        "two factor",
+        "two-step",
+        "two step",
+        "authentication app",
+        "6-digit code",
+        "confirm it's you",
+        "suspicious",
+        "challenge",
+        "verify your account",
+        "help us confirm",
+        "验证码",
+        "两步验证",
+        "双重验证",
+        "安全码",
+    ]
+
+
 def _detect_platform_login_state(page, platform: str) -> dict[str, Any]:
     if platform == "threads":
         return _detect_threads_login_state(page)
@@ -413,7 +536,7 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
     logger.log("info", "open_login", "Browser is open for login", {"wait_seconds": wait_seconds, "auto_submit": auto_submit})
     deadline = time.time() + wait_seconds
     last_status: dict[str, Any] = {}
-    login_attempted = False
+    login_attempts = 0
     verification_logged = False
     while time.time() < deadline:
         _raise_if_cancelled(cancel_event)
@@ -432,8 +555,28 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
                     )
                     return {"ok": True, "status": "ready", "screenshot_path": shot, "details": stable_status}
                 last_status = stable_status
-            if auto_submit and not login_attempted and str(last_status.get("status") or "") != "need_verification":
-                login_attempted = _auto_submit_login_form(page, platform, payload, logger, task, screenshot_dir)
+            if last_status.get("status") == "invalid_credentials":
+                shot = _screenshot(page, screenshot_dir, task, "login_invalid_credentials", logger)
+                raise NeedManualError(
+                    f"{_platform_name(platform)} 保存的登录资料被平台判定不正确，请在网页端更新保存的账号/密码后重试；screenshot={shot}",
+                    "cookie_expired",
+                )
+            if last_status.get("status") == "need_verification":
+                shot = _screenshot(page, screenshot_dir, task, "login_verification_required", logger)
+                logger.log(
+                    "warn",
+                    "login_verification_required",
+                    f"{_platform_name(platform)} requires a verification code",
+                    {"url": str(page.url or ""), "screenshot_path": shot, "details": last_status},
+                    shot,
+                )
+                raise NeedManualError(
+                    f"{_platform_name(platform)} 需要人工输入验证码或完成二次验证；screenshot={shot}",
+                    "need_verification",
+                )
+            if auto_submit and login_attempts < 2 and str(last_status.get("status") or "") != "need_verification":
+                if _auto_submit_login_form(page, platform, payload, logger, task, screenshot_dir):
+                    login_attempts += 1
             if _verification_visible(page):
                 if not verification_logged:
                     shot = _screenshot(page, screenshot_dir, task, "login_verification_required", logger)
@@ -445,6 +588,12 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
                         shot,
                     )
                     verification_logged = True
+                raise NeedManualError(
+                    f"{_platform_name(platform)} 需要人工输入验证码或完成二次验证；screenshot={shot}",
+                    "need_verification",
+                )
+        except NeedManualError:
+            raise
         except Exception as exc:
             message = str(exc)
             if "Target page, context or browser has been closed" in message or "has been closed" in message:
@@ -720,7 +869,15 @@ def _visible_first(page, selectors: list[str], timeout_ms: int = 1200):
 
 
 def _clear_and_type(page, locator, text: str) -> None:
-    locator.click()
+    locator.wait_for(state="visible", timeout=10000)
+    locator.evaluate(
+        """element => {
+            element.focus();
+            if (typeof element.select === 'function') element.select();
+            else if (element.isContentEditable) document.getSelection().selectAllChildren(element);
+        }""",
+        timeout=10000,
+    )
     page.keyboard.press("Control+A")
     page.keyboard.press("Backspace")
     _human_type(page, text, min_delay=0.07, max_delay=0.16)
@@ -771,12 +928,17 @@ def _auto_submit_login_form(page, platform: str, payload: dict[str, Any], logger
         logger.log("warn", "auto_login_inputs_missing", "Login inputs were not visible for automatic credential input", {"continued": continue_clicked, "url": str(page.url or "")}, shot)
         return False
 
-    logger.log("info", "auto_login_type_username", "Typing username into login form", {"username": username})
-    _clear_and_type(page, username_input, username)
-    _sleep_between(0.4, 0.9)
-    logger.log("info", "auto_login_type_password", "Typing password into login form", {"password": "***"})
-    _clear_and_type(page, password_input, password)
-    _sleep_between(0.4, 0.9)
+    try:
+        logger.log("info", "auto_login_type_username", "Typing username into login form", {"username": username})
+        _clear_and_type(page, username_input, username)
+        _sleep_between(0.4, 0.9)
+        logger.log("info", "auto_login_type_password", "Typing password into login form", {"password": "***"})
+        _clear_and_type(page, password_input, password)
+        _sleep_between(0.4, 0.9)
+    except Exception as exc:
+        shot = _screenshot(page, screenshot_dir, task, "auto_login_type_failed", logger)
+        logger.log("warn", "auto_login_type_failed", "Automatic credential typing failed", {"error": str(exc), "url": str(page.url or "")}, shot)
+        return False
     filled_shot = _screenshot(page, screenshot_dir, task, "auto_login_form_filled", logger)
     logger.log("info", "auto_login_form_filled", "Login form has been filled", {"username": username, "password": "***"}, filled_shot)
     clicked = _click_text_button(
@@ -794,6 +956,9 @@ def _auto_submit_login_form(page, platform: str, payload: dict[str, Any], logger
 
 
 def _verification_visible(page) -> bool:
+    url = str(page.url or "")
+    if _is_verification_url(url):
+        return True
     markers = [
         "verification code",
         "enter the code",

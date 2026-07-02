@@ -48,6 +48,8 @@ let personaDashboardAutomationLogTaskId = "";
 let personaDashboardAutomationLogData = null;
 let personaDashboardAutomationLogTimer = 0;
 let personaDashboardAutomationGalleryIndex = -1;
+let personaDashboardLoginPasswordVisible = false;
+let personaDashboardSelectedAutomationAccountId = "";
 
 const PD_LABELS = {
   likes: "点赞",
@@ -662,11 +664,16 @@ function pdRenderAutomationPanel(persona) {
   const accounts = pdAutomationAccountsForPlatform(persona, platform);
   const tasks = pdAutomationTasksForPersona(persona);
   const proxies = personaDashboardAutomation.proxies || [];
-  const selectedProxyId = String((accounts[0] && accounts[0].proxy_id) || "");
-  const selectedAccount = accounts[0] || null;
+  const preferredAccountId = accounts.some((account) => String(account.id || "") === personaDashboardSelectedAutomationAccountId)
+    ? personaDashboardSelectedAutomationAccountId
+    : String((accounts[0] && accounts[0].id) || "");
+  const selectedAccount = accounts.find((account) => String(account.id || "") === preferredAccountId) || accounts[0] || null;
+  const selectedProxyId = String((selectedAccount && selectedAccount.proxy_id) || "");
   const savedLoginUsername = String((selectedAccount && selectedAccount.login_username) || (selectedAccount && selectedAccount.username) || "");
+  const savedLoginPassword = String((selectedAccount && selectedAccount.login_password) || "");
   const hasSavedLoginPassword = !!(selectedAccount && selectedAccount.login_password_configured);
   const savedLoginAt = Number((selectedAccount && selectedAccount.login_credentials_updated_at) || 0);
+  const passwordVisible = personaDashboardLoginPasswordVisible && hasSavedLoginPassword;
   const readyCount = accounts.filter((account) => account.status === "ready").length;
   const platformLabel = platform === "threads" ? "Threads" : "Instagram";
   const usernamePlaceholder = platform === "threads" ? "threads username / handle" : "instagram username";
@@ -727,7 +734,12 @@ function pdRenderAutomationPanel(persona) {
           <label>自动登录资料</label>
           <div class="persona-auto-inline">
             <input id="personaAutoLoginUsername" type="text" placeholder="${pdEscape(platformLabel)} 登录账号/邮箱/手机号" value="${pdEscape(savedLoginUsername)}" autocomplete="username" />
-            <input id="personaAutoLoginPassword" type="password" placeholder="${hasSavedLoginPassword ? "已保存密码；留空则使用保存资料" : "登录密码，可选择长期保存"}" autocomplete="current-password" />
+            <div class="persona-auto-password-wrap">
+              <input id="personaAutoLoginPassword" type="${passwordVisible ? "text" : "password"}" placeholder="${hasSavedLoginPassword ? "已保存密码" : "登录密码，可选择长期保存"}" value="${pdEscape(savedLoginPassword)}" autocomplete="current-password" />
+              <button class="persona-auto-eye" type="button" id="personaAutoTogglePassword" aria-label="${passwordVisible ? "隐藏密码" : "显示密码"}" title="${passwordVisible ? "隐藏密码" : "显示密码"}" ${hasSavedLoginPassword ? "" : "disabled"}>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+              </button>
+            </div>
           </div>
           <div class="persona-auto-inline persona-auto-credential-tools">
             <span class="persona-auto-credential-state">${hasSavedLoginPassword ? `已保存${savedLoginAt ? ` · ${pdEscape(pdDate(savedLoginAt * 1000))}` : ""}` : "未保存登录资料"}</span>
@@ -1683,14 +1695,23 @@ function pdBindAutomationEvents(persona, root) {
   const accountSelect = pdEl("personaAutoAccount");
   if (accountSelect) {
     accountSelect.addEventListener("change", () => {
+      personaDashboardSelectedAutomationAccountId = String(accountSelect.value || "");
       const account = pdSelectedAutomationAccount();
       const usernameInput = pdEl("personaAutoLoginUsername");
       const passwordInput = pdEl("personaAutoLoginPassword");
       if (usernameInput) usernameInput.value = String((account && account.login_username) || (account && account.username) || "");
       if (passwordInput) {
-        passwordInput.value = "";
-        passwordInput.placeholder = account && account.login_password_configured ? "已保存密码；留空则使用保存资料" : "登录密码，可选择长期保存";
+        passwordInput.value = String((account && account.login_password) || "");
+        passwordInput.type = personaDashboardLoginPasswordVisible && account && account.login_password_configured ? "text" : "password";
+        passwordInput.placeholder = account && account.login_password_configured ? "已保存密码" : "登录密码，可选择长期保存";
       }
+    });
+  }
+  const togglePassword = pdEl("personaAutoTogglePassword");
+  if (togglePassword) {
+    togglePassword.addEventListener("click", () => {
+      personaDashboardLoginPasswordVisible = !personaDashboardLoginPasswordVisible;
+      pdRenderDashboard();
     });
   }
   const saveLogin = pdEl("personaAutoSaveLogin");
@@ -1720,7 +1741,6 @@ function pdBindAutomationEvents(persona, root) {
           method: "PATCH",
           body,
         });
-        if (pdEl("personaAutoLoginPassword")) pdEl("personaAutoLoginPassword").value = "";
         await pdLoadAutomationOverview();
         pdSetMsg("自动登录资料已保存。", "ok");
         pdRenderDashboard();
@@ -1810,7 +1830,6 @@ function pdBindAutomationEvents(persona, root) {
             },
           },
         });
-        if (pdEl("personaAutoLoginPassword")) pdEl("personaAutoLoginPassword").value = "";
         await pdLoadAutomationOverview();
         pdSetMsg("自动登录任务已创建。普通账号密码会自动输入；验证码/安全验证时请在打开的窗口里人工处理。", "ok");
         await pdOpenAutomationLogModal(created && created.task && created.task.id);
