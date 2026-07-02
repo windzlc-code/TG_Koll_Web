@@ -682,32 +682,17 @@ def _wait_for_manual_login_completion(
         "warn",
         "need_manual",
         reason,
-        {"status": status, "url": str(page.url or ""), "screenshot_path": screenshot_path, "details": last_status or {}},
+        {"status": status, "screenshot_path": screenshot_path, "details": last_status or {}},
         screenshot_path,
     )
     while True:
         _raise_if_cancelled(cancel_event)
         try:
-            current_status = _detect_platform_login_state(page, platform)
-            if current_status.get("status") == "ready":
-                stable_status = _confirm_platform_ready(page, platform, logger, cancel_event)
-                if stable_status.get("status") == "ready":
-                    shot = _screenshot(page, screenshot_dir, task, "login_complete", logger)
-                    logger.log(
-                        "info",
-                        "completion_node",
-                        f"{_platform_name(platform)} login completion node detected after manual intervention",
-                        {"url": str(page.url or ""), "details": stable_status},
-                        shot,
-                    )
-                    return {"ok": True, "status": "ready", "screenshot_path": shot, "details": stable_status, "manual_intervention": True}
-            else:
-                last_status = current_status
+            page.title(timeout=1000)
         except Exception as exc:
             message = str(exc)
             if "Target page, context or browser has been closed" in message or "has been closed" in message:
                 raise NeedManualError(f"{_platform_name(platform)} 登录窗口已关闭，未检测到登录成功。请重新启动登录任务。", status) from exc
-            logger.log("warn", "manual_wait_poll", f"Manual login status check failed: {exc}", {"status": status})
         time.sleep(5)
 
 

@@ -593,7 +593,7 @@ def cancel_social_task(task_id: str, reason: str = "") -> dict[str, Any]:
         if not row:
             raise HTTPException(status_code=404, detail="任务不存在")
         status = str(row["status"] or "")
-        if status in {"success", "failed", "cancelled", "need_manual"}:
+        if status in {"success", "failed", "cancelled"}:
             return _task_public(row)
         if status == "running":
             conn.execute(
@@ -608,7 +608,7 @@ def cancel_social_task(task_id: str, reason: str = "") -> dict[str, Any]:
             )
             _insert_log(conn, task_id, "warn", "cancel", "任务已取消", {"reason": clean_reason})
         updated = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
-    if status == "running":
+    if status in {"running", "need_manual"}:
         _force_stop_running_task(task_id)
     wake_social_automation_worker()
     return _task_public(updated)
@@ -1150,6 +1150,16 @@ class _DbTaskLogger:
         screenshot_path: str = "",
     ) -> None:
         with db() as conn:
+            if str(stage or "") == "need_manual":
+                now = _now()
+                conn.execute(
+                    """
+                    UPDATE social_automation_tasks
+                    SET status = 'need_manual', error = ?, updated_at = ?
+                    WHERE id = ? AND status IN ('queued', 'running', 'need_manual')
+                    """,
+                    (str(message or ""), now, self.task_id),
+                )
             _insert_log(conn, self.task_id, level, stage, message, data or {}, screenshot_path)
 
 

@@ -1033,7 +1033,6 @@ function pdAutomationLogDetailText(row) {
   const stage = String((row && row.stage) || "");
   const parts = [];
   if (data.username) parts.push(`账号：${data.username}`);
-  if (data.url) parts.push(`页面：${data.url}`);
   if (data.clicked !== undefined) parts.push(data.clicked ? "已点击入口按钮" : "未找到入口按钮");
   if (data.clicked_submit_button !== undefined) parts.push(data.clicked_submit_button ? "已点击提交按钮" : "已使用回车提交");
   if (data.hold_seconds) parts.push(`保留窗口：${data.hold_seconds} 秒`);
@@ -1048,7 +1047,7 @@ function pdAutomationLogDetailText(row) {
   if (!parts.length && stage === "browser_launch") parts.push("正在启动并加载独立浏览器 Profile");
   if (!parts.length && stage === "success") parts.push("任务已完成并保存结果");
   if (!parts.length && stage === "failed") parts.push("任务失败，请查看当前步骤或截图");
-  if (!parts.length && stage === "need_manual") parts.push("需要人工完成页面上的验证或确认");
+  if (!parts.length && stage === "need_manual") parts.push("自动脚本已停在人工接管节点，请在打开的浏览器里完成验证或确认");
   if (!parts.length && stage === "cancel") parts.push("用户已取消任务");
   return parts.join(" · ");
 }
@@ -1184,18 +1183,18 @@ function pdRenderAutomationLogModal() {
             <div class="persona-auto-log-media">${pdRenderAutomationLogMedia(task, logs)}</div>
           </section>
           <section class="persona-auto-log-panel">
-            <h4>完整过程</h4>
+            <h4>当前步骤</h4>
             <div class="persona-auto-log-list">
-              ${logs.map((row) => `
+              ${current ? `
                 <article class="persona-auto-log-item">
                   <div class="persona-auto-log-item-head">
-                    <span>${pdEscape(pdDate((row.created_at || 0) * 1000))}</span>
-                    <strong>${pdEscape(pdAutomationLogStepText(row))}</strong>
+                    <span>${pdEscape(pdDate((current.created_at || 0) * 1000))}</span>
+                    <strong>${pdEscape(pdAutomationLogStepText(current))}</strong>
                   </div>
-                  ${pdAutomationLogDetailText(row) ? `<div class="persona-auto-log-message">${pdEscape(pdAutomationLogDetailText(row))}</div>` : ""}
-                  ${pdAutomationLogScreenshot(row)}
+                  ${pdAutomationLogDetailText(current) ? `<div class="persona-auto-log-message">${pdEscape(pdAutomationLogDetailText(current))}</div>` : ""}
+                  ${pdAutomationLogScreenshot(current)}
                 </article>
-              `).join("") || `<div class="small">暂无日志</div>`}
+              ` : `<div class="small">暂无日志</div>`}
             </div>
           </section>
         </div>
