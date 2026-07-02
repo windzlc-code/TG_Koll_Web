@@ -1024,13 +1024,40 @@ def _enrich_threads_task_payload(persona_id: str, task_type: str, payload: dict[
             next_payload.setdefault("threads_handle", handle)
         next_payload.setdefault("reply_templates", _collect_persona_reply_templates(archive))
     if task_type == "threads_warmup":
-        next_payload.setdefault("scroll_times", 6)
-        next_payload.setdefault("like_limit", 2)
+        strategy_id = str(next_payload.get("strategy_id") or "tg_default")
+        next_payload.setdefault("strategy_id", strategy_id)
+        if strategy_id == "safe_browse":
+            next_payload.setdefault("strategy_label", "保守浏览")
+            next_payload.setdefault("scroll_times", 4)
+            next_payload.setdefault("like_limit", 0)
+        elif strategy_id == "active_warmup":
+            next_payload.setdefault("strategy_label", "高活跃养号")
+            next_payload.setdefault("scroll_times", 10)
+            next_payload.setdefault("like_limit", 4)
+        else:
+            next_payload.setdefault("strategy_label", "原 TG 默认养号")
+            next_payload.setdefault("scroll_times", 6)
+            next_payload.setdefault("like_limit", 2)
         next_payload.setdefault("comment_chance", 0)
     if task_type == "threads_auto_reply":
-        next_payload.setdefault("max_posts", 5)
-        next_payload.setdefault("max_replies", 3)
-        next_payload.setdefault("max_age_days", 2)
+        strategy_id = str(next_payload.get("strategy_id") or "tg_default")
+        next_payload.setdefault("strategy_id", strategy_id)
+        if strategy_id == "safe_relevant":
+            next_payload.setdefault("strategy_label", "保守相关回复")
+            next_payload.setdefault("max_posts", 3)
+            next_payload.setdefault("max_replies", 1)
+            next_payload.setdefault("max_age_days", 1)
+        elif strategy_id == "coverage_reply":
+            next_payload.setdefault("strategy_label", "覆盖优先回复")
+            next_payload.setdefault("max_posts", 8)
+            next_payload.setdefault("max_replies", 4)
+            next_payload.setdefault("max_age_days", 3)
+        else:
+            next_payload.setdefault("strategy_label", "原 TG 默认自动回复")
+            next_payload.setdefault("max_posts", 5)
+            next_payload.setdefault("max_replies", 3)
+            next_payload.setdefault("max_age_days", 2)
+        next_payload.setdefault("require_persona_relevance", True)
     return next_payload
 
 

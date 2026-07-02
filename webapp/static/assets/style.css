@@ -6770,6 +6770,52 @@ body.page-admin {
   color: #991b1b;
 }
 
+.persona-strategy-card {
+  width: min(520px, calc(100vw - 40px));
+}
+
+.persona-strategy-list {
+  display: grid;
+  gap: 8px;
+  padding: 4px 16px 16px;
+}
+
+.persona-strategy-option {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #dbe4f0;
+  border-radius: 8px;
+  background: #fff;
+  color: #0f172a;
+  cursor: pointer;
+  text-align: left;
+}
+
+.persona-strategy-option:hover,
+.persona-strategy-option:focus-visible {
+  border-color: #0f766e;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+  outline: none;
+}
+
+.persona-strategy-option.is-recommended {
+  border-color: #99f6e4;
+  background: #f0fdfa;
+}
+
+.persona-strategy-option span {
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.persona-strategy-option small {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .persona-auto-log-modal {
   position: fixed;
   inset: 0;

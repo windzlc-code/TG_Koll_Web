@@ -84,6 +84,105 @@ function pdConfirm(message, options = {}) {
   return pdPromptDialog({ ...options, message, showCancel: true });
 }
 
+const PD_THREADS_STRATEGIES = {
+  threads_warmup: [
+    {
+      id: "tg_default",
+      label: "原 TG 默认养号",
+      desc: "平衡浏览和少量点赞，适合日常维护账号状态。",
+      payload: { strategy_id: "tg_default", strategy_label: "原 TG 默认养号", scroll_times: 6, like_limit: 2, comment_chance: 0, require_persona_relevance: false },
+    },
+    {
+      id: "safe_browse",
+      label: "保守浏览",
+      desc: "只浏览不点赞，适合新账号、异常后恢复或不想产生互动时。",
+      payload: { strategy_id: "safe_browse", strategy_label: "保守浏览", scroll_times: 4, like_limit: 0, comment_chance: 0, require_persona_relevance: false },
+    },
+    {
+      id: "active_warmup",
+      label: "高活跃养号",
+      desc: "增加浏览与点赞次数，适合已稳定登录、需要提高活跃度的账号。",
+      payload: { strategy_id: "active_warmup", strategy_label: "高活跃养号", scroll_times: 10, like_limit: 4, comment_chance: 0, require_persona_relevance: false },
+    },
+  ],
+  threads_auto_reply: [
+    {
+      id: "tg_default",
+      label: "原 TG 默认自动回复",
+      desc: "扫描最近内容，按人设模板少量回复，适合常规自动回复。",
+      payload: { strategy_id: "tg_default", strategy_label: "原 TG 默认自动回复", max_posts: 5, max_replies: 3, max_age_days: 2, require_persona_relevance: true },
+    },
+    {
+      id: "safe_relevant",
+      label: "保守相关回复",
+      desc: "减少扫描和回复数量，优先降低跑偏风险。",
+      payload: { strategy_id: "safe_relevant", strategy_label: "保守相关回复", max_posts: 3, max_replies: 1, max_age_days: 1, require_persona_relevance: true },
+    },
+    {
+      id: "coverage_reply",
+      label: "覆盖优先回复",
+      desc: "扩大扫描范围和回复上限，适合素材充足且账号状态稳定时。",
+      payload: { strategy_id: "coverage_reply", strategy_label: "覆盖优先回复", max_posts: 8, max_replies: 4, max_age_days: 3, require_persona_relevance: true },
+    },
+  ],
+};
+
+function pdChooseThreadsStrategy(taskType) {
+  const options = PD_THREADS_STRATEGIES[taskType] || [];
+  if (!options.length) return Promise.resolve(null);
+  const existing = document.querySelector(".persona-strategy-modal");
+  if (existing) existing.remove();
+  return new Promise((resolve) => {
+    const title = taskType === "threads_auto_reply" ? "选择自动回复策略" : "选择养号策略";
+    const modal = document.createElement("div");
+    modal.className = "persona-prompt-modal persona-strategy-modal";
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    modal.setAttribute("aria-label", title);
+    modal.innerHTML = `
+      <div class="persona-prompt-card persona-strategy-card">
+        <div class="persona-prompt-head">
+          <strong>${pdEscape(title)}</strong>
+          <button class="persona-prompt-icon" type="button" data-strategy-cancel aria-label="关闭">×</button>
+        </div>
+        <div class="persona-strategy-list">
+          ${options.map((item, index) => `
+            <button class="persona-strategy-option ${index === 0 ? "is-recommended" : ""}" type="button" data-strategy-id="${pdEscape(item.id)}">
+              <span>${pdEscape(item.label)}${index === 0 ? " · 推荐" : ""}</span>
+              <small>${pdEscape(item.desc)}</small>
+            </button>
+          `).join("")}
+        </div>
+        <div class="persona-prompt-actions">
+          <button class="ghost" type="button" data-strategy-cancel>取消</button>
+        </div>
+      </div>
+    `;
+    const close = (value) => {
+      document.removeEventListener("keydown", onKeydown);
+      modal.remove();
+      resolve(value);
+    };
+    const onKeydown = (event) => {
+      if (event.key === "Escape") close(null);
+    };
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal) close(null);
+    });
+    modal.querySelectorAll("[data-strategy-cancel]").forEach((node) => node.addEventListener("click", () => close(null)));
+    modal.querySelectorAll("[data-strategy-id]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const id = String(node.getAttribute("data-strategy-id") || "");
+        close(options.find((item) => item.id === id) || null);
+      });
+    });
+    document.addEventListener("keydown", onKeydown);
+    document.body.appendChild(modal);
+    const first = modal.querySelector("[data-strategy-id]");
+    if (first) first.focus();
+  });
+}
+
 let personaDashboardData = null;
 let personaDashboardSelectedId = "__overview__";
 let personaDashboardPostPage = 1;
@@ -1092,6 +1191,7 @@ function pdAutomationLogDetailText(row) {
   const data = (row && row.data) || {};
   const stage = String((row && row.stage) || "");
   const parts = [];
+  if (data.strategy_label) parts.push(`策略：${data.strategy_label}`);
   if (data.username) parts.push(`账号：${data.username}`);
   if (data.clicked !== undefined) parts.push(data.clicked ? "已点击入口按钮" : "未找到入口按钮");
   if (data.clicked_submit_button !== undefined) parts.push(data.clicked_submit_button ? "已点击提交按钮" : "已使用回车提交");
@@ -1116,6 +1216,7 @@ function pdAutomationTaskSummary(task) {
   const payload = (task && task.payload) || {};
   const result = (task && task.result) || {};
   const parts = [];
+  if (payload.strategy_label) parts.push(`策略：${payload.strategy_label}`);
   if (payload.login_username) parts.push(`登录账号：${payload.login_username}`);
   if (payload.auto_submit) parts.push("模式：自动输入账号密码");
   if (payload.max_posts) parts.push(`最多扫描：${payload.max_posts} 条`);
@@ -1768,7 +1869,7 @@ function pdScheduleAutomationPasswordNormalize() {
   window.setTimeout(pdNormalizeAutomationPasswordField, 1000);
 }
 
-function pdAutomationPayload(taskType, persona = null, platform = "") {
+function pdAutomationPayload(taskType, persona = null, platform = "", strategy = null) {
   const target = String((pdEl("personaAutoTarget") && pdEl("personaAutoTarget").value) || "").trim();
   const text = String((pdEl("personaAutoText") && pdEl("personaAutoText").value) || "").trim();
   const mediaText = String((pdEl("personaAutoMedia") && pdEl("personaAutoMedia").value) || "").trim();
@@ -1801,6 +1902,7 @@ function pdAutomationPayload(taskType, persona = null, platform = "") {
     payload.max_age_days = 2;
     payload.persona_name = (persona && persona.name) || "";
   }
+  if (strategy && strategy.payload) Object.assign(payload, strategy.payload);
   if (platform) payload.platform = platform;
   return payload;
 }
@@ -2154,14 +2256,18 @@ function pdBindAutomationEvents(persona, root) {
         pdSetMsg("请先选择执行账号。", "err");
         return;
       }
-      const payload = pdAutomationPayload(taskType, persona, platform);
+      const strategy = platform === "threads" && ["threads_warmup", "threads_auto_reply"].includes(taskType)
+        ? await pdChooseThreadsStrategy(taskType)
+        : null;
+      if (platform === "threads" && ["threads_warmup", "threads_auto_reply"].includes(taskType) && !strategy) return;
+      const payload = pdAutomationPayload(taskType, persona, platform, strategy);
       const validation = pdValidateAutomationPayload(taskType, payload);
       if (validation) {
         pdSetMsg(validation, "err");
         return;
       }
       try {
-        pdSetMsg("正在创建社媒自动化任务...", "ok");
+        pdSetMsg(payload.strategy_label ? `正在创建任务：${payload.strategy_label}...` : "正在创建社媒自动化任务...", "ok");
         await pdApi("/api/persona_dashboard/automation/tasks", {
           method: "POST",
           body: { persona_id: persona.id, account_id: accountId, platform, task_type: taskType, payload },

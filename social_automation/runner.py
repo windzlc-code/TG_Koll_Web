@@ -782,7 +782,11 @@ def _run_threads_warmup(page, task, payload, screenshot_dir, logger) -> dict[str
     _goto(page, THREADS_HOME, logger, "threads_warmup")
     scroll_times = int(payload.get("scroll_times") or payload.get("browse_count") or 6)
     like_limit = int(payload.get("like_limit") or 0)
+    strategy_id = str(payload.get("strategy_id") or "tg_default")
+    strategy_label = str(payload.get("strategy_label") or "原 TG 默认养号")
     logger.log("info", "threads_warmup", "Starting Threads warmup from persona automation settings", {
+        "strategy_id": strategy_id,
+        "strategy_label": strategy_label,
         "scroll_times": scroll_times,
         "like_limit": like_limit,
         "persona_name": payload.get("persona_name") or "",
@@ -800,10 +804,10 @@ def _run_threads_warmup(page, task, payload, screenshot_dir, logger) -> dict[str
         "info",
         "completion_node",
         "Threads warmup completion node detected",
-        {"url": str(page.url or ""), "liked": liked, "scrolled": scroll_times},
+        {"url": str(page.url or ""), "liked": liked, "scrolled": scroll_times, "strategy_id": strategy_id, "strategy_label": strategy_label},
         shot,
     )
-    return {"ok": True, "url": page.url, "liked": liked, "scrolled": scroll_times, "screenshot_path": shot}
+    return {"ok": True, "url": page.url, "liked": liked, "scrolled": scroll_times, "strategy_id": strategy_id, "strategy_label": strategy_label, "screenshot_path": shot}
 
 
 def _threads_reply_button(page):
@@ -847,6 +851,8 @@ def _pick_persona_reply(payload: dict[str, Any]) -> str:
     templates = [str(item or "").strip() for item in (payload.get("reply_templates") or []) if str(item or "").strip()]
     if templates:
         return random.choice(templates)[:180]
+    if bool(payload.get("require_persona_relevance", False)):
+        return ""
     persona_name = str(payload.get("persona_name") or "").strip()
     if persona_name:
         return f"这个角度挺适合 {persona_name} 继续观察。"
@@ -857,12 +863,18 @@ def _run_threads_auto_reply(page, task, payload, screenshot_dir, logger) -> dict
     _goto(page, THREADS_HOME, logger, "threads_auto_reply_open")
     max_posts = max(1, min(int(payload.get("max_posts") or 5), 20))
     max_replies = max(1, min(int(payload.get("max_replies") or 3), 10))
+    strategy_id = str(payload.get("strategy_id") or "tg_default")
+    strategy_label = str(payload.get("strategy_label") or "原 TG 默认自动回复")
+    require_persona_relevance = bool(payload.get("require_persona_relevance", True))
     replied = 0
     scanned = 0
     reply_screenshots: list[str] = []
     logger.log("info", "threads_auto_reply", "Starting persona-driven Threads auto reply", {
+        "strategy_id": strategy_id,
+        "strategy_label": strategy_label,
         "max_posts": max_posts,
         "max_replies": max_replies,
+        "require_persona_relevance": require_persona_relevance,
         "persona_name": payload.get("persona_name") or "",
         "threads_handle": payload.get("threads_handle") or "",
     })
@@ -872,6 +884,10 @@ def _run_threads_auto_reply(page, task, payload, screenshot_dir, logger) -> dict
         button = _threads_reply_button(page)
         if button is not None:
             reply_text = _pick_persona_reply(payload)
+            if require_persona_relevance and not str(reply_text or "").strip():
+                logger.log("warn", "threads_auto_reply_skip", "No persona-relevant reply candidate was available", {"strategy_id": strategy_id, "strategy_label": strategy_label})
+                completion_reason = "no_persona_relevant_reply"
+                break
             _human_click(page, button, logger, "threads_reply_button")
             _sleep_between(1.0, 2.5)
             box = _threads_text_box(page)
@@ -900,7 +916,7 @@ def _run_threads_auto_reply(page, task, payload, screenshot_dir, logger) -> dict
         "info",
         "completion_node",
         "Threads auto-reply completion node detected",
-        {"url": str(page.url or ""), "scannedPosts": scanned, "replied": replied, "completionReason": completion_reason},
+        {"url": str(page.url or ""), "scannedPosts": scanned, "replied": replied, "completionReason": completion_reason, "strategy_id": strategy_id, "strategy_label": strategy_label},
         shot,
     )
     return {
@@ -911,6 +927,8 @@ def _run_threads_auto_reply(page, task, payload, screenshot_dir, logger) -> dict
         "replied": replied,
         "skipped": max(0, scanned - replied),
         "completionReason": completion_reason,
+        "strategy_id": strategy_id,
+        "strategy_label": strategy_label,
         "replyScreenshots": reply_screenshots,
         "screenshot_path": shot,
     }
