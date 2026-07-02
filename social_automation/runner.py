@@ -312,6 +312,8 @@ def _human_click(page, locator, logger: AutomationLogger, stage: str = "click") 
 
 
 def _screenshot(page, screenshot_dir: Path, task: dict[str, Any], stage: str, logger: AutomationLogger) -> str:
+    if not _should_capture_screenshot(stage):
+        return ""
     path = screenshot_dir / f"{str(task.get('id') or 'task')}_{stage}_{int(time.time())}.png"
     try:
         page.screenshot(path=str(path), full_page=True)
@@ -320,6 +322,31 @@ def _screenshot(page, screenshot_dir: Path, task: dict[str, Any], stage: str, lo
     except Exception as exc:
         logger.log("warn", stage, f"Screenshot failed: {exc}")
         return ""
+
+
+def _should_capture_screenshot(stage: str) -> bool:
+    mode = str(os.getenv("SOCIAL_AUTOMATION_SCREENSHOT_MODE") or "checkpoint").strip().lower()
+    if mode in {"debug", "all", "full"}:
+        return True
+    return str(stage or "") in {
+        "auto_login_start",
+        "auto_login_form_filled",
+        "login_verification_required",
+        "login_invalid_credentials",
+        "login_wait_timeout",
+        "login_complete",
+        "check_login",
+        "browse_feed",
+        "threads_warmup",
+        "threads_auto_reply_done",
+        "publish_done",
+        "comment_done",
+        "reply_done",
+        "like_done",
+        "already_liked",
+        "share_done",
+        "failed",
+    }
 
 
 def _goto(page, url: str, logger: AutomationLogger, stage: str) -> None:
@@ -557,9 +584,17 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
                 last_status = stable_status
             if last_status.get("status") == "invalid_credentials":
                 shot = _screenshot(page, screenshot_dir, task, "login_invalid_credentials", logger)
-                raise NeedManualError(
-                    f"{_platform_name(platform)} 保存的登录资料被平台判定不正确，请在网页端更新保存的账号/密码后重试；screenshot={shot}",
+                return _wait_for_manual_login_completion(
+                    page,
+                    task,
+                    screenshot_dir,
+                    logger,
+                    platform,
+                    cancel_event,
+                    f"{_platform_name(platform)} 保存的登录资料被平台判定不正确，请在打开的浏览器里人工修正后继续。",
                     "cookie_expired",
+                    shot,
+                    last_status,
                 )
             if last_status.get("status") == "need_verification":
                 shot = _screenshot(page, screenshot_dir, task, "login_verification_required", logger)
@@ -570,9 +605,17 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
                     {"url": str(page.url or ""), "screenshot_path": shot, "details": last_status},
                     shot,
                 )
-                raise NeedManualError(
-                    f"{_platform_name(platform)} 需要人工输入验证码或完成二次验证；screenshot={shot}",
+                return _wait_for_manual_login_completion(
+                    page,
+                    task,
+                    screenshot_dir,
+                    logger,
+                    platform,
+                    cancel_event,
+                    f"{_platform_name(platform)} 需要人工输入验证码或完成二次验证；浏览器会保持打开直到人工完成或用户取消。",
                     "need_verification",
+                    shot,
+                    last_status,
                 )
             if auto_submit and login_attempts < 2 and str(last_status.get("status") or "") != "need_verification":
                 if _auto_submit_login_form(page, platform, payload, logger, task, screenshot_dir):
@@ -588,9 +631,17 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
                         shot,
                     )
                     verification_logged = True
-                raise NeedManualError(
-                    f"{_platform_name(platform)} 需要人工输入验证码或完成二次验证；screenshot={shot}",
+                return _wait_for_manual_login_completion(
+                    page,
+                    task,
+                    screenshot_dir,
+                    logger,
+                    platform,
+                    cancel_event,
+                    f"{_platform_name(platform)} 需要人工输入验证码或完成二次验证；浏览器会保持打开直到人工完成或用户取消。",
                     "need_verification",
+                    shot,
+                    last_status,
                 )
         except NeedManualError:
             raise
@@ -601,10 +652,63 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
             logger.log("warn", "open_login_poll", f"Login window status check failed: {exc}")
         time.sleep(3 if auto_submit else 10)
     shot = _screenshot(page, screenshot_dir, task, "login_wait_timeout", logger)
-    raise NeedManualError(
-        f"Manual login window timed out: {last_status.get('reason') or 'not ready'}; screenshot={shot}",
+    return _wait_for_manual_login_completion(
+        page,
+        task,
+        screenshot_dir,
+        logger,
+        platform,
+        cancel_event,
+        f"自动流程未能确认登录完成：{last_status.get('reason') or 'not ready'}。浏览器会保持打开，请人工处理或取消任务。",
         str(last_status.get("status") or "need_verification"),
+        shot,
+        last_status,
     )
+
+
+def _wait_for_manual_login_completion(
+    page,
+    task,
+    screenshot_dir: Path,
+    logger: AutomationLogger,
+    platform: str,
+    cancel_event: Any | None,
+    reason: str,
+    status: str = "need_verification",
+    screenshot_path: str = "",
+    last_status: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    logger.log(
+        "warn",
+        "need_manual",
+        reason,
+        {"status": status, "url": str(page.url or ""), "screenshot_path": screenshot_path, "details": last_status or {}},
+        screenshot_path,
+    )
+    while True:
+        _raise_if_cancelled(cancel_event)
+        try:
+            current_status = _detect_platform_login_state(page, platform)
+            if current_status.get("status") == "ready":
+                stable_status = _confirm_platform_ready(page, platform, logger, cancel_event)
+                if stable_status.get("status") == "ready":
+                    shot = _screenshot(page, screenshot_dir, task, "login_complete", logger)
+                    logger.log(
+                        "info",
+                        "completion_node",
+                        f"{_platform_name(platform)} login completion node detected after manual intervention",
+                        {"url": str(page.url or ""), "details": stable_status},
+                        shot,
+                    )
+                    return {"ok": True, "status": "ready", "screenshot_path": shot, "details": stable_status, "manual_intervention": True}
+            else:
+                last_status = current_status
+        except Exception as exc:
+            message = str(exc)
+            if "Target page, context or browser has been closed" in message or "has been closed" in message:
+                raise NeedManualError(f"{_platform_name(platform)} 登录窗口已关闭，未检测到登录成功。请重新启动登录任务。", status) from exc
+            logger.log("warn", "manual_wait_poll", f"Manual login status check failed: {exc}", {"status": status})
+        time.sleep(5)
 
 
 def _confirm_platform_ready(page, platform: str, logger: AutomationLogger, cancel_event: Any | None = None) -> dict[str, Any]:

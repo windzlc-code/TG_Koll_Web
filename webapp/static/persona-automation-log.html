@@ -93,6 +93,29 @@
       if (/\.(mp4|mov|m4v|webm)$/.test(text)) return "video";
       return "file";
     }
+    function isCheckpointScreenshot(row) {
+      const stage = String((row && row.stage) || "");
+      return new Set([
+        "auto_login_start",
+        "auto_login_form_filled",
+        "login_verification_required",
+        "login_invalid_credentials",
+        "login_wait_timeout",
+        "login_complete",
+        "completion_node",
+        "check_login",
+        "browse_feed",
+        "threads_warmup",
+        "threads_auto_reply_done",
+        "publish_done",
+        "comment_done",
+        "reply_done",
+        "like_done",
+        "already_liked",
+        "share_done",
+        "failed",
+      ]).has(stage);
+    }
     function renderMedia(task, logs) {
       const payload = task.payload || {};
       const result = task.result || {};
@@ -104,7 +127,7 @@
         items.push({ label: `结果截图 ${index + 1}`, path, url: screenshotUrl(path) });
       });
       logs.forEach((row) => {
-        if (row.screenshot_url) items.push({ label: `${row.stage} 截图`, path: row.screenshot_path, url: row.screenshot_url });
+        if (row.screenshot_url && isCheckpointScreenshot(row)) items.push({ label: `${row.stage} 截图`, path: row.screenshot_path, url: row.screenshot_url });
       });
       const seen = new Set();
       const html = items.filter((item) => {
@@ -138,14 +161,18 @@
       renderMedia(task, logs);
     }
     function renderLogs(logs) {
-      document.getElementById("logList").innerHTML = logs.map((row) => `
+      const logList = document.getElementById("logList");
+      const wasNearBottom = logList.scrollHeight - logList.scrollTop - logList.clientHeight < 48;
+      const previousTop = logList.scrollTop;
+      logList.innerHTML = logs.map((row) => `
         <div class="log-item">
           <div class="log-item-top"><span>${esc(fmtTime(row.created_at))}</span><span>${esc(row.level)} / ${esc(row.stage)}</span></div>
           <div class="log-message">${esc(row.message || "")}</div>
           ${row.data && Object.keys(row.data).length ? `<div class="log-pre" style="margin-top:8px">${esc(JSON.stringify(row.data, null, 2))}</div>` : ""}
-          ${row.screenshot_url ? `<p><a href="${esc(row.screenshot_url)}" target="_blank" rel="noopener">打开截图</a></p>` : ""}
+          ${row.screenshot_url && isCheckpointScreenshot(row) ? `<p><a href="${esc(row.screenshot_url)}" target="_blank" rel="noopener">打开截图</a></p>` : ""}
         </div>
       `).join("") || "<div class='small'>暂无日志</div>";
+      logList.scrollTop = wasNearBottom ? logList.scrollHeight : previousTop;
     }
     async function load() {
       if (!taskId) throw new Error("缺少 task_id");

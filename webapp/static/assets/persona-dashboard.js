@@ -956,7 +956,7 @@ function pdAutomationLogImages(task, logs) {
     items.push({ label: `结果截图 ${index + 1}`, url: pdAutomationScreenshotUrl(path), path });
   });
   (logs || []).forEach((row) => {
-    if (row.screenshot_url) items.push({ label: `${pdAutomationLogStepText(row)}截图`, url: row.screenshot_url, path: row.screenshot_path });
+    if (row.screenshot_url && pdAutomationLogIsCheckpointScreenshot(row)) items.push({ label: `${pdAutomationLogStepText(row)}截图`, url: row.screenshot_url, path: row.screenshot_path });
   });
   const seen = new Set();
   return items.filter((item) => {
@@ -965,6 +965,30 @@ function pdAutomationLogImages(task, logs) {
     seen.add(key);
     return true;
   });
+}
+
+function pdAutomationLogIsCheckpointScreenshot(row) {
+  const stage = String((row && row.stage) || "");
+  return new Set([
+    "auto_login_start",
+    "auto_login_form_filled",
+    "login_verification_required",
+    "login_invalid_credentials",
+    "login_wait_timeout",
+    "login_complete",
+    "completion_node",
+    "check_login",
+    "browse_feed",
+    "threads_warmup",
+    "threads_auto_reply_done",
+    "publish_done",
+    "comment_done",
+    "reply_done",
+    "like_done",
+    "already_liked",
+    "share_done",
+    "failed",
+  ]).has(stage);
 }
 
 function pdAutomationLogStepText(row) {
@@ -1047,7 +1071,7 @@ function pdAutomationTaskSummary(task) {
 
 function pdAutomationLogScreenshot(row) {
   const url = row && row.screenshot_url;
-  if (!url) return "";
+  if (!url || !pdAutomationLogIsCheckpointScreenshot(row)) return "";
   const images = pdAutomationLogImages((personaDashboardAutomationLogData || {}).task, (personaDashboardAutomationLogData || {}).logs || []);
   const index = Math.max(0, images.findIndex((item) => item.url === url));
   return `
@@ -1577,6 +1601,11 @@ async function pdOpenAutomationLogModal(taskId) {
 async function pdRefreshAutomationLogModal(taskId) {
   const id = String(taskId || personaDashboardAutomationLogTaskId || "").trim();
   if (!id) return;
+  const scrollPanel = document.querySelector(".persona-auto-log-layout .persona-auto-log-panel:nth-child(2)");
+  const scrollState = scrollPanel ? {
+    top: scrollPanel.scrollTop,
+    bottom: scrollPanel.scrollHeight - scrollPanel.scrollTop - scrollPanel.clientHeight < 48,
+  } : null;
   try {
     const [taskData, logData] = await Promise.all([
       pdApi(`/api/persona_dashboard/automation/tasks/${encodeURIComponent(id)}`),
@@ -1584,6 +1613,13 @@ async function pdRefreshAutomationLogModal(taskId) {
     ]);
     personaDashboardAutomationLogData = { task: taskData.task || null, logs: logData.logs || [] };
     pdRenderDashboard();
+    if (scrollState) {
+      requestAnimationFrame(() => {
+        const nextPanel = document.querySelector(".persona-auto-log-layout .persona-auto-log-panel:nth-child(2)");
+        if (!nextPanel) return;
+        nextPanel.scrollTop = scrollState.bottom ? nextPanel.scrollHeight : scrollState.top;
+      });
+    }
   } catch (err) {
     pdSetMsg(String((err && (err.detail || err.message)) || err || "读取日志失败"), "err");
   }
@@ -1992,9 +2028,7 @@ function pdBindAutomationEvents(persona, root) {
         });
         await pdLoadAutomationOverview();
         pdSetMsg(action === "open_login" ? "已打开登录窗口，请在有头浏览器里完成登录。" : "已创建登录检查任务。", "ok");
-        if (action === "open_login") pdRenderDashboard();
-        else if (created && created.task && created.task.id) await pdOpenAutomationLogModal(created.task.id);
-        else pdRenderDashboard();
+        pdRenderDashboard();
       } catch (err) {
         pdSetMsg(String((err && (err.detail || err.message)) || err || "创建任务失败"), "err");
       }
@@ -2046,7 +2080,7 @@ function pdBindAutomationEvents(persona, root) {
         if (pdEl("personaAutoLoginPassword")) pdEl("personaAutoLoginPassword").type = "password";
         await pdLoadAutomationOverview();
         pdSetMsg("自动登录任务已创建。普通账号密码会自动输入；验证码/安全验证时请在打开的窗口里人工处理。", "ok");
-        await pdOpenAutomationLogModal(created && created.task && created.task.id);
+        pdRenderDashboard();
       } catch (err) {
         pdSetMsg(String((err && (err.detail || err.message)) || err || "自动登录任务创建失败"), "err");
       }
