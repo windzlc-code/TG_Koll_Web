@@ -51,6 +51,7 @@ let personaDashboardAutomationGalleryIndex = -1;
 let personaDashboardVisiblePasswordAccountId = "";
 let personaDashboardSelectedAutomationAccountId = "";
 let personaDashboardPasswordDrafts = {};
+let personaDashboardPasswordDirtyAccountIds = {};
 
 const PD_LABELS = {
   likes: "点赞",
@@ -739,9 +740,9 @@ function pdRenderAutomationPanel(persona) {
           <select id="personaAutoAccount">${accountOptionsFixed || `<option value="">暂无账号，先绑定</option>`}</select>
           <label>自动登录资料</label>
           <div class="persona-auto-login-fields">
-            <input id="personaAutoLoginUsername" type="text" placeholder="${pdEscape(platformLabel)} 登录账号/邮箱/手机号" value="${pdEscape(savedLoginUsername)}" autocomplete="username" />
+            <input id="personaAutoLoginUsername" type="text" name="persona_auto_login_${pdEscape(selectedAccountId || "none")}" placeholder="${pdEscape(platformLabel)} 登录账号/邮箱/手机号" value="${pdEscape(savedLoginUsername)}" autocomplete="off" data-lpignore="true" data-1p-ignore="true" />
             <div class="persona-auto-password-wrap">
-              <input id="personaAutoLoginPassword" type="${passwordVisible ? "text" : "password"}" placeholder="${hasSavedLoginPassword ? "已保存密码" : "登录密码，可选择长期保存"}" value="${pdEscape(savedLoginPassword)}" autocomplete="current-password" />
+              <input id="personaAutoLoginPassword" type="${passwordVisible ? "text" : "password"}" name="persona_auto_password_${pdEscape(selectedAccountId || "none")}" data-account-id="${pdEscape(selectedAccountId)}" placeholder="${hasSavedLoginPassword ? "已保存密码" : "登录密码，可选择长期保存"}" value="${pdEscape(savedLoginPassword)}" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true" />
               <button class="persona-auto-eye ${passwordVisible ? "is-visible" : ""}" type="button" id="personaAutoTogglePassword" aria-label="${passwordVisible ? "隐藏密码" : "显示密码"}" title="${passwordVisible ? "隐藏密码" : "显示密码"}">
                 <svg class="persona-auto-eye-icon" viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path>
@@ -1265,6 +1266,7 @@ function pdRenderPersonaTabs(visiblePersonas, selectedPersona) {
         personaDashboardSelectedAutomationAccountId = "";
         personaDashboardVisiblePasswordAccountId = "";
         personaDashboardPasswordDrafts = {};
+        personaDashboardPasswordDirtyAccountIds = {};
       }
       personaDashboardSelectedId = nextPersonaId;
       personaDashboardPostPage = 1;
@@ -1458,7 +1460,10 @@ function pdRenderDashboard() {
       if (selected && postKey) pdDeletePost(selected, postKey);
     });
   });
-  if (selected) pdBindAutomationEvents(selected, list);
+  if (selected) {
+    pdBindAutomationEvents(selected, list);
+    pdScheduleAutomationPasswordNormalize();
+  }
 }
 
 function pdSyncPadFilter(data) {
@@ -1565,6 +1570,31 @@ function pdSelectedAutomationAccount() {
   return (personaDashboardAutomation.accounts || []).find((account) => String(account.id || "") === id) || null;
 }
 
+function pdNormalizeAutomationPasswordField() {
+  const input = pdEl("personaAutoLoginPassword");
+  if (!input) return;
+  const accountId = pdSelectedAutomationAccountId();
+  const expected = String(personaDashboardPasswordDrafts[accountId] || "");
+  if (document.activeElement === input && input.value !== expected) return;
+  if (input.value !== expected) input.value = expected;
+  if (!expected) {
+    input.type = "password";
+    personaDashboardVisiblePasswordAccountId = "";
+    const toggle = pdEl("personaAutoTogglePassword");
+    if (toggle) {
+      toggle.classList.remove("is-visible");
+      toggle.setAttribute("aria-label", "显示密码");
+      toggle.setAttribute("title", "显示密码");
+    }
+  }
+}
+
+function pdScheduleAutomationPasswordNormalize() {
+  window.setTimeout(pdNormalizeAutomationPasswordField, 50);
+  window.setTimeout(pdNormalizeAutomationPasswordField, 300);
+  window.setTimeout(pdNormalizeAutomationPasswordField, 1000);
+}
+
 function pdAutomationPayload(taskType, persona = null, platform = "") {
   const target = String((pdEl("personaAutoTarget") && pdEl("personaAutoTarget").value) || "").trim();
   const text = String((pdEl("personaAutoText") && pdEl("personaAutoText").value) || "").trim();
@@ -1650,6 +1680,7 @@ function pdBindAutomationEvents(persona, root) {
       personaDashboardSelectedAutomationAccountId = "";
       personaDashboardVisiblePasswordAccountId = "";
       personaDashboardPasswordDrafts = {};
+      personaDashboardPasswordDirtyAccountIds = {};
       localStorage.setItem("personaDashboardAccountPlatform", personaDashboardAccountPlatform);
       pdRenderDashboard();
     });
@@ -1731,8 +1762,21 @@ function pdBindAutomationEvents(persona, root) {
       if (passwordInput) {
         passwordInput.value = String(personaDashboardPasswordDrafts[personaDashboardSelectedAutomationAccountId] || "");
         passwordInput.type = "password";
+        passwordInput.name = `persona_auto_password_${personaDashboardSelectedAutomationAccountId || "none"}`;
+        passwordInput.autocomplete = "new-password";
+        passwordInput.setAttribute("data-account-id", personaDashboardSelectedAutomationAccountId);
         passwordInput.placeholder = account && account.login_password_configured ? "已保存密码" : "登录密码，可选择长期保存";
       }
+      pdScheduleAutomationPasswordNormalize();
+    });
+  }
+  const passwordField = pdEl("personaAutoLoginPassword");
+  if (passwordField) {
+    passwordField.addEventListener("input", () => {
+      const accountId = pdSelectedAutomationAccountId();
+      if (!accountId) return;
+      personaDashboardPasswordDrafts[accountId] = String(passwordField.value || "");
+      personaDashboardPasswordDirtyAccountIds[accountId] = true;
     });
   }
   const togglePassword = pdEl("personaAutoTogglePassword");
@@ -1755,7 +1799,8 @@ function pdBindAutomationEvents(persona, root) {
       const accountId = pdSelectedAutomationAccountId();
       const account = pdSelectedAutomationAccount();
       const loginUsername = String((pdEl("personaAutoLoginUsername") && pdEl("personaAutoLoginUsername").value) || "").trim();
-      const loginPassword = String((pdEl("personaAutoLoginPassword") && pdEl("personaAutoLoginPassword").value) || "");
+      const passwordWasTyped = !!personaDashboardPasswordDirtyAccountIds[accountId];
+      const loginPassword = passwordWasTyped ? String((pdEl("personaAutoLoginPassword") && pdEl("personaAutoLoginPassword").value) || "") : "";
       if (!accountId) {
         pdSetMsg("请先选择执行账号。", "err");
         return;
@@ -1782,6 +1827,7 @@ function pdBindAutomationEvents(persona, root) {
         });
         personaDashboardVisiblePasswordAccountId = "";
         if (loginPassword) personaDashboardPasswordDrafts[accountId] = loginPassword;
+        delete personaDashboardPasswordDirtyAccountIds[accountId];
         if (pdEl("personaAutoLoginPassword")) pdEl("personaAutoLoginPassword").type = "password";
         await pdLoadAutomationOverview();
         pdSetMsg("自动登录资料已保存。", "ok");
@@ -1807,6 +1853,7 @@ function pdBindAutomationEvents(persona, root) {
         });
         personaDashboardVisiblePasswordAccountId = "";
         delete personaDashboardPasswordDrafts[accountId];
+        delete personaDashboardPasswordDirtyAccountIds[accountId];
         if (pdEl("personaAutoLoginPassword")) {
           pdEl("personaAutoLoginPassword").value = "";
           pdEl("personaAutoLoginPassword").type = "password";
@@ -1848,7 +1895,8 @@ function pdBindAutomationEvents(persona, root) {
       const account = pdSelectedAutomationAccount();
       const platform = pdSelectedAutomationPlatform();
       const loginUsername = String((pdEl("personaAutoLoginUsername") && pdEl("personaAutoLoginUsername").value) || (account && account.username) || "").trim();
-      const loginPassword = String((pdEl("personaAutoLoginPassword") && pdEl("personaAutoLoginPassword").value) || "");
+      const passwordWasTyped = !!personaDashboardPasswordDirtyAccountIds[accountId];
+      const loginPassword = passwordWasTyped ? String((pdEl("personaAutoLoginPassword") && pdEl("personaAutoLoginPassword").value) || "") : "";
       const hasSavedLoginPassword = !!(account && account.login_password_configured);
       if (!accountId) {
         pdSetMsg("请先选择执行账号。", "err");
@@ -1883,6 +1931,7 @@ function pdBindAutomationEvents(persona, root) {
         });
         personaDashboardVisiblePasswordAccountId = "";
         if (loginPassword) personaDashboardPasswordDrafts[accountId] = loginPassword;
+        delete personaDashboardPasswordDirtyAccountIds[accountId];
         if (pdEl("personaAutoLoginPassword")) pdEl("personaAutoLoginPassword").type = "password";
         await pdLoadAutomationOverview();
         pdSetMsg("自动登录任务已创建。普通账号密码会自动输入；验证码/安全验证时请在打开的窗口里人工处理。", "ok");
