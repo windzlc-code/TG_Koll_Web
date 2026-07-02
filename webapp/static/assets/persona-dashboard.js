@@ -31,6 +31,59 @@ function pdEscape(value) {
   }[ch] || ch));
 }
 
+function pdPromptDialog(options = {}) {
+  const title = String(options.title || "操作确认");
+  const message = String(options.message || "");
+  const confirmText = String(options.confirmText || "确认");
+  const cancelText = String(options.cancelText || "取消");
+  const tone = String(options.tone || "default");
+  const showCancel = options.showCancel !== false;
+  const existing = document.querySelector(".persona-prompt-modal");
+  if (existing) existing.remove();
+  return new Promise((resolve) => {
+    const modal = document.createElement("div");
+    modal.className = `persona-prompt-modal persona-prompt-modal-${tone}`;
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    modal.setAttribute("aria-label", title);
+    modal.innerHTML = `
+      <div class="persona-prompt-card">
+        <div class="persona-prompt-head">
+          <strong>${pdEscape(title)}</strong>
+          <button class="persona-prompt-icon" type="button" data-prompt-action="cancel" aria-label="关闭">×</button>
+        </div>
+        <div class="persona-prompt-body">${pdEscape(message)}</div>
+        <div class="persona-prompt-actions">
+          ${showCancel ? `<button class="ghost" type="button" data-prompt-action="cancel">${pdEscape(cancelText)}</button>` : ""}
+          <button class="primary" type="button" data-prompt-action="confirm">${pdEscape(confirmText)}</button>
+        </div>
+      </div>
+    `;
+    const close = (value) => {
+      document.removeEventListener("keydown", onKeydown);
+      modal.remove();
+      resolve(value);
+    };
+    const onKeydown = (event) => {
+      if (event.key === "Escape") close(false);
+    };
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal) close(false);
+    });
+    modal.querySelectorAll("[data-prompt-action]").forEach((node) => {
+      node.addEventListener("click", () => close(node.getAttribute("data-prompt-action") === "confirm"));
+    });
+    document.addEventListener("keydown", onKeydown);
+    document.body.appendChild(modal);
+    const primary = modal.querySelector("[data-prompt-action='confirm']");
+    if (primary) primary.focus();
+  });
+}
+
+function pdConfirm(message, options = {}) {
+  return pdPromptDialog({ ...options, message, showCancel: true });
+}
+
 let personaDashboardData = null;
 let personaDashboardSelectedId = "__overview__";
 let personaDashboardPostPage = 1;
@@ -2144,7 +2197,7 @@ function pdBindAutomationEvents(persona, root) {
         pdSetMsg("请先勾选要清除的日志。", "err");
         return;
       }
-      if (!window.confirm(`确认清除选中的 ${ids.length} 条自动化日志吗？`)) return;
+      if (!await pdConfirm(`确认清除选中的 ${ids.length} 条自动化日志吗？`, { title: "清除选中日志", confirmText: "清除", tone: "danger" })) return;
       try {
         pdSetMsg("正在清除选中日志...", "ok");
         for (const taskId of ids) {
@@ -2166,7 +2219,7 @@ function pdBindAutomationEvents(persona, root) {
   const clearAllLogs = pdEl("personaAutoClearAllLogs");
   if (clearAllLogs) {
     clearAllLogs.addEventListener("click", async () => {
-      if (!window.confirm("确认清除当前人设的全部外部任务日志吗？")) return;
+      if (!await pdConfirm("确认清除当前人设的全部外部任务日志吗？", { title: "清除全部日志", confirmText: "清除全部", tone: "danger" })) return;
       try {
         pdSetMsg("正在清除全部日志...", "ok");
         await pdApi(`/api/persona_dashboard/automation/tasks?persona_id=${encodeURIComponent(persona.id)}`, { method: "DELETE" });
@@ -2185,7 +2238,7 @@ function pdBindAutomationEvents(persona, root) {
     node.addEventListener("click", async () => {
       const taskId = String(node.getAttribute("data-auto-clear-log") || "");
       if (!taskId) return;
-      if (!window.confirm("确认清除这条自动化日志吗？")) return;
+      if (!await pdConfirm("确认清除这条自动化日志吗？", { title: "清除单条日志", confirmText: "清除", tone: "danger" })) return;
       try {
         pdSetMsg("正在清除日志...", "ok");
         await pdApi(`/api/persona_dashboard/automation/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" });
@@ -2252,7 +2305,7 @@ async function pdUnbindThreads(persona) {
 }
 
 async function pdDeletePost(persona, postKey) {
-  const ok = window.confirm("确认删除这条推文记录？删除后会立即从当前看板缓存中移除。");
+  const ok = await pdConfirm("确认删除这条推文记录？删除后会立即从当前看板缓存中移除。", { title: "删除推文记录", confirmText: "删除", tone: "danger" });
   if (!ok) return;
   try {
     pdSetMsg("正在删除推文记录...", "ok");
