@@ -88,99 +88,96 @@ const PD_THREADS_STRATEGIES = {
   threads_warmup: [
     {
       id: "tg_default",
-      label: "原 TG 默认养号",
-      desc: "平衡浏览和少量点赞，适合日常维护账号状态。",
-      payload: { strategy_id: "tg_default", strategy_label: "原 TG 默认养号", scroll_times: 6, like_limit: 2, comment_chance: 0, require_persona_relevance: false },
+      label: "TG 默认：滑动 + 随机点赞",
+      desc: "对齐 TG bot 默认养号规则：7-10 分钟，每 2-3 篇最多互动 1 次，少量点赞。",
+      payload: { strategy_id: "tg_default", strategy_label: "TG 默认：滑动 + 随机点赞", scroll_times: 80, like_limit: 16, comment_chance: 0, require_persona_relevance: false, session_minutes: "7-10", interaction_every: "2-3" },
     },
     {
-      id: "safe_browse",
-      label: "保守浏览",
-      desc: "只浏览不点赞，适合新账号、异常后恢复或不想产生互动时。",
-      payload: { strategy_id: "safe_browse", strategy_label: "保守浏览", scroll_times: 4, like_limit: 0, comment_chance: 0, require_persona_relevance: false },
+      id: "browse_only",
+      label: "TG 策略：只浏览",
+      desc: "只滑动浏览不互动，适合新账号、异常后恢复或只需要保持登录活跃时。",
+      payload: { strategy_id: "browse_only", strategy_label: "TG 策略：只浏览", scroll_times: 80, like_limit: 0, comment_chance: 0, require_persona_relevance: false, session_minutes: "7-10", interaction_every: "无互动" },
     },
     {
-      id: "active_warmup",
-      label: "高活跃养号",
-      desc: "增加浏览与点赞次数，适合已稳定登录、需要提高活跃度的账号。",
-      payload: { strategy_id: "active_warmup", strategy_label: "高活跃养号", scroll_times: 10, like_limit: 4, comment_chance: 0, require_persona_relevance: false },
+      id: "like_comment",
+      label: "TG 策略：点赞/留言",
+      desc: "按 TG bot 的混合互动分支执行，适合已稳定账号和人设回复素材较完整时。",
+      payload: { strategy_id: "like_comment", strategy_label: "TG 策略：点赞/留言", scroll_times: 80, like_limit: 16, comment_chance: 100, max_comments: 8, require_persona_relevance: true, session_minutes: "7-10", interaction_every: "2-3" },
     },
   ],
   threads_auto_reply: [
     {
       id: "tg_default",
-      label: "原 TG 默认自动回复",
-      desc: "扫描最近内容，按人设模板少量回复，适合常规自动回复。",
+      label: "TG 默认：最近 2 天",
+      desc: "对齐 TG bot 默认分支：查看 2 天内内容，最多扫描 5 篇，最多回复 3 条。",
       payload: { strategy_id: "tg_default", strategy_label: "原 TG 默认自动回复", max_posts: 5, max_replies: 3, max_age_days: 2, require_persona_relevance: true },
     },
     {
-      id: "safe_relevant",
-      label: "保守相关回复",
-      desc: "减少扫描和回复数量，优先降低跑偏风险。",
-      payload: { strategy_id: "safe_relevant", strategy_label: "保守相关回复", max_posts: 3, max_replies: 1, max_age_days: 1, require_persona_relevance: true },
+      id: "safe_1d",
+      label: "TG 可选：最近 1 天",
+      desc: "缩短查看范围，优先处理最新互动，适合账号状态不稳定或评论质量较杂时。",
+      payload: { strategy_id: "safe_1d", strategy_label: "TG 可选：最近 1 天", max_posts: 5, max_replies: 3, max_age_days: 1, require_persona_relevance: true },
     },
     {
-      id: "coverage_reply",
-      label: "覆盖优先回复",
-      desc: "扩大扫描范围和回复上限，适合素材充足且账号状态稳定时。",
-      payload: { strategy_id: "coverage_reply", strategy_label: "覆盖优先回复", max_posts: 8, max_replies: 4, max_age_days: 3, require_persona_relevance: true },
+      id: "coverage_7d",
+      label: "TG 可选：最近 7 天",
+      desc: "对齐 TG bot 自定义天数上限，扩大查看范围但仍保持最多 3 条回复。",
+      payload: { strategy_id: "coverage_7d", strategy_label: "TG 可选：最近 7 天", max_posts: 5, max_replies: 3, max_age_days: 7, require_persona_relevance: true },
     },
   ],
 };
 
-function pdChooseThreadsStrategy(taskType) {
+function pdThreadsStrategyStorageKey(taskType) {
+  return taskType === "threads_auto_reply" ? "personaDashboardThreadsReplyStrategy" : "personaDashboardThreadsWarmupStrategy";
+}
+
+function pdThreadsStrategySelectedId(taskType) {
+  const key = pdThreadsStrategyStorageKey(taskType);
+  return localStorage.getItem(key) || "tg_default";
+}
+
+function pdThreadsStrategyById(taskType, id) {
   const options = PD_THREADS_STRATEGIES[taskType] || [];
-  if (!options.length) return Promise.resolve(null);
-  const existing = document.querySelector(".persona-strategy-modal");
-  if (existing) existing.remove();
-  return new Promise((resolve) => {
-    const title = taskType === "threads_auto_reply" ? "选择自动回复策略" : "选择养号策略";
-    const modal = document.createElement("div");
-    modal.className = "persona-prompt-modal persona-strategy-modal";
-    modal.setAttribute("role", "dialog");
-    modal.setAttribute("aria-modal", "true");
-    modal.setAttribute("aria-label", title);
-    modal.innerHTML = `
-      <div class="persona-prompt-card persona-strategy-card">
-        <div class="persona-prompt-head">
-          <strong>${pdEscape(title)}</strong>
-          <button class="persona-prompt-icon" type="button" data-strategy-cancel aria-label="关闭">×</button>
-        </div>
-        <div class="persona-strategy-list">
-          ${options.map((item, index) => `
-            <button class="persona-strategy-option ${index === 0 ? "is-recommended" : ""}" type="button" data-strategy-id="${pdEscape(item.id)}">
-              <span>${pdEscape(item.label)}${index === 0 ? " · 推荐" : ""}</span>
-              <small>${pdEscape(item.desc)}</small>
-            </button>
-          `).join("")}
-        </div>
-        <div class="persona-prompt-actions">
-          <button class="ghost" type="button" data-strategy-cancel>取消</button>
-        </div>
-      </div>
-    `;
-    const close = (value) => {
-      document.removeEventListener("keydown", onKeydown);
-      modal.remove();
-      resolve(value);
-    };
-    const onKeydown = (event) => {
-      if (event.key === "Escape") close(null);
-    };
-    modal.addEventListener("click", (event) => {
-      if (event.target === modal) close(null);
-    });
-    modal.querySelectorAll("[data-strategy-cancel]").forEach((node) => node.addEventListener("click", () => close(null)));
-    modal.querySelectorAll("[data-strategy-id]").forEach((node) => {
-      node.addEventListener("click", () => {
-        const id = String(node.getAttribute("data-strategy-id") || "");
-        close(options.find((item) => item.id === id) || null);
-      });
-    });
-    document.addEventListener("keydown", onKeydown);
-    document.body.appendChild(modal);
-    const first = modal.querySelector("[data-strategy-id]");
-    if (first) first.focus();
-  });
+  return options.find((item) => item.id === id) || options[0] || null;
+}
+
+function pdThreadsStrategyOptionsHtml(taskType) {
+  const selectedId = pdThreadsStrategySelectedId(taskType);
+  return (PD_THREADS_STRATEGIES[taskType] || []).map((item) => (
+    `<option value="${pdEscape(item.id)}" ${item.id === selectedId ? "selected" : ""}>${pdEscape(item.label)}</option>`
+  )).join("");
+}
+
+function pdThreadsStrategyParams(strategy) {
+  const payload = (strategy && strategy.payload) || {};
+  if (!strategy) return [];
+  if (Object.prototype.hasOwnProperty.call(payload, "max_age_days")) {
+    return [
+      `查看范围：最近 ${payload.max_age_days} 天`,
+      `扫描上限：${payload.max_posts || 0} 篇`,
+      `回复上限：${payload.max_replies || 0} 条`,
+      `相关性：${payload.require_persona_relevance ? "只回复人设/内容相关留言" : "不限制"}`,
+    ];
+  }
+  return [
+    `滑动规模：${payload.scroll_times || 0} 条`,
+    `时长：${payload.session_minutes || "按页面完成节点"}`,
+    `互动间隔：${payload.interaction_every || "自动判断"}`,
+    `点赞上限：${payload.like_limit || 0} 个`,
+    `留言上限：${payload.max_comments || 0} 条`,
+  ];
+}
+
+function pdThreadsStrategyDetailHtml(taskType) {
+  const strategy = pdThreadsStrategyById(taskType, pdThreadsStrategySelectedId(taskType));
+  if (!strategy) return "";
+  return `
+    <strong>${pdEscape(strategy.label)}</strong>
+    <small>${pdEscape(strategy.desc)}</small>
+    <div class="persona-strategy-params">
+      ${pdThreadsStrategyParams(strategy).map((item) => `<span>${pdEscape(item)}</span>`).join("")}
+    </div>
+  `;
 }
 
 let personaDashboardData = null;
@@ -946,16 +943,30 @@ function pdRenderAutomationPanel(persona) {
             <button class="ghost" type="button" data-auto-account-action="open_login" ${accounts.length ? "" : "disabled"}>打开登录窗口</button>
             <button class="ghost" type="button" data-auto-login="1" ${accounts.length ? "" : "disabled"}>自动登录</button>
             <button class="ghost" type="button" data-auto-account-action="check_login" ${accounts.length ? "" : "disabled"}>检查登录</button>
-            <button class="ghost" type="button" data-auto-task="${platform === "threads" ? "threads_warmup" : "browse_feed"}" ${accounts.length ? "" : "disabled"}>${platform === "threads" ? "养号" : "浏览首页"}</button>
+            ${platform === "threads" ? "" : `<button class="ghost" type="button" data-auto-task="browse_feed" ${accounts.length ? "" : "disabled"}>浏览首页</button>`}
           </div>
         </div>
         <div class="persona-auto-box persona-auto-box-wide">
           ${platform === "threads" ? `
             <label>Threads 自动化方式</label>
-            <div class="small">不需要手填指定内容。养号会自动浏览首页并少量互动；自动回复会读取当前人设内容生成回复候选后执行。</div>
-            <div class="persona-auto-actions">
-              <button class="primary" type="button" data-auto-task="threads_auto_reply" ${accounts.length ? "" : "disabled"}>按人设自动回复</button>
-              <button class="ghost" type="button" data-auto-task="threads_warmup" ${accounts.length ? "" : "disabled"}>养号</button>
+            <div class="small">不需要手填指定内容。先选择策略并确认参数，再点击执行；自动回复会读取当前人设内容生成回复候选。</div>
+            <div class="persona-strategy-panel">
+              <div class="persona-strategy-row">
+                <div class="persona-strategy-picker">
+                  <label for="personaAutoReplyStrategy">自动回复策略</label>
+                  <select id="personaAutoReplyStrategy" data-threads-strategy="threads_auto_reply">${pdThreadsStrategyOptionsHtml("threads_auto_reply")}</select>
+                </div>
+                <div class="persona-strategy-detail">${pdThreadsStrategyDetailHtml("threads_auto_reply")}</div>
+                <button class="primary" type="button" data-auto-task="threads_auto_reply" ${accounts.length ? "" : "disabled"}>确定执行自动回复</button>
+              </div>
+              <div class="persona-strategy-row">
+                <div class="persona-strategy-picker">
+                  <label for="personaAutoWarmupStrategy">养号策略</label>
+                  <select id="personaAutoWarmupStrategy" data-threads-strategy="threads_warmup">${pdThreadsStrategyOptionsHtml("threads_warmup")}</select>
+                </div>
+                <div class="persona-strategy-detail">${pdThreadsStrategyDetailHtml("threads_warmup")}</div>
+                <button class="ghost" type="button" data-auto-task="threads_warmup" ${accounts.length ? "" : "disabled"}>确定执行养号</button>
+              </div>
             </div>
           ` : `
             <label>目标 URL / 主页 username</label>
@@ -2247,6 +2258,14 @@ function pdBindAutomationEvents(persona, root) {
       }
     });
   });
+  root.querySelectorAll("[data-threads-strategy]").forEach((node) => {
+    node.addEventListener("change", () => {
+      const taskType = String(node.getAttribute("data-threads-strategy") || "");
+      const selected = String(node.value || "tg_default");
+      localStorage.setItem(pdThreadsStrategyStorageKey(taskType), selected);
+      pdRenderDashboard();
+    });
+  });
   root.querySelectorAll("[data-auto-task]").forEach((node) => {
     node.addEventListener("click", async () => {
       const taskType = String(node.getAttribute("data-auto-task") || "");
@@ -2257,9 +2276,8 @@ function pdBindAutomationEvents(persona, root) {
         return;
       }
       const strategy = platform === "threads" && ["threads_warmup", "threads_auto_reply"].includes(taskType)
-        ? await pdChooseThreadsStrategy(taskType)
+        ? pdThreadsStrategyById(taskType, pdThreadsStrategySelectedId(taskType))
         : null;
-      if (platform === "threads" && ["threads_warmup", "threads_auto_reply"].includes(taskType) && !strategy) return;
       const payload = pdAutomationPayload(taskType, persona, platform, strategy);
       const validation = pdValidateAutomationPayload(taskType, payload);
       if (validation) {
