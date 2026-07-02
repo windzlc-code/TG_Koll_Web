@@ -732,11 +732,11 @@ function pdRenderAutomationPanel(persona) {
           <label>执行账号</label>
           <select id="personaAutoAccount">${accountOptions || `<option value="">暂无账号，先绑定</option>`}</select>
           <label>自动登录资料</label>
-          <div class="persona-auto-inline">
+          <div class="persona-auto-login-fields">
             <input id="personaAutoLoginUsername" type="text" placeholder="${pdEscape(platformLabel)} 登录账号/邮箱/手机号" value="${pdEscape(savedLoginUsername)}" autocomplete="username" />
             <div class="persona-auto-password-wrap">
               <input id="personaAutoLoginPassword" type="${passwordVisible ? "text" : "password"}" placeholder="${hasSavedLoginPassword ? "已保存密码" : "登录密码，可选择长期保存"}" value="${pdEscape(savedLoginPassword)}" autocomplete="current-password" />
-              <button class="persona-auto-eye" type="button" id="personaAutoTogglePassword" aria-label="${passwordVisible ? "隐藏密码" : "显示密码"}" title="${passwordVisible ? "隐藏密码" : "显示密码"}" ${hasSavedLoginPassword ? "" : "disabled"}>
+              <button class="persona-auto-eye" type="button" id="personaAutoTogglePassword" aria-label="${passwordVisible ? "隐藏密码" : "显示密码"}" title="${passwordVisible ? "隐藏密码" : "显示密码"}">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
               </button>
             </div>

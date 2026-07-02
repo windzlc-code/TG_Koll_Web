@@ -6406,10 +6406,20 @@ body.page-admin {
   flex: 1 1 160px;
 }
 
+.persona-auto-login-fields {
+  display: grid;
+  gap: 10px;
+}
+
+.persona-auto-login-fields input {
+  width: 100%;
+  min-width: 0;
+}
+
 .persona-auto-password-wrap {
   position: relative;
-  flex: 1 1 180px;
-  min-width: 180px;
+  width: 100%;
+  min-width: 0;
 }
 
 .persona-auto-password-wrap input {
