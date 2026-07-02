@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "舆情系统授权助手",
+  "version": "1.0.7",
+  "description": "将已授权站点 Cookie 同步到舆情系统浏览器采集 Profile。",
+  "permissions": ["alarms", "cookies", "storage", "tabs"],
+  "host_permissions": [
+    "http://47.250.188.76/*",
+    "http://43.167.237.120/*",
+    "https://www.youtube.com/*",
+    "https://youtube.com/*",
+    "https://www.reddit.com/*",
+    "https://reddit.com/*",
+    "https://www.dcard.tw/*",
+    "https://dcard.tw/*",
+    "https://www.threads.net/*",
+    "https://threads.net/*",
+    "https://www.threads.com/*",
+    "https://threads.com/*",
+    "https://www.instagram.com/*",
+    "https://instagram.com/*",
+    "https://www.facebook.com/*",
+    "https://facebook.com/*",
+    "https://x.com/*",
+    "https://twitter.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "舆情授权助手",
+    "default_popup": "popup.html"
+  }
+}

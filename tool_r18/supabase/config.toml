@@ -1,0 +1,7 @@
+project_id = "pzhfsunanifbvcbfvkhx"
+
+[functions.api-proxy]
+verify_jwt = false
+
+[functions.parse-document]
+verify_jwt = false

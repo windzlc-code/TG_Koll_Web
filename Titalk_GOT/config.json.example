@@ -1,0 +1,6 @@
+{
+    "gemini_api_key": "YOUR_GEMINI_API_KEY_HERE",
+    "videos_dir": "downloaded_videos",
+    "scripts_dir": "scripts",
+    "output_dir": "output"
+}

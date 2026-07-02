@@ -1,0 +1,54 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Local agent / tooling state
+.claude/
+.serena/
+output/
+preload.cjs
+docs/superpowers/
+
+# Runtime data and local verification artifacts
+.runtime/
+.playwright-mcp/
+page-snapshot.yml
+server-page.yml
+settings-page.yml
+runninghub-home.png
+nul
+threads_*.json
+tmp_*
+tmp-*
+temp_*.mjs
+*.tmp
+*.bak
+*.bak-*
+*.bak.*
+C_/
+src/__tmp_nonexistent/
+/-
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.dyad/
+/release
+.gstack/

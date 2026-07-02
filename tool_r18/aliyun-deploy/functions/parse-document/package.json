@@ -1,0 +1,12 @@
+{
+  "name": "parse-document",
+  "version": "1.0.0",
+  "description": "Document parsing function for Aliyun FC",
+  "main": "index.js",
+  "dependencies": {
+    "adm-zip": "^0.5.12"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

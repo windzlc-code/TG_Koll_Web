@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>自动化任务日志</title>
+  <link rel="stylesheet" href="/assets/style.css" />
+  <style>
+    body { background: #f6f8fb; color: #101828; }
+    .log-shell { max-width: 1180px; margin: 0 auto; padding: 24px; }
+    .log-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+    .log-title h1 { margin: 0 0 6px; font-size: 22px; }
+    .log-title p { margin: 0; color: #667085; }
+    .log-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .log-grid { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 16px; }
+    .log-panel { background: #fff; border: 1px solid #d9e2ef; border-radius: 8px; padding: 16px; }
+    .log-panel h2 { margin: 0 0 12px; font-size: 16px; }
+    .log-meta { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 8px 12px; font-size: 14px; }
+    .log-meta span { color: #667085; }
+    .log-pre { white-space: pre-wrap; word-break: break-word; background: #f8fafc; border: 1px solid #e4eaf3; border-radius: 6px; padding: 12px; max-height: 320px; overflow: auto; font-size: 13px; }
+    .log-list { display: flex; flex-direction: column; gap: 10px; max-height: 620px; overflow: auto; }
+    .log-item { border: 1px solid #e4eaf3; border-radius: 8px; padding: 12px; background: #fff; }
+    .log-item-top { display: flex; justify-content: space-between; gap: 12px; color: #667085; font-size: 12px; margin-bottom: 6px; }
+    .log-message { white-space: pre-wrap; word-break: break-word; }
+    .log-media { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+    .log-media a { display: block; border: 1px solid #d9e2ef; border-radius: 8px; padding: 10px; background: #fff; color: #172b4d; text-decoration: none; word-break: break-all; }
+    .log-media img { width: 100%; max-height: 260px; object-fit: contain; border-radius: 6px; background: #f8fafc; }
+    .log-status { display: inline-flex; align-items: center; padding: 3px 8px; border-radius: 999px; background: #eaf2ff; color: #175cd3; font-weight: 700; font-size: 12px; }
+    .log-status.failed, .log-status.need_manual { background: #ffe4e8; color: #b42318; }
+    .log-status.success, .log-status.ready { background: #dcfae6; color: #067647; }
+    @media (max-width: 900px) { .log-grid { grid-template-columns: 1fr; } .log-shell { padding: 14px; } }
+  </style>
+</head>
+<body>
+  <main class="log-shell">
+    <div class="log-head">
+      <div class="log-title">
+        <h1>自动化任务日志</h1>
+        <p id="logSubtitle">正在加载...</p>
+      </div>
+      <div class="log-actions">
+        <button class="ghost" type="button" id="refreshBtn">刷新</button>
+        <button class="ghost" type="button" id="toggleAutoBtn">暂停自动刷新</button>
+        <button class="ghost" type="button" onclick="window.close()">关闭窗口</button>
+      </div>
+    </div>
+    <div class="log-grid">
+      <section class="log-panel">
+        <h2>任务信息</h2>
+        <div class="log-meta" id="taskMeta"></div>
+        <h2 style="margin-top:18px">内容 / 参数</h2>
+        <div class="log-pre" id="payloadBox">-</div>
+        <h2 style="margin-top:18px">媒体 / 截图</h2>
+        <div class="log-media" id="mediaBox"></div>
+      </section>
+      <section class="log-panel">
+        <h2>执行日志</h2>
+        <div class="log-list" id="logList"></div>
+      </section>
+    </div>
+  </main>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const taskId = params.get("task_id") || "";
+    let autoRefresh = true;
+    let timer = 0;
+
+    function esc(value) {
+      return String(value == null ? "" : value).replace(/[&<>"']/g, (ch) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+      }[ch] || ch));
+    }
+    function fmtTime(seconds) {
+      const n = Number(seconds || 0);
+      if (!n) return "-";
+      return new Date(n * 1000).toLocaleString();
+    }
+    async function api(path) {
+      const res = await fetch(path, { cache: "no-store" });
+      const text = await res.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch { data = { detail: text }; }
+      if (!res.ok) throw new Error((data && data.detail) || `接口状态 ${res.status}`);
+      return data;
+    }
+    function screenshotUrl(path) {
+      const name = String(path || "").split(/[\\/]/).pop();
+      return name ? `/api/persona_dashboard/automation/screenshots/${encodeURIComponent(name)}` : "";
+    }
+    function mediaType(path) {
+      const text = String(path || "").toLowerCase();
+      if (/\.(png|jpe?g|webp|gif|bmp)$/.test(text)) return "image";
+      if (/\.(mp4|mov|m4v|webm)$/.test(text)) return "video";
+      return "file";
+    }
+    function renderMedia(task, logs) {
+      const payload = task.payload || {};
+      const result = task.result || {};
+      const items = [];
+      (payload.media_paths || []).forEach((path, index) => {
+        items.push({ label: `任务媒体 ${index + 1}`, path, url: `/api/persona_dashboard/automation/tasks/${encodeURIComponent(task.id)}/media/${index}` });
+      });
+      [result.screenshot_path, ...(result.replyScreenshots || [])].filter(Boolean).forEach((path, index) => {
+        items.push({ label: `结果截图 ${index + 1}`, path, url: screenshotUrl(path) });
+      });
+      logs.forEach((row) => {
+        if (row.screenshot_url) items.push({ label: `${row.stage} 截图`, path: row.screenshot_path, url: row.screenshot_url });
+      });
+      const seen = new Set();
+      const html = items.filter((item) => {
+        const key = item.url || item.path;
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }).map((item) => {
+        const type = mediaType(item.path || item.url);
+        const preview = type === "image" ? `<img src="${esc(item.url)}" alt="${esc(item.label)}" loading="lazy" />` : "";
+        return `<a href="${esc(item.url)}" target="_blank" rel="noopener">${preview}<strong>${esc(item.label)}</strong><br><small>${esc(item.path || item.url)}</small></a>`;
+      }).join("");
+      document.getElementById("mediaBox").innerHTML = html || "<div class='small'>暂无媒体或截图</div>";
+    }
+    function renderTask(task, logs) {
+      document.getElementById("logSubtitle").textContent = `${task.platform || "-"} / ${task.task_type || "-"} / ${task.id || taskId}`;
+      document.getElementById("taskMeta").innerHTML = [
+        ["任务ID", task.id],
+        ["平台", task.platform],
+        ["任务", task.task_type],
+        ["状态", `<span class="log-status ${esc(task.status)}">${esc(task.status || "-")}</span>`],
+        ["账号ID", task.account_id],
+        ["人设ID", task.persona_id],
+        ["创建时间", fmtTime(task.created_at)],
+        ["更新时间", fmtTime(task.updated_at)],
+        ["开始时间", fmtTime(task.started_at)],
+        ["结束时间", fmtTime(task.finished_at)],
+        ["错误", task.error || "-"],
+      ].map(([k, v]) => `<span>${esc(k)}</span><strong>${typeof v === "string" && v.startsWith("<") ? v : esc(v)}</strong>`).join("");
+      document.getElementById("payloadBox").textContent = JSON.stringify({ payload: task.payload || {}, result: task.result || {} }, null, 2);
+      renderMedia(task, logs);
+    }
+    function renderLogs(logs) {
+      document.getElementById("logList").innerHTML = logs.map((row) => `
+        <div class="log-item">
+          <div class="log-item-top"><span>${esc(fmtTime(row.created_at))}</span><span>${esc(row.level)} / ${esc(row.stage)}</span></div>
+          <div class="log-message">${esc(row.message || "")}</div>
+          ${row.data && Object.keys(row.data).length ? `<div class="log-pre" style="margin-top:8px">${esc(JSON.stringify(row.data, null, 2))}</div>` : ""}
+          ${row.screenshot_url ? `<p><a href="${esc(row.screenshot_url)}" target="_blank" rel="noopener">打开截图</a></p>` : ""}
+        </div>
+      `).join("") || "<div class='small'>暂无日志</div>";
+    }
+    async function load() {
+      if (!taskId) throw new Error("缺少 task_id");
+      const [taskResp, logResp] = await Promise.all([
+        api(`/api/persona_dashboard/automation/tasks/${encodeURIComponent(taskId)}`),
+        api(`/api/persona_dashboard/automation/tasks/${encodeURIComponent(taskId)}/logs`),
+      ]);
+      const task = taskResp.task || {};
+      const logs = logResp.logs || [];
+      renderTask(task, logs);
+      renderLogs(logs);
+    }
+    async function tick() {
+      try { await load(); } catch (err) { document.getElementById("logSubtitle").textContent = err.message || String(err); }
+    }
+    document.getElementById("refreshBtn").addEventListener("click", tick);
+    document.getElementById("toggleAutoBtn").addEventListener("click", () => {
+      autoRefresh = !autoRefresh;
+      document.getElementById("toggleAutoBtn").textContent = autoRefresh ? "暂停自动刷新" : "继续自动刷新";
+    });
+    tick();
+    timer = window.setInterval(() => { if (autoRefresh) tick(); }, 3000);
+  </script>
+</body>
+</html>

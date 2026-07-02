@@ -1,0 +1,11 @@
+yt-dlp>=2024.1.1
+google-generativeai>=0.3.0
+moviepy>=1.0.3
+opencv-python>=4.8.0
+pillow>=10.0.0
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+numpy>=1.24.0
+gtts>=2.3.0
+# 可選：高級數字人功能
+# TTS>=0.20.0  # Coqui TTS（語音克隆），安裝: pip install TTS

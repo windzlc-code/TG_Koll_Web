@@ -1,0 +1,19 @@
+{
+  "name": "opinx-sentiment-backend",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Standalone backend for OpinX public sentiment collection.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "demo": "node demo-flow.mjs"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.11",
+    "better-sqlite3": "^12.6.2",
+    "hono": "^4.12.9",
+    "proxy-agent": "^6.5.0",
+    "undici": "^7.19.1"
+  }
+}

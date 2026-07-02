@@ -1,0 +1,2 @@
+# Keep vendored OpinX files byte-for-byte identical to the working server copy.
+* -text

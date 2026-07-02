@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>舆情系统后台管理</title>
+    <link rel="stylesheet" href="/assets/admin.css">
+  </head>
+  <body>
+    <div class="admin-shell">
+      <header class="admin-topbar">
+        <div>
+          <h1>舆情系统后台管理</h1>
+          <p id="adminStatus">正在连接后端...</p>
+        </div>
+        <nav>
+          <a href="/">返回搜索页</a>
+          <button id="reloadBtn" type="button">刷新</button>
+        </nav>
+      </header>
+
+      <main>
+        <section class="panel">
+          <div class="panel-heading">
+            <div>
+              <h2>AI 大模型配置</h2>
+              <p>配置 OpenAI-compatible API URL、模型 ID 和密钥。</p>
+            </div>
+            <span id="aiConfigured" class="status-pill">未检测</span>
+          </div>
+          <form id="aiForm" class="form-grid">
+            <label>
+              <span>启用 AI 报告</span>
+              <select id="aiEnabled">
+                <option value="true">启用</option>
+                <option value="false">停用</option>
+              </select>
+            </label>
+            <label>
+              <span>API URL</span>
+              <input id="aiBaseUrl" placeholder="https://api.siliconflow.cn/v1" autocomplete="off">
+            </label>
+            <label>
+              <span>模型 ID</span>
+              <input id="aiModel" placeholder="deepseek-ai/DeepSeek-V4-Pro" autocomplete="off">
+            </label>
+            <label>
+              <span>API Key</span>
+              <input id="aiApiKey" type="text" placeholder="请输入 API Key" autocomplete="off" spellcheck="false">
+            </label>
+            <label>
+              <span>超时毫秒</span>
+              <input id="aiTimeoutMs" type="number" min="1000" max="120000" step="1000">
+            </label>
+            <div class="form-actions">
+              <button type="submit">保存 AI 配置</button>
+              <button id="clearAiKeyBtn" class="secondary" type="button">清除密钥</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <div>
+              <h2>OpenSearch 高价值证据库</h2>
+              <p>只同步高风险、稀缺来源和深度证据，普通噪音保留在本地短期证据池。</p>
+            </div>
+            <span id="openSearchConfigured" class="status-pill">未检测</span>
+          </div>
+          <form id="openSearchForm" class="form-grid">
+            <label>
+              <span>启用 OpenSearch</span>
+              <select id="openSearchEnabled">
+                <option value="false">停用</option>
+                <option value="true">启用</option>
+              </select>
+            </label>
+            <label>
+              <span>连接方式</span>
+              <select id="openSearchAccessMode">
+                <option value="direct">REST 直连</option>
+                <option value="dashboardsProxy">Dashboards 代理</option>
+              </select>
+            </label>
+            <label>
+              <span>API URL</span>
+              <input id="openSearchEndpoint" placeholder="http://127.0.0.1:9200 或 http://host:5601" autocomplete="off">
+            </label>
+            <label>
+              <span>索引名</span>
+              <input id="openSearchIndexName" placeholder="sentiment_high_value_evidence" autocomplete="off">
+            </label>
+            <label>
+              <span>用户名</span>
+              <input id="openSearchUsername" placeholder="admin" autocomplete="off">
+            </label>
+            <label>
+              <span>密码</span>
+              <input id="openSearchPassword" type="text" placeholder="请输入密码" autocomplete="off" spellcheck="false">
+            </label>
+            <label>
+              <span>API Key</span>
+              <input id="openSearchApiKey" type="text" placeholder="可选，优先于用户名密码" autocomplete="off" spellcheck="false">
+            </label>
+            <label>
+              <span>超时毫秒</span>
+              <input id="openSearchTimeoutMs" type="number" min="1000" max="120000" step="1000">
+            </label>
+            <label>
+              <span>高价值入库阈值</span>
+              <input id="openSearchMinArchiveScore" type="number" min="0" max="100">
+            </label>
+            <label>
+              <span>每次最大同步候选</span>
+              <input id="openSearchMaxSyncItems" type="number" min="1" max="10000">
+            </label>
+            <label>
+              <span>维护策略</span>
+              <select id="openSearchMaintenanceEnabled">
+                <option value="true">启用</option>
+                <option value="false">停用</option>
+              </select>
+            </label>
+            <label>
+              <span>普通证据保留天数</span>
+              <input id="openSearchRetentionDays" type="number" min="30" max="3650">
+            </label>
+            <label>
+              <span>低分噪音保留天数</span>
+              <input id="openSearchNoiseRetentionDays" type="number" min="7" max="730">
+            </label>
+            <label>
+              <span>重复检测天数</span>
+              <input id="openSearchDuplicateLookbackDays" type="number" min="7" max="1095">
+            </label>
+            <label>
+              <span>最低保留分</span>
+              <input id="openSearchMinKeepScore" type="number" min="0" max="100">
+            </label>
+            <label>
+              <span>单次最多删除</span>
+              <input id="openSearchMaxDeletePerRun" type="number" min="10" max="10000">
+            </label>
+            <div class="form-actions">
+              <button type="submit">保存 OpenSearch 配置</button>
+              <button id="testOpenSearchBtn" class="secondary" type="button">测试连接</button>
+              <button id="previewOpenSearchSyncBtn" class="secondary" type="button">预览入库</button>
+              <button id="runOpenSearchSyncBtn" type="button">同步高价值证据</button>
+              <button id="previewOpenSearchMaintenanceBtn" class="secondary" type="button">预览维护</button>
+              <button id="runOpenSearchMaintenanceBtn" type="button">执行维护</button>
+            </div>
+          </form>
+          <div id="openSearchStatus" class="source-summary">尚未检测 OpenSearch。</div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <div>
+              <h2>扫描与报告日期</h2>
+              <p>控制搜索页默认扫描窗口和报告统计周期。</p>
+            </div>
+          </div>
+          <form id="windowForm" class="form-grid compact">
+            <label>
+              <span>扫描日期范围（天）</span>
+              <input id="scanDays" type="number" min="1" max="365">
+            </label>
+            <label>
+              <span>报告统计周期（天）</span>
+              <input id="reportDays" type="number" min="1" max="365">
+            </label>
+            <div class="form-actions">
+              <button type="submit">保存日期设置</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <div>
+              <h2>授权浏览器采集</h2>
+              <p>为无法通过普通请求抓取的网站配置无头浏览器兜底采集和 Cookie Profile。</p>
+            </div>
+            <span id="browserConfigured" class="status-pill">未检测</span>
+          </div>
+          <div class="auth-toolbar">
+            <button id="openBrowserAuthBtn" type="button" disabled>一键打开授权页面</button>
+            <a href="/browser-auth-extension/download" download="opinx-browser-auth-helper.zip">安装授权助手</a>
+            <span id="browserAuthStatus">未开始授权</span>
+          </div>
+          <form id="browserForm" class="form-grid">
+            <label>
+              <span>启用浏览器兜底</span>
+              <select id="browserEnabled">
+                <option value="true">启用</option>
+                <option value="false">停用</option>
+              </select>
+            </label>
+            <label>
+              <span>每轮最大关键词</span>
+              <input id="browserMaxKeywords" type="number" min="1" max="20">
+            </label>
+            <label>
+              <span>抓取结果页正文</span>
+              <select id="browserCapturePages">
+                <option value="true">启用</option>
+                <option value="false">停用</option>
+              </select>
+            </label>
+            <label>
+              <span>每关键词最大结果</span>
+              <input id="browserMaxItems" type="number" min="1" max="30">
+            </label>
+            <label>
+              <span>每关键词深入页数</span>
+              <input id="browserMaxDetailPages" type="number" min="0" max="10">
+            </label>
+            <label>
+              <span>页面超时毫秒</span>
+              <input id="browserTimeoutMs" type="number" min="5000" max="90000" step="1000">
+            </label>
+            <label>
+              <span>页面等待毫秒</span>
+              <input id="browserWaitMs" type="number" min="0" max="10000" step="100">
+            </label>
+            <div class="wide-field">
+              <div class="field-heading">授权站点</div>
+              <div id="browserProfileList" class="auth-profile-list"></div>
+            </div>
+            <div class="form-actions">
+              <button type="submit">保存浏览器采集配置</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <div>
+              <h2>舆情扫描网站范围</h2>
+              <p>分别配置快速扫描、深度扫描、危情扫描的网站范围。</p>
+            </div>
+            <div class="source-actions">
+              <select id="sourceModeSelect" aria-label="选择扫描模式">
+                <option value="fast">快速扫描</option>
+                <option value="full">深度扫描</option>
+                <option value="watch">危情扫描</option>
+              </select>
+              <input id="sourceFilter" placeholder="搜索来源">
+              <button id="selectAllBtn" class="secondary" type="button">全选</button>
+              <button id="selectNoneBtn" class="secondary" type="button">全不选</button>
+            </div>
+          </div>
+          <div id="sourceSummary" class="source-summary">正在加载来源...</div>
+          <div id="sourceList" class="source-list"></div>
+          <div class="sticky-actions">
+            <button id="saveSourcesBtn" type="button">保存网站范围</button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <div>
+              <h2>RSS 媒体包覆盖</h2>
+              <p>按扫描模式配置媒体包，并查看公开 RSS / 新闻索引的证据量、质量和空包情况。</p>
+            </div>
+            <span id="rssPackStatus" class="status-pill">未检测</span>
+          </div>
+          <div class="rss-pack-toolbar">
+            <select id="rssPackModeSelect" aria-label="选择 RSS 媒体包扫描模式">
+              <option value="fast">快速扫描</option>
+              <option value="full">深度扫描</option>
+              <option value="watch">危情扫描</option>
+            </select>
+            <button id="rssPackSelectAllBtn" class="secondary" type="button">全选</button>
+            <button id="rssPackSelectNoneBtn" class="secondary" type="button">全不选</button>
+            <button id="applyRssModeRecommendationsBtn" class="secondary" type="button">应用覆盖建议</button>
+            <button id="saveRssPacksBtn" type="button">保存媒体包范围</button>
+          </div>
+          <div id="rssPackConfigSummary" class="source-summary">正在加载媒体包配置...</div>
+          <div id="rssPackConfigList" class="rss-pack-config-list"></div>
+          <div id="rssPackSummary" class="metric-strip"></div>
+          <div class="followup-heading compact-heading">
+            <div>
+              <h3>台湾媒体健康</h3>
+              <p>显示指定台湾新闻/财经媒体的直接入口、站点地图和新闻索引兜底状态。</p>
+            </div>
+            <div class="followup-actions">
+              <button id="enqueueTaiwanNativeDiscoveryBtn" type="button">入队发现入口</button>
+            </div>
+          </div>
+          <div id="taiwanMediaHealthSummary" class="source-summary">正在加载台湾媒体健康...</div>
+          <div id="taiwanNativeDiscoverySummary" class="source-summary">正在加载入口发现预览...</div>
+          <div id="taiwanNativeDiscoveryList" class="rss-followup-job-list"></div>
+          <div id="taiwanNativeDiscoveryRecoverySummary" class="source-summary">正在加载入口发现执行效果...</div>
+          <div id="taiwanNativeDiscoveryRecoveryList" class="rss-followup-job-list"></div>
+          <div id="taiwanMediaHealthList" class="rss-followup-job-list"></div>
+          <div class="followup-heading compact-heading">
+            <div>
+              <h3>台湾公共议题媒体健康</h3>
+              <p>显示独立媒体、公共媒体和公共议题来源的直接入口与新闻索引兜底状态。</p>
+            </div>
+          </div>
+          <div id="taiwanPublicInterestHealthSummary" class="source-summary">正在加载公共议题媒体健康...</div>
+          <div id="taiwanPublicInterestHealthList" class="rss-followup-job-list"></div>
+          <div id="rssModeCoverageList" class="rss-mode-coverage-list"></div>
+          <div id="rssPrioritySiteGapList" class="rss-priority-gap-list"></div>
+          <div class="followup-heading compact-heading">
+            <div>
+              <h3>连续采集运维</h3>
+              <p>查看下一轮连续采集计划，并手动运行一轮扫描、重试和扫描后证据补采。</p>
+            </div>
+            <div class="followup-actions">
+              <button id="reloadContinuousCollectionBtn" class="secondary" type="button">刷新计划</button>
+              <button id="runContinuousCollectionBtn" type="button">运行一轮</button>
+            </div>
+          </div>
+          <div id="continuousCollectionSummary" class="source-summary">正在加载连续采集计划...</div>
+          <div id="continuousCollectionResultSummary" class="source-summary">尚未手动运行连续采集。</div>
+          <div id="continuousCollectionList" class="rss-followup-job-list"></div>
+          <div class="followup-heading compact-heading">
+            <div>
+              <h3>免费来源目标覆盖</h3>
+              <p>检查社区、投诉、应用商店、状态页等免费来源是否配置了足够的目标范围，并追踪补扫效果。</p>
+            </div>
+            <div class="followup-actions">
+              <button id="enqueueFreeTargetCoverageBtn" type="button">入队目标补扫</button>
+              <button id="reloadFreeTargetCoverageBtn" class="secondary" type="button">刷新覆盖</button>
+            </div>
+          </div>
+          <div id="freeTargetCoverageSummary" class="source-summary">正在加载免费来源目标覆盖...</div>
+          <div id="freeTargetCoverageList" class="rss-followup-job-list"></div>
+          <div id="freeTargetCoverageEffectivenessSummary" class="source-summary">正在加载目标覆盖补扫效果...</div>
+          <div id="freeTargetCoverageEffectivenessList" class="rss-followup-job-list"></div>
+          <div class="followup-heading">
+            <div>
+              <h3>重点站点补采任务</h3>
+              <p>根据空站点自动生成站点级 RSS / 新闻索引补采查询。</p>
+            </div>
+            <div class="followup-actions">
+              <button id="reloadFollowupPlanBtn" class="secondary" type="button">刷新预览</button>
+              <button id="enqueueFollowupPlanBtn" type="button">入队补采任务</button>
+            </div>
+          </div>
+          <div id="rssFollowupSummary" class="source-summary">正在加载补采任务预览...</div>
+          <div id="rssFollowupJobList" class="rss-followup-job-list"></div>
+          <div class="followup-heading compact-heading">
+            <div>
+              <h3>来源家族刷新任务</h3>
+              <p>显示本次补采预览中会按扫描模式刷新哪些新闻、财经、监管等来源家族。</p>
+            </div>
+          </div>
+          <div id="rssSourceFamilyRefreshPlanList" class="rss-followup-job-list"></div>
+          <div id="rssFollowupRecoverySummary" class="source-summary">正在加载补采效果...</div>
+          <div id="rssFollowupRecoveryList" class="rss-followup-job-list"></div>
+          <div class="followup-heading compact-heading">
+            <div>
+              <h3>来源家族刷新恢复</h3>
+              <p>追踪商业级扫描模式下新闻、财经、监管等来源家族是否已通过 RSS 媒体包刷新恢复。</p>
+            </div>
+          </div>
+          <div id="rssSourceFamilyRefreshRecoverySummary" class="source-summary">正在加载来源家族刷新效果...</div>
+          <div id="rssSourceFamilyRefreshRecoveryList" class="rss-followup-job-list"></div>
+          <div class="followup-heading">
+            <div>
+              <h3>原生入口晋升效果</h3>
+              <p>追踪已加入配置的 RSS 原生入口是否持续产出证据。</p>
+            </div>
+            <div class="followup-actions">
+              <button id="reloadNativePromotionRefreshBtn" class="secondary" type="button">刷新预览</button>
+              <button id="applyNativePromotionGovernanceBtn" class="secondary" type="button">应用复核标记</button>
+              <button id="enqueueNativePromotionRefreshBtn" type="button">入队刷新任务</button>
+            </div>
+          </div>
+          <div id="rssNativePromotionRefreshSummary" class="source-summary">正在加载晋升入口刷新任务...</div>
+          <div id="rssNativePromotionSummary" class="source-summary">正在加载晋升入口效果...</div>
+          <div id="rssNativePromotionList" class="rss-followup-job-list"></div>
+          <div id="rssNativePromotionRefreshRecoverySummary" class="source-summary">正在加载晋升入口刷新效果...</div>
+          <div id="rssNativePromotionRefreshRecoveryList" class="rss-followup-job-list"></div>
+          <div id="rssNativePromotionGovernanceSummary" class="source-summary">正在加载晋升入口治理建议...</div>
+          <div id="rssNativePromotionGovernanceList" class="rss-followup-job-list"></div>
+          <div id="rssPackList" class="rss-pack-list"></div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="/assets/admin.js"></script>
+  </body>
+</html>

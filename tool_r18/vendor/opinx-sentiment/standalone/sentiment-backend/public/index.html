@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>舆情全网搜索与研判</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <h1>舆情全网搜索与研判</h1>
+          <p id="systemStatus">正在连接后端...</p>
+        </div>
+        <div class="top-actions">
+          <button class="icon-button" id="refreshBtn" title="刷新当前报告" aria-label="刷新当前报告">↻</button>
+        </div>
+      </header>
+
+      <main>
+        <section class="search-band" aria-label="关键词搜索">
+          <form id="searchForm" class="search-form">
+            <label for="keywordInput">监控关键词</label>
+            <div class="search-row">
+              <input id="keywordInput" name="keyword" autocomplete="off" placeholder="可输入多个关键词，用逗号、顿号、分号分隔，例如：palantir, GPT, 退款投诉">
+              <select id="modeSelect" name="mode" aria-label="扫描模式">
+                <option value="fast">快速扫描</option>
+                <option value="full">深度扫描</option>
+                <option value="watch">危情扫描</option>
+              </select>
+              <button type="submit" id="searchBtn">开始全网搜索</button>
+            </div>
+          </form>
+          <div class="quick-row" id="keywordChips" aria-label="历史关键词"></div>
+        </section>
+
+        <section class="scan-progress" id="scanProgress" aria-label="扫描进度" aria-live="polite" hidden>
+          <div class="progress-heading">
+            <div>
+              <span>扫描进度</span>
+              <strong id="progressTitle">准备扫描</strong>
+            </div>
+            <em id="progressPercent">0%</em>
+          </div>
+          <div class="progress-track" aria-hidden="true">
+            <div id="progressFill" class="progress-fill"></div>
+          </div>
+          <div class="progress-stats">
+            <div><span>已扫描消息</span><strong id="progressMessages">0</strong></div>
+            <div><span>已完成网站</span><strong id="progressSources">0</strong></div>
+            <div><span>计划网站</span><strong id="progressTotalSources">0</strong></div>
+            <div><span>异常来源</span><strong id="progressFailures">0</strong></div>
+          </div>
+        </section>
+
+        <section class="status-strip" id="statusStrip" aria-label="搜索状态">
+          <div><span>当前任务</span><strong id="runState">待搜索</strong></div>
+          <div><span>证据数量</span><strong id="totalCount">0</strong></div>
+          <div><span>负面/高危</span><strong id="riskCount">0</strong></div>
+          <div><span>有结果来源</span><strong id="sourceCount">0</strong></div>
+          <div><span>最近更新时间</span><strong id="updatedAt">-</strong></div>
+        </section>
+
+        <section class="workspace-grid">
+          <div class="report-panel">
+            <div class="panel-heading">
+              <h2>分析报告记录</h2>
+              <button class="text-button" id="clearReportsBtn">清空记录</button>
+            </div>
+            <div id="reportRecords" class="report-records"></div>
+          </div>
+
+          <aside class="insight-panel">
+            <h2>研判指标</h2>
+            <div class="metric-list" id="metricList"></div>
+            <h3>建议动作</h3>
+            <ul id="recommendations" class="recommendations"></ul>
+          </aside>
+        </section>
+
+        <section class="report-detail-section" id="reportDetailSection" hidden>
+          <div class="panel-heading">
+            <div>
+              <h2 id="detailTitle">报告详情</h2>
+              <p id="detailMeta" class="detail-meta"></p>
+            </div>
+            <button class="text-button" id="copyReportBtn">复制报告</button>
+          </div>
+          <div id="executiveSummary" class="summary-box"></div>
+          <div id="reportMarkdown" class="report-body"></div>
+        </section>
+
+        <section class="results-section" id="evidenceSection" hidden>
+          <div class="panel-heading">
+            <h2>匹配证据</h2>
+            <div class="filters">
+              <button class="segmented active" data-filter="all">全部</button>
+              <button class="segmented" data-filter="negative">负面</button>
+              <button class="segmented" data-filter="high">高危</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>来源</th>
+                  <th>标题/内容</th>
+                  <th>情绪</th>
+                  <th>风险</th>
+                  <th>链接</th>
+                </tr>
+              </thead>
+              <tbody id="evidenceTable">
+                <tr><td colspan="6" class="empty">暂无证据</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="/assets/app.js"></script>
+  </body>
+</html>

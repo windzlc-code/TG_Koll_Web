@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>账号开通 - 电商带货视频生成平台</title>
+  <link rel="stylesheet" href="/assets/style.css" />
+</head>
+<body class="page-auth-shell">
+  <main class="auth-shell">
+    <section class="auth-stage auth-stage-compact">
+      <div class="auth-stage-head">
+        <div class="auth-kicker">账号开通说明</div>
+        <h1 class="auth-stage-title">账号由运营管理员统一开通</h1>
+        <p class="auth-stage-copy">客户账号、初始额度和后台权限都由管理员维护，自助注册入口保持关闭，避免客户侧误操作。</p>
+      </div>
+      <div class="auth-stage-grid auth-stage-grid-compact">
+        <article class="auth-stage-card">
+          <div class="auth-stage-card-title">客户开通</div>
+          <div class="small">后台创建客户账号后，前台即可使用。</div>
+        </article>
+        <article class="auth-stage-card">
+          <div class="auth-stage-card-title">额度分配</div>
+          <div class="small">首次额度和后续充值都通过运营后台处理。</div>
+        </article>
+      </div>
+    </section>
+
+    <section class="auth-card auth-card-product auth-card-register">
+      <div class="auth-card-head">
+        <h2 class="auth-title">当前入口不可自助注册</h2>
+        <p class="auth-sub">请联系运营管理员创建客户账号并分配生成额度。</p>
+      </div>
+      <div class="auth-submit-row">
+        <button class="primary" type="button" id="toLogin">返回登录</button>
+      </div>
+      <div id="authMsg" class="msg"></div>
+    </section>
+  </main>
+  <script src="/assets/auth.js"></script>
+</body>
+</html>

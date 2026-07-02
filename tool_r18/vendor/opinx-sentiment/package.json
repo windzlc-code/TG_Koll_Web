@@ -1,0 +1,29 @@
+{
+  "name": "opinx-sentiment",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "OpinX舆情监控后端",
+  "license": "Apache-2.0",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node standalone/sentiment-backend/src/server.js",
+    "sentiment:backend": "node standalone/sentiment-backend/src/server.js",
+    "sentiment:demo": "node standalone/sentiment-backend/demo-flow.mjs",
+    "test": "vitest run --dir tests",
+    "test:watch": "vitest --dir tests"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.11",
+    "better-sqlite3": "^12.6.2",
+    "hono": "^4.12.25",
+    "playwright": "^1.61.0",
+    "proxy-agent": "^8.0.2",
+    "undici": "^7.19.1"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.18"
+  }
+}

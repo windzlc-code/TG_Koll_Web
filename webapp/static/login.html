@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>登录 - 电商带货视频生成平台</title>
+  <link rel="stylesheet" href="/assets/style.css" />
+</head>
+<body class="page-auth-shell">
+  <main class="auth-shell">
+    <section class="auth-stage">
+      <div class="auth-stage-head">
+        <div class="auth-kicker">素材生产工作台</div>
+        <h1 class="auth-stage-title">电商素材生成平台</h1>
+        <p class="auth-stage-copy">上传模特图和商品图，集中处理生成记录、额度和客户账号，适合运营团队日常交付使用。</p>
+      </div>
+      <div class="auth-stage-grid">
+        <article class="auth-stage-card">
+          <div class="auth-stage-card-title">视频生成</div>
+          <div class="small">主路径聚焦模特图、商品图和批量素材包，减少跳转和分散操作。</div>
+        </article>
+        <article class="auth-stage-card">
+          <div class="auth-stage-card-title">生成记录</div>
+          <div class="small">失败态、下载结果和处理进度都集中在同一处查看。</div>
+        </article>
+        <article class="auth-stage-card">
+          <div class="auth-stage-card-title">额度管理</div>
+          <div class="small">前台只看额度与消费，后台统一维护客户开通和计费策略。</div>
+        </article>
+      </div>
+    </section>
+
+    <section class="auth-card auth-card-product">
+      <div class="auth-card-head">
+        <h2 class="auth-title">账号登录</h2>
+        <p class="auth-sub">请使用运营管理员分配的账号登录</p>
+      </div>
+      <form id="loginForm" class="auth-form">
+        <label for="username">用户名</label>
+        <input id="username" name="username" autocomplete="username" required placeholder="请输入用户名" />
+
+        <label for="password">密码</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required placeholder="请输入密码" />
+
+        <div class="auth-submit-row">
+          <button class="primary" type="submit">登录</button>
+        </div>
+      </form>
+      <div id="authMsg" class="msg"></div>
+      <div class="auth-quick-setup">
+        <a class="btn ghost auth-quick-setup-link" href="/quick-setup.html">快速配置</a>
+        <a class="btn ghost auth-quick-setup-link" href="/persona-dashboard.html">人设数据看板</a>
+      </div>
+      <p class="auth-switch">没有账号？请联系运营管理员开通并分配额度。</p>
+    </section>
+  </main>
+  <script src="/assets/auth.js"></script>
+</body>
+</html>

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>舆情授权助手安装</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 28px;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Microsoft YaHei", sans-serif;
+        color: #17202a;
+        background: #f6f8fb;
+      }
+      main {
+        max-width: 760px;
+        margin: 0 auto;
+        border: 1px solid #d8e1ea;
+        border-radius: 8px;
+        background: #fff;
+        padding: 22px;
+      }
+      h1 {
+        margin: 0 0 14px;
+        font-size: 22px;
+      }
+      p,
+      li {
+        line-height: 1.7;
+      }
+      code {
+        background: #eef3f7;
+        padding: 2px 5px;
+        border-radius: 4px;
+      }
+      a {
+        color: #126d75;
+        font-weight: 700;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>舆情授权助手安装</h1>
+      <p>普通网页无法读取 YouTube、Reddit、Dcard 等其它域名的 Cookie。要自动记录授权 Cookie，需要在 Chrome 中加载这个本地扩展。</p>
+      <ol>
+        <li>在服务器文件目录下载或复制 <code>/browser-auth-extension/</code> 下的 <code>manifest.json</code>、<code>background.js</code>、<code>popup.html</code>、<code>popup.js</code> 到同一个本地文件夹。</li>
+        <li>打开 Chrome 的 <code>chrome://extensions</code>。</li>
+        <li>开启“开发者模式”。</li>
+        <li>点击“加载已解压的扩展程序”，选择刚才的本地文件夹。</li>
+        <li>回到后台管理页，点击“一键打开授权页面”，逐个登录目标网站；扩展会自动把 Cookie 同步到系统。</li>
+      </ol>
+      <p>扩展文件：</p>
+      <ul>
+        <li><a href="/browser-auth-extension/manifest.json" target="_blank">manifest.json</a></li>
+        <li><a href="/browser-auth-extension/background.js" target="_blank">background.js</a></li>
+        <li><a href="/browser-auth-extension/popup.html" target="_blank">popup.html</a></li>
+        <li><a href="/browser-auth-extension/popup.js" target="_blank">popup.js</a></li>
+      </ul>
+    </main>
+  </body>
+</html>
