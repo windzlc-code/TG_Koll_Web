@@ -678,6 +678,7 @@ function pdRenderAutomationPanel(persona) {
   const savedLoginPassword = pdAutomationPasswordDisplayValue(selectedAccountId, selectedAccount);
   const savedLoginAt = Number((selectedAccount && selectedAccount.login_credentials_updated_at) || 0);
   const passwordCanReveal = !!String(personaDashboardPasswordDrafts[selectedAccountId] || "");
+  const passwordCanToggle = !!selectedAccountId && (passwordCanReveal || hasSavedLoginPassword);
   const passwordVisible = passwordCanReveal && String(personaDashboardVisiblePasswordAccountId || "") === selectedAccountId;
   const readyCount = accounts.filter((account) => account.status === "ready").length;
   const platformLabel = platform === "threads" ? "Threads" : "Instagram";
@@ -745,7 +746,7 @@ function pdRenderAutomationPanel(persona) {
             <input id="personaAutoLoginUsername" type="text" name="persona_auto_login_${pdEscape(selectedAccountId || "none")}" placeholder="${pdEscape(platformLabel)} 登录账号/邮箱/手机号" value="${pdEscape(savedLoginUsername)}" autocomplete="off" data-lpignore="true" data-1p-ignore="true" />
             <div class="persona-auto-password-wrap">
               <input id="personaAutoLoginPassword" type="${passwordVisible ? "text" : "password"}" name="persona_auto_password_${pdEscape(selectedAccountId || "none")}" data-account-id="${pdEscape(selectedAccountId)}" data-saved-mask="${hasSavedLoginPassword && !passwordCanReveal ? "1" : "0"}" placeholder="${hasSavedLoginPassword ? "已保存密码" : "登录密码，可选择长期保存"}" value="${pdEscape(savedLoginPassword)}" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true" />
-              <button class="persona-auto-eye ${passwordVisible ? "is-visible" : ""}" type="button" id="personaAutoTogglePassword" aria-label="${passwordVisible ? "隐藏密码" : "显示密码"}" title="${passwordCanReveal ? (passwordVisible ? "隐藏密码" : "显示密码") : "已保存密码仅显示掩码"}" ${passwordCanReveal ? "" : "disabled"}>
+              <button class="persona-auto-eye ${passwordVisible ? "is-visible" : ""}" type="button" id="personaAutoTogglePassword" aria-label="${passwordVisible ? "隐藏密码" : "显示密码"}" title="${passwordVisible ? "隐藏密码" : "显示密码"}" ${passwordCanToggle ? "" : "disabled"}>
                 <svg class="persona-auto-eye-icon" viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path>
                   <circle cx="12" cy="12" r="3"></circle>
@@ -1590,6 +1591,15 @@ function pdAutomationTypedPassword(accountId) {
   return value;
 }
 
+async function pdRevealSavedAutomationPassword(accountId) {
+  const data = await pdApi(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(accountId)}/credentials`);
+  const password = String(data.login_password || "");
+  if (!password) return "";
+  personaDashboardPasswordDrafts[accountId] = password;
+  delete personaDashboardPasswordDirtyAccountIds[accountId];
+  return password;
+}
+
 function pdNormalizeAutomationPasswordField() {
   const input = pdEl("personaAutoLoginPassword");
   if (!input) return;
@@ -1602,10 +1612,10 @@ function pdNormalizeAutomationPasswordField() {
   const hasRevealableDraft = !!String(personaDashboardPasswordDrafts[accountId] || "");
   input.setAttribute("data-saved-mask", account && account.login_password_configured && !hasRevealableDraft ? "1" : "0");
   if (toggle) {
-    toggle.disabled = !hasRevealableDraft;
+    toggle.disabled = !(hasRevealableDraft || (account && account.login_password_configured));
     toggle.classList.toggle("is-visible", hasRevealableDraft && input.type === "text");
     toggle.setAttribute("aria-label", input.type === "text" ? "隐藏密码" : "显示密码");
-    toggle.setAttribute("title", hasRevealableDraft ? (input.type === "text" ? "隐藏密码" : "显示密码") : "已保存密码仅显示掩码");
+    toggle.setAttribute("title", input.type === "text" ? "隐藏密码" : "显示密码");
   }
   if (!expected) {
     input.type = "password";
@@ -1817,11 +1827,28 @@ function pdBindAutomationEvents(persona, root) {
   }
   const togglePassword = pdEl("personaAutoTogglePassword");
   if (togglePassword) {
-    togglePassword.addEventListener("click", () => {
+    togglePassword.addEventListener("click", async () => {
       const accountId = pdSelectedAutomationAccountId();
+      const account = pdSelectedAutomationAccount();
       const passwordInput = pdEl("personaAutoLoginPassword");
       if (!passwordInput) return;
-      if (pdAutomationPasswordIsSavedMask(passwordInput.value) && passwordInput.getAttribute("data-saved-mask") === "1") return;
+      let hasPassword = !!String(personaDashboardPasswordDrafts[accountId] || "");
+      if (!hasPassword && account && account.login_password_configured) {
+        try {
+          togglePassword.disabled = true;
+          const revealed = await pdRevealSavedAutomationPassword(accountId);
+          hasPassword = !!revealed;
+          if (revealed) {
+            passwordInput.value = revealed;
+            passwordInput.setAttribute("data-saved-mask", "0");
+          }
+        } catch (err) {
+          pdSetMsg(String((err && (err.detail || err.message)) || err || "读取已保存密码失败"), "err");
+        } finally {
+          togglePassword.disabled = false;
+        }
+      }
+      if (!hasPassword) return;
       const willShow = passwordInput.type === "password";
       personaDashboardVisiblePasswordAccountId = willShow ? accountId : "";
       passwordInput.type = willShow ? "text" : "password";

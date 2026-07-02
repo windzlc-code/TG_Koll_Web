@@ -138,6 +138,21 @@ def register_social_automation_routes(app: FastAPI) -> None:
     def api_social_account_patch(account_id: str, payload: SocialAccountPatchPayload):
         return {"ok": True, "account": update_social_account(account_id, payload)}
 
+    @app.get("/api/persona_dashboard/automation/accounts/{account_id}/credentials")
+    def api_social_account_credentials(account_id: str):
+        with db() as conn:
+            row = conn.execute("SELECT id, login_username, login_password, login_credentials_updated_at FROM social_accounts WHERE id = ?", (account_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="账号不存在")
+        return {
+            "ok": True,
+            "account_id": str(row["id"] or ""),
+            "login_username": str(row["login_username"] or ""),
+            "login_password": str(row["login_password"] or ""),
+            "login_password_configured": bool(str(row["login_password"] or "")),
+            "login_credentials_updated_at": int(row["login_credentials_updated_at"] or 0),
+        }
+
     @app.post("/api/persona_dashboard/automation/accounts/{account_id}/check_login")
     def api_social_account_check_login(account_id: str):
         return {"ok": True, "task": create_account_task(account_id, "check_login", {})}
