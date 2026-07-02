@@ -1764,6 +1764,8 @@ function pdBindAutomationEvents(persona, root) {
           method: "PATCH",
           body,
         });
+        personaDashboardVisiblePasswordAccountId = "";
+        if (pdEl("personaAutoLoginPassword")) pdEl("personaAutoLoginPassword").type = "password";
         await pdLoadAutomationOverview();
         pdSetMsg("自动登录资料已保存。", "ok");
         pdRenderDashboard();
@@ -1786,7 +1788,11 @@ function pdBindAutomationEvents(persona, root) {
           method: "PATCH",
           body: { clear_login_credentials: true },
         });
-        if (pdEl("personaAutoLoginPassword")) pdEl("personaAutoLoginPassword").value = "";
+        personaDashboardVisiblePasswordAccountId = "";
+        if (pdEl("personaAutoLoginPassword")) {
+          pdEl("personaAutoLoginPassword").value = "";
+          pdEl("personaAutoLoginPassword").type = "password";
+        }
         await pdLoadAutomationOverview();
         pdSetMsg("自动登录资料已删除。", "ok");
         pdRenderDashboard();
@@ -1853,6 +1859,8 @@ function pdBindAutomationEvents(persona, root) {
             },
           },
         });
+        personaDashboardVisiblePasswordAccountId = "";
+        if (pdEl("personaAutoLoginPassword")) pdEl("personaAutoLoginPassword").type = "password";
         await pdLoadAutomationOverview();
         pdSetMsg("自动登录任务已创建。普通账号密码会自动输入；验证码/安全验证时请在打开的窗口里人工处理。", "ok");
         await pdOpenAutomationLogModal(created && created.task && created.task.id);
