@@ -130,7 +130,20 @@
               <label>最大数量
                 <input id="socialLimit" type="number" min="1" value="3" />
               </label>
+              <label>最大回复数
+                <input id="socialMaxReplies" type="number" min="1" value="3" />
+              </label>
+              <label>内容天数
+                <input id="socialMaxAgeDays" type="number" min="1" value="7" />
+              </label>
+              <label>最低浏览量
+                <input id="socialMinViews" type="number" min="0" value="0" />
+              </label>
             </div>
+            <label>素材路径 media_paths</label>
+            <textarea id="socialMediaPaths" rows="3" placeholder="publish_post 必填。一行一个本地素材路径。"></textarea>
+            <label>目标 URL 列表 target_urls</label>
+            <textarea id="socialTargetUrls" rows="3" placeholder="热点回复等任务可填写，一行一个 URL。"></textarea>
             <div class="command-actions">
               <button id="submitSocialTask" type="button" class="primary">提交浏览器任务</button>
               <button id="runSocialOnce" type="button">Worker 执行一次</button>

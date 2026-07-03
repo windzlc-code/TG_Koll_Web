@@ -18,11 +18,11 @@ const state = {
 };
 
 const modules = [
-  { id: "personas", label: "👤 我的人設", hint: "list_personas", callback: "list_personas" },
-  { id: "menu_status", label: "📊 排程狀態", hint: "menu_status", callback: "menu_status" },
-  { id: "schedule_publish", label: "⏰ 定時任務", hint: "schedule_publish", callback: "schedule_publish" },
-  { id: "pad_mgmt", label: "📱 设备管理", hint: "pad_mgmt", callback: "pad_mgmt" },
-  { id: "force_stop", label: "🛑 強制中止目前任務", hint: "force_stop_current_task", callback: "force_stop_current_task" },
+  { id: "generation", label: "生成 / 编辑任务", hint: "文生图、图生图、修图、换脸、视频", callback: "toolr18_generation" },
+  { id: "personas", label: "我的人设", hint: "人设列表、详情、推文、设置", callback: "list_personas" },
+  { id: "publishing", label: "发布与排程", hint: "立即发布、矩阵发布、定时、队列", callback: "publish_schedule_queue" },
+  { id: "automation", label: "指纹浏览器自动化", hint: "Camoufox Profile 登录、检测、养号、回复", callback: "social_automation" },
+  { id: "queue", label: "任务队列", hint: "待发布、失败、定时、取消、重试", callback: "queue_view" },
 ];
 
 const taskMeta = {
@@ -37,77 +37,73 @@ const taskMeta = {
 
 const personaGroups = {
   content: {
-    label: "人設詳情",
+    label: "人设内容",
     actions: [
-      ["pd", "🧾 查看人設詳情"],
-      ["posts", "📝 查看推文"],
-      ["history", "🕘 发布历史"],
-      ["genpost_branch", "✍️ 新建推文"],
-      ["publish", "🚀 发布推文"],
+      ["pd", "查看人设详情"],
+      ["posts", "查看推文"],
+      ["history", "发布历史"],
+      ["genpost_branch", "新建推文"],
+      ["publish", "发布推文"],
     ],
   },
   settings: {
-    label: "⚙️ 人設設定",
+    label: "人设设置",
     actions: [
-      ["editname", "✏️ 改名稱"],
-      ["tweetstyle", "🧾 推文風格"],
-      ["editcontent", "🧾 人設簡介"],
-      ["linksettings", "🔗 链接设置"],
-      ["bindpad", "📱 綁定设备"],
-      ["acctmgmt", "🔐 帳號管理"],
-      ["hot_metrics", "🔥 人設熱點數據"],
-      ["bindtg_free", "TG免費群"],
-      ["bindtg_paid", "TG付費群"],
+      ["editname", "改名称"],
+      ["tweetstyle", "推文风格"],
+      ["editcontent", "人设简介"],
+      ["linksettings", "链接设置"],
+      ["acctmgmt", "账号 Profile 管理"],
+      ["hot_metrics", "人设热点数据"],
     ],
   },
   account: {
-    label: "帳號管理",
+    label: "浏览器账号",
     actions: [
-      ["acctplatform_threads", "Threads"],
-      ["acctplatform_telegram", "Telegram"],
+      ["acctplatform_threads", "Threads 登录检测"],
+      ["persona_autoreply", "Threads 自动回复"],
+      ["persona_warmup", "Threads 养号"],
     ],
   },
   data: {
-    label: "自動化",
+    label: "数据面板",
     actions: [
-      ["persona_autoreply", "💬 自動回覆"],
-      ["persona_warmup", "🌱 養號"],
       ["open_dashboard", "打开人设看板"],
+      ["refresh", "刷新人设数据"],
+      ["clear_tasks", "清理该人设自动化队列"],
     ],
   },
 };
 
 const moduleBranches = {
+  generation: () => Object.entries(taskMeta).map(([id, meta]) => ({
+    id,
+    label: meta.title,
+    hint: meta.callback,
+  })),
   personas: () => [
-    { id: "list_personas", label: "📋 人設列表", hint: "list_personas" },
-    { id: "matrix_start", label: "🚀 矩陣發布", hint: "matrix_start" },
-    { id: "create_persona_entry", label: "➕ 新建人設", hint: "create_persona_entry" },
-    { id: "pd", label: "選擇人設 → 人設詳情", hint: "pd_{id}" },
-    { id: "settings", label: "⚙️ 人設設定", hint: "settings_{id}" },
-    { id: "publish", label: "🚀 发布推文", hint: "pub_{id}" },
+    { id: "content", label: "人设内容", hint: "详情、推文、历史、新建推文、发布推文" },
+    { id: "settings", label: "人设设置", hint: "名称、风格、简介、链接、账号 Profile" },
+    { id: "account", label: "浏览器账号", hint: "Threads 登录检测、养号、自动回复" },
+    { id: "data", label: "数据面板", hint: "打开看板、刷新、清理队列" },
   ],
-  menu_status: () => [
-    { id: "queue_pending", label: "📋 查看待發佈", hint: "queueview_pending_*" },
-    { id: "queue_failed", label: "❌ 查看失敗", hint: "queueview_failed_*" },
-    { id: "queue_scheduled", label: "⏰ 僅看定時任務", hint: "queueview_pending_scheduled" },
-    { id: "queue_filter_platform", label: "🧵 按平台篩選", hint: "queue_filter_platform" },
-    { id: "queue_filter_persona", label: "👤 按人設篩選", hint: "queue_filter_persona" },
-    { id: "retry_failed", label: "🔄 重試失敗", hint: "retry_failed" },
+  publishing: () => [
+    { id: "publish_now", label: "立即发布", hint: "选择人设、推文来源、平台、账号 Profile" },
+    { id: "matrix_start", label: "矩阵发布", hint: "按人设和账号批量提交发布任务" },
+    { id: "schedule_publish", label: "定时发布", hint: "设置 scheduled_at 入队" },
   ],
-  schedule_publish: () => [
-    { id: "schedule_publish", label: "請選擇要定時發佈的人設", hint: "schedule_publish → sched_persona_{id}" },
-    { id: "sched_platform_threads", label: "🧵 Threads", hint: "sched_platform_threads" },
-    { id: "sched_platform_telegram", label: "📣 Telegram 群组", hint: "sched_platform_telegram" },
-    { id: "sched_multi_platform_threads", label: "📱 多设备定时发 Threads", hint: "sched_multi_platform_threads" },
-    { id: "schedpick_confirm", label: "✅ 確認時間並入隊", hint: "schedpick_confirm" },
+  automation: () => [
+    { id: "open_login", label: "打开登录", hint: "open_login" },
+    { id: "check_login", label: "检测登录", hint: "check_login" },
+    { id: "browse_feed", label: "浏览 Feed", hint: "browse_feed" },
+    { id: "threads_warmup", label: "Threads 养号", hint: "threads_warmup" },
+    { id: "threads_auto_reply", label: "Threads 自动回复", hint: "threads_auto_reply" },
+    { id: "instagram_actions", label: "Instagram 操作", hint: "publish/comment/reply/like/share" },
   ],
-  pad_mgmt: () => [
-    { id: "pad_mgmt", label: "📱 设备列表", hint: "pad_mgmt" },
-    { id: "pad_mgmt_refresh", label: "🔄 刷新列表", hint: "pad_mgmt_refresh" },
-    { id: "pad_detail", label: "選擇设备詳情", hint: "pad_detail_{padCode}" },
-  ],
-  force_stop: () => [
-    { id: "force_stop_current_task", label: "🛑 強制中止目前任務", hint: "force_stop_current_task" },
+  queue: () => [
+    { id: "pending", label: "待执行任务", hint: "status=pending/queued" },
+    { id: "failed", label: "失败任务", hint: "retry / logs" },
+    { id: "scheduled", label: "定时任务", hint: "scheduled_at" },
   ],
 };
 
@@ -290,8 +286,8 @@ function renderWorkspace(renderMenu = true) {
   const module = currentModule();
   if (renderMenu) renderModuleMenu();
   else syncModuleMenuState();
-  $("moduleTitle").textContent = module.label.replace(/^[^\s]+\s*/, "");
-  $("moduleEyebrow").textContent = module.id === "personas" ? "Persona Flow" : "Bot Flow";
+  $("moduleTitle").textContent = module.label;
+  $("moduleEyebrow").textContent = module.id === "personas" ? "Persona Flow" : "Web Flow";
   $("moduleCallback").textContent = module.callback;
   if (module.id === "generation") renderGenerationModule();
   else if (module.id === "personas") renderPersonaModule();
@@ -487,7 +483,7 @@ function renderPersonaModule() {
 function renderPersonaList() {
   const query = String($("personaSearch")?.value || "").trim().toLowerCase();
   const personas = state.personas.filter((item) => {
-    const haystack = [item.name, item.content, item.bound_pad_name, item.bound_pad_code, item.owner_bot_name, item.threads_account?.handle].join(" ").toLowerCase();
+    const haystack = [item.name, item.content, item.owner_bot_name, item.threads_account?.handle].join(" ").toLowerCase();
     return !query || haystack.includes(query);
   });
   $("personaList").innerHTML = personas.length ? personas.map((persona) => {
@@ -525,11 +521,11 @@ function renderPersonaDetail() {
     <div>
       <div class="eyebrow">Selected Persona</div>
       <h3>${esc(persona.name || "未命名人设")}</h3>
-      <p>设备：${esc(persona.bound_pad_name || persona.bound_pad_code || "未绑定")} · 机器人：${esc(persona.owner_bot_name || "-")}</p>
+      <p>浏览器 Profile：${esc((state.socialAccounts.find((item) => String(item.persona_id) === String(persona.id)) || {}).username || "未绑定")}</p>
     </div>
     <div class="flow-box">
-      <span>Bot 链路</span>
-      <strong>我的人设 → list_personas → ${esc(persona.name || persona.id)} → pd_${esc(persona.id)} → ${esc(group.label)}</strong>
+      <span>Web 链路</span>
+      <strong>我的人设 → ${esc(persona.name || persona.id)} → ${esc(group.label)}</strong>
     </div>
     ${warnings.length ? `<div class="flow-box"><span>待处理提示</span><strong>${warnings.map(esc).join(" / ")}</strong></div>` : ""}
     <div class="persona-actions-grid">
@@ -538,76 +534,226 @@ function renderPersonaDetail() {
   `;
 }
 
+
+function currentBranch(moduleId) {
+  return selectedBranch(moduleId);
+}
+
+function selectedSocialAccount(accountId) {
+  return state.socialAccounts.find((account) => String(account.id) === String(accountId || "")) || null;
+}
+
+function platformForAccount(accountId) {
+  const account = selectedSocialAccount(accountId);
+  return account?.platform || "threads";
+}
+
+function taskOptionsForPlatform(platform) {
+  if (platform === "instagram") {
+    return [
+      ["open_login", "打开登录"],
+      ["check_login", "检测登录"],
+      ["browse_feed", "浏览 Feed"],
+      ["browse_profile", "浏览主页"],
+      ["publish_post", "发布内容"],
+      ["comment_post", "评论帖子"],
+      ["reply_comment", "回复评论"],
+      ["like_post", "点赞帖子"],
+      ["share_post", "分享帖子"],
+    ];
+  }
+  return [
+    ["open_login", "打开登录"],
+    ["check_login", "检测登录"],
+    ["browse_feed", "浏览 Feed"],
+    ["threads_warmup", "Threads 养号"],
+    ["threads_auto_reply", "Threads 自动回复"],
+  ];
+}
+
+function optionTags(options, selectedValue) {
+  return options.map(([value, label]) => `<option value="${esc(value)}" ${value === selectedValue ? "selected" : ""}>${esc(label)}</option>`).join("");
+}
+
+function personaOptionTags() {
+  return state.personas.length
+    ? state.personas.map((persona) => `<option value="${esc(persona.id)}" ${String(persona.id) === String(state.selectedPersonaId) ? "selected" : ""}>${esc(persona.name || persona.id)}</option>`).join("")
+    : `<option value="">暂无人设</option>`;
+}
+
+function accountOptionTags() {
+  return state.socialAccounts.length
+    ? state.socialAccounts.map((account) => `<option value="${esc(account.id)}" data-platform="${esc(account.platform || "")}">${esc(account.username || account.id)} · ${esc(account.platform || "-")}</option>`).join("")
+    : `<option value="">暂无 Profile</option>`;
+}
+
+function syncStandaloneSocialForm() {
+  const account = selectedSocialAccount($("socialAccount")?.value);
+  const platform = account?.platform || $("socialPlatform")?.value || "threads";
+  if ($("socialPlatform")) $("socialPlatform").value = platform;
+  const select = $("socialTaskType");
+  if (!select) return;
+  const options = taskOptionsForPlatform(platform);
+  const current = select.value;
+  const next = options.some(([value]) => value === current) ? current : options[0][0];
+  select.innerHTML = optionTags(options, next);
+}
+
 function renderSimpleFlowModule(moduleId) {
-  const controls = {
-    menu_status: `
-      <label>Bot 按钮<select id="simplePrimary">
-        <option value="queue_pending">📋 查看待發佈</option>
-        <option value="queue_failed">❌ 查看失敗</option>
-        <option value="queue_scheduled">⏰ 僅看定時任務</option>
-        <option value="queue_filter_platform">🧵 按平台篩選</option>
-        <option value="queue_filter_persona">👤 按人設篩選</option>
-        <option value="retry_failed">🔄 重試失敗</option>
-      </select></label>
-      <label>平台篩選<select id="simplePlatform"><option value="all">全部平台</option><option value="threads">Threads</option><option value="telegram">Telegram</option></select></label>`,
-    schedule_publish: `
-      <label>Bot 步驟<select id="simplePrimary">
-        <option value="schedule_publish">選擇人設 sched_persona_{id}</option>
-        <option value="sched_platform_threads">🧵 Threads sched_platform_threads</option>
-        <option value="sched_platform_telegram">📣 Telegram 群组 sched_platform_telegram</option>
-        <option value="sched_multi_platform_threads">📱 多设备定时发 Threads</option>
-        <option value="schedpick_confirm">✅ 確認時間並入隊</option>
-      </select></label>
-      <label>定時時間<input id="simpleScheduleAt" placeholder="例如：2026-07-03 21:30" /></label>`,
-    pad_mgmt: `
-      <label>Bot 按钮<select id="simplePrimary">
-        <option value="pad_mgmt">📱 设备列表</option>
-        <option value="pad_mgmt_refresh">🔄 刷新列表</option>
-        <option value="pad_detail">选择设备详情 pad_detail_{padCode}</option>
-      </select></label>
-      <label>说明<input id="simpleContent" value="当前 Web 端不恢复旧云机执行链路，只保留 Bot 对齐入口。" /></label>`,
-    force_stop: `
-      <label>Bot 按钮<select id="simplePrimary">
-        <option value="force_stop_current_task">🛑 強制中止目前任務</option>
-      </select></label>
-      <label>说明<input id="simpleContent" value="点击确认后只进入 Web 端中止/提示闭环，不走 Telegram 交互。" /></label>`,
-  }[moduleId] || "";
-  const showGenericParams = !["pad_mgmt", "force_stop"].includes(moduleId);
-  $("moduleBody").innerHTML = `
-    <div class="module-toolbar">
-      <strong>${esc(currentModule().label)}</strong>
-      <span class="muted">左侧文案对齐 Bot；右侧把必要参数扁平化成下拉框和输入框。</span>
-    </div>
-    <div class="form-grid">${controls}</div>
-    ${showGenericParams ? `
-      <label>备注 / 参数</label>
-      <textarea id="simpleContent" rows="5" placeholder="可填写任务备注、筛选条件或发布时间说明。"></textarea>
-      <div class="form-grid">
-        <label>数量<input id="simpleLimit" type="number" min="1" value="3" /></label>
+  const branch = currentBranch(moduleId);
+  const firstAccount = state.socialAccounts[0]?.id || "";
+  const accountId = $("simpleAccount")?.value || firstAccount;
+  const platform = platformForAccount(accountId);
+  const taskOptions = taskOptionsForPlatform(platform);
+  const selectedTask = taskOptions.some(([value]) => value === branch) ? branch : taskOptions[0][0];
+  const commonAccount = `
+    <div class="form-grid">
+      <label>账号 Profile
+        <select id="simpleAccount">${accountOptionTags()}</select>
+      </label>
+      <label>平台
+        <input id="simplePlatform" value="${esc(platform)}" readonly />
+      </label>
+    </div>`;
+  const commonQueue = `
+    <label>定时执行
+      <input id="simpleScheduleAt" placeholder="可选，例如 2026-07-03 21:30" />
+    </label>
+    <div class="form-grid">
+      <label>优先级
+        <input id="simplePriority" type="number" min="0" value="0" />
+      </label>
+      <label>最大重试
+        <input id="simpleMaxRetries" type="number" min="0" value="2" />
+      </label>
+    </div>`;
+  const contentBox = `
+    <label>正文 / 评论 / 回复模板</label>
+    <textarea id="simpleContent" rows="5" placeholder="按任务类型填写：发布正文、评论内容、回复模板。多条模板可一行一条。"></textarea>`;
+  let body = "";
+  if (moduleId === "publishing") {
+    body = `
+      <div class="module-toolbar">
+        <strong>发布与排程</strong>
+        <span class="muted">发布任务会提交到现有浏览器 Profile 自动化队列。</span>
       </div>
-    ` : ""}
-    <div class="flow-box"><span>执行链路</span><strong>${esc(currentModule().callback)}</strong></div>
+      <div class="form-grid">
+        <label>发布动作
+          <select id="simplePrimary">
+            <option value="publish_post" ${branch === "publish_now" ? "selected" : ""}>立即发布</option>
+            <option value="publish_post" ${branch === "matrix_start" ? "selected" : ""}>矩阵发布</option>
+            <option value="publish_post" ${branch === "schedule_publish" ? "selected" : ""}>定时发布</option>
+          </select>
+        </label>
+        <label>人设
+          <select id="simplePersona">${personaOptionTags()}</select>
+        </label>
+      </div>
+      ${commonAccount}
+      ${contentBox}
+      <label>素材路径 media_paths
+        <textarea id="simpleMediaPaths" rows="3" placeholder="publish_post 必填。一行一个本地素材路径，交给后端 runner 读取。"></textarea>
+      </label>
+      ${commonQueue}`;
+  } else if (moduleId === "automation") {
+    body = `
+      <div class="module-toolbar">
+        <strong>指纹浏览器自动化</strong>
+        <span class="muted">所有任务都通过 Camoufox persistent Profile 执行，只显示 runner 支持的任务类型。</span>
+      </div>
+      ${commonAccount}
+      <label>任务类型
+        <select id="simplePrimary">${optionTags(taskOptions, selectedTask)}</select>
+      </label>
+      <div class="form-grid">
+        <label>目标 URL / 用户名
+          <input id="simpleTargetUrl" placeholder="browse_profile/comment/like/share/reply 时填写" />
+        </label>
+        <label>策略 strategy_id
+          <input id="simpleStrategyId" placeholder="可选，例如 default" />
+        </label>
+      </div>
+      <div class="form-grid">
+        <label>浏览次数 / scroll_times
+          <input id="simpleScrollTimes" type="number" min="1" value="5" />
+        </label>
+        <label>点赞上限 / like_limit
+          <input id="simpleLikeLimit" type="number" min="0" value="3" />
+        </label>
+        <label>评论上限 / max_comments
+          <input id="simpleMaxComments" type="number" min="0" value="1" />
+        </label>
+        <label>评论概率 / comment_chance
+          <input id="simpleCommentChance" type="number" min="0" max="1" step="0.05" value="0.2" />
+        </label>
+        <label>最大帖子数 / max_posts
+          <input id="simpleMaxPosts" type="number" min="1" value="3" />
+        </label>
+        <label>最大回复数 / max_replies
+          <input id="simpleMaxReplies" type="number" min="1" value="3" />
+        </label>
+        <label>内容天数 / max_age_days
+          <input id="simpleMaxAgeDays" type="number" min="1" value="7" />
+        </label>
+        <label>最低浏览量 / min_views
+          <input id="simpleMinViews" type="number" min="0" value="0" />
+        </label>
+      </div>
+      <label>回复范围 reply_scope
+        <select id="simpleReplyScope">
+          <option value="comments">评论区</option>
+          <option value="hot_posts">热点帖子</option>
+        </select>
+      </label>
+      ${contentBox}
+      <label>目标 URL 列表 target_urls
+        <textarea id="simpleTargetUrls" rows="3" placeholder="热点回复可填写，一行一个 URL。"></textarea>
+      </label>
+      ${commonQueue}`;
+  } else {
+    body = `
+      <div class="module-toolbar">
+        <strong>任务队列</strong>
+        <span class="muted">队列筛选在 Web 端完成，取消和重试在任务行内执行。</span>
+      </div>
+      <div class="form-grid">
+        <label>状态
+          <select id="simplePrimary">
+            <option value="pending">待执行</option>
+            <option value="failed">失败</option>
+            <option value="scheduled">定时</option>
+          </select>
+        </label>
+        <label>平台
+          <select id="simplePlatform">
+            <option value="all">全部</option>
+            <option value="threads">Threads</option>
+            <option value="instagram">Instagram</option>
+          </select>
+        </label>
+      </div>`;
+  }
+  $("moduleBody").innerHTML = `
+    ${body}
+    <div class="flow-box"><span>真实执行链路</span><strong>${esc(currentModule().callback)} · ${esc(branch)}</strong></div>
+    <div id="commandMsg" class="notice"></div>
     <div class="command-actions"><button id="executeSimpleFlow" type="button" class="primary">确认执行</button></div>
   `;
-  fillSimpleAccounts();
-  if ($("simplePrimary")) {
-    const preferred = selectedBranch(moduleId);
-    if (Array.from($("simplePrimary").options).some((option) => option.value === preferred)) {
-      $("simplePrimary").value = preferred;
-    }
-  }
-  ["simplePrimary", "simpleSecondary", "simpleAccount", "simplePlatform", "simpleLimit", "simpleScheduleAt", "simpleContent"].forEach((id) => {
+  if ($("simpleAccount") && accountId) $("simpleAccount").value = accountId;
+  bindSimpleFlowInputs(moduleId);
+  $("executeSimpleFlow").addEventListener("click", () => executeSimpleFlow().catch((error) => showMsg("commandMsg", error.detail || error.message || "执行失败", false)));
+}
+
+function bindSimpleFlowInputs(moduleId) {
+  ["simplePrimary", "simpleAccount", "simplePersona", "simplePlatform", "simpleScheduleAt", "simpleContent", "simpleTargetUrl", "simpleMediaPaths", "simpleTargetUrls", "simplePriority", "simpleMaxRetries", "simpleScrollTimes", "simpleLikeLimit", "simpleMaxComments", "simpleCommentChance", "simpleMaxPosts", "simpleMaxReplies", "simpleMaxAgeDays", "simpleMinViews", "simpleReplyScope", "simpleStrategyId"].forEach((id) => {
     const node = $(id);
     if (!node) return;
     node.addEventListener(node.tagName === "TEXTAREA" || node.tagName === "INPUT" ? "input" : "change", () => {
-      if (id === "simplePrimary") {
-        state.simpleBranches[state.activeModule] = node.value;
-        renderModuleMenu();
-      }
+      if (id === "simplePrimary") state.simpleBranches[moduleId] = node.value;
+      if (id === "simpleAccount" && moduleId === "automation") renderSimpleFlowModule(moduleId);
       renderConfirmSummary();
     });
   });
-  $("executeSimpleFlow").addEventListener("click", () => executeSimpleFlow().catch((error) => showMsg("commandMsg", error.detail || error.message || "执行失败", false)));
 }
 
 function fillSimpleAccounts() {
@@ -618,14 +764,14 @@ function fillSimpleAccounts() {
     : `<option value="">暂无账号</option>`;
 }
 
+
 function renderConfirmSummary() {
   const module = currentModule();
-  let rows = [["主菜单", module.label], ["Bot 回调", module.callback]];
+  let rows = [["当前入口", module.label], ["执行链路", module.callback]];
   if (state.activeModule === "generation" && $("taskType")) {
     const meta = taskMeta[$("taskType").value] || taskMeta.text_to_image;
     rows = rows.concat([
       ["任务类型", meta.title],
-      ["分支", $("taskBranch")?.selectedOptions?.[0]?.textContent || "-"],
       ["素材", state.files.length ? state.files.map((file) => file.name).join(" / ") : "未选择"],
       ["最终动作", "提交生成任务"],
     ]);
@@ -635,17 +781,27 @@ function renderConfirmSummary() {
     rows = rows.concat([
       ["当前人设", persona ? persona.name : "未选择"],
       ["功能分组", personaGroups[groupKey]?.label || "-"],
-      ["最终动作", "执行选中人设的功能按钮"],
+      ["最终动作", "执行选中人设功能"],
+    ]);
+  } else if (state.activeModule === "publishing" || state.activeModule === "automation") {
+    const account = selectedSocialAccount($("simpleAccount")?.value);
+    rows = rows.concat([
+      ["任务类型", $("simplePrimary")?.selectedOptions?.[0]?.textContent || selectedBranch(state.activeModule)],
+      ["账号 Profile", account ? `${account.username || account.id} · ${account.platform}` : "未选择"],
+      ["平台", account?.platform || $("simplePlatform")?.value || "-"],
+      ["最终动作", "提交到 social_automation_tasks，由 Camoufox Profile 执行"],
     ]);
   } else {
     rows = rows.concat([
-      ["当前选项", $("simplePrimary")?.selectedOptions?.[0]?.textContent || "-"],
-      ["账号/Profile", $("simpleAccount")?.selectedOptions?.[0]?.textContent || "未选择"],
-      ["最终动作", ["accounts", "automation"].includes(state.activeModule) ? "提交浏览器自动化任务" : "进入对应队列/发布流程"],
+      ["队列筛选", $("simplePrimary")?.selectedOptions?.[0]?.textContent || "-"],
+      ["最终动作", "打开任务队列并执行行级取消/重试"],
     ]);
   }
-  $("confirmSummary").innerHTML = rows.map(([key, value]) => `<div><span>${esc(key)}</span><strong>${esc(value)}</strong></div>`).join("");
+  $("confirmSummary").innerHTML = rows.map(([label, value]) => `
+    <div><span>${esc(label)}</span><strong>${esc(value)}</strong></div>
+  `).join("");
 }
+
 
 function renderFiles() {
   const host = $("fileStrip");
@@ -759,7 +915,7 @@ async function executePersonaAction(action) {
     showMsg("commandMsg", "请先选择一个人设。", false);
     return;
   }
-  if (["open_dashboard", "pd", "posts", "history", "hot_metrics", "editname", "tweetstyle", "editcontent", "linksettings", "bindpad", "persona_image", "publish", "genpost_branch", "acctmgmt", "bindtg_free", "bindtg_paid"].includes(action)) {
+  if (["open_dashboard", "pd", "posts", "history", "hot_metrics", "editname", "tweetstyle", "editcontent", "linksettings", "persona_image", "publish", "genpost_branch", "acctmgmt"].includes(action)) {
     location.href = "/persona-dashboard.html";
     return;
   }
@@ -791,37 +947,33 @@ async function executePersonaAction(action) {
     persona_autoreply: "threads_auto_reply",
     persona_warmup: "threads_warmup",
     acctplatform_threads: "check_login",
-    acctplatform_telegram: "check_login",
   }[action] || action;
   await createSocialTask(taskType, account.id, persona.id);
   appendEvent("persona", `${persona.name} 已提交：${taskType}`);
 }
 
+
 async function executeSimpleFlow() {
-  if (state.activeModule === "menu_status" || state.activeModule === "schedule_publish") {
+  if (state.activeModule === "queue") {
     setView("tasks");
     await loadTasks();
+    await loadSocial();
+    showMsg("commandMsg", "已打开任务队列。取消、重试和日志在对应任务行内执行。", true);
     return;
   }
-  if (state.activeModule === "pad_mgmt") {
-    appendEvent("pad_mgmt", "Web 端已保留 Bot 设备管理入口；旧云机执行链路不再恢复。");
-    showMsg("commandMsg", "设备管理入口已对齐 Bot，当前不走旧云机链路。", true);
+  if (state.activeModule === "publishing" || state.activeModule === "automation") {
+    const accountId = $("simpleAccount")?.value || "";
+    if (!accountId) {
+      showMsg("commandMsg", "请先选择账号 Profile。", false);
+      return;
+    }
+    const taskType = $("simplePrimary")?.value || selectedBranch(state.activeModule);
+    const personaId = $("simplePersona")?.value || selectedPersona()?.id || "";
+    await createSocialTask(taskType, accountId, personaId, "commandMsg");
+    appendEvent("browser", `${taskType} 已提交到指纹浏览器任务队列`);
     return;
   }
-  if (state.activeModule === "force_stop") {
-    appendEvent("force_stop", "已触发 Web 端中止提示。");
-    showMsg("commandMsg", "已进入强制中止闭环；如有运行任务，请在任务队列中取消。", true);
-    return;
-  }
-  const accountId = $("simpleAccount")?.value || "";
-  if (!accountId) {
-    showMsg("commandMsg", "请先选择账号/Profile。", false);
-    return;
-  }
-  let taskType = $("simplePrimary")?.value || "check_login";
-  if (taskType === "threads_hot_reply") taskType = "threads_auto_reply";
-  await createSocialTask(taskType, accountId);
-  showMsg("commandMsg", "浏览器自动化任务已提交。", true);
+  setView("workspace");
 }
 
 async function loadMe() {
@@ -893,7 +1045,8 @@ async function loadSocial() {
   state.socialTasks = tasksData.tasks || [];
   renderSocialAccounts();
   renderSocialTasks();
-  if (state.activeModule && ["accounts", "automation"].includes(state.activeModule)) fillSimpleAccounts();
+  syncStandaloneSocialForm();
+  if (state.activeModule && ["publishing", "automation"].includes(state.activeModule)) renderSimpleFlowModule(state.activeModule);
   return overview;
 }
 
@@ -903,6 +1056,7 @@ function renderSocialAccounts() {
     select.innerHTML = state.socialAccounts.length
       ? state.socialAccounts.map((account) => `<option value="${esc(account.id)}" data-platform="${esc(account.platform)}">${esc(account.username || account.id)} · ${esc(account.platform)}</option>`).join("")
       : `<option value="">暂无账号</option>`;
+    syncStandaloneSocialForm();
   }
   const grid = $("accountGrid");
   if (!grid) return;
@@ -935,27 +1089,94 @@ function renderSocialTasks() {
   `).join("") : `<div class="empty-state">暂无浏览器自动化任务。</div>`;
 }
 
-async function createSocialTask(taskType = $("socialTaskType")?.value, accountId = $("socialAccount")?.value, personaId = "") {
+
+function numberField(id, fallback = undefined) {
+  const node = $(id);
+  if (!node || node.value === "") return fallback;
+  const value = Number(node.value);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function splitLines(value) {
+  return String(value || "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+}
+
+function compactPayload(payload) {
+  return Object.fromEntries(Object.entries(payload).filter(([, value]) => {
+    if (Array.isArray(value)) return value.length > 0;
+    return value !== undefined && value !== null && value !== "";
+  }));
+}
+
+function validateTaskForPlatform(taskType, platform) {
+  const allowed = taskOptionsForPlatform(platform).map(([value]) => value);
+  return allowed.includes(taskType);
+}
+
+async function createSocialTask(taskType = $("socialTaskType")?.value, accountId = $("socialAccount")?.value || $("simpleAccount")?.value, personaId = "", messageId = "socialMsg") {
   if (!accountId) {
-    showMsg("socialMsg", "请先选择账号 Profile。", false);
+    showMsg(messageId, "请先选择账号 Profile。", false);
     return;
   }
-  const selected = state.socialAccounts.find((account) => String(account.id) === String(accountId));
-  const platform = selected?.platform || $("simplePlatform")?.value || $("socialPlatform")?.value || "threads";
+  const selected = selectedSocialAccount(accountId);
+  const platform = selected?.platform || $("socialPlatform")?.value || $("simplePlatform")?.value || "threads";
+  if (!validateTaskForPlatform(taskType, platform)) {
+    showMsg(messageId, `${platform} 当前不支持 ${taskType}，请切换到可执行任务类型。`, false);
+    return;
+  }
   const content = $("socialContent")?.value.trim() || $("simpleContent")?.value.trim() || "";
-  const payload = {
+  const targetUrl = $("socialTargetUrl")?.value.trim() || $("simpleTargetUrl")?.value.trim() || "";
+  const mediaPaths = splitLines($("simpleMediaPaths")?.value || $("socialMediaPaths")?.value || "");
+  if (taskType === "publish_post" && mediaPaths.length === 0) {
+    showMsg(messageId, "publish_post 必须填写 media_paths，一行一个素材路径。", false);
+    return;
+  }
+  if (["comment_post", "reply_comment", "like_post", "share_post", "browse_profile"].includes(taskType) && !targetUrl) {
+    showMsg(messageId, `${taskType} 必须填写目标 URL 或用户名。`, false);
+    return;
+  }
+  const payload = compactPayload({
     content,
     caption: content,
-    target_url: $("socialTargetUrl")?.value.trim() || "",
-    max_posts: Number($("simpleLimit")?.value || $("socialLimit")?.value || 3),
-    max_replies: Number($("simpleLimit")?.value || $("socialLimit")?.value || 3),
-  };
+    comment: content,
+    text: content,
+    reply: content,
+    reply_text: content,
+    target_url: targetUrl,
+    post_url: targetUrl,
+    username: taskType === "browse_profile" ? targetUrl : "",
+    media_paths: mediaPaths,
+    target_urls: splitLines($("simpleTargetUrls")?.value || $("socialTargetUrls")?.value || ""),
+    login_wait_seconds: numberField("simpleLoginWaitSeconds", 180),
+    scroll_times: numberField("simpleScrollTimes", numberField("socialLimit", 5)),
+    browse_limit: numberField("simpleScrollTimes", undefined),
+    like_limit: numberField("simpleLikeLimit", undefined),
+    max_comments: numberField("simpleMaxComments", undefined),
+    comment_chance: numberField("simpleCommentChance", undefined),
+    max_posts: numberField("simpleMaxPosts", numberField("socialLimit", 3)),
+    max_replies: numberField("simpleMaxReplies", numberField("socialMaxReplies", numberField("socialLimit", 3))),
+    max_age_days: numberField("simpleMaxAgeDays", numberField("socialMaxAgeDays", undefined)),
+    min_views: numberField("simpleMinViews", numberField("socialMinViews", undefined)),
+    reply_scope: $("simpleReplyScope")?.value || "",
+    strategy_id: $("simpleStrategyId")?.value.trim() || "",
+    reply_templates: splitLines(content),
+  });
+  const scheduledAt = $("simpleScheduleAt")?.value.trim() || "";
   const result = await api("/api/persona_dashboard/automation/tasks", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ account_id: accountId, persona_id: personaId || selected?.persona_id || "", platform, task_type: taskType, payload }),
+    body: JSON.stringify({
+      account_id: accountId,
+      persona_id: personaId || selected?.persona_id || "",
+      platform,
+      task_type: taskType,
+      scheduled_at: scheduledAt || undefined,
+      priority: numberField("simplePriority", 0),
+      max_retries: numberField("simpleMaxRetries", 2),
+      payload,
+    }),
   });
-  showMsg("socialMsg", `浏览器任务已提交：${result.task?.id || ""}`, true);
+  showMsg(messageId, `浏览器任务已提交：${result.task?.id || ""}`, true);
   await loadSocial();
   return result;
 }
@@ -1017,6 +1238,8 @@ function bindEvents() {
     if (button.dataset.retry) api(`/api/tasks/${encodeURIComponent(id)}/retry`, { method: "POST" }).then(loadTasks);
   });
   $("submitSocialTask").addEventListener("click", () => createSocialTask().catch((error) => showMsg("socialMsg", error.detail || error.message || "提交失败", false)));
+  $("socialAccount").addEventListener("change", syncStandaloneSocialForm);
+  $("socialPlatform").addEventListener("change", syncStandaloneSocialForm);
   $("runSocialOnce").addEventListener("click", () => api("/api/persona_dashboard/automation/worker/run_once", { method: "POST" }).then(loadSocial).catch((error) => showMsg("socialMsg", error.detail || error.message || "执行失败", false)));
   $("refreshSocialTasks").addEventListener("click", loadSocial);
   $("refreshAccounts").addEventListener("click", loadSocial);
