@@ -2,9 +2,9 @@ const $ = (id) => document.getElementById(id);
 
 const state = {
   view: "workspace",
-  activeModule: "generation",
+  activeModule: "personas",
   workspaceMenuOpen: true,
-  openModules: { generation: true },
+  openModules: { personas: true },
   generationType: "text_to_image",
   personaGroup: "content",
   simpleBranches: {},
@@ -18,13 +18,11 @@ const state = {
 };
 
 const modules = [
-  { id: "generation", label: "🎨 生成/编辑任务", hint: "文生图、图生图、修图、换脸、视频", callback: "toolr18_task_*" },
-  { id: "personas", label: "👤 我的人设", hint: "先选人设，再进入人设自己的功能", callback: "list_personas → pd_{id}" },
-  { id: "custom_publish", label: "📝 自定义发布", hint: "选择人设和账号后发布内容", callback: "custom_publish_*" },
-  { id: "schedule_publish", label: "⏰ 定时任务", hint: "按人设、平台、时间加入队列", callback: "schedule_publish" },
-  { id: "menu_status", label: "📊 排程状态", hint: "查看待发布、失败、定时任务", callback: "menu_status / queue_*" },
-  { id: "accounts", label: "🔐 账号 Profile", hint: "登录、检测、修改 Profile", callback: "acctplatform_*" },
-  { id: "automation", label: "🌱 Threads 自动化", hint: "养号、自动回复、互动任务", callback: "acctwarmup_*" },
+  { id: "personas", label: "👤 我的人設", hint: "list_personas", callback: "list_personas" },
+  { id: "menu_status", label: "📊 排程狀態", hint: "menu_status", callback: "menu_status" },
+  { id: "schedule_publish", label: "⏰ 定時任務", hint: "schedule_publish", callback: "schedule_publish" },
+  { id: "pad_mgmt", label: "📱 设备管理", hint: "pad_mgmt", callback: "pad_mgmt" },
+  { id: "force_stop", label: "🛑 強制中止目前任務", hint: "force_stop_current_task", callback: "force_stop_current_task" },
 ];
 
 const taskMeta = {
@@ -39,87 +37,77 @@ const taskMeta = {
 
 const personaGroups = {
   content: {
-    label: "内容与发布",
+    label: "人設詳情",
     actions: [
-      ["pd", "进入详情"],
-      ["posts", "查看推文"],
-      ["history", "发布历史"],
-      ["genpost_nonr18", "生成免费内容"],
-      ["genpost_r18", "生成付费内容"],
-      ["publish", "发布推文"],
+      ["pd", "🧾 查看人設詳情"],
+      ["posts", "📝 查看推文"],
+      ["history", "🕘 发布历史"],
+      ["genpost_branch", "✍️ 新建推文"],
+      ["publish", "🚀 发布推文"],
     ],
   },
   settings: {
-    label: "人设设置",
+    label: "⚙️ 人設設定",
     actions: [
-      ["editname", "改名称"],
-      ["tweetstyle", "推文风格"],
-      ["editcontent", "人设简介"],
-      ["linksettings", "链接设置"],
-      ["bindpad", "绑定设备"],
-      ["persona_image", "人设图"],
+      ["editname", "✏️ 改名稱"],
+      ["tweetstyle", "🧾 推文風格"],
+      ["editcontent", "🧾 人設簡介"],
+      ["linksettings", "🔗 链接设置"],
+      ["bindpad", "📱 綁定设备"],
+      ["acctmgmt", "🔐 帳號管理"],
+      ["hot_metrics", "🔥 人設熱點數據"],
+      ["bindtg_free", "TG免費群"],
+      ["bindtg_paid", "TG付費群"],
     ],
   },
   account: {
-    label: "账号/自动化",
+    label: "帳號管理",
     actions: [
-      ["acctplatform_threads", "Threads 账号"],
-      ["acctlogin", "打开登录"],
-      ["acctquery", "检测登录"],
-      ["acctprofile", "修改 Profile"],
-      ["persona_autoreply", "自动回复"],
-      ["persona_warmup", "养号"],
+      ["acctplatform_threads", "Threads"],
+      ["acctplatform_telegram", "Telegram"],
     ],
   },
   data: {
-    label: "数据与维护",
+    label: "自動化",
     actions: [
-      ["hot_metrics", "热点数据"],
-      ["refresh", "刷新人设数据"],
+      ["persona_autoreply", "💬 自動回覆"],
+      ["persona_warmup", "🌱 養號"],
       ["open_dashboard", "打开人设看板"],
-      ["clear_tasks", "清理自动化队列"],
     ],
   },
 };
 
 const moduleBranches = {
-  generation: () => Object.entries(taskMeta).map(([id, meta]) => ({
-    id,
-    label: meta.title,
-    hint: meta.callback,
-  })),
-  personas: () => Object.entries(personaGroups).map(([id, group]) => ({
-    id,
-    label: group.label,
-    hint: id === "content" ? "list_personas → pd_{id} → 内容" : `pd_{id} → ${group.label}`,
-  })),
-  custom_publish: () => [
-    { id: "pick", label: "选择已有人设", hint: "custom_publish_pick_persona" },
-    { id: "create", label: "创建新人设", hint: "custom_publish_create_persona" },
-  ],
-  schedule_publish: () => [
-    { id: "schedule_publish", label: "选择人设 → 平台 → 时间", hint: "sched_persona → sched_platform → schedpick_confirm" },
-    { id: "batchreschedule", label: "批量改时间", hint: "batchreschedule_{id}" },
-    { id: "batchcancel", label: "批量取消", hint: "batchcancel_{id}" },
+  personas: () => [
+    { id: "list_personas", label: "📋 人設列表", hint: "list_personas" },
+    { id: "matrix_start", label: "🚀 矩陣發布", hint: "matrix_start" },
+    { id: "create_persona_entry", label: "➕ 新建人設", hint: "create_persona_entry" },
+    { id: "pd", label: "選擇人設 → 人設詳情", hint: "pd_{id}" },
+    { id: "settings", label: "⚙️ 人設設定", hint: "settings_{id}" },
+    { id: "publish", label: "🚀 发布推文", hint: "pub_{id}" },
   ],
   menu_status: () => [
-    { id: "queue_pending", label: "查看待发布", hint: "queue_pending" },
-    { id: "queue_failed", label: "查看失败", hint: "queue_failed" },
-    { id: "queue_scheduled", label: "定时任务", hint: "queue_scheduled" },
-    { id: "queue_filter_persona", label: "按人设筛选", hint: "queue_filter_persona" },
+    { id: "queue_pending", label: "📋 查看待發佈", hint: "queueview_pending_*" },
+    { id: "queue_failed", label: "❌ 查看失敗", hint: "queueview_failed_*" },
+    { id: "queue_scheduled", label: "⏰ 僅看定時任務", hint: "queueview_pending_scheduled" },
+    { id: "queue_filter_platform", label: "🧵 按平台篩選", hint: "queue_filter_platform" },
+    { id: "queue_filter_persona", label: "👤 按人設篩選", hint: "queue_filter_persona" },
+    { id: "retry_failed", label: "🔄 重試失敗", hint: "retry_failed" },
   ],
-  accounts: () => [
-    { id: "open_login", label: "打开登录", hint: "acctlogin_threads_{id}" },
-    { id: "check_login", label: "检测登录", hint: "acctquery_threads_{id}" },
-    { id: "profile_bio", label: "修改简介", hint: "acctprofile_bio_{id}" },
-    { id: "profile_name", label: "修改名称", hint: "acctprofile_name_{id}" },
-    { id: "profile_avatar", label: "修改头像", hint: "acctprofile_avatar_{id}" },
+  schedule_publish: () => [
+    { id: "schedule_publish", label: "請選擇要定時發佈的人設", hint: "schedule_publish → sched_persona_{id}" },
+    { id: "sched_platform_threads", label: "🧵 Threads", hint: "sched_platform_threads" },
+    { id: "sched_platform_telegram", label: "📣 Telegram 群组", hint: "sched_platform_telegram" },
+    { id: "sched_multi_platform_threads", label: "📱 多设备定时发 Threads", hint: "sched_multi_platform_threads" },
+    { id: "schedpick_confirm", label: "✅ 確認時間並入隊", hint: "schedpick_confirm" },
   ],
-  automation: () => [
-    { id: "threads_warmup", label: "Threads 养号", hint: "persona_warmup → acctwarmup_threads" },
-    { id: "threads_auto_reply", label: "自动回复评论", hint: "persona_autoreply_original" },
-    { id: "threads_hot_reply", label: "自动回复热点推文", hint: "persona_autoreply_hot" },
-    { id: "browse_feed", label: "浏览 Feed", hint: "浏览器 Profile 执行" },
+  pad_mgmt: () => [
+    { id: "pad_mgmt", label: "📱 设备列表", hint: "pad_mgmt" },
+    { id: "pad_mgmt_refresh", label: "🔄 刷新列表", hint: "pad_mgmt_refresh" },
+    { id: "pad_detail", label: "選擇设备詳情", hint: "pad_detail_{padCode}" },
+  ],
+  force_stop: () => [
+    { id: "force_stop_current_task", label: "🛑 強制中止目前任務", hint: "force_stop_current_task" },
   ],
 };
 
@@ -552,33 +540,52 @@ function renderPersonaDetail() {
 
 function renderSimpleFlowModule(moduleId) {
   const controls = {
-    custom_publish: `
-      <label>发布入口<select id="simplePrimary"><option value="pick">选择已有人设</option><option value="create">创建新人设</option></select></label>
-      <label>发布方式<select id="simpleSecondary"><option value="publish_post">图/视频/文字直发</option><option value="publish_with_image">根据文字生成图片再发布</option><option value="multi">多设备发布</option></select></label>`,
-    schedule_publish: `
-      <label>定时入口<select id="simplePrimary"><option value="schedule_publish">选择人设 → 平台 → 时间</option><option value="batchreschedule">批量改时间</option><option value="batchcancel">批量取消</option></select></label>
-      <label>发布时间<input id="simpleScheduleAt" placeholder="例如：2026-07-03 21:30" /></label>`,
     menu_status: `
-      <label>队列筛选<select id="simplePrimary"><option value="queue_pending">查看待发布</option><option value="queue_failed">查看失败</option><option value="queue_scheduled">定时任务</option><option value="queue_filter_persona">按人设筛选</option></select></label>`,
-    accounts: `
-      <label>账号动作<select id="simplePrimary"><option value="open_login">打开登录</option><option value="check_login">检测登录</option><option value="profile_bio">修改简介</option><option value="profile_name">修改名称</option><option value="profile_avatar">修改头像</option></select></label>
-      <label>执行账号/Profile<select id="simpleAccount"></select></label>`,
-    automation: `
-      <label>自动化动作<select id="simplePrimary"><option value="threads_warmup">Threads 养号</option><option value="threads_auto_reply">自动回复评论</option><option value="threads_hot_reply">自动回复热点推文</option><option value="browse_feed">浏览 Feed</option></select></label>
-      <label>执行账号/Profile<select id="simpleAccount"></select></label>`,
+      <label>Bot 按钮<select id="simplePrimary">
+        <option value="queue_pending">📋 查看待發佈</option>
+        <option value="queue_failed">❌ 查看失敗</option>
+        <option value="queue_scheduled">⏰ 僅看定時任務</option>
+        <option value="queue_filter_platform">🧵 按平台篩選</option>
+        <option value="queue_filter_persona">👤 按人設篩選</option>
+        <option value="retry_failed">🔄 重試失敗</option>
+      </select></label>
+      <label>平台篩選<select id="simplePlatform"><option value="all">全部平台</option><option value="threads">Threads</option><option value="telegram">Telegram</option></select></label>`,
+    schedule_publish: `
+      <label>Bot 步驟<select id="simplePrimary">
+        <option value="schedule_publish">選擇人設 sched_persona_{id}</option>
+        <option value="sched_platform_threads">🧵 Threads sched_platform_threads</option>
+        <option value="sched_platform_telegram">📣 Telegram 群组 sched_platform_telegram</option>
+        <option value="sched_multi_platform_threads">📱 多设备定时发 Threads</option>
+        <option value="schedpick_confirm">✅ 確認時間並入隊</option>
+      </select></label>
+      <label>定時時間<input id="simpleScheduleAt" placeholder="例如：2026-07-03 21:30" /></label>`,
+    pad_mgmt: `
+      <label>Bot 按钮<select id="simplePrimary">
+        <option value="pad_mgmt">📱 设备列表</option>
+        <option value="pad_mgmt_refresh">🔄 刷新列表</option>
+        <option value="pad_detail">选择设备详情 pad_detail_{padCode}</option>
+      </select></label>
+      <label>说明<input id="simpleContent" value="当前 Web 端不恢复旧云机执行链路，只保留 Bot 对齐入口。" /></label>`,
+    force_stop: `
+      <label>Bot 按钮<select id="simplePrimary">
+        <option value="force_stop_current_task">🛑 強制中止目前任務</option>
+      </select></label>
+      <label>说明<input id="simpleContent" value="点击确认后只进入 Web 端中止/提示闭环，不走 Telegram 交互。" /></label>`,
   }[moduleId] || "";
+  const showGenericParams = !["pad_mgmt", "force_stop"].includes(moduleId);
   $("moduleBody").innerHTML = `
     <div class="module-toolbar">
       <strong>${esc(currentModule().label)}</strong>
-      <span class="muted">当前只显示该菜单所属选项。</span>
+      <span class="muted">左侧文案对齐 Bot；右侧把必要参数扁平化成下拉框和输入框。</span>
     </div>
     <div class="form-grid">${controls}</div>
-    <label>内容 / 备注</label>
-    <textarea id="simpleContent" rows="6" placeholder="填写发布内容、账号修改内容或自动化策略。"></textarea>
-    <div class="form-grid">
-      <label>平台<select id="simplePlatform"><option value="threads">Threads</option><option value="instagram">Instagram</option><option value="telegram">Telegram</option></select></label>
-      <label>数量<input id="simpleLimit" type="number" min="1" value="3" /></label>
-    </div>
+    ${showGenericParams ? `
+      <label>备注 / 参数</label>
+      <textarea id="simpleContent" rows="5" placeholder="可填写任务备注、筛选条件或发布时间说明。"></textarea>
+      <div class="form-grid">
+        <label>数量<input id="simpleLimit" type="number" min="1" value="3" /></label>
+      </div>
+    ` : ""}
     <div class="flow-box"><span>执行链路</span><strong>${esc(currentModule().callback)}</strong></div>
     <div class="command-actions"><button id="executeSimpleFlow" type="button" class="primary">确认执行</button></div>
   `;
@@ -752,7 +759,7 @@ async function executePersonaAction(action) {
     showMsg("commandMsg", "请先选择一个人设。", false);
     return;
   }
-  if (["open_dashboard", "pd", "posts", "history", "hot_metrics", "editname", "tweetstyle", "editcontent", "linksettings", "bindpad", "persona_image", "publish", "genpost_nonr18", "genpost_r18"].includes(action)) {
+  if (["open_dashboard", "pd", "posts", "history", "hot_metrics", "editname", "tweetstyle", "editcontent", "linksettings", "bindpad", "persona_image", "publish", "genpost_branch", "acctmgmt", "bindtg_free", "bindtg_paid"].includes(action)) {
     location.href = "/persona-dashboard.html";
     return;
   }
@@ -784,6 +791,7 @@ async function executePersonaAction(action) {
     persona_autoreply: "threads_auto_reply",
     persona_warmup: "threads_warmup",
     acctplatform_threads: "check_login",
+    acctplatform_telegram: "check_login",
   }[action] || action;
   await createSocialTask(taskType, account.id, persona.id);
   appendEvent("persona", `${persona.name} 已提交：${taskType}`);
@@ -795,8 +803,14 @@ async function executeSimpleFlow() {
     await loadTasks();
     return;
   }
-  if (state.activeModule === "custom_publish") {
-    setView("social");
+  if (state.activeModule === "pad_mgmt") {
+    appendEvent("pad_mgmt", "Web 端已保留 Bot 设备管理入口；旧云机执行链路不再恢复。");
+    showMsg("commandMsg", "设备管理入口已对齐 Bot，当前不走旧云机链路。", true);
+    return;
+  }
+  if (state.activeModule === "force_stop") {
+    appendEvent("force_stop", "已触发 Web 端中止提示。");
+    showMsg("commandMsg", "已进入强制中止闭环；如有运行任务，请在任务队列中取消。", true);
     return;
   }
   const accountId = $("simpleAccount")?.value || "";
