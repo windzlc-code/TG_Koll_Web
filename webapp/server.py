@@ -2472,7 +2472,7 @@ def _notify_tg_task_finished(
     bot_token = _tg_bot_token_for_payload(payload)
     download_path = _extract_download_path(output_data if isinstance(output_data, dict) else {})
     public_base = str(os.getenv("PUBLIC_BASE_URL") or "").strip().rstrip("/")
-    task_url = f"{public_base}/index.html#app-tasks" if public_base else ""
+    task_url = f"{public_base}/console.html" if public_base else ""
     if str(status or "").strip().lower() == "success":
         reply_markup = _send_telegram_reply_markup_for_finished_task(task_id, task_type)
         output_dict = output_data if isinstance(output_data, dict) else {}
@@ -3945,6 +3945,40 @@ def _ensure_admin_seed() -> None:
             """,
             ("admin", hash_password("admin123"), now, now),
         )
+
+
+def _create_local_console_session() -> str:
+    """Issue a local web-console session so console.html can replace Bot clicks."""
+    now = _now_ts()
+    with db() as conn:
+        user = conn.execute(
+            "SELECT * FROM users WHERE username = ?",
+            ("local_console",),
+        ).fetchone()
+        if user is None:
+            conn.execute(
+                """
+                INSERT INTO users(username, password_hash, is_admin, is_disabled, balance_cents, created_at, updated_at)
+                VALUES (?, ?, 1, 0, 999999999, ?, ?)
+                """,
+                ("local_console", hash_password(f"local-{uuid.uuid4().hex}"), now, now),
+            )
+            user = conn.execute(
+                "SELECT * FROM users WHERE username = ?",
+                ("local_console",),
+            ).fetchone()
+        else:
+            conn.execute(
+                """
+                UPDATE users
+                SET is_admin = 1, is_disabled = 0, updated_at = ?
+                WHERE id = ?
+                """,
+                (now, int(user["id"])),
+            )
+        if user is None:
+            raise HTTPException(status_code=500, detail="无法创建本地控制台会话")
+        return create_session(conn, int(user["id"]))
 
 
 def _ensure_user_can_access_task(user: dict[str, Any], task_row: dict[str, Any]) -> None:
@@ -14744,7 +14778,7 @@ def create_app() -> FastAPI:
                 user = get_current_user(session_token=token)
                 if bool(int(user.get("is_admin") or 0)):
                     return RedirectResponse(url="/admin.html#admin-overview", status_code=302)
-                return RedirectResponse(url="/index.html#app-generate", status_code=302)
+                return RedirectResponse(url="/console.html", status_code=302)
             except HTTPException:
                 pass
             except Exception:
@@ -14770,14 +14804,26 @@ def create_app() -> FastAPI:
         return FileResponse(str(STATIC_DIR / "register.html"))
 
     @app.get("/index.html", include_in_schema=False)
-    def page_index() -> HTMLResponse:
-        return _html_response_with_versions(
-            "index.html",
+    def page_index() -> RedirectResponse:
+        return RedirectResponse(url="/console.html", status_code=302)
+
+    @app.get("/console.html", include_in_schema=False)
+    def page_console() -> HTMLResponse:
+        response = _html_response_with_versions(
+            "console.html",
             replacements={
-                "__STYLE_VERSION__": _asset_version("assets", "style.css"),
-                "__APP_JS_VERSION__": _asset_version("assets", "app.js"),
+                "__CONSOLE_CSS_VERSION__": _asset_version("assets", "console.css"),
+                "__CONSOLE_JS_VERSION__": _asset_version("assets", "console.js"),
             },
         )
+        response.set_cookie(
+            key=SESSION_COOKIE,
+            value=_create_local_console_session(),
+            httponly=True,
+            max_age=14 * 24 * 3600,
+            samesite="lax",
+        )
+        return response
 
     @app.get("/admin.html", include_in_schema=False)
     def page_admin() -> HTMLResponse:
@@ -16147,7 +16193,11 @@ def create_app() -> FastAPI:
 
         try:
             payload: dict[str, Any] = dict(params)
-            if typ == "image_generate":
+            if typ == "text_to_image":
+                payload["prompt"] = str(payload.get("prompt") or payload.get("prompt_text") or payload.get("message") or "").strip()
+                if not payload["prompt"]:
+                    raise HTTPException(status_code=400, detail="文生图需要填写 prompt")
+            elif typ == "image_generate":
                 mode = str(payload.get("mode") or "").strip() or ("dual_reference" if len(images) >= 2 else "single_reference")
                 payload["mode"] = mode
                 if mode == "dual_reference":
@@ -16179,6 +16229,26 @@ def create_app() -> FastAPI:
                     payload["image_paths"] = [str(s["path"]) for s in images]
                 if videos:
                     payload["video_paths"] = [str(s["path"]) for s in videos]
+            elif typ == "video_i2v":
+                if not images:
+                    raise HTTPException(status_code=400, detail=f"图生视频需要上传 1 张参考图（已识别：{_format_uploaded_files(saved)}）")
+                payload["image_local_path"] = str(images[0]["path"])
+                if audios:
+                    payload["audio_local_path"] = str(audios[0]["path"])
+                payload["prompt"] = str(payload.get("prompt") or payload.get("prompt_text") or payload.get("message") or "").strip()
+                if not payload["prompt"]:
+                    raise HTTPException(status_code=400, detail="图生视频需要填写 prompt")
+                payload["duration_seconds"] = min(max(_to_int(payload.get("duration_seconds") or payload.get("mulerouter_wan_i2v_duration"), 2), 2), 15)
+                payload["mulerouter_wan_i2v_duration"] = payload["duration_seconds"]
+                resolution = str(payload.get("resolution") or payload.get("mulerouter_wan_i2v_resolution") or "720p").strip()
+                payload["mulerouter_wan_i2v_resolution"] = resolution if resolution in {"720p", "1080p"} else "720p"
+                payload["mulerouter_wan_i2v_prompt_extend"] = False
+                payload["prompt_extend"] = False
+                payload["mulerouter_wan_i2v_safety_filter"] = _to_bool(payload.get("mulerouter_wan_i2v_safety_filter", payload.get("safety_filter")), True)
+                payload["mulerouter_wan_i2v_negative_prompt"] = str(payload.get("mulerouter_wan_i2v_negative_prompt") or payload.get("negative_prompt") or "").strip()
+                seed_raw = payload.get("mulerouter_wan_i2v_seed", payload.get("seed"))
+                if str(seed_raw or "").strip().isdigit():
+                    payload["mulerouter_wan_i2v_seed"] = min(max(_to_int(seed_raw, 0), 0), 2147483647)
             else:
                 raise HTTPException(status_code=400, detail=f"不支持的 task_type: {typ}")
         except HTTPException:

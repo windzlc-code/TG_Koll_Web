@@ -21,7 +21,7 @@ uvicorn webapp.server:app --host 0.0.0.0 --port 8000
 Open:
 
 - `http://<server-ip>:8000/login.html`
-- User page: `http://<server-ip>:8000/index.html`
+- User page: `http://<server-ip>:8000/console.html`
 - Admin page: `http://<server-ip>:8000/admin.html`
 
 ## 3. Default admin account

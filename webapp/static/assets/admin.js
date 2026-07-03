@@ -2163,7 +2163,7 @@ function toggleSensitiveInput(button) {
 async function ensureAdmin() {
   const me = await api("/api/me");
   if (!me.is_admin) {
-    location.href = "/index.html";
+    location.href = "/console.html";
     return null;
   }
   el("adminName").textContent = me.username;
@@ -3256,7 +3256,7 @@ function bindActions() {
   });
 
   el("btnToUser").addEventListener("click", () => {
-    location.href = "/index.html#app-generate";
+    location.href = "/console.html";
   });
 
   if (el("btnQuickSetup")) {

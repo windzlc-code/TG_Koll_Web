@@ -15,7 +15,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from .auth import require_admin
+from .auth import get_current_user, require_admin
 from .db import db
 
 
@@ -120,26 +120,26 @@ def configure_social_automation(*, data_dir: Path, new_id: Callable[[str], str] 
 
 def register_social_automation_routes(app: FastAPI) -> None:
     @app.get("/api/persona_dashboard/automation/overview")
-    def api_social_automation_overview():
+    def api_social_automation_overview(_user: dict[str, Any] = Depends(get_current_user)):
         return build_social_automation_overview()
 
     @app.get("/api/persona_dashboard/automation/accounts")
-    def api_social_accounts():
+    def api_social_accounts(_user: dict[str, Any] = Depends(get_current_user)):
         with db() as conn:
             rows = conn.execute("SELECT * FROM social_accounts ORDER BY updated_at DESC, created_at DESC").fetchall()
         return {"ok": True, "accounts": [_account_public(row) for row in rows]}
 
     @app.post("/api/persona_dashboard/automation/accounts")
-    def api_social_account_create(payload: SocialAccountPayload):
+    def api_social_account_create(payload: SocialAccountPayload, _user: dict[str, Any] = Depends(get_current_user)):
         account = create_social_account(payload)
         return {"ok": True, "account": account}
 
     @app.patch("/api/persona_dashboard/automation/accounts/{account_id}")
-    def api_social_account_patch(account_id: str, payload: SocialAccountPatchPayload):
+    def api_social_account_patch(account_id: str, payload: SocialAccountPatchPayload, _user: dict[str, Any] = Depends(get_current_user)):
         return {"ok": True, "account": update_social_account(account_id, payload)}
 
     @app.get("/api/persona_dashboard/automation/accounts/{account_id}/credentials")
-    def api_social_account_credentials(account_id: str):
+    def api_social_account_credentials(account_id: str, _user: dict[str, Any] = Depends(get_current_user)):
         with db() as conn:
             row = conn.execute("SELECT id, login_username, login_password, login_credentials_updated_at FROM social_accounts WHERE id = ?", (account_id,)).fetchone()
         if not row:
@@ -154,58 +154,58 @@ def register_social_automation_routes(app: FastAPI) -> None:
         }
 
     @app.post("/api/persona_dashboard/automation/accounts/{account_id}/check_login")
-    def api_social_account_check_login(account_id: str):
+    def api_social_account_check_login(account_id: str, _user: dict[str, Any] = Depends(get_current_user)):
         return {"ok": True, "task": create_account_task(account_id, "check_login", {})}
 
     @app.post("/api/persona_dashboard/automation/accounts/{account_id}/open_login")
-    def api_social_account_open_login(account_id: str):
+    def api_social_account_open_login(account_id: str, _user: dict[str, Any] = Depends(get_current_user)):
         wait_seconds = int(os.getenv("SOCIAL_AUTOMATION_LOGIN_WAIT_SECONDS", "600"))
         return {"ok": True, "task": create_account_task(account_id, "open_login", {"login_wait_seconds": wait_seconds})}
 
     @app.get("/api/persona_dashboard/automation/proxies")
-    def api_social_proxies():
+    def api_social_proxies(_user: dict[str, Any] = Depends(get_current_user)):
         with db() as conn:
             rows = conn.execute("SELECT * FROM social_proxies ORDER BY updated_at DESC, created_at DESC").fetchall()
         return {"ok": True, "proxies": [_proxy_public(row) for row in rows]}
 
     @app.post("/api/persona_dashboard/automation/proxies")
-    def api_social_proxy_create(payload: SocialProxyPayload):
+    def api_social_proxy_create(payload: SocialProxyPayload, _user: dict[str, Any] = Depends(get_current_user)):
         return {"ok": True, "proxy": create_social_proxy(payload)}
 
     @app.post("/api/persona_dashboard/automation/proxies/{proxy_id}/check")
-    def api_social_proxy_check(proxy_id: str):
+    def api_social_proxy_check(proxy_id: str, _user: dict[str, Any] = Depends(get_current_user)):
         return {"ok": True, "proxy": check_social_proxy(proxy_id)}
 
     @app.get("/api/persona_dashboard/automation/tasks")
-    def api_social_tasks(status: str = "", account_id: str = "", limit: int = 60):
+    def api_social_tasks(status: str = "", account_id: str = "", limit: int = 60, _user: dict[str, Any] = Depends(get_current_user)):
         return {"ok": True, "tasks": list_social_tasks(status=status, account_id=account_id, limit=limit)}
 
     @app.post("/api/persona_dashboard/automation/tasks")
-    def api_social_task_create(payload: SocialTaskPayload):
+    def api_social_task_create(payload: SocialTaskPayload, _user: dict[str, Any] = Depends(get_current_user)):
         return {"ok": True, "task": create_social_task(payload)}
 
     @app.get("/api/persona_dashboard/automation/tasks/{task_id}")
-    def api_social_task_get(task_id: str):
+    def api_social_task_get(task_id: str, _user: dict[str, Any] = Depends(get_current_user)):
         return {"ok": True, "task": get_social_task(task_id)}
 
     @app.delete("/api/persona_dashboard/automation/tasks")
-    def api_social_tasks_clear(persona_id: str = "", account_id: str = ""):
+    def api_social_tasks_clear(persona_id: str = "", account_id: str = "", _user: dict[str, Any] = Depends(get_current_user)):
         return {"ok": True, "cleared": clear_social_tasks(persona_id=persona_id, account_id=account_id)}
 
     @app.delete("/api/persona_dashboard/automation/tasks/{task_id}")
-    def api_social_task_clear(task_id: str):
+    def api_social_task_clear(task_id: str, _user: dict[str, Any] = Depends(get_current_user)):
         return {"ok": True, "cleared": clear_social_task(task_id)}
 
     @app.post("/api/persona_dashboard/automation/tasks/{task_id}/cancel")
-    def api_social_task_cancel(task_id: str, payload: SocialTaskActionPayload | None = None):
+    def api_social_task_cancel(task_id: str, payload: SocialTaskActionPayload | None = None, _user: dict[str, Any] = Depends(get_current_user)):
         return {"ok": True, "task": cancel_social_task(task_id, (payload.reason if payload else ""))}
 
     @app.post("/api/persona_dashboard/automation/tasks/{task_id}/retry")
-    def api_social_task_retry(task_id: str):
+    def api_social_task_retry(task_id: str, _user: dict[str, Any] = Depends(get_current_user)):
         return {"ok": True, "task": retry_social_task(task_id)}
 
     @app.get("/api/persona_dashboard/automation/tasks/{task_id}/logs")
-    def api_social_task_logs(task_id: str):
+    def api_social_task_logs(task_id: str, _user: dict[str, Any] = Depends(get_current_user)):
         with db() as conn:
             logs = conn.execute(
                 "SELECT * FROM social_automation_logs WHERE task_id = ? ORDER BY created_at ASC, id ASC",
@@ -214,7 +214,7 @@ def register_social_automation_routes(app: FastAPI) -> None:
         return {"ok": True, "logs": [_log_public(row) for row in logs]}
 
     @app.get("/api/persona_dashboard/automation/tasks/{task_id}/media/{index}")
-    def api_social_task_media(task_id: str, index: int):
+    def api_social_task_media(task_id: str, index: int, _user: dict[str, Any] = Depends(get_current_user)):
         task = get_social_task(task_id)
         payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
         media_paths = [str(item or "").strip() for item in (payload.get("media_paths") or []) if str(item or "").strip()]
@@ -230,7 +230,7 @@ def register_social_automation_routes(app: FastAPI) -> None:
         return {"ok": True, "result": run_social_automation_once()}
 
     @app.get("/api/persona_dashboard/automation/screenshots/{filename}")
-    def api_social_screenshot(filename: str):
+    def api_social_screenshot(filename: str, _user: dict[str, Any] = Depends(get_current_user)):
         safe = Path(filename).name
         path = (_DATA_DIR / "social_automation" / "screenshots" / safe).resolve()
         root = (_DATA_DIR / "social_automation" / "screenshots").resolve()

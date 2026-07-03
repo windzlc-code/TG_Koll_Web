@@ -34,7 +34,7 @@ async function submitLogin(form) {
     location.href = "/admin.html#admin-overview";
     return;
   }
-  location.href = "/index.html#app-generate";
+  location.href = "/console.html";
 }
 
 async function submitRegister(form) {
@@ -51,7 +51,7 @@ async function submitRegister(form) {
     location.href = "/admin.html#admin-overview";
     return;
   }
-  location.href = "/index.html#app-generate";
+  location.href = "/console.html";
 }
 
 document.addEventListener("DOMContentLoaded", () => {

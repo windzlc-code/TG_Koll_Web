@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Web 任务控制台</title>
+  <link rel="stylesheet" href="/assets/console.css?v=__CONSOLE_CSS_VERSION__" />
+</head>
+<body>
+  <div class="console-shell">
+    <aside class="console-sidebar">
+      <div class="console-brand">
+        <div class="brand-mark">WK</div>
+        <div>
+          <h1>Web 任务控制台</h1>
+          <p>替代 TG Bot 的完整操作面板</p>
+        </div>
+      </div>
+
+      <nav class="console-nav" aria-label="控制台导航">
+        <button type="button" class="is-active" data-view="workspace" aria-expanded="true">任务工作台</button>
+        <div class="sidebar-flow is-open" id="workspaceFlow">
+          <div class="sidebar-flow-divider" aria-hidden="true"></div>
+          <div class="module-menu" id="moduleMenu"></div>
+        </div>
+        <button type="button" data-view="tasks">任务队列</button>
+        <button type="button" data-view="social">浏览器发布</button>
+        <button type="button" data-view="accounts">账号 Profile</button>
+        <button type="button" data-view="settings">系统状态</button>
+      </nav>
+
+      <div class="operator-card">
+        <div class="tiny">当前账号</div>
+        <strong id="consoleMeName">...</strong>
+      </div>
+      <div class="side-actions">
+        <a href="/persona-dashboard.html">人设看板</a>
+        <button id="consoleLogout" type="button">退出</button>
+      </div>
+    </aside>
+
+    <main class="console-main">
+      <header class="console-topbar">
+        <div>
+          <div class="eyebrow">Console</div>
+          <h2 id="viewTitle">任务工作台</h2>
+        </div>
+        <div class="topbar-actions">
+          <button id="refreshAll" type="button">刷新</button>
+          <button id="openAdmin" type="button" class="admin-only" hidden>运营后台</button>
+        </div>
+      </header>
+
+      <section class="view is-active" data-panel="workspace">
+        <div class="workbench-layout">
+          <section class="module-panel">
+            <div class="panel-head">
+              <div>
+                <div class="eyebrow" id="moduleEyebrow">Flow</div>
+                <h3 id="moduleTitle">生成/编辑任务</h3>
+              </div>
+              <span class="module-chip" id="moduleCallback">toolr18_entry</span>
+            </div>
+            <div id="moduleBody"></div>
+            <div id="commandMsg" class="notice" role="status"></div>
+          </section>
+
+          <aside class="action-panel">
+            <div class="panel-head">
+              <div>
+                <div class="eyebrow">Confirm</div>
+                <h3>确认执行</h3>
+              </div>
+              <span id="watchingTask">未监听</span>
+            </div>
+            <div class="confirm-summary" id="confirmSummary"></div>
+            <div class="event-stream" id="eventStream"></div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="view" data-panel="tasks">
+        <div class="panel-head">
+          <div>
+            <div class="eyebrow">Task Queue</div>
+            <h3>任务队列</h3>
+          </div>
+          <button id="refreshTasks" type="button">刷新队列</button>
+        </div>
+        <div class="task-table" id="taskTable"></div>
+      </section>
+
+      <section class="view" data-panel="social">
+        <div class="workspace-grid">
+          <section class="command-panel">
+            <div class="panel-head">
+              <div>
+                <div class="eyebrow">Browser Publish</div>
+                <h3>创建浏览器自动化任务</h3>
+              </div>
+              <select id="socialTaskType">
+                <option value="open_login">打开登录</option>
+                <option value="check_login">检测登录</option>
+                <option value="publish_post">发布内容</option>
+                <option value="browse_feed">浏览 Feed</option>
+                <option value="threads_warmup">Threads 养号</option>
+                <option value="threads_auto_reply">Threads 自动回复</option>
+                <option value="comment_post">评论</option>
+                <option value="like_post">点赞</option>
+                <option value="share_post">分享</option>
+              </select>
+            </div>
+            <div class="form-grid">
+              <label>账号
+                <select id="socialAccount"></select>
+              </label>
+              <label>平台
+                <select id="socialPlatform">
+                  <option value="threads">Threads</option>
+                  <option value="instagram">Instagram</option>
+                </select>
+              </label>
+            </div>
+            <label>发布内容 / 动作参数</label>
+            <textarea id="socialContent" rows="7" placeholder="发布内容、评论内容或自动回复策略。"></textarea>
+            <div class="form-grid">
+              <label>目标 URL
+                <input id="socialTargetUrl" placeholder="可选" />
+              </label>
+              <label>最大数量
+                <input id="socialLimit" type="number" min="1" value="3" />
+              </label>
+            </div>
+            <div class="command-actions">
+              <button id="submitSocialTask" type="button" class="primary">提交浏览器任务</button>
+              <button id="runSocialOnce" type="button">Worker 执行一次</button>
+            </div>
+            <div id="socialMsg" class="notice"></div>
+          </section>
+
+          <aside class="live-panel">
+            <div class="panel-head">
+              <div>
+                <div class="eyebrow">Automation Queue</div>
+                <h3>浏览器任务</h3>
+              </div>
+              <button id="refreshSocialTasks" type="button">刷新</button>
+            </div>
+            <div class="social-task-list" id="socialTaskList"></div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="view" data-panel="accounts">
+        <div class="panel-head">
+          <div>
+            <div class="eyebrow">Profiles</div>
+            <h3>账号与 Camoufox Profile</h3>
+          </div>
+          <button id="refreshAccounts" type="button">刷新账号</button>
+        </div>
+        <div class="account-grid" id="accountGrid"></div>
+      </section>
+
+      <section class="view" data-panel="settings">
+        <div class="status-grid">
+          <div class="status-card">
+            <div class="eyebrow">Worker</div>
+            <strong id="workerState">-</strong>
+            <span id="workerDetail">等待读取</span>
+          </div>
+          <div class="status-card">
+            <div class="eyebrow">Web Console</div>
+            <strong>新面板</strong>
+            <span>入口统一到 Web 控制台。</span>
+          </div>
+          <div class="status-card">
+            <div class="eyebrow">Browser</div>
+            <strong>Camoufox</strong>
+            <span>持久化 Profile + 代理 + 有头模式。</span>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/assets/console.js?v=__CONSOLE_JS_VERSION__"></script>
+</body>
+</html>
