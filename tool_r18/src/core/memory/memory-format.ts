@@ -248,7 +248,7 @@ function compactThumbnailPart(text: string): string {
     .replace(/隨便都要/u, "")
     .replace(/可能又要/u, "可能調")
     .replace(/^如果你還在猶豫要不要/u, "")
-    .replace(/^與其去研究那些聽不懂的複雜商品/u, "")
+    .replace(/^與其去研究那些聽不懂的複雜產品/u, "")
     .replace(/^不如先把/u, "")
     .replace(/^建議/u, "")
     .replace(/^反映/u, "")

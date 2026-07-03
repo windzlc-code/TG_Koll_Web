@@ -123,7 +123,7 @@ class AccountSettingsApiTests(unittest.TestCase):
                 (
                     "task_downloadable",
                     1,
-                    "replace_model",
+                    "image_generate",
                     "success",
                     "{}",
                     json.dumps({"download_path": str(output_file)}, ensure_ascii=False),

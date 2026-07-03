@@ -2094,7 +2094,7 @@ select:focus {
   font-size: 12px;
 }
 
-.commerce-dropzone {
+.generator-dropzone {
   padding: 14px;
   border-style: dashed;
   background: #ffffff;
@@ -2756,7 +2756,7 @@ body.page-product {
   background: linear-gradient(180deg, #f9fbfc, #f2f6f9);
 }
 
-.page-product .commerce-dropzone {
+.page-product .generator-dropzone {
   padding: 18px;
   border: 1px solid #d9e1e8;
   border-style: solid;
@@ -3571,7 +3571,7 @@ body.page-product {
 
   .page-product .section,
   .page-product .card,
-  .page-product .commerce-dropzone,
+  .page-product .generator-dropzone,
   .page-product .workspace-stage {
     border-radius: 14px;
   }

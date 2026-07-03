@@ -28,7 +28,7 @@ export type ThreadsOwnPostReplyProgress = PublishProgress & Record<string, any>;
 export type ThreadsOwnPostReplyTarget = Record<string, unknown>;
 
 function removed(): never {
-  throw new Error("Legacy mobile automation has been removed from this project");
+  throw new Error("Use Web social automation with Camoufox browser profiles.");
 }
 
 export async function publishPost(_config: MobileConfig, _task: any, _onProgress?: (progress: PublishProgress) => void, _options?: any): Promise<PublishResult> {

@@ -1,7 +1,5 @@
 import { ensureRuntimeApiConfig } from "@/runtime/node/ensure-runtime-config";
 import { ensureRuntimeSecrets } from "@/runtime/node/ensure-runtime-secrets";
-import { PublishSchedulerService, recoverInterruptedPublishQueue, type PublishTaskRunResult } from "@/core/publish/publish-scheduler";
-import { createNodePublishQueueRepository } from "@/runtime/node/publish-queue-repository";
 import { startTelegramBot, stopTelegramPolling, type TelegramBotInstanceOptions } from "@/telegram-bot";
 import { resolveRuntimeFile } from "@/runtime/node/data-dir";
 import fs from "node:fs";
@@ -221,38 +219,13 @@ function log(msg: string) {
   console.log(`${ts} ${LOG_PREFIX} ${msg}`);
 }
 
-async function runRemovedLegacyPublishTask(): Promise<PublishTaskRunResult> {
-  return {
-    status: "failed",
-    error: "Legacy mobile publish automation has been removed from this project",
-    failureStep: "startup check",
-    manualInterventionRequired: false,
-  };
-}
-
 async function main() {
   writeDaemonHeartbeat({ state: "starting" });
   log("Workflow daemon starting...");
   const configPath = ensureRuntimeApiConfig();
   ensureRuntimeSecrets();
   log(`Runtime API config ready: ${configPath}`);
-
-  const repo = createNodePublishQueueRepository();
-  log("Publish queue database connected");
-  const recovered = recoverInterruptedPublishQueue(repo);
-  if (recovered.interrupted || recovered.expiredPaused || recovered.clearedLocks) {
-    log(`Recovery: publishing=${recovered.interrupted} paused_expired=${recovered.expiredPaused} requeued=${recovered.requeued} post_publish_paused=${recovered.postPublishPaused} failed=${recovered.failed} locks_cleared=${recovered.clearedLocks}`);
-  }
-
-  const scheduler = new PublishSchedulerService(repo, runRemovedLegacyPublishTask, {
-    onTaskStatusChange: (taskId, status, extra) => {
-      const detail = extra?.error ? ` (${extra.error})` : "";
-      log(`Task ${taskId} -> ${status}${detail}`);
-    },
-  });
-
-  scheduler.start();
-  log("Publish scheduler started with legacy mobile automation disabled");
+  log("Web social automation uses social_automation/runner.py with Camoufox browser profiles.");
 
   let botConfigTimer: NodeJS.Timeout | null = null;
   const reloadBotConfigs = async (reason: string) => {
@@ -272,7 +245,6 @@ async function main() {
 
   const shutdown = async (signal: string) => {
     log(`Received ${signal}, shutting down`);
-    scheduler.stop();
     if (botConfigTimer) clearInterval(botConfigTimer);
     clearInterval(heartbeatTimer);
     await stopActiveTelegramBots();

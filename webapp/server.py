@@ -34,14 +34,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from PIL import Image
 
-import create_audio
-import create_video
-import commerce_video_generator
 import get_gemini
 import asset_uploader
-import replace_model
-import replace_product
-import replace_productANDmodel
 import runninghub_common
 from .auth import SESSION_COOKIE, create_session, delete_session, get_current_user, hash_password, require_admin, verify_password
 from .billing import compute_cost_cents
@@ -156,19 +150,7 @@ DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
     "mulerouter_wan_i2v_duration": 2,
     "mulerouter_wan_i2v_prompt_extend": False,
     "mulerouter_wan_i2v_negative_prompt": "low quality, blurry, distorted, watermark, text, logo",
-    "oral_digital_human_workflow_ids": [],
-    "digital_human_workflow_ids": [],
     "image_generate_workflow_ids": [],
-    "replace_model_original_workflow_ids": [],
-    "replace_product_workflow_ids": [],
-    "replace_union_model_workflow_ids": [],
-    "replace_union_product_workflow_ids": [],
-    "create_video_app_id": "",
-    "create_audio_app_id": "",
-    "video_app_id": "",
-    "replace_model_app_id": "",
-    "replace_model_original_app_id": "",
-    "replace_product_app_id": "",
     "cleanup_enabled": True,
     "cleanup_time": "03:30",
     "cleanup_retention_days": 7,
@@ -2366,21 +2348,23 @@ def _send_telegram_reply_markup_for_finished_task(task_id: str, task_type: str) 
     typ = str(task_type or "").strip()
     if typ == "face_swap":
         return {
-            "inline_keyboard": [
-                [{"text": "\u589e\u52a0\u89e3\u6790\u5ea6 2 \u500d", "callback_data": "toolr18_task_r18_face_swap_upscale"}],
-                [{"text": "\u91cd\u65b0\u751f\u6210\u4eba\u7269\u63db\u81c9", "callback_data": "toolr18_task_r18_face_swap_rerun"}],
-                [{"text": "\u4eba\u7269\u63db\u81c9", "callback_data": "toolr18_task_face_swap"}, {"text": "\u5716\u7247\u7de8\u8f2f", "callback_data": "toolr18_task_get_nano_banana"}],
-                [{"text": "\u8fd4\u56de\u4e3b\u9078\u55ae", "callback_data": "toolr18_entry"}],
+            "keyboard": [
+                [{"text": "\u589e\u52a0\u89e3\u6790\u5ea6 2 \u500d"}],
+                [{"text": "\u91cd\u65b0\u751f\u6210\u4eba\u7269\u63db\u81c9"}],
+                [{"text": "\u4eba\u7269\u63db\u81c9"}, {"text": "\u5716\u7247\u7de8\u8f2f"}],
+                [{"text": "\u8fd4\u56de\u4e3b\u9078\u55ae"}],
             ],
+            "resize_keyboard": True,
         }
     if typ in {"single_image_edit", "get_nano_banana"}:
         return {
-            "inline_keyboard": [
-                [{"text": "\u7e7c\u7e8c\u7de8\u8f2f\u7d50\u679c\u5716", "callback_data": "toolr18_task_r18_image_edit_continue"}],
-                [{"text": "\u91cd\u65b0\u751f\u6210\u5716\u7247\u7de8\u8f2f", "callback_data": "toolr18_task_r18_image_edit_rerun"}],
-                [{"text": "\u55ae\u5716\u7de8\u8f2f", "callback_data": "toolr18_task_single_image_edit"}, {"text": "\u5716\u7247\u7de8\u8f2f", "callback_data": "toolr18_task_get_nano_banana"}],
-                [{"text": "\u8fd4\u56de\u4e3b\u9078\u55ae", "callback_data": "toolr18_entry"}],
+            "keyboard": [
+                [{"text": "\u7e7c\u7e8c\u7de8\u8f2f\u7d50\u679c\u5716"}],
+                [{"text": "\u91cd\u65b0\u751f\u6210\u5716\u7247\u7de8\u8f2f"}],
+                [{"text": "\u55ae\u5716\u7de8\u8f2f"}, {"text": "\u5716\u7247\u7de8\u8f2f"}],
+                [{"text": "\u8fd4\u56de\u4e3b\u9078\u55ae"}],
             ],
+            "resize_keyboard": True,
         }
     if typ != "text_to_image":
         return None
@@ -2961,69 +2945,6 @@ def _extract_execution_trace_from_step_results(raw_result: dict[str, Any], *, ti
     return [_build_trace_group(title=title, steps=steps, status=status, message=message, final_output_path=final_output_path)]
 
 
-def _extract_execution_trace_from_union_logs(output_dir: Path) -> list[dict[str, Any]]:
-    records = _read_jsonl_records(output_dir / "logs.jsonl", limit=20)
-    groups: list[dict[str, Any]] = []
-    for record in records:
-        job_no = max(_to_int(record.get("job"), 0), 0)
-        stage_model = record.get("stage_model") if isinstance(record.get("stage_model"), dict) else {}
-        for part in stage_model.get("parts") if isinstance(stage_model.get("parts"), list) else []:
-            if not isinstance(part, dict):
-                continue
-            part_no = max(_to_int(part.get("part"), 0), 0)
-            steps = [dict(step) for step in (part.get("steps") if isinstance(part.get("steps"), list) else []) if isinstance(step, dict)]
-            if steps and str(part.get("input_video_url") or "").strip():
-                steps[0]["input_video_url"] = str(part.get("input_video_url") or "").strip()
-            groups.append(
-                _build_trace_group(
-                    title=f"联合替换·模特链 Job {job_no} / Part {part_no}",
-                    steps=steps,
-                    status=str(record.get("status") or "").strip(),
-                    message=str(record.get("error") or "").strip(),
-                    final_output_path=str(record.get("final") or "").strip(),
-                )
-            )
-        stage_product = record.get("stage_product") if isinstance(record.get("stage_product"), dict) else {}
-        for part in stage_product.get("parts") if isinstance(stage_product.get("parts"), list) else []:
-            if not isinstance(part, dict):
-                continue
-            part_no = max(_to_int(part.get("part"), 0), 0)
-            steps = [dict(step) for step in (part.get("steps") if isinstance(part.get("steps"), list) else []) if isinstance(step, dict)]
-            if steps and str(part.get("input_temp_video_url") or "").strip():
-                steps[0]["input_temp_video_url"] = str(part.get("input_temp_video_url") or "").strip()
-            groups.append(
-                _build_trace_group(
-                    title=f"联合替换·商品链 Job {job_no} / Part {part_no}",
-                    steps=steps,
-                    status=str(record.get("status") or "").strip(),
-                    message=str(record.get("error") or "").strip(),
-                    final_output_path=str(record.get("final") or "").strip(),
-                )
-            )
-    return [group for group in groups if isinstance(group, dict) and group.get("steps")]
-
-
-def _extract_execution_trace_from_video_logs(output_dir: Path) -> list[dict[str, Any]]:
-    records = _read_jsonl_records(output_dir / "logs.jsonl", limit=20)
-    groups: list[dict[str, Any]] = []
-    for record in records:
-        video_chain = record.get("video_chain") if isinstance(record.get("video_chain"), dict) else {}
-        steps = video_chain.get("steps") if isinstance(video_chain.get("steps"), list) else []
-        if not steps:
-            continue
-        job_no = max(_to_int(record.get("job"), 0), 0)
-        groups.append(
-            _build_trace_group(
-                title=f"口播视频链 Job {job_no}",
-                steps=steps,
-                status=str(record.get("status") or "").strip(),
-                message=str(record.get("error") or "").strip(),
-                final_output_path=str(record.get("video") or "").strip(),
-            )
-        )
-    return [group for group in groups if isinstance(group, dict) and group.get("steps")]
-
-
 def _build_task_execution_trace(*, task_type: str, output_data: Any) -> list[dict[str, Any]]:
     output = output_data if isinstance(output_data, dict) else {}
     raw_result = output.get("raw_result") if isinstance(output.get("raw_result"), dict) else {}
@@ -3036,33 +2957,10 @@ def _build_task_execution_trace(*, task_type: str, output_data: Any) -> list[dic
     ).strip()
     status = "success" if _to_bool(output.get("ok"), False) else str(output.get("status") or "").strip()
     message = str(output.get("message") or output.get("error") or "").strip()
-    if task_type == "replace_model":
-        return _extract_execution_trace_from_step_results(raw_result, title="视频模特替换链", status=status, message=message, final_output_path=final_output_path)
-    if task_type == "replace_product":
-        return _extract_execution_trace_from_step_results(raw_result, title="视频商品替换链", status=status, message=message, final_output_path=final_output_path)
     if task_type == "image_generate":
         return _extract_execution_trace_from_step_results(raw_result, title="图片生成链", status=status, message=message, final_output_path=final_output_path)
-    if task_type in {"create_video", "commerce_video", "batch_create_video"}:
-        direct_trace = _extract_execution_trace_from_step_results(raw_result, title="数字人工作流", status=status, message=message, final_output_path=final_output_path)
-        if direct_trace:
-            return direct_trace
-
-    output_dir_candidates = [
-        output.get("output_dir"),
-        raw_result.get("output_dir"),
-    ]
-    output_dir = None
-    for candidate in output_dir_candidates:
-        text = str(candidate or "").strip()
-        if text:
-            output_dir = Path(text).resolve()
-            break
-    if output_dir is None:
-        return []
-    if task_type in {"create_video", "commerce_video", "batch_create_video"}:
-        return _extract_execution_trace_from_video_logs(output_dir)
-    if task_type == "replace_productANDmodel":
-        return _extract_execution_trace_from_union_logs(output_dir)
+    if task_type in {"get_nano_banana", "single_image_edit", "face_swap", "video_i2v", "get_gemini", "text_to_image"}:
+        return _extract_execution_trace_from_step_results(raw_result, title=_task_type_label(task_type), status=status, message=message, final_output_path=final_output_path)
     return []
 
 
@@ -3307,22 +3205,6 @@ def _normalize_runtime_config(raw: dict[str, Any] | None) -> dict[str, Any]:
         if k in current:
             merged[k] = current.get(k)
     merged["telegram_bot_token"] = str(merged.get("telegram_bot_token") or "").strip()
-    merged["create_video_app_id"] = str(merged.get("create_video_app_id") or merged.get("video_app_id") or "").strip()
-    merged["video_app_id"] = str(merged.get("video_app_id") or merged.get("create_video_app_id") or "").strip()
-    merged["create_audio_app_id"] = str(merged.get("create_audio_app_id") or "").strip()
-    legacy_replace_model_app_id = str(current.get("replace_model_app_id") or "").strip()
-    explicit_original_app_id = str(current.get("replace_model_original_app_id") or "").strip()
-    merged["replace_model_original_app_id"] = str(explicit_original_app_id or legacy_replace_model_app_id or "").strip()
-    merged["replace_model_app_id"] = merged["replace_model_original_app_id"]
-    for legacy_workflow_key in (
-        "create_video_app_id",
-        "create_audio_app_id",
-        "video_app_id",
-        "replace_model_app_id",
-        "replace_model_original_app_id",
-        "replace_product_app_id",
-    ):
-        merged[legacy_workflow_key] = ""
     merged["remote_comfy_gateway_url"] = str(merged.get("remote_comfy_gateway_url") or "").strip().rstrip("/")
     merged["remote_comfy_gateway_token"] = str(merged.get("remote_comfy_gateway_token") or "").strip()
     merged["local_comfy_gateway_url"] = str(merged.get("local_comfy_gateway_url") or "http://127.0.0.1:9001").strip().rstrip("/")
@@ -3469,38 +3351,9 @@ def _normalize_runtime_config(raw: dict[str, Any] | None) -> dict[str, Any]:
         builtin_model="gemini-3-pro-image-preview",
     )
     merged["image_model_priority_order"] = ", ".join(image_priority_models)
-    oral_chain = _normalize_runtime_workflow_chain(current.get("oral_digital_human_workflow_ids"))
-    oral_chain = [value for value in oral_chain if not _workflow_stage_runninghub_id(value)]
-    merged["oral_digital_human_workflow_ids"] = oral_chain
-    if oral_chain:
-        runninghub_oral_chain = [value for value in oral_chain if _workflow_stage_runninghub_id(value)]
-        if runninghub_oral_chain:
-            merged["create_audio_app_id"] = runninghub_oral_chain[0]
-            merged["create_video_app_id"] = runninghub_oral_chain[-1]
-            merged["video_app_id"] = runninghub_oral_chain[-1]
-
-    digital_human_chain = _normalize_runtime_workflow_chain(current.get("digital_human_workflow_ids"))
-    merged["digital_human_workflow_ids"] = digital_human_chain
-
     image_chain = _normalize_runtime_workflow_chain(current.get("image_generate_workflow_ids"))
     image_chain = [value for value in image_chain if not _workflow_stage_runninghub_id(value)]
     merged["image_generate_workflow_ids"] = image_chain
-
-    replace_model_original_chain = _normalize_runtime_workflow_chain(current.get("replace_model_original_workflow_ids"))
-    replace_model_original_chain = [value for value in replace_model_original_chain if not _workflow_stage_runninghub_id(value)]
-    merged["replace_model_original_workflow_ids"] = replace_model_original_chain
-
-    replace_product_chain = _normalize_runtime_workflow_chain(current.get("replace_product_workflow_ids"))
-    replace_product_chain = [value for value in replace_product_chain if not _workflow_stage_runninghub_id(value)]
-    merged["replace_product_workflow_ids"] = replace_product_chain
-
-    replace_union_model_chain = _normalize_runtime_workflow_chain(current.get("replace_union_model_workflow_ids"))
-    replace_union_model_chain = [value for value in replace_union_model_chain if not _workflow_stage_runninghub_id(value)]
-    merged["replace_union_model_workflow_ids"] = replace_union_model_chain
-
-    replace_union_product_chain = _normalize_runtime_workflow_chain(current.get("replace_union_product_workflow_ids"))
-    replace_union_product_chain = [value for value in replace_union_product_chain if not _workflow_stage_runninghub_id(value)]
-    merged["replace_union_product_workflow_ids"] = replace_union_product_chain
 
     merged["cleanup_enabled"] = _to_bool(merged.get("cleanup_enabled"), True)
     merged["cleanup_time"] = str(merged.get("cleanup_time") or "03:30").strip() or "03:30"
@@ -4103,83 +3956,16 @@ def _ensure_user_can_access_task(user: dict[str, Any], task_row: dict[str, Any])
 
 def _task_type_label(task_type: Any) -> str:
     mapping = {
-        "create_video": "创建视频",
-        "commerce_video": "商业视频生成",
-        "create_audio": "创建音频",
-        "replace_model": "视频模特替换",
-        "replace_product": "视频商品替换",
-        "replace_productANDmodel": "联合替换商品和模特",
+        "text_to_image": "文字生成图片",
+        "single_image_edit": "单图编辑",
         "get_nano_banana": "图片编辑",
         "get_gemini": "Gemini 分析",
-        "batch_create_video": "批量创建视频",
-        "batch_replace_model": "批量视频模特替换",
-        "batch_replace_product": "批量视频商品替换",
+        "face_swap": "人物换脸",
+        "video_i2v": "图生视频",
+        "image_generate": "图片生成",
     }
     key = str(task_type or "").strip()
     return mapping.get(key, key or "未知工作流")
-
-
-def _replace_model_mode_label(mode: Any) -> str:
-    normalized = replace_model.normalize_mode(str(mode or ""))
-    mapping = {
-        replace_model.MODE_ORIGINAL: "原版工作流",
-        replace_model.MODE_PRIMARY: "主要工作流",
-        replace_model.MODE_SLICE: "切片工作流",
-        replace_model.MODE_MOTION_TRANSFER: "动作迁移工作流",
-    }
-    return mapping.get(normalized, "原版工作流")
-
-
-def _normalize_replace_model_mode(payload: dict[str, Any] | None) -> str:
-    source = payload if isinstance(payload, dict) else {}
-    return replace_model.normalize_mode(source.get("mode"))
-
-
-def _replace_model_runtime_app_id(runtime: dict[str, Any], mode: Any) -> str:
-    normalized = replace_model.normalize_mode(str(mode or ""))
-    if normalized == replace_model.MODE_PRIMARY:
-        return str(runtime.get("replace_model_primary_app_id") or replace_model.PRIMARY_APP_ID).strip() or replace_model.PRIMARY_APP_ID
-    if normalized == replace_model.MODE_SLICE:
-        return str(runtime.get("replace_model_slice_app_id") or replace_model.SLICE_APP_ID).strip() or replace_model.SLICE_APP_ID
-    if normalized == replace_model.MODE_MOTION_TRANSFER:
-        return str(runtime.get("replace_model_motion_transfer_app_id") or replace_model.MOTION_TRANSFER_APP_ID).strip() or replace_model.MOTION_TRANSFER_APP_ID
-    return str(
-        runtime.get("replace_model_original_app_id")
-        or runtime.get("replace_model_app_id")
-        or replace_model.LEGACY_DEFAULT_APP_ID
-    ).strip() or replace_model.LEGACY_DEFAULT_APP_ID
-
-
-def _normalize_replace_model_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
-    merged = dict(payload or {})
-    mode = _normalize_replace_model_mode(merged)
-    merged["mode"] = mode
-    if mode == replace_model.MODE_PRIMARY:
-        merged.pop("prompt", None)
-        merged.pop("frame", None)
-        merged.pop("duration_seconds", None)
-        merged.pop("start_seconds", None)
-    elif mode == replace_model.MODE_SLICE:
-        merged.pop("width", None)
-        merged.pop("height", None)
-        merged.pop("frame", None)
-        merged["start_seconds"] = max(_to_int(merged.get("start_seconds"), 0), 0)
-        merged["duration_seconds"] = max(_to_int(merged.get("duration_seconds"), 5), 1)
-    elif mode == replace_model.MODE_MOTION_TRANSFER:
-        merged.pop("prompt", None)
-        merged.pop("frame", None)
-        merged.pop("duration_seconds", None)
-        merged.pop("start_seconds", None)
-    else:
-        merged.pop("start_seconds", None)
-        merged["duration_seconds"] = max(_to_int(merged.get("duration_seconds"), 10), 1)
-        merged["frame"] = max(_to_int(merged.get("frame"), 30), 1)
-        merged["width"] = max(_to_int(merged.get("width"), 576), 1)
-        merged["height"] = max(_to_int(merged.get("height"), 1024), 1)
-    if mode in {replace_model.MODE_PRIMARY, replace_model.MODE_MOTION_TRANSFER}:
-        merged["width"] = max(_to_int(merged.get("width"), 1280), 1)
-        merged["height"] = max(_to_int(merged.get("height"), 720), 1)
-    return merged
 
 
 def _normalize_workflow_ids(values: Iterable[Any]) -> list[str]:
@@ -4252,17 +4038,6 @@ def _last_runninghub_workflow_id(values: Iterable[Any]) -> str:
     return ""
 
 
-def _replace_model_chain_key(mode: Any) -> str:
-    normalized = replace_model.normalize_mode(str(mode or ""))
-    if normalized == replace_model.MODE_PRIMARY:
-        return "replace_model_primary_workflow_ids"
-    if normalized == replace_model.MODE_SLICE:
-        return "replace_model_slice_workflow_ids"
-    if normalized == replace_model.MODE_MOTION_TRANSFER:
-        return "replace_model_motion_transfer_workflow_ids"
-    return "replace_model_original_workflow_ids"
-
-
 def _workflow_chain_from_payload(payload: dict[str, Any] | None, key: str, fallback_values: Iterable[Any] = ()) -> list[str]:
     source = payload if isinstance(payload, dict) else {}
     chain = _normalize_runtime_workflow_chain(source.get(key))
@@ -4274,53 +4049,6 @@ def _workflow_chain_from_payload(payload: dict[str, Any] | None, key: str, fallb
 def _build_workflow_chain_summary(*, task_type: str, payload: dict[str, Any], workflow_ids: list[str]) -> tuple[str, int]:
     ids = _normalize_workflow_ids(workflow_ids)
     total_steps = len(ids)
-    if task_type in {"create_video", "commerce_video", "batch_create_video", "create_audio"}:
-        digital_chain = _workflow_chain_from_payload(payload, "digital_human_workflow_ids", [])
-        oral_chain = _workflow_chain_from_payload(
-            payload,
-            "oral_digital_human_workflow_ids",
-            [payload.get("create_audio_app_id"), payload.get("video_app_id"), payload.get("create_video_app_id")],
-        )
-        if not oral_chain:
-            return ("", 0)
-        runninghub_steps = sum(1 for value in oral_chain if _workflow_stage_runninghub_id(value))
-        llm_steps = sum(1 for value in oral_chain if _is_closed_llm_workflow_stage(value))
-        image_steps = sum(1 for value in oral_chain if _is_closed_image_workflow_stage(value))
-        audio_steps = 1 if runninghub_steps else 0
-        video_steps = max(runninghub_steps - 1, 0)
-        if task_type == "create_audio":
-            return (f"口播音频链 {audio_steps} 步", audio_steps)
-        if llm_steps or image_steps:
-            parts = []
-            if llm_steps:
-                parts.append(f"闭源文字 {llm_steps}")
-            if image_steps:
-                parts.append(f"闭源图片 {image_steps}")
-            if runninghub_steps:
-                parts.append(f"RunningHub {runninghub_steps}")
-            return (f"口播链 {len(oral_chain)} 步（{' + '.join(parts)}）", len(oral_chain))
-        return (f"口播链 {len(oral_chain)} 步（音频 {audio_steps} + 视频 {video_steps}）", len(oral_chain))
-    if task_type in {"replace_model", "batch_replace_model"}:
-        closed_steps = sum(1 for value in ids if _is_closed_image_workflow_stage(value))
-        if closed_steps and total_steps:
-            return (f"视频模特替换链 {total_steps} 步（闭源图片 {closed_steps} + RunningHub {total_steps - closed_steps}）", total_steps)
-        return (f"视频模特替换链 {total_steps} 步", total_steps) if total_steps else ("", 0)
-    if task_type in {"replace_product", "batch_replace_product"}:
-        closed_steps = sum(1 for value in ids if _is_closed_image_workflow_stage(value))
-        if closed_steps and total_steps:
-            return (f"视频商品替换链 {total_steps} 步（闭源图片 {closed_steps} + RunningHub {total_steps - closed_steps}）", total_steps)
-        return (f"视频商品替换链 {total_steps} 步", total_steps) if total_steps else ("", 0)
-    if task_type == "replace_productANDmodel":
-        model_chain = _workflow_chain_from_payload(payload, "model_workflow_chain_ids", [payload.get("model_app_id")])
-        product_chain = _workflow_chain_from_payload(payload, "product_workflow_chain_ids", [payload.get("product_app_id")])
-        model_steps = len(model_chain)
-        product_steps = len(product_chain)
-        total = model_steps + product_steps
-        if total <= 0:
-            return ("", 0)
-        closed_steps = sum(1 for value in [*model_chain, *product_chain] if _is_closed_image_workflow_stage(value))
-        suffix = f"（闭源图片 {closed_steps}）" if closed_steps else ""
-        return (f"联合链 模特 {model_steps} 步 + 商品 {product_steps} 步{suffix}", total)
     if task_type == "image_generate":
         provider = str(payload.get("image_generate_provider") or payload.get("image_generate_mode_default") or "closed_model_api").strip() or "closed_model_api"
         if provider == "closed_model_api":
@@ -4337,57 +4065,13 @@ def _build_workflow_chain_summary(*, task_type: str, payload: dict[str, Any], wo
 def _build_workflow_meta(*, task_id: str, task_type: str, input_payload: Any, output_payload: Any, runninghub_task_id: Any) -> dict[str, Any]:
     payload = input_payload if isinstance(input_payload, dict) else {}
     output = output_payload if isinstance(output_payload, dict) else {}
-    batch_defaults = payload.get("defaults") if isinstance(payload.get("defaults"), dict) else {}
-    replace_model_payload = payload
-    if task_type == "batch_replace_model" and batch_defaults:
-        replace_model_payload = batch_defaults
 
     workflow_name = _task_type_label(task_type)
     workflow_ids: list[str] = []
-    model_app_id = str(payload.get("model_app_id") or "").strip()
-    product_app_id = str(payload.get("product_app_id") or "").strip()
     workflow_mode = ""
     workflow_mode_label = ""
 
-    if task_type in {"create_video", "commerce_video", "batch_create_video"}:
-        digital_chain = _workflow_chain_from_payload(payload, "digital_human_workflow_ids", [])
-        workflow_ids = _workflow_chain_from_payload(
-            payload,
-            "oral_digital_human_workflow_ids",
-            [payload.get("create_audio_app_id"), payload.get("video_app_id"), payload.get("create_video_app_id")],
-        )
-    elif task_type == "create_audio":
-        workflow_ids = _normalize_workflow_ids(
-            [
-                *(_workflow_chain_from_payload(payload, "oral_digital_human_workflow_ids", [payload.get("create_audio_app_id")])[:1]),
-                payload.get("create_audio_app_id"),
-            ]
-        )
-    elif task_type in {"replace_model", "batch_replace_model"}:
-        workflow_mode = _normalize_replace_model_mode(replace_model_payload)
-        workflow_mode_label = _replace_model_mode_label(workflow_mode)
-        workflow_name = f"{workflow_name}（{workflow_mode_label}）"
-        workflow_ids = _workflow_chain_from_payload(
-            replace_model_payload,
-            _replace_model_chain_key(workflow_mode),
-            [replace_model_payload.get("workflow_chain_ids"), replace_model_payload.get("app_id"), replace_model_payload.get("model_app_id")],
-        )
-    elif task_type in {"replace_product", "batch_replace_product"}:
-        workflow_ids = _workflow_chain_from_payload(
-            payload,
-            "replace_product_workflow_ids",
-            [payload.get("workflow_chain_ids"), payload.get("app_id"), payload.get("product_app_id")],
-        )
-    elif task_type == "replace_productANDmodel":
-        workflow_ids = _normalize_workflow_ids(
-            [
-                *_workflow_chain_from_payload(payload, "model_workflow_chain_ids", [model_app_id]),
-                *_workflow_chain_from_payload(payload, "product_workflow_chain_ids", [product_app_id]),
-            ]
-        )
-        if workflow_ids:
-            workflow_name = "联合替换商品和模特"
-    elif task_type in {"get_nano_banana", "single_image_edit"}:
+    if task_type in {"get_nano_banana", "single_image_edit", "face_swap"}:
         workflow_path = str(
             output.get("remote_comfy_workflow_path")
             or payload.get("remote_comfy_workflow_path")
@@ -4404,6 +4088,8 @@ def _build_workflow_meta(*, task_id: str, task_type: str, input_payload: Any, ou
         provider = str(payload.get("image_generate_provider") or payload.get("image_generate_mode_default") or "closed_model_api").strip() or "closed_model_api"
         model_name = str(payload.get("image_generate_model") or payload.get("image_model_default_model") or "").strip()
         workflow_ids = _normalize_workflow_ids([model_name])
+    elif task_type == "video_i2v":
+        workflow_ids = _normalize_workflow_ids([payload.get("mulerouter_wan_i2v_model") or output.get("model")])
 
     runninghub_ids = _normalize_workflow_ids(
         [
@@ -4646,10 +4332,6 @@ def _apply_runtime_defaults(task_type: str, payload: dict[str, Any]) -> dict[str
     with db() as conn:
         runtime = _get_runtime_config(conn)
 
-    def _looks_like_runninghub_workflow_id(value: Any) -> bool:
-        text = str(value or "").strip()
-        return bool(re.fullmatch(r"\d{10,}", text))
-
     secret_keys = {
         "upload_file_api_key",
         "image_model_provider_api_key_gemini",
@@ -4717,100 +4399,13 @@ def _apply_runtime_defaults(task_type: str, payload: dict[str, Any]) -> dict[str
     source = str(merged.get("comfy_workflow_source") or runtime.get("comfy_workflow_source") or "remote").strip().lower()
     merged["comfy_workflow_source"] = source if source in {"remote", "local"} else "remote"
 
-    if task_type in {"create_video", "commerce_video", "batch_create_video", "create_audio"}:
-        oral_chain = _workflow_chain_from_payload(
-            merged,
-            "oral_digital_human_workflow_ids",
-            [
-                merged.get("create_audio_app_id"),
-                merged.get("video_app_id"),
-                merged.get("create_video_app_id"),
-                runtime.get("create_audio_app_id"),
-                runtime.get("create_video_app_id"),
-                runtime.get("video_app_id"),
-            ],
-        )
-        if oral_chain:
-            merged["oral_digital_human_workflow_ids"] = oral_chain
-        runninghub_oral_chain = [value for value in oral_chain if _workflow_stage_runninghub_id(value)]
-        if task_type == "create_audio":
-            if runninghub_oral_chain and (not str(merged.get("create_audio_app_id") or "").strip()):
-                merged["create_audio_app_id"] = runninghub_oral_chain[0]
-        else:
-            if runninghub_oral_chain and (not str(merged.get("create_audio_app_id") or "").strip()):
-                merged["create_audio_app_id"] = runninghub_oral_chain[0]
-            if not str(merged.get("video_app_id") or "").strip():
-                if runninghub_oral_chain:
-                    merged["video_app_id"] = runninghub_oral_chain[-1]
-                else:
-                    merged["video_app_id"] = runtime.get("create_video_app_id") or runtime.get("video_app_id")
-            if not str(merged.get("create_video_app_id") or "").strip():
-                merged["create_video_app_id"] = merged.get("video_app_id") or runtime.get("create_video_app_id") or runtime.get("video_app_id")
-        digital_chain = _workflow_chain_from_payload(
-            merged,
-            "digital_human_workflow_ids",
-            runtime.get("digital_human_workflow_ids") or [],
-        )
-        if digital_chain:
-            merged["digital_human_workflow_ids"] = digital_chain
     if task_type == "image_generate":
-        mode = str(merged.get("mode") or "product_only").strip() or "product_only"
-        if mode not in {"product_only", "model_product"}:
-            merged["mode"] = "product_only"
+        mode = str(merged.get("mode") or "single_reference").strip() or "single_reference"
+        if mode not in {"single_reference", "dual_reference"}:
+            merged["mode"] = "single_reference"
         if str(merged.get("image_generate_provider") or "").strip() == "runninghub_workflow":
             merged["image_generate_provider"] = "closed_model_api"
         merged["image_generate_workflow_ids"] = []
-        if not str(merged.get("create_audio_app_id") or "").strip():
-            merged["create_audio_app_id"] = runtime.get("create_audio_app_id")
-    if task_type == "replace_model":
-        merged = _normalize_replace_model_payload(merged)
-        chain_key = _replace_model_chain_key(merged.get("mode"))
-        workflow_chain = _workflow_chain_from_payload(
-            merged,
-            chain_key,
-            [merged.get("workflow_chain_ids"), merged.get("app_id"), _replace_model_runtime_app_id(runtime, merged.get("mode"))],
-        )
-        if workflow_chain:
-            merged[chain_key] = workflow_chain
-            merged["workflow_chain_ids"] = workflow_chain
-        app_id = str(merged.get("app_id") or "").strip()
-        if (not app_id) or (not _looks_like_runninghub_workflow_id(app_id)):
-            merged["app_id"] = _last_runninghub_workflow_id(workflow_chain) or _replace_model_runtime_app_id(runtime, merged.get("mode"))
-    if task_type == "replace_product":
-        workflow_chain = _workflow_chain_from_payload(
-            merged,
-            "replace_product_workflow_ids",
-            [merged.get("workflow_chain_ids"), merged.get("app_id"), runtime.get("replace_product_app_id")],
-        )
-        if workflow_chain:
-            merged["replace_product_workflow_ids"] = workflow_chain
-            merged["workflow_chain_ids"] = workflow_chain
-        app_id = str(merged.get("app_id") or "").strip()
-        if (not app_id) or (not _looks_like_runninghub_workflow_id(app_id)):
-            merged["app_id"] = _last_runninghub_workflow_id(workflow_chain) or runtime.get("replace_product_app_id")
-    if task_type == "replace_productANDmodel":
-        runtime_union_model_chain = _normalize_runtime_workflow_chain(runtime.get("replace_union_model_workflow_ids"))
-        runtime_union_product_chain = _normalize_runtime_workflow_chain(runtime.get("replace_union_product_workflow_ids"))
-        model_chain = _workflow_chain_from_payload(
-            merged,
-            "model_workflow_chain_ids",
-            runtime_union_model_chain or [merged.get("model_app_id"), runtime.get("replace_model_original_app_id")],
-        )
-        product_chain = _workflow_chain_from_payload(
-            merged,
-            "product_workflow_chain_ids",
-            runtime_union_product_chain or [merged.get("product_app_id"), runtime.get("replace_product_app_id")],
-        )
-        if model_chain:
-            merged["model_workflow_chain_ids"] = model_chain
-        if product_chain:
-            merged["product_workflow_chain_ids"] = product_chain
-        model_app_id = str(merged.get("model_app_id") or "").strip()
-        product_app_id = str(merged.get("product_app_id") or "").strip()
-        if (not model_app_id) or (not _looks_like_runninghub_workflow_id(model_app_id)):
-            merged["model_app_id"] = _last_runninghub_workflow_id(model_chain) or _replace_model_runtime_app_id(runtime, replace_model.MODE_ORIGINAL)
-        if (not product_app_id) or (not _looks_like_runninghub_workflow_id(product_app_id)):
-            merged["product_app_id"] = _last_runninghub_workflow_id(product_chain) or runtime.get("replace_product_app_id")
     return _attach_workflow_meta_to_payload(task_type, merged)
 
 
@@ -5434,7 +5029,7 @@ def _comfy_task_required_free_gb(payload: dict[str, Any] | None, workflow_path: 
     required = 8.0
     if task_type in {"face_swap", "single_image_edit", "get_nano_banana"} or any(key in workflow for key in ("face", "swap", "nano", "edit")):
         required = 10.0
-    if task_type in {"video_i2v", "create_video"} or any(key in workflow for key in ("video", "i2v", "seedvr", "upscale")):
+    if task_type == "video_i2v" or any(key in workflow for key in ("video", "i2v", "seedvr", "upscale")):
         required = 16.0
     if task_type in {"text_to_image", "image_generate"}:
         required = 9.0 + max(batch_size - 1, 0) * 1.5
@@ -5708,6 +5303,7 @@ def _run_remote_comfy_gateway_test(
             body["prompt_text_node_ids"] = ["164"]
             body["negative_text_node_ids"] = ["166"]
             merged_node_inputs.setdefault("164", {})["text"] = prompt_text_value
+            merged_node_inputs.setdefault("166", {})["text"] = str(negative_prompt or "").strip()
         for key, value in {
             "width": width,
             "height": height,
@@ -5858,9 +5454,6 @@ def _execute_remote_comfy_gateway_body(
 REMOTE_COMFY_TASK_LABELS = {
     "text_to_image": "文字生成圖片",
     "image_generate": "圖片生成",
-    "replace_model": "替換模特",
-    "create_audio": "生成音頻",
-    "create_video": "生成視頻",
     "video_i2v": "圖生視頻",
     "single_image_edit": "單圖編輯",
     "get_nano_banana": "圖片編輯",
@@ -5997,13 +5590,12 @@ def _remote_comfy_prompt_from_payload(task_type: str, payload: dict[str, Any]) -
         payload.get("message"),
         payload.get("user_input"),
         payload.get("style_hint"),
-        payload.get("product_name"),
-        payload.get("speech_text"),
+        payload.get("asset_name"),
     ]
-    if isinstance(payload.get("model_params"), dict):
-        candidates.append(payload["model_params"].get("image_prompt"))
-    if isinstance(payload.get("product_params"), dict):
-        candidates.append(payload["product_params"].get("image_prompt"))
+    if isinstance(payload.get("primary_params"), dict):
+        candidates.append(payload["primary_params"].get("image_prompt"))
+    if isinstance(payload.get("secondary_params"), dict):
+        candidates.append(payload["secondary_params"].get("image_prompt"))
     for value in candidates:
         text = str(value or "").strip()
         if text:
@@ -6197,7 +5789,7 @@ def _merge_persona_body_anchor_into_prompt(prompt_text: str, anchor: str) -> str
         return text
     if _tg_image_first_segment_has_subject_start(text):
         subject_match = re.match(
-            r"^(?:(一位|一名|一个|一個))?(成人女性|成熟女性|女性|女人|女子|女郎|美女|美人|女教师|女教?师|教师|老师|人物|模特|女模特|主角|角色)?",
+            r"^(?:(一位|一名|一个|一個))?(成人女性|成熟女性|女性|女人|女子|女郎|美女|美人|女教师|女教?师|教师|老师|人物|人物|女性人物|主角|角色)?",
             text,
         )
         if subject_match and (subject_match.group(1) or subject_match.group(2)):
@@ -6207,7 +5799,7 @@ def _merge_persona_body_anchor_into_prompt(prompt_text: str, anchor: str) -> str
             if subject:
                 return f"{quantifier}{visible_anchor}的{subject}{rest}"
             return f"{quantifier}{visible_anchor}的{rest}"
-    match = re.match(r"^(成人|女性|女人|女子|女郎|美女|美人|女教师|女教?师|教师|老师|人物|模特)", text)
+    match = re.match(r"^(成人|女性|女人|女子|女郎|美女|美人|女教师|女教?师|教师|老师|人物|人物)", text)
     if match:
         end = match.end()
         return f"{text[:end]}{visible_anchor}，{text[end:].lstrip('，、 ')}"
@@ -6531,7 +6123,7 @@ def _remote_comfy_input_image_paths_from_payload(payload: dict[str, Any], task_t
         single_image = (
             payload.get("input_image_local_path")
             or payload.get("image_local_path")
-            or payload.get("product_image_local_path")
+            or payload.get("primary_image_local_path")
         )
         candidates.extend(
             [
@@ -6544,11 +6136,11 @@ def _remote_comfy_input_image_paths_from_payload(payload: dict[str, Any], task_t
             [
                 ("image1", payload.get("input_image_local_path"), "原圖"),
                 ("image1", payload.get("image_local_path"), "原圖"),
-                ("image1", payload.get("product_image_local_path"), "原圖"),
+                ("image1", payload.get("primary_image_local_path"), "原圖"),
                 ("image2", payload.get("reference_image_local_path"), "參考圖"),
                 ("image2", payload.get("second_image_local_path"), "參考圖"),
                 ("image2", payload.get("image2_local_path"), "參考圖"),
-                ("image2", payload.get("model_image_local_path"), "參考圖"),
+                ("image2", payload.get("secondary_image_local_path"), "參考圖"),
             ]
         )
     elif typ == "face_swap":
@@ -7403,7 +6995,7 @@ def _analyze_generated_person_body_shape_quality(
             "你是人物圖像身形視覺 QA 複審員，只判斷候選圖是否適合交付。",
             "目標：篩掉身形明顯過於豐滿、厚重、臃腫或肥胖的人物候選圖，保留身形自然、輕盈、比例穩定、符合提示詞的人物圖。",
             "只根據可見畫面判斷，不推測真實身份、年齡、健康狀態或現實個人屬性；不要輸出冒犯性描述。",
-            "如果輸入中提供了人設體型參考，請只把它作為非露骨的體型比例與輪廓一致性標準：肩頸、上半身輪廓、腰腹、胯部、腿部和手臂比例需要接近參考；若明顯漂移成寬肩、粗腰、短腿、厚重體型、男性化軀幹或通用模特身形，應標記不通過。",
+            "如果輸入中提供了人設體型參考，請只把它作為非露骨的體型比例與輪廓一致性標準：肩頸、上半身輪廓、腰腹、胯部、腿部和手臂比例需要接近參考；若明顯漂移成寬肩、粗腰、短腿、厚重體型、男性化軀幹或通用人物身形，應標記不通過。",
             "若人物身體不可見、只有臉部特寫、被衣物或遮擋物完全遮住，不能可靠判斷身形時，將 clearPersonBodyVisible 設為 false，且不要僅因此攔截。",
             "若可見單人或主體人物的腰腹、軀幹、四肢或整體輪廓明顯偏厚、偏圓、偏臃腫、體量過大，或與提示詞中的輕盈/纖細/自然人物形象明顯不符，必須標記 bodyShapeTooFull 或 bodyShapeBulkyOrObese。",
             "額外檢查上半身前側輪廓：若出現誇張球形、硬邊貼圖感、比例過大、左右結構明顯失衡、與軀幹連接不自然、像局部被放大或覆蓋到身體上的錯誤造型，必須將 upperTorsoContourAnomaly 設為 true，並視為不可交付。",
@@ -8271,39 +7863,6 @@ def _run_video_i2v(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     return _run_mulerouter_wan_i2v(task_id, payload)
 
 
-def _resolve_digital_human_reference_image(task_id: str, payload: dict[str, Any], workdir: Path) -> Path:
-    generated = str(payload.get("generated_scene_image_local_path") or "").strip()
-    if generated:
-        path = Path(generated).resolve()
-        if not path.exists() or not path.is_file():
-            raise FileNotFoundError(f"数字人场景图不存在: {path}")
-        return path
-
-    model_local = str(payload.get("model_image_local_path") or "").strip()
-    product_local = str(payload.get("product_image_local_path") or "").strip()
-    if model_local and product_local:
-        model_path = Path(model_local).resolve()
-        product_path = Path(product_local).resolve()
-        if not model_path.exists() or not product_path.exists():
-            raise FileNotFoundError("数字人工作流输入图片不存在")
-        return _compose_reference_image(
-            model_image=model_path,
-            product_image=product_path,
-            output_path=workdir / "digital_human_reference.png",
-        )
-    if product_local:
-        product_path = Path(product_local).resolve()
-        if not product_path.exists():
-            raise FileNotFoundError(f"商品图不存在: {product_path}")
-        return product_path
-    if model_local:
-        model_path = Path(model_local).resolve()
-        if not model_path.exists():
-            raise FileNotFoundError(f"模特图不存在: {model_path}")
-        return model_path
-    raise RuntimeError("数字人工作流需要上传模特图、商品图或提供 generated_scene_image_local_path")
-
-
 def _classify_runninghub_image_generate_failure(query_result: Any) -> str:
     data = query_result if isinstance(query_result, dict) else {}
     raw = data.get("raw") if isinstance(data.get("raw"), dict) else {}
@@ -8327,157 +7886,6 @@ def _classify_runninghub_image_generate_failure(query_result: Any) -> str:
         return f"RunningHub 图片生成失败：{error_message}"
     return f"RunningHub 图像编辑查询失败: {raw_preview}"
 
-
-
-
-def _run_image_generate_via_runninghub_workflow(task_id: str, payload: dict[str, Any], *, ref_input: Path, prompt_text: str, mode: str) -> dict[str, Any]:
-    runninghub_api_key = str(payload.get("runninghub_api_key") or "").strip()
-    workflow_ids = _workflow_chain_from_payload(
-        payload,
-        "image_generate_workflow_ids",
-        [payload.get("image_runninghub_workflow_id")],
-    )
-    needs_runninghub = any(not _is_closed_image_workflow_stage(item) for item in workflow_ids)
-    if needs_runninghub and not runninghub_api_key:
-        raise RuntimeError("RunningHub 图像编辑工作流需要 runninghub_api_key")
-    if not workflow_ids:
-        raise RuntimeError("RunningHub 图像编辑工作流需要 image_runninghub_workflow_id")
-
-    product_name = str(payload.get("product_name") or "商品").strip() or "商品"
-    replace_target = str(payload.get("replace_target_name") or product_name).strip() or product_name
-    output_height = max(_to_int(payload.get("output_height_limit"), 1980), 256)
-    extra_prompt = str(payload.get("style_hint") or prompt_text).strip()
-
-    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {runninghub_api_key}"}
-    workdir = _build_task_workdir(task_id)
-    final_path = workdir / "image_generate_output.png"
-    step_results: list[dict[str, Any]] = []
-    runninghub_task_ids: list[str] = []
-    current_output_path = final_path
-    current_input_path = Path(ref_input).resolve()
-    query_result = None
-    submit_result = None
-    for idx, workflow_id in enumerate(workflow_ids, start=1):
-        current_output_path = final_path if idx == len(workflow_ids) else workdir / f"image_generate_step_{idx:02d}.png"
-        if _is_closed_image_workflow_stage(workflow_id):
-            model_name = _closed_image_workflow_stage_model(workflow_id)
-            current_output_path, closed_result, model = _run_closed_image_model_transform(
-                input_path=current_input_path,
-                output_path=current_output_path,
-                payload=payload,
-                model_name=model_name,
-                prompt_text=prompt_text,
-                logger=_prefixed_logger(payload.get("_event_logger"), f"[图像编辑链 {idx}/{len(workflow_ids)} 闭源模型] "),
-            )
-            step_results.append(
-                {
-                    "step": idx,
-                    "provider": "closed_image_model",
-                    "workflow_id": _workflow_stage_display_id(workflow_id),
-                    "model": model,
-                    "result": closed_result,
-                    "output_path": str(current_output_path),
-                }
-            )
-            current_input_path = current_output_path
-            continue
-
-        image_url = _upload_binary_to_runninghub(
-            api_key=runninghub_api_key,
-            file_path=current_input_path,
-            media_kind="image_generate_input" if idx == 1 else f"image_generate_chain_step_{idx - 1}",
-        )
-        submit_payload = {
-            "nodeInfoList": [
-                {"nodeId": "16", "fieldName": "image", "fieldValue": image_url, "description": "产品图片"},
-                {"nodeId": "142", "fieldName": "string", "fieldValue": product_name, "description": "目标描述（可以是单个或者多个）"},
-                {"nodeId": "12", "fieldName": "image", "fieldValue": image_url, "description": "背景或模特图"},
-                {"nodeId": "141", "fieldName": "string", "fieldValue": replace_target, "description": "被替换区域描述（可以单个可以多个）"},
-                {"nodeId": "143", "fieldName": "value", "fieldValue": str(output_height), "description": "输出高度限制"},
-                {"nodeId": "215", "fieldName": "string", "fieldValue": extra_prompt, "description": "提示词（可不填，可以增加被替换后的约束）"},
-            ],
-            "instanceType": "default",
-            "usePersonalQueue": False,
-        }
-        response = requests.post(
-            f"{str(runninghub_common.BASE_URL).rstrip('/')}/openapi/v2/run/ai-app/{workflow_id}",
-            headers=headers,
-            data=json.dumps(submit_payload),
-            timeout=120,
-        )
-        response.raise_for_status()
-        submit_result = response.json()
-        normalized = runninghub_common._normalize_submit_result(submit_result)
-        task_id_text = str(normalized.get("task_id") or normalized.get("task id") or "").strip()
-        if not task_id_text:
-            raise RuntimeError(f"RunningHub 图像编辑提交失败: {json.dumps(submit_result, ensure_ascii=False)[:500]}")
-        runninghub_task_ids.append(task_id_text)
-
-        query_result = None
-        for _ in range(120):
-            current = runninghub_common.query_task(task_id=task_id_text, api_key=runninghub_api_key, video_output_path=str(current_output_path))
-            status_text = str(current.get("status") or "").strip().lower()
-            query_result = current
-            if status_text == "success":
-                break
-            if status_text == "failed":
-                break
-            time.sleep(3)
-        if not isinstance(query_result, dict) or str(query_result.get("status") or "").lower() != "success":
-            raise RuntimeError(_classify_runninghub_image_generate_failure(query_result))
-
-        possible_url = ""
-        results = query_result.get("results") if isinstance(query_result.get("results"), list) else []
-        for item in results:
-            if not isinstance(item, dict):
-                continue
-            value = str(item.get("url") or "").strip()
-            if value:
-                possible_url = value
-                break
-        if not possible_url:
-            raw = query_result.get("raw") if isinstance(query_result.get("raw"), dict) else {}
-            if isinstance(raw, dict):
-                raw_results = raw.get("results") if isinstance(raw.get("results"), list) else []
-                for item in raw_results:
-                    if not isinstance(item, dict):
-                        continue
-                    value = str(item.get("url") or item.get("imageUrl") or item.get("image_url") or "").strip()
-                    if value:
-                        possible_url = value
-                        break
-        if not possible_url:
-            raise RuntimeError(f"RunningHub 图像编辑成功但未返回图片 URL: {json.dumps(query_result, ensure_ascii=False)[:500]}")
-
-        _download_to_file(possible_url, current_output_path)
-        current_output_path = current_output_path.resolve()
-        step_results.append(
-            {
-                "step": idx,
-                "provider": "runninghub_workflow",
-                "workflow_id": str(workflow_id),
-                "runninghub_task_id": task_id_text,
-                "submit": submit_result,
-                "query": query_result,
-                "output_path": str(current_output_path),
-            }
-        )
-        current_input_path = current_output_path
-
-    final_path = current_output_path.resolve()
-    return {
-        "ok": True,
-        "message": "图片生成完成",
-        "runninghub_task_id": runninghub_task_ids[-1] if runninghub_task_ids else "",
-        "runninghub_task_ids": _normalize_workflow_ids(runninghub_task_ids),
-        "runninghub_usage": _merge_usage_values(step_results),
-        "nano_images": 1,
-        "image_path": str(final_path),
-        "scene_image_path": str(final_path),
-        "download_path": str(final_path),
-        "mode": mode,
-        "raw_result": {"steps": step_results, "final_submit": submit_result, "final_query": query_result},
-    }
 
 
 
@@ -8518,6 +7926,61 @@ def _run_image_generate_via_legacy_nano(task_id: str, payload: dict[str, Any], *
     return _run_image_generate_via_closed_model_api(task_id, payload, ref_input=ref_input, prompt_text=prompt_text, mode=mode)
 
 
+def _compose_reference_image(*, secondary_image: Path, primary_image: Path, output_path: Path) -> Path:
+    with Image.open(primary_image) as primary_raw, Image.open(secondary_image) as secondary_raw:
+        primary = primary_raw.convert("RGB")
+        secondary = secondary_raw.convert("RGB")
+        target_height = max(primary.height, secondary.height)
+        def resize_to_height(img: Image.Image) -> Image.Image:
+            if img.height == target_height:
+                return img
+            width = max(int(img.width * (target_height / float(img.height))), 1)
+            return img.resize((width, target_height), Image.LANCZOS)
+        primary = resize_to_height(primary)
+        secondary = resize_to_height(secondary)
+        canvas = Image.new("RGB", (secondary.width + primary.width, target_height), "white")
+        canvas.paste(secondary, (0, 0))
+        canvas.paste(primary, (secondary.width, 0))
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        canvas.save(output_path)
+    return output_path
+
+
+def _extract_zip_to_dir(zip_path: Path, out_dir: Path) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(str(zip_path), "r") as zf:
+        members = zf.infolist()
+        if len(members) > MAX_ZIP_MEMBERS:
+            raise RuntimeError("zip 文件内容过多，拒绝处理")
+        out_base = out_dir.resolve()
+        total_bytes = 0
+        for member in members:
+            name = str(member.filename or "")
+            if not name or name.endswith("/"):
+                continue
+            normalized = name.replace("\\", "/")
+            if normalized.startswith("/") or re.match(r"^[a-zA-Z]:", normalized):
+                raise RuntimeError("zip 文件路径不安全")
+            posix = PurePosixPath(normalized)
+            if ".." in posix.parts:
+                raise RuntimeError("zip 文件路径不安全")
+            mode = (int(getattr(member, "external_attr", 0)) >> 16) & 0xFFFF
+            if stat.S_ISLNK(mode):
+                raise RuntimeError("zip 文件路径不安全")
+            size = int(getattr(member, "file_size", 0) or 0)
+            if size > MAX_ZIP_MEMBER_BYTES:
+                raise RuntimeError("zip 单文件过大，拒绝处理")
+            total_bytes += size
+            if total_bytes > MAX_ZIP_TOTAL_BYTES:
+                raise RuntimeError("zip 解压后总大小过大，拒绝处理")
+            target = (out_dir / Path(*posix.parts)).resolve()
+            if target != out_base and out_base not in target.parents:
+                raise RuntimeError("zip 文件路径不安全")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(member, "r") as src, target.open("wb") as dst:
+                shutil.copyfileobj(src, dst, length=UPLOAD_CHUNK_SIZE)
+
+
 
 def _run_image_generate(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     chain_config = _remote_comfy_image_generate_chain_config(payload)
@@ -8525,35 +7988,35 @@ def _run_image_generate(task_id: str, payload: dict[str, Any]) -> dict[str, Any]
         return _run_image_generate_via_remote_comfy_firered_chain(task_id, payload, chain_config)
     if _remote_comfy_workflow_mapping(payload, "image_generate"):
         return _run_remote_comfy_mapped_task(task_id, payload, "image_generate")
-    mode = str(payload.get("mode") or "product_only").strip() or "product_only"
+    mode = str(payload.get("mode") or "single_reference").strip() or "single_reference"
     provider = str(payload.get("image_generate_provider") or payload.get("image_generate_mode_default") or "closed_model_api").strip() or "closed_model_api"
-    product_local = str(payload.get("product_image_local_path") or "").strip()
-    model_local = str(payload.get("model_image_local_path") or "").strip()
+    primary_local = str(payload.get("primary_image_local_path") or payload.get("primary_image_local_path") or "").strip()
+    secondary_local = str(payload.get("secondary_image_local_path") or payload.get("secondary_image_local_path") or "").strip()
     prompt_text = str(payload.get("prompt") or payload.get("prompt_text") or payload.get("message") or "").strip()
     if not prompt_text:
         raise RuntimeError("图片生成需要填写提示词")
-    if not product_local:
-        raise RuntimeError("图片生成缺少商品图")
+    if not primary_local:
+        raise RuntimeError("图片生成缺少参考图")
 
     workdir = _build_task_workdir(task_id)
-    product_src = Path(product_local).resolve()
-    if not product_src.exists():
-        raise FileNotFoundError(f"商品图不存在: {product_src}")
+    primary_src = Path(primary_local).resolve()
+    if not primary_src.exists():
+        raise FileNotFoundError(f"参考图不存在: {primary_src}")
 
-    if mode == "model_product":
-        if not model_local:
-            raise RuntimeError("图片生成（模特+商品）需要上传模特图和商品图")
-        model_src = Path(model_local).resolve()
-        if not model_src.exists():
-            raise FileNotFoundError(f"模特图不存在: {model_src}")
+    if mode == "dual_reference":
+        if not secondary_local:
+            raise RuntimeError("双图图片生成需要上传 2 张参考图")
+        secondary_src = Path(secondary_local).resolve()
+        if not secondary_src.exists():
+            raise FileNotFoundError(f"参考图不存在: {secondary_src}")
         ref_input = _compose_reference_image(
-            model_image=model_src,
-            product_image=product_src,
+            secondary_image=secondary_src,
+            primary_image=primary_src,
             output_path=workdir / "image_generate_ref.png",
         )
     else:
-        ref_input = workdir / f"product_input{product_src.suffix.lower() or '.png'}"
-        shutil.copy2(product_src, ref_input)
+        ref_input = workdir / f"reference_input{primary_src.suffix.lower() or '.png'}"
+        shutil.copy2(primary_src, ref_input)
 
     if provider == "runninghub_workflow":
         provider = "closed_model_api"
@@ -8603,2302 +8066,6 @@ def _run_get_gemini(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _extract_image_label_mapping(parsed: Any) -> dict[str, str]:
-    if isinstance(parsed, dict):
-        for key in ("image lable", "image_label", "image_lable", "image labels", "labels", "image_labels"):
-            val = parsed.get(key)
-            if isinstance(val, dict):
-                return {str(k): str(v) for k, v in val.items()}
-        if all(isinstance(k, str) for k in parsed.keys()):
-            if all(isinstance(v, (str, int, float, bool)) or v is None for v in parsed.values()):
-                return {str(k): str(v) for k, v in parsed.items()}
-    return {}
-
-
-def _label_images_with_gemini(
-    *,
-    image_paths: list[str],
-    gemini_host: str,
-    gemini_api_key: str,
-    gemini_port: str | None,
-    task_id: str,
-    llm_model: str = "",
-) -> dict[str, Any]:
-    system_prompt = (
-        "你是一个视频标注助手，专门对图片进行标注。\n"
-        "分为以下类型：1.商品图，2.模特图。\n"
-        "你会收到多张图片与图片路径列表，你需要判断每张图片属于“商品图”还是“模特图”，不确定则标注为“不属于模特图或商品图”。\n"
-        "只输出严格 JSON，不要代码块，不要解释文字。\n"
-        "输出格式：\n"
-        "{\n"
-        '  \"tool\": \"image_path_lable\",\n'
-        '  \"image lable\": {\n'
-        '    \"/abs/path/a.png\": \"模特图|商品图|不属于模特图或商品图\"\n'
-        "  }\n"
-        "}\n"
-        "注意：image lable 的 key 必须使用我给你的路径字符串原样返回。"
-    )
-    user_input = "请对下列图片逐一标注（路径列表）：\n" + "\n".join(image_paths)
-    resp = get_gemini.request_gemini3_pro_json(
-        user_input=user_input,
-        host=gemini_host,
-        api_key=gemini_api_key,
-        system_prompt=system_prompt,
-        port=gemini_port,
-        parameters="",
-        image_paths=image_paths,
-        model=llm_model,
-    )
-    if not (isinstance(resp, dict) and resp.get("ok") is True):
-        err = str(resp.get("error") if isinstance(resp, dict) else "Gemini 请求失败")
-        raw_text = str(resp.get("raw_text") or "") if isinstance(resp, dict) else ""
-        raise RuntimeError(f"Gemini 标注失败: {err}; task_id={task_id}; raw={raw_text[:300]}")
-    parsed = resp.get("parsed")
-    mapping = _extract_image_label_mapping(parsed)
-    if not mapping:
-        raw_text = str(resp.get("raw_text") or "")
-        raise RuntimeError(f"Gemini 未返回可用标注结果; task_id={task_id}; raw={raw_text[:300]}")
-    return {"mapping": mapping, "raw_text": str(resp.get("raw_text") or ""), "raw": resp.get("raw")}
-
-
-def _copy_inputs_to_dir(src_paths: list[str], dest_dir: Path) -> list[str]:
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    copied: list[str] = []
-    for idx, p in enumerate(src_paths or [], start=1):
-        src = Path(str(p)).resolve()
-        if not src.exists() or not src.is_file():
-            continue
-        suffix = src.suffix.lower()
-        name = src.name
-        target = dest_dir / name
-        if target.exists():
-            target = dest_dir / f"{idx:04d}{suffix or src.suffix}"
-        shutil.copy2(src, target)
-        copied.append(str(target))
-    return copied
-
-
-def _auto_split_model_product_inputs(
-    *,
-    task_id: str,
-    mixed_image_paths: list[str],
-    gemini_host: str,
-    gemini_api_key: str,
-    gemini_port: str | None,
-) -> tuple[str, str]:
-    workdir = _build_task_workdir(task_id)
-    input_dir = workdir / "batch_input"
-    model_dir = input_dir / "model"
-    product_dir = input_dir / "product"
-    unknown_dir = input_dir / "unknown"
-
-    abs_paths = [str(Path(p).resolve()) for p in mixed_image_paths if str(p).strip()]
-    if len(abs_paths) < 2:
-        raise RuntimeError("联合替换自动分拣需要至少 2 张图片（模特+商品）")
-
-    merged_mapping: dict[str, str] = {}
-    raw_texts: list[str] = []
-    batch_size = 8
-    for i in range(0, len(abs_paths), batch_size):
-        chunk = abs_paths[i : i + batch_size]
-        labeled = _label_images_with_gemini(
-            image_paths=chunk,
-            gemini_host=gemini_host,
-            gemini_api_key=gemini_api_key,
-            gemini_port=gemini_port,
-            task_id=task_id,
-        )
-        mapping = labeled.get("mapping") if isinstance(labeled, dict) else {}
-        if isinstance(mapping, dict):
-            merged_mapping.update({str(k): str(v) for k, v in mapping.items()})
-        raw_texts.append(str(labeled.get("raw_text") or ""))
-
-    key_by_name: dict[str, str] = {}
-    for k, v in merged_mapping.items():
-        key_by_name[Path(str(k)).name] = str(v)
-
-    model_src: list[str] = []
-    product_src: list[str] = []
-    unknown_src: list[str] = []
-    for p in abs_paths:
-        v = merged_mapping.get(p) or merged_mapping.get(str(Path(p).resolve())) or key_by_name.get(Path(p).name) or ""
-        low = str(v).strip()
-        if "模特" in low or "人物" in low or "人像" in low:
-            model_src.append(p)
-        elif "商品" in low or "产品" in low:
-            product_src.append(p)
-        else:
-            unknown_src.append(p)
-
-    _copy_inputs_to_dir(model_src, model_dir)
-    _copy_inputs_to_dir(product_src, product_dir)
-    _copy_inputs_to_dir(unknown_src, unknown_dir)
-
-    label_path = workdir / "image_labels.json"
-    with label_path.open("w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "tool": "image_path_lable",
-                "image lable": merged_mapping,
-                "stats": {"model": len(model_src), "product": len(product_src), "unknown": len(unknown_src)},
-                "raw_texts": raw_texts,
-            },
-            f,
-            ensure_ascii=False,
-            indent=2,
-        )
-
-    if not model_src or not product_src:
-        raise RuntimeError(f"自动分拣失败：未识别到足够的模特图或商品图（已写入 {label_path}）")
-    return str(model_dir), str(product_dir)
-
-
-def _run_replace_product_and_model(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    if _remote_comfy_workflow_mapping(payload, "replace_productANDmodel"):
-        return _run_remote_comfy_mapped_task(task_id, payload, "replace_productANDmodel")
-    raise RuntimeError("旧联合替换工作流已停用：下一步需要接入远程 ComfyUI 工作流后再提交")
-    api_key = str(payload.get("runninghub_api_key") or "").strip()
-    if not api_key:
-        raise RuntimeError("缺少 RunningHub API Key")
-    upload_server_ip = str(payload.get("upload_server_ip") or "").strip()
-    upload_server_port = str(payload.get("upload_server_port") or "").strip()
-    upload_file_api_key = str(payload.get("upload_file_api_key") or "").strip()
-    _emit_stage(payload, stage="parsing", status="running", message="解析文件中")
-
-    def _resolve_for_union(*, media_kind: str, file_path: Path) -> str:
-        _emit_stage(payload, stage="uploading", status="running", message="上传文件中", data={"media_kind": str(media_kind), "name": file_path.name})
-        try:
-            url = _resolve_media_url(
-                task_id=task_id,
-                media_kind=str(media_kind),
-                api_key=api_key,
-                local_path=str(file_path),
-                remote_url="",
-                upload_server_ip=upload_server_ip,
-                upload_server_port=upload_server_port,
-                upload_file_api_key=upload_file_api_key,
-            )
-            _emit_stage(payload, stage="upload_result", status="success", message="上传成功", data={"media_kind": str(media_kind), "urls": [str(url)]})
-            return str(url)
-        except Exception as exc:
-            _emit_stage(payload, stage="upload_result", status="failed", message="上传失败", data={"media_kind": str(media_kind), "error": str(exc)})
-            raise
-
-    def zip_has_entries(path_text: str) -> bool:
-        text = str(path_text or "").strip()
-        if not text:
-            return False
-        p = Path(text)
-        if not p.exists():
-            return False
-        try:
-            with zipfile.ZipFile(str(p), "r") as zf:
-                return bool(zf.namelist())
-        except Exception:
-            return False
-
-    model_zip = str(payload.get("model_zip_path") or "").strip()
-    product_zip = str(payload.get("product_zip_path") or "").strip()
-    video_zip = str(payload.get("video_zip_path") or "").strip()
-    model_dir = str(payload.get("model_dir_path") or "").strip()
-    product_dir = str(payload.get("product_dir_path") or "").strip()
-    video_dir = str(payload.get("video_dir_path") or "").strip()
-
-    mixed_image_paths = payload.get("mixed_image_paths") if isinstance(payload.get("mixed_image_paths"), list) else []
-    mixed_image_paths = [str(p) for p in mixed_image_paths if str(p).strip()]
-
-    video_paths = payload.get("video_paths") if isinstance(payload.get("video_paths"), list) else []
-    video_paths = [str(p) for p in video_paths if str(p).strip()]
-
-    if (not model_zip) and (not model_dir) and (not product_zip) and (not product_dir):
-        with db() as conn:
-            runtime = _get_runtime_config(conn)
-        gemini_host, gemini_key, _ = _resolve_llm_settings(runtime)
-        gemini_port = None
-        if not gemini_key or not gemini_host:
-            raise RuntimeError("自动分拣模特/商品图片需要管理员配置文字模型（API Base URL / API Key）")
-        model_dir, product_dir = _auto_split_model_product_inputs(
-            task_id=task_id,
-            mixed_image_paths=mixed_image_paths,
-            gemini_host=gemini_host,
-            gemini_api_key=gemini_key,
-            gemini_port=gemini_port,
-        )
-        _emit_stage(payload, stage="parse_result", status="success", message="解析结果", data={"auto_split": True, "model_dir": str(model_dir), "product_dir": str(product_dir)})
-
-    if (not video_zip) and (not video_dir) and video_paths:
-        workdir = _build_task_workdir(task_id)
-        video_dir_path = workdir / "batch_input" / "video"
-        _copy_inputs_to_dir(video_paths, video_dir_path)
-        video_dir = str(video_dir_path)
-    _emit_stage(
-        payload,
-        stage="parse_result",
-        status="success",
-        message="解析结果",
-        data={
-            "model_input": "zip" if model_zip else "dir",
-            "product_input": "zip" if product_zip else "dir",
-            "video_input": "zip" if video_zip else "dir",
-        },
-    )
-
-    if bool(model_zip) == bool(model_dir):
-        raise RuntimeError("联合替换的模特输入必须且只能提供 zip 或 dir 其中一个")
-    if bool(product_zip) == bool(product_dir):
-        raise RuntimeError("联合替换的商品输入必须且只能提供 zip 或 dir 其中一个")
-    if bool(video_zip) == bool(video_dir):
-        raise RuntimeError("联合替换的原视频输入必须且只能提供 zip 或 dir 其中一个")
-
-    out_dir = _build_task_workdir(task_id) / "batch_output"
-    _emit_stage(payload, stage="uploading", status="running", message="上传文件中")
-    _emit_stage(payload, stage="processing", status="running", message="正在执行视频模特替换/视频商品替换")
-    model_chain_ids = _workflow_chain_from_payload(
-        payload,
-        "model_workflow_chain_ids",
-        [payload.get("model_app_id"), payload.get("replace_model_original_app_id")],
-    )
-    product_chain_ids = _workflow_chain_from_payload(
-        payload,
-        "product_workflow_chain_ids",
-        [payload.get("product_app_id"), payload.get("replace_product_app_id")],
-    )
-    model_closed_stages, model_runninghub_chain = _split_workflow_chain_stages(model_chain_ids)
-    product_closed_stages, product_runninghub_chain = _split_workflow_chain_stages(product_chain_ids)
-    if not model_runninghub_chain:
-        raise RuntimeError("联合替换的模特链至少需要一个 RunningHub 视频工作流，闭源图片模型只负责处理模特图")
-    if not product_runninghub_chain:
-        raise RuntimeError("联合替换的商品链至少需要一个 RunningHub 视频工作流，闭源图片模型只负责处理商品图")
-
-    closed_stage_results: list[dict[str, Any]] = []
-    closed_workdir = _build_task_workdir(task_id) / "closed_image_preprocess"
-    if model_closed_stages:
-        model_source_dir = Path(model_dir).resolve() if model_dir else closed_workdir / "model_zip_input"
-        if model_zip:
-            _extract_zip_to_dir(Path(model_zip).resolve(), model_source_dir)
-            model_zip = ""
-        processed_model_dir, model_closed_results = _apply_closed_image_stages_to_dir(
-            task_id=task_id,
-            payload=payload,
-            input_dir=model_source_dir,
-            closed_stages=model_closed_stages,
-            workdir=closed_workdir,
-            label="model",
-            prompt_text=str(
-                (
-                    (payload.get("model_params") or {}).get("image_prompt")
-                    if isinstance(payload.get("model_params"), dict)
-                    else ""
-                )
-                or "优化人物参考图，保持人物身份、面部和服饰自然清晰，背景简洁，不添加文字或水印。"
-            ),
-        )
-        model_dir = str(processed_model_dir)
-        closed_stage_results.extend(model_closed_results)
-    if product_closed_stages:
-        product_source_dir = Path(product_dir).resolve() if product_dir else closed_workdir / "product_zip_input"
-        if product_zip:
-            _extract_zip_to_dir(Path(product_zip).resolve(), product_source_dir)
-            product_zip = ""
-        processed_product_dir, product_closed_results = _apply_closed_image_stages_to_dir(
-            task_id=task_id,
-            payload=payload,
-            input_dir=product_source_dir,
-            closed_stages=product_closed_stages,
-            workdir=closed_workdir,
-            label="product",
-            prompt_text=str(
-                (
-                    (payload.get("product_params") or {}).get("image_prompt")
-                    if isinstance(payload.get("product_params"), dict)
-                    else ""
-                )
-                or "优化商品参考图，保持商品外观、材质和颜色准确，背景简洁，不添加文字或水印。"
-            ),
-        )
-        product_dir = str(processed_product_dir)
-        closed_stage_results.extend(product_closed_results)
-
-    result = replace_productANDmodel.run_product_and_model_replace(
-        rh_api_key=api_key,
-        model_zip=model_zip or None,
-        model_dir=model_dir or None,
-        product_zip=product_zip or None,
-        product_dir=product_dir or None,
-        video_zip=video_zip or None,
-        video_dir=video_dir or None,
-        output_dir=str(out_dir),
-        model_app_id=replace_model.normalize_app_id(_last_runninghub_workflow_id(model_runninghub_chain) or payload.get("model_app_id")),
-        product_app_id=str(_last_runninghub_workflow_id(product_runninghub_chain) or payload.get("product_app_id") or replace_productANDmodel.DEFAULT_PRODUCT_APP_ID).strip() or replace_productANDmodel.DEFAULT_PRODUCT_APP_ID,
-        model_app_ids=model_runninghub_chain,
-        product_app_ids=product_runninghub_chain,
-        match_mode=str(payload.get("match_mode") or "cycle").strip() or "cycle",
-        fixed_index=max(_to_int(payload.get("fixed_index"), 1), 1),
-        auto_rename=_to_bool(payload.get("auto_rename"), True),
-        model_params=payload.get("model_params") if isinstance(payload.get("model_params"), dict) else {},
-        product_params=payload.get("product_params") if isinstance(payload.get("product_params"), dict) else {},
-        batch_params=payload.get("batch_params") if isinstance(payload.get("batch_params"), list) else [],
-        common_params=payload.get("common_params") if isinstance(payload.get("common_params"), list) else [],
-        cycle_params_on_shortage=_to_bool(payload.get("cycle_params_on_shortage"), True),
-        product_mapping=payload.get("product_mapping") if isinstance(payload.get("product_mapping"), list) else None,
-        upload_result=False,
-        media_url_resolver=_resolve_for_union,
-    )
-
-    output_dir = Path(str(result.get("output_dir") or out_dir)).resolve()
-    usage = _collect_batch_usage(output_dir)
-    result_zip = str(result.get("result_zip") or "").strip()
-    rh_task_ids = result.get("runninghub_task_ids") if isinstance(result.get("runninghub_task_ids"), list) else []
-    rh_task_ids = [str(x).strip() for x in rh_task_ids if str(x).strip()]
-    rh_task_id = rh_task_ids[-1] if rh_task_ids else ""
-    if closed_stage_results:
-        result["closed_image_steps"] = closed_stage_results
-
-    success = _to_int(result.get("success"), 0)
-    ok = success > 0
-    message = "批量替换完成" if ok else "批量替换失败：未生成任何视频"
-    if not ok:
-        results_path = output_dir / "results.json"
-        reason = ""
-        if results_path.exists():
-            try:
-                parsed = _json_loads(results_path.read_text(encoding="utf-8", errors="ignore"), {})
-                items = []
-                if isinstance(parsed, dict):
-                    items = parsed.get("items") if isinstance(parsed.get("items"), list) else []
-                elif isinstance(parsed, list):
-                    items = parsed
-                for it in items:
-                    if not isinstance(it, dict):
-                        continue
-                    st = str(it.get("status") or "").strip().lower()
-                    if st == "failed":
-                        reason = str(it.get("error") or "").strip()
-                        break
-                if not reason:
-                    for it in items:
-                        if not isinstance(it, dict):
-                            continue
-                        reason = str(it.get("error") or "").strip()
-                        if reason:
-                            break
-            except Exception:
-                reason = ""
-        if reason:
-            message = f"批量替换失败：{reason}"
-            _emit_stage(payload, stage="processing", status="failed", message="生成失败", data={"error": reason})
-    else:
-        _emit_stage(payload, stage="processing", status="success", message="生成成功")
-
-    return {
-        "ok": ok,
-        "message": message,
-        "runninghub_task_id": rh_task_id,
-        "runninghub_task_ids": rh_task_ids,
-        "runninghub_usage": usage,
-        "result_zip": result_zip,
-        "download_path": result_zip if zip_has_entries(result_zip) else "",
-        "raw_result": result,
-    }
-
-
-def _run_create_video_with_doubao(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    task_type = str(payload.get("_task_type") or "").strip()
-    mapped_type = "commerce_video" if task_type == "commerce_video" else "create_video"
-    if _remote_comfy_workflow_mapping(payload, mapped_type):
-        return _run_remote_comfy_mapped_task(task_id, payload, mapped_type)
-    raise RuntimeError("旧视频生成工作流已停用：下一步需要接入远程 ComfyUI 工作流后再提交")
-
-    runninghub_api_key = str(payload.get("runninghub_api_key") or "").strip()
-    if not runninghub_api_key:
-        raise RuntimeError("缺少 RunningHub API Key")
-
-    model_local = str(payload.get("model_image_local_path") or "").strip()
-    product_local = str(payload.get("product_image_local_path") or "").strip()
-    if not model_local or not product_local:
-        raise RuntimeError("视频生成必须上传模特图和商品图")
-
-    model_path = Path(model_local).resolve()
-    product_path = Path(product_local).resolve()
-    if not model_path.exists() or not product_path.exists():
-        raise RuntimeError("上传图片不存在")
-    _emit_stage(payload, stage="parsing", status="running", message="解析文件中")
-
-    fallback_username = str(payload.get("_username") or "").strip() or None
-    workdir = _build_task_workdir(task_id, fallback_username=fallback_username)
-    resume_from_task_id = str(payload.get("resume_from_task_id") or "").strip()
-    resume_enabled = False
-    if resume_from_task_id:
-        source_workdir = _build_task_workdir(resume_from_task_id, fallback_username=fallback_username)
-        copied_any = False
-        copied_any = _copytree_if_exists(source_workdir / "commerce_input", workdir / "commerce_input") or copied_any
-        copied_any = _copytree_if_exists(source_workdir / "commerce_out", workdir / "commerce_out") or copied_any
-        if not copied_any:
-            raise RuntimeError(f"源任务缺少可续跑产物: {resume_from_task_id}")
-        resume_enabled = True
-
-    input_dir = workdir / "commerce_input"
-    product_dir = input_dir / "products"
-    model_dir = input_dir / "models"
-    product_dir.mkdir(parents=True, exist_ok=True)
-    model_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(product_path, product_dir / f"1{product_path.suffix.lower()}")
-    shutil.copy2(model_path, model_dir / f"1{model_path.suffix.lower()}")
-
-    use_ai_copy = _to_bool(payload.get("use_ai_copy"), _to_bool(payload.get("use_doubao"), True))
-    speech_text = str(payload.get("speech_text") or "").strip()
-    prompt_text = str(payload.get("prompt_text") or "").strip()
-    uploaded_audio_local = str(payload.get("audio_local_path") or "").strip()
-    generated_scene_local = str(payload.get("generated_scene_image_local_path") or "").strip()
-    ai_meta: dict[str, Any] = {}
-    ai_warning = ""
-    fallback_text = (
-        str(payload.get("message") or "").strip()
-        or str(payload.get("style_hint") or "").strip()
-        or str(payload.get("product_name") or "").strip()
-    )
-
-    product_name = str(payload.get("product_name") or "该商品").strip() or "该商品"
-    style_hint = str(payload.get("style_hint") or "自然口播，真实电商场景").strip()
-    duration_mode = str(payload.get("duration_mode") or "manual").strip().lower() or "manual"
-    duration_seconds = max(_to_int(payload.get("duration_seconds"), 15), 1)
-    oral_chain = _workflow_chain_from_payload(
-        payload,
-        "oral_digital_human_workflow_ids",
-        [payload.get("create_audio_app_id"), payload.get("video_app_id"), payload.get("create_video_app_id")],
-    )
-    runninghub_oral_chain = [stage for stage in oral_chain if _workflow_stage_runninghub_id(stage)]
-    closed_llm_models = [_closed_llm_workflow_stage_model(stage) for stage in oral_chain if _is_closed_llm_workflow_stage(stage)]
-    closed_image_models = [_closed_image_workflow_stage_model(stage) for stage in oral_chain if _is_closed_image_workflow_stage(stage)]
-    oral_llm_model = next((model for model in reversed(closed_llm_models) if model), "")
-    oral_image_model = next((model for model in reversed(closed_image_models) if model), "")
-    audio_app_id = (
-        runninghub_oral_chain[0]
-        if runninghub_oral_chain
-        else str(payload.get("create_audio_app_id") or "").strip() or create_audio.DEFAULT_APP_ID
-    )
-    video_chain_ids = (
-        runninghub_oral_chain[1:]
-        if len(runninghub_oral_chain) > 1
-        else _normalize_workflow_ids([payload.get("video_app_id"), payload.get("create_video_app_id"), create_video.DEFAULT_APP_ID])
-    )
-
-    if use_ai_copy and ((not prompt_text) or ((not speech_text) and (not uploaded_audio_local))):
-        _emit_stage(payload, stage="processing", status="running", message="正在生成文案")
-        llm_source = dict(payload)
-        if oral_llm_model:
-            llm_source["llm_model"] = oral_llm_model
-        llm_base_url, llm_candidates = _resolve_llm_fallback_candidates(llm_source, allow_builtin=True)
-        llm_port = None
-        if not llm_base_url or not llm_candidates:
-            if uploaded_audio_local:
-                raise RuntimeError("启用文字模型生成提示词需先在后台配置文字模型 API，或手动填写 prompt_text")
-            raise RuntimeError("启用文字模型生成口播/提示词需先在后台配置文字模型 API，或手动填写 speech_text/prompt_text")
-        gemini_prompt = "\n".join(
-            [
-                "你是电商短视频创作助手。请输出严格 JSON（不要代码块、不要多余文字）。",
-                "字段必须是 prompt_text。" if uploaded_audio_local else "字段必须是 speech_text 和 prompt_text。",
-                f"商品名称：{product_name}。",
-                f"风格：{style_hint}。",
-                f"目标时长：{duration_seconds} 秒。",
-                "" if uploaded_audio_local else "speech_text：中文口播文案，适合直接配音。",
-                "prompt_text：用于视频生成的镜头/场景提示词。",
-            ]
-        ).strip()
-        try:
-            gemini_result, llm_selected, llm_attempts = _request_llm_json_with_fallback(
-                source=llm_source,
-                user_input=fallback_text or style_hint or product_name,
-                system_prompt=gemini_prompt,
-                port=llm_port,
-                parameters="",
-                logger=payload.get("_event_logger"),
-                allow_builtin=True,
-                request_label="口播文案生成",
-            )
-            ai_meta = gemini_result if isinstance(gemini_result, dict) else {"raw": gemini_result}
-            ai_meta["llm_selected"] = llm_selected
-            ai_meta["llm_attempts"] = llm_attempts
-            parsed = gemini_result.get("parsed") if isinstance(gemini_result, dict) else None
-            if isinstance(parsed, dict):
-                if not uploaded_audio_local:
-                    speech_text = speech_text or str(parsed.get("speech_text") or "").strip()
-                prompt_text = prompt_text or str(parsed.get("prompt_text") or "").strip()
-        except Exception as exc:
-            ai_meta = {"error": str(exc)}
-            ai_warning = f"文字模型自动文案失败: {exc}"
-
-    if (not speech_text) and (not uploaded_audio_local):
-        speech_text = fallback_text
-    if not prompt_text:
-        prompt_text = fallback_text
-    if uploaded_audio_local:
-        if not prompt_text:
-            raise RuntimeError("缺少 prompt_text，请手动填写或启用 Gemini 自动生成")
-    else:
-        if not speech_text or not prompt_text:
-            raise RuntimeError("缺少 speech_text/prompt_text，请手动填写或启用 Gemini 自动生成")
-
-    image_source = dict(payload)
-    if oral_image_model:
-        image_source["image_generate_model"] = oral_image_model
-    image_base_url, image_gemini_api_key, image_gpt_api_key, image_candidates = _resolve_closed_image_model_fallback_candidates(
-        image_source,
-        allow_builtin=True,
-    )
-    image_model = str(image_candidates[0].get("model") or "").strip() if image_candidates else ""
-    requires_generated_scene = not bool(generated_scene_local)
-    if requires_generated_scene and (not image_base_url or not image_candidates):
-        raise RuntimeError("视频生成需要先配置闭源图片模型（Base URL / API Key / 候选模型）")
-
-    camera_video_url = _resolve_media_url(
-        task_id=task_id,
-        media_kind="camera_video",
-        api_key=runninghub_api_key,
-        local_path=payload.get("camera_video_local_path"),
-        remote_url=payload.get("camera_video_url"),
-        upload_server_ip=payload.get("upload_server_ip"),
-        upload_server_port=payload.get("upload_server_port"),
-        upload_file_api_key=payload.get("upload_file_api_key"),
-    ) if str(payload.get("camera_video_local_path") or "").strip() or str(payload.get("camera_video_url") or "").strip() else ""
-
-    out_dir = workdir / "commerce_out"
-    audio_path_value = Path(uploaded_audio_local).resolve() if uploaded_audio_local else None
-    if audio_path_value is not None and not audio_path_value.exists():
-        raise FileNotFoundError("上传音频不存在")
-    _emit_stage(payload, stage="uploading", status="running", message="上传文件中")
-    _emit_stage(payload, stage="processing", status="running", message="正在生成音频/视频")
-    result = commerce_video_generator.generate_commerce_videos(
-        runninghub_api_key=runninghub_api_key,
-        upload_api_key=str(payload.get("upload_file_api_key") or "").strip() or runninghub_api_key,
-        product_dir=str(product_dir),
-        model_dir=str(model_dir),
-        output_dir=str(out_dir),
-        batch=commerce_video_generator.BatchSettings(
-            output_dir=str(out_dir),
-            match_mode="cycle",
-            fixed_index=1,
-            auto_rename=True,
-            upload_result_zip=False,
-            resume=resume_enabled,
-        ),
-        audio_settings=commerce_video_generator.AudioSettings(
-            emotion=str(payload.get("emotion") or "happy"),
-            language=str(payload.get("language") or "Chinese"),
-            model_choice=str(payload.get("model_choice") or "1.7B"),
-            speaker=str(payload.get("speaker") or "Ryan"),
-            app_id=audio_app_id,
-        ),
-        nano_settings=commerce_video_generator.NanoSettings(
-            base_url=image_base_url,
-            model=image_model,
-            gemini_api_key=image_gemini_api_key,
-            gpt_api_key=image_gpt_api_key,
-            prompt_template=str(payload.get("nano_prompt") or "电商口播视频场景截图风格：真实人物在室内/直播间展示商品，手持商品或放在手掌上讲解；写实摄影、柔和补光、干净背景；9:16；画面不要文字/水印/海报排版。"),
-        ),
-        video_workflow=commerce_video_generator.VideoWorkflowSettings(
-            app_id=video_chain_ids[-1] if video_chain_ids else str(payload.get("video_app_id") or create_video.DEFAULT_APP_ID).strip() or create_video.DEFAULT_APP_ID,
-            app_ids=video_chain_ids,
-            duration_mode=duration_mode,
-            duration_seconds=duration_seconds,
-            camera_video_url=camera_video_url or None,
-            instance_type=str(payload.get("instance_type") or "default").strip() or "default",
-            use_personal_queue=_to_bool(payload.get("use_personal_queue"), False),
-        ),
-        speech_text_provider=(lambda _i, _m, _p: speech_text) if not uploaded_audio_local else None,
-        prompt_provider=lambda _i, _m, _p: prompt_text,
-        image_path_provider=(lambda _i, _m, _p: generated_scene_local) if generated_scene_local else None,
-        logger=payload.get("_event_logger"),
-        progress_callback=payload.get("_event_progress"),
-    )
-    output_dir = Path(str(result.get("output_dir") or out_dir)).resolve()
-    runninghub_usage = _collect_batch_usage(output_dir)
-    if _to_int(result.get("success"), 0) <= 0:
-        logs_path = output_dir / "logs.jsonl"
-        if logs_path.exists():
-            last_line = ""
-            for line in logs_path.read_text(encoding="utf-8", errors="ignore").splitlines():
-                if line.strip():
-                    last_line = line.strip()
-            record = _json_loads(last_line, {}) if last_line else {}
-            err_text = str(record.get("error") or "").strip()
-            raise RuntimeError(err_text or "视频生成失败（logs.jsonl 未提供 error 字段）")
-        raise RuntimeError("视频生成失败（无 logs.jsonl）")
-    video_path = output_dir / "videos" / "1.mp4"
-    if not video_path.exists():
-        for cand in sorted((output_dir / "videos").glob("*.mp4")):
-            video_path = cand
-            break
-    if not video_path.exists():
-        logs_path = output_dir / "logs.jsonl"
-        if logs_path.exists():
-            last_line = ""
-            for line in logs_path.read_text(encoding="utf-8", errors="ignore").splitlines():
-                if line.strip():
-                    last_line = line.strip()
-            record = _json_loads(last_line, {}) if last_line else {}
-            err_text = str(record.get("error") or "").strip()
-            raise RuntimeError(err_text or "视频生成失败（未找到输出视频文件）")
-        raise RuntimeError("视频生成失败（未找到输出视频文件）")
-
-    return {
-        "ok": True,
-        "message": "视频流程完成",
-        "runninghub_task_id": str((result.get("runninghub_task_ids") or [""])[-1] or "").strip(),
-        "runninghub_task_ids": result.get("runninghub_task_ids") if isinstance(result.get("runninghub_task_ids"), list) else [],
-        "runninghub_usage": runninghub_usage,
-        "nano_images": 1,
-        "speech_text": speech_text,
-        "prompt_text": prompt_text,
-        "video_path": str(video_path),
-        "download_path": str(video_path),
-        "ai_copy": ai_meta,
-        "warnings": [ai_warning] if ai_warning else [],
-        "raw_result": result,
-    }
-
-
-def _extract_zip_to_dir(zip_path: Path, out_dir: Path) -> None:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(str(zip_path), "r") as zf:
-        members = zf.infolist()
-        if len(members) > MAX_ZIP_MEMBERS:
-            raise RuntimeError("zip 文件内容过多，拒绝处理")
-        out_base = out_dir.resolve()
-        total_bytes = 0
-        for m in members:
-            name = str(m.filename or "")
-            if not name or name.endswith("/"):
-                continue
-            norm = name.replace("\\", "/")
-            if norm.startswith("/") or re.match(r"^[a-zA-Z]:", norm):
-                raise RuntimeError("zip 文件路径不安全")
-            posix = PurePosixPath(norm)
-            if ".." in posix.parts:
-                raise RuntimeError("zip 文件路径不安全")
-            if _is_macos_junk_posix(posix):
-                continue
-            mode = (int(getattr(m, "external_attr", 0)) >> 16) & 0xFFFF
-            if stat.S_ISLNK(mode):
-                raise RuntimeError("zip 文件路径不安全")
-            size = int(getattr(m, "file_size", 0) or 0)
-            if size > MAX_ZIP_MEMBER_BYTES:
-                raise RuntimeError("zip 单文件过大，拒绝处理")
-            total_bytes += size
-            if total_bytes > MAX_ZIP_TOTAL_BYTES:
-                raise RuntimeError("zip 解压后总大小过大，拒绝处理")
-            rel = Path(*posix.parts)
-            target = (out_dir / rel).resolve()
-            if target != out_base and out_base not in target.parents:
-                raise RuntimeError("zip 文件路径不安全")
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with zf.open(m, "r") as src, target.open("wb") as dst:
-                shutil.copyfileobj(src, dst, length=UPLOAD_CHUNK_SIZE)
-
-
-def _normalize_batch_media_rel_path(value: Any, *, field_name: str, required: bool = False) -> str:
-    text = str(value or "").strip().replace("\\", "/")
-    if not text:
-        if required:
-            raise RuntimeError(f"{field_name} 不能为空")
-        return ""
-    if text.startswith("/") or re.match(r"^[a-zA-Z]:", text):
-        raise RuntimeError(f"{field_name} 路径不安全")
-    posix = PurePosixPath(text)
-    if posix.is_absolute() or ".." in posix.parts or _is_macos_junk_posix(posix):
-        raise RuntimeError(f"{field_name} 路径不安全")
-    return str(PurePosixPath(*posix.parts))
-
-
-def _resolve_batch_media_path(src_dir: Path, value: Any, *, field_name: str, required: bool = False) -> Path | None:
-    rel = _normalize_batch_media_rel_path(value, field_name=field_name, required=required)
-    if not rel:
-        return None
-    src_base = src_dir.resolve()
-    target = (src_base / Path(*PurePosixPath(rel).parts)).resolve()
-    if target != src_base and src_base not in target.parents:
-        raise RuntimeError(f"{field_name} 路径不安全")
-    return target
-
-
-BATCH_MODEL_KEYWORDS = {"model", "person", "human", "actor", "talent", "模特", "人物", "人像", "modelimg"}
-BATCH_PRODUCT_KEYWORDS = {"product", "goods", "item", "sku", "商品", "产品", "货品"}
-BATCH_AUDIO_KEYWORDS = {"audio", "voice", "speech", "tts", "音频", "配音"}
-BATCH_VIDEO_KEYWORDS = {"video", "camera", "motion", "运镜", "镜头", "视频"}
-
-
-def _batch_match_sort_key(entry: dict[str, Any]) -> tuple[Any, ...]:
-    return (
-        int(entry.get("path_depth") or 0),
-        str(entry.get("normalized_path") or ""),
-        str(entry.get("basename") or ""),
-        str(entry.get("rel") or ""),
-    )
-
-
-def _normalize_batch_match_keys(stem: str) -> dict[str, str]:
-    low = str(stem or "").strip().lower()
-    low = re.sub(r"\s+", "_", low)
-    exact = low
-    numeric = ""
-    if low.isdigit():
-        try:
-            numeric = str(int(low))
-        except Exception:
-            numeric = low
-    parts = re.findall(r"[a-z]+|\d+", low)
-    normalized_parts: list[str] = []
-    for part in parts:
-        if part.isdigit():
-            try:
-                normalized_parts.append(str(int(part)))
-            except Exception:
-                normalized_parts.append(part)
-        else:
-            normalized_parts.append(part)
-    normalized = "_".join([p for p in normalized_parts if p])
-    return {
-        "exact_stem": exact,
-        "numeric_stem": numeric,
-        "normalized_stem": normalized,
-    }
-
-
-def _detect_batch_media_role(*, rel: str, kind: str, role_hint: str = "") -> str:
-    hint = str(role_hint or "").strip().lower()
-    if hint in {"model", "product", "audio", "video"}:
-        return hint
-    if kind == "audio":
-        return "audio"
-    if kind == "video":
-        return "video"
-    low = str(rel or "").lower()
-    if _has_any(low, BATCH_PRODUCT_KEYWORDS):
-        return "product"
-    if _has_any(low, BATCH_MODEL_KEYWORDS):
-        return "model"
-    return ""
-
-
-def _make_batch_media_entry(rel: str, *, kind: str, role_hint: str = "") -> dict[str, Any]:
-    norm = str(rel or "").replace("\\", "/").strip("/")
-    posix = PurePosixPath(norm)
-    folder = str(PurePosixPath(*posix.parts[:-1])) if len(posix.parts) > 1 else ""
-    basename = str(posix.name or "")
-    stem = str(Path(basename).stem or "")
-    key_info = _normalize_batch_match_keys(stem)
-    return {
-        "rel": norm,
-        "folder": folder,
-        "kind": kind,
-        "role": _detect_batch_media_role(rel=norm, kind=kind, role_hint=role_hint),
-        "basename": basename,
-        "stem": stem,
-        "path_depth": len(posix.parts),
-        "normalized_path": norm.lower(),
-        **key_info,
-    }
-
-
-def _collect_batch_media_entries_from_dir(root_dir: Path) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    for p in sorted(root_dir.rglob("*")):
-        if not p.is_file():
-            continue
-        if _is_macos_junk_path(p):
-            continue
-        suf = p.suffix.lower()
-        rel = str(p.relative_to(root_dir)).replace("\\", "/")
-        if suf in IMAGE_EXTS:
-            out.append(_make_batch_media_entry(rel, kind="image"))
-        elif suf in VIDEO_EXTS:
-            out.append(_make_batch_media_entry(rel, kind="video"))
-        elif suf in AUDIO_EXTS:
-            out.append(_make_batch_media_entry(rel, kind="audio"))
-    return sorted(out, key=_batch_match_sort_key)
-
-
-def _legacy_scan_batch_items(root_dir: Path) -> list[dict[str, Any]]:
-    grouped: dict[str, dict[str, Any]] = {}
-    for entry in _collect_batch_media_entries_from_dir(root_dir):
-        folder = str(entry.get("folder") or "")
-        g = grouped.setdefault(folder, {"id": folder or "root", "folder": folder, "images": [], "videos": []})
-        if entry.get("kind") == "image":
-            g["images"].append(str(entry.get("rel") or ""))
-        elif entry.get("kind") == "video":
-            g["videos"].append(str(entry.get("rel") or ""))
-
-    out: list[dict[str, Any]] = []
-    for folder, g in sorted(grouped.items(), key=lambda kv: kv[0]):
-        images = sorted(set(g.get("images") or []))
-        if not images:
-            continue
-        videos = sorted(set(g.get("videos") or []))
-        out.append(
-            {
-                "id": str(g.get("id") or folder or "root"),
-                "folder": str(g.get("folder") or ""),
-                "model_image": str(images[0]),
-                "product_image": str(images[1]) if len(images) > 1 else str(images[0]),
-                "camera_video": str(videos[0]) if videos else "",
-                "audio": "",
-                "match_key": str(folder or images[0]),
-                "match_mode": "legacy_folder",
-                "audio_match_state": "missing",
-                "source_folder": str(g.get("folder") or ""),
-            }
-        )
-    return out
-
-
-def _build_strict_batch_item_from_pair(
-    *,
-    idx: int,
-    model_entry: dict[str, Any],
-    product_entry: dict[str, Any],
-    match_key: str,
-    match_mode: str,
-    audio_entry: dict[str, Any] | None,
-    audio_state: str,
-    video_entry: dict[str, Any] | None,
-    model_candidate_count: int,
-    product_candidate_count: int,
-) -> dict[str, Any]:
-    source_parts = [str(model_entry.get("folder") or ""), str(product_entry.get("folder") or "")]
-    source_parts = [p for p in source_parts if p]
-    return {
-        "id": f"item_{idx}",
-        "folder": str(model_entry.get("folder") or product_entry.get("folder") or ""),
-        "model_image": str(model_entry.get("rel") or ""),
-        "product_image": str(product_entry.get("rel") or ""),
-        "camera_video": str((video_entry or {}).get("rel") or ""),
-        "audio": str((audio_entry or {}).get("rel") or ""),
-        "match_key": str(match_key or ""),
-        "match_mode": str(match_mode or ""),
-        "audio_match_state": str(audio_state or "missing"),
-        "source_folder": "|".join(dict.fromkeys(source_parts)),
-        "model_candidates": int(model_candidate_count),
-        "product_candidates": int(product_candidate_count),
-    }
-
-
-def _pick_optional_support_entry(
-    entries: list[dict[str, Any]],
-    *,
-    pair_info: dict[str, Any],
-    used_rels: set[str],
-) -> tuple[dict[str, Any] | None, str]:
-    if not entries:
-        return None, "missing"
-    preferred_fields = ["exact_stem", "numeric_stem", "normalized_stem"]
-    match_mode = str(pair_info.get("match_mode") or "")
-    if match_mode in preferred_fields:
-        preferred_fields = [match_mode] + [f for f in preferred_fields if f != match_mode]
-    for field in preferred_fields:
-        key = str(pair_info.get(field) or "")
-        if not key:
-            continue
-        candidates = [e for e in entries if str(e.get(field) or "") == key and str(e.get("rel") or "") not in used_rels]
-        candidates = sorted(candidates, key=_batch_match_sort_key)
-        if len(candidates) == 1:
-            picked = candidates[0]
-            used_rels.add(str(picked.get("rel") or ""))
-            return picked, "matched"
-        if len(candidates) > 1:
-            return None, "ambiguous"
-    return None, "missing"
-
-
-def _format_batch_pairing_error(
-    *,
-    ambiguous: list[str],
-    missing_models: list[dict[str, Any]],
-    missing_products: list[dict[str, Any]],
-) -> str:
-    parts: list[str] = []
-    if ambiguous:
-        parts.append("存在歧义配对: " + "; ".join(sorted(dict.fromkeys(ambiguous))))
-    if missing_products:
-        details = ", ".join(str(e.get("rel") or "") for e in sorted(missing_products, key=_batch_match_sort_key)[:5])
-        parts.append(f"以下模特图缺少对应商品图: {details}")
-    if missing_models:
-        details = ", ".join(str(e.get("rel") or "") for e in sorted(missing_models, key=_batch_match_sort_key)[:5])
-        parts.append(f"以下商品图缺少对应模特图: {details}")
-    return "；".join(parts) if parts else "未识别到稳定的图像配对规则"
-
-
-def _build_strict_batch_items(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    image_entries = [e for e in entries if e.get("kind") == "image"]
-    model_entries = sorted([e for e in image_entries if e.get("role") == "model"], key=_batch_match_sort_key)
-    product_entries = sorted([e for e in image_entries if e.get("role") == "product"], key=_batch_match_sort_key)
-    if not model_entries or not product_entries:
-        return []
-
-    fields = ["exact_stem", "numeric_stem", "normalized_stem"]
-    used_models: set[str] = set()
-    used_products: set[str] = set()
-    pairs: list[dict[str, Any]] = []
-    ambiguous: list[str] = []
-
-    for field in fields:
-        model_map: dict[str, list[dict[str, Any]]] = {}
-        product_map: dict[str, list[dict[str, Any]]] = {}
-        for entry in model_entries:
-            if str(entry.get("rel") or "") in used_models:
-                continue
-            key = str(entry.get(field) or "")
-            if key:
-                model_map.setdefault(key, []).append(entry)
-        for entry in product_entries:
-            if str(entry.get("rel") or "") in used_products:
-                continue
-            key = str(entry.get(field) or "")
-            if key:
-                product_map.setdefault(key, []).append(entry)
-        for key in sorted(set(model_map.keys()) & set(product_map.keys())):
-            models = sorted(model_map.get(key) or [], key=_batch_match_sort_key)
-            products = sorted(product_map.get(key) or [], key=_batch_match_sort_key)
-            if len(models) != 1 or len(products) != 1:
-                ambiguous.append(f"{field}:{key}")
-                continue
-            model_entry = models[0]
-            product_entry = products[0]
-            used_models.add(str(model_entry.get("rel") or ""))
-            used_products.add(str(product_entry.get("rel") or ""))
-            pairs.append(
-                {
-                    "match_key": key,
-                    "match_mode": field,
-                    "model": model_entry,
-                    "product": product_entry,
-                    "exact_stem": str(model_entry.get("exact_stem") or product_entry.get("exact_stem") or ""),
-                    "numeric_stem": str(model_entry.get("numeric_stem") or product_entry.get("numeric_stem") or ""),
-                    "normalized_stem": str(model_entry.get("normalized_stem") or product_entry.get("normalized_stem") or ""),
-                    "model_candidate_count": len(models),
-                    "product_candidate_count": len(products),
-                }
-            )
-
-    missing_models = [e for e in product_entries if str(e.get("rel") or "") not in used_products]
-    missing_products = [e for e in model_entries if str(e.get("rel") or "") not in used_models]
-    if ambiguous or missing_models or missing_products:
-        raise RuntimeError(
-            _format_batch_pairing_error(
-                ambiguous=ambiguous,
-                missing_models=missing_models,
-                missing_products=missing_products,
-            )
-        )
-    if not pairs:
-        return []
-
-    audio_entries = sorted([e for e in entries if e.get("kind") == "audio"], key=_batch_match_sort_key)
-    video_entries = sorted([e for e in entries if e.get("kind") == "video"], key=_batch_match_sort_key)
-    used_audio: set[str] = set()
-    used_video: set[str] = set()
-    out: list[dict[str, Any]] = []
-    sorted_pairs = sorted(
-        pairs,
-        key=lambda item: (
-            str(item.get("match_key") or ""),
-            str(item.get("match_mode") or ""),
-            _batch_match_sort_key(item.get("model") or {}),
-        ),
-    )
-    for idx, pair in enumerate(sorted_pairs, start=1):
-        audio_entry, audio_state = _pick_optional_support_entry(audio_entries, pair_info=pair, used_rels=used_audio)
-        video_entry, _ = _pick_optional_support_entry(video_entries, pair_info=pair, used_rels=used_video)
-        out.append(
-            _build_strict_batch_item_from_pair(
-                idx=idx,
-                model_entry=pair["model"],
-                product_entry=pair["product"],
-                match_key=str(pair.get("match_key") or ""),
-                match_mode=str(pair.get("match_mode") or ""),
-                audio_entry=audio_entry,
-                audio_state=audio_state,
-                video_entry=video_entry,
-                model_candidate_count=int(pair.get("model_candidate_count") or 0),
-                product_candidate_count=int(pair.get("product_candidate_count") or 0),
-            )
-        )
-    return out
-
-
-def _should_try_strict_batch_matching(entries: list[dict[str, Any]]) -> bool:
-    if not entries:
-        return False
-    image_entries = [e for e in entries if e.get("kind") == "image"]
-    if not image_entries:
-        return False
-    roles = {str(e.get("role") or "") for e in image_entries if str(e.get("role") or "")}
-    role_folders = {str(e.get("folder") or "") for e in image_entries if str(e.get("role") or "") in {"model", "product"}}
-    if any(e.get("kind") == "audio" for e in entries):
-        return True
-    if "model" in roles and "product" in roles and len(role_folders) > 1:
-        return True
-    folder_image_counts: dict[str, int] = {}
-    for entry in image_entries:
-        folder = str(entry.get("folder") or "")
-        folder_image_counts[folder] = folder_image_counts.get(folder, 0) + 1
-    if any(v > 2 for v in folder_image_counts.values()):
-        return True
-    seen: dict[tuple[str, str], int] = {}
-    for entry in image_entries:
-        for field in ("exact_stem", "numeric_stem", "normalized_stem"):
-            key = str(entry.get(field) or "")
-            if not key:
-                continue
-            seen_key = (field, key)
-            seen[seen_key] = seen.get(seen_key, 0) + 1
-            if seen[seen_key] > 1:
-                return True
-    return False
-
-
-def _scan_batch_items(root_dir: Path) -> list[dict[str, Any]]:
-    entries = _collect_batch_media_entries_from_dir(root_dir)
-    legacy_items = _legacy_scan_batch_items(root_dir)
-    if _should_try_strict_batch_matching(entries):
-        strict_items = _build_strict_batch_items(entries)
-        if strict_items:
-            return strict_items
-    return legacy_items
-
-
-def _strip_batch_meta_params(params: dict[str, Any]) -> dict[str, Any]:
-    out = dict(params or {})
-    for k in [
-        "batch_mode",
-        "batch_groups_estimated",
-        "batch_params",
-        "common_params",
-        "cycle_params_on_shortage",
-        "use_common_params_on_shortage",
-    ]:
-        out.pop(k, None)
-    return out
-
-
-def _has_any(text: str, keywords: set[str]) -> bool:
-    low = str(text or "").lower()
-    return any(k in low for k in (keywords or set()) if k)
-
-
-def _is_macos_junk_posix(posix: PurePosixPath) -> bool:
-    parts = tuple(getattr(posix, "parts", ()) or ())
-    if "__MACOSX" in parts:
-        return True
-    name = str(parts[-1] if parts else "")
-    if not name:
-        return False
-    if name.startswith("._"):
-        return True
-    if name in {".DS_Store", "Thumbs.db"}:
-        return True
-    return False
-
-
-def _is_macos_junk_path(path: Path) -> bool:
-    try:
-        if "__MACOSX" in path.parts:
-            return True
-        name = str(path.name or "")
-        if name.startswith("._"):
-            return True
-        if name in {".DS_Store", "Thumbs.db"}:
-            return True
-    except Exception:
-        return False
-    return False
-
-
-def _zip_category(zip_path: Path) -> str:
-    try:
-        with zipfile.ZipFile(str(zip_path), "r") as zf:
-            img = 0
-            vid = 0
-            aud = 0
-            other = 0
-            for m in zf.infolist():
-                name = str(getattr(m, "filename", "") or "")
-                if not name or name.endswith("/"):
-                    continue
-                norm = name.replace("\\", "/")
-                posix = PurePosixPath(norm)
-                if posix.is_absolute() or ".." in posix.parts:
-                    continue
-                if _is_macos_junk_posix(posix):
-                    continue
-                suf = Path(norm).suffix.lower()
-                if suf in IMAGE_EXTS:
-                    img += 1
-                elif suf in VIDEO_EXTS:
-                    vid += 1
-                elif suf in AUDIO_EXTS:
-                    aud += 1
-                else:
-                    other += 1
-            total = img + vid + aud + other
-            if total <= 0:
-                return "empty"
-            def ratio(x: int) -> float:
-                return float(x) / float(total)
-            if img > 0 and ratio(img) >= 0.8:
-                return "images"
-            if vid > 0 and ratio(vid) >= 0.8:
-                return "videos"
-            if aud > 0 and ratio(aud) >= 0.8:
-                return "audios"
-            return "mixed"
-    except Exception:
-        return "mixed"
-
-
-def _scan_zip_media(zip_path: Path) -> dict[str, dict[str, list[str]]]:
-    grouped: dict[str, dict[str, list[str]]] = {}
-    with zipfile.ZipFile(str(zip_path), "r") as zf:
-        for m in zf.infolist():
-            name = str(getattr(m, "filename", "") or "")
-            if not name or name.endswith("/"):
-                continue
-            norm = name.replace("\\", "/")
-            posix = PurePosixPath(norm)
-            if posix.is_absolute() or ".." in posix.parts:
-                continue
-            if _is_macos_junk_posix(posix):
-                continue
-            suf = Path(norm).suffix.lower()
-            if suf not in IMAGE_EXTS and suf not in VIDEO_EXTS and suf not in AUDIO_EXTS:
-                continue
-            rel = str(PurePosixPath(*posix.parts))
-            folder = str(PurePosixPath(*posix.parts[:-1])) if len(posix.parts) > 1 else ""
-            g = grouped.setdefault(folder, {"images": [], "videos": [], "audios": []})
-            if suf in IMAGE_EXTS:
-                g["images"].append(rel)
-            elif suf in VIDEO_EXTS:
-                g["videos"].append(rel)
-            else:
-                g["audios"].append(rel)
-    for g in grouped.values():
-        g["images"] = sorted(set(g.get("images") or []))
-        g["videos"] = sorted(set(g.get("videos") or []))
-        g["audios"] = sorted(set(g.get("audios") or []))
-    return grouped
-
-
-def _pick_first_by_keywords(paths: list[str], keywords: set[str]) -> str:
-    for p in paths or []:
-        if _has_any(Path(p).name, keywords):
-            return p
-    return str((paths or [""])[0] or "")
-
-
-def _batch_params_for_index(batch_params: list[Any], *, idx: int, use_cycle: bool) -> dict[str, Any]:
-    picked: dict[str, Any] = {}
-    if batch_params and len(batch_params) >= idx:
-        bp = batch_params[idx - 1]
-        picked = bp if isinstance(bp, dict) else {}
-    elif batch_params and use_cycle:
-        bp = batch_params[(idx - 1) % len(batch_params)]
-        picked = bp if isinstance(bp, dict) else {}
-    return _strip_batch_meta_params(picked) if isinstance(picked, dict) else {}
-
-
-def _apply_batch_params_to_items(items: list[dict[str, Any]], *, batch_params: list[Any], use_cycle: bool) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    for idx, item in enumerate(items, start=1):
-        merged = dict(item)
-        merged["params"] = _batch_params_for_index(batch_params, idx=idx, use_cycle=use_cycle)
-        out.append(merged)
-    return out
-
-
-def _repair_strict_item_support_media(items: list[dict[str, Any]], entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    if not items:
-        return items
-    audio_entries = sorted([e for e in entries if e.get("kind") == "audio"], key=_batch_match_sort_key)
-    video_entries = sorted([e for e in entries if e.get("kind") == "video"], key=_batch_match_sort_key)
-    used_audio: set[str] = set()
-    used_video: set[str] = set()
-    out: list[dict[str, Any]] = []
-    for item in items:
-        merged = dict(item)
-        match_mode = str(merged.get("match_mode") or "")
-        match_key = str(merged.get("match_key") or "")
-        pair_info = {"match_mode": match_mode}
-        if match_mode and match_key:
-            pair_info[match_mode] = match_key
-        if (not str(merged.get("audio") or "").strip()) and match_mode and match_key:
-            audio_entry, audio_state = _pick_optional_support_entry(audio_entries, pair_info=pair_info, used_rels=used_audio)
-            merged["audio"] = str((audio_entry or {}).get("rel") or "")
-            merged["audio_match_state"] = str(audio_state or "missing")
-        if (not str(merged.get("camera_video") or "").strip()) and match_mode and match_key:
-            video_entry, _ = _pick_optional_support_entry(video_entries, pair_info=pair_info, used_rels=used_video)
-            if video_entry:
-                merged["camera_video"] = str(video_entry.get("rel") or "")
-        out.append(merged)
-    return out
-
-
-def _pick_support_rel_by_match(paths: list[str], *, match_mode: str, match_key: str, used_paths: set[str]) -> tuple[str, str]:
-    if not match_mode or not match_key:
-        return "", "missing"
-    candidates: list[str] = []
-    for rel in sorted(set(paths)):
-        if rel in used_paths:
-            continue
-        key_info = _normalize_batch_match_keys(Path(PurePosixPath(rel).name).stem)
-        if str(key_info.get(match_mode) or "") == match_key:
-            candidates.append(rel)
-    if len(candidates) == 1:
-        used_paths.add(candidates[0])
-        return candidates[0], "matched"
-    if len(candidates) > 1:
-        return "", "ambiguous"
-    return "", "missing"
-
-
-def _build_batch_media_entries_from_slots(slots: dict[str, dict[str, list[str]]]) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    for _, slot in sorted(slots.items(), key=lambda kv: kv[0]):
-        for rel in sorted(set(slot.get("model_images") or [])):
-            out.append(_make_batch_media_entry(rel, kind="image", role_hint="model"))
-        for rel in sorted(set(slot.get("product_images") or [])):
-            out.append(_make_batch_media_entry(rel, kind="image", role_hint="product"))
-        for rel in sorted(set(slot.get("images") or [])):
-            out.append(_make_batch_media_entry(rel, kind="image"))
-        for rel in sorted(set(slot.get("videos") or [])):
-            out.append(_make_batch_media_entry(rel, kind="video"))
-        for rel in sorted(set(slot.get("audios") or [])):
-            out.append(_make_batch_media_entry(rel, kind="audio"))
-    return sorted(out, key=_batch_match_sort_key)
-
-
-def _build_batch_payload_from_uploaded_zips(
-    *,
-    zips: list[dict[str, str]],
-    params: dict[str, Any],
-) -> dict[str, Any]:
-    batch_params = params.get("batch_params") if isinstance(params.get("batch_params"), list) else []
-    use_cycle = bool(params.get("cycle_params_on_shortage"))
-    defaults = _strip_batch_meta_params(params)
-
-    slots: dict[str, dict[str, list[str]]] = {}
-    zip_paths: list[str] = []
-    zip_meta: list[dict[str, Any]] = []
-    image_zip_indices: list[int] = []
-    image_zip_roles: dict[int, str] = {}
-
-    for i, z in enumerate(zips or []):
-        zp = Path(str(z.get("path") or "")).resolve()
-        if not zp.exists():
-            continue
-        zip_paths.append(str(zp))
-        name = str(z.get("name") or zp.name)
-        cat = _zip_category(zp)
-        groups = _scan_zip_media(zp)
-        role = cat
-        if cat == "images":
-            image_zip_indices.append(i)
-            if _has_any(name, BATCH_MODEL_KEYWORDS):
-                role = "model_images"
-            elif _has_any(name, BATCH_PRODUCT_KEYWORDS):
-                role = "product_images"
-            else:
-                role = "images"
-            if role == "images":
-                folder_keys = list((groups or {}).keys())
-                found_model = any(_has_any(f, BATCH_MODEL_KEYWORDS) for f in folder_keys)
-                found_product = any(_has_any(f, BATCH_PRODUCT_KEYWORDS) for f in folder_keys)
-                if found_model and (not found_product):
-                    role = "model_images"
-                elif found_product and (not found_model):
-                    role = "product_images"
-            image_zip_roles[i] = role
-        elif cat == "videos":
-            role = "videos"
-        elif cat == "audios":
-            role = "audios"
-        else:
-            role = "bundle"
-        zip_meta.append({"i": i, "path": str(zp), "name": name, "cat": cat, "role": role, "groups": groups})
-
-    if image_zip_indices:
-        has_named_role = any(image_zip_roles.get(i) in {"model_images", "product_images"} for i in image_zip_indices)
-        if (not has_named_role) and len(image_zip_indices) >= 2:
-            image_zip_roles[image_zip_indices[0]] = "model_images"
-            image_zip_roles[image_zip_indices[1]] = "product_images"
-
-    for meta in zip_meta:
-        i = int(meta.get("i") or 0)
-        zp = Path(str(meta.get("path") or "")).resolve()
-        if not zp.exists():
-            continue
-        cat = str(meta.get("cat") or "")
-        role = str(meta.get("role") or "")
-        if cat == "images":
-            role = str(image_zip_roles.get(i) or role or "images")
-        groups = meta.get("groups") if isinstance(meta.get("groups"), dict) else _scan_zip_media(zp)
-        for folder, g in groups.items():
-            slot = slots.setdefault(folder or "root", {"model_images": [], "product_images": [], "images": [], "videos": [], "audios": []})
-            pref = f"z{i}/"
-            if role == "model_images":
-                slot["model_images"] += [pref + p for p in (g.get("images") or [])]
-                slot["videos"] += [pref + p for p in (g.get("videos") or [])]
-                slot["audios"] += [pref + p for p in (g.get("audios") or [])]
-            elif role == "product_images":
-                slot["product_images"] += [pref + p for p in (g.get("images") or [])]
-                slot["videos"] += [pref + p for p in (g.get("videos") or [])]
-                slot["audios"] += [pref + p for p in (g.get("audios") or [])]
-            elif role == "images":
-                slot["images"] += [pref + p for p in (g.get("images") or [])]
-                slot["videos"] += [pref + p for p in (g.get("videos") or [])]
-                slot["audios"] += [pref + p for p in (g.get("audios") or [])]
-            elif role == "videos":
-                slot["videos"] += [pref + p for p in (g.get("videos") or [])]
-            elif role == "audios":
-                slot["audios"] += [pref + p for p in (g.get("audios") or [])]
-            else:
-                slot["images"] += [pref + p for p in (g.get("images") or [])]
-                slot["videos"] += [pref + p for p in (g.get("videos") or [])]
-                slot["audios"] += [pref + p for p in (g.get("audios") or [])]
-
-    items: list[dict[str, Any]] = []
-    strict_entries = _build_batch_media_entries_from_slots(slots)
-    if _should_try_strict_batch_matching(strict_entries):
-        strict_items = _build_strict_batch_items(strict_entries)
-        if strict_items:
-            items = _apply_batch_params_to_items(strict_items, batch_params=batch_params, use_cycle=use_cycle)
-            items = _repair_strict_item_support_media(items, strict_entries)
-            all_audio_paths = sorted({rel for slot in slots.values() for rel in (slot.get("audios") or [])})
-            all_video_paths = sorted({rel for slot in slots.values() for rel in (slot.get("videos") or [])})
-            used_audio_paths = {str(it.get("audio") or "") for it in items if str(it.get("audio") or "")}
-            used_video_paths = {str(it.get("camera_video") or "") for it in items if str(it.get("camera_video") or "")}
-            repaired_items: list[dict[str, Any]] = []
-            for item in items:
-                merged = dict(item)
-                match_mode = str(merged.get("match_mode") or "")
-                match_key = str(merged.get("match_key") or "")
-                if not str(merged.get("audio") or "").strip():
-                    audio_rel, audio_state = _pick_support_rel_by_match(all_audio_paths, match_mode=match_mode, match_key=match_key, used_paths=used_audio_paths)
-                    if audio_rel or audio_state != "missing":
-                        merged["audio"] = audio_rel
-                        merged["audio_match_state"] = audio_state
-                if not str(merged.get("camera_video") or "").strip():
-                    video_rel, _ = _pick_support_rel_by_match(all_video_paths, match_mode=match_mode, match_key=match_key, used_paths=used_video_paths)
-                    if video_rel:
-                        merged["camera_video"] = video_rel
-                repaired_items.append(merged)
-            items = repaired_items
-
-    model_folders = [k for k, v in slots.items() if isinstance(v, dict) and (v.get("model_images") or [])]
-    product_folders = [k for k, v in slots.items() if isinstance(v, dict) and (v.get("product_images") or [])]
-    if (not items) and len(model_folders) == 1 and len(product_folders) == 1 and model_folders[0] != product_folders[0]:
-        mslot = slots.get(model_folders[0]) or {}
-        pslot = slots.get(product_folders[0]) or {}
-        mimgs = sorted(set(mslot.get("model_images") or []))
-        pimgs = sorted(set(pslot.get("product_images") or []))
-        vids = sorted(set((mslot.get("videos") or []) + (pslot.get("videos") or [])))
-        auds = sorted(set((mslot.get("audios") or []) + (pslot.get("audios") or [])))
-        total = max(len(mimgs), len(pimgs))
-        if total > 0 and mimgs and pimgs:
-            for idx in range(1, total + 1):
-                model_img = mimgs[(idx - 1) % len(mimgs)]
-                product_img = pimgs[(idx - 1) % len(pimgs)]
-                camera_video = vids[(idx - 1) % len(vids)] if vids else ""
-                audio = auds[(idx - 1) % len(auds)] if auds else ""
-                items.append(
-                    {
-                        "id": f"item_{idx}",
-                        "model_image": str(model_img or ""),
-                        "product_image": str(product_img or model_img or ""),
-                        "camera_video": str(camera_video or ""),
-                        "audio": str(audio or ""),
-                        "match_key": str(idx),
-                        "match_mode": "legacy_zip_sequence",
-                        "audio_match_state": "matched" if audio else "missing",
-                        "source_folder": f"{model_folders[0]}|{product_folders[0]}",
-                        "params": _batch_params_for_index(batch_params, idx=idx, use_cycle=use_cycle),
-                    }
-                )
-
-    if not items:
-        for idx, (folder, slot) in enumerate(sorted(slots.items(), key=lambda kv: kv[0]), start=1):
-            imgs_model = sorted(set(slot.get("model_images") or []))
-            imgs_product = sorted(set(slot.get("product_images") or []))
-            imgs_generic = sorted(set(slot.get("images") or []))
-            vids = sorted(set(slot.get("videos") or []))
-            auds = sorted(set(slot.get("audios") or []))
-
-            model_img = _pick_first_by_keywords(imgs_model, BATCH_MODEL_KEYWORDS) if imgs_model else ""
-            product_img = _pick_first_by_keywords(imgs_product, BATCH_PRODUCT_KEYWORDS) if imgs_product else ""
-            if not model_img and imgs_generic:
-                model_img = _pick_first_by_keywords(imgs_generic, BATCH_MODEL_KEYWORDS) or imgs_generic[0]
-            if not product_img and imgs_generic:
-                cand = [p for p in imgs_generic if p != model_img] or imgs_generic
-                product_img = _pick_first_by_keywords(cand, BATCH_PRODUCT_KEYWORDS) or (cand[0] if cand else "")
-            if not model_img and (imgs_generic or imgs_product):
-                pool = imgs_generic or imgs_product
-                model_img = pool[0] if pool else ""
-            if not product_img and (imgs_generic or imgs_model):
-                pool = imgs_generic or imgs_model
-                product_img = pool[1] if len(pool) > 1 else (pool[0] if pool else "")
-
-            camera_video = _pick_first_by_keywords(vids, BATCH_VIDEO_KEYWORDS) if vids else ""
-            audio = _pick_first_by_keywords(auds, BATCH_AUDIO_KEYWORDS) if auds else ""
-            item_id = str(folder or f"item_{idx}")
-            items.append(
-                {
-                    "id": item_id,
-                    "model_image": str(model_img or ""),
-                    "product_image": str(product_img or model_img or ""),
-                    "camera_video": str(camera_video or ""),
-                    "audio": str(audio or ""),
-                    "match_key": str(folder or item_id),
-                    "match_mode": "legacy_zip_folder",
-                    "audio_match_state": "matched" if audio else "missing",
-                    "source_folder": str(folder or ""),
-                    "params": _batch_params_for_index(batch_params, idx=idx, use_cycle=use_cycle),
-                }
-            )
-
-    if items:
-        all_audio_paths = sorted({rel for slot in slots.values() for rel in (slot.get("audios") or [])})
-        all_video_paths = sorted({rel for slot in slots.values() for rel in (slot.get("videos") or [])})
-        used_audio_paths = {str(it.get("audio") or "") for it in items if str(it.get("audio") or "")}
-        used_video_paths = {str(it.get("camera_video") or "") for it in items if str(it.get("camera_video") or "")}
-        finalized_items: list[dict[str, Any]] = []
-        for item in items:
-            merged = dict(item)
-            match_mode = str(merged.get("match_mode") or "")
-            match_key = str(merged.get("match_key") or "")
-            if not str(merged.get("audio") or "").strip():
-                audio_rel, audio_state = _pick_support_rel_by_match(all_audio_paths, match_mode=match_mode, match_key=match_key, used_paths=used_audio_paths)
-                if audio_rel:
-                    merged["audio"] = audio_rel
-                    merged["audio_match_state"] = audio_state
-            if not str(merged.get("camera_video") or "").strip():
-                video_rel, _ = _pick_support_rel_by_match(all_video_paths, match_mode=match_mode, match_key=match_key, used_paths=used_video_paths)
-                if video_rel:
-                    merged["camera_video"] = video_rel
-            finalized_items.append(merged)
-        items = finalized_items
-
-    if not zip_paths:
-        raise RuntimeError("未找到可用 zip 文件")
-    if not items:
-        raise RuntimeError("zip 内未识别到可用素材（至少每组需要 1 张图片）")
-    return {"zip_paths": zip_paths, "defaults": defaults, "items": items}
-
-
-def _build_batch_payload_video_image_from_uploaded_zips(
-    *,
-    zips: list[dict[str, str]],
-    params: dict[str, Any],
-) -> dict[str, Any]:
-    video_kw = {"video", "camera", "motion", "运镜", "镜头", "视频"}
-    image_kw = {"image", "img", "picture", "photo", "图片", "图"}
-
-    batch_params = params.get("batch_params") if isinstance(params.get("batch_params"), list) else []
-    use_cycle = bool(params.get("cycle_params_on_shortage"))
-    defaults = _strip_batch_meta_params(params)
-
-    slots: dict[str, dict[str, list[str]]] = {}
-    zip_paths: list[str] = []
-    zip_meta: list[dict[str, Any]] = []
-
-    for i, z in enumerate(zips or []):
-        zp = Path(str(z.get("path") or "")).resolve()
-        if not zp.exists():
-            continue
-        zip_paths.append(str(zp))
-        name = str(z.get("name") or zp.name)
-        cat = _zip_category(zp)
-        groups = _scan_zip_media(zp)
-        role = cat
-        if cat == "videos":
-            role = "videos"
-        elif cat == "images":
-            role = "images"
-        elif cat == "mixed":
-            role = "bundle"
-        else:
-            role = cat
-        if role in {"images", "videos"}:
-            folder_keys = list((groups or {}).keys())
-            if role == "images" and _has_any(name, video_kw) and (not _has_any(name, image_kw)):
-                role = "videos"
-            if role == "videos" and _has_any(name, image_kw) and (not _has_any(name, video_kw)):
-                role = "images"
-            if role == "images" and any(_has_any(f, video_kw) for f in folder_keys) and (not any(_has_any(f, image_kw) for f in folder_keys)):
-                role = "videos"
-            if role == "videos" and any(_has_any(f, image_kw) for f in folder_keys) and (not any(_has_any(f, video_kw) for f in folder_keys)):
-                role = "images"
-
-        zip_meta.append({"i": i, "path": str(zp), "role": role, "groups": groups})
-
-    for meta in zip_meta:
-        i = int(meta.get("i") or 0)
-        role = str(meta.get("role") or "")
-        groups = meta.get("groups") if isinstance(meta.get("groups"), dict) else {}
-        pref = f"z{i}/"
-        for folder, g in groups.items():
-            slot = slots.setdefault(folder or "root", {"images": [], "videos": [], "audios": []})
-            if role == "images":
-                slot["images"] += [pref + p for p in (g.get("images") or [])]
-            elif role == "videos":
-                slot["videos"] += [pref + p for p in (g.get("videos") or [])]
-            else:
-                slot["images"] += [pref + p for p in (g.get("images") or [])]
-                slot["videos"] += [pref + p for p in (g.get("videos") or [])]
-                slot["audios"] += [pref + p for p in (g.get("audios") or [])]
-
-    items: list[dict[str, Any]] = []
-
-    folders_with_both = [k for k, v in slots.items() if (v.get("images") or []) and (v.get("videos") or [])]
-    if folders_with_both:
-        for idx, folder in enumerate(sorted(set(folders_with_both)), start=1):
-            slot = slots.get(folder) or {}
-            imgs = sorted(set(slot.get("images") or []))
-            vids = sorted(set(slot.get("videos") or []))
-            if not imgs or not vids:
-                continue
-            picked: dict[str, Any] = {}
-            if batch_params and len(batch_params) >= idx:
-                bp = batch_params[idx - 1]
-                picked = bp if isinstance(bp, dict) else {}
-            elif batch_params and use_cycle:
-                bp = batch_params[(idx - 1) % len(batch_params)]
-                picked = bp if isinstance(bp, dict) else {}
-            picked = _strip_batch_meta_params(picked) if isinstance(picked, dict) else {}
-            items.append({"id": str(folder or f"item_{idx}"), "video": str(vids[0]), "image": str(imgs[0]), "params": picked})
-
-    if not items:
-        video_only_folders = [k for k, v in slots.items() if (v.get("videos") or []) and not (v.get("images") or [])]
-        image_only_folders = [k for k, v in slots.items() if (v.get("images") or []) and not (v.get("videos") or [])]
-        if len(video_only_folders) == 1 and len(image_only_folders) == 1 and video_only_folders[0] != image_only_folders[0]:
-            vslot = slots.get(video_only_folders[0]) or {}
-            islot = slots.get(image_only_folders[0]) or {}
-            vids = sorted(set(vslot.get("videos") or []))
-            imgs = sorted(set(islot.get("images") or []))
-            total = max(len(vids), len(imgs))
-            if total > 0 and vids and imgs:
-                for idx in range(1, total + 1):
-                    vid = vids[(idx - 1) % len(vids)]
-                    img = imgs[(idx - 1) % len(imgs)]
-                    picked: dict[str, Any] = {}
-                    if batch_params and len(batch_params) >= idx:
-                        bp = batch_params[idx - 1]
-                        picked = bp if isinstance(bp, dict) else {}
-                    elif batch_params and use_cycle:
-                        bp = batch_params[(idx - 1) % len(batch_params)]
-                        picked = bp if isinstance(bp, dict) else {}
-                    picked = _strip_batch_meta_params(picked) if isinstance(picked, dict) else {}
-                    items.append({"id": f"item_{idx}", "video": str(vid), "image": str(img), "params": picked})
-
-    if not zip_paths:
-        raise RuntimeError("未找到可用 zip 文件")
-    if not items:
-        raise RuntimeError("zip 内未识别到可用素材（每条至少需要 1 个视频 + 1 张图片）")
-    return {"zip_paths": zip_paths, "defaults": defaults, "items": items}
-
-
-def _plan_batch_params_with_gemini(
-    *,
-    user_prompt: str,
-    items: list[dict[str, Any]],
-    defaults: dict[str, Any],
-    gemini_host: str,
-    gemini_key: str,
-    gemini_port: str | None,
-) -> dict[str, Any]:
-    schema_text = str(user_prompt or "").strip()
-    if not schema_text:
-        raise RuntimeError("参数要求不能为空")
-    plan_prompt = (
-        "你是批量视频参数生成器。请输出严格 JSON（不要代码块、不要多余文字）。\n"
-        "用户会提供“参数要求”，你必须按要求生成每条 item 的 params。\n"
-        "输出结构：\n"
-        "{\n"
-        '  "defaults": { ... },\n'
-        '  "items": [\n'
-        "    {\n"
-        '      "id": "item id",\n'
-        '      "model_image": "相对路径",\n'
-        '      "product_image": "相对路径",\n'
-        '      "camera_video": "相对路径或空",\n'
-        '      "params": { ... }\n'
-        "    }\n"
-        "  ]\n"
-        "}\n"
-        "约束：\n"
-        "- items 的条数必须与输入 items 一致\n"
-        "- model_image/product_image/camera_video 必须原样引用输入里给出的相对路径，不要编造\n"
-        "- params 字段由“参数要求”决定，字段名与结构按用户要求生成\n"
-        f"参数要求：\n{schema_text}\n"
-        f"默认参数（供参考，可在 defaults 中复用）：\n{json.dumps(defaults, ensure_ascii=False)}\n"
-        f"输入 items：\n{json.dumps(items, ensure_ascii=False)}\n"
-    )
-    plan = get_gemini.request_gemini3_pro_json(
-        user_input="生成批量参数",
-        host=gemini_host,
-        api_key=gemini_key,
-        system_prompt=plan_prompt,
-        port=gemini_port,
-        parameters="",
-    )
-    if not isinstance(plan, dict) or not plan.get("ok"):
-        raise RuntimeError(f"Gemini 规划失败: {plan}")
-    parsed = plan.get("parsed")
-    if not isinstance(parsed, dict):
-        raise RuntimeError("Gemini 未返回 JSON 对象")
-    return parsed
-
-
-def _run_batch_create_video(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    zip_paths_value = payload.get("zip_paths")
-    zip_paths: list[Path] = []
-    if isinstance(zip_paths_value, list):
-        for z in zip_paths_value:
-            t = str(z or "").strip()
-            if not t:
-                continue
-            p = Path(t).resolve()
-            if p.exists():
-                zip_paths.append(p)
-    if not zip_paths:
-        zip_path_text = str(payload.get("zip_path") or "").strip()
-        if not zip_path_text:
-            raise RuntimeError("缺少 zip_path")
-        zip_path = Path(zip_path_text).resolve()
-        if not zip_path.exists():
-            raise RuntimeError("zip 文件不存在")
-        zip_paths = [zip_path]
-    defaults = payload.get("defaults") if isinstance(payload.get("defaults"), dict) else {}
-    items = payload.get("items") if isinstance(payload.get("items"), list) else []
-    if not items:
-        raise RuntimeError("批量 items 不能为空")
-    _emit_stage(payload, stage="parsing", status="running", message="解析文件中")
-
-    with db() as conn:
-        runtime = _get_runtime_config(conn)
-    runtime_defaults: dict[str, Any] = {}
-    for key in (
-        "runninghub_api_key",
-        "upload_server_ip",
-        "upload_server_port",
-        "upload_file_api_key",
-        "image_model_provider_base_url",
-        "image_model_provider_api_key_gemini",
-        "image_model_provider_api_key_gpt",
-        "image_model_default_model",
-        "image_model_default_model_gemini",
-        "image_model_default_model_gpt",
-        "image_model_priority_order",
-        "llm_base_url",
-        "llm_api_key",
-        "llm_api_key_gemini",
-        "llm_api_key_gpt",
-        "llm_default_model",
-        "llm_default_model_gemini",
-        "llm_default_model_gpt",
-        "llm_model_priority_order",
-        "create_audio_app_id",
-        "video_app_id",
-        "instance_type",
-        "use_personal_queue",
-    ):
-        value = payload.get(key)
-        if not str(value or "").strip():
-            value = runtime.get(key)
-        if str(value or "").strip():
-            runtime_defaults[key] = value
-    oral_chain = _workflow_chain_from_payload(
-        payload,
-        "oral_digital_human_workflow_ids",
-        [runtime.get("create_audio_app_id"), runtime.get("create_video_app_id"), runtime.get("video_app_id")],
-    )
-    if oral_chain:
-        runtime_defaults["oral_digital_human_workflow_ids"] = oral_chain
-    digital_chain = _workflow_chain_from_payload(
-        payload,
-        "digital_human_workflow_ids",
-        runtime.get("digital_human_workflow_ids") or [],
-    )
-    if digital_chain:
-        runtime_defaults["digital_human_workflow_ids"] = digital_chain
-    if not str(runtime_defaults.get("video_app_id") or "").strip():
-        runtime_defaults["video_app_id"] = runtime.get("create_video_app_id") or runtime.get("video_app_id")
-    if not str(runtime_defaults.get("create_audio_app_id") or "").strip():
-        runtime_defaults["create_audio_app_id"] = runtime.get("create_audio_app_id")
-
-    workdir = _build_task_workdir(task_id)
-    src_dir = workdir / "src"
-    for i, zp in enumerate(zip_paths):
-        _extract_zip_to_dir(zp, src_dir / f"z{i}")
-    _emit_stage(payload, stage="parse_result", status="success", message="解析结果", data={"zip_count": len(zip_paths), "item_count": len(items)})
-
-    out_dir = workdir / "videos"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    results: list[dict[str, Any]] = []
-    agg_runninghub_usage: dict[str, Any] = {}
-    agg_nano_images = 0
-    agg_gemini_input_tokens = 0
-    agg_gemini_output_tokens = 0
-    charged_total_cents = 0
-    stopped_for_balance = False
-    stop_reason = ""
-    stop_from_index = 0
-    rh_task_ids: list[str] = []
-
-    user_id = _to_int(payload.get("_user_id"), 0)
-    is_admin_user = False
-    if user_id > 0:
-        with db() as conn:
-            row = conn.execute("SELECT is_admin FROM users WHERE id = ?", (int(user_id),)).fetchone()
-            is_admin_user = bool(int(row["is_admin"] or 0)) if row else False
-
-    for idx, it in enumerate(items, start=1):
-        if user_id > 0 and (not is_admin_user):
-            with db() as conn:
-                row = conn.execute("SELECT balance_cents FROM users WHERE id = ?", (int(user_id),)).fetchone()
-                bal = int(row["balance_cents"]) if row else 0
-            if bal <= 0:
-                stopped_for_balance = True
-                stop_reason = f"余额不足（当前 {bal} 分），已中断批量任务"
-                stop_from_index = int(idx)
-                break
-        if not isinstance(it, dict):
-            continue
-        sub_id = f"{task_id}_item_{idx}"
-        model_rel = str(it.get("model_image") or "").strip()
-        product_rel = str(it.get("product_image") or model_rel).strip()
-        camera_rel = str(it.get("camera_video") or "").strip()
-        audio_rel = str(it.get("audio") or it.get("audio_file") or "").strip()
-        if not model_rel:
-            results.append({"id": it.get("id") or f"item_{idx}", "ok": False, "error": "缺少 model_image"})
-            continue
-        try:
-            model_path = _resolve_batch_media_path(src_dir, model_rel, field_name="model_image", required=True)
-            product_path = _resolve_batch_media_path(src_dir, product_rel, field_name="product_image", required=True)
-            camera_path = _resolve_batch_media_path(src_dir, camera_rel, field_name="camera_video") if camera_rel else None
-            audio_path = _resolve_batch_media_path(src_dir, audio_rel, field_name="audio") if audio_rel else None
-        except RuntimeError as exc:
-            results.append({"id": it.get("id") or f"item_{idx}", "ok": False, "error": str(exc)})
-            continue
-        if model_path is None or product_path is None or not model_path.is_file() or not product_path.is_file():
-            results.append({"id": it.get("id") or f"item_{idx}", "ok": False, "error": "图片文件不存在"})
-            continue
-        if camera_rel and (camera_path is None or not camera_path.is_file()):
-            results.append({"id": it.get("id") or f"item_{idx}", "ok": False, "error": f"运镜视频文件不存在: {camera_rel}"})
-            continue
-        if audio_rel and (audio_path is None or not audio_path.is_file()):
-            results.append({"id": it.get("id") or f"item_{idx}", "ok": False, "error": f"音频文件不存在: {audio_rel}"})
-            continue
-
-        params = it.get("params") if isinstance(it.get("params"), dict) else {}
-        one_payload: dict[str, Any] = {}
-        one_payload.update(runtime_defaults)
-        one_payload.update(defaults)
-        one_payload.update(params)
-        one_payload["_username"] = str(payload.get("_username") or "").strip()
-        one_payload["model_image_local_path"] = str(model_path)
-        one_payload["product_image_local_path"] = str(product_path)
-        if camera_path is not None:
-            one_payload["camera_video_local_path"] = str(camera_path)
-        if audio_path is not None:
-            one_payload["audio_local_path"] = str(audio_path)
-
-        try:
-            _emit_stage(payload, stage="uploading", status="running", message="上传文件中", data={"item_index": idx, "item_id": it.get("id") or f"item_{idx}"})
-            _emit_stage(payload, stage="processing", status="running", message="正在生成视频", data={"item_index": idx, "item_id": it.get("id") or f"item_{idx}"})
-            output = _run_create_video_with_doubao(sub_id, one_payload)
-            ok = _to_bool(output.get("ok"), False)
-            one_rh_id = str(output.get("runninghub_task_id") or "").strip()
-            if one_rh_id:
-                rh_task_ids.append(one_rh_id)
-            video_path = str(output.get("video_path") or "").strip()
-            moved_path = ""
-            if ok and video_path and Path(video_path).exists():
-                safe_id = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(it.get("id") or "video")).strip("_") or "video"
-                target = out_dir / f"{idx:03d}_{safe_id}.mp4"
-                target.write_bytes(Path(video_path).read_bytes())
-                moved_path = str(target)
-            if isinstance(output.get("runninghub_usage"), dict):
-                agg_runninghub_usage = _sum_usage([agg_runninghub_usage, output.get("runninghub_usage")])
-            agg_nano_images += _to_int(output.get("nano_images"), 0)
-            agg_gemini_input_tokens += _to_int(output.get("gemini_input_tokens"), 0)
-            agg_gemini_output_tokens += _to_int(output.get("gemini_output_tokens"), 0)
-
-            item_cost_cents = 0
-            bal2 = 0
-            if user_id > 0 and (not is_admin_user) and ok:
-                with db() as conn:
-                    pricing = _get_pricing_config(conn)
-                    cost = compute_cost_cents(
-                        runninghub_usage=output.get("runninghub_usage") if isinstance(output.get("runninghub_usage"), dict) else {},
-                        rh_coins_per_10rmb=int(pricing.get("rh_coins_per_10rmb") or 2500),
-                        usd_to_rmb=float(pricing.get("usd_to_rmb") or 7.2),
-                        gemini_input_tokens=int(_to_int(output.get("gemini_input_tokens"), 0)),
-                        gemini_output_tokens=int(_to_int(output.get("gemini_output_tokens"), 0)),
-                        gemini_input_usd_per_1m=float(pricing.get("gemini_input_usd_per_1m") or 4.0),
-                        gemini_output_usd_per_1m=float(pricing.get("gemini_output_usd_per_1m") or 18.0),
-                        nano_images=int(_to_int(output.get("nano_images"), 0)),
-                        nano_usd_per_image=float(pricing.get("nano_usd_per_image") or 0.134),
-                    )
-                    item_cost_cents = max(_to_int(cost.get("total_cents"), 0), 0)
-                    if item_cost_cents > 0:
-                        conn.execute(
-                            "UPDATE users SET balance_cents = balance_cents - ?, updated_at = ? WHERE id = ?",
-                            (int(item_cost_cents), _now_ts(), int(user_id)),
-                        )
-                        charged_total_cents += int(item_cost_cents)
-                        _insert_ledger(
-                            conn,
-                            user_id=int(user_id),
-                            typ="charge",
-                            amount_cents=-int(item_cost_cents),
-                            ref_task_id=f"{task_id}_item_{idx}",
-                            meta={"task_type": "batch_create_video", "batch_task_id": task_id, "item_index": idx, "item_id": it.get("id") or f"item_{idx}", "cost": cost},
-                        )
-
-            results.append(
-                {
-                    "id": it.get("id") or f"item_{idx}",
-                    "ok": ok,
-                    "video_path": moved_path,
-                    "runninghub_task_id": one_rh_id,
-                    "error": "" if ok else str(output.get("message") or output.get("error") or ""),
-                    "cost_cents": int(item_cost_cents),
-                }
-            )
-            if ok:
-                urls = []
-                up = output.get("uploaded_urls")
-                if isinstance(up, dict):
-                    urls = [str(v) for v in up.values() if str(v).strip()]
-                _emit_stage(payload, stage="upload_result", status="success", message="上传成功", data={"item_index": idx, "urls": urls, "runninghub_task_id": one_rh_id})
-            else:
-                _emit_stage(payload, stage="upload_result", status="failed", message="上传失败", data={"item_index": idx, "error": str(output.get("message") or output.get("error") or "")})
-            if user_id > 0 and (not is_admin_user) and ok:
-                with db() as conn:
-                    row = conn.execute("SELECT balance_cents FROM users WHERE id = ?", (int(user_id),)).fetchone()
-                    bal2 = int(row["balance_cents"]) if row else 0
-                if bal2 <= 0:
-                    stopped_for_balance = True
-                    stop_reason = f"余额不足（当前 {bal2} 分），已中断批量任务"
-                    stop_from_index = int(idx) + 1
-                    break
-        except Exception as exc:
-            results.append({"id": it.get("id") or f"item_{idx}", "ok": False, "error": str(exc)})
-
-    if stopped_for_balance:
-        start = int(stop_from_index or 0)
-        if start <= 0:
-            start = len(items) + 1
-        for j in range(start, len(items) + 1):
-            it2 = items[j - 1] if j - 1 < len(items) else {}
-            iid = it2.get("id") if isinstance(it2, dict) else None
-            results.append({"id": iid or f"item_{j}", "ok": False, "error": stop_reason, "skipped": True})
-
-    manifest_path = workdir / "results.json"
-    manifest_path.write_text(_json_dumps({"items": results}), encoding="utf-8")
-
-    zip_out = workdir / "batch_videos.zip"
-    with zipfile.ZipFile(str(zip_out), "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.write(str(manifest_path), arcname="results.json")
-        for p in sorted(out_dir.glob("*.mp4")):
-            zf.write(str(p), arcname=f"videos/{p.name}")
-
-    ok_any = any(bool(r.get("ok")) for r in results)
-    message = stop_reason or ("批量视频任务完成" if ok_any else "批量视频任务失败")
-    if (not ok_any) and (not stop_reason):
-        for r in results:
-            err = str(r.get("error") or "").strip()
-            if err:
-                message = f"批量视频任务失败：{err}"
-                break
-    rh_task_ids = list(dict.fromkeys([x for x in rh_task_ids if str(x).strip()]))
-    return {
-        "ok": bool(ok_any),
-        "message": message,
-        "runninghub_task_id": rh_task_ids[0] if rh_task_ids else "",
-        "runninghub_task_ids": rh_task_ids,
-        "runninghub_usage": agg_runninghub_usage,
-        "nano_images": int(agg_nano_images),
-        "gemini_input_tokens": int(agg_gemini_input_tokens),
-        "gemini_output_tokens": int(agg_gemini_output_tokens),
-        "result_zip": str(zip_out),
-        "download_path": str(zip_out),
-        "items": results,
-        "skip_billing": True if (user_id > 0 and (not is_admin_user)) else False,
-        "billing": {"mode": "per_item", "cost_cents": int(charged_total_cents)},
-    }
-
-
-def _run_batch_replace_model(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    zip_paths_value = payload.get("zip_paths")
-    zip_paths: list[Path] = []
-    if isinstance(zip_paths_value, list):
-        for z in zip_paths_value:
-            t = str(z or "").strip()
-            if not t:
-                continue
-            p = Path(t).resolve()
-            if p.exists():
-                zip_paths.append(p)
-    if not zip_paths:
-        raise RuntimeError("缺少 zip_paths")
-    defaults = _normalize_replace_model_payload(payload.get("defaults") if isinstance(payload.get("defaults"), dict) else {})
-    items = payload.get("items") if isinstance(payload.get("items"), list) else []
-    if not items:
-        raise RuntimeError("批量 items 不能为空")
-    _emit_stage(payload, stage="parsing", status="running", message="解析文件中")
-
-    workdir = _build_task_workdir(task_id)
-    src_dir = workdir / "src"
-    for i, zp in enumerate(zip_paths):
-        _extract_zip_to_dir(zp, src_dir / f"z{i}")
-    _emit_stage(payload, stage="parse_result", status="success", message="解析结果", data={"zip_count": len(zip_paths), "item_count": len(items)})
-
-    out_dir = workdir / "videos"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    results: list[dict[str, Any]] = []
-    agg_runninghub_usage: dict[str, Any] = {}
-    charged_total_cents = 0
-    stopped_for_balance = False
-    stop_reason = ""
-    stop_from_index = 0
-    rh_task_ids: list[str] = []
-
-    user_id = _to_int(payload.get("_user_id"), 0)
-    is_admin_user = False
-    if user_id > 0:
-        with db() as conn:
-            row = conn.execute("SELECT is_admin FROM users WHERE id = ?", (int(user_id),)).fetchone()
-            is_admin_user = bool(int(row["is_admin"] or 0)) if row else False
-
-    def charge_one(*, idx: int, item: dict[str, Any], output: dict[str, Any]) -> int:
-        nonlocal charged_total_cents
-        if user_id <= 0 or is_admin_user:
-            return 0
-        if not _to_bool(output.get("ok"), False):
-            return 0
-        with db() as conn:
-            pricing = _get_pricing_config(conn)
-            cost = compute_cost_cents(
-                runninghub_usage=output.get("runninghub_usage") if isinstance(output.get("runninghub_usage"), dict) else {},
-                rh_coins_per_10rmb=int(pricing.get("rh_coins_per_10rmb") or 2500),
-                usd_to_rmb=float(pricing.get("usd_to_rmb") or 7.2),
-                gemini_input_tokens=0,
-                gemini_output_tokens=0,
-                gemini_input_usd_per_1m=float(pricing.get("gemini_input_usd_per_1m") or 4.0),
-                gemini_output_usd_per_1m=float(pricing.get("gemini_output_usd_per_1m") or 18.0),
-                nano_images=0,
-                nano_usd_per_image=float(pricing.get("nano_usd_per_image") or 0.134),
-            )
-            item_cost_cents = max(_to_int(cost.get("total_cents"), 0), 0)
-            if item_cost_cents > 0:
-                conn.execute(
-                    "UPDATE users SET balance_cents = balance_cents - ?, updated_at = ? WHERE id = ?",
-                    (int(item_cost_cents), _now_ts(), int(user_id)),
-                )
-                charged_total_cents += int(item_cost_cents)
-                _insert_ledger(
-                    conn,
-                    user_id=int(user_id),
-                    typ="charge",
-                    amount_cents=-int(item_cost_cents),
-                    ref_task_id=f"{task_id}_item_{idx}",
-                    meta={"task_type": "batch_replace_model", "batch_task_id": task_id, "item_index": idx, "item_id": item.get("id") or f"item_{idx}", "cost": cost},
-                )
-            return int(item_cost_cents)
-
-    for idx, it in enumerate(items, start=1):
-        if user_id > 0 and (not is_admin_user):
-            with db() as conn:
-                row = conn.execute("SELECT balance_cents FROM users WHERE id = ?", (int(user_id),)).fetchone()
-                bal = int(row["balance_cents"]) if row else 0
-            if bal <= 0:
-                stopped_for_balance = True
-                stop_reason = f"余额不足（当前 {bal} 分），已中断批量任务"
-                stop_from_index = int(idx)
-                break
-
-        if not isinstance(it, dict):
-            continue
-        sub_id = f"{task_id}_item_{idx}"
-        video_rel = str(it.get("video") or it.get("video_file") or "").strip()
-        image_rel = str(it.get("image") or it.get("image_file") or "").strip()
-        if not video_rel or not image_rel:
-            results.append({"id": it.get("id") or f"item_{idx}", "ok": False, "error": "缺少 video/image"})
-            continue
-        video_path = (src_dir / video_rel).resolve()
-        image_path = (src_dir / image_rel).resolve()
-        if not video_path.exists() or not image_path.exists():
-            results.append({"id": it.get("id") or f"item_{idx}", "ok": False, "error": "文件不存在"})
-            continue
-
-        params = it.get("params") if isinstance(it.get("params"), dict) else {}
-        one_payload: dict[str, Any] = {}
-        one_payload.update(defaults)
-        one_payload.update(params)
-        one_payload["video_local_path"] = str(video_path)
-        one_payload["image_local_path"] = str(image_path)
-
-        try:
-            _emit_stage(payload, stage="uploading", status="running", message="上传文件中", data={"item_index": idx, "item_id": it.get("id") or f"item_{idx}"})
-            _emit_stage(payload, stage="processing", status="running", message="正在执行视频模特替换", data={"item_index": idx, "item_id": it.get("id") or f"item_{idx}"})
-            output = _run_replace_model(sub_id, _apply_runtime_defaults("replace_model", one_payload))
-            ok = _to_bool(output.get("ok"), False)
-            one_rh_id = str(output.get("runninghub_task_id") or "").strip()
-            if one_rh_id:
-                rh_task_ids.append(one_rh_id)
-            moved_path = ""
-            out_file = str(output.get("download_path") or "").strip()
-            if ok and out_file and Path(out_file).exists():
-                safe_id = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(it.get("id") or "video")).strip("_") or "video"
-                target = out_dir / f"{idx:03d}_{safe_id}.mp4"
-                target.write_bytes(Path(out_file).read_bytes())
-                moved_path = str(target)
-            if isinstance(output.get("runninghub_usage"), dict):
-                agg_runninghub_usage = _sum_usage([agg_runninghub_usage, output.get("runninghub_usage")])
-            cost_cents = charge_one(idx=idx, item=it, output=output if isinstance(output, dict) else {})
-            item_result = {"id": it.get("id") or f"item_{idx}", "ok": ok, "video_path": moved_path, "runninghub_task_id": one_rh_id, "error": "" if ok else str(output.get("message") or output.get("error") or ""), "cost_cents": int(cost_cents)}
-            results.append(item_result)
-            _emit_batch_item_output_event(payload, item_index=idx, item_id=str(it.get("id") or f"item_{idx}"), result=item_result)
-            _emit_stage(
-                payload,
-                stage="upload_result",
-                status="success" if ok else "failed",
-                message="上传成功" if ok else "上传失败",
-                data={"item_index": idx, "runninghub_task_id": one_rh_id, "error": "" if ok else str(output.get("message") or output.get("error") or "")},
-            )
-            if user_id > 0 and (not is_admin_user) and ok:
-                with db() as conn:
-                    row = conn.execute("SELECT balance_cents FROM users WHERE id = ?", (int(user_id),)).fetchone()
-                    bal2 = int(row["balance_cents"]) if row else 0
-                if bal2 <= 0:
-                    stopped_for_balance = True
-                    stop_reason = f"余额不足（当前 {bal2} 分），已中断批量任务"
-                    stop_from_index = int(idx) + 1
-                    break
-        except Exception as exc:
-            item_result = {"id": it.get("id") or f"item_{idx}", "ok": False, "error": str(exc)}
-            results.append(item_result)
-            _emit_batch_item_output_event(payload, item_index=idx, item_id=str(it.get("id") or f"item_{idx}"), result=item_result)
-
-    if stopped_for_balance:
-        start = int(stop_from_index or 0)
-        if start <= 0:
-            start = len(items) + 1
-        for j in range(start, len(items) + 1):
-            it2 = items[j - 1] if j - 1 < len(items) else {}
-            iid = it2.get("id") if isinstance(it2, dict) else None
-            results.append({"id": iid or f"item_{j}", "ok": False, "error": stop_reason, "skipped": True})
-
-    manifest_path = workdir / "results.json"
-    manifest_path.write_text(_json_dumps({"items": results}), encoding="utf-8")
-
-    zip_out = workdir / "batch_videos.zip"
-    with zipfile.ZipFile(str(zip_out), "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.write(str(manifest_path), arcname="results.json")
-        for p in sorted(out_dir.glob("*.mp4")):
-            zf.write(str(p), arcname=f"videos/{p.name}")
-
-    ok_any = any(bool(r.get("ok")) for r in results)
-    message = stop_reason or ("批量任务完成" if ok_any else "批量任务失败")
-    if (not ok_any) and (not stop_reason):
-        for r in results:
-            err = str(r.get("error") or "").strip()
-            if err:
-                message = f"批量任务失败：{err}"
-                break
-    rh_task_ids = list(dict.fromkeys([x for x in rh_task_ids if str(x).strip()]))
-    return {"ok": bool(ok_any), "message": message, "runninghub_task_id": rh_task_ids[0] if rh_task_ids else "", "runninghub_task_ids": rh_task_ids, "runninghub_usage": agg_runninghub_usage, "result_zip": str(zip_out), "download_path": str(zip_out), "items": results, "skip_billing": True if (user_id > 0 and (not is_admin_user)) else False, "billing": {"mode": "per_item", "cost_cents": int(charged_total_cents)}}
-
-
-def _run_batch_replace_product(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    zip_paths_value = payload.get("zip_paths")
-    zip_paths: list[Path] = []
-    if isinstance(zip_paths_value, list):
-        for z in zip_paths_value:
-            t = str(z or "").strip()
-            if not t:
-                continue
-            p = Path(t).resolve()
-            if p.exists():
-                zip_paths.append(p)
-    if not zip_paths:
-        raise RuntimeError("缺少 zip_paths")
-    defaults = payload.get("defaults") if isinstance(payload.get("defaults"), dict) else {}
-    items = payload.get("items") if isinstance(payload.get("items"), list) else []
-    if not items:
-        raise RuntimeError("批量 items 不能为空")
-    _emit_stage(payload, stage="parsing", status="running", message="解析文件中")
-
-    workdir = _build_task_workdir(task_id)
-    src_dir = workdir / "src"
-    for i, zp in enumerate(zip_paths):
-        _extract_zip_to_dir(zp, src_dir / f"z{i}")
-    _emit_stage(payload, stage="parse_result", status="success", message="解析结果", data={"zip_count": len(zip_paths), "item_count": len(items)})
-
-    out_dir = workdir / "videos"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    results: list[dict[str, Any]] = []
-    agg_runninghub_usage: dict[str, Any] = {}
-    charged_total_cents = 0
-    stopped_for_balance = False
-    stop_reason = ""
-    stop_from_index = 0
-    rh_task_ids: list[str] = []
-
-    user_id = _to_int(payload.get("_user_id"), 0)
-    is_admin_user = False
-    if user_id > 0:
-        with db() as conn:
-            row = conn.execute("SELECT is_admin FROM users WHERE id = ?", (int(user_id),)).fetchone()
-            is_admin_user = bool(int(row["is_admin"] or 0)) if row else False
-
-    def charge_one(*, idx: int, item: dict[str, Any], output: dict[str, Any]) -> int:
-        nonlocal charged_total_cents
-        if user_id <= 0 or is_admin_user:
-            return 0
-        if not _to_bool(output.get("ok"), False):
-            return 0
-        with db() as conn:
-            pricing = _get_pricing_config(conn)
-            cost = compute_cost_cents(
-                runninghub_usage=output.get("runninghub_usage") if isinstance(output.get("runninghub_usage"), dict) else {},
-                rh_coins_per_10rmb=int(pricing.get("rh_coins_per_10rmb") or 2500),
-                usd_to_rmb=float(pricing.get("usd_to_rmb") or 7.2),
-                gemini_input_tokens=0,
-                gemini_output_tokens=0,
-                gemini_input_usd_per_1m=float(pricing.get("gemini_input_usd_per_1m") or 4.0),
-                gemini_output_usd_per_1m=float(pricing.get("gemini_output_usd_per_1m") or 18.0),
-                nano_images=0,
-                nano_usd_per_image=float(pricing.get("nano_usd_per_image") or 0.134),
-            )
-            item_cost_cents = max(_to_int(cost.get("total_cents"), 0), 0)
-            if item_cost_cents > 0:
-                conn.execute(
-                    "UPDATE users SET balance_cents = balance_cents - ?, updated_at = ? WHERE id = ?",
-                    (int(item_cost_cents), _now_ts(), int(user_id)),
-                )
-                charged_total_cents += int(item_cost_cents)
-                _insert_ledger(
-                    conn,
-                    user_id=int(user_id),
-                    typ="charge",
-                    amount_cents=-int(item_cost_cents),
-                    ref_task_id=f"{task_id}_item_{idx}",
-                    meta={"task_type": "batch_replace_product", "batch_task_id": task_id, "item_index": idx, "item_id": item.get("id") or f"item_{idx}", "cost": cost},
-                )
-            return int(item_cost_cents)
-
-    for idx, it in enumerate(items, start=1):
-        if user_id > 0 and (not is_admin_user):
-            with db() as conn:
-                row = conn.execute("SELECT balance_cents FROM users WHERE id = ?", (int(user_id),)).fetchone()
-                bal = int(row["balance_cents"]) if row else 0
-            if bal <= 0:
-                stopped_for_balance = True
-                stop_reason = f"余额不足（当前 {bal} 分），已中断批量任务"
-                stop_from_index = int(idx)
-                break
-
-        if not isinstance(it, dict):
-            continue
-        sub_id = f"{task_id}_item_{idx}"
-        video_rel = str(it.get("video") or it.get("video_file") or "").strip()
-        image_rel = str(it.get("image") or it.get("image_file") or "").strip()
-        if not video_rel or not image_rel:
-            results.append({"id": it.get("id") or f"item_{idx}", "ok": False, "error": "缺少 video/image"})
-            continue
-        video_path = (src_dir / video_rel).resolve()
-        image_path = (src_dir / image_rel).resolve()
-        if not video_path.exists() or not image_path.exists():
-            results.append({"id": it.get("id") or f"item_{idx}", "ok": False, "error": "文件不存在"})
-            continue
-
-        params = it.get("params") if isinstance(it.get("params"), dict) else {}
-        one_payload: dict[str, Any] = {}
-        one_payload.update(defaults)
-        one_payload.update(params)
-        one_payload["video_local_path"] = str(video_path)
-        one_payload["image_local_path"] = str(image_path)
-
-        try:
-            _emit_stage(payload, stage="uploading", status="running", message="上传文件中", data={"item_index": idx, "item_id": it.get("id") or f"item_{idx}"})
-            _emit_stage(payload, stage="processing", status="running", message="正在执行视频商品替换", data={"item_index": idx, "item_id": it.get("id") or f"item_{idx}"})
-            output = _run_replace_product(sub_id, _apply_runtime_defaults("replace_product", one_payload))
-            ok = _to_bool(output.get("ok"), False)
-            one_rh_id = str(output.get("runninghub_task_id") or "").strip()
-            if one_rh_id:
-                rh_task_ids.append(one_rh_id)
-            moved_path = ""
-            out_file = str(output.get("download_path") or "").strip()
-            if ok and out_file and Path(out_file).exists():
-                safe_id = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(it.get("id") or "video")).strip("_") or "video"
-                target = out_dir / f"{idx:03d}_{safe_id}.mp4"
-                target.write_bytes(Path(out_file).read_bytes())
-                moved_path = str(target)
-            if isinstance(output.get("runninghub_usage"), dict):
-                agg_runninghub_usage = _sum_usage([agg_runninghub_usage, output.get("runninghub_usage")])
-            cost_cents = charge_one(idx=idx, item=it, output=output if isinstance(output, dict) else {})
-            item_result = {"id": it.get("id") or f"item_{idx}", "ok": ok, "video_path": moved_path, "runninghub_task_id": one_rh_id, "error": "" if ok else str(output.get("message") or output.get("error") or ""), "cost_cents": int(cost_cents)}
-            results.append(item_result)
-            _emit_batch_item_output_event(payload, item_index=idx, item_id=str(it.get("id") or f"item_{idx}"), result=item_result)
-            _emit_stage(
-                payload,
-                stage="upload_result",
-                status="success" if ok else "failed",
-                message="上传成功" if ok else "上传失败",
-                data={"item_index": idx, "runninghub_task_id": one_rh_id, "error": "" if ok else str(output.get("message") or output.get("error") or "")},
-            )
-            if user_id > 0 and (not is_admin_user) and ok:
-                with db() as conn:
-                    row = conn.execute("SELECT balance_cents FROM users WHERE id = ?", (int(user_id),)).fetchone()
-                    bal2 = int(row["balance_cents"]) if row else 0
-                if bal2 <= 0:
-                    stopped_for_balance = True
-                    stop_reason = f"余额不足（当前 {bal2} 分），已中断批量任务"
-                    stop_from_index = int(idx) + 1
-                    break
-        except Exception as exc:
-            item_result = {"id": it.get("id") or f"item_{idx}", "ok": False, "error": str(exc)}
-            results.append(item_result)
-            _emit_batch_item_output_event(payload, item_index=idx, item_id=str(it.get("id") or f"item_{idx}"), result=item_result)
-
-    if stopped_for_balance:
-        start = int(stop_from_index or 0)
-        if start <= 0:
-            start = len(items) + 1
-        for j in range(start, len(items) + 1):
-            it2 = items[j - 1] if j - 1 < len(items) else {}
-            iid = it2.get("id") if isinstance(it2, dict) else None
-            results.append({"id": iid or f"item_{j}", "ok": False, "error": stop_reason, "skipped": True})
-
-    manifest_path = workdir / "results.json"
-    manifest_path.write_text(_json_dumps({"items": results}), encoding="utf-8")
-
-    zip_out = workdir / "batch_videos.zip"
-    with zipfile.ZipFile(str(zip_out), "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.write(str(manifest_path), arcname="results.json")
-        for p in sorted(out_dir.glob("*.mp4")):
-            zf.write(str(p), arcname=f"videos/{p.name}")
-
-    ok_any = any(bool(r.get("ok")) for r in results)
-    message = stop_reason or ("批量任务完成" if ok_any else "批量任务失败")
-    if (not ok_any) and (not stop_reason):
-        for r in results:
-            err = str(r.get("error") or "").strip()
-            if err:
-                message = f"批量任务失败：{err}"
-                break
-    rh_task_ids = list(dict.fromkeys([x for x in rh_task_ids if str(x).strip()]))
-    return {"ok": bool(ok_any), "message": message, "runninghub_task_id": rh_task_ids[0] if rh_task_ids else "", "runninghub_task_ids": rh_task_ids, "runninghub_usage": agg_runninghub_usage, "result_zip": str(zip_out), "download_path": str(zip_out), "items": results, "skip_billing": True if (user_id > 0 and (not is_admin_user)) else False, "billing": {"mode": "per_item", "cost_cents": int(charged_total_cents)}}
 
 
 def _run_text_to_image_disabled(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -11914,8 +9081,8 @@ def _compress_tg_image_body_anchor_in_prompt(prompt_text: str) -> str:
         "女子",
         "女郎",
         "美女",
-        "模特",
-        "女模特",
+        "人物",
+        "女性人物",
         "护士",
         "教师",
         "老师",
@@ -12028,7 +9195,7 @@ def _looks_like_chinese_image_prompt(prompt_text: str) -> bool:
 
 
 _TG_PERSON_IMAGE_PATTERN = re.compile(
-    r"人物|人像|真人|模特|成人|女性|女人|女子|女郎|男性|男人|男士|她的|他的|站立|坐姿|半身|全身|portrait|person|human|model",
+    r"人物|人像|真人|人物|成人|女性|女人|女子|女郎|男性|男人|男士|她的|他的|站立|坐姿|半身|全身|portrait|person|human|model",
     re.IGNORECASE,
 )
 _TG_CLOTHING_COLOR_PATTERN = re.compile(
@@ -13506,8 +10673,8 @@ def _tg_prompt_subject_role(prompt_text: str) -> str:
         return "女性护士"
     if re.search(r"空姐|乘务|空服", text):
         return "女性空乘"
-    if re.search(r"模特|女模特", text):
-        return "女性模特"
+    if re.search(r"人物|女性人物", text):
+        return "女性人物"
     if re.search(r"女郎", text):
         return "女郎"
     if re.search(r"女子", text):
@@ -13567,7 +10734,7 @@ def _tg_prompt_has_exposure_text(text: str) -> bool:
 
 
 def _tg_prompt_has_subject_role(text: str) -> bool:
-    return bool(re.search(r"成人女性|成熟女性|女性|女人|女子|女郎|美女|美人|女教师|女教師|教师|教師|老师|老師|人物|模特|女模特|主角|角色", str(text or "")))
+    return bool(re.search(r"成人女性|成熟女性|女性|女人|女子|女郎|美女|美人|女教师|女教師|教师|教師|老师|老師|人物|人物|女性人物|主角|角色", str(text or "")))
 
 
 def _tg_prompt_has_pose_or_scene(text: str) -> bool:
@@ -14226,7 +11393,7 @@ def _canonicalize_tg_image_nine_segment_prompt(
 
 
 _TG_IMAGE_PROMPT_TYPES = {"text_to_image", "image_generate", "single_image_edit", "get_nano_banana", "face_swap"}
-_TG_VIDEO_PROMPT_TYPES = {"replace_model", "replace_product", "replace_productANDmodel", "video_i2v"}
+_TG_VIDEO_PROMPT_TYPES = {"video_i2v"}
 
 
 def _tg_video_duration_seconds(payload: dict[str, Any] | None) -> int:
@@ -14458,7 +11625,7 @@ def _build_tg_prompt_system_prompt(task_type: str, task_label: str, *, non_r18_f
         )
     else:
         image_segment_rule = (
-            "CRITICAL FORMAT RULE - NATURAL ORDERED SEGMENTS: The prompt MUST be one continuous natural Chinese sentence, using Chinese commas (，) to connect the clauses. Use at least these 9 ordered content blocks, but do not output numbers, labels, semicolons, or list formatting: 1.[natural single-subject opening + concise body/persona figure constraint + female subject + full or half-body pose + scene; the first block should start naturally with wording such as 一位, 一名, 一个, 一個, 一名女性, 一位成熟女性, 女子, 女郎, 女模特, 主角, or similar subject wording. Do not force only 一位. The persona constraint here must be very short and only describe big body structure such as 身形纤细修长且腰胯比例轻盈. Do not mention shoulders, neck, waist-abdomen details, limb details, breasts, face, hairstyle, skin, small body details, or exposure in this first block] 2.穿着[clothing body and clothing states must be explicit. Write upper-garment state and lower-garment state separately when both exist, such as 穿着白色衬衫和黑色短裙，上衣前襟完全敞开，短裙向上掀起. If block 3 exposes breasts/nipples, shoulder straps slipping, transparent fabric, or a loose neckline alone is not enough; the upper garment state must say 前襟完全敞开 or 领口下拉至胸下] 3.[visible exposure block: upper-body exposure is mandatory and must be written first with the exact phrase 露出丰满坚挺的乳房和清晰可见的乳头; lower-body exposure is low-probability unless the user explicitly requests it. If lower-body exposure appears, upper-body exposure must also appear before it. Every exposed part must correspond to a written clothing state in block 2. If this block exposes breasts, nipples, areola, labia, or another specific body part, immediately follow that exposed part with the selected persona's matching exposed-part feature description. Do not use 边缘可见, 部分可见, 可见, 隐约可见, or any ambiguous wording] 4.她的[left hand action]而右手[right hand action] 5.她的身体[orientation and camera angle; use side, three-quarter, diagonal, back-turn, slight overhead, side-front, or side-back angles unless the user explicitly asks for front-facing] 6.她的头[dynamic head process + explicit 目光方向 + independent 眼神状态 + direct expression; prefer varied gaze directions such as 画面外, 手部, 窗边, 侧方, 镜头边缘. Never merge 目光 and 眼神 into one phrase, and never use vague expressions like 表情自然 or 表情明确自然] 7.[background / props / spatial relation] 8.[lighting / shadows / depth of field] 9.[technical quality / realism / texture]. You may add block 10 or 11 for anatomy stability, camera distance, or fabric logic, but keep the final text as one smooth comma-connected paragraph. Keep each block concise and non-repetitive."
+            "CRITICAL FORMAT RULE - NATURAL ORDERED SEGMENTS: The prompt MUST be one continuous natural Chinese sentence, using Chinese commas (，) to connect the clauses. Use at least these 9 ordered content blocks, but do not output numbers, labels, semicolons, or list formatting: 1.[natural single-subject opening + concise body/persona figure constraint + female subject + full or half-body pose + scene; the first block should start naturally with wording such as 一位, 一名, 一个, 一個, 一名女性, 一位成熟女性, 女子, 女郎, 女性人物, 主角, or similar subject wording. Do not force only 一位. The persona constraint here must be very short and only describe big body structure such as 身形纤细修长且腰胯比例轻盈. Do not mention shoulders, neck, waist-abdomen details, limb details, breasts, face, hairstyle, skin, small body details, or exposure in this first block] 2.穿着[clothing body and clothing states must be explicit. Write upper-garment state and lower-garment state separately when both exist, such as 穿着白色衬衫和黑色短裙，上衣前襟完全敞开，短裙向上掀起. If block 3 exposes breasts/nipples, shoulder straps slipping, transparent fabric, or a loose neckline alone is not enough; the upper garment state must say 前襟完全敞开 or 领口下拉至胸下] 3.[visible exposure block: upper-body exposure is mandatory and must be written first with the exact phrase 露出丰满坚挺的乳房和清晰可见的乳头; lower-body exposure is low-probability unless the user explicitly requests it. If lower-body exposure appears, upper-body exposure must also appear before it. Every exposed part must correspond to a written clothing state in block 2. If this block exposes breasts, nipples, areola, labia, or another specific body part, immediately follow that exposed part with the selected persona's matching exposed-part feature description. Do not use 边缘可见, 部分可见, 可见, 隐约可见, or any ambiguous wording] 4.她的[left hand action]而右手[right hand action] 5.她的身体[orientation and camera angle; use side, three-quarter, diagonal, back-turn, slight overhead, side-front, or side-back angles unless the user explicitly asks for front-facing] 6.她的头[dynamic head process + explicit 目光方向 + independent 眼神状态 + direct expression; prefer varied gaze directions such as 画面外, 手部, 窗边, 侧方, 镜头边缘. Never merge 目光 and 眼神 into one phrase, and never use vague expressions like 表情自然 or 表情明确自然] 7.[background / props / spatial relation] 8.[lighting / shadows / depth of field] 9.[technical quality / realism / texture]. You may add block 10 or 11 for anatomy stability, camera distance, or fabric logic, but keep the final text as one smooth comma-connected paragraph. Keep each block concise and non-repetitive."
         )
         exposure_rule = (
             "MANDATORY EXPOSURE LOGIC: Upper-body exposure is mandatory for the image prompt and must be supported by a physically matching upper-garment state in the clothing block. Shoulder straps slipping, transparent fabric, or a loose neckline alone does not support full breast/nipple exposure; use 前襟完全敞开 or 领口下拉至胸下 according to the garment type. Lower-body exposure is low-probability and should appear only when the user explicitly asks for a lower-body area/action or when the scene logic strongly requires it; when lower-body exposure is included, write the lower-garment state first and keep upper-body exposure before lower-body exposure. Do not invent a lower-body exposure when the prompt is clearly upper-body-only."
@@ -14532,7 +11699,7 @@ def _build_tg_prompt_system_prompt(task_type: str, task_label: str, *, non_r18_f
 
 
 _TG_IMAGE_SUBJECT_START_RE = re.compile(
-    r"^(?:一位|一名|一个|一個|成人女性|成熟女性|女性|女人|女子|女郎|美女|美人|女教师|教师|老师|人物|模特|女模特|主角|角色)"
+    r"^(?:一位|一名|一个|一個|成人女性|成熟女性|女性|女人|女子|女郎|美女|美人|女教师|教师|老师|人物|人物|女性人物|主角|角色)"
 )
 
 
@@ -14764,7 +11931,7 @@ def _enhance_tg_payload_with_llm_prompt(task_type: str, payload: dict[str, Any])
             pass
 
     typ = str(task_type or "").strip()
-    if typ not in {"text_to_image", "image_generate", "single_image_edit", "get_nano_banana", "face_swap", "replace_model", "replace_product", "replace_productANDmodel", "video_i2v"}:
+    if typ not in {"text_to_image", "image_generate", "single_image_edit", "get_nano_banana", "face_swap", "video_i2v"}:
         return enhanced
 
     user_request = _clean_tg_prompt_request(
@@ -14772,7 +11939,6 @@ def _enhance_tg_payload_with_llm_prompt(task_type: str, payload: dict[str, Any])
         or enhanced.get("message")
         or enhanced.get("prompt_text")
         or enhanced.get("prompt")
-        or enhanced.get("product_name")
         or ""
     )
     if not user_request:
@@ -14796,9 +11962,6 @@ def _enhance_tg_payload_with_llm_prompt(task_type: str, payload: dict[str, Any])
         "single_image_edit": "single image editing",
         "get_nano_banana": "image editing",
         "face_swap": "face swap",
-        "replace_model": "video model replacement",
-        "replace_product": "video product replacement",
-        "replace_productANDmodel": "video model and product replacement",
         "video_i2v": "image-to-video",
     }
     system_prompt, prompt_chain = _build_tg_prompt_system_prompt(typ, task_labels.get(typ, typ), non_r18_free=non_r18_free_image)
@@ -14884,8 +12047,8 @@ def _enhance_tg_payload_with_llm_prompt(task_type: str, payload: dict[str, Any])
         "image_local_path",
         "input_image_local_path",
         "reference_image_local_path",
-        "product_image_local_path",
-        "model_image_local_path",
+        "primary_image_local_path",
+        "secondary_image_local_path",
         "generated_scene_image_local_path",
     ):
         image_path = str(enhanced.get(image_key) or "").strip()
@@ -15185,7 +12348,7 @@ def _enhance_tg_payload_with_llm_prompt(task_type: str, payload: dict[str, Any])
     enhanced["prompt_text"] = final_prompt
     enhanced["prompt"] = final_prompt
     enhanced["message"] = final_prompt
-    if typ in {"replace_model", "replace_product", "replace_productANDmodel"}:
+    if False:
         enhanced["style_hint"] = final_prompt
     return enhanced
 
@@ -15205,18 +12368,6 @@ def _build_agent_task_payload(
     )
 
 
-def _run_replace_model(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    return _run_remote_comfy_mapped_task(task_id, payload, "replace_model")
-
-
-def _run_replace_product(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    return _run_remote_comfy_mapped_task(task_id, payload, "replace_product")
-
-
-def _run_create_audio(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    return _run_remote_comfy_mapped_task(task_id, payload, "create_audio")
-
-
 def _run_get_nano_banana(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     return _run_remote_comfy_mapped_task(task_id, payload, "get_nano_banana")
 
@@ -15231,21 +12382,12 @@ def _run_face_swap(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 TASK_RUNNERS = {
     "text_to_image": _run_text_to_image_disabled,
-    "replace_model": _run_replace_model,
-    "replace_product": _run_replace_product,
-    "create_audio": _run_create_audio,
     "single_image_edit": _run_single_image_edit,
     "get_nano_banana": _run_get_nano_banana,
     "face_swap": _run_face_swap,
     "video_i2v": _run_video_i2v,
     "image_generate": _run_image_generate,
     "get_gemini": _run_get_gemini,
-    "replace_productANDmodel": _run_replace_product_and_model,
-    "create_video": _run_create_video_with_doubao,
-    "commerce_video": _run_create_video_with_doubao,
-    "batch_create_video": _run_batch_create_video,
-    "batch_replace_model": _run_batch_replace_model,
-    "batch_replace_product": _run_batch_replace_product,
 }
 TG_AGENT_PRODUCTION_TASK_TYPES = set(TASK_RUNNERS.keys())
 
@@ -15813,14 +12955,14 @@ def _build_internal_tg_task_payload(task_id: str, task_type: str, params: dict[s
     payload = _apply_runtime_defaults(typ, payload)
 
     if typ == "image_generate":
-        product_image = _validated_local_file(payload.get("product_image_local_path") or payload.get("image_local_path"), label="商品图")
-        model_image = str(payload.get("model_image_local_path") or "").strip()
-        if model_image:
-            payload["mode"] = "model_product"
-            payload["model_image_local_path"] = _validated_local_file(model_image, label="模特图")
+        primary_image = _validated_local_file(payload.get("primary_image_local_path") or payload.get("image_local_path") or payload.get("primary_image_local_path"), label="参考图")
+        secondary_image = str(payload.get("secondary_image_local_path") or payload.get("secondary_image_local_path") or "").strip()
+        if secondary_image:
+            payload["mode"] = "dual_reference"
+            payload["secondary_image_local_path"] = _validated_local_file(secondary_image, label="参考图")
         else:
-            payload["mode"] = "product_only"
-        payload["product_image_local_path"] = product_image
+            payload["mode"] = "single_reference"
+        payload["primary_image_local_path"] = primary_image
         payload = _enhance_tg_payload_with_llm_prompt(typ, payload)
         return payload
 
@@ -15854,95 +12996,6 @@ def _build_internal_tg_task_payload(task_id: str, task_type: str, params: dict[s
         payload = _enhance_tg_payload_with_llm_prompt(typ, payload)
         return payload
 
-    if typ == "replace_model":
-        payload = _normalize_replace_model_payload(payload)
-        payload["video_local_path"] = _validated_local_file(payload.get("video_local_path"), label="原视频")
-        payload["image_local_path"] = _validated_local_file(payload.get("image_local_path"), label="模特图")
-        payload = _enhance_tg_payload_with_llm_prompt(typ, payload)
-        return payload
-
-    if typ == "replace_product":
-        payload["video_local_path"] = _validated_local_file(payload.get("video_local_path"), label="原视频")
-        payload["image_local_path"] = _validated_local_file(payload.get("image_local_path"), label="商品图")
-        payload = _enhance_tg_payload_with_llm_prompt(typ, payload)
-        return payload
-
-    if typ == "replace_productANDmodel":
-        model_zip = str(payload.get("model_zip_path") or "").strip()
-        product_zip = str(payload.get("product_zip_path") or "").strip()
-        video_zip = str(payload.get("video_zip_path") or "").strip()
-        if model_zip or product_zip or video_zip:
-            payload["model_zip_path"] = _validated_local_file(model_zip, label="模特 zip")
-            payload["product_zip_path"] = _validated_local_file(product_zip, label="商品 zip")
-            payload["video_zip_path"] = _validated_local_file(video_zip, label="原视频 zip")
-            payload.setdefault("match_mode", "cycle")
-            payload.setdefault("fixed_index", 1)
-            payload.setdefault("auto_rename", True)
-            payload = _enhance_tg_payload_with_llm_prompt(typ, payload)
-            return payload
-
-        mixed_image_paths = payload.get("mixed_image_paths") if isinstance(payload.get("mixed_image_paths"), list) else []
-        video_paths = payload.get("video_paths") if isinstance(payload.get("video_paths"), list) else []
-        if mixed_image_paths or video_paths:
-            payload["mixed_image_paths"] = [_validated_local_file(item, label="模特/商品图") for item in mixed_image_paths]
-            payload["video_paths"] = [_validated_local_file(item, label="原视频") for item in video_paths]
-            payload.setdefault("match_mode", "cycle")
-            payload.setdefault("fixed_index", 1)
-            payload.setdefault("auto_rename", True)
-            payload = _enhance_tg_payload_with_llm_prompt(typ, payload)
-            return payload
-
-        video_path = _validated_local_file(payload.get("video_local_path"), label="原视频")
-        model_image = _validated_local_file(payload.get("model_image_local_path"), label="模特图")
-        product_image = _validated_local_file(payload.get("product_image_local_path"), label="商品图")
-        workdir = _build_task_workdir(task_id, fallback_username="telegram")
-        model_dir = workdir / "tg_input" / "model"
-        product_dir = workdir / "tg_input" / "product"
-        video_dir = workdir / "tg_input" / "video"
-        _copy_inputs_to_dir([model_image], model_dir)
-        _copy_inputs_to_dir([product_image], product_dir)
-        _copy_inputs_to_dir([video_path], video_dir)
-        payload["model_dir_path"] = str(model_dir)
-        payload["product_dir_path"] = str(product_dir)
-        payload["video_dir_path"] = str(video_dir)
-        payload.pop("model_image_local_path", None)
-        payload.pop("product_image_local_path", None)
-        payload.pop("video_local_path", None)
-        payload.setdefault("match_mode", "cycle")
-        payload.setdefault("fixed_index", 1)
-        payload.setdefault("auto_rename", True)
-        payload = _enhance_tg_payload_with_llm_prompt(typ, payload)
-        return payload
-
-    if typ in {"create_video", "commerce_video"}:
-        model_image = payload.get("model_image_local_path") or payload.get("image_local_path")
-        product_image = payload.get("product_image_local_path") or payload.get("scene_image_local_path") or model_image
-        payload["model_image_local_path"] = _validated_local_file(model_image, label="模特图")
-        payload["product_image_local_path"] = _validated_local_file(product_image, label="商品图")
-
-        camera_video = str(payload.get("camera_video_local_path") or "").strip()
-        if camera_video:
-            payload["camera_video_local_path"] = _validated_local_file(camera_video, label="运镜视频")
-
-        audio_local = str(payload.get("audio_local_path") or "").strip()
-        if audio_local:
-            payload["audio_local_path"] = _validated_local_file(audio_local, label="音频")
-
-        scene_image = str(payload.get("generated_scene_image_local_path") or "").strip()
-        if scene_image:
-            payload["generated_scene_image_local_path"] = _validated_local_file(scene_image, label="场景图")
-
-        payload["duration_seconds"] = max(_to_int(payload.get("duration_seconds"), 15), 1)
-        payload = _enhance_tg_payload_with_llm_prompt(typ, payload)
-        return payload
-
-    if typ == "create_audio":
-        speech_text = str(payload.get("speech_text") or payload.get("word") or "").strip()
-        if not speech_text:
-            raise HTTPException(status_code=400, detail="create_audio 需要 speech_text")
-        payload["speech_text"] = speech_text
-        return payload
-
     if typ == "single_image_edit":
         input_image = payload.get("input_image_local_path") or payload.get("image_local_path")
         payload["input_image_local_path"] = _validated_local_file(input_image, label="原圖")
@@ -15952,7 +13005,7 @@ def _build_internal_tg_task_payload(task_id: str, task_type: str, params: dict[s
 
     if typ == "get_nano_banana":
         input_image = payload.get("input_image_local_path") or payload.get("image_local_path")
-        reference_image = payload.get("reference_image_local_path") or payload.get("second_image_local_path") or payload.get("image2_local_path") or payload.get("model_image_local_path")
+        reference_image = payload.get("reference_image_local_path") or payload.get("second_image_local_path") or payload.get("image2_local_path") or payload.get("secondary_image_local_path")
         payload["input_image_local_path"] = _validated_local_file(input_image, label="原圖")
         payload["reference_image_local_path"] = _validated_local_file(reference_image, label="參考圖")
         payload = _enhance_tg_payload_with_llm_prompt(typ, payload)
@@ -15992,12 +13045,7 @@ _TG_CHINESE_IMAGE_PROMPT_TASK_TYPES = {
     "single_image_edit",
     "get_nano_banana",
     "face_swap",
-    "replace_model",
-    "replace_product",
-    "replace_productANDmodel",
     "video_i2v",
-    "create_video",
-    "commerce_video",
 }
 
 PERSON_T2I_DEFAULT_BATCH_SIZE = 4
@@ -16033,7 +13081,7 @@ def _primary_tg_generation_prompt(payload: dict[str, Any]) -> str:
         value = str(source.get(key) or "").strip()
         if value:
             return value
-    for nested_key in ("model_params", "product_params"):
+    for nested_key in ("primary_params", "secondary_params"):
         nested = source.get(nested_key) if isinstance(source.get(nested_key), dict) else {}
         for key in ("prompt_text", "prompt", "message", "style_hint"):
             value = str(nested.get(key) or "").strip()
@@ -16060,7 +13108,7 @@ def _set_tg_generation_prompt(payload: dict[str, Any], prompt_text: str) -> dict
             payload[key] = final_prompt
     if "style_hint" in payload:
         payload["style_hint"] = final_prompt
-    for nested_key in ("model_params", "product_params"):
+    for nested_key in ("primary_params", "secondary_params"):
         nested = payload.get(nested_key) if isinstance(payload.get(nested_key), dict) else None
         if nested is None:
             continue
@@ -16154,11 +13202,11 @@ def _ensure_internal_tg_payload_chinese_image_prompt(task_type: str, payload: di
 def _tg_prompt_preview(payload: dict[str, Any]) -> str:
     source = payload if isinstance(payload, dict) else {}
     candidates: list[str] = []
-    for key in ("prompt_text", "prompt", "style_hint", "speech_text"):
+    for key in ("prompt_text", "prompt", "style_hint"):
         value = str(source.get(key) or "").strip()
         if value:
             candidates.append(value)
-    for nested_key in ("model_params", "product_params"):
+    for nested_key in ("primary_params", "secondary_params"):
         nested = source.get(nested_key) if isinstance(source.get(nested_key), dict) else {}
         for key in ("prompt", "prompt_text"):
             value = str(nested.get(key) or "").strip()
@@ -16264,19 +13312,7 @@ class RuntimeConfigPayload(BaseModel):
     mulerouter_wan_i2v_duration: int = 2
     mulerouter_wan_i2v_prompt_extend: bool = False
     mulerouter_wan_i2v_negative_prompt: str = "low quality, blurry, distorted, watermark, text, logo"
-    oral_digital_human_workflow_ids: list[Any] = Field(default_factory=list)
-    digital_human_workflow_ids: list[Any] = Field(default_factory=list)
     image_generate_workflow_ids: list[Any] = Field(default_factory=list)
-    replace_model_original_workflow_ids: list[Any] = Field(default_factory=list)
-    replace_product_workflow_ids: list[Any] = Field(default_factory=list)
-    replace_union_model_workflow_ids: list[Any] = Field(default_factory=list)
-    replace_union_product_workflow_ids: list[Any] = Field(default_factory=list)
-    create_video_app_id: str = ""
-    create_audio_app_id: str = ""
-    video_app_id: str = ""
-    replace_model_app_id: str = ""
-    replace_model_original_app_id: str = ""
-    replace_product_app_id: str = ""
     cleanup_enabled: bool = True
     cleanup_time: str = "03:30"
     cleanup_retention_days: int = 7
@@ -18929,43 +15965,6 @@ def create_app() -> FastAPI:
         _enqueue_task(new_id, int(task.get("user_id") or 0), task_type, payload)
         return {"id": new_id, "task_type": task_type, "source_task_id": tid}
 
-    @app.post("/api/tasks/{task_id}/retry_resume")
-    def api_task_retry_resume(task_id: str, user: dict[str, Any] = Depends(get_current_user)):
-        _require_positive_balance(user)
-        tid = str(task_id or "").strip()
-        if not tid:
-            raise HTTPException(status_code=400, detail="task_id 不能为空")
-        with db() as conn:
-            row = conn.execute("SELECT * FROM tasks WHERE id = ?", (tid,)).fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="任务不存在")
-        task = dict(row)
-        _ensure_user_can_access_task(user, task)
-        if str(task.get("status") or "").strip().lower() != "failed":
-            raise HTTPException(status_code=409, detail="仅支持断点重试失败任务")
-        task_type = str(task.get("type") or "").strip()
-        if task_type != "commerce_video":
-            raise HTTPException(status_code=409, detail="当前仅商业视频生成支持断点重试")
-        source_workdir = _build_task_workdir(tid)
-        has_checkpoint = (source_workdir / "commerce_out").exists() or (source_workdir / "commerce_input").exists()
-        if not has_checkpoint:
-            raise HTTPException(status_code=409, detail="未找到可续跑的任务产物，请使用普通重试")
-
-        payload = _json_loads(task.get("input_json"), {})
-        if not isinstance(payload, dict):
-            raise HTTPException(status_code=400, detail="任务输入参数损坏，无法断点重试")
-        payload["resume_from_task_id"] = tid
-        payload["retry_mode"] = "resume"
-
-        new_id = _new_id("task")
-        _enqueue_task(new_id, int(task.get("user_id") or 0), task_type, payload)
-        return {
-            "id": new_id,
-            "task_type": task_type,
-            "source_task_id": tid,
-            "retry_mode": "resume",
-        }
-
     @app.get("/api/ledger")
     def api_ledger(limit: int = 50, user: dict[str, Any] = Depends(get_current_user)):
         lim = min(max(int(limit or 50), 1), 200)
@@ -19040,237 +16039,6 @@ def create_app() -> FastAPI:
             "task_type": task_type,
             "summary": summary,
         }
-
-    @app.post("/api/batch/create_video/plan")
-    async def api_batch_create_video_plan(
-        zip_file: UploadFile = File(...),
-        defaults_json: str = Form("{}"),
-        param_prompt: str = Form(""),
-        enable_ai: str = Form("1"),
-        user: dict[str, Any] = Depends(get_current_user),
-    ):
-        _require_positive_balance(user)
-        plan_id = _new_id("plan")
-        zip_path = await _save_upload_file(str(user.get("username") or ""), plan_id, "batch_zip", zip_file)
-        if not zip_path:
-            raise HTTPException(status_code=400, detail="zip_file 不能为空")
-        defaults = _extract_json_from_text(defaults_json)
-        defaults = defaults if isinstance(defaults, dict) else {}
-
-        safe = re.sub(r"[^a-zA-Z0-9._-]+", "_", str(user.get("username") or "")).strip("._-") or "user"
-        workdir = UPLOAD_ROOT / safe / plan_id
-        src_dir = workdir / "plan_src"
-        _extract_zip_to_dir(Path(zip_path), src_dir)
-        try:
-            items = _scan_batch_items(src_dir)
-        except RuntimeError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if not items:
-            raise HTTPException(status_code=400, detail="zip 内未找到可用的图片素材（至少每组需要 1 张图片）")
-
-        enable = _to_bool(enable_ai, True)
-        plan: dict[str, Any] = {
-            "defaults": defaults,
-            "items": [
-                {
-                    "id": it["id"],
-                    "model_image": it["model_image"],
-                    "product_image": it["product_image"],
-                    "camera_video": it.get("camera_video") or "",
-                    "audio": it.get("audio") or it.get("audio_file") or "",
-                    "match_key": it.get("match_key") or "",
-                    "match_mode": it.get("match_mode") or "",
-                    "audio_match_state": it.get("audio_match_state") or "",
-                    "source_folder": it.get("source_folder") or "",
-                    "params": {},
-                }
-                for it in items
-            ],
-        }
-        if enable:
-            with db() as conn:
-                runtime = _get_runtime_config(conn)
-        gemini_host, gemini_key, _ = _resolve_llm_settings(runtime)
-        gemini_port = None
-        if not gemini_key or not gemini_host:
-            raise HTTPException(status_code=400, detail="启用 AI 分析需先在后台配置文字模型 API")
-            parsed_plan = _plan_batch_params_with_gemini(
-                user_prompt=str(param_prompt or ""),
-                items=items,
-                defaults=defaults,
-                gemini_host=gemini_host,
-                gemini_key=gemini_key,
-                gemini_port=gemini_port,
-            )
-            if isinstance(parsed_plan, dict) and isinstance(parsed_plan.get("items"), list):
-                plan = parsed_plan
-
-        return {
-            "ok": True,
-            "plan_id": plan_id,
-            "items": items,
-            "plan": plan,
-        }
-
-    @app.post("/api/batch/create_video/run")
-    def api_batch_create_video_run(
-        request: dict[str, Any],
-        user: dict[str, Any] = Depends(get_current_user),
-    ):
-        _require_positive_balance(user)
-        plan_id = str((request or {}).get("plan_id") or "").strip()
-        plan = (request or {}).get("plan")
-        if not plan_id:
-            raise HTTPException(status_code=400, detail="plan_id 不能为空")
-        if not re.fullmatch(r"plan_[0-9a-f]{20}", plan_id):
-            raise HTTPException(status_code=400, detail="plan_id 非法")
-        if not isinstance(plan, dict):
-            raise HTTPException(status_code=400, detail="plan 必须是 JSON 对象")
-
-        safe = re.sub(r"[^a-zA-Z0-9._-]+", "_", str(user.get("username") or "")).strip("._-") or "user"
-        plan_dir = (UPLOAD_ROOT / safe / plan_id).resolve()
-        alt = list(plan_dir.glob("batch_zip.*"))
-        zip_path = alt[0].resolve() if alt else Path("")
-        if not zip_path.exists():
-            raise HTTPException(status_code=404, detail="找不到计划对应的 zip 文件，请重新生成计划")
-        if plan_dir not in zip_path.parents:
-            raise HTTPException(status_code=400, detail="zip_path 非法")
-
-        defaults = plan.get("defaults") if isinstance(plan.get("defaults"), dict) else {}
-        items = plan.get("items") if isinstance(plan.get("items"), list) else []
-        if not items:
-            raise HTTPException(status_code=400, detail="plan.items 不能为空")
-        normalized_items: list[dict[str, Any]] = []
-        for it in items:
-            if not isinstance(it, dict):
-                continue
-            try:
-                model_rel = _normalize_batch_media_rel_path(it.get("model_image"), field_name="model_image")
-                product_rel = _normalize_batch_media_rel_path(
-                    it.get("product_image") or model_rel,
-                    field_name="product_image",
-                )
-                camera_rel = _normalize_batch_media_rel_path(it.get("camera_video"), field_name="camera_video")
-                audio_rel = _normalize_batch_media_rel_path(
-                    it.get("audio") or it.get("audio_file"),
-                    field_name="audio",
-                )
-            except RuntimeError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            normalized_items.append(
-                {
-                    "id": str(it.get("id") or ""),
-                    "model_image": model_rel,
-                    "product_image": product_rel,
-                    "camera_video": camera_rel,
-                    "audio": audio_rel,
-                    "params": it.get("params") if isinstance(it.get("params"), dict) else {},
-                }
-            )
-        if not normalized_items:
-            raise HTTPException(status_code=400, detail="plan.items 无有效条目")
-
-        task_id = _new_id("task")
-        payload = {
-            "zip_path": str(zip_path),
-            "defaults": defaults,
-            "items": normalized_items,
-        }
-        _enqueue_task(task_id, int(user["id"]), "batch_create_video", payload)
-        return {"ok": True, "id": task_id}
-
-    @app.post("/api/tasks/replace_model")
-    async def api_task_replace_model(
-        mode: str = Form(replace_model.MODE_ORIGINAL),
-        prompt: str = Form(""),
-        width: int = Form(576),
-        height: int = Form(1024),
-        frame: int = Form(30),
-        duration_seconds: int = Form(10),
-        start_seconds: int = Form(0),
-        app_id: str = Form(""),
-        video_url: str = Form(""),
-        image_url: str = Form(""),
-        gemini_input_tokens: int = Form(0),
-        gemini_output_tokens: int = Form(0),
-        nano_images: int = Form(0),
-        video_file: UploadFile | None = File(None),
-        image_file: UploadFile | None = File(None),
-        user: dict[str, Any] = Depends(get_current_user),
-    ):
-        _require_positive_balance(user)
-        task_id = _new_id("task")
-        payload = _normalize_replace_model_payload(
-            {
-                "mode": mode,
-                "prompt": prompt,
-                "width": width,
-                "height": height,
-                "frame": frame,
-                "duration_seconds": duration_seconds,
-                "start_seconds": start_seconds,
-                "app_id": app_id,
-                "video_url": video_url,
-                "image_url": image_url,
-                "gemini_input_tokens": gemini_input_tokens,
-                "gemini_output_tokens": gemini_output_tokens,
-                "nano_images": nano_images,
-            }
-        )
-        payload["video_local_path"] = await _save_upload_file(str(user.get("username") or ""), task_id, "video", video_file)
-        payload["image_local_path"] = await _save_upload_file(str(user.get("username") or ""), task_id, "image", image_file)
-        _enqueue_task(task_id, int(user["id"]), "replace_model", payload)
-        return {"id": task_id}
-
-    @app.post("/api/tasks/replace_product")
-    async def api_task_replace_product(
-        product_name: str = Form(""),
-        prompt_text: str = Form(""),
-        width: int = Form(576),
-        height: int = Form(1024),
-        frame_rate: int = Form(30),
-        duration_seconds: int = Form(15),
-        app_id: str = Form(""),
-        video_url: str = Form(""),
-        image_url: str = Form(""),
-        gemini_input_tokens: int = Form(0),
-        gemini_output_tokens: int = Form(0),
-        nano_images: int = Form(0),
-        video_file: UploadFile | None = File(None),
-        image_file: UploadFile | None = File(None),
-        user: dict[str, Any] = Depends(get_current_user),
-    ):
-        _require_positive_balance(user)
-        task_id = _new_id("task")
-        payload = {
-            "product_name": product_name,
-            "prompt_text": prompt_text,
-            "width": width,
-            "height": height,
-            "frame_rate": frame_rate,
-            "duration_seconds": duration_seconds,
-            "app_id": app_id,
-            "video_url": video_url,
-            "image_url": image_url,
-            "gemini_input_tokens": gemini_input_tokens,
-            "gemini_output_tokens": gemini_output_tokens,
-            "nano_images": nano_images,
-        }
-        payload["video_local_path"] = await _save_upload_file(str(user.get("username") or ""), task_id, "video", video_file)
-        payload["image_local_path"] = await _save_upload_file(str(user.get("username") or ""), task_id, "image", image_file)
-        _enqueue_task(task_id, int(user["id"]), "replace_product", payload)
-        return {"id": task_id}
-
-    @app.post("/api/tasks/create_audio")
-    def api_task_create_audio(
-        request: dict[str, Any],
-        user: dict[str, Any] = Depends(get_current_user),
-    ):
-        _require_positive_balance(user)
-        task_id = _new_id("task")
-        payload = dict(request or {})
-        _enqueue_task(task_id, int(user["id"]), "create_audio", payload)
-        return {"id": task_id}
 
     @app.post("/api/tasks/get_nano_banana")
     async def api_task_get_nano_banana(
@@ -19349,67 +16117,6 @@ def create_app() -> FastAPI:
         _enqueue_task(task_id, int(user["id"]), "get_gemini", payload)
         return {"id": task_id}
 
-    @app.post("/api/tasks/create_video")
-    async def api_task_create_video(
-        image_model_provider_base_url: str = Form(""),
-        image_model_provider_api_key_gemini: str = Form(""),
-        image_model_provider_api_key_gpt: str = Form(""),
-        image_generate_model: str = Form(""),
-        speech_text: str = Form(""),
-        prompt_text: str = Form(""),
-        product_name: str = Form("商品"),
-        style_hint: str = Form("自然口播，真实电商场景"),
-        nano_prompt: str = Form("电商口播视频场景截图风格：真实人物在室内/直播间展示商品，手持商品或放在手掌上讲解；写实摄影、柔和补光、干净背景；9:16；画面不要文字/水印/海报排版。"),
-        duration_seconds: int = Form(15),
-        language: str = Form("Chinese"),
-        emotion: str = Form("happy"),
-        model_choice: str = Form("1.7B"),
-        speaker: str = Form("Ryan"),
-        video_app_id: str = Form(""),
-        instance_type: str = Form("default"),
-        use_personal_queue: str = Form("0"),
-        camera_video_url: str = Form(""),
-        use_ai_copy: str = Form("1"),
-        gemini_input_tokens: int = Form(0),
-        gemini_output_tokens: int = Form(0),
-        model_image: UploadFile | None = File(None),
-        product_image: UploadFile | None = File(None),
-        camera_video_file: UploadFile | None = File(None),
-        user: dict[str, Any] = Depends(get_current_user),
-    ):
-        _require_positive_balance(user)
-        if model_image is None or product_image is None:
-            raise HTTPException(status_code=400, detail="带货视频生成需要上传模特图和商品图")
-        task_id = _new_id("task")
-        payload = {
-            "image_model_provider_base_url": image_model_provider_base_url,
-            "image_model_provider_api_key_gemini": image_model_provider_api_key_gemini,
-            "image_model_provider_api_key_gpt": image_model_provider_api_key_gpt,
-            "image_generate_model": image_generate_model,
-            "speech_text": speech_text,
-            "prompt_text": prompt_text,
-            "product_name": product_name,
-            "style_hint": style_hint,
-            "nano_prompt": nano_prompt,
-            "duration_seconds": duration_seconds,
-            "language": language,
-            "emotion": emotion,
-            "model_choice": model_choice,
-            "speaker": speaker,
-            "video_app_id": video_app_id,
-            "instance_type": instance_type,
-            "use_personal_queue": _to_bool(use_personal_queue),
-            "camera_video_url": camera_video_url,
-            "use_ai_copy": _to_bool(use_ai_copy, True),
-            "gemini_input_tokens": gemini_input_tokens,
-            "gemini_output_tokens": gemini_output_tokens,
-        }
-        payload["model_image_local_path"] = await _save_upload_file(str(user.get("username") or ""), task_id, "model_image", model_image)
-        payload["product_image_local_path"] = await _save_upload_file(str(user.get("username") or ""), task_id, "product_image", product_image)
-        payload["camera_video_local_path"] = await _save_upload_file(str(user.get("username") or ""), task_id, "camera_video", camera_video_file)
-        _enqueue_task(task_id, int(user["id"]), "create_video", payload)
-        return {"id": task_id}
-
     @app.post("/api/tasks/submit")
     async def api_task_submit(
         request: Request,
@@ -19440,78 +16147,19 @@ def create_app() -> FastAPI:
 
         try:
             payload: dict[str, Any] = dict(params)
-            if typ == "replace_model":
-                payload = _normalize_replace_model_payload(payload)
-                if _to_bool(payload.get("batch_mode"), False) and zips:
-                    if images or videos or audios:
-                        raise HTTPException(status_code=400, detail="批量 zip 模式请仅上传 zip（不要混传图片/视频/音频）")
-                    batch_payload = _build_batch_payload_video_image_from_uploaded_zips(zips=zips, params=payload)
-                    batch_payload["mode"] = _normalize_replace_model_mode(batch_payload.get("defaults") if isinstance(batch_payload.get("defaults"), dict) else payload)
-                    batch_payload["uploaded_files"] = [{"name": s["name"], "kind": s["kind"]} for s in saved]
-                    batch_payload["source_task_type"] = str(typ)
-                    _enqueue_task(task_id, int(user["id"]), "batch_replace_model", batch_payload)
-                    return {"id": task_id, "task_type": "batch_replace_model"}
-                if not videos or not images:
-                    raise HTTPException(status_code=400, detail=f"replace_model 需要上传 1 个视频和 1 张图片（已识别：{_format_uploaded_files(saved)}）")
-                payload["video_local_path"] = str(videos[0]["path"])
-                payload["image_local_path"] = str(images[0]["path"])
-            elif typ == "replace_product":
-                if _to_bool(payload.get("batch_mode"), False) and zips:
-                    if images or videos or audios:
-                        raise HTTPException(status_code=400, detail="批量 zip 模式请仅上传 zip（不要混传图片/视频/音频）")
-                    batch_payload = _build_batch_payload_video_image_from_uploaded_zips(zips=zips, params=payload)
-                    batch_payload["uploaded_files"] = [{"name": s["name"], "kind": s["kind"]} for s in saved]
-                    batch_payload["source_task_type"] = str(typ)
-                    _enqueue_task(task_id, int(user["id"]), "batch_replace_product", batch_payload)
-                    return {"id": task_id, "task_type": "batch_replace_product"}
-                if not videos or not images:
-                    raise HTTPException(status_code=400, detail=f"replace_product 需要上传 1 个视频和 1 张图片（已识别：{_format_uploaded_files(saved)}）")
-                payload["video_local_path"] = str(videos[0]["path"])
-                payload["image_local_path"] = str(images[0]["path"])
-            elif typ == "create_audio":
-                if not str(payload.get("speech_text") or payload.get("word") or "").strip():
-                    raise HTTPException(status_code=400, detail="create_audio 需要 speech_text")
-            elif typ in {"create_video", "commerce_video"}:
-                if _to_bool(payload.get("batch_mode"), False) and zips:
-                    if images or videos or audios:
-                        raise HTTPException(status_code=400, detail="批量 zip 模式请仅上传 zip（不要混传图片/视频/音频）")
-                    try:
-                        batch_payload = _build_batch_payload_from_uploaded_zips(zips=zips, params=payload)
-                    except RuntimeError as exc:
-                        raise HTTPException(status_code=400, detail=str(exc)) from exc
-                    batch_payload["uploaded_files"] = [{"name": s["name"], "kind": s["kind"]} for s in saved]
-                    batch_payload["source_task_type"] = str(typ)
-                    _enqueue_task(task_id, int(user["id"]), "batch_create_video", batch_payload)
-                    return {"id": task_id, "task_type": "batch_create_video"}
-                scene_image_local_path = str(payload.get("scene_image_local_path") or "").strip()
-                if scene_image_local_path:
-                    if not images:
-                        raise HTTPException(status_code=400, detail=f"场景图直出视频需要至少上传 1 张模特图（已识别：{_format_uploaded_files(saved)}）")
-                    payload["model_image_local_path"] = str(images[0]["path"])
-                    payload["product_image_local_path"] = scene_image_local_path
-                    payload["generated_scene_image_local_path"] = scene_image_local_path
-                else:
-                    if len(images) < 2:
-                        raise HTTPException(status_code=400, detail=f"带货视频生成需要上传 2 张图片（先模特后商品），可选 1 个运镜视频（已识别：{_format_uploaded_files(saved)}）")
-                    payload["model_image_local_path"] = str(images[0]["path"])
-                    payload["product_image_local_path"] = str(images[1]["path"])
-                if videos:
-                    payload["camera_video_local_path"] = str(videos[0]["path"])
-                if audios:
-                    payload["audio_local_path"] = str(audios[0]["path"])
-            elif typ == "image_generate":
-                mode = str(payload.get("mode") or "").strip() or ("model_product" if len(images) >= 2 else "product_only")
+            if typ == "image_generate":
+                mode = str(payload.get("mode") or "").strip() or ("dual_reference" if len(images) >= 2 else "single_reference")
                 payload["mode"] = mode
-                if mode == "model_product":
+                if mode == "dual_reference":
                     if len(images) < 2:
-                        raise HTTPException(status_code=400, detail=f"图片生成（模特+商品）需要上传 2 张图片（先模特后商品）（已识别：{_format_uploaded_files(saved)}）")
-                    payload["model_image_local_path"] = str(images[0]["path"])
-                    payload["product_image_local_path"] = str(images[1]["path"])
+                        raise HTTPException(status_code=400, detail=f"双图图片生成需要上传 2 张图片（已识别：{_format_uploaded_files(saved)}）")
+                    payload["secondary_image_local_path"] = str(images[0]["path"])
+                    payload["primary_image_local_path"] = str(images[1]["path"])
                 else:
                     if not images:
-                        raise HTTPException(status_code=400, detail=f"图片生成需要至少上传 1 张商品图（已识别：{_format_uploaded_files(saved)}）")
-                    payload["mode"] = "product_only"
-                    payload["product_image_local_path"] = str(images[0]["path"])
+                        raise HTTPException(status_code=400, detail=f"图片生成需要至少上传 1 张参考图（已识别：{_format_uploaded_files(saved)}）")
+                    payload["mode"] = "single_reference"
+                    payload["primary_image_local_path"] = str(images[0]["path"])
             elif typ == "single_image_edit":
                 if not images:
                     raise HTTPException(status_code=400, detail=f"单图编辑需要上传 1 张图片（已识别：{_format_uploaded_files(saved)}）")
@@ -19531,64 +16179,6 @@ def create_app() -> FastAPI:
                     payload["image_paths"] = [str(s["path"]) for s in images]
                 if videos:
                     payload["video_paths"] = [str(s["path"]) for s in videos]
-            elif typ == "replace_productANDmodel":
-                def pick_zip(keyword: str) -> str:
-                    for s in zips:
-                        if keyword in str(s.get("name") or "").lower():
-                            return str(s["path"])
-                    return ""
-                model_zip = pick_zip("model")
-                product_zip = pick_zip("product")
-                video_zip = pick_zip("video")
-                used = {p for p in (model_zip, product_zip, video_zip) if p}
-                rest = [s for s in zips if str(s.get("path") or "") not in used]
-                if not model_zip and rest:
-                    model_zip = str(rest.pop(0).get("path") or "")
-                if not product_zip and rest:
-                    product_zip = str(rest.pop(0).get("path") or "")
-                if not video_zip and rest:
-                    video_zip = str(rest.pop(0).get("path") or "")
-
-                if model_zip:
-                    payload["model_zip_path"] = str(model_zip)
-                if product_zip:
-                    payload["product_zip_path"] = str(product_zip)
-                if video_zip:
-                    payload["video_zip_path"] = str(video_zip)
-                if videos and not payload.get("video_zip_path"):
-                    payload["video_paths"] = [str(s["path"]) for s in videos]
-                if images and not payload.get("model_zip_path") and not payload.get("product_zip_path"):
-                    payload["mixed_image_paths"] = [str(s["path"]) for s in images]
-
-                has_model = bool(payload.get("model_zip_path")) or bool(payload.get("model_dir_path")) or bool(payload.get("mixed_image_paths"))
-                has_product = bool(payload.get("product_zip_path")) or bool(payload.get("product_dir_path")) or bool(payload.get("mixed_image_paths"))
-                has_video = bool(payload.get("video_zip_path")) or bool(payload.get("video_dir_path")) or bool(payload.get("video_paths"))
-                if not (has_model and has_product and has_video):
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"replace_productANDmodel 需要：model+product 图片（可 2 个 zip，或直接混传图片自动分拣）+ 原视频（zip 或视频文件）（已识别：{_format_uploaded_files(saved)}）",
-                    )
-                mp = payload.get("model_params")
-                if not isinstance(mp, dict):
-                    mp_json = payload.get("model_params_json")
-                    if isinstance(mp_json, str) and mp_json.strip():
-                        parsed = _extract_json_from_text(mp_json)
-                        payload["model_params"] = parsed if isinstance(parsed, dict) else {}
-                pp = payload.get("product_params")
-                if not isinstance(pp, dict):
-                    pp_json = payload.get("product_params_json")
-                    if isinstance(pp_json, str) and pp_json.strip():
-                        parsed = _extract_json_from_text(pp_json)
-                        payload["product_params"] = parsed if isinstance(parsed, dict) else {}
-                pm = payload.get("product_mapping")
-                if not isinstance(pm, list):
-                    pm_json = payload.get("product_mapping_json")
-                    if isinstance(pm_json, str) and pm_json.strip():
-                        parsed = _extract_json_from_text(pm_json)
-                        if isinstance(parsed, dict) and isinstance(parsed.get("items"), list):
-                            payload["product_mapping"] = parsed.get("items")
-                        elif isinstance(parsed, list):
-                            payload["product_mapping"] = parsed
             else:
                 raise HTTPException(status_code=400, detail=f"不支持的 task_type: {typ}")
         except HTTPException:
@@ -19598,53 +16188,6 @@ def create_app() -> FastAPI:
         payload["uploaded_files"] = [{"name": s["name"], "kind": s["kind"]} for s in saved]
         _enqueue_task(task_id, int(user["id"]), typ, payload)
         return {"id": task_id, "task_type": typ}
-
-    @app.post("/api/tasks/replace_productANDmodel")
-    async def api_task_replace_product_and_model(
-        model_app_id: str = Form(""),
-        product_app_id: str = Form(""),
-        match_mode: str = Form("cycle"),
-        fixed_index: int = Form(1),
-        auto_rename: str = Form("1"),
-        model_params_json: str = Form(""),
-        product_params_json: str = Form(""),
-        product_mapping_json: str = Form(""),
-        gemini_input_tokens: int = Form(0),
-        gemini_output_tokens: int = Form(0),
-        nano_images: int = Form(0),
-        model_zip: UploadFile | None = File(None),
-        product_zip: UploadFile | None = File(None),
-        video_zip: UploadFile | None = File(None),
-        user: dict[str, Any] = Depends(get_current_user),
-    ):
-        _require_positive_balance(user)
-        task_id = _new_id("task")
-        payload: dict[str, Any] = {
-            "model_app_id": model_app_id,
-            "product_app_id": product_app_id,
-            "match_mode": match_mode,
-            "fixed_index": fixed_index,
-            "auto_rename": _to_bool(auto_rename, True),
-            "gemini_input_tokens": gemini_input_tokens,
-            "gemini_output_tokens": gemini_output_tokens,
-            "nano_images": nano_images,
-        }
-        model_params = _extract_json_from_text(model_params_json)
-        product_params = _extract_json_from_text(product_params_json)
-        product_mapping = _extract_json_from_text(product_mapping_json)
-        payload["model_params"] = model_params if isinstance(model_params, dict) else {}
-        payload["product_params"] = product_params if isinstance(product_params, dict) else {}
-        if isinstance(product_mapping, dict) and isinstance(product_mapping.get("items"), list):
-            payload["product_mapping"] = product_mapping.get("items")
-        elif isinstance(product_mapping, list):
-            payload["product_mapping"] = product_mapping
-
-        payload["model_zip_path"] = await _save_upload_file(str(user.get("username") or ""), task_id, "model_zip", model_zip)
-        payload["product_zip_path"] = await _save_upload_file(str(user.get("username") or ""), task_id, "product_zip", product_zip)
-        payload["video_zip_path"] = await _save_upload_file(str(user.get("username") or ""), task_id, "video_zip", video_zip)
-
-        _enqueue_task(task_id, int(user["id"]), "replace_productANDmodel", payload)
-        return {"id": task_id}
 
     @app.get("/api/admin/runtime_config")
     def api_admin_get_runtime_config(user: dict[str, Any] = Depends(require_admin)):

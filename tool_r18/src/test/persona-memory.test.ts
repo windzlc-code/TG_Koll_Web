@@ -46,7 +46,7 @@ describe("persona memory deletion", () => {
   });
 
   it("extracts key tweet points instead of only keeping the opening line", () => {
-    const post = "最近看到專家對 2026 年中產資產配置的建議，我超有感觸！現在一個便當隨便都要破百，健保費可能又要調，生活成本根本回不去了。如果你還在猶豫要不要開始做理財規劃，我只能說：現在就是最好的時機。與其去研究那些聽不懂的複雜商品，不如先把現金流、保險缺口、緊急預備金整理好。";
+    const post = "最近看到專家對 2026 年中產資產配置的建議，我超有感觸！現在一個便當隨便都要破百，健保費可能又要調，生活成本根本回不去了。如果你還在猶豫要不要開始做理財規劃，我只能說：現在就是最好的時機。與其去研究那些聽不懂的複雜產品，不如先把現金流、保險缺口、緊急預備金整理好。";
 
     const outline = buildMemoryOutline(post);
 

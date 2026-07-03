@@ -351,18 +351,23 @@ def _request_openai_compatible_raw_text(
     model: str = "",
 ) -> dict[str, Any]:
     url = _resolve_openai_chat_completions_url(host=host, port=port)
+    user_content = _build_openai_user_content(
+        user_input=user_input,
+        parameters=parameters,
+        image_paths=image_paths,
+        video_paths=video_paths,
+    )
+    prompt_prefix = str(system_prompt or "").strip()
+    if prompt_prefix:
+        if isinstance(user_content, str):
+            user_content = f"{prompt_prefix}\n{user_content}".strip()
+        else:
+            user_content = [{"type": "text", "text": prompt_prefix}, *user_content]
     messages: list[dict[str, Any]] = []
-    if str(system_prompt or "").strip():
-        messages.append({"role": "system", "content": str(system_prompt or "").strip()})
     messages.append(
         {
             "role": "user",
-            "content": _build_openai_user_content(
-                user_input=user_input,
-                parameters=parameters,
-                image_paths=image_paths,
-                video_paths=video_paths,
-            ),
+            "content": user_content,
         }
     )
     payload = {

@@ -16,7 +16,7 @@ from runtime_config_bootstrap import bundled_root, ensure_runtime_config_file
 
 
 APP_NAME = "WorkflowDesktop"
-DISPLAY_NAME = "电商带货视频生成平台"
+DISPLAY_NAME = "Web 素材生成平台"
 WINDOW_TITLE = f"{DISPLAY_NAME} - 桌面版"
 
 

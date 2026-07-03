@@ -4,20 +4,20 @@ export interface MobileConfig {
   accounts?: Array<{ name?: string; ak?: string; sk?: string }>;
 }
 
-export async function execAdb(_config: MobileConfig, _padCode: string, _command: string): Promise<string> {
-  throw new Error("Legacy mobile automation has been removed from this project");
+function removed(): never {
+  throw new Error("Use Web social automation with Camoufox browser profiles.");
 }
 
 export async function waitTask(_config: MobileConfig, _taskId: string, _timeoutMs = 30_000, _pollMs = 1_000): Promise<{ taskResult?: string }> {
-  throw new Error("Legacy mobile automation has been removed from this project");
+  removed();
 }
 
 export async function inputText(_config: MobileConfig, _padCode: string, _text: string): Promise<void> {
-  throw new Error("Legacy mobile automation has been removed from this project");
+  removed();
 }
 
 export async function screenshot(_config: MobileConfig, _padCode: string): Promise<string> {
-  throw new Error("Legacy mobile automation has been removed from this project");
+  removed();
 }
 
 export async function listPads(_config: MobileConfig): Promise<any[]> {

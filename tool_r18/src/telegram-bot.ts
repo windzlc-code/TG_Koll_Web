@@ -1,4 +1,4 @@
-// @ts-nocheck
+﻿// @ts-nocheck
 import "@/runtime/node/browser-shim";
 import TelegramBot from "node-telegram-bot-api";
 import https from "node:https";
@@ -19,7 +19,7 @@ import { planPersonaPostGenerationBatches, runPersonaWorkflow } from "@/core/per
 import { buildRegeneratePostInstruction, calculateRegeneratedPostSimilarity, isRegeneratedPostTooSimilar } from "@/core/persona/regenerate-post-instruction";
 import { createNodePublishQueueRepository } from "@/runtime/node/publish-queue-repository";
 import { publishPost, queryThreadsAccount, loginThreadsAccount, clearThreadsAccountSession, queryTelegramAccountSession, clearTelegramAccountSession, startTelegramAccountLoginSession, updateThreadsProfileLink, updateThreadsProfileBio, updateThreadsProfileName, updateThreadsProfileAvatar, warmupThreadsAccount, executeWarmupCandidate, autoReplyThreadsAccount, replyOwnPublishedThreadsPosts, buildWarmupInterestKeywords, extractThreadsPublishedPostUrlFromReaderMarkdown, type PublishProgress, type PublishResult, type WarmupConfig, type WarmupCandidate, type WarmupCommentPersona, type ThreadsAutoReplyProgress, type ThreadsOwnPostReplyProgress, type ThreadsOwnPostReplyTarget } from "@/lib/mobile-publisher";
-import { execAdb, listPads, getPadInfo, screenshot } from "@/lib/mobile-client";
+import { listPads, getPadInfo, screenshot } from "@/lib/mobile-client";
 import { loadPersonaArchive, listPersonaArchives, getCachedPersonaArchives, savePersonaArchive, deleteArchiveEpisode, deleteArchiveEpisodes, updateArchiveEpisode, updateArchivePostMedia, updatePersonaArchivePostDraft, updatePersonaArchiveProfile, deletePersonaArchive, updatePersonaArchivePadBinding, requeuePublishRecord, markArchiveEpisodesPublished, markFavoritePostsPublished, appendCustomPersonaArchivePost, markPersonaArchivePostTelegramGroupContentType, savePersonaReferenceSheet, appendPersonaArchiveImage } from "@/lib/persona-archives";
 import { addSummariesToMemoryAsync, deletePersonaMemoryEntryAsync, getPersonaMemoryAsync, type PersonaMemoryEntry } from "@/lib/persona-memory";
 import { buildMemoryOutline, normalizeMemorySummaryForStorage } from "@/core/memory/memory-format";
@@ -1416,12 +1416,6 @@ type ToolR18TaskType =
   | "get_nano_banana"
   | "face_swap"
   | "video_i2v"
-  | "replace_model"
-  | "replace_product"
-  | "replace_productANDmodel"
-  | "create_video"
-  | "commerce_video"
-  | "create_audio"
   | "get_gemini"
   | "r18_config"
   | "r18_set_script"
@@ -1726,7 +1720,7 @@ async function resumePendingThreadsProfileAction(bot: TelegramBot, chatId: numbe
     return true;
   } catch (error) {
     stopTyping();
-    const notice = formatCloudAccountStateNotice(rawErrorMessage(error), {
+    const notice = formatBrowserAccountStateNotice(rawErrorMessage(error), {
       action,
       padName: resume.padName,
       padCode: resume.padCode,
@@ -4123,7 +4117,7 @@ async function runPadThreadsAutoReplyFromTelegram(
       await bot.sendMessage(chatId, `🚫 已中止 Threads自动回复任務\n\n设备：${padName}`);
       return;
     }
-    if (await sendCloudAccountStateNotice(
+    if (await sendBrowserAccountStateNotice(
       bot,
       chatId,
       error,
@@ -4215,7 +4209,7 @@ async function runPersonaThreadsAutoReplyFromTelegram(
       await bot.sendMessage(chatId, `🚇 已中止 Threads 自動回覆任務\n\n设备：${boundPad.padName}`);
       return;
     }
-    if (await sendCloudAccountStateNotice(
+    if (await sendBrowserAccountStateNotice(
       bot,
       chatId,
       error,
@@ -6371,7 +6365,7 @@ const TOOL_R18_TASKS: Array<{ type: ToolR18TaskType; label: string; hint: string
   { type: "text_to_image", label: "文生圖", hint: "發送圖片生成提示詞。" },
   { type: "r18_text_to_image_reroll", label: "重新生成圖片", hint: "重跑最近一次文生圖/圖像結果；不需要新素材。" },
   { type: "r18_text_to_image_continue", label: "繼續生成圖片", hint: "基於最近一次圖像任務繼續生成；可補充文字要求。" },
-  { type: "image_generate", label: "圖像生成", hint: "發送商品圖，可繼續發送模特圖，並寫生成要求。" },
+  { type: "image_generate", label: "圖像生成", hint: "發送參考圖，可繼續發送第二張參考圖，並寫生成要求。" },
   { type: "r18_multi_image", label: "多圖生成", hint: "連續發送多張圖片和生成要求，準備好後點提交。" },
   { type: "single_image_edit", label: "單圖編輯", hint: "發送一張原圖和編輯要求。" },
   { type: "get_nano_banana", label: "圖片編輯", hint: "發送原圖、參考圖和編輯要求。" },
@@ -6382,15 +6376,6 @@ const TOOL_R18_TASKS: Array<{ type: ToolR18TaskType; label: string; hint: string
   { type: "r18_face_swap_rerun", label: "重新生成人物換臉", hint: "重跑最近一次人物換臉任務。" },
   { type: "r18_image_replace", label: "圖片替換", hint: "發送原圖、替換參考圖和替換要求。" },
   { type: "video_i2v", label: "圖生視頻", hint: "發送參考圖和視頻動作要求，可附加音頻。" },
-  { type: "replace_model", label: "視頻模特替換", hint: "發送原視頻、模特圖和替換要求。" },
-  { type: "replace_product", label: "視頻商品替換", hint: "發送原視頻、商品圖和替換要求。" },
-  { type: "replace_productANDmodel", label: "聯合替換工作流", hint: "發送原視頻、模特圖、商品圖和替換要求。" },
-  { type: "commerce_video", label: "寫實帶貨視頻", hint: "發送模特圖、商品圖和口播/鏡頭要求。" },
-  { type: "commerce_video", label: "直播口播視頻", hint: "發送模特圖、商品圖和直播口播要求。" },
-  { type: "commerce_video", label: "產品展示視頻", hint: "發送商品圖/模特圖和產品展示要求。" },
-  { type: "create_video", label: "數字人視頻生成", hint: "發送模特圖、商品圖和視頻要求。" },
-  { type: "create_video", label: "自定義數字人要求", hint: "發送素材並寫自定義數字人視頻要求。" },
-  { type: "create_audio", label: "生成口播音頻", hint: "發送要合成的口播文案。" },
   { type: "get_gemini", label: "素材解析", hint: "發送圖片/視頻和需要解析的問題。" },
   { type: "r18_config", label: "查看後臺工作流配置", hint: "讀取 R18 後臺執行時工作流配置摘要。" },
   { type: "r18_set_script", label: "設定預設文案", hint: "測試入口：發送後會記錄到 Tool_R18 測試狀態，不改 R18 生產配置。" },
@@ -7941,16 +7926,11 @@ function buildToolR18SubmitParams(taskType: ToolR18TaskType, text: string, files
   const audios = files.filter((item) => item.kind === "audio").map((item) => item.path);
   const params: Record<string, any> = { message: text, prompt: text, prompt_text: text, tg_user_instruction: text, duration_seconds: 15 };
   if (taskType === "text_to_image") return { prompt: text, prompt_text: text, message: text, tg_user_instruction: text, tg_original_user_request: text, ...(images[0] ? { input_image_local_path: images[0], image_local_path: images[0] } : {}) };
-  if (taskType === "create_audio") return { speech_text: text };
   if (taskType === "get_gemini") return { user_input: text, message: text, image_paths: images, video_paths: videos };
   if (taskType === "r18_multi_image") return { user_input: text, message: text, image_paths: images, video_paths: videos };
   if (taskType === "r18_image_replace") return { input_image_local_path: images[0], reference_image_local_path: images[1] || images[0], prompt: text, message: text, tg_user_instruction: text };
-  if (taskType === "image_generate") { params.product_image_local_path = images[0]; if (images[1]) params.model_image_local_path = images[1]; }
+  if (taskType === "image_generate") { params.primary_image_local_path = images[0]; if (images[1]) params.secondary_image_local_path = images[1]; }
   else if (taskType === "video_i2v") { params.image_local_path = images[0]; if (audios[0]) params.audio_local_path = audios[0]; }
-  else if (taskType === "replace_model") { params.video_local_path = videos[0]; params.image_local_path = images[0]; }
-  else if (taskType === "replace_product") { params.video_local_path = videos[0]; params.image_local_path = images[0]; }
-  else if (taskType === "replace_productANDmodel") { params.video_local_path = videos[0]; params.model_image_local_path = images[0]; params.product_image_local_path = images[1]; }
-  else if (taskType === "create_video" || taskType === "commerce_video") { params.model_image_local_path = images[0]; params.product_image_local_path = images[1] || images[0]; if (videos[0]) params.camera_video_local_path = videos[0]; if (audios[0]) params.audio_local_path = audios[0]; }
   else if (taskType === "single_image_edit") { params.input_image_local_path = images[0]; }
   else if (taskType === "get_nano_banana") { params.input_image_local_path = images[0]; params.reference_image_local_path = images[1]; }
   else if (taskType === "face_swap") { params.target_image_local_path = images[0]; params.source_image_local_path = images[1]; }
@@ -7959,10 +7939,9 @@ function buildToolR18SubmitParams(taskType: ToolR18TaskType, text: string, files
 
 function toolR18MinimumFileCount(taskType?: ToolR18TaskType) {
   if (!taskType) return 0;
-  if (["text_to_image", "create_audio", "r18_config", "r18_rerun_latest", "r18_text_to_image_reroll", "r18_text_to_image_continue", "r18_image_edit_continue", "r18_image_edit_rerun", "r18_face_swap_upscale", "r18_face_swap_rerun", "r18_set_script"].includes(taskType)) return 0;
+  if (["text_to_image", "r18_config", "r18_rerun_latest", "r18_text_to_image_reroll", "r18_text_to_image_continue", "r18_image_edit_continue", "r18_image_edit_rerun", "r18_face_swap_upscale", "r18_face_swap_rerun", "r18_set_script"].includes(taskType)) return 0;
   if (["single_image_edit", "video_i2v", "get_gemini", "r18_image_replace", "r18_multi_image"].includes(taskType)) return 1;
-  if (["image_generate", "get_nano_banana", "face_swap", "replace_model", "replace_product", "create_video", "commerce_video"].includes(taskType)) return 2;
-  if (taskType === "replace_productANDmodel") return 3;
+  if (["image_generate", "get_nano_banana", "face_swap"].includes(taskType)) return 2;
   return 1;
 }
 
@@ -8230,7 +8209,7 @@ async function submitPendingToolR18Task(bot: TelegramBot, chatId: number, state:
   if (state.taskType === "r18_config") {
     const data = await toolR18JsonRequest("GET", "/api/internal/tg/runtime_config");
     const cfg = data?.runtime_config || {};
-    const keys = ["image_generate_mode_default", "comfy_workflow_source", "remote_comfy_gateway_url", "text_to_image_workflow_profile", "replace_model_app_id", "replace_product_app_id", "create_video_app_id", "commerce_video_app_id"];
+    const keys = ["image_generate_mode_default", "comfy_workflow_source", "remote_comfy_gateway_url", "text_to_image_workflow_profile"];
     const lines = ["R18 後臺工作流配置摘要", ...keys.map((key) => key + ": " + String(cfg[key] ?? "").slice(0, 120))];
     pendingToolR18Tasks.delete(chatId);
     await bot.sendMessage(chatId, lines.join(String.fromCharCode(10)), { reply_markup: { inline_keyboard: [[toolR18ContextBackButton(chatId, state.params)]] } });
@@ -8624,7 +8603,7 @@ const PERSONA_DERIVATION_TEMPLATES: Array<{ pattern: RegExp; value: DerivedPerso
     },
   },
   {
-    pattern: /美女|福利|自拍|颜值|顏值|穿搭|写真|寫真|女神|模特/i,
+    pattern: /美女|福利|自拍|颜值|顏值|穿搭|写真|寫真|女神|人物/i,
     value: {
       genre: "美女传播型",
       gender: "女性",
@@ -11963,17 +11942,17 @@ async function buildSentimentCandidateMediaGridPreview(
   }).composite(composites).jpeg({ quality: 88 }).toBuffer();
 }
 
-export type CloudAccountStateKind = "phone_verification" | "captcha" | "login_required" | "onboarding" | "blocked";
+export type BrowserAccountStateKind = "phone_verification" | "captcha" | "login_required" | "onboarding" | "blocked";
 
-export type CloudAccountStateNotice = {
-  kind: CloudAccountStateKind;
+export type BrowserAccountStateNotice = {
+  kind: BrowserAccountStateKind;
   status: string;
   shortStatus: string;
   text: string;
   debugPath?: string;
 };
 
-function normalizeCloudAccountStateMessage(errorOrMessage: unknown): string {
+function normalizeBrowserAccountStateMessage(errorOrMessage: unknown): string {
   const raw = errorOrMessage instanceof Error
     ? errorOrMessage.message
     : typeof errorOrMessage === "string"
@@ -11986,7 +11965,7 @@ function normalizeCloudAccountStateMessage(errorOrMessage: unknown): string {
     .trim();
 }
 
-function extractCloudAccountDebugPath(message: string): string | undefined {
+function extractBrowserAccountDebugPath(message: string): string | undefined {
   const match = message.match(/[｜|]\s*(?:debug|sample)=([^\n\r]+)/i);
   if (!match) return undefined;
   const raw = match[1].trim();
@@ -12000,15 +11979,15 @@ function extractInlineDebugPath(message: string): string | undefined {
   return match[1].trim().replace(/^["']|["']$/g, "") || undefined;
 }
 
-function stripCloudAccountDebugSuffix(message: string): string {
+function stripBrowserAccountDebugSuffix(message: string): string {
   return message.replace(/[｜|]\s*(?:debug|sample)=[^\n\r]+/gi, "").trim();
 }
 
-export function formatCloudAccountStateNotice(
+export function formatBrowserAccountStateNotice(
   errorOrMessage: unknown,
   context: { action: string; padName?: string; padCode?: string },
-): CloudAccountStateNotice | null {
-  const normalized = normalizeCloudAccountStateMessage(errorOrMessage);
+): BrowserAccountStateNotice | null {
+  const normalized = normalizeBrowserAccountStateMessage(errorOrMessage);
   if (!normalized) return null;
 
   const isPhoneVerification =
@@ -12027,7 +12006,7 @@ export function formatCloudAccountStateNotice(
 
   if (!isPhoneVerification && !isCaptcha && !isLoginRequired && !isOnboarding && !isBlocked) return null;
 
-  const kind: CloudAccountStateKind = isPhoneVerification
+  const kind: BrowserAccountStateKind = isPhoneVerification
     ? "phone_verification"
     : isOnboarding
       ? "onboarding"
@@ -12055,7 +12034,7 @@ export function formatCloudAccountStateNotice(
         ? "未登入/需重新登入"
         : "帳號狀態被攔截";
   const pad = context.padName || context.padCode || "目前设备";
-  const reason = normalizeInternalPageLabel(stripCloudAccountDebugSuffix(normalized))
+  const reason = normalizeInternalPageLabel(stripBrowserAccountDebugSuffix(normalized))
     .replace(/\s+/g, " ")
     .slice(0, 180);
   const text = [
@@ -12074,11 +12053,11 @@ export function formatCloudAccountStateNotice(
     status,
     shortStatus,
     text,
-    debugPath: extractCloudAccountDebugPath(normalized),
+    debugPath: extractBrowserAccountDebugPath(normalized),
   };
 }
 
-function resolveCloudAccountEvidenceInput(debugPath?: string): string | Buffer | null {
+function resolveBrowserAccountEvidenceInput(debugPath?: string): string | Buffer | null {
   if (!debugPath) return null;
   if (/^(https?:\/\/|data:image\/)/i.test(debugPath)) return resolveTelegramPhotoInput(debugPath);
   try {
@@ -12103,14 +12082,14 @@ function resolveCloudAccountEvidenceInput(debugPath?: string): string | Buffer |
   return null;
 }
 
-async function sendCloudAccountStateNotice(
+async function sendBrowserAccountStateNotice(
   bot: TelegramBot,
   chatId: number,
   errorOrMessage: unknown,
   context: { action: string; padName?: string; padCode?: string },
   inlineKeyboard: Array<Array<{ text: string; callback_data: string }>>,
 ) {
-  const notice = formatCloudAccountStateNotice(errorOrMessage, context);
+  const notice = formatBrowserAccountStateNotice(errorOrMessage, context);
   if (!notice) return false;
   await bot.sendMessage(chatId, notice.text, {
     reply_markup: { inline_keyboard: inlineKeyboard },
@@ -12119,7 +12098,7 @@ async function sendCloudAccountStateNotice(
 }
 
 function extractFailureDebugPath(errorOrMessage: unknown): string | undefined {
-  return extractCloudAccountDebugPath(normalizeCloudAccountStateMessage(errorOrMessage));
+  return extractBrowserAccountDebugPath(normalizeBrowserAccountStateMessage(errorOrMessage));
 }
 
 async function sendCurrentPadScreenshot(
@@ -12202,7 +12181,7 @@ async function sendManualInterventionFailure(
     { reply_markup: { inline_keyboard: context.inlineKeyboard } },
   );
 
-  const evidenceInput = resolveCloudAccountEvidenceInput(extractFailureDebugPath(error));
+  const evidenceInput = resolveBrowserAccountEvidenceInput(extractFailureDebugPath(error));
   if (evidenceInput) {
     if (!await sendOriginalScreenshotDocument(bot, chatId, evidenceInput, "📸 失败界面截图")) {
       await bot.sendPhoto(chatId, evidenceInput, { caption: "📸 失败界面截图" }).catch(() => undefined);
@@ -15910,7 +15889,7 @@ export function startTelegramBot(token: string, options: TelegramBotInstanceOpti
         await bot.sendMessage(chatId, `🛑 已中止自定义发布任务\n\n人設：${archive?.name || state.archiveName || "未命名人設"}\n设备：${padCode}`);
         return;
       }
-      if (await sendCloudAccountStateNotice(
+      if (await sendBrowserAccountStateNotice(
         bot,
         chatId,
         error,
@@ -15955,16 +15934,6 @@ export function startTelegramBot(token: string, options: TelegramBotInstanceOpti
 
     for (const task of publishingTasks) {
       padCodesToForceStop.add(task.pad_code);
-    }
-
-    for (const padCode of padCodesToForceStop) {
-      void execAdb(
-        credentials,
-        padCode,
-        "am force-stop com.instagram.barcelona; am force-stop com.instagram.android; am force-stop com.twitter.android; am force-stop com.xingin.xhs; input keyevent KEYCODE_HOME",
-      ).catch((error) => {
-        console.warn("[telegram][force_stop_adb_error]", padCode, error?.message || error);
-      });
     }
 
     for (const [scope] of stoppedPublishScopes) {
@@ -16962,12 +16931,12 @@ function sendMainMenu(chatId: number, msgId?: number) {
       }));
       let msg: string;
       if (!result.loggedIn && (result.method === "failed" || (!result.username && !result.email))) {
-        const accountState = formatCloudAccountStateNotice(result.error || "", { action: "帳號查詢", padName, padCode });
+        const accountState = formatBrowserAccountStateNotice(result.error || "", { action: "帳號查詢", padName, padCode });
         msg = accountState
           ? `🔍 *设备帳號查詢*\n\n设备：${padName}\n平台：Threads\n\n⚠️ ${accountState.status}\n\n請先進入设备处理帳號狀態，再回来重試查詢或操作。`
           : `🔍 *设备帳號查詢*\n\n设备：${padName}\n平台：Threads\n\n❌ 未识别到帳號${result.error ? `\n原因：${formatUserFacingError(result.error, "目前页面沒有识别到 Threads 帳號信息。")}` : ""}`;
       } else {
-        msg = `🔍 *设备帳號查詢*\n\n设备：${padName}\n平台：Threads\n\n✅ 已登录帳號：\n${result.username ? `使用者名：@${result.username}\n` : ""}${result.email ? `信箱：${result.email}\n` : ""}识别方式：${result.method === "adb" ? "ADB 直读" : "截图识别"}`;
+        msg = `🔍 *设备帳號查詢*\n\n设备：${padName}\n平台：Threads\n\n✅ 已登录帳號：\n${result.username ? `使用者名：@${result.username}\n` : ""}${result.email ? `信箱：${result.email}\n` : ""}识别方式：浏览器 Profile / 截图识别`;
       }
       await bot.sendMessage(chatId, msg, {
         parse_mode: "Markdown",
@@ -17085,7 +17054,7 @@ function sendMainMenu(chatId: number, msgId?: number) {
           await bot.sendMessage(chatId, `🚫 已中止 Threads自动回复任務\n\n设备：${padName}`);
           return;
         }
-        if (await sendCloudAccountStateNotice(
+        if (await sendBrowserAccountStateNotice(
           bot,
           chatId,
           error,
@@ -17464,7 +17433,7 @@ function sendMainMenu(chatId: number, msgId?: number) {
         const progressLine = `[telegram][warmup_progress] chat=${chatId} pad=${padCode} browsed=0 liked=0 commented=0 done=1 step=养号失敗 error=${errorMessage}`;
         console.log(progressLine);
         appendWarmupProgressLog(progressLine);
-        if (await sendCloudAccountStateNotice(
+        if (await sendBrowserAccountStateNotice(
           bot,
           chatId,
           error,
@@ -17518,7 +17487,7 @@ function sendMainMenu(chatId: number, msgId?: number) {
           await bot.sendMessage(chatId, `🛑 已中止${candidate.type === "comment" ? "留言" : "點讚"}任務\n\n设备：${candidate.padCode}`);
           return;
         }
-        if (await sendCloudAccountStateNotice(
+        if (await sendBrowserAccountStateNotice(
           bot,
           chatId,
           error,
@@ -18533,7 +18502,7 @@ function sendMainMenu(chatId: number, msgId?: number) {
           await bot.sendMessage(chatId, `🚇 已中止 Threads 自動回覆熱點推文任務\n\n设备：${boundPad.padName}`);
           return;
         }
-        if (await sendCloudAccountStateNotice(
+        if (await sendBrowserAccountStateNotice(
           bot,
           chatId,
           error,
@@ -18673,7 +18642,7 @@ function sendMainMenu(chatId: number, msgId?: number) {
           await bot.sendMessage(chatId, `🚇 已中止 Threads 自動回覆任務\n\n设备：${boundPad.padName}`);
           return;
         }
-        if (await sendCloudAccountStateNotice(
+        if (await sendBrowserAccountStateNotice(
           bot,
           chatId,
           error,
@@ -23620,7 +23589,7 @@ function sendMainMenu(chatId: number, msgId?: number) {
       const lines = results.map((r) => {
         const padName = (targets.find((p) => p.padCode === r.padCode) ? padDisplayName(targets.find((p) => p.padCode === r.padCode)!) : r.padCode);
         if (r.method === "failed" || (!r.username && !r.email)) {
-          const accountState = formatCloudAccountStateNotice(r.error || "", { action: "账号查询", padName, padCode: r.padCode });
+          const accountState = formatBrowserAccountStateNotice(r.error || "", { action: "账号查询", padName, padCode: r.padCode });
           if (accountState) return `📱 ${padName}\n└ ⚠️ ${accountState.shortStatus}`;
           return `📱 ${padName}\n└ ❌ 未识别到账号${r.error ? `（${formatUserFacingError(r.error, "当前页面没有识别到账号信息。").slice(0, 60)}）` : ""}`;
         }
@@ -23671,12 +23640,12 @@ function sendMainMenu(chatId: number, msgId?: number) {
       }));
       let msg: string;
       if (!result.loggedIn && (result.method === "failed" || (!result.username && !result.email))) {
-        const accountState = formatCloudAccountStateNotice(result.error || "", { action: "帳號查詢", padName, padCode });
+        const accountState = formatBrowserAccountStateNotice(result.error || "", { action: "帳號查詢", padName, padCode });
         msg = accountState
           ? `🔍 *设备帳號查詢*\n\n设备：${padName}\n平台：Threads\n\n⚠️ ${accountState.status}\n\n請先進入设备處理帳號狀態，再回來重試查詢或操作。`
           : `🔍 *设备帳號查詢*\n\n设备：${padName}\n平台：Threads\n\n❌ 未識別到帳號${result.error ? `\n原因：${formatUserFacingError(result.error, "目前頁面沒有識別到 Threads 帳號資訊。")}` : ""}`;
       } else {
-        msg = `🔍 *设备帳號查詢*\n\n设备：${padName}\n平台：Threads\n\n✅ 已登入帳號：\n${result.username ? `使用者名：@${result.username}\n` : ""}${result.email ? `信箱：${result.email}\n` : ""}識別方式：${result.method === "adb" ? "ADB 直讀" : "截圖識別"}`;
+        msg = `🔍 *设备帳號查詢*\n\n设备：${padName}\n平台：Threads\n\n✅ 已登入帳號：\n${result.username ? `使用者名：@${result.username}\n` : ""}${result.email ? `信箱：${result.email}\n` : ""}識別方式：瀏覽器 Profile / 截圖識別`;
       }
       await bot.sendMessage(chatId, msg, {
         parse_mode: "Markdown",
@@ -24175,7 +24144,7 @@ function sendMainMenu(chatId: number, msgId?: number) {
           return;
         }
         const retryCallback = buildManualConfirmCallback(archiveId, platform, startIndex, posts.length || count);
-        if (await sendCloudAccountStateNotice(
+        if (await sendBrowserAccountStateNotice(
           bot,
           chatId,
           error,
@@ -24291,7 +24260,7 @@ function sendMainMenu(chatId: number, msgId?: number) {
           await bot.sendMessage(chatId, `🛑 已中止发布任务\n\n人設：${archive.name}\n平台：${platform}\n设备：${padCode}`);
           return;
         }
-        if (await sendCloudAccountStateNotice(
+        if (await sendBrowserAccountStateNotice(
           bot,
           chatId,
           error,
@@ -25184,7 +25153,7 @@ function sendMainMenu(chatId: number, msgId?: number) {
         }
         const retryCallback = shortPlatform ? data : (platform === "threads" || platform === "telegram" ? `dop_${platform}` : data);
         const returnCallback = buildPostSourcePageCallback(archiveId, source, 0, groupContentType);
-        if (await sendCloudAccountStateNotice(
+        if (await sendBrowserAccountStateNotice(
           bot,
           chatId,
           error,
@@ -26065,7 +26034,7 @@ function sendMainMenu(chatId: number, msgId?: number) {
         stopTyping();
         const errorRaw = rawErrorMessage(error);
         console.warn(`[telegram][threads_avatar_error] chat=${chatId} pad=${pendingThreadsProfile.padCode} error=${errorRaw}`);
-        const notice = formatCloudAccountStateNotice(errorRaw, {
+        const notice = formatBrowserAccountStateNotice(errorRaw, {
           action: "頭像修改",
           padName: pendingThreadsProfile.padName,
           padCode: pendingThreadsProfile.padCode,
@@ -26076,7 +26045,7 @@ function sendMainMenu(chatId: number, msgId?: number) {
         await bot.sendMessage(chatId, message, {
           reply_markup: { inline_keyboard: [[{ text: "◀️ 返回", callback_data: profileReturnCallback }]] },
         });
-        const evidenceInput = notice ? null : resolveCloudAccountEvidenceInput(extractInlineDebugPath(errorRaw));
+        const evidenceInput = notice ? null : resolveBrowserAccountEvidenceInput(extractInlineDebugPath(errorRaw));
         if (evidenceInput) {
           if (!await sendOriginalScreenshotDocument(bot, chatId, evidenceInput, "📸 目前帳號狀態截圖")) {
             await bot.sendPhoto(chatId, evidenceInput, { caption: "📸 目前帳號狀態截圖" }).catch(() => undefined);
@@ -26342,7 +26311,7 @@ function sendMainMenu(chatId: number, msgId?: number) {
         stopTyping();
         const errorRaw = rawErrorMessage(error);
         console.warn(`[telegram][threads_profile_error] chat=${chatId} pad=${profileState.padCode} stage=${profileState.stage} error=${errorRaw}`);
-        const notice = formatCloudAccountStateNotice(errorRaw, {
+        const notice = formatBrowserAccountStateNotice(errorRaw, {
           action: operation.action,
           padName: profileState.padName,
           padCode: profileState.padCode,
@@ -26387,7 +26356,7 @@ function sendMainMenu(chatId: number, msgId?: number) {
         await bot.sendMessage(chatId, message, {
           reply_markup: { inline_keyboard: [[{ text: "◀️ 返回", callback_data: profileReturnCallback }]] },
         });
-        const evidenceInput = notice ? null : resolveCloudAccountEvidenceInput(extractInlineDebugPath(rawErrorMessage(error)));
+        const evidenceInput = notice ? null : resolveBrowserAccountEvidenceInput(extractInlineDebugPath(rawErrorMessage(error)));
         if (evidenceInput) {
           if (!await sendOriginalScreenshotDocument(bot, chatId, evidenceInput, "📸 目前帳號狀態截圖")) {
             await bot.sendPhoto(chatId, evidenceInput, { caption: "📸 目前帳號狀態截圖" }).catch(() => undefined);
@@ -26408,25 +26377,9 @@ function sendMainMenu(chatId: number, msgId?: number) {
         : `⏳ 正在提交驗證碼...`);
       const stopTyping = startTelegramTyping(bot, chatId);
       try {
-        const creds = resolveMobileCredentials();
-        // 提交 OTP：用 ADB 輸入到當前焦點框。
-        await execAdbForText(
-          creds,
-          state.padCode,
-          `input tap 128 560; sleep 0.2; input text ${otp}; input keyevent KEYCODE_ENTER`,
-          15000,
-          1000,
-        ).catch(() => "");
-        await new Promise((r) => setTimeout(r, 8000));
-        const session = await queryTelegramAccountSession(creds, state.padCode).catch(() => null);
-        const shotUrl = session?.screenshotUrl;
         stopTyping();
         pendingLoginActions.delete(chatId);
-        const statusLine = session?.state === "challenge_otp"
-          ? "Telegram 仍停在驗證碼頁，可能是驗證碼錯誤或已過期，請重新取得後再發送 6 位驗證碼。"
-          : session?.ok
-            ? "Telegram 已確認登入成功。"
-            : session?.message || "驗證碼已提交，請查看截圖確認登入狀態。";
+        const statusLine = "旧验证码提交链路已删除。请在 Web 端浏览器自动化工作台打开对应 Profile，并在浏览器中完成人工验证。";
         const telegramArchiveId = state.returnCallback?.startsWith("acctplatform_telegram_")
           ? state.returnCallback.slice("acctplatform_telegram_".length)
           : "";
@@ -26438,11 +26391,7 @@ function sendMainMenu(chatId: number, msgId?: number) {
           : threadsArchiveId
             ? { text: "🔍 檢測 Threads 登入狀態", callback_data: `acctquery_threads_${threadsArchiveId}` }
             : { text: "🔍 驗證帳號", callback_data: `pad_query_account_${state.padCode}` };
-        const otpSubmitTitle = session?.ok
-          ? "✅ Telegram 登入已確認"
-          : session?.state === "challenge_manual" || session?.state === "failed"
-            ? "⚠️ Telegram 登入需要人工介入"
-            : "✅ 驗證碼已提交";
+        const otpSubmitTitle = "⚠️ 已切换为 Web 浏览器验证";
         await bot.sendMessage(chatId, `${otpSubmitTitle}\n\n${statusLine}`, {
           reply_markup: {
             inline_keyboard: threadsArchiveId
@@ -26450,9 +26399,6 @@ function sendMainMenu(chatId: number, msgId?: number) {
               : [[queryButton], [{ text: "◀️ 返回", callback_data: loginReturnCallback }]],
           },
         });
-        if (shotUrl) {
-          await bot.sendPhoto(chatId, shotUrl, { caption: "📸 提交驗證碼後截圖" }).catch(() => undefined);
-        }
       } catch (error: any) {
         stopTyping();
         pendingLoginActions.delete(chatId);

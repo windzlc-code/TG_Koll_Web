@@ -17,6 +17,7 @@ npm run skill:persona
 npm run skill:persona-generate-by-id
 ```
 
-Legacy mobile publishing automation has been removed from this copy. The queue
-schema still keeps existing device fields for data compatibility with archived
-personas, pending tasks, and dashboard filters.
+Publishing is handled by the Web social automation worker using Camoufox
+persistent browser profiles. The queue schema still keeps existing target
+fields for data compatibility with archived personas, pending tasks, and
+dashboard filters.

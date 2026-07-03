@@ -3,15 +3,15 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>电商带货视频生成平台</title>
+  <title>Web 素材生成平台</title>
   <link rel="stylesheet" href="/assets/style.css?v=__STYLE_VERSION__" />
 </head>
 <body class="page-product">
   <div class="layout product-layout">
     <aside class="sidebar">
       <div class="brand">
-        <h1>电商带货视频生成平台</h1>
-        <p>商品素材生成工作台</p>
+        <h1>Web 素材生成平台</h1>
+        <p>素材生成工作台</p>
       </div>
       <div class="account-chip">
         <div class="account-chip-row">
@@ -79,29 +79,28 @@
         </div>
 
         <div class="task-type-tabs" id="taskTypeTabs" aria-label="主要生成模式">
-          <button type="button" class="task-type-tab is-active" id="taskTypeModeVideo" data-task-type="commerce_video">视频生成</button>
-          <button type="button" class="task-type-tab" id="taskTypeModeImage" data-task-type="image_generate">图片生成</button>
+          <button type="button" class="task-type-tab is-active" id="taskTypeModeImage" data-task-type="image_generate">图片生成</button>
         </div>
 
         <div class="mode-switch-brief" id="modeSwitchBrief">
           <div class="mode-brief-card is-active" id="modeBriefVideo">
             <div class="mode-brief-label">视频模式</div>
-            <div class="mode-brief-title">适合直接出带货视频</div>
+            <div class="mode-brief-title">适合直接生成图片素材</div>
           </div>
           <div class="mode-brief-card" id="modeBriefImage">
             <div class="mode-brief-label">图片模式</div>
-            <div class="mode-brief-title">适合先产出商品展示图</div>
+            <div class="mode-brief-title">适合产出参考展示图</div>
           </div>
         </div>
 
         <div class="mode-hero-card" id="modeHeroCard">
           <div class="mode-hero-copy">
             <div class="mode-hero-kicker" id="modeHeroKicker">当前模式</div>
-            <h3 id="generatePageTitle">带货视频生成</h3>
+            <h3 id="generatePageTitle">图片生成</h3>
           </div>
           <div class="mode-hero-actions">
-            <div class="generator-actions-note small" id="generatorActionHint">双图准备完成后即可发起生成</div>
-            <button id="btnSendChat" type="button" class="primary mode-hero-submit">生成带货视频</button>
+            <div class="generator-actions-note small" id="generatorActionHint">参考图准备完成后即可发起生成</div>
+            <button id="btnSendChat" type="button" class="primary mode-hero-submit">生成图片</button>
           </div>
         </div>
 
@@ -110,18 +109,14 @@
         </div>
 
         <div class="flow-steps flow-steps-prominent" aria-label="生成步骤">
-          <div id="generateStep1"><span>1</span> 上传模特图</div>
-          <div id="generateStep2"><span>2</span> 上传商品图</div>
+          <div id="generateStep1"><span>1</span> 上传参考图</div>
+          <div id="generateStep2"><span>2</span> 补充描述</div>
           <div id="generateStep3"><span>3</span> 生成并下载</div>
         </div>
 
-        <div class="chat-input-wrap commerce-dropzone" id="chatDropzone">
+        <div class="chat-input-wrap generator-dropzone" id="chatDropzone">
           <select id="chatTaskType" class="select task-type-select-hidden" aria-label="生成类型" tabindex="-1" aria-hidden="true">
-            <option value="commerce_video" selected>带货视频生成</option>
-            <option value="image_generate">图片生成</option>
-            <option value="replace_model">模特替换</option>
-            <option value="replace_product">商品替换</option>
-            <option value="replace_productANDmodel">模特+商品联合替换</option>
+            <option value="image_generate" selected>图片生成</option>
           </select>
           <input id="chatFiles" type="file" multiple hidden tabindex="-1" />
           <div id="chatMsg" class="msg" role="alert"></div>
@@ -132,24 +127,24 @@
                 <div class="workspace-stage-head">
                   <div>
                     <h3 id="uploadStageTitle">素材上传</h3>
-                    <div class="small" id="uploadStageMeta">先模特图，后商品图</div>
-                    <div class="small" id="imageModeHint" style="display:none">仅商品图模式下只需上传商品图；双图模式需同时上传模特图和商品图。</div>
+                    <div class="small" id="uploadStageMeta">上传参考图并填写描述</div>
+                    <div class="small" id="imageModeHint" style="display:none">单图模式只需上传 1 张参考图；双图模式需上传 2 张参考图。</div>
                   </div>
                 </div>
                 <div class="upload-slot-grid">
-                  <label class="upload-slot required" id="modelSlot" tabindex="0">
-                    <input id="modelImageInput" type="file" accept="image/*" />
-                    <span class="slot-label">模特图</span>
-                    <span class="slot-title">上传模特图片</span>
-                    <span class="slot-help" id="modelSlotHint">真人或模特展示图，建议竖图、主体清晰</span>
-                    <span class="slot-preview" id="modelSlotPreview"></span>
+                  <label class="upload-slot required" id="primarySlot" tabindex="0">
+                    <input id="primaryImageInput" type="file" accept="image/*" />
+                    <span class="slot-label">参考图 A</span>
+                    <span class="slot-title">上传第一张参考图</span>
+                    <span class="slot-help" id="primarySlotHint">可选，用于双图生成</span>
+                    <span class="slot-preview" id="primarySlotPreview"></span>
                   </label>
-                  <label class="upload-slot required" id="productSlot" tabindex="0">
-                    <input id="productImageInput" type="file" accept="image/*" />
-                    <span class="slot-label">商品图</span>
-                    <span class="slot-title">上传商品图片</span>
-                    <span class="slot-help" id="productSlotHint">白底图、场景图或商品实拍均可</span>
-                    <span class="slot-preview" id="productSlotPreview"></span>
+                  <label class="upload-slot required" id="secondarySlot" tabindex="0">
+                    <input id="secondaryImageInput" type="file" accept="image/*" />
+                    <span class="slot-label">参考图 B</span>
+                    <span class="slot-title">上传参考图片</span>
+                    <span class="slot-help" id="secondarySlotHint">单图模式下上传这里即可</span>
+                    <span class="slot-preview" id="secondarySlotPreview"></span>
                   </label>
                 </div>
 
@@ -159,11 +154,11 @@
                     <input id="cameraVideoInput" type="file" accept="video/*" />
                   </label>
                   <label class="secondary-file-btn">
-                    口播音频
+                    参考音频
                     <input id="audioInput" type="file" accept="audio/*" />
                   </label>
                   <label class="secondary-file-btn">
-                    ZIP 批量素材
+                    ZIP 批量参考
                     <input id="batchZipInput" type="file" accept=".zip" multiple />
                   </label>
                   <button id="btnClearFiles" type="button" class="ghost">清空已选素材</button>
@@ -193,23 +188,23 @@
                     <div>
                       <label for="imageGenerateMode">图片模式</label>
                       <select id="imageGenerateMode">
-                        <option value="product_only">仅商品图</option>
-                        <option value="model_product">模特图 + 商品图</option>
+                        <option value="single_reference">单图参考</option>
+                        <option value="dual_reference">双图参考</option>
                       </select>
                     </div>
                   </div>
                   <div class="grid-2">
                     <div>
-                      <label for="commerceProductName">商品名称</label>
-                      <input id="commerceProductName" placeholder="例如：夏季防晒衣" />
+                      <label for="assetName">素材名称</label>
+                      <input id="assetName" placeholder="例如：人物海报" />
                     </div>
                     <div>
-                      <label for="commerceStyleHint">画面风格</label>
-                      <input id="commerceStyleHint" placeholder="例如：自然口播，真实电商场景" />
+                      <label for="assetStyleHint">画面风格</label>
+                      <input id="assetStyleHint" placeholder="例如：自然光，真实场景" />
                     </div>
                   </div>
-                  <label for="chatInput">口播文案 / 描述</label>
-                  <textarea id="chatInput" placeholder="可留空。填写后会作为口播文案和视频提示词。"></textarea>
+                  <label for="chatInput">生成描述</label>
+                  <textarea id="chatInput" placeholder="填写生成描述或提示词。"></textarea>
                   <div class="settings-actions">
                     <button id="btnBatchParams" type="button" class="ghost chat-param-btn">参数设置</button>
                   </div>
@@ -295,7 +290,6 @@
                 <select id="taskTypeQuickFilter">
                   <option value="">全部记录</option>
                   <option value="image_generate">仅图片生成</option>
-                  <option value="commerce_video">仅视频生成</option>
                 </select>
               </div>
             </div>

@@ -54,7 +54,7 @@ function setActiveAdminPage(page, updateHash = true) {
     node.setAttribute("aria-hidden", active ? "false" : "true");
   });
   setText("adminCurrentPageLabel", pageLabel);
-  document.title = `${pageLabel} - 运营后台 - 电商带货视频生成平台`;
+  document.title = `${pageLabel} - 运营后台 - Web 素材生成平台`;
   const targetHash = `admin-${nextPage}`;
   if (updateHash && String(location.hash || "").replace(/^#/, "") !== targetHash) {
     location.hash = targetHash;
@@ -1083,9 +1083,6 @@ const adminState = {
 const REMOTE_COMFY_TASKS = [
   ["text_to_image", "文字生成图片"],
   ["image_generate", "图片生成"],
-  ["replace_model", "替换模特"],
-  ["create_audio", "生成音频"],
-  ["create_video", "生成视频"],
   ["video_i2v", "图生视频"],
   ["get_nano_banana", "图片编辑"],
   ["face_swap", "人物换脸"],
@@ -1720,9 +1717,6 @@ function taskActionButtons(task) {
   }
   if (String((task && task.status) || "") === "failed") {
     buttons.push(`<button class="primary task-action-btn" type="button" data-act="retry" data-id="${escapeHtml(task.id)}">重试</button>`);
-    if (taskType === "commerce_video") {
-      buttons.push(`<button class="blue task-action-btn" type="button" data-act="retry_resume" data-id="${escapeHtml(task.id)}">断点重试</button>`);
-    }
   }
   buttons.push(`<button class="ghost task-action-btn" type="button" data-act="delete_task" data-id="${escapeHtml(task.id)}">删除</button>`);
   return buttons.join("");
@@ -2179,8 +2173,6 @@ async function ensureAdmin() {
 
 function runtimeFormToPayload() {
   const workflowChains = collectWorkflowChains();
-  const digitalHumanChain = (workflowChains.digital_human_workflow_ids || [])
-    .filter((stage) => parseWorkflowStage(stage).value);
   adminState.llmGeminiModels = [];
   adminState.llmGptModels = grokModelItems(adminState.llmGptModels);
   adminState.llmPriorityModels = grokModelItems(adminState.llmPriorityModels);
@@ -2206,13 +2198,7 @@ function runtimeFormToPayload() {
     local_comfy_gateway_token: el("rtLocalComfyGatewayToken").value.trim(),
     local_comfy_workflow_mappings: collectLocalComfyWorkflowMappings(),
     image_generate_mode_default: "remote_comfy",
-    digital_human_workflow_ids: digitalHumanChain,
-    oral_digital_human_workflow_ids: [],
     image_generate_workflow_ids: [],
-    replace_model_original_workflow_ids: [],
-    replace_product_workflow_ids: [],
-    replace_union_model_workflow_ids: [],
-    replace_union_product_workflow_ids: [],
     llm_base_url: el("rtLlmBaseUrl").value.trim(),
     llm_api_key_gemini: "",
     llm_api_key_gpt: el("rtLlmApiKeyGpt").value.trim(),
@@ -2240,12 +2226,7 @@ function runtimeFormToPayload() {
     mulerouter_wan_i2v_model: el("rtMuleRouterWanI2vModelName").value.trim(),
     mulerouter_wan_i2v_endpoint: el("rtMuleRouterWanI2vEndpoint").value.trim(),
     mulerouter_wan_i2v_negative_prompt: el("rtMuleRouterWanI2vNegativePrompt").value.trim(),
-    create_video_app_id: "",
-    create_audio_app_id: "",
     video_app_id: "",
-    replace_model_app_id: "",
-    replace_model_original_app_id: "",
-    replace_product_app_id: "",
     cleanup_enabled: !!el("rtCleanupEnabled").checked,
     cleanup_time: el("rtCleanupTime").value || "03:30",
     cleanup_retention_days: Number(el("rtCleanupRetentionDays").value || 7),
@@ -2312,9 +2293,7 @@ function fillRuntimeForm(data) {
   if (restoredModelDraft) {
     setMsg("runtimeMsg", "已恢复浏览器中的未保存候选模型草稿，请确认后点击保存运行配置。", true);
   }
-  adminState.workflowChains = {
-    digital_human_workflow_ids: normalizeWorkflowChain(v.digital_human_workflow_ids, []),
-  };
+  adminState.workflowChains = {};
   renderAllWorkflowChains();
   el("rtCleanupEnabled").checked = v.cleanup_enabled !== false;
   el("rtCleanupTime").value = v.cleanup_time || "03:30";

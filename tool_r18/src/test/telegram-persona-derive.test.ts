@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+﻿import { describe, expect, it } from "vitest";
 import {
   buildListPaginationRows,
   buildManualConfirmCallback,
@@ -23,7 +23,7 @@ import {
   aggregatePublishedTargets,
   derivePersonaSpecFromPrompt,
   filterPersonaMenuList,
-  formatCloudAccountStateNotice,
+  formatBrowserAccountStateNotice,
   formatUserFacingError,
   inferStoredPostMediaKind,
   isSentimentHotRewriteTooShort,
@@ -944,9 +944,9 @@ describe("buildPostImageRegenerateCallback", () => {
   });
 });
 
-describe("formatCloudAccountStateNotice", () => {
+describe("formatBrowserAccountStateNotice", () => {
   it("formats phone verification as an account status notice instead of a generic failure", () => {
-    const notice = formatCloudAccountStateNotice(
+    const notice = formatBrowserAccountStateNotice(
       "Threads 目前需要完成手机号验证码登录：LOCAL_PHONE_VERIFICATION_PAGE｜debug=D:\\tmp\\phone.jpg",
       { action: "养号", padName: "OP-TEST1", padCode: "ACP1" },
     );
@@ -958,7 +958,7 @@ describe("formatCloudAccountStateNotice", () => {
   });
 
   it("formats captcha and human verification pages as an actionable status", () => {
-    const notice = formatCloudAccountStateNotice(
+    const notice = formatBrowserAccountStateNotice(
       "__THREADS_BLOCKED__驗證你是真人，輸入圖片中的驗證碼",
       { action: "发布", padName: "F1 2.0" },
     );
@@ -969,7 +969,7 @@ describe("formatCloudAccountStateNotice", () => {
   });
 
   it("does not label onboarding/profile setup blockers as captcha", () => {
-    const notice = formatCloudAccountStateNotice(
+    const notice = formatBrowserAccountStateNotice(
       "__THREADS_BLOCKED__Threads 個人頁目前停在阻斷頁：账号初始化/资料引导页",
       { action: "发布", padName: "F1 2.0" },
     );
@@ -980,7 +980,7 @@ describe("formatCloudAccountStateNotice", () => {
   });
 
   it("keeps generic Threads blockers generic instead of calling them captcha", () => {
-    const notice = formatCloudAccountStateNotice(
+    const notice = formatBrowserAccountStateNotice(
       "__THREADS_BLOCKED__檢測到 Threads 阻斷頁，需要人工確認當前帳號狀態",
       { action: "发布", padName: "F1 2.0" },
     );
@@ -991,7 +991,7 @@ describe("formatCloudAccountStateNotice", () => {
   });
 
   it("formats local Threads login activity blockers as login required", () => {
-    const notice = formatCloudAccountStateNotice(
+    const notice = formatBrowserAccountStateNotice(
       "__THREADS_BLOCKED__Threads profile update blocked: LOCAL_THREADS_LOGIN_ACTIVITY",
       { action: "bio update", padName: "OP-TEST2" },
     );
@@ -1001,7 +1001,7 @@ describe("formatCloudAccountStateNotice", () => {
   });
 
   it("ignores ordinary automation failures", () => {
-    expect(formatCloudAccountStateNotice("Threads 發布前未找到新串文輸入控件", { action: "发布" })).toBeNull();
+    expect(formatBrowserAccountStateNotice("Threads 發布前未找到新串文輸入控件", { action: "发布" })).toBeNull();
   });
 });
 

@@ -253,7 +253,13 @@ def query_task(*, task_id: str, api_key: str, video_output_path: str, base_url: 
     query_url = f"{str(base_url).rstrip('/')}/openapi/v2/query"
     query_data = {"taskId": str(task_id)}
     try:
-        response = rh_post(query_url, headers=headers, data=json.dumps(query_data), timeout=(10, 120))
+        response = requests.post(
+            query_url,
+            **_prepare_request_kwargs(
+                query_url,
+                {"headers": headers, "data": json.dumps(query_data), "timeout": (10, 120)},
+            ),
+        )
     except requests.exceptions.RequestException as exc:
         return {
             "status": "RUNNING",
