@@ -6,6 +6,7 @@ const state = {
   workspaceMenuOpen: true,
   generationType: "text_to_image",
   personaGroup: "content",
+  personaDetailMode: "summary",
   simpleBranches: {},
   files: [],
   tasks: [],
@@ -378,14 +379,16 @@ function renderPersonaModule() {
   $("moduleBody").innerHTML = `
     <div class="module-toolbar">
       <div>
-        <strong>我的人设 / 人设列表</strong>
-        <div class="muted">选择某个人设后，只显示该人设自己的功能分组。</div>
+        <strong>我的人设</strong>
+        <div class="muted">先选择人设，再在右侧下拉选择该人设的功能分组。</div>
       </div>
       <button type="button" class="chip-button" data-persona-refresh>刷新人设列表</button>
     </div>
     <div class="form-grid">
-      <label>搜索人设
-        <input id="personaSearch" type="search" placeholder="输入名称、设备、Threads 账号" />
+      <label>选择人设
+        <select id="personaSelect">
+          ${state.personas.map((persona) => `<option value="${esc(persona.id)}" ${String(persona.id) === String(state.selectedPersonaId) ? "selected" : ""}>${esc(persona.name || persona.id)}${persona.threads_account?.handle ? ` · ${esc(persona.threads_account.handle)}` : ""}</option>`).join("")}
+        </select>
       </label>
       <label>操作分组
         <select id="personaActionGroup">
@@ -393,46 +396,22 @@ function renderPersonaModule() {
         </select>
       </label>
     </div>
-    <div class="persona-list" id="personaList"></div>
     <div class="persona-detail" id="personaDetail"></div>
   `;
-  $("personaSearch").addEventListener("input", renderPersonaList);
-  $("personaActionGroup").value = state.personaGroup;
-  $("personaActionGroup").addEventListener("change", () => {
-    state.personaGroup = $("personaActionGroup").value;
-    renderModuleMenu();
+  $("personaSelect").addEventListener("change", () => {
+    state.selectedPersonaId = $("personaSelect").value;
+    state.personaDetailMode = "summary";
     renderPersonaDetail();
     renderConfirmSummary();
   });
-  renderPersonaList();
-  if (current) renderPersonaDetail();
-}
-
-function renderPersonaList() {
-  const query = String($("personaSearch")?.value || "").trim().toLowerCase();
-  const personas = state.personas.filter((item) => {
-    const haystack = [item.name, item.content, item.owner_bot_name, item.threads_account?.handle].join(" ").toLowerCase();
-    return !query || haystack.includes(query);
+  $("personaActionGroup").value = state.personaGroup;
+  $("personaActionGroup").addEventListener("change", () => {
+    state.personaGroup = $("personaActionGroup").value;
+    state.personaDetailMode = "summary";
+    renderPersonaDetail();
+    renderConfirmSummary();
   });
-  $("personaList").innerHTML = personas.length ? personas.map((persona) => {
-    const counts = persona.counts || {};
-    const hot = persona.hot || {};
-    return `
-      <article class="persona-card ${String(persona.id) === String(state.selectedPersonaId) ? "is-active" : ""}" data-persona-id="${esc(persona.id)}">
-        <div class="persona-card-head">
-          <h4>${esc(persona.name || "未命名人设")}</h4>
-          <span class="status ${persona.threads_account?.bound ? "ready" : ""}">${persona.threads_account?.handle ? esc(persona.threads_account.handle) : "未绑 Threads"}</span>
-        </div>
-        <p>${esc(String(persona.content || "暂无简介").slice(0, 120))}</p>
-        <div class="persona-metrics">
-          <div><span>帖子</span><strong>${numberText(counts.posts)}</strong></div>
-          <div><span>已发布</span><strong>${numberText(counts.published)}</strong></div>
-          <div><span>素材图</span><strong>${numberText(counts.images)}</strong></div>
-          <div><span>热度</span><strong>${numberText(hot.hot_score)}</strong></div>
-        </div>
-      </article>
-    `;
-  }).join("") : `<div class="empty-state">没有匹配的人设。</div>`;
+  if (current) renderPersonaDetail();
 }
 
 function renderPersonaDetail() {
@@ -445,6 +424,32 @@ function renderPersonaDetail() {
   state.personaGroup = groupKey;
   const group = personaGroups[groupKey] || personaGroups.content;
   const warnings = Array.isArray(persona.warnings) ? persona.warnings : [];
+  const counts = persona.counts || {};
+  const hot = persona.hot || {};
+  const history = Array.isArray(persona.publish_history) ? persona.publish_history.slice(0, 6) : [];
+  const mode = state.personaDetailMode || "summary";
+  const modePanel = {
+    posts: `
+      <div class="persona-inline-panel">
+        <strong>推文概览</strong>
+        <p>当前人设共 ${numberText(counts.posts)} 条帖子，素材图 ${numberText(counts.images)} 张。</p>
+      </div>`,
+    history: `
+      <div class="persona-inline-panel">
+        <strong>发布历史</strong>
+        ${history.length ? history.map((row) => `<p>${esc(row.platform || "-")} · ${esc(formatTime(row.published_at || row.captured_at))} · ${esc(row.status || row.task_type || "-")}</p>`).join("") : `<p>暂无发布历史。</p>`}
+      </div>`,
+    hot_metrics: `
+      <div class="persona-inline-panel">
+        <strong>热点数据</strong>
+        <p>热度 ${numberText(hot.hot_score)} · 点赞 ${numberText(hot.likes)} · 评论 ${numberText(hot.comments)} · 分享 ${numberText(hot.shares)}</p>
+      </div>`,
+    settings_notice: `
+      <div class="persona-inline-panel">
+        <strong>设置项</strong>
+        <p>该设置项当前没有独立 Web 控制台保存接口，已阻止自动跳转。需要编辑完整资料时，请明确点击“打开人设看板”。</p>
+      </div>`,
+  }[mode] || "";
   $("personaDetail").innerHTML = `
     <div>
       <div class="eyebrow">Selected Persona</div>
@@ -455,7 +460,14 @@ function renderPersonaDetail() {
       <span>Web 链路</span>
       <strong>我的人设 → ${esc(persona.name || persona.id)} → ${esc(group.label)}</strong>
     </div>
+    <div class="persona-metrics">
+      <div><span>帖子</span><strong>${numberText(counts.posts)}</strong></div>
+      <div><span>已发布</span><strong>${numberText(counts.published)}</strong></div>
+      <div><span>素材图</span><strong>${numberText(counts.images)}</strong></div>
+      <div><span>热度</span><strong>${numberText(hot.hot_score)}</strong></div>
+    </div>
     ${warnings.length ? `<div class="flow-box"><span>待处理提示</span><strong>${warnings.map(esc).join(" / ")}</strong></div>` : ""}
+    ${modePanel}
     <div class="persona-actions-grid">
       ${group.actions.map(([action, label]) => `<button type="button" data-persona-action="${esc(action)}">${esc(label)}</button>`).join("")}
     </div>
@@ -850,8 +862,47 @@ async function executePersonaAction(action) {
     showMsg("commandMsg", "请先选择一个人设。", false);
     return;
   }
-  if (["open_dashboard", "pd", "posts", "history", "hot_metrics", "editname", "tweetstyle", "editcontent", "linksettings", "persona_image", "publish", "genpost_branch", "acctmgmt"].includes(action)) {
+  if (action === "open_dashboard") {
     location.href = "/persona-dashboard.html";
+    return;
+  }
+  if (action === "pd") {
+    state.personaDetailMode = "summary";
+    renderPersonaDetail();
+    appendEvent("persona", `已显示人设详情：${persona.name || persona.id}`);
+    return;
+  }
+  if (["posts", "history", "hot_metrics"].includes(action)) {
+    state.personaDetailMode = action;
+    renderPersonaDetail();
+    appendEvent("persona", `已切换人设信息：${persona.name || persona.id} / ${action}`);
+    return;
+  }
+  if (action === "publish") {
+    state.activeModule = "publishing";
+    state.simpleBranches.publishing = "publish_now";
+    renderWorkspace();
+    appendEvent("persona", `已进入发布参数面板：${persona.name || persona.id}`);
+    return;
+  }
+  if (action === "genpost_branch") {
+    state.activeModule = "generation";
+    state.generationType = "text_to_image";
+    renderWorkspace();
+    appendEvent("persona", `已进入生成任务面板：${persona.name || persona.id}`);
+    return;
+  }
+  if (action === "acctmgmt" || action === "acctplatform_threads") {
+    state.activeModule = "automation";
+    state.simpleBranches.automation = "check_login";
+    renderWorkspace();
+    appendEvent("persona", `已进入浏览器账号检测：${persona.name || persona.id}`);
+    return;
+  }
+  if (["editname", "tweetstyle", "editcontent", "linksettings", "persona_image"].includes(action)) {
+    state.personaDetailMode = "settings_notice";
+    renderPersonaDetail();
+    appendEvent("persona", `该设置动作未跳转看板：${action}`);
     return;
   }
   if (action === "refresh") {
@@ -1142,14 +1193,6 @@ function bindEvents() {
     }
   });
   $("moduleBody").addEventListener("click", (event) => {
-    const personaCard = event.target.closest("[data-persona-id]");
-    if (personaCard) {
-      state.selectedPersonaId = personaCard.dataset.personaId;
-      renderPersonaList();
-      renderPersonaDetail();
-      renderConfirmSummary();
-      return;
-    }
     const personaAction = event.target.closest("[data-persona-action]");
     if (personaAction) executePersonaAction(personaAction.dataset.personaAction).catch((error) => showMsg("commandMsg", error.detail || error.message || "执行失败", false));
     if (event.target.closest("[data-persona-refresh]")) loadPersonas();

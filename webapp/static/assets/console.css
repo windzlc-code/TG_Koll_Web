@@ -46,7 +46,6 @@ button, a, input, select, textarea { border-radius: var(--radius); }
 .view,
 .status-card,
 .account-card,
-.persona-card,
 .persona-detail,
 .flow-box {
   border: 1px solid var(--line);
@@ -85,8 +84,7 @@ button, a, input, select, textarea { border-radius: var(--radius); }
 
 .console-brand h1,
 .console-topbar h2,
-.panel-head h3,
-.persona-card h4 {
+.panel-head h3 {
   margin: 0;
   letter-spacing: 0;
 }
@@ -98,7 +96,6 @@ button, a, input, select, textarea { border-radius: var(--radius); }
 .eyebrow,
 .operator-card span,
 .muted,
-.persona-card p,
 .persona-detail p,
 .flow-box span {
   color: var(--muted);
@@ -284,8 +281,7 @@ button.primary,
 .command-actions,
 .topbar-actions,
 .row-actions,
-.module-toolbar,
-.persona-card-head {
+.module-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -362,7 +358,6 @@ textarea { resize: vertical; }
 .form-grid,
 .status-grid,
 .account-grid,
-.persona-list,
 .persona-metrics,
 .persona-actions-grid {
   display: grid;
@@ -428,7 +423,6 @@ textarea { resize: vertical; }
 .file-chip small { color: var(--muted); }
 .file-chip button { border: 0; background: transparent; color: var(--bad); cursor: pointer; }
 
-.persona-card,
 .persona-detail,
 .event-row,
 .task-row,
@@ -440,18 +434,6 @@ textarea { resize: vertical; }
   padding: 12px;
 }
 
-.persona-card {
-  display: grid;
-  gap: 10px;
-  cursor: pointer;
-}
-
-.persona-card.is-active {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(52, 58, 64, .12);
-}
-
-.persona-card p,
 .persona-detail p { margin: 0; line-height: 1.55; }
 
 .persona-metrics {
@@ -480,6 +462,19 @@ textarea { resize: vertical; }
   display: grid;
   gap: 12px;
   margin-top: 14px;
+}
+
+.persona-inline-panel {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--soft);
+}
+
+.persona-inline-panel p {
+  margin: 0;
 }
 
 .persona-actions-grid button {
@@ -566,7 +561,6 @@ textarea { resize: vertical; }
   .status-grid,
   .account-grid,
   .task-row,
-  .persona-list,
   .persona-actions-grid {
     grid-template-columns: 1fr;
   }
