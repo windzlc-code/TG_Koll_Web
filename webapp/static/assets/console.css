@@ -152,6 +152,16 @@ button.primary,
   transition: border-color var(--motion-fast), box-shadow var(--motion-fast);
 }
 
+.module-trigger.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.module-trigger.is-active small {
+  color: rgba(255, 255, 255, .78);
+}
+
 .module-menu button {
   display: grid;
   gap: 4px;
