@@ -4,7 +4,6 @@ const state = {
   view: "workspace",
   activeModule: "personas",
   workspaceMenuOpen: true,
-  openModules: { personas: true },
   generationType: "text_to_image",
   personaGroup: "content",
   simpleBranches: {},
@@ -32,7 +31,7 @@ const taskMeta = {
   get_nano_banana: { title: "图片编辑", minImages: 2, files: "上传 2 张图片：原图 + 参考图。", callback: "get_nano_banana" },
   face_swap: { title: "人物换脸", minImages: 2, files: "上传 2 张图片：目标图 + 人脸参考图。", callback: "face_swap" },
   video_i2v: { title: "图生视频", minImages: 1, files: "上传 1 张首帧参考图，可选音频。", callback: "video_i2v" },
-  get_gemini: { title: "Gemini 分析", minImages: 0, files: "可上传图片或视频，也可只填写文本。", callback: "get_gemini" },
+  get_gemini: { title: "素材解析", minImages: 0, files: "发送图片/视频和需要解析的问题。", callback: "get_gemini" },
 };
 
 const personaGroups = {
@@ -75,36 +74,10 @@ const personaGroups = {
   },
 };
 
-const moduleBranches = {
-  generation: () => Object.entries(taskMeta).map(([id, meta]) => ({
-    id,
-    label: meta.title,
-    hint: meta.callback,
-  })),
-  personas: () => [
-    { id: "content", label: "人设内容", hint: "详情、推文、历史、新建推文、发布推文" },
-    { id: "settings", label: "人设设置", hint: "名称、风格、简介、链接、账号 Profile" },
-    { id: "account", label: "浏览器账号", hint: "Threads 登录检测、养号、自动回复" },
-    { id: "data", label: "数据面板", hint: "打开看板、刷新、清理队列" },
-  ],
-  publishing: () => [
-    { id: "publish_now", label: "立即发布", hint: "选择人设、推文来源、平台、账号 Profile" },
-    { id: "matrix_start", label: "矩阵发布", hint: "按人设和账号批量提交发布任务" },
-    { id: "schedule_publish", label: "定时发布", hint: "设置 scheduled_at 入队" },
-  ],
-  automation: () => [
-    { id: "open_login", label: "打开登录", hint: "open_login" },
-    { id: "check_login", label: "检测登录", hint: "check_login" },
-    { id: "browse_feed", label: "浏览 Feed", hint: "browse_feed" },
-    { id: "threads_warmup", label: "Threads 养号", hint: "threads_warmup" },
-    { id: "threads_auto_reply", label: "Threads 自动回复", hint: "threads_auto_reply" },
-    { id: "instagram_actions", label: "Instagram 操作", hint: "publish/comment/reply/like/share" },
-  ],
-  queue: () => [
-    { id: "pending", label: "待执行任务", hint: "status=pending/queued" },
-    { id: "failed", label: "失败任务", hint: "retry / logs" },
-    { id: "scheduled", label: "定时任务", hint: "scheduled_at" },
-  ],
+const moduleDefaultBranch = {
+  publishing: "publish_post",
+  automation: "open_login",
+  queue: "pending",
 };
 
 function esc(value) {
@@ -192,29 +165,14 @@ function renderModuleMenu() {
   updateWorkspaceFlow();
   $("moduleMenu").innerHTML = `<div class="module-accordion">${modules.map((item) => {
     const isActive = item.id === state.activeModule;
-    const isOpen = !!state.openModules[item.id];
-    const branches = getModuleBranches(item.id);
     return `
       <div class="module-accordion-item">
-        <button type="button" class="module-trigger ${isActive ? "is-active" : ""} ${isOpen ? "is-open" : ""}" data-module="${esc(item.id)}" aria-expanded="${isOpen ? "true" : "false"}">
+        <button type="button" class="module-trigger ${isActive ? "is-active" : ""}" data-module="${esc(item.id)}">
           <span class="module-trigger-text">
             <span>${esc(item.label)}</span>
             <small>${esc(item.hint)}</small>
           </span>
-          <span class="module-caret" aria-hidden="true"></span>
         </button>
-        <div class="branch-panel ${isOpen ? "is-open" : ""}" data-module-panel="${esc(item.id)}">
-          <div class="branch-panel-inner">
-            <div class="module-branches">
-              ${branches.map((branch) => `
-                <button type="button" class="branch-button ${isActiveBranch(item.id, branch.id) ? "is-active" : ""}" data-module-branch="${esc(item.id)}:${esc(branch.id)}">
-                  <span>${esc(branch.label)}</span>
-                  <small>${esc(branch.hint)}</small>
-                </button>
-              `).join("")}
-            </div>
-          </div>
-        </div>
       </div>
     `;
   }).join("")}</div>`;
@@ -225,17 +183,7 @@ function syncModuleMenuState() {
   document.querySelectorAll("[data-module]").forEach((button) => {
     const moduleId = button.dataset.module;
     const isActive = moduleId === state.activeModule;
-    const isOpen = !!state.openModules[moduleId];
     button.classList.toggle("is-active", isActive);
-    button.classList.toggle("is-open", isOpen);
-    button.setAttribute("aria-expanded", isOpen ? "true" : "false");
-  });
-  document.querySelectorAll("[data-module-panel]").forEach((panel) => {
-    panel.classList.toggle("is-open", !!state.openModules[panel.dataset.modulePanel]);
-  });
-  document.querySelectorAll("[data-module-branch]").forEach((button) => {
-    const [moduleId, branchId] = String(button.dataset.moduleBranch || "").split(":");
-    button.classList.toggle("is-active", isActiveBranch(moduleId, branchId));
   });
 }
 
@@ -252,34 +200,15 @@ function setMenuClickHighlight(button, leaveScope = button) {
   leaveScope.addEventListener("mouseleave", clear, { once: true });
 }
 
-function setModule(moduleId, toggleOpen = false) {
+function setModule(moduleId) {
   state.activeModule = moduleId;
-  if (toggleOpen) state.openModules[moduleId] = !state.openModules[moduleId];
-  else state.openModules[moduleId] = true;
-  renderWorkspace(!toggleOpen);
-}
-
-function getModuleBranches(moduleId) {
-  const factory = moduleBranches[moduleId];
-  return factory ? factory() : [];
+  renderWorkspace();
 }
 
 function selectedBranch(moduleId) {
   if (moduleId === "generation") return state.generationType;
   if (moduleId === "personas") return state.personaGroup;
-  return state.simpleBranches[moduleId] || getModuleBranches(moduleId)[0]?.id || "";
-}
-
-function isActiveBranch(moduleId, branchId) {
-  return selectedBranch(moduleId) === branchId;
-}
-
-function applyBranch(moduleId, branchId) {
-  state.activeModule = moduleId;
-  state.openModules[moduleId] = true;
-  if (moduleId === "generation") state.generationType = branchId;
-  else if (moduleId === "personas") state.personaGroup = branchId;
-  else state.simpleBranches[moduleId] = branchId;
+  return state.simpleBranches[moduleId] || moduleDefaultBranch[moduleId] || "";
 }
 
 function renderWorkspace(renderMenu = true) {
@@ -299,7 +228,7 @@ function renderGenerationModule() {
   $("moduleBody").innerHTML = `
     <div class="module-toolbar">
       <strong>生成任务</strong>
-      <span class="muted">只显示生成相关参数，其他 Bot 分支已收进各自菜单。</span>
+      <span class="muted">任务类型和后续分支都在右侧下拉框选择。</span>
     </div>
     <div class="form-grid">
       <label>任务类型
@@ -310,7 +239,7 @@ function renderGenerationModule() {
           <option value="get_nano_banana">图片编辑</option>
           <option value="face_swap">人物换脸</option>
           <option value="video_i2v">图生视频</option>
-          <option value="get_gemini">Gemini 分析</option>
+          <option value="get_gemini">素材解析</option>
         </select>
       </label>
       <label>完成后分支
@@ -388,7 +317,6 @@ function bindGenerationEvents() {
   $("taskType").addEventListener("change", () => {
     state.generationType = $("taskType").value;
     updateGenerationFields();
-    renderModuleMenu();
     renderConfirmSummary();
   });
   ["taskBranch", "promptMode", "taskAspectRatio", "taskQa", "taskFinalResolution", "taskPersonaLora", "taskMode", "taskResolution", "taskDuration", "taskSeed"].forEach((id) => {
@@ -638,12 +566,15 @@ function renderSimpleFlowModule(moduleId) {
         <span class="muted">发布任务会提交到现有浏览器 Profile 自动化队列。</span>
       </div>
       <div class="form-grid">
-        <label>发布动作
-          <select id="simplePrimary">
-            <option value="publish_post" ${branch === "publish_now" ? "selected" : ""}>立即发布</option>
-            <option value="publish_post" ${branch === "matrix_start" ? "selected" : ""}>矩阵发布</option>
-            <option value="publish_post" ${branch === "schedule_publish" ? "selected" : ""}>定时发布</option>
+        <label>发布方式
+          <select id="simplePublishMode">
+            <option value="publish_now">立即发布</option>
+            <option value="matrix_start">矩阵发布</option>
+            <option value="schedule_publish">定时发布</option>
           </select>
+        </label>
+        <label>任务类型
+          <input id="simplePrimary" value="publish_post" readonly />
         </label>
         <label>人设
           <select id="simplePersona">${personaOptionTags()}</select>
@@ -740,16 +671,20 @@ function renderSimpleFlowModule(moduleId) {
     <div class="command-actions"><button id="executeSimpleFlow" type="button" class="primary">确认执行</button></div>
   `;
   if ($("simpleAccount") && accountId) $("simpleAccount").value = accountId;
+  if ($("simplePublishMode")) {
+    const modes = ["publish_now", "matrix_start", "schedule_publish"];
+    $("simplePublishMode").value = modes.includes(branch) ? branch : "publish_now";
+  }
   bindSimpleFlowInputs(moduleId);
   $("executeSimpleFlow").addEventListener("click", () => executeSimpleFlow().catch((error) => showMsg("commandMsg", error.detail || error.message || "执行失败", false)));
 }
 
 function bindSimpleFlowInputs(moduleId) {
-  ["simplePrimary", "simpleAccount", "simplePersona", "simplePlatform", "simpleScheduleAt", "simpleContent", "simpleTargetUrl", "simpleMediaPaths", "simpleTargetUrls", "simplePriority", "simpleMaxRetries", "simpleScrollTimes", "simpleLikeLimit", "simpleMaxComments", "simpleCommentChance", "simpleMaxPosts", "simpleMaxReplies", "simpleMaxAgeDays", "simpleMinViews", "simpleReplyScope", "simpleStrategyId"].forEach((id) => {
+  ["simplePrimary", "simplePublishMode", "simpleAccount", "simplePersona", "simplePlatform", "simpleScheduleAt", "simpleContent", "simpleTargetUrl", "simpleMediaPaths", "simpleTargetUrls", "simplePriority", "simpleMaxRetries", "simpleScrollTimes", "simpleLikeLimit", "simpleMaxComments", "simpleCommentChance", "simpleMaxPosts", "simpleMaxReplies", "simpleMaxAgeDays", "simpleMinViews", "simpleReplyScope", "simpleStrategyId"].forEach((id) => {
     const node = $(id);
     if (!node) return;
     node.addEventListener(node.tagName === "TEXTAREA" || node.tagName === "INPUT" ? "input" : "change", () => {
-      if (id === "simplePrimary") state.simpleBranches[moduleId] = node.value;
+      if (id === "simplePrimary" || id === "simplePublishMode") state.simpleBranches[moduleId] = node.value;
       if (id === "simpleAccount" && moduleId === "automation") renderSimpleFlowModule(moduleId);
       renderConfirmSummary();
     });
@@ -786,7 +721,7 @@ function renderConfirmSummary() {
   } else if (state.activeModule === "publishing" || state.activeModule === "automation") {
     const account = selectedSocialAccount($("simpleAccount")?.value);
     rows = rows.concat([
-      ["任务类型", $("simplePrimary")?.selectedOptions?.[0]?.textContent || selectedBranch(state.activeModule)],
+      [state.activeModule === "publishing" ? "发布方式" : "任务类型", $("simplePublishMode")?.selectedOptions?.[0]?.textContent || $("simplePrimary")?.selectedOptions?.[0]?.textContent || selectedBranch(state.activeModule)],
       ["账号 Profile", account ? `${account.username || account.id} · ${account.platform}` : "未选择"],
       ["平台", account?.platform || $("simplePlatform")?.value || "-"],
       ["最终动作", "提交到 social_automation_tasks，由 Camoufox Profile 执行"],
@@ -1200,18 +1135,10 @@ function bindEvents() {
     setView(nextView);
   }));
   $("moduleMenu").addEventListener("click", (event) => {
-    const branch = event.target.closest("[data-module-branch]");
-    if (branch) {
-      setMenuClickHighlight(branch, branch);
-      const [moduleId, branchId] = String(branch.dataset.moduleBranch || "").split(":");
-      applyBranch(moduleId, branchId);
-      renderWorkspace();
-      return;
-    }
     const button = event.target.closest("[data-module]");
     if (button) {
       setMenuClickHighlight(button, button.closest(".module-accordion-item") || button);
-      setModule(button.dataset.module, true);
+      setModule(button.dataset.module);
     }
   });
   $("moduleBody").addEventListener("click", (event) => {

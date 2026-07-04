@@ -145,8 +145,7 @@ button, a, input, select, textarea { border-radius: var(--radius); }
 button.primary,
 .chip-button.primary,
 .console-nav button.is-click-highlight,
-.module-trigger.is-click-highlight,
-.branch-button.is-click-highlight {
+.module-trigger.is-click-highlight {
   background: var(--accent);
   border-color: var(--accent);
   color: white;
@@ -182,8 +181,7 @@ button.primary,
   box-shadow: inset 0 0 0 2px rgba(52, 58, 64, .16);
 }
 
-.module-trigger.is-click-highlight small,
-.branch-button.is-click-highlight small {
+.module-trigger.is-click-highlight small {
   color: rgba(255, 255, 255, .78);
 }
 
@@ -228,7 +226,7 @@ button.primary,
 .module-trigger {
   min-height: 44px;
   align-items: center;
-  grid-template-columns: minmax(0, 1fr) 18px;
+  grid-template-columns: minmax(0, 1fr);
   padding: 7px 10px;
 }
 
@@ -243,72 +241,10 @@ button.primary,
   line-height: 1.15;
 }
 
-.module-caret {
-  width: 0;
-  height: 0;
-  justify-self: center;
-  align-self: center;
-  border-left: 5px solid transparent;
-  border-right: 5px solid transparent;
-  border-top: 6px solid currentColor;
-  opacity: .78;
-  transition: transform var(--motion);
-  transform-origin: 50% 45%;
-}
-
-.module-trigger.is-open .module-caret {
-  transform: rotate(180deg);
-}
-
-.branch-panel {
-  max-height: 0;
-  opacity: 0;
-  overflow: hidden;
-  visibility: hidden;
-  pointer-events: none;
-  transition: max-height var(--motion), opacity var(--motion-fast), visibility 0s linear 260ms;
-}
-
-.branch-panel.is-open {
-  max-height: 560px;
-  opacity: 1;
-  visibility: visible;
-  pointer-events: auto;
-  transition-delay: 0s;
-}
-
-.branch-panel-inner {
-  overflow: hidden;
-}
-
-.branch-panel.is-open .branch-panel-inner {
-  padding-top: 6px;
-}
-
-.module-trigger small,
-.branch-button small {
+.module-trigger small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.module-branches {
-  display: grid;
-  gap: 5px;
-  padding-left: 10px;
-  border-left: 2px solid var(--line);
-}
-
-.branch-button {
-  min-height: auto;
-  padding: 6px 9px;
-  font-size: 12px;
-  line-height: 1.18;
-}
-
-.branch-button small {
-  font-size: 11px;
-  line-height: 1.12;
 }
 
 .operator-card {
