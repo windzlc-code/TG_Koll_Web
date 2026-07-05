@@ -28,12 +28,16 @@
         <button type="button" data-view="settings">系统状态</button>
       </nav>
 
+      <div class="side-actions">
+        <a href="/persona-dashboard.html">人设看板</a>
+        <button id="consoleSettings" type="button" data-view="console_settings">通用设置</button>
+      </div>
+
       <div class="operator-card">
         <div class="tiny">当前账号</div>
         <strong id="consoleMeName">...</strong>
       </div>
       <div class="side-actions">
-        <a href="/persona-dashboard.html">人设看板</a>
         <button id="consoleLogout" type="button">退出</button>
       </div>
     </aside>
@@ -184,6 +188,17 @@
             <span>持久化浏览器环境 + 代理 + 有头模式。</span>
           </div>
         </div>
+      </section>
+
+      <section class="view" data-panel="console_settings">
+        <div class="panel-head">
+          <div>
+            <div class="eyebrow">设置</div>
+            <h3>通用设置</h3>
+          </div>
+        </div>
+        <div id="consoleSettingsBody"></div>
+        <div id="consoleSettingsMsg" class="notice"></div>
       </section>
     </main>
   </div>

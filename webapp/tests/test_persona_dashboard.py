@@ -536,6 +536,73 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(archives[0]["name"], "New Persona")
         self.assertEqual(archives[0]["posts"], [])
 
+    def test_persona_ai_keywords_calls_cli_and_returns_keywords(self):
+        with mock.patch.object(
+            server,
+            "_run_persona_create_cli",
+            return_value={"ok": True, "keywords": ["夜班司机", "城市见闻", "深夜通勤", "口语表达", "乘客故事"]},
+        ) as cli_mock:
+            resp = self.client.post(
+                "/api/persona_dashboard/personas/ai_keywords",
+                json={"name": "Night Driver", "prompt": "夜班出租车司机，分享夜间载客见闻和城市通勤观察。"},
+            )
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["name"], "Night Driver")
+        self.assertEqual(len(body["keywords"]), 5)
+        cli_mock.assert_called_once()
+        payload = cli_mock.call_args.args[0]
+        self.assertEqual(payload["action"], "suggest-keywords")
+        self.assertEqual(payload["personaName"], "Night Driver")
+
+    def test_persona_ai_create_calls_cli_and_returns_profile(self):
+        archives = [
+            {
+                "id": "persona-ai-1",
+                "name": "Night Driver",
+                "content": "一位夜班司机人设，擅长分享深夜通勤与城市观察。",
+                "createdAt": "2026-07-05T00:00:00Z",
+                "updatedAt": "2026-07-05T00:00:00Z",
+                "setup": {
+                    "personaName": "Night Driver",
+                    "customTopic": "夜班出租车司机，分享夜间载客见闻和城市通勤观察。",
+                    "stylePrompt": "口语化，带城市夜生活细节。",
+                },
+                "posts": [],
+            }
+        ]
+        (self.tool_runtime_dir / "persona_archives.json").write_text(json.dumps(archives, ensure_ascii=False, indent=2), encoding="utf-8")
+        with mock.patch.object(
+            server,
+            "_run_persona_create_cli",
+            return_value={
+                "ok": True,
+                "archiveId": "persona-ai-1",
+                "name": "Night Driver",
+                "content": "一位夜班司机人设，擅长分享深夜通勤与城市观察。",
+                "setup": {"personaName": "Night Driver", "customTopic": "夜班出租车司机，分享夜间载客见闻和城市通勤观察。"},
+                "selectedKeywords": ["夜班司机", "城市见闻"],
+            },
+        ) as cli_mock:
+            resp = self.client.post(
+                "/api/persona_dashboard/personas/ai_create",
+                json={
+                    "name": "Night Driver",
+                    "prompt": "夜班出租车司机，分享夜间载客见闻和城市通勤观察。",
+                    "selected_keywords": ["夜班司机", "城市见闻"],
+                },
+            )
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["selected_keywords"], ["夜班司机", "城市见闻"])
+        self.assertEqual(body["profile"]["id"], "persona-ai-1")
+        self.assertEqual(body["profile"]["name"], "Night Driver")
+        cli_mock.assert_called_once()
+        payload = cli_mock.call_args.args[0]
+        self.assertEqual(payload["action"], "create-from-prompt")
+        self.assertEqual(payload["selectedKeywords"], ["夜班司机", "城市见闻"])
+
     def test_create_persona_post_lists_draft(self):
         self._write_archives()
         create_resp = self.client.post(

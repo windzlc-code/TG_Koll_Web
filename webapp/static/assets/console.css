@@ -348,6 +348,12 @@ button.primary,
   text-decoration: none;
 }
 
+.console-settings-page {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
 .console-main {
   border-radius: 12px;
   padding: 16px;
@@ -357,13 +363,20 @@ button.primary,
 .console-topbar,
 .panel-head,
 .command-actions,
-.topbar-actions,
-.row-actions,
-.module-toolbar {
+.topbar-actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.row-actions,
+.module-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .panel-head-actions {
@@ -415,6 +428,14 @@ button.primary,
   padding: 14px;
 }
 
+.module-panel.is-persona-module {
+  padding-top: 8px;
+}
+
+.module-panel.is-persona-module > .panel-head {
+  display: none;
+}
+
 .module-chip,
 .status {
   display: inline-flex;
@@ -460,7 +481,7 @@ textarea:focus {
 .persona-actions-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 10px;
 }
 
 .status-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -567,7 +588,7 @@ textarea:focus {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 256px;
   gap: 12px;
-  margin-top: 14px;
+  margin-top: 0;
   align-items: start;
 }
 
@@ -581,6 +602,10 @@ textarea:focus {
 .persona-list-shell {
   position: sticky;
   top: 0;
+  align-self: start;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  max-height: min(812px, calc(100vh - 136px));
+  overflow: hidden;
 }
 
 .persona-list-head,
@@ -625,10 +650,39 @@ textarea:focus {
   gap: 8px;
 }
 
+.persona-list-actions,
 .persona-new-group-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 64px;
   gap: 6px;
+}
+
+.persona-list-actions button {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  background: var(--panel-solid);
+  color: var(--ink);
+  cursor: pointer;
+  transition: border-color var(--motion-fast), box-shadow var(--motion-fast), background var(--motion-fast), color var(--motion-fast), transform var(--motion-fast);
+}
+
+.persona-list-actions button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.persona-list-actions button:hover,
+.persona-list-card:hover {
+  border-color: var(--hover-border);
+  box-shadow: var(--hover-shadow);
+  transform: translateY(-1px);
+}
+
+.persona-list-actions button:active,
+.persona-list-card:active {
+  box-shadow: var(--active-shadow);
+  transform: translateY(0);
 }
 
 .persona-new-group-row input {
@@ -638,6 +692,55 @@ textarea:focus {
 .persona-new-group-row button {
   min-height: 38px;
   padding: 0 10px;
+}
+
+.persona-list-scroll {
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  overflow-x: visible;
+  padding: 8px 16px 8px 4px;
+  margin: -4px -10px 0 -4px;
+  scrollbar-width: thin;
+  scrollbar-gutter: stable;
+}
+
+.persona-list-pager {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  align-items: center;
+  padding-top: 4px;
+  background: var(--panel);
+}
+
+.persona-list-pager span {
+  grid-column: 1 / -1;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  order: -1;
+}
+
+.persona-list-pager button {
+  min-height: 32px;
+  border: 1px solid var(--line);
+  background: var(--panel-solid);
+  color: var(--ink);
+  cursor: pointer;
+  transition: border-color var(--motion-fast), box-shadow var(--motion-fast), background var(--motion-fast), color var(--motion-fast), transform var(--motion-fast);
+}
+
+.persona-list-pager button:hover:not(:disabled) {
+  border-color: var(--hover-border);
+  box-shadow: var(--hover-shadow);
+  transform: translateY(-1px);
+}
+
+.persona-list-pager button:disabled {
+  cursor: not-allowed;
+  opacity: .48;
 }
 
 .persona-layer-group {
@@ -731,6 +834,7 @@ textarea:focus {
   border-radius: var(--radius);
   background: var(--panel-solid);
   padding: 5px;
+  transition: border-color var(--motion-fast), box-shadow var(--motion-fast), background var(--motion-fast), color var(--motion-fast), transform var(--motion-fast);
 }
 
 .persona-list-card.persona-folder-card {
@@ -741,6 +845,11 @@ textarea:focus {
   border-color: var(--ink);
   background: color-mix(in srgb, var(--ink) 7%, var(--panel-solid));
   box-shadow: 0 0 0 1px var(--ink);
+}
+
+.persona-list-card.is-active:hover {
+  border-color: var(--ink);
+  box-shadow: 0 0 0 1px var(--ink), var(--hover-shadow);
 }
 
 .persona-list-card.is-editing {
@@ -852,7 +961,7 @@ textarea:focus {
   top: calc(100% + 6px);
   right: 6px;
   z-index: 1200;
-  width: min(276px, calc(100vw - 36px));
+  width: min(228px, calc(100vw - 36px));
   display: grid;
   gap: 8px;
   padding: 10px;
@@ -861,6 +970,8 @@ textarea:focus {
   background: var(--panel-solid);
   box-shadow: 0 16px 36px rgba(15, 23, 42, .22);
   opacity: 1;
+  transform-origin: top right;
+  animation: personaMenuReveal 160ms cubic-bezier(.22, .8, .24, 1) both;
 }
 
 .persona-card-menu::before {
@@ -877,7 +988,7 @@ textarea:focus {
 }
 
 .persona-card-menu--group {
-  width: min(276px, calc(100vw - 36px));
+  width: min(228px, calc(100vw - 36px));
 }
 
 .persona-card-menu label {
@@ -909,6 +1020,17 @@ textarea:focus {
   font-size: 12px;
 }
 
+@keyframes personaMenuReveal {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .persona-list-item.is-active {
   background: var(--accent);
   border-color: var(--accent);
@@ -934,6 +1056,40 @@ textarea:focus {
 
 .persona-create-workbench textarea {
   min-height: 180px;
+}
+
+.persona-keyword-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.persona-keyword-grid button {
+  min-height: 42px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  background: var(--panel-solid);
+  color: var(--ink);
+  font-weight: 760;
+  text-align: left;
+  cursor: pointer;
+}
+
+.persona-keyword-grid button.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.persona-create-result-copy {
+  display: grid;
+  gap: 10px;
+}
+
+.persona-create-result-copy p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
 }
 
 .persona-group-tabs button,
@@ -1008,7 +1164,10 @@ textarea:focus {
 }
 
 .persona-detail-controls {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 280px));
+  justify-content: start;
+  align-items: end;
+  gap: 10px 12px;
 }
 
 .field-box {
@@ -1042,6 +1201,14 @@ textarea:focus {
 
 .persona-inline-panel--nested {
   background: var(--panel-solid);
+}
+
+.persona-draft-editing-banner {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .persona-panel-intro {
@@ -1161,22 +1328,34 @@ textarea:focus {
   justify-content: space-between;
   gap: 10px;
   margin-top: auto;
+  flex-wrap: wrap;
 }
 
 .persona-draft-card-footer small {
   min-height: 18px;
 }
 
+.persona-draft-card-actions {
+  justify-content: flex-start;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.persona-draft-card-actions button {
+  min-width: 0;
+}
+
 .persona-draft-toolbar {
   display: flex;
   align-items: end;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 12px;
   flex-wrap: wrap;
 }
 
 .persona-draft-toolbar label {
-  flex: 1 1 320px;
+  flex: 0 1 560px;
+  max-width: 560px;
   margin-top: 0;
 }
 
@@ -1197,7 +1376,7 @@ textarea:focus {
 .persona-memory-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 10px;
   flex-wrap: wrap;
 }
@@ -1207,7 +1386,8 @@ textarea:focus {
 }
 
 .persona-memory-search {
-  flex: 1 1 220px;
+  flex: 0 1 520px;
+  max-width: 520px;
   min-width: 180px;
 }
 
@@ -1218,6 +1398,7 @@ textarea:focus {
 .persona-memory-actions {
   display: inline-flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .persona-memory-actions button {
@@ -1709,6 +1890,7 @@ textarea:focus {
 
   .persona-list-shell {
     position: static;
+    order: -1;
   }
 
   .persona-draft-grid,

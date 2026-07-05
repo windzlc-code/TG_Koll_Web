@@ -251,7 +251,7 @@ def _require_positive_balance(user: dict[str, Any]) -> None:
     except Exception:
         bal = 0
     if bal <= 0:
-        raise HTTPException(status_code=403, detail="额度为0，无法提交生成，请联系运营管理员分配额度")
+        raise HTTPException(status_code=403, detail="insufficient balance")
 
 
 def _task_queue_worker(worker_id: int) -> None:
@@ -272,7 +272,7 @@ def _task_queue_worker(worker_id: int) -> None:
                         task_id=str(task_id),
                         user_id=int(user_id),
                         kind="done",
-                        message="任务失败",
+                        message="task failed",
                         data={"status": "failed", "error": "任务执行线程异常退出", "cost_cents": 0},
                     )
         finally:
@@ -445,7 +445,7 @@ def _resume_pending_tasks() -> None:
                 continue
             payload = _apply_runtime_defaults(task_type, payload)
             if status == "running":
-                restart_error = "服務重啟，上一輪生成已中斷，請重新提交任務。"
+                restart_error = "service restarted while task was still running; please resubmit the task"
                 conn.execute(
                     "UPDATE tasks SET status = ?, error = ?, updated_at = ? WHERE id = ?",
                     ("failed", restart_error, _now_ts(), tid),
@@ -471,7 +471,7 @@ def _resume_pending_tasks() -> None:
                     task_id=tid,
                     user_id=user_id,
                     kind="done",
-                    message="任务失败",
+                    message="task failed",
                     data={"status": "failed", "error": "任务队列已满，无法入队", "cost_cents": 0},
                 )
 
@@ -539,12 +539,12 @@ def _guess_file_kind(path_or_name: Any) -> str:
 
 def _format_uploaded_files(files: Any) -> str:
     if not isinstance(files, list) or not files:
-        return "无文件"
+        return "no files"
     rows: list[str] = []
     for item in files:
         if not isinstance(item, dict):
             continue
-        name = str(item.get("name") or Path(str(item.get("path") or "")).name or "未命名文件")
+        name = str(item.get("name") or Path(str(item.get("path") or "")).name or "unnamed-file")
         kind = str(item.get("kind") or "file")
         rows.append(f"{name}:{kind}")
     return "、".join(rows) if rows else "无文件"
@@ -13494,6 +13494,17 @@ class PersonaDashboardPersonaCreatePayload(BaseModel):
     content: str = ""
 
 
+class PersonaDashboardPersonaAiKeywordsPayload(BaseModel):
+    name: str = ""
+    prompt: str = ""
+
+
+class PersonaDashboardPersonaAiCreatePayload(BaseModel):
+    name: str = ""
+    prompt: str = ""
+    selected_keywords: list[str] = Field(default_factory=list)
+
+
 class PersonaDashboardGroupCreatePayload(BaseModel):
     name: str = ""
 
@@ -14228,6 +14239,10 @@ def _run_persona_workflow_cli(payload: dict[str, Any], timeout_seconds: int = 90
     return data
 
 
+def _run_persona_create_cli(payload: dict[str, Any], timeout_seconds: int = 900) -> dict[str, Any]:
+    return _run_persona_workflow_cli(payload, timeout_seconds=timeout_seconds)
+
+
 def _build_persona_generate_instruction(payload: PersonaDashboardGeneratePostsPayload) -> str:
     prompt = str(payload.prompt or "").strip()
     target_words = max(10, min(int(payload.target_words or 120), 2000))
@@ -14461,6 +14476,71 @@ def _create_persona_archive(payload: PersonaDashboardPersonaCreatePayload) -> di
     return _build_persona_dashboard_profile(archive)
 
 
+def _persona_dashboard_suggest_keywords(payload: PersonaDashboardPersonaAiKeywordsPayload) -> dict[str, Any]:
+    name = str(payload.name or "").strip()
+    prompt = str(payload.prompt or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="persona name cannot be empty")
+    if not prompt:
+        raise HTTPException(status_code=400, detail="persona prompt cannot be empty")
+    result = _run_persona_create_cli({
+        "action": "suggest-keywords",
+        "personaName": name,
+        "prompt": prompt,
+    })
+    keywords = [
+        str(item or "").strip()
+        for item in (result.get("keywords") if isinstance(result.get("keywords"), list) else [])
+        if str(item or "").strip()
+    ][:12]
+    return {
+        "ok": True,
+        "name": name,
+        "keywords": keywords,
+    }
+
+
+def _persona_dashboard_create_persona_with_ai(payload: PersonaDashboardPersonaAiCreatePayload) -> dict[str, Any]:
+    name = str(payload.name or "").strip()
+    prompt = str(payload.prompt or "").strip()
+    selected_keywords = [
+        str(item or "").strip()
+        for item in (payload.selected_keywords or [])
+        if str(item or "").strip()
+    ][:8]
+    if not name:
+        raise HTTPException(status_code=400, detail="persona name cannot be empty")
+    if not prompt:
+        raise HTTPException(status_code=400, detail="persona prompt cannot be empty")
+    result = _run_persona_create_cli({
+        "action": "create-from-prompt",
+        "personaName": name,
+        "prompt": prompt,
+        "selectedKeywords": selected_keywords,
+    })
+    archive_id = str(result.get("archiveId") or "").strip()
+    if archive_id:
+        _, _, archives = _persona_archive_source_for_write(archive_id)
+        archive = _find_persona_archive(archives, archive_id)
+        if archive:
+            return {
+                "ok": True,
+                "profile": _build_persona_dashboard_profile(archive),
+                "selected_keywords": selected_keywords,
+            }
+    profile = {
+        "id": archive_id,
+        "name": str(result.get("name") or name).strip(),
+        "content": str(result.get("content") or "").strip(),
+        "setup": result.get("setup") if isinstance(result.get("setup"), dict) else {},
+    }
+    return {
+        "ok": True,
+        "profile": profile,
+        "selected_keywords": selected_keywords,
+    }
+
+
 def _create_persona_archive_post(archive_id: str, payload: PersonaDashboardDraftPostPayload) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     if not clean_id:
@@ -14489,6 +14569,39 @@ def _create_persona_archive_post(archive_id: str, payload: PersonaDashboardDraft
     archive["updatedAt"] = now
     _write_persona_archives_preserving_shape(path, raw, archives)
     return _compact_persona_archive_post(record)
+
+
+def _update_persona_archive_post(archive_id: str, post_id: str, payload: PersonaDashboardDraftPostPayload) -> dict[str, Any]:
+    clean_id = str(archive_id or "").strip()
+    clean_post_id = str(post_id or "").strip()
+    if not clean_id or not clean_post_id:
+        raise HTTPException(status_code=400, detail="missing archive_id or post_id")
+    content = str(payload.content or "").strip()
+    title = str(payload.title or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="post content cannot be empty")
+    path, raw, archives = _persona_archive_source_for_write(clean_id)
+    archive = _find_persona_archive(archives, clean_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="persona not found")
+    posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+    target: dict[str, Any] | None = None
+    target_index = 0
+    for index, post in enumerate(posts):
+        if isinstance(post, dict) and str(post.get("id") or "").strip() == clean_post_id:
+            target = post
+            target_index = index
+            break
+    if target is None:
+        raise HTTPException(status_code=404, detail="post not found")
+    now = _persona_dashboard_iso_now()
+    target["title"] = title or _persona_post_title(content, target_index)
+    target["content"] = content
+    target["wordCount"] = len(content)
+    target["updatedAt"] = now
+    archive["updatedAt"] = now
+    _write_persona_archives_preserving_shape(path, raw, archives)
+    return _compact_persona_archive_post(target)
 
 
 def _persona_post_media_items_from_paths(paths: list[str]) -> list[dict[str, str]]:
@@ -15265,6 +15378,28 @@ def _delete_persona_dashboard_post(archive_id: str, post_key: str) -> dict[str, 
     _add_persona_dashboard_deleted_post(clean_id, clean_key)
     _write_persona_archives_preserving_shape(path, raw, archives)
     return {"ok": True, "archive_id": clean_id, "post_key": clean_key, "deleted": deleted, "path": path.name}
+
+
+def _delete_persona_dashboard_post_by_id(archive_id: str, post_id: str) -> dict[str, Any]:
+    clean_id = str(archive_id or "").strip()
+    clean_post_id = str(post_id or "").strip()
+    if not clean_id or not clean_post_id:
+        raise HTTPException(status_code=400, detail="missing archive_id or post_id")
+    archives, _ = _read_tool_r18_persona_archives()
+    archive = _find_persona_archive(archives, clean_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="persona not found")
+    posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+    target = next(
+        (
+            post for post in posts
+            if isinstance(post, dict) and str(post.get("id") or "").strip() == clean_post_id
+        ),
+        None,
+    )
+    if target is None:
+        raise HTTPException(status_code=404, detail="post not found")
+    return _delete_persona_dashboard_post(clean_id, _persona_dashboard_post_key(clean_id, target))
 
 
 def _delete_persona_dashboard_persona(archive_id: str) -> dict[str, Any]:
@@ -16895,6 +17030,14 @@ def create_app() -> FastAPI:
     def api_persona_dashboard_create_persona(payload: PersonaDashboardPersonaCreatePayload, _user: dict[str, Any] = Depends(get_current_user)):
         return _create_persona_archive(payload)
 
+    @app.post("/api/persona_dashboard/personas/ai_keywords")
+    def api_persona_dashboard_persona_ai_keywords(payload: PersonaDashboardPersonaAiKeywordsPayload, _user: dict[str, Any] = Depends(get_current_user)):
+        return _persona_dashboard_suggest_keywords(payload)
+
+    @app.post("/api/persona_dashboard/personas/ai_create")
+    def api_persona_dashboard_persona_ai_create(payload: PersonaDashboardPersonaAiCreatePayload, _user: dict[str, Any] = Depends(get_current_user)):
+        return _persona_dashboard_create_persona_with_ai(payload)
+
     @app.get("/api/persona_dashboard/personas/{archive_id}/posts")
     def api_persona_dashboard_persona_posts(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
         return {"ok": True, "posts": _list_persona_archive_posts(archive_id)}
@@ -16966,6 +17109,10 @@ def create_app() -> FastAPI:
     def api_persona_dashboard_create_post(archive_id: str, payload: PersonaDashboardDraftPostPayload, _user: dict[str, Any] = Depends(get_current_user)):
         return _create_persona_archive_post(archive_id, payload)
 
+    @app.patch("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}")
+    def api_persona_dashboard_update_post(archive_id: str, post_id: str, payload: PersonaDashboardDraftPostPayload, _user: dict[str, Any] = Depends(get_current_user)):
+        return _update_persona_archive_post(archive_id, post_id, payload)
+
     @app.post("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}/media/from_task")
     def api_persona_dashboard_post_media_from_task(archive_id: str, post_id: str, payload: PersonaDashboardPostMediaTaskAttachPayload, user: dict[str, Any] = Depends(get_current_user)):
         return _attach_task_output_to_persona_post(
@@ -17033,6 +17180,10 @@ def create_app() -> FastAPI:
     @app.delete("/api/persona_dashboard/personas/{archive_id}")
     def api_persona_dashboard_delete_persona(archive_id: str):
         return _delete_persona_dashboard_persona(archive_id)
+
+    @app.delete("/api/persona_dashboard/personas/{archive_id}/posts/by_id/{post_id}")
+    def api_persona_dashboard_delete_post_by_id(archive_id: str, post_id: str):
+        return _delete_persona_dashboard_post_by_id(archive_id, post_id)
 
     @app.delete("/api/persona_dashboard/personas/{archive_id}/posts/{post_key}")
     def api_persona_dashboard_delete_post(archive_id: str, post_key: str):
