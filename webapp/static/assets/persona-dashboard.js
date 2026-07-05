@@ -261,6 +261,9 @@ let personaDashboardSelectedAutomationAccountId = "";
 let personaDashboardPasswordDrafts = {};
 let personaDashboardPasswordDirtyAccountIds = {};
 const PERSONA_DASHBOARD_SAVED_PASSWORD_MASK = "********";
+const personaDashboardInitialParams = new URLSearchParams(window.location.search || "");
+const personaDashboardInitialPersonaId = String(personaDashboardInitialParams.get("persona_id") || personaDashboardInitialParams.get("persona") || "").trim();
+let personaDashboardInitialPersonaApplied = false;
 
 const PD_LABELS = {
   likes: "点赞",
@@ -338,6 +341,11 @@ function pdPlatformFilter() {
   return String((pdEl("personaDashboardPlatform") && pdEl("personaDashboardPlatform").value) || "").trim().toLowerCase();
 }
 
+function pdIsWebVisiblePlatform(value) {
+  const platform = String(value || "").trim().toLowerCase();
+  return !!platform && platform !== "telegram";
+}
+
 function pdPostHeat(row) {
   return Number(row.view_count || 0)
     + Number(row.like_count || 0)
@@ -410,6 +418,7 @@ function pdFilteredPostRows(persona) {
   const sort = String(personaDashboardPostSort || "hot_desc");
   const dir = sort.endsWith("_asc") ? 1 : -1;
   return (persona.post_metrics || []).filter((row) => {
+    if (!pdIsWebVisiblePlatform(row.platform)) return false;
     if (platform && String(row.platform || "").toLowerCase() !== platform) return false;
     if (!pdDateInRange(row.published_at || row.captured_at)) return false;
     return pdPostMatchesType(row);
@@ -485,13 +494,13 @@ function pdBuildFilteredCharts(visiblePersonas, data) {
     Object.keys(engagement).forEach((key) => { engagement[key] += Number(hot[key] || 0); });
     (persona.hot_platforms || []).forEach((item) => {
       const platform = String(item.platform || "").trim();
-      if (platform) platformDistribution[platform] = (platformDistribution[platform] || 0) + 1;
+      if (pdIsWebVisiblePlatform(platform)) platformDistribution[platform] = (platformDistribution[platform] || 0) + 1;
     });
     Object.keys((persona.counts && persona.counts.platform_posts) || {}).forEach((platform) => {
       const count = Number(persona.counts.platform_posts[platform] || 0);
-      if (count > 0) platformDistribution[platform] = (platformDistribution[platform] || 0) + count;
+      if (count > 0 && pdIsWebVisiblePlatform(platform)) platformDistribution[platform] = (platformDistribution[platform] || 0) + count;
     });
-    const platforms = persona.hot_platforms || [];
+    const platforms = (persona.hot_platforms || []).filter((item) => pdIsWebVisiblePlatform(item.platform));
     if (!platforms.length) coverage.none += 1;
     else if (platforms.some((item) => item.complete)) coverage.complete += 1;
     else coverage.partial_or_unknown += 1;
@@ -604,8 +613,12 @@ function pdMatches(persona) {
   if (search && !haystack.includes(search)) return false;
   if (pad && String(persona.bound_pad_code || "") !== pad) return false;
   if (platform) {
-    const platforms = (persona.hot_platforms || []).map((item) => String(item.platform || "").toLowerCase());
-    const platformPosts = Object.keys((persona.counts && persona.counts.platform_posts) || {}).map((item) => item.toLowerCase());
+    const platforms = (persona.hot_platforms || [])
+      .map((item) => String(item.platform || "").toLowerCase())
+      .filter((item) => pdIsWebVisiblePlatform(item));
+    const platformPosts = Object.keys((persona.counts && persona.counts.platform_posts) || {})
+      .map((item) => item.toLowerCase())
+      .filter((item) => pdIsWebVisiblePlatform(item));
     if (!platforms.includes(platform) && !platformPosts.includes(platform)) return false;
   }
   return pdDateInRange(persona.updated_at || persona.created_at);
@@ -711,9 +724,7 @@ function pdRenderPersonaCard(persona) {
   personaDashboardPostPage = Math.max(1, Math.min(pageCount, Number(personaDashboardPostPage || 1)));
   const start = (personaDashboardPostPage - 1) * pageSize;
   const threads = persona.threads_account || {};
-  const accountPlatform = String(personaDashboardAccountPlatform || "threads").toLowerCase();
-  const isThreadsPlatform = accountPlatform === "threads";
-  const platforms = (persona.hot_platforms || []).map((item) => `
+  const platforms = (persona.hot_platforms || []).filter((item) => pdIsWebVisiblePlatform(item.platform)).map((item) => `
     <div class="persona-platform-row">
       <strong>${pdEscape(item.platform || "-")}</strong>
       <span>账号主页浏览 ${pdEscape(pdNumber(item.recent_views))}</span>
@@ -728,7 +739,7 @@ function pdRenderPersonaCard(persona) {
       <td class="persona-post-platform">${pdEscape(row.platform || "-")}</td>
       <td class="persona-post-source">
         <div>${pdEscape(String(row.content || row.source_url || "-").slice(0, 120))}</div>
-        ${pdRenderTelegramContentBadges(row)}
+        ${pdRenderPostContentBadges(row)}
       </td>
       <td class="persona-post-time">${pdEscape(pdDate(row.published_at || row.captured_at))}</td>
       <td class="persona-post-number">${pdEscape(pdNumber(row.like_count))}</td>
@@ -751,20 +762,17 @@ function pdRenderPersonaCard(persona) {
         <div class="persona-account-compact">
           <div class="persona-account-title">
             <label for="personaAccountPlatform">账号平台</label>
-            <span>${isThreadsPlatform ? "绑定后可刷新该账号热点" : "当前仅展示平台切换"}</span>
+            <span>绑定后可刷新该账号热点</span>
           </div>
           <div class="persona-account-grid">
             <select id="personaAccountPlatform">
-              <option value="threads" ${isThreadsPlatform ? "selected" : ""}>Threads</option>
-              <option value="telegram" ${accountPlatform === "telegram" ? "selected" : ""}>Telegram</option>
+              <option value="threads" selected>Threads</option>
             </select>
-            <input id="personaThreadsInput" type="text" value="${isThreadsPlatform ? pdEscape(threads.handle || "") : ""}" placeholder="${isThreadsPlatform ? "username" : "暂未接入 Telegram 绑定"}" ${isThreadsPlatform ? "" : "disabled"} />
+            <input id="personaThreadsInput" type="text" value="${pdEscape(threads.handle || "")}" placeholder="Threads 用户名 / handle" />
           </div>
           <div class="persona-account-actions">
-            <button class="ghost" type="button" id="personaBindThreadsBtn" ${isThreadsPlatform ? "" : "disabled"}>保存</button>
-            <button class="ghost persona-unbind-btn" type="button" id="personaUnbindThreadsBtn" ${isThreadsPlatform && threads.handle ? "" : "disabled"}>解绑</button>
-            <button class="primary" type="button" id="personaRefreshCurrentBtn">刷新人设</button>
-            <button class="primary persona-hot-refresh-btn" type="button" id="personaRefreshBoundHotBtn" ${isThreadsPlatform && threads.handle ? "" : "disabled"}>刷新热点</button>
+            <button class="ghost" type="button" id="personaBindThreadsBtn">保存</button>
+            <button class="ghost persona-unbind-btn" type="button" id="personaUnbindThreadsBtn" ${threads.handle ? "" : "disabled"}>解绑</button>
           </div>
         </div>
         <div class="persona-score">
@@ -775,7 +783,7 @@ function pdRenderPersonaCard(persona) {
       </div>
       ${pdPersonaWarnings(persona)}
       <div class="persona-bind-hint">
-        <span>${isThreadsPlatform ? "没有绑定时无法抓取该人设账号热点；刷新会使用服务器端已保存的浏览器授权。" : "Telegram 账号绑定和热点抓取暂未接入；切回 Threads 可保存、解绑和刷新热点。"}</span>
+        <span>没有绑定时无法抓取该人设账号热点；刷新会使用服务器端已保存的浏览器授权。</span>
       </div>
       <div class="persona-detail-grid">
         <div><span>帖子</span><strong>${pdEscape(pdNumber(counts.posts))}</strong></div>
@@ -914,7 +922,7 @@ function pdRenderAutomationPanel(persona) {
   const passwordVisible = passwordCanReveal && String(personaDashboardVisiblePasswordAccountId || "") === selectedAccountId;
   const readyCount = accounts.filter((account) => account.status === "ready").length;
   const platformLabel = platform === "threads" ? "Threads" : "Instagram";
-  const usernamePlaceholder = platform === "threads" ? "threads username / handle" : "instagram username";
+  const usernamePlaceholder = platform === "threads" ? "Threads 用户名 / handle" : "Instagram 用户名";
   const activeReplyTab = localStorage.getItem("personaDashboardThreadsReplyTab") === "hot" ? "hot" : "comment";
   const activeReplyGroup = activeReplyTab === "hot" ? "threads_hot_reply" : "threads_comment_reply";
   const commentDefaults = pdThreadsStrategyPayload("threads_comment_reply");
@@ -955,7 +963,7 @@ function pdRenderAutomationPanel(persona) {
       <div class="persona-auto-head">
         <div>
           <h4>社媒自动化执行</h4>
-          <div class="small">Instagram / Threads · Camoufox Profile · 住宅代理 · 有头模式</div>
+          <div class="small">Instagram / Threads · 指纹浏览器执行环境 · 住宅代理 · 有头模式</div>
         </div>
         <div class="persona-auto-kpis">
           <span>账号 ${pdEscape(String(allAccounts.length))}</span>
@@ -1017,6 +1025,21 @@ function pdRenderAutomationPanel(persona) {
             <label>Threads 自动化方式</label>
             <div class="small">可直接使用预设策略；选择自定义后才会展开本次执行参数。</div>
             <div class="persona-strategy-panel">
+              <div class="persona-strategy-section">
+                <div class="persona-strategy-head">
+                  <div>
+                    <strong>发布推文</strong>
+                    <small>支持正文直发，可选附图；不再强制要求媒体文件。</small>
+                  </div>
+                  <button class="ghost persona-strategy-action" type="button" data-auto-task="publish_post" ${accounts.length ? "" : "disabled"}>执行发布</button>
+                </div>
+                <div class="persona-strategy-row persona-strategy-row-compact">
+                  <div class="persona-strategy-fields">
+                    <label class="persona-strategy-field-wide">正文<textarea id="personaAutoText" rows="3" placeholder="填写 Threads 发布正文"></textarea></label>
+                    <label class="persona-strategy-field-wide">媒体路径<textarea id="personaAutoMedia" rows="2" placeholder="可选，多个本地文件路径用英文逗号分隔"></textarea></label>
+                  </div>
+                </div>
+              </div>
               <div class="persona-strategy-section">
                 <div class="persona-strategy-head">
                   <div>
@@ -1085,8 +1108,8 @@ function pdRenderAutomationPanel(persona) {
               </div>
             </div>
           ` : `
-            <label>目标 URL / 主页 username</label>
-            <input id="personaAutoTarget" type="text" placeholder="https://www.instagram.com/p/xxxx/ 或 username" />
+            <label>目标 URL / 主页用户名</label>
+            <input id="personaAutoTarget" type="text" placeholder="https://www.instagram.com/p/xxxx/ 或主页用户名" />
             <label>正文 / 评论 / 回复</label>
             <textarea id="personaAutoText" rows="3" placeholder="发帖 Caption、评论内容或回复内容"></textarea>
             <label>媒体路径</label>
@@ -1154,14 +1177,14 @@ function pdPostComposition(row) {
   return { hasText, imageCount, videoCount, otherCount, totalMedia: media.length };
 }
 
-function pdRenderTelegramContentBadges(row) {
+function pdRenderPostContentBadges(row) {
   const parts = pdPostComposition(row);
   const badges = [];
   badges.push(`<span class="${parts.hasText ? "is-on" : "is-off"}">文字${parts.hasText ? "" : " 0"}</span>`);
   badges.push(`<span class="${parts.imageCount ? "is-on" : "is-off"}">图片 ${pdEscape(String(parts.imageCount))}</span>`);
   badges.push(`<span class="${parts.videoCount ? "is-on" : "is-off"}">视频 ${pdEscape(String(parts.videoCount))}</span>`);
   if (parts.otherCount) badges.push(`<span class="is-on">其他 ${pdEscape(String(parts.otherCount))}</span>`);
-  return `<div class="persona-post-content-badges" aria-label="Telegram 内容组成">${badges.join("")}</div>`;
+  return `<div class="persona-post-content-badges" aria-label="内容组成">${badges.join("")}</div>`;
 }
 
 function pdRenderPostMedia(row) {
@@ -1542,8 +1565,8 @@ function pdRenderPostModal(persona) {
           <div><span>逐帖浏览</span><strong>${pdEscape(pdNumber(row.view_count))}</strong></div>
         </div>
         <section class="persona-post-section">
-          <h4>Telegram 内容组成</h4>
-          ${pdRenderTelegramContentBadges(row)}
+          <h4>内容组成</h4>
+          ${pdRenderPostContentBadges(row)}
         </section>
         <section class="persona-post-section">
           <h4>完整推文内容</h4>
@@ -1649,33 +1672,44 @@ function pdRenderSettings() {
     <div class="persona-settings-card">
       <div>
         <h3>设置</h3>
-        <div class="small">调整单个人设推文表的分页数量，并可手动刷新全部已绑定账号。</div>
+        <div class="small">这里只保留看板本身的显示设置；全量刷新统一使用页面右上角入口。</div>
       </div>
       <label for="personaPageSizeInput">每页推文数量</label>
       <div class="persona-settings-row">
         <input id="personaPageSizeInput" type="number" min="5" max="100" step="5" value="${pdEscape(String(personaDashboardPageSize))}" />
-        <button class="primary" type="button" id="personaPageSizeApply">应用</button>
       </div>
-      <div class="persona-settings-row persona-settings-row-left">
-        <button class="primary" type="button" id="personaRefreshAllBtn">全量刷新全部已绑定人设</button>
-        <span class="small">会逐个读取已绑定 Threads 用户名的人设；无绑定的人设会跳过并提示。</span>
-      </div>
-      <div class="small">可设置 5 到 100 条。刷新过程中可留在页面查看任务状态。</div>
+      <div class="small">可设置 5 到 100 条，修改后会立即生效。</div>
     </div>
   `;
-  const apply = pdEl("personaPageSizeApply");
-  if (apply) {
-    apply.addEventListener("click", () => {
-      const input = pdEl("personaPageSizeInput");
-      const next = Math.max(5, Math.min(100, Number(input && input.value) || 10));
+  const input = pdEl("personaPageSizeInput");
+  if (input) {
+    const applyPageSize = () => {
+      const next = Math.max(5, Math.min(100, Number(input.value) || 10));
+      if (Number(input.value) !== next) input.value = String(next);
+      if (personaDashboardPageSize === next) return;
       personaDashboardPageSize = next;
       personaDashboardPostPage = 1;
       localStorage.setItem("personaDashboardPageSize", String(next));
       pdRenderDashboard();
-    });
+    };
+    input.addEventListener("change", applyPageSize);
+    input.addEventListener("blur", applyPageSize);
   }
-  const refreshAll = pdEl("personaRefreshAllBtn");
-  if (refreshAll) refreshAll.addEventListener("click", () => pdStartRefresh(""));
+}
+
+function pdApplyInitialPersonaSelection(visible) {
+  if (personaDashboardInitialPersonaApplied || !personaDashboardInitialPersonaId || !Array.isArray(visible) || !visible.length) return;
+  const index = visible.findIndex((persona, itemIndex) => {
+    const key = pdPersonaKey(persona, itemIndex);
+    return String(persona.id || "") === personaDashboardInitialPersonaId || String(key) === personaDashboardInitialPersonaId;
+  });
+  if (index < 0) {
+    personaDashboardInitialPersonaApplied = true;
+    return;
+  }
+  personaDashboardSelectedId = pdPersonaKey(visible[index], index);
+  personaDashboardTabPage = Math.floor(index / 10) + 1;
+  personaDashboardInitialPersonaApplied = true;
 }
 
 function pdRenderDashboard() {
@@ -1687,6 +1721,7 @@ function pdRenderDashboard() {
   const settings = pdEl("personaDashboardSettings");
   if (!data || !list || !empty) return;
   const visible = (data.personas || []).filter(pdMatches);
+  pdApplyInitialPersonaSelection(visible);
   let selected = visible.find((persona, index) => pdPersonaKey(persona, index) === String(personaDashboardSelectedId || ""));
   if (!["__overview__", "__settings__"].includes(personaDashboardSelectedId) && !selected && visible.length) {
     selected = visible[0];
@@ -1714,8 +1749,6 @@ function pdRenderDashboard() {
   const bind = pdEl("personaBindThreadsBtn");
   const unbind = pdEl("personaUnbindThreadsBtn");
   const accountPlatform = pdEl("personaAccountPlatform");
-  const refreshCurrent = pdEl("personaRefreshCurrentBtn");
-  const refreshBoundHot = pdEl("personaRefreshBoundHotBtn");
   const modalClose = pdEl("personaPostModalClose");
   const autoLogClose = pdEl("personaAutoLogClose");
   const autoLogRefresh = pdEl("personaAutoLogRefresh");
@@ -1735,8 +1768,6 @@ function pdRenderDashboard() {
       pdRenderDashboard();
     });
   }
-  if (refreshCurrent && selected) refreshCurrent.addEventListener("click", () => pdStartRefresh(selected.id, "已请求刷新当前人设..."));
-  if (refreshBoundHot && selected) refreshBoundHot.addEventListener("click", () => pdStartRefresh(selected.id, "已请求刷新该绑定账号的全量热点信息..."));
   if (postSort) {
     postSort.addEventListener("change", () => {
       personaDashboardPostSort = String(postSort.value || "hot_desc");
@@ -2122,11 +2153,18 @@ function pdAutomationPayload(taskType, persona = null, platform = "", strategy =
 }
 
 function pdValidateAutomationPayload(taskType, payload) {
-  if (taskType === "publish_post" && !(payload.media_paths || []).length) return "发帖需要填写至少一个媒体路径。";
+  if (taskType === "publish_post") {
+    const platform = String(payload.platform || "").trim().toLowerCase();
+    if (platform === "threads") {
+      if (!(payload.media_paths || []).length && !String(payload.caption || payload.content || payload.text || "").trim()) return "Threads 发帖至少要填写正文或媒体路径。";
+    } else if (!(payload.media_paths || []).length) {
+      return "发帖需要填写至少一个媒体路径。";
+    }
+  }
   if (["comment_post", "reply_comment"].includes(taskType) && !payload.target_url) return "评论/回复需要填写目标帖子 URL。";
   if (["comment_post", "reply_comment"].includes(taskType) && !(payload.comment || payload.reply)) return "评论/回复需要填写正文。";
   if (["like_post", "share_post", "repost_post"].includes(taskType) && !payload.target_url) return "点赞/分享/转发需要填写目标帖子 URL。";
-  if (taskType === "browse_profile" && !payload.target_url && !payload.username) return "浏览主页需要填写 URL 或 username。";
+  if (taskType === "browse_profile" && !payload.target_url && !payload.username) return "浏览主页需要填写 URL 或主页用户名。";
   return "";
 }
 
@@ -2229,7 +2267,7 @@ function pdBindAutomationEvents(persona, root) {
       const platform = pdSelectedAutomationPlatform();
       const platformLabel = platform === "threads" ? "Threads" : "Instagram";
       if (!username) {
-        pdSetMsg(`请先填写 ${platformLabel} username。`, "err");
+        pdSetMsg(`请先填写${platformLabel}用户名。`, "err");
         return;
       }
       try {

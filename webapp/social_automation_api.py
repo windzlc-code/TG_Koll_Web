@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import requests
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -224,6 +224,30 @@ def register_social_automation_routes(app: FastAPI) -> None:
         if not path.exists() or not path.is_file():
             raise HTTPException(status_code=404, detail="媒体文件不存在")
         return FileResponse(str(path), filename=path.name)
+
+    @app.post("/api/persona_dashboard/automation/media")
+    async def api_social_media_upload(files: list[UploadFile] = File(default=[]), _user: dict[str, Any] = Depends(get_current_user)):
+        saved: list[dict[str, str]] = []
+        upload_id = _NEW_ID("social_media")
+        upload_dir = (_DATA_DIR / "social_automation" / "uploads" / upload_id).resolve()
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        for index, upload in enumerate(files or [], start=1):
+            filename = Path(str(upload.filename or f"media_{index}")).name
+            suffix = Path(filename).suffix[:20]
+            target = (upload_dir / f"media_{index}{suffix}").resolve()
+            if upload_dir not in target.parents:
+                raise HTTPException(status_code=400, detail="素材文件名不合法")
+            with target.open("wb") as fh:
+                while True:
+                    chunk = await upload.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+            await upload.close()
+            saved.append({"name": filename, "path": str(target)})
+        if not saved:
+            raise HTTPException(status_code=400, detail="请先选择要上传的素材")
+        return {"ok": True, "files": saved}
 
     @app.post("/api/persona_dashboard/automation/worker/run_once")
     def api_social_worker_run_once(_admin: dict[str, Any] = Depends(require_admin)):
@@ -1098,9 +1122,17 @@ def _collect_threads_hot_reply_targets(archive: dict[str, Any] | None, *, max_ag
     setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
     for container_name in ("hotMetrics", "threadsHotMetrics"):
         container = setup.get(container_name) if isinstance(setup.get(container_name), dict) else {}
-        for key in ("postMetrics", "posts", "publishedTargets"):
-            for item in container.get(key) if isinstance(container.get(key), list) else []:
-                add_row(item, f"setup.{container_name}.{key}")
+        candidate_containers = [container]
+        threads_container = container.get("threads") if isinstance(container.get("threads"), dict) else {}
+        if threads_container:
+            candidate_containers.append(threads_container)
+        for idx, candidate in enumerate(candidate_containers):
+            source_prefix = f"setup.{container_name}"
+            if idx == 1:
+                source_prefix += ".threads"
+            for key in ("postMetrics", "posts", "publishedTargets"):
+                for item in candidate.get(key) if isinstance(candidate.get(key), list) else []:
+                    add_row(item, f"{source_prefix}.{key}")
     for item in setup.get("publishHistory") if isinstance(setup.get("publishHistory"), list) else []:
         add_row(item, "setup.publishHistory")
     own_reply = ((archive.get("setup") if isinstance(archive.get("setup"), dict) else {}) or {}).get("threadsOwnPostAutoReply")
@@ -1126,8 +1158,17 @@ def _enrich_threads_task_payload(persona_id: str, task_type: str, payload: dict[
     next_payload = dict(payload or {})
     if archive:
         next_payload.setdefault("persona_name", str(archive.get("name") or ""))
-        threads = archive.get("threads") if isinstance(archive.get("threads"), dict) else {}
-        handle = str(threads.get("handle") or archive.get("threadsHandle") or "").strip().lstrip("@")
+        setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+        account_management = setup.get("accountManagement") if isinstance(setup.get("accountManagement"), dict) else {}
+        threads = account_management.get("threads") if isinstance(account_management.get("threads"), dict) else {}
+        legacy_threads = archive.get("threads") if isinstance(archive.get("threads"), dict) else {}
+        handle = str(
+            threads.get("handle")
+            or setup.get("threadsHandle")
+            or legacy_threads.get("handle")
+            or archive.get("threadsHandle")
+            or ""
+        ).strip().lstrip("@")
         if handle:
             next_payload.setdefault("threads_handle", handle)
         next_payload.setdefault("reply_templates", _collect_persona_reply_templates(archive))
@@ -1212,6 +1253,15 @@ def _enrich_threads_task_payload(persona_id: str, task_type: str, payload: dict[
             next_payload.setdefault("max_replies", 3)
             next_payload.setdefault("max_age_days", 2)
             next_payload.setdefault("reply_scope", "comments")
+        if str(next_payload.get("reply_scope") or "comments") == "comments":
+            comment_targets = _collect_threads_hot_reply_targets(
+                archive,
+                max_age_days=int(next_payload.get("max_age_days") or 2),
+                min_views=0,
+                limit=int(next_payload.get("max_posts") or 5),
+            )
+            next_payload.setdefault("target_urls", [str(item.get("url") or "") for item in comment_targets if item.get("url")])
+            next_payload.setdefault("target_summaries", comment_targets)
         next_payload.setdefault("require_persona_relevance", True)
     return next_payload
 
@@ -1222,6 +1272,8 @@ def _build_archive_sync_records(task: dict[str, Any], account: dict[str, Any], p
     platform = str(task.get("platform") or account.get("platform") or "instagram").strip().lower() or "instagram"
     published_at = _iso_from_ts(task.get("finished_at") or task.get("updated_at") or task.get("created_at"))
     caption = str(payload.get("caption") or payload.get("comment") or payload.get("reply") or payload.get("text") or "").strip()
+    archive_post_id = str(payload.get("archive_post_id") or "").strip() or f"webauto-{task_id}"
+    archive_post_title = str(payload.get("archive_post_title") or "").strip()
     target_url = str(payload.get("target_url") or payload.get("post_url") or result.get("url") or "").strip()
     result_url = str(result.get("url") or target_url or "").strip()
     screenshot_path = str(result.get("screenshot_path") or "").strip()
@@ -1244,12 +1296,11 @@ def _build_archive_sync_records(task: dict[str, Any], account: dict[str, Any], p
     }
     media_fields = _media_fields_from_payload(payload)
     source_meta.update({key: value for key, value in media_fields.items() if key in {"imageUrl", "videoUrl", "mediaUrl"}})
-    archive_post_id = f"webauto-{task_id}"
     title = _automation_action_label(task_type)
     publish_record = {
         "id": f"webauto-pub-{task_id}",
         "archivePostId": archive_post_id,
-        "title": title,
+        "title": archive_post_title or title,
         "content": caption or target_url or title,
         "wordCount": len(caption),
         "publishedAt": published_at,
@@ -1272,7 +1323,7 @@ def _build_archive_sync_records(task: dict[str, Any], account: dict[str, Any], p
     if task_type == "publish_post":
         post_record = {
             "id": archive_post_id,
-            "title": caption[:80] or title,
+            "title": archive_post_title or caption[:80] or title,
             "content": caption,
             "wordCount": len(caption),
             "createdAt": published_at,
@@ -1324,16 +1375,42 @@ def _sync_successful_task_to_persona_archive(task_id: str, result: dict[str, Any
                         changed = True
                     if post_record:
                         posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
-                        if not any(isinstance(item, dict) and str(item.get("automationTaskId") or item.get("id") or "") in {task_id, post_record["id"]} for item in posts):
+                        matched_post = False
+                        next_posts: list[dict[str, Any] | Any] = []
+                        for item in posts:
+                            if not isinstance(item, dict):
+                                next_posts.append(item)
+                                continue
+                            if str(item.get("id") or "") == str(post_record["id"]) or str(item.get("automationTaskId") or "") == task_id:
+                                next_posts.append({**item, **post_record})
+                                matched_post = True
+                                changed = True
+                            else:
+                                next_posts.append(item)
+                        if matched_post:
+                            archive["posts"] = next_posts
+                        else:
                             archive["posts"] = [*posts, post_record]
                             changed = True
                         platform_posts = archive.get("platformPosts") if isinstance(archive.get("platformPosts"), dict) else {}
                         platform = str(task.get("platform") or "instagram").strip().lower() or "instagram"
                         platform_rows = platform_posts.get(platform) if isinstance(platform_posts.get(platform), list) else []
-                        if not any(isinstance(item, dict) and str(item.get("automationTaskId") or item.get("id") or "") in {task_id, post_record["id"]} for item in platform_rows):
-                            platform_posts[platform] = [*platform_rows, post_record]
-                            archive["platformPosts"] = platform_posts
+                        matched_platform_post = False
+                        next_platform_rows: list[dict[str, Any] | Any] = []
+                        for item in platform_rows:
+                            if not isinstance(item, dict):
+                                next_platform_rows.append(item)
+                                continue
+                            if str(item.get("id") or "") == str(post_record["id"]) or str(item.get("automationTaskId") or "") == task_id:
+                                next_platform_rows.append({**item, **post_record})
+                                matched_platform_post = True
+                                changed = True
+                            else:
+                                next_platform_rows.append(item)
+                        platform_posts[platform] = next_platform_rows if matched_platform_post else [*platform_rows, post_record]
+                        if not matched_platform_post:
                             changed = True
+                        archive["platformPosts"] = platform_posts
                     if changed:
                         archive["updatedAt"] = _iso_from_ts(task.get("finished_at") or task.get("updated_at"))
                     break

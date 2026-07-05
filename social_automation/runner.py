@@ -40,9 +40,10 @@ class AutomationLogger(Protocol):
 
 
 class NeedManualError(RuntimeError):
-    def __init__(self, message: str, status: str = "need_verification"):
+    def __init__(self, message: str, status: str = "need_verification", screenshot_path: str = ""):
         super().__init__(message)
         self.status = status
+        self.screenshot_path = str(screenshot_path or "")
 
 
 class UnsupportedActionError(RuntimeError):
@@ -67,7 +68,7 @@ def run_social_task(
         raise UnsupportedActionError(f"Unsupported platform: {platform}")
     if platform == "instagram" and task_type in {"threads_warmup", "threads_auto_reply"}:
         raise UnsupportedActionError(f"{task_type} requires a Threads account")
-    if platform == "threads" and task_type not in {"open_login", "check_login", "browse_feed", "threads_warmup", "threads_auto_reply"}:
+    if platform == "threads" and task_type not in {"open_login", "check_login", "browse_feed", "threads_warmup", "threads_auto_reply", "publish_post"}:
         raise UnsupportedActionError(f"{task_type} is not implemented for Threads web automation")
     if platform == "instagram" and task_type == "repost_post":
         raise UnsupportedActionError("Instagram Web does not provide a real repost action. Use share_post/copy link instead.")
@@ -90,9 +91,12 @@ def run_social_task(
         _raise_if_cancelled(cancel_event)
         login = _check_platform_login(page, platform, logger)
         if login.get("status") != "ready":
+            shot = _screenshot(page, screenshot_dir, task, "login_not_ready", logger)
+            logger.log("warn", "need_manual", str(login.get("reason") or f"{platform} account requires manual login or verification"), {"details": login}, shot)
             raise NeedManualError(
                 str(login.get("reason") or f"{platform} account requires manual login or verification"),
                 str(login.get("status") or "need_verification"),
+                shot,
             )
 
         if task_type == "browse_feed":
@@ -111,7 +115,7 @@ def run_social_task(
             return _run_browse_profile(page, task, payload, screenshot_dir, logger)
         if task_type == "publish_post":
             _raise_if_cancelled(cancel_event)
-            return _run_publish_post(page, task, payload, screenshot_dir, logger)
+            return _run_publish_post(page, task, payload, screenshot_dir, logger, platform)
         if task_type == "comment_post":
             _raise_if_cancelled(cancel_event)
             return _run_comment_post(page, task, payload, screenshot_dir, logger)
@@ -699,6 +703,7 @@ def _wait_for_manual_login_completion(
         {"status": status, "screenshot_path": screenshot_path, "details": last_status or {}},
         screenshot_path,
     )
+    last_seen_status = str(status or "")
     while True:
         _raise_if_cancelled(cancel_event)
         try:
@@ -707,6 +712,30 @@ def _wait_for_manual_login_completion(
             message = str(exc)
             if "Target page, context or browser has been closed" in message or "has been closed" in message:
                 raise NeedManualError(f"{_platform_name(platform)} 登录窗口已关闭，未检测到登录成功。请重新启动登录任务。", status) from exc
+        current_status = _detect_platform_login_state(page, platform)
+        current_code = str(current_status.get("status") or "").strip()
+        if current_code == "ready":
+            stable_status = _confirm_platform_ready(page, platform, logger, cancel_event)
+            if stable_status.get("status") == "ready":
+                shot = _screenshot(page, screenshot_dir, task, "login_complete", logger)
+                logger.log(
+                    "info",
+                    "completion_node",
+                    f"{_platform_name(platform)} login completion node detected",
+                    {"url": str(page.url or ""), "details": stable_status, "manual_completion": True},
+                    shot,
+                )
+                return {"ok": True, "status": "ready", "screenshot_path": shot, "details": stable_status}
+            current_status = stable_status
+            current_code = str(current_status.get("status") or "").strip()
+        if current_code and current_code != last_seen_status:
+            logger.log(
+                "info" if current_code == "ready" else "warn",
+                "manual_login_status",
+                f"{_platform_name(platform)} 人工登录状态更新",
+                {"status": current_code, "details": current_status},
+            )
+            last_seen_status = current_code
         time.sleep(5)
 
 
@@ -733,7 +762,8 @@ def _run_check_login(page, task, account, payload, screenshot_dir, logger, platf
     status = _check_platform_login(page, platform, logger)
     shot = _screenshot(page, screenshot_dir, task, "check_login", logger)
     if status.get("status") != "ready":
-        raise NeedManualError(str(status.get("reason") or f"{_platform_name(platform)} is not ready"), str(status.get("status") or "need_verification"))
+        logger.log("warn", "need_manual", str(status.get("reason") or f"{_platform_name(platform)} is not ready"), {"details": status}, shot)
+        raise NeedManualError(str(status.get("reason") or f"{_platform_name(platform)} is not ready"), str(status.get("status") or "need_verification"), shot)
     logger.log("info", "completion_node", f"{_platform_name(platform)} check-login completion node detected", {"details": status}, shot)
     return {"ok": True, "status": "ready", "screenshot_path": shot, "details": status}
 
@@ -1196,16 +1226,20 @@ def _run_threads_hot_post_auto_reply(page, task, payload, screenshot_dir, logger
 def _run_threads_auto_reply(page, task, payload, screenshot_dir, logger) -> dict[str, Any]:
     if str(payload.get("reply_scope") or "comments") == "hot_posts":
         return _run_threads_hot_post_auto_reply(page, task, payload, screenshot_dir, logger)
-    _goto(page, THREADS_HOME, logger, "threads_auto_reply_open")
     max_posts = max(1, min(int(payload.get("max_posts") or 5), 20))
     max_replies = max(1, min(int(payload.get("max_replies") or 3), 10))
     strategy_id = str(payload.get("strategy_id") or "tg_default")
     strategy_label = str(payload.get("strategy_label") or "自动回复评论：最近 2 天")
     require_persona_relevance = bool(payload.get("require_persona_relevance", True))
+    raw_targets = payload.get("target_urls") or []
+    if not isinstance(raw_targets, list):
+        raw_targets = []
+    target_urls = [str(item or "").strip() for item in raw_targets if str(item or "").strip()]
     replied = 0
     scanned = 0
     reply_backfills = 0
     reply_screenshots: list[str] = []
+    replied_urls: list[str] = []
     logger.log("info", "threads_auto_reply", "Starting persona-driven Threads auto reply", {
         "strategy_id": strategy_id,
         "strategy_label": strategy_label,
@@ -1214,8 +1248,72 @@ def _run_threads_auto_reply(page, task, payload, screenshot_dir, logger) -> dict
         "require_persona_relevance": require_persona_relevance,
         "persona_name": payload.get("persona_name") or "",
         "threads_handle": payload.get("threads_handle") or "",
+        "target_count": len(target_urls),
     })
     completion_reason = "max_posts_scanned"
+    if target_urls:
+        for url in target_urls[:max_posts]:
+            scanned += 1
+            _goto(page, url, logger, "threads_comment_reply_open")
+            _sleep_between(1.5, 3.0)
+            button = _threads_reply_button(page)
+            reply_text = _pick_persona_reply(payload)
+            if require_persona_relevance and not str(reply_text or "").strip():
+                logger.log("warn", "threads_auto_reply_skip", "No persona-relevant reply candidate was available", {"strategy_id": strategy_id, "strategy_label": strategy_label, "url": url})
+                completion_reason = "no_persona_relevant_reply"
+                break
+            if button is None:
+                reply_backfills += 1
+                logger.log("warn", "threads_auto_reply_backfill", "补留言定位失败，继续换目标", {"attempts": reply_backfills, "url": url})
+                continue
+            _human_click(page, button, logger, "threads_reply_button")
+            _sleep_between(1.0, 2.5)
+            box = _threads_text_box(page)
+            if box is None:
+                reply_backfills += 1
+                logger.log("warn", "threads_auto_reply_backfill", "补留言定位失败，继续换目标", {"attempts": reply_backfills, "url": url})
+                continue
+            _human_click(page, box, logger, "threads_reply_focus")
+            _human_type(page, reply_text, min_delay=0.10, max_delay=0.22)
+            posted = _click_text_button(page, logger, ["Post", "Reply", "发布", "回覆", "回复"], "threads_reply_submit")
+            if posted:
+                replied += 1
+                replied_urls.append(url)
+                _sleep_between(2.0, 4.0)
+                shot = _screenshot(page, screenshot_dir, task, f"threads_reply_{replied}", logger)
+                if shot:
+                    reply_screenshots.append(shot)
+                logger.log("info", "threads_auto_reply", "Replied with persona text", {"reply_index": replied, "url": url, "text": reply_text[:80]})
+                if replied >= max_replies:
+                    completion_reason = "target_replies_reached"
+                    break
+            else:
+                reply_backfills += 1
+                logger.log("warn", "threads_auto_reply_backfill", "补留言失败，继续换目标", {"attempts": reply_backfills, "url": url})
+        shot = _screenshot(page, screenshot_dir, task, "threads_auto_reply_done", logger)
+        logger.log(
+            "info",
+            "completion_node",
+            "Threads auto-reply completion node detected",
+            {"url": str(page.url or ""), "scannedPosts": scanned, "replied": replied, "reply_backfills": reply_backfills, "completionReason": completion_reason, "strategy_id": strategy_id, "strategy_label": strategy_label, "target_count": len(target_urls)},
+            shot,
+        )
+        return {
+            "ok": True,
+            "url": page.url,
+            "scannedPosts": scanned,
+            "scannedComments": scanned,
+            "replied": replied,
+            "skipped": max(0, scanned - replied),
+            "replyBackfills": reply_backfills,
+            "completionReason": completion_reason,
+            "strategy_id": strategy_id,
+            "strategy_label": strategy_label,
+            "replyScreenshots": reply_screenshots,
+            "repliedUrls": replied_urls,
+            "screenshot_path": shot,
+        }
+    _goto(page, THREADS_HOME, logger, "threads_auto_reply_open")
     for index in range(max_posts):
         scanned += 1
         button = _threads_reply_button(page)
@@ -1273,6 +1371,7 @@ def _run_threads_auto_reply(page, task, payload, screenshot_dir, logger) -> dict
         "strategy_id": strategy_id,
         "strategy_label": strategy_label,
         "replyScreenshots": reply_screenshots,
+        "repliedUrls": replied_urls,
         "screenshot_path": shot,
     }
 
@@ -1432,7 +1531,115 @@ def _verification_visible(page) -> bool:
     return any(marker in text for marker in markers)
 
 
-def _run_publish_post(page, task, payload, screenshot_dir, logger) -> dict[str, Any]:
+def _threads_compose_box(page):
+    return _visible_first(page, [
+        '[role="dialog"] textarea',
+        '[role="dialog"] [contenteditable="true"]',
+        'textarea[placeholder*="thread" i]',
+        'textarea[aria-label*="thread" i]',
+        '[contenteditable="true"][aria-label*="thread" i]',
+        '[role="textbox"][aria-label*="thread" i]',
+        'textarea',
+        '[contenteditable="true"]',
+        '[role="textbox"]',
+    ], timeout_ms=1800)
+
+
+def _threads_post_button(page):
+    selectors = [
+        '[role="dialog"] button:has-text("Post")',
+        '[role="dialog"] [role="button"]:has-text("Post")',
+        'button:has-text("Post")',
+        '[role="button"]:has-text("Post")',
+    ]
+    return _visible_first(page, selectors, timeout_ms=1800)
+
+
+def _ensure_threads_compose_ready(page, logger: AutomationLogger):
+    compose = _threads_compose_box(page)
+    if compose is not None:
+        return compose
+    openers = [
+        '[aria-label*="New thread" i]',
+        'button:has-text("Start a thread")',
+        '[role="button"]:has-text("Start a thread")',
+        'text="Start a thread"',
+        'text="New thread"',
+    ]
+    for selector in openers:
+        try:
+            loc = page.locator(selector).first
+            if loc.count() and loc.is_visible(timeout=2000):
+                _human_click(page, loc, logger, "threads_publish_open")
+                _sleep_between(0.8, 1.6)
+                compose = _threads_compose_box(page)
+                if compose is not None:
+                    return compose
+        except Exception:
+            continue
+    raise RuntimeError("Could not open Threads compose box")
+
+
+def _wait_for_threads_publish_success(page, logger: AutomationLogger) -> dict[str, Any]:
+    deadline = time.time() + 90
+    while time.time() < deadline:
+        try:
+            url = str(page.url or "")
+            if re.search(r"/@[^/]+/(post|thread)/", url) or re.search(r"/post/", url):
+                return {"confirmed": True, "reason": "Threads post url is visible", "url": url}
+        except Exception:
+            pass
+        compose = _threads_compose_box(page)
+        post_button = _threads_post_button(page)
+        if compose is None and post_button is None:
+            return {"confirmed": True, "reason": "Threads composer closed after posting", "url": str(page.url or "")}
+        _sleep_between(1.4, 2.2)
+    logger.log("warn", "threads_publish_confirm", "Threads publish confirmation timed out", {"url": str(page.url or "")})
+    return {"confirmed": False, "reason": "timeout waiting for Threads publish confirmation", "url": str(page.url or "")}
+
+
+def _run_threads_publish_post(page, task, payload, screenshot_dir, logger) -> dict[str, Any]:
+    media_paths = [str(p) for p in (payload.get("media_paths") or []) if str(p or "").strip()]
+    caption = str(payload.get("caption") or payload.get("content") or payload.get("text") or "").strip()
+    if not caption and not media_paths:
+        raise ValueError("Threads publish_post requires caption or media_paths")
+    missing = [p for p in media_paths if not Path(p).exists()]
+    if missing:
+        raise FileNotFoundError(f"Media file not found: {missing[0]}")
+    _goto(page, THREADS_HOME, logger, "threads_publish_open")
+    compose = _ensure_threads_compose_ready(page, logger)
+    _human_click(page, compose, logger, "threads_publish_focus")
+    if caption:
+        _clear_and_type(page, compose, caption)
+    if media_paths:
+        file_input = page.locator('input[type="file"]').first
+        if not file_input.count():
+            trigger = _visible_first(page, [
+                '[aria-label*="photo" i]',
+                '[aria-label*="video" i]',
+                'button:has-text("Add photo")',
+                'button:has-text("Add media")',
+            ], timeout_ms=1500)
+            if trigger is not None:
+                _human_click(page, trigger, logger, "threads_publish_media_picker")
+                _sleep_between(0.8, 1.4)
+                file_input = page.locator('input[type="file"]').first
+        file_input.wait_for(state="attached", timeout=30000)
+        logger.log("info", "threads_publish_upload", "Uploading Threads media", {"count": len(media_paths)})
+        file_input.set_input_files(media_paths)
+        _sleep_between(1.0, 2.2)
+    post_button = _threads_post_button(page)
+    if post_button is None:
+        raise RuntimeError("Could not find Threads Post button")
+    _human_click(page, post_button, logger, "threads_publish_submit")
+    success = _wait_for_threads_publish_success(page, logger)
+    shot = _screenshot(page, screenshot_dir, task, "publish_done", logger)
+    return {"ok": True, "published": success, "url": str(success.get("url") or page.url or ""), "screenshot_path": shot}
+
+
+def _run_publish_post(page, task, payload, screenshot_dir, logger, platform: str = "instagram") -> dict[str, Any]:
+    if platform == "threads":
+        return _run_threads_publish_post(page, task, payload, screenshot_dir, logger)
     media_paths = [str(p) for p in (payload.get("media_paths") or []) if str(p or "").strip()]
     caption = str(payload.get("caption") or "").strip()
     if not media_paths:

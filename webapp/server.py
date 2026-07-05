@@ -41,7 +41,9 @@ from .auth import SESSION_COOKIE, create_session, delete_session, get_current_us
 from .billing import compute_cost_cents
 from .db import db, get_admin_config, init_db, set_admin_config
 from .social_automation_api import (
+    SocialTaskPayload,
     configure_social_automation,
+    create_social_task,
     ensure_social_automation_worker_started,
     register_social_automation_routes,
 )
@@ -13444,8 +13446,56 @@ class PersonaDashboardThreadsBindingPayload(BaseModel):
     username: str = ""
 
 
+class PersonaDashboardPersonaCreatePayload(BaseModel):
+    name: str = ""
+    content: str = ""
+
+
+class PersonaDashboardLinkPresetPayload(BaseModel):
+    id: str = ""
+    name: str = ""
+    link_url: str = ""
+    ending_text: str = ""
+    enabled: bool = True
+
+
+class PersonaDashboardPersonaProfilePayload(BaseModel):
+    name: str | None = None
+    content: str | None = None
+    tweet_style_sample: str | None = None
+    bound_pad_code: str | None = None
+    bound_pad_name: str | None = None
+    active_link_preset_id: str | None = None
+    link_presets: list[PersonaDashboardLinkPresetPayload] | None = None
+
+
 class PersonaDashboardRefreshPayload(BaseModel):
     archive_id: str = ""
+
+
+class PersonaDashboardDraftPostPayload(BaseModel):
+    title: str = ""
+    content: str = ""
+
+
+class PersonaDashboardGeneratePostsPayload(BaseModel):
+    count: int = 3
+    prompt: str = ""
+    target_words: int = 120
+    content_branch: str = ""
+    content_time_slot: str = ""
+    selected_memory_ids: list[str] = Field(default_factory=list)
+    selected_memory_summaries: list[str] = Field(default_factory=list)
+    text_model_branch: str = ""
+
+
+class PersonaDashboardDraftPublishPayload(BaseModel):
+    account_id: str = ""
+    platform: str = ""
+    scheduled_at: int | str | None = 0
+    priority: int = 50
+    max_retries: int = 2
+    media_paths: list[str] = Field(default_factory=list)
 
 
 class InternalTgSubmitPayload(BaseModel):
@@ -13586,6 +13636,134 @@ def _normalize_threads_username(value: Any) -> str:
     return text
 
 
+def _persona_dashboard_iso_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _normalize_tweet_style_link_url(value: Any) -> str:
+    trimmed = str(value or "").strip()
+    trimmed = re.sub(r"[)\]\}\uFF09\u3011\u3001\uFF0C\u3002?!\uFF01\uFF1F\uFF1B;]+$", "", trimmed)
+    if not trimmed:
+        return ""
+    if re.match(r"^www\.", trimmed, re.I):
+        return f"https://{trimmed}"
+    return trimmed if re.match(r"^https?://", trimmed, re.I) else ""
+
+
+def _extract_tweet_style_link_url(sample: Any) -> str:
+    match = re.search(r"\b(?:https?://|www\.)[^\s<>\"'`\uFF0C\u3002\uFF01\uFF1F\u3001\uFF1B;]+", str(sample or ""), re.I)
+    if not match:
+        return ""
+    return _normalize_tweet_style_link_url(match.group(0))
+
+
+def _contains_any_text(text: str, words: list[str]) -> bool:
+    return any(word and word in text for word in words)
+
+
+def _analyze_tweet_style_sample(sample: Any) -> str:
+    raw = str(sample or "").strip()
+    normalized = re.sub(r"[ \t]+", " ", raw.replace("\r\n", "\n"))
+    lines = [line.strip() for line in normalized.split("\n") if line.strip()]
+    has_link = bool(_extract_tweet_style_link_url(normalized))
+    has_cta = _contains_any_text(normalized, ["你们", "你們", "大家", "留言", "评论", "評論", "私信", "收藏", "转发", "轉發", "分享", "follow", "关注", "關注"])
+    has_first_person = _contains_any_text(normalized, ["我", "我們", "我们", "最近", "今天", "昨天", "上週", "上周", "這幾天", "这几天"])
+    has_benefit_hook = _contains_any_text(normalized, ["福利", "快来", "快來", "更多", "精彩", "免费", "免費", "限定", "不要错过", "不要錯過"])
+    has_night_hook = _contains_any_text(normalized, ["深夜", "晚安", "睡前", "夜晚", "今晚"])
+    has_question = bool(re.search(r"[?\uFF1F]", normalized))
+    has_exclaim = bool(re.search(r"[!\uFF01]", normalized))
+    has_emoji = bool(re.search(r"[\U0001F300-\U0001FAFF]", normalized))
+    if has_benefit_hook:
+        content_type = "引导点击/福利预告型内容"
+    elif has_first_person:
+        content_type = "第一人称日常分享型内容"
+    elif has_question or has_cta:
+        content_type = "互动提问型内容"
+    else:
+        content_type = "短句观点/状态型内容"
+    format_parts = [
+        "多行短句排版，一句一行推进" if len(lines) >= 4 else ("分段短句排版，阅读节奏轻快" if len(lines) >= 2 else "单段短句表达，适合直接发布"),
+        "开头或句尾可用表情做情绪提示" if has_emoji else "整体不依赖表情",
+        "链接适合放在结尾，前面先用一句行动引导承接" if has_link else "结尾保留互动句或行动引导",
+    ]
+    content_parts = [
+        "以具体时间/场景开场，先制造即时感" if has_night_hook else "先用一句轻钩子开场，快速给出主题",
+        "中段强调想看更多/福利感，用好奇心推动点击" if has_benefit_hook else "中段围绕案例主题展开，但新内容不能照搬案例事件",
+        "结尾用提问或邀请动作把用户带到下一步" if has_question or has_cta else "结尾收在一个轻动作上，不做硬广告式总结",
+    ]
+    style_parts = [
+        "第一人称、亲近口吻，像本人随手发动态" if has_first_person else "亲近口吻，像面对粉丝直接说话",
+        "情绪外放，可以用感叹号制造兴奋感" if has_exclaim else "情绪克制但有钩子",
+        "表情用于增加甜感、惊喜感或暧昧感，不要堆满" if has_emoji else "不强行补表情",
+    ]
+    return "\n".join([
+        f"格式：{'；'.join(format_parts)}。",
+        f"内容：属于{content_type}；{'；'.join(content_parts)}。",
+        f"风格：{'；'.join(style_parts)}。",
+        "生成规则：后续推文要模仿这种排版、内容推进和语气钩子，但主题必须换成当前人设/记忆/用户提示，不照抄案例原句或案例主题。",
+    ])
+
+
+def _normalize_link_preset_id(value: Any) -> str:
+    return re.sub(r"[^a-zA-Z0-9-]", "", str(value or ""))[:40]
+
+
+def _link_preset_fallback_name(ending_text: str, link_url: str) -> str:
+    return re.sub(r"\s+", " ", ending_text or link_url).strip()[:24] or "未命名模板"
+
+
+def _get_link_ending_presets(setup: Any) -> list[dict[str, Any]]:
+    if not isinstance(setup, dict) or not isinstance(setup.get("linkEndingPresets"), list):
+        return []
+    presets: list[dict[str, Any]] = []
+    for preset in setup.get("linkEndingPresets") or []:
+        if not isinstance(preset, dict):
+            continue
+        preset_id = _normalize_link_preset_id(preset.get("id"))
+        link_url = _normalize_tweet_style_link_url(preset.get("linkUrl"))
+        ending_text = str(preset.get("endingText") or "").strip()[:240]
+        if not preset_id or not (link_url or ending_text):
+            continue
+        presets.append({
+            "id": preset_id,
+            "name": str(preset.get("name") or "").strip()[:40] or _link_preset_fallback_name(ending_text, link_url),
+            "linkUrl": link_url,
+            "endingText": ending_text,
+            "enabled": preset.get("enabled") is not False,
+            "createdAt": str(preset.get("createdAt") or "").strip(),
+            "updatedAt": str(preset.get("updatedAt") or "").strip(),
+        })
+    return presets
+
+
+def _sanitize_persona_dashboard_link_presets(raw_presets: Any, existing_setup: dict[str, Any]) -> list[dict[str, Any]]:
+    current = {item["id"]: item for item in _get_link_ending_presets(existing_setup)}
+    next_presets: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for index, raw in enumerate(raw_presets or []):
+        payload = raw.model_dump() if hasattr(raw, "model_dump") else (raw if isinstance(raw, dict) else {})
+        preset_id = _normalize_link_preset_id(payload.get("id")) or f"lp-{int(time.time() * 1000):x}-{index}"
+        while preset_id in seen_ids:
+            preset_id = f"{preset_id[:28]}-{index}"
+        link_url = _normalize_tweet_style_link_url(payload.get("link_url") or payload.get("linkUrl"))
+        ending_text = str(payload.get("ending_text") or payload.get("endingText") or "").strip()[:240]
+        if not (link_url or ending_text):
+            continue
+        previous = current.get(preset_id, {})
+        name = str(payload.get("name") or previous.get("name") or "").strip()[:40] or _link_preset_fallback_name(ending_text, link_url)
+        next_presets.append({
+            "id": preset_id,
+            "name": name,
+            "linkUrl": link_url,
+            "endingText": ending_text,
+            "enabled": bool(payload.get("enabled", previous.get("enabled", True))),
+            "createdAt": str(previous.get("createdAt") or _persona_dashboard_iso_now()).strip(),
+            "updatedAt": _persona_dashboard_iso_now(),
+        })
+        seen_ids.add(preset_id)
+    return next_presets
+
+
 def _persona_archive_source_for_write() -> tuple[Path, Any, list[dict[str, Any]]]:
     primary = TOOL_R18_RUNTIME_DIR / "persona_archives.json"
     fallback = TOOL_R18_RUNTIME_DIR / "persona_archives_cache.json"
@@ -13595,6 +13773,478 @@ def _persona_archive_source_for_write() -> tuple[Path, Any, list[dict[str, Any]]
         if archives:
             return path, raw, archives
     return primary, [], []
+
+
+def _new_persona_archive_id() -> str:
+    return f"persona-{uuid.uuid4().hex[:12]}"
+
+
+def _new_persona_post_id() -> str:
+    return f"post-{uuid.uuid4().hex[:12]}"
+
+
+def _persona_post_title(content: str, fallback_index: int) -> str:
+    clean = re.sub(r"\s+", " ", str(content or "")).strip()
+    return clean[:40] or f"推文草稿 #{fallback_index + 1}"
+
+
+def _automation_screenshot_url(path_value: Any) -> str:
+    path_text = str(path_value or "").strip()
+    if not path_text:
+        return ""
+    return f"/api/persona_dashboard/automation/screenshots/{Path(path_text).name}"
+
+
+def _compact_persona_archive_post(post: dict[str, Any]) -> dict[str, Any]:
+    published_meta = post.get("publishedMeta") if isinstance(post.get("publishedMeta"), dict) else {}
+    return {
+        "id": str(post.get("id") or "").strip(),
+        "title": str(post.get("title") or "")[:120],
+        "content": str(post.get("content") or "")[:5000],
+        "word_count": int(_number(post.get("wordCount"), 0)),
+        "order_index": int(_number(post.get("orderIndex"), 0)),
+        "created_at": post.get("createdAt"),
+        "updated_at": post.get("updatedAt"),
+        "published_at": post.get("publishedAt"),
+        "published_url": post.get("publishedUrl") or published_meta.get("publishedUrl") or published_meta.get("published_url") or "",
+        "screenshot_path": str(post.get("screenshotUrl") or ""),
+        "screenshot_url": _automation_screenshot_url(post.get("screenshotUrl")),
+        "platform": str(post.get("platform") or published_meta.get("platform") or "").strip(),
+        "automation_task_id": str(post.get("automationTaskId") or "").strip(),
+        "media_url": str(post.get("mediaUrl") or post.get("imageUrl") or ""),
+        "media_type": str(post.get("mediaType") or ""),
+    }
+
+
+def _persona_memory_file() -> Path:
+    return TOOL_R18_RUNTIME_DIR / "persona_memory.json"
+
+
+def _normalize_persona_memory_summary(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()[:220]
+
+
+def _memory_outline_from_content(value: Any) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    return text[:140]
+
+
+def _is_auto_imported_hot_memory_summary(summary: str) -> bool:
+    text = re.sub(r"\s+", " ", str(summary or "")).strip().lower()
+    return (
+        re.search(r"(?:舆情热点素材|輿情熱點素材|热点素材|熱點素材)\s*\|\s*平台[:：]?\s*(?:threads|instagram)", text)
+        or re.search(r"平台[:：]?\s*(?:threads|instagram)\s*\|\s*数据[:：]?", text)
+        or re.search(r"平台[:：]?\s*(?:threads|instagram)\s*\|\s*數據[:：]?", text)
+    ) is not None
+
+
+def _read_persona_memory_entries(persona_id: str) -> list[dict[str, Any]]:
+    raw = _read_json_file(_persona_memory_file())
+    if not isinstance(raw, dict):
+        return []
+    rows = raw.get(str(persona_id or "").strip())
+    if not isinstance(rows, list):
+        return []
+    entries: list[dict[str, Any]] = []
+    for index, item in enumerate(rows):
+        if not isinstance(item, dict):
+            continue
+        summary = _normalize_persona_memory_summary(item.get("summary"))
+        if not summary or _is_auto_imported_hot_memory_summary(summary):
+            continue
+        entries.append({
+            "id": str(item.get("id") or f"legacy-{index}").strip(),
+            "date": str(item.get("date") or "").strip() or _persona_dashboard_iso_now(),
+            "summary": summary,
+            "kind": "consolidated" if str(item.get("kind") or "").strip() == "consolidated" else "post",
+        })
+    entries.sort(key=lambda item: str(item.get("date") or ""), reverse=True)
+    return entries[:100]
+
+
+def _list_selectable_persona_memories(archive_id: str) -> list[dict[str, Any]]:
+    clean_id = str(archive_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID。")
+    _, _, archives = _persona_archive_source_for_write()
+    archive = _find_persona_archive(archives, clean_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    entries = list(_read_persona_memory_entries(clean_id))
+    seen = {
+        re.sub(r"\s+", "", str(item.get("summary") or "")).strip().lower()
+        for item in entries
+        if str(item.get("summary") or "").strip()
+    }
+    if len(entries) < 100:
+        history = archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []
+        for item in reversed(history[-100:]):
+            if not isinstance(item, dict):
+                continue
+            content = str(item.get("content") or "").strip()
+            summary = _normalize_persona_memory_summary(item.get("publishedMemory") or item.get("memorySummary") or _memory_outline_from_content(content))
+            key = re.sub(r"\s+", "", summary).strip().lower()
+            if not summary or not key or key in seen:
+                continue
+            seen.add(key)
+            entries.append({
+                "id": f"archive-post-{str(item.get('id') or len(entries)).strip()}",
+                "date": str(item.get("publishedAt") or "").strip() or _persona_dashboard_iso_now(),
+                "summary": summary,
+                "kind": "post",
+            })
+            if len(entries) >= 100:
+                break
+    entries.sort(key=lambda item: str(item.get("date") or ""), reverse=True)
+    return entries[:100]
+
+
+def _tool_r18_node_command() -> list[str]:
+    return ["node", "--import", "tsx", "scripts/skills/persona-workflow.ts"]
+
+
+def _sync_tool_r18_api_config_for_persona_workflow() -> None:
+    try:
+        with db() as conn:
+            runtime = _get_runtime_config(conn)
+    except Exception:
+        runtime = {}
+    if not isinstance(runtime, dict) or not runtime:
+        return
+    explicit = {
+        key: runtime.get(key)
+        for key in (
+            "llm_base_url",
+            "llm_api_key",
+            "llm_api_key_gpt",
+            "llm_default_model",
+            "llm_default_model_gpt",
+            "llm_model_priority_order",
+            "llm_free_model_priority_order",
+            "llm_paid_model_priority_order",
+            "image_model_provider_base_url",
+            "image_model_provider_api_key_gemini",
+            "image_model_default_model",
+            "image_model_default_model_gemini",
+            "image_model_priority_order",
+            "new_persona_runninghub_base_url",
+            "new_persona_runninghub_api_key",
+            "new_persona_runninghub_persona_t2i_detail_url",
+            "new_persona_runninghub_persona_t2i_endpoint",
+            "new_persona_runninghub_tweet_i2i_detail_url",
+            "new_persona_runninghub_tweet_i2i_endpoint",
+        )
+    }
+    _sync_tool_r18_api_config_from_runtime(runtime, explicit)
+
+
+def _run_persona_workflow_cli(payload: dict[str, Any], timeout_seconds: int = 900) -> dict[str, Any]:
+    _sync_tool_r18_api_config_for_persona_workflow()
+    command = [*_tool_r18_node_command(), json.dumps(payload, ensure_ascii=False)]
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(ROOT_DIR / "tool_r18"),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=max(30, int(timeout_seconds)),
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(status_code=504, detail=f"人设生成超时：{exc.timeout} 秒。") from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=500, detail="未找到 Node.js 运行时，无法执行人设生成。") from exc
+    stdout = str(completed.stdout or "").strip()
+    stderr = str(completed.stderr or "").strip()
+    data: dict[str, Any] | None = None
+    if stdout:
+        try:
+            parsed = json.loads(stdout)
+            if isinstance(parsed, dict):
+                data = parsed
+        except Exception:
+            data = None
+    if completed.returncode != 0:
+        detail = str((data or {}).get("error") or stderr or stdout or "人设生成失败。").strip()
+        raise HTTPException(status_code=500, detail=detail)
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=500, detail="人设生成返回格式无效。")
+    if data.get("ok") is False:
+        raise HTTPException(status_code=500, detail=str(data.get("error") or "人设生成失败。").strip())
+    return data
+
+
+def _build_persona_generate_instruction(payload: PersonaDashboardGeneratePostsPayload) -> str:
+    prompt = str(payload.prompt or "").strip()
+    target_words = max(10, min(int(payload.target_words or 120), 2000))
+    content_branch = str(payload.content_branch or "").strip().lower()
+    content_time_slot = str(payload.content_time_slot or "").strip().lower()
+    lines: list[str] = []
+    if prompt:
+        lines.append(f"本次用户主题/要求（最高优先级）：{prompt}")
+    else:
+        lines.append("本次没有额外提示词，请根据当前人设自由生成新的推文主题。")
+    if content_branch == "nonr18":
+        lines.extend([
+            "本次内容类型：免费内容。",
+            "方向：适合免费群预览、轻引导、平台安全，不要露骨。",
+        ])
+    elif content_branch == "r18":
+        lines.extend([
+            "本次内容类型：付费内容。",
+            "方向：强调限定感、转化感、福利感，但仍然保持平台安全，不要使用违规露骨词。",
+        ])
+    if content_time_slot == "morning":
+        lines.append("本次文案时段：早上文案。")
+    elif content_time_slot == "night":
+        lines.append("本次文案时段：晚上文案。")
+    lines.extend([
+        f"每篇目标字数：约 {target_words} 字。",
+        "只生成推文文案草稿，不要输出说明、标题解释或思考过程。",
+        "必须保持当前人设身份、语气和内容方向，避免重复旧内容。",
+    ])
+    return "\n".join(lines)
+
+
+def _generate_persona_archive_posts(archive_id: str, payload: PersonaDashboardGeneratePostsPayload) -> dict[str, Any]:
+    clean_id = str(archive_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID。")
+    count = max(1, min(int(payload.count or 3), 20))
+    content_branch = str(payload.content_branch or "").strip().lower()
+    if content_branch not in {"", "nonr18", "r18"}:
+        raise HTTPException(status_code=400, detail="不支持的内容类型。")
+    content_time_slot = str(payload.content_time_slot or "").strip().lower()
+    if content_time_slot not in {"", "morning", "night"}:
+        raise HTTPException(status_code=400, detail="不支持的文案时段。")
+    text_model_branch = str(payload.text_model_branch or "").strip().lower()
+    if text_model_branch not in {"free", "paid"}:
+        text_model_branch = "paid" if content_branch == "r18" else "free"
+    result = _run_persona_workflow_cli({
+        "action": "generate-posts",
+        "archiveId": clean_id,
+        "count": count,
+        "customInstruction": _build_persona_generate_instruction(payload),
+        "selectedMemoryEntryIds": [str(item or "").strip() for item in (payload.selected_memory_ids or []) if str(item or "").strip()],
+        "selectedMemorySummaries": [str(item or "").strip() for item in (payload.selected_memory_summaries or []) if str(item or "").strip()],
+        "textModelBranch": text_model_branch,
+    })
+    post_ids = {
+        str(item or "").strip()
+        for item in (result.get("postIds") if isinstance(result.get("postIds"), list) else [])
+        if str(item or "").strip()
+    }
+    posts = _list_persona_archive_posts(clean_id)
+    generated_posts = [item for item in posts if str(item.get("id") or "").strip() in post_ids] if post_ids else posts[:count]
+    return {
+        "ok": True,
+        "persona_id": clean_id,
+        "generated_count": int(result.get("generatedCount") or len(generated_posts) or 0),
+        "selected_memory_count": int(result.get("selectedMemoryCount") or 0),
+        "post_ids": list(post_ids) if post_ids else [str(item.get("id") or "").strip() for item in generated_posts],
+        "posts": generated_posts,
+    }
+
+
+def _find_persona_archive(archives: list[dict[str, Any]], archive_id: str) -> dict[str, Any] | None:
+    clean_id = str(archive_id or "").strip()
+    for archive in archives:
+        if str(archive.get("id") or "").strip() == clean_id:
+            return archive
+    return None
+
+
+def _list_persona_archive_posts(archive_id: str) -> list[dict[str, Any]]:
+    clean_id = str(archive_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID。")
+    _, _, archives = _persona_archive_source_for_write()
+    archive = _find_persona_archive(archives, clean_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+    rows = [_compact_persona_archive_post(post) for post in posts if isinstance(post, dict)]
+    rows.sort(key=lambda item: (str(item.get("published_at") or ""), str(item.get("updated_at") or ""), str(item.get("created_at") or "")), reverse=True)
+    return rows
+
+
+def _create_persona_archive(payload: PersonaDashboardPersonaCreatePayload) -> dict[str, Any]:
+    name = str(payload.name or "").strip()
+    content = str(payload.content or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="人设名称不能为空。")
+    if not content:
+        raise HTTPException(status_code=400, detail="人设简介不能为空。")
+    path, raw, archives = _persona_archive_source_for_write()
+    now = _persona_dashboard_iso_now()
+    archive = {
+        "id": _new_persona_archive_id(),
+        "name": name,
+        "content": content,
+        "createdAt": now,
+        "updatedAt": now,
+        "setup": {
+            "personaName": name,
+            "personaDescription": content,
+            "contentTheme": content,
+            "customTopic": content,
+            "tweetStyleSample": "",
+            "tweetStyleProfile": "",
+            "tweetStyleUpdatedAt": "",
+            "activeLinkEndingPresetId": "",
+            "linkEndingPresets": [],
+            "hotMetrics": {},
+            "accountManagement": {"threads": {}},
+        },
+        "posts": [],
+        "platformPosts": {"threads": [], "instagram": [], "telegram": []},
+        "publishHistory": [],
+        "personaImageLibrary": [],
+    }
+    archives.append(archive)
+    _write_persona_archives_preserving_shape(path, raw, archives)
+    return _build_persona_dashboard_profile(archive)
+
+
+def _create_persona_archive_post(archive_id: str, payload: PersonaDashboardDraftPostPayload) -> dict[str, Any]:
+    clean_id = str(archive_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID。")
+    content = str(payload.content or "").strip()
+    title = str(payload.title or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="推文内容不能为空。")
+    path, raw, archives = _persona_archive_source_for_write()
+    archive = _find_persona_archive(archives, clean_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+    next_order = max((int(_number(post.get("orderIndex"), -1)) for post in posts if isinstance(post, dict)), default=-1) + 1
+    now = _persona_dashboard_iso_now()
+    record = {
+        "id": _new_persona_post_id(),
+        "title": title or _persona_post_title(content, len(posts)),
+        "content": content,
+        "wordCount": len(content),
+        "orderIndex": next_order,
+        "createdAt": now,
+        "updatedAt": now,
+    }
+    archive["posts"] = [*posts, record]
+    archive["updatedAt"] = now
+    _write_persona_archives_preserving_shape(path, raw, archives)
+    return _compact_persona_archive_post(record)
+
+
+def _persona_publish_account_for_archive(
+    archive_id: str,
+    requested_account_id: str = "",
+    preferred_platform: str = "",
+) -> dict[str, Any]:
+    clean_archive_id = str(archive_id or "").strip()
+    clean_account_id = str(requested_account_id or "").strip()
+    platform = str(preferred_platform or "").strip().lower()
+    if platform not in {"instagram", "threads"}:
+        platform = "instagram"
+    with db() as conn:
+        if clean_account_id:
+            row = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (clean_account_id,)).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="执行账号不存在。")
+            account = dict(row)
+            if str(account.get("persona_id") or "").strip() != clean_archive_id:
+                raise HTTPException(status_code=400, detail="执行账号不属于当前人设。")
+        else:
+            row = conn.execute(
+                "SELECT * FROM social_accounts WHERE persona_id = ? AND platform = ? ORDER BY updated_at DESC, created_at DESC LIMIT 1",
+                (clean_archive_id, platform),
+            ).fetchone()
+            if not row:
+                raise HTTPException(status_code=400, detail=f"当前人设还没有可发布的 {platform} 执行账号。")
+            account = dict(row)
+    account_status = str(account.get("status") or "").strip().lower()
+    if account_status == "disabled":
+        raise HTTPException(status_code=400, detail="当前执行账号已禁用。")
+    if account_status != "ready":
+        raise HTTPException(status_code=400, detail="当前执行账号未处于可发布状态，请先在浏览器账号里完成登录或重新检测。")
+    if str(account.get("platform") or "").strip().lower() not in {"instagram", "threads"}:
+        raise HTTPException(status_code=400, detail="当前 Web 发布链路只支持 Instagram 或 Threads 浏览器发布。")
+    return account
+
+
+def _latest_successful_social_task_for_account(account_id: str, task_types: list[str]) -> dict[str, Any] | None:
+    clean_account_id = str(account_id or "").strip()
+    wanted = [str(item or "").strip() for item in (task_types or []) if str(item or "").strip()]
+    if not clean_account_id or not wanted:
+        return None
+    placeholders = ",".join("?" for _ in wanted)
+    params = [clean_account_id, *wanted]
+    with db() as conn:
+        row = conn.execute(
+            f"""
+            SELECT *
+            FROM social_automation_tasks
+            WHERE account_id = ?
+              AND status = 'success'
+              AND task_type IN ({placeholders})
+            ORDER BY finished_at DESC, updated_at DESC, created_at DESC
+            LIMIT 1
+            """,
+            tuple(params),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def _publish_persona_archive_post(
+    archive_id: str,
+    post_id: str,
+    payload: PersonaDashboardDraftPublishPayload,
+) -> dict[str, Any]:
+    clean_archive_id = str(archive_id or "").strip()
+    clean_post_id = str(post_id or "").strip()
+    if not clean_archive_id or not clean_post_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID 或推文 ID。")
+    media_paths = [str(item or "").strip() for item in (payload.media_paths or []) if str(item or "").strip()]
+    _, _, archives = _persona_archive_source_for_write()
+    archive = _find_persona_archive(archives, clean_archive_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+    post = next((item for item in posts if isinstance(item, dict) and str(item.get("id") or "").strip() == clean_post_id), None)
+    if not post:
+        raise HTTPException(status_code=404, detail="推文草稿不存在。")
+    content = str(post.get("content") or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="推文草稿内容为空，不能发布。")
+    account = _persona_publish_account_for_archive(clean_archive_id, payload.account_id, payload.platform)
+    platform = str(account.get("platform") or "instagram").strip().lower() or "instagram"
+    login_check = _latest_successful_social_task_for_account(str(account.get("id") or ""), ["check_login", "open_login"])
+    if not login_check:
+        raise HTTPException(status_code=400, detail="发布前请先完成一次登录检查，确认当前执行账号仍然可用。")
+    if platform == "instagram" and not media_paths:
+        raise HTTPException(status_code=400, detail="Instagram 发布至少需要一份媒体素材。")
+    task = create_social_task(
+        SocialTaskPayload(
+            persona_id=clean_archive_id,
+            account_id=str(account.get("id") or ""),
+            platform=platform,
+            task_type="publish_post",
+            priority=max(1, min(int(payload.priority or 50), 100)),
+            scheduled_at=payload.scheduled_at or 0,
+            payload={
+                "caption": content,
+                "content": content,
+                "text": content,
+                "platform": platform,
+                "media_paths": media_paths,
+                "archive_post_id": clean_post_id,
+                "archive_post_title": str(post.get("title") or ""),
+            },
+            max_retries=max(0, min(int(payload.max_retries or 2), 5)),
+        )
+    )
+    return {"ok": True, "persona_id": clean_archive_id, "post_id": clean_post_id, "task": task}
 
 
 def _write_persona_archives_preserving_shape(path: Path, raw: Any, archives: list[dict[str, Any]]) -> None:
@@ -13616,6 +14266,14 @@ def _write_persona_archives_preserving_shape(path: Path, raw: Any, archives: lis
         else:
             payload = archives
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _is_workflow_persona_archive(archive: dict[str, Any]) -> bool:
+    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+    return bool(
+        isinstance(setup.get("imageWorkflow"), dict)
+        or isinstance(archive.get("imageWorkflow"), dict)
+    )
 
 
 def _bind_persona_threads_username(archive_id: str, username: str) -> dict[str, Any]:
@@ -13702,6 +14360,149 @@ def _unbind_persona_threads_username(archive_id: str) -> dict[str, Any]:
     return {"ok": True, "archive_id": clean_id, "path": path.name}
 
 
+def _build_persona_dashboard_profile(archive: dict[str, Any]) -> dict[str, Any]:
+    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+    account_management = setup.get("accountManagement") if isinstance(setup.get("accountManagement"), dict) else {}
+    threads = account_management.get("threads") if isinstance(account_management.get("threads"), dict) else {}
+    link_presets = _get_link_ending_presets(setup)
+    active_link_preset_id = _normalize_link_preset_id(setup.get("activeLinkEndingPresetId"))
+    if active_link_preset_id and not any(item["id"] == active_link_preset_id and item.get("enabled", True) for item in link_presets):
+        active_link_preset_id = ""
+    if not active_link_preset_id:
+        active = next((item for item in link_presets if item.get("enabled", True)), None)
+        active_link_preset_id = str(active.get("id") or "") if active else ""
+    return {
+        "id": str(archive.get("id") or "").strip(),
+        "name": str(archive.get("name") or "").strip(),
+        "content": str(archive.get("content") or ""),
+        "owner_bot_name": str(archive.get("ownerBotName") or "").strip(),
+        "bound_pad_code": str(archive.get("boundPadCode") or "").strip(),
+        "bound_pad_name": str(archive.get("boundPadName") or "").strip(),
+        "threads_handle": _normalize_threads_username(threads.get("handle")),
+        "tweet_style_sample": str(setup.get("tweetStyleSample") or ""),
+        "tweet_style_profile": str(setup.get("tweetStyleProfile") or ""),
+        "tweet_style_updated_at": str(setup.get("tweetStyleUpdatedAt") or "").strip(),
+        "active_link_preset_id": active_link_preset_id,
+        "link_presets": [
+            {
+                "id": item["id"],
+                "name": item["name"],
+                "link_url": item["linkUrl"],
+                "ending_text": item["endingText"],
+                "enabled": item.get("enabled", True),
+                "created_at": item.get("createdAt"),
+                "updated_at": item.get("updatedAt"),
+            }
+            for item in link_presets
+        ],
+        "image_count": len(archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []),
+        "has_reference_images": bool(archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []),
+        "is_workflow_persona": _is_workflow_persona_archive(archive),
+        "updated_at": str(archive.get("updatedAt") or "").strip(),
+    }
+
+
+def _read_persona_dashboard_profile(archive_id: str) -> dict[str, Any]:
+    clean_id = str(archive_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID。")
+    _, _, archives = _persona_archive_source_for_write()
+    for archive in archives:
+        if str(archive.get("id") or "").strip() == clean_id:
+            return _build_persona_dashboard_profile(archive)
+    raise HTTPException(status_code=404, detail="人设不存在。")
+
+
+def _update_persona_dashboard_profile(archive_id: str, payload: PersonaDashboardPersonaProfilePayload) -> dict[str, Any]:
+    clean_id = str(archive_id or "").strip()
+    explicit = payload.model_dump(exclude_unset=True)
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID。")
+    if not explicit:
+        raise HTTPException(status_code=400, detail="没有可更新的字段。")
+    path, raw, archives = _persona_archive_source_for_write()
+    changed_archive: dict[str, Any] | None = None
+    now = _persona_dashboard_iso_now()
+    for archive in archives:
+        if str(archive.get("id") or "").strip() != clean_id:
+            continue
+        setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+        next_setup = dict(setup)
+        if "name" in explicit:
+            next_name = str(explicit.get("name") or "").strip()
+            if not next_name:
+                raise HTTPException(status_code=400, detail="人设名称不能为空。")
+            archive["name"] = next_name
+            next_setup["personaName"] = next_name
+        if "content" in explicit:
+            next_content = str(explicit.get("content") or "").strip()
+            if not next_content:
+                raise HTTPException(status_code=400, detail="人设简介不能为空。")
+            archive["content"] = next_content
+            next_setup["personaDescription"] = next_content
+            next_setup["contentTheme"] = next_content
+            next_setup["customTopic"] = next_content
+        if "bound_pad_code" in explicit:
+            archive["boundPadCode"] = str(explicit.get("bound_pad_code") or "").strip()
+        if "bound_pad_name" in explicit:
+            archive["boundPadName"] = str(explicit.get("bound_pad_name") or "").strip()
+        if "tweet_style_sample" in explicit:
+            sample = str(explicit.get("tweet_style_sample") or "").strip()
+            if sample:
+                next_setup["tweetStyleSample"] = sample[:1200]
+                next_setup["tweetStyleProfile"] = _analyze_tweet_style_sample(sample)
+                next_setup["tweetStyleLinkUrl"] = ""
+                next_setup["tweetStyleLinkText"] = ""
+                next_setup["tweetStyleUpdatedAt"] = now
+                link_url = _extract_tweet_style_link_url(sample)
+                if link_url:
+                    current_presets = _get_link_ending_presets(next_setup)
+                    exists = next((item for item in current_presets if item.get("linkUrl") == link_url and str(item.get("name") or "") == "推文风格提取"), None)
+                    if not exists:
+                        preset_id = f"style-{int(time.time() * 1000):x}"
+                        current_presets.append({
+                            "id": preset_id,
+                            "name": "推文风格提取",
+                            "linkUrl": link_url,
+                            "endingText": "",
+                            "enabled": True,
+                            "createdAt": now,
+                            "updatedAt": now,
+                        })
+                        next_setup["linkEndingPresets"] = current_presets
+                        current_active = _normalize_link_preset_id(next_setup.get("activeLinkEndingPresetId"))
+                        if not current_active:
+                            next_setup["activeLinkEndingPresetId"] = preset_id
+            else:
+                next_setup["tweetStyleSample"] = ""
+                next_setup["tweetStyleProfile"] = ""
+                next_setup["tweetStyleLinkUrl"] = ""
+                next_setup["tweetStyleLinkText"] = ""
+                next_setup["tweetStyleUpdatedAt"] = ""
+        if "link_presets" in explicit:
+            next_setup["linkEndingPresets"] = _sanitize_persona_dashboard_link_presets(explicit.get("link_presets") or [], next_setup)
+        if "active_link_preset_id" in explicit or "link_presets" in explicit:
+            presets = _get_link_ending_presets(next_setup)
+            requested_active = _normalize_link_preset_id(explicit.get("active_link_preset_id")) if "active_link_preset_id" in explicit else _normalize_link_preset_id(next_setup.get("activeLinkEndingPresetId"))
+            if requested_active:
+                if not any(item["id"] == requested_active for item in presets):
+                    raise HTTPException(status_code=400, detail="当前启用的链接模板不存在。")
+                next_setup["activeLinkEndingPresetId"] = requested_active
+            elif "active_link_preset_id" in explicit:
+                next_setup["activeLinkEndingPresetId"] = ""
+            else:
+                active = next((item for item in presets if item.get("enabled", True)), None)
+                next_setup["activeLinkEndingPresetId"] = str(active.get("id") or "") if active else ""
+        archive["setup"] = next_setup
+        archive["updatedAt"] = now
+        changed_archive = archive
+        break
+    if changed_archive is None:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    _write_persona_archives_preserving_shape(path, raw, archives)
+    return _build_persona_dashboard_profile(changed_archive)
+
+
 def _delete_persona_dashboard_post(archive_id: str, post_key: str) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     clean_key = str(post_key or "").strip()
@@ -13786,6 +14587,31 @@ def _delete_persona_dashboard_post(archive_id: str, post_key: str) -> dict[str, 
     _add_persona_dashboard_deleted_post(clean_id, clean_key)
     _write_persona_archives_preserving_shape(path, raw, archives)
     return {"ok": True, "archive_id": clean_id, "post_key": clean_key, "deleted": deleted, "path": path.name}
+
+
+def _delete_persona_dashboard_persona(archive_id: str) -> dict[str, Any]:
+    clean_id = str(archive_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID。")
+    path, raw, archives = _persona_archive_source_for_write()
+    removed: dict[str, Any] | None = None
+    next_archives: list[dict[str, Any]] = []
+    for archive in archives:
+        if str(archive.get("id") or "").strip() != clean_id:
+            next_archives.append(archive)
+            continue
+        if _is_workflow_persona_archive(archive):
+            raise HTTPException(status_code=400, detail="工作流人设不允许从 Web 控制台删除。")
+        removed = archive
+    if removed is None:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    _write_persona_archives_preserving_shape(path, raw, next_archives)
+    return {
+        "ok": True,
+        "archive_id": clean_id,
+        "name": str(removed.get("name") or "").strip(),
+        "path": path.name,
+    }
 
 
 def _read_tool_r18_persona_archives() -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -13964,6 +14790,7 @@ def _compact_dashboard_setup(setup: dict[str, Any]) -> dict[str, Any]:
 def _compact_publish_record(record: dict[str, Any]) -> dict[str, Any]:
     published_meta = record.get("publishedMeta") if isinstance(record.get("publishedMeta"), dict) else {}
     automation_task_type = record.get("automationTaskType") or record.get("automation_task_type") or published_meta.get("taskType")
+    screenshot_path = str(record.get("screenshotUrl") or "")
     return {
         "id": record.get("id"),
         "archive_post_id": record.get("archivePostId") or record.get("archive_post_id"),
@@ -13980,6 +14807,8 @@ def _compact_publish_record(record: dict[str, Any]) -> dict[str, Any]:
         "views": _source_metric(published_meta, "viewCount", "view_count"),
         "automation_task_type": automation_task_type,
         "automation_task_id": record.get("automationTaskId") or record.get("automation_task_id") or published_meta.get("taskId") or published_meta.get("task_id"),
+        "screenshot_path": screenshot_path,
+        "screenshot_url": _automation_screenshot_url(screenshot_path),
     }
 
 
@@ -14658,16 +15487,12 @@ def _build_persona_dashboard_overview() -> dict[str, Any]:
             "id": archive_id,
             "name": archive.get("name") or "未命名人设",
             "content": str(archive.get("content") or "")[:800],
+            "is_workflow_persona": _is_workflow_persona_archive(archive),
             "created_at": archive.get("createdAt"),
             "updated_at": archive.get("updatedAt"),
             "bound_pad_code": archive.get("boundPadCode"),
             "bound_pad_name": archive.get("boundPadName"),
             "owner_bot_name": archive.get("ownerBotName"),
-            "telegram": {
-                "chat_id": archive.get("boundTelegramChatId"),
-                "free_group": archive.get("boundTelegramFreeGroupName") or archive.get("boundTelegramFreeGroupId"),
-                "paid_group": archive.get("boundTelegramPaidGroupName") or archive.get("boundTelegramPaidGroupId"),
-            },
             "threads_account": {
                 "handle": threads_handle,
                 "bound": bool(threads_handle),
@@ -15302,6 +16127,35 @@ def create_app() -> FastAPI:
     def api_persona_dashboard_monitor():
         return dict(PERSONA_DASHBOARD_MONITOR_STATE)
 
+    @app.post("/api/persona_dashboard/personas")
+    def api_persona_dashboard_create_persona(payload: PersonaDashboardPersonaCreatePayload, _user: dict[str, Any] = Depends(get_current_user)):
+        return _create_persona_archive(payload)
+
+    @app.get("/api/persona_dashboard/personas/{archive_id}/posts")
+    def api_persona_dashboard_persona_posts(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+        return {"ok": True, "posts": _list_persona_archive_posts(archive_id)}
+
+    @app.get("/api/persona_dashboard/personas/{archive_id}/memories")
+    def api_persona_dashboard_persona_memories(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+        return {"ok": True, "memories": _list_selectable_persona_memories(archive_id)}
+
+    @app.post("/api/persona_dashboard/personas/{archive_id}/posts")
+    def api_persona_dashboard_create_post(archive_id: str, payload: PersonaDashboardDraftPostPayload, _user: dict[str, Any] = Depends(get_current_user)):
+        return _create_persona_archive_post(archive_id, payload)
+
+    @app.post("/api/persona_dashboard/personas/{archive_id}/generate_posts")
+    def api_persona_dashboard_generate_posts(archive_id: str, payload: PersonaDashboardGeneratePostsPayload, _user: dict[str, Any] = Depends(get_current_user)):
+        return _generate_persona_archive_posts(archive_id, payload)
+
+    @app.post("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}/publish")
+    def api_persona_dashboard_publish_post(
+        archive_id: str,
+        post_id: str,
+        payload: PersonaDashboardDraftPublishPayload,
+        _user: dict[str, Any] = Depends(get_current_user),
+    ):
+        return _publish_persona_archive_post(archive_id, post_id, payload)
+
     @app.post("/api/persona_dashboard/personas/{archive_id}/threads_binding")
     def api_persona_dashboard_bind_threads(archive_id: str, payload: PersonaDashboardThreadsBindingPayload):
         return _bind_persona_threads_username(archive_id, payload.username)
@@ -15309,6 +16163,18 @@ def create_app() -> FastAPI:
     @app.delete("/api/persona_dashboard/personas/{archive_id}/threads_binding")
     def api_persona_dashboard_unbind_threads(archive_id: str):
         return _unbind_persona_threads_username(archive_id)
+
+    @app.get("/api/persona_dashboard/personas/{archive_id}/profile")
+    def api_persona_dashboard_persona_profile(archive_id: str):
+        return _read_persona_dashboard_profile(archive_id)
+
+    @app.patch("/api/persona_dashboard/personas/{archive_id}/profile")
+    def api_persona_dashboard_update_persona_profile(archive_id: str, payload: PersonaDashboardPersonaProfilePayload):
+        return _update_persona_dashboard_profile(archive_id, payload)
+
+    @app.delete("/api/persona_dashboard/personas/{archive_id}")
+    def api_persona_dashboard_delete_persona(archive_id: str):
+        return _delete_persona_dashboard_persona(archive_id)
 
     @app.delete("/api/persona_dashboard/personas/{archive_id}/posts/{post_key}")
     def api_persona_dashboard_delete_post(archive_id: str, post_key: str):

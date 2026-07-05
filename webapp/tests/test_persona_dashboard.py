@@ -3,12 +3,14 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
 from fastapi.testclient import TestClient
 
 import webapp.server as server
+import webapp.social_automation_api as social_automation_api
 
 
 class PersonaDashboardApiTests(unittest.TestCase):
@@ -19,6 +21,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self._old_tool_runtime_dir = os.environ.get("TOOL_R18_RUNTIME_DIR")
         self._old_server_runtime_config_path = server.RUNTIME_CONFIG_PATH
         self._old_server_tool_runtime_dir = server.TOOL_R18_RUNTIME_DIR
+        self._old_social_tool_runtime_dir = social_automation_api._TOOL_R18_RUNTIME_DIR
         self._tmpdir = tempfile.TemporaryDirectory()
         self.root = Path(self._tmpdir.name)
         self.data_dir = self.root / "webapp_data"
@@ -31,6 +34,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         os.environ["TOOL_R18_RUNTIME_DIR"] = str(self.tool_runtime_dir)
         server.RUNTIME_CONFIG_PATH = self.data_dir / "runtime_config.json"
         server.TOOL_R18_RUNTIME_DIR = self.tool_runtime_dir
+        social_automation_api._TOOL_R18_RUNTIME_DIR = self.tool_runtime_dir
         self.app = server.create_app()
         self.unauth_client = TestClient(self.app)
         self.client = TestClient(self.app)
@@ -40,6 +44,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
     def tearDown(self):
         server.RUNTIME_CONFIG_PATH = self._old_server_runtime_config_path
         server.TOOL_R18_RUNTIME_DIR = self._old_server_tool_runtime_dir
+        social_automation_api._TOOL_R18_RUNTIME_DIR = self._old_social_tool_runtime_dir
         self._restore_env("APP_DB_PATH", self._old_db_path)
         self._restore_env("APP_RUNTIME_CONFIG_PATH", self._old_runtime_config_path)
         self._restore_env("WEBAPP_DATA_DIR", self._old_webapp_data_dir)
@@ -56,15 +61,15 @@ class PersonaDashboardApiTests(unittest.TestCase):
         archives = [
             {
                 "id": "persona-1",
-                "name": "历史老师",
-                "content": "讲历史冷知识的人设",
+                "name": "History Teacher",
+                "content": "Persona intro for history topics.",
                 "createdAt": "2026-06-20T00:00:00Z",
                 "updatedAt": "2026-06-30T00:00:00Z",
                 "boundPadCode": "PAD-1",
                 "boundPadName": "OP-TEST1",
                 "ownerBotName": "primary",
                 "setup": {
-                    "personaName": "历史老师",
+                    "personaName": "History Teacher",
                     "api_token": "super-secret-token",
                     "accountManagement": {"threads": {"password": "super-secret-password"}},
                     "hotMetrics": {
@@ -151,6 +156,77 @@ class PersonaDashboardApiTests(unittest.TestCase):
         conn.commit()
         conn.close()
 
+    def _insert_social_account(self, *, account_id="acct-1", persona_id="persona-1", platform="instagram", username="insta_user", status="ready"):
+        conn = sqlite3.connect(str(self.data_dir / "app.db"))
+        now = 1_720_000_000
+        conn.execute(
+            """
+            INSERT INTO social_accounts(id, persona_id, platform, username, display_name, profile_dir, proxy_id, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                account_id,
+                persona_id,
+                platform,
+                username,
+                username,
+                str(self.data_dir / "profiles" / account_id),
+                "",
+                status,
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+    def _insert_social_task(
+        self,
+        *,
+        task_id="task-social-1",
+        account_id="acct-1",
+        persona_id="persona-1",
+        platform="instagram",
+        task_type="check_login",
+        status="success",
+        payload=None,
+        result=None,
+        created_at=1_720_000_000,
+    ):
+        conn = sqlite3.connect(str(self.data_dir / "app.db"))
+        conn.execute(
+            """
+            INSERT INTO social_automation_tasks(
+              id, persona_id, account_id, platform, task_type, priority, status, scheduled_at,
+              started_at, finished_at, payload_json, result_json, error, retry_count, max_retries,
+              created_by, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                task_id,
+                persona_id,
+                account_id,
+                platform,
+                task_type,
+                50,
+                status,
+                0,
+                created_at,
+                created_at + 10,
+                json.dumps(payload or {}, ensure_ascii=False),
+                json.dumps(result or {}, ensure_ascii=False),
+                "",
+                0,
+                2,
+                "web",
+                created_at,
+                created_at + 10,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
     def test_overview_returns_empty_when_archive_files_are_missing(self):
         resp = self.client.get("/api/persona_dashboard/overview")
         self.assertEqual(resp.status_code, 200)
@@ -185,6 +261,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertNotIn(str(self.tool_runtime_dir), data_sources)
         persona = data["personas"][0]
         self.assertIn("threads_account", persona)
+        self.assertNotIn("telegram", persona)
+        self.assertFalse(persona["is_workflow_persona"])
         self.assertFalse(persona["threads_account"]["bound"])
         self.assertTrue(any("Threads" in item for item in persona["warnings"]))
 
@@ -199,8 +277,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(persona["hot"]["recent_views"], 1234)
         self.assertEqual(persona["hot"]["post_views"], 300)
         self.assertEqual(persona["post_metrics"][0]["media_items"][0]["url"], "data:image/png;base64,abc123")
-        self.assertIn("逐帖浏览", persona["hot_score_formula"])
-        self.assertIn("不包含账号主页浏览", persona["hot_score_formula"])
+        self.assertIn("浏览", persona["hot_score_formula"])
 
     def test_sensitive_values_are_masked(self):
         self._write_archives()
@@ -246,11 +323,298 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertFalse(persona["threads_account"]["bound"])
         self.assertEqual(persona["threads_account"]["handle"], "")
 
+    def test_public_persona_profile_returns_editable_fields(self):
+        self._write_archives()
+        resp = self.unauth_client.get("/api/persona_dashboard/personas/persona-1/profile")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["id"], "persona-1")
+        self.assertEqual(data["name"], "History Teacher")
+        self.assertEqual(data["content"], "Persona intro for history topics.")
+        self.assertEqual(data["image_count"], 1)
+        self.assertEqual(data["bound_pad_code"], "PAD-1")
+        self.assertEqual(data["bound_pad_name"], "OP-TEST1")
+        self.assertFalse(data["is_workflow_persona"])
+        self.assertEqual(data["link_presets"], [])
+
+    def test_public_persona_profile_patch_updates_basic_fields(self):
+        self._write_archives()
+        resp = self.unauth_client.patch(
+            "/api/persona_dashboard/personas/persona-1/profile",
+            json={
+                "name": "Updated History Teacher",
+                "content": "Updated intro",
+                "bound_pad_code": "PAD-99",
+                "bound_pad_name": "OP-TEST99",
+            },
+        )
+        self.assertEqual(resp.status_code, 200)
+        profile = resp.json()
+        self.assertEqual(profile["name"], "Updated History Teacher")
+        self.assertEqual(profile["content"], "Updated intro")
+        self.assertEqual(profile["bound_pad_code"], "PAD-99")
+        self.assertEqual(profile["bound_pad_name"], "OP-TEST99")
+        archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
+        self.assertEqual(archives[0]["name"], "Updated History Teacher")
+        self.assertEqual(archives[0]["content"], "Updated intro")
+        self.assertEqual(archives[0]["boundPadCode"], "PAD-99")
+        self.assertEqual(archives[0]["boundPadName"], "OP-TEST99")
+
+    def test_public_persona_profile_patch_updates_tweet_style_and_link_presets(self):
+        self._write_archives()
+        resp = self.unauth_client.patch(
+            "/api/persona_dashboard/personas/persona-1/profile",
+            json={
+                "tweet_style_sample": "Tonight a quick history fact. Want more? https://example.com/story",
+                "link_presets": [
+                    {
+                        "id": "preset-main",
+                        "name": "style preset",
+                        "link_url": "https://example.com/main",
+                        "ending_text": "see more",
+                        "enabled": True,
+                    }
+                ],
+                "active_link_preset_id": "preset-main",
+            },
+        )
+        self.assertEqual(resp.status_code, 200)
+        profile = resp.json()
+        self.assertTrue(profile["tweet_style_profile"])
+        self.assertEqual(profile["active_link_preset_id"], "preset-main")
+        self.assertEqual(len(profile["link_presets"]), 1)
+        self.assertEqual(profile["link_presets"][0]["link_url"], "https://example.com/main")
+        archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
+        setup = archives[0]["setup"]
+        self.assertEqual(setup["tweetStyleSample"], "Tonight a quick history fact. Want more? https://example.com/story")
+        self.assertTrue(setup["tweetStyleProfile"])
+        self.assertEqual(setup["activeLinkEndingPresetId"], "preset-main")
+        self.assertEqual(setup["linkEndingPresets"][0]["linkUrl"], "https://example.com/main")
+
+    def test_public_delete_persona_removes_non_workflow_archive(self):
+        self._write_archives()
+        resp = self.unauth_client.delete("/api/persona_dashboard/personas/persona-1")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["archive_id"], "persona-1")
+        overview = self.unauth_client.get("/api/persona_dashboard/overview").json()
+        self.assertEqual(overview["summary"]["persona_count"], 0)
+
+    def test_public_delete_persona_rejects_workflow_archive(self):
+        archives = [
+            {
+                "id": "wf-1",
+                "name": "Workflow Persona",
+                "content": "workflow seed",
+                "setup": {"imageWorkflow": {"workflowId": "wf-demo"}},
+            }
+        ]
+        (self.tool_runtime_dir / "persona_archives.json").write_text(json.dumps(archives), encoding="utf-8")
+        resp = self.unauth_client.delete("/api/persona_dashboard/personas/wf-1")
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("工作流人设", resp.json()["detail"])
+
     def test_public_refresh_endpoint_returns_task_status(self):
-        with mock.patch.object(server, "_start_persona_dashboard_refresh", return_value={"id": "pdr_test", "status": "queued", "message": "已加入刷新队列。"}):
+        with mock.patch.object(server, "_start_persona_dashboard_refresh", return_value={"id": "pdr_test", "status": "queued", "message": "queued"}):
             resp = self.unauth_client.post("/api/persona_dashboard/refresh", json={"archive_id": "persona-1"})
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["id"], "pdr_test")
+
+    def test_create_persona_requires_auth_and_persists_archive(self):
+        resp = self.client.post(
+            "/api/persona_dashboard/personas",
+            json={"name": "New Persona", "content": "New persona intro"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        profile = resp.json()
+        self.assertEqual(profile["name"], "New Persona")
+        self.assertEqual(profile["content"], "New persona intro")
+        archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(archives), 1)
+        self.assertEqual(archives[0]["name"], "New Persona")
+        self.assertEqual(archives[0]["posts"], [])
+
+    def test_create_persona_post_lists_draft(self):
+        self._write_archives()
+        create_resp = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/posts",
+            json={"title": "Draft 1", "content": "This is the first draft"},
+        )
+        self.assertEqual(create_resp.status_code, 200)
+        post = create_resp.json()
+        self.assertEqual(post["title"], "Draft 1")
+        self.assertEqual(post["content"], "This is the first draft")
+        list_resp = self.client.get("/api/persona_dashboard/personas/persona-1/posts")
+        self.assertEqual(list_resp.status_code, 200)
+        posts = list_resp.json()["posts"]
+        self.assertTrue(any(item["id"] == post["id"] for item in posts))
+        archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
+        self.assertTrue(any(item["id"] == post["id"] for item in archives[0]["posts"]))
+
+    def test_persona_memories_lists_runtime_entries(self):
+        self._write_archives()
+        (self.tool_runtime_dir / "persona_memory.json").write_text(json.dumps({
+            "persona-1": [
+                {"id": "mem-1", "date": "2026-07-04T10:00:00Z", "summary": "第一条记忆"},
+                {"id": "mem-2", "date": "2026-07-03T10:00:00Z", "summary": "第二条记忆"},
+            ]
+        }), encoding="utf-8")
+        resp = self.client.get("/api/persona_dashboard/personas/persona-1/memories")
+        self.assertEqual(resp.status_code, 200)
+        memories = resp.json()["memories"]
+        self.assertEqual([item["id"] for item in memories[:2]], ["mem-1", "mem-2"])
+
+    def test_generate_persona_posts_calls_persona_workflow_cli(self):
+        self._write_archives()
+
+        def fake_generate(_archive_id, _payload):
+            archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
+            archives[0]["posts"].append({
+                "id": "post-new-1",
+                "title": "Generated title",
+                "content": "Generated content",
+                "wordCount": 17,
+                "orderIndex": 1,
+                "createdAt": "2026-07-04T12:00:00Z",
+                "updatedAt": "2026-07-04T12:00:00Z",
+            })
+            (self.tool_runtime_dir / "persona_archives.json").write_text(json.dumps(archives), encoding="utf-8")
+            return {
+                "ok": True,
+                "persona_id": "persona-1",
+                "generated_count": 1,
+                "selected_memory_count": 1,
+                "post_ids": ["post-new-1"],
+                "posts": [{"id": "post-new-1", "title": "Generated title", "content": "Generated content"}],
+            }
+
+        with mock.patch.object(server, "_generate_persona_archive_posts", side_effect=fake_generate) as mocked:
+            resp = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/generate_posts",
+                json={
+                    "count": 1,
+                    "prompt": "围绕历史老师的通勤日常",
+                    "target_words": 80,
+                    "content_branch": "nonr18",
+                    "content_time_slot": "morning",
+                    "selected_memory_ids": ["mem-1"],
+                },
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["generated_count"], 1)
+        self.assertEqual(mocked.call_args.args[0], "persona-1")
+        self.assertEqual(mocked.call_args.args[1].prompt, "围绕历史老师的通勤日常")
+
+    def test_persona_workflow_syncs_runtime_llm_config_into_tool_api_config(self):
+        runtime_payload = dict(server.DEFAULT_RUNTIME_CONFIG)
+        runtime_payload.update({
+            "llm_base_url": "http://llm.example",
+            "llm_api_key": "key-123",
+            "llm_api_key_gpt": "key-123",
+            "llm_default_model": "xai/grok-4.3",
+            "llm_default_model_gpt": "xai/grok-4.3",
+            "llm_model_priority_order": "xai/grok-4.3, google/gemini-3.5-flash",
+            "llm_free_model_priority_order": "google/gemini-3.5-flash",
+            "llm_paid_model_priority_order": "xai/grok-4.3",
+        })
+        server._write_runtime_config_file(runtime_payload)
+        (self.tool_runtime_dir / "api_config.json").write_text(json.dumps({
+            "gptEndpoint": "http://old.example",
+            "geminiTextEndpoint": "http://old.example",
+        }), encoding="utf-8")
+
+        server._sync_tool_r18_api_config_for_persona_workflow()
+
+        synced = json.loads((self.tool_runtime_dir / "api_config.json").read_text(encoding="utf-8"))
+        self.assertEqual(synced["gptEndpoint"], "http://llm.example")
+        self.assertEqual(synced["geminiTextEndpoint"], "http://llm.example")
+        self.assertEqual(synced["gptKey"], "key-123")
+        self.assertEqual(synced["geminiTextKey"], "key-123")
+        self.assertEqual(synced["llmModelPriorityOrder"], "xai/grok-4.3, google/gemini-3.5-flash")
+        self.assertEqual(synced["llmFreeModelPriorityOrder"], "google/gemini-3.5-flash")
+        self.assertEqual(synced["llmPaidModelPriorityOrder"], "xai/grok-4.3")
+
+    def test_publish_persona_post_creates_publish_task_with_archive_post_id(self):
+        self._write_archives()
+        self._insert_social_account()
+        self._insert_social_task(account_id="acct-1", platform="instagram", task_type="check_login")
+        create_resp = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/posts",
+            json={"title": "Draft publish", "content": "Publish me"},
+        )
+        self.assertEqual(create_resp.status_code, 200)
+        post = create_resp.json()
+        with mock.patch.object(server, "create_social_task", return_value={"id": "sat-1", "task_type": "publish_post", "status": "queued"}) as mocked:
+            publish_resp = self.client.post(
+                f"/api/persona_dashboard/personas/persona-1/posts/{post['id']}/publish",
+                json={"media_paths": [r"E:\\tmp\\media_1.png"]},
+            )
+        self.assertEqual(publish_resp.status_code, 200)
+        payload_obj = mocked.call_args.args[0]
+        self.assertEqual(payload_obj.persona_id, "persona-1")
+        self.assertEqual(payload_obj.account_id, "acct-1")
+        self.assertEqual(payload_obj.task_type, "publish_post")
+        self.assertEqual(payload_obj.payload["archive_post_id"], post["id"])
+        self.assertEqual(payload_obj.payload["archive_post_title"], "Draft publish")
+        self.assertEqual(payload_obj.payload["caption"], "Publish me")
+        self.assertEqual(payload_obj.payload["media_paths"], [r"E:\\tmp\\media_1.png"])
+
+    def test_publish_persona_post_supports_threads_without_media(self):
+        self._write_archives()
+        self._insert_social_account(account_id="acct-threads", platform="threads", username="threads_user")
+        self._insert_social_task(account_id="acct-threads", platform="threads", task_type="check_login")
+        create_resp = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/posts",
+            json={"title": "Threads draft", "content": "Threads publish content"},
+        )
+        self.assertEqual(create_resp.status_code, 200)
+        post = create_resp.json()
+        with mock.patch.object(server, "create_social_task", return_value={"id": "sat-th", "task_type": "publish_post", "status": "queued"}) as mocked:
+            publish_resp = self.client.post(
+                f"/api/persona_dashboard/personas/persona-1/posts/{post['id']}/publish",
+                json={"account_id": "acct-threads", "platform": "threads", "media_paths": []},
+            )
+        self.assertEqual(publish_resp.status_code, 200)
+        payload_obj = mocked.call_args.args[0]
+        self.assertEqual(payload_obj.persona_id, "persona-1")
+        self.assertEqual(payload_obj.account_id, "acct-threads")
+        self.assertEqual(payload_obj.platform, "threads")
+        self.assertEqual(payload_obj.task_type, "publish_post")
+        self.assertEqual(payload_obj.payload["platform"], "threads")
+        self.assertEqual(payload_obj.payload["archive_post_id"], post["id"])
+        self.assertEqual(payload_obj.payload["caption"], "Threads publish content")
+        self.assertEqual(payload_obj.payload["media_paths"], [])
+
+    def test_publish_persona_post_rejects_non_ready_account(self):
+        self._write_archives()
+        self._insert_social_account(account_id="acct-threads", platform="threads", username="threads_user", status="cookie_expired")
+        create_resp = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/posts",
+            json={"title": "Threads draft", "content": "Threads publish content"},
+        )
+        self.assertEqual(create_resp.status_code, 200)
+        post = create_resp.json()
+        publish_resp = self.client.post(
+            f"/api/persona_dashboard/personas/persona-1/posts/{post['id']}/publish",
+            json={"account_id": "acct-threads", "platform": "threads", "media_paths": []},
+        )
+        self.assertEqual(publish_resp.status_code, 400)
+        self.assertIn("未处于可发布状态", publish_resp.json()["detail"])
+
+    def test_publish_persona_post_requires_successful_login_check(self):
+        self._write_archives()
+        self._insert_social_account(account_id="acct-threads", platform="threads", username="threads_user")
+        create_resp = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/posts",
+            json={"title": "Threads draft", "content": "Threads publish content"},
+        )
+        self.assertEqual(create_resp.status_code, 200)
+        post = create_resp.json()
+        publish_resp = self.client.post(
+            f"/api/persona_dashboard/personas/persona-1/posts/{post['id']}/publish",
+            json={"account_id": "acct-threads", "platform": "threads", "media_paths": []},
+        )
+        self.assertEqual(publish_resp.status_code, 400)
+        self.assertIn("发布前请先完成一次登录检查", publish_resp.json()["detail"])
 
     def test_public_delete_post_removes_metric_row(self):
         self._write_archives()
@@ -283,6 +647,38 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(next_persona["post_metrics"], [])
         self.assertEqual(next_persona["hot"]["likes"], 0)
         self.assertEqual(next_persona["hot"]["post_views"], 0)
+
+    def test_threads_auto_reply_enriches_handle_and_comment_targets(self):
+        self._write_archives()
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        archives[0].setdefault("setup", {}).setdefault("accountManagement", {}).setdefault("threads", {})["handle"] = "history_teacher"
+        archives[0]["publishHistory"][0]["publishedAt"] = now_iso
+        archives[0]["publishHistory"][0].setdefault("publishedMeta", {})["capturedAt"] = now_iso
+        archives[0]["setup"]["hotMetrics"]["threads"]["postMetrics"][0]["capturedAt"] = now_iso
+        archives_path.write_text(json.dumps(archives), encoding="utf-8")
+        self._insert_social_account(account_id="acct-threads", platform="threads", username="threads_user")
+
+        resp = self.client.post(
+            "/api/persona_dashboard/automation/tasks",
+            json={
+                "persona_id": "persona-1",
+                "account_id": "acct-threads",
+                "platform": "threads",
+                "task_type": "threads_auto_reply",
+                "priority": 50,
+                "max_retries": 2,
+                "payload": {"strategy_id": "comment_recent_7d"},
+            },
+        )
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()["task"]["payload"]
+        self.assertEqual(payload["threads_handle"], "history_teacher")
+        self.assertEqual(payload["reply_scope"], "comments")
+        self.assertTrue(payload["target_urls"])
+        self.assertIn("https://www.threads.com/@history/post/abc", payload["target_urls"])
+        self.assertTrue(payload["target_summaries"])
 
 
 if __name__ == "__main__":

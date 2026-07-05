@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
@@ -13,7 +13,7 @@
         <div class="brand-mark">WK</div>
         <div>
           <h1>Web 任务控制台</h1>
-          <p>替代 TG Bot 的完整操作面板</p>
+          <p>统一 Web 操作面板</p>
         </div>
       </div>
 
@@ -25,7 +25,7 @@
         </div>
         <button type="button" data-view="tasks">任务队列</button>
         <button type="button" data-view="social">浏览器发布</button>
-        <button type="button" data-view="accounts">账号 Profile</button>
+        <button type="button" data-view="accounts">浏览器账号</button>
         <button type="button" data-view="settings">系统状态</button>
       </nav>
 
@@ -42,7 +42,7 @@
     <main class="console-main">
       <header class="console-topbar">
         <div>
-          <div class="eyebrow">Console</div>
+          <div class="eyebrow">控制台</div>
           <h2 id="viewTitle">任务工作台</h2>
         </div>
         <div class="topbar-actions">
@@ -56,25 +56,25 @@
           <section class="module-panel">
             <div class="panel-head">
               <div>
-                <div class="eyebrow" id="moduleEyebrow">Flow</div>
-                <h3 id="moduleTitle">我的人設</h3>
+                <div class="eyebrow" id="moduleEyebrow">流程</div>
+                <h3 id="moduleTitle">我的人设</h3>
               </div>
-              <span class="module-chip" id="moduleCallback">toolr18_entry</span>
+              <span class="module-chip" id="moduleCallback" hidden></span>
             </div>
             <div id="moduleBody"></div>
             <div id="commandMsg" class="notice" role="status"></div>
+            <div id="eventStream" class="event-stream" aria-live="polite"></div>
           </section>
 
           <aside class="action-panel">
             <div class="panel-head">
               <div>
-                <div class="eyebrow">Confirm</div>
+                <div class="eyebrow">确认</div>
                 <h3>确认执行</h3>
               </div>
               <span id="watchingTask">未监听</span>
             </div>
             <div class="confirm-summary" id="confirmSummary"></div>
-            <div class="event-stream" id="eventStream"></div>
           </aside>
         </div>
       </section>
@@ -82,7 +82,7 @@
       <section class="view" data-panel="tasks">
         <div class="panel-head">
           <div>
-            <div class="eyebrow">Task Queue</div>
+            <div class="eyebrow">任务队列</div>
             <h3>任务队列</h3>
           </div>
           <button id="refreshTasks" type="button">刷新队列</button>
@@ -95,7 +95,7 @@
           <section class="command-panel">
             <div class="panel-head">
               <div>
-                <div class="eyebrow">Browser Publish</div>
+                <div class="eyebrow">浏览器发布</div>
                 <h3>创建浏览器自动化任务</h3>
               </div>
               <select id="socialTaskType">
@@ -140,13 +140,13 @@
                 <input id="socialMinViews" type="number" min="0" value="0" />
               </label>
             </div>
-            <label>素材路径 media_paths</label>
+            <label>素材路径</label>
             <textarea id="socialMediaPaths" rows="3" placeholder="publish_post 必填。一行一个本地素材路径。"></textarea>
-            <label>目标 URL 列表 target_urls</label>
+            <label>目标 URL 列表</label>
             <textarea id="socialTargetUrls" rows="3" placeholder="热点回复等任务可填写，一行一个 URL。"></textarea>
             <div class="command-actions">
               <button id="submitSocialTask" type="button" class="primary">提交浏览器任务</button>
-              <button id="runSocialOnce" type="button">Worker 执行一次</button>
+              <button id="runSocialOnce" type="button">执行一次队列</button>
             </div>
             <div id="socialMsg" class="notice"></div>
           </section>
@@ -154,7 +154,7 @@
           <aside class="live-panel">
             <div class="panel-head">
               <div>
-                <div class="eyebrow">Automation Queue</div>
+                <div class="eyebrow">自动化队列</div>
                 <h3>浏览器任务</h3>
               </div>
               <button id="refreshSocialTasks" type="button">刷新</button>
@@ -167,8 +167,8 @@
       <section class="view" data-panel="accounts">
         <div class="panel-head">
           <div>
-            <div class="eyebrow">Profiles</div>
-            <h3>账号与 Camoufox Profile</h3>
+            <div class="eyebrow">浏览器账号</div>
+            <h3>账号与 Camoufox 浏览器环境</h3>
           </div>
           <button id="refreshAccounts" type="button">刷新账号</button>
         </div>
@@ -178,19 +178,19 @@
       <section class="view" data-panel="settings">
         <div class="status-grid">
           <div class="status-card">
-            <div class="eyebrow">Worker</div>
+            <div class="eyebrow">任务执行器</div>
             <strong id="workerState">-</strong>
             <span id="workerDetail">等待读取</span>
           </div>
           <div class="status-card">
-            <div class="eyebrow">Web Console</div>
+            <div class="eyebrow">Web 控制台</div>
             <strong>新面板</strong>
             <span>入口统一到 Web 控制台。</span>
           </div>
           <div class="status-card">
-            <div class="eyebrow">Browser</div>
+            <div class="eyebrow">浏览器环境</div>
             <strong>Camoufox</strong>
-            <span>持久化 Profile + 代理 + 有头模式。</span>
+            <span>持久化浏览器环境 + 代理 + 有头模式。</span>
           </div>
         </div>
       </section>
