@@ -14069,6 +14069,31 @@ def _list_persona_archive_posts(archive_id: str) -> list[dict[str, Any]]:
     return rows
 
 
+def _list_persona_archive_publish_history(archive_id: str) -> list[dict[str, Any]]:
+    clean_id = str(archive_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID。")
+    _, _, archives = _persona_archive_source_for_write()
+    archive = _find_persona_archive(archives, clean_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    publish_history = archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []
+    rows = [
+        _compact_publish_record(record)
+        for record in publish_history
+        if isinstance(record, dict) and not _is_internal_login_publish_record(record)
+    ]
+    rows.sort(
+        key=lambda item: (
+            str(item.get("published_at") or ""),
+            str(item.get("captured_at") or ""),
+            str(item.get("id") or ""),
+        ),
+        reverse=True,
+    )
+    return rows
+
+
 def _create_persona_archive(payload: PersonaDashboardPersonaCreatePayload) -> dict[str, Any]:
     name = str(payload.name or "").strip()
     content = str(payload.content or "").strip()
@@ -16134,6 +16159,10 @@ def create_app() -> FastAPI:
     @app.get("/api/persona_dashboard/personas/{archive_id}/posts")
     def api_persona_dashboard_persona_posts(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
         return {"ok": True, "posts": _list_persona_archive_posts(archive_id)}
+
+    @app.get("/api/persona_dashboard/personas/{archive_id}/publish_history")
+    def api_persona_dashboard_persona_publish_history(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+        return {"ok": True, "publish_history": _list_persona_archive_publish_history(archive_id)}
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/memories")
     def api_persona_dashboard_persona_memories(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):

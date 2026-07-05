@@ -36,6 +36,7 @@ const state = {
   personaProfiles: {},
   personaMemories: {},
   personaDraftPosts: {},
+  personaPublishHistories: {},
   personaPublishAccountIds: {},
   personaPublishResults: {},
   personaPublishWatchers: {},
@@ -43,6 +44,7 @@ const state = {
   personaAutomationWatchers: {},
   personaForms: {},
   renderedPersonaId: "",
+  personaCreateMode: false,
   personaLinkPresetId: "",
   selectedPersonaId: "",
   selectedPersonaPostId: "",
@@ -489,17 +491,13 @@ function renderPersonaPublishPreflight(account) {
   if (!account) return "";
   const rows = personaPublishPreflightRows(account);
   return `
-    <div class="persona-inline-panel">
-      <strong>发布前状态</strong>
-      <p>这里只展示当前账号最近一次相关任务状态。只有“登录检查”是硬前置；养号和自动回复仅作建议。</p>
-      <div class="compact-list">
-        ${rows.map((row) => `
-          <article class="compact-row compact-row-log">
-            <strong>${esc(row.label)}</strong>
-            <p>${esc(row.text)}</p>
-            <span>${row.ok ? "已就绪" : "待处理"}</span>
-          </article>`).join("")}
-      </div>
+    <div class="compact-list">
+      ${rows.map((row) => `
+        <article class="compact-row compact-row-log">
+          <strong>${esc(row.label)}</strong>
+          <p>${esc(row.text)}</p>
+          <span>${row.ok ? "已就绪" : "待处理"}</span>
+        </article>`).join("")}
     </div>
   `;
 }
@@ -525,6 +523,13 @@ function personaBindingLabel(persona) {
   if (handle) return `Threads 主页 · ${handle}`;
   if (profileName) return `执行账号 · ${profileName}`;
   return "未绑定";
+}
+
+function personaExecutionAccountLabel(persona) {
+  const account = accountForPersona(persona);
+  const profileName = String(account?.username || account?.account_username || "").trim();
+  const handle = String(persona?.threads_account?.handle || "").trim();
+  return profileName || handle || "未绑定执行账号";
 }
 
 function currentPersonaGroupStep(groupKey, profile) {
@@ -864,28 +869,37 @@ function renderPersonaGroupPanel(groupKey, step, persona, account, profile) {
 }
 
 function personaHistoryRows(persona, limit = 8) {
-  const rows = Array.isArray(persona.publish_history) ? persona.publish_history : [];
+  const rows = personaPublishHistoryRows(persona);
   return rows.slice(0, limit);
 }
 
 function renderPersonaHistoryRows(rows) {
   if (!Array.isArray(rows) || !rows.length) {
-    return `<div class="empty-state">当前还没有执行记录。</div>`;
+    return `<div class="empty-state">当前还没有发布历史。</div>`;
   }
   return `<div class="compact-list">${rows.map((row) => {
-    const action = String(row.task_title || row.title || statusLabel(row.task_type || row.taskType || "") || row.platform || "记录").trim();
-    const content = String(row.caption || row.content || row.text || row.reply_text || row.source_url || "").trim();
+    const action = String(
+      row.title
+      || statusLabel(row.automation_task_type || row.task_type || row.taskType || "")
+      || row.platform
+      || "发布记录"
+    ).trim();
+    const content = String(row.content || row.caption || row.text || row.reply_text || row.source_url || "").trim();
     const platform = String(row.platform || row.publishPlatform || "").trim();
     const status = String(row.status || "").trim();
-    const publishedUrl = String(row.published_url || row.url || row.post_url || "").trim();
+    const publishedUrl = String(row.source_url || row.published_url || row.url || row.post_url || "").trim();
+    const screenshotUrl = String(row.screenshot_url || "").trim();
     const time = row.published_at || row.finished_at || row.updated_at || row.created_at || "";
     const meta = [platform, status ? statusLabel(status) : "", formatTime(time)].filter(Boolean).join(" · ");
     return `
       <article class="compact-row">
-        <strong>${esc(action || "记录")}</strong>
+        <strong>${esc(action || "发布记录")}</strong>
         <p>${esc(content || "该记录没有正文或链接摘要。")}</p>
         <span>${esc(meta)}</span>
-        ${publishedUrl ? `<div class="row-actions"><a href="${esc(publishedUrl)}" target="_blank" rel="noopener">查看结果</a></div>` : ""}
+        ${(publishedUrl || screenshotUrl) ? `<div class="row-actions">
+          ${publishedUrl ? `<a href="${esc(publishedUrl)}" target="_blank" rel="noopener">查看来源</a>` : ""}
+          ${screenshotUrl ? `<a href="${esc(screenshotUrl)}" target="_blank" rel="noopener">查看截图</a>` : ""}
+        </div>` : ""}
       </article>`;
   }).join("")}</div>`;
 }
@@ -916,6 +930,18 @@ function renderPersonaMemoryOptions(persona, selectedIds = []) {
       <span>${esc(formatTime(row.date || ""))}</span>
     </label>
   `).join("")}</div>`;
+}
+
+function personaMemoryRows(persona = selectedPersona()) {
+  if (!persona) return [];
+  return state.personaMemories[String(persona.id)] || [];
+}
+
+function personaPublishHistoryRows(persona = selectedPersona()) {
+  if (!persona) return [];
+  const key = String(persona.id);
+  if (Array.isArray(state.personaPublishHistories[key])) return state.personaPublishHistories[key];
+  return Array.isArray(persona.publish_history) ? persona.publish_history : [];
 }
 
 function personaPublishPreview(post) {
@@ -1006,17 +1032,6 @@ function renderPersonaSettingsPanelV2(persona, account, profile, step) {
           <button type="button" data-persona-save-preset ${selectedPreset ? "" : "disabled"}>保存模板</button>
           <button type="button" data-persona-delete-preset ${selectedPreset ? "" : "disabled"}>删除模板</button>
           <button type="button" data-persona-activate-preset ${selectedPreset ? "" : "disabled"}>设为当前启用</button>
-        </div>
-      </div>`;
-  }
-  if (currentStep === "dashboard") {
-    return `
-      <div class="persona-inline-panel">
-        <strong>人设看板</strong>
-        <p>这是独立浏览器页面，保留人设档案、自动化记录和更完整的外部查看能力，不影响当前 Web 控制台。</p>
-        <div class="flow-box"><span>打开方式</span><strong>只有点击下面按钮时才会打开新页面，不会自动跳转。</strong></div>
-        <div class="row-actions">
-          <button type="button" data-persona-open-dashboard>打开人设看板</button>
         </div>
       </div>`;
   }
@@ -1240,10 +1255,7 @@ function renderPersonaDataPanel(persona, profile, step) {
         <p>\u70ed\u5ea6 ${numberText(hot.hot_score)} \u00b7 \u70b9\u8d5e ${numberText(hot.likes)} \u00b7 \u8bc4\u8bba ${numberText(hot.comments)} \u00b7 \u5206\u4eab ${numberText(hot.shares)} \u00b7 \u8f6c\u53d1 ${numberText(hot.reposts)}</p>
       </div>
       <div class="persona-inline-panel">
-        <p>\u66f4\u5b8c\u6574\u7684\u65e5\u5fd7\u3001\u81ea\u52a8\u5316\u622a\u56fe\u548c\u4eba\u8bbe\u6863\u6848\u4ecd\u5728\u72ec\u7acb\u4eba\u8bbe\u770b\u677f\u9875\u9762\u67e5\u770b\u3002</p>
-        <div class="row-actions">
-          <button type="button" data-persona-open-dashboard>\u6253\u5f00\u4eba\u8bbe\u770b\u677f</button>
-        </div>
+        <p>\u66f4\u5b8c\u6574\u7684\u65e5\u5fd7\u3001\u81ea\u52a8\u5316\u622a\u56fe\u548c\u6863\u6848\u53ea\u5728\u5de6\u4e0b\u89d2\u7684\u201c\u4eba\u8bbe\u770b\u677f\u201d\u5165\u53e3\u4e2d\u67e5\u770b\u3002</p>
       </div>
     </div>`;
 }
@@ -1452,7 +1464,7 @@ function renderConfirmSummary() {
     ]);
   } else if (state.activeModule === "personas") {
     const persona = selectedPersona();
-    const groupKey = $("personaActionGroup")?.value || "content";
+    const groupKey = state.personaGroup || "content";
     const profile = selectedPersonaProfile();
     const step = currentPersonaGroupStep(groupKey, profile);
     const finalAction = {
@@ -1467,7 +1479,6 @@ function renderConfirmSummary() {
       delete: "删除当前人设",
       queue: "查看或清理该人设自动化队列",
       metrics: "查看当前人设热点数据",
-      dashboard: "打开人设看板",
     }[step] || "显示当前步骤的参数面板";
     rows = rows.concat([
       ["当前人设", persona ? persona.name : "未选择"],
@@ -1490,7 +1501,9 @@ function renderConfirmSummary() {
       ["最终动作", "打开任务队列并执行取消或重试"],
     ]);
   }
-  $("confirmSummary").innerHTML = rows.map(([label, value]) => `
+  const host = $("confirmSummary");
+  if (!host) return;
+  host.innerHTML = rows.map(([label, value]) => `
     <div><span>${esc(label)}</span><strong>${esc(value)}</strong></div>
   `).join("");
 }
@@ -1809,6 +1822,7 @@ async function deleteSelectedPersona() {
   await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}`, { method: "DELETE" });
   showMsg("commandMsg", "人设已删除。", true);
   state.selectedPersonaId = "";
+  state.personaCreateMode = false;
   await loadPersonas();
 }
 
@@ -2095,6 +2109,9 @@ async function loadPersonas() {
   Object.keys(state.personaDraftPosts).forEach((id) => {
     if (!validIds.has(id)) delete state.personaDraftPosts[id];
   });
+  Object.keys(state.personaPublishHistories).forEach((id) => {
+    if (!validIds.has(id)) delete state.personaPublishHistories[id];
+  });
   Object.keys(state.personaForms).forEach((id) => {
     if (!validIds.has(id)) delete state.personaForms[id];
   });
@@ -2108,6 +2125,8 @@ async function loadPersonas() {
     Promise.all([
       loadPersonaProfile(state.selectedPersonaId).catch(() => {}),
       loadPersonaDraftPosts(state.selectedPersonaId).catch(() => {}),
+      loadPersonaMemories(state.selectedPersonaId).catch(() => {}),
+      loadPersonaPublishHistory(state.selectedPersonaId).catch(() => {}),
     ]).catch(() => {});
   }
   if (state.activeModule === "personas") renderPersonaModule();
@@ -2353,6 +2372,17 @@ async function loadPersonaMemories(personaId, { force = false } = {}) {
   return rows;
 }
 
+async function loadPersonaPublishHistory(personaId, { force = false } = {}) {
+  const key = String(personaId || "").trim();
+  if (!key) return [];
+  if (!force && Array.isArray(state.personaPublishHistories[key])) return state.personaPublishHistories[key];
+  const data = await api(`/api/persona_dashboard/personas/${encodeURIComponent(key)}/publish_history`).catch(() => ({ publish_history: [] }));
+  const rows = Array.isArray(data.publish_history) ? data.publish_history : [];
+  state.personaPublishHistories[key] = rows;
+  if (state.activeModule === "personas" && key === String(state.selectedPersonaId || "")) renderPersonaDetail();
+  return rows;
+}
+
 async function createPersonaArchive() {
   const name = $("personaCreateName")?.value.trim() || "";
   const content = $("personaCreateContent")?.value.trim() || "";
@@ -2374,6 +2404,7 @@ async function createPersonaArchive() {
   state.selectedPersonaPostId = "";
   state.personaGroup = "content";
   state.personaPanels.content = "generate";
+  state.personaCreateMode = false;
   if ($("personaCreateName")) $("personaCreateName").value = "";
   if ($("personaCreateContent")) $("personaCreateContent").value = "";
   showMsg("commandMsg", `人设已创建：${result.name || result.id || "-"}`, true);
@@ -2481,6 +2512,96 @@ function renderPersonaSelectOptions(personas) {
   return groups.join("");
 }
 
+function splitPersonasByKind(personas) {
+  const workflow = [];
+  const custom = [];
+  (personas || []).forEach((persona) => {
+    (personaIsWorkflow(persona) ? workflow : custom).push(persona);
+  });
+  return { custom, workflow };
+}
+
+function renderPersonaListGroup(title, personas) {
+  if (!Array.isArray(personas) || !personas.length) return "";
+  return `
+    <section class="persona-list-group">
+      <div class="persona-list-group-title">${esc(title)}</div>
+      ${personas.map((persona) => {
+        const selected = String(persona.id || "") === String(state.selectedPersonaId || "");
+        return `
+          <button
+            type="button"
+            class="persona-list-item ${selected ? "is-active" : ""}"
+            data-persona-select="${esc(persona.id)}"
+          >
+            <strong>${esc(persona.name || persona.id || "未命名人设")}</strong>
+            <span>${esc(personaKindLabel(persona))}</span>
+            <small>${esc(personaExecutionAccountLabel(persona))}</small>
+          </button>`;
+      }).join("")}
+    </section>`;
+}
+
+function renderPersonaGroupTabs(profile) {
+  return `<div class="persona-group-tabs">${Object.entries(personaGroups).map(([key, group]) => `
+    <button
+      type="button"
+      class="${state.personaGroup === key ? "is-active" : ""}"
+      data-persona-group="${esc(key)}"
+    >${esc(group.label)}</button>
+  `).join("")}</div>`;
+}
+
+function renderPersonaStepTabs(groupKey, profile) {
+  const step = currentPersonaGroupStep(groupKey, profile);
+  return `<div class="persona-step-tabs">${personaGroupStepOptions(groupKey, profile).map(([value, label]) => `
+    <button
+      type="button"
+      class="${value === step ? "is-active" : ""}"
+      data-persona-step="${esc(groupKey)}:${esc(value)}"
+    >${esc(label)}</button>
+  `).join("")}</div>`;
+}
+
+function renderPersonaPostsViewTabs(drafts, historyRows, activeStep) {
+  const tabs = [
+    ["posts", `待发布草稿 ${drafts.length}`],
+    ["history", `发布历史 ${historyRows.length}`],
+  ];
+  return `<div class="persona-step-tabs">${tabs.map(([value, label]) => `
+    <button
+      type="button"
+      class="${activeStep === value ? "is-active" : ""}"
+      data-persona-step="content:${esc(value)}"
+    >${esc(label)}</button>
+  `).join("")}</div>`;
+}
+
+function renderPersonaCreateWorkbench() {
+  return `
+    <div class="persona-inline-panel persona-create-workbench is-flat">
+      <div class="persona-workbench-head">
+        <div class="persona-head-copy">
+          <strong>新建普通人设</strong>
+          <span>这里只创建普通人设。工作流人设仍由后端档案同步。</span>
+        </div>
+        <div class="persona-quick-actions">
+          <button type="button" data-persona-cancel-create>返回人设详情</button>
+        </div>
+      </div>
+      <label>人设名称
+        <input id="personaCreateName" placeholder="例如：咖啡馆主理人" />
+      </label>
+      <label>人设简介
+        <textarea id="personaCreateContent" rows="8" placeholder="填写普通人设的背景、内容方向和说话方式。"></textarea>
+      </label>
+      <div class="row-actions">
+        <button type="button" class="primary" data-persona-create>新建普通人设</button>
+      </div>
+    </div>
+  `;
+}
+
 function personaGroupStepOptions(groupKey, profile) {
   const workflowPersona = Boolean(profile?.is_workflow_persona);
   if (groupKey === "content") {
@@ -2488,15 +2609,15 @@ function personaGroupStepOptions(groupKey, profile) {
       ? [
           ["generate", "新建推文（先选免费 / 付费）"],
           ["overview", "人设内容"],
-          ["posts", "自定义新建 / 草稿库"],
-          ["history", "执行记录"],
+          ["posts", "查看推文 / 草稿库"],
+          ["history", "发布历史"],
           ["publish", "选择草稿进入发布"],
         ]
       : [
           ["generate", "新建推文（直接生成）"],
           ["overview", "人设内容"],
-          ["posts", "自定义新建 / 草稿库"],
-          ["history", "执行记录"],
+          ["posts", "查看推文 / 草稿库"],
+          ["history", "发布历史"],
           ["publish", "选择草稿进入发布"],
         ];
   }
@@ -2506,14 +2627,12 @@ function personaGroupStepOptions(groupKey, profile) {
           ["profile", "基础资料"],
           ["style", "推文风格"],
           ["links", "链接设置"],
-          ["dashboard", "打开人设看板"],
         ]
       : [
           ["profile", "基础资料"],
           ["style", "推文风格"],
           ["links", "链接设置"],
           ["delete", "删除当前人设"],
-          ["dashboard", "打开人设看板"],
         ];
   }
   if (groupKey === "account") {
@@ -2536,89 +2655,70 @@ function personaGroupStepOptions(groupKey, profile) {
 
 function renderPersonaModule() {
   const current = selectedPersona();
+  const { custom, workflow } = splitPersonasByKind(state.personas);
   $("moduleBody").innerHTML = `
-    <div class="persona-inline-panel">
-      <div class="form-grid persona-module-controls">
-        <label>新建普通人设名称
-          <input id="personaCreateName" placeholder="例如：咖啡馆主理人" />
-        </label>
-        <div class="row-actions">
-          <button type="button" class="primary" data-persona-create>新建普通人设</button>
+    <div class="persona-console-layout">
+      <section class="persona-workbench-shell">
+        <div class="persona-detail" id="personaDetail"></div>
+      </section>
+      <aside class="persona-list-shell">
+        <div class="persona-inline-panel persona-list-toolbar">
+          <div class="persona-list-head">
+            <div>
+              <strong>人设列表</strong>
+              <span>集中查看、选择和管理</span>
+            </div>
+            <span>${esc(`${state.personas.length} 个`)}</span>
+          </div>
+          <button type="button" class="primary" data-persona-open-create>新建人设</button>
         </div>
-      </div>
-      <label>普通人设简介
-        <textarea id="personaCreateContent" rows="4" placeholder="填写普通人设的背景、内容方向和说话方式。"></textarea>
-      </label>
-      <div class="flow-box">
-        <span>说明</span>
-        <strong>这里的新建入口只创建普通人设。</strong>
-        <span>工作流人设来自后端已有档案，在下方单独选择，不从这里创建。</span>
-      </div>
+        ${state.personas.length ? `
+          <div class="persona-list-stack">
+            ${renderPersonaListGroup("普通人设", custom)}
+            ${renderPersonaListGroup("工作流人设", workflow)}
+          </div>
+        ` : `<div class="empty-state">当前还没有人设，先点击“新建人设”。</div>`}
+      </aside>
     </div>
-    <div class="form-grid persona-module-controls">
-      <label>选择人设
-        <select id="personaSelect" ${state.personas.length ? "" : "disabled"}>
-          ${state.personas.length ? renderPersonaSelectOptions(state.personas) : `<option value="">当前还没有人设</option>`}
-        </select>
-      </label>
-      <label>操作分组
-        <select id="personaActionGroup" ${state.personas.length ? "" : "disabled"}>
-          ${Object.entries(personaGroups).map(([key, group]) => `<option value="${esc(key)}">${esc(group.label)}</option>`).join("")}
-        </select>
-      </label>
-    </div>
-    ${state.personas.length ? "" : `<div class="empty-state">先新建普通人设，或等待工作流人设同步后继续。</div>`}
-    <div class="persona-detail" id="personaDetail"></div>
   `;
-  const personaSelect = $("personaSelect");
-  const actionGroup = $("personaActionGroup");
-  if (!personaSelect || !actionGroup) return;
-  personaSelect.addEventListener("change", () => {
-    state.selectedPersonaId = personaSelect.value;
-    state.selectedPersonaPostId = "";
-    state.personaGroup = "content";
-    state.personaPanels.content = "generate";
-    actionGroup.value = "content";
-    state.preferredAccountId = accountForPersona(selectedPersona())?.id || "";
-    state.personaLinkPresetId = "";
-    renderPersonaDetail();
-    renderConfirmSummary();
-    Promise.all([
-      loadPersonaProfile(state.selectedPersonaId, { force: true }).catch(() => {}),
-      loadPersonaDraftPosts(state.selectedPersonaId, { force: true }).catch(() => {}),
-    ]).catch(() => {});
-  });
-  actionGroup.value = state.personaGroup;
-  actionGroup.addEventListener("change", () => {
-    state.personaGroup = actionGroup.value;
-    renderPersonaDetail();
-    renderConfirmSummary();
-  });
-  if (current) renderPersonaDetail();
-  else $("personaDetail").innerHTML = `<div class="empty-state">请先新建普通人设，或选择一个已有工作流人设。</div>`;
+  if (state.personaCreateMode || !current) renderPersonaDetail();
+  else renderPersonaDetail();
 }
 
 function renderPersonaDetail() {
   snapshotPersonaCurrentForm();
   const persona = selectedPersona();
+  if (state.personaCreateMode) {
+    state.renderedPersonaId = "";
+    $("personaDetail").innerHTML = renderPersonaCreateWorkbench();
+    return;
+  }
   if (!persona) {
     state.renderedPersonaId = "";
-    $("personaDetail").innerHTML = `<div class="empty-state">请先新建或选择一个人设。</div>`;
+    $("personaDetail").innerHTML = `
+      <div class="persona-inline-panel is-flat">
+        <strong>请选择一个人设</strong>
+        <p>右侧人设列表只负责选择和管理；中间工作区会根据当前人设显示具体参数与操作。</p>
+        <div class="row-actions">
+          <button type="button" class="primary" data-persona-open-create>新建人设</button>
+        </div>
+      </div>`;
     return;
   }
   const profile = selectedPersonaProfile();
   if (!profile) loadPersonaProfile(persona.id).catch(() => {});
   if (!state.personaDraftPosts[String(persona.id)]) loadPersonaDraftPosts(persona.id).catch(() => {});
-  const groupKey = state.personaGroup || $("personaActionGroup")?.value || "content";
+  const groupKey = state.personaGroup || "content";
   state.personaGroup = groupKey;
-  const actionGroup = $("personaActionGroup");
-  if (actionGroup && actionGroup.value !== groupKey) actionGroup.value = groupKey;
   const step = currentPersonaGroupStep(groupKey, profile);
   if (groupKey === "content" && step === "generate" && !Array.isArray(state.personaMemories[String(persona.id)])) {
     loadPersonaMemories(persona.id).catch(() => {});
   }
   if (groupKey === "content" && step === "publish") {
     ensurePersonaPublishResultLoaded(persona.id).catch(() => {});
+  }
+  if (groupKey === "content" && (step === "posts" || step === "history") && !Array.isArray(state.personaPublishHistories[String(persona.id)])) {
+    loadPersonaPublishHistory(persona.id).catch(() => {});
   }
   if (groupKey === "account" && ["login", "reply_comment", "reply_hot", "warmup"].includes(step)) {
     const platform = selectedPersonaAutomationPlatform();
@@ -2630,21 +2730,22 @@ function renderPersonaDetail() {
   const drafts = personaDraftPosts(persona);
   const showWarnings = warnings.length && groupKey !== "content";
   const groupPanel = renderPersonaGroupPanel(groupKey, step, persona, account, profile);
+  const canDelete = Boolean(profile && !profile.is_workflow_persona);
   $("personaDetail").innerHTML = `
-    <div class="persona-summary persona-summary-compact">
-      <div class="persona-summary-meta">
-        <strong>${esc(persona.name || "未命名人设")}</strong>
-        <span>${esc(`类型：${personaKindLabel(persona, profile)}`)}</span>
-        <span>${esc(account?.username ? `执行账号：${account.username}` : "未绑定执行账号")}</span>
-        <span>${esc(`草稿 ${drafts.length} 条`)}</span>
+    <div class="persona-inline-panel is-flat">
+      <div class="persona-workbench-head">
+        <div class="persona-summary-meta">
+          <strong>${esc(persona.name || "未命名人设")}</strong>
+          <span>${esc(`类型：${personaKindLabel(persona, profile)}`)}</span>
+          <span>${esc(`执行账号：${personaExecutionAccountLabel(persona)}`)}</span>
+          <span>${esc(`草稿 ${drafts.length} 条`)}</span>
+        </div>
+        <div class="persona-quick-actions">
+          ${canDelete ? `<button type="button" data-persona-delete>删除人设</button>` : ""}
+        </div>
       </div>
-    </div>
-    <div class="form-grid persona-detail-controls">
-      <div class="field-box">
-        <select id="personaGroupStep" aria-label="当前步骤">
-          ${personaGroupStepOptions(groupKey, profile).map(([value, label]) => `<option value="${esc(value)}" ${value === step ? "selected" : ""}>${esc(label)}</option>`).join("")}
-        </select>
-      </div>
+      ${renderPersonaGroupTabs(profile)}
+      ${renderPersonaStepTabs(groupKey, profile)}
     </div>
     ${showWarnings ? `<div class="persona-warning-inline">${warnings.map(esc).join(" / ")}</div>` : ""}
     ${groupPanel}
@@ -2655,6 +2756,7 @@ function renderPersonaDetail() {
 function renderPersonaContentPanel(persona, account, profile, step) {
   const panel = step || "overview";
   const drafts = personaDraftPosts(persona);
+  const memoryRows = personaMemoryRows(persona);
   const selectedPost = selectedPersonaPost(persona);
   const publishResult = state.personaPublishResults[String(persona.id)] || "";
   const form = personaFormState(persona.id);
@@ -2677,10 +2779,9 @@ function renderPersonaContentPanel(persona, account, profile, step) {
   if (panel === "generate") {
     return `
       <div class="persona-inline-panel">
-        <div class="flow-box">
-          <span>${esc(personaKindLabel(persona, profile))}</span>
-          <strong>${esc(isWorkflowPersona ? "工作流人设：新建内容前先区分免费内容和付费内容。" : "普通人设：这里直接走草稿生成链路。")}</strong>
-          <span>${esc(isWorkflowPersona ? "免费内容生成草稿，付费内容提交图片或视频任务。右侧只保留当前步骤真实会执行的参数。" : "这里只保留会真实提交到后端的草稿生成参数，不再展示后端自动处理项。")}</span>
+        <div class="persona-head-copy">
+          <strong>${esc(isWorkflowPersona ? "新建推文" : "新建推文（直接生成）")}</strong>
+          <span class="persona-panel-intro">${esc(isWorkflowPersona ? `工作流人设先区分免费内容和付费内容；这里只显示当前分支会真实提交的参数。当前已识别 ${memoryRows.length} 条可选记忆。` : `普通人设直接走草稿生成链路；这里只显示真实会提交到后端的参数。当前已识别 ${memoryRows.length} 条可选记忆。`)}</span>
         </div>
         ${isWorkflowPersona ? `
           <div class="form-grid persona-detail-controls">
@@ -2763,24 +2864,25 @@ function renderPersonaContentPanel(persona, account, profile, step) {
             <textarea id="personaGeneratePrompt" rows="5" placeholder="留空则按当前人设自由生成。">${esc(generateForm.prompt || "")}</textarea>
           </label>
           ${!preflight.ready ? `<div class="persona-warning-inline">${esc(preflight.issues.join(" / "))}，请先补齐模型配置。</div>` : ""}
-          <label>可选人设记忆</label>
+          <label>可选人设记忆（已识别 ${esc(memoryRows.length)} 条）</label>
           ${renderPersonaMemoryOptions(persona, generateForm.selectedMemoryIds || [])}
           <div class="row-actions">
             <button type="button" class="primary" data-persona-generate-posts ${preflight.ready && (!isWorkflowPersona || contentBranch) ? "" : "disabled"}>自动生成草稿</button>
-            <button type="button" data-persona-route-step="content:posts">进入草稿库</button>
+            <button type="button" data-persona-route-step="content:posts">查看草稿</button>
           </div>
         `}
       </div>`;
   }
 
   if (panel === "posts") {
+    const historyRows = personaPublishHistoryRows(persona);
     return `
       <div class="persona-inline-panel">
-        <div class="flow-box">
-          <span>${esc(personaKindLabel(persona, profile))}</span>
-          <strong>在这里新建和管理草稿。</strong>
-          <span>能直接在面板里编辑并保存的内容，不再额外做成冗余按钮。</span>
+        <div class="persona-head-copy">
+          <strong>草稿库</strong>
+          <span class="persona-panel-intro">${esc(`这里集中查看和编辑待发布草稿。当前草稿 ${drafts.length} 条，发布历史 ${historyRows.length} 条。`)}</span>
         </div>
+        ${renderPersonaPostsViewTabs(drafts, historyRows, "posts")}
         <div class="form-grid persona-detail-controls">
           <label>草稿标题（可选）
             <input id="personaDraftTitle" value="${esc(draftForm.title || "")}" placeholder="例如：今日主题帖" />
@@ -2799,12 +2901,29 @@ function renderPersonaContentPanel(persona, account, profile, step) {
           ${selectedPost ? `<button type="button" data-persona-use-post="${esc(selectedPost.id)}">带入发布步骤</button>` : ""}
         </div>
         ${selectedPost ? personaPublishPreview(selectedPost) : ""}
+        <div class="persona-head-copy">
+          <strong>草稿库</strong>
+          <span class="persona-panel-intro">这里显示当前人设的待发布推文草稿。</span>
+        </div>
         ${renderPersonaDraftRows(drafts)}
       </div>`;
   }
 
   if (panel === "history") {
-    return `<div class="persona-inline-panel">${renderPersonaHistoryRows(personaHistoryRows(persona))}</div>`;
+    const historyRows = personaPublishHistoryRows(persona);
+    return `
+      <div class="persona-inline-panel">
+        <div class="persona-head-copy">
+          <strong>发布历史</strong>
+          <span class="persona-panel-intro">${esc(`这里集中查看当前人设的已发布记录。当前草稿 ${drafts.length} 条，发布历史 ${historyRows.length} 条。`)}</span>
+        </div>
+        ${renderPersonaPostsViewTabs(drafts, historyRows, "history")}
+        <div class="persona-head-copy">
+          <strong>发布历史</strong>
+          <span class="persona-panel-intro">这里显示当前人设已经发布过的内容记录，来源于独立发布历史列表。</span>
+        </div>
+        ${renderPersonaHistoryRows(historyRows)}
+      </div>`;
   }
 
   if (panel === "publish") {
@@ -2813,7 +2932,10 @@ function renderPersonaContentPanel(persona, account, profile, step) {
     const publishHint = publishPlatformHint(publishAccount);
     return `
       <div class="persona-inline-panel persona-publish-panel">
-        ${publishAccount ? `<div class="flow-box"><span>发布平台</span><strong>${esc(publishPlatformLabel(publishAccount))}</strong><span>${esc(publishHint)}</span></div>` : `<div class="empty-state">当前人设还没有可发布的 Threads 或 Instagram 执行账号。先到浏览器账号里绑定，再提交发布。</div>`}
+        <div class="persona-head-copy">
+          <strong>发布前检查</strong>
+          <span class="persona-panel-intro">${esc(publishAccount ? `${publishPlatformLabel(publishAccount)} · ${publishHint}` : "当前人设还没有可发布的 Threads 或 Instagram 执行账号。先到“浏览器账号”里绑定，再提交发布。")}</span>
+        </div>
         ${renderPersonaPublishPreflight(publishAccount)}
         <div class="form-grid persona-detail-controls">
           <label>发布账号
@@ -2972,7 +3094,7 @@ renderConfirmSummary = function renderConfirmSummaryOverride() {
   const persona = selectedPersona();
   const profile = selectedPersonaProfile();
   if (!host || !persona || !profile?.is_workflow_persona) return;
-  const groupKey = state.personaGroup || $("personaActionGroup")?.value || "content";
+  const groupKey = state.personaGroup || "content";
   const step = currentPersonaGroupStep(groupKey, profile);
   if (groupKey !== "content" || step !== "generate") return;
   const form = personaFormState(persona.id).generate;
@@ -2991,7 +3113,7 @@ renderConfirmSummary = function renderConfirmSummaryOverride() {
     return;
   }
   if (String(form.mode || "") === "custom") {
-    finalActionValue.textContent = "进入自定义新建 / 草稿库";
+    finalActionValue.textContent = "进入草稿库";
     return;
   }
   if (String(form.mode || "") === "hot") {
@@ -3218,8 +3340,48 @@ function bindEvents() {
       if (groupKey && step) {
         state.personaGroup = groupKey;
         state.personaPanels[groupKey] = step;
-        const actionGroup = $("personaActionGroup");
-        if (actionGroup) actionGroup.value = groupKey;
+        renderPersonaDetail();
+        renderConfirmSummary();
+      }
+    }
+    const personaSelectButton = event.target.closest("[data-persona-select]");
+    if (personaSelectButton) {
+      state.selectedPersonaId = personaSelectButton.dataset.personaSelect || "";
+      state.selectedPersonaPostId = "";
+      state.personaCreateMode = false;
+      state.personaGroup = "content";
+      state.personaPanels.content = "generate";
+      state.preferredAccountId = accountForPersona(selectedPersona())?.id || "";
+      state.personaLinkPresetId = "";
+      renderPersonaModule();
+      renderConfirmSummary();
+      Promise.all([
+        loadPersonaProfile(state.selectedPersonaId, { force: true }).catch(() => {}),
+        loadPersonaDraftPosts(state.selectedPersonaId, { force: true }).catch(() => {}),
+        loadPersonaMemories(state.selectedPersonaId, { force: true }).catch(() => {}),
+        loadPersonaPublishHistory(state.selectedPersonaId, { force: true }).catch(() => {}),
+      ]).catch(() => {});
+    }
+    if (event.target.closest("[data-persona-open-create]")) {
+      state.personaCreateMode = true;
+      renderPersonaDetail();
+    }
+    if (event.target.closest("[data-persona-cancel-create]")) {
+      state.personaCreateMode = false;
+      renderPersonaDetail();
+    }
+    const personaGroupButton = event.target.closest("[data-persona-group]");
+    if (personaGroupButton) {
+      state.personaGroup = personaGroupButton.dataset.personaGroup || "content";
+      renderPersonaDetail();
+      renderConfirmSummary();
+    }
+    const personaStepButton = event.target.closest("[data-persona-step]");
+    if (personaStepButton) {
+      const [groupKey, step] = String(personaStepButton.dataset.personaStep || "").split(":");
+      if (groupKey && step) {
+        state.personaGroup = groupKey;
+        setPersonaGroupStep(groupKey, step, selectedPersonaProfile());
         renderPersonaDetail();
         renderConfirmSummary();
       }
@@ -3251,18 +3413,8 @@ function bindEvents() {
     if (event.target.closest("[data-persona-clear-tasks]")) clearPersonaAutomationTasks().catch((error) => showMsg("commandMsg", error.detail || error.message || "清理队列失败", false));
     const runThreads = event.target.closest("[data-persona-run-threads]");
     if (runThreads) runPersonaThreadsTask(runThreads.dataset.personaRunThreads).catch((error) => showMsg("commandMsg", error.detail || error.message || "提交任务失败", false));
-    if (event.target.closest("[data-persona-open-dashboard]")) {
-      const persona = selectedPersona();
-      if (persona) openPersonaDashboard(persona);
-    }
   });
   $("moduleBody").addEventListener("change", (event) => {
-    if (event.target?.id === "personaGroupStep") {
-      const groupKey = $("personaActionGroup")?.value || state.personaGroup || "content";
-      setPersonaGroupStep(groupKey, event.target.value || "", selectedPersonaProfile());
-      renderPersonaDetail();
-      renderConfirmSummary();
-    }
     if (event.target?.id === "personaGenerateBranch") {
       snapshotPersonaCurrentForm();
       renderPersonaDetail();
@@ -3312,6 +3464,9 @@ function bindEvents() {
     }
   });
   $("refreshAll").addEventListener("click", () => Promise.all([loadTasks(), loadPersonas(), loadSocial().catch(() => {}), loadSetupStatus()]).then(renderWorkspace));
+  if ($("refreshTasks")) $("refreshTasks").addEventListener("click", () => loadTasks().then(renderWorkspace));
+  if ($("refreshSocialTasks")) $("refreshSocialTasks").addEventListener("click", () => loadSocial().then(renderWorkspace));
+  if ($("refreshAccounts")) $("refreshAccounts").addEventListener("click", () => loadSocial().then(renderWorkspace));
   $("taskTable").addEventListener("click", (event) => {
     const button = event.target.closest("button");
     if (!button) return;

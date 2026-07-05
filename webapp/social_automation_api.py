@@ -1591,10 +1591,22 @@ def _proxy_public(row: Any) -> dict[str, Any]:
 
 def _task_public(row: Any) -> dict[str, Any]:
     item = dict(row)
+    account_id = str(item.get("account_id") or "")
+    account_username = str(item.get("account_username") or item.get("username") or "").strip()
+    account_display_name = str(item.get("account_display_name") or item.get("display_name") or "").strip()
+    if account_id and (not account_username or not account_display_name):
+        try:
+            account = get_social_account(account_id)
+        except Exception:
+            account = {}
+        account_username = account_username or str(account.get("username") or "").strip()
+        account_display_name = account_display_name or str(account.get("display_name") or "").strip()
     return {
         "id": str(item.get("id") or ""),
         "persona_id": str(item.get("persona_id") or ""),
-        "account_id": str(item.get("account_id") or ""),
+        "account_id": account_id,
+        "account_username": account_username,
+        "account_display_name": account_display_name,
         "platform": str(item.get("platform") or ""),
         "task_type": str(item.get("task_type") or ""),
         "priority": int(item.get("priority") or 0),

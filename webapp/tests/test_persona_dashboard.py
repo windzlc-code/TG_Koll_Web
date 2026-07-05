@@ -450,6 +450,16 @@ class PersonaDashboardApiTests(unittest.TestCase):
         archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
         self.assertTrue(any(item["id"] == post["id"] for item in archives[0]["posts"]))
 
+    def test_persona_publish_history_lists_visible_records(self):
+        self._write_archives()
+        resp = self.client.get("/api/persona_dashboard/personas/persona-1/publish_history")
+        self.assertEqual(resp.status_code, 200)
+        rows = resp.json()["publish_history"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["id"], "pub-1")
+        self.assertEqual(rows[0]["archive_post_id"], "post-1")
+        self.assertEqual(rows[0]["platform"], "threads")
+
     def test_persona_memories_lists_runtime_entries(self):
         self._write_archives()
         (self.tool_runtime_dir / "persona_memory.json").write_text(json.dumps({
@@ -679,6 +689,30 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertTrue(payload["target_urls"])
         self.assertIn("https://www.threads.com/@history/post/abc", payload["target_urls"])
         self.assertTrue(payload["target_summaries"])
+
+    def test_automation_tasks_include_account_identity_fields(self):
+        self._insert_social_account(
+            account_id="acct-threads",
+            persona_id="persona-1",
+            platform="threads",
+            username="threads_user",
+            status="ready",
+        )
+        self._insert_social_task(
+            task_id="task-social-identity",
+            account_id="acct-threads",
+            persona_id="persona-1",
+            platform="threads",
+            task_type="check_login",
+            status="success",
+        )
+
+        resp = self.client.get("/api/persona_dashboard/automation/tasks?limit=5")
+        self.assertEqual(resp.status_code, 200)
+        task = next(item for item in resp.json()["tasks"] if item["id"] == "task-social-identity")
+        self.assertEqual(task["account_id"], "acct-threads")
+        self.assertEqual(task["account_username"], "threads_user")
+        self.assertEqual(task["account_display_name"], "threads_user")
 
 
 if __name__ == "__main__":
