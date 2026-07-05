@@ -135,7 +135,6 @@ const modules = [
   { id: "personas", label: "我的人设", hint: "人设列表、详情、推文、设置", callback: "后台自动读取" },
   { id: "publishing", label: "发布与排程", hint: "立即发布、矩阵发布、定时、队列", callback: "后台自动排队" },
   { id: "automation", label: "指纹浏览器自动化", hint: "浏览器账号登录、检测、养号、回复", callback: "后台自动执行" },
-  { id: "queue", label: "任务队列", hint: "待发布、失败、定时、取消、重试", callback: "后台自动刷新" },
 ];
 
 const taskMeta = {
@@ -170,7 +169,6 @@ const personaGroups = {
 const moduleDefaultBranch = {
   publishing: "publish_post",
   automation: "open_login",
-  queue: "pending",
 };
 
 function esc(value) {
@@ -662,7 +660,7 @@ function setView(view) {
     workspace: "任务工作台",
     tasks: "任务队列",
     social: "浏览器发布",
-    accounts: "浏览器账号",
+    accounts: "执行账号管理",
     settings: "系统状态",
   };
   $("viewTitle").textContent = titles[view] || "控制台";
@@ -3528,7 +3526,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
       <div class="persona-inline-panel persona-publish-panel">
         <div class="persona-head-copy">
           <strong>发布前检查</strong>
-          <span class="persona-panel-intro">${esc(publishAccount ? `${publishPlatformLabel(publishAccount)} · ${publishHint}` : "当前人设还没有可发布的 Threads 或 Instagram 执行账号。先到“浏览器账号”里绑定，再提交发布。")}</span>
+          <span class="persona-panel-intro">${esc(publishAccount ? `${publishPlatformLabel(publishAccount)} · ${publishHint}` : "当前人设还没有可发布的 Threads 或 Instagram 执行账号。先到“执行账号管理”或“我的人设 > 浏览器账号”里绑定，再提交发布。")}</span>
         </div>
         ${renderPersonaPublishPreflight(publishAccount)}
         <div class="form-grid persona-detail-controls">
@@ -3733,7 +3731,7 @@ function renderSocialAccounts() {
       </div>
       <span class="status ${esc(account.status)}">${esc(statusLabel(account.status))}</span>
     </article>
-  `).join("") : `<div class="empty-state">暂无浏览器账号，请先在人设看板或接口中添加账号。</div>`;
+  `).join("") : `<div class="empty-state">暂无执行账号，请先在人设看板或接口中添加账号。</div>`;
 }
 
 function renderSocialTasks() {
