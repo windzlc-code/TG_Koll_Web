@@ -2223,6 +2223,47 @@ def _task_has_download_file(output_data: dict[str, Any]) -> bool:
     return bool(_extract_download_path(output_data))
 
 
+def _task_output_media_items(task_id: str, output_data: dict[str, Any]) -> list[dict[str, str]]:
+    items: list[dict[str, str]] = []
+    for index, raw_path in enumerate(_extract_download_paths(output_data)):
+        path = Path(str(raw_path)).expanduser()
+        try:
+            path = path.resolve()
+        except Exception:
+            path = Path(str(raw_path)).expanduser()
+        if not path.is_file():
+            continue
+        suffix = path.suffix.lower()
+        media_type = "video" if suffix in VIDEO_EXTS else "audio" if suffix in AUDIO_EXTS else "image" if suffix in IMAGE_EXTS else "file"
+        items.append({
+            "url": f"/api/tasks/{quote(str(task_id).strip(), safe='')}/media/{index}",
+            "type": media_type,
+            "label": path.name or f"{media_type}-{index + 1}",
+        })
+    return items
+
+
+def _serve_task_output_media(task_id: str, index: int, user: dict[str, Any]) -> FileResponse:
+    with db() as conn:
+        row = conn.execute("SELECT * FROM tasks WHERE id = ?", (str(task_id or "").strip(),)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="任务不存在。")
+    task = dict(row)
+    _ensure_user_can_access_task(user, task)
+    output_data = _json_loads(task.get("output_json"), {})
+    paths = _extract_download_paths(output_data)
+    if index < 0 or index >= len(paths):
+        raise HTTPException(status_code=404, detail="任务媒体文件不存在。")
+    path = Path(str(paths[index])).expanduser()
+    try:
+        path = path.resolve()
+    except Exception:
+        path = Path(str(paths[index])).expanduser()
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="任务媒体文件不存在。")
+    return FileResponse(str(path), filename=path.name)
+
+
 def _get_tg_chat_id_from_payload(payload: dict[str, Any]) -> int | None:
     try:
         chat_id = int(payload.get("tg_chat_id") or 0)
@@ -4317,6 +4358,7 @@ def _build_task_detail_payload(*, task: dict[str, Any], include_logs: bool = Tru
     if str(batch_summary.get("first_error") or "").strip():
         batch_summary["first_error"] = _format_user_visible_task_error(str(batch_summary.get("first_error") or ""))
     has_download = _task_has_download_file(_json_loads(task.get("output_json"), {}))
+    media_items = _task_output_media_items(str(task.get("id") or ""), raw_output)
     return {
         "id": task["id"],
         "user_id": int(task["user_id"]),
@@ -4338,6 +4380,7 @@ def _build_task_detail_payload(*, task: dict[str, Any], include_logs: bool = Tru
         "runninghub_task_ids": workflow_meta.get("runninghub_task_ids"),
         "execution_trace": execution_trace,
         "has_download": bool(has_download),
+        "media_items": media_items,
         "error_analysis_available": _error_analysis_available(runtime),
         "logs": logs,
         "analysis_summary": _extract_latest_analysis_summary(logs),
@@ -13510,6 +13553,21 @@ class PersonaDashboardDraftPublishPayload(BaseModel):
     media_paths: list[str] = Field(default_factory=list)
 
 
+class PersonaDashboardPersonaImageGeneratePayload(BaseModel):
+    prompt: str = ""
+    aspect_ratio: str = "1:1"
+    mode: str = "person"
+
+
+class PersonaDashboardPostMediaTaskAttachPayload(BaseModel):
+    task_id: str
+    replace_existing: bool = False
+
+
+class PersonaDashboardPostMediaUploadPayload(BaseModel):
+    replace_existing: bool = False
+
+
 class InternalTgSubmitPayload(BaseModel):
     task_type: str
     tg_chat_id: int
@@ -14433,6 +14491,122 @@ def _create_persona_archive_post(archive_id: str, payload: PersonaDashboardDraft
     return _compact_persona_archive_post(record)
 
 
+def _persona_post_media_items_from_paths(paths: list[str]) -> list[dict[str, str]]:
+    items: list[dict[str, str]] = []
+    for raw_path in paths:
+        text = str(raw_path or "").strip()
+        if not text:
+            continue
+        items.append({
+            "url": text,
+            "type": _guess_media_type(text, "image"),
+            "localPath": text,
+        })
+    return items
+
+
+def _update_persona_archive_post_media(archive_id: str, post_id: str, *, media_paths: list[str], replace_existing: bool = False) -> dict[str, Any]:
+    clean_archive_id = str(archive_id or "").strip()
+    clean_post_id = str(post_id or "").strip()
+    if not clean_archive_id or not clean_post_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID 或草稿 ID。")
+    valid_paths = _extract_existing_file_paths(media_paths)
+    if not valid_paths:
+        raise HTTPException(status_code=400, detail="没有可保存的媒体文件。")
+    path, raw, archives = _persona_archive_source_for_write(clean_archive_id)
+    archive = _find_persona_archive(archives, clean_archive_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+    target: dict[str, Any] | None = None
+    for post in posts:
+        if isinstance(post, dict) and str(post.get("id") or "").strip() == clean_post_id:
+            target = post
+            break
+    if target is None:
+        raise HTTPException(status_code=404, detail="草稿不存在。")
+    existing_items = _compact_dashboard_media_items(target)
+    merged_paths = valid_paths if replace_existing else [
+        *[str(item.get("url") or "").strip() for item in existing_items if str(item.get("url") or "").strip()],
+        *valid_paths,
+    ]
+    merged_paths = _extract_existing_file_paths(merged_paths)
+    media_items = _persona_post_media_items_from_paths(merged_paths)
+    first = media_items[0] if media_items else {}
+    target["mediaItems"] = media_items
+    target["mediaUrl"] = str(first.get("url") or "")
+    target["mediaType"] = str(first.get("type") or "")
+    if str(first.get("type") or "") == "image":
+        target["imageUrl"] = str(first.get("url") or "")
+    else:
+        target.pop("imageUrl", None)
+    target["updatedAt"] = _persona_dashboard_iso_now()
+    archive["updatedAt"] = target["updatedAt"]
+    _write_persona_archives_preserving_shape(path, raw, archives)
+    compact = _compact_persona_archive_post(target)
+    compact["media_items"] = _previewable_persona_media_items(
+        compact.get("media_items") if isinstance(compact.get("media_items"), list) else [],
+        archive_id=clean_archive_id,
+        post_id=clean_post_id,
+    )
+    return {"ok": True, "post": compact}
+
+
+def _delete_persona_archive_post_media_item(archive_id: str, post_id: str, index: int) -> dict[str, Any]:
+    clean_archive_id = str(archive_id or "").strip()
+    clean_post_id = str(post_id or "").strip()
+    if not clean_archive_id or not clean_post_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID 或草稿 ID。")
+    path, raw, archives = _persona_archive_source_for_write(clean_archive_id)
+    archive = _find_persona_archive(archives, clean_archive_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+    target: dict[str, Any] | None = None
+    for post in posts:
+        if isinstance(post, dict) and str(post.get("id") or "").strip() == clean_post_id:
+            target = post
+            break
+    if target is None:
+        raise HTTPException(status_code=404, detail="草稿不存在。")
+    media_items = _compact_dashboard_media_items(target)
+    if index < 0 or index >= len(media_items):
+        raise HTTPException(status_code=404, detail="草稿媒体不存在。")
+    next_paths = [str(item.get("url") or "").strip() for idx, item in enumerate(media_items) if idx != index and str(item.get("url") or "").strip()]
+    target["mediaItems"] = _persona_post_media_items_from_paths(next_paths)
+    first = target["mediaItems"][0] if target["mediaItems"] else {}
+    target["mediaUrl"] = str(first.get("url") or "")
+    target["mediaType"] = str(first.get("type") or "")
+    if str(first.get("type") or "") == "image":
+        target["imageUrl"] = str(first.get("url") or "")
+    else:
+        target.pop("imageUrl", None)
+    target["updatedAt"] = _persona_dashboard_iso_now()
+    archive["updatedAt"] = target["updatedAt"]
+    _write_persona_archives_preserving_shape(path, raw, archives)
+    compact = _compact_persona_archive_post(target)
+    compact["media_items"] = _previewable_persona_media_items(
+        compact.get("media_items") if isinstance(compact.get("media_items"), list) else [],
+        archive_id=clean_archive_id,
+        post_id=clean_post_id,
+    )
+    return {"ok": True, "post": compact}
+
+
+def _attach_task_output_to_persona_post(archive_id: str, post_id: str, task_id: str, *, replace_existing: bool = False, user: dict[str, Any]) -> dict[str, Any]:
+    with db() as conn:
+        row = conn.execute("SELECT * FROM tasks WHERE id = ?", (str(task_id or "").strip(),)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="任务不存在。")
+    task = dict(row)
+    _ensure_user_can_access_task(user, task)
+    if str(task.get("status") or "").strip().lower() != "success":
+        raise HTTPException(status_code=409, detail="任务尚未成功完成，暂时不能回写到草稿。")
+    output_data = _json_loads(task.get("output_json"), {})
+    media_paths = _extract_download_paths(output_data)
+    return _update_persona_archive_post_media(archive_id, post_id, media_paths=media_paths, replace_existing=replace_existing)
+
+
 def _persona_publish_account_for_archive(
     archive_id: str,
     requested_account_id: str = "",
@@ -14696,6 +14870,182 @@ def _build_persona_dashboard_profile(archive: dict[str, Any]) -> dict[str, Any]:
         "is_workflow_persona": _is_workflow_persona_archive(archive),
         "updated_at": str(archive.get("updatedAt") or "").strip(),
     }
+
+
+def _persona_reference_image_url_from_archive(archive: dict[str, Any]) -> str:
+    reference_sheet = str(archive.get("personaReferenceSheet") or "").strip()
+    if reference_sheet:
+        return reference_sheet
+    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+    setup_reference = str(setup.get("personaImageReferenceUrl") or "").strip()
+    if setup_reference:
+        return setup_reference
+    library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
+    for item in reversed(library):
+        if not isinstance(item, dict):
+            continue
+        image_url = str(item.get("imageUrl") or "").strip()
+        if image_url:
+            return image_url
+    return ""
+
+
+def _persona_library_preview_url(archive_id: str, image_id: str, raw_url: str) -> str:
+    text = str(raw_url or "").strip()
+    if not text:
+        return ""
+    if text.startswith("data:") or re.match(r"^https?://", text, re.I):
+        return text
+    return f"/api/persona_dashboard/personas/{quote(str(archive_id).strip(), safe='')}/images/{quote(str(image_id).strip(), safe='')}"
+
+
+def _compact_persona_image_library_item(archive_id: str, item: dict[str, Any]) -> dict[str, Any] | None:
+    image_id = str(item.get("id") or "").strip()
+    raw_url = str(item.get("imageUrl") or "").strip()
+    if not image_id or not raw_url:
+        return None
+    return {
+        "id": image_id,
+        "image_url": raw_url,
+        "preview_url": _persona_library_preview_url(archive_id, image_id, raw_url),
+        "created_at": str(item.get("createdAt") or "").strip(),
+        "prompt": str(item.get("prompt") or "").strip(),
+        "mode": str(item.get("mode") or "").strip(),
+        "source": str(item.get("source") or "").strip(),
+        "aspect_ratio": str(item.get("aspectRatio") or "").strip(),
+        "notes": str(item.get("notes") or "").strip(),
+        "is_reference": raw_url == _persona_reference_image_url_from_archive({"personaImageLibrary": [item], "personaReferenceSheet": raw_url}),
+    }
+
+
+def _list_persona_archive_images(archive_id: str) -> dict[str, Any]:
+    clean_id = str(archive_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID。")
+    _, _, archives = _persona_archive_source_for_write(clean_id)
+    archive = _find_persona_archive(archives, clean_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    current_reference_url = _persona_reference_image_url_from_archive(archive)
+    library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
+    items: list[dict[str, Any]] = []
+    for raw_item in library:
+      if not isinstance(raw_item, dict):
+        continue
+      compact = _compact_persona_image_library_item(clean_id, raw_item)
+      if not compact:
+        continue
+      compact["is_reference"] = str(compact.get("image_url") or "").strip() == current_reference_url
+      items.append(compact)
+    items.sort(key=lambda row: str(row.get("created_at") or ""), reverse=True)
+    return {
+      "ok": True,
+      "archive_id": clean_id,
+      "current_reference_url": current_reference_url,
+      "items": items,
+      "is_workflow_persona": _is_workflow_persona_archive(archive),
+    }
+
+
+def _persona_archive_persist_reference_image(archive_id: str, *, image_url: str, prompt: str = "", mode: str = "closed-model", source: str = "portrait", aspect_ratio: str = "1:1", notes: str = "current persona reference image") -> dict[str, Any]:
+    clean_id = str(archive_id or "").strip()
+    image_url = str(image_url or "").strip()
+    if not clean_id or not image_url:
+        raise HTTPException(status_code=400, detail="人设图保存参数不完整。")
+    path, raw, archives = _persona_archive_source_for_write(clean_id)
+    archive = _find_persona_archive(archives, clean_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    now = _persona_dashboard_iso_now()
+    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+    next_setup = dict(setup)
+    next_setup["personaImageSkipped"] = False
+    next_setup["personaImageReferenceUrl"] = image_url
+    archive["setup"] = next_setup
+    archive["personaReferenceSheet"] = image_url
+    library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
+    entry = {
+        "id": _new_id("personaimg"),
+        "imageUrl": image_url,
+        "createdAt": now,
+        "prompt": prompt,
+        "mode": mode,
+        "source": source,
+        "aspectRatio": aspect_ratio,
+        "notes": notes,
+    }
+    archive["personaImageLibrary"] = [entry, *library]
+    archive["updatedAt"] = now
+    _write_persona_archives_preserving_shape(path, raw, archives)
+    data = _list_persona_archive_images(clean_id)
+    data["saved_item_id"] = entry["id"]
+    return data
+
+
+def _run_persona_image_cli_for_web(archive_id: str, *, prompt: str = "", aspect_ratio: str = "1:1", mode: str = "person", generate_reference_sheet: bool = True) -> dict[str, Any]:
+    clean_id = str(archive_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID。")
+    _, _, archives = _persona_archive_source_for_write(clean_id)
+    archive = _find_persona_archive(archives, clean_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+    if _is_workflow_persona_archive(archive):
+        raise HTTPException(status_code=400, detail="工作流人设不需要单独生成人设图。")
+    payload = {
+        "setup": setup,
+        "content": str(prompt or archive.get("content") or ""),
+        "aspectRatio": str(aspect_ratio or "1:1").strip() or "1:1",
+        "mode": str(mode or "person").strip() or "person",
+        "referenceSheetUrl": _persona_reference_image_url_from_archive(archive) or None,
+        "generateReferenceSheet": bool(generate_reference_sheet),
+        "dryRun": False,
+    }
+    _sync_tool_r18_api_config_for_persona_workflow()
+    command = ["node", "--import", "tsx", "scripts/skills/generate-persona-images.ts", json.dumps(payload, ensure_ascii=False)]
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(ROOT_DIR / "tool_r18"),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=600,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(status_code=504, detail=f"生成人设图超时：{exc.timeout} 秒。") from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=500, detail="未找到 Node.js 或 tsx，无法生成人设图。") from exc
+    stdout = str(completed.stdout or "").strip()
+    stderr = str(completed.stderr or "").strip()
+    try:
+        data = json.loads(stdout) if stdout else {}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"生成人设图返回格式无效：{exc}") from exc
+    if completed.returncode != 0 or not isinstance(data, dict):
+        raise HTTPException(status_code=500, detail=str((data or {}).get("error") or stderr or stdout or "生成人设图失败。").strip())
+    image_result = data.get("imageResult") if isinstance(data.get("imageResult"), dict) else {}
+    reference_sheet = data.get("referenceSheet") if isinstance(data.get("referenceSheet"), dict) else {}
+    image_url = str(reference_sheet.get("url") or image_result.get("url") or "").strip()
+    if not image_url:
+        raise HTTPException(status_code=500, detail=str(image_result.get("error") or data.get("error") or "生成人设图失败。").strip())
+    persisted = _persona_archive_persist_reference_image(
+        clean_id,
+        image_url=image_url,
+        prompt=f"人设图：{archive.get('name') or clean_id}",
+        mode=str(image_result.get("mode") or "closed-model"),
+        source="portrait",
+        aspect_ratio=str(payload.get("aspectRatio") or "1:1"),
+    )
+    persisted["generation"] = {
+        "ok": True,
+        "image_url": image_url,
+        "mode": str(image_result.get("mode") or ""),
+        "timings": data.get("timings"),
+    }
+    return persisted
 
 
 def _read_persona_dashboard_profile(archive_id: str) -> dict[str, Any]:
@@ -15097,12 +15447,34 @@ def _compact_publish_record(record: dict[str, Any]) -> dict[str, Any]:
     published_targets = record.get("publishedTargets") if isinstance(record.get("publishedTargets"), list) else []
     automation_task_type = record.get("automationTaskType") or record.get("automation_task_type") or published_meta.get("taskType")
     screenshot_path = str(record.get("screenshotUrl") or "")
+    content = ""
+    for candidate in (
+        record.get("content"),
+        record.get("text"),
+        record.get("caption"),
+        record.get("replyText"),
+        record.get("reply_text"),
+        published_meta.get("originalContent"),
+        source_meta.get("originalContent"),
+        published_meta.get("content"),
+        source_meta.get("content"),
+        published_meta.get("text"),
+        source_meta.get("text"),
+        published_meta.get("caption"),
+        source_meta.get("caption"),
+        published_meta.get("sourceUrl"),
+        source_meta.get("sourceUrl"),
+    ):
+        text = str(candidate or "").strip()
+        if text:
+            content = text
+            break
     return {
         "id": record.get("id"),
         "archive_post_id": record.get("archivePostId") or record.get("archive_post_id"),
         "platform": record.get("platform"),
         "title": str(record.get("title") or "")[:120],
-        "content": str(record.get("content") or "")[:220],
+        "content": content[:220],
         "published_at": record.get("publishedAt") or record.get("published_at"),
         "status": record.get("status"),
         "source_url": published_meta.get("sourceUrl") or published_meta.get("source_url"),
@@ -15830,6 +16202,8 @@ def _build_persona_dashboard_overview() -> dict[str, Any]:
         threads_handle = _normalize_threads_username(threads_account.get("handle"))
         post_count = len(posts)
         published_count = len(visible_publish_history)
+        raw_published_count = len(publish_history)
+        hidden_published_count = max(0, raw_published_count - published_count)
         image_count = len(image_library)
         totals["posts"] += post_count
         totals["published"] += published_count
@@ -15856,6 +16230,8 @@ def _build_persona_dashboard_overview() -> dict[str, Any]:
             "counts": {
                 "posts": post_count,
                 "published": published_count,
+                "published_raw": raw_published_count,
+                "published_hidden": hidden_published_count,
                 "images": image_count,
                 "platform_posts": {str(k): len(v) if isinstance(v, list) else 0 for k, v in platform_posts.items()},
             },
@@ -16507,6 +16883,20 @@ def create_app() -> FastAPI:
     def api_persona_dashboard_persona_memories(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
         return {"ok": True, "memories": _list_selectable_persona_memories(archive_id)}
 
+    @app.get("/api/persona_dashboard/personas/{archive_id}/images")
+    def api_persona_dashboard_persona_images(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+        return _list_persona_archive_images(archive_id)
+
+    @app.post("/api/persona_dashboard/personas/{archive_id}/images/generate")
+    def api_persona_dashboard_generate_persona_image(archive_id: str, payload: PersonaDashboardPersonaImageGeneratePayload, _user: dict[str, Any] = Depends(get_current_user)):
+        return _run_persona_image_cli_for_web(
+            archive_id,
+            prompt=str(payload.prompt or "").strip(),
+            aspect_ratio=str(payload.aspect_ratio or "1:1").strip() or "1:1",
+            mode=str(payload.mode or "person").strip() or "person",
+            generate_reference_sheet=True,
+        )
+
     @app.get("/api/persona_dashboard/groups")
     def api_persona_dashboard_groups(_user: dict[str, Any] = Depends(get_current_user)):
         archives, _ = _read_tool_r18_persona_archives()
@@ -16539,6 +16929,41 @@ def create_app() -> FastAPI:
     @app.post("/api/persona_dashboard/personas/{archive_id}/posts")
     def api_persona_dashboard_create_post(archive_id: str, payload: PersonaDashboardDraftPostPayload, _user: dict[str, Any] = Depends(get_current_user)):
         return _create_persona_archive_post(archive_id, payload)
+
+    @app.post("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}/media/from_task")
+    def api_persona_dashboard_post_media_from_task(archive_id: str, post_id: str, payload: PersonaDashboardPostMediaTaskAttachPayload, user: dict[str, Any] = Depends(get_current_user)):
+        return _attach_task_output_to_persona_post(
+            archive_id,
+            post_id,
+            str(payload.task_id or "").strip(),
+            replace_existing=bool(payload.replace_existing),
+            user=user,
+        )
+
+    @app.post("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}/media/upload")
+    async def api_persona_dashboard_post_media_upload(
+        archive_id: str,
+        post_id: str,
+        replace_existing: str = Form("0"),
+        files: list[UploadFile] = File(default=[]),
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        upload_id = _new_id("personamedia")
+        saved_paths: list[str] = []
+        for idx, upload in enumerate(files or [], start=1):
+            saved = await _save_upload_file(str(user.get("username") or ""), upload_id, f"post_media_{idx}", upload)
+            if saved:
+                saved_paths.append(saved)
+        return _update_persona_archive_post_media(
+            archive_id,
+            post_id,
+            media_paths=saved_paths,
+            replace_existing=_to_bool(replace_existing, False),
+        )
+
+    @app.delete("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}/media/{index}")
+    def api_persona_dashboard_delete_post_media(archive_id: str, post_id: str, index: int, _user: dict[str, Any] = Depends(get_current_user)):
+        return _delete_persona_archive_post_media_item(archive_id, post_id, index)
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/generate_posts")
     def api_persona_dashboard_generate_posts(archive_id: str, payload: PersonaDashboardGeneratePostsPayload, _user: dict[str, Any] = Depends(get_current_user)):
@@ -17014,6 +17439,10 @@ def create_app() -> FastAPI:
         task = dict(row)
         _ensure_user_can_access_task(user, task)
         return _build_task_detail_payload(task=task, include_logs=True, log_limit=1000)
+
+    @app.get("/api/tasks/{task_id}/media/{index}")
+    def api_task_media(task_id: str, index: int, user: dict[str, Any] = Depends(get_current_user)):
+        return _serve_task_output_media(task_id, index, user)
 
     def _run_task_error_analysis_impl(task_id: str, user: dict[str, Any]) -> dict[str, Any]:
         tid = str(task_id or "").strip()
