@@ -185,7 +185,7 @@ function ensureThemeToggle() {
 const modules = [
   { id: "generation", label: "生成 / 编辑任务", hint: "文生图、图生图、修图、换脸、视频", callback: "后台自动提交" },
   { id: "personas", label: "我的人设", hint: "人设列表、详情、推文、设置", callback: "后台自动读取" },
-  { id: "publishing", label: "发布与排程", hint: "立即发布、矩阵发布、定时、队列", callback: "后台自动排队" },
+  { id: "publishing", label: "发布 / 矩阵发布", hint: "草稿发布、批量发布、定时、队列", callback: "后台自动排队" },
   { id: "automation", label: "指纹浏览器自动化", hint: "浏览器账号登录、检测、养号、回复", callback: "后台自动执行" },
 ];
 
@@ -201,7 +201,7 @@ const taskMeta = {
 
 const personaGroups = {
   content: {
-    label: "内容与发布",
+    label: "内容生产",
     defaultStep: "generate",
   },
   settings: {
@@ -219,7 +219,7 @@ const personaGroups = {
 };
 
 const moduleDefaultBranch = {
-  publishing: "publish_post",
+  publishing: "publish_now",
   automation: "open_login",
 };
 
@@ -1461,7 +1461,7 @@ function renderPersonaDraftRows(posts) {
         <small>${String(post.id) === String(state.selectedPersonaPostId) ? "当前已选中" : "点击卡片选中"}</small>
         <div class="row-actions persona-draft-card-actions">
           <button type="button" data-persona-edit-post="${esc(post.id)}">编辑草稿</button>
-          ${String(post.id) === String(state.selectedPersonaPostId) ? `<button type="button" class="primary" data-persona-route-step="content:publish">带入发布步骤</button>` : ""}
+          ${String(post.id) === String(state.selectedPersonaPostId) ? `<button type="button" class="primary" data-persona-open-publishing>进入发布 / 矩阵发布</button>` : ""}
         </div>
       </div>
     </article>
@@ -1998,12 +1998,20 @@ function renderSimpleFlowModule(moduleId) {
   let body = "";
   if (moduleId === "publishing") {
     const selectedPersonaForPublish = state.personas.find((item) => String(item.id) === String($("simplePersona")?.value || state.selectedPersonaId || "")) || selectedPersona();
+    if (selectedPersonaForPublish && !state.personaDraftPosts[String(selectedPersonaForPublish.id)]) {
+      loadPersonaDraftPosts(selectedPersonaForPublish.id).then(() => {
+        if (state.activeModule === "publishing") renderSimpleFlowModule("publishing");
+      }).catch(() => {});
+    }
     const publishAccount = publishAccountForPersona(selectedPersonaForPublish);
+    const drafts = personaDraftPosts(selectedPersonaForPublish);
+    const selectedDraft = drafts.find((post) => String(post.id) === String(state.selectedPersonaPostId || "")) || drafts[0] || null;
     body = `
       <div class="form-grid">
         <label>发布方式
           <select id="simplePublishMode">
             <option value="publish_now">立即发布</option>
+            <option value="matrix_start">矩阵发布</option>
             <option value="schedule_publish">定时发布</option>
           </select>
         </label>
@@ -2012,8 +2020,14 @@ function renderSimpleFlowModule(moduleId) {
         </label>
       </div>
       ${publishAccount ? `<div class="flow-box"><span>发布账号</span><strong>${esc(publishAccount.username || publishAccount.id)}</strong><span>${esc(publishPlatformHint(publishAccount))}</span></div>` : `<div class="empty-state">当前人设还没有可发布的 Threads 或 Instagram 执行账号。请先到“我的人设 > 浏览器账号”里绑定。</div>`}
+      <label>发布草稿
+        <select id="simpleDraftPost" ${drafts.length ? "" : "disabled"}>
+          ${drafts.length ? drafts.map((post, index) => `<option value="${esc(post.id)}" ${String(post.id) === String(selectedDraft?.id || "") ? "selected" : ""}>${esc(personaDraftOptionLabel(post, index))}</option>`).join("") : `<option value="">当前还没有草稿</option>`}
+        </select>
+      </label>
       ${scheduleField}
-      ${contentBox}
+      <label>内容</label>
+      <textarea id="simpleContent" rows="4" placeholder="发布正文、评论内容或回复模板。">${esc(selectedDraft?.content || "")}</textarea>
       <label>素材
         <input id="simpleMediaFiles" type="file" multiple accept="image/*,video/*" />
       </label>
@@ -2066,7 +2080,7 @@ function renderSimpleFlowModule(moduleId) {
 }
 
 function bindSimpleFlowInputs(moduleId) {
-  ["simplePrimary", "simplePublishMode", "simpleAccount", "simplePersona", "simpleScheduleAt", "simpleContent", "simpleTargetUrl", "simpleMediaFiles", "simpleTargetUrls"].forEach((id) => {
+  ["simplePrimary", "simplePublishMode", "simpleAccount", "simplePersona", "simpleDraftPost", "simpleScheduleAt", "simpleContent", "simpleTargetUrl", "simpleMediaFiles", "simpleTargetUrls"].forEach((id) => {
     const node = $(id);
     if (!node) return;
     node.addEventListener(node.tagName === "TEXTAREA" || node.tagName === "INPUT" ? "input" : "change", () => {
@@ -2077,6 +2091,12 @@ function bindSimpleFlowInputs(moduleId) {
       }
       if (id === "simplePersona" && moduleId === "publishing") {
         state.selectedPersonaId = node.value || state.selectedPersonaId;
+        state.selectedPersonaPostId = "";
+        renderSimpleFlowModule(moduleId);
+        return;
+      }
+      if (id === "simpleDraftPost" && moduleId === "publishing") {
+        state.selectedPersonaPostId = node.value || "";
         renderSimpleFlowModule(moduleId);
         return;
       }
@@ -2116,8 +2136,6 @@ function renderConfirmSummary() {
       media: "生成媒体或更新当前草稿媒体",
       overview: "查看当前人设资料",
       posts: "新建或选择推文草稿",
-      history: "查看发布历史",
-      publish: "提交浏览器发布任务",
       login: "保存凭证或提交登录任务",
       reply_comment: "提交 Threads 评论回复任务",
       reply_hot: "提交 Threads 热点回复任务",
@@ -2723,6 +2741,10 @@ async function executeSimpleFlow() {
     let accountId = $("simpleAccount")?.value || "";
     const personaId = $("simplePersona")?.value || selectedPersona()?.id || "";
     if (state.activeModule === "publishing") {
+      if (($("simplePublishMode")?.value || "") === "matrix_start") {
+        showMsg("commandMsg", "矩阵发布入口已移到外层，分组批量队列接入后在这里提交。", false);
+        return;
+      }
       const persona = state.personas.find((item) => String(item.id) === String(personaId)) || selectedPersona();
       accountId = publishAccountForPersona(persona)?.id || "";
     }
@@ -3903,8 +3925,7 @@ function renderPersonaStepTabs(groupKey, profile) {
       ["generate", "新建推文"],
       ["media", "推文配图 / 媒体"],
       ["overview", "人设内容"],
-      ["posts", "草稿与历史"],
-      ["publish", "选择草稿进入发布"],
+      ["posts", "草稿库"],
     ];
     return `<div class="persona-step-tabs">${tabs.map(([value, label]) => `
       <button
@@ -4177,23 +4198,12 @@ function renderPersonaCreateWorkbench() {
 function personaGroupStepOptions(groupKey, profile) {
   const workflowPersona = Boolean(profile?.is_workflow_persona);
   if (groupKey === "content") {
-    return workflowPersona
-      ? [
-          ["generate", "新建推文"],
-          ["media", "推文配图 / 媒体"],
-          ["overview", "人设内容"],
-          ["posts", "查看推文 / 草稿库"],
-          ["history", "发布历史"],
-          ["publish", "选择草稿进入发布"],
-        ]
-      : [
-          ["generate", "新建推文"],
-          ["media", "推文配图 / 媒体"],
-          ["overview", "人设内容"],
-          ["posts", "查看推文 / 草稿库"],
-          ["history", "发布历史"],
-          ["publish", "选择草稿进入发布"],
-        ];
+    return [
+      ["generate", "新建推文"],
+      ["media", "推文配图 / 媒体"],
+      ["overview", "人设内容"],
+      ["posts", "草稿库"],
+    ];
   }
   if (groupKey === "settings") {
     return workflowPersona
@@ -4527,14 +4537,12 @@ function renderPersonaContentPanel(persona, account, profile, step) {
   }
 
   if (panel === "posts") {
-    const historyRows = personaPublishHistoryRows(persona);
     return `
       <div class="persona-inline-panel">
         <div class="persona-head-copy">
           <strong>草稿库</strong>
-          <span class="persona-panel-intro">${esc(`这里集中查看并选择待发布草稿。新建或编辑草稿请回到“新建推文”；当前草稿 ${drafts.length} 条，发布历史 ${historyRows.length} 条。${hiddenHistoryHint}`)}</span>
+          <span class="persona-panel-intro">${esc(`这里集中查看并选择待发布草稿。新建或编辑草稿请回到“新建推文”；发布和矩阵发布已统一移到外层入口。当前草稿 ${drafts.length} 条。`)}</span>
         </div>
-        ${renderPersonaPostsViewTabs(drafts, historyRows, "posts")}
         <div class="persona-draft-toolbar">
           <label>草稿快速选择
             <select id="personaDraftPostSelect">
@@ -4544,7 +4552,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
           <div class="row-actions">
             <button type="button" data-persona-open-new-draft>新建或编辑草稿</button>
             ${selectedPost ? `<button type="button" data-persona-edit-post="${esc(selectedPost.id)}">编辑草稿</button>` : ""}
-            ${selectedPost ? `<button type="button" class="primary" data-persona-route-step="content:publish">带入发布步骤</button>` : ""}
+            ${selectedPost ? `<button type="button" class="primary" data-persona-open-publishing>进入发布 / 矩阵发布</button>` : ""}
           </div>
         </div>
         ${renderPersonaDraftRows(drafts)}
@@ -4609,7 +4617,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
       </div>
       <div class="persona-inline-panel">
         <p>帖子 ${numberText(persona.counts?.posts)} · 已发布 ${numberText(persona.counts?.published)} · 素材图 ${numberText(persona.counts?.images)}</p>
-        <p>当前主链路只保留：人设信息、草稿创建、选择草稿发布、自动化执行结果。</p>
+        <p>当前主链路只保留：人设信息、草稿创建、素材处理、自动化执行结果；发布和矩阵发布统一在外层入口执行。</p>
       </div>
     </div>`;
 }
@@ -5104,6 +5112,15 @@ function bindEvents() {
       if (action === "last") state.personaListPage = totalPages;
       state.personaListEditorId = "";
       renderPersonaModule();
+      return;
+    }
+    if (event.target.closest("[data-persona-open-publishing]")) {
+      const persona = selectedPersona();
+      if (persona) {
+        state.selectedPersonaId = persona.id;
+        state.simpleBranches.publishing = "publish_now";
+      }
+      setModule("publishing");
       return;
     }
     const routeStepButton = event.target.closest("[data-persona-route-step]");
