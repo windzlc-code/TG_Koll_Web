@@ -3333,7 +3333,11 @@ async function submitPersonaMediaTask() {
   }
   snapshotPersonaCurrentForm();
   const form = personaFormState(persona.id).media;
-  const taskType = String(form.taskType || "text_to_image");
+  const allowedTaskTypes = personaMediaTaskOptions(profile, personaFormState(persona.id).generate).map(([value]) => value);
+  const taskType = allowedTaskTypes.includes(String(form.taskType || ""))
+    ? String(form.taskType || "")
+    : String(allowedTaskTypes[0] || "text_to_image");
+  form.taskType = taskType;
   const files = filesFromInput("personaMediaTaskFiles");
   const imageCount = files.filter((file) => fileKind(file) === "image").length;
   const minImages = Number(taskMeta[taskType]?.minImages || 0);
@@ -3552,22 +3556,31 @@ function renderPersonaCard(persona, groupId = "") {
 function renderPersonaFolder(group, map) {
   const personas = (group.persona_ids || []).map((id) => map.get(String(id))).filter(Boolean);
   const collapsed = Boolean(group.collapsed);
+  const editing = String(state.personaListEditorId || "") === `group:${String(group.id || "")}`;
   return `
-    <div class="persona-layer-group ${collapsed ? "is-collapsed" : ""}">
-      <div class="persona-layer-row persona-layer-row--group">
-        <button type="button" class="persona-layer-toggle" data-persona-toggle-folder="${esc(group.id)}">${collapsed ? "展开" : "收起"}</button>
-        <strong>${esc(group.name)}</strong>
-        <span>${personas.length} 个</span>
-        <button type="button" data-persona-rename-group="${esc(group.id)}">重命名</button>
-        <button type="button" data-persona-delete-group="${esc(group.id)}">删除</button>
+    <div class="persona-layer-group ${collapsed ? "is-collapsed" : ""}" data-persona-folder="${esc(group.id)}">
+      <div class="persona-list-card persona-folder-card ${editing ? "is-editing" : ""}">
+        <button type="button" class="persona-folder-main" data-persona-toggle-folder="${esc(group.id)}" aria-label="${collapsed ? "展开分组" : "收起分组"}">
+          <span class="persona-folder-caret"></span>
+          <span class="persona-folder-copy">
+            <span class="persona-card-title">
+              <strong>${esc(group.name)}</strong>
+              <span class="persona-kind-badge">组</span>
+              <span class="persona-kind-badge">${personas.length} 个</span>
+            </span>
+            <small>${collapsed ? "已收起" : "已展开"}</small>
+          </span>
+        </button>
+        <button type="button" class="persona-card-edit" data-persona-edit-group="${esc(group.id)}" title="编辑分组" aria-label="编辑分组">...</button>
+        ${editing ? `
+          <div class="persona-card-menu persona-card-menu--group">
+            <button type="button" data-persona-rename-group="${esc(group.id)}">重命名</button>
+            <button type="button" data-persona-delete-group="${esc(group.id)}">删除分组</button>
+          </div>
+        ` : ""}
       </div>
-      ${collapsed ? "" : `<div class="persona-layer-children">${personas.length ? personas.map((persona) => renderPersonaCard(persona, group.id)).join("") : `<div class="persona-layer-empty">这个组还没有人设。</div>`}</div>`}
+      <div class="persona-layer-children">${personas.length ? personas.map((persona) => renderPersonaCard(persona, group.id)).join("") : `<div class="persona-layer-empty">这个组还没有人设。</div>`}</div>
     </div>`;
-}
-
-function renderPersonaUngrouped(personas) {
-  if (!personas.length) return "";
-  return personas.map((persona) => renderPersonaCard(persona)).join("");
 }
 
 function renderPersonaCollectionList() {
@@ -3575,10 +3588,13 @@ function renderPersonaCollectionList() {
   const groups = personaCollectionGroups();
   const assigned = personaAssignedIds();
   const ungrouped = state.personas.filter((persona) => !assigned.has(String(persona.id || "")));
+  const nodes = [
+    ...groups.map((group) => ({ type: "group", group })),
+    ...ungrouped.map((persona) => ({ type: "persona", persona })),
+  ];
   return `
     <div class="persona-list-stack">
-      ${groups.map((group) => renderPersonaFolder(group, map)).join("")}
-      ${renderPersonaUngrouped(ungrouped)}
+      ${nodes.map((node) => node.type === "group" ? renderPersonaFolder(node.group, map) : renderPersonaCard(node.persona)).join("")}
     </div>`;
 }
 
@@ -3648,7 +3664,12 @@ function renderPersonaGenerateModeTabs(mode) {
   `).join("")}</div>`;
 }
 
-function personaMediaTaskOptions() {
+function personaMediaTaskOptions(profile, generateForm = {}) {
+  const isWorkflowPersona = Boolean(profile?.is_workflow_persona);
+  const paidEnabled = isWorkflowPersona && resolvedPersonaGenerateBranch(profile, generateForm) === "r18";
+  if (!paidEnabled) {
+    return [["text_to_image", "根据推文生图"]];
+  }
   return [
     ["text_to_image", "根据推文生图"],
     ["image_generate", "图片生成"],
@@ -3659,9 +3680,10 @@ function personaMediaTaskOptions() {
   ];
 }
 
-function renderPersonaMediaTaskTabs(taskType) {
-  const active = String(taskType || "text_to_image");
-  return `<div class="persona-step-tabs persona-subflow-tabs">${personaMediaTaskOptions().map(([value, label]) => `
+function renderPersonaMediaTaskTabs(profile, generateForm, taskType) {
+  const options = personaMediaTaskOptions(profile, generateForm);
+  const active = String(taskType || options[0]?.[0] || "text_to_image");
+  return `<div class="persona-step-tabs persona-subflow-tabs">${options.map(([value, label]) => `
     <button
       type="button"
       class="${active === value ? "is-active" : ""}"
@@ -4022,16 +4044,26 @@ function renderPersonaContentPanel(persona, account, profile, step) {
     const mediaForm = form.media;
     const post = selectedPost;
     const postMediaItems = post ? personaDraftMediaItems(String(persona.id || ""), post) : [];
-    const currentTaskType = String(mediaForm.taskType || "text_to_image");
+    const mediaTaskOptions = personaMediaTaskOptions(profile, generateForm);
+    const currentTaskType = mediaTaskOptions.some(([value]) => value === String(mediaForm.taskType || ""))
+      ? String(mediaForm.taskType || "")
+      : String(mediaTaskOptions[0]?.[0] || "text_to_image");
+    mediaForm.taskType = currentTaskType;
     const mediaMeta = taskMeta[currentTaskType] || taskMeta.text_to_image;
     const showAspectRatio = ["text_to_image", "image_generate"].includes(currentTaskType);
     const showVideoOptions = currentTaskType === "video_i2v";
     const uploadAccept = currentTaskType === "video_i2v" ? "image/*,audio/*" : "image/*";
+    const showSourceUpload = Number(mediaMeta.minImages || 0) > 0 || currentTaskType === "video_i2v";
+    const mediaIntro = isWorkflowPersona
+      ? (paidWorkflowBranch
+        ? "当前已切到工作流付费分支，可处理生图、编辑、换脸和图生视频。"
+        : "当前是免费内容分支，只提供“根据推文生图”。如需付费编辑内容，先回到“新建推文”勾选“付费内容”。")
+      : "普通人设这里只提供“根据推文生图”，不会显示工作流付费编辑内容。";
     return `
       <div class="persona-inline-panel">
         <div class="persona-head-copy">
           <strong>推文配图 / 媒体</strong>
-          <span class="persona-panel-intro">先选草稿，再生成、上传、替换或删除媒体。结果会直接回写到当前草稿。</span>
+          <span class="persona-panel-intro">${esc(mediaIntro)}</span>
         </div>
         <div class="persona-draft-toolbar">
           <label>当前草稿
@@ -4067,7 +4099,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
               <div class="persona-inline-panel persona-inline-panel--nested">
                 <strong>生成媒体</strong>
                 <span class="persona-panel-intro">默认带入当前草稿正文。只有需要补充时再填写说明。</span>
-                ${renderPersonaMediaTaskTabs(currentTaskType)}
+                ${renderPersonaMediaTaskTabs(profile, generateForm, currentTaskType)}
                 <div class="form-grid persona-detail-controls">
                   ${showAspectRatio ? `<label>图像比例
                     <select id="personaMediaAspectRatio">
@@ -4091,10 +4123,10 @@ function renderPersonaContentPanel(persona, account, profile, step) {
                 <label>补充提示词
                   <textarea id="personaMediaTaskPrompt" rows="5" placeholder="留空则直接按当前草稿正文生成。">${esc(mediaForm.prompt || "")}</textarea>
                 </label>
-                <label>上传素材
+                ${showSourceUpload ? `<label>上传素材
                   <input id="personaMediaTaskFiles" type="file" multiple accept="${esc(uploadAccept)}" />
                   <small>${esc(mediaMeta.files || "根据当前任务类型上传必要素材。")}</small>
-                </label>
+                </label>` : ""}
                 <div class="row-actions">
                   <button type="button" class="primary" data-persona-run-media-task>生成预览</button>
                 </div>
@@ -4538,6 +4570,14 @@ function bindEvents() {
     if (editPersonaGroup) {
       const personaId = editPersonaGroup.dataset.personaEdit || "";
       state.personaListEditorId = state.personaListEditorId === personaId ? "" : personaId;
+      renderPersonaModule();
+      return;
+    }
+    const editCollectionGroup = event.target.closest("[data-persona-edit-group]");
+    if (editCollectionGroup) {
+      const groupId = editCollectionGroup.dataset.personaEditGroup || "";
+      const editorId = groupId ? `group:${groupId}` : "";
+      state.personaListEditorId = state.personaListEditorId === editorId ? "" : editorId;
       renderPersonaModule();
       return;
     }
