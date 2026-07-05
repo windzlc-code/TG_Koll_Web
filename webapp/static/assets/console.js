@@ -1272,21 +1272,24 @@ function renderPersonaMemoryOptions(persona, selectedIds = []) {
     return `<div class="empty-state">当前还没有可选人设记忆，留空也可以直接生成。</div>`;
   }
   const selected = new Set((selectedIds || []).map((item) => String(item || "")));
-  const visibleRows = rows.slice(0, 12);
   return `
     <div class="persona-memory-panel">
       <div class="persona-memory-toolbar">
-        <strong>已选 <span id="personaMemorySelectedCount">${selected.size}</span> / ${visibleRows.length}</strong>
+        <strong>已选 <span id="personaMemorySelectedCount">${selected.size}</span> / ${rows.length}</strong>
+        <label class="persona-memory-search">
+          <input id="personaMemorySearch" type="search" placeholder="筛选记忆内容" />
+        </label>
         <div class="persona-memory-actions">
           <button type="button" data-persona-memory-bulk="all">全选</button>
           <button type="button" data-persona-memory-bulk="clear">清空</button>
         </div>
       </div>
       <div class="persona-memory-grid">
-        ${visibleRows.map((row) => {
+        ${rows.map((row) => {
           const isSelected = selected.has(String(row.id || ""));
+          const summary = String(row.summary || "未命名记忆");
           return `
-            <label class="persona-memory-card ${isSelected ? "is-selected" : ""}">
+            <label class="persona-memory-card ${isSelected ? "is-selected" : ""}" data-persona-memory-search="${esc(summary.toLowerCase())}">
               <input
                 class="persona-memory-input"
                 type="checkbox"
@@ -1295,7 +1298,7 @@ function renderPersonaMemoryOptions(persona, selectedIds = []) {
               />
               <span class="persona-memory-check" aria-hidden="true"></span>
               <span class="persona-memory-copy">
-                <strong>${esc(row.summary || "未命名记忆")}</strong>
+                <strong>${esc(summary)}</strong>
                 <small>${esc(formatTime(row.date || ""))}</small>
               </span>
             </label>`;
@@ -1314,6 +1317,15 @@ function syncPersonaMemorySelectionState() {
   if (countNode) {
     countNode.textContent = String(document.querySelectorAll("[data-persona-memory-id]:checked").length);
   }
+}
+
+function applyPersonaMemoryFilter(value = "") {
+  const keyword = String(value || "").trim().toLowerCase();
+  document.querySelectorAll(".persona-memory-card").forEach((card) => {
+    const haystack = String(card.getAttribute("data-persona-memory-search") || "");
+    const visible = !keyword || haystack.includes(keyword);
+    card.hidden = !visible;
+  });
 }
 
 function personaMemoryRows(persona = selectedPersona()) {
@@ -4142,6 +4154,11 @@ function bindEvents() {
       if (strategyGroup) setPersonaStrategyId(strategyGroup, event.target.value || "");
       renderPersonaDetail();
       renderConfirmSummary();
+    }
+  });
+  $("moduleBody").addEventListener("input", (event) => {
+    if (event.target?.id === "personaMemorySearch") {
+      applyPersonaMemoryFilter(event.target.value || "");
     }
   });
   $("refreshAll").addEventListener("click", () => Promise.all([loadTasks(), loadPersonas(), loadSocial().catch(() => {}), loadSetupStatus()]).then(renderWorkspace));
