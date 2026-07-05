@@ -28,6 +28,10 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.tool_runtime_dir = self.root / "tool_r18_runtime"
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.tool_runtime_dir.mkdir(parents=True, exist_ok=True)
+        self.draft_media_path = self.root / "draft_media.png"
+        self.draft_media_path.write_bytes(
+            bytes.fromhex("89504E470D0A1A0A0000000D4948445200000001000000010802000000907753DE0000000C49444154789C636060000000040001F61738550000000049454E44AE426082")
+        )
         os.environ["WEBAPP_DATA_DIR"] = str(self.data_dir)
         os.environ["APP_DB_PATH"] = str(self.data_dir / "app.db")
         os.environ["APP_RUNTIME_CONFIG_PATH"] = str(self.data_dir / "runtime_config.json")
@@ -100,7 +104,15 @@ class PersonaDashboardApiTests(unittest.TestCase):
                         }
                     },
                 },
-                "posts": [{"id": "post-1", "title": "A", "content": "post", "createdAt": "2026-06-29T00:00:00Z", "updatedAt": "2026-06-29T00:00:00Z"}],
+                "posts": [{
+                    "id": "post-1",
+                    "title": "A",
+                    "content": "post",
+                    "createdAt": "2026-06-29T00:00:00Z",
+                    "updatedAt": "2026-06-29T00:00:00Z",
+                    "mediaUrl": str(self.draft_media_path),
+                    "mediaType": "image",
+                }],
                 "platformPosts": {"threads": [{"id": "post-1"}], "telegram": []},
                 "publishHistory": [
                     {
@@ -114,6 +126,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
                         "publishedMeta": {
                             "platform": "threads",
                             "capturedAt": "2026-06-30T03:00:00Z",
+                            "imageUrl": "https://example.com/publish-image.png",
+                            "mediaItems": [{"url": str(self.draft_media_path), "type": "image", "label": "local-history"}],
                             "engagement": {"likeCount": 3, "commentCount": 1, "viewCount": 40},
                         },
                     }
@@ -450,6 +464,18 @@ class PersonaDashboardApiTests(unittest.TestCase):
         archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
         self.assertTrue(any(item["id"] == post["id"] for item in archives[0]["posts"]))
 
+    def test_persona_posts_include_media_and_preview_endpoint(self):
+        self._write_archives()
+        list_resp = self.client.get("/api/persona_dashboard/personas/persona-1/posts")
+        self.assertEqual(list_resp.status_code, 200)
+        post = next(item for item in list_resp.json()["posts"] if item["id"] == "post-1")
+        self.assertEqual(post["media_url"], str(self.draft_media_path))
+        self.assertEqual(post["media_type"], "image")
+        self.assertTrue(post["media_items"])
+        media_resp = self.client.get("/api/persona_dashboard/personas/persona-1/posts/post-1/media/0")
+        self.assertEqual(media_resp.status_code, 200)
+        self.assertEqual(media_resp.headers["content-type"], "image/png")
+
     def test_persona_publish_history_lists_visible_records(self):
         self._write_archives()
         resp = self.client.get("/api/persona_dashboard/personas/persona-1/publish_history")
@@ -459,6 +485,62 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(rows[0]["id"], "pub-1")
         self.assertEqual(rows[0]["archive_post_id"], "post-1")
         self.assertEqual(rows[0]["platform"], "threads")
+        self.assertTrue(rows[0]["media_items"])
+        preview_item = next(item for item in rows[0]["media_items"] if "/publish_history/pub-1/media/" in str(item.get("preview_url") or ""))
+        preview_path = str(preview_item["preview_url"])
+        self.assertIn("/publish_history/pub-1/media/", preview_path)
+        media_resp = self.client.get(preview_path)
+        self.assertEqual(media_resp.status_code, 200)
+        self.assertEqual(media_resp.headers["content-type"], "image/png")
+
+    def test_missing_media_is_retained_as_unavailable_item(self):
+        self._write_archives()
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        archives[0]["posts"][0]["mediaUrl"] = str(self.root / "missing-media.png")
+        archives_path.write_text(json.dumps(archives, ensure_ascii=False, indent=2), encoding="utf-8")
+        (self.tool_runtime_dir / "persona_archives_cache.json").write_text(
+            json.dumps(archives, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        resp = self.client.get("/api/persona_dashboard/personas/persona-1/posts")
+        self.assertEqual(resp.status_code, 200)
+        post = next(item for item in resp.json()["posts"] if item["id"] == "post-1")
+        self.assertTrue(post["media_items"])
+        self.assertTrue(post["media_items"][0]["unavailable"])
+        self.assertEqual(post["media_items"][0]["reason"], "原始媒体文件不存在")
+        self.assertEqual(post["media_items"][0]["preview_url"], "")
+
+    def test_publish_history_drops_unstable_signed_screenshot_preview_urls(self):
+        from webapp import server
+
+        row = server._compact_publish_record({
+            "title": "Signed screenshot",
+            "screenshotPath": "/api/persona_dashboard/automation/screenshots/screenshot?cbsIp=1.2.3.4&sign=abc",
+        })
+        self.assertEqual(row["screenshot_url"], "")
+
+    def test_internal_media_proxy_urls_are_not_treated_as_raw_preview_urls(self):
+        from webapp import server
+
+        self.assertFalse(server._is_direct_preview_media_url("/api/persona_dashboard/personas/persona-1/posts/post-1/media/0"))
+        self.assertFalse(server._is_direct_preview_media_url("/api/persona_dashboard/personas/persona-1/publish_history/pub-1/media/0"))
+        self.assertFalse(server._is_direct_preview_media_url("/api/persona_dashboard/automation/screenshots/screenshot?sign=abc"))
+
+    def test_media_fields_from_payload_keeps_multiple_media_items(self):
+        payload = {
+            "media_paths": [
+                str(self.root / "first.png"),
+                str(self.root / "second.mp4"),
+            ]
+        }
+        fields = social_automation_api._media_fields_from_payload(payload)
+        self.assertEqual(fields["mediaUrl"], str(self.root / "first.png"))
+        self.assertEqual(fields["imageUrl"], str(self.root / "first.png"))
+        self.assertEqual(len(fields["mediaItems"]), 2)
+        self.assertEqual(fields["mediaItems"][0]["type"], "image")
+        self.assertEqual(fields["mediaItems"][1]["type"], "video")
 
     def test_persona_memories_lists_runtime_entries(self):
         self._write_archives()

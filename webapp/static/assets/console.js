@@ -51,6 +51,12 @@ const state = {
   socialAccounts: [],
   socialTasks: [],
   events: null,
+  mediaPreviewGroups: {},
+  mediaPreviewSeq: 0,
+  mediaLightbox: {
+    groupId: "",
+    index: 0,
+  },
 };
 
 function runtimeConfigStatus() {
@@ -717,6 +723,8 @@ function selectedBranch(moduleId) {
 
 function renderWorkspace(renderMenu = true) {
   const module = currentModule();
+  closePersonaMediaLightbox();
+  resetMediaPreviewGroups();
   if (renderMenu) renderModuleMenu();
   else syncModuleMenuState();
   $("moduleTitle").textContent = module.label;
@@ -888,28 +896,361 @@ function renderPersonaHistoryRows(rows) {
     const platform = String(row.platform || row.publishPlatform || "").trim();
     const status = String(row.status || "").trim();
     const publishedUrl = String(row.source_url || row.published_url || row.url || row.post_url || "").trim();
-    const screenshotUrl = String(row.screenshot_url || "").trim();
+    const historyMedia = personaHistoryMediaItems(row);
     const time = row.published_at || row.finished_at || row.updated_at || row.created_at || "";
     const meta = [platform, status ? statusLabel(status) : "", formatTime(time)].filter(Boolean).join(" · ");
     return `
       <article class="compact-row">
         <strong>${esc(action || "发布记录")}</strong>
         <p>${esc(content || "该记录没有正文或链接摘要。")}</p>
+        ${renderPersonaMediaPreview(historyMedia, { compact: true })}
         <span>${esc(meta)}</span>
-        ${(publishedUrl || screenshotUrl) ? `<div class="row-actions">
+        ${publishedUrl ? `<div class="row-actions">
           ${publishedUrl ? `<a href="${esc(publishedUrl)}" target="_blank" rel="noopener">查看来源</a>` : ""}
-          ${screenshotUrl ? `<a href="${esc(screenshotUrl)}" target="_blank" rel="noopener">查看截图</a>` : ""}
         </div>` : ""}
       </article>`;
   }).join("")}</div>`;
 }
 
+function directMediaPreviewUrl(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (/^\/api\/persona_dashboard\/personas\/[^/]+\/(?:posts|publish_history)\/[^/]+\/media\/\d+$/i.test(text)) {
+    return "";
+  }
+  if (/^\/api\/persona_dashboard\/automation\/screenshots\/screenshot\?/i.test(text)) {
+    return "";
+  }
+  if (/^(?:https?:)?\/\//i.test(text)) return text;
+  if (/^(?:data:|blob:|\/api\/)/i.test(text)) return text;
+  return "";
+}
+
+function legacyMediaPreviewReason(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (/armcloud\.net\/api\/agent\/pad\/screenshot/i.test(text) || /\/api\/agent\/pad\/screenshot\?/i.test(text)) {
+    return "历史云机截图链接已失效";
+  }
+  return "";
+}
+
+function guessMediaType(value, fallback = "") {
+  const text = String(value || "").trim().toLowerCase();
+  const typ = String(fallback || "").trim().toLowerCase();
+  if (typ === "video" || /\.(mp4|mov|m4v|webm|avi|mkv)$/i.test(text)) return "video";
+  if (typ === "audio" || /\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(text)) return "audio";
+  return "image";
+}
+
+function mediaKindLabel(type) {
+  if (type === "video") return "视频";
+  if (type === "audio") return "音频";
+  return "图片";
+}
+
+function resetMediaPreviewGroups() {
+  state.mediaPreviewGroups = {};
+  state.mediaPreviewSeq = 0;
+}
+
+function registerMediaPreviewGroup(items) {
+  const rows = Array.isArray(items)
+    ? items.filter((item) => item && item.previewUrl && !item.unavailable)
+    : [];
+  if (!rows.length) return "";
+  const keys = Object.keys(state.mediaPreviewGroups || {});
+  if (keys.length >= 160) {
+    for (const key of keys.slice(0, keys.length - 120)) {
+      delete state.mediaPreviewGroups[key];
+    }
+  }
+  const id = `media-group-${++state.mediaPreviewSeq}`;
+  state.mediaPreviewGroups[id] = rows.map((item) => ({
+    previewUrl: String(item.previewUrl || "").trim(),
+    type: String(item.type || "image").trim() || "image",
+    label: String(item.label || "").trim(),
+  }));
+  return id;
+}
+
+function renderMediaPreviewButton(item, groupId, index, {
+  className = "persona-media-card",
+  frameClass = "persona-media-frame",
+  caption = "",
+} = {}) {
+  const label = String(item?.label || "").trim();
+  const type = String(item?.type || "image").trim() || "image";
+  const text = caption || mediaKindLabel(type);
+  return `
+    <button
+      type="button"
+      class="${esc(className)}"
+      data-media-preview-group="${esc(groupId)}"
+      data-media-preview-index="${esc(index)}"
+      data-media-preview-type="${esc(type)}"
+      data-media-preview-label="${esc(label || text)}">
+      ${type === "video"
+        ? `<video class="${esc(frameClass)}" src="${esc(item.previewUrl)}" muted playsinline preload="metadata" onerror="handlePersonaMediaFrameError(this)"></video>`
+        : type === "audio"
+          ? `<div class="${esc(frameClass)} ${esc(frameClass)}--audio"><strong>音频</strong><small>点击站内预览</small></div>`
+          : `<img class="${esc(frameClass)}" src="${esc(item.previewUrl)}" alt="${esc(label || "media")}" loading="lazy" onerror="handlePersonaMediaFrameError(this)" />`}
+      <span>${esc(text)}</span>
+    </button>
+  `;
+}
+
+function personaDraftMediaItems(personaId, post = {}) {
+  const baseItems = Array.isArray(post.media_items) && post.media_items.length
+    ? post.media_items
+    : (() => {
+      const fallbackUrl = String(post.media_url || "").trim();
+      const screenshotUrl = String(post.screenshot_url || "").trim();
+      const fallbackReason = legacyMediaPreviewReason(fallbackUrl);
+      const screenshotReason = legacyMediaPreviewReason(screenshotUrl);
+      if (fallbackUrl && directMediaPreviewUrl(fallbackUrl)) {
+        return [{ url: fallbackUrl, type: post.media_type || "", label: post.media_type || "media", preview_url: fallbackUrl }];
+      }
+      if (fallbackUrl) {
+        return [{ url: fallbackUrl, type: post.media_type || "", label: post.media_type || "media", unavailable: true, reason: fallbackReason || "原始媒体文件不存在" }];
+      }
+      if (screenshotUrl && directMediaPreviewUrl(screenshotUrl)) {
+        return [{ url: screenshotUrl, type: "image", label: "screenshot", preview_url: screenshotUrl }];
+      }
+      if (screenshotUrl) {
+        return [{ url: screenshotUrl, type: "image", label: "screenshot", unavailable: true, reason: screenshotReason || "截图文件不存在" }];
+      }
+      return [];
+    })();
+  const items = baseItems.map((item, index) => {
+    const url = String(item?.url || "").trim();
+    if (!url) return null;
+    if (item?.unavailable) {
+      return {
+        url,
+        previewUrl: "",
+        type: guessMediaType(url, item?.type || post.media_type || ""),
+        label: String(item?.label || item?.type || "").trim(),
+        unavailable: true,
+        reason: String(item?.reason || "").trim() || "原始媒体文件不存在",
+      };
+    }
+    const previewUrl = String(item?.preview_url || "").trim()
+      || directMediaPreviewUrl(url)
+      || `/api/persona_dashboard/personas/${encodeURIComponent(personaId)}/posts/${encodeURIComponent(post.id || "")}/media/${index}`;
+    const reason = legacyMediaPreviewReason(url);
+    if (!previewUrl || reason) {
+      return {
+        url,
+        previewUrl: "",
+        type: guessMediaType(url, item?.type || post.media_type || ""),
+        label: String(item?.label || item?.type || "").trim(),
+        unavailable: true,
+        reason: reason || "原始媒体文件不存在",
+      };
+    }
+    return {
+      url,
+      previewUrl,
+      type: guessMediaType(url, item?.type || post.media_type || ""),
+      label: String(item?.label || item?.type || "").trim(),
+    };
+  }).filter(Boolean);
+  if (post.screenshot_url && !items.some((item) => item.previewUrl === post.screenshot_url || item.url === post.screenshot_url)) {
+    const screenshotUrl = String(post.screenshot_url).trim();
+    const reason = legacyMediaPreviewReason(screenshotUrl);
+    items.push({
+      url: screenshotUrl,
+      previewUrl: reason ? "" : screenshotUrl,
+      type: "image",
+      label: "screenshot",
+      unavailable: Boolean(reason),
+      reason,
+    });
+  }
+  return items;
+}
+
+function personaHistoryMediaItems(row = {}) {
+  const items = [];
+  const baseItems = Array.isArray(row.media_items) ? row.media_items : [];
+  baseItems.forEach((item) => {
+    const url = String(item?.url || "").trim();
+    const previewUrl = String(item?.preview_url || "").trim() || directMediaPreviewUrl(url);
+    if (!url) return;
+    const reason = legacyMediaPreviewReason(url);
+    items.push({
+      url,
+      previewUrl: reason ? "" : previewUrl,
+      type: guessMediaType(url, item?.type || ""),
+      label: String(item?.label || item?.type || "").trim(),
+      unavailable: Boolean(reason || !previewUrl),
+      reason: reason || (!previewUrl ? "媒体链接已失效" : ""),
+    });
+  });
+  const screenshotUrl = String(row.screenshot_url || "").trim();
+  if (screenshotUrl && !items.some((item) => item.previewUrl === screenshotUrl || item.url === screenshotUrl)) {
+    const reason = legacyMediaPreviewReason(screenshotUrl);
+    items.push({
+      url: screenshotUrl,
+      previewUrl: reason ? "" : screenshotUrl,
+      type: "image",
+      label: "screenshot",
+      unavailable: Boolean(reason),
+      reason,
+    });
+  }
+  return items;
+}
+
+function renderPersonaMediaPreview(items, { compact = false } = {}) {
+  const rows = Array.isArray(items) ? items : [];
+  if (!rows.length) return "";
+  const visibleRows = rows.slice(0, compact ? 3 : 6);
+  const groupId = registerMediaPreviewGroup(rows);
+  let previewIndex = 0;
+  return `<div class="persona-media-grid ${compact ? "is-compact" : ""}">${visibleRows.map((item) => `
+    ${item.unavailable || !item.previewUrl ? `
+      <div class="persona-media-card is-unavailable">
+        <div class="persona-media-frame persona-media-frame--empty">
+          <strong>媒体不可预览</strong>
+          <small>${esc(item.reason || "原始文件已失效")}</small>
+        </div>
+        <span>${esc(mediaKindLabel(item.type))}</span>
+      </div>
+    ` : `
+      ${renderMediaPreviewButton(item, groupId, previewIndex++, { className: "persona-media-card", frameClass: "persona-media-frame" })}
+    `}
+  `).join("")}</div>`;
+}
+
+function ensurePersonaMediaLightbox() {
+  let node = $("personaMediaLightbox");
+  if (node) return node;
+  node = document.createElement("div");
+  node.id = "personaMediaLightbox";
+  node.className = "persona-media-lightbox";
+  node.hidden = true;
+  node.innerHTML = `
+    <div class="persona-media-lightbox-backdrop" data-media-lightbox-close></div>
+    <div class="persona-media-lightbox-dialog" role="dialog" aria-modal="true" aria-label="媒体预览">
+      <button type="button" class="persona-media-lightbox-close" data-media-lightbox-close aria-label="关闭预览">关闭</button>
+      <div class="persona-media-lightbox-meta">
+        <strong id="personaMediaLightboxTitle">媒体预览</strong>
+        <span id="personaMediaLightboxCounter"></span>
+      </div>
+      <div class="persona-media-lightbox-body" id="personaMediaLightboxBody"></div>
+      <div class="persona-media-lightbox-actions">
+        <button type="button" id="personaMediaPrev" data-media-lightbox-prev>上一张</button>
+        <button type="button" id="personaMediaNext" data-media-lightbox-next>下一张</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(node);
+  node.addEventListener("click", (event) => {
+    if (event.target.closest("[data-media-lightbox-close]")) closePersonaMediaLightbox();
+    if (event.target.closest("[data-media-lightbox-prev]")) movePersonaMediaLightbox(-1);
+    if (event.target.closest("[data-media-lightbox-next]")) movePersonaMediaLightbox(1);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !node.hidden) closePersonaMediaLightbox();
+  });
+  return node;
+}
+
+function closePersonaMediaLightbox() {
+  const node = $("personaMediaLightbox");
+  if (!node) return;
+  node.hidden = true;
+  const body = $("personaMediaLightboxBody");
+  if (body) body.innerHTML = "";
+  state.mediaLightbox.groupId = "";
+  state.mediaLightbox.index = 0;
+}
+
+function syncPersonaMediaLightboxNav(total, index) {
+  const counter = $("personaMediaLightboxCounter");
+  const prev = $("personaMediaPrev");
+  const next = $("personaMediaNext");
+  if (counter) counter.textContent = total > 1 ? `${index + 1} / ${total}` : "";
+  if (prev) prev.disabled = total <= 1 || index <= 0;
+  if (next) next.disabled = total <= 1 || index >= total - 1;
+}
+
+function renderPersonaMediaLightboxCurrent() {
+  const groupId = String(state.mediaLightbox.groupId || "");
+  const index = Number(state.mediaLightbox.index || 0);
+  const items = state.mediaPreviewGroups[groupId] || [];
+  const item = items[index];
+  if (!item?.previewUrl) {
+    closePersonaMediaLightbox();
+    return;
+  }
+  const node = ensurePersonaMediaLightbox();
+  const title = $("personaMediaLightboxTitle");
+  const body = $("personaMediaLightboxBody");
+  if (!body) return;
+  if (title) title.textContent = item.label || `${mediaKindLabel(item.type)}预览`;
+  body.innerHTML = item.type === "video"
+    ? `<video class="persona-media-lightbox-frame" src="${esc(item.previewUrl)}" controls autoplay playsinline preload="metadata" onerror="handlePersonaMediaLightboxError(this, '视频加载失败，原始文件可能已失效。')"></video>`
+    : item.type === "audio"
+      ? `<audio class="persona-media-lightbox-audio" src="${esc(item.previewUrl)}" controls autoplay onerror="handlePersonaMediaLightboxError(this, '音频加载失败，原始文件可能已失效。')"></audio>`
+      : `<img class="persona-media-lightbox-frame" src="${esc(item.previewUrl)}" alt="${esc(item.label || "媒体预览")}" onerror="handlePersonaMediaLightboxError(this, '图片加载失败，原始文件可能已失效。')" />`;
+  syncPersonaMediaLightboxNav(items.length, index);
+  node.hidden = false;
+}
+
+function openPersonaMediaLightbox(groupId, index = 0) {
+  const items = state.mediaPreviewGroups[String(groupId || "")] || [];
+  if (!items.length) return;
+  state.mediaLightbox.groupId = String(groupId || "");
+  state.mediaLightbox.index = Math.max(0, Math.min(Number(index || 0), items.length - 1));
+  renderPersonaMediaLightboxCurrent();
+}
+
+function movePersonaMediaLightbox(step) {
+  const groupId = String(state.mediaLightbox.groupId || "");
+  const items = state.mediaPreviewGroups[groupId] || [];
+  if (!items.length) return;
+  const nextIndex = state.mediaLightbox.index + Number(step || 0);
+  if (nextIndex < 0 || nextIndex >= items.length) return;
+  state.mediaLightbox.index = nextIndex;
+  renderPersonaMediaLightboxCurrent();
+}
+
+function handlePersonaMediaFrameError(node) {
+  if (!node) return;
+  const placeholder = document.createElement("div");
+  placeholder.className = "persona-media-frame persona-media-frame--empty";
+  placeholder.innerHTML = "<strong>媒体已失效</strong><small>源文件无法加载</small>";
+  node.replaceWith(placeholder);
+  const host = placeholder.closest(".persona-media-card");
+  if (host) {
+    host.classList.add("is-unavailable");
+    host.removeAttribute("data-media-preview-group");
+    host.removeAttribute("data-media-preview-index");
+    host.removeAttribute("data-media-preview-type");
+    host.removeAttribute("data-media-preview-label");
+  }
+}
+
+function handlePersonaMediaLightboxError(node, message) {
+  const body = $("personaMediaLightboxBody");
+  if (!body) return;
+  body.innerHTML = `<div class="persona-media-lightbox-empty">${esc(message || "媒体加载失败")}</div>`;
+}
+
+window.handlePersonaMediaFrameError = handlePersonaMediaFrameError;
+window.handlePersonaMediaLightboxError = handlePersonaMediaLightboxError;
+
 function renderPersonaDraftRows(posts) {
   if (!posts.length) return `<div class="empty-state">当前还没有推文草稿。先新建一条，再进入发布步骤。</div>`;
+  const personaId = String(selectedPersona()?.id || "");
   return `<div class="compact-list">${posts.map((post) => `
     <article class="compact-row ${String(post.id) === String(state.selectedPersonaPostId) ? "is-selected" : ""}">
       <strong>${esc(post.title || "未命名草稿")}</strong>
       <p>${esc(String(post.content || "").slice(0, 220))}</p>
+      ${renderPersonaMediaPreview(personaDraftMediaItems(personaId, post), { compact: true })}
       <span>${esc(formatTime(post.published_at || post.updated_at || post.created_at))}</span>
       <div class="row-actions">
         <button type="button" data-persona-use-post="${esc(post.id)}">选中草稿</button>
@@ -946,11 +1287,13 @@ function personaPublishHistoryRows(persona = selectedPersona()) {
 
 function personaPublishPreview(post) {
   if (!post) return `<div class="empty-state">请先在“推文草稿”里创建并选中一条推文。</div>`;
+  const personaId = String(selectedPersona()?.id || "");
   return `
     <div class="flow-box">
       <span>当前草稿</span>
       <strong>${esc(post.title || "未命名草稿")}</strong>
       <span>${esc(String(post.content || "").slice(0, 240) || "暂无正文")}</span>
+      ${renderPersonaMediaPreview(personaDraftMediaItems(personaId, post))}
     </div>
   `;
 }
@@ -2164,7 +2507,7 @@ async function loadPersonaProfile(personaId, { force = false } = {}) {
 function automationScreenshotUrlFromPath(pathValue) {
   const value = String(pathValue || "").trim();
   if (!value) return "";
-  if (value.startsWith("/api/")) return value;
+  if (value.startsWith("/api/")) return directMediaPreviewUrl(value);
   const parts = value.split(/[\\/]/).filter(Boolean);
   const filename = parts[parts.length - 1] || "";
   return filename ? `/api/persona_dashboard/automation/screenshots/${encodeURIComponent(filename)}` : "";
@@ -2172,21 +2515,21 @@ function automationScreenshotUrlFromPath(pathValue) {
 
 function latestSocialTaskScreenshot(task, logs = []) {
   const result = task?.result || {};
-  const direct = String(result.screenshot_url || result.screenshotUrl || "").trim();
+  const direct = directMediaPreviewUrl(result.screenshot_url || result.screenshotUrl);
   if (direct) return direct;
   const directFromPath = automationScreenshotUrlFromPath(result.screenshot_path || result.screenshotPath || result.screenshot);
   if (directFromPath) return directFromPath;
   const checkpoints = Array.isArray(result.checkpoints) ? result.checkpoints : [];
   for (let index = checkpoints.length - 1; index >= 0; index -= 1) {
     const checkpoint = checkpoints[index] || {};
-    const checkpointUrl = String(checkpoint.screenshot_url || checkpoint.screenshotUrl || "").trim();
+    const checkpointUrl = directMediaPreviewUrl(checkpoint.screenshot_url || checkpoint.screenshotUrl);
     if (checkpointUrl) return checkpointUrl;
     const checkpointPath = automationScreenshotUrlFromPath(checkpoint.screenshot_path || checkpoint.screenshotPath || checkpoint.screenshot);
     if (checkpointPath) return checkpointPath;
   }
   for (let index = logs.length - 1; index >= 0; index -= 1) {
     const log = logs[index] || {};
-    const logUrl = String(log.screenshot_url || "").trim();
+    const logUrl = directMediaPreviewUrl(log.screenshot_url);
     if (logUrl) return logUrl;
     const logPath = automationScreenshotUrlFromPath(log.screenshot_path);
     if (logPath) return logPath;
@@ -2205,6 +2548,10 @@ function renderSocialTaskResult(task, logs = [], emptyText = "提交后，这里
   const publishedUrl = String(result.published_url || result.publishedUrl || result.url || result.post_url || "").trim();
   const recentLogs = (logs || []).slice(-4).reverse();
   const terminal = ["success", "failed", "cancelled", "need_manual"].includes(String(task.status || ""));
+  const screenshotReason = legacyMediaPreviewReason(screenshotUrl);
+  const screenshotGroupId = screenshotUrl && !screenshotReason
+    ? registerMediaPreviewGroup([{ previewUrl: screenshotUrl, type: "image", label: "任务截图" }])
+    : "";
   return `
     <div class="persona-inline-panel persona-publish-result-card">
       <div class="flow-box">
@@ -2214,7 +2561,11 @@ function renderSocialTaskResult(task, logs = [], emptyText = "提交后，这里
       </div>
       ${task.error ? `<div class="persona-warning-inline">${esc(task.error)}</div>` : ""}
       ${publishedUrl ? `<div class="row-actions"><a href="${esc(publishedUrl)}" target="_blank" rel="noopener">查看任务结果</a></div>` : ""}
-      ${screenshotUrl ? `<a class="publish-result-link" href="${esc(screenshotUrl)}" target="_blank" rel="noopener"><img class="publish-result-image" src="${esc(screenshotUrl)}" alt="任务截图" /></a>` : `<div class="empty-state">${terminal ? "当前任务没有返回截图。" : "执行中，截图生成后会显示在这里。"}</div>`}
+      ${screenshotUrl
+        ? (screenshotReason
+          ? `<div class="publish-result-link is-unavailable"><div class="persona-media-frame persona-media-frame--empty"><strong>媒体不可预览</strong><small>${esc(screenshotReason)}</small></div></div>`
+          : renderMediaPreviewButton({ previewUrl: screenshotUrl, type: "image", label: "任务截图" }, screenshotGroupId, 0, { className: "publish-result-link", frameClass: "publish-result-image", caption: "任务截图" }))
+        : `<div class="empty-state">${terminal ? "当前任务没有返回截图。" : "执行中，截图生成后会显示在这里。"}</div>`}
       ${recentLogs.length ? `<div class="compact-list">${recentLogs.map((log) => `
         <article class="compact-row compact-row-log">
           <strong>${esc(logStageLabel(log.stage, log.level))}</strong>
@@ -3331,6 +3682,14 @@ function bindEvents() {
     }
   });
   $("moduleBody").addEventListener("click", (event) => {
+    const previewButton = event.target.closest("[data-media-preview-group]");
+    if (previewButton) {
+      openPersonaMediaLightbox(
+        previewButton.dataset.mediaPreviewGroup || "",
+        Number(previewButton.dataset.mediaPreviewIndex || 0),
+      );
+      return;
+    }
     if (event.target.closest("[data-persona-create]")) createPersonaArchive().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
     if (event.target.closest("[data-persona-generate-posts]")) generatePersonaDraftPosts().catch((error) => showMsg("commandMsg", error.detail || error.message || "自动生成失败", false));
     if (event.target.closest("[data-persona-create-post]")) createPersonaDraftPost().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
@@ -3517,6 +3876,7 @@ function bindPersonaPaidTaskEvents() {
 
 async function init() {
   applyTheme(currentTheme());
+  ensurePersonaMediaLightbox();
   bindEvents();
   bindPersonaPaidTaskEvents();
   renderWorkspace();

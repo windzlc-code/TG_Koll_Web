@@ -24,7 +24,7 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import requests
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -13792,6 +13792,12 @@ def _automation_screenshot_url(path_value: Any) -> str:
     path_text = str(path_value or "").strip()
     if not path_text:
         return ""
+    if re.match(r"^(?:https?:)?//", path_text, re.I):
+        return path_text
+    if re.match(r"^/api/", path_text, re.I):
+        return "" if "?" in path_text else path_text
+    if "?" in path_text:
+        return ""
     return f"/api/persona_dashboard/automation/screenshots/{Path(path_text).name}"
 
 
@@ -13813,6 +13819,7 @@ def _compact_persona_archive_post(post: dict[str, Any]) -> dict[str, Any]:
         "automation_task_id": str(post.get("automationTaskId") or "").strip(),
         "media_url": str(post.get("mediaUrl") or post.get("imageUrl") or ""),
         "media_type": str(post.get("mediaType") or ""),
+        "media_items": _compact_dashboard_media_items(post, published_meta),
     }
 
 
@@ -14064,9 +14071,79 @@ def _list_persona_archive_posts(archive_id: str) -> list[dict[str, Any]]:
     if not archive:
         raise HTTPException(status_code=404, detail="人设不存在。")
     posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
-    rows = [_compact_persona_archive_post(post) for post in posts if isinstance(post, dict)]
+    rows = []
+    for post in posts:
+        if not isinstance(post, dict):
+            continue
+        compact = _compact_persona_archive_post(post)
+        compact["media_items"] = _previewable_persona_media_items(
+            compact.get("media_items") if isinstance(compact.get("media_items"), list) else [],
+            archive_id=clean_id,
+            post_id=str(compact.get("id") or "").strip(),
+        )
+        rows.append(compact)
     rows.sort(key=lambda item: (str(item.get("published_at") or ""), str(item.get("updated_at") or ""), str(item.get("created_at") or "")), reverse=True)
     return rows
+
+
+def _serve_persona_archive_post_media(archive_id: str, post_id: str, index: int) -> FileResponse:
+    clean_archive_id = str(archive_id or "").strip()
+    clean_post_id = str(post_id or "").strip()
+    if not clean_archive_id or not clean_post_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID 或帖子 ID。")
+    _, _, archives = _persona_archive_source_for_write()
+    archive = _find_persona_archive(archives, clean_archive_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+    raw_post = next(
+        (item for item in posts if isinstance(item, dict) and str(item.get("id") or "").strip() == clean_post_id),
+        None,
+    )
+    if not raw_post:
+        raise HTTPException(status_code=404, detail="帖子不存在或已经删除。")
+    published_meta = raw_post.get("publishedMeta") if isinstance(raw_post.get("publishedMeta"), dict) else {}
+    media_items = _compact_dashboard_media_items(raw_post, published_meta)
+    if index < 0 or index >= len(media_items):
+        raise HTTPException(status_code=404, detail="媒体文件不存在。")
+    raw_url = str((media_items[index] or {}).get("url") or "").strip()
+    if not raw_url:
+        raise HTTPException(status_code=404, detail="媒体文件不存在。")
+    path = Path(raw_url).expanduser().resolve()
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="媒体源文件不存在。")
+    return FileResponse(str(path), filename=path.name)
+
+
+def _serve_persona_archive_publish_history_media(archive_id: str, history_id: str, index: int) -> FileResponse:
+    clean_archive_id = str(archive_id or "").strip()
+    clean_history_id = str(history_id or "").strip()
+    if not clean_archive_id or not clean_history_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID 或发布记录 ID。")
+    _, _, archives = _persona_archive_source_for_write()
+    archive = _find_persona_archive(archives, clean_archive_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    publish_history = archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []
+    raw_record = next(
+        (item for item in publish_history if isinstance(item, dict) and str(item.get("id") or "").strip() == clean_history_id),
+        None,
+    )
+    if not raw_record:
+        raise HTTPException(status_code=404, detail="发布记录不存在。")
+    published_meta = raw_record.get("publishedMeta") if isinstance(raw_record.get("publishedMeta"), dict) else {}
+    source_meta = raw_record.get("sourceMeta") if isinstance(raw_record.get("sourceMeta"), dict) else {}
+    published_targets = raw_record.get("publishedTargets") if isinstance(raw_record.get("publishedTargets"), list) else []
+    media_items = _compact_dashboard_media_items(raw_record, published_meta, source_meta, published_targets)
+    if index < 0 or index >= len(media_items):
+        raise HTTPException(status_code=404, detail="媒体文件不存在。")
+    raw_url = str((media_items[index] or {}).get("url") or "").strip()
+    if not raw_url:
+        raise HTTPException(status_code=404, detail="媒体文件不存在。")
+    path = Path(raw_url).expanduser().resolve()
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="媒体源文件不存在。")
+    return FileResponse(str(path), filename=path.name)
 
 
 def _list_persona_archive_publish_history(archive_id: str) -> list[dict[str, Any]]:
@@ -14078,11 +14155,17 @@ def _list_persona_archive_publish_history(archive_id: str) -> list[dict[str, Any
     if not archive:
         raise HTTPException(status_code=404, detail="人设不存在。")
     publish_history = archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []
-    rows = [
-        _compact_publish_record(record)
-        for record in publish_history
-        if isinstance(record, dict) and not _is_internal_login_publish_record(record)
-    ]
+    rows = []
+    for record in publish_history:
+        if not isinstance(record, dict) or _is_internal_login_publish_record(record):
+            continue
+        compact = _compact_publish_record(record)
+        compact["media_items"] = _previewable_persona_media_items(
+            compact.get("media_items") if isinstance(compact.get("media_items"), list) else [],
+            archive_id=clean_id,
+            history_id=str(compact.get("id") or "").strip(),
+        )
+        rows.append(compact)
     rows.sort(
         key=lambda item: (
             str(item.get("published_at") or ""),
@@ -14814,6 +14897,8 @@ def _compact_dashboard_setup(setup: dict[str, Any]) -> dict[str, Any]:
 
 def _compact_publish_record(record: dict[str, Any]) -> dict[str, Any]:
     published_meta = record.get("publishedMeta") if isinstance(record.get("publishedMeta"), dict) else {}
+    source_meta = record.get("sourceMeta") if isinstance(record.get("sourceMeta"), dict) else {}
+    published_targets = record.get("publishedTargets") if isinstance(record.get("publishedTargets"), list) else []
     automation_task_type = record.get("automationTaskType") or record.get("automation_task_type") or published_meta.get("taskType")
     screenshot_path = str(record.get("screenshotUrl") or "")
     return {
@@ -14834,6 +14919,7 @@ def _compact_publish_record(record: dict[str, Any]) -> dict[str, Any]:
         "automation_task_id": record.get("automationTaskId") or record.get("automation_task_id") or published_meta.get("taskId") or published_meta.get("task_id"),
         "screenshot_path": screenshot_path,
         "screenshot_url": _automation_screenshot_url(screenshot_path),
+        "media_items": _compact_dashboard_media_items(record, published_meta, source_meta, published_targets),
     }
 
 
@@ -14919,6 +15005,52 @@ def _compact_dashboard_media_items(*sources: Any) -> list[dict[str, str]]:
     for source in sources:
         walk(source)
     return media[:12]
+
+
+def _is_direct_preview_media_url(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    if re.match(r"^/api/persona_dashboard/personas/[^/]+/(?:posts|publish_history)/[^/]+/media/\d+$", text, re.I):
+        return False
+    if re.match(r"^/api/persona_dashboard/automation/screenshots/screenshot\?", text, re.I):
+        return False
+    return bool(re.match(r"^(?:https?:)?//", text, re.I) or re.match(r"^(?:data:|blob:|/api/)", text, re.I))
+
+
+def _previewable_persona_media_items(items: list[dict[str, str]], *, archive_id: str = "", post_id: str = "", history_id: str = "") -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for index, item in enumerate(items or []):
+        url = str((item or {}).get("url") or "").strip()
+        if not url:
+            continue
+        preview_url = ""
+        reason = ""
+        if _is_direct_preview_media_url(url):
+            preview_url = url
+        elif archive_id and post_id:
+            path = Path(url).expanduser().resolve()
+            if path.is_file():
+                preview_url = f"/api/persona_dashboard/personas/{quote(str(archive_id).strip(), safe='')}/posts/{quote(str(post_id).strip(), safe='')}/media/{index}"
+            else:
+                reason = "原始媒体文件不存在"
+        elif archive_id and history_id:
+            path = Path(url).expanduser().resolve()
+            if path.is_file():
+                preview_url = f"/api/persona_dashboard/personas/{quote(str(archive_id).strip(), safe='')}/publish_history/{quote(str(history_id).strip(), safe='')}/media/{index}"
+            else:
+                reason = "原始媒体文件不存在"
+        elif not preview_url:
+            reason = "媒体链接已失效"
+        rows.append({
+            "url": url,
+            "type": str((item or {}).get("type") or "").strip(),
+            "label": str((item or {}).get("label") or "").strip(),
+            "preview_url": preview_url,
+            "unavailable": not bool(preview_url),
+            "reason": reason if not preview_url else "",
+        })
+    return rows
 
 
 def _dashboard_post_match_tokens(row: Any) -> set[str]:
@@ -16160,9 +16292,17 @@ def create_app() -> FastAPI:
     def api_persona_dashboard_persona_posts(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
         return {"ok": True, "posts": _list_persona_archive_posts(archive_id)}
 
+    @app.get("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}/media/{index}")
+    def api_persona_dashboard_persona_post_media(archive_id: str, post_id: str, index: int, _user: dict[str, Any] = Depends(get_current_user)):
+        return _serve_persona_archive_post_media(archive_id, post_id, index)
+
     @app.get("/api/persona_dashboard/personas/{archive_id}/publish_history")
     def api_persona_dashboard_persona_publish_history(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
         return {"ok": True, "publish_history": _list_persona_archive_publish_history(archive_id)}
+
+    @app.get("/api/persona_dashboard/personas/{archive_id}/publish_history/{history_id}/media/{index}")
+    def api_persona_dashboard_persona_publish_history_media(archive_id: str, history_id: str, index: int, _user: dict[str, Any] = Depends(get_current_user)):
+        return _serve_persona_archive_publish_history_media(archive_id, history_id, index)
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/memories")
     def api_persona_dashboard_persona_memories(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):

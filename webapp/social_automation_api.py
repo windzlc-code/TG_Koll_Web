@@ -957,16 +957,25 @@ def _archive_paths_for_sync() -> list[Path]:
     ]
 
 
-def _media_fields_from_payload(payload: dict[str, Any]) -> dict[str, str]:
+def _media_fields_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
     media_paths = [str(item or "").strip() for item in (payload.get("media_paths") or []) if str(item or "").strip()]
     if not media_paths:
         return {}
+    media_items = []
+    for path in media_paths:
+        suffix = Path(path).suffix.lower()
+        media_type = "video" if suffix in {".mp4", ".mov", ".m4v", ".webm"} else "image"
+        media_items.append({
+            "url": path,
+            "type": media_type,
+            "label": Path(path).name or media_type,
+        })
     first = media_paths[0]
     suffix = Path(first).suffix.lower()
     media_type = "video" if suffix in {".mp4", ".mov", ".m4v", ".webm"} else "image"
     if media_type == "video":
-        return {"mediaType": "video", "videoUrl": first, "mediaUrl": first}
-    return {"mediaType": "image", "imageUrl": first, "mediaUrl": first}
+        return {"mediaType": "video", "videoUrl": first, "mediaUrl": first, "mediaItems": media_items}
+    return {"mediaType": "image", "imageUrl": first, "mediaUrl": first, "mediaItems": media_items}
 
 
 def _automation_action_label(task_type: str) -> str:
@@ -1295,7 +1304,7 @@ def _build_archive_sync_records(task: dict[str, Any], account: dict[str, Any], p
         "viewCount": 0,
     }
     media_fields = _media_fields_from_payload(payload)
-    source_meta.update({key: value for key, value in media_fields.items() if key in {"imageUrl", "videoUrl", "mediaUrl"}})
+    source_meta.update({key: value for key, value in media_fields.items() if key in {"imageUrl", "videoUrl", "mediaUrl", "mediaItems"}})
     title = _automation_action_label(task_type)
     publish_record = {
         "id": f"webauto-pub-{task_id}",
