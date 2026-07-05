@@ -14947,6 +14947,38 @@ def _list_persona_archive_images(archive_id: str) -> dict[str, Any]:
     }
 
 
+def _serve_persona_archive_image(archive_id: str, image_id: str) -> Response:
+    clean_archive_id = str(archive_id or "").strip()
+    clean_image_id = str(image_id or "").strip()
+    if not clean_archive_id or not clean_image_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID 或图片 ID。")
+    _, _, archives = _persona_archive_source_for_write(clean_archive_id)
+    archive = _find_persona_archive(archives, clean_archive_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
+    item = next(
+        (
+            row for row in library
+            if isinstance(row, dict) and str(row.get("id") or "").strip() == clean_image_id
+        ),
+        None,
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="人设图片不存在。")
+    raw_url = str(item.get("imageUrl") or "").strip()
+    if not raw_url:
+        raise HTTPException(status_code=404, detail="人设图片不存在。")
+    if raw_url.startswith("data:"):
+        return Response(content=raw_url, media_type="text/plain; charset=utf-8")
+    if re.match(r"^https?://", raw_url, re.I):
+        return RedirectResponse(url=raw_url, status_code=307)
+    path = Path(raw_url).expanduser().resolve()
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="人设图片源文件不存在。")
+    return FileResponse(str(path), filename=path.name)
+
+
 def _persona_archive_persist_reference_image(archive_id: str, *, image_url: str, prompt: str = "", mode: str = "closed-model", source: str = "portrait", aspect_ratio: str = "1:1", notes: str = "current persona reference image") -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     image_url = str(image_url or "").strip()
@@ -16886,6 +16918,10 @@ def create_app() -> FastAPI:
     @app.get("/api/persona_dashboard/personas/{archive_id}/images")
     def api_persona_dashboard_persona_images(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
         return _list_persona_archive_images(archive_id)
+
+    @app.get("/api/persona_dashboard/personas/{archive_id}/images/{image_id}")
+    def api_persona_dashboard_persona_image(archive_id: str, image_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+        return _serve_persona_archive_image(archive_id, image_id)
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/images/generate")
     def api_persona_dashboard_generate_persona_image(archive_id: str, payload: PersonaDashboardPersonaImageGeneratePayload, _user: dict[str, Any] = Depends(get_current_user)):

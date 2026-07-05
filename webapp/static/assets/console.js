@@ -38,6 +38,7 @@ const state = {
   personaListEditorId: "",
   personaNewGroupName: "",
   personaMemories: {},
+  personaImageLibraries: {},
   personaDraftPosts: {},
   personaPublishHistories: {},
   personaPublishAccountIds: {},
@@ -45,6 +46,7 @@ const state = {
   personaPublishWatchers: {},
   personaAutomationResults: {},
   personaAutomationWatchers: {},
+  personaMediaTasks: {},
   personaForms: {},
   renderedPersonaId: "",
   personaCreateMode: false,
@@ -428,18 +430,16 @@ function personaFormState(personaId) {
   const key = String(personaId || "").trim();
   if (!key) {
     return {
-      generate: { mode: "ai", paidTaskType: "text_to_image", paidAspectRatio: "auto", paidResolution: "720p", paidDuration: 2, count: 3, targetWords: 120, contentBranch: "", textModelBranch: "", contentTimeSlot: "", prompt: "", selectedMemoryIds: [] },
+      generate: { mode: "ai", count: 3, targetWords: 120, contentBranch: "", textModelBranch: "", contentTimeSlot: "", prompt: "", selectedMemoryIds: [] },
       draft: { title: "", content: "" },
+      media: { taskType: "text_to_image", prompt: "", aspectRatio: "1:1", resolution: "720p", duration: 2, replaceExisting: false },
+      images: { prompt: "", aspectRatio: "1:1" },
     };
   }
   if (!state.personaForms[key]) {
     state.personaForms[key] = {
       generate: {
         mode: "ai",
-        paidTaskType: "text_to_image",
-        paidAspectRatio: "auto",
-        paidResolution: "720p",
-        paidDuration: 2,
         count: 3,
         targetWords: 120,
         contentBranch: "",
@@ -452,6 +452,18 @@ function personaFormState(personaId) {
         title: "",
         content: "",
       },
+      media: {
+        taskType: "text_to_image",
+        prompt: "",
+        aspectRatio: "1:1",
+        resolution: "720p",
+        duration: 2,
+        replaceExisting: false,
+      },
+      images: {
+        prompt: "",
+        aspectRatio: "1:1",
+      },
     };
   }
   return state.personaForms[key];
@@ -462,10 +474,6 @@ function snapshotPersonaCurrentForm() {
   if (!key) return;
   const form = personaFormState(key);
   if ($("personaGenerateMode")) form.generate.mode = String($("personaGenerateMode")?.value || "ai");
-  if ($("personaGeneratePaidTaskType")) form.generate.paidTaskType = String($("personaGeneratePaidTaskType")?.value || "text_to_image");
-  if ($("personaPaidAspectRatio")) form.generate.paidAspectRatio = String($("personaPaidAspectRatio")?.value || "auto");
-  if ($("personaPaidResolution")) form.generate.paidResolution = String($("personaPaidResolution")?.value || "720p");
-  if ($("personaPaidDuration")) form.generate.paidDuration = Number($("personaPaidDuration")?.value || form.generate.paidDuration || 2);
   if ($("personaGenerateCount")) form.generate.count = Number($("personaGenerateCount")?.value || form.generate.count || 3);
   if ($("personaGenerateTargetWords")) form.generate.targetWords = Number($("personaGenerateTargetWords")?.value || form.generate.targetWords || 120);
   if ($("personaGeneratePaidEnabled")) form.generate.contentBranch = $("personaGeneratePaidEnabled")?.checked ? "r18" : "nonr18";
@@ -479,6 +487,25 @@ function snapshotPersonaCurrentForm() {
   }
   if ($("personaDraftTitle")) form.draft.title = String($("personaDraftTitle")?.value || "");
   if ($("personaDraftContent")) form.draft.content = String($("personaDraftContent")?.value || "");
+  if ($("personaMediaTaskPrompt")) form.media.prompt = String($("personaMediaTaskPrompt")?.value || "");
+  if ($("personaMediaAspectRatio")) form.media.aspectRatio = String($("personaMediaAspectRatio")?.value || "1:1");
+  if ($("personaMediaResolution")) form.media.resolution = String($("personaMediaResolution")?.value || "720p");
+  if ($("personaMediaDuration")) form.media.duration = Number($("personaMediaDuration")?.value || form.media.duration || 2);
+  if ($("personaMediaReplaceExisting")) form.media.replaceExisting = Boolean($("personaMediaReplaceExisting")?.checked);
+  if ($("personaImagePrompt")) form.images.prompt = String($("personaImagePrompt")?.value || "");
+  if ($("personaImageAspectRatio")) form.images.aspectRatio = String($("personaImageAspectRatio")?.value || "1:1");
+}
+
+function personaImageLibraryState(personaId) {
+  return state.personaImageLibraries[String(personaId || "").trim()] || null;
+}
+
+function personaMediaTaskKey(personaId, postId) {
+  return `${String(personaId || "").trim()}:${String(postId || "").trim()}`;
+}
+
+function personaMediaTaskState(personaId, postId) {
+  return state.personaMediaTasks[personaMediaTaskKey(personaId, postId)] || null;
 }
 
 function fallbackPersonaProfile(persona) {
@@ -1518,6 +1545,46 @@ function renderPersonaSettingsPanelV2(persona, account, profile, step) {
   const selectedPreset = selectedPersonaPreset(profile);
   const selectedPresetId = String(selectedPreset?.id || "");
   const currentStep = step || "profile";
+  if (currentStep === "images") {
+    const form = personaFormState(persona.id).images;
+    const library = personaImageLibraryState(persona.id);
+    const currentReferenceItem = (Array.isArray(library?.items) ? library.items : []).find((item) => item && item.is_reference) || null;
+    const currentReferenceUrl = String(currentReferenceItem?.preview_url || library?.current_reference_url || "").trim();
+    return `
+      <div class="persona-inline-panel">
+        <div class="persona-head-copy">
+          <strong>人设图</strong>
+          <span class="persona-panel-intro">生成并管理当前人设的参考图。</span>
+        </div>
+        ${currentReferenceUrl ? `
+          <div class="persona-inline-panel persona-inline-panel--nested">
+            <strong>当前参考图</strong>
+            ${renderPersonaMediaPreview([{ previewUrl: currentReferenceUrl, url: currentReferenceUrl, type: "image", label: "当前参考图" }])}
+          </div>
+        ` : `<div class="empty-state">当前还没有参考图，先生成一张。</div>`}
+        <div class="form-grid persona-detail-controls">
+          <label>图像比例
+            <select id="personaImageAspectRatio">
+              <option value="1:1" ${String(form.aspectRatio || "1:1") === "1:1" ? "selected" : ""}>1:1</option>
+              <option value="3:4" ${String(form.aspectRatio || "") === "3:4" ? "selected" : ""}>3:4</option>
+              <option value="4:3" ${String(form.aspectRatio || "") === "4:3" ? "selected" : ""}>4:3</option>
+              <option value="9:16" ${String(form.aspectRatio || "") === "9:16" ? "selected" : ""}>9:16</option>
+              <option value="16:9" ${String(form.aspectRatio || "") === "16:9" ? "selected" : ""}>16:9</option>
+            </select>
+          </label>
+        </div>
+        <label>人设图补充提示
+          <textarea id="personaImagePrompt" rows="4" placeholder="可选，留空则按当前人设内容生成。">${esc(form.prompt || "")}</textarea>
+        </label>
+        <div class="row-actions">
+          <button type="button" class="primary" data-persona-generate-image>${currentReferenceUrl ? "重新生成人设图" : "生成人设图"}</button>
+        </div>
+        <div class="persona-inline-panel persona-inline-panel--nested">
+          <strong>图库预览</strong>
+          ${renderPersonaImageLibraryGrid(library)}
+        </div>
+      </div>`;
+  }
   if (currentStep === "style") {
     return `
       <div class="persona-inline-panel">
@@ -1994,8 +2061,10 @@ function renderConfirmSummary() {
     const step = currentPersonaGroupStep(groupKey, profile);
     const finalAction = {
       generate: "提交人设草稿生成任务",
+      media: "生成媒体或更新当前草稿媒体",
       overview: "查看当前人设资料",
       posts: "新建或选择推文草稿",
+      history: "查看发布历史",
       publish: "提交浏览器发布任务",
       login: "保存凭证或提交登录任务",
       reply_comment: "提交 Threads 评论回复任务",
@@ -3057,6 +3126,16 @@ async function loadPersonaMemories(personaId, { force = false } = {}) {
   return rows;
 }
 
+async function loadPersonaImageLibrary(personaId, { force = false } = {}) {
+  const key = String(personaId || "").trim();
+  if (!key) return null;
+  if (!force && state.personaImageLibraries[key]) return state.personaImageLibraries[key];
+  const data = await api(`/api/persona_dashboard/personas/${encodeURIComponent(key)}/images`).catch(() => ({ ok: true, items: [], current_reference_url: "", is_workflow_persona: false }));
+  state.personaImageLibraries[key] = data;
+  if (state.activeModule === "personas" && key === String(state.selectedPersonaId || "")) renderPersonaDetail();
+  return data;
+}
+
 async function loadPersonaPublishHistory(personaId, { force = false } = {}) {
   const key = String(personaId || "").trim();
   if (!key) return [];
@@ -3176,6 +3255,213 @@ async function createPersonaDraftPost() {
   showMsg("commandMsg", `草稿已保存：${result.title || result.id || "-"}`, true);
 }
 
+async function submitPersonaImageGeneration() {
+  const persona = selectedPersona();
+  const profile = selectedPersonaProfile();
+  if (!persona || !profile) {
+    showMsg("commandMsg", "请先选择一个人设。", false);
+    return;
+  }
+  if (profile.is_workflow_persona) {
+    showMsg("commandMsg", "工作流人设不需要单独生成人设图。", false);
+    return;
+  }
+  snapshotPersonaCurrentForm();
+  const form = personaFormState(persona.id).images;
+  showMsg("commandMsg", "正在生成人设图...", true);
+  const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/images/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      prompt: String(form.prompt || "").trim(),
+      aspect_ratio: String(form.aspectRatio || "1:1"),
+      mode: "person",
+    }),
+  });
+  state.personaImageLibraries[String(persona.id)] = result;
+  await Promise.all([
+    loadPersonas(),
+    loadPersonaProfile(persona.id, { force: true }).catch(() => {}),
+  ]);
+  renderPersonaDetail();
+  showMsg("commandMsg", "人设图已生成并写入图库。", true);
+}
+
+async function refreshPersonaMediaTask(personaId, postId, taskId) {
+  const detail = await api(`/api/tasks/${encodeURIComponent(taskId)}`);
+  const key = personaMediaTaskKey(personaId, postId);
+  state.personaMediaTasks[key] = {
+    taskId,
+    taskType: String(detail.type || "").trim(),
+    status: String(detail.status || "").trim(),
+    detail,
+  };
+  if (
+    String(selectedPersona()?.id || "") === String(personaId || "")
+    && String(selectedPersonaPost()?.id || "") === String(postId || "")
+    && state.personaGroup === "content"
+    && currentPersonaGroupStep("content", selectedPersonaProfile()) === "media"
+  ) {
+    renderPersonaDetail();
+    renderConfirmSummary();
+  }
+  return detail;
+}
+
+async function watchPersonaMediaTask(personaId, postId, taskId) {
+  const key = personaMediaTaskKey(personaId, postId);
+  for (let attempt = 0; attempt < 180; attempt += 1) {
+    const current = state.personaMediaTasks[key];
+    if (!current || String(current.taskId || "") !== String(taskId || "")) return;
+    const detail = await refreshPersonaMediaTask(personaId, postId, taskId).catch(() => null);
+    const status = String(detail?.status || "").trim();
+    if (["success", "failed", "cancelled"].includes(status)) {
+      await loadTasks().catch(() => {});
+      return;
+    }
+    await sleep(2000);
+  }
+}
+
+async function submitPersonaMediaTask() {
+  const persona = selectedPersona();
+  const profile = selectedPersonaProfile();
+  const post = selectedPersonaPost(persona);
+  if (!persona || !profile || !post) {
+    showMsg("commandMsg", "请先选中一条草稿。", false);
+    return;
+  }
+  snapshotPersonaCurrentForm();
+  const form = personaFormState(persona.id).media;
+  const taskType = String(form.taskType || "text_to_image");
+  const files = filesFromInput("personaMediaTaskFiles");
+  const imageCount = files.filter((file) => fileKind(file) === "image").length;
+  const minImages = Number(taskMeta[taskType]?.minImages || 0);
+  if (imageCount < minImages) {
+    showMsg("commandMsg", `当前任务至少需要 ${minImages} 张图片素材。`, false);
+    return;
+  }
+  const fallbackPrompt = String(post.content || "").trim();
+  const prompt = String(form.prompt || "").trim() || fallbackPrompt;
+  if (["text_to_image", "video_i2v"].includes(taskType) && !prompt) {
+    showMsg("commandMsg", "当前草稿没有正文，请补充提示词后再生成。", false);
+    return;
+  }
+  const params = compactPayload({
+    prompt,
+    prompt_text: prompt,
+    message: prompt,
+    persona_enabled: true,
+    persona_label: String(persona.name || profile.name || "").trim(),
+    tg_generation_context: String(profile.content || persona.content || "").trim(),
+    tg_use_llm_prompt: true,
+    related_persona_id: String(persona.id || "").trim(),
+    related_post_id: String(post.id || "").trim(),
+    draft_source_text: fallbackPrompt,
+    aspect_ratio: ["text_to_image", "image_generate"].includes(taskType) ? String(form.aspectRatio || "1:1") : undefined,
+    resolution: taskType === "video_i2v" ? String(form.resolution || "720p") : undefined,
+    duration_seconds: taskType === "video_i2v" ? Math.min(Math.max(Number(form.duration || 2), 2), 15) : undefined,
+  });
+  const body = new FormData();
+  body.append("task_type", taskType);
+  body.append("params_json", JSON.stringify(params));
+  files.forEach((file) => body.append("files", file, file.name));
+  showMsg("commandMsg", "正在提交推文配图任务...", true);
+  const result = await api("/api/tasks/submit", { method: "POST", body });
+  const key = personaMediaTaskKey(persona.id, post.id);
+  state.personaMediaTasks[key] = {
+    taskId: String(result.id || "").trim(),
+    taskType,
+    status: "queued",
+    detail: {
+      id: String(result.id || "").trim(),
+      type: taskType,
+      status: "queued",
+      media_items: [],
+    },
+  };
+  renderPersonaDetail();
+  renderConfirmSummary();
+  appendEvent("queued", `推文配图任务已创建：${result.id}`);
+  watchTask(result.id);
+  refreshPersonaMediaTask(persona.id, post.id, result.id).catch(() => {});
+  watchPersonaMediaTask(persona.id, post.id, result.id).catch(() => {});
+  await loadTasks().catch(() => {});
+  showMsg("commandMsg", `推文配图任务已提交：${result.id}`, true);
+}
+
+async function attachPersonaTaskMediaToPost(replaceExisting = false) {
+  const persona = selectedPersona();
+  const post = selectedPersonaPost(persona);
+  if (!persona || !post) {
+    showMsg("commandMsg", "请先选中一条草稿。", false);
+    return;
+  }
+  snapshotPersonaCurrentForm();
+  const taskState = personaMediaTaskState(persona.id, post.id);
+  if (!taskState?.taskId) {
+    showMsg("commandMsg", "当前还没有可回写的媒体任务结果。", false);
+    return;
+  }
+  showMsg("commandMsg", "正在把任务结果写回草稿媒体...", true);
+  await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/posts/${encodeURIComponent(post.id)}/media/from_task`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      task_id: taskState.taskId,
+      replace_existing: Boolean(replaceExisting),
+    }),
+  });
+  await loadPersonaDraftPosts(persona.id, { force: true });
+  renderPersonaDetail();
+  renderConfirmSummary();
+  showMsg("commandMsg", replaceExisting ? "任务结果已替换当前草稿媒体。" : "任务结果已追加到当前草稿。", true);
+}
+
+async function uploadPersonaPostMedia(replaceExisting = false) {
+  const persona = selectedPersona();
+  const post = selectedPersonaPost(persona);
+  if (!persona || !post) {
+    showMsg("commandMsg", "请先选中一条草稿。", false);
+    return;
+  }
+  const files = filesFromInput("personaPostMediaUploadFiles");
+  if (!files.length) {
+    showMsg("commandMsg", "请先选择要上传的媒体文件。", false);
+    return;
+  }
+  const body = new FormData();
+  body.append("replace_existing", replaceExisting ? "1" : "0");
+  files.forEach((file) => body.append("files", file, file.name));
+  showMsg("commandMsg", replaceExisting ? "正在替换草稿媒体..." : "正在追加草稿媒体...", true);
+  await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/posts/${encodeURIComponent(post.id)}/media/upload`, {
+    method: "POST",
+    body,
+  });
+  if ($("personaPostMediaUploadFiles")) $("personaPostMediaUploadFiles").value = "";
+  await loadPersonaDraftPosts(persona.id, { force: true });
+  renderPersonaDetail();
+  renderConfirmSummary();
+  showMsg("commandMsg", replaceExisting ? "草稿媒体已替换。" : "草稿媒体已追加。", true);
+}
+
+async function deletePersonaPostMedia(index) {
+  const persona = selectedPersona();
+  const post = selectedPersonaPost(persona);
+  if (!persona || !post) {
+    showMsg("commandMsg", "请先选中一条草稿。", false);
+    return;
+  }
+  showMsg("commandMsg", "正在删除草稿媒体...", true);
+  await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/posts/${encodeURIComponent(post.id)}/media/${encodeURIComponent(index)}`, {
+    method: "DELETE",
+  });
+  await loadPersonaDraftPosts(persona.id, { force: true });
+  renderPersonaDetail();
+  renderConfirmSummary();
+  showMsg("commandMsg", "草稿媒体已删除。", true);
+}
+
 function personaIsWorkflow(persona, profile = null) {
   if (typeof profile?.is_workflow_persona === "boolean") return profile.is_workflow_persona;
   if (typeof persona?.is_workflow_persona === "boolean") return persona.is_workflow_persona;
@@ -3229,18 +3515,20 @@ function renderPersonaCard(persona, groupId = "") {
   const editing = String(state.personaListEditorId || "") === String(persona.id || "");
   const currentGroups = personaGroupsForPersona(persona.id);
   const availableGroups = personaCollectionGroups().filter((group) => !currentGroups.some((item) => item.id === group.id));
+  const ungrouped = !currentGroups.length;
   return `
     <article class="persona-list-card ${selected ? "is-active" : ""} ${editing ? "is-editing" : ""}" data-persona-card="${esc(persona.id)}">
       <button type="button" class="persona-list-item" data-persona-select="${esc(persona.id)}">
         <span class="persona-card-title">
           <strong>${esc(persona.name || persona.id || "未命名人设")}</strong>
           ${renderPersonaKindBadge(persona)}
+          ${ungrouped ? `<span class="persona-kind-badge persona-ungrouped-badge">未分组</span>` : ""}
         </span>
         <small>${esc(personaExecutionAccountLabel(persona))}</small>
       </button>
       <button type="button" class="persona-card-edit" data-persona-edit="${esc(persona.id)}" title="编辑分组" aria-label="编辑分组">...</button>
       ${editing ? `
-        <div class="persona-group-editor">
+        <div class="persona-card-menu">
           <label>加入已有组
             <select data-persona-add-group-select="${esc(persona.id)}">
               <option value="">选择分组</option>
@@ -3265,28 +3553,21 @@ function renderPersonaFolder(group, map) {
   const personas = (group.persona_ids || []).map((id) => map.get(String(id))).filter(Boolean);
   const collapsed = Boolean(group.collapsed);
   return `
-    <section class="persona-folder ${collapsed ? "is-collapsed" : ""}">
-      <div class="persona-folder-head">
-        <button type="button" data-persona-toggle-folder="${esc(group.id)}">${collapsed ? "展开" : "收起"}</button>
+    <div class="persona-layer-group ${collapsed ? "is-collapsed" : ""}">
+      <div class="persona-layer-row persona-layer-row--group">
+        <button type="button" class="persona-layer-toggle" data-persona-toggle-folder="${esc(group.id)}">${collapsed ? "展开" : "收起"}</button>
         <strong>${esc(group.name)}</strong>
         <span>${personas.length} 个</span>
         <button type="button" data-persona-rename-group="${esc(group.id)}">重命名</button>
         <button type="button" data-persona-delete-group="${esc(group.id)}">删除</button>
       </div>
-      ${collapsed ? "" : `<div class="persona-folder-items">${personas.length ? personas.map((persona) => renderPersonaCard(persona, group.id)).join("") : `<div class="empty-state">这个组还没有人设。</div>`}</div>`}
-    </section>`;
+      ${collapsed ? "" : `<div class="persona-layer-children">${personas.length ? personas.map((persona) => renderPersonaCard(persona, group.id)).join("") : `<div class="persona-layer-empty">这个组还没有人设。</div>`}</div>`}
+    </div>`;
 }
 
 function renderPersonaUngrouped(personas) {
   if (!personas.length) return "";
-  return `
-    <section class="persona-folder persona-folder--ungrouped">
-      <div class="persona-folder-head">
-        <strong>未分组</strong>
-        <span>${personas.length} 个</span>
-      </div>
-      <div class="persona-folder-items">${personas.map((persona) => renderPersonaCard(persona)).join("")}</div>
-    </section>`;
+  return personas.map((persona) => renderPersonaCard(persona)).join("");
 }
 
 function renderPersonaCollectionList() {
@@ -3316,6 +3597,7 @@ function renderPersonaStepTabs(groupKey, profile) {
   if (groupKey === "content") {
     const tabs = [
       ["generate", "新建推文"],
+      ["media", "推文配图 / 媒体"],
       ["overview", "人设内容"],
       ["posts", "草稿与历史"],
       ["publish", "选择草稿进入发布"],
@@ -3358,12 +3640,123 @@ function renderPersonaGenerateModeTabs(mode) {
     ["custom", "自定义输入"],
   ];
   return `<div class="persona-step-tabs persona-subflow-tabs">${tabs.map(([value, label]) => `
+      <button
+        type="button"
+        class="${activeMode === value ? "is-active" : ""}"
+        data-persona-generate-mode="${esc(value)}"
+      >${esc(label)}</button>
+  `).join("")}</div>`;
+}
+
+function personaMediaTaskOptions() {
+  return [
+    ["text_to_image", "根据推文生图"],
+    ["image_generate", "图片生成"],
+    ["single_image_edit", "单图编辑"],
+    ["get_nano_banana", "双图编辑"],
+    ["face_swap", "人物换脸"],
+    ["video_i2v", "图生视频"],
+  ];
+}
+
+function renderPersonaMediaTaskTabs(taskType) {
+  const active = String(taskType || "text_to_image");
+  return `<div class="persona-step-tabs persona-subflow-tabs">${personaMediaTaskOptions().map(([value, label]) => `
     <button
       type="button"
-      class="${activeMode === value ? "is-active" : ""}"
-      data-persona-generate-mode="${esc(value)}"
+      class="${active === value ? "is-active" : ""}"
+      data-persona-media-task="${esc(value)}"
     >${esc(label)}</button>
   `).join("")}</div>`;
+}
+
+function taskOutputMediaItems(detail = {}) {
+  const rows = Array.isArray(detail?.media_items) ? detail.media_items : [];
+  return rows.map((item) => {
+    const previewUrl = String(item?.preview_url || item?.url || "").trim();
+    if (!previewUrl) return null;
+    return {
+      url: previewUrl,
+      previewUrl,
+      type: guessMediaType(previewUrl, item?.type || ""),
+      label: String(item?.label || item?.type || "").trim() || mediaKindLabel(guessMediaType(previewUrl, item?.type || "")),
+    };
+  }).filter(Boolean);
+}
+
+function renderPersonaEditableMediaGrid(items) {
+  const rows = Array.isArray(items) ? items : [];
+  if (!rows.length) return `<div class="empty-state">当前草稿还没有媒体。</div>`;
+  const groupId = registerMediaPreviewGroup(rows.filter((item) => item && item.previewUrl && !item.unavailable));
+  let previewIndex = 0;
+  return `<div class="persona-edit-media-grid">${rows.map((item, index) => `
+    <div class="persona-edit-media-card">
+      ${item.unavailable || !item.previewUrl ? `
+        <div class="persona-media-frame persona-media-frame--empty">
+          <strong>媒体不可预览</strong>
+          <small>${esc(item.reason || "原始文件已失效")}</small>
+        </div>
+      ` : `
+        ${renderMediaPreviewButton(item, groupId, previewIndex++, {
+          className: "persona-edit-media-preview",
+          frameClass: "persona-media-frame",
+          caption: mediaKindLabel(item.type),
+        })}
+      `}
+      <div class="row-actions persona-edit-media-actions">
+        <button type="button" data-persona-delete-post-media="${esc(index)}">删除</button>
+      </div>
+    </div>
+  `).join("")}</div>`;
+}
+
+function renderPersonaImageLibraryGrid(library) {
+  const rows = Array.isArray(library?.items) ? library.items : [];
+  if (!rows.length) return `<div class="empty-state">当前还没有人设图。生成后会在这里直接预览。</div>`;
+  const previewable = rows
+    .map((item) => ({
+      previewUrl: String(item.preview_url || item.image_url || "").trim(),
+      type: "image",
+      label: String(item.prompt || item.created_at || "人设图").trim() || "人设图",
+      isReference: Boolean(item.is_reference),
+      createdAt: String(item.created_at || "").trim(),
+    }))
+    .filter((item) => item.previewUrl);
+  const groupId = registerMediaPreviewGroup(previewable);
+  return `<div class="persona-image-library-grid">${previewable.map((item, index) => `
+    <div class="persona-image-library-card ${item.isReference ? "is-reference" : ""}">
+      ${renderMediaPreviewButton(item, groupId, index, {
+        className: "persona-image-library-preview",
+        frameClass: "persona-image-library-frame",
+        caption: item.isReference ? "当前参考图" : "历史图",
+      })}
+      <small>${esc(item.createdAt ? formatTime(item.createdAt) : "")}</small>
+    </div>
+  `).join("")}</div>`;
+}
+
+function renderPersonaMediaTaskResult(personaId, postId) {
+  const taskState = personaMediaTaskState(personaId, postId);
+  if (!taskState?.taskId) return `<div class="empty-state">提交生成任务后，这里会显示结果预览，并可直接回写到当前草稿。</div>`;
+  const detail = taskState.detail || {};
+  const items = taskOutputMediaItems(detail);
+  const status = String(detail.status || taskState.status || "queued").trim();
+  const terminal = ["success", "failed", "cancelled"].includes(status);
+  return `
+    <div class="compact-list">
+      <article class="compact-row compact-row-log">
+        <strong>${esc(taskMeta[String(detail.type || taskState.taskType || "text_to_image")]?.title || "媒体任务")}</strong>
+        <p>${esc(statusLabel(status))} · ${esc(taskState.taskId)}</p>
+        <span>${esc(formatTime(detail.finished_at || detail.updated_at || detail.created_at || ""))}</span>
+      </article>
+    </div>
+    ${detail.error ? `<div class="persona-warning-inline">${esc(detail.error)}</div>` : ""}
+    ${items.length ? renderPersonaMediaPreview(items) : `<div class="empty-state">${terminal ? "任务已结束，但还没有可预览的媒体结果。" : "任务执行中，结果返回后会自动显示在这里。"}</div>`}
+    <div class="row-actions">
+      <button type="button" class="primary" data-persona-attach-task-media="append" ${items.length ? "" : "disabled"}>追加到当前草稿</button>
+      <button type="button" data-persona-attach-task-media="replace" ${items.length ? "" : "disabled"}>替换当前草稿媒体</button>
+    </div>
+  `;
 }
 
 function renderPersonaCreateWorkbench() {
@@ -3397,6 +3790,7 @@ function personaGroupStepOptions(groupKey, profile) {
     return workflowPersona
       ? [
           ["generate", "新建推文"],
+          ["media", "推文配图 / 媒体"],
           ["overview", "人设内容"],
           ["posts", "查看推文 / 草稿库"],
           ["history", "发布历史"],
@@ -3404,6 +3798,7 @@ function personaGroupStepOptions(groupKey, profile) {
         ]
       : [
           ["generate", "新建推文"],
+          ["media", "推文配图 / 媒体"],
           ["overview", "人设内容"],
           ["posts", "查看推文 / 草稿库"],
           ["history", "发布历史"],
@@ -3419,6 +3814,7 @@ function personaGroupStepOptions(groupKey, profile) {
         ]
       : [
           ["profile", "基础资料"],
+          ["images", "人设图"],
           ["style", "推文风格"],
           ["links", "链接设置"],
           ["delete", "删除当前人设"],
@@ -3504,6 +3900,9 @@ function renderPersonaDetail() {
   if (groupKey === "content" && step === "generate" && !Array.isArray(state.personaMemories[String(persona.id)])) {
     loadPersonaMemories(persona.id).catch(() => {});
   }
+  if (groupKey === "settings" && step === "images" && !personaImageLibraryState(persona.id)) {
+    loadPersonaImageLibrary(persona.id).catch(() => {});
+  }
   if (groupKey === "content" && step === "publish") {
     ensurePersonaPublishResultLoaded(persona.id).catch(() => {});
   }
@@ -3554,16 +3953,8 @@ function renderPersonaContentPanel(persona, account, profile, step) {
   const draftForm = form.draft;
   const isWorkflowPersona = personaIsWorkflow(persona, profile);
   const contentBranch = resolvedPersonaGenerateBranch(profile, generateForm);
-  const paidTaskType = String(generateForm.paidTaskType || "text_to_image");
-  const paidTaskMeta = taskMeta[paidTaskType] || taskMeta.text_to_image;
   const paidWorkflowBranch = isWorkflowPersona && contentBranch === "r18";
   const showTimeSlot = isWorkflowPersona && contentBranch === "nonr18";
-  const showPaidAspectRatio = ["text_to_image", "image_generate"].includes(paidTaskType);
-  const showPaidVideoOptions = paidTaskType === "video_i2v";
-  const paidTaskAccept = paidTaskType === "video_i2v" ? "image/*,audio/*" : "image/*";
-  const paidAspectRatio = String(generateForm.paidAspectRatio || "auto");
-  const paidResolution = String(generateForm.paidResolution || "720p");
-  const paidDuration = Math.min(Math.max(Number(generateForm.paidDuration || 2), 2), 15);
   const generateMode = String(generateForm.mode || "ai") === "custom" ? "custom" : "ai";
   const preflight = personaGeneratePreflight();
   const hiddenHistoryCount = personaHiddenPublishHistoryCount(persona);
@@ -3575,7 +3966,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
         <div class="persona-head-copy persona-head-copy--split">
           <div class="persona-head-copy-main">
             <strong>新建推文</strong>
-            <span class="persona-panel-intro">${esc(isWorkflowPersona ? `默认走免费内容；工作流人设可额外勾选付费内容。已识别 ${memoryRows.length} 条可选记忆。` : `免费内容统一支持 AI 生成和自定义输入。已识别 ${memoryRows.length} 条可选记忆。`)}</span>
+            <span class="persona-panel-intro">${esc(isWorkflowPersona ? `这里处理推文内容。工作流人设可额外勾选付费内容；配图和媒体操作已归到“推文配图 / 媒体”。已识别 ${memoryRows.length} 条可选记忆。` : `这里处理推文内容。配图和媒体操作已归到“推文配图 / 媒体”。已识别 ${memoryRows.length} 条可选记忆。`)}</span>
           </div>
           ${isWorkflowPersona ? `
             <label class="persona-toggle-chip">
@@ -3584,89 +3975,137 @@ function renderPersonaContentPanel(persona, account, profile, step) {
             </label>
           ` : ""}
         </div>
-        ${paidWorkflowBranch ? `
-          <div class="form-grid persona-detail-controls">
-            <label>付费任务类型
-              <select id="personaGeneratePaidTaskType">
-                <option value="text_to_image" ${paidTaskType === "text_to_image" ? "selected" : ""}>文生图</option>
-                <option value="image_generate" ${paidTaskType === "image_generate" ? "selected" : ""}>图片生成</option>
-                <option value="single_image_edit" ${paidTaskType === "single_image_edit" ? "selected" : ""}>单图编辑</option>
-                <option value="get_nano_banana" ${paidTaskType === "get_nano_banana" ? "selected" : ""}>图片编辑</option>
-                <option value="face_swap" ${paidTaskType === "face_swap" ? "selected" : ""}>人物换脸</option>
-                <option value="video_i2v" ${paidTaskType === "video_i2v" ? "selected" : ""}>图生视频</option>
-              </select>
-            </label>
-            ${showPaidAspectRatio ? `<label>图像比例
-              <select id="personaPaidAspectRatio">
-                <option value="auto" ${paidAspectRatio === "auto" ? "selected" : ""}>自动</option>
-                <option value="1:1" ${paidAspectRatio === "1:1" ? "selected" : ""}>1:1</option>
-                <option value="3:4" ${paidAspectRatio === "3:4" ? "selected" : ""}>3:4</option>
-                <option value="4:3" ${paidAspectRatio === "4:3" ? "selected" : ""}>4:3</option>
-                <option value="9:16" ${paidAspectRatio === "9:16" ? "selected" : ""}>9:16</option>
-                <option value="16:9" ${paidAspectRatio === "16:9" ? "selected" : ""}>16:9</option>
-              </select>
-            </label>` : ""}
-            ${showPaidVideoOptions ? `<label>视频分辨率
-              <select id="personaPaidResolution">
-                <option value="720p" ${paidResolution === "720p" ? "selected" : ""}>720p</option>
-                <option value="1080p" ${paidResolution === "1080p" ? "selected" : ""}>1080p</option>
-              </select>
-            </label>` : ""}
-            ${showPaidVideoOptions ? `<label>时长（秒）
-              <input id="personaPaidDuration" type="number" min="2" max="15" value="${esc(paidDuration)}" />
-            </label>` : ""}
-          </div>
-          <label>本次任务指令
-            <textarea id="personaGeneratePrompt" rows="5" placeholder="填写本次图片或视频任务指令。">${esc(generateForm.prompt || "")}</textarea>
+        <div class="form-grid persona-detail-controls">
+          <label>生成数量
+            <input id="personaGenerateCount" type="number" min="1" max="20" value="${esc(generateForm.count || 3)}" />
           </label>
-          <label>上传素材
-            <input id="personaPaidTaskFiles" type="file" multiple accept="${esc(paidTaskAccept)}" />
-            <small>${esc(paidTaskMeta.files || "根据当前任务类型上传必要素材。")}</small>
+          <label>目标字数
+            <input id="personaGenerateTargetWords" type="number" min="10" max="2000" value="${esc(generateForm.targetWords || 120)}" />
+          </label>
+          ${showTimeSlot ? `<label>早晚文案
+            <select id="personaGenerateTimeSlot">
+              <option value="" ${!generateForm.contentTimeSlot ? "selected" : ""}>自动</option>
+              <option value="morning" ${generateForm.contentTimeSlot === "morning" ? "selected" : ""}>早上</option>
+              <option value="night" ${generateForm.contentTimeSlot === "night" ? "selected" : ""}>晚上</option>
+            </select>
+          </label>` : ""}
+        </div>
+        ${renderPersonaGenerateModeTabs(generateMode)}
+        ${generateMode === "custom" ? `
+          <label>草稿标题（可选）
+            <input id="personaDraftTitle" value="${esc(draftForm.title || "")}" placeholder="例如：今日主题帖" />
+          </label>
+          <label>自定义正文
+            <textarea id="personaDraftContent" rows="6" placeholder="直接输入本次要保存的推文正文。">${esc(draftForm.content || "")}</textarea>
           </label>
           <div class="row-actions">
-            <button type="button" class="primary" data-persona-submit-paid-task>提交付费内容任务</button>
+            <button type="button" class="primary" data-persona-create-post>保存草稿</button>
+            <button type="button" data-persona-route-step="content:posts">查看草稿</button>
           </div>
         ` : `
-          <div class="form-grid persona-detail-controls">
-            <label>生成数量
-              <input id="personaGenerateCount" type="number" min="1" max="20" value="${esc(generateForm.count || 3)}" />
-            </label>
-            <label>目标字数
-              <input id="personaGenerateTargetWords" type="number" min="10" max="2000" value="${esc(generateForm.targetWords || 120)}" />
-            </label>
-            ${showTimeSlot ? `<label>早晚文案
-              <select id="personaGenerateTimeSlot">
-                <option value="" ${!generateForm.contentTimeSlot ? "selected" : ""}>自动</option>
-                <option value="morning" ${generateForm.contentTimeSlot === "morning" ? "selected" : ""}>早上</option>
-                <option value="night" ${generateForm.contentTimeSlot === "night" ? "selected" : ""}>晚上</option>
-              </select>
-            </label>` : ""}
+          <label>本次提示词
+            <textarea id="personaGeneratePrompt" rows="5" placeholder="留空则按当前人设自由生成。">${esc(generateForm.prompt || "")}</textarea>
+          </label>
+          ${!preflight.ready ? `<div class="persona-warning-inline">${esc(preflight.issues.join(" / "))}，请先补齐配置。</div>` : ""}
+          <label>可选人设记忆（已识别 ${esc(memoryRows.length)} 条）</label>
+          ${renderPersonaMemoryOptions(persona, generateForm.selectedMemoryIds || [])}
+          <div class="row-actions">
+            <button type="button" class="primary" data-persona-generate-posts ${preflight.ready ? "" : "disabled"}>自动生成草稿</button>
+            <button type="button" data-persona-route-step="content:posts">查看草稿</button>
+            <button type="button" data-persona-route-step="content:media">进入配图</button>
           </div>
-          ${renderPersonaGenerateModeTabs(generateMode)}
-          ${generateMode === "custom" ? `
-            <label>草稿标题（可选）
-              <input id="personaDraftTitle" value="${esc(draftForm.title || "")}" placeholder="例如：今日主题帖" />
-            </label>
-            <label>自定义正文
-              <textarea id="personaDraftContent" rows="6" placeholder="直接输入本次要保存的推文正文。">${esc(draftForm.content || "")}</textarea>
-            </label>
-            <div class="row-actions">
-              <button type="button" class="primary" data-persona-create-post>保存草稿</button>
-              <button type="button" data-persona-route-step="content:posts">查看草稿</button>
-            </div>
-          ` : `
-            <label>本次提示词
-              <textarea id="personaGeneratePrompt" rows="5" placeholder="留空则按当前人设自由生成。">${esc(generateForm.prompt || "")}</textarea>
-            </label>
-            ${!preflight.ready ? `<div class="persona-warning-inline">${esc(preflight.issues.join(" / "))}，请先补齐模型配置。</div>` : ""}
-            <label>可选人设记忆（已识别 ${esc(memoryRows.length)} 条）</label>
-            ${renderPersonaMemoryOptions(persona, generateForm.selectedMemoryIds || [])}
-            <div class="row-actions">
-              <button type="button" class="primary" data-persona-generate-posts ${preflight.ready ? "" : "disabled"}>自动生成草稿</button>
-              <button type="button" data-persona-route-step="content:posts">查看草稿</button>
-            </div>
-          `}
         `}
+      </div>`;
+  }
+
+  if (panel === "media") {
+    const mediaForm = form.media;
+    const post = selectedPost;
+    const postMediaItems = post ? personaDraftMediaItems(String(persona.id || ""), post) : [];
+    const currentTaskType = String(mediaForm.taskType || "text_to_image");
+    const mediaMeta = taskMeta[currentTaskType] || taskMeta.text_to_image;
+    const showAspectRatio = ["text_to_image", "image_generate"].includes(currentTaskType);
+    const showVideoOptions = currentTaskType === "video_i2v";
+    const uploadAccept = currentTaskType === "video_i2v" ? "image/*,audio/*" : "image/*";
+    return `
+      <div class="persona-inline-panel">
+        <div class="persona-head-copy">
+          <strong>推文配图 / 媒体</strong>
+          <span class="persona-panel-intro">先选草稿，再生成、上传、替换或删除媒体。结果会直接回写到当前草稿。</span>
+        </div>
+        <div class="persona-draft-toolbar">
+          <label>当前草稿
+            <select id="personaDraftPostSelect">
+              ${drafts.length ? drafts.map((post, index) => `<option value="${esc(post.id)}" ${String(post.id) === String(state.selectedPersonaPostId || drafts[0]?.id || "") ? "selected" : ""}>${esc(personaDraftOptionLabel(post, index))}</option>`).join("") : `<option value="">当前还没有草稿</option>`}
+            </select>
+          </label>
+          <div class="row-actions">
+            <button type="button" data-persona-route-step="content:generate">返回新建推文</button>
+            <button type="button" data-persona-route-step="content:posts">查看草稿库</button>
+          </div>
+        </div>
+        ${post ? `
+          <div class="persona-media-workspace">
+            <section class="persona-media-column">
+              <div class="persona-inline-panel persona-inline-panel--nested">
+                <strong>当前草稿正文</strong>
+                <p>${esc(String(post.content || "").trim() || "当前草稿没有正文。")}</p>
+              </div>
+              <div class="persona-inline-panel persona-inline-panel--nested">
+                <strong>当前媒体</strong>
+                ${renderPersonaEditableMediaGrid(postMediaItems)}
+                <label>上传媒体
+                  <input id="personaPostMediaUploadFiles" type="file" multiple accept="image/*,video/*" />
+                </label>
+                <div class="row-actions">
+                  <button type="button" class="primary" data-persona-upload-post-media="append">追加到草稿</button>
+                  <button type="button" data-persona-upload-post-media="replace">替换草稿媒体</button>
+                </div>
+              </div>
+            </section>
+            <section class="persona-media-column">
+              <div class="persona-inline-panel persona-inline-panel--nested">
+                <strong>生成媒体</strong>
+                <span class="persona-panel-intro">默认带入当前草稿正文。只有需要补充时再填写说明。</span>
+                ${renderPersonaMediaTaskTabs(currentTaskType)}
+                <div class="form-grid persona-detail-controls">
+                  ${showAspectRatio ? `<label>图像比例
+                    <select id="personaMediaAspectRatio">
+                      <option value="1:1" ${String(mediaForm.aspectRatio || "1:1") === "1:1" ? "selected" : ""}>1:1</option>
+                      <option value="3:4" ${String(mediaForm.aspectRatio || "") === "3:4" ? "selected" : ""}>3:4</option>
+                      <option value="4:3" ${String(mediaForm.aspectRatio || "") === "4:3" ? "selected" : ""}>4:3</option>
+                      <option value="9:16" ${String(mediaForm.aspectRatio || "") === "9:16" ? "selected" : ""}>9:16</option>
+                      <option value="16:9" ${String(mediaForm.aspectRatio || "") === "16:9" ? "selected" : ""}>16:9</option>
+                    </select>
+                  </label>` : ""}
+                  ${showVideoOptions ? `<label>视频分辨率
+                    <select id="personaMediaResolution">
+                      <option value="720p" ${String(mediaForm.resolution || "720p") === "720p" ? "selected" : ""}>720p</option>
+                      <option value="1080p" ${String(mediaForm.resolution || "") === "1080p" ? "selected" : ""}>1080p</option>
+                    </select>
+                  </label>` : ""}
+                  ${showVideoOptions ? `<label>时长（秒）
+                    <input id="personaMediaDuration" type="number" min="2" max="15" value="${esc(mediaForm.duration || 2)}" />
+                  </label>` : ""}
+                </div>
+                <label>补充提示词
+                  <textarea id="personaMediaTaskPrompt" rows="5" placeholder="留空则直接按当前草稿正文生成。">${esc(mediaForm.prompt || "")}</textarea>
+                </label>
+                <label>上传素材
+                  <input id="personaMediaTaskFiles" type="file" multiple accept="${esc(uploadAccept)}" />
+                  <small>${esc(mediaMeta.files || "根据当前任务类型上传必要素材。")}</small>
+                </label>
+                <div class="row-actions">
+                  <button type="button" class="primary" data-persona-run-media-task>生成预览</button>
+                </div>
+              </div>
+              <div class="persona-inline-panel persona-inline-panel--nested">
+                <strong>任务结果预览</strong>
+                ${renderPersonaMediaTaskResult(persona.id, post.id)}
+              </div>
+            </section>
+          </div>
+        ` : `<div class="empty-state">当前还没有草稿。先新建推文，再回来处理配图和媒体。</div>`}
       </div>`;
   }
 
@@ -3809,95 +4248,6 @@ async function loadSocial() {
   if (state.activeModule && ["publishing", "automation"].includes(state.activeModule)) renderSimpleFlowModule(state.activeModule);
   return overview;
 }
-
-async function submitPersonaPaidTask() {
-  const persona = selectedPersona();
-  if (!persona) {
-    showMsg("commandMsg", "请先选择一个人设。", false);
-    return;
-  }
-  const profile = selectedPersonaProfile();
-  snapshotPersonaCurrentForm();
-  const form = personaFormState(persona.id).generate;
-  if (!profile?.is_workflow_persona || resolvedPersonaGenerateBranch(profile, form) !== "r18") {
-    showMsg("commandMsg", "当前不是工作流人设的付费内容分支。", false);
-    return;
-  }
-  const taskType = String(form.paidTaskType || "text_to_image");
-  const files = filesFromInput("personaPaidTaskFiles");
-  const imageCount = files.filter((file) => fileKind(file) === "image").length;
-  const minImages = Number(taskMeta[taskType]?.minImages || 0);
-  if (imageCount < minImages) {
-    showMsg("commandMsg", `当前任务至少需要 ${minImages} 张图片素材。`, false);
-    return;
-  }
-  const prompt = String(form.prompt || "").trim();
-  if (["text_to_image", "video_i2v"].includes(taskType) && !prompt) {
-    showMsg("commandMsg", "当前任务需要填写任务指令。", false);
-    return;
-  }
-  const params = compactPayload({
-    prompt,
-    prompt_text: prompt,
-    message: prompt,
-    persona_enabled: true,
-    persona_label: String(persona.name || profile?.name || "").trim(),
-    tg_generation_context: String(profile?.content || persona.content || "").trim(),
-    tg_use_llm_prompt: true,
-    content_branch: "r18",
-    tg_content_branch: "r18",
-    aspect_ratio: String(form.paidAspectRatio || "auto"),
-    resolution: taskType === "video_i2v" ? String(form.paidResolution || "720p") : undefined,
-    duration_seconds: taskType === "video_i2v" ? Math.min(Math.max(Number(form.paidDuration || 2), 2), 15) : undefined,
-  });
-  const body = new FormData();
-  body.append("task_type", taskType);
-  body.append("params_json", JSON.stringify(params));
-  files.forEach((file) => body.append("files", file, file.name));
-  showMsg("commandMsg", "正在提交付费内容任务...", true);
-  const result = await api("/api/tasks/submit", { method: "POST", body });
-  appendEvent("queued", `付费内容任务已创建：${result.id}`);
-  showMsg("commandMsg", `付费内容任务已提交：${result.id}`, true);
-  watchTask(result.id);
-  await loadTasks();
-}
-
-const renderPersonaContentPanelLegacy = renderPersonaContentPanel;
-renderPersonaContentPanel = function renderPersonaContentPanelOverride(persona, account, profile, step) {
-  return renderPersonaContentPanelLegacy(persona, account, profile, step);
-};
-
-const renderConfirmSummaryLegacy = renderConfirmSummary;
-renderConfirmSummary = function renderConfirmSummaryOverride() {
-  renderConfirmSummaryLegacy();
-  if (state.activeModule !== "personas") return;
-  const host = $("confirmSummary");
-  const persona = selectedPersona();
-  const profile = selectedPersonaProfile();
-  if (!host || !persona || !profile?.is_workflow_persona) return;
-  const groupKey = state.personaGroup || "content";
-  const step = currentPersonaGroupStep(groupKey, profile);
-  if (groupKey !== "content" || step !== "generate") return;
-  const form = personaFormState(persona.id).generate;
-  const entries = [...host.querySelectorAll("div")];
-  const finalActionRow = entries.find((row) => row.querySelector("span")?.textContent?.trim() === "最终动作");
-  if (!finalActionRow) return;
-  const finalActionValue = finalActionRow.querySelector("strong");
-  if (!finalActionValue) return;
-  const contentBranch = resolvedPersonaGenerateBranch(profile, form);
-  if (contentBranch === "r18") {
-    const meta = taskMeta[String(form.paidTaskType || "text_to_image")] || taskMeta.text_to_image;
-    finalActionValue.textContent = `提交${meta.title}任务`;
-    return;
-  }
-  if (String(form.mode || "") === "custom") {
-    finalActionValue.textContent = "进入草稿库";
-    return;
-  }
-  if (String(form.mode || "") === "hot") {
-    finalActionValue.textContent = "进入热点数据";
-  }
-};
 
 function renderSocialAccounts() {
   const select = $("socialAccount");
@@ -4142,8 +4492,31 @@ function bindEvents() {
       generatePersonaDraftPosts().catch((error) => showMsg("commandMsg", error.detail || error.message || "自动生成失败", false));
       return;
     }
+    if (event.target.closest("[data-persona-generate-image]")) {
+      submitPersonaImageGeneration().catch((error) => showMsg("commandMsg", error.detail || error.message || "生成人设图失败", false));
+      return;
+    }
     if (event.target.closest("[data-persona-create-post]")) {
       createPersonaDraftPost().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
+      return;
+    }
+    if (event.target.closest("[data-persona-run-media-task]")) {
+      submitPersonaMediaTask().catch((error) => showMsg("commandMsg", error.detail || error.message || "生成媒体失败", false));
+      return;
+    }
+    if (event.target.closest("[data-persona-attach-task-media]")) {
+      const button = event.target.closest("[data-persona-attach-task-media]");
+      attachPersonaTaskMediaToPost(button?.dataset.personaAttachTaskMedia === "replace").catch((error) => showMsg("commandMsg", error.detail || error.message || "保存媒体失败", false));
+      return;
+    }
+    const uploadPostMedia = event.target.closest("[data-persona-upload-post-media]");
+    if (uploadPostMedia) {
+      uploadPersonaPostMedia(uploadPostMedia.dataset.personaUploadPostMedia === "replace").catch((error) => showMsg("commandMsg", error.detail || error.message || "上传媒体失败", false));
+      return;
+    }
+    const deletePostMedia = event.target.closest("[data-persona-delete-post-media]");
+    if (deletePostMedia) {
+      deletePersonaPostMedia(deletePostMedia.dataset.personaDeletePostMedia || "0").catch((error) => showMsg("commandMsg", error.detail || error.message || "删除媒体失败", false));
       return;
     }
     const toggleFolder = event.target.closest("[data-persona-toggle-folder]");
@@ -4252,6 +4625,15 @@ function bindEvents() {
         renderConfirmSummary();
       }
     }
+    const mediaTaskButton = event.target.closest("[data-persona-media-task]");
+    if (mediaTaskButton) {
+      const persona = selectedPersona();
+      if (persona) {
+        personaFormState(persona.id).media.taskType = mediaTaskButton.dataset.personaMediaTask || "text_to_image";
+        renderPersonaDetail();
+        renderConfirmSummary();
+      }
+    }
     if (event.target.closest("[data-persona-publish-submit]")) submitPersonaPublishTask().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
     if (event.target.closest("[data-persona-save-profile]")) savePersonaProfileFields().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
     if (event.target.closest("[data-persona-save-threads]")) savePersonaThreadsBinding().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
@@ -4287,10 +4669,6 @@ function bindEvents() {
     if (event.target?.id === "personaGenerateMode") {
       snapshotPersonaCurrentForm();
       renderPersonaDetail();
-      renderConfirmSummary();
-    }
-    if (event.target?.id === "personaGeneratePaidTaskType") {
-      snapshotPersonaCurrentForm();
       renderConfirmSummary();
     }
     if (event.target?.id === "personaDraftPostSelect") {
@@ -4373,26 +4751,10 @@ function bindEvents() {
   });
 }
 
-function bindPersonaPaidTaskEvents() {
-  $("moduleBody").addEventListener("click", (event) => {
-    if (event.target.closest("[data-persona-submit-paid-task]")) {
-      submitPersonaPaidTask().catch((error) => showMsg("commandMsg", error.detail || error.message || "提交付费内容任务失败", false));
-    }
-  });
-  $("moduleBody").addEventListener("change", (event) => {
-    if (event.target?.id === "personaGeneratePaidTaskType") {
-      snapshotPersonaCurrentForm();
-      renderPersonaDetail();
-      renderConfirmSummary();
-    }
-  });
-}
-
 async function init() {
   applyTheme(currentTheme());
   ensurePersonaMediaLightbox();
   bindEvents();
-  bindPersonaPaidTaskEvents();
   renderWorkspace();
   appendEvent("ready", "Web 控制台已就绪。");
   await loadMe();

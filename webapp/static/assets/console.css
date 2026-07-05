@@ -640,12 +640,14 @@ textarea:focus {
   padding: 0 10px;
 }
 
-.persona-folder {
+.persona-folder,
+.persona-layer-group {
   display: grid;
   gap: 8px;
 }
 
-.persona-folder-head {
+.persona-folder-head,
+.persona-layer-row {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto auto auto;
   gap: 6px;
@@ -656,24 +658,31 @@ textarea:focus {
   padding: 8px;
 }
 
+.persona-layer-row--group {
+  min-height: 52px;
+}
+
 .persona-folder--ungrouped .persona-folder-head {
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
-.persona-folder-head strong {
+.persona-folder-head strong,
+.persona-layer-row strong {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.persona-folder-head span {
+.persona-folder-head span,
+.persona-layer-row span {
   color: var(--muted);
   font-size: 11px;
   font-weight: 800;
   white-space: nowrap;
 }
 
-.persona-folder-head button {
+.persona-folder-head button,
+.persona-layer-row button {
   min-height: 30px;
   padding: 5px 8px;
   border: 1px solid var(--line);
@@ -682,12 +691,23 @@ textarea:focus {
   cursor: pointer;
 }
 
-.persona-folder-items {
+.persona-folder-items,
+.persona-layer-children {
   display: grid;
   gap: 8px;
 }
 
+.persona-layer-children {
+  padding-left: 10px;
+}
+
+.persona-layer-empty {
+  color: var(--muted);
+  padding: 8px 10px;
+}
+
 .persona-list-card {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 6px;
@@ -698,33 +718,18 @@ textarea:focus {
 }
 
 .persona-list-card.is-active {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, var(--panel-solid));
+  border-color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 7%, var(--panel-solid));
+  box-shadow: 0 0 0 1px var(--ink);
 }
 
 .persona-list-card.is-editing {
-  border-color: transparent;
-  background: transparent;
-  padding: 0;
+  z-index: 30;
 }
 
 .persona-list-card.is-editing.is-active {
-  border-color: transparent;
-  background: transparent;
-}
-
-.persona-list-card.is-editing .persona-list-item {
-  padding: 8px 10px;
-  border-radius: var(--radius);
-  background: var(--panel-solid);
-}
-
-.persona-list-card.is-editing.is-active .persona-list-item {
-  background: color-mix(in srgb, var(--accent) 10%, var(--panel-solid));
-}
-
-.persona-list-card.is-editing .persona-card-edit {
-  margin-top: 6px;
+  border-color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 7%, var(--panel-solid));
 }
 
 .persona-list-group-title {
@@ -752,6 +757,14 @@ textarea:focus {
   background: transparent;
   color: var(--ink);
   cursor: pointer;
+}
+
+.persona-list-card.is-active .persona-list-item strong {
+  color: var(--ink);
+}
+
+.persona-list-card.is-active .persona-list-item small {
+  color: color-mix(in srgb, var(--ink) 70%, transparent);
 }
 
 .persona-card-title {
@@ -798,6 +811,11 @@ textarea:focus {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
 }
 
+.persona-ungrouped-badge {
+  color: var(--muted);
+  border-style: dashed;
+}
+
 .persona-card-edit {
   width: 36px;
   min-width: 36px;
@@ -818,16 +836,23 @@ textarea:focus {
   background: var(--soft);
 }
 
-.persona-group-editor {
-  grid-column: 1 / -1;
+.persona-card-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 600;
+  width: min(276px, calc(100vw - 36px));
   display: grid;
-  gap: 6px;
-  padding: 4px 0 2px;
-  border-top: 0;
-  background: transparent;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-solid);
+  box-shadow: var(--shadow);
+  opacity: 1;
 }
 
-.persona-group-editor label {
+.persona-card-menu label {
   display: grid;
   gap: 4px;
   color: var(--muted);
@@ -835,12 +860,12 @@ textarea:focus {
   font-weight: 800;
 }
 
-.persona-group-editor select,
-.persona-group-editor input {
+.persona-card-menu select,
+.persona-card-menu input {
   min-height: 34px;
 }
 
-.persona-group-editor button {
+.persona-card-menu button {
   min-height: 32px;
 }
 
@@ -984,6 +1009,10 @@ textarea:focus {
   border: 0;
   border-radius: 0;
   background: transparent;
+}
+
+.persona-inline-panel--nested {
+  background: var(--panel-solid);
 }
 
 .persona-panel-intro {
@@ -1253,8 +1282,73 @@ textarea:focus {
   font-size: 12px;
 }
 
+.persona-media-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+  gap: 12px;
+}
+
+.persona-media-column {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.persona-edit-media-grid,
+.persona-image-library-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 10px;
+}
+
+.persona-edit-media-card,
+.persona-image-library-card {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--soft);
+}
+
+.persona-image-library-card.is-reference {
+  border-color: var(--ink);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 12%, transparent);
+}
+
+.persona-edit-media-preview,
+.persona-image-library-preview {
+  display: grid;
+  gap: 6px;
+  color: inherit;
+  text-decoration: none;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.persona-image-library-frame {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+}
+
+.persona-edit-media-actions {
+  justify-content: flex-end;
+}
+
 @media (max-width: 1100px) {
   .persona-memory-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .persona-media-workspace {
     grid-template-columns: 1fr;
   }
 }
