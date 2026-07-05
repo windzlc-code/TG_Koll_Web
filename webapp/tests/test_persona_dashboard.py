@@ -254,6 +254,51 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["summary"]["persona_count"], 1)
 
+    def test_overview_merges_primary_and_cache_persona_archives(self):
+        self._write_archives()
+        cache_archives = {
+            "persona_archives_v2": [
+                {
+                    "id": "persona-1",
+                    "name": "Primary duplicate should not win",
+                    "setup": {},
+                },
+                {
+                    "id": "workflow-persona-cache-only",
+                    "name": "Cache Workflow",
+                    "content": "workflow persona from cache",
+                    "setup": {
+                        "imageWorkflow": {
+                            "provider": "comfyui",
+                            "workflowFile": "人设-cache.json",
+                            "workflowId": "wf-cache",
+                        }
+                    },
+                    "posts": [],
+                    "platformPosts": {},
+                    "publishHistory": [],
+                    "personaImageLibrary": [],
+                },
+            ]
+        }
+        (self.tool_runtime_dir / "persona_archives_cache.json").write_text(json.dumps(cache_archives, ensure_ascii=False), encoding="utf-8")
+
+        resp = self.client.get("/api/persona_dashboard/overview")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        names = {item["name"]: item for item in data["personas"]}
+        self.assertEqual(data["summary"]["persona_count"], 2)
+        self.assertIn("History Teacher", names)
+        self.assertIn("Cache Workflow", names)
+        self.assertTrue(names["Cache Workflow"]["is_workflow_persona"])
+        self.assertTrue(data["data_sources"]["archives"]["merged"])
+        self.assertEqual(data["data_sources"]["archives"]["primary_count"], 1)
+        self.assertEqual(data["data_sources"]["archives"]["fallback_count"], 2)
+
+        profile_resp = self.client.get("/api/persona_dashboard/personas/workflow-persona-cache-only/profile")
+        self.assertEqual(profile_resp.status_code, 200)
+        self.assertTrue(profile_resp.json()["is_workflow_persona"])
+
     def test_overview_aggregates_personas_and_queue_stats(self):
         self._write_archives()
         self._write_queue()
@@ -301,6 +346,50 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertNotIn("super-secret-token", body)
         self.assertNotIn("super-secret-password", body)
         self.assertIn("configured", body)
+
+    def test_persona_groups_create_assign_collapse_rename_and_remove(self):
+        self._write_archives()
+
+        create_resp = self.client.post("/api/persona_dashboard/groups", json={"name": "Matrix Group"})
+        self.assertEqual(create_resp.status_code, 200)
+        group = create_resp.json()["group"]
+        group_id = group["id"]
+        self.assertEqual(group["name"], "Matrix Group")
+        self.assertEqual(group["persona_ids"], [])
+
+        add_resp = self.client.post(
+            f"/api/persona_dashboard/groups/{group_id}/personas",
+            json={"persona_id": "persona-1"},
+        )
+        self.assertEqual(add_resp.status_code, 200)
+        self.assertEqual(add_resp.json()["group"]["persona_ids"], ["persona-1"])
+
+        overview = self.client.get("/api/persona_dashboard/overview").json()
+        groups = overview["persona_groups"]["groups"]
+        self.assertEqual(groups[0]["persona_ids"], ["persona-1"])
+        self.assertEqual(overview["persona_groups"]["assigned_persona_ids"], ["persona-1"])
+
+        collapse_resp = self.client.post(
+            f"/api/persona_dashboard/groups/{group_id}/collapse",
+            json={"collapsed": True},
+        )
+        self.assertEqual(collapse_resp.status_code, 200)
+        self.assertTrue(collapse_resp.json()["group"]["collapsed"])
+
+        rename_resp = self.client.patch(
+            f"/api/persona_dashboard/groups/{group_id}",
+            json={"name": "Renamed Matrix"},
+        )
+        self.assertEqual(rename_resp.status_code, 200)
+        self.assertEqual(rename_resp.json()["group"]["name"], "Renamed Matrix")
+
+        remove_resp = self.client.delete(f"/api/persona_dashboard/groups/{group_id}/personas/persona-1")
+        self.assertEqual(remove_resp.status_code, 200)
+        self.assertEqual(remove_resp.json()["group"]["persona_ids"], [])
+
+        persisted = json.loads((self.tool_runtime_dir / "persona_groups.json").read_text(encoding="utf-8"))
+        self.assertEqual(persisted["groups"][0]["name"], "Renamed Matrix")
+        self.assertEqual(persisted["groups"][0]["persona_ids"], [])
 
     def test_publish_queue_missing_is_non_fatal(self):
         self._write_archives()

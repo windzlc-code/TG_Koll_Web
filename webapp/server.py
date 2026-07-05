@@ -13451,6 +13451,18 @@ class PersonaDashboardPersonaCreatePayload(BaseModel):
     content: str = ""
 
 
+class PersonaDashboardGroupCreatePayload(BaseModel):
+    name: str = ""
+
+
+class PersonaDashboardGroupRenamePayload(BaseModel):
+    name: str = ""
+
+
+class PersonaDashboardGroupPersonaPayload(BaseModel):
+    persona_id: str = ""
+
+
 class PersonaDashboardLinkPresetPayload(BaseModel):
     id: str = ""
     name: str = ""
@@ -13543,6 +13555,11 @@ def _read_json_file(path: Path) -> Any:
         return json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception:
         return None
+
+
+def _write_json_file(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _extract_persona_archive_list(raw: Any) -> list[dict[str, Any]]:
@@ -13764,15 +13781,36 @@ def _sanitize_persona_dashboard_link_presets(raw_presets: Any, existing_setup: d
     return next_presets
 
 
-def _persona_archive_source_for_write() -> tuple[Path, Any, list[dict[str, Any]]]:
+def _persona_archive_source_for_write(archive_id: str = "") -> tuple[Path, Any, list[dict[str, Any]]]:
     primary = TOOL_R18_RUNTIME_DIR / "persona_archives.json"
     fallback = TOOL_R18_RUNTIME_DIR / "persona_archives_cache.json"
+    clean_id = str(archive_id or "").strip()
+    if clean_id:
+        for path in (primary, fallback):
+            raw = _read_json_file(path)
+            archives = _extract_persona_archive_list(raw)
+            if archives and _find_persona_archive(archives, clean_id):
+                return path, raw, archives
     for path in (primary, fallback):
         raw = _read_json_file(path)
         archives = _extract_persona_archive_list(raw)
         if archives:
             return path, raw, archives
     return primary, [], []
+
+
+def _merge_persona_archive_sources(primary_archives: list[dict[str, Any]], fallback_archives: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for archive in [*primary_archives, *fallback_archives]:
+        if not isinstance(archive, dict):
+            continue
+        archive_id = str(archive.get("id") or "").strip()
+        if not archive_id or archive_id in seen:
+            continue
+        seen.add(archive_id)
+        merged.append(archive)
+    return merged
 
 
 def _new_persona_archive_id() -> str:
@@ -13827,6 +13865,156 @@ def _persona_memory_file() -> Path:
     return TOOL_R18_RUNTIME_DIR / "persona_memory.json"
 
 
+def _persona_group_file() -> Path:
+    return TOOL_R18_RUNTIME_DIR / "persona_groups.json"
+
+
+def _sanitize_persona_group_name(name: Any) -> str:
+    return re.sub(r"\s+", " ", str(name or "")).strip()[:40]
+
+
+def _new_persona_group_id() -> str:
+    return f"pg-{uuid.uuid4().hex[:10]}"
+
+
+def _read_persona_groups_config() -> dict[str, Any]:
+    raw = _read_json_file(_persona_group_file())
+    if not isinstance(raw, dict):
+        return {"groups": []}
+    raw_groups = raw.get("groups") if isinstance(raw.get("groups"), list) else []
+    groups: list[dict[str, Any]] = []
+    seen_group_ids: set[str] = set()
+    for index, item in enumerate(raw_groups):
+        if not isinstance(item, dict):
+            continue
+        group_id = str(item.get("id") or "").strip() or f"pg-legacy-{index}"
+        if group_id in seen_group_ids:
+            continue
+        seen_group_ids.add(group_id)
+        persona_ids: list[str] = []
+        seen_persona_ids: set[str] = set()
+        for persona_id in item.get("persona_ids") if isinstance(item.get("persona_ids"), list) else []:
+            clean_persona_id = str(persona_id or "").strip()
+            if clean_persona_id and clean_persona_id not in seen_persona_ids:
+                seen_persona_ids.add(clean_persona_id)
+                persona_ids.append(clean_persona_id)
+        groups.append({
+            "id": group_id,
+            "name": _sanitize_persona_group_name(item.get("name")) or f"人设组 {index + 1}",
+            "persona_ids": persona_ids,
+            "collapsed": bool(item.get("collapsed", False)),
+            "created_at": str(item.get("created_at") or "").strip() or _persona_dashboard_iso_now(),
+            "updated_at": str(item.get("updated_at") or "").strip() or _persona_dashboard_iso_now(),
+        })
+    return {"groups": groups}
+
+
+def _write_persona_groups_config(config: dict[str, Any]) -> None:
+    groups = config.get("groups") if isinstance(config.get("groups"), list) else []
+    _write_json_file(_persona_group_file(), {"groups": groups})
+
+
+def _read_persona_groups(valid_persona_ids: set[str] | None = None) -> dict[str, Any]:
+    config = _read_persona_groups_config()
+    valid_ids = set(valid_persona_ids or set())
+    groups: list[dict[str, Any]] = []
+    for group in config.get("groups") if isinstance(config.get("groups"), list) else []:
+        persona_ids = [pid for pid in group.get("persona_ids", []) if not valid_ids or pid in valid_ids]
+        groups.append({**group, "persona_ids": persona_ids})
+    assigned_ids = {persona_id for group in groups for persona_id in group.get("persona_ids", [])}
+    return {"ok": True, "groups": groups, "assigned_persona_ids": sorted(assigned_ids), "source": _persona_group_file().name}
+
+
+def _find_persona_group(groups: list[dict[str, Any]], group_id: str) -> dict[str, Any] | None:
+    clean_id = str(group_id or "").strip()
+    return next((group for group in groups if str(group.get("id") or "").strip() == clean_id), None)
+
+
+def _create_persona_group(payload: PersonaDashboardGroupCreatePayload) -> dict[str, Any]:
+    name = _sanitize_persona_group_name(payload.name)
+    if not name:
+        raise HTTPException(status_code=400, detail="分组名称不能为空。")
+    config = _read_persona_groups_config()
+    groups = config.get("groups") if isinstance(config.get("groups"), list) else []
+    now = _persona_dashboard_iso_now()
+    group = {"id": _new_persona_group_id(), "name": name, "persona_ids": [], "collapsed": False, "created_at": now, "updated_at": now}
+    groups.append(group)
+    _write_persona_groups_config({"groups": groups})
+    return {"ok": True, "group": group}
+
+
+def _rename_persona_group(group_id: str, payload: PersonaDashboardGroupRenamePayload) -> dict[str, Any]:
+    name = _sanitize_persona_group_name(payload.name)
+    if not name:
+        raise HTTPException(status_code=400, detail="分组名称不能为空。")
+    config = _read_persona_groups_config()
+    groups = config.get("groups") if isinstance(config.get("groups"), list) else []
+    group = _find_persona_group(groups, group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="分组不存在。")
+    group["name"] = name
+    group["updated_at"] = _persona_dashboard_iso_now()
+    _write_persona_groups_config({"groups": groups})
+    return {"ok": True, "group": group}
+
+
+def _delete_persona_group(group_id: str) -> dict[str, Any]:
+    config = _read_persona_groups_config()
+    groups = config.get("groups") if isinstance(config.get("groups"), list) else []
+    clean_id = str(group_id or "").strip()
+    next_groups = [group for group in groups if str(group.get("id") or "").strip() != clean_id]
+    if len(next_groups) == len(groups):
+        raise HTTPException(status_code=404, detail="分组不存在。")
+    _write_persona_groups_config({"groups": next_groups})
+    return {"ok": True, "group_id": clean_id}
+
+
+def _set_persona_group_collapsed(group_id: str, collapsed: bool) -> dict[str, Any]:
+    config = _read_persona_groups_config()
+    groups = config.get("groups") if isinstance(config.get("groups"), list) else []
+    group = _find_persona_group(groups, group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="分组不存在。")
+    group["collapsed"] = bool(collapsed)
+    group["updated_at"] = _persona_dashboard_iso_now()
+    _write_persona_groups_config({"groups": groups})
+    return {"ok": True, "group": group}
+
+
+def _add_persona_to_group(group_id: str, payload: PersonaDashboardGroupPersonaPayload) -> dict[str, Any]:
+    persona_id = str(payload.persona_id or "").strip()
+    if not persona_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID。")
+    archives, _ = _read_tool_r18_persona_archives()
+    if not _find_persona_archive(archives, persona_id):
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    config = _read_persona_groups_config()
+    groups = config.get("groups") if isinstance(config.get("groups"), list) else []
+    group = _find_persona_group(groups, group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="分组不存在。")
+    persona_ids = group.get("persona_ids") if isinstance(group.get("persona_ids"), list) else []
+    if persona_id not in persona_ids:
+        persona_ids.append(persona_id)
+    group["persona_ids"] = persona_ids
+    group["updated_at"] = _persona_dashboard_iso_now()
+    _write_persona_groups_config({"groups": groups})
+    return {"ok": True, "group": group}
+
+
+def _remove_persona_from_group(group_id: str, persona_id: str) -> dict[str, Any]:
+    clean_persona_id = str(persona_id or "").strip()
+    config = _read_persona_groups_config()
+    groups = config.get("groups") if isinstance(config.get("groups"), list) else []
+    group = _find_persona_group(groups, group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="分组不存在。")
+    group["persona_ids"] = [pid for pid in group.get("persona_ids", []) if str(pid) != clean_persona_id]
+    group["updated_at"] = _persona_dashboard_iso_now()
+    _write_persona_groups_config({"groups": groups})
+    return {"ok": True, "group": group}
+
+
 def _normalize_persona_memory_summary(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()[:220]
 
@@ -13873,7 +14061,7 @@ def _list_selectable_persona_memories(archive_id: str) -> list[dict[str, Any]]:
     clean_id = str(archive_id or "").strip()
     if not clean_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID。")
-    _, _, archives = _persona_archive_source_for_write()
+    _, _, archives = _persona_archive_source_for_write(clean_id)
     archive = _find_persona_archive(archives, clean_id)
     if not archive:
         raise HTTPException(status_code=404, detail="人设不存在。")
@@ -14066,7 +14254,7 @@ def _list_persona_archive_posts(archive_id: str) -> list[dict[str, Any]]:
     clean_id = str(archive_id or "").strip()
     if not clean_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID。")
-    _, _, archives = _persona_archive_source_for_write()
+    _, _, archives = _persona_archive_source_for_write(clean_id)
     archive = _find_persona_archive(archives, clean_id)
     if not archive:
         raise HTTPException(status_code=404, detail="人设不存在。")
@@ -14091,7 +14279,7 @@ def _serve_persona_archive_post_media(archive_id: str, post_id: str, index: int)
     clean_post_id = str(post_id or "").strip()
     if not clean_archive_id or not clean_post_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID 或帖子 ID。")
-    _, _, archives = _persona_archive_source_for_write()
+    _, _, archives = _persona_archive_source_for_write(clean_archive_id)
     archive = _find_persona_archive(archives, clean_archive_id)
     if not archive:
         raise HTTPException(status_code=404, detail="人设不存在。")
@@ -14120,7 +14308,7 @@ def _serve_persona_archive_publish_history_media(archive_id: str, history_id: st
     clean_history_id = str(history_id or "").strip()
     if not clean_archive_id or not clean_history_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID 或发布记录 ID。")
-    _, _, archives = _persona_archive_source_for_write()
+    _, _, archives = _persona_archive_source_for_write(clean_archive_id)
     archive = _find_persona_archive(archives, clean_archive_id)
     if not archive:
         raise HTTPException(status_code=404, detail="人设不存在。")
@@ -14150,7 +14338,7 @@ def _list_persona_archive_publish_history(archive_id: str) -> list[dict[str, Any
     clean_id = str(archive_id or "").strip()
     if not clean_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID。")
-    _, _, archives = _persona_archive_source_for_write()
+    _, _, archives = _persona_archive_source_for_write(clean_id)
     archive = _find_persona_archive(archives, clean_id)
     if not archive:
         raise HTTPException(status_code=404, detail="人设不存在。")
@@ -14223,7 +14411,7 @@ def _create_persona_archive_post(archive_id: str, payload: PersonaDashboardDraft
     title = str(payload.title or "").strip()
     if not content:
         raise HTTPException(status_code=400, detail="推文内容不能为空。")
-    path, raw, archives = _persona_archive_source_for_write()
+    path, raw, archives = _persona_archive_source_for_write(clean_id)
     archive = _find_persona_archive(archives, clean_id)
     if not archive:
         raise HTTPException(status_code=404, detail="人设不存在。")
@@ -14314,7 +14502,7 @@ def _publish_persona_archive_post(
     if not clean_archive_id or not clean_post_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID 或推文 ID。")
     media_paths = [str(item or "").strip() for item in (payload.media_paths or []) if str(item or "").strip()]
-    _, _, archives = _persona_archive_source_for_write()
+    _, _, archives = _persona_archive_source_for_write(clean_archive_id)
     archive = _find_persona_archive(archives, clean_archive_id)
     if not archive:
         raise HTTPException(status_code=404, detail="人设不存在。")
@@ -14391,7 +14579,7 @@ def _bind_persona_threads_username(archive_id: str, username: str) -> dict[str, 
         raise HTTPException(status_code=400, detail="缺少人设 ID。")
     if not clean_username or len(clean_username) < 2:
         raise HTTPException(status_code=400, detail="请输入有效的 Threads 用户名。")
-    path, raw, archives = _persona_archive_source_for_write()
+    path, raw, archives = _persona_archive_source_for_write(clean_id)
     changed = False
     for archive in archives:
         if str(archive.get("id") or "").strip() != clean_id:
@@ -14432,7 +14620,7 @@ def _unbind_persona_threads_username(archive_id: str) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     if not clean_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID。")
-    path, raw, archives = _persona_archive_source_for_write()
+    path, raw, archives = _persona_archive_source_for_write(clean_id)
     changed = False
     for archive in archives:
         if str(archive.get("id") or "").strip() != clean_id:
@@ -14514,7 +14702,7 @@ def _read_persona_dashboard_profile(archive_id: str) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     if not clean_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID。")
-    _, _, archives = _persona_archive_source_for_write()
+    _, _, archives = _persona_archive_source_for_write(clean_id)
     for archive in archives:
         if str(archive.get("id") or "").strip() == clean_id:
             return _build_persona_dashboard_profile(archive)
@@ -14528,7 +14716,7 @@ def _update_persona_dashboard_profile(archive_id: str, payload: PersonaDashboard
         raise HTTPException(status_code=400, detail="缺少人设 ID。")
     if not explicit:
         raise HTTPException(status_code=400, detail="没有可更新的字段。")
-    path, raw, archives = _persona_archive_source_for_write()
+    path, raw, archives = _persona_archive_source_for_write(clean_id)
     changed_archive: dict[str, Any] | None = None
     now = _persona_dashboard_iso_now()
     for archive in archives:
@@ -14616,7 +14804,7 @@ def _delete_persona_dashboard_post(archive_id: str, post_key: str) -> dict[str, 
     clean_key = str(post_key or "").strip()
     if not clean_id or not clean_key:
         raise HTTPException(status_code=400, detail="缺少人设 ID 或帖子 ID。")
-    path, raw, archives = _persona_archive_source_for_write()
+    path, raw, archives = _persona_archive_source_for_write(clean_id)
     deleted = 0
     deleted_post_ids: set[str] = set()
     for archive in archives:
@@ -14701,7 +14889,7 @@ def _delete_persona_dashboard_persona(archive_id: str) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     if not clean_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID。")
-    path, raw, archives = _persona_archive_source_for_write()
+    path, raw, archives = _persona_archive_source_for_write(clean_id)
     removed: dict[str, Any] | None = None
     next_archives: list[dict[str, Any]] = []
     for archive in archives:
@@ -14725,20 +14913,28 @@ def _delete_persona_dashboard_persona(archive_id: str) -> dict[str, Any]:
 def _read_tool_r18_persona_archives() -> tuple[list[dict[str, Any]], dict[str, Any]]:
     primary = TOOL_R18_RUNTIME_DIR / "persona_archives.json"
     fallback = TOOL_R18_RUNTIME_DIR / "persona_archives_cache.json"
-    for path in (primary, fallback):
-        raw = _read_json_file(path)
-        archives = _extract_persona_archive_list(raw)
-        if archives:
-            return archives, {
-                "path": path.name,
-                "exists": True,
-                "count": len(archives),
-                "fallback": path == fallback,
-            }
+    primary_raw = _read_json_file(primary)
+    fallback_raw = _read_json_file(fallback)
+    primary_archives = _extract_persona_archive_list(primary_raw)
+    fallback_archives = _extract_persona_archive_list(fallback_raw)
+    merged_archives = _merge_persona_archive_sources(primary_archives, fallback_archives)
+    if merged_archives:
+        return merged_archives, {
+            "path": primary.name if primary_archives else fallback.name,
+            "exists": primary.exists() or fallback.exists(),
+            "count": len(merged_archives),
+            "primary_count": len(primary_archives),
+            "fallback_count": len(fallback_archives),
+            "merged": bool(primary_archives and fallback_archives),
+            "fallback": bool(fallback_archives and not primary_archives),
+        }
     return [], {
         "path": primary.name,
         "exists": primary.exists() or fallback.exists(),
         "count": 0,
+        "primary_count": len(primary_archives),
+        "fallback_count": len(fallback_archives),
+        "merged": False,
         "fallback": fallback.exists() and not primary.exists(),
     }
 
@@ -15673,6 +15869,7 @@ def _build_persona_dashboard_overview() -> dict[str, Any]:
         })
 
     personas.sort(key=lambda item: _number(item.get("hot", {}).get("hot_score"), 0), reverse=True)
+    persona_groups = _read_persona_groups({str(item.get("id") or "").strip() for item in personas})
     trend = [{"date": day, **values} for day, values in sorted(daily.items())]
     return {
         "ok": True,
@@ -15722,10 +15919,12 @@ def _build_persona_dashboard_overview() -> dict[str, Any]:
             "pad_distribution": pad_counts,
         },
         "personas": personas,
+        "persona_groups": persona_groups,
         "data_sources": {
             "archives": archives_source,
             "publish_queue": {k: v for k, v in queue_stats.items() if k != "rows"},
             "sentiment_hot_candidates": sentiment_stats,
+            "persona_groups": {"path": persona_groups.get("source"), "count": len(persona_groups.get("groups") or [])},
             "persona_dashboard_monitor": dict(PERSONA_DASHBOARD_MONITOR_STATE),
         },
     }
@@ -16307,6 +16506,35 @@ def create_app() -> FastAPI:
     @app.get("/api/persona_dashboard/personas/{archive_id}/memories")
     def api_persona_dashboard_persona_memories(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
         return {"ok": True, "memories": _list_selectable_persona_memories(archive_id)}
+
+    @app.get("/api/persona_dashboard/groups")
+    def api_persona_dashboard_groups(_user: dict[str, Any] = Depends(get_current_user)):
+        archives, _ = _read_tool_r18_persona_archives()
+        return _read_persona_groups({str(item.get("id") or "").strip() for item in archives})
+
+    @app.post("/api/persona_dashboard/groups")
+    def api_persona_dashboard_create_group(payload: PersonaDashboardGroupCreatePayload, _user: dict[str, Any] = Depends(get_current_user)):
+        return _create_persona_group(payload)
+
+    @app.patch("/api/persona_dashboard/groups/{group_id}")
+    def api_persona_dashboard_rename_group(group_id: str, payload: PersonaDashboardGroupRenamePayload, _user: dict[str, Any] = Depends(get_current_user)):
+        return _rename_persona_group(group_id, payload)
+
+    @app.delete("/api/persona_dashboard/groups/{group_id}")
+    def api_persona_dashboard_delete_group(group_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+        return _delete_persona_group(group_id)
+
+    @app.post("/api/persona_dashboard/groups/{group_id}/collapse")
+    def api_persona_dashboard_collapse_group(group_id: str, payload: dict[str, Any], _user: dict[str, Any] = Depends(get_current_user)):
+        return _set_persona_group_collapsed(group_id, bool((payload or {}).get("collapsed")))
+
+    @app.post("/api/persona_dashboard/groups/{group_id}/personas")
+    def api_persona_dashboard_add_group_persona(group_id: str, payload: PersonaDashboardGroupPersonaPayload, _user: dict[str, Any] = Depends(get_current_user)):
+        return _add_persona_to_group(group_id, payload)
+
+    @app.delete("/api/persona_dashboard/groups/{group_id}/personas/{archive_id}")
+    def api_persona_dashboard_remove_group_persona(group_id: str, archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+        return _remove_persona_from_group(group_id, archive_id)
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/posts")
     def api_persona_dashboard_create_post(archive_id: str, payload: PersonaDashboardDraftPostPayload, _user: dict[str, Any] = Depends(get_current_user)):
