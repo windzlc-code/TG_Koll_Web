@@ -1,3 +1,4 @@
+﻿import base64
 import json
 import os
 import sqlite3
@@ -60,6 +61,12 @@ class PersonaDashboardApiTests(unittest.TestCase):
             os.environ.pop(key, None)
         else:
             os.environ[key] = old_value
+
+    def _admin_user_id(self) -> int:
+        conn = sqlite3.connect(str(self.data_dir / "app.db"))
+        row = conn.execute("SELECT id FROM users WHERE username = ?", ("admin",)).fetchone()
+        conn.close()
+        return int(row[0])
 
     def _write_archives(self):
         archives = [
@@ -360,6 +367,26 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(groups[0]["persona_ids"], ["persona-1"])
         self.assertEqual(overview["persona_groups"]["assigned_persona_ids"], ["persona-1"])
 
+        second_resp = self.client.post("/api/persona_dashboard/groups", json={"name": "Second Matrix"})
+        self.assertEqual(second_resp.status_code, 200)
+        second_group_id = second_resp.json()["group"]["id"]
+        move_resp = self.client.post(
+            f"/api/persona_dashboard/groups/{second_group_id}/personas",
+            json={"persona_id": "persona-1"},
+        )
+        self.assertEqual(move_resp.status_code, 200)
+        overview = self.client.get("/api/persona_dashboard/overview").json()
+        groups = overview["persona_groups"]["groups"]
+        self.assertEqual(groups[0]["persona_ids"], [])
+        self.assertEqual(groups[1]["persona_ids"], ["persona-1"])
+
+        add_resp = self.client.post(
+            f"/api/persona_dashboard/groups/{group_id}/personas",
+            json={"persona_id": "persona-1"},
+        )
+        self.assertEqual(add_resp.status_code, 200)
+        self.assertEqual(add_resp.json()["group"]["persona_ids"], ["persona-1"])
+
         collapse_resp = self.client.post(
             f"/api/persona_dashboard/groups/{group_id}/collapse",
             json={"collapsed": True},
@@ -381,6 +408,57 @@ class PersonaDashboardApiTests(unittest.TestCase):
         persisted = json.loads((self.tool_runtime_dir / "persona_groups.json").read_text(encoding="utf-8"))
         self.assertEqual(persisted["groups"][0]["name"], "Renamed Matrix")
         self.assertEqual(persisted["groups"][0]["persona_ids"], [])
+        self.assertEqual(persisted["groups"][1]["persona_ids"], [])
+
+    def test_persona_groups_reorder_persists_drag_layout(self):
+        self._write_archives()
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        for persona_id, name in (("persona-2", "Driver"), ("persona-3", "Broker")):
+            item = json.loads(json.dumps(archives[0]))
+            item["id"] = persona_id
+            item["name"] = name
+            item["setup"]["personaName"] = name
+            archives.append(item)
+        archives_path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        first_group = self.client.post("/api/persona_dashboard/groups", json={"name": "First"}).json()["group"]
+        second_group = self.client.post("/api/persona_dashboard/groups", json={"name": "Second"}).json()["group"]
+
+        reorder_resp = self.client.post(
+            "/api/persona_dashboard/groups/reorder",
+            json={
+                "groups": [
+                    {"id": second_group["id"], "persona_ids": ["persona-2"]},
+                    {"id": first_group["id"], "persona_ids": ["persona-1"]},
+                ],
+                "ungrouped_persona_ids": ["persona-3"],
+            },
+        )
+        self.assertEqual(reorder_resp.status_code, 200)
+        groups = reorder_resp.json()["groups"]
+        self.assertEqual([group["id"] for group in groups], [second_group["id"], first_group["id"]])
+        self.assertEqual(groups[0]["persona_ids"], ["persona-2"])
+        self.assertEqual(groups[1]["persona_ids"], ["persona-1"])
+        self.assertEqual(reorder_resp.json()["ungrouped_persona_ids"], ["persona-3"])
+
+        drag_out_resp = self.client.post(
+            "/api/persona_dashboard/groups/reorder",
+            json={
+                "groups": [
+                    {"id": second_group["id"], "persona_ids": []},
+                    {"id": first_group["id"], "persona_ids": ["persona-1"]},
+                ],
+                "ungrouped_persona_ids": ["persona-2", "persona-3"],
+            },
+        )
+        self.assertEqual(drag_out_resp.status_code, 200)
+        self.assertEqual(drag_out_resp.json()["groups"][0]["persona_ids"], [])
+        self.assertEqual(drag_out_resp.json()["ungrouped_persona_ids"], ["persona-2", "persona-3"])
+
+        persisted = json.loads((self.tool_runtime_dir / "persona_groups.json").read_text(encoding="utf-8"))
+        self.assertEqual([group["id"] for group in persisted["groups"]], [second_group["id"], first_group["id"]])
+        self.assertEqual(persisted["ungrouped_persona_ids"], ["persona-2", "persona-3"])
 
     def test_publish_queue_missing_is_non_fatal(self):
         self._write_archives()
@@ -530,7 +608,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         with mock.patch.object(
             server,
             "_run_persona_create_cli",
-            return_value={"ok": True, "keywords": ["夜班司机", "城市见闻", "深夜通勤", "口语表达", "乘客故事"]},
+            return_value={"ok": True, "keywords": ["夜班司机", "城市见闻", "出租车故事", "深夜通勤", "城市观察"]},
         ) as cli_mock:
             resp = self.client.post(
                 "/api/persona_dashboard/personas/ai_keywords",
@@ -622,6 +700,97 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(media_resp.status_code, 200)
         self.assertEqual(media_resp.headers["content-type"], "image/png")
 
+    def test_task_submit_accepts_persona_post_image(self):
+        self._write_archives()
+        captured = {}
+
+        def fake_enqueue(task_id, user_id, task_type, payload):
+            captured["task_id"] = task_id
+            captured["user_id"] = user_id
+            captured["task_type"] = task_type
+            captured["payload"] = payload
+
+        with mock.patch.object(server, "_enqueue_task", side_effect=fake_enqueue):
+            resp = self.client.post(
+                "/api/tasks/submit",
+                data={
+                    "task_type": "persona_post_image",
+                    "params_json": json.dumps(
+                        {
+                            "related_persona_id": "persona-1",
+                            "related_post_id": "post-1",
+                            "prompt": "请生成一张通勤风格的配图",
+                            "aspect_ratio": "1:1",
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["task_type"], "persona_post_image")
+        self.assertEqual(captured["task_type"], "persona_post_image")
+        self.assertEqual(captured["payload"]["related_persona_id"], "persona-1")
+        self.assertEqual(captured["payload"]["related_post_id"], "post-1")
+
+    def test_persona_post_image_runner_saves_local_preview_file(self):
+        self._write_archives()
+        task_id = "task-persona-post-image"
+        payload = {
+            "related_persona_id": "persona-1",
+            "related_post_id": "post-1",
+            "prompt": "请生成一张适合当前推文的通勤配图",
+            "aspect_ratio": "1:1",
+        }
+        server._create_task_record(task_id, self._admin_user_id(), "persona_post_image", payload)
+        data_url = "data:image/png;base64," + base64.b64encode(self.draft_media_path.read_bytes()).decode("ascii")
+        completed = mock.Mock(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "ok": True,
+                    "imageResult": {"url": data_url, "mode": "closed-person"},
+                    "timings": {"provider": "test-provider"},
+                },
+                ensure_ascii=False,
+            ),
+            stderr="",
+        )
+        with mock.patch.object(server.subprocess, "run", return_value=completed):
+            result = server._run_persona_post_image_task(task_id, payload)
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["image_paths"])
+        saved_path = Path(result["image_paths"][0])
+        self.assertTrue(saved_path.is_file())
+        self.assertEqual(saved_path.read_bytes(), self.draft_media_path.read_bytes())
+
+    def test_attach_persona_post_image_task_output_writes_back_to_post(self):
+        self._write_archives()
+        generated_path = self.root / "generated-preview.png"
+        generated_path.write_bytes(self.draft_media_path.read_bytes())
+        task_id = "task-persona-post-image-attach"
+        server._create_task_record(
+            task_id,
+            self._admin_user_id(),
+            "persona_post_image",
+            {"related_persona_id": "persona-1", "related_post_id": "post-1"},
+        )
+        conn = sqlite3.connect(str(self.data_dir / "app.db"))
+        conn.execute(
+            "UPDATE tasks SET status = ?, output_json = ?, updated_at = ? WHERE id = ?",
+            ("success", json.dumps({"image_paths": [str(generated_path)]}, ensure_ascii=False), 1_720_000_100, task_id),
+        )
+        conn.commit()
+        conn.close()
+
+        resp = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/posts/post-1/media/from_task",
+            json={"task_id": task_id, "replace_existing": True},
+        )
+        self.assertEqual(resp.status_code, 200)
+        archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
+        post = next(item for item in archives[0]["posts"] if item["id"] == "post-1")
+        self.assertEqual(post["mediaItems"][0]["url"], str(generated_path))
+
     def test_persona_publish_history_lists_visible_records(self):
         self._write_archives()
         resp = self.client.get("/api/persona_dashboard/personas/persona-1/publish_history")
@@ -701,6 +870,127 @@ class PersonaDashboardApiTests(unittest.TestCase):
         memories = resp.json()["memories"]
         self.assertEqual([item["id"] for item in memories[:2]], ["mem-1", "mem-2"])
 
+    def test_fetch_persona_hot_candidates_calls_hot_workflow_cli(self):
+        self._write_archives()
+        (self.tool_runtime_dir / "persona_memory.json").write_text(json.dumps({
+            "persona-1": [
+                {"id": "mem-1", "date": "2026-07-04T10:00:00Z", "summary": "记忆一"},
+                {"id": "mem-2", "date": "2026-07-03T10:00:00Z", "summary": "记忆二"},
+            ]
+        }, ensure_ascii=False), encoding="utf-8")
+
+        fake_result = {
+            "ok": True,
+            "archiveName": "History Teacher",
+            "keywords": ["历史", "课堂"],
+            "cookieStatuses": [{"platform": "threads", "message": "ok"}],
+            "warnings": ["暂无 Instagram cookie"],
+            "candidates": [
+                {
+                    "id": "hot-1",
+                    "platform": "threads",
+                    "sourceUrl": "https://www.threads.com/@history/post/1",
+                    "author": "history",
+                    "content": "完整热点正文",
+                    "hotScore": 98,
+                    "metrics": {"viewCount": 1000, "likeCount": 99, "commentCount": 12},
+                    "capturedAt": "2026-07-06T10:00:00Z",
+                    "media": [{"url": "https://example.com/hot.png", "type": "image"}],
+                    "warnings": [],
+                }
+            ],
+        }
+
+        with mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value=fake_result) as mocked:
+            resp = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/hot_candidates",
+                json={
+                    "prompt": "抓取历史老师热点",
+                    "refresh": True,
+                    "limit": 6,
+                    "selected_memory_ids": ["mem-1"],
+                },
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["archive_name"], "History Teacher")
+        self.assertEqual(body["keywords"], ["历史", "课堂"])
+        self.assertEqual(body["candidates"][0]["candidate_id"], "hot-1")
+        self.assertEqual(body["candidates"][0]["id"], "hot-1")
+        self.assertEqual(body["candidates"][0]["full_content"], "完整热点正文")
+        self.assertEqual(body["candidates"][0]["media_items"][0]["url"], "https://example.com/hot.png")
+        payload = mocked.call_args.args[0]
+        self.assertEqual(payload["action"], "fetch-hot-candidates")
+        self.assertEqual(payload["archiveId"], "persona-1")
+        self.assertEqual(payload["prompt"], "抓取历史老师热点")
+        self.assertTrue(payload["refresh"])
+        self.assertEqual(payload["limit"], 6)
+        self.assertEqual(payload["memorySummaries"], ["记忆一"])
+
+    def test_import_persona_hot_candidates_returns_hot_source_meta(self):
+        self._write_archives()
+
+        def fake_hot_import(payload, timeout_seconds=180):
+            archives_path = self.tool_runtime_dir / "persona_archives.json"
+            archives = json.loads(archives_path.read_text(encoding="utf-8"))
+            archives[0]["posts"].append({
+                "id": "hot-post-1",
+                "title": "热点 #1",
+                "content": "导入的热点正文",
+                "wordCount": 6,
+                "orderIndex": 2,
+                "createdAt": "2026-07-06T11:00:00Z",
+                "updatedAt": "2026-07-06T11:00:00Z",
+                "mediaItems": [{"url": str(self.draft_media_path), "type": "image", "localPath": str(self.draft_media_path)}],
+                "mediaUrl": str(self.draft_media_path),
+                "mediaType": "image",
+                "sourceMeta": {
+                    "source": "sentiment_hot_import",
+                    "platform": "threads",
+                    "sourceUrl": "https://www.threads.com/@history/post/hot-1",
+                    "metrics": {"viewCount": 888},
+                    "engagement": {"likeCount": 66, "commentCount": 7},
+                    "originalContent": "导入的热点正文",
+                    "media": [{"url": "https://example.com/hot.png", "localPath": str(self.draft_media_path), "type": "image"}],
+                    "mediaItems": [{"url": str(self.draft_media_path), "type": "image", "localPath": str(self.draft_media_path)}],
+                    "originalMediaUrl": "https://example.com/hot.png",
+                    "originalMediaUrls": ["https://example.com/hot.png"],
+                    "warnings": [],
+                },
+            })
+            archives_path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+            return {
+                "ok": True,
+                "archiveId": payload["archiveId"],
+                "importedCount": 1,
+                "posts": [{"id": "hot-post-1", "title": "热点 #1", "content": "导入的热点正文"}],
+            }
+
+        with mock.patch.object(server, "_run_persona_hot_workflow_cli", side_effect=fake_hot_import):
+            resp = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/hot_candidates/import",
+                json={
+                    "candidates": [
+                        {
+                            "id": "hot-1",
+                            "platform": "threads",
+                            "sourceUrl": "https://www.threads.com/@history/post/hot-1",
+                            "content": "导入的热点正文",
+                            "media": [{"url": "https://example.com/hot.png", "type": "image"}],
+                        }
+                    ]
+                },
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["imported_count"], 1)
+        self.assertEqual(body["posts"][0]["id"], "hot-post-1")
+        self.assertTrue(body["posts"][0]["is_hot_imported"])
+        self.assertEqual(body["posts"][0]["source_meta"]["source"], "sentiment_hot_import")
+        self.assertEqual(body["posts"][0]["source_meta"]["source_url"], "https://www.threads.com/@history/post/hot-1")
+        self.assertTrue(body["posts"][0]["source_meta"]["media_items"])
     def test_generate_persona_posts_calls_persona_workflow_cli(self):
         self._write_archives()
 

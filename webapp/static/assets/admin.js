@@ -1012,8 +1012,9 @@ const adminState = {
 };
 const REMOTE_COMFY_TASKS = [
   ["text_to_image", "文字生成图片"],
+  ["persona_post_image", "推文生成配图"],
 ];
-const TASK_TYPE_LABELS = { text_to_image: "文字生成图片" };
+const TASK_TYPE_LABELS = { text_to_image: "文字生成图片", persona_post_image: "推文生成配图" };
 const ADMIN_PAGES = new Set(["overview", "users", "tasks", "pricing", "runtime", "sentimentCookies", "account"]);
 const ADMIN_PAGE_ALIASES = {
   secOverview: "overview",

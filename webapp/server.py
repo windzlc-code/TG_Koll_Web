@@ -9204,8 +9204,103 @@ def _run_face_swap(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     raise RuntimeError("该换脸工作流入口已移除。")
 
 
+def _persist_generated_image_for_task(task_id: str, image_url: str) -> str:
+    text = str(image_url or "").strip()
+    if not text:
+        raise RuntimeError("未返回可保存的图片结果。")
+    workdir = _build_task_workdir(task_id)
+    if text.startswith("data:image/"):
+        header, _, base64_data = text.partition(",")
+        mime_part = header[5:].split(";", 1)[0].strip().lower()
+        suffix = {
+            "image/png": ".png",
+            "image/jpeg": ".jpg",
+            "image/jpg": ".jpg",
+            "image/webp": ".webp",
+            "image/gif": ".gif",
+        }.get(mime_part, ".png")
+        target = workdir / f"persona_post_preview{suffix}"
+        target.write_bytes(base64.b64decode(base64_data))
+        return str(target)
+    if re.match(r"^https?://", text, re.I):
+        suffix = Path(urlsplit(text).path).suffix or ".png"
+        target = workdir / f"persona_post_preview{suffix}"
+        _download_to_file(text, target)
+        return str(target)
+    source = Path(text).expanduser().resolve()
+    if source.is_file():
+        target = workdir / f"persona_post_preview{source.suffix or '.png'}"
+        shutil.copy2(source, target)
+        return str(target)
+    raise RuntimeError("未识别的图片结果地址。")
+
+
+def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    archive_id = str(payload.get("related_persona_id") or "").strip()
+    post_id = str(payload.get("related_post_id") or "").strip()
+    prompt = str(payload.get("prompt") or payload.get("prompt_text") or payload.get("message") or "").strip()
+    aspect_ratio = str(payload.get("aspect_ratio") or payload.get("aspectRatio") or "1:1").strip() or "1:1"
+    if not archive_id or not post_id:
+        raise RuntimeError("推文配图缺少人设 ID 或草稿 ID。")
+    _, _, archives = _persona_archive_source_for_write(archive_id)
+    archive = _find_persona_archive(archives, archive_id)
+    if not archive:
+        raise RuntimeError("人设不存在。")
+    posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+    post = next((item for item in posts if isinstance(item, dict) and str(item.get("id") or "").strip() == post_id), None)
+    if not post:
+        raise RuntimeError("草稿不存在。")
+    cli_payload = {
+        "setup": archive.get("setup") if isinstance(archive.get("setup"), dict) else {},
+        "content": str(post.get("content") or "").strip(),
+        "customPrompt": prompt or None,
+        "aspectRatio": aspect_ratio,
+        "mode": "auto",
+        "referenceSheetUrl": _persona_reference_image_url_from_archive(archive) or None,
+        "generateReferenceSheet": False,
+        "dryRun": False,
+    }
+    _sync_tool_r18_api_config_for_persona_workflow()
+    command = ["node", "--import", "tsx", "scripts/skills/generate-persona-images.ts", json.dumps(cli_payload, ensure_ascii=False)]
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(ROOT_DIR / "tool_r18"),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=300,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"推文配图超时：{exc.timeout} 秒。") from exc
+    except FileNotFoundError as exc:
+        raise RuntimeError("未找到 Node.js 或 tsx，无法执行推文配图。") from exc
+    stdout = str(completed.stdout or "").strip()
+    stderr = str(completed.stderr or "").strip()
+    data = _parse_tool_r18_json_output(stdout)
+    if completed.returncode != 0:
+        raise RuntimeError(str((data or {}).get("error") or stderr or stdout or "推文配图失败。").strip())
+    if not isinstance(data, dict):
+        raise RuntimeError("推文配图返回格式无效。")
+    image_result = data.get("imageResult") if isinstance(data.get("imageResult"), dict) else {}
+    image_url = str(image_result.get("url") or "").strip()
+    if not image_url:
+        raise RuntimeError(str(image_result.get("error") or data.get("error") or "推文配图失败。").strip())
+    saved_path = _persist_generated_image_for_task(task_id, image_url)
+    return {
+        "ok": True,
+        "message": "推文配图生成完成",
+        "download_path": saved_path,
+        "image_paths": [saved_path],
+        "image_url": image_url,
+        "timings": data.get("timings") if isinstance(data.get("timings"), dict) else {},
+    }
+
+
 TASK_RUNNERS = {
     "text_to_image": _run_text_to_image_disabled,
+    "persona_post_image": _run_persona_post_image_task,
     "single_image_edit": _run_single_image_edit,
     "get_nano_banana": _run_get_nano_banana,
     "face_swap": _run_face_swap,
@@ -10163,6 +10258,16 @@ class PersonaDashboardGroupPersonaPayload(BaseModel):
     persona_id: str = ""
 
 
+class PersonaDashboardGroupReorderItemPayload(BaseModel):
+    id: str = ""
+    persona_ids: list[str] = Field(default_factory=list)
+
+
+class PersonaDashboardGroupReorderPayload(BaseModel):
+    groups: list[PersonaDashboardGroupReorderItemPayload] = Field(default_factory=list)
+    ungrouped_persona_ids: list[str] = Field(default_factory=list)
+
+
 class PersonaDashboardLinkPresetPayload(BaseModel):
     id: str = ""
     name: str = ""
@@ -10221,6 +10326,17 @@ class PersonaDashboardPostMediaTaskAttachPayload(BaseModel):
 
 class PersonaDashboardPostMediaUploadPayload(BaseModel):
     replace_existing: bool = False
+
+
+class PersonaDashboardHotCandidatesFetchPayload(BaseModel):
+    prompt: str = ""
+    refresh: bool = False
+    limit: int = 10
+    selected_memory_ids: list[str] = Field(default_factory=list)
+
+
+class PersonaDashboardHotCandidatesImportPayload(BaseModel):
+    candidates: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class InternalTgSubmitPayload(BaseModel):
@@ -10594,6 +10710,60 @@ def _compact_persona_archive_post(post: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _compact_persona_source_meta(source_meta: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(source_meta, dict):
+        return {}
+    return {
+        "source": str(source_meta.get("source") or "").strip(),
+        "platform": str(source_meta.get("platform") or "").strip(),
+        "source_url": str(source_meta.get("sourceUrl") or source_meta.get("source_url") or "").strip(),
+        "hot_score": _number(source_meta.get("hotScore"), 0),
+        "metrics": source_meta.get("metrics") if isinstance(source_meta.get("metrics"), dict) else {},
+        "engagement": source_meta.get("engagement") if isinstance(source_meta.get("engagement"), dict) else {},
+        "published_at": source_meta.get("publishedAt") or source_meta.get("published_at"),
+        "captured_at": source_meta.get("capturedAt") or source_meta.get("captured_at"),
+        "original_content": str(source_meta.get("originalContent") or "").strip()[:5000],
+        "original_media_url": str(source_meta.get("originalMediaUrl") or "").strip(),
+        "original_media_urls": [
+            str(item or "").strip()
+            for item in (source_meta.get("originalMediaUrls") if isinstance(source_meta.get("originalMediaUrls"), list) else [])
+            if str(item or "").strip()
+        ],
+        "warnings": [
+            str(item or "").strip()
+            for item in (source_meta.get("warnings") if isinstance(source_meta.get("warnings"), list) else [])
+            if str(item or "").strip()
+        ],
+        "media_items": _compact_dashboard_media_items(source_meta),
+        "source_summary": str(source_meta.get("sourceSummary") or "").strip()[:220],
+    }
+
+
+def _compact_persona_archive_post(post: dict[str, Any]) -> dict[str, Any]:
+    published_meta = post.get("publishedMeta") if isinstance(post.get("publishedMeta"), dict) else {}
+    source_meta = post.get("sourceMeta") if isinstance(post.get("sourceMeta"), dict) else {}
+    return {
+        "id": str(post.get("id") or "").strip(),
+        "title": str(post.get("title") or "")[:120],
+        "content": str(post.get("content") or "")[:5000],
+        "word_count": int(_number(post.get("wordCount"), 0)),
+        "order_index": int(_number(post.get("orderIndex"), 0)),
+        "created_at": post.get("createdAt"),
+        "updated_at": post.get("updatedAt"),
+        "published_at": post.get("publishedAt"),
+        "published_url": post.get("publishedUrl") or published_meta.get("publishedUrl") or published_meta.get("published_url") or "",
+        "screenshot_path": str(post.get("screenshotUrl") or ""),
+        "screenshot_url": _automation_screenshot_url(post.get("screenshotUrl")),
+        "platform": str(post.get("platform") or published_meta.get("platform") or "").strip(),
+        "automation_task_id": str(post.get("automationTaskId") or "").strip(),
+        "media_url": str(post.get("mediaUrl") or post.get("imageUrl") or ""),
+        "media_type": str(post.get("mediaType") or ""),
+        "media_items": _compact_dashboard_media_items(post, published_meta),
+        "is_hot_imported": str(source_meta.get("source") or "").strip() == "sentiment_hot_import",
+        "source_meta": _compact_persona_source_meta(source_meta),
+    }
+
+
 def _persona_memory_file() -> Path:
     return TOOL_R18_RUNTIME_DIR / "persona_memory.json"
 
@@ -10807,6 +10977,178 @@ def _remove_persona_from_group(group_id: str, persona_id: str) -> dict[str, Any]
     return {"ok": True, "group": group}
 
 
+def _read_persona_groups_config() -> dict[str, Any]:
+    raw = _read_json_file(_persona_group_file())
+    if not isinstance(raw, dict):
+        return {"groups": [], "ungrouped_persona_ids": []}
+    raw_groups = raw.get("groups") if isinstance(raw.get("groups"), list) else []
+    raw_ungrouped = raw.get("ungrouped_persona_ids") if isinstance(raw.get("ungrouped_persona_ids"), list) else []
+    groups: list[dict[str, Any]] = []
+    seen_group_ids: set[str] = set()
+    for index, item in enumerate(raw_groups):
+        if not isinstance(item, dict):
+            continue
+        group_id = str(item.get("id") or "").strip() or f"pg-legacy-{index}"
+        if group_id in seen_group_ids:
+            continue
+        seen_group_ids.add(group_id)
+        persona_ids: list[str] = []
+        seen_persona_ids: set[str] = set()
+        for persona_id in item.get("persona_ids") if isinstance(item.get("persona_ids"), list) else []:
+            clean_persona_id = str(persona_id or "").strip()
+            if clean_persona_id and clean_persona_id not in seen_persona_ids:
+                seen_persona_ids.add(clean_persona_id)
+                persona_ids.append(clean_persona_id)
+        groups.append({
+            "id": group_id,
+            "name": _sanitize_persona_group_name(item.get("name")) or f"人设组 {index + 1}",
+            "persona_ids": persona_ids,
+            "collapsed": bool(item.get("collapsed", False)),
+            "created_at": str(item.get("created_at") or "").strip() or _persona_dashboard_iso_now(),
+            "updated_at": str(item.get("updated_at") or "").strip() or _persona_dashboard_iso_now(),
+        })
+    ungrouped_persona_ids: list[str] = []
+    seen_ungrouped: set[str] = set()
+    for persona_id in raw_ungrouped:
+        clean_persona_id = str(persona_id or "").strip()
+        if clean_persona_id and clean_persona_id not in seen_ungrouped:
+            seen_ungrouped.add(clean_persona_id)
+            ungrouped_persona_ids.append(clean_persona_id)
+    return {"groups": groups, "ungrouped_persona_ids": ungrouped_persona_ids}
+
+
+def _write_persona_groups_config(config: dict[str, Any]) -> None:
+    groups = config.get("groups") if isinstance(config.get("groups"), list) else []
+    ungrouped_persona_ids = config.get("ungrouped_persona_ids") if isinstance(config.get("ungrouped_persona_ids"), list) else []
+    _write_json_file(_persona_group_file(), {"groups": groups, "ungrouped_persona_ids": ungrouped_persona_ids})
+
+
+def _remove_persona_group_ids(persona_ids: set[str]) -> bool:
+    if not persona_ids:
+        return False
+    config = _read_persona_groups_config()
+    groups = config.get("groups") if isinstance(config.get("groups"), list) else []
+    changed = False
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        current_ids = group.get("persona_ids") if isinstance(group.get("persona_ids"), list) else []
+        next_ids = [pid for pid in current_ids if str(pid or "").strip() not in persona_ids]
+        if len(next_ids) != len(current_ids):
+            group["persona_ids"] = next_ids
+            group["updated_at"] = _persona_dashboard_iso_now()
+            changed = True
+    ungrouped_persona_ids = [
+        pid
+        for pid in (config.get("ungrouped_persona_ids") if isinstance(config.get("ungrouped_persona_ids"), list) else [])
+        if str(pid or "").strip() not in persona_ids
+    ]
+    if len(ungrouped_persona_ids) != len(config.get("ungrouped_persona_ids") or []):
+        changed = True
+    if changed:
+        _write_persona_groups_config({"groups": groups, "ungrouped_persona_ids": ungrouped_persona_ids})
+    return changed
+
+
+def _read_persona_groups(valid_persona_ids: set[str] | None = None) -> dict[str, Any]:
+    config = _read_persona_groups_config()
+    valid_ids = set(valid_persona_ids or set())
+    groups: list[dict[str, Any]] = []
+    for group in config.get("groups") if isinstance(config.get("groups"), list) else []:
+        persona_ids = [pid for pid in group.get("persona_ids", []) if not valid_ids or pid in valid_ids]
+        groups.append({**group, "persona_ids": persona_ids})
+    assigned_ids = {persona_id for group in groups for persona_id in group.get("persona_ids", [])}
+    ungrouped_persona_ids = [
+        pid
+        for pid in (config.get("ungrouped_persona_ids") if isinstance(config.get("ungrouped_persona_ids"), list) else [])
+        if not valid_ids or pid in valid_ids
+    ]
+    return {
+        "ok": True,
+        "groups": groups,
+        "assigned_persona_ids": sorted(assigned_ids),
+        "ungrouped_persona_ids": ungrouped_persona_ids,
+        "source": _persona_group_file().name,
+    }
+
+
+def _add_persona_to_group(group_id: str, payload: PersonaDashboardGroupPersonaPayload) -> dict[str, Any]:
+    persona_id = str(payload.persona_id or "").strip()
+    if not persona_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID。")
+    archives, _ = _read_tool_r18_persona_archives()
+    if not _find_persona_archive(archives, persona_id):
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    config = _read_persona_groups_config()
+    groups = config.get("groups") if isinstance(config.get("groups"), list) else []
+    group = _find_persona_group(groups, group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="分组不存在。")
+    for current_group in groups:
+        if not isinstance(current_group, dict):
+            continue
+        current_ids = current_group.get("persona_ids") if isinstance(current_group.get("persona_ids"), list) else []
+        if persona_id in current_ids:
+            current_group["persona_ids"] = [pid for pid in current_ids if pid != persona_id]
+            current_group["updated_at"] = _persona_dashboard_iso_now()
+    persona_ids = group.get("persona_ids") if isinstance(group.get("persona_ids"), list) else []
+    if persona_id not in persona_ids:
+        persona_ids.append(persona_id)
+    group["persona_ids"] = persona_ids
+    group["updated_at"] = _persona_dashboard_iso_now()
+    ungrouped_persona_ids = [
+        pid
+        for pid in (config.get("ungrouped_persona_ids") if isinstance(config.get("ungrouped_persona_ids"), list) else [])
+        if pid != persona_id
+    ]
+    _write_persona_groups_config({"groups": groups, "ungrouped_persona_ids": ungrouped_persona_ids})
+    return {"ok": True, "group": group}
+
+
+def _remove_persona_from_group(group_id: str, persona_id: str) -> dict[str, Any]:
+    clean_persona_id = str(persona_id or "").strip()
+    config = _read_persona_groups_config()
+    groups = config.get("groups") if isinstance(config.get("groups"), list) else []
+    group = _find_persona_group(groups, group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="分组不存在。")
+    group["persona_ids"] = [pid for pid in group.get("persona_ids", []) if str(pid) != clean_persona_id]
+    group["updated_at"] = _persona_dashboard_iso_now()
+    ungrouped_persona_ids = list(config.get("ungrouped_persona_ids") or [])
+    if clean_persona_id and clean_persona_id not in ungrouped_persona_ids:
+        ungrouped_persona_ids.append(clean_persona_id)
+    _write_persona_groups_config({"groups": groups, "ungrouped_persona_ids": ungrouped_persona_ids})
+    return {"ok": True, "group": group}
+
+
+def _reorder_persona_groups(payload: PersonaDashboardGroupReorderPayload) -> dict[str, Any]:
+    config = _read_persona_groups_config()
+    current_groups = config.get("groups") if isinstance(config.get("groups"), list) else []
+    current_by_id = {
+        str(group.get("id") or "").strip(): dict(group)
+        for group in current_groups
+        if isinstance(group, dict) and str(group.get("id") or "").strip()
+    }
+    reordered_groups: list[dict[str, Any]] = []
+    seen_group_ids: set[str] = set()
+    for item in payload.groups:
+        group_id = str(item.id or "").strip()
+        if not group_id or group_id in seen_group_ids or group_id not in current_by_id:
+            continue
+        seen_group_ids.add(group_id)
+        next_group = current_by_id[group_id]
+        next_group["persona_ids"] = [str(pid or "").strip() for pid in item.persona_ids if str(pid or "").strip()]
+        next_group["updated_at"] = _persona_dashboard_iso_now()
+        reordered_groups.append(next_group)
+    for group in current_groups:
+        group_id = str(group.get("id") or "").strip()
+        if group_id and group_id not in seen_group_ids:
+            reordered_groups.append(group)
+    ungrouped_persona_ids = [str(pid or "").strip() for pid in payload.ungrouped_persona_ids if str(pid or "").strip()]
+    _write_persona_groups_config({"groups": reordered_groups, "ungrouped_persona_ids": ungrouped_persona_ids})
+    return {"ok": True, "groups": reordered_groups, "ungrouped_persona_ids": ungrouped_persona_ids}
+
+
 def _normalize_persona_memory_summary(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()[:220]
 
@@ -10886,8 +11228,65 @@ def _list_selectable_persona_memories(archive_id: str) -> list[dict[str, Any]]:
     return entries[:100]
 
 
+def _normalize_persona_hot_candidate(candidate: Any) -> dict[str, Any] | None:
+    if not isinstance(candidate, dict):
+        return None
+    raw_candidate_id = str(candidate.get("id") or candidate.get("candidateId") or "").strip()
+    candidate_id = raw_candidate_id or _new_id("hot")
+    source_url = str(candidate.get("sourceUrl") or candidate.get("source_url") or "").strip()
+    content = str(candidate.get("content") or "").strip()
+    metrics = candidate.get("metrics") if isinstance(candidate.get("metrics"), dict) else {}
+    engagement = candidate.get("engagement") if isinstance(candidate.get("engagement"), dict) else {}
+    return {
+        "candidate_id": candidate_id,
+        "id": candidate_id,
+        "platform": str(candidate.get("platform") or "threads").strip() or "threads",
+        "author": str(candidate.get("author") or "").strip(),
+        "summary": _normalize_persona_memory_summary(content or source_url),
+        "content": content[:280],
+        "full_content": content[:5000],
+        "source_url": source_url,
+        "hot_score": _number(candidate.get("hotScore"), 0),
+        "metrics": metrics,
+        "engagement": engagement,
+        "published_at": candidate.get("publishedAt") or candidate.get("published_at"),
+        "captured_at": candidate.get("capturedAt") or candidate.get("captured_at"),
+        "qa_passed": bool(candidate.get("qaPassed") is True or candidate.get("qa_passed") is True),
+        "warnings": [
+            str(item or "").strip()
+            for item in (candidate.get("warnings") if isinstance(candidate.get("warnings"), list) else [])
+            if str(item or "").strip()
+        ],
+        "media_items": _compact_dashboard_media_items(candidate),
+    }
+
+
 def _tool_r18_node_command(script_rel: str = "scripts/skills/persona-workflow.ts") -> list[str]:
     return ["node", "--import", "tsx", script_rel]
+
+
+def _parse_tool_r18_json_output(stdout: str) -> dict[str, Any] | None:
+    text = str(stdout or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+    lines = text.splitlines()
+    for start in range(len(lines) - 1, -1, -1):
+        candidate = "\n".join(lines[start:]).strip()
+        if not candidate.startswith("{"):
+            continue
+        try:
+            parsed = json.loads(candidate)
+        except Exception:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
 
 
 def _sync_tool_r18_api_config_for_persona_workflow() -> None:
@@ -10995,6 +11394,227 @@ def _run_persona_create_cli(payload: dict[str, Any], timeout_seconds: int = 900)
     if data.get("ok") is False:
         raise HTTPException(status_code=500, detail=str(data.get("error") or "AI 新建人设失败。").strip())
     return data
+
+
+def _run_persona_workflow_cli(payload: dict[str, Any], timeout_seconds: int = 900) -> dict[str, Any]:
+    _sync_tool_r18_api_config_for_persona_workflow()
+    command = [*_tool_r18_node_command(), json.dumps(payload, ensure_ascii=True)]
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(ROOT_DIR / "tool_r18"),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=max(30, int(timeout_seconds)),
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(status_code=504, detail=f"人设生成超时：{exc.timeout} 秒。") from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=500, detail="未找到 Node.js 运行时，无法执行人设生成。") from exc
+    stdout = str(completed.stdout or "").strip()
+    stderr = str(completed.stderr or "").strip()
+    data = _parse_tool_r18_json_output(stdout)
+    if completed.returncode != 0:
+        detail = str((data or {}).get("error") or stderr or stdout or "人设生成失败。").strip()
+        raise HTTPException(status_code=500, detail=detail)
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=500, detail="人设生成返回格式无效。")
+    if data.get("ok") is False:
+        raise HTTPException(status_code=500, detail=str(data.get("error") or "人设生成失败。").strip())
+    return data
+
+
+def _run_persona_create_cli(payload: dict[str, Any], timeout_seconds: int = 900) -> dict[str, Any]:
+    _sync_tool_r18_api_config_for_persona_workflow()
+    command = [*_tool_r18_node_command("scripts/skills/persona-create-workflow.ts"), json.dumps(payload, ensure_ascii=True)]
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(ROOT_DIR / "tool_r18"),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=max(30, int(timeout_seconds)),
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(status_code=504, detail=f"AI 新建人设超时：{exc.timeout} 秒。") from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=500, detail="未找到 Node.js 或 tsx，无法执行 AI 新建人设。") from exc
+    stdout = str(completed.stdout or "").strip()
+    stderr = str(completed.stderr or "").strip()
+    data = _parse_tool_r18_json_output(stdout)
+    if completed.returncode != 0:
+        detail = str((data or {}).get("error") or stderr or stdout or "AI 新建人设失败。").strip()
+        raise HTTPException(status_code=500, detail=detail)
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=500, detail="AI 新建人设返回格式无效。")
+    if data.get("ok") is False:
+        raise HTTPException(status_code=500, detail=str(data.get("error") or "AI 新建人设失败。").strip())
+    return data
+
+
+_HOT_WORKFLOW_SIMPLIFIED_REPLACEMENTS: tuple[tuple[str, str], ...] = (
+    ("請刷新或換更人設關鍵詞", "请刷新或更换人设关键词"),
+    ("未找到符合條件的高熱度中文熱點", "未找到符合条件的高热度中文热点"),
+    ("當前人設沒有解析出可搜索关键词", "当前人设没有解析出可搜索关键词"),
+    ("請先在人設簡介補充明確的領域、興趣或職業設定", "请先在人设简介补充明确的领域、兴趣或职业设定"),
+    ("渠道統計", "渠道统计"),
+    ("快取初始", "缓存初始"),
+    ("補充前", "补充前"),
+    ("資料庫", "数据库"),
+    ("最終", "最终"),
+    ("課堂互動", "课堂互动"),
+    ("班級管理", "班级管理"),
+    ("教育觀察", "教育观察"),
+    ("師生相處", "师生相处"),
+    ("學生輔導", "学生辅导"),
+    ("晨會分享", "晨会分享"),
+    ("校園日常", "校园日常"),
+    ("教師生活", "教师生活"),
+    ("個", "个"),
+    ("過期", "过期"),
+    ("條件", "条件"),
+    ("熱度", "热度"),
+    ("熱點", "热点"),
+    ("關鍵詞", "关键词"),
+)
+
+
+def _normalize_hot_workflow_text(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    for source, target in _HOT_WORKFLOW_SIMPLIFIED_REPLACEMENTS:
+        text = text.replace(source, target)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _run_persona_hot_workflow_cli(payload: dict[str, Any], timeout_seconds: int = 180) -> dict[str, Any]:
+    _sync_tool_r18_api_config_for_persona_workflow()
+    command = [*_tool_r18_node_command("scripts/skills/persona-hot-workflow.ts"), json.dumps(payload, ensure_ascii=True)]
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(ROOT_DIR / "tool_r18"),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=max(30, int(timeout_seconds)),
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(status_code=504, detail=f"热点抓取超时：{exc.timeout} 秒。") from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=500, detail="未找到 Node.js 或 tsx，无法执行热点抓取。") from exc
+    stdout = str(completed.stdout or "").strip()
+    stderr = str(completed.stderr or "").strip()
+    data = _parse_tool_r18_json_output(stdout)
+    if completed.returncode != 0:
+        detail = str((data or {}).get("error") or stderr or stdout or "热点抓取失败。").strip()
+        raise HTTPException(status_code=500, detail=detail)
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=500, detail="热点抓取返回格式无效。")
+    if data.get("ok") is False:
+        raise HTTPException(status_code=500, detail=str(data.get("error") or "热点抓取失败。").strip())
+    return data
+
+
+def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload) -> dict[str, Any]:
+    clean_id = str(archive_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID。")
+    memories = _list_selectable_persona_memories(clean_id)
+    summary_by_id = {
+        str(item.get("id") or "").strip(): str(item.get("summary") or "").strip()
+        for item in memories
+        if str(item.get("id") or "").strip() and str(item.get("summary") or "").strip()
+    }
+    selected_summaries = [
+        summary_by_id[memory_id]
+        for memory_id in [str(item or "").strip() for item in (payload.selected_memory_ids or [])]
+        if memory_id in summary_by_id
+    ][:8]
+    result = _run_persona_hot_workflow_cli(
+        {
+            "action": "fetch-hot-candidates",
+            "archiveId": clean_id,
+            "prompt": str(payload.prompt or "").strip(),
+            "refresh": bool(payload.refresh),
+            "limit": min(max(_to_int(payload.limit, 10), 1), 20),
+            "memorySummaries": selected_summaries,
+        },
+        timeout_seconds=180,
+    )
+    cookie_rows = []
+    for item in result.get("cookieStatuses") if isinstance(result.get("cookieStatuses"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        cookie_rows.append({
+            "platform": str(item.get("platform") or "").strip(),
+            "label": _normalize_hot_workflow_text(item.get("label") or item.get("platform") or ""),
+            "message": _normalize_hot_workflow_text(item.get("message") or item.get("health") or ""),
+            "health": str(item.get("health") or "").strip(),
+        })
+    candidates = [
+        normalized
+        for normalized in (
+            _normalize_persona_hot_candidate(item)
+            for item in (result.get("candidates") if isinstance(result.get("candidates"), list) else [])
+        )
+        if normalized
+    ]
+    return {
+        "ok": True,
+        "archive_name": str(result.get("archiveName") or result.get("archive_name") or "").strip(),
+        "keywords": [
+            _normalize_hot_workflow_text(item)
+            for item in (result.get("keywords") if isinstance(result.get("keywords"), list) else [])
+            if _normalize_hot_workflow_text(item)
+        ],
+        "cookie_statuses": cookie_rows,
+        "warnings": [
+            _normalize_hot_workflow_text(item)
+            for item in (result.get("warnings") if isinstance(result.get("warnings"), list) else [])
+            if _normalize_hot_workflow_text(item)
+        ],
+        "candidates": candidates,
+    }
+
+
+def _import_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesImportPayload) -> dict[str, Any]:
+    clean_id = str(archive_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID。")
+    candidates = payload.candidates if isinstance(payload.candidates, list) else []
+    cleaned_candidates = [item for item in candidates if isinstance(item, dict)]
+    if not cleaned_candidates:
+        raise HTTPException(status_code=400, detail="请先选择至少一条热点候选。")
+    result = _run_persona_hot_workflow_cli(
+        {
+            "action": "import-hot-candidates",
+            "archiveId": clean_id,
+            "candidates": cleaned_candidates,
+        },
+        timeout_seconds=180,
+    )
+    posts = _list_persona_archive_posts(clean_id)
+    post_by_id = {str(post.get("id") or "").strip(): post for post in posts if str(post.get("id") or "").strip()}
+    imported_posts = []
+    for item in result.get("posts") if isinstance(result.get("posts"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        post_id = str(item.get("id") or "").strip()
+        if post_id and post_id in post_by_id:
+            imported_posts.append(post_by_id[post_id])
+    return {
+        "ok": True,
+        "archive_id": str(result.get("archiveId") or clean_id).strip(),
+        "imported_count": _to_int(result.get("importedCount"), len(imported_posts)),
+        "posts": imported_posts,
+    }
 
 
 def _build_persona_generate_instruction(payload: PersonaDashboardGeneratePostsPayload) -> str:
@@ -13867,6 +14487,18 @@ def create_app() -> FastAPI:
     def api_persona_dashboard_remove_group_persona(group_id: str, archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
         return _remove_persona_from_group(group_id, archive_id)
 
+    @app.post("/api/persona_dashboard/groups/reorder")
+    def api_persona_dashboard_reorder_groups(payload: PersonaDashboardGroupReorderPayload, _user: dict[str, Any] = Depends(get_current_user)):
+        return _reorder_persona_groups(payload)
+
+    @app.post("/api/persona_dashboard/personas/{archive_id}/hot_candidates")
+    def api_persona_dashboard_fetch_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload, _user: dict[str, Any] = Depends(get_current_user)):
+        return _fetch_persona_hot_candidates(archive_id, payload)
+
+    @app.post("/api/persona_dashboard/personas/{archive_id}/hot_candidates/import")
+    def api_persona_dashboard_import_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesImportPayload, _user: dict[str, Any] = Depends(get_current_user)):
+        return _import_persona_hot_candidates(archive_id, payload)
+
     @app.post("/api/persona_dashboard/personas/{archive_id}/posts")
     def api_persona_dashboard_create_post(archive_id: str, payload: PersonaDashboardDraftPostPayload, _user: dict[str, Any] = Depends(get_current_user)):
         return _create_persona_archive_post(archive_id, payload)
@@ -14389,6 +15021,14 @@ def create_app() -> FastAPI:
         _ensure_user_can_access_task(user, task)
         return _build_task_detail_payload(task=task, include_logs=True, log_limit=1000)
 
+    @app.post("/api/tasks/{task_id}/cancel")
+    def api_task_cancel(task_id: str, user: dict[str, Any] = Depends(get_current_user)):
+        return _cancel_task_record_for_user(
+            task_id=task_id,
+            user_id=int(user["id"]),
+            requested_by="Web 控制台",
+        )
+
     @app.get("/api/tasks/{task_id}/media/{index}")
     def api_task_media(task_id: str, index: int, user: dict[str, Any] = Depends(get_current_user)):
         return _serve_task_output_media(task_id, index, user)
@@ -14816,7 +15456,9 @@ def create_app() -> FastAPI:
         typ = str(task_type or "").strip()
         if not typ:
             raise HTTPException(status_code=400, detail="task_type 不能为空")
-        if typ != "text_to_image":
+        if typ == "persona_post_image":
+            pass
+        elif typ != "text_to_image":
             raise HTTPException(status_code=400, detail="Web 端当前只保留文生图任务")
         params = _extract_json_from_text(params_json)
         params = params if isinstance(params, dict) else {}
@@ -14840,6 +15482,13 @@ def create_app() -> FastAPI:
                 payload["prompt"] = str(payload.get("prompt") or payload.get("prompt_text") or payload.get("message") or "").strip()
                 if not payload["prompt"]:
                     raise HTTPException(status_code=400, detail="文生图需要填写 prompt")
+            elif typ == "persona_post_image":
+                payload["related_persona_id"] = str(payload.get("related_persona_id") or "").strip()
+                payload["related_post_id"] = str(payload.get("related_post_id") or "").strip()
+                payload["prompt"] = str(payload.get("prompt") or payload.get("prompt_text") or payload.get("message") or "").strip()
+                payload["aspect_ratio"] = str(payload.get("aspect_ratio") or payload.get("aspectRatio") or "1:1").strip() or "1:1"
+                if not payload["related_persona_id"] or not payload["related_post_id"]:
+                    raise HTTPException(status_code=400, detail="推文配图需要关联人设 ID 和草稿 ID")
             else:
                 raise HTTPException(status_code=400, detail=f"不支持的 task_type: {typ}")
         except HTTPException:
