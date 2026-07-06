@@ -599,7 +599,7 @@ def create_social_task(payload: SocialTaskPayload) -> dict[str, Any]:
                 raise HTTPException(status_code=400, detail="登录密码内容看起来像说明文字，请填写真实密码")
             saved_username = str(account["login_username"] or "").strip() if "login_username" in account.keys() else ""
             task_payload["login_username"] = str(task_payload.get("login_username") or saved_username or account["username"] or "").strip()
-            task_payload, runtime_secrets = _extract_runtime_secrets(task_payload)
+        task_payload, runtime_secrets = _extract_runtime_secrets(task_payload)
         if platform == "threads" and task_type in {"threads_warmup", "threads_auto_reply"}:
             task_payload = _enrich_threads_task_payload(persona_id, task_type, task_payload)
         conn.execute(
