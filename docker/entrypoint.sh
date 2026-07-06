@@ -101,7 +101,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo "Starting Workflow Delivery Web backend..."
-uvicorn webapp.server:app --host 0.0.0.0 --port 8098 &
+"${VIRTUAL_ENV:-/opt/venv}/bin/uvicorn" webapp.server:app --host 0.0.0.0 --port 8098 &
 WEB_PID=$!
 
 if [[ "$(desired_state)" == "running" ]]; then
