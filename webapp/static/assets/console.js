@@ -3,6 +3,7 @@ const THEME_STORAGE_KEY = "wk-console-theme";
 const PERSONA_LIST_PAGE_SIZE_KEY = "wk-persona-list-page-size";
 const PERSONA_GENERATE_COUNT_KEY = "wk-persona-generate-count";
 const PERSONA_GENERATE_TARGET_WORDS_KEY = "wk-persona-generate-target-words";
+const PERSONA_MEDIA_IMAGE_COUNT_KEY = "wk-persona-media-image-count";
 const PERSONA_HOT_IMPORTS_STORAGE_KEY = "wk-persona-hot-imports";
 
 try {
@@ -35,6 +36,15 @@ function storedPersonaGenerateTargetWords() {
     return Math.min(Math.max(Number.isFinite(value) ? Math.round(value) : 120, 10), 2000);
   } catch {
     return 120;
+  }
+}
+
+function storedPersonaMediaImageCount() {
+  try {
+    const value = Number(window.localStorage.getItem(PERSONA_MEDIA_IMAGE_COUNT_KEY) || 1);
+    return Math.min(Math.max(Number.isFinite(value) ? Math.round(value) : 1, 1), 8);
+  } catch {
+    return 1;
   }
 }
 
@@ -79,6 +89,7 @@ const state = {
   personaListPageSize: storedPersonaListPageSize(),
   personaGenerateCountDefault: storedPersonaGenerateCount(),
   personaGenerateTargetWordsDefault: storedPersonaGenerateTargetWords(),
+  personaMediaImageCountDefault: storedPersonaMediaImageCount(),
   personaNewGroupName: "",
   personaDrag: {
     type: "",
@@ -127,6 +138,14 @@ const state = {
   personaForms: {},
   personaProfileModes: {},
   personaLinkPresetPages: {},
+  personaDraftViewModes: {},
+  matrixPublish: {
+    personaIds: [],
+    source: "posts",
+    perPersonaCount: 1,
+    platform: "threads",
+    initialized: false,
+  },
   renderedPersonaId: "",
   personaCreateMode: false,
   personaCreate: null,
@@ -628,7 +647,7 @@ function personaFormState(personaId) {
     return {
       generate: { mode: "ai", count: 3, targetWords: 120, contentTimeSlot: "", prompt: "", selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotPrompt: "", hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {} },
       draft: { title: "", content: "", editingPostId: "" },
-      media: { taskType: "persona_post_image", prompt: "", aspectRatio: "1:1", resolution: "720p", duration: 2, replaceExisting: false },
+      media: { taskType: "persona_post_image", contentMode: "draft", manualContent: "", prompt: "", imageCount: storedPersonaMediaImageCount(), aspectRatio: "1:1", resolution: "720p", duration: 2, replaceExisting: false },
       images: { prompt: "", aspectRatio: "1:1" },
     };
   }
@@ -654,7 +673,10 @@ function personaFormState(personaId) {
       },
       media: {
         taskType: "persona_post_image",
+        contentMode: "draft",
+        manualContent: "",
         prompt: "",
+        imageCount: storedPersonaMediaImageCount(),
         aspectRatio: "1:1",
         resolution: "720p",
         duration: 2,
@@ -985,7 +1007,13 @@ function snapshotPersonaCurrentForm() {
   }
   if ($("personaDraftTitle")) form.draft.title = String($("personaDraftTitle")?.value || "");
   if ($("personaDraftContent")) form.draft.content = String($("personaDraftContent")?.value || "");
+  if ($("personaMediaContentMode")) form.media.contentMode = String($("personaMediaContentMode")?.value || "draft");
+  if ($("personaMediaManualContent")) form.media.manualContent = String($("personaMediaManualContent")?.value || "");
   if ($("personaMediaTaskPrompt")) form.media.prompt = String($("personaMediaTaskPrompt")?.value || "");
+  if ($("personaMediaImageCount")) {
+    const value = Number.parseInt(String($("personaMediaImageCount")?.value || ""), 10);
+    form.media.imageCount = Math.min(Math.max(Number.isFinite(value) ? value : state.personaMediaImageCountDefault || 1, 1), 8);
+  }
   if ($("personaMediaAspectRatio")) form.media.aspectRatio = String($("personaMediaAspectRatio")?.value || "1:1");
   if ($("personaMediaResolution")) form.media.resolution = String($("personaMediaResolution")?.value || "720p");
   if ($("personaMediaDuration")) form.media.duration = Number($("personaMediaDuration")?.value || form.media.duration || 2);
@@ -1885,7 +1913,9 @@ window.handlePersonaMediaLightboxError = handlePersonaMediaLightboxError;
 
 function renderPersonaDraftRows(posts) {
   if (!posts.length) return `<div class="empty-state">当前还没有推文草稿。先新建一条，再进入发布步骤。</div>`;
+  const mode = personaDraftViewMode();
   const personaId = String(selectedPersona()?.id || "");
+  if (mode === "list") return renderPersonaDraftTableRows(posts, personaId);
   return `<div class="compact-list persona-draft-grid">${posts.map((post) => {
     const hotMeta = personaHotImportMeta(personaId, post.id);
     return `
@@ -1905,6 +1935,7 @@ function renderPersonaDraftRows(posts) {
       <div class="persona-draft-card-footer">
         <small>${String(post.id) === String(state.selectedPersonaPostId) ? "当前已选中" : "点击卡片选中"}</small>
         <div class="row-actions persona-draft-card-actions">
+          <button type="button" data-persona-view-post="${esc(post.id)}">查看</button>
           <button type="button" data-persona-edit-post="${esc(post.id)}">编辑草稿</button>
           ${String(post.id) === String(state.selectedPersonaPostId) ? `<button type="button" class="primary" data-persona-open-publishing>进入发布 / 矩阵发布</button>` : ""}
         </div>
@@ -1912,6 +1943,93 @@ function renderPersonaDraftRows(posts) {
     </article>
   `;
   }).join("")}</div>`;
+}
+
+function personaDraftViewMode(personaId = String(selectedPersona()?.id || state.selectedPersonaId || "default")) {
+  return state.personaDraftViewModes[String(personaId || "default")] === "list" ? "list" : "grid";
+}
+
+function setPersonaDraftViewMode(mode, personaId = String(selectedPersona()?.id || state.selectedPersonaId || "default")) {
+  state.personaDraftViewModes[String(personaId || "default")] = mode === "list" ? "list" : "grid";
+}
+
+function renderPersonaDraftViewToggle(mode) {
+  const activeMode = mode === "list" ? "list" : "grid";
+  return `
+    <div class="persona-draft-view-toggle" aria-label="草稿显示模式">
+      <button type="button" class="${activeMode === "grid" ? "is-active" : ""}" data-persona-draft-view="grid" title="格子布局" aria-label="格子布局">
+        <span class="persona-draft-mode-icon persona-draft-mode-icon--grid" aria-hidden="true"></span>
+      </button>
+      <button type="button" class="${activeMode === "list" ? "is-active" : ""}" data-persona-draft-view="list" title="列表表格" aria-label="列表表格">
+        <span class="persona-draft-mode-icon persona-draft-mode-icon--list" aria-hidden="true"></span>
+      </button>
+    </div>`;
+}
+
+function renderPersonaDraftTableRows(posts, personaId) {
+  return `
+    <div class="persona-draft-table" role="table" aria-label="草稿列表">
+      <div class="persona-draft-table-head" role="row">
+        <span>序号</span>
+        <span>草稿</span>
+        <span>更新时间</span>
+        <span>内容</span>
+        <span>状态</span>
+        <span>操作</span>
+      </div>
+      ${posts.map((post, index) => {
+        const postId = String(post.id || "");
+        const isSelected = postId === String(state.selectedPersonaPostId || "");
+        const hotMeta = personaHotImportMeta(personaId, post.id);
+        return `
+          <article
+            class="persona-draft-table-row ${isSelected ? "is-selected" : ""}"
+            role="row"
+            data-persona-select-post="${esc(post.id)}"
+            tabindex="0"
+            aria-pressed="${isSelected ? "true" : "false"}"
+          >
+            <div class="persona-draft-table-cell persona-draft-table-index" role="cell">${esc(index + 1)}</div>
+            <div class="persona-draft-table-cell persona-draft-table-title" role="cell">
+              <strong>${esc(post.title || "未命名草稿")}</strong>
+              ${hotMeta ? renderPersonaHotOrigin(hotMeta, { compact: true }) : ""}
+            </div>
+            <div class="persona-draft-table-cell" role="cell">${esc(formatTime(post.published_at || post.updated_at || post.created_at))}</div>
+            <div class="persona-draft-table-cell persona-draft-table-content" role="cell">${esc(String(post.content || "").slice(0, 120))}</div>
+            <div class="persona-draft-table-cell" role="cell"><span class="module-chip ${isSelected ? "is-dark" : ""}">${isSelected ? "当前选中" : "待选择"}</span></div>
+            <div class="persona-draft-table-actions" role="cell">
+              <button type="button" data-persona-view-post="${esc(post.id)}">查看</button>
+              <button type="button" data-persona-edit-post="${esc(post.id)}">编辑</button>
+              ${isSelected ? `<button type="button" class="primary" data-persona-open-publishing>发布</button>` : ""}
+            </div>
+          </article>`;
+      }).join("")}
+    </div>`;
+}
+
+async function viewPersonaDraftPost(postId = "") {
+  const persona = selectedPersona();
+  const posts = personaDraftPosts(persona);
+  const post = posts.find((item) => String(item.id) === String(postId || "")) || posts.find((item) => String(item.id) === String(state.selectedPersonaPostId || "")) || posts[0];
+  if (!persona || !post) return;
+  const hotMeta = personaHotImportMeta(String(persona.id || ""), post.id);
+  const mediaItems = personaDraftMediaItems(String(persona.id || ""), post);
+  await openConsoleModal({
+    title: "草稿详情",
+    contentHtml: `
+      <div class="console-modal-detail persona-draft-detail-modal">
+        <div><span>草稿标题</span><strong>${esc(post.title || "未命名草稿")}</strong></div>
+        <div><span>所属人设</span><strong>${esc(persona.name || "未命名人设")}</strong></div>
+        <div><span>时间信息</span><strong>${esc(formatTime(post.published_at || post.updated_at || post.created_at))}</strong></div>
+        <div><span>当前状态</span><strong>${esc(String(post.id) === String(state.selectedPersonaPostId || "") ? "当前选中" : "待选择")}</strong></div>
+        ${hotMeta ? `<div><span>来源信息</span>${renderPersonaHotOrigin(hotMeta, { compact: true })}</div>` : ""}
+        <div class="persona-draft-detail-content"><span>推文正文</span><p>${esc(String(post.content || "暂无正文"))}</p></div>
+        <div class="persona-draft-detail-media"><span>媒体文件</span>${mediaItems.length ? renderPersonaMediaPreview(mediaItems) : `<div class="empty-state">当前草稿没有媒体文件。</div>`}</div>
+      </div>
+    `,
+    confirmText: "关闭",
+    showCancel: false,
+  });
 }
 
 function renderPersonaMemoryOptions(persona, selectedIds = []) {
@@ -2157,8 +2275,7 @@ function renderPersonaHotSummaryCard(persona) {
     <aside class="persona-hot-summary-card">
       <div class="persona-hot-summary-head">
         <span>热点数据</span>
-        <strong>${hasHotData ? "当前热点表现" : "暂无热点统计"}</strong>
-        <small>${hasHotData ? "直接查看当前人设的热度表现。" : "后续抓取或同步后会在这里更新。"}</small>
+        <strong>${hasHotData ? "已同步" : "暂无热点统计"}</strong>
       </div>
       <div class="persona-hot-summary-metrics">
         ${stats.map(([label, value]) => `
@@ -2323,7 +2440,7 @@ function renderPersonaSettingsPanelV2(persona, account, profile, step) {
     <div class="persona-inline-panel">
       <div class="persona-head-copy">
         <strong>基础资料</strong>
-        <span class="persona-panel-intro">集中查看人设内容概览，也可以切换到编辑资料。</span>
+        <span class="persona-panel-intro">集中查看人设内容概览，右侧同步展示热点概览，也可以切换到编辑资料。</span>
       </div>
       <div class="persona-profile-overview-bar">
         ${renderPersonaProfileModeTabs(profileMode)}
@@ -2684,33 +2801,47 @@ function renderSimpleFlowModule(moduleId) {
         if (state.activeModule === "publishing") renderSimpleFlowModule("publishing");
       }).catch(() => {});
     }
-    const publishAccount = publishAccountForPersona(selectedPersonaForPublish);
-    const drafts = personaDraftPosts(selectedPersonaForPublish);
-    const selectedDraft = drafts.find((post) => String(post.id) === String(state.selectedPersonaPostId || "")) || drafts[0] || null;
-    body = `
-      <div class="form-grid">
-        <label>发布方式
-          <select id="simplePublishMode">
-            <option value="publish_now">立即发布</option>
-            <option value="matrix_start">矩阵发布</option>
-            <option value="schedule_publish">定时发布</option>
+    if (branch === "matrix_start") {
+      body = `
+        <div class="form-grid">
+          <label>发布方式
+            <select id="simplePublishMode">
+              <option value="publish_now">立即发布</option>
+              <option value="matrix_start">矩阵发布</option>
+              <option value="schedule_publish">定时发布</option>
+            </select>
+          </label>
+        </div>
+        ${renderMatrixPublishPanel()}`;
+    } else {
+      const publishAccount = publishAccountForPersona(selectedPersonaForPublish);
+      const drafts = personaDraftPosts(selectedPersonaForPublish);
+      const selectedDraft = drafts.find((post) => String(post.id) === String(state.selectedPersonaPostId || "")) || drafts[0] || null;
+      body = `
+        <div class="form-grid">
+          <label>发布方式
+            <select id="simplePublishMode">
+              <option value="publish_now">立即发布</option>
+              <option value="matrix_start">矩阵发布</option>
+              <option value="schedule_publish">定时发布</option>
+            </select>
+          </label>
+          <label>人设
+            <select id="simplePersona">${personaOptionTags()}</select>
+          </label>
+        </div>
+        ${publishAccount ? `<div class="flow-box"><span>发布账号</span><strong>${esc(publishAccount.username || publishAccount.id)}</strong><span>${esc(publishPlatformHint(publishAccount))}</span></div>` : `<div class="empty-state">当前人设还没有可发布的 Threads 或 Instagram 执行账号。请先到“我的人设 > 浏览器账号”里绑定。</div>`}
+        <label>发布草稿
+          <select id="simpleDraftPost" ${drafts.length ? "" : "disabled"}>
+            ${drafts.length ? drafts.map((post, index) => `<option value="${esc(post.id)}" ${String(post.id) === String(selectedDraft?.id || "") ? "selected" : ""}>${esc(personaDraftOptionLabel(post, index))}</option>`).join("") : `<option value="">当前还没有草稿</option>`}
           </select>
         </label>
-        <label>人设
-          <select id="simplePersona">${personaOptionTags()}</select>
-        </label>
-      </div>
-      ${publishAccount ? `<div class="flow-box"><span>发布账号</span><strong>${esc(publishAccount.username || publishAccount.id)}</strong><span>${esc(publishPlatformHint(publishAccount))}</span></div>` : `<div class="empty-state">当前人设还没有可发布的 Threads 或 Instagram 执行账号。请先到“我的人设 > 浏览器账号”里绑定。</div>`}
-      <label>发布草稿
-        <select id="simpleDraftPost" ${drafts.length ? "" : "disabled"}>
-          ${drafts.length ? drafts.map((post, index) => `<option value="${esc(post.id)}" ${String(post.id) === String(selectedDraft?.id || "") ? "selected" : ""}>${esc(personaDraftOptionLabel(post, index))}</option>`).join("") : `<option value="">当前还没有草稿</option>`}
-        </select>
-      </label>
-      ${scheduleField}
-      <label>内容</label>
-      <textarea id="simpleContent" rows="4" placeholder="发布正文、评论内容或回复模板。">${esc(selectedDraft?.content || "")}</textarea>
-      ${renderUploadDropzone("simpleMediaFiles", { label: "上传素材", hint: "拖动图片或视频到这里，或点击选择。发布内容会读取这里的文件。" })}
-      <input id="simplePrimary" type="hidden" value="publish_post" />`;
+        ${scheduleField}
+        <label>内容</label>
+        <textarea id="simpleContent" rows="4" placeholder="发布正文、评论内容或回复模板。">${esc(selectedDraft?.content || "")}</textarea>
+        ${renderUploadDropzone("simpleMediaFiles", { label: "上传素材", hint: "拖动图片或视频到这里，或点击选择。发布内容会读取这里的文件。" })}
+        <input id="simplePrimary" type="hidden" value="publish_post" />`;
+    }
   } else if (moduleId === "automation") {
     const needsTarget = ["browse_profile", "comment_post", "reply_comment", "like_post", "share_post"].includes(selectedTask);
     const needsContent = ["publish_post", "comment_post", "reply_comment", "threads_auto_reply"].includes(selectedTask);
@@ -2744,7 +2875,7 @@ function renderSimpleFlowModule(moduleId) {
         </label>
       </div>`;
   }
-  const actionLabel = moduleId === "queue" ? "打开任务队列" : "确认执行";
+  const actionLabel = moduleId === "queue" ? "打开任务队列" : (moduleId === "publishing" && branch === "matrix_start" ? "提交矩阵发布" : "确认执行");
   $("moduleBody").innerHTML = `
     ${body}
     <div class="command-actions"><button id="executeSimpleFlow" type="button" class="primary">${esc(actionLabel)}</button></div>
@@ -2755,6 +2886,18 @@ function renderSimpleFlowModule(moduleId) {
     $("simplePublishMode").value = modes.includes(branch) ? branch : "publish_now";
   }
   bindSimpleFlowInputs(moduleId);
+  if (moduleId === "publishing" && branch === "matrix_start") {
+    document.querySelector("[data-matrix-select-all]")?.addEventListener("click", () => {
+      state.matrixPublish.personaIds = state.personas.map((persona) => String(persona.id || "")).filter(Boolean);
+      state.matrixPublish.initialized = true;
+      renderSimpleFlowModule("publishing");
+    });
+    document.querySelector("[data-matrix-clear]")?.addEventListener("click", () => {
+      state.matrixPublish.personaIds = [];
+      state.matrixPublish.initialized = true;
+      renderSimpleFlowModule("publishing");
+    });
+  }
   $("executeSimpleFlow").addEventListener("click", () => executeSimpleFlow().catch((error) => showMsg("commandMsg", error.detail || error.message || "执行失败", false)));
 }
 
@@ -2764,6 +2907,10 @@ function bindSimpleFlowInputs(moduleId) {
     if (!node) return;
     node.addEventListener(node.tagName === "TEXTAREA" || node.tagName === "INPUT" ? "input" : "change", () => {
       if (id === "simplePrimary" || id === "simplePublishMode") state.simpleBranches[moduleId] = node.value;
+      if (id === "simplePublishMode" && moduleId === "publishing") {
+        renderSimpleFlowModule(moduleId);
+        return;
+      }
       if (id === "simplePrimary" && moduleId === "automation") {
         renderSimpleFlowModule(moduleId);
         return;
@@ -2781,6 +2928,20 @@ function bindSimpleFlowInputs(moduleId) {
       }
       if (id === "simpleAccount" && moduleId === "automation") renderSimpleFlowModule(moduleId);
       renderConfirmSummary();
+    });
+  });
+  ["matrixPublishSource", "matrixPublishPlatform", "matrixPublishCount"].forEach((id) => {
+    const node = $(id);
+    if (!node) return;
+    node.addEventListener(node.tagName === "INPUT" ? "input" : "change", () => {
+      updateMatrixPublishStateFromForm();
+      renderSimpleFlowModule(moduleId);
+    });
+  });
+  document.querySelectorAll("[data-matrix-persona]").forEach((node) => {
+    node.addEventListener("change", () => {
+      updateMatrixPublishStateFromForm();
+      renderSimpleFlowModule(moduleId);
     });
   });
 }
@@ -2814,7 +2975,6 @@ function renderConfirmSummary() {
       warmup: "提交 Threads 养号任务",
       delete: "删除当前人设",
       queue: "查看或清理该人设自动化队列",
-      metrics: "查看当前人设热点数据",
     }[step] || "显示当前步骤的参数面板";
     rows = rows.concat([
       ["当前人设", persona ? persona.name : "未选择"],
@@ -3145,10 +3305,14 @@ async function viewPersonaPreset(presetId = "") {
   });
 }
 
-async function deleteSelectedPersona() {
-  const persona = selectedPersona();
-  const profile = selectedPersonaProfile();
-  if (!persona || !profile) return;
+async function deleteSelectedPersona(personaId = "") {
+  const persona = personaId
+    ? state.personas.find((item) => String(item.id) === String(personaId || ""))
+    : selectedPersona();
+  if (!persona) return;
+  state.personaListEditorId = "";
+  state.personaListEditorMode = "";
+  removePersonaCardEditorPortal();
   const confirmed = await openConsoleModal({
     title: "删除人设",
     message: `确认删除人设「${persona.name || persona.id}」？删除后不可恢复。`,
@@ -3158,8 +3322,15 @@ async function deleteSelectedPersona() {
   if (!confirmed) return;
   await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}`, { method: "DELETE" });
   showMsg("commandMsg", "人设已删除。", true);
-  state.selectedPersonaId = "";
-  state.personaCreateMode = false;
+  if (String(state.selectedPersonaId || "") === String(persona.id || "")) {
+    state.selectedPersonaId = "";
+    state.selectedPersonaPostId = "";
+    state.personaCreateMode = false;
+  }
+  if (String(state.personaListEditorId || "") === String(persona.id || "")) {
+    state.personaListEditorId = "";
+    state.personaListEditorMode = "";
+  }
   await loadPersonas();
 }
 
@@ -3437,7 +3608,7 @@ async function executeSimpleFlow() {
     const personaId = $("simplePersona")?.value || selectedPersona()?.id || "";
     if (state.activeModule === "publishing") {
       if (($("simplePublishMode")?.value || "") === "matrix_start") {
-        showMsg("commandMsg", "矩阵发布入口已移到外层，分组批量队列接入后在这里提交。", false);
+        await submitMatrixPublishTask("commandMsg");
         return;
       }
       const persona = state.personas.find((item) => String(item.id) === String(personaId)) || selectedPersona();
@@ -3628,6 +3799,17 @@ function renderConsoleSettingsPage() {
           </label>
         </div>
       </section>
+      <section class="persona-inline-panel">
+        <div class="persona-head-copy">
+          <strong>推文配图</strong>
+          <span>控制根据推文生成配图时的默认张数，生成面板里仍可临时调整。</span>
+        </div>
+        <div class="form-grid">
+          <label>默认生成张数
+            <input id="settingsPersonaMediaImageCount" type="number" min="1" max="8" step="1" value="${esc(state.personaMediaImageCountDefault || 1)}" />
+          </label>
+        </div>
+      </section>
     </div>
   `;
 }
@@ -3642,14 +3824,17 @@ function saveConsoleSettingsPage() {
   const pageSize = Math.min(Math.max(Number.parseInt(String($("settingsPersonaPageSize")?.value || ""), 10) || 20, 5), 80);
   const generateCount = Math.min(Math.max(Number.parseInt(String($("settingsPersonaGenerateCount")?.value || ""), 10) || 3, 1), 20);
   const targetWords = Math.min(Math.max(Number.parseInt(String($("settingsPersonaTargetWords")?.value || ""), 10) || 120, 10), 2000);
+  const mediaImageCount = Math.min(Math.max(Number.parseInt(String($("settingsPersonaMediaImageCount")?.value || ""), 10) || 1, 1), 8);
   state.personaListPageSize = pageSize;
   state.personaGenerateCountDefault = generateCount;
   state.personaGenerateTargetWordsDefault = targetWords;
+  state.personaMediaImageCountDefault = mediaImageCount;
   state.personaListPage = 1;
   try {
     window.localStorage.setItem(PERSONA_LIST_PAGE_SIZE_KEY, String(pageSize));
     window.localStorage.setItem(PERSONA_GENERATE_COUNT_KEY, String(generateCount));
     window.localStorage.setItem(PERSONA_GENERATE_TARGET_WORDS_KEY, String(targetWords));
+    window.localStorage.setItem(PERSONA_MEDIA_IMAGE_COUNT_KEY, String(mediaImageCount));
   } catch {}
   renderConsoleSettingsPage();
   refreshConsoleSettingsDependents();
@@ -5037,23 +5222,33 @@ async function submitPersonaMediaTask() {
     showMsg("commandMsg", `当前任务至少需要 ${minImages} 张图片素材。`, false);
     return;
   }
-  const fallbackPrompt = String(post.content || "").trim();
-  const prompt = String(form.prompt || "").trim() || fallbackPrompt;
-  if (taskType === "persona_post_image" && !prompt) {
-    showMsg("commandMsg", "当前草稿没有正文，请补充提示词后再生成。", false);
+  const draftSourceText = String(post.content || "").trim();
+  const contentMode = String(form.contentMode || "draft") === "manual" ? "manual" : "draft";
+  const manualContent = String(form.manualContent || "").trim();
+  const generationContent = contentMode === "manual" ? manualContent : draftSourceText;
+  const prompt = String(form.prompt || "").trim();
+  const desiredImageCount = Math.min(Math.max(Number(form.imageCount || state.personaMediaImageCountDefault || 1), 1), 8);
+  form.imageCount = desiredImageCount;
+  if (taskType === "persona_post_image" && !generationContent && !prompt) {
+    showMsg("commandMsg", contentMode === "manual" ? "请先输入手动生成内容或补充提示词。" : "当前草稿没有正文，请补充提示词后再生成。", false);
     return;
   }
   const params = compactPayload({
     prompt,
     prompt_text: prompt,
     message: prompt,
+    custom_prompt: prompt,
+    generation_content: generationContent,
+    content_source_mode: contentMode,
+    manual_content: contentMode === "manual" ? manualContent : "",
+    image_count: desiredImageCount,
     persona_enabled: true,
     persona_label: String(persona.name || profile.name || "").trim(),
     tg_generation_context: String(profile.content || persona.content || "").trim(),
     tg_use_llm_prompt: true,
     related_persona_id: String(persona.id || "").trim(),
     related_post_id: String(post.id || "").trim(),
-    draft_source_text: fallbackPrompt,
+    draft_source_text: draftSourceText,
     aspect_ratio: taskType === "persona_post_image" ? String(form.aspectRatio || "1:1") : undefined,
   });
   const body = new FormData();
@@ -5300,6 +5495,10 @@ function renderPersonaCardEditorMenu(persona, currentGroups, availableGroups) {
           <span>单独拆出来</span>
           <small>${currentGroups.length ? "移出所有组" : "无需操作"}</small>
         </button>
+        <button type="button" class="persona-menu-tab persona-menu-tab--action persona-menu-tab--danger" data-persona-delete data-persona-delete-id="${esc(personaId)}">
+          <span>删除人设</span>
+          <small>不可恢复</small>
+        </button>
       </div>
     </div>
     ${submenu}`;
@@ -5360,7 +5559,7 @@ function schedulePersonaCardEditorMenuPosition() {
 }
 
 function handlePersonaCardEditorPortalClick(event) {
-  if (!event.target.closest?.("#personaCardEditorPortal")) return;
+  if (event.currentTarget?.id !== "personaCardEditorPortal") return;
   const personaEditorBack = event.target.closest("[data-persona-editor-back]");
   if (personaEditorBack) {
     const personaId = personaEditorBack.dataset.personaEditorBack || "";
@@ -5401,6 +5600,12 @@ function handlePersonaCardEditorPortalClick(event) {
   const ungroupAll = event.target.closest("[data-persona-ungroup-all]");
   if (ungroupAll) {
     ungroupPersona(ungroupAll.dataset.personaUngroupAll || "").catch((error) => showMsg("commandMsg", error.detail || error.message || "拆出失败", false));
+    return;
+  }
+  const deletePersonaButton = event.target.closest("[data-persona-delete]");
+  if (deletePersonaButton) {
+    deleteSelectedPersona(deletePersonaButton.dataset.personaDeleteId || "").catch((error) => showMsg("commandMsg", error.detail || error.message || "删除人设失败", false));
+    return;
   }
 }
 
@@ -5420,6 +5625,7 @@ function renderPersonaCardEditorPortal() {
   portal.id = "personaCardEditorPortal";
   portal.className = "persona-editor-portal";
   portal.innerHTML = renderPersonaCardEditorMenu(persona, currentGroups, availableGroups);
+  portal.addEventListener("click", handlePersonaCardEditorPortalClick);
   document.body.appendChild(portal);
   schedulePersonaCardEditorMenuPosition();
 }
@@ -5497,11 +5703,11 @@ function renderPersonaCollectionList() {
   const visibleNodes = nodes.slice(start, start + pageSize);
   const pager = `
     <div class="persona-list-pager">
-      <button type="button" data-persona-list-page="first" title="首页" aria-label="首页" ${state.personaListPage <= 1 ? "disabled" : ""}>&lt;&lt;</button>
-      <button type="button" data-persona-list-page="prev" title="上页" aria-label="上页" ${state.personaListPage <= 1 ? "disabled" : ""}>&lt;</button>
+      <button type="button" data-persona-list-page="first" title="首页" aria-label="首页" ${state.personaListPage <= 1 ? "disabled" : ""}><span class="ui-arrow-icon ui-arrow-icon--double-left" aria-hidden="true"></span></button>
+      <button type="button" data-persona-list-page="prev" title="上页" aria-label="上页" ${state.personaListPage <= 1 ? "disabled" : ""}><span class="ui-arrow-icon ui-arrow-icon--left" aria-hidden="true"></span></button>
       <span>${esc(`${state.personaListPage} / ${totalPages} · 每页 ${pageSize}`)}</span>
-      <button type="button" data-persona-list-page="next" title="下页" aria-label="下页" ${state.personaListPage >= totalPages ? "disabled" : ""}>&gt;</button>
-      <button type="button" data-persona-list-page="last" title="尾页" aria-label="尾页" ${state.personaListPage >= totalPages ? "disabled" : ""}>&gt;&gt;</button>
+      <button type="button" data-persona-list-page="next" title="下页" aria-label="下页" ${state.personaListPage >= totalPages ? "disabled" : ""}><span class="ui-arrow-icon ui-arrow-icon--right" aria-hidden="true"></span></button>
+      <button type="button" data-persona-list-page="last" title="尾页" aria-label="尾页" ${state.personaListPage >= totalPages ? "disabled" : ""}><span class="ui-arrow-icon ui-arrow-icon--double-right" aria-hidden="true"></span></button>
     </div>
   `;
   return `
@@ -6157,6 +6363,8 @@ function renderPersonaContentPanel(persona, account, profile, step) {
       ? String(mediaForm.taskType || "")
       : String(mediaTaskOptions[0]?.[0] || "persona_post_image");
     mediaForm.taskType = currentTaskType;
+    mediaForm.contentMode = String(mediaForm.contentMode || "draft") === "manual" ? "manual" : "draft";
+    mediaForm.imageCount = Math.min(Math.max(Number(mediaForm.imageCount || state.personaMediaImageCountDefault || 1), 1), 8);
     const mediaMeta = taskMeta[currentTaskType] || taskMeta.persona_post_image || taskMeta.text_to_image;
     const showAspectRatio = currentTaskType === "persona_post_image";
     const showVideoOptions = false;
@@ -6202,9 +6410,18 @@ function renderPersonaContentPanel(persona, account, profile, step) {
             <section class="persona-media-column">
               <div class="persona-inline-panel persona-inline-panel--nested">
                 <strong>生成媒体</strong>
-                <span class="persona-panel-intro">默认带入当前草稿正文。只有需要补充时再填写说明。</span>
+                <span class="persona-panel-intro">可按当前草稿正文生成，也可以切到手动输入内容生成。</span>
                 ${renderPersonaMediaTaskTabs(profile, generateForm, currentTaskType)}
                 <div class="form-grid persona-detail-controls">
+                  <label>生成模式
+                    <select id="personaMediaContentMode">
+                      <option value="draft" ${mediaForm.contentMode === "manual" ? "" : "selected"}>按当前草稿</option>
+                      <option value="manual" ${mediaForm.contentMode === "manual" ? "selected" : ""}>手动输入内容</option>
+                    </select>
+                  </label>
+                  <label>生成张数
+                    <input id="personaMediaImageCount" type="number" min="1" max="8" step="1" value="${esc(mediaForm.imageCount || state.personaMediaImageCountDefault || 1)}" />
+                  </label>
                   ${showAspectRatio ? `<label>图像比例
                     <select id="personaMediaAspectRatio">
                       <option value="1:1" ${String(mediaForm.aspectRatio || "1:1") === "1:1" ? "selected" : ""}>1:1</option>
@@ -6224,8 +6441,11 @@ function renderPersonaContentPanel(persona, account, profile, step) {
                     <input id="personaMediaDuration" type="number" min="2" max="15" value="${esc(mediaForm.duration || 2)}" />
                   </label>` : ""}
                 </div>
+                <label>手动生成内容
+                  <textarea id="personaMediaManualContent" rows="5" placeholder="选择“手动输入内容”时，将使用这里的内容生成配图。">${esc(mediaForm.manualContent || "")}</textarea>
+                </label>
                 <label>补充提示词
-                  <textarea id="personaMediaTaskPrompt" rows="5" placeholder="留空则直接按当前草稿正文生成。">${esc(mediaForm.prompt || "")}</textarea>
+                  <textarea id="personaMediaTaskPrompt" rows="5" placeholder="${esc(mediaForm.contentMode === "manual" ? "可留空；这里用于补充手动内容的画面要求。" : "留空则直接按当前草稿正文生成。")}">${esc(mediaForm.prompt || "")}</textarea>
                 </label>
                 ${showSourceUpload ? renderUploadDropzone("personaMediaTaskFiles", {
                   label: "上传素材",
@@ -6247,6 +6467,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
   }
 
   if (panel === "posts") {
+    const draftViewMode = personaDraftViewMode(persona.id);
     return `
       <div class="persona-inline-panel">
         <div class="persona-head-copy">
@@ -6260,9 +6481,10 @@ function renderPersonaContentPanel(persona, account, profile, step) {
             </select>
           </label>
           <div class="row-actions">
-            <button type="button" data-persona-open-new-draft>新建或编辑草稿</button>
-            ${selectedPost ? `<button type="button" data-persona-edit-post="${esc(selectedPost.id)}">编辑草稿</button>` : ""}
+            <button type="button" data-persona-open-new-draft>新建草稿</button>
+            ${selectedPost ? `<button type="button" data-persona-edit-post="${esc(selectedPost.id)}">编辑</button>` : ""}
             ${selectedPost ? `<button type="button" class="primary" data-persona-open-publishing>进入发布 / 矩阵发布</button>` : ""}
+            ${renderPersonaDraftViewToggle(draftViewMode)}
           </div>
         </div>
         ${renderPersonaDraftRows(drafts)}
@@ -6506,6 +6728,163 @@ function validateTaskForPlatform(taskType, platform) {
   return allowed.includes(taskType);
 }
 
+function matrixPublishSelectedIds() {
+  const current = Array.isArray(state.matrixPublish?.personaIds) ? state.matrixPublish.personaIds.map((id) => String(id || "").trim()).filter(Boolean) : [];
+  if (state.matrixPublish?.initialized) return current.filter((id) => state.personas.some((persona) => String(persona.id) === id));
+  const selected = selectedPersona();
+  return selected ? [String(selected.id || "")].filter(Boolean) : [];
+}
+
+function updateMatrixPublishStateFromForm() {
+  const selectedIds = Array.from(document.querySelectorAll("[data-matrix-persona]:checked")).map((node) => String(node.value || "").trim()).filter(Boolean);
+  state.matrixPublish = {
+    ...state.matrixPublish,
+    personaIds: selectedIds,
+    source: $("matrixPublishSource")?.value || state.matrixPublish.source || "posts",
+    perPersonaCount: Math.min(Math.max(Number($("matrixPublishCount")?.value || state.matrixPublish.perPersonaCount || 1), 1), 20),
+    platform: $("matrixPublishPlatform")?.value || state.matrixPublish.platform || "threads",
+    initialized: true,
+  };
+}
+
+function ensureMatrixDraftLoads(personaIds) {
+  (personaIds || []).forEach((personaId) => {
+    if (!state.personaDraftPosts[String(personaId || "")]) {
+      loadPersonaDraftPosts(personaId).then(() => {
+        if (state.activeModule === "publishing" && $("simplePublishMode")?.value === "matrix_start") {
+          renderSimpleFlowModule("publishing");
+        }
+      }).catch(() => {});
+    }
+  });
+}
+
+function renderMatrixPublishPanel() {
+  const selectedIds = matrixPublishSelectedIds();
+  if (!state.matrixPublish.initialized && selectedIds.length) {
+    state.matrixPublish.personaIds = selectedIds;
+    state.matrixPublish.initialized = true;
+  }
+  ensureMatrixDraftLoads(selectedIds);
+  const source = state.matrixPublish.source || "posts";
+  const perCount = Math.min(Math.max(Number(state.matrixPublish.perPersonaCount || 1), 1), 20);
+  const platform = state.matrixPublish.platform || "threads";
+  const rows = selectedIds.map((personaId) => {
+    const persona = state.personas.find((item) => String(item.id) === String(personaId));
+    const account = publishAccountsForPersona(persona).find((item) => String(item.platform || "").toLowerCase() === platform) || null;
+    const posts = source === "posts" ? personaDraftPosts(persona).filter((post) => !String(post.published_at || post.publishedAt || "").trim()) : [];
+    const previewPosts = posts.slice(0, perCount);
+    return `
+      <tr>
+        <td>${esc(persona?.name || personaId)}</td>
+        <td>${account ? esc(account.username || account.id) : "<span class=\"muted\">无可用账号</span>"}</td>
+        <td>${source === "posts" ? `${posts.length} 条` : "后端读取收藏"}</td>
+        <td>${previewPosts.length ? previewPosts.map((post) => esc(post.title || post.content || post.id).slice(0, 34)).join("<br>") : "<span class=\"muted\">待提交时校验</span>"}</td>
+      </tr>
+    `;
+  }).join("");
+  return `
+    <div class="matrix-publish-panel">
+      <div class="form-grid">
+        <label>发布来源
+          <select id="matrixPublishSource">
+            <option value="posts" ${source === "posts" ? "selected" : ""}>草稿库</option>
+            <option value="favorites" ${source === "favorites" ? "selected" : ""}>收藏推文</option>
+          </select>
+        </label>
+        <label>执行平台
+          <select id="matrixPublishPlatform">
+            <option value="threads" ${platform === "threads" ? "selected" : ""}>Threads</option>
+            <option value="instagram" ${platform === "instagram" ? "selected" : ""}>Instagram</option>
+          </select>
+        </label>
+        <label>每个人设发布数量
+          <input id="matrixPublishCount" type="number" min="1" max="20" value="${esc(perCount)}" />
+        </label>
+        <label>发布时间
+          <input id="simpleScheduleAt" placeholder="留空立即执行 / 2026-07-04 21:30" />
+        </label>
+      </div>
+      <div class="matrix-toolbar">
+        <strong>选择人设</strong>
+        <div>
+          <button type="button" data-matrix-select-all>全选</button>
+          <button type="button" data-matrix-clear>清空</button>
+        </div>
+      </div>
+      <div class="matrix-persona-list">
+        ${state.personas.length ? state.personas.map((persona) => {
+          const id = String(persona.id || "");
+          const account = publishAccountsForPersona(persona).find((item) => String(item.platform || "").toLowerCase() === platform);
+          return `
+            <label class="matrix-persona-option">
+              <input type="checkbox" data-matrix-persona value="${esc(id)}" ${selectedIds.includes(id) ? "checked" : ""} />
+              <span>
+                <strong>${esc(persona.name || id)}</strong>
+                <small>${account ? esc(account.username || account.id) : "没有可用发布账号"}</small>
+              </span>
+            </label>
+          `;
+        }).join("") : `<div class="empty-state">暂无人设。</div>`}
+      </div>
+      <div class="matrix-preview">
+        <div class="matrix-toolbar"><strong>提交预览</strong><span class="muted">将创建 ${selectedIds.length * perCount} 条以内的发布任务</span></div>
+        <table class="mini-table">
+          <thead><tr><th>人设</th><th>账号</th><th>可发布</th><th>预览内容</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="4">请选择人设。</td></tr>`}</tbody>
+        </table>
+      </div>
+      <input id="simplePrimary" type="hidden" value="publish_post" />
+    </div>
+  `;
+}
+
+async function submitMatrixPublishTask(messageId = "commandMsg") {
+  updateMatrixPublishStateFromForm();
+  const personaIds = matrixPublishSelectedIds();
+  if (!personaIds.length) {
+    showMsg(messageId, "请至少选择一个人设。", false);
+    return null;
+  }
+  const source = state.matrixPublish.source || "posts";
+  const platform = state.matrixPublish.platform || "threads";
+  const perPersonaCount = Math.min(Math.max(Number(state.matrixPublish.perPersonaCount || 1), 1), 20);
+  const lockParts = ["matrix_publish", source, platform, personaIds.join("_")];
+  if (isActionLocked(...lockParts)) {
+    showMsg(messageId, "矩阵发布正在提交，请等待当前操作完成。", false);
+    return null;
+  }
+  const scheduledAt = $("simpleScheduleAt")?.value.trim() || "";
+  setActionLocked(lockParts, true);
+  renderSimpleFlowModule("publishing");
+  try {
+    showMsg(messageId, "正在提交矩阵发布任务...", true);
+    const result = await api("/api/persona_dashboard/matrix_publish", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        persona_ids: personaIds,
+        source,
+        platform,
+        per_persona_count: perPersonaCount,
+        scheduled_at: scheduledAt || undefined,
+        priority: 50,
+        max_retries: 2,
+      }),
+    });
+    const created = Array.isArray(result.created) ? result.created : [];
+    const skipped = Array.isArray(result.skipped) ? result.skipped : [];
+    const errors = Array.isArray(result.errors) ? result.errors : [];
+    showMsg(messageId, `矩阵发布已提交 ${created.length} 条任务，跳过 ${skipped.length} 条，失败 ${errors.length} 条。`, created.length > 0);
+    appendEvent("queue", `矩阵发布批次 ${result.batch_id || "-"}：创建 ${created.length} 条，跳过 ${skipped.length} 条，失败 ${errors.length} 条`);
+    await loadSocial();
+    return result;
+  } finally {
+    setActionLocked(lockParts, false);
+    if (state.activeModule === "publishing") renderSimpleFlowModule("publishing");
+  }
+}
+
 async function createSocialTask(taskType = $("socialTaskType")?.value, accountId = $("socialAccount")?.value || $("simpleAccount")?.value, personaId = "", messageId = "socialMsg") {
   if (!accountId) {
     showMsg(messageId, "请先选择执行账号。", false);
@@ -6718,7 +7097,6 @@ function bindEvents() {
   document.addEventListener("pointermove", handlePersonaPointerMove, { passive: false });
   document.addEventListener("pointerup", handlePersonaPointerUp, { passive: false });
   document.addEventListener("pointercancel", handlePersonaPointerCancel);
-  document.addEventListener("click", handlePersonaCardEditorPortalClick);
   $("moduleBody").addEventListener("scroll", schedulePersonaCardEditorMenuPosition, true);
   window.addEventListener("resize", schedulePersonaCardEditorMenuPosition);
   $("moduleBody").addEventListener("click", (event) => {
@@ -6951,6 +7329,19 @@ function bindEvents() {
       deletePersonaDraftPost(deletePostButton.dataset.personaDeletePost || "").catch((error) => showMsg("commandMsg", error.detail || error.message || "删除草稿失败", false));
       return;
     }
+    const mediaContentModeButton = event.target.closest("[data-persona-media-content-mode]");
+    if (mediaContentModeButton) {
+      const persona = selectedPersona();
+      const personaId = String(persona?.id || state.renderedPersonaId || state.selectedPersonaId || "").trim();
+      if (personaId) {
+        snapshotPersonaCurrentForm();
+        const mode = String(mediaContentModeButton.dataset.personaMediaContentMode || "draft");
+        personaFormState(personaId).media.contentMode = mode === "manual" ? "manual" : "draft";
+        renderPersonaDetail();
+        renderConfirmSummary();
+      }
+      return;
+    }
     if (event.target.closest("[data-persona-run-media-task]")) {
       submitPersonaMediaTask().catch((error) => showMsg("commandMsg", error.detail || error.message || "生成媒体失败", false));
       return;
@@ -7073,6 +7464,21 @@ function bindEvents() {
         renderConfirmSummary();
       }
     }
+    const draftViewButton = event.target.closest("[data-persona-draft-view]");
+    if (draftViewButton) {
+      const persona = selectedPersona();
+      if (persona) {
+        setPersonaDraftViewMode(draftViewButton.dataset.personaDraftView || "grid", persona.id);
+        renderPersonaDetail();
+        renderConfirmSummary();
+      }
+      return;
+    }
+    const viewDraftPostButton = event.target.closest("[data-persona-view-post]");
+    if (viewDraftPostButton) {
+      viewPersonaDraftPost(viewDraftPostButton.dataset.personaViewPost || "").catch((error) => showMsg("commandMsg", error.detail || error.message || "查看草稿失败", false));
+      return;
+    }
     const draftCard = event.target.closest("[data-persona-select-post]");
     if (draftCard && !event.target.closest("button, a, input, select, textarea")) {
       clearMsg("commandMsg");
@@ -7159,11 +7565,14 @@ function bindEvents() {
     const mediaTaskButton = event.target.closest("[data-persona-media-task]");
     if (mediaTaskButton) {
       const persona = selectedPersona();
-      if (persona) {
-        personaFormState(persona.id).media.taskType = mediaTaskButton.dataset.personaMediaTask || "persona_post_image";
+      const personaId = String(persona?.id || state.renderedPersonaId || state.selectedPersonaId || "").trim();
+      if (personaId) {
+        snapshotPersonaCurrentForm();
+        personaFormState(personaId).media.taskType = mediaTaskButton.dataset.personaMediaTask || "persona_post_image";
         renderPersonaDetail();
         renderConfirmSummary();
       }
+      return;
     }
     const cancelMediaTask = event.target.closest("[data-persona-cancel-media-task]");
     if (cancelMediaTask) {
@@ -7250,7 +7659,11 @@ function bindEvents() {
     if (event.target.closest("[data-persona-open-login]")) submitPersonaLoginTask(false).catch((error) => showMsg("commandMsg", error.detail || error.message || "打开登录窗口失败", false));
     if (event.target.closest("[data-persona-auto-login]")) submitPersonaLoginTask(true).catch((error) => showMsg("commandMsg", error.detail || error.message || "自动登录失败", false));
     if (event.target.closest("[data-persona-check-login]")) checkPersonaLogin().catch((error) => showMsg("commandMsg", error.detail || error.message || "检查登录失败", false));
-    if (event.target.closest("[data-persona-delete]")) deleteSelectedPersona().catch((error) => showMsg("commandMsg", error.detail || error.message || "删除人设失败", false));
+    const deletePersonaButton = event.target.closest("[data-persona-delete]");
+    if (deletePersonaButton) {
+      deleteSelectedPersona(deletePersonaButton.dataset.personaDeleteId || "").catch((error) => showMsg("commandMsg", error.detail || error.message || "删除人设失败", false));
+      return;
+    }
     if (event.target.closest("[data-persona-clear-tasks]")) clearPersonaAutomationTasks().catch((error) => showMsg("commandMsg", error.detail || error.message || "清理队列失败", false));
     const runThreads = event.target.closest("[data-persona-run-threads]");
     if (runThreads) runPersonaThreadsTask(runThreads.dataset.personaRunThreads).catch((error) => showMsg("commandMsg", error.detail || error.message || "提交任务失败", false));

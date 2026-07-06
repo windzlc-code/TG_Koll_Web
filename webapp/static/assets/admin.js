@@ -1,4 +1,4 @@
-function el(id) {
+﻿function el(id) {
   return document.getElementById(id);
 }
 
@@ -2167,9 +2167,8 @@ async function downloadSentimentCookieHelper() {
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 30000);
-  setMsg("sentimentCookieMsg", "授权助手已开始下载，后端地址和同步令牌已自动写入安装包。加载新版助手后会自动同步已登录站点 Cookie，并定时刷新后台配置。", true);
+  setMsg("sentimentCookieMsg", "授权助手 zip 已开始下载。建议优先按安装说明加载固定目录；zip 只作为备用安装包。", true);
 }
-
 async function loadSentimentCookieProfiles() {
   const payload = await api("/api/admin/sentiment/browser_auth/profiles");
   renderSentimentCookieProfiles(payload);
@@ -2776,24 +2775,6 @@ function bindActions() {
     el("btnSentimentCookieCopyBase").addEventListener("click", async () => {
       try {
         await copySentimentCookieHelperBase();
-      } catch (err) {
-        setMsg("sentimentCookieMsg", getErrorMessage(err), false);
-      }
-    });
-  }
-  if (el("btnSentimentCookieCopyToken")) {
-    el("btnSentimentCookieCopyToken").addEventListener("click", async () => {
-      try {
-        await copySentimentCookieHelperToken();
-      } catch (err) {
-        setMsg("sentimentCookieMsg", getErrorMessage(err), false);
-      }
-    });
-  }
-  if (el("btnSentimentCookieRotateToken")) {
-    el("btnSentimentCookieRotateToken").addEventListener("click", async () => {
-      try {
-        await rotateSentimentCookieHelperToken();
       } catch (err) {
         setMsg("sentimentCookieMsg", getErrorMessage(err), false);
       }

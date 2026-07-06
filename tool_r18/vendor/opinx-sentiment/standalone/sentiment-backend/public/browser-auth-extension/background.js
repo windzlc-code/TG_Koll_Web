@@ -5,6 +5,14 @@ const AUTO_SYNC_ALARM = "opinx-browser-auth-auto-sync";
 const AUTO_SYNC_INTERVAL_MINUTES = 10;
 const MIN_PROFILE_SYNC_GAP_MS = 2 * 60 * 1000;
 const CONFIG_REFRESH_GAP_MS = 10 * 60 * 1000;
+const LOCAL_API_BASE_CANDIDATES = [
+  "http://127.0.0.1:8001",
+  "http://localhost:8001",
+  "http://127.0.0.1:8003",
+  "http://localhost:8003",
+  "http://127.0.0.1:8000",
+  "http://localhost:8000",
+];
 
 const PROFILES = [
   {
@@ -194,14 +202,55 @@ function storageSet(values) {
   return chrome.storage.local.set(values);
 }
 
+function normalizeApiBase(value = "") {
+  return String(value || "").trim().replace(/\/+$/, "");
+}
+
 async function apiBase() {
   const values = await storageGet(["apiBase"]);
-  return String(values.apiBase || DEFAULT_API_BASE).replace(/\/+$/, "");
+  const current = normalizeApiBase(values.apiBase || DEFAULT_API_BASE);
+  if (!current || /43\.167\.237\.120|47\.250\.188\.76/.test(current)) {
+    return LOCAL_API_BASE_CANDIDATES[0];
+  }
+  return current;
 }
 
 async function authToken() {
   const values = await storageGet(["authToken"]);
   return String(values.authToken || DEFAULT_AUTH_TOKEN || "").trim();
+}
+
+async function fetchExtensionConfigFromBase(base, token) {
+  const response = await fetch(`${base}/browser-auth-extension/config.json?t=${Date.now()}`, {
+    cache: "no-store",
+    credentials: "include",
+    headers: token ? { "x-sentiment-browser-auth": token } : {},
+  });
+  if (!response.ok) {
+    throw new Error(`配置刷新失败：HTTP ${response.status}`);
+  }
+  const payload = await response.json();
+  if (!payload?.ok) {
+    throw new Error(payload?.error || "配置刷新失败");
+  }
+  return payload;
+}
+
+async function discoverApiBase(currentBase, token) {
+  const bases = [currentBase, DEFAULT_API_BASE, ...LOCAL_API_BASE_CANDIDATES]
+    .map(normalizeApiBase)
+    .filter(Boolean);
+  const uniqueBases = [...new Set(bases)];
+  let lastError = null;
+  for (const base of uniqueBases) {
+    try {
+      const payload = await fetchExtensionConfigFromBase(base, token);
+      return { base, payload };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("无法识别可用后端地址");
 }
 
 async function refreshExtensionConfig(options = {}) {
@@ -214,6 +263,19 @@ async function refreshExtensionConfig(options = {}) {
   }
   const base = await apiBase();
   const token = await authToken();
+  const discovered = await discoverApiBase(base, token).catch(() => null);
+  if (discovered) {
+    const payload = discovered.payload;
+    const next = {
+      lastConfigRefreshAt: new Date().toISOString(),
+      extensionVersion: String(payload.version || DEFAULT_EXTENSION_VERSION),
+      apiBase: normalizeApiBase(payload.apiBase || discovered.base),
+    };
+    if (payload.authToken) next.authToken = String(payload.authToken).trim();
+    if (Array.isArray(payload.profiles) && payload.profiles.length) next.profiles = payload.profiles;
+    await storageSet(next);
+    return { ok: true, version: next.extensionVersion, profileCount: Array.isArray(next.profiles) ? next.profiles.length : undefined };
+  }
   const response = await fetch(`${base}/browser-auth-extension/config.json?t=${Date.now()}`, {
     cache: "no-store",
     credentials: "include",
@@ -329,26 +391,39 @@ async function syncProfileCookies(profile, options = {}) {
     await storageSet({ lastStatus: `${profile.key}: 未读取到 Cookie（${domainSummary}），请先登录或检查扩展站点权限` });
     return { ok: false, savedCookieCount: 0 };
   }
-  const base = await apiBase();
-  const token = await authToken();
+  let token = await authToken();
+  if (!token) {
+    await refreshExtensionConfig({ force: true }).catch(() => undefined);
+    token = await authToken();
+  }
   if (!token) {
     await storageSet({ lastStatus: `${profile.key}: missing auth token` });
     return { ok: false, savedCookieCount: 0, error: "missing auth token" };
   }
-  const response = await fetch(`${base}/api/sentiment/browser-auth/cookies`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-sentiment-browser-auth": token,
-    },
-    body: JSON.stringify({
-      profileKey: profile.key,
-      sourceKey: profile.sourceKey,
-      domain: profile.domain,
-      cookies: usefulCookies,
-    }),
-  });
-  const result = await response.json().catch(() => ({}));
+  const postCookies = async (nextToken) => {
+    const nextBase = await apiBase();
+    const response = await fetch(`${nextBase}/api/sentiment/browser-auth/cookies`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-sentiment-browser-auth": nextToken,
+      },
+      body: JSON.stringify({
+        profileKey: profile.key,
+        sourceKey: profile.sourceKey,
+        domain: profile.domain,
+        cookies: usefulCookies,
+      }),
+    });
+    const result = await response.json().catch(() => ({}));
+    return { response, result };
+  };
+  let { response, result } = await postCookies(token);
+  if (response.status === 403 || /invalid browser auth token/i.test(String(result.error || ""))) {
+    await refreshExtensionConfig({ force: true });
+    token = await authToken();
+    ({ response, result } = await postCookies(token));
+  }
   if (!response.ok || !result.ok) {
     throw new Error(result.error || `同步失败：${response.status}`);
   }
@@ -497,3 +572,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   })().catch(error => sendResponse({ ok: false, error: error.message }));
   return true;
 });
+
+function bootAutoSync() {
+  ensureAutoSyncAlarm();
+  void syncAllProfiles({ force: true }).catch(() => undefined);
+}
+
+bootAutoSync();

@@ -29,9 +29,12 @@
         line-height: 1.7;
       }
       code {
+        display: inline-block;
+        max-width: 100%;
         background: #eef3f7;
         padding: 2px 5px;
         border-radius: 4px;
+        overflow-wrap: anywhere;
       }
       a {
         color: #126d75;
@@ -42,15 +45,15 @@
   <body>
     <main>
       <h1>舆情授权助手安装</h1>
-      <p>普通网页无法读取 YouTube、Reddit、Dcard 等其它域名的 Cookie。要自动记录授权 Cookie，需要在 Chrome 中加载这个本地扩展。</p>
+      <p>浏览器扩展代码不能由网页后台静默替换。开发环境推荐只加载一次固定目录，后续代码更新后在扩展管理页点击刷新即可，不需要反复下载 zip。</p>
       <ol>
-        <li>在服务器文件目录下载或复制 <code>/browser-auth-extension/</code> 下的 <code>manifest.json</code>、<code>background.js</code>、<code>popup.html</code>、<code>popup.js</code> 到同一个本地文件夹。</li>
-        <li>打开 Chrome 的 <code>chrome://extensions</code>。</li>
+        <li>打开 Chrome / Edge 的 <code>chrome://extensions</code>。</li>
         <li>开启“开发者模式”。</li>
-        <li>点击“加载已解压的扩展程序”，选择刚才的本地文件夹。</li>
-        <li>回到后台管理页，点击“一键打开授权页面”，逐个登录目标网站；扩展会自动把 Cookie 同步到系统。</li>
+        <li>点击“加载已解压的扩展程序”。</li>
+        <li>选择项目里的固定目录：<code>__EXTENSION_DIR__</code></li>
+        <li>以后如果后端地址或平台配置变化，助手会自动刷新；如果 <code>manifest.json</code>、<code>background.js</code> 或 <code>popup.js</code> 改了，需要在扩展页点一次刷新。</li>
       </ol>
-      <p>扩展文件：</p>
+      <p>当前源码文件：</p>
       <ul>
         <li><a href="/browser-auth-extension/manifest.json" target="_blank">manifest.json</a></li>
         <li><a href="/browser-auth-extension/background.js" target="_blank">background.js</a></li>

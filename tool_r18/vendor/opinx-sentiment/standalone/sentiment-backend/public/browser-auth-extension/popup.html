@@ -32,9 +32,9 @@
         width: 100%;
         min-height: 36px;
         margin-top: 8px;
-        border: 1px solid #126d75;
+        border: 1px solid #30363d;
         border-radius: 6px;
-        background: #126d75;
+        background: #30363d;
         color: #fff;
         font-weight: 700;
         cursor: pointer;
@@ -43,6 +43,10 @@
         background: #fff;
         color: #17202a;
         border-color: #d8e1ea;
+      }
+      button:disabled {
+        cursor: default;
+        opacity: .6;
       }
       #status {
         margin-top: 10px;
@@ -66,12 +70,12 @@
     <h1>舆情授权助手</h1>
     <label>
       后端地址
-      <input id="apiBase" placeholder="http://47.250.188.76">
+      <input id="apiBase" placeholder="http://127.0.0.1:8001">
     </label>
-    <p class="hint">新版助手会自动读取后台配置和同步令牌。正常情况下只需要登录平台后点击同步。</p>
-    <button id="saveApi">保存后端地址</button>
-    <button id="openAuth">打开全部授权页面</button>
-    <button id="syncCurrent" class="secondary">同步当前标签页</button>
+    <p class="hint">授权校验由后台自动处理，不需要填写令牌。</p>
+    <button id="saveApi" type="button">保存后端地址</button>
+    <button id="openAuth" type="button">打开全部授权页面</button>
+    <button id="syncCurrent" class="secondary" type="button">同步当前页面</button>
     <div id="status">正在读取状态...</div>
     <script src="popup.js"></script>
   </body>

@@ -34,8 +34,8 @@ const THREADS_READER_TOTAL_QUERY_LIMIT = 36;
 const THREADS_READER_QUERY_BATCH_SIZE = 6;
 const INSTAGRAM_READER_QUERY_LIMIT = 48;
 const SENTIMENT_HOT_REFRESH_COOLDOWN_MS = 5 * 60 * 1000;
-const SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS = 25_000;
-const SENTIMENT_HOT_TOTAL_TIMEOUT_MS = 75_000;
+const SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS = 55_000;
+const SENTIMENT_HOT_TOTAL_TIMEOUT_MS = 150_000;
 const SENTIMENT_HOT_FAST_RETURN_COUNT = 5;
 const SENTIMENT_HOT_SUPPLEMENT_MIN_REMAINING_MS = 15_000;
 const SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS = 72 * 60 * 60 * 1000;
@@ -1088,15 +1088,7 @@ export function isChineseSentimentCandidate(value: unknown): boolean {
 }
 
 export async function fetchSentimentCookieStatuses(): Promise<SentimentCookieStatus[]> {
-  const runtime = await ensureSentimentRuntime();
-  if (!runtime.ok) {
-    return [
-      { platform: "threads", health: "unknown", label: "Threads", message: runtime.warning || "舆情後端未啟動，無法讀取 Cookie 狀態。" },
-      { platform: "instagram", health: "unknown", label: "Instagram", message: runtime.warning || "舆情後端未啟動，無法讀取 Cookie 狀態。" },
-    ];
-  }
   const profiles = readSentimentBrowserAuthProfilesConfig();
-  scheduleSentimentRuntimeShutdown();
   return (["threads", "instagram"] as SentimentHotPlatform[]).map((platform) => buildSentimentCookieStatusFromProfile(platform, profiles.find((item) => sentimentProfileMatchesPlatform(item, platform))));
 }
 
@@ -1369,7 +1361,7 @@ export async function fetchSentimentHotCandidates(args: {
           limit: poolLimit,
           refresh: args.refresh === true,
         }),
-        Math.min(16_000, remainingSentimentHotTotalBudgetMs(startedAt, 24_000)),
+        Math.min(60_000, remainingSentimentHotTotalBudgetMs(startedAt, 72_000)),
         [],
       ),
     ).catch((error) => {
@@ -2088,6 +2080,11 @@ async function fetchThreadsBrowserSearchCandidates(args: {
   excludeIds?: Set<string>;
   deadlineAt?: number;
 }): Promise<SentimentHotCandidate[]> {
+  const bindingStatus = getSentimentBrowserAuthProfileBinding("threads");
+  if (bindingStatus.authorizationNeedsRefresh === true && Number(bindingStatus.expiredCookieCount || 0) > 0) {
+    console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} status=skip_stale_cookie expired=${Number(bindingStatus.expiredCookieCount || 0)}`);
+    return [];
+  }
   const cookies = readSentimentBrowserAuthCookies("threads");
   const sessionCookieCount = cookies.filter((cookie: any) => String(cookie?.name || "").toLowerCase() === "sessionid" && String(cookie?.value || "").trim()).length;
   if (!hasValidThreadsSessionCookie(cookies)) {
@@ -2155,7 +2152,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           if (results.length >= args.limit) break;
         }
         console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} query=${JSON.stringify(query)} textLen=${search.text.length} parsed=${parsed.length} accepted=${acceptedCount} total=${results.length} excluded=${excludedCount} short=${shortCount} keywordMiss=${keywordMissCount} duplicate=${duplicateCount} url=${search.url}`);
-        if (parsed.length === 0 && search.text.trim().length <= 180) {
+        if (parsed.length === 0 && (search.text.trim().length <= 320 || /\/#$/.test(search.url))) {
           emptyShellCount += 1;
           if (emptyShellCount >= THREADS_BROWSER_EMPTY_SHELL_LIMIT) {
             console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} status=stop_empty_shell count=${emptyShellCount} total=${results.length}`);
@@ -4235,6 +4232,7 @@ async function readThreadsSearchPageText(page: any, query: string, deadlineAt?: 
   await page.goto(directSearchUrl, { waitUntil: "domcontentloaded", timeout: Math.min(6_000, remainingSentimentDeadlineMs(deadlineAt, 6_000)) }).catch(() => undefined);
   await page.waitForTimeout(Math.min(1_000, remainingSentimentDeadlineMs(deadlineAt, 1_000)));
   if (await remember(directSearchUrl) || (deadlineAt && Date.now() >= deadlineAt)) return { text: best.text, url: best.url };
+  if (/\/#$/.test(best.url) && best.text.trim().length <= 320) return { text: best.text, url: best.url };
 
   await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: Math.min(5_000, remainingSentimentDeadlineMs(deadlineAt, 5_000)) }).catch(() => undefined);
   if (deadlineAt && Date.now() >= deadlineAt) return { text: best.text, url: best.url };

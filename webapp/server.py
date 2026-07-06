@@ -1328,13 +1328,13 @@ def _build_sentiment_browser_auth_extension_zip(request: Request) -> bytes:
 
 
 def _find_sentiment_profile(profiles: list[dict[str, Any]], key: str) -> dict[str, Any] | None:
-    target = str(key or "").strip()
+    target = _sentiment_browser_auth_profile_key(key)
     return next(
         (
             profile for profile in profiles
-            if str(profile.get("key") or "") == target
-            or str(profile.get("platform") or "") == target
-            or str(profile.get("sourceKey") or "") == target
+            if _sentiment_browser_auth_profile_key(profile.get("key")) == target
+            or _sentiment_browser_auth_profile_key(profile.get("platform")) == target
+            or _sentiment_browser_auth_profile_key(profile.get("sourceKey")) == target
         ),
         None,
     )
@@ -9204,11 +9204,12 @@ def _run_face_swap(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     raise RuntimeError("该换脸工作流入口已移除。")
 
 
-def _persist_generated_image_for_task(task_id: str, image_url: str) -> str:
+def _persist_generated_image_for_task(task_id: str, image_url: str, index: int = 1) -> str:
     text = str(image_url or "").strip()
     if not text:
         raise RuntimeError("未返回可保存的图片结果。")
     workdir = _build_task_workdir(task_id)
+    stem = "persona_post_preview" if index <= 1 else f"persona_post_preview_{index}"
     if text.startswith("data:image/"):
         header, _, base64_data = text.partition(",")
         mime_part = header[5:].split(";", 1)[0].strip().lower()
@@ -9219,17 +9220,17 @@ def _persist_generated_image_for_task(task_id: str, image_url: str) -> str:
             "image/webp": ".webp",
             "image/gif": ".gif",
         }.get(mime_part, ".png")
-        target = workdir / f"persona_post_preview{suffix}"
+        target = workdir / f"{stem}{suffix}"
         target.write_bytes(base64.b64decode(base64_data))
         return str(target)
     if re.match(r"^https?://", text, re.I):
         suffix = Path(urlsplit(text).path).suffix or ".png"
-        target = workdir / f"persona_post_preview{suffix}"
+        target = workdir / f"{stem}{suffix}"
         _download_to_file(text, target)
         return str(target)
     source = Path(text).expanduser().resolve()
     if source.is_file():
-        target = workdir / f"persona_post_preview{source.suffix or '.png'}"
+        target = workdir / f"{stem}{source.suffix or '.png'}"
         shutil.copy2(source, target)
         return str(target)
     raise RuntimeError("未识别的图片结果地址。")
@@ -9238,7 +9239,13 @@ def _persist_generated_image_for_task(task_id: str, image_url: str) -> str:
 def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     archive_id = str(payload.get("related_persona_id") or "").strip()
     post_id = str(payload.get("related_post_id") or "").strip()
-    prompt = str(payload.get("prompt") or payload.get("prompt_text") or payload.get("message") or "").strip()
+    prompt = str(payload.get("custom_prompt") or payload.get("prompt") or payload.get("prompt_text") or payload.get("message") or "").strip()
+    generation_content = str(payload.get("generation_content") or "").strip()
+    image_count_raw = payload.get("image_count") or payload.get("imageCount") or payload.get("count") or 1
+    try:
+        image_count = min(max(int(float(image_count_raw)), 1), 8)
+    except (TypeError, ValueError):
+        image_count = 1
     aspect_ratio = str(payload.get("aspect_ratio") or payload.get("aspectRatio") or "1:1").strip() or "1:1"
     if not archive_id or not post_id:
         raise RuntimeError("推文配图缺少人设 ID 或草稿 ID。")
@@ -9250,9 +9257,12 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
     post = next((item for item in posts if isinstance(item, dict) and str(item.get("id") or "").strip() == post_id), None)
     if not post:
         raise RuntimeError("草稿不存在。")
+    source_content = generation_content or str(post.get("content") or "").strip()
+    if not source_content and not prompt:
+        raise RuntimeError("推文配图缺少用于生成的正文或提示词。")
     cli_payload = {
         "setup": archive.get("setup") if isinstance(archive.get("setup"), dict) else {},
-        "content": str(post.get("content") or "").strip(),
+        "content": source_content or prompt,
         "customPrompt": prompt or None,
         "aspectRatio": aspect_ratio,
         "mode": "auto",
@@ -9287,14 +9297,50 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
     image_url = str(image_result.get("url") or "").strip()
     if not image_url:
         raise RuntimeError(str(image_result.get("error") or data.get("error") or "推文配图失败。").strip())
-    saved_path = _persist_generated_image_for_task(task_id, image_url)
+    saved_path = _persist_generated_image_for_task(task_id, image_url, 1)
+    image_paths = [saved_path]
+    image_urls = [image_url]
+    timings = [data.get("timings")] if isinstance(data.get("timings"), dict) else []
+    for index in range(2, image_count + 1):
+        command = ["node", "--import", "tsx", "scripts/skills/generate-persona-images.ts", json.dumps(cli_payload, ensure_ascii=False)]
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=str(ROOT_DIR / "tool_r18"),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=300,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f"推文配图超时：{exc.timeout} 秒。") from exc
+        except FileNotFoundError as exc:
+            raise RuntimeError("未找到 Node.js 或 tsx，无法执行推文配图。") from exc
+        stdout = str(completed.stdout or "").strip()
+        stderr = str(completed.stderr or "").strip()
+        data = _parse_tool_r18_json_output(stdout)
+        if completed.returncode != 0:
+            raise RuntimeError(str((data or {}).get("error") or stderr or stdout or "推文配图失败。").strip())
+        if not isinstance(data, dict):
+            raise RuntimeError("推文配图返回格式无效。")
+        image_result = data.get("imageResult") if isinstance(data.get("imageResult"), dict) else {}
+        image_url = str(image_result.get("url") or "").strip()
+        if not image_url:
+            raise RuntimeError(str(image_result.get("error") or data.get("error") or "推文配图失败。").strip())
+        image_urls.append(image_url)
+        image_paths.append(_persist_generated_image_for_task(task_id, image_url, index))
+        if isinstance(data.get("timings"), dict):
+            timings.append(data.get("timings"))
     return {
         "ok": True,
         "message": "推文配图生成完成",
-        "download_path": saved_path,
-        "image_paths": [saved_path],
-        "image_url": image_url,
-        "timings": data.get("timings") if isinstance(data.get("timings"), dict) else {},
+        "download_path": image_paths[0],
+        "image_paths": image_paths,
+        "image_url": image_urls[0],
+        "image_urls": image_urls,
+        "image_count": len(image_paths),
+        "timings": timings[0] if len(timings) == 1 else {"items": timings},
     }
 
 
@@ -10311,6 +10357,17 @@ class PersonaDashboardDraftPublishPayload(BaseModel):
     priority: int = 50
     max_retries: int = 2
     media_paths: list[str] = Field(default_factory=list)
+
+
+class PersonaDashboardMatrixPublishPayload(BaseModel):
+    persona_ids: list[str] = Field(default_factory=list)
+    source: str = "posts"
+    per_persona_count: int = 1
+    platform: str = "threads"
+    scheduled_at: int | str | None = 0
+    priority: int = 50
+    max_retries: int = 2
+    skip_active: bool = True
 
 
 class PersonaDashboardPersonaImageGeneratePayload(BaseModel):
@@ -11522,6 +11579,167 @@ def _run_persona_hot_workflow_cli(payload: dict[str, Any], timeout_seconds: int 
     return data
 
 
+def _persona_hot_raw_candidate_count(result: dict[str, Any]) -> int:
+    candidates = result.get("candidates") if isinstance(result, dict) else []
+    return len(candidates) if isinstance(candidates, list) else 0
+
+
+def _persona_hot_entry_id(entry: Any) -> str:
+    if isinstance(entry, str):
+        return entry.strip()
+    if isinstance(entry, dict):
+        return str(entry.get("id") or "").strip()
+    return ""
+
+
+def _persona_hot_entry_at(entry: Any) -> float:
+    if not isinstance(entry, dict):
+        return 0.0
+    text = str(entry.get("at") or "").strip()
+    if not text:
+        return 0.0
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return 0.0
+
+
+def _persona_hot_web_served_file() -> Path:
+    return TOOL_R18_RUNTIME_DIR / "persona_hot_web_served.json"
+
+
+def _persona_hot_threads_cache_file() -> Path:
+    return TOOL_R18_RUNTIME_DIR / "sentiment_threads_search_cache.json"
+
+
+def _read_persona_hot_web_served_at_map(archive_id: str) -> dict[str, float]:
+    raw = _read_json_file(_persona_hot_web_served_file())
+    rows = raw.get(str(archive_id or "").strip()) if isinstance(raw, dict) else []
+    if not isinstance(rows, list):
+        return {}
+    result: dict[str, float] = {}
+    for row in rows:
+        candidate_id = _persona_hot_entry_id(row)
+        if candidate_id:
+            result[candidate_id] = _persona_hot_entry_at(row)
+    return result
+
+
+def _remember_persona_hot_web_served(archive_id: str, candidates: list[dict[str, Any]]) -> None:
+    clean_id = str(archive_id or "").strip()
+    if not clean_id or not candidates:
+        return
+    path = _persona_hot_web_served_file()
+    raw = _read_json_file(path)
+    state = raw if isinstance(raw, dict) else {}
+    current: dict[str, dict[str, str]] = {}
+    rows = state.get(clean_id)
+    if isinstance(rows, list):
+        for row in rows:
+            candidate_id = _persona_hot_entry_id(row)
+            if candidate_id:
+                current[candidate_id] = {
+                    "id": candidate_id,
+                    "at": str(row.get("at") or "") if isinstance(row, dict) else "",
+                }
+    now = _persona_dashboard_iso_now()
+    for candidate in candidates:
+        candidate_id = str(candidate.get("id") or candidate.get("candidate_id") or "").strip()
+        if candidate_id:
+            current[candidate_id] = {"id": candidate_id, "at": now}
+    state[clean_id] = list(current.values())[-500:]
+    _write_json_file(path, state)
+
+
+def _persona_hot_cache_entry_is_fresh(entry: dict[str, Any], max_age_seconds: int = 24 * 60 * 60) -> bool:
+    text = str(entry.get("at") or "").strip()
+    if not text:
+        return True
+    try:
+        captured = datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return True
+    return (time.time() - captured) <= max_age_seconds
+
+
+def _dedupe_persona_hot_candidates(candidates: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    result: list[dict[str, Any]] = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        candidate_id = str(candidate.get("id") or candidate.get("candidate_id") or "").strip()
+        source_url = str(candidate.get("source_url") or candidate.get("sourceUrl") or "").strip()
+        content = re.sub(r"\s+", "", str(candidate.get("full_content") or candidate.get("content") or "").strip())
+        key = candidate_id or source_url or content[:160]
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        result.append(candidate)
+    return result
+
+
+def _read_persona_hot_cached_candidates(archive_id: str, max_candidates: int = 120) -> list[dict[str, Any]]:
+    clean_id = str(archive_id or "").strip()
+    if not clean_id:
+        return []
+    raw = _read_json_file(_persona_hot_threads_cache_file())
+    if not isinstance(raw, dict):
+        return []
+    prefix = f"{clean_id}::"
+    rows: list[tuple[float, float, dict[str, Any]]] = []
+    for key, entry in raw.items():
+        if not isinstance(key, str) or not key.startswith(prefix) or not isinstance(entry, dict):
+            continue
+        if not _persona_hot_cache_entry_is_fresh(entry):
+            continue
+        cache_at = _persona_hot_entry_at(entry)
+        for item in entry.get("candidates") if isinstance(entry.get("candidates"), list) else []:
+            normalized = _normalize_persona_hot_candidate(item)
+            if not normalized:
+                continue
+            rows.append((cache_at, _number(normalized.get("hot_score"), 0), normalized))
+    rows.sort(key=lambda item: (-item[0], -item[1]))
+    return _dedupe_persona_hot_candidates(row[2] for row in rows)[:max(0, int(max_candidates or 0))]
+
+
+def _rank_persona_hot_candidates_for_web(candidates: list[dict[str, Any]], served_at: dict[str, float], limit: int) -> list[dict[str, Any]]:
+    def sort_key(candidate: dict[str, Any]) -> tuple[int, float, float]:
+        candidate_id = str(candidate.get("id") or candidate.get("candidate_id") or "").strip()
+        seen_at = served_at.get(candidate_id)
+        hot_score = _number(candidate.get("hot_score"), 0)
+        return (1 if seen_at is not None else 0, float(seen_at or 0), -hot_score)
+
+    return sorted(candidates, key=sort_key)[:max(0, int(limit or 0))]
+
+
+def _persona_hot_result_needs_web_retry(result: dict[str, Any], limit: int, refresh: bool) -> bool:
+    if not refresh or limit <= 0:
+        return False
+    if _persona_hot_raw_candidate_count(result) >= limit:
+        return False
+    warnings = result.get("warnings") if isinstance(result, dict) else []
+    text = " ".join(str(item or "") for item in warnings) if isinstance(warnings, list) else str(warnings or "")
+    return any(marker in text for marker in (
+        "模型生成热点关键词失败",
+        "模型生成熱點關鍵詞失敗",
+        "模型关键词不可用",
+        "模型關鍵詞不可用",
+        "关键词超时",
+        "關鍵詞超時",
+        "keyword",
+        "timeout",
+    ))
+
+
+def _run_persona_hot_workflow_cli_with_web_retry(payload: dict[str, Any], limit: int, timeout_seconds: int = 180) -> dict[str, Any]:
+    result = _run_persona_hot_workflow_cli(payload, timeout_seconds=timeout_seconds)
+    if not _persona_hot_result_needs_web_retry(result, limit, bool(payload.get("refresh"))):
+        return result
+    retry_result = _run_persona_hot_workflow_cli(payload, timeout_seconds=timeout_seconds)
+    return retry_result if _persona_hot_raw_candidate_count(retry_result) >= _persona_hot_raw_candidate_count(result) else result
+
+
 def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     if not clean_id:
@@ -11538,15 +11756,20 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
         if selected_ids
         else [str(item.get("summary") or "").strip() for item in memories if str(item.get("summary") or "").strip()]
     )[:8]
-    result = _run_persona_hot_workflow_cli(
-        {
-            "action": "fetch-hot-candidates",
-            "archiveId": clean_id,
-            "prompt": str(payload.prompt or "").strip(),
-            "refresh": bool(payload.refresh),
-            "limit": min(max(_to_int(payload.limit, 10), 1), 20),
-            "memorySummaries": selected_summaries,
-        },
+    limit = min(max(_to_int(payload.limit, 10), 1), 20)
+    internal_limit = 20 if bool(payload.refresh) and limit >= 10 else limit
+    web_served_at_before_fetch = _read_persona_hot_web_served_at_map(clean_id)
+    workflow_payload = {
+        "action": "fetch-hot-candidates",
+        "archiveId": clean_id,
+        "prompt": str(payload.prompt or "").strip(),
+        "refresh": bool(payload.refresh),
+        "limit": internal_limit,
+        "memorySummaries": selected_summaries,
+    }
+    result = _run_persona_hot_workflow_cli_with_web_retry(
+        workflow_payload,
+        limit=internal_limit,
         timeout_seconds=180,
     )
     cookie_rows = []
@@ -11567,6 +11790,13 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
         )
         if normalized
     ]
+    if bool(payload.refresh) and limit >= 10:
+        candidates = _dedupe_persona_hot_candidates([
+            *candidates,
+            *_read_persona_hot_cached_candidates(clean_id),
+        ])
+    candidates = _rank_persona_hot_candidates_for_web(candidates, web_served_at_before_fetch, limit)
+    _remember_persona_hot_web_served(clean_id, candidates)
     return {
         "ok": True,
         "archive_name": str(result.get("archiveName") or result.get("archive_name") or "").strip(),
@@ -12190,6 +12420,158 @@ def _publish_persona_archive_post(
         )
     )
     return {"ok": True, "persona_id": clean_archive_id, "post_id": clean_post_id, "task": task}
+
+
+def _archive_posts_for_matrix_source(archive: dict[str, Any], source: str) -> list[dict[str, Any]]:
+    key = "favoritePosts" if source == "favorites" else "posts"
+    rows = archive.get(key) if isinstance(archive.get(key), list) else []
+    return [item for item in rows if isinstance(item, dict)]
+
+
+def _post_media_paths_for_publish(post: dict[str, Any]) -> list[str]:
+    paths: list[str] = []
+    for item in _compact_dashboard_media_items(post, post.get("publishedMeta") if isinstance(post.get("publishedMeta"), dict) else {}):
+        text = str((item or {}).get("url") or "").strip()
+        if text and text not in paths:
+            paths.append(text)
+    return paths
+
+
+def _active_publish_task_for_post(*, persona_id: str, account_id: str, post_id: str) -> dict[str, Any] | None:
+    clean_persona_id = str(persona_id or "").strip()
+    clean_account_id = str(account_id or "").strip()
+    clean_post_id = str(post_id or "").strip()
+    if not clean_persona_id or not clean_account_id or not clean_post_id:
+        return None
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM social_automation_tasks
+            WHERE persona_id = ?
+              AND account_id = ?
+              AND task_type = 'publish_post'
+              AND status IN ('queued', 'running', 'need_manual')
+            ORDER BY created_at DESC
+            """,
+            (clean_persona_id, clean_account_id),
+        ).fetchall()
+    for row in rows:
+        payload = _json_loads(dict(row).get("payload_json"), {})
+        if str(payload.get("archive_post_id") or "").strip() == clean_post_id:
+            return dict(row)
+    return None
+
+
+def _publish_persona_matrix(payload: PersonaDashboardMatrixPublishPayload) -> dict[str, Any]:
+    source = str(payload.source or "posts").strip().lower()
+    if source not in {"posts", "favorites"}:
+        raise HTTPException(status_code=400, detail="发布来源只能选择草稿或收藏。")
+    platform = str(payload.platform or "threads").strip().lower()
+    if platform not in {"threads", "instagram"}:
+        raise HTTPException(status_code=400, detail="矩阵发布当前只支持 Threads 或 Instagram。")
+    persona_ids: list[str] = []
+    for raw_id in payload.persona_ids or []:
+        clean_id = str(raw_id or "").strip()
+        if clean_id and clean_id not in persona_ids:
+            persona_ids.append(clean_id)
+    if not persona_ids:
+        raise HTTPException(status_code=400, detail="请至少选择一个人设。")
+    per_count = max(1, min(int(payload.per_persona_count or 1), 20))
+    _, _, archives = _persona_archive_source_for_write()
+    archive_map = {str(item.get("id") or "").strip(): item for item in archives if isinstance(item, dict)}
+    created: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    batch_id = _new_id("matrix_publish")
+    for persona_id in persona_ids:
+        archive = archive_map.get(persona_id)
+        if not archive:
+            errors.append({"persona_id": persona_id, "reason": "人设不存在"})
+            continue
+        persona_name = str(archive.get("name") or archive.get("title") or persona_id).strip()
+        try:
+            account = _persona_publish_account_for_archive(persona_id, "", platform)
+            login_check = _latest_successful_social_task_for_account(str(account.get("id") or ""), ["check_login", "open_login"])
+            if not login_check:
+                errors.append({"persona_id": persona_id, "persona_name": persona_name, "reason": "发布前需要先完成登录检查"})
+                continue
+            rows = _archive_posts_for_matrix_source(archive, source)
+            candidates: list[dict[str, Any]] = []
+            for post in rows:
+                post_id = str(post.get("id") or "").strip()
+                content = str(post.get("content") or "").strip()
+                if not post_id or not content:
+                    continue
+                if str(post.get("publishedAt") or post.get("published_at") or "").strip():
+                    continue
+                candidates.append(post)
+            if not candidates:
+                skipped.append({"persona_id": persona_id, "persona_name": persona_name, "reason": "没有可发布内容"})
+                continue
+            selected_posts = candidates[:per_count]
+            for post in selected_posts:
+                post_id = str(post.get("id") or "").strip()
+                active = _active_publish_task_for_post(persona_id=persona_id, account_id=str(account.get("id") or ""), post_id=post_id)
+                if active and payload.skip_active:
+                    skipped.append({
+                        "persona_id": persona_id,
+                        "persona_name": persona_name,
+                        "post_id": post_id,
+                        "post_title": str(post.get("title") or ""),
+                        "reason": "已有发布任务在队列或执行中",
+                    })
+                    continue
+                media_paths = _post_media_paths_for_publish(post)
+                if platform == "instagram" and not media_paths:
+                    errors.append({
+                        "persona_id": persona_id,
+                        "persona_name": persona_name,
+                        "post_id": post_id,
+                        "post_title": str(post.get("title") or ""),
+                        "reason": "Instagram 发布需要先给草稿添加媒体",
+                    })
+                    continue
+                content = str(post.get("content") or "").strip()
+                task = create_social_task(
+                    SocialTaskPayload(
+                        persona_id=persona_id,
+                        account_id=str(account.get("id") or ""),
+                        platform=platform,
+                        task_type="publish_post",
+                        priority=max(1, min(int(payload.priority or 50), 100)),
+                        scheduled_at=payload.scheduled_at or 0,
+                        payload={
+                            "caption": content,
+                            "content": content,
+                            "text": content,
+                            "platform": platform,
+                            "media_paths": media_paths,
+                            "archive_post_id": post_id,
+                            "archive_post_title": str(post.get("title") or ""),
+                            "archive_post_source": source,
+                            "matrix_publish_batch_id": batch_id,
+                        },
+                        max_retries=max(0, min(int(payload.max_retries or 2), 5)),
+                    )
+                )
+                created.append({
+                    "persona_id": persona_id,
+                    "persona_name": persona_name,
+                    "post_id": post_id,
+                    "post_title": str(post.get("title") or ""),
+                    "account_id": str(account.get("id") or ""),
+                    "platform": platform,
+                    "task": task,
+                })
+        except HTTPException as exc:
+            errors.append({"persona_id": persona_id, "persona_name": persona_name, "reason": str(exc.detail)})
+        except Exception as exc:
+            logger.exception("matrix publish item failed: persona_id=%s", persona_id)
+            errors.append({"persona_id": persona_id, "persona_name": persona_name, "reason": str(exc)})
+    if not created and errors:
+        return {"ok": False, "batch_id": batch_id, "created": created, "skipped": skipped, "errors": errors}
+    return {"ok": True, "batch_id": batch_id, "created": created, "skipped": skipped, "errors": errors}
 
 
 def _write_persona_archives_preserving_shape(path: Path, raw: Any, archives: list[dict[str, Any]]) -> None:
@@ -14556,6 +14938,13 @@ def create_app() -> FastAPI:
     ):
         return _publish_persona_archive_post(archive_id, post_id, payload)
 
+    @app.post("/api/persona_dashboard/matrix_publish")
+    def api_persona_dashboard_matrix_publish(
+        payload: PersonaDashboardMatrixPublishPayload,
+        _user: dict[str, Any] = Depends(get_current_user),
+    ):
+        return _publish_persona_matrix(payload)
+
     @app.post("/api/persona_dashboard/personas/{archive_id}/threads_binding")
     def api_persona_dashboard_bind_threads(archive_id: str, payload: PersonaDashboardThreadsBindingPayload):
         return _bind_persona_threads_username(archive_id, payload.username)
@@ -15486,7 +15875,15 @@ def create_app() -> FastAPI:
             elif typ == "persona_post_image":
                 payload["related_persona_id"] = str(payload.get("related_persona_id") or "").strip()
                 payload["related_post_id"] = str(payload.get("related_post_id") or "").strip()
-                payload["prompt"] = str(payload.get("prompt") or payload.get("prompt_text") or payload.get("message") or "").strip()
+                payload["prompt"] = str(payload.get("custom_prompt") or payload.get("prompt") or payload.get("prompt_text") or payload.get("message") or "").strip()
+                payload["custom_prompt"] = payload["prompt"]
+                payload["generation_content"] = str(payload.get("generation_content") or payload.get("manual_content") or "").strip()
+                payload["content_source_mode"] = "manual" if str(payload.get("content_source_mode") or "").strip() == "manual" else "draft"
+                image_count_raw = payload.get("image_count") or payload.get("imageCount") or payload.get("count") or 1
+                try:
+                    payload["image_count"] = min(max(int(float(image_count_raw)), 1), 8)
+                except (TypeError, ValueError):
+                    payload["image_count"] = 1
                 payload["aspect_ratio"] = str(payload.get("aspect_ratio") or payload.get("aspectRatio") or "1:1").strip() or "1:1"
                 if not payload["related_persona_id"] or not payload["related_post_id"]:
                     raise HTTPException(status_code=400, detail="推文配图需要关联人设 ID 和草稿 ID")

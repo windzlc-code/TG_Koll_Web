@@ -62,6 +62,35 @@ class PersonaDashboardApiTests(unittest.TestCase):
         else:
             os.environ[key] = old_value
 
+    def test_sentiment_profile_lookup_accepts_legacy_aliases(self):
+        profiles = [
+            {"key": "xiaohongshusearch", "platform": "xiaohongshusearch"},
+            {"key": "facebooksearch", "platform": "facebooksearch"},
+        ]
+
+        self.assertEqual(server._find_sentiment_profile(profiles, "xiaohongshu")["key"], "xiaohongshusearch")
+        self.assertEqual(server._find_sentiment_profile(profiles, "facebook")["key"], "facebooksearch")
+
+    def test_threads_live_auth_prefers_browser_probe_success(self):
+        profile = {"key": "threads", "platform": "threads"}
+        cookies = [
+            {
+                "name": "sessionid",
+                "value": "live-session",
+                "domain": ".threads.com",
+                "path": "/",
+                "expires": 1893456000,
+            }
+        ]
+
+        server._SENTIMENT_THREADS_LIVE_AUTH_CACHE.clear()
+        with mock.patch.object(server, "_probe_threads_live_auth_with_browser", return_value={"ok": True, "status": "verified"}):
+            state = server._sentiment_threads_live_auth_state(profile, cookies)
+
+        self.assertTrue(state["liveAuthUsable"])
+        self.assertEqual(state["liveAuthStatus"], "verified")
+        self.assertEqual(state["liveAuthAction"], "keep")
+
     def _admin_user_id(self) -> int:
         conn = sqlite3.connect(str(self.data_dir / "app.db"))
         row = conn.execute("SELECT id FROM users WHERE username = ?", ("admin",)).fetchone()
@@ -720,6 +749,9 @@ class PersonaDashboardApiTests(unittest.TestCase):
                             "related_persona_id": "persona-1",
                             "related_post_id": "post-1",
                             "prompt": "请生成一张通勤风格的配图",
+                            "generation_content": "手动输入的通勤配图正文",
+                            "content_source_mode": "manual",
+                            "image_count": 3,
                             "aspect_ratio": "1:1",
                         },
                         ensure_ascii=False,
@@ -731,6 +763,9 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(captured["task_type"], "persona_post_image")
         self.assertEqual(captured["payload"]["related_persona_id"], "persona-1")
         self.assertEqual(captured["payload"]["related_post_id"], "post-1")
+        self.assertEqual(captured["payload"]["generation_content"], "手动输入的通勤配图正文")
+        self.assertEqual(captured["payload"]["content_source_mode"], "manual")
+        self.assertEqual(captured["payload"]["image_count"], 3)
 
     def test_persona_post_image_runner_saves_local_preview_file(self):
         self._write_archives()
@@ -740,6 +775,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
             "related_post_id": "post-1",
             "prompt": "请生成一张适合当前推文的通勤配图",
             "aspect_ratio": "1:1",
+            "generation_content": "手动输入正文",
+            "image_count": 2,
         }
         server._create_task_record(task_id, self._admin_user_id(), "persona_post_image", payload)
         data_url = "data:image/png;base64," + base64.b64encode(self.draft_media_path.read_bytes()).decode("ascii")
@@ -755,10 +792,12 @@ class PersonaDashboardApiTests(unittest.TestCase):
             ),
             stderr="",
         )
-        with mock.patch.object(server.subprocess, "run", return_value=completed):
+        with mock.patch.object(server.subprocess, "run", return_value=completed) as run_mock:
             result = server._run_persona_post_image_task(task_id, payload)
         self.assertTrue(result["ok"])
-        self.assertTrue(result["image_paths"])
+        self.assertEqual(result["image_count"], 2)
+        self.assertEqual(len(result["image_paths"]), 2)
+        self.assertEqual(run_mock.call_count, 2)
         saved_path = Path(result["image_paths"][0])
         self.assertTrue(saved_path.is_file())
         self.assertEqual(saved_path.read_bytes(), self.draft_media_path.read_bytes())
@@ -927,6 +966,191 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertTrue(payload["refresh"])
         self.assertEqual(payload["limit"], 6)
         self.assertEqual(payload["memorySummaries"], ["记忆一"])
+
+    def test_fetch_persona_hot_candidates_retries_keyword_timeout_short_result(self):
+        self._write_archives()
+        short_result = {
+            "ok": True,
+            "archiveName": "History Teacher",
+            "keywords": ["历史人物"],
+            "cookieStatuses": [],
+            "warnings": ["模型生成热点关键词失败，已改用同一人设历史真实抓取关键词继续刷新：timeout"],
+            "candidates": [
+                {
+                    "id": f"hot-{index}",
+                    "platform": "threads",
+                    "sourceUrl": f"https://www.threads.com/@history/post/{index}",
+                    "author": "history",
+                    "content": f"历史热点正文 {index}",
+                    "hotScore": 100 - index,
+                    "metrics": {},
+                    "capturedAt": "2026-07-06T10:00:00Z",
+                }
+                for index in range(8)
+            ],
+        }
+        full_result = {
+            **short_result,
+            "keywords": ["历史课堂", "朝代历史"],
+            "warnings": ["已即时刷新 Threads reader 中文热点。"],
+            "candidates": [
+                {
+                    "id": f"full-hot-{index}",
+                    "platform": "threads",
+                    "sourceUrl": f"https://www.threads.com/@history/post/full-{index}",
+                    "author": "history",
+                    "content": f"历史课堂热点正文 {index}",
+                    "hotScore": 200 - index,
+                    "metrics": {},
+                    "capturedAt": "2026-07-06T10:00:00Z",
+                }
+                for index in range(10)
+            ],
+        }
+
+        with mock.patch.object(server, "_run_persona_hot_workflow_cli", side_effect=[short_result, full_result]) as mocked:
+            resp = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/hot_candidates",
+                json={"refresh": True, "limit": 10},
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(len(body["candidates"]), 10)
+        self.assertEqual(body["keywords"], ["历史课堂", "朝代历史"])
+        self.assertEqual(body["candidates"][0]["candidate_id"], "full-hot-0")
+        self.assertEqual(mocked.call_count, 2)
+
+    def test_fetch_persona_hot_candidates_prefers_unshown_candidates_from_larger_web_pool(self):
+        self._write_archives()
+        (self.tool_runtime_dir / "persona_hot_web_served.json").write_text(json.dumps({
+            "persona-1": [
+                {"id": f"seen-hot-{index}", "at": f"2026-07-0{index + 1}T10:00:00Z"}
+                for index in range(10)
+            ]
+        }, ensure_ascii=False), encoding="utf-8")
+        fake_result = {
+            "ok": True,
+            "archiveName": "History Teacher",
+            "keywords": ["历史"],
+            "cookieStatuses": [],
+            "warnings": [],
+            "candidates": [
+                {
+                    "id": f"seen-hot-{index}",
+                    "platform": "threads",
+                    "sourceUrl": f"https://www.threads.com/@history/post/seen-{index}",
+                    "author": "history",
+                    "content": f"已展示历史热点正文 {index}",
+                    "hotScore": 1000 - index,
+                    "metrics": {},
+                    "capturedAt": "2026-07-06T10:00:00Z",
+                }
+                for index in range(10)
+            ] + [
+                {
+                    "id": f"fresh-hot-{index}",
+                    "platform": "threads",
+                    "sourceUrl": f"https://www.threads.com/@history/post/fresh-{index}",
+                    "author": "history",
+                    "content": f"新鲜历史热点正文 {index}",
+                    "hotScore": 100 - index,
+                    "metrics": {},
+                    "capturedAt": "2026-07-06T10:00:00Z",
+                }
+                for index in range(10)
+            ],
+        }
+
+        with mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value=fake_result) as mocked:
+            resp = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/hot_candidates",
+                json={"refresh": True, "limit": 10},
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(len(body["candidates"]), 10)
+        self.assertTrue(all(item["candidate_id"].startswith("fresh-hot-") for item in body["candidates"]))
+        self.assertEqual(mocked.call_args.args[0]["limit"], 20)
+        served = json.loads((self.tool_runtime_dir / "persona_hot_web_served.json").read_text(encoding="utf-8"))
+        served_ids = [item["id"] for item in served["persona-1"]]
+        self.assertIn("fresh-hot-0", served_ids)
+
+    def test_fetch_persona_hot_candidates_supplements_from_persona_threads_cache(self):
+        self._write_archives()
+        (self.tool_runtime_dir / "persona_hot_web_served.json").write_text(json.dumps({
+            "persona-1": [
+                {"id": f"seen-hot-{index}", "at": f"2026-07-0{index + 1}T10:00:00Z"}
+                for index in range(10)
+            ]
+        }, ensure_ascii=False), encoding="utf-8")
+        (self.tool_runtime_dir / "sentiment_threads_search_cache.json").write_text(json.dumps({
+            "persona-1::历史课堂": {
+                "at": "2026-07-06T10:00:00Z",
+                "candidates": [
+                    {
+                        "id": f"cache-hot-{index}",
+                        "platform": "threads",
+                        "sourceUrl": f"https://www.threads.com/@history/post/cache-{index}",
+                        "author": "history",
+                        "content": f"缓存里的历史课堂热点 {index}",
+                        "hotScore": 80 - index,
+                        "metrics": {},
+                        "capturedAt": "2026-07-06T10:00:00Z",
+                    }
+                    for index in range(10)
+                ],
+            },
+            "persona-other::历史课堂": {
+                "at": "2026-07-06T10:00:00Z",
+                "candidates": [
+                    {
+                        "id": "other-hot",
+                        "platform": "threads",
+                        "sourceUrl": "https://www.threads.com/@other/post/1",
+                        "author": "other",
+                        "content": "其他人设热点不应混入",
+                        "hotScore": 9999,
+                        "metrics": {},
+                        "capturedAt": "2026-07-06T10:00:00Z",
+                    }
+                ],
+            },
+        }, ensure_ascii=False), encoding="utf-8")
+        fake_result = {
+            "ok": True,
+            "archiveName": "History Teacher",
+            "keywords": ["历史课堂"],
+            "cookieStatuses": [],
+            "warnings": [],
+            "candidates": [
+                {
+                    "id": f"seen-hot-{index}",
+                    "platform": "threads",
+                    "sourceUrl": f"https://www.threads.com/@history/post/seen-{index}",
+                    "author": "history",
+                    "content": f"已展示历史热点正文 {index}",
+                    "hotScore": 1000 - index,
+                    "metrics": {},
+                    "capturedAt": "2026-07-06T10:00:00Z",
+                }
+                for index in range(10)
+            ],
+        }
+
+        with mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value=fake_result):
+            resp = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/hot_candidates",
+                json={"refresh": True, "limit": 10},
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        ids = [item["candidate_id"] for item in body["candidates"]]
+        self.assertEqual(len(ids), 10)
+        self.assertTrue(all(item.startswith("cache-hot-") for item in ids))
+        self.assertNotIn("other-hot", ids)
 
     def test_fetch_persona_hot_candidates_uses_default_memories_without_web_params(self):
         self._write_archives()

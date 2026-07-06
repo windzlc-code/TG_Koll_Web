@@ -28,17 +28,12 @@
         <button type="button" data-view="settings">系统状态</button>
       </nav>
 
-      <div class="side-actions">
+      <div class="sidebar-bottom-actions">
         <a href="/persona-dashboard.html">人设看板</a>
-        <button id="consoleSettings" type="button" data-view="console_settings">通用设置</button>
-      </div>
-
-      <div class="operator-card">
-        <div class="tiny">当前账号</div>
-        <strong id="consoleMeName">...</strong>
-      </div>
-      <div class="side-actions">
-        <button id="consoleLogout" type="button">退出</button>
+        <button id="consoleSettings" type="button" data-view="console_settings" class="settings-entry">
+          <span class="settings-entry-icon" aria-hidden="true">⚙</span>
+          <span>设置</span>
+        </button>
       </div>
     </aside>
 
@@ -198,7 +193,7 @@
         <div class="panel-head">
           <div>
             <div class="eyebrow">设置</div>
-            <h3>通用设置</h3>
+            <h3>设置</h3>
           </div>
         </div>
         <div id="consoleSettingsBody"></div>

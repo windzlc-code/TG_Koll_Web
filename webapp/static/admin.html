@@ -220,25 +220,23 @@
         <div class="sentiment-cookie-automation">
           <div>
             <div class="admin-config-card-title">授权助手流程</div>
-            <div class="meta">网页不能直接安装未上架扩展；先下载并解压助手，在扩展管理页加载该目录，再登录平台并用助手同步 Cookie。</div>
+            <div class="meta">网页不能静默替换浏览器扩展代码；开发环境建议加载项目里的固定助手目录，后续只需在扩展管理页点击刷新。</div>
             <ol class="sentiment-cookie-steps">
-              <li>下载授权助手 zip，解压到本地文件夹。</li>
-              <li>打开 Chrome / Edge 扩展管理页，开启开发者模式，选择“加载已解压的扩展程序”。</li>
+              <li>打开 Chrome / Edge 扩展管理页，开启开发者模式。</li>
+              <li>选择“加载已解压的扩展程序”，加载安装说明中的固定目录。</li>
               <li>点击对应平台的“打开”，完成平台登录。</li>
-              <li>在浏览器右上角打开授权助手，点“同步当前站点”。</li>
+              <li>在浏览器右上角打开授权助手，点“同步当前页面”。</li>
             </ol>
           </div>
           <div class="sentiment-cookie-automation-actions">
-            <button id="btnSentimentCookieDownloadHelper" class="primary" type="button">下载授权助手</button>
-            <a class="btn ghost" href="/browser-auth-extension/install.html" target="_blank" rel="noopener">安装说明</a>
+            <a class="btn primary" href="/browser-auth-extension/install.html" target="_blank" rel="noopener">安装/更新说明</a>
+            <button id="btnSentimentCookieDownloadHelper" class="ghost" type="button">下载授权助手 zip</button>
             <button id="btnSentimentCookieOpenAuth" class="ghost" type="button">打开当前平台授权页</button>
             <details class="sentiment-cookie-advanced">
               <summary>高级维护</summary>
               <div class="sentiment-cookie-advanced-actions">
                 <button id="btnSentimentCookieCopyExtensionUrl" class="ghost" type="button">复制扩展管理页地址</button>
                 <button id="btnSentimentCookieCopyBase" class="ghost" type="button">复制助手接口地址</button>
-                <button id="btnSentimentCookieCopyToken" class="ghost" type="button">复制同步令牌</button>
-                <button id="btnSentimentCookieRotateToken" class="danger ghost" type="button">轮换同步令牌</button>
               </div>
             </details>
           </div>
