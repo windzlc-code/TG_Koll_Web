@@ -849,6 +849,17 @@ textarea:focus {
   transition: max-height var(--motion), opacity var(--motion-fast), margin-top var(--motion-fast), visibility 0s linear var(--motion-fast);
 }
 
+.persona-layer-group.is-collapsed.is-drag-over .persona-layer-children {
+  max-height: 86px;
+  opacity: 1;
+  overflow: hidden;
+  visibility: visible;
+  margin-top: 0;
+  pointer-events: auto;
+  border-left-color: color-mix(in srgb, var(--accent) 62%, var(--line));
+  transition: max-height var(--motion), opacity var(--motion-fast), margin-top var(--motion-fast), visibility 0s linear 0s;
+}
+
 .persona-layer-empty {
   color: var(--muted);
   padding: 8px 10px;
@@ -865,6 +876,111 @@ textarea:focus {
   background: var(--panel-solid);
   padding: 5px;
   transition: border-color var(--motion-fast), box-shadow var(--motion-fast), background var(--motion-fast), color var(--motion-fast), transform var(--motion-fast);
+}
+
+.persona-draggable-card {
+  cursor: grab;
+  will-change: transform;
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-drag: none;
+  -webkit-user-select: none;
+}
+
+.persona-draggable-card:active {
+  cursor: grabbing;
+}
+
+.persona-list-card.is-dragging {
+  opacity: .42;
+  border-color: var(--accent);
+  box-shadow: 0 18px 38px rgba(15, 23, 42, .18);
+  transform: none;
+}
+
+.persona-list-card.is-drag-source-hidden {
+  display: none;
+}
+
+.persona-list-card.is-pointer-dragging {
+  opacity: .32;
+}
+
+.persona-pointer-ghost {
+  position: fixed;
+  z-index: 5000;
+  margin: 0;
+  pointer-events: none;
+  opacity: .96;
+  border-color: color-mix(in srgb, var(--accent) 72%, var(--line));
+  box-shadow: 0 22px 48px rgba(15, 23, 42, .24);
+  transition: none;
+  will-change: transform;
+}
+
+body.persona-touch-dragging {
+  cursor: grabbing;
+  user-select: none;
+  -webkit-user-select: none;
+  overscroll-behavior: contain;
+}
+
+body.persona-touch-dragging .persona-list-scroll {
+  scroll-behavior: auto;
+}
+
+body.persona-dragging .persona-list-card,
+body.persona-touch-dragging .persona-list-card {
+  transition: border-color var(--motion-fast), box-shadow var(--motion-fast), background var(--motion-fast), color var(--motion-fast);
+}
+
+body.persona-dragging .persona-list-card:hover,
+body.persona-dragging .persona-list-card:active,
+body.persona-touch-dragging .persona-list-card:hover,
+body.persona-touch-dragging .persona-list-card:active {
+  transform: none;
+}
+
+.persona-list-card.is-settling,
+.persona-layer-group.is-settling {
+  transition: transform 240ms cubic-bezier(.2, .82, .2, 1), border-color var(--motion-fast), box-shadow var(--motion-fast), background var(--motion-fast), color var(--motion-fast);
+}
+
+.persona-list-stack.is-drag-over,
+.persona-layer-children.is-drag-over,
+.persona-layer-group.is-drag-over > .persona-folder-card {
+  border-color: color-mix(in srgb, var(--accent) 56%, var(--line));
+}
+
+.persona-layer-children.is-drag-over {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border-left-color: color-mix(in srgb, var(--accent) 62%, var(--line));
+}
+
+.persona-layer-group.is-drag-over > .persona-folder-card {
+  background: color-mix(in srgb, var(--accent) 9%, var(--panel-solid));
+}
+
+.persona-drop-placeholder {
+  min-height: 50px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 72%, var(--line));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent);
+  animation: personaDropSlot 160ms cubic-bezier(.2, .82, .2, 1) both;
+}
+
+@keyframes personaDropSlot {
+  from {
+    min-height: 0;
+    opacity: 0;
+    transform: scaleY(.72);
+  }
+  to {
+    min-height: 50px;
+    opacity: 1;
+    transform: scaleY(1);
+  }
 }
 
 .persona-list-card.persona-folder-card {
@@ -1131,6 +1247,60 @@ textarea:focus {
   min-height: 180px;
 }
 
+.persona-create-workbench input[readonly],
+.persona-create-workbench textarea[readonly] {
+  background: var(--soft);
+  color: var(--muted);
+  cursor: default;
+}
+
+.persona-create-keyword-section {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-solid);
+}
+
+.persona-create-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.persona-create-actions button {
+  border: 1px solid var(--line);
+  background: var(--panel-solid);
+  color: var(--ink);
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: border-color var(--motion-fast), box-shadow var(--motion-fast), background var(--motion-fast), color var(--motion-fast), transform var(--motion-fast);
+}
+
+.persona-create-actions button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.persona-create-workbench button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.row-actions button:disabled,
+.command-actions button:disabled,
+.topbar-actions button:disabled,
+.side-actions button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .persona-keyword-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -1236,6 +1406,131 @@ textarea:focus {
   border-color: var(--accent);
   color: var(--accent-ink);
   box-shadow: none;
+}
+
+.persona-hot-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+  gap: 12px;
+}
+
+.persona-hot-filters {
+  display: grid;
+  gap: 12px;
+}
+
+.persona-hot-status-row {
+  display: grid;
+  gap: 4px;
+}
+
+.persona-hot-status-row strong {
+  font-size: 13px;
+}
+
+.persona-hot-status-row span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.persona-hot-list,
+.persona-hot-preview {
+  display: grid;
+  gap: 10px;
+}
+
+.persona-hot-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.persona-hot-toolbar small {
+  color: var(--muted);
+}
+
+.persona-hot-grid {
+  display: grid;
+  gap: 10px;
+  max-height: 540px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.persona-hot-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-solid);
+  transition: border-color var(--motion-fast), box-shadow var(--motion-fast), transform var(--motion-fast);
+}
+
+.persona-hot-card:hover,
+.persona-hot-card.is-preview {
+  border-color: var(--hover-border);
+  box-shadow: var(--hover-shadow);
+}
+
+.persona-hot-card.is-selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel-solid));
+}
+
+.persona-hot-card-check {
+  width: 16px;
+  height: 16px;
+  margin: 4px 0 0;
+}
+
+.persona-hot-card-main {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  box-shadow: none;
+}
+
+.persona-hot-card-head,
+.persona-hot-preview-head,
+.persona-hot-preview-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.persona-hot-card-copy,
+.persona-hot-preview-card p {
+  color: var(--ink);
+  line-height: 1.55;
+}
+
+.persona-hot-card-metrics,
+.persona-hot-preview-meta small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.persona-hot-preview-card {
+  display: grid;
+  gap: 10px;
+  min-height: 100%;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-solid);
 }
 
 .persona-toggle-chip {
@@ -1372,6 +1667,51 @@ textarea:focus {
   justify-content: flex-start;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.persona-hot-origin {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel-solid));
+}
+
+.persona-hot-origin.is-compact {
+  gap: 4px;
+  padding: 7px 9px;
+}
+
+.persona-hot-origin-head,
+.persona-hot-origin-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.persona-hot-origin-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 16%, var(--panel-solid));
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.persona-hot-origin p {
+  margin: 0;
+  color: var(--ink);
+  line-height: 1.5;
+}
+
+.persona-hot-origin-meta small {
+  color: var(--muted);
 }
 
 .persona-panel-intro {
@@ -2047,7 +2387,8 @@ textarea:focus {
   .account-grid,
   .task-row,
   .persona-actions-grid,
-  .persona-console-layout {
+  .persona-console-layout,
+  .persona-hot-layout {
     grid-template-columns: 1fr;
   }
 
