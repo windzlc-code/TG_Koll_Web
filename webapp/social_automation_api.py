@@ -1600,23 +1600,30 @@ def _strip_task_secrets(value: Any) -> Any:
     return value
 
 
-def _extract_runtime_secrets(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+def _extract_runtime_secrets(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     clean = dict(payload or {})
-    secrets: dict[str, str] = {}
+    secrets: dict[str, Any] = {}
     for key in ("login_password", "password"):
         value = str(clean.pop(key, "") or "")
         if value and not secrets.get("login_password"):
             secrets["login_password"] = value
+    initial_cookies = clean.pop("initial_cookies", None)
+    if initial_cookies is None:
+        initial_cookies = clean.pop("initialCookies", None)
+    if isinstance(initial_cookies, list) and initial_cookies:
+        secrets["initial_cookies"] = initial_cookies
     return clean, secrets
 
 
 def _runtime_task_payload(task: dict[str, Any], account: dict[str, Any]) -> dict[str, Any]:
     payload = dict(task.get("payload") or {})
-    if str(task.get("task_type") or "") != "open_login" or not payload.get("auto_submit"):
-        return payload
     task_id = str(task.get("id") or "")
     with _EPHEMERAL_TASK_SECRETS_LOCK:
         secrets = dict(_EPHEMERAL_TASK_SECRETS.get(task_id) or {})
+    if secrets.get("initial_cookies") and not payload.get("initial_cookies"):
+        payload["initial_cookies"] = secrets["initial_cookies"]
+    if str(task.get("task_type") or "") != "open_login" or not payload.get("auto_submit"):
+        return payload
     saved_username = str(account.get("login_username") or "").strip()
     saved_password = str(account.get("login_password") or "")
     payload["login_username"] = str(payload.get("login_username") or saved_username or account.get("username") or "").strip()

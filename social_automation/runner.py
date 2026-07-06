@@ -81,6 +81,7 @@ def run_social_task(
     logger.log("info", "prepare", "Starting social automation task", {"task_type": task_type, "platform": platform})
     _raise_if_cancelled(cancel_event)
     with _open_camoufox_context(account=account, proxy=proxy, logger=logger, context_control=context_control) as context:
+        _import_initial_cookies(context, payload.get("initial_cookies"), platform, logger)
         page = _first_page(context)
         page.set_default_timeout(int(os.getenv("SOCIAL_AUTOMATION_DEFAULT_TIMEOUT_MS", "30000")))
         if task_type == "open_login":
@@ -292,6 +293,50 @@ def _first_page(context):
     if pages:
         return pages[0]
     return context.new_page()
+
+
+def _import_initial_cookies(context, cookies: Any, platform: str, logger: AutomationLogger) -> None:
+    if not isinstance(cookies, list) or not cookies:
+        return
+    allowed_domains = ("threads.net", "threads.com", "instagram.com", "facebook.com") if platform == "threads" else ("instagram.com", "facebook.com")
+    rows: list[dict[str, Any]] = []
+    for cookie in cookies:
+        if not isinstance(cookie, dict):
+            continue
+        name = str(cookie.get("name") or "").strip()
+        value = str(cookie.get("value") or "").strip()
+        domain = str(cookie.get("domain") or "").strip()
+        if not name or not value or not domain:
+            continue
+        clean_domain = domain.lstrip(".").lower()
+        if not any(clean_domain == allowed or clean_domain.endswith(f".{allowed}") for allowed in allowed_domains):
+            continue
+        row: dict[str, Any] = {
+            "name": name,
+            "value": value,
+            "domain": domain,
+            "path": str(cookie.get("path") or "/").strip() or "/",
+            "httpOnly": bool(cookie.get("httpOnly") or cookie.get("http_only")),
+            "secure": cookie.get("secure") is not False,
+        }
+        same_site = str(cookie.get("sameSite") or cookie.get("same_site") or "").strip().lower()
+        if same_site in {"strict", "lax", "none"}:
+            row["sameSite"] = {"strict": "Strict", "lax": "Lax", "none": "None"}[same_site]
+        try:
+            expires = float(cookie.get("expires", cookie.get("expirationDate", 0)) or 0)
+        except (TypeError, ValueError):
+            expires = 0
+        if expires > time.time():
+            row["expires"] = expires
+        rows.append(row)
+    if not rows:
+        logger.log("warn", "cookie_import", "No usable initial cookies were available for this profile", {"platform": platform})
+        return
+    try:
+        context.add_cookies(rows)
+        logger.log("info", "cookie_import", "Imported initial cookies into the browser profile", {"platform": platform, "cookie_count": len(rows)})
+    except Exception as exc:
+        logger.log("warn", "cookie_import_failed", "Failed to import initial cookies into the browser profile", {"platform": platform, "error": str(exc)})
 
 
 def _sleep_between(min_s: float, max_s: float) -> None:
