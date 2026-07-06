@@ -11915,7 +11915,15 @@ def _find_persona_archive(archives: list[dict[str, Any]], archive_id: str) -> di
     return None
 
 
-def _list_persona_archive_posts(archive_id: str) -> list[dict[str, Any]]:
+def _persona_post_source_key(source: str = "posts") -> str:
+    return "favoritePosts" if str(source or "").strip().lower() == "favorites" else "posts"
+
+
+def _persona_post_source_name(source: str = "posts") -> str:
+    return "favorites" if _persona_post_source_key(source) == "favoritePosts" else "posts"
+
+
+def _list_persona_archive_posts(archive_id: str, source: str = "posts") -> list[dict[str, Any]]:
     clean_id = str(archive_id or "").strip()
     if not clean_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID。")
@@ -11923,23 +11931,26 @@ def _list_persona_archive_posts(archive_id: str) -> list[dict[str, Any]]:
     archive = _find_persona_archive(archives, clean_id)
     if not archive:
         raise HTTPException(status_code=404, detail="人设不存在。")
-    posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+    source_key = _persona_post_source_key(source)
+    posts = archive.get(source_key) if isinstance(archive.get(source_key), list) else []
     rows = []
     for post in posts:
         if not isinstance(post, dict):
             continue
         compact = _compact_persona_archive_post(post)
+        compact["source"] = _persona_post_source_name(source)
         compact["media_items"] = _previewable_persona_media_items(
             compact.get("media_items") if isinstance(compact.get("media_items"), list) else [],
             archive_id=clean_id,
             post_id=str(compact.get("id") or "").strip(),
+            source=_persona_post_source_name(source),
         )
         rows.append(compact)
     rows.sort(key=lambda item: (str(item.get("published_at") or ""), str(item.get("updated_at") or ""), str(item.get("created_at") or "")), reverse=True)
     return rows
 
 
-def _serve_persona_archive_post_media(archive_id: str, post_id: str, index: int) -> FileResponse:
+def _serve_persona_archive_post_media(archive_id: str, post_id: str, index: int, source: str = "posts") -> FileResponse:
     clean_archive_id = str(archive_id or "").strip()
     clean_post_id = str(post_id or "").strip()
     if not clean_archive_id or not clean_post_id:
@@ -11948,7 +11959,8 @@ def _serve_persona_archive_post_media(archive_id: str, post_id: str, index: int)
     archive = _find_persona_archive(archives, clean_archive_id)
     if not archive:
         raise HTTPException(status_code=404, detail="人设不存在。")
-    posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+    source_key = _persona_post_source_key(source)
+    posts = archive.get(source_key) if isinstance(archive.get(source_key), list) else []
     raw_post = next(
         (item for item in posts if isinstance(item, dict) and str(item.get("id") or "").strip() == clean_post_id),
         None,
@@ -12163,7 +12175,81 @@ def _create_persona_archive_post(archive_id: str, payload: PersonaDashboardDraft
     return _compact_persona_archive_post(record)
 
 
-def _update_persona_archive_post(archive_id: str, post_id: str, payload: PersonaDashboardDraftPostPayload) -> dict[str, Any]:
+def _favorite_source_post_id(post: dict[str, Any]) -> str:
+    source_meta = post.get("sourceMeta") if isinstance(post.get("sourceMeta"), dict) else {}
+    return str(source_meta.get("favoriteSourcePostId") or post.get("id") or "").strip()
+
+
+def _add_persona_favorite_post(archive_id: str, post_id: str) -> dict[str, Any]:
+    clean_id = str(archive_id or "").strip()
+    clean_post_id = str(post_id or "").strip()
+    if not clean_id or not clean_post_id:
+        raise HTTPException(status_code=400, detail="missing archive_id or post_id")
+    path, raw, archives = _persona_archive_source_for_write(clean_id)
+    archive = _find_persona_archive(archives, clean_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="persona not found")
+    posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+    source_post = next((post for post in posts if isinstance(post, dict) and str(post.get("id") or "").strip() == clean_post_id), None)
+    if not source_post:
+        raise HTTPException(status_code=404, detail="post not found")
+    favorites = archive.get("favoritePosts") if isinstance(archive.get("favoritePosts"), list) else []
+    for favorite in favorites:
+        if isinstance(favorite, dict) and _favorite_source_post_id(favorite) == clean_post_id:
+            compact = _compact_persona_archive_post(favorite)
+            compact["source"] = "favorites"
+            return {"ok": True, "post": compact, "exists": True, "favorites": _list_persona_archive_posts(clean_id, "favorites")}
+    now = _persona_dashboard_iso_now()
+    record = copy.deepcopy(source_post)
+    source_meta = record.get("sourceMeta") if isinstance(record.get("sourceMeta"), dict) else {}
+    record.update({
+        "id": _new_persona_post_id(),
+        "title": str(record.get("title") or f"收藏推文 #{len(favorites) + 1}").strip(),
+        "orderIndex": len(favorites),
+        "createdAt": now,
+        "updatedAt": now,
+    })
+    record.pop("publishedAt", None)
+    record.pop("publishedMemory", None)
+    record["sourceMeta"] = {
+        **source_meta,
+        "favoriteSourcePostId": clean_post_id,
+        "favoriteAddedAt": now,
+    }
+    archive["favoritePosts"] = [*favorites, record]
+    archive["updatedAt"] = now
+    _write_persona_archives_preserving_shape(path, raw, archives)
+    compact = _compact_persona_archive_post(record)
+    compact["source"] = "favorites"
+    compact["media_items"] = _previewable_persona_media_items(
+        compact.get("media_items") if isinstance(compact.get("media_items"), list) else [],
+        archive_id=clean_id,
+        post_id=str(compact.get("id") or "").strip(),
+        source="favorites",
+    )
+    return {"ok": True, "post": compact, "exists": False, "favorites": _list_persona_archive_posts(clean_id, "favorites")}
+
+
+def _delete_persona_favorite_post(archive_id: str, post_id: str) -> dict[str, Any]:
+    clean_id = str(archive_id or "").strip()
+    clean_post_id = str(post_id or "").strip()
+    if not clean_id or not clean_post_id:
+        raise HTTPException(status_code=400, detail="missing archive_id or post_id")
+    path, raw, archives = _persona_archive_source_for_write(clean_id)
+    archive = _find_persona_archive(archives, clean_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="persona not found")
+    favorites = archive.get("favoritePosts") if isinstance(archive.get("favoritePosts"), list) else []
+    next_favorites = [post for post in favorites if not (isinstance(post, dict) and str(post.get("id") or "").strip() == clean_post_id)]
+    if len(next_favorites) == len(favorites):
+        raise HTTPException(status_code=404, detail="favorite post not found")
+    archive["favoritePosts"] = next_favorites
+    archive["updatedAt"] = _persona_dashboard_iso_now()
+    _write_persona_archives_preserving_shape(path, raw, archives)
+    return {"ok": True, "archive_id": clean_id, "post_id": clean_post_id, "favorites": _list_persona_archive_posts(clean_id, "favorites")}
+
+
+def _update_persona_archive_post(archive_id: str, post_id: str, payload: PersonaDashboardDraftPostPayload, source: str = "posts") -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     clean_post_id = str(post_id or "").strip()
     if not clean_id or not clean_post_id:
@@ -12176,7 +12262,8 @@ def _update_persona_archive_post(archive_id: str, post_id: str, payload: Persona
     archive = _find_persona_archive(archives, clean_id)
     if not archive:
         raise HTTPException(status_code=404, detail="persona not found")
-    posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+    source_key = _persona_post_source_key(source)
+    posts = archive.get(source_key) if isinstance(archive.get(source_key), list) else []
     target: dict[str, Any] | None = None
     target_index = 0
     for index, post in enumerate(posts):
@@ -12193,7 +12280,9 @@ def _update_persona_archive_post(archive_id: str, post_id: str, payload: Persona
     target["updatedAt"] = now
     archive["updatedAt"] = now
     _write_persona_archives_preserving_shape(path, raw, archives)
-    return _compact_persona_archive_post(target)
+    compact = _compact_persona_archive_post(target)
+    compact["source"] = _persona_post_source_name(source)
+    return compact
 
 
 def _persona_post_media_items_from_paths(paths: list[str]) -> list[dict[str, str]]:
@@ -12210,7 +12299,7 @@ def _persona_post_media_items_from_paths(paths: list[str]) -> list[dict[str, str
     return items
 
 
-def _update_persona_archive_post_media(archive_id: str, post_id: str, *, media_paths: list[str], replace_existing: bool = False) -> dict[str, Any]:
+def _update_persona_archive_post_media(archive_id: str, post_id: str, *, media_paths: list[str], replace_existing: bool = False, source: str = "posts") -> dict[str, Any]:
     clean_archive_id = str(archive_id or "").strip()
     clean_post_id = str(post_id or "").strip()
     if not clean_archive_id or not clean_post_id:
@@ -12222,7 +12311,8 @@ def _update_persona_archive_post_media(archive_id: str, post_id: str, *, media_p
     archive = _find_persona_archive(archives, clean_archive_id)
     if not archive:
         raise HTTPException(status_code=404, detail="人设不存在。")
-    posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+    source_key = _persona_post_source_key(source)
+    posts = archive.get(source_key) if isinstance(archive.get(source_key), list) else []
     target: dict[str, Any] | None = None
     for post in posts:
         if isinstance(post, dict) and str(post.get("id") or "").strip() == clean_post_id:
@@ -12249,15 +12339,17 @@ def _update_persona_archive_post_media(archive_id: str, post_id: str, *, media_p
     archive["updatedAt"] = target["updatedAt"]
     _write_persona_archives_preserving_shape(path, raw, archives)
     compact = _compact_persona_archive_post(target)
+    compact["source"] = _persona_post_source_name(source)
     compact["media_items"] = _previewable_persona_media_items(
         compact.get("media_items") if isinstance(compact.get("media_items"), list) else [],
         archive_id=clean_archive_id,
         post_id=clean_post_id,
+        source=_persona_post_source_name(source),
     )
     return {"ok": True, "post": compact}
 
 
-def _delete_persona_archive_post_media_item(archive_id: str, post_id: str, index: int) -> dict[str, Any]:
+def _delete_persona_archive_post_media_item(archive_id: str, post_id: str, index: int, source: str = "posts") -> dict[str, Any]:
     clean_archive_id = str(archive_id or "").strip()
     clean_post_id = str(post_id or "").strip()
     if not clean_archive_id or not clean_post_id:
@@ -12266,7 +12358,8 @@ def _delete_persona_archive_post_media_item(archive_id: str, post_id: str, index
     archive = _find_persona_archive(archives, clean_archive_id)
     if not archive:
         raise HTTPException(status_code=404, detail="人设不存在。")
-    posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+    source_key = _persona_post_source_key(source)
+    posts = archive.get(source_key) if isinstance(archive.get(source_key), list) else []
     target: dict[str, Any] | None = None
     for post in posts:
         if isinstance(post, dict) and str(post.get("id") or "").strip() == clean_post_id:
@@ -12290,10 +12383,12 @@ def _delete_persona_archive_post_media_item(archive_id: str, post_id: str, index
     archive["updatedAt"] = target["updatedAt"]
     _write_persona_archives_preserving_shape(path, raw, archives)
     compact = _compact_persona_archive_post(target)
+    compact["source"] = _persona_post_source_name(source)
     compact["media_items"] = _previewable_persona_media_items(
         compact.get("media_items") if isinstance(compact.get("media_items"), list) else [],
         archive_id=clean_archive_id,
         post_id=clean_post_id,
+        source=_persona_post_source_name(source),
     )
     return {"ok": True, "post": compact}
 
@@ -12375,17 +12470,20 @@ def _publish_persona_archive_post(
     archive_id: str,
     post_id: str,
     payload: PersonaDashboardDraftPublishPayload,
+    source: str = "posts",
 ) -> dict[str, Any]:
     clean_archive_id = str(archive_id or "").strip()
     clean_post_id = str(post_id or "").strip()
     if not clean_archive_id or not clean_post_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID 或推文 ID。")
+    source_name = _persona_post_source_name(source)
     media_paths = [str(item or "").strip() for item in (payload.media_paths or []) if str(item or "").strip()]
     _, _, archives = _persona_archive_source_for_write(clean_archive_id)
     archive = _find_persona_archive(archives, clean_archive_id)
     if not archive:
         raise HTTPException(status_code=404, detail="人设不存在。")
-    posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+    source_key = _persona_post_source_key(source_name)
+    posts = archive.get(source_key) if isinstance(archive.get(source_key), list) else []
     post = next((item for item in posts if isinstance(item, dict) and str(item.get("id") or "").strip() == clean_post_id), None)
     if not post:
         raise HTTPException(status_code=404, detail="推文草稿不存在。")
@@ -12397,6 +12495,8 @@ def _publish_persona_archive_post(
     login_check = _latest_successful_social_task_for_account(str(account.get("id") or ""), ["check_login", "open_login"])
     if not login_check:
         raise HTTPException(status_code=400, detail="发布前请先完成一次登录检查，确认当前执行账号仍然可用。")
+    if not media_paths:
+        media_paths = _post_media_paths_for_publish(post)
     if platform == "instagram" and not media_paths:
         raise HTTPException(status_code=400, detail="Instagram 发布至少需要一份媒体素材。")
     task = create_social_task(
@@ -12415,11 +12515,12 @@ def _publish_persona_archive_post(
                 "media_paths": media_paths,
                 "archive_post_id": clean_post_id,
                 "archive_post_title": str(post.get("title") or ""),
+                "archive_post_source": source_name,
             },
             max_retries=max(0, min(int(payload.max_retries or 2), 5)),
         )
     )
-    return {"ok": True, "persona_id": clean_archive_id, "post_id": clean_post_id, "task": task}
+    return {"ok": True, "persona_id": clean_archive_id, "post_id": clean_post_id, "source": source_name, "task": task}
 
 
 def _archive_posts_for_matrix_source(archive: dict[str, Any], source: str) -> list[dict[str, Any]]:
@@ -13520,7 +13621,7 @@ def _is_direct_preview_media_url(value: Any) -> bool:
     return bool(re.match(r"^(?:https?:)?//", text, re.I) or re.match(r"^(?:data:|blob:|/api/)", text, re.I))
 
 
-def _previewable_persona_media_items(items: list[dict[str, str]], *, archive_id: str = "", post_id: str = "", history_id: str = "") -> list[dict[str, str]]:
+def _previewable_persona_media_items(items: list[dict[str, str]], *, archive_id: str = "", post_id: str = "", history_id: str = "", source: str = "posts") -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for index, item in enumerate(items or []):
         url = str((item or {}).get("url") or "").strip()
@@ -13533,7 +13634,8 @@ def _previewable_persona_media_items(items: list[dict[str, str]], *, archive_id:
         elif archive_id and post_id:
             path = Path(url).expanduser().resolve()
             if path.is_file():
-                preview_url = f"/api/persona_dashboard/personas/{quote(str(archive_id).strip(), safe='')}/posts/{quote(str(post_id).strip(), safe='')}/media/{index}"
+                source_path = "favorites" if _persona_post_source_name(source) == "favorites" else "posts"
+                preview_url = f"/api/persona_dashboard/personas/{quote(str(archive_id).strip(), safe='')}/{source_path}/{quote(str(post_id).strip(), safe='')}/media/{index}"
             else:
                 reason = "原始媒体文件不存在"
         elif archive_id and history_id:
@@ -14135,6 +14237,7 @@ def _build_persona_dashboard_overview() -> dict[str, Any]:
         threads_account = account_management.get("threads") if isinstance(account_management.get("threads"), dict) else {}
         threads_handle = _normalize_threads_username(threads_account.get("handle"))
         post_count = len(posts)
+        favorite_count = len(archive.get("favoritePosts") if isinstance(archive.get("favoritePosts"), list) else [])
         published_count = len(visible_publish_history)
         raw_published_count = len(publish_history)
         hidden_published_count = max(0, raw_published_count - published_count)
@@ -14162,6 +14265,7 @@ def _build_persona_dashboard_overview() -> dict[str, Any]:
             "setup": _compact_dashboard_setup(setup),
             "counts": {
                 "posts": post_count,
+                "favorites": favorite_count,
                 "published": published_count,
                 "published_raw": raw_published_count,
                 "published_hidden": hidden_published_count,
@@ -14807,9 +14911,29 @@ def create_app() -> FastAPI:
     def api_persona_dashboard_persona_posts(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
         return {"ok": True, "posts": _list_persona_archive_posts(archive_id)}
 
+    @app.get("/api/persona_dashboard/personas/{archive_id}/favorites")
+    def api_persona_dashboard_persona_favorites(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+        return {"ok": True, "favorites": _list_persona_archive_posts(archive_id, "favorites")}
+
+    @app.post("/api/persona_dashboard/personas/{archive_id}/favorites/{post_id}")
+    def api_persona_dashboard_add_favorite(archive_id: str, post_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+        return _add_persona_favorite_post(archive_id, post_id)
+
+    @app.patch("/api/persona_dashboard/personas/{archive_id}/favorites/{post_id}")
+    def api_persona_dashboard_update_favorite(archive_id: str, post_id: str, payload: PersonaDashboardDraftPostPayload, _user: dict[str, Any] = Depends(get_current_user)):
+        return _update_persona_archive_post(archive_id, post_id, payload, source="favorites")
+
+    @app.delete("/api/persona_dashboard/personas/{archive_id}/favorites/{post_id}")
+    def api_persona_dashboard_delete_favorite(archive_id: str, post_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+        return _delete_persona_favorite_post(archive_id, post_id)
+
     @app.get("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}/media/{index}")
     def api_persona_dashboard_persona_post_media(archive_id: str, post_id: str, index: int, _user: dict[str, Any] = Depends(get_current_user)):
         return _serve_persona_archive_post_media(archive_id, post_id, index)
+
+    @app.get("/api/persona_dashboard/personas/{archive_id}/favorites/{post_id}/media/{index}")
+    def api_persona_dashboard_persona_favorite_media(archive_id: str, post_id: str, index: int, _user: dict[str, Any] = Depends(get_current_user)):
+        return _serve_persona_archive_post_media(archive_id, post_id, index, source="favorites")
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/publish_history")
     def api_persona_dashboard_persona_publish_history(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
@@ -14921,9 +15045,35 @@ def create_app() -> FastAPI:
             replace_existing=_to_bool(replace_existing, False),
         )
 
+    @app.post("/api/persona_dashboard/personas/{archive_id}/favorites/{post_id}/media/upload")
+    async def api_persona_dashboard_favorite_media_upload(
+        archive_id: str,
+        post_id: str,
+        replace_existing: str = Form("0"),
+        files: list[UploadFile] = File(default=[]),
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        upload_id = _new_id("personafavmedia")
+        saved_paths: list[str] = []
+        for idx, upload in enumerate(files or [], start=1):
+            saved = await _save_upload_file(str(user.get("username") or ""), upload_id, f"favorite_media_{idx}", upload)
+            if saved:
+                saved_paths.append(saved)
+        return _update_persona_archive_post_media(
+            archive_id,
+            post_id,
+            media_paths=saved_paths,
+            replace_existing=_to_bool(replace_existing, False),
+            source="favorites",
+        )
+
     @app.delete("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}/media/{index}")
     def api_persona_dashboard_delete_post_media(archive_id: str, post_id: str, index: int, _user: dict[str, Any] = Depends(get_current_user)):
         return _delete_persona_archive_post_media_item(archive_id, post_id, index)
+
+    @app.delete("/api/persona_dashboard/personas/{archive_id}/favorites/{post_id}/media/{index}")
+    def api_persona_dashboard_delete_favorite_media(archive_id: str, post_id: str, index: int, _user: dict[str, Any] = Depends(get_current_user)):
+        return _delete_persona_archive_post_media_item(archive_id, post_id, index, source="favorites")
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/generate_posts")
     def api_persona_dashboard_generate_posts(archive_id: str, payload: PersonaDashboardGeneratePostsPayload, _user: dict[str, Any] = Depends(get_current_user)):
@@ -14937,6 +15087,15 @@ def create_app() -> FastAPI:
         _user: dict[str, Any] = Depends(get_current_user),
     ):
         return _publish_persona_archive_post(archive_id, post_id, payload)
+
+    @app.post("/api/persona_dashboard/personas/{archive_id}/favorites/{post_id}/publish")
+    def api_persona_dashboard_publish_favorite_post(
+        archive_id: str,
+        post_id: str,
+        payload: PersonaDashboardDraftPublishPayload,
+        _user: dict[str, Any] = Depends(get_current_user),
+    ):
+        return _publish_persona_archive_post(archive_id, post_id, payload, source="favorites")
 
     @app.post("/api/persona_dashboard/matrix_publish")
     def api_persona_dashboard_matrix_publish(

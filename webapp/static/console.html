@@ -18,7 +18,10 @@
       </div>
 
       <nav class="console-nav" aria-label="控制台导航">
-        <button type="button" class="is-active" data-view="workspace" aria-expanded="true">任务工作台</button>
+        <button type="button" class="is-active nav-parent-toggle" data-view="workspace" aria-expanded="true">
+          <span>任务工作台</span>
+          <span class="nav-toggle-arrow" aria-hidden="true"></span>
+        </button>
         <div class="sidebar-flow is-open" id="workspaceFlow">
           <div class="sidebar-flow-divider" aria-hidden="true"></div>
           <div class="module-menu" id="moduleMenu"></div>
@@ -70,14 +73,8 @@
       </section>
 
       <section class="view" data-panel="tasks">
-        <div class="panel-head">
-          <div>
-            <div class="eyebrow">任务队列</div>
-            <h3>任务队列</h3>
-          </div>
-          <button id="refreshTasks" type="button">刷新队列</button>
-        </div>
         <div class="task-table" id="taskTable"></div>
+        <div id="taskQueueMsg" class="notice" role="status"></div>
       </section>
 
       <section class="view" data-panel="social">

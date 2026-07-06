@@ -1319,6 +1319,7 @@ def _build_archive_sync_records(task: dict[str, Any], account: dict[str, Any], p
     source_meta = {
         "platform": platform,
         "source": "web_social_automation",
+        "archivePostSource": str(payload.get("archive_post_source") or "posts").strip().lower() or "posts",
         "taskType": task_type,
         "taskId": task_id,
         "accountId": str(task.get("account_id") or ""),
@@ -1398,6 +1399,8 @@ def _sync_successful_task_to_persona_archive(task_id: str, result: dict[str, Any
         if _is_manual_open_login_task(task, payload):
             return
         publish_record, post_record = _build_archive_sync_records(task, account, payload, result or {})
+        archive_post_source = str(payload.get("archive_post_source") or "posts").strip().lower()
+        is_favorite_post_source = archive_post_source == "favorites"
         with _archive_file_lock():
             for path in _archive_paths_for_sync():
                 raw = _read_json_file(path)
@@ -1412,7 +1415,7 @@ def _sync_successful_task_to_persona_archive(task_id: str, result: dict[str, Any
                     if not any(isinstance(item, dict) and str(item.get("automationTaskId") or item.get("id") or "") in {task_id, publish_record["id"]} for item in history):
                         archive["publishHistory"] = [publish_record, *history]
                         changed = True
-                    if post_record:
+                    if post_record and not is_favorite_post_source:
                         posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
                         matched_post = False
                         next_posts: list[dict[str, Any] | Any] = []
