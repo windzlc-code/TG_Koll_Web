@@ -5077,35 +5077,39 @@ function renderPersonaCardEditorMenu(persona, currentGroups, availableGroups) {
   const mode = personaCardEditorMode(personaId);
   const submenu = mode === "add" ? `
     <div class="persona-card-submenu" data-persona-editor-submenu="${esc(personaId)}">
-      <div class="persona-menu-head">
-        <button type="button" class="persona-menu-back" data-persona-editor-back="${esc(personaId)}" aria-label="返回操作选项">&lt;</button>
-        <strong>加入分组</strong>
-      </div>
-      <div class="persona-menu-panel">
-        <label>选择目标分组
-          <select data-persona-add-group-select="${esc(personaId)}">
-            <option value="">选择分组</option>
-            ${availableGroups.map((group) => `<option value="${esc(group.id)}">${esc(group.name)}</option>`).join("")}
-          </select>
-        </label>
-        <button type="button" data-persona-add-selected-group="${esc(personaId)}" ${availableGroups.length ? "" : "disabled"}>加入</button>
-        ${availableGroups.length ? "" : `<span class="persona-editor-empty">暂无可加入的分组。</span>`}
+      <div class="persona-menu-tabs" aria-label="选择加入分组">
+        ${availableGroups.length ? availableGroups.map((group) => `
+          <button type="button" class="persona-menu-tab" data-persona-add-to-group="${esc(personaId)}" data-group-id="${esc(group.id)}">
+            <span>${esc(group.name)}</span>
+            <small>加入</small>
+          </button>
+        `).join("") : `
+          <button type="button" class="persona-menu-tab" disabled>
+            <span>暂无可加入分组</span>
+            <small>不可用</small>
+          </button>
+        `}
       </div>
     </div>` : mode === "remove" ? `
     <div class="persona-card-submenu" data-persona-editor-submenu="${esc(personaId)}">
-      <div class="persona-menu-head">
-        <button type="button" class="persona-menu-back" data-persona-editor-back="${esc(personaId)}" aria-label="返回操作选项">&lt;</button>
-        <strong>移出分组</strong>
-      </div>
-      <div class="persona-menu-panel">
+      <div class="persona-menu-tabs" aria-label="选择移出分组">
         ${currentGroups.length ? `
-          <div class="persona-editor-groups">
-            ${currentGroups.map((group) => `
-              <button type="button" data-persona-remove-from-group="${esc(personaId)}" data-group-id="${esc(group.id)}">移出 ${esc(group.name)}</button>
-            `).join("")}
-          </div>
-          <button type="button" data-persona-ungroup-all="${esc(personaId)}">单独拆出来</button>
-        ` : `<span class="persona-editor-empty">当前未加入任何组。</span>`}
+          ${currentGroups.map((group) => `
+            <button type="button" class="persona-menu-tab" data-persona-remove-from-group="${esc(personaId)}" data-group-id="${esc(group.id)}">
+              <span>${esc(group.name)}</span>
+              <small>移出</small>
+            </button>
+          `).join("")}
+          <button type="button" class="persona-menu-tab" data-persona-ungroup-all="${esc(personaId)}">
+            <span>移出所有组</span>
+            <small>单独</small>
+          </button>
+        ` : `
+          <button type="button" class="persona-menu-tab" disabled>
+            <span>当前未加入分组</span>
+            <small>不可用</small>
+          </button>
+        `}
       </div>
     </div>` : "";
   return `
@@ -5150,7 +5154,7 @@ function positionPersonaCardEditorMenu() {
   const menuRect = menu.getBoundingClientRect();
   const renderedMenuLeft = menuRect.left;
   const renderedMenuWidth = menuRect.width || menuWidth;
-  const submenuWidth = Math.min(218, Math.max(180, window.innerWidth - margin * 2));
+  const submenuWidth = Math.min(190, Math.max(156, window.innerWidth - margin * 2));
   const submenuHeight = submenu.offsetHeight || 128;
   const rightLeft = renderedMenuLeft + renderedMenuWidth + gap;
   const hasRightRoom = rightLeft + submenuWidth <= window.innerWidth - margin;
@@ -5201,6 +5205,11 @@ function handlePersonaCardEditorPortalClick(event) {
       state.personaListEditorMode = mode || "";
       renderPersonaModule();
     }
+    return;
+  }
+  const addToGroup = event.target.closest("[data-persona-add-to-group]");
+  if (addToGroup) {
+    addPersonaToCollection(addToGroup.dataset.personaAddToGroup || "", addToGroup.dataset.groupId || "").catch((error) => showMsg("commandMsg", error.detail || error.message || "加入分组失败", false));
     return;
   }
   const addSelectedGroup = event.target.closest("[data-persona-add-selected-group]");
