@@ -1333,8 +1333,8 @@ body.persona-touch-dragging .persona-list-card:active {
   right: auto !important;
   left: var(--persona-submenu-left, 0) !important;
   z-index: 5210;
-  width: var(--persona-submenu-width, 210px) !important;
-  box-shadow: 0 18px 42px rgba(15, 23, 42, .22);
+  width: var(--persona-submenu-width, 190px) !important;
+  box-shadow: 0 16px 36px rgba(15, 23, 42, .22);
   transform-origin: top left;
   animation: personaMenuFade 120ms ease-out both !important;
 }
