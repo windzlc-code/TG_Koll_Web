@@ -31,11 +31,11 @@ kill_bot_processes() {
   local current_pid="$$"
   local found="0"
   if command -v pgrep >/dev/null 2>&1; then
-    pgrep -f "node --import tsx src/daemon.ts|tsx src/daemon.ts|/app/tool_r18.*src/daemon.ts" 2>/dev/null | while read -r pid; do
+    while read -r pid; do
       if [[ -n "$pid" && "$pid" != "$current_pid" ]]; then
         kill "-$signal" "$pid" 2>/dev/null || true
       fi
-    done
+    done < <(pgrep -f "node --import tsx src/daemon.ts|tsx src/daemon.ts|/app/tool_r18.*src/daemon.ts" 2>/dev/null || true)
     found="1"
   fi
   if [[ "$found" == "0" ]]; then
