@@ -928,6 +928,37 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload["limit"], 6)
         self.assertEqual(payload["memorySummaries"], ["记忆一"])
 
+    def test_fetch_persona_hot_candidates_uses_default_memories_without_web_params(self):
+        self._write_archives()
+        (self.tool_runtime_dir / "persona_memory.json").write_text(json.dumps({
+            "persona-1": [
+                {"id": f"mem-{index}", "date": f"2026-07-{index:02d}T10:00:00Z", "summary": f"记忆{index}"}
+                for index in range(1, 11)
+            ]
+        }, ensure_ascii=False), encoding="utf-8")
+
+        fake_result = {
+            "ok": True,
+            "archiveName": "History Teacher",
+            "keywords": [],
+            "cookieStatuses": [],
+            "warnings": [],
+            "candidates": [],
+        }
+
+        with mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value=fake_result) as mocked:
+            resp = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/hot_candidates",
+                json={"refresh": False, "limit": 10},
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        payload = mocked.call_args.args[0]
+        self.assertEqual(payload["prompt"], "")
+        self.assertFalse(payload["refresh"])
+        self.assertEqual(payload["limit"], 10)
+        self.assertEqual(payload["memorySummaries"], [f"记忆{index}" for index in range(10, 2, -1)])
+
     def test_import_persona_hot_candidates_returns_hot_source_meta(self):
         self._write_archives()
 

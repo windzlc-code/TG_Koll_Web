@@ -11532,11 +11532,12 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
         for item in memories
         if str(item.get("id") or "").strip() and str(item.get("summary") or "").strip()
     }
-    selected_summaries = [
-        summary_by_id[memory_id]
-        for memory_id in [str(item or "").strip() for item in (payload.selected_memory_ids or [])]
-        if memory_id in summary_by_id
-    ][:8]
+    selected_ids = [str(item or "").strip() for item in (payload.selected_memory_ids or []) if str(item or "").strip()]
+    selected_summaries = (
+        [summary_by_id[memory_id] for memory_id in selected_ids if memory_id in summary_by_id]
+        if selected_ids
+        else [str(item.get("summary") or "").strip() for item in memories if str(item.get("summary") or "").strip()]
+    )[:8]
     result = _run_persona_hot_workflow_cli(
         {
             "action": "fetch-hot-candidates",

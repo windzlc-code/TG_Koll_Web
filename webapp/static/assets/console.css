@@ -1124,12 +1124,12 @@ body.persona-touch-dragging .persona-list-card:active {
   top: calc(100% + 6px);
   right: 6px;
   z-index: 1200;
-  width: min(228px, calc(100vw - 36px));
+  width: min(246px, calc(100vw - 36px));
   display: grid;
-  gap: 8px;
-  padding: 10px;
+  gap: 6px;
+  padding: 8px;
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: 8px;
   background: var(--panel-solid);
   box-shadow: 0 16px 36px rgba(15, 23, 42, .22);
   opacity: 1;
@@ -1154,6 +1154,92 @@ body.persona-touch-dragging .persona-list-card:active {
   width: min(228px, calc(100vw - 36px));
 }
 
+.persona-menu-tabs,
+.persona-menu-panel {
+  display: grid;
+  gap: 4px;
+}
+
+.persona-menu-tab {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 22px 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+}
+
+.persona-menu-tab::after {
+  content: "›";
+  position: absolute;
+  right: 8px;
+  color: var(--muted);
+  font-weight: 900;
+}
+
+.persona-menu-tab:hover,
+.persona-menu-tab:focus-visible {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.persona-menu-tab:disabled {
+  cursor: not-allowed;
+  opacity: .52;
+}
+
+.persona-menu-tab span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.persona-menu-tab small {
+  max-width: 76px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.persona-menu-head {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.persona-menu-head strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.persona-menu-back {
+  width: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border-radius: 6px;
+  font-size: 20px;
+  line-height: 1;
+}
+
 .persona-card-menu label {
   display: grid;
   gap: 4px;
@@ -1167,7 +1253,7 @@ body.persona-touch-dragging .persona-list-card:active {
   min-height: 34px;
 }
 
-.persona-card-menu button {
+.persona-card-menu button:not(.persona-menu-tab):not(.persona-menu-back) {
   width: 100%;
   min-height: 32px;
   text-align: center;

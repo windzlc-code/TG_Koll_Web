@@ -34,7 +34,7 @@ const THREADS_READER_TOTAL_QUERY_LIMIT = 36;
 const THREADS_READER_QUERY_BATCH_SIZE = 6;
 const INSTAGRAM_READER_QUERY_LIMIT = 48;
 const SENTIMENT_HOT_REFRESH_COOLDOWN_MS = 5 * 60 * 1000;
-const SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS = 12_000;
+const SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS = 25_000;
 const SENTIMENT_HOT_TOTAL_TIMEOUT_MS = 75_000;
 const SENTIMENT_HOT_FAST_RETURN_COUNT = 5;
 const SENTIMENT_HOT_SUPPLEMENT_MIN_REMAINING_MS = 15_000;
@@ -2101,10 +2101,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
   let emptyShellCount = 0;
   try {
     const { chromium } = await import("playwright");
-    const browser = await chromium.launch({
-      headless: true,
-      args: ["--no-sandbox", "--disable-dev-shm-usage"],
-    });
+    const browser = await chromium.launch(buildLocalChromiumLaunchOptions());
     try {
       const context = await browser.newContext({
         locale: "zh-TW",
@@ -4216,28 +4213,41 @@ async function readThreadsSearchPageText(page: any, query: string, deadlineAt?: 
   const primarySearchUrl = `https://www.threads.com/search?q=${encodedQuery}`;
   const searchUrl = "https://www.threads.com/search";
   const directSearchUrl = `https://www.threads.com/search?q=${encodedQuery}&serp_type=default`;
+  let best = { text: "", url: primarySearchUrl, parsed: 0 };
+  const remember = async (fallbackUrl: string) => {
+    const text = await page.locator("body").innerText({ timeout: Math.min(1_500, remainingSentimentDeadlineMs(deadlineAt, 1_500)) }).catch(() => "");
+    const url = page.url() || fallbackUrl;
+    const parsed = parseThreadsSearchTextCandidates({
+      text,
+      query,
+      keywords: [query],
+      limit: 1,
+      sourceUrl: url,
+    }).length;
+    if (parsed > best.parsed || (parsed === best.parsed && text.trim().length > best.text.trim().length)) {
+      best = { text, url, parsed };
+    }
+    return best.parsed > 0;
+  };
   await page.goto(primarySearchUrl, { waitUntil: "domcontentloaded", timeout: Math.min(8_000, remainingSentimentDeadlineMs(deadlineAt, 8_000)) }).catch(() => undefined);
   await page.waitForTimeout(Math.min(1_500, remainingSentimentDeadlineMs(deadlineAt, 1_500)));
-  if (deadlineAt && Date.now() >= deadlineAt) return { text: "", url: page.url() || primarySearchUrl };
-  const primaryText = await page.locator("body").innerText({ timeout: Math.min(1_500, remainingSentimentDeadlineMs(deadlineAt, 1_500)) }).catch(() => "");
-  if (primaryText && primaryText.trim().length > 120) {
-    return { text: primaryText, url: page.url() || primarySearchUrl };
-  }
-  await page.goto(directSearchUrl, { waitUntil: "domcontentloaded", timeout: Math.min(6_000, remainingSentimentDeadlineMs(deadlineAt, 6_000)) }).catch(async () => {
-    await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: Math.min(4_000, remainingSentimentDeadlineMs(deadlineAt, 4_000)) }).catch(() => undefined);
-  });
-  if (deadlineAt && Date.now() >= deadlineAt) return { text: primaryText || "", url: page.url() || searchUrl };
+  if (await remember(primarySearchUrl) || (deadlineAt && Date.now() >= deadlineAt)) return { text: best.text, url: best.url };
+  await page.goto(directSearchUrl, { waitUntil: "domcontentloaded", timeout: Math.min(6_000, remainingSentimentDeadlineMs(deadlineAt, 6_000)) }).catch(() => undefined);
+  await page.waitForTimeout(Math.min(1_000, remainingSentimentDeadlineMs(deadlineAt, 1_000)));
+  if (await remember(directSearchUrl) || (deadlineAt && Date.now() >= deadlineAt)) return { text: best.text, url: best.url };
+
+  await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: Math.min(5_000, remainingSentimentDeadlineMs(deadlineAt, 5_000)) }).catch(() => undefined);
+  if (deadlineAt && Date.now() >= deadlineAt) return { text: best.text, url: best.url };
   const searchInput = page.locator('input[type="search"], input[placeholder*="搜尋"], input[placeholder*="Search"], textarea, [contenteditable="true"]').first();
-  await searchInput.click({ timeout: Math.min(1_000, remainingSentimentDeadlineMs(deadlineAt, 1_000)) }).catch(() => undefined);
-  await searchInput.fill(query, { timeout: Math.min(1_000, remainingSentimentDeadlineMs(deadlineAt, 1_000)) }).catch(async () => {
+  await searchInput.click({ timeout: Math.min(1_500, remainingSentimentDeadlineMs(deadlineAt, 1_500)) }).catch(() => undefined);
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => undefined);
+  await searchInput.fill(query, { timeout: Math.min(1_500, remainingSentimentDeadlineMs(deadlineAt, 1_500)) }).catch(async () => {
     await page.keyboard.type(query).catch(() => undefined);
   });
   await page.keyboard.press("Enter").catch(() => undefined);
-  await page.waitForTimeout(Math.min(1_200, remainingSentimentDeadlineMs(deadlineAt, 1_200)));
-  if (deadlineAt && Date.now() >= deadlineAt) return { text: primaryText || "", url: page.url() || searchUrl };
-  const fallbackText = await page.locator("body").innerText({ timeout: Math.min(1_500, remainingSentimentDeadlineMs(deadlineAt, 1_500)) }).catch(() => "");
-  const text = fallbackText && fallbackText.trim().length > primaryText.trim().length ? fallbackText : primaryText;
-  return { text, url: page.url() || directSearchUrl };
+  await page.waitForTimeout(Math.min(2_500, remainingSentimentDeadlineMs(deadlineAt, 2_500)));
+  await remember(searchUrl);
+  return { text: best.text, url: best.url };
 }
 
 const THREADS_SEARCH_CACHE_FILE = resolveRuntimeFile("sentiment_threads_search_cache.json");

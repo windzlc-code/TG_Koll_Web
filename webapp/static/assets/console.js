@@ -74,6 +74,7 @@ const state = {
   personaProfiles: {},
   personaCollections: { groups: [], assigned_persona_ids: [] },
   personaListEditorId: "",
+  personaListEditorMode: "",
   personaListPage: 1,
   personaListPageSize: storedPersonaListPageSize(),
   personaGenerateCountDefault: storedPersonaGenerateCount(),
@@ -96,6 +97,7 @@ const state = {
     startY: 0,
     currentX: 0,
     currentY: 0,
+    lockX: 0,
     targetGroupId: "",
     beforeId: "",
     source: null,
@@ -976,7 +978,6 @@ function snapshotPersonaCurrentForm() {
   if ($("personaGenerateMode")) form.generate.mode = String($("personaGenerateMode")?.value || "ai");
   if ($("personaGenerateTimeSlot")) form.generate.contentTimeSlot = String($("personaGenerateTimeSlot")?.value || "");
   if ($("personaGeneratePrompt")) form.generate.prompt = String($("personaGeneratePrompt")?.value || "");
-  if ($("personaHotPrompt")) form.generate.hotPrompt = String($("personaHotPrompt")?.value || "");
   if (document.querySelector("[data-persona-memory-id]")) {
     form.generate.selectedMemoryIds = [...document.querySelectorAll("[data-persona-memory-id]:checked")]
       .map((node) => node.getAttribute("data-persona-memory-id") || "")
@@ -3706,6 +3707,7 @@ function handlePersonaDragStart(event) {
   const personaId = String(card.dataset.personaDragPersona || "");
   if (!personaId) return;
   state.personaListEditorId = "";
+  state.personaListEditorMode = "";
   state.personaDrag = {
     type: "persona",
     id: personaId,
@@ -3748,10 +3750,8 @@ function handlePersonaDrop(event) {
   document.querySelectorAll(".persona-list-card.is-dragging, .persona-list-card.is-drag-source-hidden").forEach((node) => node.classList.remove("is-dragging", "is-drag-source-hidden"));
   clearPersonaDropVisuals();
   if (!nextModel) return;
-  animatePersonaListRender(() => {
-    setPersonaCollectionModel(nextModel);
-    renderPersonaModule();
-  });
+  setPersonaCollectionModel(nextModel);
+  renderPersonaModule();
   const targetName = targetGroupId
     ? personaCollectionGroups().find((group) => String(group.id || "") === targetGroupId)?.name || "分组"
     : "未分组";
@@ -3779,6 +3779,7 @@ function defaultPersonaPointerDrag() {
     startY: 0,
     currentX: 0,
     currentY: 0,
+    lockX: 0,
     targetGroupId: "",
     beforeId: "",
     source: null,
@@ -3815,10 +3816,10 @@ function createPersonaPointerGhost(card, x, y) {
   const rect = card.getBoundingClientRect();
   const ghost = card.cloneNode(true);
   ghost.classList.add("persona-pointer-ghost");
-  ghost.classList.remove("is-active", "is-editing");
+  ghost.classList.remove("is-active", "is-editing", "is-dragging", "is-pointer-dragging", "is-drag-source-hidden");
   ghost.style.width = `${rect.width}px`;
-  ghost.style.left = `${x}px`;
-  ghost.style.top = `${y}px`;
+  ghost.style.left = "0";
+  ghost.style.top = "0";
   document.body.appendChild(ghost);
   updatePersonaPointerGhost(ghost, x, y);
   return ghost;
@@ -3857,8 +3858,9 @@ function schedulePersonaPointerDragFrame() {
     state.personaPointerRaf = 0;
     const drag = state.personaPointerDrag || {};
     if (!drag.active) return;
-    updatePersonaPointerGhost(drag.ghost, drag.currentX, drag.currentY);
-    updatePersonaPointerDropTarget(drag.currentX, drag.currentY);
+    const x = drag.lockX || drag.startX || drag.currentX;
+    updatePersonaPointerGhost(drag.ghost, x, drag.currentY);
+    updatePersonaPointerDropTarget(x, drag.currentY);
   });
 }
 
@@ -3868,9 +3870,10 @@ function startPersonaPointerDrag(event) {
   drag.active = true;
   drag.currentX = event.clientX;
   drag.currentY = event.clientY;
+  drag.lockX = drag.lockX || drag.startX || event.clientX;
   drag.targetGroupId = drag.fromGroupId;
   drag.beforeId = "";
-  drag.ghost = createPersonaPointerGhost(drag.source, event.clientX, event.clientY);
+  drag.ghost = createPersonaPointerGhost(drag.source, drag.lockX, event.clientY);
   drag.source.classList.add("is-pointer-dragging", "is-dragging", "is-drag-source-hidden");
   document.body.classList.add("persona-touch-dragging");
   schedulePersonaPointerDragFrame();
@@ -3887,15 +3890,13 @@ function finishPersonaPointerDrag() {
     cancelAnimationFrame(state.personaPointerRaf);
     state.personaPointerRaf = 0;
   }
-  updatePersonaPointerDropTarget(drag.currentX, drag.currentY);
+  updatePersonaPointerDropTarget(drag.lockX || drag.startX || drag.currentX, drag.currentY);
   const nextModel = movePersonaInCollectionModel(personaCollectionModel(), drag.id, drag.targetGroupId, drag.beforeId);
   const targetGroupId = drag.targetGroupId;
   cleanupPersonaPointerDrag();
   if (!nextModel) return;
-  animatePersonaListRender(() => {
-    setPersonaCollectionModel(nextModel);
-    renderPersonaModule();
-  });
+  setPersonaCollectionModel(nextModel);
+  renderPersonaModule();
   const targetName = targetGroupId
     ? personaCollectionGroups().find((group) => String(group.id || "") === targetGroupId)?.name || "分组"
     : "未分组";
@@ -3909,6 +3910,7 @@ function handlePersonaPointerDown(event) {
   if (!event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
   const card = personaPointerDragCardFromTarget(event.target);
   if (!card) return;
+  const rect = card.getBoundingClientRect();
   state.personaPointerDrag = {
     ...defaultPersonaPointerDrag(),
     pending: true,
@@ -3919,6 +3921,7 @@ function handlePersonaPointerDown(event) {
     startY: event.clientY,
     currentX: event.clientX,
     currentY: event.clientY,
+    lockX: Math.round(rect.left + rect.width / 2),
     source: card,
   };
   try {
@@ -3929,9 +3932,8 @@ function handlePersonaPointerDown(event) {
 function handlePersonaPointerMove(event) {
   const drag = state.personaPointerDrag || {};
   if (!drag.pending || drag.pointerId !== event.pointerId) return;
-  const dx = event.clientX - drag.startX;
   const dy = event.clientY - drag.startY;
-  if (!drag.active && Math.hypot(dx, dy) < 8) return;
+  if (!drag.active && Math.abs(dy) < 8) return;
   event.preventDefault();
   if (!drag.active) startPersonaPointerDrag(event);
   drag.currentX = event.clientX;
@@ -4480,10 +4482,8 @@ async function fetchPersonaHotCandidates(refresh = false) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        prompt: String(form.hotPrompt || "").trim(),
         refresh: Boolean(refresh),
         limit: 10,
-        selected_memory_ids: Array.isArray(form.selectedMemoryIds) ? form.selectedMemoryIds : [],
       }),
     });
     state.personaHotCandidateResults[String(persona.id)] = {
@@ -5006,6 +5006,72 @@ function renderPersonaKindBadge(persona) {
   return `<span class="persona-kind-badge">普通</span>`;
 }
 
+function personaCardEditorMode(personaId) {
+  const editorId = String(state.personaListEditorId || "");
+  if (editorId !== String(personaId || "")) return "";
+  return String(state.personaListEditorMode || "");
+}
+
+function renderPersonaCardEditorMenu(persona, currentGroups, availableGroups) {
+  const personaId = String(persona.id || "");
+  const mode = personaCardEditorMode(personaId);
+  if (mode === "add") {
+    return `
+      <div class="persona-card-menu" data-persona-editor-menu="${esc(personaId)}">
+        <div class="persona-menu-head">
+          <button type="button" class="persona-menu-back" data-persona-editor-back="${esc(personaId)}" aria-label="返回操作选项">‹</button>
+          <strong>加入分组</strong>
+        </div>
+        <div class="persona-menu-panel">
+          <label>选择目标分组
+            <select data-persona-add-group-select="${esc(personaId)}">
+              <option value="">选择分组</option>
+              ${availableGroups.map((group) => `<option value="${esc(group.id)}">${esc(group.name)}</option>`).join("")}
+            </select>
+          </label>
+          <button type="button" data-persona-add-selected-group="${esc(personaId)}" ${availableGroups.length ? "" : "disabled"}>加入</button>
+          ${availableGroups.length ? "" : `<span class="persona-editor-empty">暂无可加入的分组。</span>`}
+        </div>
+      </div>`;
+  }
+  if (mode === "remove") {
+    return `
+      <div class="persona-card-menu" data-persona-editor-menu="${esc(personaId)}">
+        <div class="persona-menu-head">
+          <button type="button" class="persona-menu-back" data-persona-editor-back="${esc(personaId)}" aria-label="返回操作选项">‹</button>
+          <strong>移出分组</strong>
+        </div>
+        <div class="persona-menu-panel">
+          ${currentGroups.length ? `
+            <div class="persona-editor-groups">
+              ${currentGroups.map((group) => `
+                <button type="button" data-persona-remove-from-group="${esc(personaId)}" data-group-id="${esc(group.id)}">移出 ${esc(group.name)}</button>
+              `).join("")}
+            </div>
+            <button type="button" data-persona-ungroup-all="${esc(personaId)}">单独拆出来</button>
+          ` : `<span class="persona-editor-empty">当前未加入任何组。</span>`}
+        </div>
+      </div>`;
+  }
+  return `
+    <div class="persona-card-menu" data-persona-editor-menu="${esc(personaId)}">
+      <div class="persona-menu-tabs" aria-label="人设操作">
+        <button type="button" class="persona-menu-tab" data-persona-editor-mode="${esc(personaId)}:add">
+          <span>加入分组</span>
+          <small>${availableGroups.length ? `${availableGroups.length} 个可选` : "暂无可选"}</small>
+        </button>
+        <button type="button" class="persona-menu-tab" data-persona-editor-mode="${esc(personaId)}:remove">
+          <span>移出分组</span>
+          <small>${currentGroups.length ? `${currentGroups.length} 个已加入` : "未加入"}</small>
+        </button>
+        <button type="button" class="persona-menu-tab" data-persona-ungroup-all="${esc(personaId)}" ${currentGroups.length ? "" : "disabled"}>
+          <span>单独拆出来</span>
+          <small>${currentGroups.length ? "移出所有组" : "无需操作"}</small>
+        </button>
+      </div>
+    </div>`;
+}
+
 function renderPersonaCard(persona, groupId = "") {
   const selected = String(persona.id || "") === String(state.selectedPersonaId || "");
   const editing = String(state.personaListEditorId || "") === String(persona.id || "");
@@ -5030,25 +5096,7 @@ function renderPersonaCard(persona, groupId = "") {
         <small>${esc(personaExecutionAccountLabel(persona))}</small>
       </button>
       <button type="button" class="persona-card-edit" data-persona-edit="${esc(persona.id)}" title="编辑分组" aria-label="编辑分组">...</button>
-      ${editing ? `
-        <div class="persona-card-menu">
-          <label>加入已有组
-            <select data-persona-add-group-select="${esc(persona.id)}">
-              <option value="">选择分组</option>
-              ${availableGroups.map((group) => `<option value="${esc(group.id)}">${esc(group.name)}</option>`).join("")}
-            </select>
-          </label>
-          <button type="button" data-persona-add-selected-group="${esc(persona.id)}">加入</button>
-          ${currentGroups.length ? `
-            <div class="persona-editor-groups">
-              ${currentGroups.map((group) => `
-                <button type="button" data-persona-remove-from-group="${esc(persona.id)}" data-group-id="${esc(group.id)}">移出 ${esc(group.name)}</button>
-              `).join("")}
-            </div>
-            <button type="button" data-persona-ungroup-all="${esc(persona.id)}">单独拆出来</button>
-          ` : `<span class="persona-editor-empty">当前未加入任何组。</span>`}
-        </div>
-      ` : ""}
+      ${editing ? renderPersonaCardEditorMenu(persona, currentGroups, availableGroups) : ""}
     </article>`;
 }
 
@@ -5234,11 +5282,10 @@ function renderPersonaHotCandidatePicker(persona, form) {
   const hotBusy = isActionLocked("persona", persona?.id || "", "hot_candidates");
   return `
     <div class="persona-hot-filters">
-      <label>热点线索提示词
-        <textarea id="personaHotPrompt" rows="4" placeholder="可选。补充这次想抓取的行业、事件、话题或角度。">${esc(form.hotPrompt || "")}</textarea>
-      </label>
-      <label>可选人设记忆（已识别 ${esc(personaMemoryRows(persona).length)} 条）</label>
-      ${renderPersonaMemoryOptions(persona, form.selectedMemoryIds || [])}
+      <div class="persona-head-copy">
+        <strong>热点抓取</strong>
+        <span>按当前人设和已有记忆自动抓取 Threads / Instagram 热点候选。</span>
+      </div>
       <div class="row-actions">
         <button type="button" class="primary" data-persona-fetch-hot ${hotBusy ? "disabled" : ""}>${hotBusy ? "正在抓取热点..." : "抓取热点"}</button>
         <button type="button" data-persona-fetch-hot-refresh ${candidates.length && !hotBusy ? "" : "disabled"}>${hotBusy ? "正在刷新..." : "刷新候选"}</button>
@@ -5292,7 +5339,7 @@ function renderPersonaHotCandidatePicker(persona, form) {
         </div>
         ${renderPersonaHotCandidatePreview(preview)}
       </section>
-    </div>` : `<div class="empty-state">还没有热点候选。点击“抓取热点”，系统会按当前人设、记忆和提示词去抓 Threads / Instagram 热点候选。</div>`}
+    </div>` : `<div class="empty-state">还没有热点候选。点击“抓取热点”，系统会按当前人设和已有记忆自动抓取 Threads / Instagram 热点候选。</div>`}
   `;
 }
 
@@ -6282,6 +6329,7 @@ function bindEvents() {
       && !event.target.closest(".persona-list-card")
     ) {
       state.personaListEditorId = "";
+      state.personaListEditorMode = "";
       renderPersonaModule();
     }
   });
@@ -6559,7 +6607,9 @@ function bindEvents() {
     const editPersonaGroup = event.target.closest("[data-persona-edit]");
     if (editPersonaGroup) {
       const personaId = editPersonaGroup.dataset.personaEdit || "";
-      state.personaListEditorId = state.personaListEditorId === personaId ? "" : personaId;
+      const closing = state.personaListEditorId === personaId;
+      state.personaListEditorId = closing ? "" : personaId;
+      state.personaListEditorMode = "";
       renderPersonaModule();
       return;
     }
@@ -6568,7 +6618,27 @@ function bindEvents() {
       const groupId = editCollectionGroup.dataset.personaEditGroup || "";
       const editorId = groupId ? `group:${groupId}` : "";
       state.personaListEditorId = state.personaListEditorId === editorId ? "" : editorId;
+      state.personaListEditorMode = "";
       renderPersonaModule();
+      return;
+    }
+    const personaEditorBack = event.target.closest("[data-persona-editor-back]");
+    if (personaEditorBack) {
+      const personaId = personaEditorBack.dataset.personaEditorBack || "";
+      if (state.personaListEditorId === personaId) {
+        state.personaListEditorMode = "";
+        renderPersonaModule();
+      }
+      return;
+    }
+    const personaEditorMode = event.target.closest("[data-persona-editor-mode]");
+    if (personaEditorMode) {
+      const [personaId, mode] = String(personaEditorMode.dataset.personaEditorMode || "").split(":");
+      if (personaId) {
+        state.personaListEditorId = personaId;
+        state.personaListEditorMode = mode || "";
+        renderPersonaModule();
+      }
       return;
     }
     const addSelectedGroup = event.target.closest("[data-persona-add-selected-group]");
@@ -6597,6 +6667,7 @@ function bindEvents() {
       if (action === "next") state.personaListPage = Math.min(totalPages, Number(state.personaListPage || 1) + 1);
       if (action === "last") state.personaListPage = totalPages;
       state.personaListEditorId = "";
+      state.personaListEditorMode = "";
       renderPersonaModule();
       return;
     }
@@ -6771,6 +6842,7 @@ function bindEvents() {
       && !event.target.closest(".persona-list-card")
     ) {
       state.personaListEditorId = "";
+      state.personaListEditorMode = "";
       renderPersonaModule();
     }
   });
