@@ -538,18 +538,43 @@ textarea:focus {
 .flow-box strong { word-break: break-word; }
 
 .upload-zone {
+  position: relative;
+  display: grid;
+  gap: 8px;
   margin-top: 14px;
   padding: 22px;
   border: 1px dashed var(--upload-dash);
   border-radius: 10px;
   background: var(--soft);
   cursor: pointer;
-  transition: border-color var(--motion-fast), background var(--motion-fast);
+  transition: border-color var(--motion-fast), background var(--motion-fast), box-shadow var(--motion-fast), transform var(--motion-fast);
+}
+
+.upload-zone:hover,
+.upload-zone:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .08);
 }
 
 .upload-zone.dragging {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 14%, var(--soft));
+  transform: translateY(-1px);
+}
+
+.upload-zone-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.upload-zone strong,
+.upload-zone p,
+.upload-zone .file-strip {
+  pointer-events: none;
 }
 
 .upload-zone p { margin: 4px 0 0; color: var(--muted); }
@@ -559,6 +584,9 @@ textarea:focus {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 750;
 }
 
 .file-chip {
@@ -1267,6 +1295,95 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-editor-empty {
   color: var(--muted);
   font-size: 12px;
+}
+
+.persona-card-menu,
+.persona-card-submenu {
+  position: fixed;
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-solid);
+  opacity: 1;
+}
+
+.persona-card-menu {
+  top: var(--persona-menu-top, 0) !important;
+  right: auto !important;
+  left: var(--persona-menu-left, 0) !important;
+  z-index: 5200;
+  width: var(--persona-menu-width, 180px) !important;
+  box-shadow: 0 16px 36px rgba(15, 23, 42, .22);
+  animation: personaMenuFade 120ms ease-out both !important;
+}
+
+.persona-card-menu--group {
+  position: absolute;
+  top: calc(100% + 6px) !important;
+  right: 6px !important;
+  left: auto !important;
+  z-index: 1200;
+  width: min(228px, calc(100vw - 36px)) !important;
+}
+
+.persona-card-submenu {
+  top: var(--persona-submenu-top, 0) !important;
+  right: auto !important;
+  left: var(--persona-submenu-left, 0) !important;
+  z-index: 5210;
+  width: var(--persona-submenu-width, 210px) !important;
+  box-shadow: 0 18px 42px rgba(15, 23, 42, .22);
+  transform-origin: top left;
+  animation: personaMenuFade 120ms ease-out both !important;
+}
+
+.persona-card-submenu.is-left {
+  transform-origin: top right;
+}
+
+.persona-menu-tab::after {
+  content: ">";
+}
+
+.persona-menu-tab:hover,
+.persona-menu-tab:focus-visible,
+.persona-menu-tab.is-active {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.persona-menu-tab small {
+  max-width: 70px;
+}
+
+.persona-card-submenu label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.persona-card-submenu select,
+.persona-card-submenu input {
+  min-height: 34px;
+}
+
+.persona-card-submenu button:not(.persona-menu-tab):not(.persona-menu-back) {
+  width: 100%;
+  min-height: 32px;
+  text-align: center;
+}
+
+@keyframes personaSubmenuReveal {
+  from { opacity: 0; transform: translateX(-4px) scale(.985); }
+  to { opacity: 1; transform: translateX(0) scale(1); }
+}
+
+@keyframes personaMenuFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 @keyframes personaMenuReveal {

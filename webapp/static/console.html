@@ -135,8 +135,12 @@
                 <input id="socialMinViews" type="number" min="0" value="0" />
               </label>
             </div>
-            <label>素材路径</label>
-            <textarea id="socialMediaPaths" rows="3" placeholder="publish_post 必填。一行一个本地素材路径。"></textarea>
+            <label class="upload-zone" data-upload-dropzone for="socialMediaFiles">
+              <input class="upload-zone-input" id="socialMediaFiles" type="file" multiple accept="image/*,video/*" />
+              <strong>上传素材</strong>
+              <p>拖动图片或视频到这里，或点击选择。发布内容会读取这里的文件。</p>
+              <div class="file-strip" data-upload-file-list="socialMediaFiles">未选择文件</div>
+            </label>
             <label>目标 URL 列表</label>
             <textarea id="socialTargetUrls" rows="3" placeholder="热点回复等任务可填写，一行一个 URL。"></textarea>
             <div class="command-actions">

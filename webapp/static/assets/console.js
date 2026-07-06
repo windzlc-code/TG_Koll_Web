@@ -2482,6 +2482,57 @@ function accountOptionTags() {
     : `<option value="">暂无账号</option>`;
 }
 
+function renderUploadDropzone(id, {
+  label = "上传媒体",
+  accept = "image/*,video/*",
+  hint = "拖动文件到这里，或点击选择文件。",
+  multiple = true,
+} = {}) {
+  return `
+    <label class="upload-zone" data-upload-dropzone for="${esc(id)}">
+      <input class="upload-zone-input" id="${esc(id)}" type="file" ${multiple ? "multiple" : ""} accept="${esc(accept)}" />
+      <strong>${esc(label)}</strong>
+      <p>${esc(hint || "拖动文件到这里，或点击选择文件。")}</p>
+      <div class="file-strip" data-upload-file-list="${esc(id)}">未选择文件</div>
+    </label>`;
+}
+
+function formatUploadFileSize(size) {
+  const value = Number(size || 0);
+  if (!Number.isFinite(value) || value <= 0) return "0 KB";
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(value >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
+  return `${Math.max(1, Math.round(value / 1024))} KB`;
+}
+
+function syncUploadDropzone(input) {
+  if (!input) return;
+  const zone = input.closest("[data-upload-dropzone]");
+  if (!zone) return;
+  const host = zone.querySelector(`[data-upload-file-list="${CSS.escape(input.id)}"]`);
+  if (!host) return;
+  const files = Array.from(input.files || []);
+  host.innerHTML = files.length
+    ? files.map((file) => `<span class="file-chip"><strong>${esc(file.name)}</strong><small>${esc(formatUploadFileSize(file.size))}</small></span>`).join("")
+    : "未选择文件";
+}
+
+function setUploadDropzoneFiles(zone, fileList) {
+  const input = zone?.querySelector?.("input[type='file']");
+  if (!input || !fileList) return;
+  const transfer = new DataTransfer();
+  const files = Array.from(fileList || []).filter(Boolean);
+  const selected = input.multiple ? files : files.slice(0, 1);
+  selected.forEach((file) => transfer.items.add(file));
+  input.files = transfer.files;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+  syncUploadDropzone(input);
+}
+
+function uploadDropzoneFromEvent(event) {
+  return event.target?.closest?.("[data-upload-dropzone]") || null;
+}
+
 function syncStandaloneSocialForm() {
   const account = selectedSocialAccount($("socialAccount")?.value);
   const platform = account?.platform || $("socialPlatform")?.value || "threads";
@@ -2552,9 +2603,7 @@ function renderSimpleFlowModule(moduleId) {
       ${scheduleField}
       <label>内容</label>
       <textarea id="simpleContent" rows="4" placeholder="发布正文、评论内容或回复模板。">${esc(selectedDraft?.content || "")}</textarea>
-      <label>素材
-        <input id="simpleMediaFiles" type="file" multiple accept="image/*,video/*" />
-      </label>
+      ${renderUploadDropzone("simpleMediaFiles", { label: "上传素材", hint: "拖动图片或视频到这里，或点击选择。发布内容会读取这里的文件。" })}
       <input id="simplePrimary" type="hidden" value="publish_post" />`;
   } else if (moduleId === "automation") {
     const needsTarget = ["browse_profile", "comment_post", "reply_comment", "like_post", "share_post"].includes(selectedTask);
@@ -2568,7 +2617,7 @@ function renderSimpleFlowModule(moduleId) {
       </label>
       ${needsTarget ? targetField : ""}
       ${needsContent ? contentBox : ""}
-      ${needsMedia ? `<label>素材<input id="simpleMediaFiles" type="file" multiple accept="image/*,video/*" /></label>` : ""}
+      ${needsMedia ? renderUploadDropzone("simpleMediaFiles", { label: "上传素材", hint: "拖动图片或视频到这里，或点击选择。Instagram 发布至少需要一份媒体。" }) : ""}
       ${showTargetList ? targetListField : ""}`;
   } else {
     body = `
@@ -3430,6 +3479,12 @@ function renderConsoleSettingsPage() {
   `;
 }
 
+function refreshConsoleSettingsDependents() {
+  if (state.activeModule === "personas" && $("moduleBody")) {
+    renderPersonaModule();
+  }
+}
+
 function saveConsoleSettingsPage() {
   const pageSize = Math.min(Math.max(Number.parseInt(String($("settingsPersonaPageSize")?.value || ""), 10) || 20, 5), 80);
   const generateCount = Math.min(Math.max(Number.parseInt(String($("settingsPersonaGenerateCount")?.value || ""), 10) || 3, 1), 20);
@@ -3444,6 +3499,7 @@ function saveConsoleSettingsPage() {
     window.localStorage.setItem(PERSONA_GENERATE_TARGET_WORDS_KEY, String(targetWords));
   } catch {}
   renderConsoleSettingsPage();
+  refreshConsoleSettingsDependents();
   showMsg("consoleSettingsMsg", "通用设置已保存。", true);
 }
 
@@ -3703,11 +3759,12 @@ function movePersonaDropPlaceholder(zone, beforeId) {
 
 function handlePersonaDragStart(event) {
   const card = event.target.closest?.("[data-persona-drag-persona]");
-  if (!card || event.target.closest?.(".persona-card-edit, .persona-card-menu")) return;
+  if (!card || event.target.closest?.(".persona-card-edit, .persona-card-menu, .persona-card-submenu")) return;
   const personaId = String(card.dataset.personaDragPersona || "");
   if (!personaId) return;
   state.personaListEditorId = "";
   state.personaListEditorMode = "";
+  removePersonaCardEditorPortal();
   state.personaDrag = {
     type: "persona",
     id: personaId,
@@ -3808,7 +3865,7 @@ function cleanupPersonaPointerDrag() {
 function personaPointerDragCardFromTarget(target) {
   const card = target?.closest?.("[data-persona-drag-persona]");
   if (!card) return null;
-  if (target.closest?.(".persona-card-edit, .persona-card-menu, input, select, textarea, a")) return null;
+  if (target.closest?.(".persona-card-edit, .persona-card-menu, .persona-card-submenu, input, select, textarea, a")) return null;
   return card;
 }
 
@@ -4909,7 +4966,10 @@ async function uploadPersonaPostMedia(replaceExisting = false) {
     method: "POST",
     body,
   });
-  if ($("personaPostMediaUploadFiles")) $("personaPostMediaUploadFiles").value = "";
+  if ($("personaPostMediaUploadFiles")) {
+    $("personaPostMediaUploadFiles").value = "";
+    syncUploadDropzone($("personaPostMediaUploadFiles"));
+  }
   await loadPersonaDraftPosts(persona.id, { force: true });
   renderPersonaDetail();
   renderConfirmSummary();
@@ -5015,52 +5075,47 @@ function personaCardEditorMode(personaId) {
 function renderPersonaCardEditorMenu(persona, currentGroups, availableGroups) {
   const personaId = String(persona.id || "");
   const mode = personaCardEditorMode(personaId);
-  if (mode === "add") {
-    return `
-      <div class="persona-card-menu" data-persona-editor-menu="${esc(personaId)}">
-        <div class="persona-menu-head">
-          <button type="button" class="persona-menu-back" data-persona-editor-back="${esc(personaId)}" aria-label="返回操作选项">‹</button>
-          <strong>加入分组</strong>
-        </div>
-        <div class="persona-menu-panel">
-          <label>选择目标分组
-            <select data-persona-add-group-select="${esc(personaId)}">
-              <option value="">选择分组</option>
-              ${availableGroups.map((group) => `<option value="${esc(group.id)}">${esc(group.name)}</option>`).join("")}
-            </select>
-          </label>
-          <button type="button" data-persona-add-selected-group="${esc(personaId)}" ${availableGroups.length ? "" : "disabled"}>加入</button>
-          ${availableGroups.length ? "" : `<span class="persona-editor-empty">暂无可加入的分组。</span>`}
-        </div>
-      </div>`;
-  }
-  if (mode === "remove") {
-    return `
-      <div class="persona-card-menu" data-persona-editor-menu="${esc(personaId)}">
-        <div class="persona-menu-head">
-          <button type="button" class="persona-menu-back" data-persona-editor-back="${esc(personaId)}" aria-label="返回操作选项">‹</button>
-          <strong>移出分组</strong>
-        </div>
-        <div class="persona-menu-panel">
-          ${currentGroups.length ? `
-            <div class="persona-editor-groups">
-              ${currentGroups.map((group) => `
-                <button type="button" data-persona-remove-from-group="${esc(personaId)}" data-group-id="${esc(group.id)}">移出 ${esc(group.name)}</button>
-              `).join("")}
-            </div>
-            <button type="button" data-persona-ungroup-all="${esc(personaId)}">单独拆出来</button>
-          ` : `<span class="persona-editor-empty">当前未加入任何组。</span>`}
-        </div>
-      </div>`;
-  }
+  const submenu = mode === "add" ? `
+    <div class="persona-card-submenu" data-persona-editor-submenu="${esc(personaId)}">
+      <div class="persona-menu-head">
+        <button type="button" class="persona-menu-back" data-persona-editor-back="${esc(personaId)}" aria-label="返回操作选项">&lt;</button>
+        <strong>加入分组</strong>
+      </div>
+      <div class="persona-menu-panel">
+        <label>选择目标分组
+          <select data-persona-add-group-select="${esc(personaId)}">
+            <option value="">选择分组</option>
+            ${availableGroups.map((group) => `<option value="${esc(group.id)}">${esc(group.name)}</option>`).join("")}
+          </select>
+        </label>
+        <button type="button" data-persona-add-selected-group="${esc(personaId)}" ${availableGroups.length ? "" : "disabled"}>加入</button>
+        ${availableGroups.length ? "" : `<span class="persona-editor-empty">暂无可加入的分组。</span>`}
+      </div>
+    </div>` : mode === "remove" ? `
+    <div class="persona-card-submenu" data-persona-editor-submenu="${esc(personaId)}">
+      <div class="persona-menu-head">
+        <button type="button" class="persona-menu-back" data-persona-editor-back="${esc(personaId)}" aria-label="返回操作选项">&lt;</button>
+        <strong>移出分组</strong>
+      </div>
+      <div class="persona-menu-panel">
+        ${currentGroups.length ? `
+          <div class="persona-editor-groups">
+            ${currentGroups.map((group) => `
+              <button type="button" data-persona-remove-from-group="${esc(personaId)}" data-group-id="${esc(group.id)}">移出 ${esc(group.name)}</button>
+            `).join("")}
+          </div>
+          <button type="button" data-persona-ungroup-all="${esc(personaId)}">单独拆出来</button>
+        ` : `<span class="persona-editor-empty">当前未加入任何组。</span>`}
+      </div>
+    </div>` : "";
   return `
     <div class="persona-card-menu" data-persona-editor-menu="${esc(personaId)}">
       <div class="persona-menu-tabs" aria-label="人设操作">
-        <button type="button" class="persona-menu-tab" data-persona-editor-mode="${esc(personaId)}:add">
+        <button type="button" class="persona-menu-tab ${mode === "add" ? "is-active" : ""}" data-persona-editor-mode="${esc(personaId)}:add">
           <span>加入分组</span>
           <small>${availableGroups.length ? `${availableGroups.length} 个可选` : "暂无可选"}</small>
         </button>
-        <button type="button" class="persona-menu-tab" data-persona-editor-mode="${esc(personaId)}:remove">
+        <button type="button" class="persona-menu-tab ${mode === "remove" ? "is-active" : ""}" data-persona-editor-mode="${esc(personaId)}:remove">
           <span>移出分组</span>
           <small>${currentGroups.length ? `${currentGroups.length} 个已加入` : "未加入"}</small>
         </button>
@@ -5069,7 +5124,121 @@ function renderPersonaCardEditorMenu(persona, currentGroups, availableGroups) {
           <small>${currentGroups.length ? "移出所有组" : "无需操作"}</small>
         </button>
       </div>
-    </div>`;
+    </div>
+    ${submenu}`;
+}
+
+function positionPersonaCardEditorMenu() {
+  const personaId = String(state.personaListEditorId || "");
+  if (!personaId || personaId.startsWith("group:") || !$("moduleBody")) return;
+  const card = $("moduleBody").querySelector(`[data-persona-card="${CSS.escape(personaId)}"]`);
+  const editButton = card?.querySelector("[data-persona-edit]");
+  const menu = document.querySelector(`[data-persona-editor-menu="${CSS.escape(personaId)}"]`);
+  if (!editButton || !menu) return;
+  const gap = 8;
+  const margin = 10;
+  const buttonRect = editButton.getBoundingClientRect();
+  const menuWidth = Math.min(190, Math.max(156, window.innerWidth - margin * 2));
+  const menuHeight = menu.offsetHeight || 128;
+  const top = Math.min(Math.max(margin, buttonRect.bottom + gap), Math.max(margin, window.innerHeight - menuHeight - margin));
+  const left = Math.min(Math.max(margin, buttonRect.right - menuWidth), Math.max(margin, window.innerWidth - menuWidth - margin));
+  menu.style.setProperty("--persona-menu-left", `${Math.round(left)}px`);
+  menu.style.setProperty("--persona-menu-top", `${Math.round(top)}px`);
+  menu.style.setProperty("--persona-menu-width", `${Math.round(menuWidth)}px`);
+  const submenu = document.querySelector(`[data-persona-editor-submenu="${CSS.escape(personaId)}"]`);
+  if (!submenu) return;
+  const menuRect = menu.getBoundingClientRect();
+  const renderedMenuLeft = menuRect.left;
+  const renderedMenuWidth = menuRect.width || menuWidth;
+  const submenuWidth = Math.min(218, Math.max(180, window.innerWidth - margin * 2));
+  const submenuHeight = submenu.offsetHeight || 128;
+  const rightLeft = renderedMenuLeft + renderedMenuWidth + gap;
+  const hasRightRoom = rightLeft + submenuWidth <= window.innerWidth - margin;
+  const leftLeft = renderedMenuLeft - submenuWidth - gap;
+  const hasLeftRoom = leftLeft >= margin;
+  let submenuLeft = rightLeft;
+  let submenuTop = Math.min(Math.max(margin, top), Math.max(margin, window.innerHeight - submenuHeight - margin));
+  let placement = "right";
+  if (!hasRightRoom && hasLeftRoom) {
+    submenuLeft = leftLeft;
+    placement = "left";
+  } else if (!hasRightRoom) {
+    submenuLeft = Math.min(Math.max(margin, renderedMenuLeft), Math.max(margin, window.innerWidth - submenuWidth - margin));
+    const menuBottom = menuRect.bottom;
+    const belowTop = menuBottom + gap;
+    const aboveTop = menuRect.top - submenuHeight - gap;
+    submenuTop = belowTop + submenuHeight <= window.innerHeight - margin ? belowTop : Math.max(margin, aboveTop);
+    placement = belowTop + submenuHeight <= window.innerHeight - margin ? "below" : "above";
+  }
+  submenu.classList.toggle("is-left", placement === "left");
+  submenu.classList.toggle("is-stacked", placement === "below" || placement === "above");
+  submenu.style.setProperty("--persona-submenu-left", `${Math.round(submenuLeft)}px`);
+  submenu.style.setProperty("--persona-submenu-top", `${Math.round(submenuTop)}px`);
+  submenu.style.setProperty("--persona-submenu-width", `${Math.round(submenuWidth)}px`);
+}
+
+function schedulePersonaCardEditorMenuPosition() {
+  if (state.activeModule !== "personas") return;
+  requestAnimationFrame(positionPersonaCardEditorMenu);
+}
+
+function handlePersonaCardEditorPortalClick(event) {
+  if (!event.target.closest?.("#personaCardEditorPortal")) return;
+  const personaEditorBack = event.target.closest("[data-persona-editor-back]");
+  if (personaEditorBack) {
+    const personaId = personaEditorBack.dataset.personaEditorBack || "";
+    if (state.personaListEditorId === personaId) {
+      state.personaListEditorMode = "";
+      renderPersonaModule();
+    }
+    return;
+  }
+  const personaEditorMode = event.target.closest("[data-persona-editor-mode]");
+  if (personaEditorMode) {
+    const [personaId, mode] = String(personaEditorMode.dataset.personaEditorMode || "").split(":");
+    if (personaId) {
+      state.personaListEditorId = personaId;
+      state.personaListEditorMode = mode || "";
+      renderPersonaModule();
+    }
+    return;
+  }
+  const addSelectedGroup = event.target.closest("[data-persona-add-selected-group]");
+  if (addSelectedGroup) {
+    const personaId = addSelectedGroup.dataset.personaAddSelectedGroup || "";
+    const select = document.querySelector(`#personaCardEditorPortal [data-persona-add-group-select="${CSS.escape(personaId)}"]`);
+    addPersonaToCollection(personaId, select?.value || "").catch((error) => showMsg("commandMsg", error.detail || error.message || "加入分组失败", false));
+    return;
+  }
+  const removeFromGroup = event.target.closest("[data-persona-remove-from-group]");
+  if (removeFromGroup) {
+    removePersonaFromCollection(removeFromGroup.dataset.personaRemoveFromGroup || "", removeFromGroup.dataset.groupId || "").catch((error) => showMsg("commandMsg", error.detail || error.message || "移出失败", false));
+    return;
+  }
+  const ungroupAll = event.target.closest("[data-persona-ungroup-all]");
+  if (ungroupAll) {
+    ungroupPersona(ungroupAll.dataset.personaUngroupAll || "").catch((error) => showMsg("commandMsg", error.detail || error.message || "拆出失败", false));
+  }
+}
+
+function removePersonaCardEditorPortal() {
+  document.getElementById("personaCardEditorPortal")?.remove();
+}
+
+function renderPersonaCardEditorPortal() {
+  removePersonaCardEditorPortal();
+  const personaId = String(state.personaListEditorId || "");
+  if (!personaId || personaId.startsWith("group:") || state.activeModule !== "personas") return;
+  const persona = state.personas.find((item) => String(item.id || "") === personaId);
+  if (!persona) return;
+  const currentGroups = personaGroupsForPersona(persona.id);
+  const availableGroups = personaCollectionGroups().filter((group) => !currentGroups.some((item) => item.id === group.id));
+  const portal = document.createElement("div");
+  portal.id = "personaCardEditorPortal";
+  portal.className = "persona-editor-portal";
+  portal.innerHTML = renderPersonaCardEditorMenu(persona, currentGroups, availableGroups);
+  document.body.appendChild(portal);
+  schedulePersonaCardEditorMenuPosition();
 }
 
 function renderPersonaCard(persona, groupId = "") {
@@ -5096,7 +5265,6 @@ function renderPersonaCard(persona, groupId = "") {
         <small>${esc(personaExecutionAccountLabel(persona))}</small>
       </button>
       <button type="button" class="persona-card-edit" data-persona-edit="${esc(persona.id)}" title="编辑分组" aria-label="编辑分组">...</button>
-      ${editing ? renderPersonaCardEditorMenu(persona, currentGroups, availableGroups) : ""}
     </article>`;
 }
 
@@ -5600,6 +5768,7 @@ function personaGroupStepOptions(groupKey, profile) {
 
 function renderPersonaModule() {
   const current = selectedPersona();
+  removePersonaCardEditorPortal();
   $("moduleBody").innerHTML = `
     <div class="persona-console-layout">
       <section class="persona-workbench-shell">
@@ -5627,6 +5796,7 @@ function renderPersonaModule() {
   `;
   if (state.personaCreateMode || !current) renderPersonaDetail();
   else renderPersonaDetail();
+  renderPersonaCardEditorPortal();
 }
 
 function renderPersonaDetail() {
@@ -5840,9 +6010,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
               <div class="persona-inline-panel persona-inline-panel--nested">
                 <strong>当前媒体</strong>
                 ${renderPersonaEditableMediaGrid(postMediaItems)}
-                <label>上传媒体
-                  <input id="personaPostMediaUploadFiles" type="file" multiple accept="image/*,video/*" />
-                </label>
+                ${renderUploadDropzone("personaPostMediaUploadFiles", { label: "上传媒体", hint: "拖动图片或视频到这里，或点击选择。可追加或替换当前草稿媒体。" })}
                 <div class="row-actions">
                   <button type="button" class="primary" data-persona-upload-post-media="append">追加到草稿</button>
                   <button type="button" data-persona-upload-post-media="replace">替换草稿媒体</button>
@@ -5877,10 +6045,11 @@ function renderPersonaContentPanel(persona, account, profile, step) {
                 <label>补充提示词
                   <textarea id="personaMediaTaskPrompt" rows="5" placeholder="留空则直接按当前草稿正文生成。">${esc(mediaForm.prompt || "")}</textarea>
                 </label>
-                ${showSourceUpload ? `<label>上传素材
-                  <input id="personaMediaTaskFiles" type="file" multiple accept="${esc(uploadAccept)}" />
-                  <small>${esc(mediaMeta.files || "根据当前任务类型上传必要素材。")}</small>
-                </label>` : ""}
+                ${showSourceUpload ? renderUploadDropzone("personaMediaTaskFiles", {
+                  label: "上传素材",
+                  accept: uploadAccept,
+                  hint: mediaMeta.files || "拖动任务需要的素材到这里，或点击选择。",
+                }) : ""}
                 <div class="row-actions">
                   <button type="button" class="primary" data-persona-run-media-task ${mediaBusy ? "disabled" : ""}>${mediaBusy ? "配图任务执行中" : "生成预览"}</button>
                 </div>
@@ -5961,10 +6130,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
           </label>
         </div>
         ${personaPublishPreview(selectedPost)}
-        <label>发布素材
-          <input id="personaPublishFiles" type="file" multiple accept="image/*,video/*" />
-          <small>${esc(publishHint)}</small>
-        </label>
+        ${renderUploadDropzone("personaPublishFiles", { label: "发布素材", hint: publishHint || "拖动图片或视频到这里，或点击选择。" })}
         <div class="row-actions">
           <button type="button" class="primary" data-persona-publish-submit ${(publishAccount && selectedPost && !publishBusy) ? "" : "disabled"}>${publishBusy ? "发布任务执行中" : "发布内容"}</button>
         </div>
@@ -6324,6 +6490,7 @@ function bindEvents() {
       state.activeModule === "personas"
       && state.personaListEditorId
       && !event.target.closest(".persona-card-menu")
+      && !event.target.closest(".persona-card-submenu")
       && !event.target.closest("[data-persona-edit]")
       && !event.target.closest("[data-persona-edit-group]")
       && !event.target.closest(".persona-list-card")
@@ -6333,6 +6500,35 @@ function bindEvents() {
       renderPersonaModule();
     }
   });
+  document.addEventListener("change", (event) => {
+    const input = event.target?.closest?.(".upload-zone-input");
+    if (input) syncUploadDropzone(input);
+  });
+  document.addEventListener("dragenter", (event) => {
+    const zone = uploadDropzoneFromEvent(event);
+    if (!zone) return;
+    event.preventDefault();
+    zone.classList.add("dragging");
+  });
+  document.addEventListener("dragover", (event) => {
+    const zone = uploadDropzoneFromEvent(event);
+    if (!zone) return;
+    event.preventDefault();
+    zone.classList.add("dragging");
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+  });
+  document.addEventListener("dragleave", (event) => {
+    const zone = uploadDropzoneFromEvent(event);
+    if (!zone || zone.contains(event.relatedTarget)) return;
+    zone.classList.remove("dragging");
+  });
+  document.addEventListener("drop", (event) => {
+    const zone = uploadDropzoneFromEvent(event);
+    if (!zone) return;
+    event.preventDefault();
+    zone.classList.remove("dragging");
+    setUploadDropzoneFiles(zone, event.dataTransfer?.files);
+  });
   $("moduleBody").addEventListener("dragstart", (event) => {
     if (event.target.closest?.("[data-persona-drag-persona]")) event.preventDefault();
   });
@@ -6340,6 +6536,9 @@ function bindEvents() {
   document.addEventListener("pointermove", handlePersonaPointerMove, { passive: false });
   document.addEventListener("pointerup", handlePersonaPointerUp, { passive: false });
   document.addEventListener("pointercancel", handlePersonaPointerCancel);
+  document.addEventListener("click", handlePersonaCardEditorPortalClick);
+  $("moduleBody").addEventListener("scroll", schedulePersonaCardEditorMenuPosition, true);
+  window.addEventListener("resize", schedulePersonaCardEditorMenuPosition);
   $("moduleBody").addEventListener("click", (event) => {
     if (Date.now() < Number(state.personaSuppressClickUntil || 0)) {
       event.preventDefault();
@@ -6699,7 +6898,7 @@ function bindEvents() {
       renderConfirmSummary();
     }
     const personaSelectButton = event.target.closest("[data-persona-select]") || (
-      event.target.closest(".persona-card-edit, .persona-card-menu, button, a, input, select, textarea")
+      event.target.closest(".persona-card-edit, .persona-card-menu, .persona-card-submenu, button, a, input, select, textarea")
         ? null
         : event.target.closest("[data-persona-card]")
     );
@@ -6837,6 +7036,7 @@ function bindEvents() {
     if (
       state.personaListEditorId
       && !event.target.closest(".persona-card-menu")
+      && !event.target.closest(".persona-card-submenu")
       && !event.target.closest("[data-persona-edit]")
       && !event.target.closest("[data-persona-edit-group]")
       && !event.target.closest(".persona-list-card")
