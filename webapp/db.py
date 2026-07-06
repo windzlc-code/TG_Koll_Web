@@ -10,6 +10,9 @@ def get_db_path() -> str:
     env = str(os.getenv("APP_DB_PATH", "") or "").strip()
     if env:
         return os.path.abspath(env)
+    data_dir = str(os.getenv("WEBAPP_DATA_DIR", "") or "").strip()
+    if data_dir:
+        return str((Path(data_dir).resolve() / "app.db").absolute())
     root_dir = Path(__file__).resolve().parent.parent
     return str((root_dir / "webapp_data" / "app.db").absolute())
 
