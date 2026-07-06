@@ -21,6 +21,9 @@ WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        ca-certificates curl ffmpeg libgl1 libglib2.0-0 libgomp1 \
+       libgtk-3-0 libdbus-glib-1-2 libxt6 libxss1 libasound2 \
+       libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+       libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 xvfb \
        python3 python3-pip python3-venv build-essential sqlite3 \
     && python3 -m venv /opt/venv \
     && rm -rf /var/lib/apt/lists/*
