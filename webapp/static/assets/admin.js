@@ -1012,12 +1012,8 @@ const adminState = {
 };
 const REMOTE_COMFY_TASKS = [
   ["text_to_image", "文字生成图片"],
-  ["image_generate", "图片生成"],
-  ["video_i2v", "图生视频"],
-  ["get_nano_banana", "图片编辑"],
-  ["face_swap", "人物换脸"],
 ];
-const TASK_TYPE_LABELS = Object.fromEntries(REMOTE_COMFY_TASKS);
+const TASK_TYPE_LABELS = { text_to_image: "文字生成图片" };
 const ADMIN_PAGES = new Set(["overview", "users", "tasks", "pricing", "runtime", "sentimentCookies", "account"]);
 const ADMIN_PAGE_ALIASES = {
   secOverview: "overview",
@@ -1822,12 +1818,12 @@ function runtimeFormToPayload() {
     new_persona_runninghub_persona_t2i_endpoint: el("rtNewPersonaPersonaT2iEndpoint") ? el("rtNewPersonaPersonaT2iEndpoint").value.trim() : "",
     new_persona_runninghub_tweet_i2i_detail_url: el("rtNewPersonaTweetI2iDetailUrl") ? el("rtNewPersonaTweetI2iDetailUrl").value.trim() : "",
     new_persona_runninghub_tweet_i2i_endpoint: el("rtNewPersonaTweetI2iEndpoint") ? el("rtNewPersonaTweetI2iEndpoint").value.trim() : "",
-    mulerouter_api_name: el("rtMuleRouterApiName").value.trim(),
-    mulerouter_api_key: el("rtMuleRouterApiKey").value.trim(),
-    mulerouter_base_url: el("rtMuleRouterBaseUrl").value.trim(),
-    mulerouter_wan_i2v_model: el("rtMuleRouterWanI2vModelName").value.trim(),
-    mulerouter_wan_i2v_endpoint: el("rtMuleRouterWanI2vEndpoint").value.trim(),
-    mulerouter_wan_i2v_negative_prompt: el("rtMuleRouterWanI2vNegativePrompt").value.trim(),
+    mulerouter_api_name: el("rtMuleRouterApiName") ? el("rtMuleRouterApiName").value.trim() : "",
+    mulerouter_api_key: el("rtMuleRouterApiKey") ? el("rtMuleRouterApiKey").value.trim() : "",
+    mulerouter_base_url: el("rtMuleRouterBaseUrl") ? el("rtMuleRouterBaseUrl").value.trim() : "",
+    mulerouter_wan_i2v_model: el("rtMuleRouterWanI2vModelName") ? el("rtMuleRouterWanI2vModelName").value.trim() : "",
+    mulerouter_wan_i2v_endpoint: el("rtMuleRouterWanI2vEndpoint") ? el("rtMuleRouterWanI2vEndpoint").value.trim() : "",
+    mulerouter_wan_i2v_negative_prompt: el("rtMuleRouterWanI2vNegativePrompt") ? el("rtMuleRouterWanI2vNegativePrompt").value.trim() : "",
     video_app_id: "",
     cleanup_enabled: !!el("rtCleanupEnabled").checked,
     cleanup_time: el("rtCleanupTime").value || "03:30",
@@ -1868,12 +1864,12 @@ function fillRuntimeForm(data) {
     ...parseModelList(v.image_model_default_model || ""),
   ]);
   adminState.imagePriorityModels = imageModelItems(v.image_model_priority_order ? parseModelList(v.image_model_priority_order) : adminState.imageGeminiModels);
-  el("rtMuleRouterApiName").value = v.mulerouter_api_name || "";
-  el("rtMuleRouterApiKey").value = v.mulerouter_api_key || "";
-  el("rtMuleRouterBaseUrl").value = v.mulerouter_base_url || "https://api.mulerouter.ai";
-  el("rtMuleRouterWanI2vModelName").value = v.mulerouter_wan_i2v_model || "wan2.7-i2v-spicy";
-  el("rtMuleRouterWanI2vEndpoint").value = v.mulerouter_wan_i2v_endpoint || "/vendors/carrothub/v1/wan2.7-i2v-spicy/generation";
-  el("rtMuleRouterWanI2vNegativePrompt").value = v.mulerouter_wan_i2v_negative_prompt || "low quality, blurry, distorted, watermark, text, logo";
+  if (el("rtMuleRouterApiName")) el("rtMuleRouterApiName").value = v.mulerouter_api_name || "";
+  if (el("rtMuleRouterApiKey")) el("rtMuleRouterApiKey").value = v.mulerouter_api_key || "";
+  if (el("rtMuleRouterBaseUrl")) el("rtMuleRouterBaseUrl").value = v.mulerouter_base_url || "";
+  if (el("rtMuleRouterWanI2vModelName")) el("rtMuleRouterWanI2vModelName").value = v.mulerouter_wan_i2v_model || "";
+  if (el("rtMuleRouterWanI2vEndpoint")) el("rtMuleRouterWanI2vEndpoint").value = v.mulerouter_wan_i2v_endpoint || "";
+  if (el("rtMuleRouterWanI2vNegativePrompt")) el("rtMuleRouterWanI2vNegativePrompt").value = v.mulerouter_wan_i2v_negative_prompt || "";
   syncPriorityModelsFromCatalog("llm");
   const restoredModelDraft = mergeModelDraft();
   renderAllModelLists();

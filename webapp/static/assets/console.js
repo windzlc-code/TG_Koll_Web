@@ -22,7 +22,6 @@ const state = {
   activeModule: "personas",
   workspaceMenuOpen: true,
   setupStatus: null,
-  generationType: "text_to_image",
   personaGroup: "content",
   personaPanels: {
     content: "generate",
@@ -38,7 +37,6 @@ const state = {
   },
   preferredAccountId: "",
   simpleBranches: {},
-  files: [],
   publishFiles: [],
   socialFiles: [],
   tasks: [],
@@ -60,6 +58,7 @@ const state = {
   personaAutomationWatchers: {},
   personaMediaTasks: {},
   personaForms: {},
+  personaProfileModes: {},
   renderedPersonaId: "",
   personaCreateMode: false,
   personaCreate: null,
@@ -180,7 +179,6 @@ function ensureThemeToggle() {
 }
 
 const modules = [
-  { id: "generation", label: "生成 / 编辑任务", hint: "文生图、图生图、修图、换脸、视频", callback: "后台自动提交" },
   { id: "personas", label: "我的人设", hint: "人设列表、详情、推文、设置", callback: "后台自动读取" },
   { id: "publishing", label: "发布 / 矩阵发布", hint: "草稿发布、批量发布、定时、队列", callback: "后台自动排队" },
   { id: "automation", label: "指纹浏览器自动化", hint: "浏览器账号登录、检测、养号、回复", callback: "后台自动执行" },
@@ -188,12 +186,6 @@ const modules = [
 
 const taskMeta = {
   text_to_image: { title: "文生图", minImages: 0, files: "无需文件，填写 Prompt 后直接生成图片。", callback: "后台自动提交" },
-  image_generate: { title: "图片生成", minImages: 1, files: "单图参考上传 1 张图，双图参考上传 2 张图。", callback: "后台自动提交" },
-  single_image_edit: { title: "单图编辑", minImages: 1, files: "上传 1 张原图，填写编辑指令。", callback: "后台自动提交" },
-  get_nano_banana: { title: "图片编辑", minImages: 2, files: "上传 2 张图片：原图 + 参考图。", callback: "后台自动提交" },
-  face_swap: { title: "人物换脸", minImages: 2, files: "上传 2 张图片：目标图 + 人脸参考图。", callback: "后台自动提交" },
-  video_i2v: { title: "图生视频", minImages: 1, files: "上传 1 张首帧参考图，可选音频。", callback: "后台自动提交" },
-  get_gemini: { title: "素材解析", minImages: 0, files: "发送图片或视频，并附上需要解析的问题。", callback: "后台自动提交" },
 };
 
 const personaGroups = {
@@ -710,6 +702,47 @@ function uniqueAccountOptions(accounts) {
   });
 }
 
+function accountOptionKey(account) {
+  const username = String(account?.username || account?.account_username || "").trim().toLowerCase();
+  return [
+    String(account?.platform || "").trim().toLowerCase(),
+    username || String(account?.id || "").trim().toLowerCase(),
+  ].join("|");
+}
+
+function accountStatusRank(status) {
+  const value = String(status || "").trim().toLowerCase();
+  if (value === "ready") return 5;
+  if (value === "need_verification") return 4;
+  if (value === "pending_login") return 3;
+  if (value === "cookie_expired") return 2;
+  if (value === "disabled") return 1;
+  return 0;
+}
+
+function mergedAccountCards(accounts) {
+  const groups = new Map();
+  (accounts || []).forEach((account) => {
+    const key = accountOptionKey(account);
+    if (!key || key === "|") return;
+    const current = groups.get(key);
+    if (!current) {
+      groups.set(key, { ...account, binding_count: 1, account_ids: [account.id].filter(Boolean) });
+      return;
+    }
+    current.binding_count += 1;
+    if (account.id) current.account_ids.push(account.id);
+    const currentScore = accountStatusRank(current.status);
+    const nextScore = accountStatusRank(account.status);
+    const currentTime = Number(current.updated_at || current.created_at || 0);
+    const nextTime = Number(account.updated_at || account.created_at || 0);
+    if (nextScore > currentScore || (nextScore === currentScore && nextTime > currentTime)) {
+      groups.set(key, { ...account, binding_count: current.binding_count, account_ids: current.account_ids });
+    }
+  });
+  return Array.from(groups.values());
+}
+
 function personaBindingLabel(persona) {
   const account = accountForPersona(persona);
   const handle = String(persona?.threads_account?.handle || "").trim();
@@ -835,7 +868,13 @@ function personaThreadsStrategyDetail(group) {
 function setView(view) {
   state.view = view;
   if (view !== "workspace") state.workspaceMenuOpen = false;
-  document.querySelectorAll("[data-view]").forEach((button) => button.classList.toggle("is-active", button.dataset.view === view));
+  document.querySelectorAll("[data-view]").forEach((button) => {
+    const isActive = button.dataset.view === view;
+    button.classList.toggle("is-active", isActive);
+    if (button.dataset.view === "workspace") {
+      button.classList.toggle("has-active-child", view === "workspace");
+    }
+  });
   document.querySelectorAll("[data-panel]").forEach((panel) => panel.classList.toggle("is-active", panel.dataset.panel === view));
   const titles = {
     workspace: "任务工作台",
@@ -850,6 +889,12 @@ function setView(view) {
   if (view === "console_settings") renderConsoleSettingsPage();
   if (view === "tasks") loadTasks();
   if (view === "social" || view === "accounts" || view === "settings") loadSocial();
+}
+
+function setWorkspaceModule(moduleId) {
+  state.workspaceMenuOpen = true;
+  if (state.view !== "workspace") setView("workspace");
+  setModule(moduleId);
 }
 
 function updateWorkspaceFlow() {
@@ -906,7 +951,6 @@ function setModule(moduleId) {
 }
 
 function selectedBranch(moduleId) {
-  if (moduleId === "generation") return state.generationType;
   if (moduleId === "personas") return state.personaGroup;
   return state.simpleBranches[moduleId] || moduleDefaultBranch[moduleId] || "";
 }
@@ -922,138 +966,9 @@ function renderWorkspace(renderMenu = true) {
   $("moduleBody").closest(".module-panel")?.classList.toggle("is-persona-module", module.id === "personas");
   $("moduleCallback").textContent = "";
   $("moduleCallback").style.display = "none";
-  if (module.id === "generation") renderGenerationModule();
-  else if (module.id === "personas") renderPersonaModule();
+  if (module.id === "personas") renderPersonaModule();
   else renderSimpleFlowModule(module.id);
   renderConfirmSummary();
-}
-
-function renderGenerationModule() {
-  $("moduleBody").innerHTML = `
-    <div class="form-grid persona-module-controls">
-      <label>任务类型
-        <select id="taskType">
-          <option value="text_to_image">文生图</option>
-          <option value="image_generate">图片生成</option>
-          <option value="single_image_edit">单图编辑</option>
-          <option value="get_nano_banana">图片编辑</option>
-          <option value="face_swap">人物换脸</option>
-          <option value="video_i2v">图生视频</option>
-          <option value="get_gemini">素材解析</option>
-        </select>
-      </label>
-      <label>完成后分支
-        <select id="taskBranch">
-          <option value="new">新建任务</option>
-        </select>
-      </label>
-      <label>提示词模式
-        <select id="promptMode">
-          <option value="grok">Grok 改写并预览</option>
-          <option value="custom">输入自定义提示词</option>
-          <option value="free">AI 自由发挥</option>
-        </select>
-      </label>
-      <label data-generation-field="ratio">图像比例
-        <select id="taskAspectRatio">
-          <option value="auto">自动</option><option value="1:1">1:1</option><option value="3:4">3:4</option>
-          <option value="4:3">4:3</option><option value="9:16">9:16</option><option value="16:9">16:9</option>
-        </select>
-      </label>
-      <label data-generation-field="mode">参考模式
-        <select id="taskMode">
-          <option value="single_reference">单图参考</option>
-          <option value="dual_reference">双图参考</option>
-        </select>
-      </label>
-      <label data-generation-field="video">清晰度
-        <select id="taskResolution"><option value="720p">720p</option><option value="1080p">1080p</option></select>
-      </label>
-      <label data-generation-field="video">时长
-        <input id="taskDuration" type="number" min="2" max="15" value="2" />
-      </label>
-      <label data-generation-field="qa">文生图 QA
-        <select id="taskQa"><option value="on">开启自动 QA</option><option value="off">关闭自动 QA</option></select>
-      </label>
-      <label data-generation-field="highres">最终分辨率
-        <select id="taskFinalResolution"><option value="on">开启最终高清</option><option value="off">关闭最终高清</option></select>
-      </label>
-      <label data-generation-field="lora">人设 LoRA
-        <select id="taskPersonaLora"><option value="off">不使用人设 LoRA</option><option value="auto">自动选择人设 LoRA</option></select>
-      </label>
-      <label data-generation-field="video">图生视频音频
-        <select id="taskAudioMode"><option value="skip">跳过音频</option><option value="upload">上传音频</option><option value="keep">沿用已有音频</option></select>
-      </label>
-    </div>
-    <label>Prompt / 指令</label>
-    <textarea id="taskPrompt" rows="7" placeholder="填写任务指令，Web 会按当前类型提交到已有后台。"></textarea>
-    <label data-generation-field="video">负面提示词</label>
-    <input id="taskNegativePrompt" data-generation-field="video" placeholder="可选，用于图生视频或远程工作流" />
-    <div class="upload-zone" id="uploadZone">
-      <input id="taskFiles" type="file" multiple hidden />
-      <div><strong>拖拽或点击上传素材</strong><p id="uploadHint"></p></div>
-    </div>
-    <div class="file-strip" id="fileStrip"></div>
-    <div class="flow-box" id="generationBrief"></div>
-    <div class="command-actions">
-      <button id="submitTask" type="button" class="primary">确认执行</button>
-      <button id="clearCommand" type="button">清空</button>
-    </div>
-  `;
-  $("taskType").value = state.generationType;
-  bindGenerationEvents();
-  updateGenerationFields();
-  renderFiles();
-}
-
-function bindGenerationEvents() {
-  $("taskType").addEventListener("change", () => {
-    state.generationType = $("taskType").value;
-    updateGenerationFields();
-    renderConfirmSummary();
-  });
-  ["taskBranch", "promptMode", "taskAspectRatio", "taskQa", "taskFinalResolution", "taskPersonaLora", "taskMode", "taskResolution", "taskDuration"].forEach((id) => {
-    const node = $(id);
-    if (node) node.addEventListener("change", renderConfirmSummary);
-  });
-  $("taskPrompt").addEventListener("input", renderConfirmSummary);
-  $("uploadZone").addEventListener("click", () => $("taskFiles").click());
-  $("uploadZone").addEventListener("dragover", (event) => { event.preventDefault(); $("uploadZone").classList.add("dragging"); });
-  $("uploadZone").addEventListener("dragleave", () => $("uploadZone").classList.remove("dragging"));
-  $("uploadZone").addEventListener("drop", (event) => {
-    event.preventDefault();
-    $("uploadZone").classList.remove("dragging");
-    addFiles(event.dataTransfer.files);
-  });
-  $("taskFiles").addEventListener("change", (event) => addFiles(event.target.files));
-  $("fileStrip").addEventListener("click", (event) => {
-    const button = event.target.closest("[data-remove-file]");
-    if (!button) return;
-    state.files.splice(Number(button.dataset.removeFile), 1);
-    renderFiles();
-  });
-  $("submitTask").addEventListener("click", () => submitGenerationTask().catch((error) => showMsg("commandMsg", error.detail || error.message || "提交失败", false)));
-  $("clearCommand").addEventListener("click", () => {
-    state.files = [];
-    $("taskPrompt").value = "";
-    $("taskNegativePrompt").value = "";
-    renderFiles();
-    renderConfirmSummary();
-  });
-}
-
-function updateGenerationFields() {
-  const type = $("taskType").value;
-  const show = (selector, visible) => document.querySelectorAll(selector).forEach((node) => { node.style.display = visible ? "" : "none"; });
-  show('[data-generation-field="mode"]', type === "image_generate");
-  show('[data-generation-field="video"]', type === "video_i2v");
-  show('[data-generation-field="ratio"]', ["text_to_image", "image_generate"].includes(type));
-  show('[data-generation-field="qa"]', type === "text_to_image");
-  show('[data-generation-field="highres"]', ["text_to_image", "image_generate"].includes(type));
-  show('[data-generation-field="lora"]', ["text_to_image", "image_generate"].includes(type));
-  const meta = taskMeta[type] || taskMeta.text_to_image;
-  $("uploadHint").textContent = meta.files;
-  $("generationBrief").innerHTML = `<span>执行方式</span><strong>${esc(meta.callback)}</strong><span>${esc(meta.files)}</span>`;
 }
 
 function renderPersonaGroupPanel(groupKey, step, persona, account, profile) {
@@ -1579,6 +1494,75 @@ function renderPersonaAccountPanel(persona, account, profile, step) {
   return renderPersonaAccountPanelV2(persona, account, profile, step);
 }
 
+function personaProfileMode(personaId) {
+  const key = String(personaId || "").trim();
+  const mode = key ? state.personaProfileModes[key] : "";
+  return mode === "edit" ? "edit" : "overview";
+}
+
+function renderPersonaProfileModeTabs(mode) {
+  const activeMode = mode === "edit" ? "edit" : "overview";
+  return `<div class="persona-step-tabs persona-subflow-tabs persona-profile-mode-tabs">${[
+    ["overview", "内容概览"],
+    ["edit", "编辑资料"],
+  ].map(([value, label]) => `
+    <button
+      type="button"
+      class="${activeMode === value ? "is-active" : ""}"
+      data-persona-profile-mode="${esc(value)}"
+    >${esc(label)}</button>
+  `).join("")}</div>`;
+}
+
+function renderPersonaContentOverview(persona, account, profile) {
+  const drafts = personaDraftPosts(persona);
+  const historyRows = personaPublishHistoryRows(persona);
+  const accounts = uniqueAccountOptions(personaAccounts(persona));
+  const publishAccount = publishAccountForPersona(persona);
+  const latestDraft = sortPersonaDraftPosts(drafts)[0] || null;
+  const latestHistory = historyRows[0] || null;
+  const personaId = String(persona?.id || "");
+  const latestTask = [...state.socialTasks]
+    .filter((task) => String(task.persona_id || "") === personaId)
+    .sort((left, right) => Math.max(timeValue(right.updated_at), timeValue(right.created_at)) - Math.max(timeValue(left.updated_at), timeValue(left.created_at)))[0] || null;
+  const content = String(profile?.content || persona?.content || "").trim();
+  return `
+    <div class="persona-overview-grid">
+      <div class="flow-box persona-overview-summary">
+        <span>人设简介</span>
+        <strong>${esc(profile?.name || persona?.name || "未命名人设")}</strong>
+        <p>${esc(content || "当前还没有人设简介。")}</p>
+      </div>
+      <div class="persona-overview-stats">
+        <div><span>草稿</span><strong>${esc(drafts.length)}</strong></div>
+        <div><span>已发布</span><strong>${esc(Number(persona?.counts?.published || historyRows.length || 0))}</strong></div>
+        <div><span>账号</span><strong>${esc(accounts.length)}</strong></div>
+      </div>
+      <div class="form-grid">
+        <div class="flow-box">
+          <span>执行账号</span>
+          <strong>${esc(account ? `${account.username || account.id} · ${account.platform || "-"}` : "未绑定")}</strong>
+          <span>${esc(publishAccount ? `可发布：${publishPlatformLabel(publishAccount)} · ${publishPlatformHint(publishAccount)}` : "还没有可发布账号")}</span>
+        </div>
+        <div class="flow-box">
+          <span>最近草稿</span>
+          <strong>${esc(latestDraft?.title || "暂无草稿")}</strong>
+          <span>${esc(latestDraft ? formatTime(latestDraft.updated_at || latestDraft.created_at) : "先到内容生产里新建推文")}</span>
+        </div>
+        <div class="flow-box">
+          <span>最近发布</span>
+          <strong>${esc(latestHistory?.title || latestHistory?.content || "暂无发布记录")}</strong>
+          <span>${esc(latestHistory ? formatTime(latestHistory.published_at || latestHistory.created_at || latestHistory.captured_at) : "发布后会在这里显示")}</span>
+        </div>
+        <div class="flow-box">
+          <span>最近自动化</span>
+          <strong>${esc(latestTask ? statusLabel(latestTask.task_type || latestTask.status || "") : "暂无任务")}</strong>
+          <span>${esc(latestTask ? `${statusLabel(latestTask.status || "")} · ${formatTime(latestTask.updated_at || latestTask.created_at)}` : "登录、养号、回复任务会在这里汇总")}</span>
+        </div>
+      </div>
+    </div>`;
+}
+
 function renderPersonaSettingsPanelV2(persona, account, profile, step) {
   if (!profile) return personaSettingsLoadingPanel();
   const presets = personaProfilePresets(profile);
@@ -1677,20 +1661,27 @@ function renderPersonaSettingsPanelV2(persona, account, profile, step) {
         </div>
       </div>`;
   }
+  const profileMode = personaProfileMode(persona.id);
   return `
     <div class="persona-inline-panel">
-      <strong>基础资料</strong>
-      <div class="form-grid">
-        <label>人设名称
-          <input id="personaProfileName" value="${esc(profile.name || persona.name || persona.id)}" />
+      <div class="persona-head-copy">
+        <strong>基础资料</strong>
+        <span class="persona-panel-intro">集中查看人设内容概览，也可以切换到编辑资料。</span>
+      </div>
+      ${renderPersonaProfileModeTabs(profileMode)}
+      ${profileMode === "edit" ? `
+        <div class="form-grid">
+          <label>人设名称
+            <input id="personaProfileName" value="${esc(profile.name || persona.name || persona.id)}" />
+          </label>
+        </div>
+        <label>人设简介
+          <textarea id="personaProfileContent" rows="8" placeholder="编辑并保存当前人设简介。">${esc(profile.content || persona.content || "")}</textarea>
         </label>
-      </div>
-      <label>人设简介
-        <textarea id="personaProfileContent" rows="8" placeholder="编辑并保存当前人设简介。">${esc(profile.content || persona.content || "")}</textarea>
-      </label>
-      <div class="row-actions">
-        <button type="button" data-persona-save-profile>保存资料</button>
-      </div>
+        <div class="row-actions">
+          <button type="button" data-persona-save-profile>保存资料</button>
+        </div>
+      ` : renderPersonaContentOverview(persona, account, profile)}
     </div>`;
 }
 
@@ -2107,14 +2098,7 @@ function fillSimpleAccounts() {
 function renderConfirmSummary() {
   const module = currentModule();
   let rows = [["当前入口", module.label]];
-  if (state.activeModule === "generation" && $("taskType")) {
-    const meta = taskMeta[$("taskType").value] || taskMeta.text_to_image;
-    rows = rows.concat([
-      ["任务类型", meta.title],
-      ["素材", state.files.length ? `${state.files.length} 个文件` : "未选择"],
-      ["最终动作", "提交生成任务"],
-    ]);
-  } else if (state.activeModule === "personas") {
+  if (state.activeModule === "personas") {
     const persona = selectedPersona();
     const groupKey = state.personaGroup || "content";
     const profile = selectedPersonaProfile();
@@ -2161,31 +2145,6 @@ function renderConfirmSummary() {
 }
 
 
-function renderFiles() {
-  const host = $("fileStrip");
-  if (!host) return;
-  if (!state.files.length) {
-    host.innerHTML = `<span class="empty-line">未选择文件</span>`;
-    return;
-  }
-  host.innerHTML = state.files.map((file, index) => `
-    <div class="file-chip"><span>${esc(file.name)}</span><small>${esc(fileKind(file))}</small><button type="button" data-remove-file="${index}">移除</button></div>
-  `).join("");
-  renderConfirmSummary();
-}
-
-function addFiles(files) {
-  const seen = new Set(state.files.map((file) => `${file.name}:${file.size}:${file.lastModified}`));
-  Array.from(files || []).forEach((file) => {
-    const key = `${file.name}:${file.size}:${file.lastModified}`;
-    if (!seen.has(key)) {
-      state.files.push(file);
-      seen.add(key);
-    }
-  });
-  renderFiles();
-}
-
 function appendEvent(kind, message) {
   const host = $("eventStream");
   if (!host) return;
@@ -2230,55 +2189,6 @@ function watchTask(taskId) {
     state.events = null;
     syncWatchingTaskChip("");
   };
-}
-
-function buildTaskPayload() {
-  const type = $("taskType").value;
-  const prompt = $("taskPrompt").value.trim();
-  const payload = {
-    prompt,
-    prompt_text: prompt,
-    message: prompt,
-    negative_prompt: $("taskNegativePrompt")?.value.trim() || "",
-    tg_prompt_mode: $("promptMode").value,
-    tg_web_branch: $("taskBranch").value,
-    aspect_ratio: $("taskAspectRatio")?.value || "auto",
-    text_to_image_auto_qa_enabled: $("taskQa")?.value !== "off",
-    final_resolution_enabled: $("taskFinalResolution")?.value !== "off",
-    persona_lora_mode: $("taskPersonaLora")?.value || "off",
-  };
-  if (type === "image_generate") payload.mode = $("taskMode").value;
-  if (type === "video_i2v") {
-    payload.resolution = $("taskResolution").value;
-    payload.duration_seconds = Number($("taskDuration").value || 2);
-    payload.audio_mode = $("taskAudioMode").value;
-  }
-  return payload;
-}
-
-async function submitGenerationTask() {
-  const type = $("taskType").value;
-  const prompt = $("taskPrompt").value.trim();
-  if (!prompt && !["image_generate"].includes(type)) {
-    showMsg("commandMsg", "请先填写任务指令。", false);
-    return;
-  }
-  const imageCount = state.files.filter((file) => fileKind(file) === "image").length;
-  const requiredImages = taskMeta[type]?.minImages || 0;
-  if (imageCount < requiredImages) {
-    showMsg("commandMsg", `该任务至少需要 ${requiredImages} 张图片。`, false);
-    return;
-  }
-  const form = new FormData();
-  form.append("task_type", type);
-  form.append("params_json", JSON.stringify(buildTaskPayload()));
-  state.files.forEach((file) => form.append("files", file, file.name));
-  showMsg("commandMsg", "正在提交任务...", true);
-  const result = await api("/api/tasks/submit", { method: "POST", body: form });
-  appendEvent("queued", `任务已创建：${result.id}`);
-  showMsg("commandMsg", `任务已提交：${result.id}`, true);
-  watchTask(result.id);
-  await loadTasks();
 }
 
 async function submitPersonaPublishTask() {
@@ -3609,7 +3519,7 @@ async function submitPersonaMediaTask() {
   }
   const fallbackPrompt = String(post.content || "").trim();
   const prompt = String(form.prompt || "").trim() || fallbackPrompt;
-  if (["text_to_image", "video_i2v"].includes(taskType) && !prompt) {
+  if (taskType === "text_to_image" && !prompt) {
     showMsg("commandMsg", "当前草稿没有正文，请补充提示词后再生成。", false);
     return;
   }
@@ -3624,9 +3534,7 @@ async function submitPersonaMediaTask() {
     related_persona_id: String(persona.id || "").trim(),
     related_post_id: String(post.id || "").trim(),
     draft_source_text: fallbackPrompt,
-    aspect_ratio: ["text_to_image", "image_generate"].includes(taskType) ? String(form.aspectRatio || "1:1") : undefined,
-    resolution: taskType === "video_i2v" ? String(form.resolution || "720p") : undefined,
-    duration_seconds: taskType === "video_i2v" ? Math.min(Math.max(Number(form.duration || 2), 2), 15) : undefined,
+    aspect_ratio: taskType === "text_to_image" ? String(form.aspectRatio || "1:1") : undefined,
   });
   const body = new FormData();
   body.append("task_type", taskType);
@@ -3735,12 +3643,14 @@ function personaIsWorkflow(persona, profile = null) {
 }
 
 function personaKindLabel(persona, profile = null) {
-  return personaIsWorkflow(persona, profile) ? "工作流" : "普通";
+  void persona;
+  void profile;
+  return "普通";
 }
 
 function renderPersonaSelectOptions(personas) {
   return (personas || []).map((persona) => {
-    const kind = personaIsWorkflow(persona) ? "工作流" : "普通";
+    const kind = "普通";
     return `<option value="${esc(persona.id)}" ${String(persona.id) === String(state.selectedPersonaId) ? "selected" : ""}>${esc(persona.name || persona.id)} · ${esc(kind)} · ${esc(personaBindingLabel(persona))}</option>`;
   }).join("");
 }
@@ -3771,9 +3681,8 @@ function personaGroupsForPersona(personaId) {
 }
 
 function renderPersonaKindBadge(persona) {
-  return personaIsWorkflow(persona)
-    ? `<span class="persona-kind-badge is-workflow">工作流</span>`
-    : `<span class="persona-kind-badge">普通</span>`;
+  void persona;
+  return `<span class="persona-kind-badge">普通</span>`;
 }
 
 function renderPersonaCard(persona, groupId = "") {
@@ -3891,6 +3800,8 @@ function renderPersonaGroupTabs(profile) {
       type="button"
       class="${state.personaGroup === key ? "is-active" : ""}"
       data-persona-group="${esc(key)}"
+      aria-controls="personaStepTabs"
+      title="${esc(`切换到${group.label}分组`)}"
     >${esc(group.label)}</button>
   `).join("")}</div>`;
 }
@@ -3901,10 +3812,9 @@ function renderPersonaStepTabs(groupKey, profile) {
     const tabs = [
       ["generate", "新建推文"],
       ["media", "推文配图 / 媒体"],
-      ["overview", "人设内容"],
       ["posts", "草稿库"],
     ];
-    return `<div class="persona-step-tabs">${tabs.map(([value, label]) => `
+    return `<div class="persona-step-tabs" id="personaStepTabs" aria-label="当前分组的二级页签">${tabs.map(([value, label]) => `
       <button
         type="button"
         class="${(value === "posts" ? ["posts", "history"].includes(step) : value === step) ? "is-active" : ""}"
@@ -3912,7 +3822,7 @@ function renderPersonaStepTabs(groupKey, profile) {
       >${esc(label)}</button>
     `).join("")}</div>`;
   }
-  return `<div class="persona-step-tabs">${personaGroupStepOptions(groupKey, profile).map(([value, label]) => `
+  return `<div class="persona-step-tabs" id="personaStepTabs" aria-label="当前分组的二级页签">${personaGroupStepOptions(groupKey, profile).map(([value, label]) => `
     <button
       type="button"
       class="${value === step ? "is-active" : ""}"
@@ -4105,8 +4015,8 @@ function renderPersonaCreateWorkbench() {
     <div class="persona-inline-panel persona-create-workbench is-flat">
       <div class="persona-workbench-head">
         <div class="persona-head-copy">
-          <strong>新建普通人设</strong>
-          <span>对齐 Bot：先定名称，再写提示词，最后确认关键词后创建。</span>
+          <strong>新建人设</strong>
+          <span>先填名称和提示词，再确认关键词后创建。</span>
         </div>
         <div class="persona-quick-actions">
           <button type="button" data-persona-cancel-create>返回人设详情</button>
@@ -4150,10 +4060,10 @@ function renderPersonaCreateWorkbench() {
           <input id="personaCreateName" value="${esc(createState.manualName || "")}" placeholder="例如：咖啡馆主理人" />
         </label>
         <label>人设简介
-          <textarea id="personaCreateContent" rows="8" placeholder="填写普通人设的背景、内容方向和说话方式。">${esc(createState.manualContent || "")}</textarea>
+          <textarea id="personaCreateContent" rows="8" placeholder="填写人设的背景、内容方向和说话方式。">${esc(createState.manualContent || "")}</textarea>
         </label>
         <div class="row-actions">
-          <button type="button" class="primary" data-persona-create>新建普通人设</button>
+          <button type="button" class="primary" data-persona-create>直接创建人设</button>
         </div>
       `}
     </div>
@@ -4165,7 +4075,6 @@ function personaGroupStepOptions(groupKey, profile) {
     return [
       ["generate", "新建推文"],
       ["media", "推文配图 / 媒体"],
-      ["overview", "人设内容"],
       ["posts", "草稿库"],
     ];
   }
@@ -4175,7 +4084,6 @@ function personaGroupStepOptions(groupKey, profile) {
       ["images", "人设图"],
       ["style", "推文风格"],
       ["links", "链接设置"],
-      ["delete", "删除当前人设"],
     ];
   }
   if (groupKey === "account") {
@@ -4259,6 +4167,10 @@ function renderPersonaDetail() {
   if (groupKey === "settings" && step === "images" && !personaImageLibraryState(persona.id)) {
     loadPersonaImageLibrary(persona.id).catch(() => {});
   }
+  if (groupKey === "settings" && step === "profile") {
+    if (!personaImageLibraryState(persona.id)) loadPersonaImageLibrary(persona.id).catch(() => {});
+    if (!Array.isArray(state.personaPublishHistories[String(persona.id)])) loadPersonaPublishHistory(persona.id).catch(() => {});
+  }
   if (groupKey === "content" && step === "publish") {
     ensurePersonaPublishResultLoaded(persona.id).catch(() => {});
   }
@@ -4286,14 +4198,16 @@ function renderPersonaDetail() {
           <span>${esc(`草稿 ${drafts.length} 条`)}</span>
         </div>
         <div class="persona-quick-actions">
-          ${canDelete ? `<button type="button" data-persona-delete>删除人设</button>` : ""}
+          ${canDelete ? `<button type="button" class="danger" data-persona-delete>删除当前人设</button>` : ""}
         </div>
       </div>
       ${renderPersonaGroupTabs(profile)}
-      ${renderPersonaStepTabs(groupKey, profile)}
     </div>
     ${showWarnings ? `<div class="persona-warning-inline">${warnings.map(esc).join(" / ")}</div>` : ""}
-    ${groupPanel}
+    <div class="persona-step-shell">
+      ${renderPersonaStepTabs(groupKey, profile)}
+      ${groupPanel}
+    </div>
   `;
   state.renderedPersonaId = String(persona.id || "");
 }
@@ -4393,10 +4307,10 @@ function renderPersonaContentPanel(persona, account, profile, step) {
       : String(mediaTaskOptions[0]?.[0] || "text_to_image");
     mediaForm.taskType = currentTaskType;
     const mediaMeta = taskMeta[currentTaskType] || taskMeta.text_to_image;
-    const showAspectRatio = ["text_to_image", "image_generate"].includes(currentTaskType);
-    const showVideoOptions = currentTaskType === "video_i2v";
-    const uploadAccept = currentTaskType === "video_i2v" ? "image/*,audio/*" : "image/*";
-    const showSourceUpload = Number(mediaMeta.minImages || 0) > 0 || currentTaskType === "video_i2v";
+    const showAspectRatio = currentTaskType === "text_to_image";
+    const showVideoOptions = false;
+    const uploadAccept = "image/*";
+    const showSourceUpload = Number(mediaMeta.minImages || 0) > 0;
     const mediaIntro = "这里只提供“根据推文生图”。";
     return `
       <div class="persona-inline-panel">
@@ -4630,10 +4544,12 @@ function renderSocialAccounts() {
   }
   const grid = $("accountGrid");
   if (!grid) return;
-  grid.innerHTML = state.socialAccounts.length ? state.socialAccounts.map((account) => `
+  const accounts = mergedAccountCards(state.socialAccounts);
+  grid.innerHTML = accounts.length ? accounts.map((account) => `
     <article class="account-card">
-      <div><strong>${esc(account.username || account.id)}</strong><span>${esc(account.platform || "-")}</span></div>
+      <div><strong>${esc(account.username || account.id)}</strong><span> · ${esc(account.platform || "-")}</span></div>
       <p>${esc(account.profile_dir || "未配置浏览器环境")}</p>
+      ${Number(account.binding_count || 0) > 1 ? `<p>已合并 ${Number(account.binding_count || 0)} 个人设绑定，当前操作使用状态最好的账号记录。</p>` : ""}
       <div class="row-actions">
         <button type="button" data-social-open-login="${esc(account.id)}">打开登录</button>
         <button type="button" data-social-check-login="${esc(account.id)}">检查登录</button>
@@ -5064,7 +4980,7 @@ function bindEvents() {
         state.selectedPersonaId = persona.id;
         state.simpleBranches.publishing = "publish_now";
       }
-      setModule("publishing");
+      setWorkspaceModule("publishing");
       return;
     }
     const routeStepButton = event.target.closest("[data-persona-route-step]");
@@ -5114,7 +5030,9 @@ function bindEvents() {
     }
     const personaGroupButton = event.target.closest("[data-persona-group]");
     if (personaGroupButton) {
-      state.personaGroup = personaGroupButton.dataset.personaGroup || "content";
+      const groupKey = personaGroupButton.dataset.personaGroup || "content";
+      state.personaGroup = groupKey;
+      setPersonaGroupStep(groupKey, state.personaPanels[groupKey] || personaGroups[groupKey]?.defaultStep || "", selectedPersonaProfile());
       renderPersonaDetail();
       renderConfirmSummary();
     }
@@ -5133,6 +5051,15 @@ function bindEvents() {
       const persona = selectedPersona();
       if (persona) {
         personaFormState(persona.id).generate.mode = generateModeButton.dataset.personaGenerateMode || "ai";
+        renderPersonaDetail();
+        renderConfirmSummary();
+      }
+    }
+    const profileModeButton = event.target.closest("[data-persona-profile-mode]");
+    if (profileModeButton) {
+      const persona = selectedPersona();
+      if (persona) {
+        state.personaProfileModes[String(persona.id)] = profileModeButton.dataset.personaProfileMode === "edit" ? "edit" : "overview";
         renderPersonaDetail();
         renderConfirmSummary();
       }

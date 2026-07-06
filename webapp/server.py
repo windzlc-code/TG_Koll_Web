@@ -38,7 +38,6 @@ import get_gemini
 import asset_uploader
 import runninghub_common
 from .auth import SESSION_COOKIE, create_session, delete_session, get_current_user, hash_password, require_admin, verify_password
-from .billing import compute_cost_cents
 from .db import db, get_admin_config, init_db, set_admin_config
 from .social_automation_api import (
     SocialTaskPayload,
@@ -1539,12 +1538,12 @@ def _fetch_openai_compatible_model_ids(*, base_url: str, api_key: str) -> list[s
 def _resolve_gemini_models_url(base_url: str) -> str:
     cleaned = str(base_url or "").strip().strip("`'\"")
     if not cleaned:
-        raise ValueError("缺少 Gemini 圖片模型 API Base URL")
+        raise ValueError("缺少 Gemini 图片模型 API Base URL")
     if "://" not in cleaned:
         cleaned = "https://" + cleaned.lstrip("/")
     parsed = urlsplit(cleaned)
     if not parsed.scheme or not parsed.netloc:
-        raise ValueError("Gemini 圖片模型 API Base URL 無效")
+        raise ValueError("Gemini 图片模型 API Base URL 无效")
     path = (parsed.path or "").rstrip("/")
     if path.endswith("/models"):
         final_path = path
@@ -1560,7 +1559,7 @@ def _resolve_gemini_models_url(base_url: str) -> str:
 def _gemini_image_model_headers(models_url: str, api_key: str) -> dict[str, str]:
     key = str(api_key or "").strip()
     if not key:
-        raise ValueError("缺少 Gemini 圖片模型 API Key")
+        raise ValueError("缺少 Gemini 图片模型 API Key")
     headers = {"Accept": "application/json"}
     host = urlsplit(models_url).netloc.lower()
     if "generativelanguage.googleapis.com" in host:
@@ -1590,13 +1589,13 @@ def _fetch_gemini_image_model_ids(*, base_url: str, api_key: str) -> list[str]:
             timeout=30,
         )
     except requests.RequestException as exc:
-        raise RuntimeError(f"查詢 Gemini 圖片模型失敗: {exc}") from exc
+        raise RuntimeError(f"查询 Gemini 图片模型失败: {exc}") from exc
     if resp.status_code >= 400:
-        raise RuntimeError(f"查詢 Gemini 圖片模型失敗: HTTP {resp.status_code}; {resp.text[:300]}")
+        raise RuntimeError(f"查询 Gemini 图片模型失败: HTTP {resp.status_code}; {resp.text[:300]}")
     try:
         payload = resp.json()
     except Exception as exc:
-        raise RuntimeError("查詢 Gemini 圖片模型失敗: 回應不是有效 JSON") from exc
+        raise RuntimeError("查询 Gemini 图片模型失败: 响应不是有效 JSON") from exc
     rows: list[Any] = []
     if isinstance(payload, dict):
         for key in ("models", "data", "items"):
@@ -2519,16 +2518,16 @@ def _notify_tg_task_finished(
         returned_line = ""
         if is_text_to_image and len(download_paths) > 0:
             returned_line = (
-                f"回傳通過 QA 圖片: {len(download_paths)}/{target_count} 張"
+                f"返回通过 QA 图片: {len(download_paths)}/{target_count} 张"
                 if target_count > 1
-                else f"回傳圖片: {len(download_paths)} 張"
+                else f"返回图片: {len(download_paths)} 张"
             )
         caption = "\n".join(
             part
             for part in [
-                "後臺生成任務已完成。",
+                "后台生成任务已完成。",
                 f"工作流: {task_type}",
-                f"任務編號: {task_id}",
+                f"任务编号: {task_id}",
                 returned_line,
                 _text_to_image_qa_notice(output_dict),
             ]
@@ -2628,8 +2627,8 @@ def _format_user_visible_task_error(error: str) -> str:
         required_match = re.search(r"Required:\s*\d+\s*amount\s*\(([\d.]+)\s*credits?\)", text, flags=re.IGNORECASE)
         available_match = re.search(r"Available:\s*\d+\s*amount\s*\(([\d.]+)\s*credits?\)", text, flags=re.IGNORECASE)
         if required_match and available_match:
-            return f"余额不足：本次需要 {required_match.group(1)} credits，当前只有 {available_match.group(1)} credits，请充值或降低视频参数后重试。"
-        return "余额不足：上游生成服务拒绝了请求，请充值或降低任务参数后重试。"
+            return f"上游生成服务额度不足：本次需要 {required_match.group(1)} credits，当前仅返回 {available_match.group(1)} credits。请降低任务参数后重试。"
+        return "上游生成服务额度不足：请求被拒绝，请降低任务参数后重试。"
     if "cuda error" in lower and ("out of memory" in lower or "cudaerrormemoryallocation" in lower):
         return "图像生成服务显存不足：请释放资源、降低分辨率/批量数，或稍后重试。"
     if "prompt_outputs_failed_validation" in text or "Prompt outputs failed validation" in text:
@@ -3722,8 +3721,8 @@ def _tool_r18_stop_responder_loop() -> None:
                         continue
                     setup_url = _quick_setup_public_url()
                     reply_text = (
-                        "Bot 目前已在簡易配置頁停止，完整功能不會被調用。\n\n"
-                        "請點擊下方連結完成 Bot Token / Grok Key 設定，然後點擊「啟動 Bot 進程」。\n"
+                        "Bot 目前已在简易配置页停止，完整功能不会被调用。\n\n"
+                        "请点击下方链接完成 Bot Token / Grok Key 设置，然后点击“启动 Bot 进程”。\n"
                         f"{setup_url}"
                     )
                     requests.post(
@@ -3731,7 +3730,7 @@ def _tool_r18_stop_responder_loop() -> None:
                         json={
                             "chat_id": chat_id,
                             "text": reply_text,
-                            "reply_markup": {"inline_keyboard": [[{"text": "打開簡易配置", "url": setup_url}]]},
+                            "reply_markup": {"inline_keyboard": [[{"text": "打开简易配置", "url": setup_url}]]},
                         },
                         timeout=10,
                     )
@@ -5337,32 +5336,32 @@ def _build_tg_non_r18_free_image_fallback_prompt(original_request: str, payload:
     elif re.search(r"T恤|tee|短袖", context, re.IGNORECASE):
         clothing = "日常短袖 T 恤，版型自然"
     elif re.search(r"牛仔|褲|裤", context):
-        clothing = "日常上衣搭配褲裝，腰線和布料褶皺清楚"
+        clothing = "日常上衣搭配裤装，腰线和布料褶皱清楚"
 
-    action = "自然站立或半身自拍，表情輕鬆"
+    action = "自然站立或半身自拍，表情轻松"
     if re.search(r"自拍|拍照|鏡頭|镜头", context):
-        action = "一手拿手機自拍，身體自然側向鏡頭"
+        action = "一手拿手机自拍，身体自然侧向镜头"
     if re.search(r"等車|等车|捷運|地鐵|地铁|月台", context):
-        action = "等待交通時低頭看手機或側身自拍"
+        action = "等待交通时低头看手机或侧身自拍"
     if re.search(r"買完|买完|外帶|外带|滷肉飯|卤肉饭|便當|便当", context):
-        action = "手拿外帶餐盒或袋子，像剛買完食物的生活抓拍"
+        action = "手拿外带餐盒或袋子，像刚买完食物的生活抓拍"
     if re.search(r"風|风|吹|裙擺|裙摆", context):
-        action = "自然風帶動頭髮與衣物邊緣，手部順勢整理裙擺或衣角"
+        action = "自然风带动头发与衣物边缘，手部顺势整理裙摆或衣角"
 
     ratio = str(payload.get("aspect_ratio") or payload.get("image_aspect_ratio") or "").strip()
     resolution = str(payload.get("base_resolution") or payload.get("resolution") or "").strip()
     parts = [
-        "女性日常手機隨手拍照片，免費群公開內容配圖，單幀靜態畫面",
-        f"推文視覺語境：{context}",
+        "女性日常手机随手拍照片，免费公开内容配图，单帧静态画面",
+        f"推文视觉语境：{context}",
         f"背景是{scene}",
-        f"穿著{clothing}",
-        f"動作是{action}",
-        "畫面必須和推文內容一致，優先保留使用者指定的服裝、顏色、場景、道具、動作和情緒",
-        "保持公開安全尺度，服裝完整自然，不要成人擦邊風格，不要文字，不要水印",
-        "寫清背景物件、自然光方向、淺景深、皮膚與布料質感，人物臉部清楚可見",
+        f"穿着{clothing}",
+        f"动作是{action}",
+        "画面必须和推文内容一致，优先保留用户指定的服装、颜色、场景、道具、动作和情绪",
+        "保持公开安全尺度，服装完整自然，不要成人擦边风格，不要文字，不要水印",
+        "写清背景物件、自然光方向、浅景深、皮肤与布料质感，人物脸部清楚可见",
     ]
     if ratio:
-        parts.append(f"畫面比例 {ratio}")
+        parts.append(f"画面比例 {ratio}")
     if resolution:
         parts.append(f"基礎分辨率 {resolution}")
     return _force_tg_image_chinese_prompt("，".join(part for part in parts if part))
@@ -5420,18 +5419,18 @@ def _build_tg_image_fallback_prompt(original_request: str, payload: dict[str, An
 def _build_tg_image_edit_fallback_prompt(original_request: str, task_type: str) -> str:
     request_text = _clean_tg_prompt_request(original_request)
     if not request_text:
-        request_text = "自然處理圖片，保持原圖構圖、光線、服裝、背景和主體關係"
+        request_text = "自然处理图片，保持原图构图、光线、服装、背景和主体关系"
     request_text = re.sub(r"^\s*把\s*", "", request_text).strip()
     if str(task_type or "").strip() == "face_swap":
         return (
-            f"{request_text}，保持目標圖姿態、服裝、背景、光線和鏡頭角度，只替換臉部身份，"
-            "五官融合自然，膚色和陰影一致，邊緣乾淨，無變形，無水印"
+            f"{request_text}，保持目标图姿态、服装、背景、光线和镜头角度，只替换脸部身份，"
+            "五官融合自然，肤色和阴影一致，边缘干净，无变形，无水印"
         )
     if str(task_type or "").strip() == "get_nano_banana":
         return _format_tg_image_edit_prompt(request_text, request_text)
     return (
-        f"{request_text}，保留原圖主體、構圖、背景、光線和材質關係，編輯區域過渡自然，"
-        "細節清晰，邊緣乾淨，無變形，無水印"
+        f"{request_text}，保留原图主体、构图、背景、光线和材质关系，编辑区域过渡自然，"
+        "细节清晰，边缘干净，无变形，无水印"
     )
 
 
@@ -9327,63 +9326,10 @@ def _task_worker(task_id: str, user_id: int, task_type: str, payload: dict[str, 
                 },
             )
             return
-        pricing = _get_pricing_config(conn)
-        charge_info: dict[str, Any] = {}
-        skip_billing = bool(task_output.get("skip_billing"))
-        if skip_billing:
-            billing = task_output.get("billing") if isinstance(task_output.get("billing"), dict) else {}
-            cost_cents = max(_to_int(billing.get("cost_cents"), 0), 0)
-            cost = billing.get("cost") if isinstance(billing.get("cost"), dict) else {"total_cents": cost_cents}
-        else:
-            cost = compute_cost_cents(
-                runninghub_usage=usage_json.get("runninghub") if isinstance(usage_json.get("runninghub"), dict) else {},
-                rh_coins_per_10rmb=int(pricing.get("rh_coins_per_10rmb") or 2500),
-                usd_to_rmb=float(pricing.get("usd_to_rmb") or 7.2),
-                gemini_input_tokens=int(usage_json.get("gemini_input_tokens") or 0),
-                gemini_output_tokens=int(usage_json.get("gemini_output_tokens") or 0),
-                gemini_input_usd_per_1m=float(pricing.get("gemini_input_usd_per_1m") or 4.0),
-                gemini_output_usd_per_1m=float(pricing.get("gemini_output_usd_per_1m") or 18.0),
-                nano_images=int(usage_json.get("nano_images") or 0),
-                nano_usd_per_image=float(pricing.get("nano_usd_per_image") or 0.134),
-            )
-            cost_cents = max(_to_int(cost.get("total_cents"), 0), 0)
-
-        if status != "success":
-            cost_cents = 0
-        elif (not skip_billing) and cost_cents > 0:
-            row = conn.execute("SELECT balance_cents FROM users WHERE id = ?", (int(user_id),)).fetchone()
-            balance = int(row["balance_cents"]) if row else 0
-            allow_negative = bool(pricing.get("allow_negative_balance"))
-            if (not allow_negative) and (balance < cost_cents):
-                status = "failed"
-                extra = f"余额不足（当前 {balance} 分，所需 {cost_cents} 分）"
-                task_error = f"{task_error}; {extra}" if task_error else extra
-                cost_cents = 0
-            else:
-                conn.execute(
-                    "UPDATE users SET balance_cents = balance_cents - ?, updated_at = ? WHERE id = ?",
-                    (int(cost_cents), _now_ts(), int(user_id)),
-                )
-                charge_info = {
-                    "cost": cost,
-                    "task_type": task_type,
-                }
-                _insert_ledger(
-                    conn,
-                    user_id=int(user_id),
-                    typ="charge",
-                    amount_cents=-int(cost_cents),
-                    ref_task_id=task_id,
-                    meta=charge_info,
-                )
+        cost_cents = 0
 
         output_to_store = dict(task_output)
-        if cost_cents:
-            existing = output_to_store.get("billing") if isinstance(output_to_store.get("billing"), dict) else {}
-            merged = dict(existing)
-            merged["cost_cents"] = cost_cents
-            merged["pricing"] = pricing
-            output_to_store["billing"] = merged
+        output_to_store.pop("billing", None)
         conn.execute(
             """
             UPDATE tasks
@@ -10344,6 +10290,26 @@ def _extract_persona_archive_list(raw: Any) -> list[dict[str, Any]]:
     return []
 
 
+def _is_workflow_persona_archive(archive: Any) -> bool:
+    if not isinstance(archive, dict):
+        return False
+    archive_id = str(archive.get("id") or "").strip().lower()
+    if archive_id.startswith("workflow-persona-"):
+        return True
+    top_level_workflow = archive.get("imageWorkflow")
+    if isinstance(top_level_workflow, dict) and top_level_workflow:
+        return True
+    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+    setup_workflow = setup.get("imageWorkflow")
+    if isinstance(setup_workflow, dict) and setup_workflow:
+        return True
+    return False
+
+
+def _filter_active_persona_archives(archives: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [archive for archive in archives if isinstance(archive, dict) and not _is_workflow_persona_archive(archive)]
+
+
 PERSONA_DASHBOARD_REFRESH_TASKS: dict[str, dict[str, Any]] = {}
 PERSONA_DASHBOARD_REFRESH_LOCK = threading.Lock()
 PERSONA_DASHBOARD_ARCHIVE_LOCK_TIMEOUT_SECONDS = 30
@@ -10555,12 +10521,12 @@ def _persona_archive_source_for_write(archive_id: str = "") -> tuple[Path, Any, 
     if clean_id:
         for path in (primary, fallback):
             raw = _read_json_file(path)
-            archives = _extract_persona_archive_list(raw)
+            archives = _filter_active_persona_archives(_extract_persona_archive_list(raw))
             if archives and _find_persona_archive(archives, clean_id):
                 return path, raw, archives
     for path in (primary, fallback):
         raw = _read_json_file(path)
-        archives = _extract_persona_archive_list(raw)
+        archives = _filter_active_persona_archives(_extract_persona_archive_list(raw))
         if archives:
             return path, raw, archives
     return primary, [], []
@@ -10679,6 +10645,65 @@ def _read_persona_groups_config() -> dict[str, Any]:
 def _write_persona_groups_config(config: dict[str, Any]) -> None:
     groups = config.get("groups") if isinstance(config.get("groups"), list) else []
     _write_json_file(_persona_group_file(), {"groups": groups})
+
+
+def _remove_persona_group_ids(persona_ids: set[str]) -> bool:
+    if not persona_ids:
+        return False
+    config = _read_persona_groups_config()
+    groups = config.get("groups") if isinstance(config.get("groups"), list) else []
+    changed = False
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        current_ids = group.get("persona_ids") if isinstance(group.get("persona_ids"), list) else []
+        next_ids = [pid for pid in current_ids if str(pid or "").strip() not in persona_ids]
+        if len(next_ids) != len(current_ids):
+            group["persona_ids"] = next_ids
+            group["updated_at"] = _persona_dashboard_iso_now()
+            changed = True
+    if changed:
+        _write_persona_groups_config({"groups": groups})
+    return changed
+
+
+def _remove_persona_memory_entries(persona_ids: set[str]) -> bool:
+    if not persona_ids:
+        return False
+    path = _persona_memory_file()
+    raw = _read_json_file(path)
+    if not isinstance(raw, dict):
+        return False
+    next_raw = {key: value for key, value in raw.items() if str(key or "").strip() not in persona_ids}
+    if len(next_raw) == len(raw):
+        return False
+    _write_json_file(path, next_raw)
+    return True
+
+
+def _remove_persona_deleted_post_entries(persona_ids: set[str]) -> bool:
+    if not persona_ids:
+        return False
+    path = TOOL_R18_RUNTIME_DIR / "persona_dashboard_deleted_posts.json"
+    raw = _read_json_file(path)
+    if not isinstance(raw, dict):
+        return False
+    next_raw = {key: value for key, value in raw.items() if str(key or "").strip() not in persona_ids}
+    if len(next_raw) == len(raw):
+        return False
+    _write_json_file(path, next_raw)
+    return True
+
+
+def _clear_persona_runtime_cache_files() -> list[str]:
+    removed: list[str] = []
+    for name in ("persona-list-summary-cache.json", "persona-trend-intel-cache.json"):
+        path = TOOL_R18_RUNTIME_DIR / name
+        if path.exists():
+            with contextlib.suppress(Exception):
+                path.unlink()
+                removed.append(name)
+    return removed
 
 
 def _read_persona_groups(valid_persona_ids: set[str] | None = None) -> dict[str, Any]:
@@ -11567,6 +11592,43 @@ def _write_persona_archives_preserving_shape(path: Path, raw: Any, archives: lis
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _purge_workflow_persona_runtime_data() -> dict[str, Any]:
+    primary = TOOL_R18_RUNTIME_DIR / "persona_archives.json"
+    fallback = TOOL_R18_RUNTIME_DIR / "persona_archives_cache.json"
+    removed_ids: set[str] = set()
+    updated_files: list[str] = []
+    for path in (primary, fallback):
+        raw = _read_json_file(path)
+        archives = _extract_persona_archive_list(raw)
+        if not archives:
+            continue
+        next_archives: list[dict[str, Any]] = []
+        for archive in archives:
+            if _is_workflow_persona_archive(archive):
+                archive_id = str((archive or {}).get("id") or "").strip()
+                if archive_id:
+                    removed_ids.add(archive_id)
+                continue
+            next_archives.append(archive)
+        if len(next_archives) != len(archives):
+            _write_persona_archives_preserving_shape(path, raw, next_archives)
+            updated_files.append(path.name)
+    groups_changed = _remove_persona_group_ids(removed_ids)
+    memory_changed = _remove_persona_memory_entries(removed_ids)
+    deleted_posts_changed = _remove_persona_deleted_post_entries(removed_ids)
+    cleared_cache_files = _clear_persona_runtime_cache_files()
+    return {
+        "ok": True,
+        "removed_ids": sorted(removed_ids),
+        "removed_count": len(removed_ids),
+        "updated_files": updated_files,
+        "groups_changed": groups_changed,
+        "memory_changed": memory_changed,
+        "deleted_posts_changed": deleted_posts_changed,
+        "cleared_cache_files": cleared_cache_files,
+    }
+
+
 def _bind_persona_threads_username(archive_id: str, username: str) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     clean_username = _normalize_threads_username(username)
@@ -12134,9 +12196,9 @@ def _read_tool_r18_persona_archives() -> tuple[list[dict[str, Any]], dict[str, A
     fallback = TOOL_R18_RUNTIME_DIR / "persona_archives_cache.json"
     primary_raw = _read_json_file(primary)
     fallback_raw = _read_json_file(fallback)
-    primary_archives = _extract_persona_archive_list(primary_raw)
-    fallback_archives = _extract_persona_archive_list(fallback_raw)
-    merged_archives = _merge_persona_archive_sources(primary_archives, fallback_archives)
+    primary_archives = _filter_active_persona_archives(_extract_persona_archive_list(primary_raw))
+    fallback_archives = _filter_active_persona_archives(_extract_persona_archive_list(fallback_raw))
+    merged_archives = _filter_active_persona_archives(_merge_persona_archive_sources(primary_archives, fallback_archives))
     if merged_archives:
         return merged_archives, {
             "path": primary.name if primary_archives else fallback.name,
@@ -13496,7 +13558,7 @@ def create_app() -> FastAPI:
             base_url = base_url or str(runtime.get("llm_base_url") or "").strip()
             api_key = api_key or str(runtime.get("llm_api_key_gpt") or runtime.get("llm_api_key") or "").strip()
         if not base_url or not api_key:
-            raise HTTPException(status_code=400, detail="請先配置 API Base URL 和 Grok Key")
+            raise HTTPException(status_code=400, detail="请先配置 API Base URL 和 Grok Key")
         try:
             models = _fetch_provider_model_ids(model_type="text", base_url=base_url, api_key=api_key, provider="openai-compatible")
         except ValueError as exc:
@@ -13520,7 +13582,7 @@ def create_app() -> FastAPI:
             base_url = base_url or str(runtime.get("image_model_provider_base_url") or "").strip()
             api_key = api_key or str(runtime.get("image_model_provider_api_key_gemini") or "").strip()
         if not base_url or not api_key:
-            raise HTTPException(status_code=400, detail="請先配置 Gemini 圖片 API Base URL 和 API Key")
+            raise HTTPException(status_code=400, detail="请先配置 Gemini 图片 API Base URL 和 API Key")
         try:
             models = _fetch_provider_model_ids(model_type="image", base_url=base_url, api_key=api_key, provider=str(payload.provider or "openai-compatible").strip())
         except ValueError as exc:
@@ -13546,7 +13608,7 @@ def create_app() -> FastAPI:
             api_key = api_key or str(runtime.get("mulerouter_api_key") or "").strip()
             endpoint = endpoint or str(runtime.get("mulerouter_wan_i2v_endpoint") or "").strip()
         if not base_url:
-            raise HTTPException(status_code=400, detail="請先配置視頻模型 API Base URL")
+            raise HTTPException(status_code=400, detail="请先配置视频模型 API Base URL")
         try:
             models = _fetch_provider_model_ids(model_type="video", base_url=base_url, api_key=api_key, provider="openai-compatible", endpoint=endpoint)
         except ValueError as exc:
@@ -14235,11 +14297,11 @@ def create_app() -> FastAPI:
                         "updated_at": int(latest.get("updated_at") or 0),
                     },
                     "message": (
-                        "目前沒有可強制停止的後臺生成任務。"
-                        f"最近後臺任務 {latest.get('id')} 目前狀態為{status_label}，無法再強制停止。"
+                        "目前没有可强制停止的后台生成任务。"
+                        f"最近后台任务 {latest.get('id')} 目前状态为{status_label}，无法再强制停止。"
                     ),
                 }
-            return {"ok": True, "cancelled": False, "state": "none", "message": "目前沒有可強制停止的後臺生成任務。"}
+            return {"ok": True, "cancelled": False, "state": "none", "message": "目前没有可强制停止的后台生成任务。"}
         return _cancel_task_record_for_user(
             task_id=str(target.get("id") or ""),
             user_id=int(target.get("user_id") or 0),
@@ -14754,6 +14816,8 @@ def create_app() -> FastAPI:
         typ = str(task_type or "").strip()
         if not typ:
             raise HTTPException(status_code=400, detail="task_type 不能为空")
+        if typ != "text_to_image":
+            raise HTTPException(status_code=400, detail="Web 端当前只保留文生图任务")
         params = _extract_json_from_text(params_json)
         params = params if isinstance(params, dict) else {}
 
@@ -14776,58 +14840,6 @@ def create_app() -> FastAPI:
                 payload["prompt"] = str(payload.get("prompt") or payload.get("prompt_text") or payload.get("message") or "").strip()
                 if not payload["prompt"]:
                     raise HTTPException(status_code=400, detail="文生图需要填写 prompt")
-            elif typ == "image_generate":
-                mode = str(payload.get("mode") or "").strip() or ("dual_reference" if len(images) >= 2 else "single_reference")
-                payload["mode"] = mode
-                if mode == "dual_reference":
-                    if len(images) < 2:
-                        raise HTTPException(status_code=400, detail=f"双图图片生成需要上传 2 张图片（已识别：{_format_uploaded_files(saved)}）")
-                    payload["secondary_image_local_path"] = str(images[0]["path"])
-                    payload["primary_image_local_path"] = str(images[1]["path"])
-                else:
-                    if not images:
-                        raise HTTPException(status_code=400, detail=f"图片生成需要至少上传 1 张参考图（已识别：{_format_uploaded_files(saved)}）")
-                    payload["mode"] = "single_reference"
-                    payload["primary_image_local_path"] = str(images[0]["path"])
-            elif typ == "single_image_edit":
-                if not images:
-                    raise HTTPException(status_code=400, detail=f"单图编辑需要上传 1 张图片（已识别：{_format_uploaded_files(saved)}）")
-                payload["input_image_local_path"] = str(images[0]["path"])
-            elif typ == "get_nano_banana":
-                if len(images) < 2:
-                    raise HTTPException(status_code=400, detail=f"圖片編輯需要上傳 2 張圖片（先原圖，後參考圖）（已識別：{_format_uploaded_files(saved)}）")
-                payload["input_image_local_path"] = str(images[0]["path"])
-                payload["reference_image_local_path"] = str(images[1]["path"])
-            elif typ == "face_swap":
-                if len(images) < 2:
-                    raise HTTPException(status_code=400, detail=f"人物換臉需要上傳 2 張圖片（先原圖，後人臉參考圖）（已識別：{_format_uploaded_files(saved)}）")
-                payload["target_image_local_path"] = str(images[0]["path"])
-                payload["source_image_local_path"] = str(images[1]["path"])
-            elif typ == "get_gemini":
-                if images:
-                    payload["image_paths"] = [str(s["path"]) for s in images]
-                if videos:
-                    payload["video_paths"] = [str(s["path"]) for s in videos]
-            elif typ == "video_i2v":
-                if not images:
-                    raise HTTPException(status_code=400, detail=f"图生视频需要上传 1 张参考图（已识别：{_format_uploaded_files(saved)}）")
-                payload["image_local_path"] = str(images[0]["path"])
-                if audios:
-                    payload["audio_local_path"] = str(audios[0]["path"])
-                payload["prompt"] = str(payload.get("prompt") or payload.get("prompt_text") or payload.get("message") or "").strip()
-                if not payload["prompt"]:
-                    raise HTTPException(status_code=400, detail="图生视频需要填写 prompt")
-                payload["duration_seconds"] = min(max(_to_int(payload.get("duration_seconds") or payload.get("mulerouter_wan_i2v_duration"), 2), 2), 15)
-                payload["mulerouter_wan_i2v_duration"] = payload["duration_seconds"]
-                resolution = str(payload.get("resolution") or payload.get("mulerouter_wan_i2v_resolution") or "720p").strip()
-                payload["mulerouter_wan_i2v_resolution"] = resolution if resolution in {"720p", "1080p"} else "720p"
-                payload["mulerouter_wan_i2v_prompt_extend"] = False
-                payload["prompt_extend"] = False
-                payload["mulerouter_wan_i2v_safety_filter"] = _to_bool(payload.get("mulerouter_wan_i2v_safety_filter", payload.get("safety_filter")), True)
-                payload["mulerouter_wan_i2v_negative_prompt"] = str(payload.get("mulerouter_wan_i2v_negative_prompt") or payload.get("negative_prompt") or "").strip()
-                seed_raw = payload.get("mulerouter_wan_i2v_seed", payload.get("seed"))
-                if str(seed_raw or "").strip().isdigit():
-                    payload["mulerouter_wan_i2v_seed"] = min(max(_to_int(seed_raw, 0), 0), 2147483647)
             else:
                 raise HTTPException(status_code=400, detail=f"不支持的 task_type: {typ}")
         except HTTPException:
@@ -14970,7 +14982,7 @@ def create_app() -> FastAPI:
             return JSONResponse(
                 {
                     "ok": False,
-                    "error": "Threads Cookie 已讀取，但缺少 threads.net/threads.com 的有效 sessionid；請先在後台瀏覽器打開 Threads 並完成登入，再重新同步授權。",
+                    "error": "Threads Cookie 已读取，但缺少 threads.net/threads.com 的有效 sessionid；请先在后台浏览器打开 Threads 并完成登录，再重新同步授权。",
                     "requiresCookie": "sessionid",
                 },
                 status_code=400,
@@ -15059,7 +15071,7 @@ def create_app() -> FastAPI:
         if not cookies:
             raise HTTPException(status_code=400, detail="没有解析到有效 Cookie。请粘贴 JSON Cookie 数组，或 name=value; name2=value2 格式。")
         if _sentiment_profile_requires_sessionid(profile, profile_key) and not _sentiment_cookies_have_threads_sessionid(cookies):
-            raise HTTPException(status_code=400, detail="Threads Cookie 已讀取，但缺少 threads.net/threads.com 的有效 sessionid；請先在後台瀏覽器打開 Threads 並完成登入，再重新同步授權。")
+            raise HTTPException(status_code=400, detail="Threads Cookie 已读取，但缺少 threads.net/threads.com 的有效 sessionid；请先在后台浏览器打开 Threads 并完成登录，再重新同步授权。")
         profile["cookies"] = cookies
         profile["lastAuthorizedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         note = str(payload.note or "").strip()
@@ -15112,7 +15124,7 @@ def create_app() -> FastAPI:
             base_url = base_url or str(runtime.get("image_model_provider_base_url") or "").strip()
             api_key = api_key or str(runtime.get("image_model_provider_api_key_gemini") or "").strip()
         if not base_url or not api_key:
-            raise HTTPException(status_code=400, detail="請先配置 Gemini 圖片 API Base URL 和 API Key")
+            raise HTTPException(status_code=400, detail="请先配置 Gemini 图片 API Base URL 和 API Key")
         try:
             models = _fetch_gemini_image_model_ids(base_url=base_url, api_key=api_key)
         except ValueError as exc:
@@ -15143,7 +15155,7 @@ def create_app() -> FastAPI:
                 base_url = base_url or str(runtime.get("llm_base_url") or "").strip()
                 api_key = api_key or str(runtime.get("llm_api_key_gpt") or runtime.get("llm_api_key") or "").strip()
         if typ != "video" and (not base_url or not api_key):
-            raise HTTPException(status_code=400, detail="請先配置 API Base URL 和 API Key")
+            raise HTTPException(status_code=400, detail="请先配置 API Base URL 和 API Key")
         try:
             models = _fetch_provider_model_ids(
                 model_type=typ,

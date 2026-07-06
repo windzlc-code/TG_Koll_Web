@@ -323,14 +323,13 @@
             <div class="admin-runtime-panel-head">
               <div>
                 <div class="admin-config-card-title">闭源模型配置</div>
-                <div class="small">把文字、图片和视频模型集中管理，避免不同供应商配置混在一起。</div>
+                <div class="small">把文字和图片模型集中管理，避免不同供应商配置混在一起。</div>
               </div>
             </div>
             <div class="admin-model-tabs" role="tablist" aria-label="模型类型">
               <button class="admin-model-tab is-active" type="button" data-model-tab="text">文字模型</button>
               <button class="admin-model-tab" type="button" data-model-tab="image">图片模型</button>
               <button class="admin-model-tab" type="button" data-model-tab="runninghub">RunningHub 链路</button>
-              <button class="admin-model-tab" type="button" data-model-tab="video">视频模型</button>
             </div>
             <div class="admin-model-tab-panels">
                 <div class="admin-runtime-block admin-model-tab-panel is-active" data-model-panel="text">
@@ -438,27 +437,6 @@
                   <input id="rtNewPersonaPersonaT2iEndpoint" type="hidden">
                   <input id="rtNewPersonaTweetI2iDetailUrl" type="hidden">
                   <input id="rtNewPersonaTweetI2iEndpoint" type="hidden">
-                </div>
-                <div class="admin-runtime-block admin-model-tab-panel" data-model-panel="video">
-                  <div class="admin-config-card-title">视频模型</div>
-                  <div class="small">用于图生视频和视频生成；请求记录会进入任务详情日志。</div>
-                  <label>候选模型</label>
-                  <div class="admin-model-list-input-row admin-model-list-input-row-picker">
-                    <input id="rtMuleRouterWanI2vModelName" type="text" value="wan2.7-i2v-spicy" placeholder="输入视频模型名称">
-                    <button id="btnBrowseVideoModels" type="button" class="ghost admin-model-picker-btn">识别模型</button>
-                    <button id="btnApplyVideoModel" type="button" class="ghost admin-model-add-btn">✓</button>
-                  </div>
-                  <div id="rtVideoModelPicker" class="admin-model-picker" hidden></div>
-                  <label>API Name</label>
-                  <input id="rtMuleRouterApiName" type="text" placeholder="api-key0526">
-                  <label>API Key</label>
-                  <input id="rtMuleRouterApiKey" type="password" placeholder="视频模型 API Key">
-                  <label>API Base URL</label>
-                  <input id="rtMuleRouterBaseUrl" type="text" placeholder="https://api.mulerouter.ai">
-                  <label>图生视频 Endpoint</label>
-                  <input id="rtMuleRouterWanI2vEndpoint" type="text" placeholder="/vendors/carrothub/v1/wan2.7-i2v-spicy/generation">
-                  <label>默认负面提示词</label>
-                  <textarea id="rtMuleRouterWanI2vNegativePrompt" rows="3" placeholder="low quality, blurry, distorted, watermark, text, logo"></textarea>
                 </div>
             </div>
           </div>

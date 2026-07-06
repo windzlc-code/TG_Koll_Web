@@ -409,15 +409,45 @@ def create_social_account(payload: SocialAccountPayload) -> dict[str, Any]:
     status = str(payload.status or "pending_login").strip()
     if status not in SOCIAL_ACCOUNT_STATUSES:
         status = "pending_login"
-    account_id = _NEW_ID("social_account")
-    profile_dir = str(payload.profile_dir or "").strip()
-    if not profile_dir:
-        profile_dir = str((_DATA_DIR / "social_automation" / "profiles" / platform / account_id).resolve())
-    Path(profile_dir).mkdir(parents=True, exist_ok=True)
     now = _now()
     with db() as conn:
         if payload.proxy_id:
             _require_proxy(conn, payload.proxy_id)
+        existing = conn.execute(
+            """
+            SELECT *
+            FROM social_accounts
+            WHERE persona_id = ?
+              AND platform = ?
+              AND lower(username) = lower(?)
+            ORDER BY updated_at DESC, created_at DESC
+            LIMIT 1
+            """,
+            (persona_id, platform, username),
+        ).fetchone()
+        if existing:
+            updates: dict[str, Any] = {"updated_at": now}
+            display_name = str(payload.display_name or "").strip()
+            profile_dir = str(payload.profile_dir or "").strip()
+            proxy_id = str(payload.proxy_id or "").strip()
+            if display_name:
+                updates["display_name"] = display_name
+            if profile_dir:
+                Path(profile_dir).mkdir(parents=True, exist_ok=True)
+                updates["profile_dir"] = profile_dir
+            if proxy_id:
+                updates["proxy_id"] = proxy_id
+            if status and status != "pending_login":
+                updates["status"] = status
+            assignments = ", ".join(f"{key} = ?" for key in updates)
+            conn.execute(f"UPDATE social_accounts SET {assignments} WHERE id = ?", (*updates.values(), existing["id"]))
+            row = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (existing["id"],)).fetchone()
+            return _account_public(row)
+        account_id = _NEW_ID("social_account")
+        profile_dir = str(payload.profile_dir or "").strip()
+        if not profile_dir:
+            profile_dir = str((_DATA_DIR / "social_automation" / "profiles" / platform / account_id).resolve())
+        Path(profile_dir).mkdir(parents=True, exist_ok=True)
         conn.execute(
             """
             INSERT INTO social_accounts(id, persona_id, platform, username, display_name, profile_dir, proxy_id, status, created_at, updated_at)

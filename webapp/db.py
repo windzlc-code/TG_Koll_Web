@@ -201,6 +201,10 @@ def init_db() -> None:
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_social_accounts_persona ON social_accounts(persona_id)")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_social_accounts_persona_platform_username "
+            "ON social_accounts(persona_id, platform, username COLLATE NOCASE)"
+        )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_social_tasks_queue ON social_automation_tasks(status, scheduled_at, priority, created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_social_tasks_account ON social_automation_tasks(account_id, created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_social_logs_task ON social_automation_logs(task_id, created_at)")
