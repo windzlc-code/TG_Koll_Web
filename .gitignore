@@ -22,6 +22,7 @@ Thumbs.db
 logs/
 *.log
 .codex-run-logs/
+.codex-tmp/
 .codex_tmp_py/
 .playwright-mcp/
 .serena/

@@ -10348,6 +10348,9 @@ class PersonaDashboardGeneratePostsPayload(BaseModel):
     content_time_slot: str = ""
     selected_memory_ids: list[str] = Field(default_factory=list)
     selected_memory_summaries: list[str] = Field(default_factory=list)
+    rewrite_source_post_id: str = ""
+    rewrite_source_title: str = ""
+    rewrite_source_content: str = ""
 
 
 class PersonaDashboardDraftPublishPayload(BaseModel):
@@ -11922,9 +11925,20 @@ def _import_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHot
 
 def _build_persona_generate_instruction(payload: PersonaDashboardGeneratePostsPayload) -> str:
     prompt = str(payload.prompt or "").strip()
+    rewrite_source_post_id = str(getattr(payload, "rewrite_source_post_id", "") or "").strip()
+    rewrite_source_title = str(getattr(payload, "rewrite_source_title", "") or "").strip()
+    rewrite_source_content = str(getattr(payload, "rewrite_source_content", "") or "").strip()
     target_words = max(10, min(int(payload.target_words or 120), 2000))
     content_time_slot = str(payload.content_time_slot or "").strip().lower()
     lines: list[str] = []
+    if rewrite_source_post_id or rewrite_source_content:
+        lines.extend([
+            "Task mode: rewrite the current draft post.",
+            f"Rewrite source post id: {rewrite_source_post_id}",
+            f"Rewrite source title: {rewrite_source_title}",
+            f"Rewrite source content: {rewrite_source_content}",
+            "Use the source content as reference only. Produce fresh rewritten draft posts for the same persona. Do not copy the source verbatim.",
+        ])
     if prompt:
         lines.append(f"本次用户主题/要求（最高优先级）：{prompt}")
     else:
