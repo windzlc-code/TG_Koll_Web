@@ -10836,6 +10836,7 @@ def _compact_persona_archive_post(post: dict[str, Any]) -> dict[str, Any]:
         "media_url": str(post.get("mediaUrl") or post.get("imageUrl") or ""),
         "media_type": str(post.get("mediaType") or ""),
         "media_items": _compact_dashboard_media_items(post, published_meta),
+        "source_post_id": str(source_meta.get("favoriteSourcePostId") or source_meta.get("favorite_source_post_id") or "").strip(),
         "is_hot_imported": str(source_meta.get("source") or "").strip() == "sentiment_hot_import",
         "source_meta": _compact_persona_source_meta(source_meta),
     }
