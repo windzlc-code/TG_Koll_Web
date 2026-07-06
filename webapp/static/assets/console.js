@@ -128,6 +128,7 @@ const state = {
   personaImageLibraries: {},
   personaDraftPosts: {},
   personaFavoritePosts: {},
+  personaSelectedPostIds: {},
   personaPostSources: {},
   personaPublishHistories: {},
   personaPublishAccountIds: {},
@@ -610,6 +611,31 @@ function personaSourcePosts(persona = selectedPersona(), source = personaPostSou
   return source === "favorites" ? personaFavoritePosts(persona) : personaDraftPosts(persona);
 }
 
+function personaPostSelectionKey(persona = selectedPersona(), source = personaPostSource(persona)) {
+  const personaId = String(persona?.id || state.selectedPersonaId || "default").trim() || "default";
+  const sourceKey = source === "favorites" ? "favorites" : "posts";
+  return `${personaId}:${sourceKey}`;
+}
+
+function personaSelectedPostIds(persona = selectedPersona(), source = personaPostSource(persona)) {
+  return state.personaSelectedPostIds[personaPostSelectionKey(persona, source)] || [];
+}
+
+function setPersonaSelectedPostIds(persona = selectedPersona(), source = personaPostSource(persona), ids = []) {
+  const key = personaPostSelectionKey(persona, source);
+  const clean = Array.from(new Set((ids || []).map((item) => String(item || "").trim()).filter(Boolean)));
+  if (clean.length) state.personaSelectedPostIds[key] = clean;
+  else delete state.personaSelectedPostIds[key];
+  return clean;
+}
+
+function syncPersonaSelectedPostIds(persona = selectedPersona(), source = personaPostSource(persona), rows = personaSourcePosts(persona, source)) {
+  const valid = new Set((rows || []).map((item) => String(item.id || "").trim()).filter(Boolean));
+  const next = personaSelectedPostIds(persona, source).filter((id) => valid.has(id));
+  setPersonaSelectedPostIds(persona, source, next);
+  return next;
+}
+
 function selectedPersonaPost(persona = selectedPersona()) {
   const posts = personaSourcePosts(persona);
   const wanted = String($("personaDraftPostSelect")?.value || state.selectedPersonaPostId || "").trim();
@@ -1090,17 +1116,18 @@ function renderPersonaHotMediaDeleteControls(persona, candidate) {
 function renderPersonaHotOrigin(meta, { compact = false } = {}) {
   if (!meta) return "";
   const mediaItems = personaHotCandidateMediaItems(meta);
+  if (compact) {
+    return `<span class="persona-hot-origin-badge persona-hot-origin-badge--compact">热点导入</span>`;
+  }
   const scoreBits = [
     `浏览 ${numberText(meta.view_count || 0)}`,
     `点赞 ${numberText(meta.like_count || 0)}`,
     `评论 ${numberText(meta.comment_count || 0)}`,
   ];
-  if (!compact) {
-    scoreBits.push(`分享 ${numberText(meta.share_count || 0)}`);
-    scoreBits.push(`转发 ${numberText(meta.repost_count || 0)}`);
-  }
+  scoreBits.push(`分享 ${numberText(meta.share_count || 0)}`);
+  scoreBits.push(`转发 ${numberText(meta.repost_count || 0)}`);
   return `
-    <div class="persona-hot-origin ${compact ? "is-compact" : ""}">
+    <div class="persona-hot-origin">
       <div class="persona-hot-origin-head">
         <span class="persona-hot-origin-badge">热点导入</span>
         ${renderMediaTypeBadge(mediaItems)}
@@ -1113,6 +1140,32 @@ function renderPersonaHotOrigin(meta, { compact = false } = {}) {
       </div>
     </div>
   `;
+}
+
+function personaPostFavoriteMatchId(post = {}) {
+  return String(
+    post.source_post_id
+    || post.sourcePostId
+    || post.original_post_id
+    || post.originalPostId
+    || post.post_id
+    || post.postId
+    || post.id
+    || ""
+  ).trim();
+}
+
+function isPersonaPostFavorited(persona, post = {}, source = personaPostSource(persona)) {
+  if (source === "favorites") return true;
+  const currentId = personaPostFavoriteMatchId(post);
+  if (!currentId) return false;
+  return personaFavoritePosts(persona).some((favorite) => personaPostFavoriteMatchId(favorite) === currentId);
+}
+
+function personaFavoriteRecordForPost(persona, post = {}) {
+  const currentId = personaPostFavoriteMatchId(post);
+  if (!currentId) return null;
+  return personaFavoritePosts(persona).find((favorite) => personaPostFavoriteMatchId(favorite) === currentId) || null;
 }
 
 function snapshotPersonaCurrentForm() {
@@ -2065,38 +2118,53 @@ function handlePersonaMediaLightboxError(node, message) {
 window.handlePersonaMediaFrameError = handlePersonaMediaFrameError;
 window.handlePersonaMediaLightboxError = handlePersonaMediaLightboxError;
 
+function closePersonaDraftMenus(except = null) {
+  document.querySelectorAll(".persona-draft-more.is-open").forEach((menu) => {
+    if (except && menu === except) return;
+    menu.classList.remove("is-open");
+  });
+}
+
 function renderPersonaDraftRows(posts, source = personaPostSource()) {
   const isFavoriteSource = source === "favorites";
   if (!posts.length) return `<div class="empty-state">${isFavoriteSource ? "当前还没有收藏推文。可以在草稿里点击收藏，或从 Bot 同步已有收藏。" : "当前还没有推文草稿。先新建一条，再进入发布步骤。"}</div>`;
   const mode = personaDraftViewMode();
   const personaId = String(selectedPersona()?.id || "");
+  const selectedIds = new Set(syncPersonaSelectedPostIds(selectedPersona(), source, posts));
   if (mode === "list") return renderPersonaDraftTableRows(posts, personaId);
   return `<div class="compact-list persona-draft-grid">${posts.map((post) => {
     const hotMeta = personaHotImportMeta(personaId, post.id);
     const mediaItems = personaDraftMediaItems(personaId, post);
+    const isChecked = selectedIds.has(String(post.id || ""));
+    const isSelected = String(post.id) === String(state.selectedPersonaPostId);
     return `
     <article
-      class="compact-row persona-draft-card ${String(post.id) === String(state.selectedPersonaPostId) ? "is-selected" : ""}"
+      class="compact-row persona-draft-card ${isSelected ? "is-selected" : ""}"
       data-persona-select-post="${esc(post.id)}"
       role="button"
       tabindex="0"
-      aria-pressed="${String(post.id) === String(state.selectedPersonaPostId) ? "true" : "false"}"
+      aria-pressed="${isSelected ? "true" : "false"}"
     >
       <div class="persona-draft-card-head">
+        <label class="persona-post-bulk-toggle" data-persona-bulk-post-toggle="${esc(post.id)}" data-persona-bulk-post-source="${esc(source)}" aria-label="勾选用于批量操作">
+          <input
+            type="checkbox"
+            data-persona-bulk-post-id="${esc(post.id)}"
+            data-persona-bulk-post-source="${esc(source)}"
+            ${isChecked ? "checked" : ""}
+          />
+          <span>勾选</span>
+        </label>
         <strong>${esc(post.title || "未命名草稿")}</strong>
         ${renderMediaTypeBadge(mediaItems)}
+        ${hotMeta ? renderPersonaHotOrigin(hotMeta, { compact: true }) : ""}
         <span class="persona-draft-card-time">${esc(formatTime(post.published_at || post.updated_at || post.created_at))}</span>
       </div>
-      ${hotMeta ? renderPersonaHotOrigin(hotMeta, { compact: true }) : ""}
       <p>${esc(String(post.content || "").slice(0, 220))}</p>
       <div class="persona-draft-card-footer">
-        <small>${String(post.id) === String(state.selectedPersonaPostId) ? "当前已选中" : "点击卡片选中"}</small>
+        <small>${isSelected ? "当前已选中" : "点击卡片选中"}</small>
         <div class="row-actions persona-draft-card-actions">
-          <button type="button" data-persona-view-post="${esc(post.id)}">查看</button>
-          <button type="button" data-persona-edit-post="${esc(post.id)}">${isFavoriteSource ? "编辑收藏" : "编辑草稿"}</button>
-          ${isFavoriteSource ? `<button type="button" class="danger" data-persona-delete-favorite="${esc(post.id)}">移出收藏</button>` : `<button type="button" data-persona-favorite-post="${esc(post.id)}">收藏</button>`}
-          ${isFavoriteSource ? "" : `<button type="button" class="danger" data-persona-delete-post="${esc(post.id)}">删除</button>`}
-          ${String(post.id) === String(state.selectedPersonaPostId) ? `<button type="button" class="primary" data-persona-open-publishing>进入发布 / 矩阵发布</button>` : ""}
+          ${renderPersonaDraftPostActions(post, { source, isSelected })}
         </div>
       </div>
     </article>
@@ -2125,12 +2193,44 @@ function renderPersonaDraftViewToggle(mode) {
     </div>`;
 }
 
+function renderPersonaDraftPostActions(post, { source = personaPostSource(), isSelected = false } = {}) {
+  const persona = selectedPersona();
+  const isFavoriteSource = source === "favorites";
+  const favoriteRecord = isFavoriteSource ? post : personaFavoriteRecordForPost(persona, post);
+  const isFavorited = isFavoriteSource || Boolean(favoriteRecord);
+  const favoriteAction = isFavorited && favoriteRecord?.id
+    ? `data-persona-delete-favorite="${esc(favoriteRecord.id)}"`
+    : `data-persona-favorite-post="${esc(post.id)}"`;
+  return `
+    <div class="persona-draft-actions-inline">
+      <button type="button" data-persona-view-post="${esc(post.id)}">查看</button>
+      <button
+        type="button"
+        class="persona-favorite-star ${isFavorited ? "is-active" : ""}"
+        ${favoriteAction}
+        title="${isFavorited ? "取消收藏" : "收藏"}"
+        aria-label="${isFavorited ? "取消收藏" : "收藏"}"
+      >${isFavorited ? "★" : "☆"}</button>
+      <div class="persona-draft-more">
+        <button type="button" class="persona-draft-more-trigger" data-persona-draft-menu-toggle="${esc(post.id)}" title="更多操作" aria-label="更多操作">...</button>
+        <div class="persona-draft-more-menu">
+          <button type="button" data-persona-edit-post="${esc(post.id)}">${isFavoriteSource ? "编辑收藏" : "编辑草稿"}</button>
+          ${isFavoriteSource
+            ? `<button type="button" class="danger" data-persona-delete-favorite="${esc(post.id)}">移出收藏</button>`
+            : `<button type="button" class="danger" data-persona-delete-post="${esc(post.id)}">删除草稿</button>`}
+        </div>
+      </div>
+      ${isSelected ? `<button type="button" class="primary" data-persona-open-publishing>${source === "favorites" ? "发布收藏" : "发布"}</button>` : ""}
+    </div>`;
+}
+
 function renderPersonaDraftTableRows(posts, personaId) {
   const source = personaPostSource();
-  const isFavoriteSource = source === "favorites";
+  const selectedIds = new Set(syncPersonaSelectedPostIds(selectedPersona(), source, posts));
   return `
     <div class="persona-draft-table" role="table" aria-label="草稿列表">
       <div class="persona-draft-table-head" role="row">
+        <span>勾选</span>
         <span>序号</span>
         <span>草稿</span>
         <span>更新时间</span>
@@ -2141,6 +2241,7 @@ function renderPersonaDraftTableRows(posts, personaId) {
       ${posts.map((post, index) => {
         const postId = String(post.id || "");
         const isSelected = postId === String(state.selectedPersonaPostId || "");
+        const isChecked = selectedIds.has(postId);
         const hotMeta = personaHotImportMeta(personaId, post.id);
         const mediaItems = personaDraftMediaItems(personaId, post);
         return `
@@ -2151,6 +2252,17 @@ function renderPersonaDraftTableRows(posts, personaId) {
             tabindex="0"
             aria-pressed="${isSelected ? "true" : "false"}"
           >
+            <div class="persona-draft-table-cell persona-draft-table-check" role="cell">
+              <label class="persona-post-bulk-toggle" data-persona-bulk-post-toggle="${esc(post.id)}" data-persona-bulk-post-source="${esc(source)}" aria-label="勾选用于批量操作">
+                <input
+                  type="checkbox"
+                  data-persona-bulk-post-id="${esc(post.id)}"
+                  data-persona-bulk-post-source="${esc(source)}"
+                  ${isChecked ? "checked" : ""}
+                />
+                <span>勾选</span>
+              </label>
+            </div>
             <div class="persona-draft-table-cell persona-draft-table-index" role="cell">${esc(index + 1)}</div>
             <div class="persona-draft-table-cell persona-draft-table-title" role="cell">
               <strong>${esc(post.title || "未命名草稿")}</strong>
@@ -2161,14 +2273,26 @@ function renderPersonaDraftTableRows(posts, personaId) {
             <div class="persona-draft-table-cell persona-draft-table-content" role="cell">${esc(String(post.content || "").slice(0, 120))}</div>
             <div class="persona-draft-table-cell" role="cell"><span class="module-chip ${isSelected ? "is-dark" : ""}">${isSelected ? "当前选中" : "待选择"}</span></div>
             <div class="persona-draft-table-actions" role="cell">
-              <button type="button" data-persona-view-post="${esc(post.id)}">查看</button>
-              <button type="button" data-persona-edit-post="${esc(post.id)}">编辑</button>
-              ${isFavoriteSource ? `<button type="button" class="danger" data-persona-delete-favorite="${esc(post.id)}">移出</button>` : `<button type="button" data-persona-favorite-post="${esc(post.id)}">收藏</button>`}
-              ${isFavoriteSource ? "" : `<button type="button" class="danger" data-persona-delete-post="${esc(post.id)}">删除</button>`}
-              ${isSelected ? `<button type="button" class="primary" data-persona-open-publishing>发布</button>` : ""}
+              ${renderPersonaDraftPostActions(post, { source, isSelected })}
             </div>
           </article>`;
       }).join("")}
+    </div>`;
+}
+
+function renderPersonaPostBulkActions(persona, source, rows) {
+  const cleanSource = source === "favorites" ? "favorites" : "posts";
+  const selectedIds = syncPersonaSelectedPostIds(persona, cleanSource, rows);
+  const selectedCount = selectedIds.length;
+  const actionLabel = cleanSource === "favorites" ? "批量移出" : "批量删除";
+  return `
+    <div class="persona-post-bulk-actions">
+      <strong>已勾选 ${selectedCount} / ${rows.length}</strong>
+      <div class="row-actions">
+        <button type="button" data-persona-post-bulk="all" data-persona-post-bulk-source="${esc(cleanSource)}">全选</button>
+        <button type="button" data-persona-post-bulk="clear" data-persona-post-bulk-source="${esc(cleanSource)}">清空</button>
+        <button type="button" class="danger" data-persona-post-bulk="delete" data-persona-post-bulk-source="${esc(cleanSource)}" ${selectedCount ? "" : "disabled"}>${actionLabel}</button>
+      </div>
     </div>`;
 }
 
@@ -4021,6 +4145,10 @@ async function loadPersonas() {
   Object.keys(state.personaFavoritePosts).forEach((id) => {
     if (!validIds.has(id)) delete state.personaFavoritePosts[id];
   });
+  Object.keys(state.personaSelectedPostIds).forEach((key) => {
+    const [personaId] = String(key || "").split(":");
+    if (!validIds.has(personaId)) delete state.personaSelectedPostIds[key];
+  });
   Object.keys(state.personaPostSources).forEach((id) => {
     if (!validIds.has(id)) delete state.personaPostSources[id];
   });
@@ -4945,6 +5073,7 @@ async function loadPersonaDraftPosts(personaId, { force = false } = {}) {
   const data = await api(`/api/persona_dashboard/personas/${encodeURIComponent(key)}/posts`).catch(() => ({ posts: [] }));
   const posts = sortPersonaDraftPosts(Array.isArray(data.posts) ? data.posts : []);
   state.personaDraftPosts[key] = posts;
+  syncPersonaSelectedPostIds({ id: key }, "posts", posts);
   syncPersonaHotImportPosts(key, posts);
   const currentSelected = String(state.selectedPersonaPostId || "").trim();
   if (!posts.some((post) => String(post.id) === currentSelected)) {
@@ -4961,6 +5090,7 @@ async function loadPersonaFavoritePosts(personaId, { force = false } = {}) {
   const data = await api(`/api/persona_dashboard/personas/${encodeURIComponent(key)}/favorites`).catch(() => ({ favorites: [] }));
   const posts = sortPersonaDraftPosts(Array.isArray(data.favorites) ? data.favorites : []);
   state.personaFavoritePosts[key] = posts;
+  syncPersonaSelectedPostIds({ id: key }, "favorites", posts);
   const currentSelected = String(state.selectedPersonaPostId || "").trim();
   if (personaPostSource({ id: key }) === "favorites" && !posts.some((post) => String(post.id) === currentSelected)) {
     state.selectedPersonaPostId = posts[0]?.id || "";
@@ -5642,6 +5772,71 @@ async function deletePersonaDraftPost(postId = "") {
   showMsg("commandMsg", "草稿已删除。", true);
 }
 
+async function deletePersonaSelectedPosts(source = personaPostSource(), ids = []) {
+  const persona = selectedPersona();
+  if (!persona) {
+    showMsg("commandMsg", "请先选择一个人设。", false);
+    return;
+  }
+  const cleanSource = source === "favorites" ? "favorites" : "posts";
+  const rows = personaSourcePosts(persona, cleanSource);
+  const selectedIds = Array.from(new Set((ids && ids.length ? ids : personaSelectedPostIds(persona, cleanSource))
+    .map((item) => String(item || "").trim())
+    .filter((id) => rows.some((post) => String(post.id || "").trim() === id))));
+  if (!selectedIds.length) {
+    showMsg("commandMsg", cleanSource === "favorites" ? "请先勾选要移出的收藏。" : "请先勾选要删除的草稿。", false);
+    return;
+  }
+  const confirmed = await openConsoleModal({
+    title: cleanSource === "favorites" ? "批量移出收藏" : "批量删除草稿",
+    message: cleanSource === "favorites"
+      ? `确认将已勾选的 ${selectedIds.length} 条收藏移出吗？原草稿不会被删除。`
+      : `确认删除已勾选的 ${selectedIds.length} 条草稿吗？`,
+    confirmText: cleanSource === "favorites" ? "批量移出" : "批量删除",
+    cancelText: "取消",
+    danger: true,
+  });
+  if (!confirmed) return;
+  showMsg("commandMsg", cleanSource === "favorites" ? "正在批量移出收藏..." : "正在批量删除草稿...", true);
+  for (const postId of selectedIds) {
+    if (cleanSource === "favorites") {
+      await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/favorites/${encodeURIComponent(postId)}`, {
+        method: "DELETE",
+      });
+    } else {
+      await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/posts/by_id/${encodeURIComponent(postId)}`, {
+        method: "DELETE",
+      });
+      deletePersonaHotImportMeta(persona.id, postId);
+    }
+  }
+  setPersonaSelectedPostIds(persona, cleanSource, []);
+  resetPersonaDraftEditor(persona.id);
+  if ($("personaDraftTitle")) $("personaDraftTitle").value = "";
+  if ($("personaDraftContent")) $("personaDraftContent").value = "";
+  if (cleanSource === "favorites") {
+    await loadPersonaFavoritePosts(persona.id, { force: true });
+    const favoriteRows = personaFavoritePosts(persona);
+    state.selectedPersonaPostId = favoriteRows[0]?.id || "";
+    setPersonaPostSource(favoriteRows.length ? "favorites" : "posts", persona);
+  } else {
+    await Promise.all([
+      loadPersonaDraftPosts(persona.id, { force: true }),
+      loadPersonaPublishHistory(persona.id, { force: true }).catch(() => []),
+    ]);
+    const draftRows = personaDraftPosts(persona);
+    state.selectedPersonaPostId = draftRows[0]?.id || "";
+    if (!draftRows.length && personaPostSource(persona) === "posts" && personaFavoritePosts(persona).length) {
+      setPersonaPostSource("favorites", persona);
+      state.selectedPersonaPostId = personaFavoritePosts(persona)[0]?.id || "";
+    }
+  }
+  state.personaPanels.content = personaDraftPosts(persona).length || personaFavoritePosts(persona).length ? "posts" : "generate";
+  renderPersonaDetail();
+  renderConfirmSummary();
+  showMsg("commandMsg", cleanSource === "favorites" ? "已批量移出收藏。" : "已批量删除草稿。", true);
+}
+
 async function addPersonaFavoritePost(postId = "") {
   const persona = selectedPersona();
   if (!persona) {
@@ -6089,28 +6284,20 @@ function renderPersonaCardEditorMenu(persona, currentGroups, availableGroups) {
     <div class="persona-card-submenu" data-persona-editor-submenu="${esc(personaId)}">
       <div class="persona-menu-tabs" aria-label="选择加入分组">
         ${availableGroups.map((group) => `
-          <button type="button" class="persona-menu-tab" data-persona-add-to-group="${esc(personaId)}" data-group-id="${esc(group.id)}">
-            <span>${esc(group.name)}</span>
-          </button>
-        `).join("")}
-      </div>
-    </div>` : mode === "remove" && currentGroups.length ? `
-    <div class="persona-card-submenu" data-persona-editor-submenu="${esc(personaId)}">
-      <div class="persona-menu-tabs" aria-label="选择移出分组">
-        ${currentGroups.map((group) => `
-          <button type="button" class="persona-menu-tab" data-persona-remove-from-group="${esc(personaId)}" data-group-id="${esc(group.id)}">
+          <button type="button" class="persona-menu-tab persona-menu-tab--action" data-persona-add-to-group="${esc(personaId)}" data-group-id="${esc(group.id)}">
             <span>${esc(group.name)}</span>
           </button>
         `).join("")}
       </div>
     </div>` : "";
+  const currentGroup = currentGroups[0] || null;
   const actionButtons = [
     availableGroups.length ? `
-        <button type="button" class="persona-menu-tab ${mode === "add" ? "is-active" : ""}" data-persona-editor-mode="${esc(personaId)}:add">
+        <button type="button" class="persona-menu-tab persona-menu-tab--submenu ${mode === "add" ? "is-active" : ""}" data-persona-editor-mode="${esc(personaId)}:add">
           <span>加入分组</span>
         </button>` : "",
-    currentGroups.length ? `
-        <button type="button" class="persona-menu-tab ${mode === "remove" ? "is-active" : ""}" data-persona-editor-mode="${esc(personaId)}:remove">
+    currentGroup ? `
+        <button type="button" class="persona-menu-tab persona-menu-tab--action" data-persona-remove-from-group="${esc(personaId)}" data-group-id="${esc(currentGroup.id)}">
           <span>移出分组</span>
         </button>` : "",
     `
@@ -6179,6 +6366,7 @@ function positionPersonaCardEditorMenu() {
 
 function schedulePersonaCardEditorMenuPosition() {
   if (state.activeModule !== "personas") return;
+  positionPersonaCardEditorMenu();
   requestAnimationFrame(positionPersonaCardEditorMenu);
 }
 
@@ -6283,22 +6471,36 @@ function renderPersonaCard(persona, groupId = "") {
 
 function renderPersonaFolder(group, map) {
   const personas = (group.persona_ids || []).map((id) => map.get(String(id))).filter(Boolean);
+  const hasPersonas = personas.length > 0;
   const collapsed = Boolean(group.collapsed);
   const editing = String(state.personaListEditorId || "") === `group:${String(group.id || "")}`;
   return `
-    <div class="persona-layer-group ${collapsed ? "is-collapsed" : ""}" data-persona-folder="${esc(group.id)}" data-persona-drop-zone="${esc(group.id)}">
+    <div class="persona-layer-group ${collapsed ? "is-collapsed" : ""} ${hasPersonas ? "" : "is-empty"}" data-persona-folder="${esc(group.id)}" data-persona-drop-zone="${esc(group.id)}">
       <div class="persona-list-card persona-folder-card ${editing ? "is-editing" : ""}" data-persona-folder-card="${esc(group.id)}">
+        ${hasPersonas ? `
         <button type="button" class="persona-folder-main" data-persona-toggle-folder="${esc(group.id)}" aria-label="${collapsed ? "展开分组" : "收起分组"}">
-          <span class="persona-folder-caret"></span>
+          <span class="persona-folder-caret" aria-hidden="true"></span>
           <span class="persona-folder-copy">
             <span class="persona-card-title">
               <strong>${esc(group.name)}</strong>
-              <span class="persona-kind-badge">组</span>
+              <span class="persona-kind-badge persona-group-badge">分组</span>
               <span class="persona-kind-badge">${personas.length} 个</span>
             </span>
             <small>${collapsed ? "已收起" : "已展开"}</small>
           </span>
         </button>
+        ` : `
+        <div class="persona-folder-main persona-folder-main--static" aria-label="空分组">
+          <span class="persona-folder-copy">
+            <span class="persona-card-title">
+              <strong>${esc(group.name)}</strong>
+              <span class="persona-kind-badge persona-group-badge">分组</span>
+              <span class="persona-kind-badge persona-empty-group-badge">0 个</span>
+            </span>
+            <small>空分组</small>
+          </span>
+        </div>
+        `}
         <button type="button" class="persona-card-edit" data-persona-edit-group="${esc(group.id)}" title="编辑分组" aria-label="编辑分组">...</button>
         ${editing ? `
           <div class="persona-card-menu persona-card-menu--group">
@@ -6313,7 +6515,7 @@ function renderPersonaFolder(group, map) {
           </div>
         ` : ""}
       </div>
-      <div class="persona-layer-children" data-persona-drop-zone="${esc(group.id)}">${personas.length ? personas.map((persona) => renderPersonaCard(persona, group.id)).join("") : `<div class="persona-layer-empty">这个组还没有人设。</div>`}</div>
+      ${hasPersonas ? `<div class="persona-layer-children" data-persona-drop-zone="${esc(group.id)}">${personas.map((persona) => renderPersonaCard(persona, group.id)).join("")}</div>` : ""}
     </div>`;
 }
 
@@ -7233,6 +7435,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
               ${sourceRows.length ? sourceRows.map((post, index) => `<option value="${esc(post.id)}" ${String(post.id) === String(state.selectedPersonaPostId || sourceRows[0]?.id || "") ? "selected" : ""}>${esc(personaDraftOptionLabel(post, index))}</option>`).join("") : `<option value="">${postSource === "favorites" ? "当前还没有收藏" : "当前还没有草稿"}</option>`}
             </select>
           </label>
+          ${sourceRows.length ? renderPersonaPostBulkActions(persona, postSource, sourceRows) : ""}
           <div class="row-actions">
             <button type="button" data-persona-open-new-draft>新建草稿</button>
             ${selectedPost ? `<button type="button" data-persona-edit-post="${esc(selectedPost.id)}">编辑</button>` : ""}
@@ -7806,6 +8009,7 @@ function bindEvents() {
     }
   });
   document.addEventListener("click", (event) => {
+    if (!event.target.closest?.(".persona-draft-more")) closePersonaDraftMenus();
     if (
       state.activeModule === "personas"
       && state.personaListEditorId
@@ -7880,6 +8084,25 @@ function bindEvents() {
       });
       snapshotPersonaCurrentForm();
       syncPersonaMemorySelectionState();
+      renderConfirmSummary();
+      return;
+    }
+    const postBulkButton = event.target.closest("[data-persona-post-bulk]");
+    if (postBulkButton) {
+      const persona = selectedPersona();
+      if (!persona) return;
+      const source = postBulkButton.dataset.personaPostBulkSource === "favorites" ? "favorites" : "posts";
+      if (postBulkButton.dataset.personaPostBulk === "delete") {
+        deletePersonaSelectedPosts(source).catch((error) => showMsg("commandMsg", error.detail || error.message || "批量操作失败", false));
+        return;
+      }
+      const rows = personaSourcePosts(persona, source);
+      setPersonaSelectedPostIds(
+        persona,
+        source,
+        postBulkButton.dataset.personaPostBulk === "all" ? rows.map((post) => String(post.id || "").trim()).filter(Boolean) : [],
+      );
+      renderPersonaDetail();
       renderConfirmSummary();
       return;
     }
@@ -8302,6 +8525,14 @@ function bindEvents() {
       }
       return;
     }
+    const draftMenuToggle = event.target.closest("[data-persona-draft-menu-toggle]");
+    if (draftMenuToggle) {
+      const menu = draftMenuToggle.closest(".persona-draft-more");
+      const opening = !menu?.classList.contains("is-open");
+      closePersonaDraftMenus(menu);
+      if (menu) menu.classList.toggle("is-open", opening);
+      return;
+    }
     const viewDraftPostButton = event.target.closest("[data-persona-view-post]");
     if (viewDraftPostButton) {
       viewPersonaDraftPost(viewDraftPostButton.dataset.personaViewPost || "").catch((error) => showMsg("commandMsg", error.detail || error.message || "查看草稿失败", false));
@@ -8535,6 +8766,19 @@ function bindEvents() {
       snapshotPersonaCurrentForm();
       syncPersonaMemorySelectionState();
       renderConfirmSummary();
+    }
+    if (event.target?.matches?.("[data-persona-bulk-post-id]")) {
+      const persona = selectedPersona();
+      if (!persona) return;
+      const source = event.target.getAttribute("data-persona-bulk-post-source") === "favorites" ? "favorites" : "posts";
+      const postId = String(event.target.getAttribute("data-persona-bulk-post-id") || "").trim();
+      const selected = new Set(personaSelectedPostIds(persona, source));
+      if (event.target.checked) selected.add(postId);
+      else selected.delete(postId);
+      setPersonaSelectedPostIds(persona, source, Array.from(selected));
+      renderPersonaDetail();
+      renderConfirmSummary();
+      return;
     }
     if (event.target?.matches?.("[data-persona-hot-candidate-id]")) {
       const persona = selectedPersona();

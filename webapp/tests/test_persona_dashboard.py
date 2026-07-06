@@ -909,6 +909,60 @@ class PersonaDashboardApiTests(unittest.TestCase):
         memories = resp.json()["memories"]
         self.assertEqual([item["id"] for item in memories[:2]], ["mem-1", "mem-2"])
 
+    def test_persona_memory_delete_removes_runtime_entry(self):
+        self._write_archives()
+        memory_path = self.tool_runtime_dir / "persona_memory.json"
+        memory_path.write_text(json.dumps({
+            "persona-1": [
+                {"id": "mem-1", "date": "2026-07-04T10:00:00Z", "summary": "第一条记忆"},
+                {"id": "mem-2", "date": "2026-07-03T10:00:00Z", "summary": "第二条记忆"},
+            ]
+        }, ensure_ascii=False), encoding="utf-8")
+
+        resp = self.client.delete("/api/persona_dashboard/personas/persona-1/memories/mem-1")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual([item["id"] for item in resp.json()["memories"]], ["mem-2", "archive-post-pub-1"])
+
+        stored = json.loads(memory_path.read_text(encoding="utf-8"))
+        self.assertEqual([item["id"] for item in stored["persona-1"]], ["mem-2"])
+
+    def test_persona_memory_delete_hides_history_derived_entry(self):
+        self._write_archives()
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        archives[0]["publishHistory"][0]["publishedMemory"] = "来自发布历史的记忆"
+        archives_path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        list_resp = self.client.get("/api/persona_dashboard/personas/persona-1/memories")
+        self.assertEqual(list_resp.status_code, 200)
+        self.assertEqual([item["id"] for item in list_resp.json()["memories"]], ["archive-post-pub-1"])
+
+        delete_resp = self.client.delete("/api/persona_dashboard/personas/persona-1/memories/archive-post-pub-1")
+        self.assertEqual(delete_resp.status_code, 200)
+        self.assertEqual(delete_resp.json()["memories"], [])
+
+        hidden = json.loads((self.tool_runtime_dir / "persona_dashboard_hidden_memories.json").read_text(encoding="utf-8"))
+        self.assertEqual(hidden["persona-1"], ["archive-post-pub-1"])
+
+        next_list_resp = self.client.get("/api/persona_dashboard/personas/persona-1/memories")
+        self.assertEqual(next_list_resp.status_code, 200)
+        self.assertEqual(next_list_resp.json()["memories"], [])
+
+    def test_delete_favorite_removes_only_favorite_copy(self):
+        self._write_archives()
+
+        add_resp = self.client.post("/api/persona_dashboard/personas/persona-1/favorites/post-1")
+        self.assertEqual(add_resp.status_code, 200)
+        favorite_post_id = add_resp.json()["post"]["id"]
+
+        delete_resp = self.client.delete(f"/api/persona_dashboard/personas/persona-1/favorites/{favorite_post_id}")
+        self.assertEqual(delete_resp.status_code, 200)
+        self.assertEqual(delete_resp.json()["favorites"], [])
+
+        posts_resp = self.client.get("/api/persona_dashboard/personas/persona-1/posts")
+        self.assertEqual(posts_resp.status_code, 200)
+        self.assertEqual([item["id"] for item in posts_resp.json()["posts"]], ["post-1"])
+
     def test_fetch_persona_hot_candidates_calls_hot_workflow_cli(self):
         self._write_archives()
         (self.tool_runtime_dir / "persona_memory.json").write_text(json.dumps({
