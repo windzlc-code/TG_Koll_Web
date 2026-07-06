@@ -622,7 +622,7 @@ function personaFormState(personaId) {
   const key = String(personaId || "").trim();
   if (!key) {
     return {
-      generate: { mode: "ai", count: 3, targetWords: 120, contentTimeSlot: "", prompt: "", selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotPrompt: "" },
+      generate: { mode: "ai", count: 3, targetWords: 120, contentTimeSlot: "", prompt: "", selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotPrompt: "", hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {} },
       draft: { title: "", content: "", editingPostId: "" },
       media: { taskType: "persona_post_image", prompt: "", aspectRatio: "1:1", resolution: "720p", duration: 2, replaceExisting: false },
       images: { prompt: "", aspectRatio: "1:1" },
@@ -640,6 +640,8 @@ function personaFormState(personaId) {
         hotSelectedIds: [],
         hotPreviewId: "",
         hotPrompt: "",
+        hotDeletedMediaByCandidate: {},
+        hotEditedContentByCandidate: {},
       },
       draft: {
         title: "",
@@ -853,6 +855,92 @@ function personaHotCandidateMediaItems(candidate) {
       label: String(item?.label || item?.type || "热点媒体").trim() || "热点媒体",
     };
   }).filter(Boolean);
+}
+
+function personaHotCandidateKey(candidate) {
+  return String(candidate?.candidate_id || candidate?.id || "").trim();
+}
+
+function personaHotDeletedMediaSet(personaId, candidateId) {
+  const form = personaFormState(personaId).generate;
+  if (!form.hotDeletedMediaByCandidate || typeof form.hotDeletedMediaByCandidate !== "object") {
+    form.hotDeletedMediaByCandidate = {};
+  }
+  const key = String(candidateId || "").trim();
+  const rows = Array.isArray(form.hotDeletedMediaByCandidate[key]) ? form.hotDeletedMediaByCandidate[key] : [];
+  return new Set(rows.map((item) => Number(item)).filter((item) => Number.isInteger(item) && item >= 0));
+}
+
+function setPersonaHotDeletedMediaSet(personaId, candidateId, indexes) {
+  const form = personaFormState(personaId).generate;
+  if (!form.hotDeletedMediaByCandidate || typeof form.hotDeletedMediaByCandidate !== "object") {
+    form.hotDeletedMediaByCandidate = {};
+  }
+  const key = String(candidateId || "").trim();
+  const clean = Array.from(indexes || [])
+    .map((item) => Number(item))
+    .filter((item) => Number.isInteger(item) && item >= 0)
+    .sort((left, right) => left - right);
+  if (clean.length) form.hotDeletedMediaByCandidate[key] = clean;
+  else delete form.hotDeletedMediaByCandidate[key];
+}
+
+function personaHotEditedContent(personaId, candidate) {
+  const form = personaFormState(personaId).generate;
+  if (!form.hotEditedContentByCandidate || typeof form.hotEditedContentByCandidate !== "object") {
+    form.hotEditedContentByCandidate = {};
+  }
+  const key = personaHotCandidateKey(candidate);
+  return Object.prototype.hasOwnProperty.call(form.hotEditedContentByCandidate, key)
+    ? String(form.hotEditedContentByCandidate[key] || "")
+    : String(candidate?.full_content || candidate?.content || "该热点没有完整正文。");
+}
+
+function snapshotPersonaHotPreviewContent() {
+  const persona = selectedPersona();
+  const textarea = document.querySelector("#personaHotPreviewContent");
+  if (!persona || !textarea) return;
+  const candidate = personaHotPreviewCandidate(persona);
+  const key = personaHotCandidateKey(candidate);
+  if (!key) return;
+  const form = personaFormState(persona.id).generate;
+  if (!form.hotEditedContentByCandidate || typeof form.hotEditedContentByCandidate !== "object") {
+    form.hotEditedContentByCandidate = {};
+  }
+  form.hotEditedContentByCandidate[key] = String(textarea.value || "");
+}
+
+function renderPersonaHotMediaDeleteControls(persona, candidate) {
+  const mediaItems = personaHotCandidateMediaItems(candidate);
+  if (!mediaItems.length) return `<div class="empty-state">当前热点候选没有媒体。</div>`;
+  const candidateId = personaHotCandidateKey(candidate);
+  const deleted = personaHotDeletedMediaSet(persona?.id, candidateId);
+  return `
+    <div class="persona-hot-media-toolbar">
+      <strong>媒体处理</strong>
+      <span>已标记删除 ${esc(deleted.size)} / ${esc(mediaItems.length)} 个，未标记的媒体会随草稿保留。</span>
+      <div class="row-actions">
+        <button type="button" data-persona-hot-media-bulk="all" data-persona-hot-media-candidate="${esc(candidateId)}">全选删除</button>
+        <button type="button" data-persona-hot-media-bulk="clear" data-persona-hot-media-candidate="${esc(candidateId)}">清空选择</button>
+      </div>
+    </div>
+    <div class="persona-hot-media-delete-list">
+      ${mediaItems.map((item, index) => {
+        const isDeleted = deleted.has(index);
+        return `
+          <button
+            type="button"
+            class="persona-hot-media-delete-item ${isDeleted ? "is-deleted" : ""}"
+            data-persona-hot-media-toggle="${esc(candidateId)}"
+            data-persona-hot-media-index="${esc(index)}"
+          >
+            <span>${esc(item.label || mediaKindLabel(item.type))}</span>
+            <strong>${isDeleted ? "将删除" : "保留"}</strong>
+          </button>
+        `;
+      }).join("")}
+    </div>
+  `;
 }
 
 function renderPersonaHotOrigin(meta, { compact = false } = {}) {
@@ -3305,6 +3393,13 @@ function renderConsoleSettingsPage() {
   const generateDefaults = personaGenerateDefaults();
   host.innerHTML = `
     <div class="console-settings-page">
+      <div class="console-settings-toolbar">
+        <div class="persona-head-copy">
+          <strong>全部设置</strong>
+          <span>修改下方参数后统一保存，保存结果会应用到对应功能模块。</span>
+        </div>
+        <button type="button" class="primary" id="saveConsoleSettings">保存全部设置</button>
+      </div>
       <section class="persona-inline-panel">
         <div class="persona-head-copy">
           <strong>人设列表</strong>
@@ -3314,9 +3409,6 @@ function renderConsoleSettingsPage() {
           <label>每页显示数量
             <input id="settingsPersonaPageSize" type="number" min="5" max="80" step="1" value="${esc(state.personaListPageSize || 20)}" />
           </label>
-        </div>
-        <div class="row-actions">
-          <button type="button" class="primary" id="saveConsoleSettings">保存设置</button>
         </div>
       </section>
       <section class="persona-inline-panel">
@@ -4404,6 +4496,8 @@ async function fetchPersonaHotCandidates(refresh = false) {
     const candidateIds = personaHotCandidates(persona).map((item) => String(item.candidate_id || "").trim()).filter(Boolean);
     form.hotSelectedIds = (form.hotSelectedIds || []).filter((item) => candidateIds.includes(String(item || "").trim()));
     form.hotPreviewId = candidateIds.includes(String(form.hotPreviewId || "").trim()) ? String(form.hotPreviewId || "").trim() : (candidateIds[0] || "");
+    form.hotDeletedMediaByCandidate = {};
+    form.hotEditedContentByCandidate = {};
     renderPersonaDetail();
     renderConfirmSummary();
     showMsg("commandMsg", `已获取 ${candidateIds.length} 条热点候选。`, true);
@@ -4442,6 +4536,8 @@ async function submitPersonaHotDraftImport(persona, selected) {
   const form = personaFormState(persona.id).generate;
   form.hotSelectedIds = [];
   form.hotPreviewId = "";
+  form.hotDeletedMediaByCandidate = {};
+  form.hotEditedContentByCandidate = {};
   await loadPersonaDraftPosts(persona.id, { force: true });
   state.personaPanels.content = "posts";
   renderPersonaDetail();
@@ -4508,10 +4604,13 @@ async function importEditedPersonaHotDraft(candidateId = "") {
   renderPersonaDetail();
   try {
     showMsg("commandMsg", "正在导入当前编辑后的热点草稿...", true);
+    const deleted = personaHotDeletedMediaSet(persona.id, cleanCandidateId);
+    const mediaItems = personaHotCandidateMediaItems(candidate).filter((_, index) => !deleted.has(index));
     await submitPersonaHotDraftImport(persona, [{
       ...candidate,
       content: editedContent.slice(0, 280),
       full_content: editedContent,
+      media_items: mediaItems,
     }]);
   } finally {
     setActionLocked(lockParts, false);
@@ -5092,6 +5191,8 @@ function renderPersonaGenerateModeTabs(mode) {
 
 function renderPersonaHotCandidatePreview(candidate) {
   if (!candidate) return `<div class="empty-state">从左侧热点候选里选一条，这里会显示正文预览和来源。</div>`;
+  const persona = selectedPersona();
+  const candidateId = personaHotCandidateKey(candidate);
   const metrics = [
     `浏览 ${numberText(candidate.view_count || 0)}`,
     `点赞 ${numberText(candidate.like_count || 0)}`,
@@ -5106,16 +5207,17 @@ function renderPersonaHotCandidatePreview(candidate) {
         <small>${esc(formatTime(candidate.captured_at || candidate.published_at || ""))}</small>
       </div>
       <label>导入正文（可改）
-        <textarea id="personaHotPreviewContent" rows="7">${esc(candidate.full_content || candidate.content || "该热点没有完整正文。")}</textarea>
+        <textarea id="personaHotPreviewContent" rows="7">${esc(personaHotEditedContent(persona?.id, candidate))}</textarea>
       </label>
       <div class="persona-hot-preview-meta">
         <small>${esc(metrics.join(" · "))}</small>
         ${candidate.source_url ? `<a href="${esc(candidate.source_url)}" target="_blank" rel="noopener">打开原帖</a>` : ""}
       </div>
       ${renderPersonaMediaPreview(personaHotCandidateMediaItems(candidate))}
+      ${renderPersonaHotMediaDeleteControls(persona, candidate)}
       <div class="row-actions">
-        <button type="button" class="primary" data-persona-import-hot-one="${esc(candidate.candidate_id || candidate.id || "")}">直接使用这条</button>
-        <button type="button" data-persona-import-hot-edit="${esc(candidate.candidate_id || candidate.id || "")}">编辑后使用</button>
+        <button type="button" class="primary" data-persona-import-hot-one="${esc(candidateId)}">直接使用这条</button>
+        <button type="button" data-persona-import-hot-edit="${esc(candidateId)}">编辑后使用</button>
       </div>
     </div>
   `;
@@ -6328,6 +6430,38 @@ function bindEvents() {
       importPersonaHotDrafts().catch((error) => showMsg("commandMsg", error.detail || error.message || "导入热点草稿失败", false));
       return;
     }
+    const hotMediaToggle = event.target.closest("[data-persona-hot-media-toggle]");
+    if (hotMediaToggle) {
+      const persona = selectedPersona();
+      if (!persona) return;
+      snapshotPersonaHotPreviewContent();
+      const candidateId = String(hotMediaToggle.dataset.personaHotMediaToggle || "").trim();
+      const index = Number(hotMediaToggle.dataset.personaHotMediaIndex);
+      if (!candidateId || !Number.isInteger(index) || index < 0) return;
+      const deleted = personaHotDeletedMediaSet(persona.id, candidateId);
+      if (deleted.has(index)) deleted.delete(index);
+      else deleted.add(index);
+      setPersonaHotDeletedMediaSet(persona.id, candidateId, deleted);
+      renderPersonaDetail();
+      return;
+    }
+    const hotMediaBulk = event.target.closest("[data-persona-hot-media-bulk]");
+    if (hotMediaBulk) {
+      const persona = selectedPersona();
+      if (!persona) return;
+      snapshotPersonaHotPreviewContent();
+      const candidateId = String(hotMediaBulk.dataset.personaHotMediaCandidate || "").trim();
+      const candidate = personaHotCandidates(persona).find((item) => personaHotCandidateKey(item) === candidateId);
+      if (!candidate) return;
+      const mediaCount = personaHotCandidateMediaItems(candidate).length;
+      setPersonaHotDeletedMediaSet(
+        persona.id,
+        candidateId,
+        hotMediaBulk.dataset.personaHotMediaBulk === "all" ? new Set(Array.from({ length: mediaCount }, (_, index) => index)) : new Set(),
+      );
+      renderPersonaDetail();
+      return;
+    }
     const importOneHotButton = event.target.closest("[data-persona-import-hot-one]");
     if (importOneHotButton) {
       const candidateId = String(importOneHotButton.dataset.personaImportHotOne || "").trim();
@@ -6357,6 +6491,7 @@ function bindEvents() {
     if (hotPreviewButton) {
       const persona = selectedPersona();
       if (!persona) return;
+      snapshotPersonaHotPreviewContent();
       personaFormState(persona.id).generate.hotPreviewId = String(hotPreviewButton.dataset.personaHotPreview || "").trim();
       renderPersonaDetail();
       renderConfirmSummary();
@@ -6492,10 +6627,14 @@ function bindEvents() {
       renderPersonaDetail();
       renderConfirmSummary();
     }
-    const personaSelectButton = event.target.closest("[data-persona-select]");
+    const personaSelectButton = event.target.closest("[data-persona-select]") || (
+      event.target.closest(".persona-card-edit, .persona-card-menu, button, a, input, select, textarea")
+        ? null
+        : event.target.closest("[data-persona-card]")
+    );
     if (personaSelectButton) {
       clearMsg("commandMsg");
-      state.selectedPersonaId = personaSelectButton.dataset.personaSelect || "";
+      state.selectedPersonaId = personaSelectButton.dataset.personaSelect || personaSelectButton.dataset.personaCard || "";
       state.selectedPersonaPostId = "";
       state.personaCreateMode = false;
       state.personaGroup = "content";

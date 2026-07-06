@@ -368,6 +368,23 @@ button.primary,
   margin-top: 12px;
 }
 
+.console-settings-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-solid);
+}
+
+.console-settings-toolbar .primary {
+  min-width: 132px;
+  padding: 10px 12px;
+  line-height: normal;
+}
+
 .console-main {
   border-radius: 12px;
   padding: 16px;
@@ -881,7 +898,7 @@ textarea:focus {
 .persona-draggable-card {
   cursor: grab;
   will-change: transform;
-  touch-action: pan-y;
+  touch-action: none;
   user-select: none;
   -webkit-user-drag: none;
   -webkit-user-select: none;
@@ -1531,6 +1548,61 @@ body.persona-touch-dragging .persona-list-card:active {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--panel-solid);
+}
+
+.persona-hot-media-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-muted);
+}
+
+.persona-hot-media-toolbar span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.persona-hot-media-delete-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.persona-hot-media-delete-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 42px;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.persona-hot-media-delete-item span {
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.persona-hot-media-delete-item strong {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.persona-hot-media-delete-item.is-deleted {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, var(--panel-solid));
+}
+
+.persona-hot-media-delete-item.is-deleted strong {
+  color: var(--danger);
 }
 
 .persona-toggle-chip {
@@ -2393,10 +2465,11 @@ body.persona-touch-dragging .persona-list-card:active {
   }
 
   .persona-list-shell {
-    position: sticky;
-    top: 8px;
+    position: static;
+    top: auto;
     order: -1;
-    max-height: min(812px, calc(100vh - 24px));
+    max-height: none;
+    overflow: visible;
   }
 
   .persona-draft-grid,
