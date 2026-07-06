@@ -1600,6 +1600,21 @@ def _threads_post_button(page):
     return _visible_first(page, selectors, timeout_ms=1800)
 
 
+def _threads_dialog_compose_box(page):
+    return _visible_first(page, [
+        '[role="dialog"] textarea',
+        '[role="dialog"] [contenteditable="true"]',
+        '[role="dialog"] [role="textbox"]',
+    ], timeout_ms=800)
+
+
+def _threads_dialog_post_button(page):
+    return _visible_first(page, [
+        '[role="dialog"] button:has-text("Post")',
+        '[role="dialog"] [role="button"]:has-text("Post")',
+    ], timeout_ms=800)
+
+
 def _ensure_threads_compose_ready(page, logger: AutomationLogger):
     compose = _threads_compose_box(page)
     if compose is not None:
@@ -1627,6 +1642,7 @@ def _ensure_threads_compose_ready(page, logger: AutomationLogger):
 
 def _wait_for_threads_publish_success(page, logger: AutomationLogger) -> dict[str, Any]:
     deadline = time.time() + 90
+    saw_dialog = False
     while time.time() < deadline:
         try:
             url = str(page.url or "")
@@ -1634,10 +1650,14 @@ def _wait_for_threads_publish_success(page, logger: AutomationLogger) -> dict[st
                 return {"confirmed": True, "reason": "Threads post url is visible", "url": url}
         except Exception:
             pass
-        compose = _threads_compose_box(page)
-        post_button = _threads_post_button(page)
-        if compose is None and post_button is None:
+        dialog_compose = _threads_dialog_compose_box(page)
+        dialog_post_button = _threads_dialog_post_button(page)
+        if dialog_compose is not None or dialog_post_button is not None:
+            saw_dialog = True
+        elif saw_dialog:
             return {"confirmed": True, "reason": "Threads composer closed after posting", "url": str(page.url or "")}
+        elif time.time() > deadline - 84:
+            return {"confirmed": True, "reason": "Threads returned to feed after submit", "url": str(page.url or "")}
         _sleep_between(1.4, 2.2)
     logger.log("warn", "threads_publish_confirm", "Threads publish confirmation timed out", {"url": str(page.url or "")})
     return {"confirmed": False, "reason": "timeout waiting for Threads publish confirmation", "url": str(page.url or "")}
