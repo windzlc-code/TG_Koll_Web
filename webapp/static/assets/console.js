@@ -126,6 +126,7 @@ const state = {
   personaHotCandidateResults: {},
   personaForms: {},
   personaProfileModes: {},
+  personaLinkPresetPages: {},
   renderedPersonaId: "",
   personaCreateMode: false,
   personaCreate: null,
@@ -409,7 +410,7 @@ function closeConsoleModal(result) {
   if (typeof resolver === "function") resolver(result);
 }
 
-function openConsoleModal({ title = "确认操作", message = "", inputLabel = "", inputValue = "", confirmText = "确定", cancelText = "取消", danger = false } = {}) {
+function openConsoleModal({ title = "确认操作", message = "", contentHtml = "", inputLabel = "", inputValue = "", confirmText = "确定", cancelText = "取消", danger = false, showCancel = true } = {}) {
   closeConsoleModal(null);
   return new Promise((resolve) => {
     const modal = document.createElement("div");
@@ -423,13 +424,14 @@ function openConsoleModal({ title = "确认操作", message = "", inputLabel = "
           <strong id="consoleModalTitle">${esc(title)}</strong>
         </div>
         ${message ? `<p>${esc(message)}</p>` : ""}
+        ${contentHtml ? `<div class="console-modal-content">${contentHtml}</div>` : ""}
         ${inputLabel ? `
           <label>${esc(inputLabel)}
             <input id="consoleModalInput" value="${esc(inputValue)}" />
           </label>
         ` : ""}
         <div class="console-modal-actions">
-          <button type="button" data-console-modal-cancel>${esc(cancelText)}</button>
+          ${showCancel ? `<button type="button" data-console-modal-cancel>${esc(cancelText)}</button>` : ""}
           <button type="button" class="${danger ? "danger" : "primary"}" data-console-modal-confirm>${esc(confirmText)}</button>
         </div>
       </section>
@@ -774,9 +776,7 @@ function personaHotCandidateScore(row) {
 function personaHotCandidates(persona = selectedPersona()) {
   const personaKey = String(persona?.id || "").trim();
   const fetchedRows = state.personaHotCandidateResults[personaKey]?.candidates;
-  const rows = Array.isArray(fetchedRows) && fetchedRows.length
-    ? fetchedRows
-    : (Array.isArray(persona?.post_metrics) ? persona.post_metrics : []);
+  const rows = Array.isArray(fetchedRows) ? fetchedRows : [];
   const deduped = new Map();
   rows.forEach((row, index) => {
     if (!row || typeof row !== "object") return;
@@ -990,8 +990,6 @@ function snapshotPersonaCurrentForm() {
   if ($("personaMediaResolution")) form.media.resolution = String($("personaMediaResolution")?.value || "720p");
   if ($("personaMediaDuration")) form.media.duration = Number($("personaMediaDuration")?.value || form.media.duration || 2);
   if ($("personaMediaReplaceExisting")) form.media.replaceExisting = Boolean($("personaMediaReplaceExisting")?.checked);
-  if ($("personaImagePrompt")) form.images.prompt = String($("personaImagePrompt")?.value || "");
-  if ($("personaImageAspectRatio")) form.images.aspectRatio = String($("personaImageAspectRatio")?.value || "1:1");
 }
 
 function personaImageLibraryState(personaId) {
@@ -1290,6 +1288,13 @@ function personaExecutionAccountLabel(persona) {
   return profileName || handle || "未绑定执行账号";
 }
 
+function renderPersonaExecutionAccountBadge(persona) {
+  const account = accountForPersona(persona);
+  const hasExecutionAccount = Boolean(account?.id || account?.username || account?.account_username);
+  const label = `执行账号：${personaExecutionAccountLabel(persona)}`;
+  return `<span class="persona-status-chip ${hasExecutionAccount ? "is-ready" : "is-warning"}">${esc(label)}</span>`;
+}
+
 function currentPersonaGroupStep(groupKey, profile) {
   const options = personaGroupStepOptions(groupKey, profile);
   const current = state.personaPanels[groupKey] || personaGroups[groupKey]?.defaultStep || options[0]?.[0] || "";
@@ -1414,7 +1419,7 @@ function setView(view) {
     social: "浏览器发布",
     accounts: "执行账号管理",
     settings: "系统状态",
-    console_settings: "通用设置",
+    console_settings: "设置",
   };
   $("viewTitle").textContent = titles[view] || "控制台";
   updateWorkspaceFlow();
@@ -2015,6 +2020,89 @@ function selectedPersonaPreset(profile) {
   return presets[0] || null;
 }
 
+function personaPresetById(profile, presetId) {
+  const target = String(presetId || "").trim();
+  if (!target) return null;
+  return personaProfilePresets(profile).find((item) => String(item.id) === target) || null;
+}
+
+function personaLinkPageKey() {
+  return String(selectedPersona()?.id || state.selectedPersonaId || "default");
+}
+
+function personaLinkPresetPage(totalItems = 0) {
+  const key = personaLinkPageKey();
+  const pageSize = 20;
+  const totalPages = Math.max(1, Math.ceil(Number(totalItems || 0) / pageSize));
+  const page = Math.min(Math.max(Number(state.personaLinkPresetPages[key] || 1), 1), totalPages);
+  state.personaLinkPresetPages[key] = page;
+  return { key, page, pageSize, totalPages };
+}
+
+function setPersonaLinkPresetPage(page) {
+  const key = personaLinkPageKey();
+  state.personaLinkPresetPages[key] = Math.max(Number(page || 1), 1);
+}
+
+function renderPersonaLinkPresetPager(pageInfo, totalItems) {
+  if (Number(totalItems || 0) <= pageInfo.pageSize) return "";
+  const page = Number(pageInfo.page || 1);
+  const totalPages = Number(pageInfo.totalPages || 1);
+  return `
+    <div class="persona-link-pager">
+      <span>${esc(page)} / ${esc(totalPages)} · 每页 ${esc(pageInfo.pageSize)}</span>
+      <button type="button" data-persona-link-page="first" ${page <= 1 ? "disabled" : ""}>首页</button>
+      <button type="button" data-persona-link-page="prev" ${page <= 1 ? "disabled" : ""}>上页</button>
+      <button type="button" data-persona-link-page="next" ${page >= totalPages ? "disabled" : ""}>下页</button>
+      <button type="button" data-persona-link-page="last" ${page >= totalPages ? "disabled" : ""}>尾页</button>
+    </div>`;
+}
+
+function renderPersonaLinkPresetTable(profile, presets, selectedPresetId) {
+  if (!presets.length) {
+    return `<div class="empty-state">暂无链接模板。左侧填写参数后新增。</div>`;
+  }
+  const activeId = String(profile?.active_link_preset_id || "").trim();
+  const pageInfo = personaLinkPresetPage(presets.length);
+  const pagePresets = presets.slice((pageInfo.page - 1) * pageInfo.pageSize, pageInfo.page * pageInfo.pageSize);
+  return `
+    <div class="persona-link-table-wrap">
+      <div class="persona-link-table" role="table" aria-label="链接模板列表">
+        <div class="persona-link-table-head" role="row">
+          <span>序号</span>
+          <span>模板</span>
+          <span>链接</span>
+          <span>结尾文案</span>
+          <span>状态</span>
+          <span>操作</span>
+        </div>
+        ${pagePresets.map((item, index) => {
+          const presetId = String(item.id || "").trim();
+          const isSelected = presetId === String(selectedPresetId || "");
+          const isActive = presetId === activeId;
+          const displayIndex = (pageInfo.page - 1) * pageInfo.pageSize + index + 1;
+          return `
+            <article class="persona-link-row ${isSelected ? "is-selected" : ""}" role="row" data-persona-select-preset="${esc(presetId)}">
+              <div class="persona-link-cell persona-link-index" role="cell">${esc(displayIndex)}</div>
+              <div class="persona-link-cell persona-link-name" role="cell">
+                <strong>${esc(item.name || presetId || "链接模板")}</strong>
+              </div>
+              <div class="persona-link-cell" role="cell">${item.link_url ? `<a href="${esc(item.link_url)}" target="_blank" rel="noreferrer">${esc(item.link_url)}</a>` : `<span class="muted">未填写</span>`}</div>
+              <div class="persona-link-cell persona-link-ending" role="cell">${esc(item.ending_text || "未填写")}</div>
+              <div class="persona-link-cell" role="cell">
+                <span class="module-chip ${isActive ? "is-dark" : ""}">${isActive ? "当前启用" : "未启用"}</span>
+              </div>
+              <div class="persona-link-actions" role="cell">
+                <button type="button" data-persona-view-preset="${esc(presetId)}">查看</button>
+                <button type="button" class="danger" data-persona-delete-preset-id="${esc(presetId)}">删除</button>
+              </div>
+            </article>`;
+        }).join("")}
+      </div>
+    </div>
+    ${renderPersonaLinkPresetPager(pageInfo, presets.length)}`;
+}
+
 function personaAutomationTaskTypesForStep(step) {
   if (step === "login") return ["open_login", "check_login"];
   if (step === "reply_comment" || step === "reply_hot") return ["threads_auto_reply"];
@@ -2037,14 +2125,15 @@ function renderPersonaAccountPanel(persona, account, profile, step) {
 function personaProfileMode(personaId) {
   const key = String(personaId || "").trim();
   const mode = key ? state.personaProfileModes[key] : "";
-  return mode === "edit" ? "edit" : "overview";
+  return ["edit", "images"].includes(mode) ? mode : "overview";
 }
 
 function renderPersonaProfileModeTabs(mode) {
-  const activeMode = mode === "edit" ? "edit" : "overview";
+  const activeMode = ["edit", "images"].includes(mode) ? mode : "overview";
   return `<div class="persona-step-tabs persona-subflow-tabs persona-profile-mode-tabs">${[
     ["overview", "内容概览"],
     ["edit", "编辑资料"],
+    ["images", "人设图"],
   ].map(([value, label]) => `
     <button
       type="button"
@@ -2052,6 +2141,34 @@ function renderPersonaProfileModeTabs(mode) {
       data-persona-profile-mode="${esc(value)}"
     >${esc(label)}</button>
   `).join("")}</div>`;
+}
+
+function renderPersonaHotSummaryCard(persona) {
+  const hot = persona?.hot || {};
+  const stats = [
+    ["热度", Number(hot.hot_score || 0)],
+    ["点赞", Number(hot.likes || 0)],
+    ["评论", Number(hot.comments || 0)],
+    ["分享", Number(hot.shares || 0)],
+    ["转发", Number(hot.reposts || 0)],
+  ];
+  const hasHotData = stats.some(([, value]) => Number(value || 0) > 0);
+  return `
+    <aside class="persona-hot-summary-card">
+      <div class="persona-hot-summary-head">
+        <span>热点数据</span>
+        <strong>${hasHotData ? "当前热点表现" : "暂无热点统计"}</strong>
+        <small>${hasHotData ? "直接查看当前人设的热度表现。" : "后续抓取或同步后会在这里更新。"}</small>
+      </div>
+      <div class="persona-hot-summary-metrics">
+        ${stats.map(([label, value]) => `
+          <div>
+            <span>${esc(label)}</span>
+            <strong>${esc(numberText(value))}</strong>
+          </div>
+        `).join("")}
+      </div>
+    </aside>`;
 }
 
 function renderPersonaContentOverview(persona, account, profile) {
@@ -2103,53 +2220,39 @@ function renderPersonaContentOverview(persona, account, profile) {
     </div>`;
 }
 
+function renderPersonaImagePanel(persona) {
+  const imageBusy = isActionLocked("persona", persona.id, "image_generate");
+  const library = personaImageLibraryState(persona.id);
+  const currentReferenceItem = (Array.isArray(library?.items) ? library.items : []).find((item) => item && item.is_reference) || null;
+  const currentReferenceUrl = String(currentReferenceItem?.preview_url || library?.current_reference_url || "").trim();
+  return `
+    <div class="persona-profile-section">
+      <div class="persona-head-copy">
+        <strong>人设图</strong>
+        <span class="persona-panel-intro">生成并管理当前人设的参考图。</span>
+      </div>
+      ${currentReferenceUrl ? `
+        <div class="persona-inline-panel persona-inline-panel--nested">
+          <strong>当前参考图</strong>
+          ${renderPersonaMediaPreview([{ previewUrl: currentReferenceUrl, url: currentReferenceUrl, type: "image", label: "当前参考图" }])}
+        </div>
+      ` : `<div class="empty-state">当前还没有参考图，先生成一张。</div>`}
+      <div class="row-actions">
+        <button type="button" class="primary" data-persona-generate-image ${imageBusy ? "disabled" : ""}>${imageBusy ? "正在生成人设图..." : (currentReferenceUrl ? "重新生成人设图" : "生成人设图")}</button>
+      </div>
+      <div class="persona-inline-panel persona-inline-panel--nested">
+        <strong>图库预览</strong>
+        ${renderPersonaImageLibraryGrid(library)}
+      </div>
+    </div>`;
+}
+
 function renderPersonaSettingsPanelV2(persona, account, profile, step) {
   if (!profile) return personaSettingsLoadingPanel();
   const presets = personaProfilePresets(profile);
   const selectedPreset = selectedPersonaPreset(profile);
   const selectedPresetId = String(selectedPreset?.id || "");
   const currentStep = step || "profile";
-  if (currentStep === "images") {
-    const form = personaFormState(persona.id).images;
-    const imageBusy = isActionLocked("persona", persona.id, "image_generate");
-    const library = personaImageLibraryState(persona.id);
-    const currentReferenceItem = (Array.isArray(library?.items) ? library.items : []).find((item) => item && item.is_reference) || null;
-    const currentReferenceUrl = String(currentReferenceItem?.preview_url || library?.current_reference_url || "").trim();
-    return `
-      <div class="persona-inline-panel">
-        <div class="persona-head-copy">
-          <strong>人设图</strong>
-          <span class="persona-panel-intro">生成并管理当前人设的参考图。</span>
-        </div>
-        ${currentReferenceUrl ? `
-          <div class="persona-inline-panel persona-inline-panel--nested">
-            <strong>当前参考图</strong>
-            ${renderPersonaMediaPreview([{ previewUrl: currentReferenceUrl, url: currentReferenceUrl, type: "image", label: "当前参考图" }])}
-          </div>
-        ` : `<div class="empty-state">当前还没有参考图，先生成一张。</div>`}
-        <div class="form-grid persona-detail-controls">
-          <label>图像比例
-            <select id="personaImageAspectRatio">
-              <option value="1:1" ${String(form.aspectRatio || "1:1") === "1:1" ? "selected" : ""}>1:1</option>
-              <option value="3:4" ${String(form.aspectRatio || "") === "3:4" ? "selected" : ""}>3:4</option>
-              <option value="4:3" ${String(form.aspectRatio || "") === "4:3" ? "selected" : ""}>4:3</option>
-              <option value="9:16" ${String(form.aspectRatio || "") === "9:16" ? "selected" : ""}>9:16</option>
-              <option value="16:9" ${String(form.aspectRatio || "") === "16:9" ? "selected" : ""}>16:9</option>
-            </select>
-          </label>
-        </div>
-        <label>人设图补充提示
-          <textarea id="personaImagePrompt" rows="4" placeholder="可选，留空则按当前人设内容生成。">${esc(form.prompt || "")}</textarea>
-          </label>
-          <div class="row-actions">
-            <button type="button" class="primary" data-persona-generate-image ${imageBusy ? "disabled" : ""}>${imageBusy ? "正在生成人设图..." : (currentReferenceUrl ? "重新生成人设图" : "生成人设图")}</button>
-          </div>
-        <div class="persona-inline-panel persona-inline-panel--nested">
-          <strong>图库预览</strong>
-          ${renderPersonaImageLibraryGrid(library)}
-        </div>
-      </div>`;
-  }
   if (currentStep === "style") {
     return `
       <div class="persona-inline-panel">
@@ -2167,28 +2270,41 @@ function renderPersonaSettingsPanelV2(persona, account, profile, step) {
   if (currentStep === "links") {
     return `
       <div class="persona-inline-panel">
-        <strong>链接设置</strong>
-        <label>模板列表
-          <select id="personaLinkPresetSelect">
-            ${presets.length ? presets.map((item) => `<option value="${esc(item.id)}" ${String(item.id) === selectedPresetId ? "selected" : ""}>${esc(item.name || item.id)}${String(profile.active_link_preset_id || "") === String(item.id) ? " · 当前启用" : ""}</option>`).join("") : `<option value="">暂无链接模板</option>`}
-          </select>
-        </label>
-        <div class="form-grid">
-          <label>模板名称
-            <input id="personaLinkPresetName" value="${esc(selectedPreset?.name || "")}" placeholder="模板名称" />
-          </label>
-          <label>链接地址
-            <input id="personaLinkPresetUrl" value="${esc(selectedPreset?.link_url || "")}" placeholder="https://example.com" />
-          </label>
+        <div class="persona-head-copy">
+          <strong>链接设置</strong>
+          <span class="persona-panel-intro">左侧编辑模板参数，右侧查看和管理全部模板。</span>
         </div>
-        <label>结尾文案
-          <textarea id="personaLinkPresetEnding" rows="4" placeholder="发布时附加在推文结尾。">${esc(selectedPreset?.ending_text || "")}</textarea>
-        </label>
-        <div class="row-actions">
-          <button type="button" data-persona-add-preset>新增模板</button>
-          <button type="button" data-persona-save-preset ${selectedPreset ? "" : "disabled"}>保存模板</button>
-          <button type="button" data-persona-delete-preset ${selectedPreset ? "" : "disabled"}>删除模板</button>
-          <button type="button" data-persona-activate-preset ${selectedPreset ? "" : "disabled"}>设为当前启用</button>
+        <div class="persona-link-layout">
+          <section class="persona-link-editor">
+            <div class="persona-head-copy">
+              <strong>${selectedPreset ? "编辑模板" : "新增模板"}</strong>
+              <span class="persona-panel-intro">${selectedPreset ? "修改当前选中的链接模板。" : "填写后新增为链接模板。"}</span>
+            </div>
+            <label>模板名称
+              <input id="personaLinkPresetName" value="${esc(selectedPreset?.name || "")}" placeholder="例如：预约咨询" />
+            </label>
+            <label>链接地址
+              <input id="personaLinkPresetUrl" value="${esc(selectedPreset?.link_url || "")}" placeholder="https://example.com" />
+            </label>
+            <label>结尾文案
+              <textarea id="personaLinkPresetEnding" rows="5" placeholder="发布时附加在推文结尾。">${esc(selectedPreset?.ending_text || "")}</textarea>
+            </label>
+            <div class="row-actions persona-link-editor-actions">
+              <button type="button" class="primary" data-persona-add-preset>新增模板</button>
+              <button type="button" data-persona-save-preset ${selectedPreset ? "" : "disabled"}>保存当前</button>
+              <button type="button" data-persona-activate-preset ${selectedPreset ? "" : "disabled"}>设为启用</button>
+            </div>
+          </section>
+          <section class="persona-link-list-panel">
+            <div class="persona-link-list-head">
+              <div>
+                <strong>模板列表</strong>
+                <span>${esc(presets.length)} 个模板</span>
+              </div>
+              <span class="module-chip">${selectedPreset ? `正在编辑：${selectedPreset.name || selectedPreset.id}` : "未选择"}</span>
+            </div>
+            ${renderPersonaLinkPresetTable(profile, presets, selectedPresetId)}
+          </section>
         </div>
       </div>`;
   }
@@ -2209,8 +2325,11 @@ function renderPersonaSettingsPanelV2(persona, account, profile, step) {
         <strong>基础资料</strong>
         <span class="persona-panel-intro">集中查看人设内容概览，也可以切换到编辑资料。</span>
       </div>
-      ${renderPersonaProfileModeTabs(profileMode)}
-      ${profileMode === "edit" ? `
+      <div class="persona-profile-overview-bar">
+        ${renderPersonaProfileModeTabs(profileMode)}
+        ${renderPersonaHotSummaryCard(persona)}
+      </div>
+      ${profileMode === "images" ? renderPersonaImagePanel(persona) : profileMode === "edit" ? `
         <div class="form-grid">
           <label>人设名称
             <input id="personaProfileName" value="${esc(profile.name || persona.name || persona.id)}" />
@@ -2262,7 +2381,6 @@ function renderPersonaAccountPanelV2(persona, account, profile, step) {
         </select>
       </label>
     </div>
-    ${selectedAccount ? "" : `<div class="empty-state">当前平台还没有执行账号。请先绑定账号。</div>`}
   `;
   if (currentStep === "binding") {
     return `
@@ -2400,30 +2518,18 @@ function renderPersonaAccountPanelV2(persona, account, profile, step) {
 }
 
 function renderPersonaDataPanel(persona, profile, step) {
-  const hot = persona.hot || {};
-  if (step === "queue") {
-    const personaTasks = state.socialTasks.filter((item) => String(item.persona_id || "") === String(persona.id || "")).slice(0, 10);
-    return `
-      <div class="persona-inline-panel">
-        ${personaTasks.length ? `<div class="compact-list">${personaTasks.map((task) => `
-          <article class="compact-row">
-            <strong>${esc(statusLabel(task.task_type || ""))}</strong>
-            <p>${esc(statusLabel(task.status || ""))} \u00b7 ${esc(task.account_username || task.account_id || "")}</p>
-            <span>${esc(formatTime(task.updated_at || task.created_at || ""))}</span>
-          </article>
-        `).join("")}</div>` : `<div class="empty-state">\u5f53\u524d\u4eba\u8bbe\u6682\u65e0\u81ea\u52a8\u5316\u4efb\u52a1\u3002</div>`}
-        <div class="row-actions">
-          <button type="button" data-persona-clear-tasks>\u6e05\u7406\u8be5\u4eba\u8bbe\u81ea\u52a8\u5316\u961f\u5217</button>
-        </div>
-      </div>`;
-  }
+  const personaTasks = state.socialTasks.filter((item) => String(item.persona_id || "") === String(persona.id || "")).slice(0, 10);
   return `
-    <div class="form-grid">
-      <div class="persona-inline-panel">
-        <p>\u70ed\u5ea6 ${numberText(hot.hot_score)} \u00b7 \u70b9\u8d5e ${numberText(hot.likes)} \u00b7 \u8bc4\u8bba ${numberText(hot.comments)} \u00b7 \u5206\u4eab ${numberText(hot.shares)} \u00b7 \u8f6c\u53d1 ${numberText(hot.reposts)}</p>
-      </div>
-      <div class="persona-inline-panel">
-        <p>\u66f4\u5b8c\u6574\u7684\u65e5\u5fd7\u3001\u81ea\u52a8\u5316\u622a\u56fe\u548c\u6863\u6848\u53ea\u5728\u5de6\u4e0b\u89d2\u7684\u201c\u4eba\u8bbe\u770b\u677f\u201d\u5165\u53e3\u4e2d\u67e5\u770b\u3002</p>
+    <div class="persona-inline-panel">
+      ${personaTasks.length ? `<div class="compact-list">${personaTasks.map((task) => `
+        <article class="compact-row">
+          <strong>${esc(statusLabel(task.task_type || ""))}</strong>
+          <p>${esc(statusLabel(task.status || ""))} \u00b7 ${esc(task.account_username || task.account_id || "")}</p>
+          <span>${esc(formatTime(task.updated_at || task.created_at || ""))}</span>
+        </article>
+      `).join("")}</div>` : `<div class="empty-state">\u5f53\u524d\u4eba\u8bbe\u6682\u65e0\u81ea\u52a8\u5316\u4efb\u52a1\u3002</div>`}
+      <div class="row-actions">
+        <button type="button" data-persona-clear-tasks>\u6e05\u7406\u8be5\u4eba\u8bbe\u81ea\u52a8\u5316\u961f\u5217</button>
       </div>
     </div>`;
 }
@@ -2932,6 +3038,14 @@ function draftPersonaPresetList(profile, mutate) {
   return presets;
 }
 
+function readPersonaPresetForm() {
+  return {
+    name: $("personaLinkPresetName")?.value.trim() || "",
+    link_url: $("personaLinkPresetUrl")?.value.trim() || "",
+    ending_text: $("personaLinkPresetEnding")?.value.trim() || "",
+  };
+}
+
 async function savePersonaPresetList(nextPresets, activeId = null) {
   const payload = { link_presets: nextPresets };
   if (activeId !== null) payload.active_link_preset_id = activeId;
@@ -2945,11 +3059,23 @@ async function savePersonaPresetList(nextPresets, activeId = null) {
 async function addPersonaPreset() {
   const profile = selectedPersonaProfile();
   if (!profile) return;
+  const form = readPersonaPresetForm();
+  if (!form.link_url && !form.ending_text) {
+    showMsg("commandMsg", "请先填写链接地址或结尾文案。", false);
+    return;
+  }
   const nextId = `preset-${Date.now().toString(36)}`;
   const nextPresets = draftPersonaPresetList(profile, (presets) => {
-    presets.push({ id: nextId, name: "新模板", link_url: "", ending_text: "", enabled: true });
+    presets.push({
+      id: nextId,
+      name: form.name || "链接模板",
+      link_url: form.link_url,
+      ending_text: form.ending_text,
+      enabled: true,
+    });
   });
   state.personaLinkPresetId = nextId;
+  setPersonaLinkPresetPage(Math.ceil(nextPresets.length / 20));
   await savePersonaPresetList(nextPresets, String(profile.active_link_preset_id || nextId));
 }
 
@@ -2957,23 +3083,28 @@ async function savePersonaPreset() {
   const profile = selectedPersonaProfile();
   const preset = selectedPersonaPreset(profile);
   if (!profile || !preset) return;
+  const form = readPersonaPresetForm();
+  if (!form.link_url && !form.ending_text) {
+    showMsg("commandMsg", "请先填写链接地址或结尾文案。", false);
+    return;
+  }
   const nextPresets = draftPersonaPresetList(profile, (presets) => {
     const index = presets.findIndex((item) => String(item.id) === String(preset.id));
     if (index >= 0) {
       presets[index] = {
         ...presets[index],
-        name: $("personaLinkPresetName")?.value.trim() || presets[index].name || "模板",
-        link_url: $("personaLinkPresetUrl")?.value.trim() || "",
-        ending_text: $("personaLinkPresetEnding")?.value.trim() || "",
+        name: form.name || presets[index].name || "链接模板",
+        link_url: form.link_url,
+        ending_text: form.ending_text,
       };
     }
   });
   await savePersonaPresetList(nextPresets, String(profile.active_link_preset_id || preset.id));
 }
 
-async function deletePersonaPreset() {
+async function deletePersonaPreset(presetId = "") {
   const profile = selectedPersonaProfile();
-  const preset = selectedPersonaPreset(profile);
+  const preset = personaPresetById(profile, presetId) || selectedPersonaPreset(profile);
   if (!profile || !preset) return;
   const nextPresets = draftPersonaPresetList(profile, (presets) => {
     const index = presets.findIndex((item) => String(item.id) === String(preset.id));
@@ -2986,11 +3117,32 @@ async function deletePersonaPreset() {
   await savePersonaPresetList(nextPresets, nextActive);
 }
 
-async function activatePersonaPreset() {
+async function activatePersonaPreset(presetId = "") {
   const profile = selectedPersonaProfile();
-  const preset = selectedPersonaPreset(profile);
+  const preset = personaPresetById(profile, presetId) || selectedPersonaPreset(profile);
   if (!profile || !preset) return;
+  state.personaLinkPresetId = String(preset.id || "");
   await savePersonaPresetList(draftPersonaPresetList(profile, () => {}), String(preset.id));
+}
+
+async function viewPersonaPreset(presetId = "") {
+  const profile = selectedPersonaProfile();
+  const preset = personaPresetById(profile, presetId) || selectedPersonaPreset(profile);
+  if (!profile || !preset) return;
+  const isActive = String(profile.active_link_preset_id || "") === String(preset.id || "");
+  await openConsoleModal({
+    title: "链接模板详情",
+    contentHtml: `
+      <div class="console-modal-detail">
+        <div><span>模板名称</span><strong>${esc(preset.name || "链接模板")}</strong></div>
+        <div><span>状态</span><strong>${esc(isActive ? "当前启用" : "未启用")}</strong></div>
+        <div><span>链接地址</span><strong>${preset.link_url ? `<a href="${esc(preset.link_url)}" target="_blank" rel="noreferrer">${esc(preset.link_url)}</a>` : "未填写"}</strong></div>
+        <div><span>结尾文案</span><p>${esc(preset.ending_text || "未填写")}</p></div>
+      </div>
+    `,
+    confirmText: "关闭",
+    showCancel: false,
+  });
 }
 
 async function deleteSelectedPersona() {
@@ -3304,12 +3456,13 @@ async function executeSimpleFlow() {
 }
 
 async function loadMe() {
+  const meName = $("consoleMeName");
   try {
     const me = await api("/api/me");
-    $("consoleMeName").textContent = me.username || "-";
+    if (meName) meName.textContent = me.username || "-";
     if (me.is_admin) $("openAdmin").hidden = false;
   } catch (error) {
-    $("consoleMeName").textContent = "本地控制台";
+    if (meName) meName.textContent = "本地控制台";
     $("openAdmin").hidden = true;
     appendEvent("error", error.detail || error.message || "本地控制台会话不可用");
   }
@@ -3500,7 +3653,7 @@ function saveConsoleSettingsPage() {
   } catch {}
   renderConsoleSettingsPage();
   refreshConsoleSettingsDependents();
-  showMsg("consoleSettingsMsg", "通用设置已保存。", true);
+  showMsg("consoleSettingsMsg", "设置已保存。", true);
 }
 
 async function togglePersonaCollection(groupId) {
@@ -3556,21 +3709,27 @@ async function addPersonaToCollection(personaId, groupId) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ persona_id: personaId }),
   });
-  state.personaListEditorId = personaId;
+  state.personaListEditorId = "";
+  state.personaListEditorMode = "";
+  removePersonaCardEditorPortal();
   await refreshPersonaCollections("已加入分组。");
 }
 
 async function removePersonaFromCollection(personaId, groupId) {
   if (!personaId || !groupId) return;
   await api(`/api/persona_dashboard/groups/${encodeURIComponent(groupId)}/personas/${encodeURIComponent(personaId)}`, { method: "DELETE" });
-  state.personaListEditorId = personaId;
+  state.personaListEditorId = "";
+  state.personaListEditorMode = "";
+  removePersonaCardEditorPortal();
   await refreshPersonaCollections("已移出分组。");
 }
 
 async function ungroupPersona(personaId) {
   const groups = personaGroupsForPersona(personaId);
   await Promise.all(groups.map((group) => api(`/api/persona_dashboard/groups/${encodeURIComponent(group.id)}/personas/${encodeURIComponent(personaId)}`, { method: "DELETE" })));
-  state.personaListEditorId = personaId;
+  state.personaListEditorId = "";
+  state.personaListEditorMode = "";
+  removePersonaCardEditorPortal();
   await refreshPersonaCollections("已单独拆出。");
 }
 
@@ -4288,17 +4447,20 @@ async function loadPersonaPublishHistory(personaId, { force = false } = {}) {
   return rows;
 }
 
-async function activateCreatedPersona(personaId, { group = "settings", step = "profile" } = {}) {
+async function activateCreatedPersona(personaId, { group = "settings", step = "profile", profileMode = "" } = {}) {
   state.selectedPersonaId = personaId || state.selectedPersonaId;
   state.selectedPersonaPostId = "";
   state.personaGroup = group;
   if (group === "settings") state.personaPanels.settings = step;
   if (group === "content") state.personaPanels.content = step;
+  if (group === "settings" && step === "profile") {
+    state.personaProfileModes[String(state.selectedPersonaId || "")] = ["images", "edit"].includes(profileMode) ? profileMode : "overview";
+  }
   state.personaCreateMode = false;
   await loadPersonas();
   await loadPersonaProfile(state.selectedPersonaId, { force: true }).catch(() => {});
   await loadPersonaDraftPosts(state.selectedPersonaId, { force: true }).catch(() => {});
-  if (group === "settings" && step === "images") {
+  if (group === "settings" && step === "profile" && personaProfileMode(state.selectedPersonaId) === "images") {
     await loadPersonaImageLibrary(state.selectedPersonaId, { force: true }).catch(() => {});
   }
   renderConfirmSummary();
@@ -4773,8 +4935,6 @@ async function submitPersonaImageGeneration() {
     showMsg("commandMsg", "当前人设图正在生成，请等待本次生成完成。", false);
     return;
   }
-  snapshotPersonaCurrentForm();
-  const form = personaFormState(persona.id).images;
   setActionLocked(lockParts, true);
   renderPersonaDetail();
   try {
@@ -4782,11 +4942,7 @@ async function submitPersonaImageGeneration() {
     const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/images/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        prompt: String(form.prompt || "").trim(),
-        aspect_ratio: String(form.aspectRatio || "1:1"),
-        mode: "person",
-      }),
+      body: JSON.stringify({}),
     });
     state.personaImageLibraries[String(persona.id)] = result;
     await Promise.all([
@@ -4799,6 +4955,23 @@ async function submitPersonaImageGeneration() {
     setActionLocked(lockParts, false);
     if (state.activeModule === "personas") renderPersonaDetail();
   }
+}
+
+async function applyPersonaReferenceImage(imageId) {
+  const persona = selectedPersona();
+  const cleanImageId = String(imageId || "").trim();
+  if (!persona || !cleanImageId) return;
+  const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/images/${encodeURIComponent(cleanImageId)}/apply`, {
+    method: "POST",
+  });
+  state.personaImageLibraries[String(persona.id)] = result;
+  await Promise.all([
+    loadPersonas(),
+    loadPersonaProfile(persona.id, { force: true }).catch(() => {}),
+  ]);
+  renderPersonaDetail();
+  renderConfirmSummary();
+  showMsg("commandMsg", "当前人设图已切换。", true);
 }
 
 async function refreshPersonaMediaTask(personaId, postId, taskId) {
@@ -5115,11 +5288,11 @@ function renderPersonaCardEditorMenu(persona, currentGroups, availableGroups) {
   return `
     <div class="persona-card-menu" data-persona-editor-menu="${esc(personaId)}">
       <div class="persona-menu-tabs" aria-label="人设操作">
-        <button type="button" class="persona-menu-tab ${mode === "add" ? "is-active" : ""}" data-persona-editor-mode="${esc(personaId)}:add">
+        <button type="button" class="persona-menu-tab ${mode === "add" ? "is-active" : ""}" data-persona-editor-mode="${esc(personaId)}:add" ${availableGroups.length ? "" : "disabled"}>
           <span>加入分组</span>
           <small>${availableGroups.length ? `${availableGroups.length} 个可选` : "暂无可选"}</small>
         </button>
-        <button type="button" class="persona-menu-tab ${mode === "remove" ? "is-active" : ""}" data-persona-editor-mode="${esc(personaId)}:remove">
+        <button type="button" class="persona-menu-tab ${mode === "remove" ? "is-active" : ""}" data-persona-editor-mode="${esc(personaId)}:remove" ${currentGroups.length ? "" : "disabled"}>
           <span>移出分组</span>
           <small>${currentGroups.length ? `${currentGroups.length} 个已加入` : "未加入"}</small>
         </button>
@@ -5199,6 +5372,7 @@ function handlePersonaCardEditorPortalClick(event) {
   }
   const personaEditorMode = event.target.closest("[data-persona-editor-mode]");
   if (personaEditorMode) {
+    if (personaEditorMode.disabled) return;
     const [personaId, mode] = String(personaEditorMode.dataset.personaEditorMode || "").split(":");
     if (personaId) {
       state.personaListEditorId = personaId;
@@ -5323,11 +5497,11 @@ function renderPersonaCollectionList() {
   const visibleNodes = nodes.slice(start, start + pageSize);
   const pager = `
     <div class="persona-list-pager">
-      <button type="button" data-persona-list-page="first" ${state.personaListPage <= 1 ? "disabled" : ""}>首页</button>
-      <button type="button" data-persona-list-page="prev" ${state.personaListPage <= 1 ? "disabled" : ""}>上页</button>
+      <button type="button" data-persona-list-page="first" title="首页" aria-label="首页" ${state.personaListPage <= 1 ? "disabled" : ""}>&lt;&lt;</button>
+      <button type="button" data-persona-list-page="prev" title="上页" aria-label="上页" ${state.personaListPage <= 1 ? "disabled" : ""}>&lt;</button>
       <span>${esc(`${state.personaListPage} / ${totalPages} · 每页 ${pageSize}`)}</span>
-      <button type="button" data-persona-list-page="next" ${state.personaListPage >= totalPages ? "disabled" : ""}>下页</button>
-      <button type="button" data-persona-list-page="last" ${state.personaListPage >= totalPages ? "disabled" : ""}>尾页</button>
+      <button type="button" data-persona-list-page="next" title="下页" aria-label="下页" ${state.personaListPage >= totalPages ? "disabled" : ""}>&gt;</button>
+      <button type="button" data-persona-list-page="last" title="尾页" aria-label="尾页" ${state.personaListPage >= totalPages ? "disabled" : ""}>&gt;&gt;</button>
     </div>
   `;
   return `
@@ -5581,6 +5755,7 @@ function renderPersonaImageLibraryGrid(library) {
   if (!rows.length) return `<div class="empty-state">当前还没有人设图。生成后会在这里直接预览。</div>`;
   const previewable = rows
     .map((item) => ({
+      id: String(item.id || "").trim(),
       previewUrl: String(item.preview_url || item.image_url || "").trim(),
       type: "image",
       label: String(item.prompt || item.created_at || "人设图").trim() || "人设图",
@@ -5597,6 +5772,9 @@ function renderPersonaImageLibraryGrid(library) {
         caption: item.isReference ? "当前参考图" : "历史图",
       })}
       <small>${esc(item.createdAt ? formatTime(item.createdAt) : "")}</small>
+      <div class="row-actions persona-image-library-actions">
+        <button type="button" class="primary" data-persona-apply-image="${esc(item.id)}" ${item.isReference || !item.id ? "disabled" : ""}>${item.isReference ? "当前使用" : "设为当前"}</button>
+      </div>
     </div>
   `).join("")}</div>`;
 }
@@ -5659,7 +5837,7 @@ function renderPersonaCreateWorkbench() {
         <div class="persona-workbench-head">
           <div class="persona-head-copy">
             <strong>AI 人设已生成</strong>
-            <span>下一步和 Bot 一样，先进入详情继续补资料，或直接转到人设图。</span>
+            <span>下一步可以继续补资料，或直接生成人设图。</span>
           </div>
           <span class="module-chip">已创建</span>
         </div>
@@ -5752,7 +5930,6 @@ function personaGroupStepOptions(groupKey, profile) {
   if (groupKey === "settings") {
     return [
       ["profile", "基础资料"],
-      ["images", "人设图"],
       ["style", "推文风格"],
       ["links", "链接设置"],
     ];
@@ -5768,7 +5945,6 @@ function personaGroupStepOptions(groupKey, profile) {
   }
   if (groupKey === "data") {
     return [
-      ["metrics", "热点数据"],
       ["queue", "自动化队列"],
     ];
   }
@@ -5837,7 +6013,7 @@ function renderPersonaDetail() {
   if (groupKey === "content" && step === "generate" && !Array.isArray(state.personaMemories[String(persona.id)])) {
     loadPersonaMemories(persona.id).catch(() => {});
   }
-  if (groupKey === "settings" && step === "images" && !personaImageLibraryState(persona.id)) {
+  if (groupKey === "settings" && step === "profile" && personaProfileMode(persona.id) === "images" && !personaImageLibraryState(persona.id)) {
     loadPersonaImageLibrary(persona.id).catch(() => {});
   }
   if (groupKey === "settings" && step === "profile") {
@@ -5855,10 +6031,8 @@ function renderPersonaDetail() {
     const selectedAccount = selectedPersonaAutomationAccount(persona, platform);
     if (selectedAccount?.id) ensurePersonaAutomationResultLoaded(selectedAccount.id, step).catch(() => {});
   }
-  const warnings = Array.isArray(persona.warnings) ? persona.warnings : [];
   const account = accountForPersona(persona);
   const drafts = personaDraftPosts(persona);
-  const showWarnings = warnings.length && groupKey !== "content";
   const groupPanel = renderPersonaGroupPanel(groupKey, step, persona, account, profile);
   const canDelete = Boolean(profile);
   $("personaDetail").innerHTML = `
@@ -5867,7 +6041,7 @@ function renderPersonaDetail() {
         <div class="persona-summary-meta">
           <strong>${esc(persona.name || "未命名人设")}</strong>
           <span>${esc(`类型：${personaKindLabel(persona, profile)}`)}</span>
-          <span>${esc(`执行账号：${personaExecutionAccountLabel(persona)}`)}</span>
+          ${renderPersonaExecutionAccountBadge(persona)}
           <span>${esc(`草稿 ${drafts.length} 条`)}</span>
         </div>
         <div class="persona-quick-actions">
@@ -5876,7 +6050,6 @@ function renderPersonaDetail() {
       </div>
       ${renderPersonaGroupTabs(profile)}
     </div>
-    ${showWarnings ? `<div class="persona-warning-inline">${warnings.map(esc).join(" / ")}</div>` : ""}
     <div class="persona-step-shell">
       ${renderPersonaStepTabs(groupKey, profile)}
       ${groupPanel}
@@ -5906,7 +6079,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
   const generateDefaults = personaGenerateDefaults();
   const generateTitle = generateMode === "hot" ? "新建推文" : (isEditingDraft ? "编辑草稿" : "新建推文");
   const generateIntro = generateMode === "hot"
-    ? "这里直接走 Bot 同源的热点抓取链路，先抓候选，再多选导入当前人设草稿库。"
+    ? "这里会抓取热点候选，选择后导入当前人设草稿库。"
     : (isEditingDraft
       ? "这里处理当前草稿的正文修改。配图、媒体、删除和 AI 重写都从这里进入，不再放在草稿列表里。"
       : `这里处理推文内容。配图和媒体操作已归到“推文配图 / 媒体”。已识别 ${memoryRows.length} 条可选记忆。`);
@@ -5923,7 +6096,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
           </div>
         </div>
         ${renderPersonaGenerateModeTabs(generateMode)}
-        ${generateMode === "ai" ? `<div class="persona-panel-intro">当前按通用设置生成：每次 ${esc(generateDefaults.count)} 条，目标约 ${esc(generateDefaults.targetWords)} 字。</div>` : ""}
+        ${generateMode === "ai" ? `<div class="persona-panel-intro">当前按设置生成：每次 ${esc(generateDefaults.count)} 条，目标约 ${esc(generateDefaults.targetWords)} 字。</div>` : ""}
         ${generateMode === "custom" ? `
           ${isEditingDraft && editingDraft ? `
             <div class="persona-inline-panel persona-inline-panel--nested persona-draft-editing-banner">
@@ -5952,7 +6125,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
         ` : generateMode === "hot" ? `
           <div class="persona-inline-panel persona-inline-panel--nested">
             <strong>热点抓取</strong>
-            <span class="persona-panel-intro">这里直接走 Bot 同源的热点抓取链路，先抓候选，再多选导入当前人设草稿库。</span>
+            <span class="persona-panel-intro">这里会抓取热点候选，选择后导入当前人设草稿库。</span>
           </div>
           ${renderPersonaHotCandidatePicker(persona, generateForm)}
           <div class="row-actions">
@@ -6654,7 +6827,7 @@ function bindEvents() {
         showMsg("commandMsg", "还没有可生成图片的人设。", false);
         return;
       }
-      activateCreatedPersona(personaId, { group: "settings", step: "images" }).catch((error) => showMsg("commandMsg", error.detail || error.message || "切换到人设图失败", false));
+      activateCreatedPersona(personaId, { group: "settings", step: "profile", profileMode: "images" }).catch((error) => showMsg("commandMsg", error.detail || error.message || "切换到人设图失败", false));
       return;
     }
     if (event.target.closest("[data-persona-create-ai-reset]")) {
@@ -6675,7 +6848,7 @@ function bindEvents() {
       return;
     }
     if (event.target.closest("[data-persona-fetch-hot]")) {
-      fetchPersonaHotCandidates(false).catch((error) => showMsg("commandMsg", error.detail || error.message || "抓取热点失败", false));
+      fetchPersonaHotCandidates(true).catch((error) => showMsg("commandMsg", error.detail || error.message || "抓取热点失败", false));
       return;
     }
     if (event.target.closest("[data-persona-fetch-hot-refresh]")) {
@@ -6841,6 +7014,7 @@ function bindEvents() {
     }
     const personaEditorMode = event.target.closest("[data-persona-editor-mode]");
     if (personaEditorMode) {
+      if (personaEditorMode.disabled) return;
       const [personaId, mode] = String(personaEditorMode.dataset.personaEditorMode || "").split(":");
       if (personaId) {
         state.personaListEditorId = personaId;
@@ -6976,7 +7150,8 @@ function bindEvents() {
     if (profileModeButton) {
       const persona = selectedPersona();
       if (persona) {
-        state.personaProfileModes[String(persona.id)] = profileModeButton.dataset.personaProfileMode === "edit" ? "edit" : "overview";
+        const mode = String(profileModeButton.dataset.personaProfileMode || "");
+        state.personaProfileModes[String(persona.id)] = ["edit", "images"].includes(mode) ? mode : "overview";
         renderPersonaDetail();
         renderConfirmSummary();
       }
@@ -7028,6 +7203,43 @@ function bindEvents() {
     if (event.target.closest("[data-persona-unbind-threads]")) unbindPersonaThreadsBinding().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
     if (event.target.closest("[data-persona-save-style]")) savePersonaTweetStyle().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
     if (event.target.closest("[data-persona-clear-style]")) clearPersonaTweetStyle().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
+    const applyPersonaImage = event.target.closest("[data-persona-apply-image]");
+    if (applyPersonaImage) applyPersonaReferenceImage(applyPersonaImage.dataset.personaApplyImage || "").catch((error) => showMsg("commandMsg", error.detail || error.message || "切换人设图失败", false));
+    const linkPageButton = event.target.closest("[data-persona-link-page]");
+    if (linkPageButton) {
+      const profile = selectedPersonaProfile();
+      const pageInfo = personaLinkPresetPage(personaProfilePresets(profile).length);
+      const action = String(linkPageButton.dataset.personaLinkPage || "");
+      if (action === "first") setPersonaLinkPresetPage(1);
+      if (action === "prev") setPersonaLinkPresetPage(pageInfo.page - 1);
+      if (action === "next") setPersonaLinkPresetPage(pageInfo.page + 1);
+      if (action === "last") setPersonaLinkPresetPage(pageInfo.totalPages);
+      renderPersonaDetail();
+      renderConfirmSummary();
+      return;
+    }
+    const viewPreset = event.target.closest("[data-persona-view-preset]");
+    if (viewPreset) {
+      viewPersonaPreset(viewPreset.dataset.personaViewPreset || "").catch((error) => showMsg("commandMsg", error.detail || error.message || "查看失败", false));
+      return;
+    }
+    const activatePresetId = event.target.closest("[data-persona-activate-preset-id]");
+    if (activatePresetId) {
+      activatePersonaPreset(activatePresetId.dataset.personaActivatePresetId || "").catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
+      return;
+    }
+    const deletePresetId = event.target.closest("[data-persona-delete-preset-id]");
+    if (deletePresetId) {
+      deletePersonaPreset(deletePresetId.dataset.personaDeletePresetId || "").catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
+      return;
+    }
+    const selectPreset = event.target.closest("[data-persona-select-preset]");
+    if (selectPreset) {
+      state.personaLinkPresetId = selectPreset.dataset.personaSelectPreset || "";
+      renderPersonaDetail();
+      renderConfirmSummary();
+      return;
+    }
     if (event.target.closest("[data-persona-add-preset]")) addPersonaPreset().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
     if (event.target.closest("[data-persona-save-preset]")) savePersonaPreset().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
     if (event.target.closest("[data-persona-delete-preset]")) deletePersonaPreset().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
@@ -7157,10 +7369,6 @@ function bindEvents() {
   $("openAdmin").addEventListener("click", () => { location.href = "/admin.html"; });
   $("consoleSettingsBody").addEventListener("click", (event) => {
     if (event.target.closest("#saveConsoleSettings")) saveConsoleSettingsPage();
-  });
-  $("consoleLogout").addEventListener("click", async () => {
-    await api("/api/auth/logout", { method: "POST" }).catch(() => {});
-    location.href = "/console.html";
   });
 }
 
