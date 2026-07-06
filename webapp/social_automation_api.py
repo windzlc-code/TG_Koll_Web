@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import requests
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Body, Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -154,13 +154,26 @@ def register_social_automation_routes(app: FastAPI) -> None:
         }
 
     @app.post("/api/persona_dashboard/automation/accounts/{account_id}/check_login")
-    def api_social_account_check_login(account_id: str, _user: dict[str, Any] = Depends(get_current_user)):
-        return {"ok": True, "task": create_account_task(account_id, "check_login", {})}
+    def api_social_account_check_login(
+        account_id: str,
+        payload: dict[str, Any] | None = Body(default=None),
+        _user: dict[str, Any] = Depends(get_current_user),
+    ):
+        body = payload if isinstance(payload, dict) else {}
+        return {"ok": True, "task": create_account_task(account_id, "check_login", body.get("payload") if isinstance(body.get("payload"), dict) else body)}
 
     @app.post("/api/persona_dashboard/automation/accounts/{account_id}/open_login")
-    def api_social_account_open_login(account_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_social_account_open_login(
+        account_id: str,
+        payload: dict[str, Any] | None = Body(default=None),
+        _user: dict[str, Any] = Depends(get_current_user),
+    ):
         wait_seconds = int(os.getenv("SOCIAL_AUTOMATION_LOGIN_WAIT_SECONDS", "600"))
-        return {"ok": True, "task": create_account_task(account_id, "open_login", {"login_wait_seconds": wait_seconds})}
+        body = payload if isinstance(payload, dict) else {}
+        task_payload = body.get("payload") if isinstance(body.get("payload"), dict) else body
+        task_payload = dict(task_payload or {})
+        task_payload.setdefault("login_wait_seconds", wait_seconds)
+        return {"ok": True, "task": create_account_task(account_id, "open_login", task_payload)}
 
     @app.get("/api/persona_dashboard/automation/proxies")
     def api_social_proxies(_user: dict[str, Any] = Depends(get_current_user)):
