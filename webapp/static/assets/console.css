@@ -1402,17 +1402,18 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-menu-tab {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
   align-items: center;
-  gap: 8px;
+  gap: 0;
   width: 100%;
   min-height: 34px;
-  padding: 6px 22px 6px 8px;
+  padding: 6px 22px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--panel-solid);
   color: var(--ink);
-  text-align: left;
+  text-align: center;
 }
 
 .persona-menu-tab::after {
@@ -1436,6 +1437,7 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-menu-tab span {
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1515,10 +1517,6 @@ body.persona-touch-dragging .persona-list-card:active {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
-.persona-card-menu--group button[data-persona-delete-group] {
-  color: var(--danger);
-}
-
 .persona-editor-groups {
   display: grid;
   gap: 6px;
@@ -1557,7 +1555,7 @@ body.persona-touch-dragging .persona-list-card:active {
   right: 6px !important;
   left: auto !important;
   z-index: 1200;
-  width: min(228px, calc(100vw - 36px)) !important;
+  width: min(180px, calc(100vw - 36px)) !important;
 }
 
 .persona-card-submenu {
@@ -1568,7 +1566,12 @@ body.persona-touch-dragging .persona-list-card:active {
   width: var(--persona-submenu-width, 190px) !important;
   box-shadow: 0 16px 36px rgba(15, 23, 42, .22);
   transform-origin: top left;
+  visibility: hidden;
   animation: personaMenuFade 120ms ease-out both !important;
+}
+
+.persona-card-submenu.is-positioned {
+  visibility: visible;
 }
 
 .persona-card-submenu.is-left {
@@ -1596,7 +1599,7 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .persona-menu-tab--action {
-  padding-right: 8px;
+  padding-right: 22px;
 }
 
 .persona-menu-tab--danger span,
@@ -2644,6 +2647,31 @@ body.persona-touch-dragging .persona-list-card:active {
   font-weight: 700;
 }
 
+.persona-media-type-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--soft);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.persona-media-type-badge--image,
+.persona-media-type-badge--video,
+.persona-media-type-badge--audio,
+.persona-media-type-badge--media {
+  background: var(--panel-solid);
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
+}
+
 .persona-hot-origin p {
   margin: 0;
   color: var(--ink);
@@ -2966,8 +2994,8 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .persona-draft-table-actions {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 50px));
+  display: flex;
+  flex-wrap: wrap;
   justify-content: end;
   gap: 6px;
 }
@@ -3041,8 +3069,8 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-memory-card {
   position: relative;
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr);
-  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
   align-items: start;
   min-height: 74px;
   padding: 10px 12px;
@@ -3051,6 +3079,15 @@ body.persona-touch-dragging .persona-list-card:active {
   background: var(--soft);
   cursor: pointer;
   transition: border-color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.persona-memory-card-main {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  min-width: 0;
+  cursor: pointer;
 }
 
 .persona-memory-card:hover {
@@ -3113,6 +3150,12 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-memory-copy small {
   color: var(--muted);
   font-size: 12px;
+}
+
+.persona-memory-card > button {
+  min-height: 32px;
+  padding: 0 10px;
+  align-self: start;
 }
 
 .persona-media-workspace {

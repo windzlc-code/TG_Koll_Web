@@ -1362,6 +1362,49 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload_obj.payload["caption"], "Threads publish content")
         self.assertEqual(payload_obj.payload["media_paths"], [])
 
+    def test_publish_favorite_post_sync_marks_favorite_not_source_post(self):
+        self._write_archives()
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        source_post = dict(archives[0]["posts"][0])
+        source_post.update({
+            "id": "favorite-1",
+            "title": "Favorite draft",
+            "content": "Favorite publish content",
+            "sourceMeta": {"favoriteSourcePostId": "post-1"},
+        })
+        source_post.pop("publishedAt", None)
+        archives[0]["favoritePosts"] = [source_post]
+        archives_path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+        self._insert_social_account(account_id="acct-fav", platform="threads", username="threads_user")
+        self._insert_social_task(
+            task_id="task-favorite-publish",
+            account_id="acct-fav",
+            platform="threads",
+            task_type="publish_post",
+            payload={
+                "archive_post_id": "favorite-1",
+                "archive_post_title": "Favorite draft",
+                "archive_post_source": "favorites",
+                "caption": "Favorite publish content",
+            },
+        )
+
+        social_automation_api._sync_successful_task_to_persona_archive(
+            "task-favorite-publish",
+            {"url": "https://threads.example/favorite-1"},
+        )
+
+        synced = json.loads(archives_path.read_text(encoding="utf-8"))[0]
+        favorite = synced["favoritePosts"][0]
+        self.assertEqual(favorite["id"], "favorite-1")
+        self.assertEqual(favorite["publishedUrl"], "https://threads.example/favorite-1")
+        self.assertTrue(str(favorite.get("publishedAt") or "").strip())
+        self.assertEqual(favorite["sourceMeta"]["archivePostSource"], "favorites")
+        self.assertNotIn("publishedAt", synced["posts"][0])
+        self.assertFalse(any(post.get("id") == "favorite-1" for post in synced["posts"]))
+        self.assertEqual(synced["publishHistory"][0]["archivePostId"], "favorite-1")
+
     def test_publish_persona_post_rejects_non_ready_account(self):
         self._write_archives()
         self._insert_social_account(account_id="acct-threads", platform="threads", username="threads_user", status="cookie_expired")

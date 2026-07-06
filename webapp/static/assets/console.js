@@ -1089,6 +1089,7 @@ function renderPersonaHotMediaDeleteControls(persona, candidate) {
 
 function renderPersonaHotOrigin(meta, { compact = false } = {}) {
   if (!meta) return "";
+  const mediaItems = personaHotCandidateMediaItems(meta);
   const scoreBits = [
     `浏览 ${numberText(meta.view_count || 0)}`,
     `点赞 ${numberText(meta.like_count || 0)}`,
@@ -1102,6 +1103,7 @@ function renderPersonaHotOrigin(meta, { compact = false } = {}) {
     <div class="persona-hot-origin ${compact ? "is-compact" : ""}">
       <div class="persona-hot-origin-head">
         <span class="persona-hot-origin-badge">热点导入</span>
+        ${renderMediaTypeBadge(mediaItems)}
         <small>${esc((meta.platform || "threads").toUpperCase())}${meta.captured_at ? ` · ${esc(formatTime(meta.captured_at))}` : ""}</small>
       </div>
       <p>${esc(meta.source_summary || "该草稿来自已抓取热点内容。")}</p>
@@ -1740,6 +1742,35 @@ function mediaKindLabel(type) {
   return "图片";
 }
 
+function mediaTypeBadgeInfo(items = []) {
+  const rows = Array.isArray(items) ? items : [];
+  if (!rows.length) return { label: "纯文本", count: 0, kind: "text" };
+  let images = 0;
+  let videos = 0;
+  let audios = 0;
+  let others = 0;
+  rows.forEach((item) => {
+    const type = guessMediaType(item?.url || item?.previewUrl || item?.preview_url || "", item?.type || "");
+    if (type === "video") videos += 1;
+    else if (type === "audio") audios += 1;
+    else if (type === "image") images += 1;
+    else others += 1;
+  });
+  const total = rows.length;
+  const pieces = [];
+  if (images) pieces.push("图片");
+  if (videos) pieces.push("视频");
+  if (audios) pieces.push("音频");
+  if (others) pieces.push("媒体");
+  const label = pieces.length ? pieces.join("+") : "媒体";
+  return { label: total > 1 ? `${label} ${total}` : label, count: total, kind: videos ? "video" : images ? "image" : audios ? "audio" : "media" };
+}
+
+function renderMediaTypeBadge(items = [], { className = "" } = {}) {
+  const info = mediaTypeBadgeInfo(items);
+  return `<span class="persona-media-type-badge persona-media-type-badge--${esc(info.kind)} ${esc(className)}">${esc(info.label)}</span>`;
+}
+
 function resetMediaPreviewGroups() {
   state.mediaPreviewGroups = {};
   state.mediaPreviewSeq = 0;
@@ -2042,6 +2073,7 @@ function renderPersonaDraftRows(posts, source = personaPostSource()) {
   if (mode === "list") return renderPersonaDraftTableRows(posts, personaId);
   return `<div class="compact-list persona-draft-grid">${posts.map((post) => {
     const hotMeta = personaHotImportMeta(personaId, post.id);
+    const mediaItems = personaDraftMediaItems(personaId, post);
     return `
     <article
       class="compact-row persona-draft-card ${String(post.id) === String(state.selectedPersonaPostId) ? "is-selected" : ""}"
@@ -2052,6 +2084,7 @@ function renderPersonaDraftRows(posts, source = personaPostSource()) {
     >
       <div class="persona-draft-card-head">
         <strong>${esc(post.title || "未命名草稿")}</strong>
+        ${renderMediaTypeBadge(mediaItems)}
         <span class="persona-draft-card-time">${esc(formatTime(post.published_at || post.updated_at || post.created_at))}</span>
       </div>
       ${hotMeta ? renderPersonaHotOrigin(hotMeta, { compact: true }) : ""}
@@ -2061,7 +2094,8 @@ function renderPersonaDraftRows(posts, source = personaPostSource()) {
         <div class="row-actions persona-draft-card-actions">
           <button type="button" data-persona-view-post="${esc(post.id)}">查看</button>
           <button type="button" data-persona-edit-post="${esc(post.id)}">${isFavoriteSource ? "编辑收藏" : "编辑草稿"}</button>
-          ${isFavoriteSource ? `<button type="button" data-persona-delete-favorite="${esc(post.id)}">移出收藏</button>` : `<button type="button" data-persona-favorite-post="${esc(post.id)}">收藏</button>`}
+          ${isFavoriteSource ? `<button type="button" class="danger" data-persona-delete-favorite="${esc(post.id)}">移出收藏</button>` : `<button type="button" data-persona-favorite-post="${esc(post.id)}">收藏</button>`}
+          ${isFavoriteSource ? "" : `<button type="button" class="danger" data-persona-delete-post="${esc(post.id)}">删除</button>`}
           ${String(post.id) === String(state.selectedPersonaPostId) ? `<button type="button" class="primary" data-persona-open-publishing>进入发布 / 矩阵发布</button>` : ""}
         </div>
       </div>
@@ -2108,6 +2142,7 @@ function renderPersonaDraftTableRows(posts, personaId) {
         const postId = String(post.id || "");
         const isSelected = postId === String(state.selectedPersonaPostId || "");
         const hotMeta = personaHotImportMeta(personaId, post.id);
+        const mediaItems = personaDraftMediaItems(personaId, post);
         return `
           <article
             class="persona-draft-table-row ${isSelected ? "is-selected" : ""}"
@@ -2119,6 +2154,7 @@ function renderPersonaDraftTableRows(posts, personaId) {
             <div class="persona-draft-table-cell persona-draft-table-index" role="cell">${esc(index + 1)}</div>
             <div class="persona-draft-table-cell persona-draft-table-title" role="cell">
               <strong>${esc(post.title || "未命名草稿")}</strong>
+              ${renderMediaTypeBadge(mediaItems)}
               ${hotMeta ? renderPersonaHotOrigin(hotMeta, { compact: true }) : ""}
             </div>
             <div class="persona-draft-table-cell" role="cell">${esc(formatTime(post.published_at || post.updated_at || post.created_at))}</div>
@@ -2127,7 +2163,8 @@ function renderPersonaDraftTableRows(posts, personaId) {
             <div class="persona-draft-table-actions" role="cell">
               <button type="button" data-persona-view-post="${esc(post.id)}">查看</button>
               <button type="button" data-persona-edit-post="${esc(post.id)}">编辑</button>
-              ${isFavoriteSource ? `<button type="button" data-persona-delete-favorite="${esc(post.id)}">移出</button>` : `<button type="button" data-persona-favorite-post="${esc(post.id)}">收藏</button>`}
+              ${isFavoriteSource ? `<button type="button" class="danger" data-persona-delete-favorite="${esc(post.id)}">移出</button>` : `<button type="button" data-persona-favorite-post="${esc(post.id)}">收藏</button>`}
+              ${isFavoriteSource ? "" : `<button type="button" class="danger" data-persona-delete-post="${esc(post.id)}">删除</button>`}
               ${isSelected ? `<button type="button" class="primary" data-persona-open-publishing>发布</button>` : ""}
             </div>
           </article>`;
@@ -2149,6 +2186,7 @@ async function viewPersonaDraftPost(postId = "") {
       <div class="console-modal-detail persona-draft-detail-modal">
         <div><span>${source === "favorites" ? "收藏标题" : "草稿标题"}</span><strong>${esc(post.title || "未命名草稿")}</strong></div>
         <div><span>所属人设</span><strong>${esc(persona.name || "未命名人设")}</strong></div>
+        <div><span>内容类型</span>${renderMediaTypeBadge(mediaItems)}</div>
         <div><span>时间信息</span><strong>${esc(formatTime(post.published_at || post.updated_at || post.created_at))}</strong></div>
         <div><span>当前状态</span><strong>${esc(String(post.id) === String(state.selectedPersonaPostId || "") ? "当前选中" : "待选择")}</strong></div>
         ${hotMeta ? `<div><span>来源信息</span>${renderPersonaHotOrigin(hotMeta, { compact: true })}</div>` : ""}
@@ -2184,19 +2222,22 @@ function renderPersonaMemoryOptions(persona, selectedIds = []) {
           const isSelected = selected.has(String(row.id || ""));
           const summary = String(row.summary || "未命名记忆");
           return `
-            <label class="persona-memory-card ${isSelected ? "is-selected" : ""}" data-persona-memory-search="${esc(summary.toLowerCase())}">
-              <input
-                class="persona-memory-input"
-                type="checkbox"
-                data-persona-memory-id="${esc(row.id)}"
-                ${isSelected ? "checked" : ""}
-              />
-              <span class="persona-memory-check" aria-hidden="true"></span>
-              <span class="persona-memory-copy">
-                <strong>${esc(summary)}</strong>
-                <small>${esc(formatTime(row.date || ""))}</small>
-              </span>
-            </label>`;
+            <article class="persona-memory-card ${isSelected ? "is-selected" : ""}" data-persona-memory-search="${esc(summary.toLowerCase())}">
+              <label class="persona-memory-card-main">
+                <input
+                  class="persona-memory-input"
+                  type="checkbox"
+                  data-persona-memory-id="${esc(row.id)}"
+                  ${isSelected ? "checked" : ""}
+                />
+                <span class="persona-memory-check" aria-hidden="true"></span>
+                <span class="persona-memory-copy">
+                  <strong>${esc(summary)}</strong>
+                  <small>${esc(formatTime(row.date || ""))}</small>
+                </span>
+              </label>
+              <button type="button" class="danger" data-persona-delete-memory="${esc(row.id)}">删除</button>
+            </article>`;
         }).join("")}
       </div>
     </div>`;
@@ -4939,6 +4980,39 @@ async function loadPersonaMemories(personaId, { force = false } = {}) {
   return rows;
 }
 
+async function deletePersonaMemoryEntry(memoryId = "") {
+  const persona = selectedPersona();
+  if (!persona) {
+    showMsg("commandMsg", "请先选择一个人设。", false);
+    return;
+  }
+  const cleanMemoryId = String(memoryId || "").trim();
+  const row = personaMemoryRows(persona).find((item) => String(item.id || "").trim() === cleanMemoryId);
+  if (!cleanMemoryId || !row) {
+    showMsg("commandMsg", "当前记忆不存在或已删除。", false);
+    return;
+  }
+  const confirmed = await openConsoleModal({
+    title: "删除记忆",
+    message: `确认删除“${String(row.summary || "未命名记忆").trim() || "未命名记忆"}”吗？这条内容会从可选记忆里移除。`,
+    confirmText: "删除",
+    cancelText: "取消",
+    danger: true,
+  });
+  if (!confirmed) return;
+  showMsg("commandMsg", "正在删除记忆...", true);
+  await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/memories/${encodeURIComponent(cleanMemoryId)}`, {
+    method: "DELETE",
+  });
+  const generateForm = personaFormState(persona.id).generate;
+  generateForm.selectedMemoryIds = (Array.isArray(generateForm.selectedMemoryIds) ? generateForm.selectedMemoryIds : [])
+    .filter((item) => String(item || "").trim() !== cleanMemoryId);
+  await loadPersonaMemories(persona.id, { force: true });
+  renderPersonaDetail();
+  renderConfirmSummary();
+  showMsg("commandMsg", "记忆已删除。", true);
+}
+
 async function loadPersonaImageLibrary(personaId, { force = false } = {}) {
   const key = String(personaId || "").trim();
   if (!key) return null;
@@ -5159,6 +5233,7 @@ async function generatePersonaDraftPosts() {
   }
   const payload = generatePersonaPayloadFromState(persona, profile);
   setPersonaGenerateRunState(persona.id, {
+    kind: "draft",
     status: "running",
     message: "正在按当前人设生成图文草稿",
     count: payload.count,
@@ -5186,6 +5261,7 @@ async function generatePersonaDraftPosts() {
     personaFormState(persona.id).draft = defaultPersonaDraftForm();
     setPersonaPostSource("posts", persona);
     setPersonaGenerateRunState(persona.id, {
+      kind: "draft",
       status: "success",
       message: `已生成 ${result.generated_count || generatedPosts.length || 0} 条图文草稿`,
       generatedCount: result.generated_count || generatedPosts.length || 0,
@@ -5196,6 +5272,7 @@ async function generatePersonaDraftPosts() {
     renderConfirmSummary();
   } catch (error) {
     setPersonaGenerateRunState(persona.id, {
+      kind: "draft",
       status: "error",
       message: "图文草稿生成失败",
       error: error.detail || error.message || "生成失败",
@@ -5261,10 +5338,16 @@ async function fetchPersonaHotCandidates(refresh = false) {
   }
   snapshotPersonaCurrentForm();
   const form = personaFormState(persona.id).generate;
+  setPersonaGenerateRunState(persona.id, {
+    kind: "hot",
+    status: "running",
+    message: refresh ? "热点候选刷新中" : "热点候选抓取中",
+    error: "",
+  });
+  clearMsg("commandMsg");
   setActionLocked(lockParts, true);
   renderPersonaDetail();
   try {
-    showMsg("commandMsg", refresh ? "正在刷新热点候选..." : "正在抓取热点候选...", true);
     const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/hot_candidates`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -5285,9 +5368,23 @@ async function fetchPersonaHotCandidates(refresh = false) {
     form.hotPreviewId = candidateIds.includes(String(form.hotPreviewId || "").trim()) ? String(form.hotPreviewId || "").trim() : (candidateIds[0] || "");
     form.hotDeletedMediaByCandidate = {};
     form.hotEditedContentByCandidate = {};
+    setPersonaGenerateRunState(persona.id, {
+      kind: "hot",
+      status: "success",
+      message: `热点候选已获取 ${candidateIds.length} 条`,
+      generatedCount: candidateIds.length,
+      error: "",
+    });
     renderPersonaDetail();
     renderConfirmSummary();
-    showMsg("commandMsg", `已获取 ${candidateIds.length} 条热点候选。`, true);
+  } catch (error) {
+    setPersonaGenerateRunState(persona.id, {
+      kind: "hot",
+      status: "error",
+      message: "热点候选抓取失败",
+      error: error.detail || error.message || "抓取失败",
+    });
+    throw error;
   } finally {
     setActionLocked(lockParts, false);
     if (state.activeModule === "personas") renderPersonaDetail();
@@ -5329,7 +5426,14 @@ async function submitPersonaHotDraftImport(persona, selected) {
   state.personaPanels.content = "posts";
   renderPersonaDetail();
   renderConfirmSummary();
-  showMsg("commandMsg", `已导入 ${result.imported_count || createdIds.length || 0} 条热点草稿。`, true);
+  setPersonaGenerateRunState(persona.id, {
+    kind: "hot_import",
+    status: "success",
+    message: `热点草稿已导入 ${result.imported_count || createdIds.length || 0} 条`,
+    generatedCount: result.imported_count || createdIds.length || 0,
+    postIds: createdIds,
+    error: "",
+  });
 }
 
 async function importPersonaHotDrafts(candidateIds = null) {
@@ -5354,11 +5458,25 @@ async function importPersonaHotDrafts(candidateIds = null) {
     showMsg("commandMsg", "请先勾选至少一条带正文的热点候选。", false);
     return;
   }
+  setPersonaGenerateRunState(persona.id, {
+    kind: "hot_import",
+    status: "running",
+    message: `热点草稿导入中 ${selected.length} 条`,
+    error: "",
+  });
+  clearMsg("commandMsg");
   setActionLocked(lockParts, true);
   renderPersonaDetail();
   try {
-    showMsg("commandMsg", `正在导入 ${selected.length} 条热点候选到草稿库...`, true);
     await submitPersonaHotDraftImport(persona, selected);
+  } catch (error) {
+    setPersonaGenerateRunState(persona.id, {
+      kind: "hot_import",
+      status: "error",
+      message: "热点草稿导入失败",
+      error: error.detail || error.message || "导入失败",
+    });
+    throw error;
   } finally {
     setActionLocked(lockParts, false);
     if (state.activeModule === "personas") renderPersonaDetail();
@@ -5387,10 +5505,16 @@ async function importEditedPersonaHotDraft(candidateId = "") {
     showMsg("commandMsg", "热点草稿正在导入，请等待当前导入完成。", false);
     return;
   }
+  setPersonaGenerateRunState(persona.id, {
+    kind: "hot_import",
+    status: "running",
+    message: "热点草稿导入中",
+    error: "",
+  });
+  clearMsg("commandMsg");
   setActionLocked(lockParts, true);
   renderPersonaDetail();
   try {
-    showMsg("commandMsg", "正在导入当前编辑后的热点草稿...", true);
     const deleted = personaHotDeletedMediaSet(persona.id, cleanCandidateId);
     const mediaItems = personaHotCandidateMediaItems(candidate).filter((_, index) => !deleted.has(index));
     await submitPersonaHotDraftImport(persona, [{
@@ -5399,6 +5523,14 @@ async function importEditedPersonaHotDraft(candidateId = "") {
       full_content: editedContent,
       media_items: mediaItems,
     }]);
+  } catch (error) {
+    setPersonaGenerateRunState(persona.id, {
+      kind: "hot_import",
+      status: "error",
+      message: "热点草稿导入失败",
+      error: error.detail || error.message || "导入失败",
+    });
+    throw error;
   } finally {
     setActionLocked(lockParts, false);
     if (state.activeModule === "personas") renderPersonaDetail();
@@ -5583,9 +5715,15 @@ async function submitPersonaImageGeneration() {
     return;
   }
   setActionLocked(lockParts, true);
+  setPersonaGenerateRunState(persona.id, {
+    kind: "persona_image",
+    status: "running",
+    message: "人设图生成中",
+    error: "",
+  });
+  clearMsg("commandMsg");
   renderPersonaDetail();
   try {
-    showMsg("commandMsg", "正在生成人设图...", true);
     const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/images/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -5597,7 +5735,20 @@ async function submitPersonaImageGeneration() {
       loadPersonaProfile(persona.id, { force: true }).catch(() => {}),
     ]);
     renderPersonaDetail();
-    showMsg("commandMsg", "人设图已生成并写入图库。", true);
+    setPersonaGenerateRunState(persona.id, {
+      kind: "persona_image",
+      status: "success",
+      message: "人设图已生成",
+      error: "",
+    });
+  } catch (error) {
+    setPersonaGenerateRunState(persona.id, {
+      kind: "persona_image",
+      status: "error",
+      message: "人设图生成失败",
+      error: error.detail || error.message || "生成失败",
+    });
+    throw error;
   } finally {
     setActionLocked(lockParts, false);
     if (state.activeModule === "personas") renderPersonaDetail();
@@ -5721,9 +5872,15 @@ async function submitPersonaMediaTask() {
   body.append("params_json", JSON.stringify(params));
   files.forEach((file) => body.append("files", file, file.name));
   setActionLocked(lockParts, true);
+  setPersonaGenerateRunState(persona.id, {
+    kind: "media",
+    status: "running",
+    message: "推文配图任务提交中",
+    error: "",
+  });
+  clearMsg("commandMsg");
   renderPersonaDetail();
   try {
-    showMsg("commandMsg", "正在提交推文配图任务...", true);
     const result = await api("/api/tasks/submit", { method: "POST", body });
     const key = personaMediaTaskKey(persona.id, post.id);
     state.personaMediaTasks[key] = {
@@ -5744,7 +5901,21 @@ async function submitPersonaMediaTask() {
     refreshPersonaMediaTask(persona.id, post.id, result.id).catch(() => {});
     watchPersonaMediaTask(persona.id, post.id, result.id).catch(() => {});
     await loadTasks().catch(() => {});
-    showMsg("commandMsg", `推文配图任务已提交：${result.id}`, true);
+    setPersonaGenerateRunState(persona.id, {
+      kind: "media",
+      status: "success",
+      message: "推文配图任务已提交",
+      taskId: String(result.id || "").trim(),
+      error: "",
+    });
+  } catch (error) {
+    setPersonaGenerateRunState(persona.id, {
+      kind: "media",
+      status: "error",
+      message: "推文配图任务提交失败",
+      error: error.detail || error.message || "提交失败",
+    });
+    throw error;
   } finally {
     setActionLocked(lockParts, false);
     if (state.activeModule === "personas") renderPersonaDetail();
@@ -5914,62 +6085,43 @@ function personaCardEditorMode(personaId) {
 function renderPersonaCardEditorMenu(persona, currentGroups, availableGroups) {
   const personaId = String(persona.id || "");
   const mode = personaCardEditorMode(personaId);
-  const submenu = mode === "add" ? `
+  const submenu = mode === "add" && availableGroups.length ? `
     <div class="persona-card-submenu" data-persona-editor-submenu="${esc(personaId)}">
       <div class="persona-menu-tabs" aria-label="选择加入分组">
-        ${availableGroups.length ? availableGroups.map((group) => `
+        ${availableGroups.map((group) => `
           <button type="button" class="persona-menu-tab" data-persona-add-to-group="${esc(personaId)}" data-group-id="${esc(group.id)}">
             <span>${esc(group.name)}</span>
-            <small>加入</small>
           </button>
-        `).join("") : `
-          <button type="button" class="persona-menu-tab" disabled>
-            <span>暂无可加入分组</span>
-            <small>不可用</small>
-          </button>
-        `}
+        `).join("")}
       </div>
-    </div>` : mode === "remove" ? `
+    </div>` : mode === "remove" && currentGroups.length ? `
     <div class="persona-card-submenu" data-persona-editor-submenu="${esc(personaId)}">
       <div class="persona-menu-tabs" aria-label="选择移出分组">
-        ${currentGroups.length ? `
-          ${currentGroups.map((group) => `
-            <button type="button" class="persona-menu-tab" data-persona-remove-from-group="${esc(personaId)}" data-group-id="${esc(group.id)}">
-              <span>${esc(group.name)}</span>
-              <small>移出</small>
-            </button>
-          `).join("")}
-          <button type="button" class="persona-menu-tab" data-persona-ungroup-all="${esc(personaId)}">
-            <span>移出所有组</span>
-            <small>单独</small>
+        ${currentGroups.map((group) => `
+          <button type="button" class="persona-menu-tab" data-persona-remove-from-group="${esc(personaId)}" data-group-id="${esc(group.id)}">
+            <span>${esc(group.name)}</span>
           </button>
-        ` : `
-          <button type="button" class="persona-menu-tab" disabled>
-            <span>当前未加入分组</span>
-            <small>不可用</small>
-          </button>
-        `}
+        `).join("")}
       </div>
     </div>` : "";
+  const actionButtons = [
+    availableGroups.length ? `
+        <button type="button" class="persona-menu-tab ${mode === "add" ? "is-active" : ""}" data-persona-editor-mode="${esc(personaId)}:add">
+          <span>加入分组</span>
+        </button>` : "",
+    currentGroups.length ? `
+        <button type="button" class="persona-menu-tab ${mode === "remove" ? "is-active" : ""}" data-persona-editor-mode="${esc(personaId)}:remove">
+          <span>移出分组</span>
+        </button>` : "",
+    `
+        <button type="button" class="persona-menu-tab persona-menu-tab--action persona-menu-tab--danger" data-persona-delete data-persona-delete-id="${esc(personaId)}">
+          <span>删除人设</span>
+        </button>`,
+  ].join("");
   return `
     <div class="persona-card-menu" data-persona-editor-menu="${esc(personaId)}">
       <div class="persona-menu-tabs" aria-label="人设操作">
-        <button type="button" class="persona-menu-tab ${mode === "add" ? "is-active" : ""}" data-persona-editor-mode="${esc(personaId)}:add" ${availableGroups.length ? "" : "disabled"}>
-          <span>加入分组</span>
-          <small>${availableGroups.length ? `${availableGroups.length} 个可选` : "暂无可选"}</small>
-        </button>
-        <button type="button" class="persona-menu-tab ${mode === "remove" ? "is-active" : ""}" data-persona-editor-mode="${esc(personaId)}:remove" ${currentGroups.length ? "" : "disabled"}>
-          <span>移出分组</span>
-          <small>${currentGroups.length ? `${currentGroups.length} 个已加入` : "未加入"}</small>
-        </button>
-        <button type="button" class="persona-menu-tab" data-persona-ungroup-all="${esc(personaId)}" ${currentGroups.length ? "" : "disabled"}>
-          <span>单独拆出来</span>
-          <small>${currentGroups.length ? "移出所有组" : "无需操作"}</small>
-        </button>
-        <button type="button" class="persona-menu-tab persona-menu-tab--action persona-menu-tab--danger" data-persona-delete data-persona-delete-id="${esc(personaId)}">
-          <span>删除人设</span>
-          <small>不可恢复</small>
-        </button>
+${actionButtons}
       </div>
     </div>
     ${submenu}`;
@@ -6022,6 +6174,7 @@ function positionPersonaCardEditorMenu() {
   submenu.style.setProperty("--persona-submenu-left", `${Math.round(submenuLeft)}px`);
   submenu.style.setProperty("--persona-submenu-top", `${Math.round(submenuTop)}px`);
   submenu.style.setProperty("--persona-submenu-width", `${Math.round(submenuWidth)}px`);
+  submenu.classList.add("is-positioned");
 }
 
 function schedulePersonaCardEditorMenuPosition() {
@@ -6149,8 +6302,14 @@ function renderPersonaFolder(group, map) {
         <button type="button" class="persona-card-edit" data-persona-edit-group="${esc(group.id)}" title="编辑分组" aria-label="编辑分组">...</button>
         ${editing ? `
           <div class="persona-card-menu persona-card-menu--group">
-            <button type="button" data-persona-rename-group="${esc(group.id)}">重命名</button>
-            <button type="button" data-persona-delete-group="${esc(group.id)}">删除分组</button>
+            <div class="persona-menu-tabs" aria-label="分组操作">
+              <button type="button" class="persona-menu-tab persona-menu-tab--action" data-persona-rename-group="${esc(group.id)}">
+                <span>重命名</span>
+              </button>
+              <button type="button" class="persona-menu-tab persona-menu-tab--action" data-persona-delete-group="${esc(group.id)}">
+                <span>删除分组</span>
+              </button>
+            </div>
           </div>
         ` : ""}
       </div>
@@ -6297,6 +6456,7 @@ function renderPersonaHotCandidatePreview(candidate) {
   if (!candidate) return `<div class="empty-state">从左侧热点候选里选一条，这里会显示正文预览和来源。</div>`;
   const persona = selectedPersona();
   const candidateId = personaHotCandidateKey(candidate);
+  const mediaItems = personaHotCandidateMediaItems(candidate);
   const metrics = [
     `浏览 ${numberText(candidate.view_count || 0)}`,
     `点赞 ${numberText(candidate.like_count || 0)}`,
@@ -6308,6 +6468,7 @@ function renderPersonaHotCandidatePreview(candidate) {
     <div class="persona-hot-preview-card">
       <div class="persona-hot-preview-head">
         <strong>${esc((candidate.platform || "threads").toUpperCase())}</strong>
+        ${renderMediaTypeBadge(mediaItems)}
         <small>${esc(formatTime(candidate.captured_at || candidate.published_at || ""))}</small>
       </div>
       <label>导入正文（可改）
@@ -6317,7 +6478,7 @@ function renderPersonaHotCandidatePreview(candidate) {
         <small>${esc(metrics.join(" · "))}</small>
         ${candidate.source_url ? `<a href="${esc(candidate.source_url)}" target="_blank" rel="noopener">打开原帖</a>` : ""}
       </div>
-      ${renderPersonaMediaPreview(personaHotCandidateMediaItems(candidate))}
+      ${renderPersonaMediaPreview(mediaItems)}
       ${renderPersonaHotMediaDeleteControls(persona, candidate)}
       <div class="row-actions">
         <button type="button" class="primary" data-persona-import-hot-one="${esc(candidateId)}">直接使用这条</button>
@@ -6367,6 +6528,7 @@ function renderPersonaHotCandidatePicker(persona, form) {
           ${candidates.map((candidate) => {
             const checked = selectedIds.has(candidate.candidate_id);
             const previewing = String(preview?.candidate_id || "") === String(candidate.candidate_id);
+            const mediaItems = personaHotCandidateMediaItems(candidate);
             return `
               <article class="persona-hot-card ${checked ? "is-selected" : ""} ${previewing ? "is-preview" : ""}">
                 <input
@@ -6378,6 +6540,7 @@ function renderPersonaHotCandidatePicker(persona, form) {
                 <button type="button" class="persona-hot-card-main" data-persona-hot-preview="${esc(candidate.candidate_id)}">
                   <span class="persona-hot-card-head">
                     <strong>${esc((candidate.platform || "threads").toUpperCase())}</strong>
+                    ${renderMediaTypeBadge(mediaItems)}
                     <small>${esc(formatTime(candidate.captured_at || candidate.published_at || ""))}</small>
                   </span>
                   <span class="persona-hot-card-copy">${esc(candidate.summary)}</span>
@@ -6705,16 +6868,21 @@ function renderPersonaGenerateStatusChip(persona) {
   const runState = personaGenerateRunState(persona?.id);
   if (!persona || !runState) return "";
   const status = String(runState.status || "").trim();
+  const kind = String(runState.kind || "draft").trim();
   const isRunning = status === "running";
   const isError = status === "error";
   const isSuccess = status === "success";
-  const rows = isSuccess ? personaGeneratedPreviewPosts(persona, runState) : [];
-  const label = isRunning
-    ? "图文草稿生成中"
-    : (isError ? "图文草稿生成失败" : `图文草稿已生成 ${Number(runState.generatedCount || rows.length || 0)} 条`);
-  const title = isRunning
+  const isDraft = kind === "draft";
+  const rows = isSuccess && isDraft ? personaGeneratedPreviewPosts(persona, runState) : [];
+  const fallbackSuccess = isDraft
+    ? `图文草稿已生成 ${Number(runState.generatedCount || rows.length || 0)} 条`
+    : "操作已完成";
+  const label = String(runState.message || "").trim() || (isRunning
+    ? (isDraft ? "图文草稿生成中" : "处理中")
+    : (isError ? (isDraft ? "图文草稿生成失败" : "操作失败") : fallbackSuccess));
+  const title = isRunning && isDraft
     ? `预计生成 ${Number(runState.count || 0) || personaGenerateDefaults().count} 条，目标约 ${Number(runState.targetWords || 0) || personaGenerateDefaults().targetWords} 字`
-    : (isError ? String(runState.error || "请稍后重试。") : "结果已同步到草稿库，可在底部预览。");
+    : (isError ? String(runState.error || "请稍后重试。") : label);
   return `
     <span class="persona-generate-status-chip ${isRunning ? "is-running" : ""} ${isSuccess ? "is-success" : ""} ${isError ? "is-error" : ""}" title="${esc(title)}">
       <span class="persona-generate-status-dot" aria-hidden="true"></span>
@@ -6725,7 +6893,7 @@ function renderPersonaGenerateStatusChip(persona) {
 
 function renderPersonaGeneratePreviewDock(persona) {
   const runState = personaGenerateRunState(persona?.id);
-  if (!persona || !runState || String(runState.status || "") !== "success") return "";
+  if (!persona || !runState || String(runState.kind || "draft") !== "draft" || String(runState.status || "") !== "success") return "";
   const rows = personaGeneratedPreviewPosts(persona, runState);
   if (!rows.length) return "";
   return `
@@ -6869,7 +7037,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
   const editingSourceLabel = editingSource === "favorites" ? "收藏" : "草稿";
   const generateTitle = generateMode === "hot" ? "新建推文" : (isEditingDraft ? `编辑${editingSourceLabel}` : "新建推文");
   const generateIntro = generateMode === "hot"
-    ? "这里会抓取热点候选，选择后导入当前人设草稿库。"
+    ? ""
     : (isEditingDraft
       ? `这里处理当前${editingSourceLabel}的正文修改。媒体、移出和 AI 重写都从这里进入，不再堆在列表里。`
       : `这里处理推文内容。配图和媒体操作已归到“推文配图 / 媒体”。已识别 ${memoryRows.length} 条可选记忆。`);
@@ -6882,7 +7050,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
         <div class="persona-head-copy persona-head-copy--split">
           <div class="persona-head-copy-main">
             <strong>${esc(generateTitle)}</strong>
-            <span class="persona-panel-intro">${esc(generateIntro)}</span>
+            ${generateIntro ? `<span class="persona-panel-intro">${esc(generateIntro)}</span>` : ""}
           </div>
         </div>
         ${renderPersonaGenerateModeTabs(generateMode)}
@@ -6915,15 +7083,11 @@ function renderPersonaContentPanel(persona, account, profile, step) {
             `}
           </div>
         ` : generateMode === "hot" ? `
-          <div class="persona-inline-panel persona-inline-panel--nested">
-            <strong>热点抓取</strong>
-            <span class="persona-panel-intro">这里会抓取热点候选，选择后导入当前人设草稿库。</span>
-          </div>
           ${renderPersonaHotCandidatePicker(persona, generateForm)}
-          <div class="row-actions">
+          ${personaHotCandidates(persona).length ? `<div class="row-actions">
             <button type="button" class="primary" data-persona-import-hot-drafts ${personaHotSelectedCandidates(persona).length && !hotImportBusy ? "" : "disabled"}>${hotImportBusy ? "正在导入热点..." : "导入到当前人设草稿库"}</button>
             <button type="button" data-persona-route-step="content:posts">查看草稿</button>
-          </div>
+          </div>` : ""}
         ` : `
           <label>本次提示词
             <textarea id="personaGeneratePrompt" rows="5" placeholder="留空则按当前人设自由生成。">${esc(generateForm.prompt || "")}</textarea>
@@ -7719,6 +7883,11 @@ function bindEvents() {
       renderConfirmSummary();
       return;
     }
+    const deleteMemoryButton = event.target.closest("[data-persona-delete-memory]");
+    if (deleteMemoryButton) {
+      deletePersonaMemoryEntry(deleteMemoryButton.dataset.personaDeleteMemory || "").catch((error) => showMsg("commandMsg", error.detail || error.message || "删除记忆失败", false));
+      return;
+    }
     if (event.target.closest("[data-persona-create-group]")) {
       openPersonaCollectionCreateModal().catch((error) => {
         showMsg("commandMsg", error.detail || error.message || "创建分组失败", false);
@@ -7846,7 +8015,7 @@ function bindEvents() {
       return;
     }
     if (event.target.closest("[data-persona-generate-image]")) {
-      submitPersonaImageGeneration().catch((error) => showMsg("commandMsg", error.detail || error.message || "生成人设图失败", false));
+      submitPersonaImageGeneration().catch(() => {});
       return;
     }
     if (event.target.closest("[data-persona-create-post]")) {
@@ -7854,15 +8023,15 @@ function bindEvents() {
       return;
     }
     if (event.target.closest("[data-persona-fetch-hot]")) {
-      fetchPersonaHotCandidates(true).catch((error) => showMsg("commandMsg", error.detail || error.message || "抓取热点失败", false));
+      fetchPersonaHotCandidates(true).catch(() => {});
       return;
     }
     if (event.target.closest("[data-persona-fetch-hot-refresh]")) {
-      fetchPersonaHotCandidates(true).catch((error) => showMsg("commandMsg", error.detail || error.message || "刷新热点失败", false));
+      fetchPersonaHotCandidates(true).catch(() => {});
       return;
     }
     if (event.target.closest("[data-persona-import-hot-drafts]")) {
-      importPersonaHotDrafts().catch((error) => showMsg("commandMsg", error.detail || error.message || "导入热点草稿失败", false));
+      importPersonaHotDrafts().catch(() => {});
       return;
     }
     const hotMediaToggle = event.target.closest("[data-persona-hot-media-toggle]");
@@ -7900,13 +8069,13 @@ function bindEvents() {
     const importOneHotButton = event.target.closest("[data-persona-import-hot-one]");
     if (importOneHotButton) {
       const candidateId = String(importOneHotButton.dataset.personaImportHotOne || "").trim();
-      importPersonaHotDrafts(candidateId ? [candidateId] : []).catch((error) => showMsg("commandMsg", error.detail || error.message || "导入热点草稿失败", false));
+      importPersonaHotDrafts(candidateId ? [candidateId] : []).catch(() => {});
       return;
     }
     const importEditedHotButton = event.target.closest("[data-persona-import-hot-edit]");
     if (importEditedHotButton) {
       const candidateId = String(importEditedHotButton.dataset.personaImportHotEdit || "").trim();
-      importEditedPersonaHotDraft(candidateId).catch((error) => showMsg("commandMsg", error.detail || error.message || "导入热点草稿失败", false));
+      importEditedPersonaHotDraft(candidateId).catch(() => {});
       return;
     }
     const hotBulkButton = event.target.closest("[data-persona-hot-bulk]");
@@ -7982,7 +8151,7 @@ function bindEvents() {
       return;
     }
     if (event.target.closest("[data-persona-run-media-task]")) {
-      submitPersonaMediaTask().catch((error) => showMsg("commandMsg", error.detail || error.message || "生成媒体失败", false));
+      submitPersonaMediaTask().catch(() => {});
       return;
     }
     if (event.target.closest("[data-persona-attach-task-media]")) {

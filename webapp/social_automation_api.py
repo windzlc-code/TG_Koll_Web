@@ -1415,7 +1415,23 @@ def _sync_successful_task_to_persona_archive(task_id: str, result: dict[str, Any
                     if not any(isinstance(item, dict) and str(item.get("automationTaskId") or item.get("id") or "") in {task_id, publish_record["id"]} for item in history):
                         archive["publishHistory"] = [publish_record, *history]
                         changed = True
-                    if post_record and not is_favorite_post_source:
+                    if post_record and is_favorite_post_source:
+                        favorites = archive.get("favoritePosts") if isinstance(archive.get("favoritePosts"), list) else []
+                        next_favorites: list[dict[str, Any] | Any] = []
+                        favorites_changed = False
+                        for item in favorites:
+                            if not isinstance(item, dict):
+                                next_favorites.append(item)
+                                continue
+                            if str(item.get("id") or "") == str(post_record["id"]) or str(item.get("automationTaskId") or "") == task_id:
+                                next_favorites.append({**item, **post_record})
+                                favorites_changed = True
+                            else:
+                                next_favorites.append(item)
+                        if favorites_changed:
+                            archive["favoritePosts"] = next_favorites
+                            changed = True
+                    elif post_record:
                         posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
                         matched_post = False
                         next_posts: list[dict[str, Any] | Any] = []

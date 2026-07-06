@@ -10552,6 +10552,26 @@ def _add_persona_dashboard_deleted_post_unlocked(archive_id: str, post_key: str)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _read_persona_dashboard_hidden_memories() -> dict[str, set[str]]:
+    path = TOOL_R18_RUNTIME_DIR / "persona_dashboard_hidden_memories.json"
+    raw = _read_json_file(path)
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, set[str]] = {}
+    for archive_id, values in raw.items():
+        if isinstance(values, list):
+            out[str(archive_id)] = {str(item) for item in values if str(item or "").strip()}
+    return out
+
+
+def _hide_persona_dashboard_memory_unlocked(archive_id: str, memory_id: str) -> None:
+    path = TOOL_R18_RUNTIME_DIR / "persona_dashboard_hidden_memories.json"
+    hidden = _read_persona_dashboard_hidden_memories()
+    keys = hidden.setdefault(str(archive_id), set())
+    keys.add(str(memory_id))
+    _write_json_file(path, {key: sorted(values) for key, values in hidden.items() if values})
+
+
 def _normalize_threads_username(value: Any) -> str:
     text = str(value or "").strip()
     text = re.sub(r"^https?://(?:www\.)?threads\.(?:net|com)/", "", text, flags=re.I)
@@ -11256,7 +11276,10 @@ def _list_selectable_persona_memories(archive_id: str) -> list[dict[str, Any]]:
     archive = _find_persona_archive(archives, clean_id)
     if not archive:
         raise HTTPException(status_code=404, detail="人设不存在。")
+    hidden_ids = _read_persona_dashboard_hidden_memories().get(clean_id, set())
     entries = list(_read_persona_memory_entries(clean_id))
+    if hidden_ids:
+        entries = [item for item in entries if str(item.get("id") or "").strip() not in hidden_ids]
     seen = {
         re.sub(r"\s+", "", str(item.get("summary") or "")).strip().lower()
         for item in entries
@@ -11272,9 +11295,12 @@ def _list_selectable_persona_memories(archive_id: str) -> list[dict[str, Any]]:
             key = re.sub(r"\s+", "", summary).strip().lower()
             if not summary or not key or key in seen:
                 continue
+            entry_id = f"archive-post-{str(item.get('id') or len(entries)).strip()}"
+            if entry_id in hidden_ids:
+                continue
             seen.add(key)
             entries.append({
-                "id": f"archive-post-{str(item.get('id') or len(entries)).strip()}",
+                "id": entry_id,
                 "date": str(item.get("publishedAt") or "").strip() or _persona_dashboard_iso_now(),
                 "summary": summary,
                 "kind": "post",
@@ -11283,6 +11309,51 @@ def _list_selectable_persona_memories(archive_id: str) -> list[dict[str, Any]]:
                 break
     entries.sort(key=lambda item: str(item.get("date") or ""), reverse=True)
     return entries[:100]
+
+
+def _delete_persona_dashboard_memory_entry(archive_id: str, memory_id: str) -> dict[str, Any]:
+    clean_id = str(archive_id or "").strip()
+    clean_memory_id = str(memory_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="missing archive_id")
+    if not clean_memory_id:
+        raise HTTPException(status_code=400, detail="missing memory_id")
+    _, _, archives = _persona_archive_source_for_write(clean_id)
+    archive = _find_persona_archive(archives, clean_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="persona not found")
+    removed = False
+    with _persona_archive_file_lock():
+        path = _persona_memory_file()
+        raw = _read_json_file(path)
+        if isinstance(raw, dict):
+            rows = raw.get(clean_id) if isinstance(raw.get(clean_id), list) else []
+            next_rows: list[Any] = []
+            for index, item in enumerate(rows):
+                if not isinstance(item, dict):
+                    next_rows.append(item)
+                    continue
+                entry_id = str(item.get("id") or f"legacy-{index}").strip()
+                summary = _normalize_persona_memory_summary(item.get("summary"))
+                if not removed and entry_id == clean_memory_id and summary and not _is_auto_imported_hot_memory_summary(summary):
+                    removed = True
+                    continue
+                next_rows.append(item)
+            if removed:
+                raw[clean_id] = next_rows
+                _write_json_file(path, raw)
+        if not removed:
+            visible = _list_selectable_persona_memories(clean_id)
+            if not any(str(item.get("id") or "").strip() == clean_memory_id for item in visible):
+                raise HTTPException(status_code=404, detail="memory not found")
+            _hide_persona_dashboard_memory_unlocked(clean_id, clean_memory_id)
+            removed = True
+    return {
+        "ok": True,
+        "archive_id": clean_id,
+        "memory_id": clean_memory_id,
+        "memories": _list_selectable_persona_memories(clean_id),
+    }
 
 
 def _normalize_persona_hot_candidate(candidate: Any) -> dict[str, Any] | None:
@@ -14946,6 +15017,10 @@ def create_app() -> FastAPI:
     @app.get("/api/persona_dashboard/personas/{archive_id}/memories")
     def api_persona_dashboard_persona_memories(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
         return {"ok": True, "memories": _list_selectable_persona_memories(archive_id)}
+
+    @app.delete("/api/persona_dashboard/personas/{archive_id}/memories/{memory_id}")
+    def api_persona_dashboard_delete_persona_memory(archive_id: str, memory_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+        return _delete_persona_dashboard_memory_entry(archive_id, memory_id)
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/images")
     def api_persona_dashboard_persona_images(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
