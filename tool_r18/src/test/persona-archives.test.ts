@@ -24,7 +24,6 @@ import { getPersonaMemory } from "@/lib/persona-memory";
 describe("persona archives migration", () => {
   beforeEach(() => {
     window.localStorage.clear();
-    window.localStorage.setItem("workflow_persona_archives_seeded_v1", "1");
     delete (window as any).electronAPI;
     vi.restoreAllMocks();
   });
@@ -121,7 +120,7 @@ describe("persona archives migration", () => {
         content: "目标内容",
         createdAt: "2026-01-02T00:00:00.000Z",
         updatedAt: "2026-01-02T00:00:00.000Z",
-        setup: { genres: ["测试"], imageWorkflow: { provider: "comfyui", personaKey: "demo" } },
+        setup: { genres: ["测试"], personaKey: "demo" },
         posts: [{ id: "b-post", content: "B post", createdAt: "2026-01-02T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" }],
       },
     ];
@@ -328,61 +327,6 @@ describe("persona archives migration", () => {
     expect(post.content.length).toBeLessThanOrEqual(183);
     expect(post.content).not.toContain("舊版保留的逐字細節舊版保留的逐字細節");
     expect(post.wordCount).toBe(post.content.length);
-  });
-
-  it("migrates seeded workflow persona archives to the 50-word default when cached data still carries the old value", () => {
-    window.localStorage.setItem("persona_archives_v2", JSON.stringify([{
-      id: "workflow-persona-jinjunya",
-      name: "金君雅 GY",
-      content: "台韓混血空服員人設",
-      createdAt: "2026-05-01T00:00:00.000Z",
-      updatedAt: "2026-05-02T00:00:00.000Z",
-      setup: {
-        personaName: "金君雅 GY",
-        personaStyle: "繁體中文、台灣口語、甜感碎碎念、生活感強",
-        targetMarket: "cn",
-        chineseScript: "traditional",
-        totalEpisodes: 3,
-        isMemePersona: false,
-        isGirlPersona: false,
-      },
-      posts: [],
-    }]));
-
-    const [archive] = getCachedPersonaArchives().filter((item) => item.id === "workflow-persona-jinjunya");
-    const persisted = JSON.parse(window.localStorage.getItem("persona_archives_v2") || "[]");
-    const persistedArchive = persisted.find((item: any) => item.id === "workflow-persona-jinjunya");
-
-    expect(archive.setup?.totalEpisodes).toBe(50);
-    expect(persistedArchive?.setup?.totalEpisodes).toBe(50);
-  });
-
-  it("keeps seeded workflow image config current even when a saved archive has stale workflow fields", () => {
-    window.localStorage.setItem("persona_archives_v2", JSON.stringify([{
-      id: "workflow-persona-jinjunya",
-      name: "金君雅",
-      content: "台韓混血空服員人設",
-      createdAt: "2026-05-01T00:00:00.000Z",
-      updatedAt: "2026-05-02T00:00:00.000Z",
-      setup: {
-        personaName: "金君雅",
-        totalEpisodes: 50,
-        imageWorkflow: {
-          provider: "comfyui",
-          workflowFile: "人设1 金君雅.json",
-          workflowGroup: "批量文生圖",
-          personaKey: "jinjunya",
-          promptSuffix: "stale prompt",
-        },
-      },
-      posts: [],
-    }]));
-
-    const archive = getCachedPersonaArchives().find((item) => item.id === "workflow-persona-jinjunya");
-
-    expect(archive?.setup?.imageWorkflow?.executionProvider).toBe("comfyui");
-    expect(archive?.setup?.imageWorkflow?.workflowGroup).toBe("线上反推洗图");
-    expect(archive?.setup?.imageWorkflow?.promptSuffix).not.toBe("stale prompt");
   });
 
   it("stores edited publish-panel content in memory before removing the archive post", async () => {

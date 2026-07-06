@@ -43,8 +43,6 @@ export interface RuntimeApiConfig {
   llm_model_priority_order?: string;
   llmFreeModelPriorityOrder?: string;
   llm_free_model_priority_order?: string;
-  llmPaidModelPriorityOrder?: string;
-  llm_paid_model_priority_order?: string;
   llmDefaultModelGpt?: string;
   llm_default_model_gpt?: string;
   llmDefaultModel?: string;

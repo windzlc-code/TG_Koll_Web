@@ -16,16 +16,13 @@
     "skill:publish-queue": "node --import tsx scripts/skills/publish-queue-worker.ts",
     "skill:verify-path": "node --import tsx scripts/skills/verify-skill-path.ts",
     "skill:telegram-selftest": "node --import tsx scripts/skills/telegram-bot-selftest.ts",
-    "skill:telegram-workflow-persona-button-selftest": "node --import tsx scripts/skills/telegram-workflow-persona-button-selftest.ts",
     "skill:telegram-publish-button-matrix-selftest": "node --import tsx scripts/skills/telegram-publish-button-matrix-selftest.ts",
     "skill:telegram-warmup-button-selftest": "node --import tsx scripts/skills/telegram-warmup-button-selftest.ts",
     "skill:telegram-custom-publish-selftest": "node --import tsx scripts/skills/telegram-custom-publish-selftest.ts",
     "skill:telegram-custom-post-selftest": "node --import tsx scripts/skills/telegram-custom-post-selftest.ts",
     "skill:persona": "node --import tsx scripts/skills/persona-workflow.ts",
     "skill:persona-generate-by-id": "node --import tsx scripts/skills/persona-generate-by-id.ts",
-    "skill:runninghub-lora": "node --import tsx scripts/skills/runninghub-lora.ts",
-    "skill:runninghub-workflow-map": "node --import tsx scripts/skills/runninghub-workflow-map.ts",
-    "skill:runninghub-workflows": "node --import tsx scripts/skills/runninghub-workflows.ts"
+    "skill:runninghub-lora": "node --import tsx scripts/skills/runninghub-lora.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.14",

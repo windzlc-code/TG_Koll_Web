@@ -1,16 +1,13 @@
 import {
   createRunningHubAiAppTask,
   createRunningHubStandardModelTask,
-  createRunningHubTask,
   getRunningHubAiAppCallDemo,
-  getRunningHubWorkflowJson,
   resolveRunningHubConfig,
   waitRunningHubOpenApiV2TaskOutputs,
   waitRunningHubTaskOutputs,
   type RunningHubNodeInfo,
 } from "./runninghub-client";
 import { readRuntimeApiConfig, type RuntimeConfigOptions } from "./config";
-import type { PersonaWorkflowImageConfig } from "./comfyui-workflow-client";
 
 type RunningHubApiPrompt = Record<string, {
   class_type?: string;
@@ -302,38 +299,6 @@ export async function generateRunningHubNewPersonaStandardImage(
     const url = extractOutputUrl(outputs);
     if (!url) {
       return { ok: false, taskId, outputs, error: `RunningHub OpenAPI v2 任务完成但未返回图片 URL：${JSON.stringify(outputs).slice(0, 500)}`, retryable: true, reasonCode: "output_missing" };
-    }
-    return { ok: true, taskId, outputs, url };
-  } catch (error: any) {
-    const message = error?.message || String(error);
-    return { ok: false, error: message, ...classifyRunningHubError(message) };
-  }
-}
-
-export async function generateRunningHubWorkflowImage(
-  params: {
-    prompt: string;
-    workflowImage: PersonaWorkflowImageConfig;
-    aspectRatio?: string;
-    timeoutMs?: number;
-  },
-  runtimeOptions: RuntimeConfigOptions = {},
-): Promise<RunningHubImageResult> {
-  const workflowId = params.workflowImage.workflowId;
-  if (!workflowId) return { ok: false, error: "缺少 RunningHub workflowId", retryable: false, reasonCode: "config_missing" };
-  const config = resolveRunningHubConfig(runtimeOptions);
-  try {
-    const apiFormat = await getRunningHubWorkflowJson(config, workflowId);
-    const apiPrompt = parsePromptPayload(apiFormat);
-    const finalPrompt = [params.prompt, params.workflowImage.promptSuffix].filter(Boolean).join(", ");
-    const nodeInfoList = buildRunningHubNodeInfoList(apiPrompt, finalPrompt, params.aspectRatio);
-    const created = await createRunningHubTask(config, nodeInfoList, workflowId);
-    const taskId = String(created?.data?.taskId || created?.data?.task_id || created?.data || "");
-    if (!taskId) throw new Error(`RunningHub 未返回 taskId：${JSON.stringify(created).slice(0, 500)}`);
-    const outputs = await waitRunningHubTaskOutputs(config, taskId, params.timeoutMs || 300_000, 5000);
-    const url = extractOutputUrl(outputs);
-    if (!url) {
-      return { ok: false, taskId, outputs, error: `RunningHub 任务完成但未返回图片 URL：${JSON.stringify(outputs).slice(0, 500)}`, retryable: true, reasonCode: "output_missing" };
     }
     return { ok: true, taskId, outputs, url };
   } catch (error: any) {

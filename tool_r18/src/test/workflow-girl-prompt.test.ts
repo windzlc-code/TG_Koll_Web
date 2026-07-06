@@ -11,7 +11,7 @@ import {
 } from "@/lib/persona-image-search";
 import type { DramaSetup } from "@/types/drama";
 
-describe("workflow girl persona image prompts", () => {
+describe("girl persona image prompts", () => {
   const setup: DramaSetup = {
     genres: ["單身貴族"],
     personaPersonality: "知性優雅",
@@ -37,7 +37,7 @@ describe("workflow girl persona image prompts", () => {
     expect(prompt).toContain("train platform or station background");
   });
 
-  it("builds girl workflow prompts around the concrete event instead of generic glamour only", () => {
+  it("builds girl image prompts around the concrete event instead of generic glamour only", () => {
     const signals = getPersonaImageSignals(setup, content);
     const prompt = buildGirlPersonaImagePrompt(content, setup, signals);
 
@@ -54,28 +54,17 @@ describe("workflow girl persona image prompts", () => {
     expect(prompt.match(/25 歲女性，甜美空服員感，手機自拍自然生活照。/g)?.length).toBe(1);
   });
 
-  it("routes scene-only workflow persona posts to closed-model image generation", () => {
-    expect(shouldUseWorkflowPersonaImage("今天只拍桃園機場傍晚跑道、雲海和窗外夕陽，畫面裡沒有人。", {
-      ...setup,
-      imageWorkflow: { provider: "comfyui", workflowFile: "人设1 金君雅.json" },
-    })).toBe(false);
-
-    expect(shouldUseWorkflowPersonaImage("剛下班在捷運月台自拍，制服領口被飲料弄濕，超尷尬。", {
-      ...setup,
-      imageWorkflow: { provider: "comfyui", workflowFile: "人设1 金君雅.json" },
-    })).toBe(true);
+  it("does not route posts to the removed workflow image generation path", () => {
+    expect(shouldUseWorkflowPersonaImage("今天只拍桃園機場傍晚跑道、雲海和窗外夕陽，畫面裡沒有人。", setup)).toBe(false);
+    expect(shouldUseWorkflowPersonaImage("剛下班在捷運月台自拍，制服領口被飲料弄濕，超尷尬。", setup)).toBe(false);
   });
 
   it("routes cafe mood posts to first-person POV scene images", () => {
-    const workflowSetup = {
-      ...setup,
-      imageWorkflow: { provider: "comfyui" as const, workflowFile: "人设1 金君雅.json" },
-    };
     const cafeContent = "在咖啡店等人等到放空，只拍窗邊桌上的拿鐵和自己握著杯子的手。";
-    const signals = getPersonaImageSignals(workflowSetup, cafeContent);
-    const prompt = buildSceneOnlyImagePrompt(cafeContent, workflowSetup, signals);
+    const signals = getPersonaImageSignals(setup, cafeContent);
+    const prompt = buildSceneOnlyImagePrompt(cafeContent, setup, signals);
 
-    expect(shouldUseWorkflowPersonaImage(cafeContent, workflowSetup)).toBe(false);
+    expect(shouldUseWorkflowPersonaImage(cafeContent, setup)).toBe(false);
     expect(prompt).toContain("first-person POV lifestyle photo");
     expect(prompt).toContain("only partial hands are allowed");
     expect(prompt).toContain("one hand holding a coffee cup");

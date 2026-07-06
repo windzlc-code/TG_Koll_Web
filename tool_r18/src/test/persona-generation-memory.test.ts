@@ -47,7 +47,6 @@ describe("persona generation memory", () => {
     prompts.length = 0;
     process.env.PERSONA_MEMORY_AI_TEST = "1";
     window.localStorage.clear();
-    window.localStorage.setItem("workflow_persona_archives_seeded_v1", "1");
   });
 
   it("generates an AI memory summary with each post and feeds it into the next generation", async () => {
@@ -222,7 +221,7 @@ describe("persona generation memory", () => {
     expect(generationPrompt).toContain("【固定链接结尾】");
     expect(generationPrompt).toContain("固定链接：https://example.com/more");
     expect(generationPrompt).toContain("结尾语句：想看更多整理，我放这里");
-    expect(generationPrompt).toContain("禁止复述案例里的具体事件");
+    expect(generationPrompt).toContain("禁止复述示例里的具体事件");
     expect(result.posts?.[0].content).toContain("想看更多整理，我放这里");
     expect(result.posts?.[0].content).toContain("https://example.com/more");
   });

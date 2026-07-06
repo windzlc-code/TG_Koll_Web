@@ -2,7 +2,7 @@
 // 從 short-drama 倉庫提取並最佳化
 
 import type { DramaSetup, EpisodeEntry } from "@/types/drama";
-import { usesJinjunyaFreeContentStyle } from "@/lib/workflow-personas";
+import { usesJinjunyaFreeContentStyle } from "@/lib/persona-content-style";
 
 /** 目標市場描述與創作語言指令 */
 function getMarketDirective(setup: DramaSetup): string {

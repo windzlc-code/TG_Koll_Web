@@ -6,8 +6,7 @@ import {
   type PersonaImageReferenceMode,
 } from "@/lib/persona-image-production";
 import { compressImage } from "@/lib/image-compress";
-import { generateWorkflowPersonaImage } from "@/runtime/node/comfyui-workflow-client";
-import { generateRunningHubNewPersonaStandardImage } from "@/runtime/node/runninghub-workflow-image";
+import { generateRunningHubNewPersonaStandardImage } from "@/runtime/node/runninghub-persona-image";
 import { generateClosedModelImage } from "@/runtime/node/image-generator";
 import { parseDataUrlMedia } from "@/lib/media-utils";
 import { readRuntimeApiConfig } from "@/runtime/node/config";
@@ -98,29 +97,6 @@ async function compressGeneratedDataUrl(url?: string): Promise<{ url?: string; b
 const unsupportedImageApi = {
   generate: async (payload: any) => {
     const startedAt = Date.now();
-    if (payload?.workflowImage) {
-      const result = await generateWorkflowPersonaImage({
-        prompt: payload.prompt,
-        workflowImage: payload.workflowImage,
-        aspectRatio: payload.aspectRatio,
-        timeoutMs: payload.timeoutMs,
-        referenceImageBase64: payload.avatarBase64,
-        referenceImageMimeType: payload.avatarMimeType,
-      }, {
-        configPath: payload.configPath,
-        dataDir: payload.dataDir,
-      });
-      return {
-        ...result,
-        timings: {
-          ...(result as any)?.timings,
-          provider: (result as any)?.timings?.provider
-            || (payload.workflowImage?.executionProvider === "comfyui" ? "comfyui-workflow" : "runninghub-workflow"),
-          elapsedMs: Date.now() - startedAt,
-          timeoutMs: payload.timeoutMs || 300_000,
-        },
-      };
-    }
     if (payload?.runningHubNewPersonaMode) {
       const result = await generateRunningHubNewPersonaStandardImage({
         prompt: payload.prompt,

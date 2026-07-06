@@ -135,7 +135,7 @@ def parse_sample_response():
         },
         "results": [
             {
-                "url": "https://rh-images-1252422369.cos.ap-beijing.myqcloud.com/b04e28cad0ee39193921a30a2eb4dc00/output/ComfyUI_00001_plhjr_1768892915.png",
+                "url": "https://example.invalid/output/generated_image_00001.png",
                 "outputType": "png",
                 "text": None
             }

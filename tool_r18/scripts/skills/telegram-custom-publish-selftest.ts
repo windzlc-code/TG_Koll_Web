@@ -13,7 +13,7 @@ const WEBHOOK_URL = process.env.TELEGRAM_SELFTEST_WEBHOOK_URL
 const CHAT_ID = Number(process.env.TELEGRAM_SELFTEST_CHAT_ID || "6470391105");
 const FROM_ID = Number(process.env.TELEGRAM_SELFTEST_FROM_ID || CHAT_ID);
 const PAD_CODE = process.env.TELEGRAM_CUSTOM_PUBLISH_PAD_CODE || "ACP250322677KIRJ";
-const ARCHIVE_ID = process.env.TELEGRAM_CUSTOM_PUBLISH_ARCHIVE_ID || "workflow-persona-yoga";
+const ARCHIVE_ID = process.env.TELEGRAM_CUSTOM_PUBLISH_ARCHIVE_ID || "persona-selftest";
 const PLATFORM = (process.env.TELEGRAM_CUSTOM_PUBLISH_PLATFORM
   || process.argv.find((arg) => arg.startsWith("--platform="))?.split("=")[1]
   || "threads") as "threads" | "telegram";

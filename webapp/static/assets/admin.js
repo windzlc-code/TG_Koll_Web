@@ -23,8 +23,6 @@ const SENSITIVE_RUNTIME_INPUT_IDS = [
   "rtLlmApiKeyGpt",
   "rtImageGeminiApiKey",
   "rtNewPersonaRunningHubApiKey",
-  "rtRemoteComfyGatewayToken",
-  "rtLocalComfyGatewayToken",
   "rtMuleRouterApiKey",
 ];
 
@@ -451,8 +449,6 @@ function syncPriorityModelsFromCatalog(type) {
     );
   };
   normalizeLlmPriorityKey("llmPriorityModels");
-  normalizeLlmPriorityKey("llmFreePriorityModels");
-  normalizeLlmPriorityKey("llmPaidPriorityModels");
 }
 
 function defaultClosedLlmModel(priorityKey = "llmPriorityModels") {
@@ -529,8 +525,7 @@ function renderAllModelLists() {
   syncPriorityModelsFromCatalog("llm");
   syncPriorityModelsFromCatalog("image");
   renderModelList("llmGptModels", "rtLlmGptModelList");
-  renderPriorityModelListSafe("llmFreePriorityModels", "rtLlmFreePriorityModelList");
-  renderPriorityModelListSafe("llmPaidPriorityModels", "rtLlmPaidPriorityModelList");
+  renderPriorityModelListSafe("llmPriorityModels", "rtLlmPriorityModelList");
   renderModelList("imageGeminiModels", "rtImageGeminiModelList");
   renderPriorityModelListSafe("imagePriorityModels", "rtImagePriorityModelList");
   renderModelSummaries();
@@ -553,31 +548,9 @@ function buildModelSummary(geminiListKey, gptListKey, label) {
   return `当前默认执行：未配置 ${label}候选模型`;
 }
 
-function buildLlmModelSummary() {
-  const freePriority = grokModelItems(adminState.llmFreePriorityModels);
-  const paidPriority = grokModelItems(adminState.llmPaidPriorityModels);
-  if (freePriority.length || paidPriority.length) {
-    return `免费内容首选：${freePriority[0] || "未配置"}；付费内容首选：${paidPriority[0] || "未配置"}`;
-  }
-  const grokModel = llmModelOptions()[0] || "";
-  if (grokModel) return `当前文字执行模型：${grokModel}`;
-  return "当前未配置文字模型";
-}
 
-function renderModelSummaries() {
-  const llmSummary = el("rtLlmModelSummary");
-  if (llmSummary) {
-    llmSummary.textContent = buildLlmModelSummary();
-  }
-  const imageSummary = el("rtImageModelSummary");
-  if (imageSummary) {
-    const priority = imageModelItems(adminState.imagePriorityModels);
-    const first = priority[0] || imageModelOptions()[0] || "";
-    imageSummary.textContent = first
-      ? `当前图片执行模型：${first}`
-      : "当前未配置图片模型";
-  }
-}
+
+
 
 function addModelFromInput(listKey, inputId) {
   const input = el(inputId);
@@ -717,8 +690,7 @@ function bindModelPickerFilters(pickerId) {
 }
 
 function activeTextModelPriorityListKey() {
-  const activeTab = document.querySelector("[data-text-model-tab].is-active");
-  return activeTab && activeTab.dataset.textModelTab === "paid" ? "llmPaidPriorityModels" : "llmFreePriorityModels";
+  return "llmPriorityModels";
 }
 
 function addModelToFront(listKey, model) {
@@ -738,7 +710,6 @@ function addLlmModelFromPicker(model) {
   if (!Array.isArray(adminState.llmGptModels)) adminState.llmGptModels = [];
   if (!adminState.llmGptModels.includes(value)) adminState.llmGptModels.push(value);
   addModelToFront("llmPriorityModels", value);
-  addModelToFront(activeTextModelPriorityListKey(), value);
   syncPriorityModelsFromCatalog("llm");
   writeModelDraft();
   renderAllModelLists();
@@ -749,7 +720,7 @@ function addLlmModelFromPicker(model) {
 function addLlmPriorityModelFromPicker(listKey, model) {
   const value = String(model || "").trim();
   if (!value) return;
-  if (!["llmPriorityModels", "llmFreePriorityModels", "llmPaidPriorityModels"].includes(listKey)) return;
+  if (listKey !== "llmPriorityModels") return;
   addModelToFront(listKey, value);
   if (!Array.isArray(adminState.llmGptModels)) adminState.llmGptModels = [];
   if (!adminState.llmGptModels.includes(value)) adminState.llmGptModels.push(value);
@@ -765,7 +736,7 @@ function addLlmPriorityModelFromPicker(listKey, model) {
 function openLlmPriorityModelPicker(listKey) {
   const picker = el("rtLlmGrokModelPicker");
   if (!picker) return;
-  const triggerId = listKey === "llmPaidPriorityModels" ? "btnAddLlmPaidPriorityModel" : "btnAddLlmFreePriorityModel";
+  const triggerId = "btnAddLlmPriorityModel";
   placeLlmModelPickerNear(triggerId);
   const candidates = uniqueItems(adminState.llmGptModels);
   if (!candidates.length) {
@@ -869,31 +840,9 @@ function openImagePriorityModelPicker() {
   renderSearchableModelPicker(picker, candidates, "image-model", "暂无候选图片模型", "搜索候选图片模型");
 }
 
-function buildLlmModelSummary() {
-  const activeKey = activeTextModelPriorityListKey();
-  const activePriority = grokModelItems(adminState[activeKey]);
-  if (activePriority.length > 0) {
-    return activeKey === "llmPaidPriorityModels"
-      ? `当前付费内容执行模型：${activePriority[0]}`
-      : `当前免费内容执行模型：${activePriority[0]}`;
-  }
-  const priority = grokModelItems(adminState.llmPriorityModels);
-  if (priority.length > 0) return `当前文字执行模型：${priority[0]}`;
-  const model = llmModelOptions()[0] || "";
-  if (model) return `当前文字执行模型：${model}`;
-  return "当前未配置文字模型";
-}
 
-function renderModelSummaries() {
-  const llmSummary = el("rtLlmModelSummary");
-  if (llmSummary) llmSummary.textContent = buildLlmModelSummary();
-  const imageSummary = el("rtImageModelSummary");
-  if (imageSummary) {
-    const priority = imageModelItems(adminState.imagePriorityModels);
-    const first = priority[0] || imageModelOptions()[0] || "";
-    imageSummary.textContent = first ? `当前图片执行模型：${first}` : "当前未配置图片模型";
-  }
-}
+
+
 
 function renderAvailableImageModels(models) {
   const picker = el("rtImageGeminiModelPicker");
@@ -1012,20 +961,7 @@ function bindModelTabs() {
   activate(tabs.find((tab) => tab.classList.contains("is-active"))?.dataset.modelTab || "text");
 }
 
-function bindTextModelContentTabs() {
-  const tabs = Array.from(document.querySelectorAll("[data-text-model-tab]"));
-  const panels = Array.from(document.querySelectorAll("[data-text-model-panel]"));
-  if (!tabs.length || !panels.length) return;
-  const activate = (name) => {
-    tabs.forEach((tab) => tab.classList.toggle("is-active", tab.dataset.textModelTab === name));
-    panels.forEach((panel) => panel.classList.toggle("is-active", panel.dataset.textModelPanel === name));
-    renderModelSummaries();
-  };
-  tabs.forEach((tab) => {
-    tab.addEventListener("click", () => activate(tab.dataset.textModelTab || "free"));
-  });
-  activate(tabs.find((tab) => tab.classList.contains("is-active"))?.dataset.textModelTab || "free");
-}
+
 
 function bindRunningHubSlotTabs() {
   const tabs = Array.from(document.querySelectorAll("[data-runninghub-slot-tab]"));
@@ -1066,17 +1002,11 @@ const adminState = {
   llmGeminiModels: [],
   llmGptModels: [],
   llmPriorityModels: [],
-  llmFreePriorityModels: [],
-  llmPaidPriorityModels: [],
   llmModelPickerTargetListKey: "",
   imageGeminiModels: [],
   imagePriorityModels: [],
   imageModelPickerTargetListKey: "",
   workflowChains: {},
-  remoteComfyWorkflowMappings: {},
-  remoteComfyWorkflows: [],
-  localComfyWorkflowMappings: {},
-  localComfyWorkflows: [],
   tgTrustedUsers: [],
   sentimentCookieProfiles: [],
 };
@@ -1793,129 +1723,6 @@ function renderTasks() {
   list.innerHTML = visibleRows.map((task) => renderTaskCard(task)).join("");
 }
 
-function comfySourceConfig(source) {
-  const isLocal = source === "local";
-  return {
-    source: isLocal ? "local" : "remote",
-    label: isLocal ? "本地 ComfyUI" : "4090",
-    urlId: isLocal ? "rtLocalComfyGatewayUrl" : "rtRemoteComfyGatewayUrl",
-    tokenId: isLocal ? "rtLocalComfyGatewayToken" : "rtRemoteComfyGatewayToken",
-    mappingsId: isLocal ? "rtLocalComfyWorkflowMappings" : "rtRemoteComfyWorkflowMappings",
-    statusId: isLocal ? "rtLocalComfyWorkflowStatus" : "rtRemoteComfyWorkflowStatus",
-    workflowsKey: isLocal ? "localComfyWorkflows" : "remoteComfyWorkflows",
-    mappingsKey: isLocal ? "localComfyWorkflowMappings" : "remoteComfyWorkflowMappings",
-    selectPrefix: isLocal ? "rtLocalComfyWorkflow" : "rtRemoteComfyWorkflow",
-  };
-}
-
-function collectComfyWorkflowMappings(source = "remote") {
-  const cfg = comfySourceConfig(source);
-  const result = {};
-  REMOTE_COMFY_TASKS.forEach(([key]) => {
-    const node = el(`${cfg.selectPrefix}_${key}`);
-    const value = String((node && node.value) || "").trim();
-    if (value) result[key] = value;
-  });
-  adminState[cfg.mappingsKey] = result;
-  return result;
-}
-
-function collectRemoteComfyWorkflowMappings() {
-  return collectComfyWorkflowMappings("remote");
-}
-
-function collectLocalComfyWorkflowMappings() {
-  return collectComfyWorkflowMappings("local");
-}
-
-function renderComfyWorkflowMappings(source = "remote") {
-  const cfg = comfySourceConfig(source);
-  const host = el(cfg.mappingsId);
-  if (!host) return;
-  const workflows = Array.isArray(adminState[cfg.workflowsKey]) ? adminState[cfg.workflowsKey] : [];
-  const runnable = workflows.filter((item) => item && item.can_run);
-  const convertible = workflows.filter((item) => item && item.kind === "ui_workflow");
-  const apiWorkflows = workflows.filter((item) => item && item.root === "api");
-  const mappings = adminState[cfg.mappingsKey] || {};
-  const runnablePaths = new Set(runnable.map((item) => String(item.path || "")).filter(Boolean));
-  const savedMappingOptions = Object.values(mappings)
-    .map((value) => {
-      if (value && typeof value === "object") return String(value.path || value.workflow || value.value || "").trim();
-      return String(value || "").trim();
-    })
-    .filter((value) => value && !runnablePaths.has(value));
-  const options = [
-    `<option value="">${escapeHtml("\u672a\u6620\u5c04")}</option>`,
-    ...runnable.map((item) => {
-      const path = String(item.path || "");
-      const label = remoteComfyDisplayName(path);
-      return `<option value="${escapeHtml(path)}">${escapeHtml(label)}</option>`;
-    }),
-    ...savedMappingOptions.map((path) => `<option value="${escapeHtml(path)}">${escapeHtml(`${remoteComfyDisplayName(path)}（已保存，未刷新到列表）`)}</option>`),
-  ].join("");
-  host.innerHTML = REMOTE_COMFY_TASKS.map(([key, label]) => {
-    const value = String(mappings[key] || "");
-    return `
-      <div class="remote-comfy-map-row">
-        <label for="${cfg.selectPrefix}_${escapeHtml(key)}">${escapeHtml(label)}</label>
-        <select id="${cfg.selectPrefix}_${escapeHtml(key)}" data-${cfg.source}-comfy-task="${escapeHtml(key)}">
-          ${options}
-        </select>
-      </div>
-    `;
-  }).join("");
-  REMOTE_COMFY_TASKS.forEach(([key]) => {
-    const node = el(`${cfg.selectPrefix}_${key}`);
-    if (node) node.value = String(mappings[key] || "");
-  });
-  setComfyStatus(source, "", workflows.length
-    ? escapeHtml(`\u5df2\u8bfb\u53d6 API \u5de5\u4f5c\u6d41 ${apiWorkflows.length} \u4e2a\uff0c\u53ef\u76f4\u63a5\u8fd0\u884c ${runnable.length} \u4e2a\u3002\u539f\u59cb UI \u5de5\u4f5c\u6d41\u53ea\u7528\u4e8e\u4e00\u952e\u8f6c\u6362\uff0c\u4e0d\u8ba1\u5165\u8fd9\u91cc\u7684\u603b\u6570\u3002\u4e0b\u62c9\u6846\u4ec5\u663e\u793a\u53ef\u8fd0\u884c\u7684 API \u5de5\u4f5c\u6d41\uff0c\u4fdd\u5b58\u540e\u5b9e\u65f6\u751f\u6548\u3002`)
-    : escapeHtml("\u5c1a\u672a\u5237\u65b0\u5de5\u4f5c\u6d41"));
-}
-
-function renderRemoteComfyWorkflowMappings() {
-  renderComfyWorkflowMappings("remote");
-}
-
-function renderLocalComfyWorkflowMappings() {
-  renderComfyWorkflowMappings("local");
-}
-
-function remoteComfyDisplayName(path) {
-  const parts = String(path || "")
-    .replace(/\\/g, "/")
-    .split("/")
-    .filter(Boolean)
-    .filter((part) => part !== "__converted__");
-  const filename = parts.pop() || "";
-  const name = filename
-    .replace(/\.api\.json$/i, "")
-    .replace(/\.json$/i, "");
-  if (name === "person_t2i") return "人设_t2i";
-  const folder = parts.length ? parts[parts.length - 1] : "";
-  return folder ? `${folder} / ${name}` : name;
-}
-
-function setRemoteComfyStatus(kind, html) {
-  setComfyStatus("remote", kind, html);
-}
-
-function setComfyStatus(source, kind, html) {
-  const status = el(comfySourceConfig(source).statusId);
-  if (!status) return;
-  const suffix = kind ? ` is-${kind}` : "";
-  status.className = `small remote-comfy-status${suffix}`;
-  status.innerHTML = html || "";
-}
-
-function setRemoteComfyTextStatus(kind, text) {
-  setRemoteComfyStatus(kind, escapeHtml(text || ""));
-}
-
-function setComfyTextStatus(source, kind, text) {
-  setComfyStatus(source, kind, escapeHtml(text || ""));
-}
-
 function setButtonLoading(buttonId, loading, loadingText) {
   const button = el(buttonId);
   if (!button) return;
@@ -1932,196 +1739,6 @@ function setButtonLoading(buttonId, loading, loadingText) {
     if (button.dataset.idleText) button.textContent = button.dataset.idleText;
   }
 }
-
-function summarizeRemoteComfyNames(items, fieldNames) {
-  const names = items.map((item) => {
-    for (const field of fieldNames) {
-      const value = String((item && item[field]) || "").trim();
-      if (value) return value;
-    }
-    return "-";
-  });
-  const shown = names.slice(0, 8).map(escapeHtml).join("\u3001");
-  return names.length > 8 ? `${shown}\u3001\u7b49 ${names.length} \u4e2a` : shown;
-}
-
-function renderRemoteComfyConvertResult(resp) {
-  const items = Array.isArray(resp && resp.items) ? resp.items : [];
-  const successItems = items.filter((item) => item && item.ok);
-  const failedItems = items.filter((item) => !item || !item.ok);
-  const skippedItems = successItems.filter((item) => item && item.skipped);
-  const convertedItems = successItems.filter((item) => item && !item.skipped && !item.already_api);
-  const converted = Number((resp && resp.converted) || convertedItems.length || 0);
-  const skipped = Number((resp && resp.skipped) || skippedItems.length || 0);
-  const failed = Number((resp && resp.failed) || failedItems.length || 0);
-  const alreadyApi = successItems.filter((item) => item && item.already_api).length;
-  const warningItems = successItems.filter((item) => Array.isArray(item.warnings) && item.warnings.length);
-  const successNames = summarizeRemoteComfyNames(convertedItems, ["output_path", "source_path"]);
-  const skippedNames = summarizeRemoteComfyNames(skippedItems, ["source_path", "output_path"]);
-  const failureHtml = failedItems.length
-    ? failedItems.slice(0, 10).map((item) => {
-        const source = escapeHtml(String((item && item.source_path) || "-"));
-        const reason = escapeHtml(String((item && (item.error || item.detail || item.message)) || "\u672a\u8fd4\u56de\u5931\u8d25\u539f\u56e0"));
-        return `<div>${source}\uff1a${reason}</div>`;
-      }).join("")
-    : `<div>\u65e0</div>`;
-  const warningHtml = warningItems.length
-    ? `<div class="remote-comfy-status-list">\u8f6c\u6362\u8b66\u544a\uff1a${escapeHtml(String(warningItems.length))} \u4e2a\u5de5\u4f5c\u6d41\u6709\u8282\u70b9\u6620\u5c04\u8b66\u544a\uff0c\u5982\u679c\u540e\u7eed\u63d0\u4ea4\u5931\u8d25\u518d\u6309\u5355\u4e2a\u5de5\u4f5c\u6d41\u5904\u7406\u3002</div>`
-    : "";
-  return `
-    <div class="remote-comfy-status-title">\u8f6c\u6362\u5b8c\u6210</div>
-    <div>\u65b0\u8f6c\u6362\uff1a${escapeHtml(String(converted))} \u4e2a${alreadyApi ? `\uff0c\u5df2\u662f API \u683c\u5f0f ${escapeHtml(String(alreadyApi))} \u4e2a` : ""}</div>
-    <div>\u8df3\u8fc7\uff1a${escapeHtml(String(skipped))} \u4e2a</div>
-    <div>\u5931\u8d25\uff1a${escapeHtml(String(failed))} \u4e2a</div>
-    ${convertedItems.length ? `<div class="remote-comfy-status-list">\u65b0\u8f6c\u6362\u6587\u4ef6\uff1a${successNames}</div>` : ""}
-    ${skippedItems.length ? `<div class="remote-comfy-status-list">\u8df3\u8fc7\u6587\u4ef6\uff1a${skippedNames}</div>` : ""}
-    <div class="remote-comfy-status-list">\u5931\u8d25\u539f\u56e0\uff1a${failureHtml}</div>
-    ${warningHtml}
-  `;
-}
-
-async function refreshComfyWorkflows(source = "remote") {
-  const cfg = comfySourceConfig(source);
-  setComfyTextStatus(source, "running", `正在读取${cfg.label}工作流...`);
-  const resp = await api("/api/admin/remote_comfy/workflows", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      comfy_workflow_source: cfg.source,
-      remote_comfy_gateway_url: cfg.source === "remote" ? el(cfg.urlId).value.trim() : "",
-      remote_comfy_gateway_token: cfg.source === "remote" ? el(cfg.tokenId).value.trim() : "",
-      local_comfy_gateway_url: cfg.source === "local" ? el(cfg.urlId).value.trim() : "",
-      local_comfy_gateway_token: cfg.source === "local" ? el(cfg.tokenId).value.trim() : "",
-    }),
-  });
-  adminState[cfg.workflowsKey] = Array.isArray(resp.items) ? resp.items : [];
-  renderComfyWorkflowMappings(source);
-  return resp;
-}
-
-async function refreshRemoteComfyWorkflows() {
-  return refreshComfyWorkflows("remote");
-}
-
-async function refreshLocalComfyWorkflows() {
-  return refreshComfyWorkflows("local");
-}
-
-async function convertComfyWorkflows(source = "remote", force = false) {
-  const cfg = comfySourceConfig(source);
-  const workflows = Array.isArray(adminState[cfg.workflowsKey]) ? adminState[cfg.workflowsKey] : [];
-  const paths = workflows
-    .filter((item) => item && item.kind === "ui_workflow")
-    .map((item) => String(item.path || "").trim())
-    .filter(Boolean);
-  if (!paths.length) {
-    const message = `当前没有需要转换的 UI 工作流。请先刷新${cfg.label}工作流。`;
-    setComfyTextStatus(source, "error", message);
-    throw new Error(message);
-  }
-  const buttonId = cfg.source === "local"
-    ? (force ? "btnLocalComfyForceConvertWorkflows" : "btnLocalComfyConvertWorkflows")
-    : (force ? "btnRemoteComfyForceConvertWorkflows" : "btnRemoteComfyConvertWorkflows");
-  const otherButtonId = cfg.source === "local"
-    ? (force ? "btnLocalComfyConvertWorkflows" : "btnLocalComfyForceConvertWorkflows")
-    : (force ? "btnRemoteComfyConvertWorkflows" : "btnRemoteComfyForceConvertWorkflows");
-  const otherButton = el(otherButtonId);
-  if (otherButton) otherButton.disabled = true;
-  setButtonLoading(buttonId, true, force ? "\u91cd\u65b0\u8f6c\u6362\u4e2d..." : "\u8f6c\u6362\u4e2d...");
-  setComfyStatus(source, "running", `
-    <div class="remote-comfy-status-title">${force ? "\u6b63\u5728\u5f3a\u5236\u91cd\u65b0\u8f6c\u6362 API \u683c\u5f0f" : "\u6b63\u5728\u589e\u91cf\u8f6c\u6362 API \u683c\u5f0f"}</div>
-    <div>\u5171 ${escapeHtml(String(paths.length))} \u4e2a UI \u5de5\u4f5c\u6d41\uff0c${force ? "\u5c06\u5ffd\u7565\u7f13\u5b58\u5e76\u91cd\u65b0\u751f\u6210\u3002" : "\u672a\u53d8\u5316\u7684\u5de5\u4f5c\u6d41\u4f1a\u81ea\u52a8\u8df3\u8fc7\u3002"}</div>
-  `);
-  try {
-    const resp = await api("/api/admin/remote_comfy/convert_workflows", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        comfy_workflow_source: cfg.source,
-        remote_comfy_gateway_url: cfg.source === "remote" ? el(cfg.urlId).value.trim() : "",
-        remote_comfy_gateway_token: cfg.source === "remote" ? el(cfg.tokenId).value.trim() : "",
-        local_comfy_gateway_url: cfg.source === "local" ? el(cfg.urlId).value.trim() : "",
-        local_comfy_gateway_token: cfg.source === "local" ? el(cfg.tokenId).value.trim() : "",
-        paths,
-        overwrite: true,
-        force,
-      }),
-    });
-    await refreshComfyWorkflows(source);
-    const failed = Number(resp.failed || 0);
-    setComfyStatus(source, failed ? "error" : "ok", renderRemoteComfyConvertResult(resp));
-    return resp;
-  } catch (err) {
-    setComfyTextStatus(source, "error", `转换失败：${getErrorMessage(err)}`);
-    throw err;
-  } finally {
-    setButtonLoading(buttonId, false);
-    if (otherButton) otherButton.disabled = false;
-  }
-}
-
-async function convertRemoteComfyWorkflows(force = false) {
-  return convertComfyWorkflows("remote", force);
-}
-
-async function convertLocalComfyWorkflows(force = false) {
-  return convertComfyWorkflows("local", force);
-}
-
-async function runComfyMappedTest(source = "remote") {
-  const cfg = comfySourceConfig(source);
-  const mappings = collectComfyWorkflowMappings(source);
-  const workflowPath = mappings.text_to_image || Object.values(mappings).find(Boolean) || "";
-  if (!workflowPath) {
-    const message = `请先给至少一个任务类型选择可运行的${cfg.label}工作流`;
-    setComfyTextStatus(source, "error", message);
-    throw new Error(message);
-  }
-  const buttonId = cfg.source === "local" ? "btnLocalComfyRunTest" : "btnRemoteComfyRunTest";
-  setButtonLoading(buttonId, true, "\u6d4b\u8bd5\u4e2d...");
-  setComfyTextStatus(source, "running", `正在测试 ${workflowPath}...`);
-  try {
-    const resp = await api("/api/admin/remote_comfy/run_test", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        comfy_workflow_source: cfg.source,
-        remote_comfy_gateway_url: cfg.source === "remote" ? el(cfg.urlId).value.trim() : "",
-        remote_comfy_gateway_token: cfg.source === "remote" ? el(cfg.tokenId).value.trim() : "",
-        local_comfy_gateway_url: cfg.source === "local" ? el(cfg.urlId).value.trim() : "",
-        local_comfy_gateway_token: cfg.source === "local" ? el(cfg.tokenId).value.trim() : "",
-        workflow_path: workflowPath,
-        prompt_text: "a simple red apple on a wooden table, studio lighting, high quality",
-        negative_prompt: "low quality, blurry, distorted",
-        width: 512,
-        height: 512,
-        steps: 6,
-        batch_size: 1,
-        timeout_seconds: 900,
-      }),
-    });
-    const outputs = Array.isArray(resp.local_outputs) ? resp.local_outputs : [];
-    const firstPath = outputs.map((item) => item && item.local_path).find(Boolean) || "";
-    setComfyStatus(source, "ok", firstPath
-      ? `<div class="remote-comfy-status-title">\u6d4b\u8bd5\u6210\u529f</div><div>\u5df2\u4e0b\u8f7d\u7ed3\u679c\uff1a${escapeHtml(firstPath)}</div>`
-      : `<div class="remote-comfy-status-title">\u6d4b\u8bd5\u6210\u529f</div><div>prompt_id=${escapeHtml(String(resp.prompt_id || "-"))}</div>`);
-    return resp;
-  } catch (err) {
-    setComfyTextStatus(source, "error", `测试失败：${getErrorMessage(err)}`);
-    throw err;
-  } finally {
-    setButtonLoading(buttonId, false);
-  }
-}
-
-async function runRemoteComfyMappedTest() {
-  return runComfyMappedTest("remote");
-}
-
-async function runLocalComfyMappedTest() {
-  return runComfyMappedTest("local");
-}
-
 
 function initSensitiveInputToggles() {
   SENSITIVE_RUNTIME_INPUT_IDS.forEach((id) => {
@@ -2176,28 +1793,15 @@ function runtimeFormToPayload() {
   adminState.llmGeminiModels = [];
   adminState.llmGptModels = grokModelItems(adminState.llmGptModels);
   adminState.llmPriorityModels = grokModelItems(adminState.llmPriorityModels);
-  adminState.llmFreePriorityModels = grokModelItems(adminState.llmFreePriorityModels);
-  adminState.llmPaidPriorityModels = grokModelItems(adminState.llmPaidPriorityModels);
   adminState.imageGeminiModels = imageModelItems(adminState.imageGeminiModels);
   adminState.imagePriorityModels = imageModelItems(adminState.imagePriorityModels);
   const llmGrokModels = stringifyModelList(adminState.llmGptModels);
   const llmPriorityModels = stringifyModelList(adminState.llmPriorityModels);
-  const llmFreePriorityModels = stringifyModelList(adminState.llmFreePriorityModels);
-  const llmPaidPriorityModels = stringifyModelList(adminState.llmPaidPriorityModels);
   const imageGeminiModels = stringifyModelList(adminState.imageGeminiModels);
   const imagePriorityModels = stringifyModelList(adminState.imagePriorityModels);
   return {
     telegram_bot_token: el("rtTelegramBotToken") ? el("rtTelegramBotToken").value.trim() : "",
-    comfy_workflow_source: el("rtComfyWorkflowSource").value || "remote",
-    remote_comfy_gateway_url: el("rtRemoteComfyGatewayUrl").value.trim(),
-    remote_comfy_gateway_token: el("rtRemoteComfyGatewayToken").value.trim(),
-    remote_comfy_workflow_mappings: collectRemoteComfyWorkflowMappings(),
-    comfy_gpu_queue_enabled: Boolean(el("rtComfyGpuQueueEnabled").checked),
-    comfy_gpu_max_concurrency: Math.max(1, Math.min(4, Number(el("rtComfyGpuMaxConcurrency").value || 4))),
-    local_comfy_gateway_url: el("rtLocalComfyGatewayUrl").value.trim(),
-    local_comfy_gateway_token: el("rtLocalComfyGatewayToken").value.trim(),
-    local_comfy_workflow_mappings: collectLocalComfyWorkflowMappings(),
-    image_generate_mode_default: "remote_comfy",
+    image_generate_mode_default: "closed_model_api",
     image_generate_workflow_ids: [],
     llm_base_url: el("rtLlmBaseUrl").value.trim(),
     llm_api_key_gemini: "",
@@ -2207,8 +1811,6 @@ function runtimeFormToPayload() {
     llm_default_model_gpt: llmGrokModels,
     llm_default_model: llmGrokModels,
     llm_model_priority_order: llmPriorityModels,
-    llm_free_model_priority_order: llmFreePriorityModels,
-    llm_paid_model_priority_order: llmPaidPriorityModels,
     image_model_provider_base_url: el("rtImageBaseUrl").value.trim(),
     image_model_provider_api_key_gemini: el("rtImageGeminiApiKey").value.trim(),
     image_model_default_model_gemini: imageGeminiModels,
@@ -2237,21 +1839,6 @@ function fillRuntimeForm(data) {
   const v = data || {};
   const hasRuntimeField = (key) => Object.prototype.hasOwnProperty.call(v, key);
   if (el("rtTelegramBotToken")) el("rtTelegramBotToken").value = "";
-  el("rtRemoteComfyGatewayUrl").value = v.remote_comfy_gateway_url || "";
-  el("rtRemoteComfyGatewayToken").value = v.remote_comfy_gateway_token || "";
-  el("rtComfyGpuQueueEnabled").checked = Boolean(v.comfy_gpu_queue_enabled);
-  el("rtComfyGpuMaxConcurrency").value = String(v.comfy_gpu_max_concurrency || 4);
-  el("rtLocalComfyGatewayUrl").value = v.local_comfy_gateway_url || "http://127.0.0.1:9001";
-  el("rtLocalComfyGatewayToken").value = v.local_comfy_gateway_token || "";
-  el("rtComfyWorkflowSource").value = v.comfy_workflow_source === "local" ? "local" : "remote";
-  adminState.remoteComfyWorkflowMappings = (v.remote_comfy_workflow_mappings && typeof v.remote_comfy_workflow_mappings === "object")
-    ? { ...v.remote_comfy_workflow_mappings }
-    : {};
-  adminState.localComfyWorkflowMappings = (v.local_comfy_workflow_mappings && typeof v.local_comfy_workflow_mappings === "object")
-    ? { ...v.local_comfy_workflow_mappings }
-    : {};
-  renderRemoteComfyWorkflowMappings();
-  renderLocalComfyWorkflowMappings();
   el("rtLlmBaseUrl").value = v.llm_base_url || "http://202.90.21.53:3008";
   el("rtLlmApiKeyGemini").value = "";
   el("rtLlmApiKeyGpt").value = v.llm_api_key_gpt || "";
@@ -2259,13 +1846,13 @@ function fillRuntimeForm(data) {
   adminState.llmGptModels = grokModelItems([
     ...parseModelList(v.llm_default_model_gpt || ""),
     ...parseModelList(v.llm_model_priority_order || ""),
-    ...parseModelList(v.llm_free_model_priority_order || ""),
-    ...parseModelList(v.llm_paid_model_priority_order || ""),
     ...parseModelList(v.llm_default_model || ""),
   ]);
-  adminState.llmPriorityModels = grokModelItems(hasRuntimeField("llm_model_priority_order") ? parseModelList(v.llm_model_priority_order) : adminState.llmGptModels);
-  adminState.llmFreePriorityModels = grokModelItems(hasRuntimeField("llm_free_model_priority_order") ? parseModelList(v.llm_free_model_priority_order) : adminState.llmPriorityModels);
-  adminState.llmPaidPriorityModels = grokModelItems(hasRuntimeField("llm_paid_model_priority_order") ? parseModelList(v.llm_paid_model_priority_order) : adminState.llmPriorityModels);
+  adminState.llmPriorityModels = grokModelItems(
+    hasRuntimeField("llm_model_priority_order")
+      ? parseModelList(v.llm_model_priority_order)
+      : adminState.llmGptModels,
+  );
   el("rtImageBaseUrl").value = v.image_model_provider_base_url || "http://202.90.21.53:3008";
   el("rtImageGeminiApiKey").value = v.image_model_provider_api_key_gemini || "";
   if (el("rtNewPersonaRunningHubBaseUrl")) el("rtNewPersonaRunningHubBaseUrl").value = v.new_persona_runninghub_base_url || "https://www.runninghub.ai";
@@ -2619,46 +2206,6 @@ async function clearSentimentCookieProfile() {
   return resp;
 }
 
-async function checkRemoteComfyHealth() {
-  return checkComfyHealth("remote");
-}
-
-async function checkLocalComfyHealth() {
-  return checkComfyHealth("local");
-}
-
-async function checkComfyHealth(source = "remote") {
-  const cfg = comfySourceConfig(source);
-  const statusNode = el(source === "local" ? "rtLocalComfyHealthStatus" : "rtRemoteComfyHealthStatus");
-  if (statusNode) {
-    statusNode.className = "small";
-    statusNode.textContent = `正在检测${cfg.label}网关...`;
-  }
-  const resp = await api("/api/admin/remote_comfy/health", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      comfy_workflow_source: cfg.source,
-      remote_comfy_gateway_url: cfg.source === "remote" ? el(cfg.urlId).value.trim() : "",
-      remote_comfy_gateway_token: cfg.source === "remote" ? el(cfg.tokenId).value.trim() : "",
-      local_comfy_gateway_url: cfg.source === "local" ? el(cfg.urlId).value.trim() : "",
-      local_comfy_gateway_token: cfg.source === "local" ? el(cfg.tokenId).value.trim() : "",
-    }),
-  });
-  const health = resp && typeof resp.health === "object" ? resp.health : {};
-  const system = health && typeof health.system === "object" ? health.system : {};
-  const comfyVersion = system.comfyui_version || "-";
-  const osName = system.os || "-";
-  const ramFree = Number(system.ram_free || 0);
-  const ramTotal = Number(system.ram_total || 0);
-  const ramText = ramTotal > 0 ? `${Math.round(ramFree / 1024 / 1024 / 1024)}GB / ${Math.round(ramTotal / 1024 / 1024 / 1024)}GB` : "-";
-  if (statusNode) {
-    statusNode.className = "msg ok";
-    statusNode.textContent = `${cfg.label}网关可用：ComfyUI ${comfyVersion}，${osName}，内存 ${ramText}`;
-  }
-  return resp;
-}
-
 async function loadPricing() {
   const p = await api("/api/admin/pricing");
   el("priceRhCoins").value = p.rh_coins_per_10rmb;
@@ -2968,107 +2515,6 @@ function bindActions() {
     }
   });
 
-  if (el("btnRemoteComfyWorkflows")) {
-    el("btnRemoteComfyWorkflows").addEventListener("click", async () => {
-      try {
-        await refreshRemoteComfyWorkflows();
-        setMsg("runtimeMsg", "4090 工作流已刷新", true);
-      } catch (err) {
-        setMsg("runtimeMsg", getErrorMessage(err), false);
-      }
-    });
-  }
-  if (el("btnRemoteComfyConvertWorkflows")) {
-    el("btnRemoteComfyConvertWorkflows").addEventListener("click", async () => {
-      try {
-        await convertRemoteComfyWorkflows(false);
-        setMsg("runtimeMsg", "\u589e\u91cf\u8f6c\u6362\u5b8c\u6210", true);
-      } catch (err) {
-        setMsg("runtimeMsg", getErrorMessage(err), false);
-      }
-    });
-  }
-  if (el("btnRemoteComfyForceConvertWorkflows")) {
-    el("btnRemoteComfyForceConvertWorkflows").addEventListener("click", async () => {
-      try {
-        await convertRemoteComfyWorkflows(true);
-        setMsg("runtimeMsg", "\u5f3a\u5236\u91cd\u65b0\u8f6c\u6362\u5b8c\u6210", true);
-      } catch (err) {
-        setMsg("runtimeMsg", getErrorMessage(err), false);
-      }
-    });
-  }
-  if (el("btnRemoteComfyHealth")) {
-    el("btnRemoteComfyHealth").addEventListener("click", async () => {
-      try {
-        await checkRemoteComfyHealth();
-        setMsg("runtimeMsg", "远程 ComfyUI 网关可用", true);
-      } catch (err) {
-        setMsg("runtimeMsg", getErrorMessage(err), false);
-      }
-    });
-  }
-  if (el("btnRemoteComfyRunTest")) {
-    el("btnRemoteComfyRunTest").addEventListener("click", async () => {
-      try {
-        await runRemoteComfyMappedTest();
-        setMsg("runtimeMsg", "远程 ComfyUI 测试完成", true);
-      } catch (err) {
-        setMsg("runtimeMsg", getErrorMessage(err), false);
-      }
-    });
-  }
-  if (el("btnLocalComfyWorkflows")) {
-    el("btnLocalComfyWorkflows").addEventListener("click", async () => {
-      try {
-        await refreshLocalComfyWorkflows();
-        setMsg("runtimeMsg", "本地 ComfyUI 工作流已刷新", true);
-      } catch (err) {
-        setMsg("runtimeMsg", getErrorMessage(err), false);
-      }
-    });
-  }
-  if (el("btnLocalComfyConvertWorkflows")) {
-    el("btnLocalComfyConvertWorkflows").addEventListener("click", async () => {
-      try {
-        await convertLocalComfyWorkflows(false);
-        setMsg("runtimeMsg", "本地 ComfyUI 增量转换完成", true);
-      } catch (err) {
-        setMsg("runtimeMsg", getErrorMessage(err), false);
-      }
-    });
-  }
-  if (el("btnLocalComfyForceConvertWorkflows")) {
-    el("btnLocalComfyForceConvertWorkflows").addEventListener("click", async () => {
-      try {
-        await convertLocalComfyWorkflows(true);
-        setMsg("runtimeMsg", "本地 ComfyUI 强制重新转换完成", true);
-      } catch (err) {
-        setMsg("runtimeMsg", getErrorMessage(err), false);
-      }
-    });
-  }
-  if (el("btnLocalComfyHealth")) {
-    el("btnLocalComfyHealth").addEventListener("click", async () => {
-      try {
-        await checkLocalComfyHealth();
-        setMsg("runtimeMsg", "本地 ComfyUI 网关可用", true);
-      } catch (err) {
-        setMsg("runtimeMsg", getErrorMessage(err), false);
-      }
-    });
-  }
-  if (el("btnLocalComfyRunTest")) {
-    el("btnLocalComfyRunTest").addEventListener("click", async () => {
-      try {
-        await runLocalComfyMappedTest();
-        setMsg("runtimeMsg", "本地 ComfyUI 测试完成", true);
-      } catch (err) {
-        setMsg("runtimeMsg", getErrorMessage(err), false);
-      }
-    });
-  }
-
   [
     ["btnAddLlmGptModel", "rtLlmGptModelInput", "llmGptModels"],
   ].forEach(([buttonId, inputId, listKey]) => {
@@ -3135,8 +2581,7 @@ function bindActions() {
   }
 
   [
-    ["btnAddLlmFreePriorityModel", "llmFreePriorityModels"],
-    ["btnAddLlmPaidPriorityModel", "llmPaidPriorityModels"],
+    ["btnAddLlmPriorityModel", "llmPriorityModels"],
   ].forEach(([buttonId, listKey]) => {
     if (el(buttonId)) {
       el(buttonId).addEventListener("click", (event) => {
@@ -3168,7 +2613,7 @@ function bindActions() {
       setMsg("tgSettingsMsg", "");
       try {
         await loadTgSettings();
-        setMsg("tgSettingsMsg", "TG Bot 设置已刷新", true);
+      setMsg("tgSettingsMsg", "TG 信任用户已删除", true);
       } catch (err) {
         setMsg("tgSettingsMsg", getErrorMessage(err), false);
       }
@@ -3441,9 +2886,6 @@ function bindActions() {
       syncWorkflowChainFromDom(chainKey);
       renderWorkflowChain(chainKey);
     }
-    if (target.dataset && target.dataset.remoteComfyTask) {
-      collectRemoteComfyWorkflowMappings();
-    }
   });
 
   document.querySelectorAll("[data-page]").forEach((node) => {
@@ -3469,13 +2911,13 @@ function bindActions() {
       if (idx >= 0 && Array.isArray(list)) {
         const [removedModel] = list.splice(idx, 1);
         if (listName === "llmGptModels") {
-          ["llmPriorityModels", "llmFreePriorityModels", "llmPaidPriorityModels"].forEach((priorityKey) => {
+          ["llmPriorityModels"].forEach((priorityKey) => {
             if (Array.isArray(adminState[priorityKey])) {
               adminState[priorityKey] = adminState[priorityKey].filter((model) => model !== removedModel);
             }
           });
           syncPriorityModelsFromCatalog("llm");
-        } else if (listName === "llmPriorityModels" || listName === "llmFreePriorityModels" || listName === "llmPaidPriorityModels") {
+        } else if (listName === "llmPriorityModels") {
           syncPriorityModelsFromCatalog("llm");
         } else if (listName === "imageGeminiModels" || listName === "imagePriorityModels") {
           syncPriorityModelsFromCatalog("image");
@@ -3500,7 +2942,7 @@ function bindActions() {
         list[idx] = list[idx + 1];
         list[idx + 1] = item;
       }
-      if (listName === "llmPriorityModels" || listName === "llmFreePriorityModels" || listName === "llmPaidPriorityModels") syncPriorityModelsFromCatalog("llm");
+      if (listName === "llmPriorityModels") syncPriorityModelsFromCatalog("llm");
       if (listName === "imagePriorityModels") syncPriorityModelsFromCatalog("image");
       writeModelDraft();
       renderAllModelLists();
@@ -3589,6 +3031,35 @@ function bindActions() {
   });
 }
 
+
+
+
+
+
+
+function buildLlmModelSummary() {
+  const priority = grokModelItems(adminState.llmPriorityModels);
+  if (priority.length) return `文字模型：${priority[0]}`;
+  const model = llmModelOptions()[0] || "";
+  if (model) return `文字模型：${model}`;
+  return "未配置文字模型";
+}
+
+function renderModelSummaries() {
+  const llmSummary = el("rtLlmModelSummary");
+  if (llmSummary) llmSummary.textContent = buildLlmModelSummary();
+  const imageSummary = el("rtImageModelSummary");
+  if (imageSummary) {
+    const priority = imageModelItems(adminState.imagePriorityModels);
+    const first = priority[0] || imageModelOptions()[0] || "";
+    imageSummary.textContent = first ? `图片模型：${first}` : "未配置图片模型";
+  }
+}
+
+function bindTextModelContentTabs() {
+  return;
+}
+
 window.addEventListener("DOMContentLoaded", async () => {
   try {
     const me = await ensureAdmin();
@@ -3603,11 +3074,6 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   try {
     await loadRuntime();
-    try {
-      await refreshRemoteComfyWorkflows();
-    } catch {
-      // Keep runtime page usable when the remote gateway is temporarily offline.
-    }
     setMsg("runtimeMsg", "");
   } catch (err) {
     setMsg("runtimeMsg", formatRuntimeConfigError("读取", err), false);

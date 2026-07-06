@@ -100,10 +100,7 @@ function personaGeneratePreflight() {
 }
 
 function resolvedPersonaGenerateBranch(profile, generateForm = {}) {
-  const explicit = String(generateForm?.contentBranch || "").trim().toLowerCase();
-  if (explicit === "r18") return "r18";
-  if (explicit === "nonr18") return "nonr18";
-  return profile?.is_workflow_persona ? "nonr18" : "nonr18";
+  return "nonr18";
 }
 
 function defaultPersonaCreateState() {
@@ -477,7 +474,7 @@ function personaFormState(personaId) {
   const key = String(personaId || "").trim();
   if (!key) {
     return {
-      generate: { mode: "ai", count: 3, targetWords: 120, contentBranch: "", textModelBranch: "", contentTimeSlot: "", prompt: "", selectedMemoryIds: [] },
+      generate: { mode: "ai", count: 3, targetWords: 120, contentTimeSlot: "", prompt: "", selectedMemoryIds: [] },
       draft: { title: "", content: "", editingPostId: "" },
       media: { taskType: "text_to_image", prompt: "", aspectRatio: "1:1", resolution: "720p", duration: 2, replaceExisting: false },
       images: { prompt: "", aspectRatio: "1:1" },
@@ -489,8 +486,6 @@ function personaFormState(personaId) {
         mode: "ai",
         count: 3,
         targetWords: 120,
-        contentBranch: "",
-        textModelBranch: "",
         contentTimeSlot: "",
         prompt: "",
         selectedMemoryIds: [],
@@ -524,8 +519,6 @@ function snapshotPersonaCurrentForm() {
   if ($("personaGenerateMode")) form.generate.mode = String($("personaGenerateMode")?.value || "ai");
   if ($("personaGenerateCount")) form.generate.count = Number($("personaGenerateCount")?.value || form.generate.count || 3);
   if ($("personaGenerateTargetWords")) form.generate.targetWords = Number($("personaGenerateTargetWords")?.value || form.generate.targetWords || 120);
-  if ($("personaGeneratePaidEnabled")) form.generate.contentBranch = $("personaGeneratePaidEnabled")?.checked ? "r18" : "nonr18";
-  if ($("personaGenerateModelBranch")) form.generate.textModelBranch = String($("personaGenerateModelBranch")?.value || "");
   if ($("personaGenerateTimeSlot")) form.generate.contentTimeSlot = String($("personaGenerateTimeSlot")?.value || "");
   if ($("personaGeneratePrompt")) form.generate.prompt = String($("personaGeneratePrompt")?.value || "");
   if (document.querySelector("[data-persona-memory-id]")) {
@@ -569,7 +562,6 @@ function fallbackPersonaProfile(persona) {
     link_presets: [],
     image_count: Number(persona?.counts?.images || 0),
     has_reference_images: Number(persona?.counts?.images || 0) > 0,
-    is_workflow_persona: false,
     _fallback: true,
   };
 }
@@ -953,10 +945,6 @@ function renderGenerationModule() {
       <label>完成后分支
         <select id="taskBranch">
           <option value="new">新建任务</option>
-          <option value="toolr18_task_r18_text_to_image_reroll">重新生成图片</option>
-          <option value="toolr18_task_r18_text_to_image_continue">继续生成图片</option>
-          <option value="r18_image_edit_continue">继续编辑结果图</option>
-          <option value="r18_rerun_latest">重跑最近任务</option>
         </select>
       </label>
       <label>提示词模式
@@ -1683,9 +1671,9 @@ function renderPersonaSettingsPanelV2(persona, account, profile, step) {
     return `
       <div class="persona-inline-panel">
         <strong>删除人设</strong>
-        <p>这里只保留真实可用的删除接口。工作流人设不允许删除，普通人设删除后不可恢复。</p>
+        <p>这里只保留真实可用的删除接口。删除后不可恢复。</p>
         <div class="row-actions">
-          <button type="button" class="danger" data-persona-delete ${profile.is_workflow_persona ? "disabled" : ""}>删除当前人设</button>
+          <button type="button" class="danger" data-persona-delete>删除当前人设</button>
         </div>
       </div>`;
   }
@@ -2493,10 +2481,6 @@ async function deleteSelectedPersona() {
   const persona = selectedPersona();
   const profile = selectedPersonaProfile();
   if (!persona || !profile) return;
-  if (profile.is_workflow_persona) {
-    showMsg("commandMsg", "工作流人设不允许在 Web 控制台删除。", false);
-    return;
-  }
   const confirmed = await openConsoleModal({
     title: "删除人设",
     message: `确认删除人设「${persona.name || persona.id}」？删除后不可恢复。`,
@@ -3251,7 +3235,7 @@ async function loadPersonaImageLibrary(personaId, { force = false } = {}) {
   const key = String(personaId || "").trim();
   if (!key) return null;
   if (!force && state.personaImageLibraries[key]) return state.personaImageLibraries[key];
-  const data = await api(`/api/persona_dashboard/personas/${encodeURIComponent(key)}/images`).catch(() => ({ ok: true, items: [], current_reference_url: "", is_workflow_persona: false }));
+  const data = await api(`/api/persona_dashboard/personas/${encodeURIComponent(key)}/images`).catch(() => ({ ok: true, items: [], current_reference_url: "" }));
   state.personaImageLibraries[key] = data;
   if (state.activeModule === "personas" && key === String(state.selectedPersonaId || "")) renderPersonaDetail();
   return data;
@@ -3377,13 +3361,10 @@ async function createPersonaArchiveWithAi() {
 
 function generatePersonaPayloadFromState(persona, profile = selectedPersonaProfile()) {
   const form = personaFormState(persona.id).generate;
-  const contentBranch = resolvedPersonaGenerateBranch(profile, form);
   return {
     count: Number(form.count || 3),
     prompt: String(form.prompt || "").trim(),
     target_words: Number(form.targetWords || 120),
-    content_branch: contentBranch,
-    text_model_branch: contentBranch === "r18" ? "paid" : "free",
     content_time_slot: String(form.contentTimeSlot || "").trim(),
     selected_memory_ids: Array.isArray(form.selectedMemoryIds) ? form.selectedMemoryIds : [],
   };
@@ -3545,10 +3526,6 @@ async function submitPersonaImageGeneration() {
   const profile = selectedPersonaProfile();
   if (!persona || !profile) {
     showMsg("commandMsg", "请先选择一个人设。", false);
-    return;
-  }
-  if (profile.is_workflow_persona) {
-    showMsg("commandMsg", "工作流人设不需要单独生成人设图。", false);
     return;
   }
   snapshotPersonaCurrentForm();
@@ -3752,9 +3729,9 @@ async function deletePersonaPostMedia(index) {
 }
 
 function personaIsWorkflow(persona, profile = null) {
-  if (typeof profile?.is_workflow_persona === "boolean") return profile.is_workflow_persona;
-  if (typeof persona?.is_workflow_persona === "boolean") return persona.is_workflow_persona;
-  return String(persona?.id || "").startsWith("workflow-persona-");
+  void persona;
+  void profile;
+  return false;
 }
 
 function personaKindLabel(persona, profile = null) {
@@ -3974,19 +3951,7 @@ function renderPersonaGenerateModeTabs(mode) {
 }
 
 function personaMediaTaskOptions(profile, generateForm = {}) {
-  const isWorkflowPersona = Boolean(profile?.is_workflow_persona);
-  const paidEnabled = isWorkflowPersona && resolvedPersonaGenerateBranch(profile, generateForm) === "r18";
-  if (!paidEnabled) {
-    return [["text_to_image", "根据推文生图"]];
-  }
-  return [
-    ["text_to_image", "根据推文生图"],
-    ["image_generate", "图片生成"],
-    ["single_image_edit", "单图编辑"],
-    ["get_nano_banana", "双图编辑"],
-    ["face_swap", "人物换脸"],
-    ["video_i2v", "图生视频"],
-  ];
+  return [["text_to_image", "根据推文生图"]];
 }
 
 function renderPersonaMediaTaskTabs(profile, generateForm, taskType) {
@@ -4141,7 +4106,7 @@ function renderPersonaCreateWorkbench() {
       <div class="persona-workbench-head">
         <div class="persona-head-copy">
           <strong>新建普通人设</strong>
-          <span>对齐 Bot：先定名称，再写提示词，最后确认关键词后创建。工作流人设仍由后端档案同步。</span>
+          <span>对齐 Bot：先定名称，再写提示词，最后确认关键词后创建。</span>
         </div>
         <div class="persona-quick-actions">
           <button type="button" data-persona-cancel-create>返回人设详情</button>
@@ -4196,7 +4161,6 @@ function renderPersonaCreateWorkbench() {
 }
 
 function personaGroupStepOptions(groupKey, profile) {
-  const workflowPersona = Boolean(profile?.is_workflow_persona);
   if (groupKey === "content") {
     return [
       ["generate", "新建推文"],
@@ -4206,19 +4170,13 @@ function personaGroupStepOptions(groupKey, profile) {
     ];
   }
   if (groupKey === "settings") {
-    return workflowPersona
-      ? [
-          ["profile", "基础资料"],
-          ["style", "推文风格"],
-          ["links", "链接设置"],
-        ]
-      : [
-          ["profile", "基础资料"],
-          ["images", "人设图"],
-          ["style", "推文风格"],
-          ["links", "链接设置"],
-          ["delete", "删除当前人设"],
-        ];
+    return [
+      ["profile", "基础资料"],
+      ["images", "人设图"],
+      ["style", "推文风格"],
+      ["links", "链接设置"],
+      ["delete", "删除当前人设"],
+    ];
   }
   if (groupKey === "account") {
     return [
@@ -4317,7 +4275,7 @@ function renderPersonaDetail() {
   const drafts = personaDraftPosts(persona);
   const showWarnings = warnings.length && groupKey !== "content";
   const groupPanel = renderPersonaGroupPanel(groupKey, step, persona, account, profile);
-  const canDelete = Boolean(profile && !profile.is_workflow_persona);
+  const canDelete = Boolean(profile);
   $("personaDetail").innerHTML = `
     <div class="persona-inline-panel is-flat">
       <div class="persona-workbench-head">
@@ -4349,10 +4307,8 @@ function renderPersonaContentPanel(persona, account, profile, step) {
   const form = personaFormState(persona.id);
   const generateForm = form.generate;
   const draftForm = form.draft;
-  const isWorkflowPersona = personaIsWorkflow(persona, profile);
-  const contentBranch = resolvedPersonaGenerateBranch(profile, generateForm);
-  const paidWorkflowBranch = isWorkflowPersona && contentBranch === "r18";
-  const showTimeSlot = isWorkflowPersona && contentBranch === "nonr18";
+  const isWorkflowPersona = false;
+  const showTimeSlot = false;
   const generateMode = String(generateForm.mode || "ai") === "custom" ? "custom" : "ai";
   const isEditingDraft = Boolean(String(draftForm.editingPostId || "").trim());
   const editingDraft = isEditingDraft ? drafts.find((post) => String(post.id) === String(draftForm.editingPostId || "").trim()) || selectedPost : null;
@@ -4368,16 +4324,8 @@ function renderPersonaContentPanel(persona, account, profile, step) {
             <strong>${isEditingDraft ? "编辑草稿" : "新建推文"}</strong>
             <span class="persona-panel-intro">${esc(isEditingDraft
               ? `这里处理当前草稿的正文修改。配图、媒体、删除和 AI 重写都从这里进入，不再放在草稿列表里。`
-              : (isWorkflowPersona
-                ? `这里处理推文内容。工作流人设可额外勾选付费内容；配图和媒体操作已归到“推文配图 / 媒体”。已识别 ${memoryRows.length} 条可选记忆。`
-                : `这里处理推文内容。配图和媒体操作已归到“推文配图 / 媒体”。已识别 ${memoryRows.length} 条可选记忆。`))}</span>
+              : `这里处理推文内容。配图和媒体操作已归到“推文配图 / 媒体”。已识别 ${memoryRows.length} 条可选记忆。`)}</span>
           </div>
-          ${isWorkflowPersona ? `
-            <label class="persona-toggle-chip">
-              <input id="personaGeneratePaidEnabled" type="checkbox" ${paidWorkflowBranch ? "checked" : ""} />
-              <span>付费内容</span>
-            </label>
-          ` : ""}
         </div>
         <div class="form-grid persona-detail-controls">
           <label>生成数量
@@ -4449,11 +4397,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
     const showVideoOptions = currentTaskType === "video_i2v";
     const uploadAccept = currentTaskType === "video_i2v" ? "image/*,audio/*" : "image/*";
     const showSourceUpload = Number(mediaMeta.minImages || 0) > 0 || currentTaskType === "video_i2v";
-    const mediaIntro = isWorkflowPersona
-      ? (paidWorkflowBranch
-        ? "当前已切到工作流付费分支，可处理生图、编辑、换脸和图生视频。"
-        : "当前是免费内容分支，只提供“根据推文生图”。如需付费编辑内容，先回到“新建推文”勾选“付费内容”。")
-      : "普通人设这里只提供“根据推文生图”，不会显示工作流付费编辑内容。";
+    const mediaIntro = "这里只提供“根据推文生图”。";
     return `
       <div class="persona-inline-panel">
         <div class="persona-head-copy">
@@ -5237,11 +5181,6 @@ function bindEvents() {
     if (event.target?.matches?.("[data-persona-memory-id]")) {
       snapshotPersonaCurrentForm();
       syncPersonaMemorySelectionState();
-      renderConfirmSummary();
-    }
-    if (event.target?.id === "personaGeneratePaidEnabled") {
-      snapshotPersonaCurrentForm();
-      renderPersonaDetail();
       renderConfirmSummary();
     }
     if (event.target?.id === "personaGenerateMode") {

@@ -20,21 +20,13 @@ import type { DramaSetup, EpisodeScript } from "@/types/drama";
 
 const PERSONA_TEXT_MODEL = "xai/grok-4.3";
 const PERSONA_TEXT_MAX_RETRIES = 3;
-type PersonaTextModelBranch = "free" | "paid";
+type PersonaTextModelBranch = "free";
 
-function resolvePersonaTextModelPreference(branch: PersonaTextModelBranch = "free"): string {
+function resolvePersonaTextModelPreference(): string {
   const config = readRuntimeApiConfig() as Record<string, unknown>;
-  const branchCandidates = branch === "paid"
-    ? [
-        config.llmPaidModelPriorityOrder,
-        config.llm_paid_model_priority_order,
-      ]
-    : [
-        config.llmFreeModelPriorityOrder,
-        config.llm_free_model_priority_order,
-      ];
   const configured = [
-    ...branchCandidates,
+    config.llmFreeModelPriorityOrder,
+    config.llm_free_model_priority_order,
     config.llmModelPriorityOrder,
     config.llm_model_priority_order,
     config.llmDefaultModelGpt,
@@ -61,9 +53,9 @@ function buildTweetStyleInstruction(setup: any): string {
   if (!profile) return "";
   return [
     "【固定推文风格】",
-    "该人设已设置专属推文风格。生成时只能模仿格式结构、内容推进方式、语气和互动钩子；禁止复述案例里的具体事件、事实、人物、福利话术或连续原句。",
+    "该人设已设置专属推文风格。生成时只能模仿格式结构、内容推进方式、语气和互动钩子；禁止复述示例里的具体事件、事实、人物、福利话术或连续原句。",
     profile ? `风格分析：${profile}` : "",
-    "必须使用当前人设、记忆和用户提示生成全新内容；如果没有明确主题，就换一个同人设的日常/观点/互动主题，不要沿用案例主题。",
+    "必须使用当前人设、记忆和用户提示生成全新内容；如果没有明确主题，就换一个同人设的日常观点或互动主题，不要沿用示例主题。",
   ].filter(Boolean).join("\n");
 }
 
@@ -90,7 +82,7 @@ function buildLinkEndingInstruction(setup: any): string {
   if (!preset) return "";
   return [
     "【固定链接结尾】",
-    "该人设已开启链接设置预设。每篇生成推文结尾必须自动追加以下结尾语句/链接，不要改写，不要省略。",
+    "该人设已开启链接结尾预设。每篇生成推文结尾必须自动追加以下结尾语句或链接，不要改写，不要省略。",
     preset.endingText ? `结尾语句：${preset.endingText}` : "",
     preset.linkUrl ? `固定链接：${preset.linkUrl}` : "",
     preset.linkUrl ? "The fixed link must appear exactly once and must be the final line of the post." : "",
@@ -99,7 +91,7 @@ function buildLinkEndingInstruction(setup: any): string {
 }
 
 function buildChineseScriptInstruction(archive: { id?: string; setup?: any }): string {
-  if (String(archive.id || "").startsWith("workflow-persona-")) return "";
+  void archive;
   return [
     "【Traditional Chinese output rule】",
     "1. Final post body must be generated directly in Traditional Chinese.",
@@ -111,8 +103,6 @@ function buildChineseScriptInstruction(archive: { id?: string; setup?: any }): s
 function isJinjunyaLinkPersona(setup: any): boolean {
   const markers = [
     String(setup?.personaName || ""),
-    String(setup?.imageWorkflow?.personaKey || ""),
-    String(setup?.imageWorkflow?.workflowFile || ""),
   ].join(" ").toLowerCase();
   return markers.includes("\u91d1\u541b\u96c5") || markers.includes("jinjunya");
 }
@@ -216,7 +206,7 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function generateTextWithGemini(prompt: string, count: number, textModelBranch: PersonaTextModelBranch = "free"): Promise<string> {
+async function generateTextWithGemini(prompt: string, count: number): Promise<string> {
   const finalPrompt = [
     prompt,
     "",
@@ -224,7 +214,7 @@ async function generateTextWithGemini(prompt: string, count: number, textModelBr
     `1. 必须输出完整的 ${count} 篇独立推文正文。`,
     "2. 每篇之间只能使用一行 --- 分隔。",
     "3. 不要输出思考过程，不要输出说明，不要输出检查结果，不要输出标题说明。",
-    `4. 直接从第1篇正文开始写，写完第${count}篇正文后立即结束。`,
+    `4. 直接从第 1 篇正文开始写，写完第 ${count} 篇正文后立即结束。`,
     `5. 如果少于 ${count} 篇视为失败。`,
   ].join("\n");
 
@@ -232,7 +222,7 @@ async function generateTextWithGemini(prompt: string, count: number, textModelBr
   for (let attempt = 0; attempt <= PERSONA_TEXT_MAX_RETRIES; attempt += 1) {
     try {
       const result = await callTextUnderstandingModelWithFallback(
-        resolvePersonaTextModelPreference(textModelBranch),
+        resolvePersonaTextModelPreference(),
         [{ role: "user", parts: [{ text: finalPrompt }] }],
         {
           maxOutputTokens: Math.max(4096, count * 1200),
@@ -349,7 +339,7 @@ export type PersonaWorkflowInput =
   | { action: "get"; archiveId: string }
   | { action: "update"; archiveId: string; name?: string; content?: string; setup?: Partial<DramaSetup> }
   | { action: "delete"; archiveId: string }
-  | { action: "generate-posts"; archiveId: string; count?: number; customInstruction?: string; selectedMemoryEntryIds?: string[]; selectedMemorySummaries?: string[]; textModelBranch?: PersonaTextModelBranch }
+  | { action: "generate-posts"; archiveId: string; count?: number; customInstruction?: string; selectedMemoryEntryIds?: string[]; selectedMemorySummaries?: string[]; textModelBranch?: "free" }
   | { action: "enqueue-posts"; archiveId: string; postIds?: string[]; padCode?: string; platform?: string; telegramChatId?: string }
   | { action: "finalize-published"; archiveId: string; postIds: string[]; publishedContentById?: Record<string, string>; publishedMetaById?: Record<string, any> };
 
@@ -440,13 +430,11 @@ export async function runPersonaWorkflow(input: PersonaWorkflowInput) {
           .filter((entry) => entry.summary),
       ];
       const selectedMemoryInstruction = buildSelectedMemoryInstruction(selectedEntries);
-      const effectiveSetup = String(archive.id || "").startsWith("workflow-persona-")
-        ? archive.setup
-        : {
-            ...(archive.setup || {}),
-            targetMarket: (archive.setup as any)?.targetMarket || "cn",
-            chineseScript: "traditional",
-          };
+      const effectiveSetup = {
+        ...(archive.setup || {}),
+        targetMarket: (archive.setup as any)?.targetMarket || "cn",
+        chineseScript: "traditional",
+      };
       const tweetStyleInstruction = buildTweetStyleInstruction(effectiveSetup);
       const linkEndingInstruction = buildLinkEndingInstruction(effectiveSetup);
       const chineseScriptInstruction = buildChineseScriptInstruction(archive);
@@ -475,8 +463,7 @@ export async function runPersonaWorkflow(input: PersonaWorkflowInput) {
         [input.customInstruction || "", chineseScriptInstruction].filter((part) => part.trim()).join("\n\n"),
       );
 
-      const textModelBranch = input.textModelBranch === "paid" ? "paid" : "free";
-      const generated = await generateTextWithGemini(prompt, targetCount, textModelBranch);
+      const generated = await generateTextWithGemini(prompt, targetCount);
       let posts = ensurePostsContainLinkEndingPreset(parsePosts(generated, targetCount), archive.setup);
 
       let attempts = 0;
@@ -485,12 +472,12 @@ export async function runPersonaWorkflow(input: PersonaWorkflowInput) {
         const retryPrompt = [
           customInstruction,
           `现在只补充剩余 ${missing} 篇推文。`,
-          `前面已经成功生成了 ${posts.length} 篇，不要重复前面的内容。`,
-          "必须直接输出缺失的推文正文，每篇之间只用 --- 分隔。",
+          `前面已经成功生成 ${posts.length} 篇，不要重复前面的内容。`,
+          "必须直接输出缺少的推文正文，每篇之间只能用 --- 分隔。",
           trendIntel ? `必须继续自然结合以下今日人设时事情报，不要写成新闻摘要：\n${trendIntel.slice(0, 1200)}` : "",
-          "不要输出思考过程、不要输出说明、不要输出检查文本、不要输出标题说明。",
+          "不要输出思考过程，不要输出说明，不要输出检查文本，不要输出标题说明。",
         ].join("\n");
-        const retryGenerated = await generateTextWithGemini(retryPrompt, missing, textModelBranch);
+        const retryGenerated = await generateTextWithGemini(retryPrompt, missing);
         const retryPosts = ensurePostsContainLinkEndingPreset(parsePosts(retryGenerated, missing), archive.setup).map((post, index) => ({
           ...post,
           number: posts.length + index + 1,
@@ -549,12 +536,11 @@ export async function runPersonaWorkflow(input: PersonaWorkflowInput) {
           skipped.push({ postId: post.id, reason: "already-enqueued" });
           continue;
         }
-        const telegramGroupType = post.telegramGroupContentType === "paid" ? "paid" : "free";
         const telegramTargetGroupName = platform === "telegram"
-          ? (telegramGroupType === "paid" ? archive.boundTelegramPaidGroupName : archive.boundTelegramFreeGroupName)
+          ? archive.boundTelegramFreeGroupName
           : undefined;
         const telegramTargetChatId = platform === "telegram"
-          ? (telegramGroupType === "paid" ? archive.boundTelegramPaidGroupId : archive.boundTelegramFreeGroupId)
+          ? archive.boundTelegramFreeGroupId
           : undefined;
         const activeLinkEndingPreset = resolveActiveLinkEndingPreset(archive.setup);
         const finalCaption = activeLinkEndingPreset
@@ -570,7 +556,7 @@ export async function runPersonaWorkflow(input: PersonaWorkflowInput) {
           telegram_chat_id: input.telegramChatId,
           telegram_target_chat_id: telegramTargetChatId,
           telegram_target_group_name: telegramTargetGroupName,
-          telegram_group_content_type: platform === "telegram" ? telegramGroupType : undefined,
+          telegram_group_content_type: platform === "telegram" ? "free" : undefined,
         });
         existingKeys.add(dedupeKey);
         enqueued.push({ taskId: task.id, postId: post.id });

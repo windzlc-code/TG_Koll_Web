@@ -2,7 +2,6 @@ import type { DramaProject } from "@/types/drama";
 import fs from "node:fs";
 import { resolveRuntimeFile } from "@/runtime/node/data-dir";
 import { addPostToMemory, buildMemoryOutline, deleteMemory } from "./persona-memory-v2";
-import { WORKFLOW_PERSONA_SEEDS } from "./workflow-personas";
 import {
   appendEpisodesToArchivePosts,
   archivePostsToEpisodes,
@@ -21,9 +20,7 @@ import { sanitizeGeneratedPostContent } from "@/core/persona/generated-post-pars
 const ARCHIVES_KEY = "persona_archives_v2";
 const LEGACY_PRESETS_KEY = "persona_presets";
 const LEGACY_PROJECTS_KEY = "storyforge_drama_projects";
-const WORKFLOW_PERSONAS_SEEDED_KEY = "workflow_persona_archives_seeded_v1";
 const buildArchiveMemoryOutline = buildMemoryOutline;
-const WORKFLOW_PERSONA_ID_PREFIX = "workflow-persona-";
 const PUBLISH_PLATFORMS = ["threads", "telegram"] as const;
 type PublishPlatformQueue = typeof PUBLISH_PLATFORMS[number];
 
@@ -322,28 +319,8 @@ function normalizePublishRecord(raw: any, fallbackIndex: number): PersonaPublish
   };
 }
 
-function normalizeWorkflowSeedSetup(
-  rawId: unknown,
-  rawSetup: any,
-  workflowSeed: WorkflowPersonaSeed | undefined,
-): ArchiveSetup | undefined {
-  const merged = rawSetup && typeof rawSetup === "object"
-    ? { ...(workflowSeed?.setup || {}), ...rawSetup }
-    : workflowSeed?.setup
-      ? { ...workflowSeed.setup }
-      : undefined;
-
-  if (!merged) return undefined;
-
-  const isWorkflowPersona = typeof rawId === "string" && rawId.startsWith("workflow-persona-");
-  if (isWorkflowPersona && merged.totalEpisodes === 3) {
-    merged.totalEpisodes = 50;
-  }
-  if (workflowSeed?.setup?.imageWorkflow) {
-    merged.imageWorkflow = workflowSeed.setup.imageWorkflow;
-  }
-
-  return merged;
+function normalizeArchiveSetup(rawSetup: any): ArchiveSetup | undefined {
+  return rawSetup && typeof rawSetup === "object" ? { ...rawSetup } : undefined;
 }
 
 function normalizePlatformPosts(raw: any, fallbackPosts: PersonaArchivePost[]): Record<string, PersonaArchivePost[]> {
@@ -413,8 +390,7 @@ function normalizeArchive(raw: any): PersonaArchive {
         .map((item: any, index: number) => normalizePersonaImageLibraryItem(item, index))
         .filter(Boolean) as PersonaImageLibraryItem[]
     : [];
-  const workflowSeed = WORKFLOW_PERSONA_SEEDS.find((seed) => seed.id === raw?.id);
-  const normalizedSetup = normalizeWorkflowSeedSetup(raw?.id, raw?.setup, workflowSeed);
+  const normalizedSetup = normalizeArchiveSetup(raw?.setup);
   return {
     id: typeof raw?.id === "string" && raw.id ? raw.id : crypto.randomUUID(),
     name: typeof raw?.name === "string" && raw.name.trim() ? raw.name : "未命名人設",
@@ -544,92 +520,18 @@ function migrateLegacyProjects(): PersonaArchive[] {
   );
 }
 
-function buildWorkflowPersonaArchive(seed: WorkflowPersonaSeed, existing: PersonaArchive | undefined, now: string): PersonaArchive {
-  const setup = {
-    ...(existing?.setup || {}),
-    ...seed.setup,
-    imageWorkflow: seed.setup.imageWorkflow,
-    personaName: seed.setup.personaName || seed.name,
-  };
-  return normalizeArchive({
-    ...(existing || {}),
-    id: seed.id,
-    name: seed.name,
-    content: seed.content,
-    createdAt: existing?.createdAt || now,
-    updatedAt: existing?.updatedAt || now,
-    setup,
-    posts: existing?.posts || [],
-    publishHistory: existing?.publishHistory || [],
-    personaImageLibrary: existing?.personaImageLibrary || [],
-    personaReferenceSheet: existing?.personaReferenceSheet,
-  });
-}
-
-function isEmptyWorkflowSeedArchive(archive: PersonaArchive): boolean {
-  if (!archive.id.startsWith(WORKFLOW_PERSONA_ID_PREFIX)) return false;
-  const seed = WORKFLOW_PERSONA_SEEDS.find((item) => item.id === archive.id);
-  if (!seed) return false;
-  return archive.posts.length === 0
-    && (archive.publishHistory || []).length === 0
-    && (archive.personaImageLibrary || []).length === 0
-    && archive.name === seed.name
-    && archive.content === seed.content;
-}
-
-function syncWorkflowPersonaArchives(archives: PersonaArchive[]): PersonaArchive[] {
-  const shouldSync = storageShim.getItem(WORKFLOW_PERSONAS_SEEDED_KEY) !== "1"
-    || archives.some((archive) => archive.id.startsWith(WORKFLOW_PERSONA_ID_PREFIX));
-  if (!shouldSync) return normalizeArchives(archives);
-
-  const now = new Date().toISOString();
-  const seedIds = new Set(WORKFLOW_PERSONA_SEEDS.map((seed) => seed.id));
-  const withoutStaleWorkflowPersonas = archives.filter((archive) =>
-    !archive.id.startsWith(WORKFLOW_PERSONA_ID_PREFIX) || seedIds.has(archive.id),
-  );
-  const byId = new Map(withoutStaleWorkflowPersonas.map((archive) => [archive.id, archive]));
-  for (const seed of WORKFLOW_PERSONA_SEEDS) {
-    byId.set(seed.id, buildWorkflowPersonaArchive(seed, byId.get(seed.id), now));
-  }
-  return normalizeArchives([...byId.values()]);
-}
-
-function createWorkflowPersonaArchives(cached: PersonaArchive[]): PersonaArchive[] {
-  if (storageShim.getItem(WORKFLOW_PERSONAS_SEEDED_KEY) === "1") return [];
-  const cachedIds = new Set(cached.map((archive) => archive.id));
-  const now = new Date().toISOString();
-  return normalizeArchives(
-    WORKFLOW_PERSONA_SEEDS
-      .filter((seed) => !cachedIds.has(seed.id))
-      .map((seed) => ({
-        id: seed.id,
-        name: seed.name,
-        content: seed.content,
-        createdAt: now,
-        updatedAt: now,
-        setup: seed.setup,
-        posts: [],
-      })),
-  );
-}
-
 function getLocalArchives(): PersonaArchive[] {
   const cached = safeArray<PersonaArchive>(storageShim.getItem(ARCHIVES_KEY));
   const normalizedCached = normalizeArchives(cached);
-  const workflowSeeds = createWorkflowPersonaArchives(normalizedCached);
-  const merged = syncWorkflowPersonaArchives(mergeArchives(
+  const merged = mergeArchives(
     normalizedCached,
     [
       ...migrateLegacyPresets(),
       ...migrateLegacyProjects(),
-      ...workflowSeeds,
     ],
-  ));
+  );
   if (archivesChanged(cached, merged)) {
     saveLocalArchives(merged, Boolean(archiveAPI()));
-  }
-  if (workflowSeeds.length > 0) {
-    storageShim.setItem(WORKFLOW_PERSONAS_SEEDED_KEY, "1");
   }
   return merged;
 }
@@ -646,8 +548,7 @@ function getLocalArchiveById(id: string): PersonaArchive | null {
       }
     }
   }
-  const seed = WORKFLOW_PERSONA_SEEDS.find((item) => item.id === id);
-  return seed ? buildWorkflowPersonaArchive(seed, undefined, new Date().toISOString()) : null;
+  return null;
 }
 
 function stripLargeMediaForLocalCache(archive: PersonaArchive): PersonaArchive {
@@ -695,21 +596,9 @@ function mergeArchives(localArchives: PersonaArchive[], remoteArchives: PersonaA
   for (const archive of [...localArchives, ...remoteArchives]) {
     const normalized = normalizeArchive(archive);
     const existing = byId.get(normalized.id);
-    const normalizedIsEmptySeed = isEmptyWorkflowSeedArchive(normalized);
-    const existingIsEmptySeed = existing ? isEmptyWorkflowSeedArchive(existing) : false;
-    const normalizedHasData = normalized.posts.length > 0
-      || (normalized.publishHistory || []).length > 0
-      || (normalized.personaImageLibrary || []).length > 0;
-    const existingHasData = existing ? (
-      existing.posts.length > 0
-      || (existing.publishHistory || []).length > 0
-      || (existing.personaImageLibrary || []).length > 0
-    ) : false;
     if (
       !existing
-      || (existingIsEmptySeed && normalizedHasData)
-      || (!normalizedIsEmptySeed && !existingHasData && new Date(normalized.updatedAt).getTime() >= new Date(existing.updatedAt).getTime())
-      || (!normalizedIsEmptySeed && existingHasData && new Date(normalized.updatedAt).getTime() >= new Date(existing.updatedAt).getTime())
+      || new Date(normalized.updatedAt).getTime() >= new Date(existing.updatedAt).getTime()
     ) {
       byId.set(normalized.id, normalized);
     }
@@ -750,7 +639,7 @@ export async function listPersonaArchives(): Promise<PersonaArchive[]> {
 
   const remoteRaw = await api.list().catch(() => []);
   const remote = normalizeArchives(remoteRaw);
-  const merged = syncWorkflowPersonaArchives(mergeArchives(local, remote));
+  const merged = mergeArchives(local, remote);
   try {
     saveLocalArchives(merged, true);
   } catch {

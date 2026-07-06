@@ -279,7 +279,6 @@ export function buildPersonaVisualIdentityCue(
     setup.personaStyle || "",
   ].filter(Boolean).join(" ")).slice(0, 180);
   const visualAnchors = sanitizeSocialPromptText([
-    setup.imageWorkflow?.visualAnchorAddendum || "",
     (setup.trendTopics || []).join(" "),
   ].filter(Boolean).join(" ")).slice(0, 180);
   const stylingCore = sanitizeSocialPromptText([
@@ -362,13 +361,8 @@ export function classifyPersonaImageSubject(content: string, setup?: DramaSetup)
   const hasPersonFocus = PERSON_FOCUSED_IMAGE_PATTERN.test(content);
   const hasPovLifestyle = POV_LIFESTYLE_IMAGE_PATTERN.test(content) && EXPLICIT_POV_IMAGE_PATTERN.test(content);
   const hasSceneryOrObject = SCENERY_OR_OBJECT_IMAGE_PATTERN.test(content);
-  const isWorkflowPersona = Boolean(setup?.imageWorkflow?.workflowFile);
-
-  // 人物出鏡訊號優先於場景/咖啡店/POV 詞，避免「咖啡店自拍」「制服穿搭」被當成純場景圖。
   if (hasPersonFocus) return "person";
   if (hasPovLifestyle) return "pov";
-  // 工作流人設的核心價值是保持同一個人設出鏡；普通咖啡、甜點、旅行等生活詞不應默認變成空鏡。
-  if (isWorkflowPersona) return "person";
   if (hasSceneryOrObject) return "scene";
 
   const fallbackText = [setup?.contentTheme || "", setup?.personaDescription || ""].join(" ");
@@ -377,8 +371,9 @@ export function classifyPersonaImageSubject(content: string, setup?: DramaSetup)
 }
 
 export function shouldUseWorkflowPersonaImage(content: string, setup?: DramaSetup): boolean {
-  if (!setup?.imageWorkflow?.workflowFile) return false;
-  return classifyPersonaImageSubject(content, setup) === "person";
+  void content;
+  void setup;
+  return false;
 }
 
 function buildPovHandPersonaHint(setup: DramaSetup, signals: PersonaImageSignals): string {

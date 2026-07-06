@@ -251,23 +251,19 @@ describe("buildPersonaSettingsRows", () => {
     expect(texts).not.toContain("✅ 粉絲");
   });
 
-  it("hides persona-image controls for workflow personas", () => {
+  it("shows persona-image controls for personas without a stored reference image", () => {
     const rows = buildPersonaSettingsRows(archiveForSettings({
       setup: {
         ...archiveForSettings().setup!,
-        imageWorkflow: {
-          provider: "comfyui",
-          workflowFile: "人设3小mii.json",
-        },
       },
     }));
 
-    expect(flattenButtonTexts(rows)).not.toContain("🎨 生成人设图");
+    expect(flattenButtonTexts(rows)).toContain("🎨 生成人设图");
     expect(flattenButtonTexts(rows)).not.toContain("👁 查看人设图");
     expect(flattenButtonTexts(rows)).not.toContain("🔄 重新生成人设图");
   });
 
-  it("shows generate for non-workflow personas without a stored reference image", () => {
+  it("shows generate for non-legacy personas without a stored reference image", () => {
     const texts = flattenButtonTexts(buildPersonaSettingsRows(archiveForSettings()));
 
     expect(texts).toContain("🎨 生成人设图");
@@ -275,7 +271,7 @@ describe("buildPersonaSettingsRows", () => {
     expect(texts).not.toContain("🔄 重新生成人设图");
   });
 
-  it("shows view and regenerate for non-workflow personas with a stored reference image", () => {
+  it("shows view and regenerate for non-legacy personas with a stored reference image", () => {
     const texts = flattenButtonTexts(buildPersonaSettingsRows(archiveForSettings({
       personaReferenceSheet: "data:image/png;base64,cmVm",
     })));
@@ -497,15 +493,15 @@ describe("sentiment hot rewrite quality gate", () => {
 });
 
 describe("filterPersonaMenuList", () => {
-  it("keeps newly created personas visible even when workflow personas exist", () => {
+  it("keeps newly created personas visible even when legacy personas exist", () => {
     const list = filterPersonaMenuList([
       { id: "c452e276-cc6c-40c0-855b-00e1a32a68bf", name: "高校讲台老师", postCount: 0 },
-      { id: "workflow-persona-jinjunya", name: "金君雅", imageWorkflow: true, postCount: 38 },
+      { id: "legacy-persona-jinjunya", name: "金君雅", postCount: 38 },
     ]);
 
     expect(list.map((item) => item.id)).toEqual([
       "c452e276-cc6c-40c0-855b-00e1a32a68bf",
-      "workflow-persona-jinjunya",
+      "legacy-persona-jinjunya",
     ]);
   });
 });
@@ -538,9 +534,9 @@ describe("generic list pagination", () => {
 });
 
 describe("buildManualConfirmCallback", () => {
-  it("keeps workflow persona publish retry callbacks self-contained", () => {
-    expect(buildManualConfirmCallback("workflow-persona-jinjunya", "threads", 2, 1))
-      .toBe("manualpub_confirm_workflow-persona-jinjunya_threads_2_1");
+  it("keeps legacy persona publish retry callbacks self-contained", () => {
+    expect(buildManualConfirmCallback("legacy-persona-jinjunya", "threads", 2, 1))
+      .toBe("manualpub_confirm_legacy-persona-jinjunya_threads_2_1");
   });
 
   it("uses a compact self-contained callback for UUID archive ids", () => {
@@ -645,16 +641,16 @@ describe("stored posts pagination", () => {
     const view = buildStoredPostsListView("archive-1", paidPosts, 1, 5, null, "paid");
     const buttons = view.keyboard.flat();
 
-    expect(view.text).toContain("付費內容");
-    expect(buttons.find((button) => button.text === "◀️ 上一頁")?.callback_data).toBe("posts_archive-1_ct_paid_p0");
-    expect(buttons.find((button) => button.text === "🚀 發布推文")?.callback_data).toBe("bulkpub_archive-1_ct_paid_p1");
-    expect(buttons.find((button) => button.text === "🗑 刪除推文")?.callback_data).toBe("bulkdel_archive-1_ct_paid_p1");
-    expect(buttons.find((button) => button.text === "◀️ 返回")?.callback_data).toBe("posts_branch_archive-1");
+    expect(view.text).toContain("普通內容");
+    expect(buttons.find((button) => button.text === "◀️ 上一頁")?.callback_data).toBe("posts_archive-1_p0");
+    expect(buttons.find((button) => button.text === "🚀 發布推文")?.callback_data).toBe("bulkpub_archive-1_p1");
+    expect(buttons.find((button) => button.text === "🗑 刪除推文")?.callback_data).toBe("bulkdel_archive-1_p1");
+    expect(buttons.find((button) => button.text === "◀️ 返回")?.callback_data).toBe("pd_archive-1");
   });
 
   it("parses stored post page callbacks", () => {
     expect(parseStoredPostsCallback("posts_archive-1_p2")).toEqual({ archiveId: "archive-1", page: 2 });
-    expect(parseStoredPostsCallback("posts_archive-1_ct_paid_p2")).toEqual({ archiveId: "archive-1", groupContentType: "paid", page: 2 });
+    expect(parseStoredPostsCallback("posts_archive-1_ct_paid_p2")).toEqual({ archiveId: "archive-1", groupContentType: "free", page: 2 });
     expect(parseStoredPostsCallback("posts_archive-1_ct_free")).toEqual({ archiveId: "archive-1", groupContentType: "free", page: 0 });
     expect(parseStoredPostsCallback("posts_archive-1")).toEqual({ archiveId: "archive-1", page: 0 });
   });
@@ -664,25 +660,18 @@ describe("persona content branch picker", () => {
   it("shows content counts on every branch button and keeps callbacks compact", () => {
     for (const target of ["posts", "history", "publish"] as const) {
       const rows = buildPersonaContentTypePickerRows({
-        archiveId: "workflow-persona-jinjunya",
+        archiveId: "legacy-persona-jinjunya",
         target,
         counts: { free: 3, paid: 2 },
       });
       const buttons = rows.flat();
 
-      expect(buttons[0].text).toContain("3");
-      expect(buttons[1].text).toContain("2");
+      expect(buttons[0].text).toContain("5");
       expect(buttons[0].callback_data.length).toBeLessThanOrEqual(64);
-      expect(buttons[1].callback_data.length).toBeLessThanOrEqual(64);
       expect(parsePersonaContentTypeCallback(buttons[0].callback_data)).toEqual({
         target,
-        archiveId: "workflow-persona-jinjunya",
+        archiveId: "legacy-persona-jinjunya",
         groupContentType: "free",
-      });
-      expect(parsePersonaContentTypeCallback(buttons[1].callback_data)).toEqual({
-        target,
-        archiveId: "workflow-persona-jinjunya",
-        groupContentType: "paid",
       });
     }
   });
@@ -696,29 +685,29 @@ describe("persona content branch picker", () => {
     expect(parsePersonaContentTypeCallback("history_archive-1_ct_paid")).toEqual({
       target: "history",
       archiveId: "archive-1",
-      groupContentType: "paid",
+      groupContentType: "free",
     });
     expect(parsePersonaContentTypeCallback("pub_archive-1_ct_paid")).toEqual({
       target: "publish",
       archiveId: "archive-1",
-      groupContentType: "paid",
+      groupContentType: "free",
     });
   });
 
   it("builds callbacks for direct preview buttons for every target", () => {
-    expect(parsePersonaContentTypeCallback(buildPersonaContentTypeCallback("posts", "workflow-persona-jinjunya", "free"))).toEqual({
+    expect(parsePersonaContentTypeCallback(buildPersonaContentTypeCallback("posts", "legacy-persona-jinjunya", "free"))).toEqual({
       target: "posts",
-      archiveId: "workflow-persona-jinjunya",
+      archiveId: "legacy-persona-jinjunya",
       groupContentType: "free",
     });
-    expect(parsePersonaContentTypeCallback(buildPersonaContentTypeCallback("history", "workflow-persona-jinjunya", "paid"))).toEqual({
+    expect(parsePersonaContentTypeCallback(buildPersonaContentTypeCallback("history", "legacy-persona-jinjunya", "paid"))).toEqual({
       target: "history",
-      archiveId: "workflow-persona-jinjunya",
-      groupContentType: "paid",
+      archiveId: "legacy-persona-jinjunya",
+      groupContentType: "free",
     });
-    expect(parsePersonaContentTypeCallback(buildPersonaContentTypeCallback("publish", "workflow-persona-jinjunya", "free"))).toEqual({
+    expect(parsePersonaContentTypeCallback(buildPersonaContentTypeCallback("publish", "legacy-persona-jinjunya", "free"))).toEqual({
       target: "publish",
-      archiveId: "workflow-persona-jinjunya",
+      archiveId: "legacy-persona-jinjunya",
       groupContentType: "free",
     });
   });

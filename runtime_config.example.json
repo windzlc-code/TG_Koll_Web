@@ -1,7 +1,4 @@
 {
-  "remote_comfy_gateway_url": "",
-  "remote_comfy_gateway_token": "",
-  "remote_comfy_workflow_mappings": {},
   "upload_server_ip": "",
   "upload_file_api_key": "",
   "image_generate_mode_default": "closed_model_api",

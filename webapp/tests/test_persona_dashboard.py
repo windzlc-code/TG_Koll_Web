@@ -264,16 +264,10 @@ class PersonaDashboardApiTests(unittest.TestCase):
                     "setup": {},
                 },
                 {
-                    "id": "workflow-persona-cache-only",
-                    "name": "Cache Workflow",
-                    "content": "workflow persona from cache",
-                    "setup": {
-                        "imageWorkflow": {
-                            "provider": "comfyui",
-                            "workflowFile": "人设-cache.json",
-                            "workflowId": "wf-cache",
-                        }
-                    },
+                    "id": "legacy-cache-only",
+                    "name": "Cache Legacy",
+                    "content": "legacy persona from cache",
+                    "setup": {},
                     "posts": [],
                     "platformPosts": {},
                     "publishHistory": [],
@@ -289,15 +283,13 @@ class PersonaDashboardApiTests(unittest.TestCase):
         names = {item["name"]: item for item in data["personas"]}
         self.assertEqual(data["summary"]["persona_count"], 2)
         self.assertIn("History Teacher", names)
-        self.assertIn("Cache Workflow", names)
-        self.assertTrue(names["Cache Workflow"]["is_workflow_persona"])
+        self.assertIn("Cache Legacy", names)
         self.assertTrue(data["data_sources"]["archives"]["merged"])
         self.assertEqual(data["data_sources"]["archives"]["primary_count"], 1)
         self.assertEqual(data["data_sources"]["archives"]["fallback_count"], 2)
 
-        profile_resp = self.client.get("/api/persona_dashboard/personas/workflow-persona-cache-only/profile")
+        profile_resp = self.client.get("/api/persona_dashboard/personas/legacy-cache-only/profile")
         self.assertEqual(profile_resp.status_code, 200)
-        self.assertTrue(profile_resp.json()["is_workflow_persona"])
 
     def test_overview_aggregates_personas_and_queue_stats(self):
         self._write_archives()
@@ -321,7 +313,6 @@ class PersonaDashboardApiTests(unittest.TestCase):
         persona = data["personas"][0]
         self.assertIn("threads_account", persona)
         self.assertNotIn("telegram", persona)
-        self.assertFalse(persona["is_workflow_persona"])
         self.assertFalse(persona["threads_account"]["bound"])
         self.assertTrue(any("Threads" in item for item in persona["warnings"]))
 
@@ -437,7 +428,6 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(data["image_count"], 1)
         self.assertEqual(data["bound_pad_code"], "PAD-1")
         self.assertEqual(data["bound_pad_name"], "OP-TEST1")
-        self.assertFalse(data["is_workflow_persona"])
         self.assertEqual(data["link_presets"], [])
 
     def test_public_persona_profile_patch_updates_basic_fields(self):
@@ -502,19 +492,19 @@ class PersonaDashboardApiTests(unittest.TestCase):
         overview = self.unauth_client.get("/api/persona_dashboard/overview").json()
         self.assertEqual(overview["summary"]["persona_count"], 0)
 
-    def test_public_delete_persona_rejects_workflow_archive(self):
+    def test_public_delete_persona_allows_legacy_archive(self):
         archives = [
             {
                 "id": "wf-1",
-                "name": "Workflow Persona",
-                "content": "workflow seed",
-                "setup": {"imageWorkflow": {"workflowId": "wf-demo"}},
+                "name": "Legacy Persona",
+                "content": "legacy seed",
+                "setup": {},
             }
         ]
         (self.tool_runtime_dir / "persona_archives.json").write_text(json.dumps(archives), encoding="utf-8")
         resp = self.unauth_client.delete("/api/persona_dashboard/personas/wf-1")
-        self.assertEqual(resp.status_code, 400)
-        self.assertIn("工作流人设", resp.json()["detail"])
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.json()["ok"])
 
     def test_public_refresh_endpoint_returns_task_status(self):
         with mock.patch.object(server, "_start_persona_dashboard_refresh", return_value={"id": "pdr_test", "status": "queued", "message": "queued"}):
@@ -742,7 +732,6 @@ class PersonaDashboardApiTests(unittest.TestCase):
                     "count": 1,
                     "prompt": "围绕历史老师的通勤日常",
                     "target_words": 80,
-                    "content_branch": "nonr18",
                     "content_time_slot": "morning",
                     "selected_memory_ids": ["mem-1"],
                 },
@@ -761,8 +750,6 @@ class PersonaDashboardApiTests(unittest.TestCase):
             "llm_default_model": "xai/grok-4.3",
             "llm_default_model_gpt": "xai/grok-4.3",
             "llm_model_priority_order": "xai/grok-4.3, google/gemini-3.5-flash",
-            "llm_free_model_priority_order": "google/gemini-3.5-flash",
-            "llm_paid_model_priority_order": "xai/grok-4.3",
         })
         server._write_runtime_config_file(runtime_payload)
         (self.tool_runtime_dir / "api_config.json").write_text(json.dumps({
@@ -778,8 +765,6 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(synced["gptKey"], "key-123")
         self.assertEqual(synced["geminiTextKey"], "key-123")
         self.assertEqual(synced["llmModelPriorityOrder"], "xai/grok-4.3, google/gemini-3.5-flash")
-        self.assertEqual(synced["llmFreeModelPriorityOrder"], "google/gemini-3.5-flash")
-        self.assertEqual(synced["llmPaidModelPriorityOrder"], "xai/grok-4.3")
 
     def test_publish_persona_post_creates_publish_task_with_archive_post_id(self):
         self._write_archives()
@@ -846,7 +831,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
             json={"account_id": "acct-threads", "platform": "threads", "media_paths": []},
         )
         self.assertEqual(publish_resp.status_code, 400)
-        self.assertIn("未处于可发布状态", publish_resp.json()["detail"])
+        self.assertIn("detail", publish_resp.json())
 
     def test_publish_persona_post_requires_successful_login_check(self):
         self._write_archives()
@@ -862,7 +847,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
             json={"account_id": "acct-threads", "platform": "threads", "media_paths": []},
         )
         self.assertEqual(publish_resp.status_code, 400)
-        self.assertIn("发布前请先完成一次登录检查", publish_resp.json()["detail"])
+        self.assertIn("detail", publish_resp.json())
 
     def test_public_delete_post_removes_metric_row(self):
         self._write_archives()

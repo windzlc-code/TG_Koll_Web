@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
@@ -323,7 +323,7 @@
             <div class="admin-runtime-panel-head">
               <div>
                 <div class="admin-config-card-title">闭源模型配置</div>
-                <div class="small">把文字、图片和视频模型集中管理，避免和远程 ComfyUI 工作流混在一起。</div>
+                <div class="small">把文字、图片和视频模型集中管理，避免不同供应商配置混在一起。</div>
               </div>
             </div>
             <div class="admin-model-tabs" role="tablist" aria-label="模型类型">
@@ -351,29 +351,19 @@
                     <div id="rtLlmGrokModelPicker" class="admin-model-picker" hidden></div>
                   </div>
                   <div class="admin-content-model-tabs" aria-label="文字模型内容类型">
-                    <button class="admin-content-model-tab is-active" type="button" data-text-model-tab="free">免费内容</button>
-                    <button class="admin-content-model-tab" type="button" data-text-model-tab="paid">付费内容</button>
+                    <button class="admin-content-model-tab is-active" type="button" data-text-model-tab="default" hidden>文字模型</button>
                   </div>
                   <div class="admin-content-model-panels">
-                    <div class="admin-content-model-panel is-active" data-text-model-panel="free">
-                      <label>免费内容调用顺序</label>
-                      <div class="small">用于免费群推文、非 R18 提示词与常规内容生成。</div>
+                    <div class="admin-content-model-panel is-active" data-text-model-panel="default">
+                      <label>文字模型调用顺序</label>
+                      <div class="small">用于常规推文、提示词改写与文字内容生成。</div>
                       <div class="admin-model-list-editor">
-                        <div id="rtLlmFreePriorityModelList" class="admin-model-priority-list"></div>
+                        <div id="rtLlmPriorityModelList" class="admin-model-priority-list"></div>
                         <div class="admin-model-list-input-row">
-                          <button id="btnAddLlmFreePriorityModel" type="button" class="ghost admin-model-add-btn" title="从候选模型添加" aria-label="从候选模型添加">+</button>
+                          <button id="btnAddLlmPriorityModel" type="button" class="ghost admin-model-add-btn" title="从候选模型添加" aria-label="从候选模型添加">+</button>
                         </div>
                       </div>
                     </div>
-                    <div class="admin-content-model-panel" data-text-model-panel="paid">
-                      <label>付费内容调用顺序</label>
-                      <div class="small">用于付费群推文、R18 提示词、R18 文案润色与确认前预览。</div>
-                      <div class="admin-model-list-editor">
-                        <div id="rtLlmPaidPriorityModelList" class="admin-model-priority-list"></div>
-                        <div class="admin-model-list-input-row">
-                          <button id="btnAddLlmPaidPriorityModel" type="button" class="ghost admin-model-add-btn" title="从候选模型添加" aria-label="从候选模型添加">+</button>
-                        </div>
-                      </div>
                     </div>
                   </div>
                   <div id="rtLlmModelSummary" class="admin-model-summary small"></div>
@@ -470,92 +460,6 @@
                   <label>默认负面提示词</label>
                   <textarea id="rtMuleRouterWanI2vNegativePrompt" rows="3" placeholder="low quality, blurry, distorted, watermark, text, logo"></textarea>
                 </div>
-            </div>
-          </div>
-
-          <div class="admin-config-card admin-runtime-panel admin-runtime-card-compact">
-            <div class="admin-config-card-title">ComfyUI 工作流来源</div>
-            <div class="small">选择前台和 Telegram 提交任务时使用远程 4090 还是本地 ComfyUI。保存运行配置后立即生效。</div>
-            <label>当前执行来源</label>
-            <select id="rtComfyWorkflowSource">
-              <option value="remote">远程 4090 ComfyUI</option>
-              <option value="local">本地 ComfyUI</option>
-            </select>
-          </div>
-
-          <div class="admin-config-card admin-runtime-panel">
-            <div class="admin-runtime-panel-head">
-              <div>
-                <div class="admin-config-card-title">&#36828;&#31243; ComfyUI &#24037;&#20316;&#27969;</div>
-                <div class="small">&#36830;&#25509; 4090 &#30005;&#33041;&#19978;&#30340; ComfyUI &#32593;&#20851;&#65292;&#21047;&#26032;&#21518;&#21487;&#38543;&#26102;&#20999;&#25442;&#19981;&#21516; API Format &#24037;&#20316;&#27969;&#24182;&#23454;&#26102;&#29983;&#25928;&#12290;</div>
-              </div>
-              <button id="btnRemoteComfyWorkflows" type="button" class="ghost">&#21047;&#26032; 4090 &#24037;&#20316;&#27969;</button>
-              <button id="btnRemoteComfyConvertWorkflows" type="button" class="blue">&#19968;&#38190;&#36716;&#25442; API &#26684;&#24335;</button>
-              <button id="btnRemoteComfyForceConvertWorkflows" type="button" class="ghost">&#24378;&#21046;&#37325;&#26032;&#36716;&#25442;</button>
-            </div>
-            <div class="admin-runtime-grid admin-runtime-grid-remote">
-              <div class="admin-runtime-column">
-                <div class="admin-runtime-block">
-                  <div class="admin-config-card-title">&#32593;&#20851;&#36830;&#25509;</div>
-                  <label>&#20844;&#32593;&#32593;&#20851;&#22320;&#22336;</label>
-                  <input id="rtRemoteComfyGatewayUrl" type="text" placeholder="http://47.243.99.2/gpu">
-                  <label>&#32593;&#20851;&#35775;&#38382; Token</label>
-                  <input id="rtRemoteComfyGatewayToken" type="password" placeholder="Bearer Token">
-                  <label class="inline-check"><input id="rtComfyGpuQueueEnabled" type="checkbox"> 啟用 4090 本地隊列限制</label>
-                  <label for="rtComfyGpuMaxConcurrency">4090 隊列上限</label>
-                  <input id="rtComfyGpuMaxConcurrency" type="number" min="1" max="4" step="1" placeholder="4">
-                  <div class="small">停用時會恢復原本直接提交 4090 的模式；啟用後才會按上限排隊。</div>
-                  <div class="remote-comfy-toolbar">
-                    <button id="btnRemoteComfyHealth" type="button" class="ghost">&#26816;&#27979;&#36828;&#31243;&#32593;&#20851;</button>
-                    <button id="btnRemoteComfyRunTest" type="button" class="blue">&#27979;&#35797;&#24403;&#21069;&#26144;&#23556;</button>
-                  </div>
-                  <div id="rtRemoteComfyHealthStatus" class="small"></div>
-                  <div class="small remote-comfy-status" id="rtRemoteComfyWorkflowStatus">&#23578;&#26410;&#21047;&#26032;&#24037;&#20316;&#27969;</div>
-                </div>
-              </div>
-              <div class="admin-runtime-column">
-                <div class="admin-runtime-block">
-                  <div class="admin-config-card-title">&#20219;&#21153;&#24037;&#20316;&#27969;&#26144;&#23556;</div>
-                  <div class="small">&#27599;&#19968;&#31867;&#21069;&#21488;/TG &#20219;&#21153;&#37117;&#21487;&#20197;&#36873;&#25321; 4090 &#19978;&#19981;&#21516;&#30340;&#21487;&#36816;&#34892;&#24037;&#20316;&#27969;&#65307;&#20445;&#23384;&#21518;&#31435;&#21363;&#25353;&#26032;&#26144;&#23556;&#25552;&#20132;&#12290;</div>
-                  <div id="rtRemoteComfyWorkflowMappings" class="remote-comfy-mapping-list"></div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="admin-config-card admin-runtime-panel">
-            <div class="admin-runtime-panel-head">
-              <div>
-                <div class="admin-config-card-title">本地 ComfyUI 工作流</div>
-                <div class="small">连接本机 ComfyUI 网关，格式和 4090 网关一致。刷新后可选择本地 API Format 工作流；保存并切换来源后 Telegram 会走本地 ComfyUI。</div>
-              </div>
-              <button id="btnLocalComfyWorkflows" type="button" class="ghost">刷新本地工作流</button>
-              <button id="btnLocalComfyConvertWorkflows" type="button" class="blue">一键转换 API 格式</button>
-              <button id="btnLocalComfyForceConvertWorkflows" type="button" class="ghost">强制重新转换</button>
-            </div>
-            <div class="admin-runtime-grid admin-runtime-grid-remote">
-              <div class="admin-runtime-column">
-                <div class="admin-runtime-block">
-                  <div class="admin-config-card-title">本地网关连接</div>
-                  <label>本地网关地址</label>
-                  <input id="rtLocalComfyGatewayUrl" type="text" placeholder="http://127.0.0.1:9001">
-                  <label>网关访问 Token（可选）</label>
-                  <input id="rtLocalComfyGatewayToken" type="password" placeholder="未启用鉴权可留空">
-                  <div class="remote-comfy-toolbar">
-                    <button id="btnLocalComfyHealth" type="button" class="ghost">检测本地网关</button>
-                    <button id="btnLocalComfyRunTest" type="button" class="blue">测试当前映射</button>
-                  </div>
-                  <div id="rtLocalComfyHealthStatus" class="small"></div>
-                  <div class="small remote-comfy-status" id="rtLocalComfyWorkflowStatus">尚未刷新工作流</div>
-                </div>
-              </div>
-              <div class="admin-runtime-column">
-                <div class="admin-runtime-block">
-                  <div class="admin-config-card-title">任务工作流映射</div>
-                  <div class="small">本地工作流映射与 4090 分开保存。把来源切到“本地 ComfyUI”后，前台/TG 任务会按这里的映射提交。</div>
-                  <div id="rtLocalComfyWorkflowMappings" class="remote-comfy-mapping-list"></div>
-                </div>
-              </div>
             </div>
           </div>
 

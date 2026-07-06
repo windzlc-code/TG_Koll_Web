@@ -11,22 +11,7 @@ DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
     "runninghub_api_key": "",
     "upload_server_ip": "",
     "upload_file_api_key": "",
-    "remote_comfy_gateway_url": "",
-    "remote_comfy_gateway_token": "",
-    "remote_comfy_workflow_mappings": {},
-    "remote_comfy_image_input_bindings": {
-        "get_nano_banana": {
-            "image1": {"node_id": "2", "input_name": "image"},
-            "image2": {"node_id": "19", "input_name": "image"},
-        }
-    },
-    "local_comfy_gateway_url": "http://127.0.0.1:9001",
-    "local_comfy_gateway_token": "",
-    "local_comfy_workflow_mappings": {},
-    "local_comfy_image_input_bindings": {},
-    "comfy_workflow_source": "remote",
-    "image_generate_mode_default": "remote_comfy",
-    "image_runninghub_workflow_id": "",
+    "image_generate_mode_default": "closed_model_api",
     "llm_base_url": "http://202.90.21.53:3008",
     "llm_api_key": "",
     "llm_api_key_gemini": "",

@@ -98,22 +98,6 @@ DEFAULT_PRICING: dict[str, Any] = {
 
 DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
     "telegram_bot_token": "",
-    "remote_comfy_gateway_url": "",
-    "remote_comfy_gateway_token": "",
-    "remote_comfy_workflow_mappings": {"face_swap": "__converted__/flux_人物换脸工作流.api.json"},
-    "remote_comfy_image_input_bindings": {
-        "get_nano_banana": {
-            "image1": {"node_id": "2", "input_name": "image"},
-            "image2": {"node_id": "19", "input_name": "image"},
-        }
-    },
-    "local_comfy_image_input_bindings": {},
-    "local_comfy_gateway_url": "http://127.0.0.1:9001",
-    "local_comfy_gateway_token": "",
-    "local_comfy_workflow_mappings": {},
-    "comfy_workflow_source": "remote",
-    "comfy_gpu_queue_enabled": False,
-    "comfy_gpu_max_concurrency": 4,
     "upload_server_ip": "",
     "upload_file_api_key": "",
     "image_generate_mode_default": "closed_model_api",
@@ -138,8 +122,6 @@ DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
     "llm_default_model_gemini": "",
     "llm_default_model_gpt": "",
     "llm_model_priority_order": "",
-    "llm_free_model_priority_order": "",
-    "llm_paid_model_priority_order": "",
     "text_to_image_auto_qa_enabled": False,
     "text_to_image_auto_qa_max_attempts": 3,
     "persona_body_profiles": {},
@@ -2098,7 +2080,7 @@ def _generate_closed_image_with_fallback(
     logger=None,
     request_label: str = "闭源图片模型请求",
 ) -> tuple[dict[str, Any], dict[str, str], list[dict[str, Any]]]:
-    raise RuntimeError("Closed image model generation is disabled. Use the configured ComfyUI gateway workflow instead.")
+    raise RuntimeError("Closed image model generation is disabled. Use the configured configured image generation service instead.")
     base_url, gemini_api_key, gpt_api_key, candidates = _resolve_closed_image_model_fallback_candidates(
         source,
         allow_builtin=allow_builtin,
@@ -2623,9 +2605,9 @@ def _format_user_visible_task_error(error: str) -> str:
     text = str(error or "").strip()
     short_reason_prefixes = (
         "余额不足：",
-        "4090 显存不足：",
-        "ComfyUI 工作流参数校验失败：",
-        "ComfyUI 缺少自定义节点：",
+        "图像生成服务显存不足：",
+        "图像工作流参数校验失败：",
+        "图像工作流缺少自定义节点：",
         "工作流已执行但没有返回可下载结果",
         "生成超时：",
         "接口鉴权失败：",
@@ -2634,8 +2616,8 @@ def _format_user_visible_task_error(error: str) -> str:
         "请求参数不合法：",
         "上游资源不存在：",
         "上游服务异常：",
-        "4090 ComfyUI 主服务当前不可用",
-        "4090 连接通道中断",
+        "图像生成服务当前不可用",
+        "图像生成连接通道中断",
         "MuleRouter 下游生成失败：",
         "后台生成失败：",
     )
@@ -2649,13 +2631,13 @@ def _format_user_visible_task_error(error: str) -> str:
             return f"余额不足：本次需要 {required_match.group(1)} credits，当前只有 {available_match.group(1)} credits，请充值或降低视频参数后重试。"
         return "余额不足：上游生成服务拒绝了请求，请充值或降低任务参数后重试。"
     if "cuda error" in lower and ("out of memory" in lower or "cudaerrormemoryallocation" in lower):
-        return "4090 显存不足：ComfyUI 在采样节点显存溢出，请释放显存、降低分辨率/批量数，或重启 ComfyUI 后重试。"
+        return "图像生成服务显存不足：请释放资源、降低分辨率/批量数，或稍后重试。"
     if "prompt_outputs_failed_validation" in text or "Prompt outputs failed validation" in text:
         if "keep_proportion" in text or "crop_position" in text or "value_not_in_list" in text:
-            return "ComfyUI 工作流参数校验失败：当前工作流节点参数与 4090 节点版本不匹配，请更新工作流映射或使用已修正的节点覆盖配置。"
-        return "ComfyUI 工作流参数校验失败：提交前节点输入不合法，请检查工作流映射和后台节点参数。"
+            return "图像工作流参数校验失败：当前节点参数与执行环境不匹配，请更新工作流映射或节点覆盖配置。"
+        return "图像工作流参数校验失败：提交前节点输入不合法，请检查工作流映射和后台节点参数。"
     if "missing_node_type" in text or ("Node '" in text and "not found" in text):
-        return "ComfyUI 缺少自定义节点：当前工作流需要的节点没有安装或未启用，请在 4090 安装对应 custom node 后重试。"
+        return "图像工作流缺少自定义节点：当前工作流需要的节点没有安装或未启用，请安装对应 custom node 后重试。"
     if "did not return downloadable image" in lower or "未返回可下载图片" in text or "未返回可下载" in text:
         return "工作流已执行但没有返回可下载结果，请检查工作流保存节点和输出节点配置。"
     if "timeout" in lower or "超时" in text:
@@ -2682,9 +2664,9 @@ def _format_user_visible_task_error(error: str) -> str:
         if 500 <= http_code <= 599:
             return "上游服务异常：生成服务临时不可用，请稍后重试。"
     if "WinError 10061" in text or "Connection refused" in text or "目标电脑拒绝连接" in text or "目標電腦拒絕連線" in text:
-        return "4090 ComfyUI 主服务当前不可用或已崩溃，网关能连接但 ComfyUI 端口拒绝连接；请先重启 4090 上的 ComfyUI 后再提交。"
+        return "图像生成服务当前不可用或已崩溃，网关能连接但执行端口拒绝连接；请先恢复服务后再提交。"
     if "RemoteDisconnected" in text or "SSH session not active" in text or "Connection aborted" in text:
-        return "4090 连接通道中断，已不是提示词问题；请重新连接 4090 网关后再提交。"
+        return "图像生成连接通道中断，已不是提示词问题；请重新连接网关后再提交。"
     text = re.sub(r"工作台[:：]\s*https?://\S+", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\bfor url:\s*https?://\S+", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\burl:\s*https?://\S+", "", text, flags=re.IGNORECASE)
@@ -3219,23 +3201,6 @@ def _load_runtime_config_file(conn) -> dict[str, Any]:
                 fallback_raw = {}
             if isinstance(fallback_raw, dict):
                 fallback = _normalize_runtime_config(fallback_raw)
-                for key in (
-                    "comfy_workflow_source",
-                    "remote_comfy_gateway_url",
-                    "remote_comfy_gateway_token",
-                    "remote_comfy_workflow_mappings",
-                    "remote_comfy_image_input_bindings",
-                    "local_comfy_gateway_url",
-                    "local_comfy_gateway_token",
-                    "local_comfy_workflow_mappings",
-                    "local_comfy_image_input_bindings",
-                    "comfy_gpu_queue_enabled",
-                    "comfy_gpu_max_concurrency",
-                ):
-                    current_value = merged.get(key)
-                    fallback_value = fallback.get(key)
-                    if current_value in (None, "", {}) and fallback_value not in (None, "", {}):
-                        merged[key] = fallback_value
         if merged != raw:
             _write_runtime_config_file(merged)
         return merged
@@ -3248,58 +3213,7 @@ def _normalize_runtime_config(raw: dict[str, Any] | None) -> dict[str, Any]:
         if k in current:
             merged[k] = current.get(k)
     merged["telegram_bot_token"] = str(merged.get("telegram_bot_token") or "").strip()
-    merged["remote_comfy_gateway_url"] = str(merged.get("remote_comfy_gateway_url") or "").strip().rstrip("/")
-    merged["remote_comfy_gateway_token"] = str(merged.get("remote_comfy_gateway_token") or "").strip()
-    merged["local_comfy_gateway_url"] = str(merged.get("local_comfy_gateway_url") or "http://127.0.0.1:9001").strip().rstrip("/")
-    merged["local_comfy_gateway_token"] = str(merged.get("local_comfy_gateway_token") or "").strip()
-    source = str(merged.get("comfy_workflow_source") or "remote").strip().lower()
-    merged["comfy_workflow_source"] = source if source in {"remote", "local"} else "remote"
-    merged["comfy_gpu_queue_enabled"] = _to_bool(merged.get("comfy_gpu_queue_enabled"), False)
-    merged["comfy_gpu_max_concurrency"] = min(
-        max(_to_int(merged.get("comfy_gpu_max_concurrency"), COMFY_GPU_MAX_CONCURRENCY), 1),
-        int(COMFY_GPU_CONFIG_MAX_CONCURRENCY),
-    )
-    raw_remote_mappings = current.get("remote_comfy_workflow_mappings")
-    remote_mappings: dict[str, Any] = {}
-    if isinstance(raw_remote_mappings, dict):
-        for key, value in raw_remote_mappings.items():
-            task_key = str(key or "").strip()
-            if not task_key:
-                continue
-            if isinstance(value, (dict, list)):
-                remote_mappings[task_key] = value
-                continue
-            workflow_path = str(value or "").strip()
-            if workflow_path:
-                remote_mappings[task_key] = workflow_path
-    merged["remote_comfy_workflow_mappings"] = remote_mappings
-    merged["remote_comfy_image_input_bindings"] = (
-        current.get("remote_comfy_image_input_bindings")
-        if isinstance(current.get("remote_comfy_image_input_bindings"), dict)
-        else {}
-    )
-    raw_local_mappings = current.get("local_comfy_workflow_mappings")
-    local_mappings: dict[str, Any] = {}
-    if isinstance(raw_local_mappings, dict):
-        for key, value in raw_local_mappings.items():
-            task_key = str(key or "").strip()
-            if not task_key:
-                continue
-            if isinstance(value, (dict, list)):
-                local_mappings[task_key] = value
-                continue
-            workflow_path = str(value or "").strip()
-            if workflow_path:
-                local_mappings[task_key] = workflow_path
-    merged["local_comfy_workflow_mappings"] = local_mappings
-    merged["local_comfy_image_input_bindings"] = (
-        current.get("local_comfy_image_input_bindings")
-        if isinstance(current.get("local_comfy_image_input_bindings"), dict)
-        else {}
-    )
-    merged["image_generate_mode_default"] = str(merged.get("image_generate_mode_default") or "closed_model_api").strip() or "closed_model_api"
-    if merged["image_generate_mode_default"] not in {"closed_model_api", "remote_comfy"}:
-        merged["image_generate_mode_default"] = "closed_model_api"
+    merged["image_generate_mode_default"] = "closed_model_api"
     merged["image_model_provider_base_url"] = str(merged.get("image_model_provider_base_url") or BUILTIN_IMAGE_MODEL_PROVIDER_BASE_URL).strip() or BUILTIN_IMAGE_MODEL_PROVIDER_BASE_URL
     merged["image_model_provider_api_key_gemini"] = str(merged.get("image_model_provider_api_key_gemini") or "").strip()
     merged["image_model_provider_api_key_gpt"] = str(merged.get("image_model_provider_api_key_gpt") or "").strip()
@@ -3341,20 +3255,6 @@ def _normalize_runtime_config(raw: dict[str, Any] | None) -> dict[str, Any]:
         fallback=llm_gpt_models,
     )
     merged["llm_model_priority_order"] = ", ".join(llm_priority_models)
-    free_models_present = "llm_free_model_priority_order" in current
-    paid_models_present = "llm_paid_model_priority_order" in current
-    raw_free_models = parse_model_list(current.get("llm_free_model_priority_order"))
-    raw_paid_models = parse_model_list(current.get("llm_paid_model_priority_order"))
-    llm_free_models = _llm_models(
-        raw_free_models if free_models_present else llm_priority_models,
-        fallback=[] if free_models_present else (llm_priority_models or llm_gpt_models),
-    )
-    llm_paid_models = _llm_models(
-        raw_paid_models if paid_models_present else llm_priority_models,
-        fallback=[] if paid_models_present else (llm_priority_models or llm_gpt_models),
-    )
-    merged["llm_free_model_priority_order"] = ", ".join(llm_free_models)
-    merged["llm_paid_model_priority_order"] = ", ".join(llm_paid_models)
     merged["text_to_image_auto_qa_enabled"] = _to_bool(merged.get("text_to_image_auto_qa_enabled"), False)
     merged["text_to_image_auto_qa_max_attempts"] = min(
         max(_to_int(merged.get("text_to_image_auto_qa_max_attempts"), 3), 1),
@@ -3492,7 +3392,7 @@ def _write_tool_r18_api_config(raw: dict[str, Any]) -> None:
 
 def _sync_tool_r18_api_config_from_runtime(runtime: dict[str, Any], explicit: dict[str, Any]) -> None:
     updates: dict[str, Any] = {}
-    if any(key in explicit for key in ("llm_api_key", "llm_api_key_gpt", "llm_base_url", "llm_model_priority_order", "llm_free_model_priority_order", "llm_paid_model_priority_order", "llm_default_model_gpt", "llm_default_model")):
+    if any(key in explicit for key in ("llm_api_key", "llm_api_key_gpt", "llm_base_url", "llm_model_priority_order", "llm_default_model_gpt", "llm_default_model")):
         llm_key = str(runtime.get("llm_api_key_gpt") or runtime.get("llm_api_key") or "").strip()
         llm_base = str(runtime.get("llm_base_url") or "").strip()
         if "llm_api_key" in explicit or "llm_api_key_gpt" in explicit:
@@ -3518,24 +3418,6 @@ def _sync_tool_r18_api_config_from_runtime(runtime: dict[str, Any], explicit: di
             updates["llm_model_priority_order"] = model_order
             updates["llm_default_model_gpt"] = model_order
             updates["llm_default_model"] = model_order
-        free_models_present = "llm_free_model_priority_order" in runtime
-        paid_models_present = "llm_paid_model_priority_order" in runtime
-        raw_free_models = parse_model_list(runtime.get("llm_free_model_priority_order"))
-        raw_paid_models = parse_model_list(runtime.get("llm_paid_model_priority_order"))
-        free_models = _ordered_model_list(
-            raw_free_models if free_models_present else parse_model_list(runtime.get("llm_model_priority_order")),
-            fallback=[] if free_models_present else llm_models,
-        )
-        paid_models = _ordered_model_list(
-            raw_paid_models if paid_models_present else parse_model_list(runtime.get("llm_model_priority_order")),
-            fallback=[] if paid_models_present else llm_models,
-        )
-        if free_models_present or free_models:
-            updates["llmFreeModelPriorityOrder"] = ", ".join(free_models)
-            updates["llm_free_model_priority_order"] = ", ".join(free_models)
-        if paid_models_present or paid_models:
-            updates["llmPaidModelPriorityOrder"] = ", ".join(paid_models)
-            updates["llm_paid_model_priority_order"] = ", ".join(paid_models)
     if any(
         key in explicit
         for key in (
@@ -4135,7 +4017,7 @@ def _build_workflow_chain_summary(*, task_type: str, payload: dict[str, Any], wo
             return (f"图像编辑链 {total_steps} 步（闭源模型 {closed_steps} + RunningHub {total_steps - closed_steps}）", total_steps)
         return (f"图像编辑链 {total_steps} 步", total_steps) if total_steps else ("", 0)
     if task_type in {"get_nano_banana", "single_image_edit"}:
-        return (f"ComfyUI 图片编辑链 {total_steps} 步", total_steps) if total_steps else ("", 0)
+        return (f"图像编辑链 {total_steps} 步", total_steps) if total_steps else ("", 0)
     return (f"{total_steps} 步" if total_steps > 0 else "", total_steps)
 
 
@@ -4149,18 +4031,7 @@ def _build_workflow_meta(*, task_id: str, task_type: str, input_payload: Any, ou
     workflow_mode_label = ""
 
     if task_type in {"get_nano_banana", "single_image_edit", "face_swap"}:
-        workflow_path = str(
-            output.get("remote_comfy_workflow_path")
-            or payload.get("remote_comfy_workflow_path")
-            or payload.get("local_comfy_workflow_path")
-            or _remote_comfy_workflow_mapping(payload, task_type)
-            or ""
-        ).strip()
-        workflow_ids = _normalize_workflow_ids(
-            [
-                workflow_path,
-            ]
-        )
+        workflow_ids = []
     elif task_type == "image_generate":
         provider = str(payload.get("image_generate_provider") or payload.get("image_generate_mode_default") or "closed_model_api").strip() or "closed_model_api"
         model_name = str(payload.get("image_generate_model") or payload.get("image_model_default_model") or "").strip()
@@ -4418,16 +4289,9 @@ def _apply_runtime_defaults(task_type: str, payload: dict[str, Any]) -> dict[str
         "llm_api_key",
         "llm_api_key_gemini",
         "llm_api_key_gpt",
-        "remote_comfy_gateway_token",
-        "local_comfy_gateway_token",
         "mulerouter_api_key",
     }
     runtime_fill_keys = [
-        "comfy_workflow_source",
-        "remote_comfy_gateway_url",
-        "remote_comfy_gateway_token",
-        "local_comfy_gateway_url",
-        "local_comfy_gateway_token",
         "upload_server_ip",
         "upload_file_api_key",
         "image_generate_mode_default",
@@ -4467,17 +4331,6 @@ def _apply_runtime_defaults(task_type: str, payload: dict[str, Any]) -> dict[str
             continue
         if current_raw is None or (isinstance(current_raw, str) and not current_value):
             merged[key] = runtime.get(key)
-    if not isinstance(merged.get("remote_comfy_workflow_mappings"), dict) or not merged.get("remote_comfy_workflow_mappings"):
-        merged["remote_comfy_workflow_mappings"] = runtime.get("remote_comfy_workflow_mappings") if isinstance(runtime.get("remote_comfy_workflow_mappings"), dict) else {}
-    if not isinstance(merged.get("remote_comfy_image_input_bindings"), dict) or not merged.get("remote_comfy_image_input_bindings"):
-        merged["remote_comfy_image_input_bindings"] = runtime.get("remote_comfy_image_input_bindings") if isinstance(runtime.get("remote_comfy_image_input_bindings"), dict) else {}
-    if not isinstance(merged.get("local_comfy_workflow_mappings"), dict) or not merged.get("local_comfy_workflow_mappings"):
-        merged["local_comfy_workflow_mappings"] = runtime.get("local_comfy_workflow_mappings") if isinstance(runtime.get("local_comfy_workflow_mappings"), dict) else {}
-    if not isinstance(merged.get("local_comfy_image_input_bindings"), dict) or not merged.get("local_comfy_image_input_bindings"):
-        merged["local_comfy_image_input_bindings"] = runtime.get("local_comfy_image_input_bindings") if isinstance(runtime.get("local_comfy_image_input_bindings"), dict) else {}
-    source = str(merged.get("comfy_workflow_source") or runtime.get("comfy_workflow_source") or "remote").strip().lower()
-    merged["comfy_workflow_source"] = source if source in {"remote", "local"} else "remote"
-
     if task_type == "image_generate":
         mode = str(merged.get("mode") or "single_reference").strip() or "single_reference"
         if mode not in {"single_reference", "dual_reference"}:
@@ -4866,3079 +4719,7 @@ def _extract_result_url(data: Any) -> str:
     return ""
 
 
-def _normalize_remote_comfy_gateway_url(gateway_url: str) -> str:
-    cleaned = str(gateway_url or "").strip().rstrip("/")
-    if not cleaned:
-        raise ValueError("远程 ComfyUI 网关地址不能为空")
-    parsed = urlsplit(cleaned)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ValueError("远程 ComfyUI 网关地址必须是 http 或 https URL")
-    return cleaned
-
-
-def _remote_comfy_gateway_headers(token: str) -> dict[str, str]:
-    cleaned = str(token or "").strip()
-    headers = {"Accept": "application/json"}
-    if cleaned:
-        headers["Authorization"] = f"Bearer {cleaned}"
-    return headers
-
-
-def _remote_comfy_gateway_health(*, gateway_url: str, token: str) -> dict[str, Any]:
-    root = _normalize_remote_comfy_gateway_url(gateway_url)
-    headers = _remote_comfy_gateway_headers(token)
-    try:
-        response = requests.get(f"{root}/api/health", headers=headers, timeout=30)
-        response.raise_for_status()
-        data = response.json()
-    except requests.RequestException as exc:
-        raise RuntimeError(f"远程 ComfyUI 网关检测失败: {exc}") from exc
-    except Exception as exc:
-        raise RuntimeError("远程 ComfyUI 网关返回的不是有效 JSON") from exc
-    return data if isinstance(data, dict) else {"raw": data}
-
-
-def _remote_comfy_gateway_json(
-    *,
-    gateway_url: str,
-    token: str,
-    method: str,
-    path: str,
-    json_body: dict[str, Any] | None = None,
-    timeout: int = 60,
-) -> dict[str, Any]:
-    root = _normalize_remote_comfy_gateway_url(gateway_url)
-    headers = _remote_comfy_gateway_headers(token)
-    endpoint = f"{root}/{str(path or '').lstrip('/')}"
-    try:
-        response = requests.request(
-            str(method or "GET").upper(),
-            endpoint,
-            headers=headers,
-            json=json_body,
-            timeout=max(int(timeout or 60), 1),
-        )
-        response.raise_for_status()
-        data = response.json()
-    except requests.RequestException as exc:
-        detail = ""
-        response = getattr(exc, "response", None)
-        if response is not None:
-            try:
-                detail = str(response.text or "").strip()
-            except Exception:
-                detail = ""
-        suffix = f": {detail[:800]}" if detail else ""
-        raise RuntimeError(f"远程 ComfyUI 网关请求失败: {exc}{suffix}") from exc
-    except Exception as exc:
-        raise RuntimeError("远程 ComfyUI 网关返回的不是有效 JSON") from exc
-    return data if isinstance(data, dict) else {"raw": data}
-
-
-def _remote_comfy_gateway_download_output(
-    *,
-    gateway_url: str,
-    token: str,
-    file_item: dict[str, Any],
-    output_dir: Path,
-) -> Path:
-    filename = Path(str(file_item.get("filename") or "output.bin")).name
-    if not filename:
-        filename = "output.bin"
-    params = {
-        "filename": filename,
-        "subfolder": str(file_item.get("subfolder") or ""),
-        "type": str(file_item.get("type") or "output"),
-    }
-    root = _normalize_remote_comfy_gateway_url(gateway_url)
-    headers = _remote_comfy_gateway_headers(token)
-    response = requests.get(f"{root}/api/view", headers=headers, params=params, timeout=120)
-    response.raise_for_status()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    target = output_dir / filename
-    if target.exists():
-        target = output_dir / f"{target.stem}_{uuid.uuid4().hex[:8]}{target.suffix}"
-    target.write_bytes(response.content)
-    return target
-
-
-def _remote_comfy_gateway_upload_image(
-    *,
-    gateway_url: str,
-    token: str,
-    image_path: str | Path,
-    subfolder: str = "telegram",
-) -> dict[str, Any]:
-    path = Path(str(image_path or "")).expanduser()
-    if not path.exists() or not path.is_file():
-        raise FileNotFoundError(f"ComfyUI input image not found: {path}")
-    if path.suffix.lower() not in IMAGE_EXTS:
-        raise RuntimeError(f"ComfyUI input must be an image file: {path}")
-    upload_name = f"{path.stem}_{uuid.uuid4().hex[:8]}{path.suffix.lower()}"
-    body = {
-        "filename": upload_name,
-        "subfolder": str(subfolder or "telegram").strip().strip("/"),
-        "overwrite": False,
-        "content_b64": base64.b64encode(path.read_bytes()).decode("ascii"),
-    }
-    data = _remote_comfy_gateway_json(
-        gateway_url=gateway_url,
-        token=token,
-        method="POST",
-        path="/api/upload/image",
-        json_body=body,
-        timeout=120,
-    )
-    image_value = str(data.get("image") or "").strip()
-    if not image_value:
-        name = str(data.get("name") or data.get("filename") or "").strip()
-        folder = str(data.get("subfolder") or "").strip().strip("/")
-        image_value = f"{folder}/{name}" if folder else name
-    if not image_value:
-        raise RuntimeError(f"ComfyUI gateway did not return uploaded image name: {data}")
-    return {**data, "image": image_value}
-
-
-def _task_status_for_payload(payload: dict[str, Any] | None) -> str:
-    task_id = str((payload or {}).get("_task_id") or "").strip()
-    if not task_id:
-        return ""
-    try:
-        with db() as conn:
-            row = conn.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
-        return str(row["status"] or "").strip().lower() if row is not None else ""
-    except Exception:
-        return ""
-
-
-def _task_cancelled_for_payload(payload: dict[str, Any] | None) -> bool:
-    return _task_status_for_payload(payload) == "cancelled"
-
-
-def _comfy_gpu_snapshot() -> dict[str, int]:
-    max_concurrency = _runtime_comfy_gpu_max_concurrency()
-    with _COMFY_GPU_LOCK:
-        return {
-            "max_concurrency": int(max_concurrency),
-            "waiting": int(_COMFY_GPU_WAITING),
-            "running": int(_COMFY_GPU_RUNNING),
-        }
-
-
-def _bytes_to_gb(value: Any) -> float:
-    try:
-        number = float(value)
-    except Exception:
-        return 0.0
-    if number <= 0:
-        return 0.0
-    return number / (1024.0 ** 3)
-
-
-def _first_numeric_value(source: dict[str, Any], keys: Iterable[str]) -> float:
-    for key in keys:
-        if key not in source:
-            continue
-        try:
-            value = float(source.get(key) or 0)
-        except Exception:
-            continue
-        if value > 0:
-            return value
-    return 0.0
-
-
-def _extract_comfy_gpu_memory_stats(health: Any) -> dict[str, Any]:
-    if not isinstance(health, dict):
-        return {"available": False}
-    devices = health.get("devices")
-    if not isinstance(devices, list):
-        devices = health.get("gpus") if isinstance(health.get("gpus"), list) else []
-    best: dict[str, Any] = {}
-    for raw_device in devices:
-        if not isinstance(raw_device, dict):
-            continue
-        device_type = str(raw_device.get("type") or raw_device.get("device_type") or raw_device.get("name") or "").lower()
-        total_bytes = _first_numeric_value(raw_device, ("vram_total", "total_vram", "memory_total", "total_memory", "torch_vram_total"))
-        free_bytes = _first_numeric_value(raw_device, ("vram_free", "free_vram", "memory_free", "free_memory", "torch_vram_free"))
-        used_bytes = _first_numeric_value(raw_device, ("vram_used", "used_vram", "memory_used", "used_memory", "torch_vram_used"))
-        if devices and ("cuda" not in device_type and "gpu" not in device_type and "nvidia" not in device_type) and not (total_bytes or free_bytes or used_bytes):
-            continue
-        if not free_bytes and total_bytes and used_bytes:
-            free_bytes = max(total_bytes - used_bytes, 0)
-        if not total_bytes and free_bytes:
-            total_bytes = free_bytes + used_bytes
-        if free_bytes <= 0 and total_bytes <= 0:
-            continue
-        candidate = {
-            "available": True,
-            "name": str(raw_device.get("name") or raw_device.get("device") or "gpu").strip(),
-            "type": str(raw_device.get("type") or "").strip(),
-            "vram_total_gb": round(_bytes_to_gb(total_bytes), 2),
-            "vram_free_gb": round(_bytes_to_gb(free_bytes), 2),
-            "vram_used_gb": round(_bytes_to_gb(used_bytes), 2) if used_bytes else round(max(_bytes_to_gb(total_bytes) - _bytes_to_gb(free_bytes), 0), 2),
-        }
-        if not best or float(candidate["vram_free_gb"]) > float(best.get("vram_free_gb") or 0):
-            best = candidate
-    return best or {"available": False}
-
-
-def _comfy_queue_counts(queue_data: Any) -> dict[str, int]:
-    if not isinstance(queue_data, dict):
-        return {"running": 0, "pending": 0}
-    running = queue_data.get("queue_running")
-    pending = queue_data.get("queue_pending")
-    if not isinstance(running, list):
-        running = queue_data.get("running") if isinstance(queue_data.get("running"), list) else []
-    if not isinstance(pending, list):
-        pending = queue_data.get("pending") if isinstance(queue_data.get("pending"), list) else []
-    return {"running": len(running), "pending": len(pending)}
-
-
-def _comfy_task_required_free_gb(payload: dict[str, Any] | None, workflow_path: str, body: dict[str, Any] | None) -> float:
-    source = payload if isinstance(payload, dict) else {}
-    request_body = body if isinstance(body, dict) else {}
-    task_type = str(source.get("_task_type") or "").strip()
-    workflow = str(workflow_path or request_body.get("path") or "").lower()
-    batch_size = max(_to_int(request_body.get("batch_size") or source.get("batch_size"), 1), 1)
-    width = max(_to_int(request_body.get("width") or source.get("width"), 0), 0)
-    height = max(_to_int(request_body.get("height") or source.get("height"), 0), 0)
-    megapixels = (width * height / 1_000_000.0) if width and height else 1.0
-
-    required = 8.0
-    if task_type in {"face_swap", "single_image_edit", "get_nano_banana"} or any(key in workflow for key in ("face", "swap", "nano", "edit")):
-        required = 10.0
-    if task_type == "video_i2v" or any(key in workflow for key in ("video", "i2v", "seedvr", "upscale")):
-        required = 16.0
-    if task_type in {"text_to_image", "image_generate"}:
-        required = 9.0 + max(batch_size - 1, 0) * 1.5
-        if "person_t2i" in workflow or "人设_t2i" in workflow or "人設_t2i" in workflow:
-            required += 1.5
-    if megapixels > 1.2:
-        required += min((megapixels - 1.2) * 1.2, 4.0)
-    return round(max(required, float(COMFY_GPU_MIN_FREE_GB)) + float(COMFY_GPU_RESERVE_GB), 2)
-
-
-def _comfy_gpu_capacity_check(
-    *,
-    gateway_url: str,
-    token: str,
-    payload: dict[str, Any] | None,
-    workflow_path: str,
-    body: dict[str, Any],
-) -> dict[str, Any]:
-    required_free_gb = _comfy_task_required_free_gb(payload, workflow_path, body)
-    result: dict[str, Any] = {
-        "ok": True,
-        "dynamic_enabled": bool(COMFY_GPU_DYNAMIC_ENABLED),
-        "required_free_gb": required_free_gb,
-        "reason": "dynamic_disabled",
-    }
-    if not COMFY_GPU_DYNAMIC_ENABLED:
-        return result
-    if not str((payload or {}).get("_task_id") or "").strip():
-        return {**result, "ok": True, "reason": "no_task_context_fallback"}
-    try:
-        health = _remote_comfy_gateway_json(gateway_url=gateway_url, token=token, method="GET", path="/api/health", timeout=20)
-        queue_data = _remote_comfy_gateway_json(gateway_url=gateway_url, token=token, method="GET", path="/api/queue", timeout=20)
-    except Exception as exc:
-        return {**result, "ok": True, "reason": "stats_unavailable_fallback", "stats_error": str(exc)}
-    memory = _extract_comfy_gpu_memory_stats(health)
-    queue_counts = _comfy_queue_counts(queue_data)
-    result.update({"memory": memory, "comfy_queue": queue_counts})
-    queue_load = int(queue_counts.get("running", 0)) + int(queue_counts.get("pending", 0))
-    max_concurrency = _runtime_comfy_gpu_max_concurrency()
-    result["max_concurrency"] = int(max_concurrency)
-    max_pending = max(int(COMFY_GPU_MAX_COMFY_PENDING), int(max_concurrency))
-    result["queue_load"] = queue_load
-    result["remote_queue_over_limit"] = queue_load >= int(max_concurrency) or queue_counts.get("pending", 0) > int(max_pending)
-    if not memory.get("available"):
-        return {**result, "ok": True, "reason": "queue_slot_available_memory_unavailable"}
-    free_gb = float(memory.get("vram_free_gb") or 0.0)
-    return {**result, "ok": True, "reason": "queue_slot_available", "free_gb": free_gb}
-
-
-@contextlib.contextmanager
-def _comfy_gpu_execution_slot(
-    payload: dict[str, Any] | None,
-    *,
-    gateway_url: str = "",
-    token: str = "",
-    workflow_path: str,
-    body: dict[str, Any] | None = None,
-) -> Iterable[dict[str, Any]]:
-    global _COMFY_GPU_WAITING, _COMFY_GPU_RUNNING
-    source_payload = payload if isinstance(payload, dict) else {}
-    request_body = body if isinstance(body, dict) else {}
-    workflow_label = str(workflow_path or "").strip() or "ComfyUI workflow"
-    if not _runtime_comfy_gpu_queue_enabled():
-        if _task_cancelled_for_payload(source_payload):
-            raise RuntimeError("任務已取消，未提交到 4090。")
-        yield {
-            "queue_enabled": False,
-            "workflow": workflow_label,
-            "mode": "direct",
-        }
-        return
-    last_capacity: dict[str, Any] = {}
-    with _COMFY_GPU_LOCK:
-        _COMFY_GPU_WAITING += 1
-        queue_position = _COMFY_GPU_WAITING
-        queued_snapshot = {
-            "max_concurrency": int(_runtime_comfy_gpu_max_concurrency()),
-            "waiting": int(_COMFY_GPU_WAITING),
-            "running": int(_COMFY_GPU_RUNNING),
-            "queue_position": int(queue_position),
-        }
-    _emit_stage(
-        source_payload,
-        stage="comfy_gpu_queue",
-        status="queued",
-        message=f"等待 4090 隊列槽位，前方約 {max(queue_position - 1, 0)} 個任務",
-        data={"workflow": workflow_label, **queued_snapshot},
-    )
-    acquired = False
-    running_snapshot: dict[str, Any] = {}
-    started = time.time()
-    try:
-        while not acquired:
-            if _task_cancelled_for_payload(source_payload):
-                raise RuntimeError("任務已取消，未提交到 4090。")
-            elapsed = time.time() - started
-            remaining = float(COMFY_GPU_QUEUE_TIMEOUT_SECONDS) - elapsed
-            if remaining <= 0:
-                detail = ""
-                if last_capacity:
-                    detail = f"，最後檢測：{last_capacity.get('reason') or 'unknown'}"
-                raise RuntimeError(f"等待 4090 隊列槽位超時（超過 {COMFY_GPU_QUEUE_TIMEOUT_SECONDS} 秒{detail}），請稍後重試。")
-            with _COMFY_GPU_LOCK:
-                current_max = _runtime_comfy_gpu_max_concurrency()
-                local_queue_full = _COMFY_GPU_RUNNING >= current_max
-                local_wait_snapshot = {
-                    "max_concurrency": int(current_max),
-                    "waiting": int(_COMFY_GPU_WAITING),
-                    "running": int(_COMFY_GPU_RUNNING),
-                }
-            if local_queue_full:
-                last_capacity = {"ok": False, "reason": "local_slots_full", **local_wait_snapshot}
-                _emit_stage(
-                    source_payload,
-                    stage="comfy_gpu_queue",
-                    status="queued",
-                    message="4090 本地隊列槽位已滿，繼續排隊等待",
-                    data={"workflow": workflow_label, "reason": "local_slots_full", **local_wait_snapshot},
-                )
-                time.sleep(min(float(COMFY_GPU_QUEUE_POLL_SECONDS), max(remaining, 0.1)))
-                continue
-            acquired = _COMFY_GPU_SEMAPHORE.acquire(timeout=min(float(COMFY_GPU_QUEUE_POLL_SECONDS), remaining))
-            if not acquired:
-                continue
-            last_capacity = _comfy_gpu_capacity_check(
-                gateway_url=gateway_url,
-                token=token,
-                payload=source_payload,
-                workflow_path=workflow_label,
-                body=request_body,
-            )
-            if last_capacity.get("ok") is False:
-                _COMFY_GPU_SEMAPHORE.release()
-                acquired = False
-                reason = str(last_capacity.get("reason") or "capacity_wait").strip()
-                memory = last_capacity.get("memory") if isinstance(last_capacity.get("memory"), dict) else {}
-                queue_counts = last_capacity.get("comfy_queue") if isinstance(last_capacity.get("comfy_queue"), dict) else {}
-                free_gb = memory.get("vram_free_gb") if memory else last_capacity.get("free_gb")
-                required_gb = last_capacity.get("required_free_gb")
-                _emit_stage(
-                    source_payload,
-                    stage="comfy_gpu_queue",
-                    status="queued",
-                    message="4090 隊列已滿，繼續排隊等待",
-                    data={
-                        "workflow": workflow_label,
-                        "reason": reason,
-                        "free_gb": free_gb,
-                        "required_free_gb": required_gb,
-                        "comfy_queue": queue_counts,
-                        **_comfy_gpu_snapshot(),
-                    },
-                )
-                time.sleep(float(COMFY_GPU_QUEUE_POLL_SECONDS))
-                continue
-            with _COMFY_GPU_LOCK:
-                current_max = _runtime_comfy_gpu_max_concurrency()
-                if _COMFY_GPU_RUNNING >= current_max:
-                    local_wait_snapshot = {
-                        "max_concurrency": int(current_max),
-                        "waiting": int(_COMFY_GPU_WAITING),
-                        "running": int(_COMFY_GPU_RUNNING),
-                    }
-                else:
-                    local_wait_snapshot = {}
-                    _COMFY_GPU_WAITING = max(_COMFY_GPU_WAITING - 1, 0)
-                    _COMFY_GPU_RUNNING += 1
-                    running_snapshot = {
-                        "max_concurrency": int(current_max),
-                        "waiting": int(_COMFY_GPU_WAITING),
-                        "running": int(_COMFY_GPU_RUNNING),
-                        "queue_wait_seconds": int(time.time() - started),
-                    }
-            if local_wait_snapshot:
-                _COMFY_GPU_SEMAPHORE.release()
-                acquired = False
-                last_capacity = {"ok": False, "reason": "local_slots_full", **local_wait_snapshot}
-                _emit_stage(
-                    source_payload,
-                    stage="comfy_gpu_queue",
-                    status="queued",
-                    message="4090 本地隊列槽位已滿，繼續排隊等待",
-                    data={"workflow": workflow_label, "reason": "local_slots_full", **local_wait_snapshot},
-                )
-                time.sleep(float(COMFY_GPU_QUEUE_POLL_SECONDS))
-                continue
-        if last_capacity:
-            running_snapshot["gpu_capacity"] = last_capacity
-        if _task_cancelled_for_payload(source_payload):
-            raise RuntimeError("任務已取消，未提交到 4090。")
-        _emit_stage(
-            source_payload,
-            stage="comfy_gpu_queue",
-            status="running",
-            message="已取得 4090 隊列槽位，開始提交 ComfyUI 工作流",
-            data={"workflow": workflow_label, **running_snapshot},
-        )
-        yield running_snapshot
-    finally:
-        if not acquired:
-            with _COMFY_GPU_LOCK:
-                _COMFY_GPU_WAITING = max(_COMFY_GPU_WAITING - 1, 0)
-        else:
-            with _COMFY_GPU_LOCK:
-                _COMFY_GPU_RUNNING = max(_COMFY_GPU_RUNNING - 1, 0)
-                released_snapshot = {
-                    "max_concurrency": int(_runtime_comfy_gpu_max_concurrency()),
-                    "waiting": int(_COMFY_GPU_WAITING),
-                    "running": int(_COMFY_GPU_RUNNING),
-                }
-            _COMFY_GPU_SEMAPHORE.release()
-            _emit_stage(
-                source_payload,
-                stage="comfy_gpu_queue",
-                status="success",
-                message="4090 隊列槽位已釋放",
-                data={"workflow": workflow_label, **released_snapshot},
-            )
-
-
-def _run_remote_comfy_gateway_test(
-    *,
-    gateway_url: str,
-    token: str,
-    workflow_path: str,
-    prompt_text: str,
-    negative_prompt: str = "",
-    width: int | None = None,
-    height: int | None = None,
-    steps: int | None = None,
-    seed: int | None = None,
-    batch_size: int | None = None,
-    node_inputs: dict[str, Any] | None = None,
-    input_images: list[Any] | None = None,
-    input_image_bindings: Any = None,
-    timeout_seconds: int = 900,
-    apply_prompt: bool = True,
-    payload: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    workflow_text = str(workflow_path or "").strip()
-    prompt_text_value = str(prompt_text or "").strip()
-    if apply_prompt and not prompt_text_value:
-        prompt_text_value = "a simple red apple on a wooden table, studio lighting"
-    zit_final_workflow = "ZIT_final" in workflow_text
-    person_t2i_workflow = (
-        "person_t2i" in workflow_text.lower()
-        or "人设_t2i" in workflow_text
-        or "人設_t2i" in workflow_text
-    )
-    body: dict[str, Any] = {"path": workflow_text}
-    merged_node_inputs: dict[str, Any] = {}
-    if isinstance(node_inputs, dict) and node_inputs:
-        merged_node_inputs = {
-            str(node_id): dict(values)
-            for node_id, values in node_inputs.items()
-            if isinstance(values, dict)
-        }
-    if apply_prompt and zit_final_workflow:
-        merged_node_inputs.setdefault("627", {})["text"] = prompt_text_value
-        if width is not None:
-            merged_node_inputs.setdefault("698", {})["width"] = int(width)
-        if height is not None:
-            merged_node_inputs.setdefault("698", {})["height"] = int(height)
-        if batch_size is not None:
-            merged_node_inputs.setdefault("698", {})["batch_size"] = int(batch_size)
-        body["prompt_text_node_ids"] = ["627"]
-    elif apply_prompt:
-        body["prompt_text"] = prompt_text_value
-        body["negative_prompt"] = str(negative_prompt or "").strip()
-        if person_t2i_workflow:
-            body["prompt_text_node_ids"] = ["164"]
-            body["negative_text_node_ids"] = ["166"]
-            merged_node_inputs.setdefault("164", {})["text"] = prompt_text_value
-            merged_node_inputs.setdefault("166", {})["text"] = str(negative_prompt or "").strip()
-        for key, value in {
-            "width": width,
-            "height": height,
-            "steps": steps,
-            "seed": seed,
-            "batch_size": batch_size,
-        }.items():
-            if value is not None:
-                body[key] = int(value)
-    if seed is not None:
-        body["seed"] = int(seed)
-    if merged_node_inputs:
-        body["node_inputs"] = merged_node_inputs
-    if input_images:
-        body["input_images"] = [item for item in input_images if item]
-    if isinstance(input_image_bindings, (dict, list)) and input_image_bindings:
-        body["input_image_bindings"] = input_image_bindings
-    with _comfy_gpu_execution_slot(payload, gateway_url=gateway_url, token=token, workflow_path=workflow_text, body=body):
-        return _execute_remote_comfy_gateway_body(
-            gateway_url=gateway_url,
-            token=token,
-            body=body,
-            timeout_seconds=timeout_seconds,
-            payload=payload,
-        )
-
-
-def _execute_remote_comfy_gateway_body(
-    *,
-    gateway_url: str,
-    token: str,
-    body: dict[str, Any],
-    timeout_seconds: int = 900,
-    payload: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    submitted = _remote_comfy_gateway_json(
-        gateway_url=gateway_url,
-        token=token,
-        method="POST",
-        path="/api/workflows/run",
-        json_body=body,
-        timeout=90,
-    )
-    prompt_id = str(submitted.get("prompt_id") or "").strip()
-    if not prompt_id:
-        raise RuntimeError(f"远程 ComfyUI 未返回 prompt_id: {submitted}")
-    workflow_path = str(body.get("path") or "").strip()
-    _emit_stage(
-        payload,
-        stage="remote_comfy",
-        status="running",
-        message=f"已提交到 4090，prompt_id: {prompt_id}",
-        data={"prompt_id": prompt_id, "workflow": workflow_path},
-    )
-    deadline = time.time() + max(int(timeout_seconds or 900), 30)
-    last_job: dict[str, Any] = {}
-    poll_count = 0
-    started = time.time()
-    while time.time() < deadline:
-        poll_count += 1
-        last_job = _remote_comfy_gateway_json(
-            gateway_url=gateway_url,
-            token=token,
-            method="GET",
-            path=f"/api/jobs?prompt_id={prompt_id}",
-            timeout=60,
-        )
-        if _to_bool(last_job.get("done"), False):
-            outputs = last_job.get("outputs") if isinstance(last_job.get("outputs"), list) else []
-            if not outputs:
-                try:
-                    history = _remote_comfy_gateway_json(
-                        gateway_url=gateway_url,
-                        token=token,
-                        method="GET",
-                        path=f"/api/history/{prompt_id}",
-                        timeout=60,
-                    )
-                    item = history.get(prompt_id) if isinstance(history, dict) else None
-                    status = item.get("status") if isinstance(item, dict) else None
-                    if isinstance(status, dict):
-                        last_job["history_status"] = {
-                            "status_str": status.get("status_str"),
-                            "completed": status.get("completed"),
-                        }
-                        for message in status.get("messages") or []:
-                            if not isinstance(message, list) or len(message) < 2:
-                                continue
-                            if message[0] != "execution_error" or not isinstance(message[1], dict):
-                                continue
-                            error_payload = message[1]
-                            node_id = str(error_payload.get("node_id") or "").strip()
-                            node_type = str(error_payload.get("node_type") or "").strip()
-                            exception_message = str(error_payload.get("exception_message") or "").strip()
-                            last_job["execution_error_message"] = " ".join(
-                                part
-                                for part in [
-                                    f"节点 {node_id}" if node_id else "",
-                                    f"({node_type})" if node_type else "",
-                                    exception_message,
-                                ]
-                                if part
-                            )
-                            break
-                except Exception as exc:
-                    last_job["history_error"] = str(exc)
-            local_outputs: list[dict[str, Any]] = []
-            output_dir = OUTPUT_ROOT / "remote_comfy_tests" / prompt_id
-            for item in outputs:
-                if not isinstance(item, dict):
-                    continue
-                try:
-                    local_path = _remote_comfy_gateway_download_output(
-                        gateway_url=gateway_url,
-                        token=token,
-                        file_item=item,
-                        output_dir=output_dir,
-                    )
-                    local_outputs.append({**item, "local_path": str(local_path)})
-                except Exception as exc:
-                    local_outputs.append({**item, "download_error": str(exc)})
-            return {
-                "ok": True,
-                "prompt_id": prompt_id,
-                "outputs": outputs,
-                "local_outputs": local_outputs,
-                "raw_submit": submitted,
-                "raw_job": last_job,
-            }
-        if poll_count == 1 or poll_count % 6 == 0:
-            _emit_stage(
-                payload,
-                stage="remote_comfy",
-                status="running",
-                message=f"4090 正在生成，prompt_id: {prompt_id}",
-                data={
-                    "prompt_id": prompt_id,
-                    "workflow": workflow_path,
-                    "elapsed_seconds": int(time.time() - started),
-                    "poll_count": poll_count,
-                    "job": _sanitize_payload(last_job),
-                },
-            )
-        time.sleep(5)
-    return {"ok": False, "prompt_id": prompt_id, "message": "远程 ComfyUI 测试超时", "raw_job": last_job}
-
-
-REMOTE_COMFY_TASK_LABELS = {
-    "text_to_image": "文字生成圖片",
-    "image_generate": "圖片生成",
-    "video_i2v": "圖生視頻",
-    "single_image_edit": "單圖編輯",
-    "get_nano_banana": "圖片編輯",
-    "face_swap": "人物換臉",
-}
-
-
-def _remote_comfy_workflow_mapping_value(payload: dict[str, Any], task_type: str) -> Any:
-    source = _comfy_workflow_source(payload)
-    mappings = payload.get("local_comfy_workflow_mappings") if source == "local" else payload.get("remote_comfy_workflow_mappings")
-    if not isinstance(mappings, dict):
-        mappings = {}
-    candidates = [
-        payload.get("remote_comfy_workflow_path"),
-        payload.get("local_comfy_workflow_path"),
-        mappings.get(task_type),
-        mappings.get("get_nano_banana") if str(task_type or "").strip() == "single_image_edit" else None,
-        mappings.get("default"),
-    ]
-    for value in candidates:
-        if isinstance(value, (dict, list)):
-            return value
-        text = str(value or "").strip()
-        if text:
-            if source == "remote" and task_type in {"text_to_image", "image_generate"} and text.endswith("__converted__/ZIT_final.api.json"):
-                return "ZIT_final_output.api.json"
-            return text
-    return ""
-
-
-def _remote_comfy_workflow_mapping(payload: dict[str, Any], task_type: str) -> str:
-    value = _remote_comfy_workflow_mapping_value(payload, task_type)
-    if isinstance(value, str):
-        return value
-    if isinstance(value, dict):
-        for key in ("path", "workflow_path", "workflow", "file"):
-            text = str(value.get(key) or "").strip()
-            if text:
-                return text
-    return ""
-
-
-def _current_runtime_workflow_mapping_meta(task_type: Any, runtime: dict[str, Any] | None) -> dict[str, Any]:
-    typ = str(task_type or "").strip()
-    source = _comfy_workflow_source(runtime if isinstance(runtime, dict) else {})
-    workflow_path = _remote_comfy_workflow_mapping(runtime if isinstance(runtime, dict) else {}, typ)
-    workflow_ids = _normalize_workflow_ids([workflow_path])
-    return {
-        "current_workflow_name": REMOTE_COMFY_TASK_LABELS.get(typ) or _task_type_label(typ),
-        "current_workflow_id": ", ".join(workflow_ids),
-        "current_workflow_ids": workflow_ids,
-        "current_workflow_source": source,
-    }
-
-
-def _remote_comfy_image_input_bindings(payload: dict[str, Any], task_type: str) -> Any:
-    direct = payload.get("input_image_bindings") or payload.get("image_input_bindings")
-    if isinstance(direct, (dict, list)):
-        return direct
-    source = _comfy_workflow_source(payload)
-    bindings = payload.get("local_comfy_image_input_bindings") if source == "local" else payload.get("remote_comfy_image_input_bindings")
-    if isinstance(bindings, dict):
-        value = bindings.get(task_type)
-        if isinstance(value, (dict, list)):
-            return value
-        if str(task_type or "").strip() == "single_image_edit":
-            value = bindings.get("get_nano_banana")
-            if isinstance(value, (dict, list)):
-                return value
-        default_value = bindings.get("default")
-        if isinstance(default_value, (dict, list)):
-            return default_value
-    mapping_value = _remote_comfy_workflow_mapping_value(payload, task_type)
-    if isinstance(mapping_value, dict):
-        for key in ("input_image_bindings", "image_input_bindings", "load_image_bindings"):
-            value = mapping_value.get(key)
-            if isinstance(value, (dict, list)):
-                return value
-    workflow_path = _remote_comfy_workflow_mapping(payload, task_type)
-    if str(task_type or "").strip() in {"get_nano_banana", "single_image_edit"} and "firered" in str(workflow_path or "").lower():
-        return {
-            "image1": {"node_id": "2", "input_name": "image"},
-            "image2": {"node_id": "19", "input_name": "image"},
-        }
-    if str(task_type or "").strip() == "face_swap" and "flux_" in str(workflow_path or "").lower():
-        return {
-            "target": {"node_id": "81", "input_name": "image"},
-            "source_face": {"node_id": "244", "input_name": "image"},
-        }
-    return None
-
-
-def _comfy_workflow_source(payload: dict[str, Any]) -> str:
-    source = str(payload.get("comfy_workflow_source") or "remote").strip().lower()
-    return source if source in {"remote", "local"} else "remote"
-
-
-def _comfy_gateway_from_payload(payload: dict[str, Any]) -> tuple[str, str, str]:
-    source = _comfy_workflow_source(payload)
-    if source == "local":
-        return (
-            source,
-            str(payload.get("local_comfy_gateway_url") or "").strip(),
-            str(payload.get("local_comfy_gateway_token") or "").strip(),
-        )
-    return (
-        source,
-        str(payload.get("remote_comfy_gateway_url") or "").strip(),
-        str(payload.get("remote_comfy_gateway_token") or "").strip(),
-    )
-
-
-def _admin_comfy_gateway_values(payload: RemoteComfyGatewayPayload, runtime: dict[str, Any] | None = None) -> tuple[str, str, str]:
-    source = str(payload.comfy_workflow_source or "remote").strip().lower()
-    source = source if source in {"remote", "local"} else "remote"
-    runtime = runtime or {}
-    if source == "local":
-        return (
-            source,
-            str(payload.local_comfy_gateway_url or runtime.get("local_comfy_gateway_url") or "http://127.0.0.1:9001").strip(),
-            str(payload.local_comfy_gateway_token or runtime.get("local_comfy_gateway_token") or "").strip(),
-        )
-    return (
-        source,
-        str(payload.remote_comfy_gateway_url or runtime.get("remote_comfy_gateway_url") or "").strip(),
-        str(payload.remote_comfy_gateway_token or runtime.get("remote_comfy_gateway_token") or "").strip(),
-    )
-
-
-def _remote_comfy_prompt_from_payload(task_type: str, payload: dict[str, Any]) -> str:
-    candidates = [
-        payload.get("prompt_text"),
-        payload.get("prompt"),
-        payload.get("message"),
-        payload.get("user_input"),
-        payload.get("style_hint"),
-        payload.get("asset_name"),
-    ]
-    if isinstance(payload.get("primary_params"), dict):
-        candidates.append(payload["primary_params"].get("image_prompt"))
-    if isinstance(payload.get("secondary_params"), dict):
-        candidates.append(payload["secondary_params"].get("image_prompt"))
-    for value in candidates:
-        text = str(value or "").strip()
-        if text:
-            return text
-    return f"{REMOTE_COMFY_TASK_LABELS.get(task_type, task_type)} test generation, high quality"
-
-
-PERSONA_BODY_PROFILES: dict[str, dict[str, Any]] = {
-    "jinjunya_gy": {
-        "label": "人设1金君雅",
-        "match_terms": [
-            "金君雅",
-            "人设1捞女1金君雅",
-            "人設1撈女1金君雅",
-            "Character Setting\\人设1捞女1金君雅.safetensors",
-            "Character Setting/人设1捞女1金君雅.safetensors",
-        ],
-         "body_profile_prompt": (
-            "身材约束：年轻女性，头身比例修长，上半身纤细，肩线窄而柔和，颈部修长，"
-            "腰部很细，腰腹线条平滑，胯部和臀部曲线明显，形成纤细腰身与饱满髋部的沙漏轮廓，"
-            "腿部修长纤细，手臂纤细自然，整体比例轻盈、柔和、真实，不要变成厚重宽肩、粗腰、短腿或男性化体型。"
-            "乳房特征：乳晕边缘自然清晰，乳晕小呈暗褐色，乳头清晰可见略微突出，乳头颜色比乳晕稍深，"
-            "乳房形状自然下垂感，轻微乳沟，乳房质感柔软真实"
-        ),
-        "prompt_anchor": (
-            "身形纤细修长且腰胯比例轻盈"
-        ),
-        "negative_body_prompt": (
-            "宽肩，粗腰，短腿，厚重体型，男性化躯干，腰胯比例消失，身体比例漂移，"
-            "过度肌肉，粗壮手臂，畸形躯干，额外肢体，重复手臂，手脚错乱，"
-            "乳晕过大，乳晕过小，乳头模糊，乳头缺失，乳房形状不自然，乳房僵硬，乳沟过浅，"
-            "乳头颜色异常，乳晕边缘模糊，乳房比例失调"
-        ),
-    }
-}
-
-
-def _persona_body_profile_for_payload(payload: dict[str, Any] | None) -> dict[str, str]:
-    source = payload if isinstance(payload, dict) else {}
-    explicit_prompt = str(source.get("persona_body_profile_prompt") or source.get("tg_persona_body_profile_prompt") or "").strip()
-    explicit_negative = str(source.get("persona_negative_body_prompt") or source.get("tg_persona_negative_body_prompt") or "").strip()
-    explicit_label = str(source.get("persona_body_profile_label") or source.get("tg_persona_body_profile_label") or "").strip()
-    explicit_anchor = str(source.get("persona_body_prompt_anchor") or source.get("tg_persona_body_prompt_anchor") or "").strip()
-    if explicit_prompt:
-        return {
-            "id": str(source.get("persona_body_profile_id") or source.get("tg_persona_body_profile_id") or "custom").strip() or "custom",
-            "label": explicit_label or str(source.get("persona_label") or "当前人设").strip() or "当前人设",
-            "body_profile_prompt": explicit_prompt,
-            "prompt_anchor": explicit_anchor,
-            "negative_body_prompt": explicit_negative,
-        }
-
-    persona_text = " ".join(
-        str(source.get(key) or "")
-        for key in (
-            "persona_lora",
-            "persona_label",
-            "tg_generation_context",
-            "text_to_image_workflow_path",
-            "remote_comfy_workflow_path",
-        )
-    )
-    normalized = persona_text.replace("\\", "/").lower()
-
-    runtime_profiles = source.get("persona_body_profiles") if isinstance(source.get("persona_body_profiles"), dict) else {}
-    profile_sources: list[tuple[str, dict[str, Any]]] = []
-    for profile_id, profile in runtime_profiles.items():
-        if isinstance(profile, dict):
-            profile_sources.append((str(profile_id), profile))
-    for profile_id, profile in PERSONA_BODY_PROFILES.items():
-        profile_sources.append((profile_id, profile))
-
-    for profile_id, profile in profile_sources:
-        raw_terms = profile.get("match_terms")
-        if isinstance(raw_terms, list):
-            terms = [str(item or "").strip() for item in raw_terms if str(item or "").strip()]
-        else:
-            terms = [
-                item.strip()
-                for item in re.split(r"[\n,，;；]+", str(raw_terms or ""))
-                if item.strip()
-            ]
-        terms = [term.replace("\\", "/").lower() for term in terms]
-        if any(term.lower() in normalized for term in terms):
-            return {
-                "id": profile_id,
-                "label": str(profile.get("label") or "").strip(),
-                "body_profile_prompt": str(profile.get("body_profile_prompt") or "").strip(),
-                "prompt_anchor": str(profile.get("prompt_anchor") or profile.get("body_prompt_anchor") or "").strip(),
-                "negative_body_prompt": str(profile.get("negative_body_prompt") or "").strip(),
-            }
-    return {}
-
-
-def _persona_body_prompt_anchor_for_profile(profile: dict[str, Any]) -> str:
-    anchor = str(profile.get("prompt_anchor") or profile.get("body_prompt_anchor") or "").strip()
-    if anchor:
-        return _naturalize_persona_body_positive_prompt(anchor)
-    body_prompt = str(profile.get("body_profile_prompt") or "").strip()
-    visible_prompt = _naturalize_persona_body_positive_prompt(body_prompt)
-    if visible_prompt:
-        return visible_prompt
-    return ""
-
-
-def _naturalize_persona_body_positive_prompt(prompt_text: str) -> str:
-    text = _strip_prompt_response_wrappers(prompt_text)
-    if not text:
-        return ""
-    text = text.replace("身材约束：", "").replace("身材約束：", "")
-    text = text.replace("乳房特征：", "").replace("乳房特徵：", "")
-    text = re.sub(r"年轻女性[，、\s]*|年輕女性[，、\s]*", "", text)
-    text = re.sub(r"不要[^。；;]*[。；;]?", "", text)
-    text = re.sub(r"不应[^。；;]*[。；;]?", "", text)
-    text = re.sub(r"不能[^。；;]*[。；;]?", "", text)
-    text = re.sub(r"避免[^。；;]*[。；;]?", "", text)
-    text = text.replace("头身比例修长", "整体比例修长")
-    text = re.sub(r"[。；;]+", "，", text)
-    text = re.sub(r"\s+", "", text)
-    parts: list[str] = []
-    seen: set[str] = set()
-    for raw in re.split(r"[，、,]+", text):
-        part = raw.strip(" ，、,。；;")
-        if not part:
-            continue
-        if re.search(r"厚重|宽肩|寬肩|粗腰|短腿|男性化|畸形|缺失|异常|異常|失调|失調|模糊|过大|過大|过小|過小", part):
-            continue
-        if re.search(r"乳房|乳头|乳頭|乳晕|乳暈|胸|皮肤|皮膚|脸|臉|五官|眼|眉|鼻|唇|嘴|发型|髮型|头发|頭髮|发色|髮色|发|髮", part):
-            continue
-        key = re.sub(r"\s+", "", part)
-        if key in seen:
-            continue
-        seen.add(key)
-        parts.append(part)
-    if not parts:
-        return ""
-    concise_priority = (
-        "身形",
-        "整体比例",
-        "整體比例",
-        "腰胯比例",
-        "胯臀曲线",
-        "胯臀曲線",
-        "四肢",
-        "腿部",
-        "手臂",
-    )
-    concise_parts = [part for part in parts if any(term in part for term in concise_priority)]
-    selected = concise_parts or parts
-    selected = selected[:2]
-    if len(selected) >= 2:
-        return f"{selected[0]}且{selected[1]}"
-    return "，".join(selected).strip("，")
-
-
-def _prompt_already_has_persona_body_anchor(prompt_text: str, anchor: str) -> bool:
-    text = re.sub(r"[，。；、,.;:\s]+", "", str(prompt_text or ""))
-    target = re.sub(r"[，。；、,.;:\s]+", "", str(anchor or ""))
-    if not text or not target:
-        return False
-    if target in text:
-        return True
-    anchor_parts = [
-        re.sub(r"[，。；、,.;:\s]+", "", part)
-        for part in re.split(r"[，。；、,.;:\s]+", str(anchor or ""))
-        if len(re.sub(r"[，。；、,.;:\s]+", "", part)) >= 4
-    ]
-    if anchor_parts:
-        covered = sum(1 for part in anchor_parts if part in text)
-        if covered >= min(4, len(anchor_parts)) or covered / max(len(anchor_parts), 1) >= 0.55:
-            return True
-    body_terms = (
-        "身形修長纖細",
-        "身形修长纤细",
-        "身形纖細修長",
-        "身形纤细修长",
-        "肩頸線條柔和",
-        "肩颈线条柔和",
-        "腰胯比例輕盈自然",
-        "腰胯比例轻盈自然",
-    )
-    if sum(1 for term in body_terms if term in text) >= 2:
-        return True
-    return bool(re.search(r"身形[^，。；、]{0,12}(?:纤细|纖細|修长|修長)[^，。；、]{0,12}(?:纤细|纖細|修长|修長)", text) and re.search(r"腰胯比例|腰臀比例", text))
-
-
-def _merge_persona_body_anchor_into_prompt(prompt_text: str, anchor: str) -> str:
-    text = _strip_prompt_response_wrappers(prompt_text)
-    visible_anchor = _naturalize_persona_body_positive_prompt(anchor)
-    if not text or not visible_anchor or _prompt_already_has_persona_body_anchor(text, visible_anchor):
-        return text
-    if _tg_image_first_segment_has_subject_start(text):
-        subject_match = re.match(
-            r"^(?:(一位|一名|一个|一個))?(成人女性|成熟女性|女性|女人|女子|女郎|美女|美人|女教师|女教?师|教师|老师|人物|人物|女性人物|主角|角色)?",
-            text,
-        )
-        if subject_match and (subject_match.group(1) or subject_match.group(2)):
-            quantifier = subject_match.group(1) or "一名"
-            subject = subject_match.group(2) or ""
-            rest = text[subject_match.end():].lstrip("的，、 ")
-            if subject:
-                return f"{quantifier}{visible_anchor}的{subject}{rest}"
-            return f"{quantifier}{visible_anchor}的{rest}"
-    match = re.match(r"^(成人|女性|女人|女子|女郎|美女|美人|女教师|女教?师|教师|老师|人物|人物)", text)
-    if match:
-        end = match.end()
-        return f"{text[:end]}{visible_anchor}，{text[end:].lstrip('，、 ')}"
-    return f"一名{visible_anchor}的{text.lstrip('，、；; ')}"
-
-
-def _strip_persona_body_profile_from_final_prompt(prompt_text: str, body_prompt: str) -> str:
-    text = str(prompt_text or "").strip()
-    body = str(body_prompt or "").strip()
-    if not text:
-        return ""
-    if body:
-        text = text.replace(body, "")
-    text = re.sub(r"^\s*[，。；、,.;\s]+", "", text).strip()
-    if re.match(r"^(?:身材[约約]束|年轻女性|年輕女性|头身比例|頭身比例|上半身纤细|上半身纖細)", text):
-        scene_markers = ("一位", "側坐", "侧坐", "站立", "坐在", "跪坐", "躺在", "倚靠", "穿着", "穿著")
-        positions = [text.find(marker) for marker in scene_markers if text.find(marker) > 8]
-        if positions:
-            text = text[min(positions) :]
-    text = re.sub(r"^\s*[，。；、,.;\s]+", "", text).strip()
-    return text
-
-
-def _apply_persona_body_profile_to_payload(task_type: str, payload: dict[str, Any]) -> dict[str, Any]:
-    typ = str(task_type or "").strip()
-    if typ not in {"text_to_image", "image_generate"}:
-        return payload
-    source = dict(payload or {})
-    if _tg_payload_has_confirmed_prompt(source):
-        return source
-    if not _to_bool(source.get("persona_enabled"), False):
-        return source
-    profile = _persona_body_profile_for_payload(source)
-    body_prompt = str(profile.get("body_profile_prompt") or "").strip()
-    if not body_prompt:
-        return source
-    visible_anchor = _persona_body_prompt_anchor_for_profile(profile)
-    current_prompt = _strip_persona_body_profile_from_final_prompt(
-        _remote_comfy_prompt_from_payload(typ, source).strip(),
-        body_prompt,
-    )
-    if not current_prompt:
-        return source
-    if visible_anchor:
-        current_prompt = _merge_persona_body_anchor_into_prompt(current_prompt, visible_anchor)
-    source = _set_tg_generation_prompt(source, current_prompt)
-    source["tg_persona_body_profile_id"] = str(profile.get("id") or "").strip()
-    source["tg_persona_body_profile_label"] = str(profile.get("label") or "").strip()
-    source["tg_persona_body_profile_prompt"] = body_prompt
-    source["tg_persona_body_prompt_anchor"] = visible_anchor
-    negative_body = str(profile.get("negative_body_prompt") or "").strip()
-    if negative_body:
-        source["tg_persona_negative_body_prompt"] = negative_body
-        existing_negative = str(source.get("negative_prompt") or source.get("negative") or "").strip()
-        if negative_body not in existing_negative:
-            merged_negative = f"{existing_negative}, {negative_body}" if existing_negative else negative_body
-            source["negative_prompt"] = merged_negative
-            source["negative"] = merged_negative
-    return source
-
-
-def _remote_comfy_prompt_node_inputs_from_payload(
-    payload: dict[str, Any],
-    *,
-    task_type: str = "",
-    workflow_path: str = "",
-) -> dict[str, Any]:
-    typ = str(task_type or "").strip()
-    prompt_text = _remote_comfy_prompt_from_payload(typ, payload).strip()
-    if not prompt_text:
-        return {}
-    mapping_value = _remote_comfy_workflow_mapping_value(payload, typ)
-    if isinstance(mapping_value, dict):
-        input_name = str(mapping_value.get("prompt_input_name") or "prompt").strip() or "prompt"
-        node_ids = mapping_value.get("prompt_node_ids") or mapping_value.get("prompt_text_node_ids")
-        if isinstance(node_ids, str):
-            node_ids = [node_ids]
-        if isinstance(node_ids, list):
-            return {
-                str(node_id).strip(): {input_name: prompt_text}
-                for node_id in node_ids
-                if str(node_id or "").strip()
-            }
-    workflow_lower = str(workflow_path or "").lower()
-    if typ in {"get_nano_banana", "single_image_edit"} and "firered" in workflow_lower:
-        return {"66": {"prompt": prompt_text}}
-    return {}
-
-
-def _is_person_t2i_workflow(task_type: str, workflow_path: str) -> bool:
-    workflow_text = str(workflow_path or "")
-    return (
-        str(task_type or "").strip() in {"text_to_image", "image_generate"}
-        and (
-            "person_t2i" in workflow_text.lower()
-            or "人设_t2i" in workflow_text
-            or "人設_t2i" in workflow_text
-        )
-    )
-
-
-PERSON_T2I_LORA_NODE_IDS = {"184", "185", "186", "191", "195", "196", "197"}
-
-
-def _strip_person_t2i_lora_node_inputs(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        return {}
-    cleaned: dict[str, Any] = {}
-    for node_id, inputs in value.items():
-        node_key = str(node_id)
-        if not isinstance(inputs, dict):
-            continue
-        if node_key in PERSON_T2I_LORA_NODE_IDS or "lora_name" in inputs:
-            continue
-        cleaned[node_key] = dict(inputs)
-    return cleaned
-
-
-def _person_t2i_runtime_node_inputs(payload: dict[str, Any], task_type: str, workflow_path: str) -> dict[str, Any]:
-    return {
-        "160": {
-            "width": max(_to_int(payload.get("width"), 640), 1),
-            "height": max(_to_int(payload.get("height"), 960), 1),
-            "batch_size": max(_to_int(payload.get("batch_size"), _remote_comfy_default_batch_size(task_type, workflow_path)), 1),
-        },
-        "167": {
-            "steps": 10,
-            "cfg": 1.0,
-            "sampler_name": "euler",
-            "scheduler": "simple",
-            "denoise": 1.0,
-        },
-        "171": {"filename_prefix": "telegram/person_t2i"},
-    }
-
-
-def _remote_comfy_node_inputs_from_payload(
-    payload: dict[str, Any],
-    *,
-    task_type: str = "",
-    workflow_path: str = "",
-) -> dict[str, Any]:
-    prompt_node_inputs = _remote_comfy_prompt_node_inputs_from_payload(
-        payload,
-        task_type=task_type,
-        workflow_path=workflow_path,
-    )
-    person_t2i_workflow = _is_person_t2i_workflow(task_type, workflow_path)
-    raw = payload.get("remote_comfy_node_inputs")
-    if isinstance(raw, dict):
-        if person_t2i_workflow:
-            return _merge_node_inputs(_strip_person_t2i_lora_node_inputs(raw), _person_t2i_runtime_node_inputs(payload, task_type, workflow_path), prompt_node_inputs)
-        return _merge_node_inputs(raw, prompt_node_inputs)
-    raw_json = str(payload.get("remote_comfy_node_inputs_json") or "").strip()
-    if raw_json:
-        parsed = _json_loads(raw_json, {})
-        if isinstance(parsed, dict) and person_t2i_workflow:
-            return _merge_node_inputs(_strip_person_t2i_lora_node_inputs(parsed), _person_t2i_runtime_node_inputs(payload, task_type, workflow_path), prompt_node_inputs)
-        return _merge_node_inputs(parsed, prompt_node_inputs) if isinstance(parsed, dict) else prompt_node_inputs
-    mapping_value = _remote_comfy_workflow_mapping_value(payload, task_type)
-    if isinstance(mapping_value, dict):
-        mapped_inputs: dict[str, Any] = {}
-        for key in ("node_inputs", "remote_comfy_node_inputs", "inputs"):
-            value = mapping_value.get(key)
-            if isinstance(value, dict):
-                mapped_inputs = value
-                break
-        if str(task_type or "").strip() == "face_swap":
-            seed = _to_int(payload.get("face_swap_random_seed") or payload.get("seed"), 0)
-            if seed > 0:
-                mapped_inputs = _merge_node_inputs(mapped_inputs, {"256": {"noise_seed": seed}})
-            if _to_bool(payload.get("face_swap_seedvr_upscale"), False):
-                return _merge_node_inputs(
-                    mapped_inputs,
-                    {
-                        "467": {
-                            "images": ["326", 0],
-                            "filename_prefix": "telegram/face_swap_seedvr",
-                        }
-                    },
-                )
-        if mapped_inputs:
-            if person_t2i_workflow:
-                return _merge_node_inputs(_strip_person_t2i_lora_node_inputs(mapped_inputs), _person_t2i_runtime_node_inputs(payload, task_type, workflow_path), prompt_node_inputs)
-            return _merge_node_inputs(mapped_inputs, prompt_node_inputs)
-    if str(task_type or "").strip() == "face_swap" and "flux_" in str(workflow_path or "").lower():
-        seed = _to_int(payload.get("face_swap_random_seed") or payload.get("seed"), 0)
-        mapped_inputs = {
-            "462": {"mask": None},
-            "463": {"mask": None},
-            "468": {
-                "crop_position": "center",
-                "device": "gpu",
-                "divisible_by": 2,
-                "keep_proportion": "resize",
-                "upscale_method": "bicubic",
-                "pad_color": "0, 0, 0",
-                "mask": None,
-            },
-            "326": {
-                "temporal_overlap": 0,
-                "offload_device": "cpu",
-                "batch_size": 1,
-                "resolution": 1080,
-                "color_correction": "lab",
-            },
-            "467": {"images": ["251", 0], "filename_prefix": "telegram/face_swap"},
-        }
-        if seed > 0:
-            mapped_inputs = _merge_node_inputs(mapped_inputs, {"256": {"noise_seed": seed}})
-        if _to_bool(payload.get("face_swap_seedvr_upscale"), False):
-            return _merge_node_inputs(
-                mapped_inputs,
-                {
-                    "467": {
-                        "images": ["326", 0],
-                        "filename_prefix": "telegram/face_swap_seedvr",
-                    }
-                },
-            )
-        return mapped_inputs
-    if person_t2i_workflow:
-        return _merge_node_inputs(_person_t2i_runtime_node_inputs(payload, task_type, workflow_path), prompt_node_inputs)
-    if (
-        str(task_type or "").strip() in {"text_to_image", "image_generate"}
-        and "ZIT_final" in str(workflow_path or "")
-        and "final_resolution_enabled" in payload
-    ):
-        detailer_inputs = {
-            "guide_size": 512.0,
-            "guide_size_for": True,
-            "max_size": 1440.0,
-            "steps": 4,
-            "cfg": 1.0,
-            "sampler_name": "dpmpp_2m_sde",
-            "scheduler": "sgm_uniform",
-            "denoise": 0.45,
-            "feather": 100,
-            "noise_mask": True,
-            "force_inpaint": True,
-            "wildcard": "",
-            "cycle": 1,
-            "inpaint_model": False,
-            "noise_mask_feather": 20,
-            "tiled_encode": False,
-            "tiled_decode": False,
-        }
-        safe_save_prefixes = {
-            "698": {
-                "width": max(_to_int(payload.get("width"), 640), 1),
-                "height": max(_to_int(payload.get("height"), 960), 1),
-                "batch_size": 1,
-            },
-            "715": {"filename_prefix": "telegram/ZIT_upscale"},
-            "732": {"filename_prefix": "telegram/ZIT_blend"},
-        }
-        if _to_bool(payload.get("final_resolution_enabled"), False):
-            return {
-                "647": {"scale_by": 1.7},
-                "637": {"value": 2.0},
-                "663": {
-                    "steps": 3,
-                    "cfg": 1.0,
-                    "sampler_name": "dpmpp_2m_sde",
-                    "scheduler": "sgm_uniform",
-                    "denoise": 0.23,
-                    "mode_type": "Linear",
-                    "mask_blur": 64,
-                    "tile_padding": 96,
-                    "seam_fix_mode": "None",
-                    "seam_fix_denoise": 1.0,
-                    "seam_fix_width": 64,
-                    "seam_fix_mask_blur": 8,
-                    "seam_fix_padding": 16,
-                    "force_uniform_tiles": True,
-                    "tiled_decode": False,
-                    "batch_size": 1,
-                },
-                "713": {
-                    "resolution": 1080,
-                    "color_correction": "lab",
-                    "offload_device": "cpu",
-                    "temporal_overlap": 0,
-                },
-                "789": {"image": ["663", 0], **detailer_inputs},
-                "790": {"image": ["663", 0]},
-                **safe_save_prefixes,
-            }
-        return {
-            "647": {"scale_by": 1.0},
-            "637": {"value": 1.0},
-            "663": {
-                "steps": 3,
-                "cfg": 1.0,
-                "sampler_name": "dpmpp_2m_sde",
-                "scheduler": "sgm_uniform",
-                "denoise": 0.23,
-                "mode_type": "Linear",
-                "mask_blur": 64,
-                "tile_padding": 96,
-                "seam_fix_mode": "None",
-                "seam_fix_denoise": 1.0,
-                "seam_fix_width": 64,
-                "seam_fix_mask_blur": 8,
-                "seam_fix_padding": 16,
-                "force_uniform_tiles": True,
-                "tiled_decode": False,
-                "batch_size": 1,
-            },
-            "789": {"image": ["663", 0], **detailer_inputs},
-            "790": {"image": ["663", 0]},
-            **safe_save_prefixes,
-        }
-    return prompt_node_inputs
-
-
-def _remote_comfy_input_image_paths_from_payload(payload: dict[str, Any], task_type: str) -> list[dict[str, str]]:
-    typ = str(task_type or "").strip()
-    candidates: list[tuple[str, Any, str]] = []
-    if typ == "single_image_edit":
-        single_image = (
-            payload.get("input_image_local_path")
-            or payload.get("image_local_path")
-            or payload.get("primary_image_local_path")
-        )
-        candidates.extend(
-            [
-                ("image1", single_image, "原圖"),
-                ("image2", single_image, "原圖"),
-            ]
-        )
-    elif typ == "get_nano_banana":
-        candidates.extend(
-            [
-                ("image1", payload.get("input_image_local_path"), "原圖"),
-                ("image1", payload.get("image_local_path"), "原圖"),
-                ("image1", payload.get("primary_image_local_path"), "原圖"),
-                ("image2", payload.get("reference_image_local_path"), "參考圖"),
-                ("image2", payload.get("second_image_local_path"), "參考圖"),
-                ("image2", payload.get("image2_local_path"), "參考圖"),
-                ("image2", payload.get("secondary_image_local_path"), "參考圖"),
-            ]
-        )
-    elif typ == "face_swap":
-        candidates.extend(
-            [
-                ("target", payload.get("target_image_local_path"), "原圖"),
-                ("target", payload.get("image_local_path"), "原圖"),
-                ("source_face", payload.get("source_image_local_path"), "人臉參考圖"),
-                ("source_face", payload.get("reference_image_local_path"), "人臉參考圖"),
-                ("source_face", payload.get("face_image_local_path"), "人臉參考圖"),
-            ]
-        )
-    else:
-        return []
-    paths: list[dict[str, str]] = []
-    seen_roles: set[str] = set()
-    for role, value, label in candidates:
-        text = str(value or "").strip()
-        if not text:
-            continue
-        role_text = str(role)
-        if role_text in seen_roles:
-            continue
-        try:
-            resolved = str(Path(text).expanduser().resolve())
-        except Exception:
-            resolved = text
-        seen_roles.add(role_text)
-        paths.append({"role": role_text, "path": resolved, "label": str(label)})
-    return paths
-
-
-def _remote_comfy_upload_input_images(
-    *,
-    gateway_url: str,
-    token: str,
-    task_id: str,
-    payload: dict[str, Any],
-    task_type: str,
-) -> list[dict[str, str]]:
-    image_items = _remote_comfy_input_image_paths_from_payload(payload, task_type)
-    if not image_items:
-        return []
-    upload_subfolder = f"telegram/{re.sub(r'[^a-zA-Z0-9._-]+', '_', str(task_id or uuid.uuid4().hex)).strip('._-') or uuid.uuid4().hex}"
-    uploaded: list[dict[str, str]] = []
-    for image_item in image_items:
-        item = _remote_comfy_gateway_upload_image(
-            gateway_url=gateway_url,
-            token=token,
-            image_path=str(image_item.get("path") or ""),
-            subfolder=upload_subfolder,
-        )
-        image_value = str(item.get("image") or "").strip()
-        if image_value:
-            uploaded.append(
-                {
-                    "role": str(image_item.get("role") or "input"),
-                    "image": image_value,
-                    "label": str(image_item.get("label") or ""),
-                }
-            )
-    return uploaded
-
-
-def _remote_comfy_node_inputs_from_uploaded_image_bindings(
-    input_images: list[dict[str, str]],
-    input_image_bindings: Any,
-) -> dict[str, Any]:
-    if not input_images or not isinstance(input_image_bindings, (dict, list)):
-        return {}
-    bindings_by_role: dict[str, dict[str, str]] = {}
-    if isinstance(input_image_bindings, dict):
-        for role, binding in input_image_bindings.items():
-            if isinstance(binding, dict):
-                node_id = str(binding.get("node_id") or binding.get("node") or binding.get("id") or "").strip()
-                input_name = str(binding.get("input_name") or binding.get("input") or "image").strip() or "image"
-                if node_id:
-                    bindings_by_role[str(role or "").strip().lower()] = {"node_id": node_id, "input_name": input_name}
-    elif isinstance(input_image_bindings, list):
-        for binding in input_image_bindings:
-            if not isinstance(binding, dict):
-                continue
-            role = str(binding.get("role") or binding.get("source") or "").strip().lower()
-            node_id = str(binding.get("node_id") or binding.get("node") or binding.get("id") or "").strip()
-            input_name = str(binding.get("input_name") or binding.get("input") or "image").strip() or "image"
-            if role and node_id:
-                bindings_by_role[role] = {"node_id": node_id, "input_name": input_name}
-    if not bindings_by_role:
-        return {}
-    node_inputs: dict[str, Any] = {}
-    for item in input_images:
-        if not isinstance(item, dict):
-            continue
-        role = str(item.get("role") or "").strip().lower()
-        image_value = str(item.get("image") or "").strip()
-        binding = bindings_by_role.get(role)
-        if not binding or not image_value:
-            continue
-        node_inputs.setdefault(binding["node_id"], {})[binding["input_name"]] = image_value
-    return node_inputs
-
-
-def _first_remote_comfy_output_path(result: dict[str, Any]) -> str:
-    outputs = result.get("local_outputs") if isinstance(result.get("local_outputs"), list) else []
-    saved_outputs = [
-        item
-        for item in outputs
-        if isinstance(item, dict)
-        and str(item.get("type") or "").strip().lower() == "output"
-        and str(item.get("local_path") or "").strip()
-        and Path(str(item.get("local_path") or "")).exists()
-    ]
-    for item in saved_outputs:
-        local_path = str(item.get("local_path") or "").strip()
-        if local_path and Path(local_path).exists():
-            return local_path
-    preferred_outputs = [
-        item
-        for item in outputs
-        if isinstance(item, dict)
-        and (
-            str(item.get("node") or "").strip() in {"650", "651"}
-            or "ZIT_detailer" in str(item.get("filename") or item.get("local_path") or "")
-        )
-    ]
-    for item in preferred_outputs:
-        local_path = str(item.get("local_path") or "").strip()
-        if local_path and Path(local_path).exists():
-            return local_path
-    for item in outputs:
-        if not isinstance(item, dict):
-            continue
-        local_path = str(item.get("local_path") or "").strip()
-        if local_path and Path(local_path).exists():
-            return local_path
-    return ""
-
-
-def _remote_comfy_output_image_paths(result: dict[str, Any]) -> list[str]:
-    outputs = result.get("local_outputs") if isinstance(result.get("local_outputs"), list) else []
-    image_items = [
-        item
-        for item in outputs
-        if isinstance(item, dict)
-        and str(item.get("local_path") or "").strip()
-        and Path(str(item.get("local_path") or "")).exists()
-        and Path(str(item.get("local_path") or "")).suffix.lower() in IMAGE_EXTS
-    ]
-    preferred_items = [
-        item
-        for item in image_items
-        if str(item.get("node") or "").strip() in {"650", "651"}
-        or "ZIT_detailer" in str(item.get("filename") or item.get("local_path") or "")
-    ]
-    saved_items = [
-        item
-        for item in image_items
-        if str(item.get("type") or "").strip().lower() == "output"
-    ]
-    selected = preferred_items or saved_items or image_items
-    paths: list[str] = []
-    seen: set[str] = set()
-    for item in selected:
-        local_path = str(item.get("local_path") or "").strip()
-        try:
-            resolved = str(Path(local_path).resolve())
-        except Exception:
-            resolved = local_path
-        if resolved and resolved not in seen:
-            seen.add(resolved)
-            paths.append(resolved)
-    return paths
-
-
-def _remote_comfy_image_generate_chain_config(payload: dict[str, Any]) -> dict[str, Any]:
-    value = _remote_comfy_workflow_mapping_value(payload, "image_generate")
-    if isinstance(value, dict):
-        mode = str(value.get("mode") or value.get("type") or "").strip().lower()
-        if mode in {"firered_chain", "person_firered_chain", "two_image_firered"} or value.get("firered_workflow"):
-            return value
-    return {}
-
-
-def _workflow_path_from_chain_config(config: dict[str, Any], keys: Iterable[str], default: str = "") -> str:
-    for key in keys:
-        text = str(config.get(key) or "").strip()
-        if text:
-            return text
-    return str(default or "").strip()
-
-
-def _merge_node_inputs(*values: Any) -> dict[str, Any]:
-    merged: dict[str, Any] = {}
-    for value in values:
-        if not isinstance(value, dict):
-            continue
-        for node_id, inputs in value.items():
-            if not isinstance(inputs, dict):
-                continue
-            target = merged.setdefault(str(node_id), {})
-            if isinstance(target, dict):
-                target.update(inputs)
-    return merged
-
-
-def _firered_image_input_bindings(config: dict[str, Any]) -> list[dict[str, str]]:
-    raw = config.get("firered_image_inputs") or config.get("image_inputs")
-    bindings: list[dict[str, str]] = []
-    if isinstance(raw, list):
-        for idx, item in enumerate(raw):
-            if not isinstance(item, dict):
-                continue
-            node_id = str(item.get("node_id") or item.get("node") or item.get("id") or "").strip()
-            input_name = str(item.get("input_name") or item.get("input") or "image").strip() or "image"
-            source = str(item.get("source") or ("image1" if idx == 0 else "image2")).strip().lower()
-            if node_id:
-                bindings.append({"node_id": node_id, "input_name": input_name, "source": source})
-    if not bindings:
-        node_ids = config.get("firered_input_node_ids") or config.get("image_input_node_ids")
-        if isinstance(node_ids, list):
-            for idx, node_id in enumerate(node_ids[:2]):
-                text = str(node_id or "").strip()
-                if text:
-                    bindings.append({"node_id": text, "input_name": "image", "source": "image1" if idx == 0 else "image2"})
-    if not bindings:
-        first = str(config.get("firered_image1_node_id") or config.get("image1_node_id") or "").strip()
-        second = str(config.get("firered_image2_node_id") or config.get("image2_node_id") or "").strip()
-        if first:
-            bindings.append({"node_id": first, "input_name": str(config.get("image1_input_name") or "image").strip() or "image", "source": "image1"})
-        if second:
-            bindings.append({"node_id": second, "input_name": str(config.get("image2_input_name") or "image").strip() or "image", "source": "image2"})
-    if len(bindings) < 2:
-        raise RuntimeError("firered_api 需要配置两个输入图节点 ID。请在 image_generate 的链式配置里填写 firered_image_inputs，格式如 [{\"node_id\":\"节点1\",\"input_name\":\"image\",\"source\":\"image1\"},{\"node_id\":\"节点2\",\"input_name\":\"image\",\"source\":\"image2\"}]。")
-    return bindings[:2]
-
-
-def _build_firered_node_inputs(config: dict[str, Any], *, image1: str, image2: str) -> dict[str, Any]:
-    source_images = {
-        "image1": image1,
-        "persona": image1,
-        "person": image1,
-        "model": image1,
-        "source": image1,
-        "image2": image2,
-        "zit": image2,
-        "reference": image2,
-        "clothes": image2,
-        "target": image2,
-    }
-    node_inputs = _merge_node_inputs(config.get("firered_node_inputs"), config.get("node_inputs"))
-    for idx, binding in enumerate(_firered_image_input_bindings(config)):
-        source = str(binding.get("source") or "").strip().lower()
-        image_value = source_images.get(source, image1 if idx == 0 else image2)
-        node_inputs.setdefault(str(binding["node_id"]), {})[str(binding["input_name"] or "image")] = image_value
-    return node_inputs
-
-
-def _run_image_generate_via_remote_comfy_firered_chain(task_id: str, payload: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
-    source, gateway_url, token = _comfy_gateway_from_payload(payload)
-    source_label = "本地 ComfyUI" if source == "local" else "远程 ComfyUI"
-    if not gateway_url:
-        raise RuntimeError(f"{source_label} 网关未配置，请先在后台保存网关地址")
-    prompt_text = _remote_comfy_prompt_from_payload("image_generate", payload)
-    negative_prompt = str(payload.get("negative_prompt") or payload.get("negative") or "").strip()
-    width = _to_int(payload.get("width"), 640)
-    height = _to_int(payload.get("height"), 960)
-    steps = _to_int(payload.get("steps"), 6)
-    batch_size = _to_int(payload.get("batch_size"), 1)
-    seed_raw = payload.get("seed")
-    seed = None if str(seed_raw or "").strip() in {"", "auto", "None", "null"} else min(max(_to_int(seed_raw, 0), 0), 2147483647)
-
-    persona_workflow = _workflow_path_from_chain_config(
-        config,
-        ("persona_workflow", "person_workflow", "image1_workflow", "first_workflow"),
-        "人设1 金君雅.api.json",
-    )
-    zit_workflow = _workflow_path_from_chain_config(
-        config,
-        ("zit_workflow", "image2_workflow", "second_workflow"),
-        "ZIT_final_output.api.json",
-    )
-    firered_workflow = _workflow_path_from_chain_config(
-        config,
-        ("firered_workflow", "final_workflow", "workflow"),
-        "firered_api.json",
-    )
-    if not persona_workflow or not zit_workflow or not firered_workflow:
-        raise RuntimeError("image_generate 链式工作流缺少 persona_workflow、zit_workflow 或 firered_workflow")
-
-    if not negative_prompt and not _is_person_t2i_workflow("image_generate", persona_workflow):
-        negative_prompt = "low quality, blurry, distorted"
-
-    stage_results: list[dict[str, Any]] = []
-    _emit_stage(payload, stage="remote_comfy_chain", status="running", message=f"生成图1：{persona_workflow}", data={"workflow": persona_workflow})
-    image1_result = _run_remote_comfy_gateway_test(
-        gateway_url=gateway_url,
-        token=token,
-        workflow_path=persona_workflow,
-        prompt_text=prompt_text,
-        negative_prompt=negative_prompt,
-        width=width if width > 0 else None,
-        height=height if height > 0 else None,
-        steps=steps if steps > 0 else None,
-        seed=seed,
-        batch_size=batch_size if batch_size > 0 else None,
-        node_inputs=_merge_node_inputs(config.get("persona_node_inputs"), config.get("image1_node_inputs")),
-        timeout_seconds=max(_to_int(payload.get("remote_comfy_timeout_seconds"), 900), 30),
-        payload=payload,
-    )
-    image1_path = _first_remote_comfy_output_path(image1_result)
-    if not image1_path:
-        raise RuntimeError(f"图1工作流完成但没有返回可下载图片：{persona_workflow}")
-    stage_results.append({"stage": "image1", "workflow": persona_workflow, "output_path": image1_path, "result": image1_result})
-
-    _emit_stage(payload, stage="remote_comfy_chain", status="running", message=f"生成图2：{zit_workflow}", data={"workflow": zit_workflow})
-    image2_result = _run_remote_comfy_gateway_test(
-        gateway_url=gateway_url,
-        token=token,
-        workflow_path=zit_workflow,
-        prompt_text=prompt_text,
-        negative_prompt=negative_prompt,
-        width=width if width > 0 else None,
-        height=height if height > 0 else None,
-        steps=steps if steps > 0 else None,
-        seed=seed,
-        batch_size=batch_size if batch_size > 0 else None,
-        node_inputs=_merge_node_inputs(_remote_comfy_node_inputs_from_payload(payload, task_type="image_generate", workflow_path=zit_workflow), config.get("zit_node_inputs"), config.get("image2_node_inputs")),
-        timeout_seconds=max(_to_int(payload.get("remote_comfy_timeout_seconds"), 900), 30),
-        payload=payload,
-    )
-    image2_path = _first_remote_comfy_output_path(image2_result)
-    if not image2_path:
-        raise RuntimeError(f"图2工作流完成但没有返回可下载图片：{zit_workflow}")
-    stage_results.append({"stage": "image2", "workflow": zit_workflow, "output_path": image2_path, "result": image2_result})
-
-    upload_subfolder = f"telegram/{re.sub(r'[^a-zA-Z0-9._-]+', '_', str(task_id or uuid.uuid4().hex)).strip('._-') or uuid.uuid4().hex}"
-    image1_upload = _remote_comfy_gateway_upload_image(gateway_url=gateway_url, token=token, image_path=image1_path, subfolder=upload_subfolder)
-    image2_upload = _remote_comfy_gateway_upload_image(gateway_url=gateway_url, token=token, image_path=image2_path, subfolder=upload_subfolder)
-    firered_node_inputs = _build_firered_node_inputs(config, image1=str(image1_upload["image"]), image2=str(image2_upload["image"]))
-
-    _emit_stage(
-        payload,
-        stage="remote_comfy_chain",
-        status="running",
-        message=f"执行服装替换：{firered_workflow}",
-        data={"workflow": firered_workflow, "image1": image1_upload.get("image"), "image2": image2_upload.get("image")},
-    )
-    final_result = _run_remote_comfy_gateway_test(
-        gateway_url=gateway_url,
-        token=token,
-        workflow_path=firered_workflow,
-        prompt_text="",
-        negative_prompt="",
-        node_inputs=firered_node_inputs,
-        timeout_seconds=max(_to_int(payload.get("remote_comfy_timeout_seconds"), 900), 30),
-        apply_prompt=False,
-        payload=payload,
-    )
-    final_path = _first_remote_comfy_output_path(final_result)
-    if not final_path:
-        raise RuntimeError(f"firered_api 工作流完成但没有返回可下载图片：{firered_workflow}")
-    if Path(final_path).suffix.lower() not in IMAGE_EXTS:
-        raise RuntimeError(f"firered_api 返回的结果不是图片文件：{final_path}")
-    stage_results.append({"stage": "firered", "workflow": firered_workflow, "output_path": final_path, "result": final_result})
-
-    return {
-        "ok": True,
-        "message": f"{source_label} 图像生成链路完成",
-        "comfy_workflow_source": source,
-        "remote_comfy_workflow_path": firered_workflow,
-        "remote_comfy_prompt_id": str(final_result.get("prompt_id") or "").strip(),
-        "runninghub_task_id": str(final_result.get("prompt_id") or "").strip(),
-        "runninghub_usage": {},
-        "download_path": final_path,
-        "image_path": final_path,
-        "intermediate_image_paths": [image1_path, image2_path],
-        "raw_result": {
-            "mode": "firered_chain",
-            "image1_upload": _sanitize_payload(image1_upload),
-            "image2_upload": _sanitize_payload(image2_upload),
-            "stages": stage_results,
-        },
-    }
-
-
-def _new_image_qa_seed(excluded: set[int] | None = None) -> int:
-    excluded = excluded or set()
-    for _ in range(20):
-        seed = int(uuid.uuid4().int % 2147483647)
-        if seed > 0 and seed not in excluded:
-            return seed
-    return int(time.time() * 1000) % 2147483647 or 1
-
-
-def _collect_seed_values(value: Any) -> set[int]:
-    seeds: set[int] = set()
-    if isinstance(value, dict):
-        for key, item in value.items():
-            if "seed" in str(key or "").strip().lower():
-                try:
-                    seed = int(item)
-                    if seed >= 0:
-                        seeds.add(seed)
-                except Exception:
-                    pass
-            seeds.update(_collect_seed_values(item))
-    elif isinstance(value, list):
-        for item in value:
-            seeds.update(_collect_seed_values(item))
-    return seeds
-
-
-def _replace_seed_values(value: Any, seed: int) -> None:
-    if isinstance(value, dict):
-        for key, item in list(value.items()):
-            if "seed" in str(key or "").strip().lower():
-                value[key] = int(seed)
-                continue
-            _replace_seed_values(item, seed)
-    elif isinstance(value, list):
-        for item in value:
-            _replace_seed_values(item, seed)
-
-
-def _parse_qa_string_list(value: Any, limit: int = 6) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    out: list[str] = []
-    for item in value:
-        text = str(item or "").strip()
-        if text:
-            out.append(text)
-        if len(out) >= int(limit):
-            break
-    return out
-
-
-def _qa_score(value: Any, default: int = 75) -> int:
-    try:
-        score = float(value)
-        if 0 < score <= 10:
-            score *= 10
-        return max(0, min(100, int(round(score))))
-    except Exception:
-        return int(default)
-
-
-_HEAD_REQUIRED_PROMPT_PATTERN = re.compile(
-    r"(?:头部|头脸|脸部|面部|露脸|完整头部|完整面部|完整脸部|她的头|他的头|人物头|主角头|"
-    r"眼神|眼睛|目光|视线|凝视|注视|看向|望向|直视|表情|神情|微笑|嘴唇|"
-    r"head|face|facial|eyes?|gaze|expression|look(?:ing)?\s+(?:at|towards?)\s+(?:the\s+)?camera)",
-    re.IGNORECASE,
-)
-
-
-def _text_to_image_prompt_requires_visible_head(prompt_text: str) -> bool:
-    return bool(_HEAD_REQUIRED_PROMPT_PATTERN.search(str(prompt_text or "")))
-
-
-_GENERATED_PERSON_CLOTHING_REQUIREMENT_PATTERN = re.compile(
-    r"(?:穿着|穿著|服装|服裝|衣服|衣着|衣著|上衣|衬衫|襯衫|裙|短裙|长裙|長裙|裤|褲|外套|制服|校服|水手服|内衣|內衣|吊带|吊帶|睡衣|泳装|泳裝|"
-    r"shirt|blouse|skirt|dress|uniform|jacket|coat|pants|shorts|lingerie|bra|clothes|clothing|outfit)",
-    re.IGNORECASE,
-)
-
-
-def _generated_person_prompt_has_clothing_requirement(prompt_text: str) -> bool:
-    return bool(_GENERATED_PERSON_CLOTHING_REQUIREMENT_PATTERN.search(str(prompt_text or "")))
-
-
-_GENERATED_PERSON_BOUNDARY_ARTIFACT_PATTERN = re.compile(
-    r"(clip|clipping|intersect|intersection|fusion|fuse|floating|pasted|misaligned|sticker|hard[- ]?edge|"
-    r"穿模|穿插|交叠|交疊|融合|粘连|黏连|粘贴|粘貼|贴片|貼片|硬边|硬邊|错位|錯位|断裂|斷裂)",
-    re.IGNORECASE,
-)
-_GENERATED_PERSON_BOUNDARY_AREA_PATTERN = re.compile(
-    r"(clothing|fabric|garment|body|exposed|chest|breast|nipple|areola|strap|"
-    r"衣物|衣服|服装|服裝|布料|身体|身體|暴露|胸|乳|吊带|吊帶|肩带|肩帶|边界|邊界)",
-    re.IGNORECASE,
-)
-
-
-def _generated_person_boundary_artifact_mentioned(*values: Any) -> bool:
-    parts: list[str] = []
-    for value in values:
-        if isinstance(value, (list, tuple)):
-            parts.extend(str(item or "") for item in value)
-        else:
-            parts.append(str(value or ""))
-    text = "\n".join(parts)
-    return bool(
-        _GENERATED_PERSON_BOUNDARY_ARTIFACT_PATTERN.search(text)
-        and _GENERATED_PERSON_BOUNDARY_AREA_PATTERN.search(text)
-    )
-
-
-def _analyze_generated_person_image_quality(
-    *,
-    image_path: str,
-    prompt_text: str,
-    payload: dict[str, Any],
-    attempt: int,
-) -> dict[str, Any]:
-    path = Path(str(image_path or "")).expanduser()
-    if not path.exists() or not path.is_file() or path.suffix.lower() not in IMAGE_EXTS:
-        return {"inspected": False, "passed": True, "summary": "未找到可检查的图片文件。"}
-    requires_visible_head = _text_to_image_prompt_requires_visible_head(prompt_text)
-    system_prompt = "\n".join(
-        [
-            "你是严格的文生图自动 QA 检查员，只判断图片是否应该交付给用户。",
-            "核心目标：筛掉人物图像里明显不可交付的候选图，尤其是人体结构、肢体关系和画面语义异常。",
-            "必须拦截这些情况：肢体严重错乱、额外手脚或缺失手脚、手指融合或数量明显异常、关节反折、身体比例严重畸形、人物和背景/道具融合、多人或身体部位异常重叠、主体塌陷、画面意义不明、明显不符合提示词主体。",
-            "当生成提示词明确要求头部、脸部、眼神、目光、表情或看向镜头时，候选图必须完整包含人物头部，且脸部/眼神/表情区域不能被裁掉、遮挡到无法判断或缺失。",
-            "允许轻微姿势遮挡、自然透视、正常衣物遮挡和不影响交付的小瑕疵；不要因为题材、服装风格或审美偏好而扣分。",
-            "只根据可见画面质量、提示词符合度、人物结构完整性和交付可用性判断。",
-            "如果图像没有清晰人物，或者主体不是人物，也应按提示词符合度和画面语义判断是否拦截。",
-            "必须只返回 JSON，不要输出解释性正文。",
-            "Strict face visibility rule: when the prompt requires head, face, gaze, expression, or looking at camera, the face itself must be fully visible from forehead to chin: visible forehead/upper face, both eyes, nose, mouth, chin, and the main facial oval must be inside the frame and not hidden by crop. Do not fail for hair/top-of-head margin alone, but fail if the forehead or upper face is cropped, or if facial features are partially cut off.",
-            "R18 clothing-boundary rule: standalone exposed local rendering imperfections are not enough, and normal coherent garment openings/cutouts around exposed areas should pass. Reject clear clothing geometry failures: fabric visibly clips into/intersects/fuses with the body, garment pieces pass through exposed areas, disconnected floating fabric, pasted/sticker-like/misaligned local details caused by transparent fabric, or body/clothing boundaries that are visibly broken. Light or ambiguous edge blending should pass.",
-            "JSON schema:",
-            "{",
-            '  "summary": "中文一句话总结",',
-            '  "overallScore": 0,',
-            '  "promptMatchScore": 0,',
-            '  "anatomyScore": 0,',
-            '  "visualScore": 0,',
-            '  "limbOrBodyBroken": false,',
-            '  "extraOrMissingLimbs": false,',
-            '  "limbOverlapOrFusion": false,',
-            '  "handAnomalyVisible": false,',
-            '  "poseGeometryBroken": false,',
-            '  "bodyPartScaleAnomaly": false,',
-            '  "bodyShapeTooFull": false,',
-            '  "bodyShapeBulkyOrObese": false,',
-            '  "bodySilhouetteScore": 0,',
-            '  "promptMismatchVisible": false,',
-            '  "meaninglessOrCollapsed": false,',
-            '  "textOrWatermarkVisible": false,',
-            '  "headVisible": true,',
-            '  "headCroppedOrMissing": false,',
-            '  "faceIncompleteOrCropped": false,',
-            '  "exposedRegionArtifactVisible": false,',
-            '  "clothingBodyFusionVisible": false,',
-            '  "deliverableReady": false,',
-            '  "issues": ["中文问题1"],',
-            '  "fixPriorities": ["中文重试重点1"]',
-            "}",
-        ]
-    )
-    user_input = "\n".join(
-        [
-            f"生成提示词：{str(prompt_text or '').strip()}",
-            f"画面比例/分辨率：{payload.get('aspect_ratio') or ''} {payload.get('width') or ''}x{payload.get('height') or ''}".strip(),
-            f"当前为第 {max(int(attempt), 1)} 轮候选图，请判断是否可以直接显示给用户。",
-            "请先逐项核对可见人体几何：是否只有合理数量的手臂和手掌；每只手是否连接到正确手臂；手臂是否异常变粗、变长、断裂、穿过身体或与腿/枕头/床单融合；身体轮廓是否存在不可能的重叠、交叉或重复肢体。",
-            "若存在严重人体结构错误、肢体重叠错乱、身体融合、手部明显崩坏、手臂比例异常、额外肢体或画面无意义，请将 deliverableReady 设为 false，并把 limbOrBodyBroken 以及对应的细分字段设为 true。",
-            "额外检查人物身形：若可见人物身形明显过于丰满、厚重、臃肿、肥胖，或躯干/腰腹/四肢体量明显偏离轻盈自然的人物图交付要求，请将 bodyShapeTooFull 或 bodyShapeBulkyOrObese 设为 true，并降低 bodySilhouetteScore。",
-            "本次提示词要求头部/脸部/眼神/表情可见：是。若候选图没有完整头部，或头部/脸部/眼神/表情被裁切、缺失、遮挡到无法判断，请将 headVisible 设为 false，headCroppedOrMissing 设为 true，deliverableReady 设为 false。"
-            if requires_visible_head
-            else "本次提示词没有明确要求头部/脸部/眼神/表情可见：否。无需仅因普通构图裁切头部而拦截，但仍需按主体和画面语义判断。",
-            "Strictly inspect face visibility: pass only when the forehead/upper face, both eyes, nose, mouth, chin, and main face oval are visible. Reject if the frame cuts through the forehead or face, if only part of the face is visible, or if gaze/expression cannot be judged. Do not reject merely because hair/top-of-head margin is tight while the forehead and full face are visible.",
-            "Strictly inspect clothing/body boundaries: normal coherent garment openings/cutouts should pass. Reject clear failures: clothing clips into, intersects, or fuses with the body/exposed region; fabric pieces pass through exposed details; disconnected floating fabric; transparent fabric creates pasted/sticker-like/misaligned local details; or the body/clothing boundary is visibly broken. Pay special attention to requested exposed chest/upper-body regions. Light or ambiguous edge blending is not enough.",
-        ]
-    )
-    try:
-        result, selected, attempts = _request_llm_json_with_fallback(
-            source=payload,
-            user_input=user_input,
-            system_prompt=system_prompt,
-            image_paths=[str(path)],
-            retry_count=1,
-            request_label="图像自动QA",
-        )
-        parsed = result.get("parsed") if isinstance(result, dict) else None
-        if not isinstance(parsed, dict):
-            raise RuntimeError("图像自动 QA 未返回 JSON 对象")
-        report = {
-            "inspected": True,
-            "selected_model": str(selected.get("model") or "").strip() if isinstance(selected, dict) else "",
-            "attempts": attempts,
-            "summary": str(parsed.get("summary") or "图像 QA 检查完成。").strip(),
-            "overall_score": _qa_score(parsed.get("overallScore"), 75),
-            "prompt_match_score": _qa_score(parsed.get("promptMatchScore"), 75),
-            "anatomy_score": _qa_score(parsed.get("anatomyScore"), 75),
-            "visual_score": _qa_score(parsed.get("visualScore"), 75),
-            "limb_or_body_broken": parsed.get("limbOrBodyBroken") is True,
-            "extra_or_missing_limbs": parsed.get("extraOrMissingLimbs") is True,
-            "limb_overlap_or_fusion": parsed.get("limbOverlapOrFusion") is True,
-            "hand_anomaly_visible": parsed.get("handAnomalyVisible") is True,
-            "pose_geometry_broken": parsed.get("poseGeometryBroken") is True,
-            "body_part_scale_anomaly": parsed.get("bodyPartScaleAnomaly") is True,
-            "body_shape_too_full": parsed.get("bodyShapeTooFull") is True,
-            "body_shape_bulky_or_obese": parsed.get("bodyShapeBulkyOrObese") is True,
-            "body_silhouette_score": _qa_score(parsed.get("bodySilhouetteScore"), 85),
-            "prompt_mismatch_visible": parsed.get("promptMismatchVisible") is True,
-            "meaningless_or_collapsed": parsed.get("meaninglessOrCollapsed") is True,
-            "text_or_watermark_visible": parsed.get("textOrWatermarkVisible") is True,
-            "requires_visible_head": requires_visible_head,
-            "head_visible": (parsed.get("headVisible") is True) if requires_visible_head else parsed.get("headVisible") is not False,
-            "head_cropped_or_missing": parsed.get("headCroppedOrMissing") is True,
-            "face_incomplete_or_cropped": (
-                parsed.get("faceIncompleteOrCropped") is True
-                or (requires_visible_head and _detect_top_edge_face_crop_without_valid_face(str(path)))
-            ),
-            "exposed_region_artifact_visible": parsed.get("exposedRegionArtifactVisible") is True,
-            "clothing_body_fusion_visible": parsed.get("clothingBodyFusionVisible") is True,
-            "deliverable_ready": parsed.get("deliverableReady") is True,
-            "issues": _parse_qa_string_list(parsed.get("issues"), 6),
-            "fix_priorities": _parse_qa_string_list(parsed.get("fixPriorities"), 4),
-        }
-        reject = _should_reject_generated_person_image(report)
-        if not reject:
-            review_futures: dict[str, Any] = {}
-            with ThreadPoolExecutor(max_workers=4) as executor:
-                if requires_visible_head:
-                    review_futures["face"] = executor.submit(
-                        _analyze_generated_person_face_framing_quality,
-                        image_path=str(path),
-                        prompt_text=prompt_text,
-                        payload=payload,
-                        attempt=attempt,
-                    )
-                review_futures["body"] = executor.submit(
-                    _analyze_generated_person_body_shape_quality,
-                    image_path=str(path),
-                    prompt_text=prompt_text,
-                    payload=payload,
-                    attempt=attempt,
-                )
-                if _generated_person_prompt_has_clothing_requirement(prompt_text):
-                    review_futures["clothing"] = executor.submit(
-                        _analyze_generated_person_clothing_quality,
-                        image_path=str(path),
-                        prompt_text=prompt_text,
-                        payload=payload,
-                        attempt=attempt,
-                    )
-                review_futures["hand"] = executor.submit(
-                    _analyze_generated_person_hand_limb_quality,
-                    image_path=str(path),
-                    prompt_text=prompt_text,
-                    payload=payload,
-                    attempt=attempt,
-                )
-                face_audit = review_futures["face"].result() if "face" in review_futures else None
-                body_audit = review_futures["body"].result()
-                clothing_audit = review_futures["clothing"].result() if "clothing" in review_futures else None
-                audit = review_futures["hand"].result()
-
-            _merge_generated_person_face_framing_audit(report, face_audit)
-            reject = _should_reject_generated_person_image(report)
-        if not reject:
-            _merge_generated_person_body_shape_audit(report, body_audit)
-            reject = _should_reject_generated_person_image(report)
-        if not reject:
-            _merge_generated_person_clothing_audit(report, clothing_audit)
-            reject = _should_reject_generated_person_image(report)
-        if not reject:
-            _merge_generated_person_hand_limb_audit(report, audit)
-            reject = _should_reject_generated_person_image(report)
-        report["passed"] = not reject
-        return report
-    except Exception as exc:
-        return {
-            "inspected": False,
-            "passed": False,
-            "qa_unavailable": True,
-            "summary": "图像自动 QA 暂不可用，未放行当前结果。",
-            "error": str(exc),
-            "issues": ["图像自动 QA 未完成，不能确认候选图可交付。"],
-        }
-
-
-
-
-def _detect_top_edge_face_crop_without_valid_face(image_path: str) -> bool:
-    try:
-        import cv2  # type: ignore
-        import numpy as np  # type: ignore
-    except Exception:
-        return False
-    try:
-        img = cv2.imread(str(image_path))
-        if img is None:
-            return False
-        h, w = img.shape[:2]
-        if h <= 0 or w <= 0:
-            return False
-        ycrcb = cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb)
-        y_chan, cr_chan, cb_chan = cv2.split(ycrcb)
-        skin = ((cr_chan >= 133) & (cr_chan <= 178) & (cb_chan >= 70) & (cb_chan <= 135) & (y_chan >= 55))
-        x1, x2 = int(w * 0.18), int(w * 0.82)
-        top_h = max(6, int(h * 0.018))
-        upper_h = max(40, int(h * 0.16))
-        top_skin_ratio = float(skin[:top_h, x1:x2].mean())
-        upper_skin_ratio = float(skin[:upper_h, x1:x2].mean())
-        if not (top_skin_ratio >= 0.25 and upper_skin_ratio >= 0.18):
-            return False
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        cascades = []
-        for filename in ("haarcascade_frontalface_default.xml", "haarcascade_profileface.xml"):
-            try:
-                classifier = cv2.CascadeClassifier(cv2.data.haarcascades + filename)
-                if not classifier.empty():
-                    cascades.append(classifier)
-            except Exception:
-                pass
-        valid_faces: list[tuple[int, int, int, int]] = []
-        min_face = max(80, int(min(h, w) * 0.08))
-        for classifier in cascades:
-            for (x, y, fw, fh) in classifier.detectMultiScale(gray, 1.08, 4, minSize=(min_face, min_face)):
-                if y < h * 0.55 and fh >= min_face and fw >= min_face:
-                    valid_faces.append((int(x), int(y), int(fw), int(fh)))
-            flipped = cv2.flip(gray, 1)
-            for (x, y, fw, fh) in classifier.detectMultiScale(flipped, 1.08, 4, minSize=(min_face, min_face)):
-                x = w - x - fw
-                if y < h * 0.55 and fh >= min_face and fw >= min_face:
-                    valid_faces.append((int(x), int(y), int(fw), int(fh)))
-        return not bool(valid_faces)
-    except Exception:
-        return False
-
-def _analyze_generated_person_face_framing_quality(
-    *,
-    image_path: str,
-    prompt_text: str,
-    payload: dict[str, Any],
-    attempt: int,
-) -> dict[str, Any]:
-    path = Path(str(image_path or "")).expanduser()
-    if not path.exists() or not path.is_file() or path.suffix.lower() not in IMAGE_EXTS:
-        return {"inspected": False, "qa_unavailable": True, "summary": "No image file available for face framing QA."}
-    system_prompt = "\n".join(
-        [
-            "You are a strict face-framing QA reviewer for generated person images.",
-            "Only judge whether the face is completely visible in the frame. Do not judge clothing, body shape, style, or subject matter.",
-            "Pass only if the visible main face includes the forehead/upper face, both eyes, nose, mouth, chin, and the main facial oval. Hair/top-of-head may be tight or cropped, but the forehead and all facial features must be visible.",
-            "Fail if the frame cuts through the forehead or face, if eyes are missing/cropped, if only the lower face is visible, if the face is partly outside the image, or if gaze/expression cannot be judged because facial features are cropped.",
-            "Return strict JSON only. Put issues in Chinese.",
-            "JSON schema:",
-            "{",
-            '  "summary": "脸部完整性检查结论",',
-            '  "faceVisible": false,',
-            '  "fullFaceVisible": false,',
-            '  "foreheadVisible": false,',
-            '  "bothEyesVisible": false,',
-            '  "noseVisible": false,',
-            '  "mouthVisible": false,',
-            '  "chinVisible": false,',
-            '  "faceCroppedOrMissing": false,',
-            '  "confidence": 0,',
-            '  "issues": ["脸部裁切或缺失问题"]',
-            "}",
-        ]
-    )
-    user_input = "\n".join(
-        [
-            f"Generation prompt: {str(prompt_text or '').strip()}",
-            f"Candidate round: {max(int(attempt), 1)}.",
-            "Inspect only the main face. The acceptance standard is forehead-to-chin full face visibility, not just any detectable face-like area.",
-            "If forehead/upper face, eyes, nose, mouth, or chin are cropped or outside the frame, mark faceCroppedOrMissing=true and fullFaceVisible=false.",
-        ]
-    )
-    try:
-        result, selected, attempts = _request_llm_json_with_fallback(
-            source=payload,
-            user_input=user_input,
-            system_prompt=system_prompt,
-            image_paths=[str(path)],
-            retry_count=1,
-            request_label="face framing QA",
-        )
-        parsed = result.get("parsed") if isinstance(result, dict) else None
-        if not isinstance(parsed, dict):
-            raise RuntimeError("face framing QA did not return a JSON object")
-        return {
-            "inspected": True,
-            "selected_model": str(selected.get("model") or "").strip() if isinstance(selected, dict) else "",
-            "attempts": attempts,
-            "summary": str(parsed.get("summary") or "脸部 QA 检查完成。").strip(),
-            "face_visible": parsed.get("faceVisible") is True,
-            "full_face_visible": parsed.get("fullFaceVisible") is True,
-            "forehead_visible": parsed.get("foreheadVisible") is True,
-            "both_eyes_visible": parsed.get("bothEyesVisible") is True,
-            "nose_visible": parsed.get("noseVisible") is True,
-            "mouth_visible": parsed.get("mouthVisible") is True,
-            "chin_visible": parsed.get("chinVisible") is True,
-            "face_cropped_or_missing": parsed.get("faceCroppedOrMissing") is True,
-            "confidence": _qa_score(parsed.get("confidence"), 75),
-            "issues": _parse_qa_string_list(parsed.get("issues"), 6),
-        }
-    except Exception as exc:
-        return {
-            "inspected": False,
-            "qa_unavailable": True,
-            "summary": "脸部 QA 暂不可用，已跳过专项复审。",
-            "error": str(exc),
-            "issues": ["脸部 QA 未完成，不能确认脸部构图完整。"],
-        }
-
-
-def _merge_generated_person_face_framing_audit(report: dict[str, Any], audit: dict[str, Any] | None) -> None:
-    if not isinstance(report, dict) or not isinstance(audit, dict):
-        return
-    report["face_framing_audit"] = audit
-    if not _to_bool(audit.get("inspected"), False):
-        if _to_bool(audit.get("qa_unavailable"), False):
-            report["qa_unavailable"] = True
-            issues = _parse_qa_string_list(report.get("issues"), 6)
-            issues.extend(_parse_qa_string_list(audit.get("issues"), 3))
-            report["issues"] = _parse_qa_string_list(issues, 6)
-        return
-    confidence = _to_int(audit.get("confidence"), 75)
-    missing = (
-        _to_bool(audit.get("face_cropped_or_missing"), False)
-        or not _to_bool(audit.get("face_visible"), False)
-        or not _to_bool(audit.get("full_face_visible"), False)
-        or not _to_bool(audit.get("forehead_visible"), False)
-        or not _to_bool(audit.get("both_eyes_visible"), False)
-        or not _to_bool(audit.get("nose_visible"), False)
-        or not _to_bool(audit.get("mouth_visible"), False)
-        or not _to_bool(audit.get("chin_visible"), False)
-    )
-    if not missing or confidence < 70:
-        return
-    report["head_visible"] = False
-    report["head_cropped_or_missing"] = True
-    report["face_incomplete_or_cropped"] = True
-    report["deliverable_ready"] = False
-    issues = _parse_qa_string_list(report.get("issues"), 6)
-    audit_issues = _parse_qa_string_list(audit.get("issues"), 6)
-    if audit_issues:
-        issues.extend(audit_issues)
-    else:
-        issues.append(str(audit.get("summary") or "脸部构图不完整或被裁切。").strip())
-    report["issues"] = _parse_qa_string_list(issues, 6)
-
-def _analyze_generated_person_body_shape_quality(
-    *,
-    image_path: str,
-    prompt_text: str,
-    payload: dict[str, Any],
-    attempt: int,
-) -> dict[str, Any]:
-    path = Path(str(image_path or "")).expanduser()
-    if not path.exists() or not path.is_file() or path.suffix.lower() not in IMAGE_EXTS:
-        return {"inspected": False, "summary": "未找到可複審的圖片文件。"}
-    persona_body_profile = _persona_body_profile_for_payload(payload)
-    persona_body_reference = str(persona_body_profile.get("body_profile_prompt") or "").strip()
-    system_prompt = "\n".join(
-        [
-            "你是人物圖像身形視覺 QA 複審員，只判斷候選圖是否適合交付。",
-            "目標：篩掉身形明顯過於豐滿、厚重、臃腫或肥胖的人物候選圖，保留身形自然、輕盈、比例穩定、符合提示詞的人物圖。",
-            "只根據可見畫面判斷，不推測真實身份、年齡、健康狀態或現實個人屬性；不要輸出冒犯性描述。",
-            "如果輸入中提供了人設體型參考，請只把它作為非露骨的體型比例與輪廓一致性標準：肩頸、上半身輪廓、腰腹、胯部、腿部和手臂比例需要接近參考；若明顯漂移成寬肩、粗腰、短腿、厚重體型、男性化軀幹或通用人物身形，應標記不通過。",
-            "若人物身體不可見、只有臉部特寫、被衣物或遮擋物完全遮住，不能可靠判斷身形時，將 clearPersonBodyVisible 設為 false，且不要僅因此攔截。",
-            "若可見單人或主體人物的腰腹、軀幹、四肢或整體輪廓明顯偏厚、偏圓、偏臃腫、體量過大，或與提示詞中的輕盈/纖細/自然人物形象明顯不符，必須標記 bodyShapeTooFull 或 bodyShapeBulkyOrObese。",
-            "額外檢查上半身前側輪廓：若出現誇張球形、硬邊貼圖感、比例過大、左右結構明顯失衡、與軀幹連接不自然、像局部被放大或覆蓋到身體上的錯誤造型，必須將 upperTorsoContourAnomaly 設為 true，並視為不可交付。",
-            "正常透視、寬鬆衣物、自然姿勢、鏡頭壓縮或健康自然曲線不應被誤判；只有明顯不符合交付要求時才攔截。",
-            "必須只返回 JSON，不要輸出解釋性正文。",
-            "Exposed local detail rule: standalone exposed local rendering imperfections should not fail this body-shape audit. Mark exposedRegionAnatomyArtifact only when the issue is tied to clothing/body clipping, intersection, fusion, pasted/sticker-like texture, hard broken edge, or impossible garment boundary.",
-            "JSON schema:",
-            "{",
-            '  "summary": "中文一句話總結",',
-            '  "clearPersonBodyVisible": false,',
-            '  "bodyShapeTooFull": false,',
-            '  "bodyShapeBulkyOrObese": false,',
-            '  "upperTorsoContourAnomaly": false,',
-            '  "exposedRegionAnatomyArtifact": false,',
-            '  "bodySilhouetteScore": 0,',
-            '  "confidence": 0,',
-            '  "issues": ["中文問題1"]',
-            "}",
-        ]
-    )
-    user_input = "\n".join(
-        [
-            f"生成提示詞：{str(prompt_text or '').strip()}",
-            f"人設體型參考：{persona_body_reference}" if persona_body_reference else "",
-            f"當前為第 {max(int(attempt), 1)} 輪候選圖，通過第一輪通用 QA，現在進行身形視覺複審。",
-            "請觀察主體人物的整體輪廓、肩腰比例、腰腹厚度、四肢體量和衣物下的身形輪廓。若身形明顯過於豐滿、厚重、臃腫或肥胖，請標記為不可交付。",
-            "請特別檢查上半身前側輪廓是否出現錯誤造型：誇張球形、硬邊貼圖感、局部尺寸過大、左右不平衡、與軀幹銜接不自然、比例明顯偏離人設體型參考。若存在，upperTorsoContourAnomaly 必須為 true。",
-            "Also inspect exposed local detail rendering only when it interacts with clothing/body boundaries: fabric clipping, intersection, fusion, pasted/sticker-like hard edge, impossible garment edge, or clothing passing through exposed regions may set exposedRegionAnatomyArtifact=true.",
-        ]
-    )
-    try:
-        result, selected, attempts = _request_llm_json_with_fallback(
-            source=payload,
-            user_input=user_input,
-            system_prompt=system_prompt,
-            image_paths=[str(path)],
-            retry_count=1,
-            request_label="圖像身形視覺複審",
-        )
-        parsed = result.get("parsed") if isinstance(result, dict) else None
-        if not isinstance(parsed, dict):
-            raise RuntimeError("圖像身形視覺複審未返回 JSON 對象")
-        return {
-            "inspected": True,
-            "selected_model": str(selected.get("model") or "").strip() if isinstance(selected, dict) else "",
-            "attempts": attempts,
-            "summary": str(parsed.get("summary") or "身形視覺複審完成。").strip(),
-            "clear_person_body_visible": parsed.get("clearPersonBodyVisible") is True,
-            "body_shape_too_full": parsed.get("bodyShapeTooFull") is True,
-            "body_shape_bulky_or_obese": parsed.get("bodyShapeBulkyOrObese") is True,
-            "upper_torso_contour_anomaly": parsed.get("upperTorsoContourAnomaly") is True,
-            "exposed_region_anatomy_artifact": parsed.get("exposedRegionAnatomyArtifact") is True,
-            "body_silhouette_score": _qa_score(parsed.get("bodySilhouetteScore"), 85),
-            "confidence": _qa_score(parsed.get("confidence"), 75),
-            "issues": _parse_qa_string_list(parsed.get("issues"), 6),
-        }
-    except Exception as exc:
-        return {
-            "inspected": False,
-            "qa_unavailable": True,
-            "summary": "圖像身形視覺複審暫不可用，未放行當前結果。",
-            "error": str(exc),
-            "issues": ["圖像身形視覺複審未完成，不能確認候選圖可交付。"],
-        }
-
-
-def _analyze_generated_person_clothing_quality(
-    *,
-    image_path: str,
-    prompt_text: str,
-    payload: dict[str, Any],
-    attempt: int,
-) -> dict[str, Any]:
-    path = Path(str(image_path or "")).expanduser()
-    if not _generated_person_prompt_has_clothing_requirement(prompt_text):
-        return {"inspected": False, "skipped": True, "summary": "No explicit clothing requirement in prompt."}
-    if not path.exists() or not path.is_file() or path.suffix.lower() not in IMAGE_EXTS:
-        return {"inspected": False, "summary": "No image file available for clothing QA."}
-    system_prompt = "\n".join(
-        [
-            "You are a strict clothing, clothing-color, and clothing-geometry QA reviewer for generated person images.",
-            "Only compare visible clothing against the generation prompt and visible clothing/body boundary quality. Do not judge aesthetics, body shape, pose style, or subject matter.",
-            "Check garment type, main garment color, requested clothing state, and whether the clothing is physically coherent on the body without clipping, fusion, impossible openings, floating fabric, or pasted/translucent boundary artifacts.",
-            "Be tolerant of shadows, highlights, folds, transparency, small trim colors, and minor lighting shifts. Do not fail a candidate for tiny color-temperature differences.",
-            "Fail when the requested garment type is clearly absent or replaced, the main requested garment color is clearly wrong, the requested clothing state is clearly contradicted, or the garment clearly clips into/fuses with the body or exposed regions. Normal coherent openings/cutouts are acceptable; broken boundaries, fabric passing through body, floating/disconnected fabric, or transparent-fabric pasted/sticker-like/misaligned local details should fail.",
-            "If clothing is mostly hidden and cannot be reliably judged, mark clothingRequirementVisible as false and do not mark mismatch.",
-            "Return JSON only. Put user-facing issues in Chinese.",
-            "JSON schema:",
-            "{",
-            '  "summary": "中文一句话总结",',
-            '  "clothingRequirementVisible": false,',
-            '  "requiredClothing": ["白色衬衫"],',
-            '  "requiredColors": ["白色"],',
-            '  "visibleClothing": ["白色衬衫"],',
-            '  "visibleColors": ["白色"],',
-            '  "garmentMismatchVisible": false,',
-            '  "colorMismatchVisible": false,',
-            '  "clothingStateMismatchVisible": false,',
-            '  "clothingClippingOrFusionVisible": false,',
-            '  "impossibleClothingStructureVisible": false,',
-            '  "exposedRegionClothingConflictVisible": false,',
-            '  "clothingMatchScore": 0,',
-            '  "colorMatchScore": 0,',
-            '  "confidence": 0,',
-            '  "issues": ["中文问题1"]',
-            "}",
-        ]
-    )
-    user_input = "\n".join(
-        [
-            f"Generation prompt: {str(prompt_text or '').strip()}",
-            f"Candidate round: {max(int(attempt), 1)}.",
-            "Extract the clothing and color requirements from the prompt, then compare them to the visible candidate image.",
-            "If the prompt says white shirt and black skirt, a red dress or blue jacket is a visible mismatch. If the prompt requests an open shirt or raised skirt, a fully closed or different garment state is a state mismatch.",
-            "Fail candidates when fabric edges pass through the body, clothing and exposed body details are clearly fused into one broken texture, fabric is floating/disconnected, garment openings are physically incoherent, or translucent garments create clearly pasted/sticker-like/misaligned local details. Pay special attention to requested chest/upper-body clothing boundaries. Do not fail normal coherent garment openings or mild edge blending.",
-            "If the candidate preserves the garment type and main color but lighting makes it warmer/cooler, pass it.",
-        ]
-    )
-    try:
-        result, selected, attempts = _request_llm_json_with_fallback(
-            source=payload,
-            user_input=user_input,
-            system_prompt=system_prompt,
-            image_paths=[str(path)],
-            retry_count=1,
-            request_label="image clothing color QA",
-        )
-        parsed = result.get("parsed") if isinstance(result, dict) else None
-        if not isinstance(parsed, dict):
-            raise RuntimeError("image clothing color QA did not return a JSON object")
-        return {
-            "inspected": True,
-            "selected_model": str(selected.get("model") or "").strip() if isinstance(selected, dict) else "",
-            "attempts": attempts,
-            "summary": str(parsed.get("summary") or "服装颜色 QA 检查完成。").strip(),
-            "clothing_requirement_visible": parsed.get("clothingRequirementVisible") is True,
-            "required_clothing": _parse_qa_string_list(parsed.get("requiredClothing"), 6),
-            "required_colors": _parse_qa_string_list(parsed.get("requiredColors"), 6),
-            "visible_clothing": _parse_qa_string_list(parsed.get("visibleClothing"), 6),
-            "visible_colors": _parse_qa_string_list(parsed.get("visibleColors"), 6),
-            "garment_mismatch_visible": parsed.get("garmentMismatchVisible") is True,
-            "color_mismatch_visible": parsed.get("colorMismatchVisible") is True,
-            "clothing_state_mismatch_visible": parsed.get("clothingStateMismatchVisible") is True,
-            "clothing_clipping_or_fusion_visible": parsed.get("clothingClippingOrFusionVisible") is True,
-            "impossible_clothing_structure_visible": parsed.get("impossibleClothingStructureVisible") is True,
-            "exposed_region_clothing_conflict_visible": parsed.get("exposedRegionClothingConflictVisible") is True,
-            "clothing_match_score": _qa_score(parsed.get("clothingMatchScore"), 85),
-            "color_match_score": _qa_score(parsed.get("colorMatchScore"), 85),
-            "confidence": _qa_score(parsed.get("confidence"), 75),
-            "issues": _parse_qa_string_list(parsed.get("issues"), 6),
-        }
-    except Exception as exc:
-        return {
-            "inspected": False,
-            "qa_unavailable": True,
-            "summary": "服装颜色 QA 暂不可用，已跳过专项复审。",
-            "error": str(exc),
-            "issues": ["服装颜色 QA 未完成。"],
-        }
-
-
-def _analyze_generated_person_hand_limb_quality(
-    *,
-    image_path: str,
-    prompt_text: str,
-    payload: dict[str, Any],
-    attempt: int,
-) -> dict[str, Any]:
-    path = Path(str(image_path or "")).expanduser()
-    if not path.exists() or not path.is_file() or path.suffix.lower() not in IMAGE_EXTS:
-        return {"inspected": False, "summary": "未找到可复审的图片文件。"}
-    system_prompt = "\n".join(
-        [
-            "你是专门检查人物图片手部和肢体结构的 QA 复审员。",
-            "只检查可见人体结构，不评价题材、服装、姿势风格或审美偏好。",
-            "重点查找：多出来的手、重复手掌、额外手臂、手臂从错误位置长出、手臂或手掌与身体/衣服/背景融合、手指严重粘连或数量明显异常、肢体穿模、肢体断裂、身体轮廓出现重复人体部位。",
-            "只要怀疑存在额外手掌、额外手臂、手部明显崩坏、肢体融合或连接错误，就必须标记 suspected 字段为 true。不要因为整体画面好看而放行。",
-            "如果是单个人物图，正常最多只能有 2 只可见手和 2 条可见手臂；看到 3 个以上类似手掌/手臂的结构时，按额外肢体处理。",
-            "必须只返回 JSON，不要输出解释性正文。",
-            "JSON schema:",
-            "{",
-            '  "summary": "中文一句话总结",',
-            '  "visibleHandCount": 0,',
-            '  "visibleArmCount": 0,',
-            '  "extraHandSuspected": false,',
-            '  "extraArmSuspected": false,',
-            '  "handFingerAnomalySuspected": false,',
-            '  "armAttachmentAnomalySuspected": false,',
-            '  "limbFusionSuspected": false,',
-            '  "bodyDuplicatePartSuspected": false,',
-            '  "confidence": 0,',
-            '  "issues": ["中文问题1"]',
-            "}",
-        ]
-    )
-    user_input = "\n".join(
-        [
-            f"生成提示词：{str(prompt_text or '').strip()}",
-            f"当前为第 {max(int(attempt), 1)} 轮候选图，通过了第一轮通用 QA，现在进行手部和肢体复审。",
-            "请从整张图里逐个数可见手掌/手部结构和可见手臂结构。若有类似第三只手、重复手掌、手臂位置不合理、手臂穿过身体或手和衣服/背景融合，请标记为异常。",
-        ]
-    )
-    try:
-        result, selected, attempts = _request_llm_json_with_fallback(
-            source=payload,
-            user_input=user_input,
-            system_prompt=system_prompt,
-            image_paths=[str(path)],
-            retry_count=1,
-            request_label="图像手部肢体复审",
-        )
-        parsed = result.get("parsed") if isinstance(result, dict) else None
-        if not isinstance(parsed, dict):
-            raise RuntimeError("图像手部肢体复审未返回 JSON 对象")
-        return {
-            "inspected": True,
-            "selected_model": str(selected.get("model") or "").strip() if isinstance(selected, dict) else "",
-            "attempts": attempts,
-            "summary": str(parsed.get("summary") or "手部肢体复审完成。").strip(),
-            "visible_hand_count": _to_int(parsed.get("visibleHandCount"), 0),
-            "visible_arm_count": _to_int(parsed.get("visibleArmCount"), 0),
-            "extra_hand_suspected": parsed.get("extraHandSuspected") is True,
-            "extra_arm_suspected": parsed.get("extraArmSuspected") is True,
-            "hand_finger_anomaly_suspected": parsed.get("handFingerAnomalySuspected") is True,
-            "arm_attachment_anomaly_suspected": parsed.get("armAttachmentAnomalySuspected") is True,
-            "limb_fusion_suspected": parsed.get("limbFusionSuspected") is True,
-            "body_duplicate_part_suspected": parsed.get("bodyDuplicatePartSuspected") is True,
-            "confidence": _qa_score(parsed.get("confidence"), 75),
-            "issues": _parse_qa_string_list(parsed.get("issues"), 6),
-        }
-    except Exception as exc:
-        return {
-            "inspected": False,
-            "qa_unavailable": True,
-            "summary": "图像手部肢体复审暂不可用，未放行当前结果。",
-            "error": str(exc),
-            "issues": ["图像手部肢体复审未完成，不能确认候选图可交付。"],
-        }
-
-
-def _merge_generated_person_body_shape_audit(report: dict[str, Any], audit: dict[str, Any] | None) -> None:
-    if not isinstance(report, dict) or not isinstance(audit, dict):
-        return
-    report["body_shape_audit"] = audit
-    if not _to_bool(audit.get("inspected"), False):
-        if _to_bool(audit.get("qa_unavailable"), False):
-            report["qa_unavailable"] = True
-            issues = _parse_qa_string_list(report.get("issues"), 6)
-            issues.extend(_parse_qa_string_list(audit.get("issues"), 3))
-            report["issues"] = _parse_qa_string_list(issues, 6)
-        return
-    if not _to_bool(audit.get("clear_person_body_visible"), False):
-        return
-
-    silhouette_score = _to_int(audit.get("body_silhouette_score"), 85)
-    confidence = _to_int(audit.get("confidence"), 75)
-    too_full = _to_bool(audit.get("body_shape_too_full"), False)
-    bulky_or_obese = _to_bool(audit.get("body_shape_bulky_or_obese"), False)
-    upper_torso_anomaly = _to_bool(audit.get("upper_torso_contour_anomaly"), False)
-    exposed_region_artifact = _to_bool(audit.get("exposed_region_anatomy_artifact"), False)
-    boundary_artifact_mentioned = _generated_person_boundary_artifact_mentioned(
-        audit.get("summary"),
-        _parse_qa_string_list(audit.get("issues"), 6),
-    )
-    upper_torso_failure = upper_torso_anomaly and (
-        (confidence >= 85 and (silhouette_score <= 45 or too_full or bulky_or_obese))
-        or (boundary_artifact_mentioned and confidence >= 80 and silhouette_score <= 55)
-    )
-    exposed_region_failure = exposed_region_artifact and confidence >= 80 and (
-        silhouette_score <= 55 or boundary_artifact_mentioned
-    )
-    # Prominent requested R18 curves are not enough to fail QA by themselves.
-    # Reject clear upper-body contour artifacts, heavy/bulky body drift, or very low silhouette quality.
-    extreme_body_shape = (
-        upper_torso_failure
-        or exposed_region_failure
-        or silhouette_score < 25
-        or (silhouette_score < 35 and confidence >= 90 and (too_full or bulky_or_obese))
-        or (silhouette_score < 45 and confidence >= 95 and bulky_or_obese)
-    )
-    if not extreme_body_shape:
-        report["body_silhouette_score"] = min(_to_int(report.get("body_silhouette_score"), 85), silhouette_score)
-        return
-
-    report["body_shape_too_full"] = True
-    if bulky_or_obese:
-        report["body_shape_bulky_or_obese"] = True
-    if upper_torso_anomaly:
-        report["upper_torso_contour_anomaly"] = True
-        report["body_part_scale_anomaly"] = True
-    if exposed_region_artifact:
-        report["exposed_region_artifact_visible"] = True
-        report["body_part_scale_anomaly"] = True
-    report["body_silhouette_score"] = min(_to_int(report.get("body_silhouette_score"), 85), silhouette_score)
-    report["prompt_mismatch_visible"] = True
-    report["deliverable_ready"] = False
-    issues = _parse_qa_string_list(report.get("issues"), 6)
-    audit_issues = _parse_qa_string_list(audit.get("issues"), 6)
-    if audit_issues:
-        issues.extend(audit_issues)
-    else:
-        issues.append(str(audit.get("summary") or "身形視覺複審發現人物身形不符合交付要求。").strip())
-    report["issues"] = _parse_qa_string_list(issues, 6)
-
-
-def _merge_generated_person_clothing_audit(report: dict[str, Any], audit: dict[str, Any] | None) -> None:
-    if not isinstance(report, dict) or not isinstance(audit, dict):
-        return
-    report["clothing_audit"] = audit
-    if not _to_bool(audit.get("inspected"), False):
-        return
-    if not _to_bool(audit.get("clothing_requirement_visible"), False):
-        return
-
-    clothing_score = _to_int(audit.get("clothing_match_score"), 85)
-    color_score = _to_int(audit.get("color_match_score"), 85)
-    confidence = _to_int(audit.get("confidence"), 75)
-    garment_mismatch = _to_bool(audit.get("garment_mismatch_visible"), False)
-    color_mismatch = _to_bool(audit.get("color_mismatch_visible"), False)
-    state_mismatch = _to_bool(audit.get("clothing_state_mismatch_visible"), False)
-    clipping_or_fusion = _to_bool(audit.get("clothing_clipping_or_fusion_visible"), False)
-    impossible_structure = _to_bool(audit.get("impossible_clothing_structure_visible"), False)
-    exposed_region_conflict = _to_bool(audit.get("exposed_region_clothing_conflict_visible"), False)
-    clothing_artifact = clipping_or_fusion or impossible_structure or exposed_region_conflict
-    boundary_artifact_mentioned = _generated_person_boundary_artifact_mentioned(
-        audit.get("summary"),
-        _parse_qa_string_list(audit.get("issues"), 6),
-    )
-    severe_clothing_artifact = clothing_artifact and (
-        confidence >= 85
-        or (
-            confidence >= 75
-            and (clothing_score <= 75 or boundary_artifact_mentioned or impossible_structure or exposed_region_conflict)
-        )
-    )
-    rejectable = (
-        severe_clothing_artifact
-        or (garment_mismatch and clothing_score < 75 and confidence >= 70)
-        or (state_mismatch and clothing_score < 75 and confidence >= 70)
-        or (color_mismatch and color_score < 70 and confidence >= 75)
-        or (clothing_score < 55 and confidence >= 70)
-        or (color_score < 55 and confidence >= 75)
-    )
-    if not rejectable:
-        return
-
-    report["clothing_mismatch_visible"] = True
-    if garment_mismatch:
-        report["garment_mismatch_visible"] = True
-    if color_mismatch:
-        report["clothing_color_mismatch_visible"] = True
-    if state_mismatch:
-        report["clothing_state_mismatch_visible"] = True
-    if clipping_or_fusion:
-        report["clothing_clipping_or_fusion_visible"] = True
-    if impossible_structure:
-        report["impossible_clothing_structure_visible"] = True
-    if exposed_region_conflict:
-        report["exposed_region_clothing_conflict_visible"] = True
-    report["prompt_mismatch_visible"] = True
-    report["prompt_match_score"] = min(_to_int(report.get("prompt_match_score"), 75), clothing_score, color_score)
-    report["deliverable_ready"] = False
-    issues = _parse_qa_string_list(report.get("issues"), 6)
-    audit_issues = _parse_qa_string_list(audit.get("issues"), 6)
-    if audit_issues:
-        issues.extend(audit_issues)
-    else:
-        issues.append(str(audit.get("summary") or "服装或服装颜色与提示词不匹配。").strip())
-    report["issues"] = _parse_qa_string_list(issues, 6)
-
-
-def _merge_generated_person_hand_limb_audit(report: dict[str, Any], audit: dict[str, Any] | None) -> None:
-    if not isinstance(report, dict) or not isinstance(audit, dict):
-        return
-    report["hand_limb_audit"] = audit
-    if not _to_bool(audit.get("inspected"), False):
-        if _to_bool(audit.get("qa_unavailable"), False):
-            report["qa_unavailable"] = True
-            issues = _parse_qa_string_list(report.get("issues"), 6)
-            issues.extend(_parse_qa_string_list(audit.get("issues"), 3))
-            report["issues"] = _parse_qa_string_list(issues, 6)
-        return
-
-    visible_hand_count = _to_int(audit.get("visible_hand_count"), 0)
-    visible_arm_count = _to_int(audit.get("visible_arm_count"), 0)
-    suspect_keys = (
-        "extra_hand_suspected",
-        "extra_arm_suspected",
-        "hand_finger_anomaly_suspected",
-        "arm_attachment_anomaly_suspected",
-        "limb_fusion_suspected",
-        "body_duplicate_part_suspected",
-    )
-    suspicious = any(_to_bool(audit.get(key), False) for key in suspect_keys)
-    suspicious = suspicious or visible_hand_count > 2 or visible_arm_count > 2
-    if not suspicious:
-        return
-
-    report["limb_or_body_broken"] = True
-    if _to_bool(audit.get("extra_hand_suspected"), False) or _to_bool(audit.get("extra_arm_suspected"), False) or visible_hand_count > 2 or visible_arm_count > 2:
-        report["extra_or_missing_limbs"] = True
-    if _to_bool(audit.get("limb_fusion_suspected"), False) or _to_bool(audit.get("body_duplicate_part_suspected"), False):
-        report["limb_overlap_or_fusion"] = True
-    if _to_bool(audit.get("hand_finger_anomaly_suspected"), False) or _to_bool(audit.get("extra_hand_suspected"), False) or visible_hand_count > 2:
-        report["hand_anomaly_visible"] = True
-    if _to_bool(audit.get("arm_attachment_anomaly_suspected"), False) or visible_arm_count > 2:
-        report["pose_geometry_broken"] = True
-    report["anatomy_score"] = min(_to_int(report.get("anatomy_score"), 75), 45)
-    report["deliverable_ready"] = False
-    issues = _parse_qa_string_list(report.get("issues"), 6)
-    audit_issues = _parse_qa_string_list(audit.get("issues"), 6)
-    if audit_issues:
-        issues.extend(audit_issues)
-    else:
-        issues.append(str(audit.get("summary") or "手部或肢体结构复审发现异常。").strip())
-    report["issues"] = _parse_qa_string_list(issues, 6)
-
-
-def _should_reject_generated_person_image(report: dict[str, Any] | None) -> bool:
-    if not isinstance(report, dict):
-        return False
-    if report.get("passed") is False:
-        return True
-    if not _to_bool(report.get("inspected"), False):
-        return _to_bool(report.get("qa_unavailable"), False)
-    body_audit = report.get("body_shape_audit") if isinstance(report.get("body_shape_audit"), dict) else {}
-    if body_audit and not _to_bool(body_audit.get("inspected"), False):
-        return _to_bool(body_audit.get("qa_unavailable"), False)
-    if body_audit:
-        if _to_bool(body_audit.get("clear_person_body_visible"), False):
-            audit_silhouette = _to_int(body_audit.get("body_silhouette_score"), 85)
-            audit_confidence = _to_int(body_audit.get("confidence"), 75)
-            audit_too_full = _to_bool(body_audit.get("body_shape_too_full"), False)
-            audit_bulky_or_obese = _to_bool(body_audit.get("body_shape_bulky_or_obese"), False)
-            audit_upper_torso_anomaly = _to_bool(body_audit.get("upper_torso_contour_anomaly"), False)
-            audit_exposed_region_artifact = _to_bool(body_audit.get("exposed_region_anatomy_artifact"), False)
-            audit_boundary_artifact_mentioned = _generated_person_boundary_artifact_mentioned(
-                body_audit.get("summary"),
-                _parse_qa_string_list(body_audit.get("issues"), 6),
-            )
-            if audit_exposed_region_artifact and audit_confidence >= 80 and (
-                audit_silhouette <= 55 or audit_boundary_artifact_mentioned
-            ):
-                return True
-            if audit_upper_torso_anomaly and audit_boundary_artifact_mentioned and audit_confidence >= 80 and audit_silhouette <= 55:
-                return True
-            if audit_upper_torso_anomaly and audit_confidence >= 95 and (audit_silhouette <= 25 or audit_bulky_or_obese or audit_exposed_region_artifact):
-                return True
-            if audit_silhouette < 25:
-                return True
-            if audit_silhouette < 35 and audit_confidence >= 90 and (audit_too_full or audit_bulky_or_obese):
-                return True
-            if audit_silhouette < 45 and audit_confidence >= 95 and audit_bulky_or_obese:
-                return True
-    clothing_audit = report.get("clothing_audit") if isinstance(report.get("clothing_audit"), dict) else {}
-    if clothing_audit and _to_bool(clothing_audit.get("inspected"), False) and _to_bool(clothing_audit.get("clothing_requirement_visible"), False):
-        clothing_score = _to_int(clothing_audit.get("clothing_match_score"), 85)
-        color_score = _to_int(clothing_audit.get("color_match_score"), 85)
-        clothing_confidence = _to_int(clothing_audit.get("confidence"), 75)
-        clothing_artifact = (
-            _to_bool(clothing_audit.get("clothing_clipping_or_fusion_visible"), False)
-            or _to_bool(clothing_audit.get("impossible_clothing_structure_visible"), False)
-            or _to_bool(clothing_audit.get("exposed_region_clothing_conflict_visible"), False)
-        )
-        clothing_boundary_artifact_mentioned = _generated_person_boundary_artifact_mentioned(
-            clothing_audit.get("summary"),
-            _parse_qa_string_list(clothing_audit.get("issues"), 6),
-        )
-        if _to_bool(clothing_audit.get("garment_mismatch_visible"), False) and clothing_score < 75 and clothing_confidence >= 70:
-            return True
-        if _to_bool(clothing_audit.get("clothing_state_mismatch_visible"), False) and clothing_score < 75 and clothing_confidence >= 70:
-            return True
-        if clothing_artifact and (
-            clothing_confidence >= 85
-            or (
-                clothing_confidence >= 75
-                and (
-                    clothing_score <= 75
-                    or clothing_boundary_artifact_mentioned
-                    or _to_bool(clothing_audit.get("impossible_clothing_structure_visible"), False)
-                    or _to_bool(clothing_audit.get("exposed_region_clothing_conflict_visible"), False)
-                )
-            )
-        ):
-            return True
-        if _to_bool(clothing_audit.get("color_mismatch_visible"), False) and color_score < 70 and clothing_confidence >= 75:
-            return True
-        if clothing_score < 55 and clothing_confidence >= 70:
-            return True
-        if color_score < 55 and clothing_confidence >= 75:
-            return True
-    audit = report.get("hand_limb_audit") if isinstance(report.get("hand_limb_audit"), dict) else {}
-    if audit and not _to_bool(audit.get("inspected"), False):
-        if (
-            _to_bool(audit.get("qa_unavailable"), False)
-            and _to_bool(report.get("deliverable_ready"), False)
-            and _to_int(report.get("anatomy_score"), 75) >= 85
-            and not _to_bool(report.get("limb_or_body_broken"), False)
-            and not _to_bool(report.get("extra_or_missing_limbs"), False)
-            and not _to_bool(report.get("limb_overlap_or_fusion"), False)
-            and not _to_bool(report.get("pose_geometry_broken"), False)
-        ):
-            return False
-        return _to_bool(audit.get("qa_unavailable"), False)
-    if audit:
-        if _to_int(audit.get("visible_hand_count"), 0) > 2 or _to_int(audit.get("visible_arm_count"), 0) > 2:
-            return True
-        for key in (
-            "extra_hand_suspected",
-            "extra_arm_suspected",
-            "hand_finger_anomaly_suspected",
-            "arm_attachment_anomaly_suspected",
-            "limb_fusion_suspected",
-            "body_duplicate_part_suspected",
-        ):
-            if _to_bool(audit.get(key), False):
-                return True
-    if _to_bool(report.get("limb_or_body_broken"), False):
-        return True
-    if _to_bool(report.get("clothing_mismatch_visible"), False):
-        return True
-    if _to_bool(report.get("clothing_body_fusion_visible"), False):
-        return True
-    if _to_bool(report.get("face_incomplete_or_cropped"), False):
-        return True
-    body_silhouette_score = _to_int(report.get("body_silhouette_score"), 85)
-    body_shape_flagged = (
-        _to_bool(report.get("body_shape_too_full"), False)
-        or _to_bool(report.get("body_shape_bulky_or_obese"), False)
-    )
-    if body_silhouette_score < 25:
-        return True
-    if body_silhouette_score < 35 and body_shape_flagged:
-        return True
-    for key in (
-        "extra_or_missing_limbs",
-        "limb_overlap_or_fusion",
-        "pose_geometry_broken",
-    ):
-        if _to_bool(report.get(key), False):
-            return True
-    if _to_bool(report.get("hand_anomaly_visible"), False):
-        issue_text = "；".join(_parse_qa_string_list(report.get("issues"), 6))
-        if not (
-            _to_bool(report.get("deliverable_ready"), False)
-            and _to_int(report.get("anatomy_score"), 75) >= 85
-            and re.search(r"轻微|輕微|minor|slight|自然|姿态|姿態", issue_text, flags=re.IGNORECASE)
-        ):
-            return True
-    if _to_bool(report.get("prompt_mismatch_visible"), False):
-        issue_text = "；".join(_parse_qa_string_list(report.get("issues"), 6))
-        if (
-            _to_bool(report.get("deliverable_ready"), False)
-            and _to_int(report.get("prompt_match_score"), 75) >= 80
-            and re.search(r"略有差异|略有差異|轻微|輕微|minor|slight|色差|颜色|顏色", issue_text, flags=re.IGNORECASE)
-        ):
-            return False
-        return True
-    if _to_bool(report.get("meaningless_or_collapsed"), False):
-        return True
-    if _to_bool(report.get("requires_visible_head"), False) and (
-        not _to_bool(report.get("head_visible"), False)
-        or _to_bool(report.get("head_cropped_or_missing"), False)
-    ):
-        return True
-    if _to_int(report.get("overall_score"), 75) < 72:
-        return True
-    if _to_int(report.get("prompt_match_score"), 75) < 65:
-        return True
-    if _to_int(report.get("anatomy_score"), 75) < 75:
-        return True
-    if _to_int(report.get("visual_score"), 75) < 65:
-        return True
-    if _to_bool(report.get("deliverable_ready"), False):
-        return False
-    return False
-
-
-def _qa_failure_reason(report: dict[str, Any]) -> str:
-    issues = _parse_qa_string_list(report.get("issues"), 3)
-    if issues:
-        return "；".join(issues)
-    summary = str(report.get("summary") or "").strip()
-    return summary or "候选图未通过自动 QA。"
-
-
-def _run_remote_comfy_mapped_task(task_id: str, payload: dict[str, Any], task_type: str) -> dict[str, Any]:
-    payload = _apply_persona_body_profile_to_payload(task_type, payload if isinstance(payload, dict) else {})
-    source, gateway_url, token = _comfy_gateway_from_payload(payload)
-    source_label = "本地 ComfyUI" if source == "local" else "远程 ComfyUI"
-    workflow_path = _remote_comfy_workflow_mapping(payload, task_type)
-    if not gateway_url:
-        raise RuntimeError(f"{source_label} 网关未配置，请先在后台保存网关地址")
-    if not workflow_path:
-        raise RuntimeError(f"{REMOTE_COMFY_TASK_LABELS.get(task_type, task_type)} 未映射{source_label}工作流")
-
-    prompt_text = _remote_comfy_prompt_from_payload(task_type, payload)
-    negative_prompt = str(payload.get("negative_prompt") or payload.get("negative") or "").strip()
-    if not negative_prompt and not _is_person_t2i_workflow(task_type, workflow_path):
-        negative_prompt = "low quality, blurry, distorted"
-    steps = _to_int(payload.get("steps"), 6)
-    seed_raw = payload.get("seed")
-    seed = None if str(seed_raw or "").strip() in {"", "auto", "None", "null"} else min(max(_to_int(seed_raw, 0), 0), 2147483647)
-    width = _to_int(payload.get("width"), 512)
-    height = _to_int(payload.get("height"), 512)
-    batch_size = _to_int(payload.get("batch_size"), _remote_comfy_default_batch_size(task_type, workflow_path))
-    base_node_inputs = _remote_comfy_node_inputs_from_payload(payload, task_type=task_type, workflow_path=workflow_path)
-    input_images = _remote_comfy_upload_input_images(
-        gateway_url=gateway_url,
-        token=token,
-        task_id=task_id,
-        payload=payload,
-        task_type=task_type,
-    )
-    input_image_bindings = _remote_comfy_image_input_bindings(payload, task_type)
-    binding_node_inputs = _remote_comfy_node_inputs_from_uploaded_image_bindings(input_images, input_image_bindings)
-    base_node_inputs = _merge_node_inputs(binding_node_inputs, base_node_inputs)
-    auto_qa_enabled = (
-        str(task_type or "").strip() == "text_to_image"
-        and _to_bool(payload.get("text_to_image_auto_qa_enabled"), False)
-    )
-    image_task_requires_output = str(task_type or "").strip() in {"text_to_image", "image_generate", "single_image_edit", "get_nano_banana", "face_swap"}
-    qa_target_count = _text_to_image_qa_target_count(payload, batch_size=batch_size, workflow_path=workflow_path) if str(task_type or "").strip() == "text_to_image" else 1
-    batch_qa_enabled = auto_qa_enabled and qa_target_count > 1
-    default_max_attempts = PERSON_T2I_AUTO_QA_MAX_ATTEMPTS if _is_person_t2i_workflow(task_type, workflow_path) else 3
-    max_attempts = min(max(_to_int(payload.get("text_to_image_auto_qa_max_attempts"), default_max_attempts), 1), 6) if auto_qa_enabled else 1
-    qa_reports: list[dict[str, Any]] = []
-    qa_passed_image_paths: list[str] = []
-    used_seeds = _collect_seed_values(base_node_inputs)
-    if seed is not None:
-        used_seeds.add(int(seed))
-    result: dict[str, Any] = {}
-    output_path = ""
-    image_paths: list[str] = []
-    selected_seed = seed
-    last_qa_reason = ""
-    attempt = 0
-    while True:
-        attempt += 1
-        if _task_cancelled_for_payload(payload):
-            raise RuntimeError("任务已取消，已停止继续生成。")
-        attempt_seed = selected_seed
-        node_inputs = copy.deepcopy(base_node_inputs)
-        if attempt > 1:
-            attempt_seed = _new_image_qa_seed(used_seeds)
-            used_seeds.add(int(attempt_seed))
-        if attempt_seed is not None:
-            if node_inputs:
-                _replace_seed_values(node_inputs, int(attempt_seed))
-            payload["seed"] = int(attempt_seed)
-        message = f"提交{source_label}工作流: {workflow_path}"
-        if batch_qa_enabled:
-            message = f"{message}（自动 QA 第 {attempt} 轮，目标 {qa_target_count} 张）"
-        elif auto_qa_enabled and max_attempts > 1:
-            message = f"{message}（自动 QA 第 {attempt}/{max_attempts} 轮）"
-        _emit_stage(payload, stage="remote_comfy", status="running", message=message, data={"qa_attempt": attempt, "seed": attempt_seed, "batch_size": batch_size, "qa_missing_count": max(qa_target_count - len(qa_passed_image_paths), 0) if batch_qa_enabled else None})
-        result = _run_remote_comfy_gateway_test(
-            gateway_url=gateway_url,
-            token=token,
-            workflow_path=workflow_path,
-            prompt_text=prompt_text,
-            negative_prompt=negative_prompt,
-            width=width if width > 0 else None,
-            height=height if height > 0 else None,
-            steps=steps if steps > 0 else None,
-            seed=attempt_seed,
-            batch_size=batch_size if batch_size > 0 else None,
-            node_inputs=node_inputs,
-            input_images=input_images,
-            input_image_bindings=input_image_bindings,
-            timeout_seconds=max(_to_int(payload.get("remote_comfy_timeout_seconds"), 900), 30),
-            payload=payload,
-        )
-        if not _to_bool(result.get("ok"), False):
-            raise RuntimeError(str(result.get("message") or f"{source_label} 工作流执行失败"))
-        candidate_image_paths = _remote_comfy_output_image_paths(result)
-        output_path = candidate_image_paths[0] if candidate_image_paths else _first_remote_comfy_output_path(result)
-        selected_seed = attempt_seed
-        if image_task_requires_output and not output_path:
-            last_qa_reason = f"{source_label} 工作流完成但未返回可下载图片"
-            raw_job = result.get("raw_job") if isinstance(result.get("raw_job"), dict) else {}
-            execution_error = str(raw_job.get("execution_error_message") or "").strip()
-            if execution_error:
-                last_qa_reason = f"{source_label} 工作流执行失败：{execution_error}"
-            _emit_stage(
-                payload,
-                stage="remote_comfy",
-                status="warn",
-                message=last_qa_reason,
-                data={
-                    "qa_attempt": attempt,
-                    "prompt_id": str(result.get("prompt_id") or "").strip(),
-                    "outputs_count": len(result.get("outputs") if isinstance(result.get("outputs"), list) else []),
-                    "local_outputs_count": len(result.get("local_outputs") if isinstance(result.get("local_outputs"), list) else []),
-                },
-            )
-            if auto_qa_enabled and not batch_qa_enabled and attempt < max_attempts:
-                continue
-            raise RuntimeError(last_qa_reason)
-        if image_task_requires_output and Path(output_path).suffix.lower() not in IMAGE_EXTS:
-            raise RuntimeError(f"{source_label} 工作流返回的结果不是图片文件：{output_path}")
-        if not auto_qa_enabled or Path(output_path).suffix.lower() not in IMAGE_EXTS:
-            break
-        if batch_qa_enabled:
-            attempt_passed_image_paths: list[str] = []
-            for candidate_index, candidate_path in enumerate(candidate_image_paths, start=1):
-                qa_report = _analyze_generated_person_image_quality(
-                    image_path=candidate_path,
-                    prompt_text=prompt_text,
-                    payload=payload,
-                    attempt=attempt,
-                )
-                qa_report["attempt"] = attempt
-                qa_report["candidate_index"] = candidate_index
-                qa_report["seed"] = attempt_seed
-                qa_report["image_path"] = candidate_path
-                qa_reports.append(qa_report)
-                if not _should_reject_generated_person_image(qa_report):
-                    attempt_passed_image_paths.append(candidate_path)
-                    if candidate_path not in qa_passed_image_paths:
-                        qa_passed_image_paths.append(candidate_path)
-            if len(qa_passed_image_paths) >= qa_target_count:
-                _emit_stage(
-                    payload,
-                    stage="image_auto_qa",
-                    status="success",
-                    message=f"自動 QA 已檢查 {len(qa_reports)} 張候選圖，累積通過 {len(qa_passed_image_paths)} 張",
-                    data={
-                        "qa_attempt": attempt,
-                        "target_count": qa_target_count,
-                        "passed_count": len(qa_passed_image_paths),
-                        "rejected_count": len(qa_reports) - len(qa_passed_image_paths),
-                        "attempt_passed_count": len(attempt_passed_image_paths),
-                        "candidate_image_paths": candidate_image_paths,
-                        "attempt_passed_image_paths": attempt_passed_image_paths,
-                        "passed_image_paths": qa_passed_image_paths,
-                        "attempt_reports": _sanitize_payload(qa_reports[-len(candidate_image_paths):]) if candidate_image_paths else [],
-                    },
-                )
-                break
-            else:
-                last_qa_reason = f"QA 累積通過圖片 {len(qa_passed_image_paths)}/{qa_target_count} 張，未滿 {qa_target_count} 張"
-                _emit_stage(
-                    payload,
-                    stage="image_auto_qa",
-                    status="warn",
-                    message=last_qa_reason,
-                    data={
-                        "qa_attempt": attempt,
-                        "target_count": qa_target_count,
-                        "passed_count": len(qa_passed_image_paths),
-                        "rejected_count": len(qa_reports) - len(qa_passed_image_paths),
-                        "attempt_passed_count": len(attempt_passed_image_paths),
-                        "candidate_image_paths": candidate_image_paths,
-                        "attempt_passed_image_paths": attempt_passed_image_paths,
-                        "passed_image_paths": qa_passed_image_paths,
-                        "attempt_reports": _sanitize_payload(qa_reports[-len(candidate_image_paths):]) if candidate_image_paths else [],
-                    },
-                )
-                if max_attempts > 0 and attempt >= max_attempts:
-                    break
-                continue
-        qa_report = _analyze_generated_person_image_quality(
-            image_path=output_path,
-            prompt_text=prompt_text,
-            payload=payload,
-            attempt=attempt,
-        )
-        qa_report["attempt"] = attempt
-        qa_report["seed"] = attempt_seed
-        qa_reports.append(qa_report)
-        if not _should_reject_generated_person_image(qa_report):
-            _emit_stage(
-                payload,
-                stage="image_auto_qa",
-                status="success",
-                message=f"自动 QA 第 {attempt} 轮通过",
-                data={"qa_attempt": attempt, "qa_report": _sanitize_payload(qa_report)},
-            )
-            break
-        last_qa_reason = _qa_failure_reason(qa_report)
-        _emit_stage(
-            payload,
-            stage="image_auto_qa",
-            status="warn",
-            message=f"自动 QA 第 {attempt} 轮拦截候选图，准备重新生成",
-            data={"qa_attempt": attempt, "qa_report": _sanitize_payload(qa_report), "reason": last_qa_reason},
-        )
-        if max_attempts > 0 and attempt >= max_attempts:
-            break
-    if batch_qa_enabled and len(qa_passed_image_paths) < qa_target_count:
-        raise RuntimeError(
-            f"自動 QA 已檢查 {len(qa_reports)} 張候選圖，"
-            f"累積通過 {len(qa_passed_image_paths)}/{qa_target_count} 張，仍未滿 Telegram 回傳數量要求。"
-        )
-    if auto_qa_enabled and not batch_qa_enabled and qa_reports and _should_reject_generated_person_image(qa_reports[-1]):
-        raise RuntimeError(f"自动 QA 已筛选 {len(qa_reports)} 轮仍未获得可交付图片：{last_qa_reason or '候选图未通过质量检查'}")
-
-    current_task_type = str(task_type or "").strip()
-    if batch_qa_enabled:
-        image_paths = qa_passed_image_paths[:qa_target_count]
-        output_path = image_paths[0] if image_paths else output_path
-    elif current_task_type == "text_to_image":
-        image_paths = _remote_comfy_output_image_paths(result)
-        output_path = image_paths[0] if image_paths else output_path
-    else:
-        image_paths = [output_path] if output_path and Path(output_path).suffix.lower() in IMAGE_EXTS else []
-
-    output_key = "download_path"
-    suffix = Path(output_path).suffix.lower() if output_path else ""
-    if suffix in IMAGE_EXTS:
-        output_key = "image_path"
-    elif suffix in VIDEO_EXTS:
-        output_key = "video_path"
-    elif suffix in AUDIO_EXTS:
-        output_key = "audio_path"
-    output: dict[str, Any] = {
-        "ok": True,
-        "message": f"{source_label} 工作流完成",
-        "comfy_workflow_source": source,
-        "remote_comfy_prompt_id": str(result.get("prompt_id") or "").strip(),
-        "remote_comfy_workflow_path": workflow_path,
-        "runninghub_task_id": str(result.get("prompt_id") or "").strip(),
-        "runninghub_usage": {},
-        "download_path": output_path,
-        "raw_result": result,
-    }
-    if selected_seed is not None:
-        output["seed"] = selected_seed
-    if batch_qa_enabled or (str(task_type or "").strip() == "text_to_image" and image_paths):
-        output["image_paths"] = image_paths
-    if auto_qa_enabled:
-        if batch_qa_enabled:
-            passed_count = len(qa_passed_image_paths)
-            rejected_count = max(len(qa_reports) - passed_count, 0)
-            output["image_qa"] = {
-                "enabled": True,
-                "mode": "batch_candidates",
-                "target_count": qa_target_count,
-                "checked_count": len(qa_reports),
-                "passed_count": passed_count,
-                "rejected_count": rejected_count,
-                "insufficient_count": passed_count < qa_target_count,
-                "passed": passed_count >= qa_target_count,
-                "attempts": max((int(report.get("attempt") or 0) for report in qa_reports), default=0),
-                "reports": qa_reports,
-            }
-        else:
-            output["image_qa"] = {
-                "enabled": True,
-                "max_attempts": max_attempts,
-                "attempts": len(qa_reports) if qa_reports else 1,
-                "rejected_rounds": sum(1 for report in qa_reports if _should_reject_generated_person_image(report)),
-                "passed": not qa_reports or not _should_reject_generated_person_image(qa_reports[-1]),
-                "reports": qa_reports,
-            }
-    if output_path:
-        output[output_key] = output_path
-    return output
-
-
 def _run_video_i2v(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    if _remote_comfy_workflow_mapping(payload, "video_i2v"):
-        return _run_remote_comfy_mapped_task(task_id, payload, "video_i2v")
     return _run_mulerouter_wan_i2v(task_id, payload)
 
 
@@ -8062,11 +4843,6 @@ def _extract_zip_to_dir(zip_path: Path, out_dir: Path) -> None:
 
 
 def _run_image_generate(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    chain_config = _remote_comfy_image_generate_chain_config(payload)
-    if chain_config:
-        return _run_image_generate_via_remote_comfy_firered_chain(task_id, payload, chain_config)
-    if _remote_comfy_workflow_mapping(payload, "image_generate"):
-        return _run_remote_comfy_mapped_task(task_id, payload, "image_generate")
     mode = str(payload.get("mode") or "single_reference").strip() or "single_reference"
     provider = str(payload.get("image_generate_provider") or payload.get("image_generate_mode_default") or "closed_model_api").strip() or "closed_model_api"
     primary_local = str(payload.get("primary_image_local_path") or payload.get("primary_image_local_path") or "").strip()
@@ -8148,7 +4924,7 @@ def _run_get_gemini(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _run_text_to_image_disabled(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    return _run_remote_comfy_mapped_task(task_id, payload, "text_to_image")
+    raise RuntimeError("文生图工作流入口已移除，请使用人设图或推文配图的现有生成入口。")
 
 
 def _collect_batch_usage(output_dir: Any) -> dict[str, Any]:
@@ -8274,7 +5050,7 @@ def _looks_like_mojibake_text(value: Any) -> bool:
     if not text:
         return False
     cjk_count = len(re.findall(r"[\u4e00-\u9fff]", text))
-    marker_count = len(re.findall(r"[ÃÂ�]|\u00c2|\u00a0|[\u0080-\u009f]|[æçåèéäãï¼]", text))
+    marker_count = len(re.findall(r"[ÃÂ]|\ufffd|\u00c2|\u00a0|[\u0080-\u009f]|[æçåèéäãï¼]", text))
     return marker_count >= 3 and cjk_count < 10
 
 
@@ -8420,7 +5196,7 @@ def _tg_image_aspect_ratio_pose_guidance(payload: dict[str, Any] | None) -> str:
             detail = (
                 "For free non-R18 content, use a public-safe vertical composition: standing, seated, leaning by a doorway, "
                 "counter, desk, street corner, cafe, classroom, office, shopfront, travel spot, or the concrete scene from the tweet. "
-                "Keep clothing intact and natural. Do not introduce unrelated private-room resting poses, lingerie focus, opened clothing, or paid-content posing "
+                "Keep clothing intact and natural. Do not introduce unrelated private-room resting poses, lingerie focus, opened clothing, or adult private-content posing "
                 "unless the user/tweet explicitly asks for that scene."
             )
         elif ratio == "16:9" or ratio in {"3:2", "4:3"} or orientation == "landscape":
@@ -8430,7 +5206,7 @@ def _tg_image_aspect_ratio_pose_guidance(payload: dict[str, Any] | None) -> str:
                 "Use seated, standing, walking, leaning by a counter/table, or holding a prop according to the tweet. "
             )
             if not mentions_private_scene:
-                detail += "Do not change the scene into an unrelated private indoor resting pose or paid-content posing. "
+                detail += "Do not change the scene into an unrelated private indoor resting pose or adult private-content posing. "
             detail += "Preserve the tweet's concrete object/location first, then adapt camera distance to the selected ratio."
         elif ratio == "1:1" or orientation == "square":
             detail = (
@@ -8582,7 +5358,7 @@ def _build_tg_non_r18_free_image_fallback_prompt(original_request: str, payload:
         f"穿著{clothing}",
         f"動作是{action}",
         "畫面必須和推文內容一致，優先保留使用者指定的服裝、顏色、場景、道具、動作和情緒",
-        "保持公開安全尺度，服裝完整自然，不要付費群成人風格，不要文字，不要水印",
+        "保持公開安全尺度，服裝完整自然，不要成人擦邊風格，不要文字，不要水印",
         "寫清背景物件、自然光方向、淺景深、皮膚與布料質感，人物臉部清楚可見",
     ]
     if ratio:
@@ -9014,7 +5790,7 @@ def _force_tg_image_chinese_prompt(prompt_text: str) -> str:
 def _force_tg_image_english_prompt(prompt_text: str) -> str:
     text = _strip_prompt_response_wrappers(prompt_text)
     text = re.sub(
-        r"(?i)\b(?:final\s+prompt|prompt|image\s+prompt|comfyui\s+prompt|rewritten\s+prompt)\b\s*[:：-]?\s*",
+        r"(?i)\b(?:final\s+prompt|prompt|image\s+prompt|generation\s+prompt|rewritten\s+prompt)\b\s*[:：-]?\s*",
         "",
         text,
     )
@@ -9094,7 +5870,7 @@ def _force_tg_image_chinese_prompt(prompt_text: str) -> str:
     if not text:
         return ""
     text = re.sub(
-        r"(?i)\b(?:final\s+prompt|prompt|image\s+prompt|comfyui\s+prompt|rewritten\s+prompt)\b\s*[:：]?\s*",
+        r"(?i)\b(?:final\s+prompt|prompt|image\s+prompt|generation\s+prompt|rewritten\s+prompt)\b\s*[:：]?\s*",
         "",
         text,
     )
@@ -10539,31 +7315,6 @@ def _tg_payload_is_non_r18_free_image(payload: dict[str, Any] | None) -> bool:
     return context.startswith("generated-post image candidates")
 
 
-def _tg_paid_content_time_slot(payload: dict[str, Any] | None) -> str:
-    source = payload if isinstance(payload, dict) else {}
-    context = source.get("r18_paid_post_context") if isinstance(source.get("r18_paid_post_context"), dict) else {}
-    slot = str(context.get("contentTimeSlot") or context.get("timeSlot") or source.get("contentTimeSlot") or "").strip().lower()
-    return slot if slot in {"morning", "night"} else ""
-
-
-def _ensure_tg_paid_time_slot_visual_anchor(prompt_text: str, payload: dict[str, Any] | None) -> str:
-    text = _strip_prompt_response_wrappers(prompt_text)
-    slot = _tg_paid_content_time_slot(payload)
-    if not text or slot not in {"morning", "night"}:
-        return text
-
-    if slot == "morning":
-        if re.search(r"清晨|早晨|晨光|上午|白天|日间|窗边自然光|明亮自然光|自然光线从窗边", text):
-            return text
-        return _normalize_tg_chinese_image_prompt_format(f"{text}，清晨卧室氛围，窗边柔和自然光照入，明亮干净的早安画面")
-
-    text = re.sub(r"自然光线从窗边(?:洒入|照入|照射)", "暖色床头灯低照度照明", text)
-    text = re.sub(r"自然光照明|明亮自然光|柔和自然光|窗边自然光|晨光|早晨|清晨|上午|白天|日间", "暖色床头灯低照度照明", text)
-    if re.search(r"夜晚|深夜|夜间|床头灯|台灯|低照度|暖色灯光|昏暗卧室|夜色", text):
-        return _normalize_tg_chinese_image_prompt_format(text)
-    return _normalize_tg_chinese_image_prompt_format(f"{text}，夜晚卧室背景，暖色床头灯低照度照明，深色阴影突出深夜私密氛围")
-
-
 def _ensure_tg_image_user_request_anchors(prompt_text: str, original_request: str, payload: dict[str, Any] | None) -> str:
     text = _strip_prompt_response_wrappers(prompt_text)
     request = _strip_prompt_response_wrappers(original_request)
@@ -11665,7 +8416,7 @@ def _build_tg_prompt_system_prompt(task_type: str, task_label: str, *, non_r18_f
     prompt_chain = "image" if typ in _TG_IMAGE_PROMPT_TYPES else "video"
     if typ in {"single_image_edit", "get_nano_banana", "face_swap"}:
         edit_rules = [
-            "You rewrite Telegram user requests into one Chinese prompt for an existing image-conditioned ComfyUI workflow.",
+            "You rewrite Telegram user requests into one Chinese prompt for an existing image-conditioned image workflow.",
             "Output only the final Chinese prompt text. Do not output English, labels, JSON, Markdown, explanations, policy text, or reasoning.",
             "Faithfully preserve the user's actual request. Do not invent a different person, scene, clothing state, sexual content, pose, or background.",
             "Use the uploaded reference image as the visual source. Keep the original composition, lighting, camera angle, clothing, background, and object relationships unless the user explicitly asks to change them.",
@@ -11711,7 +8462,7 @@ def _build_tg_prompt_system_prompt(task_type: str, task_label: str, *, non_r18_f
         )
     image_rules = [
         *internal_reasoning_layers,
-        "Rewrite the user's request into one Chinese image generation prompt that can be sent directly to ComfyUI.",
+        "Rewrite the user's request into one Chinese image generation prompt that can be sent directly to the image generation service.",
         "Output only a single-frame still image prompt. Do not output role labels, explanations, refusals, policy text, JSON, Markdown, lists, video scripts, timelines, or camera-movement procedures.",
         "Faithfully preserve the subject, clothing, pose, scene, props, materials, colors, camera angle, style, and restrictions specified by the user. Do not change the scene or soften the requested visual intensity.",
         "Defaults are fallback only: use preset persona/body/clothing/scene details only for missing fields. Never replace an explicit user clothing, scene, action, color, prop, style, or restriction with a preset value.",
@@ -12102,7 +8853,6 @@ def _enhance_tg_payload_with_llm_prompt(task_type: str, payload: dict[str, Any])
                 "",
                 "Workflow visual context that must be visible in the final image prompt:",
                 generation_context,
-                "If this context includes a paid group morning or night time slot, the final Chinese prompt must contain concrete visible lighting and scene clues for that exact time period.",
             ]
         )
     action_decomposition = (
@@ -12254,7 +9004,7 @@ def _enhance_tg_payload_with_llm_prompt(task_type: str, payload: dict[str, Any])
         if not cleaned_line:
             continue
         if re.search(
-            r"refining the prompt|prompt for comfyui|优化提示词|提示词改写|^(ontology|epistemology|methodology|axiology|narratology|cinematic language|world model|quality audit|本体论|认识论|方法论|价值论|叙事学|电影语言|世界模型|质量审校)\s*[:：]",
+            r"refining the prompt|prompt for image generation|优化提示词|提示词改写|^(ontology|epistemology|methodology|axiology|narratology|cinematic language|world model|quality audit|本体论|认识论|方法论|价值论|叙事学|电影语言|世界模型|质量审校)\s*[:：]",
             cleaned_line,
             re.IGNORECASE,
         ):
@@ -12298,7 +9048,7 @@ def _enhance_tg_payload_with_llm_prompt(task_type: str, payload: dict[str, Any])
                         [
                             f"用户原始需求：{original_request or user_request}",
                             f"当前提示词：{rewritten}",
-                            "改写成一段最终中文 ComfyUI 图像提示词，保持相同画面意图。不要包含英文、标签、分析、人名、人设名或 LoRA 文件名。",
+                            "改写成一段最终中文 图像生成提示词，保持相同画面意图。不要包含英文、标签、分析、人名、人设名或 LoRA 文件名。",
                         ]
                     ),
                     system_prompt="\n".join(
@@ -12371,7 +9121,7 @@ def _enhance_tg_payload_with_llm_prompt(task_type: str, payload: dict[str, Any])
         final_prompt = _ensure_tg_image_user_request_anchors(final_prompt, preserved_request, enhanced)
         final_prompt = _normalize_tg_chinese_image_prompt_format(final_prompt)
         enhanced = _apply_persona_body_profile_to_payload(typ, {**enhanced, "prompt": final_prompt, "prompt_text": final_prompt, "message": final_prompt})
-        final_prompt = _remote_comfy_prompt_from_payload(typ, enhanced)
+        final_prompt = str(enhanced.get("prompt") or enhanced.get("prompt_text") or enhanced.get("message") or final_prompt).strip()
         final_prompt = _ensure_tg_image_subject_prefix(final_prompt)
         if not non_r18_free_image:
             final_prompt = _ensure_tg_image_explicit_private_part(final_prompt, preserved_request)
@@ -12380,7 +9130,6 @@ def _enhance_tg_payload_with_llm_prompt(task_type: str, payload: dict[str, Any])
         final_prompt = _ensure_tg_image_user_request_anchors(final_prompt, preserved_request, enhanced)
         final_prompt = _normalize_tg_chinese_image_prompt_format(final_prompt)
         final_prompt = _canonicalize_tg_image_nine_segment_prompt(final_prompt, enhanced, preserved_request)
-        final_prompt = _ensure_tg_paid_time_slot_visual_anchor(final_prompt, enhanced)
         final_prompt = _normalize_tg_chinese_image_prompt_format(final_prompt)
         enhanced = _set_tg_generation_prompt(enhanced, final_prompt)
         rewritten = final_prompt
@@ -12391,7 +9140,6 @@ def _enhance_tg_payload_with_llm_prompt(task_type: str, payload: dict[str, Any])
             final_prompt = _ensure_tg_image_user_request_anchors(final_prompt, preserved_request, enhanced)
             final_prompt = _normalize_tg_chinese_image_prompt_format(final_prompt)
             final_prompt = _canonicalize_tg_image_nine_segment_prompt(final_prompt, enhanced, preserved_request)
-            final_prompt = _ensure_tg_paid_time_slot_visual_anchor(final_prompt, enhanced)
             final_prompt = _normalize_tg_chinese_image_prompt_format(final_prompt)
             enhanced = _set_tg_generation_prompt(enhanced, final_prompt)
             rewritten = final_prompt
@@ -12403,7 +9151,6 @@ def _enhance_tg_payload_with_llm_prompt(task_type: str, payload: dict[str, Any])
                 fallback_prompt = _ensure_tg_image_user_request_anchors(fallback_prompt, preserved_request, enhanced)
                 fallback_prompt = _normalize_tg_chinese_image_prompt_format(fallback_prompt)
                 fallback_prompt = _canonicalize_tg_image_nine_segment_prompt(fallback_prompt, enhanced, preserved_request)
-                fallback_prompt = _ensure_tg_paid_time_slot_visual_anchor(fallback_prompt, enhanced)
                 fallback_prompt = _normalize_tg_chinese_image_prompt_format(fallback_prompt)
                 enhanced = _set_tg_generation_prompt(enhanced, fallback_prompt)
                 rewritten = fallback_prompt
@@ -12442,21 +9189,20 @@ def _build_agent_task_payload(
 ) -> tuple[str, dict[str, Any], str]:
     return (
         "chat",
-        {"reply": "远程 ComfyUI 工作流尚未接入，请先在后台完成工作流映射后再创建生产任务。"},
-        "远程 ComfyUI 工作流尚未接入",
+        {"reply": "该生产工作流入口已移除，请使用现有的人设、推文配图或视频生成入口。"},
+        "生产工作流入口已移除",
     )
 
-
 def _run_get_nano_banana(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    return _run_remote_comfy_mapped_task(task_id, payload, "get_nano_banana")
+    raise RuntimeError("该图像工作流入口已移除。")
 
 
 def _run_single_image_edit(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    return _run_remote_comfy_mapped_task(task_id, payload, "single_image_edit")
+    raise RuntimeError("该图像编辑工作流入口已移除。")
 
 
 def _run_face_swap(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    return _run_remote_comfy_mapped_task(task_id, payload, "face_swap")
+    raise RuntimeError("该换脸工作流入口已移除。")
 
 
 TASK_RUNNERS = {
@@ -13132,13 +9878,6 @@ PERSON_T2I_TELEGRAM_RETURN_COUNT = 4
 PERSON_T2I_AUTO_QA_MAX_ATTEMPTS = 4
 
 
-def _remote_comfy_default_batch_size(task_type: str, workflow_path: str) -> int:
-    workflow_text = str(workflow_path or "").lower()
-    if str(task_type or "").strip() == "text_to_image" and ("person_t2i" in workflow_text or "人设_t2i" in workflow_text or "人設_t2i" in workflow_text):
-        return PERSON_T2I_DEFAULT_BATCH_SIZE
-    return 1
-
-
 def _text_to_image_qa_target_count(payload: dict[str, Any], *, batch_size: int, workflow_path: str) -> int:
     explicit = _to_int(
         payload.get("text_to_image_qa_target_count")
@@ -13232,7 +9971,6 @@ def _finalize_tg_image_generation_prompt_constraints(task_type: str, payload: di
         final_prompt = _ensure_tg_image_user_request_anchors(final_prompt, original_request, payload)
         final_prompt = _normalize_tg_chinese_image_prompt_format(final_prompt)
         final_prompt = _canonicalize_tg_image_nine_segment_prompt(final_prompt, payload, original_request)
-        final_prompt = _ensure_tg_paid_time_slot_visual_anchor(final_prompt, payload)
         final_prompt = _normalize_tg_chinese_image_prompt_format(final_prompt)
     return final_prompt
 
@@ -13345,17 +10083,6 @@ class PricingPayload(BaseModel):
 
 class RuntimeConfigPayload(BaseModel):
     telegram_bot_token: str = ""
-    comfy_workflow_source: str = "remote"
-    remote_comfy_gateway_url: str = ""
-    remote_comfy_gateway_token: str = ""
-    remote_comfy_workflow_mappings: dict[str, Any] = Field(default_factory=dict)
-    remote_comfy_image_input_bindings: dict[str, Any] = Field(default_factory=dict)
-    local_comfy_gateway_url: str = "http://127.0.0.1:9001"
-    local_comfy_gateway_token: str = ""
-    local_comfy_workflow_mappings: dict[str, Any] = Field(default_factory=dict)
-    local_comfy_image_input_bindings: dict[str, Any] = Field(default_factory=dict)
-    comfy_gpu_queue_enabled: bool = False
-    comfy_gpu_max_concurrency: int = 4
     upload_server_ip: str = ""
     upload_file_api_key: str = ""
     image_generate_mode_default: str = "closed_model_api"
@@ -13380,8 +10107,6 @@ class RuntimeConfigPayload(BaseModel):
     llm_default_model_gemini: str = ""
     llm_default_model_gpt: str = ""
     llm_model_priority_order: str = ""
-    llm_free_model_priority_order: str = ""
-    llm_paid_model_priority_order: str = ""
     mulerouter_api_name: str = ""
     mulerouter_api_key: str = ""
     mulerouter_base_url: str = "https://api.mulerouter.ai"
@@ -13418,31 +10143,6 @@ class ModelLookupPayload(BaseModel):
     api_key: str = ""
     provider: str = ""
     endpoint: str = ""
-
-
-class RemoteComfyGatewayPayload(BaseModel):
-    remote_comfy_gateway_url: str = ""
-    remote_comfy_gateway_token: str = ""
-    local_comfy_gateway_url: str = ""
-    local_comfy_gateway_token: str = ""
-    comfy_workflow_source: str = "remote"
-
-
-class RemoteComfyWorkflowTestPayload(RemoteComfyGatewayPayload):
-    workflow_path: str = ""
-    prompt_text: str = "a simple red apple on a wooden table, studio lighting, high quality"
-    negative_prompt: str = "low quality, blurry, distorted"
-    width: int | None = 512
-    height: int | None = 512
-    steps: int | None = 6
-    batch_size: int | None = 1
-    timeout_seconds: int = 900
-
-
-class RemoteComfyConvertPayload(RemoteComfyGatewayPayload):
-    paths: list[str] = Field(default_factory=list)
-    overwrite: bool = True
-    force: bool = False
 
 
 class RechargePayload(BaseModel):
@@ -13548,11 +10248,9 @@ class PersonaDashboardGeneratePostsPayload(BaseModel):
     count: int = 3
     prompt: str = ""
     target_words: int = 120
-    content_branch: str = ""
     content_time_slot: str = ""
     selected_memory_ids: list[str] = Field(default_factory=list)
     selected_memory_summaries: list[str] = Field(default_factory=list)
-    text_model_branch: str = ""
 
 
 class PersonaDashboardDraftPublishPayload(BaseModel):
@@ -14163,8 +10861,8 @@ def _list_selectable_persona_memories(archive_id: str) -> list[dict[str, Any]]:
     return entries[:100]
 
 
-def _tool_r18_node_command() -> list[str]:
-    return ["node", "--import", "tsx", "scripts/skills/persona-workflow.ts"]
+def _tool_r18_node_command(script_rel: str = "scripts/skills/persona-workflow.ts") -> list[str]:
+    return ["node", "--import", "tsx", script_rel]
 
 
 def _sync_tool_r18_api_config_for_persona_workflow() -> None:
@@ -14184,8 +10882,6 @@ def _sync_tool_r18_api_config_for_persona_workflow() -> None:
             "llm_default_model",
             "llm_default_model_gpt",
             "llm_model_priority_order",
-            "llm_free_model_priority_order",
-            "llm_paid_model_priority_order",
             "image_model_provider_base_url",
             "image_model_provider_api_key_gemini",
             "image_model_default_model",
@@ -14204,7 +10900,7 @@ def _sync_tool_r18_api_config_for_persona_workflow() -> None:
 
 def _run_persona_workflow_cli(payload: dict[str, Any], timeout_seconds: int = 900) -> dict[str, Any]:
     _sync_tool_r18_api_config_for_persona_workflow()
-    command = [*_tool_r18_node_command(), json.dumps(payload, ensure_ascii=False)]
+    command = [*_tool_r18_node_command(), json.dumps(payload, ensure_ascii=True)]
     try:
         completed = subprocess.run(
             command,
@@ -14240,29 +10936,55 @@ def _run_persona_workflow_cli(payload: dict[str, Any], timeout_seconds: int = 90
 
 
 def _run_persona_create_cli(payload: dict[str, Any], timeout_seconds: int = 900) -> dict[str, Any]:
-    return _run_persona_workflow_cli(payload, timeout_seconds=timeout_seconds)
+    _sync_tool_r18_api_config_for_persona_workflow()
+    command = [*_tool_r18_node_command("scripts/skills/persona-create-workflow.ts"), json.dumps(payload, ensure_ascii=True)]
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(ROOT_DIR / "tool_r18"),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=max(30, int(timeout_seconds)),
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(status_code=504, detail=f"AI 新建人设超时：{exc.timeout} 秒。") from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=500, detail="未找到 Node.js 或 tsx，无法执行 AI 新建人设。") from exc
+    stdout = str(completed.stdout or "").strip()
+    stderr = str(completed.stderr or "").strip()
+    data: dict[str, Any] | None = None
+    if stdout:
+        try:
+            parsed = json.loads(stdout)
+            if isinstance(parsed, dict):
+                data = parsed
+        except Exception:
+            data = None
+    if completed.returncode != 0:
+        detail = str((data or {}).get("error") or stderr or stdout or "AI 新建人设失败。").strip()
+        raise HTTPException(status_code=500, detail=detail)
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=500, detail="AI 新建人设返回格式无效。")
+    if data.get("ok") is False:
+        raise HTTPException(status_code=500, detail=str(data.get("error") or "AI 新建人设失败。").strip())
+    return data
 
 
 def _build_persona_generate_instruction(payload: PersonaDashboardGeneratePostsPayload) -> str:
     prompt = str(payload.prompt or "").strip()
     target_words = max(10, min(int(payload.target_words or 120), 2000))
-    content_branch = str(payload.content_branch or "").strip().lower()
     content_time_slot = str(payload.content_time_slot or "").strip().lower()
     lines: list[str] = []
     if prompt:
         lines.append(f"本次用户主题/要求（最高优先级）：{prompt}")
     else:
         lines.append("本次没有额外提示词，请根据当前人设自由生成新的推文主题。")
-    if content_branch == "nonr18":
-        lines.extend([
-            "本次内容类型：免费内容。",
-            "方向：适合免费群预览、轻引导、平台安全，不要露骨。",
-        ])
-    elif content_branch == "r18":
-        lines.extend([
-            "本次内容类型：付费内容。",
-            "方向：强调限定感、转化感、福利感，但仍然保持平台安全，不要使用违规露骨词。",
-        ])
+    lines.extend([
+        "本次内容类型：常规推文内容。",
+        "方向：适合日常发布、互动和平台安全，突出人设风格和内容表达。",
+    ])
     if content_time_slot == "morning":
         lines.append("本次文案时段：早上文案。")
     elif content_time_slot == "night":
@@ -14280,15 +11002,9 @@ def _generate_persona_archive_posts(archive_id: str, payload: PersonaDashboardGe
     if not clean_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID。")
     count = max(1, min(int(payload.count or 3), 20))
-    content_branch = str(payload.content_branch or "").strip().lower()
-    if content_branch not in {"", "nonr18", "r18"}:
-        raise HTTPException(status_code=400, detail="不支持的内容类型。")
     content_time_slot = str(payload.content_time_slot or "").strip().lower()
     if content_time_slot not in {"", "morning", "night"}:
         raise HTTPException(status_code=400, detail="不支持的文案时段。")
-    text_model_branch = str(payload.text_model_branch or "").strip().lower()
-    if text_model_branch not in {"free", "paid"}:
-        text_model_branch = "paid" if content_branch == "r18" else "free"
     result = _run_persona_workflow_cli({
         "action": "generate-posts",
         "archiveId": clean_id,
@@ -14296,7 +11012,7 @@ def _generate_persona_archive_posts(archive_id: str, payload: PersonaDashboardGe
         "customInstruction": _build_persona_generate_instruction(payload),
         "selectedMemoryEntryIds": [str(item or "").strip() for item in (payload.selected_memory_ids or []) if str(item or "").strip()],
         "selectedMemorySummaries": [str(item or "").strip() for item in (payload.selected_memory_summaries or []) if str(item or "").strip()],
-        "textModelBranch": text_model_branch,
+        "textModelBranch": "free",
     })
     post_ids = {
         str(item or "").strip()
@@ -14486,7 +11202,7 @@ def _persona_dashboard_suggest_keywords(payload: PersonaDashboardPersonaAiKeywor
     result = _run_persona_create_cli({
         "action": "suggest-keywords",
         "personaName": name,
-        "prompt": prompt,
+        "userPrompt": prompt,
     })
     keywords = [
         str(item or "").strip()
@@ -14515,7 +11231,7 @@ def _persona_dashboard_create_persona_with_ai(payload: PersonaDashboardPersonaAi
     result = _run_persona_create_cli({
         "action": "create-from-prompt",
         "personaName": name,
-        "prompt": prompt,
+        "userPrompt": prompt,
         "selectedKeywords": selected_keywords,
     })
     archive_id = str(result.get("archiveId") or "").strip()
@@ -14851,14 +11567,6 @@ def _write_persona_archives_preserving_shape(path: Path, raw: Any, archives: lis
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _is_workflow_persona_archive(archive: dict[str, Any]) -> bool:
-    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
-    return bool(
-        isinstance(setup.get("imageWorkflow"), dict)
-        or isinstance(archive.get("imageWorkflow"), dict)
-    )
-
-
 def _bind_persona_threads_username(archive_id: str, username: str) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     clean_username = _normalize_threads_username(username)
@@ -14980,7 +11688,6 @@ def _build_persona_dashboard_profile(archive: dict[str, Any]) -> dict[str, Any]:
         ],
         "image_count": len(archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []),
         "has_reference_images": bool(archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []),
-        "is_workflow_persona": _is_workflow_persona_archive(archive),
         "updated_at": str(archive.get("updatedAt") or "").strip(),
     }
 
@@ -15056,7 +11763,6 @@ def _list_persona_archive_images(archive_id: str) -> dict[str, Any]:
       "archive_id": clean_id,
       "current_reference_url": current_reference_url,
       "items": items,
-      "is_workflow_persona": _is_workflow_persona_archive(archive),
     }
 
 
@@ -15136,8 +11842,6 @@ def _run_persona_image_cli_for_web(archive_id: str, *, prompt: str = "", aspect_
     if not archive:
         raise HTTPException(status_code=404, detail="人设不存在。")
     setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
-    if _is_workflow_persona_archive(archive):
-        raise HTTPException(status_code=400, detail="工作流人设不需要单独生成人设图。")
     payload = {
         "setup": setup,
         "content": str(prompt or archive.get("content") or ""),
@@ -15413,8 +12117,6 @@ def _delete_persona_dashboard_persona(archive_id: str) -> dict[str, Any]:
         if str(archive.get("id") or "").strip() != clean_id:
             next_archives.append(archive)
             continue
-        if _is_workflow_persona_archive(archive):
-            raise HTTPException(status_code=400, detail="工作流人设不允许从 Web 控制台删除。")
         removed = archive
     if removed is None:
         raise HTTPException(status_code=404, detail="人设不存在。")
@@ -16381,7 +13083,6 @@ def _build_persona_dashboard_overview() -> dict[str, Any]:
             "id": archive_id,
             "name": archive.get("name") or "未命名人设",
             "content": str(archive.get("content") or "")[:800],
-            "is_workflow_persona": _is_workflow_persona_archive(archive),
             "created_at": archive.get("createdAt"),
             "updated_at": archive.get("updatedAt"),
             "bound_pad_code": archive.get("boundPadCode"),
@@ -16484,15 +13185,16 @@ def create_app() -> FastAPI:
     _start_task_workers()
     _start_cleanup_worker()
 
-    app = FastAPI(title="Workflow WebApp", version="1.0.0")
-    app.mount("/assets", StaticFiles(directory=str(STATIC_DIR / "assets")), name="assets")
-    app.mount("/tool_r18_uploads", StaticFiles(directory=str(TOOL_R18_UPLOAD_ROOT)), name="tool_r18_uploads")
-
-    @app.on_event("startup")
-    def start_tool_r18_stop_responder() -> None:
+    @contextlib.asynccontextmanager
+    async def lifespan(_: FastAPI):
         _ensure_tool_r18_stop_responder_started()
         _ensure_persona_dashboard_monitor_started()
         ensure_social_automation_worker_started()
+        yield
+
+    app = FastAPI(title="Workflow WebApp", version="1.0.0", lifespan=lifespan)
+    app.mount("/assets", StaticFiles(directory=str(STATIC_DIR / "assets")), name="assets")
+    app.mount("/tool_r18_uploads", StaticFiles(directory=str(TOOL_R18_UPLOAD_ROOT)), name="tool_r18_uploads")
 
     @app.get("/", include_in_schema=False)
     def root(request: Request) -> RedirectResponse:
@@ -16653,8 +13355,6 @@ def create_app() -> FastAPI:
         explicit = payload.model_dump(exclude_unset=True)
         secret_keys = {
             "telegram_bot_token",
-            "remote_comfy_gateway_token",
-            "local_comfy_gateway_token",
             "llm_api_key",
             "llm_api_key_gpt",
             "llm_api_key_gemini",
@@ -18162,24 +14862,6 @@ def create_app() -> FastAPI:
         if isinstance(current_runtime, dict):
             merged.update(current_runtime)
         merged.update({k: str(v).strip() if isinstance(v, str) else v for k, v in explicit_data.items()})
-        comfy_preserve_keys = (
-            "comfy_workflow_source",
-            "remote_comfy_gateway_url",
-            "remote_comfy_gateway_token",
-            "remote_comfy_workflow_mappings",
-            "remote_comfy_image_input_bindings",
-            "local_comfy_gateway_url",
-            "local_comfy_gateway_token",
-            "local_comfy_workflow_mappings",
-            "local_comfy_image_input_bindings",
-            "comfy_gpu_queue_enabled",
-            "comfy_gpu_max_concurrency",
-        )
-        for key in comfy_preserve_keys:
-            current_value = explicit_data.get(key)
-            saved_value = current_runtime.get(key) if isinstance(current_runtime, dict) else None
-            if (key not in explicit_data or current_value in (None, "", {})) and saved_value not in (None, "", {}):
-                merged[key] = saved_value
         secret_preserve_keys = ("new_persona_runninghub_api_key",)
         for key in secret_preserve_keys:
             current_value = explicit_data.get(key)
@@ -18477,88 +15159,6 @@ def create_app() -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"識別模型失敗：{type(exc).__name__}: {str(exc)[:300]}") from exc
         return {"ok": True, "type": typ, "count": len(models), "models": models}
-
-    @app.post("/api/admin/remote_comfy/health")
-    def api_admin_remote_comfy_health(payload: RemoteComfyGatewayPayload, user: dict[str, Any] = Depends(require_admin)):
-        with db() as conn:
-            runtime = _get_runtime_config(conn)
-        _source, gateway_url, token = _admin_comfy_gateway_values(payload, runtime)
-        try:
-            health = _remote_comfy_gateway_health(gateway_url=gateway_url, token=token)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-        return {"ok": True, "gateway_url": _normalize_remote_comfy_gateway_url(gateway_url), "health": health}
-
-    @app.post("/api/admin/remote_comfy/workflows")
-    def api_admin_remote_comfy_workflows(payload: RemoteComfyGatewayPayload, user: dict[str, Any] = Depends(require_admin)):
-        with db() as conn:
-            runtime = _get_runtime_config(conn)
-        _source, gateway_url, token = _admin_comfy_gateway_values(payload, runtime)
-        try:
-            return _remote_comfy_gateway_json(
-                gateway_url=gateway_url,
-                token=token,
-                method="GET",
-                path="/api/workflows",
-                timeout=60,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-    @app.post("/api/admin/remote_comfy/run_test")
-    def api_admin_remote_comfy_run_test(payload: RemoteComfyWorkflowTestPayload, user: dict[str, Any] = Depends(require_admin)):
-        with db() as conn:
-            runtime = _get_runtime_config(conn)
-        _source, gateway_url, token = _admin_comfy_gateway_values(payload, runtime)
-        workflow_path = str(payload.workflow_path or "").strip()
-        if not workflow_path:
-            raise HTTPException(status_code=400, detail="workflow_path 不能为空")
-        try:
-            result = _run_remote_comfy_gateway_test(
-                gateway_url=gateway_url,
-                token=token,
-                workflow_path=workflow_path,
-                prompt_text=payload.prompt_text,
-                negative_prompt=payload.negative_prompt,
-                width=payload.width,
-                height=payload.height,
-                steps=payload.steps,
-                batch_size=payload.batch_size,
-                timeout_seconds=payload.timeout_seconds,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-        return result
-
-    @app.post("/api/admin/remote_comfy/convert_workflows")
-    def api_admin_remote_comfy_convert_workflows(payload: RemoteComfyConvertPayload, user: dict[str, Any] = Depends(require_admin)):
-        with db() as conn:
-            runtime = _get_runtime_config(conn)
-        _source, gateway_url, token = _admin_comfy_gateway_values(payload, runtime)
-        body = {
-            "paths": [str(path).strip() for path in payload.paths if str(path).strip()],
-            "overwrite": bool(payload.overwrite),
-            "force": bool(payload.force),
-        }
-        try:
-            return _remote_comfy_gateway_json(
-                gateway_url=gateway_url,
-                token=token,
-                method="POST",
-                path="/api/workflows/convert",
-                json_body=body,
-                timeout=300,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.get("/api/admin/tg_settings")
     def api_admin_tg_settings(user: dict[str, Any] = Depends(require_admin)):
