@@ -3867,6 +3867,7 @@ body.persona-touch-dragging .persona-list-card:active {
   grid-template-columns: minmax(0, 1fr) 48px;
   gap: 6px;
   align-items: center;
+  align-content: center;
   width: 100%;
   max-width: 100%;
   min-width: 0;
