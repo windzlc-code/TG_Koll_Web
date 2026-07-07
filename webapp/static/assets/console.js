@@ -10328,6 +10328,7 @@ function bindEvents() {
   document.addEventListener("pointermove", handlePersonaPointerMove, { passive: false });
   document.addEventListener("pointerup", handlePersonaPointerUp, { passive: false });
   document.addEventListener("pointercancel", handlePersonaPointerCancel);
+  document.addEventListener("wheel", handlePersonaImageLibraryWheel, { passive: false });
   $("moduleBody").addEventListener("scroll", schedulePersonaCardEditorMenuPosition, true);
   window.addEventListener("resize", schedulePersonaCardEditorMenuPosition);
   $("moduleBody").addEventListener("click", (event) => {
