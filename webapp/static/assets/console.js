@@ -9901,13 +9901,13 @@ function bindEvents() {
   if ($("socialAccount")) $("socialAccount").addEventListener("change", syncStandaloneSocialForm);
   if ($("socialPlatform")) $("socialPlatform").addEventListener("change", syncStandaloneSocialForm);
   if ($("runSocialOnce")) $("runSocialOnce").addEventListener("click", () => api("/api/persona_dashboard/automation/worker/run_once", { method: "POST" }).then(loadSocial).catch((error) => showMsg("socialMsg", error.detail || error.message || "执行失败", false)));
-  $("accountGrid").addEventListener("click", (event) => {
+  if ($("accountGrid")) $("accountGrid").addEventListener("click", (event) => {
     const open = event.target.closest("[data-social-open-login]");
     const check = event.target.closest("[data-social-check-login]");
     if (open) createSocialTask("open_login", open.dataset.socialOpenLogin);
     if (check) createSocialTask("check_login", check.dataset.socialCheckLogin);
   });
-  $("socialTaskList").addEventListener("click", (event) => {
+  if ($("socialTaskList")) $("socialTaskList").addEventListener("click", (event) => {
     const log = event.target.closest("[data-social-log]");
     const retry = event.target.closest("[data-social-retry]");
     const cancel = event.target.closest("[data-social-cancel]");
