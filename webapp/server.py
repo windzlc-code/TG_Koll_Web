@@ -14476,6 +14476,100 @@ def _build_persona_dashboard_overview() -> dict[str, Any]:
     }
 
 
+def _build_persona_dashboard_console_overview() -> dict[str, Any]:
+    archives, archives_source = _read_tool_r18_persona_archives()
+    queue_stats = _read_tool_r18_publish_queue_stats()
+    deleted_posts = _read_persona_dashboard_deleted_posts()
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    personas: list[dict[str, Any]] = []
+    totals = {"posts": 0, "published": 0, "images": 0}
+
+    for archive in archives:
+        if not isinstance(archive, dict):
+            continue
+        archive_id = str(archive.get("id") or "").strip()
+        if not archive_id:
+            continue
+        setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+        posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+        deleted_post_keys = deleted_posts.get(archive_id, set())
+        visible_posts = [
+            post for post in posts
+            if isinstance(post, dict) and _persona_dashboard_post_key(archive_id, post) not in deleted_post_keys
+        ]
+        publish_history = archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []
+        visible_publish_history = [
+            record for record in publish_history
+            if isinstance(record, dict) and not _is_internal_login_publish_record(record)
+        ]
+        image_library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
+        favorite_posts = archive.get("favoritePosts") if isinstance(archive.get("favoritePosts"), list) else []
+        account_management = setup.get("accountManagement") if isinstance(setup.get("accountManagement"), dict) else {}
+        threads_account = account_management.get("threads") if isinstance(account_management.get("threads"), dict) else {}
+        threads_handle = _normalize_threads_username(threads_account.get("handle"))
+        platform_posts = archive.get("platformPosts") if isinstance(archive.get("platformPosts"), dict) else {}
+        post_count = len(visible_posts)
+        published_count = len(visible_publish_history)
+        image_count = len(image_library)
+        totals["posts"] += post_count
+        totals["published"] += published_count
+        totals["images"] += image_count
+        personas.append({
+            "id": archive_id,
+            "name": archive.get("name") or "未命名人设",
+            "content": str(archive.get("content") or "")[:800],
+            "created_at": archive.get("createdAt"),
+            "updated_at": archive.get("updatedAt"),
+            "bound_pad_code": archive.get("boundPadCode"),
+            "bound_pad_name": archive.get("boundPadName"),
+            "owner_bot_name": archive.get("ownerBotName"),
+            "threads_account": {
+                "handle": threads_handle,
+                "bound": bool(threads_handle),
+                "auth_profile_key": threads_account.get("authProfileKey"),
+                "updated_at": threads_account.get("updatedAt"),
+            },
+            "setup": _compact_dashboard_setup(setup),
+            "counts": {
+                "posts": post_count,
+                "favorites": len(favorite_posts),
+                "published": published_count,
+                "published_raw": len(publish_history),
+                "published_hidden": max(0, len(publish_history) - published_count),
+                "images": image_count,
+                "platform_posts": {str(k): len(v) if isinstance(v, list) else 0 for k, v in platform_posts.items()},
+            },
+            "hot": {"hot_score": 0},
+            "hot_platforms": [],
+            "post_metrics": [],
+            "publish_history": [],
+            "queue": (queue_stats.get("by_archive") or {}).get(archive_id, {}),
+            "warnings": [],
+        })
+
+    personas.sort(key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)
+    persona_groups = _read_persona_groups({str(item.get("id") or "").strip() for item in personas})
+    return {
+        "ok": True,
+        "updated_at": now,
+        "summary": {
+            "persona_count": len(personas),
+            "post_count": totals["posts"],
+            "published_count": totals["published"],
+            "image_count": totals["images"],
+            "task_count": queue_stats.get("total", 0),
+        },
+        "charts": {},
+        "personas": personas,
+        "persona_groups": persona_groups,
+        "data_sources": {
+            "archives": archives_source,
+            "publish_queue": {k: v for k, v in queue_stats.items() if k != "rows"},
+            "persona_groups": {"path": persona_groups.get("source"), "count": len(persona_groups.get("groups") or [])},
+        },
+    }
+
+
 def create_app() -> FastAPI:
     _ensure_dirs()
     init_db()
@@ -15023,6 +15117,10 @@ def create_app() -> FastAPI:
     @app.get("/api/persona_dashboard/overview")
     def api_persona_dashboard_overview():
         return _build_persona_dashboard_overview()
+
+    @app.get("/api/persona_dashboard/console_overview")
+    def api_persona_dashboard_console_overview(_user: dict[str, Any] = Depends(get_current_user)):
+        return _build_persona_dashboard_console_overview()
 
     @app.get("/api/persona_dashboard/monitor")
     def api_persona_dashboard_monitor():

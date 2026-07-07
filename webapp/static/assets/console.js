@@ -4682,7 +4682,9 @@ function schedulePersonaDetailRender(personaId = "") {
 }
 
 async function loadPersonas() {
-  const data = await api("/api/persona_dashboard/overview").catch(() => ({ personas: [] }));
+  const data = await api("/api/persona_dashboard/console_overview")
+    .catch(() => api("/api/persona_dashboard/overview"))
+    .catch(() => ({ personas: [] }));
   state.personas = Array.isArray(data.personas) ? data.personas : [];
   state.personaCollections = data.persona_groups && Array.isArray(data.persona_groups.groups)
     ? data.persona_groups

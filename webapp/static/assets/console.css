@@ -3882,10 +3882,10 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .persona-memory-card-main {
-  display: grid;
-  grid-template-columns: 20px 24px minmax(0, 1fr);
+  display: flex;
   gap: 6px;
   align-items: center;
+  align-self: center;
   max-width: 100%;
   min-width: 0;
   cursor: pointer;
@@ -3894,6 +3894,7 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-memory-index {
   display: inline-grid;
   place-items: center;
+  align-self: center;
   width: 20px;
   min-width: 20px;
   height: 20px;
@@ -3927,6 +3928,7 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-memory-check {
   position: relative;
+  align-self: center;
   width: 24px;
   min-width: 24px;
   height: 24px;
@@ -3954,7 +3956,10 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-memory-copy {
   display: grid;
+  flex: 1 1 auto;
   gap: 2px;
+  align-self: center;
+  justify-content: start;
   max-width: 100%;
   min-width: 0;
 }
@@ -3987,6 +3992,7 @@ body.persona-touch-dragging .persona-list-card:active {
   min-height: 30px;
   padding: 0;
   align-self: center;
+  justify-self: end;
 }
 
 .persona-media-workspace {
