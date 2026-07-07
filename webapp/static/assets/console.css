@@ -3853,7 +3853,7 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-memory-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   max-height: 270px;
   overflow-x: hidden;
@@ -3864,14 +3864,14 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-memory-card {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 54px;
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) 48px;
+  gap: 6px;
   align-items: center;
   width: 100%;
   max-width: 100%;
   min-width: 0;
   min-height: 58px;
-  padding: 8px 10px;
+  padding: 8px;
   box-sizing: border-box;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -3883,8 +3883,8 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-memory-card-main {
   display: grid;
-  grid-template-columns: 22px 28px minmax(0, 1fr);
-  gap: 8px;
+  grid-template-columns: 20px 24px minmax(0, 1fr);
+  gap: 6px;
   align-items: center;
   max-width: 100%;
   min-width: 0;
@@ -3894,9 +3894,9 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-memory-index {
   display: inline-grid;
   place-items: center;
-  width: 22px;
-  min-width: 22px;
-  height: 22px;
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--ink) 8%, var(--panel-solid));
   color: var(--muted);
@@ -3927,10 +3927,10 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-memory-check {
   position: relative;
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  min-height: 28px;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel-solid);
@@ -3981,10 +3981,10 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .persona-memory-card > button {
-  width: 54px;
+  width: 48px;
   min-width: 0;
-  max-width: 54px;
-  min-height: 32px;
+  max-width: 48px;
+  min-height: 30px;
   padding: 0;
   align-self: center;
 }
