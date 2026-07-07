@@ -1197,7 +1197,7 @@ textarea:focus {
   min-height: 0;
   max-height: none;
   overflow-y: auto;
-  overflow-x: visible;
+  overflow-x: hidden;
   padding: 8px 16px 8px 4px;
   margin: -4px -10px 0 -4px;
   scrollbar-width: thin;
@@ -1382,6 +1382,9 @@ textarea:focus {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 6px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   box-sizing: border-box;
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -1523,6 +1526,8 @@ body.persona-touch-dragging .persona-list-card:active {
   display: grid;
   gap: 2px;
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
   text-align: left;
   min-height: 52px;
   padding: 8px 10px;
@@ -1549,15 +1554,21 @@ body.persona-touch-dragging .persona-list-card:active {
   display: flex;
   align-items: center;
   gap: 6px;
+  max-width: 100%;
   min-width: 0;
+  overflow: hidden;
 }
 
 .persona-list-item strong {
+  min-width: 0;
   font-size: 14px;
   line-height: 1.2;
 }
 
 .persona-card-title strong {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1565,12 +1576,18 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-list-item span,
 .persona-list-item small {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--muted);
   font-size: 11px;
   line-height: 1.2;
 }
 
 .persona-kind-badge {
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   min-height: 18px;
@@ -1608,6 +1625,7 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-card-edit {
   width: 36px;
   min-width: 36px;
+  max-width: 36px;
   min-height: 32px;
   align-self: start;
   padding: 0;
@@ -3805,6 +3823,7 @@ body.persona-touch-dragging .persona-list-card:active {
   grid-template-columns: auto minmax(180px, 1fr) auto;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
 .persona-memory-toolbar strong {
@@ -3834,7 +3853,7 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-memory-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
   gap: 8px;
   max-height: 270px;
   overflow-x: hidden;
@@ -3845,15 +3864,19 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-memory-card {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) 54px;
   gap: 8px;
   align-items: center;
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
   min-height: 58px;
   padding: 8px 10px;
+  box-sizing: border-box;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--soft);
+  overflow: hidden;
   cursor: pointer;
   transition: border-color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease;
 }
@@ -3863,6 +3886,7 @@ body.persona-touch-dragging .persona-list-card:active {
   grid-template-columns: 22px 28px minmax(0, 1fr);
   gap: 8px;
   align-items: center;
+  max-width: 100%;
   min-width: 0;
   cursor: pointer;
 }
@@ -3893,6 +3917,10 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-memory-input {
   position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
   opacity: 0;
   pointer-events: none;
 }
@@ -3900,7 +3928,9 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-memory-check {
   position: relative;
   width: 28px;
+  min-width: 28px;
   height: 28px;
+  min-height: 28px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel-solid);
@@ -3925,6 +3955,7 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-memory-copy {
   display: grid;
   gap: 2px;
+  max-width: 100%;
   min-width: 0;
 }
 
@@ -3940,13 +3971,21 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .persona-memory-copy small {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--muted);
   font-size: 12px;
 }
 
 .persona-memory-card > button {
+  width: 54px;
+  min-width: 0;
+  max-width: 54px;
   min-height: 32px;
-  padding: 0 10px;
+  padding: 0;
   align-self: center;
 }
 
