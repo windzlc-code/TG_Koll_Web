@@ -525,8 +525,8 @@ function ensureThemeToggle() {
 
 const modules = [
   { id: "personas", label: "我的人设", hint: "人设列表、详情、推文、账号", callback: "后台自动读取" },
-  { id: "publishing", label: "发布", hint: "草稿发布、批量发布、定时、队列", callback: "后台自动排队" },
-  { id: "automation", label: "指纹浏览器自动化", hint: "浏览器账号登录、检测、养号、回复", callback: "后台自动执行" },
+  { id: "publishing", label: "发布", hint: "草稿发布、批量发布、定时发布", callback: "后台自动排队" },
+  { id: "automation", label: "指纹浏览器自动化", hint: "登录、检测、养号、回复、浏览", callback: "后台自动执行" },
 ];
 
 const taskMeta = {
@@ -3524,28 +3524,30 @@ function platformForAccount(accountId) {
   return account?.platform || "threads";
 }
 
-function taskOptionsForPlatform(platform) {
+function taskOptionsForPlatform(platform, { includePublish = false } = {}) {
   if (platform === "instagram") {
-    return [
+    const options = [
       ["open_login", "打开登录"],
       ["check_login", "检查登录"],
       ["browse_feed", "浏览 Feed"],
       ["browse_profile", "浏览主页"],
-      ["publish_post", "发布内容"],
       ["comment_post", "评论帖子"],
       ["reply_comment", "回复评论"],
       ["like_post", "点赞帖子"],
       ["share_post", "分享帖子"],
     ];
+    if (includePublish) options.splice(4, 0, ["publish_post", "发布内容"]);
+    return options;
   }
-  return [
+  const options = [
     ["open_login", "打开登录"],
     ["check_login", "检查登录"],
     ["browse_feed", "浏览 Feed"],
-    ["publish_post", "发布内容"],
     ["threads_warmup", "Threads 养号"],
     ["threads_auto_reply", "Threads 自动回复"],
   ];
+  if (includePublish) options.splice(3, 0, ["publish_post", "发布内容"]);
+  return options;
 }
 
 function optionTags(options, selectedValue) {
@@ -3755,7 +3757,7 @@ function renderSimpleFlowModule(moduleId) {
   const firstAccount = state.preferredAccountId || personaAccount?.id || state.socialAccounts[0]?.id || "";
   const accountId = $("simpleAccount")?.value || firstAccount;
   const platform = platformForAccount(accountId);
-  const taskOptions = taskOptionsForPlatform(platform);
+  const taskOptions = taskOptionsForPlatform(platform, { includePublish: moduleId === "publishing" });
   const selectedTask = taskOptions.some(([value]) => value === branch) ? branch : taskOptions[0][0];
   const commonAccount = `
     <label>执行账号
@@ -8528,8 +8530,8 @@ function defaultPayloadForTask(taskType) {
   return {};
 }
 
-function validateTaskForPlatform(taskType, platform) {
-  const allowed = taskOptionsForPlatform(platform).map(([value]) => value);
+function validateTaskForPlatform(taskType, platform, { includePublish = false } = {}) {
+  const allowed = taskOptionsForPlatform(platform, { includePublish }).map(([value]) => value);
   return allowed.includes(taskType);
 }
 
@@ -8712,7 +8714,8 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
   }
   const selected = selectedSocialAccount(accountId);
   const platform = selected?.platform || $("socialPlatform")?.value || "threads";
-  if (!validateTaskForPlatform(taskType, platform)) {
+  const allowPublishTask = taskType === "publish_post" && state.activeModule === "publishing";
+  if (!validateTaskForPlatform(taskType, platform, { includePublish: allowPublishTask })) {
     showMsg(messageId, `${platformLabel(platform)} 当前不支持「${statusLabel(taskType)}」，请切换到可执行任务类型。`, false);
     return;
   }
@@ -9894,8 +9897,8 @@ function bindEvents() {
     if (button.dataset.retry) api(`/api/tasks/${encodeURIComponent(id)}/retry`, { method: "POST" }).then(loadTasks);
     if (button.dataset.cancelTask) cancelRegularTask(id, "commandMsg").catch((error) => showMsg("commandMsg", error.detail || error.message || "停止任务失败", false));
   });
-  $("submitSocialTask").addEventListener("click", () => createSocialTask().catch((error) => showMsg("socialMsg", error.detail || error.message || "提交失败", false)));
-  $("socialAccount").addEventListener("change", syncStandaloneSocialForm);
+  if ($("submitSocialTask")) $("submitSocialTask").addEventListener("click", () => createSocialTask().catch((error) => showMsg("socialMsg", error.detail || error.message || "提交失败", false)));
+  if ($("socialAccount")) $("socialAccount").addEventListener("change", syncStandaloneSocialForm);
   if ($("socialPlatform")) $("socialPlatform").addEventListener("change", syncStandaloneSocialForm);
   if ($("runSocialOnce")) $("runSocialOnce").addEventListener("click", () => api("/api/persona_dashboard/automation/worker/run_once", { method: "POST" }).then(loadSocial).catch((error) => showMsg("socialMsg", error.detail || error.message || "执行失败", false)));
   $("accountGrid").addEventListener("click", (event) => {
