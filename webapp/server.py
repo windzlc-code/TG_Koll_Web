@@ -12152,7 +12152,7 @@ def _list_persona_archive_publish_history(archive_id: str) -> list[dict[str, Any
     publish_history = archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []
     rows = []
     for record in publish_history:
-        if not isinstance(record, dict) or _is_internal_login_publish_record(record):
+        if not _is_persona_publish_history_record(record):
             continue
         compact = _compact_publish_record(record)
         compact["media_items"] = _previewable_persona_media_items(
@@ -12170,6 +12170,67 @@ def _list_persona_archive_publish_history(archive_id: str) -> list[dict[str, Any
         reverse=True,
     )
     return rows
+
+
+def _requeue_persona_publish_record(archive_id: str, history_id: str) -> dict[str, Any]:
+    clean_id = str(archive_id or "").strip()
+    clean_history_id = str(history_id or "").strip()
+    if not clean_id or not clean_history_id:
+        raise HTTPException(status_code=400, detail="missing archive_id or history_id")
+    path, raw, archives = _persona_archive_source_for_write(clean_id)
+    archive = _find_persona_archive(archives, clean_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="persona not found")
+    publish_history = archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []
+    record = next((
+        item for item in publish_history
+        if isinstance(item, dict) and str(item.get("id") or item.get("archivePostId") or item.get("archive_post_id") or "").strip() == clean_history_id
+    ), None)
+    if not record or not _is_persona_publish_history_record(record):
+        raise HTTPException(status_code=404, detail="publish history record not found")
+    content = str(record.get("content") or record.get("caption") or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="publish history content is empty")
+    posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+    next_order = max((int(_number(post.get("orderIndex"), -1)) for post in posts if isinstance(post, dict)), default=-1) + 1
+    now = _persona_dashboard_iso_now()
+    source_meta = copy.deepcopy(record.get("sourceMeta")) if isinstance(record.get("sourceMeta"), dict) else {}
+    media_items = copy.deepcopy(record.get("mediaItems")) if isinstance(record.get("mediaItems"), list) else None
+    if media_items is None and isinstance(record.get("media_items"), list):
+        media_items = copy.deepcopy(record.get("media_items"))
+    post = {
+        "id": _new_persona_post_id(),
+        "title": str(record.get("title") or f"重入队推文 #{len(posts) + 1}").strip(),
+        "content": content,
+        "wordCount": len(content),
+        "orderIndex": next_order,
+        "createdAt": now,
+        "updatedAt": now,
+        "sourceMeta": source_meta,
+    }
+    for key in ("imageUrl", "mediaUrl", "mediaType", "telegramGroupContentType"):
+        value = record.get(key)
+        if value:
+            post[key] = value
+    if media_items:
+        post["mediaItems"] = media_items
+    archive["posts"] = [*posts, post]
+    archive["updatedAt"] = now
+    _write_persona_archives_preserving_shape(path, raw, archives)
+    compact = _compact_persona_archive_post(post)
+    compact["media_items"] = _previewable_persona_media_items(
+        compact.get("media_items") if isinstance(compact.get("media_items"), list) else [],
+        archive_id=clean_id,
+        post_id=str(compact.get("id") or "").strip(),
+        source="posts",
+    )
+    return {
+        "ok": True,
+        "archive_id": clean_id,
+        "history_id": clean_history_id,
+        "post": compact,
+        "posts": _list_persona_archive_posts(clean_id, "posts"),
+    }
 
 
 def _create_persona_archive(payload: PersonaDashboardPersonaCreatePayload) -> dict[str, Any]:
@@ -13759,6 +13820,17 @@ def _is_internal_login_publish_record(record: Any) -> bool:
     return str(task_type or "") == "open_login"
 
 
+def _is_persona_publish_history_record(record: Any) -> bool:
+    if not isinstance(record, dict) or _is_internal_login_publish_record(record):
+        return False
+    published_meta = record.get("publishedMeta") if isinstance(record.get("publishedMeta"), dict) else {}
+    task_type = str(record.get("automationTaskType") or record.get("automation_task_type") or published_meta.get("taskType") or "").strip().lower()
+    if task_type and task_type != "publish_post":
+        return False
+    content = str(record.get("content") or record.get("caption") or "").strip()
+    return bool(content)
+
+
 def _metric_value(metrics: dict[str, Any], *keys: str) -> int:
     for key in keys:
         if key in metrics:
@@ -14313,7 +14385,7 @@ def _build_persona_dashboard_overview() -> dict[str, Any]:
         posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
         platform_posts = archive.get("platformPosts") if isinstance(archive.get("platformPosts"), dict) else {}
         publish_history = archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []
-        visible_publish_history = [record for record in publish_history if not _is_internal_login_publish_record(record)]
+        visible_publish_history = [record for record in publish_history if _is_persona_publish_history_record(record)]
         image_library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
         hot_metrics_raw = setup.get("hotMetrics") if isinstance(setup.get("hotMetrics"), dict) else {}
         deleted_post_keys = deleted_posts.get(archive_id, set())
@@ -14599,10 +14671,7 @@ def _build_persona_dashboard_console_overview() -> dict[str, Any]:
             if isinstance(post, dict) and _persona_dashboard_post_key(archive_id, post) not in deleted_post_keys
         ]
         publish_history = archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []
-        visible_publish_history = [
-            record for record in publish_history
-            if isinstance(record, dict) and not _is_internal_login_publish_record(record)
-        ]
+        visible_publish_history = [record for record in publish_history if _is_persona_publish_history_record(record)]
         image_library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
         favorite_posts = archive.get("favoritePosts") if isinstance(archive.get("favoritePosts"), list) else []
         account_management = setup.get("accountManagement") if isinstance(setup.get("accountManagement"), dict) else {}
@@ -15286,6 +15355,10 @@ def create_app() -> FastAPI:
     @app.get("/api/persona_dashboard/personas/{archive_id}/publish_history/{history_id}/media/{index}")
     def api_persona_dashboard_persona_publish_history_media(archive_id: str, history_id: str, index: int, _user: dict[str, Any] = Depends(get_current_user)):
         return _serve_persona_archive_publish_history_media(archive_id, history_id, index)
+
+    @app.post("/api/persona_dashboard/personas/{archive_id}/publish_history/{history_id}/requeue")
+    def api_persona_dashboard_persona_publish_history_requeue(archive_id: str, history_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+        return _requeue_persona_publish_record(archive_id, history_id)
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/memories")
     def api_persona_dashboard_persona_memories(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):

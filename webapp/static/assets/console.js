@@ -112,7 +112,7 @@ const state = {
   activeModule: "personas",
   workspaceMenuOpen: true,
   setupStatus: null,
-  personaGroup: "content",
+  personaGroup: "settings",
   personaPanels: {
     content: "generate",
     settings: "profile",
@@ -236,6 +236,7 @@ const state = {
   publishContentSource: "posts",
   publishSelectedPostIds: {},
   publishPreviewPostId: "",
+  publishHistoryPreviewId: "",
   publishCustomContent: "",
   socialTasksFetch: null,
   socialAccounts: [],
@@ -579,13 +580,13 @@ const taskMeta = {
 };
 
 const personaGroups = {
-  content: {
-    label: "内容生产",
-    defaultStep: "generate",
-  },
   settings: {
     label: "人设设置",
     defaultStep: "profile",
+  },
+  content: {
+    label: "推文生成",
+    defaultStep: "generate",
   },
 };
 
@@ -789,6 +790,8 @@ function statusLabel(status) {
     cancelled: "已取消",
     need_manual: "需人工",
     pending_login: "待登录",
+    cookie_expired: "登录已过期",
+    disabled: "已禁用",
     ready: "可用",
     open_login: "打开登录",
     check_login: "检测登录",
@@ -1940,8 +1943,8 @@ function currentPersonaGroupStep(groupKey, profile) {
   return options[0]?.[0] || "";
 }
 
-function normalizedPersonaGroupKey(groupKey = state.personaGroup || "content") {
-  return Object.prototype.hasOwnProperty.call(personaGroups, String(groupKey || "").trim()) ? String(groupKey || "").trim() : "content";
+function normalizedPersonaGroupKey(groupKey = state.personaGroup || "settings") {
+  return Object.prototype.hasOwnProperty.call(personaGroups, String(groupKey || "").trim()) ? String(groupKey || "").trim() : "settings";
 }
 
 function setPersonaGroupStep(groupKey, step, profile) {
@@ -3148,9 +3151,16 @@ function personaPublishHistoryRows(persona = selectedPersona()) {
   const fallbackRows = sortPersonaPublishHistory(Array.isArray(persona.publish_history) ? persona.publish_history : []);
   if (Array.isArray(state.personaPublishHistories[key])) {
     const cachedRows = state.personaPublishHistories[key];
-    if (cachedRows.length || !fallbackRows.length) return cachedRows;
+    if (cachedRows.length || !fallbackRows.length) return cachedRows.filter(isPublishHistoryPostRecord);
   }
-  return fallbackRows;
+  return fallbackRows.filter(isPublishHistoryPostRecord);
+}
+
+function isPublishHistoryPostRecord(record = {}) {
+  if (!record || typeof record !== "object") return false;
+  const taskType = String(record.automation_task_type || record.automationTaskType || record.task_type || record.taskType || "").trim().toLowerCase();
+  if (taskType && taskType !== "publish_post") return false;
+  return Boolean(String(record.content || record.caption || "").trim());
 }
 
 function personaPublishPreview(post) {
@@ -3390,7 +3400,7 @@ function renderPersonaContentOverview(persona, account, profile) {
         <div class="flow-box">
           <span>最近草稿</span>
           <strong>${esc(latestDraft?.title || "暂无草稿")}</strong>
-          <span>${esc(latestDraft ? formatTime(latestDraft.updated_at || latestDraft.created_at) : "先到内容生产里新建推文")}</span>
+          <span>${esc(latestDraft ? formatTime(latestDraft.updated_at || latestDraft.created_at) : "先到推文生成里新建推文")}</span>
         </div>
         <div class="flow-box">
           <span>最近发布</span>
@@ -4148,11 +4158,13 @@ function publishModeLabel(mode) {
     publish_now: "普通发布",
     schedule_publish: "普通发布",
     matrix_start: "矩阵发布",
+    publish_history: "发布历史",
   })[mode] || "普通发布";
 }
 
 function normalizedPublishMode(mode) {
   if (mode === "matrix_start") return "matrix_start";
+  if (mode === "publish_history") return "publish_history";
   return "publish_now";
 }
 
@@ -4161,6 +4173,7 @@ function renderPublishModeTabs(mode) {
   const modes = [
     ["publish_now", "普通发布"],
     ["matrix_start", "矩阵发布"],
+    ["publish_history", "发布历史"],
   ];
   return `
     <div class="publish-mode-tabs" aria-label="发布方式">
@@ -4362,6 +4375,15 @@ function setPublishSelectedPostIds(persona = selectedPersona(), source = state.p
   if (!next.includes(String(state.publishPreviewPostId || ""))) state.publishPreviewPostId = next[0] || "";
 }
 
+function clearPublishSelectionForPersona(persona = selectedPersona()) {
+  if (!persona) return;
+  ["posts", "favorites"].forEach((source) => {
+    state.publishSelectedPostIds[publishSelectionKey(persona, source)] = [];
+  });
+  state.publishPreviewPostId = "";
+  setSelectedPersonaPostId("");
+}
+
 function selectedPublishPosts(persona = selectedPersona(), source = state.publishContentSource) {
   const rows = publishSourceRows(persona, source);
   const selected = new Set(syncPublishSelectedPostIds(persona, source, rows));
@@ -4382,7 +4404,7 @@ function activePublishPreviewPost(posts = []) {
 function renderPublishContentSourceTabs(source = state.publishContentSource) {
   const current = normalizePublishContentSource(source);
   return `
-    <div class="publish-source-tabs" aria-label="发布来源">
+    <div class="publish-mode-tabs publish-source-tabs" aria-label="发布来源">
       ${[
         ["custom", "自定义"],
         ["posts", "草稿"],
@@ -4522,6 +4544,167 @@ function renderPublishContentPanel(persona = selectedPersona()) {
     </div>`;
 }
 
+function publishHistoryRecordTitle(record, index = 0) {
+  return String(
+    record?.title
+    || statusLabel(record?.automation_task_type || record?.task_type || record?.taskType || "")
+    || record?.platform
+    || `第 ${index + 1} 条发布记录`
+  ).trim();
+}
+
+function publishHistoryRecordTime(record) {
+  return record?.published_at || record?.finished_at || record?.captured_at || record?.updated_at || record?.created_at || "";
+}
+
+function activePublishHistoryRecord(rows = []) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) {
+    state.publishHistoryPreviewId = "";
+    return null;
+  }
+  const active = list.find((record) => String(record.id || "") === String(state.publishHistoryPreviewId || "")) || list[0];
+  state.publishHistoryPreviewId = String(active.id || "");
+  return active;
+}
+
+function renderPublishHistorySelectionList(persona = selectedPersona()) {
+  const rows = personaPublishHistoryRows(persona);
+  if (!rows.length) return `<div class="empty-state">当前人设还没有发布历史。</div>`;
+  const activeId = String(state.publishHistoryPreviewId || rows[0]?.id || "");
+  return `
+    <div class="publish-post-list">
+      ${rows.map((record, index) => {
+        const recordId = String(record.id || "");
+        const active = recordId === activeId;
+        const mediaItems = personaHistoryMediaItems(record);
+        const platform = String(record.platform || record.publishPlatform || "").trim();
+        const status = String(record.status || "").trim();
+        const meta = [platform, status ? statusLabel(status) : "", formatTime(publishHistoryRecordTime(record))].filter(Boolean).join(" · ");
+        return `
+          <article class="publish-post-card publish-history-card ${active ? "is-selected" : ""}" data-publish-history-card="${esc(recordId)}">
+            <div class="publish-history-card-main">
+              <span class="publish-post-card-index">${esc(index + 1)}</span>
+              <span class="publish-post-card-copy">
+                <span class="publish-post-card-head">
+                  <strong>${esc(publishHistoryRecordTitle(record, index))}</strong>
+                  ${renderMediaTypeBadge(mediaItems)}
+                </span>
+                <span class="publish-post-card-meta">${esc(meta || "发布记录")}</span>
+                <span class="publish-post-card-snippet">${esc(String(record.content || record.caption || record.text || record.source_url || "").replace(/\s+/g, " ").slice(0, 86) || "该记录没有正文摘要。")}</span>
+              </span>
+            </div>
+          </article>`;
+      }).join("")}
+    </div>`;
+}
+
+function renderPublishHistoryPreview(persona = selectedPersona()) {
+  const rows = personaPublishHistoryRows(persona);
+  const activeRecord = activePublishHistoryRecord(rows);
+  const activeMediaItems = activeRecord ? personaHistoryMediaItems(activeRecord) : [];
+  const publishedUrl = String(activeRecord?.source_url || activeRecord?.published_url || activeRecord?.url || activeRecord?.post_url || "").trim();
+  const metrics = activeRecord ? [
+    ["点赞", activeRecord.likes],
+    ["评论", activeRecord.comments],
+    ["转发", activeRecord.shares],
+    ["浏览", activeRecord.views],
+  ].filter(([, value]) => Number(value || 0) > 0) : [];
+  return `
+    <section class="publish-content-preview">
+      <div class="publish-panel-head">
+        <strong>发布历史展示</strong>
+        <span>已发布 ${rows.length} 条</span>
+      </div>
+      ${rows.length ? `
+        <div class="publish-preview-tabs-layout">
+          <div class="publish-preview-tabs" aria-label="发布历史标签页">
+            ${rows.map((record, index) => {
+              const recordId = String(record.id || "");
+              const active = recordId === String(activeRecord?.id || "");
+              return `
+                <button
+                  type="button"
+                  class="${active ? "is-active" : ""}"
+                  data-publish-history-preview="${esc(recordId)}"
+                  aria-pressed="${active ? "true" : "false"}"
+                >
+                  <strong>第${esc(index + 1)}条</strong>
+                  <span>${esc(publishHistoryRecordTitle(record, index))}</span>
+                </button>`;
+            }).join("")}
+          </div>
+          <article class="publish-preview-card">
+            <div class="publish-preview-card-head">
+              <strong>${esc(publishHistoryRecordTitle(activeRecord, 0) || "发布记录")}</strong>
+              ${renderMediaTypeBadge(activeMediaItems)}
+            </div>
+            <div class="publish-history-meta">
+              <span>${esc(String(activeRecord?.platform || "平台未知"))}</span>
+              <span>${esc(formatTime(publishHistoryRecordTime(activeRecord)) || "时间未知")}</span>
+              ${activeRecord?.status ? `<span>${esc(statusLabel(activeRecord.status))}</span>` : ""}
+            </div>
+            <p>${esc(String(activeRecord?.content || activeRecord?.caption || activeRecord?.text || activeRecord?.source_url || "").trim() || "该记录没有正文或链接摘要。")}</p>
+            ${metrics.length ? `<div class="publish-history-metrics">${metrics.map(([label, value]) => `<span>${esc(label)} ${esc(value)}</span>`).join("")}</div>` : ""}
+            <div class="row-actions publish-history-actions">
+              ${publishedUrl ? `<a href="${esc(publishedUrl)}" target="_blank" rel="noopener">查看来源</a>` : ""}
+              <button type="button" data-publish-history-requeue="${esc(String(activeRecord?.id || ""))}">重入队</button>
+            </div>
+            ${renderPublishPreviewMedia(activeMediaItems)}
+          </article>
+        </div>
+      ` : `<div class="empty-state">当前人设还没有发布历史。</div>`}
+    </section>`;
+}
+
+function renderPublishHistoryPanel(persona = selectedPersona()) {
+  return `
+    <div class="publish-content-layout">
+      ${renderPublishHistoryPreview(persona)}
+      <section class="publish-post-picker">
+        <div class="publish-panel-head">
+          <strong>发布历史</strong>
+          <span>${esc(persona?.name || "当前人设")}</span>
+        </div>
+        <div class="publish-history-note">这里只查看当前人设的已发布记录，不会创建新的发布任务。</div>
+        ${renderPublishHistorySelectionList(persona)}
+      </section>
+    </div>`;
+}
+
+async function requeuePublishHistoryRecord(historyId = "", persona = selectedPersona()) {
+  const cleanPersonaId = String(persona?.id || "").trim();
+  const cleanHistoryId = String(historyId || state.publishHistoryPreviewId || "").trim();
+  if (!cleanPersonaId || !cleanHistoryId) {
+    showMsg("commandMsg", "请先选择一条发布历史。", false);
+    return;
+  }
+  const lockParts = ["publish_history_requeue", cleanPersonaId, cleanHistoryId];
+  if (isActionLocked(...lockParts)) {
+    showMsg("commandMsg", "该发布历史正在重入队，请等待当前操作完成。", false);
+    return;
+  }
+  setActionLocked(lockParts, true);
+  try {
+    showMsg("commandMsg", "正在将发布历史重入草稿队列...", true);
+    const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(cleanPersonaId)}/publish_history/${encodeURIComponent(cleanHistoryId)}/requeue`, {
+      method: "POST",
+    });
+    await Promise.all([
+      loadPersonaDraftPosts(cleanPersonaId, { force: true }).catch(() => []),
+      loadPersonaPublishHistory(cleanPersonaId, { force: true }).catch(() => []),
+      loadPersonas().catch(() => {}),
+    ]);
+    const postTitle = String(result?.post?.title || "发布历史").trim();
+    showMsg("commandMsg", `已重入队：${postTitle}`, true);
+    if (state.activeModule === "publishing") renderSimpleFlowModule("publishing");
+  } catch (error) {
+    showMsg("commandMsg", error.detail || error.message || "重入队失败", false);
+  } finally {
+    setActionLocked(lockParts, false);
+  }
+}
+
 function publishGroupSelectionState(personaIds = [], selectedIds = []) {
   const ids = (personaIds || []).map((id) => String(id || "")).filter(Boolean);
   const selected = new Set((selectedIds || []).map((id) => String(id || "")));
@@ -4573,13 +4756,20 @@ function renderPublishPersonaSidebar(mode) {
 function selectPublishingPersona(personaId) {
   const cleanId = String(personaId || "").trim();
   if (!cleanId || !state.personas.some((persona) => String(persona.id) === cleanId)) return;
+  const previousId = String(state.selectedPersonaId || "");
   state.selectedPersonaId = cleanId;
-  setSelectedPersonaPostId("");
+  if (cleanId !== previousId) clearPublishSelectionForPersona(selectedPersona());
+  else setSelectedPersonaPostId("");
   state.preferredAccountId = accountForPersona(selectedPersona())?.id || "";
   const persona = selectedPersona();
   if (persona && !state.personaDraftPosts[cleanId]) {
     loadPersonaDraftPosts(cleanId).then(() => {
       if (state.activeModule === "publishing") renderSimpleFlowModule("publishing");
+    }).catch(() => {});
+  }
+  if (persona && !Array.isArray(state.personaPublishHistories[cleanId])) {
+    loadPersonaPublishHistory(cleanId).then(() => {
+      if (state.activeModule === "publishing" && normalizedPublishMode(state.simpleBranches.publishing) === "publish_history") renderSimpleFlowModule("publishing");
     }).catch(() => {});
   }
 }
@@ -4641,12 +4831,28 @@ function renderSimpleFlowModule(moduleId) {
     }
     const publishMode = normalizedPublishMode(branch);
     const modeTabs = renderPublishModeTabs(publishMode);
+    if (publishMode === "publish_history" && selectedPersonaForPublish && !Array.isArray(state.personaPublishHistories[String(selectedPersonaForPublish.id)])) {
+      loadPersonaPublishHistory(selectedPersonaForPublish.id).then(() => {
+        if (state.activeModule === "publishing" && normalizedPublishMode(state.simpleBranches.publishing) === "publish_history") {
+          renderSimpleFlowModule("publishing");
+        }
+      }).catch(() => {});
+    }
     if (publishMode === "matrix_start") {
       body = `
         <div class="publish-workspace">
           <section class="publish-config-panel">
             ${modeTabs}
             ${renderMatrixPublishPanel()}
+          </section>
+          ${renderPublishPersonaSidebar(publishMode)}
+        </div>`;
+    } else if (publishMode === "publish_history") {
+      body = `
+        <div class="publish-workspace">
+          <section class="publish-config-panel">
+            ${modeTabs}
+            ${renderPublishHistoryPanel(selectedPersonaForPublish)}
           </section>
           ${renderPublishPersonaSidebar(publishMode)}
         </div>`;
@@ -4691,15 +4897,16 @@ function renderSimpleFlowModule(moduleId) {
         </label>
       </div>`;
   }
-  const actionLabel = moduleId === "queue" ? "打开任务队列" : (moduleId === "publishing" && normalizedPublishMode(branch) === "matrix_start" ? "提交矩阵发布" : "确认执行");
-  const actionHtml = moduleId === "automation" ? "" : `<div class="command-actions ${moduleId === "publishing" ? "publish-command-actions" : ""}"><button id="executeSimpleFlow" type="button" class="primary">${esc(actionLabel)}</button></div>`;
+  const publishModeForAction = moduleId === "publishing" ? normalizedPublishMode(branch) : "";
+  const actionLabel = moduleId === "queue" ? "打开任务队列" : (moduleId === "publishing" && publishModeForAction === "matrix_start" ? "提交矩阵发布" : "确认执行");
+  const actionHtml = moduleId === "automation" || publishModeForAction === "publish_history" ? "" : `<div class="command-actions ${moduleId === "publishing" ? "publish-command-actions" : ""}"><button id="executeSimpleFlow" type="button" class="primary">${esc(actionLabel)}</button></div>`;
   $("moduleBody").innerHTML = `
     ${body}
     ${actionHtml}
   `;
   if ($("simpleAccount") && accountId) $("simpleAccount").value = accountId;
   if ($("simplePublishMode")) {
-    const modes = ["publish_now", "matrix_start"];
+    const modes = ["publish_now", "matrix_start", "publish_history"];
     $("simplePublishMode").value = modes.includes(branch) ? branch : "publish_now";
   }
   bindSimpleFlowInputs(moduleId);
@@ -4786,6 +4993,7 @@ function bindSimpleFlowInputs(moduleId) {
     document.querySelectorAll("[data-simple-publish-mode]").forEach((node) => {
       node.addEventListener("click", () => {
         state.simpleBranches.publishing = normalizedPublishMode(node.dataset.simplePublishMode || "publish_now");
+        state.publishHistoryPreviewId = "";
         renderSimpleFlowModule("publishing");
       });
     });
@@ -4844,6 +5052,17 @@ function bindSimpleFlowInputs(moduleId) {
       node.addEventListener("click", () => {
         state.publishPreviewPostId = String(node.dataset.publishPreviewPost || "").trim();
         renderSimpleFlowModule("publishing");
+      });
+    });
+    document.querySelectorAll("[data-publish-history-card], [data-publish-history-preview]").forEach((node) => {
+      node.addEventListener("click", () => {
+        state.publishHistoryPreviewId = String(node.dataset.publishHistoryCard || node.dataset.publishHistoryPreview || "").trim();
+        renderSimpleFlowModule("publishing");
+      });
+    });
+    document.querySelectorAll("[data-publish-history-requeue]").forEach((node) => {
+      node.addEventListener("click", () => {
+        requeuePublishHistoryRecord(node.dataset.publishHistoryRequeue || "").catch(() => {});
       });
     });
     document.querySelectorAll("[data-publish-use-persona]").forEach((node) => {
@@ -5285,13 +5504,30 @@ async function regeneratePersonaProfileContent() {
       showMsg("commandMsg", "AI 没有返回可用简介，请调整当前简介后再试。", false);
       return;
     }
+    const confirmed = await openConsoleModal({
+      title: "预览 AI 生成简介",
+      message: "确认后会填入当前编辑框，仍需点击“保存资料”才会保存到人设。",
+      contentHtml: `
+        <div class="persona-profile-preview-modal">
+          <span>生成结果</span>
+          <p>${esc(nextContent)}</p>
+        </div>
+      `,
+      confirmText: "应用到编辑框",
+      cancelText: "取消",
+      showCancel: true,
+    });
+    if (!confirmed) {
+      showMsg("commandMsg", "已取消应用，当前简介未修改。", true);
+      return;
+    }
     const field = $("personaProfileContent");
     if (field) field.value = nextContent;
     const key = String(persona.id || "");
     if (state.personaProfiles[key]) {
       state.personaProfiles[key] = { ...state.personaProfiles[key], name, content: nextContent };
     }
-    showMsg("commandMsg", "已重新生成简介，确认无误后保存资料。", true);
+    showMsg("commandMsg", "已应用到编辑框，确认无误后保存资料。", true);
   } finally {
     state.personaCreateBusy.profileContent = false;
     if (state.activeModule === "personas") renderPersonaDetail();
@@ -5774,7 +6010,12 @@ async function executeSimpleFlow() {
       ? (selectedPersona()?.id || "")
       : ($("simplePersona")?.value || selectedPersona()?.id || "");
     if (state.activeModule === "publishing") {
-      if (normalizedPublishMode($("simplePublishMode")?.value || state.simpleBranches.publishing) === "matrix_start") {
+      const currentPublishMode = normalizedPublishMode($("simplePublishMode")?.value || state.simpleBranches.publishing);
+      if (currentPublishMode === "publish_history") {
+        showMsg("commandMsg", "发布历史仅用于查看记录，不会创建发布任务。", false);
+        return;
+      }
+      if (currentPublishMode === "matrix_start") {
         await submitMatrixPublishTask("commandMsg");
         return;
       }
