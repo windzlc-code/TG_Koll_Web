@@ -13742,6 +13742,8 @@ def _is_direct_preview_media_url(value: Any) -> bool:
         return False
     if re.match(r"^/api/persona_dashboard/automation/screenshots/screenshot\?", text, re.I):
         return False
+    if re.search(r"//scontent-[^/]*\.cdninstagram\.com/", text, re.I):
+        return False
     return bool(re.match(r"^(?:https?:)?//", text, re.I) or re.match(r"^(?:data:|blob:|/api/)", text, re.I))
 
 
