@@ -1,4 +1,4 @@
-const DEFAULT_API_BASE = "http://43.167.237.120";
+const DEFAULT_API_BASE = "";
 const DEFAULT_AUTH_TOKEN = "";
 const DEFAULT_EXTENSION_VERSION = "1.0.7";
 const AUTO_SYNC_ALARM = "opinx-browser-auth-auto-sync";
@@ -209,10 +209,7 @@ function normalizeApiBase(value = "") {
 async function apiBase() {
   const values = await storageGet(["apiBase"]);
   const current = normalizeApiBase(values.apiBase || DEFAULT_API_BASE);
-  if (!current || /43\.167\.237\.120|47\.250\.188\.76/.test(current)) {
-    return LOCAL_API_BASE_CANDIDATES[0];
-  }
-  return current;
+  return current || DEFAULT_API_BASE || LOCAL_API_BASE_CANDIDATES[0];
 }
 
 async function authToken() {
@@ -553,7 +550,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       return;
     }
     if (message?.type === "set-api-base") {
-      const base = String(message.apiBase || DEFAULT_API_BASE).replace(/\/+$/, "");
+      const base = normalizeApiBase(message.apiBase || DEFAULT_API_BASE);
+      if (!base) {
+        sendResponse({ ok: false, error: "请填写后端地址" });
+        return;
+      }
       await storageSet({ apiBase: base });
       ensureAutoSyncAlarm();
       await refreshExtensionConfig({ force: true }).catch(() => undefined);

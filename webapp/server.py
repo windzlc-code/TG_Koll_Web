@@ -1212,7 +1212,7 @@ def _sentiment_browser_auth_text(file_name: str, request: Request) -> tuple[byte
     if file_name == "background.js":
         auth_token = _sentiment_browser_auth_token(_read_sentiment_config_file(), create=True)
         body = re.sub(
-            r'const DEFAULT_API_BASE = "https?://[^"]+";',
+            r'const DEFAULT_API_BASE = "[^"]*";',
             f'const DEFAULT_API_BASE = "{origin}";',
             body,
             count=1,

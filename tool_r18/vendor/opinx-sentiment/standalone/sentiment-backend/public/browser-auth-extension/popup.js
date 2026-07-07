@@ -1,8 +1,5 @@
 const $ = (id) => document.getElementById(id);
 
-const LOCAL_API_BASE = "http://127.0.0.1:8001";
-const LEGACY_API_RE = /43\.167\.237\.120|47\.250\.188\.76/;
-
 function setStatus(message) {
   $("status").textContent = message;
 }
@@ -19,8 +16,7 @@ function friendlyError(message) {
 }
 
 function displayApiBase(value) {
-  const apiBase = String(value || "").trim();
-  return !apiBase || LEGACY_API_RE.test(apiBase) ? LOCAL_API_BASE : apiBase;
+  return String(value || "").trim().replace(/\/+$/, "");
 }
 
 function send(message) {
