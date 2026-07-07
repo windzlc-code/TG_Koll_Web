@@ -3886,6 +3886,7 @@ body.persona-touch-dragging .persona-list-card:active {
   gap: 6px;
   align-items: center;
   align-self: stretch;
+  height: 100%;
   max-width: 100%;
   min-width: 0;
   cursor: pointer;
