@@ -20,6 +20,7 @@ const CREATE_PERSONA_MAX_SELECTED_KEYWORDS = 2;
 
 type Input =
   | { action: "suggest-keywords"; personaName: string; userPrompt: string }
+  | { action: "derive-profile"; personaName: string; userPrompt: string; selectedKeywords?: string[] }
   | { action: "create-from-prompt"; personaName: string; userPrompt: string; selectedKeywords?: string[] };
 
 function printJson(value: unknown) {
@@ -547,6 +548,36 @@ async function createPersonaFromPromptSelection(personaName: string, userPrompt:
   };
 }
 
+async function derivePersonaProfileFromPrompt(personaName: string, userPrompt: string, selectedKeywords: string[]) {
+  const personaPrompt = buildPersonaPromptWithKeywords(personaName, userPrompt, selectedKeywords);
+  const spec = await derivePersonaSpecWithCodex(personaPrompt);
+  spec.name = personaName;
+  spec.setup = {
+    ...spec.setup,
+    personaName,
+    customTopic: userPrompt,
+    contentTheme: [
+      spec.setup.contentTheme,
+      selectedKeywords.length ? `selected keywords: ${selectedKeywords.join(", ")}` : "",
+    ].filter(Boolean).join("\n"),
+  } as DramaSetup;
+  spec.setup.interests = derivePersonaInterestTags(
+    {
+      ...spec.setup,
+      interests: [...normalizePersonaInterestTags(spec.setup.interests), ...selectedKeywords],
+    },
+    spec.content,
+  );
+  return {
+    ok: true,
+    action: "derive-profile",
+    name: spec.name,
+    content: spec.content,
+    setup: spec.setup,
+    selectedKeywords: selectedKeywords.slice(0, CREATE_PERSONA_MAX_SELECTED_KEYWORDS),
+  };
+}
+
 async function main() {
   const raw = process.argv[2];
   if (!raw) {
@@ -558,8 +589,8 @@ async function main() {
   if (input.action === "suggest-keywords") {
     const personaName = normalizeSingleLine(String(input.personaName || "")).slice(0, 40);
     const userPrompt = String(input.userPrompt || "").trim();
-    if (!personaName) throw new Error("人设名称不能为空");
-    if (!userPrompt) throw new Error("人设提示词不能为空");
+    if (!personaName) throw new Error("persona name cannot be empty");
+    if (!userPrompt) throw new Error("persona prompt cannot be empty");
     const keywords = await derivePersonaDirectionKeywordsWithCodex(personaName, userPrompt);
     printJson({ ok: true, action: input.action, personaName, keywords });
     return;
@@ -573,9 +604,23 @@ async function main() {
         .filter(Boolean)
         .slice(0, CREATE_PERSONA_MAX_SELECTED_KEYWORDS)
       : [];
-    if (!personaName) throw new Error("人设名称不能为空");
-    if (!userPrompt) throw new Error("人设提示词不能为空");
+    if (!personaName) throw new Error("persona name cannot be empty");
+    if (!userPrompt) throw new Error("persona prompt cannot be empty");
     printJson(await createPersonaFromPromptSelection(personaName, userPrompt, selectedKeywords));
+    return;
+  }
+  if (input.action === "derive-profile") {
+    const personaName = normalizeSingleLine(String(input.personaName || "")).slice(0, 40);
+    const userPrompt = String(input.userPrompt || "").trim();
+    const selectedKeywords = Array.isArray(input.selectedKeywords)
+      ? input.selectedKeywords
+        .map((item) => normalizePersonaDirectionKeyword(item))
+        .filter(Boolean)
+        .slice(0, CREATE_PERSONA_MAX_SELECTED_KEYWORDS)
+      : [];
+    if (!personaName) throw new Error("persona name cannot be empty");
+    if (!userPrompt) throw new Error("persona prompt cannot be empty");
+    printJson(await derivePersonaProfileFromPrompt(personaName, userPrompt, selectedKeywords));
     return;
   }
   throw new Error(`unsupported action: ${(input as any)?.action || ""}`);

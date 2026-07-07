@@ -10330,6 +10330,12 @@ class PersonaDashboardPersonaAiCreatePayload(BaseModel):
     selected_keywords: list[str] = Field(default_factory=list)
 
 
+class PersonaDashboardPersonaAiProfilePayload(BaseModel):
+    name: str = ""
+    prompt: str = ""
+    selected_keywords: list[str] = Field(default_factory=list)
+
+
 class PersonaDashboardGroupCreatePayload(BaseModel):
     name: str = ""
 
@@ -12302,6 +12308,33 @@ def _persona_dashboard_create_persona_with_ai(payload: PersonaDashboardPersonaAi
     }
 
 
+def _persona_dashboard_generate_profile_content(payload: PersonaDashboardPersonaAiProfilePayload) -> dict[str, Any]:
+    name = str(payload.name or "").strip()
+    prompt = str(payload.prompt or "").strip()
+    selected_keywords = [
+        str(item or "").strip()
+        for item in (payload.selected_keywords or [])
+        if str(item or "").strip()
+    ][:8]
+    if not name:
+        raise HTTPException(status_code=400, detail="persona name cannot be empty")
+    if not prompt:
+        raise HTTPException(status_code=400, detail="persona prompt cannot be empty")
+    result = _run_persona_create_cli({
+        "action": "derive-profile",
+        "personaName": name,
+        "userPrompt": prompt,
+        "selectedKeywords": selected_keywords,
+    })
+    return {
+        "ok": True,
+        "name": str(result.get("name") or name).strip(),
+        "content": str(result.get("content") or "").strip(),
+        "setup": result.get("setup") if isinstance(result.get("setup"), dict) else {},
+        "selected_keywords": selected_keywords,
+    }
+
+
 def _create_persona_archive_post(archive_id: str, payload: PersonaDashboardDraftPostPayload) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     if not clean_id:
@@ -13119,6 +13152,41 @@ def _serve_persona_archive_image(archive_id: str, image_id: str) -> Response:
     if not path.is_file():
         raise HTTPException(status_code=404, detail="人设图片源文件不存在。")
     return FileResponse(str(path), filename=path.name)
+
+
+def _apply_persona_archive_reference_image(archive_id: str, image_id: str) -> dict[str, Any]:
+    clean_archive_id = str(archive_id or "").strip()
+    clean_image_id = str(image_id or "").strip()
+    if not clean_archive_id or not clean_image_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID 或图片 ID。")
+    path, raw, archives = _persona_archive_source_for_write(clean_archive_id)
+    archive = _find_persona_archive(archives, clean_archive_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
+    item = next(
+        (
+            row for row in library
+            if isinstance(row, dict) and str(row.get("id") or "").strip() == clean_image_id
+        ),
+        None,
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="人设图不存在。")
+    image_url = str(item.get("imageUrl") or "").strip()
+    if not image_url:
+        raise HTTPException(status_code=404, detail="人设图源文件不存在。")
+    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+    next_setup = dict(setup)
+    next_setup["personaImageSkipped"] = False
+    next_setup["personaImageReferenceUrl"] = image_url
+    archive["setup"] = next_setup
+    archive["personaReferenceSheet"] = image_url
+    archive["updatedAt"] = _persona_dashboard_iso_now()
+    _write_persona_archives_preserving_shape(path, raw, archives)
+    data = _list_persona_archive_images(clean_archive_id)
+    data["saved_item_id"] = clean_image_id
+    return data
 
 
 def _persona_archive_persist_reference_image(archive_id: str, *, image_url: str, prompt: str = "", mode: str = "closed-model", source: str = "portrait", aspect_ratio: str = "1:1", notes: str = "current persona reference image") -> dict[str, Any]:
@@ -15171,6 +15239,10 @@ def create_app() -> FastAPI:
     def api_persona_dashboard_persona_ai_create(payload: PersonaDashboardPersonaAiCreatePayload, _user: dict[str, Any] = Depends(get_current_user)):
         return _persona_dashboard_create_persona_with_ai(payload)
 
+    @app.post("/api/persona_dashboard/personas/ai_profile")
+    def api_persona_dashboard_persona_ai_profile(payload: PersonaDashboardPersonaAiProfilePayload, _user: dict[str, Any] = Depends(get_current_user)):
+        return _persona_dashboard_generate_profile_content(payload)
+
     @app.post("/api/persona_dashboard/personas/{archive_id}/duplicate")
     def api_persona_dashboard_duplicate_persona(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
         return _duplicate_persona_archive(archive_id)
@@ -15227,10 +15299,6 @@ def create_app() -> FastAPI:
     def api_persona_dashboard_persona_images(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
         return _list_persona_archive_images(archive_id)
 
-    @app.get("/api/persona_dashboard/personas/{archive_id}/images/{image_id}")
-    def api_persona_dashboard_persona_image(archive_id: str, image_id: str, _user: dict[str, Any] = Depends(get_current_user)):
-        return _serve_persona_archive_image(archive_id, image_id)
-
     @app.post("/api/persona_dashboard/personas/{archive_id}/images/generate")
     def api_persona_dashboard_generate_persona_image(archive_id: str, payload: PersonaDashboardPersonaImageGeneratePayload, _user: dict[str, Any] = Depends(get_current_user)):
         return _run_persona_image_cli_for_web(
@@ -15240,6 +15308,14 @@ def create_app() -> FastAPI:
             mode=str(payload.mode or "person").strip() or "person",
             generate_reference_sheet=True,
         )
+
+    @app.get("/api/persona_dashboard/personas/{archive_id}/images/{image_id}")
+    def api_persona_dashboard_persona_image(archive_id: str, image_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+        return _serve_persona_archive_image(archive_id, image_id)
+
+    @app.post("/api/persona_dashboard/personas/{archive_id}/images/{image_id}/apply")
+    def api_persona_dashboard_apply_persona_image(archive_id: str, image_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+        return _apply_persona_archive_reference_image(archive_id, image_id)
 
     @app.get("/api/persona_dashboard/groups")
     def api_persona_dashboard_groups(_user: dict[str, Any] = Depends(get_current_user)):
