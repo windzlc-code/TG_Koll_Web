@@ -133,6 +133,13 @@ const state = {
   personaDragSaveSeq: 0,
   personaSuppressClickUntil: 0,
   personaMemories: {},
+  personaFetches: {
+    profiles: {},
+    draftPosts: {},
+    favoritePosts: {},
+    memories: {},
+    publishHistories: {},
+  },
   personaImageLibraries: {},
   personaDraftPosts: {},
   personaFavoritePosts: {},
@@ -177,6 +184,7 @@ const state = {
   taskQueuePanel: "persona",
   taskQueuePersonaPage: 1,
   taskQueueRegularPage: 1,
+  socialTasksFetch: null,
   socialAccounts: [],
   socialTasks: [],
   events: null,
@@ -5383,29 +5391,36 @@ async function loadPersonaProfile(personaId, { force = false } = {}) {
   const key = String(personaId || "").trim();
   if (!key) return null;
   if (!force && state.personaProfiles[key]) return state.personaProfiles[key];
+  if (!force && state.personaFetches.profiles[key]) return state.personaFetches.profiles[key];
   const persona = state.personas.find((item) => String(item.id) === key) || null;
   if (persona) state.personaProfiles[key] = fallbackPersonaProfile(persona);
-  let profile = null;
-  try {
-    profile = await api(`/api/persona_dashboard/personas/${encodeURIComponent(key)}/profile`);
-  } catch (error) {
-    if (error?.detail && String(error.detail).includes("不存在") && persona) {
-      profile = fallbackPersonaProfile(persona);
-      appendEvent("persona", `人设 ${persona.name || persona.id} 暂无独立 profile，已改用概览数据兜底。`);
-    } else {
-      throw error;
+  const request = (async () => {
+    let profile = null;
+    try {
+      profile = await api(`/api/persona_dashboard/personas/${encodeURIComponent(key)}/profile`);
+    } catch (error) {
+      if (error?.detail && String(error.detail).includes("不存在") && persona) {
+        profile = fallbackPersonaProfile(persona);
+        appendEvent("persona", `人设 ${persona.name || persona.id} 暂无独立 profile，已改用概览数据兜底。`);
+      } else {
+        throw error;
+      }
     }
-  }
-  state.personaProfiles[key] = profile;
-  if (!state.personaLinkPresetId || key === String(state.selectedPersonaId || "")) {
-    const presets = Array.isArray(profile.link_presets) ? profile.link_presets : [];
-    const activeId = String(profile.active_link_preset_id || "").trim();
-    state.personaLinkPresetId = (activeId && presets.some((item) => String(item.id) === activeId))
-      ? activeId
-      : (presets[0]?.id || "");
-  }
-  if (state.activeModule === "personas" && key === String(state.selectedPersonaId || "")) renderPersonaDetail();
-  return profile;
+    state.personaProfiles[key] = profile;
+    if (!state.personaLinkPresetId || key === String(state.selectedPersonaId || "")) {
+      const presets = Array.isArray(profile.link_presets) ? profile.link_presets : [];
+      const activeId = String(profile.active_link_preset_id || "").trim();
+      state.personaLinkPresetId = (activeId && presets.some((item) => String(item.id) === activeId))
+        ? activeId
+        : (presets[0]?.id || "");
+    }
+    if (state.activeModule === "personas" && key === String(state.selectedPersonaId || "")) renderPersonaDetail();
+    return profile;
+  })().finally(() => {
+    if (state.personaFetches.profiles[key] === request) delete state.personaFetches.profiles[key];
+  });
+  state.personaFetches.profiles[key] = request;
+  return request;
 }
 
 function automationScreenshotUrlFromPath(pathValue) {
@@ -5609,44 +5624,71 @@ async function loadPersonaDraftPosts(personaId, { force = false } = {}) {
   const key = String(personaId || "").trim();
   if (!key) return [];
   if (!force && Array.isArray(state.personaDraftPosts[key])) return state.personaDraftPosts[key];
-  const data = await api(`/api/persona_dashboard/personas/${encodeURIComponent(key)}/posts`).catch(() => ({ posts: [] }));
-  const posts = sortPersonaDraftPosts(Array.isArray(data.posts) ? data.posts : []);
-  state.personaDraftPosts[key] = posts;
-  syncPersonaSelectedPostIds({ id: key }, "posts", posts);
-  syncPersonaHotImportPosts(key, posts);
-  const currentSelected = String(state.selectedPersonaPostId || "").trim();
-  if (!posts.some((post) => String(post.id) === currentSelected)) {
-    setSelectedPersonaPostId(posts[0]?.id || "", { auto: true });
-  }
-  if (state.activeModule === "personas" && key === String(state.selectedPersonaId || "")) renderPersonaDetail();
-  return posts;
+  if (!force && state.personaFetches.draftPosts[key]) return state.personaFetches.draftPosts[key];
+  const request = api(`/api/persona_dashboard/personas/${encodeURIComponent(key)}/posts`)
+    .catch(() => ({ posts: [] }))
+    .then((data) => {
+      const posts = sortPersonaDraftPosts(Array.isArray(data.posts) ? data.posts : []);
+      state.personaDraftPosts[key] = posts;
+      syncPersonaSelectedPostIds({ id: key }, "posts", posts);
+      syncPersonaHotImportPosts(key, posts);
+      const currentSelected = String(state.selectedPersonaPostId || "").trim();
+      if (!posts.some((post) => String(post.id) === currentSelected)) {
+        setSelectedPersonaPostId(posts[0]?.id || "", { auto: true });
+      }
+      if (state.activeModule === "personas" && key === String(state.selectedPersonaId || "")) renderPersonaDetail();
+      return posts;
+    })
+    .finally(() => {
+      if (state.personaFetches.draftPosts[key] === request) delete state.personaFetches.draftPosts[key];
+    });
+  state.personaFetches.draftPosts[key] = request;
+  return request;
 }
 
 async function loadPersonaFavoritePosts(personaId, { force = false } = {}) {
   const key = String(personaId || "").trim();
   if (!key) return [];
   if (!force && Array.isArray(state.personaFavoritePosts[key])) return state.personaFavoritePosts[key];
-  const data = await api(`/api/persona_dashboard/personas/${encodeURIComponent(key)}/favorites`).catch(() => ({ favorites: [] }));
-  const posts = sortPersonaDraftPosts(Array.isArray(data.favorites) ? data.favorites : []);
-  state.personaFavoritePosts[key] = posts;
-  syncPersonaSelectedPostIds({ id: key }, "favorites", posts);
-  const currentSelected = String(state.selectedPersonaPostId || "").trim();
-  if (personaPostSource({ id: key }) === "favorites" && !posts.some((post) => String(post.id) === currentSelected)) {
-    setSelectedPersonaPostId(posts[0]?.id || "", { auto: true });
-  }
-  if (state.activeModule === "personas" && key === String(state.selectedPersonaId || "")) renderPersonaDetail();
-  return posts;
+  if (!force && state.personaFetches.favoritePosts[key]) return state.personaFetches.favoritePosts[key];
+  const request = api(`/api/persona_dashboard/personas/${encodeURIComponent(key)}/favorites`)
+    .catch(() => ({ favorites: [] }))
+    .then((data) => {
+      const posts = sortPersonaDraftPosts(Array.isArray(data.favorites) ? data.favorites : []);
+      state.personaFavoritePosts[key] = posts;
+      syncPersonaSelectedPostIds({ id: key }, "favorites", posts);
+      const currentSelected = String(state.selectedPersonaPostId || "").trim();
+      if (personaPostSource({ id: key }) === "favorites" && !posts.some((post) => String(post.id) === currentSelected)) {
+        setSelectedPersonaPostId(posts[0]?.id || "", { auto: true });
+      }
+      if (state.activeModule === "personas" && key === String(state.selectedPersonaId || "")) renderPersonaDetail();
+      return posts;
+    })
+    .finally(() => {
+      if (state.personaFetches.favoritePosts[key] === request) delete state.personaFetches.favoritePosts[key];
+    });
+  state.personaFetches.favoritePosts[key] = request;
+  return request;
 }
 
 async function loadPersonaMemories(personaId, { force = false } = {}) {
   const key = String(personaId || "").trim();
   if (!key) return [];
   if (!force && Array.isArray(state.personaMemories[key])) return state.personaMemories[key];
-  const data = await api(`/api/persona_dashboard/personas/${encodeURIComponent(key)}/memories`).catch(() => ({ memories: [] }));
-  const rows = Array.isArray(data.memories) ? data.memories : [];
-  state.personaMemories[key] = rows;
-  if (state.activeModule === "personas" && key === String(state.selectedPersonaId || "")) renderPersonaDetail();
-  return rows;
+  if (!force && state.personaFetches.memories[key]) return state.personaFetches.memories[key];
+  const request = api(`/api/persona_dashboard/personas/${encodeURIComponent(key)}/memories`)
+    .catch(() => ({ memories: [] }))
+    .then((data) => {
+      const rows = Array.isArray(data.memories) ? data.memories : [];
+      state.personaMemories[key] = rows;
+      if (state.activeModule === "personas" && key === String(state.selectedPersonaId || "")) renderPersonaDetail();
+      return rows;
+    })
+    .finally(() => {
+      if (state.personaFetches.memories[key] === request) delete state.personaFetches.memories[key];
+    });
+  state.personaFetches.memories[key] = request;
+  return request;
 }
 
 async function deletePersonaMemoryEntry(memoryId = "") {
@@ -5696,14 +5738,39 @@ async function loadPersonaPublishHistory(personaId, { force = false } = {}) {
   const key = String(personaId || "").trim();
   if (!key) return [];
   if (!force && Array.isArray(state.personaPublishHistories[key])) return state.personaPublishHistories[key];
+  if (!force && state.personaFetches.publishHistories[key]) return state.personaFetches.publishHistories[key];
   const fallbackPersona = state.personas.find((item) => String(item.id) === key) || null;
   const fallbackRows = sortPersonaPublishHistory(Array.isArray(fallbackPersona?.publish_history) ? fallbackPersona.publish_history : []);
-  const data = await api(`/api/persona_dashboard/personas/${encodeURIComponent(key)}/publish_history`).catch(() => ({ publish_history: fallbackRows }));
-  const apiRows = Array.isArray(data.publish_history) ? data.publish_history : [];
-  const rows = sortPersonaPublishHistory(apiRows.length ? apiRows : fallbackRows);
-  state.personaPublishHistories[key] = rows;
-  if (state.activeModule === "personas" && key === String(state.selectedPersonaId || "")) renderPersonaDetail();
-  return rows;
+  const request = api(`/api/persona_dashboard/personas/${encodeURIComponent(key)}/publish_history`)
+    .catch(() => ({ publish_history: fallbackRows }))
+    .then((data) => {
+      const apiRows = Array.isArray(data.publish_history) ? data.publish_history : [];
+      const rows = sortPersonaPublishHistory(apiRows.length ? apiRows : fallbackRows);
+      state.personaPublishHistories[key] = rows;
+      if (state.activeModule === "personas" && key === String(state.selectedPersonaId || "")) renderPersonaDetail();
+      return rows;
+    })
+    .finally(() => {
+      if (state.personaFetches.publishHistories[key] === request) delete state.personaFetches.publishHistories[key];
+    });
+  state.personaFetches.publishHistories[key] = request;
+  return request;
+}
+
+async function loadAutomationTasksShared({ force = false } = {}) {
+  if (!force && state.socialTasksFetch) return state.socialTasksFetch;
+  const request = api("/api/persona_dashboard/automation/tasks?limit=80")
+    .catch(() => ({ tasks: state.socialTasks || [] }))
+    .then((data) => {
+      const tasks = Array.isArray(data.tasks) ? data.tasks : [];
+      state.socialTasks = tasks;
+      return { tasks };
+    })
+    .finally(() => {
+      if (state.socialTasksFetch === request) state.socialTasksFetch = null;
+    });
+  state.socialTasksFetch = request;
+  return request;
 }
 
 async function activateCreatedPersona(personaId, { group = "settings", step = "profile", profileMode = "" } = {}) {
@@ -8259,7 +8326,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
 async function loadTasks() {
   const [data, socialTasksData] = await Promise.all([
     api("/api/tasks"),
-    api("/api/persona_dashboard/automation/tasks?limit=80").catch(() => ({ tasks: state.socialTasks || [] })),
+    loadAutomationTasksShared(),
   ]);
   state.tasks = Array.isArray(data.items) ? data.items : (Array.isArray(data.tasks) ? data.tasks : []);
   state.socialTasks = Array.isArray(socialTasksData.tasks) ? socialTasksData.tasks : (Array.isArray(state.socialTasks) ? state.socialTasks : []);
@@ -8285,7 +8352,7 @@ async function loadSocial() {
   const [overview, accountsData, tasksData] = await Promise.all([
     loadSocialOverview().catch(() => ({})),
     api("/api/persona_dashboard/automation/accounts").catch(() => ({ accounts: [] })),
-    api("/api/persona_dashboard/automation/tasks?limit=80").catch(() => ({ tasks: [] })),
+    loadAutomationTasksShared(),
   ]);
   state.socialAccounts = accountsData.accounts || [];
   state.socialTasks = tasksData.tasks || [];

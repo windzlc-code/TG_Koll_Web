@@ -3853,7 +3853,7 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-memory-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
   gap: 8px;
   max-height: 270px;
   overflow-x: hidden;
