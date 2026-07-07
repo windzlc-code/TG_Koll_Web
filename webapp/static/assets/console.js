@@ -154,6 +154,7 @@ const state = {
   personaAutomationWatchers: {},
   personaMediaTasks: {},
   personaGenerateRuns: {},
+  personaDetailRenderTimer: 0,
   personaHotImports: storedPersonaHotImports(),
   personaHotCandidateResults: {},
   personaForms: {},
@@ -4668,6 +4669,18 @@ async function loadSetupStatus() {
   }
 }
 
+function schedulePersonaDetailRender(personaId = "") {
+  const key = String(personaId || "").trim();
+  if (state.activeModule !== "personas" || (key && key !== String(state.selectedPersonaId || ""))) return;
+  if (state.personaDetailRenderTimer) clearTimeout(state.personaDetailRenderTimer);
+  state.personaDetailRenderTimer = setTimeout(() => {
+    state.personaDetailRenderTimer = 0;
+    if (state.activeModule === "personas" && (!key || key === String(state.selectedPersonaId || ""))) {
+      renderPersonaDetail();
+    }
+  }, 80);
+}
+
 async function loadPersonas() {
   const data = await api("/api/persona_dashboard/overview").catch(() => ({ personas: [] }));
   state.personas = Array.isArray(data.personas) ? data.personas : [];
@@ -5414,7 +5427,7 @@ async function loadPersonaProfile(personaId, { force = false } = {}) {
         ? activeId
         : (presets[0]?.id || "");
     }
-    if (state.activeModule === "personas" && key === String(state.selectedPersonaId || "")) renderPersonaDetail();
+    schedulePersonaDetailRender(key);
     return profile;
   })().finally(() => {
     if (state.personaFetches.profiles[key] === request) delete state.personaFetches.profiles[key];
@@ -5636,7 +5649,7 @@ async function loadPersonaDraftPosts(personaId, { force = false } = {}) {
       if (!posts.some((post) => String(post.id) === currentSelected)) {
         setSelectedPersonaPostId(posts[0]?.id || "", { auto: true });
       }
-      if (state.activeModule === "personas" && key === String(state.selectedPersonaId || "")) renderPersonaDetail();
+      schedulePersonaDetailRender(key);
       return posts;
     })
     .finally(() => {
@@ -5661,7 +5674,7 @@ async function loadPersonaFavoritePosts(personaId, { force = false } = {}) {
       if (personaPostSource({ id: key }) === "favorites" && !posts.some((post) => String(post.id) === currentSelected)) {
         setSelectedPersonaPostId(posts[0]?.id || "", { auto: true });
       }
-      if (state.activeModule === "personas" && key === String(state.selectedPersonaId || "")) renderPersonaDetail();
+      schedulePersonaDetailRender(key);
       return posts;
     })
     .finally(() => {
@@ -5681,7 +5694,7 @@ async function loadPersonaMemories(personaId, { force = false } = {}) {
     .then((data) => {
       const rows = Array.isArray(data.memories) ? data.memories : [];
       state.personaMemories[key] = rows;
-      if (state.activeModule === "personas" && key === String(state.selectedPersonaId || "")) renderPersonaDetail();
+      schedulePersonaDetailRender(key);
       return rows;
     })
     .finally(() => {
@@ -5730,7 +5743,7 @@ async function loadPersonaImageLibrary(personaId, { force = false } = {}) {
   if (!force && state.personaImageLibraries[key]) return state.personaImageLibraries[key];
   const data = await api(`/api/persona_dashboard/personas/${encodeURIComponent(key)}/images`).catch(() => ({ ok: true, items: [], current_reference_url: "" }));
   state.personaImageLibraries[key] = data;
-  if (state.activeModule === "personas" && key === String(state.selectedPersonaId || "")) renderPersonaDetail();
+  schedulePersonaDetailRender(key);
   return data;
 }
 
@@ -5747,7 +5760,7 @@ async function loadPersonaPublishHistory(personaId, { force = false } = {}) {
       const apiRows = Array.isArray(data.publish_history) ? data.publish_history : [];
       const rows = sortPersonaPublishHistory(apiRows.length ? apiRows : fallbackRows);
       state.personaPublishHistories[key] = rows;
-      if (state.activeModule === "personas" && key === String(state.selectedPersonaId || "")) renderPersonaDetail();
+      schedulePersonaDetailRender(key);
       return rows;
     })
     .finally(() => {
