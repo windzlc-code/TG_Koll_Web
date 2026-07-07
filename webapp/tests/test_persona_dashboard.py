@@ -633,6 +633,31 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(archives[0]["name"], "New Persona")
         self.assertEqual(archives[0]["posts"], [])
 
+    def test_duplicate_persona_copies_shell_without_content_data(self):
+        self._write_archives()
+        resp = self.client.post("/api/persona_dashboard/personas/persona-1/duplicate")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        profile = body["profile"]
+        self.assertNotEqual(profile["id"], "persona-1")
+        self.assertEqual(profile["name"], "History Teacher 副本")
+        self.assertEqual(profile["content"], "Persona intro for history topics.")
+        archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(archives), 2)
+        original, duplicate = archives
+        self.assertEqual(original["id"], "persona-1")
+        self.assertNotEqual(duplicate["id"], original["id"])
+        self.assertEqual(duplicate["name"], "History Teacher 副本")
+        self.assertEqual(duplicate["content"], original["content"])
+        self.assertEqual(duplicate["setup"]["personaName"], "History Teacher 副本")
+        self.assertNotIn("api_token", duplicate["setup"])
+        self.assertEqual(duplicate["setup"]["accountManagement"], {"threads": {}})
+        self.assertNotIn("hotMetrics", duplicate["setup"])
+        self.assertEqual(duplicate["posts"], [])
+        self.assertEqual(duplicate["platformPosts"], {"threads": [], "instagram": [], "telegram": []})
+        self.assertEqual(duplicate["publishHistory"], [])
+        self.assertEqual(duplicate["personaImageLibrary"], [])
+
     def test_persona_ai_keywords_calls_cli_and_returns_keywords(self):
         with mock.patch.object(
             server,

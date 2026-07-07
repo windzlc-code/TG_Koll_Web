@@ -7,8 +7,8 @@ const PERSONA_GENERATE_TARGET_WORDS_KEY = "wk-persona-generate-target-words";
 const PERSONA_MEDIA_IMAGE_COUNT_KEY = "wk-persona-media-image-count";
 const PERSONA_HOT_IMPORTS_STORAGE_KEY = "wk-persona-hot-imports";
 const PERSONA_CONSOLE_OVERVIEW_CACHE_KEY = "wk-persona-console-overview-cache";
-const TASK_QUEUE_PERSONA_PAGE_SIZE = 4;
-const TASK_QUEUE_REGULAR_PAGE_SIZE = 6;
+const TASK_QUEUE_PERSONA_PAGE_SIZE_KEY = "wk-task-queue-persona-page-size";
+const TASK_QUEUE_REGULAR_PAGE_SIZE_KEY = "wk-task-queue-regular-page-size";
 
 try {
   if (window.localStorage.getItem(THEME_STORAGE_KEY) === "dark") {
@@ -56,6 +56,24 @@ function storedPersonaMediaImageCount() {
     return Math.min(Math.max(Number.isFinite(value) ? Math.round(value) : 1, 1), 8);
   } catch {
     return 1;
+  }
+}
+
+function storedTaskQueuePersonaPageSize() {
+  try {
+    const value = Number(window.localStorage.getItem(TASK_QUEUE_PERSONA_PAGE_SIZE_KEY) || 12);
+    return Math.min(Math.max(Number.isFinite(value) ? Math.round(value) : 12, 1), 100);
+  } catch {
+    return 12;
+  }
+}
+
+function storedTaskQueueRegularPageSize() {
+  try {
+    const value = Number(window.localStorage.getItem(TASK_QUEUE_REGULAR_PAGE_SIZE_KEY) || 20);
+    return Math.min(Math.max(Number.isFinite(value) ? Math.round(value) : 20, 1), 100);
+  } catch {
+    return 20;
   }
 }
 
@@ -207,6 +225,11 @@ const state = {
   taskQueuePanel: "persona",
   taskQueuePersonaPage: 1,
   taskQueueRegularPage: 1,
+  taskQueuePersonaPageSize: storedTaskQueuePersonaPageSize(),
+  taskQueueRegularPageSize: storedTaskQueueRegularPageSize(),
+  taskQueueSelectedPersonaIds: new Set(),
+  taskQueueSelectedRegularIds: new Set(),
+  taskQueueRefreshTimer: 0,
   socialTasksFetch: null,
   socialAccounts: [],
   socialTasks: [],
@@ -216,6 +239,14 @@ const state = {
   mediaLightbox: {
     groupId: "",
     index: 0,
+    scale: 1,
+    x: 0,
+    y: 0,
+    dragging: false,
+    dragX: 0,
+    dragY: 0,
+    startX: 0,
+    startY: 0,
   },
 };
 
@@ -306,9 +337,12 @@ function syncThemeToggle() {
   const button = $("themeToggle");
   if (!button) return;
   const isDark = currentTheme() === "dark";
-  button.textContent = isDark ? "亮色" : "暗色";
-  button.title = isDark ? "切换到亮色模式" : "切换到暗色模式";
+  const label = isDark ? "切换到亮色模式" : "切换到暗色模式";
+  button.classList.add("theme-toggle");
+  button.title = label;
+  button.setAttribute("aria-label", label);
   button.setAttribute("aria-pressed", isDark ? "true" : "false");
+  button.innerHTML = `<span class="theme-toggle-icon" aria-hidden="true"></span>`;
 }
 
 function applyTheme(theme) {
@@ -517,6 +551,8 @@ function ensureThemeToggle() {
     button = document.createElement("button");
     button.id = "themeToggle";
     button.type = "button";
+    button.className = "theme-toggle";
+    button.dataset.i18nSkip = "true";
     actions.insertBefore(button, refreshButton);
   }
   syncThemeToggle();
@@ -551,7 +587,7 @@ const personaGroups = {
 
 const moduleDefaultBranch = {
   publishing: "publish_now",
-  automation: "open_login",
+  automation: "binding",
 };
 
 function esc(value) {
@@ -756,8 +792,88 @@ function statusLabel(status) {
     persona_post_image: "推文配图",
     threads_warmup: "Threads 养号",
     threads_auto_reply: "Threads 自动回复",
+    browse_feed: "浏览动态",
+    login_wait_timeout: "登录等待超时",
+    browser_launch: "启动浏览器",
+    prepare: "准备执行",
   };
   return map[String(status || "")] || String(status || "-");
+}
+
+function statusTone(status) {
+  const key = String(status || "").trim();
+  if (["success", "ready"].includes(key)) return "success";
+  if (["failed", "error"].includes(key)) return "error";
+  if (key === "queued") return "queued";
+  if (["need_manual", "pending_login"].includes(key)) return "manual";
+  if (key === "running") return "active";
+  if (key === "cancelled") return "muted";
+  return "muted";
+}
+
+function renderStatusText(status, { className = "" } = {}) {
+  const key = String(status || "").trim();
+  const classes = ["task-status-text", `is-${statusTone(key)}`, className].filter(Boolean).join(" ");
+  return `<span class="${esc(classes)}">${esc(statusLabel(key))}</span>`;
+}
+
+function queuePlatformLabel(platform) {
+  const key = String(platform || "").trim().toLowerCase();
+  if (key === "threads") return "Threads";
+  if (key === "instagram") return "Instagram";
+  return key || "-";
+}
+
+function platformLabel(platform) {
+  return queuePlatformLabel(platform);
+}
+
+function sanitizeTaskUserMessage(value, { fallback = "步骤已记录。" } = {}) {
+  const raw = String(value || "").trim();
+  if (!raw) return fallback;
+  const lower = raw.toLowerCase();
+  if (lower.includes("manual login window timed out")) {
+    return "登录窗口等待超时，请重新打开登录窗口，或检查当前账号是否已经跳转到登录验证页面。";
+  }
+  if (lower.includes("browser is open for manual login")) {
+    return "登录窗口已打开，请在浏览器中完成登录。";
+  }
+  if (lower.includes("launching camoufox") || lower.includes("persistent profile")) {
+    return "正在启动浏览器环境。";
+  }
+  if (lower.includes("starting social automation task")) {
+    return "自动化任务开始执行。";
+  }
+  if (lower.includes("worker") && raw.includes("领取")) {
+    return "任务已进入执行流程。";
+  }
+  if (lower.startsWith("opening ")) {
+    return "正在打开目标页面。";
+  }
+  if (lower.includes("login page") && lower.includes("visible")) {
+    return "检测到登录页面，请先完成账号登录或重新检查登录状态。";
+  }
+  if (lower.includes("redirected to") && (lower.includes("instagram.com") || lower.includes("threads.com"))) {
+    return "登录流程发生页面跳转，系统已记录当前页面截图。";
+  }
+  if (lower.includes("timeout")) {
+    return "操作等待超时，请查看截图确认当前页面状态后重试。";
+  }
+  if (lower.includes("screenshot")) {
+    return "系统已记录当前页面截图。";
+  }
+  let text = raw
+    .replace(/screenshot\s*=\s*[^\s;，。]+/gi, "截图已保存")
+    .replace(/https?:\/\/[^\s;，。]+/gi, "页面链接")
+    .replace(/[A-Za-z]:\\[^\s;，。]+/g, "本地截图")
+    .replace(/(?:app_id|state|code|scope|redirect_uri|response_type|logger_id|request_id|enable_fb_login|force_authentication|force_consent)=[^\s;&]+/gi, "")
+    .replace(/[?&](?:app_id|state|code|scope|redirect_uri|response_type|logger_id|request_id|enable_fb_login|force_authentication|force_consent)=[^\s;&]+/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/(?:页面链接\s*){2,}/g, "页面链接")
+    .trim();
+  if (!text) return fallback;
+  if (text.length > 180) text = `${text.slice(0, 180)}...`;
+  return text;
 }
 
 function logStageLabel(stage, level) {
@@ -784,8 +900,11 @@ function logStageLabel(stage, level) {
     open_login: "打开登录",
     check_login: "检查登录",
     publish_post: "发布内容",
-    browse_feed: "浏览 Feed",
+    browse_feed: "浏览动态",
     browse_profile: "浏览主页",
+    login_wait_timeout: "登录等待超时",
+    browser_launch: "启动浏览器",
+    prepare: "准备执行",
     threads_warmup: "Threads 养号",
     threads_auto_reply: "Threads 自动回复",
     info: "日志",
@@ -1602,6 +1721,79 @@ async function cancelSocialAutomationTask(taskId, messageId = "commandMsg") {
   return result;
 }
 
+function taskQueueSet(kind) {
+  return kind === "regular" ? state.taskQueueSelectedRegularIds : state.taskQueueSelectedPersonaIds;
+}
+
+function taskQueueRowsForKind(kind) {
+  if (kind === "regular") return Array.isArray(state.tasks) ? state.tasks : [];
+  const persona = selectedPersona();
+  return persona ? personaAutomationTasksFor(persona.id) : [];
+}
+
+function syncTaskQueueSelection(kind) {
+  const set = taskQueueSet(kind);
+  const validIds = new Set(taskQueueRowsForKind(kind).map((task) => String(task.id || "")).filter(Boolean));
+  Array.from(set).forEach((id) => {
+    if (!validIds.has(String(id))) set.delete(id);
+  });
+}
+
+function taskQueueSelectionSummary(kind) {
+  syncTaskQueueSelection(kind);
+  const rows = taskQueueRowsForKind(kind);
+  const set = taskQueueSet(kind);
+  const total = rows.length;
+  const selected = Array.from(set).filter((id) => rows.some((task) => String(task.id || "") === String(id))).length;
+  return { rows, total, selected, allSelected: total > 0 && selected === total };
+}
+
+async function deleteRegularTaskRecord(taskId, messageId = "taskQueueMsg") {
+  const cleanTaskId = String(taskId || "").trim();
+  if (!cleanTaskId) return null;
+  await api(`/api/tasks/${encodeURIComponent(cleanTaskId)}`, { method: "DELETE" });
+  state.taskQueueSelectedRegularIds.delete(cleanTaskId);
+  showMsg(messageId, "任务记录已删除。", true);
+  await loadTasks().catch(() => {});
+  return true;
+}
+
+async function deleteSocialTaskRecord(taskId, messageId = "taskQueueMsg") {
+  const cleanTaskId = String(taskId || "").trim();
+  if (!cleanTaskId) return null;
+  await api(`/api/persona_dashboard/automation/tasks/${encodeURIComponent(cleanTaskId)}`, { method: "DELETE" });
+  state.taskQueueSelectedPersonaIds.delete(cleanTaskId);
+  showMsg(messageId, "自动化记录已删除。", true);
+  await Promise.all([loadSocial().catch(() => {}), loadTasks().catch(() => {})]);
+  return true;
+}
+
+async function deleteSelectedTaskQueueRecords(kind, messageId = "taskQueueMsg") {
+  syncTaskQueueSelection(kind);
+  const selectedIds = Array.from(taskQueueSet(kind)).filter(Boolean);
+  if (!selectedIds.length) {
+    showMsg(messageId, "请先选择要删除的记录。", false);
+    return;
+  }
+  const ok = await confirmDangerAction(`确定删除已选中的 ${selectedIds.length} 条记录吗？删除后不可恢复。`, {
+    title: "清空选中记录",
+    confirmText: "清空选中",
+  });
+  if (!ok) return;
+  const endpoint = kind === "regular"
+    ? (id) => `/api/tasks/${encodeURIComponent(id)}`
+    : (id) => `/api/persona_dashboard/automation/tasks/${encodeURIComponent(id)}`;
+  const results = await Promise.allSettled(selectedIds.map((id) => api(endpoint(id), { method: "DELETE" })));
+  const success = results.filter((item) => item.status === "fulfilled").length;
+  const failed = results.length - success;
+  const set = taskQueueSet(kind);
+  selectedIds.forEach((id, index) => {
+    if (results[index]?.status === "fulfilled") set.delete(id);
+  });
+  await Promise.all([loadTasks().catch(() => {}), kind === "persona" ? loadSocial().catch(() => {}) : Promise.resolve()]);
+  showMsg(messageId, failed ? `已删除 ${success} 条，${failed} 条未删除。运行中或排队中的通用任务需要先停止。` : `已删除 ${success} 条记录。`, failed === 0);
+}
+
 function personaPublishPreflight(account) {
   const accountId = String(account?.id || "").trim();
   return {
@@ -1850,6 +2042,7 @@ function personaThreadsStrategyDetail(group) {
 function setView(view) {
   clearConsoleNotices();
   state.view = view;
+  syncTaskQueueAutoRefresh();
   if (view !== "workspace") state.workspaceMenuOpen = false;
   document.querySelectorAll("[data-view]").forEach((button) => {
     const isActive = button.dataset.view === view;
@@ -1872,6 +2065,26 @@ function setView(view) {
   if (view === "console_settings") renderConsoleSettingsPage();
   if (view === "tasks") loadTasks();
   if (view === "social" || view === "accounts" || view === "settings") loadSocial();
+  syncTaskQueueAutoRefresh();
+}
+
+function syncTaskQueueAutoRefresh() {
+  const shouldRun = state.view === "tasks" || (state.view === "workspace" && state.activeModule === "queue");
+  if (!shouldRun) {
+    if (state.taskQueueRefreshTimer) {
+      window.clearInterval(state.taskQueueRefreshTimer);
+      state.taskQueueRefreshTimer = 0;
+    }
+    return;
+  }
+  if (state.taskQueueRefreshTimer) return;
+  state.taskQueueRefreshTimer = window.setInterval(() => {
+    if (!(state.view === "tasks" || (state.view === "workspace" && state.activeModule === "queue"))) {
+      syncTaskQueueAutoRefresh();
+      return;
+    }
+    loadTasks().catch(() => {});
+  }, 5000);
 }
 
 function setWorkspaceModule(moduleId) {
@@ -1909,6 +2122,17 @@ function restoreConsoleScrollState(snapshot) {
     apply();
     window.requestAnimationFrame(apply);
   });
+}
+
+async function confirmDangerAction(message, { title = "确认删除", confirmText = "删除" } = {}) {
+  return Boolean(await openConsoleModal({
+    title,
+    message,
+    confirmText,
+    cancelText: "取消",
+    danger: true,
+    showCancel: true,
+  }));
 }
 
 function withConsoleScrollPreserved(callback) {
@@ -1972,6 +2196,7 @@ function setModule(moduleId) {
   clearMsg("commandMsg");
   state.activeModule = moduleId;
   renderWorkspace();
+  syncTaskQueueAutoRefresh();
 }
 
 function selectedBranch(moduleId) {
@@ -2307,26 +2532,27 @@ function renderPersonaDraftDetailMedia(items = []) {
     </div>`;
 }
 
-function renderPersonaDraftCardMediaStrip(items = []) {
-  const rows = (Array.isArray(items) ? items : []).filter((item) => item && (item.previewUrl || item.unavailable)).slice(0, 4);
-  if (!rows.length) return "";
-  const groupId = registerMediaPreviewGroup(rows.filter((item) => item?.previewUrl && !item.unavailable));
-  let previewIndex = 0;
-  const visibleRows = rows.slice(0, 3);
-  const extraCount = Math.max(0, (Array.isArray(items) ? items.length : 0) - visibleRows.length);
-  return `
-    <div class="persona-draft-card-media" aria-label="草稿媒体缩略图">
-      ${visibleRows.map((item, index) => {
-        const isLast = index === visibleRows.length - 1;
-        return item.unavailable || !item.previewUrl
-          ? `<div class="persona-draft-card-media-thumb is-unavailable"><span>${esc(mediaKindLabel(item.type))}</span>${isLast && extraCount ? `<strong>+${esc(extraCount)}</strong>` : ""}</div>`
-          : `${renderMediaPreviewButton(item, groupId, previewIndex++, {
-            className: `persona-draft-card-media-thumb ${isLast && extraCount ? "has-more" : ""}`,
-            frameClass: "persona-draft-card-media-frame",
-            caption: isLast && extraCount ? `+${extraCount}` : "",
-          })}`;
-      }).join("")}
-    </div>`;
+function renderPersonaDraftCardMediaSlot(items = []) {
+  const rows = (Array.isArray(items) ? items : []).filter((item) => item && (item.previewUrl || item.unavailable));
+  if (!rows.length) {
+    return `<div class="persona-draft-card-media-slot is-empty" aria-label="无媒体"><span>无媒体</span></div>`;
+  }
+  const previewRows = rows.filter((item) => item?.previewUrl && !item.unavailable);
+  const first = previewRows[0] || rows[0];
+  const countBadge = rows.length > 1 ? `<strong class="persona-draft-card-media-count">${esc(rows.length)}</strong>` : "";
+  if (!first?.previewUrl || first.unavailable) {
+    return `
+      <div class="persona-draft-card-media-slot is-unavailable" aria-label="媒体不可预览">
+        <span>${esc(mediaKindLabel(first?.type))}</span>
+        ${countBadge}
+      </div>`;
+  }
+  const groupId = registerMediaPreviewGroup(previewRows);
+  return renderMediaPreviewButton(first, groupId, 0, {
+    className: "persona-draft-card-media-slot",
+    frameClass: "persona-draft-card-media-frame",
+    caption: mediaKindLabel(first.type),
+  }).replace("</button>", `${countBadge}</button>`);
 }
 
 function ensurePersonaMediaLightbox() {
@@ -2346,6 +2572,7 @@ function ensurePersonaMediaLightbox() {
       </div>
       <div class="persona-media-lightbox-body" id="personaMediaLightboxBody"></div>
       <div class="persona-media-lightbox-actions">
+        <button type="button" id="personaMediaReset" data-media-lightbox-reset>复位</button>
         <button type="button" id="personaMediaPrev" data-media-lightbox-prev>上一张</button>
         <button type="button" id="personaMediaNext" data-media-lightbox-next>下一张</button>
       </div>
@@ -2354,13 +2581,79 @@ function ensurePersonaMediaLightbox() {
   document.body.appendChild(node);
   node.addEventListener("click", (event) => {
     if (event.target.closest("[data-media-lightbox-close]")) closePersonaMediaLightbox();
+    if (event.target.closest("[data-media-lightbox-reset]")) resetPersonaMediaLightboxTransform();
     if (event.target.closest("[data-media-lightbox-prev]")) movePersonaMediaLightbox(-1);
     if (event.target.closest("[data-media-lightbox-next]")) movePersonaMediaLightbox(1);
   });
+  node.addEventListener("wheel", handlePersonaMediaLightboxWheel, { passive: false });
+  node.addEventListener("pointerdown", handlePersonaMediaLightboxPointerDown);
+  document.addEventListener("pointermove", handlePersonaMediaLightboxPointerMove, { passive: false });
+  document.addEventListener("pointerup", handlePersonaMediaLightboxPointerUp);
+  document.addEventListener("pointercancel", handlePersonaMediaLightboxPointerUp);
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && !node.hidden) closePersonaMediaLightbox();
   });
   return node;
+}
+
+function mediaLightboxImage() {
+  return $("personaMediaLightboxBody")?.querySelector("[data-media-lightbox-zoomable]");
+}
+
+function applyPersonaMediaLightboxTransform() {
+  const image = mediaLightboxImage();
+  if (!image) return;
+  const scale = Math.min(Math.max(Number(state.mediaLightbox.scale || 1), 0.4), 6);
+  const x = Number(state.mediaLightbox.x || 0);
+  const y = Number(state.mediaLightbox.y || 0);
+  state.mediaLightbox.scale = scale;
+  image.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+}
+
+function resetPersonaMediaLightboxTransform() {
+  state.mediaLightbox.scale = 1;
+  state.mediaLightbox.x = 0;
+  state.mediaLightbox.y = 0;
+  state.mediaLightbox.dragging = false;
+  applyPersonaMediaLightboxTransform();
+}
+
+function handlePersonaMediaLightboxWheel(event) {
+  const node = $("personaMediaLightbox");
+  if (!node || node.hidden || !mediaLightboxImage()) return;
+  event.preventDefault();
+  const current = Math.min(Math.max(Number(state.mediaLightbox.scale || 1), 0.4), 6);
+  const next = Math.min(Math.max(current * (event.deltaY < 0 ? 1.12 : 0.88), 0.4), 6);
+  if (Math.abs(next - current) < 0.001) return;
+  state.mediaLightbox.scale = next;
+  applyPersonaMediaLightboxTransform();
+}
+
+function handlePersonaMediaLightboxPointerDown(event) {
+  const image = mediaLightboxImage();
+  if (!image || !event.target.closest?.(".persona-media-lightbox-body")) return;
+  event.preventDefault();
+  state.mediaLightbox.dragging = true;
+  state.mediaLightbox.dragX = event.clientX;
+  state.mediaLightbox.dragY = event.clientY;
+  state.mediaLightbox.startX = Number(state.mediaLightbox.x || 0);
+  state.mediaLightbox.startY = Number(state.mediaLightbox.y || 0);
+  image.classList.add("is-dragging");
+  image.setPointerCapture?.(event.pointerId);
+}
+
+function handlePersonaMediaLightboxPointerMove(event) {
+  if (!state.mediaLightbox.dragging || !mediaLightboxImage()) return;
+  event.preventDefault();
+  state.mediaLightbox.x = Number(state.mediaLightbox.startX || 0) + event.clientX - Number(state.mediaLightbox.dragX || 0);
+  state.mediaLightbox.y = Number(state.mediaLightbox.startY || 0) + event.clientY - Number(state.mediaLightbox.dragY || 0);
+  applyPersonaMediaLightboxTransform();
+}
+
+function handlePersonaMediaLightboxPointerUp() {
+  if (!state.mediaLightbox.dragging) return;
+  state.mediaLightbox.dragging = false;
+  mediaLightboxImage()?.classList.remove("is-dragging");
 }
 
 function closePersonaMediaLightbox() {
@@ -2371,15 +2664,18 @@ function closePersonaMediaLightbox() {
   if (body) body.innerHTML = "";
   state.mediaLightbox.groupId = "";
   state.mediaLightbox.index = 0;
+  resetPersonaMediaLightboxTransform();
 }
 
 function syncPersonaMediaLightboxNav(total, index) {
   const counter = $("personaMediaLightboxCounter");
   const prev = $("personaMediaPrev");
   const next = $("personaMediaNext");
+  const reset = $("personaMediaReset");
   if (counter) counter.textContent = total > 1 ? `${index + 1} / ${total}` : "";
   if (prev) prev.disabled = total <= 1 || index <= 0;
   if (next) next.disabled = total <= 1 || index >= total - 1;
+  if (reset) reset.disabled = !mediaLightboxImage();
 }
 
 function renderPersonaMediaLightboxCurrent() {
@@ -2396,11 +2692,13 @@ function renderPersonaMediaLightboxCurrent() {
   const body = $("personaMediaLightboxBody");
   if (!body) return;
   if (title) title.textContent = item.label || `${mediaKindLabel(item.type)}预览`;
+  resetPersonaMediaLightboxTransform();
   body.innerHTML = item.type === "video"
     ? `<video class="persona-media-lightbox-frame" src="${esc(item.previewUrl)}" controls autoplay playsinline preload="metadata" onerror="handlePersonaMediaLightboxError(this, '视频加载失败，原始文件可能已失效。')"></video>`
     : item.type === "audio"
       ? `<audio class="persona-media-lightbox-audio" src="${esc(item.previewUrl)}" controls autoplay onerror="handlePersonaMediaLightboxError(this, '音频加载失败，原始文件可能已失效。')"></audio>`
-      : `<img class="persona-media-lightbox-frame" src="${esc(item.previewUrl)}" alt="${esc(item.label || "媒体预览")}" onerror="handlePersonaMediaLightboxError(this, '图片加载失败，原始文件可能已失效。')" />`;
+      : `<img class="persona-media-lightbox-frame is-zoomable" data-media-lightbox-zoomable src="${esc(item.previewUrl)}" alt="${esc(item.label || "媒体预览")}" draggable="false" onerror="handlePersonaMediaLightboxError(this, '图片加载失败，原始文件可能已失效。')" />`;
+  applyPersonaMediaLightboxTransform();
   syncPersonaMediaLightboxNav(items.length, index);
   node.hidden = false;
 }
@@ -2495,8 +2793,12 @@ function renderPersonaDraftRows(posts, source = personaPostSource()) {
         ${hotMeta ? renderPersonaHotOrigin(hotMeta, { compact: true }) : ""}
         <span class="persona-draft-card-time">${esc(formatTime(post.published_at || post.updated_at || post.created_at))}</span>
       </div>
-      <p>${esc(String(post.content || "").slice(0, 220))}</p>
-      ${renderPersonaDraftCardMediaStrip(mediaItems)}
+      <div class="persona-draft-card-body">
+        ${renderPersonaDraftCardMediaSlot(mediaItems)}
+        <div class="persona-draft-card-copy">
+          <p>${esc(String(post.content || "").slice(0, 170))}</p>
+        </div>
+      </div>
       <div class="persona-draft-card-footer">
         <small>${isSelected ? "当前已选中" : "点击卡片选中"}</small>
         <div class="row-actions persona-draft-card-actions">
@@ -2918,6 +3220,7 @@ function personaAutomationTaskTypesForStep(step) {
   if (step === "login") return ["open_login", "check_login"];
   if (step === "reply_comment" || step === "reply_hot") return ["threads_auto_reply"];
   if (step === "warmup") return ["threads_warmup"];
+  if (["open_login", "check_login", "browse_feed", "browse_profile", "comment_post", "reply_comment", "like_post", "share_post", "threads_auto_reply"].includes(String(step || ""))) return [String(step)];
   return [];
 }
 
@@ -2930,7 +3233,31 @@ function personaSettingsLoadingPanel() {
 }
 
 function renderPersonaAccountPanel(persona, account, profile, step) {
-  return renderPersonaAccountPanelV2(persona, account, profile, step);
+  const accounts = personaAccounts(persona);
+  const threads = persona.threads_account || {};
+  return `
+    <div class="persona-inline-panel persona-account-summary-panel">
+      <strong>浏览器账号已统一管理</strong>
+      <p>登录、检查、养号、自动回复等操作已集中到“指纹浏览器自动化”。这里仅保留当前人设的账号状态概览。</p>
+      <div class="persona-metrics persona-account-summary-metrics">
+        <div><span>主页标识</span><strong>${esc(threads.handle || profile?.threads_handle || "未绑定")}</strong></div>
+        <div><span>执行账号</span><strong>${esc(`${accounts.length} 个`)}</strong></div>
+        <div><span>可发布账号</span><strong>${esc(`${publishAccountsForPersona(persona).length} 个`)}</strong></div>
+        <div><span>当前账号</span><strong>${esc(account ? (account.username || account.id) : "未选择")}</strong></div>
+      </div>
+      ${accounts.length ? `
+        <div class="compact-list">
+          ${accounts.map((item) => `
+            <article class="compact-row">
+              <strong>${esc(item.username || item.id)}</strong>
+              <p>${esc(`${platformLabel(item.platform || "")} · ${statusLabel(item.status || "")}`)}</p>
+            </article>`).join("")}
+        </div>
+      ` : `<div class="empty-state">当前人设还没有绑定浏览器执行账号。</div>`}
+      <div class="row-actions">
+        <button type="button" class="primary" data-open-unified-automation>进入统一账号自动化</button>
+      </div>
+    </div>`;
 }
 
 function personaProfileMode(personaId) {
@@ -3371,18 +3698,35 @@ function renderTaskQueuePanelTabs(active = "persona") {
   `).join("")}</div>`;
 }
 
+function renderTaskQueueBulkControls(kind) {
+  const summary = taskQueueSelectionSummary(kind);
+  return `
+    <div class="task-queue-bulk-controls" aria-label="批量操作">
+      <button type="button" data-task-queue-select-all="${esc(kind)}" ${summary.total ? "" : "disabled"}>${summary.allSelected ? "取消全选" : "全选当前页"}</button>
+      <span class="task-queue-selection-count">${esc(`已选 ${summary.selected} / ${summary.total}`)}</span>
+      <button type="button" class="danger" data-task-queue-delete-selected="${esc(kind)}" ${summary.selected ? "" : "disabled"}>删除选中</button>
+    </div>`;
+}
+
 function renderPersonaQueueRows(rows) {
   return rows.map((task) => `
     <article class="compact-row task-persona-queue-row">
-      <div class="task-persona-queue-main">
+      <label class="task-queue-check-label task-queue-row-check">
+        <input type="checkbox" data-task-queue-select="persona:${esc(task.id)}" ${state.taskQueueSelectedPersonaIds.has(String(task.id || "")) ? "checked" : ""} />
+        <span class="sr-only">选择</span>
+      </label>
+      <div class="task-persona-queue-type">
         <strong>${esc(statusLabel(task.task_type || ""))}</strong>
-        <p>${esc(`${statusLabel(task.status || "")} · ${task.platform || "-"} · ${task.account_username || task.account_id || ""}`)}</p>
-        <span>${esc(formatTime(task.updated_at || task.created_at || ""))}</span>
       </div>
+      <div class="task-persona-queue-platform">${esc(queuePlatformLabel(task.platform || ""))}</div>
+      <div class="task-persona-queue-account">${esc(task.account_username || task.account_id || "-")}</div>
+      <div class="task-persona-queue-time">${esc(formatTime(task.updated_at || task.created_at || ""))}</div>
+      <div>${renderStatusText(task.status || "")}</div>
       <div class="row-actions">
         <button type="button" data-social-log="${esc(task.id)}">日志</button>
         ${task.status === "failed" ? `<button type="button" data-social-retry="${esc(task.id)}">重试</button>` : ""}
-        ${["queued", "running", "need_manual"].includes(String(task.status || "")) ? `<button type="button" class="danger" data-social-cancel="${esc(task.id)}">取消</button>` : ""}
+        ${["queued", "running", "need_manual"].includes(String(task.status || "")) ? `<button type="button" class="muted" data-social-cancel="${esc(task.id)}">取消</button>` : ""}
+        <button type="button" class="danger" data-social-delete="${esc(task.id)}">删除</button>
       </div>
     </article>
   `).join("");
@@ -3436,30 +3780,36 @@ function renderTaskQueuePersonaSelector() {
 
 function renderTaskQueueView() {
   const persona = selectedPersona();
+  const personaPageSize = Math.min(Math.max(Number(state.taskQueuePersonaPageSize || 12), 1), 100);
+  const regularPageSize = Math.min(Math.max(Number(state.taskQueueRegularPageSize || 20), 1), 100);
   const personaPageInfo = paginateTaskQueueRows(
     persona ? personaAutomationTasksFor(persona.id) : [],
     state.taskQueuePersonaPage,
-    TASK_QUEUE_PERSONA_PAGE_SIZE,
+    personaPageSize,
   );
   state.taskQueuePersonaPage = personaPageInfo.page;
   const personaTasks = personaPageInfo.items;
   const regularPageInfo = paginateTaskQueueRows(
     state.tasks,
     state.taskQueueRegularPage,
-    TASK_QUEUE_REGULAR_PAGE_SIZE,
+    regularPageSize,
   );
   state.taskQueueRegularPage = regularPageInfo.page;
   const regularTasksHtml = regularPageInfo.totalItems ? regularPageInfo.items.map((task) => `
-    <article class="task-row">
+    <article class="compact-row task-row">
+      <label class="task-queue-check-label task-queue-row-check">
+        <input type="checkbox" data-task-queue-select="regular:${esc(task.id)}" ${state.taskQueueSelectedRegularIds.has(String(task.id || "")) ? "checked" : ""} />
+        <span class="sr-only">选择</span>
+      </label>
       <div><strong>${esc(task.workflow_name || task.type || "任务")}</strong><span>${esc(task.id)}</span></div>
-      <div><span class="status ${esc(task.status)}">${esc(statusLabel(task.status))}</span></div>
       <div>${esc(formatTime(task.created_at))}</div>
+      <div>${renderStatusText(task.status || "")}</div>
       <div class="row-actions">
-        <button type="button" data-watch="${esc(task.id)}">监听</button>
         <button type="button" data-detail="${esc(task.id)}">详情</button>
         ${task.has_download ? `<a href="/api/tasks/${encodeURIComponent(task.id)}/download">下载</a>` : ""}
         ${task.status === "failed" ? `<button type="button" data-retry="${esc(task.id)}">重试</button>` : ""}
         ${activeTaskStatus(task.status) ? `<button type="button" class="danger" data-cancel-task="${esc(task.id)}">停止</button>` : ""}
+        <button type="button" class="danger" data-delete-task="${esc(task.id)}">删除</button>
       </div>
     </article>
   `).join("") : `<div class="empty-state">当前还没有通用任务。</div>`;
@@ -3467,23 +3817,32 @@ function renderTaskQueueView() {
   const panel = currentPanel === "regular"
     ? {
       title: "通用任务队列",
-      description: "这里继续保留原有的 Web 任务列表，用于监听、详情、下载、重试和停止。",
-      actions: "",
-      body: `<div class="task-table-inner">${regularTasksHtml}</div>`,
+      description: "这里继续保留原有的 Web 任务列表，用于查看详情、下载、重试和停止。",
+      actions: `<div class="task-queue-actionbar">${renderTaskQueueBulkControls("regular")}</div>`,
+      extraActions: "",
+      body: `<div class="task-table-inner task-table-inner--regular">
+        <div class="task-table-head"><span>勾选</span><span>任务</span><span>创建时间</span><span>状态</span><span>操作</span></div>
+        ${regularTasksHtml}
+      </div>`,
       pager: renderTaskQueuePager("regular", regularPageInfo),
     }
     : {
       title: "当前人设自动化队列",
       description: persona ? `这里统一查看「${persona.name || persona.id}」的浏览器自动化任务，不再单独放在人设页签里。` : "先在右侧点选一个人设，这里会同步显示对应自动化队列。",
       actions: `
-        <div class="row-actions">
+        <div class="task-queue-actionbar">
           <button type="button" data-task-open-persona>${persona ? "打开当前人设" : "去选择人设"}</button>
-          ${persona ? `<button type="button" data-task-clear-persona-queue="${esc(persona.id)}">清理该人设自动化队列</button>` : ""}
+          ${renderTaskQueueBulkControls("persona")}
+          ${persona ? `<button type="button" class="danger" data-task-clear-persona-queue="${esc(persona.id)}">删除全部记录</button>` : ""}
         </div>`,
+      extraActions: "",
       body: persona
         ? (
           personaTasks.length
-            ? `<div class="compact-list task-persona-queue-list">${renderPersonaQueueRows(personaTasks)}</div>`
+            ? `<div class="compact-list task-persona-queue-list">
+                <div class="task-table-head task-table-head--persona"><span>勾选</span><span>任务</span><span>平台</span><span>账号</span><span>时间</span><span>状态</span><span>操作</span></div>
+                ${renderPersonaQueueRows(personaTasks)}
+              </div>`
             : `<div class="empty-state">当前人设暂无自动化任务。</div>`
         )
         : `<div class="empty-state">当前还没有选中的人设。</div>`,
@@ -3499,9 +3858,7 @@ function renderTaskQueueView() {
               <strong>${panel.title}</strong>
               <p>${esc(panel.description)}</p>
             </div>
-            <div class="task-panel-section-controls">
-              ${panel.actions}
-            </div>
+            ${panel.actions ? `<div class="task-panel-section-controls">${panel.actions}</div>` : ""}
           </div>
           ${panel.body}
           <div class="task-panel-section-foot">${panel.pager}</div>
@@ -3565,6 +3922,229 @@ function accountOptionTags() {
   return accounts.length
     ? accounts.map((account) => `<option value="${esc(account.id)}" data-platform="${esc(account.platform || "")}">${esc(account.username || account.id)} · ${esc(account.platform || "-")}</option>`).join("")
     : `<option value="">暂无账号</option>`;
+}
+
+function renderAutomationPersonaTabs() {
+  if (!state.personas.length) return `<div class="empty-state">暂无人设，请先创建人设。</div>`;
+  return `
+    <div class="automation-tab-strip" aria-label="切换人设">
+      ${state.personas.map((persona) => {
+        const selected = String(persona.id || "") === String(state.selectedPersonaId || selectedPersona()?.id || "");
+        const accounts = personaAccounts(persona);
+        return `
+          <button type="button" class="automation-tab ${selected ? "is-active" : ""}" data-automation-persona="${esc(persona.id)}">
+            <strong>${esc(persona.name || persona.id)}</strong>
+            <span>${esc(accounts.length ? `${accounts.length} 个账号` : "未绑定账号")}</span>
+          </button>`;
+      }).join("")}
+    </div>`;
+}
+
+function renderAutomationAccountTabs(persona, platform) {
+  const accounts = personaAutomationAccounts(persona, platform);
+  if (!accounts.length) {
+    return `<div class="empty-line">当前人设还没有 ${esc(platformLabel(platform))} 执行账号。</div>`;
+  }
+  const selectedAccount = selectedPersonaAutomationAccount(persona, platform) || accounts[0];
+  return `
+    <div class="automation-tab-strip automation-tab-strip--accounts" aria-label="切换执行账号">
+      ${accounts.map((account) => {
+        const selected = String(account.id || "") === String(selectedAccount?.id || "");
+        return `
+          <button type="button" class="automation-tab ${selected ? "is-active" : ""}" data-automation-account="${esc(account.id)}">
+            <strong>${esc(account.username || account.id)}</strong>
+            <span>${esc(statusLabel(account.status || ""))}</span>
+          </button>`;
+      }).join("")}
+    </div>`;
+}
+
+function renderAutomationStepTabs(activeStep) {
+  const steps = [
+    ["binding", "账号绑定"],
+    ["login", "登录与检查"],
+    ["reply_comment", "自动回复评论"],
+    ["reply_hot", "自动回复热点"],
+    ["warmup", "养号"],
+  ];
+  return `
+    <div class="segmented-control automation-step-tabs" aria-label="切换自动化操作">
+      ${steps.map(([value, label]) => `<button type="button" class="${activeStep === value ? "active" : ""}" data-automation-step="${esc(value)}">${esc(label)}</button>`).join("")}
+    </div>`;
+}
+
+function renderUnifiedAutomationModule() {
+  const persona = selectedPersona();
+  const currentStep = ["binding", "login", "reply_comment", "reply_hot", "warmup"].includes(currentBranch("automation"))
+    ? currentBranch("automation")
+    : "binding";
+  const platform = selectedPersonaAutomationPlatform();
+  const accounts = persona ? personaAutomationAccounts(persona, platform) : [];
+  const selectedAccount = persona ? selectedPersonaAutomationAccount(persona, platform) : null;
+  const selectedAccountId = String(selectedAccount?.id || "");
+  const loginBusy = Boolean(selectedAccountId) && (isActionLocked("social", selectedAccountId, "open_login") || activeSocialTaskFor({ accountId: selectedAccountId, taskType: "open_login" }));
+  const checkBusy = Boolean(selectedAccountId) && (isActionLocked("social", selectedAccountId, "check_login") || activeSocialTaskFor({ accountId: selectedAccountId, taskType: "check_login" }));
+  const replyBusy = Boolean(selectedAccountId) && (isActionLocked("social", selectedAccountId, "threads_auto_reply") || activeSocialTaskFor({ accountId: selectedAccountId, taskType: "threads_auto_reply" }));
+  const warmupBusy = Boolean(selectedAccountId) && (isActionLocked("social", selectedAccountId, "threads_warmup") || activeSocialTaskFor({ accountId: selectedAccountId, taskType: "threads_warmup" }));
+  const taskResultStep = currentStep;
+  const taskResultKey = selectedAccount ? personaAutomationResultKey(selectedAccount.id, taskResultStep) : "";
+  if (selectedAccount?.id && taskResultStep) {
+    ensurePersonaAutomationResultLoaded(selectedAccount.id, taskResultStep).then(() => {
+      if (state.activeModule === "automation") updatePersonaAutomationResultView(selectedAccount.id, taskResultStep);
+    }).catch(() => {});
+  }
+  const taskResultHtml = taskResultKey ? (state.personaAutomationResults[taskResultKey] || `<div class="empty-state">提交后，这里会显示任务状态、截图和执行日志。</div>`) : `<div class="empty-state">选择或绑定执行账号后，这里会显示任务状态、截图和执行日志。</div>`;
+  const credentialsMask = selectedAccount?.login_password_configured ? "已保存密码，留空则沿用" : "登录密码";
+  const threadsOnlyNotice = platform !== "threads" && ["reply_comment", "reply_hot", "warmup"].includes(currentStep)
+    ? `<div class="empty-state">当前操作只支持 Threads。请先切换到 Threads 平台。</div>`
+    : "";
+  const strategyGroup = currentStep === "reply_hot"
+    ? "threads_hot_reply"
+    : currentStep === "warmup"
+      ? "threads_warmup"
+      : "threads_comment_reply";
+  const strategy = personaThreadsStrategy(strategyGroup);
+  const customStrategy = personaThreadsStrategyIsCustom(strategyGroup);
+  const payload = strategy?.payload || {};
+  let operationPanel = "";
+  if (!persona) {
+    operationPanel = `<div class="empty-state">请先创建并选择人设。</div>`;
+  } else if (currentStep === "binding") {
+    operationPanel = `
+      <div class="automation-operation-card">
+        <strong>Threads 主页标识</strong>
+        <p>这里只保存当前人设对应的 Threads 主页用户名，不会创建浏览器执行账号。</p>
+        <label>Threads 用户名
+          <input id="personaThreadsHandle" value="${esc(persona.threads_account?.handle || selectedPersonaProfile()?.threads_handle || "")}" placeholder="Threads 用户名 / handle" />
+        </label>
+        <div class="row-actions">
+          <button type="button" data-persona-save-threads>保存主页标识</button>
+          <button type="button" data-persona-unbind-threads ${persona.threads_account?.handle ? "" : "disabled"}>解绑主页标识</button>
+        </div>
+      </div>
+      <div class="automation-operation-card">
+        <strong>绑定浏览器执行账号</strong>
+        <p>在这里为当前人设创建真正用于登录、发布、养号和自动回复的浏览器执行账号。</p>
+        <label>${platform === "threads" ? "Threads 用户名" : "Instagram 用户名"}
+          <input id="personaAutoUsername" value="" placeholder="${platform === "threads" ? "Threads 用户名 / handle" : "Instagram 用户名"}" />
+        </label>
+        <div class="row-actions">
+          <button type="button" data-persona-create-account>绑定新账号</button>
+        </div>
+      </div>`;
+  } else if (currentStep === "login") {
+    operationPanel = `
+      <div class="automation-operation-card">
+        <strong>登录与检查</strong>
+        <div class="form-grid">
+          <label>登录账号
+            <input id="personaAutoLoginUsername" value="${esc(selectedAccount?.login_username || selectedAccount?.username || "")}" placeholder="账号 / 邮箱 / 手机号" />
+          </label>
+          <label>登录密码
+            <input id="personaAutoLoginPassword" type="password" value="" placeholder="${esc(credentialsMask)}" />
+          </label>
+        </div>
+        <div class="row-actions">
+          <button type="button" data-persona-save-login ${selectedAccount ? "" : "disabled"}>保存登录资料</button>
+          <button type="button" data-persona-clear-login ${selectedAccount?.login_password_configured ? "" : "disabled"}>删除登录资料</button>
+          <button type="button" data-persona-open-login ${selectedAccount && !loginBusy ? "" : "disabled"}>${loginBusy ? "登录任务执行中" : "打开登录窗口"}</button>
+          <button type="button" data-persona-auto-login ${selectedAccount && !loginBusy ? "" : "disabled"}>${loginBusy ? "登录任务执行中" : "自动登录"}</button>
+          <button type="button" data-persona-check-login ${selectedAccount && !checkBusy ? "" : "disabled"}>${checkBusy ? "检查执行中" : "检查登录"}</button>
+        </div>
+      </div>`;
+  } else if (currentStep === "reply_comment" || currentStep === "reply_hot") {
+    operationPanel = threadsOnlyNotice || `
+      <div class="automation-operation-card">
+        <strong>${currentStep === "reply_hot" ? "自动回复热点推文" : "自动回复评论"}</strong>
+        <label>策略
+          <select id="personaStrategySelect" data-strategy-group="${esc(strategyGroup)}">
+            ${personaThreadsStrategyOptionsHtml(strategyGroup)}
+          </select>
+        </label>
+        ${customStrategy ? `
+          <div class="form-grid">
+            <label>查看天数
+              <input id="personaAutoMaxAgeDays" type="number" min="1" max="365" value="${esc(payload.max_age_days || (currentStep === "reply_hot" ? 30 : 2))}" />
+            </label>
+            <label>扫描篇数
+              <input id="personaAutoMaxPosts" type="number" min="1" max="20" value="${esc(payload.max_posts || 5)}" />
+            </label>
+            <label>回复上限
+              <input id="personaAutoMaxReplies" type="number" min="1" max="10" value="${esc(payload.max_replies || 3)}" />
+            </label>
+            ${currentStep === "reply_hot" ? `<label>最低浏览
+              <input id="personaAutoMinViews" type="number" min="0" max="999999999" value="${esc(payload.min_views || 0)}" />
+            </label>` : ""}
+          </div>
+          ${currentStep === "reply_hot" ? `<label>指定目标 URL
+            <textarea id="personaAutoTargetUrls" rows="3" placeholder="可选，多个链接换行填写。"></textarea>
+          </label>` : ""}
+          <label>固定回复内容
+            <textarea id="personaAutoReplyText" rows="3" placeholder="留空则按当前人设自动生成。"></textarea>
+          </label>
+        ` : ""}
+        ${personaThreadsStrategyDetail(strategyGroup)}
+        <div class="row-actions">
+          <button type="button" data-persona-run-threads="${currentStep === "reply_hot" ? "reply_hot" : "reply_comment"}" ${selectedAccount && !replyBusy ? "" : "disabled"}>${replyBusy ? "自动回复执行中" : "提交自动回复任务"}</button>
+        </div>
+      </div>`;
+  } else {
+    operationPanel = threadsOnlyNotice || `
+      <div class="automation-operation-card">
+        <strong>养号</strong>
+        <label>策略
+          <select id="personaStrategySelect" data-strategy-group="threads_warmup">
+            ${personaThreadsStrategyOptionsHtml("threads_warmup")}
+          </select>
+        </label>
+        ${customStrategy ? `
+          <div class="form-grid">
+            <label>浏览篇数上限
+              <input id="personaAutoBrowseLimit" type="number" min="1" max="300" value="${esc(payload.browse_limit || payload.scroll_times || 30)}" />
+            </label>
+            <label>点赞上限
+              <input id="personaAutoLikeLimit" type="number" min="0" max="100" value="${esc(payload.like_limit || 0)}" />
+            </label>
+            <label>留言上限
+              <input id="personaAutoMaxComments" type="number" min="0" max="50" value="${esc(payload.max_comments || 0)}" />
+            </label>
+          </div>
+          <label>养号留言模板
+            <textarea id="personaAutoReplyText" rows="3" placeholder="可选，多条换行。留空则按人设自动生成。"></textarea>
+          </label>
+        ` : ""}
+        ${personaThreadsStrategyDetail("threads_warmup")}
+        <div class="row-actions">
+          <button type="button" data-persona-run-threads="warmup" ${selectedAccount && !warmupBusy ? "" : "disabled"}>${warmupBusy ? "养号执行中" : "提交养号任务"}</button>
+        </div>
+      </div>`;
+  }
+  return `
+    <div class="automation-unified-shell">
+      <section class="automation-switch-panel">
+        <div class="automation-section-head">
+          <strong>选择人设</strong>
+          <span>${esc(state.personas.length ? `${state.personas.length} 个` : "暂无")}</span>
+        </div>
+        ${renderAutomationPersonaTabs()}
+      </section>
+      <section class="automation-switch-panel">
+        <div class="automation-section-head">
+          <strong>选择平台与账号</strong>
+          <span>${esc(persona ? `${accounts.length} 个当前平台账号` : "未选择人设")}</span>
+        </div>
+        <div class="segmented-control automation-platform-tabs">
+          <button type="button" class="${platform === "threads" ? "active" : ""}" data-automation-platform="threads">Threads</button>
+          <button type="button" class="${platform === "instagram" ? "active" : ""}" data-automation-platform="instagram">Instagram</button>
+        </div>
+        ${persona ? renderAutomationAccountTabs(persona, platform) : ""}
+      </section>
+      <section class="automation-work-panel">
+        ${renderAutomationStepTabs(currentStep)}
+        ${operationPanel}
+        <div id="personaAutomationResult">${taskResultHtml}</div>
+      </section>
+    </div>`;
 }
 
 function renderUploadDropzone(id, {
@@ -3819,19 +4399,7 @@ function renderSimpleFlowModule(moduleId) {
         </div>`;
     }
   } else if (moduleId === "automation") {
-    const needsTarget = ["browse_profile", "comment_post", "reply_comment", "like_post", "share_post"].includes(selectedTask);
-    const needsContent = ["publish_post", "comment_post", "reply_comment", "threads_auto_reply"].includes(selectedTask);
-    const needsMedia = selectedTask === "publish_post";
-    const showTargetList = selectedTask === "threads_auto_reply";
-    body = `
-      ${commonAccount}
-      <label>任务类型
-        <select id="simplePrimary">${optionTags(taskOptions, selectedTask)}</select>
-      </label>
-      ${needsTarget ? targetField : ""}
-      ${needsContent ? contentBox : ""}
-      ${needsMedia ? renderUploadDropzone("simpleMediaFiles", { label: "上传素材", hint: "拖动图片或视频到这里，或点击选择。Instagram 发布至少需要一份媒体。" }) : ""}
-      ${showTargetList ? targetListField : ""}`;
+    body = renderUnifiedAutomationModule();
   } else {
     body = `
       <div class="form-grid">
@@ -3852,9 +4420,10 @@ function renderSimpleFlowModule(moduleId) {
       </div>`;
   }
   const actionLabel = moduleId === "queue" ? "打开任务队列" : (moduleId === "publishing" && normalizedPublishMode(branch) === "matrix_start" ? "提交矩阵发布" : "确认执行");
+  const actionHtml = moduleId === "automation" ? "" : `<div class="command-actions"><button id="executeSimpleFlow" type="button" class="primary">${esc(actionLabel)}</button></div>`;
   $("moduleBody").innerHTML = `
     ${body}
-    <div class="command-actions"><button id="executeSimpleFlow" type="button" class="primary">${esc(actionLabel)}</button></div>
+    ${actionHtml}
   `;
   if ($("simpleAccount") && accountId) $("simpleAccount").value = accountId;
   if ($("simplePublishMode")) {
@@ -3874,7 +4443,7 @@ function renderSimpleFlowModule(moduleId) {
       renderSimpleFlowModule("publishing");
     });
   }
-  $("executeSimpleFlow").addEventListener("click", () => executeSimpleFlow().catch((error) => showMsg("commandMsg", error.detail || error.message || "执行失败", false)));
+  if ($("executeSimpleFlow")) $("executeSimpleFlow").addEventListener("click", () => executeSimpleFlow().catch((error) => showMsg("commandMsg", error.detail || error.message || "执行失败", false)));
 }
 
 function bindSimpleFlowInputs(moduleId) {
@@ -3968,6 +4537,38 @@ function bindSimpleFlowInputs(moduleId) {
       renderSimpleFlowModule(moduleId);
     });
   });
+  if (moduleId === "automation") {
+    document.querySelectorAll("[data-automation-persona]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const personaId = String(node.dataset.automationPersona || "").trim();
+        if (!personaId) return;
+        state.selectedPersonaId = personaId;
+        state.preferredAccountId = accountForPersona(selectedPersona())?.id || "";
+        setSelectedPersonaPostId("");
+        renderSimpleFlowModule("automation");
+      });
+    });
+    document.querySelectorAll("[data-automation-platform]").forEach((node) => {
+      node.addEventListener("click", () => {
+        state.personaAutomationPlatform = node.dataset.automationPlatform === "instagram" ? "instagram" : "threads";
+        state.preferredAccountId = "";
+        renderSimpleFlowModule("automation");
+      });
+    });
+    document.querySelectorAll("[data-automation-account]").forEach((node) => {
+      node.addEventListener("click", () => {
+        state.preferredAccountId = node.dataset.automationAccount || "";
+        renderSimpleFlowModule("automation");
+      });
+    });
+    document.querySelectorAll("[data-automation-step]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const step = String(node.dataset.automationStep || "binding");
+        state.simpleBranches.automation = ["binding", "login", "reply_comment", "reply_hot", "warmup"].includes(step) ? step : "binding";
+        renderSimpleFlowModule("automation");
+      });
+    });
+  }
   document.querySelectorAll("[data-matrix-persona]").forEach((node) => {
     node.addEventListener("change", () => {
       updateMatrixPublishStateFromForm();
@@ -4012,13 +4613,15 @@ function renderConfirmSummary() {
     ]);
   } else if (state.activeModule === "publishing" || state.activeModule === "automation") {
     const persona = state.personas.find((item) => String(item.id) === String($("simplePersona")?.value || state.selectedPersonaId)) || selectedPersona();
+    const automationStep = currentBranch("automation");
     const account = state.activeModule === "publishing"
       ? publishAccountForPersona(persona)
-      : selectedSocialAccount($("simpleAccount")?.value);
+      : selectedPersonaAutomationAccount(persona, selectedPersonaAutomationPlatform());
     rows = rows.concat([
-      [state.activeModule === "publishing" ? "发布方式" : "任务类型", state.activeModule === "publishing" ? publishModeLabel($("simplePublishMode")?.value || state.simpleBranches.publishing) : ($("simplePrimary")?.selectedOptions?.[0]?.textContent || selectedBranch(state.activeModule))],
+      [state.activeModule === "publishing" ? "发布方式" : "当前操作", state.activeModule === "publishing" ? publishModeLabel($("simplePublishMode")?.value || state.simpleBranches.publishing) : personaGroupStepLabel("account", automationStep, selectedPersonaProfile())],
+      ...(state.activeModule === "automation" ? [["当前人设", persona ? persona.name : "未选择"]] : []),
       [state.activeModule === "publishing" ? "发布账号" : "账号", account ? String(account.username || account.id) : "未选择"],
-      ["最终动作", "提交浏览器任务"],
+      ["最终动作", state.activeModule === "publishing" ? "提交发布任务" : "在统一自动化面板执行"],
     ]);
   } else {
     rows = rows.concat([
@@ -4170,6 +4773,7 @@ async function savePersonaThreadsBinding() {
   appendEvent("persona", `${persona.name || persona.id} 已保存 Threads 绑定：${username}`);
   showMsg("commandMsg", "Threads 绑定已保存。", true);
   await loadPersonas();
+  refreshAutomationWorkSurface();
 }
 
 async function unbindPersonaThreadsBinding() {
@@ -4183,6 +4787,7 @@ async function unbindPersonaThreadsBinding() {
   appendEvent("persona", `${persona.name || persona.id} 已解绑 Threads 绑定`);
   showMsg("commandMsg", "Threads 绑定已解绑。", true);
   await loadPersonas();
+  refreshAutomationWorkSurface();
 }
 
 async function patchPersonaProfile(payload) {
@@ -4367,6 +4972,39 @@ async function deleteSelectedPersona(personaId = "") {
   await loadPersonas();
 }
 
+async function duplicatePersonaArchive(personaId = "") {
+  const cleanId = String(personaId || "").trim();
+  const persona = state.personas.find((item) => String(item.id || "") === cleanId);
+  if (!persona) return;
+  state.personaListEditorId = "";
+  state.personaListEditorMode = "";
+  removePersonaCardEditorPortal();
+  const confirmed = await openConsoleModal({
+    title: "复制人设",
+    message: `确认复制人设「${persona.name || persona.id}」？系统会直接拷贝当前人设数据并生成一份副本。`,
+    confirmText: "复制",
+  });
+  if (!confirmed) return;
+  showMsg("commandMsg", "正在复制人设...", true);
+  const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(cleanId)}/duplicate`, { method: "POST" });
+  const profile = result?.profile && typeof result.profile === "object" ? result.profile : null;
+  if (profile?.id) {
+    const newId = String(profile.id);
+    state.selectedPersonaId = newId;
+    setSelectedPersonaPostId("");
+    delete state.personaDraftPosts[newId];
+    delete state.personaFavoritePosts[newId];
+    delete state.personaPublishHistories[newId];
+    delete state.personaMemories[newId];
+    delete state.personaImageLibraries[newId];
+  }
+  await loadPersonas();
+  if (profile?.id) state.selectedPersonaId = String(profile.id);
+  renderActivePersonaListSurface();
+  renderConfirmSummary();
+  showMsg("commandMsg", `已复制人设：${profile?.name || `${persona.name || persona.id} 副本`}`, true);
+}
+
 async function createPersonaAutomationAccount() {
   const persona = selectedPersona();
   if (!persona) {
@@ -4448,7 +5086,7 @@ async function submitPersonaLoginTask(autoSubmit = false) {
     return;
   }
   setActionLocked(lockParts, true);
-  renderPersonaDetail();
+  refreshAutomationWorkSurface();
   if (!autoSubmit) {
     try {
       const result = await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(account.id)}/open_login`, { method: "POST" });
@@ -4462,14 +5100,14 @@ async function submitPersonaLoginTask(autoSubmit = false) {
       return;
     } finally {
       setActionLocked(lockParts, false);
-      if (state.activeModule === "personas") renderPersonaDetail();
+      refreshAutomationWorkSurface();
     }
   }
   const loginUsername = String($("personaAutoLoginUsername")?.value || account.login_username || account.username || "").trim();
   const loginPassword = String($("personaAutoLoginPassword")?.value || "");
   if (!loginUsername || (!loginPassword && !account.login_password_configured)) {
     setActionLocked(lockParts, false);
-    renderPersonaDetail();
+    refreshAutomationWorkSurface();
     showMsg("commandMsg", "请填写登录账号和密码，或先保存长期登录资料。", false);
     return;
   }
@@ -4505,7 +5143,7 @@ async function submitPersonaLoginTask(autoSubmit = false) {
     await loadSocial();
   } finally {
     setActionLocked(lockParts, false);
-    if (state.activeModule === "personas") renderPersonaDetail();
+    refreshAutomationWorkSurface();
   }
 }
 
@@ -4522,7 +5160,7 @@ async function checkPersonaLogin() {
     return;
   }
   setActionLocked(lockParts, true);
-  renderPersonaDetail();
+  refreshAutomationWorkSurface();
   try {
     const result = await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(account.id)}/check_login`, { method: "POST" });
     const task = result.task || {};
@@ -4534,7 +5172,7 @@ async function checkPersonaLogin() {
     await loadSocial();
   } finally {
     setActionLocked(lockParts, false);
-    if (state.activeModule === "personas") renderPersonaDetail();
+    refreshAutomationWorkSurface();
   }
 }
 
@@ -4586,7 +5224,7 @@ async function runPersonaThreadsTask(kind) {
     return;
   }
   setActionLocked(lockParts, true);
-  renderPersonaDetail();
+  refreshAutomationWorkSurface();
   try {
     const result = await api("/api/persona_dashboard/automation/tasks", {
       method: "POST",
@@ -4604,7 +5242,7 @@ async function runPersonaThreadsTask(kind) {
     {
       const task = result.task || {};
       const taskId = String(task.id || "").trim();
-      const step = currentPersonaGroupStep("account", selectedPersonaProfile()) || (kind === "warmup" ? "warmup" : kind);
+      const step = state.activeModule === "automation" ? currentBranch("automation") : (currentPersonaGroupStep("account", selectedPersonaProfile()) || (kind === "warmup" ? "warmup" : kind));
       state.personaAutomationResults[personaAutomationResultKey(account.id, step)] = renderSocialTaskResult(task, [], "提交后，这里会显示任务状态、截图和执行日志。");
       updatePersonaAutomationResultView(account.id, step);
       if (taskId) watchPersonaAutomationTask(taskId, account.id, step).catch(() => {});
@@ -4613,7 +5251,7 @@ async function runPersonaThreadsTask(kind) {
     await loadSocial();
   } finally {
     setActionLocked(lockParts, false);
-    if (state.activeModule === "personas") renderPersonaDetail();
+    refreshAutomationWorkSurface();
   }
 }
 
@@ -4633,7 +5271,7 @@ async function clearPersonaAutomationTasksFor(personaId, messageId = "commandMsg
     return;
   }
   await api(`/api/persona_dashboard/automation/tasks?persona_id=${encodeURIComponent(cleanPersonaId)}`, { method: "DELETE" });
-  showMsg(messageId, "该人设的自动化队列已清理。", true);
+  showMsg(messageId, "该人设的自动化队列记录已删除。", true);
   await loadSocial();
   if (state.view === "tasks") await loadTasks().catch(() => {});
 }
@@ -4848,6 +5486,8 @@ function renderConsoleSettingsPage() {
   const host = $("consoleSettingsBody");
   if (!host) return;
   const generateDefaults = personaGenerateDefaults();
+  const taskPersonaPageSize = Math.min(Math.max(Number(state.taskQueuePersonaPageSize || 12), 1), 100);
+  const taskRegularPageSize = Math.min(Math.max(Number(state.taskQueueRegularPageSize || 20), 1), 100);
   host.innerHTML = `
     <div class="console-settings-page">
       <div class="console-settings-toolbar">
@@ -4865,6 +5505,20 @@ function renderConsoleSettingsPage() {
         <div class="form-grid">
           <label>每页显示数量
             <input id="settingsPersonaPageSize" type="number" min="5" max="80" step="1" value="${esc(state.personaListPageSize || 20)}" />
+          </label>
+        </div>
+      </section>
+      <section class="persona-inline-panel">
+        <div class="persona-head-copy">
+          <strong>任务队列</strong>
+          <span>控制任务队列页面每页展示数量，保存后立即刷新当前队列。</span>
+        </div>
+        <div class="form-grid">
+          <label>人设队列每页数量
+            <input id="settingsTaskQueuePersonaPageSize" type="number" min="1" max="100" step="1" value="${esc(taskPersonaPageSize)}" />
+          </label>
+          <label>通用队列每页数量
+            <input id="settingsTaskQueueRegularPageSize" type="number" min="1" max="100" step="1" value="${esc(taskRegularPageSize)}" />
           </label>
         </div>
       </section>
@@ -4901,20 +5555,34 @@ function refreshConsoleSettingsDependents() {
   if (["personas", "publishing"].includes(state.activeModule) && $("moduleBody")) {
     renderActivePersonaListSurface();
   }
+  if (state.view === "tasks" && $("taskTable")) {
+    $("taskTable").innerHTML = renderTaskQueueView();
+  }
+  if (state.view === "workspace" && state.activeModule === "queue" && $("moduleBody")) {
+    renderWorkspace(false);
+  }
 }
 
 function saveConsoleSettingsPage() {
   const pageSize = Math.min(Math.max(Number.parseInt(String($("settingsPersonaPageSize")?.value || ""), 10) || 20, 5), 80);
+  const taskPersonaPageSize = Math.min(Math.max(Number.parseInt(String($("settingsTaskQueuePersonaPageSize")?.value || ""), 10) || 12, 1), 100);
+  const taskRegularPageSize = Math.min(Math.max(Number.parseInt(String($("settingsTaskQueueRegularPageSize")?.value || ""), 10) || 20, 1), 100);
   const generateCount = Math.min(Math.max(Number.parseInt(String($("settingsPersonaGenerateCount")?.value || ""), 10) || 3, 1), 20);
   const targetWords = Math.min(Math.max(Number.parseInt(String($("settingsPersonaTargetWords")?.value || ""), 10) || 120, 10), 2000);
   const mediaImageCount = Math.min(Math.max(Number.parseInt(String($("settingsPersonaMediaImageCount")?.value || ""), 10) || 1, 1), 8);
   state.personaListPageSize = pageSize;
+  state.taskQueuePersonaPageSize = taskPersonaPageSize;
+  state.taskQueueRegularPageSize = taskRegularPageSize;
   state.personaGenerateCountDefault = generateCount;
   state.personaGenerateTargetWordsDefault = targetWords;
   state.personaMediaImageCountDefault = mediaImageCount;
   state.personaListPage = 1;
+  state.taskQueuePersonaPage = 1;
+  state.taskQueueRegularPage = 1;
   try {
     window.localStorage.setItem(PERSONA_LIST_PAGE_SIZE_KEY, String(pageSize));
+    window.localStorage.setItem(TASK_QUEUE_PERSONA_PAGE_SIZE_KEY, String(taskPersonaPageSize));
+    window.localStorage.setItem(TASK_QUEUE_REGULAR_PAGE_SIZE_KEY, String(taskRegularPageSize));
     window.localStorage.setItem(PERSONA_GENERATE_COUNT_KEY, String(generateCount));
     window.localStorage.setItem(PERSONA_GENERATE_TARGET_WORDS_KEY, String(targetWords));
     window.localStorage.setItem(PERSONA_MEDIA_IMAGE_COUNT_KEY, String(mediaImageCount));
@@ -5543,9 +6211,198 @@ function renderSocialTaskResult(task, logs = [], emptyText = "提交后，这里
       ${recentLogs.length ? `<div class="compact-list">${recentLogs.map((log) => `
         <article class="compact-row compact-row-log">
           <strong>${esc(logStageLabel(log.stage, log.level))}</strong>
-          <p>${esc(log.message || JSON.stringify(log.data || {}))}</p>
+          <p>${esc(taskLogMessage(log))}</p>
           <span>${esc(formatTime(log.created_at || ""))}</span>
         </article>`).join("")}</div>` : ""}
+    </div>`;
+}
+
+function taskLogMessage(log = {}) {
+  const raw = log.message || log.detail || log.error || "";
+  if (raw) return sanitizeTaskUserMessage(raw);
+  const data = log.data && typeof log.data === "object" ? log.data : {};
+  if (data.screenshot_url || data.screenshotUrl || data.screenshot_path || data.screenshotPath) return "已生成执行截图";
+  if (data.published_url || data.publishedUrl || data.post_url) return "已返回发布结果链接";
+  if (data.error) return sanitizeTaskUserMessage(data.error);
+  if (data.task_type) return `执行 ${statusLabel(data.task_type)}`;
+  return Object.keys(data).length ? "步骤已完成，详情见下方截图或结果信息。" : "无日志内容";
+}
+
+function taskResultUrl(task = {}) {
+  const result = task.result && typeof task.result === "object"
+    ? task.result
+    : (task.output && typeof task.output === "object" ? task.output : {});
+  return String(result.published_url || result.publishedUrl || result.url || result.post_url || result.result_url || "").trim();
+}
+
+function taskScreenshotFromValue(value) {
+  const text = String(value || "").trim();
+  const direct = directMediaPreviewUrl(text);
+  if (direct) return direct;
+  if (/social_automation[\\/]+screenshots|[\\/]screenshots[\\/]|screenshot_/i.test(text)) {
+    return automationScreenshotUrlFromPath(text);
+  }
+  return "";
+}
+
+function collectTaskScreenshots(task = {}, logs = []) {
+  const rows = [];
+  const seen = new Set();
+  const push = (value, label = "任务截图", time = "") => {
+    const url = taskScreenshotFromValue(value);
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    rows.push({ previewUrl: url, url, type: "image", label, time });
+  };
+  const pushMedia = (item, index = 0, labelPrefix = "任务图片") => {
+    if (!item) return;
+    const value = item.preview_url || item.previewUrl || item.url || item.image_url || item.imageUrl || item.path || item.file_path || item.filePath || "";
+    const label = item.label || item.name || item.filename || `${labelPrefix} ${index + 1}`;
+    push(value, label, item.created_at || item.time || "");
+  };
+  const taskMediaUrl = (index = 0) => task?.id ? `/api/tasks/${encodeURIComponent(task.id)}/media/${encodeURIComponent(index)}` : "";
+  const result = task?.result && typeof task.result === "object"
+    ? task.result
+    : (task?.output && typeof task.output === "object" ? task.output : {});
+  const taskMediaItems = Array.isArray(task.media_items) ? task.media_items : [];
+  const resultMediaItems = Array.isArray(result.media_items) ? result.media_items : [];
+  const hasExplicitMedia = taskMediaItems.length || resultMediaItems.length;
+  taskMediaItems.forEach((item, index) => pushMedia(item, index, "任务图片"));
+  resultMediaItems.forEach((item, index) => pushMedia(item, index, "输出图片"));
+  if (!hasExplicitMedia) {
+    (Array.isArray(result.image_urls) ? result.image_urls : []).forEach((item, index) => push(item, `输出图片 ${index + 1}`, task.finished_at || task.updated_at || ""));
+    (Array.isArray(result.image_paths) ? result.image_paths : []).forEach((item, index) => push(taskMediaUrl(index) || item, `输出图片 ${index + 1}`, task.finished_at || task.updated_at || ""));
+    push(result.image_url || result.imageUrl, "输出图片", task.finished_at || task.updated_at || "");
+    push(result.download_path || result.downloadPath ? (taskMediaUrl(0) || result.download_path || result.downloadPath) : "", "输出文件", task.finished_at || task.updated_at || "");
+  }
+  push(result.screenshot_url || result.screenshotUrl, "最终截图", task.finished_at || task.updated_at || "");
+  push(result.screenshot_path || result.screenshotPath || result.screenshot, "最终截图", task.finished_at || task.updated_at || "");
+  (Array.isArray(result.checkpoints) ? result.checkpoints : []).forEach((checkpoint, index) => {
+    push(
+      checkpoint?.screenshot_url || checkpoint?.screenshotUrl || checkpoint?.screenshot_path || checkpoint?.screenshotPath || checkpoint?.screenshot,
+      checkpoint?.label || checkpoint?.stage || `步骤截图 ${index + 1}`,
+      checkpoint?.created_at || checkpoint?.time || "",
+    );
+  });
+  (Array.isArray(logs) ? logs : []).forEach((log, index) => {
+    const data = log?.data && typeof log.data === "object" ? log.data : {};
+    const snapshot = data.output_snapshot && typeof data.output_snapshot === "object" ? data.output_snapshot : {};
+    push(
+      log?.screenshot_url || log?.screenshotUrl || log?.screenshot_path || log?.screenshotPath || data.screenshot_url || data.screenshotUrl || data.screenshot_path || data.screenshotPath || snapshot.screenshot_url || snapshot.screenshotUrl || snapshot.screenshot_path || snapshot.screenshotPath || snapshot.download_path || snapshot.downloadPath,
+      logStageLabel(log?.stage, log?.level) || `日志截图 ${index + 1}`,
+      log?.created_at || log?.ts || "",
+    );
+  });
+  return rows;
+}
+
+function renderTaskScreenshotGallery(items = [], { emptyText = "当前任务还没有截图。" } = {}) {
+  const rows = (Array.isArray(items) ? items : []).filter((item) => item?.previewUrl);
+  if (!rows.length) return `<div class="empty-state">${esc(emptyText)}</div>`;
+  const groupId = registerMediaPreviewGroup(rows);
+  return `
+    <div class="task-screenshot-gallery">
+      ${rows.map((item, index) => renderMediaPreviewButton(item, groupId, index, {
+        className: "task-screenshot-card",
+        frameClass: "task-screenshot-frame",
+        caption: `${item.label || "任务截图"}${item.time ? ` · ${formatTime(item.time)}` : ""}`,
+      })).join("")}
+    </div>`;
+}
+
+function renderTaskDetailField(label, value, { wide = false, code = false } = {}) {
+  const text = value === undefined || value === null || value === "" ? "-" : String(value);
+  return `
+    <div class="${wide ? "is-wide" : ""}">
+      <span>${esc(label)}</span>
+      ${code ? `<code>${esc(text)}</code>` : `<strong>${esc(text)}</strong>`}
+    </div>`;
+}
+
+function renderTaskDetailStatusField(status) {
+  return `
+    <div>
+      <span>状态</span>
+      <strong class="task-detail-status is-${esc(statusTone(status))}">${esc(statusLabel(status || ""))}</strong>
+    </div>`;
+}
+
+function renderTaskDetailLogs(logs = [], { limit = 30 } = {}) {
+  const rows = (Array.isArray(logs) ? logs : []).slice(-limit).reverse();
+  return `
+    <section class="task-detail-log-list">
+      <div class="task-detail-section-head">
+        <strong>执行日志</strong>
+        <span>${esc(`${rows.length} 条`)}</span>
+      </div>
+      ${rows.length ? rows.map((log) => {
+        const screenshotUrl = taskScreenshotFromValue(log.screenshot_url || log.screenshot_path || "");
+        const screenshotGroupId = screenshotUrl ? registerMediaPreviewGroup([{ previewUrl: screenshotUrl, url: screenshotUrl, type: "image", label: logStageLabel(log.stage, log.level) }]) : "";
+        return `
+          <article class="task-detail-log-item">
+            <div>
+              <strong>${esc(logStageLabel(log.stage, log.level))}</strong>
+              <span>${esc(formatTime(log.created_at || log.ts || ""))}</span>
+            </div>
+            <p>${esc(taskLogMessage(log))}</p>
+            ${screenshotUrl ? renderMediaPreviewButton({ previewUrl: screenshotUrl, type: "image", label: logStageLabel(log.stage, log.level) }, screenshotGroupId, 0, {
+              className: "task-log-screenshot-button",
+              frameClass: "task-log-screenshot-frame",
+              caption: "查看截图",
+            }) : ""}
+          </article>`;
+      }).join("") : `<div class="empty-state">暂无日志。</div>`}
+    </section>`;
+}
+
+function renderTaskDetailLayout(task = {}, logs = [], {
+  kind = "regular",
+  title = "任务",
+  downloadUrl = "",
+} = {}) {
+  const resultUrl = taskResultUrl(task);
+  const screenshots = collectTaskScreenshots(task, logs);
+  const previewCountLabel = kind === "regular" ? `${screenshots.length} 张图片` : `${screenshots.length} 张截图`;
+  const fields = kind === "social"
+    ? [
+      renderTaskDetailField("任务类型", statusLabel(task.task_type || task.workflow_name || task.type || title)),
+      renderTaskDetailStatusField(task.status || ""),
+      renderTaskDetailField("平台", queuePlatformLabel(task.platform || "")),
+      renderTaskDetailField("账号", task.account_username || task.account_id || "-"),
+      renderTaskDetailField("更新时间", formatTime(task.updated_at || task.finished_at || task.created_at || "")),
+      task.error ? renderTaskDetailField("错误信息", sanitizeTaskUserMessage(task.error), { wide: true }) : "",
+    ].filter(Boolean).join("")
+    : [
+      renderTaskDetailField("任务类型", statusLabel(task.task_type || task.workflow_name || task.type || title)),
+      renderTaskDetailField("任务 ID", task.id || ""),
+      renderTaskDetailStatusField(task.status || ""),
+      renderTaskDetailField("创建时间", formatTime(task.created_at || "")),
+      renderTaskDetailField("更新时间", formatTime(task.updated_at || task.finished_at || task.created_at || "")),
+      task.error ? renderTaskDetailField("错误信息", sanitizeTaskUserMessage(task.error), { wide: true }) : "",
+    ].filter(Boolean).join("");
+  return `
+    <div class="console-modal-detail task-detail-modal task-detail-modal--stacked">
+      <section class="task-detail-summary-card">
+        <span>${esc(kind === "social" ? "自动化任务" : "任务详情")}</span>
+        <strong class="task-detail-status is-${esc(statusTone(task.status || ""))}">${esc(statusLabel(task.status || "") || title)}</strong>
+        <p>${esc(task.workflow_name || statusLabel(task.task_type || task.type || "") || task.id || "")}</p>
+      </section>
+      <section class="task-detail-field-grid">
+        ${fields}
+      </section>
+      ${(downloadUrl || resultUrl || screenshots.length) ? `
+        <section class="task-detail-result-panel">
+          <div class="task-detail-section-head">
+            <strong>结果预览</strong>
+            <span>${esc(screenshots.length ? previewCountLabel : "链接")}</span>
+          </div>
+          <div class="row-actions">
+            ${downloadUrl ? `<a href="${esc(downloadUrl)}">下载结果文件</a>` : ""}
+            ${resultUrl ? `<a href="${esc(resultUrl)}" target="_blank" rel="noopener">查看任务结果</a>` : ""}
+          </div>
+          ${renderTaskScreenshotGallery(screenshots)}
+        </section>` : ""}
+      ${renderTaskDetailLogs(logs, { limit: kind === "social" ? 30 : 12 })}
     </div>`;
 }
 
@@ -5555,6 +6412,11 @@ function updatePersonaPublishResultView(personaId) {
   const host = $("personaPublishResult");
   if (!host) return;
   host.innerHTML = state.personaPublishResults[currentPersonaId] || `<div class="empty-state">提交后，这里会显示任务状态、截图和发布结果。</div>`;
+}
+
+function refreshAutomationWorkSurface() {
+  if (state.activeModule === "automation") renderSimpleFlowModule("automation");
+  else if (state.activeModule === "personas") renderPersonaDetail();
 }
 
 function latestAutomationTaskForAccount(accountId, step) {
@@ -5575,7 +6437,8 @@ function updatePersonaAutomationResultView(accountId, step) {
   const account = selectedPersonaAutomationAccount(persona, selectedPersonaAutomationPlatform());
   if (!account || String(account.id || "") !== String(accountId || "")) return;
   const profile = selectedPersonaProfile();
-  if (currentPersonaGroupStep("account", profile) !== step) return;
+  const activeStep = state.activeModule === "automation" ? currentBranch("automation") : currentPersonaGroupStep("account", profile);
+  if (activeStep !== step) return;
   const host = $("personaAutomationResult");
   if (!host) return;
   host.innerHTML = state.personaAutomationResults[personaAutomationResultKey(accountId, step)]
@@ -6962,6 +7825,10 @@ function renderPersonaCardEditorMenu(persona, currentGroups, availableGroups) {
           <span>移出分组</span>
         </button>` : "",
     `
+        <button type="button" class="persona-menu-tab persona-menu-tab--action" data-persona-duplicate="${esc(personaId)}">
+          <span>复制人设</span>
+        </button>`,
+    `
         <button type="button" class="persona-menu-tab persona-menu-tab--action persona-menu-tab--danger" data-persona-delete data-persona-delete-id="${esc(personaId)}">
           <span>删除人设</span>
         </button>`,
@@ -7081,6 +7948,11 @@ function handlePersonaCardEditorPortalClick(event) {
   const ungroupAll = event.target.closest("[data-persona-ungroup-all]");
   if (ungroupAll) {
     ungroupPersona(ungroupAll.dataset.personaUngroupAll || "").catch((error) => showMsg("commandMsg", error.detail || error.message || "拆出失败", false));
+    return;
+  }
+  const duplicatePersonaButton = event.target.closest("[data-persona-duplicate]");
+  if (duplicatePersonaButton) {
+    duplicatePersonaArchive(duplicatePersonaButton.dataset.personaDuplicate || "").catch((error) => showMsg("commandMsg", error.detail || error.message || "复制人设失败", false));
     return;
   }
   const deletePersonaButton = event.target.closest("[data-persona-delete]");
@@ -7843,11 +8715,7 @@ function personaGroupStepOptions(groupKey, profile) {
   }
   if (groupKey === "account") {
     return [
-      ["binding", "账号绑定"],
-      ["login", "登录与检查"],
-      ["reply_comment", "自动回复评论"],
-      ["reply_hot", "自动回复热点推文"],
-      ["warmup", "养号"],
+      ["binding", "账号概览"],
     ];
   }
   return [["overview", "概览"]];
@@ -8004,6 +8872,7 @@ function renderPersonaDetail() {
   const profile = selectedPersonaProfile();
   if (!profile) loadPersonaProfile(persona.id).catch(() => {});
   if (!state.personaDraftPosts[String(persona.id)]) loadPersonaDraftPosts(persona.id).catch(() => {});
+  if (!state.personaFavoritePosts[String(persona.id)]) loadPersonaFavoritePosts(persona.id).catch(() => {});
   const groupKey = normalizedPersonaGroupKey(state.personaGroup || "content");
   state.personaGroup = groupKey;
   const step = currentPersonaGroupStep(groupKey, profile);
@@ -8030,6 +8899,7 @@ function renderPersonaDetail() {
   }
   const account = accountForPersona(persona);
   const drafts = personaDraftPosts(persona);
+  const favorites = personaFavoritePosts(persona);
   const groupPanel = renderPersonaGroupPanel(groupKey, step, persona, account, profile);
   const canDelete = Boolean(profile);
   $("personaDetail").innerHTML = `
@@ -8040,6 +8910,7 @@ function renderPersonaDetail() {
           <span>${esc(`类型：${personaKindLabel(persona, profile)}`)}</span>
           ${renderPersonaExecutionAccountBadge(persona)}
           <span>${esc(`草稿 ${drafts.length} 条`)}</span>
+          <span>${esc(`收藏 ${favorites.length} 条`)}</span>
           ${renderPersonaGenerateStatusText(persona)}
         </div>
         <div class="persona-quick-actions">
@@ -8387,8 +9258,17 @@ async function loadTasks() {
 
 async function showTaskDetail(id) {
   const task = await api(`/api/tasks/${encodeURIComponent(id)}`);
-  appendEvent("detail", `${task.type || "任务"} / ${task.status || "-"} / ${task.error || "无错误"}`);
-  setView("workspace");
+  const logs = Array.isArray(task.logs) ? task.logs : [];
+  await openConsoleModal({
+    title: "任务详情",
+    contentHtml: renderTaskDetailLayout(task, logs, {
+      kind: "regular",
+      title: task.workflow_name || task.type || "任务",
+      downloadUrl: task.has_download ? `/api/tasks/${encodeURIComponent(task.id || id)}/download` : "",
+    }),
+    confirmText: "关闭",
+    showCancel: false,
+  });
 }
 
 async function loadSocialOverview() {
@@ -8434,16 +9314,24 @@ function renderSocialAccounts() {
     const checkBusy = isActionLocked("social", account.id, "check_login", account.persona_id || "standalone")
       || isActionLocked("social", account.id, "check_login")
       || activeSocialTaskFor({ accountId: account.id, taskType: "check_login" });
+    const bindingCount = Number(account.binding_count || 0);
     return `
       <article class="account-card">
-        <div><strong>${esc(account.username || account.id)}</strong><span> · ${esc(account.platform || "-")}</span></div>
-        <p>${esc(account.profile_dir || "未配置浏览器环境")}</p>
-        ${Number(account.binding_count || 0) > 1 ? `<p>已合并 ${Number(account.binding_count || 0)} 个人设绑定，当前操作使用状态最好的账号记录。</p>` : ""}
+        <div class="account-card-head">
+          <div>
+            <strong>${esc(account.username || account.id)}</strong>
+            <span>${esc(account.platform || "-")}</span>
+          </div>
+          <span class="status ${esc(account.status)}">${esc(statusLabel(account.status))}</span>
+        </div>
+        <div class="account-card-meta">
+          <span>${esc(bindingCount > 1 ? `已绑定 ${bindingCount} 个人设` : "单人设绑定")}</span>
+          ${account.display_name ? `<span>${esc(account.display_name)}</span>` : ""}
+        </div>
         <div class="row-actions">
           <button type="button" data-social-open-login="${esc(account.id)}" ${loginBusy ? "disabled" : ""}>${loginBusy ? "登录任务执行中" : "打开登录"}</button>
           <button type="button" data-social-check-login="${esc(account.id)}" ${checkBusy ? "disabled" : ""}>${checkBusy ? "检查执行中" : "检查登录"}</button>
         </div>
-        <span class="status ${esc(account.status)}">${esc(statusLabel(account.status))}</span>
       </article>
     `;
   }).join("") : `<div class="empty-state">暂无执行账号，请先在人设看板或接口中添加账号。</div>`;
@@ -8839,12 +9727,16 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
 
 async function showSocialLog(id) {
   const data = await api(`/api/persona_dashboard/automation/tasks/${encodeURIComponent(id)}/logs`);
-  const host = $("eventStream");
-  if (host) host.innerHTML = "";
-  setView("workspace");
-  (data.logs || []).slice(-12).reverse().forEach((log) => {
-    appendEvent(log.stage || log.level, log.message || JSON.stringify(log.data || {}));
-    if (log.screenshot_url) appendEvent("screenshot", log.screenshot_url);
+  const logs = Array.isArray(data.logs) ? data.logs : [];
+  const task = data.task || state.socialTasks.find((item) => String(item.id || "") === String(id || "")) || {};
+  await openConsoleModal({
+    title: "自动化日志",
+    contentHtml: renderTaskDetailLayout(task, logs, {
+      kind: "social",
+      title: statusLabel(task.task_type || task.type || "自动化任务"),
+    }),
+    confirmText: "关闭",
+    showCancel: false,
   });
 }
 
@@ -8876,6 +9768,14 @@ function bindEvents() {
     }
   });
   document.addEventListener("click", (event) => {
+    const modalPreviewButton = event.target.closest?.("[data-media-preview-group]");
+    if (modalPreviewButton && !$("moduleBody")?.contains(modalPreviewButton)) {
+      openPersonaMediaLightbox(
+        modalPreviewButton.dataset.mediaPreviewGroup || "",
+        Number(modalPreviewButton.dataset.mediaPreviewIndex || 0),
+      );
+      return;
+    }
     if (!event.target.closest?.(".persona-draft-more")) closePersonaDraftMenus();
     if (
       state.activeModule === "personas"
@@ -9706,6 +10606,14 @@ function bindEvents() {
     if (event.target.closest("[data-persona-open-login]")) submitPersonaLoginTask(false).catch((error) => showMsg("commandMsg", error.detail || error.message || "打开登录窗口失败", false));
     if (event.target.closest("[data-persona-auto-login]")) submitPersonaLoginTask(true).catch((error) => showMsg("commandMsg", error.detail || error.message || "自动登录失败", false));
     if (event.target.closest("[data-persona-check-login]")) checkPersonaLogin().catch((error) => showMsg("commandMsg", error.detail || error.message || "检查登录失败", false));
+    if (event.target.closest("[data-open-unified-automation]")) {
+      state.activeModule = "automation";
+      state.simpleBranches.automation = "binding";
+      state.preferredAccountId = accountForPersona(selectedPersona())?.id || "";
+      renderWorkspace();
+      renderConfirmSummary();
+      return;
+    }
     const deletePersonaButton = event.target.closest("[data-persona-delete]");
     if (deletePersonaButton) {
       deleteSelectedPersona(deletePersonaButton.dataset.personaDeleteId || "").catch((error) => showMsg("commandMsg", error.detail || error.message || "删除人设失败", false));
@@ -9791,18 +10699,18 @@ function bindEvents() {
     if (event.target?.id === "personaAutoPlatform") {
       state.personaAutomationPlatform = event.target.value === "instagram" ? "instagram" : "threads";
       state.preferredAccountId = "";
-      renderPersonaDetail();
+      refreshAutomationWorkSurface();
       renderConfirmSummary();
     }
     if (event.target?.id === "personaAutoAccount") {
       state.preferredAccountId = event.target.value || "";
-      renderPersonaDetail();
+      refreshAutomationWorkSurface();
       renderConfirmSummary();
     }
     if (event.target?.id === "personaStrategySelect") {
       const strategyGroup = String(event.target.dataset.strategyGroup || "");
       if (strategyGroup) setPersonaStrategyId(strategyGroup, event.target.value || "");
-      renderPersonaDetail();
+      refreshAutomationWorkSurface();
       renderConfirmSummary();
     }
   });
@@ -9824,6 +10732,32 @@ function bindEvents() {
   if ($("refreshSocialTasks")) $("refreshSocialTasks").addEventListener("click", () => loadSocial().then(renderWorkspace));
   if ($("refreshAccounts")) $("refreshAccounts").addEventListener("click", () => loadSocial().then(renderWorkspace));
   $("taskTable").addEventListener("click", (event) => {
+    const selectionInput = event.target.closest("[data-task-queue-select]");
+    if (selectionInput) {
+      const [kind, id] = String(selectionInput.dataset.taskQueueSelect || "").split(":");
+      const set = taskQueueSet(kind);
+      if (selectionInput.checked) set.add(String(id || ""));
+      else set.delete(String(id || ""));
+      $("taskTable").innerHTML = renderTaskQueueView();
+      return;
+    }
+    const selectAllInput = event.target.closest("[data-task-queue-select-all]");
+    if (selectAllInput) {
+      const kind = String(selectAllInput.dataset.taskQueueSelectAll || "");
+      const set = taskQueueSet(kind);
+      const rows = taskQueueRowsForKind(kind);
+      const summary = taskQueueSelectionSummary(kind);
+      if (!summary.allSelected) rows.forEach((task) => task.id && set.add(String(task.id)));
+      else rows.forEach((task) => task.id && set.delete(String(task.id)));
+      $("taskTable").innerHTML = renderTaskQueueView();
+      return;
+    }
+    const deleteSelected = event.target.closest("[data-task-queue-delete-selected]");
+    if (deleteSelected) {
+      deleteSelectedTaskQueueRecords(deleteSelected.dataset.taskQueueDeleteSelected || "", "taskQueueMsg")
+        .catch((error) => showMsg("taskQueueMsg", error.detail || error.message || "清空选中失败", false));
+      return;
+    }
     const taskRefreshButton = event.target.closest("[data-task-refresh]");
     if (taskRefreshButton) {
       loadTasks().then(renderWorkspace);
@@ -9839,12 +10773,14 @@ function bindEvents() {
     if (taskQueuePageButton) {
       const [kind, action] = String(taskQueuePageButton.dataset.taskQueuePage || "").split(":");
       if (kind === "persona") {
-        const totalPages = Math.max(1, Math.ceil(personaAutomationTasksFor(selectedPersona()?.id).length / TASK_QUEUE_PERSONA_PAGE_SIZE));
+        const pageSize = Math.min(Math.max(Number(state.taskQueuePersonaPageSize || 12), 1), 100);
+        const totalPages = Math.max(1, Math.ceil(personaAutomationTasksFor(selectedPersona()?.id).length / pageSize));
         if (action === "prev") state.taskQueuePersonaPage = Math.max(1, Number(state.taskQueuePersonaPage || 1) - 1);
         if (action === "next") state.taskQueuePersonaPage = Math.min(totalPages, Number(state.taskQueuePersonaPage || 1) + 1);
       }
       if (kind === "regular") {
-        const totalPages = Math.max(1, Math.ceil((state.tasks || []).length / TASK_QUEUE_REGULAR_PAGE_SIZE));
+        const pageSize = Math.min(Math.max(Number(state.taskQueueRegularPageSize || 20), 1), 100);
+        const totalPages = Math.max(1, Math.ceil((state.tasks || []).length / pageSize));
         if (action === "prev") state.taskQueueRegularPage = Math.max(1, Number(state.taskQueueRegularPage || 1) - 1);
         if (action === "next") state.taskQueueRegularPage = Math.min(totalPages, Number(state.taskQueueRegularPage || 1) + 1);
       }
@@ -9868,7 +10804,14 @@ function bindEvents() {
     }
     const clearPersonaQueue = event.target.closest("[data-task-clear-persona-queue]");
     if (clearPersonaQueue) {
-      clearPersonaAutomationTasksFor(clearPersonaQueue.dataset.taskClearPersonaQueue || "", "taskQueueMsg").catch((error) => showMsg("taskQueueMsg", error.detail || error.message || "清理队列失败", false));
+      confirmDangerAction("确定删除该人设的全部自动化队列记录吗？删除后不可恢复。", {
+        title: "删除全部记录",
+        confirmText: "删除全部",
+      }).then((ok) => {
+        if (!ok) return;
+        clearPersonaAutomationTasksFor(clearPersonaQueue.dataset.taskClearPersonaQueue || "", "taskQueueMsg")
+          .catch((error) => showMsg("taskQueueMsg", error.detail || error.message || "清理队列失败", false));
+      });
       return;
     }
     const socialRetry = event.target.closest("[data-social-retry]");
@@ -9884,6 +10827,15 @@ function bindEvents() {
       cancelSocialAutomationTask(socialCancel.dataset.socialCancel, "taskQueueMsg").catch((error) => showMsg("taskQueueMsg", error.detail || error.message || "停止任务失败", false));
       return;
     }
+    const socialDelete = event.target.closest("[data-social-delete]");
+    if (socialDelete) {
+      confirmDangerAction("确定删除这条自动化记录吗？删除后不可恢复。").then((ok) => {
+        if (!ok) return;
+        deleteSocialTaskRecord(socialDelete.dataset.socialDelete || "", "taskQueueMsg")
+          .catch((error) => showMsg("taskQueueMsg", error.detail || error.message || "删除记录失败", false));
+      });
+      return;
+    }
     const socialLog = event.target.closest("[data-social-log]");
     if (socialLog) {
       showSocialLog(socialLog.dataset.socialLog || "").catch((error) => showMsg("taskQueueMsg", error.detail || error.message || "查看日志失败", false));
@@ -9891,11 +10843,17 @@ function bindEvents() {
     }
     const button = event.target.closest("button");
     if (!button) return;
-    const id = button.dataset.watch || button.dataset.detail || button.dataset.retry || button.dataset.cancelTask;
-    if (button.dataset.watch) watchTask(id);
+    const id = button.dataset.detail || button.dataset.retry || button.dataset.cancelTask || button.dataset.deleteTask;
     if (button.dataset.detail) showTaskDetail(id).catch((error) => appendEvent("error", error.detail || error.message));
     if (button.dataset.retry) api(`/api/tasks/${encodeURIComponent(id)}/retry`, { method: "POST" }).then(loadTasks);
     if (button.dataset.cancelTask) cancelRegularTask(id, "commandMsg").catch((error) => showMsg("commandMsg", error.detail || error.message || "停止任务失败", false));
+    if (button.dataset.deleteTask) {
+      confirmDangerAction("确定删除这条任务记录吗？删除后不可恢复。").then((ok) => {
+        if (!ok) return;
+        deleteRegularTaskRecord(id, "taskQueueMsg")
+          .catch((error) => showMsg("taskQueueMsg", error.detail || error.message || "删除记录失败", false));
+      });
+    }
   });
   if ($("submitSocialTask")) $("submitSocialTask").addEventListener("click", () => createSocialTask().catch((error) => showMsg("socialMsg", error.detail || error.message || "提交失败", false)));
   if ($("socialAccount")) $("socialAccount").addEventListener("change", syncStandaloneSocialForm);

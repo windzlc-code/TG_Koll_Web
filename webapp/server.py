@@ -12204,6 +12204,39 @@ def _create_persona_archive(payload: PersonaDashboardPersonaCreatePayload) -> di
     return _build_persona_dashboard_profile(archive)
 
 
+def _duplicate_persona_archive(archive_id: str) -> dict[str, Any]:
+    clean_id = str(archive_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="missing archive_id")
+    path, raw, archives = _persona_archive_source_for_write(clean_id)
+    source = _find_persona_archive(archives, clean_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="persona not found")
+    now = _persona_dashboard_iso_now()
+    source_name = str(source.get("name") or "").strip() or "\u672a\u547d\u540d\u4eba\u8bbe"
+    duplicate_name = f"{source_name} \u526f\u672c"
+    setup = copy.deepcopy(source.get("setup")) if isinstance(source.get("setup"), dict) else {}
+    setup["personaName"] = duplicate_name
+    setup["accountManagement"] = {"threads": {}}
+    setup.pop("api_token", None)
+    setup.pop("hotMetrics", None)
+    duplicate = {
+        "id": _new_persona_archive_id(),
+        "name": duplicate_name,
+        "content": str(source.get("content") or ""),
+        "createdAt": now,
+        "updatedAt": now,
+        "setup": setup,
+        "posts": [],
+        "platformPosts": {"threads": [], "instagram": [], "telegram": []},
+        "publishHistory": [],
+        "personaImageLibrary": [],
+    }
+    archives.append(duplicate)
+    _write_persona_archives_preserving_shape(path, raw, archives)
+    return {"ok": True, "profile": _build_persona_dashboard_profile(duplicate)}
+
+
 def _persona_dashboard_suggest_keywords(payload: PersonaDashboardPersonaAiKeywordsPayload) -> dict[str, Any]:
     name = str(payload.name or "").strip()
     prompt = str(payload.prompt or "").strip()
@@ -15137,6 +15170,10 @@ def create_app() -> FastAPI:
     @app.post("/api/persona_dashboard/personas/ai_create")
     def api_persona_dashboard_persona_ai_create(payload: PersonaDashboardPersonaAiCreatePayload, _user: dict[str, Any] = Depends(get_current_user)):
         return _persona_dashboard_create_persona_with_ai(payload)
+
+    @app.post("/api/persona_dashboard/personas/{archive_id}/duplicate")
+    def api_persona_dashboard_duplicate_persona(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+        return _duplicate_persona_archive(archive_id)
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/posts")
     def api_persona_dashboard_persona_posts(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
