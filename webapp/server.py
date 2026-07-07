@@ -316,6 +316,44 @@ def _safe_rmtree(path: Path) -> None:
         shutil.rmtree(str(p), ignore_errors=True)
 
 
+def _is_allowed_dashboard_media_path(path: Path) -> bool:
+    try:
+        resolved = path.expanduser().resolve()
+    except Exception:
+        return False
+    roots = (DATA_DIR, TOOL_R18_RUNTIME_DIR, TOOL_R18_UPLOAD_ROOT)
+    for root in roots:
+        try:
+            root_resolved = root.resolve()
+        except Exception:
+            root_resolved = root
+        if resolved == root_resolved or root_resolved in resolved.parents:
+            return True
+    return False
+
+
+def _dashboard_media_proxy_url(path: Path) -> str:
+    if not path.is_file() or not _is_allowed_dashboard_media_path(path):
+        return ""
+    token = base64.urlsafe_b64encode(str(path.resolve()).encode("utf-8")).decode("ascii").rstrip("=")
+    return f"/api/persona_dashboard/media/{token}"
+
+
+def _serve_dashboard_media_proxy(token: str) -> FileResponse:
+    raw = str(token or "").strip()
+    if not raw:
+        raise HTTPException(status_code=404, detail="媒体文件不存在。")
+    try:
+        padded = raw + "=" * (-len(raw) % 4)
+        decoded = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="媒体文件不存在。") from exc
+    path = Path(decoded).expanduser().resolve()
+    if not path.is_file() or not _is_allowed_dashboard_media_path(path):
+        raise HTTPException(status_code=404, detail="媒体文件不存在。")
+    return FileResponse(str(path), filename=path.name)
+
+
 def _cleanup_files_once(*, retention_days: int) -> dict[str, Any]:
     cutoff = time.time() - float(max(int(retention_days), 1) * 86400)
     with db() as conn:
@@ -13730,6 +13768,10 @@ def _previewable_persona_media_items(items: list[dict[str, str]], *, archive_id:
                 preview_url = f"/api/persona_dashboard/personas/{quote(str(archive_id).strip(), safe='')}/publish_history/{quote(str(history_id).strip(), safe='')}/media/{index}"
             else:
                 reason = "原始媒体文件不存在"
+        elif re.match(r"^(?:/|[A-Za-z]:[\\/]|~[\\/])", url):
+            preview_url = _dashboard_media_proxy_url(Path(url).expanduser())
+            if not preview_url:
+                reason = "原始媒体文件不存在"
         elif not preview_url:
             reason = "媒体链接已失效"
         rows.append({
@@ -14241,7 +14283,10 @@ def _build_persona_dashboard_overview() -> dict[str, Any]:
                 compact = _compact_hot_post(row, archive_id)
                 if compact:
                     compact["platform"] = platform_name
-                    compact["media_items"] = _related_dashboard_media_items(row, posts, visible_publish_history)
+                    compact["media_items"] = _previewable_persona_media_items(
+                        _related_dashboard_media_items(row, posts, visible_publish_history),
+                        archive_id=archive_id,
+                    )
                     post_metric_rows.append(compact)
             hot_platforms.append({
                 "platform": platform_name,
@@ -15020,6 +15065,10 @@ def create_app() -> FastAPI:
     @app.get("/api/persona_dashboard/personas/{archive_id}/favorites/{post_id}/media/{index}")
     def api_persona_dashboard_persona_favorite_media(archive_id: str, post_id: str, index: int, _user: dict[str, Any] = Depends(get_current_user)):
         return _serve_persona_archive_post_media(archive_id, post_id, index, source="favorites")
+
+    @app.get("/api/persona_dashboard/media/{token}")
+    def api_persona_dashboard_media_proxy(token: str, _user: dict[str, Any] = Depends(get_current_user)):
+        return _serve_dashboard_media_proxy(token)
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/publish_history")
     def api_persona_dashboard_persona_publish_history(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
