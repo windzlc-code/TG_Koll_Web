@@ -6,6 +6,7 @@ const PERSONA_GENERATE_COUNT_KEY = "wk-persona-generate-count";
 const PERSONA_GENERATE_TARGET_WORDS_KEY = "wk-persona-generate-target-words";
 const PERSONA_MEDIA_IMAGE_COUNT_KEY = "wk-persona-media-image-count";
 const PERSONA_HOT_IMPORTS_STORAGE_KEY = "wk-persona-hot-imports";
+const PERSONA_CONSOLE_OVERVIEW_CACHE_KEY = "wk-persona-console-overview-cache";
 const TASK_QUEUE_PERSONA_PAGE_SIZE = 4;
 const TASK_QUEUE_REGULAR_PAGE_SIZE = 6;
 
@@ -65,6 +66,27 @@ function storedPersonaHotImports() {
   } catch {
     return {};
   }
+}
+
+function storedPersonaConsoleOverview() {
+  try {
+    const raw = JSON.parse(window.localStorage.getItem(PERSONA_CONSOLE_OVERVIEW_CACHE_KEY) || "{}");
+    if (!raw || typeof raw !== "object" || !Array.isArray(raw.personas)) return null;
+    return raw;
+  } catch {
+    return null;
+  }
+}
+
+function savePersonaConsoleOverview(data) {
+  try {
+    if (!data || typeof data !== "object" || !Array.isArray(data.personas)) return;
+    window.localStorage.setItem(PERSONA_CONSOLE_OVERVIEW_CACHE_KEY, JSON.stringify({
+      cached_at: Date.now(),
+      personas: data.personas,
+      persona_groups: data.persona_groups || { groups: [], assigned_persona_ids: [] },
+    }));
+  } catch {}
 }
 
 const state = {
@@ -4681,10 +4703,7 @@ function schedulePersonaDetailRender(personaId = "") {
   }, 80);
 }
 
-async function loadPersonas() {
-  const data = await api("/api/persona_dashboard/console_overview")
-    .catch(() => api("/api/persona_dashboard/overview"))
-    .catch(() => ({ personas: [] }));
+function applyPersonaOverviewData(data, { fromCache = false } = {}) {
   state.personas = Array.isArray(data.personas) ? data.personas : [];
   state.personaCollections = data.persona_groups && Array.isArray(data.persona_groups.groups)
     ? data.persona_groups
@@ -4735,6 +4754,21 @@ async function loadPersonas() {
     ]).catch(() => {});
   }
   if (["personas", "publishing"].includes(state.activeModule)) renderActivePersonaListSurface();
+  if (!fromCache) savePersonaConsoleOverview(data);
+}
+
+function hydratePersonaOverviewFromCache() {
+  const cached = storedPersonaConsoleOverview();
+  if (!cached || !Array.isArray(cached.personas) || !cached.personas.length) return false;
+  applyPersonaOverviewData(cached, { fromCache: true });
+  return true;
+}
+
+async function loadPersonas() {
+  const data = await api("/api/persona_dashboard/console_overview")
+    .catch(() => api("/api/persona_dashboard/overview"))
+    .catch(() => ({ personas: [] }));
+  applyPersonaOverviewData(data);
 }
 
 async function refreshPersonaCollections(message = "") {
@@ -9889,6 +9923,7 @@ async function init() {
   ensurePersonaMediaLightbox();
   bindEvents();
   renderWorkspace();
+  hydratePersonaOverviewFromCache();
   await loadMe();
   await Promise.all([loadPersonas(), loadTasks(), loadSocial().catch(() => {}), loadSetupStatus()]);
   renderWorkspace();

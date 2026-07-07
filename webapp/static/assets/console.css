@@ -3870,7 +3870,7 @@ body.persona-touch-dragging .persona-list-card:active {
   width: 100%;
   max-width: 100%;
   min-width: 0;
-  min-height: 58px;
+  min-height: 76px;
   padding: 8px;
   box-sizing: border-box;
   border: 1px solid var(--line);
