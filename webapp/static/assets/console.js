@@ -625,12 +625,18 @@ function esc(value) {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, { credentials: "include", ...options });
+  let response;
+  try {
+    response = await fetch(path, { credentials: "include", ...options });
+  } catch (error) {
+    if (error?.name === "AbortError" || error?.name === "TimeoutError") throw error;
+    throw { detail: localizeConsoleMessage(error?.message || "Failed to fetch", 0), status: 0 };
+  }
   const text = await response.text();
   let data = {};
   try { data = text ? JSON.parse(text) : {}; } catch { data = { detail: text }; }
   if (!response.ok) {
-    const detail = localizeConsoleMessage(data?.detail || text || "", response.status);
+    const detail = localizeConsoleMessage(data?.detail || data?.message || text || "", response.status);
     if (data && typeof data === "object") {
       data.detail = detail;
       data.status = response.status;
@@ -670,6 +676,16 @@ async function apiWithTimeout(path, options = {}, timeoutMs = 90000) {
 }
 
 function localizeConsoleMessage(text, status = 0) {
+  if (Array.isArray(text)) {
+    const messages = text
+      .map((item) => localizeValidationMessage(item, status))
+      .filter(Boolean);
+    return messages.length ? messages.join("；") : localizeConsoleMessage("", status);
+  }
+  if (text && typeof text === "object") {
+    if (Array.isArray(text.detail)) return localizeConsoleMessage(text.detail, status);
+    return localizeConsoleMessage(text.detail || text.message || text.msg || JSON.stringify(text), status);
+  }
   const raw = String(text || "").trim();
   const exactMap = {
     "Method Not Allowed": "请求方式不正确",
@@ -678,8 +694,21 @@ function localizeConsoleMessage(text, status = 0) {
     "Forbidden": "当前没有权限执行这个操作",
     "Bad Request": "请求参数不正确",
     "Internal Server Error": "服务处理失败，请稍后重试",
+    "Failed to fetch": "网络请求失败，请检查服务是否正常。",
+    "NetworkError when attempting to fetch resource.": "网络请求失败，请检查服务是否正常。",
+    "Request aborted": "请求已取消。",
+    "Request timed out": "请求超时，请稍后重试。",
+    "Field required": "缺少必填信息。",
+    "field required": "缺少必填信息。",
+    "persona_id 必填": "账号池新增账号不需要先选择人设，请刷新页面后重试。",
+    "账号 username 必填": "请填写账号用户名。",
+    "username 必填": "请填写账号用户名。",
   };
   if (exactMap[raw]) return exactMap[raw];
+  if (/persona_id\s*(必填|required|field required)/i.test(raw)) return "账号池新增账号不需要先选择人设，请刷新页面后重试。";
+  if (/field required/i.test(raw)) return "缺少必填信息。";
+  if (/input should be/i.test(raw)) return "输入内容格式不正确。";
+  if (/failed to fetch|networkerror/i.test(raw)) return "网络请求失败，请检查服务是否正常。";
   if (raw) return raw;
   const statusMap = {
     400: "请求参数不正确",
@@ -690,6 +719,32 @@ function localizeConsoleMessage(text, status = 0) {
     500: "服务处理失败，请稍后重试",
   };
   return statusMap[Number(status) || 0] || "操作失败";
+}
+
+
+function localizeValidationMessage(item, status = 0) {
+  if (!item || typeof item !== "object") return localizeConsoleMessage(item, status);
+  const raw = String(item.msg || item.message || item.detail || "").trim();
+  const loc = Array.isArray(item.loc) ? item.loc : [];
+  const field = loc.length ? String(loc[loc.length - 1] || "") : "";
+  const fieldLabel = {
+    persona_id: "人设",
+    platform: "平台",
+    username: "账号用户名",
+    display_name: "显示名称",
+    profile_dir: "浏览器资料目录",
+    login_username: "登录账号",
+    login_password: "登录密码",
+    password: "密码",
+    account_id: "账号",
+    task_type: "任务类型",
+  }[field] || "信息";
+  if (field === "persona_id" && /field required|required|必填/i.test(raw)) {
+    return "账号池新增账号不需要先选择人设，请刷新页面后重试。";
+  }
+  if (/field required/i.test(raw)) return `${fieldLabel}为必填项。`;
+  if (/input should be/i.test(raw)) return `${fieldLabel}格式不正确。`;
+  return localizeConsoleMessage(raw || JSON.stringify(item), status);
 }
 
 function eventKindLabel(kind) {

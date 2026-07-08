@@ -561,8 +561,6 @@ def create_social_account(payload: SocialAccountPayload) -> dict[str, Any]:
     if not username:
         raise HTTPException(status_code=400, detail="账号 username 必填")
     persona_id = str(payload.persona_id or "").strip()
-    if not persona_id:
-        raise HTTPException(status_code=400, detail="persona_id 必填")
     status = str(payload.status or "pending_login").strip()
     if status not in SOCIAL_ACCOUNT_STATUSES:
         status = "pending_login"
