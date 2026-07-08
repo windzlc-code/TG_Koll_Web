@@ -12550,7 +12550,7 @@ def _persona_post_media_items_from_paths(paths: list[str]) -> list[dict[str, str
     return items
 
 
-def _update_persona_archive_post_media(archive_id: str, post_id: str, *, media_paths: list[str], replace_existing: bool = False, source: str = "posts") -> dict[str, Any]:
+def _update_persona_archive_post_media(archive_id: str, post_id: str, *, media_paths: list[str], replace_existing: bool = False, source: str = "posts", replace_index: int | None = None) -> dict[str, Any]:
     clean_archive_id = str(archive_id or "").strip()
     clean_post_id = str(post_id or "").strip()
     if not clean_archive_id or not clean_post_id:
@@ -12572,10 +12572,20 @@ def _update_persona_archive_post_media(archive_id: str, post_id: str, *, media_p
     if target is None:
         raise HTTPException(status_code=404, detail="草稿不存在。")
     existing_items = _compact_dashboard_media_items(target)
-    merged_paths = valid_paths if replace_existing else [
-        *[str(item.get("url") or "").strip() for item in existing_items if str(item.get("url") or "").strip()],
-        *valid_paths,
-    ]
+    existing_paths = [str(item.get("url") or "").strip() for item in existing_items if str(item.get("url") or "").strip()]
+    if replace_index is not None:
+        if replace_index < 0 or replace_index >= len(existing_paths):
+            raise HTTPException(status_code=404, detail="media item not found")
+        merged_paths = [
+            *existing_paths[:replace_index],
+            *valid_paths,
+            *existing_paths[replace_index + 1:],
+        ]
+    else:
+        merged_paths = valid_paths if replace_existing else [
+            *existing_paths,
+            *valid_paths,
+        ]
     merged_paths = _extract_existing_file_paths(merged_paths)
     media_items = _persona_post_media_items_from_paths(merged_paths)
     first = media_items[0] if media_items else {}
@@ -15454,6 +15464,7 @@ def create_app() -> FastAPI:
         archive_id: str,
         post_id: str,
         replace_existing: str = Form("0"),
+        replace_index: str = Form(""),
         files: list[UploadFile] = File(default=[]),
         user: dict[str, Any] = Depends(get_current_user),
     ):
@@ -15468,6 +15479,7 @@ def create_app() -> FastAPI:
             post_id,
             media_paths=saved_paths,
             replace_existing=_to_bool(replace_existing, False),
+            replace_index=int(replace_index) if str(replace_index or "").strip().lstrip("-").isdigit() else None,
         )
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/favorites/{post_id}/media/upload")
@@ -15475,6 +15487,7 @@ def create_app() -> FastAPI:
         archive_id: str,
         post_id: str,
         replace_existing: str = Form("0"),
+        replace_index: str = Form(""),
         files: list[UploadFile] = File(default=[]),
         user: dict[str, Any] = Depends(get_current_user),
     ):
@@ -15490,6 +15503,7 @@ def create_app() -> FastAPI:
             media_paths=saved_paths,
             replace_existing=_to_bool(replace_existing, False),
             source="favorites",
+            replace_index=int(replace_index) if str(replace_index or "").strip().lstrip("-").isdigit() else None,
         )
 
     @app.delete("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}/media/{index}")

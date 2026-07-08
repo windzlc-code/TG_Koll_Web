@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import asyncio
 import threading
 import time
 import uuid
@@ -11,11 +12,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 import requests
-from fastapi import Body, Depends, FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import Body, Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
-from .auth import get_current_user, require_admin
+from .auth import SESSION_COOKIE, get_current_user, require_admin
 from .db import db
 
 
@@ -122,6 +123,25 @@ def register_social_automation_routes(app: FastAPI) -> None:
     @app.get("/api/persona_dashboard/automation/overview")
     def api_social_automation_overview(_user: dict[str, Any] = Depends(get_current_user)):
         return build_social_automation_overview()
+
+    @app.get("/api/persona_dashboard/automation/browser_sessions")
+    def api_social_browser_sessions(_user: dict[str, Any] = Depends(get_current_user)):
+        return {"ok": True, "sessions": _live_browser_sessions()}
+
+    @app.websocket("/api/persona_dashboard/automation/browser_sessions/{session_id}/ws")
+    async def api_social_browser_session_ws(websocket: WebSocket, session_id: str):
+        if not _authenticate_live_browser_websocket(websocket):
+            await websocket.close(code=1008)
+            return
+        await _proxy_live_browser_websocket(websocket, session_id)
+
+    @app.get("/api/persona_dashboard/automation/browser_sessions/{session_id}/kasm")
+    def api_social_browser_session_kasm_root(session_id: str, request: Request, _user: dict[str, Any] = Depends(get_current_user)):
+        return _proxy_live_browser_http(session_id, "vnc.html", request)
+
+    @app.get("/api/persona_dashboard/automation/browser_sessions/{session_id}/kasm/{path:path}")
+    def api_social_browser_session_kasm_path(session_id: str, path: str, request: Request, _user: dict[str, Any] = Depends(get_current_user)):
+        return _proxy_live_browser_http(session_id, path or "vnc.html", request)
 
     @app.get("/api/persona_dashboard/automation/accounts")
     def api_social_accounts(_user: dict[str, Any] = Depends(get_current_user)):
@@ -276,6 +296,110 @@ def register_social_automation_routes(app: FastAPI) -> None:
         return FileResponse(str(path))
 
 
+def _authenticate_live_browser_websocket(websocket: WebSocket) -> bool:
+    token = str(websocket.cookies.get(SESSION_COOKIE) or "").strip()
+    if not token:
+        return False
+    try:
+        get_current_user(session_token=token)
+        return True
+    except Exception:
+        return False
+
+
+async def _proxy_live_browser_websocket(websocket: WebSocket, session_id: str) -> None:
+    subprotocol = _requested_websocket_subprotocol(websocket)
+    await websocket.accept(subprotocol=subprotocol)
+    try:
+        from social_automation.live_browser import get_live_browser_session
+
+        session = get_live_browser_session(session_id)
+        if not session:
+            await websocket.close(code=1008)
+            return
+        import websockets
+
+        target = await websockets.connect(
+            f"ws://127.0.0.1:{int(session.web_port)}/websockify",
+            max_size=None,
+            subprotocols=[subprotocol or "binary"],
+            origin=f"http://127.0.0.1:{int(session.web_port)}",
+        )
+    except Exception:
+        with contextlib.suppress(Exception):
+            await websocket.close(code=1011)
+        return
+
+    async def browser_to_kasm() -> None:
+        while True:
+            message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                break
+            data = message.get("bytes")
+            if data is not None:
+                await target.send(data)
+                continue
+            text = message.get("text")
+            if text is not None:
+                await target.send(text)
+
+    async def kasm_to_browser() -> None:
+        while True:
+            data = await target.recv()
+            if isinstance(data, bytes):
+                await websocket.send_bytes(data)
+            else:
+                await websocket.send_text(str(data))
+
+    tasks = [asyncio.create_task(browser_to_kasm()), asyncio.create_task(kasm_to_browser())]
+    try:
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in pending:
+            task.cancel()
+        for task in done:
+            with contextlib.suppress(Exception):
+                task.result()
+    finally:
+        with contextlib.suppress(Exception):
+            await target.close()
+        with contextlib.suppress(Exception):
+            await websocket.close()
+
+
+def _requested_websocket_subprotocol(websocket: WebSocket) -> str | None:
+    header = str(websocket.headers.get("sec-websocket-protocol") or "").strip()
+    if not header:
+        return None
+    return header.split(",", 1)[0].strip() or None
+
+
+def _proxy_live_browser_http(session_id: str, path: str, request: Request) -> Response:
+    try:
+        from social_automation.live_browser import get_live_browser_session
+
+        session = get_live_browser_session(session_id)
+    except Exception:
+        session = None
+    if not session:
+        raise HTTPException(status_code=404, detail="实时浏览器会话不存在")
+    clean_path = str(path or "vnc.html").lstrip("/")
+    if ".." in Path(clean_path).parts:
+        raise HTTPException(status_code=400, detail="路径不合法")
+    url = f"http://127.0.0.1:{int(session.web_port)}/{clean_path}"
+    try:
+        upstream = requests.get(url, params=dict(request.query_params), timeout=8)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"KasmVNC 页面代理失败: {exc}") from exc
+    headers = {}
+    content_type = upstream.headers.get("content-type")
+    if content_type:
+        headers["content-type"] = content_type
+    cache_control = upstream.headers.get("cache-control")
+    if cache_control:
+        headers["cache-control"] = cache_control
+    return Response(content=upstream.content, status_code=upstream.status_code, headers=headers)
+
+
 def ensure_social_automation_worker_started() -> None:
     global _WORKER_THREAD, _TASK_SECRETS_SCRUBBED
     enabled = str(os.getenv("SOCIAL_AUTOMATION_WORKER_ENABLED", "1")).strip().lower() not in {"0", "false", "no", "off"}
@@ -346,9 +470,19 @@ def build_social_automation_overview() -> dict[str, Any]:
         "accounts": [_account_public(row) for row in accounts],
         "proxies": [_proxy_public(row) for row in proxies],
         "tasks": [_task_public(row) for row in visible_tasks],
+        "browser_sessions": _live_browser_sessions(),
         "worker": dict(_WORKER_STATE),
         "supported_task_types": sorted(SOCIAL_TASK_TYPES),
     }
+
+
+def _live_browser_sessions() -> list[dict[str, Any]]:
+    try:
+        from social_automation.live_browser import list_live_browser_sessions
+
+        return list_live_browser_sessions()
+    except Exception:
+        return []
 
 
 def create_social_proxy(payload: SocialProxyPayload) -> dict[str, Any]:
@@ -820,7 +954,7 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
     from social_automation.runner import NeedManualError, UnsupportedActionError, run_social_task
 
     logger = _DbTaskLogger(task["id"])
-    control = {"cancel_event": threading.Event(), "context": None, "manager": None}
+    control = {"cancel_event": threading.Event(), "context": None, "manager": None, "task": dict(task), "live_browser_session_id": ""}
     with _RUNNING_TASK_CONTROLS_LOCK:
         _RUNNING_TASK_CONTROLS[str(task["id"])] = control
     try:
@@ -877,6 +1011,12 @@ def _force_stop_running_task(task_id: str) -> None:
     if context is not None:
         with contextlib.suppress(Exception):
             context.close()
+    session_id = str(control.get("live_browser_session_id") or "")
+    if session_id:
+        with contextlib.suppress(Exception):
+            from social_automation.live_browser import stop_live_browser_session
+
+            stop_live_browser_session(session_id)
     with contextlib.suppress(Exception):
         with db() as conn:
             _insert_log(conn, task_id, "warn", "force_stop", "已发送强制停止信号并关闭浏览器上下文", {})

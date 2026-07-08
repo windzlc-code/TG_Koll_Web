@@ -140,6 +140,7 @@ class _BrowserContextManager:
         self.context_control = context_control
         self.cm = None
         self.context = None
+        self.live_session = None
 
     def __enter__(self):
         try:
@@ -153,8 +154,9 @@ class _BrowserContextManager:
         profile_dir.mkdir(parents=True, exist_ok=True)
         _cleanup_stale_profile_locks(profile_dir, self.logger)
         proxy_config = _proxy_config(self.proxy)
+        self.live_session = self._start_live_browser_session()
         headless: bool | str = False
-        if os.name != "nt" and str(os.getenv("SOCIAL_AUTOMATION_HEADLESS") or "").strip().lower() == "virtual":
+        if self.live_session is None and os.name != "nt" and str(os.getenv("SOCIAL_AUTOMATION_HEADLESS") or "").strip().lower() == "virtual":
             headless = "virtual"
         kwargs: dict[str, Any] = {
             "persistent_context": True,
@@ -171,15 +173,12 @@ class _BrowserContextManager:
             "Launching Camoufox persistent profile",
             {"profile_dir": str(profile_dir), "proxy": _masked_proxy(proxy_config), "headless": headless},
         )
-        self.cm = Camoufox(**kwargs)
         try:
-            self.context = self.cm.__enter__()
-            if self.context_control is not None:
-                self.context_control["context"] = self.context
-                self.context_control["manager"] = self.cm
+            self._enter_camoufox(Camoufox, kwargs)
         except Exception as exc:
             with contextlib.suppress(Exception):
-                self.cm.__exit__(type(exc), exc, getattr(exc, "__traceback__", None))
+                if self.cm:
+                    self.cm.__exit__(type(exc), exc, getattr(exc, "__traceback__", None))
             if _should_rebuild_profile_after_launch_error(exc):
                 backup_dir = _quarantine_profile_dir(profile_dir, self.logger)
                 if backup_dir:
@@ -190,17 +189,15 @@ class _BrowserContextManager:
                         "Browser profile failed to launch; backed up stale profile and retrying with a clean profile",
                         {"backup_dir": str(backup_dir), "profile_dir": str(profile_dir)},
                     )
-                    self.cm = Camoufox(**kwargs)
                     try:
-                        self.context = self.cm.__enter__()
-                        if self.context_control is not None:
-                            self.context_control["context"] = self.context
-                            self.context_control["manager"] = self.cm
+                        self._enter_camoufox(Camoufox, kwargs)
                         return self.context
                     except Exception as retry_exc:
                         with contextlib.suppress(Exception):
-                            self.cm.__exit__(type(retry_exc), retry_exc, getattr(retry_exc, "__traceback__", None))
+                            if self.cm:
+                                self.cm.__exit__(type(retry_exc), retry_exc, getattr(retry_exc, "__traceback__", None))
                         exc = retry_exc
+            self._stop_live_browser_session()
             raise RuntimeError(
                 "Camoufox browser failed to launch. Run `py -3 -m camoufox fetch` on Windows "
                 "or `python -m camoufox fetch` on Linux/macOS to download the Camoufox browser build. "
@@ -212,9 +209,57 @@ class _BrowserContextManager:
         if self.context_control is not None:
             self.context_control["context"] = None
             self.context_control["manager"] = None
+            self.context_control["live_browser_session_id"] = ""
         if self.cm:
-            return self.cm.__exit__(exc_type, exc, tb)
+            result = self.cm.__exit__(exc_type, exc, tb)
+            self._stop_live_browser_session()
+            return result
+        self._stop_live_browser_session()
         return None
+
+    def _enter_camoufox(self, Camoufox: Any, kwargs: dict[str, Any]) -> None:
+        old_display = os.environ.get("DISPLAY")
+        if self.live_session is not None:
+            os.environ["DISPLAY"] = str(self.live_session.display)
+        try:
+            self.cm = Camoufox(**kwargs)
+            self.context = self.cm.__enter__()
+        finally:
+            if self.live_session is not None:
+                if old_display is None:
+                    os.environ.pop("DISPLAY", None)
+                else:
+                    os.environ["DISPLAY"] = old_display
+        if self.context_control is not None:
+            self.context_control["context"] = self.context
+            self.context_control["manager"] = self.cm
+            self.context_control["live_browser_session_id"] = str(getattr(self.live_session, "id", "") or "")
+
+    def _start_live_browser_session(self) -> Any | None:
+        try:
+            from social_automation.live_browser import start_live_browser_session
+
+            task = {}
+            if self.context_control is not None and isinstance(self.context_control.get("task"), dict):
+                task = dict(self.context_control.get("task") or {})
+            session = start_live_browser_session(task=task, account=self.account, logger=self.logger)
+            if session is not None and self.context_control is not None:
+                self.context_control["live_browser_session_id"] = str(session.id)
+            return session
+        except Exception as exc:
+            self.logger.log("warn", "live_browser_error", "实时浏览器监控初始化失败，已继续普通执行", {"error": str(exc)})
+            return None
+
+    def _stop_live_browser_session(self) -> None:
+        if self.live_session is None:
+            return
+        try:
+            from social_automation.live_browser import stop_live_browser_session
+
+            stop_live_browser_session(str(self.live_session.id))
+        except Exception:
+            pass
+        self.live_session = None
 
 
 def _open_camoufox_context(account: dict[str, Any], proxy: dict[str, Any] | None, logger: AutomationLogger, context_control: dict[str, Any] | None = None):

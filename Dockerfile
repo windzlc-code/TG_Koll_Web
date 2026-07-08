@@ -17,6 +17,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TELEGRAM_PROXY_URL=direct
 
 WORKDIR /app
+ARG KASMVNC_DEB_URL=https://github.com/kasmtech/KasmVNC/releases/download/v1.4.0/kasmvncserver_bookworm_1.4.0_amd64.deb
+ARG KASMVNC_DEB_SHA256=a059b9db8d93a7d8bb753e9cf2b119b132c8cf0d832b549a1287b81be68e956a
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -25,6 +27,10 @@ RUN apt-get update \
        libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
        libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 xvfb \
        python3 python3-pip python3-venv build-essential sqlite3 \
+    && curl -fL --retry 3 -o /tmp/kasmvncserver.deb "$KASMVNC_DEB_URL" \
+    && echo "$KASMVNC_DEB_SHA256  /tmp/kasmvncserver.deb" | sha256sum -c - \
+    && apt-get install -y /tmp/kasmvncserver.deb \
+    && rm -f /tmp/kasmvncserver.deb \
     && python3 -m venv /opt/venv \
     && rm -rf /var/lib/apt/lists/*
 
