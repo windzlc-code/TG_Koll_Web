@@ -1,0 +1,11 @@
+{
+  "/api/persona_dashboard/automation/tasks?limit=80": {
+    "error": "TypeError: Failed to execute 'fetch' on 'Window': Failed to parse URL from /api/persona_dashboard/automation/tasks?limit=80"
+  },
+  "/api/persona_dashboard/automation/accounts": {
+    "error": "TypeError: Failed to execute 'fetch' on 'Window': Failed to parse URL from /api/persona_dashboard/automation/accounts"
+  },
+  "/api/persona_dashboard/automation/browser-sessions": {
+    "error": "TypeError: Failed to execute 'fetch' on 'Window': Failed to parse URL from /api/persona_dashboard/automation/browser-sessions"
+  }
+}

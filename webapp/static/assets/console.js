@@ -219,6 +219,7 @@ const state = {
     aiCreate: false,
     profileContent: false,
   },
+  personaCreateKeywordController: null,
   personaLinkPresetId: "",
   selectedPersonaId: "",
   selectedPersonaPostId: "",
@@ -638,6 +639,33 @@ async function api(path, options = {}) {
     throw data;
   }
   return data;
+}
+
+async function apiWithTimeout(path, options = {}, timeoutMs = 90000) {
+  const externalSignal = options.signal || null;
+  const controller = new AbortController();
+  const abortFromExternal = () => controller.abort(externalSignal?.reason || new DOMException("Request aborted", "AbortError"));
+  if (externalSignal) {
+    if (externalSignal.aborted) abortFromExternal();
+    else externalSignal.addEventListener("abort", abortFromExternal, { once: true });
+  }
+  const timer = window.setTimeout(() => controller.abort(new DOMException("Request timed out", "TimeoutError")), Math.max(1000, Number(timeoutMs) || 90000));
+  try {
+    return await api(path, {
+      ...options,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error?.name === "AbortError" || error?.name === "TimeoutError") {
+      const reason = String(controller.signal.reason?.message || error?.message || "");
+      if (/cancel/i.test(reason)) throw { detail: "已取消操作。", status: 499 };
+      throw { detail: "请求超时，请稍后重试或改用手动输入。", status: 408 };
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+    if (externalSignal) externalSignal.removeEventListener("abort", abortFromExternal);
+  }
 }
 
 function localizeConsoleMessage(text, status = 0) {
@@ -1177,6 +1205,9 @@ function defaultPersonaDraftForm(overrides = {}) {
     editingSource: "posts",
     originalTitle: "",
     originalContent: "",
+    originalMediaSignature: "",
+    mediaItems: [],
+    mediaOps: [],
     dirty: false,
     rewriteSourcePostId: "",
     ...overrides,
@@ -1193,8 +1224,10 @@ function syncPersonaDraftDirty(draft) {
     if (draft) draft.dirty = false;
     return false;
   }
+  const mediaOps = Array.isArray(draft.mediaOps) ? draft.mediaOps : [];
   const dirty = String(draft.title || "") !== String(draft.originalTitle || "")
-    || String(draft.content || "") !== String(draft.originalContent || "");
+    || String(draft.content || "") !== String(draft.originalContent || "")
+    || mediaOps.length > 0;
   draft.dirty = dirty;
   return dirty;
 }
@@ -1232,16 +1265,14 @@ function canLeavePersonaDraftEdit(personaId, targetStep = "") {
     snapshotPersonaCurrentForm();
   }
   const status = personaDraftEditState(personaId);
-  if ((status.editing || status.rewritePending) && ["posts", "generate"].includes(String(targetStep || ""))) {
-    return true;
-  }
   if (status.rewritePending && (targetStep === "media" || targetStep === "generate_media")) {
     showMsg("commandMsg", "当前是 AI 重写新草稿状态，请先生成并选择新草稿后再进入配图。", false);
     return false;
   }
   if (status.dirty) {
-    const ok = window.confirm("当前草稿有未保存修改。确定放弃修改并离开吗？");
-    if (!ok) return false;
+    const ok = window.confirm("当前草稿有未保存修改。点击确定保存修改；点击取消返回编辑。");
+    if (ok) createPersonaDraftPost().catch((error) => showMsg("commandMsg", error.detail || error.message || "保存修改失败", false));
+    return false;
   }
   discardPersonaDraftEdit(personaId);
   return true;
@@ -2588,6 +2619,53 @@ function personaEditablePostMediaItems(personaId, post = {}) {
   });
 }
 
+function personaMediaSignature(items = []) {
+  return JSON.stringify((Array.isArray(items) ? items : []).map((item) => ({
+    url: String(item?.url || "").trim(),
+    type: String(item?.type || "").trim(),
+    label: String(item?.label || "").trim(),
+  })));
+}
+
+function clonePersonaDraftMediaItem(item = {}) {
+  return {
+    url: String(item?.url || "").trim(),
+    previewUrl: String(item?.previewUrl || item?.preview_url || item?.url || "").trim(),
+    type: guessMediaType(String(item?.url || item?.previewUrl || item?.preview_url || "").trim(), item?.type || ""),
+    label: String(item?.label || item?.type || "").trim(),
+    unavailable: Boolean(item?.unavailable),
+    reason: String(item?.reason || "").trim(),
+    pending: Boolean(item?.pending),
+  };
+}
+
+function filePersonaDraftMediaItem(file) {
+  const previewUrl = URL.createObjectURL(file);
+  return {
+    url: previewUrl,
+    previewUrl,
+    type: guessMediaType(file?.name || "", file?.type || ""),
+    label: file?.name || "待保存媒体",
+    pending: true,
+    file,
+  };
+}
+
+function personaDraftMediaPreviewItems(persona, source, post = {}) {
+  const personaId = String(persona?.id || "").trim();
+  const rows = personaEditablePostMediaItems(personaId, post);
+  const draft = personaFormState(personaId).draft || {};
+  if (
+    personaId
+    && String(draft.editingPostId || "").trim() === String(post?.id || "").trim()
+    && (draft.editingSource === "favorites" ? "favorites" : "posts") === (source === "favorites" ? "favorites" : "posts")
+    && Array.isArray(draft.mediaItems)
+  ) {
+    return draft.mediaItems.map(clonePersonaDraftMediaItem);
+  }
+  return rows;
+}
+
 function personaPublishPostMediaItems(personaId, post = {}) {
   return personaDraftMediaItems(personaId, post).filter((item) => {
     const label = String(item?.label || "").trim().toLowerCase();
@@ -2947,7 +3025,7 @@ function renderPersonaDraftRows(posts, source = personaPostSource()) {
   if (mode === "list") return renderPersonaDraftTableRows(posts, personaId);
   return `<div class="compact-list persona-draft-grid">${posts.map((post) => {
     const hotMeta = personaHotImportMeta(personaId, post.id);
-    const mediaItems = personaDraftMediaItems(personaId, post);
+    const mediaItems = personaDraftMediaPreviewItems(selectedPersona(), source, post);
     const isChecked = selectedIds.has(String(post.id || ""));
     const isSelected = String(post.id) === String(state.selectedPersonaPostId);
     return `
@@ -3121,7 +3199,7 @@ function renderPersonaDraftTableRows(posts, personaId) {
         const isSelected = postId === String(state.selectedPersonaPostId || "");
         const isChecked = selectedIds.has(postId);
         const hotMeta = personaHotImportMeta(personaId, post.id);
-        const mediaItems = personaDraftMediaItems(personaId, post);
+        const mediaItems = personaDraftMediaPreviewItems(selectedPersona(), source, post);
         return `
           <article
             class="persona-draft-table-row ${isSelected ? "is-selected" : ""}"
@@ -7743,14 +7821,16 @@ async function suggestPersonaCreateKeywords() {
     return;
   }
   state.personaCreateBusy.keywords = true;
+  state.personaCreateKeywordController = new AbortController();
   renderPersonaDetail();
   try {
     showMsg("commandMsg", "正在提炼人设方向关键词...", true);
-    const result = await api("/api/persona_dashboard/personas/ai_keywords", {
+    const result = await apiWithTimeout("/api/persona_dashboard/personas/ai_keywords", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, prompt }),
-    });
+      signal: state.personaCreateKeywordController.signal,
+    }, 90000);
     createState.aiStep = "keywords";
     createState.aiKeywords = Array.isArray(result.keywords) ? result.keywords : [];
     createState.aiSelectedKeywords = [];
@@ -7759,8 +7839,20 @@ async function suggestPersonaCreateKeywords() {
     showMsg("commandMsg", "已提炼出人设方向关键词。", true);
   } finally {
     state.personaCreateBusy.keywords = false;
+    state.personaCreateKeywordController = null;
     if (state.personaCreateMode) renderPersonaDetail();
   }
+}
+
+function cancelPersonaCreateKeywords() {
+  const controller = state.personaCreateKeywordController;
+  if (controller && !controller.signal.aborted) {
+    controller.abort(new DOMException("Request cancelled", "AbortError"));
+  }
+  state.personaCreateBusy.keywords = false;
+  state.personaCreateKeywordController = null;
+  showMsg("commandMsg", "已取消关键词提炼。", true);
+  if (state.personaCreateMode) renderPersonaDetail();
 }
 
 async function createPersonaArchiveWithAi() {
@@ -7943,6 +8035,7 @@ async function createPersonaDraftPost() {
   const content = String(form.content || "").trim();
   const editingPostId = String(form.editingPostId || "").trim();
   const editingSource = form.editingSource === "favorites" ? "favorites" : "posts";
+  const queuedMediaOps = editingPostId && Array.isArray(form.mediaOps) ? [...form.mediaOps] : [];
   const pendingMediaFiles = filesFromInput("personaPostMediaUploadFiles");
   if (!content) {
     showMsg("commandMsg", "请先填写推文正文。", false);
@@ -7960,6 +8053,14 @@ async function createPersonaDraftPost() {
     },
   );
   const savedPostId = result.id || editingPostId || "";
+  if (queuedMediaOps.length && savedPostId) {
+    await applyPersonaDraftMediaOps({
+      persona,
+      postId: savedPostId,
+      source: editingPostId ? editingSource : "posts",
+      ops: queuedMediaOps,
+    });
+  }
   if (pendingMediaFiles.length && savedPostId) {
     await savePersonaPostMediaFiles({
       persona,
@@ -7981,7 +8082,9 @@ async function createPersonaDraftPost() {
   ]);
   renderPersonaDetail();
   renderConfirmSummary();
-  const mediaSuffix = pendingMediaFiles.length ? `，并追加 ${pendingMediaFiles.length} 个媒体文件` : "";
+  const mediaSuffix = queuedMediaOps.length
+    ? `，并更新 ${queuedMediaOps.length} 项媒体操作`
+    : (pendingMediaFiles.length ? `，并追加 ${pendingMediaFiles.length} 个媒体文件` : "");
   showMsg("commandMsg", editingPostId ? `${editingSource === "favorites" ? "收藏" : "草稿"}已更新：${result.title || result.id || "-"}${mediaSuffix}` : `草稿已保存：${result.title || result.id || "-"}${mediaSuffix}`, true);
 }
 
@@ -8223,6 +8326,15 @@ function clearPersonaDraftEdit(personaId) {
 }
 
 function exitPersonaDraftEdit(personaId) {
+  if (String(state.renderedPersonaId || "") === String(personaId || "")) {
+    snapshotPersonaCurrentForm();
+  }
+  const status = personaDraftEditState(personaId);
+  if (status.dirty) {
+    const ok = window.confirm("当前草稿有未保存修改。点击确定保存修改；点击取消返回编辑。");
+    if (ok) createPersonaDraftPost().catch((error) => showMsg("commandMsg", error.detail || error.message || "保存修改失败", false));
+    return;
+  }
   discardPersonaDraftEdit(personaId);
   state.personaPanels.content = "posts";
 }
@@ -8243,6 +8355,7 @@ function openPersonaDraftEditor(postId) {
     return;
   }
   const form = personaFormState(persona.id);
+  const originalMediaItems = personaEditablePostMediaItems(persona.id, post).map(clonePersonaDraftMediaItem);
   form.generate.mode = "custom";
   form.draft = defaultPersonaDraftForm({
     title: String(post.title || "").trim(),
@@ -8251,6 +8364,9 @@ function openPersonaDraftEditor(postId) {
     editingSource: source,
     originalTitle: String(post.title || "").trim(),
     originalContent: String(post.content || ""),
+    originalMediaSignature: personaMediaSignature(originalMediaItems),
+    mediaItems: originalMediaItems,
+    mediaOps: [],
     dirty: false,
   });
   setPersonaPostSource(source, persona);
@@ -8709,6 +8825,87 @@ async function savePersonaPostMediaFiles({
   });
 }
 
+function queuePersonaDraftMediaChange(action, { index = -1, files = [] } = {}) {
+  const persona = selectedPersona();
+  const { source, post } = personaMediaTargetPost(persona);
+  if (!persona || !post) {
+    showMsg("commandMsg", source === "favorites" ? "请先选中一条收藏。" : "请先选中一条草稿。", false);
+    return false;
+  }
+  const draft = personaFormState(persona.id).draft;
+  const isEditingTarget = String(draft.editingPostId || "").trim() === String(post.id || "").trim()
+    && (draft.editingSource === "favorites" ? "favorites" : "posts") === (source === "favorites" ? "favorites" : "posts");
+  if (!isEditingTarget) return false;
+  if (!Array.isArray(draft.mediaItems)) {
+    draft.mediaItems = personaEditablePostMediaItems(persona.id, post).map(clonePersonaDraftMediaItem);
+  }
+  if (!Array.isArray(draft.mediaOps)) draft.mediaOps = [];
+  const mediaFiles = Array.from(files || []).filter(Boolean);
+  const current = draft.mediaItems;
+  if (action === "append") {
+    if (!mediaFiles.length) {
+      showMsg("commandMsg", "请先选择要追加的媒体文件。", false);
+      return true;
+    }
+    current.push(...mediaFiles.map(filePersonaDraftMediaItem));
+    draft.mediaOps.push({ type: "append", files: mediaFiles });
+    showMsg("commandMsg", `已临时追加 ${mediaFiles.length} 个媒体，保存修改后生效。`, true);
+  } else if (action === "replace") {
+    if (!mediaFiles.length) {
+      showMsg("commandMsg", "请先选择要替换的媒体文件。", false);
+      return true;
+    }
+    const requestedIndex = Number.parseInt(String(index ?? ""), 10);
+    const safeIndex = Number.isFinite(requestedIndex)
+      ? Math.min(Math.max(requestedIndex, 0), current.length - 1)
+      : selectedPersonaMediaIndex(persona.id, source, post.id, current.length);
+    if (safeIndex < 0) {
+      showMsg("commandMsg", "当前没有可替换的媒体。", false);
+      return true;
+    }
+    current.splice(safeIndex, 1, ...mediaFiles.map(filePersonaDraftMediaItem));
+    draft.mediaOps.push({ type: "replace", index: safeIndex, files: mediaFiles });
+    setSelectedPersonaMediaIndex(persona.id, source, post.id, safeIndex);
+    showMsg("commandMsg", `已临时替换第 ${safeIndex + 1} 个媒体，保存修改后生效。`, true);
+  } else if (action === "delete") {
+    const requestedIndex = Number.parseInt(String(index ?? ""), 10);
+    const safeIndex = Number.isFinite(requestedIndex)
+      ? Math.min(Math.max(requestedIndex, 0), current.length - 1)
+      : selectedPersonaMediaIndex(persona.id, source, post.id, current.length);
+    if (safeIndex < 0) {
+      showMsg("commandMsg", "当前没有可删除的媒体。", false);
+      return true;
+    }
+    current.splice(safeIndex, 1);
+    draft.mediaOps.push({ type: "delete", index: safeIndex });
+    setSelectedPersonaMediaIndex(persona.id, source, post.id, Math.max(0, Math.min(safeIndex, current.length - 1)));
+    showMsg("commandMsg", `已临时删除第 ${safeIndex + 1} 个媒体，保存修改后生效。`, true);
+  }
+  syncPersonaDraftDirty(draft);
+  if ($("personaPostMediaUploadFiles")) {
+    $("personaPostMediaUploadFiles").value = "";
+    syncUploadDropzone($("personaPostMediaUploadFiles"));
+  }
+  renderPersonaDetail();
+  renderConfirmSummary();
+  return true;
+}
+
+async function applyPersonaDraftMediaOps({ persona, postId, source, ops = [] } = {}) {
+  const cleanOps = Array.isArray(ops) ? ops : [];
+  for (const op of cleanOps) {
+    if (op?.type === "append") {
+      await savePersonaPostMediaFiles({ persona, postId, source, files: op.files || [], replaceExisting: false });
+    } else if (op?.type === "replace") {
+      await savePersonaPostMediaFiles({ persona, postId, source, files: op.files || [], replaceIndex: op.index });
+    } else if (op?.type === "delete") {
+      await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/${source === "favorites" ? "favorites" : "posts"}/${encodeURIComponent(postId)}/media/${encodeURIComponent(op.index)}`, {
+        method: "DELETE",
+      });
+    }
+  }
+}
+
 async function uploadPersonaPostMedia(replaceExisting = false, replaceIndex = null) {
   const persona = selectedPersona();
   const { source, post } = personaMediaTargetPost(persona);
@@ -8721,6 +8918,7 @@ async function uploadPersonaPostMedia(replaceExisting = false, replaceIndex = nu
     showMsg("commandMsg", "请先选择要上传的媒体文件。", false);
     return;
   }
+  if (queuePersonaDraftMediaChange(replaceIndex !== null && replaceIndex !== undefined && replaceIndex !== "" ? "replace" : "append", { index: replaceIndex, files })) return;
   const sourceLabel = source === "favorites" ? "收藏" : "草稿";
   const replacingSingle = replaceIndex !== null && replaceIndex !== undefined && replaceIndex !== "";
   showMsg("commandMsg", replacingSingle ? `正在替换第 ${Number(replaceIndex) + 1} 个${sourceLabel}媒体...` : (replaceExisting ? `正在替换${sourceLabel}媒体...` : `正在追加${sourceLabel}媒体...`), true);
@@ -8743,6 +8941,7 @@ async function deletePersonaPostMedia(index) {
     showMsg("commandMsg", source === "favorites" ? "请先选中一条收藏。" : "请先选中一条草稿。", false);
     return;
   }
+  if (queuePersonaDraftMediaChange("delete", { index })) return;
   const sourceLabel = source === "favorites" ? "收藏" : "草稿";
   showMsg("commandMsg", `正在删除${sourceLabel}媒体...`, true);
   await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/${source === "favorites" ? "favorites" : "posts"}/${encodeURIComponent(post.id)}/media/${encodeURIComponent(index)}`, {
@@ -9483,8 +9682,10 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
               </div>
               <div class="persona-media-edit-pane persona-media-edit-pane--upload">
                 ${renderUploadDropzone("personaPostMediaUploadFiles", { label: "上传媒体", hint: `拖动图片或视频到这里，或点击选择。可追加到${sourceLabel}；选中左侧缩略图可替换。` })}
-                <div class="row-actions">
-                  <button type="button" class="primary" data-persona-upload-post-media="append">追加到${sourceLabel}</button>
+                <div class="row-actions persona-media-upload-actions">
+                  <button type="button" class="primary" data-persona-upload-post-media="append">追加</button>
+                  ${postMediaItems.length ? `<button type="button" data-persona-replace-post-media="${esc(selectedPersonaMediaIndex(persona.id, isFavoriteMedia ? "favorites" : "posts", post.id, postMediaItems.length))}">替换</button>` : ""}
+                  ${postMediaItems.length ? `<button type="button" class="danger" data-persona-delete-post-media="${esc(selectedPersonaMediaIndex(persona.id, isFavoriteMedia ? "favorites" : "posts", post.id, postMediaItems.length))}">删除</button>` : ""}
                 </div>
               </div>
             </div>
@@ -9566,7 +9767,7 @@ function renderPersonaEditableMediaGrid(items, options = {}) {
     <div class="persona-edit-media-card ${isSelected ? "is-selected" : ""}" data-persona-select-post-media="${esc(index)}" role="option" aria-selected="${isSelected ? "true" : "false"}">
       <div class="persona-edit-media-card-head">
         <span>${esc(`第 ${index + 1} 个媒体`)}</span>
-        ${isSelected ? `<button type="button" class="primary" data-persona-replace-post-media="${esc(index)}">替换媒体</button>` : ""}
+        ${isSelected ? `<small>已选中</small>` : ""}
       </div>
       ${item.unavailable || !item.previewUrl ? `
         <div class="persona-media-frame persona-media-frame--empty">
@@ -9580,11 +9781,33 @@ function renderPersonaEditableMediaGrid(items, options = {}) {
           caption: mediaKindLabel(item.type),
         })}
       `}
-      <div class="row-actions persona-edit-media-actions">
-        <button type="button" data-persona-delete-post-media="${esc(index)}">删除</button>
-      </div>
     </div>
   `;}).join("")}</div>`;
+}
+
+function updatePersonaEditableMediaSelectionDom(card, index) {
+  const selectedIndex = Math.max(0, Number.parseInt(String(index || 0), 10) || 0);
+  const grid = card?.closest?.(".persona-edit-media-grid");
+  if (!grid) return;
+  grid.querySelectorAll(".persona-edit-media-card").forEach((item) => {
+    const isSelected = Number.parseInt(String(item.dataset.personaSelectPostMedia || "0"), 10) === selectedIndex;
+    item.classList.toggle("is-selected", isSelected);
+    item.setAttribute("aria-selected", isSelected ? "true" : "false");
+    const head = item.querySelector(".persona-edit-media-card-head");
+    const marker = head?.querySelector("small");
+    if (isSelected && head && !marker) {
+      head.insertAdjacentHTML("beforeend", "<small>已选中</small>");
+    } else if (!isSelected && marker) {
+      marker.remove();
+    }
+  });
+  const panel = grid.closest(".persona-media-operation-panel, .persona-media-workspace, .persona-content-panel, #moduleBody") || document;
+  panel.querySelectorAll("[data-persona-replace-post-media]").forEach((button) => {
+    button.dataset.personaReplacePostMedia = String(selectedIndex);
+  });
+  panel.querySelectorAll("[data-persona-delete-post-media]").forEach((button) => {
+    button.dataset.personaDeletePostMedia = String(selectedIndex);
+  });
 }
 
 function renderPersonaImageLibraryGrid(library) {
@@ -9720,6 +9943,7 @@ function renderPersonaCreateWorkbench() {
         ${createState.aiStep === "input" ? `
           <div class="row-actions">
             <button type="button" class="primary" data-persona-create-ai-keywords ${anyCreateBusy ? "disabled" : ""}>${aiKeywordsBusy ? "正在提炼关键词..." : (anyCreateBusy ? `${busyLabel}中` : "下一步：提炼关键词")}</button>
+            ${aiKeywordsBusy ? `<button type="button" data-persona-create-ai-cancel-keywords>取消</button>` : ""}
           </div>
         ` : `
           <div class="persona-inline-panel is-flat">
@@ -10015,7 +10239,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
   const selectedPostBase = selectedPersonaPost(persona, { requireExplicit: panel === "generate" && composeMode === "tweet_media" });
   const selectedPost = isEditingDraft ? editingDraft : selectedPostBase;
   const selectedSourceLabel = (isEditingDraft ? editingSource : postSource) === "favorites" ? "收藏" : "草稿";
-  const selectedPostMediaItems = selectedPost ? personaEditablePostMediaItems(String(persona.id || ""), selectedPost) : [];
+  const selectedPostMediaItems = selectedPost ? personaDraftMediaPreviewItems(persona, postSource, selectedPost) : [];
   const generateIntro = generateMode === "hot"
     ? ""
     : (isEditingDraft
@@ -10104,7 +10328,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
     const mediaRows = sourceRows;
     const isFavoriteMedia = postSource === "favorites";
     const sourceLabel = isFavoriteMedia ? "收藏" : "草稿";
-    const postMediaItems = post ? personaEditablePostMediaItems(String(persona.id || ""), post) : [];
+    const postMediaItems = post ? personaDraftMediaPreviewItems(persona, isFavoriteMedia ? "favorites" : "posts", post) : [];
     const mediaTaskOptions = personaMediaTaskOptions(profile, generateForm);
     const currentTaskType = mediaTaskOptions.some(([value]) => value === String(mediaForm.taskType || ""))
       ? String(mediaForm.taskType || "")
@@ -10151,8 +10375,10 @@ function renderPersonaContentPanel(persona, account, profile, step) {
                   </div>
                   <div class="persona-media-edit-pane persona-media-edit-pane--upload">
                     ${renderUploadDropzone("personaPostMediaUploadFiles", { label: "上传媒体", hint: `拖动图片或视频到这里，或点击选择。可追加到${sourceLabel}；选中左侧缩略图可替换。` })}
-                    <div class="row-actions">
-                      <button type="button" class="primary" data-persona-upload-post-media="append">追加到${sourceLabel}</button>
+                    <div class="row-actions persona-media-upload-actions">
+                      <button type="button" class="primary" data-persona-upload-post-media="append">追加</button>
+                      ${postMediaItems.length ? `<button type="button" data-persona-replace-post-media="${esc(selectedPersonaMediaIndex(persona.id, isFavoriteMedia ? "favorites" : "posts", post.id, postMediaItems.length))}">替换</button>` : ""}
+                      ${postMediaItems.length ? `<button type="button" class="danger" data-persona-delete-post-media="${esc(selectedPersonaMediaIndex(persona.id, isFavoriteMedia ? "favorites" : "posts", post.id, postMediaItems.length))}">删除</button>` : ""}
                     </div>
                   </div>
                 </div>
@@ -11009,9 +11235,9 @@ function bindEvents() {
       const persona = selectedPersona();
       const target = personaMediaTargetPost(persona);
       if (persona && target.post) {
-        setSelectedPersonaMediaIndex(persona.id, target.source, target.post.id, editableMediaCard.dataset.personaSelectPostMedia || "0");
-        renderPersonaDetail();
-        renderConfirmSummary();
+        const selectedIndex = editableMediaCard.dataset.personaSelectPostMedia || "0";
+        setSelectedPersonaMediaIndex(persona.id, target.source, target.post.id, selectedIndex);
+        updatePersonaEditableMediaSelectionDom(editableMediaCard, selectedIndex);
       }
       return;
     }
@@ -11081,7 +11307,14 @@ function bindEvents() {
       return;
     }
     if (event.target.closest("[data-persona-create-ai-keywords]")) {
-      suggestPersonaCreateKeywords().catch((error) => showMsg("commandMsg", error.detail || error.message || "提炼关键词失败", false));
+      suggestPersonaCreateKeywords().catch((error) => {
+        if (Number(error?.status || 0) === 499) return;
+        showMsg("commandMsg", error.detail || error.message || "提炼关键词失败", false);
+      });
+      return;
+    }
+    if (event.target.closest("[data-persona-create-ai-cancel-keywords]")) {
+      cancelPersonaCreateKeywords();
       return;
     }
     const createKeywordButton = event.target.closest("[data-persona-create-ai-keyword]");
@@ -11367,9 +11600,9 @@ function bindEvents() {
       const persona = selectedPersona();
       const target = personaMediaTargetPost(persona);
       if (persona && target.post) {
-        setSelectedPersonaMediaIndex(persona.id, target.source, target.post.id, selectPostMedia.dataset.personaSelectPostMedia || "0");
-        renderPersonaDetail();
-        renderConfirmSummary();
+        const selectedIndex = selectPostMedia.dataset.personaSelectPostMedia || "0";
+        setSelectedPersonaMediaIndex(persona.id, target.source, target.post.id, selectedIndex);
+        updatePersonaEditableMediaSelectionDom(selectPostMedia, selectedIndex);
       }
       return;
     }

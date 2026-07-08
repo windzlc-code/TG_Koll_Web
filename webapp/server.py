@@ -71,6 +71,9 @@ def _resolve_sentiment_config_path() -> Path:
 
 
 SENTIMENT_CONFIG_PATH = _resolve_sentiment_config_path()
+SENTIMENT_BROWSER_AUTH_EXTENSION_NAME = "TG Koll Web 舆情授权助手"
+SENTIMENT_BROWSER_AUTH_EXTENSION_DIR_NAME = "tg-koll-web-browser-auth-helper"
+SENTIMENT_BROWSER_AUTH_EXTENSION_ZIP_NAME = f"{SENTIMENT_BROWSER_AUTH_EXTENSION_DIR_NAME}.zip"
 CLOSED_IMAGE_WORKFLOW_STAGE_PREFIX = "closed_image_model:"
 CLOSED_LLM_WORKFLOW_STAGE_PREFIX = "closed_llm_model:"
 _TG_PROMPT_VARIANT_HISTORY_LOCK = threading.Lock()
@@ -1242,6 +1245,10 @@ def _sentiment_browser_auth_text(file_name: str, request: Request) -> tuple[byte
     elif file_name == "manifest.json":
         with contextlib.suppress(Exception):
             parsed = json.loads(body)
+            parsed["name"] = SENTIMENT_BROWSER_AUTH_EXTENSION_NAME
+            parsed["short_name"] = "TGKW 舆情助手"
+            parsed["description"] = "将已登录站点 Cookie 同步到 TG Koll Web 舆情系统。"
+            parsed.setdefault("action", {})["default_title"] = SENTIMENT_BROWSER_AUTH_EXTENSION_NAME
             permissions = parsed.setdefault("host_permissions", [])
             current_permission = f"{origin}/*"
             if current_permission not in permissions:
@@ -1250,6 +1257,15 @@ def _sentiment_browser_auth_text(file_name: str, request: Request) -> tuple[byte
                 if permission not in permissions:
                     permissions.append(permission)
             body = json.dumps(parsed, ensure_ascii=False, indent=2) + "\n"
+    elif file_name == "popup.html":
+        body = body.replace("<h1>舆情授权助手</h1>", f"<h1>{SENTIMENT_BROWSER_AUTH_EXTENSION_NAME}</h1>")
+    elif file_name == "install.html":
+        body = body.replace("<title>舆情授权助手安装</title>", f"<title>{SENTIMENT_BROWSER_AUTH_EXTENSION_NAME} 安装</title>")
+        body = body.replace("<h1>舆情授权助手安装</h1>", f"<h1>{SENTIMENT_BROWSER_AUTH_EXTENSION_NAME} 安装</h1>")
+        body = body.replace(
+            "选择项目里的固定目录：<code>__EXTENSION_DIR__</code>",
+            f"选择 TG Koll Web 解压后的固定目录：<code>{SENTIMENT_BROWSER_AUTH_EXTENSION_DIR_NAME}</code>",
+        )
     return body.encode("utf-8"), allowed[file_name]
 
 
@@ -1361,7 +1377,7 @@ def _build_sentiment_browser_auth_extension_zip(request: Request) -> bytes:
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for name in file_names:
             body, _ = _sentiment_browser_auth_text(name, request)
-            zf.writestr(f"opinx-browser-auth-helper/{name}", body)
+            zf.writestr(f"{SENTIMENT_BROWSER_AUTH_EXTENSION_DIR_NAME}/{name}", body)
     return buffer.getvalue()
 
 
@@ -16543,7 +16559,7 @@ def create_app() -> FastAPI:
             content=zip_body,
             media_type="application/zip",
             headers={
-                "Content-Disposition": 'attachment; filename="opinx-browser-auth-helper.zip"',
+                "Content-Disposition": f'attachment; filename="{SENTIMENT_BROWSER_AUTH_EXTENSION_ZIP_NAME}"',
                 "Cache-Control": "no-cache",
             },
         )

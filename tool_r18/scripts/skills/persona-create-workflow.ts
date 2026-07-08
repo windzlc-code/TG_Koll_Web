@@ -626,7 +626,11 @@ async function main() {
   throw new Error(`unsupported action: ${(input as any)?.action || ""}`);
 }
 
-main().catch((error) => {
-  printJson({ ok: false, error: error instanceof Error ? error.message : String(error) });
-  process.exitCode = 1;
-});
+main()
+  .then(() => {
+    process.exit(process.exitCode || 0);
+  })
+  .catch((error) => {
+    printJson({ ok: false, error: error instanceof Error ? error.message : String(error) });
+    process.exit(1);
+  });
