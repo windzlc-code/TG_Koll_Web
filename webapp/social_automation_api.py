@@ -112,6 +112,11 @@ class SocialTaskActionPayload(BaseModel):
     reason: str = ""
 
 
+class LiveBrowserSettingsPayload(BaseModel):
+    standby_seconds: int = Field(default=60, ge=0, le=3600)
+    auto_close_seconds: int = Field(default=300, ge=10, le=86400)
+
+
 def configure_social_automation(*, data_dir: Path, new_id: Callable[[str], str] | None = None) -> None:
     global _DATA_DIR, _NEW_ID
     _DATA_DIR = Path(data_dir).resolve()
@@ -127,6 +132,19 @@ def register_social_automation_routes(app: FastAPI) -> None:
     @app.get("/api/persona_dashboard/automation/browser_sessions")
     def api_social_browser_sessions(_user: dict[str, Any] = Depends(get_current_user)):
         return {"ok": True, "sessions": _live_browser_sessions()}
+
+    @app.get("/api/persona_dashboard/automation/browser_settings")
+    def api_social_browser_settings(_user: dict[str, Any] = Depends(get_current_user)):
+        return {"ok": True, "settings": get_live_browser_settings()}
+
+    @app.put("/api/persona_dashboard/automation/browser_settings")
+    def api_social_browser_settings_save(payload: LiveBrowserSettingsPayload, _user: dict[str, Any] = Depends(get_current_user)):
+        return {"ok": True, "settings": set_live_browser_settings(payload)}
+
+    @app.post("/api/persona_dashboard/automation/browser_sessions/{session_id}/close")
+    def api_social_browser_session_close(session_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+        close_live_browser_session(session_id)
+        return {"ok": True, "closed": True}
 
     @app.websocket("/api/persona_dashboard/automation/browser_sessions/{session_id}/ws")
     async def api_social_browser_session_ws(websocket: WebSocket, session_id: str):
@@ -495,6 +513,59 @@ def _live_browser_sessions() -> list[dict[str, Any]]:
         return []
 
 
+def get_live_browser_settings() -> dict[str, int]:
+    def _bounded_env_int(name: str, fallback: int, minimum: int, maximum: int) -> int:
+        try:
+            value = int(os.getenv(name, str(fallback)))
+        except (TypeError, ValueError):
+            value = fallback
+        return max(minimum, min(value, maximum))
+
+    defaults = {
+        "standby_seconds": _bounded_env_int("SOCIAL_AUTOMATION_LIVE_BROWSER_STANDBY_SECONDS", 60, 0, 3600),
+        "auto_close_seconds": _bounded_env_int("SOCIAL_AUTOMATION_LIVE_BROWSER_AUTO_CLOSE_SECONDS", 300, 10, 86400),
+    }
+    try:
+        with db() as conn:
+            row = conn.execute("SELECT value_json FROM admin_config WHERE key = ?", ("live_browser_settings",)).fetchone()
+        if not row:
+            return defaults
+        raw = _loads(row["value_json"], {})
+        return {
+            "standby_seconds": max(0, min(int(raw.get("standby_seconds", defaults["standby_seconds"])), 3600)),
+            "auto_close_seconds": max(10, min(int(raw.get("auto_close_seconds", defaults["auto_close_seconds"])), 86400)),
+        }
+    except Exception:
+        return defaults
+
+
+def set_live_browser_settings(payload: LiveBrowserSettingsPayload) -> dict[str, int]:
+    settings = {
+        "standby_seconds": max(0, min(int(payload.standby_seconds), 3600)),
+        "auto_close_seconds": max(10, min(int(payload.auto_close_seconds), 86400)),
+    }
+    now = _now()
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO admin_config(key, value_json, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
+            """,
+            ("live_browser_settings", json.dumps(settings, ensure_ascii=False), now),
+        )
+    return settings
+
+
+def close_live_browser_session(session_id: str) -> None:
+    try:
+        from social_automation.live_browser import stop_live_browser_session
+
+        stop_live_browser_session(str(session_id or ""))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"关闭实时浏览器失败: {exc}") from exc
+
+
 def create_social_proxy(payload: SocialProxyPayload) -> dict[str, Any]:
     proxy_type = _normalize_proxy_type(payload.proxy_type)
     host = str(payload.host or "").strip()
@@ -553,7 +624,6 @@ def check_social_proxy(proxy_id: str) -> dict[str, Any]:
         )
         updated = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
     return _proxy_public(updated)
-
 
 def create_social_account(payload: SocialAccountPayload) -> dict[str, Any]:
     platform = _normalize_platform(payload.platform)
@@ -656,6 +726,24 @@ def update_social_account(account_id: str, payload: SocialAccountPatchPayload) -
         existing = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (account_id,)).fetchone()
         if not existing:
             raise HTTPException(status_code=404, detail="账号不存在")
+        if "persona_id" in updates and str(updates.get("persona_id") or "").strip():
+            target_persona_id = str(updates.get("persona_id") or "").strip()
+            target_platform = str(updates.get("platform") or existing["platform"] or "").strip()
+            target_username = str(updates.get("username") or existing["username"] or "").strip().lstrip("@")
+            duplicate = conn.execute(
+                """
+                SELECT id
+                FROM social_accounts
+                WHERE id != ?
+                  AND persona_id = ?
+                  AND platform = ?
+                  AND lower(username) = lower(?)
+                LIMIT 1
+                """,
+                (account_id, target_persona_id, target_platform, target_username),
+            ).fetchone()
+            if duplicate:
+                raise HTTPException(status_code=409, detail="目标人设已经绑定了这个平台账号，请直接选择已有绑定")
         if updates.get("proxy_id"):
             _require_proxy(conn, updates["proxy_id"])
         if updates.get("profile_dir"):
@@ -1030,6 +1118,7 @@ def _worker_loop() -> None:
 
 def _claim_next_task() -> dict[str, Any] | None:
     now = _now()
+    _recover_orphaned_manual_login_task(now)
     with db() as conn:
         row = conn.execute(
             """
@@ -1052,6 +1141,85 @@ def _claim_next_task() -> dict[str, Any] | None:
     public = _task_public(updated)
     public["payload"] = _loads(updated["payload_json"], {})
     return public
+
+
+def _recover_orphaned_manual_login_task(now: int) -> None:
+    with _RUNNING_TASK_CONTROLS_LOCK:
+        running_ids = set(_RUNNING_TASK_CONTROLS.keys())
+    recovery_window = max(60, int(os.getenv("SOCIAL_AUTOMATION_MANUAL_RECOVERY_SECONDS", "7200")))
+    recent_cutoff = now - recovery_window
+    with db() as conn:
+        ready_rows = conn.execute(
+            """
+            SELECT t.id
+            FROM social_automation_tasks t
+            JOIN social_accounts a ON a.id = t.account_id
+            WHERE t.status = 'need_manual'
+              AND t.finished_at = 0
+              AND t.task_type = 'open_login'
+              AND a.status = 'ready'
+            LIMIT 20
+            """
+        ).fetchall()
+        for row in ready_rows:
+            task_id = str(row["id"] or "")
+            if not task_id or task_id in running_ids:
+                continue
+            result = json.dumps({"ok": True, "status": "ready", "recovered": True}, ensure_ascii=False)
+            conn.execute(
+                """
+                UPDATE social_automation_tasks
+                SET status = 'success', result_json = ?, error = '', finished_at = ?, updated_at = ?
+                WHERE id = ? AND status = 'need_manual' AND finished_at = 0
+                """,
+                (result, now, now, task_id),
+            )
+            _insert_log(
+                conn,
+                task_id,
+                "info",
+                "resume_manual_login",
+                "已恢复登录任务：当前账号已经处于登录成功状态。",
+                {},
+            )
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM social_automation_tasks
+            WHERE status = 'need_manual'
+              AND finished_at = 0
+              AND task_type = 'open_login'
+              AND updated_at >= ?
+            ORDER BY account_id ASC, updated_at DESC, created_at DESC
+            LIMIT 20
+            """
+            ,
+            (recent_cutoff,),
+        ).fetchall()
+        seen_accounts: set[str] = set()
+        for row in rows:
+            task_id = str(row["id"] or "")
+            account_id = str(row["account_id"] or "")
+            if not task_id or task_id in running_ids or account_id in seen_accounts:
+                continue
+            seen_accounts.add(account_id)
+            conn.execute(
+                """
+                UPDATE social_automation_tasks
+                SET status = 'queued', error = '', updated_at = ?
+                WHERE id = ? AND status = 'need_manual' AND finished_at = 0
+                """,
+                (now, task_id),
+            )
+            _insert_log(
+                conn,
+                task_id,
+                "info",
+                "resume_manual_login",
+                "登录任务的实时执行进程已断开，系统已重新排队检查当前浏览器登录状态。",
+                {},
+            )
+            break
 
 
 def _execute_claimed_task(task: dict[str, Any]) -> None:
@@ -1278,7 +1446,7 @@ def _media_fields_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _automation_action_label(task_type: str) -> str:
     return {
-        "publish_post": "网页自动化发帖",
+        "publish_post": "网页自动化发布",
         "comment_post": "网页自动化评论",
         "reply_comment": "网页自动化回复",
         "like_post": "网页自动化点赞",
@@ -1885,6 +2053,9 @@ def _extract_runtime_secrets(payload: dict[str, Any]) -> tuple[dict[str, Any], d
 
 def _runtime_task_payload(task: dict[str, Any], account: dict[str, Any]) -> dict[str, Any]:
     payload = dict(task.get("payload") or {})
+    settings = get_live_browser_settings()
+    payload.setdefault("live_browser_standby_seconds", settings["standby_seconds"])
+    payload.setdefault("live_browser_auto_close_seconds", settings["auto_close_seconds"])
     task_id = str(task.get("id") or "")
     with _EPHEMERAL_TASK_SECRETS_LOCK:
         secrets = dict(_EPHEMERAL_TASK_SECRETS.get(task_id) or {})

@@ -12795,8 +12795,7 @@ def _ensure_publish_login_task(account: dict[str, Any], *, scheduled_at: int | f
     if not account_id:
         return None
     account_status = str(account.get("status") or "").strip().lower()
-    login_check = _latest_successful_social_task_for_account(account_id, ["check_login", "open_login"])
-    if account_status == "ready" and login_check:
+    if account_status == "ready":
         return None
     active = _active_social_task_for_account(account_id, ["open_login", "check_login"])
     if active:
@@ -12847,6 +12846,12 @@ def _publish_persona_archive_post(
     account = _persona_publish_account_for_archive(clean_archive_id, payload.account_id, payload.platform)
     platform = str(account.get("platform") or "instagram").strip().lower() or "instagram"
     login_task = _ensure_publish_login_task(account, scheduled_at=payload.scheduled_at or 0)
+    if login_task:
+        login_task_id = str((login_task or {}).get("id") or "").strip()
+        detail = "账号未登录，已打开登录窗口，请完成登录后重试发布。"
+        if login_task_id:
+            detail = f"{detail} 登录任务：{login_task_id}"
+        raise HTTPException(status_code=409, detail=detail)
     if not media_paths:
         media_paths = _post_media_paths_for_publish(post)
     if platform == "instagram" and not media_paths:
@@ -12948,6 +12953,16 @@ def _publish_persona_matrix(payload: PersonaDashboardMatrixPublishPayload) -> di
         try:
             account = _persona_publish_account_for_archive(persona_id, "", platform)
             login_task = _ensure_publish_login_task(account, scheduled_at=payload.scheduled_at or 0)
+            if login_task:
+                skipped.append({
+                    "persona_id": persona_id,
+                    "persona_name": persona_name,
+                    "account_id": str(account.get("id") or ""),
+                    "platform": platform,
+                    "login_task": login_task,
+                    "reason": "账号未登录，已打开登录窗口，请完成登录后重试发布。",
+                })
+                continue
             rows = _archive_posts_for_matrix_source(archive, source)
             candidates: list[dict[str, Any]] = []
             for post in rows:

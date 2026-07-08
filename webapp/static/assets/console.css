@@ -6503,6 +6503,339 @@ body.persona-touch-dragging .persona-list-card:active {
   display: none;
 }
 
+.account-grid {
+  display: block;
+}
+
+.account-pool-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 256px;
+  gap: 12px;
+  align-items: start;
+}
+
+.account-pool-main,
+.account-pool-persona-shell {
+  min-width: 0;
+}
+
+.account-pool-main {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-solid);
+}
+
+.account-pool-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.account-pool-head > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.account-pool-head strong {
+  color: var(--ink);
+  font-size: 16px;
+}
+
+.account-pool-head span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.account-pool-body {
+  display: grid;
+  grid-template-columns: 180px minmax(360px, 480px) minmax(360px, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.account-pool-platform-panel,
+.account-pool-account-panel,
+.account-pool-create-panel {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.account-pool-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+}
+
+.account-pool-section-head strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.account-pool-section-head span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-pool-add-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+
+.account-pool-add-button span {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.account-pool-add-button strong {
+  font-size: 13px;
+}
+
+.account-create-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.account-create-form label {
+  display: grid;
+  gap: 6px;
+}
+
+.account-create-form label:last-child {
+  grid-column: 1 / -1;
+}
+
+.account-create-form span {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.account-create-form input,
+.account-create-form select {
+  width: 100%;
+}
+
+.account-pool-create-panel {
+  min-height: 176px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-solid);
+}
+
+.account-pool-create-panel--empty {
+  visibility: hidden;
+}
+
+.account-pool-create-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.account-pool-create-head > div {
+  display: grid;
+  gap: 3px;
+}
+
+.account-pool-create-head strong {
+  color: var(--ink);
+  font-size: 15px;
+}
+
+.account-pool-create-head span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.account-pool-create-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.account-pool-create-actions button {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--panel-solid);
+}
+
+.account-pool-platforms,
+.account-pool-list {
+  display: grid;
+  gap: 8px;
+}
+
+.account-pool-platforms {
+  position: sticky;
+  top: 0;
+}
+
+.account-pool-platforms button {
+  display: grid;
+  gap: 3px;
+  justify-items: start;
+  min-height: 54px;
+  padding: 8px 10px;
+  background: var(--panel-solid);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  text-align: left;
+}
+
+.account-pool-platforms button.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  box-shadow: var(--active-shadow);
+}
+
+.account-pool-platforms button span {
+  color: inherit;
+  opacity: 0.72;
+  font-size: 12px;
+}
+
+.account-pool-card {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  width: 100%;
+  max-width: 480px;
+  min-height: 118px;
+  border-color: var(--line);
+}
+
+.account-pool-card.is-active {
+  border-color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--ink);
+}
+
+.account-pool-card-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 0;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  box-shadow: none;
+}
+
+.account-pool-check {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--panel-solid);
+}
+
+.account-pool-check.is-checked {
+  background: var(--ink);
+  border-color: var(--ink);
+  box-shadow: inset 0 0 0 4px var(--panel-solid);
+}
+
+.account-pool-card-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.account-pool-card-copy strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-pool-card-copy small {
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-pool-card .account-card-meta,
+.account-pool-card .row-actions {
+  grid-column: 1;
+}
+
+.account-pool-card .row-actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.account-pool-bind-persona {
+  position: absolute;
+  top: 10px;
+  right: 8px;
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.account-pool-bind-persona:disabled {
+  opacity: 0.45;
+}
+
+.account-pool-persona-shell .publish-persona-card {
+  grid-template-columns: minmax(0, 1fr);
+  padding-right: 56px;
+  align-items: center;
+}
+
+.account-pool-persona-shell .publish-persona-card .persona-list-item {
+  grid-column: 1;
+  grid-row: 1;
+  width: auto;
+  min-height: 46px;
+}
+
+.account-pool-persona-shell .account-pool-bind-persona {
+  z-index: 3;
+  pointer-events: auto;
+}
+
+.account-pool-persona-shell {
+  position: sticky;
+  top: 0;
+}
+
 .live-browser-panel {
   display: grid;
   gap: 10px;
@@ -6551,6 +6884,11 @@ body.persona-touch-dragging .persona-list-card:active {
   font-size: 12px;
 }
 
+.live-browser-card-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .live-browser-grid {
   display: grid;
   grid-template-columns: minmax(0, min(100%, 960px));
@@ -6575,6 +6913,30 @@ body.persona-touch-dragging .persona-list-card:active {
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--soft);
+}
+
+.live-browser-card.is-status-active {
+  border-color: color-mix(in srgb, var(--warning-soft-ink) 70%, var(--line));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--warning-soft-ink) 18%, transparent);
+}
+
+.live-browser-card.is-status-manual {
+  border-color: color-mix(in srgb, var(--warning-soft-ink) 78%, var(--line));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--warning-soft-ink) 22%, transparent);
+}
+
+.live-browser-card.is-status-success {
+  border-color: color-mix(in srgb, var(--success-soft-ink) 70%, var(--line));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--success-soft-ink) 16%, transparent);
+}
+
+.live-browser-card.is-status-error {
+  border-color: color-mix(in srgb, var(--danger) 72%, var(--line));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
+.live-browser-card.is-status-muted {
+  border-color: var(--line);
 }
 
 .live-browser-panel[data-live-browser-count]:not([data-live-browser-count="0"]):not([data-live-browser-count="1"]) .live-browser-card {
@@ -6615,26 +6977,77 @@ body.persona-touch-dragging .persona-list-card:active {
   max-width: 280px;
 }
 
+.live-browser-frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: var(--live-browser-ratio, 16 / 9);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #111;
+}
+
 .live-browser-card iframe {
   box-sizing: border-box;
   display: block;
   width: 100%;
   max-width: 100%;
+  height: 100%;
   justify-self: start;
-  aspect-ratio: var(--live-browser-ratio, 16 / 9);
-  height: auto;
   min-height: 0;
   max-height: none;
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  border: 0;
+  border-radius: 0;
   background: #111;
+}
+
+.live-browser-card.is-interaction-locked iframe {
+  pointer-events: none;
+}
+
+.live-browser-lock {
+  display: none;
+}
+
+.live-browser-lock span {
+  max-width: 360px;
+  padding: 9px 12px;
+  border-radius: 999px;
+  background: rgba(8, 12, 18, 0.72);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.live-browser-interaction-note {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.live-browser-card.is-interaction-enabled .live-browser-interaction-note,
+.live-browser-card.is-status-success .live-browser-interaction-note {
+  color: var(--success-soft-ink);
+  font-weight: 700;
+}
+
+.live-browser-card.is-status-active .live-browser-interaction-note,
+.live-browser-card.is-status-manual .live-browser-interaction-note {
+  color: var(--warning-soft-ink);
+  font-weight: 700;
+}
+
+.live-browser-card.is-status-error .live-browser-interaction-note {
+  color: var(--danger);
+  font-weight: 700;
 }
 
 .live-browser-card.is-portrait {
   max-width: min(100%, 420px);
 }
 
-.live-browser-card.is-portrait iframe {
+.live-browser-card.is-portrait .live-browser-frame {
   width: 100%;
   max-width: min(100%, calc(var(--live-browser-width, 720) * 1px));
   min-height: 0;
@@ -6652,7 +7065,7 @@ body.persona-touch-dragging .persona-list-card:active {
   background: var(--panel-solid);
 }
 
-.live-browser-card:fullscreen iframe {
+.live-browser-card:fullscreen .live-browser-frame {
   width: min(calc(100vw - 32px), calc(var(--live-browser-width, 1280) * 1px));
 }
 
@@ -6940,6 +7353,7 @@ body.persona-touch-dragging .persona-list-card:active {
 .status.cancelled { background: var(--danger-soft); color: var(--danger-soft-ink); }
 .status.running,
 .status.need_manual { background: var(--warning-soft); color: var(--warning-soft-ink); }
+.status.standby { background: var(--chip-bg); color: var(--chip-ink); }
 
 .confirm-summary {
   display: grid;
@@ -6978,6 +7392,8 @@ body.persona-touch-dragging .persona-list-card:active {
   .task-row,
   .persona-actions-grid,
   .task-queue-layout,
+  .account-pool-layout,
+  .account-pool-body,
   .persona-console-layout,
   .persona-hot-layout {
     grid-template-columns: 1fr;

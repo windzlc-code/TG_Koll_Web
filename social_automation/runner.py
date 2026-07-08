@@ -4,6 +4,7 @@ import contextlib
 import os
 import random
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Any, Protocol
@@ -207,6 +208,8 @@ class _BrowserContextManager:
         return self.context
 
     def __exit__(self, exc_type, exc, tb):
+        if exc_type is None and self._detach_live_browser_for_standby():
+            return None
         if self.context_control is not None:
             self.context_control["context"] = None
             self.context_control["manager"] = None
@@ -217,6 +220,68 @@ class _BrowserContextManager:
             return result
         self._stop_live_browser_session()
         return None
+
+    def _detach_live_browser_for_standby(self) -> bool:
+        if self.live_session is None or self.context is None:
+            return False
+        task = {}
+        if self.context_control is not None and isinstance(self.context_control.get("task"), dict):
+            task = dict(self.context_control.get("task") or {})
+        payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+        standby_seconds = _safe_int_env_or_payload(payload, "live_browser_standby_seconds", "SOCIAL_AUTOMATION_LIVE_BROWSER_STANDBY_SECONDS", 60)
+        auto_close_seconds = _safe_int_env_or_payload(payload, "live_browser_auto_close_seconds", "SOCIAL_AUTOMATION_LIVE_BROWSER_AUTO_CLOSE_SECONDS", 300)
+        standby_seconds = max(0, min(standby_seconds, 3600))
+        auto_close_seconds = max(10, min(auto_close_seconds, 24 * 3600))
+        close_delay = standby_seconds + auto_close_seconds
+        session_id = str(getattr(self.live_session, "id", "") or "")
+        if not session_id:
+            return False
+
+        context = self.context
+        cm = self.cm
+        live_session = self.live_session
+        closed = threading.Event()
+
+        def close_live_browser() -> None:
+            if closed.is_set():
+                return
+            closed.set()
+            with contextlib.suppress(Exception):
+                context.close()
+            with contextlib.suppress(Exception):
+                if cm:
+                    cm.__exit__(None, None, None)
+
+        try:
+            from social_automation.live_browser import mark_live_browser_session_standby, register_live_browser_close_callback, stop_live_browser_session
+
+            close_at = int(time.time()) + close_delay
+            mark_live_browser_session_standby(session_id, close_at=close_at)
+            register_live_browser_close_callback(session_id, close_live_browser)
+            self.logger.log(
+                "info",
+                "live_browser_standby",
+                "Live browser entered standby; it can be closed manually or automatically later.",
+                {"session_id": session_id, "standby_seconds": standby_seconds, "auto_close_seconds": auto_close_seconds, "close_at": close_at},
+            )
+
+            def auto_close() -> None:
+                time.sleep(close_delay)
+                stop_live_browser_session(session_id, session=live_session)
+
+            threading.Thread(target=auto_close, name=f"live-browser-standby-{session_id}", daemon=True).start()
+        except Exception as detach_exc:
+            self.logger.log("warn", "live_browser_standby_failed", "Live browser standby failed; closed through the normal flow.", {"error": str(detach_exc)})
+            return False
+
+        if self.context_control is not None:
+            self.context_control["context"] = None
+            self.context_control["manager"] = None
+            self.context_control["live_browser_session_id"] = session_id
+        self.context = None
+        self.cm = None
+        self.live_session = None
+        return True
 
     def _enter_camoufox(self, Camoufox: Any, kwargs: dict[str, Any]) -> None:
         old_display = os.environ.get("DISPLAY")
@@ -250,7 +315,7 @@ class _BrowserContextManager:
                 self.context_control["live_browser_height"] = int(getattr(session, "height", 0) or 0)
             return session
         except Exception as exc:
-            self.logger.log("warn", "live_browser_error", "实时浏览器监控初始化失败，已继续普通执行", {"error": str(exc)})
+            self.logger.log("warn", "live_browser_error", "Live browser monitor initialization failed; continuing without monitor.", {"error": str(exc)})
             return None
 
     def _stop_live_browser_session(self) -> None:
@@ -308,6 +373,16 @@ def _raise_if_cancelled(cancel_event: Any | None) -> None:
         raise RuntimeError("Social automation task was cancelled")
 
 
+def _safe_int_env_or_payload(payload: dict[str, Any], key: str, env_key: str, fallback: int) -> int:
+    raw = payload.get(key)
+    if raw is None or raw == "":
+        raw = os.getenv(env_key)
+    try:
+        return int(raw)
+    except Exception:
+        return int(fallback)
+
+
 def _proxy_config(proxy: dict[str, Any] | None) -> dict[str, str] | None:
     if not proxy:
         return None
@@ -354,9 +429,9 @@ def _sync_live_browser_viewport(page, context_control: dict[str, Any] | None, lo
     }
     try:
         page.set_viewport_size(viewport)
-        logger.log("info", "live_browser_viewport", "已同步实时监控窗口尺寸", viewport)
+        logger.log("info", "live_browser_viewport", "Live browser viewport has been synchronized", viewport)
     except Exception as exc:
-        logger.log("warn", "live_browser_viewport_failed", "实时监控窗口尺寸同步失败，继续执行任务", {"error": str(exc), "viewport": viewport})
+        logger.log("warn", "live_browser_viewport_failed", "Live browser viewport synchronization failed; continuing task", {"error": str(exc), "viewport": viewport})
 
 
 def _safe_int(value: Any, fallback: int) -> int:
@@ -725,7 +800,7 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
                     logger,
                     platform,
                     cancel_event,
-                    f"{_platform_name(platform)} 保存的登录资料被平台判定不正确，请在打开的浏览器里人工修正后继续。",
+                    f"{_platform_name(platform)} saved credentials were rejected; fix them manually in the open browser and continue.",
                     "cookie_expired",
                     shot,
                     last_status,
@@ -746,7 +821,7 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
                     logger,
                     platform,
                     cancel_event,
-                    f"{_platform_name(platform)} 需要人工输入验证码或完成二次验证；浏览器会保持打开直到人工完成或用户取消。",
+                    f"{_platform_name(platform)} requires manual verification; the browser will stay open until it is completed or cancelled.",
                     "need_verification",
                     shot,
                     last_status,
@@ -772,7 +847,7 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
                     logger,
                     platform,
                     cancel_event,
-                    f"{_platform_name(platform)} 需要人工输入验证码或完成二次验证；浏览器会保持打开直到人工完成或用户取消。",
+                    f"{_platform_name(platform)} requires manual verification; the browser will stay open until it is completed or cancelled.",
                     "need_verification",
                     shot,
                     last_status,
@@ -782,7 +857,7 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
         except Exception as exc:
             message = str(exc)
             if "Target page, context or browser has been closed" in message or "has been closed" in message:
-                raise NeedManualError(f"{_platform_name(platform)} 登录窗口已关闭，未检测到登录成功。请重新点击“打开登录窗口”并保持窗口打开直到账号状态变为可执行。", "cookie_expired") from exc
+                raise NeedManualError(f"{_platform_name(platform)} login window was closed before login was confirmed. Reopen the login window and keep it open until the account is ready.", "cookie_expired") from exc
             logger.log("warn", "open_login_poll", f"Login window status check failed: {exc}")
         time.sleep(3 if auto_submit else 10)
     shot = _screenshot(page, screenshot_dir, task, "login_wait_timeout", logger)
@@ -793,7 +868,7 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
         logger,
         platform,
         cancel_event,
-        f"自动流程未能确认登录完成：{last_status.get('reason') or 'not ready'}。浏览器会保持打开，请人工处理或取消任务。",
+        f"Automatic login flow could not confirm completion: {last_status.get('reason') or 'not ready'}. The browser will stay open for manual handling or cancellation.",
         str(last_status.get("status") or "need_verification"),
         shot,
         last_status,
@@ -827,7 +902,7 @@ def _wait_for_manual_login_completion(
         except Exception as exc:
             message = str(exc)
             if "Target page, context or browser has been closed" in message or "has been closed" in message:
-                raise NeedManualError(f"{_platform_name(platform)} 登录窗口已关闭，未检测到登录成功。请重新启动登录任务。", status) from exc
+                raise NeedManualError(f"{_platform_name(platform)} login window was closed before login was confirmed. Restart the login task.", status) from exc
         current_status = _detect_platform_login_state(page, platform)
         current_code = str(current_status.get("status") or "").strip()
         if current_code == "ready":
@@ -848,7 +923,7 @@ def _wait_for_manual_login_completion(
             logger.log(
                 "info" if current_code == "ready" else "warn",
                 "manual_login_status",
-                f"{_platform_name(platform)} 人工登录状态更新",
+                f"{_platform_name(platform)} manual login status updated.",
                 {"status": current_code, "details": current_status},
             )
             last_seen_status = current_code
@@ -973,7 +1048,7 @@ def _run_browse_feed(page, task, payload, screenshot_dir, logger) -> dict[str, A
 def _threads_like_buttons(page):
     selectors = [
         '[aria-label="Like"]',
-        '[aria-label*="赞"]',
+        '[aria-label*="\u8d5e"]',
     ]
     locators = []
     for selector in selectors:
@@ -994,10 +1069,10 @@ def _is_threads_like_candidate(locator) -> bool:
     probe = f"{label} {text}".strip().lower()
     if not probe:
         return False
-    blocked = ("unlike", "liked", "取消", "已赞", "已按赞", "收回")
+    blocked = ("unlike", "liked", "\u53d6\u6d88", "\u5df2\u8d5e", "\u5df2\u6309\u8d5e", "\u6536\u56de")
     if any(item in probe for item in blocked):
         return False
-    return "like" in probe or "赞" in probe
+    return "like" in probe or "\u8d5e" in probe
 
 
 def _click_some_threads_likes(page, logger: AutomationLogger, limit: int) -> int:
@@ -1099,7 +1174,7 @@ def _run_threads_warmup(page, task, payload, screenshot_dir, logger) -> dict[str
     comment_chance = _payload_int(payload, ("comment_chance",), 0, 0, 100)
     session_seconds = _warmup_session_seconds(payload)
     strategy_id = str(payload.get("strategy_id") or "tg_default")
-    strategy_label = str(payload.get("strategy_label") or "默认养号：滑动 + 随机点赞")
+    strategy_label = str(payload.get("strategy_label") or "\u9ed8\u8ba4\u517b\u53f7\uff1a\u6ed1\u52a8 + \u968f\u673a\u70b9\u8d5e")
     logger.log("info", "threads_warmup", "Starting Threads warmup from persona automation settings", {
         "strategy_id": strategy_id,
         "strategy_label": strategy_label,
@@ -1130,7 +1205,7 @@ def _run_threads_warmup(page, task, payload, screenshot_dir, logger) -> dict[str
                 liked += clicked_likes
             else:
                 like_backfills += 1
-                logger.log("warn", "threads_warmup_backfill", "补点赞失败，继续换目标", {"attempts": like_backfills, "liked": liked, "target": min_required_likes})
+                logger.log("warn", "threads_warmup_backfill", "Like backfill failed; switching target", {"attempts": like_backfills, "liked": liked, "target": min_required_likes})
         should_open_post = browsed > 0 and (random.random() < 0.12 or (opened_posts == 0 and elapsed_ratio >= 0.3))
         if should_open_post and _open_random_threads_post(page, logger):
             opened_posts += 1
@@ -1145,7 +1220,7 @@ def _run_threads_warmup(page, task, payload, screenshot_dir, logger) -> dict[str
                 if box is not None:
                     _human_click(page, box, logger, "threads_warmup_reply_focus")
                     _human_type(page, reply_text, min_delay=0.10, max_delay=0.22)
-                    posted = _click_text_button(page, logger, ["Post", "Reply", "发布", "回覆", "回复"], "threads_warmup_reply_submit")
+                    posted = _click_text_button(page, logger, ["Post", "Reply", "\u53d1\u5e03", "\u56de\u8986", "\u56de\u590d"], "threads_warmup_reply_submit")
                     if posted:
                         commented += 1
                         shot_reply = _screenshot(page, screenshot_dir, task, f"threads_warmup_comment_{commented}", logger)
@@ -1154,13 +1229,13 @@ def _run_threads_warmup(page, task, payload, screenshot_dir, logger) -> dict[str
                         logger.log("info", "threads_warmup_comment", "Commented during Threads warmup", {"commented": commented, "text": reply_text[:80]})
                     else:
                         comment_backfills += 1
-                        logger.log("warn", "threads_warmup_backfill", "补留言失败，继续换目标", {"attempts": comment_backfills, "commented": commented, "target": min_required_comments})
+                        logger.log("warn", "threads_warmup_backfill", "Comment backfill failed; switching target", {"attempts": comment_backfills, "commented": commented, "target": min_required_comments})
                 else:
                     comment_backfills += 1
-                    logger.log("warn", "threads_warmup_backfill", "补留言定位失败，继续浏览", {"attempts": comment_backfills, "commented": commented, "target": min_required_comments})
+                    logger.log("warn", "threads_warmup_backfill", "Comment target was not found; continuing browse", {"attempts": comment_backfills, "commented": commented, "target": min_required_comments})
             elif max_comments > commented:
                 comment_backfills += 1
-                logger.log("warn", "threads_warmup_backfill", "补留言定位失败，继续浏览", {"attempts": comment_backfills, "commented": commented, "target": min_required_comments, "has_reply_text": bool(str(reply_text or "").strip())})
+                logger.log("warn", "threads_warmup_backfill", "Comment target was not found; continuing browse", {"attempts": comment_backfills, "commented": commented, "target": min_required_comments, "has_reply_text": bool(str(reply_text or "").strip())})
         scroll = _slow_human_scroll(page)
         browsed += 1
         remaining_seconds = max(0, int(deadline - time.monotonic()))
@@ -1183,8 +1258,8 @@ def _threads_reply_button(page):
     selectors = [
         '[aria-label="Reply"]',
         '[aria-label*="Reply" i]',
-        '[aria-label*="回复"]',
-        '[aria-label*="回覆"]',
+        '[aria-label*="鍥炲"]',
+        '[aria-label*="鍥炶"]',
         'button:has-text("Reply")',
     ]
     for selector in selectors:
@@ -1203,8 +1278,8 @@ def _threads_text_box(page):
         '[contenteditable="true"]',
         '[role="textbox"]',
         'div[aria-label*="Reply" i]',
-        'div[aria-label*="回复"]',
-        'div[aria-label*="回覆"]',
+        'div[aria-label*="鍥炲"]',
+        'div[aria-label*="鍥炶"]',
     ]
     for selector in selectors:
         try:
@@ -1227,15 +1302,15 @@ def _pick_persona_reply(payload: dict[str, Any]) -> str:
         return ""
     persona_name = str(payload.get("persona_name") or "").strip()
     if persona_name:
-        return f"这个角度挺适合 {persona_name} 继续观察。"
-    return "这个角度值得继续观察。"
+        return f"\u8fd9\u4e2a\u89d2\u5ea6\u633a\u9002\u5408 {persona_name} \u7ee7\u7eed\u89c2\u5bdf\u3002"
+    return "\u8fd9\u4e2a\u89d2\u5ea6\u503c\u5f97\u7ee7\u7eed\u89c2\u5bdf\u3002"
 
 
 def _run_threads_hot_post_auto_reply(page, task, payload, screenshot_dir, logger) -> dict[str, Any]:
     max_posts = max(1, min(int(payload.get("max_posts") or 5), 20))
     max_replies = max(1, min(int(payload.get("max_replies") or 3), 10))
     strategy_id = str(payload.get("strategy_id") or "hot_posts")
-    strategy_label = str(payload.get("strategy_label") or "自动回复热点推文")
+    strategy_label = str(payload.get("strategy_label") or "\u81ea\u52a8\u56de\u590d\u70ed\u70b9\u63a8\u6587")
     raw_targets = payload.get("target_urls") or []
     if not isinstance(raw_targets, list):
         raw_targets = []
@@ -1288,18 +1363,18 @@ def _run_threads_hot_post_auto_reply(page, task, payload, screenshot_dir, logger
             break
         if button is None:
             reply_backfills += 1
-            logger.log("warn", "threads_auto_reply_backfill", "补留言定位失败，继续换目标", {"attempts": reply_backfills, "url": url})
+            logger.log("warn", "threads_auto_reply_backfill", "Reply target was not found; switching target", {"attempts": reply_backfills, "url": url})
             continue
         _human_click(page, button, logger, "threads_hot_post_reply_button")
         _sleep_between(1.0, 2.5)
         box = _threads_text_box(page)
         if box is None:
             reply_backfills += 1
-            logger.log("warn", "threads_auto_reply_backfill", "补留言定位失败，继续换目标", {"attempts": reply_backfills, "url": url})
+            logger.log("warn", "threads_auto_reply_backfill", "Reply target was not found; switching target", {"attempts": reply_backfills, "url": url})
             continue
         _human_click(page, box, logger, "threads_hot_post_reply_focus")
         _human_type(page, reply_text, min_delay=0.10, max_delay=0.22)
-        posted = _click_text_button(page, logger, ["Post", "Reply", "发布", "回覆", "回复"], "threads_hot_post_reply_submit")
+        posted = _click_text_button(page, logger, ["Post", "Reply", "\u53d1\u5e03", "\u56de\u8986", "\u56de\u590d"], "threads_hot_post_reply_submit")
         if posted:
             replied += 1
             replied_urls.append(url)
@@ -1313,7 +1388,7 @@ def _run_threads_hot_post_auto_reply(page, task, payload, screenshot_dir, logger
                 break
         else:
             reply_backfills += 1
-            logger.log("warn", "threads_auto_reply_backfill", "补留言失败，继续换目标", {"attempts": reply_backfills, "url": url})
+            logger.log("warn", "threads_auto_reply_backfill", "Reply backfill failed; switching target", {"attempts": reply_backfills, "url": url})
     shot = _screenshot(page, screenshot_dir, task, "threads_auto_reply_done", logger)
     logger.log(
         "info",
@@ -1345,7 +1420,7 @@ def _run_threads_auto_reply(page, task, payload, screenshot_dir, logger) -> dict
     max_posts = max(1, min(int(payload.get("max_posts") or 5), 20))
     max_replies = max(1, min(int(payload.get("max_replies") or 3), 10))
     strategy_id = str(payload.get("strategy_id") or "tg_default")
-    strategy_label = str(payload.get("strategy_label") or "自动回复评论：最近 2 天")
+    strategy_label = str(payload.get("strategy_label") or "\u81ea\u52a8\u56de\u590d\u8bc4\u8bba\uff1a\u6700\u8fd1 2 \u5929")
     require_persona_relevance = bool(payload.get("require_persona_relevance", True))
     raw_targets = payload.get("target_urls") or []
     if not isinstance(raw_targets, list):
@@ -1380,18 +1455,18 @@ def _run_threads_auto_reply(page, task, payload, screenshot_dir, logger) -> dict
                 break
             if button is None:
                 reply_backfills += 1
-                logger.log("warn", "threads_auto_reply_backfill", "补留言定位失败，继续换目标", {"attempts": reply_backfills, "url": url})
+                logger.log("warn", "threads_auto_reply_backfill", "Reply target was not found; switching target", {"attempts": reply_backfills, "url": url})
                 continue
             _human_click(page, button, logger, "threads_reply_button")
             _sleep_between(1.0, 2.5)
             box = _threads_text_box(page)
             if box is None:
                 reply_backfills += 1
-                logger.log("warn", "threads_auto_reply_backfill", "补留言定位失败，继续换目标", {"attempts": reply_backfills, "url": url})
+                logger.log("warn", "threads_auto_reply_backfill", "Reply target was not found; switching target", {"attempts": reply_backfills, "url": url})
                 continue
             _human_click(page, box, logger, "threads_reply_focus")
             _human_type(page, reply_text, min_delay=0.10, max_delay=0.22)
-            posted = _click_text_button(page, logger, ["Post", "Reply", "发布", "回覆", "回复"], "threads_reply_submit")
+            posted = _click_text_button(page, logger, ["Post", "Reply", "\u53d1\u5e03", "\u56de\u8986", "\u56de\u590d"], "threads_reply_submit")
             if posted:
                 replied += 1
                 replied_urls.append(url)
@@ -1405,7 +1480,7 @@ def _run_threads_auto_reply(page, task, payload, screenshot_dir, logger) -> dict
                     break
             else:
                 reply_backfills += 1
-                logger.log("warn", "threads_auto_reply_backfill", "补留言失败，继续换目标", {"attempts": reply_backfills, "url": url})
+                logger.log("warn", "threads_auto_reply_backfill", "Reply backfill failed; switching target", {"attempts": reply_backfills, "url": url})
         shot = _screenshot(page, screenshot_dir, task, "threads_auto_reply_done", logger)
         logger.log(
             "info",
@@ -1444,11 +1519,11 @@ def _run_threads_auto_reply(page, task, payload, screenshot_dir, logger) -> dict
             box = _threads_text_box(page)
             if box is None:
                 reply_backfills += 1
-                logger.log("warn", "threads_auto_reply_backfill", "补留言定位失败，继续换目标", {"attempts": reply_backfills, "index": index + 1})
+                logger.log("warn", "threads_auto_reply_backfill", "Reply target was not found; switching target", {"attempts": reply_backfills, "index": index + 1})
             else:
                 _human_click(page, box, logger, "threads_reply_focus")
                 _human_type(page, reply_text, min_delay=0.10, max_delay=0.22)
-                posted = _click_text_button(page, logger, ["Post", "Reply", "发布", "回覆", "回复"], "threads_reply_submit")
+                posted = _click_text_button(page, logger, ["Post", "Reply", "\u53d1\u5e03", "\u56de\u8986", "\u56de\u590d"], "threads_reply_submit")
                 if posted:
                     replied += 1
                     _sleep_between(2.0, 4.0)
@@ -1461,10 +1536,10 @@ def _run_threads_auto_reply(page, task, payload, screenshot_dir, logger) -> dict
                         break
                 else:
                     reply_backfills += 1
-                    logger.log("warn", "threads_auto_reply_backfill", "补留言失败，继续换目标", {"attempts": reply_backfills, "index": index + 1})
+                    logger.log("warn", "threads_auto_reply_backfill", "Reply backfill failed; switching target", {"attempts": reply_backfills, "index": index + 1})
         else:
             reply_backfills += 1
-            logger.log("warn", "threads_auto_reply_backfill", "补留言定位失败，继续换目标", {"attempts": reply_backfills, "index": index + 1})
+            logger.log("warn", "threads_auto_reply_backfill", "Reply target was not found; switching target", {"attempts": reply_backfills, "index": index + 1})
         page.mouse.wheel(0, random.randint(550, 950))
         _sleep_between(2.0, 5.0)
     shot = _screenshot(page, screenshot_dir, task, "threads_auto_reply_done", logger)
@@ -1562,7 +1637,7 @@ def _auto_submit_login_form(page, platform: str, payload: dict[str, Any], logger
         continue_clicked = _click_text_button(
             page,
             logger,
-            ["Continue with Instagram", "Log in with Instagram", "继续使用 Instagram", "使用 Instagram 继续"],
+            ["Continue with Instagram", "Log in with Instagram", "缁х画浣跨敤 Instagram", "浣跨敤 Instagram 缁х画"],
             "threads_continue_instagram",
         )
         logger.log("info" if continue_clicked else "warn", "auto_login_continue", "Threads Instagram login button processed", {"clicked": continue_clicked, "url": str(page.url or "")})
@@ -1609,7 +1684,7 @@ def _auto_submit_login_form(page, platform: str, payload: dict[str, Any], logger
     clicked = _click_text_button(
         page,
         logger,
-        ["Log in", "Log In", "Login", "Continue", "登录", "登入", "继续"],
+        ["Log in", "Log In", "Login", "Continue", "\u767b\u5f55", "\u767b\u5165", "\u7ee7\u7eed"],
         "auto_login_submit",
     )
     if not clicked:
@@ -1636,9 +1711,9 @@ def _verification_visible(page) -> bool:
         "verify your account",
         "help us confirm",
         "验证码",
-        "驗證碼",
+        "验证提示",
         "安全码",
-        "安全碼",
+        "安全提示",
     ]
     try:
         text = page.locator("body").inner_text(timeout=3000).lower()

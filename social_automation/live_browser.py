@@ -12,7 +12,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 @dataclass
@@ -32,11 +32,14 @@ class LiveBrowserSession:
     backend: str = "kasmvnc"
     status: str = "starting"
     error: str = ""
+    standby_started_at: int = 0
+    close_at: int = 0
     processes: list[subprocess.Popen] = field(default_factory=list, repr=False)
     temp_dir: str = ""
 
 
 _SESSIONS: dict[str, LiveBrowserSession] = {}
+_CLOSE_CALLBACKS: dict[str, Callable[[], None]] = {}
 _LOCK = threading.Lock()
 _ORPHAN_CLEANUP_DONE = False
 
@@ -151,6 +154,12 @@ def start_live_browser_session(
 def stop_live_browser_session(session_id: str, *, session: LiveBrowserSession | None = None) -> None:
     with _LOCK:
         target = session or _SESSIONS.pop(str(session_id), None)
+        if session is not None:
+            _SESSIONS.pop(str(session_id), None)
+        callback = _CLOSE_CALLBACKS.pop(str(session_id), None)
+    if callback is not None:
+        with contextlib.suppress(Exception):
+            callback()
     if not target:
         _remove_session_registry(str(session_id))
         return
@@ -170,6 +179,38 @@ def stop_live_browser_session(session_id: str, *, session: LiveBrowserSession | 
     _remove_session_registry(target.id)
 
 
+def mark_live_browser_session_standby(session_id: str, *, close_at: int = 0) -> None:
+    clean_id = str(session_id or "")
+    if not clean_id:
+        return
+    now = int(time.time())
+    with _LOCK:
+        session = _SESSIONS.get(clean_id)
+        if session is not None:
+            session.status = "standby"
+            session.standby_started_at = now
+            session.close_at = max(0, int(close_at or 0))
+            _save_session_registry(session)
+            return
+    sessions = _read_registry()
+    row = sessions.get(clean_id)
+    if not row:
+        return
+    row["status"] = "standby"
+    row["standby_started_at"] = now
+    row["close_at"] = max(0, int(close_at or 0))
+    sessions[clean_id] = row
+    _write_registry(sessions)
+
+
+def register_live_browser_close_callback(session_id: str, callback: Callable[[], None]) -> None:
+    clean_id = str(session_id or "")
+    if not clean_id:
+        return
+    with _LOCK:
+        _CLOSE_CALLBACKS[clean_id] = callback
+
+
 def list_live_browser_sessions() -> list[dict[str, Any]]:
     with _LOCK:
         sessions = list(_SESSIONS.values())
@@ -177,9 +218,13 @@ def list_live_browser_sessions() -> list[dict[str, Any]]:
     known_ids = {session.id for session in sessions}
     sessions.extend(session for session in registry_sessions if session.id not in known_ids)
     rows: list[dict[str, Any]] = []
+    now = int(time.time())
     for session in sessions:
         alive = _session_processes_alive(session)
         if not alive:
+            stop_live_browser_session(session.id)
+            continue
+        if session.status == "standby" and session.close_at and session.close_at <= now:
             stop_live_browser_session(session.id)
             continue
         rows.append(_session_public(session))
@@ -194,6 +239,9 @@ def get_live_browser_session(session_id: str) -> LiveBrowserSession | None:
     if not session:
         return None
     if not _session_processes_alive(session):
+        stop_live_browser_session(session.id)
+        return None
+    if session.status == "standby" and session.close_at and session.close_at <= int(time.time()):
         stop_live_browser_session(session.id)
         return None
     return session
@@ -222,6 +270,8 @@ def _session_public(session: LiveBrowserSession) -> dict[str, Any]:
         "started_at": session.started_at,
         "status": session.status,
         "error": session.error,
+        "standby_started_at": session.standby_started_at,
+        "close_at": session.close_at,
     }
 
 
@@ -296,6 +346,8 @@ def _session_from_registry(row: dict[str, Any]) -> LiveBrowserSession | None:
         backend=str(row.get("backend") or "kasmvnc"),
         status=str(row.get("status") or "running"),
         error=str(row.get("error") or ""),
+        standby_started_at=_safe_int(row.get("standby_started_at"), 0),
+        close_at=_safe_int(row.get("close_at"), 0),
     )
 
 
@@ -382,18 +434,18 @@ def _cleanup_orphaned_live_browser_processes(logger: Any | None = None) -> None:
 
 def _wait_for_live_browser_ready(session: LiveBrowserSession, *, timeout_seconds: float = 8.0) -> None:
     deadline = time.time() + timeout_seconds
-    last_error = "KasmVNC did not become ready"
+    last_error = "KasmVNC 未在限定时间内就绪"
     while time.time() < deadline:
         if not all(process.poll() is None for process in session.processes):
             codes = [process.poll() for process in session.processes]
-            raise RuntimeError(f"KasmVNC exited before ready: {codes}")
+            raise RuntimeError(f"KasmVNC 就绪前退出：{codes}")
         try:
             with socket.create_connection(("127.0.0.1", int(session.web_port)), timeout=0.35):
                 return
         except OSError as exc:
             last_error = str(exc)
             time.sleep(0.15)
-    raise RuntimeError(f"KasmVNC port {session.web_port} is not ready: {last_error}")
+    raise RuntimeError(f"KasmVNC 端口 {session.web_port} 未就绪：{last_error}")
 
 
 def _safe_int(value: Any, fallback: int) -> int:
