@@ -12331,7 +12331,7 @@ def _persona_dashboard_suggest_keywords(payload: PersonaDashboardPersonaAiKeywor
         "action": "suggest-keywords",
         "personaName": name,
         "userPrompt": prompt,
-    })
+    }, timeout_seconds=90)
     keywords = [
         str(item or "").strip()
         for item in (result.get("keywords") if isinstance(result.get("keywords"), list) else [])
@@ -12351,7 +12351,7 @@ def _persona_dashboard_create_persona_with_ai(payload: PersonaDashboardPersonaAi
         str(item or "").strip()
         for item in (payload.selected_keywords or [])
         if str(item or "").strip()
-    ][:8]
+    ][:2]
     if not name:
         raise HTTPException(status_code=400, detail="persona name cannot be empty")
     if not prompt:
@@ -12392,7 +12392,7 @@ def _persona_dashboard_generate_profile_content(payload: PersonaDashboardPersona
         str(item or "").strip()
         for item in (payload.selected_keywords or [])
         if str(item or "").strip()
-    ][:8]
+    ][:2]
     if not name:
         raise HTTPException(status_code=400, detail="persona name cannot be empty")
     if not prompt:
