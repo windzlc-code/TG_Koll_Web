@@ -1748,6 +1748,10 @@ function activeTaskStatus(status) {
   return ["queued", "running", "need_manual"].includes(String(status || "").trim());
 }
 
+function blockingTaskStatus(status) {
+  return ["queued", "running"].includes(String(status || "").trim());
+}
+
 function activeSocialTaskFor({ accountId = "", personaId = "", taskType = "", postId = "", postSource = "" } = {}) {
   const cleanAccountId = String(accountId || "").trim();
   const cleanPersonaId = String(personaId || "").trim();
@@ -1755,7 +1759,7 @@ function activeSocialTaskFor({ accountId = "", personaId = "", taskType = "", po
   const cleanPostId = String(postId || "").trim();
   const cleanPostSource = String(postSource || "").trim();
   return (state.socialTasks || []).find((task) => {
-    if (!activeTaskStatus(task?.status)) return false;
+    if (!blockingTaskStatus(task?.status)) return false;
     if (cleanAccountId && String(task?.account_id || "").trim() !== cleanAccountId) return false;
     if (cleanPersonaId && String(task?.persona_id || "").trim() !== cleanPersonaId) return false;
     if (cleanTaskType && String(task?.task_type || "").trim() !== cleanTaskType) return false;
@@ -10439,7 +10443,7 @@ function renderLiveBrowserSessions() {
       <section class="live-browser-panel is-empty">
         <div>
           <strong>实时浏览器监控</strong>
-          <span>暂无运行中的指纹浏览器。打开登录、检查登录或发布任务运行后，这里会自动显示可交互窗口。</span>
+          <span>暂无运行中的浏览器窗口。打开登录、检查登录或发布任务运行后，这里会自动显示可交互窗口。</span>
         </div>
       </section>
     `;
