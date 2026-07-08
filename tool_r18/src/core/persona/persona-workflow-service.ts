@@ -253,15 +253,15 @@ async function generateTextWithGemini(prompt: string, count: number): Promise<st
   return content;
 }
 
-function parsePosts(text: string, count: number): EpisodeScript[] {
+function parsePosts(text: string, count: number, startIndex = 0): EpisodeScript[] {
   const parts = parseGeneratedPosts(text, count);
 
   return parts.map((content, index) => ({
-    number: index + 1,
-    title: `第${index + 1}篇`,
+    number: startIndex + index + 1,
+    title: `第${startIndex + index + 1}篇`,
     content,
     wordCount: content.length,
-    orderIndex: index,
+    orderIndex: startIndex + index,
   }));
 }
 
@@ -285,8 +285,8 @@ async function attachMemorySummariesToPosts(
 }
 
 async function buildPersonaGenerationMemoryPrompt(
-  archive: { id: string; setup?: any; posts: Array<{ content: string; createdAt?: string; updatedAt?: string; memorySummary?: string }> },
-): Promise<{ memoryText: string; recentPosts: string[]; existingCount: number; persistedEntries: MemoryEntryPreview[] }> {
+  archive: { id: string; setup?: any; posts: Array<{ title?: string; content: string; orderIndex?: number; createdAt?: string; updatedAt?: string; memorySummary?: string }> },
+): Promise<{ memoryText: string; recentPosts: string[]; recentTitles: string[]; existingCount: number; nextDraftIndex: number; persistedEntries: MemoryEntryPreview[] }> {
   const persistedEntries = (await getMemoryEntries(archive.id).catch(() => []))
     .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime());
   const cleanPosts = archive.posts.filter((post) => !isTooSimilarToTweetStyleSample(post.content, archive.setup));
@@ -301,12 +301,38 @@ async function buildPersonaGenerationMemoryPrompt(
     ...pendingEntries,
     ...persistedEntries,
   ], 32);
+  const recentPostSliceStart = Math.max(0, cleanPosts.length - 10);
+  const nextDraftIndex = archive.posts.reduce(
+    (max, post, index) => Math.max(max, typeof post.orderIndex === "number" && Number.isFinite(post.orderIndex) ? post.orderIndex : index),
+    -1,
+  ) + 1;
   return {
     memoryText,
     recentPosts: cleanPosts.slice(-6).map((post) => post.content),
+    recentTitles: cleanPosts
+      .slice(-10)
+      .map((post, index) => String(post.title || `第${recentPostSliceStart + index + 1}篇`).trim())
+      .filter(Boolean),
     existingCount: persistedEntries.length + archive.posts.length,
+    nextDraftIndex,
     persistedEntries,
   };
+}
+
+function buildTitleSequenceInstruction(memoryContext: { nextDraftIndex: number; recentTitles: string[] }, targetCount: number): string {
+  const existingDraftCount = memoryContext.nextDraftIndex;
+  const nextStart = memoryContext.nextDraftIndex + 1;
+  const nextEnd = memoryContext.nextDraftIndex + targetCount;
+  const recentTitleText = memoryContext.recentTitles.length
+    ? memoryContext.recentTitles.map((title, index) => `${index + 1}. ${title}`).join("\n")
+    : "暂无已有草稿标题。";
+  return [
+    "【草稿标题顺序参考】",
+    `当前草稿库已有 ${existingDraftCount} 篇草稿，本次将继续生成第 ${nextStart} 至第 ${nextEnd} 篇。`,
+    "最近已有标题：",
+    recentTitleText,
+    "请让本次内容自然承接已有标题顺序与过往记忆，不要把每一批都当成新的第1篇重新开始。",
+  ].join("\n");
 }
 
 function buildSelectedMemoryInstruction(entries: MemoryEntryPreview[]): string {
@@ -438,8 +464,10 @@ export async function runPersonaWorkflow(input: PersonaWorkflowInput) {
       const tweetStyleInstruction = buildTweetStyleInstruction(effectiveSetup);
       const linkEndingInstruction = buildLinkEndingInstruction(effectiveSetup);
       const chineseScriptInstruction = buildChineseScriptInstruction(archive);
+      const titleSequenceInstruction = buildTitleSequenceInstruction(memoryContext, targetCount);
       const customInstruction = [
         input.customInstruction || "",
+        titleSequenceInstruction,
         chineseScriptInstruction,
         tweetStyleInstruction,
         linkEndingInstruction,
@@ -464,7 +492,7 @@ export async function runPersonaWorkflow(input: PersonaWorkflowInput) {
       );
 
       const generated = await generateTextWithGemini(prompt, targetCount);
-      let posts = ensurePostsContainLinkEndingPreset(parsePosts(generated, targetCount), archive.setup);
+      let posts = ensurePostsContainLinkEndingPreset(parsePosts(generated, targetCount, memoryContext.nextDraftIndex), archive.setup);
 
       let attempts = 0;
       while (posts.length < targetCount && attempts < 3) {
@@ -478,11 +506,12 @@ export async function runPersonaWorkflow(input: PersonaWorkflowInput) {
           "不要输出思考过程，不要输出说明，不要输出检查文本，不要输出标题说明。",
         ].join("\n");
         const retryGenerated = await generateTextWithGemini(retryPrompt, missing);
-        const retryPosts = ensurePostsContainLinkEndingPreset(parsePosts(retryGenerated, missing), archive.setup).map((post, index) => ({
+        const retryStartIndex = memoryContext.nextDraftIndex + posts.length;
+        const retryPosts = ensurePostsContainLinkEndingPreset(parsePosts(retryGenerated, missing, retryStartIndex), archive.setup).map((post, index) => ({
           ...post,
-          number: posts.length + index + 1,
-          title: `第${posts.length + index + 1}篇`,
-          orderIndex: posts.length + index,
+          number: retryStartIndex + index + 1,
+          title: `第${retryStartIndex + index + 1}篇`,
+          orderIndex: retryStartIndex + index,
         }));
         posts = [...posts, ...retryPosts].slice(0, targetCount);
         attempts += 1;
@@ -498,7 +527,7 @@ export async function runPersonaWorkflow(input: PersonaWorkflowInput) {
         generatedCount: saved.length,
         selectedMemoryCount: selectedEntries.length,
         postIds: saved.map((p) => p.archivePostId),
-        posts: saved.map((p) => ({ id: p.archivePostId, content: p.content, memorySummary: p.memorySummary })),
+        posts: saved.map((p) => ({ id: p.archivePostId, title: p.title, content: p.content, memorySummary: p.memorySummary })),
       };
     }
 

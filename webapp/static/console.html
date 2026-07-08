@@ -6,8 +6,9 @@
   <title>Web 任务控制台</title>
   <link rel="stylesheet" href="/assets/console.css?v=__CONSOLE_CSS_VERSION__" />
 </head>
-<body>
-  <div class="console-shell">
+  <body>
+    <div id="toastHost" class="toast-host" aria-live="polite" aria-atomic="false"></div>
+    <div class="console-shell">
     <aside class="console-sidebar">
       <div class="console-brand">
         <div class="brand-mark">WK</div>
@@ -65,8 +66,8 @@
                 <span class="module-chip" id="moduleCallback" hidden></span>
               </div>
             </div>
-            <div id="moduleBody"></div>
             <div id="commandMsg" class="notice" role="status"></div>
+            <div id="moduleBody"></div>
             <div id="eventStream" class="event-stream" aria-live="polite"></div>
           </section>
         </div>

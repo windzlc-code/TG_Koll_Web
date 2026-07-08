@@ -67,6 +67,7 @@ describe("persona generation memory", () => {
 
     const archiveId = created.archiveId;
     const first = await runPersonaWorkflow({ action: "generate-posts", archiveId, count: 1 });
+    expect(first.posts?.[0].title).toBe("第1篇");
     expect(first.posts?.[0].memorySummary).toContain("第1篇");
     expect(first.posts?.[0].memorySummary).toContain("日本");
 
@@ -74,6 +75,7 @@ describe("persona generation memory", () => {
     expect(cached.posts[0].memorySummary).toContain("東京便利店");
 
     const second = await runPersonaWorkflow({ action: "generate-posts", archiveId, count: 1 });
+    expect(second.posts?.[0].title).toBe("第2篇");
     const secondGenerationPrompt = prompts
       .filter((prompt) => prompt.includes("## 人設記憶"))
       .at(-1) || "";

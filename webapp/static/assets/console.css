@@ -516,7 +516,7 @@ button.primary,
 }
 
 .console-settings-group-head strong {
-  font-size: 16px;
+  font-size: 20px;
 }
 
 .console-settings-group-head span {
@@ -1769,6 +1769,11 @@ textarea:focus {
   font-weight: 750;
 }
 
+.file-strip.has-preview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
 .file-chip {
   display: flex;
   align-items: center;
@@ -1777,6 +1782,42 @@ textarea:focus {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--panel-solid);
+}
+
+.file-chip--preview {
+  align-items: center;
+  min-width: 0;
+  padding: 8px;
+}
+
+.file-preview-frame {
+  width: 54px;
+  height: 54px;
+  min-width: 54px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+  object-fit: cover;
+}
+
+.file-preview-frame--empty {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.file-chip-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.file-chip-copy strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .file-chip small { color: var(--muted); }
@@ -3185,6 +3226,25 @@ body.persona-touch-dragging .persona-list-card:active {
   gap: 10px 12px;
 }
 
+.persona-media-generation-controls {
+  grid-template-columns: minmax(96px, 140px) minmax(150px, 1fr);
+  gap: 8px 10px;
+  max-width: 360px;
+}
+
+.persona-media-generation-controls label,
+.persona-media-generation-controls input,
+.persona-media-generation-controls select {
+  min-width: 0;
+  width: 100%;
+}
+
+@media (max-width: 1180px) {
+  .form-grid.persona-detail-controls.persona-media-generation-controls {
+    grid-template-columns: minmax(96px, 140px) minmax(150px, 1fr);
+  }
+}
+
 .persona-overview-grid {
   display: grid;
   gap: 10px;
@@ -3496,14 +3556,14 @@ body.persona-touch-dragging .persona-list-card:active {
   gap: 2px;
   margin-left: 18px;
   color: var(--muted);
-  font-size: 16px;
-  font-weight: 800;
+  font-size: 20px;
+  font-weight: 400;
   line-height: 1.35;
   white-space: nowrap;
 }
 
 .persona-summary-meta .persona-generate-status-text.is-running {
-  color: var(--persona-status-running-ink);
+  color: var(--ink);
 }
 
 .persona-summary-meta .persona-generate-status-text.is-success {
@@ -3571,6 +3631,16 @@ body.persona-touch-dragging .persona-list-card:active {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel-solid);
+  cursor: pointer;
+  transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+
+.persona-generated-preview-card:hover,
+.persona-generated-preview-card:focus-visible {
+  border-color: var(--hover-border);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.1);
+  outline: none;
+  transform: translateY(-1px);
 }
 
 .persona-generated-preview-card.is-selected {
@@ -3867,6 +3937,31 @@ body.persona-touch-dragging .persona-list-card:active {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.45;
+}
+
+.persona-generate-current-settings {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.persona-generate-current-settings label {
+  display: grid;
+  gap: 6px;
+  min-width: 160px;
+  margin: 0;
+}
+
+.persona-generate-current-settings input {
+  width: 160px;
+}
+
+.persona-generate-current-settings span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+  padding-bottom: 11px;
 }
 
 .persona-warning-inline {
@@ -5515,9 +5610,15 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .console-modal-actions .danger {
-  background: var(--bad);
-  border-color: var(--bad);
-  color: #fff;
+  background: var(--panel-solid);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.console-modal-actions .danger:active {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: var(--danger-ink);
 }
 
 .persona-media-lightbox {
@@ -5612,13 +5713,100 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .notice {
-  min-height: 22px;
-  margin-top: 10px;
-  color: var(--muted);
+  display: none;
 }
 
-.notice.ok { color: var(--ok); }
-.notice.bad { color: var(--bad); }
+.toast-host {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 9000;
+  display: grid;
+  gap: 6px;
+  width: min(360px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+.toast-message {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24px;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 10px 8px 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel-solid) 96%, transparent);
+  color: var(--ink);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
+  pointer-events: auto;
+  animation: toastSlideIn 180ms ease-out;
+}
+
+.toast-message.is-ok {
+  border-color: color-mix(in srgb, var(--ok) 42%, var(--line));
+}
+
+.toast-message.is-bad {
+  border-color: color-mix(in srgb, var(--danger) 72%, var(--line));
+  background: color-mix(in srgb, var(--panel-solid) 92%, var(--danger-soft));
+}
+
+.toast-message.is-refreshed {
+  animation: toastRefresh 160ms ease-out;
+}
+
+.toast-message.is-leaving {
+  opacity: 0;
+  transform: translateX(16px);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.toast-message-text {
+  min-width: 0;
+  font-size: 15px;
+  line-height: 1.5;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+.toast-message-close {
+  width: 24px;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.toast-message-close:hover,
+.toast-message-close:focus-visible {
+  color: var(--ink);
+  background: var(--soft);
+}
+
+@keyframes toastSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes toastRefresh {
+  from {
+    transform: translateX(0) scale(0.99);
+  }
+  to {
+    transform: translateX(0) scale(1);
+  }
+}
 
 .publish-result-link {
   display: block;
@@ -5647,6 +5835,9 @@ body.persona-touch-dragging .persona-list-card:active {
 .event-stream {
   max-height: 520px;
   overflow: auto;
+}
+
+.event-stream:not(:empty) {
   padding-top: 12px;
 }
 
@@ -6230,17 +6421,34 @@ body.persona-touch-dragging .persona-list-card:active {
   gap: 10px;
 }
 
+.live-browser-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.live-browser-card-actions button {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 .live-browser-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(360px, 720px));
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   align-items: start;
+  justify-content: stretch;
+  overflow: hidden;
 }
 
 .live-browser-card {
   display: grid;
   gap: 8px;
-  max-width: 720px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   padding: 10px;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -6248,12 +6456,44 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .live-browser-card iframe {
+  box-sizing: border-box;
+  display: block;
   width: 100%;
-  height: min(58vh, 520px);
-  min-height: 360px;
+  max-width: min(100%, calc(var(--live-browser-width, 1280) * 1px));
+  justify-self: start;
+  aspect-ratio: var(--live-browser-ratio, 16 / 9);
+  height: auto;
+  min-height: 0;
+  max-height: none;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #111;
+}
+
+.live-browser-card.is-portrait {
+  max-width: min(100%, 420px);
+}
+
+.live-browser-card.is-portrait iframe {
+  width: 100%;
+  max-width: min(100%, calc(var(--live-browser-width, 720) * 1px));
+  min-height: 0;
+  max-height: none;
+}
+
+.live-browser-card:fullscreen {
+  align-content: start;
+  justify-items: center;
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  padding: 16px;
+  overflow: auto;
+  background: var(--panel-solid);
+}
+
+.live-browser-card:fullscreen iframe {
+  width: min(calc(100vw - 32px), calc(var(--live-browser-width, 1280) * 1px));
 }
 
 .automation-unified-shell {
@@ -6638,4 +6878,10 @@ body.persona-touch-dragging .persona-list-card:active {
 @media (max-width: 980px) {
   .console-shell { grid-template-columns: 1fr; }
   .console-sidebar { position: static; height: auto; }
+}
+
+@media (max-width: 1180px) {
+  .form-grid.persona-detail-controls.persona-media-generation-controls {
+    grid-template-columns: minmax(96px, 140px) minmax(150px, 1fr);
+  }
 }
