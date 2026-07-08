@@ -158,6 +158,14 @@ def register_social_automation_routes(app: FastAPI) -> None:
     def api_social_account_patch(account_id: str, payload: SocialAccountPatchPayload, _user: dict[str, Any] = Depends(get_current_user)):
         return {"ok": True, "account": update_social_account(account_id, payload)}
 
+    @app.delete("/api/persona_dashboard/automation/accounts/{account_id}")
+    def api_social_account_delete(account_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+        return {"ok": True, "deleted": delete_social_account(account_id)}
+
+    @app.post("/api/persona_dashboard/automation/accounts/dedupe")
+    def api_social_accounts_dedupe(_user: dict[str, Any] = Depends(get_current_user)):
+        return {"ok": True, **dedupe_social_accounts()}
+
     @app.get("/api/persona_dashboard/automation/accounts/{account_id}/credentials")
     def api_social_account_credentials(account_id: str, _user: dict[str, Any] = Depends(get_current_user)):
         with db() as conn:
@@ -688,6 +696,113 @@ def get_social_account(account_id: str) -> dict[str, Any]:
     if not row:
         raise HTTPException(status_code=404, detail="账号不存在")
     return _account_public(row)
+
+
+def _deletable_account_ids(conn: Any, account_ids: list[str]) -> set[str]:
+    clean_ids = [str(account_id or "").strip() for account_id in account_ids if str(account_id or "").strip()]
+    if not clean_ids:
+        return set()
+    placeholders = ",".join("?" for _ in clean_ids)
+    active_rows = conn.execute(
+        f"""
+        SELECT DISTINCT account_id
+        FROM social_automation_tasks
+        WHERE account_id IN ({placeholders})
+          AND status IN ('queued', 'running', 'need_manual')
+        """,
+        tuple(clean_ids),
+    ).fetchall()
+    active_ids = {str(row["account_id"] or "") for row in active_rows}
+    return {account_id for account_id in clean_ids if account_id not in active_ids}
+
+
+def delete_social_account(account_id: str) -> int:
+    clean_id = str(account_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="account_id required")
+    with db() as conn:
+        row = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (clean_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="account not found")
+        task_rows = conn.execute("SELECT id, status FROM social_automation_tasks WHERE account_id = ?", (clean_id,)).fetchall()
+        task_ids = [str(task["id"] or "") for task in task_rows if str(task["id"] or "")]
+        active_task_ids = [
+            str(task["id"] or "") for task in task_rows
+            if str(task["id"] or "") and str(task["status"] or "") in {"running", "need_manual"}
+        ]
+    for task_id in active_task_ids:
+        _force_stop_running_task(task_id)
+    with db() as conn:
+        for task_id in task_ids:
+            conn.execute("DELETE FROM social_automation_logs WHERE task_id = ?", (task_id,))
+        conn.execute("DELETE FROM social_automation_tasks WHERE account_id = ?", (clean_id,))
+        deleted = conn.execute("DELETE FROM social_accounts WHERE id = ?", (clean_id,)).rowcount
+    wake_social_automation_worker()
+    return int(deleted or 0)
+
+
+def _account_dedupe_rank(row: Any) -> tuple[int, int]:
+    status_rank = {
+        "ready": 5,
+        "need_verification": 4,
+        "pending_login": 3,
+        "cookie_expired": 2,
+        "disabled": 1,
+    }
+    return (
+        status_rank.get(str(row["status"] or "").strip().lower(), 0),
+        int(row["updated_at"] or row["created_at"] or 0),
+    )
+
+
+def dedupe_social_accounts() -> dict[str, Any]:
+    deleted_ids: list[str] = []
+    kept_ids: list[str] = []
+    skipped_ids: list[str] = []
+    with db() as conn:
+        rows = conn.execute("SELECT * FROM social_accounts ORDER BY updated_at DESC, created_at DESC").fetchall()
+        groups: dict[tuple[str, str], list[Any]] = {}
+        for row in rows:
+            username = str(row["username"] or "").strip().lower()
+            platform = str(row["platform"] or "").strip().lower()
+            if not username or not platform:
+                continue
+            groups.setdefault((platform, username), []).append(row)
+        for group_rows in groups.values():
+            if len(group_rows) <= 1:
+                continue
+            ranked = sorted(group_rows, key=_account_dedupe_rank, reverse=True)
+            keep = ranked[0]
+            kept_ids.append(str(keep["id"] or ""))
+            candidates = [
+                row for row in ranked[1:]
+                if str(row["status"] or "").strip().lower() in {"cookie_expired", "disabled"}
+            ]
+            candidate_ids = [str(row["id"] or "") for row in candidates if str(row["id"] or "")]
+            deletable = _deletable_account_ids(conn, candidate_ids)
+            for row in candidates:
+                account_id = str(row["id"] or "")
+                if not account_id:
+                    continue
+                if account_id not in deletable:
+                    skipped_ids.append(account_id)
+                    continue
+                task_rows = conn.execute("SELECT id FROM social_automation_tasks WHERE account_id = ?", (account_id,)).fetchall()
+                for task in task_rows:
+                    task_id = str(task["id"] or "")
+                    if task_id:
+                        conn.execute("DELETE FROM social_automation_logs WHERE task_id = ?", (task_id,))
+                conn.execute("DELETE FROM social_automation_tasks WHERE account_id = ?", (account_id,))
+                conn.execute("DELETE FROM social_accounts WHERE id = ?", (account_id,))
+                deleted_ids.append(account_id)
+    if deleted_ids:
+        wake_social_automation_worker()
+    return {
+        "deleted_count": len(deleted_ids),
+        "deleted_ids": deleted_ids,
+        "kept_ids": kept_ids,
+        "skipped_ids": skipped_ids,
+    }
 
 
 def create_account_task(account_id: str, task_type: str, payload: dict[str, Any]) -> dict[str, Any]:

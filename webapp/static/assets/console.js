@@ -1879,6 +1879,27 @@ async function deleteSocialTaskRecord(taskId, messageId = "taskQueueMsg") {
   return true;
 }
 
+async function deleteSocialAccountRecord(accountId, messageId = "socialMsg") {
+  const cleanAccountId = String(accountId || "").trim();
+  if (!cleanAccountId) return null;
+  await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(cleanAccountId)}`, { method: "DELETE" });
+  showMsg(messageId, "执行账号已删除。", true);
+  await loadSocial().catch(() => {});
+  renderWorkspace();
+  return true;
+}
+
+async function dedupeSocialAccountRecords(messageId = "socialMsg") {
+  const result = await api("/api/persona_dashboard/automation/accounts/dedupe", { method: "POST" });
+  const deletedCount = Number(result.deleted_count || 0);
+  const skippedCount = Array.isArray(result.skipped_ids) ? result.skipped_ids.length : 0;
+  const suffix = skippedCount ? `，${skippedCount} 条有进行中任务已跳过。` : "。";
+  showMsg(messageId, deletedCount ? `已清理 ${deletedCount} 条过期重复账号${suffix}` : `没有可清理的过期重复账号${suffix}`, true);
+  await loadSocial().catch(() => {});
+  renderWorkspace();
+  return result;
+}
+
 async function deleteSelectedTaskQueueRecords(kind, messageId = "taskQueueMsg") {
   syncTaskQueueSelection(kind);
   const selectedIds = Array.from(taskQueueSet(kind)).filter(Boolean);
@@ -10652,8 +10673,10 @@ function renderSocialAccounts() {
           ${account.display_name ? `<span>${esc(account.display_name)}</span>` : ""}
         </div>
         <div class="row-actions">
+          ${bindingCount > 1 ? `<button type="button" data-social-dedupe-accounts>清理重复</button>` : ""}
           <button type="button" data-social-open-login="${esc(account.id)}" ${loginBusy ? "disabled" : ""}>${loginBusy ? "登录任务执行中" : "打开登录"}</button>
           <button type="button" data-social-check-login="${esc(account.id)}" ${checkBusy ? "disabled" : ""}>${checkBusy ? "检查执行中" : "检查登录"}</button>
+          <button type="button" class="danger" data-social-delete-account="${esc(account.id)}">删除账号</button>
         </div>
       </article>
     `;
@@ -12332,8 +12355,29 @@ function bindEvents() {
   if ($("accountGrid")) $("accountGrid").addEventListener("click", (event) => {
     const open = event.target.closest("[data-social-open-login]");
     const check = event.target.closest("[data-social-check-login]");
+    const dedupe = event.target.closest("[data-social-dedupe-accounts]");
+    const deleteAccount = event.target.closest("[data-social-delete-account]");
     if (open) createSocialTask("open_login", open.dataset.socialOpenLogin);
     if (check) createSocialTask("check_login", check.dataset.socialCheckLogin);
+    if (dedupe) {
+      confirmDangerAction("确定清理过期重复账号吗？系统会保留同平台同用户名中状态最好或最近更新的一条。", {
+        title: "清理重复账号",
+        confirmText: "清理重复",
+      }).then((ok) => {
+        if (!ok) return;
+        dedupeSocialAccountRecords("socialMsg").catch((error) => showMsg("socialMsg", error.detail || error.message || "清理重复账号失败", false));
+      });
+    }
+    if (deleteAccount) {
+      confirmDangerAction("确定删除这个执行账号吗？相关历史自动化记录也会一起删除。", {
+        title: "删除执行账号",
+        confirmText: "删除账号",
+      }).then((ok) => {
+        if (!ok) return;
+        deleteSocialAccountRecord(deleteAccount.dataset.socialDeleteAccount || "", "socialMsg")
+          .catch((error) => showMsg("socialMsg", error.detail || error.message || "删除账号失败", false));
+      });
+    }
   });
   if ($("socialTaskList")) $("socialTaskList").addEventListener("click", (event) => {
     const log = event.target.closest("[data-social-log]");
