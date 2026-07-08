@@ -9398,9 +9398,35 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
     }
 
 
+def _run_persona_image_task(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    archive_id = str(payload.get("related_persona_id") or payload.get("archive_id") or "").strip()
+    if not archive_id:
+        raise RuntimeError("人设图生成缺少人设 ID。")
+    try:
+        result = _run_persona_image_cli_for_web(
+            archive_id,
+            prompt=str(payload.get("prompt") or "").strip(),
+            aspect_ratio=str(payload.get("aspect_ratio") or payload.get("aspectRatio") or "1:1").strip() or "1:1",
+            mode=str(payload.get("mode") or "person").strip() or "person",
+            generate_reference_sheet=True,
+        )
+    except HTTPException as exc:
+        raise RuntimeError(str(exc.detail or "人设图生成失败。")) from exc
+    generation = result.get("generation") if isinstance(result.get("generation"), dict) else {}
+    return {
+        "ok": True,
+        "message": "人设图生成完成",
+        "related_persona_id": archive_id,
+        "image_url": str(generation.get("image_url") or result.get("current_reference_url") or "").strip(),
+        "saved_item_id": str(result.get("saved_item_id") or "").strip(),
+        "library": result,
+    }
+
+
 TASK_RUNNERS = {
     "text_to_image": _run_text_to_image_disabled,
     "persona_post_image": _run_persona_post_image_task,
+    "persona_image": _run_persona_image_task,
     "single_image_edit": _run_single_image_edit,
     "get_nano_banana": _run_get_nano_banana,
     "face_swap": _run_face_swap,
@@ -16511,6 +16537,20 @@ def create_app() -> FastAPI:
         typ = str(task_type or "").strip()
         if not typ:
             raise HTTPException(status_code=400, detail="task_type 不能为空")
+        if typ == "persona_image":
+            params = _extract_json_from_text(params_json)
+            params = params if isinstance(params, dict) else {}
+            payload: dict[str, Any] = dict(params)
+            payload["related_persona_id"] = str(payload.get("related_persona_id") or payload.get("archive_id") or "").strip()
+            payload["prompt"] = str(payload.get("prompt") or payload.get("prompt_text") or payload.get("message") or "").strip()
+            payload["aspect_ratio"] = str(payload.get("aspect_ratio") or payload.get("aspectRatio") or "1:1").strip() or "1:1"
+            payload["mode"] = str(payload.get("mode") or "person").strip() or "person"
+            if not payload["related_persona_id"]:
+                raise HTTPException(status_code=400, detail="人设图生成需要关联人设 ID")
+            task_id = _new_id("task")
+            payload["uploaded_files"] = []
+            _enqueue_task(task_id, int(user["id"]), typ, payload)
+            return {"id": task_id, "task_type": typ}
         if typ == "persona_post_image":
             pass
         elif typ != "text_to_image":

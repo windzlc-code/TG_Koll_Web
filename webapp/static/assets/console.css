@@ -1289,7 +1289,9 @@ textarea:focus {
 
 .publish-preview-tabs button {
   display: grid;
-  gap: 2px;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
   min-height: 44px;
   padding: 7px 8px;
   text-align: left;
@@ -1305,15 +1307,41 @@ textarea:focus {
   box-shadow: var(--active-shadow);
 }
 
-.publish-preview-tabs button strong,
-.publish-preview-tabs button span {
+.publish-preview-tab-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--panel-solid);
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.publish-preview-tabs button.is-active .publish-preview-tab-index {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+
+.publish-preview-tab-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.publish-preview-tab-copy strong,
+.publish-preview-tab-copy span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.publish-preview-tabs button span {
+.publish-preview-tab-copy span {
   color: var(--muted);
   font-size: 12px;
   font-weight: 700;
@@ -6435,6 +6463,46 @@ body.persona-touch-dragging .persona-list-card:active {
   padding: 0 10px;
 }
 
+.account-browser-shell {
+  display: grid;
+  gap: 12px;
+}
+
+.account-browser-tabs {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  padding: 4px;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--soft);
+}
+
+.account-browser-tabs button {
+  min-height: 34px;
+  padding: 0 18px;
+  border-radius: 999px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  box-shadow: none;
+}
+
+.account-browser-tabs button.is-active {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--panel-solid);
+}
+
+.account-browser-page {
+  min-width: 0;
+}
+
+.account-browser-page[hidden] {
+  display: none;
+}
+
 .live-browser-panel {
   display: grid;
   gap: 10px;
@@ -6492,7 +6560,7 @@ body.persona-touch-dragging .persona-list-card:active {
   overflow: hidden;
 }
 
-.live-browser-panel[data-live-browser-count]:not([data-live-browser-count="1"]) .live-browser-grid {
+.live-browser-panel[data-live-browser-count]:not([data-live-browser-count="0"]):not([data-live-browser-count="1"]) .live-browser-grid {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
   justify-items: stretch;
 }
@@ -6509,8 +6577,42 @@ body.persona-touch-dragging .persona-list-card:active {
   background: var(--soft);
 }
 
-.live-browser-panel[data-live-browser-count]:not([data-live-browser-count="1"]) .live-browser-card {
+.live-browser-panel[data-live-browser-count]:not([data-live-browser-count="0"]):not([data-live-browser-count="1"]) .live-browser-card {
   max-width: none;
+}
+
+.account-browser-page[data-account-browser-page="browsers"] .live-browser-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  justify-items: stretch;
+}
+
+.account-browser-page[data-account-browser-page="browsers"] .live-browser-card {
+  max-width: none;
+}
+
+.live-browser-placeholder {
+  min-height: 180px;
+  aspect-ratio: 16 / 9;
+  border-style: dashed;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--soft) 88%, var(--panel-solid)), var(--panel-solid));
+}
+
+.live-browser-placeholder-body {
+  display: grid;
+  place-content: center;
+  gap: 6px;
+  min-height: 100%;
+  text-align: center;
+  color: var(--muted);
+}
+
+.live-browser-placeholder-body strong {
+  color: var(--ink);
+}
+
+.live-browser-placeholder-body span {
+  max-width: 280px;
 }
 
 .live-browser-card iframe {
@@ -6936,6 +7038,12 @@ body.persona-touch-dragging .persona-list-card:active {
 @media (max-width: 980px) {
   .console-shell { grid-template-columns: 1fr; }
   .console-sidebar { position: static; height: auto; }
+}
+
+@media (max-width: 760px) {
+  .account-browser-page[data-account-browser-page="browsers"] .live-browser-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 1180px) {

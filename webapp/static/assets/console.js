@@ -110,6 +110,7 @@ function savePersonaConsoleOverview(data) {
 const state = {
   view: "workspace",
   activeModule: "personas",
+  accountBrowserPanel: "accounts",
   workspaceMenuOpen: true,
   setupStatus: null,
   personaGroup: "settings",
@@ -803,13 +804,20 @@ async function openToastTarget(rawTarget) {
   const view = String(target.view || "").trim();
   const moduleId = String(target.module || "").trim();
   const targetPersonaId = String(target.personaId || "").trim();
+  const targetAction = String(target.action || "").trim();
+  if (targetAction === "persona_image_generation" && targetPersonaId) {
+    await openPersonaImageGeneration(targetPersonaId);
+    return;
+  }
   if (view) {
     if (state.view === "workspace" && isPersonaWorkspaceModule() && view !== "workspace" && !(await canLeaveCurrentPersonaDraftEdit("leave"))) return;
     if (state.view === "workspace" && view !== "workspace" && !(await confirmLeaveTransientWorkspaceState())) return;
     setView(view);
   }
   if (targetPersonaId) {
-    setSelectedPersonaId(targetPersonaId);
+    if (state.personas.some((persona) => String(persona.id || "") === targetPersonaId)) {
+      state.selectedPersonaId = targetPersonaId;
+    }
     state.taskQueuePersonaPage = 1;
   }
   if (view === "workspace" && moduleId) {
@@ -821,8 +829,13 @@ async function openToastTarget(rawTarget) {
   if (moduleId === "queue" || view === "tasks") {
     if (target.taskPanel) state.taskQueuePanel = target.taskPanel === "regular" ? "regular" : "persona";
     await loadTasks().catch(() => {});
-    if (target.taskId && target.openDetail) {
-      await showTaskDetail(String(target.taskId || "")).catch(() => {});
+    if (target.taskId && (target.openDetail || target.taskPanel === "regular")) {
+      await showTaskDetail(String(target.taskId || "")).catch((error) => {
+        showToast(error?.detail || error?.message || "任务详情查询失败。", false, {
+          key: `task-detail-error:${target.taskId}`,
+          target: { view: "tasks", taskPanel: target.taskPanel || "regular" },
+        });
+      });
     }
   }
 }
@@ -3878,7 +3891,9 @@ function renderPersonaContentOverview(persona, account, profile) {
 }
 
 function renderPersonaImagePanel(persona) {
-  const imageBusy = isActionLocked("persona", persona.id, "image_generate");
+  const imageRunState = personaGenerateRunState(persona.id);
+  const imageBusy = isActionLocked("persona", persona.id, "image_generate")
+    || (String(imageRunState?.kind || "") === "persona_image" && String(imageRunState?.status || "") === "running");
   const library = personaImageLibraryState(persona.id);
   const libraryItems = Array.isArray(library?.items) ? library.items : [];
   const hasImages = libraryItems.length > 0;
@@ -5036,8 +5051,11 @@ function renderPublishContentPreview(persona = selectedPersona(), source = state
                   data-publish-preview-post="${esc(postId)}"
                   aria-pressed="${active ? "true" : "false"}"
                 >
-                  <strong>第${esc(index + 1)}篇</strong>
-                  <span>${esc(post.title || "未命名")}</span>
+                  <span class="publish-preview-tab-index">${esc(index + 1)}</span>
+                  <span class="publish-preview-tab-copy">
+                    <strong>${esc(post.title || "未命名")}</strong>
+                    <span>${esc(`第${index + 1}篇`)}</span>
+                  </span>
                 </button>`;
             }).join("")}
           </div>
@@ -5159,8 +5177,11 @@ function renderPublishHistoryPreview(persona = selectedPersona()) {
                   data-publish-history-preview="${esc(recordId)}"
                   aria-pressed="${active ? "true" : "false"}"
                 >
-                  <strong>第${esc(index + 1)}条</strong>
-                  <span>${esc(publishHistoryRecordTitle(record, index))}</span>
+                  <span class="publish-preview-tab-index">${esc(index + 1)}</span>
+                  <span class="publish-preview-tab-copy">
+                    <strong>${esc(publishHistoryRecordTitle(record, index))}</strong>
+                    <span>${esc(`第${index + 1}条`)}</span>
+                  </span>
                 </button>`;
             }).join("")}
           </div>
@@ -5856,22 +5877,26 @@ function watchTask(taskId, options = {}) {
   if (state.events) state.events.close();
   const suppressDisconnectWarning = Boolean(options.suppressDisconnectWarning);
   const onDone = typeof options.onDone === "function" ? options.onDone : null;
+  const onError = typeof options.onError === "function" ? options.onError : null;
   syncWatchingTaskChip(taskId);
   state.events = new EventSource(`/api/tasks/${encodeURIComponent(taskId)}/events`, { withCredentials: true });
   state.events.onmessage = (event) => {
     let payload = {};
     try { payload = JSON.parse(event.data || "{}"); } catch {}
     const kind = String(payload.kind || payload.status || "progress");
-    appendEvent(kind, payload.message || payload.detail || kind, {
+    const dataStatus = String(payload?.data?.status || "").trim();
+    const terminalStatus = ["success", "failed"].includes(dataStatus) ? dataStatus : "";
+    const eventKind = terminalStatus || kind;
+    appendEvent(eventKind, payload.message || payload.detail || eventKind, {
       key: `task:${taskId}`,
       taskId,
       taskPanel: options.taskPanel || "regular",
     });
-    if (["success", "failed"].includes(kind)) {
+    if (["success", "failed"].includes(eventKind)) {
       state.events.close();
       state.events = null;
       syncWatchingTaskChip("");
-      if (onDone) onDone(payload);
+      if (onDone) onDone({ ...payload, status: eventKind });
       loadTasks();
     }
   };
@@ -5880,6 +5905,7 @@ function watchTask(taskId, options = {}) {
     if (state.events) state.events.close();
     state.events = null;
     syncWatchingTaskChip("");
+    if (onError) onError();
   };
 }
 
@@ -5898,7 +5924,7 @@ async function submitPersonaPublishTask() {
   const sourceLabel = source === "favorites" ? "收藏推文" : "草稿";
   const account = selectedPublishAccountForPersona(persona);
   if (!account) {
-    showMsg("commandMsg", "当前人设没有可发布的 Threads 或 Instagram 账号，请先绑定账号。", false);
+    await promptPersonaAccountBinding(persona);
     return;
   }
   const lockParts = ["publish", source, persona.id, post.id, account.id];
@@ -5977,7 +6003,7 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
   const account = publishAccountForPersona(persona);
   const cleanAccountId = String(accountId || account?.id || "").trim();
   if (!cleanAccountId || !account) {
-    showMsg(messageId, "当前人设没有可用的 Threads 或 Instagram 执行账号。", false);
+    await promptPersonaAccountBinding(persona);
     return null;
   }
   const rows = publishSourceRows(persona, source);
@@ -6673,6 +6699,39 @@ async function clearPersonaAutomationTasksFor(personaId, messageId = "commandMsg
   if (state.view === "tasks") await loadTasks().catch(() => {});
 }
 
+async function openPersonaAccountBindingPage(persona = selectedPersona()) {
+  const personaId = String(persona?.id || state.selectedPersonaId || "").trim();
+  if (!personaId) {
+    showMsg("commandMsg", "请先选择一个人设。", false);
+    return false;
+  }
+  state.selectedPersonaId = personaId;
+  state.activeModule = "personas";
+  if (state.view !== "workspace") setView("workspace");
+  state.personaCreateMode = false;
+  state.personaGroup = "settings";
+  setPersonaGroupStep("settings", "account", selectedPersonaProfile());
+  await loadPersonaProfile(personaId, { force: true }).catch(() => {});
+  renderWorkspace();
+  window.requestAnimationFrame(() => {
+    const target = document.querySelector("[data-persona-create-account]");
+    target?.scrollIntoView({ block: "center", behavior: "smooth" });
+    target?.focus({ preventScroll: true });
+  });
+  return true;
+}
+
+async function promptPersonaAccountBinding(persona = selectedPersona()) {
+  const confirmed = await openConsoleModal({
+    title: "绑定发布账号",
+    message: "当前人设没有可用的 Threads 或 Instagram 执行账号。请先绑定账号后再发布。",
+    confirmText: "绑定账号",
+    cancelText: "取消",
+  });
+  if (!confirmed) return false;
+  return openPersonaAccountBindingPage(persona);
+}
+
 async function executeSimpleFlow() {
   if (state.activeModule === "queue") {
     setView("tasks");
@@ -6720,7 +6779,12 @@ async function executeSimpleFlow() {
       }
     }
     if (!accountId) {
-      showMsg("commandMsg", state.activeModule === "publishing" ? "当前人设没有可用的 Threads 或 Instagram 执行账号。" : "请先选择执行账号。", false);
+      if (state.activeModule === "publishing") {
+        const persona = state.personas.find((item) => String(item.id) === String(personaId)) || selectedPersona();
+        await promptPersonaAccountBinding(persona);
+        return;
+      }
+      showMsg("commandMsg", "请先选择执行账号。", false);
       return;
     }
     const taskType = $("simplePrimary")?.value || selectedBranch(state.activeModule);
@@ -8350,6 +8414,19 @@ function showPersonaGenerateRunToast(personaId, runState) {
   const persona = state.personas.find((item) => String(item?.id || "") === String(personaId || ""));
   const display = personaGenerateRunDisplay(persona, runState);
   if (!display?.label) return;
+  const kind = String(runState?.kind || "").trim();
+  const target = kind === "persona_image"
+    ? {
+      view: "workspace",
+      module: "personas",
+      personaId,
+      action: "persona_image_generation",
+    }
+    : {
+      view: "workspace",
+      module: "tweet_generation",
+      personaId,
+    };
   const ok = !display.isError;
   const message = display.isError && runState?.error
     ? `${display.label}：${runState.error}`
@@ -8359,11 +8436,7 @@ function showPersonaGenerateRunToast(personaId, runState) {
     key: `persona-generate:${personaId}:${display.kind}`,
     kind: display.isRunning ? "running" : (display.isError ? "error" : "success"),
     persistent: display.isRunning,
-    target: {
-      view: "workspace",
-      module: "tweet_generation",
-      personaId,
-    },
+    target,
     duration,
   });
 }
@@ -9002,24 +9075,70 @@ async function submitPersonaImageGeneration() {
   clearMsg("commandMsg");
   renderPersonaDetail();
   try {
-    const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/images/generate`, {
+    const body = new FormData();
+    body.append("task_type", "persona_image");
+    body.append("params_json", JSON.stringify({
+      related_persona_id: persona.id,
+      aspect_ratio: "1:1",
+      mode: "person",
+    }));
+    const result = await api("/api/tasks/submit", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
+      body,
     });
-    state.personaImageLibraries[String(persona.id)] = result;
-    await Promise.all([
-      loadPersonas(),
-      loadPersonaProfile(persona.id, { force: true }).catch(() => {}),
-    ]);
-    renderPersonaDetail();
+    const taskId = String(result.id || "").trim();
+    if (!taskId) throw new Error("人设图生成任务没有返回任务 ID。");
+    appendEvent("queued", `人设图生成任务已创建：${taskId}`, {
+      key: `task:${taskId}`,
+      taskId,
+      taskPanel: "regular",
+      personaId: persona.id,
+      openDetail: true,
+    });
     setPersonaGenerateRunState(persona.id, {
       kind: "persona_image",
-      status: "success",
-      message: "人设图已生成",
+      status: "running",
+      message: "人设图生成任务已提交",
+      taskId,
       error: "",
     });
+    watchTask(taskId, {
+      suppressDisconnectWarning: true,
+      taskPanel: "regular",
+      onDone: async (payload) => {
+        const doneKind = String(payload?.status || payload?.data?.status || payload?.kind || "").trim();
+        const ok = doneKind === "success";
+        await Promise.all([
+          loadPersonaImageLibrary(persona.id, { force: true }).catch(() => {}),
+          loadPersonas().catch(() => {}),
+          loadPersonaProfile(persona.id, { force: true }).catch(() => {}),
+        ]);
+        setPersonaGenerateRunState(persona.id, {
+          kind: "persona_image",
+          status: ok ? "success" : "error",
+          message: ok ? "人设图已生成" : "人设图生成失败",
+          taskId,
+          error: ok ? "" : (payload?.message || payload?.detail || "生成失败"),
+        });
+        setActionLocked(lockParts, false);
+        if (isPersonaWorkspaceModule()) renderPersonaDetail();
+      },
+      onError: () => {
+        setActionLocked(lockParts, false);
+        setPersonaGenerateRunState(persona.id, {
+          kind: "persona_image",
+          status: "error",
+          message: "人设图任务监听已断开",
+          taskId,
+          error: "可在通用队列继续查看任务状态。",
+        });
+        if (isPersonaWorkspaceModule()) renderPersonaDetail();
+      },
+    });
+    await loadTasks().catch(() => {});
+    renderPersonaDetail();
   } catch (error) {
+    setActionLocked(lockParts, false);
     setPersonaGenerateRunState(persona.id, {
       kind: "persona_image",
       status: "error",
@@ -9028,7 +9147,6 @@ async function submitPersonaImageGeneration() {
     });
     throw error;
   } finally {
-    setActionLocked(lockParts, false);
     if (isPersonaWorkspaceModule()) renderPersonaDetail();
   }
 }
@@ -11282,6 +11400,7 @@ function updateAccountStatusViews() {
 }
 
 function renderSocialAccounts() {
+  syncAccountBrowserPanel();
   const select = $("socialAccount");
   if (select) {
     const accounts = uniqueAccountOptions(state.socialAccounts);
@@ -11326,6 +11445,27 @@ function renderSocialAccounts() {
   }).join("") : `<div class="empty-state">暂无执行账号，请先在人设看板或接口中添加账号。</div>`;
 }
 
+function setAccountBrowserPanel(panel = "accounts") {
+  state.accountBrowserPanel = panel === "browsers" ? "browsers" : "accounts";
+  syncAccountBrowserPanel();
+}
+
+function syncAccountBrowserPanel() {
+  const active = state.accountBrowserPanel === "browsers" ? "browsers" : "accounts";
+  const shell = $("accountBrowserShell");
+  if (shell) shell.dataset.accountBrowserPanel = active;
+  document.querySelectorAll("[data-account-browser-tab]").forEach((button) => {
+    const selected = String(button.dataset.accountBrowserTab || "") === active;
+    button.classList.toggle("is-active", selected);
+    button.setAttribute("aria-selected", selected ? "true" : "false");
+  });
+  document.querySelectorAll("[data-account-browser-page]").forEach((page) => {
+    const selected = String(page.dataset.accountBrowserPage || "") === active;
+    page.classList.toggle("is-active", selected);
+    page.hidden = !selected;
+  });
+}
+
 function renderLiveBrowserSessions() {
   const host = $("liveBrowserSessions");
   if (!host) return;
@@ -11352,29 +11492,35 @@ function renderLiveBrowserSessions() {
     return;
   }
   host.dataset.liveBrowserSessionKey = sessionKey;
-  if (!sessions.length) {
-    host.innerHTML = `
-      <section class="live-browser-panel is-empty">
-        <div>
-          <strong>实时浏览器监控</strong>
-          <span>暂无运行中的浏览器窗口。打开登录、检查登录或发布任务运行后，这里会自动显示可交互窗口。</span>
-        </div>
-      </section>
-    `;
-    return;
-  }
   host.innerHTML = `
-    <section class="live-browser-panel" data-live-browser-count="${esc(String(sessions.length))}">
+    <section class="live-browser-panel${sessions.length ? "" : " is-empty"}" data-live-browser-count="${esc(String(sessions.length))}">
       <div class="live-browser-head">
         <div>
           <strong>实时浏览器监控</strong>
-          <span>${esc(`${sessions.length} 个浏览器正在运行，可在下方窗口直接交互`)}</span>
+          <span>${esc(sessions.length ? `${sessions.length} 个浏览器正在运行，可在下方窗口直接交互` : "暂无运行中的浏览器窗口。打开登录、检查登录或发布任务运行后会自动追加到下方。")}</span>
         </div>
       </div>
       <div class="live-browser-grid">
         ${sessions.map((session) => renderLiveBrowserSession(session)).join("")}
+        ${renderLiveBrowserPlaceholders(sessions.length)}
       </div>
     </section>
+  `;
+}
+
+function renderLiveBrowserPlaceholders(sessionCount = 0) {
+  const count = Math.max(1, Math.min(2, 2 - Number(sessionCount || 0)));
+  return Array.from({ length: count }, (_, index) => renderLiveBrowserPlaceholder(index + 1)).join("");
+}
+
+function renderLiveBrowserPlaceholder(index = 1) {
+  return `
+    <article class="live-browser-card live-browser-placeholder" aria-label="实时浏览器占位框 ${index}">
+      <div class="live-browser-placeholder-body">
+        <strong>等待浏览器窗口 ${index}</strong>
+        <span>运行账号登录、检测或发布任务后，实时画面会添加到这里。</span>
+      </div>
+    </article>
   `;
 }
 
@@ -13094,7 +13240,12 @@ function bindEvents() {
   if ($("socialAccount")) $("socialAccount").addEventListener("change", syncStandaloneSocialForm);
   if ($("socialPlatform")) $("socialPlatform").addEventListener("change", syncStandaloneSocialForm);
   if ($("runSocialOnce")) $("runSocialOnce").addEventListener("click", () => api("/api/persona_dashboard/automation/worker/run_once", { method: "POST" }).then(loadSocial).catch((error) => showMsg("socialMsg", error.detail || error.message || "执行失败", false)));
-  if ($("accountGrid")) $("accountGrid").addEventListener("click", (event) => {
+  if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("click", (event) => {
+    const tab = event.target.closest("[data-account-browser-tab]");
+    if (tab) {
+      setAccountBrowserPanel(tab.dataset.accountBrowserTab || "accounts");
+      return;
+    }
     const open = event.target.closest("[data-social-open-login]");
     const check = event.target.closest("[data-social-check-login]");
     const dedupe = event.target.closest("[data-social-dedupe-accounts]");
@@ -13120,8 +13271,6 @@ function bindEvents() {
           .catch((error) => showMsg("socialMsg", error.detail || error.message || "删除账号失败", false));
       });
     }
-  });
-  if ($("liveBrowserSessions")) $("liveBrowserSessions").addEventListener("click", (event) => {
     const fullscreen = event.target.closest("[data-live-browser-fullscreen]");
     if (fullscreen) requestLiveBrowserFullscreen(fullscreen.dataset.liveBrowserFullscreen || "");
     const cancel = event.target.closest("[data-social-cancel]");
