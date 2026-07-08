@@ -12713,8 +12713,6 @@ def _persona_publish_account_for_archive(
     account_status = str(account.get("status") or "").strip().lower()
     if account_status == "disabled":
         raise HTTPException(status_code=400, detail="当前执行账号已禁用。")
-    if account_status != "ready":
-        raise HTTPException(status_code=400, detail="当前执行账号未处于可发布状态，请先在浏览器账号里完成登录或重新检测。")
     if str(account.get("platform") or "").strip().lower() not in {"instagram", "threads"}:
         raise HTTPException(status_code=400, detail="当前 Web 发布链路只支持 Instagram 或 Threads 浏览器发布。")
     return account
@@ -12743,6 +12741,59 @@ def _latest_successful_social_task_for_account(account_id: str, task_types: list
     return dict(row) if row else None
 
 
+def _active_social_task_for_account(account_id: str, task_types: list[str]) -> dict[str, Any] | None:
+    clean_account_id = str(account_id or "").strip()
+    wanted = [str(item or "").strip() for item in (task_types or []) if str(item or "").strip()]
+    if not clean_account_id or not wanted:
+        return None
+    placeholders = ",".join("?" for _ in wanted)
+    params = [clean_account_id, *wanted]
+    with db() as conn:
+        row = conn.execute(
+            f"""
+            SELECT *
+            FROM social_automation_tasks
+            WHERE account_id = ?
+              AND status IN ('queued', 'running')
+              AND task_type IN ({placeholders})
+            ORDER BY priority ASC, scheduled_at ASC, created_at DESC
+            LIMIT 1
+            """,
+            tuple(params),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def _ensure_publish_login_task(account: dict[str, Any], *, scheduled_at: int | float = 0) -> dict[str, Any] | None:
+    account_id = str(account.get("id") or "").strip()
+    if not account_id:
+        return None
+    account_status = str(account.get("status") or "").strip().lower()
+    login_check = _latest_successful_social_task_for_account(account_id, ["check_login", "open_login"])
+    if account_status == "ready" and login_check:
+        return None
+    active = _active_social_task_for_account(account_id, ["open_login", "check_login"])
+    if active:
+        return active
+    platform = str(account.get("platform") or "threads").strip().lower() or "threads"
+    return create_social_task(
+        SocialTaskPayload(
+            persona_id=str(account.get("persona_id") or "").strip(),
+            account_id=account_id,
+            platform=platform,
+            task_type="open_login",
+            priority=20,
+            scheduled_at=scheduled_at or 0,
+            payload={
+                "auto_submit": True,
+                "login_wait_seconds": 180,
+                "reason": "publish_before_login",
+            },
+            max_retries=0,
+        )
+    )
+
+
 def _publish_persona_archive_post(
     archive_id: str,
     post_id: str,
@@ -12769,9 +12820,7 @@ def _publish_persona_archive_post(
         raise HTTPException(status_code=400, detail="推文草稿内容为空，不能发布。")
     account = _persona_publish_account_for_archive(clean_archive_id, payload.account_id, payload.platform)
     platform = str(account.get("platform") or "instagram").strip().lower() or "instagram"
-    login_check = _latest_successful_social_task_for_account(str(account.get("id") or ""), ["check_login", "open_login"])
-    if not login_check:
-        raise HTTPException(status_code=400, detail="发布前请先完成一次登录检查，确认当前执行账号仍然可用。")
+    login_task = _ensure_publish_login_task(account, scheduled_at=payload.scheduled_at or 0)
     if not media_paths:
         media_paths = _post_media_paths_for_publish(post)
     if platform == "instagram" and not media_paths:
@@ -12793,11 +12842,13 @@ def _publish_persona_archive_post(
                 "archive_post_id": clean_post_id,
                 "archive_post_title": str(post.get("title") or ""),
                 "archive_post_source": source_name,
+                "auto_login_before_publish": bool(login_task),
+                "login_task_id": str((login_task or {}).get("id") or ""),
             },
             max_retries=max(0, min(int(payload.max_retries or 2), 5)),
         )
     )
-    return {"ok": True, "persona_id": clean_archive_id, "post_id": clean_post_id, "source": source_name, "task": task}
+    return {"ok": True, "persona_id": clean_archive_id, "post_id": clean_post_id, "source": source_name, "login_task": login_task, "task": task}
 
 
 def _archive_posts_for_matrix_source(archive: dict[str, Any], source: str) -> list[dict[str, Any]]:
@@ -12870,10 +12921,7 @@ def _publish_persona_matrix(payload: PersonaDashboardMatrixPublishPayload) -> di
         persona_name = str(archive.get("name") or archive.get("title") or persona_id).strip()
         try:
             account = _persona_publish_account_for_archive(persona_id, "", platform)
-            login_check = _latest_successful_social_task_for_account(str(account.get("id") or ""), ["check_login", "open_login"])
-            if not login_check:
-                errors.append({"persona_id": persona_id, "persona_name": persona_name, "reason": "发布前需要先完成登录检查"})
-                continue
+            login_task = _ensure_publish_login_task(account, scheduled_at=payload.scheduled_at or 0)
             rows = _archive_posts_for_matrix_source(archive, source)
             candidates: list[dict[str, Any]] = []
             for post in rows:
@@ -12929,6 +12977,8 @@ def _publish_persona_matrix(payload: PersonaDashboardMatrixPublishPayload) -> di
                             "archive_post_title": str(post.get("title") or ""),
                             "archive_post_source": source,
                             "matrix_publish_batch_id": batch_id,
+                            "auto_login_before_publish": bool(login_task),
+                            "login_task_id": str((login_task or {}).get("id") or ""),
                         },
                         max_retries=max(0, min(int(payload.max_retries or 2), 5)),
                     )
@@ -12940,6 +12990,7 @@ def _publish_persona_matrix(payload: PersonaDashboardMatrixPublishPayload) -> di
                     "post_title": str(post.get("title") or ""),
                     "account_id": str(account.get("id") or ""),
                     "platform": platform,
+                    "login_task": login_task,
                     "task": task,
                 })
         except HTTPException as exc:
