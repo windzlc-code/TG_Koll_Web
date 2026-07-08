@@ -6592,26 +6592,29 @@ body.persona-touch-dragging .persona-list-card:active {
 .account-pool-add-button {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  min-height: 28px;
-  padding: 0 10px;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 14px;
   border-radius: 8px;
+  background: var(--panel-solid);
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
   white-space: nowrap;
 }
 
 .account-pool-add-button span {
   display: grid;
   place-items: center;
-  width: 16px;
-  height: 16px;
+  width: 20px;
+  height: 20px;
   border: 1px solid currentColor;
   border-radius: 999px;
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1;
 }
 
 .account-pool-add-button strong {
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .account-create-form {
@@ -6626,7 +6629,7 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .account-create-form label:last-child {
-  grid-column: 1 / -1;
+  grid-column: auto;
 }
 
 .account-create-form span {
@@ -6659,6 +6662,16 @@ body.persona-touch-dragging .persona-list-card:active {
   gap: 10px;
 }
 
+.account-pool-create-head > button {
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: 8px;
+  background: var(--panel-solid);
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+  font-size: 14px;
+}
+
 .account-pool-create-head > div {
   display: grid;
   gap: 3px;
@@ -6680,9 +6693,14 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .account-pool-create-actions button {
+  min-height: 38px;
+  padding: 0 18px;
+  border-radius: 8px;
   background: var(--ink);
   border-color: var(--ink);
   color: var(--panel-solid);
+  font-size: 15px;
+  font-weight: 850;
 }
 
 .account-pool-platforms,
@@ -6729,11 +6747,25 @@ body.persona-touch-dragging .persona-list-card:active {
   max-width: 480px;
   min-height: 118px;
   border-color: var(--line);
+  cursor: pointer;
 }
 
 .account-pool-card.is-active {
   border-color: var(--ink);
   box-shadow: inset 0 0 0 1px var(--ink);
+}
+
+.account-pool-card:hover {
+  border-color: var(--line-strong);
+}
+
+.account-pool-card:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.account-pool-card.is-active:hover {
+  border-color: var(--ink);
 }
 
 .account-pool-card-main {
@@ -6749,21 +6781,6 @@ body.persona-touch-dragging .persona-list-card:active {
   color: var(--ink);
   text-align: left;
   box-shadow: none;
-}
-
-.account-pool-check {
-  flex: 0 0 auto;
-  width: 20px;
-  height: 20px;
-  border: 1px solid var(--line-strong);
-  border-radius: 6px;
-  background: var(--panel-solid);
-}
-
-.account-pool-check.is-checked {
-  background: var(--ink);
-  border-color: var(--ink);
-  box-shadow: inset 0 0 0 4px var(--panel-solid);
 }
 
 .account-pool-card-copy {

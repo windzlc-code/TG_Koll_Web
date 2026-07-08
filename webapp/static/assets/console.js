@@ -11754,15 +11754,14 @@ function renderAccountPoolCards(accounts, selectedAccount) {
           || isActionLocked("social", account.id, "open_login")
           || activeSocialTaskFor({ accountId: account.id, taskType: "open_login" });
         return `
-          <article class="account-card account-pool-card ${selected ? "is-active" : ""}" data-account-pool-account="${esc(account.id)}">
-            <button type="button" class="account-pool-card-main" data-account-pool-toggle="${esc(account.id)}" aria-pressed="${selected ? "true" : "false"}">
-              <span class="account-pool-check ${selected ? "is-checked" : ""}" aria-hidden="true"></span>
+          <article class="account-card account-pool-card ${selected ? "is-active" : ""}" data-account-pool-account="${esc(account.id)}" data-account-pool-toggle="${esc(account.id)}" role="button" tabindex="0" aria-pressed="${selected ? "true" : "false"}">
+            <div class="account-pool-card-main">
               <span class="account-pool-card-copy">
                 <strong>${esc(account.username || account.id)}</strong>
                 <small>${esc(account.display_name || account.id || "")}</small>
               </span>
               <span class="status ${esc(account.status)}">${esc(statusLabel(account.status))}</span>
-            </button>
+            </div>
             <div class="account-card-meta">
               <span>${esc(persona ? `已绑定：${persona.name || persona.id}` : "未绑定人设")}</span>
               <span>${esc(account.profile_dir ? "已配置浏览器环境" : "未配置浏览器环境")}</span>
@@ -11831,10 +11830,6 @@ function renderAccountPoolCreatePanel() {
         <label>
           <span>显示名称（可选）</span>
           <input id="accountPoolDisplayName" value="${esc(accountPoolDraftValue("display_name"))}" placeholder="用于区分账号，可留空" autocomplete="off" />
-        </label>
-        <label>
-          <span>浏览器资料目录（可选）</span>
-          <input id="accountPoolProfileDir" value="${esc(accountPoolDraftValue("profile_dir"))}" placeholder="留空则系统自动创建" autocomplete="off" />
         </label>
       </div>
       <div class="account-pool-create-actions">
@@ -13920,7 +13915,8 @@ function bindEvents() {
       return;
     }
     const accountToggle = event.target.closest("[data-account-pool-toggle]");
-    if (accountToggle) {
+    const accountAction = event.target.closest("[data-social-open-login], [data-account-pool-unbind], [data-social-delete-account]");
+    if (accountToggle && !accountAction) {
       toggleAccountPoolAccount(accountToggle.dataset.accountPoolToggle || "");
       renderSocialAccounts();
       return;
@@ -13967,6 +13963,14 @@ function bindEvents() {
     }
     const cancel = event.target.closest("[data-social-cancel]");
     if (cancel) cancelSocialAutomationTask(cancel.dataset.socialCancel, "socialMsg").catch((error) => showMsg("socialMsg", error.detail || error.message || "停止任务失败", false));
+  });
+  if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("keydown", (event) => {
+    if (!["Enter", " "].includes(event.key)) return;
+    const accountToggle = event.target.closest("[data-account-pool-toggle]");
+    if (!accountToggle || !event.target.closest(".account-pool-card")) return;
+    event.preventDefault();
+    toggleAccountPoolAccount(accountToggle.dataset.accountPoolToggle || "");
+    renderSocialAccounts();
   });
   if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("input", (event) => {
     if (event.target.closest(".account-pool-create-panel")) syncAccountPoolCreateDraftFromForm();
