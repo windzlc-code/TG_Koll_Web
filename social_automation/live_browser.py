@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import atexit
+import contextlib
+import json
 import os
 import shutil
 import socket
@@ -36,6 +38,7 @@ class LiveBrowserSession:
 
 _SESSIONS: dict[str, LiveBrowserSession] = {}
 _LOCK = threading.Lock()
+_ORPHAN_CLEANUP_DONE = False
 
 
 def live_browser_enabled() -> bool:
@@ -53,6 +56,8 @@ def start_live_browser_session(
     if not live_browser_enabled():
         return None
 
+    _cleanup_orphaned_live_browser_processes(logger)
+
     missing = [name for name in ("Xvnc",) if not shutil.which(name)]
     kasm_www_dir = Path(os.getenv("SOCIAL_AUTOMATION_KASMVNC_WWW_DIR", "/usr/share/kasmvnc/www"))
     if missing or not kasm_www_dir.exists():
@@ -65,8 +70,8 @@ def start_live_browser_session(
         )
         return None
 
-    width = _safe_int(os.getenv("SOCIAL_AUTOMATION_LIVE_BROWSER_WIDTH"), 720)
-    height = _safe_int(os.getenv("SOCIAL_AUTOMATION_LIVE_BROWSER_HEIGHT"), 1280)
+    width = _safe_int(os.getenv("SOCIAL_AUTOMATION_LIVE_BROWSER_WIDTH"), 1600)
+    height = _safe_int(os.getenv("SOCIAL_AUTOMATION_LIVE_BROWSER_HEIGHT"), 900)
     task_id = str(task.get("id") or f"task_{int(time.time())}")
     account_id = str(account.get("id") or "")
     session_id = f"live_{task_id}"
@@ -126,6 +131,7 @@ def start_live_browser_session(
         session.status = "running"
         with _LOCK:
             _SESSIONS[session.id] = session
+        _save_session_registry(session)
         _log(
             logger,
             "info",
@@ -146,6 +152,7 @@ def stop_live_browser_session(session_id: str, *, session: LiveBrowserSession | 
     with _LOCK:
         target = session or _SESSIONS.pop(str(session_id), None)
     if not target:
+        _remove_session_registry(str(session_id))
         return
     for process in reversed(target.processes):
         if process.poll() is not None:
@@ -160,14 +167,18 @@ def stop_live_browser_session(session_id: str, *, session: LiveBrowserSession | 
                 pass
     if target.temp_dir:
         shutil.rmtree(target.temp_dir, ignore_errors=True)
+    _remove_session_registry(target.id)
 
 
 def list_live_browser_sessions() -> list[dict[str, Any]]:
     with _LOCK:
         sessions = list(_SESSIONS.values())
+    registry_sessions = _load_registry_sessions()
+    known_ids = {session.id for session in sessions}
+    sessions.extend(session for session in registry_sessions if session.id not in known_ids)
     rows: list[dict[str, Any]] = []
     for session in sessions:
-        alive = all(process.poll() is None for process in session.processes)
+        alive = _session_processes_alive(session)
         if not alive:
             stop_live_browser_session(session.id)
             continue
@@ -179,8 +190,10 @@ def get_live_browser_session(session_id: str) -> LiveBrowserSession | None:
     with _LOCK:
         session = _SESSIONS.get(str(session_id))
     if not session:
+        session = _load_registry_session(str(session_id))
+    if not session:
         return None
-    if not all(process.poll() is None for process in session.processes):
+    if not _session_processes_alive(session):
         stop_live_browser_session(session.id)
         return None
     return session
@@ -188,7 +201,7 @@ def get_live_browser_session(session_id: str) -> LiveBrowserSession | None:
 
 def _session_public(session: LiveBrowserSession) -> dict[str, Any]:
     ws_path = f"api/persona_dashboard/automation/browser_sessions/{session.id}/ws"
-    view_path = f"/api/persona_dashboard/automation/browser_sessions/{session.id}/kasm/vnc.html?autoconnect=1&resize=scale&reconnect=1&path={ws_path}"
+    kasm_path = f"/api/persona_dashboard/automation/browser_sessions/{session.id}/kasm/vnc.html?autoconnect=1&resize=scale&reconnect=1&path={ws_path}"
     return {
         "id": session.id,
         "task_id": session.task_id,
@@ -202,13 +215,104 @@ def _session_public(session: LiveBrowserSession) -> dict[str, Any]:
         "web_port": session.web_port,
         "backend": session.backend,
         "ws_path": ws_path,
-        "view_path": view_path,
-        "novnc_path": view_path,
+        "view_path": kasm_path,
+        "novnc_path": kasm_path,
+        "kasm_path": kasm_path,
         "password": "",
         "started_at": session.started_at,
         "status": session.status,
         "error": session.error,
     }
+
+
+def _registry_path() -> Path:
+    default_root = Path(__file__).resolve().parent.parent / "webapp_data"
+    data_root = Path(os.getenv("WEBAPP_DATA_DIR", str(default_root))).resolve()
+    return data_root / "social_automation" / "live_browser_sessions.json"
+
+
+def _read_registry() -> dict[str, dict[str, Any]]:
+    path = _registry_path()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    sessions = data.get("sessions", data)
+    if not isinstance(sessions, dict):
+        return {}
+    return {str(key): value for key, value in sessions.items() if isinstance(value, dict)}
+
+
+def _write_registry(sessions: dict[str, dict[str, Any]]) -> None:
+    path = _registry_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"sessions": sessions}, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _save_session_registry(session: LiveBrowserSession) -> None:
+    sessions = _read_registry()
+    sessions[session.id] = _session_public(session)
+    _write_registry(sessions)
+
+
+def _remove_session_registry(session_id: str) -> None:
+    sessions = _read_registry()
+    if sessions.pop(str(session_id), None) is not None:
+        _write_registry(sessions)
+
+
+def _load_registry_sessions() -> list[LiveBrowserSession]:
+    return [session for session in (_session_from_registry(row) for row in _read_registry().values()) if session is not None]
+
+
+def _load_registry_session(session_id: str) -> LiveBrowserSession | None:
+    row = _read_registry().get(str(session_id))
+    if not row:
+        return None
+    return _session_from_registry(row)
+
+
+def _session_from_registry(row: dict[str, Any]) -> LiveBrowserSession | None:
+    session_id = str(row.get("id") or "").strip()
+    if not session_id:
+        return None
+    return LiveBrowserSession(
+        id=session_id,
+        task_id=str(row.get("task_id") or ""),
+        account_id=str(row.get("account_id") or ""),
+        account_username=str(row.get("account_username") or row.get("account_id") or ""),
+        platform=str(row.get("platform") or ""),
+        task_type=str(row.get("task_type") or ""),
+        display=str(row.get("display") or ""),
+        width=_safe_int(row.get("width"), 1600),
+        height=_safe_int(row.get("height"), 900),
+        vnc_port=_safe_int(row.get("web_port") or row.get("vnc_port"), 0),
+        web_port=_safe_int(row.get("web_port") or row.get("vnc_port"), 0),
+        started_at=_safe_int(row.get("started_at"), int(time.time())),
+        backend=str(row.get("backend") or "kasmvnc"),
+        status=str(row.get("status") or "running"),
+        error=str(row.get("error") or ""),
+    )
+
+
+def _session_processes_alive(session: LiveBrowserSession) -> bool:
+    if session.processes:
+        return all(process.poll() is None for process in session.processes)
+    return _tcp_port_open(session.web_port)
+
+
+def _tcp_port_open(port: int) -> bool:
+    if not port:
+        return False
+    try:
+        with socket.create_connection(("127.0.0.1", int(port)), timeout=0.35):
+            return True
+    except OSError:
+        return False
 
 
 def _allocate_display_number() -> int:
@@ -243,6 +347,37 @@ def _allocate_tcp_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+def _cleanup_orphaned_live_browser_processes(logger: Any | None = None) -> None:
+    global _ORPHAN_CLEANUP_DONE
+    with _LOCK:
+        if _ORPHAN_CLEANUP_DONE or _SESSIONS:
+            return
+        _ORPHAN_CLEANUP_DONE = True
+    if str(os.getenv("SOCIAL_AUTOMATION_LIVE_BROWSER_CLEAN_ORPHANS", "1")).strip().lower() in {"0", "false", "no", "off"}:
+        return
+
+    patterns = [
+        r"Xvnc :9[0-9]\b",
+        r"Xvnc :1[0-3][0-9]\b",
+        r"camoufox-bin .*social_automation/profiles/",
+    ]
+    stopped = 0
+    for pattern in patterns:
+        try:
+            result = subprocess.run(["pgrep", "-f", pattern], check=False, capture_output=True, text=True, timeout=3)
+        except Exception:
+            continue
+        pids = [pid.strip() for pid in (result.stdout or "").splitlines() if pid.strip().isdigit()]
+        for pid in pids:
+            try:
+                subprocess.run(["kill", "-TERM", pid], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+                stopped += 1
+            except Exception:
+                continue
+    if stopped:
+        _log(logger, "info", "live_browser_orphan_cleanup", "已清理上次遗留的实时浏览器进程", {"count": stopped})
 
 
 def _wait_for_live_browser_ready(session: LiveBrowserSession, *, timeout_seconds: float = 8.0) -> None:

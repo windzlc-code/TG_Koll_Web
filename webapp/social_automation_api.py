@@ -196,7 +196,7 @@ def register_social_automation_routes(app: FastAPI) -> None:
         payload: dict[str, Any] | None = Body(default=None),
         _user: dict[str, Any] = Depends(get_current_user),
     ):
-        wait_seconds = int(os.getenv("SOCIAL_AUTOMATION_LOGIN_WAIT_SECONDS", "600"))
+        wait_seconds = max(3600, int(os.getenv("SOCIAL_AUTOMATION_LOGIN_WAIT_SECONDS", "3600")))
         body = payload if isinstance(payload, dict) else {}
         task_payload = body.get("payload") if isinstance(body.get("payload"), dict) else body
         task_payload = dict(task_payload or {})
@@ -332,6 +332,8 @@ async def _proxy_live_browser_websocket(websocket: WebSocket, session_id: str) -
             max_size=None,
             subprotocols=[subprotocol or "binary"],
             origin=f"http://127.0.0.1:{int(session.web_port)}",
+            ping_interval=None,
+            close_timeout=1,
         )
     except Exception:
         with contextlib.suppress(Exception):

@@ -710,6 +710,7 @@ function eventKindLabel(kind) {
 }
 
 const toastTimers = new WeakMap();
+const dismissedPersistentToastKeys = new Set();
 const uploadPreviewUrls = new WeakMap();
 
 function ensureToastHost() {
@@ -724,8 +725,11 @@ function ensureToastHost() {
   return host;
 }
 
-function dismissToast(toast) {
+function dismissToast(toast, options = {}) {
   if (!toast) return;
+  if (options.manual && toast.dataset.toastPersistent === "true" && toast.dataset.toastKey) {
+    dismissedPersistentToastKeys.add(toast.dataset.toastKey);
+  }
   const timer = toastTimers.get(toast);
   if (timer) window.clearTimeout(timer);
   toastTimers.delete(toast);
@@ -741,53 +745,168 @@ function removeToastNow(toast) {
   toast.remove();
 }
 
+function toastTargetForKind(kind, options = {}) {
+  const normalized = String(kind || "").trim();
+  if (options.target && typeof options.target === "object") return options.target;
+  if (options.taskId) {
+    return {
+      view: "tasks",
+      taskPanel: options.taskPanel || "regular",
+      taskId: String(options.taskId || "").trim(),
+      personaId: String(options.personaId || "").trim(),
+      openDetail: Boolean(options.openDetail),
+    };
+  }
+  if (["queued", "queue", "progress", "running"].includes(normalized)) {
+    return { view: "tasks", taskPanel: options.taskPanel || "persona" };
+  }
+  if (["persona"].includes(normalized)) {
+    return { view: "workspace", module: "personas" };
+  }
+  if (["browser"].includes(normalized)) {
+    return { view: "social" };
+  }
+  return null;
+}
+
+function applyToastMeta(toast, { key, ok, message, persistent, target }) {
+  if (!toast) return;
+  toast.className = [
+    "toast-message",
+    ok ? "is-ok" : "is-bad",
+    persistent ? "is-persistent" : "",
+    target ? "is-clickable" : "",
+  ].filter(Boolean).join(" ");
+  toast.dataset.toastKey = key;
+  toast.dataset.toastPersistent = persistent ? "true" : "false";
+  if (target) {
+    toast.dataset.toastTarget = JSON.stringify(target);
+    toast.setAttribute("role", "button");
+    toast.tabIndex = 0;
+    toast.title = target.taskId ? "点击打开任务队列" : "点击跳转到相关页面";
+  } else {
+    delete toast.dataset.toastTarget;
+    toast.setAttribute("role", ok ? "status" : "alert");
+    toast.removeAttribute("tabindex");
+    toast.removeAttribute("title");
+  }
+  const messageNode = toast.querySelector(".toast-message-text");
+  if (messageNode) messageNode.textContent = message;
+}
+
+async function openToastTarget(rawTarget) {
+  let target = rawTarget;
+  if (typeof rawTarget === "string") {
+    try { target = JSON.parse(rawTarget); } catch { target = null; }
+  }
+  if (!target || typeof target !== "object") return;
+  const view = String(target.view || "").trim();
+  const moduleId = String(target.module || "").trim();
+  const targetPersonaId = String(target.personaId || "").trim();
+  if (view) {
+    if (state.view === "workspace" && isPersonaWorkspaceModule() && view !== "workspace" && !(await canLeaveCurrentPersonaDraftEdit("leave"))) return;
+    if (state.view === "workspace" && view !== "workspace" && !(await confirmLeaveTransientWorkspaceState())) return;
+    setView(view);
+  }
+  if (targetPersonaId) {
+    setSelectedPersonaId(targetPersonaId);
+    state.taskQueuePersonaPage = 1;
+  }
+  if (view === "workspace" && moduleId) {
+    if (moduleId !== state.activeModule && isPersonaWorkspaceModule() && !(await canLeaveCurrentPersonaDraftEdit("leave"))) return;
+    if (moduleId !== state.activeModule && !(await confirmLeaveTransientWorkspaceState())) return;
+    state.workspaceMenuOpen = true;
+    setModule(moduleId);
+  }
+  if (moduleId === "queue" || view === "tasks") {
+    if (target.taskPanel) state.taskQueuePanel = target.taskPanel === "regular" ? "regular" : "persona";
+    await loadTasks().catch(() => {});
+    if (target.taskId && target.openDetail) {
+      await showTaskDetail(String(target.taskId || "")).catch(() => {});
+    }
+  }
+}
+
 function showToast(text, ok = true, options = {}) {
   const message = String(text || "").trim();
   if (!message) return null;
   const host = ensureToastHost();
   const toastKey = String(options.key || `${ok ? "ok" : "bad"}:${message}`);
+  const persistent = Boolean(options.persistent);
+  const target = toastTargetForKind(options.kind || "", options);
+  if (!persistent) dismissedPersistentToastKeys.delete(toastKey);
+  if (persistent && dismissedPersistentToastKeys.has(toastKey)) return null;
   const existingToast = Array.from(host.children).find((item) => item.dataset.toastKey === toastKey);
   const duration = Number(options.duration || (ok ? 3200 : 5200));
   if (existingToast) {
-    existingToast.className = `toast-message ${ok ? "is-ok" : "is-bad"}`;
-    existingToast.setAttribute("role", ok ? "status" : "alert");
-    const messageNode = existingToast.querySelector(".toast-message-text");
-    if (messageNode) messageNode.textContent = message;
+    applyToastMeta(existingToast, { key: toastKey, ok, message, persistent, target });
     existingToast.classList.remove("is-leaving");
     host.appendChild(existingToast);
     const existingTimer = toastTimers.get(existingToast);
     if (existingTimer) window.clearTimeout(existingTimer);
-    toastTimers.set(existingToast, window.setTimeout(() => dismissToast(existingToast), duration));
+    if (persistent) {
+      toastTimers.delete(existingToast);
+    } else {
+      toastTimers.set(existingToast, window.setTimeout(() => dismissToast(existingToast), duration));
+    }
     existingToast.classList.remove("is-refreshed");
     void existingToast.offsetWidth;
     existingToast.classList.add("is-refreshed");
     return existingToast;
   }
   const toast = document.createElement("div");
-  toast.className = `toast-message ${ok ? "is-ok" : "is-bad"}`;
-  toast.dataset.toastKey = toastKey;
-  toast.setAttribute("role", ok ? "status" : "alert");
   toast.innerHTML = `
     <span class="toast-message-text">${esc(message)}</span>
     <button type="button" class="toast-message-close" aria-label="关闭提示">×</button>
   `;
+  applyToastMeta(toast, { key: toastKey, ok, message, persistent, target });
   host.appendChild(toast);
   const maxToasts = 3;
   const overflowCount = Math.max(0, host.children.length - maxToasts);
   Array.from(host.children).slice(0, overflowCount).forEach(removeToastNow);
-  toast.querySelector(".toast-message-close")?.addEventListener("click", () => dismissToast(toast));
-  const timer = window.setTimeout(() => dismissToast(toast), duration);
-  toastTimers.set(toast, timer);
+  toast.querySelector(".toast-message-close")?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    dismissToast(toast, { manual: true });
+  });
+  toast.addEventListener("click", (event) => {
+    if (event.target.closest(".toast-message-close")) return;
+    openToastTarget(toast.dataset.toastTarget || "").catch(() => {});
+  });
+  toast.addEventListener("keydown", (event) => {
+    if (!["Enter", " "].includes(event.key)) return;
+    if (!toast.dataset.toastTarget) return;
+    event.preventDefault();
+    openToastTarget(toast.dataset.toastTarget || "").catch(() => {});
+  });
+  if (!persistent) {
+    const timer = window.setTimeout(() => dismissToast(toast), duration);
+    toastTimers.set(toast, timer);
+  }
   return toast;
 }
 
-function showMsg(id, text, ok = true) {
+function defaultToastTargetForMessage(id) {
+  const cleanId = String(id || "").trim();
+  if (cleanId === "taskQueueMsg") {
+    return { view: "tasks", taskPanel: state.taskQueuePanel || "persona" };
+  }
+  if (cleanId === "commandMsg" && state.view === "workspace") {
+    return { view: "workspace", module: state.activeModule || "personas" };
+  }
+  if (cleanId === "socialMsg") return { view: "social" };
+  return null;
+}
+
+function showMsg(id, text, ok = true, options = {}) {
   const node = $(id);
   if (node) {
     node.textContent = "";
     node.className = "notice";
   }
-  showToast(text, ok);
+  showToast(text, ok, {
+    ...options,
+    target: options.target || defaultToastTargetForMessage(id),
+  });
 }
 
 function showMsgHtml(id, html, ok = true) {
@@ -1888,6 +2007,12 @@ function blockingTaskStatus(status) {
   return ["queued", "running"].includes(String(status || "").trim());
 }
 
+function toastKindForTaskStatus(status) {
+  const normalized = String(status || "").trim();
+  if (["success", "failed", "cancelled", "need_manual", "queued", "running", "progress"].includes(normalized)) return normalized;
+  return "progress";
+}
+
 function activeSocialTaskFor({ accountId = "", personaId = "", taskType = "", postId = "", postSource = "" } = {}) {
   const cleanAccountId = String(accountId || "").trim();
   const cleanPersonaId = String(personaId || "").trim();
@@ -2498,7 +2623,9 @@ function renderWorkspace(renderMenu = true) {
   else syncModuleMenuState();
   $("moduleTitle").textContent = module.label;
   $("moduleEyebrow").textContent = isPersonaWorkspaceModule(module.id) ? "人设流程" : "Web 流程";
-  $("moduleBody").closest(".module-panel")?.classList.toggle("is-persona-module", isPersonaWorkspaceModule(module.id));
+  const modulePanel = $("moduleBody").closest(".module-panel");
+  modulePanel?.classList.toggle("is-persona-module", isPersonaWorkspaceModule(module.id));
+  modulePanel?.classList.toggle("is-publishing-module", module.id === "publishing");
   $("moduleCallback").textContent = "";
   $("moduleCallback").style.display = "none";
   if (isPersonaWorkspaceModule(module.id)) renderPersonaModule();
@@ -4584,7 +4711,10 @@ function renderPublishAccountBadge(account) {
 function renderPublishHeaderRow(mode, account) {
   return `
     <div class="publish-header-row">
-      ${renderPublishModeTabs(mode)}
+      <div class="publish-header-main">
+        <strong class="publish-inline-title">发布</strong>
+        ${renderPublishModeTabs(mode)}
+      </div>
       ${renderPublishAccountBadge(account)}
     </div>`;
 }
@@ -5688,16 +5818,24 @@ function renderConfirmSummary() {
 }
 
 
-function appendEvent(kind, message) {
+function appendEvent(kind, message, options = {}) {
   const localized = localizeConsoleMessage(message || "");
   if (!localized) return;
   const eventKind = String(kind || "info").trim() || "info";
   const host = $("eventStream");
   if (host) host.replaceChildren();
   const ok = !["error", "failed", "warn", "warning"].includes(eventKind);
+  const persistent = ["queued", "progress", "running"].includes(eventKind);
   showToast(`${eventKindLabel(eventKind)}：${localized}`, ok, {
-    key: `event:${eventKind}:${localized}`,
-    duration: ok ? 4200 : 6200,
+    key: options.key || (options.taskId ? `task:${options.taskId}` : `event:${eventKind}:${localized}`),
+    kind: eventKind,
+    taskId: options.taskId,
+    taskPanel: options.taskPanel,
+    personaId: options.personaId,
+    openDetail: options.openDetail,
+    target: options.target,
+    persistent,
+    duration: persistent ? 0 : (ok ? 4200 : 6200),
   });
 }
 
@@ -5724,7 +5862,11 @@ function watchTask(taskId, options = {}) {
     let payload = {};
     try { payload = JSON.parse(event.data || "{}"); } catch {}
     const kind = String(payload.kind || payload.status || "progress");
-    appendEvent(kind, payload.message || payload.detail || kind);
+    appendEvent(kind, payload.message || payload.detail || kind, {
+      key: `task:${taskId}`,
+      taskId,
+      taskPanel: options.taskPanel || "regular",
+    });
     if (["success", "failed"].includes(kind)) {
       state.events.close();
       state.events = null;
@@ -5798,8 +5940,20 @@ async function submitPersonaPublishTask() {
     const taskId = String(task.id || "").trim();
     state.personaPublishResults[String(persona.id)] = renderPersonaPublishResult(task, []);
     updatePersonaPublishResultView(persona.id);
-    appendEvent("persona", `${persona.name || persona.id} 已提交${sourceLabel}发布任务：${taskId || "-"}`);
-    showMsg("commandMsg", `发布任务已提交：${taskId || "-"}`, true);
+    appendEvent("queued", `${persona.name || persona.id} 已提交${sourceLabel}发布任务：${taskId || "-"}`, {
+      key: taskId ? `social-task:${taskId}` : undefined,
+      taskId,
+      taskPanel: "persona",
+      personaId: persona.id,
+    });
+    showMsg("commandMsg", `发布任务已提交：${taskId || "-"}`, true, {
+      key: taskId ? `social-task:${taskId}` : undefined,
+      kind: "queued",
+      taskId,
+      taskPanel: "persona",
+      personaId: persona.id,
+      persistent: Boolean(taskId),
+    });
     if (taskId) watchPersonaPublishTask(taskId, persona.id).catch((error) => {
       state.personaPublishResults[String(persona.id)] = `<div class="persona-warning-inline">${esc(error?.detail || error?.message || "任务结果轮询失败")}</div>`;
       updatePersonaPublishResultView(persona.id);
@@ -6483,7 +6637,14 @@ async function runPersonaThreadsTask(kind) {
       updatePersonaAutomationResultView(account.id, step);
       if (taskId) watchPersonaAutomationTask(taskId, account.id, step).catch(() => {});
     }
-    showMsg("commandMsg", `${kind === "warmup" ? "养号" : "自动回复"}任务已提交：${result.task?.id || ""}`, true);
+    showMsg("commandMsg", `${kind === "warmup" ? "养号" : "自动回复"}任务已提交：${result.task?.id || ""}`, true, {
+      key: result.task?.id ? `social-task:${result.task.id}` : undefined,
+      kind: "queued",
+      taskId: result.task?.id || "",
+      taskPanel: "persona",
+      personaId: persona.id,
+      persistent: Boolean(result.task?.id),
+    });
     await loadSocial();
   } finally {
     setActionLocked(lockParts, false);
@@ -6538,8 +6699,23 @@ async function executeSimpleFlow() {
       const persona = state.personas.find((item) => String(item.id) === String(personaId)) || selectedPersona();
       accountId = publishAccountForPersona(persona)?.id || "";
       if (normalizePublishContentSource() !== "custom") {
-        await submitPublishContentTasks(accountId, persona, "commandMsg");
-        appendEvent("browser", "发布任务已提交到指纹浏览器任务队列");
+        const result = await submitPublishContentTasks(accountId, persona, "commandMsg");
+        const resultItems = Array.isArray(result) ? result : (result ? [result] : []);
+        const resultTasks = resultItems.map((item) => item?.task).filter((task) => task?.id);
+        const createdTasks = Array.isArray(result?.created) ? result.created : [];
+        const taskIds = [
+          ...resultTasks.map((task) => String(task.id || "").trim()),
+          ...createdTasks.map((task) => String(task?.id || "").trim()),
+        ].filter(Boolean);
+        if (taskIds.length || createdTasks.length) {
+          const firstTaskId = taskIds[0] || "";
+          appendEvent("queued", `发布任务已提交到指纹浏览器任务队列${taskIds.length > 1 ? `：${taskIds.length} 条` : ""}`, {
+            key: firstTaskId ? `social-task:${firstTaskId}` : undefined,
+            taskId: firstTaskId,
+            taskPanel: "persona",
+            personaId: persona?.id || personaId,
+          });
+        }
         return;
       }
     }
@@ -6548,8 +6724,16 @@ async function executeSimpleFlow() {
       return;
     }
     const taskType = $("simplePrimary")?.value || selectedBranch(state.activeModule);
-    await createSocialTask(taskType, accountId, personaId, "commandMsg");
-    appendEvent("browser", `${taskType} 已提交到指纹浏览器任务队列`);
+    const result = await createSocialTask(taskType, accountId, personaId, "commandMsg");
+    const taskId = String(result?.task?.id || "").trim();
+    if (taskId) {
+      appendEvent("queued", `${taskType} 已提交到指纹浏览器任务队列`, {
+        key: `social-task:${taskId}`,
+        taskId,
+        taskPanel: personaId ? "persona" : "regular",
+        personaId,
+      });
+    }
     return;
   }
   setView("workspace");
@@ -7690,6 +7874,12 @@ async function watchPersonaAutomationTask(taskId, accountId, step) {
     if (task) {
       state.personaAutomationResults[key] = renderSocialTaskResult(task, logs, "提交后，这里会显示任务状态、截图和执行日志。");
       updatePersonaAutomationResultView(accountId, step);
+      appendEvent(toastKindForTaskStatus(task.status), `${statusLabel(task.task_type || task.type || "自动化任务")}：${statusLabel(task.status || "")}`, {
+        key: `social-task:${taskId}`,
+        taskId,
+        taskPanel: "persona",
+        personaId: task.persona_id || "",
+      });
       if (["success", "failed", "cancelled", "need_manual"].includes(String(task.status || ""))) {
         delete state.personaAutomationWatchers[key];
         await loadSocial().catch(() => {});
@@ -7740,6 +7930,12 @@ async function watchPersonaPublishTask(taskId, personaId) {
     if (task) {
       state.personaPublishResults[key] = renderPersonaPublishResult(task, logs);
       updatePersonaPublishResultView(key);
+      appendEvent(toastKindForTaskStatus(task.status), `发布任务：${statusLabel(task.status || "")}`, {
+        key: `social-task:${taskId}`,
+        taskId,
+        taskPanel: "persona",
+        personaId,
+      });
       if (["success", "failed", "cancelled", "need_manual"].includes(String(task.status || ""))) {
         delete state.personaPublishWatchers[key];
         await loadSocial().catch(() => {});
@@ -8161,6 +8357,13 @@ function showPersonaGenerateRunToast(personaId, runState) {
   const duration = display.isRunning ? 6000 : (ok ? 4200 : 6200);
   showToast(message, ok, {
     key: `persona-generate:${personaId}:${display.kind}`,
+    kind: display.isRunning ? "running" : (display.isError ? "error" : "success"),
+    persistent: display.isRunning,
+    target: {
+      view: "workspace",
+      module: "tweet_generation",
+      personaId,
+    },
     duration,
   });
 }
@@ -8983,9 +9186,14 @@ async function submitPersonaMediaTask() {
     };
     renderPersonaDetail();
     renderConfirmSummary();
-    appendEvent("queued", `推文配图任务已创建：${result.id}`);
+    appendEvent("queued", `推文配图任务已创建：${result.id}`, {
+      key: `task:${result.id}`,
+      taskId: result.id,
+      taskPanel: "regular",
+    });
     watchTask(result.id, {
       suppressDisconnectWarning: true,
+      taskPanel: "regular",
       onDone: () => refreshPersonaMediaTask(persona.id, post.id, result.id).catch(() => {}),
     });
     refreshPersonaMediaTask(persona.id, post.id, result.id).catch(() => {});
@@ -11156,7 +11364,7 @@ function renderLiveBrowserSessions() {
     return;
   }
   host.innerHTML = `
-    <section class="live-browser-panel">
+    <section class="live-browser-panel" data-live-browser-count="${esc(String(sessions.length))}">
       <div class="live-browser-head">
         <div>
           <strong>实时浏览器监控</strong>
@@ -11186,6 +11394,7 @@ function renderLiveBrowserSession(session) {
         </div>
         <div class="live-browser-card-actions">
           <button type="button" data-live-browser-fullscreen="${esc(sessionId)}">放大窗口</button>
+          ${session.task_id ? `<button type="button" class="danger" data-social-cancel="${esc(session.task_id)}">停止进程</button>` : ""}
           <span class="status ${esc(session.status || "running")}" data-live-browser-status>${esc(statusLabel(session.status || "running"))}</span>
         </div>
       </div>
@@ -11473,8 +11682,17 @@ async function submitMatrixPublishTask(messageId = "commandMsg") {
     const created = Array.isArray(result.created) ? result.created : [];
     const skipped = Array.isArray(result.skipped) ? result.skipped : [];
     const errors = Array.isArray(result.errors) ? result.errors : [];
-    showMsg(messageId, `矩阵发布已提交 ${created.length} 条任务，跳过 ${skipped.length} 条，失败 ${errors.length} 条。`, created.length > 0);
-    appendEvent("queue", `矩阵发布批次 ${result.batch_id || "-"}：创建 ${created.length} 条，跳过 ${skipped.length} 条，失败 ${errors.length} 条`);
+    const matrixToastTarget = { view: "tasks", taskPanel: "persona" };
+    const matrixToastKey = `matrix-publish:${result.batch_id || Date.now()}`;
+    showMsg(messageId, `矩阵发布已提交 ${created.length} 条任务，跳过 ${skipped.length} 条，失败 ${errors.length} 条。`, created.length > 0, {
+      kind: created.length > 0 ? "queued" : "failed",
+      target: matrixToastTarget,
+      key: matrixToastKey,
+    });
+    appendEvent(created.length > 0 ? "info" : "failed", `矩阵发布批次 ${result.batch_id || "-"}：创建 ${created.length} 条，跳过 ${skipped.length} 条，失败 ${errors.length} 条`, {
+      target: matrixToastTarget,
+      key: matrixToastKey,
+    });
     await loadSocial();
     return result;
   } finally {
@@ -11556,7 +11774,14 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
           payload,
         }),
       });
-      showMsg(messageId, `浏览器任务已提交：${result.task?.id || ""}`, true);
+      showMsg(messageId, `浏览器任务已提交：${result.task?.id || ""}`, true, {
+        key: result.task?.id ? `social-task:${result.task.id}` : undefined,
+        kind: "queued",
+        taskId: result.task?.id || "",
+        taskPanel: cleanPersonaId ? "persona" : "regular",
+        personaId: cleanPersonaId,
+        persistent: Boolean(result.task?.id),
+      });
       refreshLiveBrowserSessionsSoon(String(result.task?.id || ""));
       await loadSocial();
       return result;
@@ -11605,7 +11830,14 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
         payload,
       }),
     });
-    showMsg(messageId, `浏览器任务已提交：${result.task?.id || ""}`, true);
+    showMsg(messageId, `浏览器任务已提交：${result.task?.id || ""}`, true, {
+      key: result.task?.id ? `social-task:${result.task.id}` : undefined,
+      kind: "queued",
+      taskId: result.task?.id || "",
+      taskPanel: cleanPersonaId ? "persona" : "regular",
+      personaId: cleanPersonaId,
+      persistent: Boolean(result.task?.id),
+    });
     refreshLiveBrowserSessionsSoon(String(result.task?.id || ""));
     await loadSocial();
     return result;
@@ -12892,6 +13124,8 @@ function bindEvents() {
   if ($("liveBrowserSessions")) $("liveBrowserSessions").addEventListener("click", (event) => {
     const fullscreen = event.target.closest("[data-live-browser-fullscreen]");
     if (fullscreen) requestLiveBrowserFullscreen(fullscreen.dataset.liveBrowserFullscreen || "");
+    const cancel = event.target.closest("[data-social-cancel]");
+    if (cancel) cancelSocialAutomationTask(cancel.dataset.socialCancel, "socialMsg").catch((error) => showMsg("socialMsg", error.detail || error.message || "停止任务失败", false));
   });
   if ($("socialTaskList")) $("socialTaskList").addEventListener("click", (event) => {
     const log = event.target.closest("[data-social-log]");

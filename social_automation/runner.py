@@ -83,6 +83,7 @@ def run_social_task(
     with _open_camoufox_context(account=account, proxy=proxy, logger=logger, context_control=context_control) as context:
         _import_initial_cookies(context, payload.get("initial_cookies"), platform, logger)
         page = _first_page(context)
+        _sync_live_browser_viewport(page, context_control, logger)
         page.set_default_timeout(int(os.getenv("SOCIAL_AUTOMATION_DEFAULT_TIMEOUT_MS", "30000")))
         if task_type == "open_login":
             return _run_open_login(page, task, account, payload, screenshot_dir, logger, platform, cancel_event)
@@ -245,6 +246,8 @@ class _BrowserContextManager:
             session = start_live_browser_session(task=task, account=self.account, logger=self.logger)
             if session is not None and self.context_control is not None:
                 self.context_control["live_browser_session_id"] = str(session.id)
+                self.context_control["live_browser_width"] = int(getattr(session, "width", 0) or 0)
+                self.context_control["live_browser_height"] = int(getattr(session, "height", 0) or 0)
             return session
         except Exception as exc:
             self.logger.log("warn", "live_browser_error", "实时浏览器监控初始化失败，已继续普通执行", {"error": str(exc)})
@@ -338,6 +341,29 @@ def _first_page(context):
     if pages:
         return pages[0]
     return context.new_page()
+
+
+def _sync_live_browser_viewport(page, context_control: dict[str, Any] | None, logger: AutomationLogger) -> None:
+    if not isinstance(context_control, dict) or not context_control.get("live_browser_session_id"):
+        return
+    width = _safe_int(context_control.get("live_browser_width"), 1600)
+    height = _safe_int(context_control.get("live_browser_height"), 900)
+    viewport = {
+        "width": max(1024, width),
+        "height": max(640, height - 90),
+    }
+    try:
+        page.set_viewport_size(viewport)
+        logger.log("info", "live_browser_viewport", "已同步实时监控窗口尺寸", viewport)
+    except Exception as exc:
+        logger.log("warn", "live_browser_viewport_failed", "实时监控窗口尺寸同步失败，继续执行任务", {"error": str(exc), "viewport": viewport})
+
+
+def _safe_int(value: Any, fallback: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
 
 
 def _import_initial_cookies(context, cookies: Any, platform: str, logger: AutomationLogger) -> None:
@@ -665,7 +691,7 @@ def _detect_platform_login_state(page, platform: str) -> dict[str, Any]:
 
 def _run_open_login(page, task, account, payload, screenshot_dir, logger, platform: str = "instagram", cancel_event: Any | None = None) -> dict[str, Any]:
     _goto(page, _platform_home(platform), logger, "open_login")
-    wait_seconds = int(payload.get("login_wait_seconds") or os.getenv("SOCIAL_AUTOMATION_LOGIN_WAIT_SECONDS", "600"))
+    wait_seconds = int(payload.get("login_wait_seconds") or os.getenv("SOCIAL_AUTOMATION_LOGIN_WAIT_SECONDS", "3600"))
     wait_seconds = max(30, min(wait_seconds, 3600))
     auto_submit = bool(payload.get("auto_submit") or payload.get("login_password") or payload.get("password"))
     logger.log("info", "open_login", "Browser is open for login", {"wait_seconds": wait_seconds, "auto_submit": auto_submit})
