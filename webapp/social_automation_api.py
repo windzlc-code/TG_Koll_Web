@@ -43,6 +43,8 @@ _WORKER_THREAD: threading.Thread | None = None
 _WORKER_STOP = threading.Event()
 _WORKER_WAKE = threading.Event()
 _WORKER_LOCK = threading.Lock()
+_WORKER_TASK_THREADS: dict[str, threading.Thread] = {}
+_WORKER_TASK_THREADS_LOCK = threading.Lock()
 _WORKER_STATE: dict[str, Any] = {
     "enabled": False,
     "running": False,
@@ -50,6 +52,8 @@ _WORKER_STATE: dict[str, Any] = {
     "last_tick_at": 0,
     "last_task_id": "",
     "last_error": "",
+    "running_count": 0,
+    "max_concurrency": 1,
 }
 _RUNNING_TASK_CONTROLS: dict[str, dict[str, Any]] = {}
 _RUNNING_TASK_CONTROLS_LOCK = threading.Lock()
@@ -115,6 +119,7 @@ class SocialTaskActionPayload(BaseModel):
 class LiveBrowserSettingsPayload(BaseModel):
     standby_seconds: int = Field(default=60, ge=0, le=3600)
     auto_close_seconds: int = Field(default=300, ge=10, le=86400)
+    max_concurrency: int = Field(default=4, ge=1, le=12)
 
 
 def configure_social_automation(*, data_dir: Path, new_id: Callable[[str], str] | None = None) -> None:
@@ -515,17 +520,19 @@ def _live_browser_sessions() -> list[dict[str, Any]]:
         return []
 
 
-def get_live_browser_settings() -> dict[str, int]:
-    def _bounded_env_int(name: str, fallback: int, minimum: int, maximum: int) -> int:
-        try:
-            value = int(os.getenv(name, str(fallback)))
-        except (TypeError, ValueError):
-            value = fallback
-        return max(minimum, min(value, maximum))
+def _bounded_env_int(name: str, fallback: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.getenv(name, str(fallback)))
+    except (TypeError, ValueError):
+        value = fallback
+    return max(minimum, min(value, maximum))
 
+
+def get_live_browser_settings() -> dict[str, int]:
     defaults = {
         "standby_seconds": _bounded_env_int("SOCIAL_AUTOMATION_LIVE_BROWSER_STANDBY_SECONDS", 60, 0, 3600),
         "auto_close_seconds": _bounded_env_int("SOCIAL_AUTOMATION_LIVE_BROWSER_AUTO_CLOSE_SECONDS", 300, 10, 86400),
+        "max_concurrency": _bounded_env_int("SOCIAL_AUTOMATION_WORKER_CONCURRENCY", 4, 1, 12),
     }
     try:
         with db() as conn:
@@ -536,6 +543,7 @@ def get_live_browser_settings() -> dict[str, int]:
         return {
             "standby_seconds": max(0, min(int(raw.get("standby_seconds", defaults["standby_seconds"])), 3600)),
             "auto_close_seconds": max(10, min(int(raw.get("auto_close_seconds", defaults["auto_close_seconds"])), 86400)),
+            "max_concurrency": max(1, min(int(raw.get("max_concurrency", defaults["max_concurrency"])), 12)),
         }
     except Exception:
         return defaults
@@ -545,6 +553,7 @@ def set_live_browser_settings(payload: LiveBrowserSettingsPayload) -> dict[str, 
     settings = {
         "standby_seconds": max(0, min(int(payload.standby_seconds), 3600)),
         "auto_close_seconds": max(10, min(int(payload.auto_close_seconds), 86400)),
+        "max_concurrency": max(1, min(int(payload.max_concurrency), 12)),
     }
     now = _now()
     with db() as conn:
@@ -556,6 +565,9 @@ def set_live_browser_settings(payload: LiveBrowserSettingsPayload) -> dict[str, 
             """,
             ("live_browser_settings", json.dumps(settings, ensure_ascii=False), now),
         )
+    with contextlib.suppress(Exception):
+        _refresh_worker_state()
+        wake_social_automation_worker()
     return settings
 
 
@@ -1091,31 +1103,94 @@ def retry_social_task(task_id: str) -> dict[str, Any]:
 
 def run_social_automation_once() -> dict[str, Any] | None:
     with _WORKER_LOCK:
+        _cleanup_worker_task_threads()
+        if _active_worker_thread_count() >= _social_worker_max_concurrency():
+            return None
         task = _claim_next_task()
         if not task:
+            _refresh_worker_state()
             return None
-        _WORKER_STATE.update({"running": True, "last_tick_at": _now(), "last_task_id": task["id"], "last_error": ""})
-        try:
-            _execute_claimed_task(task)
-            return {"task_id": task["id"], "status": "finished"}
-        except Exception as exc:
-            _WORKER_STATE["last_error"] = str(exc)
-            _fail_task_safely(task["id"], exc)
-            return {"task_id": task["id"], "status": "failed", "error": str(exc)}
-        finally:
-            _WORKER_STATE["running"] = False
-            _WORKER_STATE["last_tick_at"] = _now()
+        _start_claimed_task_thread(task)
+        _refresh_worker_state()
+        return {"task_id": task["id"], "status": "started"}
 
 
 def _worker_loop() -> None:
     _WORKER_STATE["last_started_at"] = _now()
     while not _WORKER_STOP.is_set():
         try:
-            run_social_automation_once()
+            _launch_available_social_tasks()
         except Exception as exc:
             _WORKER_STATE["last_error"] = str(exc)
         _WORKER_WAKE.wait(timeout=max(1, int(os.getenv("SOCIAL_AUTOMATION_WORKER_POLL_SECONDS", "5"))))
         _WORKER_WAKE.clear()
+
+
+def _social_worker_max_concurrency() -> int:
+    try:
+        value = int(get_live_browser_settings().get("max_concurrency", 4))
+    except Exception:
+        value = _bounded_env_int("SOCIAL_AUTOMATION_WORKER_CONCURRENCY", 4, 1, 12)
+    return max(1, min(value, 12))
+
+
+def _cleanup_worker_task_threads() -> None:
+    with _WORKER_TASK_THREADS_LOCK:
+        for task_id, thread in list(_WORKER_TASK_THREADS.items()):
+            if not thread.is_alive():
+                _WORKER_TASK_THREADS.pop(task_id, None)
+
+
+def _active_worker_thread_count() -> int:
+    _cleanup_worker_task_threads()
+    with _WORKER_TASK_THREADS_LOCK:
+        return sum(1 for thread in _WORKER_TASK_THREADS.values() if thread.is_alive())
+
+
+def _refresh_worker_state() -> None:
+    running_count = _active_worker_thread_count()
+    _WORKER_STATE.update({
+        "running": running_count > 0,
+        "running_count": running_count,
+        "max_concurrency": _social_worker_max_concurrency(),
+        "last_tick_at": _now(),
+    })
+
+
+def _launch_available_social_tasks() -> int:
+    launched = 0
+    with _WORKER_LOCK:
+        while _active_worker_thread_count() < _social_worker_max_concurrency():
+            task = _claim_next_task()
+            if not task:
+                break
+            _start_claimed_task_thread(task)
+            launched += 1
+        _refresh_worker_state()
+    return launched
+
+
+def _start_claimed_task_thread(task: dict[str, Any]) -> None:
+    task_id = str(task.get("id") or "")
+    if not task_id:
+        return
+
+    def target() -> None:
+        _WORKER_STATE.update({"last_tick_at": _now(), "last_task_id": task_id, "last_error": ""})
+        try:
+            _execute_claimed_task(task)
+        except Exception as exc:
+            _WORKER_STATE["last_error"] = str(exc)
+            _fail_task_safely(task_id, exc)
+        finally:
+            with _WORKER_TASK_THREADS_LOCK:
+                _WORKER_TASK_THREADS.pop(task_id, None)
+            _refresh_worker_state()
+
+    thread = threading.Thread(target=target, name=f"social-automation-task-{task_id[:12]}", daemon=True)
+    with _WORKER_TASK_THREADS_LOCK:
+        _WORKER_TASK_THREADS[task_id] = thread
+    thread.start()
 
 
 def _claim_next_task() -> dict[str, Any] | None:
@@ -1124,9 +1199,17 @@ def _claim_next_task() -> dict[str, Any] | None:
     with db() as conn:
         row = conn.execute(
             """
-            SELECT * FROM social_automation_tasks
-            WHERE status = 'queued' AND (scheduled_at = 0 OR scheduled_at <= ?)
-            ORDER BY priority ASC, created_at ASC
+            SELECT t.*
+            FROM social_automation_tasks t
+            WHERE t.status = 'queued'
+              AND (t.scheduled_at = 0 OR t.scheduled_at <= ?)
+              AND NOT EXISTS (
+                SELECT 1
+                FROM social_automation_tasks r
+                WHERE r.account_id = t.account_id
+                  AND r.status = 'running'
+              )
+            ORDER BY t.priority ASC, t.created_at ASC
             LIMIT 1
             """,
             (now,),
