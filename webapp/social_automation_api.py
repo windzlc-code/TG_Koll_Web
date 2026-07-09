@@ -606,43 +606,12 @@ def type_live_browser_session_text(session_id: str, text: str, *, press_enter: b
     clean_text = str(text or "")
     if not clean_text and not press_enter:
         raise HTTPException(status_code=400, detail="请输入要发送到浏览器的文本")
-    control = _running_control_for_live_browser_session(session_id)
-    if control is None:
-        return _type_live_browser_session_text_via_display(session_id, clean_text, press_enter=press_enter)
-    lock = control.setdefault("browser_action_lock", threading.RLock())
-    with lock:
-        page = _live_browser_control_page(control)
-        if page is None:
-            return _type_live_browser_session_text_via_display(session_id, clean_text, press_enter=press_enter)
-        try:
-            if clean_text:
-                page.keyboard.type(clean_text, delay=20)
-            if press_enter:
-                page.keyboard.press("Enter")
-        except Exception as exc:
-            with contextlib.suppress(Exception):
-                return _type_live_browser_session_text_via_display(session_id, clean_text, press_enter=press_enter)
-            raise HTTPException(status_code=500, detail=f"发送文本失败：{exc}") from exc
-    return {"sent": True, "length": len(clean_text), "pressed_enter": bool(press_enter)}
+    return _type_live_browser_session_text_via_display(session_id, clean_text, press_enter=press_enter)
 
 
 def press_live_browser_session_key(session_id: str, key: str) -> dict[str, Any]:
     clean_key = _normalize_live_browser_key(key)
-    control = _running_control_for_live_browser_session(session_id)
-    if control is None:
-        return _press_live_browser_session_key_via_display(session_id, clean_key)
-    lock = control.setdefault("browser_action_lock", threading.RLock())
-    with lock:
-        page = _live_browser_control_page(control)
-        if page is None:
-            return _press_live_browser_session_key_via_display(session_id, clean_key)
-        try:
-            page.keyboard.press(clean_key)
-        except Exception as exc:
-            with contextlib.suppress(Exception):
-                return _press_live_browser_session_key_via_display(session_id, clean_key)
-            raise HTTPException(status_code=500, detail=f"发送按键失败：{exc}") from exc
-    return {"pressed": clean_key}
+    return _press_live_browser_session_key_via_display(session_id, clean_key)
 
 
 def capture_live_browser_session_screenshot(session_id: str) -> dict[str, Any]:
@@ -654,49 +623,12 @@ def capture_live_browser_session_screenshot(session_id: str) -> dict[str, Any]:
     path = (screenshot_dir / filename).resolve()
     if screenshot_dir not in path.parents:
         raise HTTPException(status_code=400, detail="截图路径不合法")
-    if control is None:
-        return _capture_live_browser_session_screenshot_via_display(session_id, path)
-    lock = control.setdefault("browser_action_lock", threading.RLock())
-    with lock:
-        page = _live_browser_control_page(control)
-        if page is None:
-            return _capture_live_browser_session_screenshot_via_display(session_id, path)
-        try:
-            page.screenshot(path=str(path), full_page=False)
-        except Exception as exc:
-            with contextlib.suppress(Exception):
-                return _capture_live_browser_session_screenshot_via_display(session_id, path)
-            raise HTTPException(status_code=500, detail=f"截图失败：{exc}") from exc
+    result = _capture_live_browser_session_screenshot_via_display(session_id, path)
     if task_id:
         with contextlib.suppress(Exception):
             with db() as conn:
                 _insert_log(conn, task_id, "info", "manual_screenshot", "已从预览窗口手动截图", {"session_id": session_id}, str(path))
-    return {"screenshot_path": str(path), "screenshot_url": f"/api/persona_dashboard/automation/screenshots/{path.name}"}
-
-
-def _running_control_for_live_browser_session(session_id: str) -> dict[str, Any] | None:
-    clean_id = str(session_id or "").strip()
-    if not clean_id:
-        raise HTTPException(status_code=400, detail="浏览器会话不能为空")
-    with _RUNNING_TASK_CONTROLS_LOCK:
-        for control in _RUNNING_TASK_CONTROLS.values():
-            if str(control.get("live_browser_session_id") or "") == clean_id:
-                return control
-    return None
-
-
-def _live_browser_control_page(control: dict[str, Any]) -> Any | None:
-    context = control.get("context")
-    if context is None:
-        return None
-    pages = getattr(context, "pages", None) or []
-    for page in reversed(list(pages)):
-        with contextlib.suppress(Exception):
-            if not page.is_closed():
-                return page
-    with contextlib.suppress(Exception):
-        return context.new_page()
-    return None
+    return result
 
 
 def _live_browser_session_display(session_id: str) -> str:
