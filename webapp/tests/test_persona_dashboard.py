@@ -242,6 +242,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         payload=None,
         result=None,
         created_at=1_720_000_000,
+        priority=50,
     ):
         conn = sqlite3.connect(str(self.data_dir / "app.db"))
         conn.execute(
@@ -259,7 +260,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
                 account_id,
                 platform,
                 task_type,
-                50,
+                priority,
                 status,
                 0,
                 created_at,
@@ -1560,7 +1561,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertFalse(any(post.get("id") == "favorite-1" for post in synced["posts"]))
         self.assertEqual(synced["publishHistory"][0]["archivePostId"], "favorite-1")
 
-    def test_publish_persona_post_rejects_non_ready_account(self):
+    def test_publish_persona_post_queues_login_and_publish_for_non_ready_account(self):
         self._write_archives()
         self._insert_social_account(account_id="acct-threads", platform="threads", username="threads_user", status="cookie_expired")
         create_resp = self.client.post(
@@ -1569,14 +1570,26 @@ class PersonaDashboardApiTests(unittest.TestCase):
         )
         self.assertEqual(create_resp.status_code, 200)
         post = create_resp.json()
-        publish_resp = self.client.post(
-            f"/api/persona_dashboard/personas/persona-1/posts/{post['id']}/publish",
-            json={"account_id": "acct-threads", "platform": "threads", "media_paths": []},
-        )
-        self.assertEqual(publish_resp.status_code, 400)
-        self.assertIn("detail", publish_resp.json())
+        created_tasks = []
 
-    def test_publish_persona_post_requires_successful_login_check(self):
+        def fake_create_social_task(payload):
+            created = {"id": f"sat-{len(created_tasks) + 1}", "task_type": payload.task_type, "status": "queued"}
+            created_tasks.append((payload, created))
+            return created
+
+        with mock.patch.object(server, "create_social_task", side_effect=fake_create_social_task):
+            publish_resp = self.client.post(
+                f"/api/persona_dashboard/personas/persona-1/posts/{post['id']}/publish",
+                json={"account_id": "acct-threads", "platform": "threads", "media_paths": []},
+            )
+        self.assertEqual(publish_resp.status_code, 200)
+        self.assertEqual([payload.task_type for payload, _ in created_tasks], ["open_login", "publish_post"])
+        publish_payload = created_tasks[1][0]
+        self.assertTrue(publish_payload.payload["auto_login_before_publish"])
+        self.assertEqual(publish_payload.payload["login_task_id"], "sat-1")
+        self.assertEqual(publish_payload.payload["archive_post_id"], post["id"])
+
+    def test_publish_persona_post_does_not_require_manual_login_check(self):
         self._write_archives()
         self._insert_social_account(account_id="acct-threads", platform="threads", username="threads_user")
         create_resp = self.client.post(
@@ -1585,12 +1598,81 @@ class PersonaDashboardApiTests(unittest.TestCase):
         )
         self.assertEqual(create_resp.status_code, 200)
         post = create_resp.json()
-        publish_resp = self.client.post(
-            f"/api/persona_dashboard/personas/persona-1/posts/{post['id']}/publish",
-            json={"account_id": "acct-threads", "platform": "threads", "media_paths": []},
+        with mock.patch.object(server, "create_social_task", return_value={"id": "sat-ready", "task_type": "publish_post", "status": "queued"}) as mocked:
+            publish_resp = self.client.post(
+                f"/api/persona_dashboard/personas/persona-1/posts/{post['id']}/publish",
+                json={"account_id": "acct-threads", "platform": "threads", "media_paths": []},
+            )
+        self.assertEqual(publish_resp.status_code, 200)
+        payload_obj = mocked.call_args.args[0]
+        self.assertEqual(payload_obj.task_type, "publish_post")
+        self.assertFalse(payload_obj.payload["auto_login_before_publish"])
+        self.assertEqual(payload_obj.payload["login_task_id"], "")
+        self.assertEqual(payload_obj.payload["archive_post_id"], post["id"])
+
+    def test_publish_task_waits_for_login_dependency_before_claim(self):
+        self._insert_social_account(account_id="acct-threads", platform="threads", username="threads_user", status="cookie_expired")
+        self._insert_social_task(
+            task_id="login-needed",
+            account_id="acct-threads",
+            platform="threads",
+            task_type="open_login",
+            status="need_manual",
+            priority=20,
         )
-        self.assertEqual(publish_resp.status_code, 400)
-        self.assertIn("detail", publish_resp.json())
+        self._insert_social_task(
+            task_id="publish-waiting",
+            account_id="acct-threads",
+            platform="threads",
+            task_type="publish_post",
+            status="queued",
+            priority=50,
+            payload={
+                "archive_post_id": "post-1",
+                "auto_login_before_publish": True,
+                "login_task_id": "login-needed",
+            },
+        )
+
+        claimed = social_automation_api._claim_next_task()
+
+        self.assertIsNone(claimed)
+        conn = sqlite3.connect(str(self.data_dir / "app.db"))
+        try:
+            status = conn.execute("SELECT status FROM social_automation_tasks WHERE id = 'publish-waiting'").fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(status, "queued")
+
+    def test_publish_task_claims_after_login_dependency_succeeds(self):
+        self._insert_social_account(account_id="acct-threads", platform="threads", username="threads_user", status="ready")
+        self._insert_social_task(
+            task_id="login-success",
+            account_id="acct-threads",
+            platform="threads",
+            task_type="open_login",
+            status="success",
+            priority=20,
+        )
+        self._insert_social_task(
+            task_id="publish-ready",
+            account_id="acct-threads",
+            platform="threads",
+            task_type="publish_post",
+            status="queued",
+            priority=50,
+            payload={
+                "archive_post_id": "post-1",
+                "auto_login_before_publish": True,
+                "login_task_id": "login-success",
+            },
+        )
+
+        claimed = social_automation_api._claim_next_task()
+
+        self.assertIsNotNone(claimed)
+        self.assertEqual(claimed["id"], "publish-ready")
+        self.assertEqual(claimed["status"], "running")
 
     def test_public_delete_post_removes_metric_row(self):
         self._write_archives()

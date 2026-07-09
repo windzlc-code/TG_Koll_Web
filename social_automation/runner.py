@@ -47,8 +47,65 @@ class NeedManualError(RuntimeError):
         self.screenshot_path = str(screenshot_path or "")
 
 
+class AutoLoginFailedError(RuntimeError):
+    def __init__(self, message: str, status: str = "cookie_expired", screenshot_path: str = ""):
+        super().__init__(message)
+        self.status = status
+        self.screenshot_path = str(screenshot_path or "")
+
+
 class UnsupportedActionError(RuntimeError):
     pass
+
+
+def _attempt_publish_login_repair(
+    page,
+    task: dict[str, Any],
+    account: dict[str, Any],
+    payload: dict[str, Any],
+    screenshot_dir: Path,
+    logger: AutomationLogger,
+    platform: str,
+    cancel_event: Any | None,
+    initial_status: dict[str, Any],
+) -> dict[str, Any]:
+    if str(task.get("task_type") or "") != "publish_post":
+        return initial_status
+    max_repair_attempts = _int_payload_or_env(payload, "publish_login_repair_attempts", "SOCIAL_AUTOMATION_PUBLISH_LOGIN_REPAIR_ATTEMPTS", 3, 0, 8)
+    if max_repair_attempts <= 0:
+        return initial_status
+    logger.log(
+        "warn",
+        "publish_login_repair",
+        f"{_platform_name(platform)} login check failed before publishing; trying automatic recovery before manual handoff.",
+        {"status": initial_status, "attempts": max_repair_attempts},
+    )
+    for attempt in range(1, max_repair_attempts + 1):
+        _self_heal_login_page(page, platform, logger, task, screenshot_dir, str(initial_status.get("reason") or "publish_login_not_ready"), attempt, cancel_event)
+        current = _detect_platform_login_state(page, platform)
+        if current.get("status") == "ready":
+            stable = _confirm_platform_ready(page, platform, logger, cancel_event)
+            if stable.get("status") == "ready":
+                return stable
+        initial_status = current
+    saved_password = str(account.get("login_password") or "")
+    if not saved_password:
+        return initial_status
+    repair_payload = dict(payload or {})
+    repair_payload.setdefault("auto_submit", True)
+    repair_payload.setdefault("login_username", str(account.get("login_username") or account.get("username") or "").strip())
+    repair_payload.setdefault("login_password", saved_password)
+    repair_payload.setdefault("login_wait_seconds", 120)
+    repair_payload.setdefault("wait_for_manual", False)
+    repair_payload.setdefault("max_self_heal_attempts", max_repair_attempts)
+    repair_payload.setdefault("max_login_attempts", 2)
+    try:
+        result = _run_open_login(page, task, account, repair_payload, screenshot_dir, logger, platform, cancel_event)
+    except NeedManualError as exc:
+        return {"status": str(exc.status or "need_verification"), "reason": str(exc), "screenshot_path": str(exc.screenshot_path or "")}
+    if result.get("status") == "ready":
+        return result
+    return initial_status
 
 
 def run_social_task(
@@ -94,6 +151,8 @@ def run_social_task(
         _raise_if_cancelled(cancel_event)
         login = _check_platform_login(page, platform, logger)
         if login.get("status") != "ready":
+            login = _attempt_publish_login_repair(page, task, account, payload, screenshot_dir, logger, platform, cancel_event, login)
+        if login.get("status") != "ready":
             shot = _screenshot(page, screenshot_dir, task, "login_not_ready", logger)
             logger.log("warn", "need_manual", str(login.get("reason") or f"{_platform_name(platform)} 账号需要人工登录或验证。"), {"details": login}, shot)
             raise NeedManualError(
@@ -118,7 +177,7 @@ def run_social_task(
             return _run_browse_profile(page, task, payload, screenshot_dir, logger)
         if task_type == "publish_post":
             _raise_if_cancelled(cancel_event)
-            return _run_publish_post(page, task, payload, screenshot_dir, logger, platform)
+            return _run_publish_post(page, task, payload, screenshot_dir, logger, platform, account=account)
         if task_type == "comment_post":
             _raise_if_cancelled(cancel_event)
             return _run_comment_post(page, task, payload, screenshot_dir, logger)
@@ -517,7 +576,19 @@ def _human_click(page, locator, logger: AutomationLogger, stage: str = "click") 
     rel_x = random.uniform(box["width"] * 0.25, box["width"] * 0.75)
     rel_y = random.uniform(box["height"] * 0.25, box["height"] * 0.75)
     logger.log("debug", stage, "正在点击目标元素。", {"x": round(box["x"] + rel_x, 1), "y": round(box["y"] + rel_y, 1)})
-    locator.click(position={"x": rel_x, "y": rel_y}, timeout=10000)
+    abs_x = box["x"] + rel_x
+    abs_y = box["y"] + rel_y
+    try:
+        locator.click(position={"x": rel_x, "y": rel_y}, timeout=5000)
+        return
+    except Exception as exc:
+        logger.log("warn", f"{stage}_locator_click_failed", "目标元素常规点击超时，改用坐标点击兜底。", {"error": str(exc)[:500]})
+    try:
+        page.mouse.click(abs_x, abs_y, delay=random.randint(60, 180))
+        return
+    except Exception as exc:
+        logger.log("warn", f"{stage}_mouse_click_failed", "目标元素坐标点击失败，改用 DOM 点击兜底。", {"error": str(exc)[:500]})
+    locator.evaluate("(node) => node.click()")
 
 
 def _screenshot(page, screenshot_dir: Path, task: dict[str, Any], stage: str, logger: AutomationLogger) -> str:
@@ -525,7 +596,7 @@ def _screenshot(page, screenshot_dir: Path, task: dict[str, Any], stage: str, lo
         return ""
     path = screenshot_dir / f"{str(task.get('id') or 'task')}_{stage}_{int(time.time())}.png"
     try:
-        page.screenshot(path=str(path), full_page=True)
+        page.screenshot(path=str(path), full_page=str(stage or "") != "publish_done")
         logger.log("info", stage, "已保存截图。", {"path": str(path)}, str(path))
         return str(path)
     except Exception as exc:
@@ -538,22 +609,11 @@ def _should_capture_screenshot(stage: str) -> bool:
     if mode in {"debug", "all", "full"}:
         return True
     return str(stage or "") in {
-        "auto_login_start",
-        "auto_login_form_filled",
         "login_verification_required",
         "login_invalid_credentials",
         "login_wait_timeout",
         "login_complete",
-        "check_login",
-        "browse_feed",
-        "threads_warmup",
-        "threads_auto_reply_done",
         "publish_done",
-        "comment_done",
-        "reply_done",
-        "like_done",
-        "already_liked",
-        "share_done",
         "failed",
     }
 
@@ -641,6 +701,13 @@ def _detect_threads_login_state(page) -> dict[str, Any]:
     url = str(page.url or "")
     if _is_verification_url(url):
         return {"status": "need_verification", "reason": "Threads/Instagram 需要输入验证码。", "url": url}
+    body_text = ""
+    try:
+        body_text = page.locator("body").inner_text(timeout=5000).lower()
+    except Exception:
+        pass
+    if any(marker in body_text for marker in _verification_text_markers()):
+        return {"status": "need_verification", "reason": "检测到验证码或安全挑战文案。", "url": url}
     if "/login" in url:
         return {"status": "cookie_expired", "reason": "检测到 Threads 登录页面。", "url": url}
     login_prompt_selectors = [
@@ -764,15 +831,110 @@ def _detect_platform_login_state(page, platform: str) -> dict[str, Any]:
     return _detect_instagram_login_state(page)
 
 
+def _int_payload_or_env(payload: dict[str, Any], key: str, env_key: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(payload.get(key) or os.getenv(env_key, str(default)))
+    except Exception:
+        value = default
+    return max(minimum, min(value, maximum))
+
+
+def _self_heal_login_page(
+    page,
+    platform: str,
+    logger: AutomationLogger,
+    task: dict[str, Any],
+    screenshot_dir: Path,
+    reason: str,
+    attempt: int,
+    cancel_event: Any | None = None,
+) -> None:
+    _raise_if_cancelled(cancel_event)
+    shot = _screenshot(page, screenshot_dir, task, f"login_self_heal_{attempt}", logger)
+    logger.log(
+        "warn",
+        "login_self_heal",
+        f"{_platform_name(platform)} login is unstable; running automatic recovery attempt {attempt}.",
+        {"attempt": attempt, "reason": reason, "url": str(page.url or "")},
+        shot,
+    )
+    with contextlib.suppress(Exception):
+        page.keyboard.press("Escape")
+    action = attempt % 4
+    if action == 1:
+        with contextlib.suppress(Exception):
+            page.reload(wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_load_state("networkidle", timeout=12000)
+    elif action == 2:
+        _goto(page, _platform_home(platform), logger, "login_self_heal_home")
+    elif platform == "threads":
+        clicked = _click_text_button(
+            page,
+            logger,
+            ["Continue with Instagram", "Log in with Instagram", "继续使用 Instagram", "使用 Instagram 继续"],
+            "login_self_heal_continue",
+        )
+        if not clicked:
+            _goto(page, THREADS_HOME, logger, "login_self_heal_threads")
+    else:
+        _goto(page, "https://www.instagram.com/accounts/login/", logger, "login_self_heal_instagram_login")
+    _sleep_between(1.5, 3.0)
+
+
+def _wait_or_raise_manual(
+    page,
+    task,
+    screenshot_dir: Path,
+    logger: AutomationLogger,
+    platform: str,
+    cancel_event: Any | None,
+    reason: str,
+    status: str,
+    screenshot_path: str,
+    last_status: dict[str, Any] | None,
+    wait_for_manual: bool,
+    manual_only_on_verification: bool = False,
+) -> dict[str, Any]:
+    if wait_for_manual and (not manual_only_on_verification or status == "need_verification"):
+        return _wait_for_manual_login_completion(
+            page,
+            task,
+            screenshot_dir,
+            logger,
+            platform,
+            cancel_event,
+            reason,
+            status,
+            screenshot_path,
+            last_status,
+        )
+    logger.log(
+        "error",
+        "auto_login_failed",
+        reason,
+        {"status": status, "screenshot_path": screenshot_path, "details": last_status or {}},
+        screenshot_path,
+    )
+    raise AutoLoginFailedError(reason, status, screenshot_path)
+
+
 def _run_open_login(page, task, account, payload, screenshot_dir, logger, platform: str = "instagram", cancel_event: Any | None = None) -> dict[str, Any]:
     _goto(page, _platform_home(platform), logger, "open_login")
     wait_seconds = int(payload.get("login_wait_seconds") or os.getenv("SOCIAL_AUTOMATION_LOGIN_WAIT_SECONDS", "3600"))
     wait_seconds = max(30, min(wait_seconds, 3600))
     auto_submit = bool(payload.get("auto_submit") or payload.get("login_password") or payload.get("password"))
+    max_login_attempts = _int_payload_or_env(payload, "max_login_attempts", "SOCIAL_AUTOMATION_LOGIN_MAX_ATTEMPTS", 4, 1, 8)
+    max_self_heal_attempts = _int_payload_or_env(payload, "max_self_heal_attempts", "SOCIAL_AUTOMATION_LOGIN_SELF_HEAL_ATTEMPTS", 5, 0, 12)
+    verification_confirmations = _int_payload_or_env(payload, "verification_confirmations", "SOCIAL_AUTOMATION_VERIFICATION_CONFIRMATIONS", 3, 1, 6)
+    wait_for_manual = bool(payload.get("wait_for_manual", True))
+    manual_only_on_verification = bool(payload.get("manual_only_on_verification", False))
     logger.log("info", "open_login", "浏览器登录窗口已打开。", {"wait_seconds": wait_seconds, "auto_submit": auto_submit})
     deadline = time.time() + wait_seconds
     last_status: dict[str, Any] = {}
     login_attempts = 0
+    self_heal_attempts = 0
+    verification_hits = 0
+    invalid_hits = 0
     verification_logged = False
     while time.time() < deadline:
         _raise_if_cancelled(cancel_event)
@@ -792,8 +954,13 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
                     return {"ok": True, "status": "ready", "screenshot_path": shot, "details": stable_status}
                 last_status = stable_status
             if last_status.get("status") == "invalid_credentials":
+                invalid_hits += 1
+                if invalid_hits < 2 and self_heal_attempts < max_self_heal_attempts:
+                    self_heal_attempts += 1
+                    _self_heal_login_page(page, platform, logger, task, screenshot_dir, str(last_status.get("reason") or "invalid_credentials"), self_heal_attempts, cancel_event)
+                    continue
                 shot = _screenshot(page, screenshot_dir, task, "login_invalid_credentials", logger)
-                return _wait_for_manual_login_completion(
+                return _wait_or_raise_manual(
                     page,
                     task,
                     screenshot_dir,
@@ -804,9 +971,12 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
                     "cookie_expired",
                     shot,
                     last_status,
+                    wait_for_manual,
+                    manual_only_on_verification,
                 )
             if last_status.get("status") == "need_verification":
                 shot = _screenshot(page, screenshot_dir, task, "login_verification_required", logger)
+                verification_hits += 1
                 logger.log(
                     "warn",
                     "login_verification_required",
@@ -814,7 +984,11 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
                     {"url": str(page.url or ""), "screenshot_path": shot, "details": last_status},
                     shot,
                 )
-                return _wait_for_manual_login_completion(
+                if verification_hits < verification_confirmations and self_heal_attempts < max_self_heal_attempts:
+                    self_heal_attempts += 1
+                    _self_heal_login_page(page, platform, logger, task, screenshot_dir, str(last_status.get("reason") or "need_verification"), self_heal_attempts, cancel_event)
+                    continue
+                return _wait_or_raise_manual(
                     page,
                     task,
                     screenshot_dir,
@@ -825,11 +999,24 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
                     "need_verification",
                     shot,
                     last_status,
+                    wait_for_manual,
+                    manual_only_on_verification,
                 )
-            if auto_submit and login_attempts < 2 and str(last_status.get("status") or "") != "need_verification":
+            if auto_submit and login_attempts < max_login_attempts and str(last_status.get("status") or "") != "need_verification":
                 if _auto_submit_login_form(page, platform, payload, logger, task, screenshot_dir):
                     login_attempts += 1
+                    time.sleep(3)
+                    continue
+                elif self_heal_attempts < max_self_heal_attempts:
+                    self_heal_attempts += 1
+                    _self_heal_login_page(page, platform, logger, task, screenshot_dir, "auto_login_form_not_ready", self_heal_attempts, cancel_event)
+                    continue
             if _verification_visible(page):
+                verification_hits += 1
+                if verification_hits < verification_confirmations and self_heal_attempts < max_self_heal_attempts:
+                    self_heal_attempts += 1
+                    _self_heal_login_page(page, platform, logger, task, screenshot_dir, "verification_visible", self_heal_attempts, cancel_event)
+                    continue
                 if not verification_logged:
                     shot = _screenshot(page, screenshot_dir, task, "login_verification_required", logger)
                     logger.log(
@@ -840,7 +1027,7 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
                         shot,
                     )
                     verification_logged = True
-                return _wait_for_manual_login_completion(
+                return _wait_or_raise_manual(
                     page,
                     task,
                     screenshot_dir,
@@ -851,6 +1038,8 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
                     "need_verification",
                     shot,
                     last_status,
+                    wait_for_manual,
+                    manual_only_on_verification,
                 )
         except NeedManualError:
             raise
@@ -859,9 +1048,13 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
             if "Target page, context or browser has been closed" in message or "has been closed" in message:
                 raise NeedManualError(f"{_platform_name(platform)} 登录确认前浏览器窗口已关闭，请重新打开登录窗口并保持到账号就绪。", "cookie_expired") from exc
             logger.log("warn", "open_login_poll", f"登录窗口状态检查失败：{exc}")
+        if self_heal_attempts < max_self_heal_attempts:
+            self_heal_attempts += 1
+            _self_heal_login_page(page, platform, logger, task, screenshot_dir, "login_state_not_ready", self_heal_attempts, cancel_event)
+            continue
         time.sleep(3 if auto_submit else 10)
     shot = _screenshot(page, screenshot_dir, task, "login_wait_timeout", logger)
-    return _wait_for_manual_login_completion(
+    return _wait_or_raise_manual(
         page,
         task,
         screenshot_dir,
@@ -872,6 +1065,8 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
         str(last_status.get("status") or "need_verification"),
         shot,
         last_status,
+        wait_for_manual,
+        manual_only_on_verification,
     )
 
 
@@ -1585,6 +1780,11 @@ def _click_text_button(page, logger: AutomationLogger, names: list[str], stage: 
         locators = [
             page.get_by_role("button", name=name).first,
             page.get_by_text(name, exact=True).first,
+            page.get_by_text(name, exact=False).first,
+            page.locator(f'button:has-text("{name}")').first,
+            page.locator(f'a:has-text("{name}")').first,
+            page.locator(f'[role="button"]:has-text("{name}")').first,
+            page.locator(f'div:has-text("{name}")').filter(has=page.locator("img, svg, [aria-label], span")).first,
             page.locator(f'[aria-label="{name}"]').first,
         ]
         for loc in locators:
@@ -1594,6 +1794,32 @@ def _click_text_button(page, logger: AutomationLogger, names: list[str], stage: 
                     return True
             except Exception:
                 continue
+        try:
+            clicked = page.evaluate(
+                """label => {
+                    const wanted = String(label || '').trim().toLowerCase();
+                    const candidates = Array.from(document.querySelectorAll('button, a, [role="button"], div, span'));
+                    for (const node of candidates) {
+                        const text = String(node.innerText || node.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+                        if (!text || !text.includes(wanted)) continue;
+                        const rect = node.getBoundingClientRect();
+                        if (rect.width <= 0 || rect.height <= 0) continue;
+                        const style = window.getComputedStyle(node);
+                        if (style.visibility === 'hidden' || style.display === 'none' || style.pointerEvents === 'none') continue;
+                        const clickable = node.closest('button, a, [role="button"]') || node;
+                        clickable.scrollIntoView({block: 'center', inline: 'center'});
+                        clickable.click();
+                        return true;
+                    }
+                    return false;
+                }""",
+                name,
+            )
+            if clicked:
+                logger.log("debug", stage, "Clicked text target with DOM fallback.", {"label": name})
+                return True
+        except Exception:
+            pass
     return False
 
 
@@ -1603,6 +1829,20 @@ def _visible_first(page, selectors: list[str], timeout_ms: int = 1200):
             loc = page.locator(selector).first
             if loc.count() and loc.is_visible(timeout=timeout_ms):
                 return loc
+        except Exception:
+            continue
+    return None
+
+
+def _visible_last(page, selectors: list[str], timeout_ms: int = 1200):
+    for selector in selectors:
+        try:
+            locator = page.locator(selector)
+            count = locator.count()
+            for index in range(count - 1, -1, -1):
+                loc = locator.nth(index)
+                if loc.is_visible(timeout=timeout_ms):
+                    return loc
         except Exception:
             continue
     return None
@@ -1633,16 +1873,37 @@ def _auto_submit_login_form(page, platform: str, payload: dict[str, Any], logger
 
     continue_clicked = False
     if platform == "threads":
-        logger.log("info", "auto_login_continue", "正在查找 Threads 的 Instagram 登录按钮。", {"url": str(page.url or "")})
-        continue_clicked = _click_text_button(
-            page,
-            logger,
-            ["Continue with Instagram", "Log in with Instagram", "缁х画浣跨敤 Instagram", "浣跨敤 Instagram 缁х画"],
-            "threads_continue_instagram",
-        )
-        logger.log("info" if continue_clicked else "warn", "auto_login_continue", "Threads 的 Instagram 登录按钮已处理。", {"clicked": continue_clicked, "url": str(page.url or "")})
-        if continue_clicked:
-            _sleep_between(2.0, 4.0)
+        username_entry_clicked = False
+        for username_entry_attempt in range(1, 4):
+            try:
+                page.keyboard.press("Escape")
+            except Exception:
+                pass
+            if not _click_text_button(
+                page,
+                logger,
+                ["Log in with username instead", "Log in with username", "Use username instead"],
+                "threads_login_username_instead",
+            ):
+                continue
+            username_entry_clicked = True
+            _sleep_between(1.2, 2.2)
+            if _visible_first(page, ['input[name="username"]', 'input[autocomplete="username"]', 'input[type="text"]'], 700) and _visible_first(page, ['input[type="password"]', 'input[autocomplete="current-password"]'], 700):
+                logger.log("info", "threads_login_username_instead", "Threads username/password login entry was opened.", {"attempt": username_entry_attempt, "url": str(page.url or "")})
+                continue_clicked = True
+                break
+            logger.log("warn", "threads_login_username_instead", "Threads username login entry click did not expose inputs yet; retrying.", {"attempt": username_entry_attempt, "url": str(page.url or "")})
+        if not continue_clicked:
+            logger.log("info", "auto_login_continue", "正在查找 Threads 的 Instagram 登录按钮。", {"url": str(page.url or "")})
+            continue_clicked = _click_text_button(
+                page,
+                logger,
+                ["Continue with Instagram", "Log in with Instagram", "缁х画浣跨敤 Instagram", "浣跨敤 Instagram 缁х画"],
+                "threads_continue_instagram",
+            )
+            logger.log("info" if continue_clicked else "warn", "auto_login_continue", "Threads 的 Instagram 登录按钮已处理。", {"clicked": continue_clicked, "url": str(page.url or "")})
+            if continue_clicked:
+                _sleep_between(2.0, 4.0)
 
     logger.log("info", "auto_login_find_inputs", "正在查找用户名和密码输入框。", {"url": str(page.url or "")})
     username_input = _visible_first(page, [
@@ -1723,9 +1984,14 @@ def _verification_visible(page) -> bool:
 
 
 def _threads_compose_box(page):
+    dialog_box = _threads_dialog_compose_box(page)
+    if dialog_box is not None:
+        return dialog_box
+    return _threads_inline_compose_box(page)
+
+
+def _threads_inline_compose_box(page):
     return _visible_first(page, [
-        '[role="dialog"] textarea',
-        '[role="dialog"] [contenteditable="true"]',
         'textarea[placeholder*="thread" i]',
         'textarea[aria-label*="thread" i]',
         '[contenteditable="true"][aria-label*="thread" i]',
@@ -1747,7 +2013,7 @@ def _threads_post_button(page):
 
 
 def _threads_dialog_compose_box(page):
-    return _visible_first(page, [
+    return _visible_last(page, [
         '[role="dialog"] textarea',
         '[role="dialog"] [contenteditable="true"]',
         '[role="dialog"] [role="textbox"]',
@@ -1755,18 +2021,58 @@ def _threads_dialog_compose_box(page):
 
 
 def _threads_dialog_post_button(page):
-    return _visible_first(page, [
+    return _visible_last(page, [
         '[role="dialog"] button:has-text("Post")',
         '[role="dialog"] [role="button"]:has-text("Post")',
     ], timeout_ms=800)
 
 
+def _dismiss_threads_compose_dialogs(page, logger: AutomationLogger) -> None:
+    for attempt in range(5):
+        try:
+            visible_count = page.locator('[role="dialog"]').evaluate_all(
+                """nodes => nodes.filter((node) => {
+                    const rect = node.getBoundingClientRect();
+                    const style = window.getComputedStyle(node);
+                    return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+                }).length"""
+            )
+            if not visible_count:
+                return
+        except Exception:
+            return
+        logger.log("debug", "threads_publish_cleanup", "正在清理残留 Threads 发帖弹窗。", {"attempt": attempt + 1, "dialogs": visible_count})
+        with contextlib.suppress(Exception):
+            page.evaluate(
+                """() => {
+                    const labels = ['Discard', 'Cancel', 'Close', '取消', '关闭'];
+                    const dialogs = Array.from(document.querySelectorAll('[role="dialog"]')).reverse();
+                    for (const dialog of dialogs) {
+                        const controls = Array.from(dialog.querySelectorAll('button, [role="button"], a, div, span')).reverse();
+                        const target = controls.find((node) => {
+                            const text = String(node.innerText || node.textContent || node.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+                            return labels.some((label) => text.includes(label));
+                        });
+                        if (target) {
+                            const clickable = target.closest('button, [role="button"], a') || target;
+                            clickable.click();
+                        }
+                    }
+                }"""
+            )
+        with contextlib.suppress(Exception):
+            page.keyboard.press("Escape")
+        _sleep_between(0.5, 0.9)
+
+
 def _ensure_threads_compose_ready(page, logger: AutomationLogger):
-    compose = _threads_compose_box(page)
+    compose = _threads_dialog_compose_box(page)
     if compose is not None:
         return compose
     openers = [
         '[aria-label*="New thread" i]',
+        '[aria-label*="Create" i]',
+        '[aria-label*="Compose" i]',
         'button:has-text("Start a thread")',
         '[role="button"]:has-text("Start a thread")',
         'text="Start a thread"',
@@ -1778,11 +2084,18 @@ def _ensure_threads_compose_ready(page, logger: AutomationLogger):
             if loc.count() and loc.is_visible(timeout=2000):
                 _human_click(page, loc, logger, "threads_publish_open")
                 _sleep_between(0.8, 1.6)
-                compose = _threads_compose_box(page)
+                compose = _threads_dialog_compose_box(page)
                 if compose is not None:
                     return compose
         except Exception:
             continue
+    inline_compose = _threads_inline_compose_box(page)
+    if inline_compose is not None:
+        _human_click(page, inline_compose, logger, "threads_publish_open")
+        _sleep_between(0.8, 1.6)
+        compose = _threads_dialog_compose_box(page)
+        if compose is not None:
+            return compose
     raise RuntimeError("无法打开 Threads 发帖输入框。")
 
 
@@ -1809,7 +2122,103 @@ def _wait_for_threads_publish_success(page, logger: AutomationLogger) -> dict[st
     return {"confirmed": False, "reason": "等待 Threads 发布确认超时。", "url": str(page.url or "")}
 
 
-def _run_threads_publish_post(page, task, payload, screenshot_dir, logger) -> dict[str, Any]:
+def _threads_active_dialog_text(page) -> str:
+    try:
+        return str(
+            page.locator('[role="dialog"]').evaluate_all(
+                """nodes => {
+                    const visible = nodes.filter((node) => {
+                        const rect = node.getBoundingClientRect();
+                        const style = window.getComputedStyle(node);
+                        return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+                    });
+                    if (!visible.length) return '';
+                    visible.sort((a, b) => {
+                        const ar = a.getBoundingClientRect();
+                        const br = b.getBoundingClientRect();
+                        const ac = Math.abs((ar.left + ar.right) / 2 - window.innerWidth / 2) + Math.abs((ar.top + ar.bottom) / 2 - window.innerHeight / 2);
+                        const bc = Math.abs((br.left + br.right) / 2 - window.innerWidth / 2) + Math.abs((br.top + br.bottom) / 2 - window.innerHeight / 2);
+                        return ac - bc;
+                    });
+                    return visible[0].innerText || visible[0].textContent || '';
+                }"""
+            )
+            or ""
+        )
+    except Exception:
+        return ""
+
+
+def _click_threads_active_dialog_post(page, logger: AutomationLogger) -> bool:
+    try:
+        clicked = page.evaluate(
+            """() => {
+                const visible = Array.from(document.querySelectorAll('[role="dialog"]')).filter((node) => {
+                    const rect = node.getBoundingClientRect();
+                    const style = window.getComputedStyle(node);
+                    return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+                });
+                if (!visible.length) return false;
+                visible.sort((a, b) => {
+                    const ar = a.getBoundingClientRect();
+                    const br = b.getBoundingClientRect();
+                    const ac = Math.abs((ar.left + ar.right) / 2 - window.innerWidth / 2) + Math.abs((ar.top + ar.bottom) / 2 - window.innerHeight / 2);
+                    const bc = Math.abs((br.left + br.right) / 2 - window.innerWidth / 2) + Math.abs((br.top + br.bottom) / 2 - window.innerHeight / 2);
+                    return ac - bc;
+                });
+                const dialog = visible[0];
+                const controls = Array.from(dialog.querySelectorAll('button, [role="button"], div, span')).reverse();
+                for (const node of controls) {
+                    const text = String(node.innerText || node.textContent || node.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+                    if (text !== 'Post') continue;
+                    const clickable = node.closest('button, [role="button"]') || node;
+                    const style = window.getComputedStyle(clickable);
+                    if (clickable.disabled || clickable.getAttribute('aria-disabled') === 'true' || style.pointerEvents === 'none') continue;
+                    clickable.scrollIntoView({block: 'center', inline: 'center'});
+                    clickable.click();
+                    return true;
+                }
+                return false;
+            }"""
+        )
+        if clicked:
+            logger.log("debug", "threads_publish_submit", "已点击当前 Threads 弹窗内的 Post 按钮。", {})
+            return True
+    except Exception as exc:
+        logger.log("warn", "threads_publish_submit_dom_failed", "当前弹窗 Post DOM 点击失败。", {"error": str(exc)[:500]})
+    return False
+
+
+def _threads_profile_url(account: dict[str, Any] | None) -> str:
+    username = str((account or {}).get("username") or (account or {}).get("login_username") or "").strip().lstrip("@")
+    return f"https://www.threads.net/@{username}" if username else THREADS_HOME
+
+
+def _wait_for_threads_own_post(page, caption: str, logger: AutomationLogger, account: dict[str, Any] | None = None) -> dict[str, Any]:
+    _dismiss_threads_compose_dialogs(page, logger)
+    target_url = _threads_profile_url(account)
+    _goto(page, target_url, logger, "threads_publish_profile")
+    deadline = time.time() + 75
+    while time.time() < deadline:
+        try:
+            body = page.locator("body").inner_text(timeout=5000)
+        except Exception:
+            body = ""
+        if caption and caption in body:
+            with contextlib.suppress(Exception):
+                target = page.get_by_text(caption, exact=True).first
+                if target.count():
+                    target.scroll_into_view_if_needed(timeout=8000)
+                    _sleep_between(0.8, 1.2)
+            return {"confirmed": True, "reason": "已在账号主页看到本次发布内容。", "url": str(page.url or target_url)}
+        with contextlib.suppress(Exception):
+            page.reload(wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_load_state("networkidle", timeout=12000)
+        _sleep_between(2.0, 3.5)
+    return {"confirmed": False, "reason": "发布已提交，但账号主页未看到本次发布内容。", "url": str(page.url or target_url)}
+
+
+def _run_threads_publish_post(page, task, payload, screenshot_dir, logger, account: dict[str, Any] | None = None) -> dict[str, Any]:
     media_paths = [str(p) for p in (payload.get("media_paths") or []) if str(p or "").strip()]
     caption = str(payload.get("caption") or payload.get("content") or payload.get("text") or "").strip()
     if not caption and not media_paths:
@@ -1817,11 +2226,27 @@ def _run_threads_publish_post(page, task, payload, screenshot_dir, logger) -> di
     missing = [p for p in media_paths if not Path(p).exists()]
     if missing:
         raise FileNotFoundError(f"媒体文件不存在：{missing[0]}")
+    _dismiss_threads_compose_dialogs(page, logger)
     _goto(page, THREADS_HOME, logger, "threads_publish_open")
-    compose = _ensure_threads_compose_ready(page, logger)
+    _dismiss_threads_compose_dialogs(page, logger)
+    try:
+        compose = _ensure_threads_compose_ready(page, logger)
+    except Exception:
+        _screenshot(page, screenshot_dir, task, "failed", logger)
+        raise
     _human_click(page, compose, logger, "threads_publish_focus")
     if caption:
         _clear_and_type(page, compose, caption)
+        _sleep_between(0.8, 1.4)
+        dialog_text = _threads_active_dialog_text(page)
+        if caption not in dialog_text:
+            compose = _threads_dialog_compose_box(page) or compose
+            _clear_and_type(page, compose, caption)
+            _sleep_between(0.8, 1.4)
+            dialog_text = _threads_active_dialog_text(page)
+        if caption not in dialog_text:
+            _screenshot(page, screenshot_dir, task, "failed", logger)
+            raise RuntimeError("Threads 发帖内容没有写入当前弹窗。")
     if media_paths:
         file_input = page.locator('input[type="file"]').first
         if not file_input.count():
@@ -1839,18 +2264,29 @@ def _run_threads_publish_post(page, task, payload, screenshot_dir, logger) -> di
         logger.log("info", "threads_publish_upload", "正在上传 Threads 媒体文件。", {"count": len(media_paths)})
         file_input.set_input_files(media_paths)
         _sleep_between(1.0, 2.2)
-    post_button = _threads_post_button(page)
-    if post_button is None:
+    post_clicked = _click_threads_active_dialog_post(page, logger)
+    post_button = None if post_clicked else (_threads_dialog_post_button(page) or _threads_post_button(page))
+    if not post_clicked and post_button is None:
         raise RuntimeError("未找到 Threads 发布按钮。")
-    _human_click(page, post_button, logger, "threads_publish_submit")
+    if not post_clicked:
+        _human_click(page, post_button, logger, "threads_publish_submit")
     success = _wait_for_threads_publish_success(page, logger)
+    shot = ""
+    if not success.get("confirmed"):
+        _screenshot(page, screenshot_dir, task, "failed", logger)
+        raise RuntimeError(str(success.get("reason") or "Threads 发布未确认。"))
+    own_post = _wait_for_threads_own_post(page, caption, logger, account)
+    if not own_post.get("confirmed"):
+        _screenshot(page, screenshot_dir, task, "failed", logger)
+        raise RuntimeError(str(own_post.get("reason") or "Threads 发布后未看到自己的内容。"))
     shot = _screenshot(page, screenshot_dir, task, "publish_done", logger)
+    success = {**success, **own_post}
     return {"ok": True, "published": success, "url": str(success.get("url") or page.url or ""), "screenshot_path": shot}
 
 
-def _run_publish_post(page, task, payload, screenshot_dir, logger, platform: str = "instagram") -> dict[str, Any]:
+def _run_publish_post(page, task, payload, screenshot_dir, logger, platform: str = "instagram", account: dict[str, Any] | None = None) -> dict[str, Any]:
     if platform == "threads":
-        return _run_threads_publish_post(page, task, payload, screenshot_dir, logger)
+        return _run_threads_publish_post(page, task, payload, screenshot_dir, logger, account)
     media_paths = [str(p) for p in (payload.get("media_paths") or []) if str(p or "").strip()]
     caption = str(payload.get("caption") or "").strip()
     if not media_paths:

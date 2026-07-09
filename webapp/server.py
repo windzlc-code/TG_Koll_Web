@@ -31,6 +31,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, Field
 from PIL import Image
 
@@ -3890,6 +3891,14 @@ def _html_response_with_versions(filename: str, replacements: dict[str, str] | N
             "Expires": "0",
         },
     )
+
+
+def _json_script_payload(value: Any) -> str:
+    try:
+        payload = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        payload = "null"
+    return payload.replace("</", "<\\/")
 
 
 def _ensure_default_pricing() -> None:
@@ -10482,6 +10491,7 @@ class PersonaDashboardHotCandidatesFetchPayload(BaseModel):
     prompt: str = ""
     refresh: bool = False
     limit: int = 10
+    search_mode: str = "strict"
     selected_memory_ids: list[str] = Field(default_factory=list)
 
 
@@ -11948,6 +11958,7 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
         else [str(item.get("summary") or "").strip() for item in memories if str(item.get("summary") or "").strip()]
     )[:8]
     limit = min(max(_to_int(payload.limit, 10), 1), 20)
+    search_mode = "normal" if str(payload.search_mode or "").strip().lower() == "normal" else "strict"
     internal_limit = 20 if bool(payload.refresh) and limit >= 10 else limit
     web_served_at_before_fetch = _read_persona_hot_web_served_at_map(clean_id)
     workflow_payload = {
@@ -11956,6 +11967,7 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
         "prompt": str(payload.prompt or "").strip(),
         "refresh": bool(payload.refresh),
         "limit": internal_limit,
+        "searchMode": search_mode,
         "memorySummaries": selected_summaries,
     }
     result = _run_persona_hot_workflow_cli_with_web_retry(
@@ -11996,6 +12008,7 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
             for item in (result.get("keywords") if isinstance(result.get("keywords"), list) else [])
             if _normalize_hot_workflow_text(item)
         ],
+        "search_mode": "normal" if str(result.get("searchMode") or search_mode).strip().lower() == "normal" else "strict",
         "cookie_statuses": cookie_rows,
         "warnings": [
             _normalize_hot_workflow_text(item)
@@ -12818,7 +12831,7 @@ def _active_social_task_for_account(account_id: str, task_types: list[str]) -> d
             SELECT *
             FROM social_automation_tasks
             WHERE account_id = ?
-              AND status IN ('queued', 'running')
+              AND status IN ('queued', 'running', 'need_manual')
               AND task_type IN ({placeholders})
             ORDER BY priority ASC, scheduled_at ASC, created_at DESC
             LIMIT 1
@@ -12835,7 +12848,7 @@ def _ensure_publish_login_task(account: dict[str, Any], *, scheduled_at: int | f
     account_status = str(account.get("status") or "").strip().lower()
     if account_status == "ready":
         return None
-    active = _active_social_task_for_account(account_id, ["open_login", "check_login"])
+    active = _active_social_task_for_account(account_id, ["open_login"])
     if active:
         return active
     platform = str(account.get("platform") or "threads").strip().lower() or "threads"
@@ -12850,9 +12863,14 @@ def _ensure_publish_login_task(account: dict[str, Any], *, scheduled_at: int | f
             payload={
                 "auto_submit": True,
                 "login_wait_seconds": 180,
+                "wait_for_manual": True,
+                "manual_only_on_verification": True,
+                "max_login_attempts": 4,
+                "max_self_heal_attempts": 6,
+                "verification_confirmations": 3,
                 "reason": "publish_before_login",
             },
-            max_retries=0,
+            max_retries=2,
         )
     )
 
@@ -12884,12 +12902,6 @@ def _publish_persona_archive_post(
     account = _persona_publish_account_for_archive(clean_archive_id, payload.account_id, payload.platform)
     platform = str(account.get("platform") or "instagram").strip().lower() or "instagram"
     login_task = _ensure_publish_login_task(account, scheduled_at=payload.scheduled_at or 0)
-    if login_task:
-        login_task_id = str((login_task or {}).get("id") or "").strip()
-        detail = "账号未登录，已打开登录窗口，请完成登录后重试发布。"
-        if login_task_id:
-            detail = f"{detail} 登录任务：{login_task_id}"
-        raise HTTPException(status_code=409, detail=detail)
     if not media_paths:
         media_paths = _post_media_paths_for_publish(post)
     if platform == "instagram" and not media_paths:
@@ -12992,16 +13004,6 @@ def _publish_persona_matrix(payload: PersonaDashboardMatrixPublishPayload) -> di
         try:
             account = _persona_publish_account_for_archive(persona_id, "", platform)
             login_task = _ensure_publish_login_task(account, scheduled_at=payload.scheduled_at or 0)
-            if login_task:
-                skipped.append({
-                    "persona_id": persona_id,
-                    "persona_name": persona_name,
-                    "account_id": str(account.get("id") or ""),
-                    "platform": platform,
-                    "login_task": login_task,
-                    "reason": "账号未登录，已打开登录窗口，请完成登录后重试发布。",
-                })
-                continue
             rows = _archive_posts_for_matrix_source(archive, source)
             candidates: list[dict[str, Any]] = []
             for post in rows:
@@ -14843,6 +14845,8 @@ def _build_persona_dashboard_console_overview() -> dict[str, Any]:
         visible_publish_history = [record for record in publish_history if _is_persona_publish_history_record(record)]
         image_library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
         favorite_posts = archive.get("favoritePosts") if isinstance(archive.get("favoritePosts"), list) else []
+        compact_visible_posts = [_compact_persona_archive_post(post) for post in visible_posts if isinstance(post, dict)]
+        compact_favorite_posts = [_compact_persona_archive_post(post) for post in favorite_posts if isinstance(post, dict)]
         account_management = setup.get("accountManagement") if isinstance(setup.get("accountManagement"), dict) else {}
         threads_account = account_management.get("threads") if isinstance(account_management.get("threads"), dict) else {}
         threads_handle = _normalize_threads_username(threads_account.get("handle"))
@@ -14882,6 +14886,8 @@ def _build_persona_dashboard_console_overview() -> dict[str, Any]:
             "hot_platforms": [],
             "post_metrics": [],
             "publish_history": [],
+            "draft_posts": compact_visible_posts,
+            "favorite_posts": compact_favorite_posts,
             "queue": (queue_stats.get("by_archive") or {}).get(archive_id, {}),
             "warnings": [],
         })
@@ -14928,6 +14934,7 @@ def create_app() -> FastAPI:
         yield
 
     app = FastAPI(title="Workflow WebApp", version="1.0.0", lifespan=lifespan)
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
     app.mount("/assets", StaticFiles(directory=str(STATIC_DIR / "assets")), name="assets")
     app.mount("/tool_r18_uploads", StaticFiles(directory=str(TOOL_R18_UPLOAD_ROOT)), name="tool_r18_uploads")
 
@@ -14970,11 +14977,17 @@ def create_app() -> FastAPI:
 
     @app.get("/console.html", include_in_schema=False)
     def page_console() -> HTMLResponse:
+        try:
+            console_bootstrap = _build_persona_dashboard_console_overview()
+        except Exception as exc:
+            logger.warning("Failed to build console bootstrap overview: %s", exc)
+            console_bootstrap = None
         response = _html_response_with_versions(
             "console.html",
             replacements={
                 "__CONSOLE_CSS_VERSION__": _asset_version("assets", "console.css"),
                 "__CONSOLE_JS_VERSION__": _asset_version("assets", "console.js"),
+                "__CONSOLE_BOOTSTRAP_JSON__": _json_script_payload(console_bootstrap),
             },
         )
         response.set_cookie(

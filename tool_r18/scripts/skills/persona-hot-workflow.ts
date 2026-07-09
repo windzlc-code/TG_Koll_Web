@@ -21,6 +21,7 @@ type FetchHotCandidatesInput = {
   prompt?: string;
   limit?: number;
   refresh?: boolean;
+  searchMode?: "normal" | "strict";
   memorySummaries?: string[];
 };
 
@@ -93,12 +94,14 @@ async function fetchHotCandidates(input: FetchHotCandidatesInput) {
     memorySummaries,
     limit: Math.max(1, Math.min(Number(input.limit || 10), 20)),
     refresh: input.refresh === true,
+    searchMode: input.searchMode === "normal" ? "normal" : "strict",
   });
   return {
     ok: true,
     archiveId: archive.id,
     archiveName: archive.name,
     keywords: result.keywords,
+    searchMode: result.searchMode,
     cookieStatuses: result.cookieStatuses,
     warnings: result.warnings,
     candidates: result.candidates,

@@ -13397,9 +13397,6 @@ function renderLiveBrowserSessions() {
   const sessionKey = sessions.map((session) => [
     session.id || session.session_id || "",
     session.task_id || "",
-    session.status || "",
-    session.close_at || "",
-    session.standby_started_at || "",
     session.view_path || session.novnc_path || session.public_url || "",
     session.web_port || "",
     session.width || "",
@@ -13411,17 +13408,28 @@ function renderLiveBrowserSessions() {
       const card = Array.from(host.querySelectorAll("[data-live-browser-card]"))
         .find((node) => String(node.dataset.liveBrowserCard || "") === sessionId);
       const statusNode = card?.querySelector("[data-live-browser-status]");
+      const status = liveBrowserTaskStatus(session);
       if (statusNode) {
-        statusNode.className = `status ${esc(session.status || "running")}`;
-        statusNode.textContent = statusLabel(session.status || "running");
+        statusNode.className = `status ${esc(status)}`;
+        statusNode.textContent = statusLabel(status);
       }
-      const tone = statusTone(session.status || "running");
+      const tone = statusTone(status || "running");
+      const isTaskSuccess = status === "success";
       if (card) {
+        const interactionAllowed = canInteractWithLiveBrowser(session);
         card.classList.toggle("is-status-active", tone === "active");
         card.classList.toggle("is-status-manual", tone === "manual");
-        card.classList.toggle("is-status-success", tone === "success");
+        card.classList.toggle("is-status-success", isTaskSuccess);
         card.classList.toggle("is-status-error", tone === "error");
         card.classList.toggle("is-status-muted", tone === "muted");
+        card.classList.toggle("is-interaction-enabled", interactionAllowed);
+        card.classList.toggle("is-interaction-locked", !interactionAllowed);
+        card.querySelector("[data-live-browser-fullscreen]")?.toggleAttribute("disabled", !interactionAllowed);
+        card.querySelector("[data-live-browser-text]")?.toggleAttribute("disabled", !interactionAllowed);
+        card.querySelector("[data-live-browser-type]")?.toggleAttribute("disabled", !interactionAllowed);
+        card.querySelector("[data-live-browser-key]")?.toggleAttribute("disabled", !interactionAllowed);
+        const note = card.querySelector(".live-browser-interaction-note");
+        if (note) note.textContent = liveBrowserInteractionHint(session);
       }
     });
     return;
@@ -13432,7 +13440,7 @@ function renderLiveBrowserSessions() {
       <div class="live-browser-head">
         <div>
           <strong>实时浏览器监控</strong>
-          <span>${esc(sessions.length ? `${sessions.length} 个浏览器正在运行，可在下方窗口直接交互` : "暂无运行中的浏览器窗口。发布或自动化任务运行后会自动追加到下方。")}</span>
+          <span>${esc(liveBrowserPanelHint(sessions))}</span>
         </div>
       </div>
       <div class="live-browser-grid">
@@ -13459,12 +13467,35 @@ function renderLiveBrowserPlaceholder(index = 1) {
   `;
 }
 
+function liveBrowserTaskStatus(session) {
+  return String(session?.task_status || session?.status || "running").trim().toLowerCase() || "running";
+}
+
+function liveBrowserSessionStatus(session) {
+  return String(session?.status || "running").trim().toLowerCase() || "running";
+}
+
+function liveBrowserPanelHint(sessions = []) {
+  if (!Array.isArray(sessions) || !sessions.length) {
+    return "暂无运行中的浏览器窗口。发布或自动化任务运行后会自动追加到下方。";
+  }
+  const manualCount = sessions.filter((session) => canInteractWithLiveBrowser(session)).length;
+  if (manualCount > 0) {
+    return `${sessions.length} 个浏览器正在运行，其中 ${manualCount} 个需要人工处理，可在对应窗口操作。`;
+  }
+  return `${sessions.length} 个浏览器正在运行，当前仅展示实时画面；进入人工处理状态后才可操作。`;
+}
+
+function liveBrowserInteractionHint(session) {
+  const taskStatus = liveBrowserTaskStatus(session);
+  const sessionStatus = liveBrowserSessionStatus(session);
+  if (sessionStatus === "standby") return "任务已完成，浏览器处于待机状态，可等待系统自动关闭。";
+  if (taskStatus === "need_manual") return "当前需要人工处理，可以直接操作浏览器窗口。";
+  return "自动化执行中，当前仅展示实时画面，暂不允许人工输入。";
+}
+
 function canInteractWithLiveBrowser(session) {
-  const status = String(session?.status || "").trim().toLowerCase();
-  const taskType = String(session?.task_type || "").trim().toLowerCase();
-  if (session?.id || session?.session_id) return true;
-  if (["need_manual", "pending_login", "need_verification"].includes(status)) return true;
-  return taskType === "open_login";
+  return liveBrowserTaskStatus(session) === "need_manual";
 }
 
 function renderLiveBrowserSession(session) {
@@ -13474,16 +13505,17 @@ function renderLiveBrowserSession(session) {
   const width = Math.max(1, Number(session.width || 1280));
   const height = Math.max(1, Number(session.height || 720));
   const orientationClass = height > width ? " is-portrait" : " is-landscape";
-  const status = String(session.status || "running");
-  const statusClass = ` is-status-${statusTone(status)}`;
+  const status = liveBrowserTaskStatus(session);
+  const sessionStatus = liveBrowserSessionStatus(session);
+  const normalizedStatus = status.trim().toLowerCase();
+  const tone = statusTone(status);
+  const statusClass = normalizedStatus === "success"
+    ? " is-status-success"
+    : ` is-status-${tone === "success" ? "muted" : tone}`;
   const interactionAllowed = canInteractWithLiveBrowser(session);
   const interactionClass = interactionAllowed ? " is-interaction-enabled" : " is-interaction-locked";
-  const interactionHint = status === "standby"
-    ? "任务已完成，浏览器处于待机状态，可手动关闭或等待自动关闭。"
-    : ["need_manual", "pending_login", "need_verification"].includes(status) || String(session.task_type || "").trim().toLowerCase() === "open_login"
-    ? "当前需要人工处理，可以直接操作浏览器窗口。"
-    : "预览窗口可直接操作；自动化执行中请谨慎输入，验证码场景可使用下方工具。";
-  const canCloseWindow = sessionId && status !== "running";
+  const interactionHint = liveBrowserInteractionHint(session);
+  const canCloseWindow = sessionId && sessionStatus === "standby";
   return `
     <article class="live-browser-card${orientationClass}${interactionClass}${statusClass}" data-live-browser-card="${esc(sessionId)}" style="--live-browser-width: ${width}; --live-browser-height: ${height}; --live-browser-ratio: ${width} / ${height};">
       <div class="live-browser-card-head">
@@ -13507,6 +13539,7 @@ function renderLiveBrowserSession(session) {
           allow="clipboard-read; clipboard-write"
           allowfullscreen
         ></iframe>
+        <div class="live-browser-lock" aria-hidden="true"><span>自动化执行中，等待进入人工处理状态后再操作。</span></div>
       </div>
       <div class="live-browser-tools" data-live-browser-tools="${esc(sessionId)}">
         <input
@@ -13514,10 +13547,10 @@ function renderLiveBrowserSession(session) {
           data-live-browser-text="${esc(sessionId)}"
           placeholder="输入验证码或文本"
           autocomplete="off"
-          ${sessionId ? "" : "disabled"}
+          ${interactionAllowed ? "" : "disabled"}
         />
-        <button type="button" data-live-browser-type="${esc(sessionId)}" ${sessionId ? "" : "disabled"}>发送</button>
-        <button type="button" data-live-browser-key="${esc(sessionId)}" data-live-browser-key-value="Enter" ${sessionId ? "" : "disabled"}>回车</button>
+        <button type="button" data-live-browser-type="${esc(sessionId)}" ${interactionAllowed ? "" : "disabled"}>发送</button>
+        <button type="button" data-live-browser-key="${esc(sessionId)}" data-live-browser-key-value="Enter" ${interactionAllowed ? "" : "disabled"}>回车</button>
         <button type="button" data-live-browser-screenshot="${esc(sessionId)}" ${sessionId ? "" : "disabled"}>截图</button>
       </div>
       <div class="live-browser-interaction-note">${esc(interactionHint)}</div>

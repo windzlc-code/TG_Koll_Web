@@ -385,6 +385,23 @@ async def _proxy_live_browser_websocket(websocket: WebSocket, session_id: str) -
             await websocket.close(code=1011)
         return
 
+    def input_allowed() -> bool:
+        try:
+            with db() as conn:
+                row = conn.execute("SELECT status FROM social_automation_tasks WHERE id = ?", (str(session.task_id or ""),)).fetchone()
+            return bool(row and str(row["status"] or "").strip().lower() == "need_manual")
+        except Exception:
+            return False
+
+    def is_rfb_input_event(message: bytes | str) -> bool:
+        if isinstance(message, str):
+            return False
+        if not message:
+            return False
+        # RFB client messages: 4=KeyEvent, 5=PointerEvent, 6=ClientCutText.
+        # Keep framebuffer/setup traffic flowing so the preview remains live.
+        return int(message[0]) in {4, 5, 6}
+
     async def browser_to_kasm() -> None:
         while True:
             message = await websocket.receive()
@@ -392,10 +409,14 @@ async def _proxy_live_browser_websocket(websocket: WebSocket, session_id: str) -
                 break
             data = message.get("bytes")
             if data is not None:
+                if is_rfb_input_event(data) and not input_allowed():
+                    continue
                 await target.send(data)
                 continue
             text = message.get("text")
             if text is not None:
+                if is_rfb_input_event(text.encode("latin1", "ignore")) and not input_allowed():
+                    continue
                 await target.send(text)
 
     async def kasm_to_browser() -> None:
@@ -537,9 +558,33 @@ def _live_browser_sessions() -> list[dict[str, Any]]:
     try:
         from social_automation.live_browser import list_live_browser_sessions
 
-        return list_live_browser_sessions()
+        sessions = list_live_browser_sessions()
     except Exception:
         return []
+    task_ids = [str(session.get("task_id") or "").strip() for session in sessions if str(session.get("task_id") or "").strip()]
+    if not task_ids:
+        return sessions
+    placeholders = ",".join("?" for _ in task_ids)
+    try:
+        with db() as conn:
+            rows = conn.execute(
+                f"SELECT id, status, error, finished_at FROM social_automation_tasks WHERE id IN ({placeholders})",
+                task_ids,
+            ).fetchall()
+        task_status = {str(row["id"]): row for row in rows}
+    except Exception:
+        return sessions
+    for session in sessions:
+        row = task_status.get(str(session.get("task_id") or ""))
+        if not row:
+            continue
+        status = str(row["status"] or "").strip().lower()
+        if status:
+            session["task_status"] = status
+        if str(row["error"] or "").strip():
+            session["task_error"] = str(row["error"] or "")
+        session["task_finished_at"] = int(row["finished_at"] or 0)
+    return sessions
 
 
 def _bounded_env_int(name: str, fallback: int, minimum: int, maximum: int) -> int:
@@ -593,24 +638,50 @@ def set_live_browser_settings(payload: LiveBrowserSettingsPayload) -> dict[str, 
     return settings
 
 
-def close_live_browser_session(session_id: str) -> None:
+def close_live_browser_session(session_id: str, *, force: bool = False) -> None:
     try:
-        from social_automation.live_browser import stop_live_browser_session
+        from social_automation.live_browser import get_live_browser_session, stop_live_browser_session
 
+        session = get_live_browser_session(str(session_id or ""))
+        if session is not None and str(getattr(session, "status", "") or "").strip().lower() == "running" and not force:
+            raise HTTPException(status_code=409, detail="自动化执行中的实时浏览器不能直接关闭，请使用停止进程。")
         stop_live_browser_session(str(session_id or ""))
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"关闭实时浏览器失败: {exc}") from exc
+
+
+def _require_live_browser_manual_session(session_id: str) -> str:
+    clean_id = str(session_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="缺少实时浏览器会话")
+    task_id = ""
+    with _RUNNING_TASK_CONTROLS_LOCK:
+        for candidate_task_id, control in _RUNNING_TASK_CONTROLS.items():
+            if str(control.get("live_browser_session_id") or "") == clean_id:
+                task_id = str(candidate_task_id or "")
+                break
+    if not task_id:
+        raise HTTPException(status_code=409, detail="当前浏览器会话未处于可人工操作状态")
+    with db() as conn:
+        row = conn.execute("SELECT status FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
+    if not row or str(row["status"] or "").strip().lower() != "need_manual":
+        raise HTTPException(status_code=409, detail="只有任务进入人工处理状态后才允许操作浏览器")
+    return task_id
 
 
 def type_live_browser_session_text(session_id: str, text: str, *, press_enter: bool = False) -> dict[str, Any]:
     clean_text = str(text or "")
     if not clean_text and not press_enter:
         raise HTTPException(status_code=400, detail="请输入要发送到浏览器的文本")
+    _require_live_browser_manual_session(session_id)
     return _type_live_browser_session_text_via_display(session_id, clean_text, press_enter=press_enter)
 
 
 def press_live_browser_session_key(session_id: str, key: str) -> dict[str, Any]:
     clean_key = _normalize_live_browser_key(key)
+    _require_live_browser_manual_session(session_id)
     return _press_live_browser_session_key_via_display(session_id, clean_key)
 
 
@@ -1487,7 +1558,7 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
     proxy = dict(proxy_row) if proxy_row else None
     task = dict(task)
     task["payload"] = _runtime_task_payload(task, account)
-    from social_automation.runner import NeedManualError, UnsupportedActionError, run_social_task
+    from social_automation.runner import AutoLoginFailedError, NeedManualError, UnsupportedActionError, run_social_task
 
     logger = _DbTaskLogger(task["id"])
     control = {"cancel_event": threading.Event(), "context": None, "manager": None, "task": dict(task), "live_browser_session_id": ""}
@@ -1505,6 +1576,10 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
     except NeedManualError as exc:
         if not _is_task_cancelled(str(task["id"])):
             _finish_task(task["id"], "need_manual", {}, str(exc), account_status=str(getattr(exc, "status", "") or "need_verification"))
+        return
+    except AutoLoginFailedError as exc:
+        if not _is_task_cancelled(str(task["id"])):
+            _finish_task(task["id"], "failed", {"auto_login_failed": True, "screenshot_path": str(getattr(exc, "screenshot_path", "") or "")}, str(exc), account_status=str(getattr(exc, "status", "") or "cookie_expired"))
         return
     except UnsupportedActionError as exc:
         if not _is_task_cancelled(str(task["id"])):

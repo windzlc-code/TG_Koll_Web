@@ -7378,8 +7378,13 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .live-browser-card.is-status-active {
-  border-color: color-mix(in srgb, var(--warning-soft-ink) 70%, var(--line));
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--warning-soft-ink) 18%, transparent);
+  border-color: color-mix(in srgb, #05070a 86%, var(--line));
+  box-shadow: 0 0 0 2px color-mix(in srgb, #05070a 14%, transparent);
+}
+
+.live-browser-card.is-status-queued {
+  border-color: color-mix(in srgb, #2563eb 78%, var(--line));
+  box-shadow: 0 0 0 2px color-mix(in srgb, #2563eb 16%, transparent);
 }
 
 .live-browser-card.is-status-manual {
@@ -7473,8 +7478,23 @@ body.persona-touch-dragging .persona-list-card:active {
   background: #111;
 }
 
+.live-browser-card.is-interaction-locked iframe {
+  pointer-events: none;
+}
+
 .live-browser-lock {
   display: none;
+}
+
+.live-browser-card.is-interaction-locked .live-browser-lock {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: end center;
+  padding: 12px;
+  pointer-events: auto;
+  background: linear-gradient(to bottom, transparent 62%, rgba(8, 12, 18, 0.48));
 }
 
 .live-browser-lock span {
