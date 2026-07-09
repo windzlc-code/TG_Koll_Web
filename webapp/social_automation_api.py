@@ -7,6 +7,7 @@ import threading
 import time
 import uuid
 import contextlib
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -122,6 +123,15 @@ class LiveBrowserSettingsPayload(BaseModel):
     max_concurrency: int = Field(default=4, ge=1, le=12)
 
 
+class LiveBrowserTextPayload(BaseModel):
+    text: str = Field(default="", max_length=2000)
+    press_enter: bool = False
+
+
+class LiveBrowserKeyPayload(BaseModel):
+    key: str = Field(default="Enter", max_length=40)
+
+
 def configure_social_automation(*, data_dir: Path, new_id: Callable[[str], str] | None = None) -> None:
     global _DATA_DIR, _NEW_ID
     _DATA_DIR = Path(data_dir).resolve()
@@ -150,6 +160,18 @@ def register_social_automation_routes(app: FastAPI) -> None:
     def api_social_browser_session_close(session_id: str, _user: dict[str, Any] = Depends(get_current_user)):
         close_live_browser_session(session_id)
         return {"ok": True, "closed": True}
+
+    @app.post("/api/persona_dashboard/automation/browser_sessions/{session_id}/type")
+    def api_social_browser_session_type(session_id: str, payload: LiveBrowserTextPayload, _user: dict[str, Any] = Depends(get_current_user)):
+        return {"ok": True, **type_live_browser_session_text(session_id, payload.text, press_enter=payload.press_enter)}
+
+    @app.post("/api/persona_dashboard/automation/browser_sessions/{session_id}/key")
+    def api_social_browser_session_key(session_id: str, payload: LiveBrowserKeyPayload, _user: dict[str, Any] = Depends(get_current_user)):
+        return {"ok": True, **press_live_browser_session_key(session_id, payload.key)}
+
+    @app.post("/api/persona_dashboard/automation/browser_sessions/{session_id}/screenshot")
+    def api_social_browser_session_screenshot(session_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+        return {"ok": True, **capture_live_browser_session_screenshot(session_id)}
 
     @app.websocket("/api/persona_dashboard/automation/browser_sessions/{session_id}/ws")
     async def api_social_browser_session_ws(websocket: WebSocket, session_id: str):
@@ -578,6 +600,183 @@ def close_live_browser_session(session_id: str) -> None:
         stop_live_browser_session(str(session_id or ""))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"关闭实时浏览器失败: {exc}") from exc
+
+
+def type_live_browser_session_text(session_id: str, text: str, *, press_enter: bool = False) -> dict[str, Any]:
+    clean_text = str(text or "")
+    if not clean_text and not press_enter:
+        raise HTTPException(status_code=400, detail="请输入要发送到浏览器的文本")
+    control = _running_control_for_live_browser_session(session_id)
+    if control is None:
+        return _type_live_browser_session_text_via_display(session_id, clean_text, press_enter=press_enter)
+    lock = control.setdefault("browser_action_lock", threading.RLock())
+    with lock:
+        page = _live_browser_control_page(control)
+        if page is None:
+            return _type_live_browser_session_text_via_display(session_id, clean_text, press_enter=press_enter)
+        try:
+            if clean_text:
+                page.keyboard.type(clean_text, delay=20)
+            if press_enter:
+                page.keyboard.press("Enter")
+        except Exception as exc:
+            with contextlib.suppress(Exception):
+                return _type_live_browser_session_text_via_display(session_id, clean_text, press_enter=press_enter)
+            raise HTTPException(status_code=500, detail=f"发送文本失败：{exc}") from exc
+    return {"sent": True, "length": len(clean_text), "pressed_enter": bool(press_enter)}
+
+
+def press_live_browser_session_key(session_id: str, key: str) -> dict[str, Any]:
+    clean_key = _normalize_live_browser_key(key)
+    control = _running_control_for_live_browser_session(session_id)
+    if control is None:
+        return _press_live_browser_session_key_via_display(session_id, clean_key)
+    lock = control.setdefault("browser_action_lock", threading.RLock())
+    with lock:
+        page = _live_browser_control_page(control)
+        if page is None:
+            return _press_live_browser_session_key_via_display(session_id, clean_key)
+        try:
+            page.keyboard.press(clean_key)
+        except Exception as exc:
+            with contextlib.suppress(Exception):
+                return _press_live_browser_session_key_via_display(session_id, clean_key)
+            raise HTTPException(status_code=500, detail=f"发送按键失败：{exc}") from exc
+    return {"pressed": clean_key}
+
+
+def capture_live_browser_session_screenshot(session_id: str) -> dict[str, Any]:
+    control = _running_control_for_live_browser_session(session_id)
+    task_id = str(control.get("task", {}).get("id") or "") if control else str(session_id or "").replace("live_", "", 1)
+    screenshot_dir = (_DATA_DIR / "social_automation" / "screenshots").resolve()
+    screenshot_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"screenshot_{task_id or 'live'}_manual_{_now()}.png"
+    path = (screenshot_dir / filename).resolve()
+    if screenshot_dir not in path.parents:
+        raise HTTPException(status_code=400, detail="截图路径不合法")
+    if control is None:
+        return _capture_live_browser_session_screenshot_via_display(session_id, path)
+    lock = control.setdefault("browser_action_lock", threading.RLock())
+    with lock:
+        page = _live_browser_control_page(control)
+        if page is None:
+            return _capture_live_browser_session_screenshot_via_display(session_id, path)
+        try:
+            page.screenshot(path=str(path), full_page=False)
+        except Exception as exc:
+            with contextlib.suppress(Exception):
+                return _capture_live_browser_session_screenshot_via_display(session_id, path)
+            raise HTTPException(status_code=500, detail=f"截图失败：{exc}") from exc
+    if task_id:
+        with contextlib.suppress(Exception):
+            with db() as conn:
+                _insert_log(conn, task_id, "info", "manual_screenshot", "已从预览窗口手动截图", {"session_id": session_id}, str(path))
+    return {"screenshot_path": str(path), "screenshot_url": f"/api/persona_dashboard/automation/screenshots/{path.name}"}
+
+
+def _running_control_for_live_browser_session(session_id: str) -> dict[str, Any] | None:
+    clean_id = str(session_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="浏览器会话不能为空")
+    with _RUNNING_TASK_CONTROLS_LOCK:
+        for control in _RUNNING_TASK_CONTROLS.values():
+            if str(control.get("live_browser_session_id") or "") == clean_id:
+                return control
+    return None
+
+
+def _live_browser_control_page(control: dict[str, Any]) -> Any | None:
+    context = control.get("context")
+    if context is None:
+        return None
+    pages = getattr(context, "pages", None) or []
+    for page in reversed(list(pages)):
+        with contextlib.suppress(Exception):
+            if not page.is_closed():
+                return page
+    with contextlib.suppress(Exception):
+        return context.new_page()
+    return None
+
+
+def _live_browser_session_display(session_id: str) -> str:
+    try:
+        from social_automation.live_browser import get_live_browser_session
+
+        session = get_live_browser_session(session_id)
+    except Exception:
+        session = None
+    display = str(getattr(session, "display", "") or "").strip()
+    if not display:
+        raise HTTPException(status_code=404, detail="浏览器会话没有可控制的显示窗口")
+    return display
+
+
+def _type_live_browser_session_text_via_display(session_id: str, text: str, *, press_enter: bool = False) -> dict[str, Any]:
+    display = _live_browser_session_display(session_id)
+    if text:
+        _run_display_tool(["xdotool", "type", "--clearmodifiers", "--delay", "20", text], display, "发送文本")
+    if press_enter:
+        _run_display_tool(["xdotool", "key", "--clearmodifiers", "Return"], display, "发送回车")
+    return {"sent": True, "length": len(text), "pressed_enter": bool(press_enter), "backend": "display"}
+
+
+def _press_live_browser_session_key_via_display(session_id: str, key: str) -> dict[str, Any]:
+    display = _live_browser_session_display(session_id)
+    x_key = "Return" if key == "Enter" else key
+    _run_display_tool(["xdotool", "key", "--clearmodifiers", x_key], display, "发送按键")
+    return {"pressed": key, "backend": "display"}
+
+
+def _capture_live_browser_session_screenshot_via_display(session_id: str, path: Path) -> dict[str, Any]:
+    display = _live_browser_session_display(session_id)
+    if _display_tool_available("import"):
+        _run_display_tool(["import", "-window", "root", str(path)], display, "截图")
+    elif _display_tool_available("scrot"):
+        _run_display_tool(["scrot", str(path)], display, "截图")
+    else:
+        raise HTTPException(status_code=409, detail="当前浏览器会话已脱离任务上下文，且容器缺少 import/scrot 截图工具")
+    return {"screenshot_path": str(path), "screenshot_url": f"/api/persona_dashboard/automation/screenshots/{path.name}", "backend": "display"}
+
+
+def _display_tool_available(name: str) -> bool:
+    try:
+        result = subprocess.run(["/bin/sh", "-lc", f"command -v {name}"], capture_output=True, text=True, timeout=2)
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _run_display_tool(args: list[str], display: str, action: str) -> None:
+    env = dict(os.environ)
+    env["DISPLAY"] = display
+    try:
+        result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=10)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=409, detail=f"{action}失败：容器缺少 {args[0]} 工具") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"{action}失败：{exc}") from exc
+    if result.returncode != 0:
+        error = (result.stderr or result.stdout or "").strip()
+        raise HTTPException(status_code=500, detail=f"{action}失败：{error or result.returncode}")
+
+
+def _normalize_live_browser_key(key: str) -> str:
+    clean = str(key or "Enter").strip()
+    allowed = {
+        "Enter": "Enter",
+        "Tab": "Tab",
+        "Escape": "Escape",
+        "Backspace": "Backspace",
+        "Delete": "Delete",
+        "ArrowLeft": "ArrowLeft",
+        "ArrowRight": "ArrowRight",
+        "ArrowUp": "ArrowUp",
+        "ArrowDown": "ArrowDown",
+    }
+    if clean in allowed:
+        return allowed[clean]
+    raise HTTPException(status_code=400, detail="不支持的按键")
 
 
 def create_social_proxy(payload: SocialProxyPayload) -> dict[str, Any]:
@@ -1193,11 +1392,42 @@ def _start_claimed_task_thread(task: dict[str, Any]) -> None:
     thread.start()
 
 
+def _publish_login_dependency_blocks_claim(conn: sqlite3.Connection, row: Any, now: int) -> bool:
+    task_type = str(row["task_type"] or "").strip()
+    if task_type != "publish_post":
+        return False
+    payload = _loads(row["payload_json"], {})
+    if not payload.get("auto_login_before_publish"):
+        return False
+    login_task_id = str(payload.get("login_task_id") or "").strip()
+    if not login_task_id:
+        return False
+    login_row = conn.execute("SELECT status, error FROM social_automation_tasks WHERE id = ?", (login_task_id,)).fetchone()
+    if not login_row:
+        return False
+    login_status = str(login_row["status"] or "").strip()
+    if login_status == "success":
+        return False
+    if login_status in {"failed", "cancelled"}:
+        task_id = str(row["id"] or "")
+        message = str(login_row["error"] or "发布前自动登录任务未成功，发布任务已停止。")
+        conn.execute(
+            """
+            UPDATE social_automation_tasks
+            SET status = 'failed', finished_at = ?, error = ?, updated_at = ?
+            WHERE id = ? AND status = 'queued'
+            """,
+            (now, message, now, task_id),
+        )
+        _insert_log(conn, task_id, "error", "login_dependency_failed", message, {"login_task_id": login_task_id, "login_status": login_status})
+    return True
+
+
 def _claim_next_task() -> dict[str, Any] | None:
     now = _now()
     _recover_orphaned_manual_login_task(now)
     with db() as conn:
-        row = conn.execute(
+        rows = conn.execute(
             """
             SELECT t.*
             FROM social_automation_tasks t
@@ -1210,10 +1440,16 @@ def _claim_next_task() -> dict[str, Any] | None:
                   AND r.status = 'running'
               )
             ORDER BY t.priority ASC, t.created_at ASC
-            LIMIT 1
+            LIMIT 50
             """,
             (now,),
-        ).fetchone()
+        ).fetchall()
+        row = None
+        for candidate in rows:
+            if _publish_login_dependency_blocks_claim(conn, candidate, now):
+                continue
+            row = candidate
+            break
         if not row:
             return None
         task_id = str(row["id"])

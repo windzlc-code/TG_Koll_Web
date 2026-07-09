@@ -3053,6 +3053,23 @@ body.persona-touch-dragging .persona-list-card:active {
   gap: 12px;
 }
 
+.persona-hot-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.persona-hot-mode-row small {
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.persona-hot-mode-tabs button:disabled {
+  cursor: not-allowed;
+  opacity: 0.64;
+}
+
 .persona-hot-status-row {
   display: grid;
   gap: 4px;
@@ -7422,10 +7439,6 @@ body.persona-touch-dragging .persona-list-card:active {
   background: #111;
 }
 
-.live-browser-card.is-interaction-locked iframe {
-  pointer-events: none;
-}
-
 .live-browser-lock {
   display: none;
 }
@@ -7445,6 +7458,26 @@ body.persona-touch-dragging .persona-list-card:active {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.4;
+}
+
+.live-browser-tools {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) auto auto auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.live-browser-tools input {
+  min-width: 0;
+  min-height: 32px;
+  padding: 6px 9px;
+  font-size: 13px;
+}
+
+.live-browser-tools button {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 12px;
 }
 
 .live-browser-card.is-interaction-enabled .live-browser-interaction-note,

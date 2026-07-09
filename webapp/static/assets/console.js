@@ -1765,7 +1765,7 @@ function personaFormState(personaId) {
   const key = String(personaId || "").trim();
   if (!key) {
     return {
-      generate: { mode: "ai", composeMode: "tweet", count: storedPersonaGenerateCount(), targetWords: storedPersonaGenerateTargetWords(), contentTimeSlot: "", prompt: "", selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotPrompt: "", hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {} },
+      generate: { mode: "ai", composeMode: "tweet", count: storedPersonaGenerateCount(), targetWords: storedPersonaGenerateTargetWords(), contentTimeSlot: "", prompt: "", selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotPrompt: "", hotSearchMode: "strict", hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {} },
       draft: defaultPersonaDraftForm(),
       media: { taskType: "persona_post_image", contentMode: "draft", manualContent: "", prompt: "", imageCount: storedPersonaMediaImageCount(), aspectRatio: "1:1", resolution: "720p", duration: 2, replaceExisting: false },
       images: { prompt: "", aspectRatio: "1:1" },
@@ -1784,6 +1784,7 @@ function personaFormState(personaId) {
         hotSelectedIds: [],
         hotPreviewId: "",
         hotPrompt: "",
+        hotSearchMode: "strict",
         hotDeletedMediaByCandidate: {},
         hotEditedContentByCandidate: {},
       },
@@ -2036,6 +2037,14 @@ function personaHotCandidateScore(row) {
     + Number(row?.comment_count || row?.engagement?.commentCount || row?.metrics?.commentCount || row?.metrics?.comments || 0)
     + Number(row?.share_count || row?.engagement?.shareCount || row?.metrics?.shareCount || row?.metrics?.shares || 0)
     + Number(row?.repost_count || row?.metrics?.repostCount || row?.metrics?.reposts || 0);
+}
+
+function normalizePersonaHotSearchMode(value) {
+  return String(value || "").trim() === "normal" ? "normal" : "strict";
+}
+
+function personaHotSearchModeLabel(value) {
+  return normalizePersonaHotSearchMode(value) === "normal" ? "普通" : "严格";
 }
 
 function personaHotCandidates(persona = selectedPersona()) {
@@ -2343,6 +2352,10 @@ function isPublishPlatformAccount(account) {
 
 function isReadyPublishAccount(account) {
   return isPublishPlatformAccount(account) && String(account?.status || "").trim().toLowerCase() === "ready";
+}
+
+function canSubmitPublishWithAccount(account) {
+  return isPublishPlatformAccount(account) && String(account?.status || "").trim().toLowerCase() !== "disabled";
 }
 
 function publishPlatformAccountsForPersona(persona) {
@@ -6554,6 +6567,10 @@ async function submitPersonaPublishTask() {
     await promptPersonaAccountBinding(persona);
     return;
   }
+  if (!canSubmitPublishWithAccount(account)) {
+    showMsg("commandMsg", publishAccountBlockMessage(account), false);
+    return;
+  }
   const lockParts = ["publish", source, persona.id, post.id, account.id];
   if (isActionLocked(...lockParts) || activeSocialTaskFor({ accountId: account.id, personaId: persona.id, taskType: "publish_post", postId: post.id, postSource: source })) {
     showMsg("commandMsg", `当前${sourceLabel}已经有发布任务在队列或执行中，请等待完成后再重复提交。`, false);
@@ -6626,6 +6643,10 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
   const cleanAccountId = String(accountId || account?.id || "").trim();
   if (!cleanAccountId || !account) {
     await promptPersonaAccountBinding(persona);
+    return null;
+  }
+  if (!canSubmitPublishWithAccount(account)) {
+    showMsg(messageId, publishAccountBlockMessage(account), false);
     return null;
   }
   const rows = publishSourceRows(persona, source);
@@ -9276,6 +9297,7 @@ async function fetchPersonaHotCandidates(refresh = false) {
   }
   snapshotPersonaCurrentForm();
   const form = personaFormState(persona.id).generate;
+  form.hotSearchMode = normalizePersonaHotSearchMode(form.hotSearchMode);
   setPersonaGenerateRunState(persona.id, {
     kind: "hot",
     status: "running",
@@ -9292,6 +9314,7 @@ async function fetchPersonaHotCandidates(refresh = false) {
       body: JSON.stringify({
         refresh: Boolean(refresh),
         limit: 10,
+        search_mode: form.hotSearchMode,
       }),
     });
     state.personaHotCandidateResults[String(persona.id)] = {
@@ -9299,6 +9322,7 @@ async function fetchPersonaHotCandidates(refresh = false) {
       keywords: Array.isArray(result.keywords) ? result.keywords : [],
       cookie_statuses: Array.isArray(result.cookie_statuses) ? result.cookie_statuses : [],
       warnings: Array.isArray(result.warnings) ? result.warnings : [],
+      search_mode: normalizePersonaHotSearchMode(result.search_mode || form.hotSearchMode),
       fetched_at: new Date().toISOString(),
     };
     const candidateIds = personaHotCandidates(persona).map((item) => String(item.candidate_id || "").trim()).filter(Boolean);
@@ -10827,11 +10851,24 @@ function renderPersonaHotCandidatePicker(persona, form) {
   const warnings = Array.isArray(hotState.warnings) ? hotState.warnings : [];
   const cookieStatuses = Array.isArray(hotState.cookie_statuses) ? hotState.cookie_statuses : [];
   const hotBusy = isActionLocked("persona", persona?.id || "", "hot_candidates");
+  form.hotSearchMode = normalizePersonaHotSearchMode(form.hotSearchMode || hotState.search_mode);
+  const hotMode = form.hotSearchMode;
   return `
     <div class="persona-hot-filters">
       <div class="persona-head-copy">
         <strong>热点抓取</strong>
         <span>按当前人设和已有记忆自动抓取 Threads / Instagram 热点候选。</span>
+      </div>
+      <div class="persona-hot-mode-row">
+        <div class="automation-capsule-tabs persona-hot-mode-tabs" aria-label="热点抓取方式">
+          ${[
+            ["normal", "普通"],
+            ["strict", "严格"],
+          ].map(([value, label]) => `
+            <button type="button" data-persona-hot-search-mode="${esc(value)}" class="${hotMode === value ? "is-active" : ""}" ${hotBusy ? "disabled" : ""}>${esc(label)}</button>
+          `).join("")}
+        </div>
+        <small>${hotMode === "normal" ? "泛垂直：覆盖同领域宽泛热点" : "垂直：更贴合当前人设关键词"}</small>
       </div>
       <div class="row-actions">
         <button type="button" class="primary" data-persona-fetch-hot ${hotBusy ? "disabled" : ""}>${hotBusy ? "正在抓取热点..." : "抓取热点"}</button>
@@ -10841,6 +10878,7 @@ function renderPersonaHotCandidatePicker(persona, form) {
     ${(keywords.length || warnings.length || cookieStatuses.length) ? `
       <div class="persona-inline-panel persona-inline-panel--nested">
         ${keywords.length ? `<div class="persona-hot-status-row"><strong>本次关键词</strong><span>${esc(keywords.join(" / "))}</span></div>` : ""}
+        <div class="persona-hot-status-row"><strong>抓取方式</strong><span>${esc(personaHotSearchModeLabel(hotState.search_mode || hotMode))}</span></div>
         ${cookieStatuses.length ? `<div class="persona-hot-status-row"><strong>Cookie 状态</strong><span>${esc(cookieStatuses.map((item) => `${item.label || item.platform || "-"}：${item.message || item.health || "-"}`).join(" / "))}</span></div>` : ""}
         ${warnings.length ? `<div class="persona-warning-inline">${warnings.map(esc).join(" / ")}</div>` : ""}
       </div>
@@ -12011,7 +12049,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
     const publishHint = publishPlatformHint(publishAccount);
     const publishSource = personaPostSource(persona);
     const publishSourceLabel = publishSource === "favorites" ? "收藏推文" : "草稿";
-    const publishCanSubmit = Boolean(publishAccount);
+    const publishCanSubmit = canSubmitPublishWithAccount(publishAccount);
     const publishBusy = publishCanSubmit && selectedPost
       ? (isActionLocked("publish", publishSource, persona.id, selectedPost.id, publishAccount.id) || activeSocialTaskFor({ accountId: publishAccount.id, personaId: persona.id, taskType: "publish_post", postId: selectedPost.id, postSource: publishSource }))
       : false;
@@ -13409,6 +13447,7 @@ function renderLiveBrowserPlaceholder(index = 1) {
 function canInteractWithLiveBrowser(session) {
   const status = String(session?.status || "").trim().toLowerCase();
   const taskType = String(session?.task_type || "").trim().toLowerCase();
+  if (session?.id || session?.session_id) return true;
   if (["need_manual", "pending_login", "need_verification"].includes(status)) return true;
   return taskType === "open_login";
 }
@@ -13426,9 +13465,9 @@ function renderLiveBrowserSession(session) {
   const interactionClass = interactionAllowed ? " is-interaction-enabled" : " is-interaction-locked";
   const interactionHint = status === "standby"
     ? "任务已完成，浏览器处于待机状态，可手动关闭或等待自动关闭。"
-    : interactionAllowed
+    : ["need_manual", "pending_login", "need_verification"].includes(status) || String(session.task_type || "").trim().toLowerCase() === "open_login"
     ? "当前需要人工处理，可以直接操作浏览器窗口。"
-    : "自动化执行中，已锁定屏幕防止误触；如需中断请点击停止进程。";
+    : "预览窗口可直接操作；自动化执行中请谨慎输入，验证码场景可使用下方工具。";
   const canCloseWindow = sessionId && status !== "running";
   return `
     <article class="live-browser-card${orientationClass}${interactionClass}${statusClass}" data-live-browser-card="${esc(sessionId)}" style="--live-browser-width: ${width}; --live-browser-height: ${height}; --live-browser-ratio: ${width} / ${height};">
@@ -13454,6 +13493,18 @@ function renderLiveBrowserSession(session) {
           allowfullscreen
         ></iframe>
       </div>
+      <div class="live-browser-tools" data-live-browser-tools="${esc(sessionId)}">
+        <input
+          type="text"
+          data-live-browser-text="${esc(sessionId)}"
+          placeholder="输入验证码或文本"
+          autocomplete="off"
+          ${sessionId ? "" : "disabled"}
+        />
+        <button type="button" data-live-browser-type="${esc(sessionId)}" ${sessionId ? "" : "disabled"}>发送</button>
+        <button type="button" data-live-browser-key="${esc(sessionId)}" data-live-browser-key-value="Enter" ${sessionId ? "" : "disabled"}>回车</button>
+        <button type="button" data-live-browser-screenshot="${esc(sessionId)}" ${sessionId ? "" : "disabled"}>截图</button>
+      </div>
       <div class="live-browser-interaction-note">${esc(interactionHint)}</div>
     </article>
   `;
@@ -13474,6 +13525,57 @@ async function closeLiveBrowserSession(sessionId = "") {
   if (!cleanSessionId) return;
   await api(`/api/persona_dashboard/automation/browser_sessions/${encodeURIComponent(cleanSessionId)}/close`, { method: "POST" });
   await refreshSocialAccountsOnly();
+}
+
+function liveBrowserToolInput(sessionId = "") {
+  const cleanSessionId = String(sessionId || "").trim();
+  if (!cleanSessionId) return null;
+  return Array.from(document.querySelectorAll("[data-live-browser-text]"))
+    .find((node) => String(node.dataset.liveBrowserText || "") === cleanSessionId) || null;
+}
+
+async function sendLiveBrowserText(sessionId = "", { pressEnter = false } = {}) {
+  const cleanSessionId = String(sessionId || "").trim();
+  if (!cleanSessionId) return;
+  const input = liveBrowserToolInput(cleanSessionId);
+  const text = String(input?.value || "");
+  if (!text && !pressEnter) {
+    showMsg("socialMsg", "请输入要发送到浏览器的文本。", false);
+    return;
+  }
+  await api(`/api/persona_dashboard/automation/browser_sessions/${encodeURIComponent(cleanSessionId)}/type`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, press_enter: Boolean(pressEnter) }),
+  });
+  if (input && text) input.value = "";
+  showMsg("socialMsg", pressEnter ? "已发送文本并回车。" : "已发送文本到浏览器。", true);
+}
+
+async function pressLiveBrowserKey(sessionId = "", key = "Enter") {
+  const cleanSessionId = String(sessionId || "").trim();
+  if (!cleanSessionId) return;
+  await api(`/api/persona_dashboard/automation/browser_sessions/${encodeURIComponent(cleanSessionId)}/key`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key }),
+  });
+  showMsg("socialMsg", "已发送按键。", true);
+}
+
+async function captureLiveBrowserScreenshot(sessionId = "") {
+  const cleanSessionId = String(sessionId || "").trim();
+  if (!cleanSessionId) return;
+  const result = await api(`/api/persona_dashboard/automation/browser_sessions/${encodeURIComponent(cleanSessionId)}/screenshot`, {
+    method: "POST",
+  });
+  showMsg("socialMsg", "已完成浏览器截图。", true);
+  const screenshotUrl = directMediaPreviewUrl(result.screenshot_url || result.screenshotUrl);
+  if (screenshotUrl) {
+    const groupId = registerMediaPreviewGroup([{ previewUrl: screenshotUrl, type: "image", label: "浏览器截图" }]);
+    openMediaLightbox(groupId, 0);
+  }
+  await loadSocial().catch(() => {});
 }
 
 function liveBrowserSessionUrl(session) {
@@ -14240,8 +14342,19 @@ function bindEvents() {
       createPersonaDraftPost().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
       return;
     }
+    const hotSearchModeButton = event.target.closest("[data-persona-hot-search-mode]");
+    if (hotSearchModeButton) {
+      const persona = selectedPersona();
+      if (persona) {
+        snapshotPersonaCurrentForm();
+        personaFormState(persona.id).generate.hotSearchMode = normalizePersonaHotSearchMode(hotSearchModeButton.dataset.personaHotSearchMode);
+        renderPersonaDetail();
+        renderConfirmSummary();
+      }
+      return;
+    }
     if (event.target.closest("[data-persona-fetch-hot]")) {
-      fetchPersonaHotCandidates(true).catch(() => {});
+      fetchPersonaHotCandidates(false).catch(() => {});
       return;
     }
     if (event.target.closest("[data-persona-fetch-hot-refresh]")) {
@@ -15375,10 +15488,35 @@ function bindEvents() {
         .catch((error) => showMsg("socialMsg", error.detail || error.message || "关闭浏览器窗口失败", false));
       return;
     }
+    const liveBrowserType = event.target.closest("[data-live-browser-type]");
+    if (liveBrowserType) {
+      sendLiveBrowserText(liveBrowserType.dataset.liveBrowserType || "")
+        .catch((error) => showMsg("socialMsg", error.detail || error.message || "发送文本失败", false));
+      return;
+    }
+    const liveBrowserKey = event.target.closest("[data-live-browser-key]");
+    if (liveBrowserKey) {
+      pressLiveBrowserKey(liveBrowserKey.dataset.liveBrowserKey || "", liveBrowserKey.dataset.liveBrowserKeyValue || "Enter")
+        .catch((error) => showMsg("socialMsg", error.detail || error.message || "发送按键失败", false));
+      return;
+    }
+    const liveBrowserScreenshot = event.target.closest("[data-live-browser-screenshot]");
+    if (liveBrowserScreenshot) {
+      captureLiveBrowserScreenshot(liveBrowserScreenshot.dataset.liveBrowserScreenshot || "")
+        .catch((error) => showMsg("socialMsg", error.detail || error.message || "浏览器截图失败", false));
+      return;
+    }
     const cancel = event.target.closest("[data-social-cancel]");
     if (cancel) cancelSocialAutomationTask(cancel.dataset.socialCancel, "socialMsg").catch((error) => showMsg("socialMsg", error.detail || error.message || "停止任务失败", false));
   });
   if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("keydown", (event) => {
+    const liveBrowserInput = event.target.closest("[data-live-browser-text]");
+    if (liveBrowserInput && event.key === "Enter") {
+      event.preventDefault();
+      sendLiveBrowserText(liveBrowserInput.dataset.liveBrowserText || "", { pressEnter: true })
+        .catch((error) => showMsg("socialMsg", error.detail || error.message || "发送文本失败", false));
+      return;
+    }
     if (!["Enter", " "].includes(event.key)) return;
     if (event.target.closest("button, a, input, select, textarea")) return;
     const accountCard = event.target.closest("[data-account-pool-account]");
