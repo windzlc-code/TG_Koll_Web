@@ -59,6 +59,7 @@ def start_live_browser_session(
     if not live_browser_enabled():
         return None
 
+    _stop_standby_sessions_for_account(str(account.get("id") or ""), logger)
     _cleanup_orphaned_live_browser_processes(logger)
 
     missing = [name for name in ("Xvnc",) if not shutil.which(name)]
@@ -149,6 +150,37 @@ def start_live_browser_session(
         stop_live_browser_session(session.id, session=session)
         _log(logger, "warn", "live_browser_failed", "实时浏览器监控启动失败，已回退到普通浏览器执行", {"error": str(exc)})
         return None
+
+
+def _stop_standby_sessions_for_account(account_id: str, logger: Any | None = None) -> None:
+    clean_account_id = str(account_id or "").strip()
+    if not clean_account_id:
+        return
+    with _LOCK:
+        targets = [
+            session.id
+            for session in _SESSIONS.values()
+            if session.account_id == clean_account_id and session.status == "standby"
+        ]
+    for session_id in targets:
+        stop_live_browser_session(session_id)
+    registry_targets: list[str] = []
+    sessions = _read_registry()
+    for session_id, row in list(sessions.items()):
+        if str(row.get("account_id") or "") == clean_account_id and str(row.get("status") or "") == "standby":
+            registry_targets.append(str(session_id))
+            sessions.pop(session_id, None)
+    if registry_targets:
+        _write_registry(sessions)
+    released = targets + registry_targets
+    if released:
+        _log(
+            logger,
+            "info",
+            "live_browser_standby_released",
+            "已关闭同账号待机浏览器，准备执行新的自动化任务。",
+            {"account_id": clean_account_id, "sessions": released},
+        )
 
 
 def stop_live_browser_session(session_id: str, *, session: LiveBrowserSession | None = None) -> None:
@@ -435,17 +467,39 @@ def _cleanup_orphaned_live_browser_processes(logger: Any | None = None) -> None:
 def _wait_for_live_browser_ready(session: LiveBrowserSession, *, timeout_seconds: float = 8.0) -> None:
     deadline = time.time() + timeout_seconds
     last_error = "KasmVNC 未在限定时间内就绪"
+    display_num = str(session.display or "").lstrip(":")
+    x_socket = Path(f"/tmp/.X11-unix/X{display_num}") if display_num.isdigit() else None
     while time.time() < deadline:
         if not all(process.poll() is None for process in session.processes):
             codes = [process.poll() for process in session.processes]
             raise RuntimeError(f"KasmVNC 就绪前退出：{codes}")
         try:
             with socket.create_connection(("127.0.0.1", int(session.web_port)), timeout=0.35):
-                return
+                if _x_display_ready(session.display, x_socket):
+                    return
+                last_error = f"X11 display {session.display} 尚未就绪"
         except OSError as exc:
             last_error = str(exc)
-            time.sleep(0.15)
-    raise RuntimeError(f"KasmVNC 端口 {session.web_port} 未就绪：{last_error}")
+        time.sleep(0.2)
+    raise RuntimeError(f"KasmVNC 端口或 X11 显示未就绪：{last_error}")
+
+
+def _x_display_ready(display: str, x_socket: Path | None) -> bool:
+    if x_socket is not None and not x_socket.exists():
+        return False
+    if shutil.which("xdpyinfo"):
+        try:
+            result = subprocess.run(
+                ["xdpyinfo", "-display", str(display)],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=1,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+    return x_socket is None or x_socket.exists()
 
 
 def _safe_int(value: Any, fallback: int) -> int:

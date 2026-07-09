@@ -12308,6 +12308,7 @@ function renderAccountPoolCards(accounts, selectedAccount) {
     <span class="account-pool-selection-count">${esc(selectedCount ? `已选 ${selectedCount} 个` : "未选择")}</span>
     <button type="button" data-account-pool-copy-selected title="复制账号" aria-label="复制账号" ${selectedCount ? "" : "disabled"}><span aria-hidden="true"></span></button>
     <button type="button" data-account-pool-select-all title="全选账号" aria-label="全选账号" ${accounts.length ? "" : "disabled"}><span aria-hidden="true"></span></button>
+    <button type="button" data-account-pool-clear-selected title="取消选择" aria-label="取消选择" ${selectedCount ? "" : "disabled"}><span aria-hidden="true"></span></button>
     <button type="button" class="danger" data-account-pool-delete-selected title="删除账号" aria-label="删除账号" ${selectedCount ? "" : "disabled"}><span aria-hidden="true"></span></button>
     ${addButton}
   </div>`;
@@ -15232,6 +15233,12 @@ function bindEvents() {
     const accountSelectAll = event.target.closest("[data-account-pool-select-all]");
     if (accountSelectAll) {
       selectAllAccountPoolAccounts();
+      return;
+    }
+    const accountClearSelected = event.target.closest("[data-account-pool-clear-selected]");
+    if (accountClearSelected) {
+      clearAccountPoolAccountSelection();
+      renderSocialAccounts();
       return;
     }
     const accountDeleteSelected = event.target.closest("[data-account-pool-delete-selected]");

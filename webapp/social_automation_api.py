@@ -472,7 +472,7 @@ def build_social_automation_overview() -> dict[str, Any]:
         tasks = conn.execute(
             "SELECT * FROM social_automation_tasks ORDER BY created_at DESC LIMIT 80"
         ).fetchall()
-        all_tasks = conn.execute("SELECT task_type, payload_json, status FROM social_automation_tasks").fetchall()
+        all_tasks = conn.execute("SELECT task_type, payload_json, status, finished_at FROM social_automation_tasks").fetchall()
     visible_tasks = [
         row for row in tasks
         if not _is_manual_open_login_task(dict(row), _loads(row["payload_json"], {}))
@@ -482,6 +482,8 @@ def build_social_automation_overview() -> dict[str, Any]:
         if _is_manual_open_login_task(dict(row), _loads(row["payload_json"], {})):
             continue
         status = str(row["status"] or "")
+        if status == "need_manual" and int(row["finished_at"] or 0) > 0:
+            continue
         counts[status] = counts.get(status, 0) + 1
     return {
         "ok": True,
@@ -1136,7 +1138,7 @@ def _claim_next_task() -> dict[str, Any] | None:
             "UPDATE social_automation_tasks SET status = 'running', started_at = ?, updated_at = ? WHERE id = ? AND status = 'queued'",
             (now, now, task_id),
         )
-        _insert_log(conn, task_id, "info", "running", "Worker 已领取任务", {})
+        _insert_log(conn, task_id, "info", "running", "后台执行器已领取任务", {})
         updated = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
     public = _task_public(updated)
     public["payload"] = _loads(updated["payload_json"], {})
@@ -1241,14 +1243,13 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
     with _RUNNING_TASK_CONTROLS_LOCK:
         _RUNNING_TASK_CONTROLS[str(task["id"])] = control
     try:
-        result = run_social_task(
+        result = _run_social_task_in_clean_thread(
+            run_social_task,
             task=task,
             account=account,
             proxy=proxy,
-            data_dir=_DATA_DIR,
             logger=logger,
-            cancel_event=control["cancel_event"],
-            context_control=control,
+            control=control,
         )
     except NeedManualError as exc:
         if not _is_task_cancelled(str(task["id"])):
@@ -1270,6 +1271,41 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
     if task.get("task_type") in {"check_login", "open_login"} and result.get("status") == "ready":
         account_status = "ready"
     _finish_task(task["id"], status, result, "" if status == "success" else str(result.get("error") or "执行失败"), account_status=account_status)
+
+
+def _run_social_task_in_clean_thread(
+    runner: Callable[..., dict[str, Any]],
+    *,
+    task: dict[str, Any],
+    account: dict[str, Any],
+    proxy: dict[str, Any] | None,
+    logger: Any,
+    control: dict[str, Any],
+) -> dict[str, Any]:
+    result_box: dict[str, Any] = {}
+    error_box: dict[str, BaseException] = {}
+
+    def target() -> None:
+        try:
+            result_box["result"] = runner(
+                task=task,
+                account=account,
+                proxy=proxy,
+                data_dir=_DATA_DIR,
+                logger=logger,
+                cancel_event=control["cancel_event"],
+                context_control=control,
+            )
+        except BaseException as exc:
+            error_box["error"] = exc
+
+    thread = threading.Thread(target=target, name=f"social-task-runner-{str(task.get('id') or '')[:12]}", daemon=False)
+    thread.start()
+    thread.join()
+    if error_box:
+        raise error_box["error"]
+    result = result_box.get("result")
+    return result if isinstance(result, dict) else {}
 
 
 def _is_task_cancelled(task_id: str) -> bool:
@@ -1384,7 +1420,7 @@ def _archive_file_lock(timeout_seconds: int = _ARCHIVE_LOCK_TIMEOUT_SECONDS):
             break
         except FileExistsError:
             if time.time() - started > timeout_seconds:
-                raise RuntimeError("Persona archive is locked; try again later")
+                raise RuntimeError("人设归档正在被占用，请稍后重试。")
             time.sleep(0.1)
     try:
         yield

@@ -63,23 +63,23 @@ def run_social_task(
 ) -> dict[str, Any]:
     task_type = str(task.get("task_type") or "").strip()
     if task_type not in SUPPORTED_TASK_TYPES:
-        raise UnsupportedActionError(f"Unsupported social automation task_type: {task_type}")
+        raise UnsupportedActionError(f"不支持的社交自动化任务类型：{task_type}")
     platform = str(task.get("platform") or account.get("platform") or "").strip().lower()
     if platform not in {"instagram", "threads"}:
-        raise UnsupportedActionError(f"Unsupported platform: {platform}")
+        raise UnsupportedActionError(f"不支持的平台：{platform}")
     if platform == "instagram" and task_type in {"threads_warmup", "threads_auto_reply"}:
-        raise UnsupportedActionError(f"{task_type} requires a Threads account")
+        raise UnsupportedActionError(f"{task_type} 需要使用 Threads 账号。")
     if platform == "threads" and task_type not in {"open_login", "check_login", "browse_feed", "threads_warmup", "threads_auto_reply", "publish_post"}:
-        raise UnsupportedActionError(f"{task_type} is not implemented for Threads web automation")
+        raise UnsupportedActionError(f"{task_type} 尚未支持 Threads Web 自动化。")
     if platform == "instagram" and task_type == "repost_post":
-        raise UnsupportedActionError("Instagram Web does not provide a real repost action. Use share_post/copy link instead.")
+        raise UnsupportedActionError("Instagram Web 不提供真正的转发动作，请改用 share_post/复制链接。")
 
     payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
     data_root = Path(data_dir).resolve()
     screenshot_dir = data_root / "social_automation" / "screenshots"
     screenshot_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.log("info", "prepare", "Starting social automation task", {"task_type": task_type, "platform": platform})
+    logger.log("info", "prepare", "自动化任务开始执行。", {"task_type": task_type, "platform": platform})
     _raise_if_cancelled(cancel_event)
     with _open_camoufox_context(account=account, proxy=proxy, logger=logger, context_control=context_control) as context:
         _import_initial_cookies(context, payload.get("initial_cookies"), platform, logger)
@@ -95,9 +95,9 @@ def run_social_task(
         login = _check_platform_login(page, platform, logger)
         if login.get("status") != "ready":
             shot = _screenshot(page, screenshot_dir, task, "login_not_ready", logger)
-            logger.log("warn", "need_manual", str(login.get("reason") or f"{platform} account requires manual login or verification"), {"details": login}, shot)
+            logger.log("warn", "need_manual", str(login.get("reason") or f"{_platform_name(platform)} 账号需要人工登录或验证。"), {"details": login}, shot)
             raise NeedManualError(
-                str(login.get("reason") or f"{platform} account requires manual login or verification"),
+                str(login.get("reason") or f"{_platform_name(platform)} 账号需要人工登录或验证。"),
                 str(login.get("status") or "need_verification"),
                 shot,
             )
@@ -131,7 +131,7 @@ def run_social_task(
         if task_type == "share_post":
             _raise_if_cancelled(cancel_event)
             return _run_share_post(page, task, payload, screenshot_dir, logger)
-    raise UnsupportedActionError(f"Unhandled social automation task_type: {task_type}")
+    raise UnsupportedActionError(f"未处理的社交自动化任务类型：{task_type}")
 
 
 class _BrowserContextManager:
@@ -149,7 +149,7 @@ class _BrowserContextManager:
             from camoufox.sync_api import Camoufox
         except Exception as exc:
             raise RuntimeError(
-                "Camoufox is not installed. Install dependencies with: pip install camoufox playwright"
+                "Camoufox 未安装，请先安装依赖：pip install camoufox playwright"
             ) from exc
 
         profile_dir = Path(str(self.account.get("profile_dir") or "")).expanduser().resolve()
@@ -172,7 +172,7 @@ class _BrowserContextManager:
         self.logger.log(
             "info",
             "browser_launch",
-            "Launching Camoufox persistent profile",
+            "正在启动 Camoufox 指纹浏览器环境。",
             {"profile_dir": str(profile_dir), "proxy": _masked_proxy(proxy_config), "headless": headless},
         )
         try:
@@ -188,7 +188,7 @@ class _BrowserContextManager:
                     self.logger.log(
                         "warn",
                         "profile_rebuild_retry",
-                        "Browser profile failed to launch; backed up stale profile and retrying with a clean profile",
+                        "浏览器配置启动失败，已备份失效配置并使用干净配置重试。",
                         {"backup_dir": str(backup_dir), "profile_dir": str(profile_dir)},
                     )
                     try:
@@ -201,9 +201,9 @@ class _BrowserContextManager:
                         exc = retry_exc
             self._stop_live_browser_session()
             raise RuntimeError(
-                "Camoufox browser failed to launch. Run `py -3 -m camoufox fetch` on Windows "
-                "or `python -m camoufox fetch` on Linux/macOS to download the Camoufox browser build. "
-                f"Original error: {exc}"
+                "Camoufox 浏览器启动失败。请在 Windows 执行 `py -3 -m camoufox fetch`，"
+                "或在 Linux/macOS 执行 `python -m camoufox fetch` 下载浏览器构建。"
+                f"原始错误：{exc}"
             ) from exc
         return self.context
 
@@ -261,7 +261,7 @@ class _BrowserContextManager:
             self.logger.log(
                 "info",
                 "live_browser_standby",
-                "Live browser entered standby; it can be closed manually or automatically later.",
+                "实时浏览器已进入待机，可手动关闭或等待系统自动关闭。",
                 {"session_id": session_id, "standby_seconds": standby_seconds, "auto_close_seconds": auto_close_seconds, "close_at": close_at},
             )
 
@@ -271,7 +271,7 @@ class _BrowserContextManager:
 
             threading.Thread(target=auto_close, name=f"live-browser-standby-{session_id}", daemon=True).start()
         except Exception as detach_exc:
-            self.logger.log("warn", "live_browser_standby_failed", "Live browser standby failed; closed through the normal flow.", {"error": str(detach_exc)})
+            self.logger.log("warn", "live_browser_standby_failed", "实时浏览器进入待机失败，已按正常流程关闭。", {"error": str(detach_exc)})
             return False
 
         if self.context_control is not None:
@@ -315,7 +315,7 @@ class _BrowserContextManager:
                 self.context_control["live_browser_height"] = int(getattr(session, "height", 0) or 0)
             return session
         except Exception as exc:
-            self.logger.log("warn", "live_browser_error", "Live browser monitor initialization failed; continuing without monitor.", {"error": str(exc)})
+            self.logger.log("warn", "live_browser_error", "实时浏览器监控初始化失败，将在无监控窗口模式下继续执行。", {"error": str(exc)})
             return None
 
     def _stop_live_browser_session(self) -> None:
@@ -344,11 +344,11 @@ def _cleanup_stale_profile_locks(profile_dir: Path, logger: AutomationLogger) ->
             path.unlink()
             removed.append(name)
         except PermissionError:
-            logger.log("warn", "profile_lock_active", "Profile lock is active; another browser may still be open", {"path": str(path)})
+            logger.log("warn", "profile_lock_active", "浏览器配置锁仍在使用，可能还有其他浏览器窗口未关闭。", {"path": str(path)})
         except Exception as exc:
-            logger.log("warn", "profile_lock_cleanup_failed", "Failed to clean stale profile lock", {"path": str(path), "error": str(exc)})
+            logger.log("warn", "profile_lock_cleanup_failed", "清理失效的浏览器配置锁失败。", {"path": str(path), "error": str(exc)})
     if removed:
-        logger.log("info", "profile_lock_cleanup", "Cleaned stale browser profile lock files", {"files": removed})
+        logger.log("info", "profile_lock_cleanup", "已清理失效的浏览器配置锁文件。", {"files": removed})
 
 
 def _should_rebuild_profile_after_launch_error(exc: Exception) -> bool:
@@ -364,13 +364,13 @@ def _quarantine_profile_dir(profile_dir: Path, logger: AutomationLogger) -> Path
         profile_dir.rename(backup)
         return backup
     except Exception as exc:
-        logger.log("warn", "profile_rebuild_failed", "Failed to back up stale browser profile", {"profile_dir": str(profile_dir), "error": str(exc)})
+        logger.log("warn", "profile_rebuild_failed", "备份失效的浏览器配置失败。", {"profile_dir": str(profile_dir), "error": str(exc)})
         return None
 
 
 def _raise_if_cancelled(cancel_event: Any | None) -> None:
     if cancel_event is not None and getattr(cancel_event, "is_set", lambda: False)():
-        raise RuntimeError("Social automation task was cancelled")
+        raise RuntimeError("社交自动化任务已取消。")
 
 
 def _safe_int_env_or_payload(payload: dict[str, Any], key: str, env_key: str, fallback: int) -> int:
@@ -429,9 +429,9 @@ def _sync_live_browser_viewport(page, context_control: dict[str, Any] | None, lo
     }
     try:
         page.set_viewport_size(viewport)
-        logger.log("info", "live_browser_viewport", "Live browser viewport has been synchronized", viewport)
+        logger.log("info", "live_browser_viewport", "已同步实时监控窗口尺寸。", viewport)
     except Exception as exc:
-        logger.log("warn", "live_browser_viewport_failed", "Live browser viewport synchronization failed; continuing task", {"error": str(exc), "viewport": viewport})
+        logger.log("warn", "live_browser_viewport_failed", "实时监控窗口尺寸同步失败，任务继续执行。", {"error": str(exc), "viewport": viewport})
 
 
 def _safe_int(value: Any, fallback: int) -> int:
@@ -476,13 +476,13 @@ def _import_initial_cookies(context, cookies: Any, platform: str, logger: Automa
             row["expires"] = expires
         rows.append(row)
     if not rows:
-        logger.log("warn", "cookie_import", "No usable initial cookies were available for this profile", {"platform": platform})
+        logger.log("warn", "cookie_import", "当前浏览器配置没有可用的初始 Cookie。", {"platform": platform})
         return
     try:
         context.add_cookies(rows)
-        logger.log("info", "cookie_import", "Imported initial cookies into the browser profile", {"platform": platform, "cookie_count": len(rows)})
+        logger.log("info", "cookie_import", "已将初始 Cookie 导入浏览器配置。", {"platform": platform, "cookie_count": len(rows)})
     except Exception as exc:
-        logger.log("warn", "cookie_import_failed", "Failed to import initial cookies into the browser profile", {"platform": platform, "error": str(exc)})
+        logger.log("warn", "cookie_import_failed", "导入初始 Cookie 到浏览器配置失败。", {"platform": platform, "error": str(exc)})
 
 
 def _sleep_between(min_s: float, max_s: float) -> None:
@@ -516,7 +516,7 @@ def _human_click(page, locator, logger: AutomationLogger, stage: str = "click") 
             return
     rel_x = random.uniform(box["width"] * 0.25, box["width"] * 0.75)
     rel_y = random.uniform(box["height"] * 0.25, box["height"] * 0.75)
-    logger.log("debug", stage, "Clicking target", {"x": round(box["x"] + rel_x, 1), "y": round(box["y"] + rel_y, 1)})
+    logger.log("debug", stage, "正在点击目标元素。", {"x": round(box["x"] + rel_x, 1), "y": round(box["y"] + rel_y, 1)})
     locator.click(position={"x": rel_x, "y": rel_y}, timeout=10000)
 
 
@@ -526,10 +526,10 @@ def _screenshot(page, screenshot_dir: Path, task: dict[str, Any], stage: str, lo
     path = screenshot_dir / f"{str(task.get('id') or 'task')}_{stage}_{int(time.time())}.png"
     try:
         page.screenshot(path=str(path), full_page=True)
-        logger.log("info", stage, "Screenshot captured", {"path": str(path)}, str(path))
+        logger.log("info", stage, "已保存截图。", {"path": str(path)}, str(path))
         return str(path)
     except Exception as exc:
-        logger.log("warn", stage, f"Screenshot failed: {exc}")
+        logger.log("warn", stage, f"截图失败：{exc}")
         return ""
 
 
@@ -559,7 +559,7 @@ def _should_capture_screenshot(stage: str) -> bool:
 
 
 def _goto(page, url: str, logger: AutomationLogger, stage: str) -> None:
-    logger.log("info", stage, f"Opening {url}")
+    logger.log("info", stage, f"正在打开页面：{url}")
     page.goto(url, wait_until="domcontentloaded", timeout=60000)
     try:
         page.wait_for_load_state("networkidle", timeout=15000)
@@ -586,9 +586,9 @@ def _check_platform_login(page, platform: str, logger: AutomationLogger) -> dict
 def _detect_instagram_login_state(page) -> dict[str, Any]:
     url = str(page.url or "")
     if _is_verification_url(url):
-        return {"status": "need_verification", "reason": "Instagram requires a verification code", "url": url}
+        return {"status": "need_verification", "reason": "Instagram 需要输入验证码。", "url": url}
     if "/accounts/login" in url:
-        return {"status": "cookie_expired", "reason": "Instagram login page is visible", "url": url}
+        return {"status": "cookie_expired", "reason": "检测到 Instagram 登录页面。", "url": url}
     login_inputs = page.locator(
         'input[name="username"], input[name="password"], '
         'input[aria-label*="username" i], input[aria-label*="email" i], input[aria-label*="password" i], '
@@ -596,7 +596,7 @@ def _detect_instagram_login_state(page) -> dict[str, Any]:
     )
     try:
         if login_inputs.count() > 0 and login_inputs.first.is_visible():
-            return {"status": "cookie_expired", "reason": "Login form is visible"}
+            return {"status": "cookie_expired", "reason": "检测到登录表单。"}
     except Exception:
         pass
     body_text = ""
@@ -612,13 +612,13 @@ def _detect_instagram_login_state(page) -> dict[str, Any]:
         "we couldn't find an account",
     ]
     if any(marker in body_text for marker in invalid_markers):
-        return {"status": "invalid_credentials", "reason": "Instagram says the saved login information is incorrect", "url": url}
+        return {"status": "invalid_credentials", "reason": "Instagram 提示保存的登录信息不正确。", "url": url}
     login_markers = ["log into instagram", "log in with facebook", "forgot password", "create new account"]
     if any(marker in body_text for marker in login_markers):
-        return {"status": "cookie_expired", "reason": "Instagram login page text is visible"}
+        return {"status": "cookie_expired", "reason": "检测到 Instagram 登录页面文案。"}
     challenge_markers = _verification_text_markers()
     if any(marker in body_text for marker in challenge_markers):
-        return {"status": "need_verification", "reason": "Verification or challenge text is visible"}
+        return {"status": "need_verification", "reason": "检测到验证或安全挑战文案。"}
     ready_markers = [
         '[aria-label="New post"]',
         'text=Create',
@@ -631,18 +631,18 @@ def _detect_instagram_login_state(page) -> dict[str, Any]:
         try:
             loc = page.locator(selector).first
             if loc.count() and loc.is_visible(timeout=2000):
-                return {"status": "ready", "reason": "Instagram home UI is visible", "url": url}
+                return {"status": "ready", "reason": "已检测到 Instagram 首页界面。", "url": url}
         except Exception:
             continue
-    return {"status": "ready", "reason": "No login or verification UI detected", "url": url}
+    return {"status": "ready", "reason": "未检测到登录或验证界面。", "url": url}
 
 
 def _detect_threads_login_state(page) -> dict[str, Any]:
     url = str(page.url or "")
     if _is_verification_url(url):
-        return {"status": "need_verification", "reason": "Threads/Instagram requires a verification code", "url": url}
+        return {"status": "need_verification", "reason": "Threads/Instagram 需要输入验证码。", "url": url}
     if "/login" in url:
-        return {"status": "cookie_expired", "reason": "Threads login page is visible", "url": url}
+        return {"status": "cookie_expired", "reason": "检测到 Threads 登录页面。", "url": url}
     login_prompt_selectors = [
         'text="Log in or sign up for Threads"',
         'text="Continue with Instagram"',
@@ -656,7 +656,7 @@ def _detect_threads_login_state(page) -> dict[str, Any]:
         try:
             loc = page.locator(selector).first
             if loc.count() and loc.is_visible(timeout=1500):
-                return {"status": "cookie_expired", "reason": "Threads login prompt is visible", "url": url}
+                return {"status": "cookie_expired", "reason": "检测到 Threads 登录提示。", "url": url}
         except Exception:
             continue
     login_inputs = page.locator(
@@ -666,7 +666,7 @@ def _detect_threads_login_state(page) -> dict[str, Any]:
     )
     try:
         if login_inputs.count() > 0 and login_inputs.first.is_visible():
-            return {"status": "cookie_expired", "reason": "Threads login form is visible"}
+            return {"status": "cookie_expired", "reason": "检测到 Threads 登录表单。"}
     except Exception:
         pass
     body_text = ""
@@ -682,13 +682,13 @@ def _detect_threads_login_state(page) -> dict[str, Any]:
         "we couldn't find an account",
     ]
     if any(marker in body_text for marker in invalid_markers):
-        return {"status": "invalid_credentials", "reason": "Instagram/Threads says the saved login information is incorrect", "url": url}
+        return {"status": "invalid_credentials", "reason": "Instagram/Threads 提示保存的登录信息不正确。", "url": url}
     login_markers = ["log in", "login", "continue with instagram", "forgot password", "sign up"]
     if any(marker in body_text for marker in login_markers) and any(marker in body_text for marker in ["threads", "instagram"]):
-        return {"status": "cookie_expired", "reason": "Threads login page text is visible", "url": url}
+        return {"status": "cookie_expired", "reason": "检测到 Threads 登录页面文案。", "url": url}
     challenge_markers = _verification_text_markers()
     if any(marker in body_text for marker in challenge_markers):
-        return {"status": "need_verification", "reason": "Verification or challenge text is visible"}
+        return {"status": "need_verification", "reason": "检测到验证或安全挑战文案。"}
 
     account_markers = [
         '[aria-label*="New thread" i]',
@@ -708,11 +708,11 @@ def _detect_threads_login_state(page) -> dict[str, Any]:
         except Exception:
             continue
     if matched >= 2:
-        return {"status": "ready", "reason": "Threads authenticated UI is visible", "url": url, "matched_markers": matched}
+        return {"status": "ready", "reason": "已检测到 Threads 登录后的界面。", "url": url, "matched_markers": matched}
 
     if any(marker in body_text for marker in ("log in", "continue with instagram", "continue with facebook", "sign up")):
-        return {"status": "cookie_expired", "reason": "Threads login prompt is visible", "url": url}
-    return {"status": "cookie_expired", "reason": "Threads authenticated UI was not detected yet", "url": url, "matched_markers": matched}
+        return {"status": "cookie_expired", "reason": "检测到 Threads 登录提示。", "url": url}
+    return {"status": "cookie_expired", "reason": "尚未检测到 Threads 登录后的界面。", "url": url, "matched_markers": matched}
 
 
 def _platform_home(platform: str) -> str:
@@ -769,7 +769,7 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
     wait_seconds = int(payload.get("login_wait_seconds") or os.getenv("SOCIAL_AUTOMATION_LOGIN_WAIT_SECONDS", "3600"))
     wait_seconds = max(30, min(wait_seconds, 3600))
     auto_submit = bool(payload.get("auto_submit") or payload.get("login_password") or payload.get("password"))
-    logger.log("info", "open_login", "Browser is open for login", {"wait_seconds": wait_seconds, "auto_submit": auto_submit})
+    logger.log("info", "open_login", "浏览器登录窗口已打开。", {"wait_seconds": wait_seconds, "auto_submit": auto_submit})
     deadline = time.time() + wait_seconds
     last_status: dict[str, Any] = {}
     login_attempts = 0
@@ -785,7 +785,7 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
                     logger.log(
                         "info",
                         "completion_node",
-                        f"{_platform_name(platform)} login completion node detected",
+                        f"{_platform_name(platform)} 登录成功节点已确认。",
                         {"url": str(page.url or ""), "details": stable_status},
                         shot,
                     )
@@ -800,7 +800,7 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
                     logger,
                     platform,
                     cancel_event,
-                    f"{_platform_name(platform)} saved credentials were rejected; fix them manually in the open browser and continue.",
+                    f"{_platform_name(platform)} 保存的账号密码被拒绝，请在打开的浏览器中手动修正并继续。",
                     "cookie_expired",
                     shot,
                     last_status,
@@ -810,7 +810,7 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
                 logger.log(
                     "warn",
                     "login_verification_required",
-                    f"{_platform_name(platform)} requires a verification code",
+                    f"{_platform_name(platform)} 需要输入验证码。",
                     {"url": str(page.url or ""), "screenshot_path": shot, "details": last_status},
                     shot,
                 )
@@ -821,7 +821,7 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
                     logger,
                     platform,
                     cancel_event,
-                    f"{_platform_name(platform)} requires manual verification; the browser will stay open until it is completed or cancelled.",
+                    f"{_platform_name(platform)} 需要人工验证，浏览器会保持打开直到验证完成或任务取消。",
                     "need_verification",
                     shot,
                     last_status,
@@ -835,7 +835,7 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
                     logger.log(
                         "warn",
                         "login_verification_required",
-                        "Verification or security challenge is visible; waiting for manual intervention in the open browser",
+                        "检测到验证码或安全挑战，正在等待人工在浏览器中处理。",
                         {"url": str(page.url or ""), "screenshot_path": shot},
                         shot,
                     )
@@ -847,7 +847,7 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
                     logger,
                     platform,
                     cancel_event,
-                    f"{_platform_name(platform)} requires manual verification; the browser will stay open until it is completed or cancelled.",
+                    f"{_platform_name(platform)} 需要人工验证，浏览器会保持打开直到验证完成或任务取消。",
                     "need_verification",
                     shot,
                     last_status,
@@ -857,8 +857,8 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
         except Exception as exc:
             message = str(exc)
             if "Target page, context or browser has been closed" in message or "has been closed" in message:
-                raise NeedManualError(f"{_platform_name(platform)} login window was closed before login was confirmed. Reopen the login window and keep it open until the account is ready.", "cookie_expired") from exc
-            logger.log("warn", "open_login_poll", f"Login window status check failed: {exc}")
+                raise NeedManualError(f"{_platform_name(platform)} 登录确认前浏览器窗口已关闭，请重新打开登录窗口并保持到账号就绪。", "cookie_expired") from exc
+            logger.log("warn", "open_login_poll", f"登录窗口状态检查失败：{exc}")
         time.sleep(3 if auto_submit else 10)
     shot = _screenshot(page, screenshot_dir, task, "login_wait_timeout", logger)
     return _wait_for_manual_login_completion(
@@ -868,7 +868,7 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
         logger,
         platform,
         cancel_event,
-        f"Automatic login flow could not confirm completion: {last_status.get('reason') or 'not ready'}. The browser will stay open for manual handling or cancellation.",
+        f"自动登录流程暂未确认完成：{last_status.get('reason') or '账号未就绪'}。浏览器会保持打开，等待人工处理或取消任务。",
         str(last_status.get("status") or "need_verification"),
         shot,
         last_status,
@@ -902,7 +902,7 @@ def _wait_for_manual_login_completion(
         except Exception as exc:
             message = str(exc)
             if "Target page, context or browser has been closed" in message or "has been closed" in message:
-                raise NeedManualError(f"{_platform_name(platform)} login window was closed before login was confirmed. Restart the login task.", status) from exc
+                raise NeedManualError(f"{_platform_name(platform)} 登录确认前浏览器窗口已关闭，请重新启动登录任务。", status) from exc
         current_status = _detect_platform_login_state(page, platform)
         current_code = str(current_status.get("status") or "").strip()
         if current_code == "ready":
@@ -912,7 +912,7 @@ def _wait_for_manual_login_completion(
                 logger.log(
                     "info",
                     "completion_node",
-                    f"{_platform_name(platform)} login completion node detected",
+                    f"{_platform_name(platform)} 登录成功节点已确认。",
                     {"url": str(page.url or ""), "details": stable_status, "manual_completion": True},
                     shot,
                 )
@@ -923,7 +923,7 @@ def _wait_for_manual_login_completion(
             logger.log(
                 "info" if current_code == "ready" else "warn",
                 "manual_login_status",
-                f"{_platform_name(platform)} manual login status updated.",
+                f"{_platform_name(platform)} 人工登录状态已更新。",
                 {"status": current_code, "details": current_status},
             )
             last_seen_status = current_code
@@ -945,24 +945,24 @@ def _confirm_platform_ready(page, platform: str, logger: AutomationLogger, cance
                 return result
         else:
             ready_hits = 0
-            logger.log("debug", "login_ready_confirm", "Ready state was not stable yet", {"index": index + 1, "status": last_status})
-    return last_status or {"status": "cookie_expired", "reason": "Ready state was not stable"}
+            logger.log("debug", "login_ready_confirm", "登录就绪状态仍不稳定。", {"index": index + 1, "status": last_status})
+    return last_status or {"status": "cookie_expired", "reason": "登录就绪状态仍不稳定。"}
 
 
 def _run_check_login(page, task, account, payload, screenshot_dir, logger, platform: str = "instagram") -> dict[str, Any]:
     status = _check_platform_login(page, platform, logger)
     shot = _screenshot(page, screenshot_dir, task, "check_login", logger)
     if status.get("status") != "ready":
-        logger.log("warn", "need_manual", str(status.get("reason") or f"{_platform_name(platform)} is not ready"), {"details": status}, shot)
-        raise NeedManualError(str(status.get("reason") or f"{_platform_name(platform)} is not ready"), str(status.get("status") or "need_verification"), shot)
-    logger.log("info", "completion_node", f"{_platform_name(platform)} check-login completion node detected", {"details": status}, shot)
+        logger.log("warn", "need_manual", str(status.get("reason") or f"{_platform_name(platform)} 账号未就绪。"), {"details": status}, shot)
+        raise NeedManualError(str(status.get("reason") or f"{_platform_name(platform)} 账号未就绪。"), str(status.get("status") or "need_verification"), shot)
+    logger.log("info", "completion_node", f"{_platform_name(platform)} 登录检查完成节点已确认。", {"details": status}, shot)
     return {"ok": True, "status": "ready", "screenshot_path": shot, "details": status}
 
 
 def _warmup_scroll(page, logger: AutomationLogger, times: int = 2) -> None:
     for index in range(max(1, times)):
         scroll = _slow_human_scroll(page)
-        logger.log("debug", "warmup", "Slowly browsed feed", {"index": index + 1, **scroll})
+        logger.log("debug", "warmup", "已缓慢浏览信息流。", {"index": index + 1, **scroll})
         _sleep_between(4.0, 8.0)
 
 
@@ -1093,7 +1093,7 @@ def _click_some_threads_likes(page, logger: AutomationLogger, limit: int) -> int
                     label = ""
                     with contextlib.suppress(Exception):
                         label = str(loc.get_attribute("aria-label") or "")
-                    logger.log("debug", "threads_like_candidate", "Selected unliked Threads like button", {"aria_label": label})
+                    logger.log("debug", "threads_like_candidate", "已选中未点赞的 Threads 点赞按钮。", {"aria_label": label})
                     _human_click(page, loc, logger, "threads_like")
                     clicked += 1
                     _sleep_between(1.0, 2.5)
@@ -1132,11 +1132,11 @@ def _open_random_threads_post(page, logger: AutomationLogger) -> bool:
                 opened = after_url != before_url or "/post/" in after_url
                 if not opened:
                     continue
-                logger.log("info", "threads_open_post", "Opened a Threads post for reading", {"url": after_url})
+                logger.log("info", "threads_open_post", "已打开一条 Threads 帖子进行浏览。", {"url": after_url})
                 _sleep_between(6.0, 12.0)
                 if random.random() < 0.55:
                     detail_scroll = _slow_human_scroll(page)
-                    logger.log("debug", "threads_read_post", "Browsed inside opened Threads post", detail_scroll)
+                    logger.log("debug", "threads_read_post", "已在打开的 Threads 帖子内浏览。", detail_scroll)
                     _sleep_between(4.0, 9.0)
                 _return_threads_feed_after_post(page, logger)
                 return True
@@ -1163,7 +1163,7 @@ def _return_threads_feed_after_post(page, logger: AutomationLogger) -> None:
     if "/post/" in final_url.lower() or "/media" in final_url.lower():
         _goto(page, THREADS_HOME, logger, "threads_return_feed")
         final_url = str(page.url or "")
-    logger.log("info", "threads_return_feed", "Returned from opened Threads post", {"url": final_url})
+    logger.log("info", "threads_return_feed", "已从打开的 Threads 帖子返回信息流。", {"url": final_url})
 
 
 def _run_threads_warmup(page, task, payload, screenshot_dir, logger) -> dict[str, Any]:
@@ -1175,7 +1175,7 @@ def _run_threads_warmup(page, task, payload, screenshot_dir, logger) -> dict[str
     session_seconds = _warmup_session_seconds(payload)
     strategy_id = str(payload.get("strategy_id") or "tg_default")
     strategy_label = str(payload.get("strategy_label") or "\u9ed8\u8ba4\u517b\u53f7\uff1a\u6ed1\u52a8 + \u968f\u673a\u70b9\u8d5e")
-    logger.log("info", "threads_warmup", "Starting Threads warmup from persona automation settings", {
+    logger.log("info", "threads_warmup", "开始按人设自动化设置执行 Threads 养号。", {
         "strategy_id": strategy_id,
         "strategy_label": strategy_label,
         "browse_limit": browse_limit,
@@ -1205,7 +1205,7 @@ def _run_threads_warmup(page, task, payload, screenshot_dir, logger) -> dict[str
                 liked += clicked_likes
             else:
                 like_backfills += 1
-                logger.log("warn", "threads_warmup_backfill", "Like backfill failed; switching target", {"attempts": like_backfills, "liked": liked, "target": min_required_likes})
+                logger.log("warn", "threads_warmup_backfill", "点赞补量失败，正在切换目标。", {"attempts": like_backfills, "liked": liked, "target": min_required_likes})
         should_open_post = browsed > 0 and (random.random() < 0.12 or (opened_posts == 0 and elapsed_ratio >= 0.3))
         if should_open_post and _open_random_threads_post(page, logger):
             opened_posts += 1
@@ -1226,20 +1226,20 @@ def _run_threads_warmup(page, task, payload, screenshot_dir, logger) -> dict[str
                         shot_reply = _screenshot(page, screenshot_dir, task, f"threads_warmup_comment_{commented}", logger)
                         if shot_reply:
                             comment_screenshots.append(shot_reply)
-                        logger.log("info", "threads_warmup_comment", "Commented during Threads warmup", {"commented": commented, "text": reply_text[:80]})
+                        logger.log("info", "threads_warmup_comment", "Threads 养号过程中已评论。", {"commented": commented, "text": reply_text[:80]})
                     else:
                         comment_backfills += 1
-                        logger.log("warn", "threads_warmup_backfill", "Comment backfill failed; switching target", {"attempts": comment_backfills, "commented": commented, "target": min_required_comments})
+                        logger.log("warn", "threads_warmup_backfill", "评论补量失败，正在切换目标。", {"attempts": comment_backfills, "commented": commented, "target": min_required_comments})
                 else:
                     comment_backfills += 1
-                    logger.log("warn", "threads_warmup_backfill", "Comment target was not found; continuing browse", {"attempts": comment_backfills, "commented": commented, "target": min_required_comments})
+                    logger.log("warn", "threads_warmup_backfill", "未找到可评论目标，继续浏览。", {"attempts": comment_backfills, "commented": commented, "target": min_required_comments})
             elif max_comments > commented:
                 comment_backfills += 1
-                logger.log("warn", "threads_warmup_backfill", "Comment target was not found; continuing browse", {"attempts": comment_backfills, "commented": commented, "target": min_required_comments, "has_reply_text": bool(str(reply_text or "").strip())})
+                logger.log("warn", "threads_warmup_backfill", "未找到可评论目标，继续浏览。", {"attempts": comment_backfills, "commented": commented, "target": min_required_comments, "has_reply_text": bool(str(reply_text or "").strip())})
         scroll = _slow_human_scroll(page)
         browsed += 1
         remaining_seconds = max(0, int(deadline - time.monotonic()))
-        logger.log("debug", "threads_warmup", "Smoothly browsed Threads feed", {"index": browsed, "browse_limit": browse_limit, **scroll, "liked": liked, "commented": commented, "opened_posts": opened_posts, "remaining_seconds": remaining_seconds})
+        logger.log("debug", "threads_warmup", "已平滑浏览 Threads 信息流。", {"index": browsed, "browse_limit": browse_limit, **scroll, "liked": liked, "commented": commented, "opened_posts": opened_posts, "remaining_seconds": remaining_seconds})
         if remaining_seconds <= 0:
             break
         _sleep_between(8.0, 16.0)
@@ -1247,7 +1247,7 @@ def _run_threads_warmup(page, task, payload, screenshot_dir, logger) -> dict[str
     logger.log(
         "info",
         "completion_node",
-        "Threads warmup completion node detected",
+        "Threads 养号完成节点已确认。",
         {"url": str(page.url or ""), "liked": liked, "commented": commented, "scrolled": browsed, "browse_limit": browse_limit, "opened_posts": opened_posts, "target_seconds": session_seconds, "like_backfills": like_backfills, "comment_backfills": comment_backfills, "strategy_id": strategy_id, "strategy_label": strategy_label},
         shot,
     )
@@ -1315,7 +1315,7 @@ def _run_threads_hot_post_auto_reply(page, task, payload, screenshot_dir, logger
     if not isinstance(raw_targets, list):
         raw_targets = []
     target_urls = [str(item or "").strip() for item in raw_targets if str(item or "").strip()]
-    logger.log("info", "threads_hot_post_auto_reply", "Starting Threads hot-post auto reply", {
+    logger.log("info", "threads_hot_post_auto_reply", "开始执行 Threads 热点帖子自动回复。", {
         "strategy_id": strategy_id,
         "strategy_label": strategy_label,
         "target_count": len(target_urls),
@@ -1325,7 +1325,7 @@ def _run_threads_hot_post_auto_reply(page, task, payload, screenshot_dir, logger
     })
     if not target_urls:
         shot = _screenshot(page, screenshot_dir, task, "threads_auto_reply_done", logger)
-        logger.log("warn", "completion_node", "No Threads hot-post targets were available", {
+        logger.log("warn", "completion_node", "没有可用的 Threads 热点帖子目标。", {
             "strategy_id": strategy_id,
             "strategy_label": strategy_label,
         }, shot)
@@ -1359,18 +1359,18 @@ def _run_threads_hot_post_auto_reply(page, task, payload, screenshot_dir, logger
         reply_text = _pick_persona_reply(payload)
         if not str(reply_text or "").strip():
             completion_reason = "no_persona_relevant_reply"
-            logger.log("warn", "threads_hot_post_reply_skip", "No persona-relevant reply candidate was available", {"url": url})
+            logger.log("warn", "threads_hot_post_reply_skip", "没有可用的人设相关回复候选内容。", {"url": url})
             break
         if button is None:
             reply_backfills += 1
-            logger.log("warn", "threads_auto_reply_backfill", "Reply target was not found; switching target", {"attempts": reply_backfills, "url": url})
+            logger.log("warn", "threads_auto_reply_backfill", "未找到可回复目标，正在切换目标。", {"attempts": reply_backfills, "url": url})
             continue
         _human_click(page, button, logger, "threads_hot_post_reply_button")
         _sleep_between(1.0, 2.5)
         box = _threads_text_box(page)
         if box is None:
             reply_backfills += 1
-            logger.log("warn", "threads_auto_reply_backfill", "Reply target was not found; switching target", {"attempts": reply_backfills, "url": url})
+            logger.log("warn", "threads_auto_reply_backfill", "未找到可回复目标，正在切换目标。", {"attempts": reply_backfills, "url": url})
             continue
         _human_click(page, box, logger, "threads_hot_post_reply_focus")
         _human_type(page, reply_text, min_delay=0.10, max_delay=0.22)
@@ -1382,18 +1382,18 @@ def _run_threads_hot_post_auto_reply(page, task, payload, screenshot_dir, logger
             shot = _screenshot(page, screenshot_dir, task, f"threads_reply_{replied}", logger)
             if shot:
                 reply_screenshots.append(shot)
-            logger.log("info", "threads_hot_post_auto_reply", "Replied to Threads hot post", {"reply_index": replied, "url": url, "text": reply_text[:80]})
+            logger.log("info", "threads_hot_post_auto_reply", "已回复 Threads 热点帖子。", {"reply_index": replied, "url": url, "text": reply_text[:80]})
             if replied >= max_replies:
                 completion_reason = "target_replies_reached"
                 break
         else:
             reply_backfills += 1
-            logger.log("warn", "threads_auto_reply_backfill", "Reply backfill failed; switching target", {"attempts": reply_backfills, "url": url})
+            logger.log("warn", "threads_auto_reply_backfill", "回复补量失败，正在切换目标。", {"attempts": reply_backfills, "url": url})
     shot = _screenshot(page, screenshot_dir, task, "threads_auto_reply_done", logger)
     logger.log(
         "info",
         "completion_node",
-        "Threads hot-post auto-reply completion node detected",
+        "Threads 热点帖子自动回复完成节点已确认。",
         {"url": str(page.url or ""), "scannedPosts": scanned, "replied": replied, "reply_backfills": reply_backfills, "completionReason": completion_reason, "strategy_id": strategy_id, "strategy_label": strategy_label},
         shot,
     )
@@ -1431,7 +1431,7 @@ def _run_threads_auto_reply(page, task, payload, screenshot_dir, logger) -> dict
     reply_backfills = 0
     reply_screenshots: list[str] = []
     replied_urls: list[str] = []
-    logger.log("info", "threads_auto_reply", "Starting persona-driven Threads auto reply", {
+    logger.log("info", "threads_auto_reply", "开始执行人设驱动的 Threads 自动回复。", {
         "strategy_id": strategy_id,
         "strategy_label": strategy_label,
         "max_posts": max_posts,
@@ -1450,19 +1450,19 @@ def _run_threads_auto_reply(page, task, payload, screenshot_dir, logger) -> dict
             button = _threads_reply_button(page)
             reply_text = _pick_persona_reply(payload)
             if require_persona_relevance and not str(reply_text or "").strip():
-                logger.log("warn", "threads_auto_reply_skip", "No persona-relevant reply candidate was available", {"strategy_id": strategy_id, "strategy_label": strategy_label, "url": url})
+                logger.log("warn", "threads_auto_reply_skip", "没有可用的人设相关回复候选内容。", {"strategy_id": strategy_id, "strategy_label": strategy_label, "url": url})
                 completion_reason = "no_persona_relevant_reply"
                 break
             if button is None:
                 reply_backfills += 1
-                logger.log("warn", "threads_auto_reply_backfill", "Reply target was not found; switching target", {"attempts": reply_backfills, "url": url})
+                logger.log("warn", "threads_auto_reply_backfill", "未找到可回复目标，正在切换目标。", {"attempts": reply_backfills, "url": url})
                 continue
             _human_click(page, button, logger, "threads_reply_button")
             _sleep_between(1.0, 2.5)
             box = _threads_text_box(page)
             if box is None:
                 reply_backfills += 1
-                logger.log("warn", "threads_auto_reply_backfill", "Reply target was not found; switching target", {"attempts": reply_backfills, "url": url})
+                logger.log("warn", "threads_auto_reply_backfill", "未找到可回复目标，正在切换目标。", {"attempts": reply_backfills, "url": url})
                 continue
             _human_click(page, box, logger, "threads_reply_focus")
             _human_type(page, reply_text, min_delay=0.10, max_delay=0.22)
@@ -1474,18 +1474,18 @@ def _run_threads_auto_reply(page, task, payload, screenshot_dir, logger) -> dict
                 shot = _screenshot(page, screenshot_dir, task, f"threads_reply_{replied}", logger)
                 if shot:
                     reply_screenshots.append(shot)
-                logger.log("info", "threads_auto_reply", "Replied with persona text", {"reply_index": replied, "url": url, "text": reply_text[:80]})
+                logger.log("info", "threads_auto_reply", "已使用人设文案完成回复。", {"reply_index": replied, "url": url, "text": reply_text[:80]})
                 if replied >= max_replies:
                     completion_reason = "target_replies_reached"
                     break
             else:
                 reply_backfills += 1
-                logger.log("warn", "threads_auto_reply_backfill", "Reply backfill failed; switching target", {"attempts": reply_backfills, "url": url})
+                logger.log("warn", "threads_auto_reply_backfill", "回复补量失败，正在切换目标。", {"attempts": reply_backfills, "url": url})
         shot = _screenshot(page, screenshot_dir, task, "threads_auto_reply_done", logger)
         logger.log(
             "info",
             "completion_node",
-            "Threads auto-reply completion node detected",
+            "Threads 自动回复完成节点已确认。",
             {"url": str(page.url or ""), "scannedPosts": scanned, "replied": replied, "reply_backfills": reply_backfills, "completionReason": completion_reason, "strategy_id": strategy_id, "strategy_label": strategy_label, "target_count": len(target_urls)},
             shot,
         )
@@ -1511,7 +1511,7 @@ def _run_threads_auto_reply(page, task, payload, screenshot_dir, logger) -> dict
         if button is not None:
             reply_text = _pick_persona_reply(payload)
             if require_persona_relevance and not str(reply_text or "").strip():
-                logger.log("warn", "threads_auto_reply_skip", "No persona-relevant reply candidate was available", {"strategy_id": strategy_id, "strategy_label": strategy_label})
+                logger.log("warn", "threads_auto_reply_skip", "没有可用的人设相关回复候选内容。", {"strategy_id": strategy_id, "strategy_label": strategy_label})
                 completion_reason = "no_persona_relevant_reply"
                 break
             _human_click(page, button, logger, "threads_reply_button")
@@ -1519,7 +1519,7 @@ def _run_threads_auto_reply(page, task, payload, screenshot_dir, logger) -> dict
             box = _threads_text_box(page)
             if box is None:
                 reply_backfills += 1
-                logger.log("warn", "threads_auto_reply_backfill", "Reply target was not found; switching target", {"attempts": reply_backfills, "index": index + 1})
+                logger.log("warn", "threads_auto_reply_backfill", "未找到可回复目标，正在切换目标。", {"attempts": reply_backfills, "index": index + 1})
             else:
                 _human_click(page, box, logger, "threads_reply_focus")
                 _human_type(page, reply_text, min_delay=0.10, max_delay=0.22)
@@ -1530,23 +1530,23 @@ def _run_threads_auto_reply(page, task, payload, screenshot_dir, logger) -> dict
                     shot = _screenshot(page, screenshot_dir, task, f"threads_reply_{replied}", logger)
                     if shot:
                         reply_screenshots.append(shot)
-                    logger.log("info", "threads_auto_reply", "Replied with persona text", {"reply_index": replied, "text": reply_text[:80]})
+                    logger.log("info", "threads_auto_reply", "已使用人设文案完成回复。", {"reply_index": replied, "text": reply_text[:80]})
                     if replied >= max_replies:
                         completion_reason = "target_replies_reached"
                         break
                 else:
                     reply_backfills += 1
-                    logger.log("warn", "threads_auto_reply_backfill", "Reply backfill failed; switching target", {"attempts": reply_backfills, "index": index + 1})
+                    logger.log("warn", "threads_auto_reply_backfill", "回复补量失败，正在切换目标。", {"attempts": reply_backfills, "index": index + 1})
         else:
             reply_backfills += 1
-            logger.log("warn", "threads_auto_reply_backfill", "Reply target was not found; switching target", {"attempts": reply_backfills, "index": index + 1})
+            logger.log("warn", "threads_auto_reply_backfill", "未找到可回复目标，正在切换目标。", {"attempts": reply_backfills, "index": index + 1})
         page.mouse.wheel(0, random.randint(550, 950))
         _sleep_between(2.0, 5.0)
     shot = _screenshot(page, screenshot_dir, task, "threads_auto_reply_done", logger)
     logger.log(
         "info",
         "completion_node",
-        "Threads auto-reply completion node detected",
+        "Threads 自动回复完成节点已确认。",
         {"url": str(page.url or ""), "scannedPosts": scanned, "replied": replied, "reply_backfills": reply_backfills, "completionReason": completion_reason, "strategy_id": strategy_id, "strategy_label": strategy_label},
         shot,
     )
@@ -1573,7 +1573,7 @@ def _run_browse_profile(page, task, payload, screenshot_dir, logger) -> dict[str
     if not target_url and username:
         target_url = f"{INSTAGRAM_HOME}{username}/"
     if not target_url:
-        raise ValueError("browse_profile requires target_url or username")
+        raise ValueError("浏览主页任务需要 target_url 或 username。")
     _goto(page, target_url, logger, "browse_profile")
     _warmup_scroll(page, logger, int(payload.get("scroll_times") or 2))
     shot = _screenshot(page, screenshot_dir, task, "browse_profile", logger)
@@ -1629,22 +1629,22 @@ def _auto_submit_login_form(page, platform: str, payload: dict[str, Any], logger
     if not username or not password:
         return False
     start_shot = _screenshot(page, screenshot_dir, task, "auto_login_start", logger)
-    logger.log("info", "auto_login_start", f"Starting {_platform_name(platform)} automatic credential input", {"username": username, "url": str(page.url or "")}, start_shot)
+    logger.log("info", "auto_login_start", f"开始自动填写 {_platform_name(platform)} 登录凭据。", {"username": username, "url": str(page.url or "")}, start_shot)
 
     continue_clicked = False
     if platform == "threads":
-        logger.log("info", "auto_login_continue", "Looking for Threads Instagram login button", {"url": str(page.url or "")})
+        logger.log("info", "auto_login_continue", "正在查找 Threads 的 Instagram 登录按钮。", {"url": str(page.url or "")})
         continue_clicked = _click_text_button(
             page,
             logger,
             ["Continue with Instagram", "Log in with Instagram", "缁х画浣跨敤 Instagram", "浣跨敤 Instagram 缁х画"],
             "threads_continue_instagram",
         )
-        logger.log("info" if continue_clicked else "warn", "auto_login_continue", "Threads Instagram login button processed", {"clicked": continue_clicked, "url": str(page.url or "")})
+        logger.log("info" if continue_clicked else "warn", "auto_login_continue", "Threads 的 Instagram 登录按钮已处理。", {"clicked": continue_clicked, "url": str(page.url or "")})
         if continue_clicked:
             _sleep_between(2.0, 4.0)
 
-    logger.log("info", "auto_login_find_inputs", "Looking for username and password inputs", {"url": str(page.url or "")})
+    logger.log("info", "auto_login_find_inputs", "正在查找用户名和密码输入框。", {"url": str(page.url or "")})
     username_input = _visible_first(page, [
         'input[name="username"]',
         'input[autocomplete="username"]',
@@ -1665,22 +1665,22 @@ def _auto_submit_login_form(page, platform: str, payload: dict[str, Any], logger
     ])
     if username_input is None or password_input is None:
         shot = _screenshot(page, screenshot_dir, task, "auto_login_inputs_missing", logger)
-        logger.log("warn", "auto_login_inputs_missing", "Login inputs were not visible for automatic credential input", {"continued": continue_clicked, "url": str(page.url or "")}, shot)
+        logger.log("warn", "auto_login_inputs_missing", "未找到可见的登录输入框，无法自动填写凭据。", {"continued": continue_clicked, "url": str(page.url or "")}, shot)
         return False
 
     try:
-        logger.log("info", "auto_login_type_username", "Typing username into login form", {"username": username})
+        logger.log("info", "auto_login_type_username", "正在填写登录用户名。", {"username": username})
         _clear_and_type(page, username_input, username)
         _sleep_between(0.4, 0.9)
-        logger.log("info", "auto_login_type_password", "Typing password into login form", {"password": "***"})
+        logger.log("info", "auto_login_type_password", "正在填写登录密码。", {"password": "***"})
         _clear_and_type(page, password_input, password)
         _sleep_between(0.4, 0.9)
     except Exception as exc:
         shot = _screenshot(page, screenshot_dir, task, "auto_login_type_failed", logger)
-        logger.log("warn", "auto_login_type_failed", "Automatic credential typing failed", {"error": str(exc), "url": str(page.url or "")}, shot)
+        logger.log("warn", "auto_login_type_failed", "自动填写登录凭据失败。", {"error": str(exc), "url": str(page.url or "")}, shot)
         return False
     filled_shot = _screenshot(page, screenshot_dir, task, "auto_login_form_filled", logger)
-    logger.log("info", "auto_login_form_filled", "Login form has been filled", {"username": username, "password": "***"}, filled_shot)
+    logger.log("info", "auto_login_form_filled", "登录表单已填写完成。", {"username": username, "password": "***"}, filled_shot)
     clicked = _click_text_button(
         page,
         logger,
@@ -1690,7 +1690,7 @@ def _auto_submit_login_form(page, platform: str, payload: dict[str, Any], logger
     if not clicked:
         page.keyboard.press("Enter")
     submit_shot = _screenshot(page, screenshot_dir, task, "auto_login_submitted", logger)
-    logger.log("info", "auto_login_submit", "Login form submitted; waiting for ready state or verification", {"clicked_submit_button": clicked, "url": str(page.url or "")}, submit_shot)
+    logger.log("info", "auto_login_submit", "登录表单已提交，正在等待账号就绪或验证提示。", {"clicked_submit_button": clicked, "url": str(page.url or "")}, submit_shot)
     _sleep_between(4.0, 7.0)
     return True
 
@@ -1783,7 +1783,7 @@ def _ensure_threads_compose_ready(page, logger: AutomationLogger):
                     return compose
         except Exception:
             continue
-    raise RuntimeError("Could not open Threads compose box")
+    raise RuntimeError("无法打开 Threads 发帖输入框。")
 
 
 def _wait_for_threads_publish_success(page, logger: AutomationLogger) -> dict[str, Any]:
@@ -1793,7 +1793,7 @@ def _wait_for_threads_publish_success(page, logger: AutomationLogger) -> dict[st
         try:
             url = str(page.url or "")
             if re.search(r"/@[^/]+/(post|thread)/", url) or re.search(r"/post/", url):
-                return {"confirmed": True, "reason": "Threads post url is visible", "url": url}
+                return {"confirmed": True, "reason": "已检测到 Threads 帖子链接。", "url": url}
         except Exception:
             pass
         dialog_compose = _threads_dialog_compose_box(page)
@@ -1801,22 +1801,22 @@ def _wait_for_threads_publish_success(page, logger: AutomationLogger) -> dict[st
         if dialog_compose is not None or dialog_post_button is not None:
             saw_dialog = True
         elif saw_dialog:
-            return {"confirmed": True, "reason": "Threads composer closed after posting", "url": str(page.url or "")}
+            return {"confirmed": True, "reason": "Threads 发布后编辑器已关闭。", "url": str(page.url or "")}
         elif time.time() > deadline - 84:
-            return {"confirmed": True, "reason": "Threads returned to feed after submit", "url": str(page.url or "")}
+            return {"confirmed": True, "reason": "Threads 提交后已返回信息流。", "url": str(page.url or "")}
         _sleep_between(1.4, 2.2)
-    logger.log("warn", "threads_publish_confirm", "Threads publish confirmation timed out", {"url": str(page.url or "")})
-    return {"confirmed": False, "reason": "timeout waiting for Threads publish confirmation", "url": str(page.url or "")}
+    logger.log("warn", "threads_publish_confirm", "等待 Threads 发布确认超时。", {"url": str(page.url or "")})
+    return {"confirmed": False, "reason": "等待 Threads 发布确认超时。", "url": str(page.url or "")}
 
 
 def _run_threads_publish_post(page, task, payload, screenshot_dir, logger) -> dict[str, Any]:
     media_paths = [str(p) for p in (payload.get("media_paths") or []) if str(p or "").strip()]
     caption = str(payload.get("caption") or payload.get("content") or payload.get("text") or "").strip()
     if not caption and not media_paths:
-        raise ValueError("Threads publish_post requires caption or media_paths")
+        raise ValueError("Threads 发布任务需要正文或媒体文件。")
     missing = [p for p in media_paths if not Path(p).exists()]
     if missing:
-        raise FileNotFoundError(f"Media file not found: {missing[0]}")
+        raise FileNotFoundError(f"媒体文件不存在：{missing[0]}")
     _goto(page, THREADS_HOME, logger, "threads_publish_open")
     compose = _ensure_threads_compose_ready(page, logger)
     _human_click(page, compose, logger, "threads_publish_focus")
@@ -1836,12 +1836,12 @@ def _run_threads_publish_post(page, task, payload, screenshot_dir, logger) -> di
                 _sleep_between(0.8, 1.4)
                 file_input = page.locator('input[type="file"]').first
         file_input.wait_for(state="attached", timeout=30000)
-        logger.log("info", "threads_publish_upload", "Uploading Threads media", {"count": len(media_paths)})
+        logger.log("info", "threads_publish_upload", "正在上传 Threads 媒体文件。", {"count": len(media_paths)})
         file_input.set_input_files(media_paths)
         _sleep_between(1.0, 2.2)
     post_button = _threads_post_button(page)
     if post_button is None:
-        raise RuntimeError("Could not find Threads Post button")
+        raise RuntimeError("未找到 Threads 发布按钮。")
     _human_click(page, post_button, logger, "threads_publish_submit")
     success = _wait_for_threads_publish_success(page, logger)
     shot = _screenshot(page, screenshot_dir, task, "publish_done", logger)
@@ -1854,23 +1854,23 @@ def _run_publish_post(page, task, payload, screenshot_dir, logger, platform: str
     media_paths = [str(p) for p in (payload.get("media_paths") or []) if str(p or "").strip()]
     caption = str(payload.get("caption") or "").strip()
     if not media_paths:
-        raise ValueError("publish_post requires media_paths")
+        raise ValueError("发布任务需要媒体文件。")
     missing = [p for p in media_paths if not Path(p).exists()]
     if missing:
-        raise FileNotFoundError(f"Media file not found: {missing[0]}")
+        raise FileNotFoundError(f"媒体文件不存在：{missing[0]}")
     _goto(page, INSTAGRAM_HOME, logger, "publish_open")
     if payload.get("warmup", True):
         _warmup_scroll(page, logger, 1)
     if not _click_text_button(page, logger, ["Create", "New post", "Create new post"], "publish_create"):
-        raise RuntimeError("Could not find Instagram create/new post button")
+        raise RuntimeError("未找到 Instagram 创建/新建帖子按钮。")
     file_input = page.locator('input[type="file"]').first
     file_input.wait_for(state="attached", timeout=30000)
-    logger.log("info", "publish_upload", "Uploading media", {"count": len(media_paths)})
+    logger.log("info", "publish_upload", "正在上传媒体文件。", {"count": len(media_paths)})
     file_input.set_input_files(media_paths)
     for stage in ("publish_next_1", "publish_next_2"):
         _sleep_between(1.0, 2.0)
         if not _click_text_button(page, logger, ["Next"], stage):
-            logger.log("debug", stage, "Next button not found; continuing")
+            logger.log("debug", stage, "未找到下一步按钮，继续执行。")
             break
     if caption:
         caption_box = page.locator('textarea, [contenteditable="true"]').last
@@ -1878,7 +1878,7 @@ def _run_publish_post(page, task, payload, screenshot_dir, logger, platform: str
         _human_click(page, caption_box, logger, "publish_caption_focus")
         _human_type(page, caption)
     if not _click_text_button(page, logger, ["Share"], "publish_share"):
-        raise RuntimeError("Could not find Instagram Share button")
+        raise RuntimeError("未找到 Instagram 分享按钮。")
     success = _wait_for_publish_success(page, logger)
     shot = _screenshot(page, screenshot_dir, task, "publish_done", logger)
     time.sleep(5)
@@ -1892,34 +1892,34 @@ def _wait_for_publish_success(page, logger: AutomationLogger) -> dict[str, Any]:
         try:
             body = page.locator("body").inner_text(timeout=3000)
             if any(marker.lower() in body.lower() for marker in markers):
-                return {"confirmed": True, "reason": "success text visible"}
+                return {"confirmed": True, "reason": "已检测到发布成功文案。"}
         except Exception:
             pass
         if "/p/" in str(page.url or "") or str(page.url or "").rstrip("/") == INSTAGRAM_HOME.rstrip("/"):
-            return {"confirmed": True, "reason": "page redirected after share"}
+            return {"confirmed": True, "reason": "分享后页面已跳转。"}
         time.sleep(2)
-    logger.log("warn", "publish_confirm", "Publish confirmation timed out", {"url": page.url})
-    return {"confirmed": False, "reason": "timeout waiting for confirmation"}
+    logger.log("warn", "publish_confirm", "等待发布确认超时。", {"url": page.url})
+    return {"confirmed": False, "reason": "等待发布确认超时。"}
 
 
 def _target_url(payload: dict[str, Any]) -> str:
     url = str(payload.get("target_url") or payload.get("post_url") or "").strip()
     if not url:
-        raise ValueError("target_url is required")
+        raise ValueError("需要提供 target_url。")
     return url
 
 
 def _run_comment_post(page, task, payload, screenshot_dir, logger) -> dict[str, Any]:
     comment = str(payload.get("comment") or payload.get("text") or "").strip()
     if not comment:
-        raise ValueError("comment_post requires comment")
+        raise ValueError("评论任务需要填写评论内容。")
     _goto(page, _target_url(payload), logger, "comment_open")
     box = page.locator('textarea[aria-label*="Add a comment"], textarea, [contenteditable="true"]').last
     box.wait_for(state="visible", timeout=30000)
     _human_click(page, box, logger, "comment_focus")
     _human_type(page, comment)
     if not _click_text_button(page, logger, ["Post"], "comment_submit"):
-        raise RuntimeError("Could not find comment Post button")
+        raise RuntimeError("未找到评论发布按钮。")
     _sleep_between(2.0, 4.0)
     shot = _screenshot(page, screenshot_dir, task, "comment_done", logger)
     return {"ok": True, "url": page.url, "screenshot_path": shot}
@@ -1929,22 +1929,22 @@ def _run_reply_comment(page, task, payload, screenshot_dir, logger) -> dict[str,
     reply = str(payload.get("reply") or payload.get("comment") or payload.get("text") or "").strip()
     target_text = str(payload.get("target_text") or "").strip()
     if not reply:
-        raise ValueError("reply_comment requires reply/comment text")
+        raise ValueError("回复任务需要填写回复/评论内容。")
     _goto(page, _target_url(payload), logger, "reply_open")
     _warmup_scroll(page, logger, 1)
     if target_text:
         try:
             page.get_by_text(target_text, exact=False).first.scroll_into_view_if_needed(timeout=8000)
         except Exception:
-            logger.log("warn", "reply_target", "Target comment text was not found before replying", {"target_text": target_text[:80]})
+            logger.log("warn", "reply_target", "回复前未找到目标评论文本。", {"target_text": target_text[:80]})
     if not _click_text_button(page, logger, ["Reply"], "reply_button"):
-        raise RuntimeError("Could not find Reply button")
+        raise RuntimeError("未找到回复按钮。")
     box = page.locator('textarea, [contenteditable="true"]').last
     box.wait_for(state="visible", timeout=30000)
     _human_click(page, box, logger, "reply_focus")
     _human_type(page, reply)
     if not _click_text_button(page, logger, ["Post"], "reply_submit"):
-        raise RuntimeError("Could not find reply Post button")
+        raise RuntimeError("未找到回复发布按钮。")
     _sleep_between(2.0, 4.0)
     shot = _screenshot(page, screenshot_dir, task, "reply_done", logger)
     return {"ok": True, "url": page.url, "screenshot_path": shot}
@@ -1961,7 +1961,7 @@ def _run_like_post(page, task, payload, screenshot_dir, logger) -> dict[str, Any
         pass
     like = page.locator('[aria-label="Like"]').first
     if not like.count():
-        raise RuntimeError("Could not find Like button")
+        raise RuntimeError("未找到点赞按钮。")
     _human_click(page, like, logger, "like_click")
     _sleep_between(1.0, 2.0)
     shot = _screenshot(page, screenshot_dir, task, "like_done", logger)
@@ -1971,7 +1971,7 @@ def _run_like_post(page, task, payload, screenshot_dir, logger) -> dict[str, Any
 def _run_share_post(page, task, payload, screenshot_dir, logger) -> dict[str, Any]:
     _goto(page, _target_url(payload), logger, "share_open")
     if not _click_text_button(page, logger, ["Share", "Send"], "share_button"):
-        raise RuntimeError("Could not find Share/Send button")
+        raise RuntimeError("未找到分享/发送按钮。")
     _sleep_between(1.0, 2.0)
     copied = _click_text_button(page, logger, ["Copy link"], "share_copy_link")
     shot = _screenshot(page, screenshot_dir, task, "share_done", logger)

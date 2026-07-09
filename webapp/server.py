@@ -10386,6 +10386,10 @@ class PersonaDashboardGroupRenamePayload(BaseModel):
     name: str = ""
 
 
+class PersonaDashboardPersonaRenamePayload(BaseModel):
+    name: str = ""
+
+
 class PersonaDashboardGroupPersonaPayload(BaseModel):
     persona_id: str = ""
 
@@ -11070,6 +11074,32 @@ def _create_persona_group(payload: PersonaDashboardGroupCreatePayload) -> dict[s
     groups.append(group)
     _write_persona_groups_config({"groups": groups})
     return {"ok": True, "group": group}
+
+
+def _rename_persona_archive(archive_id: str, payload: PersonaDashboardPersonaRenamePayload) -> dict[str, Any]:
+    clean_id = str(archive_id or "").strip()
+    name = str(payload.name or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID。")
+    if not name:
+        raise HTTPException(status_code=400, detail="人设名称不能为空。")
+    path, raw, archives = _persona_archive_source_for_write(clean_id)
+    archive = _find_persona_archive(archives, clean_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    now = _persona_dashboard_iso_now()
+    archive["name"] = name
+    archive["updatedAt"] = now
+    archive["updated_at"] = now
+    for key in ("profile", "setup"):
+        section = archive.get(key)
+        if isinstance(section, dict):
+            section["name"] = name
+            if key == "setup":
+                section["displayName"] = name
+                section["display_name"] = name
+    _write_persona_archives_preserving_shape(path, raw, archives)
+    return {"ok": True, "persona": {"id": clean_id, "name": name, "updated_at": now}}
 
 
 def _rename_persona_group(group_id: str, payload: PersonaDashboardGroupRenamePayload) -> dict[str, Any]:
@@ -12095,6 +12125,12 @@ def _persona_post_source_name(source: str = "posts") -> str:
     return "favorites" if _persona_post_source_key(source) == "favoritePosts" else "posts"
 
 
+def _is_published_persona_draft(post: dict[str, Any] | None) -> bool:
+    if not isinstance(post, dict):
+        return False
+    return bool(str(post.get("publishedAt") or post.get("published_at") or "").strip())
+
+
 def _list_persona_archive_posts(archive_id: str, source: str = "posts") -> list[dict[str, Any]]:
     clean_id = str(archive_id or "").strip()
     if not clean_id:
@@ -12109,7 +12145,7 @@ def _list_persona_archive_posts(archive_id: str, source: str = "posts") -> list[
     for post in posts:
         if not isinstance(post, dict):
             continue
-        if source_key == "posts" and str(post.get("publishedAt") or post.get("published_at") or "").strip():
+        if source_key == "posts" and _is_published_persona_draft(post):
             continue
         compact = _compact_persona_archive_post(post)
         compact["source"] = _persona_post_source_name(source)
@@ -12483,11 +12519,11 @@ def _add_persona_favorite_post(archive_id: str, post_id: str) -> dict[str, Any]:
     path, raw, archives = _persona_archive_source_for_write(clean_id)
     archive = _find_persona_archive(archives, clean_id)
     if not archive:
-        raise HTTPException(status_code=404, detail="persona not found")
+        raise HTTPException(status_code=404, detail="人设不存在。")
     posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
     source_post = next((post for post in posts if isinstance(post, dict) and str(post.get("id") or "").strip() == clean_post_id), None)
-    if not source_post:
-        raise HTTPException(status_code=404, detail="post not found")
+    if not source_post or _is_published_persona_draft(source_post):
+        raise HTTPException(status_code=404, detail="草稿已发布或已不存在。")
     favorites = archive.get("favoritePosts") if isinstance(archive.get("favoritePosts"), list) else []
     for favorite in favorites:
         if isinstance(favorite, dict) and _favorite_source_post_id(favorite) == clean_post_id:
@@ -12840,7 +12876,7 @@ def _publish_persona_archive_post(
     source_key = _persona_post_source_key(source_name)
     posts = archive.get(source_key) if isinstance(archive.get(source_key), list) else []
     post = next((item for item in posts if isinstance(item, dict) and str(item.get("id") or "").strip() == clean_post_id), None)
-    if not post:
+    if not post or (source_name == "posts" and _is_published_persona_draft(post)):
         raise HTTPException(status_code=404, detail="推文草稿不存在。")
     content = str(post.get("content") or "").strip()
     if not content:
@@ -12914,6 +12950,7 @@ def _active_publish_task_for_post(*, persona_id: str, account_id: str, post_id: 
               AND account_id = ?
               AND task_type = 'publish_post'
               AND status IN ('queued', 'running', 'need_manual')
+              AND (status != 'need_manual' OR COALESCE(finished_at, 0) = 0)
             ORDER BY created_at DESC
             """,
             (clean_persona_id, clean_account_id),
@@ -15534,6 +15571,10 @@ def create_app() -> FastAPI:
     @app.patch("/api/persona_dashboard/groups/{group_id}")
     def api_persona_dashboard_rename_group(group_id: str, payload: PersonaDashboardGroupRenamePayload, _user: dict[str, Any] = Depends(get_current_user)):
         return _rename_persona_group(group_id, payload)
+
+    @app.patch("/api/persona_dashboard/personas/{archive_id}/name")
+    def api_persona_dashboard_rename_persona(archive_id: str, payload: PersonaDashboardPersonaRenamePayload, _user: dict[str, Any] = Depends(get_current_user)):
+        return _rename_persona_archive(archive_id, payload)
 
     @app.delete("/api/persona_dashboard/groups/{group_id}")
     def api_persona_dashboard_delete_group(group_id: str, _user: dict[str, Any] = Depends(get_current_user)):

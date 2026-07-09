@@ -6555,8 +6555,8 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .account-pool-body {
   display: grid;
-  grid-template-columns: 180px minmax(360px, 480px) minmax(420px, 1fr);
-  gap: 12px;
+  grid-template-columns: 150px minmax(300px, 420px) minmax(380px, 1fr);
+  gap: 10px;
   align-items: start;
 }
 
@@ -6689,7 +6689,7 @@ body.persona-touch-dragging .persona-list-card:active {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 4px;
   min-width: 0;
   flex: 1 1 auto;
 }
@@ -6698,11 +6698,11 @@ body.persona-touch-dragging .persona-list-card:active {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 78px;
-  height: 36px;
-  padding: 0 10px;
+  min-width: 66px;
+  height: 30px;
+  padding: 0 6px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 800;
 }
 
@@ -6711,24 +6711,43 @@ body.persona-touch-dragging .persona-list-card:active {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
-  min-height: 40px;
+  width: 30px;
+  height: 30px;
+  min-height: 30px;
   padding: 0;
   box-sizing: border-box;
   border-radius: 999px;
   color: var(--ink);
-  background: var(--panel-solid);
-  border: 2px solid var(--ink);
+  background: transparent;
+  border: 0;
   line-height: 1;
+  opacity: 0.76;
+  transition: background var(--motion-fast), opacity var(--motion-fast), transform var(--motion-fast), color var(--motion-fast);
+}
+
+.account-pool-edit-toolbar > button:not(.account-pool-add-button):hover,
+.account-pool-edit-toolbar > button:not(.account-pool-add-button):focus-visible {
+  background: var(--soft);
+  opacity: 1;
+  transform: translateY(-1px) scale(1.04);
+}
+
+.account-pool-edit-toolbar > button:not(.account-pool-add-button):disabled {
+  opacity: 0.34;
+  cursor: not-allowed;
+}
+
+.account-pool-edit-toolbar > button:not(.account-pool-add-button):disabled:hover {
+  background: transparent;
+  transform: none;
 }
 
 .account-pool-edit-toolbar > button:not(.account-pool-add-button) > span {
   position: relative;
   display: grid;
   place-items: center;
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   font-size: 0;
   line-height: 0;
 }
@@ -6742,20 +6761,20 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .account-pool-edit-toolbar [data-account-pool-copy-selected] > span::before,
 .account-pool-edit-toolbar [data-account-pool-copy-selected] > span::after {
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
   border: 2px solid currentColor;
-  border-radius: 4px;
+  border-radius: 3px;
 }
 
 .account-pool-edit-toolbar [data-account-pool-copy-selected] > span::before {
-  left: 3px;
+  left: 2px;
   top: 5px;
 }
 
 .account-pool-edit-toolbar [data-account-pool-copy-selected] > span::after {
-  left: 6px;
-  top: 2px;
+  left: 5px;
+  top: 1px;
   background: var(--panel-solid);
 }
 
@@ -6766,8 +6785,8 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .account-pool-edit-toolbar [data-account-pool-select-all] > span::after {
-  left: 6px;
-  top: 4px;
+  left: 5px;
+  top: 3px;
   width: 7px;
   height: 11px;
   border: solid currentColor;
@@ -6775,10 +6794,26 @@ body.persona-touch-dragging .persona-list-card:active {
   transform: rotate(45deg);
 }
 
+.account-pool-edit-toolbar [data-account-pool-clear-selected] > span::before {
+  inset: 2px;
+  border: 2px solid currentColor;
+  border-radius: 5px;
+}
+
+.account-pool-edit-toolbar [data-account-pool-clear-selected] > span::after {
+  left: 2px;
+  top: 8px;
+  width: 14px;
+  height: 2.5px;
+  border-radius: 999px;
+  background: currentColor;
+  transform: rotate(-35deg);
+}
+
 .account-pool-edit-toolbar [data-account-pool-delete-selected] > span::before,
 .account-pool-edit-toolbar [data-account-pool-delete-selected] > span::after {
-  left: 4px;
-  top: 9px;
+  left: 3px;
+  top: 8px;
   width: 12px;
   height: 2.5px;
   border-radius: 999px;
@@ -6800,32 +6835,45 @@ body.persona-touch-dragging .persona-list-card:active {
 .account-pool-add-button {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  height: 46px;
-  min-height: 46px;
-  padding: 0 18px;
+  gap: 6px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0 8px;
   box-sizing: border-box;
   border-radius: 999px;
-  background: var(--panel-solid);
-  border: 2px solid var(--ink);
+  background: transparent;
+  border: 0;
   color: var(--ink);
   line-height: 1;
   white-space: nowrap;
+  transition: background var(--motion-fast), transform var(--motion-fast);
+}
+
+.account-pool-add-button:hover,
+.account-pool-add-button:focus-visible {
+  background: var(--soft);
+  transform: translateY(-1px);
 }
 
 .account-pool-add-button span {
   position: relative;
-  flex: 0 0 30px;
+  flex: 0 0 22px;
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 22px;
+  height: 22px;
   box-sizing: border-box;
-  border: 2px solid currentColor;
+  border: 0;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--surface) 80%, transparent);
+  background: transparent;
   font-size: 0;
   line-height: 0;
+  transition: transform var(--motion-fast);
+}
+
+.account-pool-add-button:hover span,
+.account-pool-add-button:focus-visible span {
+  transform: rotate(90deg) scale(1.08);
 }
 
 .account-pool-add-button span::before,
@@ -6834,7 +6882,7 @@ body.persona-touch-dragging .persona-list-card:active {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 14px;
+  width: 15px;
   height: 3px;
   border-radius: 999px;
   background: currentColor;
@@ -6843,11 +6891,11 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .account-pool-add-button span::after {
   width: 3px;
-  height: 14px;
+  height: 15px;
 }
 
 .account-pool-add-button strong {
-  font-size: 18px;
+  font-size: 15px;
   line-height: 1;
 }
 
@@ -6963,10 +7011,10 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .account-pool-platforms button {
   display: grid;
-  gap: 3px;
+  gap: 2px;
   justify-items: start;
-  min-height: 54px;
-  padding: 8px 10px;
+  min-height: 48px;
+  padding: 7px 9px;
   background: var(--panel-solid);
   border: 1px solid var(--line);
   color: var(--ink);
@@ -6983,20 +7031,24 @@ body.persona-touch-dragging .persona-list-card:active {
 .account-pool-platforms button span {
   color: inherit;
   opacity: 0.72;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .account-pool-card {
   position: relative;
   display: grid;
   grid-template-columns: 1fr;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
-  max-width: 480px;
-  min-height: 118px;
-  padding-left: 48px;
+  max-width: 420px;
+  min-height: 96px;
+  padding: 12px 12px 12px 42px;
   border-color: var(--line);
   cursor: pointer;
+}
+
+.account-card.account-pool-card {
+  gap: 5px;
 }
 
 .account-pool-card.is-active {
@@ -7029,20 +7081,20 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .account-pool-card-check {
   position: absolute;
-  top: 4px;
-  left: 10px;
+  top: 13px;
+  left: 12px;
   z-index: 4;
   display: inline-flex;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   cursor: pointer;
 }
 
 .account-pool-card-check input {
   position: absolute;
   inset: 0;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   margin: 0;
   opacity: 0;
   cursor: pointer;
@@ -7050,10 +7102,10 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .account-pool-card-check span {
   display: block;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   border: 2px solid var(--ink);
-  border-radius: 6px;
+  border-radius: 5px;
   background: var(--surface);
   box-shadow: 0 0 0 2px var(--surface), 0 2px 8px rgba(15, 23, 42, 0.16);
   transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
@@ -7067,8 +7119,8 @@ body.persona-touch-dragging .persona-list-card:active {
 .account-pool-card-check input:checked + span::after {
   content: "";
   position: absolute;
-  left: 8px;
-  top: 4px;
+  left: 7px;
+  top: 3px;
   width: 6px;
   height: 12px;
   border: solid var(--surface);
@@ -7084,7 +7136,7 @@ body.persona-touch-dragging .persona-list-card:active {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
   min-height: 0;
   width: 100%;
   padding: 0;
@@ -7105,13 +7157,15 @@ body.persona-touch-dragging .persona-list-card:active {
 .account-pool-card-copy strong {
   min-width: 0;
   overflow: hidden;
+  font-size: 16px;
+  line-height: 1.15;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .account-pool-card-copy small {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -7125,6 +7179,27 @@ body.persona-touch-dragging .persona-list-card:active {
 .account-pool-card .row-actions {
   justify-content: flex-start;
   flex-wrap: wrap;
+  margin-top: 0;
+  gap: 6px;
+}
+
+.account-pool-card .account-card-meta {
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.account-pool-card .status {
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+.account-pool-card .row-actions button {
+  min-height: 28px;
+  padding: 0 7px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 780;
 }
 
 .account-pool-bind-persona {
@@ -7769,6 +7844,15 @@ body.persona-touch-dragging .persona-list-card:active {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
     justify-content: stretch;
+  }
+
+  .account-pool-body {
+    grid-template-columns: 140px minmax(260px, 1fr);
+    align-items: start;
+  }
+
+  .account-pool-automation-panel {
+    grid-column: 1 / -1;
   }
 
   .persona-link-table-head {
