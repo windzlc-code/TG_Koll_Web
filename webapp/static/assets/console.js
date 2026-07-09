@@ -4766,11 +4766,10 @@ function renderPersonaQueueRows(rows) {
       <div class="task-persona-queue-time">${esc(formatTime(task.updated_at || task.created_at || ""))}</div>
       <div>${renderStatusText(task.status || "")}</div>
       <div class="row-actions">
-        <button type="button" data-social-preview="${esc(task.id)}">预览</button>
         <button type="button" data-social-log="${esc(task.id)}">日志</button>
         ${task.status === "failed" ? `<button type="button" data-social-retry="${esc(task.id)}">重试</button>` : ""}
         ${activeSocialAutomationTask(task) ? `<button type="button" class="muted" data-social-cancel="${esc(task.id)}">取消</button>` : ""}
-        <button type="button" class="danger" data-social-delete="${esc(task.id)}">删除</button>
+        <button type="button" class="danger task-queue-delete-button" data-social-delete="${esc(task.id)}" title="删除" aria-label="删除"><span class="ui-trash-icon" aria-hidden="true"></span></button>
       </div>
     </article>
   `).join("");
@@ -4853,7 +4852,7 @@ function renderTaskQueueView() {
         ${task.has_download ? `<a href="/api/tasks/${encodeURIComponent(task.id)}/download">下载</a>` : ""}
         ${task.status === "failed" ? `<button type="button" data-retry="${esc(task.id)}">重试</button>` : ""}
         ${activeSocialAutomationTask(task) ? `<button type="button" class="danger" data-cancel-task="${esc(task.id)}">停止</button>` : ""}
-        <button type="button" class="danger" data-delete-task="${esc(task.id)}">删除</button>
+        <button type="button" class="danger task-queue-delete-button" data-delete-task="${esc(task.id)}" title="删除" aria-label="删除"><span class="ui-trash-icon" aria-hidden="true"></span></button>
       </div>
     </article>
   `).join("") : `<div class="empty-state">当前还没有通用任务。</div>`;
