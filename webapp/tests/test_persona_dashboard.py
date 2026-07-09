@@ -352,6 +352,25 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertFalse(persona["threads_account"]["bound"])
         self.assertTrue(any("Threads" in item for item in persona["warnings"]))
 
+    def test_overview_post_count_ignores_legacy_published_drafts(self):
+        self._write_archives()
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        archives[0]["posts"].append({
+            "id": "legacy-published-count",
+            "title": "Legacy published draft",
+            "content": "Already published",
+            "publishedAt": "2026-07-01T00:00:00Z",
+        })
+        archives_path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        resp = self.client.get("/api/persona_dashboard/overview")
+
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["summary"]["post_count"], 1)
+        self.assertEqual(data["personas"][0]["counts"]["posts"], 1)
+
     def test_recent_views_and_post_views_are_separate(self):
         self._write_archives()
         resp = self.client.get("/api/persona_dashboard/overview")
@@ -741,6 +760,24 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertTrue(any(item["id"] == post["id"] for item in posts))
         archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
         self.assertTrue(any(item["id"] == post["id"] for item in archives[0]["posts"]))
+
+    def test_persona_posts_hide_legacy_published_drafts(self):
+        self._write_archives()
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        archives[0]["posts"].append({
+            "id": "legacy-published-1",
+            "title": "Legacy published draft",
+            "content": "Already published",
+            "publishedAt": "2026-07-01T00:00:00Z",
+        })
+        archives_path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        list_resp = self.client.get("/api/persona_dashboard/personas/persona-1/posts")
+
+        self.assertEqual(list_resp.status_code, 200)
+        posts = list_resp.json()["posts"]
+        self.assertFalse(any(item["id"] == "legacy-published-1" for item in posts))
 
     def test_persona_posts_include_media_and_preview_endpoint(self):
         self._write_archives()
@@ -1440,6 +1477,45 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload_obj.payload["archive_post_id"], post["id"])
         self.assertEqual(payload_obj.payload["caption"], "Threads publish content")
         self.assertEqual(payload_obj.payload["media_paths"], [])
+
+    def test_publish_draft_post_sync_removes_source_post(self):
+        self._write_archives()
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        draft_post = {
+            "id": "draft-sync-1",
+            "title": "Draft to publish",
+            "content": "Draft publish content",
+            "createdAt": "2026-07-01T00:00:00Z",
+            "updatedAt": "2026-07-01T00:00:00Z",
+        }
+        archives[0]["posts"].append(draft_post)
+        archives[0]["platformPosts"]["threads"].append({"id": "draft-sync-1", "content": "Draft publish content"})
+        archives_path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+        self._insert_social_account(account_id="acct-draft", platform="threads", username="threads_user")
+        self._insert_social_task(
+            task_id="task-draft-publish",
+            account_id="acct-draft",
+            platform="threads",
+            task_type="publish_post",
+            payload={
+                "archive_post_id": "draft-sync-1",
+                "archive_post_title": "Draft to publish",
+                "archive_post_source": "posts",
+                "caption": "Draft publish content",
+            },
+        )
+
+        social_automation_api._sync_successful_task_to_persona_archive(
+            "task-draft-publish",
+            {"url": "https://threads.example/draft-sync-1"},
+        )
+
+        synced = json.loads(archives_path.read_text(encoding="utf-8"))[0]
+        self.assertFalse(any(post.get("id") == "draft-sync-1" for post in synced["posts"]))
+        self.assertFalse(any(post.get("id") == "draft-sync-1" for post in synced["platformPosts"]["threads"]))
+        self.assertEqual(synced["publishHistory"][0]["archivePostId"], "draft-sync-1")
+        self.assertEqual(synced["publishHistory"][0]["publishedUrl"], "https://threads.example/draft-sync-1")
 
     def test_publish_favorite_post_sync_marks_favorite_not_source_post(self):
         self._write_archives()

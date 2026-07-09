@@ -8230,8 +8230,30 @@ async function watchPersonaPublishTask(taskId, personaId) {
       });
       if (["success", "failed", "cancelled", "need_manual"].includes(String(task.status || ""))) {
         delete state.personaPublishWatchers[key];
-        await loadSocial().catch(() => {});
-        await loadPersonas().catch(() => {});
+        await Promise.all([
+          loadSocial().catch(() => {}),
+          loadPersonas().catch(() => {}),
+          loadPersonaDraftPosts(key, { force: true }).catch(() => []),
+          loadPersonaFavoritePosts(key, { force: true }).catch(() => []),
+          loadPersonaPublishHistory(key, { force: true }).catch(() => []),
+        ]);
+        let payload = task.payload || task.payload_json || {};
+        if (typeof payload === "string") {
+          try { payload = JSON.parse(payload || "{}"); } catch (_) { payload = {}; }
+        }
+        if (!payload || typeof payload !== "object") payload = {};
+        const publishedPostId = String(payload.archive_post_id || "").trim();
+        const publishedSource = String(payload.archive_post_source || "posts").trim();
+        if (String(task.status || "") === "success" && publishedPostId && publishedSource !== "favorites") {
+          if (String(state.selectedPersonaPostId || "") === publishedPostId) {
+            const nextPost = personaDraftPosts({ id: key })[0] || personaFavoritePosts({ id: key })[0] || null;
+            setSelectedPersonaPostId(nextPost?.id || "", { auto: true });
+          }
+          const selectionKey = publishSelectionKey({ id: key }, "posts");
+          state.publishSelectedPostIds[selectionKey] = (state.publishSelectedPostIds[selectionKey] || []).filter((id) => String(id) !== publishedPostId);
+          if (String(state.publishPreviewPostId || "") === publishedPostId) state.publishPreviewPostId = "";
+        }
+        schedulePersonaDetailRender(key);
         return;
       }
     }

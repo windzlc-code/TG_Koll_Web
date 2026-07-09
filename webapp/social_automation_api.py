@@ -1876,16 +1876,12 @@ def _sync_successful_task_to_persona_archive(task_id: str, result: dict[str, Any
                                 next_posts.append(item)
                                 continue
                             if str(item.get("id") or "") == str(post_record["id"]) or str(item.get("automationTaskId") or "") == task_id:
-                                next_posts.append({**item, **post_record})
                                 matched_post = True
                                 changed = True
                             else:
                                 next_posts.append(item)
                         if matched_post:
                             archive["posts"] = next_posts
-                        else:
-                            archive["posts"] = [*posts, post_record]
-                            changed = True
                         platform_posts = archive.get("platformPosts") if isinstance(archive.get("platformPosts"), dict) else {}
                         platform = str(task.get("platform") or "instagram").strip().lower() or "instagram"
                         platform_rows = platform_posts.get(platform) if isinstance(platform_posts.get(platform), list) else []
@@ -1896,15 +1892,13 @@ def _sync_successful_task_to_persona_archive(task_id: str, result: dict[str, Any
                                 next_platform_rows.append(item)
                                 continue
                             if str(item.get("id") or "") == str(post_record["id"]) or str(item.get("automationTaskId") or "") == task_id:
-                                next_platform_rows.append({**item, **post_record})
                                 matched_platform_post = True
                                 changed = True
                             else:
                                 next_platform_rows.append(item)
-                        platform_posts[platform] = next_platform_rows if matched_platform_post else [*platform_rows, post_record]
-                        if not matched_platform_post:
-                            changed = True
-                        archive["platformPosts"] = platform_posts
+                        if matched_platform_post:
+                            platform_posts[platform] = next_platform_rows
+                            archive["platformPosts"] = platform_posts
                     if changed:
                         archive["updatedAt"] = _iso_from_ts(task.get("finished_at") or task.get("updated_at"))
                     break

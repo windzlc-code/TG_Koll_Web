@@ -12109,6 +12109,8 @@ def _list_persona_archive_posts(archive_id: str, source: str = "posts") -> list[
     for post in posts:
         if not isinstance(post, dict):
             continue
+        if source_key == "posts" and str(post.get("publishedAt") or post.get("published_at") or "").strip():
+            continue
         compact = _compact_persona_archive_post(post)
         compact["source"] = _persona_post_source_name(source)
         compact["media_items"] = _previewable_persona_media_items(
@@ -14507,6 +14509,14 @@ def _build_persona_dashboard_overview() -> dict[str, Any]:
         image_library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
         hot_metrics_raw = setup.get("hotMetrics") if isinstance(setup.get("hotMetrics"), dict) else {}
         deleted_post_keys = deleted_posts.get(archive_id, set())
+        visible_posts = [
+            post for post in posts
+            if (
+                isinstance(post, dict)
+                and _persona_dashboard_post_key(archive_id, post) not in deleted_post_keys
+                and not str(post.get("publishedAt") or post.get("published_at") or "").strip()
+            )
+        ]
         pad_code = str(archive.get("boundPadCode") or "").strip()
         if pad_code:
             pad_counts[pad_code] = pad_counts.get(pad_code, 0) + 1
@@ -14660,7 +14670,7 @@ def _build_persona_dashboard_overview() -> dict[str, Any]:
         account_management = setup.get("accountManagement") if isinstance(setup.get("accountManagement"), dict) else {}
         threads_account = account_management.get("threads") if isinstance(account_management.get("threads"), dict) else {}
         threads_handle = _normalize_threads_username(threads_account.get("handle"))
-        post_count = len(posts)
+        post_count = len(visible_posts)
         favorite_count = len(archive.get("favoritePosts") if isinstance(archive.get("favoritePosts"), list) else [])
         published_count = len(visible_publish_history)
         raw_published_count = len(publish_history)
@@ -14786,7 +14796,11 @@ def _build_persona_dashboard_console_overview() -> dict[str, Any]:
         deleted_post_keys = deleted_posts.get(archive_id, set())
         visible_posts = [
             post for post in posts
-            if isinstance(post, dict) and _persona_dashboard_post_key(archive_id, post) not in deleted_post_keys
+            if (
+                isinstance(post, dict)
+                and _persona_dashboard_post_key(archive_id, post) not in deleted_post_keys
+                and not str(post.get("publishedAt") or post.get("published_at") or "").strip()
+            )
         ]
         publish_history = archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []
         visible_publish_history = [record for record in publish_history if _is_persona_publish_history_record(record)]
