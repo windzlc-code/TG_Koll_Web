@@ -5360,9 +5360,10 @@ body.persona-touch-dragging .persona-list-card:active {
   gap: 14px;
   border: 1px solid var(--line);
   border-radius: 12px;
-  background: var(--panel);
+  background: var(--panel-solid, #fff);
   box-shadow: var(--shadow);
   padding: 18px;
+  isolation: isolate;
 }
 
 .console-modal-head {
@@ -5389,6 +5390,7 @@ body.persona-touch-dragging .persona-list-card:active {
   overflow-x: hidden;
   overflow-y: auto;
   padding-right: 4px;
+  background: var(--panel-solid, #fff);
 }
 
 .console-modal-detail {
@@ -6553,18 +6555,112 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .account-pool-body {
   display: grid;
-  grid-template-columns: 180px minmax(360px, 480px) minmax(360px, 1fr);
+  grid-template-columns: 180px minmax(360px, 480px) minmax(420px, 1fr);
   gap: 12px;
   align-items: start;
 }
 
 .account-pool-platform-panel,
 .account-pool-account-panel,
+.account-pool-automation-panel,
 .account-pool-create-panel {
   display: grid;
   align-content: start;
   gap: 8px;
   min-width: 0;
+}
+
+.account-pool-automation-panel {
+  min-height: 210px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-solid);
+}
+
+.account-pool-automation-tabs {
+  margin-bottom: 2px;
+}
+
+.account-pool-automation-card {
+  align-content: start;
+  background: var(--soft);
+}
+
+.account-pool-automation-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.account-pool-automation-meta span {
+  min-width: 0;
+  max-width: 100%;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-solid);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.account-pool-param-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(112px, 1fr));
+  gap: 10px;
+}
+
+.account-pool-param-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.account-pool-param-field--wide {
+  grid-column: 1 / -1;
+}
+
+.account-pool-param-field input,
+.account-pool-param-field select,
+.account-pool-param-field textarea {
+  width: 100%;
+  min-width: 0;
+}
+
+.account-pool-param-field textarea {
+  resize: vertical;
+}
+
+.account-pool-strategy-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(96px, 1fr));
+  gap: 8px;
+}
+
+.account-pool-strategy-summary span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-solid);
+}
+
+.account-pool-strategy-summary strong {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.account-pool-strategy-summary em {
+  color: var(--ink);
+  font-size: 16px;
+  font-style: normal;
+  font-weight: 900;
 }
 
 .account-pool-section-head {
@@ -6589,32 +6685,170 @@ body.persona-touch-dragging .persona-list-card:active {
   white-space: nowrap;
 }
 
-.account-pool-add-button {
-  display: inline-flex;
+.account-pool-edit-toolbar {
+  display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
-  min-height: 36px;
-  padding: 0 14px;
-  border-radius: 8px;
-  background: var(--panel-solid);
-  border: 1px solid var(--line-strong);
-  color: var(--ink);
-  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
-.account-pool-add-button span {
+.account-pool-edit-toolbar .account-pool-selection-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 78px;
+  height: 36px;
+  padding: 0 10px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.account-pool-edit-toolbar > button:not(.account-pool-add-button) {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  min-height: 40px;
+  padding: 0;
+  box-sizing: border-box;
+  border-radius: 999px;
+  color: var(--ink);
+  background: var(--panel-solid);
+  border: 2px solid var(--ink);
+  line-height: 1;
+}
+
+.account-pool-edit-toolbar > button:not(.account-pool-add-button) > span {
+  position: relative;
   display: grid;
   place-items: center;
   width: 20px;
   height: 20px;
-  border: 1px solid currentColor;
+  font-size: 0;
+  line-height: 0;
+}
+
+.account-pool-edit-toolbar > button:not(.account-pool-add-button) > span::before,
+.account-pool-edit-toolbar > button:not(.account-pool-add-button) > span::after {
+  content: "";
+  position: absolute;
+  box-sizing: border-box;
+}
+
+.account-pool-edit-toolbar [data-account-pool-copy-selected] > span::before,
+.account-pool-edit-toolbar [data-account-pool-copy-selected] > span::after {
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-radius: 4px;
+}
+
+.account-pool-edit-toolbar [data-account-pool-copy-selected] > span::before {
+  left: 3px;
+  top: 5px;
+}
+
+.account-pool-edit-toolbar [data-account-pool-copy-selected] > span::after {
+  left: 6px;
+  top: 2px;
+  background: var(--panel-solid);
+}
+
+.account-pool-edit-toolbar [data-account-pool-select-all] > span::before {
+  inset: 2px;
+  border: 2px solid currentColor;
+  border-radius: 5px;
+}
+
+.account-pool-edit-toolbar [data-account-pool-select-all] > span::after {
+  left: 6px;
+  top: 4px;
+  width: 7px;
+  height: 11px;
+  border: solid currentColor;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.account-pool-edit-toolbar [data-account-pool-delete-selected] > span::before,
+.account-pool-edit-toolbar [data-account-pool-delete-selected] > span::after {
+  left: 4px;
+  top: 9px;
+  width: 12px;
+  height: 2.5px;
   border-radius: 999px;
-  font-size: 16px;
+  background: currentColor;
+}
+
+.account-pool-edit-toolbar [data-account-pool-delete-selected] > span::before {
+  transform: rotate(45deg);
+}
+
+.account-pool-edit-toolbar [data-account-pool-delete-selected] > span::after {
+  transform: rotate(-45deg);
+}
+
+.account-pool-edit-toolbar > button.danger:not(.account-pool-add-button) {
+  color: var(--danger);
+}
+
+.account-pool-add-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 46px;
+  min-height: 46px;
+  padding: 0 18px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background: var(--panel-solid);
+  border: 2px solid var(--ink);
+  color: var(--ink);
   line-height: 1;
+  white-space: nowrap;
+}
+
+.account-pool-add-button span {
+  position: relative;
+  flex: 0 0 30px;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  box-sizing: border-box;
+  border: 2px solid currentColor;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 80%, transparent);
+  font-size: 0;
+  line-height: 0;
+}
+
+.account-pool-add-button span::before,
+.account-pool-add-button span::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 14px;
+  height: 3px;
+  border-radius: 999px;
+  background: currentColor;
+  transform: translate(-50%, -50%);
+}
+
+.account-pool-add-button span::after {
+  width: 3px;
+  height: 14px;
 }
 
 .account-pool-add-button strong {
-  font-size: 14px;
+  font-size: 18px;
+  line-height: 1;
 }
 
 .account-create-form {
@@ -6643,6 +6877,19 @@ body.persona-touch-dragging .persona-list-card:active {
   width: 100%;
 }
 
+.account-pool-create-modal {
+  width: min(760px, calc(100vw - 32px));
+}
+
+.account-pool-create-modal-body {
+  display: grid;
+  gap: 12px;
+}
+
+.account-create-form--modal {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .account-pool-create-panel {
   min-height: 176px;
   padding: 12px;
@@ -6667,7 +6914,7 @@ body.persona-touch-dragging .persona-list-card:active {
   padding: 0 14px;
   border-radius: 8px;
   background: var(--panel-solid);
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--line);
   color: var(--ink);
   font-size: 14px;
 }
@@ -6740,23 +6987,34 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .account-pool-card {
+  position: relative;
   display: grid;
   grid-template-columns: 1fr;
   gap: 8px;
   width: 100%;
   max-width: 480px;
   min-height: 118px;
+  padding-left: 48px;
   border-color: var(--line);
   cursor: pointer;
 }
 
 .account-pool-card.is-active {
   border-color: var(--ink);
-  box-shadow: inset 0 0 0 1px var(--ink);
+  outline: 1px solid var(--ink);
+  outline-offset: -2px;
+  box-shadow: none;
+}
+
+.account-pool-card.is-checked {
+  border-color: var(--ink);
+  outline: 1px solid var(--ink);
+  outline-offset: -2px;
+  box-shadow: none;
 }
 
 .account-pool-card:hover {
-  border-color: var(--line-strong);
+  border-color: var(--ink);
 }
 
 .account-pool-card:focus-visible {
@@ -6764,8 +7022,62 @@ body.persona-touch-dragging .persona-list-card:active {
   outline-offset: 2px;
 }
 
-.account-pool-card.is-active:hover {
+.account-pool-card.is-active:hover,
+.account-pool-card.is-checked:hover {
   border-color: var(--ink);
+}
+
+.account-pool-card-check {
+  position: absolute;
+  top: 4px;
+  left: 10px;
+  z-index: 4;
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+}
+
+.account-pool-card-check input {
+  position: absolute;
+  inset: 0;
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.account-pool-card-check span {
+  display: block;
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--ink);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: 0 0 0 2px var(--surface), 0 2px 8px rgba(15, 23, 42, 0.16);
+  transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
+}
+
+.account-pool-card-check input:checked + span {
+  border-color: var(--ink);
+  background: var(--ink);
+}
+
+.account-pool-card-check input:checked + span::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  top: 4px;
+  width: 6px;
+  height: 12px;
+  border: solid var(--surface);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.account-pool-card-check input:focus-visible + span {
+  box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.16);
 }
 
 .account-pool-card-main {
@@ -6945,6 +7257,7 @@ body.persona-touch-dragging .persona-list-card:active {
 .live-browser-card.is-status-success {
   border-color: color-mix(in srgb, var(--success-soft-ink) 70%, var(--line));
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--success-soft-ink) 16%, transparent);
+  animation: liveBrowserSuccessBreath 1.9s ease-in-out infinite;
 }
 
 .live-browser-card.is-status-error {
@@ -6954,6 +7267,15 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .live-browser-card.is-status-muted {
   border-color: var(--line);
+}
+
+@keyframes liveBrowserSuccessBreath {
+  0%, 100% {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--success-soft-ink) 14%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--success-soft-ink) 28%, transparent);
+  }
 }
 
 .live-browser-panel[data-live-browser-count]:not([data-live-browser-count="0"]):not([data-live-browser-count="1"]) .live-browser-card {
@@ -7365,12 +7687,12 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .status.success,
-.status.ready { background: var(--success-soft); color: var(--success-soft-ink); }
+.status.ready,
+.status.standby { background: var(--success-soft); color: var(--success-soft-ink); }
 .status.failed,
 .status.cancelled { background: var(--danger-soft); color: var(--danger-soft-ink); }
 .status.running,
 .status.need_manual { background: var(--warning-soft); color: var(--warning-soft-ink); }
-.status.standby { background: var(--chip-bg); color: var(--chip-ink); }
 
 .confirm-summary {
   display: grid;

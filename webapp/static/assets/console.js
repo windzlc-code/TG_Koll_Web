@@ -1,4 +1,4 @@
-const $ = (id) => document.getElementById(id);
+﻿const $ = (id) => document.getElementById(id);
 const THEME_STORAGE_KEY = "wk-console-theme";
 const LANGUAGE_STORAGE_KEY = "wk-console-language";
 const PERSONA_LIST_PAGE_SIZE_KEY = "wk-persona-list-page-size";
@@ -7,6 +7,7 @@ const PERSONA_GENERATE_TARGET_WORDS_KEY = "wk-persona-generate-target-words";
 const PERSONA_MEDIA_IMAGE_COUNT_KEY = "wk-persona-media-image-count";
 const PERSONA_HOT_IMPORTS_STORAGE_KEY = "wk-persona-hot-imports";
 const PERSONA_CONSOLE_OVERVIEW_CACHE_KEY = "wk-persona-console-overview-cache";
+const SOCIAL_ACCOUNTS_CACHE_KEY = "wk-social-accounts-cache";
 const TASK_QUEUE_PERSONA_PAGE_SIZE_KEY = "wk-task-queue-persona-page-size";
 const TASK_QUEUE_REGULAR_PAGE_SIZE_KEY = "wk-task-queue-regular-page-size";
 const LIVE_BROWSER_STANDBY_SECONDS_KEY = "wk-live-browser-standby-seconds";
@@ -116,6 +117,35 @@ function savePersonaConsoleOverview(data) {
       persona_groups: data.persona_groups || { groups: [], assigned_persona_ids: [] },
     }));
   } catch {}
+}
+
+function storedSocialAccountsSnapshot() {
+  try {
+    const raw = JSON.parse(window.localStorage.getItem(SOCIAL_ACCOUNTS_CACHE_KEY) || "{}");
+    if (!raw || typeof raw !== "object" || !Array.isArray(raw.accounts)) return null;
+    return raw;
+  } catch {
+    return null;
+  }
+}
+
+function saveSocialAccountsSnapshot({ accounts = state.socialAccounts, browserSessions = state.socialBrowserSessions } = {}) {
+  try {
+    if (!Array.isArray(accounts)) return;
+    window.localStorage.setItem(SOCIAL_ACCOUNTS_CACHE_KEY, JSON.stringify({
+      cached_at: Date.now(),
+      accounts,
+      browser_sessions: Array.isArray(browserSessions) ? browserSessions : [],
+    }));
+  } catch {}
+}
+
+function hydrateSocialAccountsFromCache() {
+  const cached = storedSocialAccountsSnapshot();
+  if (!cached) return false;
+  state.socialAccounts = cached.accounts || [];
+  state.socialBrowserSessions = Array.isArray(cached.browser_sessions) ? cached.browser_sessions : [];
+  return true;
 }
 
 const state = {
@@ -267,6 +297,8 @@ const state = {
   socialTasksFetch: null,
   socialAccounts: [],
   socialTasks: [],
+  socialTaskToastStatuses: {},
+  socialTaskPersonaRefreshSignatures: {},
   socialBrowserSessions: [],
   events: null,
   mediaPreviewGroups: {},
@@ -599,7 +631,7 @@ const modules = [
   { id: "personas", label: "我的人设", hint: "人设列表、详情、推文、账号", callback: "后台自动读取" },
   { id: "tweet_generation", label: "推文生成", hint: "新建推文、草稿库、收藏", callback: "后台自动读取" },
   { id: "publishing", label: "发布", hint: "草稿发布、批量发布、定时发布", callback: "后台自动排队" },
-  { id: "automation", label: "自动化", hint: "登录、养号、回复、浏览", callback: "后台自动执行" },
+  { id: "accounts", label: "账号管理自动化", hint: "账号池、自动回复、养号", view: "accounts" },
 ];
 
 const taskMeta = {
@@ -721,6 +753,7 @@ function localizeConsoleMessage(text, status = 0) {
     "Request timed out": "请求超时，请稍后重试。",
     "Field required": "缺少必填信息。",
     "field required": "缺少必填信息。",
+    "post not found": "草稿已发布或已不存在，请刷新草稿库。",
     "persona_id 必填": "账号池新增账号不需要先选择人设，请刷新页面后重试。",
     "账号 username 必填": "请填写账号用户名。",
     "username 必填": "请填写账号用户名。",
@@ -822,9 +855,27 @@ function removeToastNow(toast) {
   toast.remove();
 }
 
+function dismissToastByKey(key, options = {}) {
+  const toastKey = String(key || "").trim();
+  if (!toastKey) return;
+  const host = $("toastHost");
+  if (!host) return;
+  Array.from(host.children)
+    .filter((item) => item.dataset.toastKey === toastKey)
+    .forEach((toast) => dismissToast(toast, options));
+}
+
 function toastTargetForKind(kind, options = {}) {
   const normalized = String(kind || "").trim();
   if (options.target && typeof options.target === "object") return options.target;
+  if (options.openBrowser && options.taskId) {
+    return {
+      view: "accounts",
+      action: "live_browser",
+      taskId: String(options.taskId || "").trim(),
+      personaId: String(options.personaId || "").trim(),
+    };
+  }
   if (options.taskId) {
     return {
       view: "tasks",
@@ -883,6 +934,10 @@ async function openToastTarget(rawTarget) {
   const targetAction = String(target.action || "").trim();
   if (targetAction === "persona_image_generation" && targetPersonaId) {
     await openPersonaImageGeneration(targetPersonaId);
+    return;
+  }
+  if (targetAction === "live_browser") {
+    openLiveBrowserTaskView(String(target.taskId || ""));
     return;
   }
   if (view) {
@@ -1145,12 +1200,11 @@ function statusLabel(status) {
 
 function statusTone(status) {
   const key = String(status || "").trim();
-  if (["success", "ready"].includes(key)) return "success";
+  if (["success", "ready", "standby"].includes(key)) return "success";
   if (["failed", "error", "cookie_expired"].includes(key)) return "error";
   if (key === "queued") return "queued";
   if (["need_manual", "pending_login", "need_verification"].includes(key)) return "manual";
   if (key === "running") return "active";
-  if (key === "standby") return "muted";
   if (["cancelled", "disabled", "unknown"].includes(key)) return "muted";
   return "muted";
 }
@@ -1458,12 +1512,28 @@ function selectedPersonaProfile() {
 
 function personaDraftPosts(persona = selectedPersona()) {
   if (!persona) return [];
-  return state.personaDraftPosts[String(persona.id)] || [];
+  return visiblePersonaDraftPosts(state.personaDraftPosts[String(persona.id)] || []);
 }
 
 function personaFavoritePosts(persona = selectedPersona()) {
   if (!persona) return [];
   return state.personaFavoritePosts[String(persona.id)] || [];
+}
+
+function personaOverviewDraftCount(persona) {
+  return Math.max(0, Number(persona?.counts?.posts || persona?.counts?.drafts || 0));
+}
+
+function personaOverviewFavoriteCount(persona) {
+  return Math.max(0, Number(persona?.counts?.favorites || 0));
+}
+
+function isPublishedPersonaPost(post) {
+  return Boolean(String(post?.published_at || post?.publishedAt || "").trim());
+}
+
+function visiblePersonaDraftPosts(rows = []) {
+  return (Array.isArray(rows) ? rows : []).filter((post) => !isPublishedPersonaPost(post));
 }
 
 function personaPostSource(persona = selectedPersona()) {
@@ -1595,9 +1665,25 @@ function sortPersonaPublishHistory(rows) {
 
 function personaDraftOptionLabel(post, index = 0) {
   const hotMeta = personaHotImportMeta(String(selectedPersona()?.id || ""), post?.id);
-  const title = String(post?.title || "").trim() || `未命名草稿 ${index + 1}`;
+  const title = personaDraftDisplayTitle(post, index, personaSourcePosts());
   const stamp = formatTime(post?.published_at || post?.updated_at || post?.created_at);
   return `${hotMeta ? "[热点] " : ""}${title} · ${stamp}`;
+}
+
+function personaDraftDisplayTitle(post, index = 0, rows = []) {
+  const title = String(post?.title || "").trim();
+  if (/^第\d+篇$/.test(title)) {
+    const total = Array.isArray(rows) && rows.length ? rows.length : Math.max(1, Number(index || 0) + 1);
+    return `第${Math.max(1, total - Number(index || 0))}篇`;
+  }
+  return title || `未命名草稿 ${Number(index || 0) + 1}`;
+}
+
+function personaDraftDisplayTitleForPost(post, rows = personaSourcePosts(), fallbackIndex = 0) {
+  const list = Array.isArray(rows) ? rows : [];
+  const postId = String(post?.id || "").trim();
+  const index = postId ? list.findIndex((item) => String(item?.id || "").trim() === postId) : -1;
+  return personaDraftDisplayTitle(post, index >= 0 ? index : fallbackIndex, list);
 }
 
 function personaHiddenPublishHistoryCount(persona = selectedPersona()) {
@@ -2180,29 +2266,40 @@ function accountForPersona(persona) {
   return personaAccounts(persona)[0] || null;
 }
 
-function publishAccountForPersona(persona) {
-  const accounts = uniqueAccountOptions(personaAccounts(persona).filter((account) => {
-    const platform = String(account.platform || "").trim().toLowerCase();
-    const status = String(account.status || "").trim().toLowerCase();
-    return (platform === "threads" || platform === "instagram") && status === "ready";
-  }));
-  return accounts.find((account) => String(account.platform || "").trim().toLowerCase() === "threads")
-    || accounts.find((account) => String(account.platform || "").trim().toLowerCase() === "instagram")
-    || accounts[0]
+function isPublishPlatformAccount(account) {
+  const platform = String(account?.platform || "").trim().toLowerCase();
+  return platform === "threads" || platform === "instagram";
+}
+
+function isReadyPublishAccount(account) {
+  return isPublishPlatformAccount(account) && String(account?.status || "").trim().toLowerCase() === "ready";
+}
+
+function publishPlatformAccountsForPersona(persona) {
+  return uniqueAccountOptions(personaAccounts(persona).filter(isPublishPlatformAccount));
+}
+
+function preferredPublishAccount(accounts) {
+  const rows = Array.isArray(accounts) ? accounts : [];
+  return rows.find((account) => String(account.platform || "").trim().toLowerCase() === "threads")
+    || rows.find((account) => String(account.platform || "").trim().toLowerCase() === "instagram")
+    || rows[0]
     || null;
 }
 
 function publishAccountsForPersona(persona) {
-  return uniqueAccountOptions(personaAccounts(persona).filter((account) => {
-    const platform = String(account.platform || "").trim().toLowerCase();
-    const status = String(account.status || "").trim().toLowerCase();
-    return (platform === "threads" || platform === "instagram") && status === "ready";
-  }));
+  return uniqueAccountOptions(personaAccounts(persona).filter(isReadyPublishAccount));
+}
+
+function publishAccountForPersona(persona) {
+  const readyAccounts = publishAccountsForPersona(persona);
+  if (readyAccounts.length) return preferredPublishAccount(readyAccounts);
+  return preferredPublishAccount(publishPlatformAccountsForPersona(persona));
 }
 
 function selectedPublishAccountForPersona(persona) {
   if (!persona) return null;
-  const accounts = publishAccountsForPersona(persona);
+  const accounts = publishPlatformAccountsForPersona(persona);
   if (!accounts.length) return null;
   const personaId = String(persona.id || "");
   const selectedId = String($("personaPublishAccountSelect")?.value || state.personaPublishAccountIds[personaId] || "").trim();
@@ -2222,6 +2319,15 @@ function publishPlatformHint(account) {
   const platform = String(account?.platform || "").trim().toLowerCase();
   if (platform === "threads") return "当前走 Threads 浏览器发布，正文必填，素材可选。";
   return "当前走 Instagram 浏览器发布，至少需要上传一份媒体素材。";
+}
+
+function publishAccountBlockMessage(account) {
+  const status = String(account?.status || "").trim().toLowerCase();
+  if (status === "cookie_expired") return "当前发布账号登录已过期，请到账号管理自动化重新登录后再发布。";
+  if (status === "pending_login") return "当前发布账号还未完成登录，请到账号管理自动化完成登录后再发布。";
+  if (status === "need_verification") return "当前发布账号需要验证，请到账号管理自动化处理验证后再发布。";
+  if (status === "disabled") return "当前发布账号已停用，请到账号管理自动化启用或更换账号后再发布。";
+  return "当前发布账号暂不可发布，请到账号管理自动化检查账号状态。";
 }
 
 function latestSuccessfulSocialTask(accountId, taskTypes) {
@@ -2257,6 +2363,89 @@ function activeTaskStatus(status) {
   return ["queued", "running", "need_manual"].includes(String(status || "").trim());
 }
 
+function isUnfinishedTask(task) {
+  if (!task || typeof task !== "object") return false;
+  return !Number(task.finished_at || task.finishedAt || 0);
+}
+
+function activeSocialAutomationTask(task) {
+  const status = String(task?.status || "").trim();
+  if (["queued", "running"].includes(status)) return true;
+  return status === "need_manual" && isUnfinishedTask(task);
+}
+
+function socialTaskPayload(task) {
+  let payload = task?.payload || task?.payload_json || {};
+  if (typeof payload === "string") {
+    try { payload = JSON.parse(payload || "{}"); } catch (_) { payload = {}; }
+  }
+  return payload && typeof payload === "object" ? payload : {};
+}
+
+function isRecentFinishedTask(task, maxAgeSeconds = 900) {
+  const finishedAt = Number(task?.finished_at || task?.finishedAt || 0);
+  if (!finishedAt) return false;
+  return Math.abs(Math.floor(Date.now() / 1000) - finishedAt) <= maxAgeSeconds;
+}
+
+function shouldRefreshPersonaForPublishTask(task, previousTask) {
+  const status = String(task?.status || "").trim();
+  if (String(task?.task_type || "").trim() !== "publish_post" || status !== "success") return false;
+  const payload = socialTaskPayload(task);
+  const personaId = String(task?.persona_id || payload.persona_id || payload.archive_id || "").trim();
+  if (!personaId) return false;
+  const signature = `${status}:${Number(task?.finished_at || task?.finishedAt || 0)}:${String(task?.updated_at || task?.updatedAt || "")}`;
+  const taskId = String(task?.id || "").trim();
+  if (taskId && state.socialTaskPersonaRefreshSignatures[taskId] === signature) return false;
+  const previousStatus = String(previousTask?.status || "").trim();
+  return ["queued", "running", "need_manual"].includes(previousStatus) || !previousTask || isRecentFinishedTask(task);
+}
+
+function syncPublishedPostLocalState(task) {
+  const payload = socialTaskPayload(task);
+  const personaId = String(task?.persona_id || payload.persona_id || payload.archive_id || "").trim();
+  const postId = String(payload.archive_post_id || "").trim();
+  const source = String(payload.archive_post_source || "posts").trim() === "favorites" ? "favorites" : "posts";
+  if (!personaId || !postId || source === "favorites") return;
+  const rows = visiblePersonaDraftPosts(state.personaDraftPosts[personaId] || [])
+    .filter((post) => String(post.id || "") !== postId);
+  state.personaDraftPosts[personaId] = rows;
+  syncPersonaSelectedPostIds({ id: personaId }, "posts", rows);
+  if (String(state.selectedPersonaPostId || "") === postId) {
+    const nextPost = personaDraftPosts({ id: personaId })[0] || personaFavoritePosts({ id: personaId })[0] || null;
+    setSelectedPersonaPostId(nextPost?.id || "", { auto: true });
+  }
+  const selectionKey = publishSelectionKey({ id: personaId }, "posts");
+  state.publishSelectedPostIds[selectionKey] = (state.publishSelectedPostIds[selectionKey] || []).filter((id) => String(id) !== postId);
+  if (String(state.publishPreviewPostId || "") === postId) state.publishPreviewPostId = "";
+}
+
+async function refreshPersonaAfterPublishTasks(tasks = [], previousById = new Map()) {
+  const pending = new Map();
+  for (const task of tasks) {
+    if (!shouldRefreshPersonaForPublishTask(task, previousById.get(String(task?.id || "")))) continue;
+    const payload = socialTaskPayload(task);
+    const personaId = String(task?.persona_id || payload.persona_id || payload.archive_id || "").trim();
+    const source = String(payload.archive_post_source || "posts").trim() === "favorites" ? "favorites" : "posts";
+    if (!personaId) continue;
+    const taskId = String(task?.id || "").trim();
+    if (taskId) {
+      state.socialTaskPersonaRefreshSignatures[taskId] = `${String(task?.status || "")}:${Number(task?.finished_at || task?.finishedAt || 0)}:${String(task?.updated_at || task?.updatedAt || "")}`;
+    }
+    syncPublishedPostLocalState(task);
+    pending.set(personaId, source);
+  }
+  if (!pending.size) return;
+  await loadPersonas().catch(() => {});
+  await Promise.all(Array.from(pending.entries()).flatMap(([personaId, source]) => [
+    loadPersonaDraftPosts(personaId, { force: true }).catch(() => []),
+    source === "favorites" ? loadPersonaFavoritePosts(personaId, { force: true }).catch(() => []) : Promise.resolve([]),
+    loadPersonaPublishHistory(personaId, { force: true }).catch(() => []),
+  ]));
+  for (const personaId of pending.keys()) schedulePersonaDetailRender(personaId);
+  if (state.view === "accounts" || isPersonaWorkspaceModule() || state.activeModule === "publishing") renderActivePersonaListSurface();
+}
+
 function blockingTaskStatus(status) {
   return ["queued", "running"].includes(String(status || "").trim());
 }
@@ -2265,6 +2454,47 @@ function toastKindForTaskStatus(status) {
   const normalized = String(status || "").trim();
   if (["success", "failed", "cancelled", "need_manual", "queued", "running", "progress"].includes(normalized)) return normalized;
   return "progress";
+}
+
+function socialTaskToastMessage(task) {
+  const typeLabel = statusLabel(task?.task_type || "自动化任务");
+  const accountLabel = String(task?.account_username || task?.account_display_name || task?.account_id || "").trim();
+  const suffix = accountLabel ? ` · ${accountLabel}` : "";
+  const status = String(task?.status || "").trim();
+  if (status === "success") return `${typeLabel}已完成${suffix}`;
+  if (status === "failed") return `${typeLabel}执行失败${suffix}`;
+  if (status === "cancelled") return `${typeLabel}已取消${suffix}`;
+  if (status === "need_manual") return `${typeLabel}需要人工处理${suffix}`;
+  if (status === "running") return `${typeLabel}执行中${suffix}`;
+  return `${typeLabel}已排队${suffix}`;
+}
+
+function syncSocialTaskToast(task, { force = false } = {}) {
+  const taskId = String(task?.id || "").trim();
+  if (!taskId) return;
+  const status = String(task?.status || "").trim();
+  const previous = state.socialTaskToastStatuses[taskId] || "";
+  state.socialTaskToastStatuses[taskId] = status;
+  const key = `social-task:${taskId}`;
+  const existing = Array.from(ensureToastHost().children).find((item) => item.dataset.toastKey === key);
+  const waitingForManual = status === "need_manual" && isUnfinishedTask(task);
+  const terminal = ["success", "failed", "cancelled"].includes(status) || (status === "need_manual" && !waitingForManual);
+  const changedToTerminal = terminal && previous && previous !== status;
+  if (!force && !existing && !changedToTerminal) return;
+  showToast(socialTaskToastMessage(task), !["failed", "cancelled"].includes(status), {
+    key,
+    kind: toastKindForTaskStatus(status),
+    taskId,
+    taskPanel: task?.persona_id ? "persona" : "regular",
+    personaId: task?.persona_id || "",
+    openBrowser: true,
+    persistent: !terminal,
+    duration: terminal ? 5200 : undefined,
+  });
+}
+
+function syncSocialTaskToasts(tasks = []) {
+  tasks.forEach((task) => syncSocialTaskToast(task));
 }
 
 function activeSocialTaskFor({ accountId = "", personaId = "", taskType = "", postId = "", postSource = "" } = {}) {
@@ -2311,7 +2541,13 @@ async function cancelSocialAutomationTask(taskId, messageId = "commandMsg") {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ reason: "user_cancel" }),
   });
-  showMsg(messageId, "自动化任务已发送停止请求。", true);
+  showMsg(messageId, "自动化任务已发送停止请求。", true, {
+    key: `social-task:${cleanTaskId}`,
+    kind: "cancelled",
+    taskId: cleanTaskId,
+    taskPanel: "persona",
+  });
+  window.setTimeout(() => dismissToastByKey(`social-task:${cleanTaskId}`), 4200);
   await loadSocial().catch(() => {});
   return result;
 }
@@ -2540,8 +2776,11 @@ function personaExecutionAccountLabel(persona) {
 
 function renderPersonaExecutionAccountBadge(persona) {
   const account = accountForPersona(persona);
-  const hasExecutionAccount = Boolean(account?.id || account?.username || account?.account_username);
-  const label = `执行账号：${personaExecutionAccountLabel(persona)}`;
+  const profileName = String(account?.username || account?.account_username || "").trim();
+  const handle = String(persona?.threads_account?.handle || "").trim();
+  const accountLabel = profileName || handle || "未绑定执行账号";
+  const hasExecutionAccount = Boolean(account?.id || profileName || handle);
+  const label = `执行账号：${accountLabel}`;
   return `<span class="persona-status-chip ${hasExecutionAccount ? "is-ready" : "is-warning"}">${esc(label)}</span>`;
 }
 
@@ -2677,12 +2916,12 @@ function setView(view) {
   state.view = view;
   syncTaskQueueAutoRefresh();
   syncAccountStatusAutoRefresh();
-  if (view !== "workspace") state.workspaceMenuOpen = false;
+  if (!["workspace", "accounts"].includes(view)) state.workspaceMenuOpen = false;
   document.querySelectorAll("[data-view]").forEach((button) => {
     const isActive = button.dataset.view === view;
     button.classList.toggle("is-active", isActive);
     if (button.dataset.view === "workspace") {
-      button.classList.toggle("has-active-child", view === "workspace");
+      button.classList.toggle("has-active-child", ["workspace", "accounts"].includes(view));
     }
   });
   document.querySelectorAll("[data-panel]").forEach((panel) => panel.classList.toggle("is-active", panel.dataset.panel === view));
@@ -2690,12 +2929,13 @@ function setView(view) {
     workspace: "任务工作台",
     tasks: "任务队列",
     social: "浏览器发布",
-    accounts: "执行账号管理",
+    accounts: "账号管理自动化",
     settings: "系统状态",
     console_settings: "设置",
   };
   $("viewTitle").textContent = titles[view] || "控制台";
   updateWorkspaceFlow();
+  if ($("moduleMenu")) syncModuleMenuState();
   if (view === "console_settings") renderConsoleSettingsPage();
   if (view === "tasks") loadTasks();
   if (view === "social" || view === "accounts" || view === "settings") loadSocial();
@@ -2806,7 +3046,7 @@ function updateWorkspaceFlow() {
   const flow = $("workspaceFlow");
   const button = document.querySelector('[data-view="workspace"]');
   if (!flow || !button) return;
-  const open = state.workspaceMenuOpen && state.view === "workspace";
+  const open = state.workspaceMenuOpen && ["workspace", "accounts"].includes(state.view);
   flow.classList.toggle("is-open", open);
   button.setAttribute("aria-expanded", open ? "true" : "false");
 }
@@ -2814,10 +3054,10 @@ function updateWorkspaceFlow() {
 function renderModuleMenu() {
   updateWorkspaceFlow();
   $("moduleMenu").innerHTML = `<div class="module-accordion">${modules.map((item) => {
-    const isActive = item.id === state.activeModule;
+    const isActive = item.view ? item.view === state.view : (state.view === "workspace" && item.id === state.activeModule);
     return `
       <div class="module-accordion-item">
-        <button type="button" class="module-trigger ${isActive ? "is-active" : ""}" data-module="${esc(item.id)}">
+        <button type="button" class="module-trigger ${isActive ? "is-active" : ""}" ${item.view ? `data-workspace-view="${esc(item.view)}"` : `data-module="${esc(item.id)}"`}>
           <span class="module-trigger-text">
             <span>${esc(item.label)}</span>
             <small>${esc(item.hint)}</small>
@@ -2832,8 +3072,11 @@ function syncModuleMenuState() {
   updateWorkspaceFlow();
   document.querySelectorAll("[data-module]").forEach((button) => {
     const moduleId = button.dataset.module;
-    const isActive = moduleId === state.activeModule;
+    const isActive = state.view === "workspace" && moduleId === state.activeModule;
     button.classList.toggle("is-active", isActive);
+  });
+  document.querySelectorAll("[data-workspace-view]").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.workspaceView === state.view);
   });
 }
 
@@ -2885,6 +3128,16 @@ function renderWorkspace(renderMenu = true) {
   if (isPersonaWorkspaceModule(module.id)) renderPersonaModule();
   else renderSimpleFlowModule(module.id);
   renderConfirmSummary();
+  });
+}
+
+let workspaceRenderRaf = 0;
+
+function scheduleWorkspaceRender(renderMenu = false) {
+  if (workspaceRenderRaf) return;
+  workspaceRenderRaf = window.requestAnimationFrame(() => {
+    workspaceRenderRaf = 0;
+    renderWorkspace(renderMenu);
   });
 }
 
@@ -3523,18 +3776,19 @@ function closePersonaDraftMenus(except = null) {
   });
 }
 
-function renderPersonaDraftRows(posts, source = personaPostSource()) {
+function renderPersonaDraftRows(posts, source = personaPostSource(), allRows = posts) {
   const isFavoriteSource = source === "favorites";
   if (!posts.length) return `<div class="empty-state">${isFavoriteSource ? "当前还没有收藏推文。可以在草稿里点击收藏，或从 Bot 同步已有收藏。" : "当前还没有推文草稿。先新建一条，再进入发布步骤。"}</div>`;
   const mode = personaDraftViewMode();
   const personaId = String(selectedPersona()?.id || "");
   const selectedIds = new Set(syncPersonaSelectedPostIds(selectedPersona(), source, posts));
-  if (mode === "list") return renderPersonaDraftTableRows(posts, personaId);
-  return `<div class="compact-list persona-draft-grid">${posts.map((post) => {
+  if (mode === "list") return renderPersonaDraftTableRows(posts, personaId, allRows);
+  return `<div class="compact-list persona-draft-grid">${posts.map((post, index) => {
     const hotMeta = personaHotImportMeta(personaId, post.id);
     const mediaItems = personaDraftMediaPreviewItems(selectedPersona(), source, post);
     const isChecked = selectedIds.has(String(post.id || ""));
     const isSelected = String(post.id) === String(state.selectedPersonaPostId);
+    const displayTitle = personaDraftDisplayTitleForPost(post, allRows, index);
     return `
     <article
       class="compact-row persona-draft-card ${isSelected ? "is-selected" : ""}"
@@ -3554,7 +3808,7 @@ function renderPersonaDraftRows(posts, source = personaPostSource()) {
           />
           <span>勾选</span>
         </label>
-        <strong>${esc(post.title || "未命名草稿")}</strong>
+        <strong>${esc(displayTitle)}</strong>
         ${renderMediaTypeBadge(mediaItems)}
         ${hotMeta ? renderPersonaHotOrigin(hotMeta, { compact: true }) : ""}
         <span class="persona-draft-card-time">${esc(formatTime(post.published_at || post.updated_at || post.created_at))}</span>
@@ -3687,7 +3941,7 @@ function renderPersonaDraftPostActions(post, { source = personaPostSource(), isS
     </div>`;
 }
 
-function renderPersonaDraftTableRows(posts, personaId) {
+function renderPersonaDraftTableRows(posts, personaId, allRows = posts) {
   const source = personaPostSource();
   const selectedIds = new Set(syncPersonaSelectedPostIds(selectedPersona(), source, posts));
   return `
@@ -3728,7 +3982,7 @@ function renderPersonaDraftTableRows(posts, personaId) {
             </div>
             <div class="persona-draft-table-cell persona-draft-table-index" role="cell">${esc(index + 1)}</div>
             <div class="persona-draft-table-cell persona-draft-table-title" role="cell">
-              <strong>${esc(post.title || "未命名草稿")}</strong>
+              <strong>${esc(personaDraftDisplayTitleForPost(post, allRows, index))}</strong>
               ${renderMediaTypeBadge(mediaItems)}
               ${hotMeta ? renderPersonaHotOrigin(hotMeta, { compact: true }) : ""}
             </div>
@@ -3771,7 +4025,7 @@ async function viewPersonaDraftPost(postId = "") {
     title: source === "favorites" ? "收藏详情" : "草稿详情",
     contentHtml: `
       <div class="console-modal-detail persona-draft-detail-modal">
-        <div><span>${source === "favorites" ? "收藏标题" : "草稿标题"}</span><strong>${esc(post.title || "未命名草稿")}</strong></div>
+        <div><span>${source === "favorites" ? "收藏标题" : "草稿标题"}</span><strong>${esc(personaDraftDisplayTitleForPost(post, posts))}</strong></div>
         <div><span>所属人设</span><strong>${esc(persona.name || "未命名人设")}</strong></div>
         <div><span>内容类型</span>${renderMediaTypeBadge(mediaItems)}</div>
         <div><span>时间信息</span><strong>${esc(formatTime(post.published_at || post.updated_at || post.created_at))}</strong></div>
@@ -3885,7 +4139,7 @@ function personaPublishPreview(post) {
   return `
     <div class="flow-box">
       <span>当前草稿</span>
-      <strong>${esc(post.title || "未命名草稿")}</strong>
+      <strong>${esc(personaDraftDisplayTitleForPost(post))}</strong>
       ${hotMeta ? renderPersonaHotOrigin(hotMeta, { compact: true }) : ""}
       <span>${esc(String(post.content || "").slice(0, 240) || "暂无正文")}</span>
       ${renderPersonaMediaPreview(personaDraftMediaItems(personaId, post))}
@@ -4007,13 +4261,11 @@ function personaSettingsLoadingPanel() {
 
 function renderPersonaAccountPanel(persona, account, profile, step) {
   const accounts = personaAccounts(persona);
-  const threads = persona.threads_account || {};
   return `
     <div class="persona-inline-panel persona-account-summary-panel">
       <strong>账号设置已统一管理</strong>
-      <p>登录、检查、养号、自动回复等操作已集中到“自动化”。这里仅保留当前人设的账号状态概览。</p>
+      <p>登录、检查、养号、自动回复等操作已集中到“账号管理自动化”。这里仅保留当前人设的账号状态概览。</p>
       <div class="persona-metrics persona-account-summary-metrics">
-        <div><span>主页标识</span><strong>${esc(threads.handle || profile?.threads_handle || "未绑定")}</strong></div>
         <div><span>执行账号</span><strong>${esc(`${accounts.length} 个`)}</strong></div>
         <div><span>可发布账号</span><strong>${esc(`${publishAccountsForPersona(persona).length} 个`)}</strong></div>
         <div><span>当前账号</span><strong>${esc(account ? (account.username || account.id) : "未选择")}</strong></div>
@@ -4028,7 +4280,7 @@ function renderPersonaAccountPanel(persona, account, profile, step) {
         </div>
       ` : `<div class="empty-state">当前人设还没有绑定浏览器执行账号。</div>`}
       <div class="row-actions">
-        <button type="button" class="primary" data-open-unified-automation>进入统一账号自动化</button>
+        <button type="button" class="primary" data-open-unified-automation>进入账号管理自动化</button>
       </div>
     </div>`;
 }
@@ -4086,9 +4338,11 @@ function renderPersonaContentOverview(persona, account, profile) {
   const historyRows = personaPublishHistoryRows(persona);
   const accounts = uniqueAccountOptions(personaAccounts(persona));
   const publishAccount = publishAccountForPersona(persona);
+  const personaId = String(persona?.id || "");
+  const draftCount = Array.isArray(state.personaDraftPosts[personaId]) ? drafts.length : personaOverviewDraftCount(persona);
+  const accountCount = accounts.length || Math.max(0, Number(persona?.counts?.accounts || 0));
   const latestDraft = sortPersonaDraftPosts(drafts)[0] || null;
   const latestHistory = historyRows[0] || null;
-  const personaId = String(persona?.id || "");
   const latestTask = [...state.socialTasks]
     .filter((task) => String(task.persona_id || "") === personaId)
     .sort((left, right) => Math.max(timeValue(right.updated_at), timeValue(right.created_at)) - Math.max(timeValue(left.updated_at), timeValue(left.created_at)))[0] || null;
@@ -4101,20 +4355,20 @@ function renderPersonaContentOverview(persona, account, profile) {
         <p>${esc(content || "当前还没有人设简介。")}</p>
       </div>
       <div class="persona-overview-stats">
-        <div><span>草稿</span><strong>${esc(drafts.length)}</strong></div>
+        <div><span>草稿</span><strong>${esc(draftCount)}</strong></div>
         <div><span>已发布</span><strong>${esc(Number(persona?.counts?.published || historyRows.length || 0))}</strong></div>
-        <div><span>账号</span><strong>${esc(accounts.length)}</strong></div>
+        <div><span>账号</span><strong>${esc(accountCount)}</strong></div>
       </div>
       <div class="form-grid">
         <div class="flow-box">
           <span>执行账号</span>
           <strong>${esc(account ? `${account.username || account.id} · ${platformLabel(account.platform || "")}` : "未绑定")}</strong>
           <span>${esc(account ? `${statusLabel(account.status || "")}${accounts.length > 1 ? ` · 共 ${accounts.length} 个账号` : ""}` : "到“人设设置 > 账号设置”绑定账号")}</span>
-          <span>${esc(publishAccount ? `可发布：${publishPlatformLabel(publishAccount)} · ${publishPlatformHint(publishAccount)}` : "还没有可发布账号")}</span>
+          <span>${esc(publishAccount ? (isReadyPublishAccount(publishAccount) ? `可发布：${publishPlatformLabel(publishAccount)} · ${publishPlatformHint(publishAccount)}` : publishAccountBlockMessage(publishAccount)) : "还没有绑定发布账号")}</span>
         </div>
         <div class="flow-box">
           <span>最近草稿</span>
-          <strong>${esc(latestDraft?.title || "暂无草稿")}</strong>
+          <strong>${esc(latestDraft ? personaDraftDisplayTitleForPost(latestDraft, drafts) : "暂无草稿")}</strong>
           <span>${esc(latestDraft ? formatTime(latestDraft.updated_at || latestDraft.created_at) : "先到推文生成里新建推文")}</span>
         </div>
         <div class="flow-box">
@@ -4165,7 +4419,9 @@ function renderPersonaImagePanel(persona) {
 }
 
 function renderPersonaSettingsPanelV2(persona, account, profile, step) {
-  if (!profile) return personaSettingsLoadingPanel();
+  const effectiveProfile = profile || fallbackPersonaProfile(persona);
+  if (!profile && persona?.id) loadPersonaProfile(persona.id).catch(() => {});
+  profile = effectiveProfile;
   const presets = personaProfilePresets(profile);
   const selectedPreset = selectedPersonaPreset(profile);
   const selectedPresetId = String(selectedPreset?.id || "");
@@ -4406,9 +4662,10 @@ function renderPersonaQueueRows(rows) {
       <div class="task-persona-queue-time">${esc(formatTime(task.updated_at || task.created_at || ""))}</div>
       <div>${renderStatusText(task.status || "")}</div>
       <div class="row-actions">
+        <button type="button" data-social-preview="${esc(task.id)}">预览</button>
         <button type="button" data-social-log="${esc(task.id)}">日志</button>
         ${task.status === "failed" ? `<button type="button" data-social-retry="${esc(task.id)}">重试</button>` : ""}
-        ${["queued", "running", "need_manual"].includes(String(task.status || "")) ? `<button type="button" class="muted" data-social-cancel="${esc(task.id)}">取消</button>` : ""}
+        ${activeSocialAutomationTask(task) ? `<button type="button" class="muted" data-social-cancel="${esc(task.id)}">取消</button>` : ""}
         <button type="button" class="danger" data-social-delete="${esc(task.id)}">删除</button>
       </div>
     </article>
@@ -4418,7 +4675,7 @@ function renderPersonaQueueRows(rows) {
 function renderTaskQueuePersonaSelectorCard(persona) {
   const queueRows = personaAutomationTasksFor(persona.id);
   const selected = String(persona.id || "") === String(selectedPersona()?.id || "");
-  const activeCount = queueRows.filter((task) => ["queued", "running", "need_manual"].includes(String(task.status || ""))).length;
+  const activeCount = queueRows.filter(activeSocialAutomationTask).length;
   return `
     <article class="persona-list-card task-persona-card ${selected ? "is-active" : ""}">
       <button type="button" class="persona-list-item" data-task-persona-select="${esc(persona.id)}">
@@ -4491,7 +4748,7 @@ function renderTaskQueueView() {
         <button type="button" data-detail="${esc(task.id)}">详情</button>
         ${task.has_download ? `<a href="/api/tasks/${encodeURIComponent(task.id)}/download">下载</a>` : ""}
         ${task.status === "failed" ? `<button type="button" data-retry="${esc(task.id)}">重试</button>` : ""}
-        ${activeTaskStatus(task.status) ? `<button type="button" class="danger" data-cancel-task="${esc(task.id)}">停止</button>` : ""}
+        ${activeSocialAutomationTask(task) ? `<button type="button" class="danger" data-cancel-task="${esc(task.id)}">停止</button>` : ""}
         <button type="button" class="danger" data-delete-task="${esc(task.id)}">删除</button>
       </div>
     </article>
@@ -4643,7 +4900,6 @@ function renderAutomationAccountTabs(persona, platform) {
 function renderAutomationStepTabs(activeStep) {
   const steps = [
     ["binding", "账号绑定"],
-    ["login", "登录与检查"],
     ["reply_comment", "自动回复评论"],
     ["reply_hot", "自动回复热点"],
     ["warmup", "养号"],
@@ -4656,7 +4912,7 @@ function renderAutomationStepTabs(activeStep) {
 
 function renderUnifiedAutomationModule() {
   const persona = selectedPersona();
-  const currentStep = ["binding", "login", "reply_comment", "reply_hot", "warmup"].includes(currentBranch("automation"))
+  const currentStep = ["binding", "reply_comment", "reply_hot", "warmup"].includes(currentBranch("automation"))
     ? currentBranch("automation")
     : "binding";
   const platform = selectedPersonaAutomationPlatform();
@@ -4684,17 +4940,6 @@ function renderUnifiedAutomationModule() {
   } else if (currentStep === "binding") {
     operationPanel = `
       <div class="automation-operation-card">
-        <strong>主页标识（可选）</strong>
-        <p>用于识别人设主页，不参与登录和发布。浏览器执行账号在下方绑定。</p>
-        <label>主页用户名
-          <input id="personaThreadsHandle" value="${esc(persona.threads_account?.handle || selectedPersonaProfile()?.threads_handle || "")}" placeholder="Threads 用户名 / handle" />
-        </label>
-        <div class="row-actions automation-capsule-actions">
-          <button type="button" data-persona-save-threads>保存主页标识</button>
-          <button type="button" data-persona-unbind-threads ${persona.threads_account?.handle ? "" : "disabled"}>解绑主页标识</button>
-        </div>
-      </div>
-      <div class="automation-operation-card">
         <strong>浏览器执行账号</strong>
         <p>用于登录、发布、养号和自动回复。绑定后会出现在上方账号切换里。</p>
         <label>${esc(platformLabel(platform))} 执行账号
@@ -4703,11 +4948,6 @@ function renderUnifiedAutomationModule() {
         <div class="row-actions automation-capsule-actions">
           <button type="button" data-persona-create-account>绑定账号</button>
         </div>
-      </div>`;
-  } else if (currentStep === "login") {
-    operationPanel = `
-      <div class="automation-operation-card">
-        <strong>登录与检查</strong>
         <div class="form-grid">
           <label>登录账号
             <input id="personaAutoLoginUsername" value="${esc(selectedAccount?.login_username || selectedAccount?.username || "")}" placeholder="账号 / 邮箱 / 手机号" />
@@ -4944,10 +5184,12 @@ function renderPublishAccountBadge(account) {
   if (!account) {
     return `<div class="publish-account-badge is-empty"><span>发布账号</span><strong>未绑定</strong><em>到账号设置绑定</em></div>`;
   }
+  const ready = isReadyPublishAccount(account);
   return `
-    <div class="publish-account-badge">
+    <div class="publish-account-badge ${ready ? "" : "is-empty"}">
       <span>发布账号</span>
       <strong>${esc(accountDisplayName(account))}</strong>
+      ${ready ? "" : `<em>${esc(statusLabel(account.status || ""))}</em>`}
     </div>`;
 }
 
@@ -5232,7 +5474,7 @@ function renderPublishPostSelectionList(persona = selectedPersona(), source = st
               <span class="publish-post-card-index">${esc(index + 1)}</span>
               <span class="publish-post-card-copy">
                 <span class="publish-post-card-head">
-                  <strong>${esc(post.title || `第 ${index + 1} 条内容`)}</strong>
+                  <strong>${esc(personaDraftDisplayTitleForPost(post, rows, index))}</strong>
                   ${renderMediaTypeBadge(mediaItems)}
                 </span>
                 <span class="publish-post-card-meta">${esc(formatTime(post.published_at || post.updated_at || post.created_at))}${hotMeta ? " · 热点导入" : ""}</span>
@@ -5257,6 +5499,7 @@ function renderPublishContentPreview(persona = selectedPersona(), source = state
         ${renderUploadDropzone("simpleMediaFiles", { label: "上传素材", hint: "拖动图片或视频到这里，或点击选择。发布内容会读取这里的文件。" })}
       </section>`;
   }
+  const sourceRows = publishSourceRows(persona, cleanSource);
   const selectedPosts = selectedPublishPosts(persona, cleanSource);
   const activePost = activePublishPreviewPost(selectedPosts);
   const activeMediaItems = activePost ? personaPublishPostMediaItems(String(persona?.id || ""), activePost) : [];
@@ -5281,7 +5524,7 @@ function renderPublishContentPreview(persona = selectedPersona(), source = state
                 >
                   <span class="publish-preview-tab-index">${esc(index + 1)}</span>
                   <span class="publish-preview-tab-copy">
-                    <strong>${esc(post.title || "未命名")}</strong>
+                    <strong>${esc(personaDraftDisplayTitleForPost(post, sourceRows, index))}</strong>
                     <span>${esc(`第${index + 1}篇`)}</span>
                   </span>
                 </button>`;
@@ -5289,7 +5532,7 @@ function renderPublishContentPreview(persona = selectedPersona(), source = state
           </div>
           <article class="publish-preview-card">
             <div class="publish-preview-card-head">
-              <strong>${esc(activePost?.title || "待发布内容")}</strong>
+              <strong>${esc(activePost ? personaDraftDisplayTitleForPost(activePost, sourceRows) : "待发布内容")}</strong>
               ${renderMediaTypeBadge(activeMediaItems)}
             </div>
             <p>${esc(String(activePost?.content || "").trim() || "当前内容为空。")}</p>
@@ -5507,6 +5750,72 @@ function renderPublishPersonaCollectionList(mode, selectedIds) {
   });
 }
 
+function personaCollectionListNodes() {
+  const groups = personaCollectionGroups();
+  const assigned = personaAssignedIds();
+  const ungrouped = orderedUngroupedPersonas(assigned);
+  return [
+    ...groups.map((group) => ({ type: "group", group })),
+    ...ungrouped.map((persona) => ({ type: "persona", persona })),
+  ];
+}
+
+function visiblePersonaCollectionListNodes() {
+  const pageSize = Math.min(Math.max(Number(state.personaListPageSize || 20), 5), 80);
+  const nodes = personaCollectionListNodes();
+  const totalPages = Math.max(1, Math.ceil(nodes.length / pageSize));
+  state.personaListPage = Math.min(Math.max(Number(state.personaListPage || 1), 1), totalPages);
+  const start = (state.personaListPage - 1) * pageSize;
+  return {
+    pageSize,
+    totalPages,
+    currentPage: state.personaListPage,
+    nodes: nodes.slice(start, start + pageSize),
+  };
+}
+
+function personaIdsFromCollectionNodes(nodes = [], map = personaByIdMap()) {
+  const ids = new Set();
+  (Array.isArray(nodes) ? nodes : []).forEach((node) => {
+    if (node?.type === "persona" && node.persona?.id) {
+      ids.add(String(node.persona.id));
+      return;
+    }
+    if (node?.type === "group") {
+      (node.group?.persona_ids || []).forEach((id) => {
+        const cleanId = String(id || "").trim();
+        if (cleanId && map.has(cleanId)) ids.add(cleanId);
+      });
+    }
+  });
+  return Array.from(ids);
+}
+
+function visiblePublishPersonaIdsForRefresh(mode = state.simpleBranches.publishing) {
+  const current = normalizedPublishMode(mode);
+  const ids = new Set(personaIdsFromCollectionNodes(visiblePersonaCollectionListNodes().nodes));
+  if (current === "matrix_start") matrixPublishSelectedIds().forEach((id) => ids.add(String(id || "")));
+  const selectedId = currentPublishingPersonaId();
+  if (selectedId) ids.add(selectedId);
+  return Array.from(ids).filter((id) => state.personas.some((persona) => String(persona.id || "") === id));
+}
+
+function ensurePublishingPersonaSidebarContent(mode = state.simpleBranches.publishing) {
+  const personaIds = visiblePublishPersonaIdsForRefresh(mode);
+  const pending = personaIds.flatMap((personaId) => {
+    const tasks = [];
+    if (!Array.isArray(state.personaDraftPosts[personaId])) tasks.push(loadPersonaDraftPosts(personaId).catch(() => []));
+    if (!Array.isArray(state.personaFavoritePosts[personaId])) tasks.push(loadPersonaFavoritePosts(personaId).catch(() => []));
+    return tasks;
+  });
+  if (!pending.length) return;
+  Promise.all(pending).then(() => {
+    if (state.activeModule === "publishing" && normalizedPublishMode(state.simpleBranches.publishing) === normalizedPublishMode(mode)) {
+      renderSimpleFlowModule("publishing");
+    }
+  }).catch(() => {});
+}
+
 function renderAutomationPersonaCollectionList() {
   return renderPersonaCollectionList({
     context: "automation",
@@ -5521,6 +5830,7 @@ function renderPublishPersonaSidebar(mode) {
   const current = normalizedPublishMode(mode);
   const isMatrix = current === "matrix_start";
   const selectedIds = isMatrix ? matrixPublishSelectedIds() : [String(state.selectedPersonaId || "")].filter(Boolean);
+  ensurePublishingPersonaSidebarContent(current);
   return `
     <aside class="persona-list-shell publish-persona-shell">
       <div class="persona-inline-panel persona-list-toolbar">
@@ -5994,7 +6304,7 @@ function bindSimpleFlowInputs(moduleId) {
     document.querySelectorAll("[data-automation-step]").forEach((node) => {
       node.addEventListener("click", () => {
         const step = String(node.dataset.automationStep || "binding");
-        state.simpleBranches.automation = ["binding", "login", "reply_comment", "reply_hot", "warmup"].includes(step) ? step : "binding";
+        state.simpleBranches.automation = ["binding", "reply_comment", "reply_hot", "warmup"].includes(step) ? step : "binding";
         renderSimpleFlowModule("automation");
       });
     });
@@ -6081,6 +6391,7 @@ function appendEvent(kind, message, options = {}) {
     taskId: options.taskId,
     taskPanel: options.taskPanel,
     personaId: options.personaId,
+    openBrowser: options.openBrowser,
     openDetail: options.openDetail,
     target: options.target,
     persistent,
@@ -6155,6 +6466,10 @@ async function submitPersonaPublishTask() {
     await promptPersonaAccountBinding(persona);
     return;
   }
+  if (!isReadyPublishAccount(account)) {
+    await promptPersonaAccountBinding(persona);
+    return;
+  }
   const lockParts = ["publish", source, persona.id, post.id, account.id];
   if (isActionLocked(...lockParts) || activeSocialTaskFor({ accountId: account.id, personaId: persona.id, taskType: "publish_post", postId: post.id, postSource: source })) {
     showMsg("commandMsg", `当前${sourceLabel}已经有发布任务在队列或执行中，请等待完成后再重复提交。`, false);
@@ -6226,6 +6541,10 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
   const account = publishAccountForPersona(persona);
   const cleanAccountId = String(accountId || account?.id || "").trim();
   if (!cleanAccountId || !account) {
+    await promptPersonaAccountBinding(persona);
+    return null;
+  }
+  if (!isReadyPublishAccount(account)) {
     await promptPersonaAccountBinding(persona);
     return null;
   }
@@ -6874,22 +7193,27 @@ async function clearPersonaAutomationTasksFor(personaId, messageId = "commandMsg
   if (state.view === "tasks") await loadTasks().catch(() => {});
 }
 
-async function openPersonaAccountBindingPage(persona = selectedPersona()) {
+async function openPersonaAccountBindingPage(persona = selectedPersona(), account = null) {
   const personaId = String(persona?.id || state.selectedPersonaId || "").trim();
-  if (!personaId) {
-    showMsg("commandMsg", "请先选择一个人设。", false);
-    return false;
+  const targetAccount = account || publishAccountForPersona(persona) || accountForPersona(persona);
+  if (personaId) {
+    state.selectedPersonaId = personaId;
+    state.accountPoolPersonaId = personaId;
   }
-  state.selectedPersonaId = personaId;
-  state.activeModule = "personas";
-  if (state.view !== "workspace") setView("workspace");
-  state.personaCreateMode = false;
-  state.personaGroup = "settings";
-  setPersonaGroupStep("settings", "account", selectedPersonaProfile());
-  await loadPersonaProfile(personaId, { force: true }).catch(() => {});
+  if (targetAccount?.platform) state.accountPoolPlatform = normalizeAccountPoolPlatform(targetAccount.platform);
+  if (targetAccount?.id) {
+    state.accountPoolAccountId = String(targetAccount.id || "");
+    state.accountPoolSelectedAccountIds = [String(targetAccount.id || "")];
+  }
+  state.accountBrowserPanel = "accounts";
+  setView("accounts");
+  await loadSocial().catch(() => {});
   renderWorkspace();
+  renderSocialAccounts();
   window.requestAnimationFrame(() => {
-    const target = document.querySelector("[data-persona-create-account]");
+    const target = targetAccount?.id
+      ? Array.from(document.querySelectorAll("[data-account-pool-account]")).find((item) => String(item.dataset.accountPoolAccount || "") === String(targetAccount.id))
+      : document.querySelector("[data-account-pool-create]");
     target?.scrollIntoView({ block: "center", behavior: "smooth" });
     target?.focus({ preventScroll: true });
   });
@@ -6897,14 +7221,15 @@ async function openPersonaAccountBindingPage(persona = selectedPersona()) {
 }
 
 async function promptPersonaAccountBinding(persona = selectedPersona()) {
+  const account = publishAccountForPersona(persona);
   const confirmed = await openConsoleModal({
-    title: "绑定发布账号",
-    message: "当前人设没有可用的 Threads 或 Instagram 执行账号。请先绑定账号后再发布。",
-    confirmText: "绑定账号",
+    title: account ? "管理发布账号" : "绑定发布账号",
+    message: account ? publishAccountBlockMessage(account) : "当前人设还没有绑定 Threads 或 Instagram 执行账号。请到账号管理自动化绑定账号后再发布。",
+    confirmText: account ? "进入账号管理" : "绑定账号",
     cancelText: "取消",
   });
   if (!confirmed) return false;
-  return openPersonaAccountBindingPage(persona);
+  return openPersonaAccountBindingPage(persona, account);
 }
 
 async function executeSimpleFlow() {
@@ -7099,6 +7424,23 @@ async function refreshPersonaCollections(message = "") {
   await loadPersonas();
   if (state.activeModule === "publishing") renderSimpleFlowModule("publishing");
   if (message) showMsg("commandMsg", message, true);
+}
+
+function currentPublishingPersonaId() {
+  return String($("simplePersona")?.value || state.selectedPersonaId || selectedPersona()?.id || "").trim();
+}
+
+async function refreshCurrentPublishingPersonaContent({ force = true } = {}) {
+  const personaIds = visiblePublishPersonaIdsForRefresh();
+  if (!personaIds.length) return [];
+  const tasks = personaIds.flatMap((personaId) => [
+    loadPersonaDraftPosts(personaId, { force }).catch(() => []),
+    loadPersonaFavoritePosts(personaId, { force }).catch(() => []),
+    loadPersonaPublishHistory(personaId, { force }).catch(() => []),
+  ]);
+  const result = await Promise.all(tasks);
+  if (state.activeModule === "publishing") renderSimpleFlowModule("publishing");
+  return result;
 }
 
 async function createPersonaCollection(name, personaId = "") {
@@ -7309,6 +7651,40 @@ async function renamePersonaCollection(groupId) {
     body: JSON.stringify({ name }),
   });
   await refreshPersonaCollections("已重命名分组。");
+}
+
+async function renamePersonaArchive(personaId) {
+  const cleanId = String(personaId || "").trim();
+  const persona = state.personas.find((item) => String(item.id || "") === cleanId);
+  if (!persona) return;
+  const name = await openConsoleModal({
+    title: "重命名人设",
+    inputLabel: "人设名称",
+    inputValue: persona.name || "",
+    confirmText: "保存",
+  });
+  if (name === null) return;
+  const cleanName = String(name || "").trim();
+  if (!cleanName) {
+    showMsg("commandMsg", "人设名称不能为空。", false);
+    return;
+  }
+  const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(cleanId)}/name`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: cleanName }),
+  });
+  const nextName = String(result?.persona?.name || cleanName).trim();
+  state.personas = state.personas.map((item) => (
+    String(item.id || "") === cleanId ? { ...item, name: nextName } : item
+  ));
+  if (state.personaProfiles[cleanId]) state.personaProfiles[cleanId] = { ...state.personaProfiles[cleanId], name: nextName };
+  state.personaListEditorId = "";
+  state.personaListEditorMode = "";
+  removePersonaCardEditorPortal();
+  renderActivePersonaListSurface();
+  renderConfirmSummary();
+  await refreshPersonaCollections("已重命名人设。");
 }
 
 async function deletePersonaCollection(groupId) {
@@ -8109,6 +8485,7 @@ function updatePersonaPublishResultView(personaId) {
 
 function refreshAutomationWorkSurface() {
   if (state.activeModule === "automation") renderSimpleFlowModule("automation");
+  else if (state.view === "accounts") renderSocialAccounts();
   else if (isPersonaWorkspaceModule()) renderPersonaDetail();
 }
 
@@ -8171,6 +8548,7 @@ async function watchPersonaAutomationTask(taskId, accountId, step) {
         taskId,
         taskPanel: "persona",
         personaId: task.persona_id || "",
+        openBrowser: true,
       });
       if (["success", "failed", "cancelled", "need_manual"].includes(String(task.status || ""))) {
         delete state.personaAutomationWatchers[key];
@@ -8227,6 +8605,7 @@ async function watchPersonaPublishTask(taskId, personaId) {
         taskId,
         taskPanel: "persona",
         personaId,
+        openBrowser: true,
       });
       if (["success", "failed", "cancelled", "need_manual"].includes(String(task.status || ""))) {
         delete state.personaPublishWatchers[key];
@@ -8245,6 +8624,10 @@ async function watchPersonaPublishTask(taskId, personaId) {
         const publishedPostId = String(payload.archive_post_id || "").trim();
         const publishedSource = String(payload.archive_post_source || "posts").trim();
         if (String(task.status || "") === "success" && publishedPostId && publishedSource !== "favorites") {
+          const currentDraftRows = visiblePersonaDraftPosts(state.personaDraftPosts[key] || [])
+            .filter((post) => String(post.id || "") !== publishedPostId);
+          state.personaDraftPosts[key] = currentDraftRows;
+          syncPersonaSelectedPostIds({ id: key }, "posts", currentDraftRows);
           if (String(state.selectedPersonaPostId || "") === publishedPostId) {
             const nextPost = personaDraftPosts({ id: key })[0] || personaFavoritePosts({ id: key })[0] || null;
             setSelectedPersonaPostId(nextPost?.id || "", { auto: true });
@@ -8269,12 +8652,12 @@ async function loadPersonaDraftPosts(personaId, { force = false } = {}) {
   const request = api(`/api/persona_dashboard/personas/${encodeURIComponent(key)}/posts`)
     .catch(() => ({ posts: [] }))
     .then((data) => {
-      const posts = sortPersonaDraftPosts(Array.isArray(data.posts) ? data.posts : []);
+      const posts = sortPersonaDraftPosts(visiblePersonaDraftPosts(Array.isArray(data.posts) ? data.posts : []));
       state.personaDraftPosts[key] = posts;
       syncPersonaSelectedPostIds({ id: key }, "posts", posts);
       syncPersonaHotImportPosts(key, posts);
       const currentSelected = String(state.selectedPersonaPostId || "").trim();
-      if (!posts.some((post) => String(post.id) === currentSelected)) {
+      if (String(state.selectedPersonaId || "") === key && !posts.some((post) => String(post.id) === currentSelected)) {
         setSelectedPersonaPostId(posts[0]?.id || "", { auto: true });
       }
       schedulePersonaDetailRender(key);
@@ -8299,7 +8682,7 @@ async function loadPersonaFavoritePosts(personaId, { force = false } = {}) {
       state.personaFavoritePosts[key] = posts;
       syncPersonaSelectedPostIds({ id: key }, "favorites", posts);
       const currentSelected = String(state.selectedPersonaPostId || "").trim();
-      if (personaPostSource({ id: key }) === "favorites" && !posts.some((post) => String(post.id) === currentSelected)) {
+      if (String(state.selectedPersonaId || "") === key && personaPostSource({ id: key }) === "favorites" && !posts.some((post) => String(post.id) === currentSelected)) {
         setSelectedPersonaPostId(posts[0]?.id || "", { auto: true });
       }
       schedulePersonaDetailRender(key);
@@ -8400,11 +8783,14 @@ async function loadPersonaPublishHistory(personaId, { force = false } = {}) {
 
 async function loadAutomationTasksShared({ force = false } = {}) {
   if (!force && state.socialTasksFetch) return state.socialTasksFetch;
+  const previousById = new Map((state.socialTasks || []).map((task) => [String(task?.id || ""), task]));
   const request = api("/api/persona_dashboard/automation/tasks?limit=80")
     .catch(() => ({ tasks: state.socialTasks || [] }))
-    .then((data) => {
+    .then(async (data) => {
       const tasks = Array.isArray(data.tasks) ? data.tasks : [];
       state.socialTasks = tasks;
+      syncSocialTaskToasts(tasks);
+      await refreshPersonaAfterPublishTasks(tasks, previousById);
       return { tasks };
     })
     .finally(() => {
@@ -8625,12 +9011,16 @@ function setPersonaGenerateRunState(personaId, patch = {}) {
   const key = String(personaId || "").trim();
   if (!key) return null;
   const current = personaGenerateRunState(key) || {};
+  const suppressToast = Boolean(patch.suppressToast || patch.silent);
+  const nextPatch = { ...patch };
+  delete nextPatch.suppressToast;
+  delete nextPatch.silent;
   state.personaGenerateRuns[key] = {
     ...current,
-    ...patch,
+    ...nextPatch,
     updatedAt: new Date().toISOString(),
   };
-  showPersonaGenerateRunToast(key, state.personaGenerateRuns[key]);
+  if (!suppressToast) showPersonaGenerateRunToast(key, state.personaGenerateRuns[key]);
   return state.personaGenerateRuns[key];
 }
 
@@ -9145,7 +9535,7 @@ async function deletePersonaDraftPost(postId = "") {
   }
   const confirmed = await openConsoleModal({
     title: "删除草稿",
-    message: `确认删除“${String(post.title || "未命名草稿").trim() || "未命名草稿"}”吗？`,
+    message: `确认删除“${personaDraftDisplayTitleForPost(post, personaDraftPosts(persona))}”吗？`,
     confirmText: "删除",
     cancelText: "取消",
     danger: true,
@@ -9246,22 +9636,45 @@ async function addPersonaFavoritePost(postId = "", { preserveSource = false } = 
     showMsg("commandMsg", "当前草稿不存在或已被删除。", false);
     return;
   }
-  showMsg("commandMsg", "正在加入收藏...", true);
-  const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/favorites/${encodeURIComponent(cleanPostId)}`, {
-    method: "POST",
-  });
-  await loadPersonaFavoritePosts(persona.id, { force: true });
-  if (!preserveSource) {
-    setPersonaPostSource("favorites", persona);
-    setSelectedPersonaPostId(result.post?.id || state.selectedPersonaPostId || "");
-  } else {
-    setPersonaPostSource("posts", persona);
-    setSelectedPersonaPostId(cleanPostId);
+  const lockParts = ["persona", persona.id, "favorite_post", cleanPostId];
+  if (isActionLocked(...lockParts)) return;
+  setActionLocked(lockParts, true);
+  try {
+    const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/favorites/${encodeURIComponent(cleanPostId)}`, {
+      method: "POST",
+    });
+    const nextFavorites = sortPersonaDraftPosts(Array.isArray(result.favorites) ? result.favorites : []);
+    state.personaFavoritePosts[String(persona.id)] = nextFavorites;
+    syncPersonaSelectedPostIds(persona, "favorites", nextFavorites);
+    if (!preserveSource) {
+      setPersonaPostSource("favorites", persona);
+      setSelectedPersonaPostId(result.post?.id || nextFavorites[0]?.id || state.selectedPersonaPostId || "");
+    } else {
+      setPersonaPostSource("posts", persona);
+      setSelectedPersonaPostId(cleanPostId);
+    }
+    state.personaPanels.content = "posts";
+    renderPersonaDetail();
+    renderConfirmSummary();
+    showMsg("commandMsg", result.exists ? "这条内容已经在收藏里。" : "已加入收藏。", true, { key: `favorite:${persona.id}:${cleanPostId}` });
+  } catch (error) {
+    const detail = String(error?.detail || error?.message || "").trim();
+    if (error?.status === 404 || /post not found|草稿已发布|不存在/.test(detail)) {
+      await loadPersonaDraftPosts(persona.id, { force: true }).catch(() => []);
+      const rows = personaDraftPosts(persona);
+      if (!rows.some((item) => String(item.id) === cleanPostId)) {
+        setSelectedPersonaPostId(rows[0]?.id || "", { auto: true });
+      }
+      state.personaPanels.content = rows.length || personaFavoritePosts(persona).length ? "posts" : "generate";
+      renderPersonaDetail();
+      renderConfirmSummary();
+      showMsg("commandMsg", "草稿已发布或已不存在，已刷新草稿库。", false, { key: `favorite-missing:${persona.id}:${cleanPostId}` });
+      return;
+    }
+    throw error;
+  } finally {
+    setActionLocked(lockParts, false);
   }
-  state.personaPanels.content = "posts";
-  renderPersonaDetail();
-  renderConfirmSummary();
-  showMsg("commandMsg", result.exists ? "这条内容已经在收藏里。" : "已加入收藏。", true);
 }
 
 async function deletePersonaFavoritePost(postId = "", { preserveSource = false } = {}) {
@@ -9276,31 +9689,38 @@ async function deletePersonaFavoritePost(postId = "", { preserveSource = false }
     showMsg("commandMsg", "当前收藏不存在或已移出。", false);
     return;
   }
-  const confirmed = await openConsoleModal({
-    title: "移出收藏",
-    message: `确认将“${String(post.title || "未命名内容").trim() || "未命名内容"}”移出收藏吗？原草稿不会被删除。`,
-    confirmText: "移出",
-    cancelText: "取消",
-    danger: true,
-  });
-  if (!confirmed) return;
-  showMsg("commandMsg", "正在移出收藏...", true);
-  await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/favorites/${encodeURIComponent(cleanPostId)}`, {
-    method: "DELETE",
-  });
-  resetPersonaDraftEditor(persona.id);
-  await loadPersonaFavoritePosts(persona.id, { force: true });
-  if (!preserveSource) {
-    const rows = personaFavoritePosts(persona);
-    setSelectedPersonaPostId(rows[0]?.id || "", { auto: true });
-    setPersonaPostSource(rows.length ? "favorites" : "posts", persona);
-  } else {
-    setPersonaPostSource("posts", persona);
+  const lockParts = ["persona", persona.id, "delete_favorite", cleanPostId];
+  if (isActionLocked(...lockParts)) return;
+  setActionLocked(lockParts, true);
+  try {
+    const confirmed = await openConsoleModal({
+      title: "移出收藏",
+      message: `确认将“${personaDraftDisplayTitleForPost(post, personaFavoritePosts(persona))}”移出收藏吗？原草稿不会被删除。`,
+      confirmText: "移出",
+      cancelText: "取消",
+      danger: true,
+    });
+    if (!confirmed) return;
+    const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/favorites/${encodeURIComponent(cleanPostId)}`, {
+      method: "DELETE",
+    });
+    resetPersonaDraftEditor(persona.id);
+    const nextFavorites = sortPersonaDraftPosts(Array.isArray(result.favorites) ? result.favorites : []);
+    state.personaFavoritePosts[String(persona.id)] = nextFavorites;
+    syncPersonaSelectedPostIds(persona, "favorites", nextFavorites);
+    if (!preserveSource) {
+      setSelectedPersonaPostId(nextFavorites[0]?.id || "", { auto: true });
+      setPersonaPostSource(nextFavorites.length ? "favorites" : "posts", persona);
+    } else {
+      setPersonaPostSource("posts", persona);
+    }
+    state.personaPanels.content = "posts";
+    renderPersonaDetail();
+    renderConfirmSummary();
+    showMsg("commandMsg", "已移出收藏。", true, { key: `favorite:${persona.id}:${cleanPostId}` });
+  } finally {
+    setActionLocked(lockParts, false);
   }
-  state.personaPanels.content = "posts";
-  renderPersonaDetail();
-  renderConfirmSummary();
-  showMsg("commandMsg", "已移出收藏。", true);
 }
 
 async function submitPersonaImageGeneration() {
@@ -9423,12 +9843,34 @@ async function refreshPersonaMediaTask(personaId, postId, taskId) {
   const key = personaMediaTaskKey(personaId, postId);
   const status = String(detail.status || "").trim();
   const errorText = String(detail.error || "").trim();
+  const previousStatus = String(state.personaMediaTasks[key]?.status || "").trim();
+  const terminalStatuses = ["success", "failed", "cancelled"];
+  const becameTerminal = terminalStatuses.includes(status) && !terminalStatuses.includes(previousStatus);
+  const taskTitle = taskMeta[String(detail.type || state.personaMediaTasks[key]?.taskType || "persona_post_image")]?.title || statusLabel(detail.type || "") || "生成任务";
   state.personaMediaTasks[key] = {
     taskId,
     taskType: String(detail.type || "").trim(),
     status,
     detail,
   };
+  if (becameTerminal) {
+    const ok = status === "success";
+    appendEvent(ok ? "success" : (status === "failed" ? "failed" : "cancelled"), `${taskTitle}：${statusLabel(status)}`, {
+      key: `task:${taskId}`,
+      taskId,
+      taskPanel: "regular",
+      personaId,
+    });
+    setPersonaGenerateRunState(personaId, {
+      kind: "media",
+      status: ok ? "success" : "error",
+      message: ok ? `${taskTitle}已完成` : `${taskTitle}${statusLabel(status)}`,
+      taskId,
+      error: ok ? "" : (errorText || statusLabel(status)),
+      suppressToast: true,
+    });
+    dismissToastByKey(`persona-generate:${personaId}:media`);
+  }
   if (errorText && ["failed", "cancelled"].includes(status)) {
     showToast(errorText, false, {
       key: `persona-media-task:${taskId}:${status}:${errorText}`,
@@ -9569,8 +10011,8 @@ async function submitPersonaMediaTask() {
     await loadTasks().catch(() => {});
     setPersonaGenerateRunState(persona.id, {
       kind: "media",
-      status: "success",
-      message: "推文配图任务已提交",
+      status: "running",
+      message: "推文配图任务已提交，等待生成完成",
       taskId: String(result.id || "").trim(),
       error: "",
     });
@@ -9872,6 +10314,10 @@ function renderPersonaCardEditorMenu(persona, currentGroups, availableGroups) {
           <span>移出分组</span>
         </button>` : "",
     `
+        <button type="button" class="persona-menu-tab persona-menu-tab--action" data-persona-rename="${esc(personaId)}">
+          <span>重命名人设</span>
+        </button>`,
+    `
         <button type="button" class="persona-menu-tab persona-menu-tab--action" data-persona-duplicate="${esc(personaId)}">
           <span>复制人设</span>
         </button>`,
@@ -10001,6 +10447,11 @@ function handlePersonaCardEditorPortalClick(event) {
     ungroupPersona(ungroupAll.dataset.personaUngroupAll || "").catch((error) => showMsg("commandMsg", error.detail || error.message || "拆出失败", false));
     return;
   }
+  const renamePersonaButton = event.target.closest("[data-persona-rename]");
+  if (renamePersonaButton) {
+    renamePersonaArchive(renamePersonaButton.dataset.personaRename || "").catch((error) => showMsg("commandMsg", error.detail || error.message || "重命名人设失败", false));
+    return;
+  }
   const duplicatePersonaButton = event.target.closest("[data-persona-duplicate]");
   if (duplicatePersonaButton) {
     duplicatePersonaArchive(duplicatePersonaButton.dataset.personaDuplicate || "").catch((error) => showMsg("commandMsg", error.detail || error.message || "复制人设失败", false));
@@ -10050,11 +10501,22 @@ function renderPersonaCard(persona, groupId = "", options = {}) {
   const dragging = allowReorder && String(state.personaDrag?.id || "") === String(persona.id || "") && state.personaDrag?.type === "persona";
   const currentGroups = personaGroupsForPersona(persona.id);
   const ungrouped = !currentGroups.length;
-  const account = publishAccountsForPersona(persona)[0] || null;
+  const account = isPublishContext ? publishAccountForPersona(persona) : (publishAccountsForPersona(persona)[0] || null);
+  const publishAccountLabel = account
+    ? `${accountDisplayName(account)}${isReadyPublishAccount(account) ? "" : ` · ${statusLabel(account.status || "unknown")}`}`
+    : "没有可用发布账号";
+  const personaId = String(persona.id || "");
+  const draftCacheLoaded = Array.isArray(state.personaDraftPosts[personaId]);
+  const favoriteCacheLoaded = Array.isArray(state.personaFavoritePosts[personaId]);
   const drafts = personaDraftPosts(persona);
   const favorites = personaFavoritePosts(persona);
-  const availableDraftCount = drafts.filter((post) => !String(post.published_at || post.publishedAt || "").trim()).length;
+  const draftCount = draftCacheLoaded ? drafts.length : personaOverviewDraftCount(persona);
+  const favoriteCount = favoriteCacheLoaded ? favorites.length : personaOverviewFavoriteCount(persona);
+  const availableDraftCount = draftCacheLoaded
+    ? drafts.filter((post) => !String(post.published_at || post.publishedAt || "").trim()).length
+    : draftCount;
   const accountPoolSelectedCount = isAccountPoolContext ? accountPoolSelectedIds().length : 0;
+  const showSelectionCheck = isMatrix;
   return `
     <article
       class="persona-list-card persona-draggable-card ${isSideListContext ? "publish-persona-card" : ""} ${isAutomationContext ? "automation-persona-card" : ""} ${publishSelected ? "is-active" : ""} ${editing ? "is-editing" : ""} ${dragging ? "is-dragging" : ""}"
@@ -10063,19 +10525,19 @@ function renderPersonaCard(persona, groupId = "", options = {}) {
       data-group-id="${esc(groupId)}"
       draggable="false"
     >
-      <button type="button" class="persona-list-item ${isMatrix ? "publish-persona-select-item" : ""}" data-persona-select="${esc(persona.id)}">
-        ${isMatrix ? `<span class="publish-persona-check ${publishSelected ? "is-checked" : ""}" aria-hidden="true"></span>` : ""}
+      <button type="button" class="persona-list-item ${showSelectionCheck ? "publish-persona-select-item" : ""}" data-persona-select="${esc(persona.id)}">
+        ${showSelectionCheck ? `<span class="publish-persona-check ${publishSelected ? "is-checked" : ""}" aria-hidden="true"></span>` : ""}
         <span class="${isMatrix ? "publish-persona-copy" : ""}">
           <span class="persona-card-title">
             <strong>${esc(persona.name || persona.id || "未命名人设")}</strong>
             ${renderPersonaKindBadge(persona)}
             ${ungrouped ? `<span class="persona-kind-badge persona-ungrouped-badge">未分组</span>` : ""}
           </span>
-          <small>${esc(isPublishContext ? (account ? accountDisplayName(account) : "没有可用发布账号") : (isAutomationContext || isAccountPoolContext ? (personaAccounts(persona).length ? `${personaAccounts(persona).length} 个执行账号` : "未绑定执行账号") : personaExecutionAccountLabel(persona)))}</small>
+          <small>${esc(isPublishContext ? publishAccountLabel : (isAutomationContext || isAccountPoolContext ? (personaAccounts(persona).length ? `${personaAccounts(persona).length} 个执行账号` : "未绑定执行账号") : personaExecutionAccountLabel(persona)))}</small>
           ${isPublishContext ? `
             <span class="publish-persona-stats">
-              <span>草稿 ${esc(availableDraftCount)}/${esc(drafts.length)}</span>
-              <span>收藏 ${esc(favorites.length)}</span>
+              <span>草稿 ${esc(availableDraftCount)}/${esc(draftCount)}</span>
+              <span>收藏 ${esc(favoriteCount)}</span>
             </span>
           ` : ""}
         </span>
@@ -10154,19 +10616,7 @@ function renderPersonaCollectionList(options = {}) {
   const isSideListContext = isPublishContext || isAutomationContext || isAccountPoolContext;
   const allowReorder = options.allowReorder !== false;
   const map = personaByIdMap();
-  const groups = personaCollectionGroups();
-  const assigned = personaAssignedIds();
-  const ungrouped = orderedUngroupedPersonas(assigned);
-  const pageSize = Math.min(Math.max(Number(state.personaListPageSize || 20), 5), 80);
-  const nodes = [
-    ...groups.map((group) => ({ type: "group", group })),
-    ...ungrouped.map((persona) => ({ type: "persona", persona })),
-  ];
-  const totalPages = Math.max(1, Math.ceil(nodes.length / pageSize));
-  state.personaListPage = Math.min(Math.max(Number(state.personaListPage || 1), 1), totalPages);
-  const currentPage = state.personaListPage;
-  const start = (currentPage - 1) * pageSize;
-  const visibleNodes = nodes.slice(start, start + pageSize);
+  const { pageSize, totalPages, currentPage, nodes: visibleNodes } = visiblePersonaCollectionListNodes();
   const pager = `
     <div class="persona-list-pager">
       <button type="button" data-persona-list-page="first" title="首页" aria-label="首页" ${currentPage <= 1 ? "disabled" : ""}><span class="ui-arrow-icon ui-arrow-icon--double-left" aria-hidden="true"></span></button>
@@ -10943,7 +11393,7 @@ function renderPersonaGeneratePreviewDock(persona) {
               aria-pressed="${selected ? "true" : "false"}"
             >
               <div class="persona-draft-card-head">
-                <strong>${esc(post.title || `生成草稿 ${index + 1}`)}</strong>
+                <strong>${esc(personaDraftDisplayTitle(post, index, rows))}</strong>
                 <span class="persona-draft-card-time">${esc(formatTime(post.published_at || post.updated_at || post.created_at))}</span>
               </div>
               <p>${esc(post.content || post.full_content || "暂无正文。")}</p>
@@ -11186,6 +11636,9 @@ function renderPersonaDetail() {
   const account = accountForPersona(persona);
   const drafts = personaDraftPosts(persona);
   const favorites = personaFavoritePosts(persona);
+  const personaId = String(persona.id || "");
+  const draftCount = Array.isArray(state.personaDraftPosts[personaId]) ? drafts.length : personaOverviewDraftCount(persona);
+  const favoriteCount = Array.isArray(state.personaFavoritePosts[personaId]) ? favorites.length : personaOverviewFavoriteCount(persona);
   const groupPanel = renderPersonaGroupPanel(groupKey, step, persona, account, profile);
   const canDelete = Boolean(profile);
   $("personaDetail").innerHTML = `
@@ -11195,8 +11648,8 @@ function renderPersonaDetail() {
           <strong>${esc(persona.name || "未命名人设")}</strong>
           <span>${esc(`类型：${personaKindLabel(persona, profile)}`)}</span>
           ${renderPersonaExecutionAccountBadge(persona)}
-          <span>${esc(`草稿 ${drafts.length} 条`)}</span>
-          <span>${esc(`收藏 ${favorites.length} 条`)}</span>
+          <span>${esc(`草稿 ${draftCount} 条`)}</span>
+          <span>${esc(`收藏 ${favoriteCount} 条`)}</span>
         </div>
         <div class="persona-quick-actions">
           ${canDelete ? `<button type="button" class="danger" data-persona-delete>删除当前人设</button>` : ""}
@@ -11490,7 +11943,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
             ${renderPersonaDraftViewToggle(draftViewMode)}
           </div>
         </div>
-        ${renderPersonaDraftRows(postPageInfo.items, postSource)}
+        ${renderPersonaDraftRows(postPageInfo.items, postSource, sourceRows)}
         ${renderPersonaPostPager(postPageInfo, postSource)}
       </div>`;
   }
@@ -11509,19 +11962,20 @@ function renderPersonaContentPanel(persona, account, profile, step) {
   }
 
   if (panel === "publish") {
-    const publishAccounts = publishAccountsForPersona(persona);
+    const publishAccounts = publishPlatformAccountsForPersona(persona);
     const publishAccount = selectedPublishAccountForPersona(persona);
     const publishHint = publishPlatformHint(publishAccount);
+    const publishReady = isReadyPublishAccount(publishAccount);
     const publishSource = personaPostSource(persona);
     const publishSourceLabel = publishSource === "favorites" ? "收藏推文" : "草稿";
-    const publishBusy = publishAccount && selectedPost
+    const publishBusy = publishReady && selectedPost
       ? (isActionLocked("publish", publishSource, persona.id, selectedPost.id, publishAccount.id) || activeSocialTaskFor({ accountId: publishAccount.id, personaId: persona.id, taskType: "publish_post", postId: selectedPost.id, postSource: publishSource }))
       : false;
     return `
       <div class="persona-inline-panel persona-publish-panel">
         <div class="persona-head-copy">
           <strong>发布前检查</strong>
-          <span class="persona-panel-intro">${esc(publishAccount ? `${publishPlatformLabel(publishAccount)} · ${publishHint}` : "当前人设还没有可发布的 Threads 或 Instagram 执行账号。先到“执行账号管理”或“我的人设 > 人设设置 > 账号设置”里绑定，再提交发布。")}</span>
+          <span class="persona-panel-intro">${esc(publishAccount ? (publishReady ? `${publishPlatformLabel(publishAccount)} · ${publishHint}` : publishAccountBlockMessage(publishAccount)) : "当前人设还没有绑定 Threads 或 Instagram 执行账号。请到账号管理自动化绑定账号后再发布。")}</span>
         </div>
         ${renderPersonaPublishPreflight(publishAccount)}
         <div class="form-grid persona-detail-controls">
@@ -11543,7 +11997,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
         ${personaPublishPreview(selectedPost)}
         ${renderUploadDropzone("personaPublishFiles", { label: "发布素材", hint: publishHint || "拖动图片或视频到这里，或点击选择。" })}
         <div class="row-actions">
-          <button type="button" class="primary" data-persona-publish-submit ${(publishAccount && selectedPost && !publishBusy) ? "" : "disabled"}>${publishBusy ? "发布任务执行中" : "发布内容"}</button>
+          <button type="button" class="primary" data-persona-publish-submit ${(publishReady && selectedPost && !publishBusy) ? "" : "disabled"}>${publishBusy ? "发布任务执行中" : "发布内容"}</button>
         </div>
         <div id="personaPublishResult">${publishResult || `<div class="empty-state">提交后，这里会显示任务状态、截图和发布结果。</div>`}</div>
       </div>`;
@@ -11595,32 +12049,41 @@ async function loadSocialOverview() {
   return overview;
 }
 
-async function loadSocial() {
+async function loadSocial({ render = true } = {}) {
   const [overview, accountsData, tasksData] = await Promise.all([
     loadSocialOverview().catch(() => ({})),
-    api("/api/persona_dashboard/automation/accounts").catch(() => ({ accounts: [] })),
-    loadAutomationTasksShared(),
+    api("/api/persona_dashboard/automation/accounts").catch(() => ({ accounts: state.socialAccounts || [] })),
+    loadAutomationTasksShared().catch(() => ({ tasks: state.socialTasks || [] })),
   ]);
-  state.socialBrowserSessions = Array.isArray(overview.browser_sessions) ? overview.browser_sessions : [];
+  state.socialBrowserSessions = Array.isArray(overview.browser_sessions) ? overview.browser_sessions : state.socialBrowserSessions;
   state.socialAccounts = accountsData.accounts || [];
   state.socialTasks = tasksData.tasks || [];
-  renderSocialAccounts();
-  renderSocialTasks();
-  syncStandaloneSocialForm();
-  if (isPersonaWorkspaceModule()) renderPersonaModule();
-  if (state.activeModule && ["publishing", "automation"].includes(state.activeModule)) renderSimpleFlowModule(state.activeModule);
+  saveSocialAccountsSnapshot();
+  if (render) {
+    renderSocialAccounts();
+    renderSocialTasks();
+    syncStandaloneSocialForm();
+    if (isPersonaWorkspaceModule()) renderPersonaModule();
+    if (state.activeModule && ["publishing", "automation"].includes(state.activeModule)) renderSimpleFlowModule(state.activeModule);
+  } else {
+    syncStandaloneSocialForm();
+  }
   syncAccountStatusAutoRefresh();
   return overview;
 }
 
 async function refreshSocialAccountsOnly() {
-  const [overview, data] = await Promise.all([
+  const [overview, data, tasksData] = await Promise.all([
     loadSocialOverview().catch(() => ({})),
-    api("/api/persona_dashboard/automation/accounts").catch(() => ({ accounts: [] })),
+    api("/api/persona_dashboard/automation/accounts").catch(() => ({ accounts: state.socialAccounts || [] })),
+    loadAutomationTasksShared().catch(() => ({ tasks: state.socialTasks || [] })),
   ]);
-  state.socialBrowserSessions = Array.isArray(overview.browser_sessions) ? overview.browser_sessions : [];
+  state.socialBrowserSessions = Array.isArray(overview.browser_sessions) ? overview.browser_sessions : state.socialBrowserSessions;
   state.socialAccounts = data.accounts || [];
+  state.socialTasks = tasksData.tasks || [];
+  saveSocialAccountsSnapshot();
   updateAccountStatusViews();
+  renderSocialTasks();
 }
 
 function refreshLiveBrowserSessionsSoon(taskId = "", attempts = 16, delayMs = 500) {
@@ -11690,9 +12153,16 @@ function selectedAccountPoolAccount() {
     state.accountPoolSelectedAccountIds = [];
     return null;
   }
-  const selected = accounts.find((account) => String(account.id || "") === String(state.accountPoolAccountId || ""));
-  const account = selected || accounts[0];
-  state.accountPoolAccountId = String(account.id || "");
+  const selectedIds = new Set(accountPoolSelectedIds());
+  if (!selectedIds.size) {
+    state.accountPoolAccountId = "";
+    return null;
+  }
+  const current = accounts.find((account) =>
+    selectedIds.has(String(account.id || "")) && String(account.id || "") === String(state.accountPoolAccountId || "")
+  );
+  const account = current || accounts.find((item) => selectedIds.has(String(item.id || ""))) || null;
+  state.accountPoolAccountId = account ? String(account.id || "") : "";
   return account;
 }
 
@@ -11718,6 +12188,27 @@ function toggleAccountPoolAccount(accountId = "") {
   else selected.add(cleanId);
   state.accountPoolSelectedAccountIds = Array.from(selected);
   state.accountPoolAccountId = cleanId;
+  const account = accountPoolAccounts().find((item) => String(item.id || "") === cleanId);
+  setAccountPoolAutomationContext(account);
+}
+
+function selectAccountPoolAccount(accountId = "") {
+  const cleanId = String(accountId || "").trim();
+  if (!cleanId) return;
+  const account = accountPoolAccounts().find((item) => String(item.id || "") === cleanId);
+  if (!account) return;
+  state.accountPoolAccountId = cleanId;
+  state.accountPoolSelectedAccountIds = [cleanId];
+  setAccountPoolAutomationContext(account);
+}
+
+function clearAccountPoolAccountSelection() {
+  state.accountPoolAccountId = "";
+  state.accountPoolSelectedAccountIds = [];
+}
+
+function clearAccountPoolPersonaSelection() {
+  state.accountPoolPersonaId = "";
 }
 
 function selectAccountPoolPersona(personaId = "") {
@@ -11770,13 +12261,19 @@ function renderAccountPoolCards(accounts, selectedAccount) {
       </div>
       <div class="account-pool-list">
       ${accounts.map((account) => {
-        const selected = selectedIds.has(String(account.id || ""));
+        const accountId = String(account.id || "");
+        const checked = selectedIds.has(accountId);
+        const active = String(selectedAccount?.id || state.accountPoolAccountId || "") === accountId;
         const persona = state.personas.find((item) => String(item.id || "") === String(account.persona_id || ""));
         const loginBusy = isActionLocked("social", account.id, "open_login", account.persona_id || "standalone")
           || isActionLocked("social", account.id, "open_login")
           || activeSocialTaskFor({ accountId: account.id, taskType: "open_login" });
         return `
-          <article class="account-card account-pool-card ${selected ? "is-active" : ""}" data-account-pool-account="${esc(account.id)}" data-account-pool-toggle="${esc(account.id)}" role="button" tabindex="0" aria-pressed="${selected ? "true" : "false"}">
+          <article class="account-card account-pool-card ${active ? "is-active" : ""} ${checked ? "is-checked" : ""}" data-account-pool-account="${esc(account.id)}" role="button" tabindex="0" aria-pressed="${active ? "true" : "false"}">
+            <label class="account-pool-card-check" aria-label="multi select account">
+              <input type="checkbox" data-account-pool-check="${esc(account.id)}" ${checked ? "checked" : ""} />
+              <span aria-hidden="true"></span>
+            </label>
             <div class="account-pool-card-main">
               <span class="account-pool-card-copy">
                 <strong>${esc(account.username || account.id)}</strong>
@@ -11797,6 +12294,466 @@ function renderAccountPoolCards(accounts, selectedAccount) {
         `;
       }).join("")}
       </div>
+    </section>`;
+}
+
+function renderAccountPoolCards(accounts, selectedAccount) {
+  const selectedIds = new Set(accountPoolSelectedIds());
+  const selectedCount = selectedIds.size;
+  const addButton = `<button type="button" class="account-pool-add-button" data-account-pool-add>
+    <span aria-hidden="true"></span>
+    <strong>添加账号</strong>
+  </button>`;
+  const editToolbar = `<div class="account-pool-edit-toolbar" role="toolbar" aria-label="账号编辑操作">
+    <span class="account-pool-selection-count">${esc(selectedCount ? `已选 ${selectedCount} 个` : "未选择")}</span>
+    <button type="button" data-account-pool-copy-selected title="复制账号" aria-label="复制账号" ${selectedCount ? "" : "disabled"}><span aria-hidden="true"></span></button>
+    <button type="button" data-account-pool-select-all title="全选账号" aria-label="全选账号" ${accounts.length ? "" : "disabled"}><span aria-hidden="true"></span></button>
+    <button type="button" class="danger" data-account-pool-delete-selected title="删除账号" aria-label="删除账号" ${selectedCount ? "" : "disabled"}><span aria-hidden="true"></span></button>
+    ${addButton}
+  </div>`;
+  if (!accounts.length) return `
+    <section class="account-pool-account-panel">
+      <div class="account-pool-section-head">
+        <strong>账号</strong>
+        ${editToolbar}
+      </div>
+      <div class="empty-state">当前平台还没有账号。点击添加账号后填写账号信息。</div>
+    </section>`;
+  return `
+    <section class="account-pool-account-panel">
+      <div class="account-pool-section-head">
+        <strong>账号</strong>
+        ${editToolbar}
+      </div>
+      <div class="account-pool-list">
+      ${accounts.map((account) => {
+        const accountId = String(account.id || "");
+        const checked = selectedIds.has(accountId);
+        const active = String(selectedAccount?.id || state.accountPoolAccountId || "") === accountId;
+        const persona = state.personas.find((item) => String(item.id || "") === String(account.persona_id || ""));
+        const loginBusy = isActionLocked("social", account.id, "open_login", account.persona_id || "standalone")
+          || isActionLocked("social", account.id, "open_login")
+          || activeSocialTaskFor({ accountId: account.id, taskType: "open_login" });
+        return `
+          <article class="account-card account-pool-card ${active ? "is-active" : ""} ${checked ? "is-checked" : ""}" data-account-pool-account="${esc(account.id)}" role="button" tabindex="0" aria-pressed="${active ? "true" : "false"}">
+            <label class="account-pool-card-check" aria-label="多选账号">
+              <input type="checkbox" data-account-pool-check="${esc(account.id)}" ${checked ? "checked" : ""} />
+              <span aria-hidden="true"></span>
+            </label>
+            <div class="account-pool-card-main">
+              <span class="account-pool-card-copy">
+                <strong>${esc(account.username || account.id)}</strong>
+                <small>${esc(account.display_name || account.id || "")}</small>
+              </span>
+              <span class="status ${esc(account.status)}">${esc(statusLabel(account.status))}</span>
+            </div>
+            <div class="account-card-meta">
+              <span>${esc(persona ? `已绑定：${persona.name || persona.id}` : "未绑定人设")}</span>
+              <span>${esc(account.profile_dir ? "已配置浏览器环境" : "未配置浏览器环境")}</span>
+            </div>
+            <div class="row-actions">
+              <button type="button" data-social-open-login="${esc(account.id)}" ${loginBusy ? "disabled" : ""}>${loginBusy ? "登录任务执行中" : "打开登录"}</button>
+              <button type="button" data-account-pool-edit="${esc(account.id)}">编辑</button>
+              <button type="button" data-account-pool-unbind="${esc(account.id)}" ${account.persona_id ? "" : "disabled"}>解绑</button>
+              <button type="button" class="danger" data-social-delete-account="${esc(account.id)}">删除账号</button>
+            </div>
+          </article>
+        `;
+      }).join("")}
+      </div>
+    </section>`;
+}
+
+function accountPoolAutomationMode() {
+  const mode = String(state.simpleBranches.account_automation || "reply_comment").trim();
+  return ["reply_comment", "reply_hot", "warmup"].includes(mode) ? mode : "reply_comment";
+}
+
+function setAccountPoolAutomationContext(account) {
+  if (!account) return;
+  state.preferredAccountId = String(account.id || "");
+  state.personaAutomationPlatform = normalizeAccountPoolPlatform(account.platform || "threads");
+  if (account.persona_id) state.selectedPersonaId = String(account.persona_id || "");
+}
+
+function buildAccountPoolThreadsTaskPayload(kind) {
+  const strategyGroup = kind === "reply_hot"
+    ? "threads_hot_reply"
+    : kind === "warmup"
+      ? "threads_warmup"
+      : "threads_comment_reply";
+  const strategy = personaThreadsStrategy(strategyGroup);
+  const payload = { ...(strategy?.payload || {}) };
+  if (kind === "reply_comment" || kind === "reply_hot") {
+    if (personaThreadsStrategyIsCustom(strategyGroup)) {
+      payload.max_age_days = numberField("accountPoolAutoMaxAgeDays", payload.max_age_days || (kind === "reply_hot" ? 30 : 2));
+      payload.max_posts = numberField("accountPoolAutoMaxPosts", payload.max_posts || 5);
+      payload.max_replies = numberField("accountPoolAutoMaxReplies", payload.max_replies || 3);
+      if (kind === "reply_hot") {
+        payload.min_views = numberField("accountPoolAutoMinViews", payload.min_views || 0);
+        payload.target_urls = splitLines($("accountPoolAutoTargetUrls")?.value || "");
+      }
+      const replyTemplates = splitLines($("accountPoolAutoReplyText")?.value || "");
+      if (replyTemplates.length) payload.reply_templates = replyTemplates;
+    }
+    return payload;
+  }
+  if (personaThreadsStrategyIsCustom(strategyGroup)) {
+    payload.browse_limit = numberField("accountPoolAutoBrowseLimit", payload.browse_limit || payload.scroll_times || 30);
+    payload.scroll_times = payload.browse_limit;
+    payload.like_limit = numberField("accountPoolAutoLikeLimit", payload.like_limit || 0);
+    payload.max_comments = numberField("accountPoolAutoMaxComments", payload.max_comments || 0);
+    payload.comment_chance = Number(payload.max_comments || 0) > 0 ? 100 : 0;
+    const replyTemplates = splitLines($("accountPoolAutoReplyText")?.value || "");
+    if (replyTemplates.length) payload.reply_templates = replyTemplates;
+  }
+  return payload;
+}
+
+function renderAccountPoolAutomationPanel(selectedAccount) {
+  const mode = accountPoolAutomationMode();
+  const steps = [
+    ["reply_comment", "自动回复评论"],
+    ["reply_hot", "自动回复热点"],
+    ["warmup", "养号"],
+  ];
+  const platform = String(selectedAccount?.platform || normalizeAccountPoolPlatform()).trim().toLowerCase();
+  const persona = selectedAccount?.persona_id
+    ? state.personas.find((item) => String(item.id || "") === String(selectedAccount.persona_id || ""))
+    : null;
+  const strategyGroup = mode === "reply_hot"
+    ? "threads_hot_reply"
+    : mode === "warmup"
+      ? "threads_warmup"
+      : "threads_comment_reply";
+  const strategy = personaThreadsStrategy(strategyGroup);
+  const customStrategy = personaThreadsStrategyIsCustom(strategyGroup);
+  const payload = strategy?.payload || {};
+  const taskType = mode === "warmup" ? "threads_warmup" : "threads_auto_reply";
+  const busy = Boolean(selectedAccount?.id) && (isActionLocked("social", selectedAccount.id, taskType) || activeSocialTaskFor({ accountId: selectedAccount.id, taskType }));
+  let body = "";
+  if (!selectedAccount) {
+    body = `<div class="empty-state">请先在左侧选择一个账号。</div>`;
+  } else if (platform !== "threads") {
+    body = `<div class="empty-state">自动回复和养号当前只支持 Threads 账号。请切换到 Threads 平台。</div>`;
+  } else if (!persona) {
+    body = `<div class="empty-state">当前账号还没有绑定人设。请先在右侧人设列表点击绑定。</div>`;
+  } else if (mode === "reply_comment" || mode === "reply_hot") {
+    body = `
+      <div class="automation-operation-card account-pool-automation-card">
+        <strong>${mode === "reply_hot" ? "自动回复热点推文" : "自动回复评论"}</strong>
+        <p>当前账号：${esc(accountDisplayName(selectedAccount))} · 人设：${esc(persona.name || persona.id)}</p>
+        <label>策略
+          <select id="accountPoolAutoStrategySelect" data-account-pool-automation-strategy="${esc(strategyGroup)}">
+            ${personaThreadsStrategyOptionsHtml(strategyGroup)}
+          </select>
+        </label>
+        ${customStrategy ? `
+          <div class="form-grid">
+            <label>查看天数
+              <input id="accountPoolAutoMaxAgeDays" type="number" min="1" max="365" value="${esc(payload.max_age_days || (mode === "reply_hot" ? 30 : 2))}" />
+            </label>
+            <label>扫描篇数
+              <input id="accountPoolAutoMaxPosts" type="number" min="1" max="20" value="${esc(payload.max_posts || 5)}" />
+            </label>
+            <label>回复上限
+              <input id="accountPoolAutoMaxReplies" type="number" min="1" max="10" value="${esc(payload.max_replies || 3)}" />
+            </label>
+            ${mode === "reply_hot" ? `<label>最低浏览
+              <input id="accountPoolAutoMinViews" type="number" min="0" max="999999999" value="${esc(payload.min_views || 0)}" />
+            </label>` : ""}
+          </div>
+          ${mode === "reply_hot" ? `<label>指定目标 URL
+            <textarea id="accountPoolAutoTargetUrls" rows="3" placeholder="可选，多个链接换行填写。"></textarea>
+          </label>` : ""}
+          <label>固定回复内容
+            <textarea id="accountPoolAutoReplyText" rows="3" placeholder="留空则按当前人设自动生成。"></textarea>
+          </label>
+        ` : ""}
+        ${personaThreadsStrategyDetail(strategyGroup)}
+        <div class="row-actions">
+          <button type="button" data-account-pool-run-threads="${esc(mode)}" ${busy ? "disabled" : ""}>${busy ? "自动回复执行中" : "提交自动回复任务"}</button>
+        </div>
+      </div>`;
+  } else {
+    body = `
+      <div class="automation-operation-card account-pool-automation-card">
+        <strong>养号</strong>
+        <p>当前账号：${esc(accountDisplayName(selectedAccount))} · 人设：${esc(persona.name || persona.id)}</p>
+        <label>策略
+          <select id="accountPoolAutoStrategySelect" data-account-pool-automation-strategy="threads_warmup">
+            ${personaThreadsStrategyOptionsHtml("threads_warmup")}
+          </select>
+        </label>
+        ${customStrategy ? `
+          <div class="form-grid">
+            <label>浏览篇数上限
+              <input id="accountPoolAutoBrowseLimit" type="number" min="1" max="300" value="${esc(payload.browse_limit || payload.scroll_times || 30)}" />
+            </label>
+            <label>点赞上限
+              <input id="accountPoolAutoLikeLimit" type="number" min="0" max="100" value="${esc(payload.like_limit || 0)}" />
+            </label>
+            <label>留言上限
+              <input id="accountPoolAutoMaxComments" type="number" min="0" max="50" value="${esc(payload.max_comments || 0)}" />
+            </label>
+          </div>
+          <label>养号留言模板
+            <textarea id="accountPoolAutoReplyText" rows="3" placeholder="可选，多条换行。留空则按人设自动生成。"></textarea>
+          </label>
+        ` : ""}
+        ${personaThreadsStrategyDetail("threads_warmup")}
+        <div class="row-actions">
+          <button type="button" data-account-pool-run-threads="warmup" ${busy ? "disabled" : ""}>${busy ? "养号执行中" : "提交养号任务"}</button>
+        </div>
+      </div>`;
+  }
+  return `
+    <section class="account-pool-automation-panel">
+      <div class="account-pool-section-head">
+        <strong>自动化模式</strong>
+        <span>${selectedAccount ? esc(accountDisplayName(selectedAccount)) : "未选择账号"}</span>
+      </div>
+      <div class="automation-capsule-tabs account-pool-automation-tabs" aria-label="切换自动化模式">
+        ${steps.map(([value, label]) => `<button type="button" class="${mode === value ? "is-active" : ""}" data-account-pool-automation-mode="${esc(value)}">${esc(label)}</button>`).join("")}
+      </div>
+      ${body}
+    </section>`;
+}
+
+function renderAccountPoolAutomationPanel(selectedAccount) {
+  const mode = accountPoolAutomationMode();
+  const steps = [
+    ["reply_comment", "自动回复评论"],
+    ["reply_hot", "自动回复热点"],
+    ["warmup", "养号"],
+  ];
+  const platform = String(selectedAccount?.platform || normalizeAccountPoolPlatform()).trim().toLowerCase();
+  const persona = selectedAccount?.persona_id
+    ? state.personas.find((item) => String(item.id || "") === String(selectedAccount.persona_id || ""))
+    : null;
+  const strategyGroup = mode === "reply_hot"
+    ? "threads_hot_reply"
+    : mode === "warmup"
+      ? "threads_warmup"
+      : "threads_comment_reply";
+  const payload = personaThreadsStrategy(strategyGroup)?.payload || {};
+  const taskType = mode === "warmup" ? "threads_warmup" : "threads_auto_reply";
+  const busy = Boolean(selectedAccount?.id) && (isActionLocked("social", selectedAccount.id, taskType) || activeSocialTaskFor({ accountId: selectedAccount.id, taskType }));
+  const contextMeta = selectedAccount && persona ? `
+    <div class="account-pool-automation-meta">
+      <span>账号：${esc(accountDisplayName(selectedAccount))}</span>
+      <span>人设：${esc(persona.name || persona.id)}</span>
+    </div>` : "";
+  let body = "";
+  if (!selectedAccount) {
+    body = `<div class="empty-state">请先在左侧选择一个账号。</div>`;
+  } else if (platform !== "threads") {
+    body = `<div class="empty-state">自动回复和养号当前只支持 Threads 账号，请切换到 Threads 平台。</div>`;
+  } else if (!persona) {
+    body = `<div class="empty-state">当前账号还没有绑定人设，请先在右侧人设列表点击绑定。</div>`;
+  } else if (mode === "reply_comment" || mode === "reply_hot") {
+    body = `
+      <div class="automation-operation-card account-pool-automation-card">
+        <strong>${mode === "reply_hot" ? "自动回复热点" : "自动回复评论"}</strong>
+        ${contextMeta}
+        <label class="account-pool-param-field account-pool-param-field--wide">策略
+          <select id="accountPoolAutoStrategySelect" data-account-pool-automation-strategy="${esc(strategyGroup)}">
+            ${personaThreadsStrategyOptionsHtml(strategyGroup)}
+          </select>
+        </label>
+        <div class="account-pool-param-grid">
+          <label class="account-pool-param-field">查看天数
+            <input id="accountPoolAutoMaxAgeDays" type="number" min="1" max="365" value="${esc(payload.max_age_days || (mode === "reply_hot" ? 30 : 2))}" />
+          </label>
+          <label class="account-pool-param-field">扫描篇数
+            <input id="accountPoolAutoMaxPosts" type="number" min="1" max="20" value="${esc(payload.max_posts || 5)}" />
+          </label>
+          <label class="account-pool-param-field">回复上限
+            <input id="accountPoolAutoMaxReplies" type="number" min="1" max="10" value="${esc(payload.max_replies || 3)}" />
+          </label>
+          ${mode === "reply_hot" ? `<label class="account-pool-param-field">最低浏览
+            <input id="accountPoolAutoMinViews" type="number" min="0" max="999999999" value="${esc(payload.min_views || 0)}" />
+          </label>` : ""}
+        </div>
+        ${mode === "reply_hot" ? `<label class="account-pool-param-field account-pool-param-field--wide">指定目标 URL
+          <textarea id="accountPoolAutoTargetUrls" rows="3" placeholder="可选，多个链接换行填写。"></textarea>
+        </label>` : ""}
+        <label class="account-pool-param-field account-pool-param-field--wide">固定回复内容
+          <textarea id="accountPoolAutoReplyText" rows="3" placeholder="留空则按当前人设自动生成。"></textarea>
+        </label>
+        <div class="row-actions">
+          <button type="button" data-account-pool-run-threads="${esc(mode)}" ${busy ? "disabled" : ""}>${busy ? "任务执行中" : "提交自动化任务"}</button>
+        </div>
+      </div>`;
+  } else {
+    body = `
+      <div class="automation-operation-card account-pool-automation-card">
+        <strong>养号</strong>
+        ${contextMeta}
+        <label class="account-pool-param-field account-pool-param-field--wide">策略
+          <select id="accountPoolAutoStrategySelect" data-account-pool-automation-strategy="threads_warmup">
+            ${personaThreadsStrategyOptionsHtml("threads_warmup")}
+          </select>
+        </label>
+        <div class="account-pool-param-grid">
+          <label class="account-pool-param-field">浏览篇数上限
+            <input id="accountPoolAutoBrowseLimit" type="number" min="1" max="300" value="${esc(payload.browse_limit || payload.scroll_times || 30)}" />
+          </label>
+          <label class="account-pool-param-field">点赞上限
+            <input id="accountPoolAutoLikeLimit" type="number" min="0" max="100" value="${esc(payload.like_limit || 0)}" />
+          </label>
+          <label class="account-pool-param-field">留言上限
+            <input id="accountPoolAutoMaxComments" type="number" min="0" max="50" value="${esc(payload.max_comments || 0)}" />
+          </label>
+        </div>
+        <label class="account-pool-param-field account-pool-param-field--wide">养号留言模板
+          <textarea id="accountPoolAutoReplyText" rows="3" placeholder="可选，多条换行。留空则按人设自动生成。"></textarea>
+        </label>
+        <div class="row-actions">
+          <button type="button" data-account-pool-run-threads="warmup" ${busy ? "disabled" : ""}>${busy ? "养号执行中" : "提交养号任务"}</button>
+        </div>
+      </div>`;
+  }
+  return `
+    <section class="account-pool-automation-panel">
+      <div class="account-pool-section-head">
+        <strong>自动化模式</strong>
+        <span>${selectedAccount ? esc(accountDisplayName(selectedAccount)) : "未选择账号"}</span>
+      </div>
+      <div class="automation-capsule-tabs account-pool-automation-tabs" aria-label="切换自动化模式">
+        ${steps.map(([value, label]) => `<button type="button" class="${mode === value ? "is-active" : ""}" data-account-pool-automation-mode="${esc(value)}">${esc(label)}</button>`).join("")}
+      </div>
+      ${body}
+    </section>`;
+}
+
+function accountPoolStrategyParamSummary(group) {
+  const payload = personaThreadsStrategy(group)?.payload || {};
+  const rows = [];
+  if (group === "threads_comment_reply" || group === "threads_hot_reply") {
+    rows.push(["查看天数", payload.max_age_days || (group === "threads_hot_reply" ? 30 : 2)]);
+    rows.push(["扫描篇数", payload.max_posts || 5]);
+    rows.push(["回复上限", payload.max_replies || 3]);
+    if (group === "threads_hot_reply") rows.push(["最低浏览", payload.min_views || 0]);
+  } else {
+    rows.push(["浏览篇数上限", payload.browse_limit || payload.scroll_times || 30]);
+    rows.push(["点赞上限", payload.like_limit || 0]);
+    rows.push(["留言上限", payload.max_comments || 0]);
+  }
+  return `<div class="account-pool-strategy-summary">${rows.map(([label, value]) => `
+    <span><strong>${esc(label)}</strong><em>${esc(value)}</em></span>
+  `).join("")}</div>`;
+}
+
+function renderAccountPoolAutomationPanel(selectedAccount) {
+  const mode = accountPoolAutomationMode();
+  const steps = [
+    ["reply_comment", "自动回复评论"],
+    ["reply_hot", "自动回复热点"],
+    ["warmup", "养号"],
+  ];
+  const platform = String(selectedAccount?.platform || normalizeAccountPoolPlatform()).trim().toLowerCase();
+  const persona = selectedAccount?.persona_id
+    ? state.personas.find((item) => String(item.id || "") === String(selectedAccount.persona_id || ""))
+    : null;
+  const strategyGroup = mode === "reply_hot"
+    ? "threads_hot_reply"
+    : mode === "warmup"
+      ? "threads_warmup"
+      : "threads_comment_reply";
+  const payload = personaThreadsStrategy(strategyGroup)?.payload || {};
+  const customStrategy = personaThreadsStrategyIsCustom(strategyGroup);
+  const taskType = mode === "warmup" ? "threads_warmup" : "threads_auto_reply";
+  const busy = Boolean(selectedAccount?.id) && (isActionLocked("social", selectedAccount.id, taskType) || activeSocialTaskFor({ accountId: selectedAccount.id, taskType }));
+  const contextMeta = selectedAccount && persona ? `
+    <div class="account-pool-automation-meta">
+      <span>账号：${esc(accountDisplayName(selectedAccount))}</span>
+      <span>人设：${esc(persona.name || persona.id)}</span>
+    </div>` : "";
+  let body = "";
+  if (!selectedAccount) {
+    body = `<div class="empty-state">请先在左侧选择一个账号。</div>`;
+  } else if (platform !== "threads") {
+    body = `<div class="empty-state">自动回复和养号当前只支持 Threads 账号，请切换到 Threads 平台。</div>`;
+  } else if (!persona) {
+    body = `<div class="empty-state">当前账号还没有绑定人设，请先在右侧人设列表点击绑定。</div>`;
+  } else if (mode === "reply_comment" || mode === "reply_hot") {
+    body = `
+      <div class="automation-operation-card account-pool-automation-card">
+        <strong>${mode === "reply_hot" ? "自动回复热点" : "自动回复评论"}</strong>
+        ${contextMeta}
+        <label class="account-pool-param-field account-pool-param-field--wide">策略
+          <select id="accountPoolAutoStrategySelect" data-account-pool-automation-strategy="${esc(strategyGroup)}">
+            ${personaThreadsStrategyOptionsHtml(strategyGroup)}
+          </select>
+        </label>
+        ${customStrategy ? `
+          <div class="account-pool-param-grid">
+            <label class="account-pool-param-field">查看天数
+              <input id="accountPoolAutoMaxAgeDays" type="number" min="1" max="365" value="${esc(payload.max_age_days || (mode === "reply_hot" ? 30 : 2))}" />
+            </label>
+            <label class="account-pool-param-field">扫描篇数
+              <input id="accountPoolAutoMaxPosts" type="number" min="1" max="20" value="${esc(payload.max_posts || 5)}" />
+            </label>
+            <label class="account-pool-param-field">回复上限
+              <input id="accountPoolAutoMaxReplies" type="number" min="1" max="10" value="${esc(payload.max_replies || 3)}" />
+            </label>
+            ${mode === "reply_hot" ? `<label class="account-pool-param-field">最低浏览
+              <input id="accountPoolAutoMinViews" type="number" min="0" max="999999999" value="${esc(payload.min_views || 0)}" />
+            </label>` : ""}
+          </div>
+          ${mode === "reply_hot" ? `<label class="account-pool-param-field account-pool-param-field--wide">指定目标 URL
+            <textarea id="accountPoolAutoTargetUrls" rows="3" placeholder="可选，多个链接换行填写。"></textarea>
+          </label>` : ""}
+          <label class="account-pool-param-field account-pool-param-field--wide">固定回复内容
+            <textarea id="accountPoolAutoReplyText" rows="3" placeholder="留空则按当前人设自动生成。"></textarea>
+          </label>
+        ` : accountPoolStrategyParamSummary(strategyGroup)}
+        <div class="row-actions">
+          <button type="button" data-account-pool-run-threads="${esc(mode)}" ${busy ? "disabled" : ""}>${busy ? "任务执行中" : "提交自动化任务"}</button>
+        </div>
+      </div>`;
+  } else {
+    body = `
+      <div class="automation-operation-card account-pool-automation-card">
+        <strong>养号</strong>
+        ${contextMeta}
+        <label class="account-pool-param-field account-pool-param-field--wide">策略
+          <select id="accountPoolAutoStrategySelect" data-account-pool-automation-strategy="threads_warmup">
+            ${personaThreadsStrategyOptionsHtml("threads_warmup")}
+          </select>
+        </label>
+        ${customStrategy ? `
+          <div class="account-pool-param-grid">
+            <label class="account-pool-param-field">浏览篇数上限
+              <input id="accountPoolAutoBrowseLimit" type="number" min="1" max="300" value="${esc(payload.browse_limit || payload.scroll_times || 30)}" />
+            </label>
+            <label class="account-pool-param-field">点赞上限
+              <input id="accountPoolAutoLikeLimit" type="number" min="0" max="100" value="${esc(payload.like_limit || 0)}" />
+            </label>
+            <label class="account-pool-param-field">留言上限
+              <input id="accountPoolAutoMaxComments" type="number" min="0" max="50" value="${esc(payload.max_comments || 0)}" />
+            </label>
+          </div>
+          <label class="account-pool-param-field account-pool-param-field--wide">养号留言模板
+            <textarea id="accountPoolAutoReplyText" rows="3" placeholder="可选，多条换行。留空则按人设自动生成。"></textarea>
+          </label>
+        ` : accountPoolStrategyParamSummary("threads_warmup")}
+        <div class="row-actions">
+          <button type="button" data-account-pool-run-threads="warmup" ${busy ? "disabled" : ""}>${busy ? "养号执行中" : "提交养号任务"}</button>
+        </div>
+      </div>`;
+  }
+  return `
+    <section class="account-pool-automation-panel">
+      <div class="account-pool-section-head">
+        <strong>自动化模式</strong>
+        <span>${selectedAccount ? esc(accountDisplayName(selectedAccount)) : "未选择账号"}</span>
+      </div>
+      <div class="automation-capsule-tabs account-pool-automation-tabs" aria-label="切换自动化模式">
+        ${steps.map(([value, label]) => `<button type="button" class="${mode === value ? "is-active" : ""}" data-account-pool-automation-mode="${esc(value)}">${esc(label)}</button>`).join("")}
+      </div>
+      ${body}
     </section>`;
 }
 
@@ -11824,40 +12781,86 @@ function resetAccountPoolCreateForm() {
 }
 
 function renderAccountPoolCreatePanel() {
-  if (!state.accountPoolCreateOpen) return `<section class="account-pool-create-panel account-pool-create-panel--empty"></section>`;
+  return "";
+}
+
+function accountPoolCreateFormHtml() {
   const platform = normalizeAccountPoolPlatform();
   const platformLabel = accountPoolPlatforms.find(([value]) => value === platform)?.[1] || platform;
   return `
-    <section class="account-pool-create-panel">
-      <div class="account-pool-create-head">
-        <div>
-          <strong>添加账号</strong>
-          <span>当前平台：${esc(platformLabel)}</span>
-        </div>
-        <button type="button" data-account-pool-create-cancel>取消</button>
+    <div class="account-pool-create-modal-body">
+      <p>当前平台：${esc(platformLabel)}</p>
+      <div class="account-create-form account-create-form--modal">
+          <label>
+            <span>账号用户名</span>
+            <input id="accountPoolUsername" value="${esc(accountPoolDraftValue("username"))}" placeholder="例如：liliacvuiy575" autocomplete="off" />
+          </label>
+          <label>
+            <span>登录账号（可选）</span>
+            <input id="accountPoolLoginUsername" value="${esc(accountPoolDraftValue("login_username"))}" placeholder="默认同账号用户名" autocomplete="off" />
+          </label>
+          <label>
+            <span>登录密码（可选）</span>
+            <input id="accountPoolLoginPassword" type="password" value="${esc(accountPoolDraftValue("login_password"))}" placeholder="用于自动登录，可稍后再填" autocomplete="new-password" />
+          </label>
+          <label>
+            <span>显示名称（可选）</span>
+            <input id="accountPoolDisplayName" value="${esc(accountPoolDraftValue("display_name"))}" placeholder="用于区分账号，可留空" autocomplete="off" />
+          </label>
       </div>
-      <div class="account-create-form">
-        <label>
-          <span>账号用户名</span>
-          <input id="accountPoolUsername" value="${esc(accountPoolDraftValue("username"))}" placeholder="例如：liliacvuiy575" autocomplete="off" />
-        </label>
-        <label>
-          <span>登录账号（可选）</span>
-          <input id="accountPoolLoginUsername" value="${esc(accountPoolDraftValue("login_username"))}" placeholder="默认同账号用户名" autocomplete="off" />
-        </label>
-        <label>
-          <span>登录密码（可选）</span>
-          <input id="accountPoolLoginPassword" type="password" value="${esc(accountPoolDraftValue("login_password"))}" placeholder="用于自动登录，可稍后再填" autocomplete="new-password" />
-        </label>
-        <label>
-          <span>显示名称（可选）</span>
-          <input id="accountPoolDisplayName" value="${esc(accountPoolDraftValue("display_name"))}" placeholder="用于区分账号，可留空" autocomplete="off" />
-        </label>
+    </div>`;
+}
+
+function openAccountPoolCreateModal() {
+  resetAccountPoolCreateForm();
+  closeConsoleModal(null);
+  const modal = document.createElement("div");
+  modal.id = "consoleModal";
+  modal.className = "console-modal";
+  modal.innerHTML = `
+    <div class="console-modal-backdrop" data-account-pool-create-modal-cancel></div>
+    <section class="console-modal-dialog account-pool-create-modal" role="dialog" aria-modal="true" aria-labelledby="accountPoolCreateModalTitle">
+      <div class="console-modal-head">
+        <strong id="accountPoolCreateModalTitle">添加账号</strong>
       </div>
-      <div class="account-pool-create-actions">
-        <button type="button" data-account-pool-create-save>保存账号</button>
+      <div class="console-modal-content">
+        ${accountPoolCreateFormHtml()}
+      </div>
+      <div class="console-modal-actions">
+        <button type="button" data-account-pool-create-modal-cancel>取消</button>
+        <button type="button" class="primary" data-account-pool-create-modal-save>保存账号</button>
       </div>
     </section>`;
+  document.body.appendChild(modal);
+  $("accountPoolUsername")?.focus();
+
+  const close = () => {
+    modal.remove();
+    resetAccountPoolCreateForm();
+  };
+
+  modal.addEventListener("click", (event) => {
+    if (event.target.closest("[data-account-pool-create-modal-cancel]")) {
+      close();
+      return;
+    }
+    const saveButton = event.target.closest("[data-account-pool-create-modal-save]");
+    if (saveButton) {
+      saveButton.disabled = true;
+      saveAccountPoolCreateForm()
+        .then((saved) => {
+          if (saved !== false) close();
+          else saveButton.disabled = false;
+        })
+        .catch((error) => {
+          saveButton.disabled = false;
+          showMsg("socialMsg", error.detail || error.message || "添加账号失败", false);
+        });
+    }
+  });
+  modal.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") close();
+  });
 }
 
 async function saveAccountPoolCreateForm() {
@@ -11871,7 +12874,7 @@ async function saveAccountPoolCreateForm() {
   };
   if (!payload.username) {
     showMsg("socialMsg", "请填写账号用户名。", false);
-    return;
+    return false;
   }
   const result = await api("/api/persona_dashboard/automation/accounts", {
     method: "POST",
@@ -11896,6 +12899,210 @@ async function saveAccountPoolCreateForm() {
   resetAccountPoolCreateForm();
   showMsg("socialMsg", "账号已添加到账号池。", true);
   await loadSocial();
+  return true;
+}
+
+function accountPoolSelectedAccountsForAction() {
+  const selectedIds = new Set(accountPoolSelectedIds());
+  return accountPoolAccounts().filter((account) => selectedIds.has(String(account.id || "")));
+}
+
+async function copyAccountPoolSelectedAccounts() {
+  const rows = accountPoolSelectedAccountsForAction();
+  if (!rows.length) {
+    showMsg("socialMsg", "请先勾选账号。", false);
+    return;
+  }
+  const text = rows.map((account) => [
+    `平台：${account.platform || ""}`,
+    `账号：${account.username || ""}`,
+    `显示名：${account.display_name || ""}`,
+    `状态：${statusLabel(account.status)}`,
+    `ID：${account.id || ""}`,
+  ].join("\n")).join("\n\n");
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (_) {
+    const input = document.createElement("textarea");
+    input.value = text;
+    input.style.position = "fixed";
+    input.style.left = "-9999px";
+    document.body.appendChild(input);
+    input.select();
+    document.execCommand("copy");
+    input.remove();
+  }
+  showMsg("socialMsg", `已复制 ${rows.length} 个账号信息。`, true);
+}
+
+async function copyAccountPoolSelectedAccounts() {
+  const rows = accountPoolSelectedAccountsForAction();
+  if (!rows.length) {
+    showMsg("socialMsg", "请先勾选账号。", false);
+    return;
+  }
+  const existing = new Set(state.socialAccounts.map((account) => `${String(account.platform || "").toLowerCase()}:${String(account.persona_id || "")}:${String(account.username || "").toLowerCase()}`));
+  const copiedIds = [];
+  for (const account of rows) {
+    const platform = normalizeAccountPoolPlatform(account.platform || state.accountPoolPlatform || "threads");
+    const personaId = String(account.persona_id || "");
+    const base = String(account.username || "account").trim().replace(/^@+/, "") || "account";
+    let username = `${base}_copy`;
+    let index = 2;
+    while (existing.has(`${platform}:${personaId}:${username.toLowerCase()}`)) {
+      username = `${base}_copy${index}`;
+      index += 1;
+    }
+    const result = await api("/api/persona_dashboard/automation/accounts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        persona_id: personaId,
+        platform,
+        username,
+        display_name: account.display_name ? `${account.display_name} 副本` : "",
+        proxy_id: account.proxy_id || "",
+        status: "pending_login",
+      }),
+    });
+    const newId = String(result.account?.id || "");
+    if (newId) copiedIds.push(newId);
+    existing.add(`${platform}:${personaId}:${username.toLowerCase()}`);
+  }
+  state.accountPoolSelectedAccountIds = copiedIds;
+  state.accountPoolAccountId = copiedIds[0] || "";
+  showMsg("socialMsg", `已复制 ${copiedIds.length} 个账号。`, copiedIds.length > 0);
+  await loadSocial();
+  renderSocialAccounts();
+}
+
+function selectAllAccountPoolAccounts() {
+  const ids = accountPoolAccounts().map((account) => String(account.id || "")).filter(Boolean);
+  state.accountPoolSelectedAccountIds = ids;
+  if (!state.accountPoolAccountId && ids.length) state.accountPoolAccountId = ids[0];
+  const account = selectedAccountPoolAccount();
+  setAccountPoolAutomationContext(account);
+  renderSocialAccounts();
+}
+
+async function deleteSelectedAccountPoolAccounts() {
+  const rows = accountPoolSelectedAccountsForAction();
+  if (!rows.length) {
+    showMsg("socialMsg", "请先勾选要删除的账号。", false);
+    return;
+  }
+  const ok = await confirmDangerAction(`确定删除已勾选的 ${rows.length} 个执行账号吗？相关自动化记录也会一起删除。`, {
+    title: "批量删除账号",
+    confirmText: "删除账号",
+  });
+  if (!ok) return;
+  let deleted = 0;
+  for (const account of rows) {
+    await deleteSocialAccountRecord(account.id, "socialMsg");
+    deleted += 1;
+  }
+  state.accountPoolSelectedAccountIds = [];
+  state.accountPoolAccountId = "";
+  showMsg("socialMsg", `已删除 ${deleted} 个账号。`, true);
+  await loadSocial();
+  renderSocialAccounts();
+}
+
+function openAccountPoolEditModal(accountId = "") {
+  const account = accountPoolAccounts().find((item) => String(item.id || "") === String(accountId || ""));
+  if (!account) {
+    showMsg("socialMsg", "账号不存在，请刷新后重试。", false);
+    return;
+  }
+  closeConsoleModal(null);
+  const modal = document.createElement("div");
+  modal.id = "consoleModal";
+  modal.className = "console-modal";
+  modal.innerHTML = `
+    <div class="console-modal-backdrop" data-account-pool-edit-cancel></div>
+    <section class="console-modal-dialog account-pool-create-modal" role="dialog" aria-modal="true" aria-labelledby="accountPoolEditModalTitle">
+      <div class="console-modal-head">
+        <strong id="accountPoolEditModalTitle">编辑账号</strong>
+      </div>
+      <div class="console-modal-content">
+        <div class="account-pool-create-modal-body">
+          <p>平台：${esc(account.platform || normalizeAccountPoolPlatform())}</p>
+          <div class="account-create-form account-create-form--modal">
+            <label>
+              <span>账号用户名</span>
+              <input id="accountPoolEditUsername" value="${esc(account.username || "")}" placeholder="例如：liliacvuiy575" autocomplete="off" />
+            </label>
+            <label>
+              <span>登录账号（可选）</span>
+              <input id="accountPoolEditLoginUsername" value="${esc(account.login_username || account.username || "")}" placeholder="默认同账号用户名" autocomplete="off" />
+            </label>
+            <label>
+              <span>登录密码（可选）</span>
+              <input id="accountPoolEditLoginPassword" type="password" value="" placeholder="${account.login_password_configured ? "留空则不修改" : "可选"}" autocomplete="new-password" />
+            </label>
+            <label>
+              <span>显示名称（可选）</span>
+              <input id="accountPoolEditDisplayName" value="${esc(account.display_name || "")}" placeholder="用于区分账号，可留空" autocomplete="off" />
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="console-modal-actions">
+        <button type="button" data-account-pool-edit-cancel>取消</button>
+        <button type="button" class="primary" data-account-pool-edit-save="${esc(account.id)}">保存修改</button>
+      </div>
+    </section>`;
+  document.body.appendChild(modal);
+  $("accountPoolEditUsername")?.focus();
+  const close = () => modal.remove();
+  modal.addEventListener("click", (event) => {
+    if (event.target.closest("[data-account-pool-edit-cancel]")) {
+      close();
+      return;
+    }
+    const saveButton = event.target.closest("[data-account-pool-edit-save]");
+    if (!saveButton) return;
+    saveButton.disabled = true;
+    saveAccountPoolEditForm(saveButton.dataset.accountPoolEditSave || "")
+      .then((saved) => {
+        if (saved !== false) close();
+        else saveButton.disabled = false;
+      })
+      .catch((error) => {
+        saveButton.disabled = false;
+        showMsg("socialMsg", error.detail || error.message || "保存账号失败", false);
+      });
+  });
+  modal.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") close();
+  });
+}
+
+async function saveAccountPoolEditForm(accountId = "") {
+  const cleanId = String(accountId || "").trim();
+  if (!cleanId) return false;
+  const username = String($("accountPoolEditUsername")?.value || "").trim().replace(/^@+/, "");
+  if (!username) {
+    showMsg("socialMsg", "请填写账号用户名。", false);
+    return false;
+  }
+  const payload = {
+    username,
+    display_name: String($("accountPoolEditDisplayName")?.value || "").trim(),
+    login_username: String($("accountPoolEditLoginUsername")?.value || "").trim(),
+  };
+  const loginPassword = String($("accountPoolEditLoginPassword")?.value || "");
+  if (loginPassword) payload.login_password = loginPassword;
+  const result = await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(cleanId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  state.accountPoolAccountId = String(result.account?.id || cleanId);
+  showMsg("socialMsg", "账号信息已保存。", true);
+  await loadSocial();
+  renderSocialAccounts();
+  return true;
 }
 
 function renderAccountPoolPersonaSidebar(selectedAccount) {
@@ -11939,6 +13146,7 @@ function renderAccountPool() {
         <div class="account-pool-body">
           ${renderAccountPoolPlatformTabs()}
           ${renderAccountPoolCards(accounts, selectedAccount)}
+          ${renderAccountPoolAutomationPanel(selectedAccount)}
           ${renderAccountPoolCreatePanel()}
         </div>
       </section>
@@ -11979,6 +13187,63 @@ async function bindAccountPoolAccountToPersona(personaId = "") {
   }
   showMsg("socialMsg", skipped ? `已绑定 ${bound} 个账号，跳过 ${skipped} 个重复账号。` : `已绑定 ${bound} 个账号。`, bound > 0);
   await loadSocial();
+}
+
+async function runAccountPoolThreadsTask(kind) {
+  const mode = ["reply_comment", "reply_hot", "warmup"].includes(String(kind || "")) ? String(kind || "") : accountPoolAutomationMode();
+  const account = selectedAccountPoolAccount();
+  const persona = account?.persona_id
+    ? state.personas.find((item) => String(item.id || "") === String(account.persona_id || ""))
+    : null;
+  if (!account) {
+    showMsg("socialMsg", "请先选择一个 Threads 执行账号。", false);
+    return;
+  }
+  if (String(account.platform || "").trim().toLowerCase() !== "threads") {
+    showMsg("socialMsg", "自动回复和养号当前只支持 Threads 账号。", false);
+    return;
+  }
+  if (!persona) {
+    showMsg("socialMsg", "请先把当前账号绑定到一个人设。", false);
+    return;
+  }
+  setAccountPoolAutomationContext(account);
+  const taskType = mode === "warmup" ? "threads_warmup" : "threads_auto_reply";
+  const lockParts = ["social", account.id, taskType];
+  if (isActionLocked(...lockParts) || activeSocialTaskFor({ accountId: account.id, taskType })) {
+    showMsg("socialMsg", `该账号已有${mode === "warmup" ? "养号" : "自动回复"}任务在队列或执行中，请等待完成。`, false);
+    return;
+  }
+  const payload = buildAccountPoolThreadsTaskPayload(mode);
+  setActionLocked(lockParts, true);
+  renderSocialAccounts();
+  try {
+    const result = await api("/api/persona_dashboard/automation/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        persona_id: persona.id,
+        account_id: account.id,
+        platform: "threads",
+        task_type: taskType,
+        priority: 50,
+        max_retries: 2,
+        payload,
+      }),
+    });
+    showMsg("socialMsg", `${mode === "warmup" ? "养号" : "自动回复"}任务已提交：${result.task?.id || ""}`, true, {
+      key: result.task?.id ? `social-task:${result.task.id}` : undefined,
+      kind: "queued",
+      taskId: result.task?.id || "",
+      taskPanel: "persona",
+      personaId: persona.id,
+      persistent: Boolean(result.task?.id),
+    });
+    openLiveBrowserTaskView(String(result.task?.id || ""));
+  } finally {
+    setActionLocked(lockParts, false);
+    renderSocialAccounts();
+  }
 }
 
 async function unbindAccountPoolAccount(accountId = "") {
@@ -12194,9 +13459,10 @@ function renderSocialTasks() {
       <div><strong>${esc(statusLabel(task.task_type))}</strong><span>${esc(task.platform)} · ${esc(task.account_username || task.account_id || "")}</span></div>
       <span class="status ${esc(task.status)}">${esc(statusLabel(task.status))}</span>
       <div class="row-actions">
+        <button type="button" data-social-preview="${esc(task.id)}">预览</button>
         <button type="button" data-social-log="${esc(task.id)}">日志</button>
         ${task.status === "failed" ? `<button type="button" data-social-retry="${esc(task.id)}">重试</button>` : ""}
-        ${["queued", "running", "need_manual"].includes(String(task.status)) ? `<button type="button" data-social-cancel="${esc(task.id)}">取消</button>` : ""}
+        ${activeSocialAutomationTask(task) ? `<button type="button" data-social-cancel="${esc(task.id)}">取消</button>` : ""}
       </div>
     </article>
   `).join("") : `<div class="empty-state">暂无浏览器自动化任务。</div>`;
@@ -12360,7 +13626,7 @@ function renderMatrixPublishPanel() {
         <td>${esc(persona?.name || personaId)}</td>
         <td>${account ? esc(account.username || account.id) : "<span class=\"muted\">无可用账号</span>"}</td>
         <td>${posts.length} 条</td>
-        <td>${previewPosts.length ? previewPosts.map((post) => esc(post.title || post.content || post.id).slice(0, 34)).join("<br>") : "<span class=\"muted\">暂无可用内容</span>"}</td>
+        <td>${previewPosts.length ? previewPosts.map((post, index) => esc(personaDraftDisplayTitleForPost(post, posts, index) || post.content || post.id).slice(0, 34)).join("<br>") : "<span class=\"muted\">暂无可用内容</span>"}</td>
       </tr>
     `;
   }).join("");
@@ -12532,6 +13798,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
         taskId: result.task?.id || "",
         taskPanel: cleanPersonaId ? "persona" : "regular",
         personaId: cleanPersonaId,
+        openBrowser: true,
         persistent: Boolean(result.task?.id),
       });
       refreshLiveBrowserSessionsSoon(String(result.task?.id || ""));
@@ -12588,6 +13855,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
       taskId: result.task?.id || "",
       taskPanel: cleanPersonaId ? "persona" : "regular",
       personaId: cleanPersonaId,
+      openBrowser: true,
       persistent: Boolean(result.task?.id),
     });
     refreshLiveBrowserSessionsSoon(String(result.task?.id || ""));
@@ -12636,11 +13904,25 @@ function bindEvents() {
     setView(nextView);
   }));
   $("moduleMenu").addEventListener("click", async (event) => {
+    const viewButton = event.target.closest("[data-workspace-view]");
+    if (viewButton) {
+      const nextView = viewButton.dataset.workspaceView || "workspace";
+      if (nextView !== state.view && isPersonaWorkspaceModule() && !(await canLeaveCurrentPersonaDraftEdit("leave"))) return;
+      if (nextView !== state.view && !(await confirmLeaveTransientWorkspaceState())) return;
+      setMenuClickHighlight(viewButton, viewButton.closest(".module-accordion-item") || viewButton);
+      state.workspaceMenuOpen = true;
+      setView(nextView);
+      return;
+    }
     const button = event.target.closest("[data-module]");
     if (button) {
-      if (button.dataset.module !== state.activeModule && isPersonaWorkspaceModule() && !(await canLeaveCurrentPersonaDraftEdit("leave"))) return;
-      if (button.dataset.module !== state.activeModule && !(await confirmLeaveTransientWorkspaceState())) return;
+      if (button.dataset.module !== state.activeModule && state.view === "workspace" && isPersonaWorkspaceModule() && !(await canLeaveCurrentPersonaDraftEdit("leave"))) return;
+      if (button.dataset.module !== state.activeModule && state.view === "workspace" && !(await confirmLeaveTransientWorkspaceState())) return;
       setMenuClickHighlight(button, button.closest(".module-accordion-item") || button);
+      if (state.view !== "workspace") {
+        state.workspaceMenuOpen = true;
+        setView("workspace");
+      }
       setModule(button.dataset.module);
     }
   });
@@ -13598,11 +14880,14 @@ function bindEvents() {
     if (event.target.closest("[data-persona-auto-login]")) submitPersonaLoginTask(true).catch((error) => showMsg("commandMsg", error.detail || error.message || "自动登录失败", false));
     if (event.target.closest("[data-open-unified-automation]")) {
       if (!(await confirmLeaveTransientWorkspaceState())) return;
-      state.activeModule = "automation";
-      state.simpleBranches.automation = "binding";
-      state.preferredAccountId = accountForPersona(selectedPersona())?.id || "";
-      renderWorkspace();
-      renderConfirmSummary();
+      const account = accountForPersona(selectedPersona());
+      if (account?.platform) state.accountPoolPlatform = normalizeAccountPoolPlatform(account.platform);
+      if (account?.id) {
+        state.accountPoolAccountId = String(account.id || "");
+        state.accountPoolSelectedAccountIds = [String(account.id || "")];
+        state.preferredAccountId = String(account.id || "");
+      }
+      setView("accounts");
       return;
     }
     const deletePersonaButton = event.target.closest("[data-persona-delete]");
@@ -13718,7 +15003,18 @@ function bindEvents() {
       applyPersonaMemoryFilter(event.target.value || "");
     }
   });
-  $("refreshAll").addEventListener("click", () => Promise.all([loadTasks(), loadPersonas(), loadSocial().catch(() => {}), loadSetupStatus()]).then(renderWorkspace));
+  $("refreshAll").addEventListener("click", () => {
+    const refreshPublishing = state.activeModule === "publishing";
+    renderWorkspace(false);
+    loadTasks().then(() => scheduleWorkspaceRender(false)).catch(() => {});
+    loadPersonas().then(() => scheduleWorkspaceRender(false)).catch(() => {});
+    loadSetupStatus().then(() => scheduleWorkspaceRender(false)).catch(() => {});
+    loadSocial({ render: false }).then(() => {
+      updateAccountStatusViews();
+      scheduleWorkspaceRender(false);
+    }).catch(() => {});
+    if (refreshPublishing) refreshCurrentPublishingPersonaContent({ force: true }).catch(() => {});
+  });
   if ($("refreshTasks")) $("refreshTasks").addEventListener("click", () => loadTasks().then(renderWorkspace));
   if ($("refreshSocialTasks")) $("refreshSocialTasks").addEventListener("click", () => loadSocial().then(renderWorkspace));
   if ($("refreshAccounts")) $("refreshAccounts").addEventListener("click", () => loadSocial().then(renderWorkspace));
@@ -13827,6 +15123,11 @@ function bindEvents() {
       });
       return;
     }
+    const socialPreview = event.target.closest("[data-social-preview]");
+    if (socialPreview) {
+      openLiveBrowserTaskView(socialPreview.dataset.socialPreview || "");
+      return;
+    }
     const socialLog = event.target.closest("[data-social-log]");
     if (socialLog) {
       showSocialLog(socialLog.dataset.socialLog || "").catch((error) => showMsg("taskQueueMsg", error.detail || error.message || "查看日志失败", false));
@@ -13908,6 +15209,36 @@ function bindEvents() {
       renderSocialAccounts();
       return;
     }
+    const accountAutomationMode = event.target.closest("[data-account-pool-automation-mode]");
+    if (accountAutomationMode) {
+      const mode = String(accountAutomationMode.dataset.accountPoolAutomationMode || "reply_comment");
+      state.simpleBranches.account_automation = ["reply_comment", "reply_hot", "warmup"].includes(mode) ? mode : "reply_comment";
+      const account = selectedAccountPoolAccount();
+      setAccountPoolAutomationContext(account);
+      renderSocialAccounts();
+      return;
+    }
+    const accountRunThreads = event.target.closest("[data-account-pool-run-threads]");
+    if (accountRunThreads) {
+      runAccountPoolThreadsTask(accountRunThreads.dataset.accountPoolRunThreads || "")
+        .catch((error) => showMsg("socialMsg", error.detail || error.message || "提交任务失败", false));
+      return;
+    }
+    const accountCopySelected = event.target.closest("[data-account-pool-copy-selected]");
+    if (accountCopySelected) {
+      copyAccountPoolSelectedAccounts().catch((error) => showMsg("socialMsg", error.detail || error.message || "复制账号失败", false));
+      return;
+    }
+    const accountSelectAll = event.target.closest("[data-account-pool-select-all]");
+    if (accountSelectAll) {
+      selectAllAccountPoolAccounts();
+      return;
+    }
+    const accountDeleteSelected = event.target.closest("[data-account-pool-delete-selected]");
+    if (accountDeleteSelected) {
+      deleteSelectedAccountPoolAccounts().catch((error) => showMsg("socialMsg", error.detail || error.message || "删除账号失败", false));
+      return;
+    }
     const platform = event.target.closest("[data-account-pool-platform]");
     if (platform) {
       state.accountPoolPlatform = normalizeAccountPoolPlatform(platform.dataset.accountPoolPlatform || "");
@@ -13919,10 +15250,7 @@ function bindEvents() {
     }
     const accountAdd = event.target.closest("[data-account-pool-add]");
     if (accountAdd) {
-      state.accountPoolCreateOpen = true;
-      state.accountPoolCreateDraft = {};
-      renderSocialAccounts();
-      $("accountPoolUsername")?.focus();
+      openAccountPoolCreateModal();
       return;
     }
     const accountCreateCancel = event.target.closest("[data-account-pool-create-cancel]");
@@ -13936,10 +15264,33 @@ function bindEvents() {
       saveAccountPoolCreateForm().catch((error) => showMsg("socialMsg", error.detail || error.message || "添加账号失败", false));
       return;
     }
-    const accountToggle = event.target.closest("[data-account-pool-toggle]");
-    const accountAction = event.target.closest("[data-social-open-login], [data-account-pool-unbind], [data-social-delete-account]");
-    if (accountToggle && !accountAction) {
-      toggleAccountPoolAccount(accountToggle.dataset.accountPoolToggle || "");
+    const accountCheck = event.target.closest("[data-account-pool-check]");
+    if (accountCheck) {
+      toggleAccountPoolAccount(accountCheck.dataset.accountPoolCheck || "");
+      renderSocialAccounts();
+      return;
+    }
+    const accountEdit = event.target.closest("[data-account-pool-edit]");
+    if (accountEdit) {
+      openAccountPoolEditModal(accountEdit.dataset.accountPoolEdit || "");
+      return;
+    }
+    const accountCard = event.target.closest("[data-account-pool-account]");
+    const accountAction = event.target.closest("[data-social-open-login], [data-account-pool-edit], [data-account-pool-unbind], [data-social-delete-account], [data-account-pool-check]");
+    if (accountCard && !accountAction) {
+      selectAccountPoolAccount(accountCard.dataset.accountPoolAccount || "");
+      renderSocialAccounts();
+      return;
+    }
+    const accountPanelBlank = event.target.closest(".account-pool-account-panel");
+    if (accountPanelBlank && !event.target.closest(".account-pool-card, button, a, input, select, textarea, label")) {
+      clearAccountPoolAccountSelection();
+      renderSocialAccounts();
+      return;
+    }
+    const personaPanelBlank = event.target.closest(".account-pool-persona-shell");
+    if (personaPanelBlank && !event.target.closest("[data-persona-card], [data-persona-folder-card], button, a, input, select, textarea, label")) {
+      clearAccountPoolPersonaSelection();
       renderSocialAccounts();
       return;
     }
@@ -13988,19 +15339,29 @@ function bindEvents() {
   });
   if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("keydown", (event) => {
     if (!["Enter", " "].includes(event.key)) return;
-    const accountToggle = event.target.closest("[data-account-pool-toggle]");
-    if (!accountToggle || !event.target.closest(".account-pool-card")) return;
+    if (event.target.closest("button, a, input, select, textarea")) return;
+    const accountCard = event.target.closest("[data-account-pool-account]");
+    if (!accountCard || !event.target.closest(".account-pool-card")) return;
     event.preventDefault();
-    toggleAccountPoolAccount(accountToggle.dataset.accountPoolToggle || "");
+    selectAccountPoolAccount(accountCard.dataset.accountPoolAccount || "");
     renderSocialAccounts();
   });
   if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("input", (event) => {
     if (event.target.closest(".account-pool-create-panel")) syncAccountPoolCreateDraftFromForm();
   });
+  if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("change", (event) => {
+    const strategySelect = event.target.closest("[data-account-pool-automation-strategy]");
+    if (!strategySelect) return;
+    const strategyGroup = String(strategySelect.dataset.accountPoolAutomationStrategy || "");
+    if (strategyGroup) setPersonaStrategyId(strategyGroup, strategySelect.value || "");
+    renderSocialAccounts();
+  });
   if ($("socialTaskList")) $("socialTaskList").addEventListener("click", (event) => {
+    const preview = event.target.closest("[data-social-preview]");
     const log = event.target.closest("[data-social-log]");
     const retry = event.target.closest("[data-social-retry]");
     const cancel = event.target.closest("[data-social-cancel]");
+    if (preview) openLiveBrowserTaskView(preview.dataset.socialPreview || "");
     if (log) showSocialLog(log.dataset.socialLog);
     if (retry) api(`/api/persona_dashboard/automation/tasks/${encodeURIComponent(retry.dataset.socialRetry)}/retry`, { method: "POST" }).then(loadSocial);
     if (cancel) cancelSocialAutomationTask(cancel.dataset.socialCancel, "socialMsg").catch((error) => showMsg("socialMsg", error.detail || error.message || "停止任务失败", false));
@@ -14018,10 +15379,12 @@ async function init() {
   applyTheme(currentTheme());
   ensurePersonaMediaLightbox();
   bindEvents();
-  renderWorkspace();
   hydratePersonaOverviewFromCache();
+  hydrateSocialAccountsFromCache();
+  renderWorkspace();
   await loadMe();
   await Promise.all([loadPersonas(), loadTasks(), loadSocial().catch(() => {}), loadSetupStatus()]);
+  if (state.activeModule === "publishing") await refreshCurrentPublishingPersonaContent({ force: true }).catch(() => []);
   renderWorkspace();
 }
 
