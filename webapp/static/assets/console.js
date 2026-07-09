@@ -6623,6 +6623,7 @@ async function submitPersonaPublishTask() {
       state.personaPublishResults[String(persona.id)] = `<div class="persona-warning-inline">${esc(error?.detail || error?.message || "任务结果轮询失败")}</div>`;
       updatePersonaPublishResultView(persona.id);
     });
+    if (taskId) openLiveBrowserTaskView(taskId);
     await loadSocial();
   } finally {
     setActionLocked(lockParts, false);
@@ -6699,6 +6700,10 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
       results.push(result);
     }
     showMsg(messageId, `已提交 ${results.length} 条发布任务。`, true);
+    const firstTaskId = results
+      .map((item) => String(item?.task?.id || "").trim())
+      .find(Boolean) || "";
+    if (firstTaskId) openLiveBrowserTaskView(firstTaskId);
     await loadSocial();
     await loadPersonaDraftPosts(persona.id, { force: true }).catch(() => {});
     if (source === "favorites") await loadPersonaFavoritePosts(persona.id, { force: true }).catch(() => {});
@@ -7311,6 +7316,7 @@ async function executeSimpleFlow() {
             taskPanel: "persona",
             personaId: persona?.id || personaId,
           });
+          if (firstTaskId) openLiveBrowserTaskView(firstTaskId);
         }
         return;
       }
@@ -13852,6 +13858,8 @@ async function submitMatrixPublishTask(messageId = "commandMsg") {
       target: matrixToastTarget,
       key: matrixToastKey,
     });
+    const firstTaskId = created.map((task) => String(task?.id || "").trim()).find(Boolean) || "";
+    if (firstTaskId) openLiveBrowserTaskView(firstTaskId);
     await loadSocial();
     return result;
   } finally {
@@ -13999,7 +14007,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
       openBrowser: true,
       persistent: Boolean(result.task?.id),
     });
-    refreshLiveBrowserSessionsSoon(String(result.task?.id || ""));
+    openLiveBrowserTaskView(String(result.task?.id || ""));
     await loadSocial();
     return result;
   } finally {
