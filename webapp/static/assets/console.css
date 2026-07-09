@@ -6297,12 +6297,14 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .task-row .row-actions .task-queue-delete-button,
 .task-persona-queue-row .row-actions .task-queue-delete-button {
+  display: inline-grid;
+  place-items: center;
   width: 34px;
   min-width: 34px;
+  height: 34px;
   min-height: 34px;
   padding: 0;
-  align-items: center;
-  justify-content: center;
+  line-height: 0;
   border-color: #ef4444;
   background: #fff;
   color: #dc2626;
@@ -6319,6 +6321,7 @@ body.persona-touch-dragging .persona-list-card:active {
   display: block;
   width: 19px;
   height: 19px;
+  margin: 0;
   stroke: currentColor;
   stroke-width: 2.25;
   stroke-linecap: round;
