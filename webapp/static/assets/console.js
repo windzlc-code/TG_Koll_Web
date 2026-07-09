@@ -4751,6 +4751,16 @@ function renderTaskQueueBulkControls(kind) {
     </div>`;
 }
 
+function renderTrashIcon() {
+  return `<svg class="ui-trash-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M3 6h18"></path>
+    <path d="M8 6V4h8v2"></path>
+    <path d="M6 6l1 15h10l1-15"></path>
+    <path d="M10 11v6"></path>
+    <path d="M14 11v6"></path>
+  </svg>`;
+}
+
 function renderPersonaQueueRows(rows) {
   return rows.map((task) => `
     <article class="compact-row task-persona-queue-row">
@@ -4769,7 +4779,7 @@ function renderPersonaQueueRows(rows) {
         <button type="button" data-social-log="${esc(task.id)}">日志</button>
         ${task.status === "failed" ? `<button type="button" data-social-retry="${esc(task.id)}">重试</button>` : ""}
         ${activeSocialAutomationTask(task) ? `<button type="button" class="muted" data-social-cancel="${esc(task.id)}">取消</button>` : ""}
-        <button type="button" class="danger task-queue-delete-button" data-social-delete="${esc(task.id)}" title="删除" aria-label="删除"><span class="ui-trash-icon" aria-hidden="true"></span></button>
+        <button type="button" class="danger task-queue-delete-button" data-social-delete="${esc(task.id)}" title="删除" aria-label="删除">${renderTrashIcon()}</button>
       </div>
     </article>
   `).join("");
@@ -4852,7 +4862,7 @@ function renderTaskQueueView() {
         ${task.has_download ? `<a href="/api/tasks/${encodeURIComponent(task.id)}/download">下载</a>` : ""}
         ${task.status === "failed" ? `<button type="button" data-retry="${esc(task.id)}">重试</button>` : ""}
         ${activeSocialAutomationTask(task) ? `<button type="button" class="danger" data-cancel-task="${esc(task.id)}">停止</button>` : ""}
-        <button type="button" class="danger task-queue-delete-button" data-delete-task="${esc(task.id)}" title="删除" aria-label="删除"><span class="ui-trash-icon" aria-hidden="true"></span></button>
+        <button type="button" class="danger task-queue-delete-button" data-delete-task="${esc(task.id)}" title="删除" aria-label="删除">${renderTrashIcon()}</button>
       </div>
     </article>
   `).join("") : `<div class="empty-state">当前还没有通用任务。</div>`;

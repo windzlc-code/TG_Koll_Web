@@ -6303,38 +6303,27 @@ body.persona-touch-dragging .persona-list-card:active {
   padding: 0;
   align-items: center;
   justify-content: center;
+  border-color: #ef4444;
+  background: #fff;
+  color: #dc2626;
+}
+
+.task-row .row-actions .task-queue-delete-button:hover,
+.task-persona-queue-row .row-actions .task-queue-delete-button:hover {
+  border-color: #dc2626;
+  background: #fef2f2;
+  color: #b91c1c;
 }
 
 .ui-trash-icon {
-  position: relative;
-  display: inline-block;
-  width: 16px;
-  height: 17px;
-  color: currentColor;
-}
-
-.ui-trash-icon::before {
-  content: "";
-  position: absolute;
-  left: 3px;
-  top: 5px;
-  width: 10px;
-  height: 10px;
-  border: 2px solid currentColor;
-  border-top: 0;
-  border-radius: 0 0 3px 3px;
-}
-
-.ui-trash-icon::after {
-  content: "";
-  position: absolute;
-  left: 2px;
-  top: 2px;
-  width: 12px;
-  height: 2px;
-  border-radius: 999px;
-  background: currentColor;
-  box-shadow: 4px -3px 0 -1px currentColor;
+  display: block;
+  width: 19px;
+  height: 19px;
+  stroke: currentColor;
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
 }
 
 :root[data-theme="dark"] .task-row .row-actions button.muted,
