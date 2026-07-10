@@ -4397,7 +4397,7 @@ function personaProfileMode(personaId) {
 
 function renderPersonaProfileModeTabs(mode) {
   const activeMode = ["edit", "style"].includes(mode) ? mode : "overview";
-  return `<div class="persona-step-tabs persona-subflow-tabs persona-profile-mode-tabs" role="tablist" aria-label="基础资料视图">${[
+  return `<div class="persona-step-tabs persona-subflow-tabs persona-profile-mode-tabs automation-capsule-tabs" role="tablist" aria-label="基础资料视图">${[
     ["overview", "内容概览"],
     ["edit", "编辑资料"],
     ["style", "推文风格"],
