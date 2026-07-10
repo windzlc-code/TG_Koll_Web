@@ -2,6 +2,7 @@
 const THEME_STORAGE_KEY = "wk-console-theme";
 const LANGUAGE_STORAGE_KEY = "wk-console-language";
 const PERSONA_LIST_PAGE_SIZE_KEY = "wk-persona-list-page-size";
+const PERSONA_POST_PAGE_SIZE_KEY = "wk-persona-post-page-size";
 const PERSONA_GENERATE_COUNT_KEY = "wk-persona-generate-count";
 const PERSONA_GENERATE_TARGET_WORDS_KEY = "wk-persona-generate-target-words";
 const PERSONA_MEDIA_IMAGE_COUNT_KEY = "wk-persona-media-image-count";
@@ -37,6 +38,15 @@ function storedPersonaListPageSize() {
     return Math.min(Math.max(Number.isFinite(value) ? Math.round(value) : 20, 5), 80);
   } catch {
     return 20;
+  }
+}
+
+function storedPersonaPostPageSize() {
+  try {
+    const value = Number(window.localStorage.getItem(PERSONA_POST_PAGE_SIZE_KEY) || 10);
+    return Math.min(Math.max(Number.isFinite(value) ? Math.round(value) : 10, 5), 80);
+  } catch {
+    return 10;
   }
 }
 
@@ -269,6 +279,7 @@ const state = {
   personaListEditorMode: "",
   personaListPage: 1,
   personaListPageSize: storedPersonaListPageSize(),
+  personaPostPageSize: storedPersonaPostPageSize(),
   personaGenerateCountDefault: storedPersonaGenerateCount(),
   personaGenerateTargetWordsDefault: storedPersonaGenerateTargetWords(),
   personaMediaImageCountDefault: storedPersonaMediaImageCount(),
@@ -4448,14 +4459,12 @@ function setPersonaDraftViewMode(mode, personaId = String(selectedPersona()?.id 
   state.personaDraftViewModes[String(personaId || "default")] = mode === "list" ? "list" : "grid";
 }
 
-const PERSONA_POST_PAGE_SIZE = 20;
-
 function personaPostPageKey(persona = selectedPersona(), source = personaPostSource(persona)) {
   return `${String(persona?.id || "default")}::${source === "favorites" ? "favorites" : "posts"}`;
 }
 
 function personaPostPageInfo(persona = selectedPersona(), source = personaPostSource(persona), rows = []) {
-  const pageSize = PERSONA_POST_PAGE_SIZE;
+  const pageSize = Math.min(Math.max(Number(state.personaPostPageSize || 10), 5), 80);
   const totalItems = Array.isArray(rows) ? rows.length : 0;
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
   const key = personaPostPageKey(persona, source);
@@ -4480,11 +4489,12 @@ function ensurePersonaPostPageForPost(persona = selectedPersona(), source = pers
   const cleanPostId = String(postId || "").trim();
   const index = (Array.isArray(rows) ? rows : []).findIndex((post) => String(post.id || "") === cleanPostId);
   if (index < 0) return;
-  setPersonaPostPage(persona, source, Math.floor(index / PERSONA_POST_PAGE_SIZE) + 1);
+  const pageSize = Math.min(Math.max(Number(state.personaPostPageSize || 10), 5), 80);
+  setPersonaPostPage(persona, source, Math.floor(index / pageSize) + 1);
 }
 
 function renderPersonaPostPager(pageInfo, source) {
-  if (!pageInfo || Number(pageInfo.totalItems || 0) <= Number(pageInfo.pageSize || PERSONA_POST_PAGE_SIZE)) return "";
+  if (!pageInfo || Number(pageInfo.totalItems || 0) <= Number(pageInfo.pageSize || 10)) return "";
   const { page, totalPages, pageSize, totalItems } = pageInfo;
   return `
     <div class="persona-list-pager persona-post-pager" aria-label="${source === "favorites" ? "收藏分页" : "草稿分页"}">
@@ -8164,6 +8174,7 @@ function renderConsoleSettingsPage() {
   if (!host) return;
   const taskPersonaPageSize = Math.min(Math.max(Number(state.taskQueuePersonaPageSize || 12), 1), 100);
   const taskRegularPageSize = Math.min(Math.max(Number(state.taskQueueRegularPageSize || 20), 1), 100);
+  const personaPostPageSize = Math.min(Math.max(Number(state.personaPostPageSize || 10), 5), 80);
   const liveBrowserStandbySeconds = Math.min(Math.max(Number(state.liveBrowserSettings?.standby_seconds ?? 60), 0), 3600);
   const liveBrowserAutoCloseSeconds = Math.min(Math.max(Number(state.liveBrowserSettings?.auto_close_seconds ?? 300), 10), 86400);
   const liveBrowserMaxConcurrency = Math.min(Math.max(Number(state.liveBrowserSettings?.max_concurrency ?? 4), 1), 12);
@@ -8176,12 +8187,16 @@ function renderConsoleSettingsPage() {
       <section class="console-settings-group">
         <div class="console-settings-group-head">
           <strong>列表与分页</strong>
-          <span>控制右侧人设列表和任务队列的分页展示数量，保存后会应用到对应列表。</span>
+          <span>控制人设、草稿收藏和任务队列的分页展示数量，保存后会应用到对应列表。</span>
         </div>
         <div class="console-settings-grid">
           <label class="console-setting-card">
             <span>人设列表每页数量</span>
             <input id="settingsPersonaPageSize" type="number" min="5" max="80" step="1" value="${esc(state.personaListPageSize || 20)}" />
+          </label>
+          <label class="console-setting-card">
+            <span>草稿收藏每页数量</span>
+            <input id="settingsPersonaPostPageSize" type="number" min="5" max="80" step="1" value="${esc(personaPostPageSize)}" />
           </label>
           <label class="console-setting-card">
             <span>人设队列每页数量</span>
@@ -8258,6 +8273,7 @@ function refreshConsoleSettingsDependents() {
 
 async function saveConsoleSettingsPage() {
   const pageSize = Math.min(Math.max(Number.parseInt(String($("settingsPersonaPageSize")?.value || ""), 10) || 20, 5), 80);
+  const personaPostPageSize = Math.min(Math.max(Number.parseInt(String($("settingsPersonaPostPageSize")?.value || ""), 10) || 10, 5), 80);
   const taskPersonaPageSize = Math.min(Math.max(Number.parseInt(String($("settingsTaskQueuePersonaPageSize")?.value || ""), 10) || 12, 1), 100);
   const taskRegularPageSize = Math.min(Math.max(Number.parseInt(String($("settingsTaskQueueRegularPageSize")?.value || ""), 10) || 20, 1), 100);
   const liveBrowserStandbySeconds = Math.min(Math.max(Number.parseInt(String($("settingsLiveBrowserStandbySeconds")?.value || ""), 10) || 0, 0), 3600);
@@ -8265,6 +8281,7 @@ async function saveConsoleSettingsPage() {
   const liveBrowserMaxConcurrency = Math.min(Math.max(Number.parseInt(String($("settingsLiveBrowserMaxConcurrency")?.value || ""), 10) || 4, 1), 12);
   const liveBrowserTextInputMode = normalizeLiveBrowserTextInputMode(state.liveBrowserSettings?.text_input_mode);
   state.personaListPageSize = pageSize;
+  state.personaPostPageSize = personaPostPageSize;
   state.taskQueuePersonaPageSize = taskPersonaPageSize;
   state.taskQueueRegularPageSize = taskRegularPageSize;
   state.liveBrowserSettings = {
@@ -8274,10 +8291,12 @@ async function saveConsoleSettingsPage() {
     text_input_mode: liveBrowserTextInputMode,
   };
   state.personaListPage = 1;
+  state.personaPostPages = {};
   state.taskQueuePersonaPage = 1;
   state.taskQueueRegularPage = 1;
   try {
     window.localStorage.setItem(PERSONA_LIST_PAGE_SIZE_KEY, String(pageSize));
+    window.localStorage.setItem(PERSONA_POST_PAGE_SIZE_KEY, String(personaPostPageSize));
     window.localStorage.setItem(TASK_QUEUE_PERSONA_PAGE_SIZE_KEY, String(taskPersonaPageSize));
     window.localStorage.setItem(TASK_QUEUE_REGULAR_PAGE_SIZE_KEY, String(taskRegularPageSize));
     window.localStorage.setItem(LIVE_BROWSER_STANDBY_SECONDS_KEY, String(liveBrowserStandbySeconds));
