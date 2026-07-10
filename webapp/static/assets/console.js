@@ -2674,9 +2674,10 @@ function renderPersonaHotMetricStrip(meta, postId = "") {
 function renderPersonaHotInfo(meta, postId = "") {
   if (!meta) return "";
   const tooltip = [
-    meta.source_summary || "热点导入草稿",
-    personaHotMetricSummary(meta),
-    `${String(meta.platform || "threads").toUpperCase()}${meta.captured_at ? ` · ${formatTime(meta.captured_at)}` : ""}`,
+    `平台：${String(meta.platform || "threads").toUpperCase()}`,
+    meta.published_at ? `发布时间：${formatTime(meta.published_at)}` : "",
+    meta.captured_at ? `抓取时间：${formatTime(meta.captured_at)}` : "",
+    `热点数据：${personaHotMetricSummary(meta)}`,
   ].filter(Boolean).join("\n");
   return `
     <span class="persona-hot-list-tools">
@@ -4570,6 +4571,10 @@ function renderPersonaDraftTableRows(posts, personaId, allRows = posts) {
         const isChecked = selectedIds.has(postId);
         const hotMeta = personaHotImportMeta(personaId, post.id);
         const mediaItems = personaDraftMediaPreviewItems(selectedPersona(), source, post);
+        const fullIndex = allRows.findIndex((item) => String(item?.id || "") === postId);
+        const displayTitle = hotMeta
+          ? `第${Math.max(1, allRows.length - (fullIndex >= 0 ? fullIndex : index))}篇`
+          : personaDraftDisplayTitleForPost(post, allRows, index);
         return `
           <article
             class="persona-draft-table-row ${isSelected ? "is-selected" : ""}"
@@ -4591,7 +4596,7 @@ function renderPersonaDraftTableRows(posts, personaId, allRows = posts) {
             </div>
             <div class="persona-draft-table-cell persona-draft-table-index" role="cell">${esc(index + 1)}</div>
             <div class="persona-draft-table-cell persona-draft-table-title" role="cell">
-              <strong>${esc(personaDraftDisplayTitleForPost(post, allRows, index))}</strong>
+              <strong>${esc(displayTitle)}</strong>
               ${renderMediaTypeBadge(mediaItems)}
               ${hotMeta ? renderPersonaHotOrigin(hotMeta, { compact: true }) : ""}
               ${hotMeta ? renderPersonaHotInfo(hotMeta, post.id) : ""}
@@ -5331,16 +5336,18 @@ function renderEyeIcon() {
 
 function renderRefreshIcon() {
   return `<svg class="ui-action-icon ui-refresh-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-    <path d="M20 11a8 8 0 1 0 2 5"></path>
-    <path d="M20 4v7h-7"></path>
+    <path d="M21 12a9 9 0 0 0-15.17-6.49L3 8"></path>
+    <path d="M3 3v5h5"></path>
+    <path d="M3 12a9 9 0 0 0 15.17 6.49L21 16"></path>
+    <path d="M16 16h5v5"></path>
   </svg>`;
 }
 
 function renderInfoIcon() {
   return `<svg class="ui-action-icon ui-info-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-    <circle cx="12" cy="12" r="9"></circle>
-    <path d="M12 11v6"></path>
-    <path d="M12 7h.01"></path>
+    <circle cx="12" cy="12" r="10"></circle>
+    <path d="M12 16v-4"></path>
+    <path d="M12 8h.01"></path>
   </svg>`;
 }
 

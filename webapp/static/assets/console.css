@@ -5013,8 +5013,34 @@ body.persona-touch-dragging .persona-list-card:active {
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   flex: 0 0 auto;
+}
+
+.persona-hot-list-tools .persona-hot-refresh-button,
+.persona-hot-list-tools .persona-hot-info {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  border-color: transparent;
+  border-radius: 6px;
+  background: transparent;
+  line-height: 0;
+}
+
+.persona-hot-list-tools .persona-hot-refresh-button:hover,
+.persona-hot-list-tools .persona-hot-refresh-button:focus-visible,
+.persona-hot-list-tools .persona-hot-info:hover,
+.persona-hot-list-tools .persona-hot-info:focus-visible {
+  border-color: transparent;
+  background: var(--soft);
+}
+
+.persona-hot-list-tools .persona-hot-refresh-button svg,
+.persona-hot-list-tools .persona-hot-info svg {
+  width: 18px;
+  height: 18px;
 }
 
 .persona-hot-info {
