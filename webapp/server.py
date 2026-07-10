@@ -14940,41 +14940,24 @@ def create_app() -> FastAPI:
     app.mount("/tool_r18_uploads", StaticFiles(directory=str(TOOL_R18_UPLOAD_ROOT)), name="tool_r18_uploads")
 
     @app.get("/", include_in_schema=False)
-    def root(request: Request) -> RedirectResponse:
-        token = str(request.cookies.get(SESSION_COOKIE) or "").strip()
-        if token:
-            try:
-                user = get_current_user(session_token=token)
-                if bool(int(user.get("is_admin") or 0)):
-                    return RedirectResponse(url="/admin.html#admin-overview", status_code=302)
-                return RedirectResponse(url="/console.html", status_code=302)
-            except HTTPException:
-                pass
-            except Exception:
-                pass
-        return RedirectResponse(url="/login.html", status_code=302)
+    def root() -> FileResponse:
+        return FileResponse(str(STATIC_DIR / "index.html"))
 
     @app.get("/login.html", include_in_schema=False)
     def page_login() -> FileResponse:
         return FileResponse(str(STATIC_DIR / "login.html"))
 
     @app.get("/favicon.ico", include_in_schema=False)
-    def favicon() -> Response:
-        svg = (
-            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
-            '<rect width="32" height="32" rx="6" fill="#0f8a5f"/>'
-            '<path d="M9 10h14v3H9zM9 15h14v3H9zM9 20h9v3H9z" fill="#fff"/>'
-            "</svg>"
-        )
-        return Response(content=svg, media_type="image/svg+xml")
+    def favicon() -> FileResponse:
+        return FileResponse(str(STATIC_DIR / "assets" / "opc" / "vecto-logo-ui-icon.png"), media_type="image/png")
 
     @app.get("/register.html", include_in_schema=False)
     def page_register() -> FileResponse:
         return FileResponse(str(STATIC_DIR / "register.html"))
 
     @app.get("/index.html", include_in_schema=False)
-    def page_index() -> RedirectResponse:
-        return RedirectResponse(url="/console.html", status_code=302)
+    def page_index() -> FileResponse:
+        return FileResponse(str(STATIC_DIR / "index.html"))
 
     @app.get("/console.html", include_in_schema=False)
     def page_console() -> HTMLResponse:

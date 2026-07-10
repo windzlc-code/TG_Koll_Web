@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vecto 維拓｜OPC超級個體 AI駕駛倉</title>
+    <meta
+      name="description"
+      content="Vecto Vanguard OPC 超級個體 AI駕駛倉，透過 Vecto OS 多維 AI 向量技術，自動化社媒內容、互動、私域沉澱與轉化。"
+    />
+    <link rel="icon" type="image/png" href="/assets/opc/vecto-logo-ui-icon.png?v=20260711" />
+    <link rel="preload" href="/assets/opc/vecto-ai-cockpit.png" as="image" />
+    <link rel="stylesheet" href="/assets/opc/styles.css?v=20260711" />
+  </head>
+  <body>
+    <header class="site-header" data-header>
+      <a class="brand" href="#top" aria-label="Vecto 首頁">
+        <span class="brand-logo-frame" aria-hidden="true">
+          <img class="brand-logo" src="/assets/opc/vecto-logo-ui-icon.png?v=20260711" alt="" width="1024" height="1024" />
+        </span>
+        <span class="brand-text">
+          <span class="brand-name">Vecto</span>
+          <span class="brand-local">維拓 / 維圖</span>
+        </span>
+      </a>
+
+      <nav class="site-nav" aria-label="主要導覽">
+        <a href="#solution">解決方案</a>
+        <a href="#agents">三帳架構</a>
+        <a href="#scenarios">場景</a>
+        <a href="#pricing">價格</a>
+      </nav>
+
+      <a class="header-action" href="#contact">
+        <span aria-hidden="true">↘</span>
+        與我聯繫
+      </a>
+    </header>
+
+    <main id="top">
+      <section class="hero" aria-labelledby="hero-title">
+        <img
+          class="hero-media"
+          src="/assets/opc/vecto-ai-cockpit.png"
+          alt=""
+          width="1536"
+          height="864"
+          fetchpriority="high"
+        />
+        <div class="hero-shade" aria-hidden="true"></div>
+
+        <div class="hero-shell">
+          <div class="hero-copy">
+            <p class="eyebrow">Vecto Vanguard · 2026 正式版</p>
+            <h1 id="hero-title">OPC超級個體 AI駕駛倉</h1>
+            <p class="hero-lede">
+              以 Vecto OS 多維 AI 向量運算為底層，部署三組獨立社媒代理人帳號，自動完成內容產製、錯峰發布、熱點捕捉、互動答疑、私域沉澱與成交培育。
+            </p>
+
+            <div class="hero-actions" aria-label="主要操作">
+              <a class="button button-primary" href="#contact">預約導入諮詢</a>
+              <a class="button button-ghost" href="#pricing">查看官方方案</a>
+            </div>
+
+            <dl class="hero-metrics" aria-label="方案重點">
+              <div>
+                <dt>3 帳</dt>
+                <dd>乾貨、體驗、投放分工</dd>
+              </div>
+              <div>
+                <dt>1 點</dt>
+                <dd>等於新台幣 10 元</dd>
+              </div>
+              <div>
+                <dt>6,000</dt>
+                <dd>每月系統權限費</dd>
+              </div>
+            </dl>
+          </div>
+
+          <form class="lead-form" id="contact" novalidate>
+            <p class="form-kicker">與我聯繫</p>
+            <h2>留下 LINE 與手機</h2>
+
+            <label class="field" for="lineId">
+              <span>LINE ID</span>
+              <input
+                id="lineId"
+                name="lineId"
+                type="text"
+                autocomplete="off"
+                placeholder="@vecto 或你的 LINE ID"
+                aria-describedby="lineError"
+                required
+              />
+              <small class="field-error" id="lineError"></small>
+            </label>
+
+            <label class="field" for="phone">
+              <span>手機號碼</span>
+              <input
+                id="phone"
+                name="phone"
+                type="tel"
+                inputmode="tel"
+                autocomplete="tel"
+                placeholder="09xx xxx xxx"
+                aria-describedby="phoneError"
+                required
+              />
+              <small class="field-error" id="phoneError"></small>
+            </label>
+
+            <label class="field" for="interest">
+              <span>想優先了解</span>
+              <select id="interest" name="interest">
+                <option value="OPC導入">OPC 導入與三帳代營運</option>
+                <option value="算力計費">算力計費與預算規劃</option>
+                <option value="私域轉化">獨立站與私域轉化閉環</option>
+                <option value="企業多套">企業多套 OPC 批量部署</option>
+              </select>
+            </label>
+
+            <label class="consent" for="consent">
+              <input id="consent" name="consent" type="checkbox" required />
+              <span>我同意使用 LINE 與手機接收 Vecto OPC 服務回覆。</span>
+            </label>
+
+            <button class="submit-button" type="submit">
+              <span>送出並寄到信箱</span>
+              <span aria-hidden="true">→</span>
+            </button>
+
+            <div class="contact-shortcuts" aria-label="直接聯絡方式">
+              <a href="mailto:pingatou@gmail.com">寄信：pingatou@gmail.com</a>
+              <a href="https://line.me/R/ti/p/~0903247221" target="_blank" rel="noreferrer">加 LINE：0903247221</a>
+            </div>
+
+            <p class="form-note">送出後會開啟郵件 App，請確認寄出。也可直接加 LINE：0903247221。</p>
+            <p class="form-status" id="formStatus" role="status" aria-live="polite"></p>
+
+            <button class="copy-button" type="button" id="copyLead" hidden>
+              複製聯絡卡
+            </button>
+          </form>
+        </div>
+      </section>
+
+      <section class="intro-band" id="solution" aria-labelledby="solution-title">
+        <div class="section-shell">
+          <div class="section-heading">
+            <p class="eyebrow">品牌介紹</p>
+            <h2 id="solution-title">重新繪製企業自動化營運版圖</h2>
+            <p>
+              Vecto 以多維 AI 向量技術作為底層，把社媒營運從單點人工發文，升級成可追蹤、可調度、可控成本的 AI 自動駕駛流程。
+            </p>
+          </div>
+
+          <div class="system-grid">
+            <article class="system-card">
+              <span class="card-index">01</span>
+              <h3>Vecto OS</h3>
+              <p>核心 Agent 自動化底層平台，負責全域 AI 向量運算、多帳號智能調度、風控隔離、數據追蹤與算力計費。</p>
+            </article>
+            <article class="system-card accent">
+              <span class="card-index">02</span>
+              <h3>Vecto Vanguard 維拓先鋒</h3>
+              <p>前線落地執行服務品牌，面向企業與個體商家交付 OPC 超級業務個體與 AI 駕駛倉社媒營運方案。</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section-shell pain-section" aria-labelledby="pain-title">
+        <div class="split-heading">
+          <div>
+            <p class="eyebrow">產業痛點</p>
+            <h2 id="pain-title">硬廣越來越貴，單帳越來越脆弱</h2>
+          </div>
+          <p>
+            OPC 以真實個體視角輸出乾貨、案例與軟內容，把一次性社媒曝光導入可反覆經營的私域資產。
+          </p>
+        </div>
+
+        <div class="pain-grid">
+          <article>
+            <h3>信任感不足</h3>
+            <p>傳統硬廣容易被限流，用戶防禦心高，轉化成本持續攀升。</p>
+          </article>
+          <article>
+            <h3>內容產能卡住</h3>
+            <p>手動產圖文、短片、互動回覆與活動素材，難以支撐日更與熱點節奏。</p>
+          </article>
+          <article>
+            <h3>單帳風險過高</h3>
+            <p>帳號一旦限流或封鎖，投放、內容與私域入口會同步斷流。</p>
+          </article>
+          <article>
+            <h3>成本無法量化</h3>
+            <p>傳統代營運固定費僵化，淡旺季預算與素材產能不容易同步調整。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="flow-band" aria-labelledby="flow-title">
+        <div class="section-shell">
+          <div class="section-heading compact">
+            <p class="eyebrow">全鏈路閉環</p>
+            <h2 id="flow-title">從社媒曝光到私域成交沉澱</h2>
+          </div>
+
+          <ol class="flow-list">
+            <li>
+              <span>曝光</span>
+              <strong>三帳錯峰發布</strong>
+            </li>
+            <li>
+              <span>留資</span>
+              <strong>獨立站承接名單</strong>
+            </li>
+            <li>
+              <span>分類</span>
+              <strong>向量標籤需求</strong>
+            </li>
+            <li>
+              <span>培育</span>
+              <strong>私域內容跟進</strong>
+            </li>
+            <li>
+              <span>成交</span>
+              <strong>預約與轉化沉澱</strong>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="section-shell" id="agents" aria-labelledby="agents-title">
+        <div class="split-heading">
+          <div>
+            <p class="eyebrow">標準配置</p>
+            <h2 id="agents-title">三組社媒代理人帳號獨立運行</h2>
+          </div>
+          <p>
+            每套 OPC 內建 3 組分工帳號，互相引流、內容互補、風險分擔，維持長期穩定的獲客通道。
+          </p>
+        </div>
+
+        <div class="agent-grid">
+          <article class="agent-card">
+            <span class="agent-role">信任核心</span>
+            <h3>乾貨主帳</h3>
+            <p>以產業內行人設輸出市場解析、政策對比與專業乾貨，建立帳號權威基底。</p>
+          </article>
+          <article class="agent-card">
+            <span class="agent-role">降低防備</span>
+            <h3>真實體驗帳</h3>
+            <p>以一般使用者視角分享經歷與場景，軟植入服務價值，降低平台廣告判定。</p>
+          </article>
+          <article class="agent-card">
+            <span class="agent-role">流量放大</span>
+            <h3>廣告投放帳</h3>
+            <p>負責熱點節點投放、素材擴散與活動流量承接，導流獨立站與私域。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="scenario-band" id="scenarios" aria-labelledby="scenarios-title">
+        <div class="section-shell">
+          <div class="section-heading">
+            <p class="eyebrow">五大商業場景</p>
+            <h2 id="scenarios-title">常態鋪量、事件衝量、風控與成本一起被管理</h2>
+          </div>
+
+          <div class="scenario-grid">
+            <article>
+              <span>01</span>
+              <h3>常態乾貨鋪量</h3>
+              <p>AI 抓取產業熱點並生成乾貨圖文，三帳錯峰發布，長期累積高信任自然流量。</p>
+            </article>
+            <article>
+              <span>02</span>
+              <h3>事件營銷突擊</h3>
+              <p>短期政策、節慶、優惠窗口期內批量生成素材與短片，快速提高高意向諮詢。</p>
+            </article>
+            <article>
+              <span>03</span>
+              <h3>多帳風控隔離</h3>
+              <p>三帳內容屬性與環境獨立，AI 控制頻率、互動強度與素材合規，降低連鎖風險。</p>
+            </article>
+            <article>
+              <span>04</span>
+              <h3>獨立站與私域沉澱</h3>
+              <p>社媒流量導入資源領取頁，綁定 LINE 私域，依需求標籤推送內容與活動。</p>
+            </article>
+            <article>
+              <span>05</span>
+              <h3>算力彈性計費</h3>
+              <p>訂閱開權限，內容執行與素材產製按量扣點，淡旺季都能精準控預算。</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section-shell modules-section" aria-labelledby="modules-title">
+        <div class="split-heading">
+          <div>
+            <p class="eyebrow">獨立站模組</p>
+            <h2 id="modules-title">五個入口承接社媒流量</h2>
+          </div>
+          <p>
+            從首頁留資、訂閱銷售、算力充值、乾貨下載到後台管理，讓流量與營運資料能被持續沉澱。
+          </p>
+        </div>
+
+        <ul class="module-list">
+          <li>流量落地首頁</li>
+          <li>OPC 訂閱銷售頁</li>
+          <li>算力充值商城</li>
+          <li>產業乾貨資源庫</li>
+          <li>Vecto OS 後台管理系統</li>
+        </ul>
+      </section>
+
+      <section class="pricing-band" id="pricing" aria-labelledby="pricing-title">
+        <div class="section-shell">
+          <div class="section-heading">
+            <p class="eyebrow">官方服務方案</p>
+            <h2 id="pricing-title">月度訂閱與算力儲值完全獨立</h2>
+            <p>
+              訂閱費為系統權限費；所有內容執行、素材產製、互動任務需額外使用算力點，不互相抵扣。
+            </p>
+          </div>
+
+          <div class="pricing-layout">
+            <article class="subscription-card">
+              <span class="pricing-label">Vecto Vanguard OPC</span>
+              <h3>月度訂閱方案</h3>
+              <p class="price"><span>NT$</span>6,000<small>/ 月</small></p>
+              <ul>
+                <li>一組 OPC 超級個體服務</li>
+                <li>3 組 Threads 社媒帳號 AI 全自動駕駛權限</li>
+                <li>每月 10 張 AI 圖片免費額度</li>
+                <li>文案模板、發文邏輯、評論話術包無限使用</li>
+                <li>Vecto OS 排程發布、數據看板、算力明細</li>
+              </ul>
+            </article>
+
+            <div class="credit-panel" aria-label="算力計價標準">
+              <h3>算力點官方計價</h3>
+              <div class="unit-price">
+                <span>1 點</span>
+                <strong>NT$10</strong>
+              </div>
+              <div class="usage-grid">
+                <span>單篇文字推文</span><strong>0.1 點</strong>
+                <span>基礎完整貼文</span><strong>0.3 點</strong>
+                <span>AI 圖片</span><strong>0.6 點 / 張</strong>
+                <span>口播短片</span><strong>0.15 點 / 秒</strong>
+                <span>批量評論、Quote</span><strong>2 點 / 批</strong>
+              </div>
+            </div>
+          </div>
+
+          <div class="package-grid" aria-label="算力儲值套餐">
+            <article>
+              <span>輕量儲值包</span>
+              <h3>100 點</h3>
+              <p>NT$1,000</p>
+              <small>日常少量發文、基礎素材製作</small>
+            </article>
+            <article class="featured">
+              <span>暢銷儲值包</span>
+              <h3>530 點</h3>
+              <p>NT$5,000</p>
+              <small>含 30 點加贈，適合穩定長期經營</small>
+            </article>
+            <article>
+              <span>企業頂級儲值包</span>
+              <h3>1,620 點</h3>
+              <p>NT$15,000</p>
+              <small>含 120 點與 20 張免費圖，適合批量事件營運</small>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="compliance-band" aria-labelledby="compliance-title">
+        <div class="section-shell compliance-layout">
+          <div>
+            <p class="eyebrow">合規與風控</p>
+            <h2 id="compliance-title">客觀內容、帳號隔離、AI 前置審查</h2>
+          </div>
+          <ul>
+            <li>所有內容客觀中立，不誇大效果、不做虛假承諾。</li>
+            <li>全站與貼文配置標準免責聲明，維持平台合規。</li>
+            <li>三帳號獨立向量隔離，避免單點封鎖造成全帳斷流。</li>
+            <li>AI 前置過濾違規詞彙，維持真實分享口吻。</li>
+          </ul>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="footer-brand">
+        <span class="footer-logo-frame" aria-hidden="true">
+          <img class="footer-logo" src="/assets/opc/vecto-logo-ui-icon.png?v=20260711" alt="" width="1024" height="1024" />
+        </span>
+        <div>
+          <strong>Vecto 維拓</strong>
+          <span>OPC超級個體 AI駕駛倉</span>
+        </div>
+      </div>
+      <a class="button button-primary" href="#contact">留下 LINE 與手機</a>
+    </footer>
+
+    <script src="/assets/opc/script.js"></script>
+  </body>
+</html>
