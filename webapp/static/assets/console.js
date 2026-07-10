@@ -10626,7 +10626,12 @@ function renderPersonaCard(persona, groupId = "", options = {}) {
         </span>
       </button>
       ${isMatrix ? `<input class="publish-persona-hidden-check" type="checkbox" data-matrix-persona value="${esc(persona.id)}" ${publishSelected ? "checked" : ""} aria-hidden="true" tabindex="-1" />` : ""}
-      ${isAccountPoolContext ? `<button type="button" class="account-pool-bind-persona" data-account-pool-bind-persona="${esc(persona.id)}" ${accountPoolSelectedCount ? "" : "disabled"}>绑定</button>` : ""}
+      ${isAccountPoolContext ? `<button type="button" class="account-pool-bind-persona" data-account-pool-bind-persona="${esc(persona.id)}" title="绑定所选账号" aria-label="绑定所选账号" ${accountPoolSelectedCount ? "" : "disabled"}>
+        <svg class="ui-link-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+          <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+        </svg>
+      </button>` : ""}
       ${isPublishContext ? "" : (allowEdit ? `<button type="button" class="persona-card-edit" data-persona-edit="${esc(persona.id)}" title="编辑分组" aria-label="编辑分组">...</button>` : "")}
     </article>`;
 }

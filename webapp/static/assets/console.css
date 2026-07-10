@@ -7262,13 +7262,30 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .account-pool-bind-persona {
   position: absolute;
-  top: 10px;
+  top: 50%;
   right: 8px;
-  min-height: 24px;
-  padding: 0 8px;
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
   border-radius: 8px;
-  font-size: 12px;
-  line-height: 1;
+  line-height: 0;
+  transform: translateY(-50%);
+}
+
+.account-pool-bind-persona .ui-link-icon {
+  display: block;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .account-pool-bind-persona:disabled {
