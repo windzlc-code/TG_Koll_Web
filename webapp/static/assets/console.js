@@ -5740,7 +5740,7 @@ function renderPublishHistoryPreview(persona = selectedPersona()) {
     ["浏览", activeRecord.views],
   ].filter(([, value]) => Number(value || 0) > 0) : [];
   return `
-    <section class="publish-content-preview">
+    <section class="publish-content-preview publish-history-preview">
       <div class="publish-panel-head">
         <strong>发布历史展示</strong>
         <span>已发布 ${rows.length} 条</span>

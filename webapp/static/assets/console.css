@@ -1284,6 +1284,29 @@ textarea:focus {
   align-items: stretch;
 }
 
+.publish-history-preview {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.publish-history-preview .publish-preview-tabs-layout {
+  grid-template-columns: 147px minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.publish-history-preview .publish-preview-tabs {
+  grid-template-columns: 130px;
+  width: 147px;
+  min-width: 147px;
+  max-width: 147px;
+  height: 100%;
+  min-height: 0;
+  max-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+
 .publish-preview-tabs {
   display: grid;
   align-content: start;
@@ -1722,6 +1745,21 @@ textarea:focus {
   .publish-preview-tabs {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     max-height: none;
+  }
+
+  .publish-history-preview .publish-preview-tabs-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(88px, 0.35fr) minmax(0, 1fr);
+    overflow: hidden;
+  }
+
+  .publish-history-preview .publish-preview-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    height: 100%;
+    max-height: 100%;
   }
 
   .publish-config-panel {
