@@ -1307,6 +1307,10 @@ textarea:focus {
   overscroll-behavior-y: contain;
 }
 
+.publish-history-preview .publish-preview-tabs button {
+  min-height: 58px;
+}
+
 .publish-preview-tabs {
   display: grid;
   align-content: start;
