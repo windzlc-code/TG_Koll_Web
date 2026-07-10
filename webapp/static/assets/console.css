@@ -4946,10 +4946,10 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-draft-table-head,
 .persona-draft-table-row {
   display: grid;
-  grid-template-columns: 58px 42px minmax(128px, .5fr) 174px minmax(132px, .74fr) 82px 250px;
+  grid-template-columns: 58px 42px minmax(252px, .75fr) 174px minmax(132px, .74fr) 82px 250px;
   gap: 8px;
   align-items: center;
-  min-width: 1140px;
+  min-width: 1264px;
 }
 
 .persona-draft-table-row:has(.persona-hot-info:hover),
@@ -8505,8 +8505,8 @@ body.persona-touch-dragging .persona-list-card:active {
 
   .persona-draft-table-head,
   .persona-draft-table-row {
-    grid-template-columns: 56px 40px minmax(120px, 0.45fr) 174px minmax(132px, 0.72fr) 82px 190px;
-    min-width: 990px;
+    grid-template-columns: 56px 40px minmax(252px, .75fr) 174px minmax(132px, 0.72fr) 82px 190px;
+    min-width: 1122px;
   }
 }
 
