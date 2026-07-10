@@ -4595,7 +4595,7 @@ function renderPersonaDraftTableRows(posts, personaId, allRows = posts) {
               </label>
             </div>
             <div class="persona-draft-table-cell persona-draft-table-index" role="cell">${esc(index + 1)}</div>
-            <div class="persona-draft-table-cell persona-draft-table-title" role="cell">
+            <div class="persona-draft-table-cell persona-draft-table-title ${hotMeta ? "is-hot-import" : ""}" role="cell">
               <strong>${esc(displayTitle)}</strong>
               ${renderMediaTypeBadge(mediaItems)}
               ${hotMeta ? renderPersonaHotOrigin(hotMeta, { compact: true }) : ""}
