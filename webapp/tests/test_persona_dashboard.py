@@ -1363,6 +1363,40 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(body["posts"][0]["source_meta"]["source"], "sentiment_hot_import")
         self.assertEqual(body["posts"][0]["source_meta"]["source_url"], "https://www.threads.com/@history/post/hot-1")
         self.assertTrue(body["posts"][0]["source_meta"]["media_items"])
+
+    def test_refresh_hot_post_returns_updated_source_metrics(self):
+        self._write_archives()
+        refreshed_post = {
+            "id": "post-1",
+            "title": "Draft 1",
+            "content": "Draft content",
+            "wordCount": 13,
+            "orderIndex": 0,
+            "createdAt": "2026-07-03T00:00:00Z",
+            "updatedAt": "2026-07-11T01:02:03Z",
+            "sourceMeta": {
+                "source": "sentiment_hot_import",
+                "platform": "threads",
+                "sourceUrl": "https://www.threads.com/@history/post/hot-1",
+                "hotScore": 987,
+                "metrics": {"viewCount": 900},
+                "engagement": {"likeCount": 70, "commentCount": 8},
+                "capturedAt": "2026-07-11T01:02:03Z",
+            },
+        }
+        fake_result = {"ok": True, "archiveId": "persona-1", "post": refreshed_post}
+        with mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value=fake_result) as mocked:
+            resp = self.client.post("/api/persona_dashboard/personas/persona-1/posts/post-1/hot_metrics/refresh")
+
+        self.assertEqual(resp.status_code, 200)
+        post = resp.json()["post"]
+        self.assertTrue(post["is_hot_imported"])
+        self.assertEqual(post["source_meta"]["hot_score"], 987)
+        self.assertEqual(post["source_meta"]["metrics"]["viewCount"], 900)
+        self.assertEqual(post["source_meta"]["engagement"]["likeCount"], 70)
+        payload = mocked.call_args.args[0]
+        self.assertEqual(payload, {"action": "refresh-hot-post", "archiveId": "persona-1", "postId": "post-1"})
+
     def test_generate_persona_posts_calls_persona_workflow_cli(self):
         self._write_archives()
 

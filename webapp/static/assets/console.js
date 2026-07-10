@@ -1962,16 +1962,44 @@ function personaHotImportMeta(personaId, postId) {
       imported_at: String(post?.created_at || post?.updated_at || "").trim(),
       source_url: String(sourceMeta.source_url || "").trim(),
       source_summary: normalizedTextSnippet(sourceMeta.original_content || "", 140) || normalizedTextSnippet(sourceMeta.source_url || "", 140),
+      original_content: String(sourceMeta.original_content || "").trim(),
       platform: String(sourceMeta.platform || "").trim() || "threads",
+      published_at: sourceMeta.published_at || "",
       captured_at: sourceMeta.captured_at || sourceMeta.published_at || "",
-      view_count: Number(sourceMeta.engagement?.viewCount || sourceMeta.metrics?.viewCount || sourceMeta.metrics?.views || 0),
-      like_count: Number(sourceMeta.engagement?.likeCount || sourceMeta.metrics?.likeCount || sourceMeta.metrics?.likes || 0),
-      comment_count: Number(sourceMeta.engagement?.commentCount || sourceMeta.metrics?.commentCount || sourceMeta.metrics?.comments || 0),
-      share_count: Number(sourceMeta.engagement?.shareCount || sourceMeta.metrics?.shareCount || sourceMeta.metrics?.shares || 0),
-      repost_count: Number(sourceMeta.metrics?.repostCount || sourceMeta.metrics?.reposts || 0),
+      hot_score: personaHotMetricNumber(sourceMeta.hotScore, sourceMeta.hot_score),
+      metrics: sourceMeta.metrics && typeof sourceMeta.metrics === "object" ? sourceMeta.metrics : {},
+      engagement: sourceMeta.engagement && typeof sourceMeta.engagement === "object" ? sourceMeta.engagement : {},
+      view_count: personaHotMetricNumber(sourceMeta.engagement?.viewCount, sourceMeta.metrics?.view_count, sourceMeta.metrics?.viewCount, sourceMeta.metrics?.views),
+      like_count: personaHotMetricNumber(sourceMeta.engagement?.likeCount, sourceMeta.metrics?.like_count, sourceMeta.metrics?.likeCount, sourceMeta.metrics?.likes),
+      comment_count: personaHotMetricNumber(sourceMeta.engagement?.commentCount, sourceMeta.metrics?.comment_count, sourceMeta.metrics?.commentCount, sourceMeta.metrics?.comments),
+      share_count: personaHotMetricNumber(sourceMeta.metrics?.send_count, sourceMeta.engagement?.sendCount, sourceMeta.metrics?.share_count, sourceMeta.metrics?.shareCount, sourceMeta.metrics?.shares, sourceMeta.engagement?.shareCount),
+      repost_count: personaHotMetricNumber(sourceMeta.engagement?.repostCount, sourceMeta.metrics?.repost_count, sourceMeta.metrics?.repostCount, sourceMeta.metrics?.reposts),
+      warnings: Array.isArray(sourceMeta.warnings) ? sourceMeta.warnings : [],
+      media_items: Array.isArray(sourceMeta.media_items) ? sourceMeta.media_items : [],
     };
   }
   return personaHotImportStore(personaId)[postKey] || null;
+}
+
+function personaHotMetricNumber(...values) {
+  for (const value of values) {
+    if (value === null || value === undefined || value === "") continue;
+    const number = Number(value);
+    if (Number.isFinite(number) && number >= 0) return number;
+  }
+  return null;
+}
+
+function personaHotMetricSummary(candidate) {
+  const fields = [
+    ["热度", personaHotMetricNumber(candidate?.hot_score, candidate?.hotScore, candidate?.score)],
+    ["浏览", personaHotMetricNumber(candidate?.view_count, candidate?.engagement?.viewCount, candidate?.metrics?.view_count, candidate?.metrics?.viewCount, candidate?.metrics?.views)],
+    ["点赞", personaHotMetricNumber(candidate?.like_count, candidate?.engagement?.likeCount, candidate?.metrics?.like_count, candidate?.metrics?.likeCount, candidate?.metrics?.likes)],
+    ["评论", personaHotMetricNumber(candidate?.comment_count, candidate?.engagement?.commentCount, candidate?.metrics?.comment_count, candidate?.metrics?.commentCount, candidate?.metrics?.comments)],
+    ["转发", personaHotMetricNumber(candidate?.repost_count, candidate?.engagement?.repostCount, candidate?.metrics?.repost_count, candidate?.metrics?.repostCount, candidate?.metrics?.reposts)],
+    ["分享", personaHotMetricNumber(candidate?.metrics?.send_count, candidate?.engagement?.sendCount, candidate?.share_count, candidate?.metrics?.share_count, candidate?.metrics?.shareCount, candidate?.metrics?.shares, candidate?.engagement?.shareCount)],
+  ];
+  return fields.map(([label, value]) => `${label} ${numberText(value ?? 0)}`).join(" · ");
 }
 
 function setPersonaHotImportMeta(personaId, postId, meta) {
@@ -2246,6 +2274,57 @@ function renderPersonaHotOrigin(meta, { compact = false } = {}) {
       </div>
     </div>
   `;
+}
+
+function renderPersonaHotMetricStrip(meta, postId = "") {
+  if (!meta) return "";
+  const metrics = [
+    ["热度", meta.hot_score],
+    ["浏览", meta.view_count],
+    ["点赞", meta.like_count],
+    ["评论", meta.comment_count],
+    ["转发", meta.repost_count],
+    ["分享", meta.share_count],
+  ];
+  return `
+    <div class="persona-hot-metric-strip">
+      <div class="persona-hot-metric-values">
+        ${metrics.map(([label, value]) => `<span><small>${esc(label)}</small><strong>${esc(numberText(value ?? 0))}</strong></span>`).join("")}
+      </div>
+      <button type="button" class="persona-hot-refresh-button" data-persona-refresh-hot-post="${esc(postId)}" title="刷新热点数据" aria-label="刷新热点数据">
+        ${renderRefreshIcon()}
+      </button>
+    </div>`;
+}
+
+function renderPersonaHotInfo(meta, postId = "") {
+  if (!meta) return "";
+  const tooltip = [
+    meta.source_summary || "热点导入草稿",
+    personaHotMetricSummary(meta),
+    `${String(meta.platform || "threads").toUpperCase()}${meta.captured_at ? ` · ${formatTime(meta.captured_at)}` : ""}`,
+  ].filter(Boolean).join("\n");
+  return `
+    <span class="persona-hot-list-tools">
+      <span class="persona-hot-info" tabindex="0" aria-label="查看热点数据提示">
+        ${renderInfoIcon()}
+        <span class="persona-hot-info-tooltip" role="tooltip">${esc(tooltip)}</span>
+      </span>
+      <button type="button" class="persona-hot-refresh-button" data-persona-refresh-hot-post="${esc(postId)}" title="刷新热点数据" aria-label="刷新热点数据">
+        ${renderRefreshIcon()}
+      </button>
+    </span>`;
+}
+
+function renderPersonaHotDetail(meta) {
+  if (!meta) return "";
+  const warnings = Array.isArray(meta.warnings) ? meta.warnings.filter(Boolean) : [];
+  return `
+    <div class="persona-hot-detail">
+      ${renderPersonaHotOrigin(meta)}
+      ${meta.original_content ? `<div class="persona-hot-detail-block"><strong>热点原文</strong><p>${esc(meta.original_content)}</p></div>` : ""}
+      ${warnings.length ? `<div class="persona-hot-detail-block"><strong>抓取提示</strong><p>${esc(warnings.join("\n"))}</p></div>` : ""}
+    </div>`;
 }
 
 function personaPostFavoriteMatchId(post = {}) {
@@ -3921,6 +4000,7 @@ function renderPersonaDraftRows(posts, source = personaPostSource(), allRows = p
         ${renderPersonaDraftCardMediaSlot(mediaItems)}
         <div class="persona-draft-card-copy">
           <p>${esc(String(post.content || "").slice(0, 170))}</p>
+          ${hotMeta ? renderPersonaHotMetricStrip(hotMeta, post.id) : ""}
         </div>
       </div>
       <div class="persona-draft-card-footer">
@@ -4089,6 +4169,7 @@ function renderPersonaDraftTableRows(posts, personaId, allRows = posts) {
               <strong>${esc(personaDraftDisplayTitleForPost(post, allRows, index))}</strong>
               ${renderMediaTypeBadge(mediaItems)}
               ${hotMeta ? renderPersonaHotOrigin(hotMeta, { compact: true }) : ""}
+              ${hotMeta ? renderPersonaHotInfo(hotMeta, post.id) : ""}
             </div>
             <div class="persona-draft-table-cell persona-draft-table-time" role="cell">${esc(formatTime(post.published_at || post.updated_at || post.created_at))}</div>
             <div class="persona-draft-table-cell persona-draft-table-content" role="cell">${esc(String(post.content || "").slice(0, 48))}</div>
@@ -4134,7 +4215,7 @@ async function viewPersonaDraftPost(postId = "") {
         <div><span>内容类型</span>${renderMediaTypeBadge(mediaItems)}</div>
         <div><span>时间信息</span><strong>${esc(formatTime(post.published_at || post.updated_at || post.created_at))}</strong></div>
         <div><span>当前状态</span><strong>${esc(String(post.id) === String(state.selectedPersonaPostId || "") ? "当前选中" : "待选择")}</strong></div>
-        ${hotMeta ? `<div><span>来源信息</span>${renderPersonaHotOrigin(hotMeta, { compact: true })}</div>` : ""}
+        ${hotMeta ? `<div class="persona-draft-detail-hot"><span>热点数据</span>${renderPersonaHotDetail(hotMeta)}</div>` : ""}
         <div class="persona-draft-detail-content">
           <span>推文正文</span>
           <p>${esc(String(post.content || "暂无正文"))}</p>
@@ -4145,6 +4226,32 @@ async function viewPersonaDraftPost(postId = "") {
     confirmText: "关闭",
     showCancel: false,
   });
+}
+
+async function refreshPersonaHotPost(postId = "", trigger = null) {
+  const persona = selectedPersona();
+  const cleanPostId = String(postId || "").trim();
+  if (!persona || !cleanPostId) return;
+  if (trigger) {
+    trigger.disabled = true;
+    trigger.classList.add("is-loading");
+  }
+  try {
+    const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/posts/${encodeURIComponent(cleanPostId)}/hot_metrics/refresh`, { method: "POST" });
+    const updated = result?.post;
+    if (!updated?.id) throw new Error("热点数据刷新后未返回草稿。");
+    const key = String(persona.id);
+    state.personaDraftPosts[key] = (state.personaDraftPosts[key] || []).map((post) => String(post.id) === cleanPostId ? updated : post);
+    savePersonaPostRows(key, "posts", state.personaDraftPosts[key]);
+    renderPersonaDetail();
+    renderConfirmSummary();
+    showMsg("commandMsg", "热点数据已更新。", true);
+  } finally {
+    if (trigger?.isConnected) {
+      trigger.disabled = false;
+      trigger.classList.remove("is-loading");
+    }
+  }
 }
 
 function renderPersonaMemoryOptions(persona, selectedIds = []) {
@@ -4760,6 +4867,21 @@ function renderTrashIcon() {
     <path d="M6 6l1 15h10l1-15"></path>
     <path d="M10 11v6"></path>
     <path d="M14 11v6"></path>
+  </svg>`;
+}
+
+function renderRefreshIcon() {
+  return `<svg class="ui-action-icon ui-refresh-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M20 11a8 8 0 1 0 2 5"></path>
+    <path d="M20 4v7h-7"></path>
+  </svg>`;
+}
+
+function renderInfoIcon() {
+  return `<svg class="ui-action-icon ui-info-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <circle cx="12" cy="12" r="9"></circle>
+    <path d="M12 11v6"></path>
+    <path d="M12 7h.01"></path>
   </svg>`;
 }
 
@@ -14797,6 +14919,12 @@ function bindEvents() {
     const viewDraftPostButton = event.target.closest("[data-persona-view-post]");
     if (viewDraftPostButton) {
       viewPersonaDraftPost(viewDraftPostButton.dataset.personaViewPost || "").catch((error) => showMsg("commandMsg", error.detail || error.message || "查看草稿失败", false));
+      return;
+    }
+    const refreshHotPostButton = event.target.closest("[data-persona-refresh-hot-post]");
+    if (refreshHotPostButton) {
+      refreshPersonaHotPost(refreshHotPostButton.dataset.personaRefreshHotPost || "", refreshHotPostButton)
+        .catch((error) => showMsg("commandMsg", error.detail || error.message || "热点数据刷新失败", false));
       return;
     }
     const favoritePostButton = event.target.closest("[data-persona-favorite-post]");

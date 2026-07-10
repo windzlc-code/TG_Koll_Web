@@ -4243,6 +4243,84 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-draft-card-copy {
   min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.persona-hot-metric-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.persona-hot-metric-values {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+}
+
+.persona-hot-metric-values > span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  min-height: 24px;
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-solid);
+  white-space: nowrap;
+}
+
+.persona-hot-metric-values small { font-size: 11px; font-weight: 700; }
+.persona-hot-metric-values strong { color: var(--ink); font-size: 12px; }
+
+.persona-hot-refresh-button,
+.persona-hot-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--panel-solid);
+  color: var(--muted);
+}
+
+.persona-hot-refresh-button:hover,
+.persona-hot-refresh-button:focus-visible,
+.persona-hot-info:hover,
+.persona-hot-info:focus-visible {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+
+.persona-hot-refresh-button svg,
+.persona-hot-info svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.persona-hot-refresh-button.is-loading .ui-refresh-icon {
+  animation: persona-hot-refresh-spin .8s linear infinite;
+}
+
+@keyframes persona-hot-refresh-spin {
+  to { transform: rotate(360deg); }
 }
 
 .compact-row span {
@@ -4760,6 +4838,11 @@ body.persona-touch-dragging .persona-list-card:active {
   min-width: 1140px;
 }
 
+.persona-draft-table-row:has(.persona-hot-info:hover),
+.persona-draft-table-row:has(.persona-hot-info:focus-visible) {
+  z-index: 6;
+}
+
 .persona-draft-table-head {
   padding: 0 10px 4px;
   color: var(--muted);
@@ -4809,6 +4892,50 @@ body.persona-touch-dragging .persona-list-card:active {
   gap: 6px;
   color: var(--ink);
   white-space: nowrap;
+  overflow: visible;
+}
+
+.persona-hot-list-tools {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.persona-hot-info {
+  position: relative;
+  cursor: help;
+}
+
+.persona-hot-info-tooltip {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 8px);
+  left: 50%;
+  width: min(320px, 70vw);
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-solid);
+  box-shadow: 0 10px 26px rgba(20, 27, 36, .16);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transform: translate(-50%, -4px);
+  transition: opacity .15s ease, transform .15s ease, visibility .15s ease;
+}
+
+.persona-hot-info:hover .persona-hot-info-tooltip,
+.persona-hot-info:focus-visible .persona-hot-info-tooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, 0);
 }
 
 .persona-draft-table-title strong {
@@ -4900,6 +5027,31 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-draft-detail-modal .persona-draft-detail-content p {
   white-space: pre-wrap;
   line-height: 1.6;
+}
+
+.persona-draft-detail-hot {
+  display: grid;
+  gap: 8px;
+}
+
+.persona-hot-detail,
+.persona-hot-detail-block {
+  display: grid;
+  gap: 8px;
+}
+
+.persona-hot-detail-block {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--soft);
+}
+
+.persona-hot-detail-block p {
+  margin: 0;
+  color: var(--ink);
+  line-height: 1.6;
+  white-space: pre-wrap;
 }
 
 .persona-draft-detail-media-expanded {
@@ -8033,6 +8185,29 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 @media (max-width: 760px) {
+  .persona-draft-card-body {
+    grid-template-columns: 1fr;
+  }
+
+  .persona-draft-card-media-slot {
+    width: 100%;
+    min-width: 0;
+    max-width: 160px;
+  }
+
+  .persona-hot-metric-strip {
+    align-items: end;
+  }
+
+  .persona-hot-metric-values {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .persona-hot-metric-values > span {
+    justify-content: space-between;
+  }
+
   .account-browser-page[data-account-browser-page="browsers"] .live-browser-grid {
     grid-template-columns: 1fr;
   }

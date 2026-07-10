@@ -1,10 +1,11 @@
 import "@/runtime/node/browser-shim";
 import { installNodePersonaArchiveBridge } from "@/runtime/node/persona-archive-store";
-import { appendCustomPersonaArchivePost, loadPersonaArchive } from "@/lib/persona-archives";
+import { appendCustomPersonaArchivePost, loadPersonaArchive, updatePersonaArchivePostDraft } from "@/lib/persona-archives";
 import {
   cleanSentimentCandidateContent,
   downloadCandidateMedia,
   fetchSentimentHotCandidates,
+  refreshSentimentSourceMetrics,
 } from "@/lib/sentiment-hot-importer";
 import {
   rememberSentimentHotImported,
@@ -31,7 +32,13 @@ type ImportHotCandidatesInput = {
   candidates?: Array<Partial<SentimentHotCandidate>>;
 };
 
-type PersonaHotWorkflowInput = FetchHotCandidatesInput | ImportHotCandidatesInput;
+type RefreshHotPostInput = {
+  action: "refresh-hot-post";
+  archiveId: string;
+  postId: string;
+};
+
+type PersonaHotWorkflowInput = FetchHotCandidatesInput | ImportHotCandidatesInput | RefreshHotPostInput;
 
 function printJson(value: unknown) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -62,23 +69,25 @@ function normalizeMediaItem(input: any): SentimentHotMedia | null {
 }
 
 function normalizeCandidate(input: Partial<SentimentHotCandidate>, index = 0): SentimentHotCandidate {
-  const media = Array.isArray(input?.media)
-    ? input.media.map((item) => normalizeMediaItem(item)).filter((item): item is SentimentHotMedia => Boolean(item))
+  const raw = input as any;
+  const rawMedia = Array.isArray(raw?.media) ? raw.media : Array.isArray(raw?.media_items) ? raw.media_items : [];
+  const media = rawMedia.length
+    ? rawMedia.map((item: any) => normalizeMediaItem(item)).filter((item: SentimentHotMedia | null): item is SentimentHotMedia => Boolean(item))
     : [];
   return {
-    id: String(input?.id || `hot-${index}`).trim(),
-    platform: String(input?.platform || "").trim() === "instagram" ? "instagram" : "threads",
-    sourceUrl: String(input?.sourceUrl || "").trim(),
-    author: String(input?.author || "").trim(),
-    content: cleanSentimentCandidateContent(input?.content || ""),
+    id: String(raw?.id || raw?.candidate_id || `hot-${index}`).trim(),
+    platform: String(raw?.platform || "").trim() === "instagram" ? "instagram" : "threads",
+    sourceUrl: String(raw?.sourceUrl || raw?.source_url || "").trim(),
+    author: String(raw?.author || "").trim(),
+    content: cleanSentimentCandidateContent(raw?.content || raw?.full_content || ""),
     media,
-    hotScore: Number(input?.hotScore || 0),
-    metrics: input?.metrics && typeof input.metrics === "object" ? input.metrics : {},
-    engagement: input?.engagement && typeof input.engagement === "object" ? input.engagement : undefined,
-    publishedAt: String(input?.publishedAt || "").trim() || undefined,
-    capturedAt: String(input?.capturedAt || "").trim() || new Date().toISOString(),
-    warnings: Array.isArray(input?.warnings) ? input.warnings.map((item) => String(item || "").trim()).filter(Boolean) : [],
-    qaPassed: input?.qaPassed === true,
+    hotScore: Number(raw?.hotScore ?? raw?.hot_score ?? 0),
+    metrics: raw?.metrics && typeof raw.metrics === "object" ? raw.metrics : {},
+    engagement: raw?.engagement && typeof raw.engagement === "object" ? raw.engagement : undefined,
+    publishedAt: String(raw?.publishedAt || raw?.published_at || "").trim() || undefined,
+    capturedAt: String(raw?.capturedAt || raw?.captured_at || "").trim() || new Date().toISOString(),
+    warnings: Array.isArray(raw?.warnings) ? raw.warnings.map((item: unknown) => String(item || "").trim()).filter(Boolean) : [],
+    qaPassed: raw?.qaPassed === true || raw?.qa_passed === true,
   };
 }
 
@@ -174,6 +183,37 @@ async function importHotCandidates(input: ImportHotCandidatesInput) {
   };
 }
 
+async function refreshHotPost(input: RefreshHotPostInput) {
+  const archiveId = String(input.archiveId || "").trim();
+  const postId = String(input.postId || "").trim();
+  const archive = await loadPersonaArchive(archiveId);
+  if (!archive) throw new Error("人设不存在。");
+  const post = archive.posts.find((item) => String(item.id || "") === postId);
+  if (!post) throw new Error("草稿不存在。");
+  const sourceMeta = post.sourceMeta;
+  if (sourceMeta?.source !== "sentiment_hot_import" || !String(sourceMeta.sourceUrl || "").trim()) {
+    throw new Error("当前草稿不是可刷新的热点导入草稿。");
+  }
+  const refreshed = await refreshSentimentSourceMetrics({
+    platform: sourceMeta.platform,
+    sourceUrl: String(sourceMeta.sourceUrl),
+    existingEngagement: sourceMeta.engagement as any,
+    existingMedia: sourceMeta.mediaItems as any,
+    existingHotScore: sourceMeta.hotScore,
+  });
+  if (!refreshed.ok) throw new Error(refreshed.message);
+  const updated = await updatePersonaArchivePostDraft(archiveId, postId, {
+    sourceMetaPatch: {
+      hotScore: refreshed.hotScore,
+      metrics: { ...(sourceMeta.metrics || {}), ...(refreshed.metrics || {}) },
+      engagement: { ...(sourceMeta.engagement || {}), ...(refreshed.engagement || {}) },
+      capturedAt: new Date().toISOString(),
+    },
+  });
+  if (!updated) throw new Error("热点数据已抓取，但草稿保存失败。");
+  return { ok: true, archiveId, post: updated };
+}
+
 async function main() {
   const raw = process.argv[2];
   if (!raw) {
@@ -185,6 +225,9 @@ async function main() {
   }
   if (input.action === "import-hot-candidates") {
     await printJsonAndExit(await importHotCandidates(input));
+  }
+  if (input.action === "refresh-hot-post") {
+    await printJsonAndExit(await refreshHotPost(input));
   }
   await printJsonAndExit({ ok: false, error: "unsupported action" }, 1);
 }

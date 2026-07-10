@@ -12053,6 +12053,25 @@ def _import_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHot
     }
 
 
+def _refresh_persona_hot_post(archive_id: str, post_id: str) -> dict[str, Any]:
+    clean_archive_id = str(archive_id or "").strip()
+    clean_post_id = str(post_id or "").strip()
+    if not clean_archive_id or not clean_post_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID 或草稿 ID。")
+    result = _run_persona_hot_workflow_cli(
+        {
+            "action": "refresh-hot-post",
+            "archiveId": clean_archive_id,
+            "postId": clean_post_id,
+        },
+        timeout_seconds=180,
+    )
+    post = result.get("post") if isinstance(result.get("post"), dict) else None
+    if not post:
+        raise HTTPException(status_code=500, detail="热点数据已刷新，但未返回草稿数据。")
+    return {"ok": True, "post": _compact_persona_archive_post(post)}
+
+
 def _build_persona_generate_instruction(payload: PersonaDashboardGeneratePostsPayload) -> str:
     prompt = str(payload.prompt or "").strip()
     rewrite_source_post_id = str(getattr(payload, "rewrite_source_post_id", "") or "").strip()
@@ -15600,6 +15619,10 @@ def create_app() -> FastAPI:
     @app.post("/api/persona_dashboard/personas/{archive_id}/hot_candidates/import")
     def api_persona_dashboard_import_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesImportPayload, _user: dict[str, Any] = Depends(get_current_user)):
         return _import_persona_hot_candidates(archive_id, payload)
+
+    @app.post("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}/hot_metrics/refresh")
+    def api_persona_dashboard_refresh_hot_post(archive_id: str, post_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+        return _refresh_persona_hot_post(archive_id, post_id)
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/posts")
     def api_persona_dashboard_create_post(archive_id: str, payload: PersonaDashboardDraftPostPayload, _user: dict[str, Any] = Depends(get_current_user)):
