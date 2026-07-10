@@ -2630,7 +2630,7 @@ function renderPersonaHotMediaPreview(persona, candidate, { editing = false } = 
                 data-persona-hot-media-index="${esc(index)}"
                 title="${isDeleted ? "恢复媒体" : "删除媒体"}"
                 aria-label="${isDeleted ? `恢复第 ${index + 1} 个媒体` : `删除第 ${index + 1} 个媒体`}"
-              >${isDeleted ? `<span class="persona-hot-media-undo-icon" aria-hidden="true">↶</span>` : renderTrashIcon()}</button>` : ""}
+              >${isDeleted ? renderUndoIcon() : renderTrashIcon()}</button>` : ""}
             </div>
           </div>
         `;
@@ -5367,6 +5367,13 @@ function renderReplaceIcon() {
     <path d="m17 4 3 3-3 3"></path>
     <path d="M4 17h8a5 5 0 0 0 5-5"></path>
     <path d="m7 20-3-3 3-3"></path>
+  </svg>`;
+}
+
+function renderUndoIcon() {
+  return `<svg class="ui-undo-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path>
+    <path d="M3 3v5h5"></path>
   </svg>`;
 }
 
@@ -11854,7 +11861,7 @@ function renderPersonaHotCandidatePicker(persona, form) {
                     ${renderMediaTypeBadge(mediaItems)}
                     <small>${esc(formatTime(candidate.captured_at || candidate.published_at || ""))}</small>
                   </span>
-                  <span class="persona-hot-card-copy">${esc(candidate.summary)}</span>
+                  <span class="persona-hot-card-copy">${esc(candidate.full_content || candidate.summary)}</span>
                   <span class="persona-hot-card-metrics">${esc(personaHotMetricSummary(candidate))}</span>
                 </button>
               </article>

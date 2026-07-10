@@ -3232,17 +3232,31 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .persona-hot-card-copy {
-  display: -webkit-box;
-  overflow: hidden;
+  display: block;
+  overflow: visible;
   color: var(--ink);
   line-height: 1.42;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.persona-hot-card-head .persona-media-type-badge {
+  width: max-content;
+  max-width: 100%;
+  justify-self: start;
 }
 
 .persona-hot-preview-card p {
   color: var(--ink);
   line-height: 1.55;
+}
+
+.persona-hot-preview-card #personaHotPreviewContent {
+  field-sizing: content;
+  min-height: 160px;
+  max-height: none;
+  overflow-y: hidden;
+  white-space: pre-wrap;
 }
 
 .persona-hot-card-metrics,
@@ -3372,7 +3386,8 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-hot-media-action .ui-trash-icon,
 .persona-hot-media-action .ui-eye-icon,
-.persona-hot-media-action .ui-replace-icon {
+.persona-hot-media-action .ui-replace-icon,
+.persona-hot-media-action .ui-undo-icon {
   width: 17px;
   height: 17px;
   fill: none;
@@ -3380,12 +3395,6 @@ body.persona-touch-dragging .persona-list-card:active {
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-.persona-hot-media-undo-icon {
-  font-size: 21px;
-  font-weight: 800;
-  line-height: 1;
 }
 
 .persona-toggle-chip {
@@ -4934,8 +4943,10 @@ body.persona-touch-dragging .persona-list-card:active {
   display: grid;
   gap: 6px;
   min-width: 0;
-  overflow-x: auto;
-  overflow-y: visible;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  max-height: clamp(360px, 60vh, 640px);
   padding: 2px;
 }
 
@@ -4946,10 +4957,10 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-draft-table-head,
 .persona-draft-table-row {
   display: grid;
-  grid-template-columns: 58px 42px minmax(252px, .75fr) 174px minmax(132px, .74fr) 82px 250px;
+  grid-template-columns: 58px 42px minmax(280px, 1fr) 154px minmax(110px, .65fr) 74px minmax(220px, auto);
   gap: 8px;
   align-items: center;
-  min-width: 1264px;
+  min-width: 0;
 }
 
 .persona-draft-table-row:has(.persona-hot-info:hover),
@@ -8505,8 +8516,8 @@ body.persona-touch-dragging .persona-list-card:active {
 
   .persona-draft-table-head,
   .persona-draft-table-row {
-    grid-template-columns: 56px 40px minmax(252px, .75fr) 174px minmax(132px, 0.72fr) 82px 190px;
-    min-width: 1122px;
+    grid-template-columns: 52px 38px minmax(250px, .9fr) 144px minmax(96px, .55fr) 72px 214px;
+    min-width: 0;
   }
 }
 

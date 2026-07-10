@@ -51,6 +51,7 @@ const SENTIMENT_HOT_NORMAL_KEYWORD_TARGET = 48;
 const SENTIMENT_HOT_STRICT_KEYWORD_TARGET = 36;
 const SENTIMENT_HOT_SEARCH_STRATEGY_CACHE_FILE = resolveRuntimeFile("sentiment_hot_search_strategy_cache.json");
 const SENTIMENT_HOT_SEARCH_STRATEGY_CACHE_TTL_MS = 30 * 60 * 1000;
+const SENTIMENT_HOT_SEMANTIC_RELEVANCE_VERSION = 1;
 const SENTIMENT_HOT_GENERIC_QUERY_INTENTS = [
   "經驗",
   "心得",
@@ -1185,6 +1186,90 @@ function sentimentHotStrategyTermsForMode(strategy: SentimentHotSearchStrategy, 
   return [...new Set(terms)];
 }
 
+function parseSentimentHotSemanticAcceptedIds(value: unknown): string[] | null {
+  const raw = cleanText(value).replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || !Array.isArray(parsed.acceptedIds)) return null;
+    return [...new Set(parsed.acceptedIds.map((id: unknown) => cleanText(id)).filter(Boolean))];
+  } catch {
+    return null;
+  }
+}
+
+async function filterSentimentHotCandidatesWithModel(args: {
+  archive?: PersonaArchive;
+  strategy: SentimentHotSearchStrategy;
+  keywords: string[];
+  searchMode: SentimentHotSearchMode;
+  candidates: SentimentHotCandidate[];
+  warnings: string[];
+}): Promise<{ accepted: SentimentHotCandidate[]; tagged: SentimentHotCandidate[]; scope?: string }> {
+  if (!args.archive || !sentimentHotStrategyHasModelTerms(args.strategy) || args.candidates.length === 0) {
+    return { accepted: args.candidates, tagged: args.candidates };
+  }
+  const scope = crypto.createHash("sha1").update(JSON.stringify({
+    version: SENTIMENT_HOT_SEMANTIC_RELEVANCE_VERSION,
+    archiveId: args.archive.id,
+    mode: args.searchMode,
+    domain: args.strategy.domainSummary,
+    keywords: args.keywords,
+  })).digest("hex");
+  const contentHash = (candidate: SentimentHotCandidate) => crypto.createHash("sha1").update(cleanSentimentCandidateContent(candidate.content)).digest("hex");
+  const known = args.candidates.filter((candidate) => {
+    const metrics = candidate.metrics as any;
+    return metrics?.semanticRelevanceScope === scope
+      && metrics?.semanticContentHash === contentHash(candidate)
+      && typeof metrics?.semanticRelevant === "boolean";
+  });
+  const unknown = args.candidates.filter((candidate) => !known.includes(candidate)).slice(0, 60);
+  if (unknown.length === 0) {
+    return { accepted: known.filter((candidate) => (candidate.metrics as any)?.semanticRelevant === true), tagged: args.candidates, scope };
+  }
+  try {
+    const candidatePayload = unknown.map((candidate) => ({
+      id: candidate.id,
+      content: cleanSentimentCandidateContent(candidate.content).slice(0, 500),
+    }));
+    const result = await callTextUnderstandingModelWithFallback(
+      resolveSentimentHotTextModelPreference(),
+      [{ role: "user", parts: [{ text: [
+        "你是社媒热点候选的语义相关性审核器。只输出 JSON，不要解释，不要 Markdown。",
+        "输出格式：{\"acceptedIds\":[\"候选ID\"]}",
+        `人设主领域：${args.strategy.domainSummary || cleanText(args.archive.content)}`,
+        `抓取模式：${args.searchMode === "strict" ? "严格垂直，只接受主领域" : "普通泛垂直，可接受主领域的消费、产品、行业、场景和相邻热点"}`,
+        "判断必须阅读正文语义，不能因为一个歧义词或搜索词就接受。拒绝同名学校、人物、地名、网络用语及正文实际主题无关的内容。",
+        `候选：${JSON.stringify(candidatePayload)}`,
+      ].join("\n") }] }],
+      { temperature: 0, maxOutputTokens: 2048 },
+      AbortSignal.timeout(65_000),
+      {
+        attemptTimeoutMs: 20_000,
+        isUsableResponse: (data) => parseSentimentHotSemanticAcceptedIds(extractText(data)) !== null,
+        isRetryableError: isTextModelFallbackError,
+      },
+    );
+    const acceptedIds = new Set(parseSentimentHotSemanticAcceptedIds(extractText(result.data)) || []);
+    const unknownIds = new Set(unknown.map((candidate) => candidate.id));
+    const tagged = args.candidates.map((candidate) => unknownIds.has(candidate.id) ? {
+      ...candidate,
+      metrics: {
+        ...(candidate.metrics || {}),
+        semanticRelevant: acceptedIds.has(candidate.id),
+        semanticRelevanceScope: scope,
+        semanticContentHash: contentHash(candidate),
+      },
+    } : candidate);
+    const accepted = tagged.filter((candidate) => (candidate.metrics as any)?.semanticRelevanceScope === scope
+      && (candidate.metrics as any)?.semanticRelevant === true);
+    args.warnings.push(`模型语义复核通过 ${accepted.length}/${tagged.length} 篇候选。`);
+    return { accepted, tagged, scope };
+  } catch (error) {
+    args.warnings.push(`模型语义复核暂不可用，已保留正文领域信号过滤：${error instanceof Error ? error.message : String(error)}`);
+    return { accepted: args.candidates, tagged: args.candidates };
+  }
+}
+
 function buildSentimentHotSearchStrategyCacheKey(args: {
   archive?: Partial<Pick<PersonaArchive, "name" | "content" | "setup">>;
   prompt?: string;
@@ -1904,7 +1989,7 @@ export async function fetchSentimentHotCandidates(args: {
   }
   if (!hasSearchKeywords) {
     warnings.push("\u7576\u524d\u4eba\u8a2d\u6c92\u6709\u89e3\u6790\u51fa\u53ef\u641c\u7d22\u95dc\u9375\u8a5e\uff0c\u5df2\u505c\u6b62\u6cdb\u5316\u641c\u7d22\uff1b\u8acb\u5148\u5728\u4eba\u8a2d\u7c21\u4ecb\u88dc\u5145\u660e\u78ba\u7684\u9818\u57df\u3001\u8208\u8da3\u6216\u8077\u696d\u8a2d\u5b9a\u3002");
-  } else {
+  } else if (candidates.length < limit) {
     candidates = await fillSentimentHotCandidatesToLimit({
       archiveId,
       keywords,
@@ -1932,7 +2017,78 @@ export async function fetchSentimentHotCandidates(args: {
   }
 
   const displayCandidatePool = candidates;
-  candidates = finalizeSentimentHotCandidatesForDisplay(displayCandidatePool, limit, { archiveId, keywords, excludeShown: true, searchMode });
+  let semanticScope: string | undefined;
+  let semanticallyCheckedPool = displayCandidatePool;
+  if (hasModelStrategy && strategyResult) {
+    const semanticResult = await measureSentimentStage(warnings, "semantic-relevance", () => filterSentimentHotCandidatesWithModel({
+      archive,
+      strategy: strategyResult,
+      keywords,
+      searchMode,
+      candidates: displayCandidatePool,
+      warnings,
+    }));
+    semanticallyCheckedPool = semanticResult.accepted;
+    semanticScope = semanticResult.scope;
+    writeThreadsSearchCandidateCache(archiveId, keywords, semanticResult.tagged, searchMode);
+  }
+  candidates = finalizeSentimentHotCandidatesForDisplay(semanticallyCheckedPool, limit, { archiveId, keywords, excludeShown: true, searchMode });
+  if (candidates.length < limit) {
+    const selectedKeys = new Set(candidates.flatMap((candidate) => getSentimentHotCandidateHistoryKeys(candidate)));
+    const shownHistoryKeys = getSentimentHotShownHistoryKeys(archiveId);
+    const shownAtMap = getSentimentHotShownAtMap(archiveId);
+    const supplementLimit = Math.min(2, limit - candidates.length);
+    const semanticHistory = semanticScope
+      ? readThreadsSearchCandidateCache(archiveId, keywords, poolLimit, false, searchMode)
+        .filter((candidate) => (candidate.metrics as any)?.semanticRelevanceScope === semanticScope && (candidate.metrics as any)?.semanticRelevant === true)
+      : [];
+    const supplements = finalizeSentimentHotCandidatesForDisplay([...semanticallyCheckedPool, ...semanticHistory], poolLimit, {
+      archiveId,
+      keywords,
+      excludeShown: false,
+      searchMode,
+    })
+      .filter((candidate) => {
+        const historyKeys = getSentimentHotCandidateHistoryKeys(candidate);
+        return historyKeys.some((key) => shownHistoryKeys.has(key)) && historyKeys.every((key) => !selectedKeys.has(key));
+      })
+      .sort((a, b) => compareSentimentHotFreshness(a, b) || (shownAtMap.get(a.id) || 0) - (shownAtMap.get(b.id) || 0))
+      .slice(0, supplementLimit);
+    if (supplements.length > 0) {
+      candidates = [...candidates, ...supplements];
+      warnings.push(`新候選不足時已按新鮮度補充 ${supplements.length} 篇同人設高熱度歷史候選（最多 2 篇）。`);
+    }
+  }
+  const forceDetailRefresh = args.refresh === true;
+  const detailTargetCount = candidates.filter((candidate) => (
+    candidate.platform === "threads"
+    && (
+      forceDetailRefresh
+      || (
+        typeof candidate.engagement?.viewCount !== "number"
+        && typeof (candidate.metrics as any)?.view_count !== "number"
+        && typeof (candidate.metrics as any)?.viewCount !== "number"
+        && typeof (candidate.metrics as any)?.views !== "number"
+      )
+    )
+  )).length;
+  if (detailTargetCount > 0) {
+    const detailStartedAt = Date.now();
+    candidates = await enrichThreadsCandidateDetails(candidates, { force: forceDetailRefresh });
+    const resolvedViewCount = candidates.filter((candidate) => (
+      typeof candidate.engagement?.viewCount === "number"
+      || typeof (candidate.metrics as any)?.view_count === "number"
+      || typeof (candidate.metrics as any)?.viewCount === "number"
+      || typeof (candidate.metrics as any)?.views === "number"
+    )).length;
+    channelStats.push(`原帖浏览 ${resolvedViewCount}/${candidates.length}，耗时 ${Date.now() - detailStartedAt}ms`);
+    if (resolvedViewCount > 0) {
+      writeThreadsSearchCandidateCache(archiveId, keywords, candidates, searchMode);
+    }
+    if (resolvedViewCount < candidates.length) {
+      warnings.push(`已从原帖详情获取 ${resolvedViewCount}/${candidates.length} 条真实浏览量；其余原帖暂未公开或详情读取失败。`);
+    }
+  }
   const channelSummary = [
     `快取初始 ${initialCacheCount}`,
     ...channelStats,
@@ -2347,6 +2503,7 @@ function candidateMeetsDisplayQuality(candidate: SentimentHotCandidate, keywords
       sourceTier: sentimentCandidateSourceTier(candidate),
     },
   };
+  if ((normalized.metrics as any)?.semanticRelevant === false) return null;
   if (!candidateHasAcceptableFreshness(normalized)) return null;
   if (!isUsefulHotCandidate(normalized)) return null;
   if (sentimentHotHanCount(content) < minimumSentimentHotHanCountForCandidate(normalized)) return null;
@@ -2673,19 +2830,38 @@ export function parseThreadsGraphqlSearchPayload(args: {
   return out;
 }
 
+export function parseThreadsGraphqlSearchPageInfo(payload: any): { endCursor: string; hasNextPage: boolean } | null {
+  const stack: any[] = [payload];
+  const visited = new Set<any>();
+  while (stack.length > 0) {
+    const value = stack.pop();
+    if (!value || typeof value !== "object" || visited.has(value)) continue;
+    visited.add(value);
+    const pageInfo = value.page_info || value.pageInfo;
+    const endCursor = cleanText(pageInfo?.end_cursor || pageInfo?.endCursor);
+    const hasNextPage = Boolean(pageInfo?.has_next_page ?? pageInfo?.hasNextPage);
+    if (endCursor) return { endCursor, hasNextPage };
+    for (const child of Object.values(value)) {
+      if (child && typeof child === "object") stack.push(child);
+    }
+  }
+  return null;
+}
+
 async function requestThreadsGraphqlSearchPayload(args: {
   page: any;
   template: ThreadsSearchGraphqlTemplate;
   query: string;
+  after?: string | null;
   deadlineAt?: number;
 }): Promise<any | null> {
   const params = new URLSearchParams(args.template.params);
   params.set("variables", JSON.stringify({
     ...args.template.variables,
     query: args.query,
-    after: null,
+    after: args.after || null,
     before: null,
-    first: 10,
+    first: 20,
     last: null,
   }));
   const timeoutMs = Math.min(18_000, remainingSentimentDeadlineMs(args.deadlineAt, 18_000));
@@ -2784,7 +2960,8 @@ async function fetchThreadsBrowserSearchCandidates(args: {
       page.off("request", captureTemplate);
 
       if (template) {
-        const queries = args.queries.slice(0, THREADS_BROWSER_QUERY_LIMIT);
+        const shouldPageQueries = args.limit >= 20;
+        const queries = args.queries.slice(0, shouldPageQueries ? Math.min(24, THREADS_BROWSER_QUERY_LIMIT) : THREADS_BROWSER_QUERY_LIMIT);
         for (let offset = 0; offset < queries.length && results.length < args.limit; offset += THREADS_BROWSER_QUERY_BATCH_SIZE) {
           if (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 2_000) break;
           const batch = queries.slice(offset, offset + THREADS_BROWSER_QUERY_BATCH_SIZE);
@@ -2792,7 +2969,21 @@ async function fetchThreadsBrowserSearchCandidates(args: {
             query,
             payload: await requestThreadsGraphqlSearchPayload({ page, template: template!, query, deadlineAt: args.deadlineAt }),
           })));
-          for (const item of payloads) {
+          const payloadsWithNext = await Promise.all(payloads.map(async (item) => {
+            const pageInfo = shouldPageQueries ? parseThreadsGraphqlSearchPageInfo(item.payload) : null;
+            const nextPayload = pageInfo?.hasNextPage && pageInfo.endCursor
+              && (!args.deadlineAt || remainingSentimentDeadlineMs(args.deadlineAt, 0) >= 2_000)
+              ? await requestThreadsGraphqlSearchPayload({
+                page,
+                template: template!,
+                query: item.query,
+                after: pageInfo.endCursor,
+                deadlineAt: args.deadlineAt,
+              })
+              : null;
+            return { ...item, nextPayload };
+          }));
+          for (const item of payloadsWithNext) {
             const parsed = parseThreadsGraphqlSearchPayload({ payload: item.payload, query: item.query, keywords: args.keywords });
             let accepted = 0;
             for (const candidate of parsed) {
@@ -2808,6 +2999,23 @@ async function fetchThreadsBrowserSearchCandidates(args: {
               if (results.length >= args.limit) break;
             }
             console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} query=${JSON.stringify(item.query)} graphql=${parsed.length} accepted=${accepted} total=${results.length}`);
+            if (results.length < args.limit && item.nextPayload) {
+              const nextParsed = parseThreadsGraphqlSearchPayload({ payload: item.nextPayload, query: item.query, keywords: args.keywords });
+              let nextAccepted = 0;
+              for (const candidate of nextParsed) {
+                if (excluded.has(candidate.id)) continue;
+                if (getSentimentHotCandidateHistoryKeys(candidate).some((historyKey) => excludedHistoryKeys.has(historyKey))) continue;
+                const normalized = candidateMeetsDisplayQuality(candidate, args.keywords, args.searchMode);
+                if (!normalized) continue;
+                const dedupeKey = sentimentCandidateDedupeKey(normalized);
+                if (resultKeys.has(dedupeKey) || results.some((entry) => entry.id === normalized.id)) continue;
+                results.push(normalized);
+                resultKeys.add(dedupeKey);
+                nextAccepted += 1;
+                if (results.length >= args.limit) break;
+              }
+              console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} query=${JSON.stringify(item.query)} page=2 graphql=${nextParsed.length} accepted=${nextAccepted} total=${results.length}`);
+            }
             if (results.length >= args.limit) break;
           }
         }
@@ -4420,13 +4628,20 @@ export function parseThreadsBrowserPostDetailMetrics(args: {
   actionTexts: string[];
 }): Pick<ThreadsBrowserProfilePublishedPostSnapshot, "hotScore" | "engagement" | "metrics"> | null {
   const sequence = findThreadsActionMetricSequence(args.actionTexts || []);
-  if (!sequence) return null;
   const text = String(args.text || "");
   const viewCount = parseMetricNumberLoose(
     text.match(/Thread\s+(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s+views/i)?.[1]
     || text.match(/串文\s*(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s*次瀏覽/i)?.[1]
     || text.match(/(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s*次瀏覽/i)?.[1],
   );
+  if (!sequence && typeof viewCount !== "number") return null;
+  if (!sequence) {
+    return {
+      hotScore: viewCount as number,
+      engagement: { viewCount },
+      metrics: { view_count: viewCount as number },
+    };
+  }
   const rawSignals = [sequence.likeCount, sequence.commentCount, sequence.repostCount, sequence.sendCount]
     .filter((item): item is number => typeof item === "number" && Number.isFinite(item) && item > 0);
   const engagement: NonNullable<SentimentHotCandidate["engagement"]> = {
@@ -4450,37 +4665,69 @@ export function parseThreadsBrowserPostDetailMetrics(args: {
   };
 }
 
-async function fetchThreadsBrowserDetailMetrics(sourceUrl: string): Promise<Pick<ThreadsBrowserProfilePublishedPostSnapshot, "hotScore" | "engagement" | "metrics"> | null> {
+async function readThreadsBrowserDetailMetricsFromPage(page: any, sourceUrl: string) {
+  await page.goto(sourceUrl, {
+    waitUntil: "domcontentloaded",
+    timeout: 12_000,
+  }).catch(() => null);
+  await page.waitForFunction(() => {
+    const text = document.body?.innerText || "";
+    return /Thread\s+\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?\s+views/i.test(text)
+      || /\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?\s*次瀏覽/i.test(text);
+  }, undefined, { timeout: 4_500 }).catch(() => null);
+  const detailText = await page.locator("body").innerText({ timeout: 6_000 }).catch(() => "");
+  const actionTexts = await page.$$eval("[role=button],button", (items: any[]) => items
+    .map((item) => (item.textContent || "").trim())
+    .filter(Boolean)).catch(() => []);
+  return parseThreadsBrowserPostDetailMetrics({ text: detailText, actionTexts });
+}
+
+async function fetchThreadsBrowserDetailMetricsBatch(sourceUrls: string[], concurrency = 3) {
   if (process.env.VITEST_WORKER_ID) return null;
-  const normalizedSourceUrl = String(sourceUrl || "").replace(/^https:\/\/www\.threads\.com\//i, "https://www.threads.net/");
-  if (!/^https:\/\/www\.threads\.net\/@[^/]+\/post\//i.test(normalizedSourceUrl)) return null;
+  const normalizedUrls = [...new Set(sourceUrls.map(normalizeThreadsPostUrl).filter(Boolean))];
+  const results = new Map<string, Pick<ThreadsBrowserProfilePublishedPostSnapshot, "hotScore" | "engagement" | "metrics">>();
+  if (!normalizedUrls.length) return results;
   const cookies = readSentimentBrowserAuthCookies("threads");
-  if (!cookies.length) return null;
+  if (!cookies.length) return results;
   let browser: any = null;
+  let context: any = null;
   try {
     const playwright = await import("playwright");
     browser = await playwright.chromium.launch(buildLocalChromiumLaunchOptions());
-    const context = await browser.newContext({
+    context = await browser.newContext({
       viewport: { width: 900, height: 1400 },
       userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
     });
     await context.addCookies(cookies as any);
-    const page = await context.newPage();
-    await page.goto(normalizedSourceUrl, {
-      waitUntil: "domcontentloaded",
-      timeout: 35_000,
-    }).catch(() => null);
-    await page.waitForTimeout(6500);
-    const detailText = await page.locator("body").innerText({ timeout: 10_000 }).catch(() => "");
-    const actionTexts = await page.$$eval("[role=button],button", (items) => items
-      .map((item) => (item.textContent || "").trim())
-      .filter(Boolean)).catch(() => []);
-    return parseThreadsBrowserPostDetailMetrics({ text: detailText, actionTexts });
+    let cursor = 0;
+    const workerCount = Math.min(Math.max(1, concurrency), normalizedUrls.length);
+    await Promise.all(Array.from({ length: workerCount }, async () => {
+      while (cursor < normalizedUrls.length) {
+        const sourceUrl = normalizedUrls[cursor];
+        cursor += 1;
+        const page = await context.newPage();
+        try {
+          const detail = await readThreadsBrowserDetailMetricsFromPage(page, sourceUrl);
+          if (detail) results.set(sourceUrl, detail);
+        } finally {
+          await page.close().catch(() => null);
+        }
+      }
+    }));
+    return results;
   } catch {
-    return null;
+    return results;
   } finally {
+    await context?.close?.().catch?.(() => null);
     await browser?.close?.().catch?.(() => null);
   }
+}
+
+async function fetchThreadsBrowserDetailMetrics(sourceUrl: string): Promise<Pick<ThreadsBrowserProfilePublishedPostSnapshot, "hotScore" | "engagement" | "metrics"> | null> {
+  const normalizedSourceUrl = normalizeThreadsPostUrl(sourceUrl);
+  if (!normalizedSourceUrl) return null;
+  const results = await fetchThreadsBrowserDetailMetricsBatch([normalizedSourceUrl], 1);
+  return results?.get(normalizedSourceUrl) || null;
 }
 
 export async function lookupThreadsPublishedPostFromBrowserProfile(args: {
@@ -4671,17 +4918,36 @@ export async function refreshSentimentSourceMetrics(args: {
   };
 }
 
-async function enrichThreadsCandidateDetails(candidates: SentimentHotCandidate[]): Promise<SentimentHotCandidate[]> {
+export async function enrichThreadsCandidateDetails(candidates: SentimentHotCandidate[], options: { force?: boolean } = {}): Promise<SentimentHotCandidate[]> {
   const targets = candidates
     .map((candidate, index) => ({ candidate, index }))
-    .filter(({ candidate }) => candidate.platform === "threads" && /^https:\/\/www\.threads\.net\/@[^/]+\/post\//i.test(candidate.sourceUrl))
+    .filter(({ candidate }) => (
+      candidate.platform === "threads"
+      && /^https:\/\/(?:www\.)?threads\.(?:net|com)\/@[^/]+\/post\//i.test(candidate.sourceUrl)
+      && (
+        options.force === true
+        || (
+          typeof candidate.engagement?.viewCount !== "number"
+          && typeof (candidate.metrics as any)?.view_count !== "number"
+          && typeof (candidate.metrics as any)?.viewCount !== "number"
+          && typeof (candidate.metrics as any)?.views !== "number"
+        )
+      )
+    ))
     .slice(0, 10);
   if (!targets.length) return candidates;
   const enriched = [...candidates];
+  const browserMetricsPromise = fetchThreadsBrowserDetailMetricsBatch(
+    targets.map(({ candidate }) => candidate.sourceUrl),
+    3,
+  );
   await Promise.all(targets.map(async ({ candidate, index }) => {
     const detail = await fetchThreadsDetailData(candidate.sourceUrl);
     if (!hasNamedEngagementMetrics(detail.engagement) && !detail.media.length) return;
     const engagement = mergeEngagementMetrics(candidate.engagement || {}, detail.engagement);
+    if (options.force === true && typeof detail.engagement.viewCount === "number") {
+      engagement.viewCount = detail.engagement.viewCount;
+    }
     const media = mergeCandidateMedia(candidate.media || [], detail.media);
     enriched[index] = {
       ...candidate,
@@ -4695,6 +4961,24 @@ async function enrichThreadsCandidateDetails(candidates: SentimentHotCandidate[]
       },
     };
   }));
+  const browserMetrics = await browserMetricsPromise;
+  for (const { candidate, index } of targets) {
+    const detail = browserMetrics?.get(normalizeThreadsPostUrl(candidate.sourceUrl));
+    if (!detail) continue;
+    const current = enriched[index];
+    const engagement = mergeEngagementMetrics(current.engagement || {}, detail.engagement || {});
+    if (typeof detail.engagement?.viewCount === "number") engagement.viewCount = detail.engagement.viewCount;
+    enriched[index] = {
+      ...current,
+      hotScore: Math.max(current.hotScore, detail.hotScore, realSentimentHotScore(engagement)),
+      engagement,
+      metrics: {
+        ...(current.metrics || {}),
+        ...(detail.metrics || {}),
+        ...compactEngagementMetrics(engagement),
+      },
+    };
+  }
   return enriched;
 }
 
@@ -5037,6 +5321,8 @@ function readManagedThreadsAccountCookies(): any[] {
     path.resolve(process.cwd(), "webapp_data"),
     path.resolve(process.cwd(), "..", "webapp_data"),
   ].filter(Boolean);
+  let bestCookies: any[] = [];
+  let bestCookieScore = -1;
   for (const dataDir of [...new Set(dataDirs)]) {
     const appDbPath = path.join(dataDir, "app.db");
     if (!fs.existsSync(appDbPath)) continue;
@@ -5075,7 +5361,14 @@ function readManagedThreadsAccountCookies(): any[] {
             secure: Boolean(row.isSecure),
             sameSite: Number(row.sameSite) === 2 ? "Strict" : Number(row.sameSite) === 1 ? "Lax" : "None",
           }));
-          if (hasValidThreadsSessionCookie(cookies)) return cookies;
+          if (hasValidThreadsSessionCookie(cookies)) {
+            const cookieNames = new Set(cookies.map((cookie: any) => cleanText(cookie?.name).toLowerCase()).filter(Boolean));
+            const cookieScore = cookieNames.size * 10 + cookies.length;
+            if (cookieScore > bestCookieScore) {
+              bestCookies = cookies;
+              bestCookieScore = cookieScore;
+            }
+          }
         } catch {
           // Try the next ready account when a browser profile is locked or incomplete.
         } finally {
@@ -5088,7 +5381,7 @@ function readManagedThreadsAccountCookies(): any[] {
       appDb?.close?.();
     }
   }
-  return [];
+  return bestCookies;
 }
 
 function readSentimentBrowserAuthCookies(platform: SentimentHotPlatform) {

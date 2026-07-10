@@ -5,6 +5,7 @@ import {
   buildSentimentHotKeywords,
   candidateMatchesCurrentKeywords,
   cleanSentimentCandidateContent,
+  enrichThreadsCandidateDetails,
   finalizeSentimentHotCandidatesForDisplay,
   isObviouslyLowQualitySentimentHotCandidate,
   isChineseSentimentCandidate,
@@ -13,6 +14,7 @@ import {
   parseThreadsBrowserPostDetailMetrics,
   parseThreadsBrowserProfilePublishedPosts,
   parseThreadsGraphqlSearchPayload,
+  parseThreadsGraphqlSearchPageInfo,
   parseThreadsGraphqlProfilePagePayload,
   normalizeThreadsRelativeTime,
   parseThreadsPostViewCountFromText,
@@ -781,6 +783,94 @@ Search • Threads
     });
   });
 
+  it("reads the next-page cursor from Threads search GraphQL payloads", () => {
+    expect(parseThreadsGraphqlSearchPageInfo({
+      data: {
+        searchResults: {
+          page_info: {
+            end_cursor: "cursor-page-2",
+            has_next_page: true,
+          },
+        },
+      },
+    })).toEqual({ endCursor: "cursor-page-2", hasNextPage: true });
+  });
+
+  it("enriches final Threads.com candidates with real views from post details", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      text: async () => `
+Title: Demo on Threads
+
+## [Thread 186K views](https://www.threads.com/@demo/post/real-views)
+
+Demo post body
+
+19.5K
+
+51
+
+3.3K
+
+1.7K
+`,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const [candidate] = await enrichThreadsCandidateDetails([{
+      id: "real-views",
+      platform: "threads",
+      sourceUrl: "https://www.threads.com/@demo/post/real-views",
+      author: "demo",
+      content: "这是一条用于验证真实浏览量详情补全的热点推文。",
+      media: [],
+      hotScore: 24_551,
+      metrics: {
+        source: "threads-account-search",
+        like_count: 19_500,
+        comment_count: 51,
+        repost_count: 3_300,
+        reshare_count: 1_700,
+      },
+      engagement: {
+        likeCount: 19_500,
+        commentCount: 51,
+        shareCount: 1_700,
+      },
+      capturedAt: new Date().toISOString(),
+    }]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(candidate.engagement?.viewCount).toBe(186_000);
+    expect(candidate.metrics).toMatchObject({ view_count: 186_000 });
+    expect(candidate.hotScore).toBe(186_000);
+  });
+
+  it("forces a fresh detail read when a cached candidate already has views", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      text: async () => "## [Thread 99 views](https://www.threads.com/@demo/post/refresh-views)",
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const [candidate] = await enrichThreadsCandidateDetails([{
+      id: "refresh-views",
+      platform: "threads",
+      sourceUrl: "https://www.threads.com/@demo/post/refresh-views",
+      author: "demo",
+      content: "刷新时应覆盖已经缓存的旧浏览量。",
+      media: [],
+      hotScore: 100,
+      metrics: { view_count: 100 },
+      engagement: { viewCount: 100 },
+      capturedAt: new Date().toISOString(),
+    }], { force: true });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(candidate.engagement?.viewCount).toBe(99);
+    expect(candidate.metrics).toMatchObject({ view_count: 99 });
+  });
+
   it("applies the 1000 display threshold to account, Reader, and search-page candidates", () => {
     const base = {
       platform: "threads",
@@ -964,6 +1054,19 @@ Translate
       view_count: 274,
     });
     expect(detail?.hotScore).toBe(274);
+  });
+
+  it("keeps a real Threads view count even when action buttons are not readable", () => {
+    const detail = parseThreadsBrowserPostDetailMetrics({
+      text: "Thread 186K views\nDemo post body",
+      actionTexts: [],
+    });
+
+    expect(detail).toEqual({
+      hotScore: 186_000,
+      engagement: { viewCount: 186_000 },
+      metrics: { view_count: 186_000 },
+    });
   });
 
   it("overwrites existing named metrics when refreshing a stored Threads source", async () => {
