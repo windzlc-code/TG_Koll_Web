@@ -12,6 +12,7 @@ import {
   matchThreadsBrowserProfilePublishedPost,
   parseThreadsBrowserPostDetailMetrics,
   parseThreadsBrowserProfilePublishedPosts,
+  parseThreadsGraphqlSearchPayload,
   parseThreadsGraphqlProfilePagePayload,
   normalizeThreadsRelativeTime,
   parseThreadsPostViewCountFromText,
@@ -194,6 +195,63 @@ describe("sentiment hot importer", () => {
     expect(candidateMatchesCurrentKeywords(candidate, keywords)).toBe(true);
   });
 
+  it("keeps model-generated Latin domain terms in strict relevance matching", () => {
+    const candidate = {
+      id: "cosplay-strict",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@demo/post/cosplay-strict",
+      author: "demo",
+      content: "這次 Cosplay 角色扮演整理了服裝製作、妝容調整、道具修補和展場互動心得，也分享拍攝前準備與現場避坑方式，內容完整且直接屬於人設主領域。",
+      media: [],
+      hotScore: 1000,
+      metrics: { source: "threads-search-page" },
+      capturedAt: new Date().toISOString(),
+    };
+
+    expect(candidateMatchesCurrentKeywords(candidate as any, ["刺青 cosplay", "cosplay"], "strict")).toBe(true);
+    expect(finalizeSentimentHotCandidatesForDisplay([candidate] as any, 10, {
+      keywords: ["刺青 cosplay", "cosplay"],
+      searchMode: "strict",
+    }).map((item) => item.id)).toEqual(["cosplay-strict"]);
+  });
+
+  it("does not treat a generic live-stream word as strict persona relevance", () => {
+    const genericLive = {
+      id: "generic-live",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@demo/post/generic-live",
+      author: "demo",
+      content: "这个直播从哪里开始可以免费看？大家知道入口吗？",
+      hotScore: 5000,
+      metrics: {},
+      capturedAt: new Date().toISOString(),
+    };
+    const gameLive = {
+      ...genericLive,
+      id: "game-live",
+      sourceUrl: "https://www.threads.net/@demo/post/game-live",
+      content: "今晚的游戏直播会复盘职业联赛战术，重点分析队伍阵容和地图选择。",
+    };
+
+    expect(candidateMatchesCurrentKeywords(genericLive as any, ["直播", "游戏直播"], "strict")).toBe(false);
+    expect(candidateMatchesCurrentKeywords(gameLive as any, ["直播", "游戏直播"], "strict")).toBe(true);
+  });
+
+  it("matches Traditional Chinese posts against Simplified Chinese model terms in strict mode", () => {
+    const candidate = {
+      id: "traditional-auto-repair",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@garage/post/traditional-auto-repair",
+      author: "garage",
+      content: "請問泡水車的汽車維修費用大概多少，想找可靠的保養廠檢查底盤。",
+      hotScore: 5000,
+      metrics: {},
+      capturedAt: new Date().toISOString(),
+    };
+
+    expect(candidateMatchesCurrentKeywords(candidate as any, ["汽车维修", "车辆保养"], "strict")).toBe(true);
+  });
+
   it("keeps daily-life posts only when they still match persona keywords", () => {
     const base = {
       platform: "threads",
@@ -220,8 +278,8 @@ describe("sentiment hot importer", () => {
 
     expect(candidateMatchesCurrentKeywords(genericDaily as any, keywords)).toBe(false);
     expect(candidateMatchesCurrentKeywords(personaDaily as any, keywords)).toBe(true);
-    expect(finalizeSentimentHotCandidatesForDisplay([genericDaily as any, personaDaily as any], 10, { keywords }))
-      .toEqual([personaDaily]);
+    expect(finalizeSentimentHotCandidatesForDisplay([genericDaily as any, personaDaily as any], 10, { keywords })
+      .map((candidate) => candidate.id)).toEqual(["persona-daily"]);
   });
 
   it("filters obvious low-quality hot candidates before display", () => {
@@ -323,7 +381,7 @@ describe("sentiment hot importer", () => {
     expect(candidates.map((candidate) => candidate.hotScore)).toEqual([30000, 18000, 5000]);
   });
 
-  it("keeps already shown hot candidates ordered by heat in display", () => {
+  it("excludes shown posts by id and canonical URL during refresh", () => {
     const archiveId = `test-refresh-exclude-shown-${Date.now()}`;
     const base = {
       platform: "threads",
@@ -346,22 +404,155 @@ describe("sentiment hot importer", () => {
       content: "海外信貸族群最近開始整理收入證明、負債比例和固定支出，再比較信用卡分期、銀行貸款與貸款利率。這種內容和人設關鍵詞高度相關，而且沒有被展示過，刷新時應該優先出現在候選列表。",
       hotScore: 30000,
     };
+    const shownUrlVariant = {
+      ...shown,
+      id: "shown-url-variant",
+      sourceUrl: "https://www.threads.com/@demo/post/shown-hot?xmt=AQG-test#reply",
+      content: `${shown.content} 這是另一個抓取渠道回傳的同一原帖。`,
+    };
 
     rememberSentimentHotShown(archiveId, [shown] as any);
-    const candidates = finalizeSentimentHotCandidatesForDisplay([shown, fresh] as any, 10, {
+    const candidates = finalizeSentimentHotCandidatesForDisplay([shown, shownUrlVariant, fresh] as any, 10, {
       archiveId,
       keywords: ["海外信貸", "銀行貸款", "信用卡"],
       excludeShown: true,
     });
 
-    expect(candidates.map((candidate) => candidate.id)).toEqual(["shown-hot", "fresh-hot"]);
-    expect(candidates.map((candidate) => candidate.hotScore)).toEqual([90000, 30000]);
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["fresh-hot"]);
     const limitedCandidates = finalizeSentimentHotCandidatesForDisplay([shown, fresh] as any, 1, {
       archiveId,
       keywords: ["海外信貸", "銀行貸款", "信用卡"],
       excludeShown: true,
     });
-    expect(limitedCandidates.map((candidate) => candidate.id)).toEqual(["shown-hot"]);
+    expect(limitedCandidates.map((candidate) => candidate.id)).toEqual(["fresh-hot"]);
+  });
+
+  it("rejects candidates older than 30 days", () => {
+    const content = "海外信貸市場最近整理信用卡週轉、銀行貸款、收入證明和負債比例，內容包含完整申請流程、利率比較、還款安排與風險提醒，適合金融人設改寫成實用推文。";
+    const candidates = finalizeSentimentHotCandidatesForDisplay([
+      {
+        id: "old-hot",
+        platform: "threads",
+        sourceUrl: "https://www.threads.net/@demo/post/old-hot",
+        author: "demo",
+        content,
+        media: [],
+        hotScore: 90000,
+        metrics: {},
+        publishedAt: new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString(),
+        capturedAt: new Date().toISOString(),
+      },
+      {
+        id: "fresh-hot-30d",
+        platform: "threads",
+        sourceUrl: "https://www.threads.net/@demo/post/fresh-hot-30d",
+        author: "demo",
+        content: `${content} 這篇是本週新增討論。`,
+        media: [],
+        hotScore: 30000,
+        metrics: {},
+        publishedAt: new Date().toISOString(),
+        capturedAt: new Date().toISOString(),
+      },
+    ] as any, 10, { keywords: ["海外信貸", "銀行貸款", "信用卡"] });
+
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["fresh-hot-30d"]);
+  });
+
+  it("prioritizes a fresher unshown candidate over a hotter older candidate", () => {
+    const now = Date.now();
+    const candidates = finalizeSentimentHotCandidatesForDisplay([
+      {
+        id: "older-higher-heat",
+        platform: "threads",
+        sourceUrl: "https://www.threads.net/@finance/post/older-higher-heat",
+        author: "finance",
+        content: "海外金融市場近期持續討論信用卡週轉、銀行信貸與貸款利率，有人整理收入證明、負債比例、每月還款安排和現金流風險，提醒工薪族申請前先比較審核條件與總成本。",
+        media: [],
+        hotScore: 9000,
+        metrics: {},
+        publishedAt: new Date(now - 20 * 24 * 60 * 60 * 1000).toISOString(),
+        capturedAt: new Date(now).toISOString(),
+      },
+      {
+        id: "recent-lower-heat",
+        platform: "threads",
+        sourceUrl: "https://www.threads.net/@finance/post/recent-lower-heat",
+        author: "finance",
+        content: "海外工薪族今天分享銀行貸款與信用卡整合經驗，完整比較信貸利率、收入證明、負債比例、還款期限和每月現金流，提醒申請額度前先確認審核規則與長期還款壓力。",
+        media: [],
+        hotScore: 1000,
+        metrics: {},
+        publishedAt: new Date(now - 24 * 60 * 60 * 1000).toISOString(),
+        capturedAt: new Date(now).toISOString(),
+      },
+    ] as any, 10, {
+      archiveId: `test-freshness-order-${now}`,
+      keywords: ["海外金融", "銀行貸款", "信用卡"],
+      excludeShown: true,
+      searchMode: "normal",
+    });
+
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["recent-lower-heat", "older-higher-heat"]);
+  });
+
+  it("does not accept unrelated travel content from a weak fragment of a real-estate query", () => {
+    const candidates = finalizeSentimentHotCandidatesForDisplay([{
+      id: "japan-travel-only",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@travel/post/japan-travel-only",
+      author: "travel",
+      content: "日本自由行最近很多人讨论东京樱花季、大阪环球影城、京都赏枫路线和北海道温泉。这里整理交通票券、饭店选择、行李寄送、机场接送与热门餐厅预约经验，方便第一次去日本旅行的人规划完整行程。",
+      media: [],
+      hotScore: 9000,
+      metrics: { query: "比较", modelQuery: true, archiveScopedFallback: true },
+      publishedAt: new Date().toISOString(),
+      capturedAt: new Date().toISOString(),
+    }] as any, 10, {
+      keywords: ["日本不动产", "日本房产", "东京豪宅"],
+      excludeShown: true,
+      searchMode: "normal",
+    });
+
+    expect(candidates).toEqual([]);
+  });
+
+  it("does not let a standalone generic search intent become persona relevance", () => {
+    const candidates = finalizeSentimentHotCandidatesForDisplay([{
+      id: "generic-comparison-only",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@daily/post/generic-comparison-only",
+      author: "daily",
+      content: "今天整理家里的旧照片和通讯录，比较不同年份的生活变化，也记录朋友分享的工作经验与个人选择。整篇内容都在讨论日常回忆、家庭收纳、亲友往来和心情变化，主题完全属于普通生活随笔。",
+      media: [],
+      hotScore: 9000,
+      metrics: { query: "比较", modelQuery: true },
+      publishedAt: new Date().toISOString(),
+      capturedAt: new Date().toISOString(),
+    }] as any, 10, {
+      keywords: ["汽车维修", "汽车保养", "客车底盘"],
+      excludeShown: true,
+      searchMode: "normal",
+    });
+
+    expect(candidates).toEqual([]);
+  });
+
+  it("does not accept an ambiguous single keyword in normal mode", () => {
+    const candidate = {
+      id: "jingxin-school",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@news/post/jingxin-school",
+      author: "news",
+      content: "这篇人物资料介绍某位政治人物早年就读静心国民中学，之后进入高中与大学，并整理历年求学经历、选举过程和公开活动纪录。全文主题是教育背景与政治生涯，不是健康练习内容。",
+      media: [],
+      hotScore: 9000,
+      metrics: { source: "threads-account-search", query: "静心" },
+      publishedAt: new Date().toISOString(),
+      capturedAt: new Date().toISOString(),
+    } as const;
+
+    expect(candidateMatchesCurrentKeywords(candidate as any, ["静心", "冥想", "身心灵疗愈"], "normal")).toBe(false);
   });
 
   it("does not display hot candidates shorter than 60 Chinese characters", () => {
@@ -527,6 +718,97 @@ Search • Threads
     expect(candidates.length).toBe(1);
     expect(candidates[0].metrics.raw_engagement_signals).toEqual([12000, 340, 88]);
     expect(candidates[0].engagement?.rawSignals).toEqual([12000, 340, 88]);
+  });
+
+  it("parses Threads account-search GraphQL posts with real engagement totals", () => {
+    const candidates = parseThreadsGraphqlSearchPayload({
+      query: "醫療",
+      keywords: ["醫療", "醫生", "醫院"],
+      payload: {
+        data: {
+          searchResults: {
+            edges: [{
+              node: {
+                thread_items: [{
+                  post: {
+                    pk: "3925594288747063183",
+                    code: "DZ1ABCxyz",
+                    canonical_url: "https://www.threads.com/@demo_doctor/post/DZ1ABCxyz",
+                    user: { username: "demo_doctor" },
+                    caption: {
+                      text: "急診醫生分享醫療現場，今天醫院候診區真的塞滿人，病人等待和醫療流程都被拿出來討論。",
+                    },
+                    like_count: 954,
+                    text_post_app_info: {
+                      direct_reply_count: 68,
+                      repost_count: 92,
+                      reshare_count: 58,
+                      view_count: 4321,
+                    },
+                  },
+                }],
+              },
+            }],
+          },
+        },
+      },
+    });
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({
+      platform: "threads",
+      sourceUrl: "https://www.threads.com/@demo_doctor/post/DZ1ABCxyz",
+      author: "demo_doctor",
+      content: "急診醫生分享醫療現場，今天醫院候診區真的塞滿人，病人等待和醫療流程都被拿出來討論。",
+      hotScore: 1172,
+      metrics: {
+        source: "threads-account-search",
+        like_count: 954,
+        comment_count: 68,
+        repost_count: 92,
+        reshare_count: 58,
+        share_count: 58,
+        view_count: 4321,
+        realEngagementTotal: 1172,
+      },
+      engagement: {
+        likeCount: 954,
+        commentCount: 68,
+        shareCount: 58,
+        viewCount: 4321,
+        rawSignals: [954, 68, 92, 58],
+      },
+    });
+  });
+
+  it("applies the 1000 display threshold to account, Reader, and search-page candidates", () => {
+    const base = {
+      platform: "threads",
+      author: "demo",
+      media: [],
+      capturedAt: new Date().toISOString(),
+    } as const;
+    const content = "醫療現場最近持續討論急診候診、醫院分流、醫生排班和病人照護流程，這篇完整整理第一線工作壓力、資源配置、溝通方式與改善建議，提供醫療人員和一般讀者理解現況。";
+    const candidates = finalizeSentimentHotCandidatesForDisplay([
+      {
+        ...base,
+        id: "account-accepted",
+        sourceUrl: "https://www.threads.net/@demo/post/account-accepted",
+        content,
+        hotScore: 1000,
+        metrics: { source: "threads-account-search" },
+      },
+      ...["threads-account-search", "threads-reader-search", "threads-search-page"].map((source, index) => ({
+        ...base,
+        id: `below-threshold-${index}`,
+        sourceUrl: `https://www.threads.net/@demo/post/below-threshold-${index}`,
+        content: `${content} 候選來源編號${index + 1}。`,
+        hotScore: 999,
+        metrics: { source },
+      })),
+    ] as any, 10, { keywords: ["醫療", "醫生", "醫院"] });
+
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["account-accepted"]);
   });
 
   it("parses Instagram reader candidates as extra sentiment sources", () => {
@@ -810,6 +1092,10 @@ Log in to see more replies.
       query: "醫療",
       keywords: ["醫療", "醫生", "醫院"],
       sourceUrl: "https://www.threads.com/search?q=%E9%86%AB%E7%99%82",
+      sourceUrls: [
+        "https://www.threads.net/@mls_muttering/post/medical-report",
+        "https://www.threads.net/@bunundoc/post/emergency-room",
+      ],
       text: `
 醫療
 mls_muttering
@@ -833,7 +1119,7 @@ bunundoc
     expect(candidates[0].platform).toBe("threads");
     expect(candidates[0].content).toContain("醫療");
     expect(candidates[0].content).not.toContain("翻譯");
-    expect(candidates[0].sourceUrl).toContain("threads.com/search");
+    expect(candidates[0].sourceUrl).toBe("https://www.threads.net/@mls_muttering/post/medical-report");
   });
 
   it("keeps visible Threads profile metrics from the page body", () => {

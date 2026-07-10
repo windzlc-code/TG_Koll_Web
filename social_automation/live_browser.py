@@ -4,12 +4,14 @@ import atexit
 import contextlib
 import json
 import os
+import signal
 import shutil
 import socket
 import subprocess
 import tempfile
 import threading
 import time
+from urllib.parse import urlencode
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -34,6 +36,8 @@ class LiveBrowserSession:
     error: str = ""
     standby_started_at: int = 0
     close_at: int = 0
+    process_pids: list[int] = field(default_factory=list)
+    process_identities: list[dict[str, Any]] = field(default_factory=list)
     processes: list[subprocess.Popen] = field(default_factory=list, repr=False)
     temp_dir: str = ""
 
@@ -42,6 +46,7 @@ _SESSIONS: dict[str, LiveBrowserSession] = {}
 _CLOSE_CALLBACKS: dict[str, Callable[[], None]] = {}
 _LOCK = threading.Lock()
 _ORPHAN_CLEANUP_DONE = False
+_SIGKILL = getattr(signal, "SIGKILL", 9)
 
 
 def live_browser_enabled() -> bool:
@@ -132,6 +137,7 @@ def start_live_browser_session(
             )
         )
         _wait_for_live_browser_ready(session)
+        _capture_session_process_identities(session)
         session.status = "running"
         with _LOCK:
             _SESSIONS[session.id] = session
@@ -157,22 +163,17 @@ def _stop_standby_sessions_for_account(account_id: str, logger: Any | None = Non
     if not clean_account_id:
         return
     with _LOCK:
-        targets = [
+        targets = {
             session.id
             for session in _SESSIONS.values()
             if session.account_id == clean_account_id and session.status == "standby"
-        ]
+        }
+    for session_id, row in _read_registry().items():
+        if str(row.get("account_id") or "") == clean_account_id and str(row.get("status") or "") == "standby":
+            targets.add(str(session_id))
     for session_id in targets:
         stop_live_browser_session(session_id)
-    registry_targets: list[str] = []
-    sessions = _read_registry()
-    for session_id, row in list(sessions.items()):
-        if str(row.get("account_id") or "") == clean_account_id and str(row.get("status") or "") == "standby":
-            registry_targets.append(str(session_id))
-            sessions.pop(session_id, None)
-    if registry_targets:
-        _write_registry(sessions)
-    released = targets + registry_targets
+    released = sorted(targets)
     if released:
         _log(
             logger,
@@ -184,16 +185,19 @@ def _stop_standby_sessions_for_account(account_id: str, logger: Any | None = Non
 
 
 def stop_live_browser_session(session_id: str, *, session: LiveBrowserSession | None = None) -> None:
+    clean_id = str(session_id)
     with _LOCK:
-        target = session or _SESSIONS.pop(str(session_id), None)
+        target = session or _SESSIONS.pop(clean_id, None)
         if session is not None:
-            _SESSIONS.pop(str(session_id), None)
-        callback = _CLOSE_CALLBACKS.pop(str(session_id), None)
+            _SESSIONS.pop(clean_id, None)
+        callback = _CLOSE_CALLBACKS.pop(clean_id, None)
     if callback is not None:
         with contextlib.suppress(Exception):
             callback()
     if not target:
-        _remove_session_registry(str(session_id))
+        target = _load_registry_session(clean_id)
+    if not target:
+        _remove_session_registry(clean_id)
         return
     for process in reversed(target.processes):
         if process.poll() is not None:
@@ -206,9 +210,25 @@ def stop_live_browser_session(session_id: str, *, session: LiveBrowserSession | 
                 process.kill()
             except Exception:
                 pass
+    if not target.processes:
+        _terminate_registry_session_processes(target)
     if target.temp_dir:
         shutil.rmtree(target.temp_dir, ignore_errors=True)
     _remove_session_registry(target.id)
+
+
+def stop_live_browser_sessions_for_task(task_id: str) -> None:
+    clean_task_id = str(task_id or "").strip()
+    if not clean_task_id:
+        return
+    with _LOCK:
+        session_ids = {session.id for session in _SESSIONS.values() if session.task_id == clean_task_id}
+    for session_id, row in _read_registry().items():
+        if str(row.get("task_id") or "") == clean_task_id:
+            session_ids.add(str(session_id))
+    session_ids.add(f"live_{clean_task_id}")
+    for session_id in session_ids:
+        stop_live_browser_session(session_id)
 
 
 def mark_live_browser_session_standby(session_id: str, *, close_at: int = 0) -> None:
@@ -281,7 +301,33 @@ def get_live_browser_session(session_id: str) -> LiveBrowserSession | None:
 
 def _session_public(session: LiveBrowserSession) -> dict[str, Any]:
     ws_path = f"api/persona_dashboard/automation/browser_sessions/{session.id}/ws"
-    kasm_path = f"/api/persona_dashboard/automation/browser_sessions/{session.id}/kasm/vnc.html?autoconnect=1&resize=scale&reconnect=1&path={ws_path}"
+    params = urlencode(
+        {
+            "autoconnect": 1,
+            "resize": "scale",
+            "reconnect": 1,
+            "quality": 5,
+            "dynamic_quality_min": 3,
+            "dynamic_quality_max": 7,
+            "jpeg_video_quality": 5,
+            "webp_video_quality": 4,
+            "video_quality": 1,
+            "video_time": 1,
+            "video_out_time": 1,
+            "video_scaling": 1,
+            "max_video_resolution_x": 960,
+            "max_video_resolution_y": 540,
+            "framerate": 24,
+            "compression": 2,
+            "enable_webp": 1,
+            "enable_webrtc": 0,
+            "enable_threading": 1,
+            "path": ws_path,
+        }
+    )
+    kasm_path = f"/api/persona_dashboard/automation/browser_sessions/{session.id}/kasm/vnc.html?{params}"
+    live_pids = [int(process.pid) for process in session.processes if getattr(process, "pid", None)]
+    process_pids = sorted({*session.process_pids, *live_pids})
     return {
         "id": session.id,
         "task_id": session.task_id,
@@ -304,6 +350,7 @@ def _session_public(session: LiveBrowserSession) -> dict[str, Any]:
         "error": session.error,
         "standby_started_at": session.standby_started_at,
         "close_at": session.close_at,
+        "process_pids": process_pids,
     }
 
 
@@ -337,8 +384,14 @@ def _write_registry(sessions: dict[str, dict[str, Any]]) -> None:
 
 def _save_session_registry(session: LiveBrowserSession) -> None:
     sessions = _read_registry()
-    sessions[session.id] = _session_public(session)
+    sessions[session.id] = _session_registry_row(session)
     _write_registry(sessions)
+
+
+def _session_registry_row(session: LiveBrowserSession) -> dict[str, Any]:
+    row = _session_public(session)
+    row["process_identities"] = [dict(identity) for identity in session.process_identities]
+    return row
 
 
 def _remove_session_registry(session_id: str) -> None:
@@ -380,6 +433,10 @@ def _session_from_registry(row: dict[str, Any]) -> LiveBrowserSession | None:
         error=str(row.get("error") or ""),
         standby_started_at=_safe_int(row.get("standby_started_at"), 0),
         close_at=_safe_int(row.get("close_at"), 0),
+        process_pids=[_safe_int(pid, 0) for pid in row.get("process_pids", []) if _safe_int(pid, 0) > 0] if isinstance(row.get("process_pids"), list) else [],
+        process_identities=[dict(identity) for identity in row.get("process_identities", []) if isinstance(identity, dict)]
+        if isinstance(row.get("process_identities"), list)
+        else [],
     )
 
 
@@ -397,6 +454,139 @@ def _tcp_port_open(port: int) -> bool:
             return True
     except OSError:
         return False
+
+
+def _terminate_registry_session_processes(session: LiveBrowserSession) -> int:
+    terminated = 0
+    seen_pids: set[int] = set()
+    for recorded in session.process_identities:
+        pid = _safe_int(recorded.get("pid"), 0)
+        if pid <= 1 or pid in seen_pids:
+            continue
+        seen_pids.add(pid)
+        pidfd = _open_process_pidfd(pid)
+        try:
+            if not _registry_process_identity_matches(session, recorded, pid):
+                continue
+            try:
+                _send_process_signal(pid, signal.SIGTERM, pidfd)
+            except OSError:
+                continue
+            terminated += 1
+            time.sleep(0.4)
+            if not _registry_process_identity_matches(session, recorded, pid):
+                continue
+            with contextlib.suppress(OSError):
+                _send_process_signal(pid, _SIGKILL, pidfd)
+        finally:
+            if pidfd is not None:
+                with contextlib.suppress(OSError):
+                    os.close(pidfd)
+    return terminated
+
+
+def _capture_session_process_identities(session: LiveBrowserSession) -> None:
+    process_pids: list[int] = []
+    identities: list[dict[str, Any]] = []
+    for process in session.processes:
+        pid = _safe_int(getattr(process, "pid", 0), 0)
+        if pid <= 1:
+            continue
+        process_pids.append(pid)
+        current = _read_process_identity(pid)
+        if not _is_expected_xvnc_process(current, session.display):
+            continue
+        identities.append(
+            {
+                "pid": pid,
+                "boot_id": str(current["boot_id"]),
+                "start_ticks": str(current["start_ticks"]),
+                "executable": str(current["executable"]),
+                "argv0": str(current["argv0"]),
+                "display": session.display,
+            }
+        )
+    session.process_pids = process_pids
+    session.process_identities = identities
+
+
+def _registry_process_identity_matches(
+    session: LiveBrowserSession,
+    recorded: dict[str, Any],
+    pid: int,
+) -> bool:
+    expected = {
+        "pid": str(pid),
+        "boot_id": str(recorded.get("boot_id") or ""),
+        "start_ticks": str(recorded.get("start_ticks") or ""),
+        "executable": str(recorded.get("executable") or ""),
+        "argv0": str(recorded.get("argv0") or ""),
+        "display": str(recorded.get("display") or ""),
+    }
+    if not all(expected.values()) or expected["display"] != session.display:
+        return False
+    if Path(expected["argv0"]).name.lower() != "xvnc":
+        return False
+    current = _read_process_identity(pid)
+    if not _is_expected_xvnc_process(current, session.display):
+        return False
+    return (
+        str(current.get("pid")) == expected["pid"]
+        and str(current.get("boot_id")) == expected["boot_id"]
+        and str(current.get("start_ticks")) == expected["start_ticks"]
+        and str(current.get("executable")) == expected["executable"]
+    )
+
+
+def _is_expected_xvnc_process(identity: dict[str, Any] | None, display: str) -> bool:
+    if not identity or not display:
+        return False
+    argv0 = Path(str(identity.get("argv0") or "")).name.lower()
+    args = identity.get("args")
+    return argv0 == "xvnc" and isinstance(args, list) and display in args and bool(identity.get("executable"))
+
+
+def _read_process_identity(pid: int, proc_root: Path = Path("/proc")) -> dict[str, Any] | None:
+    process_root = proc_root / str(pid)
+    try:
+        stat = (process_root / "stat").read_text(encoding="utf-8")
+        command_end = stat.rfind(")")
+        stat_fields = stat[command_end + 2 :].split()
+        if command_end < 0 or len(stat_fields) <= 19:
+            return None
+        args = [part.decode("utf-8", errors="replace") for part in (process_root / "cmdline").read_bytes().split(b"\0") if part]
+        executable = os.readlink(process_root / "exe")
+        boot_id = (proc_root / "sys" / "kernel" / "random" / "boot_id").read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError):
+        return None
+    if not args or not boot_id:
+        return None
+    return {
+        "pid": pid,
+        "boot_id": boot_id,
+        "start_ticks": stat_fields[19],
+        "executable": executable,
+        "argv0": args[0],
+        "args": args,
+    }
+
+
+def _open_process_pidfd(pid: int) -> int | None:
+    pidfd_open = getattr(os, "pidfd_open", None)
+    pidfd_send_signal = getattr(signal, "pidfd_send_signal", None)
+    if not callable(pidfd_open) or not callable(pidfd_send_signal):
+        return None
+    try:
+        return int(pidfd_open(pid, 0))
+    except OSError:
+        return None
+
+
+def _send_process_signal(pid: int, signum: int, pidfd: int | None) -> None:
+    if pidfd is not None:
+        signal.pidfd_send_signal(pidfd, signum, None, 0)
+        return
+    os.kill(pid, signum)
 
 
 def _allocate_display_number() -> int:
@@ -442,24 +632,10 @@ def _cleanup_orphaned_live_browser_processes(logger: Any | None = None) -> None:
     if str(os.getenv("SOCIAL_AUTOMATION_LIVE_BROWSER_CLEAN_ORPHANS", "1")).strip().lower() in {"0", "false", "no", "off"}:
         return
 
-    patterns = [
-        r"Xvnc :9[0-9]\b",
-        r"Xvnc :1[0-3][0-9]\b",
-        r"camoufox-bin .*social_automation/profiles/",
-    ]
     stopped = 0
-    for pattern in patterns:
-        try:
-            result = subprocess.run(["pgrep", "-f", pattern], check=False, capture_output=True, text=True, timeout=3)
-        except Exception:
-            continue
-        pids = [pid.strip() for pid in (result.stdout or "").splitlines() if pid.strip().isdigit()]
-        for pid in pids:
-            try:
-                subprocess.run(["kill", "-TERM", pid], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
-                stopped += 1
-            except Exception:
-                continue
+    for session in _load_registry_sessions():
+        stopped += _terminate_registry_session_processes(session)
+        _remove_session_registry(session.id)
     if stopped:
         _log(logger, "info", "live_browser_orphan_cleanup", "已清理上次遗留的实时浏览器进程", {"count": stopped})
 

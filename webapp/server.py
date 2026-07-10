@@ -3468,9 +3468,11 @@ def _sync_tool_r18_api_config_from_runtime(runtime: dict[str, Any], explicit: di
         if llm_models:
             model_order = ", ".join(llm_models)
             updates["llmModelPriorityOrder"] = model_order
+            updates["llmFreeModelPriorityOrder"] = model_order
             updates["llmDefaultModelGpt"] = model_order
             updates["llmDefaultModel"] = model_order
             updates["llm_model_priority_order"] = model_order
+            updates["llm_free_model_priority_order"] = model_order
             updates["llm_default_model_gpt"] = model_order
             updates["llm_default_model"] = model_order
     if any(
@@ -10432,6 +10434,10 @@ class PersonaDashboardPersonaProfilePayload(BaseModel):
     link_presets: list[PersonaDashboardLinkPresetPayload] | None = None
 
 
+class PersonaDashboardMemoryCreatePayload(BaseModel):
+    summary: str = ""
+
+
 class PersonaDashboardRefreshPayload(BaseModel):
     archive_id: str = ""
 
@@ -10439,6 +10445,8 @@ class PersonaDashboardRefreshPayload(BaseModel):
 class PersonaDashboardDraftPostPayload(BaseModel):
     title: str = ""
     content: str = ""
+    media_paths: list[str] = Field(default_factory=list)
+    media_ops: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class PersonaDashboardGeneratePostsPayload(BaseModel):
@@ -11442,6 +11450,37 @@ def _list_selectable_persona_memories(archive_id: str) -> list[dict[str, Any]]:
     return entries[:100]
 
 
+def _create_persona_dashboard_memory_entry(archive_id: str, summary: str) -> dict[str, Any]:
+    clean_id = str(archive_id or "").strip()
+    clean_summary = _normalize_persona_memory_summary(summary)
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID。")
+    if not clean_summary:
+        raise HTTPException(status_code=400, detail="人设记忆内容不能为空。")
+    _, _, archives = _persona_archive_source_for_write(clean_id)
+    if not _find_persona_archive(archives, clean_id):
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    memory = {
+        "id": _new_id("memory"),
+        "date": _persona_dashboard_iso_now(),
+        "summary": clean_summary,
+        "kind": "consolidated",
+    }
+    with _persona_archive_file_lock():
+        path = _persona_memory_file()
+        raw = _read_json_file(path)
+        state = raw if isinstance(raw, dict) else {}
+        rows = state.get(clean_id) if isinstance(state.get(clean_id), list) else []
+        state[clean_id] = [memory, *rows][:100]
+        _write_json_file(path, state)
+    return {
+        "ok": True,
+        "archive_id": clean_id,
+        "memory": memory,
+        "memories": _list_selectable_persona_memories(clean_id),
+    }
+
+
 def _delete_persona_dashboard_memory_entry(archive_id: str, memory_id: str) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     clean_memory_id = str(memory_id or "").strip()
@@ -11786,166 +11825,11 @@ def _persona_hot_raw_candidate_count(result: dict[str, Any]) -> int:
     return len(candidates) if isinstance(candidates, list) else 0
 
 
-def _persona_hot_entry_id(entry: Any) -> str:
-    if isinstance(entry, str):
-        return entry.strip()
-    if isinstance(entry, dict):
-        return str(entry.get("id") or "").strip()
-    return ""
-
-
-def _persona_hot_entry_at(entry: Any) -> float:
-    if not isinstance(entry, dict):
-        return 0.0
-    text = str(entry.get("at") or "").strip()
-    if not text:
-        return 0.0
-    try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
-    except Exception:
-        return 0.0
-
-
-def _persona_hot_web_served_file() -> Path:
-    return TOOL_R18_RUNTIME_DIR / "persona_hot_web_served.json"
-
-
-def _persona_hot_threads_cache_file() -> Path:
-    return TOOL_R18_RUNTIME_DIR / "sentiment_threads_search_cache.json"
-
-
-def _read_persona_hot_web_served_at_map(archive_id: str) -> dict[str, float]:
-    raw = _read_json_file(_persona_hot_web_served_file())
-    rows = raw.get(str(archive_id or "").strip()) if isinstance(raw, dict) else []
-    if not isinstance(rows, list):
-        return {}
-    result: dict[str, float] = {}
-    for row in rows:
-        candidate_id = _persona_hot_entry_id(row)
-        if candidate_id:
-            result[candidate_id] = _persona_hot_entry_at(row)
-    return result
-
-
-def _remember_persona_hot_web_served(archive_id: str, candidates: list[dict[str, Any]]) -> None:
-    clean_id = str(archive_id or "").strip()
-    if not clean_id or not candidates:
-        return
-    path = _persona_hot_web_served_file()
-    raw = _read_json_file(path)
-    state = raw if isinstance(raw, dict) else {}
-    current: dict[str, dict[str, str]] = {}
-    rows = state.get(clean_id)
-    if isinstance(rows, list):
-        for row in rows:
-            candidate_id = _persona_hot_entry_id(row)
-            if candidate_id:
-                current[candidate_id] = {
-                    "id": candidate_id,
-                    "at": str(row.get("at") or "") if isinstance(row, dict) else "",
-                }
-    now = _persona_dashboard_iso_now()
-    for candidate in candidates:
-        candidate_id = str(candidate.get("id") or candidate.get("candidate_id") or "").strip()
-        if candidate_id:
-            current[candidate_id] = {"id": candidate_id, "at": now}
-    state[clean_id] = list(current.values())[-500:]
-    _write_json_file(path, state)
-
-
-def _persona_hot_cache_entry_is_fresh(entry: dict[str, Any], max_age_seconds: int = 24 * 60 * 60) -> bool:
-    text = str(entry.get("at") or "").strip()
-    if not text:
-        return True
-    try:
-        captured = datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
-    except Exception:
-        return True
-    return (time.time() - captured) <= max_age_seconds
-
-
-def _dedupe_persona_hot_candidates(candidates: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    seen: set[str] = set()
-    result: list[dict[str, Any]] = []
-    for candidate in candidates:
-        if not isinstance(candidate, dict):
-            continue
-        candidate_id = str(candidate.get("id") or candidate.get("candidate_id") or "").strip()
-        source_url = str(candidate.get("source_url") or candidate.get("sourceUrl") or "").strip()
-        content = re.sub(r"\s+", "", str(candidate.get("full_content") or candidate.get("content") or "").strip())
-        key = candidate_id or source_url or content[:160]
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        result.append(candidate)
-    return result
-
-
-def _read_persona_hot_cached_candidates(archive_id: str, max_candidates: int = 120) -> list[dict[str, Any]]:
-    clean_id = str(archive_id or "").strip()
-    if not clean_id:
-        return []
-    raw = _read_json_file(_persona_hot_threads_cache_file())
-    if not isinstance(raw, dict):
-        return []
-    prefix = f"{clean_id}::"
-    rows: list[tuple[float, float, dict[str, Any]]] = []
-    for key, entry in raw.items():
-        if not isinstance(key, str) or not key.startswith(prefix) or not isinstance(entry, dict):
-            continue
-        if not _persona_hot_cache_entry_is_fresh(entry):
-            continue
-        cache_at = _persona_hot_entry_at(entry)
-        for item in entry.get("candidates") if isinstance(entry.get("candidates"), list) else []:
-            normalized = _normalize_persona_hot_candidate(item)
-            if not normalized:
-                continue
-            rows.append((cache_at, _number(normalized.get("hot_score"), 0), normalized))
-    rows.sort(key=lambda item: (-item[0], -item[1]))
-    return _dedupe_persona_hot_candidates(row[2] for row in rows)[:max(0, int(max_candidates or 0))]
-
-
-def _rank_persona_hot_candidates_for_web(candidates: list[dict[str, Any]], served_at: dict[str, float], limit: int) -> list[dict[str, Any]]:
-    def sort_key(candidate: dict[str, Any]) -> tuple[int, float, float]:
-        candidate_id = str(candidate.get("id") or candidate.get("candidate_id") or "").strip()
-        seen_at = served_at.get(candidate_id)
-        hot_score = _number(candidate.get("hot_score"), 0)
-        return (1 if seen_at is not None else 0, float(seen_at or 0), -hot_score)
-
-    return sorted(candidates, key=sort_key)[:max(0, int(limit or 0))]
-
-
-def _persona_hot_result_needs_web_retry(result: dict[str, Any], limit: int, refresh: bool) -> bool:
-    if not refresh or limit <= 0:
-        return False
-    if _persona_hot_raw_candidate_count(result) >= limit:
-        return False
-    warnings = result.get("warnings") if isinstance(result, dict) else []
-    text = " ".join(str(item or "") for item in warnings) if isinstance(warnings, list) else str(warnings or "")
-    return any(marker in text for marker in (
-        "模型生成热点关键词失败",
-        "模型生成熱點關鍵詞失敗",
-        "模型关键词不可用",
-        "模型關鍵詞不可用",
-        "关键词超时",
-        "關鍵詞超時",
-        "keyword",
-        "timeout",
-    ))
-
-
-def _run_persona_hot_workflow_cli_with_web_retry(payload: dict[str, Any], limit: int, timeout_seconds: int = 180) -> dict[str, Any]:
-    result = _run_persona_hot_workflow_cli(payload, timeout_seconds=timeout_seconds)
-    if not _persona_hot_result_needs_web_retry(result, limit, bool(payload.get("refresh"))):
-        return result
-    retry_result = _run_persona_hot_workflow_cli(payload, timeout_seconds=timeout_seconds)
-    return retry_result if _persona_hot_raw_candidate_count(retry_result) >= _persona_hot_raw_candidate_count(result) else result
-
-
 def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     if not clean_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID。")
+
     memories = _list_selectable_persona_memories(clean_id)
     summary_by_id = {
         str(item.get("id") or "").strip(): str(item.get("summary") or "").strip()
@@ -11960,22 +11844,19 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
     )[:8]
     limit = min(max(_to_int(payload.limit, 10), 1), 20)
     search_mode = "normal" if str(payload.search_mode or "").strip().lower() == "normal" else "strict"
-    internal_limit = 20 if bool(payload.refresh) and limit >= 10 else limit
-    web_served_at_before_fetch = _read_persona_hot_web_served_at_map(clean_id)
-    workflow_payload = {
-        "action": "fetch-hot-candidates",
-        "archiveId": clean_id,
-        "prompt": str(payload.prompt or "").strip(),
-        "refresh": bool(payload.refresh),
-        "limit": internal_limit,
-        "searchMode": search_mode,
-        "memorySummaries": selected_summaries,
-    }
-    result = _run_persona_hot_workflow_cli_with_web_retry(
-        workflow_payload,
-        limit=internal_limit,
+    result = _run_persona_hot_workflow_cli(
+        {
+            "action": "fetch-hot-candidates",
+            "archiveId": clean_id,
+            "prompt": str(payload.prompt or "").strip(),
+            "refresh": bool(payload.refresh),
+            "limit": limit,
+            "searchMode": search_mode,
+            "memorySummaries": selected_summaries,
+        },
         timeout_seconds=180,
     )
+
     cookie_rows = []
     for item in result.get("cookieStatuses") if isinstance(result.get("cookieStatuses"), list) else []:
         if not isinstance(item, dict):
@@ -11986,6 +11867,7 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
             "message": _normalize_hot_workflow_text(item.get("message") or item.get("health") or ""),
             "health": str(item.get("health") or "").strip(),
         })
+
     candidates = [
         normalized
         for normalized in (
@@ -11993,14 +11875,7 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
             for item in (result.get("candidates") if isinstance(result.get("candidates"), list) else [])
         )
         if normalized
-    ]
-    if bool(payload.refresh) and limit >= 10:
-        candidates = _dedupe_persona_hot_candidates([
-            *candidates,
-            *_read_persona_hot_cached_candidates(clean_id),
-        ])
-    candidates = _rank_persona_hot_candidates_for_web(candidates, web_served_at_before_fetch, limit)
-    _remember_persona_hot_web_served(clean_id, candidates)
+    ][:limit]
     return {
         "ok": True,
         "archive_name": str(result.get("archiveName") or result.get("archive_name") or "").strip(),
@@ -12218,7 +12093,7 @@ def _serve_persona_archive_post_media(archive_id: str, post_id: str, index: int,
     if not raw_url:
         raise HTTPException(status_code=404, detail="媒体文件不存在。")
     path = Path(raw_url).expanduser().resolve()
-    if not path.is_file():
+    if not path.is_file() or not _is_allowed_dashboard_media_path(path):
         raise HTTPException(status_code=404, detail="媒体源文件不存在。")
     return FileResponse(str(path), filename=path.name)
 
@@ -12249,7 +12124,7 @@ def _serve_persona_archive_publish_history_media(archive_id: str, history_id: st
     if not raw_url:
         raise HTTPException(status_code=404, detail="媒体文件不存在。")
     path = Path(raw_url).expanduser().resolve()
-    if not path.is_file():
+    if not path.is_file() or not _is_allowed_dashboard_media_path(path):
         raise HTTPException(status_code=404, detail="媒体源文件不存在。")
     return FileResponse(str(path), filename=path.name)
 
@@ -12515,8 +12390,12 @@ def _create_persona_archive_post(archive_id: str, payload: PersonaDashboardDraft
         raise HTTPException(status_code=400, detail="缺少人设 ID。")
     content = str(payload.content or "").strip()
     title = str(payload.title or "").strip()
-    if not content:
-        raise HTTPException(status_code=400, detail="推文内容不能为空。")
+    media_paths = [
+        path for path in _extract_existing_file_paths(payload.media_paths)
+        if _is_allowed_dashboard_media_path(Path(path))
+    ]
+    if not content and not media_paths:
+        raise HTTPException(status_code=400, detail="推文正文和媒体不能同时为空。")
     path, raw, archives = _persona_archive_source_for_write(clean_id)
     archive = _find_persona_archive(archives, clean_id)
     if not archive:
@@ -12526,13 +12405,19 @@ def _create_persona_archive_post(archive_id: str, payload: PersonaDashboardDraft
     now = _persona_dashboard_iso_now()
     record = {
         "id": _new_persona_post_id(),
-        "title": title or _persona_post_title(content, len(posts)),
+        "title": title or (_persona_post_title(content, len(posts)) if content else f"媒体草稿 #{len(posts) + 1}"),
         "content": content,
         "wordCount": len(content),
         "orderIndex": next_order,
         "createdAt": now,
         "updatedAt": now,
     }
+    if media_paths:
+        media_items = _persona_post_media_items_from_paths(media_paths)
+        first_media = media_items[0]
+        record["mediaItems"] = media_items
+        record["mediaUrl"] = first_media["url"]
+        record["mediaType"] = first_media["type"]
     archive["posts"] = [*posts, record]
     archive["updatedAt"] = now
     _write_persona_archives_preserving_shape(path, raw, archives)
@@ -12620,8 +12505,6 @@ def _update_persona_archive_post(archive_id: str, post_id: str, payload: Persona
         raise HTTPException(status_code=400, detail="missing archive_id or post_id")
     content = str(payload.content or "").strip()
     title = str(payload.title or "").strip()
-    if not content:
-        raise HTTPException(status_code=400, detail="post content cannot be empty")
     path, raw, archives = _persona_archive_source_for_write(clean_id)
     archive = _find_persona_archive(archives, clean_id)
     if not archive:
@@ -12637,10 +12520,37 @@ def _update_persona_archive_post(archive_id: str, post_id: str, payload: Persona
             break
     if target is None:
         raise HTTPException(status_code=404, detail="post not found")
+    current_media = [str(item.get("url") or "").strip() for item in _compact_dashboard_media_items(target) if str(item.get("url") or "").strip()]
+    next_media = list(current_media)
+    for raw_op in payload.media_ops or []:
+        op = raw_op if isinstance(raw_op, dict) else {}
+        op_type = str(op.get("type") or "").strip().lower()
+        op_paths = [
+            path for path in _extract_existing_file_paths(op.get("media_paths") or [])
+            if _is_allowed_dashboard_media_path(Path(path))
+        ]
+        raw_index = int(_number(op.get("index"), -1))
+        if op_type == "append" and op_paths:
+            next_media.extend(path for path in op_paths if path not in next_media)
+        elif op_type == "replace" and op_paths and 0 <= raw_index < len(next_media):
+            next_media[raw_index:raw_index + 1] = op_paths
+        elif op_type == "delete" and 0 <= raw_index < len(next_media):
+            next_media.pop(raw_index)
+    if not content and not next_media:
+        raise HTTPException(status_code=400, detail="推文正文和媒体不能同时为空。")
     now = _persona_dashboard_iso_now()
-    target["title"] = title or _persona_post_title(content, target_index)
+    target["title"] = title or (_persona_post_title(content, target_index) if content else str(target.get("title") or "").strip() or f"媒体草稿 #{target_index + 1}")
     target["content"] = content
     target["wordCount"] = len(content)
+    if payload.media_ops:
+        media_items = _persona_post_media_items_from_paths(next_media)
+        target["mediaItems"] = media_items
+        if media_items:
+            target["mediaUrl"] = media_items[0]["url"]
+            target["mediaType"] = media_items[0]["type"]
+        else:
+            target.pop("mediaUrl", None)
+            target.pop("mediaType", None)
     target["updatedAt"] = now
     archive["updatedAt"] = now
     _write_persona_archives_preserving_shape(path, raw, archives)
@@ -12668,7 +12578,10 @@ def _update_persona_archive_post_media(archive_id: str, post_id: str, *, media_p
     clean_post_id = str(post_id or "").strip()
     if not clean_archive_id or not clean_post_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID 或草稿 ID。")
-    valid_paths = _extract_existing_file_paths(media_paths)
+    valid_paths = [
+        path for path in _extract_existing_file_paths(media_paths)
+        if _is_allowed_dashboard_media_path(Path(path))
+    ]
     if not valid_paths:
         raise HTTPException(status_code=400, detail="没有可保存的媒体文件。")
     path, raw, archives = _persona_archive_source_for_write(clean_archive_id)
@@ -12906,7 +12819,10 @@ def _publish_persona_archive_post(
     if not clean_archive_id or not clean_post_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID 或推文 ID。")
     source_name = _persona_post_source_name(source)
-    media_paths = [str(item or "").strip() for item in (payload.media_paths or []) if str(item or "").strip()]
+    media_paths = [
+        path for path in _extract_existing_file_paths(payload.media_paths)
+        if _is_allowed_dashboard_media_path(Path(path))
+    ]
     _, _, archives = _persona_archive_source_for_write(clean_archive_id)
     archive = _find_persona_archive(archives, clean_archive_id)
     if not archive:
@@ -12917,13 +12833,13 @@ def _publish_persona_archive_post(
     if not post or (source_name == "posts" and _is_published_persona_draft(post)):
         raise HTTPException(status_code=404, detail="推文草稿不存在。")
     content = str(post.get("content") or "").strip()
-    if not content:
+    if not media_paths:
+        media_paths = _post_media_paths_for_publish(post)
+    if not content and not media_paths:
         raise HTTPException(status_code=400, detail="推文草稿内容为空，不能发布。")
     account = _persona_publish_account_for_archive(clean_archive_id, payload.account_id, payload.platform)
     platform = str(account.get("platform") or "instagram").strip().lower() or "instagram"
     login_task = _ensure_publish_login_task(account, scheduled_at=payload.scheduled_at or 0)
-    if not media_paths:
-        media_paths = _post_media_paths_for_publish(post)
     if platform == "instagram" and not media_paths:
         raise HTTPException(status_code=400, detail="Instagram 发布至少需要一份媒体素材。")
     task = create_social_task(
@@ -12962,8 +12878,11 @@ def _post_media_paths_for_publish(post: dict[str, Any]) -> list[str]:
     paths: list[str] = []
     for item in _compact_dashboard_media_items(post, post.get("publishedMeta") if isinstance(post.get("publishedMeta"), dict) else {}):
         text = str((item or {}).get("url") or "").strip()
-        if text and text not in paths:
-            paths.append(text)
+        if not text or text in paths:
+            continue
+        path = Path(text).expanduser()
+        if path.is_file() and _is_allowed_dashboard_media_path(path):
+            paths.append(str(path.resolve()))
     return paths
 
 
@@ -13029,7 +12948,8 @@ def _publish_persona_matrix(payload: PersonaDashboardMatrixPublishPayload) -> di
             for post in rows:
                 post_id = str(post.get("id") or "").strip()
                 content = str(post.get("content") or "").strip()
-                if not post_id or not content:
+                media_paths = _post_media_paths_for_publish(post)
+                if not post_id or (not content and not media_paths):
                     continue
                 if str(post.get("publishedAt") or post.get("published_at") or "").strip():
                     continue
@@ -13946,7 +13866,6 @@ def _compact_publish_record(record: dict[str, Any]) -> dict[str, Any]:
     source_meta = record.get("sourceMeta") if isinstance(record.get("sourceMeta"), dict) else {}
     published_targets = record.get("publishedTargets") if isinstance(record.get("publishedTargets"), list) else []
     automation_task_type = record.get("automationTaskType") or record.get("automation_task_type") or published_meta.get("taskType")
-    screenshot_path = str(record.get("screenshotUrl") or "")
     content = ""
     for candidate in (
         record.get("content"),
@@ -13985,8 +13904,6 @@ def _compact_publish_record(record: dict[str, Any]) -> dict[str, Any]:
         "views": _source_metric(published_meta, "viewCount", "view_count"),
         "automation_task_type": automation_task_type,
         "automation_task_id": record.get("automationTaskId") or record.get("automation_task_id") or published_meta.get("taskId") or published_meta.get("task_id"),
-        "screenshot_path": screenshot_path,
-        "screenshot_url": _automation_screenshot_url(screenshot_path),
         "media_items": _compact_dashboard_media_items(record, published_meta, source_meta, published_targets),
     }
 
@@ -14007,7 +13924,7 @@ def _is_persona_publish_history_record(record: Any) -> bool:
     if task_type and task_type != "publish_post":
         return False
     content = str(record.get("content") or record.get("caption") or "").strip()
-    return bool(content)
+    return bool(content or _compact_dashboard_media_items(record, published_meta))
 
 
 def _metric_value(metrics: dict[str, Any], *keys: str) -> int:
@@ -15549,6 +15466,10 @@ def create_app() -> FastAPI:
     def api_persona_dashboard_persona_memories(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
         return {"ok": True, "memories": _list_selectable_persona_memories(archive_id)}
 
+    @app.post("/api/persona_dashboard/personas/{archive_id}/memories")
+    def api_persona_dashboard_create_persona_memory(archive_id: str, payload: PersonaDashboardMemoryCreatePayload, _user: dict[str, Any] = Depends(get_current_user)):
+        return _create_persona_dashboard_memory_entry(archive_id, payload.summary)
+
     @app.delete("/api/persona_dashboard/personas/{archive_id}/memories/{memory_id}")
     def api_persona_dashboard_delete_persona_memory(archive_id: str, memory_id: str, _user: dict[str, Any] = Depends(get_current_user)):
         return _delete_persona_dashboard_memory_entry(archive_id, memory_id)
@@ -16351,7 +16272,7 @@ def create_app() -> FastAPI:
                         yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
                 else:
                     status = str(task_row["status"]) if task_row else ""
-                    if status in {"success", "failed"}:
+                    if status in {"success", "failed", "cancelled"}:
                         if done_seen:
                             return
                         done_seen = True

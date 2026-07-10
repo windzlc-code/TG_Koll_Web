@@ -528,6 +528,7 @@ export async function callTextUnderstandingModelWithFallback(
     isUsableResponse?: (data: any) => boolean;
     isRetryableError?: (error: unknown) => boolean;
     onFallback?: (event: { from: string; to: string; error: string }) => void;
+    attemptTimeoutMs?: number;
   },
 ): Promise<{ model: string; data: any }> {
   const models = getTextUnderstandingModelFallbacks(primaryModel);
@@ -536,7 +537,10 @@ export async function callTextUnderstandingModelWithFallback(
   for (let index = 0; index < models.length; index += 1) {
     const model = models[index];
     try {
-      const data = await callGemini(model, contents, generationConfig, signal);
+      const attemptSignal = options?.attemptTimeoutMs
+        ? (signal ? AbortSignal.any([signal, AbortSignal.timeout(options.attemptTimeoutMs)]) : AbortSignal.timeout(options.attemptTimeoutMs))
+        : signal;
+      const data = await callGemini(model, contents, generationConfig, attemptSignal);
       if (!options?.isUsableResponse || options.isUsableResponse(data)) {
         return { model, data };
       }

@@ -15,6 +15,8 @@ const TASK_QUEUE_REGULAR_PAGE_SIZE_KEY = "wk-task-queue-regular-page-size";
 const LIVE_BROWSER_STANDBY_SECONDS_KEY = "wk-live-browser-standby-seconds";
 const LIVE_BROWSER_AUTO_CLOSE_SECONDS_KEY = "wk-live-browser-auto-close-seconds";
 const LIVE_BROWSER_MAX_CONCURRENCY_KEY = "wk-live-browser-max-concurrency";
+const LIVE_BROWSER_TEXT_INPUT_MODE_KEY = "wk-live-browser-text-input-mode";
+const LIVE_BROWSER_LAYOUT_KEY = "wk-live-browser-layout";
 
 try {
   if (window.localStorage.getItem(THEME_STORAGE_KEY) === "dark") {
@@ -89,6 +91,27 @@ function storedLiveBrowserSeconds(key, fallback, min, max) {
     return Math.min(Math.max(Number.isFinite(value) ? Math.round(value) : fallback, min), max);
   } catch {
     return fallback;
+  }
+}
+
+function storedLiveBrowserTextInputMode() {
+  try {
+    const value = String(window.localStorage.getItem(LIVE_BROWSER_TEXT_INPUT_MODE_KEY) || "paste").trim().toLowerCase();
+    return ["paste", "type"].includes(value) ? value : "paste";
+  } catch {
+    return "paste";
+  }
+}
+
+function normalizeLiveBrowserLayout(value = "grid") {
+  return String(value || "").trim().toLowerCase() === "list" ? "list" : "grid";
+}
+
+function storedLiveBrowserLayout() {
+  try {
+    return normalizeLiveBrowserLayout(window.localStorage.getItem(LIVE_BROWSER_LAYOUT_KEY) || "grid");
+  } catch {
+    return "grid";
   }
 }
 
@@ -351,6 +374,7 @@ const state = {
     standby_seconds: storedLiveBrowserSeconds(LIVE_BROWSER_STANDBY_SECONDS_KEY, 60, 0, 3600),
     auto_close_seconds: storedLiveBrowserSeconds(LIVE_BROWSER_AUTO_CLOSE_SECONDS_KEY, 300, 10, 86400),
     max_concurrency: storedLiveBrowserSeconds(LIVE_BROWSER_MAX_CONCURRENCY_KEY, 4, 1, 12),
+    text_input_mode: storedLiveBrowserTextInputMode(),
   },
   taskQueueSelectedPersonaIds: new Set(),
   taskQueueSelectedRegularIds: new Set(),
@@ -365,11 +389,16 @@ const state = {
   publishHistoryPreviewId: "",
   publishCustomContent: "",
   socialTasksFetch: null,
+  socialRefreshFetch: null,
+  socialCancelAllPending: false,
   socialAccounts: [],
   socialTasks: [],
   socialTaskToastStatuses: {},
   socialTaskPersonaRefreshSignatures: {},
   socialBrowserSessions: [],
+  liveBrowserLayout: storedLiveBrowserLayout(),
+  liveBrowserSettingsDirty: false,
+  liveBrowserSettingsSyncRevision: 0,
   events: null,
   mediaPreviewGroups: {},
   mediaPreviewSeq: 0,
@@ -880,6 +909,7 @@ function eventKindLabel(kind) {
     success: "成功",
     standby: "待机中",
     failed: "失败",
+    cancelled: "已取消",
     error: "错误",
     warn: "警告",
     warning: "警告",
@@ -890,6 +920,8 @@ function eventKindLabel(kind) {
 }
 
 const toastTimers = new WeakMap();
+const toastElapsedTimers = new WeakMap();
+const toastStartedAtByKey = new Map();
 const dismissedPersistentToastKeys = new Set();
 const uploadPreviewUrls = new WeakMap();
 
@@ -913,6 +945,12 @@ function dismissToast(toast, options = {}) {
   const timer = toastTimers.get(toast);
   if (timer) window.clearTimeout(timer);
   toastTimers.delete(toast);
+  const elapsedTimer = toastElapsedTimers.get(toast);
+  if (elapsedTimer) window.clearInterval(elapsedTimer);
+  toastElapsedTimers.delete(toast);
+  if (toast.dataset.toastPersistent !== "true" && toast.dataset.toastKey) {
+    toastStartedAtByKey.delete(toast.dataset.toastKey);
+  }
   toast.classList.add("is-leaving");
   window.setTimeout(() => toast.remove(), 180);
 }
@@ -922,6 +960,12 @@ function removeToastNow(toast) {
   const timer = toastTimers.get(toast);
   if (timer) window.clearTimeout(timer);
   toastTimers.delete(toast);
+  const elapsedTimer = toastElapsedTimers.get(toast);
+  if (elapsedTimer) window.clearInterval(elapsedTimer);
+  toastElapsedTimers.delete(toast);
+  if (toast.dataset.toastPersistent !== "true" && toast.dataset.toastKey) {
+    toastStartedAtByKey.delete(toast.dataset.toastKey);
+  }
   toast.remove();
 }
 
@@ -967,16 +1011,84 @@ function toastTargetForKind(kind, options = {}) {
   return null;
 }
 
-function applyToastMeta(toast, { key, ok, message, persistent, target }) {
+function normalizeToastStatus(status, ok = true, persistent = false) {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (["queued", "running", "progress", "success", "failed", "error", "cancelled", "need_manual", "warning", "warn"].includes(normalized)) {
+    return normalized;
+  }
+  if (persistent) return "running";
+  return ok ? "success" : "failed";
+}
+
+function toastTimestampMs(value) {
+  if (value instanceof Date) return value.getTime();
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) return numeric < 1e12 ? numeric * 1000 : numeric;
+  const parsed = Date.parse(String(value || ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatToastElapsed(milliseconds) {
+  const totalSeconds = Math.max(0, Math.floor(Number(milliseconds || 0) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return hours > 0
+    ? [hours, minutes, seconds].map((part) => String(part).padStart(2, "0")).join(":")
+    : [minutes, seconds].map((part) => String(part).padStart(2, "0")).join(":");
+}
+
+function updateToastElapsed(toast) {
+  if (!toast || toast.dataset.toastLongTask !== "true") return;
+  const elapsedNode = toast.querySelector(".toast-message-elapsed");
+  if (!elapsedNode) return;
+  const startedAt = toastTimestampMs(toast.dataset.toastStartedAt);
+  const finishedAt = toastTimestampMs(toast.dataset.toastFinishedAt) || Date.now();
+  const elapsed = formatToastElapsed(Math.max(0, finishedAt - startedAt));
+  elapsedNode.textContent = elapsed;
+  elapsedNode.setAttribute("aria-label", `已用时 ${elapsed}`);
+}
+
+function syncToastElapsedTimer(toast, { key, longTask, terminal, startedAt }) {
+  const currentTimer = toastElapsedTimers.get(toast);
+  if (currentTimer) window.clearInterval(currentTimer);
+  toastElapsedTimers.delete(toast);
+  if (!longTask) return;
+  const resolvedStartedAt = toastTimestampMs(startedAt)
+    || toastTimestampMs(toast.dataset.toastStartedAt)
+    || toastStartedAtByKey.get(key)
+    || Date.now();
+  toastStartedAtByKey.set(key, resolvedStartedAt);
+  toast.dataset.toastStartedAt = String(resolvedStartedAt);
+  if (terminal) {
+    if (!toast.dataset.toastFinishedAt) toast.dataset.toastFinishedAt = String(Date.now());
+  } else {
+    delete toast.dataset.toastFinishedAt;
+  }
+  updateToastElapsed(toast);
+  if (!terminal) {
+    toastElapsedTimers.set(toast, window.setInterval(() => updateToastElapsed(toast), 1000));
+  }
+}
+
+function applyToastMeta(toast, { key, ok, message, persistent, target, status, longTask, startedAt }) {
   if (!toast) return;
+  const normalizedStatus = normalizeToastStatus(status, ok, persistent);
+  const terminal = ["success", "failed", "error", "cancelled", "warning", "warn"].includes(normalizedStatus)
+    || (normalizedStatus === "need_manual" && !persistent);
   toast.className = [
     "toast-message",
     ok ? "is-ok" : "is-bad",
     persistent ? "is-persistent" : "",
     target ? "is-clickable" : "",
+    longTask ? "is-long-task" : "",
+    terminal ? "is-terminal" : "is-active",
+    `is-status-${normalizedStatus}`,
   ].filter(Boolean).join(" ");
   toast.dataset.toastKey = key;
   toast.dataset.toastPersistent = persistent ? "true" : "false";
+  toast.dataset.toastLongTask = longTask ? "true" : "false";
+  toast.dataset.toastStatus = normalizedStatus;
   if (target) {
     toast.dataset.toastTarget = JSON.stringify(target);
     toast.setAttribute("role", "button");
@@ -990,6 +1102,7 @@ function applyToastMeta(toast, { key, ok, message, persistent, target }) {
   }
   const messageNode = toast.querySelector(".toast-message-text");
   if (messageNode) messageNode.textContent = message;
+  syncToastElapsedTimer(toast, { key, longTask, terminal, startedAt });
 }
 
 async function openToastTarget(rawTarget) {
@@ -1041,6 +1154,21 @@ async function openToastTarget(rawTarget) {
   }
 }
 
+function toastProgressSegmentsMarkup() {
+  const opacities = [
+    .025, .035, .05, .07, .10, .14, .19, .26, .35, .46, .59, .74, .9,
+    1,
+    .9, .74, .59, .46, .35, .26, .19, .14, .10, .07, .05, .035, .025,
+  ];
+  const step = 1.05;
+  return opacities.map((opacity, index) => {
+    const start = -(index * step);
+    const end = start - 100;
+    const peak = opacity === 1 ? " data-toast-segment-peak" : "";
+    return `<rect pathLength="100"${peak} style="--toast-segment-start: ${start.toFixed(2)}px; --toast-segment-end: ${end.toFixed(2)}px; --toast-segment-opacity: ${opacity}"></rect>`;
+  }).join("");
+}
+
 function showToast(text, ok = true, options = {}) {
   const message = String(text || "").trim();
   if (!message) return null;
@@ -1051,9 +1179,14 @@ function showToast(text, ok = true, options = {}) {
   if (!persistent) dismissedPersistentToastKeys.delete(toastKey);
   if (persistent && dismissedPersistentToastKeys.has(toastKey)) return null;
   const existingToast = Array.from(host.children).find((item) => item.dataset.toastKey === toastKey);
+  const status = normalizeToastStatus(options.status || options.kind, ok, persistent);
+  const longTask = options.longTask === undefined
+    ? Boolean(options.taskId || persistent || existingToast?.dataset.toastLongTask === "true")
+    : Boolean(options.longTask);
+  const startedAt = options.startedAt || toastStartedAtByKey.get(toastKey) || "";
   const duration = Number(options.duration || (ok ? 3200 : 5200));
   if (existingToast) {
-    applyToastMeta(existingToast, { key: toastKey, ok, message, persistent, target });
+    applyToastMeta(existingToast, { key: toastKey, ok, message, persistent, target, status, longTask, startedAt });
     existingToast.classList.remove("is-leaving");
     host.appendChild(existingToast);
     const existingTimer = toastTimers.get(existingToast);
@@ -1070,14 +1203,25 @@ function showToast(text, ok = true, options = {}) {
   }
   const toast = document.createElement("div");
   toast.innerHTML = `
-    <span class="toast-message-text">${esc(message)}</span>
+    <span class="toast-message-body">
+      <span class="toast-message-text">${esc(message)}</span>
+      <span class="toast-message-meta">
+        <time class="toast-message-elapsed">00:00</time>
+      </span>
+    </span>
     <button type="button" class="toast-message-close" aria-label="关闭提示">×</button>
+    <svg class="toast-message-progress" aria-hidden="true">
+      ${toastProgressSegmentsMarkup()}
+    </svg>
   `;
-  applyToastMeta(toast, { key: toastKey, ok, message, persistent, target });
+  applyToastMeta(toast, { key: toastKey, ok, message, persistent, target, status, longTask, startedAt });
   host.appendChild(toast);
   const maxToasts = 3;
-  const overflowCount = Math.max(0, host.children.length - maxToasts);
-  Array.from(host.children).slice(0, overflowCount).forEach(removeToastNow);
+  while (host.children.length > maxToasts) {
+    const removable = Array.from(host.children).find((item) => item !== toast && item.dataset.toastPersistent !== "true");
+    if (!removable) break;
+    removeToastNow(removable);
+  }
   toast.querySelector(".toast-message-close")?.addEventListener("click", (event) => {
     event.stopPropagation();
     dismissToast(toast, { manual: true });
@@ -1765,7 +1909,7 @@ function personaFormState(personaId) {
   const key = String(personaId || "").trim();
   if (!key) {
     return {
-      generate: { mode: "ai", composeMode: "tweet", count: storedPersonaGenerateCount(), targetWords: storedPersonaGenerateTargetWords(), contentTimeSlot: "", prompt: "", selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotPrompt: "", hotSearchMode: "strict", hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {} },
+      generate: { mode: "ai", composeMode: "tweet", count: storedPersonaGenerateCount(), targetWords: storedPersonaGenerateTargetWords(), contentTimeSlot: "", prompt: "", selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotEditingCandidateId: "", hotPrompt: "", hotSearchMode: "strict", hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {}, hotSelectedMediaIndexByCandidate: {}, hotReplacementFilesByCandidate: {} },
       draft: defaultPersonaDraftForm(),
       media: { taskType: "persona_post_image", contentMode: "draft", manualContent: "", prompt: "", imageCount: storedPersonaMediaImageCount(), aspectRatio: "1:1", resolution: "720p", duration: 2, replaceExisting: false },
       images: { prompt: "", aspectRatio: "1:1" },
@@ -1783,10 +1927,13 @@ function personaFormState(personaId) {
         selectedMemoryIds: [],
         hotSelectedIds: [],
         hotPreviewId: "",
+        hotEditingCandidateId: "",
         hotPrompt: "",
         hotSearchMode: "strict",
         hotDeletedMediaByCandidate: {},
         hotEditedContentByCandidate: {},
+        hotSelectedMediaIndexByCandidate: {},
+        hotReplacementFilesByCandidate: {},
       },
       draft: defaultPersonaDraftForm(),
       media: {
@@ -1806,6 +1953,13 @@ function personaFormState(personaId) {
         aspectRatio: "1:1",
       },
     };
+  }
+  const generate = state.personaForms[key].generate;
+  if (!generate.hotReplacementFilesByCandidate || typeof generate.hotReplacementFilesByCandidate !== "object") {
+    generate.hotReplacementFilesByCandidate = {};
+  }
+  if (!generate.hotSelectedMediaIndexByCandidate || typeof generate.hotSelectedMediaIndexByCandidate !== "object") {
+    generate.hotSelectedMediaIndexByCandidate = {};
   }
   return state.personaForms[key];
 }
@@ -1969,10 +2123,10 @@ function personaHotImportMeta(personaId, postId) {
       hot_score: personaHotMetricNumber(sourceMeta.hotScore, sourceMeta.hot_score),
       metrics: sourceMeta.metrics && typeof sourceMeta.metrics === "object" ? sourceMeta.metrics : {},
       engagement: sourceMeta.engagement && typeof sourceMeta.engagement === "object" ? sourceMeta.engagement : {},
-      view_count: personaHotMetricNumber(sourceMeta.engagement?.viewCount, sourceMeta.metrics?.view_count, sourceMeta.metrics?.viewCount, sourceMeta.metrics?.views),
+      view_count: personaHotViewMetric({ metrics: sourceMeta.metrics, engagement: sourceMeta.engagement }),
       like_count: personaHotMetricNumber(sourceMeta.engagement?.likeCount, sourceMeta.metrics?.like_count, sourceMeta.metrics?.likeCount, sourceMeta.metrics?.likes),
       comment_count: personaHotMetricNumber(sourceMeta.engagement?.commentCount, sourceMeta.metrics?.comment_count, sourceMeta.metrics?.commentCount, sourceMeta.metrics?.comments),
-      share_count: personaHotMetricNumber(sourceMeta.metrics?.send_count, sourceMeta.engagement?.sendCount, sourceMeta.metrics?.share_count, sourceMeta.metrics?.shareCount, sourceMeta.metrics?.shares, sourceMeta.engagement?.shareCount),
+      share_count: personaHotMetricNumber(sourceMeta.metrics?.send_count, sourceMeta.engagement?.sendCount, sourceMeta.metrics?.reshare_count, sourceMeta.metrics?.share_count, sourceMeta.metrics?.shareCount, sourceMeta.metrics?.shares, sourceMeta.engagement?.shareCount),
       repost_count: personaHotMetricNumber(sourceMeta.engagement?.repostCount, sourceMeta.metrics?.repost_count, sourceMeta.metrics?.repostCount, sourceMeta.metrics?.reposts),
       warnings: Array.isArray(sourceMeta.warnings) ? sourceMeta.warnings : [],
       media_items: Array.isArray(sourceMeta.media_items) ? sourceMeta.media_items : [],
@@ -2054,17 +2208,53 @@ function personaHotCandidateId(row, index = 0) {
 }
 
 function personaHotCandidateScore(row) {
-  return Number(
-    row?.hot_score
-    || row?.view_count
-    || row?.metrics?.viewCount
-    || row?.metrics?.views
-    || 0
-  )
-    + Number(row?.like_count || row?.engagement?.likeCount || row?.metrics?.likeCount || row?.metrics?.likes || 0)
-    + Number(row?.comment_count || row?.engagement?.commentCount || row?.metrics?.commentCount || row?.metrics?.comments || 0)
-    + Number(row?.share_count || row?.engagement?.shareCount || row?.metrics?.shareCount || row?.metrics?.shares || 0)
-    + Number(row?.repost_count || row?.metrics?.repostCount || row?.metrics?.reposts || 0);
+  const explicitScore = personaHotMetricNumber(row?.hot_score, row?.hotScore, row?.score);
+  if (explicitScore !== null) return explicitScore;
+  const views = personaHotViewMetric(row) || 0;
+  const interactions = (personaHotMetricNumber(row?.like_count, row?.engagement?.likeCount, row?.metrics?.like_count, row?.metrics?.likeCount, row?.metrics?.likes) || 0)
+    + (personaHotMetricNumber(row?.comment_count, row?.engagement?.commentCount, row?.metrics?.comment_count, row?.metrics?.commentCount, row?.metrics?.comments) || 0)
+    + (personaHotMetricNumber(row?.repost_count, row?.engagement?.repostCount, row?.metrics?.repost_count, row?.metrics?.repostCount, row?.metrics?.reposts) || 0)
+    + (personaHotMetricNumber(row?.metrics?.send_count, row?.engagement?.sendCount, row?.metrics?.reshare_count, row?.send_count, row?.share_count, row?.metrics?.share_count, row?.metrics?.shareCount, row?.metrics?.shares, row?.engagement?.shareCount) || 0);
+  return Math.max(views, interactions);
+}
+
+function personaHotMetricNumber(...values) {
+  for (const value of values) {
+    if (value === null || value === undefined || value === "") continue;
+    const number = Number(value);
+    if (Number.isFinite(number) && number >= 0) return number;
+  }
+  return null;
+}
+
+function personaHotViewMetric(candidate) {
+  return personaHotMetricNumber(
+    candidate?.view_count,
+    candidate?.viewCount,
+    candidate?.views,
+    candidate?.play_count,
+    candidate?.playCount,
+    candidate?.engagement?.viewCount,
+    candidate?.engagement?.views,
+    candidate?.engagement?.playCount,
+    candidate?.metrics?.view_count,
+    candidate?.metrics?.viewCount,
+    candidate?.metrics?.views,
+    candidate?.metrics?.play_count,
+    candidate?.metrics?.playCount,
+  );
+}
+
+function personaHotMetricSummary(candidate) {
+  const fields = [
+    ["热度", personaHotMetricNumber(candidate?.hot_score, candidate?.hotScore, candidate?.score)],
+    ["浏览", personaHotViewMetric(candidate)],
+    ["点赞", personaHotMetricNumber(candidate?.like_count, candidate?.engagement?.likeCount, candidate?.metrics?.like_count, candidate?.metrics?.likeCount, candidate?.metrics?.likes)],
+    ["评论", personaHotMetricNumber(candidate?.comment_count, candidate?.engagement?.commentCount, candidate?.metrics?.comment_count, candidate?.metrics?.commentCount, candidate?.metrics?.comments)],
+    ["转发", personaHotMetricNumber(candidate?.repost_count, candidate?.engagement?.repostCount, candidate?.metrics?.repost_count, candidate?.metrics?.repostCount, candidate?.metrics?.reposts)],
+    ["分享", personaHotMetricNumber(candidate?.metrics?.send_count, candidate?.engagement?.sendCount, candidate?.metrics?.reshare_count, candidate?.send_count, candidate?.share_count, candidate?.metrics?.share_count, candidate?.metrics?.shareCount, candidate?.metrics?.shares, candidate?.engagement?.shareCount)],
+  ];
+  return fields.map(([label, value]) => `${label} ${value === null ? "未获取" : numberText(value)}`).join(" · ");
 }
 
 function normalizePersonaHotSearchMode(value) {
@@ -2093,16 +2283,16 @@ function personaHotCandidates(persona = selectedPersona()) {
       platform: String(row.platform || "").trim() || "threads",
       score: personaHotCandidateScore(row),
       captured_at: row.captured_at || row.published_at || "",
-      hot_score: Number(row.hot_score || 0),
+      hot_score: personaHotMetricNumber(row.hot_score, row.hotScore),
       warnings: Array.isArray(row.warnings) ? row.warnings : [],
       keywords: Array.isArray(row.keywords) ? row.keywords : [],
       metrics: row.metrics && typeof row.metrics === "object" ? row.metrics : {},
       engagement: row.engagement && typeof row.engagement === "object" ? row.engagement : {},
-      view_count: Number(row.view_count || row.engagement?.viewCount || row.metrics?.viewCount || row.metrics?.views || 0),
-      like_count: Number(row.like_count || row.engagement?.likeCount || row.metrics?.likeCount || row.metrics?.likes || 0),
-      comment_count: Number(row.comment_count || row.engagement?.commentCount || row.metrics?.commentCount || row.metrics?.comments || 0),
-      share_count: Number(row.share_count || row.engagement?.shareCount || row.metrics?.shareCount || row.metrics?.shares || 0),
-      repost_count: Number(row.repost_count || row.metrics?.repostCount || row.metrics?.reposts || 0),
+      view_count: personaHotViewMetric(row),
+      like_count: personaHotMetricNumber(row.like_count, row.engagement?.likeCount, row.metrics?.like_count, row.metrics?.likeCount, row.metrics?.likes),
+      comment_count: personaHotMetricNumber(row.comment_count, row.engagement?.commentCount, row.metrics?.comment_count, row.metrics?.commentCount, row.metrics?.comments),
+      share_count: personaHotMetricNumber(row.metrics?.send_count, row.engagement?.sendCount, row.metrics?.reshare_count, row.send_count, row.share_count, row.metrics?.share_count, row.metrics?.shareCount, row.metrics?.shares, row.engagement?.shareCount),
+      repost_count: personaHotMetricNumber(row.repost_count, row.engagement?.repostCount, row.metrics?.repost_count, row.metrics?.repostCount, row.metrics?.reposts),
       media_items: Array.isArray(row.media_items) ? row.media_items : [],
     });
   });
@@ -2139,11 +2329,14 @@ function personaHotImportMetaFromCandidate(candidate) {
     source_summary: normalizedTextSnippet(candidate?.full_content || candidate?.content || "", 140) || normalizedTextSnippet(candidate?.source_url || "", 140),
     platform: String(candidate?.platform || "").trim() || "threads",
     captured_at: candidate?.captured_at || candidate?.published_at || "",
-    view_count: Number(candidate?.view_count || 0),
-    like_count: Number(candidate?.like_count || 0),
-    comment_count: Number(candidate?.comment_count || 0),
-    share_count: Number(candidate?.share_count || 0),
-    repost_count: Number(candidate?.repost_count || 0),
+    hot_score: personaHotMetricNumber(candidate?.hot_score, candidate?.score),
+    metrics: candidate?.metrics && typeof candidate.metrics === "object" ? candidate.metrics : {},
+    engagement: candidate?.engagement && typeof candidate.engagement === "object" ? candidate.engagement : {},
+    view_count: personaHotMetricNumber(candidate?.view_count),
+    like_count: personaHotMetricNumber(candidate?.like_count),
+    comment_count: personaHotMetricNumber(candidate?.comment_count),
+    share_count: personaHotMetricNumber(candidate?.share_count),
+    repost_count: personaHotMetricNumber(candidate?.repost_count),
   };
 }
 
@@ -2159,6 +2352,43 @@ function personaHotCandidateMediaItems(candidate) {
       label: String(item?.label || item?.type || "热点媒体").trim() || "热点媒体",
     };
   }).filter(Boolean);
+}
+
+function personaHotCandidateMediaSignature(candidate) {
+  return JSON.stringify(personaHotCandidateMediaItems(candidate).map((item) => [
+    String(item.url || item.previewUrl || "").trim(),
+    String(item.type || "").trim(),
+  ]));
+}
+
+function reconcilePersonaHotMediaStateAfterRefresh(personaId, previousCandidates = [], nextCandidates = []) {
+  const form = personaFormState(personaId).generate;
+  const previousById = new Map((previousCandidates || []).map((candidate) => [personaHotCandidateKey(candidate), candidate]));
+  (nextCandidates || []).forEach((candidate) => {
+    const candidateId = personaHotCandidateKey(candidate);
+    const previous = previousById.get(candidateId);
+    if (!candidateId || !previous) return;
+    const mediaItems = personaHotCandidateMediaItems(candidate);
+    if (personaHotCandidateMediaSignature(previous) !== personaHotCandidateMediaSignature(candidate)) {
+      delete form.hotDeletedMediaByCandidate?.[candidateId];
+      delete form.hotSelectedMediaIndexByCandidate?.[candidateId];
+      clearPersonaHotReplacementFiles(personaId, candidateId);
+      return;
+    }
+    const mediaCount = mediaItems.length;
+    const deleted = personaHotDeletedMediaSet(personaId, candidateId);
+    setPersonaHotDeletedMediaSet(personaId, candidateId, new Set([...deleted].filter((index) => index < mediaCount)));
+    personaHotReplacementEntries(personaId, candidateId).forEach((entry) => {
+      if (entry.index >= mediaCount) setPersonaHotReplacementFile(personaId, candidateId, entry.index, null);
+    });
+    if (!mediaCount) delete form.hotSelectedMediaIndexByCandidate?.[candidateId];
+    else if (Object.prototype.hasOwnProperty.call(form.hotSelectedMediaIndexByCandidate || {}, candidateId)) {
+      form.hotSelectedMediaIndexByCandidate[candidateId] = Math.min(
+        Math.max(Number(form.hotSelectedMediaIndexByCandidate[candidateId]) || 0, 0),
+        mediaCount - 1,
+      );
+    }
+  });
 }
 
 function personaHotCandidateKey(candidate) {
@@ -2189,6 +2419,76 @@ function setPersonaHotDeletedMediaSet(personaId, candidateId, indexes) {
   else delete form.hotDeletedMediaByCandidate[key];
 }
 
+function personaHotSelectedMediaIndex(personaId, candidateId, mediaCount = 0) {
+  const form = personaFormState(personaId).generate;
+  const key = String(candidateId || "").trim();
+  const count = Math.max(0, Number(mediaCount || 0));
+  const requested = Number(form.hotSelectedMediaIndexByCandidate?.[key]);
+  if (!count) return -1;
+  return Number.isInteger(requested) ? Math.min(Math.max(requested, 0), count - 1) : 0;
+}
+
+function setPersonaHotSelectedMediaIndex(personaId, candidateId, index) {
+  const form = personaFormState(personaId).generate;
+  if (!form.hotSelectedMediaIndexByCandidate || typeof form.hotSelectedMediaIndexByCandidate !== "object") {
+    form.hotSelectedMediaIndexByCandidate = {};
+  }
+  const key = String(candidateId || "").trim();
+  const nextIndex = Number(index);
+  if (!key || !Number.isInteger(nextIndex) || nextIndex < 0) return;
+  form.hotSelectedMediaIndexByCandidate[key] = nextIndex;
+}
+
+function personaHotReplacementEntries(personaId, candidateId) {
+  const form = personaFormState(personaId).generate;
+  const key = String(candidateId || "").trim();
+  const stored = form.hotReplacementFilesByCandidate?.[key];
+  if (!stored || typeof stored !== "object") return [];
+  const entries = Array.isArray(stored)
+    ? stored.map((file, index) => [index, file])
+    : Object.entries(stored);
+  return entries.map(([rawIndex, value]) => {
+    const index = Number(rawIndex);
+    const file = value?.file || value;
+    if (!Number.isInteger(index) || index < 0 || !file) return null;
+    return {
+      index,
+      file,
+      previewUrl: String(value?.previewUrl || "").trim(),
+    };
+  }).filter(Boolean).sort((left, right) => left.index - right.index);
+}
+
+function setPersonaHotReplacementFile(personaId, candidateId, index, file = null) {
+  const form = personaFormState(personaId).generate;
+  if (!form.hotReplacementFilesByCandidate || typeof form.hotReplacementFilesByCandidate !== "object") {
+    form.hotReplacementFilesByCandidate = {};
+  }
+  const key = String(candidateId || "").trim();
+  const mediaIndex = Number(index);
+  if (!key || !Number.isInteger(mediaIndex) || mediaIndex < 0) return;
+  const current = form.hotReplacementFilesByCandidate[key];
+  const replacements = current && !Array.isArray(current) && typeof current === "object" ? current : {};
+  const previous = replacements[mediaIndex];
+  if (previous?.previewUrl) URL.revokeObjectURL(previous.previewUrl);
+  if (file) {
+    replacements[mediaIndex] = { file, previewUrl: URL.createObjectURL(file) };
+    form.hotReplacementFilesByCandidate[key] = replacements;
+  } else {
+    delete replacements[mediaIndex];
+    if (Object.keys(replacements).length) form.hotReplacementFilesByCandidate[key] = replacements;
+    else delete form.hotReplacementFilesByCandidate[key];
+  }
+}
+
+function clearPersonaHotReplacementFiles(personaId, candidateId) {
+  personaHotReplacementEntries(personaId, candidateId).forEach((entry) => {
+    if (entry.previewUrl) URL.revokeObjectURL(entry.previewUrl);
+  });
+  const form = personaFormState(personaId).generate;
+  delete form.hotReplacementFilesByCandidate?.[String(candidateId || "").trim()];
+}
+
 function personaHotEditedContent(personaId, candidate) {
   const form = personaFormState(personaId).generate;
   if (!form.hotEditedContentByCandidate || typeof form.hotEditedContentByCandidate !== "object") {
@@ -2208,39 +2508,120 @@ function snapshotPersonaHotPreviewContent() {
   const key = personaHotCandidateKey(candidate);
   if (!key) return;
   const form = personaFormState(persona.id).generate;
+  if (String(form.hotEditingCandidateId || "").trim() !== key) return;
   if (!form.hotEditedContentByCandidate || typeof form.hotEditedContentByCandidate !== "object") {
     form.hotEditedContentByCandidate = {};
   }
   form.hotEditedContentByCandidate[key] = String(textarea.value || "");
 }
 
-function renderPersonaHotMediaDeleteControls(persona, candidate) {
+function startPersonaHotCandidateEdit(persona, candidateId) {
+  const cleanCandidateId = String(candidateId || "").trim();
+  const candidate = personaHotCandidates(persona).find((item) => personaHotCandidateKey(item) === cleanCandidateId);
+  if (!persona || !candidate) return;
+  const form = personaFormState(persona.id).generate;
+  if (!form.hotEditedContentByCandidate || typeof form.hotEditedContentByCandidate !== "object") {
+    form.hotEditedContentByCandidate = {};
+  }
+  if (!Object.prototype.hasOwnProperty.call(form.hotEditedContentByCandidate, cleanCandidateId)) {
+    form.hotEditedContentByCandidate[cleanCandidateId] = String(candidate.full_content || candidate.content || "");
+  }
+  form.hotEditingCandidateId = cleanCandidateId;
+  form.hotPreviewId = cleanCandidateId;
+  renderPersonaDetail();
+  window.requestAnimationFrame(() => $("personaHotPreviewContent")?.focus());
+}
+
+function cancelPersonaHotCandidateEdit(persona, candidateId) {
+  const cleanCandidateId = String(candidateId || "").trim();
+  if (!persona || !cleanCandidateId) return;
+  const form = personaFormState(persona.id).generate;
+  delete form.hotEditedContentByCandidate?.[cleanCandidateId];
+  delete form.hotDeletedMediaByCandidate?.[cleanCandidateId];
+  delete form.hotSelectedMediaIndexByCandidate?.[cleanCandidateId];
+  clearPersonaHotReplacementFiles(persona.id, cleanCandidateId);
+  if (String(form.hotEditingCandidateId || "").trim() === cleanCandidateId) form.hotEditingCandidateId = "";
+  renderPersonaDetail();
+  renderConfirmSummary();
+}
+
+function renderPersonaHotMediaPreview(persona, candidate, { editing = false } = {}) {
   const mediaItems = personaHotCandidateMediaItems(candidate);
   if (!mediaItems.length) return `<div class="empty-state">当前热点候选没有媒体。</div>`;
   const candidateId = personaHotCandidateKey(candidate);
   const deleted = personaHotDeletedMediaSet(persona?.id, candidateId);
+  const replacements = new Map(personaHotReplacementEntries(persona?.id, candidateId).map((entry) => [entry.index, entry]));
+  const displayItems = mediaItems.map((item, index) => {
+    const replacement = replacements.get(index);
+    if (!replacement?.previewUrl) return item;
+    return {
+      previewUrl: replacement.previewUrl,
+      url: replacement.previewUrl,
+      type: guessMediaType(replacement.file?.name || "", replacement.file?.type || ""),
+      label: replacement.file?.name || `替换媒体 ${index + 1}`,
+      pending: true,
+    };
+  });
+  const previewRows = displayItems
+    .map((item, sourceIndex) => ({ item, sourceIndex }))
+    .filter(({ item, sourceIndex }) => !deleted.has(sourceIndex) && item?.previewUrl && !item?.unavailable);
+  const previewGroupId = registerMediaPreviewGroup(previewRows.map(({ item }) => item));
+  const previewIndexBySource = new Map(previewRows.map(({ sourceIndex }, previewIndex) => [sourceIndex, previewIndex]));
+  const selectedIndex = personaHotSelectedMediaIndex(persona?.id, candidateId, mediaItems.length);
   return `
-    <div class="persona-hot-media-toolbar">
-      <strong>媒体处理</strong>
-      <span>已标记删除 ${esc(deleted.size)} / ${esc(mediaItems.length)} 个，未标记的媒体会随草稿保留。</span>
-      <div class="row-actions">
-        <button type="button" data-persona-hot-media-bulk="all" data-persona-hot-media-candidate="${esc(candidateId)}">全选删除</button>
-        <button type="button" data-persona-hot-media-bulk="clear" data-persona-hot-media-candidate="${esc(candidateId)}">清空选择</button>
-      </div>
-    </div>
-    <div class="persona-hot-media-delete-list">
-      ${mediaItems.map((item, index) => {
+    <div class="persona-media-grid persona-hot-media-grid" aria-label="热点媒体编辑">
+      ${displayItems.map((item, index) => {
         const isDeleted = deleted.has(index);
+        const isSelected = editing && index === selectedIndex;
+        const replacement = replacements.get(index);
+        const previewIndex = previewIndexBySource.get(index);
         return `
-          <button
-            type="button"
-            class="persona-hot-media-delete-item ${isDeleted ? "is-deleted" : ""}"
-            data-persona-hot-media-toggle="${esc(candidateId)}"
+          <div
+            class="persona-hot-media-item ${isSelected ? "is-selected" : ""} ${isDeleted ? "is-deleted" : ""} ${replacement ? "has-replacement" : ""}"
+            ${editing ? `data-persona-hot-media-select="${esc(candidateId)}"` : ""}
             data-persona-hot-media-index="${esc(index)}"
           >
-            <span>${esc(item.label || mediaKindLabel(item.type))}</span>
-            <strong>${isDeleted ? "将删除" : "保留"}</strong>
-          </button>
+            ${item.unavailable || !item.previewUrl
+              ? `<div class="persona-media-card is-static is-unavailable">
+                  <div class="persona-media-frame persona-media-frame--empty">
+                    <strong>媒体不可预览</strong>
+                    <small>${esc(item.reason || "原始文件已失效")}</small>
+                  </div>
+                  <span>${esc(mediaKindLabel(item.type))}</span>
+                </div>`
+              : renderMediaPreviewButton(item, "", index, {
+                  className: "persona-media-card",
+                  frameClass: "persona-media-frame",
+                  caption: `${mediaKindLabel(item.type)} ${index + 1}`,
+                  interactive: false,
+                })}
+            <div class="persona-hot-media-actions">
+              ${!isDeleted && previewGroupId && Number.isInteger(previewIndex) ? `<button
+                type="button"
+                class="persona-hot-media-action is-view"
+                data-media-preview-group="${esc(previewGroupId)}"
+                data-media-preview-index="${esc(previewIndex)}"
+                title="查看媒体"
+                aria-label="查看第 ${index + 1} 个媒体"
+              >${renderEyeIcon()}</button>` : ""}
+              ${editing && !isDeleted ? `<button
+                type="button"
+                class="persona-hot-media-action is-replace"
+                data-persona-hot-media-replace="${esc(candidateId)}"
+                data-persona-hot-media-index="${esc(index)}"
+                title="替换媒体"
+                aria-label="替换第 ${index + 1} 个媒体"
+              >${renderReplaceIcon()}</button>` : ""}
+              ${editing ? `<button
+                type="button"
+                class="persona-hot-media-action ${isDeleted ? "is-restore" : "is-remove"}"
+                data-persona-hot-media-toggle="${esc(candidateId)}"
+                data-persona-hot-media-index="${esc(index)}"
+                title="${isDeleted ? "恢复媒体" : "删除媒体"}"
+                aria-label="${isDeleted ? `恢复第 ${index + 1} 个媒体` : `删除第 ${index + 1} 个媒体`}"
+              >${isDeleted ? `<span class="persona-hot-media-undo-icon" aria-hidden="true">↶</span>` : renderTrashIcon()}</button>` : ""}
+            </div>
+          </div>
         `;
       }).join("")}
     </div>
@@ -2253,13 +2634,6 @@ function renderPersonaHotOrigin(meta, { compact = false } = {}) {
   if (compact) {
     return `<span class="persona-hot-origin-badge persona-hot-origin-badge--compact">热点导入</span>`;
   }
-  const scoreBits = [
-    `浏览 ${numberText(meta.view_count || 0)}`,
-    `点赞 ${numberText(meta.like_count || 0)}`,
-    `评论 ${numberText(meta.comment_count || 0)}`,
-  ];
-  scoreBits.push(`分享 ${numberText(meta.share_count || 0)}`);
-  scoreBits.push(`转发 ${numberText(meta.repost_count || 0)}`);
   return `
     <div class="persona-hot-origin">
       <div class="persona-hot-origin-head">
@@ -2269,7 +2643,7 @@ function renderPersonaHotOrigin(meta, { compact = false } = {}) {
       </div>
       <p>${esc(meta.source_summary || "该草稿来自已抓取热点内容。")}</p>
       <div class="persona-hot-origin-meta">
-        <small>${esc(scoreBits.filter(Boolean).join(" · "))}</small>
+        <small>${esc(personaHotMetricSummary(meta))}</small>
         ${meta.source_url ? `<a href="${esc(meta.source_url)}" target="_blank" rel="noopener">查看原帖</a>` : ""}
       </div>
     </div>
@@ -2651,6 +3025,8 @@ function syncSocialTaskToast(task, { force = false } = {}) {
     personaId: task?.persona_id || "",
     openBrowser: true,
     persistent: !terminal,
+    longTask: true,
+    startedAt: task?.started_at || task?.startedAt || task?.created_at || task?.createdAt || "",
     duration: terminal ? 5200 : undefined,
   });
 }
@@ -2712,6 +3088,34 @@ async function cancelSocialAutomationTask(taskId, messageId = "commandMsg") {
   window.setTimeout(() => dismissToastByKey(`social-task:${cleanTaskId}`), 4200);
   await loadSocial().catch(() => {});
   return result;
+}
+
+async function cancelAllSocialAutomationTasks(messageId = "socialMsg") {
+  if (state.socialCancelAllPending) return null;
+  state.socialCancelAllPending = true;
+  syncSocialCancelAllButtons();
+  try {
+    const result = await api("/api/persona_dashboard/automation/tasks/cancel_all", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: "user_cancel_all" }),
+    });
+    const cancelledCount = Math.max(0, Number(result.cancelled_count || 0));
+    showMsg(messageId, cancelledCount ? `已停止 ${cancelledCount} 个自动化任务。` : "当前没有正在运行或排队的自动化任务。", true, {
+      key: "social-task:cancel-all",
+      kind: "cancelled",
+      taskPanel: "persona",
+    });
+    window.setTimeout(() => dismissToastByKey("social-task:cancel-all"), 4200);
+    await Promise.all([
+      loadSocial({ force: true }).catch(() => {}),
+      loadTasks().catch(() => {}),
+    ]);
+    return result;
+  } finally {
+    state.socialCancelAllPending = false;
+    syncSocialCancelAllButtons();
+  }
 }
 
 function taskQueueSet(kind) {
@@ -3129,6 +3533,11 @@ function shouldRefreshAccountStatus() {
   return state.view === "workspace" && (isPersonaWorkspaceModule() || ["publishing", "automation"].includes(state.activeModule));
 }
 
+async function refreshAccountStatusOnce() {
+  if (!shouldRefreshAccountStatus()) return;
+  await refreshSocialAccountsOnly();
+}
+
 function syncAccountStatusAutoRefresh() {
   if (!shouldRefreshAccountStatus()) {
     if (state.accountStatusRefreshTimer) {
@@ -3143,7 +3552,7 @@ function syncAccountStatusAutoRefresh() {
       syncAccountStatusAutoRefresh();
       return;
     }
-    refreshSocialAccountsOnly().catch(() => {});
+    refreshAccountStatusOnce().catch(() => {});
   }, 5000);
 }
 
@@ -3171,12 +3580,23 @@ function snapshotConsoleScrollState() {
   const moduleBody = $("moduleBody");
   const main = document.querySelector(".console-main");
   const personaList = moduleBody?.querySelector(".persona-list-scroll");
+  const publishPreviewTabs = moduleBody?.querySelector(".publish-preview-tabs");
+  const publishPostList = moduleBody?.querySelector(".publish-post-list");
+  const personaHotGrid = moduleBody?.querySelector(".persona-hot-grid");
+  const personaHotPreview = moduleBody?.querySelector(".persona-hot-preview-card");
+  const personaHotLayout = moduleBody?.querySelector(".persona-hot-layout");
   return {
     windowX: window.scrollX || 0,
     windowY: window.scrollY || 0,
     mainTop: main?.scrollTop || 0,
     moduleTop: moduleBody?.scrollTop || 0,
     personaListTop: personaList?.scrollTop || 0,
+    publishPreviewTabsTop: publishPreviewTabs?.scrollTop || 0,
+    publishPostListTop: publishPostList?.scrollTop || 0,
+    personaHotGridTop: personaHotGrid?.scrollTop || 0,
+    personaHotPreviewTop: personaHotPreview?.scrollTop || 0,
+    personaHotPreviewKey: String(personaHotPreview?.dataset?.personaHotPreviewKey || ""),
+    personaHotLayoutTop: personaHotLayout ? personaHotLayout.getBoundingClientRect().top : null,
     personaListScrolls: snapshotPersonaListScrolls(),
   };
 }
@@ -3187,22 +3607,38 @@ function restoreConsoleScrollState(snapshot) {
     const moduleBody = $("moduleBody");
     const main = document.querySelector(".console-main");
     const personaList = moduleBody?.querySelector(".persona-list-scroll");
+    const publishPreviewTabs = moduleBody?.querySelector(".publish-preview-tabs");
+    const publishPostList = moduleBody?.querySelector(".publish-post-list");
+    const personaHotGrid = moduleBody?.querySelector(".persona-hot-grid");
+    const personaHotPreview = moduleBody?.querySelector(".persona-hot-preview-card");
+    const personaHotLayout = moduleBody?.querySelector(".persona-hot-layout");
     if (main) main.scrollTop = snapshot.mainTop || 0;
     if (moduleBody) moduleBody.scrollTop = snapshot.moduleTop || 0;
     if (personaList) personaList.scrollTop = snapshot.personaListTop || 0;
+    if (publishPreviewTabs) publishPreviewTabs.scrollTop = snapshot.publishPreviewTabsTop || 0;
+    if (publishPostList) publishPostList.scrollTop = snapshot.publishPostListTop || 0;
+    if (personaHotGrid) personaHotGrid.scrollTop = snapshot.personaHotGridTop || 0;
+    if (
+      personaHotPreview
+      && String(personaHotPreview.dataset?.personaHotPreviewKey || "") === String(snapshot.personaHotPreviewKey || "")
+    ) {
+      personaHotPreview.scrollTop = snapshot.personaHotPreviewTop || 0;
+    }
     const currentPersonaScrolls = Array.from(document.querySelectorAll(".persona-list-scroll"));
     (snapshot.personaListScrolls || []).forEach((item) => {
       const target = currentPersonaScrolls.find((node, index) => personaListScrollSnapshotKey(node, index) === item.key)
         || currentPersonaScrolls[item.index];
       if (target) target.scrollTop = item.top || 0;
     });
-    window.scrollTo(snapshot.windowX || 0, snapshot.windowY || 0);
+    if (personaHotLayout && Number.isFinite(snapshot.personaHotLayoutTop)) {
+      const topDelta = personaHotLayout.getBoundingClientRect().top - snapshot.personaHotLayoutTop;
+      if (Math.abs(topDelta) > 0.5) window.scrollBy(0, topDelta);
+    } else {
+      window.scrollTo(snapshot.windowX || 0, snapshot.windowY || 0);
+    }
   };
   apply();
-  window.requestAnimationFrame(() => {
-    apply();
-    window.requestAnimationFrame(apply);
-  });
+  window.requestAnimationFrame(apply);
 }
 
 async function confirmDangerAction(message, { title = "确认删除", confirmText = "删除" } = {}) {
@@ -3461,25 +3897,24 @@ function renderMediaPreviewButton(item, groupId, index, {
   className = "persona-media-card",
   frameClass = "persona-media-frame",
   caption = "",
+  interactive = true,
 } = {}) {
   const label = String(item?.label || "").trim();
   const type = String(item?.type || "image").trim() || "image";
   const text = caption || mediaKindLabel(type);
+  const rootTag = interactive ? "button" : "div";
   return `
-    <button
-      type="button"
-      class="${esc(className)}"
-      data-media-preview-group="${esc(groupId)}"
-      data-media-preview-index="${esc(index)}"
-      data-media-preview-type="${esc(type)}"
-      data-media-preview-label="${esc(label || text)}">
+    <${rootTag}
+      ${interactive ? "type=\"button\"" : ""}
+      class="${esc(className)}${interactive ? "" : " is-static"}"
+      ${interactive ? `data-media-preview-group="${esc(groupId)}" data-media-preview-index="${esc(index)}" data-media-preview-type="${esc(type)}" data-media-preview-label="${esc(label || text)}"` : ""}>
       ${type === "video"
         ? `<video class="${esc(frameClass)}" src="${esc(item.previewUrl)}" muted playsinline preload="metadata" onerror="handlePersonaMediaFrameError(this)"></video>`
         : type === "audio"
           ? `<div class="${esc(frameClass)} ${esc(frameClass)}--audio"><strong>音频</strong><small>点击站内预览</small></div>`
           : `<img class="${esc(frameClass)}" src="${esc(item.previewUrl)}" alt="${esc(label || "media")}" loading="lazy" onerror="handlePersonaMediaFrameError(this)" />`}
       <span>${esc(text)}</span>
-    </button>
+    </${rootTag}>
   `;
 }
 
@@ -3609,23 +4044,25 @@ function personaDraftMediaPreviewItems(persona, source, post = {}) {
   return rows;
 }
 
+function isPublishContentMediaItem(item = {}) {
+  const label = String(item?.label || "").trim().toLowerCase();
+  const url = String(item?.url || "").trim();
+  const previewUrl = String(item?.previewUrl || item?.preview_url || "").trim();
+  const combined = `${url} ${previewUrl}`.toLowerCase().replaceAll("\\", "/");
+  if (label === "screenshot") return false;
+  if (combined.includes("/automation/screenshots/")) return false;
+  if (combined.includes("/publish_done_")) return false;
+  return true;
+}
+
 function personaPublishPostMediaItems(personaId, post = {}) {
-  return personaDraftMediaItems(personaId, post).filter((item) => {
-    const label = String(item?.label || "").trim().toLowerCase();
-    const url = String(item?.url || "").trim();
-    const previewUrl = String(item?.previewUrl || "").trim();
-    const combined = `${url} ${previewUrl}`;
-    if (label === "screenshot") return false;
-    if (combined.includes("/automation/screenshots/")) return false;
-    if (combined.includes("/publish_done_")) return false;
-    return true;
-  });
+  return personaDraftMediaItems(personaId, post).filter(isPublishContentMediaItem);
 }
 
 function personaHistoryMediaItems(row = {}) {
   const items = [];
   const baseItems = Array.isArray(row.media_items) ? row.media_items : [];
-  baseItems.forEach((item) => {
+  baseItems.filter(isPublishContentMediaItem).forEach((item) => {
     const url = String(item?.url || "").trim();
     const previewUrl = String(item?.preview_url || "").trim() || directMediaPreviewUrl(url);
     if (!url) return;
@@ -3639,18 +4076,6 @@ function personaHistoryMediaItems(row = {}) {
       reason: reason || (!previewUrl ? "媒体链接已失效" : ""),
     });
   });
-  const screenshotUrl = String(row.screenshot_url || "").trim();
-  if (screenshotUrl && !items.some((item) => item.previewUrl === screenshotUrl || item.url === screenshotUrl)) {
-    const reason = legacyMediaPreviewReason(screenshotUrl);
-    items.push({
-      url: screenshotUrl,
-      previewUrl: reason ? "" : screenshotUrl,
-      type: "image",
-      label: "screenshot",
-      unavailable: Boolean(reason),
-      reason,
-    });
-  }
   return items;
 }
 
@@ -4256,24 +4681,23 @@ async function refreshPersonaHotPost(postId = "", trigger = null) {
 
 function renderPersonaMemoryOptions(persona, selectedIds = []) {
   const rows = state.personaMemories[String(persona.id)] || [];
-  if (!Array.isArray(rows) || !rows.length) {
-    return `<div class="empty-state">当前还没有可选人设记忆，留空也可以直接生成。</div>`;
-  }
+  const safeRows = Array.isArray(rows) ? rows : [];
   const selected = new Set((selectedIds || []).map((item) => String(item || "")));
   return `
     <div class="persona-memory-panel">
       <div class="persona-memory-toolbar">
-        <strong>已选 <span id="personaMemorySelectedCount">${selected.size}</span> / ${rows.length}</strong>
+        <strong>已选 <span id="personaMemorySelectedCount">${selected.size}</span> / ${safeRows.length}</strong>
         <label class="persona-memory-search">
           <input id="personaMemorySearch" type="search" placeholder="筛选记忆内容" />
         </label>
-        <div class="persona-memory-actions">
-          <button type="button" data-persona-memory-bulk="all">全选</button>
-          <button type="button" data-persona-memory-bulk="clear">清空</button>
+        <div class="persona-memory-actions" aria-label="人设记忆操作">
+          <button type="button" data-persona-create-memory title="新建记忆" aria-label="新建记忆">${renderPlusIcon()}</button>
+          <button type="button" data-persona-memory-bulk="all" title="全选记忆" aria-label="全选记忆" ${safeRows.length ? "" : "disabled"}>${renderSelectAllIcon()}</button>
+          <button type="button" data-persona-memory-bulk="clear" title="清空选择" aria-label="清空选择" ${selected.size ? "" : "disabled"}>${renderClearSelectionIcon()}</button>
         </div>
       </div>
-      <div class="persona-memory-grid">
-        ${rows.map((row, index) => {
+      ${safeRows.length ? `<div class="persona-memory-grid">
+        ${safeRows.map((row, index) => {
           const isSelected = selected.has(String(row.id || ""));
           const summary = String(row.summary || "未命名记忆");
           return `
@@ -4292,10 +4716,10 @@ function renderPersonaMemoryOptions(persona, selectedIds = []) {
                   <small>${esc(formatTime(row.date || ""))}</small>
                 </span>
               </label>
-              <button type="button" class="danger" data-persona-delete-memory="${esc(row.id)}">删除</button>
+              <button type="button" class="danger persona-memory-delete" data-persona-delete-memory="${esc(row.id)}" title="删除记忆" aria-label="删除记忆">${renderTrashIcon()}</button>
             </article>`;
         }).join("")}
-      </div>
+      </div>` : `<div class="empty-state">当前还没有可选人设记忆，点击“新建记忆”图标即可添加。</div>`}
     </div>`;
 }
 
@@ -4306,9 +4730,12 @@ function syncPersonaMemorySelectionState() {
     card.classList.toggle("is-selected", Boolean(input?.checked));
   });
   const countNode = $("personaMemorySelectedCount");
+  const selectedCount = document.querySelectorAll("[data-persona-memory-id]:checked").length;
   if (countNode) {
-    countNode.textContent = String(document.querySelectorAll("[data-persona-memory-id]:checked").length);
+    countNode.textContent = String(selectedCount);
   }
+  const clearButton = document.querySelector('[data-persona-memory-bulk="clear"]');
+  if (clearButton) clearButton.disabled = selectedCount === 0;
 }
 
 function applyPersonaMemoryFilter(value = "") {
@@ -4340,7 +4767,10 @@ function isPublishHistoryPostRecord(record = {}) {
   if (!record || typeof record !== "object") return false;
   const taskType = String(record.automation_task_type || record.automationTaskType || record.task_type || record.taskType || "").trim().toLowerCase();
   if (taskType && taskType !== "publish_post") return false;
-  return Boolean(String(record.content || record.caption || "").trim());
+  const hasMedia = [record.media_items, record.mediaItems, record.media, record.attachments]
+    .some((items) => Array.isArray(items) && items.length > 0)
+    || Boolean(String(record.media_url || record.mediaUrl || record.image_url || record.imageUrl || record.video_url || record.videoUrl || "").trim());
+  return Boolean(String(record.content || record.caption || "").trim() || hasMedia);
 }
 
 function personaPublishPreview(post) {
@@ -4870,6 +5300,35 @@ function renderTrashIcon() {
   </svg>`;
 }
 
+function renderPlusIcon() {
+  return `<svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M12 5v14"></path>
+    <path d="M5 12h14"></path>
+  </svg>`;
+}
+
+function renderSelectAllIcon() {
+  return `<svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <rect x="4" y="4" width="16" height="16" rx="3"></rect>
+    <path d="m8 12 2.5 2.5L16 9"></path>
+  </svg>`;
+}
+
+function renderClearSelectionIcon() {
+  return `<svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <rect x="4" y="4" width="16" height="16" rx="3"></rect>
+    <path d="m9 9 6 6"></path>
+    <path d="m15 9-6 6"></path>
+  </svg>`;
+}
+
+function renderEyeIcon() {
+  return `<svg class="ui-eye-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path>
+    <circle cx="12" cy="12" r="2.5"></circle>
+  </svg>`;
+}
+
 function renderRefreshIcon() {
   return `<svg class="ui-action-icon ui-refresh-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
     <path d="M20 11a8 8 0 1 0 2 5"></path>
@@ -4882,6 +5341,15 @@ function renderInfoIcon() {
     <circle cx="12" cy="12" r="9"></circle>
     <path d="M12 11v6"></path>
     <path d="M12 7h.01"></path>
+  </svg>`;
+}
+
+function renderReplaceIcon() {
+  return `<svg class="ui-replace-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M20 7h-8a5 5 0 0 0-5 5"></path>
+    <path d="m17 4 3 3-3 3"></path>
+    <path d="M4 17h8a5 5 0 0 0 5-5"></path>
+    <path d="m7 20-3-3 3-3"></path>
   </svg>`;
 }
 
@@ -5869,25 +6337,6 @@ function renderPublishHistoryPreview(persona = selectedPersona()) {
       </div>
       ${rows.length ? `
         <div class="publish-preview-tabs-layout">
-          <div class="publish-preview-tabs" aria-label="发布历史标签页">
-            ${rows.map((record, index) => {
-              const recordId = String(record.id || "");
-              const active = recordId === String(activeRecord?.id || "");
-              return `
-                <button
-                  type="button"
-                  class="${active ? "is-active" : ""}"
-                  data-publish-history-preview="${esc(recordId)}"
-                  aria-pressed="${active ? "true" : "false"}"
-                >
-                  <span class="publish-preview-tab-index">${esc(index + 1)}</span>
-                  <span class="publish-preview-tab-copy">
-                    <strong>${esc(publishHistoryRecordTitle(record, index))}</strong>
-                    <span>${esc(`第${index + 1}条`)}</span>
-                  </span>
-                </button>`;
-            }).join("")}
-          </div>
           <article class="publish-preview-card">
             <div class="publish-preview-card-head">
               <strong>${esc(publishHistoryRecordTitle(activeRecord, 0) || "发布记录")}</strong>
@@ -6442,9 +6891,9 @@ function bindSimpleFlowInputs(moduleId) {
         renderSimpleFlowModule("publishing");
       });
     });
-    document.querySelectorAll("[data-publish-history-card], [data-publish-history-preview]").forEach((node) => {
+    document.querySelectorAll("[data-publish-history-card]").forEach((node) => {
       node.addEventListener("click", () => {
-        state.publishHistoryPreviewId = String(node.dataset.publishHistoryCard || node.dataset.publishHistoryPreview || "").trim();
+        state.publishHistoryPreviewId = String(node.dataset.publishHistoryCard || "").trim();
         renderSimpleFlowModule("publishing");
       });
     });
@@ -6629,6 +7078,8 @@ function appendEvent(kind, message, options = {}) {
     openDetail: options.openDetail,
     target: options.target,
     persistent,
+    longTask: options.longTask === undefined ? Boolean(options.taskId || persistent) : Boolean(options.longTask),
+    startedAt: options.startedAt || "",
     duration: persistent ? 0 : (ok ? 4200 : 6200),
   });
 }
@@ -6658,14 +7109,14 @@ function watchTask(taskId, options = {}) {
     try { payload = JSON.parse(event.data || "{}"); } catch {}
     const kind = String(payload.kind || payload.status || "progress");
     const dataStatus = String(payload?.data?.status || "").trim();
-    const terminalStatus = ["success", "failed"].includes(dataStatus) ? dataStatus : "";
+    const terminalStatus = ["success", "failed", "cancelled"].includes(dataStatus) ? dataStatus : "";
     const eventKind = terminalStatus || kind;
     appendEvent(eventKind, payload.message || payload.detail || eventKind, {
       key: `task:${taskId}`,
       taskId,
       taskPanel: options.taskPanel || "regular",
     });
-    if (["success", "failed"].includes(eventKind)) {
+    if (["success", "failed", "cancelled"].includes(eventKind)) {
       state.events.close();
       state.events = null;
       syncWatchingTaskChip("");
@@ -6833,10 +7284,16 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
       results.push(result);
     }
     showMsg(messageId, `已提交 ${results.length} 条发布任务。`, true);
-    const firstTaskId = results
+    const taskIds = results
       .map((item) => String(item?.task?.id || "").trim())
-      .find(Boolean) || "";
+      .filter(Boolean);
+    const firstTaskId = taskIds[0] || "";
     if (firstTaskId) openLiveBrowserTaskView(firstTaskId);
+    if (taskIds.length) {
+      watchPersonaPublishTaskSequence(taskIds, persona.id).catch((error) => {
+        showMsg(messageId, error?.detail || error?.message || "连续发布状态跟踪失败", false);
+      });
+    }
     await loadSocial();
     await loadPersonaDraftPosts(persona.id, { force: true }).catch(() => {});
     if (source === "favorites") await loadPersonaFavoritePosts(persona.id, { force: true }).catch(() => {});
@@ -7703,6 +8160,7 @@ function renderConsoleSettingsPage() {
   const liveBrowserStandbySeconds = Math.min(Math.max(Number(state.liveBrowserSettings?.standby_seconds ?? 60), 0), 3600);
   const liveBrowserAutoCloseSeconds = Math.min(Math.max(Number(state.liveBrowserSettings?.auto_close_seconds ?? 300), 10), 86400);
   const liveBrowserMaxConcurrency = Math.min(Math.max(Number(state.liveBrowserSettings?.max_concurrency ?? 4), 1), 12);
+  const liveBrowserTextInputMode = normalizeLiveBrowserTextInputMode(state.liveBrowserSettings?.text_input_mode);
   host.innerHTML = `
     <div class="console-settings-page">
       <div class="console-settings-actions">
@@ -7747,11 +8205,36 @@ function renderConsoleSettingsPage() {
             <input id="settingsLiveBrowserMaxConcurrency" type="number" min="1" max="12" step="1" value="${esc(liveBrowserMaxConcurrency)}" />
             <em>不同账号可并行，超过数量自动排队。</em>
           </label>
+          <label class="console-setting-card console-setting-card-wide">
+            <span>发布正文输入方式</span>
+            <div class="automation-capsule-tabs console-input-mode-tabs" aria-label="发布正文输入方式">
+              <button type="button" class="${liveBrowserTextInputMode === "paste" ? "is-active" : ""}" data-live-browser-input-mode="paste">复制粘贴</button>
+              <button type="button" class="${liveBrowserTextInputMode === "type" ? "is-active" : ""}" data-live-browser-input-mode="type">逐字输入</button>
+            </div>
+            <em>复制粘贴会优先写入浏览器剪贴板并粘贴；逐字输入按字符模拟键入。</em>
+          </label>
         </div>
       </section>
     </div>
   `;
-  syncLiveBrowserSettingsFromServer();
+  const syncRevision = ++state.liveBrowserSettingsSyncRevision;
+  syncLiveBrowserSettingsFromServer(syncRevision);
+}
+
+function normalizeLiveBrowserTextInputMode(value = "paste") {
+  const mode = String(value || "").trim().toLowerCase();
+  return ["paste", "type"].includes(mode) ? mode : "paste";
+}
+
+function setLiveBrowserTextInputMode(mode = "paste") {
+  state.liveBrowserSettingsDirty = true;
+  state.liveBrowserSettings = {
+    ...(state.liveBrowserSettings || {}),
+    text_input_mode: normalizeLiveBrowserTextInputMode(mode),
+  };
+  document.querySelectorAll("[data-live-browser-input-mode]").forEach((button) => {
+    button.classList.toggle("is-active", String(button.dataset.liveBrowserInputMode || "") === state.liveBrowserSettings.text_input_mode);
+  });
 }
 
 function refreshConsoleSettingsDependents() {
@@ -7773,6 +8256,7 @@ async function saveConsoleSettingsPage() {
   const liveBrowserStandbySeconds = Math.min(Math.max(Number.parseInt(String($("settingsLiveBrowserStandbySeconds")?.value || ""), 10) || 0, 0), 3600);
   const liveBrowserAutoCloseSeconds = Math.min(Math.max(Number.parseInt(String($("settingsLiveBrowserAutoCloseSeconds")?.value || ""), 10) || 300, 10), 86400);
   const liveBrowserMaxConcurrency = Math.min(Math.max(Number.parseInt(String($("settingsLiveBrowserMaxConcurrency")?.value || ""), 10) || 4, 1), 12);
+  const liveBrowserTextInputMode = normalizeLiveBrowserTextInputMode(state.liveBrowserSettings?.text_input_mode);
   state.personaListPageSize = pageSize;
   state.taskQueuePersonaPageSize = taskPersonaPageSize;
   state.taskQueueRegularPageSize = taskRegularPageSize;
@@ -7780,6 +8264,7 @@ async function saveConsoleSettingsPage() {
     standby_seconds: liveBrowserStandbySeconds,
     auto_close_seconds: liveBrowserAutoCloseSeconds,
     max_concurrency: liveBrowserMaxConcurrency,
+    text_input_mode: liveBrowserTextInputMode,
   };
   state.personaListPage = 1;
   state.taskQueuePersonaPage = 1;
@@ -7791,6 +8276,7 @@ async function saveConsoleSettingsPage() {
     window.localStorage.setItem(LIVE_BROWSER_STANDBY_SECONDS_KEY, String(liveBrowserStandbySeconds));
     window.localStorage.setItem(LIVE_BROWSER_AUTO_CLOSE_SECONDS_KEY, String(liveBrowserAutoCloseSeconds));
     window.localStorage.setItem(LIVE_BROWSER_MAX_CONCURRENCY_KEY, String(liveBrowserMaxConcurrency));
+    window.localStorage.setItem(LIVE_BROWSER_TEXT_INPUT_MODE_KEY, liveBrowserTextInputMode);
   } catch {}
   try {
     const result = await api("/api/persona_dashboard/automation/browser_settings", {
@@ -7799,6 +8285,7 @@ async function saveConsoleSettingsPage() {
       body: JSON.stringify(state.liveBrowserSettings),
     });
     if (result.settings) state.liveBrowserSettings = result.settings;
+    state.liveBrowserSettingsDirty = false;
   } catch (error) {
     showMsg("consoleSettingsMsg", error.detail || error.message || "实时浏览器设置保存失败。", false);
     return;
@@ -7808,10 +8295,10 @@ async function saveConsoleSettingsPage() {
   showMsg("consoleSettingsMsg", "设置已保存。", true);
 }
 
-async function syncLiveBrowserSettingsFromServer() {
+async function syncLiveBrowserSettingsFromServer(syncRevision = state.liveBrowserSettingsSyncRevision) {
   try {
     const result = await api("/api/persona_dashboard/automation/browser_settings");
-    if (!result.settings) return;
+    if (!result.settings || syncRevision !== state.liveBrowserSettingsSyncRevision || state.liveBrowserSettingsDirty) return;
     state.liveBrowserSettings = result.settings;
     const standby = $("settingsLiveBrowserStandbySeconds");
     const autoClose = $("settingsLiveBrowserAutoCloseSeconds");
@@ -7819,6 +8306,11 @@ async function syncLiveBrowserSettingsFromServer() {
     if (standby) standby.value = String(result.settings.standby_seconds ?? 60);
     if (autoClose) autoClose.value = String(result.settings.auto_close_seconds ?? 300);
     if (maxConcurrency) maxConcurrency.value = String(result.settings.max_concurrency ?? 4);
+    const inputMode = normalizeLiveBrowserTextInputMode(result.settings.text_input_mode || "paste");
+    state.liveBrowserSettings = { ...state.liveBrowserSettings, text_input_mode: inputMode };
+    document.querySelectorAll("[data-live-browser-input-mode]").forEach((button) => {
+      button.classList.toggle("is-active", String(button.dataset.liveBrowserInputMode || "") === inputMode);
+    });
   } catch {}
 }
 
@@ -8748,7 +9240,7 @@ async function watchPersonaAutomationTask(taskId, accountId, step) {
         personaId: task.persona_id || "",
         openBrowser: true,
       });
-      if (["success", "failed", "cancelled", "need_manual"].includes(String(task.status || ""))) {
+      if (["success", "failed", "cancelled"].includes(String(task.status || ""))) {
         delete state.personaAutomationWatchers[key];
         await loadSocial().catch(() => {});
         await loadPersonas().catch(() => {});
@@ -8805,7 +9297,7 @@ async function watchPersonaPublishTask(taskId, personaId) {
         personaId,
         openBrowser: true,
       });
-      if (["success", "failed", "cancelled", "need_manual"].includes(String(task.status || ""))) {
+      if (["success", "failed", "cancelled"].includes(String(task.status || ""))) {
         delete state.personaPublishWatchers[key];
         await Promise.all([
           loadSocial().catch(() => {}),
@@ -8839,6 +9331,113 @@ async function watchPersonaPublishTask(taskId, personaId) {
       }
     }
     await sleep(2000);
+  }
+}
+
+async function refreshPersonaPublishSequenceState(personaId) {
+  const key = String(personaId || "").trim();
+  if (!key) return;
+  await Promise.all([
+    loadSocial().catch(() => {}),
+    loadPersonas().catch(() => {}),
+    loadPersonaDraftPosts(key, { force: true }).catch(() => []),
+    loadPersonaFavoritePosts(key, { force: true }).catch(() => []),
+    loadPersonaPublishHistory(key, { force: true }).catch(() => []),
+  ]);
+}
+
+function socialTaskScheduledAtMs(task) {
+  const raw = task?.scheduled_at;
+  if (raw === undefined || raw === null || raw === "") return 0;
+  const numeric = Number(raw);
+  if (Number.isFinite(numeric)) return numeric < 1e12 ? numeric * 1000 : numeric;
+  const parsed = Date.parse(String(raw));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function personaPublishWatchDeadline(task, startedAt) {
+  const baseDeadline = startedAt + 8 * 60 * 1000;
+  const scheduledAt = socialTaskScheduledAtMs(task);
+  return scheduledAt ? Math.max(baseDeadline, scheduledAt + 10 * 60 * 1000) : baseDeadline;
+}
+
+async function watchPersonaPublishTaskSequence(taskIds = [], personaId = "") {
+  const key = String(personaId || "").trim();
+  const ids = (taskIds || []).map((id) => String(id || "").trim()).filter(Boolean);
+  if (!key || !ids.length) return;
+  const sequenceToken = `sequence:${Date.now()}:${ids.join("|")}`;
+  state.personaPublishWatchers[key] = sequenceToken;
+  try {
+    for (const taskId of ids) {
+      if (state.personaPublishWatchers[key] !== sequenceToken) return;
+      const startedAt = Date.now();
+      const knownTask = (state.socialTasks || []).find((task) => String(task?.id || "") === taskId) || null;
+      let deadline = personaPublishWatchDeadline(knownTask, startedAt);
+      let lastStatus = "";
+      let lastLogs = [];
+      let completed = false;
+      while (Date.now() < deadline) {
+        if (state.personaPublishWatchers[key] !== sequenceToken) return;
+        const taskData = await api(`/api/persona_dashboard/automation/tasks/${encodeURIComponent(taskId)}`).catch(() => null);
+        const task = taskData?.task || null;
+        if (!task) {
+          await sleep(2000);
+          continue;
+        }
+        deadline = Math.max(deadline, personaPublishWatchDeadline(task, startedAt));
+        const status = String(task.status || "").trim().toLowerCase();
+        const terminal = ["success", "failed", "cancelled"].includes(status);
+        const taskPayload = task?.payload && typeof task.payload === "object" ? task.payload : {};
+        const waitingForLoginDependency = status === "queued" && Boolean(taskPayload.auto_login_before_publish && taskPayload.login_task_id);
+        if (status === "need_manual" || waitingForLoginDependency) {
+          deadline = Math.max(deadline, Date.now() + 10 * 60 * 1000);
+        }
+        const statusChanged = status !== lastStatus;
+        if (statusChanged || terminal) {
+          const logData = await api(`/api/persona_dashboard/automation/tasks/${encodeURIComponent(taskId)}/logs`).catch(() => ({ logs: lastLogs }));
+          lastLogs = Array.isArray(logData?.logs) ? logData.logs : lastLogs;
+        }
+        state.personaPublishResults[key] = renderPersonaPublishResult(task, lastLogs);
+        updatePersonaPublishResultView(key);
+        if (statusChanged) {
+          appendEvent(toastKindForTaskStatus(status), `连续发布：${statusLabel(status)}`, {
+            key: `social-task:${taskId}`,
+            taskId,
+            taskPanel: "persona",
+            personaId,
+            openBrowser: true,
+          });
+        }
+        lastStatus = status;
+        if (terminal) {
+          if (status !== "success") {
+            throw new Error(`连续发布任务 ${taskId.slice(0, 8)} 状态为${statusLabel(status)}，已停止跟踪后续任务。`);
+          }
+          completed = true;
+          break;
+        }
+        await sleep(["queued", "pending", "scheduled"].includes(status) ? 5000 : 2000);
+      }
+      if (!completed) {
+        const message = `连续发布任务 ${taskId.slice(0, 8)} 状态跟踪超时，已停止跟踪后续任务。`;
+        state.personaPublishResults[key] = `<div class="persona-warning-inline">${esc(message)}</div>`;
+        updatePersonaPublishResultView(key);
+        appendEvent("warning", message, {
+          key: `social-task:${taskId}`,
+          taskId,
+          taskPanel: "persona",
+          personaId,
+          openBrowser: true,
+        });
+        throw new Error(message);
+      }
+    }
+    await refreshPersonaPublishSequenceState(key);
+  } catch (error) {
+    await refreshPersonaPublishSequenceState(key);
+    throw error;
+  } finally {
+    if (state.personaPublishWatchers[key] === sequenceToken) delete state.personaPublishWatchers[key];
   }
 }
 
@@ -8948,6 +9547,44 @@ async function deletePersonaMemoryEntry(memoryId = "") {
   renderPersonaDetail();
   renderConfirmSummary();
   showMsg("commandMsg", "记忆已删除。", true);
+}
+
+async function createPersonaMemoryEntry() {
+  const persona = selectedPersona();
+  if (!persona) {
+    showMsg("commandMsg", "请先选择一个人设。", false);
+    return;
+  }
+  const summary = await openConsoleModal({
+    title: "新建人设记忆",
+    message: "填写一条可在生成推文时选用的人设记忆。",
+    inputLabel: "记忆内容",
+    confirmText: "保存记忆",
+    cancelText: "取消",
+  });
+  if (summary === null) return;
+  const cleanSummary = String(summary || "").trim();
+  if (!cleanSummary) {
+    showMsg("commandMsg", "人设记忆内容不能为空。", false);
+    return;
+  }
+  showMsg("commandMsg", "正在保存人设记忆...", true);
+  const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/memories`, {
+    method: "POST",
+    body: JSON.stringify({ summary: cleanSummary }),
+  });
+  const memoryId = String(result.memory?.id || "").trim();
+  const generateForm = personaFormState(persona.id).generate;
+  if (memoryId) {
+    generateForm.selectedMemoryIds = Array.from(new Set([
+      ...(Array.isArray(generateForm.selectedMemoryIds) ? generateForm.selectedMemoryIds : []),
+      memoryId,
+    ]));
+  }
+  await loadPersonaMemories(persona.id, { force: true });
+  renderPersonaDetail();
+  renderConfirmSummary();
+  showMsg("commandMsg", "人设记忆已新建并选中。", true);
 }
 
 async function loadPersonaImageLibrary(personaId, { force = false } = {}) {
@@ -9217,6 +9854,13 @@ function setPersonaGenerateRunState(personaId, patch = {}) {
   const nextPatch = { ...patch };
   delete nextPatch.suppressToast;
   delete nextPatch.silent;
+  if (
+    nextPatch.status === "running"
+    && !nextPatch.startedAt
+    && (current.status !== "running" || String(current.kind || "") !== String(nextPatch.kind || current.kind || ""))
+  ) {
+    nextPatch.startedAt = new Date().toISOString();
+  }
   state.personaGenerateRuns[key] = {
     ...current,
     ...nextPatch,
@@ -9278,6 +9922,8 @@ function showPersonaGenerateRunToast(personaId, runState) {
     key: `persona-generate:${personaId}:${display.kind}`,
     kind: display.isRunning ? "running" : (display.isError ? "error" : "success"),
     persistent: display.isRunning,
+    longTask: true,
+    startedAt: runState?.startedAt || "",
     target,
     duration,
   });
@@ -9346,7 +9992,7 @@ async function generatePersonaDraftPosts() {
     renderConfirmSummary();
   } catch (error) {
     setPersonaGenerateRunState(persona.id, {
-      kind: "draft",
+      kind: isRewriteRun ? "rewrite" : "draft",
       status: "error",
       message: "图文草稿生成失败",
       error: error.detail || error.message || "生成失败",
@@ -9372,10 +10018,22 @@ async function createPersonaDraftPost() {
   const editingSource = form.editingSource === "favorites" ? "favorites" : "posts";
   const queuedMediaOps = editingPostId && Array.isArray(form.mediaOps) ? [...form.mediaOps] : [];
   const pendingMediaFiles = filesFromInput("personaPostMediaUploadFiles");
-  if (!content) {
-    showMsg("commandMsg", "请先填写推文正文。", false);
+  const hasExistingMedia = Boolean(editingPostId && Array.isArray(form.mediaItems) && form.mediaItems.length);
+  const hasMediaContent = pendingMediaFiles.length > 0 || hasExistingMedia;
+  if (!content && !hasMediaContent) {
+    showMsg("commandMsg", "请填写推文正文或上传至少一个媒体文件。", false);
     return;
   }
+  const initialMediaPaths = !editingPostId && pendingMediaFiles.length
+    ? await uploadAutomationMedia(pendingMediaFiles, "commandMsg")
+    : [];
+  if (!editingPostId && pendingMediaFiles.length && !initialMediaPaths.length) {
+    showMsg("commandMsg", "媒体上传失败，请重新选择文件后再保存。", false);
+    return;
+  }
+  const preparedMediaOps = editingPostId
+    ? await preparePersonaDraftMediaOps(queuedMediaOps, pendingMediaFiles)
+    : [];
   showMsg("commandMsg", editingPostId ? `正在保存${editingSource === "favorites" ? "收藏" : "草稿"}修改...` : "正在保存推文草稿...", true);
   const result = await api(
     editingPostId
@@ -9384,27 +10042,10 @@ async function createPersonaDraftPost() {
     {
       method: editingPostId ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, content }),
+      body: JSON.stringify({ title, content, media_paths: initialMediaPaths, media_ops: preparedMediaOps }),
     },
   );
   const savedPostId = result.id || editingPostId || "";
-  if (queuedMediaOps.length && savedPostId) {
-    await applyPersonaDraftMediaOps({
-      persona,
-      postId: savedPostId,
-      source: editingPostId ? editingSource : "posts",
-      ops: queuedMediaOps,
-    });
-  }
-  if (pendingMediaFiles.length && savedPostId) {
-    await savePersonaPostMediaFiles({
-      persona,
-      postId: savedPostId,
-      source: editingPostId ? editingSource : "posts",
-      files: pendingMediaFiles,
-      replaceExisting: false,
-    });
-  }
   setSelectedPersonaPostId(savedPostId);
   setPersonaPostSource(editingPostId ? editingSource : "posts", persona);
   state.personaPanels.content = "posts";
@@ -9436,6 +10077,7 @@ async function fetchPersonaHotCandidates(refresh = false) {
   }
   snapshotPersonaCurrentForm();
   const form = personaFormState(persona.id).generate;
+  const previousCandidates = personaHotCandidates(persona);
   form.hotSearchMode = normalizePersonaHotSearchMode(form.hotSearchMode);
   setPersonaGenerateRunState(persona.id, {
     kind: "hot",
@@ -9464,11 +10106,20 @@ async function fetchPersonaHotCandidates(refresh = false) {
       search_mode: normalizePersonaHotSearchMode(result.search_mode || form.hotSearchMode),
       fetched_at: new Date().toISOString(),
     };
-    const candidateIds = personaHotCandidates(persona).map((item) => String(item.candidate_id || "").trim()).filter(Boolean);
+    const nextCandidates = personaHotCandidates(persona);
+    reconcilePersonaHotMediaStateAfterRefresh(persona.id, previousCandidates, nextCandidates);
+    const candidateIds = nextCandidates.map((item) => String(item.candidate_id || "").trim()).filter(Boolean);
+    const candidateIdSet = new Set(candidateIds);
     form.hotSelectedIds = (form.hotSelectedIds || []).filter((item) => candidateIds.includes(String(item || "").trim()));
     form.hotPreviewId = candidateIds.includes(String(form.hotPreviewId || "").trim()) ? String(form.hotPreviewId || "").trim() : (candidateIds[0] || "");
-    form.hotDeletedMediaByCandidate = {};
-    form.hotEditedContentByCandidate = {};
+    if (!candidateIdSet.has(String(form.hotEditingCandidateId || "").trim())) form.hotEditingCandidateId = "";
+    Object.keys(form.hotReplacementFilesByCandidate || {}).forEach((candidateId) => {
+      if (!candidateIdSet.has(candidateId)) clearPersonaHotReplacementFiles(persona.id, candidateId);
+    });
+    ["hotDeletedMediaByCandidate", "hotEditedContentByCandidate", "hotSelectedMediaIndexByCandidate"].forEach((field) => {
+      const current = form[field] && typeof form[field] === "object" ? form[field] : {};
+      form[field] = Object.fromEntries(Object.entries(current).filter(([candidateId]) => candidateIdSet.has(candidateId)));
+    });
     setPersonaGenerateRunState(persona.id, {
       kind: "hot",
       status: "success",
@@ -9476,8 +10127,6 @@ async function fetchPersonaHotCandidates(refresh = false) {
       generatedCount: candidateIds.length,
       error: "",
     });
-    renderPersonaDetail();
-    renderConfirmSummary();
   } catch (error) {
     setPersonaGenerateRunState(persona.id, {
       kind: "hot",
@@ -9488,11 +10137,14 @@ async function fetchPersonaHotCandidates(refresh = false) {
     throw error;
   } finally {
     setActionLocked(lockParts, false);
-    if (isPersonaWorkspaceModule()) renderPersonaDetail();
+    if (isPersonaWorkspaceModule()) {
+      renderPersonaDetail();
+      renderConfirmSummary();
+    }
   }
 }
 
-async function submitPersonaHotDraftImport(persona, selected) {
+async function submitPersonaHotDraftImport(persona, selected, { replacementOpsByCandidate = {} } = {}) {
   const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/hot_candidates/import`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -9517,24 +10169,83 @@ async function submitPersonaHotDraftImport(persona, selected) {
     }),
   });
   const createdIds = Array.isArray(result.posts) ? result.posts.map((item) => String(item?.id || "").trim()).filter(Boolean) : [];
-  if (createdIds.length) setSelectedPersonaPostId(createdIds[0]);
   const form = personaFormState(persona.id).generate;
+  let replacementCount = 0;
+  try {
+    for (let index = 0; index < selected.length; index += 1) {
+      const candidateId = personaHotCandidateKey(selected[index]);
+      const operations = Array.isArray(replacementOpsByCandidate[candidateId])
+        ? replacementOpsByCandidate[candidateId].filter((item) => item?.file && Number.isInteger(item?.replaceIndex) && item.replaceIndex >= 0)
+        : [];
+      const postId = createdIds[index] || "";
+      if (!postId || !operations.length) continue;
+      for (const operation of operations) {
+        let lastError = null;
+        for (let attempt = 1; attempt <= 3; attempt += 1) {
+          try {
+            await savePersonaPostMediaFiles({
+              persona,
+              postId,
+              source: "posts",
+              files: [operation.file],
+              replaceIndex: operation.replaceIndex,
+            });
+            lastError = null;
+            break;
+          } catch (error) {
+            lastError = error;
+            if (attempt < 3) await sleep(300 * (2 ** (attempt - 1)));
+          }
+        }
+        if (lastError) throw lastError;
+        replacementCount += 1;
+      }
+    }
+  } catch (error) {
+    const rollbackResults = await Promise.allSettled(createdIds.map((postId) => api(
+      `/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/posts/by_id/${encodeURIComponent(postId)}`,
+      { method: "DELETE" },
+    )));
+    await loadPersonaDraftPosts(persona.id, { force: true }).catch(() => []);
+    const rollbackFailures = rollbackResults.filter((item) => item.status === "rejected").length;
+    const wrapped = new Error(
+      rollbackFailures
+        ? `媒体替换失败，且有 ${rollbackFailures} 条草稿未能自动撤销，请检查草稿库后再重试。`
+        : "媒体替换连续失败，已自动撤销本次草稿导入，可以直接重试。",
+    );
+    wrapped.detail = wrapped.message;
+    wrapped.cause = error;
+    throw wrapped;
+  }
+  const importedIds = new Set(selected.map(personaHotCandidateKey).filter(Boolean));
   form.hotSelectedIds = [];
-  form.hotPreviewId = "";
-  form.hotDeletedMediaByCandidate = {};
-  form.hotEditedContentByCandidate = {};
+  if (!form.hotPreviewId) form.hotPreviewId = personaHotCandidateKey(selected[0]);
+  if (importedIds.has(String(form.hotEditingCandidateId || "").trim())) form.hotEditingCandidateId = "";
+  importedIds.forEach((candidateId) => {
+    delete form.hotDeletedMediaByCandidate?.[candidateId];
+    delete form.hotEditedContentByCandidate?.[candidateId];
+    delete form.hotSelectedMediaIndexByCandidate?.[candidateId];
+    clearPersonaHotReplacementFiles(persona.id, candidateId);
+  });
   await loadPersonaDraftPosts(persona.id, { force: true });
-  state.personaPanels.content = "posts";
-  renderPersonaDetail();
-  renderConfirmSummary();
+  const importedCount = result.imported_count || createdIds.length || 0;
   setPersonaGenerateRunState(persona.id, {
     kind: "hot_import",
     status: "success",
-    message: `热点草稿已导入 ${result.imported_count || createdIds.length || 0} 条`,
-    generatedCount: result.imported_count || createdIds.length || 0,
+    message: `热点草稿已导入 ${importedCount} 条`,
+    generatedCount: importedCount,
     postIds: createdIds,
     error: "",
   });
+  renderPersonaDetail();
+  renderConfirmSummary();
+  await openConsoleModal({
+    title: "热点草稿已导入",
+    message: `已将 ${importedCount} 条热点推文保存到当前人设草稿库${replacementCount ? `，并替换 ${replacementCount} 个媒体文件` : ""}。页面会保持在热点处理区，你可以继续选择、编辑或替换媒体。`,
+    confirmText: "继续处理热点",
+    showCancel: false,
+  });
+  return { ...result, createdIds, replacementCount };
 }
 
 async function importPersonaHotDrafts(candidateIds = null) {
@@ -9559,6 +10270,37 @@ async function importPersonaHotDrafts(candidateIds = null) {
     showMsg("commandMsg", "请先勾选至少一条带正文的热点候选。", false);
     return;
   }
+  const applyCurrentEdits = requestedIds.length === 0;
+  if (applyCurrentEdits) snapshotPersonaHotPreviewContent();
+  const replacementOpsByCandidate = {};
+  const prepared = selected.map((candidate) => {
+    if (!applyCurrentEdits) return candidate;
+    const candidateId = personaHotCandidateKey(candidate);
+    const deleted = personaHotDeletedMediaSet(persona.id, candidateId);
+    const originalMediaItems = personaHotCandidateMediaItems(candidate);
+    const mediaItems = originalMediaItems.filter((_, index) => !deleted.has(index));
+    const sourceToEffectiveIndex = new Map();
+    let effectiveIndex = 0;
+    originalMediaItems.forEach((_, sourceIndex) => {
+      if (deleted.has(sourceIndex)) return;
+      sourceToEffectiveIndex.set(sourceIndex, effectiveIndex);
+      effectiveIndex += 1;
+    });
+    const replacementOps = personaHotReplacementEntries(persona.id, candidateId)
+      .map((entry) => ({
+        file: entry.file,
+        replaceIndex: sourceToEffectiveIndex.get(entry.index),
+      }))
+      .filter((entry) => entry.file && Number.isInteger(entry.replaceIndex));
+    if (replacementOps.length) replacementOpsByCandidate[candidateId] = replacementOps;
+    const editedContent = personaHotEditedContent(persona.id, candidate).trim();
+    return {
+      ...candidate,
+      content: editedContent.slice(0, 280),
+      full_content: editedContent,
+      media_items: mediaItems,
+    };
+  });
   setPersonaGenerateRunState(persona.id, {
     kind: "hot_import",
     status: "running",
@@ -9569,7 +10311,7 @@ async function importPersonaHotDrafts(candidateIds = null) {
   setActionLocked(lockParts, true);
   renderPersonaDetail();
   try {
-    await submitPersonaHotDraftImport(persona, selected);
+    await submitPersonaHotDraftImport(persona, prepared, { replacementOpsByCandidate });
   } catch (error) {
     setPersonaGenerateRunState(persona.id, {
       kind: "hot_import",
@@ -9617,13 +10359,29 @@ async function importEditedPersonaHotDraft(candidateId = "") {
   renderPersonaDetail();
   try {
     const deleted = personaHotDeletedMediaSet(persona.id, cleanCandidateId);
-    const mediaItems = personaHotCandidateMediaItems(candidate).filter((_, index) => !deleted.has(index));
+    const originalMediaItems = personaHotCandidateMediaItems(candidate);
+    const mediaItems = originalMediaItems.filter((_, index) => !deleted.has(index));
+    const sourceToEffectiveIndex = new Map();
+    let effectiveIndex = 0;
+    originalMediaItems.forEach((_, sourceIndex) => {
+      if (deleted.has(sourceIndex)) return;
+      sourceToEffectiveIndex.set(sourceIndex, effectiveIndex);
+      effectiveIndex += 1;
+    });
+    const replacementOps = personaHotReplacementEntries(persona.id, cleanCandidateId)
+      .map((entry) => ({
+        file: entry.file,
+        replaceIndex: sourceToEffectiveIndex.get(entry.index),
+      }))
+      .filter((entry) => entry.file && Number.isInteger(entry.replaceIndex));
     await submitPersonaHotDraftImport(persona, [{
       ...candidate,
       content: editedContent.slice(0, 280),
       full_content: editedContent,
       media_items: mediaItems,
-    }]);
+    }], {
+      replacementOpsByCandidate: replacementOps.length ? { [cleanCandidateId]: replacementOps } : {},
+    });
   } catch (error) {
     setPersonaGenerateRunState(persona.id, {
       kind: "hot_import",
@@ -10353,19 +11111,23 @@ function queuePersonaDraftMediaChange(action, { index = -1, files = [] } = {}) {
   return true;
 }
 
-async function applyPersonaDraftMediaOps({ persona, postId, source, ops = [] } = {}) {
-  const cleanOps = Array.isArray(ops) ? ops : [];
-  for (const op of cleanOps) {
-    if (op?.type === "append") {
-      await savePersonaPostMediaFiles({ persona, postId, source, files: op.files || [], replaceExisting: false });
-    } else if (op?.type === "replace") {
-      await savePersonaPostMediaFiles({ persona, postId, source, files: op.files || [], replaceIndex: op.index });
-    } else if (op?.type === "delete") {
-      await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/${source === "favorites" ? "favorites" : "posts"}/${encodeURIComponent(postId)}/media/${encodeURIComponent(op.index)}`, {
-        method: "DELETE",
-      });
-    }
+async function preparePersonaDraftMediaOps(ops = [], pendingFiles = []) {
+  const prepared = [];
+  for (const op of Array.isArray(ops) ? ops : []) {
+    const type = ["append", "replace", "delete"].includes(String(op?.type || "")) ? String(op.type) : "";
+    if (!type) continue;
+    const files = Array.from(op?.files || []).filter(Boolean);
+    const mediaPaths = files.length ? await uploadAutomationMedia(files, "commandMsg") : [];
+    if (files.length && mediaPaths.length !== files.length) throw new Error("部分媒体上传失败，请重新选择后保存。");
+    prepared.push({ type, index: Number(op?.index ?? -1), media_paths: mediaPaths });
   }
+  const trailingFiles = Array.from(pendingFiles || []).filter(Boolean);
+  if (trailingFiles.length) {
+    const mediaPaths = await uploadAutomationMedia(trailingFiles, "commandMsg");
+    if (mediaPaths.length !== trailingFiles.length) throw new Error("部分媒体上传失败，请重新选择后保存。");
+    prepared.push({ type: "append", index: -1, media_paths: mediaPaths });
+  }
+  return prepared;
 }
 
 async function uploadPersonaPostMedia(replaceExisting = false, replaceIndex = null) {
@@ -10954,33 +11716,44 @@ function renderPersonaHotCandidatePreview(candidate) {
   if (!candidate) return `<div class="empty-state">从左侧热点候选里选一条，这里会显示正文预览和来源。</div>`;
   const persona = selectedPersona();
   const candidateId = personaHotCandidateKey(candidate);
+  const form = personaFormState(persona?.id).generate;
+  const isEditing = String(form.hotEditingCandidateId || "").trim() === candidateId;
   const mediaItems = personaHotCandidateMediaItems(candidate);
-  const metrics = [
-    `浏览 ${numberText(candidate.view_count || 0)}`,
-    `点赞 ${numberText(candidate.like_count || 0)}`,
-    `评论 ${numberText(candidate.comment_count || 0)}`,
-    `分享 ${numberText(candidate.share_count || 0)}`,
-    `转发 ${numberText(candidate.repost_count || 0)}`,
-  ];
+  const replacementEntries = personaHotReplacementEntries(persona?.id, candidateId);
+  const selectedMediaIndex = personaHotSelectedMediaIndex(persona?.id, candidateId, mediaItems.length);
+  const selectedReplacement = replacementEntries.find((entry) => entry.index === selectedMediaIndex) || null;
   return `
-    <div class="persona-hot-preview-card">
+    <div class="persona-hot-preview-card ${isEditing ? "is-editing-draft" : ""}" data-persona-hot-preview-key="${esc(`${persona?.id || ""}:${candidateId}`)}">
+      ${isEditing ? `<div class="persona-temp-edit-toolbar persona-temp-edit-toolbar--hint"><span>热点推文编辑中，确认内容和媒体后再导入。</span></div>` : ""}
       <div class="persona-hot-preview-head">
         <strong>${esc((candidate.platform || "threads").toUpperCase())}</strong>
         ${renderMediaTypeBadge(mediaItems)}
         <small>${esc(formatTime(candidate.captured_at || candidate.published_at || ""))}</small>
       </div>
-      <label>导入正文（可改）
-        <textarea id="personaHotPreviewContent" rows="7">${esc(personaHotEditedContent(persona?.id, candidate))}</textarea>
+      <label>${isEditing ? "编辑导入正文" : "导入正文"}
+        <textarea id="personaHotPreviewContent" rows="7" ${isEditing ? "" : "readonly"}>${esc(personaHotEditedContent(persona?.id, candidate))}</textarea>
       </label>
       <div class="persona-hot-preview-meta">
-        <small>${esc(metrics.join(" · "))}</small>
+        <small>${esc(personaHotMetricSummary(candidate))}</small>
         ${candidate.source_url ? `<a href="${esc(candidate.source_url)}" target="_blank" rel="noopener">打开原帖</a>` : ""}
       </div>
-      ${renderPersonaMediaPreview(mediaItems)}
-      ${renderPersonaHotMediaDeleteControls(persona, candidate)}
+      ${renderPersonaHotMediaPreview(persona, candidate, { editing: isEditing })}
+      ${isEditing && mediaItems.length ? `<div class="persona-media-edit-pane persona-media-edit-pane--upload">
+        ${renderUploadDropzone("personaHotReplacementFiles", {
+          label: selectedReplacement ? `第 ${selectedMediaIndex + 1} 个媒体已选择替换` : `替换第 ${selectedMediaIndex + 1} 个媒体`,
+          hint: selectedReplacement
+            ? `当前文件：${String(selectedReplacement.file?.name || "媒体文件")}。重新选择会覆盖本次替换。`
+            : `已选中第 ${selectedMediaIndex + 1} 个媒体。拖动文件到这里或点击选择，也可以点击缩略图上的替换图标。`,
+          multiple: false,
+        })}
+        ${selectedReplacement ? `<div class="row-actions"><button type="button" data-persona-hot-media-replacement-clear="${esc(candidateId)}" data-persona-hot-media-index="${esc(selectedMediaIndex)}">撤销当前替换</button></div>` : ""}
+      </div>` : ""}
       <div class="row-actions">
-        <button type="button" class="primary" data-persona-import-hot-one="${esc(candidateId)}">直接使用这条</button>
-        <button type="button" data-persona-import-hot-edit="${esc(candidateId)}">编辑后使用</button>
+        ${isEditing
+          ? `<button type="button" data-persona-cancel-hot-edit="${esc(candidateId)}">取消编辑</button>
+             <button type="button" class="primary" data-persona-confirm-hot-import="${esc(candidateId)}">确认导入</button>`
+          : `<button type="button" class="primary" data-persona-import-hot-one="${esc(candidateId)}">直接导入</button>
+             <button type="button" data-persona-start-hot-edit="${esc(candidateId)}">编辑后使用</button>`}
       </div>
     </div>
   `;
@@ -11056,7 +11829,7 @@ function renderPersonaHotCandidatePicker(persona, form) {
                     <small>${esc(formatTime(candidate.captured_at || candidate.published_at || ""))}</small>
                   </span>
                   <span class="persona-hot-card-copy">${esc(candidate.summary)}</span>
-                  <span class="persona-hot-card-metrics">${esc(`浏览 ${numberText(candidate.view_count || 0)} · 点赞 ${numberText(candidate.like_count || 0)} · 评论 ${numberText(candidate.comment_count || 0)}`)}</span>
+                  <span class="persona-hot-card-metrics">${esc(personaHotMetricSummary(candidate))}</span>
                 </button>
               </article>
             `;
@@ -11139,12 +11912,21 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
       <p>选择草稿后生成配图，也可以上传、追加或替换当前草稿媒体。</p>
     </div>`;
   if (!post) {
+    const isCustomCompose = String(generateForm.composeMode || "").trim() === "custom";
     return `
       <section class="persona-compose-media-side persona-production-section">
         ${stepHead}
         <div class="persona-inline-panel persona-inline-panel--nested">
-          <strong>推文配图</strong>
-          <div class="empty-state">先保存或生成一条草稿，再根据草稿正文生成配图。</div>
+          <strong>${isCustomCompose ? "上传媒体" : "推文配图"}</strong>
+          ${isCustomCompose ? `
+            ${renderUploadDropzone("personaPostMediaUploadFiles", {
+              label: "选择媒体文件",
+              hint: "支持图片或视频；可单独保存媒体，也可以和左侧正文组合保存。",
+            })}
+            <div class="row-actions persona-media-upload-actions">
+              <button type="button" class="primary" data-persona-create-post>保存自定义草稿</button>
+            </div>
+          ` : `<div class="empty-state">先保存或生成一条草稿，再根据草稿正文生成配图。</div>`}
         </div>
       </section>`;
   }
@@ -11626,6 +12408,7 @@ function renderPersonaGeneratePreviewDock(persona) {
               <div class="persona-draft-card-footer">
                 <small>${selected ? "当前已选中" : "生成结果预览"}</small>
                 <div class="row-actions persona-draft-card-actions">
+                  <button type="button" data-persona-generated-view="${esc(post.id)}">查看</button>
                   <button type="button" data-persona-generated-media="${esc(post.id)}">生成配图</button>
                 </div>
               </div>
@@ -11635,6 +12418,28 @@ function renderPersonaGeneratePreviewDock(persona) {
       </div>
     </div>
   `;
+}
+
+async function viewPersonaGeneratedPost(postId = "") {
+  const activePreview = activePersonaGeneratePreview();
+  const post = activePreview?.rows.find((item) => String(item.id || "") === String(postId || ""));
+  if (!activePreview || !post) return;
+  const content = String(post.content || post.full_content || "").trim() || "暂无正文。";
+  await openConsoleModal({
+    title: "推文完整内容",
+    contentHtml: `
+      <div class="console-modal-detail persona-draft-detail-modal">
+        <div><span>推文标题</span><strong>${esc(personaDraftDisplayTitleForPost(post, activePreview.rows))}</strong></div>
+        <div><span>生成时间</span><strong>${esc(formatTime(post.published_at || post.updated_at || post.created_at))}</strong></div>
+        <div class="persona-draft-detail-content">
+          <span>推文正文</span>
+          <p>${esc(content)}</p>
+        </div>
+      </div>
+    `,
+    confirmText: "关闭",
+    showCancel: false,
+  });
 }
 
 function activePersonaGeneratePreview(persona = selectedPersona()) {
@@ -11691,8 +12496,13 @@ function activeHotCandidateTransientState(persona = selectedPersona()) {
   const deletedMedia = form.hotDeletedMediaByCandidate && typeof form.hotDeletedMediaByCandidate === "object"
     ? Object.values(form.hotDeletedMediaByCandidate).some((rows) => Array.isArray(rows) && rows.length)
     : false;
-  if (!selectedIds.length && !edited && !deletedMedia) return null;
-  return { persona, selectedIds, edited, deletedMedia };
+  const replacementMedia = form.hotReplacementFilesByCandidate && typeof form.hotReplacementFilesByCandidate === "object"
+    ? Object.values(form.hotReplacementFilesByCandidate).some((rows) => (
+        Array.isArray(rows) ? rows.length > 0 : Boolean(rows && typeof rows === "object" && Object.keys(rows).length)
+      ))
+    : false;
+  if (!selectedIds.length && !edited && !deletedMedia && !replacementMedia) return null;
+  return { persona, selectedIds, edited, deletedMedia, replacementMedia };
 }
 
 function activePublishCustomTransientState() {
@@ -12275,16 +13085,33 @@ async function loadSocialOverview() {
   return overview;
 }
 
-async function loadSocial({ render = true } = {}) {
-  const [overview, accountsData, tasksData] = await Promise.all([
+async function fetchSocialDataShared({ force = false } = {}) {
+  if (force) {
+    while (state.socialRefreshFetch) {
+      await state.socialRefreshFetch.catch(() => {});
+    }
+  } else if (state.socialRefreshFetch) {
+    return state.socialRefreshFetch;
+  }
+  const request = Promise.all([
     loadSocialOverview().catch(() => ({})),
     api("/api/persona_dashboard/automation/accounts").catch(() => ({ accounts: state.socialAccounts || [] })),
-    loadAutomationTasksShared().catch(() => ({ tasks: state.socialTasks || [] })),
-  ]);
-  state.socialBrowserSessions = Array.isArray(overview.browser_sessions) ? overview.browser_sessions : state.socialBrowserSessions;
-  state.socialAccounts = accountsData.accounts || [];
-  state.socialTasks = tasksData.tasks || [];
-  saveSocialAccountsSnapshot();
+    loadAutomationTasksShared({ force }).catch(() => ({ tasks: state.socialTasks || [] })),
+  ]).then(([overview, accountsData, tasksData]) => {
+    state.socialBrowserSessions = Array.isArray(overview.browser_sessions) ? overview.browser_sessions : state.socialBrowserSessions;
+    state.socialAccounts = accountsData.accounts || [];
+    state.socialTasks = tasksData.tasks || [];
+    saveSocialAccountsSnapshot();
+    return overview;
+  }).finally(() => {
+    if (state.socialRefreshFetch === request) state.socialRefreshFetch = null;
+  });
+  state.socialRefreshFetch = request;
+  return request;
+}
+
+async function loadSocial({ render = true, force = false } = {}) {
+  const overview = await fetchSocialDataShared({ force });
   if (render) {
     renderSocialAccounts();
     renderSocialTasks();
@@ -12298,16 +13125,8 @@ async function loadSocial({ render = true } = {}) {
   return overview;
 }
 
-async function refreshSocialAccountsOnly() {
-  const [overview, data, tasksData] = await Promise.all([
-    loadSocialOverview().catch(() => ({})),
-    api("/api/persona_dashboard/automation/accounts").catch(() => ({ accounts: state.socialAccounts || [] })),
-    loadAutomationTasksShared().catch(() => ({ tasks: state.socialTasks || [] })),
-  ]);
-  state.socialBrowserSessions = Array.isArray(overview.browser_sessions) ? overview.browser_sessions : state.socialBrowserSessions;
-  state.socialAccounts = data.accounts || [];
-  state.socialTasks = tasksData.tasks || [];
-  saveSocialAccountsSnapshot();
+async function refreshSocialAccountsOnly({ force = false } = {}) {
+  await fetchSocialDataShared({ force });
   updateAccountStatusViews();
   renderSocialTasks();
 }
@@ -13523,61 +14342,165 @@ function renderLiveBrowserSessions() {
   const host = $("liveBrowserSessions");
   if (!host) return;
   const sessions = Array.isArray(state.socialBrowserSessions) ? state.socialBrowserSessions : [];
-  const sessionKey = sessions.map((session) => [
-    session.id || session.session_id || "",
-    session.task_id || "",
-    session.view_path || session.novnc_path || session.public_url || "",
-    session.web_port || "",
-    session.width || "",
-    session.height || "",
-  ].join(":")).join("|");
-  if (host.dataset.liveBrowserSessionKey === sessionKey && host.querySelector("iframe")) {
-    sessions.forEach((session) => {
-      const sessionId = String(session.id || session.session_id || "");
-      const card = Array.from(host.querySelectorAll("[data-live-browser-card]"))
-        .find((node) => String(node.dataset.liveBrowserCard || "") === sessionId);
-      const statusNode = card?.querySelector("[data-live-browser-status]");
-      const status = liveBrowserTaskStatus(session);
-      if (statusNode) {
-        statusNode.className = `status ${esc(status)}`;
-        statusNode.textContent = statusLabel(status);
-      }
-      const tone = statusTone(status || "running");
-      const isTaskSuccess = status === "success";
-      if (card) {
-        const interactionAllowed = canInteractWithLiveBrowser(session);
-        card.classList.toggle("is-status-active", tone === "active");
-        card.classList.toggle("is-status-manual", tone === "manual");
-        card.classList.toggle("is-status-success", isTaskSuccess);
-        card.classList.toggle("is-status-error", tone === "error");
-        card.classList.toggle("is-status-muted", tone === "muted");
-        card.classList.toggle("is-interaction-enabled", interactionAllowed);
-        card.classList.toggle("is-interaction-locked", !interactionAllowed);
-        card.querySelector("[data-live-browser-fullscreen]")?.toggleAttribute("disabled", !interactionAllowed);
-        card.querySelector("[data-live-browser-text]")?.toggleAttribute("disabled", !interactionAllowed);
-        card.querySelector("[data-live-browser-type]")?.toggleAttribute("disabled", !interactionAllowed);
-        card.querySelector("[data-live-browser-key]")?.toggleAttribute("disabled", !interactionAllowed);
-        const note = card.querySelector(".live-browser-interaction-note");
-        if (note) note.textContent = liveBrowserInteractionHint(session);
-      }
-    });
-    return;
-  }
-  host.dataset.liveBrowserSessionKey = sessionKey;
-  host.innerHTML = `
-    <section class="live-browser-panel${sessions.length ? "" : " is-empty"}" data-live-browser-count="${esc(String(sessions.length))}">
+  const layout = normalizeLiveBrowserLayout(state.liveBrowserLayout);
+  let panel = host.querySelector(".live-browser-panel");
+  if (!panel) {
+    host.innerHTML = `
+    <section class="live-browser-panel is-empty" data-live-browser-count="0" data-live-browser-view="${esc(layout)}">
       <div class="live-browser-head">
         <div>
           <strong>实时浏览器监控</strong>
-          <span>${esc(liveBrowserPanelHint(sessions))}</span>
+          <span data-live-browser-panel-hint></span>
+        </div>
+        <div class="live-browser-head-actions">
+          <button type="button" class="danger" data-social-cancel-all disabled>停止全部任务</button>
+          ${renderLiveBrowserLayoutToggle(layout)}
         </div>
       </div>
-      <div class="live-browser-grid">
-        ${sessions.map((session) => renderLiveBrowserSession(session)).join("")}
-        ${renderLiveBrowserPlaceholders(sessions.length)}
-      </div>
+      <div class="live-browser-grid"></div>
     </section>
   `;
+    panel = host.querySelector(".live-browser-panel");
+  }
+  const grid = panel?.querySelector(".live-browser-grid");
+  if (!panel || !grid) return;
+  panel.classList.toggle("is-empty", !sessions.length);
+  panel.dataset.liveBrowserCount = String(sessions.length);
+  panel.dataset.liveBrowserView = layout;
+  const panelHint = panel.querySelector("[data-live-browser-panel-hint]");
+  if (panelHint) panelHint.textContent = liveBrowserPanelHint(sessions);
+
+  grid.querySelectorAll("[data-live-browser-placeholder]").forEach((node) => node.remove());
+  const cardsById = new Map(Array.from(grid.querySelectorAll("[data-live-browser-card]"))
+    .map((card) => [String(card.dataset.liveBrowserCard || ""), card]));
+  const desiredIds = new Set(sessions.map((session) => liveBrowserSessionId(session)));
+  cardsById.forEach((card, sessionId) => {
+    if (!desiredIds.has(sessionId)) card.remove();
+  });
+  sessions.forEach((session) => {
+    const sessionId = liveBrowserSessionId(session);
+    const structureKey = liveBrowserSessionStructureKey(session);
+    let card = cardsById.get(sessionId) || null;
+    if (!card) {
+      card = createLiveBrowserSessionCard(session);
+      grid.append(card);
+    } else if (card.dataset.liveBrowserStructureKey !== structureKey) {
+      const replacement = createLiveBrowserSessionCard(session);
+      card.replaceWith(replacement);
+      card = replacement;
+    }
+    updateLiveBrowserSessionCard(card, session);
+  });
+  grid.insertAdjacentHTML("beforeend", renderLiveBrowserPlaceholders(sessions.length));
+  syncSocialCancelAllButtons();
+}
+
+function liveBrowserSessionId(session) {
+  return String(session?.id || session?.session_id || "");
+}
+
+function liveBrowserSessionStructureKey(session) {
+  return JSON.stringify([
+    liveBrowserSessionUrl(session),
+    Math.max(1, Number(session?.width || 1280)),
+    Math.max(1, Number(session?.height || 720)),
+  ]);
+}
+
+function createLiveBrowserSessionCard(session) {
+  const template = document.createElement("template");
+  template.innerHTML = renderLiveBrowserSession(session).trim();
+  const card = template.content.firstElementChild;
+  card.dataset.liveBrowserStructureKey = liveBrowserSessionStructureKey(session);
+  return card;
+}
+
+function syncSocialCancelAllButtons() {
+  const activeTaskCount = (Array.isArray(state.socialTasks) ? state.socialTasks : [])
+    .filter((task) => activeSocialAutomationTask(task)).length;
+  document.querySelectorAll("[data-social-cancel-all]").forEach((button) => {
+    const pending = Boolean(state.socialCancelAllPending);
+    button.disabled = pending || !activeTaskCount;
+    button.setAttribute("aria-busy", pending ? "true" : "false");
+    button.textContent = pending ? "停止中..." : "停止全部任务";
+  });
+}
+
+function updateLiveBrowserSessionCard(card, session) {
+  if (!card) return;
+  const sessionId = liveBrowserSessionId(session);
+  const status = liveBrowserTaskStatus(session);
+  const sessionStatus = liveBrowserSessionStatus(session);
+  const tone = statusTone(status || "running");
+  const statusToneClass = status === "success" ? "success" : (tone === "success" ? "muted" : tone);
+  const interactionAllowed = canInteractWithLiveBrowser(session);
+  const canCloseWindow = Boolean(sessionId) && sessionStatus === "standby";
+  const canStopTask = Boolean(session.task_id) && ["queued", "running", "need_manual"].includes(status);
+  const title = `${session.account_username || session.account_id || "执行账号"} · ${statusLabel(session.task_type || "浏览器任务")}`;
+  const meta = `${session.platform || "-"} · ${session.display || "-"} · ${session.width || 720}x${session.height || 1280}`;
+
+  card.dataset.liveBrowserCard = sessionId;
+  ["active", "queued", "manual", "success", "error", "muted"].forEach((name) => {
+    card.classList.toggle(`is-status-${name}`, statusToneClass === name);
+  });
+  card.classList.toggle("is-interaction-enabled", interactionAllowed);
+  card.classList.toggle("is-interaction-locked", !interactionAllowed);
+  const titleNode = card.querySelector("[data-live-browser-title]");
+  if (titleNode) titleNode.textContent = title;
+  const metaNode = card.querySelector("[data-live-browser-meta]");
+  if (metaNode) metaNode.textContent = meta;
+  const iframe = card.querySelector("iframe");
+  if (iframe) iframe.title = title;
+  const statusNode = card.querySelector("[data-live-browser-status]");
+  if (statusNode) {
+    statusNode.className = `status ${status}`;
+    statusNode.textContent = statusLabel(status);
+  }
+  card.querySelector("[data-live-browser-fullscreen]")?.toggleAttribute("disabled", !interactionAllowed);
+  card.querySelector("[data-live-browser-text]")?.toggleAttribute("disabled", !interactionAllowed);
+  card.querySelector("[data-live-browser-type]")?.toggleAttribute("disabled", !interactionAllowed);
+  card.querySelector("[data-live-browser-key]")?.toggleAttribute("disabled", !interactionAllowed);
+  const closeButton = card.querySelector("[data-live-browser-close]");
+  if (closeButton) {
+    closeButton.hidden = !canCloseWindow;
+    closeButton.disabled = !canCloseWindow;
+  }
+  const stopButton = card.querySelector("[data-social-cancel]");
+  if (stopButton) {
+    stopButton.dataset.socialCancel = String(session.task_id || "");
+    stopButton.hidden = !canStopTask;
+    stopButton.disabled = !canStopTask;
+  }
+  const note = card.querySelector(".live-browser-interaction-note");
+  if (note) note.textContent = liveBrowserInteractionHint(session);
+}
+
+function renderLiveBrowserLayoutToggle(layout = state.liveBrowserLayout) {
+  const activeLayout = normalizeLiveBrowserLayout(layout);
+  return `
+    <div class="persona-draft-view-toggle live-browser-layout-toggle" aria-label="浏览器窗口布局">
+      <button type="button" class="${activeLayout === "grid" ? "is-active" : ""}" data-live-browser-layout="grid" title="格子布局" aria-label="格子布局" aria-pressed="${activeLayout === "grid" ? "true" : "false"}">
+        <span class="persona-draft-mode-icon persona-draft-mode-icon--grid" aria-hidden="true"></span>
+      </button>
+      <button type="button" class="${activeLayout === "list" ? "is-active" : ""}" data-live-browser-layout="list" title="列表布局" aria-label="列表布局" aria-pressed="${activeLayout === "list" ? "true" : "false"}">
+        <span class="persona-draft-mode-icon persona-draft-mode-icon--list" aria-hidden="true"></span>
+      </button>
+    </div>`;
+}
+
+function setLiveBrowserLayout(layout = "grid") {
+  const nextLayout = normalizeLiveBrowserLayout(layout);
+  state.liveBrowserLayout = nextLayout;
+  try {
+    window.localStorage.setItem(LIVE_BROWSER_LAYOUT_KEY, nextLayout);
+  } catch {}
+  const panel = $("liveBrowserSessions")?.querySelector(".live-browser-panel");
+  if (panel) panel.dataset.liveBrowserView = nextLayout;
+  document.querySelectorAll("[data-live-browser-layout]").forEach((button) => {
+    const active = String(button.dataset.liveBrowserLayout || "") === nextLayout;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
 }
 
 function renderLiveBrowserPlaceholders(sessionCount = 0) {
@@ -13587,7 +14510,7 @@ function renderLiveBrowserPlaceholders(sessionCount = 0) {
 
 function renderLiveBrowserPlaceholder(index = 1) {
   return `
-    <article class="live-browser-card live-browser-placeholder" aria-label="实时浏览器占位框 ${index}">
+    <article class="live-browser-card live-browser-placeholder" data-live-browser-placeholder aria-label="实时浏览器占位框 ${index}">
       <div class="live-browser-placeholder-body">
         <strong>等待浏览器窗口 ${index}</strong>
         <span>运行账号登录或发布任务后，实时画面会添加到这里。</span>
@@ -13627,16 +14550,21 @@ function canInteractWithLiveBrowser(session) {
   return liveBrowserTaskStatus(session) === "need_manual";
 }
 
+function liveBrowserIframeLoadingMode() {
+  return !document.hidden && state.accountBrowserPanel === "browsers" ? "eager" : "lazy";
+}
+
 function renderLiveBrowserSession(session) {
   const url = liveBrowserSessionUrl(session);
   const title = `${session.account_username || session.account_id || "执行账号"} · ${statusLabel(session.task_type || "浏览器任务")}`;
-  const sessionId = String(session.id || session.session_id || "");
+  const sessionId = liveBrowserSessionId(session);
   const width = Math.max(1, Number(session.width || 1280));
   const height = Math.max(1, Number(session.height || 720));
   const orientationClass = height > width ? " is-portrait" : " is-landscape";
   const status = liveBrowserTaskStatus(session);
   const sessionStatus = liveBrowserSessionStatus(session);
   const normalizedStatus = status.trim().toLowerCase();
+  const canStopTask = session.task_id && ["queued", "running", "need_manual"].includes(normalizedStatus);
   const tone = statusTone(status);
   const statusClass = normalizedStatus === "success"
     ? " is-status-success"
@@ -13649,13 +14577,13 @@ function renderLiveBrowserSession(session) {
     <article class="live-browser-card${orientationClass}${interactionClass}${statusClass}" data-live-browser-card="${esc(sessionId)}" style="--live-browser-width: ${width}; --live-browser-height: ${height}; --live-browser-ratio: ${width} / ${height};">
       <div class="live-browser-card-head">
         <div>
-          <strong>${esc(title)}</strong>
-          <span>${esc(`${session.platform || "-"} · ${session.display || "-"} · ${session.width || 720}x${session.height || 1280}`)}</span>
+          <strong data-live-browser-title>${esc(title)}</strong>
+          <span data-live-browser-meta>${esc(`${session.platform || "-"} · ${session.display || "-"} · ${session.width || 720}x${session.height || 1280}`)}</span>
         </div>
         <div class="live-browser-card-actions">
           <button type="button" data-live-browser-fullscreen="${esc(sessionId)}" ${interactionAllowed ? "" : "disabled"}>放大窗口</button>
-          ${canCloseWindow ? `<button type="button" data-live-browser-close="${esc(sessionId)}">关闭窗口</button>` : ""}
-          ${session.task_id ? `<button type="button" class="danger" data-social-cancel="${esc(session.task_id)}">停止进程</button>` : ""}
+          <button type="button" data-live-browser-close="${esc(sessionId)}" ${canCloseWindow ? "" : "hidden disabled"}>关闭窗口</button>
+          <button type="button" class="danger" data-social-cancel="${esc(session.task_id || "")}" ${canStopTask ? "" : "hidden disabled"}>停止进程</button>
           <span class="status ${esc(status)}" data-live-browser-status>${esc(statusLabel(status))}</span>
         </div>
       </div>
@@ -13663,7 +14591,7 @@ function renderLiveBrowserSession(session) {
         <iframe
           title="${esc(title)}"
           src="${esc(url)}"
-          loading="lazy"
+          loading="${liveBrowserIframeLoadingMode()}"
           referrerpolicy="no-referrer"
           allow="clipboard-read; clipboard-write"
           allowfullscreen
@@ -13701,7 +14629,10 @@ async function closeLiveBrowserSession(sessionId = "") {
   const cleanSessionId = String(sessionId || "").trim();
   if (!cleanSessionId) return;
   await api(`/api/persona_dashboard/automation/browser_sessions/${encodeURIComponent(cleanSessionId)}/close`, { method: "POST" });
-  await refreshSocialAccountsOnly();
+  state.socialBrowserSessions = (Array.isArray(state.socialBrowserSessions) ? state.socialBrowserSessions : [])
+    .filter((session) => String(session?.id || session?.session_id || "") !== cleanSessionId);
+  renderLiveBrowserSessions();
+  await refreshSocialAccountsOnly({ force: true });
 }
 
 function liveBrowserToolInput(sessionId = "") {
@@ -13764,6 +14695,22 @@ function liveBrowserSessionUrl(session) {
     autoconnect: "1",
     resize: "scale",
     reconnect: "1",
+    quality: "5",
+    dynamic_quality_min: "3",
+    dynamic_quality_max: "7",
+    jpeg_video_quality: "5",
+    webp_video_quality: "4",
+    video_quality: "1",
+    video_time: "1",
+    video_out_time: "1",
+    video_scaling: "1",
+    max_video_resolution_x: "960",
+    max_video_resolution_y: "540",
+    framerate: "24",
+    compression: "2",
+    enable_webp: "1",
+    enable_webrtc: "0",
+    enable_threading: "1",
   });
   if (session.password) params.set("password", String(session.password));
   return `${base.replace(/\/+$/, "")}/vnc.html?${params.toString()}`;
@@ -14029,8 +14976,20 @@ async function submitMatrixPublishTask(messageId = "commandMsg") {
       target: matrixToastTarget,
       key: matrixToastKey,
     });
-    const firstTaskId = created.map((task) => String(task?.id || "").trim()).find(Boolean) || "";
+    const firstTaskId = created.map((item) => String(item?.task?.id || item?.id || "").trim()).find(Boolean) || "";
     if (firstTaskId) openLiveBrowserTaskView(firstTaskId);
+    const taskIdsByPersona = new Map();
+    created.forEach((item) => {
+      const taskId = String(item?.task?.id || item?.id || "").trim();
+      const personaId = String(item?.persona_id || item?.task?.persona_id || "").trim();
+      if (!taskId || !personaId) return;
+      taskIdsByPersona.set(personaId, [...(taskIdsByPersona.get(personaId) || []), taskId]);
+    });
+    taskIdsByPersona.forEach((taskIds, personaId) => {
+      watchPersonaPublishTaskSequence(taskIds, personaId).catch((error) => {
+        showMsg(messageId, error?.detail || error?.message || "矩阵发布状态跟踪失败", false);
+      });
+    });
     await loadSocial();
     return result;
   } finally {
@@ -14360,6 +15319,10 @@ function bindEvents() {
       renderConfirmSummary();
       return;
     }
+    if (event.target.closest("[data-persona-create-memory]")) {
+      createPersonaMemoryEntry().catch((error) => showMsg("commandMsg", error.detail || error.message || "新建记忆失败", false));
+      return;
+    }
     const postBulkButton = event.target.closest("[data-persona-post-bulk]");
     if (postBulkButton) {
       const persona = selectedPersona();
@@ -14484,6 +15447,11 @@ function bindEvents() {
       generatePersonaDraftPosts().catch(() => {});
       return;
     }
+    const generatedViewButton = event.target.closest("[data-persona-generated-view]");
+    if (generatedViewButton) {
+      viewPersonaGeneratedPost(generatedViewButton.dataset.personaGeneratedView || "").catch(() => {});
+      return;
+    }
     const generatedMediaButton = event.target.closest("[data-persona-generated-media]");
     if (generatedMediaButton) {
       const persona = selectedPersona();
@@ -14544,6 +15512,18 @@ function bindEvents() {
       importPersonaHotDrafts().catch(() => {});
       return;
     }
+    const hotMediaReplace = event.target.closest("[data-persona-hot-media-replace]");
+    if (hotMediaReplace) {
+      const persona = selectedPersona();
+      if (!persona) return;
+      snapshotPersonaHotPreviewContent();
+      const candidateId = String(hotMediaReplace.dataset.personaHotMediaReplace || "").trim();
+      const index = Number(hotMediaReplace.dataset.personaHotMediaIndex);
+      if (!candidateId || !Number.isInteger(index) || index < 0) return;
+      setPersonaHotSelectedMediaIndex(persona.id, candidateId, index);
+      $("personaHotReplacementFiles")?.click();
+      return;
+    }
     const hotMediaToggle = event.target.closest("[data-persona-hot-media-toggle]");
     if (hotMediaToggle) {
       const persona = selectedPersona();
@@ -14554,26 +15534,39 @@ function bindEvents() {
       if (!candidateId || !Number.isInteger(index) || index < 0) return;
       const deleted = personaHotDeletedMediaSet(persona.id, candidateId);
       if (deleted.has(index)) deleted.delete(index);
-      else deleted.add(index);
+      else {
+        deleted.add(index);
+        setPersonaHotReplacementFile(persona.id, candidateId, index, null);
+      }
       setPersonaHotDeletedMediaSet(persona.id, candidateId, deleted);
       renderPersonaDetail();
       return;
     }
-    const hotMediaBulk = event.target.closest("[data-persona-hot-media-bulk]");
-    if (hotMediaBulk) {
+    const hotMediaSelect = event.target.closest("[data-persona-hot-media-select]");
+    if (hotMediaSelect) {
       const persona = selectedPersona();
       if (!persona) return;
       snapshotPersonaHotPreviewContent();
-      const candidateId = String(hotMediaBulk.dataset.personaHotMediaCandidate || "").trim();
-      const candidate = personaHotCandidates(persona).find((item) => personaHotCandidateKey(item) === candidateId);
-      if (!candidate) return;
-      const mediaCount = personaHotCandidateMediaItems(candidate).length;
-      setPersonaHotDeletedMediaSet(
+      const candidateId = String(hotMediaSelect.dataset.personaHotMediaSelect || "").trim();
+      const index = Number(hotMediaSelect.dataset.personaHotMediaIndex);
+      if (!candidateId || !Number.isInteger(index) || index < 0) return;
+      setPersonaHotSelectedMediaIndex(persona.id, candidateId, index);
+      renderPersonaDetail();
+      return;
+    }
+    const clearHotReplacement = event.target.closest("[data-persona-hot-media-replacement-clear]");
+    if (clearHotReplacement) {
+      const persona = selectedPersona();
+      if (!persona) return;
+      snapshotPersonaHotPreviewContent();
+      setPersonaHotReplacementFile(
         persona.id,
-        candidateId,
-        hotMediaBulk.dataset.personaHotMediaBulk === "all" ? new Set(Array.from({ length: mediaCount }, (_, index) => index)) : new Set(),
+        clearHotReplacement.dataset.personaHotMediaReplacementClear || "",
+        Number(clearHotReplacement.dataset.personaHotMediaIndex),
+        null,
       );
       renderPersonaDetail();
+      renderConfirmSummary();
       return;
     }
     const importOneHotButton = event.target.closest("[data-persona-import-hot-one]");
@@ -14582,9 +15575,24 @@ function bindEvents() {
       importPersonaHotDrafts(candidateId ? [candidateId] : []).catch(() => {});
       return;
     }
-    const importEditedHotButton = event.target.closest("[data-persona-import-hot-edit]");
-    if (importEditedHotButton) {
-      const candidateId = String(importEditedHotButton.dataset.personaImportHotEdit || "").trim();
+    const startHotEditButton = event.target.closest("[data-persona-start-hot-edit]");
+    if (startHotEditButton) {
+      const persona = selectedPersona();
+      const candidateId = String(startHotEditButton.dataset.personaStartHotEdit || "").trim();
+      if (persona && candidateId) startPersonaHotCandidateEdit(persona, candidateId);
+      return;
+    }
+    const cancelHotEditButton = event.target.closest("[data-persona-cancel-hot-edit]");
+    if (cancelHotEditButton) {
+      const persona = selectedPersona();
+      const candidateId = String(cancelHotEditButton.dataset.personaCancelHotEdit || "").trim();
+      if (persona && candidateId) cancelPersonaHotCandidateEdit(persona, candidateId);
+      return;
+    }
+    const confirmHotImportButton = event.target.closest("[data-persona-confirm-hot-import]");
+    if (confirmHotImportButton) {
+      const candidateId = String(confirmHotImportButton.dataset.personaConfirmHotImport || "").trim();
+      snapshotPersonaHotPreviewContent();
       importEditedPersonaHotDraft(candidateId).catch(() => {});
       return;
     }
@@ -14606,7 +15614,10 @@ function bindEvents() {
       const persona = selectedPersona();
       if (!persona) return;
       snapshotPersonaHotPreviewContent();
-      personaFormState(persona.id).generate.hotPreviewId = String(hotPreviewButton.dataset.personaHotPreview || "").trim();
+      const candidateId = String(hotPreviewButton.dataset.personaHotPreview || "").trim();
+      const form = personaFormState(persona.id).generate;
+      form.hotSelectedIds = candidateId ? [candidateId] : [];
+      form.hotPreviewId = candidateId;
       renderPersonaDetail();
       renderConfirmSummary();
       return;
@@ -15247,6 +16258,23 @@ function bindEvents() {
     }
   });
   $("moduleBody").addEventListener("change", async (event) => {
+    if (event.target?.id === "personaHotReplacementFiles") {
+      const persona = selectedPersona();
+      const candidate = personaHotPreviewCandidate(persona);
+      const candidateId = personaHotCandidateKey(candidate);
+      if (!persona || !candidateId) return;
+      snapshotPersonaHotPreviewContent();
+      const mediaItems = personaHotCandidateMediaItems(candidate);
+      const selectedIndex = personaHotSelectedMediaIndex(persona.id, candidateId, mediaItems.length);
+      const file = Array.from(event.target.files || []).find(Boolean) || null;
+      if (selectedIndex < 0 || !file) return;
+      setPersonaHotReplacementFile(persona.id, candidateId, selectedIndex, file);
+      const deleted = personaHotDeletedMediaSet(persona.id, candidateId);
+      if (deleted.delete(selectedIndex)) setPersonaHotDeletedMediaSet(persona.id, candidateId, deleted);
+      renderPersonaDetail();
+      renderConfirmSummary();
+      return;
+    }
     if (event.target?.matches?.("[data-persona-memory-id]")) {
       snapshotPersonaCurrentForm();
       syncPersonaMemorySelectionState();
@@ -15274,7 +16302,7 @@ function bindEvents() {
       if (event.target.checked) selected.add(candidateId);
       else selected.delete(candidateId);
       form.hotSelectedIds = Array.from(selected);
-      if (!form.hotPreviewId) form.hotPreviewId = candidateId;
+      if (event.target.checked || !form.hotPreviewId) form.hotPreviewId = candidateId;
       renderPersonaDetail();
       renderConfirmSummary();
       return;
@@ -15326,6 +16354,11 @@ function bindEvents() {
     }
   });
   $("moduleBody").addEventListener("input", (event) => {
+    if (event.target?.id === "personaHotPreviewContent") {
+      snapshotPersonaHotPreviewContent();
+      renderConfirmSummary();
+      return;
+    }
     if (event.target?.id === "personaNewGroupName") {
       state.personaNewGroupName = event.target.value || "";
       window.__personaNewGroupName = state.personaNewGroupName;
@@ -15496,6 +16529,17 @@ function bindEvents() {
     const tab = event.target.closest("[data-account-browser-tab]");
     if (tab) {
       setAccountBrowserPanel(tab.dataset.accountBrowserTab || "accounts");
+      return;
+    }
+    const liveBrowserLayout = event.target.closest("[data-live-browser-layout]");
+    if (liveBrowserLayout) {
+      setLiveBrowserLayout(liveBrowserLayout.dataset.liveBrowserLayout || "grid");
+      return;
+    }
+    const cancelAll = event.target.closest("[data-social-cancel-all]");
+    if (cancelAll) {
+      cancelAllSocialAutomationTasks("socialMsg")
+        .catch((error) => showMsg("socialMsg", error.detail || error.message || "停止全部任务失败", false));
       return;
     }
     const accountPoolBind = event.target.closest("[data-account-pool-bind-persona]");
@@ -15735,6 +16779,11 @@ function bindEvents() {
     location.href = "/admin.html";
   });
   $("consoleSettingsBody").addEventListener("click", (event) => {
+    const inputMode = event.target.closest("[data-live-browser-input-mode]");
+    if (inputMode) {
+      setLiveBrowserTextInputMode(inputMode.dataset.liveBrowserInputMode || "paste");
+      return;
+    }
     if (event.target.closest("#saveConsoleSettings")) saveConsoleSettingsPage();
   });
 }

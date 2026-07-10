@@ -35,8 +35,10 @@ export interface SentimentHotCandidate {
   qaPassed?: boolean;
 }
 
+type ShownEntry = { id: string; at?: string; urlKey?: string; contentKey?: string };
+
 type StoreState = {
-  shown: Record<string, Array<string | { id: string; at?: string }>>;
+  shown: Record<string, Array<string | ShownEntry>>;
   selected: Record<string, string[]>;
   imported: Record<string, string[]>;
 };
@@ -79,8 +81,55 @@ export function getSentimentHotExcludedIds(archiveId: string): Set<string> {
   ]);
 }
 
-function shownEntryId(entry: string | { id: string; at?: string }): string {
+function shownEntryId(entry: string | ShownEntry): string {
   return typeof entry === "string" ? entry : String(entry?.id || "");
+}
+
+function historyUrlKey(value: unknown): string {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  try {
+    const url = new URL(text);
+    const host = url.hostname.toLowerCase().replace(/^www\./, "");
+    url.hostname = host === "threads.com" || host === "threads.net" ? "threads.net" : host;
+    url.search = "";
+    url.hash = "";
+    url.pathname = url.pathname.replace(/\/+$/, "");
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return text.replace(/[?#].*$/, "").replace(/\/+$/, "");
+  }
+}
+
+function historyContentKey(value: unknown): string {
+  const text = String(value || "")
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(/[^\p{Letter}\p{Number}]+/gu, "");
+  return text ? crypto.createHash("sha1").update(text.slice(0, 500)).digest("hex") : "";
+}
+
+export function getSentimentHotCandidateHistoryKeys(candidate: Partial<SentimentHotCandidate>): string[] {
+  const keys = new Set<string>();
+  if (candidate.id) keys.add(`id:${candidate.id}`);
+  const urlKey = historyUrlKey(candidate.sourceUrl);
+  const contentKey = historyContentKey(candidate.content);
+  if (urlKey) keys.add(`url:${urlKey}`);
+  if (contentKey) keys.add(`content:${contentKey}`);
+  return [...keys];
+}
+
+export function getSentimentHotShownHistoryKeys(archiveId: string): Set<string> {
+  const keys = new Set<string>();
+  for (const entry of readState().shown[archiveId] || []) {
+    const id = shownEntryId(entry);
+    if (id) keys.add(`id:${id}`);
+    if (typeof entry === "string") continue;
+    if (entry.urlKey) keys.add(`url:${entry.urlKey}`);
+    if (entry.contentKey) keys.add(`content:${entry.contentKey}`);
+  }
+  return keys;
 }
 
 export function getSentimentHotRefreshExcludedIds(archiveId: string): Set<string> {
@@ -113,15 +162,22 @@ export function getSentimentHotShownAtMap(archiveId: string): Map<string, number
 export function rememberSentimentHotShown(archiveId: string, candidates: SentimentHotCandidate[]) {
   const state = readState();
   const now = new Date().toISOString();
-  const current = new Map<string, { id: string; at: string }>();
+  const current = new Map<string, ShownEntry>();
   for (const entry of state.shown[archiveId] || []) {
     const id = shownEntryId(entry);
     if (!id) continue;
     const at = typeof entry === "string" ? "" : String(entry.at || "");
-    current.set(id, { id, at });
+    current.set(id, typeof entry === "string" ? { id, at } : { ...entry, id, at });
   }
-  for (const candidate of candidates) current.set(candidate.id, { id: candidate.id, at: now });
-  state.shown[archiveId] = [...current.values()].slice(-500);
+  for (const candidate of candidates) {
+    current.set(candidate.id, {
+      id: candidate.id,
+      at: now,
+      urlKey: historyUrlKey(candidate.sourceUrl) || undefined,
+      contentKey: historyContentKey(candidate.content) || undefined,
+    });
+  }
+  state.shown[archiveId] = [...current.values()].slice(-2000);
   writeState(state);
 }
 

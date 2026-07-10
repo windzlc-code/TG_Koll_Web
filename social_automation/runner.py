@@ -8,6 +8,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import urljoin, urlparse
 
 
 INSTAGRAM_HOME = "https://www.instagram.com/"
@@ -554,6 +555,61 @@ def _human_type(page, text: str, min_delay: float = 0.08, max_delay: float = 0.1
         time.sleep(random.uniform(min_delay, max_delay))
 
 
+def _normalize_text_input_mode(value: Any) -> str:
+    mode = str(value or "").strip().lower()
+    return mode if mode in {"paste", "type"} else "paste"
+
+
+def _paste_text(page, text: str) -> bool:
+    clean_text = str(text or "")
+    try:
+        origin = ""
+        with contextlib.suppress(Exception):
+            parsed = urlparse(str(page.url or ""))
+            if parsed.scheme and parsed.netloc:
+                origin = f"{parsed.scheme}://{parsed.netloc}"
+        with contextlib.suppress(Exception):
+            page.context.grant_permissions(["clipboard-read", "clipboard-write"], origin=origin or None)
+        page.evaluate(
+            """async (value) => {
+                await navigator.clipboard.writeText(value);
+            }""",
+            clean_text,
+        )
+        page.keyboard.press("Control+V")
+        return True
+    except Exception:
+        return False
+
+
+def _type_text(page, text: str, min_delay: float = 0.08, max_delay: float = 0.18, *, mode: str = "paste", logger: AutomationLogger | None = None, stage: str = "text_input") -> None:
+    clean_text = str(text or "")
+    input_mode = _normalize_text_input_mode(mode or os.getenv("SOCIAL_AUTOMATION_TEXT_INPUT_MODE", "paste"))
+    if input_mode == "type":
+        if logger is not None:
+            logger.log("info", stage, "Text input is using per-character typing.", {"mode": "type", "chars": len(clean_text)})
+        _human_type(page, clean_text, min_delay=min_delay, max_delay=max_delay)
+        return
+    if clean_text and _paste_text(page, clean_text):
+        if logger is not None:
+            logger.log("info", stage, "Text input is using clipboard paste.", {"mode": "paste", "chars": len(clean_text)})
+        return
+    if logger is not None:
+        logger.log("warn", stage, "Clipboard paste failed; falling back to direct text insertion.", {"mode": "paste", "chars": len(clean_text)})
+    insert_enabled = str(os.getenv("SOCIAL_AUTOMATION_FAST_TEXT_INPUT", "1")).strip().lower() not in {"0", "false", "no", "off"}
+    if insert_enabled and len(clean_text) >= 12:
+        try:
+            page.keyboard.insert_text(clean_text)
+            if logger is not None:
+                logger.log("info", stage, "Text input used direct browser insertion fallback.", {"mode": "insert_text", "chars": len(clean_text)})
+            return
+        except Exception:
+            pass
+    if logger is not None:
+        logger.log("info", stage, "Text input used per-character fallback.", {"mode": "type_fallback", "chars": len(clean_text)})
+    _human_type(page, clean_text, min_delay=min_delay, max_delay=max_delay)
+
+
 def _human_click(page, locator, logger: AutomationLogger, stage: str = "click") -> None:
     locator.wait_for(state="visible", timeout=30000)
     try:
@@ -614,15 +670,16 @@ def _should_capture_screenshot(stage: str) -> bool:
         "login_wait_timeout",
         "login_complete",
         "publish_done",
+        "publish_submitted_unconfirmed",
         "failed",
     }
 
 
-def _goto(page, url: str, logger: AutomationLogger, stage: str) -> None:
+def _goto(page, url: str, logger: AutomationLogger, stage: str, *, timeout_ms: int = 60000, networkidle_ms: int = 15000) -> None:
     logger.log("info", stage, f"正在打开页面：{url}")
-    page.goto(url, wait_until="domcontentloaded", timeout=60000)
+    page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
     try:
-        page.wait_for_load_state("networkidle", timeout=15000)
+        page.wait_for_load_state("networkidle", timeout=networkidle_ms)
     except Exception:
         pass
 
@@ -1848,7 +1905,7 @@ def _visible_last(page, selectors: list[str], timeout_ms: int = 1200):
     return None
 
 
-def _clear_and_type(page, locator, text: str) -> None:
+def _clear_and_type(page, locator, text: str, *, mode: str = "paste", logger: AutomationLogger | None = None, stage: str = "text_input") -> None:
     locator.wait_for(state="visible", timeout=10000)
     locator.evaluate(
         """element => {
@@ -1860,7 +1917,7 @@ def _clear_and_type(page, locator, text: str) -> None:
     )
     page.keyboard.press("Control+A")
     page.keyboard.press("Backspace")
-    _human_type(page, text, min_delay=0.07, max_delay=0.16)
+    _type_text(page, text, min_delay=0.07, max_delay=0.16, mode=mode, logger=logger, stage=stage)
 
 
 def _auto_submit_login_form(page, platform: str, payload: dict[str, Any], logger: AutomationLogger, task: dict[str, Any], screenshot_dir: Path) -> bool:
@@ -1931,10 +1988,10 @@ def _auto_submit_login_form(page, platform: str, payload: dict[str, Any], logger
 
     try:
         logger.log("info", "auto_login_type_username", "正在填写登录用户名。", {"username": username})
-        _clear_and_type(page, username_input, username)
+        _clear_and_type(page, username_input, username, mode="type", logger=logger, stage="auto_login_type_username")
         _sleep_between(0.4, 0.9)
         logger.log("info", "auto_login_type_password", "正在填写登录密码。", {"password": "***"})
-        _clear_and_type(page, password_input, password)
+        _clear_and_type(page, password_input, password, mode="type", logger=logger, stage="auto_login_type_password")
         _sleep_between(0.4, 0.9)
     except Exception as exc:
         shot = _screenshot(page, screenshot_dir, task, "auto_login_type_failed", logger)
@@ -2044,7 +2101,7 @@ def _dismiss_threads_compose_dialogs(page, logger: AutomationLogger) -> None:
         logger.log("debug", "threads_publish_cleanup", "正在清理残留 Threads 发帖弹窗。", {"attempt": attempt + 1, "dialogs": visible_count})
         with contextlib.suppress(Exception):
             page.evaluate(
-                """() => {
+                r"""() => {
                     const labels = ['Discard', 'Cancel', 'Close', '取消', '关闭'];
                     const dialogs = Array.from(document.querySelectorAll('[role="dialog"]')).reverse();
                     for (const dialog of dialogs) {
@@ -2099,14 +2156,78 @@ def _ensure_threads_compose_ready(page, logger: AutomationLogger):
     raise RuntimeError("无法打开 Threads 发帖输入框。")
 
 
+def _normalize_threads_post_permalink(value: Any) -> str:
+    raw_url = str(value or "").strip()
+    if not raw_url:
+        return ""
+    parsed = urlparse(urljoin(THREADS_HOME, raw_url))
+    host = str(parsed.hostname or "").lower()
+    if host not in {"threads.net", "www.threads.net", "threads.com", "www.threads.com"}:
+        return ""
+    path = str(parsed.path or "").rstrip("/")
+    if not re.fullmatch(r"/@[^/\s]+/(?:post|thread)/[^/\s]+", path, flags=re.IGNORECASE):
+        return ""
+    return f"https://{host}{path}"
+
+
+def _find_threads_post_permalink(page, caption: str) -> str:
+    current_url = _normalize_threads_post_permalink(getattr(page, "url", ""))
+    if current_url:
+        return current_url
+    normalized_caption = " ".join(str(caption or "").split())
+    if not normalized_caption:
+        return ""
+    try:
+        candidate = page.evaluate(
+            r"""caption => {
+                const normalize = value => String(value || '').replace(/\s+/g, ' ').trim();
+                const matches = Array.from(document.querySelectorAll('div, span, p')).filter(
+                    node => normalize(node.innerText || node.textContent) === caption
+                );
+                for (const match of matches) {
+                    let root = match;
+                    for (let depth = 0; root && root !== document.body && depth < 12; depth += 1, root = root.parentElement) {
+                        const links = root.matches?.('a[href]') ? [root] : Array.from(root.querySelectorAll('a[href]'));
+                        const postLink = links.find(link => /\/@[^/]+\/(?:post|thread)\/[^/?#]+/i.test(link.href || link.getAttribute('href') || ''));
+                        if (postLink) return postLink.href || postLink.getAttribute('href') || '';
+                    }
+                }
+                return '';
+            }""",
+            normalized_caption,
+        )
+    except Exception:
+        return ""
+    return _normalize_threads_post_permalink(candidate)
+
+
+def _find_latest_threads_post_permalink(page) -> str:
+    current_url = _normalize_threads_post_permalink(getattr(page, "url", ""))
+    if current_url:
+        return current_url
+    try:
+        candidates = page.evaluate(
+            r"""() => Array.from(document.querySelectorAll('a[href]'))
+                .map(link => link.href || link.getAttribute('href') || '')
+                .filter(href => /\/@[^/]+\/(?:post|thread)\/[^/?#]+/i.test(href))"""
+        )
+    except Exception:
+        return ""
+    for candidate in candidates if isinstance(candidates, list) else []:
+        permalink = _normalize_threads_post_permalink(candidate)
+        if permalink:
+            return permalink
+    return ""
+
+
 def _wait_for_threads_publish_success(page, logger: AutomationLogger) -> dict[str, Any]:
     deadline = time.time() + 90
     saw_dialog = False
     while time.time() < deadline:
         try:
-            url = str(page.url or "")
-            if re.search(r"/@[^/]+/(post|thread)/", url) or re.search(r"/post/", url):
-                return {"confirmed": True, "reason": "已检测到 Threads 帖子链接。", "url": url}
+            permalink = _normalize_threads_post_permalink(page.url)
+            if permalink:
+                return {"confirmed": True, "submitted": True, "reason": "已检测到 Threads 帖子链接。", "url": permalink}
         except Exception:
             pass
         dialog_compose = _threads_dialog_compose_box(page)
@@ -2114,12 +2235,12 @@ def _wait_for_threads_publish_success(page, logger: AutomationLogger) -> dict[st
         if dialog_compose is not None or dialog_post_button is not None:
             saw_dialog = True
         elif saw_dialog:
-            return {"confirmed": True, "reason": "Threads 发布后编辑器已关闭。", "url": str(page.url or "")}
+            return {"confirmed": False, "submitted": True, "reason": "Threads 编辑器已关闭，仍需帖子链接确认。", "url": ""}
         elif time.time() > deadline - 84:
-            return {"confirmed": True, "reason": "Threads 提交后已返回信息流。", "url": str(page.url or "")}
+            return {"confirmed": False, "submitted": True, "reason": "Threads 已返回信息流，仍需帖子链接确认。", "url": ""}
         _sleep_between(1.4, 2.2)
     logger.log("warn", "threads_publish_confirm", "等待 Threads 发布确认超时。", {"url": str(page.url or "")})
-    return {"confirmed": False, "reason": "等待 Threads 发布确认超时。", "url": str(page.url or "")}
+    return {"confirmed": False, "submitted": False, "reason": "等待 Threads 发布确认超时。", "url": ""}
 
 
 def _threads_active_dialog_text(page) -> str:
@@ -2152,7 +2273,7 @@ def _threads_active_dialog_text(page) -> str:
 def _click_threads_active_dialog_post(page, logger: AutomationLogger) -> bool:
     try:
         clicked = page.evaluate(
-            """() => {
+            r"""() => {
                 const visible = Array.from(document.querySelectorAll('[role="dialog"]')).filter((node) => {
                     const rect = node.getBoundingClientRect();
                     const style = window.getComputedStyle(node);
@@ -2194,27 +2315,25 @@ def _threads_profile_url(account: dict[str, Any] | None) -> str:
     return f"https://www.threads.net/@{username}" if username else THREADS_HOME
 
 
-def _wait_for_threads_own_post(page, caption: str, logger: AutomationLogger, account: dict[str, Any] | None = None) -> dict[str, Any]:
+def _wait_for_threads_own_post(page, caption: str, logger: AutomationLogger, account: dict[str, Any] | None = None, payload: dict[str, Any] | None = None, previous_permalink: str = "") -> dict[str, Any]:
     _dismiss_threads_compose_dialogs(page, logger)
     target_url = _threads_profile_url(account)
-    _goto(page, target_url, logger, "threads_publish_profile")
-    deadline = time.time() + 75
+    confirm_seconds = _safe_int((payload or {}).get("profile_confirm_seconds") or os.getenv("SOCIAL_AUTOMATION_THREADS_PROFILE_CONFIRM_SECONDS"), 18)
+    confirm_seconds = max(5, min(confirm_seconds, 75))
+    nav_timeout_ms = max(3000, min(confirm_seconds * 1000, 12000))
+    try:
+        _goto(page, target_url, logger, "threads_publish_profile", timeout_ms=nav_timeout_ms, networkidle_ms=2500)
+    except Exception as exc:
+        logger.log("warn", "threads_publish_profile_open_slow", "Post-submit profile page load timed out; continue with short confirmation polling.", {"error": str(exc)[:500], "timeout_ms": nav_timeout_ms})
+    deadline = time.time() + confirm_seconds
     while time.time() < deadline:
-        try:
-            body = page.locator("body").inner_text(timeout=5000)
-        except Exception:
-            body = ""
-        if caption and caption in body:
-            with contextlib.suppress(Exception):
-                target = page.get_by_text(caption, exact=True).first
-                if target.count():
-                    target.scroll_into_view_if_needed(timeout=8000)
-                    _sleep_between(0.8, 1.2)
-            return {"confirmed": True, "reason": "已在账号主页看到本次发布内容。", "url": str(page.url or target_url)}
+        permalink = _find_threads_post_permalink(page, caption) if str(caption or "").strip() else _find_latest_threads_post_permalink(page)
+        if permalink and (str(caption or "").strip() or permalink != _normalize_threads_post_permalink(previous_permalink)):
+            return {"confirmed": True, "reason": "已在账号主页定位到本次发布帖子的链接。", "url": permalink}
         with contextlib.suppress(Exception):
-            page.reload(wait_until="domcontentloaded", timeout=60000)
-            page.wait_for_load_state("networkidle", timeout=12000)
-        _sleep_between(2.0, 3.5)
+            page.reload(wait_until="domcontentloaded", timeout=3000)
+            page.wait_for_load_state("networkidle", timeout=1500)
+        _sleep_between(1.0, 1.6)
     return {"confirmed": False, "reason": "发布已提交，但账号主页未看到本次发布内容。", "url": str(page.url or target_url)}
 
 
@@ -2229,6 +2348,15 @@ def _run_threads_publish_post(page, task, payload, screenshot_dir, logger, accou
     _dismiss_threads_compose_dialogs(page, logger)
     _goto(page, THREADS_HOME, logger, "threads_publish_open")
     _dismiss_threads_compose_dialogs(page, logger)
+    previous_latest_permalink = ""
+    if not caption and media_paths:
+        try:
+            _goto(page, _threads_profile_url(account), logger, "threads_publish_media_baseline", timeout_ms=12000, networkidle_ms=2200)
+            previous_latest_permalink = _find_latest_threads_post_permalink(page)
+        except Exception as exc:
+            logger.log("warn", "threads_publish_media_baseline_failed", "Unable to capture the latest Threads post before media-only publish.", {"error": str(exc)[:500]})
+        _goto(page, THREADS_HOME, logger, "threads_publish_open_after_baseline")
+        _dismiss_threads_compose_dialogs(page, logger)
     try:
         compose = _ensure_threads_compose_ready(page, logger)
     except Exception:
@@ -2236,12 +2364,14 @@ def _run_threads_publish_post(page, task, payload, screenshot_dir, logger, accou
         raise
     _human_click(page, compose, logger, "threads_publish_focus")
     if caption:
-        _clear_and_type(page, compose, caption)
+        text_input_mode = _normalize_text_input_mode(payload.get("text_input_mode") or os.getenv("SOCIAL_AUTOMATION_TEXT_INPUT_MODE", "paste"))
+        logger.log("info", "threads_publish_text_input", f"Using text input mode: {text_input_mode}", {"mode": text_input_mode, "chars": len(caption)})
+        _clear_and_type(page, compose, caption, mode=text_input_mode, logger=logger, stage="threads_publish_text_input")
         _sleep_between(0.8, 1.4)
         dialog_text = _threads_active_dialog_text(page)
         if caption not in dialog_text:
             compose = _threads_dialog_compose_box(page) or compose
-            _clear_and_type(page, compose, caption)
+            _clear_and_type(page, compose, caption, mode=text_input_mode, logger=logger, stage="threads_publish_text_input_retry")
             _sleep_between(0.8, 1.4)
             dialog_text = _threads_active_dialog_text(page)
         if caption not in dialog_text:
@@ -2271,17 +2401,29 @@ def _run_threads_publish_post(page, task, payload, screenshot_dir, logger, accou
     if not post_clicked:
         _human_click(page, post_button, logger, "threads_publish_submit")
     success = _wait_for_threads_publish_success(page, logger)
-    shot = ""
-    if not success.get("confirmed"):
-        _screenshot(page, screenshot_dir, task, "failed", logger)
-        raise RuntimeError(str(success.get("reason") or "Threads 发布未确认。"))
-    own_post = _wait_for_threads_own_post(page, caption, logger, account)
-    if not own_post.get("confirmed"):
-        _screenshot(page, screenshot_dir, task, "failed", logger)
-        raise RuntimeError(str(own_post.get("reason") or "Threads 发布后未看到自己的内容。"))
+    permalink = _normalize_threads_post_permalink(success.get("url")) if success.get("confirmed") else ""
+    profile_confirmation: dict[str, Any] = {}
+    if not permalink:
+        profile_confirmation = _wait_for_threads_own_post(page, caption, logger, account, payload, previous_permalink=previous_latest_permalink)
+        if profile_confirmation.get("confirmed"):
+            permalink = _normalize_threads_post_permalink(profile_confirmation.get("url"))
+    if not permalink:
+        shot = _screenshot(page, screenshot_dir, task, "publish_submitted_unconfirmed", logger)
+        reason = str(profile_confirmation.get("reason") or success.get("reason") or "Threads publish unconfirmed.")
+        logger.log("warn", "threads_publish_unconfirmed", reason, {"submit": success, "profile": profile_confirmation}, shot)
+        raise RuntimeError(f"Threads publish unconfirmed: {reason}")
     shot = _screenshot(page, screenshot_dir, task, "publish_done", logger)
-    success = {**success, **own_post}
-    return {"ok": True, "published": success, "url": str(success.get("url") or page.url or ""), "screenshot_path": shot}
+    published = {
+        **success,
+        **profile_confirmation,
+        "confirmed": True,
+        "url": permalink,
+        "permalink": permalink,
+        "confirmation_source": "profile_caption_permalink" if profile_confirmation else "direct_permalink",
+    }
+    if profile_confirmation:
+        published["profile_confirmed"] = True
+    return {"ok": True, "published": published, "url": permalink, "screenshot_path": shot}
 
 
 def _run_publish_post(page, task, payload, screenshot_dir, logger, platform: str = "instagram", account: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -2312,7 +2454,9 @@ def _run_publish_post(page, task, payload, screenshot_dir, logger, platform: str
         caption_box = page.locator('textarea, [contenteditable="true"]').last
         caption_box.wait_for(state="visible", timeout=30000)
         _human_click(page, caption_box, logger, "publish_caption_focus")
-        _human_type(page, caption)
+        text_input_mode = _normalize_text_input_mode(payload.get("text_input_mode") or os.getenv("SOCIAL_AUTOMATION_TEXT_INPUT_MODE", "paste"))
+        logger.log("info", "publish_text_input", f"Using text input mode: {text_input_mode}", {"mode": text_input_mode, "chars": len(caption)})
+        _type_text(page, caption, mode=text_input_mode, logger=logger, stage="publish_text_input")
     if not _click_text_button(page, logger, ["Share"], "publish_share"):
         raise RuntimeError("未找到 Instagram 分享按钮。")
     success = _wait_for_publish_success(page, logger)

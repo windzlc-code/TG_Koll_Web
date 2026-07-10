@@ -29,7 +29,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.tool_runtime_dir = self.root / "tool_r18_runtime"
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.tool_runtime_dir.mkdir(parents=True, exist_ok=True)
-        self.draft_media_path = self.root / "draft_media.png"
+        self.draft_media_path = self.tool_runtime_dir / "draft_media.png"
         self.draft_media_path.write_bytes(
             bytes.fromhex("89504E470D0A1A0A0000000D4948445200000001000000010802000000907753DE0000000C49444154789C636060000000040001F61738550000000049454E44AE426082")
         )
@@ -762,6 +762,83 @@ class PersonaDashboardApiTests(unittest.TestCase):
         archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
         self.assertTrue(any(item["id"] == post["id"] for item in archives[0]["posts"]))
 
+    def test_create_persona_media_only_post_requires_explicit_media_intent(self):
+        self._write_archives()
+        allowed_media_path = self.tool_runtime_dir / "media-only.png"
+        allowed_media_path.write_bytes(self.draft_media_path.read_bytes())
+
+        empty_resp = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/posts",
+            json={"title": "", "content": ""},
+        )
+        self.assertEqual(empty_resp.status_code, 400)
+        bypass_resp = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/posts",
+            json={"title": "", "content": "", "allow_empty_content": True},
+        )
+        self.assertEqual(bypass_resp.status_code, 400)
+
+        media_only_resp = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/posts",
+            json={"title": "", "content": "", "media_paths": [str(allowed_media_path)]},
+        )
+        self.assertEqual(media_only_resp.status_code, 200)
+        post = media_only_resp.json()
+        self.assertEqual(post["content"], "")
+        self.assertTrue(post["title"].startswith("媒体草稿 #"))
+        self.assertTrue(post["media_items"])
+
+        update_resp = self.client.patch(
+            f"/api/persona_dashboard/personas/persona-1/posts/{post['id']}",
+            json={"title": "仅媒体草稿", "content": ""},
+        )
+        self.assertEqual(update_resp.status_code, 200)
+        self.assertEqual(update_resp.json()["content"], "")
+
+        outside_path = self.root / "outside-media.png"
+        outside_path.write_bytes(self.draft_media_path.read_bytes())
+        outside_resp = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/posts",
+            json={"title": "", "content": "", "media_paths": [str(outside_path)]},
+        )
+        self.assertEqual(outside_resp.status_code, 400)
+
+    def test_persona_draft_media_ops_are_atomic_when_final_content_is_empty(self):
+        self._write_archives()
+        patch_resp = self.client.patch(
+            "/api/persona_dashboard/personas/persona-1/posts/post-1",
+            json={"title": "", "content": "", "media_ops": [{"type": "delete", "index": 0, "media_paths": []}]},
+        )
+        self.assertEqual(patch_resp.status_code, 400)
+
+        list_resp = self.client.get("/api/persona_dashboard/personas/persona-1/posts")
+        post = next(item for item in list_resp.json()["posts"] if item["id"] == "post-1")
+        self.assertTrue(post["media_items"])
+
+    def test_persona_media_endpoint_rejects_legacy_path_outside_trusted_roots(self):
+        self._write_archives()
+        outside_path = self.root / "outside-secret.txt"
+        outside_path.write_text("not dashboard media", encoding="utf-8")
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        archives[0]["posts"].append({
+            "id": "unsafe-media-post",
+            "title": "Unsafe",
+            "content": "Unsafe path",
+            "mediaItems": [{"url": str(outside_path), "type": "image"}],
+        })
+        archives_path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        media_resp = self.client.get("/api/persona_dashboard/personas/persona-1/posts/unsafe-media-post/media/0")
+        self.assertEqual(media_resp.status_code, 404)
+
+    def test_media_only_publish_history_record_is_visible(self):
+        self.assertTrue(server._is_persona_publish_history_record({
+            "automationTaskType": "publish_post",
+            "content": "",
+            "mediaItems": [{"url": str(self.draft_media_path), "type": "image"}],
+        }))
+
     def test_persona_posts_hide_legacy_published_drafts(self):
         self._write_archives()
         archives_path = self.tool_runtime_dir / "persona_archives.json"
@@ -867,7 +944,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
     def test_attach_persona_post_image_task_output_writes_back_to_post(self):
         self._write_archives()
-        generated_path = self.root / "generated-preview.png"
+        generated_path = self.tool_runtime_dir / "generated-preview.png"
         generated_path.write_bytes(self.draft_media_path.read_bytes())
         task_id = "task-persona-post-image-attach"
         server._create_task_record(
@@ -929,14 +1006,66 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(post["media_items"][0]["reason"], "原始媒体文件不存在")
         self.assertEqual(post["media_items"][0]["preview_url"], "")
 
-    def test_publish_history_drops_unstable_signed_screenshot_preview_urls(self):
+    def test_publish_history_excludes_automation_screenshots(self):
         from webapp import server
 
         row = server._compact_publish_record({
-            "title": "Signed screenshot",
-            "screenshotPath": "/api/persona_dashboard/automation/screenshots/screenshot?cbsIp=1.2.3.4&sign=abc",
+            "title": "Published post",
+            "content": "Real published content",
+            "screenshotUrl": "/data/automation/screenshots/publish_done_task-1.png",
+            "mediaItems": [{"url": str(self.draft_media_path), "type": "image"}],
         })
-        self.assertEqual(row["screenshot_url"], "")
+        self.assertNotIn("screenshot_path", row)
+        self.assertNotIn("screenshot_url", row)
+        self.assertEqual([item["url"] for item in row["media_items"]], [str(self.draft_media_path)])
+
+    def test_successful_publish_archive_does_not_store_execution_screenshot(self):
+        task = {
+            "id": "task-publish-1",
+            "task_type": "publish_post",
+            "platform": "threads",
+            "account_id": "acct-1",
+            "finished_at": 1_720_000_000,
+        }
+        account = {"platform": "threads", "username": "threads_user"}
+        payload = {
+            "caption": "Real published content",
+            "archive_post_id": "post-1",
+            "media_paths": [str(self.draft_media_path)],
+        }
+        result = {
+            "url": "https://www.threads.net/@threads_user/post/example",
+            "screenshot_path": "/data/automation/screenshots/publish_done_task-publish-1.png",
+        }
+
+        publish_record, post_record = social_automation_api._build_archive_sync_records(task, account, payload, result)
+
+        self.assertNotIn("screenshotUrl", publish_record)
+        self.assertNotIn("screenshotUrl", publish_record["publishedTargets"][0])
+        self.assertIsNotNone(post_record)
+        self.assertNotIn("screenshotUrl", post_record)
+        self.assertEqual(post_record["mediaItems"][0]["url"], str(self.draft_media_path))
+
+    def test_non_publish_task_is_not_synced_to_publish_history(self):
+        self._write_archives()
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        before = json.loads(archives_path.read_text(encoding="utf-8"))[0]["publishHistory"]
+        self._insert_social_account(account_id="acct-check", platform="threads", username="threads_user")
+        self._insert_social_task(
+            task_id="task-check-login",
+            account_id="acct-check",
+            platform="threads",
+            task_type="check_login",
+            payload={"caption": "This is not published content"},
+        )
+
+        social_automation_api._sync_successful_task_to_persona_archive(
+            "task-check-login",
+            {"screenshot_path": "/data/automation/screenshots/check_login.png"},
+        )
+
+        after = json.loads(archives_path.read_text(encoding="utf-8"))[0]["publishHistory"]
+        self.assertEqual(after, before)
 
     def test_internal_media_proxy_urls_are_not_treated_as_raw_preview_urls(self):
         from webapp import server
@@ -971,6 +1100,32 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         memories = resp.json()["memories"]
         self.assertEqual([item["id"] for item in memories[:2]], ["mem-1", "mem-2"])
+
+    def test_persona_memory_create_persists_runtime_entry(self):
+        self._write_archives()
+
+        resp = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/memories",
+            json={"summary": "新增的人设记忆"},
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["memory"]["summary"], "新增的人设记忆")
+        self.assertEqual(body["memory"]["kind"], "consolidated")
+        stored = json.loads((self.tool_runtime_dir / "persona_memory.json").read_text(encoding="utf-8"))
+        self.assertEqual(stored["persona-1"][0]["id"], body["memory"]["id"])
+
+    def test_persona_memory_create_rejects_blank_content(self):
+        self._write_archives()
+
+        resp = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/memories",
+            json={"summary": "   "},
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json()["detail"], "人设记忆内容不能为空。")
 
     def test_persona_memory_delete_removes_runtime_entry(self):
         self._write_archives()
@@ -1082,192 +1237,11 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload["prompt"], "抓取历史老师热点")
         self.assertTrue(payload["refresh"])
         self.assertEqual(payload["limit"], 6)
+        self.assertEqual(payload["searchMode"], "strict")
         self.assertEqual(payload["memorySummaries"], ["记忆一"])
-
-    def test_fetch_persona_hot_candidates_retries_keyword_timeout_short_result(self):
-        self._write_archives()
-        short_result = {
-            "ok": True,
-            "archiveName": "History Teacher",
-            "keywords": ["历史人物"],
-            "cookieStatuses": [],
-            "warnings": ["模型生成热点关键词失败，已改用同一人设历史真实抓取关键词继续刷新：timeout"],
-            "candidates": [
-                {
-                    "id": f"hot-{index}",
-                    "platform": "threads",
-                    "sourceUrl": f"https://www.threads.com/@history/post/{index}",
-                    "author": "history",
-                    "content": f"历史热点正文 {index}",
-                    "hotScore": 100 - index,
-                    "metrics": {},
-                    "capturedAt": "2026-07-06T10:00:00Z",
-                }
-                for index in range(8)
-            ],
-        }
-        full_result = {
-            **short_result,
-            "keywords": ["历史课堂", "朝代历史"],
-            "warnings": ["已即时刷新 Threads reader 中文热点。"],
-            "candidates": [
-                {
-                    "id": f"full-hot-{index}",
-                    "platform": "threads",
-                    "sourceUrl": f"https://www.threads.com/@history/post/full-{index}",
-                    "author": "history",
-                    "content": f"历史课堂热点正文 {index}",
-                    "hotScore": 200 - index,
-                    "metrics": {},
-                    "capturedAt": "2026-07-06T10:00:00Z",
-                }
-                for index in range(10)
-            ],
-        }
-
-        with mock.patch.object(server, "_run_persona_hot_workflow_cli", side_effect=[short_result, full_result]) as mocked:
-            resp = self.client.post(
-                "/api/persona_dashboard/personas/persona-1/hot_candidates",
-                json={"refresh": True, "limit": 10},
-            )
-
-        self.assertEqual(resp.status_code, 200)
-        body = resp.json()
-        self.assertEqual(len(body["candidates"]), 10)
-        self.assertEqual(body["keywords"], ["历史课堂", "朝代历史"])
-        self.assertEqual(body["candidates"][0]["candidate_id"], "full-hot-0")
-        self.assertEqual(mocked.call_count, 2)
-
-    def test_fetch_persona_hot_candidates_prefers_unshown_candidates_from_larger_web_pool(self):
-        self._write_archives()
-        (self.tool_runtime_dir / "persona_hot_web_served.json").write_text(json.dumps({
-            "persona-1": [
-                {"id": f"seen-hot-{index}", "at": f"2026-07-0{index + 1}T10:00:00Z"}
-                for index in range(10)
-            ]
-        }, ensure_ascii=False), encoding="utf-8")
-        fake_result = {
-            "ok": True,
-            "archiveName": "History Teacher",
-            "keywords": ["历史"],
-            "cookieStatuses": [],
-            "warnings": [],
-            "candidates": [
-                {
-                    "id": f"seen-hot-{index}",
-                    "platform": "threads",
-                    "sourceUrl": f"https://www.threads.com/@history/post/seen-{index}",
-                    "author": "history",
-                    "content": f"已展示历史热点正文 {index}",
-                    "hotScore": 1000 - index,
-                    "metrics": {},
-                    "capturedAt": "2026-07-06T10:00:00Z",
-                }
-                for index in range(10)
-            ] + [
-                {
-                    "id": f"fresh-hot-{index}",
-                    "platform": "threads",
-                    "sourceUrl": f"https://www.threads.com/@history/post/fresh-{index}",
-                    "author": "history",
-                    "content": f"新鲜历史热点正文 {index}",
-                    "hotScore": 100 - index,
-                    "metrics": {},
-                    "capturedAt": "2026-07-06T10:00:00Z",
-                }
-                for index in range(10)
-            ],
-        }
-
-        with mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value=fake_result) as mocked:
-            resp = self.client.post(
-                "/api/persona_dashboard/personas/persona-1/hot_candidates",
-                json={"refresh": True, "limit": 10},
-            )
-
-        self.assertEqual(resp.status_code, 200)
-        body = resp.json()
-        self.assertEqual(len(body["candidates"]), 10)
-        self.assertTrue(all(item["candidate_id"].startswith("fresh-hot-") for item in body["candidates"]))
-        self.assertEqual(mocked.call_args.args[0]["limit"], 20)
-        served = json.loads((self.tool_runtime_dir / "persona_hot_web_served.json").read_text(encoding="utf-8"))
-        served_ids = [item["id"] for item in served["persona-1"]]
-        self.assertIn("fresh-hot-0", served_ids)
-
-    def test_fetch_persona_hot_candidates_supplements_from_persona_threads_cache(self):
-        self._write_archives()
-        (self.tool_runtime_dir / "persona_hot_web_served.json").write_text(json.dumps({
-            "persona-1": [
-                {"id": f"seen-hot-{index}", "at": f"2026-07-0{index + 1}T10:00:00Z"}
-                for index in range(10)
-            ]
-        }, ensure_ascii=False), encoding="utf-8")
-        (self.tool_runtime_dir / "sentiment_threads_search_cache.json").write_text(json.dumps({
-            "persona-1::历史课堂": {
-                "at": "2026-07-06T10:00:00Z",
-                "candidates": [
-                    {
-                        "id": f"cache-hot-{index}",
-                        "platform": "threads",
-                        "sourceUrl": f"https://www.threads.com/@history/post/cache-{index}",
-                        "author": "history",
-                        "content": f"缓存里的历史课堂热点 {index}",
-                        "hotScore": 80 - index,
-                        "metrics": {},
-                        "capturedAt": "2026-07-06T10:00:00Z",
-                    }
-                    for index in range(10)
-                ],
-            },
-            "persona-other::历史课堂": {
-                "at": "2026-07-06T10:00:00Z",
-                "candidates": [
-                    {
-                        "id": "other-hot",
-                        "platform": "threads",
-                        "sourceUrl": "https://www.threads.com/@other/post/1",
-                        "author": "other",
-                        "content": "其他人设热点不应混入",
-                        "hotScore": 9999,
-                        "metrics": {},
-                        "capturedAt": "2026-07-06T10:00:00Z",
-                    }
-                ],
-            },
-        }, ensure_ascii=False), encoding="utf-8")
-        fake_result = {
-            "ok": True,
-            "archiveName": "History Teacher",
-            "keywords": ["历史课堂"],
-            "cookieStatuses": [],
-            "warnings": [],
-            "candidates": [
-                {
-                    "id": f"seen-hot-{index}",
-                    "platform": "threads",
-                    "sourceUrl": f"https://www.threads.com/@history/post/seen-{index}",
-                    "author": "history",
-                    "content": f"已展示历史热点正文 {index}",
-                    "hotScore": 1000 - index,
-                    "metrics": {},
-                    "capturedAt": "2026-07-06T10:00:00Z",
-                }
-                for index in range(10)
-            ],
-        }
-
-        with mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value=fake_result):
-            resp = self.client.post(
-                "/api/persona_dashboard/personas/persona-1/hot_candidates",
-                json={"refresh": True, "limit": 10},
-            )
-
-        self.assertEqual(resp.status_code, 200)
-        body = resp.json()
-        ids = [item["candidate_id"] for item in body["candidates"]]
-        self.assertEqual(len(ids), 10)
-        self.assertTrue(all(item.startswith("cache-hot-") for item in ids))
-        self.assertNotIn("other-hot", ids)
+        self.assertNotIn("recordShown", payload)
+        self.assertNotIn("forceLive", payload)
+        self.assertNotIn("deferBackgroundRefresh", payload)
 
     def test_fetch_persona_hot_candidates_uses_default_memories_without_web_params(self):
         self._write_archives()
@@ -1451,6 +1425,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
         (self.tool_runtime_dir / "api_config.json").write_text(json.dumps({
             "gptEndpoint": "http://old.example",
             "geminiTextEndpoint": "http://old.example",
+            "llmFreeModelPriorityOrder": "stale/model",
+            "llm_free_model_priority_order": "stale/model",
         }), encoding="utf-8")
 
         server._sync_tool_r18_api_config_for_persona_workflow()
@@ -1461,6 +1437,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(synced["gptKey"], "key-123")
         self.assertEqual(synced["geminiTextKey"], "key-123")
         self.assertEqual(synced["llmModelPriorityOrder"], "xai/grok-4.3, google/gemini-3.5-flash")
+        self.assertEqual(synced["llmFreeModelPriorityOrder"], "xai/grok-4.3, google/gemini-3.5-flash")
+        self.assertEqual(synced["llm_free_model_priority_order"], "xai/grok-4.3, google/gemini-3.5-flash")
 
     def test_publish_persona_post_creates_publish_task_with_archive_post_id(self):
         self._write_archives()
@@ -1472,10 +1450,12 @@ class PersonaDashboardApiTests(unittest.TestCase):
         )
         self.assertEqual(create_resp.status_code, 200)
         post = create_resp.json()
+        media_path = self.tool_runtime_dir / "publish-media.png"
+        media_path.write_bytes(self.draft_media_path.read_bytes())
         with mock.patch.object(server, "create_social_task", return_value={"id": "sat-1", "task_type": "publish_post", "status": "queued"}) as mocked:
             publish_resp = self.client.post(
                 f"/api/persona_dashboard/personas/persona-1/posts/{post['id']}/publish",
-                json={"media_paths": [r"E:\\tmp\\media_1.png"]},
+                json={"media_paths": [str(media_path)]},
             )
         self.assertEqual(publish_resp.status_code, 200)
         payload_obj = mocked.call_args.args[0]
@@ -1485,7 +1465,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload_obj.payload["archive_post_id"], post["id"])
         self.assertEqual(payload_obj.payload["archive_post_title"], "Draft publish")
         self.assertEqual(payload_obj.payload["caption"], "Publish me")
-        self.assertEqual(payload_obj.payload["media_paths"], [r"E:\\tmp\\media_1.png"])
+        self.assertEqual(payload_obj.payload["media_paths"], [str(media_path.resolve())])
 
     def test_publish_persona_post_supports_threads_without_media(self):
         self._write_archives()
@@ -1512,6 +1492,30 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload_obj.payload["archive_post_id"], post["id"])
         self.assertEqual(payload_obj.payload["caption"], "Threads publish content")
         self.assertEqual(payload_obj.payload["media_paths"], [])
+
+    def test_publish_persona_post_supports_media_without_text(self):
+        self._write_archives()
+        self._insert_social_account(account_id="acct-media", platform="threads", username="media_user")
+        self._insert_social_task(account_id="acct-media", platform="threads", task_type="check_login")
+        media_path = self.tool_runtime_dir / "publish-media-only.png"
+        media_path.write_bytes(self.draft_media_path.read_bytes())
+        create_resp = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/posts",
+            json={"title": "Media only", "content": "", "media_paths": [str(media_path)]},
+        )
+        self.assertEqual(create_resp.status_code, 200)
+        post = create_resp.json()
+
+        with mock.patch.object(server, "create_social_task", return_value={"id": "sat-media", "task_type": "publish_post", "status": "queued"}) as mocked:
+            publish_resp = self.client.post(
+                f"/api/persona_dashboard/personas/persona-1/posts/{post['id']}/publish",
+                json={"account_id": "acct-media", "platform": "threads", "media_paths": []},
+            )
+
+        self.assertEqual(publish_resp.status_code, 200)
+        payload_obj = mocked.call_args.args[0]
+        self.assertEqual(payload_obj.payload["caption"], "")
+        self.assertEqual(payload_obj.payload["media_paths"], [str(media_path.resolve())])
 
     def test_publish_draft_post_sync_removes_source_post(self):
         self._write_archives()

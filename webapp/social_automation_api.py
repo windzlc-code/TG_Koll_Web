@@ -121,6 +121,7 @@ class LiveBrowserSettingsPayload(BaseModel):
     standby_seconds: int = Field(default=60, ge=0, le=3600)
     auto_close_seconds: int = Field(default=300, ge=10, le=86400)
     max_concurrency: int = Field(default=4, ge=1, le=12)
+    text_input_mode: str = Field(default="paste", max_length=20)
 
 
 class LiveBrowserTextPayload(BaseModel):
@@ -270,6 +271,10 @@ def register_social_automation_routes(app: FastAPI) -> None:
     def api_social_task_create(payload: SocialTaskPayload, _user: dict[str, Any] = Depends(get_current_user)):
         return {"ok": True, "task": create_social_task(payload)}
 
+    @app.post("/api/persona_dashboard/automation/tasks/cancel_all")
+    def api_social_tasks_cancel_all(payload: SocialTaskActionPayload | None = None, _user: dict[str, Any] = Depends(get_current_user)):
+        return {"ok": True, **cancel_all_social_tasks((payload.reason if payload else ""))}
+
     @app.get("/api/persona_dashboard/automation/tasks/{task_id}")
     def api_social_task_get(task_id: str, _user: dict[str, Any] = Depends(get_current_user)):
         return {"ok": True, "task": get_social_task(task_id)}
@@ -360,6 +365,105 @@ def _authenticate_live_browser_websocket(websocket: WebSocket) -> bool:
         return False
 
 
+class _RfbClientMessageInspector:
+    _FIXED_LENGTHS = {
+        0: 20,
+        3: 10,
+        150: 10,
+        178: 4,
+        179: 12,
+        185: 1,
+        252: 5,
+    }
+    _INPUT_TYPES = {4, 5, 6, 180, 183, 188, 250, 255}
+
+    def __init__(self, *, handshake_complete: bool = False) -> None:
+        self._handshake_state = "messages" if handshake_complete else "protocol_version"
+
+    def requires_input_permission(self, payload: bytes) -> bool:
+        if not payload:
+            return False
+        if self._consume_handshake_payload(payload):
+            return False
+        return self._messages_require_input_permission(payload)
+
+    def _consume_handshake_payload(self, payload: bytes) -> bool:
+        if self._handshake_state == "protocol_version":
+            if _is_rfb_protocol_version(payload):
+                self._handshake_state = "security_or_client_init"
+                return True
+            self._handshake_state = "messages"
+            return False
+        if self._handshake_state == "security_or_client_init":
+            if len(payload) == 1:
+                self._handshake_state = "client_init_or_messages"
+                return True
+            self._handshake_state = "messages"
+            return False
+        if self._handshake_state == "client_init_or_messages":
+            self._handshake_state = "messages"
+            return len(payload) == 1 and payload[0] in {0, 1}
+        return False
+
+    def _messages_require_input_permission(self, payload: bytes) -> bool:
+        offset = 0
+        while offset < len(payload):
+            message_type = payload[offset]
+            if message_type in self._INPUT_TYPES:
+                return True
+            if message_type in self._FIXED_LENGTHS:
+                message_length = self._FIXED_LENGTHS[message_type]
+            elif message_type == 2:
+                if len(payload) - offset < 4:
+                    return True
+                encoding_count = int.from_bytes(payload[offset + 2 : offset + 4], "big")
+                message_length = 4 + encoding_count * 4
+            elif message_type in {182, 248}:
+                header_length = 2 if message_type == 182 else 9
+                if len(payload) - offset < header_length:
+                    return True
+                length_offset = 1 if message_type == 182 else 8
+                message_length = header_length + payload[offset + length_offset]
+            elif message_type == 184:
+                if len(payload) - offset < 2:
+                    return True
+                message_length = 2 + payload[offset + 1] * 4
+            elif message_type == 251:
+                if len(payload) - offset < 8:
+                    return True
+                message_length = 8 + payload[offset + 6] * 16
+            else:
+                return True
+            if len(payload) - offset < message_length:
+                return True
+            offset += message_length
+        return False
+
+
+def _is_rfb_protocol_version(payload: bytes) -> bool:
+    return (
+        len(payload) == 12
+        and payload[:4] == b"RFB "
+        and payload[4:7].isdigit()
+        and payload[7:8] == b"."
+        and payload[8:11].isdigit()
+        and payload[11:] == b"\n"
+    )
+
+
+def _query_live_browser_input_allowed(task_id: str) -> bool:
+    try:
+        with db() as conn:
+            row = conn.execute("SELECT status FROM social_automation_tasks WHERE id = ?", (str(task_id or ""),)).fetchone()
+        return bool(row and str(row["status"] or "").strip().lower() == "need_manual")
+    except Exception:
+        return False
+
+
+async def _live_browser_input_allowed(task_id: str) -> bool:
+    return bool(await asyncio.to_thread(_query_live_browser_input_allowed, task_id))
+
+
 async def _proxy_live_browser_websocket(websocket: WebSocket, session_id: str) -> None:
     subprotocol = _requested_websocket_subprotocol(websocket)
     await websocket.accept(subprotocol=subprotocol)
@@ -375,6 +479,8 @@ async def _proxy_live_browser_websocket(websocket: WebSocket, session_id: str) -
         target = await websockets.connect(
             f"ws://127.0.0.1:{int(session.web_port)}/websockify",
             max_size=None,
+            max_queue=1,
+            compression=None,
             subprotocols=[subprotocol or "binary"],
             origin=f"http://127.0.0.1:{int(session.web_port)}",
             ping_interval=None,
@@ -385,22 +491,7 @@ async def _proxy_live_browser_websocket(websocket: WebSocket, session_id: str) -
             await websocket.close(code=1011)
         return
 
-    def input_allowed() -> bool:
-        try:
-            with db() as conn:
-                row = conn.execute("SELECT status FROM social_automation_tasks WHERE id = ?", (str(session.task_id or ""),)).fetchone()
-            return bool(row and str(row["status"] or "").strip().lower() == "need_manual")
-        except Exception:
-            return False
-
-    def is_rfb_input_event(message: bytes | str) -> bool:
-        if isinstance(message, str):
-            return False
-        if not message:
-            return False
-        # RFB client messages: 4=KeyEvent, 5=PointerEvent, 6=ClientCutText.
-        # Keep framebuffer/setup traffic flowing so the preview remains live.
-        return int(message[0]) in {4, 5, 6}
+    rfb_inspector = _RfbClientMessageInspector()
 
     async def browser_to_kasm() -> None:
         while True:
@@ -409,13 +500,13 @@ async def _proxy_live_browser_websocket(websocket: WebSocket, session_id: str) -
                 break
             data = message.get("bytes")
             if data is not None:
-                if is_rfb_input_event(data) and not input_allowed():
+                if rfb_inspector.requires_input_permission(data) and not await _live_browser_input_allowed(session.task_id):
                     continue
                 await target.send(data)
                 continue
             text = message.get("text")
             if text is not None:
-                if is_rfb_input_event(text.encode("latin1", "ignore")) and not input_allowed():
+                if rfb_inspector.requires_input_permission(text.encode("latin1", "ignore")) and not await _live_browser_input_allowed(session.task_id):
                     continue
                 await target.send(text)
 
@@ -595,11 +686,17 @@ def _bounded_env_int(name: str, fallback: int, minimum: int, maximum: int) -> in
     return max(minimum, min(value, maximum))
 
 
-def get_live_browser_settings() -> dict[str, int]:
+def _normalize_text_input_mode(value: Any) -> str:
+    mode = str(value or "").strip().lower()
+    return mode if mode in {"paste", "type"} else "paste"
+
+
+def get_live_browser_settings() -> dict[str, Any]:
     defaults = {
         "standby_seconds": _bounded_env_int("SOCIAL_AUTOMATION_LIVE_BROWSER_STANDBY_SECONDS", 60, 0, 3600),
         "auto_close_seconds": _bounded_env_int("SOCIAL_AUTOMATION_LIVE_BROWSER_AUTO_CLOSE_SECONDS", 300, 10, 86400),
         "max_concurrency": _bounded_env_int("SOCIAL_AUTOMATION_WORKER_CONCURRENCY", 4, 1, 12),
+        "text_input_mode": _normalize_text_input_mode(os.getenv("SOCIAL_AUTOMATION_TEXT_INPUT_MODE", "paste")),
     }
     try:
         with db() as conn:
@@ -611,16 +708,18 @@ def get_live_browser_settings() -> dict[str, int]:
             "standby_seconds": max(0, min(int(raw.get("standby_seconds", defaults["standby_seconds"])), 3600)),
             "auto_close_seconds": max(10, min(int(raw.get("auto_close_seconds", defaults["auto_close_seconds"])), 86400)),
             "max_concurrency": max(1, min(int(raw.get("max_concurrency", defaults["max_concurrency"])), 12)),
+            "text_input_mode": _normalize_text_input_mode(raw.get("text_input_mode", defaults["text_input_mode"])),
         }
     except Exception:
         return defaults
 
 
-def set_live_browser_settings(payload: LiveBrowserSettingsPayload) -> dict[str, int]:
+def set_live_browser_settings(payload: LiveBrowserSettingsPayload) -> dict[str, Any]:
     settings = {
         "standby_seconds": max(0, min(int(payload.standby_seconds), 3600)),
         "auto_close_seconds": max(10, min(int(payload.auto_close_seconds), 86400)),
         "max_concurrency": max(1, min(int(payload.max_concurrency), 12)),
+        "text_input_mode": _normalize_text_input_mode(payload.text_input_mode),
     }
     now = _now()
     with db() as conn:
@@ -1260,29 +1359,60 @@ def cancel_social_task(task_id: str, reason: str = "") -> dict[str, Any]:
     now = _now()
     clean_reason = reason or "用户取消"
     with db() as conn:
+        cancelled = conn.execute(
+            """
+            UPDATE social_automation_tasks
+            SET status = 'cancelled', finished_at = ?, error = ?, updated_at = ?
+            WHERE id = ? AND status IN ('queued', 'running', 'need_manual')
+            """,
+            (now, clean_reason, now, task_id),
+        ).rowcount
         row = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="任务不存在")
-        status = str(row["status"] or "")
-        if status in {"success", "failed", "cancelled"}:
-            return _task_public(row)
-        if status == "running":
-            conn.execute(
-                "UPDATE social_automation_tasks SET status = 'cancelled', finished_at = ?, error = ?, updated_at = ? WHERE id = ?",
-                (now, clean_reason, now, task_id),
-            )
-            _insert_log(conn, task_id, "warn", "cancel", "任务已取消，正在强制关闭浏览器上下文", {"reason": clean_reason})
-        else:
-            conn.execute(
-                "UPDATE social_automation_tasks SET status = 'cancelled', finished_at = ?, error = ?, updated_at = ? WHERE id = ?",
-                (now, clean_reason, now, task_id),
-            )
-            _insert_log(conn, task_id, "warn", "cancel", "任务已取消", {"reason": clean_reason})
-        updated = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
-    if status in {"running", "need_manual"}:
+        if cancelled:
+            _insert_log(conn, task_id, "warn", "cancel", "任务已取消，正在停止执行上下文", {"reason": clean_reason})
+    _discard_ephemeral_task_secrets(task_id)
+    if cancelled:
+        _force_stop_running_task(task_id)
+        wake_social_automation_worker()
+    return _task_public(row)
+
+
+def cancel_all_social_tasks(reason: str = "") -> dict[str, Any]:
+    now = _now()
+    clean_reason = reason or "用户停止全部自动化任务"
+    with db() as conn:
+        cancelled_rows = conn.execute(
+            """
+            UPDATE social_automation_tasks
+            SET status = 'cancelled', finished_at = ?, error = ?, updated_at = ?
+            WHERE status IN ('queued', 'running', 'need_manual')
+            RETURNING id
+            """,
+            (now, clean_reason, now),
+        ).fetchall()
+        task_ids = [str(row["id"] or "") for row in cancelled_rows if str(row["id"] or "")]
+        if not task_ids:
+            return {"cancelled_count": 0, "task_ids": [], "tasks": []}
+        placeholders = ", ".join("?" for _ in task_ids)
+        for task_id in task_ids:
+            _insert_log(conn, task_id, "warn", "cancel_all", "已通过总控停止任务", {"reason": clean_reason})
+        updated_rows = conn.execute(
+            f"SELECT * FROM social_automation_tasks WHERE id IN ({placeholders})",
+            tuple(task_ids),
+        ).fetchall()
+
+    _discard_ephemeral_task_secrets(*task_ids)
+    # Mark every task cancelled before signalling browsers so queued work cannot be claimed mid-stop.
+    for task_id in task_ids:
         _force_stop_running_task(task_id)
     wake_social_automation_worker()
-    return _task_public(updated)
+    return {
+        "cancelled_count": len(task_ids),
+        "task_ids": task_ids,
+        "tasks": [_task_public(row) for row in updated_rows],
+    }
 
 
 def retry_social_task(task_id: str) -> dict[str, Any]:
@@ -1388,6 +1518,7 @@ def _start_claimed_task_thread(task: dict[str, Any]) -> None:
             with _WORKER_TASK_THREADS_LOCK:
                 _WORKER_TASK_THREADS.pop(task_id, None)
             _refresh_worker_state()
+            wake_social_automation_worker()
 
     thread = threading.Thread(target=target, name=f"social-automation-task-{task_id[:12]}", daemon=True)
     with _WORKER_TASK_THREADS_LOCK:
@@ -1547,6 +1678,10 @@ def _recover_orphaned_manual_login_task(now: int) -> None:
 
 
 def _execute_claimed_task(task: dict[str, Any]) -> None:
+    task_id = str(task.get("id") or "")
+    if _is_task_cancelled(task_id):
+        _discard_ephemeral_task_secrets(task_id)
+        return
     with db() as conn:
         account_row = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (task["account_id"],)).fetchone()
         if not account_row:
@@ -1556,6 +1691,9 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
             proxy_row = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (account_row["proxy_id"],)).fetchone()
     account = dict(account_row)
     proxy = dict(proxy_row) if proxy_row else None
+    if _is_task_cancelled(task_id):
+        _discard_ephemeral_task_secrets(task_id)
+        return
     task = dict(task)
     task["payload"] = _runtime_task_payload(task, account)
     from social_automation.runner import AutoLoginFailedError, NeedManualError, UnsupportedActionError, run_social_task
@@ -1565,6 +1703,8 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
     with _RUNNING_TASK_CONTROLS_LOCK:
         _RUNNING_TASK_CONTROLS[str(task["id"])] = control
     try:
+        if _is_task_cancelled(task_id):
+            return
         result = _run_social_task_in_clean_thread(
             run_social_task,
             task=task,
@@ -1586,8 +1726,7 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
             _finish_task(task["id"], "failed", {"unsupported": True}, str(exc))
         return
     finally:
-        with _EPHEMERAL_TASK_SECRETS_LOCK:
-            _EPHEMERAL_TASK_SECRETS.pop(str(task["id"]), None)
+        _discard_ephemeral_task_secrets(task_id)
         with _RUNNING_TASK_CONTROLS_LOCK:
             _RUNNING_TASK_CONTROLS.pop(str(task["id"]), None)
     if _is_task_cancelled(str(task["id"])):
@@ -1643,44 +1782,62 @@ def _is_task_cancelled(task_id: str) -> bool:
         return False
 
 
+def _discard_ephemeral_task_secrets(*task_ids: str) -> None:
+    with _EPHEMERAL_TASK_SECRETS_LOCK:
+        for task_id in task_ids:
+            _EPHEMERAL_TASK_SECRETS.pop(str(task_id), None)
+
+
 def _force_stop_running_task(task_id: str) -> None:
     with _RUNNING_TASK_CONTROLS_LOCK:
         control = _RUNNING_TASK_CONTROLS.get(str(task_id))
-        if not control:
-            return
-        cancel_event = control.get("cancel_event")
-        context = control.get("context")
+        cancel_event = control.get("cancel_event") if control else None
+        context = control.get("context") if control else None
+        session_id = str(control.get("live_browser_session_id") or "") if control else ""
     if cancel_event is not None:
         with contextlib.suppress(Exception):
             cancel_event.set()
     if context is not None:
         with contextlib.suppress(Exception):
             context.close()
-    session_id = str(control.get("live_browser_session_id") or "")
-    if session_id:
-        with contextlib.suppress(Exception):
-            from social_automation.live_browser import stop_live_browser_session
+    with contextlib.suppress(Exception):
+        from social_automation.live_browser import stop_live_browser_session, stop_live_browser_sessions_for_task
 
+        if session_id:
             stop_live_browser_session(session_id)
+        stop_live_browser_sessions_for_task(task_id)
     with contextlib.suppress(Exception):
         with db() as conn:
             _insert_log(conn, task_id, "warn", "force_stop", "已发送强制停止信号并关闭浏览器上下文", {})
 
 
-def _finish_task(task_id: str, status: str, result: dict[str, Any], error: str, account_status: str = "") -> None:
+def _finish_task(task_id: str, status: str, result: dict[str, Any], error: str, account_status: str = "") -> bool:
     now = _now()
     with db() as conn:
         task = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
         if not task:
-            return
-        conn.execute(
-            """
-            UPDATE social_automation_tasks
-            SET status = ?, finished_at = ?, result_json = ?, error = ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (status, now, json.dumps(result or {}, ensure_ascii=False), error, now, task_id),
-        )
+            return False
+        result_json = json.dumps(result or {}, ensure_ascii=False)
+        if status == "need_manual":
+            completed = conn.execute(
+                """
+                UPDATE social_automation_tasks
+                SET status = 'need_manual', finished_at = 0, result_json = ?, error = ?, updated_at = ?
+                WHERE id = ? AND status IN ('running', 'need_manual')
+                """,
+                (result_json, error, now, task_id),
+            ).rowcount
+        else:
+            completed = conn.execute(
+                """
+                UPDATE social_automation_tasks
+                SET status = ?, finished_at = ?, result_json = ?, error = ?, updated_at = ?
+                WHERE id = ? AND status = 'running'
+                """,
+                (status, now, result_json, error, now, task_id),
+            ).rowcount
+        if not completed:
+            return False
         _insert_log(conn, task_id, "info" if status == "success" else "error", status, "任务执行完成" if status == "success" else error, result)
         if account_status:
             conn.execute(
@@ -1692,8 +1849,9 @@ def _finish_task(task_id: str, status: str, result: dict[str, Any], error: str, 
                 "UPDATE social_accounts SET last_run_at = ?, last_error = ?, updated_at = ? WHERE id = ?",
                 (now, error, now, str(task["account_id"])),
             )
-    if status == "success":
+    if completed and status == "success":
         _sync_successful_task_to_persona_archive(task_id, result)
+    return True
 
 
 def _iso_from_ts(value: Any) -> str:
@@ -2113,7 +2271,6 @@ def _build_archive_sync_records(task: dict[str, Any], account: dict[str, Any], p
     archive_post_title = str(payload.get("archive_post_title") or "").strip()
     target_url = str(payload.get("target_url") or payload.get("post_url") or result.get("url") or "").strip()
     result_url = str(result.get("url") or target_url or "").strip()
-    screenshot_path = str(result.get("screenshot_path") or "").strip()
     source_meta = {
         "platform": platform,
         "source": "web_social_automation",
@@ -2145,13 +2302,11 @@ def _build_archive_sync_records(task: dict[str, Any], account: dict[str, Any], p
         "platform": platform,
         "status": "success",
         "publishedUrl": result_url,
-        "screenshotUrl": screenshot_path,
         "sourceMeta": source_meta,
         "publishedMeta": source_meta,
         "publishedTargets": [{
             "platform": platform,
             "publishedUrl": result_url,
-            "screenshotUrl": screenshot_path,
             "publishedMeta": source_meta,
         }],
         "automationTaskId": task_id,
@@ -2172,7 +2327,6 @@ def _build_archive_sync_records(task: dict[str, Any], account: dict[str, Any], p
             "sourceMeta": source_meta,
             "publishedMeta": source_meta,
             "publishedUrl": result_url,
-            "screenshotUrl": screenshot_path,
             "automationTaskId": task_id,
             **media_fields,
         }
@@ -2188,14 +2342,14 @@ def _sync_successful_task_to_persona_archive(task_id: str, result: dict[str, Any
             account_row = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (str(task_row["account_id"]),)).fetchone()
         task = dict(task_row)
         account = dict(account_row) if account_row else {}
+        if str(task.get("task_type") or "").strip().lower() != "publish_post":
+            return
         persona_id = str(task.get("persona_id") or account.get("persona_id") or "").strip()
         if not persona_id:
             return
         payload = json.loads(str(task.get("payload_json") or "{}"))
         if not isinstance(payload, dict):
             payload = {}
-        if _is_manual_open_login_task(task, payload):
-            return
         publish_record, post_record = _build_archive_sync_records(task, account, payload, result or {})
         archive_post_source = str(payload.get("archive_post_source") or "posts").strip().lower()
         is_favorite_post_source = archive_post_source == "favorites"
@@ -2282,16 +2436,18 @@ def _fail_task_safely(task_id: str, exc: Exception) -> None:
         if retry_count < max_retries:
             now = _now()
             with db() as conn:
-                conn.execute(
+                requeued = conn.execute(
                     """
                     UPDATE social_automation_tasks
                     SET status = 'queued', retry_count = ?, error = ?, updated_at = ?
-                    WHERE id = ?
+                    WHERE id = ? AND status = 'running'
                     """,
                     (retry_count + 1, str(exc), now, task_id),
-                )
-                _insert_log(conn, task_id, "warn", "retry", "任务失败，已重新排队", {"error": str(exc), "retry_count": retry_count + 1})
-            return
+                ).rowcount
+                if requeued:
+                    _insert_log(conn, task_id, "warn", "retry", "任务失败，已重新排队", {"error": str(exc), "retry_count": retry_count + 1})
+            if requeued:
+                return
     except Exception:
         pass
     _finish_task(task_id, "failed", {}, str(exc))
@@ -2412,6 +2568,7 @@ def _runtime_task_payload(task: dict[str, Any], account: dict[str, Any]) -> dict
     settings = get_live_browser_settings()
     payload.setdefault("live_browser_standby_seconds", settings["standby_seconds"])
     payload.setdefault("live_browser_auto_close_seconds", settings["auto_close_seconds"])
+    payload.setdefault("text_input_mode", settings.get("text_input_mode") or "paste")
     task_id = str(task.get("id") or "")
     with _EPHEMERAL_TASK_SECRETS_LOCK:
         secrets = dict(_EPHEMERAL_TASK_SECRETS.get(task_id) or {})
