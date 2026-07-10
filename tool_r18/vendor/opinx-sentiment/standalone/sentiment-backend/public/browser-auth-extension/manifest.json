@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "舆情系统授权助手",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "将已登录站点 Cookie 同步到舆情系统浏览器采集 Profile。",
   "permissions": ["alarms", "cookies", "storage", "tabs"],
   "host_permissions": [

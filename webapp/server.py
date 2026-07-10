@@ -1238,8 +1238,8 @@ def _sentiment_browser_auth_text(file_name: str, request: Request) -> tuple[byte
             )
     elif file_name == "popup.js":
         body = re.sub(
-            r'\$\("apiBase"\)\.value = values\.apiBase \|\| "https?://[^"]+";',
-            f'$("apiBase").value = values.apiBase || "{origin}";',
+            r'const DEFAULT_API_BASE = "[^"]*";',
+            f'const DEFAULT_API_BASE = "{origin}";',
             body,
             count=1,
         )
@@ -1259,6 +1259,7 @@ def _sentiment_browser_auth_text(file_name: str, request: Request) -> tuple[byte
                     permissions.append(permission)
             body = json.dumps(parsed, ensure_ascii=False, indent=2) + "\n"
     elif file_name == "popup.html":
+        body = body.replace('placeholder="http://127.0.0.1:8001"', f'placeholder="{origin}"')
         body = body.replace("<h1>舆情授权助手</h1>", f"<h1>{SENTIMENT_BROWSER_AUTH_EXTENSION_NAME}</h1>")
     elif file_name == "install.html":
         body = body.replace("<title>舆情授权助手安装</title>", f"<title>{SENTIMENT_BROWSER_AUTH_EXTENSION_NAME} 安装</title>")
@@ -1275,7 +1276,7 @@ def _sentiment_browser_auth_extension_config(request: Request, config: dict[str,
         config = _read_sentiment_config_file()
     payload: dict[str, Any] = {
         "ok": True,
-        "version": "1.0.7",
+        "version": "1.0.8",
         "apiBase": _request_public_origin(request),
         "profiles": _sentiment_browser_auth_profiles_for_extension(),
         "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

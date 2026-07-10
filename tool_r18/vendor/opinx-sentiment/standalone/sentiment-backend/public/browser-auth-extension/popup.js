@@ -1,4 +1,13 @@
 const $ = (id) => document.getElementById(id);
+const DEFAULT_API_BASE = "";
+const LOCAL_API_BASE_CANDIDATES = [
+  "http://127.0.0.1:8001",
+  "http://localhost:8001",
+  "http://127.0.0.1:8003",
+  "http://localhost:8003",
+  "http://127.0.0.1:8000",
+  "http://localhost:8000",
+];
 
 function setStatus(message) {
   $("status").textContent = message;
@@ -19,14 +28,57 @@ function displayApiBase(value) {
   return String(value || "").trim().replace(/\/+$/, "");
 }
 
+function isLocalApiBase(value) {
+  const normalized = displayApiBase(value).toLowerCase();
+  if (!normalized) return false;
+  if (LOCAL_API_BASE_CANDIDATES.map(displayApiBase).includes(normalized)) return true;
+  try {
+    return ["127.0.0.1", "localhost", "::1"].includes(new URL(normalized).hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+async function activeTabApiBase() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const url = new URL(tab?.url || "");
+    if (!/^https?:$/.test(url.protocol)) return "";
+    const path = `${url.pathname}${url.hash || ""}`;
+    if (!/(^|\/)(admin|admin\.html|console|console\.html|quick-setup|browser-auth-extension)(\/|\.|#|$)/.test(path)) {
+      return "";
+    }
+    return displayApiBase(url.origin);
+  } catch {
+    return "";
+  }
+}
+
+async function preferredApiBase(storedValue) {
+  const stored = displayApiBase(storedValue);
+  const injected = displayApiBase(DEFAULT_API_BASE);
+  const active = await activeTabApiBase();
+  if (active) return active;
+  if (!stored) return injected;
+  if (injected && !isLocalApiBase(injected) && isLocalApiBase(stored)) return injected;
+  return stored;
+}
+
 function send(message) {
   return chrome.runtime.sendMessage(message);
 }
 
 async function loadState() {
   const values = await chrome.storage.local.get(["apiBase", "lastStatus"]);
-  $("apiBase").value = displayApiBase(values.apiBase);
+  const nextApiBase = await preferredApiBase(values.apiBase);
+  $("apiBase").value = nextApiBase;
   setStatus(values.lastStatus || "等待同步");
+  if (nextApiBase && nextApiBase !== displayApiBase(values.apiBase)) {
+    const result = await send({ type: "set-api-base", apiBase: nextApiBase });
+    if (!result.ok) {
+      setStatus(friendlyError(result.error));
+    }
+  }
 }
 
 $("saveApi").addEventListener("click", async () => {
@@ -48,7 +100,7 @@ $("syncCurrent").addEventListener("click", async () => {
   try {
     const result = await send({ type: "sync-current-tab" });
     const values = await chrome.storage.local.get(["apiBase"]);
-    $("apiBase").value = displayApiBase(values.apiBase);
+    $("apiBase").value = await preferredApiBase(values.apiBase);
     setStatus(result.ok ? "当前页面 Cookie 已同步。" : friendlyError(result.error));
   } catch (error) {
     setStatus(friendlyError(error.message));

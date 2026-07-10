@@ -1,6 +1,6 @@
 const DEFAULT_API_BASE = "";
 const DEFAULT_AUTH_TOKEN = "";
-const DEFAULT_EXTENSION_VERSION = "1.0.7";
+const DEFAULT_EXTENSION_VERSION = "1.0.8";
 const AUTO_SYNC_ALARM = "opinx-browser-auth-auto-sync";
 const AUTO_SYNC_INTERVAL_MINUTES = 10;
 const MIN_PROFILE_SYNC_GAP_MS = 2 * 60 * 1000;
@@ -558,7 +558,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       await storageSet({ apiBase: base });
       ensureAutoSyncAlarm();
       await refreshExtensionConfig({ force: true }).catch(() => undefined);
-      sendResponse({ ok: true, apiBase: base });
+      const values = await storageGet(["apiBase"]);
+      sendResponse({ ok: true, apiBase: normalizeApiBase(values.apiBase || base) });
       return;
     }
     if (message?.type === "set-auth-token") {
