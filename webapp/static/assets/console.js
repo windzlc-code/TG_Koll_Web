@@ -14145,14 +14145,28 @@ function proxySelectOptions(options, selected = "") {
   return preserved + options.map(([key, label]) => `<option value="${esc(key)}" ${value === key ? "selected" : ""}>${esc(label)}</option>`).join("");
 }
 
+function proxyDatetimeInputValue(value = "") {
+  if (!value) return "";
+  const number = Number(value);
+  const date = Number.isFinite(number) && number > 100000 ? new Date(number * 1000) : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 16);
+}
+
 function sharedProxyFieldsHtml(prefix, proxy = null) {
   const protocol = ["socks5", "http", "https"].includes(proxyProtocol(proxy).toLowerCase()) ? proxyProtocol(proxy).toLowerCase() : "socks5";
   return `
+    <label><span>代理名称</span><input id="${esc(prefix)}Name" value="${esc(proxy?.name || "")}" placeholder="留空则自动生成" /></label>
     <label><span>代理协议</span><select id="${esc(prefix)}Protocol">${proxySelectOptions([["socks5", "SOCKS5"], ["http", "HTTP"], ["https", "HTTPS"]], protocol)}</select></label>
+    <label><span>供应商 / 来源</span><input id="${esc(prefix)}Source" value="${esc(proxy?.source === "manual" ? "" : (proxy?.source || ""))}" placeholder="例如：OwlProxy" /></label>
+    <label><span>持有方式</span><select id="${esc(prefix)}PurchaseStatus">${proxySelectOptions([["owned", "自有"], ["leased", "租用"]], proxy?.purchase_status || "owned")}</select></label>
     <label><span>Host</span><input id="${esc(prefix)}Host" value="${esc(proxy?.host || "")}" placeholder="proxy.example.com" autocomplete="off" /></label>
     <label><span>端口</span><input id="${esc(prefix)}Port" type="number" min="1" max="65535" value="${esc(proxy?.port || "")}" placeholder="1080" /></label>
     <label><span>认证用户名（可选）</span><input id="${esc(prefix)}Username" value="" placeholder="${proxy?.username_configured ? "留空则沿用已保存用户名" : "代理认证用户名"}" autocomplete="off" /></label>
-    <label><span>认证密码（可选）</span><input id="${esc(prefix)}Password" type="password" value="" placeholder="${proxy?.password_configured ? "留空则沿用已保存密码" : "代理认证密码"}" autocomplete="new-password" /></label>`;
+    <label><span>认证密码（可选）</span><input id="${esc(prefix)}Password" type="password" value="" placeholder="${proxy?.password_configured ? "留空则沿用已保存密码" : "代理认证密码"}" autocomplete="new-password" /></label>
+    <label><span>有效期（可选）</span><input id="${esc(prefix)}ExpiresAt" type="datetime-local" value="${esc(proxyDatetimeInputValue(proxy?.expires_at))}" /></label>
+    <label class="proxy-form-note"><span>备注（可选）</span><textarea id="${esc(prefix)}Note" rows="3" placeholder="用途或续费信息">${esc(proxy?.note || "")}</textarea></label>`;
 }
 
 function sharedProxyPayload(prefix, proxy = null) {
@@ -14164,9 +14178,14 @@ function sharedProxyPayload(prefix, proxy = null) {
   }
   const payload = {
     ip_type: "static_residential",
+    name: String($(`${prefix}Name`)?.value || "").trim(),
     proxy_type: String($(`${prefix}Protocol`)?.value || "socks5").trim().toLowerCase(),
+    source: String($(`${prefix}Source`)?.value || "manual").trim(),
+    purchase_status: String($(`${prefix}PurchaseStatus`)?.value || "owned").trim(),
     host,
     port,
+    expires_at: $(`${prefix}ExpiresAt`)?.value ? Math.floor(new Date($(`${prefix}ExpiresAt`).value).getTime() / 1000) : 0,
+    note: String($(`${prefix}Note`)?.value || "").trim(),
     status: "pending",
   };
   const username = String($(`${prefix}Username`)?.value || "").trim();
@@ -14199,7 +14218,7 @@ function accountResidentialProxyPayload(prefix, accountName = "", proxy = null) 
   if (!payload) return null;
   payload.protocol = payload.proxy_type;
   delete payload.proxy_type;
-  payload.name = `[静态住宅] ${String(accountName || payload.host).trim()}`;
+  if (!payload.name) payload.name = `[静态住宅] ${String(accountName || payload.host).trim()}`;
   return payload;
 }
 
@@ -14787,6 +14806,15 @@ function proxyStatusLabel(value = "") {
   return { active: "正常", inactive: "停用", disabled: "停用", failed: "异常", checking: "检测中", pending: "待检测" }[clean] || (value || "-");
 }
 
+function proxySourceLabel(value = "") {
+  const clean = String(value || "").trim().toLowerCase();
+  return { manual: "手动录入", provider: "购买代理", self_owned: "自有代理" }[clean] || (value || "-");
+}
+
+function proxyPurchaseStatusLabel(value = "") {
+  return { owned: "自有", leased: "租用" }[String(value || "").trim().toLowerCase()] || "自有";
+}
+
 function renderEditIcon() {
   return `<svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
     <path d="M4 20h4L19 9l-4-4L4 16v4Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" />
@@ -14804,7 +14832,7 @@ function renderProxyPool() {
   const page = state.proxyPoolPage;
   const offset = (page - 1) * pageSize;
   const pageRows = rows.slice(offset, offset + pageSize);
-  const columns = ["代理信息", "出口 IP", "国家", "状态", "绑定", "操作"];
+  const columns = ["代理", "连接", "网络", "状态", "采购", "操作"];
   root.innerHTML = `
     <section class="proxy-pool-panel">
       <div class="proxy-pool-head">
@@ -14817,12 +14845,30 @@ function renderProxyPool() {
           ${pageRows.length ? pageRows.map((proxy) => {
             const endpoint = [String(proxy.host || "").trim(), String(proxy.port || "").trim()].filter(Boolean).join(":") || "-";
             const country = String(proxy.country || "").trim() || "-";
+            const authLabel = proxy.username_configured || proxy.password_configured ? "需认证" : "无认证";
             return `<div class="proxy-table-row" role="row">
-              <span role="cell" class="proxy-endpoint" title="${esc(`${proxyProtocol(proxy)} ${endpoint}`)}">${esc(`${proxyProtocol(proxy)} ${endpoint}`)}</span>
-              <span role="cell">${esc(proxyExitIp(proxy))}</span>
-              <span role="cell" title="${esc(country)}">${esc(country)}</span>
-              <span role="cell"><span class="status ${esc(proxy.status || "")}">${esc(proxyStatusLabel(proxy.status))}</span></span>
-              <span role="cell">${proxyBoundAccountCount(proxy)}</span>
+              <span role="cell" class="proxy-cell-stack" title="${esc(`${proxy.name || ""} ${proxySourceLabel(proxy.source)}`)}">
+                <strong>${esc(proxy.name || endpoint)}</strong>
+                <small>${esc(proxySourceLabel(proxy.source))}</small>
+              </span>
+              <span role="cell" class="proxy-cell-stack" title="${esc(`${proxyProtocol(proxy)} ${endpoint} ${authLabel}`)}">
+                <strong>${esc(proxyProtocol(proxy))}</strong>
+                <small>${esc(endpoint)}</small>
+                <small>${esc(authLabel)}</small>
+              </span>
+              <span role="cell" class="proxy-cell-stack" title="${esc(`${proxyExitIp(proxy)} ${country}`)}">
+                <strong>${esc(proxyExitIp(proxy))}</strong>
+                <small>${esc(country)}</small>
+              </span>
+              <span role="cell" class="proxy-cell-stack proxy-status-stack">
+                <span class="status ${esc(proxy.status || "")}">${esc(proxyStatusLabel(proxy.status))}</span>
+                <small>绑定 ${proxyBoundAccountCount(proxy)}</small>
+                <small>${proxy.last_check_at ? esc(formatTime(proxy.last_check_at)) : "未检测"}</small>
+              </span>
+              <span role="cell" class="proxy-cell-stack" title="${esc(`${proxyPurchaseStatusLabel(proxy.purchase_status)} ${proxy.expires_at ? formatTime(proxy.expires_at) : "长期"}`)}">
+                <strong>${esc(proxyPurchaseStatusLabel(proxy.purchase_status))}</strong>
+                <small>${proxy.expires_at ? esc(formatTime(proxy.expires_at)) : "长期"}</small>
+              </span>
               <span role="cell" class="proxy-table-actions">
                 <button type="button" data-proxy-check="${esc(proxy.id)}" title="检测代理" aria-label="检测代理">${renderRefreshIcon()}</button>
                 <button type="button" data-proxy-edit="${esc(proxy.id)}" title="编辑代理" aria-label="编辑代理">${renderEditIcon()}</button>

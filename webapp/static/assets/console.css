@@ -7770,7 +7770,7 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .proxy-table-row {
   display: grid;
-  grid-template-columns: minmax(130px, 1fr) 72px 64px 60px 50px 104px;
+  grid-template-columns: minmax(90px, 1fr) 90px 70px 70px 60px 90px;
   align-items: center;
   gap: 8px;
   min-width: 0;
@@ -7805,6 +7805,34 @@ body.persona-touch-dragging .persona-list-card:active {
   font-size: 13px;
 }
 
+.proxy-cell-stack {
+  display: grid;
+  gap: 2px;
+  align-content: center;
+}
+
+.proxy-cell-stack > strong,
+.proxy-cell-stack > small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.proxy-cell-stack > strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.proxy-cell-stack > small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.proxy-status-stack .status {
+  width: fit-content;
+}
+
 .proxy-table-row .status {
   display: inline-flex;
   max-width: 100%;
@@ -7812,22 +7840,22 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .proxy-table-actions {
   display: flex;
-  gap: 4px;
+  gap: 3px;
   overflow: visible !important;
 }
 
 .proxy-table-actions button {
   display: inline-grid;
   place-items: center;
-  width: 32px;
-  min-width: 32px;
-  min-height: 32px;
+  width: 28px;
+  min-width: 28px;
+  min-height: 28px;
   padding: 0;
 }
 
 .proxy-table-actions svg {
-  width: 17px;
-  height: 17px;
+  width: 16px;
+  height: 16px;
 }
 
 .proxy-pool-empty {
