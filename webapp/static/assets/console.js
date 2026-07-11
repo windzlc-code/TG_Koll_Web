@@ -12036,6 +12036,7 @@ function renderPersonaHotCandidatePicker(persona, form) {
   const candidates = personaHotCandidates(persona);
   const selectedIds = new Set((form.hotSelectedIds || []).map((item) => String(item || "").trim()).filter(Boolean));
   const preview = personaHotPreviewCandidate(persona);
+  const previewEditing = Boolean(preview && String(form.hotEditingCandidateId || "").trim() === personaHotCandidateKey(preview));
   const keywords = Array.isArray(hotState.keywords) ? hotState.keywords : [];
   const warnings = Array.isArray(hotState.warnings) ? hotState.warnings : [];
   const cookieStatuses = Array.isArray(hotState.cookie_statuses) ? hotState.cookie_statuses : [];
@@ -12108,7 +12109,7 @@ function renderPersonaHotCandidatePicker(persona, form) {
           }).join("")}
         </div>
       </section>
-      <section class="persona-hot-preview">
+      <section class="persona-hot-preview ${previewEditing ? "is-editing-draft" : ""}">
         <div class="persona-hot-toolbar">
           <strong>单条预览</strong>
           <small>${esc(`已选 ${selectedIds.size} 条`)}</small>

@@ -3285,9 +3285,12 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .persona-hot-preview-card.is-editing-draft {
+  border-color: var(--line);
+  box-shadow: none;
+}
+
+.persona-hot-preview.is-editing-draft {
   position: relative;
-  border-color: var(--ink);
-  box-shadow: inset 0 0 0 1px var(--ink);
 }
 
 .persona-hot-preview-actions {
@@ -3772,7 +3775,8 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .persona-profile-edit-main.is-regen-editing,
-.persona-generate-panel.is-editing-draft {
+.persona-generate-panel.is-editing-draft,
+.persona-hot-preview.is-editing-draft {
   padding: 12px;
   border: 0;
   border-radius: 10px;
@@ -3783,7 +3787,8 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .persona-profile-edit-main.is-regen-editing::before,
-.persona-generate-panel.is-editing-draft::before {
+.persona-generate-panel.is-editing-draft::before,
+.persona-hot-preview.is-editing-draft::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -3799,7 +3804,8 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .persona-profile-edit-main.is-regen-editing > *,
-.persona-generate-panel.is-editing-draft > * {
+.persona-generate-panel.is-editing-draft > *,
+.persona-hot-preview.is-editing-draft > * {
   position: relative;
   z-index: 2;
 }
