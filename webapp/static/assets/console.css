@@ -7918,8 +7918,8 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .live-browser-card.is-status-active {
-  border-color: color-mix(in srgb, var(--persona-status-running-ink) 86%, var(--line));
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--persona-status-running-ink) 14%, transparent);
+  border-color: var(--ink);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ink) 14%, transparent);
 }
 
 .live-browser-card.is-status-queued {
@@ -8085,7 +8085,7 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .live-browser-card.is-status-active .live-browser-interaction-note {
-  color: var(--persona-status-running-ink);
+  color: var(--ink);
   font-weight: 700;
 }
 

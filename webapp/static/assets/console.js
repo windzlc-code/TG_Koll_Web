@@ -869,6 +869,11 @@ function localizeConsoleMessage(text, status = 0) {
     "username 必填": "请填写账号用户名。",
   };
   if (exactMap[raw]) return exactMap[raw];
+  if (lower.startsWith("using text input mode:")) {
+    const mode = raw.split(":").slice(1).join(":").trim();
+    const modeLabel = { paste: "粘贴", fill: "填充", type: "逐字输入" }[mode.toLowerCase()] || mode;
+    return `正在使用${modeLabel}模式输入文本。`;
+  }
   if (/persona_id\s*(必填|required|field required)/i.test(raw)) return "账号池新增账号不需要先选择人设，请刷新页面后重试。";
   if (/field required/i.test(raw)) return "缺少必填信息。";
   if (/input should be/i.test(raw)) return "输入内容格式不正确。";
@@ -1525,6 +1530,11 @@ function sanitizeTaskUserMessage(value, { fallback = "步骤已记录。" } = {}
     "Reply backfill failed; switching target": "补回复失败，继续切换目标。",
   };
   if (exactMap[raw]) return exactMap[raw];
+  if (lower.startsWith("using text input mode:")) {
+    const mode = raw.split(":").slice(1).join(":").trim();
+    const modeLabel = { paste: "粘贴", fill: "填充", type: "逐字输入" }[mode.toLowerCase()] || mode;
+    return `正在使用${modeLabel}模式输入文本。`;
+  }
   if (lower.includes("manual login window timed out")) {
     return "登录流程等待超时，请重新发起发布或自动化任务，或检查当前账号是否已经跳转到登录验证页面。";
   }
@@ -1659,6 +1669,20 @@ function logStageLabel(stage, level) {
     threads_hot_post_reply_button: "打开热点回复框",
     threads_hot_post_reply_focus: "聚焦热点输入框",
     threads_hot_post_reply_submit: "提交热点回复",
+    threads_publish_open: "打开 Threads 发布页面",
+    threads_publish_focus: "聚焦 Threads 发布输入框",
+    threads_publish_cleanup: "清理 Threads 发帖弹窗",
+    threads_publish_open_after_baseline: "重新打开 Threads 发布页面",
+    threads_publish_media_baseline: "读取 Threads 发布前状态",
+    threads_publish_media_baseline_failed: "读取 Threads 发布前状态失败",
+    threads_publish_text_input: "输入 Threads 发布文案",
+    threads_publish_text_input_retry: "重试输入 Threads 发布文案",
+    threads_publish_media_picker: "选择 Threads 媒体文件",
+    threads_publish_submit: "提交 Threads 发布",
+    threads_publish_submit_dom_failed: "提交 Threads 发布失败",
+    threads_publish_profile: "打开 Threads 个人主页",
+    threads_publish_profile_open_slow: "Threads 个人主页加载较慢",
+    threads_publish_unconfirmed: "Threads 发布结果待确认",
     threads_auto_reply_backfill: "补定位",
     open_login: "登录流程",
     check_login: "登录状态同步",

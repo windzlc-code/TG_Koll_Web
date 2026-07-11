@@ -648,6 +648,8 @@ def _human_click(page, locator, logger: AutomationLogger, stage: str = "click") 
 
 
 def _screenshot(page, screenshot_dir: Path, task: dict[str, Any], stage: str, logger: AutomationLogger) -> str:
+    if str(task.get("task_type") or "").strip().lower() == "publish_post" and str(stage or "") != "publish_done":
+        return ""
     if not _should_capture_screenshot(stage):
         return ""
     path = screenshot_dir / f"{str(task.get('id') or 'task')}_{stage}_{int(time.time())}.png"
@@ -2303,10 +2305,10 @@ def _click_threads_active_dialog_post(page, logger: AutomationLogger) -> bool:
             }"""
         )
         if clicked:
-            logger.log("debug", "threads_publish_submit", "已点击当前 Threads 弹窗内的 Post 按钮。", {})
+            logger.log("debug", "threads_publish_submit", "已点击当前 Threads 弹窗内的发布按钮。", {})
             return True
     except Exception as exc:
-        logger.log("warn", "threads_publish_submit_dom_failed", "当前弹窗 Post DOM 点击失败。", {"error": str(exc)[:500]})
+        logger.log("warn", "threads_publish_submit_dom_failed", "当前弹窗的发布按钮点击失败。", {"error": str(exc)[:500]})
     return False
 
 
@@ -2315,25 +2317,70 @@ def _threads_profile_url(account: dict[str, Any] | None) -> str:
     return f"https://www.threads.net/@{username}" if username else THREADS_HOME
 
 
-def _wait_for_threads_own_post(page, caption: str, logger: AutomationLogger, account: dict[str, Any] | None = None, payload: dict[str, Any] | None = None, previous_permalink: str = "") -> dict[str, Any]:
+def _normalize_threads_profile_url(value: Any) -> str:
+    raw_url = str(value or "").strip()
+    if not raw_url:
+        return ""
+    parsed = urlparse(urljoin(THREADS_HOME, raw_url))
+    host = str(parsed.hostname or "").lower()
+    path = str(parsed.path or "").rstrip("/")
+    if host not in {"threads.net", "www.threads.net", "threads.com", "www.threads.com"}:
+        return ""
+    if not re.fullmatch(r"/@[^/\s]+", path):
+        return ""
+    return f"https://{host}{path}"
+
+
+def _resolve_threads_profile_url(page, account: dict[str, Any] | None = None) -> str:
+    try:
+        candidate = page.evaluate(
+            r"""() => {
+                const links = Array.from(document.querySelectorAll('a[href]'));
+                const profileLabels = /^(profile|个人资料|個人檔案|个人主页|個人主頁)$/i;
+                const hrefOf = link => link.href || link.getAttribute('href') || '';
+                const isProfileHref = link => /\/@[^/?#]+\/?(?:[?#].*)?$/i.test(hrefOf(link));
+                const labelled = links.find(link => {
+                    const label = String(link.getAttribute('aria-label') || link.innerText || link.textContent || '').replace(/\s+/g, ' ').trim();
+                    return profileLabels.test(label) && isProfileHref(link);
+                });
+                if (labelled) return hrefOf(labelled);
+                const navigationLinks = links.filter(link => link.closest('nav, [role="navigation"]'));
+                return hrefOf(navigationLinks.find(isProfileHref) || links.find(isProfileHref));
+            }"""
+        )
+        resolved = _normalize_threads_profile_url(candidate)
+        if resolved:
+            return resolved
+    except Exception:
+        pass
+    return _threads_profile_url(account)
+
+
+def _wait_for_threads_own_post(page, caption: str, logger: AutomationLogger, account: dict[str, Any] | None = None, payload: dict[str, Any] | None = None, previous_permalink: str = "", profile_url: str = "") -> dict[str, Any]:
     _dismiss_threads_compose_dialogs(page, logger)
-    target_url = _threads_profile_url(account)
-    confirm_seconds = _safe_int((payload or {}).get("profile_confirm_seconds") or os.getenv("SOCIAL_AUTOMATION_THREADS_PROFILE_CONFIRM_SECONDS"), 18)
-    confirm_seconds = max(5, min(confirm_seconds, 75))
+    target_url = _normalize_threads_profile_url(profile_url) or _resolve_threads_profile_url(page, account)
+    confirm_seconds = _safe_int((payload or {}).get("profile_confirm_seconds") or os.getenv("SOCIAL_AUTOMATION_THREADS_PROFILE_CONFIRM_SECONDS"), 45)
+    confirm_seconds = max(15, min(confirm_seconds, 90))
     nav_timeout_ms = max(3000, min(confirm_seconds * 1000, 12000))
     try:
         _goto(page, target_url, logger, "threads_publish_profile", timeout_ms=nav_timeout_ms, networkidle_ms=2500)
     except Exception as exc:
-        logger.log("warn", "threads_publish_profile_open_slow", "Post-submit profile page load timed out; continue with short confirmation polling.", {"error": str(exc)[:500], "timeout_ms": nav_timeout_ms})
+        logger.log("warn", "threads_publish_profile_open_slow", "提交后打开账号主页超时，将继续轮询确认发布结果。", {"error": str(exc)[:500], "timeout_ms": nav_timeout_ms})
     deadline = time.time() + confirm_seconds
-    while time.time() < deadline:
+    next_reload_at = time.time() + 10
+    while True:
+        now = time.time()
+        if now >= deadline:
+            break
         permalink = _find_threads_post_permalink(page, caption) if str(caption or "").strip() else _find_latest_threads_post_permalink(page)
-        if permalink and (str(caption or "").strip() or permalink != _normalize_threads_post_permalink(previous_permalink)):
+        if permalink and permalink != _normalize_threads_post_permalink(previous_permalink):
             return {"confirmed": True, "reason": "已在账号主页定位到本次发布帖子的链接。", "url": permalink}
-        with contextlib.suppress(Exception):
-            page.reload(wait_until="domcontentloaded", timeout=3000)
-            page.wait_for_load_state("networkidle", timeout=1500)
-        _sleep_between(1.0, 1.6)
+        if now >= next_reload_at:
+            with contextlib.suppress(Exception):
+                page.reload(wait_until="domcontentloaded", timeout=5000)
+                page.wait_for_load_state("networkidle", timeout=2500)
+            next_reload_at = now + 10
+        _sleep_between(1.8, 2.6)
     return {"confirmed": False, "reason": "发布已提交，但账号主页未看到本次发布内容。", "url": str(page.url or target_url)}
 
 
@@ -2348,24 +2395,23 @@ def _run_threads_publish_post(page, task, payload, screenshot_dir, logger, accou
     _dismiss_threads_compose_dialogs(page, logger)
     _goto(page, THREADS_HOME, logger, "threads_publish_open")
     _dismiss_threads_compose_dialogs(page, logger)
+    profile_url = _resolve_threads_profile_url(page, account)
     previous_latest_permalink = ""
-    if not caption and media_paths:
-        try:
-            _goto(page, _threads_profile_url(account), logger, "threads_publish_media_baseline", timeout_ms=12000, networkidle_ms=2200)
-            previous_latest_permalink = _find_latest_threads_post_permalink(page)
-        except Exception as exc:
-            logger.log("warn", "threads_publish_media_baseline_failed", "Unable to capture the latest Threads post before media-only publish.", {"error": str(exc)[:500]})
-        _goto(page, THREADS_HOME, logger, "threads_publish_open_after_baseline")
-        _dismiss_threads_compose_dialogs(page, logger)
+    try:
+        _goto(page, profile_url, logger, "threads_publish_baseline", timeout_ms=12000, networkidle_ms=2200)
+        previous_latest_permalink = _find_latest_threads_post_permalink(page)
+    except Exception as exc:
+        logger.log("warn", "threads_publish_baseline_failed", "发布前读取账号主页最新帖子失败，将在提交后按正文和新链接谨慎确认。", {"error": str(exc)[:500]})
+    _goto(page, THREADS_HOME, logger, "threads_publish_open_after_baseline")
+    _dismiss_threads_compose_dialogs(page, logger)
     try:
         compose = _ensure_threads_compose_ready(page, logger)
     except Exception:
-        _screenshot(page, screenshot_dir, task, "failed", logger)
         raise
     _human_click(page, compose, logger, "threads_publish_focus")
     if caption:
         text_input_mode = _normalize_text_input_mode(payload.get("text_input_mode") or os.getenv("SOCIAL_AUTOMATION_TEXT_INPUT_MODE", "paste"))
-        logger.log("info", "threads_publish_text_input", f"Using text input mode: {text_input_mode}", {"mode": text_input_mode, "chars": len(caption)})
+        logger.log("info", "threads_publish_text_input", "正在填写 Threads 帖子正文。", {"mode": text_input_mode, "chars": len(caption)})
         _clear_and_type(page, compose, caption, mode=text_input_mode, logger=logger, stage="threads_publish_text_input")
         _sleep_between(0.8, 1.4)
         dialog_text = _threads_active_dialog_text(page)
@@ -2375,7 +2421,6 @@ def _run_threads_publish_post(page, task, payload, screenshot_dir, logger, accou
             _sleep_between(0.8, 1.4)
             dialog_text = _threads_active_dialog_text(page)
         if caption not in dialog_text:
-            _screenshot(page, screenshot_dir, task, "failed", logger)
             raise RuntimeError("Threads 发帖内容没有写入当前弹窗。")
     if media_paths:
         file_input = page.locator('input[type="file"]').first
@@ -2404,14 +2449,14 @@ def _run_threads_publish_post(page, task, payload, screenshot_dir, logger, accou
     permalink = _normalize_threads_post_permalink(success.get("url")) if success.get("confirmed") else ""
     profile_confirmation: dict[str, Any] = {}
     if not permalink:
-        profile_confirmation = _wait_for_threads_own_post(page, caption, logger, account, payload, previous_permalink=previous_latest_permalink)
+        profile_confirmation = _wait_for_threads_own_post(page, caption, logger, account, payload, previous_permalink=previous_latest_permalink, profile_url=profile_url)
         if profile_confirmation.get("confirmed"):
             permalink = _normalize_threads_post_permalink(profile_confirmation.get("url"))
     if not permalink:
-        shot = _screenshot(page, screenshot_dir, task, "publish_submitted_unconfirmed", logger)
-        reason = str(profile_confirmation.get("reason") or success.get("reason") or "Threads publish unconfirmed.")
-        logger.log("warn", "threads_publish_unconfirmed", reason, {"submit": success, "profile": profile_confirmation}, shot)
-        raise RuntimeError(f"Threads publish unconfirmed: {reason}")
+        reason = str(profile_confirmation.get("reason") or success.get("reason") or "Threads 已提交，但尚未确认发布结果。")
+        message = f"{reason} 为避免重复发布，任务已停止自动重试，请人工核对账号主页。"
+        logger.log("warn", "threads_publish_unconfirmed", message, {"submit": success, "profile": profile_confirmation, "retryable": False})
+        raise NeedManualError(message, "publish_submitted_unconfirmed")
     shot = _screenshot(page, screenshot_dir, task, "publish_done", logger)
     published = {
         **success,
@@ -2455,7 +2500,7 @@ def _run_publish_post(page, task, payload, screenshot_dir, logger, platform: str
         caption_box.wait_for(state="visible", timeout=30000)
         _human_click(page, caption_box, logger, "publish_caption_focus")
         text_input_mode = _normalize_text_input_mode(payload.get("text_input_mode") or os.getenv("SOCIAL_AUTOMATION_TEXT_INPUT_MODE", "paste"))
-        logger.log("info", "publish_text_input", f"Using text input mode: {text_input_mode}", {"mode": text_input_mode, "chars": len(caption)})
+        logger.log("info", "publish_text_input", "正在填写 Instagram 帖子正文。", {"mode": text_input_mode, "chars": len(caption)})
         _type_text(page, caption, mode=text_input_mode, logger=logger, stage="publish_text_input")
     if not _click_text_button(page, logger, ["Share"], "publish_share"):
         raise RuntimeError("未找到 Instagram 分享按钮。")

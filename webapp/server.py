@@ -45,6 +45,7 @@ from .social_automation_api import (
     configure_social_automation,
     create_social_task,
     ensure_social_automation_worker_started,
+    get_social_task,
     register_social_automation_routes,
 )
 
@@ -12842,6 +12843,21 @@ def _publish_persona_archive_post(
     login_task = _ensure_publish_login_task(account, scheduled_at=payload.scheduled_at or 0)
     if platform == "instagram" and not media_paths:
         raise HTTPException(status_code=400, detail="Instagram 发布至少需要一份媒体素材。")
+    active_task = _active_publish_task_for_post(
+        persona_id=clean_archive_id,
+        account_id=str(account.get("id") or ""),
+        post_id=clean_post_id,
+    )
+    if active_task:
+        return {
+            "ok": True,
+            "persona_id": clean_archive_id,
+            "post_id": clean_post_id,
+            "source": source_name,
+            "login_task": login_task,
+            "task": get_social_task(str(active_task.get("id") or "")),
+            "reused": True,
+        }
     task = create_social_task(
         SocialTaskPayload(
             persona_id=clean_archive_id,
@@ -12862,7 +12878,7 @@ def _publish_persona_archive_post(
                 "auto_login_before_publish": bool(login_task),
                 "login_task_id": str((login_task or {}).get("id") or ""),
             },
-            max_retries=max(0, min(int(payload.max_retries or 2), 5)),
+            max_retries=max(0, min(int(payload.max_retries), 5)),
         )
     )
     return {"ok": True, "persona_id": clean_archive_id, "post_id": clean_post_id, "source": source_name, "login_task": login_task, "task": task}

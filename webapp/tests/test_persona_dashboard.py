@@ -1493,6 +1493,52 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload_obj.payload["caption"], "Threads publish content")
         self.assertEqual(payload_obj.payload["media_paths"], [])
 
+    def test_publish_persona_post_respects_zero_retries(self):
+        self._write_archives()
+        self._insert_social_account(account_id="acct-no-retry", platform="threads", username="threads_user")
+        create_resp = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/posts",
+            json={"title": "No retry", "content": "Publish once"},
+        )
+        post = create_resp.json()
+
+        with mock.patch.object(server, "create_social_task", return_value={"id": "sat-once", "status": "queued"}) as mocked:
+            publish_resp = self.client.post(
+                f"/api/persona_dashboard/personas/persona-1/posts/{post['id']}/publish",
+                json={"account_id": "acct-no-retry", "platform": "threads", "max_retries": 0},
+            )
+
+        self.assertEqual(publish_resp.status_code, 200)
+        self.assertEqual(mocked.call_args.args[0].max_retries, 0)
+
+    def test_publish_persona_post_reuses_active_task_for_same_draft(self):
+        self._write_archives()
+        self._insert_social_account(account_id="acct-idempotent", platform="threads", username="threads_user")
+        create_resp = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/posts",
+            json={"title": "One task", "content": "Do not duplicate"},
+        )
+        post = create_resp.json()
+        self._insert_social_task(
+            task_id="publish-existing",
+            account_id="acct-idempotent",
+            platform="threads",
+            task_type="publish_post",
+            status="running",
+            payload={"archive_post_id": post["id"]},
+        )
+
+        with mock.patch.object(server, "create_social_task") as mocked:
+            publish_resp = self.client.post(
+                f"/api/persona_dashboard/personas/persona-1/posts/{post['id']}/publish",
+                json={"account_id": "acct-idempotent", "platform": "threads"},
+            )
+
+        self.assertEqual(publish_resp.status_code, 200)
+        self.assertTrue(publish_resp.json()["reused"])
+        self.assertEqual(publish_resp.json()["task"]["id"], "publish-existing")
+        mocked.assert_not_called()
+
     def test_publish_persona_post_supports_media_without_text(self):
         self._write_archives()
         self._insert_social_account(account_id="acct-media", platform="threads", username="media_user")
