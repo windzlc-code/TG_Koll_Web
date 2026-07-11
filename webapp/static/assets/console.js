@@ -2929,6 +2929,27 @@ function personaAccounts(persona, platform = "") {
   });
 }
 
+function personaAccountHealth(persona) {
+  const accounts = personaAccounts(persona).filter(isPublishPlatformAccount);
+  if (!accounts.length) return { tone: "unbound", label: "未绑定平台账号" };
+  const unavailable = new Set(["disabled", "banned", "blocked", "suspended", "platform_restricted", "unavailable"]);
+  const details = accounts.map((account) => `${publishPlatformLabel(account)}：${statusLabel(account.status || "unknown")}`).join("；");
+  if (accounts.some((account) => unavailable.has(String(account.status || "").trim().toLowerCase()))) {
+    return { tone: "danger", label: `存在不可用平台账号；${details}` };
+  }
+  if (accounts.every((account) => String(account.status || "").trim().toLowerCase() === "ready")) {
+    return { tone: "healthy", label: `所绑定平台账号均正常；${details}` };
+  }
+  return { tone: "warning", label: `存在异常平台账号；${details}` };
+}
+
+function renderPersonaAccountHealthIcon(health) {
+  if (health?.tone === "healthy") return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"></circle><path d="m8 12 2.5 2.5L16.5 9"></path></svg>`;
+  if (health?.tone === "warning") return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3 2.8 20h18.4L12 3Z"></path><path d="M12 9v4"></path><path d="M12 16.5h.01"></path></svg>`;
+  if (health?.tone === "danger") return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"></circle><path d="m9 9 6 6"></path><path d="m15 9-6 6"></path></svg>`;
+  return "";
+}
+
 function accountForPersona(persona) {
   if (!persona) return null;
   return personaAccounts(persona)[0] || null;
@@ -11736,9 +11757,10 @@ function renderPersonaCard(persona, groupId = "", options = {}) {
     : draftCount;
   const accountPoolSelectedCount = isAccountPoolContext ? accountPoolSelectedIds().length : 0;
   const showSelectionCheck = isMatrix;
+  const accountHealth = personaAccountHealth(persona);
   return `
     <article
-      class="persona-list-card persona-draggable-card ${isSideListContext ? "publish-persona-card" : ""} ${isAutomationContext ? "automation-persona-card" : ""} ${publishSelected ? "is-active" : ""} ${editing ? "is-editing" : ""} ${dragging ? "is-dragging" : ""}"
+      class="persona-list-card persona-draggable-card persona-account-health--${esc(accountHealth.tone)} ${isSideListContext ? "publish-persona-card" : ""} ${isAutomationContext ? "automation-persona-card" : ""} ${publishSelected ? "is-active" : ""} ${editing ? "is-editing" : ""} ${dragging ? "is-dragging" : ""}"
       data-persona-card="${esc(persona.id)}"
       ${allowReorder ? `data-persona-drag-persona="${esc(persona.id)}"` : ""}
       data-group-id="${esc(groupId)}"
@@ -11751,6 +11773,7 @@ function renderPersonaCard(persona, groupId = "", options = {}) {
             <strong>${esc(persona.name || persona.id || "未命名人设")}</strong>
             ${renderPersonaKindBadge(persona)}
             ${ungrouped ? `<span class="persona-kind-badge persona-ungrouped-badge">未分组</span>` : ""}
+            ${accountHealth.tone === "unbound" ? "" : `<span class="persona-account-health-icon is-${esc(accountHealth.tone)}" title="${esc(accountHealth.label)}" aria-label="${esc(accountHealth.label)}">${renderPersonaAccountHealthIcon(accountHealth)}</span>`}
           </span>
           <small>${esc(isPublishContext ? publishAccountLabel : (isAutomationContext || isAccountPoolContext ? (personaAccounts(persona).length ? `${personaAccounts(persona).length} 个执行账号` : "未绑定执行账号") : personaExecutionAccountLabel(persona)))}</small>
           ${isPublishContext ? `
@@ -13699,10 +13722,12 @@ function renderAccountPoolCards(accounts, selectedAccount) {
                 <strong>${esc(account.username || account.id)}</strong>
                 <small>${esc(account.display_name || account.id || "")}</small>
               </span>
-              <span class="status ${esc(account.status)}">${esc(statusLabel(account.status))}</span>
+              <span class="account-pool-card-flags">
+                <strong class="account-pool-bound-persona ${persona ? "is-bound" : "is-unbound"}" title="${esc(persona ? `已绑定：${persona.name || persona.id}` : "未绑定人设")}">${esc(persona ? `已绑定：${persona.name || persona.id}` : "未绑定人设")}</strong>
+                <span class="status ${esc(account.status)}">${esc(statusLabel(account.status))}</span>
+              </span>
             </div>
             <div class="account-card-meta">
-              <span>${esc(persona ? `已绑定：${persona.name || persona.id}` : "未绑定人设")}</span>
               <span>${esc(account.profile_dir ? "已配置浏览器环境" : "未配置浏览器环境")}</span>
               <span>${esc(accountResidentialProxyLabel(account))}</span>
             </div>
@@ -17757,7 +17782,7 @@ async function init() {
   loadTasks().catch(() => {});
   loadSocial({ render: false }).then(() => {
     updateAccountStatusViews();
-    if (!hasPersonaCache || state.activeModule === "publishing" || state.activeModule === "automation") scheduleWorkspaceRender(false);
+    if (!hasPersonaCache || isPersonaWorkspaceModule() || state.activeModule === "publishing" || state.activeModule === "automation") scheduleWorkspaceRender(false);
   }).catch(() => {});
   loadPersonas().then(() => {
     if (state.activeModule === "publishing") refreshCurrentPublishingPersonaContent({ force: false }).catch(() => []);

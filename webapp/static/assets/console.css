@@ -2485,6 +2485,66 @@ body.persona-touch-dragging .persona-list-card:active {
   border-style: dashed;
 }
 
+.persona-list-card.persona-account-health--healthy {
+  border-color: var(--persona-status-success-ink);
+  background: color-mix(in srgb, var(--persona-status-success-ink) 6%, var(--panel-solid));
+  box-shadow: inset 0 0 0 1px var(--persona-status-success-ink);
+}
+
+.persona-list-card.persona-account-health--warning {
+  border-color: var(--persona-status-running-ink);
+  background: color-mix(in srgb, var(--persona-status-running-ink) 7%, var(--panel-solid));
+  box-shadow: inset 0 0 0 1px var(--persona-status-running-ink);
+}
+
+.persona-list-card.persona-account-health--danger {
+  border-color: var(--persona-status-error-ink);
+  background: color-mix(in srgb, var(--persona-status-error-ink) 7%, var(--panel-solid));
+  box-shadow: inset 0 0 0 1px var(--persona-status-error-ink);
+}
+
+.persona-list-card.persona-account-health--healthy:hover,
+.persona-list-card.persona-account-health--healthy.is-active {
+  border-color: var(--persona-status-success-ink);
+  box-shadow: inset 0 0 0 1px var(--persona-status-success-ink);
+}
+
+.persona-list-card.persona-account-health--warning:hover,
+.persona-list-card.persona-account-health--warning.is-active {
+  border-color: var(--persona-status-running-ink);
+  box-shadow: inset 0 0 0 1px var(--persona-status-running-ink);
+}
+
+.persona-list-card.persona-account-health--danger:hover,
+.persona-list-card.persona-account-health--danger.is-active {
+  border-color: var(--persona-status-error-ink);
+  box-shadow: inset 0 0 0 1px var(--persona-status-error-ink);
+}
+
+.persona-account-health-icon {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  margin-left: auto;
+  overflow: visible !important;
+}
+
+.persona-account-health-icon.is-healthy { color: var(--persona-status-success-ink); }
+.persona-account-health-icon.is-warning { color: var(--persona-status-running-ink); }
+.persona-account-health-icon.is-danger { color: var(--persona-status-error-ink); }
+
+.persona-account-health-icon svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .persona-card-edit {
   width: 36px;
   min-width: 36px;
@@ -8163,6 +8223,33 @@ body.persona-touch-dragging .persona-list-card:active {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.account-pool-card-flags {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+  min-width: 0;
+  max-width: 52%;
+  text-align: right;
+}
+
+.account-pool-bound-persona {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-pool-bound-persona.is-unbound {
+  color: var(--muted);
+  font-weight: 800;
 }
 
 .account-pool-card .account-card-meta,
