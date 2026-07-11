@@ -7685,8 +7685,14 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .account-proxy-grid input,
-.account-proxy-grid select {
+.account-proxy-grid select,
+.account-proxy-grid textarea {
   width: 100%;
+}
+
+.account-proxy-grid input[readonly] {
+  background: var(--soft);
+  color: var(--muted);
 }
 
 .account-proxy-grid .account-proxy-confirm {

@@ -37,6 +37,7 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
             "password": "proxy-secret",
             "country": "US",
             "isp": "Residential ISP",
+            "status": "active",
         }
         values.update(overrides)
         return values
@@ -357,12 +358,37 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
             with sqlite3.connect(legacy_path) as conn:
                 columns = {row[1] for row in conn.execute("PRAGMA table_info(social_proxies)").fetchall()}
                 metadata = conn.execute(
-                    "SELECT source, ip_type, purchase_status, note, expires_at FROM social_proxies WHERE id = 'legacy'"
+                    "SELECT source, ip_type, purchase_status, region, city, note, expires_at FROM social_proxies WHERE id = 'legacy'"
                 ).fetchone()
         finally:
             os.environ["APP_DB_PATH"] = str(self.db_path)
-        self.assertTrue({"source", "ip_type", "purchase_status", "note", "expires_at"}.issubset(columns))
-        self.assertEqual(metadata, ("manual", "static_residential", "owned", "", 0))
+        self.assertTrue({"source", "ip_type", "purchase_status", "region", "city", "note", "expires_at"}.issubset(columns))
+        self.assertEqual(metadata, ("manual", "static_residential", "owned", "", "", "", 0))
+
+    def test_only_static_residential_proxy_type_is_accepted(self):
+        with self.assertRaises(HTTPException) as create_error:
+            social_api.create_social_proxy(
+                social_api.SocialProxyPayload(host="dc.example", port=8080, ip_type="datacenter")
+            )
+        self.assertEqual(create_error.exception.status_code, 400)
+
+        proxy = social_api.create_social_proxy(
+            social_api.SocialProxyPayload(host="static.example", port=1080)
+        )
+        with self.assertRaises(HTTPException) as update_error:
+            social_api.update_social_proxy(
+                proxy["id"], social_api.SocialProxyPatchPayload(ip_type="residential")
+            )
+        self.assertEqual(update_error.exception.status_code, 400)
+
+        with self.assertRaises(HTTPException) as account_error:
+            self._account(
+                "invalid-proxy-type",
+                proxy=social_api.ResidentialProxyPayload(
+                    **self._proxy(), ip_type="datacenter"
+                ),
+            )
+        self.assertEqual(account_error.exception.status_code, 400)
 
     def test_proxy_routes_and_exit_ip_list_field(self):
         app = social_api.FastAPI()
@@ -380,14 +406,26 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
             social_api.SocialProxyPayload(host="exit.example", port=8080)
         )
         response = mock.Mock(ok=True, status_code=200)
-        response.json.return_value = {"ip": "203.0.113.10"}
+        response.json.return_value = {
+            "success": True,
+            "ip": "203.0.113.10",
+            "country_code": "US",
+            "region": "California",
+            "city": "Los Angeles",
+            "connection": {"isp": "Residential Fiber"},
+        }
         with mock.patch.object(social_api.requests, "get", return_value=response):
             checked = social_api.check_social_proxy(proxy["id"])
         self.assertEqual(checked["exit_ip"], "203.0.113.10")
+        self.assertEqual(checked["country"], "US")
+        self.assertEqual(checked["region"], "California")
+        self.assertEqual(checked["city"], "Los Angeles")
+        self.assertEqual(checked["isp"], "Residential Fiber")
         with social_api.db() as conn:
             rows = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (proxy["id"],)).fetchall()
             listed = social_api._proxy_public_rows(conn, rows)
         self.assertEqual(listed[0]["exit_ip"], "203.0.113.10")
+        self.assertEqual(listed[0]["region"], "California")
         self.assertEqual(listed[0]["bound_account_count"], 0)
         self.assertEqual(listed[0]["bound_account_ids"], [])
 

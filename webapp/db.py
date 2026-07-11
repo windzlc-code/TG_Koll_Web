@@ -136,6 +136,8 @@ def init_db() -> None:
               username TEXT NOT NULL DEFAULT '',
               password TEXT NOT NULL DEFAULT '',
               country TEXT NOT NULL DEFAULT '',
+              region TEXT NOT NULL DEFAULT '',
+              city TEXT NOT NULL DEFAULT '',
               isp TEXT NOT NULL DEFAULT '',
               source TEXT NOT NULL DEFAULT 'manual',
               ip_type TEXT NOT NULL DEFAULT 'static_residential',
@@ -221,6 +223,8 @@ def init_db() -> None:
             "source": "TEXT NOT NULL DEFAULT 'manual'",
             "ip_type": "TEXT NOT NULL DEFAULT 'static_residential'",
             "purchase_status": "TEXT NOT NULL DEFAULT 'owned'",
+            "region": "TEXT NOT NULL DEFAULT ''",
+            "city": "TEXT NOT NULL DEFAULT ''",
             "note": "TEXT NOT NULL DEFAULT ''",
             "expires_at": "INTEGER NOT NULL DEFAULT 0",
         }

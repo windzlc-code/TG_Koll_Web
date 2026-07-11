@@ -90,13 +90,15 @@ class SocialProxyPayload(BaseModel):
     username: str = ""
     password: str = ""
     country: str = ""
+    region: str = ""
+    city: str = ""
     isp: str = ""
     source: str = "manual"
     ip_type: str = "static_residential"
     purchase_status: str = "owned"
     note: str = ""
     expires_at: int = Field(default=0, ge=0)
-    status: str = "active"
+    status: str = "pending"
 
 
 class SocialProxyPatchPayload(BaseModel):
@@ -107,6 +109,8 @@ class SocialProxyPatchPayload(BaseModel):
     username: str | None = None
     password: str | None = None
     country: str | None = None
+    region: str | None = None
+    city: str | None = None
     isp: str | None = None
     source: str | None = None
     ip_type: str | None = None
@@ -124,13 +128,15 @@ class ResidentialProxyPayload(BaseModel):
     password: str | None = None
     name: str = ""
     country: str = ""
+    region: str = ""
+    city: str = ""
     isp: str = ""
     source: str = "manual"
     ip_type: str = "static_residential"
     purchase_status: str = "owned"
     note: str = ""
     expires_at: int = Field(default=0, ge=0)
-    status: str = "active"
+    status: str = "pending"
 
 
 class SocialAccountPayload(BaseModel):
@@ -960,6 +966,8 @@ def _normalize_live_browser_key(key: str) -> str:
 
 
 def create_social_proxy(payload: SocialProxyPayload) -> dict[str, Any]:
+    if str(payload.ip_type or "static_residential").strip().lower() != "static_residential":
+        raise HTTPException(status_code=400, detail="仅支持静态住宅 IP")
     with db() as conn:
         row = _insert_social_proxy(
             conn,
@@ -970,9 +978,11 @@ def create_social_proxy(payload: SocialProxyPayload) -> dict[str, Any]:
             password=payload.password,
             name=payload.name,
             country=payload.country,
+            region=payload.region,
+            city=payload.city,
             isp=payload.isp,
             source=payload.source,
-            ip_type=payload.ip_type,
+            ip_type="static_residential",
             purchase_status=payload.purchase_status,
             note=payload.note,
             expires_at=payload.expires_at,
@@ -1008,19 +1018,23 @@ def update_social_proxy(proxy_id: str, payload: SocialProxyPatchPayload) -> dict
             value = getattr(payload, field)
             if value is not None and str(value).strip():
                 updates[field] = str(value).strip() if field == "username" else str(value)
-        for field in ("country", "isp", "note"):
+        for field in ("country", "region", "city", "isp", "note"):
             value = getattr(payload, field)
             if value is not None:
                 updates[field] = str(value or "").strip()
         metadata_defaults = {
             "source": "manual",
-            "ip_type": "static_residential",
             "purchase_status": "owned",
         }
         for field, default in metadata_defaults.items():
             value = getattr(payload, field)
             if value is not None:
                 updates[field] = str(value or default).strip() or default
+        if payload.ip_type is not None:
+            clean_ip_type = str(payload.ip_type or "static_residential").strip().lower()
+            if clean_ip_type != "static_residential":
+                raise HTTPException(status_code=400, detail="仅支持静态住宅 IP")
+            updates["ip_type"] = "static_residential"
         if payload.expires_at is not None:
             updates["expires_at"] = int(payload.expires_at)
         if payload.status is not None and str(payload.status or "").strip():
@@ -1064,17 +1078,21 @@ def _insert_social_proxy(
     password: str | None = "",
     name: str = "",
     country: str = "",
+    region: str = "",
+    city: str = "",
     isp: str = "",
     source: str = "manual",
     ip_type: str = "static_residential",
     purchase_status: str = "owned",
     note: str = "",
     expires_at: int = 0,
-    status: str = "active",
+    status: str = "pending",
 ) -> Any:
     proxy_type = _normalize_proxy_type(protocol)
     clean_host = str(host or "").strip()
     clean_port = int(port or 0)
+    if str(ip_type or "static_residential").strip().lower() != "static_residential":
+        raise HTTPException(status_code=400, detail="仅支持静态住宅 IP")
     if not clean_host or clean_port <= 0 or clean_port > 65535:
         raise HTTPException(status_code=400, detail="代理 host 和 port 必填，port 必须在 1-65535 之间")
     now = _now()
@@ -1082,10 +1100,10 @@ def _insert_social_proxy(
     conn.execute(
         """
         INSERT INTO social_proxies(
-          id, name, proxy_type, host, port, username, password, country, isp,
+          id, name, proxy_type, host, port, username, password, country, region, city, isp,
           source, ip_type, purchase_status, note, expires_at, status, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             proxy_id,
@@ -1096,9 +1114,11 @@ def _insert_social_proxy(
             str(username or "").strip(),
             str(password or ""),
             str(country or "").strip(),
+            str(region or "").strip(),
+            str(city or "").strip(),
             str(isp or "").strip(),
             str(source or "manual").strip() or "manual",
-            str(ip_type or "static_residential").strip() or "static_residential",
+            "static_residential",
             str(purchase_status or "owned").strip() or "owned",
             str(note or "").strip(),
             max(0, int(expires_at or 0)),
@@ -1117,15 +1137,17 @@ def _save_account_residential_proxy(
     current_proxy_id: str = "",
     account_id: str = "",
 ) -> Any:
+    if str(payload.ip_type or "static_residential").strip().lower() != "static_residential":
+        raise HTTPException(status_code=400, detail="仅支持静态住宅 IP")
     proxy_type = _normalize_proxy_type(payload.protocol)
     host = str(payload.host or "").strip()
     port = int(payload.port or 0)
     country = str(payload.country or "").strip()
+    region = str(payload.region or "").strip()
+    city = str(payload.city or "").strip()
     isp = str(payload.isp or "").strip()
     if not host or port <= 0 or port > 65535:
         raise HTTPException(status_code=400, detail="住宅代理 host 和 port 必填，port 必须在 1-65535 之间")
-    if not country or not isp:
-        raise HTTPException(status_code=400, detail="住宅代理国家/地区和住宅 ISP 必填")
 
     clean_proxy_id = str(current_proxy_id or "").strip()
     current = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (clean_proxy_id,)).fetchone() if clean_proxy_id else None
@@ -1135,7 +1157,6 @@ def _save_account_residential_proxy(
         fields_set = set(payload.__fields_set__)
     metadata_defaults: dict[str, Any] = {
         "source": "manual",
-        "ip_type": "static_residential",
         "purchase_status": "owned",
         "note": "",
         "expires_at": 0,
@@ -1166,9 +1187,11 @@ def _save_account_residential_proxy(
             password=password or (str(current["password"] or "") if current is not None else ""),
             name=str(payload.name or f"residential://{host}:{port}").strip(),
             country=country,
+            region=region,
+            city=city,
             isp=isp,
             source=str(metadata["source"] or "manual"),
-            ip_type=str(metadata["ip_type"] or "static_residential"),
+            ip_type="static_residential",
             purchase_status=str(metadata["purchase_status"] or "owned"),
             note=str(metadata["note"] or ""),
             expires_at=int(metadata["expires_at"] or 0),
@@ -1182,9 +1205,11 @@ def _save_account_residential_proxy(
         "username": username or str(current["username"] or ""),
         "name": str(payload.name or current["name"] or f"residential://{host}:{port}").strip(),
         "country": country,
+        "region": region,
+        "city": city,
         "isp": isp,
         "source": str(metadata["source"] or "manual").strip() or "manual",
-        "ip_type": str(metadata["ip_type"] or "static_residential").strip() or "static_residential",
+        "ip_type": "static_residential",
         "purchase_status": str(metadata["purchase_status"] or "owned").strip() or "owned",
         "note": str(metadata["note"] or "").strip(),
         "expires_at": max(0, int(metadata["expires_at"] or 0)),
@@ -1210,11 +1235,13 @@ def check_social_proxy(proxy_id: str) -> dict[str, Any]:
     result: dict[str, Any] = {"ok": False, "checked_at": _now(), "proxy": _proxy_url(proxy, include_password=False)}
     try:
         resp = requests.get(
-            "https://api.ipify.org?format=json",
+            "https://ipwho.is/?fields=success,message,ip,country,country_code,region,city,connection",
             proxies={"http": proxy_url, "https": proxy_url},
             timeout=20,
         )
-        result.update({"ok": resp.ok, "status_code": resp.status_code, "response": resp.json() if resp.ok else resp.text[:500]})
+        response = resp.json() if resp.ok else resp.text[:500]
+        response_ok = isinstance(response, dict) and response.get("success") is not False and bool(response.get("ip"))
+        result.update({"ok": bool(resp.ok and response_ok), "status_code": resp.status_code, "response": response})
     except Exception as exc:
         result.update({"ok": False, "error": str(exc)})
     safe_result = _redact_sensitive(
@@ -1222,11 +1249,39 @@ def check_social_proxy(proxy_id: str) -> dict[str, Any]:
         secrets=(str(proxy.get("username") or ""), str(proxy.get("password") or "")),
     )
     status = "active" if result.get("ok") else "failed"
+    response = result.get("response") if isinstance(result.get("response"), dict) else {}
+    connection = response.get("connection") if isinstance(response.get("connection"), dict) else {}
+    detected_country = str(response.get("country_code") or response.get("country") or "").strip()
+    detected_region = str(response.get("region") or "").strip()
+    detected_city = str(response.get("city") or "").strip()
+    detected_isp = str(connection.get("isp") or connection.get("org") or "").strip()
     with db() as conn:
-        conn.execute(
-            "UPDATE social_proxies SET status = ?, last_check_at = ?, last_check_result = ?, updated_at = ? WHERE id = ?",
-            (status, _now(), json.dumps(safe_result, ensure_ascii=False), _now(), proxy_id),
+        checked_at = _now()
+        cursor = conn.execute(
+            """
+            UPDATE social_proxies
+            SET status = ?, country = CASE WHEN ? != '' THEN ? ELSE country END,
+                region = CASE WHEN ? != '' THEN ? ELSE region END,
+                city = CASE WHEN ? != '' THEN ? ELSE city END,
+                isp = CASE WHEN ? != '' THEN ? ELSE isp END,
+                last_check_at = ?, last_check_result = ?, updated_at = ?
+            WHERE id = ? AND proxy_type = ? AND host = ? AND port = ?
+              AND username = ? AND password = ?
+              AND updated_at = ? AND status = ?
+            """,
+            (
+                status,
+                detected_country, detected_country,
+                detected_region, detected_region,
+                detected_city, detected_city,
+                detected_isp, detected_isp,
+                checked_at, json.dumps(safe_result, ensure_ascii=False), checked_at,
+                proxy_id, proxy["proxy_type"], proxy["host"], proxy["port"], proxy["username"], proxy["password"],
+                proxy["updated_at"], proxy["status"],
+            ),
         )
+        if not cursor.rowcount:
+            raise HTTPException(status_code=409, detail="代理配置已变更，请重新检测")
         updated = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
     return _proxy_public(updated)
 
@@ -1563,11 +1618,13 @@ def create_social_task(payload: SocialTaskPayload) -> dict[str, Any]:
             raise HTTPException(status_code=400, detail="任务平台与执行账号平台不一致")
         proxy_id = str(account["proxy_id"] or "").strip()
         if proxy_id:
-            proxy = conn.execute("SELECT status FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
+            proxy = conn.execute("SELECT status, ip_type FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
             if not proxy:
                 raise HTTPException(status_code=409, detail="账号绑定的住宅代理不存在，不能创建任务")
             proxy_status = str(proxy["status"] or "").strip().lower()
-            if proxy_status in {"failed", "inactive", "disabled"}:
+            if str(proxy["ip_type"] or "").strip().lower() != "static_residential":
+                raise HTTPException(status_code=409, detail="账号仅允许使用静态住宅 IP")
+            if proxy_status != "active":
                 raise HTTPException(status_code=409, detail="账号绑定的代理不可用，请先启用、修复或重新检测")
         persona_id = str(payload.persona_id or account["persona_id"] or "").strip()
         runtime_secrets: dict[str, str] = {}
@@ -2018,9 +2075,11 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
             proxy_row = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
     account = dict(account_row)
     proxy = dict(proxy_row) if proxy_row else None
+    if proxy is not None and str(proxy.get("ip_type") or "").strip().lower() != "static_residential":
+        raise RuntimeError("账号代理不是静态住宅 IP，已阻止浏览器启动")
     if proxy_id and proxy is None:
         raise RuntimeError("账号绑定的住宅代理不存在，已阻止浏览器启动")
-    if proxy is not None and str(proxy.get("status") or "").strip().lower() in {"failed", "inactive", "disabled"}:
+    if proxy is not None and str(proxy.get("status") or "").strip().lower() != "active":
         raise RuntimeError("账号代理不可用，已阻止浏览器启动")
     if _is_task_cancelled(task_id):
         _discard_ephemeral_task_secrets(task_id)
@@ -2901,6 +2960,8 @@ def _residential_proxy_public(row: Any) -> dict[str, Any]:
         "username_configured": bool(str(item.get("username") or "")),
         "password_configured": bool(str(item.get("password") or "")),
         "country": str(item.get("country") or ""),
+        "region": str(item.get("region") or ""),
+        "city": str(item.get("city") or ""),
         "isp": str(item.get("isp") or ""),
         "source": str(item.get("source") or "manual"),
         "ip_type": str(item.get("ip_type") or "static_residential"),
@@ -3014,6 +3075,8 @@ def _proxy_public(row: Any, *, bound_account_ids: list[str] | None = None) -> di
         "username_configured": bool(str(item.get("username") or "")),
         "password_configured": bool(str(item.get("password") or "")),
         "country": str(item.get("country") or ""),
+        "region": str(item.get("region") or ""),
+        "city": str(item.get("city") or ""),
         "isp": str(item.get("isp") or ""),
         "source": str(item.get("source") or "manual"),
         "ip_type": str(item.get("ip_type") or "static_residential"),
@@ -3086,7 +3149,9 @@ def _log_public(row: Any) -> dict[str, Any]:
 
 
 def _require_proxy(conn, proxy_id: str) -> None:
-    row = conn.execute("SELECT id FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
+    row = conn.execute("SELECT id, ip_type FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
+    if row and str(row["ip_type"] or "").strip().lower() != "static_residential":
+        raise HTTPException(status_code=400, detail="账号仅允许绑定静态住宅 IP")
     if not row:
         raise HTTPException(status_code=404, detail="绑定代理不存在")
 

@@ -14101,14 +14101,73 @@ function accountResidentialProxyLabel(account = null) {
   if (!proxy) return "未使用代理 IP";
   const checkedIp = String(proxy.last_check_result?.response?.ip || "").trim();
   const endpoint = checkedIp || String(proxy.host || "").trim();
-  const region = [proxy.country, proxy.isp].map((item) => String(item || "").trim()).filter(Boolean).join(" · ");
+  const region = [proxy.country, proxy.region, proxy.city, proxy.isp].map((item) => String(item || "").trim()).filter(Boolean).join(" · ");
   const status = String(proxy.status || "").toLowerCase() === "failed" ? "检测失败" : "住宅 IP";
   return `${status}：${endpoint || "已配置"}${region ? ` · ${region}` : ""}`;
 }
 
+function proxySelectOptions(options, selected = "") {
+  const value = String(selected || "").trim().toLowerCase();
+  const known = options.some(([key]) => key === value);
+  const preserved = value && !known ? `<option value="${esc(selected)}" selected>${esc(selected)}</option>` : "";
+  return preserved + options.map(([key, label]) => `<option value="${esc(key)}" ${value === key ? "selected" : ""}>${esc(label)}</option>`).join("");
+}
+
+function sharedProxyFieldsHtml(prefix, proxy = null) {
+  const protocol = ["socks5", "http", "https"].includes(proxyProtocol(proxy).toLowerCase()) ? proxyProtocol(proxy).toLowerCase() : "socks5";
+  const status = String(proxy?.status || "pending").trim().toLowerCase();
+  return `
+    <label><span>IP 类型</span><input value="静态住宅 IP" readonly /></label>
+    <label><span>来源</span><select id="${esc(prefix)}Source">${proxySelectOptions([["manual", "手动录入"], ["provider", "代理供应商"], ["self_owned", "自有线路"]], proxy?.source || "manual")}</select></label>
+    <label><span>购买状态</span><select id="${esc(prefix)}PurchaseStatus">${proxySelectOptions([["owned", "自有"], ["leased", "租用中"], ["expiring", "即将到期"], ["expired", "已过期"]], proxy?.purchase_status || "owned")}</select></label>
+    <label><span>代理名称</span><input id="${esc(prefix)}Name" value="${esc(proxy?.name || "")}" placeholder="留空则自动生成" /></label>
+    <label><span>代理协议</span><select id="${esc(prefix)}Protocol">${proxySelectOptions([["socks5", "SOCKS5"], ["http", "HTTP"], ["https", "HTTPS"]], protocol)}</select></label>
+    <label><span>Host</span><input id="${esc(prefix)}Host" value="${esc(proxy?.host || "")}" placeholder="proxy.example.com" autocomplete="off" /></label>
+    <label><span>端口</span><input id="${esc(prefix)}Port" type="number" min="1" max="65535" value="${esc(proxy?.port || "")}" placeholder="1080" /></label>
+    <label><span>认证用户名（可选）</span><input id="${esc(prefix)}Username" value="" placeholder="${proxy?.username_configured ? "留空则沿用已保存用户名" : "代理认证用户名"}" autocomplete="off" /></label>
+    <label><span>认证密码（可选）</span><input id="${esc(prefix)}Password" type="password" value="" placeholder="${proxy?.password_configured ? "留空则沿用已保存密码" : "代理认证密码"}" autocomplete="new-password" /></label>
+    <label><span>代理状态</span><input value="${esc(proxyStatusLabel(status))}" readonly /></label>
+    <label><span>出口 IP</span><input value="${esc(proxyExitIp(proxy || {}))}" placeholder="保存检测后自动识别" readonly /></label>
+    <label><span>国家 / 地区</span><input id="${esc(prefix)}Country" value="${esc(proxy?.country || "")}" placeholder="保存检测后自动识别" readonly /></label>
+    <label><span>州 / 省</span><input id="${esc(prefix)}Region" value="${esc(proxy?.region || "")}" placeholder="保存检测后自动识别" readonly /></label>
+    <label><span>城市</span><input id="${esc(prefix)}City" value="${esc(proxy?.city || "")}" placeholder="保存检测后自动识别" readonly /></label>
+    <label><span>ISP</span><input id="${esc(prefix)}Isp" value="${esc(proxy?.isp || "")}" placeholder="保存检测后自动识别" readonly /></label>
+    <label><span>有效时间</span><input id="${esc(prefix)}ExpiresAt" type="datetime-local" value="${esc(proxyDatetimeInputValue(proxy?.expires_at))}" /></label>
+    <label><span>已绑定账号数</span><input value="${proxy ? proxyBoundAccountCount(proxy) : 0}" readonly /></label>
+    <label class="proxy-form-note"><span>备注</span><textarea id="${esc(prefix)}Note" rows="3" placeholder="代理用途或续费信息">${esc(proxy?.note || "")}</textarea></label>`;
+}
+
+function sharedProxyPayload(prefix, proxy = null) {
+  const host = String($(`${prefix}Host`)?.value || "").trim();
+  const port = Number.parseInt(String($(`${prefix}Port`)?.value || ""), 10);
+  if (!host || !Number.isFinite(port) || port < 1 || port > 65535) {
+    showMsg("socialMsg", "请填写有效的静态住宅代理 Host 和端口。", false);
+    return null;
+  }
+  const payload = {
+    ip_type: "static_residential",
+    source: String($(`${prefix}Source`)?.value || "manual").trim(),
+    purchase_status: String($(`${prefix}PurchaseStatus`)?.value || "owned").trim(),
+    name: String($(`${prefix}Name`)?.value || "").trim(),
+    proxy_type: String($(`${prefix}Protocol`)?.value || "socks5").trim().toLowerCase(),
+    host,
+    port,
+    country: String($(`${prefix}Country`)?.value || "").trim(),
+    region: String($(`${prefix}Region`)?.value || "").trim(),
+    city: String($(`${prefix}City`)?.value || "").trim(),
+    isp: String($(`${prefix}Isp`)?.value || "").trim(),
+    note: String($(`${prefix}Note`)?.value || "").trim(),
+    expires_at: $(`${prefix}ExpiresAt`)?.value ? Math.floor(new Date($(`${prefix}ExpiresAt`).value).getTime() / 1000) : 0,
+    status: "pending",
+  };
+  const username = String($(`${prefix}Username`)?.value || "").trim();
+  if (username || !proxy?.username_configured) payload.username = username;
+  const password = String($(`${prefix}Password`)?.value || "");
+  if (password) payload.password = password;
+  return payload;
+}
+
 function accountResidentialProxyFormHtml(prefix, proxy = null) {
-  const savedType = String(proxy?.proxy_type || proxy?.protocol || "").toLowerCase();
-  const type = ["socks5", "http"].includes(savedType) ? savedType : "socks5";
   const enabled = Boolean(proxy);
   return `
     <section class="account-residential-proxy">
@@ -14120,74 +14179,18 @@ function accountResidentialProxyFormHtml(prefix, proxy = null) {
         <span class="status">可选</span>
       </div>
       <fieldset id="${esc(prefix)}ProxyFields" class="account-proxy-grid" ${enabled ? "" : "hidden disabled"}>
-        <label><span>代理协议</span>
-          <select id="${esc(prefix)}ProxyType">
-            <option value="socks5" ${type === "socks5" ? "selected" : ""}>SOCKS5</option>
-            <option value="http" ${type === "http" ? "selected" : ""}>HTTP</option>
-          </select>
-        </label>
-        <label><span>住宅 IP / 主机</span>
-          <input id="${esc(prefix)}ProxyHost" value="${esc(proxy?.host || "")}" placeholder="proxy.example.com" autocomplete="off" />
-        </label>
-        <label><span>端口</span>
-          <input id="${esc(prefix)}ProxyPort" type="number" min="1" max="65535" value="${esc(proxy?.port || "")}" placeholder="1080" />
-        </label>
-        <label><span>代理用户名（可选）</span>
-          <input id="${esc(prefix)}ProxyUsername" value="" placeholder="${proxy?.username_configured ? "留空则沿用已保存用户名" : "住宅代理认证用户名"}" autocomplete="off" />
-        </label>
-        <label><span>代理密码（可选）</span>
-          <input id="${esc(prefix)}ProxyPassword" type="password" value="" placeholder="${proxy?.password_configured ? "留空则沿用已保存密码" : "住宅代理认证密码"}" autocomplete="new-password" />
-        </label>
-        <label><span>国家 / 地区</span>
-          <input id="${esc(prefix)}ProxyCountry" value="${esc(proxy?.country || "")}" placeholder="例如：US" autocomplete="off" />
-        </label>
-        <label><span>住宅 ISP</span>
-          <input id="${esc(prefix)}ProxyIsp" value="${esc(proxy?.isp || "")}" placeholder="家庭宽带运营商" autocomplete="off" />
-        </label>
-        <label class="account-proxy-confirm">
-          <input id="${esc(prefix)}ProxyConfirmed" type="checkbox" ${proxy ? "checked" : ""} />
-          <span>确认该代理为海外静态住宅 IP</span>
-        </label>
+        ${sharedProxyFieldsHtml(`${prefix}Proxy`, proxy)}
       </fieldset>
     </section>`;
 }
 
-function accountResidentialProxyPayload(prefix, accountName = "") {
+function accountResidentialProxyPayload(prefix, accountName = "", proxy = null) {
   if (!$(`${prefix}ProxyEnabled`)?.checked) return undefined;
-  const host = String($(`${prefix}ProxyHost`)?.value || "").trim();
-  const port = Number.parseInt(String($(`${prefix}ProxyPort`)?.value || ""), 10);
-  const country = String($(`${prefix}ProxyCountry`)?.value || "").trim();
-  const isp = String($(`${prefix}ProxyIsp`)?.value || "").trim();
-  const confirmed = Boolean($(`${prefix}ProxyConfirmed`)?.checked);
-  if (!host || !Number.isFinite(port) || port < 1 || port > 65535) {
-    showMsg("socialMsg", "请填写有效的静态住宅代理 IP 和端口。", false);
-    return null;
-  }
-  if (!confirmed) {
-    showMsg("socialMsg", "请确认当前代理是海外静态住宅 IP。", false);
-    return null;
-  }
-  if (!country) {
-    showMsg("socialMsg", "请填写静态住宅代理所在的海外国家或地区。", false);
-    return null;
-  }
-  if (!isp) {
-    showMsg("socialMsg", "请填写住宅宽带 ISP，不能使用机房或普通梯子线路。", false);
-    return null;
-  }
-  const proxyType = String($(`${prefix}ProxyType`)?.value || "socks5").toLowerCase() === "http" ? "http" : "socks5";
-  const payload = {
-    name: `[静态住宅] ${String(accountName || host).trim()}`,
-    protocol: proxyType,
-    host,
-    port,
-    username: String($(`${prefix}ProxyUsername`)?.value || "").trim(),
-    country,
-    isp,
-    status: "active",
-  };
-  const password = String($(`${prefix}ProxyPassword`)?.value || "");
-  if (password) payload.password = password;
+  const payload = sharedProxyPayload(`${prefix}Proxy`, proxy);
+  if (!payload) return null;
+  payload.protocol = payload.proxy_type;
+  delete payload.proxy_type;
+  if (!payload.name) payload.name = `[静态住宅] ${String(accountName || payload.host).trim()}`;
   return payload;
 }
 
@@ -14359,7 +14362,7 @@ async function saveAccountPoolCreateForm() {
   await loadSocial();
   if (!proxyOk) {
     showMsg("socialMsg", "账号已保存，但住宅代理检测失败；修复代理前不会执行自动化任务。", false);
-    return false;
+    return true;
   }
   showMsg("socialMsg", residentialProxy ? "账号和静态住宅代理已保存。" : "账号已保存。", true);
   return true;
@@ -14563,7 +14566,7 @@ async function saveAccountPoolEditForm(accountId = "") {
   const account = accountPoolAccounts().find((item) => String(item.id || "") === cleanId);
   const hadProxy = Boolean(accountResidentialProxy(account));
   const proxyEnabled = Boolean($("accountPoolEditProxyEnabled")?.checked);
-  const residentialProxy = accountResidentialProxyPayload("accountPoolEdit", username);
+  const residentialProxy = accountResidentialProxyPayload("accountPoolEdit", username, accountResidentialProxy(account));
   if (proxyEnabled && !residentialProxy) return false;
   if (residentialProxy) payload.residential_proxy = residentialProxy;
   if (!proxyEnabled && hadProxy) payload.clear_residential_proxy = true;
@@ -14580,7 +14583,7 @@ async function saveAccountPoolEditForm(accountId = "") {
   renderSocialAccounts();
   if (!proxyOk) {
     showMsg("socialMsg", "账号已保存，但住宅代理检测失败；修复代理前不会执行自动化任务。", false);
-    return false;
+    return true;
   }
   showMsg("socialMsg", residentialProxy ? "账号和静态住宅代理已保存。" : "账号已保存，未使用代理 IP。", true);
   return true;
@@ -14779,12 +14782,12 @@ function proxyStatusLabel(value = "") {
 
 function proxyIpTypeLabel(value = "") {
   const clean = String(value || "").trim().toLowerCase();
-  return { static_residential: "静态住宅", residential: "住宅 IP", datacenter: "机房 IP" }[clean] || (value || "-");
+  return clean === "static_residential" ? "静态住宅" : "不支持";
 }
 
 function proxySourceLabel(value = "") {
   const clean = String(value || "").trim().toLowerCase();
-  return { manual: "手动录入", self_owned: "自有" }[clean] || (value || "-");
+  return { manual: "手动录入", provider: "代理供应商", self_owned: "自有线路" }[clean] || (value || "-");
 }
 
 function proxyPurchaseStatusLabel(value = "") {
@@ -14821,7 +14824,7 @@ function renderProxyPool() {
           <div class="proxy-table-row proxy-table-row--head" role="row">${columns.map((column) => `<span role="columnheader">${column}</span>`).join("")}</div>
           ${pageRows.length ? pageRows.map((proxy, index) => {
             const endpoint = [String(proxy.host || "").trim(), String(proxy.port || "").trim()].filter(Boolean).join(":") || "-";
-            const region = [proxy.country, proxy.isp].map((item) => String(item || "").trim()).filter(Boolean).join(" / ") || "-";
+            const region = [proxy.country, proxy.region, proxy.city, proxy.isp].map((item) => String(item || "").trim()).filter(Boolean).join(" / ") || "-";
             return `<div class="proxy-table-row" role="row">
               <span role="cell">${offset + index + 1}</span>
               <span role="cell">${esc(proxyIpTypeLabel(proxy.ip_type))}</span>
@@ -14868,31 +14871,7 @@ function proxyDatetimeInputValue(value = "") {
 }
 
 function proxyFormPayload(proxy = null) {
-  const host = String($("proxyFormHost")?.value || "").trim();
-  const port = Number.parseInt(String($("proxyFormPort")?.value || ""), 10);
-  if (!host || !Number.isFinite(port) || port < 1 || port > 65535) {
-    showMsg("socialMsg", "请填写有效的代理主机和端口。", false);
-    return null;
-  }
-  const payload = {
-    ip_type: String($("proxyFormIpType")?.value || "").trim(),
-    source: String($("proxyFormSource")?.value || "").trim(),
-    purchase_status: String($("proxyFormPurchaseStatus")?.value || "").trim(),
-    name: String($("proxyFormName")?.value || "").trim(),
-    proxy_type: String($("proxyFormProtocol")?.value || "socks5").trim().toLowerCase(),
-    host,
-    port,
-    note: String($("proxyFormNote")?.value || "").trim(),
-    status: String($("proxyFormStatus")?.value || "active").trim(),
-    country: String($("proxyFormCountry")?.value || "").trim(),
-    isp: String($("proxyFormIsp")?.value || "").trim(),
-    expires_at: $("proxyFormExpiresAt")?.value ? Math.floor(new Date($("proxyFormExpiresAt").value).getTime() / 1000) : 0,
-  };
-  const username = String($("proxyFormUsername")?.value || "").trim();
-  if (username || !proxy?.username_configured) payload.username = username;
-  const password = String($("proxyFormPassword")?.value || "");
-  if (password) payload.password = password;
-  return payload;
+  return sharedProxyPayload("proxyForm", proxy);
 }
 
 function openProxyModal(proxyId = "") {
@@ -14911,28 +14890,13 @@ function openProxyModal(proxyId = "") {
       <div class="console-modal-head"><strong id="proxyModalTitle">${proxy ? "编辑代理" : "新增代理"}</strong></div>
       <div class="console-modal-content proxy-edit-modal-content">
         <div class="proxy-form-grid">
-          <label><span>IP 类型</span><select id="proxyFormIpType"><option value="static_residential" ${String(proxy?.ip_type || "static_residential") === "static_residential" ? "selected" : ""}>静态住宅</option><option value="residential" ${proxy?.ip_type === "residential" ? "selected" : ""}>住宅 IP</option><option value="datacenter" ${proxy?.ip_type === "datacenter" ? "selected" : ""}>机房 IP</option></select></label>
-          <label><span>来源</span><input id="proxyFormSource" value="${esc(proxy?.source || "")}" placeholder="供应商或采购渠道" /></label>
-          <label><span>购买状态</span><select id="proxyFormPurchaseStatus"><option value="owned" ${String(proxy?.purchase_status || "owned") === "owned" ? "selected" : ""}>自有</option><option value="leased" ${proxy?.purchase_status === "leased" ? "selected" : ""}>租用中</option><option value="expiring" ${proxy?.purchase_status === "expiring" ? "selected" : ""}>即将到期</option><option value="expired" ${proxy?.purchase_status === "expired" ? "selected" : ""}>已过期</option></select></label>
-          <label><span>代理名称</span><input id="proxyFormName" value="${esc(proxy?.name || "")}" placeholder="便于识别的名称" /></label>
-          <label><span>代理协议</span><select id="proxyFormProtocol"><option value="socks5" ${proxyProtocol(proxy).toLowerCase() === "socks5" ? "selected" : ""}>SOCKS5</option><option value="http" ${proxyProtocol(proxy).toLowerCase() === "http" ? "selected" : ""}>HTTP</option><option value="https" ${proxyProtocol(proxy).toLowerCase() === "https" ? "selected" : ""}>HTTPS</option></select></label>
-          <label><span>Host</span><input id="proxyFormHost" value="${esc(proxy?.host || "")}" placeholder="proxy.example.com" autocomplete="off" /></label>
-          <label><span>端口</span><input id="proxyFormPort" type="number" min="1" max="65535" value="${esc(proxy?.port || "")}" /></label>
-          <label><span>认证用户名（可选）</span><input id="proxyFormUsername" value="" placeholder="${proxy?.username_configured ? "留空则沿用已保存用户名" : "代理认证用户名"}" autocomplete="off" /></label>
-          <label><span>认证密码（可选）</span><input id="proxyFormPassword" type="password" value="" placeholder="${proxy?.password_configured ? "留空则沿用已保存密码" : "代理认证密码"}" autocomplete="new-password" /></label>
-          <label><span>代理状态</span><select id="proxyFormStatus"><option value="active" ${proxy?.status === "active" ? "selected" : ""}>可用</option><option value="inactive" ${proxy?.status === "inactive" ? "selected" : ""}>停用</option><option value="pending" ${proxy?.status === "pending" ? "selected" : ""}>待检测</option><option value="failed" ${proxy?.status === "failed" ? "selected" : ""}>异常</option></select></label>
-          <label><span>国家 / 地区</span><input id="proxyFormCountry" value="${esc(proxy?.country || "")}" placeholder="例如：US" /></label>
-          <label><span>ISP</span><input id="proxyFormIsp" value="${esc(proxy?.isp || "")}" placeholder="网络运营商" /></label>
-          <label><span>有效时间</span><input id="proxyFormExpiresAt" type="datetime-local" value="${esc(proxyDatetimeInputValue(proxy?.expires_at))}" /></label>
-          <label><span>出口 IP</span><input value="${esc(proxyExitIp(proxy || {}))}" readonly /></label>
-          <label><span>已绑定账号数</span><input value="${proxy ? proxyBoundAccountCount(proxy) : 0}" readonly /></label>
-          <label class="proxy-form-note"><span>备注</span><textarea id="proxyFormNote" rows="3" placeholder="代理用途或续费信息">${esc(proxy?.note || "")}</textarea></label>
+          ${sharedProxyFieldsHtml("proxyForm", proxy)}
         </div>
       </div>
       <div class="console-modal-actions"><button type="button" data-proxy-modal-cancel>取消</button><button type="button" class="primary" data-proxy-modal-save="${esc(proxy?.id || "")}">保存代理</button></div>
     </section>`;
   document.body.appendChild(modal);
-  $("proxyFormIpType")?.focus();
+  $("proxyFormSource")?.focus();
   const close = () => modal.remove();
   modal.addEventListener("click", (event) => {
     if (event.target.closest("[data-proxy-modal-cancel]")) { close(); return; }
@@ -14946,10 +14910,20 @@ function openProxyModal(proxyId = "") {
       method: id ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
-    }).then(async () => {
+    }).then(async (data) => {
       close();
+      const savedId = String(data?.proxy?.id || id || "").trim();
+      let detected = false;
+      if (savedId) {
+        try {
+          const checked = await api(`/api/persona_dashboard/automation/proxies/${encodeURIComponent(savedId)}/check`, { method: "POST" });
+          detected = Boolean(checked?.proxy?.last_check_result?.ok);
+        } catch (_error) {
+          detected = false;
+        }
+      }
       await refreshProxyPool();
-      showMsg("socialMsg", id ? "代理已更新。" : "代理已新增。", true);
+      showMsg("socialMsg", detected ? `${id ? "代理已更新" : "代理已新增"}，出口 IP、地区和 ISP 已自动识别。` : `${id ? "代理已更新" : "代理已新增"}，自动检测未通过，请检查连接参数后重试。`, detected);
     }).catch((error) => {
       save.disabled = false;
       showMsg("socialMsg", error.detail || error.message || "保存代理失败", false);
