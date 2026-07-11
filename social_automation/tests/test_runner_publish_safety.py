@@ -55,6 +55,15 @@ class _Logger:
 
 
 class RunnerPublishSafetyTests(unittest.TestCase):
+    def test_screenshot_captures_current_viewport(self):
+        page = mock.Mock()
+
+        result = runner._screenshot(page, Path("."), {"id": "login-task"}, "login_complete", _Logger())
+
+        self.assertTrue(result.endswith(".png"))
+        page.screenshot.assert_called_once()
+        self.assertFalse(page.screenshot.call_args.kwargs["full_page"])
+
     def test_publish_task_only_captures_final_screenshot(self):
         page = mock.Mock()
         logger = _Logger()
@@ -62,7 +71,11 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertEqual(runner._screenshot(page, Path("."), task, "failed", logger), "")
         self.assertEqual(runner._screenshot(page, Path("."), task, "publish_submitted_unconfirmed", logger), "")
-        page.screenshot.assert_not_called()
+        result = runner._screenshot(page, Path("."), task, "publish_done", logger)
+
+        self.assertTrue(result.endswith(".png"))
+        page.screenshot.assert_called_once()
+        self.assertFalse(page.screenshot.call_args.kwargs["full_page"])
 
     def test_login_credentials_never_use_clipboard(self):
         page = _Page("https://www.instagram.com/accounts/login/")

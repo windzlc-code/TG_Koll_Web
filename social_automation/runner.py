@@ -654,7 +654,7 @@ def _screenshot(page, screenshot_dir: Path, task: dict[str, Any], stage: str, lo
         return ""
     path = screenshot_dir / f"{str(task.get('id') or 'task')}_{stage}_{int(time.time())}.png"
     try:
-        page.screenshot(path=str(path), full_page=str(stage or "") != "publish_done")
+        page.screenshot(path=str(path), full_page=False)
         logger.log("info", stage, "已保存截图。", {"path": str(path)}, str(path))
         return str(path)
     except Exception as exc:

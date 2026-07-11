@@ -391,6 +391,7 @@ const state = {
   taskQueueSelectedRegularIds: new Set(),
   taskQueueRefreshTimer: 0,
   accountStatusRefreshTimer: 0,
+  socialTaskToastRefreshTimer: 0,
   publishTimingMode: "immediate",
   publishSchedulePreset: "custom",
   publishScheduleParts: null,
@@ -405,6 +406,7 @@ const state = {
   socialAccounts: [],
   socialTasks: [],
   socialTaskToastStatuses: {},
+  socialTaskToastLabels: {},
   socialTaskPersonaRefreshSignatures: {},
   socialBrowserSessions: [],
   liveBrowserLayout: storedLiveBrowserLayout(),
@@ -3030,7 +3032,8 @@ function toastKindForTaskStatus(status) {
 
 function socialTaskToastMessage(task) {
   const typeLabel = statusLabel(task?.task_type || "自动化任务");
-  const accountLabel = String(task?.account_username || task?.account_display_name || task?.account_id || "").trim();
+  const taskId = String(task?.id || "").trim();
+  const accountLabel = String(state.socialTaskToastLabels[taskId] || task?.account_username || task?.account_display_name || task?.account_id || "").trim();
   const suffix = accountLabel ? ` · ${accountLabel}` : "";
   const status = String(task?.status || "").trim();
   if (status === "success") return `${typeLabel}已完成${suffix}`;
@@ -3065,10 +3068,38 @@ function syncSocialTaskToast(task, { force = false } = {}) {
     startedAt: task?.started_at || task?.startedAt || task?.created_at || task?.createdAt || "",
     duration: terminal ? 5200 : undefined,
   });
+  syncSocialTaskToastAutoRefresh();
 }
 
 function syncSocialTaskToasts(tasks = []) {
   tasks.forEach((task) => syncSocialTaskToast(task));
+  syncSocialTaskToastAutoRefresh();
+}
+
+function hasActiveSocialTaskToast() {
+  return (state.socialTasks || []).some((task) => activeSocialAutomationTask(task))
+    || Array.from(ensureToastHost().children).some((item) => (
+      String(item.dataset.toastKey || "").startsWith("social-task:")
+      && item.classList.contains("is-persistent")
+    ));
+}
+
+function syncSocialTaskToastAutoRefresh() {
+  if (!hasActiveSocialTaskToast()) {
+    if (state.socialTaskToastRefreshTimer) {
+      window.clearInterval(state.socialTaskToastRefreshTimer);
+      state.socialTaskToastRefreshTimer = 0;
+    }
+    return;
+  }
+  if (state.socialTaskToastRefreshTimer) return;
+  state.socialTaskToastRefreshTimer = window.setInterval(() => {
+    if (!hasActiveSocialTaskToast()) {
+      syncSocialTaskToastAutoRefresh();
+      return;
+    }
+    loadAutomationTasksShared({ force: true }).catch(() => {});
+  }, 3000);
 }
 
 function activeSocialTaskFor({ accountId = "", personaId = "", taskType = "", postId = "", postSource = "" } = {}) {
@@ -7335,6 +7366,14 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
     const taskIds = results
       .map((item) => String(item?.task?.id || "").trim())
       .filter(Boolean);
+    results.forEach((item, index) => {
+      const task = item?.task;
+      if (!task?.id) return;
+      state.socialTaskToastLabels[String(task.id)] = `${index + 1}/${results.length} 篇 · ${account.username || account.display_name || ""}`;
+      syncSocialTaskToast({
+        ...task,
+      }, { force: true });
+    });
     const firstTaskId = taskIds[0] || "";
     if (firstTaskId) openLiveBrowserTaskView(firstTaskId);
     if (taskIds.length) {
