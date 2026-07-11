@@ -209,6 +209,16 @@ class PersonaDashboardApiTests(unittest.TestCase):
     def _insert_social_account(self, *, account_id="acct-1", persona_id="persona-1", platform="instagram", username="insta_user", status="ready"):
         conn = sqlite3.connect(str(self.data_dir / "app.db"))
         now = 1_720_000_000
+        proxy_id = f"proxy-{account_id}"
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO social_proxies(
+              id, name, proxy_type, host, port, username, password, country, isp,
+              status, last_check_at, last_check_result, created_at, updated_at
+            ) VALUES (?, ?, 'http', '127.0.0.1', 18080, '', '', '', '', 'active', 0, '', ?, ?)
+            """,
+            (proxy_id, proxy_id, now, now),
+        )
         conn.execute(
             """
             INSERT INTO social_accounts(id, persona_id, platform, username, display_name, profile_dir, proxy_id, status, created_at, updated_at)
@@ -221,7 +231,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
                 username,
                 username,
                 str(self.data_dir / "profiles" / account_id),
-                "",
+                proxy_id,
                 status,
                 now,
                 now,

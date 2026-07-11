@@ -7491,6 +7491,60 @@ body.persona-touch-dragging .persona-list-card:active {
   gap: 12px;
 }
 
+.account-residential-proxy {
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.account-residential-proxy-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.account-residential-proxy-head .status {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+.account-proxy-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+
+.account-proxy-grid label {
+  display: grid;
+  gap: 6px;
+}
+
+.account-proxy-grid label > span {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.account-proxy-grid input,
+.account-proxy-grid select {
+  width: 100%;
+}
+
+.account-proxy-grid .account-proxy-confirm {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.account-proxy-confirm input {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+}
+
 .account-create-form--modal {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -8527,6 +8581,16 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 @media (max-width: 760px) {
+  .account-create-form,
+  .account-create-form--modal,
+  .account-proxy-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .account-proxy-grid .account-proxy-confirm {
+    grid-column: 1;
+  }
+
   .persona-draft-card-body {
     grid-template-columns: 1fr;
   }

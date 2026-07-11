@@ -8,7 +8,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Protocol
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, quote_plus, urljoin, urlparse
 
 
 INSTAGRAM_HOME = "https://www.instagram.com/"
@@ -259,12 +259,13 @@ class _BrowserContextManager:
                             if self.cm:
                                 self.cm.__exit__(type(retry_exc), retry_exc, getattr(retry_exc, "__traceback__", None))
                         exc = retry_exc
+            safe_error = _redact_proxy_error(exc, proxy_config)
             self._stop_live_browser_session()
             raise RuntimeError(
                 "Camoufox 浏览器启动失败。请在 Windows 执行 `py -3 -m camoufox fetch`，"
                 "或在 Linux/macOS 执行 `python -m camoufox fetch` 下载浏览器构建。"
-                f"原始错误：{exc}"
-            ) from exc
+                f"原始错误：{safe_error}"
+            ) from None
         return self.context
 
     def __exit__(self, exc_type, exc, tb):
@@ -466,9 +467,32 @@ def _masked_proxy(proxy_config: dict[str, str] | None) -> dict[str, str]:
     if not proxy_config:
         return {}
     masked = dict(proxy_config)
+    if masked.get("username"):
+        masked["username"] = "***"
     if masked.get("password"):
         masked["password"] = "***"
     return masked
+
+
+_AUTHENTICATED_PROXY_URL_RE = re.compile(r"\b(?P<scheme>https?|socks5)://[^/@\s]+@", re.IGNORECASE)
+
+
+def _redact_proxy_error(error: BaseException | str, proxy_config: dict[str, str] | None) -> str:
+    text = str(error)
+    if not proxy_config:
+        return text
+
+    text = _AUTHENTICATED_PROXY_URL_RE.sub(lambda match: f"{match.group('scheme')}://***:***@", text)
+    secrets: set[str] = set()
+    for key in ("username", "password"):
+        value = str(proxy_config.get(key) or "")
+        if not value:
+            continue
+        secrets.update({value, quote(value, safe=""), quote_plus(value, safe="")})
+    for secret in sorted(secrets, key=len, reverse=True):
+        if secret:
+            text = text.replace(secret, "***")
+    return text
 
 
 def _first_page(context):

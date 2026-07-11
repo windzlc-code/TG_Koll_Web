@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import asyncio
+import re
+import sqlite3
 import threading
 import time
 import uuid
@@ -12,6 +14,7 @@ from io import BytesIO
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import quote
 
 import requests
 from fastapi import Body, Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket
@@ -91,6 +94,18 @@ class SocialProxyPayload(BaseModel):
     status: str = "active"
 
 
+class ResidentialProxyPayload(BaseModel):
+    protocol: str = "http"
+    host: str = ""
+    port: int = 0
+    username: str = ""
+    password: str | None = None
+    name: str = ""
+    country: str = ""
+    isp: str = ""
+    status: str = "active"
+
+
 class SocialAccountPayload(BaseModel):
     persona_id: str = ""
     platform: str = "instagram"
@@ -99,6 +114,7 @@ class SocialAccountPayload(BaseModel):
     profile_dir: str = ""
     proxy_id: str = ""
     status: str = "pending_login"
+    residential_proxy: ResidentialProxyPayload | None = None
 
 
 class SocialTaskPayload(BaseModel):
@@ -122,6 +138,7 @@ class SocialAccountPatchPayload(BaseModel):
     login_username: str | None = None
     login_password: str | None = None
     clear_login_credentials: bool | None = None
+    residential_proxy: ResidentialProxyPayload | None = None
 
 
 class SocialTaskActionPayload(BaseModel):
@@ -204,7 +221,8 @@ def register_social_automation_routes(app: FastAPI) -> None:
     def api_social_accounts(_user: dict[str, Any] = Depends(get_current_user)):
         with db() as conn:
             rows = conn.execute("SELECT * FROM social_accounts ORDER BY updated_at DESC, created_at DESC").fetchall()
-        return {"ok": True, "accounts": [_account_public(row) for row in rows]}
+            accounts = _account_public_rows(conn, rows)
+        return {"ok": True, "accounts": accounts}
 
     @app.post("/api/persona_dashboard/automation/accounts")
     def api_social_account_create(payload: SocialAccountPayload, _user: dict[str, Any] = Depends(get_current_user)):
@@ -629,6 +647,7 @@ def build_social_automation_overview() -> dict[str, Any]:
     with db() as conn:
         accounts = conn.execute("SELECT * FROM social_accounts ORDER BY updated_at DESC, created_at DESC").fetchall()
         proxies = conn.execute("SELECT * FROM social_proxies ORDER BY updated_at DESC, created_at DESC").fetchall()
+        public_accounts = _account_public_rows(conn, accounts)
         tasks = conn.execute(
             "SELECT * FROM social_automation_tasks ORDER BY created_at DESC LIMIT 80"
         ).fetchall()
@@ -657,7 +676,7 @@ def build_social_automation_overview() -> dict[str, Any]:
             "failed_count": counts.get("failed", 0),
             "success_count": counts.get("success", 0),
         },
-        "accounts": [_account_public(row) for row in accounts],
+        "accounts": public_accounts,
         "proxies": [_proxy_public(row) for row in proxies],
         "tasks": [_task_public(row) for row in visible_tasks],
         "browser_sessions": _live_browser_sessions(),
@@ -903,36 +922,126 @@ def _normalize_live_browser_key(key: str) -> str:
 
 
 def create_social_proxy(payload: SocialProxyPayload) -> dict[str, Any]:
-    proxy_type = _normalize_proxy_type(payload.proxy_type)
-    host = str(payload.host or "").strip()
-    port = int(payload.port or 0)
-    if not host or port <= 0:
-        raise HTTPException(status_code=400, detail="代理 host 和 port 必填")
+    with db() as conn:
+        row = _insert_social_proxy(
+            conn,
+            protocol=payload.proxy_type,
+            host=payload.host,
+            port=payload.port,
+            username=payload.username,
+            password=payload.password,
+            name=payload.name,
+            country=payload.country,
+            isp=payload.isp,
+            status=payload.status,
+        )
+    return _proxy_public(row)
+
+
+def _insert_social_proxy(
+    conn: Any,
+    *,
+    protocol: str,
+    host: str,
+    port: int,
+    username: str = "",
+    password: str | None = "",
+    name: str = "",
+    country: str = "",
+    isp: str = "",
+    status: str = "active",
+) -> Any:
+    proxy_type = _normalize_proxy_type(protocol)
+    clean_host = str(host or "").strip()
+    clean_port = int(port or 0)
+    if not clean_host or clean_port <= 0 or clean_port > 65535:
+        raise HTTPException(status_code=400, detail="代理 host 和 port 必填，port 必须在 1-65535 之间")
     now = _now()
     proxy_id = _NEW_ID("social_proxy")
-    with db() as conn:
-        conn.execute(
-            """
-            INSERT INTO social_proxies(id, name, proxy_type, host, port, username, password, country, isp, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                proxy_id,
-                str(payload.name or f"{proxy_type}://{host}:{port}").strip(),
-                proxy_type,
-                host,
-                port,
-                str(payload.username or "").strip(),
-                str(payload.password or ""),
-                str(payload.country or "").strip(),
-                str(payload.isp or "").strip(),
-                str(payload.status or "active").strip() or "active",
-                now,
-                now,
-            ),
+    conn.execute(
+        """
+        INSERT INTO social_proxies(id, name, proxy_type, host, port, username, password, country, isp, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            proxy_id,
+            str(name or f"{proxy_type}://{clean_host}:{clean_port}").strip(),
+            proxy_type,
+            clean_host,
+            clean_port,
+            str(username or "").strip(),
+            str(password or ""),
+            str(country or "").strip(),
+            str(isp or "").strip(),
+            str(status or "active").strip() or "active",
+            now,
+            now,
+        ),
+    )
+    return conn.execute("SELECT * FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
+
+
+def _save_account_residential_proxy(
+    conn: Any,
+    payload: ResidentialProxyPayload,
+    *,
+    current_proxy_id: str = "",
+    account_id: str = "",
+) -> Any:
+    proxy_type = _normalize_proxy_type(payload.protocol)
+    host = str(payload.host or "").strip()
+    port = int(payload.port or 0)
+    country = str(payload.country or "").strip()
+    isp = str(payload.isp or "").strip()
+    if not host or port <= 0 or port > 65535:
+        raise HTTPException(status_code=400, detail="住宅代理 host 和 port 必填，port 必须在 1-65535 之间")
+    if not country or not isp:
+        raise HTTPException(status_code=400, detail="住宅代理国家/地区和住宅 ISP 必填")
+
+    clean_proxy_id = str(current_proxy_id or "").strip()
+    current = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (clean_proxy_id,)).fetchone() if clean_proxy_id else None
+    shared = False
+    if current is not None:
+        shared = bool(
+            conn.execute(
+                "SELECT 1 FROM social_accounts WHERE proxy_id = ? AND id != ? LIMIT 1",
+                (clean_proxy_id, str(account_id or "")),
+            ).fetchone()
         )
-        row = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
-    return _proxy_public(row)
+    password = str(payload.password or "")
+    username = str(payload.username or "").strip()
+    if current is None or shared:
+        return _insert_social_proxy(
+            conn,
+            protocol=proxy_type,
+            host=host,
+            port=port,
+            username=username or (str(current["username"] or "") if current is not None else ""),
+            password=password or (str(current["password"] or "") if current is not None else ""),
+            name=str(payload.name or f"residential://{host}:{port}").strip(),
+            country=country,
+            isp=isp,
+            status=payload.status,
+        )
+
+    updates: dict[str, Any] = {
+        "proxy_type": proxy_type,
+        "host": host,
+        "port": port,
+        "username": username or str(current["username"] or ""),
+        "name": str(payload.name or current["name"] or f"residential://{host}:{port}").strip(),
+        "country": country,
+        "isp": isp,
+        "status": str(payload.status or "active").strip() or "active",
+        "last_check_at": 0,
+        "last_check_result": "",
+        "updated_at": _now(),
+    }
+    if password:
+        updates["password"] = password
+    assignments = ", ".join(f"{key} = ?" for key in updates)
+    conn.execute(f"UPDATE social_proxies SET {assignments} WHERE id = ?", (*updates.values(), clean_proxy_id))
+    return conn.execute("SELECT * FROM social_proxies WHERE id = ?", (clean_proxy_id,)).fetchone()
 
 
 def check_social_proxy(proxy_id: str) -> dict[str, Any]:
@@ -952,11 +1061,15 @@ def check_social_proxy(proxy_id: str) -> dict[str, Any]:
         result.update({"ok": resp.ok, "status_code": resp.status_code, "response": resp.json() if resp.ok else resp.text[:500]})
     except Exception as exc:
         result.update({"ok": False, "error": str(exc)})
+    safe_result = _redact_sensitive(
+        result,
+        secrets=(str(proxy.get("username") or ""), str(proxy.get("password") or "")),
+    )
     status = "active" if result.get("ok") else "failed"
     with db() as conn:
         conn.execute(
             "UPDATE social_proxies SET status = ?, last_check_at = ?, last_check_result = ?, updated_at = ? WHERE id = ?",
-            (status, _now(), json.dumps(result, ensure_ascii=False), _now(), proxy_id),
+            (status, _now(), json.dumps(safe_result, ensure_ascii=False), _now(), proxy_id),
         )
         updated = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
     return _proxy_public(updated)
@@ -971,9 +1084,19 @@ def create_social_account(payload: SocialAccountPayload) -> dict[str, Any]:
     if status not in SOCIAL_ACCOUNT_STATUSES:
         status = "pending_login"
     now = _now()
+    if payload.residential_proxy is not None and str(payload.proxy_id or "").strip():
+        raise HTTPException(status_code=400, detail="residential_proxy 与 proxy_id 不能同时提交")
     with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         if payload.proxy_id:
             _require_proxy(conn, payload.proxy_id)
+        if persona_id:
+            bound = conn.execute(
+                "SELECT id FROM social_accounts WHERE persona_id = ? AND platform = ? LIMIT 1",
+                (persona_id, platform),
+            ).fetchone()
+            if bound:
+                raise HTTPException(status_code=409, detail="同一人设在同一平台最多绑定一个账号")
         existing = conn.execute(
             """
             SELECT *
@@ -987,28 +1110,17 @@ def create_social_account(payload: SocialAccountPayload) -> dict[str, Any]:
             (persona_id, platform, username),
         ).fetchone()
         if existing:
-            updates: dict[str, Any] = {"updated_at": now}
-            display_name = str(payload.display_name or "").strip()
-            profile_dir = str(payload.profile_dir or "").strip()
-            proxy_id = str(payload.proxy_id or "").strip()
-            if display_name:
-                updates["display_name"] = display_name
-            if profile_dir:
-                Path(profile_dir).mkdir(parents=True, exist_ok=True)
-                updates["profile_dir"] = profile_dir
-            if proxy_id:
-                updates["proxy_id"] = proxy_id
-            if status and status != "pending_login":
-                updates["status"] = status
-            assignments = ", ".join(f"{key} = ?" for key in updates)
-            conn.execute(f"UPDATE social_accounts SET {assignments} WHERE id = ?", (*updates.values(), existing["id"]))
-            row = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (existing["id"],)).fetchone()
-            return _account_public(row)
+            raise HTTPException(status_code=409, detail="同平台账号用户名已存在")
         account_id = _NEW_ID("social_account")
         profile_dir = str(payload.profile_dir or "").strip()
         if not profile_dir:
             profile_dir = str((_DATA_DIR / "social_automation" / "profiles" / platform / account_id).resolve())
         Path(profile_dir).mkdir(parents=True, exist_ok=True)
+        proxy_row = None
+        proxy_id = str(payload.proxy_id or "").strip()
+        if payload.residential_proxy is not None:
+            proxy_row = _save_account_residential_proxy(conn, payload.residential_proxy, account_id=account_id)
+            proxy_id = str(proxy_row["id"] or "")
         conn.execute(
             """
             INSERT INTO social_accounts(id, persona_id, platform, username, display_name, profile_dir, proxy_id, status, created_at, updated_at)
@@ -1021,14 +1133,16 @@ def create_social_account(payload: SocialAccountPayload) -> dict[str, Any]:
                 username,
                 str(payload.display_name or "").strip(),
                 profile_dir,
-                str(payload.proxy_id or "").strip(),
+                proxy_id,
                 status,
                 now,
                 now,
             ),
         )
         row = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (account_id,)).fetchone()
-    return _account_public(row)
+        if proxy_row is None and proxy_id:
+            proxy_row = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
+    return _account_public(row, proxy_row)
 
 
 def update_social_account(account_id: str, payload: SocialAccountPatchPayload) -> dict[str, Any]:
@@ -1055,17 +1169,20 @@ def update_social_account(account_id: str, payload: SocialAccountPatchPayload) -
         raise HTTPException(status_code=400, detail="账号状态不合法")
     if "username" in updates:
         updates["username"] = updates["username"].lstrip("@")
-    if not updates:
+    if payload.residential_proxy is not None and updates.get("proxy_id"):
+        raise HTTPException(status_code=400, detail="residential_proxy 与 proxy_id 不能同时提交")
+    if not updates and payload.residential_proxy is None:
         return get_social_account(account_id)
     updates["updated_at"] = _now()
     with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         existing = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (account_id,)).fetchone()
         if not existing:
             raise HTTPException(status_code=404, detail="账号不存在")
-        if "persona_id" in updates and str(updates.get("persona_id") or "").strip():
-            target_persona_id = str(updates.get("persona_id") or "").strip()
-            target_platform = str(updates.get("platform") or existing["platform"] or "").strip()
-            target_username = str(updates.get("username") or existing["username"] or "").strip().lstrip("@")
+        target_persona_id = str(updates.get("persona_id", existing["persona_id"]) or "").strip()
+        target_platform = str(existing["platform"] or "").strip()
+        target_username = str(updates.get("username", existing["username"]) or "").strip().lstrip("@")
+        if target_persona_id:
             duplicate = conn.execute(
                 """
                 SELECT id
@@ -1073,21 +1190,41 @@ def update_social_account(account_id: str, payload: SocialAccountPatchPayload) -
                 WHERE id != ?
                   AND persona_id = ?
                   AND platform = ?
-                  AND lower(username) = lower(?)
                 LIMIT 1
                 """,
-                (account_id, target_persona_id, target_platform, target_username),
+                (account_id, target_persona_id, target_platform),
             ).fetchone()
             if duplicate:
-                raise HTTPException(status_code=409, detail="目标人设已经绑定了这个平台账号，请直接选择已有绑定")
+                raise HTTPException(status_code=409, detail="同一人设在同一平台最多绑定一个账号")
+        else:
+            duplicate = conn.execute(
+                "SELECT id FROM social_accounts WHERE id != ? AND persona_id = '' AND platform = ? AND lower(username) = lower(?) LIMIT 1",
+                (account_id, target_platform, target_username),
+            ).fetchone()
+            if duplicate:
+                raise HTTPException(status_code=409, detail="同平台未绑定账号用户名重复")
         if updates.get("proxy_id"):
             _require_proxy(conn, updates["proxy_id"])
+        proxy_row = None
+        if payload.residential_proxy is not None:
+            proxy_row = _save_account_residential_proxy(
+                conn,
+                payload.residential_proxy,
+                current_proxy_id=str(existing["proxy_id"] or ""),
+                account_id=account_id,
+            )
+            updates["proxy_id"] = str(proxy_row["id"] or "")
         if updates.get("profile_dir"):
             Path(updates["profile_dir"]).mkdir(parents=True, exist_ok=True)
         assignments = ", ".join(f"{key} = ?" for key in updates)
-        conn.execute(f"UPDATE social_accounts SET {assignments} WHERE id = ?", (*updates.values(), account_id))
+        try:
+            conn.execute(f"UPDATE social_accounts SET {assignments} WHERE id = ?", (*updates.values(), account_id))
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(status_code=409, detail="账号绑定或用户名与现有账号冲突") from exc
         row = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (account_id,)).fetchone()
-    return _account_public(row)
+        if proxy_row is None and str(row["proxy_id"] or ""):
+            proxy_row = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (row["proxy_id"],)).fetchone()
+    return _account_public(row, proxy_row)
 
 
 def _looks_like_non_password_text(value: str) -> bool:
@@ -1264,6 +1401,14 @@ def create_social_task(payload: SocialTaskPayload) -> dict[str, Any]:
             raise HTTPException(status_code=409, detail="账号已停用，不能创建任务")
         if str(account["platform"] or "").strip().lower() != platform:
             raise HTTPException(status_code=400, detail="任务平台与执行账号平台不一致")
+        proxy_id = str(account["proxy_id"] or "").strip()
+        if not proxy_id:
+            raise HTTPException(status_code=409, detail="账号未配置住宅代理，不能创建任务")
+        proxy = conn.execute("SELECT status FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
+        if not proxy:
+            raise HTTPException(status_code=409, detail="账号绑定的住宅代理不存在，不能创建任务")
+        if str(proxy["status"] or "").strip().lower() == "failed":
+            raise HTTPException(status_code=409, detail="账号绑定的住宅代理检测失败，请先修复或重新检测")
         persona_id = str(payload.persona_id or account["persona_id"] or "").strip()
         runtime_secrets: dict[str, str] = {}
         if task_type == "open_login" and task_payload.get("auto_submit"):
@@ -2518,7 +2663,17 @@ def _insert_log(conn, task_id: str, level: str, stage: str, message: str, data: 
     )
 
 
-def _account_public(row: Any) -> dict[str, Any]:
+def _account_public_rows(conn: Any, rows: list[Any]) -> list[dict[str, Any]]:
+    proxy_ids = {str(row["proxy_id"] or "").strip() for row in rows if str(row["proxy_id"] or "").strip()}
+    proxies: dict[str, Any] = {}
+    if proxy_ids:
+        placeholders = ",".join("?" for _ in proxy_ids)
+        proxy_rows = conn.execute(f"SELECT * FROM social_proxies WHERE id IN ({placeholders})", tuple(proxy_ids)).fetchall()
+        proxies = {str(row["id"] or ""): row for row in proxy_rows}
+    return [_account_public(row, proxies.get(str(row["proxy_id"] or ""))) for row in rows]
+
+
+def _account_public(row: Any, proxy_row: Any | None = None) -> dict[str, Any]:
     item = dict(row)
     return {
         "id": str(item.get("id") or ""),
@@ -2528,6 +2683,7 @@ def _account_public(row: Any) -> dict[str, Any]:
         "display_name": str(item.get("display_name") or ""),
         "profile_dir": str(item.get("profile_dir") or ""),
         "proxy_id": str(item.get("proxy_id") or ""),
+        "residential_proxy": _residential_proxy_public(proxy_row) if proxy_row is not None else None,
         "status": str(item.get("status") or ""),
         "login_username": str(item.get("login_username") or "") or str(item.get("username") or ""),
         "login_password_configured": bool(str(item.get("login_password") or "")),
@@ -2540,7 +2696,42 @@ def _account_public(row: Any) -> dict[str, Any]:
     }
 
 
-def _redact_sensitive(value: Any) -> Any:
+def _residential_proxy_public(row: Any) -> dict[str, Any]:
+    item = dict(row)
+    try:
+        last_check_result = json.loads(str(item.get("last_check_result") or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        last_check_result = {}
+    return {
+        "protocol": str(item.get("proxy_type") or ""),
+        "host": str(item.get("host") or ""),
+        "port": int(item.get("port") or 0),
+        "username_configured": bool(str(item.get("username") or "")),
+        "password_configured": bool(str(item.get("password") or "")),
+        "country": str(item.get("country") or ""),
+        "isp": str(item.get("isp") or ""),
+        "status": str(item.get("status") or ""),
+        "last_check_at": int(item.get("last_check_at") or 0),
+        "last_check_result": last_check_result if isinstance(last_check_result, dict) else {},
+    }
+
+
+def _redact_sensitive_text(value: str, secrets: tuple[str, ...] = ()) -> str:
+    text = str(value or "")
+    for secret in secrets:
+        clean = str(secret or "")
+        if not clean:
+            continue
+        text = text.replace(clean, "***")
+        text = text.replace(quote(clean, safe=""), "***")
+    return re.sub(
+        r"(?i)\b((?:https?|socks5)://)[^/@\s]+@",
+        r"\1***:***@",
+        text,
+    )
+
+
+def _redact_sensitive(value: Any, secrets: tuple[str, ...] = ()) -> Any:
     if isinstance(value, dict):
         result: dict[str, Any] = {}
         for key, item in value.items():
@@ -2548,10 +2739,12 @@ def _redact_sensitive(value: Any) -> Any:
             if any(token in lower for token in ("password", "passwd", "secret", "token", "cookie")):
                 result[key] = "***" if str(item or "") else ""
             else:
-                result[key] = _redact_sensitive(item)
+                result[key] = _redact_sensitive(item, secrets)
         return result
     if isinstance(value, list):
-        return [_redact_sensitive(item) for item in value]
+        return [_redact_sensitive(item, secrets) for item in value]
+    if isinstance(value, str):
+        return _redact_sensitive_text(value, secrets)
     return value
 
 
@@ -2615,13 +2808,16 @@ def _proxy_public(row: Any) -> dict[str, Any]:
         "proxy_type": str(item.get("proxy_type") or ""),
         "host": str(item.get("host") or ""),
         "port": int(item.get("port") or 0),
-        "username": str(item.get("username") or ""),
+        "username_configured": bool(str(item.get("username") or "")),
         "password_configured": bool(str(item.get("password") or "")),
         "country": str(item.get("country") or ""),
         "isp": str(item.get("isp") or ""),
         "status": str(item.get("status") or ""),
         "last_check_at": int(item.get("last_check_at") or 0),
-        "last_check_result": _loads(item.get("last_check_result"), {}),
+        "last_check_result": _redact_sensitive(
+            _loads(item.get("last_check_result"), {}),
+            secrets=(str(item.get("username") or ""), str(item.get("password") or "")),
+        ),
         "created_at": int(item.get("created_at") or 0),
         "updated_at": int(item.get("updated_at") or 0),
     }
@@ -2704,10 +2900,12 @@ def _proxy_url(proxy: dict[str, Any], *, include_password: bool) -> str:
     host = str(proxy.get("host") or "").strip()
     port = int(proxy.get("port") or 0)
     username = str(proxy.get("username") or "").strip()
-    password = str(proxy.get("password") or "").strip() if include_password else ("***" if str(proxy.get("password") or "") else "")
+    raw_password = str(proxy.get("password") or "").strip()
+    password = quote(raw_password, safe="") if include_password else ("***" if raw_password else "")
     auth = ""
     if username:
-        auth = username if not password else f"{username}:{password}"
+        encoded_username = quote(username, safe="")
+        auth = encoded_username if not password else f"{encoded_username}:{password}"
         auth += "@"
     return f"{scheme}://{auth}{host}:{port}"
 

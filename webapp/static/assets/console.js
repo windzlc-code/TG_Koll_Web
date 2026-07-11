@@ -404,6 +404,7 @@ const state = {
   socialRefreshFetch: null,
   socialCancelAllPending: false,
   socialAccounts: [],
+  socialProxies: [],
   socialTasks: [],
   socialTaskToastStatuses: {},
   socialTaskToastLabels: {},
@@ -11629,7 +11630,7 @@ function renderPersonaCard(persona, groupId = "", options = {}) {
         </span>
       </button>
       ${isMatrix ? `<input class="publish-persona-hidden-check" type="checkbox" data-matrix-persona value="${esc(persona.id)}" ${publishSelected ? "checked" : ""} aria-hidden="true" tabindex="-1" />` : ""}
-      ${isAccountPoolContext ? `<button type="button" class="account-pool-bind-persona" data-account-pool-bind-persona="${esc(persona.id)}" title="绑定所选账号" aria-label="绑定所选账号" ${accountPoolSelectedCount ? "" : "disabled"}>
+      ${isAccountPoolContext ? `<button type="button" class="account-pool-bind-persona" data-account-pool-bind-persona="${esc(persona.id)}" title="绑定所选账号" aria-label="绑定所选账号" ${accountPoolSelectedCount === 1 ? "" : "disabled"}>
         <svg class="ui-link-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
           <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
           <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
@@ -13217,6 +13218,7 @@ async function fetchSocialDataShared({ force = false } = {}) {
   ]).then(([overview, accountsData, tasksData]) => {
     state.socialBrowserSessions = Array.isArray(overview.browser_sessions) ? overview.browser_sessions : state.socialBrowserSessions;
     state.socialAccounts = accountsData.accounts || [];
+    state.socialProxies = Array.isArray(overview.proxies) ? overview.proxies : state.socialProxies;
     state.socialTasks = tasksData.tasks || [];
     saveSocialAccountsSnapshot();
     return overview;
@@ -13443,6 +13445,7 @@ function renderAccountPoolCards(accounts, selectedAccount) {
             <div class="account-card-meta">
               <span>${esc(persona ? `已绑定：${persona.name || persona.id}` : "未绑定人设")}</span>
               <span>${esc(account.profile_dir ? "已配置浏览器环境" : "未配置浏览器环境")}</span>
+              <span>${esc(accountResidentialProxyLabel(account))}</span>
             </div>
             <div class="row-actions">
               <button type="button" data-account-pool-unbind="${esc(account.id)}" ${account.persona_id ? "" : "disabled"}>解绑</button>
@@ -13920,6 +13923,112 @@ function accountPoolDraftValue(key = "") {
   return String(state.accountPoolCreateDraft?.[key] || "");
 }
 
+function socialProxyById(proxyId = "") {
+  const cleanId = String(proxyId || "").trim();
+  return (state.socialProxies || []).find((proxy) => String(proxy.id || "") === cleanId) || null;
+}
+
+function accountResidentialProxy(account = null) {
+  return socialProxyById(account?.proxy_id || "") || account?.residential_proxy || null;
+}
+
+function accountResidentialProxyLabel(account = null) {
+  const proxy = accountResidentialProxy(account);
+  if (!proxy) return "未配置静态住宅 IP";
+  const checkedIp = String(proxy.last_check_result?.response?.ip || "").trim();
+  const endpoint = checkedIp || String(proxy.host || "").trim();
+  const region = [proxy.country, proxy.isp].map((item) => String(item || "").trim()).filter(Boolean).join(" · ");
+  const status = String(proxy.status || "").toLowerCase() === "failed" ? "检测失败" : "住宅 IP";
+  return `${status}：${endpoint || "已配置"}${region ? ` · ${region}` : ""}`;
+}
+
+function accountResidentialProxyFormHtml(prefix, proxy = null) {
+  const savedType = String(proxy?.proxy_type || proxy?.protocol || "").toLowerCase();
+  const type = ["socks5", "http"].includes(savedType) ? savedType : "socks5";
+  return `
+    <section class="account-residential-proxy">
+      <div class="account-residential-proxy-head">
+        <strong>静态住宅代理 IP</strong>
+        <span class="status">必填</span>
+      </div>
+      <div class="account-proxy-grid">
+        <label><span>代理协议</span>
+          <select id="${esc(prefix)}ProxyType">
+            <option value="socks5" ${type === "socks5" ? "selected" : ""}>SOCKS5</option>
+            <option value="http" ${type === "http" ? "selected" : ""}>HTTP</option>
+          </select>
+        </label>
+        <label><span>住宅 IP / 主机</span>
+          <input id="${esc(prefix)}ProxyHost" value="${esc(proxy?.host || "")}" placeholder="proxy.example.com" autocomplete="off" />
+        </label>
+        <label><span>端口</span>
+          <input id="${esc(prefix)}ProxyPort" type="number" min="1" max="65535" value="${esc(proxy?.port || "")}" placeholder="1080" />
+        </label>
+        <label><span>代理用户名（可选）</span>
+          <input id="${esc(prefix)}ProxyUsername" value="" placeholder="${proxy?.username_configured ? "留空则沿用已保存用户名" : "住宅代理认证用户名"}" autocomplete="off" />
+        </label>
+        <label><span>代理密码（可选）</span>
+          <input id="${esc(prefix)}ProxyPassword" type="password" value="" placeholder="${proxy?.password_configured ? "留空则沿用已保存密码" : "住宅代理认证密码"}" autocomplete="new-password" />
+        </label>
+        <label><span>国家 / 地区</span>
+          <input id="${esc(prefix)}ProxyCountry" value="${esc(proxy?.country || "")}" placeholder="例如：US" autocomplete="off" />
+        </label>
+        <label><span>住宅 ISP</span>
+          <input id="${esc(prefix)}ProxyIsp" value="${esc(proxy?.isp || "")}" placeholder="家庭宽带运营商" autocomplete="off" />
+        </label>
+        <label class="account-proxy-confirm">
+          <input id="${esc(prefix)}ProxyConfirmed" type="checkbox" ${proxy ? "checked" : ""} />
+          <span>确认该代理为海外静态住宅 IP</span>
+        </label>
+      </div>
+    </section>`;
+}
+
+function accountResidentialProxyPayload(prefix, accountName = "") {
+  const host = String($(`${prefix}ProxyHost`)?.value || "").trim();
+  const port = Number.parseInt(String($(`${prefix}ProxyPort`)?.value || ""), 10);
+  const country = String($(`${prefix}ProxyCountry`)?.value || "").trim();
+  const isp = String($(`${prefix}ProxyIsp`)?.value || "").trim();
+  const confirmed = Boolean($(`${prefix}ProxyConfirmed`)?.checked);
+  if (!host || !Number.isFinite(port) || port < 1 || port > 65535) {
+    showMsg("socialMsg", "请填写有效的静态住宅代理 IP 和端口。", false);
+    return null;
+  }
+  if (!confirmed) {
+    showMsg("socialMsg", "请确认当前代理是海外静态住宅 IP。", false);
+    return null;
+  }
+  if (!country) {
+    showMsg("socialMsg", "请填写静态住宅代理所在的海外国家或地区。", false);
+    return null;
+  }
+  if (!isp) {
+    showMsg("socialMsg", "请填写住宅宽带 ISP，不能使用机房或普通梯子线路。", false);
+    return null;
+  }
+  const proxyType = String($(`${prefix}ProxyType`)?.value || "socks5").toLowerCase() === "http" ? "http" : "socks5";
+  const payload = {
+    name: `[静态住宅] ${String(accountName || host).trim()}`,
+    protocol: proxyType,
+    host,
+    port,
+    username: String($(`${prefix}ProxyUsername`)?.value || "").trim(),
+    country,
+    isp,
+    status: "active",
+  };
+  const password = String($(`${prefix}ProxyPassword`)?.value || "");
+  if (password) payload.password = password;
+  return payload;
+}
+
+async function verifyAccountResidentialProxy(proxyId = "") {
+  const cleanId = String(proxyId || "").trim();
+  if (!cleanId) return false;
+  const result = await api(`/api/persona_dashboard/automation/proxies/${encodeURIComponent(cleanId)}/check`, { method: "POST" });
+  return Boolean(result?.proxy?.last_check_result?.ok);
+}
+
 function syncAccountPoolCreateDraftFromForm() {
   state.accountPoolCreateDraft = {
     username: accountPoolFieldValue("Username"),
@@ -13927,6 +14036,14 @@ function syncAccountPoolCreateDraftFromForm() {
     login_password: String($("accountPoolLoginPassword")?.value || ""),
     display_name: accountPoolFieldValue("DisplayName"),
     profile_dir: accountPoolFieldValue("ProfileDir"),
+    proxy_type: accountPoolFieldValue("ProxyType"),
+    proxy_host: accountPoolFieldValue("ProxyHost"),
+    proxy_port: accountPoolFieldValue("ProxyPort"),
+    proxy_username: accountPoolFieldValue("ProxyUsername"),
+    proxy_password: String($("accountPoolProxyPassword")?.value || ""),
+    proxy_country: accountPoolFieldValue("ProxyCountry"),
+    proxy_isp: accountPoolFieldValue("ProxyIsp"),
+    proxy_confirmed: Boolean($("accountPoolProxyConfirmed")?.checked),
   };
 }
 
@@ -13963,6 +14080,7 @@ function accountPoolCreateFormHtml() {
             <input id="accountPoolDisplayName" value="${esc(accountPoolDraftValue("display_name"))}" placeholder="用于区分账号，可留空" autocomplete="off" />
           </label>
       </div>
+      ${accountResidentialProxyFormHtml("accountPool")}
     </div>`;
 }
 
@@ -14031,6 +14149,8 @@ async function saveAccountPoolCreateForm() {
     showMsg("socialMsg", "请填写账号用户名。", false);
     return false;
   }
+  payload.residential_proxy = accountResidentialProxyPayload("accountPool", payload.username);
+  if (!payload.residential_proxy) return false;
   const result = await api("/api/persona_dashboard/automation/accounts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -14048,12 +14168,17 @@ async function saveAccountPoolCreateForm() {
       body: JSON.stringify(loginPayload),
     });
   }
+  const proxyOk = await verifyAccountResidentialProxy(account.proxy_id);
   state.accountPoolPlatform = normalizeAccountPoolPlatform(account.platform || payload.platform);
   state.accountPoolAccountId = String(account.id || "");
   state.accountPoolSelectedAccountIds = account.id ? [String(account.id)] : [];
   resetAccountPoolCreateForm();
-  showMsg("socialMsg", "账号已添加到账号池。", true);
   await loadSocial();
+  if (!proxyOk) {
+    showMsg("socialMsg", "账号已保存，但住宅代理检测失败；修复代理前不会执行自动化任务。", false);
+    return false;
+  }
+  showMsg("socialMsg", "账号和静态住宅代理已保存。", true);
   return true;
 }
 
@@ -14169,6 +14294,7 @@ function openAccountPoolEditModal(accountId = "") {
     showMsg("socialMsg", "账号不存在，请刷新后重试。", false);
     return;
   }
+  const proxy = accountResidentialProxy(account);
   closeConsoleModal(null);
   const modal = document.createElement("div");
   modal.id = "consoleModal";
@@ -14200,6 +14326,7 @@ function openAccountPoolEditModal(accountId = "") {
               <input id="accountPoolEditDisplayName" value="${esc(account.display_name || "")}" placeholder="用于区分账号，可留空" autocomplete="off" />
             </label>
           </div>
+          ${accountResidentialProxyFormHtml("accountPoolEdit", proxy)}
         </div>
       </div>
       <div class="console-modal-actions">
@@ -14246,6 +14373,8 @@ async function saveAccountPoolEditForm(accountId = "") {
     display_name: String($("accountPoolEditDisplayName")?.value || "").trim(),
     login_username: String($("accountPoolEditLoginUsername")?.value || "").trim(),
   };
+  payload.residential_proxy = accountResidentialProxyPayload("accountPoolEdit", username);
+  if (!payload.residential_proxy) return false;
   const loginPassword = String($("accountPoolEditLoginPassword")?.value || "");
   if (loginPassword) payload.login_password = loginPassword;
   const result = await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(cleanId)}`, {
@@ -14253,10 +14382,15 @@ async function saveAccountPoolEditForm(accountId = "") {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+  const proxyOk = await verifyAccountResidentialProxy(result.account?.proxy_id);
   state.accountPoolAccountId = String(result.account?.id || cleanId);
-  showMsg("socialMsg", "账号信息已保存。", true);
   await loadSocial();
   renderSocialAccounts();
+  if (!proxyOk) {
+    showMsg("socialMsg", "账号已保存，但住宅代理检测失败；修复代理前不会执行自动化任务。", false);
+    return false;
+  }
+  showMsg("socialMsg", "账号和静态住宅代理已保存。", true);
   return true;
 }
 
@@ -14270,7 +14404,7 @@ function renderAccountPoolPersonaSidebar(selectedAccount) {
         <div class="persona-list-head persona-list-head--queue">
           <div>
             <strong>人设列表</strong>
-            <span>${esc(selectedCount ? `已选 ${selectedCount} 个账号，点击绑定` : "先选择账号，再点绑定")}</span>
+            <span>${esc(selectedCount === 1 ? "已选 1 个账号，点击绑定" : selectedCount > 1 ? "同一平台只能选择 1 个账号绑定" : "先选择一个账号，再点绑定")}</span>
           </div>
           <span>${esc(`${state.personas.length} 个`)}</span>
         </div>
@@ -14315,6 +14449,20 @@ async function bindAccountPoolAccountToPersona(personaId = "") {
   const accounts = selectedAccountPoolAccounts();
   if (!accounts.length) {
     showMsg("socialMsg", "请先选择要绑定的账号。", false);
+    return;
+  }
+  if (accounts.length !== 1) {
+    showMsg("socialMsg", "同一人设在同一平台只能绑定一个账号，请只勾选一个账号。", false);
+    return;
+  }
+  const account = accounts[0];
+  const existing = (state.socialAccounts || []).find((item) => (
+    String(item.id || "") !== String(account.id || "")
+    && String(item.persona_id || "").trim() === cleanPersonaId
+    && String(item.platform || "").trim().toLowerCase() === String(account.platform || "").trim().toLowerCase()
+  ));
+  if (existing) {
+    showMsg("socialMsg", "该人设在当前平台已绑定账号，请先解绑原账号。", false);
     return;
   }
   let bound = 0;
