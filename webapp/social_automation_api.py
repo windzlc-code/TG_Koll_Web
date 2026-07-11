@@ -1857,6 +1857,10 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
             proxy_row = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (account_row["proxy_id"],)).fetchone()
     account = dict(account_row)
     proxy = dict(proxy_row) if proxy_row else None
+    if proxy is None:
+        raise RuntimeError("账号未配置可用的住宅代理，已阻止浏览器无代理直连")
+    if str(proxy.get("status") or "").strip().lower() == "failed":
+        raise RuntimeError("账号住宅代理检测失败，已阻止浏览器启动")
     if _is_task_cancelled(task_id):
         _discard_ephemeral_task_secrets(task_id)
         return

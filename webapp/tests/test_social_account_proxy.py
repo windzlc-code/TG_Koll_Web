@@ -186,6 +186,20 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
         ready = self._account("ready", proxy=social_api.ResidentialProxyPayload(**self._proxy(host="ready.example")))
         self.assertEqual(self._task(ready["id"])["account_id"], ready["id"])
 
+    def test_worker_blocks_legacy_queued_tasks_without_a_usable_proxy(self):
+        no_proxy = self._account("legacy-no-proxy")
+        with self.assertRaisesRegex(RuntimeError, "无代理直连"):
+            social_api._execute_claimed_task({"id": "legacy-task-1", "account_id": no_proxy["id"]})
+
+        failed = self._account(
+            "legacy-failed-proxy",
+            proxy=social_api.ResidentialProxyPayload(**self._proxy(host="legacy-failed.example")),
+        )
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("UPDATE social_proxies SET status = 'failed' WHERE id = ?", (failed["proxy_id"],))
+        with self.assertRaisesRegex(RuntimeError, "检测失败"):
+            social_api._execute_claimed_task({"id": "legacy-task-2", "account_id": failed["id"]})
+
     def test_proxy_check_url_encodes_and_redacts_credentials_from_errors(self):
         password = "p@ss:/?#"
         proxy = social_api.create_social_proxy(
