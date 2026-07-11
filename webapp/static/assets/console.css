@@ -7639,10 +7639,38 @@ body.persona-touch-dragging .persona-list-card:active {
   font-size: 11px;
 }
 
+.account-proxy-enable {
+  display: inline-flex !important;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 9px !important;
+  min-width: 0;
+}
+
+.account-proxy-enable input {
+  width: 18px;
+  height: 18px;
+  min-height: 0 !important;
+  flex: 0 0 18px;
+}
+
+.account-proxy-enable span {
+  color: var(--ink);
+  font-weight: 850;
+}
+
 .account-proxy-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.account-proxy-grid[hidden] {
+  display: none;
 }
 
 .account-proxy-grid label {
@@ -7676,6 +7704,191 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .account-create-form--modal {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.proxy-pool-panel {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.proxy-pool-head,
+.proxy-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.proxy-pool-head > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.proxy-pool-head strong {
+  font-size: 18px;
+}
+
+.proxy-pool-head span,
+.proxy-pager > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.proxy-pool-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+}
+
+.proxy-pool-add svg {
+  width: 17px;
+  height: 17px;
+}
+
+.proxy-table-wrap {
+  min-width: 0;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-gutter: stable;
+}
+
+.proxy-table {
+  display: grid;
+  gap: 6px;
+  min-width: 1840px;
+}
+
+.proxy-table-row {
+  display: grid;
+  grid-template-columns: 54px 100px 116px 112px 150px 190px 170px 108px 170px 132px 108px 100px 164px 132px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-solid);
+}
+
+.proxy-table-row--head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding-top: 8px;
+  padding-bottom: 8px;
+  background: var(--soft);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.proxy-table-row > span,
+.proxy-table-row > strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.proxy-table-row > strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.proxy-table-row .status {
+  display: inline-flex;
+  max-width: 100%;
+}
+
+.proxy-table-actions {
+  display: flex;
+  gap: 6px;
+  overflow: visible !important;
+}
+
+.proxy-table-actions button {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  min-width: 36px;
+  min-height: 34px;
+  padding: 0;
+}
+
+.proxy-table-actions svg {
+  width: 17px;
+  height: 17px;
+}
+
+.proxy-pool-empty {
+  min-width: 100%;
+}
+
+.proxy-pager label,
+.proxy-pager > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.proxy-pager label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.proxy-pager select {
+  min-width: 72px;
+}
+
+.proxy-pager button {
+  width: 38px;
+  min-width: 38px;
+  min-height: 36px;
+  padding: 0;
+}
+
+.proxy-edit-modal {
+  width: min(920px, calc(100vw - 32px));
+}
+
+.proxy-edit-modal-content {
+  max-height: min(68vh, 720px);
+  overflow-y: auto;
+}
+
+.proxy-form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.proxy-form-grid label {
+  min-width: 0;
+}
+
+.proxy-form-grid label > span {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.proxy-form-grid input,
+.proxy-form-grid select,
+.proxy-form-grid textarea {
+  width: 100%;
+}
+
+.proxy-form-grid input[readonly] {
+  background: var(--soft);
+  color: var(--muted);
+}
+
+.proxy-form-note {
+  grid-column: 1 / -1;
 }
 
 .account-pool-create-panel {
@@ -8712,8 +8925,24 @@ body.persona-touch-dragging .persona-list-card:active {
 @media (max-width: 760px) {
   .account-create-form,
   .account-create-form--modal,
-  .account-proxy-grid {
+  .account-proxy-grid,
+  .proxy-form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .proxy-form-note {
+    grid-column: 1;
+  }
+
+  .proxy-pool-head,
+  .proxy-pager {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .proxy-pager > span {
+    order: 3;
+    width: 100%;
   }
 
   .account-proxy-grid .account-proxy-confirm {

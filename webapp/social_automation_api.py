@@ -91,7 +91,29 @@ class SocialProxyPayload(BaseModel):
     password: str = ""
     country: str = ""
     isp: str = ""
+    source: str = "manual"
+    ip_type: str = "static_residential"
+    purchase_status: str = "owned"
+    note: str = ""
+    expires_at: int = Field(default=0, ge=0)
     status: str = "active"
+
+
+class SocialProxyPatchPayload(BaseModel):
+    name: str | None = None
+    proxy_type: str | None = None
+    host: str | None = None
+    port: int | None = None
+    username: str | None = None
+    password: str | None = None
+    country: str | None = None
+    isp: str | None = None
+    source: str | None = None
+    ip_type: str | None = None
+    purchase_status: str | None = None
+    note: str | None = None
+    expires_at: int | None = Field(default=None, ge=0)
+    status: str | None = None
 
 
 class ResidentialProxyPayload(BaseModel):
@@ -103,6 +125,11 @@ class ResidentialProxyPayload(BaseModel):
     name: str = ""
     country: str = ""
     isp: str = ""
+    source: str = "manual"
+    ip_type: str = "static_residential"
+    purchase_status: str = "owned"
+    note: str = ""
+    expires_at: int = Field(default=0, ge=0)
     status: str = "active"
 
 
@@ -138,6 +165,7 @@ class SocialAccountPatchPayload(BaseModel):
     login_username: str | None = None
     login_password: str | None = None
     clear_login_credentials: bool | None = None
+    clear_residential_proxy: bool | None = None
     residential_proxy: ResidentialProxyPayload | None = None
 
 
@@ -282,11 +310,20 @@ def register_social_automation_routes(app: FastAPI) -> None:
     def api_social_proxies(_user: dict[str, Any] = Depends(get_current_user)):
         with db() as conn:
             rows = conn.execute("SELECT * FROM social_proxies ORDER BY updated_at DESC, created_at DESC").fetchall()
-        return {"ok": True, "proxies": [_proxy_public(row) for row in rows]}
+            proxies = _proxy_public_rows(conn, rows)
+        return {"ok": True, "proxies": proxies}
 
     @app.post("/api/persona_dashboard/automation/proxies")
     def api_social_proxy_create(payload: SocialProxyPayload, _user: dict[str, Any] = Depends(get_current_user)):
         return {"ok": True, "proxy": create_social_proxy(payload)}
+
+    @app.patch("/api/persona_dashboard/automation/proxies/{proxy_id}")
+    def api_social_proxy_patch(proxy_id: str, payload: SocialProxyPatchPayload, _user: dict[str, Any] = Depends(get_current_user)):
+        return {"ok": True, "proxy": update_social_proxy(proxy_id, payload)}
+
+    @app.delete("/api/persona_dashboard/automation/proxies/{proxy_id}")
+    def api_social_proxy_delete(proxy_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+        return {"ok": True, "deleted": delete_social_proxy(proxy_id)}
 
     @app.post("/api/persona_dashboard/automation/proxies/{proxy_id}/check")
     def api_social_proxy_check(proxy_id: str, _user: dict[str, Any] = Depends(get_current_user)):
@@ -648,6 +685,7 @@ def build_social_automation_overview() -> dict[str, Any]:
         accounts = conn.execute("SELECT * FROM social_accounts ORDER BY updated_at DESC, created_at DESC").fetchall()
         proxies = conn.execute("SELECT * FROM social_proxies ORDER BY updated_at DESC, created_at DESC").fetchall()
         public_accounts = _account_public_rows(conn, accounts)
+        public_proxies = _proxy_public_rows(conn, proxies)
         tasks = conn.execute(
             "SELECT * FROM social_automation_tasks ORDER BY created_at DESC LIMIT 80"
         ).fetchall()
@@ -677,7 +715,7 @@ def build_social_automation_overview() -> dict[str, Any]:
             "success_count": counts.get("success", 0),
         },
         "accounts": public_accounts,
-        "proxies": [_proxy_public(row) for row in proxies],
+        "proxies": public_proxies,
         "tasks": [_task_public(row) for row in visible_tasks],
         "browser_sessions": _live_browser_sessions(),
         "worker": dict(_WORKER_STATE),
@@ -933,9 +971,87 @@ def create_social_proxy(payload: SocialProxyPayload) -> dict[str, Any]:
             name=payload.name,
             country=payload.country,
             isp=payload.isp,
+            source=payload.source,
+            ip_type=payload.ip_type,
+            purchase_status=payload.purchase_status,
+            note=payload.note,
+            expires_at=payload.expires_at,
             status=payload.status,
         )
     return _proxy_public(row)
+
+
+def update_social_proxy(proxy_id: str, payload: SocialProxyPatchPayload) -> dict[str, Any]:
+    clean_proxy_id = str(proxy_id or "").strip()
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        current = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (clean_proxy_id,)).fetchone()
+        if not current:
+            raise HTTPException(status_code=404, detail="代理不存在")
+
+        effective_type = _normalize_proxy_type(payload.proxy_type if payload.proxy_type is not None else current["proxy_type"])
+        effective_host = str(payload.host if payload.host is not None else current["host"] or "").strip()
+        effective_port = int(payload.port if payload.port is not None else current["port"] or 0)
+        if not effective_host or effective_port <= 0 or effective_port > 65535:
+            raise HTTPException(status_code=400, detail="代理 host 和 port 必填，port 必须在 1-65535 之间")
+
+        updates: dict[str, Any] = {}
+        if payload.proxy_type is not None:
+            updates["proxy_type"] = effective_type
+        if payload.host is not None:
+            updates["host"] = effective_host
+        if payload.port is not None:
+            updates["port"] = effective_port
+        if payload.name is not None and str(payload.name or "").strip():
+            updates["name"] = str(payload.name).strip()
+        for field in ("username", "password"):
+            value = getattr(payload, field)
+            if value is not None and str(value).strip():
+                updates[field] = str(value).strip() if field == "username" else str(value)
+        for field in ("country", "isp", "note"):
+            value = getattr(payload, field)
+            if value is not None:
+                updates[field] = str(value or "").strip()
+        metadata_defaults = {
+            "source": "manual",
+            "ip_type": "static_residential",
+            "purchase_status": "owned",
+        }
+        for field, default in metadata_defaults.items():
+            value = getattr(payload, field)
+            if value is not None:
+                updates[field] = str(value or default).strip() or default
+        if payload.expires_at is not None:
+            updates["expires_at"] = int(payload.expires_at)
+        if payload.status is not None and str(payload.status or "").strip():
+            updates["status"] = str(payload.status).strip()
+
+        connection_fields = {"proxy_type", "host", "port", "username", "password"}
+        if connection_fields.intersection(updates):
+            updates["last_check_at"] = 0
+            updates["last_check_result"] = ""
+        if updates:
+            updates["updated_at"] = _now()
+            assignments = ", ".join(f"{key} = ?" for key in updates)
+            conn.execute(f"UPDATE social_proxies SET {assignments} WHERE id = ?", (*updates.values(), clean_proxy_id))
+        row = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (clean_proxy_id,)).fetchone()
+    return _proxy_public(row)
+
+
+def delete_social_proxy(proxy_id: str) -> int:
+    clean_proxy_id = str(proxy_id or "").strip()
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT id FROM social_proxies WHERE id = ?", (clean_proxy_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="代理不存在")
+        bound = conn.execute(
+            "SELECT id FROM social_accounts WHERE proxy_id = ? ORDER BY created_at ASC, id ASC",
+            (clean_proxy_id,),
+        ).fetchall()
+        if bound:
+            raise HTTPException(status_code=409, detail="代理仍被账号绑定，不能删除")
+        return int(conn.execute("DELETE FROM social_proxies WHERE id = ?", (clean_proxy_id,)).rowcount or 0)
 
 
 def _insert_social_proxy(
@@ -949,6 +1065,11 @@ def _insert_social_proxy(
     name: str = "",
     country: str = "",
     isp: str = "",
+    source: str = "manual",
+    ip_type: str = "static_residential",
+    purchase_status: str = "owned",
+    note: str = "",
+    expires_at: int = 0,
     status: str = "active",
 ) -> Any:
     proxy_type = _normalize_proxy_type(protocol)
@@ -960,8 +1081,11 @@ def _insert_social_proxy(
     proxy_id = _NEW_ID("social_proxy")
     conn.execute(
         """
-        INSERT INTO social_proxies(id, name, proxy_type, host, port, username, password, country, isp, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO social_proxies(
+          id, name, proxy_type, host, port, username, password, country, isp,
+          source, ip_type, purchase_status, note, expires_at, status, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             proxy_id,
@@ -973,6 +1097,11 @@ def _insert_social_proxy(
             str(password or ""),
             str(country or "").strip(),
             str(isp or "").strip(),
+            str(source or "manual").strip() or "manual",
+            str(ip_type or "static_residential").strip() or "static_residential",
+            str(purchase_status or "owned").strip() or "owned",
+            str(note or "").strip(),
+            max(0, int(expires_at or 0)),
             str(status or "active").strip() or "active",
             now,
             now,
@@ -1000,6 +1129,23 @@ def _save_account_residential_proxy(
 
     clean_proxy_id = str(current_proxy_id or "").strip()
     current = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (clean_proxy_id,)).fetchone() if clean_proxy_id else None
+    if hasattr(payload, "model_fields_set"):
+        fields_set = set(payload.model_fields_set)
+    else:
+        fields_set = set(payload.__fields_set__)
+    metadata_defaults: dict[str, Any] = {
+        "source": "manual",
+        "ip_type": "static_residential",
+        "purchase_status": "owned",
+        "note": "",
+        "expires_at": 0,
+    }
+    metadata: dict[str, Any] = {}
+    for field, default in metadata_defaults.items():
+        if current is not None and field not in fields_set:
+            metadata[field] = current[field]
+        else:
+            metadata[field] = getattr(payload, field, default)
     shared = False
     if current is not None:
         shared = bool(
@@ -1021,6 +1167,11 @@ def _save_account_residential_proxy(
             name=str(payload.name or f"residential://{host}:{port}").strip(),
             country=country,
             isp=isp,
+            source=str(metadata["source"] or "manual"),
+            ip_type=str(metadata["ip_type"] or "static_residential"),
+            purchase_status=str(metadata["purchase_status"] or "owned"),
+            note=str(metadata["note"] or ""),
+            expires_at=int(metadata["expires_at"] or 0),
             status=payload.status,
         )
 
@@ -1032,6 +1183,11 @@ def _save_account_residential_proxy(
         "name": str(payload.name or current["name"] or f"residential://{host}:{port}").strip(),
         "country": country,
         "isp": isp,
+        "source": str(metadata["source"] or "manual").strip() or "manual",
+        "ip_type": str(metadata["ip_type"] or "static_residential").strip() or "static_residential",
+        "purchase_status": str(metadata["purchase_status"] or "owned").strip() or "owned",
+        "note": str(metadata["note"] or "").strip(),
+        "expires_at": max(0, int(metadata["expires_at"] or 0)),
         "status": str(payload.status or "active").strip() or "active",
         "last_check_at": 0,
         "last_check_result": "",
@@ -1146,6 +1302,8 @@ def create_social_account(payload: SocialAccountPayload) -> dict[str, Any]:
 
 
 def update_social_account(account_id: str, payload: SocialAccountPatchPayload) -> dict[str, Any]:
+    if payload.clear_residential_proxy and (payload.residential_proxy is not None or payload.proxy_id is not None):
+        raise HTTPException(status_code=400, detail="clear_residential_proxy 不能与 residential_proxy 或 proxy_id 同时提交")
     updates: dict[str, Any] = {}
     for field in ("persona_id", "username", "display_name", "profile_dir", "proxy_id", "status"):
         value = getattr(payload, field)
@@ -1165,6 +1323,8 @@ def update_social_account(account_id: str, payload: SocialAccountPatchPayload) -
                 raise HTTPException(status_code=400, detail="登录密码内容看起来像说明文字，请填写真实密码")
             updates["login_password"] = password
             updates["login_credentials_updated_at"] = _now()
+    if payload.clear_residential_proxy:
+        updates["proxy_id"] = ""
     if "status" in updates and updates["status"] not in SOCIAL_ACCOUNT_STATUSES:
         raise HTTPException(status_code=400, detail="账号状态不合法")
     if "username" in updates:
@@ -1402,13 +1562,13 @@ def create_social_task(payload: SocialTaskPayload) -> dict[str, Any]:
         if str(account["platform"] or "").strip().lower() != platform:
             raise HTTPException(status_code=400, detail="任务平台与执行账号平台不一致")
         proxy_id = str(account["proxy_id"] or "").strip()
-        if not proxy_id:
-            raise HTTPException(status_code=409, detail="账号未配置住宅代理，不能创建任务")
-        proxy = conn.execute("SELECT status FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
-        if not proxy:
-            raise HTTPException(status_code=409, detail="账号绑定的住宅代理不存在，不能创建任务")
-        if str(proxy["status"] or "").strip().lower() == "failed":
-            raise HTTPException(status_code=409, detail="账号绑定的住宅代理检测失败，请先修复或重新检测")
+        if proxy_id:
+            proxy = conn.execute("SELECT status FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
+            if not proxy:
+                raise HTTPException(status_code=409, detail="账号绑定的住宅代理不存在，不能创建任务")
+            proxy_status = str(proxy["status"] or "").strip().lower()
+            if proxy_status in {"failed", "inactive", "disabled"}:
+                raise HTTPException(status_code=409, detail="账号绑定的代理不可用，请先启用、修复或重新检测")
         persona_id = str(payload.persona_id or account["persona_id"] or "").strip()
         runtime_secrets: dict[str, str] = {}
         if task_type == "open_login" and task_payload.get("auto_submit"):
@@ -1852,15 +2012,16 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
         account_row = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (task["account_id"],)).fetchone()
         if not account_row:
             raise RuntimeError("任务绑定账号不存在")
+        proxy_id = str(account_row["proxy_id"] or "").strip()
         proxy_row = None
-        if str(account_row["proxy_id"] or "").strip():
-            proxy_row = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (account_row["proxy_id"],)).fetchone()
+        if proxy_id:
+            proxy_row = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
     account = dict(account_row)
     proxy = dict(proxy_row) if proxy_row else None
-    if proxy is None:
-        raise RuntimeError("账号未配置可用的住宅代理，已阻止浏览器无代理直连")
-    if str(proxy.get("status") or "").strip().lower() == "failed":
-        raise RuntimeError("账号住宅代理检测失败，已阻止浏览器启动")
+    if proxy_id and proxy is None:
+        raise RuntimeError("账号绑定的住宅代理不存在，已阻止浏览器启动")
+    if proxy is not None and str(proxy.get("status") or "").strip().lower() in {"failed", "inactive", "disabled"}:
+        raise RuntimeError("账号代理不可用，已阻止浏览器启动")
     if _is_task_cancelled(task_id):
         _discard_ephemeral_task_secrets(task_id)
         return
@@ -2677,6 +2838,28 @@ def _account_public_rows(conn: Any, rows: list[Any]) -> list[dict[str, Any]]:
     return [_account_public(row, proxies.get(str(row["proxy_id"] or ""))) for row in rows]
 
 
+def _proxy_public_rows(conn: Any, rows: list[Any]) -> list[dict[str, Any]]:
+    proxy_ids = [str(row["id"] or "").strip() for row in rows if str(row["id"] or "").strip()]
+    bound_accounts: dict[str, list[str]] = {proxy_id: [] for proxy_id in proxy_ids}
+    if proxy_ids:
+        placeholders = ",".join("?" for _ in proxy_ids)
+        account_rows = conn.execute(
+            f"""
+            SELECT id, proxy_id
+            FROM social_accounts
+            WHERE proxy_id IN ({placeholders})
+            ORDER BY proxy_id ASC, created_at ASC, id ASC
+            """,
+            tuple(proxy_ids),
+        ).fetchall()
+        for account in account_rows:
+            bound_accounts.setdefault(str(account["proxy_id"] or ""), []).append(str(account["id"] or ""))
+    return [
+        _proxy_public(row, bound_account_ids=bound_accounts.get(str(row["id"] or ""), []))
+        for row in rows
+    ]
+
+
 def _account_public(row: Any, proxy_row: Any | None = None) -> dict[str, Any]:
     item = dict(row)
     return {
@@ -2706,6 +2889,11 @@ def _residential_proxy_public(row: Any) -> dict[str, Any]:
         last_check_result = json.loads(str(item.get("last_check_result") or "{}"))
     except (TypeError, ValueError, json.JSONDecodeError):
         last_check_result = {}
+    safe_result = _redact_sensitive(
+        last_check_result if isinstance(last_check_result, dict) else {},
+        secrets=(str(item.get("username") or ""), str(item.get("password") or "")),
+    )
+    response = safe_result.get("response") if isinstance(safe_result.get("response"), dict) else {}
     return {
         "protocol": str(item.get("proxy_type") or ""),
         "host": str(item.get("host") or ""),
@@ -2714,9 +2902,15 @@ def _residential_proxy_public(row: Any) -> dict[str, Any]:
         "password_configured": bool(str(item.get("password") or "")),
         "country": str(item.get("country") or ""),
         "isp": str(item.get("isp") or ""),
+        "source": str(item.get("source") or "manual"),
+        "ip_type": str(item.get("ip_type") or "static_residential"),
+        "purchase_status": str(item.get("purchase_status") or "owned"),
+        "note": str(item.get("note") or ""),
+        "expires_at": int(item.get("expires_at") or 0),
         "status": str(item.get("status") or ""),
         "last_check_at": int(item.get("last_check_at") or 0),
-        "last_check_result": last_check_result if isinstance(last_check_result, dict) else {},
+        "last_check_result": safe_result,
+        "exit_ip": str(response.get("ip") or safe_result.get("ip") or ""),
     }
 
 
@@ -2804,9 +2998,14 @@ def _runtime_task_payload(task: dict[str, Any], account: dict[str, Any]) -> dict
     return payload
 
 
-def _proxy_public(row: Any) -> dict[str, Any]:
+def _proxy_public(row: Any, *, bound_account_ids: list[str] | None = None) -> dict[str, Any]:
     item = dict(row)
-    return {
+    last_check_result = _redact_sensitive(
+        _loads(item.get("last_check_result"), {}),
+        secrets=(str(item.get("username") or ""), str(item.get("password") or "")),
+    )
+    response = last_check_result.get("response") if isinstance(last_check_result.get("response"), dict) else {}
+    public = {
         "id": str(item.get("id") or ""),
         "name": str(item.get("name") or ""),
         "proxy_type": str(item.get("proxy_type") or ""),
@@ -2816,15 +3015,22 @@ def _proxy_public(row: Any) -> dict[str, Any]:
         "password_configured": bool(str(item.get("password") or "")),
         "country": str(item.get("country") or ""),
         "isp": str(item.get("isp") or ""),
+        "source": str(item.get("source") or "manual"),
+        "ip_type": str(item.get("ip_type") or "static_residential"),
+        "purchase_status": str(item.get("purchase_status") or "owned"),
+        "note": str(item.get("note") or ""),
+        "expires_at": int(item.get("expires_at") or 0),
         "status": str(item.get("status") or ""),
         "last_check_at": int(item.get("last_check_at") or 0),
-        "last_check_result": _redact_sensitive(
-            _loads(item.get("last_check_result"), {}),
-            secrets=(str(item.get("username") or ""), str(item.get("password") or "")),
-        ),
+        "last_check_result": last_check_result,
+        "exit_ip": str(response.get("ip") or last_check_result.get("ip") or ""),
         "created_at": int(item.get("created_at") or 0),
         "updated_at": int(item.get("updated_at") or 0),
     }
+    if bound_account_ids is not None:
+        public["bound_account_count"] = len(bound_account_ids)
+        public["bound_account_ids"] = list(bound_account_ids)
+    return public
 
 
 def _task_public(row: Any) -> dict[str, Any]:

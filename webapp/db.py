@@ -137,6 +137,11 @@ def init_db() -> None:
               password TEXT NOT NULL DEFAULT '',
               country TEXT NOT NULL DEFAULT '',
               isp TEXT NOT NULL DEFAULT '',
+              source TEXT NOT NULL DEFAULT 'manual',
+              ip_type TEXT NOT NULL DEFAULT 'static_residential',
+              purchase_status TEXT NOT NULL DEFAULT 'owned',
+              note TEXT NOT NULL DEFAULT '',
+              expires_at INTEGER NOT NULL DEFAULT 0,
               status TEXT NOT NULL DEFAULT 'active',
               last_check_at INTEGER NOT NULL DEFAULT 0,
               last_check_result TEXT NOT NULL DEFAULT '',
@@ -211,6 +216,17 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_social_tasks_queue ON social_automation_tasks(status, scheduled_at, priority, created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_social_tasks_account ON social_automation_tasks(account_id, created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_social_logs_task ON social_automation_logs(task_id, created_at)")
+        proxy_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(social_proxies)").fetchall()}
+        proxy_column_migrations = {
+            "source": "TEXT NOT NULL DEFAULT 'manual'",
+            "ip_type": "TEXT NOT NULL DEFAULT 'static_residential'",
+            "purchase_status": "TEXT NOT NULL DEFAULT 'owned'",
+            "note": "TEXT NOT NULL DEFAULT ''",
+            "expires_at": "INTEGER NOT NULL DEFAULT 0",
+        }
+        for column, definition in proxy_column_migrations.items():
+            if column not in proxy_columns:
+                conn.execute(f"ALTER TABLE social_proxies ADD COLUMN {column} {definition}")
         account_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(social_accounts)").fetchall()}
         if "login_username" not in account_columns:
             conn.execute("ALTER TABLE social_accounts ADD COLUMN login_username TEXT NOT NULL DEFAULT ''")
