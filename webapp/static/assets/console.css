@@ -8610,6 +8610,7 @@ body.live-browser-modal-open {
   overflow: hidden;
   background: var(--panel-solid);
   box-shadow: 0 24px 70px rgba(0, 0, 0, .34);
+  isolation: isolate;
 }
 
 .live-browser-card.is-live-browser-modal.is-portrait,

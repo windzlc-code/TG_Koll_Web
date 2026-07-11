@@ -309,6 +309,7 @@ def register_social_automation_routes(app: FastAPI) -> None:
         body = payload if isinstance(payload, dict) else {}
         task_payload = body.get("payload") if isinstance(body.get("payload"), dict) else body
         task_payload = dict(task_payload or {})
+        _validate_open_login_payload(task_payload)
         task_payload.setdefault("login_wait_seconds", wait_seconds)
         return {"ok": True, "task": create_account_task(account_id, "open_login", task_payload)}
 
@@ -542,8 +543,8 @@ def _live_browser_task_input_allowed(row: Any) -> bool:
         return True
     if status != "running" or str(task.get("task_type") or "").strip() != "open_login":
         return False
-    payload = _loads(task.get("payload_json"), {})
-    return payload.get("auto_submit") is not True
+    payload = _load_task_payload_object(task.get("payload_json"))
+    return payload is not None and _is_manual_open_login_task(task, payload)
 
 
 def _query_live_browser_input_allowed(task_id: str) -> bool:
@@ -714,11 +715,11 @@ def build_social_automation_overview() -> dict[str, Any]:
         all_tasks = conn.execute("SELECT task_type, payload_json, status, finished_at FROM social_automation_tasks").fetchall()
     visible_tasks = [
         row for row in tasks
-        if not _is_manual_open_login_task(dict(row), _loads(row["payload_json"], {}))
+        if not _is_manual_open_login_task(dict(row), _load_task_payload_object(row["payload_json"]))
     ]
     counts: dict[str, int] = {}
     for row in all_tasks:
-        if _is_manual_open_login_task(dict(row), _loads(row["payload_json"], {})):
+        if _is_manual_open_login_task(dict(row), _load_task_payload_object(row["payload_json"])):
             continue
         status = str(row["status"] or "")
         if status == "need_manual" and int(row["finished_at"] or 0) > 0:
@@ -1619,6 +1620,7 @@ def create_social_task(payload: SocialTaskPayload) -> dict[str, Any]:
     if task_type not in SOCIAL_TASK_TYPES:
         raise HTTPException(status_code=400, detail=f"不支持的自动化任务类型: {task_type}")
     task_payload = dict(payload.payload or {})
+    auto_submit = _validate_open_login_payload(task_payload) if task_type == "open_login" else False
     now = _now()
     scheduled_at = _parse_schedule(payload.scheduled_at)
     task_id = _NEW_ID("social_task")
@@ -1642,7 +1644,7 @@ def create_social_task(payload: SocialTaskPayload) -> dict[str, Any]:
                 raise HTTPException(status_code=409, detail="账号绑定的代理不可用，请先启用、修复或重新检测")
         persona_id = str(payload.persona_id or account["persona_id"] or "").strip()
         runtime_secrets: dict[str, str] = {}
-        if task_type == "open_login" and task_payload.get("auto_submit"):
+        if task_type == "open_login" and auto_submit:
             submitted_password = str(task_payload.get("login_password") or "")
             if submitted_password and _looks_like_non_password_text(submitted_password):
                 raise HTTPException(status_code=400, detail="登录密码内容看起来像说明文字，请填写真实密码")
@@ -2385,11 +2387,38 @@ def _automation_action_label(task_type: str) -> str:
     }.get(task_type, f"网页自动化 {task_type}")
 
 
+def _open_login_auto_submit_mode(payload: dict[str, Any] | None) -> bool | None:
+    if not isinstance(payload, dict):
+        return None
+    if "auto_submit" not in payload:
+        return False
+    value = payload.get("auto_submit")
+    return value if type(value) is bool else None
+
+
+def _validate_open_login_payload(payload: dict[str, Any]) -> bool:
+    mode = _open_login_auto_submit_mode(payload)
+    if mode is None:
+        raise HTTPException(status_code=422, detail="auto_submit must be a boolean when provided")
+    return mode
+
+
+def _load_task_payload_object(raw: Any) -> dict[str, Any] | None:
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str):
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 def _is_manual_open_login_task(task: dict[str, Any], payload: dict[str, Any] | None = None) -> bool:
     if str(task.get("task_type") or "") != "open_login":
         return False
-    data = payload if isinstance(payload, dict) else {}
-    return data.get("auto_submit") is not True
+    return _open_login_auto_submit_mode(payload) is False
 
 
 def _load_persona_archive(persona_id: str) -> dict[str, Any] | None:
@@ -3061,7 +3090,7 @@ def _runtime_task_payload(task: dict[str, Any], account: dict[str, Any]) -> dict
         secrets = dict(_EPHEMERAL_TASK_SECRETS.get(task_id) or {})
     if secrets.get("initial_cookies") and not payload.get("initial_cookies"):
         payload["initial_cookies"] = secrets["initial_cookies"]
-    if str(task.get("task_type") or "") != "open_login" or not payload.get("auto_submit"):
+    if str(task.get("task_type") or "") != "open_login" or _open_login_auto_submit_mode(payload) is not True:
         return payload
     saved_username = str(account.get("login_username") or "").strip()
     saved_password = str(account.get("login_password") or "")

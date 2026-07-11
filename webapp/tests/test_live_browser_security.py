@@ -1,10 +1,14 @@
 import asyncio
+from types import SimpleNamespace
 from unittest import mock
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from social_automation import live_browser
 from webapp import social_automation_api
+from webapp.auth import get_current_user
 
 
 def _set_encodings(*encodings: int) -> bytes:
@@ -131,6 +135,156 @@ def test_manual_open_login_allows_input_while_running():
         "task_type": "publish_post",
         "payload_json": "{}",
     }) is False
+
+
+@pytest.mark.parametrize("auto_submit", [1, 0, "true", "false", None, [], {}])
+def test_invalid_auto_submit_values_fail_closed(auto_submit):
+    row = {
+        "status": "running",
+        "task_type": "open_login",
+        "payload_json": social_automation_api.json.dumps({"auto_submit": auto_submit}),
+    }
+
+    assert social_automation_api._live_browser_task_input_allowed(row) is False
+    assert social_automation_api._is_manual_open_login_task(row, {"auto_submit": auto_submit}) is False
+
+
+def test_invalid_or_damaged_open_login_payload_fails_closed():
+    assert social_automation_api._live_browser_task_input_allowed({
+        "status": "running",
+        "task_type": "open_login",
+        "payload_json": "{damaged",
+    }) is False
+
+
+def _security_test_client() -> TestClient:
+    app = FastAPI()
+    social_automation_api.register_social_automation_routes(app)
+    app.dependency_overrides[get_current_user] = lambda: {"id": "test-user"}
+    return TestClient(app)
+
+
+@pytest.mark.parametrize("auto_submit", [1, "true", "false", None])
+def test_open_login_http_rejects_non_boolean_auto_submit(auto_submit):
+    client = _security_test_client()
+    with mock.patch.object(social_automation_api, "create_account_task") as create_task:
+        response = client.post(
+            "/api/persona_dashboard/automation/accounts/account-1/open_login",
+            json={"auto_submit": auto_submit},
+        )
+
+    assert response.status_code == 422
+    create_task.assert_not_called()
+
+
+@pytest.mark.parametrize("payload", [{}, {"auto_submit": False}, {"auto_submit": True}])
+def test_open_login_http_accepts_manual_and_boolean_auto_submit(payload):
+    client = _security_test_client()
+    with mock.patch.object(
+        social_automation_api,
+        "create_account_task",
+        return_value={"id": "task-1"},
+    ) as create_task:
+        response = client.post(
+            "/api/persona_dashboard/automation/accounts/account-1/open_login",
+            json=payload,
+        )
+
+    assert response.status_code == 200
+    submitted = create_task.call_args.args[2]
+    assert submitted.get("auto_submit", False) is payload.get("auto_submit", False)
+
+
+@pytest.mark.parametrize(
+    ("payload_json", "expected_status"),
+    [("{}", 200), ('{"auto_submit": false}', 200), ('{"auto_submit": true}', 409), ('{"auto_submit": 1}', 409)],
+)
+def test_http_text_input_enforces_live_task_permission(payload_json, expected_status):
+    client = _security_test_client()
+    connection = mock.Mock()
+    connection.execute.return_value.fetchone.return_value = {
+        "status": "running",
+        "task_type": "open_login",
+        "payload_json": payload_json,
+    }
+    database = mock.MagicMock()
+    database.return_value.__enter__.return_value = connection
+
+    with (
+        mock.patch.object(
+            social_automation_api,
+            "_RUNNING_TASK_CONTROLS",
+            {"task-1": {"live_browser_session_id": "live_task-1"}},
+        ),
+        mock.patch.object(social_automation_api, "db", database),
+        mock.patch.object(
+            social_automation_api,
+            "_type_live_browser_session_text_via_display",
+            return_value={"typed": True},
+        ) as type_text,
+    ):
+        response = client.post(
+            "/api/persona_dashboard/automation/browser_sessions/live_task-1/type",
+            json={"text": "123456"},
+        )
+
+    assert response.status_code == expected_status
+    assert type_text.called is (expected_status == 200)
+
+
+def test_websocket_rfb_input_is_blocked_when_task_permission_is_denied():
+    key_event = bytes((4, 1, 0, 0, 0, 0, 0, 65))
+
+    class BrowserSocket:
+        def __init__(self):
+            self.headers = {}
+            self.messages = [
+                {"type": "websocket.receive", "bytes": key_event},
+                {"type": "websocket.disconnect"},
+            ]
+
+        async def accept(self, **_kwargs):
+            return None
+
+        async def receive(self):
+            return self.messages.pop(0)
+
+        async def close(self, **_kwargs):
+            return None
+
+    class TargetSocket:
+        def __init__(self):
+            self.send = mock.AsyncMock()
+
+        async def recv(self):
+            await asyncio.Event().wait()
+
+        async def close(self):
+            return None
+
+    browser = BrowserSocket()
+    target = TargetSocket()
+
+    with (
+        mock.patch.object(
+            live_browser,
+            "get_live_browser_session",
+            return_value=SimpleNamespace(web_port=6901, task_id="task-1"),
+        ),
+        mock.patch.dict(
+            "sys.modules",
+            {"websockets": SimpleNamespace(connect=mock.AsyncMock(return_value=target))},
+        ),
+        mock.patch.object(
+            social_automation_api,
+            "_live_browser_input_allowed",
+            new=mock.AsyncMock(return_value=False),
+        ) as input_allowed,
+    ):
+        asyncio.run(social_automation_api._proxy_live_browser_websocket(browser, "live_task-1"))
+
+    input_allowed.assert_awaited_once_with("task-1")
+    target.send.assert_not_awaited()
 
 
 def test_stop_restored_registry_session_terminates_processes_before_removal():

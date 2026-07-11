@@ -3643,6 +3643,7 @@ function personaThreadsStrategyDetail(group) {
 }
 
 function setView(view) {
+  if (state.liveBrowserExpandedSessionId) closeLiveBrowserLargeModal({ restoreFocus: false });
   clearConsoleNotices();
   state.view = view;
   syncTaskQueueAutoRefresh();
@@ -15055,6 +15056,7 @@ function renderLiveBrowserSessions() {
   const layout = normalizeLiveBrowserLayout(state.liveBrowserLayout);
   let panel = host.querySelector(".live-browser-panel");
   if (!panel) {
+    if (state.liveBrowserExpandedSessionId) closeLiveBrowserLargeModal({ restoreFocus: false });
     host.innerHTML = `
     <section class="live-browser-panel is-empty" data-live-browser-count="0" data-live-browser-view="${esc(layout)}">
       <div class="live-browser-head">
@@ -15093,23 +15095,33 @@ function renderLiveBrowserSessions() {
   sessions.forEach((session) => {
     const sessionId = liveBrowserSessionId(session);
     const structureKey = liveBrowserSessionStructureKey(session);
+    let expanded = String(state.liveBrowserExpandedSessionId || "") === sessionId;
     let card = cardsById.get(sessionId) || null;
+    if (!card && expanded) {
+      closeLiveBrowserLargeModal({ restoreFocus: false });
+      expanded = false;
+    }
     if (!card) {
       card = createLiveBrowserSessionCard(session);
       grid.append(card);
-    } else if (card.dataset.liveBrowserStructureKey !== structureKey) {
+    } else if (!expanded && card.dataset.liveBrowserStructureKey !== structureKey) {
       const replacement = createLiveBrowserSessionCard(session);
       card.replaceWith(replacement);
       card = replacement;
     }
     updateLiveBrowserSessionCard(card, session);
-    if (String(state.liveBrowserExpandedSessionId || "") === sessionId) {
+    if (expanded) {
       card.classList.add("is-live-browser-modal");
       card.setAttribute("role", "dialog");
       card.setAttribute("aria-modal", "true");
+      card.setAttribute("aria-labelledby", liveBrowserDialogTitleId(sessionId));
     }
   });
   grid.insertAdjacentHTML("beforeend", renderLiveBrowserPlaceholders(sessions.length));
+  if (state.liveBrowserExpandedSessionId) {
+    const expandedCard = grid.querySelector(`[data-live-browser-card="${CSS.escape(String(state.liveBrowserExpandedSessionId))}"]`);
+    isolateLiveBrowserModalBackground(expandedCard, document.querySelector("[data-live-browser-modal-backdrop]"));
+  }
   syncSocialCancelAllButtons();
 }
 
@@ -15148,9 +15160,10 @@ function updateLiveBrowserSessionCard(card, session) {
   if (!card) return;
   const sessionId = liveBrowserSessionId(session);
   const status = liveBrowserTaskStatus(session);
+  const presentationStatus = liveBrowserPresentationStatus(session);
   const sessionStatus = liveBrowserSessionStatus(session);
-  const tone = statusTone(status || "running");
-  const statusToneClass = status === "success" ? "success" : (tone === "success" ? "muted" : tone);
+  const tone = statusTone(presentationStatus || "running");
+  const statusToneClass = presentationStatus === "success" ? "success" : (tone === "success" ? "muted" : tone);
   const interactionAllowed = canInteractWithLiveBrowser(session);
   const canCloseWindow = Boolean(sessionId) && sessionStatus === "standby";
   const canStopTask = Boolean(session.task_id) && ["queued", "running", "need_manual"].includes(status);
@@ -15164,15 +15177,18 @@ function updateLiveBrowserSessionCard(card, session) {
   card.classList.toggle("is-interaction-enabled", interactionAllowed);
   card.classList.toggle("is-interaction-locked", !interactionAllowed);
   const titleNode = card.querySelector("[data-live-browser-title]");
-  if (titleNode) titleNode.textContent = title;
+  if (titleNode) {
+    titleNode.id = liveBrowserDialogTitleId(sessionId);
+    titleNode.textContent = title;
+  }
   const metaNode = card.querySelector("[data-live-browser-meta]");
   if (metaNode) metaNode.textContent = meta;
   const iframe = card.querySelector("iframe");
   if (iframe) iframe.title = title;
   const statusNode = card.querySelector("[data-live-browser-status]");
   if (statusNode) {
-    statusNode.className = `status ${status}`;
-    statusNode.textContent = statusLabel(status);
+    statusNode.className = `status ${presentationStatus}`;
+    statusNode.textContent = liveBrowserPresentationLabel(session);
   }
   const expandButton = card.querySelector("[data-live-browser-fullscreen]");
   if (expandButton) {
@@ -15249,6 +15265,20 @@ function liveBrowserTaskStatus(session) {
   return String(session?.task_status || session?.status || "running").trim().toLowerCase() || "running";
 }
 
+function isManualOpenLoginSession(session) {
+  return String(session?.task_type || "").trim().toLowerCase() === "open_login"
+    && liveBrowserTaskStatus(session) === "running"
+    && Boolean(session?.input_allowed);
+}
+
+function liveBrowserPresentationStatus(session) {
+  return isManualOpenLoginSession(session) ? "need_manual" : liveBrowserTaskStatus(session);
+}
+
+function liveBrowserPresentationLabel(session) {
+  return isManualOpenLoginSession(session) ? "人工登录" : statusLabel(liveBrowserTaskStatus(session));
+}
+
 function liveBrowserSessionStatus(session) {
   return String(session?.status || "running").trim().toLowerCase() || "running";
 }
@@ -15268,6 +15298,7 @@ function liveBrowserInteractionHint(session) {
   const taskStatus = liveBrowserTaskStatus(session);
   const sessionStatus = liveBrowserSessionStatus(session);
   if (sessionStatus === "standby") return "任务已完成，浏览器处于待机状态，可等待系统自动关闭。";
+  if (isManualOpenLoginSession(session)) return "当前处于人工登录，可以直接操作浏览器窗口。";
   if (taskStatus === "need_manual") return "当前需要人工处理，可以直接操作浏览器窗口。";
   return "自动化执行中，当前仅展示实时画面，暂不允许人工输入。";
 }
@@ -15288,11 +15319,12 @@ function renderLiveBrowserSession(session) {
   const height = Math.max(1, Number(session.height || 720));
   const orientationClass = height > width ? " is-portrait" : " is-landscape";
   const status = liveBrowserTaskStatus(session);
+  const presentationStatus = liveBrowserPresentationStatus(session);
   const sessionStatus = liveBrowserSessionStatus(session);
   const normalizedStatus = status.trim().toLowerCase();
   const canStopTask = session.task_id && ["queued", "running", "need_manual"].includes(normalizedStatus);
-  const tone = statusTone(status);
-  const statusClass = normalizedStatus === "success"
+  const tone = statusTone(presentationStatus);
+  const statusClass = presentationStatus === "success"
     ? " is-status-success"
     : ` is-status-${tone === "success" ? "muted" : tone}`;
   const interactionAllowed = canInteractWithLiveBrowser(session);
@@ -15303,14 +15335,14 @@ function renderLiveBrowserSession(session) {
     <article class="live-browser-card${orientationClass}${interactionClass}${statusClass}" data-live-browser-card="${esc(sessionId)}" style="--live-browser-width: ${width}; --live-browser-height: ${height}; --live-browser-ratio: ${width} / ${height};">
       <div class="live-browser-card-head">
         <div>
-          <strong data-live-browser-title>${esc(title)}</strong>
+          <strong id="${esc(liveBrowserDialogTitleId(sessionId))}" data-live-browser-title>${esc(title)}</strong>
           <span data-live-browser-meta>${esc(`${session.platform || "-"} · ${session.display || "-"} · ${session.width || 720}x${session.height || 1280}`)}</span>
         </div>
         <div class="live-browser-card-actions">
           <button type="button" class="live-browser-expand-button" data-live-browser-fullscreen="${esc(sessionId)}" title="放大窗口" aria-label="放大窗口" aria-pressed="false">${renderExpandIcon()}</button>
           <button type="button" data-live-browser-close="${esc(sessionId)}" ${canCloseWindow ? "" : "hidden disabled"}>关闭窗口</button>
           <button type="button" class="danger" data-social-cancel="${esc(session.task_id || "")}" ${canStopTask ? "" : "hidden disabled"}>停止进程</button>
-          <span class="status ${esc(status)}" data-live-browser-status>${esc(statusLabel(status))}</span>
+          <span class="status ${esc(presentationStatus)}" data-live-browser-status>${esc(liveBrowserPresentationLabel(session))}</span>
         </div>
       </div>
       <div class="live-browser-frame">
@@ -15342,6 +15374,54 @@ function renderLiveBrowserSession(session) {
 }
 
 let liveBrowserModalTrigger = null;
+let liveBrowserModalInertNodes = [];
+
+function liveBrowserDialogTitleId(sessionId = "") {
+  const safeId = String(sessionId || "active").replace(/[^a-zA-Z0-9_-]/g, "-");
+  return `live-browser-dialog-title-${safeId || "active"}`;
+}
+
+function releaseLiveBrowserModalBackground() {
+  liveBrowserModalInertNodes.forEach((node) => {
+    if (node?.isConnected) node.removeAttribute("inert");
+  });
+  liveBrowserModalInertNodes = [];
+}
+
+function isolateLiveBrowserModalBackground(card, backdrop) {
+  releaseLiveBrowserModalBackground();
+  if (!card?.isConnected) return;
+  let branch = card;
+  while (branch?.parentElement && branch.parentElement !== document.documentElement) {
+    const parent = branch.parentElement;
+    Array.from(parent.children).forEach((sibling) => {
+      if (sibling === branch || sibling === backdrop || sibling.hasAttribute("inert")) return;
+      sibling.setAttribute("inert", "");
+      liveBrowserModalInertNodes.push(sibling);
+    });
+    branch = parent;
+  }
+}
+
+function trapLiveBrowserModalFocus(event) {
+  if (event.key !== "Tab" || !state.liveBrowserExpandedSessionId) return;
+  const card = document.querySelector(".live-browser-card.is-live-browser-modal");
+  if (!card) return;
+  const focusable = Array.from(card.querySelectorAll("button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], iframe, [tabindex]:not([tabindex='-1'])"))
+    .filter((node) => !node.hidden && node.getAttribute("aria-hidden") !== "true");
+  if (!focusable.length) {
+    event.preventDefault();
+    card.focus();
+    return;
+  }
+  const active = document.activeElement;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (!card.contains(active) || (event.shiftKey && active === first) || (!event.shiftKey && active === last)) {
+    event.preventDefault();
+    (event.shiftKey ? last : first).focus();
+  }
+}
 
 function closeLiveBrowserLargeModal({ restoreFocus = true } = {}) {
   const expandedId = String(state.liveBrowserExpandedSessionId || "");
@@ -15351,7 +15431,10 @@ function closeLiveBrowserLargeModal({ restoreFocus = true } = {}) {
   card?.classList.remove("is-live-browser-modal");
   card?.removeAttribute("role");
   card?.removeAttribute("aria-modal");
+  card?.removeAttribute("aria-labelledby");
+  card?.removeAttribute("tabindex");
   document.querySelector("[data-live-browser-modal-backdrop]")?.remove();
+  releaseLiveBrowserModalBackground();
   document.body.classList.remove("live-browser-modal-open");
   state.liveBrowserExpandedSessionId = "";
   const expandButton = card?.querySelector("[data-live-browser-fullscreen]");
@@ -15361,7 +15444,10 @@ function closeLiveBrowserLargeModal({ restoreFocus = true } = {}) {
     expandButton.setAttribute("aria-pressed", "false");
     expandButton.innerHTML = renderExpandIcon(false);
   }
-  if (restoreFocus && liveBrowserModalTrigger?.isConnected) liveBrowserModalTrigger.focus();
+  const focusTarget = liveBrowserModalTrigger?.isConnected
+    ? liveBrowserModalTrigger
+    : card?.querySelector("[data-live-browser-fullscreen]");
+  if (restoreFocus && focusTarget?.isConnected) focusTarget.focus();
   liveBrowserModalTrigger = null;
 }
 
@@ -15386,10 +15472,10 @@ function requestLiveBrowserFullscreen(sessionId = "", trigger = null) {
   card.classList.add("is-live-browser-modal");
   card.setAttribute("role", "dialog");
   card.setAttribute("aria-modal", "true");
+  card.setAttribute("aria-labelledby", liveBrowserDialogTitleId(sessionId));
+  card.setAttribute("tabindex", "-1");
   document.body.classList.add("live-browser-modal-open");
-  const url = new URL(iframe.src, location.href);
-  url.searchParams.set("resize", "scale");
-  if (iframe.src !== url.toString()) iframe.src = url.toString();
+  isolateLiveBrowserModalBackground(card, backdrop);
   const session = state.socialBrowserSessions.find((item) => liveBrowserSessionId(item) === String(sessionId || ""));
   if (session) updateLiveBrowserSessionCard(card, session);
   card.querySelector("iframe")?.focus();
@@ -17611,6 +17697,7 @@ function bindEvents() {
     renderSocialAccounts();
   });
   document.addEventListener("keydown", (event) => {
+    trapLiveBrowserModalFocus(event);
     if (event.key === "Escape" && state.liveBrowserExpandedSessionId) {
       event.preventDefault();
       closeLiveBrowserLargeModal();
