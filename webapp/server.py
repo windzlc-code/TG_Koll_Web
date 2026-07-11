@@ -10598,6 +10598,13 @@ def _filter_active_persona_archives(archives: list[dict[str, Any]]) -> list[dict
 
 PERSONA_DASHBOARD_REFRESH_TASKS: dict[str, dict[str, Any]] = {}
 PERSONA_DASHBOARD_REFRESH_LOCK = threading.Lock()
+PERSONA_HOT_PREFETCH_LOCK = threading.Lock()
+PERSONA_HOT_PREFETCH_WORKER_STARTED = False
+PERSONA_HOT_PREFETCH_WORKFLOW_LOCK = threading.Lock()
+PERSONA_HOT_PREFETCH_RECONCILE_AT = 0
+PERSONA_HOT_PREFETCH_LEASE_SECONDS = 300
+PERSONA_HOT_INTERACTIVE_LOCK = threading.Lock()
+PERSONA_HOT_INTERACTIVE_REQUESTS = 0
 PERSONA_DASHBOARD_ARCHIVE_LOCK_TIMEOUT_SECONDS = 30
 PERSONA_DASHBOARD_MONITOR_LOCK = threading.Lock()
 PERSONA_DASHBOARD_MONITOR_STARTED = False
@@ -11821,9 +11828,354 @@ def _run_persona_hot_workflow_cli(payload: dict[str, Any], timeout_seconds: int 
     return data
 
 
+def _persona_hot_prefetch_limits(search_mode: str) -> tuple[int, int]:
+    return (30, 80) if str(search_mode or "").strip().lower() == "normal" else (20, 50)
+
+
+def _persona_hot_prefetch_revision(archive: dict[str, Any]) -> str:
+    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+    payload = {
+        "id": str(archive.get("id") or "").strip(),
+        "name": str(archive.get("name") or "").strip(),
+        "content": str(archive.get("content") or "").strip(),
+        "content_theme": str(setup.get("contentTheme") or "").strip(),
+        "persona_type": str(setup.get("personaType") or "").strip(),
+        "genres": setup.get("genres") if isinstance(setup.get("genres"), list) else [],
+        "interests": setup.get("interests") if isinstance(setup.get("interests"), list) else [],
+    }
+    return hashlib.sha1(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _queue_persona_hot_prefetch(archive: dict[str, Any], search_mode: str, *, force: bool = False) -> None:
+    archive_id = str(archive.get("id") or "").strip()
+    if not archive_id:
+        return
+    mode = "normal" if str(search_mode or "").strip().lower() == "normal" else "strict"
+    low_watermark, target_count = _persona_hot_prefetch_limits(mode)
+    revision = _persona_hot_prefetch_revision(archive)
+    now = int(time.time())
+    with db() as conn:
+        existing = conn.execute(
+            "SELECT strategy_revision, status, lease_until, next_run_at FROM persona_hot_prefetch_jobs WHERE archive_id = ? AND search_mode = ?",
+            (archive_id, mode),
+        ).fetchone()
+        if existing is None:
+            conn.execute(
+                """
+                INSERT INTO persona_hot_prefetch_jobs(
+                  archive_id, search_mode, strategy_revision, low_watermark, target_count, status,
+                  next_run_at, lease_until, failure_count, last_error, last_started_at, last_finished_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'queued', ?, 0, 0, '', 0, 0, ?, ?)
+                """,
+                (archive_id, mode, revision, low_watermark, target_count, now, now, now),
+            )
+            return
+        running = str(existing["status"] or "") == "running" and int(existing["lease_until"] or 0) > now
+        expired_running = str(existing["status"] or "") == "running" and not running
+        changed = str(existing["strategy_revision"] or "") != revision
+        next_run_at = int(existing["next_run_at"] or 0)
+        should_queue = changed or force or expired_running or next_run_at <= 0
+        conn.execute(
+            """
+            UPDATE persona_hot_prefetch_jobs
+            SET strategy_revision = ?, low_watermark = ?, target_count = ?,
+                status = CASE WHEN ? THEN 'running' WHEN ? THEN 'queued' ELSE status END,
+                next_run_at = CASE WHEN ? THEN next_run_at WHEN ? THEN ? ELSE next_run_at END,
+                lease_until = CASE WHEN ? THEN 0 ELSE lease_until END,
+                lease_token = CASE WHEN ? THEN '' ELSE lease_token END,
+                failure_count = CASE WHEN ? THEN 0 ELSE failure_count END,
+                last_error = CASE WHEN ? THEN '' ELSE last_error END,
+                updated_at = ?
+            WHERE archive_id = ? AND search_mode = ?
+            """,
+            (
+                revision, low_watermark, target_count,
+                1 if running else 0, 1 if should_queue else 0,
+                1 if running else 0, 1 if should_queue else 0, now,
+                1 if expired_running else 0, 1 if expired_running else 0,
+                1 if changed else 0, 1 if changed else 0,
+                now, archive_id, mode,
+            ),
+        )
+
+
+def _queue_persona_hot_prefetch_for_archive(archive: dict[str, Any], *, force: bool = False) -> None:
+    _queue_persona_hot_prefetch(archive, "strict", force=force)
+    _queue_persona_hot_prefetch(archive, "normal", force=force)
+
+
+def _persona_hot_prefetch_status(archive_id: str, search_mode: str) -> dict[str, Any]:
+    mode = "normal" if str(search_mode or "").strip().lower() == "normal" else "strict"
+    with db() as conn:
+        row = conn.execute(
+            "SELECT * FROM persona_hot_prefetch_jobs WHERE archive_id = ? AND search_mode = ?",
+            (str(archive_id or "").strip(), mode),
+        ).fetchone()
+    return dict(row) if row is not None else {}
+
+
+def _update_persona_hot_prefetch_ready(archive_id: str, search_mode: str, ready_count: int) -> dict[str, Any]:
+    mode = "normal" if str(search_mode or "").strip().lower() == "normal" else "strict"
+    now = int(time.time())
+    with db() as conn:
+        row = conn.execute(
+            "SELECT low_watermark, target_count, status FROM persona_hot_prefetch_jobs WHERE archive_id = ? AND search_mode = ?",
+            (str(archive_id or "").strip(), mode),
+        ).fetchone()
+        if row is None:
+            return {}
+        low_watermark = int(row["low_watermark"] or 10)
+        should_queue = int(ready_count or 0) < low_watermark and str(row["status"] or "") != "running"
+        conn.execute(
+            """
+            UPDATE persona_hot_prefetch_jobs
+            SET ready_count = ?, status = CASE WHEN ? THEN 'queued' ELSE status END,
+                next_run_at = CASE WHEN ? THEN ? ELSE next_run_at END, updated_at = ?
+            WHERE archive_id = ? AND search_mode = ?
+            """,
+            (int(ready_count or 0), 1 if should_queue else 0, 1 if should_queue else 0, now, now, str(archive_id or "").strip(), mode),
+        )
+    return _persona_hot_prefetch_status(archive_id, mode)
+
+
+def _reconcile_persona_hot_prefetch_jobs() -> None:
+    _, _, archives = _persona_archive_source_for_write()
+    for archive in archives:
+        if isinstance(archive, dict):
+            _queue_persona_hot_prefetch_for_archive(archive)
+
+
+def _claim_persona_hot_prefetch_job() -> dict[str, Any] | None:
+    now = int(time.time())
+    with db() as conn:
+        conn.execute(
+            """
+            UPDATE persona_hot_prefetch_jobs
+            SET status = 'queued', lease_until = 0, lease_token = '', next_run_at = ?, updated_at = ?
+            WHERE status = 'running' AND lease_until <= ?
+            """,
+            (now, now, now),
+        )
+        row = conn.execute(
+            """
+            SELECT * FROM persona_hot_prefetch_jobs
+            WHERE status IN ('queued', 'retry', 'blocked')
+              AND next_run_at <= ?
+              AND lease_until <= ?
+            ORDER BY CASE status WHEN 'queued' THEN 0 WHEN 'retry' THEN 1 WHEN 'ready' THEN 2 ELSE 3 END,
+                     updated_at ASC
+            LIMIT 1
+            """,
+            (now, now),
+        ).fetchone()
+        if row is None:
+            return None
+        archive_id = str(row["archive_id"] or "")
+        mode = str(row["search_mode"] or "strict")
+        lease_token = uuid.uuid4().hex
+        updated = conn.execute(
+            """
+            UPDATE persona_hot_prefetch_jobs
+            SET status = 'running', lease_until = ?, lease_token = ?, last_started_at = ?, updated_at = ?
+            WHERE archive_id = ? AND search_mode = ? AND lease_until <= ? AND status = ?
+            """,
+            (now + PERSONA_HOT_PREFETCH_LEASE_SECONDS, lease_token, now, now, archive_id, mode, now, str(row["status"] or "")),
+        )
+        if updated.rowcount != 1:
+            return None
+        claimed = dict(row)
+        claimed["lease_until"] = now + PERSONA_HOT_PREFETCH_LEASE_SECONDS
+        claimed["lease_token"] = lease_token
+        return claimed
+
+
+def _persona_hot_prefetch_failure_delay(error_text: str, failure_count: int) -> tuple[str, int]:
+    text = str(error_text or "").lower()
+    if any(token in text for token in ("cookie", "sessionid", "login", "登录", "授权")):
+        return "blocked", 15 * 60
+    if any(token in text for token in ("rate limit", "too many", "限流")):
+        return "retry", min(60 * 60, 5 * 60 * max(1, failure_count))
+    if "timeout" in text or "超时" in text:
+        return "retry", min(20 * 60, 90 * max(1, failure_count))
+    return "retry", min(30 * 60, 3 * 60 * max(1, failure_count))
+
+
+def run_persona_hot_prefetch_once() -> bool:
+    with PERSONA_HOT_INTERACTIVE_LOCK:
+        if PERSONA_HOT_INTERACTIVE_REQUESTS > 0:
+            return False
+    job = _claim_persona_hot_prefetch_job()
+    if not job:
+        return False
+    archive_id = str(job.get("archive_id") or "")
+    mode = str(job.get("search_mode") or "strict")
+    lease_token = str(job.get("lease_token") or "")
+    try:
+        _, _, archives = _persona_archive_source_for_write(archive_id)
+        archive = _find_persona_archive(archives, archive_id)
+        if not archive:
+            with db() as conn:
+                conn.execute(
+                    "DELETE FROM persona_hot_prefetch_jobs WHERE archive_id = ? AND search_mode = ? AND lease_token = ?",
+                    (archive_id, mode, lease_token),
+                )
+            return True
+        if _persona_hot_prefetch_revision(archive) != str(job.get("strategy_revision") or ""):
+            _queue_persona_hot_prefetch_for_archive(archive, force=True)
+        with PERSONA_HOT_PREFETCH_WORKFLOW_LOCK:
+            result = _run_persona_hot_workflow_cli(
+                {
+                    "action": "prefetch-hot-candidates",
+                    "archiveId": archive_id,
+                    "searchMode": mode,
+                    "lowWatermark": int(job.get("low_watermark") or 10),
+                    "targetCount": int(job.get("target_count") or 50),
+                },
+                timeout_seconds=190,
+            )
+        ready_count = _to_int(result.get("readyCount") or result.get("ready_count"), 0)
+        warnings = result.get("warnings") if isinstance(result.get("warnings"), list) else []
+        if result.get("ok") is not True:
+            raise RuntimeError(" / ".join(str(item) for item in warnings if str(item).strip()) or "候选池未达到可用水位。")
+        target_count = int(job.get("target_count") or 10)
+        previous_ready_count = int(job.get("ready_count") or 0)
+        if ready_count < target_count and ready_count <= previous_ready_count:
+            raise RuntimeError(
+                " / ".join(str(item) for item in warnings if str(item).strip())
+                or "候选池本轮未新增候选，已延后重试。"
+            )
+        next_status = "ready" if ready_count >= target_count else "queued"
+        finished_at = int(time.time())
+        next_run_at = finished_at + (5 * 60 if next_status == "ready" else 45)
+        with db() as conn:
+            conn.execute(
+                """
+                UPDATE persona_hot_prefetch_jobs
+                SET ready_count = ?, status = ?, next_run_at = ?, lease_until = 0, lease_token = '',
+                    failure_count = 0, last_error = '', last_finished_at = ?, updated_at = ?
+                WHERE archive_id = ? AND search_mode = ? AND lease_token = ?
+                """,
+                (ready_count, next_status, next_run_at, finished_at, finished_at, archive_id, mode, lease_token),
+            )
+    except Exception as exc:
+        error_text = str(getattr(exc, "detail", "") or exc or "候选池补充失败")
+        finished_at = int(time.time())
+        with db() as conn:
+            row = conn.execute(
+                "SELECT failure_count FROM persona_hot_prefetch_jobs WHERE archive_id = ? AND search_mode = ? AND lease_token = ?",
+                (archive_id, mode, lease_token),
+            ).fetchone()
+            if row is None:
+                return True
+            failures = int(row["failure_count"] or 0) + 1 if row else 1
+            status, delay = _persona_hot_prefetch_failure_delay(error_text, failures)
+            conn.execute(
+                """
+                UPDATE persona_hot_prefetch_jobs
+                SET status = ?, next_run_at = ?, lease_until = 0, lease_token = '', failure_count = ?, last_error = ?,
+                    last_finished_at = ?, updated_at = ?
+                WHERE archive_id = ? AND search_mode = ? AND lease_token = ?
+                """,
+                (status, finished_at + delay, failures, error_text[:1000], finished_at, finished_at, archive_id, mode, lease_token),
+            )
+        logger.warning("persona hot prefetch failed archive=%s mode=%s error=%s", archive_id, mode, error_text)
+    return True
+
+
+def _persona_hot_prefetch_loop() -> None:
+    global PERSONA_HOT_PREFETCH_RECONCILE_AT
+    while True:
+        now = int(time.time())
+        if now >= PERSONA_HOT_PREFETCH_RECONCILE_AT:
+            try:
+                _reconcile_persona_hot_prefetch_jobs()
+            except Exception:
+                logger.exception("persona hot prefetch reconciliation failed")
+            PERSONA_HOT_PREFETCH_RECONCILE_AT = now + 5 * 60
+        try:
+            ran = run_persona_hot_prefetch_once()
+        except Exception:
+            logger.exception("persona hot prefetch worker iteration failed")
+            time.sleep(15)
+            continue
+        time.sleep(3 if ran else 15)
+
+
+def _ensure_persona_hot_prefetch_worker_started() -> None:
+    global PERSONA_HOT_PREFETCH_WORKER_STARTED
+    with PERSONA_HOT_PREFETCH_LOCK:
+        if PERSONA_HOT_PREFETCH_WORKER_STARTED:
+            return
+        PERSONA_HOT_PREFETCH_WORKER_STARTED = True
+        threading.Thread(target=_persona_hot_prefetch_loop, name="persona-hot-prefetch", daemon=True).start()
+
+
 def _persona_hot_raw_candidate_count(result: dict[str, Any]) -> int:
     candidates = result.get("candidates") if isinstance(result, dict) else []
     return len(candidates) if isinstance(candidates, list) else 0
+
+
+@contextlib.contextmanager
+def _persona_hot_interactive_priority():
+    global PERSONA_HOT_INTERACTIVE_REQUESTS
+    with PERSONA_HOT_INTERACTIVE_LOCK:
+        PERSONA_HOT_INTERACTIVE_REQUESTS += 1
+    try:
+        yield
+    finally:
+        with PERSONA_HOT_INTERACTIVE_LOCK:
+            PERSONA_HOT_INTERACTIVE_REQUESTS = max(0, PERSONA_HOT_INTERACTIVE_REQUESTS - 1)
+
+
+def _persona_hot_user_warnings(raw_warnings: Any, candidate_count: int, limit: int, cookie_rows: Any = None) -> list[str]:
+    count = max(0, int(candidate_count or 0))
+    target = max(1, int(limit or 10))
+    if count <= 0:
+        messages = ["暂未找到符合条件的热点，请稍后刷新候选。"]
+    elif count < target:
+        messages = [f"已找到 {count} 条符合条件的热点，暂不足 {target} 条。"]
+    else:
+        messages = [f"已获取 {count} 条热点候选。"]
+
+    normalized = [
+        _normalize_hot_workflow_text(item)
+        for item in (raw_warnings if isinstance(raw_warnings, list) else [])
+        if _normalize_hot_workflow_text(item)
+    ]
+    warning_text = " ".join(normalized).lower()
+    threads_status = next((
+        item
+        for item in (cookie_rows if isinstance(cookie_rows, list) else [])
+        if isinstance(item, dict) and str(item.get("platform") or "").strip().lower() == "threads"
+    ), {})
+    cookie_health = str(threads_status.get("health") or "").strip().lower()
+    has_session = threads_status.get("has_required_session_cookie")
+    valid_cookie_count = _to_int(threads_status.get("valid_cookie_count"), 0)
+    expired_cookie_count = _to_int(threads_status.get("expired_cookie_count"), 0)
+    model_unavailable = any(token in warning_text for token in (
+        "模型当前不可用",
+        "模型策略不可用",
+        "模型热点搜索策略暂不可用",
+        "模型生成热点搜索策略失败",
+        "模型未返回可用",
+    ))
+    timed_out = "超时" in warning_text or "timeout" in warning_text or "timed out" in warning_text
+    rate_limited = "限流" in warning_text or "rate limit" in warning_text or "too many requests" in warning_text
+    if cookie_health == "missing":
+        messages.append("Threads 账号尚未授权登录，请先到账号管理完成登录。")
+    elif cookie_health == "expired" or (valid_cookie_count <= 0 and expired_cookie_count > 0):
+        messages.append("Threads 登录 Cookie 已过期，请重新登录并同步 Cookie。")
+    elif cookie_health == "degraded" and has_session is False:
+        messages.append("Threads 账号未保持登录或缺少 sessionid，请重新登录并同步 Cookie。")
+    elif cookie_health == "degraded":
+        messages.append("Threads Cookie 部分失效，请刷新账号授权后重试。")
+    elif rate_limited:
+        messages.append("Threads 当前请求受限，已优先使用当前人设候选池。")
+    elif model_unavailable:
+        messages.append("模型暂不可用，已优先使用当前人设候选池。" if count > 0 else "模型暂不可用，请稍后重试。")
+    elif timed_out:
+        messages.append("本次抓取超时，结果可能不完整。")
+    return messages[:2]
 
 
 def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload) -> dict[str, Any]:
@@ -11845,18 +12197,23 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
     )[:8]
     limit = min(max(_to_int(payload.limit, 10), 1), 20)
     search_mode = "normal" if str(payload.search_mode or "").strip().lower() == "normal" else "strict"
-    result = _run_persona_hot_workflow_cli(
-        {
-            "action": "fetch-hot-candidates",
-            "archiveId": clean_id,
-            "prompt": str(payload.prompt or "").strip(),
-            "refresh": bool(payload.refresh),
-            "limit": limit,
-            "searchMode": search_mode,
-            "memorySummaries": selected_summaries,
-        },
-        timeout_seconds=180,
-    )
+    _, _, archives = _persona_archive_source_for_write(clean_id)
+    archive = _find_persona_archive(archives, clean_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="persona not found")
+    with _persona_hot_interactive_priority():
+        result = _run_persona_hot_workflow_cli(
+            {
+                "action": "fetch-hot-candidates",
+                "archiveId": clean_id,
+                "prompt": str(payload.prompt or "").strip(),
+                "refresh": bool(payload.refresh),
+                "limit": limit,
+                "searchMode": search_mode,
+                "memorySummaries": selected_summaries,
+            },
+            timeout_seconds=180,
+        )
 
     cookie_rows = []
     for item in result.get("cookieStatuses") if isinstance(result.get("cookieStatuses"), list) else []:
@@ -11867,6 +12224,10 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
             "label": _normalize_hot_workflow_text(item.get("label") or item.get("platform") or ""),
             "message": _normalize_hot_workflow_text(item.get("message") or item.get("health") or ""),
             "health": str(item.get("health") or "").strip(),
+            "valid_cookie_count": _to_int(item.get("validCookieCount") or item.get("valid_cookie_count"), 0),
+            "expired_cookie_count": _to_int(item.get("expiredCookieCount") or item.get("expired_cookie_count"), 0),
+            "has_required_session_cookie": item.get("hasRequiredSessionCookie") if "hasRequiredSessionCookie" in item else item.get("has_required_session_cookie"),
+            "recommended_action": str(item.get("recommendedAction") or item.get("recommended_action") or "").strip(),
         })
 
     candidates = [
@@ -11877,6 +12238,7 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
         )
         if normalized
     ][:limit]
+    _update_persona_hot_prefetch_ready(clean_id, search_mode, _to_int(result.get("readyCount"), len(candidates)))
     return {
         "ok": True,
         "archive_name": str(result.get("archiveName") or result.get("archive_name") or "").strip(),
@@ -11887,11 +12249,7 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
         ],
         "search_mode": "normal" if str(result.get("searchMode") or search_mode).strip().lower() == "normal" else "strict",
         "cookie_statuses": cookie_rows,
-        "warnings": [
-            _normalize_hot_workflow_text(item)
-            for item in (result.get("warnings") if isinstance(result.get("warnings"), list) else [])
-            if _normalize_hot_workflow_text(item)
-        ],
+        "warnings": _persona_hot_user_warnings(result.get("warnings"), len(candidates), limit, cookie_rows),
         "candidates": candidates,
     }
 
@@ -11921,6 +12279,10 @@ def _import_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHot
         post_id = str(item.get("id") or "").strip()
         if post_id and post_id in post_by_id:
             imported_posts.append(post_by_id[post_id])
+    _, _, archives = _persona_archive_source_for_write(clean_id)
+    archive = _find_persona_archive(archives, clean_id)
+    if archive:
+        _queue_persona_hot_prefetch_for_archive(archive, force=True)
     return {
         "ok": True,
         "archive_id": str(result.get("archiveId") or clean_id).strip(),
@@ -12257,7 +12619,11 @@ def _create_persona_archive(payload: PersonaDashboardPersonaCreatePayload) -> di
     }
     archives.append(archive)
     _write_persona_archives_preserving_shape(path, raw, archives)
-    return _build_persona_dashboard_profile(archive)
+    _queue_persona_hot_prefetch_for_archive(archive, force=True)
+    hot_pool_warmup = {"ok": True, "status": "queued", "message": "热点候选池已转入后台补充。"}
+    profile = _build_persona_dashboard_profile(archive)
+    profile["hot_pool_warmup"] = hot_pool_warmup
+    return profile
 
 
 def _duplicate_persona_archive(archive_id: str) -> dict[str, Any]:
@@ -14883,6 +15249,7 @@ def create_app() -> FastAPI:
     async def lifespan(_: FastAPI):
         _ensure_tool_r18_stop_responder_started()
         _ensure_persona_dashboard_monitor_started()
+        _ensure_persona_hot_prefetch_worker_started()
         ensure_social_automation_worker_started()
         yield
 

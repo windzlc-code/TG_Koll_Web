@@ -210,6 +210,29 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS persona_hot_prefetch_jobs (
+              archive_id TEXT NOT NULL,
+              search_mode TEXT NOT NULL,
+              strategy_revision TEXT NOT NULL DEFAULT '',
+              ready_count INTEGER NOT NULL DEFAULT 0,
+              low_watermark INTEGER NOT NULL,
+              target_count INTEGER NOT NULL,
+              status TEXT NOT NULL DEFAULT 'queued',
+              next_run_at INTEGER NOT NULL DEFAULT 0,
+              lease_until INTEGER NOT NULL DEFAULT 0,
+              lease_token TEXT NOT NULL DEFAULT '',
+              failure_count INTEGER NOT NULL DEFAULT 0,
+              last_error TEXT NOT NULL DEFAULT '',
+              last_started_at INTEGER NOT NULL DEFAULT 0,
+              last_finished_at INTEGER NOT NULL DEFAULT 0,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL,
+              PRIMARY KEY (archive_id, search_mode)
+            )
+            """
+        )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_social_accounts_persona ON social_accounts(persona_id)")
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_social_accounts_persona_platform_username "
@@ -218,6 +241,10 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_social_tasks_queue ON social_automation_tasks(status, scheduled_at, priority, created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_social_tasks_account ON social_automation_tasks(account_id, created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_social_logs_task ON social_automation_logs(task_id, created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_persona_hot_prefetch_due ON persona_hot_prefetch_jobs(status, next_run_at, lease_until)")
+        prefetch_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(persona_hot_prefetch_jobs)").fetchall()}
+        if "lease_token" not in prefetch_columns:
+            conn.execute("ALTER TABLE persona_hot_prefetch_jobs ADD COLUMN lease_token TEXT NOT NULL DEFAULT ''")
         proxy_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(social_proxies)").fetchall()}
         proxy_column_migrations = {
             "source": "TEXT NOT NULL DEFAULT 'manual'",

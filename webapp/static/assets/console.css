@@ -2590,7 +2590,7 @@ body.persona-touch-dragging .persona-list-card:active {
   min-width: 36px;
   max-width: 36px;
   min-height: 32px;
-  align-self: center;
+  align-self: start;
   padding: 0;
   border: 0;
   background: transparent;
@@ -8265,6 +8265,17 @@ body.persona-touch-dragging .persona-list-card:active {
   white-space: nowrap;
 }
 
+.account-pool-card-subline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.account-pool-card-subline .status {
+  flex: 0 0 auto;
+}
+
 .account-pool-card-flags {
   display: grid;
   justify-items: end;
@@ -8297,6 +8308,27 @@ body.persona-touch-dragging .persona-list-card:active {
   grid-column: 1;
 }
 
+.account-pool-card:not(.persona-account-pool-card) {
+  grid-template-columns: minmax(156px, 0.9fr) minmax(0, 2.1fr);
+  grid-template-rows: auto auto;
+  align-items: center;
+}
+
+.account-pool-card:not(.persona-account-pool-card) .account-pool-card-main {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.account-pool-card:not(.persona-account-pool-card) .account-card-meta {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.account-pool-card:not(.persona-account-pool-card) .row-actions {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
 .account-pool-card .row-actions {
   justify-content: flex-start;
   flex-wrap: wrap;
@@ -8321,6 +8353,334 @@ body.persona-touch-dragging .persona-list-card:active {
   border-radius: 7px;
   font-size: 12px;
   font-weight: 780;
+}
+
+.persona-account-pool-layout {
+  display: grid;
+  grid-template-columns: minmax(148px, 190px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.persona-account-platform-panel,
+.persona-account-pool-panel {
+  min-height: 0;
+}
+
+.persona-account-pool-panel .account-pool-list {
+  grid-template-columns: 1fr;
+}
+
+.persona-account-pool-card {
+  max-width: none;
+  min-height: 142px;
+  padding: 16px;
+  gap: 10px;
+}
+
+.persona-account-pool-card .account-pool-card-copy strong {
+  font-size: 17px;
+}
+
+.persona-account-pool-card .account-pool-card-copy small,
+.persona-account-pool-card .account-card-meta {
+  font-size: 12px;
+}
+
+.persona-account-pool-card .account-card-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.persona-account-pool-card .account-card-meta span {
+  min-width: 0;
+}
+
+.persona-account-pool-card .row-actions button {
+  min-height: 34px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.persona-account-pool-card--summary {
+  grid-template-columns: minmax(180px, 0.82fr) minmax(0, 1.8fr);
+  grid-template-rows: auto auto;
+  align-items: center;
+  min-height: 96px;
+  padding: 14px 16px;
+  gap: 14px;
+}
+
+.persona-account-pool-card--summary .account-pool-card-main {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.persona-account-summary-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 240px));
+  justify-content: start;
+  gap: 12px 42px;
+  min-width: 0;
+}
+
+.persona-account-summary-meta > span,
+.persona-account-summary-meta .account-password-display {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.persona-account-summary-meta small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.persona-account-summary-meta strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.persona-account-pool-card--summary .persona-account-summary-actions {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  align-self: end;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  white-space: nowrap;
+}
+
+.persona-account-pool-card--inline-edit {
+  grid-template-columns: minmax(180px, 0.8fr) minmax(0, 2.4fr);
+  grid-template-rows: auto auto;
+  align-items: center;
+  min-height: 96px;
+  padding: 14px 16px;
+  gap: 14px;
+  cursor: default;
+}
+
+.persona-account-pool-card--inline-edit .account-pool-card-main {
+  grid-column: 1;
+  grid-row: 1;
+  align-self: start;
+}
+
+.persona-account-inline-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 300px));
+  justify-content: start;
+  gap: 0 34px;
+  min-width: 0;
+}
+
+.persona-account-inline-field {
+  display: grid;
+  min-width: 0;
+}
+
+.persona-account-inline-field > span:first-child {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.persona-account-inline-field > input {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+}
+
+.account-password-display {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.account-password-display > small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.account-password-display > strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-password-display--input {
+  width: 100%;
+  min-height: 34px;
+  padding: 0 6px 0 10px;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-solid);
+}
+
+.account-password-display--input:focus-within {
+  border-color: var(--ink);
+  background: var(--panel-solid);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ink) 12%, transparent);
+}
+
+.account-password-display--input input {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 4px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--ink);
+  font: inherit;
+}
+
+.account-password-display--input input::placeholder {
+  color: var(--ink);
+  opacity: 0.76;
+}
+
+.account-password-toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.account-password-toggle:hover,
+.account-password-toggle:focus-visible {
+  background: var(--soft);
+  color: var(--ink);
+}
+
+.account-password-toggle:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.account-password-toggle .ui-eye-icon {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.9;
+}
+
+.persona-account-inline-actions {
+  align-self: center;
+  justify-content: flex-end;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.persona-account-pool-card--inline-edit .persona-account-inline-actions {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  justify-content: flex-start;
+}
+
+.persona-account-inline-actions button {
+  min-height: 34px;
+}
+
+@media (max-width: 1180px) {
+  .persona-account-pool-card--summary {
+    grid-template-columns: minmax(150px, 0.9fr) minmax(0, 2fr);
+  }
+
+  .persona-account-summary-meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .persona-account-pool-card--summary .persona-account-summary-actions {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    justify-content: flex-start;
+  }
+
+  .persona-account-pool-card--inline-edit {
+    grid-template-columns: minmax(150px, 0.9fr) minmax(0, 2fr);
+  }
+
+  .persona-account-inline-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .persona-account-inline-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+
+  .persona-account-pool-card--inline-edit .persona-account-inline-actions {
+    grid-column: 1 / -1;
+    grid-row: auto;
+  }
+}
+
+@media (max-width: 760px) {
+  .persona-account-pool-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .persona-account-platform-panel .account-pool-platforms {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .persona-account-pool-card .account-card-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .persona-account-pool-card--inline-edit {
+    grid-template-columns: 1fr;
+  }
+
+  .persona-account-pool-card--summary {
+    grid-template-columns: 1fr;
+  }
+
+  .persona-account-inline-fields,
+  .persona-account-summary-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .persona-account-inline-actions {
+    grid-column: auto;
+  }
+
+  .persona-account-pool-card--inline-edit .persona-account-inline-actions {
+    grid-column: auto;
+  }
+
+  .persona-account-pool-card--summary .persona-account-summary-actions {
+    grid-column: auto;
+  }
 }
 
 .account-pool-bind-persona {
@@ -9077,6 +9437,88 @@ body.live-browser-modal-open {
 .empty-line {
   color: var(--muted);
   padding: 16px;
+}
+
+.workspace-bootstrap-loading {
+  display: grid;
+  place-content: center;
+  gap: 20px;
+  min-height: min(420px, 48vh);
+  padding: 28px 20px;
+  color: var(--muted);
+}
+
+.workspace-bootstrap-placeholder {
+  display: grid;
+  gap: 10px;
+  width: min(520px, 76vw);
+}
+
+.workspace-bootstrap-placeholder span {
+  display: block;
+  height: 12px;
+  border-radius: 3px;
+  background: var(--panel-2);
+  animation: workspace-bootstrap-pulse 1.2s ease-in-out infinite alternate;
+}
+
+.workspace-bootstrap-placeholder span:nth-child(2) {
+  width: 78%;
+  animation-delay: 120ms;
+}
+
+.workspace-bootstrap-placeholder span:nth-child(3) {
+  width: 58%;
+  animation-delay: 240ms;
+}
+
+.workspace-bootstrap-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity var(--motion-fast), transform var(--motion-fast);
+}
+
+.workspace-bootstrap-loading.is-notice-visible .workspace-bootstrap-notice {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.workspace-bootstrap-notice strong,
+.workspace-bootstrap-notice p {
+  display: block;
+}
+
+.workspace-bootstrap-notice strong {
+  color: var(--ink);
+  font-size: 15px;
+}
+
+.workspace-bootstrap-notice p {
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+
+.workspace-bootstrap-spinner {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 17px;
+  margin-top: 1px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: workspace-bootstrap-spin 700ms linear infinite;
+}
+
+@keyframes workspace-bootstrap-pulse {
+  from { opacity: .42; }
+  to { opacity: .86; }
+}
+
+@keyframes workspace-bootstrap-spin {
+  to { transform: rotate(360deg); }
 }
 
 @media (max-width: 1180px) {

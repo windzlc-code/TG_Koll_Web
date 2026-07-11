@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { resolveRuntimeFile } from "@/runtime/node/data-dir";
+import { withExclusiveJsonFileLock } from "@/runtime/node/json-file-lock";
 
 export type SentimentHotPlatform = "threads" | "instagram";
 export type SentimentHotMediaType = "image" | "video" | "unknown";
@@ -64,8 +65,17 @@ function readState(): StoreState {
 }
 
 function writeState(state: StoreState) {
-  fs.mkdirSync(path.dirname(STORE_FILE), { recursive: true });
-  fs.writeFileSync(STORE_FILE, JSON.stringify(state, null, 2), "utf8");
+  const temporaryPath = `${STORE_FILE}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(temporaryPath, JSON.stringify(state, null, 2), "utf8");
+  fs.renameSync(temporaryPath, STORE_FILE);
+}
+
+function updateState(mutator: (state: StoreState) => void) {
+  withExclusiveJsonFileLock(STORE_FILE, () => {
+    const state = readState();
+    mutator(state);
+    writeState(state);
+  });
 }
 
 export function buildSentimentCandidateId(input: { platform: string; sourceUrl?: string; content?: string }): string {
@@ -160,39 +170,39 @@ export function getSentimentHotShownAtMap(archiveId: string): Map<string, number
 }
 
 export function rememberSentimentHotShown(archiveId: string, candidates: SentimentHotCandidate[]) {
-  const state = readState();
-  const now = new Date().toISOString();
-  const current = new Map<string, ShownEntry>();
-  for (const entry of state.shown[archiveId] || []) {
-    const id = shownEntryId(entry);
-    if (!id) continue;
-    const at = typeof entry === "string" ? "" : String(entry.at || "");
-    current.set(id, typeof entry === "string" ? { id, at } : { ...entry, id, at });
-  }
-  for (const candidate of candidates) {
-    current.set(candidate.id, {
-      id: candidate.id,
-      at: now,
-      urlKey: historyUrlKey(candidate.sourceUrl) || undefined,
-      contentKey: historyContentKey(candidate.content) || undefined,
-    });
-  }
-  state.shown[archiveId] = [...current.values()].slice(-2000);
-  writeState(state);
+  updateState((state) => {
+    const now = new Date().toISOString();
+    const current = new Map<string, ShownEntry>();
+    for (const entry of state.shown[archiveId] || []) {
+      const id = shownEntryId(entry);
+      if (!id) continue;
+      const at = typeof entry === "string" ? "" : String(entry.at || "");
+      current.set(id, typeof entry === "string" ? { id, at } : { ...entry, id, at });
+    }
+    for (const candidate of candidates) {
+      current.set(candidate.id, {
+        id: candidate.id,
+        at: now,
+        urlKey: historyUrlKey(candidate.sourceUrl) || undefined,
+        contentKey: historyContentKey(candidate.content) || undefined,
+      });
+    }
+    state.shown[archiveId] = [...current.values()].slice(-2000);
+  });
 }
 
 export function rememberSentimentHotSelected(archiveId: string, candidateId: string) {
-  const state = readState();
-  const selected = new Set(state.selected[archiveId] || []);
-  selected.add(candidateId);
-  state.selected[archiveId] = [...selected].slice(-500);
-  writeState(state);
+  updateState((state) => {
+    const selected = new Set(state.selected[archiveId] || []);
+    selected.add(candidateId);
+    state.selected[archiveId] = [...selected].slice(-500);
+  });
 }
 
 export function rememberSentimentHotImported(archiveId: string, candidateId: string) {
-  const state = readState();
-  const imported = new Set(state.imported[archiveId] || []);
-  imported.add(candidateId);
-  state.imported[archiveId] = [...imported].slice(-500);
-  writeState(state);
+  updateState((state) => {
+    const imported = new Set(state.imported[archiveId] || []);
+    imported.add(candidateId);
+    state.imported[archiveId] = [...imported].slice(-500);
+  });
 }

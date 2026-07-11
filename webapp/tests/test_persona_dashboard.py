@@ -650,10 +650,11 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(resp.json()["id"], "pdr_test")
 
     def test_create_persona_requires_auth_and_persists_archive(self):
-        resp = self.client.post(
-            "/api/persona_dashboard/personas",
-            json={"name": "New Persona", "content": "New persona intro"},
-        )
+        with mock.patch.object(server, "_run_persona_hot_workflow_cli") as hot_workflow:
+            resp = self.client.post(
+                "/api/persona_dashboard/personas",
+                json={"name": "New Persona", "content": "New persona intro"},
+            )
         self.assertEqual(resp.status_code, 200)
         profile = resp.json()
         self.assertEqual(profile["name"], "New Persona")
@@ -662,6 +663,10 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(len(archives), 1)
         self.assertEqual(archives[0]["name"], "New Persona")
         self.assertEqual(archives[0]["posts"], [])
+        self.assertEqual(profile["hot_pool_warmup"]["status"], "queued")
+        hot_workflow.assert_not_called()
+        self.assertEqual(server._persona_hot_prefetch_status(profile["id"], "strict")["status"], "queued")
+        self.assertEqual(server._persona_hot_prefetch_status(profile["id"], "normal")["status"], "queued")
 
     def test_duplicate_persona_copies_shell_without_content_data(self):
         self._write_archives()
@@ -1205,7 +1210,11 @@ class PersonaDashboardApiTests(unittest.TestCase):
             "archiveName": "History Teacher",
             "keywords": ["历史", "课堂"],
             "cookieStatuses": [{"platform": "threads", "message": "ok"}],
-            "warnings": ["暂无 Instagram cookie"],
+            "warnings": [
+                "渠道统计：缓存初始 1；Threads 原始 1；最终 1/6",
+                "模型当前不可用，本轮仅使用同人设候选池。",
+                "模型语义复核暂不可用。",
+            ],
             "candidates": [
                 {
                     "id": "hot-1",
@@ -1241,6 +1250,10 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(body["candidates"][0]["id"], "hot-1")
         self.assertEqual(body["candidates"][0]["full_content"], "完整热点正文")
         self.assertEqual(body["candidates"][0]["media_items"][0]["url"], "https://example.com/hot.png")
+        self.assertEqual(body["warnings"], [
+            "已找到 1 条符合条件的热点，暂不足 6 条。",
+            "模型暂不可用，已优先使用当前人设候选池。",
+        ])
         payload = mocked.call_args.args[0]
         self.assertEqual(payload["action"], "fetch-hot-candidates")
         self.assertEqual(payload["archiveId"], "persona-1")
@@ -1249,9 +1262,6 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload["limit"], 6)
         self.assertEqual(payload["searchMode"], "strict")
         self.assertEqual(payload["memorySummaries"], ["记忆一"])
-        self.assertNotIn("recordShown", payload)
-        self.assertNotIn("forceLive", payload)
-        self.assertNotIn("deferBackgroundRefresh", payload)
 
     def test_fetch_persona_hot_candidates_uses_default_memories_without_web_params(self):
         self._write_archives()
@@ -1283,6 +1293,113 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertFalse(payload["refresh"])
         self.assertEqual(payload["limit"], 10)
         self.assertEqual(payload["memorySummaries"], [f"记忆{index}" for index in range(10, 2, -1)])
+        self.assertEqual(resp.json()["warnings"], ["暂未找到符合条件的热点，请稍后刷新候选。"])
+
+    def test_persona_hot_prefetch_worker_uses_dedicated_job_and_never_enqueues_regular_tasks(self):
+        self._write_archives()
+        archive = {"id": "persona-1", "name": "History Teacher", "content": "历史课堂"}
+        server._queue_persona_hot_prefetch(archive, "strict", force=True)
+        fake_result = {"ok": True, "readyCount": 50, "keywords": ["历史"], "warnings": []}
+
+        with mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value=fake_result) as hot_workflow, \
+             mock.patch.object(server, "_enqueue_task") as regular_queue, \
+             mock.patch.object(server, "create_social_task") as social_queue:
+            self.assertTrue(server.run_persona_hot_prefetch_once())
+
+        payload = hot_workflow.call_args.args[0]
+        self.assertEqual(payload["action"], "prefetch-hot-candidates")
+        self.assertEqual(payload["archiveId"], "persona-1")
+        self.assertEqual(payload["searchMode"], "strict")
+        regular_queue.assert_not_called()
+        social_queue.assert_not_called()
+        state = server._persona_hot_prefetch_status("persona-1", "strict")
+        self.assertEqual(state["status"], "ready")
+        self.assertEqual(state["ready_count"], 50)
+
+    def test_persona_hot_prefetch_ready_pool_is_not_polled_until_inventory_is_low(self):
+        self._write_archives()
+        archive = {"id": "persona-1", "name": "History Teacher", "content": "历史课堂"}
+        with server.db() as conn:
+            conn.execute("DELETE FROM persona_hot_prefetch_jobs")
+        server._queue_persona_hot_prefetch(archive, "strict", force=True)
+        with server.db() as conn:
+            conn.execute(
+                "UPDATE persona_hot_prefetch_jobs SET status = 'ready', next_run_at = 0 WHERE archive_id = ? AND search_mode = ?",
+                ("persona-1", "strict"),
+            )
+        self.assertIsNone(server._claim_persona_hot_prefetch_job())
+
+    def test_persona_hot_prefetch_uses_backoff_when_a_run_adds_no_candidates(self):
+        self._write_archives()
+        archive = {"id": "persona-1", "name": "History Teacher", "content": "历史课堂"}
+        server._queue_persona_hot_prefetch(archive, "strict", force=True)
+        with mock.patch.object(
+            server,
+            "_run_persona_hot_workflow_cli",
+            return_value={"ok": True, "readyCount": 0, "keywords": ["历史"], "warnings": ["未找到新增候选"]},
+        ):
+            self.assertTrue(server.run_persona_hot_prefetch_once())
+        state = server._persona_hot_prefetch_status("persona-1", "strict")
+        self.assertEqual(state["status"], "retry")
+        self.assertEqual(state["failure_count"], 1)
+        self.assertIn("未找到新增候选", state["last_error"])
+
+    def test_persona_hot_prefetch_drops_job_for_deleted_persona(self):
+        self._write_archives()
+        archive = {"id": "persona-1", "name": "History Teacher", "content": "历史课堂"}
+        server._queue_persona_hot_prefetch(archive, "strict", force=True)
+        (self.tool_runtime_dir / "persona_archives.json").write_text("[]", encoding="utf-8")
+        with mock.patch.object(server, "_run_persona_hot_workflow_cli") as hot_workflow:
+            self.assertTrue(server.run_persona_hot_prefetch_once())
+        hot_workflow.assert_not_called()
+        self.assertEqual(server._persona_hot_prefetch_status("persona-1", "strict"), {})
+
+    def test_persona_hot_prefetch_recovers_an_expired_running_lease(self):
+        self._write_archives()
+        archive = {"id": "persona-1", "name": "History Teacher", "content": "历史课堂"}
+        with server.db() as conn:
+            conn.execute("DELETE FROM persona_hot_prefetch_jobs")
+        server._queue_persona_hot_prefetch(archive, "strict", force=True)
+        with server.db() as conn:
+            conn.execute(
+                "UPDATE persona_hot_prefetch_jobs SET status = 'running', lease_until = 0, lease_token = 'stale' WHERE archive_id = ? AND search_mode = ?",
+                ("persona-1", "strict"),
+            )
+        claimed = server._claim_persona_hot_prefetch_job()
+        self.assertIsNotNone(claimed)
+        self.assertNotEqual(claimed["lease_token"], "stale")
+
+    def test_persona_hot_prefetch_yields_to_an_active_realtime_request(self):
+        self._write_archives()
+        archive = {"id": "persona-1", "name": "History Teacher", "content": "历史课堂"}
+        with server.db() as conn:
+            conn.execute("DELETE FROM persona_hot_prefetch_jobs")
+        server._queue_persona_hot_prefetch(archive, "strict", force=True)
+        with server._persona_hot_interactive_priority(), mock.patch.object(server, "_run_persona_hot_workflow_cli") as hot_workflow:
+            self.assertFalse(server.run_persona_hot_prefetch_once())
+        hot_workflow.assert_not_called()
+
+    def test_persona_hot_user_warnings_explain_threads_login_failures(self):
+        cases = [
+            (
+                {"platform": "threads", "health": "missing", "valid_cookie_count": 0},
+                "Threads 账号尚未授权登录，请先到账号管理完成登录。",
+            ),
+            (
+                {"platform": "threads", "health": "expired", "valid_cookie_count": 0, "expired_cookie_count": 4},
+                "Threads 登录 Cookie 已过期，请重新登录并同步 Cookie。",
+            ),
+            (
+                {"platform": "threads", "health": "degraded", "valid_cookie_count": 8, "has_required_session_cookie": False},
+                "Threads 账号未保持登录或缺少 sessionid，请重新登录并同步 Cookie。",
+            ),
+        ]
+        for status, expected in cases:
+            with self.subTest(health=status["health"]):
+                self.assertEqual(
+                    server._persona_hot_user_warnings([], 0, 10, [status]),
+                    ["暂未找到符合条件的热点，请稍后刷新候选。", expected],
+                )
 
     def test_import_persona_hot_candidates_returns_hot_source_meta(self):
         self._write_archives()

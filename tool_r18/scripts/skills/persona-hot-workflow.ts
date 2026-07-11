@@ -5,6 +5,8 @@ import {
   cleanSentimentCandidateContent,
   downloadCandidateMedia,
   fetchSentimentHotCandidates,
+  prefetchSentimentHotCandidatePool,
+  primeSentimentHotCandidatePool,
   refreshSentimentSourceMetrics,
 } from "@/lib/sentiment-hot-importer";
 import {
@@ -38,7 +40,22 @@ type RefreshHotPostInput = {
   postId: string;
 };
 
-type PersonaHotWorkflowInput = FetchHotCandidatesInput | ImportHotCandidatesInput | RefreshHotPostInput;
+type PrimeHotCandidatesInput = {
+  action: "prime-hot-candidates";
+  archiveId: string;
+  searchMode?: "normal" | "strict";
+  limit?: number;
+};
+
+type PrefetchHotCandidatesInput = {
+  action: "prefetch-hot-candidates";
+  archiveId: string;
+  searchMode?: "normal" | "strict";
+  lowWatermark?: number;
+  targetCount?: number;
+};
+
+type PersonaHotWorkflowInput = FetchHotCandidatesInput | ImportHotCandidatesInput | RefreshHotPostInput | PrimeHotCandidatesInput | PrefetchHotCandidatesInput;
 
 function printJson(value: unknown) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -115,6 +132,29 @@ async function fetchHotCandidates(input: FetchHotCandidatesInput) {
     warnings: result.warnings,
     candidates: result.candidates,
   };
+}
+
+async function primeHotCandidates(input: PrimeHotCandidatesInput) {
+  const archive = await loadPersonaArchive(String(input.archiveId || "").trim());
+  if (!archive) throw new Error("人设不存在。");
+  const result = await primeSentimentHotCandidatePool(
+    archive,
+    input.searchMode === "normal" ? "normal" : "strict",
+    Math.max(1, Math.min(Number(input.limit || 10), 20)),
+  );
+  return { ok: result.ok, archiveId: archive.id, archiveName: archive.name, ...result };
+}
+
+async function prefetchHotCandidates(input: PrefetchHotCandidatesInput) {
+  const archive = await loadPersonaArchive(String(input.archiveId || "").trim());
+  if (!archive) throw new Error("人设不存在。");
+  const result = await prefetchSentimentHotCandidatePool({
+    archive,
+    searchMode: input.searchMode === "normal" ? "normal" : "strict",
+    lowWatermark: Math.max(1, Math.min(Number(input.lowWatermark || 10), 80)),
+    targetCount: Math.max(1, Math.min(Number(input.targetCount || 50), 120)),
+  });
+  return { ok: result.ok, archiveId: archive.id, archiveName: archive.name, searchMode: input.searchMode === "normal" ? "normal" : "strict", ...result };
 }
 
 async function appendCandidateAsPost(archiveId: string, candidate: SentimentHotCandidate, index: number) {
@@ -222,6 +262,12 @@ async function main() {
   const input = JSON.parse(raw) as PersonaHotWorkflowInput;
   if (input.action === "fetch-hot-candidates") {
     await printJsonAndExit(await fetchHotCandidates(input));
+  }
+  if (input.action === "prime-hot-candidates") {
+    await printJsonAndExit(await primeHotCandidates(input));
+  }
+  if (input.action === "prefetch-hot-candidates") {
+    await printJsonAndExit(await prefetchHotCandidates(input));
   }
   if (input.action === "import-hot-candidates") {
     await printJsonAndExit(await importHotCandidates(input));
