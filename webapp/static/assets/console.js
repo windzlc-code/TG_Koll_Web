@@ -11766,14 +11766,14 @@ function renderPersonaCard(persona, groupId = "", options = {}) {
       data-group-id="${esc(groupId)}"
       draggable="false"
     >
-      <button type="button" class="persona-list-item ${showSelectionCheck ? "publish-persona-select-item" : ""}" data-persona-select="${esc(persona.id)}">
+      <button type="button" class="persona-list-item ${showSelectionCheck ? "publish-persona-select-item" : "persona-list-item--status"}" data-persona-select="${esc(persona.id)}">
         ${showSelectionCheck ? `<span class="publish-persona-check ${publishSelected ? "is-checked" : ""}" aria-hidden="true"></span>` : ""}
-        <span class="${isMatrix ? "publish-persona-copy" : ""}">
+        <span class="persona-card-copy ${isMatrix ? "publish-persona-copy" : ""}">
           <span class="persona-card-title">
             <strong>${esc(persona.name || persona.id || "未命名人设")}</strong>
             ${renderPersonaKindBadge(persona)}
-            ${ungrouped ? `<span class="persona-kind-badge persona-ungrouped-badge">未分组</span>` : ""}
-            ${accountHealth.tone === "unbound" ? "" : `<span class="persona-account-health-icon is-${esc(accountHealth.tone)}" title="${esc(accountHealth.label)}" aria-label="${esc(accountHealth.label)}">${renderPersonaAccountHealthIcon(accountHealth)}</span>`}
+            ${isMatrix && ungrouped ? `<span class="persona-kind-badge persona-ungrouped-badge">未分组</span>` : ""}
+            ${isMatrix && accountHealth.tone !== "unbound" ? `<span class="persona-account-health-icon is-${esc(accountHealth.tone)}" title="${esc(accountHealth.label)}" aria-label="${esc(accountHealth.label)}">${renderPersonaAccountHealthIcon(accountHealth)}</span>` : ""}
           </span>
           <small>${esc(isPublishContext ? publishAccountLabel : (isAutomationContext || isAccountPoolContext ? (personaAccounts(persona).length ? `${personaAccounts(persona).length} 个执行账号` : "未绑定执行账号") : personaExecutionAccountLabel(persona)))}</small>
           ${isPublishContext ? `
@@ -11783,6 +11783,10 @@ function renderPersonaCard(persona, groupId = "", options = {}) {
             </span>
           ` : ""}
         </span>
+        ${isMatrix ? "" : `<span class="persona-card-status">
+          ${ungrouped ? `<span class="persona-kind-badge persona-ungrouped-badge">未分组</span>` : ""}
+          ${accountHealth.tone === "unbound" ? "" : `<span class="persona-account-health-icon is-${esc(accountHealth.tone)}" title="${esc(accountHealth.label)}" aria-label="${esc(accountHealth.label)}">${renderPersonaAccountHealthIcon(accountHealth)}</span>`}
+        </span>`}
       </button>
       ${isMatrix ? `<input class="publish-persona-hidden-check" type="checkbox" data-matrix-persona value="${esc(persona.id)}" ${publishSelected ? "checked" : ""} aria-hidden="true" tabindex="-1" />` : ""}
       ${isAccountPoolContext ? `<button type="button" class="account-pool-bind-persona" data-account-pool-bind-persona="${esc(persona.id)}" title="绑定所选账号" aria-label="绑定所选账号" ${accountPoolSelectedCount === 1 ? "" : "disabled"}>
