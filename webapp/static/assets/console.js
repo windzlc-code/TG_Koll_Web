@@ -15503,6 +15503,7 @@ function defaultPayloadForTask(taskType) {
 }
 
 function validateTaskForPlatform(taskType, platform, { includePublish = false } = {}) {
+  if (taskType === "open_login") return ["threads", "instagram"].includes(String(platform || "").trim().toLowerCase());
   const allowed = taskOptionsForPlatform(platform, { includePublish }).map(([value]) => value);
   return allowed.includes(taskType);
 }
