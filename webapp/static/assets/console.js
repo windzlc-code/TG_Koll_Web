@@ -14758,7 +14758,7 @@ function proxyPoolRows() {
 }
 
 function proxyProtocol(proxy = {}) {
-  return String(proxy.protocol || proxy.proxy_type || "-").trim().toUpperCase();
+  return String(proxy?.protocol || proxy?.proxy_type || "-").trim().toUpperCase();
 }
 
 function proxyExitIp(proxy = {}) {

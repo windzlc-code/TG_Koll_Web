@@ -7730,7 +7730,7 @@ body.persona-touch-dragging .persona-list-card:active {
   font-size: 18px;
 }
 
-.proxy-pool-head span,
+.proxy-pool-head > div > span,
 .proxy-pager > span {
   color: var(--muted);
   font-size: 12px;
@@ -7839,6 +7839,7 @@ body.persona-touch-dragging .persona-list-card:active {
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
+  white-space: nowrap;
 }
 
 .proxy-pager select {
