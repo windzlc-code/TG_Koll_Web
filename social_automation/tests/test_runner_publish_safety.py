@@ -297,7 +297,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["url"], permalink)
         self.assertEqual(result["published"]["url"], permalink)
-        self.assertTrue(any(call.args[1] == resolved_profile and call.args[3] == "threads_publish_baseline" for call in goto.call_args_list))
+        self.assertFalse(any(call.args[1] == resolved_profile and call.args[3] == "threads_publish_baseline" for call in goto.call_args_list))
         self.assertEqual(confirm_profile.call_args.kwargs["profile_url"], resolved_profile)
         screenshot.assert_called_once_with(page, Path("."), {"id": "publish-task"}, "publish_done", mock.ANY)
 

@@ -2398,13 +2398,6 @@ def _run_threads_publish_post(page, task, payload, screenshot_dir, logger, accou
     profile_url = _resolve_threads_profile_url(page, account)
     previous_latest_permalink = ""
     try:
-        _goto(page, profile_url, logger, "threads_publish_baseline", timeout_ms=12000, networkidle_ms=2200)
-        previous_latest_permalink = _find_latest_threads_post_permalink(page)
-    except Exception as exc:
-        logger.log("warn", "threads_publish_baseline_failed", "发布前读取账号主页最新帖子失败，将在提交后按正文和新链接谨慎确认。", {"error": str(exc)[:500]})
-    _goto(page, THREADS_HOME, logger, "threads_publish_open_after_baseline")
-    _dismiss_threads_compose_dialogs(page, logger)
-    try:
         compose = _ensure_threads_compose_ready(page, logger)
     except Exception:
         raise
