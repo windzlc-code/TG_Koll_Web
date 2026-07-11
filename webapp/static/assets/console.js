@@ -2552,6 +2552,9 @@ function personaHotSelectedReplacementPoolEntry(personaId, candidateId) {
 
 function setPersonaHotSelectedReplacementPoolId(personaId, candidateId, entryId = "") {
   const form = personaFormState(personaId).generate;
+  if (!form.hotSelectedReplacementPoolIdByCandidate || typeof form.hotSelectedReplacementPoolIdByCandidate !== "object") {
+    form.hotSelectedReplacementPoolIdByCandidate = {};
+  }
   const key = String(candidateId || "").trim();
   const cleanEntryId = String(entryId || "").trim();
   if (!key) return;
@@ -2561,6 +2564,9 @@ function setPersonaHotSelectedReplacementPoolId(personaId, candidateId, entryId 
 
 function addPersonaHotReplacementPoolFiles(personaId, candidateId, files = []) {
   const form = personaFormState(personaId).generate;
+  if (!form.hotReplacementPoolByCandidate || typeof form.hotReplacementPoolByCandidate !== "object") {
+    form.hotReplacementPoolByCandidate = {};
+  }
   const key = String(candidateId || "").trim();
   if (!key) return [];
   const current = personaHotReplacementPool(personaId, key);
@@ -13660,6 +13666,7 @@ function renderAccountPoolCards(accounts, selectedAccount) {
             <div class="account-card-meta">
               <span>${esc(persona ? `已绑定：${persona.name || persona.id}` : "未绑定人设")}</span>
               <span>${esc(account.profile_dir ? "已配置浏览器环境" : "未配置浏览器环境")}</span>
+              <span>${esc(accountResidentialProxyLabel(account))}</span>
             </div>
             <div class="row-actions">
               <button type="button" data-account-pool-edit="${esc(account.id)}">编辑</button>
