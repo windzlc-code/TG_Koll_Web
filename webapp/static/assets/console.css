@@ -7765,13 +7765,13 @@ body.persona-touch-dragging .persona-list-card:active {
 .proxy-table {
   display: grid;
   gap: 6px;
-  min-width: 540px;
+  min-width: 1400px;
 }
 
 .proxy-table-row {
   display: grid;
-  grid-template-columns: minmax(90px, 1fr) 90px 70px 70px 60px 90px;
-  align-items: center;
+  grid-template-columns: 36px 68px 74px 84px 76px 100px 140px 120px 76px 72px 88px 64px 70px 108px 84px;
+  align-items: start;
   gap: 8px;
   min-width: 0;
   padding: 10px;
@@ -7790,6 +7790,7 @@ body.persona-touch-dragging .persona-list-card:active {
   color: var(--muted);
   font-size: 12px;
   font-weight: 850;
+  align-items: center;
 }
 
 .proxy-table-row > span,
@@ -7805,28 +7806,28 @@ body.persona-touch-dragging .persona-list-card:active {
   font-size: 13px;
 }
 
-.proxy-cell-stack {
+.proxy-detail-cell {
   display: grid;
-  gap: 2px;
+  gap: 3px;
   align-content: center;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  white-space: normal !important;
+  overflow-wrap: anywhere;
 }
 
-.proxy-cell-stack > strong,
-.proxy-cell-stack > small {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.proxy-cell-stack > strong {
+.proxy-detail-cell > strong {
   color: var(--ink);
   font-size: 12px;
 }
 
-.proxy-cell-stack > small {
+.proxy-detail-cell > small {
   color: var(--muted);
   font-size: 10px;
+}
+
+.proxy-numeric {
+  font-variant-numeric: tabular-nums;
 }
 
 .proxy-status-stack .status {
@@ -7841,6 +7842,7 @@ body.persona-touch-dragging .persona-list-card:active {
 .proxy-table-actions {
   display: flex;
   gap: 3px;
+  align-self: center;
   overflow: visible !important;
 }
 
@@ -7904,6 +7906,10 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .proxy-form-grid label {
   min-width: 0;
+}
+
+.proxy-form-grid [hidden] {
+  display: none !important;
 }
 
 .proxy-form-grid label > span {

@@ -14154,18 +14154,32 @@ function proxyDatetimeInputValue(value = "") {
   return local.toISOString().slice(0, 16);
 }
 
+function proxySourceSuggestions(current = "") {
+  const values = new Set(["OwlProxy"]);
+  (Array.isArray(state.socialProxies) ? state.socialProxies : []).forEach((proxy) => {
+    const value = String(proxy?.source || "").trim();
+    if (value && value !== "manual") values.add(value);
+  });
+  const selected = String(current || "").trim();
+  if (selected && selected !== "manual") values.add(selected);
+  return Array.from(values).map((value) => `<option value="${esc(value)}"></option>`).join("");
+}
+
 function sharedProxyFieldsHtml(prefix, proxy = null) {
   const protocol = ["socks5", "http", "https"].includes(proxyProtocol(proxy).toLowerCase()) ? proxyProtocol(proxy).toLowerCase() : "socks5";
+  const source = proxy?.source === "manual" ? "" : String(proxy?.source || "");
+  const expiryMode = Number(proxy?.expires_at || 0) > 0 ? "custom" : "permanent";
   return `
     <label><span>代理名称</span><input id="${esc(prefix)}Name" value="${esc(proxy?.name || "")}" placeholder="留空则自动生成" /></label>
     <label><span>代理协议</span><select id="${esc(prefix)}Protocol">${proxySelectOptions([["socks5", "SOCKS5"], ["http", "HTTP"], ["https", "HTTPS"]], protocol)}</select></label>
-    <label><span>供应商 / 来源</span><input id="${esc(prefix)}Source" value="${esc(proxy?.source === "manual" ? "" : (proxy?.source || ""))}" placeholder="例如：OwlProxy" /></label>
+    <label><span>供应商 / 来源</span><input id="${esc(prefix)}Source" list="${esc(prefix)}SourceOptions" value="${esc(source)}" placeholder="选择或输入供应商" /><datalist id="${esc(prefix)}SourceOptions">${proxySourceSuggestions(source)}</datalist></label>
     <label><span>持有方式</span><select id="${esc(prefix)}PurchaseStatus">${proxySelectOptions([["owned", "自有"], ["leased", "租用"]], proxy?.purchase_status || "owned")}</select></label>
     <label><span>Host</span><input id="${esc(prefix)}Host" value="${esc(proxy?.host || "")}" placeholder="proxy.example.com" autocomplete="off" /></label>
     <label><span>端口</span><input id="${esc(prefix)}Port" type="number" min="1" max="65535" value="${esc(proxy?.port || "")}" placeholder="1080" /></label>
     <label><span>认证用户名（可选）</span><input id="${esc(prefix)}Username" value="" placeholder="${proxy?.username_configured ? "留空则沿用已保存用户名" : "代理认证用户名"}" autocomplete="off" /></label>
     <label><span>认证密码（可选）</span><input id="${esc(prefix)}Password" type="password" value="" placeholder="${proxy?.password_configured ? "留空则沿用已保存密码" : "代理认证密码"}" autocomplete="new-password" /></label>
-    <label><span>有效期（可选）</span><input id="${esc(prefix)}ExpiresAt" type="datetime-local" value="${esc(proxyDatetimeInputValue(proxy?.expires_at))}" /></label>
+    <label><span>有效期</span><select id="${esc(prefix)}ExpiryMode" data-proxy-expiry-mode data-proxy-expiry-target="${esc(prefix)}ExpiresAtWrap">${proxySelectOptions([["permanent", "长期"], ["30", "30 天"], ["90", "90 天"], ["180", "180 天"], ["custom", "自定义时间"]], expiryMode)}</select></label>
+    <label id="${esc(prefix)}ExpiresAtWrap" ${expiryMode === "custom" ? "" : "hidden"}><span>自定义有效期</span><input id="${esc(prefix)}ExpiresAt" type="datetime-local" value="${esc(proxyDatetimeInputValue(proxy?.expires_at))}" /></label>
     <label class="proxy-form-note"><span>备注（可选）</span><textarea id="${esc(prefix)}Note" rows="3" placeholder="用途或续费信息">${esc(proxy?.note || "")}</textarea></label>`;
 }
 
@@ -14176,6 +14190,16 @@ function sharedProxyPayload(prefix, proxy = null) {
     showMsg("socialMsg", "请填写有效的静态住宅代理 Host 和端口。", false);
     return null;
   }
+  const expiryMode = String($(`${prefix}ExpiryMode`)?.value || "permanent");
+  let expiresAt = 0;
+  if (["30", "90", "180"].includes(expiryMode)) expiresAt = Math.floor(Date.now() / 1000) + (Number(expiryMode) * 86400);
+  if (expiryMode === "custom") {
+    expiresAt = $(`${prefix}ExpiresAt`)?.value ? Math.floor(new Date($(`${prefix}ExpiresAt`).value).getTime() / 1000) : 0;
+    if (!expiresAt) {
+      showMsg("socialMsg", "请选择自定义有效时间", false);
+      return null;
+    }
+  }
   const payload = {
     ip_type: "static_residential",
     name: String($(`${prefix}Name`)?.value || "").trim(),
@@ -14184,7 +14208,7 @@ function sharedProxyPayload(prefix, proxy = null) {
     purchase_status: String($(`${prefix}PurchaseStatus`)?.value || "owned").trim(),
     host,
     port,
-    expires_at: $(`${prefix}ExpiresAt`)?.value ? Math.floor(new Date($(`${prefix}ExpiresAt`).value).getTime() / 1000) : 0,
+    expires_at: expiresAt,
     note: String($(`${prefix}Note`)?.value || "").trim(),
     status: "pending",
   };
@@ -14815,6 +14839,10 @@ function proxyPurchaseStatusLabel(value = "") {
   return { owned: "自有", leased: "租用" }[String(value || "").trim().toLowerCase()] || "自有";
 }
 
+function proxyIpTypeLabel(value = "") {
+  return String(value || "static_residential").trim().toLowerCase() === "static_residential" ? "静态住宅" : String(value || "-");
+}
+
 function renderEditIcon() {
   return `<svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
     <path d="M4 20h4L19 9l-4-4L4 16v4Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" />
@@ -14832,7 +14860,7 @@ function renderProxyPool() {
   const page = state.proxyPoolPage;
   const offset = (page - 1) * pageSize;
   const pageRows = rows.slice(offset, offset + pageSize);
-  const columns = ["代理", "连接", "网络", "状态", "采购", "操作"];
+  const columns = ["序号", "分组", "IP 类型", "来源", "购买状态", "代理名称", "代理资讯", "备注", "代理状态", "代理归属", "出口 IP", "已绑账号", "代理协议", "有效时间", "操作"];
   root.innerHTML = `
     <section class="proxy-pool-panel">
       <div class="proxy-pool-head">
@@ -14842,33 +14870,25 @@ function renderProxyPool() {
       <div class="proxy-table-wrap">
         <div class="proxy-table" role="table" aria-label="代理 IP 列表">
           <div class="proxy-table-row proxy-table-row--head" role="row">${columns.map((column) => `<span role="columnheader">${column}</span>`).join("")}</div>
-          ${pageRows.length ? pageRows.map((proxy) => {
+          ${pageRows.length ? pageRows.map((proxy, index) => {
             const endpoint = [String(proxy.host || "").trim(), String(proxy.port || "").trim()].filter(Boolean).join(":") || "-";
-            const country = String(proxy.country || "").trim() || "-";
+            const country = String(proxy.country || "").trim() || "待识别";
             const authLabel = proxy.username_configured || proxy.password_configured ? "需认证" : "无认证";
             return `<div class="proxy-table-row" role="row">
-              <span role="cell" class="proxy-cell-stack" title="${esc(`${proxy.name || ""} ${proxySourceLabel(proxy.source)}`)}">
-                <strong>${esc(proxy.name || endpoint)}</strong>
-                <small>${esc(proxySourceLabel(proxy.source))}</small>
-              </span>
-              <span role="cell" class="proxy-cell-stack" title="${esc(`${proxyProtocol(proxy)} ${endpoint} ${authLabel}`)}">
-                <strong>${esc(proxyProtocol(proxy))}</strong>
-                <small>${esc(endpoint)}</small>
-                <small>${esc(authLabel)}</small>
-              </span>
-              <span role="cell" class="proxy-cell-stack" title="${esc(`${proxyExitIp(proxy)} ${country}`)}">
-                <strong>${esc(proxyExitIp(proxy))}</strong>
-                <small>${esc(country)}</small>
-              </span>
-              <span role="cell" class="proxy-cell-stack proxy-status-stack">
-                <span class="status ${esc(proxy.status || "")}">${esc(proxyStatusLabel(proxy.status))}</span>
-                <small>绑定 ${proxyBoundAccountCount(proxy)}</small>
-                <small>${proxy.last_check_at ? esc(formatTime(proxy.last_check_at)) : "未检测"}</small>
-              </span>
-              <span role="cell" class="proxy-cell-stack" title="${esc(`${proxyPurchaseStatusLabel(proxy.purchase_status)} ${proxy.expires_at ? formatTime(proxy.expires_at) : "长期"}`)}">
-                <strong>${esc(proxyPurchaseStatusLabel(proxy.purchase_status))}</strong>
-                <small>${proxy.expires_at ? esc(formatTime(proxy.expires_at)) : "长期"}</small>
-              </span>
+              <span role="cell" class="proxy-detail-cell proxy-numeric">${offset + index + 1}</span>
+              <span role="cell" class="proxy-detail-cell">未分组</span>
+              <span role="cell" class="proxy-detail-cell">${esc(proxyIpTypeLabel(proxy.ip_type))}</span>
+              <span role="cell" class="proxy-detail-cell">${esc(proxySourceLabel(proxy.source))}</span>
+              <span role="cell" class="proxy-detail-cell">${esc(proxyPurchaseStatusLabel(proxy.purchase_status))}</span>
+              <span role="cell" class="proxy-detail-cell"><strong>${esc(proxy.name || endpoint)}</strong></span>
+              <span role="cell" class="proxy-detail-cell"><strong>${esc(endpoint)}</strong><small>${esc(authLabel)}</small></span>
+              <span role="cell" class="proxy-detail-cell">${esc(proxy.note || "-")}</span>
+              <span role="cell" class="proxy-detail-cell proxy-status-stack"><span class="status ${esc(proxy.status || "")}">${esc(proxyStatusLabel(proxy.status))}</span><small>${proxy.last_check_at ? esc(formatTime(proxy.last_check_at)) : "未检测"}</small></span>
+              <span role="cell" class="proxy-detail-cell">${esc(country)}</span>
+              <span role="cell" class="proxy-detail-cell">${esc(proxyExitIp(proxy))}</span>
+              <span role="cell" class="proxy-detail-cell proxy-numeric">${proxyBoundAccountCount(proxy)}</span>
+              <span role="cell" class="proxy-detail-cell">${esc(proxyProtocol(proxy))}</span>
+              <span role="cell" class="proxy-detail-cell proxy-numeric">${proxy.expires_at ? esc(formatTime(proxy.expires_at)) : "长期"}</span>
               <span role="cell" class="proxy-table-actions">
                 <button type="button" data-proxy-check="${esc(proxy.id)}" title="检测代理" aria-label="检测代理">${renderRefreshIcon()}</button>
                 <button type="button" data-proxy-edit="${esc(proxy.id)}" title="编辑代理" aria-label="编辑代理">${renderEditIcon()}</button>
@@ -15981,6 +16001,12 @@ function bindEvents() {
     }
   });
   document.addEventListener("change", (event) => {
+    const expiryMode = event.target?.closest?.("[data-proxy-expiry-mode]");
+    if (expiryMode) {
+      const target = $(expiryMode.dataset.proxyExpiryTarget || "");
+      if (target) target.hidden = expiryMode.value !== "custom";
+      return;
+    }
     const input = event.target?.closest?.(".upload-zone-input");
     if (input) syncUploadDropzone(input);
   });
