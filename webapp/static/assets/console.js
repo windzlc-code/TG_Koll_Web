@@ -5395,6 +5395,23 @@ function renderPersonaAccountPanelV2(persona, account, profile, step) {
       </label>
     </div>
     <div class="persona-inline-panel">
+      <strong>登录资料</strong>
+      <p>保存后可用于登录自动化；也可以主动打开浏览器手动完成登录。</p>
+      <div class="form-grid">
+        <label>登录账号
+          <input id="personaAutoLoginUsername" value="${esc(selectedAccount?.login_username || selectedAccount?.username || "")}" placeholder="账号 / 邮箱 / 手机号" autocomplete="username" />
+        </label>
+        <label>登录密码
+          <input id="personaAutoLoginPassword" type="password" value="" placeholder="${esc(credentialsMask)}" autocomplete="current-password" />
+        </label>
+      </div>
+      <div class="row-actions">
+        <button type="button" data-persona-save-login ${selectedAccount ? "" : "disabled"}>保存登录资料</button>
+        <button type="button" data-persona-clear-login ${selectedAccount?.login_password_configured ? "" : "disabled"}>删除登录资料</button>
+        <button type="button" class="primary" data-persona-open-login="${esc(selectedAccountId)}" ${selectedAccount ? "" : "disabled"}>打开登录</button>
+      </div>
+    </div>
+    <div class="persona-inline-panel">
       <strong>绑定执行账号</strong>
       <p>按当前平台为这个人设绑定可执行账号。绑定后会自动出现在内容概览和发布账号选择里。</p>
       <label>${platformLabel(platform)} 用户名
