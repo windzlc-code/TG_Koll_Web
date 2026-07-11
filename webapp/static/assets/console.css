@@ -7765,12 +7765,12 @@ body.persona-touch-dragging .persona-list-card:active {
 .proxy-table {
   display: grid;
   gap: 6px;
-  min-width: 1840px;
+  min-width: 540px;
 }
 
 .proxy-table-row {
   display: grid;
-  grid-template-columns: 54px 100px 116px 112px 150px 190px 170px 108px 170px 132px 108px 100px 164px 132px;
+  grid-template-columns: minmax(130px, 1fr) 72px 64px 60px 50px 104px;
   align-items: center;
   gap: 8px;
   min-width: 0;
@@ -7812,16 +7812,16 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .proxy-table-actions {
   display: flex;
-  gap: 6px;
+  gap: 4px;
   overflow: visible !important;
 }
 
 .proxy-table-actions button {
   display: inline-grid;
   place-items: center;
-  width: 36px;
-  min-width: 36px;
-  min-height: 34px;
+  width: 32px;
+  min-width: 32px;
+  min-height: 32px;
   padding: 0;
 }
 

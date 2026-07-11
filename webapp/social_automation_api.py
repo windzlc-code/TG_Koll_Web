@@ -1062,6 +1062,10 @@ def update_social_proxy(proxy_id: str, payload: SocialProxyPatchPayload) -> dict
 
         connection_fields = {"proxy_type", "host", "port", "username", "password"}
         if connection_fields.intersection(updates):
+            updates["country"] = ""
+            updates["region"] = ""
+            updates["city"] = ""
+            updates["isp"] = ""
             updates["last_check_at"] = 0
             updates["last_check_result"] = ""
         if updates:
@@ -1255,7 +1259,7 @@ def check_social_proxy(proxy_id: str) -> dict[str, Any]:
     result: dict[str, Any] = {"ok": False, "checked_at": _now(), "proxy": _proxy_url(proxy, include_password=False)}
     try:
         resp = requests.get(
-            "https://ipwho.is/?fields=success,message,ip,country,country_code,region,city,connection",
+            "https://ipwho.is/?fields=success,message,ip,country,country_code",
             proxies={"http": proxy_url, "https": proxy_url},
             timeout=20,
         )
@@ -1270,20 +1274,13 @@ def check_social_proxy(proxy_id: str) -> dict[str, Any]:
     )
     status = "active" if result.get("ok") else "failed"
     response = result.get("response") if isinstance(result.get("response"), dict) else {}
-    connection = response.get("connection") if isinstance(response.get("connection"), dict) else {}
     detected_country = str(response.get("country_code") or response.get("country") or "").strip()
-    detected_region = str(response.get("region") or "").strip()
-    detected_city = str(response.get("city") or "").strip()
-    detected_isp = str(connection.get("isp") or connection.get("org") or "").strip()
     with db() as conn:
         checked_at = _now()
         cursor = conn.execute(
             """
             UPDATE social_proxies
             SET status = ?, country = CASE WHEN ? != '' THEN ? ELSE country END,
-                region = CASE WHEN ? != '' THEN ? ELSE region END,
-                city = CASE WHEN ? != '' THEN ? ELSE city END,
-                isp = CASE WHEN ? != '' THEN ? ELSE isp END,
                 last_check_at = ?, last_check_result = ?, updated_at = ?
             WHERE id = ? AND proxy_type = ? AND host = ? AND port = ?
               AND username = ? AND password = ?
@@ -1292,9 +1289,6 @@ def check_social_proxy(proxy_id: str) -> dict[str, Any]:
             (
                 status,
                 detected_country, detected_country,
-                detected_region, detected_region,
-                detected_city, detected_city,
-                detected_isp, detected_isp,
                 checked_at, json.dumps(safe_result, ensure_ascii=False), checked_at,
                 proxy_id, proxy["proxy_type"], proxy["host"], proxy["port"], proxy["username"], proxy["password"],
                 proxy["updated_at"], proxy["status"],

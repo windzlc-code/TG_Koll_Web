@@ -14116,7 +14116,7 @@ function accountResidentialProxyLabel(account = null) {
   if (!proxy) return "未使用代理 IP";
   const checkedIp = String(proxy.last_check_result?.response?.ip || "").trim();
   const endpoint = checkedIp || String(proxy.host || "").trim();
-  const region = [proxy.country, proxy.region, proxy.city, proxy.isp].map((item) => String(item || "").trim()).filter(Boolean).join(" · ");
+  const region = String(proxy.country || "").trim();
   const status = String(proxy.status || "").toLowerCase() === "failed" ? "检测失败" : "住宅 IP";
   return `${status}：${endpoint || "已配置"}${region ? ` · ${region}` : ""}`;
 }
@@ -14130,26 +14130,12 @@ function proxySelectOptions(options, selected = "") {
 
 function sharedProxyFieldsHtml(prefix, proxy = null) {
   const protocol = ["socks5", "http", "https"].includes(proxyProtocol(proxy).toLowerCase()) ? proxyProtocol(proxy).toLowerCase() : "socks5";
-  const status = String(proxy?.status || "pending").trim().toLowerCase();
   return `
-    <label><span>IP 类型</span><input value="静态住宅 IP" readonly /></label>
-    <label><span>来源</span><select id="${esc(prefix)}Source">${proxySelectOptions([["manual", "手动录入"], ["provider", "代理供应商"], ["self_owned", "自有线路"]], proxy?.source || "manual")}</select></label>
-    <label><span>购买状态</span><select id="${esc(prefix)}PurchaseStatus">${proxySelectOptions([["owned", "自有"], ["leased", "租用中"], ["expiring", "即将到期"], ["expired", "已过期"]], proxy?.purchase_status || "owned")}</select></label>
-    <label><span>代理名称</span><input id="${esc(prefix)}Name" value="${esc(proxy?.name || "")}" placeholder="留空则自动生成" /></label>
     <label><span>代理协议</span><select id="${esc(prefix)}Protocol">${proxySelectOptions([["socks5", "SOCKS5"], ["http", "HTTP"], ["https", "HTTPS"]], protocol)}</select></label>
     <label><span>Host</span><input id="${esc(prefix)}Host" value="${esc(proxy?.host || "")}" placeholder="proxy.example.com" autocomplete="off" /></label>
     <label><span>端口</span><input id="${esc(prefix)}Port" type="number" min="1" max="65535" value="${esc(proxy?.port || "")}" placeholder="1080" /></label>
     <label><span>认证用户名（可选）</span><input id="${esc(prefix)}Username" value="" placeholder="${proxy?.username_configured ? "留空则沿用已保存用户名" : "代理认证用户名"}" autocomplete="off" /></label>
-    <label><span>认证密码（可选）</span><input id="${esc(prefix)}Password" type="password" value="" placeholder="${proxy?.password_configured ? "留空则沿用已保存密码" : "代理认证密码"}" autocomplete="new-password" /></label>
-    <label><span>代理状态</span><input value="${esc(proxyStatusLabel(status))}" readonly /></label>
-    <label><span>出口 IP</span><input value="${esc(proxyExitIp(proxy || {}))}" placeholder="保存检测后自动识别" readonly /></label>
-    <label><span>国家 / 地区</span><input id="${esc(prefix)}Country" value="${esc(proxy?.country || "")}" placeholder="保存检测后自动识别" readonly /></label>
-    <label><span>州 / 省</span><input id="${esc(prefix)}Region" value="${esc(proxy?.region || "")}" placeholder="保存检测后自动识别" readonly /></label>
-    <label><span>城市</span><input id="${esc(prefix)}City" value="${esc(proxy?.city || "")}" placeholder="保存检测后自动识别" readonly /></label>
-    <label><span>ISP</span><input id="${esc(prefix)}Isp" value="${esc(proxy?.isp || "")}" placeholder="保存检测后自动识别" readonly /></label>
-    <label><span>有效时间</span><input id="${esc(prefix)}ExpiresAt" type="datetime-local" value="${esc(proxyDatetimeInputValue(proxy?.expires_at))}" /></label>
-    <label><span>已绑定账号数</span><input value="${proxy ? proxyBoundAccountCount(proxy) : 0}" readonly /></label>
-    <label class="proxy-form-note"><span>备注</span><textarea id="${esc(prefix)}Note" rows="3" placeholder="代理用途或续费信息">${esc(proxy?.note || "")}</textarea></label>`;
+    <label><span>认证密码（可选）</span><input id="${esc(prefix)}Password" type="password" value="" placeholder="${proxy?.password_configured ? "留空则沿用已保存密码" : "代理认证密码"}" autocomplete="new-password" /></label>`;
 }
 
 function sharedProxyPayload(prefix, proxy = null) {
@@ -14161,18 +14147,9 @@ function sharedProxyPayload(prefix, proxy = null) {
   }
   const payload = {
     ip_type: "static_residential",
-    source: String($(`${prefix}Source`)?.value || "manual").trim(),
-    purchase_status: String($(`${prefix}PurchaseStatus`)?.value || "owned").trim(),
-    name: String($(`${prefix}Name`)?.value || "").trim(),
     proxy_type: String($(`${prefix}Protocol`)?.value || "socks5").trim().toLowerCase(),
     host,
     port,
-    country: String($(`${prefix}Country`)?.value || "").trim(),
-    region: String($(`${prefix}Region`)?.value || "").trim(),
-    city: String($(`${prefix}City`)?.value || "").trim(),
-    isp: String($(`${prefix}Isp`)?.value || "").trim(),
-    note: String($(`${prefix}Note`)?.value || "").trim(),
-    expires_at: $(`${prefix}ExpiresAt`)?.value ? Math.floor(new Date($(`${prefix}ExpiresAt`).value).getTime() / 1000) : 0,
     status: "pending",
   };
   const username = String($(`${prefix}Username`)?.value || "").trim();
@@ -14205,7 +14182,7 @@ function accountResidentialProxyPayload(prefix, accountName = "", proxy = null) 
   if (!payload) return null;
   payload.protocol = payload.proxy_type;
   delete payload.proxy_type;
-  if (!payload.name) payload.name = `[静态住宅] ${String(accountName || payload.host).trim()}`;
+  payload.name = `[静态住宅] ${String(accountName || payload.host).trim()}`;
   return payload;
 }
 
@@ -14236,8 +14213,6 @@ function syncAccountPoolCreateDraftFromForm() {
     proxy_port: accountPoolFieldValue("ProxyPort"),
     proxy_username: accountPoolFieldValue("ProxyUsername"),
     proxy_password: String($("accountPoolProxyPassword")?.value || ""),
-    proxy_country: accountPoolFieldValue("ProxyCountry"),
-    proxy_isp: accountPoolFieldValue("ProxyIsp"),
     proxy_confirmed: Boolean($("accountPoolProxyConfirmed")?.checked),
     proxy_enabled: Boolean($("accountPoolProxyEnabled")?.checked),
   };
@@ -14795,21 +14770,6 @@ function proxyStatusLabel(value = "") {
   return { active: "正常", inactive: "停用", disabled: "停用", failed: "异常", checking: "检测中", pending: "待检测" }[clean] || (value || "-");
 }
 
-function proxyIpTypeLabel(value = "") {
-  const clean = String(value || "").trim().toLowerCase();
-  return clean === "static_residential" ? "静态住宅" : "不支持";
-}
-
-function proxySourceLabel(value = "") {
-  const clean = String(value || "").trim().toLowerCase();
-  return { manual: "手动录入", provider: "代理供应商", self_owned: "自有线路" }[clean] || (value || "-");
-}
-
-function proxyPurchaseStatusLabel(value = "") {
-  const clean = String(value || "").trim().toLowerCase();
-  return { owned: "自有", leased: "租用中", active: "正常", expiring: "即将到期", expired: "已过期" }[clean] || (value || "-");
-}
-
 function renderEditIcon() {
   return `<svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
     <path d="M4 20h4L19 9l-4-4L4 16v4Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" />
@@ -14827,7 +14787,7 @@ function renderProxyPool() {
   const page = state.proxyPoolPage;
   const offset = (page - 1) * pageSize;
   const pageRows = rows.slice(offset, offset + pageSize);
-  const columns = ["序号", "IP类型", "来源", "购买状态", "代理名称", "代理信息", "备注", "代理状态", "代理归属", "出口IP", "已绑定账号数", "代理协议", "有效时间", "操作"];
+  const columns = ["代理信息", "出口 IP", "国家", "状态", "绑定", "操作"];
   root.innerHTML = `
     <section class="proxy-pool-panel">
       <div class="proxy-pool-head">
@@ -14837,23 +14797,15 @@ function renderProxyPool() {
       <div class="proxy-table-wrap">
         <div class="proxy-table" role="table" aria-label="代理 IP 列表">
           <div class="proxy-table-row proxy-table-row--head" role="row">${columns.map((column) => `<span role="columnheader">${column}</span>`).join("")}</div>
-          ${pageRows.length ? pageRows.map((proxy, index) => {
+          ${pageRows.length ? pageRows.map((proxy) => {
             const endpoint = [String(proxy.host || "").trim(), String(proxy.port || "").trim()].filter(Boolean).join(":") || "-";
-            const region = [proxy.country, proxy.region, proxy.city, proxy.isp].map((item) => String(item || "").trim()).filter(Boolean).join(" / ") || "-";
+            const country = String(proxy.country || "").trim() || "-";
             return `<div class="proxy-table-row" role="row">
-              <span role="cell">${offset + index + 1}</span>
-              <span role="cell">${esc(proxyIpTypeLabel(proxy.ip_type))}</span>
-              <span role="cell">${esc(proxySourceLabel(proxy.source))}</span>
-              <span role="cell">${esc(proxyPurchaseStatusLabel(proxy.purchase_status))}</span>
-              <strong role="cell" title="${esc(proxy.name || "")}">${esc(proxy.name || "-")}</strong>
               <span role="cell" class="proxy-endpoint" title="${esc(`${proxyProtocol(proxy)} ${endpoint}`)}">${esc(`${proxyProtocol(proxy)} ${endpoint}`)}</span>
-              <span role="cell" title="${esc(proxy.note || "")}">${esc(proxy.note || "-")}</span>
-              <span role="cell"><span class="status ${esc(proxy.status || "")}">${esc(proxyStatusLabel(proxy.status))}</span></span>
-              <span role="cell" title="${esc(region)}">${esc(region)}</span>
               <span role="cell">${esc(proxyExitIp(proxy))}</span>
+              <span role="cell" title="${esc(country)}">${esc(country)}</span>
+              <span role="cell"><span class="status ${esc(proxy.status || "")}">${esc(proxyStatusLabel(proxy.status))}</span></span>
               <span role="cell">${proxyBoundAccountCount(proxy)}</span>
-              <span role="cell">${esc(proxyProtocol(proxy))}</span>
-              <span role="cell">${esc(formatTime(proxy.expires_at))}</span>
               <span role="cell" class="proxy-table-actions">
                 <button type="button" data-proxy-check="${esc(proxy.id)}" title="检测代理" aria-label="检测代理">${renderRefreshIcon()}</button>
                 <button type="button" data-proxy-edit="${esc(proxy.id)}" title="编辑代理" aria-label="编辑代理">${renderEditIcon()}</button>
@@ -14874,15 +14826,6 @@ function renderProxyPool() {
         </div>
       </div>
     </section>`;
-}
-
-function proxyDatetimeInputValue(value = "") {
-  if (!value) return "";
-  const number = Number(value);
-  const date = Number.isFinite(number) && number > 100000 ? new Date(number * 1000) : new Date(value);
-  if (!value || Number.isNaN(date.getTime())) return "";
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
-  return local.toISOString().slice(0, 16);
 }
 
 function proxyFormPayload(proxy = null) {
@@ -14911,7 +14854,7 @@ function openProxyModal(proxyId = "") {
       <div class="console-modal-actions"><button type="button" data-proxy-modal-cancel>取消</button><button type="button" class="primary" data-proxy-modal-save="${esc(proxy?.id || "")}">保存代理</button></div>
     </section>`;
   document.body.appendChild(modal);
-  $("proxyFormSource")?.focus();
+  $("proxyFormProtocol")?.focus();
   const close = () => modal.remove();
   modal.addEventListener("click", (event) => {
     if (event.target.closest("[data-proxy-modal-cancel]")) { close(); return; }
@@ -14938,7 +14881,7 @@ function openProxyModal(proxyId = "") {
         }
       }
       await refreshProxyPool();
-      showMsg("socialMsg", detected ? `${id ? "代理已更新" : "代理已新增"}，出口 IP、地区和 ISP 已自动识别。` : `${id ? "代理已更新" : "代理已新增"}，自动检测未通过，请检查连接参数后重试。`, detected);
+      showMsg("socialMsg", detected ? `${id ? "代理已更新" : "代理已新增"}，出口 IP 和国家已自动识别。` : `${id ? "代理已更新" : "代理已新增"}，自动检测未通过，请检查连接参数后重试。`, detected);
     }).catch((error) => {
       save.disabled = false;
       showMsg("socialMsg", error.detail || error.message || "保存代理失败", false);

@@ -410,22 +410,19 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
             "success": True,
             "ip": "203.0.113.10",
             "country_code": "US",
-            "region": "California",
-            "city": "Los Angeles",
-            "connection": {"isp": "Residential Fiber"},
         }
         with mock.patch.object(social_api.requests, "get", return_value=response):
             checked = social_api.check_social_proxy(proxy["id"])
         self.assertEqual(checked["exit_ip"], "203.0.113.10")
         self.assertEqual(checked["country"], "US")
-        self.assertEqual(checked["region"], "California")
-        self.assertEqual(checked["city"], "Los Angeles")
-        self.assertEqual(checked["isp"], "Residential Fiber")
+        self.assertEqual(checked["region"], "")
+        self.assertEqual(checked["city"], "")
+        self.assertEqual(checked["isp"], "")
         with social_api.db() as conn:
             rows = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (proxy["id"],)).fetchall()
             listed = social_api._proxy_public_rows(conn, rows)
         self.assertEqual(listed[0]["exit_ip"], "203.0.113.10")
-        self.assertEqual(listed[0]["region"], "California")
+        self.assertEqual(listed[0]["country"], "US")
         self.assertEqual(listed[0]["bound_account_count"], 0)
         self.assertEqual(listed[0]["bound_account_ids"], [])
 
