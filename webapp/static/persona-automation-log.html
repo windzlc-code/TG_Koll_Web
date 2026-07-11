@@ -117,6 +117,11 @@
         "failed",
       ]).has(stage);
     }
+    function screenshotThumbnailUrl(url) {
+      const value = String(url || "");
+      if (!value.startsWith("/api/persona_dashboard/automation/screenshots/")) return value;
+      return `${value}${value.includes("?") ? "&" : "?"}thumbnail=1`;
+    }
     function renderMedia(task, logs) {
       const payload = task.payload || {};
       const result = task.result || {};
@@ -138,7 +143,7 @@
         return true;
       }).map((item) => {
         const type = mediaType(item.path || item.url);
-        const preview = type === "image" ? `<img src="${esc(item.url)}" alt="${esc(item.label)}" loading="lazy" />` : "";
+        const preview = type === "image" ? `<img src="${esc(screenshotThumbnailUrl(item.url))}" alt="${esc(item.label)}" loading="lazy" />` : "";
         return `<a href="${esc(item.url)}" target="_blank" rel="noopener">${preview}<strong>${esc(item.label)}</strong><br><small>${esc(item.path || item.url)}</small></a>`;
       }).join("");
       document.getElementById("mediaBox").innerHTML = html || "<div class='small'>暂无媒体或截图</div>";

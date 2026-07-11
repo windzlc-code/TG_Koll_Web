@@ -8,6 +8,7 @@ import time
 import uuid
 import contextlib
 import subprocess
+from io import BytesIO
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -15,6 +16,7 @@ from typing import Any, Callable
 import requests
 from fastapi import Body, Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket
 from fastapi.responses import FileResponse, Response
+from PIL import Image
 from pydantic import BaseModel, Field
 
 from .auth import SESSION_COOKIE, get_current_user, require_admin
@@ -58,6 +60,15 @@ _WORKER_STATE: dict[str, Any] = {
 }
 _RUNNING_TASK_CONTROLS: dict[str, dict[str, Any]] = {}
 _RUNNING_TASK_CONTROLS_LOCK = threading.Lock()
+
+
+def _screenshot_thumbnail_bytes(path: Path) -> bytes:
+    with Image.open(path) as source:
+        image = source.convert("RGB")
+        image.thumbnail((480, 270), Image.Resampling.LANCZOS)
+        output = BytesIO()
+        image.save(output, format="JPEG", quality=72, optimize=True)
+    return output.getvalue()
 _EPHEMERAL_TASK_SECRETS: dict[str, dict[str, str]] = {}
 _EPHEMERAL_TASK_SECRETS_LOCK = threading.Lock()
 _TASK_SECRETS_SCRUBBED = False
@@ -345,13 +356,23 @@ def register_social_automation_routes(app: FastAPI) -> None:
         return {"ok": True, "result": run_social_automation_once()}
 
     @app.get("/api/persona_dashboard/automation/screenshots/{filename}")
-    def api_social_screenshot(filename: str, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_social_screenshot(filename: str, thumbnail: bool = False, _user: dict[str, Any] = Depends(get_current_user)):
         safe = Path(filename).name
         path = (_DATA_DIR / "social_automation" / "screenshots" / safe).resolve()
         root = (_DATA_DIR / "social_automation" / "screenshots").resolve()
         if root != path.parent or not path.exists():
             raise HTTPException(status_code=404, detail="截图不存在")
-        return FileResponse(str(path))
+        if not thumbnail:
+            return FileResponse(str(path))
+        try:
+            content = _screenshot_thumbnail_bytes(path)
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail="截图缩略图生成失败") from exc
+        return Response(
+            content=content,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "private, max-age=86400"},
+        )
 
 
 def _authenticate_live_browser_websocket(websocket: WebSocket) -> bool:

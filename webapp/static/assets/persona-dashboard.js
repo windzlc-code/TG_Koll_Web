@@ -1258,6 +1258,12 @@ function pdAutomationScreenshotUrl(path) {
   return name ? `/api/persona_dashboard/automation/screenshots/${encodeURIComponent(name)}` : "";
 }
 
+function pdAutomationScreenshotThumbnailUrl(url) {
+  const value = String(url || "");
+  if (!value.startsWith("/api/persona_dashboard/automation/screenshots/")) return value;
+  return `${value}${value.includes("?") ? "&" : "?"}thumbnail=1`;
+}
+
 function pdAutomationLogImages(task, logs) {
   const result = (task && task.result) || {};
   const items = [];
@@ -1396,7 +1402,7 @@ function pdAutomationLogScreenshot(row) {
   const index = Math.max(0, images.findIndex((item) => item.url === url));
   return `
     <button class="persona-auto-log-shot" type="button" data-auto-gallery-index="${pdEscape(String(index))}">
-      <img src="${pdEscape(url)}" alt="步骤截图" loading="lazy" />
+      <img src="${pdEscape(pdAutomationScreenshotThumbnailUrl(url))}" alt="步骤截图" loading="lazy" />
       <span>点击放大截图</span>
     </button>
   `;
@@ -1420,7 +1426,7 @@ function pdRenderAutomationLogMedia(task, logs) {
     const imageButton = galleryIndex >= 0;
     return `
     <${imageButton ? "button" : "a"} class="persona-auto-log-media-item" ${imageButton ? `type="button" data-auto-gallery-index="${pdEscape(String(galleryIndex))}"` : `href="${pdEscape(item.url)}" target="_blank" rel="noopener"`}>
-      ${imageButton ? `<img src="${pdEscape(item.url)}" alt="${pdEscape(item.label)}" loading="lazy" />` : ""}
+      ${imageButton ? `<img src="${pdEscape(pdAutomationScreenshotThumbnailUrl(item.url))}" alt="${pdEscape(item.label)}" loading="lazy" />` : ""}
       <strong>${pdEscape(item.label)}</strong>
       <span>点击预览</span>
     </${imageButton ? "button" : "a"}>`;

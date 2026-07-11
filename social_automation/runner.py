@@ -2403,6 +2403,20 @@ def _wait_for_threads_own_post(page, caption: str, logger: AutomationLogger, acc
     return {"confirmed": False, "reason": "发布已提交，但账号主页未看到本次发布内容。", "url": str(page.url or target_url)}
 
 
+def _capture_threads_publish_evidence(page, permalink: str, caption: str, screenshot_dir: Path, task: dict[str, Any], logger: AutomationLogger) -> str:
+    try:
+        _goto(page, permalink, logger, "threads_publish_result", timeout_ms=20000, networkidle_ms=3500)
+        if caption:
+            page.get_by_text(caption, exact=False).first.wait_for(state="visible", timeout=15000)
+        else:
+            page.locator('a[href*="/post/"]').first.wait_for(state="visible", timeout=15000)
+        _sleep_between(1.0, 1.6)
+    except Exception as exc:
+        logger.log("warn", "publish_evidence_not_ready", "发布已确认，但最终帖子页面尚未稳定，未保存异常加载页截图。", {"url": permalink, "error": str(exc)[:500]})
+        return ""
+    return _screenshot(page, screenshot_dir, task, "publish_done", logger)
+
+
 def _run_threads_publish_post(page, task, payload, screenshot_dir, logger, account: dict[str, Any] | None = None) -> dict[str, Any]:
     media_paths = [str(p) for p in (payload.get("media_paths") or []) if str(p or "").strip()]
     caption = str(payload.get("caption") or payload.get("content") or payload.get("text") or "").strip()
@@ -2469,7 +2483,7 @@ def _run_threads_publish_post(page, task, payload, screenshot_dir, logger, accou
         message = f"{reason} 为避免重复发布，任务已停止自动重试，请人工核对账号主页。"
         logger.log("warn", "threads_publish_unconfirmed", message, {"submit": success, "profile": profile_confirmation, "retryable": False})
         raise NeedManualError(message, "publish_submitted_unconfirmed")
-    shot = _screenshot(page, screenshot_dir, task, "publish_done", logger)
+    shot = _capture_threads_publish_evidence(page, permalink, caption, screenshot_dir, task, logger)
     published = {
         **success,
         **profile_confirmation,
@@ -2517,8 +2531,8 @@ def _run_publish_post(page, task, payload, screenshot_dir, logger, platform: str
     if not _click_text_button(page, logger, ["Share"], "publish_share"):
         raise RuntimeError("未找到 Instagram 分享按钮。")
     success = _wait_for_publish_success(page, logger)
-    shot = _screenshot(page, screenshot_dir, task, "publish_done", logger)
     time.sleep(5)
+    shot = _screenshot(page, screenshot_dir, task, "publish_done", logger)
     return {"ok": True, "published": success, "url": page.url, "screenshot_path": shot}
 
 

@@ -3954,6 +3954,7 @@ function registerMediaPreviewGroup(items) {
   const id = `media-group-${++state.mediaPreviewSeq}`;
   state.mediaPreviewGroups[id] = rows.map((item) => ({
     previewUrl: String(item.previewUrl || "").trim(),
+    originalUrl: String(item.originalUrl || item.original_url || item.previewUrl || "").trim(),
     type: String(item.type || "image").trim() || "image",
     label: String(item.label || "").trim(),
   }));
@@ -3969,6 +3970,7 @@ function renderMediaPreviewButton(item, groupId, index, {
   const label = String(item?.label || "").trim();
   const type = String(item?.type || "image").trim() || "image";
   const text = caption || mediaKindLabel(type);
+  const displayUrl = String(item?.thumbnailUrl || item?.thumbnail_url || item?.previewUrl || "").trim();
   const rootTag = interactive ? "button" : "div";
   return `
     <${rootTag}
@@ -3976,10 +3978,10 @@ function renderMediaPreviewButton(item, groupId, index, {
       class="${esc(className)}${interactive ? "" : " is-static"}"
       ${interactive ? `data-media-preview-group="${esc(groupId)}" data-media-preview-index="${esc(index)}" data-media-preview-type="${esc(type)}" data-media-preview-label="${esc(label || text)}"` : ""}>
       ${type === "video"
-        ? `<video class="${esc(frameClass)}" src="${esc(item.previewUrl)}" muted playsinline preload="metadata" onerror="handlePersonaMediaFrameError(this)"></video>`
+        ? `<video class="${esc(frameClass)}" src="${esc(displayUrl)}" muted playsinline preload="metadata" onerror="handlePersonaMediaFrameError(this)"></video>`
         : type === "audio"
           ? `<div class="${esc(frameClass)} ${esc(frameClass)}--audio"><strong>音频</strong><small>点击站内预览</small></div>`
-          : `<img class="${esc(frameClass)}" src="${esc(item.previewUrl)}" alt="${esc(label || "media")}" loading="lazy" onerror="handlePersonaMediaFrameError(this)" />`}
+          : `<img class="${esc(frameClass)}" src="${esc(displayUrl)}" alt="${esc(label || "media")}" loading="lazy" onerror="handlePersonaMediaFrameError(this)" />`}
       <span>${esc(text)}</span>
     </${rootTag}>
   `;
@@ -4386,12 +4388,13 @@ function renderPersonaMediaLightboxCurrent() {
   const body = $("personaMediaLightboxBody");
   if (!body) return;
   if (title) title.textContent = item.label || `${mediaKindLabel(item.type)}预览`;
+  const sourceUrl = String(item.originalUrl || item.previewUrl || "").trim();
   resetPersonaMediaLightboxTransform();
   body.innerHTML = item.type === "video"
-    ? `<video class="persona-media-lightbox-frame" src="${esc(item.previewUrl)}" controls autoplay playsinline preload="metadata" onerror="handlePersonaMediaLightboxError(this, '视频加载失败，原始文件可能已失效。')"></video>`
+    ? `<video class="persona-media-lightbox-frame" src="${esc(sourceUrl)}" controls autoplay playsinline preload="metadata" onerror="handlePersonaMediaLightboxError(this, '视频加载失败，原始文件可能已失效。')"></video>`
     : item.type === "audio"
-      ? `<audio class="persona-media-lightbox-audio" src="${esc(item.previewUrl)}" controls autoplay onerror="handlePersonaMediaLightboxError(this, '音频加载失败，原始文件可能已失效。')"></audio>`
-      : `<img class="persona-media-lightbox-frame is-zoomable" data-media-lightbox-zoomable src="${esc(item.previewUrl)}" alt="${esc(item.label || "媒体预览")}" draggable="false" onerror="handlePersonaMediaLightboxError(this, '图片加载失败，原始文件可能已失效。')" />`;
+      ? `<audio class="persona-media-lightbox-audio" src="${esc(sourceUrl)}" controls autoplay onerror="handlePersonaMediaLightboxError(this, '音频加载失败，原始文件可能已失效。')"></audio>`
+      : `<img class="persona-media-lightbox-frame is-zoomable" data-media-lightbox-zoomable src="${esc(sourceUrl)}" alt="${esc(item.label || "媒体预览")}" draggable="false" onerror="handlePersonaMediaLightboxError(this, '图片加载失败，原始文件可能已失效。')" />`;
   applyPersonaMediaLightboxTransform();
   syncPersonaMediaLightboxNav(items.length, index);
   node.hidden = false;
@@ -9006,6 +9009,19 @@ function automationScreenshotUrlFromPath(pathValue) {
   return filename ? `/api/persona_dashboard/automation/screenshots/${encodeURIComponent(filename)}` : "";
 }
 
+function automationScreenshotThumbnailUrl(urlValue) {
+  const value = String(urlValue || "").trim();
+  if (!value || !value.startsWith("/api/persona_dashboard/automation/screenshots/")) return value;
+  return `${value}${value.includes("?") ? "&" : "?"}thumbnail=1`;
+}
+
+function isAutomationResultScreenshotStage(stageValue) {
+  return new Set([
+    "publish_done", "comment_done", "reply_done", "like_done", "already_liked",
+    "share_done", "threads_auto_reply_done", "threads_warmup", "browse_feed", "check_login", "login_complete",
+  ]).has(String(stageValue || "").trim());
+}
+
 function latestSocialTaskScreenshot(task, logs = []) {
   const result = task?.result || {};
   const direct = directMediaPreviewUrl(result.screenshot_url || result.screenshotUrl);
@@ -9022,6 +9038,7 @@ function latestSocialTaskScreenshot(task, logs = []) {
   }
   for (let index = logs.length - 1; index >= 0; index -= 1) {
     const log = logs[index] || {};
+    if (!isAutomationResultScreenshotStage(log.stage)) continue;
     const logUrl = directMediaPreviewUrl(log.screenshot_url);
     if (logUrl) return logUrl;
     const logPath = automationScreenshotUrlFromPath(log.screenshot_path);
@@ -9043,8 +9060,11 @@ function renderSocialTaskResult(task, logs = [], emptyText = "提交后，这里
   const terminal = ["success", "failed", "cancelled", "need_manual"].includes(String(task.status || ""));
   const canCancel = activeTaskStatus(task.status);
   const screenshotReason = legacyMediaPreviewReason(screenshotUrl);
+  const screenshotItem = screenshotUrl && !screenshotReason
+    ? { previewUrl: screenshotUrl, originalUrl: screenshotUrl, thumbnailUrl: automationScreenshotThumbnailUrl(screenshotUrl), type: "image", label: "任务截图" }
+    : null;
   const screenshotGroupId = screenshotUrl && !screenshotReason
-    ? registerMediaPreviewGroup([{ previewUrl: screenshotUrl, type: "image", label: "任务截图" }])
+    ? registerMediaPreviewGroup([screenshotItem])
     : "";
   return `
     <div class="persona-inline-panel persona-publish-result-card">
@@ -9061,7 +9081,7 @@ function renderSocialTaskResult(task, logs = [], emptyText = "提交后，这里
       ${screenshotUrl
         ? (screenshotReason
           ? `<div class="publish-result-link is-unavailable"><div class="persona-media-frame persona-media-frame--empty"><strong>媒体不可预览</strong><small>${esc(screenshotReason)}</small></div></div>`
-          : renderMediaPreviewButton({ previewUrl: screenshotUrl, type: "image", label: "任务截图" }, screenshotGroupId, 0, { className: "publish-result-link", frameClass: "publish-result-image", caption: "任务截图" }))
+          : renderMediaPreviewButton(screenshotItem, screenshotGroupId, 0, { className: "publish-result-link", frameClass: "publish-result-image", caption: "任务截图" }))
         : `<div class="empty-state">${terminal ? "当前任务没有返回截图。" : "执行中，截图生成后会显示在这里。"}</div>`}
       ${recentLogs.length ? `<div class="compact-list">${recentLogs.map((log) => `
         <article class="compact-row compact-row-log">
@@ -9107,7 +9127,7 @@ function collectTaskScreenshots(task = {}, logs = []) {
     const url = taskScreenshotFromValue(value);
     if (!url || seen.has(url)) return;
     seen.add(url);
-    rows.push({ previewUrl: url, url, type: "image", label, time });
+    rows.push({ previewUrl: url, originalUrl: url, thumbnailUrl: automationScreenshotThumbnailUrl(url), url, type: "image", label, time });
   };
   const pushMedia = (item, index = 0, labelPrefix = "任务图片") => {
     if (!item) return;
@@ -9192,7 +9212,8 @@ function renderTaskDetailLogs(logs = [], { limit = 30 } = {}) {
       </div>
       ${rows.length ? rows.map((log) => {
         const screenshotUrl = taskScreenshotFromValue(log.screenshot_url || log.screenshot_path || "");
-        const screenshotGroupId = screenshotUrl ? registerMediaPreviewGroup([{ previewUrl: screenshotUrl, url: screenshotUrl, type: "image", label: logStageLabel(log.stage, log.level) }]) : "";
+        const screenshotItem = screenshotUrl ? { previewUrl: screenshotUrl, originalUrl: screenshotUrl, thumbnailUrl: automationScreenshotThumbnailUrl(screenshotUrl), url: screenshotUrl, type: "image", label: logStageLabel(log.stage, log.level) } : null;
+        const screenshotGroupId = screenshotItem ? registerMediaPreviewGroup([screenshotItem]) : "";
         return `
           <article class="task-detail-log-item">
             <div>
@@ -9200,7 +9221,7 @@ function renderTaskDetailLogs(logs = [], { limit = 30 } = {}) {
               <span>${esc(formatTime(log.created_at || log.ts || ""))}</span>
             </div>
             <p>${esc(taskLogMessage(log))}</p>
-            ${screenshotUrl ? renderMediaPreviewButton({ previewUrl: screenshotUrl, type: "image", label: logStageLabel(log.stage, log.level) }, screenshotGroupId, 0, {
+            ${screenshotItem ? renderMediaPreviewButton(screenshotItem, screenshotGroupId, 0, {
               className: "task-log-screenshot-button",
               frameClass: "task-log-screenshot-frame",
               caption: "查看截图",

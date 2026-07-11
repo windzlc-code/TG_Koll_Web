@@ -5983,7 +5983,7 @@ body.persona-touch-dragging .persona-list-card:active {
 .task-screenshot-frame {
   width: 100%;
   aspect-ratio: 16 / 10;
-  object-fit: cover;
+  object-fit: contain;
   border-radius: 6px;
   background: var(--soft);
 }
@@ -5996,7 +5996,7 @@ body.persona-touch-dragging .persona-list-card:active {
 .task-log-screenshot-frame {
   width: 100%;
   aspect-ratio: 4 / 3;
-  object-fit: cover;
+  object-fit: contain;
   border-radius: 6px;
   background: var(--soft);
 }
@@ -6417,7 +6417,7 @@ body.persona-touch-dragging .persona-list-card:active {
   display: block;
   width: 100%;
   max-height: 320px;
-  object-fit: cover;
+  object-fit: contain;
   background: var(--panel-solid);
 }
 

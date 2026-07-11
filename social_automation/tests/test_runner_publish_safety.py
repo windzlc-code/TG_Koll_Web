@@ -77,6 +77,40 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         page.screenshot.assert_called_once()
         self.assertFalse(page.screenshot.call_args.kwargs["full_page"])
 
+    def test_threads_final_screenshot_waits_for_published_caption(self):
+        page = mock.Mock()
+        caption_locator = mock.Mock()
+        page.get_by_text.return_value.first = caption_locator
+
+        with (
+            mock.patch.object(runner, "_goto") as goto,
+            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner, "_screenshot", return_value="final.png") as screenshot,
+        ):
+            result = runner._capture_threads_publish_evidence(
+                page, "https://www.threads.com/@user/post/ABC", "published body", Path("."), {"id": "task"}, _Logger()
+            )
+
+        self.assertEqual(result, "final.png")
+        goto.assert_called_once()
+        caption_locator.wait_for.assert_called_once_with(state="visible", timeout=15000)
+        screenshot.assert_called_once()
+
+    def test_threads_final_screenshot_skips_loading_page(self):
+        page = mock.Mock()
+        page.get_by_text.return_value.first.wait_for.side_effect = TimeoutError("still loading")
+
+        with (
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_screenshot") as screenshot,
+        ):
+            result = runner._capture_threads_publish_evidence(
+                page, "https://www.threads.com/@user/post/ABC", "published body", Path("."), {"id": "task"}, _Logger()
+            )
+
+        self.assertEqual(result, "")
+        screenshot.assert_not_called()
+
     def test_login_credentials_never_use_clipboard(self):
         page = _Page("https://www.instagram.com/accounts/login/")
         username_input = _Locator()
@@ -296,7 +330,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             ) as confirm_profile,
             mock.patch.object(runner, "_find_latest_threads_post_permalink", return_value="https://www.threads.net/@alice/post/OLD"),
             mock.patch.object(runner, "_resolve_threads_profile_url", return_value=resolved_profile),
-            mock.patch.object(runner, "_screenshot", return_value="done.png") as screenshot,
+            mock.patch.object(runner, "_capture_threads_publish_evidence", return_value="done.png") as screenshot,
         ):
             result = runner._run_threads_publish_post(
                 page,
@@ -312,7 +346,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertEqual(result["published"]["url"], permalink)
         self.assertFalse(any(call.args[1] == resolved_profile and call.args[3] == "threads_publish_baseline" for call in goto.call_args_list))
         self.assertEqual(confirm_profile.call_args.kwargs["profile_url"], resolved_profile)
-        screenshot.assert_called_once_with(page, Path("."), {"id": "publish-task"}, "publish_done", mock.ANY)
+        screenshot.assert_called_once_with(page, permalink, "hello threads", Path("."), {"id": "publish-task"}, mock.ANY)
 
 
 if __name__ == "__main__":
