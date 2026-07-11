@@ -587,15 +587,15 @@ def _type_text(page, text: str, min_delay: float = 0.08, max_delay: float = 0.18
     input_mode = _normalize_text_input_mode(mode or os.getenv("SOCIAL_AUTOMATION_TEXT_INPUT_MODE", "paste"))
     if input_mode == "type":
         if logger is not None:
-            logger.log("info", stage, "Text input is using per-character typing.", {"mode": "type", "chars": len(clean_text)})
+            logger.log("info", stage, "正在使用逐字输入方式填写内容。", {"mode": "type", "chars": len(clean_text)})
         _human_type(page, clean_text, min_delay=min_delay, max_delay=max_delay)
         return
     if clean_text and _paste_text(page, clean_text):
         if logger is not None:
-            logger.log("info", stage, "Text input is using clipboard paste.", {"mode": "paste", "chars": len(clean_text)})
+            logger.log("info", stage, "正在使用剪贴板粘贴方式填写内容。", {"mode": "paste", "chars": len(clean_text)})
         return
     if logger is not None:
-        logger.log("warn", stage, "Clipboard paste failed; falling back to direct text insertion.", {"mode": "paste", "chars": len(clean_text)})
+        logger.log("warn", stage, "剪贴板粘贴失败，已改用直接文本输入。", {"mode": "paste", "chars": len(clean_text)})
     insert_enabled = str(os.getenv("SOCIAL_AUTOMATION_FAST_TEXT_INPUT", "1")).strip().lower() not in {"0", "false", "no", "off"}
     if insert_enabled and len(clean_text) >= 12:
         try:
@@ -2194,6 +2194,17 @@ def _find_threads_post_permalink(page, caption: str) -> str:
                         if (postLink) return postLink.href || postLink.getAttribute('href') || '';
                     }
                 }
+                const postLinks = Array.from(document.querySelectorAll('a[href]')).filter(
+                    link => /\/@[^/]+\/(?:post|thread)\/[^/?#]+/i.test(link.href || link.getAttribute('href') || '')
+                );
+                for (const postLink of postLinks) {
+                    let root = postLink;
+                    for (let depth = 0; root && root !== document.body && depth < 12; depth += 1, root = root.parentElement) {
+                        if (normalize(root.innerText || root.textContent).includes(caption)) {
+                            return postLink.href || postLink.getAttribute('href') || '';
+                        }
+                    }
+                }
                 return '';
             }""",
             normalized_caption,
@@ -2367,7 +2378,6 @@ def _wait_for_threads_own_post(page, caption: str, logger: AutomationLogger, acc
     except Exception as exc:
         logger.log("warn", "threads_publish_profile_open_slow", "提交后打开账号主页超时，将继续轮询确认发布结果。", {"error": str(exc)[:500], "timeout_ms": nav_timeout_ms})
     deadline = time.time() + confirm_seconds
-    next_reload_at = time.time() + 10
     while True:
         now = time.time()
         if now >= deadline:
@@ -2375,11 +2385,6 @@ def _wait_for_threads_own_post(page, caption: str, logger: AutomationLogger, acc
         permalink = _find_threads_post_permalink(page, caption) if str(caption or "").strip() else _find_latest_threads_post_permalink(page)
         if permalink and permalink != _normalize_threads_post_permalink(previous_permalink):
             return {"confirmed": True, "reason": "已在账号主页定位到本次发布帖子的链接。", "url": permalink}
-        if now >= next_reload_at:
-            with contextlib.suppress(Exception):
-                page.reload(wait_until="domcontentloaded", timeout=5000)
-                page.wait_for_load_state("networkidle", timeout=2500)
-            next_reload_at = now + 10
         _sleep_between(1.8, 2.6)
     return {"confirmed": False, "reason": "发布已提交，但账号主页未看到本次发布内容。", "url": str(page.url or target_url)}
 

@@ -204,7 +204,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             )
 
         self.assertFalse(result["confirmed"])
-        page.reload.assert_called_once()
+        page.reload.assert_not_called()
 
     def test_editor_closing_is_not_publish_confirmation(self):
         page = _Page("https://www.threads.net/")
