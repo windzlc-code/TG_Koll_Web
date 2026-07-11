@@ -115,6 +115,24 @@ def test_input_permission_queries_every_time_off_event_loop():
     assert to_thread.await_count == 2
 
 
+def test_manual_open_login_allows_input_while_running():
+    assert social_automation_api._live_browser_task_input_allowed({
+        "status": "running",
+        "task_type": "open_login",
+        "payload_json": "{}",
+    }) is True
+    assert social_automation_api._live_browser_task_input_allowed({
+        "status": "running",
+        "task_type": "open_login",
+        "payload_json": '{"auto_submit": true}',
+    }) is False
+    assert social_automation_api._live_browser_task_input_allowed({
+        "status": "running",
+        "task_type": "publish_post",
+        "payload_json": "{}",
+    }) is False
+
+
 def test_stop_restored_registry_session_terminates_processes_before_removal():
     session = live_browser.LiveBrowserSession(
         id="live_task-1",

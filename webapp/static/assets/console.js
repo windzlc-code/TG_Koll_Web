@@ -254,6 +254,7 @@ const state = {
   view: "workspace",
   activeModule: "personas",
   accountBrowserPanel: "accounts",
+  liveBrowserExpandedSessionId: "",
   workspaceMenuOpen: true,
   setupStatus: null,
   personaGroup: "settings",
@@ -5378,6 +5379,7 @@ function renderPersonaAccountPanelV2(persona, account, profile, step) {
   const selectedAccount = selectedPersonaAutomationAccount(persona, platform);
   const selectedAccountId = String(selectedAccount?.id || "");
   const platformOptions = personaAutomationPlatformOptions(persona);
+  const credentialsMask = selectedAccount?.login_password_configured ? "已保存密码，留空则沿用" : "登录密码";
   return `
     <div class="form-grid">
       <label>执行平台
@@ -5497,6 +5499,18 @@ function renderEyeIcon() {
     <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path>
     <circle cx="12" cy="12" r="2.5"></circle>
   </svg>`;
+}
+
+function renderExpandIcon(expanded = false) {
+  return expanded
+    ? `<svg class="ui-expand-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M9 4v5H4"></path><path d="m4 9 5-5"></path>
+        <path d="M15 20v-5h5"></path><path d="m20 15-5 5"></path>
+      </svg>`
+    : `<svg class="ui-expand-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M9 4H4v5"></path><path d="m4 4 5 5"></path>
+        <path d="M15 20h5v-5"></path><path d="m20 20-5-5"></path>
+      </svg>`;
 }
 
 function renderRefreshIcon() {
@@ -13675,6 +13689,7 @@ function renderAccountPoolCards(accounts, selectedAccount) {
               <span>${esc(accountResidentialProxyLabel(account))}</span>
             </div>
             <div class="row-actions">
+              <button type="button" class="primary" data-social-open-login="${esc(account.id)}">打开登录</button>
               <button type="button" data-account-pool-edit="${esc(account.id)}">编辑</button>
               <button type="button" data-account-pool-unbind="${esc(account.id)}" ${account.persona_id ? "" : "disabled"}>解绑</button>
               <button type="button" class="danger" data-social-delete-account="${esc(account.id)}">删除账号</button>
@@ -15043,6 +15058,9 @@ function renderLiveBrowserSessions() {
   const cardsById = new Map(Array.from(grid.querySelectorAll("[data-live-browser-card]"))
     .map((card) => [String(card.dataset.liveBrowserCard || ""), card]));
   const desiredIds = new Set(sessions.map((session) => liveBrowserSessionId(session)));
+  if (state.liveBrowserExpandedSessionId && !desiredIds.has(String(state.liveBrowserExpandedSessionId))) {
+    closeLiveBrowserLargeModal({ restoreFocus: false });
+  }
   cardsById.forEach((card, sessionId) => {
     if (!desiredIds.has(sessionId)) card.remove();
   });
@@ -15059,6 +15077,11 @@ function renderLiveBrowserSessions() {
       card = replacement;
     }
     updateLiveBrowserSessionCard(card, session);
+    if (String(state.liveBrowserExpandedSessionId || "") === sessionId) {
+      card.classList.add("is-live-browser-modal");
+      card.setAttribute("role", "dialog");
+      card.setAttribute("aria-modal", "true");
+    }
   });
   grid.insertAdjacentHTML("beforeend", renderLiveBrowserPlaceholders(sessions.length));
   syncSocialCancelAllButtons();
@@ -15125,7 +15148,15 @@ function updateLiveBrowserSessionCard(card, session) {
     statusNode.className = `status ${status}`;
     statusNode.textContent = statusLabel(status);
   }
-  card.querySelector("[data-live-browser-fullscreen]")?.toggleAttribute("disabled", !interactionAllowed);
+  const expandButton = card.querySelector("[data-live-browser-fullscreen]");
+  if (expandButton) {
+    const expanded = String(state.liveBrowserExpandedSessionId || "") === sessionId;
+    expandButton.disabled = false;
+    expandButton.setAttribute("aria-label", expanded ? "收起窗口" : "放大窗口");
+    expandButton.setAttribute("title", expanded ? "收起窗口" : "放大窗口");
+    expandButton.setAttribute("aria-pressed", expanded ? "true" : "false");
+    expandButton.innerHTML = renderExpandIcon(expanded);
+  }
   card.querySelector("[data-live-browser-text]")?.toggleAttribute("disabled", !interactionAllowed);
   card.querySelector("[data-live-browser-type]")?.toggleAttribute("disabled", !interactionAllowed);
   card.querySelector("[data-live-browser-key]")?.toggleAttribute("disabled", !interactionAllowed);
@@ -15216,7 +15247,7 @@ function liveBrowserInteractionHint(session) {
 }
 
 function canInteractWithLiveBrowser(session) {
-  return liveBrowserTaskStatus(session) === "need_manual";
+  return Boolean(session?.input_allowed) || liveBrowserTaskStatus(session) === "need_manual";
 }
 
 function liveBrowserIframeLoadingMode() {
@@ -15250,7 +15281,7 @@ function renderLiveBrowserSession(session) {
           <span data-live-browser-meta>${esc(`${session.platform || "-"} · ${session.display || "-"} · ${session.width || 720}x${session.height || 1280}`)}</span>
         </div>
         <div class="live-browser-card-actions">
-          <button type="button" data-live-browser-fullscreen="${esc(sessionId)}" ${interactionAllowed ? "" : "disabled"}>放大窗口</button>
+          <button type="button" class="live-browser-expand-button" data-live-browser-fullscreen="${esc(sessionId)}" title="放大窗口" aria-label="放大窗口" aria-pressed="false">${renderExpandIcon()}</button>
           <button type="button" data-live-browser-close="${esc(sessionId)}" ${canCloseWindow ? "" : "hidden disabled"}>关闭窗口</button>
           <button type="button" class="danger" data-social-cancel="${esc(session.task_id || "")}" ${canStopTask ? "" : "hidden disabled"}>停止进程</button>
           <span class="status ${esc(status)}" data-live-browser-status>${esc(statusLabel(status))}</span>
@@ -15284,14 +15315,58 @@ function renderLiveBrowserSession(session) {
   `;
 }
 
-function requestLiveBrowserFullscreen(sessionId = "") {
+let liveBrowserModalTrigger = null;
+
+function closeLiveBrowserLargeModal({ restoreFocus = true } = {}) {
+  const expandedId = String(state.liveBrowserExpandedSessionId || "");
+  const card = expandedId
+    ? document.querySelector(`[data-live-browser-card="${CSS.escape(expandedId)}"]`)
+    : document.querySelector(".live-browser-card.is-live-browser-modal");
+  card?.classList.remove("is-live-browser-modal");
+  card?.removeAttribute("role");
+  card?.removeAttribute("aria-modal");
+  document.querySelector("[data-live-browser-modal-backdrop]")?.remove();
+  document.body.classList.remove("live-browser-modal-open");
+  state.liveBrowserExpandedSessionId = "";
+  const expandButton = card?.querySelector("[data-live-browser-fullscreen]");
+  if (expandButton) {
+    expandButton.setAttribute("aria-label", "放大窗口");
+    expandButton.setAttribute("title", "放大窗口");
+    expandButton.setAttribute("aria-pressed", "false");
+    expandButton.innerHTML = renderExpandIcon(false);
+  }
+  if (restoreFocus && liveBrowserModalTrigger?.isConnected) liveBrowserModalTrigger.focus();
+  liveBrowserModalTrigger = null;
+}
+
+function requestLiveBrowserFullscreen(sessionId = "", trigger = null) {
   const cards = Array.from(document.querySelectorAll("[data-live-browser-card]"));
   const card = cards.find((node) => String(node.dataset.liveBrowserCard || "") === String(sessionId || ""));
   const iframe = card?.querySelector("iframe");
   if (!iframe) return;
+  if (String(state.liveBrowserExpandedSessionId || "") === String(sessionId || "")) {
+    closeLiveBrowserLargeModal();
+    return;
+  }
+  closeLiveBrowserLargeModal({ restoreFocus: false });
+  const shell = $("accountBrowserShell") || document.body;
+  const backdrop = document.createElement("div");
+  backdrop.className = "live-browser-modal-backdrop";
+  backdrop.dataset.liveBrowserModalBackdrop = "";
+  backdrop.dataset.liveBrowserModalClose = "";
+  shell.appendChild(backdrop);
+  liveBrowserModalTrigger = trigger instanceof HTMLElement ? trigger : null;
+  state.liveBrowserExpandedSessionId = String(sessionId || "");
+  card.classList.add("is-live-browser-modal");
+  card.setAttribute("role", "dialog");
+  card.setAttribute("aria-modal", "true");
+  document.body.classList.add("live-browser-modal-open");
   const url = new URL(iframe.src, location.href);
   url.searchParams.set("resize", "scale");
-  window.open(url.toString(), "_blank", "noopener,noreferrer,width=1280,height=820");
+  if (iframe.src !== url.toString()) iframe.src = url.toString();
+  const session = state.socialBrowserSessions.find((item) => liveBrowserSessionId(item) === String(sessionId || ""));
+  if (session) updateLiveBrowserSessionCard(card, session);
+  card.querySelector("iframe")?.focus();
 }
 
 async function closeLiveBrowserSession(sessionId = "") {
@@ -16928,6 +17003,13 @@ function bindEvents() {
     if (event.target.closest("[data-persona-create-account]")) createPersonaAutomationAccount().catch((error) => showMsg("commandMsg", error.detail || error.message || "绑定账号失败", false));
     if (event.target.closest("[data-persona-save-login]")) savePersonaAutomationLogin().catch((error) => showMsg("commandMsg", error.detail || error.message || "保存登录资料失败", false));
     if (event.target.closest("[data-persona-clear-login]")) clearPersonaAutomationLogin().catch((error) => showMsg("commandMsg", error.detail || error.message || "删除登录资料失败", false));
+    const personaOpenLogin = event.target.closest("[data-persona-open-login]");
+    if (personaOpenLogin) {
+      const persona = selectedPersona();
+      const accountId = String(personaOpenLogin.dataset.personaOpenLogin || selectedPersonaAutomationAccount(persona)?.id || "").trim();
+      createSocialTask("open_login", accountId, persona?.id || "", "commandMsg")
+        .catch((error) => showMsg("commandMsg", error.detail || error.message || "打开登录失败", false));
+    }
     if (event.target.closest("[data-open-unified-automation]")) {
       if (!(await confirmLeaveTransientWorkspaceState())) return;
       const account = accountForPersona(selectedPersona());
@@ -17227,6 +17309,10 @@ function bindEvents() {
   if ($("socialPlatform")) $("socialPlatform").addEventListener("change", syncStandaloneSocialForm);
   if ($("runSocialOnce")) $("runSocialOnce").addEventListener("click", () => api("/api/persona_dashboard/automation/worker/run_once", { method: "POST" }).then(loadSocial).catch((error) => showMsg("socialMsg", error.detail || error.message || "执行失败", false)));
   if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("click", (event) => {
+    if (event.target.closest("[data-live-browser-modal-close]")) {
+      closeLiveBrowserLargeModal();
+      return;
+    }
     const tab = event.target.closest("[data-account-browser-tab]");
     if (tab) {
       setAccountBrowserPanel(tab.dataset.accountBrowserTab || "accounts");
@@ -17389,8 +17475,16 @@ function bindEvents() {
       openAccountPoolEditModal(accountEdit.dataset.accountPoolEdit || "");
       return;
     }
+    const openLogin = event.target.closest("[data-social-open-login]");
+    if (openLogin) {
+      const accountId = String(openLogin.dataset.socialOpenLogin || "").trim();
+      const account = selectedSocialAccount(accountId);
+      createSocialTask("open_login", accountId, account?.persona_id || "", "socialMsg")
+        .catch((error) => showMsg("socialMsg", error.detail || error.message || "打开登录失败", false));
+      return;
+    }
     const accountCard = event.target.closest("[data-account-pool-account]");
-    const accountAction = event.target.closest("[data-account-pool-edit], [data-account-pool-unbind], [data-social-delete-account], [data-account-pool-check]");
+    const accountAction = event.target.closest("[data-social-open-login], [data-account-pool-edit], [data-account-pool-unbind], [data-social-delete-account], [data-account-pool-check]");
     if (accountCard && !accountAction) {
       selectAccountPoolAccount(accountCard.dataset.accountPoolAccount || "");
       renderSocialAccounts();
@@ -17437,7 +17531,7 @@ function bindEvents() {
     }
     const fullscreen = event.target.closest("[data-live-browser-fullscreen]");
     if (fullscreen) {
-      requestLiveBrowserFullscreen(fullscreen.dataset.liveBrowserFullscreen || "");
+      requestLiveBrowserFullscreen(fullscreen.dataset.liveBrowserFullscreen || "", fullscreen);
       return;
     }
     const closeLiveBrowser = event.target.closest("[data-live-browser-close]");
@@ -17482,6 +17576,12 @@ function bindEvents() {
     event.preventDefault();
     selectAccountPoolAccount(accountCard.dataset.accountPoolAccount || "");
     renderSocialAccounts();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.liveBrowserExpandedSessionId) {
+      event.preventDefault();
+      closeLiveBrowserLargeModal();
+    }
   });
   if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("input", (event) => {
     if (event.target.closest(".account-pool-create-panel")) syncAccountPoolCreateDraftFromForm();

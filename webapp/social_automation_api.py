@@ -533,11 +533,27 @@ def _is_rfb_protocol_version(payload: bytes) -> bool:
     )
 
 
+def _live_browser_task_input_allowed(row: Any) -> bool:
+    if row is None:
+        return False
+    task = dict(row)
+    status = str(task.get("status") or "").strip().lower()
+    if status == "need_manual":
+        return True
+    if status != "running" or str(task.get("task_type") or "").strip() != "open_login":
+        return False
+    payload = _loads(task.get("payload_json"), {})
+    return payload.get("auto_submit") is not True
+
+
 def _query_live_browser_input_allowed(task_id: str) -> bool:
     try:
         with db() as conn:
-            row = conn.execute("SELECT status FROM social_automation_tasks WHERE id = ?", (str(task_id or ""),)).fetchone()
-        return bool(row and str(row["status"] or "").strip().lower() == "need_manual")
+            row = conn.execute(
+                "SELECT status, task_type, payload_json FROM social_automation_tasks WHERE id = ?",
+                (str(task_id or ""),),
+            ).fetchone()
+        return _live_browser_task_input_allowed(row)
     except Exception:
         return False
 
@@ -743,7 +759,7 @@ def _live_browser_sessions() -> list[dict[str, Any]]:
     try:
         with db() as conn:
             rows = conn.execute(
-                f"SELECT id, status, error, finished_at FROM social_automation_tasks WHERE id IN ({placeholders})",
+                f"SELECT id, status, task_type, payload_json, error, finished_at FROM social_automation_tasks WHERE id IN ({placeholders})",
                 task_ids,
             ).fetchall()
         task_status = {str(row["id"]): row for row in rows}
@@ -756,6 +772,7 @@ def _live_browser_sessions() -> list[dict[str, Any]]:
         status = str(row["status"] or "").strip().lower()
         if status:
             session["task_status"] = status
+        session["input_allowed"] = _live_browser_task_input_allowed(row)
         if str(row["error"] or "").strip():
             session["task_error"] = str(row["error"] or "")
         session["task_finished_at"] = int(row["finished_at"] or 0)
@@ -848,8 +865,11 @@ def _require_live_browser_manual_session(session_id: str) -> str:
     if not task_id:
         raise HTTPException(status_code=409, detail="当前浏览器会话未处于可人工操作状态")
     with db() as conn:
-        row = conn.execute("SELECT status FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
-    if not row or str(row["status"] or "").strip().lower() != "need_manual":
+        row = conn.execute(
+            "SELECT status, task_type, payload_json FROM social_automation_tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+    if not _live_browser_task_input_allowed(row):
         raise HTTPException(status_code=409, detail="只有任务进入人工处理状态后才允许操作浏览器")
     return task_id
 
