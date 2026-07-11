@@ -2205,6 +2205,20 @@ def _find_threads_post_permalink(page, caption: str) -> str:
                         }
                     }
                 }
+                const profileMatch = String(window.location.pathname || '').match(/^\/(\@[^/]+)/);
+                const pageText = normalize(document.body?.innerText || document.body?.textContent);
+                if (profileMatch && pageText.includes(caption)) {
+                    const ownPrefix = `/${profileMatch[1]}/`;
+                    const ownPost = postLinks.find(link => {
+                        try {
+                            const path = new URL(link.href || link.getAttribute('href') || '', window.location.href).pathname;
+                            return path.startsWith(ownPrefix) && /\/(?:post|thread)\//i.test(path);
+                        } catch (_) {
+                            return false;
+                        }
+                    });
+                    if (ownPost) return ownPost.href || ownPost.getAttribute('href') || '';
+                }
                 return '';
             }""",
             normalized_caption,
