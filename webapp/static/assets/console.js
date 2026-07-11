@@ -1947,7 +1947,7 @@ function personaFormState(personaId) {
   const key = String(personaId || "").trim();
   if (!key) {
     return {
-      generate: { mode: "ai", composeMode: "tweet", count: storedPersonaGenerateCount(), targetWords: storedPersonaGenerateTargetWords(), contentTimeSlot: "", prompt: "", selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotEditingCandidateId: "", hotPrompt: "", hotSearchMode: "strict", hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {}, hotSelectedMediaIndexByCandidate: {}, hotReplacementFilesByCandidate: {} },
+      generate: { mode: "ai", composeMode: "tweet", count: storedPersonaGenerateCount(), targetWords: storedPersonaGenerateTargetWords(), contentTimeSlot: "", prompt: "", selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotEditingCandidateId: "", hotPrompt: "", hotSearchMode: "strict", hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {}, hotSelectedMediaIndexByCandidate: {}, hotReplacementFilesByCandidate: {}, hotReplacementPoolByCandidate: {}, hotSelectedReplacementPoolIdByCandidate: {} },
       draft: defaultPersonaDraftForm(),
       media: { taskType: "persona_post_image", contentMode: "draft", manualContent: "", prompt: "", imageCount: storedPersonaMediaImageCount(), aspectRatio: "1:1", resolution: "720p", duration: 2, replaceExisting: false },
       images: { prompt: "", aspectRatio: "1:1" },
@@ -1972,6 +1972,8 @@ function personaFormState(personaId) {
         hotEditedContentByCandidate: {},
         hotSelectedMediaIndexByCandidate: {},
         hotReplacementFilesByCandidate: {},
+        hotReplacementPoolByCandidate: {},
+        hotSelectedReplacementPoolIdByCandidate: {},
       },
       draft: defaultPersonaDraftForm(),
       media: {
@@ -1998,6 +2000,12 @@ function personaFormState(personaId) {
   }
   if (!generate.hotSelectedMediaIndexByCandidate || typeof generate.hotSelectedMediaIndexByCandidate !== "object") {
     generate.hotSelectedMediaIndexByCandidate = {};
+  }
+  if (!generate.hotReplacementPoolByCandidate || typeof generate.hotReplacementPoolByCandidate !== "object") {
+    generate.hotReplacementPoolByCandidate = {};
+  }
+  if (!generate.hotSelectedReplacementPoolIdByCandidate || typeof generate.hotSelectedReplacementPoolIdByCandidate !== "object") {
+    generate.hotSelectedReplacementPoolIdByCandidate = {};
   }
   return state.personaForms[key];
 }
@@ -2411,6 +2419,7 @@ function reconcilePersonaHotMediaStateAfterRefresh(personaId, previousCandidates
       delete form.hotDeletedMediaByCandidate?.[candidateId];
       delete form.hotSelectedMediaIndexByCandidate?.[candidateId];
       clearPersonaHotReplacementFiles(personaId, candidateId);
+      clearPersonaHotReplacementPool(personaId, candidateId);
       return;
     }
     const mediaCount = mediaItems.length;
@@ -2527,6 +2536,84 @@ function clearPersonaHotReplacementFiles(personaId, candidateId) {
   delete form.hotReplacementFilesByCandidate?.[String(candidateId || "").trim()];
 }
 
+function personaHotReplacementPool(personaId, candidateId) {
+  const form = personaFormState(personaId).generate;
+  const key = String(candidateId || "").trim();
+  const rows = form.hotReplacementPoolByCandidate?.[key];
+  return Array.isArray(rows) ? rows.filter((entry) => entry?.id && entry?.file) : [];
+}
+
+function personaHotSelectedReplacementPoolEntry(personaId, candidateId) {
+  const form = personaFormState(personaId).generate;
+  const key = String(candidateId || "").trim();
+  const selectedId = String(form.hotSelectedReplacementPoolIdByCandidate?.[key] || "").trim();
+  return personaHotReplacementPool(personaId, key).find((entry) => String(entry.id) === selectedId) || null;
+}
+
+function setPersonaHotSelectedReplacementPoolId(personaId, candidateId, entryId = "") {
+  const form = personaFormState(personaId).generate;
+  const key = String(candidateId || "").trim();
+  const cleanEntryId = String(entryId || "").trim();
+  if (!key) return;
+  if (cleanEntryId) form.hotSelectedReplacementPoolIdByCandidate[key] = cleanEntryId;
+  else delete form.hotSelectedReplacementPoolIdByCandidate?.[key];
+}
+
+function addPersonaHotReplacementPoolFiles(personaId, candidateId, files = []) {
+  const form = personaFormState(personaId).generate;
+  const key = String(candidateId || "").trim();
+  if (!key) return [];
+  const current = personaHotReplacementPool(personaId, key);
+  const signatures = new Set(current.map((entry) => `${entry.file.name}:${entry.file.size}:${entry.file.lastModified}`));
+  const added = Array.from(files || []).filter((file) => {
+    const kind = fileKind(file);
+    return file && (kind === "image" || kind === "video");
+  }).filter((file) => {
+    const signature = `${file.name}:${file.size}:${file.lastModified}`;
+    if (signatures.has(signature)) return false;
+    signatures.add(signature);
+    return true;
+  }).map((file, index) => ({
+    id: `${Date.now()}-${index}-${Math.random().toString(36).slice(2, 9)}`,
+    file,
+    previewUrl: URL.createObjectURL(file),
+  }));
+  if (!added.length) return [];
+  form.hotReplacementPoolByCandidate[key] = [...current, ...added];
+  setPersonaHotSelectedReplacementPoolId(personaId, key, added[0].id);
+  return added;
+}
+
+function removePersonaHotReplacementPoolEntry(personaId, candidateId, entryId) {
+  const form = personaFormState(personaId).generate;
+  const key = String(candidateId || "").trim();
+  const cleanEntryId = String(entryId || "").trim();
+  const rows = personaHotReplacementPool(personaId, key);
+  const removed = rows.find((entry) => String(entry.id) === cleanEntryId);
+  if (removed?.file) {
+    personaHotReplacementEntries(personaId, key)
+      .filter((entry) => entry.file === removed.file)
+      .forEach((entry) => setPersonaHotReplacementFile(personaId, key, entry.index, null));
+  }
+  if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
+  const nextRows = rows.filter((entry) => String(entry.id) !== cleanEntryId);
+  if (nextRows.length) form.hotReplacementPoolByCandidate[key] = nextRows;
+  else delete form.hotReplacementPoolByCandidate?.[key];
+  if (String(form.hotSelectedReplacementPoolIdByCandidate?.[key] || "") === cleanEntryId) {
+    setPersonaHotSelectedReplacementPoolId(personaId, key, nextRows[0]?.id || "");
+  }
+}
+
+function clearPersonaHotReplacementPool(personaId, candidateId) {
+  personaHotReplacementPool(personaId, candidateId).forEach((entry) => {
+    if (entry.previewUrl) URL.revokeObjectURL(entry.previewUrl);
+  });
+  const form = personaFormState(personaId).generate;
+  const key = String(candidateId || "").trim();
+  delete form.hotReplacementPoolByCandidate?.[key];
+  delete form.hotSelectedReplacementPoolIdByCandidate?.[key];
+}
+
 function personaHotEditedContent(personaId, candidate) {
   const form = personaFormState(personaId).generate;
   if (!form.hotEditedContentByCandidate || typeof form.hotEditedContentByCandidate !== "object") {
@@ -2578,6 +2665,7 @@ function cancelPersonaHotCandidateEdit(persona, candidateId) {
   delete form.hotDeletedMediaByCandidate?.[cleanCandidateId];
   delete form.hotSelectedMediaIndexByCandidate?.[cleanCandidateId];
   clearPersonaHotReplacementFiles(persona.id, cleanCandidateId);
+  clearPersonaHotReplacementPool(persona.id, cleanCandidateId);
   if (String(form.hotEditingCandidateId || "").trim() === cleanCandidateId) form.hotEditingCandidateId = "";
   renderPersonaDetail();
   renderConfirmSummary();
@@ -10234,7 +10322,10 @@ async function fetchPersonaHotCandidates(refresh = false) {
     Object.keys(form.hotReplacementFilesByCandidate || {}).forEach((candidateId) => {
       if (!candidateIdSet.has(candidateId)) clearPersonaHotReplacementFiles(persona.id, candidateId);
     });
-    ["hotDeletedMediaByCandidate", "hotEditedContentByCandidate", "hotSelectedMediaIndexByCandidate"].forEach((field) => {
+    Object.keys(form.hotReplacementPoolByCandidate || {}).forEach((candidateId) => {
+      if (!candidateIdSet.has(candidateId)) clearPersonaHotReplacementPool(persona.id, candidateId);
+    });
+    ["hotDeletedMediaByCandidate", "hotEditedContentByCandidate", "hotSelectedMediaIndexByCandidate", "hotSelectedReplacementPoolIdByCandidate"].forEach((field) => {
       const current = form[field] && typeof form[field] === "object" ? form[field] : {};
       form[field] = Object.fromEntries(Object.entries(current).filter(([candidateId]) => candidateIdSet.has(candidateId)));
     });
@@ -10344,6 +10435,7 @@ async function submitPersonaHotDraftImport(persona, selected, { replacementOpsBy
     delete form.hotEditedContentByCandidate?.[candidateId];
     delete form.hotSelectedMediaIndexByCandidate?.[candidateId];
     clearPersonaHotReplacementFiles(persona.id, candidateId);
+    clearPersonaHotReplacementPool(persona.id, candidateId);
   });
   await loadPersonaDraftPosts(persona.id, { force: true });
   const importedCount = result.imported_count || createdIds.length || 0;
@@ -11830,6 +11922,60 @@ function renderPersonaMediaContentModeTabs(mode) {
   `).join("")}</div>`;
 }
 
+function renderPersonaHotReplacementPool(personaId, candidateId) {
+  const rows = personaHotReplacementPool(personaId, candidateId);
+  if (!rows.length) return `<div class="persona-hot-replacement-empty">暂未添加待替换媒体。</div>`;
+  const selected = personaHotSelectedReplacementPoolEntry(personaId, candidateId);
+  const previewGroupId = registerMediaPreviewGroup(rows.map((entry) => ({
+    previewUrl: entry.previewUrl,
+    url: entry.previewUrl,
+    type: guessMediaType(entry.file?.name || "", entry.file?.type || ""),
+    label: entry.file?.name || "待替换媒体",
+  })));
+  return `
+    <div class="persona-hot-replacement-pool" aria-label="待替换媒体">
+      ${rows.map((entry, index) => {
+        const kind = fileKind(entry.file);
+        const isSelected = String(selected?.id || "") === String(entry.id);
+        return `
+          <div class="persona-hot-replacement-item ${isSelected ? "is-selected" : ""}">
+            <button
+              type="button"
+              class="persona-hot-replacement-thumb"
+              data-persona-hot-replacement-pool-select="${esc(candidateId)}"
+              data-persona-hot-replacement-pool-id="${esc(entry.id)}"
+              title="选择 ${esc(entry.file?.name || `媒体 ${index + 1}`)}"
+              aria-label="${isSelected ? "已选择" : "选择"}待替换媒体 ${index + 1}"
+            >
+              ${kind === "video"
+                ? `<video src="${esc(entry.previewUrl)}" muted playsinline preload="metadata"></video>`
+                : `<img src="${esc(entry.previewUrl)}" alt="${esc(entry.file?.name || `待替换媒体 ${index + 1}`)}" />`}
+              ${isSelected ? `<span class="persona-hot-replacement-selected" aria-hidden="true">${renderSelectAllIcon()}</span>` : ""}
+            </button>
+            <div class="persona-hot-replacement-actions">
+              <button
+                type="button"
+                class="persona-hot-media-action is-view"
+                data-media-preview-group="${esc(previewGroupId)}"
+                data-media-preview-index="${esc(index)}"
+                title="查看媒体"
+                aria-label="查看待替换媒体 ${index + 1}"
+              >${renderEyeIcon()}</button>
+              <button
+                type="button"
+                class="persona-hot-media-action is-remove"
+                data-persona-hot-replacement-pool-remove="${esc(candidateId)}"
+                data-persona-hot-replacement-pool-id="${esc(entry.id)}"
+                title="移除待替换媒体"
+                aria-label="移除待替换媒体 ${index + 1}"
+              >${renderTrashIcon()}</button>
+            </div>
+            <small title="${esc(entry.file?.name || "")}">${esc(entry.file?.name || `媒体 ${index + 1}`)}</small>
+          </div>`;
+      }).join("")}
+    </div>`;
+}
+
 function renderPersonaHotCandidatePreview(candidate) {
   if (!candidate) return `<div class="empty-state">从左侧热点候选里选一条，这里会显示正文预览和来源。</div>`;
   const persona = selectedPersona();
@@ -11858,21 +12004,23 @@ function renderPersonaHotCandidatePreview(candidate) {
       ${renderPersonaHotMediaPreview(persona, candidate, { editing: isEditing })}
       ${isEditing && mediaItems.length ? `<div class="persona-media-edit-pane persona-media-edit-pane--upload">
         ${renderUploadDropzone("personaHotReplacementFiles", {
-          label: selectedReplacement ? `第 ${selectedMediaIndex + 1} 个媒体已选择替换` : `替换第 ${selectedMediaIndex + 1} 个媒体`,
-          hint: selectedReplacement
-            ? `当前文件：${String(selectedReplacement.file?.name || "媒体文件")}。重新选择会覆盖本次替换。`
-            : `已选中第 ${selectedMediaIndex + 1} 个媒体。拖动文件到这里或点击选择，也可以点击缩略图上的替换图标。`,
-          multiple: false,
+          label: "添加待替换媒体",
+          hint: "可拖入或选择多个文件。先选择下方缩略图，再点击原媒体上的替换图标。",
+          multiple: true,
         })}
-        ${selectedReplacement ? `<div class="row-actions"><button type="button" data-persona-hot-media-replacement-clear="${esc(candidateId)}" data-persona-hot-media-index="${esc(selectedMediaIndex)}">撤销当前替换</button></div>` : ""}
+        <div class="persona-hot-replacement-head">
+          <small>${esc(personaHotSelectedReplacementPoolEntry(persona?.id, candidateId) ? `已选择待替换文件；目标媒体 ${selectedMediaIndex + 1}` : "添加文件后，先选择一个待替换媒体。")}</small>
+          ${selectedReplacement ? `<button type="button" class="persona-hot-media-action is-restore" data-persona-hot-media-replacement-clear="${esc(candidateId)}" data-persona-hot-media-index="${esc(selectedMediaIndex)}" title="撤销当前替换" aria-label="撤销第 ${selectedMediaIndex + 1} 个媒体的替换">${renderUndoIcon()}</button>` : ""}
+        </div>
+        ${renderPersonaHotReplacementPool(persona?.id, candidateId)}
       </div>` : ""}
-      <div class="row-actions">
-        ${isEditing
-          ? `<button type="button" data-persona-cancel-hot-edit="${esc(candidateId)}">取消编辑</button>
-             <button type="button" class="primary" data-persona-confirm-hot-import="${esc(candidateId)}">确认导入</button>`
-          : `<button type="button" class="primary" data-persona-import-hot-one="${esc(candidateId)}">直接导入</button>
-             <button type="button" data-persona-start-hot-edit="${esc(candidateId)}">编辑后使用</button>`}
-      </div>
+    </div>
+    <div class="row-actions persona-hot-preview-actions">
+      ${isEditing
+        ? `<button type="button" data-persona-cancel-hot-edit="${esc(candidateId)}">取消编辑</button>
+           <button type="button" class="primary" data-persona-confirm-hot-import="${esc(candidateId)}">确认导入</button>`
+        : `<button type="button" class="primary" data-persona-import-hot-one="${esc(candidateId)}">直接导入</button>
+           <button type="button" data-persona-start-hot-edit="${esc(candidateId)}">编辑后使用</button>`}
     </div>
   `;
 }
@@ -12619,8 +12767,11 @@ function activeHotCandidateTransientState(persona = selectedPersona()) {
         Array.isArray(rows) ? rows.length > 0 : Boolean(rows && typeof rows === "object" && Object.keys(rows).length)
       ))
     : false;
-  if (!selectedIds.length && !edited && !deletedMedia && !replacementMedia) return null;
-  return { persona, selectedIds, edited, deletedMedia, replacementMedia };
+  const stagedReplacementMedia = form.hotReplacementPoolByCandidate && typeof form.hotReplacementPoolByCandidate === "object"
+    ? Object.values(form.hotReplacementPoolByCandidate).some((rows) => Array.isArray(rows) && rows.length)
+    : false;
+  if (!selectedIds.length && !edited && !deletedMedia && !replacementMedia && !stagedReplacementMedia) return null;
+  return { persona, selectedIds, edited, deletedMedia, replacementMedia, stagedReplacementMedia };
 }
 
 function activePublishCustomTransientState() {
@@ -15777,6 +15928,31 @@ function bindEvents() {
       importPersonaHotDrafts().catch(() => {});
       return;
     }
+    const hotReplacementPoolSelect = event.target.closest("[data-persona-hot-replacement-pool-select]");
+    if (hotReplacementPoolSelect) {
+      const persona = selectedPersona();
+      if (!persona) return;
+      snapshotPersonaHotPreviewContent();
+      const candidateId = String(hotReplacementPoolSelect.dataset.personaHotReplacementPoolSelect || "").trim();
+      const entryId = String(hotReplacementPoolSelect.dataset.personaHotReplacementPoolId || "").trim();
+      if (!candidateId || !entryId) return;
+      setPersonaHotSelectedReplacementPoolId(persona.id, candidateId, entryId);
+      renderPersonaDetail();
+      return;
+    }
+    const hotReplacementPoolRemove = event.target.closest("[data-persona-hot-replacement-pool-remove]");
+    if (hotReplacementPoolRemove) {
+      const persona = selectedPersona();
+      if (!persona) return;
+      snapshotPersonaHotPreviewContent();
+      const candidateId = String(hotReplacementPoolRemove.dataset.personaHotReplacementPoolRemove || "").trim();
+      const entryId = String(hotReplacementPoolRemove.dataset.personaHotReplacementPoolId || "").trim();
+      if (!candidateId || !entryId) return;
+      removePersonaHotReplacementPoolEntry(persona.id, candidateId, entryId);
+      renderPersonaDetail();
+      renderConfirmSummary();
+      return;
+    }
     const hotMediaReplace = event.target.closest("[data-persona-hot-media-replace]");
     if (hotMediaReplace) {
       const persona = selectedPersona();
@@ -15786,7 +15962,17 @@ function bindEvents() {
       const index = Number(hotMediaReplace.dataset.personaHotMediaIndex);
       if (!candidateId || !Number.isInteger(index) || index < 0) return;
       setPersonaHotSelectedMediaIndex(persona.id, candidateId, index);
-      $("personaHotReplacementFiles")?.click();
+      const selectedPoolEntry = personaHotSelectedReplacementPoolEntry(persona.id, candidateId);
+      if (!selectedPoolEntry?.file) {
+        showMsg("commandMsg", "请先添加并选择一个待替换媒体，再点击原媒体上的替换图标。", false);
+        renderPersonaDetail();
+        return;
+      }
+      setPersonaHotReplacementFile(persona.id, candidateId, index, selectedPoolEntry.file);
+      const deleted = personaHotDeletedMediaSet(persona.id, candidateId);
+      if (deleted.delete(index)) setPersonaHotDeletedMediaSet(persona.id, candidateId, deleted);
+      renderPersonaDetail();
+      renderConfirmSummary();
       return;
     }
     const hotMediaToggle = event.target.closest("[data-persona-hot-media-toggle]");
@@ -16529,13 +16715,10 @@ function bindEvents() {
       const candidateId = personaHotCandidateKey(candidate);
       if (!persona || !candidateId) return;
       snapshotPersonaHotPreviewContent();
-      const mediaItems = personaHotCandidateMediaItems(candidate);
-      const selectedIndex = personaHotSelectedMediaIndex(persona.id, candidateId, mediaItems.length);
-      const file = Array.from(event.target.files || []).find(Boolean) || null;
-      if (selectedIndex < 0 || !file) return;
-      setPersonaHotReplacementFile(persona.id, candidateId, selectedIndex, file);
-      const deleted = personaHotDeletedMediaSet(persona.id, candidateId);
-      if (deleted.delete(selectedIndex)) setPersonaHotDeletedMediaSet(persona.id, candidateId, deleted);
+      const files = Array.from(event.target.files || []).filter(Boolean);
+      if (!files.length) return;
+      addPersonaHotReplacementPoolFiles(persona.id, candidateId, files);
+      event.target.value = "";
       renderPersonaDetail();
       renderConfirmSummary();
       return;
