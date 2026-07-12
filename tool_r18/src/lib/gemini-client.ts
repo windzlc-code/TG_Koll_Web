@@ -66,9 +66,7 @@ function parseTextModelList(value?: string): string[] {
 
 export function getTextUnderstandingModelFallbacks(primaryModel?: string): string[] {
   const primaryModels = parseTextModelList(primaryModel);
-  const ordered = primaryModels.length
-    ? [...primaryModels, ...TEXT_UNDERSTANDING_MODEL_FALLBACKS]
-    : [...TEXT_UNDERSTANDING_MODEL_FALLBACKS];
+  const ordered = primaryModels.length ? primaryModels : [...TEXT_UNDERSTANDING_MODEL_FALLBACKS];
   return Array.from(new Set(ordered.map((model) => model.trim()).filter(Boolean)));
 }
 
@@ -528,7 +526,7 @@ export async function callTextUnderstandingModelWithFallback(
     isUsableResponse?: (data: any) => boolean;
     isRetryableError?: (error: unknown) => boolean;
     onFallback?: (event: { from: string; to: string; error: string }) => void;
-    attemptTimeoutMs?: number;
+    attemptTimeoutMs?: number | ((args: { model: string; index: number; total: number }) => number);
   },
 ): Promise<{ model: string; data: any }> {
   const models = getTextUnderstandingModelFallbacks(primaryModel);
@@ -537,8 +535,11 @@ export async function callTextUnderstandingModelWithFallback(
   for (let index = 0; index < models.length; index += 1) {
     const model = models[index];
     try {
-      const attemptSignal = options?.attemptTimeoutMs
-        ? (signal ? AbortSignal.any([signal, AbortSignal.timeout(options.attemptTimeoutMs)]) : AbortSignal.timeout(options.attemptTimeoutMs))
+      const configuredAttemptTimeoutMs = typeof options?.attemptTimeoutMs === "function"
+        ? options.attemptTimeoutMs({ model, index, total: models.length })
+        : options?.attemptTimeoutMs;
+      const attemptSignal = configuredAttemptTimeoutMs
+        ? (signal ? AbortSignal.any([signal, AbortSignal.timeout(configuredAttemptTimeoutMs)]) : AbortSignal.timeout(configuredAttemptTimeoutMs))
         : signal;
       const data = await callGemini(model, contents, generationConfig, attemptSignal);
       if (!options?.isUsableResponse || options.isUsableResponse(data)) {

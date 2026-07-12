@@ -5,13 +5,12 @@ import {
   cleanSentimentCandidateContent,
   downloadCandidateMedia,
   fetchSentimentHotCandidates,
-  prefetchSentimentHotCandidatePool,
-  primeSentimentHotCandidatePool,
+  listSentimentHotCandidatePoolStats,
   refreshSentimentSourceMetrics,
+  warmSentimentHotSearchStrategy,
 } from "@/lib/sentiment-hot-importer";
 import {
   rememberSentimentHotImported,
-  rememberSentimentHotSelected,
   type SentimentHotCandidate,
   type SentimentHotMedia,
 } from "@/lib/sentiment-candidate-store";
@@ -40,22 +39,16 @@ type RefreshHotPostInput = {
   postId: string;
 };
 
-type PrimeHotCandidatesInput = {
-  action: "prime-hot-candidates";
+type WarmHotStrategyInput = {
+  action: "warm-hot-strategy";
   archiveId: string;
-  searchMode?: "normal" | "strict";
-  limit?: number;
 };
 
-type PrefetchHotCandidatesInput = {
-  action: "prefetch-hot-candidates";
-  archiveId: string;
-  searchMode?: "normal" | "strict";
-  lowWatermark?: number;
-  targetCount?: number;
+type PoolStatsInput = {
+  action: "pool-stats";
 };
 
-type PersonaHotWorkflowInput = FetchHotCandidatesInput | ImportHotCandidatesInput | RefreshHotPostInput | PrimeHotCandidatesInput | PrefetchHotCandidatesInput;
+type PersonaHotWorkflowInput = FetchHotCandidatesInput | ImportHotCandidatesInput | RefreshHotPostInput | WarmHotStrategyInput | PoolStatsInput;
 
 function printJson(value: unknown) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -134,27 +127,10 @@ async function fetchHotCandidates(input: FetchHotCandidatesInput) {
   };
 }
 
-async function primeHotCandidates(input: PrimeHotCandidatesInput) {
+async function warmHotStrategy(input: WarmHotStrategyInput) {
   const archive = await loadPersonaArchive(String(input.archiveId || "").trim());
   if (!archive) throw new Error("人设不存在。");
-  const result = await primeSentimentHotCandidatePool(
-    archive,
-    input.searchMode === "normal" ? "normal" : "strict",
-    Math.max(1, Math.min(Number(input.limit || 10), 20)),
-  );
-  return { ok: result.ok, archiveId: archive.id, archiveName: archive.name, ...result };
-}
-
-async function prefetchHotCandidates(input: PrefetchHotCandidatesInput) {
-  const archive = await loadPersonaArchive(String(input.archiveId || "").trim());
-  if (!archive) throw new Error("人设不存在。");
-  const result = await prefetchSentimentHotCandidatePool({
-    archive,
-    searchMode: input.searchMode === "normal" ? "normal" : "strict",
-    lowWatermark: Math.max(1, Math.min(Number(input.lowWatermark || 10), 80)),
-    targetCount: Math.max(1, Math.min(Number(input.targetCount || 50), 120)),
-  });
-  return { ok: result.ok, archiveId: archive.id, archiveName: archive.name, searchMode: input.searchMode === "normal" ? "normal" : "strict", ...result };
+  return { ok: await warmSentimentHotSearchStrategy(archive), archiveId: archive.id, archiveName: archive.name };
 }
 
 async function appendCandidateAsPost(archiveId: string, candidate: SentimentHotCandidate, index: number) {
@@ -210,7 +186,6 @@ async function importHotCandidates(input: ImportHotCandidatesInput) {
   if (!candidates.length) throw new Error("请先选择至少一条热点候选。");
   const importedPosts: Array<{ id: string; title: string; content: string }> = [];
   for (const [index, candidate] of candidates.entries()) {
-    rememberSentimentHotSelected(archive.id, candidate.id);
     const post = await appendCandidateAsPost(archive.id, candidate, index);
     rememberSentimentHotImported(archive.id, candidate.id);
     importedPosts.push(post);
@@ -263,11 +238,11 @@ async function main() {
   if (input.action === "fetch-hot-candidates") {
     await printJsonAndExit(await fetchHotCandidates(input));
   }
-  if (input.action === "prime-hot-candidates") {
-    await printJsonAndExit(await primeHotCandidates(input));
+  if (input.action === "warm-hot-strategy") {
+    await printJsonAndExit(await warmHotStrategy(input));
   }
-  if (input.action === "prefetch-hot-candidates") {
-    await printJsonAndExit(await prefetchHotCandidates(input));
+  if (input.action === "pool-stats") {
+    await printJsonAndExit({ ok: true, pools: listSentimentHotCandidatePoolStats() });
   }
   if (input.action === "import-hot-candidates") {
     await printJsonAndExit(await importHotCandidates(input));

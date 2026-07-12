@@ -71,11 +71,12 @@ function writeState(state: StoreState) {
 }
 
 function updateState(mutator: (state: StoreState) => void) {
-  withExclusiveJsonFileLock(STORE_FILE, () => {
+  const updated = withExclusiveJsonFileLock(STORE_FILE, () => {
     const state = readState();
     mutator(state);
     writeState(state);
   });
+  if (!updated) throw new Error("热点候选状态正在更新，请稍后重试。");
 }
 
 export function buildSentimentCandidateId(input: { platform: string; sourceUrl?: string; content?: string }): string {
@@ -85,10 +86,7 @@ export function buildSentimentCandidateId(input: { platform: string; sourceUrl?:
 
 export function getSentimentHotExcludedIds(archiveId: string): Set<string> {
   const state = readState();
-  return new Set([
-    ...(state.selected[archiveId] || []),
-    ...(state.imported[archiveId] || []),
-  ]);
+  return new Set(state.imported[archiveId] || []);
 }
 
 function shownEntryId(entry: string | ShownEntry): string {
@@ -131,24 +129,15 @@ export function getSentimentHotCandidateHistoryKeys(candidate: Partial<Sentiment
 }
 
 export function getSentimentHotShownHistoryKeys(archiveId: string): Set<string> {
-  const keys = new Set<string>();
-  for (const entry of readState().shown[archiveId] || []) {
-    const id = shownEntryId(entry);
-    if (id) keys.add(`id:${id}`);
-    if (typeof entry === "string") continue;
-    if (entry.urlKey) keys.add(`url:${entry.urlKey}`);
-    if (entry.contentKey) keys.add(`content:${entry.contentKey}`);
-  }
-  return keys;
+  // Previewing candidates, including automated tests, must not consume them.
+  // Existing shown records are presentation history only and are intentionally
+  // excluded from refresh deduplication.
+  void archiveId;
+  return new Set<string>();
 }
 
 export function getSentimentHotRefreshExcludedIds(archiveId: string): Set<string> {
-  const state = readState();
-  return new Set([
-    ...(state.shown[archiveId] || []).map(shownEntryId).filter(Boolean),
-    ...(state.selected[archiveId] || []),
-    ...(state.imported[archiveId] || []),
-  ]);
+  return getSentimentHotExcludedIds(archiveId);
 }
 
 export function getSentimentHotShownIds(archiveId: string): Set<string> {

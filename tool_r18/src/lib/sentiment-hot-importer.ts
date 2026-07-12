@@ -5,8 +5,9 @@ import { createRequire } from "node:module";
 import type { PersonaArchive } from "@/core/archives/persona-archive-domain";
 import { resolveRuntimeFile } from "@/runtime/node/data-dir";
 import { withExclusiveJsonFileLock } from "@/runtime/node/json-file-lock";
+import { withSentimentHotExecutionLock } from "@/lib/sentiment-hot-execution-lock";
 import { readRuntimeApiConfig } from "@/runtime/node/config";
-import { callTextUnderstandingModelWithFallback, extractText, isTextModelFallbackError } from "@/lib/gemini-client";
+import { callTextUnderstandingModelWithFallback, extractText, getTextUnderstandingModelFallbacks, isTextModelFallbackError } from "@/lib/gemini-client";
 import {
   buildSentimentCandidateId,
   getSentimentHotCandidateHistoryKeys,
@@ -15,7 +16,6 @@ import {
   getSentimentHotShownHistoryKeys,
   getSentimentHotShownAtMap,
   getSentimentHotShownIds,
-  rememberSentimentHotShown,
   type SentimentHotCandidate,
   type SentimentHotMedia,
   type SentimentHotPlatform,
@@ -32,30 +32,30 @@ const Database = require("better-sqlite3");
 const MIN_SENTIMENT_HOT_SCORE = 1000;
 const MIN_SENTIMENT_HOT_QUALITY_HAN_COUNT = 60;
 const SENTIMENT_HOT_CANDIDATE_POOL_TARGET = 400;
-const THREADS_SEARCH_CACHE_CANDIDATE_LIMIT = 200;
+const THREADS_SEARCH_CACHE_CANDIDATE_LIMIT = 2000;
 const THREADS_SEARCH_CACHE_MAX_ROWS_PER_ARCHIVE = 40;
-const THREADS_BROWSER_QUERY_LIMIT = 48;
+const THREADS_BROWSER_QUERY_LIMIT = 24;
+const THREADS_BROWSER_QUERY_BATCH_SIZE = 6;
 const SENTIMENT_MODEL_KEYWORD_TARGET = 20;
 const SENTIMENT_HOT_KEYWORD_MODEL = "xai/grok-4.3";
-const THREADS_READER_QUERY_LIMIT = 48;
-const THREADS_READER_QUERY_BATCH_SIZE = 4;
-const SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS = 42_000;
-const THREADS_BROWSER_AUTH_SEARCH_TIMEOUT_MS = 42_000;
-const SENTIMENT_HOT_TOTAL_TIMEOUT_MS = 60_000;
-const SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-const SENTIMENT_HOT_WARM_POOL_NORMAL_TARGET = 80;
-const SENTIMENT_HOT_WARM_POOL_STRICT_TARGET = 50;
-const SENTIMENT_HOT_WARM_POOL_MAX_ROUNDS = 5;
-const SENTIMENT_HOT_MAX_PUBLISHED_AGE_MS = 30 * 24 * 60 * 60 * 1000;
-const SENTIMENT_HOT_UNKNOWN_PUBLISHED_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 13;
+const THREADS_READER_INITIAL_QUERY_LIMIT = 24;
+const THREADS_READER_TOTAL_QUERY_LIMIT = 48;
+const THREADS_READER_QUERY_BATCH_SIZE = 8;
+const INSTAGRAM_READER_QUERY_LIMIT = 48;
+const SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS = 20_000;
+const SENTIMENT_HOT_TOTAL_TIMEOUT_MS = 55_000;
+const SENTIMENT_HOT_SUPPLEMENT_MIN_REMAINING_MS = 12_000;
+const SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT = 2;
+const SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS = 72 * 60 * 60 * 1000;
+const SENTIMENT_HOT_MAX_PUBLISHED_AGE_MS = 730 * 24 * 60 * 60 * 1000;
+const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 19;
 const SENTIMENT_HOT_TIMEOUT_WARNING = "\u71b1\u9ede\u6293\u53d6\u5df2\u8d85\u6642\uff0c\u5df2\u505c\u6b62\u5f8c\u7e8c\u8017\u6642\u6b65\u9a5f\uff1b\u8acb\u7a0d\u5f8c\u5237\u65b0\u6216\u6aa2\u67e5 Cookie / sessionid\u3002";
-const THREADS_SEARCH_CACHE_WARNING = "当前 Threads 搜索被限流，已使用同人设持久候选池。";
+const THREADS_SEARCH_CACHE_WARNING = "当前 Threads 搜索被限流，已使用 24 小时内缓存热点。";
 const SENTIMENT_HOT_NORMAL_KEYWORD_TARGET = 48;
 const SENTIMENT_HOT_STRICT_KEYWORD_TARGET = 36;
 const SENTIMENT_HOT_SEARCH_STRATEGY_CACHE_FILE = resolveRuntimeFile("sentiment_hot_search_strategy_cache.json");
-const SENTIMENT_HOT_SEARCH_STRATEGY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
-const SENTIMENT_HOT_SEMANTIC_RELEVANCE_VERSION = 2;
+const SENTIMENT_HOT_SEARCH_STRATEGY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const SENTIMENT_HOT_SEMANTIC_RELEVANCE_VERSION = 4;
 const SENTIMENT_HOT_GENERIC_QUERY_INTENTS = [
   "經驗",
   "心得",
@@ -146,10 +146,13 @@ interface SentimentHotSearchStrategy {
   primaryQueries: string[];
   broadQueries: string[];
   ecosystemQueries: string[];
+  requiredAnchorTerms: string[];
+  normalAnchorTerms: string[];
   strictAcceptTerms: string[];
   normalAcceptTerms: string[];
   rejectTerms: string[];
   domainSummary?: string;
+  personaGuardTerms?: string[];
 }
 
 export interface ThreadsBrowserProfilePublishedPostSnapshot {
@@ -242,24 +245,137 @@ function isSearchableRelevanceTerm(value: unknown): boolean {
   return hasHan(text) || /^[A-Za-z][A-Za-z0-9.+-]{2,20}$/.test(text);
 }
 
-export function expandSentimentSearchKeywordVariants(value: string): string[] {
+function expandSentimentSearchKeywordVariants(value: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (item: string) => {
+    const text = cleanText(item);
+    if (!text || !hasHan(text)) return;
+    if (text.length < 2 || text.length > 12) return;
+    const key = text.toLowerCase();
+    if (seen.has(key)) return;
+    if (isGenericSentimentKeyword(text) || WEAK_RELEVANCE_STOPWORDS.has(text) || WEAK_RELEVANCE_STOPWORDS.has(key)) return;
+    seen.add(key);
+    out.push(text);
+  };
+
   const text = cleanText(value);
-  if (!text || !hasHan(text) || text.length < 2 || text.length > 12) return [];
-  const key = text.toLowerCase();
-  if (isGenericSentimentKeyword(text) || WEAK_RELEVANCE_STOPWORDS.has(text) || WEAK_RELEVANCE_STOPWORDS.has(key)) return [];
-  const simplified = "车维辆发机养费选业电统难杂视线论贷银财务户话题体场实经验证问学医师护购买规划产资区币国长门险与为开关见听说债额转数职审华";
-  const traditional = "車維輛發機養費選業電統難雜視線論貸銀財務戶話題體場實經驗證問學醫師護購買規劃產資區幣國長門險與為開關見聽說債額轉數職審華";
-  const convert = (source: string, from: string, to: string) => [...source]
-    .map((char) => {
-      const index = from.indexOf(char);
-      return index >= 0 ? to[index] : char;
-    })
-    .join("");
-  return [...new Set([
-    text,
-    convert(text, simplified, traditional),
-    convert(text, traditional, simplified),
-  ])];
+  add(text);
+  const replacements: Array<[RegExp, string]> = [
+    [/信貸/g, "信贷"],
+    [/信贷/g, "信貸"],
+    [/貸款/g, "贷款"],
+    [/贷款/g, "貸款"],
+    [/銀行/g, "银行"],
+    [/银行/g, "銀行"],
+    [/理財/g, "理财"],
+    [/理财/g, "理財"],
+    [/債務/g, "债务"],
+    [/债务/g, "債務"],
+    [/風控/g, "风控"],
+    [/风控/g, "風控"],
+  ];
+  for (const [pattern, replacement] of replacements) add(text.replace(pattern, replacement));
+
+  if (/(?:金融|信貸|信贷|貸款|贷款|信用卡|銀行|银行|理財|理财|債務|债务|風控|风控)/u.test(text)) {
+    [
+      "海外金融",
+      "信用卡",
+      "貸款",
+      "贷款",
+      "信貸",
+      "信贷",
+      "銀行貸款",
+      "银行贷款",
+      "貸款利率",
+      "贷款利率",
+      "理財",
+      "理财",
+      "債務",
+      "债务",
+      "信用分",
+      "銀行審核",
+      "银行审核",
+      "借錢",
+      "借钱",
+      "債務整合",
+      "债务整合",
+      "房貸",
+      "房贷",
+      "車貸",
+      "车贷",
+      "信用貸款",
+      "信用贷款",
+      "小額貸款",
+      "小额贷款",
+      "貸款申請",
+      "贷款申请",
+      "信用評分",
+      "信用评分",
+    ].forEach(add);
+  }
+
+  if (/(?:汽車|汽车|修車|修车|維修|维修|保養|保养|客車|客车|大巴|底盤|底盘|煞車|刹车|傳動軸|传动轴|引擎|機油|机油)/u.test(text)) {
+    [
+      "汽車維修",
+      "汽车维修",
+      "修車",
+      "修车",
+      "汽車保養",
+      "汽车保养",
+      "引擎維修",
+      "引擎维修",
+      "底盤維修",
+      "底盘维修",
+      "煞車系統",
+      "刹车系统",
+      "機油保養",
+      "机油保养",
+      "輪胎保養",
+      "轮胎保养",
+      "車廠維修",
+      "汽修廠",
+      "二手車保養",
+      "商用車維修",
+      "大客車保養",
+      "大巴維修",
+    ].forEach(add);
+  }
+
+  if (/(?:刺青|紋身|纹身)/u.test(text)) {
+    [
+      "刺青",
+      "紋身",
+      "纹身",
+      "刺青保養",
+      "刺青圖案",
+    ].forEach(add);
+  }
+
+  if (/(?:角色扮演|cosplay|Cosplay|二次元|動漫|动漫)/u.test(text)) {
+    [
+      "角色扮演",
+      "Cosplay",
+      "二次元",
+      "動漫",
+      "动漫",
+      "動漫展",
+      "同人展",
+    ].forEach(add);
+  }
+
+  if (/(?:遊戲|游戏|手遊|手游|電競|电竞)/u.test(text)) {
+    [
+      "遊戲角色",
+      "游戏角色",
+      "手遊",
+      "手游",
+      "電競",
+      "电竞",
+    ].forEach(add);
+  }
+
+  return out.slice(0, 32);
 }
 
 function readSentimentBrowserFallbackConfig() {
@@ -640,6 +756,42 @@ const DOMAIN_RELEVANCE_KEYWORDS = new Set([
   "女生",
 ]);
 
+const PRIORITY_DOMAIN_KEYWORDS = new Set([
+  "醫療",
+  "医疗",
+  "醫生",
+  "医生",
+  "醫院",
+  "医院",
+  "診所",
+  "诊所",
+  "醫美",
+  "医美",
+  "護理",
+  "护理",
+  "護士",
+  "护士",
+  "急診",
+  "急诊",
+  "AI",
+  "人工智慧",
+  "人工智能",
+  "自動化",
+  "自动化",
+  "護膚",
+  "护肤",
+  "美妝",
+  "美妆",
+  "穿搭",
+  "遊戲",
+  "游戏",
+  "動漫",
+  "动漫",
+  "二次元",
+  "職場",
+  "职场",
+]);
+
 function isGenericSentimentKeyword(value: string): boolean {
   const key = cleanText(value).toLowerCase();
   return GENERIC_SENTIMENT_KEYWORDS.has(key) && !DOMAIN_RELEVANCE_KEYWORDS.has(key);
@@ -649,6 +801,7 @@ function isWeakRelevanceKeyword(value: string): boolean {
   const keyword = cleanText(value);
   const key = keyword.toLowerCase();
   if (!keyword) return true;
+  if (PRIORITY_DOMAIN_KEYWORDS.has(keyword)) return false;
   if (WEAK_RELEVANCE_STOPWORDS.has(keyword) || WEAK_RELEVANCE_STOPWORDS.has(key)) return true;
   if (isGenericSentimentKeyword(keyword)) return true;
   return /^(?:日常|生活|分享|心情|今天|最近|話題|话题|熱門|热门|推薦|推荐|女生|男生|故事|內容|内容)$/u.test(keyword);
@@ -720,7 +873,6 @@ function hasNegatedKeywordContext(source: string, keyword: string): boolean {
 function normalizeSentimentSearchKeyword(value: unknown, options?: { archiveName?: string; sourceText?: string }): string {
   const text = normalizeDynamicKeyword(String(value || ""), options?.archiveName || "")
     .replace(/^[@#]+/g, "")
-    .replace(/^[\s"'“”‘’「」『』]+|[\s"'“”‘’「」『』]+$/g, "")
     .trim();
   const key = text.toLowerCase();
   if (!text) return "";
@@ -775,15 +927,28 @@ function buildSearchKeywordCandidates(args: {
   for (const item of [...out]) {
     out.push(...expandSentimentSearchKeywordVariants(item));
   }
-  return rankSearchKeywords([...new Set(out)]
+  return rankSearchKeywords(filterConflictingSearchKeywords([...new Set(out)])
     .filter((item) => isConcreteSearchKeyword(item))
   ).slice(0, SENTIMENT_MODEL_KEYWORD_TARGET);
+}
+
+function filterConflictingSearchKeywords(keywords: string[]): string[] {
+  const hasStockDomain = keywords.some((keyword) => /(?:股市|股票|台股|美股|K線|k線|投資策略|投資心得|股票投資|股市分析)/u.test(cleanText(keyword)));
+  if (!hasStockDomain) return keywords;
+  const secondaryPattern = /(?:二次元|動漫|遊戲|游戏|宅文化|Cosplay|手辦|手办|美少女|女角色|角色扮演)/iu;
+  const primary: string[] = [];
+  const secondary: string[] = [];
+  for (const keyword of keywords) {
+    (secondaryPattern.test(cleanText(keyword)) ? secondary : primary).push(keyword);
+  }
+  return [...primary, ...secondary];
 }
 
 function rankSearchKeywords(keywords: string[]): string[] {
   return keywords
     .map((keyword, index) => {
       let score = 0;
+      if (PRIORITY_DOMAIN_KEYWORDS.has(keyword)) score += 100;
       if (!isWeakRelevanceKeyword(keyword)) score += 30;
       if (keyword.length <= 4) score += 20;
       if (keyword.length > 8) score -= 25;
@@ -818,11 +983,77 @@ function isStandalonePersonaVisualKeyword(value: unknown): boolean {
   return /^(?:刺青|紋身|纹身|刺青保養|刺青保养|刺青圖案|刺青图案|滿背刺青|满背刺青|鎖骨刺青|锁骨刺青)$/u.test(cleanText(value));
 }
 
-function prepareSentimentHotKeywordsForMode(keywords: string[], mode: SentimentHotSearchMode): string[] {
-  const normalized = [...new Set(
+function buildStrictPersonaDomainKeywords(sourceText: string): string[] {
+  const text = cleanText(sourceText);
+  const out: string[] = [];
+  const add = (value: string) => {
+    const keyword = normalizeSentimentSearchKeyword(value, { sourceText: text });
+    if (keyword && isConcreteSearchKeyword(keyword)) out.push(keyword);
+  };
+  const hasTattooVisual = /(?:刺青|紋身|纹身|滿背刺青|满背刺青|鎖骨刺青|锁骨刺青)/u.test(text);
+  const hasCosplayDomain = /(?:Cosplay|cosplay|Coser|coser|角色扮演|動漫Cosplay|动漫Cosplay|動漫展|动漫展|漫展|同人展|二次元|動漫|动漫)/u.test(text);
+  const hasGamingDomain = /(?:電競|电竞|遊戲|游戏|MOBA|射擊|射击|手遊|手游|開黑|开黑|實況|实况)/u.test(text);
+  const hasFootballDomain = /(?:足球|球賽|球赛|球星|聯賽|联赛|賽事|赛事|運動系|运动系)/u.test(text);
+  const hasFinanceDomain = /(?:投資|投资|理財|理财|基金|存錢|存钱|搞錢|搞钱|低門檻|低门槛)/u.test(text);
+  const hasCreditDomain = /(?:信貸|信贷|貸款|贷款|信用分|信用卡|薪資|薪资|週轉|周转|債務|债务|卡債|卡债|銀行|银行)/u.test(text);
+  const hasRealEstateDomain = /(?:不動產|不动产|房產|房产|房貸|房贷|置產|置产|豪宅|建案|融資|融资|東京|东京|大阪|日本高端|跨境資產|跨境资产|資產避險|资产避险)/u.test(text);
+  const hasEducationDomain = /(?:教師|教师|老師|老师|校園|校园|學生|学生|師生|师生|教室|教研|成長|成长|勵志|励志|治癒|治愈)/u.test(text);
+  const hasBeautyDomain = /(?:美妝|美妆|保養|保养|穿搭|護膚|护肤|彩妝|彩妆|娛樂話題|娱乐话题)/u.test(text);
+  const hasYogaDomain = /(?:瑜伽|伸展|體態|体态|飲食|饮食|晨間|晨间|健身|自律|療癒|疗愈)/u.test(text);
+  const hasTechDomain = /(?:工程師|工程师|程式|程序|科技|加班|理工|遊戲|游戏|社群觀察|社群观察)/u.test(text);
+  const hasAutoDomain = /(?:汽車|汽车|修車|修车|維修|维修|保養|保养|客車|客车|底盤|底盘|煞車|刹车)/u.test(text);
+
+  if (hasCosplayDomain) {
+    ["動漫Cosplay", "动漫Cosplay", "二次元Cosplay", "精緻Cosplay", "精致Cosplay", "漫展Cosplay", "動漫展Cosplay", "动漫展Cosplay", "同人展Cosplay", "動漫展", "动漫展", "漫展", "同人展", "Coser穿搭", "女Coser"].forEach(add);
+    if (hasTattooVisual) ["刺青Coser", "刺青Cosplay", "紋身Coser", "纹身Coser", "刺青穿搭", "刺青辣妹", "刺青角色扮演"].forEach(add);
+  }
+  if (hasGamingDomain) {
+    ["電競遊戲", "电竞游戏", "遊戲實況", "游戏实况", "MOBA手遊", "MOBA手游", "射擊手遊", "射击手游", "組隊開黑", "组队开黑", "遊戲女玩家", "游戏女玩家"].forEach(add);
+  }
+  if (hasFootballDomain) {
+    ["足球賽事", "足球赛事", "足球少女", "球星", "聯賽", "联赛", "賽事講評", "赛事讲评", "懂球"].forEach(add);
+  }
+  if (hasFinanceDomain && !hasCreditDomain && !hasRealEstateDomain) {
+    ["投資理財", "投资理财", "理財心法", "理财心法", "低門檻理財", "低门槛理财", "基金存錢", "基金存钱", "清醒搞錢", "清醒搞钱"].forEach(add);
+  }
+  if (hasCreditDomain) {
+    ["低息信貸", "低息信贷", "信用分養護", "信用分养护", "工薪信貸", "工薪信贷", "薪資規劃", "薪资规划", "小額週轉", "小额周转", "卡債整理", "卡债整理", "銀行貸款", "银行贷款", "貸款利率", "贷款利率"].forEach(add);
+  }
+  if (hasRealEstateDomain) {
+    ["日本不動產", "日本不动产", "日本房產", "日本房产", "東京豪宅", "东京豪宅", "大阪豪宅", "海外置產", "海外置产", "跨境理財", "跨境理财", "台籍融資", "台籍融资", "日本房貸", "日本房贷", "高端建案", "資產避險", "资产避险"].forEach(add);
+  }
+  if (hasEducationDomain) {
+    ["校園治癒", "校园治愈", "教師故事", "教师故事", "師生互動", "师生互动", "學生成長", "学生成长", "勵志教育", "励志教育", "教室日常", "溫暖教師", "温暖教师"].forEach(add);
+  }
+  if (hasBeautyDomain) {
+    ["美妝保養", "美妆保养", "護膚心得", "护肤心得", "彩妝分享", "彩妆分享", "穿搭日常", "娛樂話題", "娱乐话题"].forEach(add);
+  }
+  if (hasYogaDomain) {
+    ["瑜伽伸展", "體態管理", "体态管理", "晨間瑜伽", "晨间瑜伽", "飲食管理", "饮食管理", "療癒瑜伽", "疗愈瑜伽"].forEach(add);
+  }
+  if (hasTechDomain && !hasAutoDomain && !hasCosplayDomain && !hasGamingDomain) {
+    ["工程師日常", "工程师日常", "程式開發", "程序开发", "科技觀察", "科技观察", "加班日常", "理工生活"].forEach(add);
+  }
+  if (hasAutoDomain) {
+    ["汽車維修", "汽车维修", "修車", "修车", "汽車保養", "汽车保养", "底盤維修", "底盘维修", "煞車系統", "刹车系统", "引擎維修", "引擎维修"].forEach(add);
+  }
+  return rankSearchKeywords([...new Set(out)]).slice(0, SENTIMENT_HOT_STRICT_KEYWORD_TARGET);
+}
+
+function prepareSentimentHotKeywordsForMode(keywords: string[], mode: SentimentHotSearchMode, options?: { sourceText?: string; useRuleDomainFallback?: boolean }): string[] {
+  const normalized = filterConflictingSearchKeywords([...new Set(
     keywords.map(cleanText).filter((item) => isConcreteSearchKeyword(item)),
-  )];
-  return normalized.slice(0, sentimentHotKeywordTargetForMode(mode));
+  )]);
+  if (mode === "normal") {
+    const expanded: string[] = [...normalized];
+    for (const keyword of normalized) {
+      if (options?.useRuleDomainFallback) expanded.push(...expandSentimentSearchKeywordVariants(keyword));
+    }
+    return [...new Set(expanded.filter((item) => isConcreteSearchKeyword(item)))].slice(0, sentimentHotKeywordTargetForMode(mode));
+  }
+  const domainKeywords = options?.useRuleDomainFallback ? buildStrictPersonaDomainKeywords(options?.sourceText || "") : [];
+  const merged = [...normalized, ...domainKeywords];
+  return [...new Set(merged.filter((item) => isConcreteSearchKeyword(item)))].slice(0, sentimentHotKeywordTargetForMode(mode));
 }
 
 function extractDirectHanKeywords(args: { archiveName: string; text: string }): string[] {
@@ -877,6 +1108,8 @@ function emptySentimentHotSearchStrategy(): SentimentHotSearchStrategy {
     primaryQueries: [],
     broadQueries: [],
     ecosystemQueries: [],
+    requiredAnchorTerms: [],
+    normalAnchorTerms: [],
     strictAcceptTerms: [],
     normalAcceptTerms: [],
     rejectTerms: [],
@@ -888,6 +1121,14 @@ function normalizeStrategyTermList(value: unknown, args: { archiveName?: string;
   return [...new Set(raw
     .map((item) => normalizeSentimentSearchKeyword(item, { archiveName: args.archiveName, sourceText: args.sourceText }))
     .filter((item) => isConcreteSearchKeyword(item))
+  )].slice(0, args.limit);
+}
+
+function normalizeStrategyAnchorTermList(value: unknown, args: { archiveName?: string; sourceText: string; limit: number }): string[] {
+  const raw = Array.isArray(value) ? value : parseModelKeywordList(String(value || ""));
+  return [...new Set(raw
+    .map((item) => normalizeSentimentSearchKeyword(item, { archiveName: args.archiveName, sourceText: args.sourceText }))
+    .filter((item) => item.length <= 14 && isSearchableRelevanceTerm(item))
   )].slice(0, args.limit);
 }
 
@@ -912,12 +1153,18 @@ function parseSentimentHotSearchStrategy(text: string, args: { archiveName?: str
       primaryQueries: normalizeStrategyTermList(parseModelKeywordList(raw), { ...args, limit: SENTIMENT_MODEL_KEYWORD_TARGET }),
     };
   }
+  const primaryQueries = normalizeStrategyTermList((parsed as any).primaryQueries || (parsed as any).queries || (parsed as any).keywords, { ...args, limit: SENTIMENT_MODEL_KEYWORD_TARGET });
+  const broadQueries = normalizeStrategyTermList((parsed as any).broadQueries || (parsed as any).normalQueries || (parsed as any).expandedQueries, { ...args, limit: SENTIMENT_HOT_NORMAL_KEYWORD_TARGET });
+  const requiredAnchorTerms = normalizeStrategyAnchorTermList((parsed as any).requiredAnchorTerms || (parsed as any).anchorTerms || (parsed as any).coreEntityTerms, { ...args, limit: 16 });
+  const normalAnchorTerms = normalizeStrategyAnchorTermList((parsed as any).normalAnchorTerms || (parsed as any).parentAnchorTerms || requiredAnchorTerms, { ...args, limit: 16 });
   const strategy: SentimentHotSearchStrategy = {
-    primaryQueries: normalizeStrategyTermList((parsed as any).primaryQueries || (parsed as any).queries || (parsed as any).keywords, { ...args, limit: SENTIMENT_MODEL_KEYWORD_TARGET }),
-    broadQueries: normalizeStrategyTermList((parsed as any).broadQueries || (parsed as any).normalQueries || (parsed as any).expandedQueries, { ...args, limit: SENTIMENT_HOT_NORMAL_KEYWORD_TARGET }),
-    ecosystemQueries: normalizeStrategyTermList((parsed as any).ecosystemQueries || (parsed as any).parentQueries || (parsed as any).highVolumeQueries, { ...args, limit: SENTIMENT_HOT_NORMAL_KEYWORD_TARGET }),
-    strictAcceptTerms: normalizeStrategyTermList((parsed as any).strictAcceptTerms || (parsed as any).strictTerms || (parsed as any).acceptTerms, { ...args, limit: SENTIMENT_MODEL_KEYWORD_TARGET }),
-    normalAcceptTerms: normalizeStrategyTermList((parsed as any).normalAcceptTerms || (parsed as any).broadAcceptTerms, { ...args, limit: SENTIMENT_HOT_NORMAL_KEYWORD_TARGET }),
+    primaryQueries,
+    broadQueries,
+    ecosystemQueries: normalizeStrategyTermList((parsed as any).ecosystemQueries || (parsed as any).parentQueries || (parsed as any).highVolumeQueries || broadQueries, { ...args, limit: SENTIMENT_HOT_NORMAL_KEYWORD_TARGET }),
+    requiredAnchorTerms,
+    normalAnchorTerms,
+    strictAcceptTerms: normalizeStrategyTermList((parsed as any).strictAcceptTerms || (parsed as any).strictTerms || (parsed as any).acceptTerms || [...requiredAnchorTerms, ...primaryQueries], { ...args, limit: SENTIMENT_MODEL_KEYWORD_TARGET }),
+    normalAcceptTerms: normalizeStrategyTermList((parsed as any).normalAcceptTerms || (parsed as any).broadAcceptTerms || [...normalAnchorTerms, ...primaryQueries, ...broadQueries], { ...args, limit: SENTIMENT_HOT_NORMAL_KEYWORD_TARGET }),
     rejectTerms: normalizeStrategyTermList((parsed as any).rejectTerms || (parsed as any).excludeTerms || (parsed as any).negativeTerms, { ...args, limit: 16 }),
     domainSummary: cleanText((parsed as any).domainSummary || (parsed as any).summary),
   };
@@ -925,11 +1172,13 @@ function parseSentimentHotSearchStrategy(text: string, args: { archiveName?: str
 }
 
 function sentimentHotStrategyHasModelTerms(strategy: SentimentHotSearchStrategy): boolean {
-  return strategy.primaryQueries.length >= 6
-    && strategy.broadQueries.length >= 4
-    && strategy.ecosystemQueries.length >= 4
-    && strategy.strictAcceptTerms.length >= 4
-    && strategy.normalAcceptTerms.length >= 4;
+  return Array.isArray(strategy.primaryQueries) && strategy.primaryQueries.length >= 5
+    && Array.isArray(strategy.requiredAnchorTerms) && strategy.requiredAnchorTerms.length >= 3
+    && Array.isArray(strategy.normalAnchorTerms) && strategy.normalAnchorTerms.length >= 3
+    && strategy.normalAnchorTerms.filter((term) => term.length >= 2).length >= 2
+    && Array.isArray(strategy.strictAcceptTerms) && strategy.strictAcceptTerms.length >= 5
+    && Array.isArray(strategy.normalAcceptTerms) && strategy.normalAcceptTerms.length >= 5
+    && Boolean(cleanText(strategy.domainSummary));
 }
 
 function sentimentHotStrategyUsesThreadsChinese(strategy: SentimentHotSearchStrategy): boolean {
@@ -937,6 +1186,8 @@ function sentimentHotStrategyUsesThreadsChinese(strategy: SentimentHotSearchStra
     ...strategy.primaryQueries,
     ...strategy.broadQueries,
     ...strategy.ecosystemQueries,
+    ...strategy.requiredAnchorTerms,
+    ...strategy.normalAnchorTerms,
     ...strategy.strictAcceptTerms,
     ...strategy.normalAcceptTerms,
   ].join("");
@@ -946,27 +1197,10 @@ function sentimentHotStrategyUsesThreadsChinese(strategy: SentimentHotSearchStra
   return traditionalCount >= Math.max(2, Math.ceil(simplifiedCount / 2));
 }
 
-export function selectSentimentHotStrictBroadQueries(domainSummary: string, broadQueries: string[]): string[] {
-  const ignored = new Set(["台灣", "台湾", "實測", "实测", "選購", "选购", "相關", "相关", "討論", "讨论", "內容", "内容", "領域", "领域"]);
-  const bigrams = (value: string) => {
-    const han = (cleanText(value).match(/[\u3400-\u9fff]+/gu) || []).join("");
-    const out: string[] = [];
-    for (let index = 0; index < han.length - 1; index += 1) {
-      const term = han.slice(index, index + 2);
-      if (!ignored.has(term)) out.push(term);
-    }
-    return new Set(out);
-  };
-  const domainBigrams = bigrams(domainSummary);
-  if (domainBigrams.size === 0) return [];
-  return broadQueries.filter((query) => [...bigrams(query)].some((term) => domainBigrams.has(term)));
-}
-
 function sentimentHotStrategyTermsForMode(strategy: SentimentHotSearchStrategy, mode: SentimentHotSearchMode): string[] {
-  const strictBroadQueries = selectSentimentHotStrictBroadQueries(strategy.domainSummary || "", strategy.broadQueries);
   const groups = mode === "normal"
-    ? [strategy.broadQueries, strategy.primaryQueries, strategy.ecosystemQueries, strategy.normalAcceptTerms, strategy.strictAcceptTerms]
-    : [strictBroadQueries, strategy.primaryQueries, strategy.strictAcceptTerms];
+    ? [strategy.primaryQueries, strategy.ecosystemQueries, strategy.broadQueries, strategy.normalAnchorTerms, strategy.normalAcceptTerms, strategy.strictAcceptTerms]
+    : [strategy.primaryQueries, strategy.requiredAnchorTerms, strategy.strictAcceptTerms];
   const terms: string[] = [];
   for (let index = 0; index < Math.max(0, ...groups.map((group) => group.length)); index += 1) {
     for (const group of groups) {
@@ -975,6 +1209,72 @@ function sentimentHotStrategyTermsForMode(strategy: SentimentHotSearchStrategy, 
     }
   }
   return [...new Set(terms)];
+}
+
+function buildSegmentedSentimentHotQueryTerms(strategy: SentimentHotSearchStrategy, mode: SentimentHotSearchMode): string[] {
+  const identityAnchor = cleanText(strategy.personaGuardTerms?.[0] || strategy.normalAnchorTerms[0]);
+  const out: string[] = [];
+  for (const term of sentimentHotStrategyTermsForMode(strategy, mode)) {
+    for (const segment of segmentPersonaWords(term)) {
+      const query = identityAnchor && segment !== identityAnchor ? `${identityAnchor} ${segment}` : segment;
+      if (query && !out.includes(query)) out.push(query);
+    }
+  }
+  return out;
+}
+
+function applyPersonaGuardToSentimentHotStrategy(args: {
+  strategy: SentimentHotSearchStrategy;
+  archiveName?: string;
+  personaSeedKeywords: string[];
+  sourceText: string;
+}) {
+  const personaGuardTerms = prepareSentimentHotKeywordsForMode(args.personaSeedKeywords, "strict", {
+    sourceText: args.sourceText,
+    useRuleDomainFallback: true,
+  }).slice(0, 10);
+  const personaIdentityAnchor = personaGuardTerms[0]
+    || segmentPersonaWords(cleanText(args.archiveName))[0]
+    || args.strategy.normalAnchorTerms.flatMap((term) => segmentPersonaWords(term))[0];
+  args.strategy.personaGuardTerms = personaIdentityAnchor ? [personaIdentityAnchor] : personaGuardTerms.slice(0, 1);
+  args.strategy.primaryQueries = [...new Set([...personaGuardTerms, ...args.strategy.primaryQueries])];
+  args.strategy.strictAcceptTerms = [...new Set([...personaGuardTerms, ...args.strategy.strictAcceptTerms])];
+  args.strategy.normalAcceptTerms = [...new Set([...personaGuardTerms, ...args.strategy.normalAcceptTerms])];
+  if (personaIdentityAnchor) {
+    args.strategy.primaryQueries = [...new Set([personaIdentityAnchor, ...args.strategy.primaryQueries])];
+    args.strategy.normalAnchorTerms = [...new Set([personaIdentityAnchor, ...args.strategy.normalAnchorTerms])];
+  }
+}
+
+export function candidateMatchesSentimentHotStrategyAnchors(candidate: SentimentHotCandidate, strategy: SentimentHotSearchStrategy, mode: SentimentHotSearchMode): boolean {
+  const matchesExactAnchor = (anchor: string, target: SentimentHotCandidate = candidate) => {
+    const fullVariants = [...new Set([anchor, ...expandSentimentSearchKeywordVariants(anchor)].map(cleanText).filter(Boolean))];
+    return countMatchedNeedles(target, fullVariants) > 0;
+  };
+  const matchesLeadingAnchor = (anchor: string) => {
+    const content = cleanSentimentCandidateContent(candidate.content);
+    const leadingLength = Math.max(120, Math.ceil(content.length * 0.45));
+    return matchesExactAnchor(anchor, { ...candidate, content: content.slice(0, leadingLength) });
+  };
+  const rejectTerms = strategy.rejectTerms.map(cleanText).filter((term) => term.length >= 2);
+  if (rejectTerms.some((term) => countMatchedNeedles(candidate, [term]) > 0)) return false;
+  const requiredAnchors = strategy.requiredAnchorTerms.filter((term) => term.length >= 2);
+  const normalAnchors = strategy.normalAnchorTerms.filter((term) => term.length >= 2);
+  const sourceQuery = cleanText((candidate.metrics as any)?.query);
+  const currentStrategyTerms = new Set(sentimentHotStrategyTermsForMode(strategy, "normal").map(cleanText));
+  if (sourceQuery && sourceQuery.length <= 3 && !currentStrategyTerms.has(sourceQuery) && normalAnchors[0]) {
+    const leadingContent = cleanSentimentCandidateContent(candidate.content).slice(0, 120);
+    if (!matchesExactAnchor(normalAnchors[0], { ...candidate, content: leadingContent })) return false;
+  }
+  const personaGuardTerms = (strategy.personaGuardTerms || []).map(cleanText).filter((term) => term.length >= 2);
+  if (mode === "normal") {
+    if (personaGuardTerms.some(matchesLeadingAnchor) || (normalAnchors[0] && matchesLeadingAnchor(normalAnchors[0]))) return true;
+    const normalAcceptTerms = strategy.normalAcceptTerms.map(cleanText).filter((term) => term.length >= 2);
+    return [...new Set([...requiredAnchors, ...normalAnchors, ...normalAcceptTerms])]
+      .filter(matchesLeadingAnchor).length >= 2;
+  }
+  if (personaGuardTerms.some(matchesLeadingAnchor)) return true;
+  return requiredAnchors.filter(matchesExactAnchor).length >= 2;
 }
 
 function parseSentimentHotSemanticAcceptedIds(value: unknown): string[] | null {
@@ -993,8 +1293,11 @@ async function filterSentimentHotCandidatesWithModel(args: {
   strategy: SentimentHotSearchStrategy;
   keywords: string[];
   searchMode: SentimentHotSearchMode;
+  limit: number;
   candidates: SentimentHotCandidate[];
   warnings: string[];
+  timeoutMs?: number;
+  allowRecovery?: boolean;
 }): Promise<{ accepted: SentimentHotCandidate[]; tagged: SentimentHotCandidate[]; scope?: string }> {
   if (!args.archive || !sentimentHotStrategyHasModelTerms(args.strategy) || args.candidates.length === 0) {
     return { accepted: args.candidates, tagged: args.candidates };
@@ -1013,40 +1316,87 @@ async function filterSentimentHotCandidatesWithModel(args: {
       && metrics?.semanticContentHash === contentHash(candidate)
       && typeof metrics?.semanticRelevant === "boolean";
   });
-  const unknown = args.candidates.filter((candidate) => !known.includes(candidate)).slice(0, 12);
+  const unknown = args.candidates.filter((candidate) => !known.includes(candidate)).slice(0, 30);
   if (unknown.length === 0) {
     return { accepted: known.filter((candidate) => (candidate.metrics as any)?.semanticRelevant === true), tagged: args.candidates, scope };
   }
   try {
-    const candidatePayload = unknown.map((candidate) => ({
-      id: candidate.id,
-      content: cleanSentimentCandidateContent(candidate.content).slice(0, 180),
-    }));
+    const candidateAliases = new Map<string, string>();
+    const candidatePayload = unknown.map((candidate, index) => {
+      const alias = `c${index + 1}`;
+      candidateAliases.set(alias, candidate.id);
+      return {
+      id: alias,
+      content: cleanSentimentCandidateContent(candidate.content).slice(0, 260),
+      matchedTerms: Array.isArray((candidate.metrics as any)?.matchedKeywords)
+        ? (candidate.metrics as any).matchedKeywords.slice(0, 5)
+        : [],
+      searchQuery: cleanText((candidate.metrics as any)?.query).slice(0, 50),
+      };
+    });
     const result = await callTextUnderstandingModelWithFallback(
       resolveSentimentHotTextModelPreference(),
       [{ role: "user", parts: [{ text: [
         "你是社媒热点候选的语义相关性审核器。只输出 JSON，不要解释，不要 Markdown。",
         "输出格式：{\"acceptedIds\":[\"候选ID\"]}",
         `人设主领域：${args.strategy.domainSummary || cleanText(args.archive.content)}`,
+        `严格模式接受范围：${args.strategy.strictAcceptTerms.slice(0, 16).join("、")}`,
+        `普通模式接受范围：${args.strategy.normalAcceptTerms.slice(0, 16).join("、")}`,
+        `明确排除范围：${args.strategy.rejectTerms.join("、") || "无"}`,
         `抓取模式：${args.searchMode === "strict" ? "严格垂直，只接受主领域" : "普通泛垂直，可接受主领域的消费、产品、行业、场景和相邻热点"}`,
+        `本轮目标：按相关度从候选中选出 ${Math.min(args.limit, candidatePayload.length)} 条。候选已经过关键词初筛；候选数足够时必须返回恰好目标数量。正文属于人设主领域或直接父领域就应选入，只拒绝明显跨行业、同名误召回或完全无关内容。`,
         "判断必须阅读正文语义，不能因为一个歧义词或搜索词就接受。拒绝同名学校、人物、地名、网络用语及正文实际主题无关的内容。",
+        "严格模式要求候选属于主领域或其直接父领域的真实专业讨论、产品、故障、价格、使用、安全、维修、行业或消费场景；不要求正文复述人设最细的职业、对象或人设名称。候选的 matchedTerms 和 searchQuery 是其被模型策略召回的证据，必须结合正文一起判断。普通模式可额外接受模型给出的相邻生态范围。",
+        "不得因为候选来自同一大类但与人设的直接父领域无关而接受；必须同时符合当前模式的接受范围，并避开明确排除范围。",
         `候选：${JSON.stringify(candidatePayload)}`,
       ].join("\n") }] }],
-      { temperature: 0, maxOutputTokens: 256 },
-      AbortSignal.timeout(18_000),
+      { temperature: 0, maxOutputTokens: 2048 },
+      AbortSignal.timeout(Math.max(1_000, args.timeoutMs || 31_000)),
       {
-        attemptTimeoutMs: 10_000,
+        attemptTimeoutMs: ({ index }) => index === 0
+          ? Math.min(5_000, Math.max(1_000, args.timeoutMs || 31_000))
+          : Math.min(19_000, Math.max(1_000, args.timeoutMs || 31_000)),
         isUsableResponse: (data) => parseSentimentHotSemanticAcceptedIds(extractText(data)) !== null,
         isRetryableError: isTextModelFallbackError,
       },
     );
     const acceptedIds = new Set(parseSentimentHotSemanticAcceptedIds(extractText(result.data)) || []);
+    if (args.allowRecovery !== false && args.searchMode === "strict" && acceptedIds.size < args.limit) {
+      const remainingCandidates = candidatePayload.filter((candidate) => !acceptedIds.has(candidate.id));
+      if (remainingCandidates.length > 0) {
+        const recovery = await callTextUnderstandingModelWithFallback(
+          resolveSentimentHotTextModelPreference(),
+          [{ role: "user", parts: [{ text: [
+            "你是严格模式热点候选的第二轮语义复核器。只输出 JSON，不要解释，不要 Markdown。",
+            "输出格式：{\"acceptedIds\":[\"候选ID\"]}。只返回第一轮未通过、但可以作为当前人设直接父领域专业讨论的候选。",
+            `人设主领域：${args.strategy.domainSummary || cleanText(args.archive.content)}`,
+            `严格接受词：${args.strategy.strictAcceptTerms.join("、")}`,
+            `可用于直接父领域补充的相邻词：${args.strategy.normalAcceptTerms.join("、")}`,
+            `明确排除词：${args.strategy.rejectTerms.join("、") || "无"}`,
+            `本轮还需要最多 ${Math.max(0, args.limit - acceptedIds.size)} 条。允许当前人设所属直接父领域的产品、故障、安全、维修、行业、消费与使用场景；不要求复述最细职业标签。拒绝不同产业、同名词、泛生活和正文无关内容。`,
+            `候选：${JSON.stringify(remainingCandidates)}`,
+          ].join("\n") }] }],
+          { temperature: 0, maxOutputTokens: 2048 },
+          AbortSignal.timeout(45_000),
+          {
+            attemptTimeoutMs: 20_000,
+            isUsableResponse: (data) => parseSentimentHotSemanticAcceptedIds(extractText(data)) !== null,
+            isRetryableError: isTextModelFallbackError,
+          },
+        );
+        const supplementalIds = parseSentimentHotSemanticAcceptedIds(extractText(recovery.data)) || [];
+        supplementalIds.slice(0, Math.max(0, args.limit - acceptedIds.size)).forEach((id) => acceptedIds.add(id));
+      }
+    }
+    const acceptedCandidateIds = new Set([...acceptedIds]
+      .map((alias) => candidateAliases.get(alias))
+      .filter((id): id is string => Boolean(id)));
     const unknownIds = new Set(unknown.map((candidate) => candidate.id));
     const tagged = args.candidates.map((candidate) => unknownIds.has(candidate.id) ? {
       ...candidate,
       metrics: {
         ...(candidate.metrics || {}),
-        semanticRelevant: acceptedIds.has(candidate.id),
+        semanticRelevant: acceptedCandidateIds.has(candidate.id),
         semanticRelevanceScope: scope,
         semanticContentHash: contentHash(candidate),
       },
@@ -1057,47 +1407,27 @@ async function filterSentimentHotCandidatesWithModel(args: {
     return { accepted, tagged, scope };
   } catch (error) {
     args.warnings.push(`模型语义复核暂不可用，已保留正文领域信号过滤：${error instanceof Error ? error.message : String(error)}`);
-    const directNeedles = buildDirectRelevanceNeedles([
-      ...args.strategy.primaryQueries,
-      ...args.strategy.strictAcceptTerms,
-    ]);
-    const weakDomainTerms = new Set(["台灣", "台湾", "相關", "相关", "討論", "讨论", "實測", "实测", "選購", "选购", "內容", "内容", "領域", "领域"]);
-    const domainNeedles = buildStrongRelevanceNeedles([args.strategy.domainSummary || ""])
-      .filter((term) => !weakDomainTerms.has(term));
-    const tagged = args.candidates.map((candidate) => ({
-      ...candidate,
-      metrics: {
-        ...(candidate.metrics || {}),
-        semanticRelevant: args.searchMode !== "strict"
-          || (countMatchedNeedles(candidate, directNeedles) > 0 && countMatchedNeedles(candidate, domainNeedles) > 0),
-        semanticRelevanceScope: scope,
-        semanticContentHash: contentHash(candidate),
-      },
-    }));
-    return { accepted: tagged.filter((candidate) => (candidate.metrics as any)?.semanticRelevant === true), tagged, scope };
+    const safeFallback = args.candidates.filter((candidate) => (candidate.metrics as any)?.globalPersonaBackfill !== true);
+    return { accepted: safeFallback, tagged: safeFallback };
   }
 }
 
 function buildSentimentHotSearchStrategyCacheKey(args: {
   archive?: Partial<Pick<PersonaArchive, "name" | "content" | "setup">>;
+  prompt?: string;
+  memorySummaries?: string[];
+  personaText: string;
 }): string {
   const archive = args.archive || {};
-  const setup = archive.setup || {};
   const payload = {
     version: SENTIMENT_HOT_SEARCH_STRATEGY_VERSION,
     id: cleanText((archive as any).id),
     name: cleanText(archive.name),
     content: cleanText(archive.content),
-    genres: Array.isArray((setup as any).genres) ? (setup as any).genres.map(cleanText).filter(Boolean) : [],
-    interests: Array.isArray((setup as any).interests) ? (setup as any).interests.map(cleanText).filter(Boolean) : [],
-    personaType: cleanText((setup as any).personaType),
-    contentTheme: cleanText((setup as any).contentTheme),
+    setup: archive.setup || {},
+    prompt: cleanText(args.prompt),
   };
   return crypto.createHash("sha1").update(JSON.stringify(payload)).digest("hex");
-}
-
-export function sentimentHotSearchStrategyRevision(archive: Partial<Pick<PersonaArchive, "id" | "name" | "content" | "setup">>): string {
-  return buildSentimentHotSearchStrategyCacheKey({ archive });
 }
 
 function readSentimentHotSearchStrategyCache(): Record<string, { at: string; strategy: SentimentHotSearchStrategy }> {
@@ -1118,15 +1448,18 @@ function readCachedSentimentHotSearchStrategy(cacheKey: string): SentimentHotSea
 
 function writeCachedSentimentHotSearchStrategy(cacheKey: string, strategy: SentimentHotSearchStrategy) {
   if (!sentimentHotStrategyHasModelTerms(strategy) || !sentimentHotStrategyUsesThreadsChinese(strategy)) return;
-  const state = readSentimentHotSearchStrategyCache();
-  state[cacheKey] = { at: new Date().toISOString(), strategy };
-  for (const [key, row] of Object.entries(state)) {
-    if (!row?.at || Date.now() - new Date(row.at).getTime() > SENTIMENT_HOT_SEARCH_STRATEGY_CACHE_TTL_MS) delete state[key];
-  }
-  fs.mkdirSync(path.dirname(SENTIMENT_HOT_SEARCH_STRATEGY_CACHE_FILE), { recursive: true });
-  const temporaryPath = `${SENTIMENT_HOT_SEARCH_STRATEGY_CACHE_FILE}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(temporaryPath, JSON.stringify(state, null, 2), "utf8");
-  fs.renameSync(temporaryPath, SENTIMENT_HOT_SEARCH_STRATEGY_CACHE_FILE);
+  const written = withExclusiveJsonFileLock(SENTIMENT_HOT_SEARCH_STRATEGY_CACHE_FILE, () => {
+    const state = readSentimentHotSearchStrategyCache();
+    state[cacheKey] = { at: new Date().toISOString(), strategy };
+    for (const [key, row] of Object.entries(state)) {
+      if (!row?.at || Date.now() - new Date(row.at).getTime() > SENTIMENT_HOT_SEARCH_STRATEGY_CACHE_TTL_MS) delete state[key];
+    }
+    fs.mkdirSync(path.dirname(SENTIMENT_HOT_SEARCH_STRATEGY_CACHE_FILE), { recursive: true });
+    const tempFile = `${SENTIMENT_HOT_SEARCH_STRATEGY_CACHE_FILE}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tempFile, JSON.stringify(state, null, 2), "utf8");
+    fs.renameSync(tempFile, SENTIMENT_HOT_SEARCH_STRATEGY_CACHE_FILE);
+  });
+  if (!written) console.warn("[sentiment_hot_cache] strategy cache write skipped because the file is busy");
 }
 
 export function resolveSentimentHotTextModelPreference(): string {
@@ -1150,8 +1483,7 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
   prompt?: string;
   memorySummaries?: string[];
   warnings: string[];
-  modelTimeoutMs?: number;
-  attemptTimeoutMs?: number;
+  timeoutMs?: number;
 }): Promise<SentimentHotSearchStrategy> {
   const archive = args.archive || {};
   const setup = archive.setup || {};
@@ -1161,32 +1493,56 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
     Array.isArray((setup as any).genres) && (setup as any).genres.length ? `内容领域：${(setup as any).genres.join("、")}` : "",
     Array.isArray((setup as any).interests) && (setup as any).interests.length ? `兴趣参考：${(setup as any).interests.join("、")}` : "",
     (setup as any).personaType ? `身份类型：${(setup as any).personaType}` : "",
-    (setup as any).contentTheme ? `内容主题：${(setup as any).contentTheme}` : "",
+    (setup as any).personality ? `性格与边界：${(setup as any).personality}` : "",
+    setup.tweetStyleProfile ? `推文风格：${setup.tweetStyleProfile}` : "",
+    setup.tweetStyleSample ? `推文样例：${setup.tweetStyleSample}` : "",
+    args.memorySummaries?.length ? `近期记忆：${args.memorySummaries.join("；")}` : "",
     args.prompt ? `本次补充要求：${args.prompt}` : "",
   ].filter(Boolean).join("\n");
   if (!personaText.trim()) return emptySentimentHotSearchStrategy();
-  const cacheKey = buildSentimentHotSearchStrategyCacheKey({ archive });
+  const cacheKey = buildSentimentHotSearchStrategyCacheKey({
+    archive,
+    prompt: args.prompt,
+    memorySummaries: args.memorySummaries,
+    personaText,
+  });
   const cached = readCachedSentimentHotSearchStrategy(cacheKey);
   if (cached) return cached;
 
   try {
+    const modelPreference = resolveSentimentHotTextModelPreference();
+    const totalTimeoutMs = Math.max(8_000, args.timeoutMs || 38_000);
+    const configuredModelCount = Math.max(1, getTextUnderstandingModelFallbacks(modelPreference).length);
+    const attemptTimeoutMs = ({ index }: { index: number }) => configuredModelCount <= 1 ? totalTimeoutMs - 1_000 : (index === 0 ? 9_000 : 19_000);
     const result = await callTextUnderstandingModelWithFallback(
-      resolveSentimentHotTextModelPreference(),
+      modelPreference,
       [{
         role: "user",
         parts: [{
           text: [
-            "根据当前人设生成 Threads 热点搜索策略。仅输出 JSON，不要解释或 Markdown。",
-            "格式：{\"primaryQueries\":[],\"broadQueries\":[],\"ecosystemQueries\":[],\"strictAcceptTerms\":[],\"normalAcceptTerms\":[],\"rejectTerms\":[],\"domainSummary\":\"\"}",
-            "数量依次为 12、8、6、16、6、4。词语用繁体中文、2-8字、脱离上下文仍可辨识领域。",
-            "primary 和 strict 覆盖主领域同义词、子主题、产品、事件、费用与场景；broad 是主领域伞形词；ecosystem 和 normal 只外扩到相邻产业；reject 是歧义或无关领域。",
-            "禁止人格、语气、外貌、通用意图词、固定行业模板。严格模式词池不能少于普通模式，只改变接受边界。",
+            "你是 Threads / Instagram 热点搜索策略模型。你必须为任意新建人设生成可执行搜索策略，不依赖固定行业锚点。",
+            "只输出 JSON 对象，不要解释，不要 Markdown。",
+            "JSON 结构：",
+            "{\"primaryQueries\":[\"...\"],\"broadQueries\":[\"...\"],\"requiredAnchorTerms\":[\"...\"],\"normalAnchorTerms\":[\"...\"],\"rejectTerms\":[\"...\"],\"domainSummary\":\"...\"}",
+            "",
+            "字段数量：primaryQueries 8-10，broadQueries 8-10，requiredAnchorTerms 4-6，normalAnchorTerms 4-6，rejectTerms 4-8。",
+            "先以人设名称中明确的职业、行业或主题作为严格主领域；简介里的具体对象、品牌、地区和擅长方向只能作为子主题，不能替代或过度收窄主领域。",
+            "primaryQueries 至少一半覆盖主领域的高流量通用子主题，其余覆盖简介里的细分专长，总计至少 5 类；broadQueries 覆盖主领域品牌、产品、事件、受众问题、价格选择、使用经验和行业动态。",
+            "broadQueries 必须包含 2-4 个主领域高互动的受众、社区或对象词，这些词本身不能附带价格、推荐、比较等低流量意图；应根据当前人设自动推导，不能套用固定行业词。",
+            "requiredAnchorTerms 是正文必须命中的主领域实体词，应优先来自人设名称所表达的职业或行业，必须能排除同名或相邻领域；禁止营养、健康、经验、攻略、比较等泛词。",
+            "normalAnchorTerms 是普通模式可接受的直接父领域对象类别：每项 2-4 个汉字，第一项必须是最能唯一标识直接父领域的实体类别；禁止职业名、动作、抽象概念和细分产品组合，必须比 requiredAnchorTerms 宽一层但仍排除无关产业。",
+            "rejectTerms 必须针对当前关键词最容易误召回的其他行业、同名实体和相邻但不属于直接父领域的主题，不能排除主领域内容。",
+            "严格模式关键词数量不能少，只用主领域同义词和场景词收口；普通模式可扩展到直接父领域，但不能漂移到无关产业。",
+            "每个搜索词脱离上下文后仍应明确属于该领域。细分职业应覆盖普通受众会讨论的故障、价格、选择、品牌、市场和事件。",
+            "使用更容易在 Threads 搜到的繁体中文，可保留常用简体同义词。不要输出人格、语气、外貌、自我介绍或推理过程。",
+            "",
+            "当前人设资料：",
             personaText,
           ].join("\n"),
         }],
       }],
-      { temperature: 0.1, maxOutputTokens: 512 },
-      AbortSignal.timeout(args.modelTimeoutMs || 18_000),
+      { temperature: 0.1, maxOutputTokens: 768 },
+      AbortSignal.timeout(totalTimeoutMs),
       {
         isUsableResponse: (data) => {
           const candidate = parseSentimentHotSearchStrategy(extractText(data), {
@@ -1197,7 +1553,7 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
             && sentimentHotStrategyUsesThreadsChinese(candidate);
         },
         isRetryableError: isTextModelFallbackError,
-        attemptTimeoutMs: args.attemptTimeoutMs || 20_000,
+        attemptTimeoutMs,
         onFallback: ({ from, to, error }) => {
           console.info(`[sentiment_hot_model_fallback] from=${JSON.stringify(from)} to=${JSON.stringify(to)} error=${JSON.stringify(error)}`);
         },
@@ -1212,11 +1568,21 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
       writeCachedSentimentHotSearchStrategy(cacheKey, strategy);
       return strategy;
     }
-    args.warnings.push("模型未返回可用热点搜索策略，本轮将仅使用同人设候选池。");
+    args.warnings.push("模型未返回可用热点搜索策略，已改用当前人设核心领域词继续抓取。");
   } catch (error) {
-    args.warnings.push("模型生成热点搜索策略失败，本轮将仅使用同人设候选池：" + (error instanceof Error ? error.message : String(error)));
+    args.warnings.push("模型生成热点搜索策略失败，已改用当前人设核心领域词继续抓取：" + (error instanceof Error ? error.message : String(error)));
   }
   return emptySentimentHotSearchStrategy();
+}
+
+export async function warmSentimentHotSearchStrategy(archive: PersonaArchive): Promise<boolean> {
+  const warnings: string[] = [];
+  const strategy = await buildSentimentHotSearchStrategyWithModel({
+    archive,
+    warnings,
+    timeoutMs: 45_000,
+  });
+  return sentimentHotStrategyHasModelTerms(strategy);
 }
 
 export function cleanSentimentCandidateContent(value: unknown): string {
@@ -1317,8 +1683,23 @@ export async function fetchSentimentCookieStatuses(): Promise<SentimentCookieSta
   return (["threads", "instagram"] as SentimentHotPlatform[]).map((platform) => buildSentimentCookieStatusFromProfile(platform, profiles.find((item) => sentimentProfileMatchesPlatform(item, platform))));
 }
 
+function sentimentCookieStatusHasUsableCookies(status: SentimentCookieStatus): boolean {
+  if (status.platform === "threads" && status.hasRequiredSessionCookie === false) return false;
+  if (status.health === "healthy" || status.health === "watch" || status.health === "degraded") return true;
+  const match = status.message.match(/有效 Cookie\s*(\d+)/);
+  return Boolean(match && Number(match[1]) > 0);
+}
+
 function sentimentCookiePlatformLabel(platform: SentimentHotPlatform): string {
   return platform === "threads" ? "Threads" : "Instagram";
+}
+
+function sentimentCookieStatusNeedsRefresh(status: SentimentCookieStatus): boolean {
+  if (!sentimentCookieStatusHasUsableCookies(status)) return false;
+  if (status.authorizationNeedsRefresh === true) return true;
+  if (Number(status.expiredCookieCount || 0) > 0) return true;
+  if (Number(status.expiringSoonCookieCount || 0) > 0) return true;
+  return status.recommendedAction === "refresh-profile-cookies";
 }
 
 function normalizeCookieForBrowserAuth(cookie: any, fallbackDomain: string) {
@@ -1412,223 +1793,6 @@ export async function refreshSentimentBrowserCookiesForPlatform(platform: Sentim
   }
 }
 
-const sentimentHotStrategyWarmups = new Map<string, Promise<boolean>>();
-const sentimentHotPoolWarmups = new Map<string, Promise<void>>();
-let sentimentHotPoolWarmupQueue = Promise.resolve();
-
-async function primeSentimentHotCandidatePoolWithStrategy(
-  archive: PersonaArchive,
-  strategy: SentimentHotSearchStrategy,
-  searchMode: SentimentHotSearchMode = "strict",
-  limit = 10,
-): Promise<number> {
-  const keywords = prepareSentimentHotKeywordsForMode(sentimentHotStrategyTermsForMode(strategy, searchMode), searchMode);
-  const primeQueries = sentimentHotStrategyTermsForMode(strategy, searchMode);
-  const cacheOptions = { allowStaleBackfill: true };
-  const existing = readThreadsSearchCandidateCache(archive.id, keywords, limit, false, searchMode, cacheOptions);
-  if (existing.length >= limit) return existing.length;
-  const timeoutMs = 28_000;
-  await withSentimentTimeout(fetchThreadsSearchPageCandidates({
-    archiveId: archive.id,
-    keywords,
-    queryKeywords: primeQueries,
-    limit: Math.max(limit, limit - existing.length),
-    refresh: false,
-    searchMode,
-    searchFilter: "top",
-    allowStaleBackfill: true,
-    deadlineAt: Date.now() + timeoutMs - 500,
-  }), timeoutMs, []);
-  return readThreadsSearchCandidateCache(archive.id, keywords, limit, false, searchMode, cacheOptions).length;
-}
-
-export async function primeSentimentHotCandidatePool(
-  archive: PersonaArchive,
-  searchMode: SentimentHotSearchMode = "strict",
-  limit = 10,
-): Promise<{ ok: boolean; count: number; warnings: string[] }> {
-  const warnings: string[] = [];
-  const cacheKey = buildSentimentHotSearchStrategyCacheKey({ archive });
-  let strategy = readCachedSentimentHotSearchStrategy(cacheKey);
-  if (!strategy) {
-    strategy = await withSentimentTimeout(buildSentimentHotSearchStrategyWithModel({
-      archive,
-      warnings,
-      modelTimeoutMs: 32_000,
-      attemptTimeoutMs: 20_000,
-    }), 32_000, emptySentimentHotSearchStrategy());
-  }
-  if (!sentimentHotStrategyHasModelTerms(strategy)) {
-    warnings.push("模型策略不可用，未能为全新人设建立首批候选池。");
-    return { ok: false, count: 0, warnings };
-  }
-  const count = await primeSentimentHotCandidatePoolWithStrategy(archive, strategy, searchMode, Math.max(1, limit)).catch((error) => {
-    warnings.push(`全新人设候选池建立失败：${error instanceof Error ? error.message : String(error)}`);
-    return 0;
-  });
-  if (count < limit) warnings.push(`全新人设候选池仅建立 ${count}/${limit} 篇。`);
-  return { ok: count >= limit, count, warnings };
-}
-
-function getReadySentimentHotCandidates(args: {
-  archive: PersonaArchive;
-  searchMode?: SentimentHotSearchMode;
-  limit?: number;
-}): { candidates: SentimentHotCandidate[]; keywords: string[]; warnings: string[] } {
-  const archiveId = cleanText(args.archive?.id);
-  const searchMode = normalizeSentimentHotSearchMode(args.searchMode);
-  const strategy = readCachedSentimentHotSearchStrategy(buildSentimentHotSearchStrategyCacheKey({ archive: args.archive }));
-  const keywords = strategy
-    ? prepareSentimentHotKeywordsForMode(sentimentHotStrategyTermsForMode(strategy, searchMode), searchMode)
-    : readArchiveScopedThreadsSearchKeywords(archiveId, SENTIMENT_MODEL_KEYWORD_TARGET, searchMode);
-  if (!archiveId || keywords.length === 0) {
-    return {
-      candidates: [],
-      keywords,
-      warnings: ["当前人设候选池尚未建立，后台会自动补充。"],
-    };
-  }
-  const pool = readThreadsSearchCandidateCache(
-    archiveId,
-    keywords,
-    Math.max(SENTIMENT_HOT_CANDIDATE_POOL_TARGET, Number(args.limit || 10)),
-    false,
-    searchMode,
-    { allowStaleBackfill: false },
-  );
-  return {
-    candidates: finalizeSentimentHotCandidatesForDisplay(
-      pool.filter((candidate) => (candidate.metrics as any)?.semanticRelevant === true),
-      Math.max(1, Number(args.limit || 10)),
-      {
-      archiveId,
-      keywords,
-      excludeShown: true,
-      searchMode,
-      },
-    ),
-    keywords,
-    warnings: [],
-  };
-}
-
-export async function prefetchSentimentHotCandidatePool(args: {
-  archive: PersonaArchive;
-  searchMode?: SentimentHotSearchMode;
-  lowWatermark?: number;
-  targetCount?: number;
-}): Promise<{ ok: boolean; readyCount: number; keywords: string[]; warnings: string[] }> {
-  const searchMode = normalizeSentimentHotSearchMode(args.searchMode);
-  const lowWatermark = Math.max(1, Number(args.lowWatermark || 10));
-  const targetCount = Math.max(lowWatermark, Number(args.targetCount || lowWatermark));
-  const before = getReadySentimentHotCandidates({ archive: args.archive, searchMode, limit: targetCount });
-  if (before.candidates.length >= targetCount) {
-    return { ok: true, readyCount: before.candidates.length, keywords: before.keywords, warnings: [] };
-  }
-  const initial = await primeSentimentHotCandidatePool(args.archive, searchMode, Math.min(targetCount, Math.max(10, lowWatermark)));
-  const cacheKey = buildSentimentHotSearchStrategyCacheKey({ archive: args.archive });
-  const strategy = readCachedSentimentHotSearchStrategy(cacheKey);
-  if (!strategy) {
-    const unavailable = getReadySentimentHotCandidates({ archive: args.archive, searchMode, limit: targetCount });
-    return { ok: false, readyCount: unavailable.candidates.length, keywords: unavailable.keywords, warnings: initial.warnings };
-  }
-  const modeKeywords = prepareSentimentHotKeywordsForMode(sentimentHotStrategyTermsForMode(strategy, searchMode), searchMode);
-  const afterPrime = getReadySentimentHotCandidates({ archive: args.archive, searchMode, limit: targetCount });
-  if (afterPrime.candidates.length < targetCount) {
-    await withSentimentTimeout(fetchThreadsSearchPageCandidates({
-      archiveId: args.archive.id,
-      keywords: modeKeywords,
-      queryKeywords: sentimentHotStrategyTermsForMode(strategy, searchMode),
-      limit: Math.min(24, targetCount - afterPrime.candidates.length),
-      refresh: true,
-      searchMode,
-      searchFilter: "recent",
-      deadlineAt: Date.now() + 28_000,
-    }), 30_000, []);
-  }
-  const candidatesForReview = readThreadsSearchCandidateCache(
-    args.archive.id,
-    modeKeywords,
-    SENTIMENT_HOT_CANDIDATE_POOL_TARGET,
-    false,
-    searchMode,
-  );
-  const semanticResult = await filterSentimentHotCandidatesWithModel({
-    archive: args.archive,
-    strategy,
-    keywords: modeKeywords,
-    searchMode,
-    candidates: candidatesForReview,
-    warnings: initial.warnings,
-  });
-  writeThreadsSearchCandidateCache(
-    args.archive.id,
-    modeKeywords,
-    semanticResult.tagged,
-    searchMode,
-  );
-  const after = getReadySentimentHotCandidates({ archive: args.archive, searchMode, limit: targetCount });
-  return {
-    ok: true,
-    readyCount: after.candidates.length,
-    keywords: after.keywords,
-    warnings: [...initial.warnings, ...after.warnings],
-  };
-}
-
-async function warmSentimentHotCandidatePool(cacheKey: string, archiveId: string, strategy: SentimentHotSearchStrategy): Promise<void> {
-  if (sentimentHotPoolWarmups.has(cacheKey)) return sentimentHotPoolWarmups.get(cacheKey);
-  const task = sentimentHotPoolWarmupQueue.catch(() => undefined).then(async () => {
-    for (const searchMode of ["normal", "strict"] as const) {
-      const keywords = prepareSentimentHotKeywordsForMode(sentimentHotStrategyTermsForMode(strategy, searchMode), searchMode);
-      const target = searchMode === "normal" ? SENTIMENT_HOT_WARM_POOL_NORMAL_TARGET : SENTIMENT_HOT_WARM_POOL_STRICT_TARGET;
-      for (let round = 0; round < SENTIMENT_HOT_WARM_POOL_MAX_ROUNDS; round += 1) {
-        const current = readThreadsSearchCandidateCache(archiveId, keywords, target, true, searchMode);
-        if (current.length >= target) break;
-        await fetchThreadsSearchPageCandidates({
-          archiveId,
-          keywords,
-          queryKeywords: sentimentHotStrategyTermsForMode(strategy, "normal"),
-          limit: Math.min(32, target - current.length),
-          refresh: true,
-          searchMode,
-          deadlineAt: Date.now() + 42_000,
-        }).catch(() => []);
-      }
-    }
-  }).finally(() => sentimentHotPoolWarmups.delete(cacheKey));
-  sentimentHotPoolWarmupQueue = task;
-  sentimentHotPoolWarmups.set(cacheKey, task);
-  return task;
-}
-
-export function warmSentimentHotSearchStrategy(archive: PersonaArchive): Promise<boolean> {
-  const cacheKey = buildSentimentHotSearchStrategyCacheKey({ archive });
-  const running = sentimentHotStrategyWarmups.get(cacheKey);
-  if (running) return running;
-  const cached = readCachedSentimentHotSearchStrategy(cacheKey);
-  const warnings: string[] = [];
-  const task = (cached
-    ? Promise.resolve(cached)
-    : buildSentimentHotSearchStrategyWithModel({
-      archive,
-      warnings,
-      modelTimeoutMs: 32_000,
-      attemptTimeoutMs: 20_000,
-    }))
-    .then(async (strategy) => {
-      const ok = sentimentHotStrategyHasModelTerms(strategy);
-      if (!ok) return false;
-      const count = await primeSentimentHotCandidatePoolWithStrategy(archive, strategy, "strict", 10).catch(() => 0);
-      if (count >= 10) void warmSentimentHotCandidatePool(cacheKey, archive.id, strategy);
-      return count >= 10;
-    })
-    .catch(() => false)
-    .finally(() => sentimentHotStrategyWarmups.delete(cacheKey));
-  sentimentHotStrategyWarmups.set(cacheKey, task);
-  return task;
-}
-
 function activeUniqueCookies(cookies: any[]): any[] {
   const nowSeconds = Date.now() / 1000;
   const byKey = new Map<string, any>();
@@ -1641,8 +1805,82 @@ function activeUniqueCookies(cookies: any[]): any[] {
   return [...byKey.values()].slice(0, 120);
 }
 
+async function refreshSentimentBrowserCookies(statuses: SentimentCookieStatus[], warnings: string[]) {
+  const targets = statuses.filter(sentimentCookieStatusNeedsRefresh).slice(0, 2);
+  if (!targets.length) return statuses;
+  const refreshed: SentimentHotPlatform[] = [];
+  for (const status of targets) {
+    const result = await refreshSentimentBrowserCookiesForPlatform(status.platform).catch((error) => ({
+      ok: false,
+      message: `${sentimentCookiePlatformLabel(status.platform)} Cookie 自动刷新失败：${error instanceof Error ? error.message : String(error)}`,
+    }));
+    warnings.push(result.message);
+    if (result.ok) refreshed.push(status.platform);
+  }
+  if (!refreshed.length) return statuses;
+  const nextStatuses = await fetchSentimentCookieStatuses().catch(() => statuses);
+  return nextStatuses;
+}
 
-export async function fetchSentimentHotCandidates(args: {
+async function triggerRealtimeSentimentScan(platforms: SentimentHotPlatform[], warnings: string[]) {
+  const sources = [...new Set(platforms)].filter((platform) => platform === "threads" || platform === "instagram");
+  if (!sources.length) return;
+  try {
+    const response = await fetch(`${resolveSentimentBackendUrl()}/api/sentiment/scan-start`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reason: "manual", mode: "fast", sources, days: 2 }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      warnings.push(`实时扫描触发失败：HTTP ${response.status}`);
+      return;
+    }
+    const json = await response.json().catch(() => ({}));
+    warnings.push(json?.alreadyRunning ? "舆情后端已有实时扫描在运行，已复用当前任务。" : "已触发舆情后端实时扫描，结果会持续进入候选库。");
+  } catch (error) {
+    warnings.push("实时扫描触发失败：" + (error instanceof Error ? error.message : String(error)));
+  }
+}
+
+function waitSentiment(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForMoreSentimentHotCandidates(args: {
+  archiveId: string;
+  keywords: string[];
+  candidates: SentimentHotCandidate[];
+  limit: number;
+  excludeShown: boolean;
+  searchMode: SentimentHotSearchMode;
+}): Promise<SentimentHotCandidate[]> {
+  let candidates = args.candidates;
+  for (let attempt = 0; attempt < 3 && candidates.length < args.limit; attempt += 1) {
+    await waitSentiment(2500);
+    const databaseCandidates = await readCandidatesFromDatabase({
+      archiveId: args.archiveId,
+      keywords: args.keywords,
+      limit: Math.max(args.limit * 20, 200),
+      excludeShown: args.excludeShown,
+    }).catch(() => []);
+    if (!databaseCandidates.length) continue;
+    const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+    const byKey = new Set(candidates.map((candidate) => sentimentCandidateDedupeKey(candidate)));
+    for (const candidate of databaseCandidates) {
+      const dedupeKey = sentimentCandidateDedupeKey(candidate);
+      if (!byId.has(candidate.id) && !byKey.has(dedupeKey)) {
+        byId.set(candidate.id, candidate);
+        byKey.add(dedupeKey);
+      }
+      if (byId.size >= args.limit) break;
+    }
+    candidates = sortSentimentHotCandidatePool([...byId.values()], args.keywords, args.limit, args.searchMode);
+  }
+  return candidates;
+}
+
+async function fetchSentimentHotCandidatesUnlocked(args: {
   archive?: PersonaArchive;
   prompt?: string;
   memorySummaries?: string[];
@@ -1655,46 +1893,123 @@ export async function fetchSentimentHotCandidates(args: {
   const archive = args.archive;
   const archiveId = cleanText(archive?.id) || "default";
   const searchMode = normalizeSentimentHotSearchMode(args.searchMode);
+  const limit = args.limit || 10;
   const personaSeedKeywords = buildSentimentHotKeywords({
     archive,
     prompt: args.prompt,
     memorySummaries: args.memorySummaries,
   });
+  const personaGuardSeedKeywords = buildSentimentHotKeywords({ archive: { name: archive?.name } });
+  const personaGuardSourceText = cleanText(archive?.name);
+  const sourceText = [archive?.name, archive?.content, args.prompt, ...(args.memorySummaries || [])].map(cleanText).filter(Boolean).join(" ");
+  const runtimePromise = ensureSentimentRuntime().catch((error: any) => ({
+    ok: false,
+    url: resolveSentimentBackendUrl(),
+    warning: error instanceof Error ? error.message : String(error || "unknown"),
+  }));
+  const prefetchedStrategy = readCachedSentimentHotSearchStrategy(buildSentimentHotSearchStrategyCacheKey({
+    archive,
+    prompt: args.prompt,
+    memorySummaries: args.memorySummaries,
+    personaText: "",
+  }));
+  if (prefetchedStrategy) {
+    applyPersonaGuardToSentimentHotStrategy({
+      strategy: prefetchedStrategy,
+      archiveName: archive?.name,
+      personaSeedKeywords: personaGuardSeedKeywords,
+      sourceText: personaGuardSourceText,
+    });
+  }
+  const provisionalKeywordSource = prefetchedStrategy
+    ? sentimentHotStrategyTermsForMode(prefetchedStrategy, searchMode)
+    : personaSeedKeywords;
+  const provisionalKeywords = prepareSentimentHotKeywordsForMode(provisionalKeywordSource, searchMode, {
+    sourceText,
+    useRuleDomainFallback: !prefetchedStrategy,
+  });
+  const provisionalQueryKeywords = prefetchedStrategy
+    ? prepareSentimentHotKeywordsForMode([
+        ...sentimentHotStrategyTermsForMode(prefetchedStrategy, searchMode),
+        ...buildSegmentedSentimentHotQueryTerms(prefetchedStrategy, searchMode),
+      ], searchMode, { sourceText })
+    : provisionalKeywords;
+  const provisionalKeywordBatches = [provisionalQueryKeywords];
+  const provisionalCacheStartedAt = Date.now();
+  const provisionalCachedCandidates = meaningfulNeedles(provisionalKeywords).length > 0
+    ? readThreadsSearchCandidateCache(archiveId, provisionalKeywords, Math.max(limit * 4, 40), true, searchMode)
+    : [];
+  console.info(`[sentiment_hot_stage] label=provisional-cache durationMs=${Date.now() - provisionalCacheStartedAt}`);
+  const provisionalGlobalStartedAt = Date.now();
+  const provisionalGlobalCandidates = prefetchedStrategy
+    ? readGlobalThreadsCandidateBackfill(
+        archiveId,
+        [...sentimentHotStrategyTermsForMode(prefetchedStrategy, searchMode), ...provisionalKeywords],
+        Math.max(limit * 4, 40),
+        searchMode,
+      ).filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, prefetchedStrategy, searchMode))
+    : [];
+  console.info(`[sentiment_hot_stage] label=provisional-global durationMs=${Date.now() - provisionalGlobalStartedAt}`);
+  const provisionalCandidateMap = new Map<string, SentimentHotCandidate>();
+  for (const candidate of [...provisionalCachedCandidates, ...provisionalGlobalCandidates]) {
+    const dedupeKey = sentimentCandidateDedupeKey(candidate);
+    if (!provisionalCandidateMap.has(dedupeKey)) provisionalCandidateMap.set(dedupeKey, candidate);
+  }
+  const provisionalCandidatesForReadiness = [...provisionalCandidateMap.values()];
+  const provisionalReadyCount = prefetchedStrategy
+    ? provisionalCandidatesForReadiness.filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, prefetchedStrategy, searchMode)).length
+    : sortRelevantHotCandidates(provisionalCandidatesForReadiness, provisionalKeywords, Math.max(limit * 4, 40), searchMode).length;
+  const provisionalSourceAttempted = args.refresh === true
+    && meaningfulNeedles(provisionalKeywords).length > 0
+    && provisionalReadyCount < limit;
+  const provisionalSourcePromise = provisionalSourceAttempted
+    ? Promise.all(provisionalKeywordBatches.map((batch) => fetchThreadsSearchPageCandidates({
+        archiveId,
+        keywords: provisionalKeywords,
+        queryKeywords: batch,
+        limit: Math.max(limit, 25),
+        refresh: true,
+        searchMode,
+        deadlineAt: Date.now() + SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS,
+      }).catch(() => [])))
+      .then((batches) => {
+        const byKey = new Map<string, SentimentHotCandidate>();
+        for (const candidate of batches.flat()) {
+          const key = sentimentCandidateDedupeKey(candidate);
+          if (!byKey.has(key)) byKey.set(key, candidate);
+        }
+        return [...byKey.values()];
+      })
+    : Promise.resolve([] as SentimentHotCandidate[]);
+  const strategyTimeoutMs = Math.min(30_000, remainingSentimentHotTotalBudgetMs(startedAt, 25_000));
   const strategyResult = await measureSentimentStage(
     warnings,
     "search-strategy",
     () => withSentimentTimeout(
-      buildSentimentHotSearchStrategyWithModel({
-        archive,
-        prompt: args.prompt,
-        memorySummaries: args.memorySummaries,
-        warnings,
-        modelTimeoutMs: 32_000,
-        attemptTimeoutMs: 20_000,
-      }),
-      Math.min(32_000, remainingSentimentHotTotalBudgetMs(startedAt, 28_000)),
+      buildSentimentHotSearchStrategyWithModel({ archive, prompt: args.prompt, memorySummaries: args.memorySummaries, warnings, timeoutMs: strategyTimeoutMs }),
+      strategyTimeoutMs + 250,
       emptySentimentHotSearchStrategy(),
     ),
   );
+  if (strategyResult) {
+    applyPersonaGuardToSentimentHotStrategy({
+      strategy: strategyResult,
+      archiveName: archive?.name,
+      personaSeedKeywords: personaGuardSeedKeywords,
+      sourceText: personaGuardSourceText,
+    });
+  }
   const hasModelStrategy = Boolean(strategyResult && sentimentHotStrategyHasModelTerms(strategyResult));
-  const sourceText = [archive?.name, archive?.content, args.prompt, ...(args.memorySummaries || [])].map(cleanText).filter(Boolean).join(" ");
   let keywords = strategyResult ? sentimentHotStrategyTermsForMode(strategyResult, searchMode) : [];
-  if (!hasModelStrategy) warnings.push("模型热点搜索策略暂不可用，本轮不会启动弱关键词实时搜索。");
+  if (!hasModelStrategy) warnings.push("模型热点搜索策略暂不可用，已使用当前人设资料解析出的核心词继续抓取。");
   if (keywords.length === 0 && personaSeedKeywords.length > 0) {
     keywords = [...personaSeedKeywords];
-  }
-  if (!hasModelStrategy) {
-    const cachedKeywords = readArchiveScopedThreadsSearchKeywords(archiveId, SENTIMENT_MODEL_KEYWORD_TARGET, searchMode);
-    if (cachedKeywords.length > 0) {
-      keywords = [...new Set([...keywords, ...cachedKeywords])];
-      warnings.push("模型策略不可用，已合并同一人设历史真实抓取关键词筛选候选池。");
-    }
   }
   if (keywords.length === 0) {
     const cachedKeywords = readArchiveScopedThreadsSearchKeywords(archiveId, SENTIMENT_MODEL_KEYWORD_TARGET, searchMode);
     if (cachedKeywords.length > 0) {
       keywords = cachedKeywords;
-      warnings.push("模型关键词不可用，已改用同一人设历史真实抓取关键词筛选候选池。");
+      warnings.push("模型关键词不可用，已改用同一人设历史真实抓取关键词继续刷新。");
     }
   }
   if (!hasModelStrategy && personaSeedKeywords.length > 0 && keywords.length < SENTIMENT_MODEL_KEYWORD_TARGET) {
@@ -1704,54 +2019,97 @@ export async function fetchSentimentHotCandidates(args: {
     keywords
       .map((item) => normalizeSentimentSearchKeyword(item, { archiveName: archive?.name, sourceText }))
       .filter((item) => isConcreteSearchKeyword(item)),
-  )], searchMode);
+  )], searchMode, { sourceText, useRuleDomainFallback: !hasModelStrategy });
   const queryKeywords = hasModelStrategy && strategyResult
-    ? prepareSentimentHotKeywordsForMode(sentimentHotStrategyTermsForMode(strategyResult, searchMode), searchMode)
+    ? (() => {
+        const strategyTerms = sentimentHotStrategyTermsForMode(strategyResult, searchMode);
+        const segmentedTerms = buildSegmentedSentimentHotQueryTerms(strategyResult, searchMode);
+        return prepareSentimentHotKeywordsForMode([...strategyTerms, ...segmentedTerms], searchMode, { sourceText });
+      })()
     : keywords;
   warnings.push(searchMode === "normal" ? "热点抓取模式：普通（泛垂直）。" : "热点抓取模式：严格（垂直收口）。");
-  const limit = args.limit || 10;
   const poolLimit = Math.max(limit * 40, SENTIMENT_HOT_CANDIDATE_POOL_TARGET);
+  const semanticSourceTarget = hasModelStrategy ? Math.min(poolLimit, Math.max(limit, 25)) : limit;
   const hasSearchKeywords = meaningfulNeedles(keywords).length > 0;
 
+  const initialCacheStartedAt = Date.now();
   let candidates = hasSearchKeywords
-    ? sortSentimentHotCandidatePool(readThreadsSearchCandidateCache(archiveId, keywords, poolLimit, args.refresh === true, searchMode), keywords, poolLimit, searchMode)
+    ? sortSentimentHotCandidatePool(readThreadsSearchCandidateCache(archiveId, keywords, poolLimit, true, searchMode), keywords, poolLimit, searchMode)
     : [];
+  console.info(`[sentiment_hot_stage] label=initial-cache durationMs=${Date.now() - initialCacheStartedAt}`);
   const initialCacheCount = candidates.length;
   const channelStats: string[] = [];
+  const provisionalSourceStartedAt = Date.now();
+  const provisionalCandidates = await provisionalSourcePromise;
+  console.info(`[sentiment_hot_stage] label=provisional-source-wait durationMs=${Date.now() - provisionalSourceStartedAt}`);
+  if (provisionalCandidates.length > 0) {
+    const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+    const byKey = new Set(candidates.map((candidate) => sentimentCandidateDedupeKey(candidate)));
+    let added = 0;
+    for (const candidate of provisionalCandidates) {
+      const dedupeKey = sentimentCandidateDedupeKey(candidate);
+      if (byId.has(candidate.id) || byKey.has(dedupeKey)) continue;
+      byId.set(candidate.id, candidate);
+      byKey.add(dedupeKey);
+      added += 1;
+    }
+    candidates = sortSentimentHotCandidatePool([...byId.values()], keywords, poolLimit, searchMode);
+    channelStats.push(`並行實時來源 ${provisionalCandidates.length}，新增 ${added}`);
+  }
 
-  const modeInventoryTarget = searchMode === "normal"
-    ? SENTIMENT_HOT_WARM_POOL_NORMAL_TARGET
-    : SENTIMENT_HOT_WARM_POOL_STRICT_TARGET;
-  const targetPoolSize = Math.min(poolLimit, Math.max(modeInventoryTarget, limit * 6));
-  if (hasSearchKeywords && candidates.length < targetPoolSize) {
+  if (hasModelStrategy && strategyResult && candidates.length < semanticSourceTarget) {
+    const globalBackfill = readGlobalThreadsCandidateBackfill(
+      archiveId,
+      [...strategyResult.requiredAnchorTerms, ...keywords],
+      semanticSourceTarget,
+      searchMode,
+    ).filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode));
+    const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+    const byKey = new Set(candidates.map((candidate) => sentimentCandidateDedupeKey(candidate)));
+    let added = 0;
+    for (const candidate of globalBackfill) {
+      const dedupeKey = sentimentCandidateDedupeKey(candidate);
+      if (byId.has(candidate.id) || byKey.has(dedupeKey)) continue;
+      byId.set(candidate.id, candidate);
+      byKey.add(dedupeKey);
+      added += 1;
+    }
+    if (added > 0) {
+      candidates = sortSentimentHotCandidatePool([...byId.values()], keywords, poolLimit, searchMode);
+      writeThreadsSearchCandidateCache(archiveId, keywords, candidates, searchMode);
+      channelStats.push(`共享真实候选补充 ${added}`);
+    }
+  }
+
+  if (hasSearchKeywords && args.refresh === true && candidates.length < limit) {
     candidates = await fillSentimentHotCandidatesToLimit({
       archiveId,
       keywords,
       candidates,
-      limit: targetPoolSize,
-      refresh: args.refresh === true,
+      limit,
+      refresh: true,
       searchMode,
-      fallbackKeywords: queryKeywords,
       warnings,
     });
     candidates = candidates.slice(0, poolLimit);
   }
-  const candidatePoolCountBeforeLive = candidates.length;
 
   const cachedReadyCount = hasSearchKeywords
-    ? sortRelevantHotCandidates(candidates, keywords, poolLimit, searchMode).length
+    ? (hasModelStrategy && strategyResult
+      ? candidates.filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode)).length
+      : sortRelevantHotCandidates(candidates, keywords, poolLimit, searchMode).length)
     : 0;
-  const shouldFetchLiveCandidates = hasModelStrategy
-    && hasSearchKeywords
-    && (args.refresh === true || candidates.length < limit || cachedReadyCount < limit);
-  if (hasSearchKeywords && args.refresh === true && candidates.length >= limit && cachedReadyCount < limit) {
-    warnings.push(`當前候選池原始候選 ${candidates.length} 篇，但高品質預篩候選只有 ${cachedReadyCount}/${limit} 篇，已繼續刷新真實來源補充候選。`);
+  const shouldFetchLiveCandidates = hasSearchKeywords
+    && (candidates.length < semanticSourceTarget || cachedReadyCount < semanticSourceTarget);
+  if (hasSearchKeywords && args.refresh === true && candidates.length >= limit && cachedReadyCount < semanticSourceTarget) {
+    warnings.push(`當前相關候選不足，已繼續補充實時來源。`);
   }
   let liveThreadsCandidateCount = 0;
   if (shouldFetchLiveCandidates) {
     const beforeThreadsCount = candidates.length;
-    const liveCollectionLimit = Math.max(limit, targetPoolSize - cachedReadyCount);
-    const threadsTimeoutMs = Math.min(SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS, remainingSentimentHotTotalBudgetMs(startedAt, 18_000));
+    const liveDeficit = Math.max(1, semanticSourceTarget - cachedReadyCount);
+    const liveCollectionLimit = Math.min(poolLimit, Math.max(semanticSourceTarget, Math.min(30, liveDeficit * 3)));
+    const threadsTimeoutMs = Math.min(20_000, remainingSentimentHotTotalBudgetMs(startedAt, 18_000));
     const threadsCandidates = await measureSentimentStage(
       warnings,
       "threads-search",
@@ -1763,8 +2121,6 @@ export async function fetchSentimentHotCandidates(args: {
           limit: liveCollectionLimit,
           refresh: args.refresh === true,
           searchMode,
-          searchFilter: candidatePoolCountBeforeLive < limit ? "top" : "recent",
-          allowStaleBackfill: candidatePoolCountBeforeLive < limit,
           deadlineAt: Date.now() + threadsTimeoutMs - 500,
         }),
         threadsTimeoutMs,
@@ -1775,18 +2131,16 @@ export async function fetchSentimentHotCandidates(args: {
       return [];
     });
     liveThreadsCandidateCount = threadsCandidates.length;
-    const byId = new Map<string, SentimentHotCandidate>();
-    const byKey = new Set<string>();
-    const addMerged = (candidate: SentimentHotCandidate) => {
-      const candidateKeys = getSentimentHotCandidateHistoryKeys(candidate);
-      if (!byId.has(candidate.id) && !candidateKeys.some((key) => byKey.has(key))) {
+    const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+    const byKey = new Set(candidates.map((candidate) => sentimentCandidateDedupeKey(candidate)));
+    for (const candidate of threadsCandidates) {
+      const dedupeKey = sentimentCandidateDedupeKey(candidate);
+      if (!byId.has(candidate.id) && !byKey.has(dedupeKey)) {
         byId.set(candidate.id, candidate);
-        candidateKeys.forEach((key) => byKey.add(key));
+        byKey.add(dedupeKey);
       }
-    };
-    threadsCandidates.forEach(addMerged);
-    candidates.forEach(addMerged);
-    candidates = [...byId.values()].slice(0, poolLimit);
+    }
+    candidates = sortSentimentHotCandidatePool([...byId.values()], keywords, poolLimit, searchMode);
     channelStats.push(`Threads 原始 ${threadsCandidates.length}，新增 ${Math.max(0, candidates.length - beforeThreadsCount)}`);
   }
   if (candidates.length > 0) {
@@ -1796,100 +2150,261 @@ export async function fetchSentimentHotCandidates(args: {
         : "已檢查 Threads 真實來源，本輪無新增可用候選，已使用當前人設候選池。")
       : "已從當前人設候選池刷新熱點。");
   }
-  channelStats.push("Instagram 已移出前台關鍵路徑");
 
-  const cookieStatuses = await measureSentimentStage(warnings, "cookie-status", () => withSentimentTimeout(fetchSentimentCookieStatuses(), Math.min(1_500, remainingSentimentHotTotalBudgetMs(startedAt, 16_000)), [
+  if (hasSearchKeywords && shouldFetchLiveCandidates && candidates.length < limit) {
+    candidates = await fillSentimentHotCandidatesToLimit({
+      archiveId,
+      keywords,
+      candidates,
+      limit,
+      refresh: args.refresh === true,
+      searchMode,
+      warnings,
+    });
+    candidates = candidates.slice(0, Math.max(limit * 40, SENTIMENT_HOT_CANDIDATE_POOL_TARGET));
+  }
+
+  const hasFastReturnCandidates = cachedReadyCount >= semanticSourceTarget;
+
+  const preInstagramReadyCount = hasSearchKeywords
+    ? (hasModelStrategy && strategyResult
+      ? candidates.filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode)).length
+      : sortRelevantHotCandidates(candidates, keywords, poolLimit, searchMode).length)
+    : 0;
+  if (shouldFetchLiveCandidates && preInstagramReadyCount < limit && hasSentimentHotTotalBudget(startedAt, SENTIMENT_HOT_SUPPLEMENT_MIN_REMAINING_MS)) {
+    const beforeInstagramCount = candidates.length;
+    const instagramCandidates = await measureSentimentStage(
+      warnings,
+      "instagram-reader",
+      () => withSentimentTimeout(
+        fetchInstagramReaderSearchCandidates({
+          archiveId,
+          keywords,
+          queries: buildOrderedSentimentQueries(buildThreadsSearchQueries(queryKeywords), args.refresh ? Date.now() + candidates.length : candidates.length, args.refresh === true).slice(0, INSTAGRAM_READER_QUERY_LIMIT),
+          limit: poolLimit,
+          refresh: args.refresh === true,
+        }),
+        Math.min(20_000, remainingSentimentHotTotalBudgetMs(startedAt, 8_000)),
+        [],
+      ),
+    ).catch((error) => {
+      warnings.push("Instagram reader 抓取失敗：" + (error instanceof Error ? error.message : String(error)));
+      return [];
+    });
+    let instagramAddedCount = 0;
+    if (instagramCandidates.length > 0) {
+      const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+      const byKey = new Set(candidates.map((candidate) => sentimentCandidateDedupeKey(candidate)));
+      for (const candidate of instagramCandidates) {
+        const dedupeKey = sentimentCandidateDedupeKey(candidate);
+        if (!byId.has(candidate.id) && !byKey.has(dedupeKey)) {
+          byId.set(candidate.id, candidate);
+          byKey.add(dedupeKey);
+          instagramAddedCount += 1;
+        }
+        if (byId.size >= poolLimit) break;
+      }
+      candidates = sortSentimentHotCandidatePool([...byId.values()], keywords, poolLimit, searchMode);
+      warnings.push(args.refresh ? `已即時刷新 Instagram reader 候選 ${instagramCandidates.length} 篇。` : `已加入 Instagram reader 候選 ${instagramCandidates.length} 篇。`);
+    }
+    channelStats.push(`Instagram 原始 ${instagramCandidates.length}，新增 ${instagramAddedCount}，補充前 ${beforeInstagramCount}`);
+  } else if (shouldFetchLiveCandidates && hasFastReturnCandidates) {
+    channelStats.push(`Instagram 已跳過，已有 ${candidates.length}/${limit} 篇候選，使用快速返回`);
+  } else if (shouldFetchLiveCandidates && preInstagramReadyCount < limit) {
+    pushSentimentHotWarning(warnings, SENTIMENT_HOT_TIMEOUT_WARNING);
+    channelStats.push("Instagram 已跳過，剩餘時間不足");
+  } else if (shouldFetchLiveCandidates) {
+    channelStats.push(`Instagram 已跳過，預篩 ${preInstagramReadyCount}/${limit}`);
+  }
+
+  const runtime = await measureSentimentStage(warnings, "runtime", () => withSentimentTimeout(
+    runtimePromise,
+    Math.min(4_000, remainingSentimentHotTotalBudgetMs(startedAt, 16_000)),
+    { ok: false, url: resolveSentimentBackendUrl(), warning: "舆情后台启动超时，已继续使用网页实时搜索。" },
+  ));
+  if (!runtime.ok && runtime.warning) pushSentimentHotWarning(warnings, runtime.warning);
+  let cookieStatuses = await measureSentimentStage(warnings, "cookie-status", () => withSentimentTimeout(fetchSentimentCookieStatuses().catch(() => []), Math.min(1_500, remainingSentimentHotTotalBudgetMs(startedAt, 16_000)), [
     { platform: "threads" as const, health: "unknown" as const, label: "Threads", message: "\u8206\u60c5\u0020\u0043\u006f\u006f\u006b\u0069\u0065\u0020\u72c0\u614b\u6aa2\u67e5\u8d85\u6642\u3002" },
     { platform: "instagram" as const, health: "unknown" as const, label: "Instagram", message: "\u8206\u60c5\u0020\u0043\u006f\u006f\u006b\u0069\u0065\u0020\u72c0\u614b\u6aa2\u67e5\u8d85\u6642\u3002" },
   ]));
+  if (shouldFetchLiveCandidates && !hasFastReturnCandidates && runtime.ok && hasSentimentHotTotalBudget(startedAt, 7_000)) {
+    cookieStatuses = await measureSentimentStage(warnings, "cookie-refresh", () => withSentimentTimeout(refreshSentimentBrowserCookies(cookieStatuses, warnings), Math.min(6_000, remainingSentimentHotTotalBudgetMs(startedAt, 5_000)), cookieStatuses));
+  } else if (shouldFetchLiveCandidates && !hasFastReturnCandidates && runtime.ok) {
+    pushSentimentHotWarning(warnings, SENTIMENT_HOT_TIMEOUT_WARNING);
+  }
+  const usableSources = cookieStatuses
+    .filter(sentimentCookieStatusHasUsableCookies)
+    .map((status) => status.platform);
+  if (shouldFetchLiveCandidates && !hasFastReturnCandidates && runtime.ok && usableSources.length > 0 && hasSentimentHotTotalBudget(startedAt, 4_000)) {
+    await measureSentimentStage(warnings, "realtime-scan", () => withSentimentTimeout(triggerRealtimeSentimentScan(usableSources, warnings), Math.min(6_000, remainingSentimentHotTotalBudgetMs(startedAt, 3_000)), undefined));
+  }
+
+  if (hasSearchKeywords && candidates.length < limit) {
+    const beforeDatabaseCount = candidates.length;
+    const databaseCandidates = await readCandidatesFromDatabase({ archiveId, keywords, limit: poolLimit, excludeShown: args.refresh === true });
+    let databaseAddedCount = 0;
+    if (databaseCandidates.length > 0) {
+      const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+      const byKey = new Set(candidates.map((candidate) => sentimentCandidateDedupeKey(candidate)));
+      for (const candidate of databaseCandidates) {
+        const dedupeKey = sentimentCandidateDedupeKey(candidate);
+        if (!byId.has(candidate.id) && !byKey.has(dedupeKey)) {
+          byId.set(candidate.id, candidate);
+          byKey.add(dedupeKey);
+          databaseAddedCount += 1;
+        }
+        if (byId.size >= poolLimit) break;
+      }
+      candidates = sortSentimentHotCandidatePool([...byId.values()], keywords, poolLimit, searchMode);
+    }
+    channelStats.push(`資料庫原始 ${databaseCandidates.length}，新增 ${databaseAddedCount}，補充前 ${beforeDatabaseCount}`);
+  }
+  if (shouldFetchLiveCandidates && !hasFastReturnCandidates && runtime.ok && usableSources.length > 0 && hasSearchKeywords && candidates.length < limit && hasSentimentHotTotalBudget(startedAt, 5_000)) {
+    const beforeWaitCount = candidates.length;
+    candidates = await waitForMoreSentimentHotCandidates({
+      archiveId,
+      keywords,
+      candidates,
+      limit: poolLimit,
+      excludeShown: true,
+      searchMode,
+    });
+    if (candidates.length > beforeWaitCount) {
+      channelStats.push(`即時掃描新增 ${candidates.length - beforeWaitCount}`);
+      warnings.push(`\u5df2\u7b49\u5f85\u5f8c\u53f0\u5be6\u6642\u6383\u63cf\u56de\u586b\uff0c\u540c\u4eba\u8a2d\u95dc\u9375\u8a5e\u5019\u9078\u589e\u52a0\u5230 ${Math.min(candidates.length, limit)}/${limit} \u7bc7\u3002`);
+    }
+  }
   if (!hasSearchKeywords) {
     warnings.push("\u7576\u524d\u4eba\u8a2d\u6c92\u6709\u89e3\u6790\u51fa\u53ef\u641c\u7d22\u95dc\u9375\u8a5e\uff0c\u5df2\u505c\u6b62\u6cdb\u5316\u641c\u7d22\uff1b\u8acb\u5148\u5728\u4eba\u8a2d\u7c21\u4ecb\u88dc\u5145\u660e\u78ba\u7684\u9818\u57df\u3001\u8208\u8da3\u6216\u8077\u696d\u8a2d\u5b9a\u3002");
+  } else if (candidates.length < limit) {
+    candidates = await fillSentimentHotCandidatesToLimit({
+      archiveId,
+      keywords,
+      candidates,
+      limit,
+      refresh: args.refresh === true,
+      searchMode,
+      warnings,
+    });
+    candidates = candidates.slice(0, Math.max(limit * 40, SENTIMENT_HOT_CANDIDATE_POOL_TARGET));
   }
-  if (!hasSentimentHotTotalBudget(startedAt, 1_000)) {
+  if (runtime.ok && usableSources.length > 0) {
+    void syncSentimentKeywords(keywords).catch(() => undefined);
+    const missingSources = cookieStatuses
+      .filter((status) => !sentimentCookieStatusHasUsableCookies(status))
+      .map((status) => sentimentCookiePlatformLabel(status.platform));
+    if (missingSources.length > 0 && missingSources.length < cookieStatuses.length) {
+      warnings.push(`${missingSources.join(" / ")} 缺少有效 Cookie，已跳过对应平台真实扫描；其余平台仍会继续使用。`);
+    }
+  } else if (runtime.ok) {
+    warnings.push("\u0054\u0068\u0072\u0065\u0061\u0064\u0073\u0020\u002f\u0020\u0049\u006e\u0073\u0074\u0061\u0067\u0072\u0061\u006d\u0020\u7f3a\u5c11\u6709\u6548\u0020\u0043\u006f\u006f\u006b\u0069\u0065\uff0c\u5df2\u8df3\u904e\u771f\u5be6\u6383\u63cf\uff1b\u8acb\u5148\u5728\u8206\u60c5\u0020\u0043\u006f\u006f\u006b\u0069\u0065\u0020\u914d\u7f6e\u4e2d\u6388\u6b0a\u5f8c\u518d\u5237\u65b0\u6293\u53d6\u3002");
+  }
+  if (candidates.length < limit && !hasSentimentHotTotalBudget(startedAt, 1_000)) {
     pushSentimentHotWarning(warnings, SENTIMENT_HOT_TIMEOUT_WARNING);
   }
 
-  const displayCandidatePool = candidates;
-  let semanticScope: string | undefined;
-  let semanticallyCheckedPool = displayCandidatePool;
+  let modelParentCandidatePool: SentimentHotCandidate[] = [];
+  let parentSupplementCount = 0;
   if (hasModelStrategy && strategyResult) {
-    const semanticResult = await measureSentimentStage(warnings, "semantic-relevance", () => filterSentimentHotCandidatesWithModel({
-      archive,
-      strategy: strategyResult,
-      keywords,
-      searchMode,
-      candidates: displayCandidatePool,
-      warnings,
-    }));
-    semanticallyCheckedPool = semanticResult.accepted;
-    semanticScope = semanticResult.scope;
-    writeThreadsSearchCandidateCache(archiveId, keywords, semanticResult.tagged, searchMode);
+    const strategyCandidatePool = candidates;
+    modelParentCandidatePool = strategyCandidatePool.filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, "normal"));
+    candidates = strategyCandidatePool.filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode));
   }
-  candidates = finalizeSentimentHotCandidatesForDisplay(semanticallyCheckedPool, limit, { archiveId, keywords, excludeShown: true, searchMode });
+  const displayCandidatePool = candidates;
+  candidates = finalizeSentimentHotCandidatesForDisplay(displayCandidatePool, limit, { archiveId, keywords, excludeShown: true, searchMode });
   if (candidates.length < limit) {
     const selectedKeys = new Set(candidates.flatMap((candidate) => getSentimentHotCandidateHistoryKeys(candidate)));
-    const shownHistoryKeys = getSentimentHotShownHistoryKeys(archiveId);
     const shownAtMap = getSentimentHotShownAtMap(archiveId);
     const supplementLimit = limit - candidates.length;
-    const semanticHistory = semanticScope
-      ? readThreadsSearchCandidateCache(archiveId, keywords, poolLimit, false, searchMode)
-        .filter((candidate) => (candidate.metrics as any)?.semanticRelevanceScope === semanticScope && (candidate.metrics as any)?.semanticRelevant === true)
-      : [];
-    const supplements = finalizeSentimentHotCandidatesForDisplay([...semanticallyCheckedPool, ...semanticHistory], poolLimit, {
+    const archiveHistory = readThreadsSearchCandidateCache(archiveId, keywords, poolLimit, false, searchMode)
+      .filter((candidate) => !hasModelStrategy || !strategyResult || candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode));
+    const supplements = finalizeSentimentHotCandidatesForDisplay([...displayCandidatePool, ...archiveHistory], poolLimit, {
       archiveId,
       keywords,
       excludeShown: false,
       searchMode,
-      allowSingleStrongMatch: searchMode === "normal",
     })
       .filter((candidate) => {
         const historyKeys = getSentimentHotCandidateHistoryKeys(candidate);
-        return historyKeys.some((key) => shownHistoryKeys.has(key)) && historyKeys.every((key) => !selectedKeys.has(key));
+        return historyKeys.every((key) => !selectedKeys.has(key));
       })
-      .sort((a, b) => (shownAtMap.get(a.id) || 0) - (shownAtMap.get(b.id) || 0) || compareSentimentHotFreshness(a, b))
+      .sort((a, b) => compareSentimentHotFreshness(a, b) || (shownAtMap.get(a.id) || 0) - (shownAtMap.get(b.id) || 0))
       .slice(0, supplementLimit);
     if (supplements.length > 0) {
       candidates = [...candidates, ...supplements];
-      warnings.push(`新候選不足時已按最久未展示優先補充 ${supplements.length} 篇同人設高熱度歷史候選。`);
+      warnings.push(`新候選不足時已按新鮮度補充 ${supplements.length} 篇同人設高熱度候選。`);
     }
   }
-  if (candidates.length < limit) {
+  if (candidates.length < limit && modelParentCandidatePool.length > 0) {
     const selectedKeys = new Set(candidates.flatMap((candidate) => getSentimentHotCandidateHistoryKeys(candidate)));
-    const shownAtMap = getSentimentHotShownAtMap(archiveId);
-    const staleCandidates = finalizeSentimentHotCandidatesForDisplay(semanticallyCheckedPool, poolLimit, {
+    const parentSupplements = finalizeSentimentHotCandidatesForDisplay(modelParentCandidatePool, poolLimit, {
       archiveId,
       keywords,
       excludeShown: false,
-      searchMode,
-      allowSingleStrongMatch: searchMode === "normal",
-      allowStaleBackfill: true,
+      searchMode: "normal",
     })
       .filter((candidate) => getSentimentHotCandidateHistoryKeys(candidate).every((key) => !selectedKeys.has(key)))
-      .sort((a, b) => (shownAtMap.get(a.id) || 0) - (shownAtMap.get(b.id) || 0) || compareSentimentHotFreshness(a, b))
-      .slice(0, limit - candidates.length);
-    if (staleCandidates.length > 0) {
-      candidates = [...candidates, ...staleCandidates];
-      warnings.push(`30 天內候選不足時已用同人設較早高熱歷史候選低優先級補充 ${staleCandidates.length} 篇。`);
+      .slice(0, searchMode === "strict"
+        ? Math.min(limit - candidates.length, SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT - parentSupplementCount)
+        : limit - candidates.length);
+    if (parentSupplements.length > 0) {
+      candidates = [...candidates, ...parentSupplements];
+      parentSupplementCount += parentSupplements.length;
+      warnings.push(`最终去重后已用模型直接父领域候选补充 ${parentSupplements.length} 篇。`);
     }
   }
-  if (searchMode === "strict" && candidates.length < limit) {
-    const relaxedKeywords = queryKeywords.length ? queryKeywords : keywords;
-    const selectedKeys = new Set(candidates.flatMap((candidate) => getSentimentHotCandidateHistoryKeys(candidate)));
-    const shownAtMap = getSentimentHotShownAtMap(archiveId);
-    const relaxedCandidates = finalizeSentimentHotCandidatesForDisplay(semanticallyCheckedPool, poolLimit, {
+  if (candidates.length < limit && hasModelStrategy && strategyResult) {
+    const globalParentPool = readGlobalThreadsCandidateBackfill(
       archiveId,
-      keywords: relaxedKeywords,
+      sentimentHotStrategyTermsForMode(strategyResult, "normal"),
+      Math.max(limit * 4, 40),
+      "normal",
+    ).filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, "normal"));
+    const selectedKeys = new Set(candidates.flatMap((candidate) => getSentimentHotCandidateHistoryKeys(candidate)));
+    const globalSupplements = finalizeSentimentHotCandidatesForDisplay(globalParentPool, poolLimit, {
+      archiveId,
+      keywords,
       excludeShown: false,
       searchMode: "normal",
-      allowSingleStrongMatch: true,
-      allowStaleBackfill: true,
     })
       .filter((candidate) => getSentimentHotCandidateHistoryKeys(candidate).every((key) => !selectedKeys.has(key)))
-      .sort((a, b) => (shownAtMap.get(a.id) || 0) - (shownAtMap.get(b.id) || 0) || compareSentimentHotFreshness(a, b))
-      .slice(0, limit - candidates.length);
-    if (relaxedCandidates.length > 0) {
-      candidates = [...candidates, ...relaxedCandidates];
-      warnings.push(`嚴格候選不足時已用同一模型普通詞池低優先級補充 ${relaxedCandidates.length} 篇。`);
+      .slice(0, searchMode === "strict"
+        ? Math.min(limit - candidates.length, SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT - parentSupplementCount)
+        : limit - candidates.length);
+    if (globalSupplements.length > 0) {
+      candidates = [...candidates, ...globalSupplements];
+      parentSupplementCount += globalSupplements.length;
+      warnings.push(`当前人设候选不足，已用模型父领域真实候选补充 ${globalSupplements.length} 篇。`);
+    }
+  }
+  const forceDetailRefresh = false;
+  const detailTargetCount = args.refresh === true ? 0 : candidates.filter((candidate) => (
+    candidate.platform === "threads"
+    && (
+      forceDetailRefresh
+      || (
+        typeof candidate.engagement?.viewCount !== "number"
+        && typeof (candidate.metrics as any)?.view_count !== "number"
+        && typeof (candidate.metrics as any)?.viewCount !== "number"
+        && typeof (candidate.metrics as any)?.views !== "number"
+      )
+    )
+  )).length;
+  if (detailTargetCount > 0) {
+    const detailStartedAt = Date.now();
+    candidates = await enrichThreadsCandidateDetails(candidates, { force: forceDetailRefresh });
+    const resolvedViewCount = candidates.filter((candidate) => (
+      typeof candidate.engagement?.viewCount === "number"
+      || typeof (candidate.metrics as any)?.view_count === "number"
+      || typeof (candidate.metrics as any)?.viewCount === "number"
+      || typeof (candidate.metrics as any)?.views === "number"
+    )).length;
+    channelStats.push(`原帖浏览 ${resolvedViewCount}/${candidates.length}，耗时 ${Date.now() - detailStartedAt}ms`);
+    if (resolvedViewCount > 0) {
+      writeThreadsSearchCandidateCache(archiveId, keywords, candidates, searchMode);
+    }
+    if (resolvedViewCount < candidates.length) {
+      warnings.push(`已从原帖详情获取 ${resolvedViewCount}/${candidates.length} 条真实浏览量；其余原帖暂未公开或详情读取失败。`);
     }
   }
   const channelSummary = [
@@ -1903,19 +2418,23 @@ export async function fetchSentimentHotCandidates(args: {
   if (candidates.length === 0) {
     warnings.push("\u672a\u627e\u5230\u7b26\u5408\u689d\u4ef6\u7684\u9ad8\u71b1\u5ea6\u4e2d\u6587\u71b1\u9ede\uff1b\u8acb\u5237\u65b0\u6216\u63db\u66f4\u4eba\u8a2d\u95dc\u9375\u8a5e\u3002");
   } else if (candidates.length < limit) {
-    warnings.push(`本次候选池经过相关性、热度、新鲜度、语言和去重过滤后仅保留 ${candidates.length}/${limit} 篇。`);
-  }
-  if (!hasModelStrategy) {
-    warnings.push(candidatePoolCountBeforeLive > 0
-      ? `模型当前不可用，本轮仅使用同人设候选池；可用库存 ${candidatePoolCountBeforeLive} 篇，最终 ${candidates.length}/${limit} 篇。`
-      : `模型当前不可用，同人设候选池也没有可用内容，最终 0/${limit} 篇。`);
-  }
-  rememberSentimentHotShown(archiveId, candidates);
-  if (archive && strategyResult && sentimentHotStrategyHasModelTerms(strategyResult)) {
-    void warmSentimentHotCandidatePool(buildSentimentHotSearchStrategyCacheKey({ archive }), archiveId, strategyResult);
+    warnings.push(`\u672c\u6b21\u53ea\u627e\u5230\u0020${candidates.length}/${limit}\u0020\u7bc7\u9ad8\u71b1\u5ea6\u4e2d\u6587\u71b1\u9ede\uff0c\u5df2\u904e\u6ffe\u91cd\u8907\u3001\u975e\u4e2d\u6587\u6216\u4f4e\u71b1\u5ea6\u5167\u5bb9\u3002`);
   }
   scheduleSentimentRuntimeShutdown();
   return { candidates, keywords, searchMode, cookieStatuses, warnings };
+}
+
+export async function fetchSentimentHotCandidates(args: {
+  archive?: PersonaArchive;
+  prompt?: string;
+  memorySummaries?: string[];
+  limit?: number;
+  refresh?: boolean;
+  searchMode?: SentimentHotSearchMode;
+}): Promise<FetchSentimentHotCandidatesResult> {
+  const archiveId = cleanText(args.archive?.id) || "default";
+  const searchMode = normalizeSentimentHotSearchMode(args.searchMode);
+  return withSentimentHotExecutionLock(`${searchMode}:${archiveId}`, () => fetchSentimentHotCandidatesUnlocked(args));
 }
 
 async function fillSentimentHotCandidatesToLimit(args: {
@@ -1925,32 +2444,19 @@ async function fillSentimentHotCandidatesToLimit(args: {
   limit: number;
   refresh?: boolean;
   searchMode?: SentimentHotSearchMode;
-  fallbackKeywords?: string[];
   warnings: string[];
 }): Promise<SentimentHotCandidate[]> {
   const out: SentimentHotCandidate[] = [];
   const seen = new Set<string>();
   const seenDedupeKeys = new Set<string>();
   const shownHistoryKeys = args.refresh === true ? getSentimentHotShownHistoryKeys(args.archiveId) : new Set<string>();
-  const add = (
-    candidate: SentimentHotCandidate,
-    qualityKeywords = args.keywords,
-    qualityMode: SentimentHotSearchMode = normalizeSentimentHotSearchMode(args.searchMode),
-    allowShown = false,
-    allowSingleStrongMatch = false,
-    allowStaleBackfill = false,
-  ) => {
+  const add = (candidate: SentimentHotCandidate, qualityKeywords = args.keywords, qualityMode: SentimentHotSearchMode = normalizeSentimentHotSearchMode(args.searchMode)) => {
     const content = cleanSentimentCandidateContent(candidate.content || "");
     if (!candidate?.id || seen.has(candidate.id)) return;
-    if (!allowShown && args.refresh === true && getSentimentHotCandidateHistoryKeys({ ...candidate, content }).some((key) => shownHistoryKeys.has(key))) return;
+    if (args.refresh === true && getSentimentHotCandidateHistoryKeys({ ...candidate, content }).some((key) => shownHistoryKeys.has(key))) return;
     const dedupeKey = sentimentCandidateDedupeKey(candidate, content);
     if (seenDedupeKeys.has(dedupeKey)) return;
-    const normalized = candidateMeetsDisplayQuality(
-      { ...candidate, content },
-      qualityKeywords,
-      qualityMode,
-      { allowSingleStrongMatch, allowStaleBackfill },
-    );
+    const normalized = candidateMeetsDisplayQuality({ ...candidate, content }, qualityKeywords, qualityMode);
     if (!normalized) return;
     seen.add(normalized.id);
     seenDedupeKeys.add(dedupeKey);
@@ -1984,91 +2490,19 @@ async function fillSentimentHotCandidatesToLimit(args: {
       args.searchMode,
     );
     for (const candidate of archiveBackfillCandidates) {
-      add(
-        candidate,
-        args.keywords,
-        normalizeSentimentHotSearchMode(args.searchMode),
-        false,
-        normalizeSentimentHotSearchMode(args.searchMode) === "normal" && isArchiveScopedFallbackCandidate(candidate),
-      );
+      add(candidate);
       if (out.length >= args.limit) break;
     }
     if (out.length > beforeArchiveBackfillCount) {
-      args.warnings.push(`即時新候選不足，已用同一人設歷史關鍵詞候選回補 ${out.length} 篇。`);
-    }
-  }
-
-  if (args.refresh === true && out.length < args.limit) {
-    const shownAtMap = getSentimentHotShownAtMap(args.archiveId);
-    const softBackfillCandidates = [
-      ...readThreadsSearchCandidateCache(args.archiveId, args.keywords, Math.max(args.limit * 30, SENTIMENT_HOT_CANDIDATE_POOL_TARGET), false, args.searchMode, { allowStaleBackfill: true }),
-      ...readArchiveScopedThreadsCandidateBackfill(
-        args.archiveId,
-        args.keywords,
-        Math.max(args.limit * 30, SENTIMENT_HOT_CANDIDATE_POOL_TARGET),
-        false,
-        args.searchMode,
-        { allowStaleBackfill: true },
-      ),
-      ...(await readCandidatesFromDatabase({
-        archiveId: args.archiveId,
-        keywords: args.keywords,
-        limit: Math.max(args.limit * 30, SENTIMENT_HOT_CANDIDATE_POOL_TARGET),
-        excludeShown: false,
-      }).catch(() => [])),
-    ].sort((a, b) => (shownAtMap.get(a.id) || 0) - (shownAtMap.get(b.id) || 0) || compareSentimentHotFreshness(a, b));
-    const beforeSoftBackfillCount = out.length;
-    for (const candidate of softBackfillCandidates) {
-      add(
-        candidate,
-        args.keywords,
-        normalizeSentimentHotSearchMode(args.searchMode),
-        true,
-        normalizeSentimentHotSearchMode(args.searchMode) === "normal" && isArchiveScopedFallbackCandidate(candidate),
-        true,
-      );
-      if (out.length >= args.limit) break;
-    }
-    if (out.length > beforeSoftBackfillCount) {
-      args.warnings.push(`未展示候選不足時已按最久未展示優先補充同人設高熱度歷史候選 ${out.length} 篇。`);
-    }
-  }
-
-  if (normalizeSentimentHotSearchMode(args.searchMode) === "strict" && out.length < args.limit) {
-    const relaxedKeywords = args.fallbackKeywords?.length ? args.fallbackKeywords : args.keywords;
-    const shownAtMap = getSentimentHotShownAtMap(args.archiveId);
-    const relaxedStrictBackfill = [
-      ...readThreadsSearchCandidateCache(args.archiveId, relaxedKeywords, Math.max(args.limit * 40, SENTIMENT_HOT_CANDIDATE_POOL_TARGET), false, "normal", { allowSingleStrongMatch: true, allowStaleBackfill: true }),
-      ...readArchiveScopedThreadsCandidateBackfill(
-        args.archiveId,
-        relaxedKeywords,
-        Math.max(args.limit * 40, SENTIMENT_HOT_CANDIDATE_POOL_TARGET),
-        false,
-        "normal",
-        { allowSingleStrongMatch: true, allowStaleBackfill: true },
-      ),
-      ...(await readCandidatesFromDatabase({
-        archiveId: args.archiveId,
-        keywords: relaxedKeywords,
-        limit: Math.max(args.limit * 40, SENTIMENT_HOT_CANDIDATE_POOL_TARGET),
-        excludeShown: false,
-      }).catch(() => [])),
-    ].sort((a, b) => (shownAtMap.get(a.id) || 0) - (shownAtMap.get(b.id) || 0) || compareSentimentHotFreshness(a, b));
-    const beforeRelaxedStrictCount = out.length;
-    for (const candidate of relaxedStrictBackfill) {
-      add(candidate, relaxedKeywords, "normal", true, true, true);
-      if (out.length >= args.limit) break;
-    }
-    if (out.length > beforeRelaxedStrictCount) {
-      args.warnings.push(`嚴格候選不足時已用同一模型詞池的泛垂直高熱候選低優先級補充 ${out.length} 篇。`);
+      args.warnings.push(`即時新候選不足，已用同一人設歷史關鍵詞候選回補到 ${out.length}/${args.limit} 篇。`);
     }
   }
 
   if (out.length >= args.limit) {
     if (args.refresh === true) {
-      args.warnings.push("即時新結果不足，已按未展示優先、最久未展示次之使用同人設高熱度候選池。");
+      args.warnings.push("即時新結果不足 " + args.limit + " 篇，已只使用同人設未展示且符合當前模式的近期候選補足。");
     } else {
-      args.warnings.push("即時新結果不足，已使用同人設關鍵詞的高熱度歷史候選池。");
+      args.warnings.push("\u5373\u6642\u65b0\u7d50\u679c\u4e0d\u8db3\u0020" + args.limit + "\u0020\u7bc7\uff0c\u5df2\u7528\u540c\u4eba\u8a2d\u95dc\u9375\u8a5e\u7684\u9ad8\u71b1\u5ea6\u6b77\u53f2\u5019\u9078\u88dc\u9f4a\u3002");
     }
     return out;
   }
@@ -2150,6 +2584,19 @@ function remainingSentimentDeadlineMs(deadlineAt?: number, fallbackMs = 1_000): 
   return Math.max(1, deadlineAt - Date.now());
 }
 
+async function syncSentimentKeywords(keywords: string[]) {
+  const usableKeywords = meaningfulNeedles(keywords).slice(0, 6);
+  for (const keyword of usableKeywords) {
+    const response = await fetch(`${resolveSentimentBackendUrl()}/api/sentiment/keywords`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ keyword }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!response.ok && response.status !== 409) throw new Error(`HTTP ${response.status}`);
+  }
+}
+
 function buildSentimentRefreshQueryPool(baseQueries: string[]): string[] {
   const dynamicQueries = buildDynamicSearchQueryVariants(baseQueries);
   return [...new Set((dynamicQueries.length ? dynamicQueries : baseQueries).map(cleanText).filter(Boolean))];
@@ -2159,21 +2606,6 @@ function rotateSentimentQueries(queries: string[], seed: number): string[] {
   if (queries.length <= 1) return queries;
   const offset = Math.abs(seed) % queries.length;
   return [...queries.slice(offset), ...queries.slice(0, offset)];
-}
-
-export function selectThreadsGraphqlSearchQueries(args: {
-  queries: string[];
-  excludedCount: number;
-}): string[] {
-  const queryLimit = Math.min(12, THREADS_BROWSER_QUERY_LIMIT, args.queries.length);
-  const coreCount = Math.min(8, queryLimit);
-  const coreQueries = args.queries.slice(0, coreCount);
-  const supplementalQueries = args.queries.slice(coreCount);
-  const rotationSeed = Math.floor(args.excludedCount / 10) * Math.max(1, queryLimit - coreCount);
-  return [
-    ...coreQueries,
-    ...rotateSentimentQueries(supplementalQueries, rotationSeed).slice(0, queryLimit - coreCount),
-  ];
 }
 
 function buildOrderedSentimentQueries(baseQueries: string[], seed: number, refresh = false): string[] {
@@ -2366,13 +2798,11 @@ function sentimentHotPublishedAtMs(candidate: SentimentHotCandidate): number | n
 
 function candidateHasAcceptableFreshness(candidate: SentimentHotCandidate): boolean {
   const publishedAt = sentimentHotPublishedAtMs(candidate);
-  const observedAt = publishedAt ?? Date.parse(String(candidate.capturedAt || ""));
-  if (!Number.isFinite(observedAt)) return false;
-  const age = Date.now() - observedAt;
-  const maxAge = publishedAt === null
-    ? SENTIMENT_HOT_UNKNOWN_PUBLISHED_MAX_AGE_MS
-    : SENTIMENT_HOT_MAX_PUBLISHED_AGE_MS;
-  return age >= -24 * 60 * 60 * 1000 && age <= maxAge;
+  if (publishedAt === null) {
+    return !isArchiveScopedFallbackCandidate(candidate) && sentimentCandidateSource(candidate) !== "database";
+  }
+  const age = Date.now() - publishedAt;
+  return age >= -24 * 60 * 60 * 1000 && age <= SENTIMENT_HOT_MAX_PUBLISHED_AGE_MS;
 }
 
 function sentimentHotFreshnessRank(candidate: SentimentHotCandidate): number {
@@ -2391,12 +2821,7 @@ function compareSentimentHotFreshness(a: SentimentHotCandidate, b: SentimentHotC
   return (sentimentHotPublishedAtMs(b) || 0) - (sentimentHotPublishedAtMs(a) || 0);
 }
 
-function candidateMeetsDisplayQuality(
-  candidate: SentimentHotCandidate,
-  keywords: string[] = [],
-  searchMode: SentimentHotSearchMode = "normal",
-  options?: { allowSemanticRejected?: boolean; allowSingleStrongMatch?: boolean; allowStaleBackfill?: boolean },
-): SentimentHotCandidate | null {
+function candidateMeetsDisplayQuality(candidate: SentimentHotCandidate, keywords: string[] = [], searchMode: SentimentHotSearchMode = "normal"): SentimentHotCandidate | null {
   const content = cleanSentimentCandidateContent(candidate.content || "");
   if (!candidate?.id || !content) return null;
   if (isLowQualitySentimentContent(content) || !isChineseSentimentCandidate(content)) return null;
@@ -2408,19 +2833,15 @@ function candidateMeetsDisplayQuality(
       sourceTier: sentimentCandidateSourceTier(candidate),
     },
   };
-  if (!options?.allowSemanticRejected && (normalized.metrics as any)?.semanticRelevant === false) return null;
-  if (!options?.allowStaleBackfill && !candidateHasAcceptableFreshness(normalized)) return null;
+  if ((normalized.metrics as any)?.semanticRelevant === false) return null;
+  if (!candidateHasAcceptableFreshness(normalized)) return null;
   if (!isUsefulHotCandidate(normalized)) return null;
   if (sentimentHotHanCount(content) < minimumSentimentHotHanCountForCandidate(normalized)) return null;
   if (isNoisyReaderCandidateContent(normalized, content)) return null;
   const relevanceKeywords = keywords;
   if (relevanceKeywords.length > 0 && candidateLooksOffTopicForKeywords(content, relevanceKeywords)) return null;
   if (searchMode === "strict" && candidateLooksOffTopicForStrictMode(content, relevanceKeywords)) return null;
-  if (relevanceKeywords.length > 0 && !candidateMatchesCurrentKeywords(normalized, relevanceKeywords, searchMode)) {
-    const canUseSingleStrongMatch = options?.allowSingleStrongMatch
-      && countMatchedNeedles(normalized, buildStrongRelevanceNeedlesForMode(relevanceKeywords, searchMode)) > 0;
-    if (!canUseSingleStrongMatch) return null;
-  }
+  if (relevanceKeywords.length > 0 && !candidateMatchesCurrentKeywords(normalized, relevanceKeywords, searchMode)) return null;
   return normalized;
 }
 
@@ -2443,16 +2864,10 @@ function sortRelevantHotCandidates(candidates: SentimentHotCandidate[], keywords
   );
 }
 
-export function sortSentimentHotCandidatePool(
-  candidates: SentimentHotCandidate[],
-  keywords: string[],
-  limit: number,
-  searchMode: SentimentHotSearchMode = "normal",
-  options?: { allowSemanticRejected?: boolean; allowSingleStrongMatch?: boolean; allowStaleBackfill?: boolean },
-): SentimentHotCandidate[] {
+function sortSentimentHotCandidatePool(candidates: SentimentHotCandidate[], keywords: string[], limit: number, searchMode: SentimentHotSearchMode = "normal"): SentimentHotCandidate[] {
   const relevanceNeedles = buildRelevanceNeedlesForMode(keywords, searchMode);
   return candidates
-    .map((candidate) => candidateMeetsDisplayQuality(candidate, keywords, searchMode, options))
+    .map((candidate) => candidateMeetsDisplayQuality(candidate, keywords, searchMode))
     .filter((candidate): candidate is SentimentHotCandidate => Boolean(candidate))
     .sort((a, b) => {
       if (searchMode === "strict" && relevanceNeedles.length > 0) {
@@ -2473,7 +2888,7 @@ export function sortSentimentHotCandidatePool(
     .slice(0, limit);
 }
 
-export function finalizeSentimentHotCandidatesForDisplay(candidates: SentimentHotCandidate[], limit: number, options?: { archiveId?: string; keywords?: string[]; excludeShown?: boolean; searchMode?: SentimentHotSearchMode; allowSingleStrongMatch?: boolean; allowStaleBackfill?: boolean }): SentimentHotCandidate[] {
+export function finalizeSentimentHotCandidatesForDisplay(candidates: SentimentHotCandidate[], limit: number, options?: { archiveId?: string; keywords?: string[]; excludeShown?: boolean; searchMode?: SentimentHotSearchMode }): SentimentHotCandidate[] {
   const out: SentimentHotCandidate[] = [];
   const seenKeys = new Set<string>();
   const shownIds = options?.archiveId ? getSentimentHotShownIds(options.archiveId) : new Set<string>();
@@ -2483,10 +2898,7 @@ export function finalizeSentimentHotCandidatesForDisplay(candidates: SentimentHo
   const searchMode = normalizeSentimentHotSearchMode(options?.searchMode);
   const relevanceNeedles = buildRelevanceNeedlesForMode(keywords, searchMode);
   const sorted = candidates
-    .map((candidate) => candidateMeetsDisplayQuality(candidate, keywords, searchMode, {
-      allowSingleStrongMatch: options?.allowSingleStrongMatch,
-      allowStaleBackfill: options?.allowStaleBackfill,
-    }))
+    .map((candidate) => candidateMeetsDisplayQuality(candidate, keywords, searchMode))
     .filter((candidate): candidate is SentimentHotCandidate => Boolean(candidate))
     .sort((a, b) => {
       if (searchMode === "strict" && relevanceNeedles.length > 0) {
@@ -2568,21 +2980,13 @@ async function fetchThreadsSearchPageCandidates(args: {
   limit: number;
   refresh?: boolean;
   searchMode?: SentimentHotSearchMode;
-  searchFilter?: "recent" | "top";
-  allowStaleBackfill?: boolean;
   deadlineAt?: number;
 }): Promise<SentimentHotCandidate[]> {
   const baseQueries = args.queryKeywords?.length
     ? buildModelOrderedThreadsSearchQueries(args.queryKeywords)
     : buildThreadsSearchQueries(args.keywords);
   const shownIds = getSentimentHotShownIds(args.archiveId);
-  const excluded = new Set([
-    ...getSentimentHotRefreshExcludedIds(args.archiveId),
-    ...readThreadsSearchCandidateCache(args.archiveId, args.keywords, SENTIMENT_HOT_CANDIDATE_POOL_TARGET, false, args.searchMode, {
-      allowStaleBackfill: args.allowStaleBackfill,
-    })
-      .map((candidate) => candidate.id),
-  ]);
+  const excluded = getSentimentHotRefreshExcludedIds(args.archiveId);
   const excludedHistoryKeys = getSentimentHotShownHistoryKeys(args.archiveId);
   const queries = buildOrderedSentimentQueries(
     baseQueries,
@@ -2595,45 +2999,64 @@ async function fetchThreadsSearchPageCandidates(args: {
   const dedupeKeys = new Set<string>();
   const addAll = (candidates: SentimentHotCandidate[]) => {
     for (const candidate of candidates) {
-      const candidateKeys = getSentimentHotCandidateHistoryKeys(candidate);
-      if (candidateKeys.some((historyKey) => excludedHistoryKeys.has(historyKey))) continue;
-      if (byId.has(candidate.id) || candidateKeys.some((key) => dedupeKeys.has(key))) continue;
+      const key = sentimentCandidateDedupeKey(candidate);
+      if (getSentimentHotCandidateHistoryKeys(candidate).some((historyKey) => excludedHistoryKeys.has(historyKey))) continue;
+      if (byId.has(candidate.id) || dedupeKeys.has(key)) continue;
       byId.set(candidate.id, candidate);
-      candidateKeys.forEach((key) => dedupeKeys.add(key));
+      dedupeKeys.add(key);
       if (byId.size >= args.limit) break;
     }
   };
 
-  if (!args.deadlineAt || remainingSentimentDeadlineMs(args.deadlineAt, 0) >= 3_000) {
-    const [browserCandidates, readerCandidates] = await Promise.all([
-      fetchThreadsBrowserSearchCandidates({
+  const sourceLimit = args.limit;
+  const sourceTimeoutMs = Math.min(
+    SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS,
+    remainingSentimentDeadlineMs(args.deadlineAt, SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS),
+  );
+  const browserPromise = (!args.deadlineAt || sourceTimeoutMs >= 3_000)
+    ? withSentimentTimeout(fetchThreadsBrowserSearchCandidates({
       archiveId: args.archiveId,
       keywords: args.keywords,
       queries: queries.slice(0, THREADS_BROWSER_QUERY_LIMIT),
-      limit: args.limit - byId.size,
+      limit: sourceLimit,
       excludeIds: excluded,
       deadlineAt: args.deadlineAt
-        ? Math.min(args.deadlineAt, Date.now() + THREADS_BROWSER_AUTH_SEARCH_TIMEOUT_MS)
-        : Date.now() + THREADS_BROWSER_AUTH_SEARCH_TIMEOUT_MS,
+        ? Math.min(args.deadlineAt, Date.now() + SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS)
+        : Date.now() + SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS,
       searchMode: args.searchMode,
-      searchFilter: args.searchFilter,
-      allowStaleBackfill: args.allowStaleBackfill,
-      }).catch(() => []),
-      fetchThreadsReaderSearchCandidates({
+    }).catch(() => []), sourceTimeoutMs, [])
+    : Promise.resolve([]);
+  const readerPromise = withSentimentTimeout(fetchThreadsReaderSearchCandidates({
       archiveId: args.archiveId,
       keywords: args.keywords,
-      queries: queries.slice(0, Math.min(8, THREADS_READER_QUERY_LIMIT)),
-      limit: args.limit,
+      queries: queries.slice(0, THREADS_READER_INITIAL_QUERY_LIMIT),
+      limit: sourceLimit,
       refresh: args.refresh,
       excludeIds: excluded,
       searchMode: args.searchMode,
-      searchFilter: args.searchFilter,
-      allowStaleBackfill: args.allowStaleBackfill,
       deadlineAt: args.deadlineAt,
-      }).catch(() => []),
-    ]);
-    addAll(browserCandidates);
-    if (byId.size < args.limit) addAll(readerCandidates);
+    }).catch(() => []), sourceTimeoutMs, []);
+  const [browserCandidates, readerCandidates] = await Promise.all([browserPromise, readerPromise]);
+  addAll(browserCandidates);
+  addAll(readerCandidates);
+
+  if (byId.size < args.limit) {
+    const remainingQueries = queries.slice(THREADS_READER_INITIAL_QUERY_LIMIT, THREADS_READER_TOTAL_QUERY_LIMIT);
+    for (let offset = 0; offset < remainingQueries.length && byId.size < args.limit; offset += THREADS_READER_QUERY_BATCH_SIZE) {
+      if (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 2_000) break;
+      const extraTimeoutMs = Math.min(6_000, remainingSentimentDeadlineMs(args.deadlineAt, 6_000));
+      const extraCandidates = await withSentimentTimeout(fetchThreadsReaderSearchCandidates({
+        archiveId: args.archiveId,
+        keywords: args.keywords,
+        queries: remainingQueries.slice(offset, offset + THREADS_READER_QUERY_BATCH_SIZE),
+        limit: sourceLimit - byId.size,
+        refresh: args.refresh,
+        excludeIds: excluded,
+        searchMode: args.searchMode,
+        deadlineAt: args.deadlineAt,
+      }).catch(() => []), extraTimeoutMs, []);
+      addAll(extraCandidates);
+    }
   }
 
   if (byId.size < args.limit) {
@@ -2643,22 +3066,43 @@ async function fetchThreadsSearchPageCandidates(args: {
       args.limit - byId.size,
       true,
       args.searchMode,
-      { allowStaleBackfill: args.allowStaleBackfill },
     ));
   }
 
-  const sorted = sortSentimentHotCandidatePool([...byId.values()], args.keywords, args.limit, args.searchMode, {
-    allowStaleBackfill: args.allowStaleBackfill,
-  });
+  const sorted = sortSentimentHotCandidatePool([...byId.values()], args.keywords, args.limit, args.searchMode);
   if (sorted.length > 0) writeThreadsSearchCandidateCache(args.archiveId, args.keywords, sorted, args.searchMode);
   return sorted;
 }
 
 type ThreadsSearchGraphqlTemplate = {
+  endpoint: string;
+  method: string;
   params: Record<string, string>;
   variables: Record<string, any>;
   headers: Record<string, string>;
 };
+
+function threadsSearchVariableQuery(value: unknown): string {
+  if (!value || typeof value !== "object") return "";
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (/^(?:query|search_query|searchQuery)$/i.test(key) && typeof child === "string" && cleanText(child)) return cleanText(child);
+    const nested = threadsSearchVariableQuery(child);
+    if (nested) return nested;
+  }
+  return "";
+}
+
+function replaceThreadsSearchVariables(value: unknown, query: string, after?: string | null): any {
+  if (Array.isArray(value)) return value.map((item) => replaceThreadsSearchVariables(item, query, after));
+  if (!value || typeof value !== "object") return value;
+  const next: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (/^(?:query|search_query|searchQuery)$/i.test(key) && typeof child === "string") next[key] = query;
+    else if (/^(?:after|cursor)$/i.test(key) && (child === null || typeof child === "string")) next[key] = after || null;
+    else next[key] = replaceThreadsSearchVariables(child, query, after);
+  }
+  return next;
+}
 
 function extractThreadsGraphqlPostMedia(post: any): SentimentHotMedia[] {
   const media: SentimentHotMedia[] = [];
@@ -2789,25 +3233,22 @@ async function requestThreadsGraphqlSearchPayload(args: {
   deadlineAt?: number;
 }): Promise<any | null> {
   const params = new URLSearchParams(args.template.params);
-  params.set("variables", JSON.stringify({
-    ...args.template.variables,
-    query: args.query,
-    after: args.after || null,
-    before: null,
-    first: 20,
-    last: null,
-  }));
-  const timeoutMs = Math.min(7_000, remainingSentimentDeadlineMs(args.deadlineAt, 7_000));
+  params.set("variables", JSON.stringify(replaceThreadsSearchVariables(args.template.variables, args.query, args.after)));
+  const method = args.template.method === "GET" ? "GET" : "POST";
+  const endpoint = method === "GET"
+    ? `${args.template.endpoint.split("?")[0]}?${params.toString()}`
+    : args.template.endpoint;
+  const timeoutMs = Math.min(18_000, remainingSentimentDeadlineMs(args.deadlineAt, 18_000));
   if (timeoutMs < 1_000) return null;
-  const response = await args.page.evaluate(async ({ body, headers, timeoutMs }: any) => {
+  const response = await args.page.evaluate(async ({ endpoint, method, body, headers, timeoutMs }: any) => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const result = await fetch("/graphql/query", {
-        method: "POST",
+      const result = await fetch(endpoint || "/graphql/query", {
+        method,
         credentials: "include",
         headers,
-        body,
+        body: method === "GET" ? undefined : body,
         signal: controller.signal,
       });
       return result.ok ? await result.text() : "";
@@ -2816,7 +3257,7 @@ async function requestThreadsGraphqlSearchPayload(args: {
     } finally {
       clearTimeout(timeoutId);
     }
-  }, { body: params.toString(), headers: args.template.headers, timeoutMs });
+  }, { endpoint, method, body: params.toString(), headers: args.template.headers, timeoutMs });
   return safeJson(response);
 }
 
@@ -2828,8 +3269,6 @@ async function fetchThreadsBrowserSearchCandidates(args: {
   excludeIds?: Set<string>;
   deadlineAt?: number;
   searchMode?: SentimentHotSearchMode;
-  searchFilter?: "recent" | "top";
-  allowStaleBackfill?: boolean;
 }): Promise<SentimentHotCandidate[]> {
   const cookies = readSentimentBrowserAuthCookies("threads");
   const sessionCookieCount = cookies.filter((cookie: any) => String(cookie?.name || "").toLowerCase() === "sessionid" && String(cookie?.value || "").trim()).length;
@@ -2842,24 +3281,6 @@ async function fetchThreadsBrowserSearchCandidates(args: {
   const excludedHistoryKeys = getSentimentHotShownHistoryKeys(args.archiveId);
   const results: SentimentHotCandidate[] = [];
   const resultKeys = new Set<string>();
-  const appendCandidates = (candidates: SentimentHotCandidate[]): number => {
-    let accepted = 0;
-    for (const candidate of candidates) {
-      if (excluded.has(candidate.id)) continue;
-      if (getSentimentHotCandidateHistoryKeys(candidate).some((historyKey) => excludedHistoryKeys.has(historyKey))) continue;
-      const normalized = candidateMeetsDisplayQuality(candidate, args.keywords, args.searchMode, {
-        allowStaleBackfill: args.allowStaleBackfill,
-      });
-      if (!normalized) continue;
-      const candidateKeys = getSentimentHotCandidateHistoryKeys(normalized);
-      if (candidateKeys.some((key) => resultKeys.has(key)) || results.some((entry) => entry.id === normalized.id)) continue;
-      results.push(normalized);
-      candidateKeys.forEach((key) => resultKeys.add(key));
-      accepted += 1;
-      if (results.length >= args.limit) break;
-    }
-    return accepted;
-  };
   try {
     const { chromium } = await import("playwright");
     const browser = await chromium.launch(buildLocalChromiumLaunchOptions());
@@ -2870,21 +3291,18 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
       });
       await addCookiesBestEffort(context, cookies as any[]);
-      await context.route("**/*", (route: any) => {
-        const resourceType = route.request().resourceType();
-        return resourceType === "image" || resourceType === "media" || resourceType === "font"
-          ? route.abort()
-          : route.continue();
-      });
       const page = await context.newPage();
       let template: ThreadsSearchGraphqlTemplate | null = null;
       const captureTemplate = async (request: any) => {
         try {
           if (template || !/graphql\/query/i.test(String(request.url?.() || ""))) return;
-          const params = new URLSearchParams(String(request.postData?.() || ""));
+          const requestUrl = new URL(String(request.url?.() || ""));
+          const params = new URLSearchParams(String(request.postData?.() || "") || requestUrl.search);
           const friendlyName = cleanText(params.get("fb_api_req_friendly_name"));
           const variables = safeJson(params.get("variables") || "");
-          if (!/search/i.test(friendlyName) || !variables || typeof variables !== "object" || typeof variables.query !== "string") return;
+          if (!variables || typeof variables !== "object") return;
+          const requestQuery = threadsSearchVariableQuery(variables);
+          if (!/search/i.test(friendlyName) && !requestQuery) return;
           const requestParams: Record<string, string> = {};
           for (const [key, value] of params.entries()) {
             if (key !== "variables") requestParams[key] = value;
@@ -2894,108 +3312,112 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           for (const [key, value] of Object.entries(allHeaders || {})) {
             if (key === "content-type" || key.startsWith("x-")) headers[key] = String(value);
           }
-          template = { params: requestParams, variables, headers };
+          template = {
+            endpoint: requestUrl.pathname || "/graphql/query",
+            method: String(request.method?.() || "POST").toUpperCase(),
+            params: requestParams,
+            variables,
+            headers,
+          };
         } catch {
           // Continue waiting for the next search request.
         }
       };
-      const bootstrapQueries = rotateSentimentQueries(args.queries, excluded.size).slice(0, 8);
-      for (let offset = 0; offset < bootstrapQueries.length && results.length < args.limit; offset += 2) {
-        const remainingMs = remainingSentimentDeadlineMs(args.deadlineAt, 0);
-        if (args.deadlineAt && (remainingMs < 3_000 || (offset > 0 && remainingMs < 8_000))) break;
-        const batch = bootstrapQueries.slice(offset, offset + 2);
-        const rows = await Promise.all(batch.map(async (bootstrapQuery, index) => {
-          const queryPage = offset === 0 && index === 0 ? page : await context.newPage();
-          queryPage.on("request", captureTemplate);
-          try {
-            const searchUrl = `https://www.threads.com/search?q=${encodeURIComponent(bootstrapQuery)}${args.searchFilter === "top" ? "" : "&filter=recent"}`;
-            await queryPage.goto(searchUrl, {
-              waitUntil: "domcontentloaded",
-              timeout: Math.min(6_000, remainingSentimentDeadlineMs(args.deadlineAt, 6_000)),
-            }).catch(() => undefined);
-            await queryPage.waitForSelector('a[href*="/post/"]', {
-              timeout: Math.min(1_500, remainingSentimentDeadlineMs(args.deadlineAt, 1_500)),
-            }).catch(() => undefined);
-            await queryPage.mouse.wheel(0, 2200).catch(() => undefined);
-            await queryPage.waitForTimeout(Math.min(250, remainingSentimentDeadlineMs(args.deadlineAt, 250)));
-            const visible = await queryPage.evaluate(() => ({
-              text: String(document.body?.innerText || ""),
-              sourceUrls: [...new Set(Array.from(document.querySelectorAll('a[href*="/post/"]'))
-                .map((link) => (link as HTMLAnchorElement).href)
-                .filter(Boolean))],
-              cards: Array.from(document.querySelectorAll('a[href*="/post/"]')).map((link) => {
-                let node: HTMLElement | null = link as HTMLElement;
-                for (let depth = 0; node && depth < 8; depth += 1, node = node.parentElement) {
-                  const text = String(node.innerText || "").trim();
-                  if (text.length >= 60) return { url: (link as HTMLAnchorElement).href, text };
-                }
-                return null;
-              }).filter((card): card is { url: string; text: string } => Boolean(card)),
-            })).catch(() => ({ text: "", sourceUrls: [] as string[], cards: [] as Array<{ url: string; text: string }> }));
-            const parsedCards = visible.cards.flatMap((card) => parseThreadsSearchTextCandidates({
-              text: card.text,
-              query: bootstrapQuery,
-              keywords: args.keywords,
-              sourceUrl: card.url,
-              sourceUrls: [card.url],
-              limit: 1,
-            }));
-            const parsedVisible = parsedCards.length > 0 ? parsedCards : parseThreadsSearchTextCandidates({
-              text: visible.text,
-              query: bootstrapQuery,
-              keywords: args.keywords,
-              sourceUrl: queryPage.url(),
-              sourceUrls: visible.sourceUrls,
-              limit: args.limit,
-            });
-            return { bootstrapQuery, visible, parsedVisible };
-          } finally {
-            queryPage.off("request", captureTemplate);
-            if (queryPage !== page) await queryPage.close().catch(() => undefined);
-          }
-        }));
-        for (const row of rows) {
-          const accepted = appendCandidates(row.parsedVisible);
-          const maxHot = row.parsedVisible.reduce((max, candidate) => Math.max(max, Number(candidate.hotScore || 0)), 0);
-          console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} query=${JSON.stringify(row.bootstrapQuery)} domLinks=${row.visible.sourceUrls.length} domCards=${row.visible.cards.length} domParsed=${row.parsedVisible.length} maxHot=${maxHot} domAccepted=${accepted} total=${results.length}`);
+      page.on("request", captureTemplate);
+      const bootstrapQueries = [...new Set(args.queries.slice(0, THREADS_BROWSER_QUERY_LIMIT).filter(Boolean))];
+      for (const bootstrapQuery of bootstrapQueries) {
+        if (template || (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 3_000)) break;
+        await page.goto(`https://www.threads.com/search?q=${encodeURIComponent(bootstrapQuery)}`, {
+          waitUntil: "domcontentloaded",
+          timeout: Math.min(12_000, remainingSentimentDeadlineMs(args.deadlineAt, 12_000)),
+        }).catch(() => undefined);
+        for (let attempt = 0; !template && attempt < 6; attempt += 1) {
+          if (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 2_000) break;
+          await page.mouse.wheel(0, 2200).catch(() => undefined);
+          await page.waitForTimeout(Math.min(600, remainingSentimentDeadlineMs(args.deadlineAt, 600)));
+        }
+        const bodyText = await page.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
+        const postUrls = await page.$$eval('a[href*="/post/"]', (anchors: any[]) => anchors
+          .map((anchor) => String(anchor.href || anchor.getAttribute?.("href") || "").trim())
+          .filter(Boolean)).catch(() => []);
+        const domCandidates = parseThreadsSearchTextCandidates({
+          text: bodyText,
+          query: bootstrapQuery,
+          keywords: args.keywords,
+          limit: Math.max(0, args.limit - results.length),
+          sourceUrl: String(page.url?.() || `https://www.threads.com/search?q=${encodeURIComponent(bootstrapQuery)}`),
+          sourceUrls: postUrls,
+        });
+        for (const candidate of domCandidates) {
+          if (excluded.has(candidate.id)) continue;
+          const normalized = candidateMeetsDisplayQuality(candidate, args.keywords, args.searchMode);
+          if (!normalized) continue;
+          const dedupeKey = sentimentCandidateDedupeKey(normalized);
+          if (resultKeys.has(dedupeKey) || results.some((entry) => entry.id === normalized.id)) continue;
+          results.push(normalized);
+          resultKeys.add(dedupeKey);
           if (results.length >= args.limit) break;
         }
       }
+      page.off("request", captureTemplate);
 
       if (template) {
-        const queries = selectThreadsGraphqlSearchQueries({
-          queries: args.queries,
-          excludedCount: excluded.size,
-        });
-        const appendPayload = (payload: any, query: string, pageNumber: number): number => {
-          const parsed = parseThreadsGraphqlSearchPayload({ payload, query, keywords: args.keywords });
-          const accepted = appendCandidates(parsed);
-          const pageLabel = pageNumber > 1 ? ` page=${pageNumber}` : "";
-          console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} query=${JSON.stringify(query)}${pageLabel} graphql=${parsed.length} accepted=${accepted} total=${results.length}`);
-          return accepted;
-        };
-        const firstPages = await Promise.all(queries.map(async (query, index) => {
-          const payload = await requestThreadsGraphqlSearchPayload({ page, template: template!, query, deadlineAt: args.deadlineAt });
-          return { query, index, payload, accepted: appendPayload(payload, query, 1) };
-        }));
-        if (results.length < args.limit && (!args.deadlineAt || remainingSentimentDeadlineMs(args.deadlineAt, 0) >= 2_000)) {
-          const nextTargets = firstPages
-            .map((item) => ({ ...item, pageInfo: parseThreadsGraphqlSearchPageInfo(item.payload) }))
-            .filter((item) => item.pageInfo?.hasNextPage && item.pageInfo.endCursor)
-            .sort((a, b) => b.accepted - a.accepted || a.index - b.index)
-            .slice(0, 8);
-          const nextPages = await Promise.all(nextTargets.map(async (item) => ({
-            query: item.query,
-            payload: await requestThreadsGraphqlSearchPayload({
-              page,
-              template: template!,
-              query: item.query,
-              after: item.pageInfo!.endCursor,
-              deadlineAt: args.deadlineAt,
-            }),
+        const shouldPageQueries = args.limit >= 40;
+        const queries = args.queries.slice(0, shouldPageQueries ? Math.min(24, THREADS_BROWSER_QUERY_LIMIT) : THREADS_BROWSER_QUERY_LIMIT);
+        for (let offset = 0; offset < queries.length && results.length < args.limit; offset += THREADS_BROWSER_QUERY_BATCH_SIZE) {
+          if (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 2_000) break;
+          const batch = queries.slice(offset, offset + THREADS_BROWSER_QUERY_BATCH_SIZE);
+          const payloads = await Promise.all(batch.map(async (query) => ({
+            query,
+            payload: await requestThreadsGraphqlSearchPayload({ page, template: template!, query, deadlineAt: args.deadlineAt }),
           })));
-          for (const item of nextPages) {
-            appendPayload(item.payload, item.query, 2);
+          const payloadsWithNext = await Promise.all(payloads.map(async (item) => {
+            const pageInfo = shouldPageQueries ? parseThreadsGraphqlSearchPageInfo(item.payload) : null;
+            const nextPayload = pageInfo?.hasNextPage && pageInfo.endCursor
+              && (!args.deadlineAt || remainingSentimentDeadlineMs(args.deadlineAt, 0) >= 2_000)
+              ? await requestThreadsGraphqlSearchPayload({
+                page,
+                template: template!,
+                query: item.query,
+                after: pageInfo.endCursor,
+                deadlineAt: args.deadlineAt,
+              })
+              : null;
+            return { ...item, nextPayload };
+          }));
+          for (const item of payloadsWithNext) {
+            const parsed = parseThreadsGraphqlSearchPayload({ payload: item.payload, query: item.query, keywords: args.keywords });
+            let accepted = 0;
+            for (const candidate of parsed) {
+              if (excluded.has(candidate.id)) continue;
+              if (getSentimentHotCandidateHistoryKeys(candidate).some((historyKey) => excludedHistoryKeys.has(historyKey))) continue;
+              const normalized = candidateMeetsDisplayQuality(candidate, args.keywords, args.searchMode);
+              if (!normalized) continue;
+              const dedupeKey = sentimentCandidateDedupeKey(normalized);
+              if (resultKeys.has(dedupeKey) || results.some((entry) => entry.id === normalized.id)) continue;
+              results.push(normalized);
+              resultKeys.add(dedupeKey);
+              accepted += 1;
+              if (results.length >= args.limit) break;
+            }
+            console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} query=${JSON.stringify(item.query)} graphql=${parsed.length} accepted=${accepted} total=${results.length}`);
+            if (results.length < args.limit && item.nextPayload) {
+              const nextParsed = parseThreadsGraphqlSearchPayload({ payload: item.nextPayload, query: item.query, keywords: args.keywords });
+              let nextAccepted = 0;
+              for (const candidate of nextParsed) {
+                if (excluded.has(candidate.id)) continue;
+                if (getSentimentHotCandidateHistoryKeys(candidate).some((historyKey) => excludedHistoryKeys.has(historyKey))) continue;
+                const normalized = candidateMeetsDisplayQuality(candidate, args.keywords, args.searchMode);
+                if (!normalized) continue;
+                const dedupeKey = sentimentCandidateDedupeKey(normalized);
+                if (resultKeys.has(dedupeKey) || results.some((entry) => entry.id === normalized.id)) continue;
+                results.push(normalized);
+                resultKeys.add(dedupeKey);
+                nextAccepted += 1;
+                if (results.length >= args.limit) break;
+              }
+              console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} query=${JSON.stringify(item.query)} page=2 graphql=${nextParsed.length} accepted=${nextAccepted} total=${results.length}`);
+            }
             if (results.length >= args.limit) break;
           }
         }
@@ -3011,16 +3433,10 @@ async function fetchThreadsBrowserSearchCandidates(args: {
     // Playwright is optional; reader/cache/database paths still keep the Telegram flow alive.
   }
   console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} status=done total=${results.length}`);
-  return sortSentimentHotCandidatePool(results, args.keywords, args.limit, args.searchMode, {
-    allowStaleBackfill: args.allowStaleBackfill,
-  });
+  return sortSentimentHotCandidatePool(results, args.keywords, args.limit, args.searchMode);
 }
 
 const JINA_READER_PREFIX = "https://r.jina.ai/http://";
-
-export function buildJinaReaderUrl(targetUrl: string): string {
-  return `${JINA_READER_PREFIX}${cleanText(targetUrl).replace(/^https?:\/\//i, "")}`;
-}
 
 async function fetchThreadsReaderSearchCandidates(args: {
   archiveId: string;
@@ -3030,8 +3446,6 @@ async function fetchThreadsReaderSearchCandidates(args: {
   refresh?: boolean;
   excludeIds?: Set<string>;
   searchMode?: SentimentHotSearchMode;
-  searchFilter?: "recent" | "top";
-  allowStaleBackfill?: boolean;
   deadlineAt?: number;
 }): Promise<SentimentHotCandidate[]> {
   const excluded = args.excludeIds || (args.refresh ? getSentimentHotRefreshExcludedIds(args.archiveId) : getSentimentHotExcludedIds(args.archiveId));
@@ -3039,9 +3453,9 @@ async function fetchThreadsReaderSearchCandidates(args: {
   const allKeys = new Set<string>();
   const searches = await Promise.all(
     args.queries.map(async (query) => {
-      const targetUrl = `https://www.threads.com/search?q=${encodeURIComponent(query)}${args.searchFilter === "top" ? "" : "&filter=recent"}`;
+      const targetUrl = `https://www.threads.com/search?q=${encodeURIComponent(query)}`;
       try {
-        const response = await fetch(buildJinaReaderUrl(targetUrl), {
+        const response = await fetch(`${JINA_READER_PREFIX}${targetUrl}`, {
           headers: {
             "user-agent": "Mozilla/5.0",
             accept: "text/plain, text/markdown, */*",
@@ -3066,9 +3480,7 @@ async function fetchThreadsReaderSearchCandidates(args: {
     });
     for (const candidate of parsed) {
       if (excluded.has(candidate.id)) continue;
-      const normalized = candidateMeetsDisplayQuality(candidate, args.keywords, args.searchMode, {
-        allowStaleBackfill: args.allowStaleBackfill,
-      });
+      const normalized = candidateMeetsDisplayQuality(candidate, args.keywords, args.searchMode);
       if (!normalized) continue;
       const dedupeKey = sentimentCandidateDedupeKey(normalized);
       if (all.some((item) => item.id === normalized.id) || allKeys.has(dedupeKey)) continue;
@@ -3078,9 +3490,66 @@ async function fetchThreadsReaderSearchCandidates(args: {
     }
     if (all.length >= args.limit) break;
   }
-  return sortSentimentHotCandidatePool(all, args.keywords, args.limit, args.searchMode, {
-    allowStaleBackfill: args.allowStaleBackfill,
-  });
+  return sortSentimentHotCandidatePool(all, args.keywords, args.limit, args.searchMode);
+}
+
+async function fetchInstagramReaderSearchCandidates(args: {
+  archiveId: string;
+  keywords: string[];
+  queries: string[];
+  limit: number;
+  refresh?: boolean;
+  excludeIds?: Set<string>;
+}): Promise<SentimentHotCandidate[]> {
+  const excluded = args.excludeIds || (args.refresh ? getSentimentHotRefreshExcludedIds(args.archiveId) : getSentimentHotExcludedIds(args.archiveId));
+  const all: SentimentHotCandidate[] = [];
+  const allKeys = new Set<string>();
+  const searches = await Promise.all(
+    args.queries.map(async (query) => {
+      const normalizedQuery = cleanText(query).replace(/^#/, "");
+      const targets = [
+        `https://www.instagram.com/explore/search/keyword/?q=${encodeURIComponent(normalizedQuery)}`,
+        hasHan(normalizedQuery) ? `https://www.instagram.com/explore/tags/${encodeURIComponent(normalizedQuery)}/` : "",
+      ].filter(Boolean);
+      const texts: Array<{ query: string; targetUrl: string; text: string }> = [];
+      for (const targetUrl of targets) {
+        try {
+          const response = await fetch(`${JINA_READER_PREFIX}${targetUrl}`, {
+            headers: {
+              "user-agent": "Mozilla/5.0",
+              accept: "text/plain, text/markdown, */*",
+              "cache-control": "max-age=300",
+            },
+            signal: AbortSignal.timeout(8_000),
+          });
+          if (response.ok) texts.push({ query, targetUrl, text: await response.text() });
+        } catch {
+          // Instagram reader is an opportunistic extra source.
+        }
+      }
+      return texts;
+    }),
+  );
+  for (const search of searches.flat()) {
+    const parsed = parseInstagramReaderSearchMarkdownCandidates({
+      text: search.text,
+      query: search.query,
+      keywords: args.keywords,
+      sourceUrl: search.targetUrl,
+      limit: args.limit,
+    });
+    for (const candidate of parsed) {
+      if (excluded.has(candidate.id)) continue;
+      if (!candidateTouchesCurrentKeywords(candidate, args.keywords)) continue;
+      const dedupeKey = sentimentCandidateDedupeKey(candidate);
+      if (all.some((item) => item.id === candidate.id) || allKeys.has(dedupeKey)) continue;
+      allKeys.add(dedupeKey);
+      all.push(candidate);
+      if (all.length >= args.limit) break;
+    }
+    if (all.length >= args.limit) break;
+  }
+  return sortUsefulHotCandidates(all, args.limit);
 }
 
 function decodeMarkdownLinkText(value: string): string {
@@ -5073,62 +5542,29 @@ function isLikelyInstagramAuthor(value: string) {
 
 const THREADS_SEARCH_CACHE_FILE = resolveRuntimeFile("sentiment_threads_search_cache.json");
 const THREADS_SEARCH_CACHE_VERSION = 5;
-const THREADS_SEARCH_COMPATIBLE_CACHE_VERSIONS = new Set([3, 4, THREADS_SEARCH_CACHE_VERSION]);
-
-function threadsSearchCacheKeys(archiveId: string, keywords: string[], searchMode: SentimentHotSearchMode = "strict"): string[] {
-  const scope = cleanText(archiveId) || "default";
-  const mode = normalizeSentimentHotSearchMode(searchMode);
-  return buildThreadsSearchQueries(keywords)
-    .slice(0, 8)
-    .map((keyword) => `${scope}::${mode}::${keyword.toLowerCase()}`);
-}
-
-function readThreadsSearchCacheState(): Record<string, { at: string; version?: number; candidates: SentimentHotCandidate[] }> {
-  try {
-    if (!fs.existsSync(THREADS_SEARCH_CACHE_FILE)) return {};
-    const parsed = JSON.parse(fs.readFileSync(THREADS_SEARCH_CACHE_FILE, "utf8"));
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
+const THREADS_SEARCH_CACHE_COMPATIBLE_VERSIONS = new Set([3, 4, THREADS_SEARCH_CACHE_VERSION]);
+type ThreadsSearchCacheState = Record<string, { at: string; version?: number; candidates: SentimentHotCandidate[] }>;
+let threadsSearchCacheSnapshot: { mtimeMs: number; size: number; state: ThreadsSearchCacheState } | undefined;
 
 function isCompatibleThreadsSearchCacheRow(
   row: { at: string; version?: number; candidates: SentimentHotCandidate[] } | undefined,
   maxAgeMs = SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS,
 ): boolean {
+  const at = Date.parse(String(row?.at || ""));
   return Boolean(
     row
-    && THREADS_SEARCH_COMPATIBLE_CACHE_VERSIONS.has(Number(row.version || 0))
-    && Date.now() - new Date(row.at).getTime() <= maxAgeMs,
+    && THREADS_SEARCH_CACHE_COMPATIBLE_VERSIONS.has(Number(row.version || 0))
+    && Array.isArray(row.candidates)
+    && Number.isFinite(at)
+    && Date.now() - at <= maxAgeMs,
   );
 }
 
-function compactThreadsSearchCacheState(
+function threadsSearchArchiveCacheKeys(
   state: ReturnType<typeof readThreadsSearchCacheState>,
-  maxAgeMs = SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS,
-) {
-  const keysByArchive = new Map<string, string[]>();
-  for (const [key, row] of Object.entries(state)) {
-    if (!isCompatibleThreadsSearchCacheRow(row, maxAgeMs)) {
-      delete state[key];
-      continue;
-    }
-    row.candidates = (row.candidates || []).slice(0, THREADS_SEARCH_CACHE_CANDIDATE_LIMIT);
-    const archiveId = key.split("::", 1)[0];
-    const keys = keysByArchive.get(archiveId) || [];
-    keys.push(key);
-    keysByArchive.set(archiveId, keys);
-  }
-  for (const keys of keysByArchive.values()) {
-    keys
-      .sort((a, b) => new Date(state[b]?.at || 0).getTime() - new Date(state[a]?.at || 0).getTime())
-      .slice(THREADS_SEARCH_CACHE_MAX_ROWS_PER_ARCHIVE)
-      .forEach((key) => delete state[key]);
-  }
-}
-
-function threadsSearchArchiveCacheKeys(state: ReturnType<typeof readThreadsSearchCacheState>, archiveId: string, searchMode: SentimentHotSearchMode): string[] {
+  archiveId: string,
+  searchMode: SentimentHotSearchMode,
+): string[] {
   const scopePrefix = `${cleanText(archiveId) || "default"}::`;
   const mode = normalizeSentimentHotSearchMode(searchMode);
   const modePrefix = `${scopePrefix}${mode}::`;
@@ -5142,26 +5578,66 @@ function threadsSearchArchiveCacheKeys(state: ReturnType<typeof readThreadsSearc
   });
 }
 
-function threadsSearchStoredKeyword(key: string, archiveId: string, searchMode: SentimentHotSearchMode): string {
+function threadsSearchStoredKeyword(key: string, archiveId: string): string {
   const scopePrefix = `${cleanText(archiveId) || "default"}::`;
-  const suffix = key.slice(scopePrefix.length).replace(/^(?:normal|strict)::/i, "");
-  return cleanText(suffix);
+  return cleanText(key.slice(scopePrefix.length).replace(/^(?:normal|strict)::/i, ""));
 }
 
-function writeThreadsSearchCandidateCache(
-  archiveId: string,
-  keywords: string[],
-  candidates: SentimentHotCandidate[],
-  searchMode: SentimentHotSearchMode = "strict",
-) {
-  withExclusiveJsonFileLock(THREADS_SEARCH_CACHE_FILE, () => {
-    const state = readThreadsSearchCacheState();
-    const maxAgeMs = SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS;
+function compactThreadsSearchCacheState(state: ReturnType<typeof readThreadsSearchCacheState>): void {
+  const keysByArchive = new Map<string, string[]>();
+  for (const [key, row] of Object.entries(state)) {
+    if (!isCompatibleThreadsSearchCacheRow(row, SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS)) {
+      delete state[key];
+      continue;
+    }
+    row.candidates = (row.candidates || []).slice(0, THREADS_SEARCH_CACHE_CANDIDATE_LIMIT);
+    const archiveId = cleanText(key.split("::", 1)[0]);
+    const keys = keysByArchive.get(archiveId) || [];
+    keys.push(key);
+    keysByArchive.set(archiveId, keys);
+  }
+  for (const keys of keysByArchive.values()) {
+    keys
+      .sort((a, b) => new Date(state[b]?.at || 0).getTime() - new Date(state[a]?.at || 0).getTime())
+      .slice(THREADS_SEARCH_CACHE_MAX_ROWS_PER_ARCHIVE)
+      .forEach((key) => delete state[key]);
+  }
+}
+
+function threadsSearchCacheKeys(archiveId: string, keywords: string[], searchMode: SentimentHotSearchMode = "strict"): string[] {
+  const scope = cleanText(archiveId) || "default";
+  const mode = normalizeSentimentHotSearchMode(searchMode);
+  return buildThreadsSearchQueries(keywords)
+    .slice(0, 8)
+    .map((keyword) => `${scope}::${mode}::${keyword.toLowerCase()}`);
+}
+
+function readThreadsSearchCacheState(force = false): ThreadsSearchCacheState {
+  try {
+    if (!fs.existsSync(THREADS_SEARCH_CACHE_FILE)) return {};
+    const stat = fs.statSync(THREADS_SEARCH_CACHE_FILE);
+    if (!force && threadsSearchCacheSnapshot
+      && threadsSearchCacheSnapshot.mtimeMs === stat.mtimeMs
+      && threadsSearchCacheSnapshot.size === stat.size) {
+      return threadsSearchCacheSnapshot.state;
+    }
+    const parsed = JSON.parse(fs.readFileSync(THREADS_SEARCH_CACHE_FILE, "utf8"));
+    const state = parsed && typeof parsed === "object" ? parsed as ThreadsSearchCacheState : {};
+    threadsSearchCacheSnapshot = { mtimeMs: stat.mtimeMs, size: stat.size, state };
+    return state;
+  } catch {
+    return {};
+  }
+}
+
+function writeThreadsSearchCandidateCache(archiveId: string, keywords: string[], candidates: SentimentHotCandidate[], searchMode: SentimentHotSearchMode = "strict") {
+  const written = withExclusiveJsonFileLock(THREADS_SEARCH_CACHE_FILE, () => {
+    const state = readThreadsSearchCacheState(true);
+    const maxAgeMs = 24 * 60 * 60 * 1000;
     const now = new Date().toISOString();
     for (const key of threadsSearchCacheKeys(archiveId, keywords, searchMode)) {
       const existingRow = state[key];
-      const canReuseExisting = existingRow?.version === THREADS_SEARCH_CACHE_VERSION
-        && Date.now() - new Date(existingRow.at).getTime() <= maxAgeMs;
+      const canReuseExisting = isCompatibleThreadsSearchCacheRow(existingRow, maxAgeMs);
       const byId = new Map<string, SentimentHotCandidate>();
       const byDedupeKey = new Set<string>();
       const add = (candidate: SentimentHotCandidate) => {
@@ -5178,41 +5654,33 @@ function writeThreadsSearchCandidateCache(
       state[key] = {
         at: now,
         version: THREADS_SEARCH_CACHE_VERSION,
-        candidates: sortSentimentHotCandidatePool(
-          [...byId.values()],
-          keywords,
-          THREADS_SEARCH_CACHE_CANDIDATE_LIMIT,
-          searchMode,
-          { allowSemanticRejected: true, allowStaleBackfill: true },
-        )
+        candidates: sortSentimentHotCandidatePool([...byId.values()], keywords, THREADS_SEARCH_CACHE_CANDIDATE_LIMIT, searchMode)
           .map((candidate) => ({ ...candidate, warnings: uniqueSentimentWarnings(candidate.warnings || []) })),
       };
     }
-    compactThreadsSearchCacheState(state, maxAgeMs);
-    const temporaryPath = `${THREADS_SEARCH_CACHE_FILE}.${process.pid}.${Date.now()}.tmp`;
-    fs.writeFileSync(temporaryPath, JSON.stringify(state, null, 2), "utf8");
-    fs.renameSync(temporaryPath, THREADS_SEARCH_CACHE_FILE);
+    compactThreadsSearchCacheState(state);
+    fs.mkdirSync(path.dirname(THREADS_SEARCH_CACHE_FILE), { recursive: true });
+    const tempFile = `${THREADS_SEARCH_CACHE_FILE}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tempFile, JSON.stringify(state, null, 2), "utf8");
+    fs.renameSync(tempFile, THREADS_SEARCH_CACHE_FILE);
+    const stat = fs.statSync(THREADS_SEARCH_CACHE_FILE);
+    threadsSearchCacheSnapshot = { mtimeMs: stat.mtimeMs, size: stat.size, state };
   });
+  if (!written) console.warn("[sentiment_hot_cache] candidate cache write skipped because the file is busy");
 }
 
-function readThreadsSearchCandidateCache(
-  archiveId: string,
-  keywords: string[],
-  limit: number,
-  excludeShown = false,
-  searchMode: SentimentHotSearchMode = "strict",
-  options?: { allowSingleStrongMatch?: boolean; allowStaleBackfill?: boolean },
-): SentimentHotCandidate[] {
+function readThreadsSearchCandidateCache(archiveId: string, keywords: string[], limit: number, excludeShown = false, searchMode: SentimentHotSearchMode = "strict"): SentimentHotCandidate[] {
   const state = readThreadsSearchCacheState();
   const excluded = excludeShown ? getSentimentHotRefreshExcludedIds(archiveId) : getSentimentHotExcludedIds(archiveId);
   const byId = new Map<string, SentimentHotCandidate>();
+  const maxAgeMs = 24 * 60 * 60 * 1000;
   const primaryKeys = threadsSearchCacheKeys(archiveId, keywords, searchMode);
   const archiveKeys = threadsSearchArchiveCacheKeys(state, archiveId, searchMode)
     .filter((key) => !primaryKeys.includes(key))
     .sort((a, b) => new Date(state[b]?.at || 0).getTime() - new Date(state[a]?.at || 0).getTime());
   for (const key of [...primaryKeys, ...archiveKeys]) {
     const row = state[key];
-    if (!isCompatibleThreadsSearchCacheRow(row)) continue;
+    if (!isCompatibleThreadsSearchCacheRow(row, maxAgeMs)) continue;
     for (const candidate of row.candidates || []) {
       if (!candidate?.id || excluded.has(candidate.id)) continue;
       const content = cleanThreadsReaderContent(candidate.content || "");
@@ -5220,12 +5688,12 @@ function readThreadsSearchCandidateCache(
         ...candidate,
         content,
         warnings: uniqueSentimentWarnings([...(candidate.warnings || []), THREADS_SEARCH_CACHE_WARNING]),
-      }, keywords, searchMode, options);
+      }, keywords, searchMode);
       if (!normalized) continue;
       byId.set(normalized.id, normalized);
     }
   }
-  return sortSentimentHotCandidatePool([...byId.values()], keywords, limit, searchMode, options);
+  return sortSentimentHotCandidatePool([...byId.values()], keywords, limit, searchMode);
 }
 
 function isArchiveScopedFallbackCandidate(candidate: SentimentHotCandidate): boolean {
@@ -5234,6 +5702,7 @@ function isArchiveScopedFallbackCandidate(candidate: SentimentHotCandidate): boo
 
 function readArchiveScopedThreadsSearchKeywords(archiveId: string, limit: number, searchMode: SentimentHotSearchMode): string[] {
   const state = readThreadsSearchCacheState();
+  const scopedPrefix = `${cleanText(archiveId) || "default"}::${normalizeSentimentHotSearchMode(searchMode)}::`;
   const maxAgeMs = SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS;
   const keywords: string[] = [];
   const seen = new Set<string>();
@@ -5242,7 +5711,7 @@ function readArchiveScopedThreadsSearchKeywords(archiveId: string, limit: number
   for (const key of archiveKeys) {
     const row = state[key];
     if (!isCompatibleThreadsSearchCacheRow(row, maxAgeMs)) continue;
-    const keyword = threadsSearchStoredKeyword(key, archiveId, searchMode);
+    const keyword = threadsSearchStoredKeyword(key, archiveId);
     if (!keyword || seen.has(keyword)) continue;
     const hasUsefulCandidate = (row.candidates || []).some((candidate) => {
       const content = cleanThreadsReaderContent(candidate?.content || "");
@@ -5256,7 +5725,7 @@ function readArchiveScopedThreadsSearchKeywords(archiveId: string, limit: number
             ...(candidate.metrics || {}),
             archiveScopedFallback: true,
           },
-        }, [keyword], searchMode, { allowSingleStrongMatch: true }),
+        }, [keyword], searchMode),
       );
     });
     if (!hasUsefulCandidate) continue;
@@ -5267,33 +5736,21 @@ function readArchiveScopedThreadsSearchKeywords(archiveId: string, limit: number
   return keywords;
 }
 
-function readArchiveScopedThreadsCandidateBackfill(
-  archiveId: string,
-  keywords: string[],
-  limit: number,
-  excludeShown = false,
-  searchMode: SentimentHotSearchMode = "strict",
-  options?: { allowSingleStrongMatch?: boolean; allowStaleBackfill?: boolean },
-): SentimentHotCandidate[] {
+function readArchiveScopedThreadsCandidateBackfill(archiveId: string, keywords: string[], limit: number, excludeShown = false, searchMode: SentimentHotSearchMode = "strict"): SentimentHotCandidate[] {
   const state = readThreadsSearchCacheState();
   const excluded = excludeShown ? getSentimentHotRefreshExcludedIds(archiveId) : getSentimentHotExcludedIds(archiveId);
   const byId = new Map<string, SentimentHotCandidate>();
   const maxAgeMs = SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS;
   const archiveKeys = threadsSearchArchiveCacheKeys(state, archiveId, searchMode)
     .sort((a, b) => new Date(state[b]?.at || 0).getTime() - new Date(state[a]?.at || 0).getTime());
-  const archiveBackfillOptions = {
-    ...options,
-    allowSingleStrongMatch: options?.allowSingleStrongMatch || searchMode === "normal",
-  };
   for (const key of archiveKeys) {
     const row = state[key];
     if (!isCompatibleThreadsSearchCacheRow(row, maxAgeMs)) continue;
-    const storedKeyword = threadsSearchStoredKeyword(key, archiveId, searchMode);
+    const storedKeyword = threadsSearchStoredKeyword(key, archiveId);
     if (!storedKeyword) continue;
     for (const candidate of row.candidates || []) {
       if (!candidate?.id || excluded.has(candidate.id) || byId.has(candidate.id)) continue;
       const content = cleanThreadsReaderContent(candidate.content || "");
-      if (countMatchedNeedles({ ...candidate, content }, buildStrongRelevanceNeedles([storedKeyword])) < 1) continue;
       const normalized = candidateMeetsDisplayQuality({
         ...candidate,
         content,
@@ -5302,7 +5759,7 @@ function readArchiveScopedThreadsCandidateBackfill(
           archiveScopedFallback: true,
           archiveScopedKeyword: storedKeyword,
         },
-      }, keywords, searchMode, archiveBackfillOptions);
+      }, keywords, searchMode);
       if (!normalized) continue;
       byId.set(normalized.id, {
         ...normalized,
@@ -5315,7 +5772,84 @@ function readArchiveScopedThreadsCandidateBackfill(
     }
     if (byId.size >= limit) break;
   }
-  return sortSentimentHotCandidatePool([...byId.values()], keywords, limit, searchMode, archiveBackfillOptions);
+  return sortSentimentHotCandidatePool([...byId.values()], keywords, limit, searchMode);
+}
+
+export type SentimentHotCandidatePoolStat = {
+  archiveId: string;
+  searchMode: SentimentHotSearchMode;
+  readyCount: number;
+  newestAt: string;
+};
+
+function readGlobalThreadsCandidateBackfill(
+  archiveId: string,
+  keywords: string[],
+  limit: number,
+  searchMode: SentimentHotSearchMode,
+): SentimentHotCandidate[] {
+  const state = readThreadsSearchCacheState();
+  const excluded = getSentimentHotExcludedIds(archiveId);
+  const byId = new Map<string, SentimentHotCandidate>();
+  const candidateTarget = Math.max(limit * 3, 120);
+  const scanLimit = Math.max(limit * 200, 8_000);
+  const quickNeedles = meaningfulNeedles(keywords).map((term) => term.toLowerCase()).filter(Boolean);
+  let scanned = 0;
+  const rows = Object.values(state)
+    .filter((row) => isCompatibleThreadsSearchCacheRow(row, SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS))
+    .sort((a, b) => new Date(b.at || 0).getTime() - new Date(a.at || 0).getTime());
+  for (const row of rows) {
+    for (const candidate of row.candidates || []) {
+      scanned += 1;
+      if (scanned > scanLimit || byId.size >= candidateTarget) break;
+      if (!candidate?.id || excluded.has(candidate.id) || byId.has(candidate.id)) continue;
+      const quickHaystack = `${candidate.content || ""} ${candidate.author || ""}`.toLowerCase();
+      if (quickNeedles.length > 0 && !quickNeedles.some((term) => quickHaystack.includes(term))) continue;
+      const metrics = { ...(candidate.metrics || {}) } as Record<string, unknown>;
+      delete metrics.semanticRelevant;
+      delete metrics.semanticRelevanceScope;
+      delete metrics.semanticContentHash;
+      const content = cleanThreadsReaderContent(candidate.content || "");
+      const normalized = candidateMeetsDisplayQuality({
+        ...candidate,
+        content,
+        metrics: { ...metrics, archiveScopedFallback: true, globalPersonaBackfill: true },
+      }, keywords, searchMode);
+      if (normalized) byId.set(normalized.id, normalized);
+    }
+    if (scanned > scanLimit || byId.size >= candidateTarget) break;
+  }
+  return sortSentimentHotCandidatePool([...byId.values()], keywords, limit, searchMode);
+}
+
+export function listSentimentHotCandidatePoolStats(): SentimentHotCandidatePoolStat[] {
+  const state = readThreadsSearchCacheState();
+  const archiveIds = [...new Set(Object.keys(state)
+    .map((key) => cleanText(key.split("::", 1)[0]))
+    .filter(Boolean))];
+  const stats: SentimentHotCandidatePoolStat[] = [];
+  for (const archiveId of archiveIds) {
+    for (const searchMode of ["normal", "strict"] as const) {
+      const excluded = getSentimentHotExcludedIds(archiveId);
+      const byId = new Map<string, SentimentHotCandidate>();
+      let newestAt = "";
+      for (const key of threadsSearchArchiveCacheKeys(state, archiveId, searchMode)) {
+        const row = state[key];
+        if (!isCompatibleThreadsSearchCacheRow(row, SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS)) continue;
+        if (String(row.at || "") > newestAt) newestAt = String(row.at || "");
+        const storedKeyword = threadsSearchStoredKeyword(key, archiveId);
+        if (!storedKeyword) continue;
+        for (const candidate of row.candidates || []) {
+          if (!candidate?.id || excluded.has(candidate.id) || byId.has(candidate.id)) continue;
+          const content = cleanThreadsReaderContent(candidate.content || "");
+          const normalized = candidateMeetsDisplayQuality({ ...candidate, content }, [storedKeyword], searchMode);
+          if (normalized) byId.set(normalized.id, normalized);
+        }
+      }
+      stats.push({ archiveId, searchMode, readyCount: byId.size, newestAt });
+    }
+  }
+  return stats;
 }
 
 function mergeBrowserAuthCookies(...groups: any[][]): any[] {
@@ -5537,34 +6071,18 @@ export function parseThreadsSearchTextCandidates(args: {
     .map((line) => cleanText(line))
     .filter(Boolean);
   const chunks: Array<{ author: string; lines: string[] }> = [];
-  const cardAuthor = args.sourceUrls?.length === 1
-    ? (() => {
-        try {
-          return new URL(args.sourceUrls[0]).pathname.match(/^\/@([^/]+)\/post\//i)?.[1] || "";
-        } catch {
-          return "";
-        }
-      })()
-    : "";
-  if (cardAuthor) {
-    const normalizedAuthor = cardAuthor.toLowerCase();
-    chunks.push({
-      author: cardAuthor,
-      lines: lines.filter((line, index) => index > 1 || line.replace(/^@/, "").toLowerCase() !== normalizedAuthor),
-    });
-  } else {
-    let current: { author: string; lines: string[] } | null = null;
-    for (const line of lines) {
-      if (isLikelyThreadsHandle(line)) {
-        if (current?.lines.length) chunks.push(current);
-        current = { author: line.replace(/^@/, ""), lines: [] };
-        continue;
-      }
-      if (!current) continue;
-      current.lines.push(line);
+  let current: { author: string; lines: string[] } | null = null;
+
+  for (const line of lines) {
+    if (isLikelyThreadsHandle(line)) {
+      if (current?.lines.length) chunks.push(current);
+      current = { author: line.replace(/^@/, ""), lines: [] };
+      continue;
     }
-    if (current?.lines.length) chunks.push(current);
+    if (!current) continue;
+    current.lines.push(line);
   }
+  if (current?.lines.length) chunks.push(current);
 
   const needleSource = [query, ...(args.keywords || [])].filter(Boolean);
   const needles = buildRelevanceNeedles(needleSource);

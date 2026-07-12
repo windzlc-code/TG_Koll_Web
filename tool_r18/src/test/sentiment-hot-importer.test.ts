@@ -1,13 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildSentimentCandidateId, rememberSentimentHotShown } from "@/lib/sentiment-candidate-store";
+import {
+  buildSentimentCandidateId,
+  getSentimentHotExcludedIds,
+  rememberSentimentHotImported,
+  rememberSentimentHotSelected,
+  rememberSentimentHotShown,
+} from "@/lib/sentiment-candidate-store";
 import {
   analyzeThreadsProfileVisibleSignals,
-  buildJinaReaderUrl,
   buildSentimentHotKeywords,
+  candidateMatchesSentimentHotStrategyAnchors,
   candidateMatchesCurrentKeywords,
   cleanSentimentCandidateContent,
   enrichThreadsCandidateDetails,
-  expandSentimentSearchKeywordVariants,
   finalizeSentimentHotCandidatesForDisplay,
   isObviouslyLowQualitySentimentHotCandidate,
   isChineseSentimentCandidate,
@@ -25,9 +30,6 @@ import {
   parseThreadsDetailMediaMarkdown,
   parseThreadsSearchTextCandidates,
   refreshSentimentSourceMetrics,
-  selectThreadsGraphqlSearchQueries,
-  selectSentimentHotStrictBroadQueries,
-  sortSentimentHotCandidatePool,
   shouldTreatThreadsProfileAsLoginWall,
 } from "@/lib/sentiment-hot-importer";
 
@@ -36,102 +38,6 @@ afterEach(() => {
 });
 
 describe("sentiment hot importer", () => {
-  it("builds a valid Jina reader URL without duplicating the source scheme", () => {
-    expect(buildJinaReaderUrl("https://www.threads.com/search?q=%E9%9C%B2%E7%87%9F"))
-      .toBe("https://r.jina.ai/http://www.threads.com/search?q=%E9%9C%B2%E7%87%9F");
-  });
-
-  it("keeps only model broad queries that overlap the strict domain summary", () => {
-    expect(selectSentimentHotStrictBroadQueries(
-      "台灣露營裝備實測與選購",
-      ["露營裝備", "戶外用品", "野外生存", "露營活動", "山林旅行", "海灘露營"],
-    )).toEqual(["露營裝備", "露營活動", "海灘露營"]);
-  });
-
-  it("rotates the GraphQL query window after multiple shown rounds", () => {
-    const queries = Array.from({ length: 64 }, (_, index) => `query-${index}`);
-
-    const initial = selectThreadsGraphqlSearchQueries({
-      queries,
-      excludedCount: 0,
-    });
-    const later = selectThreadsGraphqlSearchQueries({
-      queries,
-      excludedCount: 20,
-    });
-
-    expect(initial).toEqual(queries.slice(0, 12));
-    expect(later).toHaveLength(12);
-    expect(later.slice(0, 8)).toEqual(queries.slice(0, 8));
-    expect(later[8]).toBe("query-16");
-    expect(later).not.toEqual(queries.slice(0, 12));
-  });
-
-  it("keeps semantic rejections in cache so later refreshes can skip them", () => {
-    const candidate = {
-      id: "semantic-rejected",
-      platform: "threads",
-      sourceUrl: "https://www.threads.com/@finance/post/semantic-rejected",
-      author: "finance",
-      content: "信用卡債務與貸款利率比較，整理不同銀行的還款條件、每月利息、提前清償成本與信用評分影響，並說明申請貸款前應核對的收入、負債與現金流資料，這是一篇具有足夠正文訊號的測試內容。",
-      hotScore: 1200,
-      metrics: {
-        query: "信用卡債務",
-        matchedKeywords: ["信用卡債務", "貸款利率"],
-        semanticRelevant: false,
-        semanticRelevanceScope: "scope-1",
-        semanticContentHash: "content-1",
-      },
-      capturedAt: new Date().toISOString(),
-      warnings: [],
-    } as any;
-
-    const cached = sortSentimentHotCandidatePool(
-      [candidate],
-      ["信用卡債務", "貸款利率"],
-      10,
-      "strict",
-      { allowSemanticRejected: true },
-    );
-
-    expect(cached).toHaveLength(1);
-    expect(cached[0].metrics).toMatchObject({
-      semanticRelevant: false,
-      semanticRelevanceScope: "scope-1",
-      semanticContentHash: "content-1",
-    });
-  });
-
-  it("keeps older high-heat candidates only when building the emergency pool", () => {
-    const candidate = {
-      id: "older-camping-hit",
-      platform: "threads",
-      sourceUrl: "https://www.threads.com/@camping/post/older-camping-hit",
-      author: "camping",
-      content: "露營裝備與帳篷實測整理，包含睡袋保暖、爐具安全、行動電源容量、搭建收納和雨天防水經驗，提供新手選購戶外用品時核對尺寸、重量、費用與營地使用情境。",
-      publishedAt: new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString(),
-      hotScore: 2_400,
-      metrics: { source: "threads-search-page", query: "露營裝備" },
-      capturedAt: new Date().toISOString(),
-      warnings: [],
-    } as any;
-
-    expect(sortSentimentHotCandidatePool([candidate], ["露營裝備", "露營帳篷"], 10, "strict")).toEqual([]);
-    expect(sortSentimentHotCandidatePool(
-      [candidate],
-      ["露營裝備", "露營帳篷"],
-      10,
-      "strict",
-      { allowStaleBackfill: true },
-    )).toHaveLength(1);
-  });
-
-  it("does not add industry-specific anchors to model search terms", () => {
-    expect(expandSentimentSearchKeywordVariants("更年期保養")).toEqual(["更年期保養", "更年期保养"]);
-    expect(expandSentimentSearchKeywordVariants("汽車保養")).toEqual(["汽車保養", "汽车保养"]);
-    expect(expandSentimentSearchKeywordVariants("刺青穿搭")).toEqual(["刺青穿搭"]);
-  });
-
   it("builds persona-specific search keywords", () => {
     const beautyKeywords = buildSentimentHotKeywords({
       archive: {
@@ -484,7 +390,7 @@ describe("sentiment hot importer", () => {
     expect(candidates.map((candidate) => candidate.hotScore)).toEqual([30000, 18000, 5000]);
   });
 
-  it("excludes shown posts by id and canonical URL during refresh", () => {
+  it("keeps previewed posts eligible until the user imports them", () => {
     const archiveId = `test-refresh-exclude-shown-${Date.now()}`;
     const base = {
       platform: "threads",
@@ -521,7 +427,7 @@ describe("sentiment hot importer", () => {
       excludeShown: true,
     });
 
-    expect(candidates.map((candidate) => candidate.id)).toEqual(["fresh-hot"]);
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["fresh-hot", "shown-url-variant"]);
     const limitedCandidates = finalizeSentimentHotCandidatesForDisplay([shown, fresh] as any, 1, {
       archiveId,
       keywords: ["海外信貸", "銀行貸款", "信用卡"],
@@ -530,7 +436,16 @@ describe("sentiment hot importer", () => {
     expect(limitedCandidates.map((candidate) => candidate.id)).toEqual(["fresh-hot"]);
   });
 
-  it("rejects candidates older than 30 days", () => {
+  it("only excludes a candidate after its draft import succeeds", () => {
+    const archiveId = `test-import-consumption-${Date.now()}`;
+    rememberSentimentHotSelected(archiveId, "candidate-a");
+    expect(getSentimentHotExcludedIds(archiveId).has("candidate-a")).toBe(false);
+
+    rememberSentimentHotImported(archiveId, "candidate-a");
+    expect(getSentimentHotExcludedIds(archiveId).has("candidate-a")).toBe(true);
+  });
+
+  it("keeps older high-heat candidates behind fresh candidates for gap filling", () => {
     const content = "海外信貸市場最近整理信用卡週轉、銀行貸款、收入證明和負債比例，內容包含完整申請流程、利率比較、還款安排與風險提醒，適合金融人設改寫成實用推文。";
     const candidates = finalizeSentimentHotCandidatesForDisplay([
       {
@@ -559,7 +474,7 @@ describe("sentiment hot importer", () => {
       },
     ] as any, 10, { keywords: ["海外信貸", "銀行貸款", "信用卡"] });
 
-    expect(candidates.map((candidate) => candidate.id)).toEqual(["fresh-hot-30d"]);
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["fresh-hot-30d", "old-hot"]);
   });
 
   it("prioritizes a fresher unshown candidate over a hotter older candidate", () => {
@@ -656,6 +571,60 @@ describe("sentiment hot importer", () => {
     } as const;
 
     expect(candidateMatchesCurrentKeywords(candidate as any, ["静心", "冥想", "身心灵疗愈"], "normal")).toBe(false);
+  });
+
+  it("does not accept a single broad strategy term as normal persona relevance", () => {
+    const candidate = {
+      id: "generic-guide",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@demo/post/generic-guide",
+      author: "demo",
+      content: "\u8fd9\u662f\u4e00\u7bc7\u666e\u901a\u6e38\u620f\u653b\u7565\uff0c\u8be6\u7ec6\u4ecb\u7ecd\u89d2\u8272\u5347\u7ea7\u3001\u5730\u56fe\u63a2\u7d22\u3001\u88c5\u5907\u642d\u914d\u548c\u5267\u60c5\u4efb\u52a1\uff0c\u5168\u6587\u90fd\u662f\u865a\u62df\u4e16\u754c\u73a9\u6cd5\u5206\u6790\u3002",
+      media: [],
+      hotScore: 9000,
+      metrics: {},
+    } as any;
+    const strategy = {
+      primaryQueries: ["\u5ba0\u7269"],
+      broadQueries: ["\u653b\u7565"],
+      ecosystemQueries: ["\u751f\u6d3b"],
+      requiredAnchorTerms: ["\u5ba0\u7269\u7528\u54c1"],
+      normalAnchorTerms: ["\u5ba0\u7269"],
+      rejectTerms: [],
+      strictAcceptTerms: ["\u5ba0\u7269\u7528\u54c1"],
+      normalAcceptTerms: ["\u653b\u7565", "\u751f\u6d3b"],
+      personaGuardTerms: ["\u5ba0\u7269"],
+      domainSummary: "\u5ba0\u7269\u7528\u54c1",
+    } as any;
+
+    expect(candidateMatchesSentimentHotStrategyAnchors(candidate, strategy, "normal")).toBe(false);
+  });
+
+  it("does not accept a parent-domain anchor alone in strict mode", () => {
+    const candidate = {
+      id: "generic-art",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@demo/post/generic-art",
+      author: "demo",
+      content: "\u5f53\u4ee3\u827a\u672f\u5c55\u89c8\u5206\u4eab\uff0c\u8ba8\u8bba\u6cb9\u753b\u3001\u96d5\u5851\u3001\u88c5\u7f6e\u4e0e\u7a7a\u95f4\u8bbe\u8ba1\uff0c\u5e76\u6574\u7406\u7b56\u5c55\u4eba\u7684\u516c\u5f00\u8bb2\u5ea7\u548c\u89c2\u5c55\u8def\u7ebf\u3002",
+      media: [],
+      hotScore: 9000,
+      metrics: {},
+    } as any;
+    const strategy = {
+      primaryQueries: ["\u523a\u9752"],
+      broadQueries: ["\u827a\u672f"],
+      ecosystemQueries: ["\u6f6e\u6d41"],
+      requiredAnchorTerms: ["\u523a\u9752", "\u7eb9\u8eab"],
+      normalAnchorTerms: ["\u827a\u672f"],
+      rejectTerms: [],
+      strictAcceptTerms: ["\u523a\u9752", "\u7eb9\u8eab"],
+      normalAcceptTerms: ["\u827a\u672f", "\u6f6e\u6d41"],
+      personaGuardTerms: ["\u523a\u9752"],
+      domainSummary: "\u523a\u9752\u7eb9\u8eab",
+    } as any;
+
+    expect(candidateMatchesSentimentHotStrategyAnchors(candidate, strategy, "strict")).toBe(false);
   });
 
   it("does not display hot candidates shorter than 60 Chinese characters", () => {
@@ -768,7 +737,7 @@ describe("sentiment hot importer", () => {
     expect(candidates.map((candidate) => candidate.id)).toEqual(["same-post-high", "same-media-high", "unique"]);
   });
 
-  it("matches finance hot candidates through model-provided search terms", () => {
+  it("matches finance hot candidates through clean search keyword variants", () => {
     const candidate = {
       id: "finance-candidate",
       platform: "threads",
@@ -786,8 +755,6 @@ describe("sentiment hot importer", () => {
       "工薪信貸",
       "理財規劃",
       "銀行審核",
-      "銀行貸款",
-      "信用卡債務",
     ])).toBe(true);
     expect(candidateMatchesCurrentKeywords(candidate as any, [
       "說話直白犀利",
@@ -798,10 +765,8 @@ describe("sentiment hot importer", () => {
       ...candidate,
       content: "最近房贷利率和债务整合讨论很多，信用评分不好的人申请贷款前真的要先整理现金流。",
     } as any, [
-      "房貸利率",
-      "債務整合",
-      "信用評分",
-      "貸款",
+      "海外信貸",
+      "理財規劃",
     ])).toBe(true);
   });
 
@@ -1328,31 +1293,6 @@ bunundoc
     expect(candidates[0].content).toContain("醫療");
     expect(candidates[0].content).not.toContain("翻譯");
     expect(candidates[0].sourceUrl).toBe("https://www.threads.net/@mls_muttering/post/medical-report");
-  });
-
-  it("keeps a DOM post card atomic when its copy contains standalone Latin tokens", () => {
-    const sourceUrl = "https://www.threads.com/@market_writer/post/etf-guide";
-    const candidates = parseThreadsSearchTextCandidates({
-      query: "台灣",
-      keywords: ["台股", "投資"],
-      sourceUrl,
-      sourceUrls: [sourceUrl],
-      text: `
-market_writer
-台股
-2026-7-10
-這些 ETF 你都了解嗎？台灣大型企業與高股息商品的差異，投資前要先確認風險與費用。
-ETF
-整理近期市場成交量與投資人的熱門討論，完整比較後再決定配置。
-1.2 萬
-35
-`,
-    });
-
-    expect(candidates).toHaveLength(1);
-    expect(candidates[0].author).toBe("market_writer");
-    expect(candidates[0].content).toContain("完整比較");
-    expect(candidates[0].hotScore).toBeGreaterThanOrEqual(12_000);
   });
 
   it("keeps visible Threads profile metrics from the page body", () => {

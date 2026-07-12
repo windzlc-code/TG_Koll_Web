@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import net from "node:net";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
 import { resolveRuntimeFile } from "@/runtime/node/data-dir";
@@ -96,12 +97,18 @@ export async function ensureSentimentRuntime(): Promise<{ ok: boolean; url: stri
 }
 
 async function isSentimentRuntimeHealthy(url: string): Promise<boolean> {
-  try {
-    const response = await fetch(`${url}/health`, { signal: AbortSignal.timeout(2500) });
-    if (!response.ok) return false;
-    const json = await response.json().catch(() => ({}));
-    return json?.ok === true || json?.status === "ok";
-  } catch {
-    return false;
-  }
+  const target = new URL(url);
+  const port = Number(target.port || (target.protocol === "https:" ? 443 : 80));
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host: target.hostname, port });
+    const finish = (healthy: boolean) => {
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(healthy);
+    };
+    socket.setTimeout(1_000);
+    socket.once("connect", () => finish(true));
+    socket.once("timeout", () => finish(false));
+    socket.once("error", () => finish(false));
+  });
 }

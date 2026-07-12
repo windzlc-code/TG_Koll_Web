@@ -16,7 +16,6 @@ import {
   type PersonaPublishRecord,
 } from "@/core/archives/persona-archive-domain";
 import { sanitizeGeneratedPostContent } from "@/core/persona/generated-post-parser";
-import { sentimentHotSearchStrategyRevision, warmSentimentHotSearchStrategy } from "@/lib/sentiment-hot-importer";
 
 const ARCHIVES_KEY = "persona_archives_v2";
 const LEGACY_PRESETS_KEY = "persona_presets";
@@ -668,27 +667,13 @@ export async function loadPersonaArchive(id: string): Promise<PersonaArchive | n
 }
 
 export async function savePersonaArchive(archive: PersonaArchive): Promise<PersonaArchive> {
-  const previous = getLocalArchiveById(archive.id);
-  const shouldWarmStrategy = !previous
-    || sentimentHotSearchStrategyRevision(previous) !== sentimentHotSearchStrategyRevision(archive);
-  const saved = await persistArchive({
+  return persistArchive({
     ...archive,
     updatedAt: new Date().toISOString(),
     posts: sortArchivePosts(archive.posts || []),
     favoritePosts: sortArchivePosts(archive.favoritePosts || []),
     publishHistory: archive.publishHistory,
   });
-  if (shouldWarmStrategy && process.env.NODE_ENV !== "test") {
-    if (!previous) {
-      const ok = await warmSentimentHotSearchStrategy(saved).catch(() => false);
-      if (!ok) console.warn(`[sentiment_hot_strategy_warmup] archiveId=${saved.id} status=failed`);
-    } else {
-      warmSentimentHotSearchStrategy(saved).then((ok) => {
-        if (!ok) console.warn(`[sentiment_hot_strategy_warmup] archiveId=${saved.id} status=failed`);
-      }).catch(() => undefined);
-    }
-  }
-  return saved;
 }
 
 export async function createPersonaArchive(input: {

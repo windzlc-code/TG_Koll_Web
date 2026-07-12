@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isTextModelFallbackError } from "@/lib/gemini-client";
+import { getTextUnderstandingModelFallbacks, isTextModelFallbackError } from "@/lib/gemini-client";
 
 describe("isTextModelFallbackError", () => {
   it("treats payment and balance failures as retryable fallback errors", () => {
@@ -8,5 +8,15 @@ describe("isTextModelFallbackError", () => {
     expect(isTextModelFallbackError(new Error("insufficient balance"))).toBe(true);
     expect(isTextModelFallbackError(new Error("quota exceeded"))).toBe(true);
     expect(isTextModelFallbackError(new Error("餘額不足"))).toBe(true);
+  });
+});
+
+describe("getTextUnderstandingModelFallbacks", () => {
+  it("keeps the configured backend order without appending another model", () => {
+    expect(getTextUnderstandingModelFallbacks("model-a,model-b\nmodel-c")).toEqual([
+      "model-a",
+      "model-b",
+      "model-c",
+    ]);
   });
 });
