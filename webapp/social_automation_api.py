@@ -11,10 +11,11 @@ import uuid
 import contextlib
 import subprocess
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
 from fastapi import Body, Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket
@@ -3239,7 +3240,15 @@ def _parse_schedule(value: int | str | None) -> int:
     try:
         if text.endswith("Z"):
             text = text[:-1] + "+00:00"
-        return int(datetime.fromisoformat(text).timestamp())
+        parsed = datetime.fromisoformat(text)
+        if parsed.tzinfo is None:
+            timezone_name = str(os.getenv("WEBAPP_TIMEZONE") or "Asia/Shanghai").strip() or "Asia/Shanghai"
+            try:
+                schedule_timezone = ZoneInfo(timezone_name)
+            except ZoneInfoNotFoundError:
+                schedule_timezone = timezone(timedelta(hours=8))
+            parsed = parsed.replace(tzinfo=schedule_timezone)
+        return int(parsed.timestamp())
     except Exception:
         raise HTTPException(status_code=400, detail="scheduled_at 必须是 Unix 秒或 ISO 时间")
 

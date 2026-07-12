@@ -5617,6 +5617,21 @@ function renderUndoIcon() {
   </svg>`;
 }
 
+function isFutureScheduledSocialTask(task) {
+  return String(task?.status || "").trim() === "queued"
+    && timeValue(task?.scheduled_at) > Date.now() + 1000;
+}
+
+function renderSocialQueueTaskStatus(task) {
+  if (!isFutureScheduledSocialTask(task)) return renderStatusText(task?.status || "");
+  return `<span class="task-status-text is-queued">定时等待</span>`;
+}
+
+function socialQueueTaskTime(task) {
+  if (isFutureScheduledSocialTask(task)) return `计划 ${formatTime(task.scheduled_at)}`;
+  return formatTime(task.updated_at || task.created_at || "");
+}
+
 function renderPersonaQueueRows(rows) {
   return rows.map((task) => `
     <article class="compact-row task-persona-queue-row">
@@ -5629,8 +5644,8 @@ function renderPersonaQueueRows(rows) {
       </div>
       <div class="task-persona-queue-platform">${esc(queuePlatformLabel(task.platform || ""))}</div>
       <div class="task-persona-queue-account">${esc(task.account_username || task.account_id || "-")}</div>
-      <div class="task-persona-queue-time">${esc(formatTime(task.updated_at || task.created_at || ""))}</div>
-      <div>${renderStatusText(task.status || "")}</div>
+      <div class="task-persona-queue-time">${esc(socialQueueTaskTime(task))}</div>
+      <div>${renderSocialQueueTaskStatus(task)}</div>
       <div class="row-actions">
         <button type="button" data-social-log="${esc(task.id)}">日志</button>
         ${task.status === "failed" ? `<button type="button" data-social-retry="${esc(task.id)}">重试</button>` : ""}
@@ -6219,6 +6234,29 @@ function currentPublishScheduleParts() {
 function composePublishScheduleAt() {
   if (state.publishTimingMode !== "scheduled") return "";
   const parts = currentPublishScheduleParts();
+  const scheduledDate = new Date(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    Number(parts.hour),
+    Number(parts.minute),
+    0,
+    0,
+  );
+  if (
+    !Number.isFinite(scheduledDate.getTime())
+    || scheduledDate.getFullYear() !== Number(parts.year)
+    || scheduledDate.getMonth() !== Number(parts.month) - 1
+    || scheduledDate.getDate() !== Number(parts.day)
+    || scheduledDate.getHours() !== Number(parts.hour)
+    || scheduledDate.getMinutes() !== Number(parts.minute)
+  ) return "";
+  return scheduledDate.toISOString();
+}
+
+function publishScheduleDisplayText() {
+  if (state.publishTimingMode !== "scheduled") return "";
+  const parts = currentPublishScheduleParts();
   return `${padSchedulePart(parts.year, 4)}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
 }
 
@@ -6237,8 +6275,9 @@ function updatePublishSchedulePreview() {
   const preview = document.querySelector("[data-publish-schedule-preview]");
   if (!preview) return;
   const scheduledAt = composePublishScheduleAt();
+  const scheduledDisplay = publishScheduleDisplayText();
   preview.innerHTML = scheduledAt
-    ? `将按 <strong>${esc(scheduledAt)}</strong> 创建定时发布任务。`
+    ? `将按 <strong>${esc(scheduledDisplay)}</strong> 创建定时发布任务。`
     : "确认执行后会立即提交发布任务。";
 }
 
@@ -6247,6 +6286,7 @@ function renderPublishScheduleControls(rawMode = "") {
   const timingMode = state.publishTimingMode === "scheduled" ? "scheduled" : "immediate";
   const parts = currentPublishScheduleParts();
   const scheduledAt = timingMode === "scheduled" ? composePublishScheduleAt() : "";
+  const scheduledDisplay = timingMode === "scheduled" ? publishScheduleDisplayText() : "";
   return `
     <div class="publish-schedule-panel">
       <div class="publish-schedule-head">
@@ -6297,7 +6337,7 @@ function renderPublishScheduleControls(rawMode = "") {
             <input id="simpleScheduleMinute" type="number" min="0" max="59" value="${esc(Number(parts.minute))}" />
           </label>
         </div>
-        <div class="publish-schedule-preview" data-publish-schedule-preview>将按 <strong>${esc(scheduledAt)}</strong> 创建定时发布任务。</div>
+        <div class="publish-schedule-preview" data-publish-schedule-preview>将按 <strong>${esc(scheduledDisplay)}</strong> 创建定时发布任务。</div>
       ` : `<div class="publish-schedule-preview" data-publish-schedule-preview>确认执行后会立即提交发布任务。</div>`}
     </div>`;
 }
