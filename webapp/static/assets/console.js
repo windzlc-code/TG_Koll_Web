@@ -6260,6 +6260,13 @@ function publishScheduleDisplayText() {
   return `${padSchedulePart(parts.year, 4)}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
 }
 
+function normalizeScheduleValueForApi(value) {
+  const raw = String(value || "").trim();
+  if (!raw || /^\d+$/.test(raw)) return raw;
+  const parsed = new Date(raw.includes("T") ? raw : raw.replace(" ", "T"));
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : raw;
+}
+
 function syncPublishScheduleStateFromInputs() {
   const parts = currentPublishScheduleParts();
   ["year", "month", "day", "hour", "minute"].forEach((key) => {
@@ -7474,7 +7481,7 @@ async function submitPersonaPublishTask() {
       showMsg("commandMsg", `Instagram 发布至少需要上传一份媒体，或先给当前${sourceLabel}添加媒体。`, false);
       return;
     }
-    const scheduledAt = $("personaPublishScheduleAt")?.value.trim() || "";
+    const scheduledAt = normalizeScheduleValueForApi($("personaPublishScheduleAt")?.value);
     showMsg("commandMsg", `正在提交 ${publishPlatformLabel(account)} 发布任务到浏览器执行队列...`, true);
     const postSourcePath = source === "favorites" ? "favorites" : "posts";
     const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/${postSourcePath}/${encodeURIComponent(post.id)}/publish`, {
@@ -7547,7 +7554,7 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
     return null;
   }
   const platform = String(account.platform || "threads").trim().toLowerCase() || "threads";
-  const scheduledAt = $("simpleScheduleAt")?.value.trim() || "";
+  const scheduledAt = normalizeScheduleValueForApi($("simpleScheduleAt")?.value);
   const lockParts = ["publish_content", source, persona.id, cleanAccountId, selectedInSourceOrder.join("_"), scheduledAt || "now"];
   if (isActionLocked(...lockParts)) {
     showMsg(messageId, "当前发布任务正在提交，请等待当前操作完成。", false);
@@ -16024,7 +16031,7 @@ async function submitMatrixPublishTask(messageId = "commandMsg") {
     showMsg(messageId, "矩阵发布正在提交，请等待当前操作完成。", false);
     return null;
   }
-  const scheduledAt = $("simpleScheduleAt")?.value.trim() || "";
+  const scheduledAt = normalizeScheduleValueForApi($("simpleScheduleAt")?.value);
   setActionLocked(lockParts, true);
   renderSimpleFlowModule("publishing");
   try {
@@ -16136,7 +16143,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
         ...defaultPayloadForTask(taskType),
         ...userPayload,
       });
-      const scheduledAt = $("simpleScheduleAt")?.value.trim() || "";
+      const scheduledAt = normalizeScheduleValueForApi($("simpleScheduleAt")?.value);
       const result = await api("/api/persona_dashboard/automation/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -16193,7 +16200,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
       ...defaultPayloadForTask(taskType),
       ...userPayload,
     });
-    const scheduledAt = $("simpleScheduleAt")?.value.trim() || "";
+    const scheduledAt = normalizeScheduleValueForApi($("simpleScheduleAt")?.value);
     const result = await api("/api/persona_dashboard/automation/tasks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
