@@ -367,8 +367,10 @@ const state = {
     source: "posts",
     perPersonaCount: 1,
     platform: "threads",
+    scheduledAt: "",
     initialized: false,
   },
+  personaPublishScheduleValues: {},
   renderedPersonaId: "",
   personaCreateMode: false,
   personaCreate: null,
@@ -401,6 +403,7 @@ const state = {
   taskQueueRefreshTimer: 0,
   accountStatusRefreshTimer: 0,
   socialTaskToastRefreshTimer: 0,
+  socialTaskScheduleWakeTimer: 0,
   publishTimingMode: "immediate",
   publishSchedulePreset: "custom",
   publishScheduleParts: null,
@@ -3161,6 +3164,7 @@ function socialTaskToastMessage(task) {
   const accountLabel = String(state.socialTaskToastLabels[taskId] || task?.account_username || task?.account_display_name || task?.account_id || "").trim();
   const suffix = accountLabel ? ` · ${accountLabel}` : "";
   const status = String(task?.status || "").trim();
+  if (isFutureScheduledSocialTask(task)) return `${typeLabel}定时等待${suffix} · 计划 ${formatTime(task.scheduled_at)}`;
   if (status === "success") return `${typeLabel}已完成${suffix}`;
   if (status === "failed") return `${typeLabel}执行失败${suffix}`;
   if (status === "cancelled") return `${typeLabel}已取消${suffix}`;
@@ -3178,10 +3182,13 @@ function syncSocialTaskToast(task, { force = false } = {}) {
   const key = `social-task:${taskId}`;
   const existing = Array.from(ensureToastHost().children).find((item) => item.dataset.toastKey === key);
   const waitingForManual = status === "need_manual" && isUnfinishedTask(task);
+  const waitingForSchedule = isFutureScheduledSocialTask(task);
   const terminal = ["success", "failed", "cancelled"].includes(status) || (status === "need_manual" && !waitingForManual);
+  const taskStartedAt = task?.started_at || task?.startedAt || "";
+  const showElapsed = !waitingForSchedule && (status === "running" || status === "need_manual" || (terminal && Boolean(taskStartedAt)));
   const changedToTerminal = terminal && previous && previous !== status;
   if (!force && !existing && !changedToTerminal) return;
-  showToast(socialTaskToastMessage(task), !["failed", "cancelled"].includes(status), {
+  const toast = showToast(socialTaskToastMessage(task), !["failed", "cancelled"].includes(status), {
     key,
     kind: toastKindForTaskStatus(status),
     taskId,
@@ -3189,10 +3196,11 @@ function syncSocialTaskToast(task, { force = false } = {}) {
     personaId: task?.persona_id || "",
     openBrowser: true,
     persistent: !terminal,
-    longTask: true,
-    startedAt: task?.started_at || task?.startedAt || task?.created_at || task?.createdAt || "",
+    longTask: showElapsed,
+    startedAt: showElapsed ? taskStartedAt : "",
     duration: terminal ? 5200 : undefined,
   });
+  if (toast) toast.dataset.toastScheduled = waitingForSchedule ? "true" : "false";
   syncSocialTaskToastAutoRefresh();
 }
 
@@ -3202,11 +3210,30 @@ function syncSocialTaskToasts(tasks = []) {
 }
 
 function hasActiveSocialTaskToast() {
-  return (state.socialTasks || []).some((task) => activeSocialAutomationTask(task))
+  return (state.socialTasks || []).some((task) => activeSocialAutomationTask(task) && !isFutureScheduledSocialTask(task))
     || Array.from(ensureToastHost().children).some((item) => (
       String(item.dataset.toastKey || "").startsWith("social-task:")
       && item.classList.contains("is-persistent")
+      && item.dataset.toastScheduled !== "true"
     ));
+}
+
+function syncSocialTaskScheduleWake() {
+  if (state.socialTaskScheduleWakeTimer) {
+    window.clearTimeout(state.socialTaskScheduleWakeTimer);
+    state.socialTaskScheduleWakeTimer = 0;
+  }
+  const nextScheduledAt = (state.socialTasks || [])
+    .filter((task) => isFutureScheduledSocialTask(task))
+    .map((task) => timeValue(task.scheduled_at))
+    .filter((value) => value > Date.now())
+    .sort((a, b) => a - b)[0] || 0;
+  if (!nextScheduledAt) return;
+  const delay = Math.min(Math.max(nextScheduledAt - Date.now() + 1000, 1000), 2_147_000_000);
+  state.socialTaskScheduleWakeTimer = window.setTimeout(() => {
+    state.socialTaskScheduleWakeTimer = 0;
+    loadAutomationTasksShared({ force: true }).catch(() => {});
+  }, delay);
 }
 
 function syncSocialTaskToastAutoRefresh() {
@@ -3215,7 +3242,12 @@ function syncSocialTaskToastAutoRefresh() {
       window.clearInterval(state.socialTaskToastRefreshTimer);
       state.socialTaskToastRefreshTimer = 0;
     }
+    syncSocialTaskScheduleWake();
     return;
+  }
+  if (state.socialTaskScheduleWakeTimer) {
+    window.clearTimeout(state.socialTaskScheduleWakeTimer);
+    state.socialTaskScheduleWakeTimer = 0;
   }
   if (state.socialTaskToastRefreshTimer) return;
   state.socialTaskToastRefreshTimer = window.setInterval(() => {
@@ -5627,6 +5659,10 @@ function renderSocialQueueTaskStatus(task) {
   return `<span class="task-status-text is-queued">定时等待</span>`;
 }
 
+function socialTaskDisplayStatus(task) {
+  return isFutureScheduledSocialTask(task) ? "定时等待" : statusLabel(task?.status || "");
+}
+
 function socialQueueTaskTime(task) {
   if (isFutureScheduledSocialTask(task)) return `计划 ${formatTime(task.scheduled_at)}`;
   return formatTime(task.updated_at || task.created_at || "");
@@ -7263,12 +7299,12 @@ function bindSimpleFlowInputs(moduleId) {
       });
     });
   }
-  ["matrixPublishSource", "matrixPublishPlatform", "matrixPublishCount"].forEach((id) => {
+  ["matrixPublishSource", "matrixPublishPlatform", "matrixPublishCount", "simpleScheduleAt"].forEach((id) => {
     const node = $(id);
-    if (!node) return;
+    if (!node || (id === "simpleScheduleAt" && !$("matrixPublishSource"))) return;
     node.addEventListener(node.tagName === "INPUT" ? "input" : "change", () => {
       updateMatrixPublishStateFromForm();
-      renderSimpleFlowModule(moduleId);
+      if (id !== "simpleScheduleAt") renderSimpleFlowModule(moduleId);
     });
   });
   if (moduleId === "automation") {
@@ -7498,27 +7534,32 @@ async function submitPersonaPublishTask() {
     });
     const task = result.task || {};
     const taskId = String(task.id || "").trim();
+    const waitingForSchedule = isFutureScheduledSocialTask(task);
     state.personaPublishResults[String(persona.id)] = renderPersonaPublishResult(task, []);
     updatePersonaPublishResultView(persona.id);
-    appendEvent("queued", `${persona.name || persona.id} 已提交${sourceLabel}发布任务：${taskId || "-"}`, {
+    appendEvent("queued", waitingForSchedule
+      ? `${persona.name || persona.id} 已创建定时发布任务：${formatTime(task.scheduled_at)}`
+      : `${persona.name || persona.id} 已提交${sourceLabel}发布任务：${taskId || "-"}`, {
       key: taskId ? `social-task:${taskId}` : undefined,
       taskId,
       taskPanel: "persona",
       personaId: persona.id,
+      longTask: false,
     });
-    showMsg("commandMsg", `发布任务已提交：${taskId || "-"}`, true, {
+    showMsg("commandMsg", waitingForSchedule ? `发布任务已定时：${formatTime(task.scheduled_at)}` : `发布任务已提交：${taskId || "-"}`, true, {
       key: taskId ? `social-task:${taskId}` : undefined,
       kind: "queued",
       taskId,
       taskPanel: "persona",
       personaId: persona.id,
       persistent: Boolean(taskId),
+      longTask: false,
     });
-    if (taskId) watchPersonaPublishTask(taskId, persona.id).catch((error) => {
+    if (taskId && !waitingForSchedule) watchPersonaPublishTask(taskId, persona.id).catch((error) => {
       state.personaPublishResults[String(persona.id)] = `<div class="persona-warning-inline">${esc(error?.detail || error?.message || "任务结果轮询失败")}</div>`;
       updatePersonaPublishResultView(persona.id);
     });
-    if (taskId) openLiveBrowserTaskView(taskId);
+    if (taskId && !waitingForSchedule) openLiveBrowserTaskView(taskId);
     await loadSocial();
   } finally {
     setActionLocked(lockParts, false);
@@ -7595,9 +7636,6 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
       results.push(result);
     }
     showMsg(messageId, `已提交 ${results.length} 条发布任务。`, true);
-    const taskIds = results
-      .map((item) => String(item?.task?.id || "").trim())
-      .filter(Boolean);
     results.forEach((item, index) => {
       const task = item?.task;
       if (!task?.id) return;
@@ -7606,10 +7644,12 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
         ...task,
       }, { force: true });
     });
-    const firstTaskId = taskIds[0] || "";
+    const immediateTasks = results.map((item) => item?.task).filter((task) => task?.id && !isFutureScheduledSocialTask(task));
+    const immediateTaskIds = immediateTasks.map((task) => String(task.id));
+    const firstTaskId = immediateTaskIds[0] || "";
     if (firstTaskId) openLiveBrowserTaskView(firstTaskId);
-    if (taskIds.length) {
-      watchPersonaPublishTaskSequence(taskIds, persona.id).catch((error) => {
+    if (immediateTaskIds.length) {
+      watchPersonaPublishTaskSequence(immediateTaskIds, persona.id).catch((error) => {
         showMsg(messageId, error?.detail || error?.message || "连续发布状态跟踪失败", false);
       });
     }
@@ -9423,11 +9463,11 @@ function renderTaskDetailField(label, value, { wide = false, code = false } = {}
     </div>`;
 }
 
-function renderTaskDetailStatusField(status) {
+function renderTaskDetailStatusField(status, label = "") {
   return `
     <div>
       <span>状态</span>
-      <strong class="task-detail-status is-${esc(statusTone(status))}">${esc(statusLabel(status || ""))}</strong>
+      <strong class="task-detail-status is-${esc(statusTone(status))}">${esc(label || statusLabel(status || ""))}</strong>
     </div>`;
 }
 
@@ -9471,9 +9511,10 @@ function renderTaskDetailLayout(task = {}, logs = [], {
   const fields = kind === "social"
     ? [
       renderTaskDetailField("任务类型", statusLabel(task.task_type || task.workflow_name || task.type || title)),
-      renderTaskDetailStatusField(task.status || ""),
+      renderTaskDetailStatusField(task.status || "", socialTaskDisplayStatus(task)),
       renderTaskDetailField("平台", queuePlatformLabel(task.platform || "")),
       renderTaskDetailField("账号", task.account_username || task.account_id || "-"),
+      task.scheduled_at ? renderTaskDetailField("计划执行", formatTime(task.scheduled_at)) : "",
       renderTaskDetailField("更新时间", formatTime(task.updated_at || task.finished_at || task.created_at || "")),
       task.error ? renderTaskDetailField("错误信息", sanitizeTaskUserMessage(task.error), { wide: true }) : "",
     ].filter(Boolean).join("")
@@ -9489,7 +9530,7 @@ function renderTaskDetailLayout(task = {}, logs = [], {
     <div class="console-modal-detail task-detail-modal task-detail-modal--stacked">
       <section class="task-detail-summary-card">
         <span>${esc(kind === "social" ? "自动化任务" : "任务详情")}</span>
-        <strong class="task-detail-status is-${esc(statusTone(task.status || ""))}">${esc(statusLabel(task.status || "") || title)}</strong>
+        <strong class="task-detail-status is-${esc(statusTone(task.status || ""))}">${esc((kind === "social" ? socialTaskDisplayStatus(task) : statusLabel(task.status || "")) || title)}</strong>
         <p>${esc(task.workflow_name || statusLabel(task.task_type || task.type || "") || task.id || "")}</p>
       </section>
       <section class="task-detail-field-grid">
@@ -9752,6 +9793,7 @@ async function watchPersonaPublishTaskSequence(taskIds = [], personaId = "") {
             taskPanel: "persona",
             personaId,
             openBrowser: true,
+            longTask: status === "running",
           });
         }
         lastStatus = status;
@@ -13428,6 +13470,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
     const publishBusy = publishCanSubmit && selectedPost
       ? (isActionLocked("publish", publishSource, persona.id, selectedPost.id, publishAccount.id) || activeSocialTaskFor({ accountId: publishAccount.id, personaId: persona.id, taskType: "publish_post", postId: selectedPost.id, postSource: publishSource }))
       : false;
+    const publishScheduleAt = String(state.personaPublishScheduleValues[String(persona.id)] || "");
     return `
       <div class="persona-inline-panel persona-publish-panel">
         <div class="persona-head-copy">
@@ -13448,7 +13491,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
             </select>
           </label>
           <label>发布时间
-            <input id="personaPublishScheduleAt" placeholder="留空立即发布 / 2026-07-04 21:30" />
+            <input id="personaPublishScheduleAt" value="${esc(publishScheduleAt)}" placeholder="留空立即发布 / 2026-07-04 21:30" />
           </label>
         </div>
         ${personaPublishPreview(selectedPost)}
@@ -15927,6 +15970,7 @@ function updateMatrixPublishStateFromForm() {
     source: $("matrixPublishSource")?.value || state.matrixPublish.source || "posts",
     perPersonaCount: Math.min(Math.max(Number($("matrixPublishCount")?.value || state.matrixPublish.perPersonaCount || 1), 1), 20),
     platform: $("matrixPublishPlatform")?.value || state.matrixPublish.platform || "threads",
+    scheduledAt: $("simpleScheduleAt")?.value ?? state.matrixPublish.scheduledAt ?? "",
     initialized: true,
   };
 }
@@ -15966,6 +16010,7 @@ function renderMatrixPublishPanel() {
   else ensureMatrixDraftLoads(selectedIds);
   const perCount = Math.min(Math.max(Number(state.matrixPublish.perPersonaCount || 1), 1), 20);
   const platform = state.matrixPublish.platform || "threads";
+  const scheduledAt = String(state.matrixPublish.scheduledAt || "");
   const rows = selectedIds.map((personaId) => {
     const persona = state.personas.find((item) => String(item.id) === String(personaId));
     const account = publishAccountsForPersona(persona).find((item) => String(item.platform || "").toLowerCase() === platform) || null;
@@ -16001,7 +16046,7 @@ function renderMatrixPublishPanel() {
           <input id="matrixPublishCount" type="number" min="1" max="20" value="${esc(perCount)}" />
         </label>
         <label>发布时间
-          <input id="simpleScheduleAt" placeholder="留空立即执行 / 2026-07-04 21:30" />
+          <input id="simpleScheduleAt" value="${esc(scheduledAt)}" placeholder="留空立即执行 / 2026-07-04 21:30" />
         </label>
       </div>
       <div class="matrix-preview">
@@ -16063,10 +16108,11 @@ async function submitMatrixPublishTask(messageId = "commandMsg") {
       target: matrixToastTarget,
       key: matrixToastKey,
     });
-    const firstTaskId = created.map((item) => String(item?.task?.id || item?.id || "").trim()).find(Boolean) || "";
+    const immediateCreated = created.filter((item) => !isFutureScheduledSocialTask(item?.task || item));
+    const firstTaskId = immediateCreated.map((item) => String(item?.task?.id || item?.id || "").trim()).find(Boolean) || "";
     if (firstTaskId) openLiveBrowserTaskView(firstTaskId);
     const taskIdsByPersona = new Map();
-    created.forEach((item) => {
+    immediateCreated.forEach((item) => {
       const taskId = String(item?.task?.id || item?.id || "").trim();
       const personaId = String(item?.persona_id || item?.task?.persona_id || "").trim();
       if (!taskId || !personaId) return;
@@ -16158,7 +16204,8 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
           payload,
         }),
       });
-      showMsg(messageId, `浏览器任务已提交：${result.task?.id || ""}`, true, {
+      const waitingForSchedule = isFutureScheduledSocialTask(result.task);
+      showMsg(messageId, waitingForSchedule ? `浏览器任务已定时：${formatTime(result.task?.scheduled_at)}` : `浏览器任务已提交：${result.task?.id || ""}`, true, {
         key: result.task?.id ? `social-task:${result.task.id}` : undefined,
         kind: "queued",
         taskId: result.task?.id || "",
@@ -16166,8 +16213,9 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
         personaId: cleanPersonaId,
         openBrowser: true,
         persistent: Boolean(result.task?.id),
+        longTask: false,
       });
-      refreshLiveBrowserSessionsSoon(String(result.task?.id || ""));
+      if (!waitingForSchedule) refreshLiveBrowserSessionsSoon(String(result.task?.id || ""));
       await loadSocial();
       return result;
     } finally {
@@ -16215,7 +16263,8 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
         payload,
       }),
     });
-    showMsg(messageId, `浏览器任务已提交：${result.task?.id || ""}`, true, {
+    const waitingForSchedule = isFutureScheduledSocialTask(result.task);
+    showMsg(messageId, waitingForSchedule ? `浏览器任务已定时：${formatTime(result.task?.scheduled_at)}` : `浏览器任务已提交：${result.task?.id || ""}`, true, {
       key: result.task?.id ? `social-task:${result.task.id}` : undefined,
       kind: "queued",
       taskId: result.task?.id || "",
@@ -16223,8 +16272,9 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
       personaId: cleanPersonaId,
       openBrowser: true,
       persistent: Boolean(result.task?.id),
+      longTask: false,
     });
-    openLiveBrowserTaskView(String(result.task?.id || ""));
+    if (!waitingForSchedule) openLiveBrowserTaskView(String(result.task?.id || ""));
     await loadSocial();
     return result;
   } finally {
@@ -17551,6 +17601,11 @@ function bindEvents() {
     }
   });
   $("moduleBody").addEventListener("input", (event) => {
+    if (event.target?.id === "personaPublishScheduleAt") {
+      const personaId = String(selectedPersona()?.id || "").trim();
+      if (personaId) state.personaPublishScheduleValues[personaId] = event.target.value || "";
+      return;
+    }
     if (event.target?.id === "personaHotPreviewContent") {
       snapshotPersonaHotPreviewContent();
       renderConfirmSummary();
