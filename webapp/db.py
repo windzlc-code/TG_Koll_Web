@@ -40,6 +40,197 @@ def db() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+def _ensure_social_integrity_triggers(conn: sqlite3.Connection) -> None:
+    triggers = (
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_social_proxies_integrity_insert
+        BEFORE INSERT ON social_proxies
+        WHEN NEW.user_id != 0
+        BEGIN
+          SELECT CASE
+            WHEN NOT EXISTS (SELECT 1 FROM users WHERE id = NEW.user_id)
+            THEN RAISE(ABORT, 'social proxy owner user missing')
+          END;
+        END
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_social_proxies_integrity_update
+        BEFORE UPDATE OF user_id ON social_proxies
+        WHEN NEW.user_id != 0
+        BEGIN
+          SELECT CASE
+            WHEN NOT EXISTS (SELECT 1 FROM users WHERE id = NEW.user_id)
+            THEN RAISE(ABORT, 'social proxy owner user missing')
+          END;
+        END
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_social_accounts_integrity_insert
+        BEFORE INSERT ON social_accounts
+        BEGIN
+          SELECT CASE
+            WHEN NEW.user_id != 0 AND NOT EXISTS (SELECT 1 FROM users WHERE id = NEW.user_id)
+            THEN RAISE(ABORT, 'social account owner user missing')
+            WHEN NEW.proxy_id != '' AND NOT EXISTS (
+              SELECT 1 FROM social_proxies WHERE id = NEW.proxy_id
+            )
+            THEN RAISE(ABORT, 'social account proxy missing')
+            WHEN NEW.proxy_id != '' AND NOT EXISTS (
+              SELECT 1 FROM social_proxies WHERE id = NEW.proxy_id AND user_id = NEW.user_id
+            )
+            THEN RAISE(ABORT, 'social account proxy owner mismatch')
+          END;
+        END
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_social_accounts_integrity_update
+        BEFORE UPDATE OF user_id, proxy_id ON social_accounts
+        BEGIN
+          SELECT CASE
+            WHEN NEW.user_id != 0 AND NOT EXISTS (SELECT 1 FROM users WHERE id = NEW.user_id)
+            THEN RAISE(ABORT, 'social account owner user missing')
+            WHEN NEW.proxy_id != '' AND NOT EXISTS (
+              SELECT 1 FROM social_proxies WHERE id = NEW.proxy_id
+            )
+            THEN RAISE(ABORT, 'social account proxy missing')
+            WHEN NEW.proxy_id != '' AND NOT EXISTS (
+              SELECT 1 FROM social_proxies WHERE id = NEW.proxy_id AND user_id = NEW.user_id
+            )
+            THEN RAISE(ABORT, 'social account proxy owner mismatch')
+          END;
+        END
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_social_tasks_integrity_insert
+        BEFORE INSERT ON social_automation_tasks
+        BEGIN
+          SELECT CASE
+            WHEN NEW.user_id != 0 AND NOT EXISTS (SELECT 1 FROM users WHERE id = NEW.user_id)
+            THEN RAISE(ABORT, 'social task owner user missing')
+            WHEN NOT EXISTS (SELECT 1 FROM social_accounts WHERE id = NEW.account_id)
+            THEN RAISE(ABORT, 'social task account missing')
+            WHEN NOT EXISTS (
+              SELECT 1 FROM social_accounts WHERE id = NEW.account_id AND user_id = NEW.user_id
+            )
+            THEN RAISE(ABORT, 'social task account owner mismatch')
+          END;
+        END
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_social_tasks_integrity_update
+        BEFORE UPDATE OF user_id, account_id ON social_automation_tasks
+        BEGIN
+          SELECT CASE
+            WHEN NEW.user_id != 0 AND NOT EXISTS (SELECT 1 FROM users WHERE id = NEW.user_id)
+            THEN RAISE(ABORT, 'social task owner user missing')
+            WHEN NOT EXISTS (SELECT 1 FROM social_accounts WHERE id = NEW.account_id)
+            THEN RAISE(ABORT, 'social task account missing')
+            WHEN NOT EXISTS (
+              SELECT 1 FROM social_accounts WHERE id = NEW.account_id AND user_id = NEW.user_id
+            )
+            THEN RAISE(ABORT, 'social task account owner mismatch')
+          END;
+        END
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_social_users_delete_restrict
+        BEFORE DELETE ON users
+        WHEN EXISTS (SELECT 1 FROM social_proxies WHERE user_id = OLD.id)
+          OR EXISTS (SELECT 1 FROM social_accounts WHERE user_id = OLD.id)
+          OR EXISTS (SELECT 1 FROM social_automation_tasks WHERE user_id = OLD.id)
+        BEGIN
+          SELECT RAISE(ABORT, 'social resources still reference user');
+        END
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_social_accounts_delete_restrict
+        BEFORE DELETE ON social_accounts
+        WHEN EXISTS (SELECT 1 FROM social_automation_tasks WHERE account_id = OLD.id)
+        BEGIN
+          SELECT RAISE(ABORT, 'social tasks still reference account');
+        END
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_social_proxies_delete_restrict
+        BEFORE DELETE ON social_proxies
+        WHEN EXISTS (SELECT 1 FROM social_accounts WHERE proxy_id = OLD.id)
+        BEGIN
+          SELECT RAISE(ABORT, 'social accounts still reference proxy');
+        END
+        """,
+    )
+    trigger_names = (
+        "trg_social_proxies_integrity_insert",
+        "trg_social_proxies_integrity_update",
+        "trg_social_accounts_integrity_insert",
+        "trg_social_accounts_integrity_update",
+        "trg_social_tasks_integrity_insert",
+        "trg_social_tasks_integrity_update",
+        "trg_social_users_delete_restrict",
+        "trg_social_accounts_delete_restrict",
+        "trg_social_proxies_delete_restrict",
+    )
+    for name in trigger_names:
+        conn.execute(f'DROP TRIGGER IF EXISTS "{name}"')
+    for statement in triggers:
+        conn.execute(statement)
+
+
+def _ensure_username_reservation_triggers(conn: sqlite3.Connection) -> None:
+    conn.execute("DROP TRIGGER IF EXISTS trg_users_reserved_username_insert")
+    conn.execute("DROP TRIGGER IF EXISTS trg_users_reserved_username_update")
+    conn.execute("DROP TRIGGER IF EXISTS trg_users_reserve_username_after_insert")
+    conn.execute("DROP TRIGGER IF EXISTS trg_users_reserve_username_after_update")
+    conn.execute(
+        """
+        CREATE TRIGGER trg_users_reserved_username_insert
+        BEFORE INSERT ON users
+        WHEN EXISTS (
+          SELECT 1 FROM username_reservations
+          WHERE username = NEW.username COLLATE NOCASE
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'username is permanently reserved');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER trg_users_reserved_username_update
+        BEFORE UPDATE OF username ON users
+        WHEN NEW.username != OLD.username COLLATE NOCASE
+          AND EXISTS (
+            SELECT 1 FROM username_reservations
+            WHERE username = NEW.username COLLATE NOCASE AND user_id != OLD.id
+          )
+        BEGIN
+          SELECT RAISE(ABORT, 'username is permanently reserved');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER trg_users_reserve_username_after_insert
+        AFTER INSERT ON users
+        BEGIN
+          INSERT OR IGNORE INTO username_reservations(username, user_id, created_at)
+          VALUES (NEW.username, NEW.id, NEW.created_at);
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER trg_users_reserve_username_after_update
+        AFTER UPDATE OF username ON users
+        WHEN NEW.username != OLD.username COLLATE NOCASE
+        BEGIN
+          INSERT OR IGNORE INTO username_reservations(username, user_id, created_at)
+          VALUES (NEW.username, NEW.id, NEW.updated_at);
+        END
+        """
+    )
+
+
 def init_db() -> None:
     os.makedirs(os.path.dirname(get_db_path()), exist_ok=True)
     with db() as conn:
@@ -79,6 +270,21 @@ def init_db() -> None:
               created_at INTEGER NOT NULL,
               FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS username_reservations (
+              username TEXT PRIMARY KEY COLLATE NOCASE,
+              user_id INTEGER NOT NULL,
+              created_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO username_reservations(username, user_id, created_at)
+            SELECT username, id, created_at FROM users
             """
         )
         conn.execute(
@@ -333,6 +539,8 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_social_tasks_user ON social_automation_tasks(user_id, created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_persona_owners_user ON persona_owners(user_id, archive_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_persona_group_owners_user ON persona_group_owners(user_id, group_id)")
+        _ensure_username_reservation_triggers(conn)
+        _ensure_social_integrity_triggers(conn)
 
 
 def get_admin_config(conn: sqlite3.Connection, key: str, default: Any) -> Any:

@@ -1075,6 +1075,36 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(archives[0]["name"], "New Persona")
         self.assertEqual(archives[0]["posts"], [])
 
+    def test_persona_creation_rolls_back_json_when_owner_recording_fails(self):
+        with mock.patch.object(
+            server,
+            "_record_persona_owner",
+            side_effect=server.HTTPException(status_code=500, detail="owner write failed"),
+        ):
+            response = self.client.post(
+                "/api/persona_dashboard/personas",
+                json={"name": "Rollback Persona", "content": "Must not remain orphaned"},
+            )
+
+        self.assertEqual(response.status_code, 500, response.text)
+        archives = server._read_tool_r18_persona_archives()[0]
+        self.assertFalse(any(item.get("name") == "Rollback Persona" for item in archives))
+
+    def test_group_creation_rolls_back_json_when_owner_recording_fails(self):
+        with mock.patch.object(
+            server,
+            "_record_persona_group_owner",
+            side_effect=server.HTTPException(status_code=500, detail="owner write failed"),
+        ):
+            response = self.client.post(
+                "/api/persona_dashboard/groups",
+                json={"name": "Rollback Group"},
+            )
+
+        self.assertEqual(response.status_code, 500, response.text)
+        groups = server._read_persona_groups_config().get("groups") or []
+        self.assertFalse(any(item.get("name") == "Rollback Group" for item in groups))
+
     def test_duplicate_persona_copies_shell_without_content_data(self):
         self._write_archives()
         resp = self.client.post("/api/persona_dashboard/personas/persona-1/duplicate")
@@ -1266,6 +1296,26 @@ class PersonaDashboardApiTests(unittest.TestCase):
         post = next(item for item in list_resp.json()["posts"] if item["id"] == "post-1")
         self.assertTrue(post["media_items"])
 
+    def test_persona_draft_media_ops_reject_paths_outside_current_user_directory(self):
+        self._write_archives()
+        other_user_dir = self.tool_runtime_dir / "other_user"
+        other_user_dir.mkdir(parents=True, exist_ok=True)
+        other_user_media = other_user_dir / "other.png"
+        other_user_media.write_bytes(self.draft_media_path.read_bytes())
+
+        response = self.client.patch(
+            "/api/persona_dashboard/personas/persona-1/posts/post-1",
+            json={
+                "title": "Keep",
+                "content": "Keep existing draft safe",
+                "media_ops": [
+                    {"type": "append", "media_paths": [str(other_user_media)]},
+                ],
+            },
+        )
+
+        self.assertEqual(response.status_code, 404, response.text)
+
     def test_persona_media_endpoint_rejects_legacy_path_outside_trusted_roots(self):
         self._write_archives()
         outside_path = self.root / "outside-secret.txt"
@@ -1357,6 +1407,59 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(captured["payload"]["generation_content"], "手动输入的通勤配图正文")
         self.assertEqual(captured["payload"]["content_source_mode"], "manual")
         self.assertEqual(captured["payload"]["image_count"], 3)
+
+    def test_persona_image_tasks_require_ownership_before_enqueue(self):
+        self._write_archives()
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        unowned = json.loads(json.dumps(archives[0]))
+        unowned["id"] = "persona-unowned"
+        unowned["posts"][0]["id"] = "post-unowned"
+        archives.append(unowned)
+        archives_path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        persona_image = self.client.post(
+            "/api/tasks/submit",
+            data={
+                "task_type": "persona_image",
+                "params_json": json.dumps({"related_persona_id": "persona-unowned"}),
+            },
+        )
+        post_image = self.client.post(
+            "/api/tasks/submit",
+            data={
+                "task_type": "persona_post_image",
+                "params_json": json.dumps(
+                    {
+                        "related_persona_id": "persona-unowned",
+                        "related_post_id": "post-unowned",
+                        "prompt": "unowned",
+                    }
+                ),
+            },
+        )
+
+        self.assertEqual(persona_image.status_code, 404, persona_image.text)
+        self.assertEqual(post_image.status_code, 404, post_image.text)
+
+    def test_persona_task_worker_revalidates_owner_before_runner_execution(self):
+        self._write_archives()
+        task_id = "task-owner-revalidation"
+        user_id = self._admin_user_id()
+        payload = {"related_persona_id": "persona-1"}
+        server._create_task_record(task_id, user_id, "persona_image", payload)
+        with server.db() as conn:
+            conn.execute("DELETE FROM persona_owners WHERE archive_id = ?", ("persona-1",))
+
+        runner = mock.Mock(return_value={"ok": True})
+        with mock.patch.dict(server.TASK_RUNNERS, {"persona_image": runner}):
+            server._task_worker(task_id, user_id, "persona_image", payload)
+
+        runner.assert_not_called()
+        with server.db() as conn:
+            task = conn.execute("SELECT status, error FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        self.assertEqual(str(task["status"]), "failed")
+        self.assertTrue(str(task["error"] or ""))
 
     def test_persona_post_image_runner_saves_local_preview_file(self):
         self._write_archives()

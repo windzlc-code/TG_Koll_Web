@@ -62,6 +62,28 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
             )
         )
 
+    def _claimed_task(self, task_id: str, account_id: str):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO social_automation_tasks(
+                  id, user_id, persona_id, account_id, platform, task_type,
+                  priority, status, payload_json, result_json, created_at, updated_at
+                ) VALUES (?, 0, '', ?, 'threads', 'check_login', 50, 'running', '{}', '{}', 1, 1)
+                """,
+                (task_id, account_id),
+            )
+        return {"id": task_id, "account_id": account_id, "task_type": "check_login"}
+
+    def _set_legacy_proxy_id(self, account_id: str, proxy_id: str) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DROP TRIGGER trg_social_accounts_integrity_update")
+            conn.execute(
+                "UPDATE social_accounts SET proxy_id = ? WHERE id = ?",
+                (proxy_id, account_id),
+            )
+        init_db()
+
     def test_create_and_patch_proxy_are_atomic_and_password_is_write_only(self):
         account = self._account(
             "creator",
@@ -177,8 +199,7 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
         self.assertEqual(self._task(no_proxy["id"])["account_id"], no_proxy["id"])
 
         active = self._account("active", proxy=social_api.ResidentialProxyPayload(**self._proxy()))
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("UPDATE social_accounts SET proxy_id = 'missing-proxy' WHERE id = ?", (active["id"],))
+        self._set_legacy_proxy_id(active["id"], "missing-proxy")
         with self.assertRaises(HTTPException) as missing_row:
             self._task(active["id"])
         self.assertEqual(missing_row.exception.status_code, 409)
@@ -209,7 +230,7 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
             self._task(account["id"])
         self.assertEqual(create_error.exception.status_code, 409)
         with self.assertRaisesRegex(RuntimeError, "已过期"):
-            social_api._execute_claimed_task({"id": "expired-task-1", "account_id": account["id"]})
+            social_api._execute_claimed_task(self._claimed_task("expired-task-1", account["id"]))
 
     def test_worker_runs_without_proxy_but_blocks_dangling_or_failed_proxy(self):
         no_proxy = self._account("legacy-no-proxy")
@@ -223,10 +244,9 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
         self.assertIsNone(run_task.call_args.kwargs["proxy"])
 
         dangling = self._account("legacy-dangling-proxy")
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("UPDATE social_accounts SET proxy_id = 'missing-proxy' WHERE id = ?", (dangling["id"],))
+        self._set_legacy_proxy_id(dangling["id"], "missing-proxy")
         with self.assertRaisesRegex(RuntimeError, "不存在"):
-            social_api._execute_claimed_task({"id": "legacy-task-1", "account_id": dangling["id"]})
+            social_api._execute_claimed_task(self._claimed_task("legacy-task-1", dangling["id"]))
 
         failed = self._account(
             "legacy-failed-proxy",
@@ -235,7 +255,7 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("UPDATE social_proxies SET status = 'failed' WHERE id = ?", (failed["proxy_id"],))
         with self.assertRaisesRegex(RuntimeError, "不可用"):
-            social_api._execute_claimed_task({"id": "legacy-task-2", "account_id": failed["id"]})
+            social_api._execute_claimed_task(self._claimed_task("legacy-task-2", failed["id"]))
 
     def test_clear_residential_proxy_and_conflicting_patch_inputs(self):
         account = self._account(

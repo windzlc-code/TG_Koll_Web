@@ -94,6 +94,20 @@ class AccountSettingsApiTests(unittest.TestCase):
         )
         self.assertEqual(relogin_resp.status_code, 200)
 
+        old_name_application = TestClient(self.app).post(
+            "/api/auth/apply",
+            json={
+                "username": "admin",
+                "password": "Applicant123",
+                "full_name": "Reserved Alias",
+                "email": "reserved@example.test",
+                "phone": "0912345678",
+                "company": "Isolation QA",
+                "use_case": "Verify historical usernames cannot cross tenant boundaries",
+            },
+        )
+        self.assertEqual(old_name_application.status_code, 409, old_name_application.text)
+
     def test_admin_can_change_password_with_current_password(self):
         login_resp = self.client.post(
             "/api/auth/login",

@@ -1156,6 +1156,7 @@ def create_social_proxy(payload: SocialProxyPayload, *, owner_user_id: int = 0) 
     if str(payload.ip_type or "static_residential").strip().lower() != "static_residential":
         raise HTTPException(status_code=400, detail="仅支持静态住宅 IP")
     with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         _require_active_owner_user(conn, owner_user_id)
         row = _insert_social_proxy(
             conn,
@@ -1814,6 +1815,7 @@ def create_social_task(payload: SocialTaskPayload) -> dict[str, Any]:
     scheduled_at = _parse_schedule(payload.scheduled_at)
     task_id = _NEW_ID("social_task")
     with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         account = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (payload.account_id,)).fetchone()
         if not account:
             raise HTTPException(status_code=404, detail="账号不存在")
@@ -1992,20 +1994,40 @@ def cancel_social_task(task_id: str, reason: str = "") -> dict[str, Any]:
     return _task_public(row)
 
 
-def cancel_all_social_tasks(reason: str = "", *, user_id: int | None = None) -> dict[str, Any]:
+def cancel_all_social_tasks(
+    reason: str = "",
+    *,
+    user_id: int | None = None,
+    account_ids: list[str] | None = None,
+) -> dict[str, Any]:
     now = _now()
     clean_reason = reason or "用户停止全部自动化任务"
+    clean_account_ids = list(
+        dict.fromkeys(
+            str(account_id or "").strip()
+            for account_id in (account_ids or [])
+            if str(account_id or "").strip()
+        )
+    )
+    scope_clauses: list[str] = []
+    scope_params: list[Any] = []
+    if user_id is not None:
+        scope_clauses.append("user_id = ?")
+        scope_params.append(int(user_id))
+    if clean_account_ids:
+        account_placeholders = ", ".join("?" for _ in clean_account_ids)
+        scope_clauses.append(f"account_id IN ({account_placeholders})")
+        scope_params.extend(clean_account_ids)
+    scope_clause = f" AND ({' OR '.join(scope_clauses)})" if scope_clauses else ""
     with db() as conn:
-        owner_clause = "" if user_id is None else " AND user_id = ?"
-        owner_params: tuple[Any, ...] = () if user_id is None else (int(user_id),)
         cancelled_rows = conn.execute(
             f"""
             UPDATE social_automation_tasks
             SET status = 'cancelled', finished_at = ?, error = ?, updated_at = ?
-            WHERE status IN ('queued', 'running', 'need_manual'){owner_clause}
+            WHERE status IN ('queued', 'running', 'need_manual'){scope_clause}
             RETURNING id
             """,
-            (now, clean_reason, now, *owner_params),
+            (now, clean_reason, now, *scope_params),
         ).fetchall()
         task_ids = [str(row["id"] or "") for row in cancelled_rows if str(row["id"] or "")]
         if not task_ids:
@@ -2294,6 +2316,20 @@ def _recover_orphaned_manual_login_task(now: int) -> None:
 
 def _execute_claimed_task(task: dict[str, Any]) -> None:
     task_id = str(task.get("id") or "")
+    task = dict(task)
+    control = {"cancel_event": threading.Event(), "context": None, "manager": None, "task": dict(task), "live_browser_session_id": ""}
+    with _RUNNING_TASK_CONTROLS_LOCK:
+        _RUNNING_TASK_CONTROLS[task_id] = control
+    try:
+        _execute_claimed_task_with_control(task, control)
+    finally:
+        _discard_ephemeral_task_secrets(task_id)
+        with _RUNNING_TASK_CONTROLS_LOCK:
+            _RUNNING_TASK_CONTROLS.pop(task_id, None)
+
+
+def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, Any]) -> None:
+    task_id = str(task.get("id") or "")
     if _is_task_cancelled(task_id):
         _discard_ephemeral_task_secrets(task_id)
         return
@@ -2323,9 +2359,6 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
     from social_automation.runner import AutoLoginFailedError, NeedManualError, UnsupportedActionError, run_social_task
 
     logger = _DbTaskLogger(task["id"])
-    control = {"cancel_event": threading.Event(), "context": None, "manager": None, "task": dict(task), "live_browser_session_id": ""}
-    with _RUNNING_TASK_CONTROLS_LOCK:
-        _RUNNING_TASK_CONTROLS[str(task["id"])] = control
     try:
         if _is_task_cancelled(task_id):
             return
@@ -2355,10 +2388,6 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
         if not _is_task_cancelled(str(task["id"])):
             _finish_task(task["id"], "failed", {"unsupported": True}, str(exc))
         return
-    finally:
-        _discard_ephemeral_task_secrets(task_id)
-        with _RUNNING_TASK_CONTROLS_LOCK:
-            _RUNNING_TASK_CONTROLS.pop(str(task["id"]), None)
     if _is_task_cancelled(str(task["id"])):
         return
     status = "success" if result.get("ok") else "failed"
@@ -2407,9 +2436,9 @@ def _is_task_cancelled(task_id: str) -> bool:
     try:
         with db() as conn:
             row = conn.execute("SELECT status FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
-        return bool(row and str(row["status"] or "") == "cancelled")
+        return row is None or str(row["status"] or "") == "cancelled"
     except Exception:
-        return False
+        return True
 
 
 def _discard_ephemeral_task_secrets(*task_ids: str) -> None:

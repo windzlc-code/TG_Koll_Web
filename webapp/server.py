@@ -214,6 +214,8 @@ COMFY_GPU_MAX_COMFY_PENDING = max(_env_int("COMFY_GPU_MAX_COMFY_PENDING", 4), 0)
 _TASK_QUEUE: queue.Queue[tuple[str, int, str, dict[str, Any]]] = queue.Queue(maxsize=int(TASK_QUEUE_MAXSIZE or 0))
 _WORKERS: list[threading.Thread] = []
 _WORKERS_LOCK = threading.Lock()
+_NORMAL_TASK_CONTROLS: dict[str, threading.Event] = {}
+_NORMAL_TASK_CONTROLS_LOCK = threading.Lock()
 _RUNTIME_CONFIG_LOCK = threading.RLock()
 _COMFY_GPU_SEMAPHORE = threading.BoundedSemaphore(int(COMFY_GPU_LOCAL_SEMAPHORE_LIMIT))
 _COMFY_GPU_LOCK = threading.Lock()
@@ -659,6 +661,67 @@ def _require_user_media_paths(media_paths: list[str], user: dict[str, Any]) -> N
             raise HTTPException(status_code=404, detail="媒体文件不存在") from exc
         if root not in path.parents or not path.is_file() or not _is_allowed_dashboard_media_path(path):
             raise HTTPException(status_code=404, detail="媒体文件不存在")
+
+
+def _require_user_draft_media_paths(payload: Any, user: dict[str, Any]) -> None:
+    _require_user_media_paths(list(getattr(payload, "media_paths", None) or []), user)
+    for raw_op in getattr(payload, "media_ops", None) or []:
+        op = raw_op if isinstance(raw_op, dict) else {}
+        nested_paths = op.get("media_paths")
+        if nested_paths is None:
+            continue
+        if not isinstance(nested_paths, list):
+            raise HTTPException(status_code=404, detail="media file not found")
+        _require_user_media_paths(nested_paths, user)
+
+
+def _persona_task_archive_id(task_type: str, payload: dict[str, Any]) -> str:
+    if str(task_type or "").strip() not in {"persona_image", "persona_post_image"}:
+        return ""
+    return str(payload.get("related_persona_id") or payload.get("archive_id") or "").strip()
+
+
+def _require_persona_task_owner(
+    task_type: str,
+    payload: dict[str, Any],
+    user_id: int,
+    *,
+    worker_execution: bool = False,
+) -> None:
+    archive_id = _persona_task_archive_id(task_type, payload)
+    if not archive_id:
+        return
+    with db() as conn:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM persona_owners po
+            JOIN users u ON u.id = po.user_id
+            WHERE po.archive_id = ? AND po.user_id = ?
+              AND u.is_disabled = 0
+              AND (u.is_admin = 1 OR u.approval_status = 'approved')
+            """,
+            (archive_id, int(user_id)),
+        ).fetchone()
+    if row is not None:
+        return
+    if worker_execution:
+        raise RuntimeError("persona is unavailable for this task owner")
+    raise HTTPException(status_code=404, detail="persona not found")
+
+
+def _require_task_execution_user(user_id: int) -> None:
+    with db() as conn:
+        row = conn.execute(
+            "SELECT is_admin, is_disabled, approval_status FROM users WHERE id = ?",
+            (int(user_id),),
+        ).fetchone()
+    if (
+        row is None
+        or int(row["is_disabled"] or 0) == 1
+        or (int(row["is_admin"] or 0) != 1 and str(row["approval_status"] or "") != "approved")
+    ):
+        raise RuntimeError("task owner account is disabled or missing")
 
 
 def _visible_persona_group_ids(user: dict[str, Any]) -> set[str]:
@@ -4095,6 +4158,21 @@ def _ensure_default_runtime_config() -> None:
                 _write_runtime_config_file(_normalize_runtime_config(raw))
 
 
+def _reserve_username(conn: sqlite3.Connection, user_id: int, username: str, now: int | None = None) -> None:
+    clean_username = str(username or "").strip()
+    owner_id = int(user_id)
+    existing = conn.execute(
+        "SELECT user_id FROM username_reservations WHERE username = ? COLLATE NOCASE",
+        (clean_username,),
+    ).fetchone()
+    if existing is not None and int(existing["user_id"] or 0) != owner_id:
+        raise sqlite3.IntegrityError("username is permanently reserved")
+    conn.execute(
+        "INSERT OR IGNORE INTO username_reservations(username, user_id, created_at) VALUES (?, ?, ?)",
+        (clean_username, owner_id, int(now if now is not None else _now_ts())),
+    )
+
+
 def _ensure_admin_seed() -> None:
     with db() as conn:
         row = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()
@@ -4107,13 +4185,14 @@ def _ensure_admin_seed() -> None:
         if len(password) < 12:
             raise RuntimeError("空数据库首次启动必须设置至少 12 位的 ADMIN_BOOTSTRAP_PASSWORD")
         now = _now_ts()
-        conn.execute(
+        inserted = conn.execute(
             """
             INSERT INTO users(username, password_hash, is_admin, is_disabled, balance_cents, created_at, updated_at)
             VALUES (?, ?, 1, 0, 0, ?, ?)
             """,
             (username, hash_password(password), now, now),
         )
+        _reserve_username(conn, int(inserted.lastrowid or 0), username, now)
 
 
 def _create_local_console_session() -> str:
@@ -4125,13 +4204,14 @@ def _create_local_console_session() -> str:
             ("local_console",),
         ).fetchone()
         if user is None:
-            conn.execute(
+            inserted = conn.execute(
                 """
                 INSERT INTO users(username, password_hash, is_admin, is_disabled, balance_cents, created_at, updated_at)
                 VALUES (?, ?, 1, 0, 999999999, ?, ?)
                 """,
                 ("local_console", hash_password(f"local-{uuid.uuid4().hex}"), now, now),
             )
+            _reserve_username(conn, int(inserted.lastrowid or 0), "local_console", now)
             user = conn.execute(
                 "SELECT * FROM users WHERE username = ?",
                 ("local_console",),
@@ -9633,6 +9713,27 @@ def _agent_chat_payload(*, reply: str, summary: str = "") -> tuple[str, dict[str
 
 
 def _task_worker(task_id: str, user_id: int, task_type: str, payload: dict[str, Any]) -> None:
+    clean_task_id = str(task_id)
+    cancel_event = threading.Event()
+    with _NORMAL_TASK_CONTROLS_LOCK:
+        if clean_task_id in _NORMAL_TASK_CONTROLS:
+            return
+        _NORMAL_TASK_CONTROLS[clean_task_id] = cancel_event
+    try:
+        _task_worker_with_control(clean_task_id, user_id, task_type, payload, cancel_event)
+    finally:
+        with _NORMAL_TASK_CONTROLS_LOCK:
+            if _NORMAL_TASK_CONTROLS.get(clean_task_id) is cancel_event:
+                _NORMAL_TASK_CONTROLS.pop(clean_task_id, None)
+
+
+def _task_worker_with_control(
+    task_id: str,
+    user_id: int,
+    task_type: str,
+    payload: dict[str, Any],
+    cancel_event: threading.Event,
+) -> None:
     with db() as conn:
         row = conn.execute("SELECT status FROM tasks WHERE id = ?", (str(task_id),)).fetchone()
         if row is None or str(row["status"] or "").strip().lower() != "queued":
@@ -9684,10 +9785,16 @@ def _task_worker(task_id: str, user_id: int, task_type: str, payload: dict[str, 
     _emit_stage(effective_payload, stage="running", status="running", message="任务进行中")
 
     try:
+        if cancel_event.is_set():
+            raise RuntimeError("task cancelled before execution")
+        _require_task_execution_user(user_id)
+        _require_persona_task_owner(task_type, effective_payload, user_id, worker_execution=True)
         runner = TASK_RUNNERS.get(task_type)
         if runner is None:
             raise RuntimeError(f"未知任务类型: {task_type}")
         task_output = runner(task_id, effective_payload)
+        if cancel_event.is_set():
+            raise RuntimeError("task cancelled during execution")
         if not isinstance(task_output, dict):
             task_output = {"raw_result": task_output}
         status = "success" if _to_bool(task_output.get("ok"), False) else "failed"
@@ -9719,9 +9826,12 @@ def _task_worker(task_id: str, user_id: int, task_type: str, payload: dict[str, 
         }
         _emit_stage(effective_payload, stage="finished", status="failed", message="生成失败", data={"error": str(task_error)})
 
+    discard_output = False
     with db() as conn:
         current_row = conn.execute("SELECT status FROM tasks WHERE id = ?", (str(task_id),)).fetchone()
-        if current_row is not None and str(current_row["status"] or "").strip().lower() == "cancelled":
+        if current_row is None:
+            discard_output = True
+        elif str(current_row["status"] or "").strip().lower() == "cancelled":
             _insert_task_event(
                 conn,
                 task_id=task_id,
@@ -9735,29 +9845,30 @@ def _task_worker(task_id: str, user_id: int, task_type: str, payload: dict[str, 
                     "user_visible": True,
                 },
             )
-            return
-        cost_cents = 0
+            discard_output = True
+        if not discard_output:
+            cost_cents = 0
 
-        output_to_store = dict(task_output)
-        output_to_store.pop("billing", None)
-        conn.execute(
-            """
-            UPDATE tasks
-            SET status = ?, output_json = ?, error = ?, runninghub_task_id = ?, usage_json = ?, cost_cents = ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (
-                status,
-                _json_dumps(_sanitize_payload(output_to_store)),
-                str(task_error or ""),
-                runninghub_task_id,
-                _json_dumps(usage_json),
-                int(cost_cents),
-                _now_ts(),
-                task_id,
-            ),
-        )
-        _insert_task_event(
+            output_to_store = dict(task_output)
+            output_to_store.pop("billing", None)
+            conn.execute(
+                """
+                UPDATE tasks
+                SET status = ?, output_json = ?, error = ?, runninghub_task_id = ?, usage_json = ?, cost_cents = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    status,
+                    _json_dumps(_sanitize_payload(output_to_store)),
+                    str(task_error or ""),
+                    runninghub_task_id,
+                    _json_dumps(usage_json),
+                    int(cost_cents),
+                    _now_ts(),
+                    task_id,
+                ),
+            )
+            _insert_task_event(
             conn,
             task_id=task_id,
             user_id=int(user_id),
@@ -9774,7 +9885,7 @@ def _task_worker(task_id: str, user_id: int, task_type: str, payload: dict[str, 
                 "batch_summary": _extract_batch_summary(output_to_store if isinstance(output_to_store, dict) else {}),
             },
         )
-        _insert_task_event(
+            _insert_task_event(
             conn,
             task_id=task_id,
             user_id=int(user_id),
@@ -9787,7 +9898,10 @@ def _task_worker(task_id: str, user_id: int, task_type: str, payload: dict[str, 
                 "user_visible": True,
                 "output_snapshot": _build_final_output_snapshot(output_to_store if isinstance(output_to_store, dict) else {}),
             },
-        )
+            )
+    if discard_output:
+        _delete_task_artifacts(task_id)
+        return
     _notify_tg_task_finished(
         task_id=task_id,
         task_type=task_type,
@@ -9940,6 +10054,10 @@ def _cancel_task_record_for_user(
                 "cost_cents": 0,
             },
         )
+    with _NORMAL_TASK_CONTROLS_LOCK:
+        cancel_event = _NORMAL_TASK_CONTROLS.get(tid)
+    if cancel_event is not None:
+        cancel_event.set()
     return {
         "ok": True,
         "cancelled": True,
@@ -9950,6 +10068,37 @@ def _cancel_task_record_for_user(
         "previous_status": status,
         "message": f"任务 {tid} 已强制停止。",
     }
+
+
+def _cancel_normal_tasks_for_deleted_user(user_id: int) -> list[str]:
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT id FROM tasks WHERE user_id = ? AND status IN ('queued', 'running')",
+            (int(user_id),),
+        ).fetchall()
+    task_ids = [str(row["id"] or "").strip() for row in rows if str(row["id"] or "").strip()]
+    for task_id in task_ids:
+        with contextlib.suppress(HTTPException):
+            _cancel_task_record_for_user(
+                task_id=task_id,
+                user_id=int(user_id),
+                requested_by="account deletion",
+            )
+    return task_ids
+
+
+def _wait_for_normal_tasks_to_stop(task_ids: Iterable[str], timeout_seconds: float = 30.0) -> list[str]:
+    pending = {str(task_id or "").strip() for task_id in task_ids if str(task_id or "").strip()}
+    if not pending:
+        return []
+    deadline = time.monotonic() + max(float(timeout_seconds), 0.0)
+    while pending:
+        with _NORMAL_TASK_CONTROLS_LOCK:
+            pending = {task_id for task_id in pending if task_id in _NORMAL_TASK_CONTROLS}
+        if not pending or time.monotonic() >= deadline:
+            break
+        time.sleep(0.05)
+    return sorted(pending)
 
 
 def _find_latest_internal_tg_active_task(chat_id: int) -> dict[str, Any] | None:
@@ -10069,6 +10218,7 @@ def _emit_stage(
 
 
 def _enqueue_task(task_id: str, user_id: int, task_type: str, payload: dict[str, Any]) -> None:
+    _require_persona_task_owner(task_type, payload, user_id)
     effective_payload = _apply_runtime_defaults(task_type, payload)
     _create_task_record(task_id, user_id, task_type, effective_payload)
     try:
@@ -15940,6 +16090,40 @@ def _admin_user_content_metrics(conn: sqlite3.Connection, user_ids: Iterable[int
     return metrics
 
 
+def _created_persona_id(result: dict[str, Any]) -> str:
+    profile = result.get("profile") if isinstance(result.get("profile"), dict) else {}
+    return str(result.get("id") or profile.get("id") or "").strip()
+
+
+def _create_persona_with_owner(user: dict[str, Any], operation: Any) -> dict[str, Any]:
+    result = operation()
+    archive_id = _created_persona_id(result)
+    try:
+        _record_persona_owner(archive_id, user)
+    except Exception:
+        try:
+            _delete_persona_dashboard_personas([archive_id])
+        except Exception:
+            logger.exception("Failed to roll back persona after owner recording failure: %s", archive_id)
+        raise
+    return result
+
+
+def _create_persona_group_with_owner(user: dict[str, Any], operation: Any) -> dict[str, Any]:
+    result = operation()
+    group = result.get("group") if isinstance(result.get("group"), dict) else {}
+    group_id = str(group.get("id") or "").strip()
+    try:
+        _record_persona_group_owner(group_id, user)
+    except Exception:
+        try:
+            _delete_persona_groups([group_id])
+        except Exception:
+            logger.exception("Failed to roll back persona group after owner recording failure: %s", group_id)
+        raise
+    return result
+
+
 def create_app() -> FastAPI:
     _ensure_dirs()
     init_db()
@@ -16040,6 +16224,7 @@ def create_app() -> FastAPI:
                 visible_archive_ids=_visible_persona_ids(user),
                 visible_group_ids=_visible_persona_group_ids(user),
             )
+            console_bootstrap["user_id"] = _workspace_user_id(user)
         except Exception as exc:
             logger.warning("Failed to build console bootstrap overview: %s", exc)
             console_bootstrap = None
@@ -16149,10 +16334,11 @@ def create_app() -> FastAPI:
                     (username, password_hash, full_name, email, phone, company, use_case, now, now),
                 )
                 user_id = int(inserted.lastrowid or 0)
+                _reserve_username(conn, user_id, username, now)
                 vault_ciphertext = _encrypt_password_for_vault(user_id, password)
                 _upsert_password_vault(conn, user_id, vault_ciphertext, now)
             except Exception as exc:
-                if "UNIQUE" in str(exc).upper():
+                if "UNIQUE" in str(exc).upper() or "RESERVED" in str(exc).upper():
                     raise HTTPException(status_code=409, detail="客户账号已存在") from exc
                 raise
             user_row = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
@@ -16311,9 +16497,13 @@ def create_app() -> FastAPI:
         if new_username == current_username:
             return {"ok": True}
         with db() as conn:
-            row = conn.execute("SELECT id FROM users WHERE username = ?", (new_username,)).fetchone()
-            if row is not None and int(row["id"] or 0) != int(user["id"]):
+            row = conn.execute(
+                "SELECT user_id FROM username_reservations WHERE username = ? COLLATE NOCASE",
+                (new_username,),
+            ).fetchone()
+            if row is not None and int(row["user_id"] or 0) != int(user["id"]):
                 raise HTTPException(status_code=400, detail="用户名已存在")
+            _reserve_username(conn, int(user["id"]), new_username)
             conn.execute(
                 "UPDATE users SET username = ?, updated_at = ? WHERE id = ?",
                 (new_username, _now_ts(), int(user["id"])),
@@ -16359,8 +16549,7 @@ def create_app() -> FastAPI:
     def api_persona_dashboard_create_persona(payload: PersonaDashboardPersonaCreatePayload, user: dict[str, Any] = Depends(get_current_user)):
         with TENANT_RESOURCE_LIFECYCLE_LOCK:
             _require_active_workspace_user(user)
-            result = _create_persona_archive(payload)
-            _record_persona_owner(str(result.get("id") or ""), user)
+            result = _create_persona_with_owner(user, lambda: _create_persona_archive(payload))
         return result
 
     @app.post("/api/persona_dashboard/personas/ai_keywords")
@@ -16371,9 +16560,7 @@ def create_app() -> FastAPI:
     def api_persona_dashboard_persona_ai_create(payload: PersonaDashboardPersonaAiCreatePayload, user: dict[str, Any] = Depends(get_current_user)):
         with TENANT_RESOURCE_LIFECYCLE_LOCK:
             _require_active_workspace_user(user)
-            result = _persona_dashboard_create_persona_with_ai(payload)
-            profile = result.get("profile") if isinstance(result.get("profile"), dict) else {}
-            _record_persona_owner(str(profile.get("id") or ""), user)
+            result = _create_persona_with_owner(user, lambda: _persona_dashboard_create_persona_with_ai(payload))
         return result
 
     @app.post("/api/persona_dashboard/personas/ai_profile")
@@ -16384,9 +16571,7 @@ def create_app() -> FastAPI:
     def api_persona_dashboard_duplicate_persona(archive_id: str, user: dict[str, Any] = Depends(require_persona_owner)):
         with TENANT_RESOURCE_LIFECYCLE_LOCK:
             _require_active_workspace_user(user)
-            result = _duplicate_persona_archive(archive_id)
-            profile = result.get("profile") if isinstance(result.get("profile"), dict) else {}
-            _record_persona_owner(str(profile.get("id") or ""), user)
+            result = _create_persona_with_owner(user, lambda: _duplicate_persona_archive(archive_id))
         return result
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/posts")
@@ -16403,7 +16588,7 @@ def create_app() -> FastAPI:
 
     @app.patch("/api/persona_dashboard/personas/{archive_id}/favorites/{post_id}")
     def api_persona_dashboard_update_favorite(archive_id: str, post_id: str, payload: PersonaDashboardDraftPostPayload, user: dict[str, Any] = Depends(require_persona_owner)):
-        _require_user_media_paths(payload.media_paths, user)
+        _require_user_draft_media_paths(payload, user)
         return _update_persona_archive_post(archive_id, post_id, payload, source="favorites")
 
     @app.delete("/api/persona_dashboard/personas/{archive_id}/favorites/{post_id}")
@@ -16499,9 +16684,7 @@ def create_app() -> FastAPI:
     def api_persona_dashboard_create_group(payload: PersonaDashboardGroupCreatePayload, user: dict[str, Any] = Depends(get_current_user)):
         with TENANT_RESOURCE_LIFECYCLE_LOCK:
             _require_active_workspace_user(user)
-            result = _create_persona_group(payload)
-            group = result.get("group") if isinstance(result.get("group"), dict) else {}
-            _record_persona_group_owner(str(group.get("id") or ""), user)
+            result = _create_persona_group_with_owner(user, lambda: _create_persona_group(payload))
         return result
 
     @app.post("/api/persona_dashboard/groups/batch-delete")
@@ -16583,12 +16766,12 @@ def create_app() -> FastAPI:
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/posts")
     def api_persona_dashboard_create_post(archive_id: str, payload: PersonaDashboardDraftPostPayload, user: dict[str, Any] = Depends(require_persona_owner)):
-        _require_user_media_paths(payload.media_paths, user)
+        _require_user_draft_media_paths(payload, user)
         return _create_persona_archive_post(archive_id, payload)
 
     @app.patch("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}")
     def api_persona_dashboard_update_post(archive_id: str, post_id: str, payload: PersonaDashboardDraftPostPayload, user: dict[str, Any] = Depends(require_persona_owner)):
-        _require_user_media_paths(payload.media_paths, user)
+        _require_user_draft_media_paths(payload, user)
         return _update_persona_archive_post(archive_id, post_id, payload)
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}/media/from_task")
@@ -18222,11 +18405,12 @@ def create_app() -> FastAPI:
                     ),
                 )
                 created_user_id = int(inserted.lastrowid or 0)
+                _reserve_username(conn, created_user_id, username, now)
                 if not bool(payload.is_admin):
                     vault_ciphertext = _encrypt_password_for_vault(created_user_id, password)
                     _upsert_password_vault(conn, created_user_id, vault_ciphertext, now)
             except Exception as exc:
-                if "UNIQUE" in str(exc).upper():
+                if "UNIQUE" in str(exc).upper() or "RESERVED" in str(exc).upper():
                     raise HTTPException(status_code=409, detail="用户名已存在") from exc
                 raise
             row = conn.execute(
@@ -18609,8 +18793,29 @@ def create_app() -> FastAPI:
                 now = _now_ts()
                 conn.execute("UPDATE users SET is_disabled = 1, updated_at = ? WHERE id = ?", (now, target_id))
                 conn.execute("DELETE FROM sessions WHERE user_id = ?", (target_id,))
+                account_ids = [
+                    str(account_row["id"] or "").strip()
+                    for account_row in conn.execute(
+                        "SELECT id FROM social_accounts WHERE user_id = ?",
+                        (target_id,),
+                    ).fetchall()
+                    if str(account_row["id"] or "").strip()
+                ]
 
-            cancel_all_social_tasks("所属用户已删除", user_id=target_id)
+            cancel_all_social_tasks("所属用户已删除", user_id=target_id, account_ids=account_ids)
+            cancelled_normal_task_ids = _cancel_normal_tasks_for_deleted_user(target_id)
+            active_normal_task_ids = _wait_for_normal_tasks_to_stop(
+                cancelled_normal_task_ids,
+                timeout_seconds=max(_env_float("ACCOUNT_DELETE_TASK_WAIT_SECONDS", 30.0), 0.0),
+            )
+            if active_normal_task_ids:
+                return {
+                    "ok": False,
+                    "deleted_personas": 0,
+                    "deleted_groups": 0,
+                    "deleted_tasks": 0,
+                    "cleanup_pending": [f"active_task:{task_id}" for task_id in active_normal_task_ids],
+                }
 
             with db() as conn:
                 task_ids = [
@@ -18633,9 +18838,20 @@ def create_app() -> FastAPI:
                     (target_id,),
                 ).fetchall()
                 profile_dirs = [str(r["profile_dir"] or "").strip() for r in account_rows if str(r["profile_dir"] or "").strip()]
+                if account_ids:
+                    account_placeholders = ",".join("?" for _ in account_ids)
+                    social_task_rows = conn.execute(
+                        f"SELECT id FROM social_automation_tasks WHERE user_id = ? OR account_id IN ({account_placeholders})",
+                        (target_id, *account_ids),
+                    ).fetchall()
+                else:
+                    social_task_rows = conn.execute(
+                        "SELECT id FROM social_automation_tasks WHERE user_id = ?",
+                        (target_id,),
+                    ).fetchall()
                 social_task_ids = [
                     str(r["id"] or "").strip()
-                    for r in conn.execute("SELECT id FROM social_automation_tasks WHERE user_id = ?", (target_id,)).fetchall()
+                    for r in social_task_rows
                     if str(r["id"] or "").strip()
                 ]
                 screenshot_paths: list[str] = []
@@ -18667,17 +18883,6 @@ def create_app() -> FastAPI:
             owned_existing_groups = [group_id for group_id in group_ids if group_id in existing_group_ids]
             for offset in range(0, len(owned_existing_groups), 100):
                 _delete_persona_groups(owned_existing_groups[offset:offset + 100])
-
-            with db() as conn:
-                if social_task_ids:
-                    placeholders = ",".join("?" for _ in social_task_ids)
-                    conn.execute(f"DELETE FROM social_automation_logs WHERE task_id IN ({placeholders})", social_task_ids)
-                conn.execute("DELETE FROM social_automation_tasks WHERE user_id = ?", (target_id,))
-                conn.execute("DELETE FROM social_accounts WHERE user_id = ?", (target_id,))
-                conn.execute("DELETE FROM social_proxies WHERE user_id = ?", (target_id,))
-                conn.execute("DELETE FROM persona_owners WHERE user_id = ?", (target_id,))
-                conn.execute("DELETE FROM persona_group_owners WHERE user_id = ?", (target_id,))
-                conn.execute("DELETE FROM users WHERE id = ?", (target_id,))
 
         cleanup_failures: list[str] = []
         cleanup_roots = [
@@ -18713,6 +18918,17 @@ def create_app() -> FastAPI:
                 cleanup_failures.append(str(value))
         for tid in task_ids:
             _delete_task_artifacts(tid)
+        if not cleanup_failures:
+            with db() as conn:
+                if social_task_ids:
+                    placeholders = ",".join("?" for _ in social_task_ids)
+                    conn.execute(f"DELETE FROM social_automation_logs WHERE task_id IN ({placeholders})", social_task_ids)
+                    conn.execute(f"DELETE FROM social_automation_tasks WHERE id IN ({placeholders})", social_task_ids)
+                conn.execute("DELETE FROM social_accounts WHERE user_id = ?", (target_id,))
+                conn.execute("DELETE FROM social_proxies WHERE user_id = ?", (target_id,))
+                conn.execute("DELETE FROM persona_owners WHERE user_id = ?", (target_id,))
+                conn.execute("DELETE FROM persona_group_owners WHERE user_id = ?", (target_id,))
+                conn.execute("DELETE FROM users WHERE id = ?", (target_id,))
         return {
             "ok": not cleanup_failures,
             "deleted_personas": len(persona_ids),

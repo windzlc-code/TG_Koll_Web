@@ -1,8 +1,10 @@
 import os
 import base64
 import json
+import re
 import sqlite3
 import tempfile
+import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -357,6 +359,181 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         self.assertFalse((self.data_dir / "social_automation" / "uploads" / str(customer_id)).exists())
         self.assertFalse((server.UPLOAD_ROOT / "delete_tenant").exists())
         self.assertFalse(screenshot_path.exists())
+
+    def test_deleted_username_stays_reserved_until_username_cleanup_finishes(self):
+        _customer, customer_id = self._approved_client("cleanup_race")
+        customer_upload_root = server.UPLOAD_ROOT / "cleanup_race"
+        customer_upload_root.mkdir(parents=True, exist_ok=True)
+        (customer_upload_root / "artifact.txt").write_text("owned", encoding="utf-8")
+        registration_statuses = []
+        original_rmtree = server.shutil.rmtree
+
+        def observe_cleanup(path, *args, **kwargs):
+            if Path(path).resolve() == customer_upload_root.resolve() and not registration_statuses:
+                response = TestClient(self.app).post(
+                    "/api/auth/apply",
+                    json=self.application_payload("cleanup_race"),
+                )
+                registration_statuses.append(response.status_code)
+            return original_rmtree(path, *args, **kwargs)
+
+        admin, _identity = self._admin_client()
+        with patch.object(server.shutil, "rmtree", side_effect=observe_cleanup):
+            deleted = admin.delete(f"/api/admin/users/{customer_id}")
+
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+        self.assertTrue(deleted.json()["ok"], deleted.text)
+        self.assertEqual(registration_statuses, [409])
+        reused = TestClient(self.app).post(
+            "/api/auth/apply",
+            json=self.application_payload("cleanup_race"),
+        )
+        self.assertEqual(reused.status_code, 409, reused.text)
+
+    def test_account_deletion_cleans_legacy_zero_owner_tasks_bound_to_tenant_account(self):
+        _customer, customer_id = self._approved_client("legacy_social_delete")
+        with server.db() as conn:
+            conn.execute(
+                """
+                INSERT INTO social_accounts(
+                  id, user_id, persona_id, platform, username, profile_dir, created_at, updated_at
+                ) VALUES ('legacy-delete-account', ?, '', 'threads', 'legacy-delete',
+                          ?, 1, 1)
+                """,
+                (customer_id, str(self.data_dir / "social_automation" / "profiles" / "legacy-delete")),
+            )
+            conn.execute("DROP TRIGGER trg_social_tasks_integrity_insert")
+            conn.execute(
+                """
+                INSERT INTO social_automation_tasks(
+                  id, user_id, persona_id, account_id, platform, task_type,
+                  status, payload_json, created_at, updated_at
+                ) VALUES ('legacy-zero-task', 0, '', 'legacy-delete-account', 'threads',
+                          'check_login', 'queued', '{}', 1, 1)
+                """
+            )
+        server.init_db()
+
+        admin, _identity = self._admin_client()
+        deleted = admin.delete(f"/api/admin/users/{customer_id}")
+
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+        self.assertTrue(deleted.json()["ok"], deleted.text)
+        with server.db() as conn:
+            self.assertIsNone(
+                conn.execute("SELECT 1 FROM social_automation_tasks WHERE id = 'legacy-zero-task'").fetchone()
+            )
+            self.assertIsNone(
+                conn.execute("SELECT 1 FROM social_accounts WHERE id = 'legacy-delete-account'").fetchone()
+            )
+
+    def test_account_deletion_retry_keeps_profile_cleanup_context(self):
+        _customer, customer_id = self._approved_client("cleanup_retry")
+        profile_dir = self.data_dir / "social_automation" / "profiles" / "cleanup-retry"
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        (profile_dir / "cookies.json").write_text("private", encoding="utf-8")
+        with server.db() as conn:
+            conn.execute(
+                """
+                INSERT INTO social_accounts(
+                  id, user_id, persona_id, platform, username, profile_dir, created_at, updated_at
+                ) VALUES ('cleanup-retry-account', ?, '', 'threads', 'cleanup-retry', ?, 1, 1)
+                """,
+                (customer_id, str(profile_dir)),
+            )
+
+        original_rmtree = server.shutil.rmtree
+        failed_once = False
+
+        def fail_profile_once(path, *args, **kwargs):
+            nonlocal failed_once
+            if Path(path).resolve() == profile_dir.resolve() and not failed_once:
+                failed_once = True
+                raise PermissionError("profile is temporarily locked")
+            return original_rmtree(path, *args, **kwargs)
+
+        admin, _identity = self._admin_client()
+        with patch.object(server.shutil, "rmtree", side_effect=fail_profile_once):
+            first = admin.delete(f"/api/admin/users/{customer_id}")
+
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertFalse(first.json()["ok"], first.text)
+        self.assertTrue(profile_dir.exists())
+        with server.db() as conn:
+            self.assertIsNotNone(
+                conn.execute("SELECT 1 FROM social_accounts WHERE id = 'cleanup-retry-account'").fetchone()
+            )
+
+        second = admin.delete(f"/api/admin/users/{customer_id}")
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertTrue(second.json()["ok"], second.text)
+        self.assertFalse(profile_dir.exists())
+        with server.db() as conn:
+            self.assertIsNone(conn.execute("SELECT 1 FROM users WHERE id = ?", (customer_id,)).fetchone())
+            self.assertIsNone(
+                conn.execute("SELECT 1 FROM social_accounts WHERE id = 'cleanup-retry-account'").fetchone()
+            )
+
+    def test_account_deletion_cancels_normal_task_and_discards_late_output(self):
+        _customer, customer_id = self._approved_client("delete_worker")
+        task_id = "task-delete-worker"
+        server._create_task_record(task_id, customer_id, "image_generate", {})
+        started = threading.Event()
+        release = threading.Event()
+        worker_errors = []
+        late_output = server.OUTPUT_ROOT / "delete_worker" / task_id / "late.txt"
+
+        def late_runner(_task_id, _payload):
+            started.set()
+            if not release.wait(timeout=5):
+                raise RuntimeError("test runner release timed out")
+            late_output.parent.mkdir(parents=True, exist_ok=True)
+            late_output.write_text("late output", encoding="utf-8")
+            return {"ok": True}
+
+        def run_worker():
+            try:
+                server._task_worker(task_id, customer_id, "image_generate", {})
+            except Exception as exc:
+                worker_errors.append(exc)
+
+        delete_result = []
+
+        def delete_user(admin):
+            delete_result.append(admin.delete(f"/api/admin/users/{customer_id}"))
+
+        with patch.dict(server.TASK_RUNNERS, {"image_generate": late_runner}):
+            worker = threading.Thread(target=run_worker)
+            worker.start()
+            self.assertTrue(started.wait(timeout=5))
+            admin, _identity = self._admin_client()
+            deleter = threading.Thread(target=delete_user, args=(admin,))
+            deleter.start()
+            self.assertTrue(release.wait(timeout=0.2) is False)
+            self.assertTrue(deleter.is_alive())
+            release.set()
+            worker.join(timeout=5)
+            deleter.join(timeout=5)
+
+        self.assertEqual(len(delete_result), 1)
+        deleted = delete_result[0]
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+        self.assertTrue(deleted.json()["ok"], deleted.text)
+        self.assertFalse(worker.is_alive())
+        self.assertFalse(deleter.is_alive())
+        self.assertEqual(worker_errors, [])
+        self.assertFalse(late_output.exists())
+
+    def test_console_bootstrap_embeds_authenticated_user_id(self):
+        customer, customer_id = self._approved_client("bootstrap_identity")
+
+        response = customer.get("/console.html")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        match = re.search(r"window\.__CONSOLE_BOOTSTRAP__\s*=\s*(.*?);", response.text)
+        self.assertIsNotNone(match)
+        bootstrap = json.loads(match.group(1))
+        self.assertEqual(bootstrap["user_id"], customer_id)
 
     def test_tool_uploads_require_authenticated_session(self):
         sample = server.TOOL_R18_UPLOAD_ROOT / "security-sample.txt"

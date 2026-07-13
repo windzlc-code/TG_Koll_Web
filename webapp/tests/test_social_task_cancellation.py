@@ -30,6 +30,7 @@ class SocialTaskCancellationTests(unittest.TestCase):
         self._tmpdir.cleanup()
 
     def _insert_task(self, task_id: str, status: str, *, task_type: str = "publish_post") -> None:
+        self._insert_account()
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 """
@@ -47,7 +48,7 @@ class SocialTaskCancellationTests(unittest.TestCase):
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 """
-                INSERT INTO social_accounts(
+                INSERT OR IGNORE INTO social_accounts(
                   id, persona_id, platform, username, display_name, profile_dir,
                   status, created_at, updated_at
                 ) VALUES (

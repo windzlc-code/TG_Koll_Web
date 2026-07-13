@@ -422,6 +422,172 @@ const state = {
   },
 };
 
+let tenantStateGeneration = 0;
+let consoleIdentityReady = false;
+let consoleBoundaryNavigationActive = false;
+let identityRevalidationPromise = null;
+
+function consoleUserId(value) {
+  return String(value == null ? "" : value).trim();
+}
+
+function maskConsoleForIdentityRevalidation() {
+  document.documentElement.hidden = true;
+}
+
+function unmaskConsoleAfterIdentityRevalidation() {
+  if (consoleBoundaryNavigationActive) return;
+  document.documentElement.hidden = false;
+}
+
+function consoleBootstrapUserId() {
+  return consoleUserId(
+    window.__CONSOLE_BOOTSTRAP_USER_ID__ ?? window.__CONSOLE_BOOTSTRAP__?.user_id,
+  );
+}
+
+function discardConsoleBootstrap() {
+  try {
+    window.__CONSOLE_BOOTSTRAP__ = null;
+  } catch {}
+}
+
+function clearTenantInMemoryState() {
+  tenantStateGeneration += 1;
+  consoleIdentityReady = false;
+
+  if (state.events) state.events.close?.();
+  if (state.personaCreateKeywordController) {
+    state.personaCreateKeywordController.abort?.(new DOMException("Session boundary", "AbortError"));
+  }
+  if (state.workspaceBootstrapTimer) window.clearTimeout(state.workspaceBootstrapTimer);
+  if (state.personaDetailRenderTimer) window.clearTimeout(state.personaDetailRenderTimer);
+  if (state.taskQueueRefreshTimer) window.clearInterval(state.taskQueueRefreshTimer);
+  if (state.accountStatusRefreshTimer) window.clearInterval(state.accountStatusRefreshTimer);
+  if (state.socialTaskToastRefreshTimer) window.clearInterval(state.socialTaskToastRefreshTimer);
+  if (state.socialTaskScheduleWakeTimer) window.clearTimeout(state.socialTaskScheduleWakeTimer);
+  Object.values(state.socialTaskToastTransitions || {}).forEach((transition) => {
+    if (transition?.timer) window.clearTimeout(transition.timer);
+  });
+
+  state.currentUser = null;
+  state.setupStatus = null;
+  state.publishFiles = [];
+  state.socialFiles = [];
+  state.tasks = [];
+  state.personas = [];
+  state.personaProfiles = {};
+  state.personaCollections = { groups: [], assigned_persona_ids: [] };
+  state.personaCollectionTogglePending = new Set();
+  state.personaBulkSelectedIds = new Set();
+  state.personaBulkSelectedGroupIds = new Set();
+  state.personaMemories = {};
+  state.personaFetches = {
+    profiles: {},
+    draftPosts: {},
+    favoritePosts: {},
+    memories: {},
+    publishHistories: {},
+  };
+  state.personaImageLibraries = {};
+  state.personaDraftPosts = {};
+  state.personaFavoritePosts = {};
+  state.personaSelectedPostIds = {};
+  state.personaPostSources = {};
+  state.personaPostPages = {};
+  state.personaPublishHistories = {};
+  state.personaPublishAccountIds = {};
+  state.personaPublishResults = {};
+  state.personaPublishWatchers = {};
+  state.personaAutomationResults = {};
+  state.personaAutomationWatchers = {};
+  state.accountPoolAccountId = "";
+  state.accountPoolSelectedAccountIds = [];
+  state.accountPoolPersonaId = "";
+  state.accountPasswordValues = {};
+  state.accountPasswordVisible = {};
+  state.personaAccountEditingIds = {};
+  state.accountPoolCreateDraft = {};
+  state.personaMediaTasks = {};
+  state.personaGenerateRuns = {};
+  state.personaHotImports = {};
+  state.personaHotCandidateResults = {};
+  state.personaForms = {};
+  state.personaProfileModes = {};
+  state.personaProfileRegenDrafts = {};
+  state.personaLinkPresetPages = {};
+  state.personaDraftViewModes = {};
+  state.personaSelectedMediaIndexes = {};
+  state.personaPublishScheduleValues = {};
+  state.personaCreate = null;
+  state.personaCreateKeywordController = null;
+  state.actionLocks = {};
+  state.selectedPersonaId = "";
+  state.selectedPersonaPostId = "";
+  state.taskQueueSelectedPersonaIds = new Set();
+  state.taskQueueSelectedRegularIds = new Set();
+  state.publishSelectedPostIds = {};
+  state.publishPreviewPostId = "";
+  state.publishHistoryPreviewId = "";
+  state.publishCustomContent = "";
+  state.socialTasksFetch = null;
+  state.socialRefreshFetch = null;
+  state.socialCancelAllPending = false;
+  state.socialAccounts = [];
+  state.socialProxies = [];
+  state.socialTasks = [];
+  state.socialTaskToastStatuses = {};
+  state.socialTaskToastLabels = {};
+  state.socialTaskToastKeys = {};
+  state.socialTaskToastBatches = {};
+  state.socialTaskToastTransitions = {};
+  state.socialTaskPersonaRefreshSignatures = {};
+  state.socialBrowserSessions = [];
+  state.liveBrowserExpandedSessionId = "";
+  state.liveBrowserRefreshToken = "";
+  state.events = null;
+  state.mediaPreviewGroups = {};
+  state.renderedPersonaId = "";
+  state.workspaceBootstrapTimer = 0;
+  state.personaDetailRenderTimer = 0;
+  state.taskQueueRefreshTimer = 0;
+  state.accountStatusRefreshTimer = 0;
+  state.socialTaskToastRefreshTimer = 0;
+  state.socialTaskScheduleWakeTimer = 0;
+  state.matrixPublish = {
+    personaIds: [],
+    source: "posts",
+    perPersonaCount: 1,
+    platform: "threads",
+    scheduledAt: "",
+    initialized: false,
+  };
+  discardConsoleBootstrap();
+  window.PersonaDashboard?.unmount?.();
+}
+
+function handleSessionBoundary(status) {
+  const normalizedStatus = Number(status || 0);
+  if (![401, 428].includes(normalizedStatus)) return false;
+  if (consoleBoundaryNavigationActive) return true;
+  consoleBoundaryNavigationActive = true;
+  clearTenantInMemoryState();
+  window.location.replace(normalizedStatus === 428 ? "/change-password.html" : "/login.html");
+  return true;
+}
+
+function reloadForIdentityChange() {
+  if (consoleBoundaryNavigationActive) return;
+  consoleBoundaryNavigationActive = true;
+  clearTenantInMemoryState();
+  window.location.reload();
+}
+
+function tenantArrayFallback(error, currentValue = []) {
+  if (consoleBoundaryNavigationActive || error?.stale || [401, 428].includes(Number(error?.status || 0))) return [];
+  return Array.isArray(currentValue) ? currentValue : [];
+}
+
 window.__personaNewGroupName = window.__personaNewGroupName || "";
 
 function runtimeConfigStatus() {
@@ -783,6 +949,7 @@ function esc(value) {
 }
 
 async function api(path, options = {}) {
+  const requestGeneration = tenantStateGeneration;
   let response;
   try {
     response = await fetch(path, { credentials: "include", ...options });
@@ -794,6 +961,7 @@ async function api(path, options = {}) {
   let data = {};
   try { data = text ? JSON.parse(text) : {}; } catch { data = { detail: text }; }
   if (!response.ok) {
+    handleSessionBoundary(response.status);
     const detail = localizeConsoleMessage(data?.detail || data?.message || text || "", response.status);
     if (data && typeof data === "object") {
       data.detail = detail;
@@ -802,6 +970,9 @@ async function api(path, options = {}) {
       data = { detail, status: response.status };
     }
     throw data;
+  }
+  if (requestGeneration !== tenantStateGeneration || consoleBoundaryNavigationActive) {
+    throw { detail: "会话已切换，正在重新加载。", status: 409, stale: true };
   }
   return data;
 }
@@ -8641,6 +8812,10 @@ async function loadMe() {
   const meName = $("consoleMeName");
   try {
     const me = await api("/api/me");
+    if (me.must_change_password) {
+      handleSessionBoundary(428);
+      return null;
+    }
     state.currentUser = me;
     if (meName) meName.textContent = me.username || "-";
     if (me.is_admin) $("openAdmin").hidden = false;
@@ -8649,9 +8824,44 @@ async function loadMe() {
     state.currentUser = null;
     if (meName) meName.textContent = "本地控制台";
     $("openAdmin").hidden = true;
-    appendEvent("error", error.detail || error.message || "本地控制台会话不可用");
-    return null;
+    if (!consoleBoundaryNavigationActive) {
+      appendEvent("error", error.detail || error.message || "本地控制台会话不可用");
+    }
+    throw error;
   }
+}
+
+async function revalidateConsoleIdentity() {
+  if (!consoleIdentityReady || consoleBoundaryNavigationActive) return null;
+  maskConsoleForIdentityRevalidation();
+  if (identityRevalidationPromise) return identityRevalidationPromise;
+  const expectedUserId = consoleUserId(state.currentUser?.id);
+  identityRevalidationPromise = api("/api/me")
+    .then((me) => {
+      if (me.must_change_password) {
+        handleSessionBoundary(428);
+        return null;
+      }
+      if (!expectedUserId || consoleUserId(me.id) !== expectedUserId) {
+        reloadForIdentityChange();
+        return null;
+      }
+      state.currentUser = me;
+      const meName = $("consoleMeName");
+      if (meName) meName.textContent = me.username || "-";
+      unmaskConsoleAfterIdentityRevalidation();
+      return me;
+    })
+    .catch((error) => {
+      if (!consoleBoundaryNavigationActive && !error?.stale) {
+        appendEvent("warning", error.detail || error.message || "会话身份校验失败");
+      }
+      return null;
+    })
+    .finally(() => {
+      identityRevalidationPromise = null;
+    });
+  return identityRevalidationPromise;
 }
 
 async function loadSetupStatus() {
@@ -8752,13 +8962,20 @@ function hydratePersonaOverviewFromCache() {
   return true;
 }
 
-function hydratePersonaOverviewFromBootstrap() {
+function hydratePersonaOverviewFromBootstrap(currentUser = state.currentUser) {
   const bootstrap = window.__CONSOLE_BOOTSTRAP__;
-  if (!bootstrap || typeof bootstrap !== "object" || !Array.isArray(bootstrap.personas) || !bootstrap.personas.length) return false;
+  const expectedUserId = consoleBootstrapUserId();
+  const currentUserId = consoleUserId(currentUser?.id);
+  if (!expectedUserId || !currentUserId || expectedUserId !== currentUserId) {
+    discardConsoleBootstrap();
+    return false;
+  }
+  if (!bootstrap || typeof bootstrap !== "object" || !Array.isArray(bootstrap.personas) || !bootstrap.personas.length) {
+    discardConsoleBootstrap();
+    return false;
+  }
   applyPersonaOverviewData(bootstrap);
-  try {
-    window.__CONSOLE_BOOTSTRAP__ = null;
-  } catch {}
+  discardConsoleBootstrap();
   return true;
 }
 
@@ -10374,7 +10591,7 @@ async function loadAutomationTasksShared({ force = false } = {}) {
   if (!force && state.socialTasksFetch) return state.socialTasksFetch;
   const previousById = new Map((state.socialTasks || []).map((task) => [String(task?.id || ""), task]));
   const request = api("/api/persona_dashboard/automation/tasks?limit=80")
-    .catch(() => ({ tasks: state.socialTasks || [] }))
+    .catch((error) => ({ tasks: tenantArrayFallback(error, state.socialTasks) }))
     .then(async (data) => {
       const tasks = Array.isArray(data.tasks) ? data.tasks : [];
       state.socialTasks = tasks;
@@ -14100,16 +14317,16 @@ async function fetchSocialDataShared({ force = false } = {}) {
   }
   const request = Promise.all([
     loadSocialOverview().catch(() => ({})),
-    api("/api/persona_dashboard/automation/accounts").catch(() => ({ accounts: state.socialAccounts || [] })),
-    api("/api/persona_dashboard/automation/proxies").catch(() => ({ proxies: state.socialProxies || [] })),
-    loadAutomationTasksShared({ force }).catch(() => ({ tasks: state.socialTasks || [] })),
+    api("/api/persona_dashboard/automation/accounts").catch((error) => ({ accounts: tenantArrayFallback(error, state.socialAccounts) })),
+    api("/api/persona_dashboard/automation/proxies").catch((error) => ({ proxies: tenantArrayFallback(error, state.socialProxies) })),
+    loadAutomationTasksShared({ force }).catch((error) => ({ tasks: tenantArrayFallback(error, state.socialTasks) })),
   ]).then(([overview, accountsData, proxiesData, tasksData]) => {
-    state.socialBrowserSessions = Array.isArray(overview.browser_sessions) ? overview.browser_sessions : state.socialBrowserSessions;
-    state.socialAccounts = accountsData.accounts || [];
+    state.socialBrowserSessions = Array.isArray(overview.browser_sessions) ? overview.browser_sessions : tenantArrayFallback(null, state.socialBrowserSessions);
+    state.socialAccounts = Array.isArray(accountsData.accounts) ? accountsData.accounts : [];
     state.socialProxies = Array.isArray(proxiesData.proxies)
       ? proxiesData.proxies
-      : (Array.isArray(overview.proxies) ? overview.proxies : state.socialProxies);
-    state.socialTasks = tasksData.tasks || [];
+      : (Array.isArray(overview.proxies) ? overview.proxies : tenantArrayFallback(null, state.socialProxies));
+    state.socialTasks = Array.isArray(tasksData.tasks) ? tasksData.tasks : [];
     saveSocialAccountsSnapshot();
     return overview;
   }).finally(() => {
@@ -18767,6 +18984,7 @@ function bindEvents() {
   });
   $("openAdmin").addEventListener("click", async () => {
     if (!(await confirmLeaveTransientWorkspaceState({ allowNextUnload: true }))) return;
+    clearTenantInMemoryState();
     location.href = "/admin.html";
   });
   $("consoleSettingsBody").addEventListener("click", (event) => {
@@ -18779,25 +18997,45 @@ function bindEvents() {
   });
 }
 
+let identityRevalidationEventsBound = false;
+
+function bindIdentityRevalidationEvents() {
+  if (identityRevalidationEventsBound) return;
+  identityRevalidationEventsBound = true;
+  window.addEventListener("pageshow", () => {
+    revalidateConsoleIdentity();
+  });
+  window.addEventListener("focus", () => {
+    revalidateConsoleIdentity();
+  });
+}
+
 async function init() {
   applyTheme(currentTheme());
   ensurePersonaMediaLightbox();
+  beginWorkspaceBootstrapLoading();
+  const me = await loadMe();
+  if (!me || consoleBoundaryNavigationActive) return;
+  const expectedBootstrapUserId = consoleBootstrapUserId();
+  if (expectedBootstrapUserId && expectedBootstrapUserId !== consoleUserId(me.id)) {
+    reloadForIdentityChange();
+    return;
+  }
+  consoleIdentityReady = true;
+  bindIdentityRevalidationEvents();
+  const hasPersonaBootstrap = hydratePersonaOverviewFromBootstrap(me);
   bindEvents();
   setView(state.view);
-  const hasPersonaBootstrap = hydratePersonaOverviewFromBootstrap();
-  const hasPersonaCache = hasPersonaBootstrap || hydratePersonaOverviewFromCache();
-  if (!hasPersonaCache) beginWorkspaceBootstrapLoading();
-  hydrateSocialAccountsFromCache();
   renderWorkspace();
-  loadMe().then((me) => {
-    if (me?.is_admin) return loadSetupStatus();
+  if (me.is_admin) {
+    loadSetupStatus().catch(() => {});
+  } else {
     state.setupStatus = null;
-    return null;
-  }).catch(() => {});
+  }
   loadTasks().catch(() => {});
   loadSocial({ render: false }).then(() => {
     updateAccountStatusViews();
-    if (!hasPersonaCache || isPersonaWorkspaceModule() || state.activeModule === "publishing" || state.activeModule === "automation") scheduleWorkspaceRender(false);
+    if (!hasPersonaBootstrap || isPersonaWorkspaceModule() || state.activeModule === "publishing" || state.activeModule === "automation") scheduleWorkspaceRender(false);
   }).catch(() => {});
   loadPersonas().then(() => {
     if (state.activeModule === "publishing") refreshCurrentPublishingPersonaContent({ force: false }).catch(() => []);
