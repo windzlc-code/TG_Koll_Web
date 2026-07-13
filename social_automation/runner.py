@@ -28,6 +28,8 @@ SUPPORTED_TASK_TYPES = {
     "repost_post",
 }
 
+_CAMOUFOX_LAUNCH_LOCK = threading.Lock()
+
 
 class AutomationLogger(Protocol):
     def log(
@@ -345,22 +347,33 @@ class _BrowserContextManager:
         return True
 
     def _enter_camoufox(self, Camoufox: Any, kwargs: dict[str, Any]) -> None:
-        old_display = os.environ.get("DISPLAY")
-        if self.live_session is not None:
-            os.environ["DISPLAY"] = str(self.live_session.display)
-        try:
-            self.cm = Camoufox(**kwargs)
-            self.context = self.cm.__enter__()
-        finally:
+        with _CAMOUFOX_LAUNCH_LOCK:
+            old_display = os.environ.get("DISPLAY")
             if self.live_session is not None:
-                if old_display is None:
-                    os.environ.pop("DISPLAY", None)
-                else:
-                    os.environ["DISPLAY"] = old_display
+                os.environ["DISPLAY"] = str(self.live_session.display)
+            try:
+                self.cm = Camoufox(**kwargs)
+                self.context = self.cm.__enter__()
+            finally:
+                if self.live_session is not None:
+                    if old_display is None:
+                        os.environ.pop("DISPLAY", None)
+                    else:
+                        os.environ["DISPLAY"] = old_display
         if self.context_control is not None:
             self.context_control["context"] = self.context
             self.context_control["manager"] = self.cm
             self.context_control["live_browser_session_id"] = str(getattr(self.live_session, "id", "") or "")
+        if self.live_session is not None:
+            from social_automation.live_browser import mark_live_browser_session_ready
+
+            mark_live_browser_session_ready(str(self.live_session.id))
+            self.logger.log(
+                "info",
+                "browser_ready",
+                "Camoufox 指纹浏览器已启动，可以显示实时画面。",
+                {"session_id": str(self.live_session.id)},
+            )
 
     def _start_live_browser_session(self) -> Any | None:
         try:

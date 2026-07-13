@@ -5,6 +5,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PYTHONPATH=/app \
     PATH="/opt/venv/bin:$PATH" \
+    XDG_CACHE_HOME=/data/webapp_data/cache \
     WEBAPP_DATA_DIR=/data/webapp_data \
     APP_RUNTIME_CONFIG_PATH=/data/webapp_data/runtime_config.json \
     TG_WORKBENCH_DB_PATH=/data/webapp_data/workbench.db \

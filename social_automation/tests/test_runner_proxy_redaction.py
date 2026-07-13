@@ -1,7 +1,11 @@
+import os
 import tempfile
+import threading
+import time
 import traceback
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from social_automation import runner
@@ -84,6 +88,39 @@ class RunnerProxyRedactionTests(unittest.TestCase):
         self.assertNotIn(authenticated_url, rendered)
         self.assertIn("socks5://***:***@proxy.example.test:1080", str(raised.exception))
         self.assertTrue(raised.exception.__suppress_context__)
+
+    def test_concurrent_camoufox_launches_use_their_own_display(self):
+        observed = []
+        rendezvous = threading.Barrier(2)
+
+        class FakeCamoufox:
+            def __init__(self, **kwargs):
+                self.expected_display = ":90" if kwargs["user_data_dir"].endswith("profile-a") else ":91"
+
+            def __enter__(self):
+                try:
+                    rendezvous.wait(timeout=0.05)
+                except threading.BrokenBarrierError:
+                    pass
+                time.sleep(0.01)
+                observed.append((self.expected_display, os.environ.get("DISPLAY")))
+                return object()
+
+        original_display = os.environ.get("DISPLAY")
+        managers = []
+        for suffix, display in (("profile-a", ":90"), ("profile-b", ":91")):
+            manager = runner._BrowserContextManager({"id": suffix}, None, _RecordingLogger())
+            manager.live_session = SimpleNamespace(id=f"live-{suffix}", display=display)
+            managers.append((manager, {"user_data_dir": suffix}))
+
+        threads = [threading.Thread(target=manager._enter_camoufox, args=(FakeCamoufox, kwargs)) for manager, kwargs in managers]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=1)
+
+        self.assertEqual(sorted(observed), [(':90', ':90'), (':91', ':91')])
+        self.assertEqual(os.environ.get("DISPLAY"), original_display)
 
 
 if __name__ == "__main__":

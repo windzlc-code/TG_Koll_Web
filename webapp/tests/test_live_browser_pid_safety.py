@@ -59,6 +59,16 @@ def test_registry_process_identity_is_preserved_without_live_popen_objects():
     assert registry_row["process_identities"] == [recorded]
 
 
+def test_browser_ready_state_round_trips_through_registry():
+    session = _session(_identity())
+    session.browser_ready_at = 123
+
+    restored = live_browser._session_from_registry(live_browser._session_registry_row(session))
+
+    assert restored is not None
+    assert restored.browser_ready_at == 123
+
+
 def test_reused_registry_pid_is_not_signaled_when_start_identity_changed():
     recorded = _identity()
     current = _current_identity(recorded, start_ticks="999")

@@ -15828,14 +15828,30 @@ function liveBrowserTaskStatus(session) {
 function isManualOpenLoginSession(session) {
   return String(session?.task_type || "").trim().toLowerCase() === "open_login"
     && liveBrowserTaskStatus(session) === "running"
+    && liveBrowserIsReady(session)
     && Boolean(session?.input_allowed);
 }
 
+function liveBrowserIsReady(session) {
+  if (Object.prototype.hasOwnProperty.call(session || {}, "browser_ready")) {
+    return Boolean(session?.browser_ready);
+  }
+  return true;
+}
+
+function isOpenLoginBrowserStarting(session) {
+  return String(session?.task_type || "").trim().toLowerCase() === "open_login"
+    && liveBrowserTaskStatus(session) === "running"
+    && !liveBrowserIsReady(session);
+}
+
 function liveBrowserPresentationStatus(session) {
+  if (isOpenLoginBrowserStarting(session)) return "browser_launch";
   return isManualOpenLoginSession(session) ? "need_manual" : liveBrowserTaskStatus(session);
 }
 
 function liveBrowserPresentationLabel(session) {
+  if (isOpenLoginBrowserStarting(session)) return "Camoufox 启动中";
   return isManualOpenLoginSession(session) ? "人工登录" : statusLabel(liveBrowserTaskStatus(session));
 }
 
@@ -15858,13 +15874,15 @@ function liveBrowserInteractionHint(session) {
   const taskStatus = liveBrowserTaskStatus(session);
   const sessionStatus = liveBrowserSessionStatus(session);
   if (sessionStatus === "standby") return "任务已完成，浏览器处于待机状态，可等待系统自动关闭。";
+  if (isOpenLoginBrowserStarting(session)) return "Camoufox 指纹浏览器正在启动，窗口就绪后即可人工操作。";
   if (isManualOpenLoginSession(session)) return "当前处于人工登录，可以直接操作浏览器窗口。";
   if (taskStatus === "need_manual") return "当前需要人工处理，可以直接操作浏览器窗口。";
   return "自动化执行中，当前仅展示实时画面，暂不允许人工输入。";
 }
 
 function canInteractWithLiveBrowser(session) {
-  return Boolean(session?.input_allowed) || liveBrowserTaskStatus(session) === "need_manual";
+  return liveBrowserIsReady(session)
+    && (Boolean(session?.input_allowed) || liveBrowserTaskStatus(session) === "need_manual");
 }
 
 function liveBrowserIframeLoadingMode() {

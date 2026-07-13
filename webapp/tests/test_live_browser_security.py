@@ -137,6 +137,19 @@ def test_manual_open_login_allows_input_while_running():
     }) is False
 
 
+def test_live_browser_session_blocks_manual_input_until_camoufox_is_ready():
+    row = {
+        "status": "running",
+        "task_type": "open_login",
+        "payload_json": "{}",
+    }
+    session = {"browser_ready": False}
+
+    session["input_allowed"] = bool(session["browser_ready"]) and social_automation_api._live_browser_task_input_allowed(row)
+
+    assert session["input_allowed"] is False
+
+
 @pytest.mark.parametrize("auto_submit", [1, 0, "true", "false", None, [], {}])
 def test_invalid_auto_submit_values_fail_closed(auto_submit):
     row = {

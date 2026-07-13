@@ -933,7 +933,7 @@ def _live_browser_sessions(*, user_id: int | None = None) -> list[dict[str, Any]
         status = str(row["status"] or "").strip().lower()
         if status:
             session["task_status"] = status
-        session["input_allowed"] = _live_browser_task_input_allowed(row)
+        session["input_allowed"] = bool(session.get("browser_ready")) and _live_browser_task_input_allowed(row)
         if str(row["error"] or "").strip():
             session["task_error"] = str(row["error"] or "")
         session["task_finished_at"] = int(row["finished_at"] or 0)

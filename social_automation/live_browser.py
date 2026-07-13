@@ -33,6 +33,7 @@ class LiveBrowserSession:
     started_at: int
     backend: str = "kasmvnc"
     status: str = "starting"
+    browser_ready_at: int = 0
     error: str = ""
     standby_started_at: int = 0
     close_at: int = 0
@@ -255,6 +256,26 @@ def mark_live_browser_session_standby(session_id: str, *, close_at: int = 0) -> 
     _write_registry(sessions)
 
 
+def mark_live_browser_session_ready(session_id: str) -> None:
+    clean_id = str(session_id or "")
+    if not clean_id:
+        return
+    ready_at = int(time.time())
+    with _LOCK:
+        session = _SESSIONS.get(clean_id)
+        if session is not None:
+            session.browser_ready_at = ready_at
+            _save_session_registry(session)
+            return
+    sessions = _read_registry()
+    row = sessions.get(clean_id)
+    if not row:
+        return
+    row["browser_ready_at"] = ready_at
+    sessions[clean_id] = row
+    _write_registry(sessions)
+
+
 def register_live_browser_close_callback(session_id: str, callback: Callable[[], None]) -> None:
     clean_id = str(session_id or "")
     if not clean_id:
@@ -347,6 +368,8 @@ def _session_public(session: LiveBrowserSession) -> dict[str, Any]:
         "password": "",
         "started_at": session.started_at,
         "status": session.status,
+        "browser_ready": session.browser_ready_at > 0,
+        "browser_ready_at": session.browser_ready_at,
         "error": session.error,
         "standby_started_at": session.standby_started_at,
         "close_at": session.close_at,
@@ -430,6 +453,7 @@ def _session_from_registry(row: dict[str, Any]) -> LiveBrowserSession | None:
         started_at=_safe_int(row.get("started_at"), int(time.time())),
         backend=str(row.get("backend") or "kasmvnc"),
         status=str(row.get("status") or "running"),
+        browser_ready_at=_safe_int(row.get("browser_ready_at"), 0),
         error=str(row.get("error") or ""),
         standby_started_at=_safe_int(row.get("standby_started_at"), 0),
         close_at=_safe_int(row.get("close_at"), 0),
