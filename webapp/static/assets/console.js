@@ -422,6 +422,7 @@ const state = {
   socialTaskToastLabels: {},
   socialTaskToastKeys: {},
   socialTaskToastBatches: {},
+  socialTaskToastTransitions: {},
   socialTaskPersonaRefreshSignatures: {},
   socialBrowserSessions: [],
   liveBrowserLayout: storedLiveBrowserLayout(),
@@ -3160,9 +3161,23 @@ function toastKindForTaskStatus(status) {
   return "progress";
 }
 
-function socialTaskToastKey(taskId) {
+function socialTaskToastLaneKey(task) {
+  if (String(task?.task_type || "").trim() !== "publish_post") return "";
+  const personaId = String(task?.persona_id || "").trim();
+  const accountId = String(task?.account_id || "").trim();
+  if (!personaId && !accountId) return "";
+  return `social-task:publish:${personaId || "none"}:${accountId || "none"}`;
+}
+
+function socialTaskToastKey(taskId, task = null) {
   const cleanTaskId = String(taskId || "").trim();
-  return state.socialTaskToastKeys[cleanTaskId] || `social-task:${cleanTaskId}`;
+  return state.socialTaskToastKeys[cleanTaskId] || socialTaskToastLaneKey(task) || `social-task:${cleanTaskId}`;
+}
+
+function socialTaskToastTerminal(task) {
+  const status = String(task?.status || "").trim();
+  return ["success", "failed", "cancelled"].includes(status)
+    || (status === "need_manual" && !isUnfinishedTask(task));
 }
 
 function registerSocialTaskToastBatch(batchKey, tasks = []) {
@@ -3175,7 +3190,7 @@ function registerSocialTaskToastBatch(batchKey, tasks = []) {
     taskIds,
     tasks: {
       ...previous.tasks,
-      ...Object.fromEntries(rows.map((task) => [String(task.id), { ...(previous.tasks?.[String(task.id)] || {}), ...task }])),
+      ...Object.fromEntries(rows.map((task) => [String(task.id), previous.tasks?.[String(task.id)] || task])),
     },
   };
   taskIds.forEach((taskId) => { state.socialTaskToastKeys[taskId] = cleanKey; });
@@ -3183,15 +3198,45 @@ function registerSocialTaskToastBatch(batchKey, tasks = []) {
 
 function resolveSocialTaskToast(task) {
   const incomingId = String(task?.id || "").trim();
-  const key = socialTaskToastKey(incomingId);
+  const key = socialTaskToastKey(incomingId, task);
   const batch = state.socialTaskToastBatches[key];
   if (!batch) return { task, key };
+  const previousOrdered = batch.taskIds.map((taskId) => batch.tasks[taskId]).filter(Boolean);
+  const currentBefore = previousOrdered.find((item) => String(item?.status || "").trim() === "running")
+    || previousOrdered.find((item) => !socialTaskToastTerminal(item));
   batch.tasks[incomingId] = { ...(batch.tasks[incomingId] || {}), ...task };
   const ordered = batch.taskIds.map((taskId) => batch.tasks[taskId]).filter(Boolean);
-  const terminalStatuses = new Set(["success", "failed", "cancelled"]);
-  const active = ordered.find((item) => !terminalStatuses.has(String(item?.status || "").trim()));
+  const incoming = batch.tasks[incomingId];
+  const active = ordered.find((item) => String(item?.status || "").trim() === "running")
+    || ordered.find((item) => !socialTaskToastTerminal(item));
   const failed = ordered.find((item) => ["failed", "cancelled"].includes(String(item?.status || "").trim()));
+  if (String(currentBefore?.id || "") === incomingId && socialTaskToastTerminal(incoming) && active) {
+    return { task: incoming, key, nextTask: active, transition: true };
+  }
   return { task: active || failed || ordered[ordered.length - 1] || task, key };
+}
+
+function registerSocialTaskToastLanes(tasks = []) {
+  const lanes = new Map();
+  (tasks || []).forEach((task) => {
+    const taskId = String(task?.id || "").trim();
+    const laneKey = socialTaskToastLaneKey(task);
+    if (!taskId || !laneKey) return;
+    const mappedKey = state.socialTaskToastKeys[taskId] || "";
+    if (!activeSocialAutomationTask(task) && mappedKey !== laneKey) return;
+    if (mappedKey && mappedKey !== laneKey) return;
+    if (!lanes.has(laneKey)) lanes.set(laneKey, []);
+    lanes.get(laneKey).push(task);
+  });
+  lanes.forEach((rows, laneKey) => {
+    rows.sort((left, right) => toastTimestampMs(left?.created_at) - toastTimestampMs(right?.created_at));
+    rows.forEach((task, index) => {
+      const taskId = String(task?.id || "").trim();
+      const accountLabel = String(task?.account_username || task?.account_display_name || task?.account_id || "").trim();
+      state.socialTaskToastLabels[taskId] = `${index + 1}/${rows.length} 篇${accountLabel ? ` · ${accountLabel}` : ""}`;
+    });
+    registerSocialTaskToastBatch(laneKey, rows);
+  });
 }
 
 function socialTaskToastMessage(task) {
@@ -3220,10 +3265,12 @@ function syncSocialTaskToast(task, { force = false } = {}) {
   state.socialTaskToastStatuses[incomingTaskId] = String((state.socialTaskToastBatches[resolved.key]?.tasks?.[incomingTaskId] || task)?.status || "").trim();
   state.socialTaskToastStatuses[taskId] = status;
   const key = resolved.key;
+  const activeTransition = state.socialTaskToastTransitions[key];
+  if (!resolved.transition && activeTransition?.until > Date.now()) return;
   const existing = Array.from(ensureToastHost().children).find((item) => item.dataset.toastKey === key);
   const waitingForManual = status === "need_manual" && isUnfinishedTask(task);
   const waitingForSchedule = isFutureScheduledSocialTask(task);
-  const terminal = ["success", "failed", "cancelled"].includes(status) || (status === "need_manual" && !waitingForManual);
+  const terminal = socialTaskToastTerminal(task);
   const taskStartedAt = task?.started_at || task?.startedAt || "";
   const showElapsed = !waitingForSchedule && (status === "running" || status === "need_manual" || (terminal && Boolean(taskStartedAt)));
   const changedToTerminal = terminal && previous && previous !== status;
@@ -3241,11 +3288,24 @@ function syncSocialTaskToast(task, { force = false } = {}) {
     duration: terminal ? 5200 : undefined,
   });
   if (toast) toast.dataset.toastScheduled = waitingForSchedule ? "true" : "false";
+  if (resolved.transition && resolved.nextTask) {
+    if (activeTransition?.timer) window.clearTimeout(activeTransition.timer);
+    const until = Date.now() + 1400;
+    const timer = window.setTimeout(() => {
+      if (state.socialTaskToastTransitions[key]?.timer !== timer) return;
+      delete state.socialTaskToastTransitions[key];
+      syncSocialTaskToast(resolved.nextTask, { force: true });
+    }, 1400);
+    state.socialTaskToastTransitions[key] = { until, timer };
+  }
   syncSocialTaskToastAutoRefresh();
 }
 
 function syncSocialTaskToasts(tasks = []) {
-  tasks.forEach((task) => syncSocialTaskToast(task));
+  registerSocialTaskToastLanes(tasks);
+  tasks.forEach((task) => syncSocialTaskToast(task, {
+    force: Boolean(socialTaskToastLaneKey(task)) && activeSocialAutomationTask(task),
+  }));
   syncSocialTaskToastAutoRefresh();
 }
 
@@ -7641,7 +7701,11 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
   const platform = String(account.platform || "threads").trim().toLowerCase() || "threads";
   const scheduledAt = normalizeScheduleValueForApi($("simpleScheduleAt")?.value);
   const lockParts = ["publish_content", source, persona.id, cleanAccountId, selectedInSourceOrder.join("_"), scheduledAt || "now"];
-  const batchToastKey = `social-publish-batch:${persona.id}:${Date.now()}`;
+  const batchToastKey = socialTaskToastLaneKey({
+    task_type: "publish_post",
+    persona_id: persona.id,
+    account_id: cleanAccountId,
+  });
   if (isActionLocked(...lockParts)) {
     showMsg(messageId, "当前发布任务正在提交，请等待当前操作完成。", false);
     return null;
