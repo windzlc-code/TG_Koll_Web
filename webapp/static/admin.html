@@ -366,7 +366,11 @@
                   <input id="rtLlmApiKey" type="hidden">
                   <input id="rtLlmApiKeyGemini" type="hidden">
                   <label>API Key</label>
-                  <input id="rtLlmApiKeyGpt" type="password" placeholder="文字模型 API Key">
+                  <div class="admin-provider-key-row">
+                    <input id="rtLlmApiKeyGpt" type="password" placeholder="文字模型 API Key">
+                    <button id="btnCheckLlmKey" class="ghost admin-provider-key-check" type="button">检测 Key</button>
+                  </div>
+                  <div id="rtLlmKeyStatus" class="msg admin-provider-key-status"></div>
                   <label>候选模型</label>
                   <div class="admin-model-list-editor">
                     <div id="rtLlmGptModelList" class="admin-model-list"></div>
@@ -402,7 +406,11 @@
                   <input id="rtImageModelProviderApiKeyGemini" type="hidden">
                   <input id="rtImageModelProviderApiKeyGpt" type="hidden">
                   <label>API Key</label>
-                  <input id="rtImageGeminiApiKey" type="password" placeholder="图片模型 API Key">
+                  <div class="admin-provider-key-row">
+                    <input id="rtImageGeminiApiKey" type="password" placeholder="图片模型 API Key">
+                    <button id="btnCheckImageKey" class="ghost admin-provider-key-check" type="button">检测 Key</button>
+                  </div>
+                  <div id="rtImageKeyStatus" class="msg admin-provider-key-status"></div>
                   <label>候选模型</label>
                   <div class="admin-model-list-editor">
                     <div id="rtImageGeminiModelList" class="admin-model-list"></div>
@@ -429,7 +437,7 @@
                   <div class="admin-secret-row admin-secret-row-with-check">
                     <input id="rtNewPersonaRunningHubApiKey" type="password" placeholder="留空则保留当前密钥">
                     <button class="ghost secret-toggle" type="button" data-secret-target="rtNewPersonaRunningHubApiKey" aria-label="显示或隐藏 RunningHub API 密钥">◉</button>
-                    <button id="btnCheckRunningHubKey" class="ghost admin-runninghub-key-check" type="button">检测 Key</button>
+                    <button id="btnCheckRunningHubKey" class="ghost admin-provider-key-check" type="button">检测 Key</button>
                   </div>
                   <div id="rtRunningHubKeyStatus" class="msg admin-runninghub-key-status"></div>
 

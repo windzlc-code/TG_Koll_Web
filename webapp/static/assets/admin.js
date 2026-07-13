@@ -357,6 +357,38 @@ async function checkRunningHubKey() {
   }
 }
 
+const MODEL_PROVIDER_KEY_CHECKS = {
+  text: { buttonId: "btnCheckLlmKey", inputId: "rtLlmApiKeyGpt", baseUrlId: "rtLlmBaseUrl", statusId: "rtLlmKeyStatus", label: "文字模型" },
+  image: { buttonId: "btnCheckImageKey", inputId: "rtImageGeminiApiKey", baseUrlId: "rtImageBaseUrl", statusId: "rtImageKeyStatus", label: "图片模型" },
+};
+
+async function checkModelProviderKey(type) {
+  const config = MODEL_PROVIDER_KEY_CHECKS[type];
+  const button = config ? el(config.buttonId) : null;
+  if (!config || !button) return;
+  const baseUrl = el(config.baseUrlId)?.value.trim() || "";
+  const apiKey = runtimeSecretInputValue(config.inputId);
+  if (!baseUrl || (!apiKey && !hasSavedRuntimeSecret(config.inputId))) {
+    setMsg(config.statusId, "请先填写 API Base URL 和 API Key。", false);
+    return;
+  }
+  setButtonLoading(config.buttonId, true, "检测中...");
+  setMsg(config.statusId, `正在检测${config.label} Key...`, true);
+  try {
+    const result = await api("/api/admin/models", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type, provider: "openai-compatible", base_url: baseUrl, api_key: apiKey }),
+    });
+    const count = Array.isArray(result.models) ? result.models.length : 0;
+    setMsg(config.statusId, count ? `Key 有效，已识别 ${count} 个可用模型。` : "Key 有效，接口连接成功。", true);
+  } catch (error) {
+    setMsg(config.statusId, error.detail || error.message || `${config.label} Key 检测失败。`, false);
+  } finally {
+    setButtonLoading(config.buttonId, false);
+  }
+}
+
 function bindRunningHubPresetSelect(slotName) {
   const slot = RUNNINGHUB_SLOT_FIELDS[slotName];
   const select = slot ? el(slot.selectId) : null;
@@ -3236,6 +3268,9 @@ function bindActions() {
   if (el("btnCheckRunningHubKey")) {
     el("btnCheckRunningHubKey").addEventListener("click", checkRunningHubKey);
   }
+  Object.entries(MODEL_PROVIDER_KEY_CHECKS).forEach(([type, config]) => {
+    el(config.buttonId)?.addEventListener("click", () => checkModelProviderKey(type));
+  });
   document.querySelectorAll("[data-secret-target]").forEach((button) => {
     button.addEventListener("click", () => {
       toggleSensitiveInput(button);
