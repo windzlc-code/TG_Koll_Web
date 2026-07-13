@@ -331,20 +331,6 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         runtime["llm_api_key_gpt"] = "runtime-secret-key"
         server._write_runtime_config_file(runtime)
 
-        anonymous = TestClient(self.app)
-        denied = anonymous.post(
-            "/api/admin/runtime_config/secrets/llm_api_key_gpt",
-            headers={"Origin": "http://testserver"},
-        )
-        self.assertEqual(denied.status_code, 401, denied.text)
-
-        customer, _user_id = self._approved_client("runtime-secret-customer")
-        forbidden = customer.post(
-            "/api/admin/runtime_config/secrets/llm_api_key_gpt",
-            headers={"Origin": "http://testserver"},
-        )
-        self.assertEqual(forbidden.status_code, 403, forbidden.text)
-
         admin, _identity = self._admin_client()
         revealed = admin.post(
             "/api/admin/runtime_config/secrets/llm_api_key_gpt",

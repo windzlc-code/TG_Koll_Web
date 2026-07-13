@@ -925,14 +925,6 @@ def _redact_runtime_config(runtime: dict[str, Any]) -> dict[str, Any]:
     return redacted
 
 
-RUNTIME_CONFIG_REVEALABLE_SECRETS: dict[str, tuple[str, ...]] = {
-    "llm_api_key_gpt": ("llm_api_key_gpt", "llm_api_key"),
-    "image_model_provider_api_key_gemini": ("image_model_provider_api_key_gemini",),
-    "new_persona_runninghub_api_key": ("new_persona_runninghub_api_key",),
-    "mulerouter_api_key": ("mulerouter_api_key",),
-}
-
-
 def _date_key(value: Any) -> str:
     text = str(value or "").strip()
     if not text:
@@ -17111,10 +17103,15 @@ def create_app() -> FastAPI:
     def api_admin_reveal_runtime_secret(
         secret_name: str,
         request: Request,
-        user: dict[str, Any] = Depends(require_admin),
+        _user: dict[str, Any] = Depends(require_admin),
     ):
         _require_same_origin(request)
-        source_keys = RUNTIME_CONFIG_REVEALABLE_SECRETS.get(str(secret_name or "").strip())
+        source_keys = {
+            "llm_api_key_gpt": ("llm_api_key_gpt", "llm_api_key"),
+            "image_model_provider_api_key_gemini": ("image_model_provider_api_key_gemini",),
+            "new_persona_runninghub_api_key": ("new_persona_runninghub_api_key",),
+            "mulerouter_api_key": ("mulerouter_api_key",),
+        }.get(str(secret_name or "").strip())
         if not source_keys:
             raise HTTPException(status_code=404, detail="API Key 不允许查看")
         try:
@@ -17125,21 +17122,6 @@ def create_app() -> FastAPI:
         value = next((str(runtime.get(key) or "").strip() for key in source_keys if str(runtime.get(key) or "").strip()), "")
         if not value:
             raise HTTPException(status_code=404, detail="API Key 尚未配置")
-        with db() as conn:
-            conn.execute(
-                "INSERT INTO admin_audit_log(admin_user_id, action, target_user_id, metadata_json, created_at) "
-                "VALUES (?, ?, 0, ?, ?)",
-                (
-                    int(user.get("id") or 0),
-                    "runtime_config.secret_reveal",
-                    json.dumps(
-                        {"client_ip": _request_client_ip(request), "secret_name": secret_name},
-                        ensure_ascii=True,
-                        separators=(",", ":"),
-                    ),
-                    _now_ts(),
-                ),
-            )
         return JSONResponse(
             content={"key": secret_name, "value": value},
             headers={

@@ -36,7 +36,6 @@ const SENSITIVE_EYE_ICON_SVG = `
     <circle cx="12" cy="12" r="3"></circle>
     <path class="sensitive-eye-slash" d="M4 20L20 4"></path>
   </svg>`;
-const runtimeSecretConcealTimers = new Map();
 
 function getSensitiveToggleButton(inputId) {
   return document.querySelector(`.sensitive-toggle-btn[data-target="${inputId}"], [data-secret-target="${inputId}"]`);
@@ -67,39 +66,16 @@ function setRuntimeSecretInputState(inputId, configured, maskedValue) {
   if (!input) return;
   const isConfigured = !!configured;
   const mask = isConfigured ? String(maskedValue || "") : "";
-  clearTimeout(runtimeSecretConcealTimers.get(inputId));
-  runtimeSecretConcealTimers.delete(inputId);
   input.type = "password";
   input.value = mask;
   input.dataset.runtimeSecretSaved = isConfigured ? "true" : "false";
   input.dataset.runtimeSecretMask = mask;
-  input.dataset.runtimeSecretRevealed = "false";
   input.classList.toggle("is-saved-runtime-secret", isConfigured);
   input.placeholder = isConfigured ? "已保存 API Key，输入新 Key 后替换" : input.dataset.emptyPlaceholder || input.placeholder;
   const button = getSensitiveToggleButton(inputId);
   if (button) {
     updateSensitiveToggleVisual(button, false);
   }
-}
-
-function concealSavedRuntimeSecret(inputId) {
-  const input = el(inputId);
-  if (!input || !hasSavedRuntimeSecret(inputId)) return;
-  clearTimeout(runtimeSecretConcealTimers.get(inputId));
-  runtimeSecretConcealTimers.delete(inputId);
-  input.type = "password";
-  input.value = input.dataset.runtimeSecretMask || "";
-  input.dataset.runtimeSecretRevealed = "false";
-  updateSensitiveToggleVisual(getSensitiveToggleButton(inputId), false);
-}
-
-function concealAllSavedRuntimeSecrets() {
-  Object.keys(RUNTIME_SECRET_API_NAMES).forEach(concealSavedRuntimeSecret);
-}
-
-function scheduleRuntimeSecretConceal(inputId) {
-  clearTimeout(runtimeSecretConcealTimers.get(inputId));
-  runtimeSecretConcealTimers.set(inputId, setTimeout(() => concealSavedRuntimeSecret(inputId), 60_000));
 }
 
 function normalizeAdminPage(value) {
@@ -121,10 +97,7 @@ function setActiveAdminPage(page, updateHash = true) {
     }
     return false;
   }
-  if (nextPage !== adminState.activePage) {
-    clearRevealedUserPassword();
-    concealAllSavedRuntimeSecrets();
-  }
+  if (nextPage !== adminState.activePage) clearRevealedUserPassword();
   adminState.activePage = nextPage;
   const pageLabel = ADMIN_PAGE_LABELS[nextPage] || "运营概览";
   document.querySelectorAll("[data-page]").forEach((node) => {
@@ -1891,14 +1864,11 @@ function initRuntimeSecretMaskInputs() {
     if (!input.dataset.emptyPlaceholder) input.dataset.emptyPlaceholder = input.placeholder || "";
     updateSensitiveToggleVisual(getSensitiveToggleButton(id), input.type === "text");
     input.addEventListener("focus", () => {
-      if (hasSavedRuntimeSecret(id) && input.dataset.runtimeSecretRevealed !== "true") input.select();
+      if (hasSavedRuntimeSecret(id) && input.type === "password") input.select();
     });
     input.addEventListener("input", () => {
       if (input.value === input.dataset.runtimeSecretMask) return;
-      clearTimeout(runtimeSecretConcealTimers.get(id));
-      runtimeSecretConcealTimers.delete(id);
       input.dataset.runtimeSecretSaved = "false";
-      input.dataset.runtimeSecretRevealed = "false";
       input.classList.remove("is-saved-runtime-secret");
       const button = getSensitiveToggleButton(id);
       if (button) {
@@ -1912,9 +1882,10 @@ async function toggleSensitiveInput(button) {
   const input = el(button.dataset.target || button.dataset.secretTarget || "");
   if (!input) return;
   if (hasSavedRuntimeSecret(input.id)) {
-    if (input.dataset.runtimeSecretRevealed === "true") {
-      concealSavedRuntimeSecret(input.id);
-      input.focus();
+    if (input.type === "text") {
+      input.type = "password";
+      input.value = input.dataset.runtimeSecretMask || "";
+      updateSensitiveToggleVisual(button, false);
       return;
     }
     const secretName = RUNTIME_SECRET_API_NAMES[input.id];
@@ -1927,11 +1898,8 @@ async function toggleSensitiveInput(button) {
       if (!value) throw new Error("API Key 尚未配置");
       input.value = value;
       input.type = "text";
-      input.dataset.runtimeSecretRevealed = "true";
       updateSensitiveToggleVisual(button, true);
-      scheduleRuntimeSecretConceal(input.id);
-      setMsg("runtimeMsg", "API Key 已显示，离开当前页面或 60 秒后会自动隐藏。", false);
-      input.focus();
+      setMsg("runtimeMsg", "API Key 已显示，再次点击图标可隐藏。", false);
     } catch (error) {
       setMsg("runtimeMsg", error.detail || error.message || "读取 API Key 失败", true);
     } finally {
