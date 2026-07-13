@@ -12496,7 +12496,7 @@ function renderPersonaFolder(group, map, options = {}) {
           <input type="checkbox" data-persona-bulk-group="${esc(group.id)}" data-persona-bulk-partial="${selection.partial ? "true" : "false"}" ${selection.all ? "checked" : ""} aria-label="选择${esc(group.name)}内全部人设" ${bulkDisabled ? "disabled" : ""} />
         </label>` : "")}
         ${hasPersonas ? `
-        <button type="button" class="persona-folder-main" ${groupBatchMode ? `data-persona-bulk-group-toggle="${esc(group.id)}" aria-label="${groupSelected ? "取消选择" : "选择"}分组${esc(group.name)}" aria-pressed="${groupSelected ? "true" : "false"}" ${bulkDisabled ? "disabled" : ""}` : `data-persona-toggle-folder="${esc(group.id)}" aria-label="${collapsed ? "展开分组" : "收起分组"}" aria-expanded="${collapsed ? "false" : "true"}`}>
+        <button type="button" class="persona-folder-main" ${groupBatchMode ? `data-persona-bulk-group-toggle="${esc(group.id)}" aria-label="${groupSelected ? "取消选择" : "选择"}分组${esc(group.name)}" aria-pressed="${groupSelected ? "true" : "false"}" ${bulkDisabled ? "disabled" : ""}` : `data-persona-toggle-folder="${esc(group.id)}" aria-label="${collapsed ? "展开分组" : "收起分组"}" aria-expanded="${collapsed ? "false" : "true"}"`}>
           ${isMatrix ? `<span class="publish-persona-check ${selection.all ? "is-checked" : ""} ${selection.partial ? "is-partial" : ""}" data-matrix-group="${esc(group.id)}" aria-hidden="true"></span>` : `<span class="persona-folder-caret" aria-hidden="true"></span>`}
           <span class="persona-folder-copy">
             <span class="persona-card-title">
