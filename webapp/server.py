@@ -17451,6 +17451,53 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=502, detail=f"識別模型失敗：{type(exc).__name__}: {str(exc)[:300]}") from exc
         return {"ok": True, "type": typ, "count": len(models), "models": models}
 
+    @app.post("/api/admin/runninghub/key_status")
+    def api_admin_runninghub_key_status(payload: ModelLookupPayload, user: dict[str, Any] = Depends(require_admin)):
+        api_key = str(payload.api_key or "").strip()
+        if "***" in api_key or "•" in api_key:
+            api_key = ""
+        if not api_key:
+            with db() as conn:
+                runtime = _get_runtime_config(conn)
+            api_key = str(runtime.get("new_persona_runninghub_api_key") or "").strip()
+        if not api_key:
+            raise HTTPException(status_code=400, detail="请先配置 RunningHub API Key。")
+
+        try:
+            response = requests.post(
+                "https://www.runninghub.cn/uc/openapi/accountStatus",
+                json={"apikey": api_key},
+                timeout=20,
+            )
+            response.raise_for_status()
+            body = response.json()
+        except (requests.RequestException, ValueError) as exc:
+            raise HTTPException(status_code=502, detail=f"RunningHub 检测请求失败：{type(exc).__name__}") from exc
+        code = str(body.get("code") if isinstance(body, dict) else "")
+        if code not in {"0", "0.0"}:
+            message = str(body.get("msg") or "API Key 无效") if isinstance(body, dict) else "API Key 无效"
+            return {"ok": True, "valid": False, "usable": False, "message": f"Key 无效：{message}（代码 {code}）。"}
+
+        data = body.get("data") if isinstance(body, dict) and isinstance(body.get("data"), dict) else {}
+        api_type = str(data.get("apiType") or "").upper()
+        money_raw = data.get("remainMoney")
+        coins_raw = data.get("remainCoins")
+        money = _to_float(money_raw, 0.0) if money_raw not in {None, ""} else None
+        coins = _to_float(coins_raw, 0.0) if coins_raw not in {None, ""} else None
+        usable = money > 0 if api_type == "SHARED" and money is not None else (coins > 0 if coins is not None else None)
+        if api_type == "SHARED" and money is not None:
+            message = "Key 有效，当前可正常使用。" if usable else "Key 有效，但当前不可用：企业余额不足。"
+        elif coins is not None:
+            message = "Key 有效，当前可正常使用。" if usable else "Key 有效，但当前不可用：RH 币余额不足。"
+        else:
+            message = "Key 有效。"
+        return {
+            "ok": True,
+            "valid": True,
+            "usable": usable,
+            "message": message,
+        }
+
     @app.get("/api/admin/pricing")
     def api_admin_get_pricing(user: dict[str, Any] = Depends(require_admin)):
         with db() as conn:

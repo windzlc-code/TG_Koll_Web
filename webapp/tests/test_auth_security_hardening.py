@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
@@ -329,6 +330,7 @@ class AuthSecurityHardeningTests(unittest.TestCase):
     def test_admin_can_reveal_allowlisted_runtime_secret_on_demand(self):
         runtime = dict(server.DEFAULT_RUNTIME_CONFIG)
         runtime["llm_api_key_gpt"] = "runtime-secret-key"
+        runtime["new_persona_runninghub_api_key"] = "runninghub-secret-key"
         server._write_runtime_config_file(runtime)
 
         admin, _identity = self._admin_client()
@@ -340,6 +342,16 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         self.assertEqual(revealed.json(), {"key": "llm_api_key_gpt", "value": "runtime-secret-key"})
         self.assertIn("no-store", revealed.headers["cache-control"])
         self.assertEqual(revealed.headers["pragma"], "no-cache")
+
+        runninghub_revealed = admin.post(
+            "/api/admin/runtime_config/secrets/new_persona_runninghub_api_key",
+            headers={"Origin": "http://testserver"},
+        )
+        self.assertEqual(runninghub_revealed.status_code, 200, runninghub_revealed.text)
+        self.assertEqual(
+            runninghub_revealed.json(),
+            {"key": "new_persona_runninghub_api_key", "value": "runninghub-secret-key"},
+        )
 
         unknown = admin.post(
             "/api/admin/runtime_config/secrets/telegram_bot_token",
@@ -360,6 +372,50 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         with server.db() as conn:
             saved = server._get_runtime_config(conn)
         self.assertEqual(saved["llm_api_key_gpt"], "runtime-secret-key")
+
+    def test_admin_runninghub_key_status_uses_saved_key_and_reports_unusable(self):
+        runtime = dict(server.DEFAULT_RUNTIME_CONFIG)
+        runtime["new_persona_runninghub_api_key"] = "saved-runninghub-key"
+        server._write_runtime_config_file(runtime)
+        provider_response = Mock()
+        provider_response.raise_for_status.return_value = None
+        provider_response.json.return_value = {
+            "code": 0,
+            "msg": "success",
+            "data": {
+                "remainCoins": "6991",
+                "remainMoney": "-0.130",
+                "currency": "CNY",
+                "apiType": "SHARED",
+                "currentTaskCounts": "0",
+            },
+        }
+        admin, _identity = self._admin_client()
+        with patch.object(server.requests, "post", return_value=provider_response) as request_post:
+            response = admin.post("/api/admin/runninghub/key_status", json={"type": "runninghub"})
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertTrue(payload["valid"])
+        self.assertFalse(payload["usable"])
+        self.assertIn("企业余额不足", payload["message"])
+        self.assertNotIn("saved-runninghub-key", response.text)
+        self.assertEqual(request_post.call_args.kwargs["json"], {"apikey": "saved-runninghub-key"})
+
+    def test_admin_runninghub_key_status_reports_invalid_key(self):
+        provider_response = Mock()
+        provider_response.raise_for_status.return_value = None
+        provider_response.json.return_value = {"code": 806, "msg": "APIKEY_USER_NOT_FOUND", "data": None}
+        admin, _identity = self._admin_client()
+        with patch.object(server.requests, "post", return_value=provider_response):
+            response = admin.post(
+                "/api/admin/runninghub/key_status",
+                json={"base_url": "https://www.runninghub.ai", "api_key": "invalid-key"},
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertFalse(response.json()["valid"])
+        self.assertIn("Key 无效", response.json()["message"])
 
     def test_public_application_switch_is_enforced(self):
         os.environ["ALLOW_PUBLIC_REGISTER"] = "0"

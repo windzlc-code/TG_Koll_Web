@@ -11488,7 +11488,7 @@ async function submitPersonaImageGeneration() {
           status: ok ? "success" : "error",
           message: ok ? "人设图已生成" : "人设图生成失败",
           taskId,
-          error: ok ? "" : (payload?.message || payload?.detail || "生成失败"),
+          error: ok ? "" : (payload?.data?.error || payload?.error || payload?.message || payload?.detail || "生成失败"),
         });
         setActionLocked(lockParts, false);
         if (isPersonaWorkspaceModule()) renderPersonaDetail();

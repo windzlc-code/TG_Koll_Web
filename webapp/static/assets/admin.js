@@ -331,6 +331,32 @@ async function switchRunningHubPreset(slotName) {
   }
 }
 
+async function checkRunningHubKey() {
+  const button = el("btnCheckRunningHubKey");
+  if (!button) return;
+  const apiKey = runtimeSecretInputValue("rtNewPersonaRunningHubApiKey");
+  if (!apiKey && !hasSavedRuntimeSecret("rtNewPersonaRunningHubApiKey")) {
+    setMsg("rtRunningHubKeyStatus", "请先填写 RunningHub API Key。", false);
+    return;
+  }
+  button.disabled = true;
+  button.textContent = "检测中...";
+  setMsg("rtRunningHubKeyStatus", "正在检测当前 Key...", true);
+  try {
+    const result = await api("/api/admin/runninghub/key_status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "runninghub", api_key: apiKey }),
+    });
+    setMsg("rtRunningHubKeyStatus", result.message || "检测完成。", result.valid === true && result.usable !== false);
+  } catch (error) {
+    setMsg("rtRunningHubKeyStatus", error.detail || error.message || "RunningHub 检测失败。", false);
+  } finally {
+    button.disabled = false;
+    button.textContent = "检测 Key";
+  }
+}
+
 function bindRunningHubPresetSelect(slotName) {
   const slot = RUNNINGHUB_SLOT_FIELDS[slotName];
   const select = slot ? el(slot.selectId) : null;
@@ -1899,9 +1925,9 @@ async function toggleSensitiveInput(button) {
       input.value = value;
       input.type = "text";
       updateSensitiveToggleVisual(button, true);
-      setMsg("runtimeMsg", "API Key 已显示，再次点击图标可隐藏。", false);
+      setMsg("runtimeMsg", "API Key 已显示，再次点击图标可隐藏。", true);
     } catch (error) {
-      setMsg("runtimeMsg", error.detail || error.message || "读取 API Key 失败", true);
+      setMsg("runtimeMsg", error.detail || error.message || "读取 API Key 失败", false);
     } finally {
       button.disabled = false;
       button.removeAttribute("aria-busy");
@@ -3207,6 +3233,9 @@ function bindActions() {
   }
   bindRunningHubPresetSelect("persona");
   bindRunningHubPresetSelect("tweet");
+  if (el("btnCheckRunningHubKey")) {
+    el("btnCheckRunningHubKey").addEventListener("click", checkRunningHubKey);
+  }
   document.querySelectorAll("[data-secret-target]").forEach((button) => {
     button.addEventListener("click", () => {
       toggleSensitiveInput(button);

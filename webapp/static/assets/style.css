@@ -3582,6 +3582,19 @@ body.page-admin {
   min-width: 0;
 }
 
+.page-admin .admin-secret-row-with-check {
+  grid-template-columns: minmax(0, 1fr) 54px auto;
+}
+
+.page-admin .admin-runninghub-key-check {
+  min-width: 92px;
+  white-space: nowrap;
+}
+
+.page-admin .admin-runninghub-key-status:empty {
+  display: none;
+}
+
 .page-admin .secret-toggle {
   min-height: 48px;
   padding: 0;
