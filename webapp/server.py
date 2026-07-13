@@ -13968,6 +13968,153 @@ def _persona_archive_persist_reference_image(archive_id: str, *, image_url: str,
     return data
 
 
+def _delete_persona_archive_image(archive_id: str, image_id: str) -> dict[str, Any]:
+    clean_archive_id = str(archive_id or "").strip()
+    clean_image_id = str(image_id or "").strip()
+    if not clean_archive_id or not clean_image_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID 或图片 ID。")
+    path, raw, archives = _persona_archive_source_for_write(clean_archive_id)
+    archive = _find_persona_archive(archives, clean_archive_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
+    deleted_item = next(
+        (
+            row for row in library
+            if isinstance(row, dict) and str(row.get("id") or "").strip() == clean_image_id
+        ),
+        None,
+    )
+    if not deleted_item:
+        raise HTTPException(status_code=404, detail="人设图不存在。")
+    deleted_url = str(deleted_item.get("imageUrl") or "").strip()
+    remaining = [
+        row for row in library
+        if not (isinstance(row, dict) and str(row.get("id") or "").strip() == clean_image_id)
+    ]
+    current_reference_url = _persona_reference_image_url_from_archive(archive)
+    archive["personaImageLibrary"] = remaining
+    if deleted_url and deleted_url == current_reference_url:
+        replacement = max(
+            (row for row in remaining if isinstance(row, dict) and str(row.get("imageUrl") or "").strip()),
+            key=lambda row: str(row.get("createdAt") or ""),
+            default=None,
+        )
+        setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+        next_setup = dict(setup)
+        if replacement:
+            replacement_url = str(replacement.get("imageUrl") or "").strip()
+            next_setup["personaImageSkipped"] = False
+            next_setup["personaImageReferenceUrl"] = replacement_url
+            archive["personaReferenceSheet"] = replacement_url
+        else:
+            next_setup.pop("personaImageReferenceUrl", None)
+            next_setup["personaImageSkipped"] = False
+            archive.pop("personaReferenceSheet", None)
+        archive["setup"] = next_setup
+    archive["updatedAt"] = _persona_dashboard_iso_now()
+    _write_persona_archives_preserving_shape(path, raw, archives)
+
+    # Only remove files that were explicitly uploaded for this web application.
+    # Generated and remote images may be shared or managed by their own provider.
+    if (
+        str(deleted_item.get("source") or "").strip() == "upload"
+        and deleted_url
+        and not any(str(row.get("imageUrl") or "").strip() == deleted_url for row in remaining if isinstance(row, dict))
+    ):
+        try:
+            uploaded_path = Path(deleted_url).expanduser().resolve()
+            upload_root = UPLOAD_ROOT.resolve()
+            if uploaded_path.is_relative_to(upload_root) and uploaded_path.is_file():
+                uploaded_path.unlink()
+        except Exception:
+            pass
+    data = _list_persona_archive_images(clean_archive_id)
+    data["deleted_item_id"] = clean_image_id
+    return data
+
+
+async def _save_persona_archive_upload(username: str, image: UploadFile | None) -> str:
+    if image is None or not str(image.filename or "").strip():
+        raise HTTPException(status_code=400, detail="请选择要上传的人设图。")
+    suffix = Path(str(image.filename or "")).suffix.lower()
+    if suffix not in IMAGE_EXTS:
+        raise HTTPException(status_code=400, detail="仅支持上传 PNG、JPG、JPEG、WEBP、BMP、GIF、TIFF 或 HEIC 图片。")
+    upload_id = _new_id("personaimg")
+    image_path = Path(await _save_upload_file(username, upload_id, "persona_image", image)).resolve()
+    try:
+        with Image.open(image_path) as candidate:
+            candidate.verify()
+    except Exception as error:
+        try:
+            image_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise HTTPException(status_code=400, detail="上传的文件不是有效图片。") from error
+    return str(image_path)
+
+
+async def _replace_persona_archive_image(archive_id: str, image_id: str, username: str, image: UploadFile | None) -> dict[str, Any]:
+    clean_archive_id = str(archive_id or "").strip()
+    clean_image_id = str(image_id or "").strip()
+    if not clean_archive_id or not clean_image_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID 或图片 ID。")
+    path, raw, archives = _persona_archive_source_for_write(clean_archive_id)
+    archive = _find_persona_archive(archives, clean_archive_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
+    item_index = next(
+        (
+            index for index, row in enumerate(library)
+            if isinstance(row, dict) and str(row.get("id") or "").strip() == clean_image_id
+        ),
+        None,
+    )
+    if item_index is None:
+        raise HTTPException(status_code=404, detail="人设图不存在。")
+    item = library[item_index]
+    old_url = str(item.get("imageUrl") or "").strip()
+    current_reference_url = _persona_reference_image_url_from_archive(archive)
+    uploaded_url = await _save_persona_archive_upload(username, image)
+    now = _persona_dashboard_iso_now()
+    replacement = dict(item)
+    replacement.update({
+        "imageUrl": uploaded_url,
+        "createdAt": now,
+        "mode": "custom-upload",
+        "source": "upload",
+        "notes": "custom uploaded replacement persona reference image",
+    })
+    library[item_index] = replacement
+    archive["personaImageLibrary"] = library
+    if old_url and old_url == current_reference_url:
+        setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+        next_setup = dict(setup)
+        next_setup["personaImageSkipped"] = False
+        next_setup["personaImageReferenceUrl"] = uploaded_url
+        archive["setup"] = next_setup
+        archive["personaReferenceSheet"] = uploaded_url
+    archive["updatedAt"] = now
+    _write_persona_archives_preserving_shape(path, raw, archives)
+
+    if (
+        str(item.get("source") or "").strip() == "upload"
+        and old_url
+        and old_url != uploaded_url
+        and not any(str(row.get("imageUrl") or "").strip() == old_url for row in library if isinstance(row, dict))
+    ):
+        try:
+            old_path = Path(old_url).expanduser().resolve()
+            if old_path.is_relative_to(UPLOAD_ROOT.resolve()) and old_path.is_file():
+                old_path.unlink()
+        except Exception:
+            pass
+    data = _list_persona_archive_images(clean_archive_id)
+    data["saved_item_id"] = clean_image_id
+    return data
+
+
 def _run_persona_image_cli_for_web(archive_id: str, *, prompt: str = "", aspect_ratio: str = "1:1", mode: str = "person", generate_reference_sheet: bool = True) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     if not clean_id:
@@ -16084,6 +16231,15 @@ def create_app() -> FastAPI:
             generate_reference_sheet=True,
         )
 
+    @app.post("/api/persona_dashboard/personas/{archive_id}/images/{image_id}/replace")
+    async def api_persona_dashboard_replace_persona_image(
+        archive_id: str,
+        image_id: str,
+        image: UploadFile = File(...),
+        user: dict[str, Any] = Depends(require_persona_owner),
+    ):
+        return await _replace_persona_archive_image(archive_id, image_id, str(user.get("username") or ""), image)
+
     @app.get("/api/persona_dashboard/personas/{archive_id}/images/{image_id}")
     def api_persona_dashboard_persona_image(archive_id: str, image_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _serve_persona_archive_image(archive_id, image_id)
@@ -16091,6 +16247,10 @@ def create_app() -> FastAPI:
     @app.post("/api/persona_dashboard/personas/{archive_id}/images/{image_id}/apply")
     def api_persona_dashboard_apply_persona_image(archive_id: str, image_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _apply_persona_archive_reference_image(archive_id, image_id)
+
+    @app.delete("/api/persona_dashboard/personas/{archive_id}/images/{image_id}")
+    def api_persona_dashboard_delete_persona_image(archive_id: str, image_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
+        return _delete_persona_archive_image(archive_id, image_id)
 
     @app.get("/api/persona_dashboard/groups")
     def api_persona_dashboard_groups(user: dict[str, Any] = Depends(get_current_user)):

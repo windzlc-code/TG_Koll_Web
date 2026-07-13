@@ -6081,6 +6081,22 @@ body.persona-touch-dragging .persona-list-card:active {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 12%, transparent);
 }
 
+.persona-image-library-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.persona-image-library-apply {
+  grid-column: 1 / -1;
+}
+
+.persona-image-library-actions button {
+  min-width: 0;
+  padding-inline: 8px;
+  white-space: nowrap;
+}
+
 .persona-edit-media-preview,
 .persona-image-library-preview {
   display: grid;

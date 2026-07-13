@@ -5581,6 +5581,7 @@ function renderPersonaImagePanel(persona) {
       </div>
       <div class="row-actions">
         <button type="button" class="primary" data-persona-generate-image ${imageBusy ? "disabled" : ""}>${esc(generateLabel)}</button>
+        <input id="personaImageUploadFile" type="file" accept="image/*" data-persona-upload-image-file hidden />
       </div>
       <div class="persona-inline-panel persona-inline-panel--nested">
         <strong>图库预览</strong>
@@ -11726,6 +11727,44 @@ async function refreshPersonaMediaTask(personaId, postId, taskId) {
     });
     dismissToastByKey(`persona-generate:${personaId}:media`);
   }
+async function replacePersonaLibraryImage(imageId, file) {
+  const persona = selectedPersona();
+  const cleanImageId = String(imageId || "").trim();
+  if (!persona || !cleanImageId || !file) return;
+  const form = new FormData();
+  form.append("image", file, file.name || "persona-image");
+  showMsg("commandMsg", "正在上传并替换人设图...", true);
+  const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/images/${encodeURIComponent(cleanImageId)}/replace`, {
+    method: "POST",
+    body: form,
+  });
+  state.personaImageLibraries[String(persona.id)] = result;
+  await Promise.all([
+    loadPersonas(),
+    loadPersonaProfile(persona.id, { force: true }).catch(() => {}),
+  ]);
+  renderPersonaDetail();
+  renderConfirmSummary();
+  showMsg("commandMsg", "自定义人设图已替换。", true);
+}
+
+async function deletePersonaLibraryImage(imageId) {
+  const persona = selectedPersona();
+  const cleanImageId = String(imageId || "").trim();
+  if (!persona || !cleanImageId) return;
+  const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/images/${encodeURIComponent(cleanImageId)}`, {
+    method: "DELETE",
+  });
+  state.personaImageLibraries[String(persona.id)] = result;
+  await Promise.all([
+    loadPersonas(),
+    loadPersonaProfile(persona.id, { force: true }).catch(() => {}),
+  ]);
+  renderPersonaDetail();
+  renderConfirmSummary();
+  showMsg("commandMsg", "人设图已删除。", true);
+}
+
   if (errorText && ["failed", "cancelled"].includes(status)) {
     showToast(errorText, false, {
       key: `persona-media-task:${taskId}:${status}:${errorText}`,
@@ -13103,7 +13142,9 @@ function renderPersonaImageLibraryGrid(library) {
       })}
       <small>${esc(item.createdAt ? formatTime(item.createdAt) : "")}</small>
       <div class="row-actions persona-image-library-actions">
-        <button type="button" class="primary" data-persona-apply-image="${esc(item.id)}" ${item.isReference || !item.id ? "disabled" : ""}>${item.isReference ? "当前使用" : "设为当前"}</button>
+        <button type="button" class="primary persona-image-library-apply" data-persona-apply-image="${esc(item.id)}" ${item.isReference || !item.id ? "disabled" : ""}>${item.isReference ? "当前使用" : "设为当前"}</button>
+        <button type="button" data-persona-replace-image="${esc(item.id)}" ${!item.id ? "disabled" : ""}>替换</button>
+        <button type="button" class="danger" data-persona-delete-image="${esc(item.id)}" ${!item.id ? "disabled" : ""}>删除</button>
       </div>
     </div>
   `).join("")}</div>`;
@@ -18102,6 +18143,30 @@ function bindEvents() {
       state.personaLinkPresetId = selectPreset.dataset.personaSelectPreset || "";
       renderPersonaDetail();
       renderConfirmSummary();
+    const replacePersonaImage = event.target.closest("[data-persona-replace-image]");
+    if (replacePersonaImage) {
+      const input = $("personaImageUploadFile");
+      if (input) {
+        input.dataset.personaReplaceImage = replacePersonaImage.dataset.personaReplaceImage || "";
+        input.click();
+      }
+      return;
+    }
+    const deletePersonaImage = event.target.closest("[data-persona-delete-image]");
+    if (deletePersonaImage) {
+      const imageId = deletePersonaImage.dataset.personaDeleteImage || "";
+      const isCurrent = deletePersonaImage.closest(".persona-image-library-card")?.classList.contains("is-reference");
+      const message = isCurrent
+        ? "确定删除当前人设图吗？系统会自动切换到最新的历史图；没有历史图时将清空当前参考图。"
+        : "确定删除这张历史人设图吗？删除后不可恢复。";
+      confirmDangerAction(message, { title: "删除人设图", confirmText: "删除图片" })
+        .then((ok) => {
+          if (!ok) return;
+          return deletePersonaLibraryImage(imageId);
+        })
+        .catch((error) => showMsg("commandMsg", error.detail || error.message || "删除人设图失败", false));
+      return;
+    }
       return;
     }
     if (event.target.closest("[data-persona-add-preset]")) addPersonaPreset().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
@@ -18273,6 +18338,15 @@ function bindEvents() {
       if (event.target.checked || !form.hotPreviewId) form.hotPreviewId = candidateId;
       renderPersonaDetail();
       renderConfirmSummary();
+      return;
+    }
+    if (event.target?.matches?.("[data-persona-upload-image-file]")) {
+      const file = event.target.files?.[0] || null;
+      const imageId = String(event.target.dataset.personaReplaceImage || "").trim();
+      event.target.value = "";
+      delete event.target.dataset.personaReplaceImage;
+      if (!file || !imageId) return;
+      replacePersonaLibraryImage(imageId, file).catch((error) => showMsg("commandMsg", error.detail || error.message || "替换人设图失败", false));
       return;
     }
     if (event.target?.id === "personaGenerateMode") {
