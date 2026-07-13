@@ -10470,6 +10470,12 @@ async function suggestPersonaCreateKeywords() {
     createState.aiResult = null;
     renderPersonaDetail();
     showMsg("commandMsg", "已提炼出人设方向关键词。", true);
+  } catch (error) {
+    if (error?.name === "AbortError" || error?.status === 499) {
+      showMsg("commandMsg", "已取消关键词提炼。", true);
+    } else {
+      showMsg("commandMsg", error?.detail || "关键词提炼失败，请稍后重试。", false);
+    }
   } finally {
     state.personaCreateBusy.keywords = false;
     state.personaCreateKeywordController = null;

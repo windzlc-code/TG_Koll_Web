@@ -817,6 +817,35 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload["action"], "suggest-keywords")
         self.assertEqual(payload["personaName"], "Night Driver")
 
+    def test_persona_ai_keywords_surfaces_cli_error_without_fallback_keywords(self):
+        with mock.patch.object(
+            server,
+            "_run_persona_create_cli",
+            side_effect=server.HTTPException(
+                status_code=500,
+                detail="关键词提炼失败：上游模型余额不足，请充值后重试。",
+            ),
+        ):
+            resp = self.client.post(
+                "/api/persona_dashboard/personas/ai_keywords",
+                json={"name": "Night Driver", "prompt": "夜班出租车司机。"},
+            )
+        self.assertEqual(resp.status_code, 500)
+        self.assertEqual(resp.json()["detail"], "关键词提炼失败：上游模型余额不足，请充值后重试。")
+
+    def test_persona_ai_keywords_rejects_incomplete_model_response(self):
+        with mock.patch.object(
+            server,
+            "_run_persona_create_cli",
+            return_value={"ok": True, "keywords": ["夜班司机", "城市见闻", "深夜通勤", "城市观察"]},
+        ):
+            resp = self.client.post(
+                "/api/persona_dashboard/personas/ai_keywords",
+                json={"name": "Night Driver", "prompt": "夜班出租车司机。"},
+            )
+        self.assertEqual(resp.status_code, 502)
+        self.assertEqual(resp.json()["detail"], "关键词提炼失败：模型未返回 5 个有效关键词，请稍后重试。")
+
     def test_persona_ai_create_calls_cli_and_returns_profile(self):
         archives = [
             {

@@ -8210,75 +8210,7 @@ function isWeakPersonaDirectionKeyword(keyword: string): boolean {
   return false;
 }
 
-function expandPersonaDirectionKeywordCandidates(originalText: string): string[] {
-  const text = String(originalText || "").toLowerCase();
-  const groups: Array<{ pattern: RegExp; keywords: string[] }> = [
-    {
-      pattern: /阿宅|宅男|宅女|宅|二次元|動漫|动漫|遊戲|游戏|acg|otaku/i,
-      keywords: ["愛看動漫", "喜歡手辦", "常去漫展", "會打遊戲", "有點社恐"],
-    },
-    {
-      pattern: /司機|司机|出租車|出租车|網約車|网约车|開車|开车|貨車|货车/i,
-      keywords: ["常跑夜班", "很熟路線", "話不多", "愛聽乘客聊天", "懂城市角落"],
-    },
-    {
-      pattern: /教授|物理|化學|化学|科學|科学|研究員|研究员|學者|学者|實驗|实验|博士/i,
-      keywords: ["大學教授", "會講物理", "愛做實驗", "說話很冷靜", "穿白襯衫"],
-    },
-    {
-      pattern: /老師|老师|教師|教师|補習|补习|校園|校园|學生|学生/i,
-      keywords: ["會教學生", "講話有耐心", "常在教室", "穿得乾淨", "有老師架勢"],
-    },
-    {
-      pattern: /上班族|白領|白领|打工|職場|职场|辦公室|办公室|社畜/i,
-      keywords: ["每天通勤", "常在辦公室", "加班很多", "穿襯衫西裝", "說話很職場"],
-    },
-    {
-      pattern: /媽媽|妈妈|人妻|主婦|主妇|家庭|太太|寶媽|宝妈/i,
-      keywords: ["會照顧人", "常在家裡", "會做家務", "說話溫柔", "像鄰家太太"],
-    },
-    {
-      pattern: /健身|運動|运动|瑜伽|跑步|教練|教练|身材/i,
-      keywords: ["每天健身", "穿運動裝", "身材很緊實", "說話很直接", "愛流汗運動"],
-    },
-    {
-      pattern: /旅行|旅遊|旅游|背包|攝影|摄影|探店|咖啡|露營|露营/i,
-      keywords: ["常去旅行", "愛拍照片", "喜歡咖啡店", "會露營", "走路看城市"],
-    },
-    {
-      pattern: /阿姨|大媽|大妈|嬸|婶|中年女人|中年女性|中年婦女|中年妇女/i,
-      keywords: ["像鄰家阿姨", "說話很會套近乎", "穿樸素外套", "常拎購物袋", "眼神很精明"],
-    },
-    {
-      pattern: /人販|人贩|拐賣|拐卖|綁架|绑架|黑幫|黑帮|騙子|骗子|小偷|殺手|杀手|反派/i,
-      keywords: ["街頭反派", "眼神很警惕", "穿深色外套", "話術很強", "常在車站附近"],
-    },
-  ];
-  const matched: string[] = [];
-  for (const group of groups) {
-    if (group.pattern.test(text)) matched.push(...group.keywords);
-  }
-  return matched;
-}
-
-function buildPersonaPromptFallbackKeywords(originalText: string): string[] {
-  const clean = normalizeTelegramSingleLine(originalText)
-    .replace(/[。！？!?，,；;：:「」『』"'`]/g, "")
-    .replace(/^(我想要|我要|請生成|生成|新建|做一個|做一个|一個|一个)/, "")
-    .replace(/的人設$|的人设$/g, "")
-    .trim();
-  if (!clean) return [];
-  const seed = clean.length > 8 ? clean.slice(0, 8) : clean;
-  return [
-    `${seed}身份`,
-    `${seed}口吻`,
-    `${seed}穿搭`,
-    `${seed}日常`,
-    `${seed}場景`,
-  ];
-}
-
-function normalizePersonaDirectionKeywords(raw: unknown, originalText: string): string[] {
+function normalizePersonaDirectionKeywords(raw: unknown): string[] {
   const source = Array.isArray(raw)
     ? raw
     : Array.isArray((raw as any)?.keywords)
@@ -8297,30 +8229,22 @@ function normalizePersonaDirectionKeywords(raw: unknown, originalText: string): 
     result.push(keyword);
     if (result.length >= CREATE_PERSONA_KEYWORD_COUNT) break;
   }
-  if (result.length >= CREATE_PERSONA_KEYWORD_COUNT) return result;
-
-  const fallbackCandidates = [
-    ...expandPersonaDirectionKeywordCandidates(originalText),
-    ...String(originalText || "").split(/[\s,，。；;、\n\r]+/g),
-    ...buildPersonaPromptFallbackKeywords(originalText),
-  ];
-  for (const item of fallbackCandidates) {
-    const keyword = normalizePersonaDirectionKeyword(item);
-    if (keyword.length < 2 || keyword.length > 18) continue;
-    if (isWeakPersonaDirectionKeyword(keyword)) continue;
-    if (/^(我|我要|希望|生成|新建|人設|提示詞|一個|一个)$/.test(keyword)) continue;
-    const key = keyword.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    result.push(keyword);
-    if (result.length >= CREATE_PERSONA_KEYWORD_COUNT) break;
-  }
   return result.slice(0, CREATE_PERSONA_KEYWORD_COUNT);
+}
+
+function personaKeywordSuggestionError(error: unknown): Error {
+  const message = String((error as any)?.message || error || "").toLowerCase();
+  if (/402|insufficient_funds|余额不足|餘額不足|quota/.test(message)) {
+    return new Error("關鍵詞提煉失敗：上游模型餘額不足，請充值後重試。");
+  }
+  if (/timeout|timed out|超时|逾時/.test(message)) {
+    return new Error("關鍵詞提煉逾時，請稍後重試。");
+  }
+  return new Error("關鍵詞提煉失敗：模型未返回有效關鍵詞，請稍後重試。");
 }
 
 async function derivePersonaDirectionKeywordsWithCodex(personaName: string, userPrompt: string): Promise<string[]> {
   const originalText = String(userPrompt || "").trim();
-  const keywordContextText = [personaName, originalText].filter(Boolean).join(" ");
   const aiInput = compactLongAiInput(originalText, 3000);
   const instruction = [
     "你是自動化推文人設策劃助手。",
@@ -8343,10 +8267,15 @@ async function derivePersonaDirectionKeywordsWithCodex(personaName: string, user
     `使用者提示詞：${aiInput}`,
   ].join("\n");
   try {
-    return normalizePersonaDirectionKeywords(await runCodexJsonInstruction(instruction), keywordContextText);
+    const keywords = normalizePersonaDirectionKeywords(await runCodexJsonInstruction(instruction));
+    if (keywords.length !== CREATE_PERSONA_KEYWORD_COUNT) {
+      throw new Error(`模型僅返回 ${keywords.length} 個有效關鍵詞`);
+    }
+    return keywords;
   } catch (error: any) {
-    console.warn("[telegram][persona_keyword_fallback]", error?.message || error);
-    return normalizePersonaDirectionKeywords([], keywordContextText);
+    const userError = personaKeywordSuggestionError(error);
+    console.warn("[telegram][persona_keyword_error]", error?.message || error);
+    throw userError;
   }
 }
 
@@ -22214,18 +22143,13 @@ function sendMainMenu(chatId: number, msgId?: number) {
 
     if (data.startsWith("cpk_")) {
       const pending = pendingActions.get(chatId);
-      if (!pending || pending.type !== "create-persona" || pending.stage !== "await_keywords") {
-        await safeEditOrSend(bot, chatId, msgId, "這組人設關鍵詞選項已失效，請重新新建人設。", {
-          reply_markup: { inline_keyboard: [[{ text: "➕ 新建人設", callback_data: "create_persona_entry" }]] },
-        });
-        return;
-      }
-      const personaName = pending.personaName || "新人設";
-      const userPrompt = pending.personaPrompt || "";
-      const options = (pending.keywordOptions || []).slice(0, CREATE_PERSONA_KEYWORD_COUNT);
-      const selected = [...(pending.selectedKeywords || [])].filter((item) => options.includes(item));
-
-      if (data === "cpk_back") {
+      if (
+        data === "cpk_back"
+        && pending
+        && pending.type === "create-persona"
+        && ["await_prompt", "await_keywords"].includes(String(pending.stage || ""))
+      ) {
+        const personaName = pending.personaName || "新人設";
         pendingActions.set(chatId, {
           type: "create-persona",
           archiveId: "",
@@ -22243,6 +22167,16 @@ function sendMainMenu(chatId: number, msgId?: number) {
         });
         return;
       }
+      if (!pending || pending.type !== "create-persona" || pending.stage !== "await_keywords") {
+        await safeEditOrSend(bot, chatId, msgId, "這組人設關鍵詞選項已失效，請重新新建人設。", {
+          reply_markup: { inline_keyboard: [[{ text: "➕ 新建人設", callback_data: "create_persona_entry" }]] },
+        });
+        return;
+      }
+      const personaName = pending.personaName || "新人設";
+      const userPrompt = pending.personaPrompt || "";
+      const options = (pending.keywordOptions || []).slice(0, CREATE_PERSONA_KEYWORD_COUNT);
+      const selected = [...(pending.selectedKeywords || [])].filter((item) => options.includes(item));
 
       if (data === "cpk_clear") {
         pendingActions.set(chatId, { ...pending, selectedKeywords: [] });
@@ -24861,7 +24795,22 @@ function sendMainMenu(chatId: number, msgId?: number) {
       if (pending.stage === "await_prompt") {
         const personaName = pending.personaName || value.slice(0, 40);
         const thinking = await bot.sendMessage(chatId, "🧠 正在提煉人設核心關鍵詞...");
-        const keywordOptions = await derivePersonaDirectionKeywordsWithCodex(personaName, value);
+        let keywordOptions: string[];
+        try {
+          keywordOptions = await derivePersonaDirectionKeywordsWithCodex(personaName, value);
+        } catch (error: any) {
+          const message = String(error?.message || "關鍵詞提煉失敗，請稍後重試。");
+          await bot.editMessageText(`${message}\n\n請重新發送人設提示詞後重試。`, {
+            chat_id: chatId,
+            message_id: thinking.message_id,
+            reply_markup: { inline_keyboard: [[{ text: "◀️ 返回修改提示詞", callback_data: "cpk_back" }]] },
+          }).catch(async () => {
+            await bot.sendMessage(chatId, `${message}\n\n請重新發送人設提示詞後重試。`, {
+              reply_markup: { inline_keyboard: [[{ text: "◀️ 返回修改提示詞", callback_data: "cpk_back" }]] },
+            });
+          });
+          return;
+        }
         pendingActions.set(chatId, {
           type: "create-persona",
           archiveId: "",

@@ -12723,6 +12723,11 @@ def _persona_dashboard_suggest_keywords(payload: PersonaDashboardPersonaAiKeywor
         for item in (result.get("keywords") if isinstance(result.get("keywords"), list) else [])
         if str(item or "").strip()
     ][:12]
+    if len(keywords) != 5:
+        raise HTTPException(
+            status_code=502,
+            detail="关键词提炼失败：模型未返回 5 个有效关键词，请稍后重试。",
+        )
     return {
         "ok": True,
         "name": name,

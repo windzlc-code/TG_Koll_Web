@@ -280,7 +280,7 @@ async function runCodexJsonInstruction(instruction: string): Promise<any> {
       return extractJsonObject(raw);
     } catch (fallbackError: any) {
       console.error("[persona-create][ai_json_parse_error]", fallbackError?.message || fallbackError, normalizeErrorForLog(raw).slice(0, 500));
-      throw new Error("人设生成返回格式无效。");
+      throw new Error(String(fallbackError?.message || "模型调用失败。"));
     }
   } finally {
     removeTempFile(promptFile);
@@ -305,45 +305,7 @@ function isWeakPersonaDirectionKeyword(keyword: string): boolean {
   return false;
 }
 
-function expandPersonaDirectionKeywordCandidates(originalText: string): string[] {
-  const text = String(originalText || "").toLowerCase();
-  const groups: Array<{ pattern: RegExp; keywords: string[] }> = [
-    { pattern: /阿宅|宅男|宅女|二次元|动漫|動畫|动画|游戏|遊戲|acg|otaku/i, keywords: ["爱看动漫", "喜欢手办", "常去漫展", "会打游戏", "有点社恐"] },
-    { pattern: /司机|司機|出租车|出租車|网约车|網約車|开车|開車|货车|貨車/i, keywords: ["常跑夜班", "很熟路线", "话不多", "爱听乘客聊天", "懂城市角落"] },
-    { pattern: /教授|物理|化学|化學|科学|科學|研究员|研究員|学者|學者|实验|實驗|博士/i, keywords: ["大学教授", "会讲物理", "爱做实验", "说话很冷静", "穿白衬衫"] },
-    { pattern: /老师|老師|教师|教師|补习|補習|校园|校園|学生|學生/i, keywords: ["会教学生", "讲话有耐心", "常在教室", "穿得干净", "有老师气场"] },
-    { pattern: /上班族|白领|白領|打工|职场|職場|办公室|辦公室|社畜/i, keywords: ["每天通勤", "常在办公室", "加班很多", "穿衬衫西装", "说话很职场"] },
-    { pattern: /妈妈|媽媽|人妻|主妇|主婦|家庭|太太|宝妈|寶媽/i, keywords: ["会照顾人", "常在家里", "会做家务", "说话温柔", "像邻家太太"] },
-    { pattern: /健身|运动|運動|瑜伽|跑步|教练|教練|身材/i, keywords: ["每天健身", "穿运动装", "身材很紧实", "说话很直接", "爱流汗运动"] },
-    { pattern: /旅行|旅游|旅遊|背包|摄影|攝影|探店|咖啡|露营|露營/i, keywords: ["常去旅行", "爱拍照片", "喜欢咖啡店", "会露营", "走路看城市"] },
-    { pattern: /阿姨|大妈|大媽|婶|嬸|中年女人|中年女性|中年妇女|中年婦女/i, keywords: ["像邻家阿姨", "说话会套近乎", "穿朴素外套", "常拎购物袋", "眼神很精明"] },
-    { pattern: /人贩|人販|拐卖|拐賣|绑架|綁架|黑帮|黑幫|骗子|騙子|小偷|杀手|殺手|反派/i, keywords: ["街头反派", "眼神很警惕", "穿深色外套", "话术很强", "常在车站附近"] },
-  ];
-  const matched: string[] = [];
-  for (const group of groups) {
-    if (group.pattern.test(text)) matched.push(...group.keywords);
-  }
-  return matched;
-}
-
-function buildPersonaPromptFallbackKeywords(originalText: string): string[] {
-  const clean = normalizeSingleLine(originalText)
-    .replace(/[。！？!?，,；;：:「」『』"'`]/g, "")
-    .replace(/^(我想要|我要|请生成|生成|新建|做一个|一个)/, "")
-    .replace(/的人设$/g, "")
-    .trim();
-  if (!clean) return [];
-  const seed = clean.length > 8 ? clean.slice(0, 8) : clean;
-  return [
-    `${seed}身份`,
-    `${seed}口吻`,
-    `${seed}穿搭`,
-    `${seed}日常`,
-    `${seed}场景`,
-  ];
-}
-
-function normalizePersonaDirectionKeywords(raw: unknown, originalText: string): string[] {
+function normalizePersonaDirectionKeywords(raw: unknown): string[] {
   const source = Array.isArray(raw)
     ? raw
     : Array.isArray((raw as any)?.keywords)
@@ -362,30 +324,22 @@ function normalizePersonaDirectionKeywords(raw: unknown, originalText: string): 
     result.push(keyword);
     if (result.length >= CREATE_PERSONA_KEYWORD_COUNT) break;
   }
-  if (result.length >= CREATE_PERSONA_KEYWORD_COUNT) return result;
-
-  const fallbackCandidates = [
-    ...expandPersonaDirectionKeywordCandidates(originalText),
-    ...String(originalText || "").split(/[\s,，。；;、\n\r]+/g),
-    ...buildPersonaPromptFallbackKeywords(originalText),
-  ];
-  for (const item of fallbackCandidates) {
-    const keyword = normalizePersonaDirectionKeyword(item);
-    if (keyword.length < 2 || keyword.length > 18) continue;
-    if (isWeakPersonaDirectionKeyword(keyword)) continue;
-    if (/^(我|我要|希望|生成|新建|人设|提示词|一个)$/.test(keyword)) continue;
-    const key = keyword.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    result.push(keyword);
-    if (result.length >= CREATE_PERSONA_KEYWORD_COUNT) break;
-  }
   return result.slice(0, CREATE_PERSONA_KEYWORD_COUNT);
+}
+
+function personaKeywordSuggestionError(error: unknown): Error {
+  const message = String((error as any)?.message || error || "").toLowerCase();
+  if (/402|insufficient_funds|余额不足|餘額不足|quota/.test(message)) {
+    return new Error("关键词提炼失败：上游模型余额不足，请充值后重试。");
+  }
+  if (/timeout|timed out|超时|逾時/.test(message)) {
+    return new Error("关键词提炼超时，请稍后重试。");
+  }
+  return new Error("关键词提炼失败：模型未返回有效关键词，请稍后重试。");
 }
 
 async function derivePersonaDirectionKeywordsWithCodex(personaName: string, userPrompt: string): Promise<string[]> {
   const originalText = String(userPrompt || "").trim();
-  const keywordContextText = [personaName, originalText].filter(Boolean).join(" ");
   const aiInput = compactLongAiInput(originalText, 3000);
   const instruction = [
     "你是自动化推文人设策划助手。",
@@ -408,10 +362,15 @@ async function derivePersonaDirectionKeywordsWithCodex(personaName: string, user
     `用户提示词：${aiInput}`,
   ].join("\n");
   try {
-    return normalizePersonaDirectionKeywords(await runCodexJsonInstruction(instruction), keywordContextText);
+    const keywords = normalizePersonaDirectionKeywords(await runCodexJsonInstruction(instruction));
+    if (keywords.length !== CREATE_PERSONA_KEYWORD_COUNT) {
+      throw new Error(`模型仅返回 ${keywords.length} 个有效关键词`);
+    }
+    return keywords;
   } catch (error: any) {
-    console.warn("[persona-create][keyword_fallback]", error?.message || error);
-    return normalizePersonaDirectionKeywords([], keywordContextText);
+    const userError = personaKeywordSuggestionError(error);
+    console.warn("[persona-create][keyword_error]", error?.message || error);
+    throw userError;
   }
 }
 
@@ -591,8 +550,13 @@ async function main() {
     const userPrompt = String(input.userPrompt || "").trim();
     if (!personaName) throw new Error("persona name cannot be empty");
     if (!userPrompt) throw new Error("persona prompt cannot be empty");
-    const keywords = await derivePersonaDirectionKeywordsWithCodex(personaName, userPrompt);
-    printJson({ ok: true, action: input.action, personaName, keywords });
+    try {
+      const keywords = await derivePersonaDirectionKeywordsWithCodex(personaName, userPrompt);
+      printJson({ ok: true, action: input.action, personaName, keywords });
+    } catch (error: any) {
+      printJson({ ok: false, action: input.action, personaName, error: String(error?.message || "关键词提炼失败，请稍后重试。") });
+      process.exitCode = 1;
+    }
     return;
   }
   if (input.action === "create-from-prompt") {
