@@ -1,6 +1,6 @@
 const DEFAULT_API_BASE = "";
 const DEFAULT_AUTH_TOKEN = "";
-const DEFAULT_EXTENSION_VERSION = "1.0.8";
+const DEFAULT_EXTENSION_VERSION = "1.0.9";
 const AUTO_SYNC_ALARM = "opinx-browser-auth-auto-sync";
 const AUTO_SYNC_INTERVAL_MINUTES = 10;
 const MIN_PROFILE_SYNC_GAP_MS = 2 * 60 * 1000;
@@ -207,9 +207,11 @@ function normalizeApiBase(value = "") {
 }
 
 async function apiBase() {
-  const values = await storageGet(["apiBase"]);
-  const current = normalizeApiBase(values.apiBase || DEFAULT_API_BASE);
-  return current || DEFAULT_API_BASE || LOCAL_API_BASE_CANDIDATES[0];
+  const values = await storageGet(["apiBase", "apiBaseSource"]);
+  const stored = normalizeApiBase(values.apiBase);
+  const injected = normalizeApiBase(DEFAULT_API_BASE);
+  if (values.apiBaseSource === "manual" && stored) return stored;
+  return injected || stored || LOCAL_API_BASE_CANDIDATES[0];
 }
 
 async function authToken() {
@@ -266,7 +268,9 @@ async function refreshExtensionConfig(options = {}) {
     const next = {
       lastConfigRefreshAt: new Date().toISOString(),
       extensionVersion: String(payload.version || DEFAULT_EXTENSION_VERSION),
-      apiBase: normalizeApiBase(payload.apiBase || discovered.base),
+      // The request that returned this config is the verified endpoint. Do not
+      // let a stale apiBase value from an older deployment replace it.
+      apiBase: normalizeApiBase(discovered.base),
     };
     if (payload.authToken) next.authToken = String(payload.authToken).trim();
     if (Array.isArray(payload.profiles) && payload.profiles.length) next.profiles = payload.profiles;
@@ -288,8 +292,8 @@ async function refreshExtensionConfig(options = {}) {
   const next = {
     lastConfigRefreshAt: new Date().toISOString(),
     extensionVersion: String(payload.version || DEFAULT_EXTENSION_VERSION),
+    apiBase: normalizeApiBase(base),
   };
-  if (payload.apiBase) next.apiBase = String(payload.apiBase).replace(/\/+$/, "");
   if (payload.authToken) next.authToken = String(payload.authToken).trim();
   if (Array.isArray(payload.profiles) && payload.profiles.length) next.profiles = payload.profiles;
   await storageSet(next);
@@ -432,7 +436,7 @@ async function syncProfileCookies(profile, options = {}) {
 }
 
 async function openAuthorizationPages() {
-  await refreshExtensionConfig().catch(() => undefined);
+  await refreshExtensionConfig({ force: true }).catch(() => undefined);
   const profiles = await activeProfiles();
   for (const profile of profiles) {
     const urls = Array.isArray(profile.authUrls) && profile.authUrls.length ? profile.authUrls : [profile.authUrl];
@@ -476,9 +480,12 @@ function ensureAutoSyncAlarm() {
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
-  const values = await storageGet(["apiBase", "authToken"]);
+  const values = await storageGet(["apiBase", "apiBaseSource", "authToken"]);
+  const stored = normalizeApiBase(values.apiBase);
+  const keepManualBase = values.apiBaseSource === "manual" && Boolean(stored);
   await storageSet({
-    apiBase: values.apiBase || DEFAULT_API_BASE,
+    apiBase: keepManualBase ? stored : normalizeApiBase(DEFAULT_API_BASE),
+    apiBaseSource: keepManualBase ? "manual" : "injected",
     authToken: values.authToken || "",
     profiles: PROFILES,
     lastStatus: "授权助手已安装",
@@ -555,7 +562,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         sendResponse({ ok: false, error: "请填写后端地址" });
         return;
       }
-      await storageSet({ apiBase: base });
+      const source = message.apiBaseSource === "manual" ? "manual" : "injected";
+      await storageSet({ apiBase: base, apiBaseSource: source });
       ensureAutoSyncAlarm();
       await refreshExtensionConfig({ force: true }).catch(() => undefined);
       const values = await storageGet(["apiBase"]);

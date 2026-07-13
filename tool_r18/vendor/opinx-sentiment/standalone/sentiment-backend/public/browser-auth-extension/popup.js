@@ -54,13 +54,14 @@ async function activeTabApiBase() {
   }
 }
 
-async function preferredApiBase(storedValue) {
+async function preferredApiBase(storedValue, storedSource = "") {
   const stored = displayApiBase(storedValue);
   const injected = displayApiBase(DEFAULT_API_BASE);
   const active = await activeTabApiBase();
   if (active) return active;
+  if (storedSource === "manual" && stored) return stored;
+  if (injected) return injected;
   if (!stored) return injected;
-  if (injected && !isLocalApiBase(injected) && isLocalApiBase(stored)) return injected;
   return stored;
 }
 
@@ -69,12 +70,12 @@ function send(message) {
 }
 
 async function loadState() {
-  const values = await chrome.storage.local.get(["apiBase", "lastStatus"]);
-  const nextApiBase = await preferredApiBase(values.apiBase);
+  const values = await chrome.storage.local.get(["apiBase", "apiBaseSource", "lastStatus"]);
+  const nextApiBase = await preferredApiBase(values.apiBase, values.apiBaseSource);
   $("apiBase").value = nextApiBase;
   setStatus(values.lastStatus || "等待同步");
   if (nextApiBase && nextApiBase !== displayApiBase(values.apiBase)) {
-    const result = await send({ type: "set-api-base", apiBase: nextApiBase });
+    const result = await send({ type: "set-api-base", apiBase: nextApiBase, apiBaseSource: "injected" });
     if (!result.ok) {
       setStatus(friendlyError(result.error));
     }
@@ -84,7 +85,7 @@ async function loadState() {
 $("saveApi").addEventListener("click", async () => {
   const apiBase = displayApiBase($("apiBase").value);
   $("apiBase").value = apiBase;
-  const result = await send({ type: "set-api-base", apiBase });
+  const result = await send({ type: "set-api-base", apiBase, apiBaseSource: "manual" });
   setStatus(result.ok ? `已保存：${result.apiBase}\n已尝试刷新后端配置。` : friendlyError(result.error));
 });
 
@@ -99,8 +100,8 @@ $("syncCurrent").addEventListener("click", async () => {
   setStatus("正在同步当前页面...");
   try {
     const result = await send({ type: "sync-current-tab" });
-    const values = await chrome.storage.local.get(["apiBase"]);
-    $("apiBase").value = await preferredApiBase(values.apiBase);
+    const values = await chrome.storage.local.get(["apiBase", "apiBaseSource"]);
+    $("apiBase").value = await preferredApiBase(values.apiBase, values.apiBaseSource);
     setStatus(result.ok ? "当前页面 Cookie 已同步。" : friendlyError(result.error));
   } catch (error) {
     setStatus(friendlyError(error.message));
