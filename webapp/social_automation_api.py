@@ -2319,7 +2319,13 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
         )
     except NeedManualError as exc:
         if not _is_task_cancelled(str(task["id"])):
-            _finish_task(task["id"], "need_manual", {}, str(exc), account_status=str(getattr(exc, "status", "") or "need_verification"))
+            _finish_task(
+                task["id"],
+                "need_manual",
+                {"screenshot_path": str(getattr(exc, "screenshot_path", "") or "")},
+                str(exc),
+                account_status=str(getattr(exc, "status", "") or "need_verification"),
+            )
         return
     except AutoLoginFailedError as exc:
         if not _is_task_cancelled(str(task["id"])):

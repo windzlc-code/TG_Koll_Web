@@ -64,17 +64,18 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         page.screenshot.assert_called_once()
         self.assertFalse(page.screenshot.call_args.kwargs["full_page"])
 
-    def test_publish_task_only_captures_final_screenshot(self):
+    def test_publish_task_captures_final_or_manual_verification_screenshot(self):
         page = mock.Mock()
         logger = _Logger()
         task = {"id": "publish-task", "task_type": "publish_post"}
 
         self.assertEqual(runner._screenshot(page, Path("."), task, "failed", logger), "")
-        self.assertEqual(runner._screenshot(page, Path("."), task, "publish_submitted_unconfirmed", logger), "")
+        manual_result = runner._screenshot(page, Path("."), task, "publish_submitted_unconfirmed", logger)
         result = runner._screenshot(page, Path("."), task, "publish_done", logger)
 
+        self.assertTrue(manual_result.endswith(".png"))
         self.assertTrue(result.endswith(".png"))
-        page.screenshot.assert_called_once()
+        self.assertEqual(page.screenshot.call_count, 2)
         self.assertFalse(page.screenshot.call_args.kwargs["full_page"])
 
     def test_threads_final_screenshot_waits_for_published_caption(self):
@@ -232,7 +233,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertFalse(result["confirmed"])
 
-    def test_threads_confirmation_does_not_reload_during_initial_render(self):
+    def test_threads_confirmation_refreshes_profile_while_waiting_for_delayed_post(self):
         page = mock.Mock(url="https://www.threads.net/@alice")
         with (
             mock.patch.object(runner, "_dismiss_threads_compose_dialogs"),
@@ -251,7 +252,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             )
 
         self.assertFalse(result["confirmed"])
-        page.reload.assert_not_called()
+        page.reload.assert_called_once_with(wait_until="domcontentloaded", timeout=12000)
 
     def test_editor_closing_is_not_publish_confirmation(self):
         page = _Page("https://www.threads.net/")
@@ -289,7 +290,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             ),
             mock.patch.object(runner, "_find_latest_threads_post_permalink", return_value="https://www.threads.net/@alice/post/OLD"),
             mock.patch.object(runner, "_resolve_threads_profile_url", return_value="https://www.threads.net/@alice"),
-            mock.patch.object(runner, "_screenshot") as screenshot,
+            mock.patch.object(runner, "_screenshot", return_value="manual.png") as screenshot,
         ):
             with self.assertRaises(runner.NeedManualError) as raised:
                 runner._run_threads_publish_post(
@@ -303,7 +304,8 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.status, "publish_submitted_unconfirmed")
         self.assertIn("停止自动重试", str(raised.exception))
-        screenshot.assert_not_called()
+        self.assertEqual(raised.exception.screenshot_path, "manual.png")
+        screenshot.assert_called_once_with(page, Path("."), {"id": "publish-task"}, "publish_submitted_unconfirmed", mock.ANY)
 
     def test_threads_success_returns_specific_permalink(self):
         permalink = "https://www.threads.net/@alice/post/ABC123"
@@ -344,7 +346,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["url"], permalink)
         self.assertEqual(result["published"]["url"], permalink)
-        self.assertFalse(any(call.args[1] == resolved_profile and call.args[3] == "threads_publish_baseline" for call in goto.call_args_list))
+        self.assertTrue(any(call.args[1] == resolved_profile and call.args[3] == "threads_publish_baseline" for call in goto.call_args_list))
         self.assertEqual(confirm_profile.call_args.kwargs["profile_url"], resolved_profile)
         screenshot.assert_called_once_with(page, permalink, "hello threads", Path("."), {"id": "publish-task"}, mock.ANY)
 

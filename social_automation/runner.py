@@ -685,7 +685,10 @@ def _human_click(page, locator, logger: AutomationLogger, stage: str = "click") 
 
 
 def _screenshot(page, screenshot_dir: Path, task: dict[str, Any], stage: str, logger: AutomationLogger) -> str:
-    if str(task.get("task_type") or "").strip().lower() == "publish_post" and str(stage or "") != "publish_done":
+    if str(task.get("task_type") or "").strip().lower() == "publish_post" and str(stage or "") not in {
+        "publish_done",
+        "publish_submitted_unconfirmed",
+    }:
         return ""
     if not _should_capture_screenshot(stage):
         return ""
@@ -2429,14 +2432,21 @@ def _wait_for_threads_own_post(page, caption: str, logger: AutomationLogger, acc
     except Exception as exc:
         logger.log("warn", "threads_publish_profile_open_slow", "提交后打开账号主页超时，将继续轮询确认发布结果。", {"error": str(exc)[:500], "timeout_ms": nav_timeout_ms})
     deadline = time.time() + confirm_seconds
+    attempt = 0
     while True:
         now = time.time()
         if now >= deadline:
             break
+        attempt += 1
         permalink = _find_threads_post_permalink(page, caption) if str(caption or "").strip() else _find_latest_threads_post_permalink(page)
         if permalink and permalink != _normalize_threads_post_permalink(previous_permalink):
             return {"confirmed": True, "reason": "已在账号主页定位到本次发布帖子的链接。", "url": permalink}
         _sleep_between(1.8, 2.6)
+        if attempt % 3 == 0:
+            try:
+                page.reload(wait_until="domcontentloaded", timeout=nav_timeout_ms)
+            except Exception as exc:
+                logger.log("debug", "threads_publish_profile_refresh", "账号主页刷新未完成，将继续确认发布结果。", {"error": str(exc)[:500]})
     return {"confirmed": False, "reason": "发布已提交，但账号主页未看到本次发布内容。", "url": str(page.url or target_url)}
 
 
@@ -2454,6 +2464,17 @@ def _capture_threads_publish_evidence(page, permalink: str, caption: str, screen
     return _screenshot(page, screenshot_dir, task, "publish_done", logger)
 
 
+def _capture_threads_profile_baseline(page, profile_url: str, logger: AutomationLogger) -> str:
+    if not profile_url:
+        return ""
+    try:
+        _goto(page, profile_url, logger, "threads_publish_baseline", timeout_ms=12000, networkidle_ms=2500)
+        return _find_latest_threads_post_permalink(page)
+    except Exception as exc:
+        logger.log("debug", "threads_publish_baseline", "发布前未能读取账号主页最新帖子，将继续使用正文确认。", {"error": str(exc)[:500]})
+        return ""
+
+
 def _run_threads_publish_post(page, task, payload, screenshot_dir, logger, account: dict[str, Any] | None = None) -> dict[str, Any]:
     media_paths = [str(p) for p in (payload.get("media_paths") or []) if str(p or "").strip()]
     caption = str(payload.get("caption") or payload.get("content") or payload.get("text") or "").strip()
@@ -2466,7 +2487,9 @@ def _run_threads_publish_post(page, task, payload, screenshot_dir, logger, accou
     _goto(page, THREADS_HOME, logger, "threads_publish_open")
     _dismiss_threads_compose_dialogs(page, logger)
     profile_url = _resolve_threads_profile_url(page, account)
-    previous_latest_permalink = ""
+    previous_latest_permalink = _capture_threads_profile_baseline(page, profile_url, logger)
+    _goto(page, THREADS_HOME, logger, "threads_publish_open")
+    _dismiss_threads_compose_dialogs(page, logger)
     try:
         compose = _ensure_threads_compose_ready(page, logger)
     except Exception:
@@ -2518,8 +2541,9 @@ def _run_threads_publish_post(page, task, payload, screenshot_dir, logger, accou
     if not permalink:
         reason = str(profile_confirmation.get("reason") or success.get("reason") or "Threads 已提交，但尚未确认发布结果。")
         message = f"{reason} 为避免重复发布，任务已停止自动重试，请人工核对账号主页。"
-        logger.log("warn", "threads_publish_unconfirmed", message, {"submit": success, "profile": profile_confirmation, "retryable": False})
-        raise NeedManualError(message, "publish_submitted_unconfirmed")
+        shot = _screenshot(page, screenshot_dir, task, "publish_submitted_unconfirmed", logger)
+        logger.log("warn", "threads_publish_unconfirmed", message, {"submit": success, "profile": profile_confirmation, "retryable": False}, shot)
+        raise NeedManualError(message, "publish_submitted_unconfirmed", shot)
     shot = _capture_threads_publish_evidence(page, permalink, caption, screenshot_dir, task, logger)
     published = {
         **success,
