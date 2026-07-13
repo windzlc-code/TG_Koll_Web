@@ -956,6 +956,9 @@ function eventKindLabel(kind) {
 
 const toastTimers = new WeakMap();
 const toastElapsedTimers = new WeakMap();
+const toastSwitchTimers = new WeakMap();
+const toastSwitchCleanupTimers = new WeakMap();
+const toastRemovalTimers = new WeakMap();
 const toastStartedAtByKey = new Map();
 const dismissedPersistentToastKeys = new Set();
 const uploadPreviewUrls = new WeakMap();
@@ -972,8 +975,35 @@ function ensureToastHost() {
   return host;
 }
 
+function clearToastSwitchTimers(toast) {
+  const switchTimer = toastSwitchTimers.get(toast);
+  if (switchTimer) window.clearTimeout(switchTimer);
+  toastSwitchTimers.delete(toast);
+  const cleanupTimer = toastSwitchCleanupTimers.get(toast);
+  if (cleanupTimer) window.clearTimeout(cleanupTimer);
+  toastSwitchCleanupTimers.delete(toast);
+}
+
+function clearToastRemovalTimer(toast) {
+  const removalTimer = toastRemovalTimers.get(toast);
+  if (removalTimer) window.clearTimeout(removalTimer);
+  toastRemovalTimers.delete(toast);
+}
+
+function scheduleToastExpiry(toast, persistent, duration) {
+  const existingTimer = toastTimers.get(toast);
+  if (existingTimer) window.clearTimeout(existingTimer);
+  if (persistent) {
+    toastTimers.delete(toast);
+    return;
+  }
+  toastTimers.set(toast, window.setTimeout(() => dismissToast(toast), duration));
+}
+
 function dismissToast(toast, options = {}) {
   if (!toast) return;
+  clearToastSwitchTimers(toast);
+  clearToastRemovalTimer(toast);
   if (options.manual && toast.dataset.toastPersistent === "true" && toast.dataset.toastKey) {
     dismissedPersistentToastKeys.add(toast.dataset.toastKey);
   }
@@ -987,11 +1017,18 @@ function dismissToast(toast, options = {}) {
     toastStartedAtByKey.delete(toast.dataset.toastKey);
   }
   toast.classList.add("is-leaving");
-  window.setTimeout(() => toast.remove(), 180);
+  const reduceMotion = Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches);
+  const removalTimer = window.setTimeout(() => {
+    toastRemovalTimers.delete(toast);
+    toast.remove();
+  }, reduceMotion ? 0 : 180);
+  toastRemovalTimers.set(toast, removalTimer);
 }
 
 function removeToastNow(toast) {
   if (!toast) return;
+  clearToastSwitchTimers(toast);
+  clearToastRemovalTimer(toast);
   const timer = toastTimers.get(toast);
   if (timer) window.clearTimeout(timer);
   toastTimers.delete(toast);
@@ -1221,18 +1258,43 @@ function showToast(text, ok = true, options = {}) {
   const startedAt = options.startedAt || toastStartedAtByKey.get(toastKey) || "";
   const duration = Number(options.duration || (ok ? 3200 : 5200));
   if (existingToast) {
-    applyToastMeta(existingToast, { key: toastKey, ok, message, persistent, target, status, longTask, startedAt });
-    existingToast.classList.remove("is-leaving");
+    clearToastRemovalTimer(existingToast);
+    const previousMessage = existingToast.querySelector(".toast-message-text")?.textContent || "";
+    const presentationChanged = previousMessage !== message
+      || String(existingToast.dataset.toastStatus || "") !== status
+      || String(existingToast.dataset.toastPersistent || "false") !== (persistent ? "true" : "false");
+    const animateStatusChange = presentationChanged && Boolean(options.taskId || toastKey.startsWith("social-task:"));
+    if (!animateStatusChange) {
+      clearToastSwitchTimers(existingToast);
+      existingToast.classList.remove("is-leaving", "is-switching-out", "is-switching-in");
+      applyToastMeta(existingToast, { key: toastKey, ok, message, persistent, target, status, longTask, startedAt });
+      scheduleToastExpiry(existingToast, persistent, duration);
+      return existingToast;
+    }
+    clearToastSwitchTimers(existingToast);
     const existingTimer = toastTimers.get(existingToast);
     if (existingTimer) window.clearTimeout(existingTimer);
-    if (persistent) {
-      toastTimers.delete(existingToast);
-    } else {
-      toastTimers.set(existingToast, window.setTimeout(() => dismissToast(existingToast), duration));
-    }
-    existingToast.classList.remove("is-refreshed");
-    void existingToast.offsetWidth;
-    existingToast.classList.add("is-refreshed");
+    toastTimers.delete(existingToast);
+    existingToast.classList.remove("is-leaving", "is-switching-in");
+    existingToast.classList.add("is-switching-out");
+    const reduceMotion = Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches);
+    const switchTimer = window.setTimeout(() => {
+      toastSwitchTimers.delete(existingToast);
+      if (!existingToast.isConnected) return;
+      existingToast.classList.remove("is-switching-out");
+      applyToastMeta(existingToast, { key: toastKey, ok, message, persistent, target, status, longTask, startedAt });
+      scheduleToastExpiry(existingToast, persistent, duration);
+      if (reduceMotion) return;
+      existingToast.classList.remove("is-state-settled");
+      existingToast.classList.add("is-switching-in");
+      const cleanupTimer = window.setTimeout(() => {
+        existingToast.classList.remove("is-switching-in");
+        existingToast.classList.add("is-state-settled");
+        toastSwitchCleanupTimers.delete(existingToast);
+      }, 200);
+      toastSwitchCleanupTimers.set(existingToast, cleanupTimer);
+    }, reduceMotion ? 0 : 130);
+    toastSwitchTimers.set(existingToast, switchTimer);
     return existingToast;
   }
   const toast = document.createElement("div");

@@ -6478,12 +6478,19 @@ body.persona-touch-dragging .persona-list-card:active {
   --toast-state-color: #b45309;
 }
 
-.toast-message.is-refreshed {
-  animation: toastRefresh 160ms ease-out;
+.toast-message.is-switching-out {
+  opacity: 0;
+  transform: translateY(-5px) scale(.985);
+  transition: opacity 120ms ease-in, transform 120ms ease-in;
+  pointer-events: none;
 }
 
-.toast-message.is-persistent.is-refreshed {
-  animation: toastRefresh 160ms ease-out;
+.toast-message.is-switching-in {
+  animation: toastStateIn 180ms cubic-bezier(.2, .72, .3, 1);
+}
+
+.toast-message.is-state-settled {
+  animation: none;
 }
 
 .toast-message.is-leaving {
@@ -6599,12 +6606,14 @@ body.persona-touch-dragging .persona-list-card:active {
   }
 }
 
-@keyframes toastRefresh {
+@keyframes toastStateIn {
   from {
-    transform: translateX(0) scale(0.99);
+    opacity: 0;
+    transform: translateY(5px) scale(.985);
   }
   to {
-    transform: translateX(0) scale(1);
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }
 
@@ -6616,9 +6625,15 @@ body.persona-touch-dragging .persona-list-card:active {
 @media (prefers-reduced-motion: reduce) {
   .toast-message,
   .toast-message.is-persistent,
-  .toast-message.is-persistent.is-refreshed,
+  .toast-message.is-switching-in,
   .toast-message.is-active .toast-message-progress rect {
     animation: none;
+  }
+
+  .toast-message.is-switching-out {
+    opacity: 0;
+    transform: none;
+    transition: none;
   }
 
   .toast-message.is-active .toast-message-progress rect {
