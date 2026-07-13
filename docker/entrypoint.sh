@@ -103,6 +103,7 @@ trap cleanup EXIT INT TERM
 
 echo "Starting Workflow Delivery Web backend..."
 WEB_PORT="${WEBAPP_PORT:-8001}"
+export SESSION_COOKIE_SECURE="${SESSION_COOKIE_SECURE:-1}"
 "${VIRTUAL_ENV:-/opt/venv}/bin/uvicorn" webapp.server:app --host 0.0.0.0 --port "$WEB_PORT" &
 WEB_PID=$!
 

@@ -63,6 +63,8 @@ def init_db() -> None:
               approved_at INTEGER NOT NULL DEFAULT 0,
               approved_by INTEGER NOT NULL DEFAULT 0,
               last_login_at INTEGER NOT NULL DEFAULT 0,
+              must_change_password INTEGER NOT NULL DEFAULT 0,
+              password_expires_at INTEGER NOT NULL DEFAULT 0,
               created_at INTEGER NOT NULL,
               updated_at INTEGER NOT NULL
             )
@@ -226,6 +228,29 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS admin_audit_log (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              admin_user_id INTEGER NOT NULL,
+              action TEXT NOT NULL,
+              target_user_id INTEGER NOT NULL DEFAULT 0,
+              metadata_json TEXT NOT NULL DEFAULT '{}',
+              created_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS password_vault (
+              user_id INTEGER PRIMARY KEY,
+              ciphertext TEXT NOT NULL,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL,
+              FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS persona_owners (
               archive_id TEXT PRIMARY KEY,
               user_id INTEGER NOT NULL DEFAULT 0,
@@ -261,6 +286,8 @@ def init_db() -> None:
             "approved_at": "INTEGER NOT NULL DEFAULT 0",
             "approved_by": "INTEGER NOT NULL DEFAULT 0",
             "last_login_at": "INTEGER NOT NULL DEFAULT 0",
+            "must_change_password": "INTEGER NOT NULL DEFAULT 0",
+            "password_expires_at": "INTEGER NOT NULL DEFAULT 0",
         }
         for column, definition in user_column_migrations.items():
             if column not in user_columns:
@@ -268,6 +295,8 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_users_approval ON users(approval_status, created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit_log(created_at DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_admin_audit_target ON admin_audit_log(target_user_id, created_at DESC)")
         proxy_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(social_proxies)").fetchall()}
         proxy_column_migrations = {
             "user_id": "INTEGER NOT NULL DEFAULT 0",

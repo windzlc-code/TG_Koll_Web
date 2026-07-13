@@ -35,7 +35,7 @@ function validateApplication(form) {
   const checks = [
     [form.fullName, form.fullName.value.trim().length >= 2, "請填寫姓名。"],
     [form.username, /^[A-Za-z0-9._-]{3,32}$/.test(form.username.value.trim()), "帳號需為 3-32 位英文、數字或 ._-。"],
-    [form.password, form.password.value.length >= 6, "密碼至少需要 6 位。"],
+    [form.password, form.password.value.length >= 8, "密碼至少需要 8 位。"],
     [form.phone, form.phone.value.trim().length >= 6, "請填寫可聯絡的電話。"],
   ];
   let valid = true;
@@ -144,7 +144,7 @@ loginForm?.addEventListener("submit", async (event) => {
   const submit = loginForm.querySelector("button[type='submit']");
   submit.disabled = true;
   try {
-    await api("/api/auth/user-login", {
+    const result = await api("/api/auth/user-login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -152,7 +152,7 @@ loginForm?.addEventListener("submit", async (event) => {
         password: loginForm.password.value,
       }),
     });
-    window.location.assign("/console.html");
+    window.location.assign(result?.must_change_password ? "/change-password.html" : "/console.html");
   } catch (error) {
     loginStatus.textContent = error.detail || "登入失敗，請檢查帳號與密碼。";
     submit.disabled = false;

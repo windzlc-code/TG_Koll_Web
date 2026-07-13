@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from webapp import db as db_module
@@ -17,6 +18,8 @@ class AccountSettingsApiTests(unittest.TestCase):
         self._old_webapp_data_dir = os.environ.get("WEBAPP_DATA_DIR")
         self._old_bootstrap_password = os.environ.get("ADMIN_BOOTSTRAP_PASSWORD")
         self._old_cookie_secure = os.environ.get("SESSION_COOKIE_SECURE")
+        self._old_vault_key = os.environ.get("PASSWORD_VAULT_KEY")
+        self._old_vault_key_file = os.environ.get("PASSWORD_VAULT_KEY_FILE")
         self._old_server_runtime_config_path = server.RUNTIME_CONFIG_PATH
         self._tmpdir = tempfile.TemporaryDirectory()
         self.data_dir = Path(self._tmpdir.name)
@@ -27,6 +30,8 @@ class AccountSettingsApiTests(unittest.TestCase):
         os.environ["APP_RUNTIME_CONFIG_PATH"] = str(self.runtime_config_path)
         os.environ["ADMIN_BOOTSTRAP_PASSWORD"] = "admin123secure"
         os.environ["SESSION_COOKIE_SECURE"] = "0"
+        os.environ["PASSWORD_VAULT_KEY"] = Fernet.generate_key().decode("ascii")
+        os.environ.pop("PASSWORD_VAULT_KEY_FILE", None)
         with server._AUTH_RATE_LOCK:
             server._AUTH_RATE_EVENTS.clear()
         server.RUNTIME_CONFIG_PATH = self.runtime_config_path
@@ -55,6 +60,14 @@ class AccountSettingsApiTests(unittest.TestCase):
             os.environ.pop("SESSION_COOKIE_SECURE", None)
         else:
             os.environ["SESSION_COOKIE_SECURE"] = self._old_cookie_secure
+        if self._old_vault_key is None:
+            os.environ.pop("PASSWORD_VAULT_KEY", None)
+        else:
+            os.environ["PASSWORD_VAULT_KEY"] = self._old_vault_key
+        if self._old_vault_key_file is None:
+            os.environ.pop("PASSWORD_VAULT_KEY_FILE", None)
+        else:
+            os.environ["PASSWORD_VAULT_KEY_FILE"] = self._old_vault_key_file
         self._tmpdir.cleanup()
 
     def test_admin_can_change_username_with_current_password(self):
@@ -106,6 +119,20 @@ class AccountSettingsApiTests(unittest.TestCase):
             json={"username": "admin", "password": "admin456secure"},
         )
         self.assertEqual(new_login_resp.status_code, 200)
+
+    def test_admin_password_change_requires_twelve_characters(self):
+        self.assertEqual(
+            self.client.post(
+                "/api/auth/login",
+                json={"username": "admin", "password": "admin123secure"},
+            ).status_code,
+            200,
+        )
+        response = self.client.post(
+            "/api/auth/change_password",
+            json={"old_password": "admin123secure", "new_password": "short888"},
+        )
+        self.assertEqual(response.status_code, 400, response.text)
 
     def test_change_password_rejects_wrong_current_password(self):
         login_resp = self.client.post(

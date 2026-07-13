@@ -9,6 +9,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     XDG_CACHE_HOME=/data/webapp_data/cache \
     WEBAPP_DATA_DIR=/data/webapp_data \
     APP_RUNTIME_CONFIG_PATH=/data/webapp_data/runtime_config.json \
+    SESSION_COOKIE_SECURE=1 \
     TG_WORKBENCH_DB_PATH=/data/webapp_data/workbench.db \
     TOOL_R18_RUNTIME_DIR=/data/tool_r18_runtime \
     AUTO_TWEET_RUNTIME_DIR=/data/tool_r18_runtime \

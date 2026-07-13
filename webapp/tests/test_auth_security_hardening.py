@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 import webapp.server as server
@@ -20,6 +21,8 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         "SESSION_COOKIE_SECURE",
         "FORCE_HTTPS",
         "ALLOW_PUBLIC_REGISTER",
+        "PASSWORD_VAULT_KEY",
+        "PASSWORD_VAULT_KEY_FILE",
     )
     ADMIN_PASSWORD = "bootstrap-secret"
 
@@ -37,6 +40,8 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         self._configure_environment(self.data_dir, bootstrap_password=self.ADMIN_PASSWORD)
         os.environ["SESSION_COOKIE_SECURE"] = "0"
         os.environ["ALLOW_PUBLIC_REGISTER"] = "1"
+        os.environ["PASSWORD_VAULT_KEY"] = Fernet.generate_key().decode("ascii")
+        os.environ.pop("PASSWORD_VAULT_KEY_FILE", None)
         server.SENTIMENT_CONFIG_PATH = self.data_dir / "sentiment-config.json"
         server.SENTIMENT_CONFIG_PATH.write_text(json.dumps({}), encoding="utf-8")
         server.DATA_DIR = self.data_dir
@@ -318,6 +323,22 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         self.assertNotIn("image-secret-key", response.text)
         self.assertEqual(payload["llm_api_key"], "")
         self.assertTrue(payload["llm_api_key_configured"])
+        self.assertEqual(payload["llm_api_key_masked"], "•" * len("runtime-secret-key"))
+        self.assertNotIn("runtime-secret-key"[:3], payload["llm_api_key_masked"])
+
+    def test_admin_runtime_config_preserves_existing_secret_for_masked_form_save(self):
+        runtime = dict(server.DEFAULT_RUNTIME_CONFIG)
+        runtime["llm_api_key_gpt"] = "runtime-secret-key"
+        server._write_runtime_config_file(runtime)
+        admin, _identity = self._admin_client()
+
+        response = admin.put("/api/admin/runtime_config", json={"llm_api_key_gpt": ""})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertNotIn("runtime-secret-key", response.text)
+        self.assertTrue(response.json()["runtime_config"]["llm_api_key_gpt_configured"])
+        with server.db() as conn:
+            saved = server._get_runtime_config(conn)
+        self.assertEqual(saved["llm_api_key_gpt"], "runtime-secret-key")
 
     def test_public_application_switch_is_enforced(self):
         os.environ["ALLOW_PUBLIC_REGISTER"] = "0"
@@ -330,6 +351,30 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         self.assertFalse(server._session_cookie_secure())
         os.environ["FORCE_HTTPS"] = "1"
         self.assertTrue(server._session_cookie_secure())
+
+    def test_https_request_sets_secure_cookie_without_restart_environment(self):
+        os.environ.pop("SESSION_COOKIE_SECURE", None)
+        os.environ["FORCE_HTTPS"] = "0"
+        client = TestClient(self.app, base_url="https://testserver")
+        response = client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": self.ADMIN_PASSWORD},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn("secure", response.headers["set-cookie"].lower())
+
+    def test_dashboard_media_path_must_remain_inside_allowed_roots(self):
+        allowed = server.DATA_DIR / "outputs" / "allowed.png"
+        outside = Path(self.tmpdir.name).parent / "outside-dashboard-media.png"
+        self.assertTrue(server._is_allowed_dashboard_media_path(allowed))
+        self.assertFalse(server._is_allowed_dashboard_media_path(outside))
+
+    def test_container_defaults_session_cookie_to_secure(self):
+        root = Path(__file__).resolve().parents[2]
+        dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
+        entrypoint = (root / "docker" / "entrypoint.sh").read_text(encoding="utf-8")
+        self.assertIn("SESSION_COOKIE_SECURE=1", dockerfile)
+        self.assertIn('SESSION_COOKIE_SECURE="${SESSION_COOKIE_SECURE:-1}"', entrypoint)
 
     def test_interactive_api_docs_are_not_public(self):
         anonymous = TestClient(self.app)
@@ -419,6 +464,44 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         ]
 
         self.assertIn(429, statuses, statuses)
+
+    def test_successful_logins_do_not_accumulate_ip_rate_limit_and_rotate_session(self):
+        client = TestClient(self.app)
+        credentials = {"username": "admin", "password": self.ADMIN_PASSWORD}
+        first = client.post("/api/auth/login", json=credentials)
+        self.assertEqual(first.status_code, 200, first.text)
+        stale_token = first.cookies.get("session_token")
+
+        statuses = [client.post("/api/auth/login", json=credentials).status_code for _ in range(35)]
+        self.assertEqual(set(statuses), {200}, statuses)
+
+        stale_client = TestClient(self.app, cookies={"session_token": stale_token})
+        self.assertEqual(stale_client.get("/api/me").status_code, 401)
+
+    def test_successful_login_does_not_clear_ip_failure_history(self):
+        client = TestClient(self.app)
+        for index in range(29):
+            response = client.post(
+                "/api/auth/login",
+                json={"username": f"missing-{index}", "password": "incorrect-password"},
+            )
+            self.assertEqual(response.status_code, 401, response.text)
+
+        success = client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": self.ADMIN_PASSWORD},
+        )
+        self.assertEqual(success.status_code, 200, success.text)
+        thirtieth_failure = client.post(
+            "/api/auth/login",
+            json={"username": "missing-29", "password": "incorrect-password"},
+        )
+        self.assertEqual(thirtieth_failure.status_code, 401, thirtieth_failure.text)
+        blocked = client.post(
+            "/api/auth/login",
+            json={"username": "missing-30", "password": "incorrect-password"},
+        )
+        self.assertEqual(blocked.status_code, 429, blocked.text)
 
     def test_repeated_account_applications_are_rate_limited(self):
         client = TestClient(self.app)

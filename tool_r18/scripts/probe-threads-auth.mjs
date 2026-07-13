@@ -33,14 +33,19 @@ function normalizeCookie(cookie) {
   };
 }
 
-function hasThreadsComSession(cookies) {
+function hasThreadsSession(cookies) {
   const now = Date.now() / 1000;
   return cookies.some((cookie) => {
     const domain = String(cookie.domain || "").replace(/^\./, "").toLowerCase();
     const expires = Number(cookie.expires);
     return String(cookie.name || "").toLowerCase() === "sessionid"
       && String(cookie.value || "").trim()
-      && (domain === "threads.com" || domain.endsWith(".threads.com"))
+      && (
+        domain === "threads.com"
+        || domain.endsWith(".threads.com")
+        || domain === "threads.net"
+        || domain.endsWith(".threads.net")
+      )
       && (!Number.isFinite(expires) || expires <= 0 || expires > now);
   });
 }
@@ -74,8 +79,8 @@ function buildChromiumLaunchOptions() {
 async function main() {
   const input = JSON.parse(await readStdin() || "{}");
   const cookies = Array.isArray(input.cookies) ? input.cookies.map(normalizeCookie).filter(Boolean) : [];
-  if (!hasThreadsComSession(cookies)) {
-    console.log(JSON.stringify({ ok: false, status: "invalid", reason: "missing threads.com sessionid" }));
+  if (!hasThreadsSession(cookies)) {
+    console.log(JSON.stringify({ ok: false, status: "invalid", reason: "missing Threads sessionid" }));
     return;
   }
 
@@ -95,7 +100,7 @@ async function main() {
     const url = page.url();
     const refreshedCookies = await context.cookies(["https://www.threads.com/", "https://www.threads.net/"]);
     const loginWall = /accounts\/login|log in|login|登入|登录|使用 Instagram|Instagram 帳號|Instagram 账号/i.test(`${title}\n${url}\n${text}`);
-    const retained = hasThreadsComSession(refreshedCookies);
+    const retained = hasThreadsSession(refreshedCookies);
     await context.close().catch(() => undefined);
     console.log(JSON.stringify({
       ok: !loginWall && retained,

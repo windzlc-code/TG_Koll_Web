@@ -19,12 +19,45 @@ const ADMIN_PAGE_LABELS = {
 };
 
 const SENSITIVE_RUNTIME_INPUT_IDS = [
-  "rtTelegramBotToken",
   "rtLlmApiKeyGpt",
   "rtImageGeminiApiKey",
-  "rtNewPersonaRunningHubApiKey",
   "rtMuleRouterApiKey",
 ];
+
+function getSensitiveToggleButton(inputId) {
+  return document.querySelector(`.sensitive-toggle-btn[data-target="${inputId}"], [data-secret-target="${inputId}"]`);
+}
+
+function hasSavedRuntimeSecret(inputId) {
+  const input = el(inputId);
+  return !!input && input.dataset.runtimeSecretSaved === "true";
+}
+
+function runtimeSecretInputValue(inputId) {
+  const input = el(inputId);
+  if (!input || hasSavedRuntimeSecret(inputId)) return "";
+  return input.value.trim();
+}
+
+function setRuntimeSecretInputState(inputId, configured, maskedValue) {
+  const input = el(inputId);
+  if (!input) return;
+  const isConfigured = !!configured;
+  const mask = isConfigured ? String(maskedValue || "") : "";
+  input.type = "password";
+  input.value = mask;
+  input.dataset.runtimeSecretSaved = isConfigured ? "true" : "false";
+  input.dataset.runtimeSecretMask = mask;
+  input.classList.toggle("is-saved-runtime-secret", isConfigured);
+  input.placeholder = isConfigured ? "已保存 API Key，输入新 Key 后替换" : input.dataset.emptyPlaceholder || input.placeholder;
+  const button = getSensitiveToggleButton(inputId);
+  if (button) {
+    button.classList.remove("is-visible");
+    button.setAttribute("aria-pressed", "false");
+    button.setAttribute("aria-label", isConfigured ? "已保存 API Key 不支持回显" : "显示密钥内容");
+    button.title = isConfigured ? "已保存 API Key 不支持回显" : "显示";
+  }
+}
 
 function normalizeAdminPage(value) {
   const raw = String(value || "").replace(/^#/, "").trim();
@@ -38,6 +71,14 @@ function readAdminPageFromHash() {
 
 function setActiveAdminPage(page, updateHash = true) {
   const nextPage = normalizeAdminPage(page);
+  if ((adminState.userPasswordResetInFlight || adminState.userPasswordSetInFlight) && nextPage !== adminState.activePage) {
+    setMsg("userDetailMsg", "密码正在保存，请等待操作完成后再切换页面。", false);
+    if (!updateHash) {
+      history.replaceState(null, "", `#admin-${adminState.activePage}`);
+    }
+    return false;
+  }
+  if (nextPage !== adminState.activePage) clearRevealedUserPassword();
   adminState.activePage = nextPage;
   const pageLabel = ADMIN_PAGE_LABELS[nextPage] || "运营概览";
   document.querySelectorAll("[data-page]").forEach((node) => {
@@ -57,6 +98,10 @@ function setActiveAdminPage(page, updateHash = true) {
   if (updateHash && String(location.hash || "").replace(/^#/, "") !== targetHash) {
     location.hash = targetHash;
   }
+  if (nextPage === "sentimentCookies") {
+    void refreshSentimentCookieProfilesIfActive();
+  }
+  return true;
 }
 
 async function api(path, opts = {}) {
@@ -91,6 +136,7 @@ function clearAccountMsgs() {
 function getErrorMessage(err) {
   if (!err) return "未知错误";
   if (typeof err === "string") return err;
+  if (typeof err.detail?.message === "string" && err.detail.message.trim()) return err.detail.message.trim();
   if (typeof err.detail === "string" && err.detail.trim()) return err.detail.trim();
   if (typeof err.message === "string" && err.message.trim()) return err.message.trim();
   return String(err);
@@ -768,8 +814,8 @@ async function toggleAvailableLlmModels() {
     return;
   }
   const baseUrl = el("rtLlmBaseUrl").value.trim();
-  const apiKey = el("rtLlmApiKeyGpt").value.trim() || el("rtLlmApiKeyGemini").value.trim();
-  if (!baseUrl || !apiKey) {
+  const apiKey = runtimeSecretInputValue("rtLlmApiKeyGpt") || el("rtLlmApiKeyGemini").value.trim();
+  if (!baseUrl || (!apiKey && !hasSavedRuntimeSecret("rtLlmApiKeyGpt"))) {
     setLlmModelPickerStatus("请先填写 API Base URL 和 API Key", true);
     return;
   }
@@ -870,8 +916,8 @@ async function toggleAvailableImageModels() {
     return;
   }
   const baseUrl = el("rtImageBaseUrl").value.trim();
-  const apiKey = el("rtImageGeminiApiKey").value.trim();
-  if (!baseUrl || !apiKey) {
+  const apiKey = runtimeSecretInputValue("rtImageGeminiApiKey");
+  if (!baseUrl || (!apiKey && !hasSavedRuntimeSecret("rtImageGeminiApiKey"))) {
     setImageModelPickerStatus("请先填写 API Base URL 和 API Key", true);
     return;
   }
@@ -996,6 +1042,7 @@ function closeModelPickersOnOutsideClick(target) {
 }
 
 const TASK_POLL_INTERVAL_MS = 10000;
+const SENTIMENT_COOKIE_POLL_INTERVAL_MS = 10000;
 const taskState = {
   rows: [],
   inspectText: "",
@@ -1005,8 +1052,25 @@ const adminState = {
   selectedUser: null,
   userDetailRequestId: 0,
   userListRequestId: 0,
+  userListPage: 1,
+  userListPageSize: 20,
+  userListTotal: 0,
+  userListRole: "customer",
+  userCustomerCount: 0,
+  userAdminCount: 0,
+  userPasswordResetRequestId: 0,
+  userPasswordResetUserId: null,
+  userPasswordResetInFlight: false,
+  userPasswordSetRequestId: 0,
+  userPasswordSetUserId: null,
+  userPasswordSetInFlight: false,
+  userPasswordRevealRequestId: 0,
+  userPasswordRevealUserId: null,
+  userPasswordRevealInFlight: false,
+  userPasswordRevealTimer: null,
   userReviewInFlight: false,
   userDetailReturnFocus: null,
+  userDetailInertElements: [],
   activePage: "overview",
   llmGeminiModels: [],
   llmGptModels: [],
@@ -1016,8 +1080,8 @@ const adminState = {
   imagePriorityModels: [],
   imageModelPickerTargetListKey: "",
   workflowChains: {},
-  tgTrustedUsers: [],
   sentimentCookieProfiles: [],
+  sentimentCookieRefreshPromise: null,
 };
 const REMOTE_COMFY_TASKS = [
   ["text_to_image", "文字生成图片"],
@@ -1771,9 +1835,39 @@ function initSensitiveInputToggles() {
   });
 }
 
+function initRuntimeSecretMaskInputs() {
+  [...SENSITIVE_RUNTIME_INPUT_IDS, "rtNewPersonaRunningHubApiKey"].forEach((id) => {
+    const input = el(id);
+    if (!input || input.dataset.runtimeSecretMaskBound === "true") return;
+    input.dataset.runtimeSecretMaskBound = "true";
+    input.autocomplete = "off";
+    input.setAttribute("spellcheck", "false");
+    if (!input.dataset.emptyPlaceholder) input.dataset.emptyPlaceholder = input.placeholder || "";
+    input.addEventListener("focus", () => {
+      if (hasSavedRuntimeSecret(id)) input.select();
+    });
+    input.addEventListener("input", () => {
+      if (input.value === input.dataset.runtimeSecretMask) return;
+      input.dataset.runtimeSecretSaved = "false";
+      input.classList.remove("is-saved-runtime-secret");
+      const button = getSensitiveToggleButton(id);
+      if (button) {
+        button.setAttribute("aria-label", "显示密钥内容");
+        button.title = "显示";
+      }
+    });
+  });
+}
+
 function toggleSensitiveInput(button) {
-  const input = el(button.dataset.target || "");
+  const input = el(button.dataset.target || button.dataset.secretTarget || "");
   if (!input) return;
+  if (hasSavedRuntimeSecret(input.id)) {
+    setMsg("runtimeMsg", "API Key 已保存，为保护安全不支持回显；如需替换，请直接输入新的 Key。", true);
+    input.focus();
+    input.select();
+    return;
+  }
   const willShow = input.type === "password";
   input.type = willShow ? "text" : "password";
   button.classList.toggle("is-visible", willShow);
@@ -1806,30 +1900,29 @@ function runtimeFormToPayload() {
   const imageGeminiModels = stringifyModelList(adminState.imageGeminiModels);
   const imagePriorityModels = stringifyModelList(adminState.imagePriorityModels);
   return {
-    telegram_bot_token: el("rtTelegramBotToken") ? el("rtTelegramBotToken").value.trim() : "",
     image_generate_mode_default: "closed_model_api",
     image_generate_workflow_ids: [],
     llm_base_url: el("rtLlmBaseUrl").value.trim(),
     llm_api_key_gemini: "",
-    llm_api_key_gpt: el("rtLlmApiKeyGpt").value.trim(),
-    llm_api_key: el("rtLlmApiKeyGpt").value.trim(),
+    llm_api_key_gpt: runtimeSecretInputValue("rtLlmApiKeyGpt"),
+    llm_api_key: runtimeSecretInputValue("rtLlmApiKeyGpt"),
     llm_default_model_gemini: "",
     llm_default_model_gpt: llmGrokModels,
     llm_default_model: llmGrokModels,
     llm_model_priority_order: llmPriorityModels,
     image_model_provider_base_url: el("rtImageBaseUrl").value.trim(),
-    image_model_provider_api_key_gemini: el("rtImageGeminiApiKey").value.trim(),
+    image_model_provider_api_key_gemini: runtimeSecretInputValue("rtImageGeminiApiKey"),
     image_model_default_model_gemini: imageGeminiModels,
     image_model_default_model: imageGeminiModels,
     image_model_priority_order: imagePriorityModels || imageGeminiModels,
     new_persona_runninghub_base_url: el("rtNewPersonaRunningHubBaseUrl") ? el("rtNewPersonaRunningHubBaseUrl").value.trim() : "",
-    new_persona_runninghub_api_key: el("rtNewPersonaRunningHubApiKey") ? el("rtNewPersonaRunningHubApiKey").value.trim() : "",
+    new_persona_runninghub_api_key: runtimeSecretInputValue("rtNewPersonaRunningHubApiKey"),
     new_persona_runninghub_persona_t2i_detail_url: el("rtNewPersonaPersonaT2iDetailUrl") ? el("rtNewPersonaPersonaT2iDetailUrl").value.trim() : "",
     new_persona_runninghub_persona_t2i_endpoint: el("rtNewPersonaPersonaT2iEndpoint") ? el("rtNewPersonaPersonaT2iEndpoint").value.trim() : "",
     new_persona_runninghub_tweet_i2i_detail_url: el("rtNewPersonaTweetI2iDetailUrl") ? el("rtNewPersonaTweetI2iDetailUrl").value.trim() : "",
     new_persona_runninghub_tweet_i2i_endpoint: el("rtNewPersonaTweetI2iEndpoint") ? el("rtNewPersonaTweetI2iEndpoint").value.trim() : "",
     mulerouter_api_name: el("rtMuleRouterApiName") ? el("rtMuleRouterApiName").value.trim() : "",
-    mulerouter_api_key: el("rtMuleRouterApiKey") ? el("rtMuleRouterApiKey").value.trim() : "",
+    mulerouter_api_key: runtimeSecretInputValue("rtMuleRouterApiKey"),
     mulerouter_base_url: el("rtMuleRouterBaseUrl") ? el("rtMuleRouterBaseUrl").value.trim() : "",
     mulerouter_wan_i2v_model: el("rtMuleRouterWanI2vModelName") ? el("rtMuleRouterWanI2vModelName").value.trim() : "",
     mulerouter_wan_i2v_endpoint: el("rtMuleRouterWanI2vEndpoint") ? el("rtMuleRouterWanI2vEndpoint").value.trim() : "",
@@ -1844,10 +1937,9 @@ function runtimeFormToPayload() {
 function fillRuntimeForm(data) {
   const v = data || {};
   const hasRuntimeField = (key) => Object.prototype.hasOwnProperty.call(v, key);
-  if (el("rtTelegramBotToken")) el("rtTelegramBotToken").value = "";
   el("rtLlmBaseUrl").value = v.llm_base_url || "http://202.90.21.53:3008";
   el("rtLlmApiKeyGemini").value = "";
-  el("rtLlmApiKeyGpt").value = v.llm_api_key_gpt || "";
+  setRuntimeSecretInputState("rtLlmApiKeyGpt", v.llm_api_key_gpt_configured || v.llm_api_key_configured, v.llm_api_key_gpt_masked || v.llm_api_key_masked);
   adminState.llmGeminiModels = [];
   adminState.llmGptModels = grokModelItems([
     ...parseModelList(v.llm_default_model_gpt || ""),
@@ -1860,9 +1952,9 @@ function fillRuntimeForm(data) {
       : adminState.llmGptModels,
   );
   el("rtImageBaseUrl").value = v.image_model_provider_base_url || "http://202.90.21.53:3008";
-  el("rtImageGeminiApiKey").value = v.image_model_provider_api_key_gemini || "";
+  setRuntimeSecretInputState("rtImageGeminiApiKey", v.image_model_provider_api_key_gemini_configured, v.image_model_provider_api_key_gemini_masked);
   if (el("rtNewPersonaRunningHubBaseUrl")) el("rtNewPersonaRunningHubBaseUrl").value = v.new_persona_runninghub_base_url || "https://www.runninghub.ai";
-  if (el("rtNewPersonaRunningHubApiKey")) el("rtNewPersonaRunningHubApiKey").value = v.new_persona_runninghub_api_key || "";
+  setRuntimeSecretInputState("rtNewPersonaRunningHubApiKey", v.new_persona_runninghub_api_key_configured, v.new_persona_runninghub_api_key_masked);
   if (el("rtNewPersonaPersonaT2iDetailUrl")) el("rtNewPersonaPersonaT2iDetailUrl").value = v.new_persona_runninghub_persona_t2i_detail_url || "https://www.runninghub.cn/call-api/api-detail/2046514150500524033";
   if (el("rtNewPersonaPersonaT2iEndpoint")) el("rtNewPersonaPersonaT2iEndpoint").value = v.new_persona_runninghub_persona_t2i_endpoint || "/rhart-image-g-2/text-to-image";
   if (el("rtNewPersonaTweetI2iDetailUrl")) el("rtNewPersonaTweetI2iDetailUrl").value = v.new_persona_runninghub_tweet_i2i_detail_url || "https://www.runninghub.cn/call-api/api-detail/2046503667076751361";
@@ -1875,7 +1967,7 @@ function fillRuntimeForm(data) {
   ]);
   adminState.imagePriorityModels = imageModelItems(v.image_model_priority_order ? parseModelList(v.image_model_priority_order) : adminState.imageGeminiModels);
   if (el("rtMuleRouterApiName")) el("rtMuleRouterApiName").value = v.mulerouter_api_name || "";
-  if (el("rtMuleRouterApiKey")) el("rtMuleRouterApiKey").value = v.mulerouter_api_key || "";
+  setRuntimeSecretInputState("rtMuleRouterApiKey", v.mulerouter_api_key_configured, v.mulerouter_api_key_masked);
   if (el("rtMuleRouterBaseUrl")) el("rtMuleRouterBaseUrl").value = v.mulerouter_base_url || "";
   if (el("rtMuleRouterWanI2vModelName")) el("rtMuleRouterWanI2vModelName").value = v.mulerouter_wan_i2v_model || "";
   if (el("rtMuleRouterWanI2vEndpoint")) el("rtMuleRouterWanI2vEndpoint").value = v.mulerouter_wan_i2v_endpoint || "";
@@ -1909,7 +2001,6 @@ async function saveRuntime() {
   const cfg = runtimeConfigResponseToConfig(resp);
   clearModelDraft();
   if (cfg) fillRuntimeForm(cfg);
-  await loadTgSettings().catch(() => undefined);
   return cfg;
 }
 
@@ -1927,64 +2018,57 @@ function sentimentCookieHealthLabel(health) {
 
 function sentimentCookieActionLabel(action) {
   const map = {
-    keep: "已就绪",
-    "authorize-profile": "请先登录并授权",
-    "reauthorize-profile": "请重新登录并同步",
-    "refresh-profile-cookies": "请刷新当前授权 Cookie",
-    "refresh-before-expiry": "Cookie 即将过期，建议重新同步",
+    keep: "",
+    "authorize-profile": "登录后同步",
+    "reauthorize-profile": "重新登录并同步",
+    "refresh-profile-cookies": "重新同步 Cookie",
+    "refresh-before-expiry": "即将过期，请重新同步",
+    "retry-later": "系统正在自动重试",
   };
-  return map[action] || action || "";
+  return map[action] || "";
 }
 
 function sentimentCookieStatusDetails(profile) {
+  const savedCookieCount = Number(profile?.cookieCount || 0);
   const validCookieCount = Number(profile?.validCookieCount || 0);
   const key = String(profile?.key || profile?.platform || "").trim().toLowerCase();
   const requiresSessionid = key === "threads";
+  const ordinaryCookieSaved = savedCookieCount > 0;
   const ordinaryCookieReady = validCookieCount > 0;
-  const ordinaryCookieText = ordinaryCookieReady
-    ? `普通 Cookie：已授权（${validCookieCount}）`
-    : "普通 Cookie：未授权";
-  const sessionidReady = profile?.hasRequiredSessionCookie !== false && ordinaryCookieReady;
+  const cookieNames = Array.isArray(profile?.cookieNames) ? profile.cookieNames : [];
+  const sessionidSaved = requiresSessionid && (
+    typeof profile?.sessionidSaved === "boolean"
+      ? profile.sessionidSaved
+      : cookieNames.some((name) => String(name || "").trim().toLowerCase() === "sessionid")
+  );
+  const items = [{
+    label: "Cookie",
+    value: ordinaryCookieSaved ? `已保存 ${savedCookieCount}` : "未保存",
+    state: ordinaryCookieSaved ? "ready" : "missing",
+  }];
   if (!requiresSessionid) {
-    return [
-      { text: ordinaryCookieText, state: ordinaryCookieReady ? "ready" : "missing" },
-      { text: "sessionid：未授权（当前平台不要求）", state: "unknown" },
-    ];
+    return { items, hint: sentimentCookieActionLabel(profile?.recommendedAction), checkedAt: "" };
   }
   const liveStatus = String(profile?.liveAuthStatus || "").trim();
-  const liveMessage = String(profile?.liveAuthMessage || "").trim();
   const checkedAt = profile?.liveAuthCheckedAt ? formatAdminDate(profile.liveAuthCheckedAt) : "";
-  const sessionidText = !ordinaryCookieReady
-    ? "sessionid：未授权"
-    : liveStatus === "verified"
-      ? "sessionid：已授权，实时检测可用"
-      : liveStatus === "invalid"
-        ? "sessionid：已授权，但实时检测不可用"
-        : liveStatus === "probe_failed"
-          ? "sessionid：已授权，实时检测失败"
-          : liveStatus === "missing_sessionid"
-            ? "sessionid：未授权，当前只有普通 Cookie"
-            : sessionidReady
-              ? "sessionid：已授权，等待实时检测"
-              : "sessionid：未授权，当前只有普通 Cookie";
-  const sessionidState = liveStatus === "verified"
-    ? "ready"
-    : liveStatus === "probe_failed"
-      ? "unknown"
+  items.push({ label: "sessionid", value: sessionidSaved ? "已保存" : "未保存", state: sessionidSaved ? "ready" : "missing" });
+  if (sessionidSaved) {
+    const liveState = liveStatus === "verified"
+      ? { value: "可用", state: "ready" }
       : liveStatus === "invalid" || liveStatus === "missing_sessionid"
-        ? "missing"
-        : sessionidReady ? "ready" : "missing";
-  const solutionText = liveMessage || (sessionidReady
-    ? "提示：刷新状态会自动检测 Threads sessionid 是否真实可用；如果账号被封、受限或跳登录，请重新登录可用账号并等待授权助手自动同步。"
-    : "提示：Threads 全量搜索需要可用账号的 sessionid；登录可用账号后，授权助手会自动同步，也可以点击同步当前标签页。");
-  return [
-    { text: ordinaryCookieText, state: ordinaryCookieReady ? "ready" : "missing" },
-    { text: checkedAt ? `${sessionidText}（检测时间：${checkedAt}）` : sessionidText, state: sessionidState },
-    {
-      text: solutionText,
-      state: liveStatus === "verified" ? "ready" : (liveStatus === "probe_failed" ? "unknown" : "missing"),
-    },
-  ];
+        ? { value: "需重新登录", state: "missing" }
+        : liveStatus === "probe_failed"
+          ? { value: "自动重试中", state: "warning" }
+          : liveStatus
+            ? { value: "状态未知", state: "warning" }
+            : { value: ordinaryCookieReady ? "等待检测" : "需重新登录", state: ordinaryCookieReady ? "warning" : "missing" };
+    items.push({ label: "登录状态", ...liveState });
+  }
+  return {
+    items,
+    hint: sentimentCookieActionLabel(sessionidSaved ? profile?.liveAuthAction : "authorize-profile"),
+    checkedAt,
+  };
 }
 
 function formatAdminDate(value) {
@@ -2068,14 +2152,22 @@ function renderSentimentCookieProfiles(payload) {
       const cookieNames = (Array.isArray(profile.cookieNames) ? profile.cookieNames : []).slice(0, 12);
       const nameText = cookieNames.length ? cookieNames.join(", ") : "-";
       const statusDetails = sentimentCookieStatusDetails(profile);
-      const actionLabel = sentimentCookieActionLabel(profile.recommendedAction);
+      const statusItems = Array.isArray(statusDetails.items) ? statusDetails.items : [];
       return `
         <tr>
           <td><strong>${escapeHtml(profile.label || key)}</strong><div class="small">${escapeHtml(profile.domain || profile.platform || "")}</div></td>
           <td>
             <span class="badge ${escapeHtml(profile.authHealth || "unknown")}">${escapeHtml(sentimentCookieHealthLabel(profile.authHealth))}</span>
-            ${actionLabel ? `<div class="small">${escapeHtml(actionLabel)}</div>` : ""}
-            ${statusDetails.map((line) => `<div class="small sentiment-cookie-detail ${escapeHtml(line.state || "unknown")}">${escapeHtml(line.text || "")}</div>`).join("")}
+            <div class="sentiment-cookie-state-list">
+              ${statusItems.map((item) => `
+                <span class="sentiment-cookie-state-pill ${escapeHtml(item.state || "unknown")}">
+                  <span>${escapeHtml(item.label || "状态")}</span>
+                  <strong>${escapeHtml(item.value || "-")}</strong>
+                </span>
+              `).join("")}
+            </div>
+            ${statusDetails.hint ? `<div class="sentiment-cookie-hint">${escapeHtml(statusDetails.hint)}</div>` : ""}
+            ${statusDetails.checkedAt ? `<div class="sentiment-cookie-updated">检测于 ${escapeHtml(statusDetails.checkedAt)}</div>` : ""}
           </td>
           <td>${Number(profile.validCookieCount || 0)} / ${Number(profile.expiredCookieCount || 0)}</td>
           <td>${Number(profile.expiringSoonCookieCount || 0)}<div class="small">${escapeHtml(profile.nearestExpiresAt || "")}</div></td>
@@ -2178,10 +2270,40 @@ async function downloadSentimentCookieHelper() {
   setTimeout(() => URL.revokeObjectURL(url), 30000);
   setMsg("sentimentCookieMsg", "授权助手 zip 已开始下载。建议优先按安装说明加载固定目录；zip 只作为备用安装包。", true);
 }
+function setSentimentCookieLiveState(text, state = "ready") {
+  const node = el("sentimentCookieLiveState");
+  const shell = node?.closest(".sentiment-cookie-live");
+  if (node) node.textContent = String(text || "自动更新中");
+  if (shell) shell.dataset.state = state;
+}
+
 async function loadSentimentCookieProfiles() {
-  const payload = await api("/api/admin/sentiment/browser_auth/profiles");
-  renderSentimentCookieProfiles(payload);
-  return payload;
+  if (adminState.sentimentCookieRefreshPromise) return adminState.sentimentCookieRefreshPromise;
+  adminState.sentimentCookieRefreshPromise = (async () => {
+    const payload = await api("/api/admin/sentiment/browser_auth/profiles");
+    renderSentimentCookieProfiles(payload);
+    if (el("sentimentCookieMsg")?.classList.contains("err")) {
+      setMsg("sentimentCookieMsg", "");
+    }
+    const updatedAt = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+    setSentimentCookieLiveState(`已更新 ${updatedAt}`, "ready");
+    return payload;
+  })();
+  try {
+    return await adminState.sentimentCookieRefreshPromise;
+  } finally {
+    adminState.sentimentCookieRefreshPromise = null;
+  }
+}
+
+async function refreshSentimentCookieProfilesIfActive() {
+  if (document.hidden || adminState.activePage !== "sentimentCookies") return null;
+  try {
+    return await loadSentimentCookieProfiles();
+  } catch {
+    setSentimentCookieLiveState("更新失败，自动重试中", "warning");
+    return null;
+  }
 }
 
 async function saveSentimentCookieProfile() {
@@ -2235,118 +2357,171 @@ async function savePricing() {
   });
 }
 
-function renderTgSettings(data) {
-  const settings = data || {};
-  const rows = Array.isArray(settings.trusted_users) ? settings.trusted_users : [];
-  adminState.tgTrustedUsers = rows;
-  setText("tgBotTokenStatus", settings.bot_token_configured ? (settings.bot_token_masked || "已配置") : "未配置");
-  const sourceMap = { runtime: "运行配置", file: "本地文件", env: "环境变量" };
-  setText("tgBotTokenSource", settings.bot_token_configured
-    ? `当前来源：${sourceMap[settings.bot_token_source] || settings.bot_token_source || "已配置"}；输入新 Token 并保存运行配置后会立即生效。`
-    : "当前未配置；输入 Bot Token 并保存运行配置后会立即生效。");
-  setText("tgTrustedUserCount", rows.length);
-  setText("tgBotDbPath", settings.db_path || "-");
-  const envIds = Array.isArray(settings.allowed_chat_ids_env) ? settings.allowed_chat_ids_env : [];
-  setText("tgBotAllowedIds", envIds.length ? envIds.join(", ") : "-");
+const ADMIN_USER_ICONS = {
+  detail: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.5"/></svg>',
+  balance: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 7h15a3 3 0 0 1 3 3v8H3V7Z"/><path d="M3 7V5h14v2M16 12h5"/><circle cx="16" cy="12" r="1"/></svg>',
+  disable: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M12 3v8"/><path d="M7.1 5.7a8 8 0 1 0 9.8 0"/></svg>',
+  enable: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 7.7-1.5M12 14v3"/></svg>',
+  delete: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M4 7h16M9 3h6l1 4H8l1-4ZM7 7l1 14h8l1-14M10 11v6m4-6v6"/></svg>',
+};
 
-  const body = el("tgTrustedUserBody");
-  if (!body) return;
-  body.innerHTML = "";
+function createAdminUserBadge(text, tone) {
+  const badge = document.createElement("span");
+  badge.className = `admin-user-badge admin-user-badge-${tone}`;
+  badge.textContent = text;
+  return badge;
+}
+
+function syncUserRoleView() {
+  const role = adminState.userListRole === "admin" ? "admin" : "customer";
+  document.querySelectorAll("[data-user-role]").forEach((button) => {
+    const active = button.dataset.userRole === role;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+  const isAdmin = role === "admin";
+  setText("newUserNameLabel", isAdmin ? "管理员用户名" : "客户用户名");
+  setText("newUserPasswordLabel", `登录密码（至少 ${isAdmin ? 12 : 8} 位）`);
+  if (el("newUserName")) el("newUserName").placeholder = isAdmin ? "manager001" : "customer001";
+  if (el("newUserPassword")) el("newUserPassword").minLength = isAdmin ? 12 : 8;
+  if (el("newUserBalanceField")) el("newUserBalanceField").hidden = isAdmin;
+  const createButtonLabel = el("btnCreateUser")?.querySelector("span");
+  if (createButtonLabel) createButtonLabel.textContent = isAdmin ? "创建管理员账号" : "创建客户账号";
+  const pending = document.querySelector(".admin-pending-count");
+  if (pending instanceof HTMLElement) pending.hidden = isAdmin;
+}
+
+function renderUserPagination() {
+  const total = Math.max(0, Number(adminState.userListTotal || 0));
+  const pageSize = Math.max(1, Number(adminState.userListPageSize || 20));
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(Math.max(1, Number(adminState.userListPage || 1)), totalPages);
+  adminState.userListPage = page;
+  const roleLabel = adminState.userListRole === "admin" ? "管理员账号" : "客户账号";
+  setText("adminUserPaginationSummary", `共 ${total} 个${roleLabel}`);
+  setText("adminUserPageIndicator", `第 ${page} / ${totalPages} 页`);
+  if (el("btnUserPagePrev")) el("btnUserPagePrev").disabled = page <= 1;
+  if (el("btnUserPageNext")) el("btnUserPageNext").disabled = page >= totalPages;
+}
+
+async function loadUsers(page = adminState.userListPage) {
+  const pageSize = Math.max(1, Number(adminState.userListPageSize || 20));
+  const requestedPage = Math.max(1, Math.floor(Number(page || 1)));
+  adminState.userListPage = requestedPage;
+  const requestId = ++adminState.userListRequestId;
+  const role = adminState.userListRole === "admin" ? "admin" : "customer";
+  const body = el("userBody");
+  body?.setAttribute("aria-busy", "true");
+  let payload;
+  try {
+    payload = await api(`/api/admin/users?role=${encodeURIComponent(role)}&limit=${pageSize}&offset=${(requestedPage - 1) * pageSize}`);
+  } finally {
+    if (requestId === adminState.userListRequestId) body?.removeAttribute("aria-busy");
+  }
+  if (requestId !== adminState.userListRequestId) return;
+  const rows = payload.items || [];
+  const total = Number.isFinite(Number(payload.total)) ? Math.max(0, Number(payload.total)) : rows.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  if (requestedPage > totalPages) {
+    adminState.userListPage = totalPages;
+    return loadUsers(totalPages);
+  }
+  adminState.userListPage = requestedPage;
+  adminState.userListTotal = total;
+  adminState.userCustomerCount = Math.max(0, Number(payload.customer_count || 0));
+  adminState.userAdminCount = Math.max(0, Number(payload.admin_count || 0));
+  setText("adminUserCount", adminState.userCustomerCount);
+  setText("overviewUserCount", adminState.userCustomerCount);
+  setText("overviewUserCountMirror", adminState.userCustomerCount);
+  setText("adminCustomerCount", adminState.userCustomerCount);
+  setText("adminManagerCount", adminState.userAdminCount);
+  const pendingCount = Number.isFinite(Number(payload.pending_count))
+    ? Number(payload.pending_count)
+    : rows.filter((user) => user.approval_status === "pending").length;
+  setText("adminPendingCount", pendingCount);
+  syncUserRoleView();
+  renderUserPagination();
+
+  const activeAction = document.activeElement?.closest?.("button[data-act]");
+  const focusSelector = activeAction
+    ? `button[data-act="${activeAction.dataset.act}"][data-id="${activeAction.dataset.id}"]`
+    : "";
+  body.replaceChildren();
   if (!rows.length) {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td colspan="6" class="small">暂无信任用户 ID</td>`;
-    body.appendChild(tr);
+    const emptyRow = document.createElement("tr");
+    const emptyCell = document.createElement("td");
+    emptyCell.className = "admin-user-empty";
+    emptyCell.colSpan = 9;
+    emptyCell.textContent = role === "admin" ? "暂无管理员账号" : "暂无客户账号";
+    emptyRow.appendChild(emptyCell);
+    body.appendChild(emptyRow);
     return;
   }
-  rows.forEach((item) => {
-    const chatId = String(item.chat_id || "");
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${escapeHtml(chatId)}</td>
-      <td>${escapeHtml(item.label || "")}</td>
-      <td>${item.enabled ? '<span class="pill success">启用</span>' : '<span class="pill failed">停用</span>'}</td>
-      <td>${item.notify_busy ? "开启" : "关闭"}</td>
-      <td>${item.notify_available ? "开启" : "关闭"}</td>
-      <td>
-        <button class="ghost" data-act="tg_toggle" data-id="${escapeHtml(chatId)}" data-enabled="${item.enabled ? 1 : 0}">${item.enabled ? "停用" : "启用"}</button>
-        <button class="ghost" data-act="tg_delete" data-id="${escapeHtml(chatId)}">删除</button>
-      </td>
-    `;
-    body.appendChild(tr);
-  });
-}
-
-async function loadTgSettings() {
-  const data = await api("/api/admin/tg_settings");
-  renderTgSettings(data);
-  return data;
-}
-
-async function saveTgTrustedUser() {
-  const chatId = Number(el("tgTrustedChatId").value || 0);
-  if (!Number.isFinite(chatId) || chatId <= 0) {
-    throw new Error("请填写有效的 TG 用户 ID");
-  }
-  const payload = {
-    chat_id: Math.floor(chatId),
-    label: el("tgTrustedLabel").value.trim(),
-    enabled: !!el("tgTrustedEnabled").checked,
-    notify_busy: !!el("tgTrustedNotifyBusy").checked,
-    notify_available: !!el("tgTrustedNotifyAvailable").checked,
-  };
-  const resp = await api("/api/admin/tg_trusted_users", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  renderTgSettings(resp.tg_settings || resp);
-  el("tgTrustedChatId").value = "";
-  el("tgTrustedLabel").value = "";
-  el("tgTrustedEnabled").checked = true;
-  el("tgTrustedNotifyBusy").checked = true;
-  el("tgTrustedNotifyAvailable").checked = true;
-}
-
-async function loadUsers() {
-  const requestId = ++adminState.userListRequestId;
-  const rows = (await api("/api/admin/users?limit=500")).items || [];
-  if (requestId !== adminState.userListRequestId) return;
-  setText("adminUserCount", rows.length);
-  setText("overviewUserCount", rows.length);
-  setText("overviewUserCountMirror", rows.length);
-  setText("adminPendingCount", rows.filter((user) => user.approval_status === "pending").length);
-
-  const body = el("userBody");
-  body.replaceChildren();
   rows.forEach((u) => {
     const tr = document.createElement("tr");
     const role = u.is_admin ? "管理员" : "客户";
     const state = u.approval_status === "pending" ? "待授权" : (u.approval_status === "rejected" ? "已拒绝" : (u.is_disabled ? "已禁用" : "已启用"));
-    [u.id, u.username, [u.full_name, u.company].filter(Boolean).join(" / ") || "-", role, state, u.balance_cents].forEach((value) => {
+    const accountCell = document.createElement("td");
+    accountCell.className = "admin-user-account-cell";
+    const accountName = document.createElement("strong");
+    accountName.textContent = String(u.username || "-");
+    const accountId = document.createElement("span");
+    accountId.textContent = `ID ${u.id}`;
+    accountCell.append(accountName, accountId);
+    tr.appendChild(accountCell);
+
+    const companyCell = document.createElement("td");
+    companyCell.className = "admin-user-company-cell";
+    companyCell.textContent = [u.full_name, u.company].filter(Boolean).join(" / ") || "-";
+    tr.appendChild(companyCell);
+
+    const roleCell = document.createElement("td");
+    roleCell.appendChild(createAdminUserBadge(role, u.is_admin ? "admin" : "customer"));
+    tr.appendChild(roleCell);
+
+    const stateTone = u.approval_status === "pending"
+      ? "pending"
+      : (u.approval_status === "rejected" ? "rejected" : (u.is_disabled ? "disabled" : "enabled"));
+    const stateCell = document.createElement("td");
+    stateCell.appendChild(createAdminUserBadge(state, stateTone));
+    tr.appendChild(stateCell);
+
+    [u.persona_count, u.created_post_count, u.published_post_count].forEach((value) => {
       const td = document.createElement("td");
-      td.textContent = String(value ?? "");
+      td.className = "admin-user-stat-cell";
+      td.textContent = String(Math.max(0, Number(value || 0)));
       tr.appendChild(td);
     });
+
+    const balanceCell = document.createElement("td");
+    balanceCell.className = "admin-user-balance-cell";
+    balanceCell.textContent = u.is_admin ? "-" : String(Math.max(0, Number(u.balance_cents || 0)));
+    tr.appendChild(balanceCell);
+
     const actions = document.createElement("td");
-    const addAction = (label, act, extra = {}) => {
+    actions.className = "admin-user-actions";
+    const addAction = (label, act, icon, extra = {}) => {
       const button = document.createElement("button");
       button.type = "button";
-      button.className = "ghost";
-      button.textContent = label;
+      button.className = `ghost admin-user-icon-button${act === "delete_user" ? " is-danger" : ""}`;
+      button.innerHTML = ADMIN_USER_ICONS[icon] || ADMIN_USER_ICONS.detail;
+      button.setAttribute("aria-label", `${label}：${u.username}`);
+      button.title = label;
       button.dataset.act = act;
       button.dataset.id = String(u.id);
       Object.entries(extra).forEach(([key, value]) => { button.dataset[key] = String(value); });
       actions.appendChild(button);
     };
-    addAction("查看详情", "user_detail");
+    addAction("查看详情", "user_detail", "detail");
     if (u.approval_status === "approved") {
-      addAction("额度分配", "recharge", { name: u.username });
-      addAction(u.is_disabled ? "启用" : "禁用", "toggle", { disabled: u.is_disabled ? 1 : 0 });
+      if (!u.is_admin) addAction("额度分配", "recharge", "balance", { name: u.username });
+      addAction(u.is_disabled ? "启用" : "禁用", "toggle", u.is_disabled ? "enable" : "disable", { disabled: u.is_disabled ? 1 : 0 });
     }
-    addAction("删除", "delete_user", { name: u.username });
+    addAction("删除", "delete_user", "delete", { name: u.username });
     tr.appendChild(actions);
     body.appendChild(tr);
   });
+  if (focusSelector) body.querySelector(focusSelector)?.focus();
 }
 
 function detailRow(label, value) {
@@ -2361,29 +2536,301 @@ function detailRow(label, value) {
 }
 
 function clearUserPasswordReset() {
-  if (el("userPasswordResultValue")) el("userPasswordResultValue").textContent = "";
+  if (el("userPasswordResultValue")) el("userPasswordResultValue").value = "";
   if (el("userPasswordResult")) el("userPasswordResult").hidden = true;
+}
+
+function clearManualUserPassword(options = {}) {
+  const { keepOpen = false } = options;
+  const form = el("userPasswordManualForm");
+  if (el("userPasswordManualValue")) el("userPasswordManualValue").value = "";
+  if (el("userPasswordManualConfirm")) el("userPasswordManualConfirm").value = "";
+  if (el("userPasswordAdminConfirm")) el("userPasswordAdminConfirm").value = "";
+  setMsg("userPasswordManualMsg", "");
+  if (form && !keepOpen) form.hidden = true;
+  if (el("btnOpenSetUserPassword")) {
+    el("btnOpenSetUserPassword").setAttribute("aria-expanded", keepOpen ? "true" : "false");
+  }
+}
+
+function setManualUserPasswordFormOpen(open) {
+  const form = el("userPasswordManualForm");
+  if (!form || adminState.userPasswordSetInFlight) return;
+  if (open) {
+    clearUserPasswordReset();
+    clearRevealedUserPassword();
+    clearManualUserPassword({ keepOpen: true });
+    form.hidden = false;
+    el("btnOpenSetUserPassword")?.setAttribute("aria-expanded", "true");
+    window.setTimeout(() => el("userPasswordManualValue")?.focus(), 0);
+    return;
+  }
+  clearManualUserPassword();
+  el("btnOpenSetUserPassword")?.focus();
+}
+
+function clearRevealedUserPassword(options = {}) {
+  const { message = "", isSuccess = false } = options;
+  adminState.userPasswordRevealRequestId += 1;
+  adminState.userPasswordRevealUserId = null;
+  adminState.userPasswordRevealInFlight = false;
+  if (adminState.userPasswordRevealTimer) {
+    window.clearTimeout(adminState.userPasswordRevealTimer);
+    adminState.userPasswordRevealTimer = null;
+  }
+  const input = el("userPasswordRevealValue");
+  if (input) input.value = "";
+  if (el("userPasswordRevealResult")) el("userPasswordRevealResult").hidden = true;
+  if (el("btnHideUserPassword")) el("btnHideUserPassword").hidden = true;
+  syncUserDetailActionState();
+  if (message) setMsg("userDetailMsg", message, isSuccess);
+}
+
+function scheduleRevealedUserPasswordClear() {
+  if (adminState.userPasswordRevealTimer) window.clearTimeout(adminState.userPasswordRevealTimer);
+  adminState.userPasswordRevealTimer = window.setTimeout(() => {
+    clearRevealedUserPassword({ message: "当前密码已自动隐藏并清除。", isSuccess: true });
+  }, 60000);
+}
+
+function setUserPasswordRevealAvailability(available) {
+  const user = adminState.selectedUser;
+  if (user) {
+    user.password_reveal_available = available;
+    user.password_reveal_status = available === false ? "unavailable" : "available";
+  }
+  const hint = el("userPasswordRevealHint");
+  if (!hint) return;
+  hint.textContent = available === false
+    ? "该历史账号没有可查看的密码，请使用重置功能生成新密码。"
+    : "点击查看后需再次确认管理员操作。";
+}
+
+async function revealSelectedUserPassword() {
+  const user = adminState.selectedUser;
+  if (!user?.id || user.is_admin || adminState.userPasswordRevealInFlight) return;
+  if (!confirm(`确认查看账号 ${user.username || user.id} 的当前登录密码吗？请确保周围没有无关人员。`)) return;
+  clearRevealedUserPassword();
+  const targetUserId = String(user.id);
+  const requestId = ++adminState.userPasswordRevealRequestId;
+  adminState.userPasswordRevealInFlight = true;
+  adminState.userPasswordRevealUserId = targetUserId;
+  syncUserDetailActionState();
+  try {
+    const response = await api(`/api/admin/users/${user.id}/reveal-password`, { method: "POST" });
+    const modalOpen = el("userDetailModal")?.getAttribute("aria-hidden") === "false";
+    const responseStillCurrent = requestId === adminState.userPasswordRevealRequestId
+      && targetUserId === String(adminState.userPasswordRevealUserId || "")
+      && targetUserId === String(adminState.selectedUser?.id || "")
+      && modalOpen
+      && !document.hidden;
+    if (!responseStillCurrent) return;
+    if (Number(response.updated_at || 0) > 0) {
+      adminState.selectedUser.updated_at = Number(response.updated_at);
+    }
+    setUserPasswordRevealAvailability(response.available !== false);
+    if (response.available === false || !response.password) {
+      clearRevealedUserPassword({ message: "该历史账号没有可查看的密码，请先重置并将新密码安全交付给用户。" });
+      return;
+    }
+    el("userPasswordRevealValue").value = String(response.password);
+    el("userPasswordRevealResult").hidden = false;
+    el("btnHideUserPassword").hidden = false;
+    setMsg("userDetailMsg", "当前密码已显示，将在 60 秒后自动清除。", true);
+    scheduleRevealedUserPasswordClear();
+  } finally {
+    if (requestId === adminState.userPasswordRevealRequestId) {
+      adminState.userPasswordRevealInFlight = false;
+      adminState.userPasswordRevealUserId = null;
+      syncUserDetailActionState();
+    }
+  }
+}
+
+function setUserDetailBackgroundInert(enabled) {
+  const modal = el("userDetailModal");
+  if (!modal) return;
+  if (enabled) {
+    if (adminState.userDetailInertElements.length) return;
+    adminState.userDetailInertElements = Array.from(document.body.children).filter((node) => {
+      return node instanceof HTMLElement && node !== modal && !node.inert;
+    });
+    adminState.userDetailInertElements.forEach((node) => { node.inert = true; });
+    return;
+  }
+  adminState.userDetailInertElements.forEach((node) => { node.inert = false; });
+  adminState.userDetailInertElements = [];
+}
+
+function userDetailFocusableElements() {
+  const modal = el("userDetailModal");
+  if (!modal || modal.getAttribute("aria-hidden") === "true") return [];
+  return Array.from(modal.querySelectorAll('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'))
+    .filter((node) => node instanceof HTMLElement && !node.hidden && node.getClientRects().length > 0);
+}
+
+function trapUserDetailFocus(event) {
+  if (event.key !== "Tab") return false;
+  const focusable = userDetailFocusableElements();
+  if (!focusable.length) return false;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (!focusable.includes(document.activeElement)) {
+    event.preventDefault();
+    (event.shiftKey ? last : first).focus();
+    return true;
+  }
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+    return true;
+  }
+  if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+    return true;
+  }
+  return false;
+}
+
+function syncUserDetailActionState() {
+  const user = adminState.selectedUser;
+  const busy = adminState.userPasswordResetInFlight || adminState.userPasswordSetInFlight;
+  if (el("btnUserDetailClose")) el("btnUserDetailClose").disabled = busy;
+  if (el("btnResetUserPassword")) el("btnResetUserPassword").disabled = busy || !user || !!user.is_admin;
+  if (el("btnOpenSetUserPassword")) el("btnOpenSetUserPassword").disabled = busy || !user || !!user.is_admin;
+  if (el("btnCancelSetUserPassword")) el("btnCancelSetUserPassword").disabled = busy;
+  if (el("btnSaveSetUserPassword")) {
+    el("btnSaveSetUserPassword").disabled = busy || !user || !!user.is_admin;
+    el("btnSaveSetUserPassword").textContent = adminState.userPasswordSetInFlight ? "正在保存..." : "保存新密码";
+  }
+  if (el("userPasswordManualValue")) el("userPasswordManualValue").disabled = busy;
+  if (el("userPasswordManualConfirm")) el("userPasswordManualConfirm").disabled = busy;
+  if (el("userPasswordAdminConfirm")) el("userPasswordAdminConfirm").disabled = busy;
+  if (el("btnRevealUserPassword")) {
+    el("btnRevealUserPassword").disabled = busy
+      || adminState.userPasswordRevealInFlight
+      || !user
+      || !!user.is_admin
+      || user.password_reveal_available === false;
+    el("btnRevealUserPassword").textContent = adminState.userPasswordRevealInFlight ? "正在读取..." : "查看当前密码";
+  }
+  if (el("btnHideUserPassword")) el("btnHideUserPassword").disabled = busy;
+  if (el("btnCopyRevealedUserPassword")) el("btnCopyRevealedUserPassword").disabled = busy;
+  if (el("btnApproveUser")) el("btnApproveUser").disabled = busy || !user || !!user.is_admin || user.approval_status === "approved";
+  if (el("btnRejectUser")) el("btnRejectUser").disabled = busy || !user || !!user.is_admin || user.approval_status !== "pending";
+}
+
+async function setSelectedUserPassword() {
+  const user = adminState.selectedUser;
+  if (!user?.id || user.is_admin || adminState.userPasswordSetInFlight || adminState.userPasswordResetInFlight) return;
+  const password = String(el("userPasswordManualValue")?.value || "");
+  const confirmation = String(el("userPasswordManualConfirm")?.value || "");
+  const adminPassword = String(el("userPasswordAdminConfirm")?.value || "");
+  if (password.length < 8 || password.length > 256) {
+    setMsg("userPasswordManualMsg", "密码长度需为 8-256 位。", false);
+    el("userPasswordManualValue")?.focus();
+    return;
+  }
+  if (password !== confirmation) {
+    setMsg("userPasswordManualMsg", "两次输入的密码不一致。", false);
+    el("userPasswordManualConfirm")?.focus();
+    return;
+  }
+  if (!adminPassword) {
+    setMsg("userPasswordManualMsg", "请输入管理员当前密码确认操作。", false);
+    el("userPasswordAdminConfirm")?.focus();
+    return;
+  }
+  if (!confirm(`确认修改账号 ${user.username || user.id} 的登录密码吗？该账号现有登录会话会立即失效。`)) return;
+
+  const targetUserId = String(user.id);
+  const requestId = ++adminState.userPasswordSetRequestId;
+  adminState.userPasswordSetInFlight = true;
+  adminState.userPasswordSetUserId = targetUserId;
+  setMsg("userPasswordManualMsg", "");
+  clearUserPasswordReset();
+  clearRevealedUserPassword();
+  syncUserDetailActionState();
+  try {
+    const response = await api(`/api/admin/users/${user.id}/set-password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        password,
+        admin_password: adminPassword,
+        expected_updated_at: Number(user.updated_at || 0),
+      }),
+    });
+    const modalOpen = el("userDetailModal")?.getAttribute("aria-hidden") === "false";
+    const responseStillCurrent = requestId === adminState.userPasswordSetRequestId
+      && targetUserId === String(adminState.userPasswordSetUserId || "")
+      && targetUserId === String(adminState.selectedUser?.id || "")
+      && modalOpen;
+    if (!responseStillCurrent) return;
+    if (Number(response.updated_at || 0) > 0) {
+      adminState.selectedUser.updated_at = Number(response.updated_at);
+    }
+    setUserPasswordRevealAvailability(true);
+    clearManualUserPassword();
+    setMsg("userDetailMsg", "登录密码已修改，旧密码和该用户的现有登录会话已失效。", true);
+    el("btnOpenSetUserPassword")?.focus();
+  } finally {
+    if (requestId === adminState.userPasswordSetRequestId) {
+      adminState.userPasswordSetInFlight = false;
+      adminState.userPasswordSetUserId = null;
+      syncUserDetailActionState();
+    }
+  }
 }
 
 async function resetSelectedUserPassword() {
   const user = adminState.selectedUser;
-  if (!user?.id || user.is_admin) return;
+  if (!user?.id || user.is_admin || adminState.userPasswordResetInFlight) return;
   if (!confirm(`确认重置账号 ${user.username || user.id} 的登录密码吗？该账号现有登录会话会立即失效。`)) return;
-  el("btnResetUserPassword").disabled = true;
+  const targetUserId = String(user.id);
+  const requestId = ++adminState.userPasswordResetRequestId;
+  adminState.userPasswordResetInFlight = true;
+  adminState.userPasswordResetUserId = targetUserId;
+  clearRevealedUserPassword();
+  syncUserDetailActionState();
+  el("userDetailDialog")?.focus();
   try {
     clearUserPasswordReset();
     const response = await api(`/api/admin/users/${user.id}/reset-password`, {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expected_updated_at: Number(user.updated_at || 0) }),
     });
-    el("userPasswordResultValue").textContent = String(response.temporary_password || "");
+    const modalOpen = el("userDetailModal")?.getAttribute("aria-hidden") === "false";
+    const responseStillCurrent = requestId === adminState.userPasswordResetRequestId
+      && targetUserId === String(adminState.userPasswordResetUserId || "")
+      && targetUserId === String(adminState.selectedUser?.id || "")
+      && modalOpen;
+    if (!responseStillCurrent) return;
+    if (Number(response.updated_at || 0) > 0) {
+      adminState.selectedUser.updated_at = Number(response.updated_at);
+    }
+    clearRevealedUserPassword();
+    setUserPasswordRevealAvailability(true);
+    el("userPasswordResultValue").value = String(response.temporary_password || "");
     el("userPasswordResult").hidden = false;
     setMsg("userDetailMsg", "密码已重置，旧登录会话已失效。请立即复制并安全交付给用户。", true);
   } finally {
-    el("btnResetUserPassword").disabled = false;
+    if (requestId === adminState.userPasswordResetRequestId) {
+      adminState.userPasswordResetInFlight = false;
+      adminState.userPasswordResetUserId = null;
+      syncUserDetailActionState();
+    }
   }
 }
 
 async function openUserDetailModal(id) {
+  if (adminState.userPasswordResetInFlight || adminState.userPasswordSetInFlight) {
+    setMsg("userDetailMsg", "密码正在保存，请等待操作完成后再切换账号。", false);
+    return;
+  }
+  clearRevealedUserPassword();
   adminState.userDetailReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const requestId = ++adminState.userDetailRequestId;
   const response = await api(`/api/admin/users/${id}`);
@@ -2402,7 +2849,12 @@ async function openUserDetailModal(id) {
     detailRow("联系电话", user.phone),
     detailRow("账号角色", user.is_admin ? "管理员" : "客户"),
     detailRow("账号状态", user.is_disabled ? "已禁用" : "已启用"),
-    detailRow("密码状态", user.password_configured ? "已设置（仅可重置）" : "未设置"),
+    detailRow(
+      "密码状态",
+      user.password_configured
+        ? (user.password_reveal_available === false ? "已设置（历史账号，重置后可查看）" : "已设置")
+        : "未设置",
+    ),
     detailRow("申请类型", user.account_type === "guest" ? "游客申请" : "后台创建"),
     detailRow("审核状态", user.approval_status),
     detailRow("可用额度", `${user.balance_cents || 0} 分`),
@@ -2419,27 +2871,42 @@ async function openUserDetailModal(id) {
   useCase.classList.add("admin-user-detail-item-wide");
   body.appendChild(useCase);
   clearUserPasswordReset();
+  clearManualUserPassword();
+  setUserPasswordRevealAvailability(user.password_reveal_available);
   el("userPasswordSection").hidden = !!user.is_admin;
   el("userApprovalNote").value = user.admin_note || "";
   setMsg("userDetailMsg", "");
-  el("btnApproveUser").disabled = !!user.is_admin || user.approval_status === "approved";
-  el("btnRejectUser").disabled = !!user.is_admin || user.approval_status !== "pending";
   el("userDetailModal").style.display = "grid";
   el("userDetailModal").setAttribute("aria-hidden", "false");
+  setUserDetailBackgroundInert(true);
+  syncUserDetailActionState();
   window.setTimeout(() => el("btnUserDetailClose")?.focus(), 0);
 }
 
 function closeUserDetailModal() {
   const modal = el("userDetailModal");
   if (!modal || modal.getAttribute("aria-hidden") === "true") return;
+  if (adminState.userPasswordResetInFlight || adminState.userPasswordSetInFlight) {
+    setMsg("userDetailMsg", "密码正在保存，完成前不能关闭此窗口。", false);
+    el("userDetailDialog")?.focus();
+    return false;
+  }
   adminState.userDetailRequestId += 1;
+  adminState.userPasswordResetRequestId += 1;
+  adminState.userPasswordResetUserId = null;
+  adminState.userPasswordSetRequestId += 1;
+  adminState.userPasswordSetUserId = null;
+  clearRevealedUserPassword();
   clearUserPasswordReset();
+  clearManualUserPassword();
   modal.style.display = "none";
   modal.setAttribute("aria-hidden", "true");
+  setUserDetailBackgroundInert(false);
   adminState.selectedUser = null;
   const returnFocus = adminState.userDetailReturnFocus;
   adminState.userDetailReturnFocus = null;
   if (returnFocus?.isConnected) returnFocus.focus();
+  return true;
 }
 
 async function reviewSelectedUser(approvalStatus) {
@@ -2504,14 +2971,18 @@ async function loadTasks() {
 }
 
 async function createUser() {
+  const isAdmin = adminState.userListRole === "admin";
   const payload = {
     username: el("newUserName").value.trim(),
     password: el("newUserPassword").value,
-    is_admin: !!el("newUserIsAdmin").checked,
-    balance_cents: Number(el("newUserBalance").value || 0),
+    is_admin: isAdmin,
+    balance_cents: isAdmin ? 0 : Number(el("newUserBalance").value || 0),
   };
-  if (!payload.username) throw new Error("客户用户名不能为空");
-  if (!payload.password || payload.password.length < 6) throw new Error("密码至少 6 位");
+  if (!payload.username) throw new Error(`${isAdmin ? "管理员" : "客户"}用户名不能为空`);
+  const minimumPasswordLength = payload.is_admin ? 12 : 8;
+  if (!payload.password || payload.password.length < minimumPasswordLength) {
+    throw new Error(`密码至少 ${minimumPasswordLength} 位`);
+  }
   await api("/api/admin/users", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2519,7 +2990,6 @@ async function createUser() {
   });
   el("newUserName").value = "";
   el("newUserPassword").value = "";
-  el("newUserIsAdmin").checked = false;
   el("newUserBalance").value = "0";
 }
 
@@ -2702,9 +3172,7 @@ function bindActions() {
   bindRunningHubPresetSelect("tweet");
   document.querySelectorAll("[data-secret-target]").forEach((button) => {
     button.addEventListener("click", () => {
-      const input = el(button.dataset.secretTarget || "");
-      if (!input) return;
-      input.type = input.type === "password" ? "text" : "password";
+      toggleSensitiveInput(button);
     });
   });
   if (el("btnApplyVideoModel")) {
@@ -2748,39 +3216,31 @@ function bindActions() {
     }
   });
 
-  if (el("btnRefreshTgTrustedUsers")) {
-    el("btnRefreshTgTrustedUsers").addEventListener("click", async () => {
-      setMsg("tgSettingsMsg", "");
-      try {
-        await loadTgSettings();
-      setMsg("tgSettingsMsg", "TG 信任用户已删除", true);
-      } catch (err) {
-        setMsg("tgSettingsMsg", getErrorMessage(err), false);
-      }
-    });
-  }
-
-  if (el("btnAddTgTrustedUser")) {
-    el("btnAddTgTrustedUser").addEventListener("click", async () => {
-      setMsg("tgSettingsMsg", "");
-      try {
-        await saveTgTrustedUser();
-        setMsg("tgSettingsMsg", "信任用户 ID 已保存", true);
-      } catch (err) {
-        setMsg("tgSettingsMsg", getErrorMessage(err), false);
-      }
-    });
-  }
-
   el("btnCreateUser").addEventListener("click", async () => {
     setMsg("userMsg", "");
     try {
       await createUser();
-      setMsg("userMsg", "客户账号已创建", true);
+      setMsg("userMsg", `${adminState.userListRole === "admin" ? "管理员" : "客户"}账号已创建`, true);
       await loadUsers();
     } catch (err) {
       setMsg("userMsg", err.detail || err.message || String(err), false);
     }
+  });
+
+  document.querySelectorAll("[data-user-role]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const nextRole = button.dataset.userRole === "admin" ? "admin" : "customer";
+      if (nextRole === adminState.userListRole) return;
+      adminState.userListRole = nextRole;
+      adminState.userListPage = 1;
+      syncUserRoleView();
+      setMsg("userMsg", "");
+      try {
+        await loadUsers(1);
+      } catch (err) {
+        setMsg("userMsg", getErrorMessage(err), false);
+      }
+    });
   });
 
   if (el("btnChangePassword")) {
@@ -2790,7 +3250,7 @@ function bindActions() {
       const newPwd = el("accNewPassword").value || "";
       const newPwd2 = el("accNewPassword2").value || "";
       if (!oldPwd) return setMsg("accountPasswordMsg", "请填写原密码", false);
-      if (!newPwd || newPwd.length < 6) return setMsg("accountPasswordMsg", "新密码至少 6 位", false);
+      if (!newPwd || newPwd.length < 12) return setMsg("accountPasswordMsg", "管理员新密码至少 12 位", false);
       if (newPwd !== newPwd2) return setMsg("accountPasswordMsg", "两次输入的新密码不一致", false);
       try {
         await api("/api/auth/change_password", {
@@ -3008,19 +3468,92 @@ function bindActions() {
       try {
         await resetSelectedUserPassword();
       } catch (err) {
-        setMsg("userDetailMsg", err.detail || err.message || String(err), false);
+        setMsg("userDetailMsg", getErrorMessage(err), false);
+      }
+    });
+  }
+  if (el("btnOpenSetUserPassword")) {
+    el("btnOpenSetUserPassword").addEventListener("click", () => {
+      setManualUserPasswordFormOpen(el("userPasswordManualForm")?.hidden !== false);
+    });
+  }
+  if (el("btnCancelSetUserPassword")) {
+    el("btnCancelSetUserPassword").addEventListener("click", () => setManualUserPasswordFormOpen(false));
+  }
+  if (el("userPasswordManualForm")) {
+    el("userPasswordManualForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        await setSelectedUserPassword();
+      } catch (err) {
+        setMsg("userPasswordManualMsg", getErrorMessage(err), false);
+      }
+    });
+  }
+  if (el("btnRevealUserPassword")) {
+    el("btnRevealUserPassword").addEventListener("click", async () => {
+      try {
+        await revealSelectedUserPassword();
+      } catch (err) {
+        clearRevealedUserPassword();
+        setMsg("userDetailMsg", getErrorMessage(err), false);
+      }
+    });
+  }
+  if (el("btnHideUserPassword")) {
+    el("btnHideUserPassword").addEventListener("click", () => {
+      clearRevealedUserPassword({ message: "当前密码已隐藏并清除。", isSuccess: true });
+      el("btnRevealUserPassword")?.focus();
+    });
+  }
+  if (el("btnCopyRevealedUserPassword")) {
+    el("btnCopyRevealedUserPassword").addEventListener("click", async () => {
+      const passwordInput = el("userPasswordRevealValue");
+      const password = String(passwordInput?.value || "");
+      if (!password) return;
+      try {
+        await navigator.clipboard.writeText(password);
+        setMsg("userDetailMsg", "当前密码已复制。", true);
+      } catch {
+        passwordInput?.focus();
+        passwordInput?.select();
+        setMsg("userDetailMsg", "复制失败，请手动复制已选中的密码。", false);
       }
     });
   }
   if (el("btnCopyUserPassword")) {
     el("btnCopyUserPassword").addEventListener("click", async () => {
-      const password = String(el("userPasswordResultValue")?.textContent || "");
+      const passwordInput = el("userPasswordResultValue");
+      const password = String(passwordInput?.value || "");
       if (!password) return;
       try {
         await navigator.clipboard.writeText(password);
         setMsg("userDetailMsg", "临时密码已复制。", true);
       } catch {
-        setMsg("userDetailMsg", "复制失败，请手动选择临时密码。", false);
+        passwordInput?.focus();
+        passwordInput?.select();
+        setMsg("userDetailMsg", "复制失败，请手动复制已选中的临时密码。", false);
+      }
+    });
+  }
+  if (el("btnUserPagePrev")) {
+    el("btnUserPagePrev").addEventListener("click", async () => {
+      if (adminState.userListPage <= 1) return;
+      try {
+        await loadUsers(adminState.userListPage - 1);
+      } catch (err) {
+        setMsg("userMsg", getErrorMessage(err), false);
+      }
+    });
+  }
+  if (el("btnUserPageNext")) {
+    el("btnUserPageNext").addEventListener("click", async () => {
+      const totalPages = Math.max(1, Math.ceil(adminState.userListTotal / adminState.userListPageSize));
+      if (adminState.userListPage >= totalPages) return;
+      try {
+        await loadUsers(adminState.userListPage + 1);
+      } catch (err) {
+        setMsg("userMsg", getErrorMessage(err), false);
       }
     });
   }
@@ -3030,11 +3563,20 @@ function bindActions() {
     });
   }
   document.addEventListener("keydown", (e) => {
+    if (trapUserDetailFocus(e)) return;
     if (e.key === "Escape") {
       closeTaskInspectModal();
       closeRechargeModal();
       closeUserDetailModal();
     }
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      clearRevealedUserPassword();
+      if (!adminState.userPasswordSetInFlight) clearManualUserPassword();
+      return;
+    }
+    void refreshSentimentCookieProfilesIfActive();
   });
   document.addEventListener("change", (e) => {
     const target = e.target;
@@ -3054,14 +3596,14 @@ function bindActions() {
 
   document.addEventListener("click", async (e) => {
     const target = e.target;
-    if (!(target instanceof HTMLElement)) return;
+    if (!(target instanceof Element)) return;
     closeModelPickersOnOutsideClick(target);
     const sensitiveToggle = target.closest(".sensitive-toggle-btn");
     if (sensitiveToggle instanceof HTMLElement) {
       toggleSensitiveInput(sensitiveToggle);
       return;
     }
-    const btn = target;
+    const btn = target.closest("button") || target;
     if (btn.classList.contains("admin-model-chip-remove")) {
       const idx = Number(btn.dataset.idx || -1);
       const listName = String(btn.dataset.list || "");
@@ -3166,24 +3708,6 @@ function bindActions() {
       }
       return;
     }
-    if (act === "tg_toggle") {
-      const enabled = String(btn.dataset.enabled || "0") === "1";
-      const resp = await api(`/api/admin/tg_trusted_users/${id}/toggle`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: !enabled }),
-      });
-      renderTgSettings(resp.tg_settings || resp);
-      setMsg("tgSettingsMsg", enabled ? "TG 用户已停用" : "TG 用户已启用", true);
-      return;
-    }
-    if (act === "tg_delete") {
-      if (!confirm(`确认删除 TG 信任用户 ${id} 吗？`)) return;
-      const resp = await api(`/api/admin/tg_trusted_users/${id}`, { method: "DELETE" });
-      renderTgSettings(resp.tg_settings || resp);
-      setMsg("tgSettingsMsg", "TG 信任用户已删除", true);
-      return;
-    }
     if (act === "sentiment_cookie_pick") {
       if (el("sentimentCookieProfile")) el("sentimentCookieProfile").value = id;
       if (el("sentimentCookieText")) el("sentimentCookieText").focus();
@@ -3239,6 +3763,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     const me = await ensureAdmin();
     if (!me) return;
     initSensitiveInputToggles();
+    initRuntimeSecretMaskInputs();
     bindActions();
     setActiveAdminPage(readAdminPageFromHash(), false);
   } catch {
@@ -3251,13 +3776,6 @@ window.addEventListener("DOMContentLoaded", async () => {
     setMsg("runtimeMsg", "");
   } catch (err) {
     setMsg("runtimeMsg", formatRuntimeConfigError("读取", err), false);
-  }
-
-  try {
-    await loadTgSettings();
-    setMsg("tgSettingsMsg", "");
-  } catch (err) {
-    setMsg("tgSettingsMsg", getErrorMessage(err), false);
   }
 
   try {
@@ -3287,7 +3805,9 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   setInterval(async () => {
     try {
-      await loadUsers();
+      const usersFocused = el("secUsers")?.contains(document.activeElement);
+      const detailOpen = el("userDetailModal")?.getAttribute("aria-hidden") === "false";
+      if (!usersFocused && !detailOpen) await loadUsers();
       if (!el("taskAutoRefresh") || el("taskAutoRefresh").checked) {
         await loadTasks();
       }
@@ -3295,6 +3815,9 @@ window.addEventListener("DOMContentLoaded", async () => {
       // ignore
     }
   }, TASK_POLL_INTERVAL_MS);
+  setInterval(() => {
+    void refreshSentimentCookieProfilesIfActive();
+  }, SENTIMENT_COOKIE_POLL_INTERVAL_MS);
 });
 
 window.addEventListener("hashchange", () => {

@@ -99,6 +99,93 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(state["liveAuthStatus"], "verified")
         self.assertEqual(state["liveAuthAction"], "keep")
 
+    def test_threads_profile_keeps_saved_state_separate_from_live_usability(self):
+        profile = {
+            "key": "threads",
+            "platform": "threads",
+            "cookies": [
+                {
+                    "name": "sessionid",
+                    "value": "saved-session",
+                    "domain": ".threads.com",
+                    "path": "/",
+                    "expires": 1893456000,
+                }
+            ],
+        }
+
+        with mock.patch.object(
+            server,
+            "_sentiment_threads_live_auth_state",
+            return_value={
+                "liveAuthStatus": "invalid",
+                "liveAuthUsable": False,
+                "liveAuthCheckedAt": "2026-07-13T00:00:00Z",
+                "liveAuthMessage": "sessionid 已保存，但当前登录已失效；请重新登录后同步。",
+                "liveAuthAction": "reauthorize-profile",
+            },
+        ):
+            state = server._sentiment_profile_for_client(profile)
+
+        self.assertTrue(state["sessionidSaved"])
+        self.assertTrue(state["hasRequiredSessionCookie"])
+        self.assertFalse(state["liveAuthUsable"])
+
+    def test_threads_probe_failure_does_not_expose_runtime_error(self):
+        profile = {"key": "threads", "platform": "threads"}
+        cookies = [
+            {
+                "name": "sessionid",
+                "value": "saved-session-2",
+                "domain": ".threads.com",
+                "path": "/",
+                "expires": 1893456000,
+            }
+        ]
+        response = mock.Mock()
+        response.status_code = 200
+        response.text = "Threads home"
+        response.url = "https://www.threads.com/"
+        response.headers = {}
+        response.raw.headers.get_all.return_value = []
+        session = mock.Mock()
+        session.get.return_value = response
+        technical_error = "Executable doesn't exist at /data/cache/chrome-headless-shell"
+
+        server._SENTIMENT_THREADS_LIVE_AUTH_CACHE.clear()
+        with (
+            mock.patch.object(server.requests, "Session", return_value=session),
+            mock.patch.object(
+                server,
+                "_probe_threads_live_auth_with_browser",
+                return_value={"ok": None, "status": "probe_failed", "reason": technical_error},
+            ),
+        ):
+            state = server._sentiment_threads_live_auth_state(profile, cookies)
+
+        self.assertEqual(state["liveAuthStatus"], "probe_failed")
+        self.assertNotIn(technical_error, state["liveAuthMessage"])
+        self.assertEqual(state["liveAuthMessage"], "sessionid 已保存，系统正在重新检测。")
+
+    def test_expired_threads_sessionid_is_still_reported_as_saved(self):
+        state = server._sentiment_auth_state(
+            [
+                {
+                    "name": "sessionid",
+                    "value": "expired-but-stored",
+                    "domain": ".threads.net",
+                    "path": "/",
+                    "expires": 1,
+                }
+            ],
+            platform="threads",
+        )
+
+        self.assertTrue(state["sessionidSaved"])
+        self.assertFalse(state["hasRequiredSessionCookie"])
+        self.assertEqual(state["cookieCount"], 1)
+        self.assertEqual(state["validCookieCount"], 0)
+
     def _admin_user_id(self) -> int:
         conn = sqlite3.connect(str(self.data_dir / "app.db"))
         row = conn.execute("SELECT id FROM users WHERE username = ?", ("admin",)).fetchone()

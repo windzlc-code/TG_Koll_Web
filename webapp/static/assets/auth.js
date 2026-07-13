@@ -26,12 +26,30 @@ async function submitLogin(form) {
     username: form.username.value.trim(),
     password: form.password.value,
   };
-  await api(`/api/auth/${loginRole}-login`, {
+  const result = await api(`/api/auth/${loginRole}-login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+  if (loginRole === "user" && result?.must_change_password) {
+    location.href = "/change-password.html";
+    return;
+  }
   location.href = loginRole === "admin" ? "/admin" : "/console.html";
+}
+
+async function submitForcedPasswordChange(form) {
+  const currentPassword = form.old_password.value;
+  const newPassword = form.new_password.value;
+  const confirmation = form.confirm_password.value;
+  if (newPassword.length < 8) throw { detail: "新密码至少 8 位" };
+  if (newPassword !== confirmation) throw { detail: "两次输入的新密码不一致" };
+  await api("/api/auth/change_password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ old_password: currentPassword, new_password: newPassword }),
+  });
+  location.href = "/console.html";
 }
 
 async function submitRegister(form) {
@@ -50,6 +68,7 @@ async function submitRegister(form) {
 document.addEventListener("DOMContentLoaded", () => {
   const loginForm = document.getElementById("loginForm") || document.getElementById("adminLoginForm");
   const registerForm = document.getElementById("registerForm");
+  const forcePasswordForm = document.getElementById("forcePasswordForm");
 
   if (loginForm) {
     loginForm.addEventListener("submit", async (e) => {
@@ -79,6 +98,22 @@ document.addEventListener("DOMContentLoaded", () => {
       } catch (err) {
         setMsg(err.detail || String(err), false);
       } finally {
+        if (submit) submit.disabled = false;
+      }
+    });
+  }
+
+  if (forcePasswordForm) {
+    forcePasswordForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      setMsg("", true);
+      const submit = forcePasswordForm.querySelector("button[type='submit']");
+      if (submit?.disabled) return;
+      if (submit) submit.disabled = true;
+      try {
+        await submitForcedPasswordChange(forcePasswordForm);
+      } catch (err) {
+        setMsg(err.detail || String(err), false);
         if (submit) submit.disabled = false;
       }
     });

@@ -40,8 +40,14 @@ from PIL import Image
 import get_gemini
 import asset_uploader
 import runninghub_common
-from .auth import SESSION_COOKIE, create_session, delete_session, get_current_user, hash_password, require_admin, verify_password
+from .auth import SESSION_COOKIE, create_session, delete_session, get_current_user as _get_session_user, hash_password, verify_password
 from .db import db, get_admin_config, init_db, set_admin_config
+from .password_vault import (
+    PasswordVaultDecryptError,
+    PasswordVaultUnavailableError,
+    decrypt_password as decrypt_vault_password,
+    encrypt_password as encrypt_vault_password,
+)
 from .social_automation_api import (
     SocialTaskPayload,
     cancel_all_social_tasks,
@@ -62,7 +68,6 @@ UPLOAD_ROOT = DATA_DIR / "uploads"
 OUTPUT_ROOT = DATA_DIR / "outputs"
 TOOL_R18_UPLOAD_ROOT = Path(os.getenv("TOOL_R18_UPLOAD_HOST_DIR", str(DATA_DIR / "tool_r18_uploads"))).resolve()
 RUNTIME_CONFIG_PATH = Path(os.getenv("APP_RUNTIME_CONFIG_PATH", str(DATA_DIR / "runtime_config.json"))).resolve()
-TG_WORKBENCH_DB_PATH = Path(os.getenv("TG_WORKBENCH_DB_PATH", str(DATA_DIR / "workbench.db"))).resolve()
 TOOL_R18_RUNTIME_DIR = Path(os.getenv("TOOL_R18_RUNTIME_DIR", str(ROOT_DIR / "tool_r18" / ".runtime" / "automatic-script"))).resolve()
 
 
@@ -239,7 +244,7 @@ def _request_client_ip(request: Request) -> str:
     return peer[:64] or "unknown"
 
 
-def _enforce_auth_rate_limit(bucket: str, key: str, *, limit: int, window_seconds: int) -> None:
+def _check_auth_rate_limit(bucket: str, key: str, *, limit: int, window_seconds: int) -> None:
     now = time.monotonic()
     rate_key = f"{bucket}:{key}"
     with _AUTH_RATE_LOCK:
@@ -254,7 +259,22 @@ def _enforce_auth_rate_limit(bucket: str, key: str, *, limit: int, window_second
                 detail="请求过于频繁，请稍后再试",
                 headers={"Retry-After": str(retry_after)},
             )
+
+
+def _record_auth_rate_limit(bucket: str, key: str, *, window_seconds: int) -> None:
+    now = time.monotonic()
+    rate_key = f"{bucket}:{key}"
+    with _AUTH_RATE_LOCK:
+        events = _AUTH_RATE_EVENTS.setdefault(rate_key, deque())
+        cutoff = now - max(int(window_seconds), 1)
+        while events and events[0] <= cutoff:
+            events.popleft()
         events.append(now)
+
+
+def _enforce_auth_rate_limit(bucket: str, key: str, *, limit: int, window_seconds: int) -> None:
+    _check_auth_rate_limit(bucket, key, limit=limit, window_seconds=window_seconds)
+    _record_auth_rate_limit(bucket, key, window_seconds=window_seconds)
 
 
 def _clear_auth_rate_limit(bucket: str, key: str) -> None:
@@ -262,12 +282,14 @@ def _clear_auth_rate_limit(bucket: str, key: str) -> None:
         _AUTH_RATE_EVENTS.pop(f"{bucket}:{key}", None)
 
 
-def _session_cookie_secure() -> bool:
+def _session_cookie_secure(request: Request | None = None) -> bool:
     configured = os.getenv("SESSION_COOKIE_SECURE")
-    if configured is None:
-        return _force_https_enabled()
-    value = str(configured or "").strip().lower()
-    return value not in {"0", "false", "no", "off"}
+    if configured is not None:
+        value = str(configured or "").strip().lower()
+        return value not in {"0", "false", "no", "off"}
+    if request is not None and _request_uses_https(request):
+        return True
+    return _force_https_enabled()
 
 
 def _force_https_enabled() -> bool:
@@ -282,6 +304,34 @@ def _request_uses_https(request: Request) -> bool:
         if forwarded_proto:
             return forwarded_proto == "https"
     return str(request.url.scheme or "").lower() == "https"
+
+
+def _origin_parts(value: str) -> tuple[str, str, int] | None:
+    try:
+        parsed = urlsplit(str(value or "").strip())
+        scheme = parsed.scheme.lower()
+        hostname = str(parsed.hostname or "").lower()
+        if scheme not in {"http", "https"} or not hostname or parsed.username or parsed.password:
+            return None
+        port = int(parsed.port or (443 if scheme == "https" else 80))
+        return scheme, hostname, port
+    except (TypeError, ValueError):
+        return None
+
+
+def _require_same_origin(request: Request) -> None:
+    supplied = str(request.headers.get("origin") or "").strip()
+    if not supplied:
+        referer = str(request.headers.get("referer") or "").strip()
+        if referer:
+            parsed = urlsplit(referer)
+            supplied = f"{parsed.scheme}://{parsed.netloc}"
+    if not supplied:
+        raise HTTPException(status_code=403, detail="same-origin request required")
+    scheme = "https" if _session_cookie_secure(request) else "http"
+    expected = _origin_parts(f"{scheme}://{request.headers.get('host', '')}")
+    if expected is None or _origin_parts(supplied) != expected:
+        raise HTTPException(status_code=403, detail="cross-origin request rejected")
 
 
 def _new_id(prefix: str) -> str:
@@ -412,6 +462,84 @@ def _is_allowed_dashboard_media_path(path: Path) -> bool:
         if resolved == root_resolved or root_resolved in resolved.parents:
             return True
     return False
+
+
+def _password_expiry(user: dict[str, Any]) -> int:
+    try:
+        return int(user.get("password_expires_at") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _password_change_required_detail(user: dict[str, Any]) -> dict[str, Any]:
+    expires_at = _password_expiry(user)
+    code = "temporary_password_expired" if expires_at <= _now_ts() else "password_change_required"
+    return {
+        "code": code,
+        "message": "temporary password expired" if code == "temporary_password_expired" else "password change required",
+        "password_expires_at": expires_at,
+    }
+
+
+def _get_user_allowing_password_change(
+    session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+) -> dict[str, Any]:
+    return _get_session_user(session_token)
+
+
+def get_current_user(
+    session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+) -> dict[str, Any]:
+    user = _get_session_user(session_token)
+    if int(user.get("must_change_password") or 0) == 1:
+        expires_at = _password_expiry(user)
+        if expires_at <= _now_ts() and session_token:
+            with db() as conn:
+                delete_session(conn, str(session_token))
+        raise HTTPException(status_code=428, detail=_password_change_required_detail(user))
+    return user
+
+
+def require_admin(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="administrator permission required")
+    return user
+
+
+def _minimum_password_length(user: dict[str, Any] | None = None, *, is_admin: bool | None = None) -> int:
+    admin = bool(is_admin) if is_admin is not None else _is_admin(user or {})
+    return 12 if admin else 8
+
+
+def _encrypt_password_for_vault(user_id: int, password: str) -> str:
+    try:
+        return encrypt_vault_password(int(user_id), password)
+    except PasswordVaultUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "password_vault_unavailable",
+                "message": "password vault key is not configured or is invalid",
+            },
+        ) from exc
+
+
+def _upsert_password_vault(
+    conn: sqlite3.Connection,
+    user_id: int,
+    ciphertext: str,
+    now: int,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO password_vault(user_id, ciphertext, created_at, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+          ciphertext = excluded.ciphertext,
+          updated_at = excluded.updated_at
+        """,
+        (int(user_id), ciphertext, int(now), int(now)),
+    )
 
 
 def _identity_user_id(user: dict[str, Any]) -> int:
@@ -780,6 +908,11 @@ def _mask_secret(value: Any) -> str:
     return f"{text[:visible]}{'•' * masked_len}{text[-visible:]}"
 
 
+def _mask_secret_exact_length(value: Any) -> str:
+    """Return an equal-length mask for editable secret fields without exposing characters."""
+    return "•" * len(str(value or ""))
+
+
 def _redact_runtime_config(runtime: dict[str, Any]) -> dict[str, Any]:
     redacted = dict(runtime or {})
     for key in list(redacted):
@@ -788,7 +921,7 @@ def _redact_runtime_config(runtime: dict[str, Any]) -> dict[str, Any]:
         value = str(redacted.get(key) or "").strip()
         redacted[key] = ""
         redacted[f"{key}_configured"] = bool(value)
-        redacted[f"{key}_masked"] = _mask_secret(value) if value else ""
+        redacted[f"{key}_masked"] = _mask_secret_exact_length(value) if value else ""
     return redacted
 
 
@@ -836,112 +969,6 @@ def _read_dotenv_values(path: Path | None = None) -> dict[str, str]:
         if key:
             values[key] = value
     return values
-
-
-def _parse_id_list(value: Any) -> list[int]:
-    items: list[int] = []
-    for part in str(value or "").replace(";", ",").split(","):
-        raw = part.strip()
-        if not raw:
-            continue
-        try:
-            items.append(int(raw))
-        except Exception:
-            continue
-    return list(dict.fromkeys(items))
-
-
-def _tg_env_values() -> dict[str, str]:
-    values = _read_dotenv_values()
-    for key in ("TG_BOT_TOKEN", "TG_ALLOWED_CHAT_IDS", "TG_CHAT_ID", "PUBLIC_BASE_URL"):
-        raw = str(os.getenv(key) or "").strip()
-        if raw:
-            values[key] = raw
-    return values
-
-
-def _tg_seed_chat_ids(env_values: dict[str, str]) -> list[int]:
-    allowed = _parse_id_list(env_values.get("TG_ALLOWED_CHAT_IDS"))
-    return allowed or _parse_id_list(env_values.get("TG_CHAT_ID"))
-
-
-def _ensure_tg_workbench_schema(conn: sqlite3.Connection, env_values: dict[str, str] | None = None) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS workspace_members (
-            chat_id            INTEGER PRIMARY KEY,
-            label              TEXT NOT NULL DEFAULT '',
-            enabled            INTEGER NOT NULL DEFAULT 1,
-            notify_busy        INTEGER NOT NULL DEFAULT 1,
-            notify_available   INTEGER NOT NULL DEFAULT 1,
-            created_at         REAL NOT NULL,
-            updated_at         REAL NOT NULL
-        )
-        """
-    )
-    now = time.time()
-    for chat_id in _tg_seed_chat_ids(env_values or {}):
-        conn.execute(
-            """
-            INSERT INTO workspace_members
-            (chat_id, label, enabled, notify_busy, notify_available, created_at, updated_at)
-            VALUES (?, ?, 1, 1, 1, ?, ?)
-            ON CONFLICT(chat_id) DO NOTHING
-            """,
-            (int(chat_id), f"TG-{chat_id}", now, now),
-        )
-    conn.commit()
-
-
-def _connect_tg_workbench_db() -> sqlite3.Connection:
-    TG_WORKBENCH_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(TG_WORKBENCH_DB_PATH)
-    conn.row_factory = sqlite3.Row
-    _ensure_tg_workbench_schema(conn, _tg_env_values())
-    return conn
-
-
-def _tg_member_payload(row: sqlite3.Row) -> dict[str, Any]:
-    return {
-        "chat_id": int(row["chat_id"]),
-        "label": str(row["label"] or ""),
-        "enabled": bool(int(row["enabled"] or 0)),
-        "notify_busy": bool(int(row["notify_busy"] or 0)),
-        "notify_available": bool(int(row["notify_available"] or 0)),
-        "created_at": float(row["created_at"] or 0),
-        "updated_at": float(row["updated_at"] or 0),
-    }
-
-
-def _load_tg_settings_payload() -> dict[str, Any]:
-    env_values = _tg_env_values()
-    runtime_token = _runtime_config_tg_bot_token()
-    file_token = _read_secret_text_file(str(_tool_r18_bot_token_file()))
-    env_token = str(env_values.get("TG_BOT_TOKEN") or "").strip()
-    token = str(runtime_token or file_token or env_token or "").strip()
-    members: list[dict[str, Any]] = []
-    conn = _connect_tg_workbench_db()
-    try:
-        rows = conn.execute(
-            """
-            SELECT chat_id, label, enabled, notify_busy, notify_available, created_at, updated_at
-            FROM workspace_members
-            ORDER BY enabled DESC, chat_id ASC
-            """
-        ).fetchall()
-        members = [_tg_member_payload(row) for row in rows]
-    finally:
-        conn.close()
-    return {
-        "db_path": str(TG_WORKBENCH_DB_PATH),
-        "db_exists": TG_WORKBENCH_DB_PATH.exists(),
-        "bot_token_configured": bool(token),
-        "bot_token_masked": _mask_secret(token) if token else "",
-        "bot_token_source": "runtime" if runtime_token else ("file" if file_token else ("env" if env_token else "")),
-        "bot_token_file": str(_tool_r18_bot_token_file()),
-        "allowed_chat_ids_env": _tg_seed_chat_ids(env_values),
-        "trusted_users": members,
-    }
 
 
 def _sanitize_payload(value: Any) -> Any:
@@ -1096,23 +1123,26 @@ def _sentiment_threads_live_auth_state(profile: dict[str, Any], cookies: list[di
                     "liveAuthStatus": "invalid",
                     "liveAuthUsable": False,
                     "liveAuthCheckedAt": checked_at,
-                    "liveAuthMessage": f"Threads sessionid 已保存，但真实浏览器检测不可用{f'：{probe_reason}' if probe_reason else ''}；请重新登录可用账号并等待授权助手自动同步。",
+                    "liveAuthMessage": "sessionid 已保存，但当前登录已失效；请重新登录后同步。",
                     "liveAuthAction": "reauthorize-profile",
                 }
             else:
+                if probe_reason:
+                    logger.warning("Threads browser auth probe did not complete: %s", probe_reason)
                 result = {
                     "liveAuthStatus": "probe_failed",
                     "liveAuthUsable": None,
                     "liveAuthCheckedAt": checked_at,
-                    "liveAuthMessage": f"Threads sessionid 已保存，但真实浏览器检测未完成{f'：{probe_reason}' if probe_reason else ''}；请稍后刷新，若持续失败再检查后台 Playwright/Node 环境。",
+                    "liveAuthMessage": "sessionid 已保存，系统正在重新检测。",
                     "liveAuthAction": "retry-later",
                 }
     except Exception as exc:
+        logger.warning("Threads browser auth check failed: %s", exc)
         result = {
             "liveAuthStatus": "probe_failed",
             "liveAuthUsable": None,
             "liveAuthCheckedAt": checked_at,
-            "liveAuthMessage": f"Threads sessionid 实时检测失败：{exc}；请稍后刷新，若持续失败再重新登录同步。",
+            "liveAuthMessage": "sessionid 已保存，系统正在重新检测。",
             "liveAuthAction": "retry-later",
         }
     _SENTIMENT_THREADS_LIVE_AUTH_CACHE[cache_key] = {
@@ -1158,7 +1188,8 @@ def _sentiment_auth_state(cookies: list[dict[str, Any]], last_authorized_at: str
                 if name and name not in expiring_soon_names:
                     expiring_soon_names.append(name)
     platform_key = str(platform or "").strip().lower()
-    missing_required_session = platform_key == "threads" and valid > 0 and not _sentiment_cookies_have_threads_sessionid(valid_cookies)
+    has_required_session = platform_key != "threads" or _sentiment_cookies_have_threads_sessionid(valid_cookies)
+    missing_required_session = platform_key == "threads" and valid > 0 and not has_required_session
     if not cookies:
         health = "missing"
         action = "authorize-profile"
@@ -1198,7 +1229,8 @@ def _sentiment_auth_state(cookies: list[dict[str, Any]], last_authorized_at: str
         "nearestExpiresAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(nearest_expires)) if nearest_expires else None,
         "authStatus": "incomplete" if missing_required_session else ("authorized" if valid > 0 else ("expired" if cookies else "missing")),
         "authHealth": health,
-        "hasRequiredSessionCookie": not missing_required_session,
+        "hasRequiredSessionCookie": has_required_session,
+        "sessionidSaved": platform_key == "threads" and _sentiment_cookies_store_threads_sessionid(cookies),
         "authorizationNeedsRefresh": action != "keep",
         "recommendedAction": action,
         "statusReasons": reasons,
@@ -1237,6 +1269,16 @@ def _sentiment_cookie_domain_matches(cookie: dict[str, Any], domains: list[str])
     if not domain:
         return False
     return any(domain == item or domain.endswith(f".{item}") for item in domains)
+
+
+def _sentiment_cookies_store_threads_sessionid(cookies: list[dict[str, Any]]) -> bool:
+    return any(
+        str(cookie.get("name") or "").strip().lower() == "sessionid"
+        and bool(str(cookie.get("value") or "").strip())
+        and _sentiment_cookie_domain_matches(cookie, ["threads.net", "threads.com"])
+        for cookie in cookies
+        if isinstance(cookie, dict)
+    )
 
 
 def _sentiment_cookies_have_threads_sessionid(cookies: list[dict[str, Any]]) -> bool:
@@ -1701,6 +1743,7 @@ def _sentiment_profile_for_client(profile: dict[str, Any]) -> dict[str, Any]:
         platform_key,
     ))
     if platform_key == "threads":
+        safe["sessionidSaved"] = _sentiment_cookies_store_threads_sessionid(cookies)
         live_state = _sentiment_threads_live_auth_state(profile, [cookie for cookie in cookies if isinstance(cookie, dict)])
         safe.update(live_state)
         if live_state.get("liveAuthUsable") is False:
@@ -1708,13 +1751,21 @@ def _sentiment_profile_for_client(profile: dict[str, Any]) -> dict[str, Any]:
             safe["authStatus"] = "invalid"
             safe["authorizationNeedsRefresh"] = True
             safe["recommendedAction"] = live_state.get("liveAuthAction") or "reauthorize-profile"
-            safe["hasRequiredSessionCookie"] = False
             reasons = list(safe.get("statusReasons") or [])
             if "live-session-invalid" not in reasons:
                 reasons.append("live-session-invalid")
             safe["statusReasons"] = reasons
         elif live_state.get("liveAuthUsable") is True:
             safe["hasRequiredSessionCookie"] = True
+        else:
+            safe["authHealth"] = "watch"
+            safe["authStatus"] = "checking"
+            safe["authorizationNeedsRefresh"] = False
+            safe["recommendedAction"] = live_state.get("liveAuthAction") or "retry-later"
+            reasons = list(safe.get("statusReasons") or [])
+            if "live-session-check-pending" not in reasons:
+                reasons.append("live-session-check-pending")
+            safe["statusReasons"] = reasons
     return safe
 
 
@@ -3845,9 +3896,9 @@ def _tool_r18_stop_responder_loop() -> None:
                         continue
                     admin_url = _admin_runtime_public_url()
                     reply_text = (
-                        "Bot 目前已在简易配置页停止，完整功能不会被调用。\n\n"
-                        "请点击下方链接完成 Bot Token / Grok Key 设置，然后点击“启动 Bot 进程”。\n"
-                        f"{setup_url}"
+                        "Bot 目前处于停止状态，完整功能不会被调用。\n\n"
+                        "请前往后台系统配置检查运行参数。\n"
+                        f"{admin_url}"
                     )
                     requests.post(
                         f"https://api.telegram.org/bot{token}/sendMessage",
@@ -10419,16 +10470,14 @@ class AdminCreateUserPayload(BaseModel):
     balance_cents: int = 0
 
 
-class TgTrustedUserPayload(BaseModel):
-    chat_id: int
-    label: str = ""
-    enabled: bool = True
-    notify_busy: bool = True
-    notify_available: bool = True
+class AdminResetPasswordPayload(BaseModel):
+    expected_updated_at: int = Field(ge=1)
 
 
-class TgTrustedUserTogglePayload(BaseModel):
-    enabled: bool
+class AdminSetPasswordPayload(BaseModel):
+    password: str
+    admin_password: str
+    expected_updated_at: int = Field(ge=1)
 
 
 class SentimentBrowserAuthCookiePayload(BaseModel):
@@ -15284,6 +15333,69 @@ def _build_persona_dashboard_console_overview(
     }
 
 
+def _admin_user_content_metrics(conn: sqlite3.Connection, user_ids: Iterable[int]) -> dict[int, dict[str, int]]:
+    clean_user_ids = sorted({int(user_id) for user_id in user_ids if int(user_id) > 0})
+    metrics = {
+        user_id: {
+            "persona_count": 0,
+            "draft_post_count": 0,
+            "created_post_count": 0,
+            "published_post_count": 0,
+        }
+        for user_id in clean_user_ids
+    }
+    if not clean_user_ids:
+        return metrics
+
+    placeholders = ",".join("?" for _ in clean_user_ids)
+    owner_rows = conn.execute(
+        f"SELECT user_id, archive_id FROM persona_owners WHERE user_id IN ({placeholders})",
+        clean_user_ids,
+    ).fetchall()
+    archives, _ = _read_tool_r18_persona_archives()
+    archives_by_id = {
+        str(archive.get("id") or "").strip(): archive
+        for archive in archives
+        if isinstance(archive, dict) and str(archive.get("id") or "").strip()
+    }
+    deleted_posts = _read_persona_dashboard_deleted_posts()
+
+    for owner in owner_rows:
+        user_id = int(owner["user_id"])
+        archive_id = str(owner["archive_id"] or "").strip()
+        archive = archives_by_id.get(archive_id)
+        if not archive or user_id not in metrics:
+            continue
+        posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+        deleted_post_keys = deleted_posts.get(archive_id, set())
+        draft_count = sum(
+            1
+            for post in posts
+            if (
+                isinstance(post, dict)
+                and _persona_dashboard_post_key(archive_id, post) not in deleted_post_keys
+                and not _is_published_persona_draft(post)
+            )
+        )
+        publish_history = archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []
+        visible_publish_history = [record for record in publish_history if _is_persona_publish_history_record(record)]
+        published_count = len(visible_publish_history)
+        published_from_drafts = sum(
+            1
+            for record in visible_publish_history
+            if str(
+                ((record.get("sourceMeta") or {}).get("archivePostSource") if isinstance(record.get("sourceMeta"), dict) else "")
+                or record.get("archivePostSource")
+                or "posts"
+            ).strip().lower() != "favorites"
+        )
+        metrics[user_id]["persona_count"] += 1
+        metrics[user_id]["draft_post_count"] += draft_count
+        metrics[user_id]["created_post_count"] += draft_count + published_from_drafts
+        metrics[user_id]["published_post_count"] += published_count
+    return metrics
+
+
 def create_app() -> FastAPI:
     _ensure_dirs()
     init_db()
@@ -15346,6 +15458,17 @@ def create_app() -> FastAPI:
     def page_login() -> FileResponse:
         return FileResponse(str(STATIC_DIR / "login.html"))
 
+    @app.get("/change-password.html", include_in_schema=False)
+    def page_change_password(session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE)) -> Response:
+        try:
+            user = _get_user_allowing_password_change(session_token)
+        except HTTPException:
+            return RedirectResponse(url="/login.html", status_code=302)
+        if int(user.get("must_change_password") or 0) != 1:
+            target = "/admin" if _is_admin(user) else "/console.html"
+            return RedirectResponse(url=target, status_code=302)
+        return FileResponse(str(STATIC_DIR / "change-password.html"))
+
     @app.get("/favicon.ico", include_in_schema=False)
     def favicon() -> FileResponse:
         return FileResponse(str(STATIC_DIR / "assets" / "opc" / "vecto-logo-ui-icon.png"), media_type="image/png")
@@ -15361,9 +15484,11 @@ def create_app() -> FastAPI:
     @app.get("/console.html", include_in_schema=False)
     def page_console(session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE)) -> Response:
         try:
-            user = get_current_user(session_token)
+            user = _get_user_allowing_password_change(session_token)
         except HTTPException:
             return RedirectResponse(url="/login.html", status_code=302)
+        if int(user.get("must_change_password") or 0) == 1:
+            return RedirectResponse(url="/change-password.html", status_code=302)
         try:
             console_bootstrap = _build_persona_dashboard_console_overview(
                 visible_archive_ids=_visible_persona_ids(user),
@@ -15459,13 +15584,15 @@ def create_app() -> FastAPI:
         if len(password) > 256:
             raise HTTPException(status_code=400, detail="密码长度不能超过 256 位")
         now = _now_ts()
+        if len(password) < _minimum_password_length(is_admin=False):
+            raise HTTPException(status_code=400, detail="password must be at least 8 characters")
         try:
             password_hash = hash_password(password)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         with db() as conn:
             try:
-                conn.execute(
+                inserted = conn.execute(
                     """
                     INSERT INTO users(
                       username, password_hash, is_admin, is_disabled, balance_cents,
@@ -15475,6 +15602,9 @@ def create_app() -> FastAPI:
                     """,
                     (username, password_hash, full_name, email, phone, company, use_case, now, now),
                 )
+                user_id = int(inserted.lastrowid or 0)
+                vault_ciphertext = _encrypt_password_for_vault(user_id, password)
+                _upsert_password_vault(conn, user_id, vault_ciphertext, now)
             except Exception as exc:
                 if "UNIQUE" in str(exc).upper():
                     raise HTTPException(status_code=409, detail="客户账号已存在") from exc
@@ -15495,16 +15625,23 @@ def create_app() -> FastAPI:
         password = str(payload.password or "")
         client_ip = _request_client_ip(request)
         username_key = username.casefold()[:64] or "empty"
-        _enforce_auth_rate_limit("login_ip", client_ip, limit=30, window_seconds=300)
-        _enforce_auth_rate_limit("login_user", username_key, limit=8, window_seconds=900)
+        _check_auth_rate_limit("login_ip", client_ip, limit=30, window_seconds=300)
+        _check_auth_rate_limit("login_user", username_key, limit=8, window_seconds=900)
+
+        def record_invalid_credentials() -> None:
+            _record_auth_rate_limit("login_ip", client_ip, window_seconds=300)
+            _record_auth_rate_limit("login_user", username_key, window_seconds=900)
         if len(password) > 256:
+            record_invalid_credentials()
             raise HTTPException(status_code=401, detail="用户名或密码错误")
         with db() as conn:
             row = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
             if row is None:
+                record_invalid_credentials()
                 raise HTTPException(status_code=401, detail="用户名或密码错误")
             user = dict(row)
             if not verify_password(password, str(user.get("password_hash") or "")):
+                record_invalid_credentials()
                 raise HTTPException(status_code=401, detail="用户名或密码错误")
             is_admin = bool(int(user.get("is_admin") or 0))
             if expected_admin is True and not is_admin:
@@ -15517,8 +15654,18 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=403, detail=detail)
             if int(user.get("is_disabled") or 0) == 1:
                 raise HTTPException(status_code=403, detail="账号已禁用")
+            if int(user.get("must_change_password") or 0) == 1 and _password_expiry(user) <= _now_ts():
+                raise HTTPException(status_code=403, detail=_password_change_required_detail(user))
+            previous_token = str(request.cookies.get(SESSION_COOKIE) or "").strip()
+            if previous_token:
+                delete_session(conn, previous_token)
             token = create_session(conn, int(user["id"]))
-            conn.execute("UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?", (_now_ts(), _now_ts(), int(user["id"])))
+            login_at = _now_ts()
+            conn.execute(
+                "UPDATE users SET last_login_at = ?, "
+                "updated_at = CASE WHEN updated_at >= ? THEN updated_at + 1 ELSE ? END WHERE id = ?",
+                (login_at, login_at, login_at, int(user["id"])),
+            )
         _clear_auth_rate_limit("login_user", username_key)
 
         resp = {
@@ -15527,6 +15674,8 @@ def create_app() -> FastAPI:
             "is_admin": is_admin,
             "balance_cents": int(user.get("balance_cents") or 0),
             "approval_status": str(user.get("approval_status") or "approved"),
+            "must_change_password": bool(int(user.get("must_change_password") or 0)),
+            "password_expires_at": _password_expiry(user),
         }
         response = JSONResponse(content=resp)
         response.set_cookie(
@@ -15535,7 +15684,7 @@ def create_app() -> FastAPI:
             httponly=True,
             max_age=14 * 24 * 3600,
             samesite="lax",
-            secure=_session_cookie_secure(),
+            secure=_session_cookie_secure(request),
         )
         return response
 
@@ -15565,20 +15714,34 @@ def create_app() -> FastAPI:
     def api_change_password(
         payload: ChangePasswordPayload,
         request: Request,
-        user: dict[str, Any] = Depends(get_current_user),
+        user: dict[str, Any] = Depends(_get_user_allowing_password_change),
     ):
         old_pwd = str(payload.old_password or "")
         new_pwd = str(payload.new_password or "")
         if not verify_password(old_pwd, str(user.get("password_hash") or "")):
             raise HTTPException(status_code=400, detail="原密码错误")
-        if not new_pwd or len(new_pwd) < 6:
-            raise HTTPException(status_code=400, detail="新密码至少 6 位")
+        if int(user.get("must_change_password") or 0) == 1 and _password_expiry(user) <= _now_ts():
+            current_token = str(request.cookies.get(SESSION_COOKIE) or "").strip()
+            if current_token:
+                with db() as conn:
+                    delete_session(conn, current_token)
+            raise HTTPException(status_code=403, detail=_password_change_required_detail(user))
+        minimum_length = _minimum_password_length(user)
+        if not new_pwd or len(new_pwd) < minimum_length:
+            raise HTTPException(status_code=400, detail=f"new password must be at least {minimum_length} characters")
         new_hash = hash_password(new_pwd)
+        vault_ciphertext = None
+        if not _is_admin(user):
+            vault_ciphertext = _encrypt_password_for_vault(int(user["id"]), new_pwd)
+        now = _now_ts()
         with db() as conn:
             conn.execute(
-                "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
-                (new_hash, _now_ts(), int(user["id"])),
+                "UPDATE users SET password_hash = ?, must_change_password = 0, "
+                "password_expires_at = 0, updated_at = ? WHERE id = ?",
+                (new_hash, now, int(user["id"])),
             )
+            if vault_ciphertext is not None:
+                _upsert_password_vault(conn, int(user["id"]), vault_ciphertext, now)
             current_token = str(request.cookies.get(SESSION_COOKIE) or "").strip()
             if current_token:
                 conn.execute("DELETE FROM sessions WHERE user_id = ? AND token <> ?", (int(user["id"]), current_token))
@@ -15612,7 +15775,7 @@ def create_app() -> FastAPI:
         return {"ok": True}
 
     @app.get("/api/me")
-    def api_me(user: dict[str, Any] = Depends(get_current_user)):
+    def api_me(user: dict[str, Any] = Depends(_get_user_allowing_password_change)):
         return {
             "id": int(user.get("id") or 0),
             "username": str(user.get("username") or ""),
@@ -15620,10 +15783,12 @@ def create_app() -> FastAPI:
             "is_disabled": bool(int(user.get("is_disabled") or 0)),
             "balance_cents": int(user.get("balance_cents") or 0),
             "created_at": int(user.get("created_at") or 0),
+            "must_change_password": bool(int(user.get("must_change_password") or 0)),
+            "password_expires_at": _password_expiry(user),
         }
 
     @app.get("/api/auth/me")
-    def api_auth_me(user: dict[str, Any] = Depends(get_current_user)):
+    def api_auth_me(user: dict[str, Any] = Depends(_get_user_allowing_password_change)):
         return api_me(user)
 
     @app.get("/api/persona_dashboard/overview")
@@ -17073,20 +17238,19 @@ def create_app() -> FastAPI:
         _write_sentiment_config_file(config)
         if _sentiment_profile_requires_sessionid(profile, profile_key):
             live_auth = _sentiment_threads_live_auth_state(profile, cookies)
-            if live_auth.get("liveAuthUsable") is False:
-                return JSONResponse(
-                    {
-                        "ok": False,
-                        "error": str(live_auth.get("liveAuthMessage") or "Threads sessionid 已保存，但真实浏览器登录态不可用。"),
-                        "profileKey": str(profile.get("key") or profile_key),
-                        "savedCookieCount": len(cookies),
-                        **live_auth,
-                    },
-                    status_code=409,
-                    headers=cors_headers,
-                )
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "saved": True,
+                    "verified": live_auth.get("liveAuthUsable") is True,
+                    "profileKey": str(profile.get("key") or profile_key),
+                    "savedCookieCount": len(cookies),
+                    **live_auth,
+                },
+                headers=cors_headers,
+            )
         return JSONResponse(
-            {"ok": True, "profileKey": str(profile.get("key") or profile_key), "savedCookieCount": len(cookies)},
+            {"ok": True, "saved": True, "verified": True, "profileKey": str(profile.get("key") or profile_key), "savedCookieCount": len(cookies)},
             headers=cors_headers,
         )
 
@@ -17250,76 +17414,6 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=502, detail=f"識別模型失敗：{type(exc).__name__}: {str(exc)[:300]}") from exc
         return {"ok": True, "type": typ, "count": len(models), "models": models}
 
-    @app.get("/api/admin/tg_settings")
-    def api_admin_tg_settings(user: dict[str, Any] = Depends(require_admin)):
-        return _load_tg_settings_payload()
-
-    @app.post("/api/admin/tg_trusted_users")
-    def api_admin_upsert_tg_trusted_user(payload: TgTrustedUserPayload, user: dict[str, Any] = Depends(require_admin)):
-        chat_id = int(payload.chat_id)
-        if chat_id <= 0:
-            raise HTTPException(status_code=400, detail="TG 用户 ID 必须为正整数")
-        label = str(payload.label or "").strip() or f"TG-{chat_id}"
-        now = time.time()
-        conn = _connect_tg_workbench_db()
-        try:
-            conn.execute(
-                """
-                INSERT INTO workspace_members
-                (chat_id, label, enabled, notify_busy, notify_available, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(chat_id) DO UPDATE SET
-                    label = excluded.label,
-                    enabled = excluded.enabled,
-                    notify_busy = excluded.notify_busy,
-                    notify_available = excluded.notify_available,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    chat_id,
-                    label,
-                    1 if payload.enabled else 0,
-                    1 if payload.notify_busy else 0,
-                    1 if payload.notify_available else 0,
-                    now,
-                    now,
-                ),
-            )
-            conn.commit()
-        finally:
-            conn.close()
-        return {"ok": True, "tg_settings": _load_tg_settings_payload()}
-
-    @app.post("/api/admin/tg_trusted_users/{chat_id}/toggle")
-    def api_admin_toggle_tg_trusted_user(
-        chat_id: int,
-        payload: TgTrustedUserTogglePayload,
-        user: dict[str, Any] = Depends(require_admin),
-    ):
-        conn = _connect_tg_workbench_db()
-        try:
-            row = conn.execute("SELECT chat_id FROM workspace_members WHERE chat_id = ?", (int(chat_id),)).fetchone()
-            if not row:
-                raise HTTPException(status_code=404, detail="找不到该 TG 用户 ID")
-            conn.execute(
-                "UPDATE workspace_members SET enabled = ?, updated_at = ? WHERE chat_id = ?",
-                (1 if payload.enabled else 0, time.time(), int(chat_id)),
-            )
-            conn.commit()
-        finally:
-            conn.close()
-        return {"ok": True, "tg_settings": _load_tg_settings_payload()}
-
-    @app.delete("/api/admin/tg_trusted_users/{chat_id}")
-    def api_admin_delete_tg_trusted_user(chat_id: int, user: dict[str, Any] = Depends(require_admin)):
-        conn = _connect_tg_workbench_db()
-        try:
-            conn.execute("DELETE FROM workspace_members WHERE chat_id = ?", (int(chat_id),))
-            conn.commit()
-        finally:
-            conn.close()
-        return {"ok": True, "tg_settings": _load_tg_settings_payload()}
-
     @app.get("/api/admin/pricing")
     def api_admin_get_pricing(user: dict[str, Any] = Depends(require_admin)):
         with db() as conn:
@@ -17340,26 +17434,83 @@ def create_app() -> FastAPI:
         return {"ok": True, "pricing": data}
 
     @app.get("/api/admin/users")
-    def api_admin_users(limit: int = 200, user: dict[str, Any] = Depends(require_admin)):
+    def api_admin_users(
+        limit: int = 200,
+        offset: int = 0,
+        role: str = "all",
+        user: dict[str, Any] = Depends(require_admin),
+    ):
         lim = min(max(int(limit or 200), 1), 1000)
+        off = max(int(offset or 0), 0)
+        clean_role = str(role or "all").strip().lower()
+        if clean_role not in {"all", "customer", "admin"}:
+            raise HTTPException(status_code=400, detail="role must be all, customer, or admin")
+        where_sql = ""
+        where_params: tuple[int, ...] = ()
+        if clean_role == "customer":
+            where_sql = "WHERE is_admin = ?"
+            where_params = (0,)
+        elif clean_role == "admin":
+            where_sql = "WHERE is_admin = ?"
+            where_params = (1,)
         with db() as conn:
+            account_counts = conn.execute(
+                """SELECT
+                       SUM(CASE WHEN is_admin = 0 THEN 1 ELSE 0 END) AS customer_count,
+                       SUM(CASE WHEN is_admin = 1 THEN 1 ELSE 0 END) AS admin_count
+                   FROM users"""
+            ).fetchone()
+            customer_count = int(account_counts["customer_count"] or 0)
+            admin_count = int(account_counts["admin_count"] or 0)
+            total = int(
+                conn.execute(
+                    f"SELECT COUNT(*) AS c FROM users {where_sql}",
+                    where_params,
+                ).fetchone()["c"]
+            )
+            pending_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) AS c FROM users WHERE is_admin = 0 AND approval_status = 'pending'"
+                ).fetchone()["c"]
+            )
             rows = conn.execute(
-                """
+                f"""
                 SELECT id, username, is_admin, is_disabled, balance_cents, account_type,
                        approval_status, full_name, email, phone, company, use_case, admin_note,
-                       approved_at, approved_by, last_login_at, created_at, updated_at
+                       approved_at, approved_by, last_login_at, must_change_password,
+                       password_expires_at, created_at, updated_at
                 FROM users
+                {where_sql}
                 ORDER BY created_at DESC
-                LIMIT ?
+                LIMIT ? OFFSET ?
                 """,
-                (lim,),
+                (*where_params, lim, off),
             ).fetchall()
-        return {"items": [dict(r) for r in rows]}
+            content_metrics = _admin_user_content_metrics(conn, [int(row["id"]) for row in rows])
+        items = []
+        for row in rows:
+            item = dict(row)
+            item.update(content_metrics.get(int(row["id"]), {}))
+            items.append(item)
+        return {
+            "items": items,
+            "total": total,
+            "pending_count": pending_count,
+            "customer_count": customer_count,
+            "admin_count": admin_count,
+            "role": clean_role,
+            "limit": lim,
+            "offset": off,
+            "has_more": off + len(rows) < total,
+        }
 
     @app.post("/api/admin/users")
     def api_admin_create_user(payload: AdminCreateUserPayload, user: dict[str, Any] = Depends(require_admin)):
         username = str(payload.username or "").strip()
         password = str(payload.password or "")
+        minimum_length = _minimum_password_length(is_admin=bool(payload.is_admin))
+        if len(password) < minimum_length:
+            raise HTTPException(status_code=400, detail=f"password must be at least {minimum_length} characters")
         if not username:
             raise HTTPException(status_code=400, detail="用户名不能为空")
         now = _now_ts()
@@ -17369,7 +17520,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         with db() as conn:
             try:
-                conn.execute(
+                inserted = conn.execute(
                     """
                     INSERT INTO users(
                       username, password_hash, is_admin, is_disabled, balance_cents,
@@ -17387,6 +17538,10 @@ def create_app() -> FastAPI:
                         now,
                     ),
                 )
+                created_user_id = int(inserted.lastrowid or 0)
+                if not bool(payload.is_admin):
+                    vault_ciphertext = _encrypt_password_for_vault(created_user_id, password)
+                    _upsert_password_vault(conn, created_user_id, vault_ciphertext, now)
             except Exception as exc:
                 if "UNIQUE" in str(exc).upper():
                     raise HTTPException(status_code=409, detail="用户名已存在") from exc
@@ -17394,7 +17549,8 @@ def create_app() -> FastAPI:
             row = conn.execute(
                 """SELECT id, username, is_admin, is_disabled, balance_cents, account_type,
                            approval_status, full_name, email, phone, company, use_case, admin_note,
-                           approved_at, approved_by, last_login_at, created_at, updated_at
+                           approved_at, approved_by, last_login_at, must_change_password,
+                           password_expires_at, created_at, updated_at
                     FROM users WHERE username = ?""",
                 (username,),
             ).fetchone()
@@ -17410,11 +17566,18 @@ def create_app() -> FastAPI:
                           target.balance_cents, target.account_type, target.approval_status,
                           target.full_name, target.email, target.phone, target.company,
                           target.use_case, target.admin_note, target.approved_at, target.approved_by,
-                          target.last_login_at, target.created_at, target.updated_at,
-                          CASE WHEN target.password_hash <> '' THEN 1 ELSE 0 END AS password_configured,
-                          approver.username AS approved_by_username
+                           target.last_login_at, target.must_change_password, target.password_expires_at,
+                           target.created_at, target.updated_at,
+                           CASE WHEN target.password_hash <> '' THEN 1 ELSE 0 END AS password_configured,
+                           CASE
+                             WHEN target.is_admin = 1 THEN 'prohibited'
+                             WHEN vault.user_id IS NOT NULL THEN 'available'
+                             ELSE 'unavailable'
+                           END AS password_reveal_status,
+                           approver.username AS approved_by_username
                    FROM users AS target
                    LEFT JOIN users AS approver ON approver.id = target.approved_by
+                   LEFT JOIN password_vault AS vault ON vault.user_id = target.id
                    WHERE target.id = ?""",
                 (int(target_user_id),),
             ).fetchone()
@@ -17427,35 +17590,279 @@ def create_app() -> FastAPI:
             }
         if row is None:
             raise HTTPException(status_code=404, detail="客户账号不存在")
-        return {"user": dict(row), "resource_counts": resource_counts}
+        user_payload = dict(row)
+        user_payload["password_reveal_available"] = user_payload.get("password_reveal_status") == "available"
+        return {"user": user_payload, "resource_counts": resource_counts}
+
+    @app.post("/api/admin/users/{target_user_id}/reveal-password")
+    def api_admin_reveal_user_password(
+        target_user_id: int,
+        request: Request,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        _require_same_origin(request)
+        target_id = int(target_user_id)
+        with db() as conn:
+            row = conn.execute(
+                """
+                SELECT users.id, users.is_admin, password_vault.ciphertext,
+                       password_vault.updated_at AS vault_updated_at
+                FROM users
+                LEFT JOIN password_vault ON password_vault.user_id = users.id
+                WHERE users.id = ?
+                """,
+                (target_id,),
+            ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="customer account does not exist")
+
+        def reveal_response(status_code: int, content: dict[str, Any]) -> JSONResponse:
+            return JSONResponse(
+                status_code=status_code,
+                content=content,
+                headers={
+                    "Cache-Control": "no-store, max-age=0",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
+                },
+            )
+
+        def audit_reveal(result: str, *, reveal_expires_at: int = 0) -> None:
+            metadata = {
+                "client_ip": _request_client_ip(request),
+                "result": result,
+                "vault_updated_at": int(row["vault_updated_at"] or 0),
+            }
+            if reveal_expires_at:
+                metadata["reveal_expires_at"] = int(reveal_expires_at)
+            with db() as conn:
+                conn.execute(
+                    "INSERT INTO admin_audit_log(admin_user_id, action, target_user_id, metadata_json, created_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (
+                        int(user.get("id") or 0),
+                        "user.password_reveal",
+                        target_id,
+                        json.dumps(metadata, ensure_ascii=True, separators=(",", ":")),
+                        _now_ts(),
+                    ),
+                )
+
+        if int(row["is_admin"] or 0) == 1:
+            audit_reveal("prohibited")
+            return reveal_response(
+                403,
+                {
+                    "detail": {
+                        "code": "admin_password_not_revealable",
+                        "message": "administrator passwords cannot be revealed",
+                    }
+                },
+            )
+        ciphertext = str(row["ciphertext"] or "")
+        if not ciphertext:
+            audit_reveal("unavailable")
+            return reveal_response(
+                404,
+                {
+                    "detail": {
+                        "code": "password_unavailable",
+                        "message": "password is unavailable until the user changes it or an administrator resets it",
+                    }
+                },
+            )
+        try:
+            password = decrypt_vault_password(target_id, ciphertext)
+        except PasswordVaultUnavailableError:
+            audit_reveal("vault_unavailable")
+            return reveal_response(
+                503,
+                {
+                    "detail": {
+                        "code": "password_vault_unavailable",
+                        "message": "password vault key is not configured or is invalid",
+                    }
+                },
+            )
+        except PasswordVaultDecryptError:
+            audit_reveal("decrypt_failed")
+            return reveal_response(
+                409,
+                {
+                    "detail": {
+                        "code": "password_unavailable",
+                        "message": "stored password cannot be decrypted with the configured vault key",
+                    }
+                },
+            )
+        reveal_expires_at = _now_ts() + 60
+        audit_reveal("revealed", reveal_expires_at=reveal_expires_at)
+        return reveal_response(
+            200,
+            {
+                "ok": True,
+                "password": password,
+                "reveal_expires_at": reveal_expires_at,
+            },
+        )
 
     @app.post("/api/admin/users/{target_user_id}/reset-password")
     def api_admin_reset_user_password(
         target_user_id: int,
+        payload: AdminResetPasswordPayload,
+        request: Request,
         user: dict[str, Any] = Depends(require_admin),
     ):
+        _require_same_origin(request)
         temporary_password = secrets.token_urlsafe(18)
         try:
             password_hash = hash_password(temporary_password)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         now = _now_ts()
+        try:
+            ttl_seconds = int(os.getenv("TEMPORARY_PASSWORD_TTL_SECONDS", "86400") or "86400")
+        except ValueError:
+            ttl_seconds = 86400
+        ttl_seconds = min(max(ttl_seconds, 300), 7 * 24 * 3600)
+        expires_at = now + ttl_seconds
+        expected_updated_at = int(payload.expected_updated_at)
         with db() as conn:
             row = conn.execute(
-                "SELECT id, is_admin FROM users WHERE id = ?",
+                "SELECT id, is_admin, updated_at FROM users WHERE id = ?",
                 (int(target_user_id),),
             ).fetchone()
             if row is None:
                 raise HTTPException(status_code=404, detail="客户账号不存在")
             if int(row["is_admin"] or 0) == 1:
                 raise HTTPException(status_code=400, detail="管理员密码请在账号设置中修改")
-            conn.execute(
-                "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
-                (password_hash, now, int(target_user_id)),
+            current_updated_at = int(row["updated_at"] or 0)
+            if current_updated_at != expected_updated_at:
+                raise HTTPException(status_code=409, detail="account changed; refresh and retry")
+            vault_ciphertext = _encrypt_password_for_vault(int(target_user_id), temporary_password)
+            new_updated_at = max(now, current_updated_at + 1)
+            updated = conn.execute(
+                "UPDATE users SET password_hash = ?, must_change_password = 1, password_expires_at = ?, "
+                "updated_at = ? WHERE id = ? AND updated_at = ?",
+                (password_hash, expires_at, new_updated_at, int(target_user_id), expected_updated_at),
             )
+            if int(updated.rowcount or 0) != 1:
+                raise HTTPException(status_code=409, detail="account changed; refresh and retry")
+            _upsert_password_vault(conn, int(target_user_id), vault_ciphertext, new_updated_at)
             conn.execute("DELETE FROM sessions WHERE user_id = ?", (int(target_user_id),))
+            conn.execute(
+                "INSERT INTO admin_audit_log(admin_user_id, action, target_user_id, metadata_json, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    int(user.get("id") or 0),
+                    "user.password_reset",
+                    int(target_user_id),
+                    json.dumps(
+                        {
+                            "client_ip": _request_client_ip(request),
+                            "previous_updated_at": current_updated_at,
+                            "new_updated_at": new_updated_at,
+                            "expires_at": expires_at,
+                        },
+                        ensure_ascii=True,
+                        separators=(",", ":"),
+                    ),
+                    now,
+                ),
+            )
         return JSONResponse(
-            content={"ok": True, "temporary_password": temporary_password},
+            content={
+                "ok": True,
+                "temporary_password": temporary_password,
+                "must_change_password": True,
+                "password_expires_at": expires_at,
+                "updated_at": new_updated_at,
+            },
+            headers={
+                "Cache-Control": "no-store, max-age=0",
+                "Pragma": "no-cache",
+            },
+        )
+
+    @app.post("/api/admin/users/{target_user_id}/set-password")
+    def api_admin_set_user_password(
+        target_user_id: int,
+        payload: AdminSetPasswordPayload,
+        request: Request,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        _require_same_origin(request)
+        password = str(payload.password or "")
+        minimum_length = _minimum_password_length(is_admin=False)
+        if len(password) < minimum_length or len(password) > 256:
+            raise HTTPException(status_code=400, detail=f"密码长度需为 {minimum_length}-256 位")
+        try:
+            password_hash = hash_password(password)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        target_id = int(target_user_id)
+        expected_updated_at = int(payload.expected_updated_at)
+        now = _now_ts()
+        with db() as conn:
+            admin_row = conn.execute(
+                "SELECT password_hash FROM users WHERE id = ? AND is_admin = 1",
+                (int(user.get("id") or 0),),
+            ).fetchone()
+            if admin_row is None or not verify_password(
+                str(payload.admin_password or ""),
+                str(admin_row["password_hash"] or ""),
+            ):
+                raise HTTPException(status_code=403, detail="管理员密码错误")
+            row = conn.execute(
+                "SELECT id, is_admin, updated_at FROM users WHERE id = ?",
+                (target_id,),
+            ).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="客户账号不存在")
+            if int(row["is_admin"] or 0) == 1:
+                raise HTTPException(status_code=400, detail="管理员密码请在账号设置中修改")
+            current_updated_at = int(row["updated_at"] or 0)
+            if current_updated_at != expected_updated_at:
+                raise HTTPException(status_code=409, detail="账号资料已更新，请刷新详情后重试")
+
+            vault_ciphertext = _encrypt_password_for_vault(target_id, password)
+            new_updated_at = max(now, current_updated_at + 1)
+            updated = conn.execute(
+                "UPDATE users SET password_hash = ?, must_change_password = 0, password_expires_at = 0, "
+                "updated_at = ? WHERE id = ? AND updated_at = ?",
+                (password_hash, new_updated_at, target_id, expected_updated_at),
+            )
+            if int(updated.rowcount or 0) != 1:
+                raise HTTPException(status_code=409, detail="账号资料已更新，请刷新详情后重试")
+            _upsert_password_vault(conn, target_id, vault_ciphertext, new_updated_at)
+            conn.execute("DELETE FROM sessions WHERE user_id = ?", (target_id,))
+            conn.execute(
+                "INSERT INTO admin_audit_log(admin_user_id, action, target_user_id, metadata_json, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    int(user.get("id") or 0),
+                    "user.password_set",
+                    target_id,
+                    json.dumps(
+                        {
+                            "client_ip": _request_client_ip(request),
+                            "previous_updated_at": current_updated_at,
+                            "new_updated_at": new_updated_at,
+                        },
+                        ensure_ascii=True,
+                        separators=(",", ":"),
+                    ),
+                    now,
+                ),
+            )
+        return JSONResponse(
+            content={
+                "ok": True,
+                "must_change_password": False,
+                "password_expires_at": 0,
+                "updated_at": new_updated_at,
+            },
             headers={
                 "Cache-Control": "no-store, max-age=0",
                 "Pragma": "no-cache",
