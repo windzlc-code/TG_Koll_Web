@@ -45,7 +45,7 @@ async function activeTabApiBase() {
     const url = new URL(tab?.url || "");
     if (!/^https?:$/.test(url.protocol)) return "";
     const path = `${url.pathname}${url.hash || ""}`;
-    if (!/(^|\/)(admin|admin\.html|console|console\.html|quick-setup|browser-auth-extension)(\/|\.|#|$)/.test(path)) {
+    if (!/(^|\/)(admin|admin\.html|console|console\.html|browser-auth-extension)(\/|\.|#|$)/.test(path)) {
       return "";
     }
     return displayApiBase(url.origin);

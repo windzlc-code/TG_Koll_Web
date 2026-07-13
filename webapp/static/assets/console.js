@@ -8615,7 +8615,7 @@ async function loadMe() {
 
 async function loadSetupStatus() {
   try {
-    state.setupStatus = await api("/api/quick_setup/status");
+    state.setupStatus = { runtime_config: await api("/api/admin/runtime_config") };
   } catch (error) {
     state.setupStatus = null;
     appendEvent("warning", error.detail || error.message || "读取运行配置失败");

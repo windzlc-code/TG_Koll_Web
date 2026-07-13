@@ -2844,19 +2844,6 @@ function bindActions() {
     location.href = "/console.html";
   });
 
-  if (el("btnQuickSetup")) {
-    el("btnQuickSetup").textContent = "快速配置";
-    el("btnQuickSetup").addEventListener("click", () => {
-      location.href = "/quick-setup.html";
-    });
-  }
-
-  if (el("btnPersonaDashboard")) {
-    el("btnPersonaDashboard").addEventListener("click", () => {
-      location.href = "/console.html?view=persona_dashboard";
-    });
-  }
-
   if (el("btnTaskRefresh")) {
     el("btnTaskRefresh").addEventListener("click", async () => {
       try {

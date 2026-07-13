@@ -3592,23 +3592,6 @@ def _write_tool_r18_bot_token_files(token: str) -> None:
         logger.warning("Failed to update local bot env token file: %s", exc)
 
 
-def _clear_tool_r18_bot_token_files() -> None:
-    token_file = _tool_r18_bot_token_file()
-    try:
-        if token_file.exists():
-            token_file.unlink()
-    except Exception as exc:
-        logger.warning("Failed to delete bot token file: %s", exc)
-    try:
-        local_env = _tool_r18_local_bot_env_path()
-        if local_env.exists():
-            lines = local_env.read_text(encoding="utf-8", errors="ignore").splitlines()
-            next_lines = [line for line in lines if not line.strip().startswith("TELEGRAM_BOT_TOKEN=")]
-            local_env.write_text("\n".join(next_lines).rstrip() + ("\n" if next_lines else ""), encoding="utf-8")
-    except Exception as exc:
-        logger.warning("Failed to clear local bot env token: %s", exc)
-
-
 def _read_tool_r18_api_config() -> dict[str, Any]:
     path = _tool_r18_api_config_file()
     try:
@@ -3815,133 +3798,11 @@ def _tool_r18_process_snapshot() -> dict[str, Any]:
     }
 
 
-def _write_tool_r18_process_desired(desired: str) -> dict[str, Any]:
-    value = "stopped" if str(desired).strip().lower() == "stopped" else "running"
-    _write_small_json_file(
-        _tool_r18_process_control_file(),
-        {"desired": value, "updated_at": int(time.time())},
-    )
-    return _tool_r18_process_snapshot()
-
-
-def _quick_setup_public_url() -> str:
-    explicit = str(os.getenv("QUICK_SETUP_PUBLIC_URL") or "").strip()
-    if explicit:
-        return explicit
+def _admin_runtime_public_url() -> str:
     public_base = str(os.getenv("PUBLIC_BASE_URL") or os.getenv("TOOL_R18_PUBLIC_URL") or "").strip().rstrip("/")
     if public_base:
-        return f"{public_base}/quick-setup.html"
-    return "http://43.167.237.120/quick-setup.html"
-
-
-def _terminate_tool_r18_daemon_processes() -> None:
-    patterns = [
-        "src/daemon.ts",
-        "src\\daemon.ts",
-        "tool_r18",
-    ]
-    try:
-        status = _read_small_json_file(_tool_r18_process_status_file())
-        pid = str(status.get("pid") or "").strip()
-        if pid.isdigit():
-            os.kill(int(pid), signal.SIGTERM)
-            time.sleep(1)
-            try:
-                os.kill(int(pid), signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-    except Exception as exc:
-        logger.warning("Failed to stop Tool_R18 daemon by status pid: %s", exc)
-    if os.name == "nt":
-        return
-    for pattern in patterns:
-        try:
-            subprocess.run(["pkill", "-TERM", "-f", pattern], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception:
-            pass
-    time.sleep(1)
-    for pattern in patterns[:2]:
-        try:
-            subprocess.run(["pkill", "-KILL", "-f", pattern], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception:
-            pass
-    _write_small_json_file(
-        _tool_r18_process_status_file(),
-        {"state": "stopped", "pid": "", "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")},
-    )
-
-
-def _tool_r18_external_supervisor_available() -> bool:
-    # In the Docker image, PID 1 is docker/entrypoint.sh and owns the desired-state loop.
-    # Local portable/webapp runs do not have that loop, so webapp must start the daemon itself.
-    if os.name == "nt":
-        return False
-    try:
-        cmdline = Path("/proc/1/cmdline").read_bytes().replace(b"\x00", b" ").decode("utf-8", "ignore")
-    except Exception:
-        return False
-    return "entrypoint.sh" in cmdline and "/app/docker/entrypoint.sh" in cmdline
-
-
-def _start_tool_r18_daemon_process() -> None:
-    if _tool_r18_external_supervisor_available():
-        return
-    snapshot = _tool_r18_process_snapshot()
-    if snapshot.get("running"):
-        return
-    token = _tg_bot_token()
-    if not token:
-        raise RuntimeError("Telegram Bot Token 尚未配置，無法啟動 Bot。")
-    project_dir = _tool_r18_project_dir()
-    daemon_path = project_dir / "src" / "daemon.ts"
-    if not daemon_path.exists():
-        raise RuntimeError(f"找不到 Tool_R18 daemon：{daemon_path}")
-    env = os.environ.copy()
-    local_env_path = _tool_r18_local_bot_env_path()
-    if local_env_path.exists():
-        try:
-            for line in local_env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
-                stripped = line.strip()
-                if not stripped or stripped.startswith("#") or "=" not in stripped:
-                    continue
-                key, value = stripped.split("=", 1)
-                key = key.strip()
-                value = value.strip().strip("\"'")
-                if key and value and not env.get(key):
-                    env[key] = value
-        except Exception as exc:
-            logger.warning("Failed to load Tool_R18 local env for daemon: %s", exc)
-    env.setdefault("TOOL_R18_RUNTIME_DIR", str(_tool_r18_runtime_dir()))
-    env.setdefault("AUTO_TWEET_RUNTIME_DIR", str(_tool_r18_runtime_dir()))
-    env.setdefault("TOOL_R18_TELEGRAM_BOT_TOKEN_FILE", str(_tool_r18_bot_token_file()))
-    env.setdefault("TOOL_R18_LOCAL_BOT_ENV_PATH", str(local_env_path))
-    env.setdefault("TOOL_R18_INTERNAL_WEBAPP_BASE_URL", "http://127.0.0.1:8098")
-    env.setdefault("TOOL_R18_UPLOAD_HOST_DIR", str(TOOL_R18_UPLOAD_ROOT))
-    env.setdefault("TOOL_R18_PUBLIC_URL", "http://43.167.237.120")
-    env.setdefault("TELEGRAM_PROXY_URL", "direct")
-    env["TELEGRAM_BOT_TOKEN"] = token
-    _terminate_tool_r18_daemon_processes()
-    stdout_path = _tool_r18_runtime_dir() / "daemon.stdout.log"
-    stderr_path = _tool_r18_runtime_dir() / "daemon.stderr.log"
-    stdout_path.parent.mkdir(parents=True, exist_ok=True)
-    stdout = stdout_path.open("ab")
-    stderr = stderr_path.open("ab")
-    creationflags = 0
-    if os.name == "nt":
-        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    process = subprocess.Popen(
-        ["node", "--import", "tsx", "src/daemon.ts"],
-        cwd=str(project_dir),
-        env=env,
-        stdout=stdout,
-        stderr=stderr,
-        stdin=subprocess.DEVNULL,
-        creationflags=creationflags,
-    )
-    _write_small_json_file(
-        _tool_r18_process_status_file(),
-        {"state": "running", "pid": str(process.pid), "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")},
-    )
+        return f"{public_base}/admin.html#admin-runtime"
+    return "http://47.243.99.2/admin.html#admin-runtime"
 
 
 _TOOL_R18_STOP_RESPONDER_STARTED = False
@@ -3982,7 +3843,7 @@ def _tool_r18_stop_responder_loop() -> None:
                     chat_id = chat.get("id")
                     if not chat_id or text.split(maxsplit=1)[0].lower() != "/start":
                         continue
-                    setup_url = _quick_setup_public_url()
+                    admin_url = _admin_runtime_public_url()
                     reply_text = (
                         "Bot 目前已在简易配置页停止，完整功能不会被调用。\n\n"
                         "请点击下方链接完成 Bot Token / Grok Key 设置，然后点击“启动 Bot 进程”。\n"
@@ -3993,7 +3854,7 @@ def _tool_r18_stop_responder_loop() -> None:
                         json={
                             "chat_id": chat_id,
                             "text": reply_text,
-                            "reply_markup": {"inline_keyboard": [[{"text": "打开简易配置", "url": setup_url}]]},
+                            "reply_markup": {"inline_keyboard": [[{"text": "打开系统配置", "url": admin_url}]]},
                         },
                         timeout=10,
                     )
@@ -10517,10 +10378,6 @@ class RuntimeConfigPayload(BaseModel):
     cleanup_retention_days: int = 7
 
 
-class QuickSetupProcessPayload(BaseModel):
-    action: str
-
-
 class LlmModelsPayload(BaseModel):
     llm_base_url: str = ""
     llm_api_key: str = ""
@@ -15565,22 +15422,6 @@ def create_app() -> FastAPI:
     def page_admin_login_alias() -> RedirectResponse:
         return RedirectResponse(url="/admin", status_code=302)
 
-    @app.get("/quick-setup.html", include_in_schema=False)
-    def page_quick_setup(session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE)) -> Response:
-        try:
-            user = get_current_user(session_token)
-        except HTTPException:
-            return RedirectResponse(url="/admin", status_code=302)
-        if not _is_admin(user):
-            return RedirectResponse(url="/admin", status_code=302)
-        return _html_response_with_versions(
-            "quick-setup.html",
-            replacements={
-                "__STYLE_VERSION__": _asset_version("assets", "style.css"),
-                "__QUICK_SETUP_JS_VERSION__": _asset_version("assets", "quick-setup.js"),
-            },
-        )
-
     @app.get("/persona-automation-log.html", include_in_schema=False)
     def page_persona_automation_log() -> FileResponse:
         return FileResponse(str(STATIC_DIR / "persona-automation-log.html"))
@@ -15589,292 +15430,7 @@ def create_app() -> FastAPI:
     def page_batch() -> FileResponse:
         return FileResponse(str(STATIC_DIR / "batch.html"))
 
-    @app.get("/api/quick_setup/status")
-    def api_quick_setup_status(_user: dict[str, Any] = Depends(require_admin)):
-        try:
-            with db() as conn:
-                runtime = _get_runtime_config(conn)
-        except RuntimeConfigFileError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-        token = _tg_bot_token()
-        llm_key = str(runtime.get("llm_api_key_gpt") or runtime.get("llm_api_key") or "").strip()
-        public_runtime = {
-            "telegram_bot_token": "",
-            "telegram_bot_token_configured": bool(token),
-            "telegram_bot_token_masked": _mask_secret(token) if token else "",
-            "llm_base_url": str(runtime.get("llm_base_url") or "").strip(),
-            "llm_api_key": "",
-            "llm_api_key_configured": bool(llm_key),
-            "llm_api_key_masked": _mask_secret(llm_key) if llm_key else "",
-            "llm_api_key_gpt": "",
-            "llm_api_key_gpt_configured": bool(llm_key),
-            "llm_api_key_gpt_masked": _mask_secret(llm_key) if llm_key else "",
-            "llm_default_model": str(runtime.get("llm_default_model") or "").strip(),
-            "llm_default_model_gpt": str(runtime.get("llm_default_model_gpt") or "").strip(),
-            "llm_model_priority_order": str(runtime.get("llm_model_priority_order") or "").strip(),
-            "image_model_provider_base_url": str(runtime.get("image_model_provider_base_url") or "").strip(),
-            "image_model_provider_api_key_gemini": "",
-            "image_model_provider_api_key_gemini_configured": bool(str(runtime.get("image_model_provider_api_key_gemini") or "").strip()),
-            "image_model_provider_api_key_gemini_masked": _mask_secret(str(runtime.get("image_model_provider_api_key_gemini") or "").strip()) if str(runtime.get("image_model_provider_api_key_gemini") or "").strip() else "",
-            "image_model_default_model": str(runtime.get("image_model_default_model") or "").strip(),
-            "image_model_default_model_gemini": str(runtime.get("image_model_default_model_gemini") or "").strip(),
-            "image_model_priority_order": str(runtime.get("image_model_priority_order") or "").strip(),
-            "new_persona_runninghub_base_url": str(runtime.get("new_persona_runninghub_base_url") or "").strip(),
-            "new_persona_runninghub_api_key_configured": bool(str(runtime.get("new_persona_runninghub_api_key") or "").strip()),
-            "new_persona_runninghub_api_key_masked": _mask_secret(str(runtime.get("new_persona_runninghub_api_key") or "").strip()) if str(runtime.get("new_persona_runninghub_api_key") or "").strip() else "",
-            "new_persona_runninghub_persona_t2i_detail_url": str(runtime.get("new_persona_runninghub_persona_t2i_detail_url") or "").strip(),
-            "new_persona_runninghub_persona_t2i_endpoint": str(runtime.get("new_persona_runninghub_persona_t2i_endpoint") or "").strip(),
-            "new_persona_runninghub_tweet_i2i_detail_url": str(runtime.get("new_persona_runninghub_tweet_i2i_detail_url") or "").strip(),
-            "new_persona_runninghub_tweet_i2i_endpoint": str(runtime.get("new_persona_runninghub_tweet_i2i_endpoint") or "").strip(),
-            "mulerouter_api_name": str(runtime.get("mulerouter_api_name") or "").strip(),
-            "mulerouter_api_key": "",
-            "mulerouter_api_key_configured": bool(str(runtime.get("mulerouter_api_key") or "").strip()),
-            "mulerouter_api_key_masked": _mask_secret(str(runtime.get("mulerouter_api_key") or "").strip()) if str(runtime.get("mulerouter_api_key") or "").strip() else "",
-            "mulerouter_base_url": str(runtime.get("mulerouter_base_url") or "").strip(),
-            "mulerouter_wan_i2v_model": str(runtime.get("mulerouter_wan_i2v_model") or "").strip(),
-            "mulerouter_wan_i2v_endpoint": str(runtime.get("mulerouter_wan_i2v_endpoint") or "").strip(),
-            "mulerouter_wan_i2v_negative_prompt": str(runtime.get("mulerouter_wan_i2v_negative_prompt") or "").strip(),
-        }
-        return {
-            "ok": True,
-            "public_setup": True,
-            "runtime_config": public_runtime,
-            "process": _tool_r18_process_snapshot(),
-        }
-
     register_social_automation_routes(app)
-
-    @app.post("/api/quick_setup/runtime_config")
-    def api_quick_setup_update_runtime_config(payload: RuntimeConfigPayload, _user: dict[str, Any] = Depends(require_admin)):
-        try:
-            with db() as conn:
-                current_runtime = _get_runtime_config(conn)
-        except RuntimeConfigFileError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-        explicit = payload.model_dump(exclude_unset=True)
-        secret_keys = {
-            "telegram_bot_token",
-            "llm_api_key",
-            "llm_api_key_gpt",
-            "llm_api_key_gemini",
-            "mulerouter_api_key",
-            "image_model_provider_api_key_gemini",
-            "image_model_provider_api_key_gpt",
-            "new_persona_runninghub_api_key",
-            "upload_file_api_key",
-        }
-        for key in list(secret_keys):
-            if key in explicit and not str(explicit.get(key) or "").strip():
-                explicit.pop(key, None)
-
-        old_process_snapshot = _tool_r18_process_snapshot()
-        merged = dict(DEFAULT_RUNTIME_CONFIG)
-        if isinstance(current_runtime, dict):
-            merged.update(current_runtime)
-        merged.update({k: str(v).strip() if isinstance(v, str) else v for k, v in explicit.items()})
-
-        try:
-            merged = _normalize_runtime_config(merged)
-            with _RUNTIME_CONFIG_LOCK:
-                _write_runtime_config_file(merged)
-            new_token = str(explicit.get("telegram_bot_token") or "").strip()
-            if new_token:
-                _write_tool_r18_process_desired("stopped")
-                _terminate_tool_r18_daemon_processes()
-                _write_tool_r18_bot_token_files(new_token)
-            _sync_tool_r18_api_config_from_runtime(merged, explicit)
-            if new_token and old_process_snapshot.get("running"):
-                _write_tool_r18_process_desired("running")
-                if not _tool_r18_external_supervisor_available():
-                    _start_tool_r18_daemon_process()
-        except RuntimeConfigFileError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-        return api_quick_setup_status()
-
-    @app.delete("/api/quick_setup/telegram_bot_token")
-    def api_quick_setup_clear_telegram_bot_token(_user: dict[str, Any] = Depends(require_admin)):
-        try:
-            with db() as conn:
-                current_runtime = _get_runtime_config(conn)
-        except RuntimeConfigFileError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-        merged = dict(DEFAULT_RUNTIME_CONFIG)
-        if isinstance(current_runtime, dict):
-            merged.update(current_runtime)
-        merged["telegram_bot_token"] = ""
-        try:
-            _write_tool_r18_process_desired("stopped")
-            _terminate_tool_r18_daemon_processes()
-            merged = _normalize_runtime_config(merged)
-            with _RUNTIME_CONFIG_LOCK:
-                _write_runtime_config_file(merged)
-            _clear_tool_r18_bot_token_files()
-        except RuntimeConfigFileError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-        return api_quick_setup_status()
-
-    @app.delete("/api/quick_setup/grok_key")
-    def api_quick_setup_clear_grok_key(_user: dict[str, Any] = Depends(require_admin)):
-        try:
-            with db() as conn:
-                current_runtime = _get_runtime_config(conn)
-        except RuntimeConfigFileError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-        merged = dict(DEFAULT_RUNTIME_CONFIG)
-        if isinstance(current_runtime, dict):
-            merged.update(current_runtime)
-        merged["llm_api_key"] = ""
-        merged["llm_api_key_gpt"] = ""
-        explicit = {"llm_api_key": "", "llm_api_key_gpt": ""}
-        try:
-            merged = _normalize_runtime_config(merged)
-            merged["llm_api_key"] = ""
-            merged["llm_api_key_gpt"] = ""
-            with _RUNTIME_CONFIG_LOCK:
-                _write_runtime_config_file(merged)
-            _sync_tool_r18_api_config_from_runtime(merged, explicit)
-        except RuntimeConfigFileError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-        return api_quick_setup_status()
-
-    def _clear_quick_setup_runtime_keys(keys: list[str]):
-        try:
-            with db() as conn:
-                current_runtime = _get_runtime_config(conn)
-        except RuntimeConfigFileError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-        merged = dict(DEFAULT_RUNTIME_CONFIG)
-        if isinstance(current_runtime, dict):
-            merged.update(current_runtime)
-        explicit = {key: "" for key in keys}
-        for key in keys:
-            merged[key] = ""
-        try:
-            merged = _normalize_runtime_config(merged)
-            for key in keys:
-                merged[key] = ""
-            with _RUNTIME_CONFIG_LOCK:
-                _write_runtime_config_file(merged)
-            _sync_tool_r18_api_config_from_runtime(merged, explicit)
-        except RuntimeConfigFileError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-        return api_quick_setup_status()
-
-    @app.delete("/api/quick_setup/image_key")
-    def api_quick_setup_clear_image_key(_user: dict[str, Any] = Depends(require_admin)):
-        return _clear_quick_setup_runtime_keys(["image_model_provider_api_key_gemini"])
-
-    @app.delete("/api/quick_setup/runninghub_key")
-    def api_quick_setup_clear_runninghub_key(_user: dict[str, Any] = Depends(require_admin)):
-        return _clear_quick_setup_runtime_keys(["new_persona_runninghub_api_key"])
-
-    @app.delete("/api/quick_setup/video_key")
-    def api_quick_setup_clear_video_key(_user: dict[str, Any] = Depends(require_admin)):
-        return _clear_quick_setup_runtime_keys(["mulerouter_api_key"])
-
-    @app.post("/api/quick_setup/llm_models")
-    def api_quick_setup_llm_models(payload: LlmModelsPayload, _user: dict[str, Any] = Depends(require_admin)):
-        base_url = str(payload.llm_base_url or "").strip()
-        api_key = str(payload.llm_api_key or "").strip()
-        if "***" in api_key:
-            api_key = ""
-        if not base_url or not api_key:
-            try:
-                with db() as conn:
-                    runtime = _get_runtime_config(conn)
-            except RuntimeConfigFileError as exc:
-                raise HTTPException(status_code=500, detail=str(exc)) from exc
-            base_url = base_url or str(runtime.get("llm_base_url") or "").strip()
-            api_key = api_key or str(runtime.get("llm_api_key_gpt") or runtime.get("llm_api_key") or "").strip()
-        if not base_url or not api_key:
-            raise HTTPException(status_code=400, detail="请先配置 API Base URL 和 Grok Key")
-        try:
-            models = _fetch_provider_model_ids(model_type="text", base_url=base_url, api_key=api_key, provider="openai-compatible")
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-        return {"ok": True, "count": len(models), "models": models}
-
-    @app.post("/api/quick_setup/image_models")
-    def api_quick_setup_image_models(payload: ImageModelsPayload, _user: dict[str, Any] = Depends(require_admin)):
-        base_url = str(payload.base_url or "").strip()
-        api_key = str(payload.api_key or "").strip()
-        if "***" in api_key:
-            api_key = ""
-        if not base_url or not api_key:
-            try:
-                with db() as conn:
-                    runtime = _get_runtime_config(conn)
-            except RuntimeConfigFileError as exc:
-                raise HTTPException(status_code=500, detail=str(exc)) from exc
-            base_url = base_url or str(runtime.get("image_model_provider_base_url") or "").strip()
-            api_key = api_key or str(runtime.get("image_model_provider_api_key_gemini") or "").strip()
-        if not base_url or not api_key:
-            raise HTTPException(status_code=400, detail="请先配置 Gemini 图片 API Base URL 和 API Key")
-        try:
-            models = _fetch_provider_model_ids(model_type="image", base_url=base_url, api_key=api_key, provider=str(payload.provider or "openai-compatible").strip())
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-        return {"ok": True, "count": len(models), "models": models}
-
-    @app.post("/api/quick_setup/video_models")
-    def api_quick_setup_video_models(payload: ModelLookupPayload, _user: dict[str, Any] = Depends(require_admin)):
-        base_url = str(payload.base_url or "").strip()
-        api_key = str(payload.api_key or "").strip()
-        endpoint = str(payload.endpoint or "").strip()
-        if "***" in api_key:
-            api_key = ""
-        if not base_url or not api_key:
-            try:
-                with db() as conn:
-                    runtime = _get_runtime_config(conn)
-            except RuntimeConfigFileError as exc:
-                raise HTTPException(status_code=500, detail=str(exc)) from exc
-            base_url = base_url or str(runtime.get("mulerouter_base_url") or "").strip()
-            api_key = api_key or str(runtime.get("mulerouter_api_key") or "").strip()
-            endpoint = endpoint or str(runtime.get("mulerouter_wan_i2v_endpoint") or "").strip()
-        if not base_url:
-            raise HTTPException(status_code=400, detail="请先配置视频模型 API Base URL")
-        try:
-            models = _fetch_provider_model_ids(model_type="video", base_url=base_url, api_key=api_key, provider="openai-compatible", endpoint=endpoint)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-        return {"ok": True, "count": len(models), "models": models}
-
-    @app.post("/api/quick_setup/process")
-    def api_quick_setup_process(payload: QuickSetupProcessPayload, _user: dict[str, Any] = Depends(require_admin)):
-        action = str(payload.action or "").strip().lower()
-        if action not in {"start", "stop"}:
-            raise HTTPException(status_code=400, detail="action 必須是 start 或 stop")
-        process = _write_tool_r18_process_desired("running" if action == "start" else "stopped")
-        if action == "stop":
-            _terminate_tool_r18_daemon_processes()
-            process = _tool_r18_process_snapshot()
-        elif not _tool_r18_external_supervisor_available():
-            try:
-                _start_tool_r18_daemon_process()
-                time.sleep(1)
-                process = _tool_r18_process_snapshot()
-            except Exception as exc:
-                _write_tool_r18_process_desired("stopped")
-                raise HTTPException(status_code=500, detail=str(exc)) from exc
-        status = api_quick_setup_status()
-        status["process"] = process
-        return status
 
     @app.post("/api/auth/apply")
     @app.post("/api/auth/register")

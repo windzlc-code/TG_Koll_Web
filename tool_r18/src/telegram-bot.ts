@@ -6082,20 +6082,18 @@ function resolveSentimentCookieHelperDownloadUrl(): string {
   return `${TOOL_R18_PUBLIC_URL}/browser-auth-extension/download`;
 }
 
-function resolveQuickSetupPublicUrl(): string {
-  const explicit = String(process.env.QUICK_SETUP_PUBLIC_URL || "").trim();
-  if (explicit) return explicit;
+function resolveAdminRuntimePublicUrl(): string {
   const base = String(
     process.env.PUBLIC_BASE_URL
     || process.env.TOOL_R18_PUBLIC_URL
     || process.env.WEB_PUBLIC_BASE_URL
     || "",
   ).trim().replace(new RegExp("/+$"), "");
-  if (base) return `${base}/quick-setup.html`;
-  return "http://43.167.237.120/quick-setup.html";
+  if (base) return `${base}/admin.html#admin-runtime`;
+  return "http://47.243.99.2/admin.html#admin-runtime";
 }
 
-function getQuickSetupMissingConfigItems(): string[] {
+function getRuntimeMissingConfigItems(): string[] {
   const missing: string[] = [];
   try {
     const runtime = readRuntimeApiConfig();
@@ -6109,33 +6107,32 @@ function getQuickSetupMissingConfigItems(): string[] {
   return missing;
 }
 
-async function sendQuickSetupEntryForStart(bot: TelegramBot, chatId: number) {
-  const setupUrl = resolveQuickSetupPublicUrl();
-  const missing = getQuickSetupMissingConfigItems();
+async function sendAdminRuntimeEntryForStart(bot: TelegramBot, chatId: number) {
+  const adminUrl = resolveAdminRuntimePublicUrl();
+  const missing = getRuntimeMissingConfigItems();
   const text = missing.length
     ? [
-        "⚙️ 快捷配置",
+        "⚠️ 系统配置",
         "",
-        `目前缺少配置：${missing.join("、")}。`,
-        "請先打開快捷配置頁補齊設定，再繼續使用 Bot。",
-        setupUrl,
+        `当前缺少配置：${missing.join("、")}。`,
+        "请先前往后台系统配置补齐后再继续使用 Bot。",
+        adminUrl,
       ].join("\n")
     : [
-        "⚙️ 快捷配置",
+        "⚙️ 系统配置",
         "",
-        "需要更換 Token、設定 Grok API，或啟停 Bot 進程時，可打開快捷配置頁。",
-        setupUrl,
+        "需要调整模型 API 或其他运行参数时，请前往后台系统配置。",
+        adminUrl,
       ].join("\n");
   await bot.sendMessage(chatId, text, {
     disable_web_page_preview: true,
     reply_markup: {
-      inline_keyboard: [[{ text: "打開快捷配置", url: setupUrl }]],
+      inline_keyboard: [[{ text: "打开系统配置", url: adminUrl }]],
     },
   }).catch((error) => {
-    console.error("[telegram][quick_setup_entry_error]", error?.message || error);
+    console.error("[telegram][admin_runtime_entry_error]", error?.message || error);
   });
 }
-
 function defaultToolR18UploadHostDir() {
   if (process.platform !== "win32") return "/opt/apps/workflow_delivery_package-R18/webapp_data/tool_r18_uploads";
   const projectRoot = path.basename(process.cwd()).toLowerCase() === "tool_r18"
@@ -23230,7 +23227,7 @@ function sendMainMenu(chatId: number, msgId?: number) {
       clearTelegramNavigationTransientState(chatId);
       sendMainMenu(chatId);
       if (isStartCommand) {
-        await sendQuickSetupEntryForStart(bot, chatId);
+        await sendAdminRuntimeEntryForStart(bot, chatId);
       }
       return;
     }

@@ -86,7 +86,7 @@
 - 它不是控制台右侧详情面板的一部分
 - 控制台里的“人设看板”直接切换至该内置视图，不再打开独立页面
 
-### 4.3 `admin.html` / `quick-setup.html`
+### 4.3 `admin.html`
 
 定位:
 
@@ -592,7 +592,6 @@ Web 重构时必须统一回真实后端动作:
 - Persona archive 中的 `pad` / `boundPadCode` / `ownerBotName` 一类历史运营字段
 - 控制台中为了兼容旧流程而保留的动作别名
 - `admin.html`
-- `quick-setup.html`
 - 已经失效或缺页的旧入口
 
 ## 10. 给 Web 前端的落地规则

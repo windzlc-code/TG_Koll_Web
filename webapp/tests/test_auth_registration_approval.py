@@ -214,10 +214,8 @@ class RegistrationApprovalTests(unittest.TestCase):
         admin_page = anonymous.get("/admin.html", follow_redirects=False)
         self.assertEqual(admin_page.status_code, 302)
         self.assertEqual(admin_page.headers["location"], "/admin")
-        quick_setup = anonymous.get("/quick-setup.html", follow_redirects=False)
-        self.assertEqual(quick_setup.status_code, 302)
-        self.assertEqual(quick_setup.headers["location"], "/admin")
-        self.assertEqual(anonymous.get("/api/quick_setup/status").status_code, 401)
+        self.assertEqual(anonymous.get("/quick-setup.html", follow_redirects=False).status_code, 404)
+        self.assertEqual(anonymous.get("/api/quick_setup/status").status_code, 404)
 
         applicant = TestClient(self.app)
         applied = applicant.post("/api/auth/apply", json=self.application_payload())
@@ -253,10 +251,8 @@ class RegistrationApprovalTests(unittest.TestCase):
         user_admin_page = user.get("/admin.html", follow_redirects=False)
         self.assertEqual(user_admin_page.status_code, 302)
         self.assertEqual(user_admin_page.headers["location"], "/admin")
-        user_quick_setup = user.get("/quick-setup.html", follow_redirects=False)
-        self.assertEqual(user_quick_setup.status_code, 302)
-        self.assertEqual(user_quick_setup.headers["location"], "/admin")
-        self.assertEqual(user.get("/api/quick_setup/status").status_code, 403)
+        self.assertEqual(user.get("/quick-setup.html", follow_redirects=False).status_code, 404)
+        self.assertEqual(user.get("/api/quick_setup/status").status_code, 404)
 
         switched_login = user.post(
             "/api/auth/admin-login",
@@ -278,9 +274,12 @@ class RegistrationApprovalTests(unittest.TestCase):
         entry = admin.get("/admin", follow_redirects=False)
         self.assertEqual(entry.status_code, 302)
         self.assertEqual(entry.headers["location"], "/admin.html#admin-overview")
-        self.assertEqual(admin.get("/admin.html", follow_redirects=False).status_code, 200)
-        self.assertEqual(admin.get("/quick-setup.html", follow_redirects=False).status_code, 200)
-        self.assertEqual(admin.get("/api/quick_setup/status").status_code, 200)
+        rendered_admin = admin.get("/admin.html", follow_redirects=False)
+        self.assertEqual(rendered_admin.status_code, 200)
+        self.assertNotIn("快速配置", rendered_admin.text)
+        self.assertNotIn("人设数据看板", rendered_admin.text)
+        self.assertEqual(admin.get("/quick-setup.html", follow_redirects=False).status_code, 404)
+        self.assertEqual(admin.get("/api/quick_setup/status").status_code, 404)
 
 
 if __name__ == "__main__":
