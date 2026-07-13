@@ -965,6 +965,9 @@ const toastRemovalTimers = new WeakMap();
 const toastStartedAtByKey = new Map();
 const dismissedPersistentToastKeys = new Set();
 const uploadPreviewUrls = new WeakMap();
+let pendingToastRequest = null;
+let toastReplacementInProgress = false;
+const TOAST_REPLACEMENT_DURATION = 180;
 
 function ensureToastHost() {
   let host = $("toastHost");
@@ -1146,7 +1149,7 @@ function syncToastElapsedTimer(toast, { key, longTask, terminal, startedAt }) {
   }
 }
 
-function applyToastMeta(toast, { key, ok, message, persistent, target, status, longTask, startedAt }) {
+function applyToastMeta(toast, { key, ok, message, persistent, target, status, longTask, startedAt, scheduled }) {
   if (!toast) return;
   const normalizedStatus = normalizeToastStatus(status, ok, persistent);
   const terminal = ["success", "failed", "error", "cancelled", "warning", "warn"].includes(normalizedStatus)
@@ -1164,6 +1167,11 @@ function applyToastMeta(toast, { key, ok, message, persistent, target, status, l
   toast.dataset.toastPersistent = persistent ? "true" : "false";
   toast.dataset.toastLongTask = longTask ? "true" : "false";
   toast.dataset.toastStatus = normalizedStatus;
+  if (typeof scheduled === "boolean") {
+    toast.dataset.toastScheduled = scheduled ? "true" : "false";
+  } else {
+    delete toast.dataset.toastScheduled;
+  }
   if (target) {
     toast.dataset.toastTarget = JSON.stringify(target);
     toast.setAttribute("role", "button");
@@ -1244,6 +1252,77 @@ function toastProgressSegmentsMarkup() {
   }).join("");
 }
 
+function createToast(request) {
+  const { host, toastKey, ok, message, persistent, target, status, longTask, startedAt, duration, scheduled } = request;
+  const toast = document.createElement("div");
+  toast.innerHTML = `
+    <span class="toast-message-body">
+      <span class="toast-message-text">${esc(message)}</span>
+      <span class="toast-message-meta">
+        <time class="toast-message-elapsed">00:00</time>
+      </span>
+    </span>
+    <button type="button" class="toast-message-close" aria-label="关闭提示">×</button>
+    <svg class="toast-message-progress" aria-hidden="true">
+      ${toastProgressSegmentsMarkup()}
+    </svg>
+  `;
+  applyToastMeta(toast, { key: toastKey, ok, message, persistent, target, status, longTask, startedAt, scheduled });
+  host.appendChild(toast);
+  toast.querySelector(".toast-message-close")?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    dismissToast(toast, { manual: true });
+  });
+  toast.addEventListener("click", (event) => {
+    if (event.target.closest(".toast-message-close")) return;
+    openToastTarget(toast.dataset.toastTarget || "").catch(() => {});
+  });
+  toast.addEventListener("keydown", (event) => {
+    if (!["Enter", " "].includes(event.key)) return;
+    if (!toast.dataset.toastTarget) return;
+    event.preventDefault();
+    openToastTarget(toast.dataset.toastTarget || "").catch(() => {});
+  });
+  scheduleToastExpiry(toast, persistent, duration);
+  return toast;
+}
+
+function removeToastsBeforeInsert(host, nextToastKey) {
+  const outgoing = Array.from(host.children);
+  if (!outgoing.length) return false;
+  toastReplacementInProgress = true;
+  const reduceMotion = Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches);
+  outgoing.forEach((toast) => {
+    clearToastSwitchTimers(toast);
+    clearToastRemovalTimer(toast);
+    const timer = toastTimers.get(toast);
+    if (timer) window.clearTimeout(timer);
+    toastTimers.delete(toast);
+    const elapsedTimer = toastElapsedTimers.get(toast);
+    if (elapsedTimer) window.clearInterval(elapsedTimer);
+    toastElapsedTimers.delete(toast);
+    if (toast.dataset.toastPersistent !== "true" && toast.dataset.toastKey !== nextToastKey) {
+      toastStartedAtByKey.delete(toast.dataset.toastKey);
+    }
+    toast.classList.remove("is-leaving", "is-switching-out", "is-switching-in");
+    toast.classList.add("is-replacing-out");
+  });
+  window.setTimeout(() => {
+    outgoing.forEach((toast) => toast.remove());
+    toastReplacementInProgress = false;
+    flushPendingToast();
+  }, reduceMotion ? 0 : TOAST_REPLACEMENT_DURATION);
+  return true;
+}
+
+function flushPendingToast() {
+  const request = pendingToastRequest;
+  if (!request || toastReplacementInProgress) return null;
+  if (removeToastsBeforeInsert(request.host, request.toastKey)) return null;
+  pendingToastRequest = null;
+  return createToast(request);
+}
+
 function showToast(text, ok = true, options = {}) {
   const message = String(text || "").trim();
   if (!message) return null;
@@ -1260,86 +1339,29 @@ function showToast(text, ok = true, options = {}) {
     : Boolean(options.longTask);
   const startedAt = options.startedAt || toastStartedAtByKey.get(toastKey) || "";
   const duration = Number(options.duration || (ok ? 3200 : 5200));
-  if (existingToast) {
-    clearToastRemovalTimer(existingToast);
+  const scheduled = typeof options.scheduled === "boolean" ? options.scheduled : undefined;
+  const request = { host, toastKey, ok, message, persistent, target, status, longTask, startedAt, duration, scheduled };
+
+  if (existingToast && !toastReplacementInProgress) {
     const previousMessage = existingToast.querySelector(".toast-message-text")?.textContent || "";
     const presentationChanged = previousMessage !== message
       || String(existingToast.dataset.toastStatus || "") !== status
       || String(existingToast.dataset.toastPersistent || "false") !== (persistent ? "true" : "false");
-    const animateStatusChange = presentationChanged && Boolean(options.taskId || toastKey.startsWith("social-task:"));
-    if (!animateStatusChange) {
+    const isTaskRefresh = !presentationChanged && Boolean(options.taskId || existingToast.dataset.toastLongTask === "true");
+    if (isTaskRefresh) {
       clearToastSwitchTimers(existingToast);
-      existingToast.classList.remove("is-leaving", "is-switching-out", "is-switching-in");
-      applyToastMeta(existingToast, { key: toastKey, ok, message, persistent, target, status, longTask, startedAt });
+      clearToastRemovalTimer(existingToast);
+      existingToast.classList.remove("is-replacing-out", "is-leaving", "is-switching-out", "is-switching-in");
+      applyToastMeta(existingToast, request);
       scheduleToastExpiry(existingToast, persistent, duration);
       return existingToast;
     }
-    clearToastSwitchTimers(existingToast);
-    const existingTimer = toastTimers.get(existingToast);
-    if (existingTimer) window.clearTimeout(existingTimer);
-    toastTimers.delete(existingToast);
-    existingToast.classList.remove("is-leaving", "is-switching-in");
-    existingToast.classList.add("is-switching-out");
-    const reduceMotion = Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches);
-    const switchTimer = window.setTimeout(() => {
-      toastSwitchTimers.delete(existingToast);
-      if (!existingToast.isConnected) return;
-      existingToast.classList.remove("is-switching-out");
-      applyToastMeta(existingToast, { key: toastKey, ok, message, persistent, target, status, longTask, startedAt });
-      scheduleToastExpiry(existingToast, persistent, duration);
-      if (reduceMotion) return;
-      existingToast.classList.remove("is-state-settled");
-      existingToast.classList.add("is-switching-in");
-      const cleanupTimer = window.setTimeout(() => {
-        existingToast.classList.remove("is-switching-in");
-        existingToast.classList.add("is-state-settled");
-        toastSwitchCleanupTimers.delete(existingToast);
-      }, 200);
-      toastSwitchCleanupTimers.set(existingToast, cleanupTimer);
-    }, reduceMotion ? 0 : 130);
-    toastSwitchTimers.set(existingToast, switchTimer);
-    return existingToast;
   }
-  const toast = document.createElement("div");
-  toast.innerHTML = `
-    <span class="toast-message-body">
-      <span class="toast-message-text">${esc(message)}</span>
-      <span class="toast-message-meta">
-        <time class="toast-message-elapsed">00:00</time>
-      </span>
-    </span>
-    <button type="button" class="toast-message-close" aria-label="关闭提示">×</button>
-    <svg class="toast-message-progress" aria-hidden="true">
-      ${toastProgressSegmentsMarkup()}
-    </svg>
-  `;
-  applyToastMeta(toast, { key: toastKey, ok, message, persistent, target, status, longTask, startedAt });
-  host.appendChild(toast);
-  const maxToasts = 3;
-  while (host.children.length > maxToasts) {
-    const removable = Array.from(host.children).find((item) => item !== toast && item.dataset.toastPersistent !== "true");
-    if (!removable) break;
-    removeToastNow(removable);
-  }
-  toast.querySelector(".toast-message-close")?.addEventListener("click", (event) => {
-    event.stopPropagation();
-    dismissToast(toast, { manual: true });
-  });
-  toast.addEventListener("click", (event) => {
-    if (event.target.closest(".toast-message-close")) return;
-    openToastTarget(toast.dataset.toastTarget || "").catch(() => {});
-  });
-  toast.addEventListener("keydown", (event) => {
-    if (!["Enter", " "].includes(event.key)) return;
-    if (!toast.dataset.toastTarget) return;
-    event.preventDefault();
-    openToastTarget(toast.dataset.toastTarget || "").catch(() => {});
-  });
-  if (!persistent) {
-    const timer = window.setTimeout(() => dismissToast(toast), duration);
-    toastTimers.set(toast, timer);
-  }
-  return toast;
+
+  // The host is intentionally single-message: each new operation withdraws the
+  // previous card before the new card enters, instead of mutating it in place.
+  pendingToastRequest = request;
+  return flushPendingToast() || existingToast;
 }
 
 function defaultToastTargetForMessage(id) {
@@ -3351,7 +3373,7 @@ function syncSocialTaskToast(task, { force = false } = {}) {
   const showElapsed = !waitingForSchedule && (status === "running" || status === "need_manual" || (terminal && Boolean(taskStartedAt)));
   const changedToTerminal = terminal && previous && previous !== status;
   if (!force && !existing && !changedToTerminal) return;
-  const toast = showToast(socialTaskToastMessage(task), !["failed", "cancelled"].includes(status), {
+  showToast(socialTaskToastMessage(task), !["failed", "cancelled"].includes(status), {
     key,
     kind: toastKindForTaskStatus(status),
     taskId,
@@ -3361,9 +3383,9 @@ function syncSocialTaskToast(task, { force = false } = {}) {
     persistent: !terminal,
     longTask: showElapsed,
     startedAt: showElapsed ? taskStartedAt : "",
+    scheduled: waitingForSchedule,
     duration: terminal ? 5200 : undefined,
   });
-  if (toast) toast.dataset.toastScheduled = waitingForSchedule ? "true" : "false";
   if (resolved.transition && resolved.nextTask) {
     if (activeTransition?.timer) window.clearTimeout(activeTransition.timer);
     const until = Date.now() + 1400;
@@ -3878,12 +3900,19 @@ function personaThreadsStrategyDetail(group) {
     </div>`;
 }
 
+function syncPersonaDashboardStyles(view) {
+  const stylesheet = $("personaDashboardStyles");
+  if (!stylesheet) return;
+  stylesheet.media = view === "persona_dashboard" ? "all" : "not all";
+}
+
 function setView(view) {
   if (state.liveBrowserExpandedSessionId) closeLiveBrowserLargeModal({ restoreFocus: false });
   clearAccountPasswordRevealState();
   state.personaAccountEditingIds = {};
   clearConsoleNotices();
   state.view = view;
+  syncPersonaDashboardStyles(view);
   syncTaskQueueAutoRefresh();
   syncAccountStatusAutoRefresh();
   if (!["workspace", "accounts"].includes(view)) state.workspaceMenuOpen = false;

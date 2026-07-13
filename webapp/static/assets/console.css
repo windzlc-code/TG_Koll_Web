@@ -6616,6 +6616,13 @@ body.persona-touch-dragging .persona-list-card:active {
   pointer-events: none;
 }
 
+.toast-message.is-replacing-out {
+  opacity: 0;
+  transform: translateY(-7px) scale(.985);
+  transition: opacity 180ms cubic-bezier(.4, 0, 1, 1), transform 180ms cubic-bezier(.4, 0, 1, 1);
+  pointer-events: none;
+}
+
 .toast-message.is-switching-in {
   animation: toastStateIn 180ms cubic-bezier(.2, .72, .3, 1);
 }
@@ -6762,6 +6769,12 @@ body.persona-touch-dragging .persona-list-card:active {
   }
 
   .toast-message.is-switching-out {
+    opacity: 0;
+    transform: none;
+    transition: none;
+  }
+
+  .toast-message.is-replacing-out {
     opacity: 0;
     transform: none;
     transition: none;
