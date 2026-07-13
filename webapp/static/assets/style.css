@@ -3789,39 +3789,19 @@ body.page-admin {
 }
 
 .page-admin .sensitive-eye-icon {
-  position: relative;
-  width: 18px;
-  height: 12px;
-  border: 2px solid currentColor;
-  border-radius: 999px / 720px;
+  display: block;
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.35;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
 }
 
-.page-admin .sensitive-eye-icon::before {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 5px;
-  height: 5px;
-  border-radius: 999px;
-  background: currentColor;
-  transform: translate(-50%, -50%);
-}
-
-.page-admin .sensitive-eye-icon::after {
-  content: "";
-  position: absolute;
-  left: -3px;
-  top: 4px;
-  width: 24px;
-  height: 2px;
-  border-radius: 999px;
-  background: currentColor;
-  transform: rotate(-38deg);
-  transform-origin: center;
-}
-
-.page-admin .sensitive-toggle-btn.is-visible .sensitive-eye-icon::after {
+.page-admin .sensitive-toggle-btn.is-visible .sensitive-eye-slash,
+.page-admin .secret-toggle.is-visible .sensitive-eye-slash {
   display: none;
 }
 

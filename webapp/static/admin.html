@@ -428,7 +428,13 @@
                   <label>RunningHub 企业共享 API 密钥</label>
                   <div class="admin-secret-row">
                     <input id="rtNewPersonaRunningHubApiKey" type="password" placeholder="留空则保留当前密钥">
-                    <button class="ghost secret-toggle" type="button" data-secret-target="rtNewPersonaRunningHubApiKey" aria-label="显示或隐藏 RunningHub API 密钥">◉</button>
+                    <button class="ghost secret-toggle" type="button" data-secret-target="rtNewPersonaRunningHubApiKey" aria-label="显示密钥内容">
+                      <svg class="sensitive-eye-icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path>
+                        <circle cx="12" cy="12" r="3"></circle>
+                        <path class="sensitive-eye-slash" d="M4 20L20 4"></path>
+                      </svg>
+                    </button>
                   </div>
 
                   <div class="admin-content-model-tabs admin-runninghub-slot-tabs" aria-label="RunningHub 链路槽位">

@@ -326,6 +326,41 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         self.assertEqual(payload["llm_api_key_masked"], "•" * len("runtime-secret-key"))
         self.assertNotIn("runtime-secret-key"[:3], payload["llm_api_key_masked"])
 
+    def test_admin_can_reveal_allowlisted_runtime_secret_on_demand(self):
+        runtime = dict(server.DEFAULT_RUNTIME_CONFIG)
+        runtime["llm_api_key_gpt"] = "runtime-secret-key"
+        server._write_runtime_config_file(runtime)
+
+        anonymous = TestClient(self.app)
+        denied = anonymous.post(
+            "/api/admin/runtime_config/secrets/llm_api_key_gpt",
+            headers={"Origin": "http://testserver"},
+        )
+        self.assertEqual(denied.status_code, 401, denied.text)
+
+        customer, _user_id = self._approved_client("runtime-secret-customer")
+        forbidden = customer.post(
+            "/api/admin/runtime_config/secrets/llm_api_key_gpt",
+            headers={"Origin": "http://testserver"},
+        )
+        self.assertEqual(forbidden.status_code, 403, forbidden.text)
+
+        admin, _identity = self._admin_client()
+        revealed = admin.post(
+            "/api/admin/runtime_config/secrets/llm_api_key_gpt",
+            headers={"Origin": "http://testserver"},
+        )
+        self.assertEqual(revealed.status_code, 200, revealed.text)
+        self.assertEqual(revealed.json(), {"key": "llm_api_key_gpt", "value": "runtime-secret-key"})
+        self.assertIn("no-store", revealed.headers["cache-control"])
+        self.assertEqual(revealed.headers["pragma"], "no-cache")
+
+        unknown = admin.post(
+            "/api/admin/runtime_config/secrets/telegram_bot_token",
+            headers={"Origin": "http://testserver"},
+        )
+        self.assertEqual(unknown.status_code, 404, unknown.text)
+
     def test_admin_runtime_config_preserves_existing_secret_for_masked_form_save(self):
         runtime = dict(server.DEFAULT_RUNTIME_CONFIG)
         runtime["llm_api_key_gpt"] = "runtime-secret-key"

@@ -24,8 +24,31 @@ const SENSITIVE_RUNTIME_INPUT_IDS = [
   "rtMuleRouterApiKey",
 ];
 
+const RUNTIME_SECRET_API_NAMES = {
+  rtLlmApiKeyGpt: "llm_api_key_gpt",
+  rtImageGeminiApiKey: "image_model_provider_api_key_gemini",
+  rtNewPersonaRunningHubApiKey: "new_persona_runninghub_api_key",
+  rtMuleRouterApiKey: "mulerouter_api_key",
+};
+const SENSITIVE_EYE_ICON_SVG = `
+  <svg class="sensitive-eye-icon" viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path>
+    <circle cx="12" cy="12" r="3"></circle>
+    <path class="sensitive-eye-slash" d="M4 20L20 4"></path>
+  </svg>`;
+const runtimeSecretConcealTimers = new Map();
+
 function getSensitiveToggleButton(inputId) {
   return document.querySelector(`.sensitive-toggle-btn[data-target="${inputId}"], [data-secret-target="${inputId}"]`);
+}
+
+function updateSensitiveToggleVisual(button, visible) {
+  if (!button) return;
+  button.innerHTML = SENSITIVE_EYE_ICON_SVG;
+  button.classList.toggle("is-visible", !!visible);
+  button.setAttribute("aria-pressed", visible ? "true" : "false");
+  button.setAttribute("aria-label", visible ? "隐藏密钥内容" : "显示密钥内容");
+  button.title = visible ? "隐藏" : "显示";
 }
 
 function hasSavedRuntimeSecret(inputId) {
@@ -44,19 +67,39 @@ function setRuntimeSecretInputState(inputId, configured, maskedValue) {
   if (!input) return;
   const isConfigured = !!configured;
   const mask = isConfigured ? String(maskedValue || "") : "";
+  clearTimeout(runtimeSecretConcealTimers.get(inputId));
+  runtimeSecretConcealTimers.delete(inputId);
   input.type = "password";
   input.value = mask;
   input.dataset.runtimeSecretSaved = isConfigured ? "true" : "false";
   input.dataset.runtimeSecretMask = mask;
+  input.dataset.runtimeSecretRevealed = "false";
   input.classList.toggle("is-saved-runtime-secret", isConfigured);
   input.placeholder = isConfigured ? "已保存 API Key，输入新 Key 后替换" : input.dataset.emptyPlaceholder || input.placeholder;
   const button = getSensitiveToggleButton(inputId);
   if (button) {
-    button.classList.remove("is-visible");
-    button.setAttribute("aria-pressed", "false");
-    button.setAttribute("aria-label", isConfigured ? "已保存 API Key 不支持回显" : "显示密钥内容");
-    button.title = isConfigured ? "已保存 API Key 不支持回显" : "显示";
+    updateSensitiveToggleVisual(button, false);
   }
+}
+
+function concealSavedRuntimeSecret(inputId) {
+  const input = el(inputId);
+  if (!input || !hasSavedRuntimeSecret(inputId)) return;
+  clearTimeout(runtimeSecretConcealTimers.get(inputId));
+  runtimeSecretConcealTimers.delete(inputId);
+  input.type = "password";
+  input.value = input.dataset.runtimeSecretMask || "";
+  input.dataset.runtimeSecretRevealed = "false";
+  updateSensitiveToggleVisual(getSensitiveToggleButton(inputId), false);
+}
+
+function concealAllSavedRuntimeSecrets() {
+  Object.keys(RUNTIME_SECRET_API_NAMES).forEach(concealSavedRuntimeSecret);
+}
+
+function scheduleRuntimeSecretConceal(inputId) {
+  clearTimeout(runtimeSecretConcealTimers.get(inputId));
+  runtimeSecretConcealTimers.set(inputId, setTimeout(() => concealSavedRuntimeSecret(inputId), 60_000));
 }
 
 function normalizeAdminPage(value) {
@@ -78,7 +121,10 @@ function setActiveAdminPage(page, updateHash = true) {
     }
     return false;
   }
-  if (nextPage !== adminState.activePage) clearRevealedUserPassword();
+  if (nextPage !== adminState.activePage) {
+    clearRevealedUserPassword();
+    concealAllSavedRuntimeSecrets();
+  }
   adminState.activePage = nextPage;
   const pageLabel = ADMIN_PAGE_LABELS[nextPage] || "运营概览";
   document.querySelectorAll("[data-page]").forEach((node) => {
@@ -1827,7 +1873,7 @@ function initSensitiveInputToggles() {
     button.type = "button";
     button.className = "ghost sensitive-toggle-btn";
     button.dataset.target = id;
-    button.innerHTML = `<span class="sensitive-eye-icon" aria-hidden="true"></span>`;
+    button.innerHTML = SENSITIVE_EYE_ICON_SVG;
     button.setAttribute("aria-label", "\u663e\u793a\u5bc6\u94a5\u5185\u5bb9");
     button.title = "\u663e\u793a";
     button.setAttribute("aria-pressed", "false");
@@ -1843,37 +1889,60 @@ function initRuntimeSecretMaskInputs() {
     input.autocomplete = "off";
     input.setAttribute("spellcheck", "false");
     if (!input.dataset.emptyPlaceholder) input.dataset.emptyPlaceholder = input.placeholder || "";
+    updateSensitiveToggleVisual(getSensitiveToggleButton(id), input.type === "text");
     input.addEventListener("focus", () => {
-      if (hasSavedRuntimeSecret(id)) input.select();
+      if (hasSavedRuntimeSecret(id) && input.dataset.runtimeSecretRevealed !== "true") input.select();
     });
     input.addEventListener("input", () => {
       if (input.value === input.dataset.runtimeSecretMask) return;
+      clearTimeout(runtimeSecretConcealTimers.get(id));
+      runtimeSecretConcealTimers.delete(id);
       input.dataset.runtimeSecretSaved = "false";
+      input.dataset.runtimeSecretRevealed = "false";
       input.classList.remove("is-saved-runtime-secret");
       const button = getSensitiveToggleButton(id);
       if (button) {
-        button.setAttribute("aria-label", "显示密钥内容");
-        button.title = "显示";
+        updateSensitiveToggleVisual(button, input.type === "text");
       }
     });
   });
 }
 
-function toggleSensitiveInput(button) {
+async function toggleSensitiveInput(button) {
   const input = el(button.dataset.target || button.dataset.secretTarget || "");
   if (!input) return;
   if (hasSavedRuntimeSecret(input.id)) {
-    setMsg("runtimeMsg", "API Key 已保存，为保护安全不支持回显；如需替换，请直接输入新的 Key。", true);
-    input.focus();
-    input.select();
+    if (input.dataset.runtimeSecretRevealed === "true") {
+      concealSavedRuntimeSecret(input.id);
+      input.focus();
+      return;
+    }
+    const secretName = RUNTIME_SECRET_API_NAMES[input.id];
+    if (!secretName) return;
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    try {
+      const response = await api(`/api/admin/runtime_config/secrets/${encodeURIComponent(secretName)}`, { method: "POST" });
+      const value = String(response?.value || "");
+      if (!value) throw new Error("API Key 尚未配置");
+      input.value = value;
+      input.type = "text";
+      input.dataset.runtimeSecretRevealed = "true";
+      updateSensitiveToggleVisual(button, true);
+      scheduleRuntimeSecretConceal(input.id);
+      setMsg("runtimeMsg", "API Key 已显示，离开当前页面或 60 秒后会自动隐藏。", false);
+      input.focus();
+    } catch (error) {
+      setMsg("runtimeMsg", error.detail || error.message || "读取 API Key 失败", true);
+    } finally {
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+    }
     return;
   }
   const willShow = input.type === "password";
   input.type = willShow ? "text" : "password";
-  button.classList.toggle("is-visible", willShow);
-  button.setAttribute("aria-label", willShow ? "\u9690\u85cf\u5bc6\u94a5\u5185\u5bb9" : "\u663e\u793a\u5bc6\u94a5\u5185\u5bb9");
-  button.title = willShow ? "\u9690\u85cf" : "\u663e\u793a";
-  button.setAttribute("aria-pressed", willShow ? "true" : "false");
+  updateSensitiveToggleVisual(button, willShow);
   input.focus();
 }
 
