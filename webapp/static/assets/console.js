@@ -968,16 +968,15 @@ function eventKindLabel(kind) {
 }
 
 const toastTimers = new WeakMap();
-const toastElapsedTimers = new WeakMap();
 const toastSwitchTimers = new WeakMap();
 const toastSwitchCleanupTimers = new WeakMap();
 const toastRemovalTimers = new WeakMap();
-const toastStartedAtByKey = new Map();
 const deliveredToastStateKeys = new Set();
 const uploadPreviewUrls = new WeakMap();
 let pendingToastRequest = null;
 let toastReplacementInProgress = false;
 const TOAST_REPLACEMENT_DURATION = 180;
+const TOAST_DURATION = 5000;
 
 function ensureToastHost() {
   let host = $("toastHost");
@@ -1006,14 +1005,10 @@ function clearToastRemovalTimer(toast) {
   toastRemovalTimers.delete(toast);
 }
 
-function scheduleToastExpiry(toast, persistent, duration) {
+function scheduleToastExpiry(toast) {
   const existingTimer = toastTimers.get(toast);
   if (existingTimer) window.clearTimeout(existingTimer);
-  if (persistent) {
-    toastTimers.delete(toast);
-    return;
-  }
-  toastTimers.set(toast, window.setTimeout(() => dismissToast(toast), duration));
+  toastTimers.set(toast, window.setTimeout(() => dismissToast(toast), TOAST_DURATION));
 }
 
 function dismissToast(toast, options = {}) {
@@ -1024,12 +1019,6 @@ function dismissToast(toast, options = {}) {
   const timer = toastTimers.get(toast);
   if (timer) window.clearTimeout(timer);
   toastTimers.delete(toast);
-  const elapsedTimer = toastElapsedTimers.get(toast);
-  if (elapsedTimer) window.clearInterval(elapsedTimer);
-  toastElapsedTimers.delete(toast);
-  if (toast.dataset.toastPersistent !== "true" && toast.dataset.toastKey) {
-    toastStartedAtByKey.delete(toast.dataset.toastKey);
-  }
   toast.classList.add("is-leaving");
   const reduceMotion = Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches);
   const removalTimer = window.setTimeout(() => {
@@ -1046,12 +1035,6 @@ function removeToastNow(toast) {
   const timer = toastTimers.get(toast);
   if (timer) window.clearTimeout(timer);
   toastTimers.delete(toast);
-  const elapsedTimer = toastElapsedTimers.get(toast);
-  if (elapsedTimer) window.clearInterval(elapsedTimer);
-  toastElapsedTimers.delete(toast);
-  if (toast.dataset.toastPersistent !== "true" && toast.dataset.toastKey) {
-    toastStartedAtByKey.delete(toast.dataset.toastKey);
-  }
   toast.remove();
 }
 
@@ -1068,14 +1051,6 @@ function dismissToastByKey(key, options = {}) {
 function toastTargetForKind(kind, options = {}) {
   const normalized = String(kind || "").trim();
   if (options.target && typeof options.target === "object") return options.target;
-  if (options.openBrowser && options.taskId) {
-    return {
-      view: "accounts",
-      action: "live_browser",
-      taskId: String(options.taskId || "").trim(),
-      personaId: String(options.personaId || "").trim(),
-    };
-  }
   if (options.taskId) {
     return {
       view: "tasks",
@@ -1114,7 +1089,7 @@ function toastTimestampMs(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function formatToastElapsed(milliseconds) {
+function formatElapsed(milliseconds) {
   const totalSeconds = Math.max(0, Math.floor(Number(milliseconds || 0) / 1000));
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -1124,57 +1099,20 @@ function formatToastElapsed(milliseconds) {
     : [minutes, seconds].map((part) => String(part).padStart(2, "0")).join(":");
 }
 
-function updateToastElapsed(toast) {
-  if (!toast || toast.dataset.toastLongTask !== "true") return;
-  const elapsedNode = toast.querySelector(".toast-message-elapsed");
-  if (!elapsedNode) return;
-  const startedAt = toastTimestampMs(toast.dataset.toastStartedAt);
-  const finishedAt = toastTimestampMs(toast.dataset.toastFinishedAt) || Date.now();
-  const elapsed = formatToastElapsed(Math.max(0, finishedAt - startedAt));
-  elapsedNode.textContent = elapsed;
-  elapsedNode.setAttribute("aria-label", `已用时 ${elapsed}`);
-}
-
-function syncToastElapsedTimer(toast, { key, longTask, terminal, startedAt }) {
-  const currentTimer = toastElapsedTimers.get(toast);
-  if (currentTimer) window.clearInterval(currentTimer);
-  toastElapsedTimers.delete(toast);
-  if (!longTask) return;
-  const resolvedStartedAt = toastTimestampMs(startedAt)
-    || toastTimestampMs(toast.dataset.toastStartedAt)
-    || toastStartedAtByKey.get(key)
-    || Date.now();
-  toastStartedAtByKey.set(key, resolvedStartedAt);
-  toast.dataset.toastStartedAt = String(resolvedStartedAt);
-  if (terminal) {
-    if (!toast.dataset.toastFinishedAt) toast.dataset.toastFinishedAt = String(Date.now());
-  } else {
-    delete toast.dataset.toastFinishedAt;
-  }
-  updateToastElapsed(toast);
-  if (!terminal) {
-    toastElapsedTimers.set(toast, window.setInterval(() => updateToastElapsed(toast), 1000));
-  }
-}
-
-function applyToastMeta(toast, { key, ok, message, persistent, target, status, longTask, startedAt, scheduled }) {
+function applyToastMeta(toast, { key, ok, message, target, status, scheduled }) {
   if (!toast) return;
-  const normalizedStatus = normalizeToastStatus(status, ok, persistent);
+  const normalizedStatus = normalizeToastStatus(status, ok);
   const terminal = ["success", "failed", "error", "cancelled", "warning", "warn"].includes(normalizedStatus)
-    || (normalizedStatus === "need_manual" && !persistent);
+    || normalizedStatus === "need_manual";
   toast.className = [
     "toast-message",
     ok ? "is-ok" : "is-bad",
-    persistent ? "is-persistent" : "",
     target ? "is-clickable" : "",
-    longTask ? "is-long-task" : "",
     terminal ? "is-terminal" : "is-active",
     `is-status-${normalizedStatus}`,
   ].filter(Boolean).join(" ");
   toast.dataset.toastKey = key;
   toast.dataset.toastStateKey = `${key}:${normalizedStatus}`;
-  toast.dataset.toastPersistent = persistent ? "true" : "false";
-  toast.dataset.toastLongTask = longTask ? "true" : "false";
   toast.dataset.toastStatus = normalizedStatus;
   if (typeof scheduled === "boolean") {
     toast.dataset.toastScheduled = scheduled ? "true" : "false";
@@ -1194,7 +1132,6 @@ function applyToastMeta(toast, { key, ok, message, persistent, target, status, l
   }
   const messageNode = toast.querySelector(".toast-message-text");
   if (messageNode) messageNode.textContent = message;
-  syncToastElapsedTimer(toast, { key, longTask, terminal, startedAt });
 }
 
 async function openToastTarget(rawTarget) {
@@ -1210,11 +1147,6 @@ async function openToastTarget(rawTarget) {
   if (targetAction === "persona_image_generation" && targetPersonaId) {
     if (!(await confirmLeaveTransientWorkspaceState())) return;
     await openPersonaImageGeneration(targetPersonaId);
-    return;
-  }
-  if (targetAction === "live_browser") {
-    if (!(await confirmLeaveTransientWorkspaceState())) return;
-    openLiveBrowserTaskView(String(target.taskId || ""));
     return;
   }
   if (view) {
@@ -1248,37 +1180,16 @@ async function openToastTarget(rawTarget) {
   }
 }
 
-function toastProgressSegmentsMarkup() {
-  const opacities = [
-    .025, .035, .05, .07, .10, .14, .19, .26, .35, .46, .59, .74, .9,
-    1,
-    .9, .74, .59, .46, .35, .26, .19, .14, .10, .07, .05, .035, .025,
-  ];
-  const step = 1.05;
-  return opacities.map((opacity, index) => {
-    const start = -(index * step);
-    const end = start - 100;
-    const peak = opacity === 1 ? " data-toast-segment-peak" : "";
-    return `<rect pathLength="100"${peak} style="--toast-segment-start: ${start.toFixed(2)}px; --toast-segment-end: ${end.toFixed(2)}px; --toast-segment-opacity: ${opacity}"></rect>`;
-  }).join("");
-}
-
 function createToast(request) {
-  const { host, toastKey, ok, message, persistent, target, status, longTask, startedAt, duration, scheduled } = request;
+  const { host, toastKey, ok, message, target, status, scheduled } = request;
   const toast = document.createElement("div");
   toast.innerHTML = `
     <span class="toast-message-body">
       <span class="toast-message-text">${esc(message)}</span>
-      <span class="toast-message-meta">
-        <time class="toast-message-elapsed">00:00</time>
-      </span>
     </span>
     <button type="button" class="toast-message-close" aria-label="关闭提示">×</button>
-    <svg class="toast-message-progress" aria-hidden="true">
-      ${toastProgressSegmentsMarkup()}
-    </svg>
   `;
-  applyToastMeta(toast, { key: toastKey, ok, message, persistent, target, status, longTask, startedAt, scheduled });
+  applyToastMeta(toast, { key: toastKey, ok, message, target, status, scheduled });
   host.appendChild(toast);
   toast.querySelector(".toast-message-close")?.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -1294,7 +1205,7 @@ function createToast(request) {
     event.preventDefault();
     openToastTarget(toast.dataset.toastTarget || "").catch(() => {});
   });
-  scheduleToastExpiry(toast, persistent, duration);
+  scheduleToastExpiry(toast);
   return toast;
 }
 
@@ -1309,12 +1220,6 @@ function removeToastsBeforeInsert(host, nextToastKey) {
     const timer = toastTimers.get(toast);
     if (timer) window.clearTimeout(timer);
     toastTimers.delete(toast);
-    const elapsedTimer = toastElapsedTimers.get(toast);
-    if (elapsedTimer) window.clearInterval(elapsedTimer);
-    toastElapsedTimers.delete(toast);
-    if (toast.dataset.toastPersistent !== "true" && toast.dataset.toastKey !== nextToastKey) {
-      toastStartedAtByKey.delete(toast.dataset.toastKey);
-    }
     toast.classList.remove("is-leaving", "is-switching-out", "is-switching-in");
     toast.classList.add("is-replacing-out");
   });
@@ -1339,34 +1244,26 @@ function showToast(text, ok = true, options = {}) {
   if (!message) return null;
   const host = ensureToastHost();
   const toastKey = String(options.key || `${ok ? "ok" : "bad"}:${message}`);
-  const persistent = Boolean(options.persistent);
   const target = toastTargetForKind(options.kind || "", options);
-  const status = normalizeToastStatus(options.status || options.kind, ok, persistent);
+  const status = normalizeToastStatus(options.status || options.kind, ok);
   const existingToast = Array.from(host.children).find((item) => item.dataset.toastKey === toastKey);
   const toastStateKey = `${toastKey}:${status}`;
-  const deliverOnce = Boolean(options.oncePerState || options.taskId || persistent);
+  const deliverOnce = Boolean(options.oncePerState || options.taskId);
   if (deliverOnce && !existingToast && deliveredToastStateKeys.has(toastStateKey)) return null;
-  const longTask = options.longTask === undefined
-    ? Boolean(options.taskId || persistent || existingToast?.dataset.toastLongTask === "true")
-    : Boolean(options.longTask);
-  const startedAt = options.startedAt || toastStartedAtByKey.get(toastKey) || "";
-  const duration = Number(options.duration || (ok ? 3200 : 5200));
   const scheduled = typeof options.scheduled === "boolean" ? options.scheduled : undefined;
-  const request = { host, toastKey, ok, message, persistent, target, status, longTask, startedAt, duration, scheduled };
+  const request = { host, toastKey, ok, message, target, status, scheduled };
   if (deliverOnce) deliveredToastStateKeys.add(toastStateKey);
 
   if (existingToast && !toastReplacementInProgress) {
     const previousMessage = existingToast.querySelector(".toast-message-text")?.textContent || "";
     const presentationChanged = previousMessage !== message
-      || String(existingToast.dataset.toastStatus || "") !== status
-      || String(existingToast.dataset.toastPersistent || "false") !== (persistent ? "true" : "false");
-    const isTaskRefresh = !presentationChanged && Boolean(options.taskId || existingToast.dataset.toastLongTask === "true");
+      || String(existingToast.dataset.toastStatus || "") !== status;
+    const isTaskRefresh = !presentationChanged && Boolean(options.taskId);
     if (isTaskRefresh) {
       clearToastSwitchTimers(existingToast);
       clearToastRemovalTimer(existingToast);
       existingToast.classList.remove("is-replacing-out", "is-leaving", "is-switching-out", "is-switching-in");
       applyToastMeta(existingToast, request);
-      scheduleToastExpiry(existingToast, persistent, duration);
       return existingToast;
     }
   }
@@ -3206,11 +3103,59 @@ function isActionLocked(...parts) {
   return Boolean(state.actionLocks[actionLockKey(...parts)]);
 }
 
+function actionLockStartedAt(...parts) {
+  const value = state.actionLocks[actionLockKey(...parts)];
+  return toastTimestampMs(value?.startedAt || value?.started_at || value);
+}
+
+function actionTaskStartedAt(task, ...lockParts) {
+  return toastTimestampMs(task?.started_at || task?.startedAt || task?.created_at || task?.createdAt)
+    || actionLockStartedAt(...lockParts)
+    || Date.now();
+}
+
+let actionElapsedTimer = 0;
+let actionElapsedSyncFrame = 0;
+
+function syncActionElapsedTimers() {
+  document.querySelectorAll("[data-action-elapsed]").forEach((node) => {
+    const startedAt = toastTimestampMs(node.dataset.actionElapsed);
+    const elapsed = formatElapsed(Math.max(0, Date.now() - (startedAt || Date.now())));
+    node.textContent = elapsed;
+    node.setAttribute("aria-label", `已用时 ${elapsed}`);
+  });
+  const hasActiveTimer = Boolean(document.querySelector("[data-action-elapsed]"));
+  if (!hasActiveTimer && actionElapsedTimer) {
+    window.clearInterval(actionElapsedTimer);
+    actionElapsedTimer = 0;
+  }
+  if (hasActiveTimer && !actionElapsedTimer) {
+    actionElapsedTimer = window.setInterval(syncActionElapsedTimers, 1000);
+  }
+}
+
+function scheduleActionElapsedSync() {
+  if (actionElapsedSyncFrame) return;
+  actionElapsedSyncFrame = window.requestAnimationFrame(() => {
+    actionElapsedSyncFrame = 0;
+    syncActionElapsedTimers();
+  });
+}
+
+function renderBusyButtonContent(label, busy, startedAt = 0) {
+  if (!busy) return esc(label);
+  scheduleActionElapsedSync();
+  const resolvedStartedAt = toastTimestampMs(startedAt) || Date.now();
+  const elapsed = formatElapsed(Math.max(0, Date.now() - resolvedStartedAt));
+  return `<span class="task-button-busy"><svg class="task-button-spinner" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 3.5a8.5 8.5 0 0 1 8.5 8.5"></path></svg><span>${esc(label)}</span><time data-action-elapsed="${esc(resolvedStartedAt)}" aria-label="已用时 ${esc(elapsed)}">${esc(elapsed)}</time></span>`;
+}
+
 function setActionLocked(parts, locked = true) {
   const key = Array.isArray(parts) ? actionLockKey(...parts) : String(parts || "");
   if (!key) return;
-  if (locked) state.actionLocks[key] = true;
+  if (locked) state.actionLocks[key] = { startedAt: Date.now() };
   else delete state.actionLocks[key];
+  scheduleActionElapsedSync();
 }
 
 function activeTaskStatus(status) {
@@ -3432,8 +3377,6 @@ function syncSocialTaskToast(task, { force = false } = {}) {
   const waitingForManual = status === "need_manual" && isUnfinishedTask(task);
   const waitingForSchedule = isFutureScheduledSocialTask(task);
   const terminal = socialTaskToastTerminal(task);
-  const taskStartedAt = task?.started_at || task?.startedAt || "";
-  const showElapsed = !waitingForSchedule && (status === "running" || status === "need_manual" || (terminal && Boolean(taskStartedAt)));
   const changedToTerminal = terminal && previous && previous !== status;
   if (!force && !existing && !changedToTerminal) return;
   showToast(socialTaskToastMessage(task), !["failed", "cancelled"].includes(status), {
@@ -3442,12 +3385,7 @@ function syncSocialTaskToast(task, { force = false } = {}) {
     taskId,
     taskPanel: task?.persona_id ? "persona" : "regular",
     personaId: task?.persona_id || "",
-    openBrowser: true,
-    persistent: !terminal,
-    longTask: showElapsed,
-    startedAt: showElapsed ? taskStartedAt : "",
     scheduled: waitingForSchedule,
-    duration: terminal ? 5200 : undefined,
   });
   if (resolved.transition && resolved.nextTask) {
     if (activeTransition?.timer) window.clearTimeout(activeTransition.timer);
@@ -3471,12 +3409,7 @@ function syncSocialTaskToasts(tasks = []) {
 }
 
 function hasActiveSocialTaskToast() {
-  return (state.socialTasks || []).some((task) => activeSocialAutomationTask(task) && !isFutureScheduledSocialTask(task))
-    || Array.from(ensureToastHost().children).some((item) => (
-      String(item.dataset.toastKey || "").startsWith("social-task:")
-      && item.classList.contains("is-persistent")
-      && item.dataset.toastScheduled !== "true"
-    ));
+  return (state.socialTasks || []).some((task) => activeSocialAutomationTask(task) && !isFutureScheduledSocialTask(task));
 }
 
 function syncSocialTaskScheduleWake() {
@@ -5573,6 +5506,7 @@ function renderPersonaImagePanel(persona) {
   const imageRunState = personaGenerateRunState(persona.id);
   const imageBusy = isActionLocked("persona", persona.id, "image_generate")
     || (String(imageRunState?.kind || "") === "persona_image" && String(imageRunState?.status || "") === "running");
+  const imageBusyStartedAt = actionTaskStartedAt(imageRunState, "persona", persona.id, "image_generate");
   const library = personaImageLibraryState(persona.id);
   const libraryItems = Array.isArray(library?.items) ? library.items : [];
   const hasImages = libraryItems.length > 0;
@@ -5593,7 +5527,7 @@ function renderPersonaImagePanel(persona) {
         <span class="persona-panel-intro">${esc(imageIntro)}</span>
       </div>
       <div class="row-actions">
-        <button type="button" class="primary" data-persona-generate-image ${imageBusy ? "disabled" : ""}>${esc(generateLabel)}</button>
+        <button type="button" class="primary" data-persona-generate-image ${imageBusy ? "disabled" : ""}>${renderBusyButtonContent(generateLabel, imageBusy, imageBusyStartedAt)}</button>
         <input id="personaImageUploadFile" type="file" accept="image/*" data-persona-upload-image-file hidden />
       </div>
       <div class="persona-inline-panel persona-inline-panel--nested">
@@ -6210,8 +6144,12 @@ function renderUnifiedAutomationModule() {
   const accounts = persona ? personaAutomationAccounts(persona, platform) : [];
   const selectedAccount = persona ? selectedPersonaAutomationAccount(persona, platform) : null;
   const selectedAccountId = String(selectedAccount?.id || "");
-  const replyBusy = Boolean(selectedAccountId) && (isActionLocked("social", selectedAccountId, "threads_auto_reply") || activeSocialTaskFor({ accountId: selectedAccountId, taskType: "threads_auto_reply" }));
-  const warmupBusy = Boolean(selectedAccountId) && (isActionLocked("social", selectedAccountId, "threads_warmup") || activeSocialTaskFor({ accountId: selectedAccountId, taskType: "threads_warmup" }));
+  const replyTask = selectedAccountId ? activeSocialTaskFor({ accountId: selectedAccountId, taskType: "threads_auto_reply" }) : null;
+  const warmupTask = selectedAccountId ? activeSocialTaskFor({ accountId: selectedAccountId, taskType: "threads_warmup" }) : null;
+  const replyBusy = Boolean(selectedAccountId) && (isActionLocked("social", selectedAccountId, "threads_auto_reply") || replyTask);
+  const warmupBusy = Boolean(selectedAccountId) && (isActionLocked("social", selectedAccountId, "threads_warmup") || warmupTask);
+  const replyBusyStartedAt = actionTaskStartedAt(replyTask, "social", selectedAccountId, "threads_auto_reply");
+  const warmupBusyStartedAt = actionTaskStartedAt(warmupTask, "social", selectedAccountId, "threads_warmup");
   const credentialsMask = selectedAccount?.login_password_configured ? "已保存密码，留空则沿用" : "登录密码";
   const threadsOnlyNotice = platform !== "threads" && ["reply_comment", "reply_hot", "warmup"].includes(currentStep)
     ? `<div class="empty-state">当前操作只支持 Threads。请先切换到 Threads 平台。</div>`
@@ -6284,7 +6222,7 @@ function renderUnifiedAutomationModule() {
         ` : ""}
         ${personaThreadsStrategyDetail(strategyGroup)}
         <div class="row-actions">
-          <button type="button" data-persona-run-threads="${currentStep === "reply_hot" ? "reply_hot" : "reply_comment"}" ${selectedAccount && !replyBusy ? "" : "disabled"}>${replyBusy ? "自动回复执行中" : "提交自动回复任务"}</button>
+          <button type="button" data-persona-run-threads="${currentStep === "reply_hot" ? "reply_hot" : "reply_comment"}" ${selectedAccount && !replyBusy ? "" : "disabled"}>${replyBusy ? renderBusyButtonContent("自动回复执行中", true, replyBusyStartedAt) : "提交自动回复任务"}</button>
         </div>
       </div>`;
   } else {
@@ -6314,7 +6252,7 @@ function renderUnifiedAutomationModule() {
         ` : ""}
         ${personaThreadsStrategyDetail("threads_warmup")}
         <div class="row-actions">
-          <button type="button" data-persona-run-threads="warmup" ${selectedAccount && !warmupBusy ? "" : "disabled"}>${warmupBusy ? "养号执行中" : "提交养号任务"}</button>
+          <button type="button" data-persona-run-threads="warmup" ${selectedAccount && !warmupBusy ? "" : "disabled"}>${warmupBusy ? renderBusyButtonContent("养号执行中", true, warmupBusyStartedAt) : "提交养号任务"}</button>
         </div>
       </div>`;
   }
@@ -7786,20 +7724,14 @@ function appendEvent(kind, message, options = {}) {
   const host = $("eventStream");
   if (host) host.replaceChildren();
   const ok = !["error", "failed", "warn", "warning"].includes(eventKind);
-  const persistent = ["queued", "progress", "running"].includes(eventKind);
   showToast(`${eventKindLabel(eventKind)}：${localized}`, ok, {
     key: options.key || (options.taskId ? `task:${options.taskId}` : `event:${eventKind}:${localized}`),
     kind: eventKind,
     taskId: options.taskId,
     taskPanel: options.taskPanel,
     personaId: options.personaId,
-    openBrowser: options.openBrowser,
     openDetail: options.openDetail,
     target: options.target,
-    persistent,
-    longTask: options.longTask === undefined ? Boolean(options.taskId || persistent) : Boolean(options.longTask),
-    startedAt: options.startedAt || "",
-    duration: persistent ? 0 : (ok ? 4200 : 6200),
   });
 }
 
@@ -7920,7 +7852,6 @@ async function submitPersonaPublishTask() {
       state.personaPublishResults[String(persona.id)] = `<div class="persona-warning-inline">${esc(error?.detail || error?.message || "任务结果轮询失败")}</div>`;
       updatePersonaPublishResultView(persona.id);
     });
-    if (taskId && !waitingForSchedule) openLiveBrowserTaskView(taskId);
     await loadSocial();
   } finally {
     setActionLocked(lockParts, false);
@@ -7987,8 +7918,6 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
     showMsg(messageId, `正在提交 ${posts.length} 条${publishContentSourceLabel(source)}发布任务...`, true, {
       key: batchToastKey,
       kind: "queued",
-      persistent: true,
-      longTask: false,
     });
     const results = [];
     for (const [index, post] of posts.entries()) {
@@ -8014,8 +7943,6 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
     }
     const immediateTasks = results.map((item) => item?.task).filter((task) => task?.id && !isFutureScheduledSocialTask(task));
     const immediateTaskIds = immediateTasks.map((task) => String(task.id));
-    const firstTaskId = immediateTaskIds[0] || "";
-    if (firstTaskId) openLiveBrowserTaskView(firstTaskId);
     if (immediateTaskIds.length) {
       watchPersonaPublishTaskSequence(immediateTaskIds, persona.id).catch((error) => {
         showMsg(messageId, error?.detail || error?.message || "连续发布状态跟踪失败", false, {
@@ -8616,9 +8543,7 @@ async function runPersonaThreadsTask(kind) {
       taskId: result.task?.id || "",
       taskPanel: "persona",
       personaId: persona.id,
-      persistent: Boolean(result.task?.id),
     });
-    openLiveBrowserTaskView(String(result.task?.id || ""));
   } finally {
     setActionLocked(lockParts, false);
     refreshAutomationWorkSurface();
@@ -8719,10 +8644,6 @@ async function executeSimpleFlow() {
           ...resultTasks.map((task) => String(task.id || "").trim()),
           ...createdTasks.map((task) => String(task?.id || "").trim()),
         ].filter(Boolean);
-        if (taskIds.length || createdTasks.length) {
-          const firstTaskId = taskIds[0] || "";
-          if (firstTaskId) openLiveBrowserTaskView(firstTaskId);
-        }
         return;
       }
     }
@@ -10292,7 +10213,6 @@ async function watchPersonaPublishTaskSequence(taskIds = [], personaId = "") {
           taskId,
           taskPanel: "persona",
           personaId,
-          openBrowser: true,
         });
         throw new Error(message);
       }
@@ -10788,15 +10708,10 @@ function showPersonaGenerateRunToast(personaId, runState) {
   const message = display.isError && runState?.error
     ? `${display.label}：${runState.error}`
     : display.label;
-  const duration = display.isRunning ? 6000 : (ok ? 4200 : 6200);
   showToast(message, ok, {
     key: `persona-generate:${personaId}:${display.kind}`,
     kind: display.isRunning ? "running" : (display.isError ? "error" : "success"),
-    persistent: display.isRunning,
-    longTask: true,
-    startedAt: runState?.startedAt || "",
     target,
-    duration,
   });
 }
 
@@ -11755,7 +11670,6 @@ async function deletePersonaLibraryImage(imageId) {
   if (errorText && ["failed", "cancelled"].includes(status)) {
     showToast(errorText, false, {
       key: `persona-media-task:${taskId}:${status}:${errorText}`,
-      duration: 6200,
     });
   }
   if (
@@ -12770,6 +12684,7 @@ function renderPersonaHotCandidatePicker(persona, form) {
   const warnings = Array.isArray(hotState.warnings) ? hotState.warnings : [];
   const cookieStatuses = Array.isArray(hotState.cookie_statuses) ? hotState.cookie_statuses : [];
   const hotBusy = isActionLocked("persona", persona?.id || "", "hot_candidates");
+  const hotBusyStartedAt = actionLockStartedAt("persona", persona?.id || "", "hot_candidates");
   form.hotSearchMode = normalizePersonaHotSearchMode(form.hotSearchMode || hotState.search_mode);
   form.hotFreshnessDays = normalizePersonaHotFreshnessDays(hotState.freshness_days ?? form.hotFreshnessDays);
   const hotMode = form.hotSearchMode;
@@ -12797,7 +12712,7 @@ function renderPersonaHotCandidatePicker(persona, form) {
           <input type="number" min="0" max="15" step="1" value="${esc(hotFreshnessDays)}" data-persona-hot-freshness-days ${hotBusy ? "disabled" : ""} aria-label="热点新鲜度天数">
           <span data-persona-hot-freshness-unit>${hotFreshnessDays > 0 ? "天内" : "不限"}</span>
         </label>
-        <button type="button" class="primary" data-persona-fetch-hot ${hotBusy ? "disabled" : ""}>${hotBusy ? "正在抓取热点..." : "抓取热点"}</button>
+        <button type="button" class="primary" data-persona-fetch-hot ${hotBusy ? "disabled" : ""}>${hotBusy ? renderBusyButtonContent("正在抓取热点", true, hotBusyStartedAt) : "抓取热点"}</button>
         <button type="button" data-persona-fetch-hot-refresh ${candidates.length && !hotBusy ? "" : "disabled"}>${hotBusy ? "正在刷新..." : "刷新候选"}</button>
       </div>
     </div>
@@ -12953,6 +12868,7 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
   const uploadAccept = "image/*";
   const showSourceUpload = Number(mediaMeta.minImages || 0) > 0;
   const mediaBusy = !isFavoriteMedia && post && (isActionLocked("media_task", persona.id, post.id, currentTaskType) || personaMediaTaskIsActive(persona.id, post.id, currentTaskType));
+  const mediaBusyStartedAt = actionLockStartedAt("media_task", persona.id, post?.id || "", currentTaskType);
   const operationMode = isFavoriteMedia ? "replace" : (mediaForm.operationMode === "generate" ? "generate" : "replace");
   return `
     <section class="persona-compose-media-side persona-production-section">
@@ -13022,7 +12938,7 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
               hint: mediaMeta.files || "拖动任务需要的素材到这里，或点击选择。",
             }) : ""}
             <div class="row-actions">
-              <button type="button" class="primary" data-persona-run-media-task ${mediaBusy ? "disabled" : ""}>${mediaBusy ? "配图任务执行中" : "生成预览"}</button>
+              <button type="button" class="primary" data-persona-run-media-task ${mediaBusy ? "disabled" : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, mediaBusyStartedAt) : "生成预览"}</button>
             </div>
             <div class="persona-inline-panel persona-inline-panel--nested">
               <strong>任务结果预览</strong>
@@ -13929,7 +13845,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
         ` : generateMode === "hot" ? `
           ${renderPersonaHotCandidatePicker(persona, generateForm)}
           ${personaHotCandidates(persona).length ? `<div class="row-actions">
-            <button type="button" class="primary" data-persona-import-hot-drafts ${personaHotSelectedCandidates(persona).length && !hotImportBusy ? "" : "disabled"}>${hotImportBusy ? "正在导入热点..." : "导入到当前人设草稿库"}</button>
+            <button type="button" class="primary" data-persona-import-hot-drafts ${personaHotSelectedCandidates(persona).length && !hotImportBusy ? "" : "disabled"}>${hotImportBusy ? renderBusyButtonContent("正在导入热点", true, actionLockStartedAt("persona", persona.id, "hot_import")) : "导入到当前人设草稿库"}</button>
             <button type="button" data-persona-route-step="content:posts">查看草稿</button>
           </div>` : ""}
         ` : `
@@ -13940,7 +13856,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
           <label>可选人设记忆（已识别 ${esc(memoryRows.length)} 条）</label>
           ${renderPersonaMemoryOptions(persona, generateForm.selectedMemoryIds || [])}
           <div class="row-actions">
-            <button type="button" class="primary" data-persona-generate-posts ${preflight.ready && !generateBusy ? "" : "disabled"}>${isRewriteMode ? "AI 重写推文" : "自动生成草稿"}</button>
+            <button type="button" class="primary" data-persona-generate-posts ${preflight.ready && !generateBusy ? "" : "disabled"}>${generateBusy ? renderBusyButtonContent(isRewriteMode ? "正在重写推文" : "正在生成草稿", true, actionLockStartedAt("persona", persona.id, "generate_posts")) : (isRewriteMode ? "AI 重写推文" : "自动生成草稿")}</button>
             ${isRewriteMode ? "" : `<button type="button" data-persona-route-step="content:posts">查看草稿</button>`}
           </div>
         `}
@@ -14123,9 +14039,13 @@ function renderPersonaContentPanel(persona, account, profile, step) {
     const publishSource = personaPostSource(persona);
     const publishSourceLabel = publishSource === "favorites" ? "收藏推文" : "草稿";
     const publishCanSubmit = canSubmitPublishWithAccount(publishAccount);
+    const publishTask = publishCanSubmit && selectedPost
+      ? activeSocialTaskFor({ accountId: publishAccount.id, personaId: persona.id, taskType: "publish_post", postId: selectedPost.id, postSource: publishSource })
+      : null;
     const publishBusy = publishCanSubmit && selectedPost
-      ? (isActionLocked("publish", publishSource, persona.id, selectedPost.id, publishAccount.id) || activeSocialTaskFor({ accountId: publishAccount.id, personaId: persona.id, taskType: "publish_post", postId: selectedPost.id, postSource: publishSource }))
+      ? (isActionLocked("publish", publishSource, persona.id, selectedPost.id, publishAccount.id) || publishTask)
       : false;
+    const publishBusyStartedAt = actionTaskStartedAt(publishTask, "publish", publishSource, persona.id, selectedPost?.id || "", publishAccount?.id || "");
     const publishScheduleAt = String(state.personaPublishScheduleValues[String(persona.id)] || "");
     return `
       <div class="persona-inline-panel persona-publish-panel">
@@ -14153,7 +14073,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
         ${personaPublishPreview(selectedPost)}
         ${renderUploadDropzone("personaPublishFiles", { label: "发布素材", hint: publishHint || "拖动图片或视频到这里，或点击选择。" })}
         <div class="row-actions">
-          <button type="button" class="primary" data-persona-publish-submit ${(publishCanSubmit && selectedPost && !publishBusy) ? "" : "disabled"}>${publishBusy ? "发布任务执行中" : "发布内容"}</button>
+          <button type="button" class="primary" data-persona-publish-submit ${(publishCanSubmit && selectedPost && !publishBusy) ? "" : "disabled"}>${publishBusy ? renderBusyButtonContent("发布任务执行中", true, publishBusyStartedAt) : "发布内容"}</button>
         </div>
         <div id="personaPublishResult">${publishResult || `<div class="empty-state">提交后，这里会显示任务状态、截图和发布结果。</div>`}</div>
       </div>`;
@@ -14723,7 +14643,9 @@ function renderAccountPoolAutomationPanel(selectedAccount) {
   const customStrategy = personaThreadsStrategyIsCustom(strategyGroup);
   const payload = strategy?.payload || {};
   const taskType = mode === "warmup" ? "threads_warmup" : "threads_auto_reply";
-  const busy = Boolean(selectedAccount?.id) && (isActionLocked("social", selectedAccount.id, taskType) || activeSocialTaskFor({ accountId: selectedAccount.id, taskType }));
+  const activeTask = selectedAccount?.id ? activeSocialTaskFor({ accountId: selectedAccount.id, taskType }) : null;
+  const busy = Boolean(selectedAccount?.id) && (isActionLocked("social", selectedAccount.id, taskType) || activeTask);
+  const busyStartedAt = actionTaskStartedAt(activeTask, "social", selectedAccount?.id || "", taskType);
   let body = "";
   if (!selectedAccount) {
     body = `<div class="empty-state">请先在左侧选择一个账号。</div>`;
@@ -14765,7 +14687,7 @@ function renderAccountPoolAutomationPanel(selectedAccount) {
         ` : ""}
         ${personaThreadsStrategyDetail(strategyGroup)}
         <div class="row-actions">
-          <button type="button" data-account-pool-run-threads="${esc(mode)}" ${busy ? "disabled" : ""}>${busy ? "自动回复执行中" : "提交自动回复任务"}</button>
+          <button type="button" data-account-pool-run-threads="${esc(mode)}" ${busy ? "disabled" : ""}>${busy ? renderBusyButtonContent("自动回复执行中", true, busyStartedAt) : "提交自动回复任务"}</button>
         </div>
       </div>`;
   } else {
@@ -14796,7 +14718,7 @@ function renderAccountPoolAutomationPanel(selectedAccount) {
         ` : ""}
         ${personaThreadsStrategyDetail("threads_warmup")}
         <div class="row-actions">
-          <button type="button" data-account-pool-run-threads="warmup" ${busy ? "disabled" : ""}>${busy ? "养号执行中" : "提交养号任务"}</button>
+          <button type="button" data-account-pool-run-threads="warmup" ${busy ? "disabled" : ""}>${busy ? renderBusyButtonContent("养号执行中", true, busyStartedAt) : "提交养号任务"}</button>
         </div>
       </div>`;
   }
@@ -14831,7 +14753,9 @@ function renderAccountPoolAutomationPanel(selectedAccount) {
       : "threads_comment_reply";
   const payload = personaThreadsStrategy(strategyGroup)?.payload || {};
   const taskType = mode === "warmup" ? "threads_warmup" : "threads_auto_reply";
-  const busy = Boolean(selectedAccount?.id) && (isActionLocked("social", selectedAccount.id, taskType) || activeSocialTaskFor({ accountId: selectedAccount.id, taskType }));
+  const activeTask = selectedAccount?.id ? activeSocialTaskFor({ accountId: selectedAccount.id, taskType }) : null;
+  const busy = Boolean(selectedAccount?.id) && (isActionLocked("social", selectedAccount.id, taskType) || activeTask);
+  const busyStartedAt = actionTaskStartedAt(activeTask, "social", selectedAccount?.id || "", taskType);
   const contextMeta = selectedAccount && persona ? `
     <div class="account-pool-automation-meta">
       <span>账号：${esc(accountDisplayName(selectedAccount))}</span>
@@ -14875,7 +14799,7 @@ function renderAccountPoolAutomationPanel(selectedAccount) {
           <textarea id="accountPoolAutoReplyText" rows="3" placeholder="留空则按当前人设自动生成。"></textarea>
         </label>
         <div class="row-actions">
-          <button type="button" data-account-pool-run-threads="${esc(mode)}" ${busy ? "disabled" : ""}>${busy ? "任务执行中" : "提交自动化任务"}</button>
+          <button type="button" data-account-pool-run-threads="${esc(mode)}" ${busy ? "disabled" : ""}>${busy ? renderBusyButtonContent("任务执行中", true, busyStartedAt) : "提交自动化任务"}</button>
         </div>
       </div>`;
   } else {
@@ -14903,7 +14827,7 @@ function renderAccountPoolAutomationPanel(selectedAccount) {
           <textarea id="accountPoolAutoReplyText" rows="3" placeholder="可选，多条换行。留空则按人设自动生成。"></textarea>
         </label>
         <div class="row-actions">
-          <button type="button" data-account-pool-run-threads="warmup" ${busy ? "disabled" : ""}>${busy ? "养号执行中" : "提交养号任务"}</button>
+          <button type="button" data-account-pool-run-threads="warmup" ${busy ? "disabled" : ""}>${busy ? renderBusyButtonContent("养号执行中", true, busyStartedAt) : "提交养号任务"}</button>
         </div>
       </div>`;
   }
@@ -15690,9 +15614,7 @@ async function runAccountPoolThreadsTask(kind) {
       taskId: result.task?.id || "",
       taskPanel: "persona",
       personaId: persona.id,
-      persistent: Boolean(result.task?.id),
     });
-    openLiveBrowserTaskView(String(result.task?.id || ""));
   } finally {
     setActionLocked(lockParts, false);
     renderSocialAccounts();
@@ -15917,7 +15839,8 @@ function renderSocialAccounts() {
   }
   const grid = $("accountGrid");
   renderProxyPool();
-  renderLiveBrowserSessions();
+  if (state.accountBrowserPanel === "browsers") renderLiveBrowserSessions();
+  else $("liveBrowserSessions")?.replaceChildren();
   if (!grid) return;
   grid.innerHTML = renderAccountPool();
   });
@@ -15928,6 +15851,8 @@ function setAccountBrowserPanel(panel = "accounts") {
   if (normalized !== "accounts") resetAccountPoolCreateForm();
   state.accountBrowserPanel = normalized;
   syncAccountBrowserPanel();
+  if (normalized === "browsers") renderLiveBrowserSessions();
+  else $("liveBrowserSessions")?.replaceChildren();
 }
 
 function syncAccountBrowserPanel() {
@@ -16758,8 +16683,6 @@ async function submitMatrixPublishTask(messageId = "commandMsg") {
       key: matrixToastKey,
     });
     const immediateCreated = created.filter((item) => !isFutureScheduledSocialTask(item?.task || item));
-    const firstTaskId = immediateCreated.map((item) => String(item?.task?.id || item?.id || "").trim()).find(Boolean) || "";
-    if (firstTaskId) openLiveBrowserTaskView(firstTaskId);
     const taskIdsByPersona = new Map();
     immediateCreated.forEach((item) => {
       const taskId = String(item?.task?.id || item?.id || "").trim();
@@ -16860,9 +16783,6 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
         taskId: result.task?.id || "",
         taskPanel: cleanPersonaId ? "persona" : "regular",
         personaId: cleanPersonaId,
-        openBrowser: true,
-        persistent: Boolean(result.task?.id),
-        longTask: false,
       });
       if (!waitingForSchedule) refreshLiveBrowserSessionsSoon(String(result.task?.id || ""));
       await loadSocial();
@@ -16919,11 +16839,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
       taskId: result.task?.id || "",
       taskPanel: cleanPersonaId ? "persona" : "regular",
       personaId: cleanPersonaId,
-      openBrowser: true,
-      persistent: Boolean(result.task?.id),
-      longTask: false,
     });
-    if (!waitingForSchedule) openLiveBrowserTaskView(String(result.task?.id || ""));
     await loadSocial();
     return result;
   } finally {
