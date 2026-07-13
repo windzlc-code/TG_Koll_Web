@@ -2506,10 +2506,6 @@ body.persona-touch-dragging .persona-list-card:active {
   cursor: pointer;
 }
 
-.persona-layer-group.is-pending .persona-folder-main {
-  cursor: wait;
-}
-
 .persona-list-item--status {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
