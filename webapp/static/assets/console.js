@@ -255,6 +255,7 @@ const state = {
   view: ["workspace", "tasks", "accounts", "settings", "console_settings", "persona_dashboard"].includes(initialConsoleView) ? initialConsoleView : "workspace",
   activeModule: "personas",
   transientWorkspaceLeaveAcknowledgement: "",
+  transientWorkspaceAllowNextUnload: false,
   accountBrowserPanel: "accounts",
   liveBrowserExpandedSessionId: "",
   workspaceMenuOpen: true,
@@ -1203,10 +1204,12 @@ async function openToastTarget(rawTarget) {
   const targetPersonaId = String(target.personaId || "").trim();
   const targetAction = String(target.action || "").trim();
   if (targetAction === "persona_image_generation" && targetPersonaId) {
+    if (!(await confirmLeaveTransientWorkspaceState())) return;
     await openPersonaImageGeneration(targetPersonaId);
     return;
   }
   if (targetAction === "live_browser") {
+    if (!(await confirmLeaveTransientWorkspaceState())) return;
     openLiveBrowserTaskView(String(target.taskId || ""));
     return;
   }
@@ -2590,6 +2593,7 @@ function setPersonaHotDeletedMediaSet(personaId, candidateId, indexes) {
     .sort((left, right) => left - right);
   if (clean.length) form.hotDeletedMediaByCandidate[key] = clean;
   else delete form.hotDeletedMediaByCandidate[key];
+  state.transientWorkspaceLeaveAcknowledgement = "";
 }
 
 function personaHotSelectedMediaIndex(personaId, candidateId, mediaCount = 0) {
@@ -2652,6 +2656,7 @@ function setPersonaHotReplacementFile(personaId, candidateId, index, file = null
     if (Object.keys(replacements).length) form.hotReplacementFilesByCandidate[key] = replacements;
     else delete form.hotReplacementFilesByCandidate[key];
   }
+  state.transientWorkspaceLeaveAcknowledgement = "";
 }
 
 function clearPersonaHotReplacementFiles(personaId, candidateId) {
@@ -2713,6 +2718,7 @@ function addPersonaHotReplacementPoolFiles(personaId, candidateId, files = []) {
   if (!added.length) return [];
   form.hotReplacementPoolByCandidate[key] = [...current, ...added];
   setPersonaHotSelectedReplacementPoolId(personaId, key, added[0].id);
+  state.transientWorkspaceLeaveAcknowledgement = "";
   return added;
 }
 
@@ -2734,6 +2740,7 @@ function removePersonaHotReplacementPoolEntry(personaId, candidateId, entryId) {
   if (String(form.hotSelectedReplacementPoolIdByCandidate?.[key] || "") === cleanEntryId) {
     setPersonaHotSelectedReplacementPoolId(personaId, key, nextRows[0]?.id || "");
   }
+  state.transientWorkspaceLeaveAcknowledgement = "";
 }
 
 function clearPersonaHotReplacementPool(personaId, candidateId) {
@@ -2744,6 +2751,26 @@ function clearPersonaHotReplacementPool(personaId, candidateId) {
   const key = String(candidateId || "").trim();
   delete form.hotReplacementPoolByCandidate?.[key];
   delete form.hotSelectedReplacementPoolIdByCandidate?.[key];
+}
+
+function discardPersonaHotMediaEdits(personaId) {
+  const form = personaFormState(personaId).generate;
+  const candidateIds = new Set([
+    ...Object.keys(form.hotDeletedMediaByCandidate || {}),
+    ...Object.keys(form.hotReplacementFilesByCandidate || {}),
+    ...Object.keys(form.hotReplacementPoolByCandidate || {}),
+    ...Object.keys(form.hotSelectedMediaIndexByCandidate || {}),
+    ...Object.keys(form.hotSelectedReplacementPoolIdByCandidate || {}),
+  ]);
+  candidateIds.forEach((candidateId) => {
+    clearPersonaHotReplacementFiles(personaId, candidateId);
+    clearPersonaHotReplacementPool(personaId, candidateId);
+  });
+  form.hotDeletedMediaByCandidate = {};
+  form.hotSelectedMediaIndexByCandidate = {};
+  form.hotReplacementFilesByCandidate = {};
+  form.hotReplacementPoolByCandidate = {};
+  form.hotSelectedReplacementPoolIdByCandidate = {};
 }
 
 function personaHotEditedContent(personaId, candidate) {
@@ -2769,7 +2796,11 @@ function snapshotPersonaHotPreviewContent() {
   if (!form.hotEditedContentByCandidate || typeof form.hotEditedContentByCandidate !== "object") {
     form.hotEditedContentByCandidate = {};
   }
-  form.hotEditedContentByCandidate[key] = String(textarea.value || "");
+  const content = String(textarea.value || "");
+  if (String(form.hotEditedContentByCandidate[key] || "") !== content) {
+    state.transientWorkspaceLeaveAcknowledgement = "";
+  }
+  form.hotEditedContentByCandidate[key] = content;
 }
 
 function startPersonaHotCandidateEdit(persona, candidateId) {
@@ -2799,6 +2830,7 @@ function cancelPersonaHotCandidateEdit(persona, candidateId) {
   clearPersonaHotReplacementFiles(persona.id, cleanCandidateId);
   clearPersonaHotReplacementPool(persona.id, cleanCandidateId);
   if (String(form.hotEditingCandidateId || "").trim() === cleanCandidateId) form.hotEditingCandidateId = "";
+  state.transientWorkspaceLeaveAcknowledgement = "";
   renderPersonaDetail();
   renderConfirmSummary();
 }
@@ -10801,6 +10833,7 @@ async function fetchPersonaHotCandidates(refresh = false) {
     };
     const nextCandidates = personaHotCandidates(persona);
     reconcilePersonaHotMediaStateAfterRefresh(persona.id, previousCandidates, nextCandidates);
+    state.transientWorkspaceLeaveAcknowledgement = "";
     const candidateIds = nextCandidates.map((item) => String(item.candidate_id || "").trim()).filter(Boolean);
     const candidateIdSet = new Set(candidateIds);
     form.hotSelectedIds = (form.hotSelectedIds || []).filter((item) => candidateIds.includes(String(item || "").trim()));
@@ -10924,6 +10957,7 @@ async function submitPersonaHotDraftImport(persona, selected, { replacementOpsBy
     clearPersonaHotReplacementFiles(persona.id, candidateId);
     clearPersonaHotReplacementPool(persona.id, candidateId);
   });
+  state.transientWorkspaceLeaveAcknowledgement = "";
   await loadPersonaDraftPosts(persona.id, { force: true });
   const importedCount = result.imported_count || createdIds.length || 0;
   setPersonaGenerateRunState(persona.id, {
@@ -13301,6 +13335,8 @@ function activeHotCandidateTransientState(persona = selectedPersona()) {
   const stagedReplacementMedia = form.hotReplacementPoolByCandidate && typeof form.hotReplacementPoolByCandidate === "object"
     ? Object.values(form.hotReplacementPoolByCandidate).some((rows) => Array.isArray(rows) && rows.length)
     : false;
+  const textRetained = Boolean(selectedIds.length || edited);
+  const mediaEdited = deletedMedia || replacementMedia || stagedReplacementMedia;
   if (!selectedIds.length && !edited && !deletedMedia && !replacementMedia && !stagedReplacementMedia) return null;
   return {
     persona,
@@ -13309,6 +13345,8 @@ function activeHotCandidateTransientState(persona = selectedPersona()) {
     deletedMedia,
     replacementMedia,
     stagedReplacementMedia,
+    textRetained,
+    mediaEdited,
     guardKey: transientWorkspaceFingerprint("hot_candidates", {
       personaId: String(persona.id || ""),
       selectedIds,
@@ -13386,11 +13424,18 @@ function activeTransientWorkspaceState() {
   if (hotState) {
     return {
       kind: "hot_candidates",
-      title: "暂时离开热点处理？",
-      message: "当前热点候选中有尚未导入草稿的选择或编辑。暂时离开后，这些内容仅保留在当前页面；返回“热点抓取”可继续处理。刷新或关闭页面可能导致内容丢失。",
-      confirmText: "暂时离开",
+      title: hotState.mediaEdited ? "放弃图片修改并离开？" : "暂时离开热点处理？",
+      message: hotState.mediaEdited
+        ? (hotState.textRetained
+          ? "当前热点候选中有尚未导入草稿的图片修改。离开后，图片删除、替换和待替换文件将全部放弃并恢复为抓取原图，不会保存到草稿；正文选择与编辑仅保留在当前页面。返回“热点抓取”可继续处理，刷新或关闭页面可能导致正文内容丢失。"
+          : "当前热点候选中有尚未导入草稿的图片修改。离开后，图片删除、替换和待替换文件将全部放弃并恢复为抓取原图，不会保存到草稿或继续保留在页面。")
+        : "当前热点候选中有尚未导入草稿的选择或正文编辑。暂时离开后，这些内容仅保留在当前页面；返回“热点抓取”可继续处理。刷新或关闭页面可能导致内容丢失。",
+      confirmText: hotState.mediaEdited ? "放弃图片修改并离开" : "暂时离开",
       cancelText: "返回处理",
       guardKey: hotState.guardKey,
+      danger: hotState.mediaEdited,
+      clear: hotState.mediaEdited ? () => discardPersonaHotMediaEdits(hotState.persona.id) : null,
+      acknowledgeRemainingState: hotState.mediaEdited,
     };
   }
   const publishCustom = activePublishCustomTransientState();
@@ -13416,26 +13461,34 @@ function activeTransientWorkspaceState() {
   return null;
 }
 
-async function confirmLeaveTransientWorkspaceState() {
+async function confirmLeaveTransientWorkspaceState({ allowNextUnload = false } = {}) {
   const activeState = activeTransientWorkspaceState();
   if (!activeState) return true;
   if (
     activeState.guardKey
     && activeState.guardKey === state.transientWorkspaceLeaveAcknowledgement
-  ) return true;
+  ) {
+    if (allowNextUnload) state.transientWorkspaceAllowNextUnload = true;
+    return true;
+  }
   const confirmed = await openConsoleModal({
     title: activeState.title,
     message: activeState.message,
     confirmText: activeState.confirmText || "继续",
     cancelText: activeState.cancelText || "取消",
+    danger: Boolean(activeState.danger),
   });
   if (!confirmed) return false;
   if (typeof activeState.clear === "function") {
     activeState.clear();
-    state.transientWorkspaceLeaveAcknowledgement = "";
+    const remainingState = activeState.acknowledgeRemainingState
+      ? activeTransientWorkspaceState()
+      : null;
+    state.transientWorkspaceLeaveAcknowledgement = remainingState?.guardKey || "";
   } else if (activeState.guardKey) {
     state.transientWorkspaceLeaveAcknowledgement = activeState.guardKey;
   }
+  if (allowNextUnload) state.transientWorkspaceAllowNextUnload = true;
   return true;
 }
 
@@ -16775,10 +16828,10 @@ function bindEvents() {
   window.addEventListener("beforeunload", (event) => {
     const activeState = activeTransientWorkspaceState();
     if (!activeState) return;
-    if (
-      activeState.guardKey
-      && activeState.guardKey === state.transientWorkspaceLeaveAcknowledgement
-    ) return;
+    if (state.transientWorkspaceAllowNextUnload) {
+      state.transientWorkspaceAllowNextUnload = false;
+      return;
+    }
     event.preventDefault();
     event.returnValue = "";
   });
@@ -17142,6 +17195,7 @@ function bindEvents() {
       form.hotSelectedIds = hotBulkButton.dataset.personaHotBulk === "all"
         ? personaHotCandidates(persona).map((item) => item.candidate_id)
         : [];
+      state.transientWorkspaceLeaveAcknowledgement = "";
       if (!form.hotPreviewId) form.hotPreviewId = form.hotSelectedIds[0] || "";
       renderPersonaDetail();
       renderConfirmSummary();
@@ -17156,6 +17210,7 @@ function bindEvents() {
       const form = personaFormState(persona.id).generate;
       form.hotSelectedIds = candidateId ? [candidateId] : [];
       form.hotPreviewId = candidateId;
+      state.transientWorkspaceLeaveAcknowledgement = "";
       renderPersonaDetail();
       renderConfirmSummary();
       return;
@@ -17644,6 +17699,7 @@ function bindEvents() {
         showMsg("commandMsg", "还没有可生成图片的人设。", false);
         return;
       }
+      if (!(await confirmLeaveTransientWorkspaceState())) return;
       openPersonaImageGeneration(personaId)
         .catch((error) => showMsg("commandMsg", error.detail || error.message || "打开人设图设置失败", false));
       return;
@@ -17920,6 +17976,7 @@ function bindEvents() {
       if (event.target.checked) selected.add(candidateId);
       else selected.delete(candidateId);
       form.hotSelectedIds = Array.from(selected);
+      state.transientWorkspaceLeaveAcknowledgement = "";
       if (event.target.checked || !form.hotPreviewId) form.hotPreviewId = candidateId;
       renderPersonaDetail();
       renderConfirmSummary();
@@ -18474,7 +18531,7 @@ function bindEvents() {
     if (cancel) cancelSocialAutomationTask(cancel.dataset.socialCancel, "socialMsg").catch((error) => showMsg("socialMsg", error.detail || error.message || "停止任务失败", false));
   });
   $("openAdmin").addEventListener("click", async () => {
-    if (!(await confirmLeaveTransientWorkspaceState())) return;
+    if (!(await confirmLeaveTransientWorkspaceState({ allowNextUnload: true }))) return;
     location.href = "/admin.html";
   });
   $("consoleSettingsBody").addEventListener("click", (event) => {
