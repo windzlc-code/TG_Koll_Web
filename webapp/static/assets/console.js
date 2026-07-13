@@ -1491,6 +1491,15 @@ function formatTime(value) {
   return Number.isNaN(date.getTime()) ? "-" : date.toLocaleString();
 }
 
+function formatScheduledTime(value) {
+  if (!value) return "-";
+  const timestamp = timeValue(value);
+  const date = new Date(timestamp);
+  return !timestamp || Number.isNaN(date.getTime())
+    ? "-"
+    : date.toLocaleString("zh-CN", { timeZone: SHANGHAI_TIME_ZONE, hour12: false });
+}
+
 function timeValue(value) {
   if (value == null || value === "") return 0;
   const number = Number(value);
@@ -3343,7 +3352,7 @@ function socialTaskToastMessage(task) {
   const accountLabel = String(state.socialTaskToastLabels[taskId] || task?.account_username || task?.account_display_name || task?.account_id || "").trim();
   const suffix = accountLabel ? ` · ${accountLabel}` : "";
   const status = String(task?.status || "").trim();
-  if (isFutureScheduledSocialTask(task)) return `${typeLabel}定时等待${suffix} · 计划 ${formatTime(task.scheduled_at)}`;
+  if (isFutureScheduledSocialTask(task)) return `${typeLabel}定时等待${suffix} · 计划 ${formatScheduledTime(task.scheduled_at)}`;
   if (status === "success") return `${typeLabel}已完成${suffix}`;
   if (status === "failed") return `${typeLabel}执行失败${suffix}`;
   if (status === "cancelled") return `${typeLabel}已取消${suffix}`;
@@ -5873,7 +5882,7 @@ function socialTaskDisplayStatus(task) {
 }
 
 function socialQueueTaskTime(task) {
-  if (isFutureScheduledSocialTask(task)) return `计划 ${formatTime(task.scheduled_at)}`;
+  if (isFutureScheduledSocialTask(task)) return `计划 ${formatScheduledTime(task.scheduled_at)}`;
   return formatTime(task.updated_at || task.created_at || "");
 }
 
@@ -6432,14 +6441,60 @@ function padSchedulePart(value, size = 2) {
   return String(value || "").padStart(size, "0");
 }
 
+const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
+
 function dateToScheduleParts(date) {
   const safe = date instanceof Date && Number.isFinite(date.getTime()) ? date : new Date();
+  const formatted = new Intl.DateTimeFormat("en-CA", {
+    timeZone: SHANGHAI_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(safe).reduce((result, part) => {
+    if (part.type !== "literal") result[part.type] = part.value;
+    return result;
+  }, {});
   return {
-    year: String(safe.getFullYear()),
-    month: padSchedulePart(safe.getMonth() + 1),
-    day: padSchedulePart(safe.getDate()),
-    hour: padSchedulePart(safe.getHours()),
-    minute: padSchedulePart(safe.getMinutes()),
+    year: String(formatted.year || safe.getUTCFullYear()),
+    month: padSchedulePart(formatted.month || safe.getUTCMonth() + 1),
+    day: padSchedulePart(formatted.day || safe.getUTCDate()),
+    hour: padSchedulePart(formatted.hour || safe.getUTCHours()),
+    minute: padSchedulePart(formatted.minute || safe.getUTCMinutes()),
+  };
+}
+
+function schedulePartsToShanghaiIso(parts) {
+  const year = Number(parts?.year);
+  const month = Number(parts?.month);
+  const day = Number(parts?.day);
+  const hour = Number(parts?.hour);
+  const minute = Number(parts?.minute);
+  const calendarTime = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
+  const calendar = new Date(calendarTime);
+  if (
+    !Number.isFinite(calendarTime)
+    || calendar.getUTCFullYear() !== year
+    || calendar.getUTCMonth() !== month - 1
+    || calendar.getUTCDate() !== day
+    || calendar.getUTCHours() !== hour
+    || calendar.getUTCMinutes() !== minute
+  ) return "";
+  // Shanghai has a fixed UTC+8 offset, so the wall-clock input is stable
+  // regardless of the browser or container time zone.
+  return new Date(calendarTime - 8 * 60 * 60 * 1000).toISOString();
+}
+
+function scheduleCalendarParts(parts, daysAhead, hour, minute) {
+  const calendar = new Date(Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day) + daysAhead));
+  return {
+    year: String(calendar.getUTCFullYear()),
+    month: padSchedulePart(calendar.getUTCMonth() + 1),
+    day: padSchedulePart(calendar.getUTCDate()),
+    hour: padSchedulePart(hour),
+    minute: padSchedulePart(minute),
   };
 }
 
@@ -6449,16 +6504,10 @@ function schedulePresetParts(preset) {
   if (key === "in_30m") return dateToScheduleParts(new Date(now.getTime() + 30 * 60 * 1000));
   if (key === "in_1h") return dateToScheduleParts(new Date(now.getTime() + 60 * 60 * 1000));
   if (key === "tomorrow_09") {
-    const date = new Date(now);
-    date.setDate(date.getDate() + 1);
-    date.setHours(9, 0, 0, 0);
-    return dateToScheduleParts(date);
+    return scheduleCalendarParts(dateToScheduleParts(now), 1, 9, 0);
   }
   if (key === "tomorrow_21") {
-    const date = new Date(now);
-    date.setDate(date.getDate() + 1);
-    date.setHours(21, 0, 0, 0);
-    return dateToScheduleParts(date);
+    return scheduleCalendarParts(dateToScheduleParts(now), 1, 21, 0);
   }
   return null;
 }
@@ -6478,25 +6527,7 @@ function currentPublishScheduleParts() {
 
 function composePublishScheduleAt() {
   if (state.publishTimingMode !== "scheduled") return "";
-  const parts = currentPublishScheduleParts();
-  const scheduledDate = new Date(
-    Number(parts.year),
-    Number(parts.month) - 1,
-    Number(parts.day),
-    Number(parts.hour),
-    Number(parts.minute),
-    0,
-    0,
-  );
-  if (
-    !Number.isFinite(scheduledDate.getTime())
-    || scheduledDate.getFullYear() !== Number(parts.year)
-    || scheduledDate.getMonth() !== Number(parts.month) - 1
-    || scheduledDate.getDate() !== Number(parts.day)
-    || scheduledDate.getHours() !== Number(parts.hour)
-    || scheduledDate.getMinutes() !== Number(parts.minute)
-  ) return "";
-  return scheduledDate.toISOString();
+  return schedulePartsToShanghaiIso(currentPublishScheduleParts());
 }
 
 function publishScheduleDisplayText() {
@@ -6508,6 +6539,16 @@ function publishScheduleDisplayText() {
 function normalizeScheduleValueForApi(value) {
   const raw = String(value || "").trim();
   if (!raw || /^\d+$/.test(raw)) return raw;
+  const naiveMatch = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})[T\s](\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (naiveMatch) {
+    return schedulePartsToShanghaiIso({
+      year: naiveMatch[1],
+      month: naiveMatch[2],
+      day: naiveMatch[3],
+      hour: naiveMatch[4],
+      minute: naiveMatch[5],
+    }) || raw;
+  }
   const parsed = new Date(raw.includes("T") ? raw : raw.replace(" ", "T"));
   return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : raw;
 }
@@ -6529,7 +6570,7 @@ function updatePublishSchedulePreview() {
   const scheduledAt = composePublishScheduleAt();
   const scheduledDisplay = publishScheduleDisplayText();
   preview.innerHTML = scheduledAt
-    ? `将按 <strong>${esc(scheduledDisplay)}</strong> 创建定时发布任务。`
+    ? `将按 <strong>${esc(scheduledDisplay)}</strong>（上海时间）创建定时发布任务。`
     : "确认执行后会立即提交发布任务。";
 }
 
@@ -6589,7 +6630,7 @@ function renderPublishScheduleControls(rawMode = "") {
             <input id="simpleScheduleMinute" type="number" min="0" max="59" value="${esc(Number(parts.minute))}" />
           </label>
         </div>
-        <div class="publish-schedule-preview" data-publish-schedule-preview>将按 <strong>${esc(scheduledDisplay)}</strong> 创建定时发布任务。</div>
+        <div class="publish-schedule-preview" data-publish-schedule-preview>将按 <strong>${esc(scheduledDisplay)}</strong>（上海时间）创建定时发布任务。</div>
       ` : `<div class="publish-schedule-preview" data-publish-schedule-preview>确认执行后会立即提交发布任务。</div>`}
     </div>`;
 }
@@ -7750,7 +7791,7 @@ async function submitPersonaPublishTask() {
     state.personaPublishResults[String(persona.id)] = renderPersonaPublishResult(task, []);
     updatePersonaPublishResultView(persona.id);
     appendEvent("queued", waitingForSchedule
-      ? `${persona.name || persona.id} 已创建定时发布任务：${formatTime(task.scheduled_at)}`
+      ? `${persona.name || persona.id} 已创建定时发布任务：${formatScheduledTime(task.scheduled_at)}`
       : `${persona.name || persona.id} 已提交${sourceLabel}发布任务：${taskId || "-"}`, {
       key: taskId ? `social-task:${taskId}` : undefined,
       taskId,
@@ -7758,7 +7799,7 @@ async function submitPersonaPublishTask() {
       personaId: persona.id,
       longTask: false,
     });
-    showMsg("commandMsg", waitingForSchedule ? `发布任务已定时：${formatTime(task.scheduled_at)}` : `发布任务已提交：${taskId || "-"}`, true, {
+    showMsg("commandMsg", waitingForSchedule ? `发布任务已定时：${formatScheduledTime(task.scheduled_at)}` : `发布任务已提交：${taskId || "-"}`, true, {
       key: taskId ? `social-task:${taskId}` : undefined,
       kind: "queued",
       taskId,
@@ -9775,7 +9816,7 @@ function renderTaskDetailLayout(task = {}, logs = [], {
       renderTaskDetailStatusField(task.status || "", socialTaskDisplayStatus(task)),
       renderTaskDetailField("平台", queuePlatformLabel(task.platform || "")),
       renderTaskDetailField("账号", task.account_username || task.account_id || "-"),
-      task.scheduled_at ? renderTaskDetailField("计划执行", formatTime(task.scheduled_at)) : "",
+      task.scheduled_at ? renderTaskDetailField("计划执行", formatScheduledTime(task.scheduled_at)) : "",
       renderTaskDetailField("更新时间", formatTime(task.updated_at || task.finished_at || task.created_at || "")),
       task.error ? renderTaskDetailField("错误信息", sanitizeTaskUserMessage(task.error), { wide: true }) : "",
     ].filter(Boolean).join("")
@@ -16445,7 +16486,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
         }),
       });
       const waitingForSchedule = isFutureScheduledSocialTask(result.task);
-      showMsg(messageId, waitingForSchedule ? `浏览器任务已定时：${formatTime(result.task?.scheduled_at)}` : `浏览器任务已提交：${result.task?.id || ""}`, true, {
+      showMsg(messageId, waitingForSchedule ? `浏览器任务已定时：${formatScheduledTime(result.task?.scheduled_at)}` : `浏览器任务已提交：${result.task?.id || ""}`, true, {
         key: result.task?.id ? `social-task:${result.task.id}` : undefined,
         kind: "queued",
         taskId: result.task?.id || "",
@@ -16504,7 +16545,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
       }),
     });
     const waitingForSchedule = isFutureScheduledSocialTask(result.task);
-    showMsg(messageId, waitingForSchedule ? `浏览器任务已定时：${formatTime(result.task?.scheduled_at)}` : `浏览器任务已提交：${result.task?.id || ""}`, true, {
+      showMsg(messageId, waitingForSchedule ? `浏览器任务已定时：${formatScheduledTime(result.task?.scheduled_at)}` : `浏览器任务已提交：${result.task?.id || ""}`, true, {
       key: result.task?.id ? `social-task:${result.task.id}` : undefined,
       kind: "queued",
       taskId: result.task?.id || "",
