@@ -637,6 +637,21 @@ class PersonaDashboardApiTests(unittest.TestCase):
         overview = self.client.get("/api/persona_dashboard/overview").json()
         self.assertEqual(overview["summary"]["persona_count"], 0)
 
+    def test_public_delete_persona_removes_primary_and_cache_duplicates(self):
+        self._write_archives()
+        primary_path = self.tool_runtime_dir / "persona_archives.json"
+        cache_path = self.tool_runtime_dir / "persona_archives_cache.json"
+        cache_path.write_text(primary_path.read_text(encoding="utf-8"), encoding="utf-8")
+
+        resp = self.client.delete("/api/persona_dashboard/personas/persona-1")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(set(resp.json()["paths"]), {"persona_archives.json", "persona_archives_cache.json"})
+        self.assertEqual(json.loads(primary_path.read_text(encoding="utf-8")), [])
+        self.assertEqual(json.loads(cache_path.read_text(encoding="utf-8")), [])
+        overview = self.client.get("/api/persona_dashboard/overview").json()
+        self.assertEqual(overview["summary"]["persona_count"], 0)
+
     def test_public_delete_persona_allows_legacy_archive(self):
         archives = [
             {

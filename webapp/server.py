@@ -14192,22 +14192,39 @@ def _delete_persona_dashboard_persona(archive_id: str) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     if not clean_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID。")
-    path, raw, archives = _persona_archive_source_for_write(clean_id)
     removed: dict[str, Any] | None = None
-    next_archives: list[dict[str, Any]] = []
-    for archive in archives:
-        if str(archive.get("id") or "").strip() != clean_id:
-            next_archives.append(archive)
+    updated_files: list[str] = []
+    for path in (
+        TOOL_R18_RUNTIME_DIR / "persona_archives.json",
+        TOOL_R18_RUNTIME_DIR / "persona_archives_cache.json",
+    ):
+        raw = _read_json_file(path)
+        archives = _extract_persona_archive_list(raw)
+        next_archives = [
+            archive
+            for archive in archives
+            if str(archive.get("id") or "").strip() != clean_id
+        ]
+        if len(next_archives) == len(archives):
             continue
-        removed = archive
+        removed = removed or next(
+            (archive for archive in archives if str(archive.get("id") or "").strip() == clean_id),
+            None,
+        )
+        _write_persona_archives_preserving_shape(path, raw, next_archives)
+        updated_files.append(path.name)
     if removed is None:
         raise HTTPException(status_code=404, detail="人设不存在。")
-    _write_persona_archives_preserving_shape(path, raw, next_archives)
+    removed_ids = {clean_id}
+    _remove_persona_group_ids(removed_ids)
+    _remove_persona_memory_entries(removed_ids)
+    _remove_persona_deleted_post_entries(removed_ids)
+    _clear_persona_runtime_cache_files()
     return {
         "ok": True,
         "archive_id": clean_id,
         "name": str(removed.get("name") or "").strip(),
-        "path": path.name,
+        "paths": updated_files,
     }
 
 

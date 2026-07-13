@@ -891,6 +891,9 @@ function localizeConsoleMessage(text, status = 0) {
   };
   if (exactMap[raw]) return exactMap[raw];
   const lower = raw.toLowerCase();
+  if (/insufficient balance|insufficient credits?|quota exceeded|credits? exhausted|payment required|http\s*402|\b402\s+(?:client\s+)?error\b/i.test(raw)) {
+    return "当前账户或上游生成服务额度不足，请补充余额或降低任务参数后重试。";
+  }
   if (lower.startsWith("using text input mode:")) {
     const mode = raw.split(":").slice(1).join(":").trim();
     const modeLabel = { paste: "粘贴", fill: "填充", type: "逐字输入" }[mode.toLowerCase()] || mode;
@@ -7711,7 +7714,10 @@ function watchTask(taskId, options = {}) {
     const dataStatus = String(payload?.data?.status || "").trim();
     const terminalStatus = ["success", "failed", "cancelled"].includes(dataStatus) ? dataStatus : "";
     const eventKind = terminalStatus || kind;
-    appendEvent(eventKind, payload.message || payload.detail || eventKind, {
+    const taskError = eventKind === "failed"
+      ? String(payload?.data?.error || payload?.error || "").trim()
+      : "";
+    appendEvent(eventKind, taskError || payload.message || payload.detail || eventKind, {
       key: `task:${taskId}`,
       taskId,
       taskPanel: options.taskPanel || "regular",
