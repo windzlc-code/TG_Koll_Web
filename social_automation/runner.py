@@ -2424,8 +2424,11 @@ def _resolve_threads_profile_url(page, account: dict[str, Any] | None = None) ->
 def _wait_for_threads_own_post(page, caption: str, logger: AutomationLogger, account: dict[str, Any] | None = None, payload: dict[str, Any] | None = None, previous_permalink: str = "", profile_url: str = "") -> dict[str, Any]:
     _dismiss_threads_compose_dialogs(page, logger)
     target_url = _normalize_threads_profile_url(profile_url) or _resolve_threads_profile_url(page, account)
-    confirm_seconds = _safe_int((payload or {}).get("profile_confirm_seconds") or os.getenv("SOCIAL_AUTOMATION_THREADS_PROFILE_CONFIRM_SECONDS"), 45)
-    confirm_seconds = max(15, min(confirm_seconds, 90))
+    # Threads can render a just-submitted media post on the profile noticeably later
+    # than a text-only post. Keep polling long enough to observe the permalink before
+    # falling back to manual confirmation, without retrying the publish action.
+    confirm_seconds = _safe_int((payload or {}).get("profile_confirm_seconds") or os.getenv("SOCIAL_AUTOMATION_THREADS_PROFILE_CONFIRM_SECONDS"), 90)
+    confirm_seconds = max(15, min(confirm_seconds, 120))
     nav_timeout_ms = max(3000, min(confirm_seconds * 1000, 12000))
     try:
         _goto(page, target_url, logger, "threads_publish_profile", timeout_ms=nav_timeout_ms, networkidle_ms=2500)
