@@ -973,7 +973,7 @@ const toastSwitchTimers = new WeakMap();
 const toastSwitchCleanupTimers = new WeakMap();
 const toastRemovalTimers = new WeakMap();
 const toastStartedAtByKey = new Map();
-const dismissedPersistentToastKeys = new Set();
+const deliveredToastStateKeys = new Set();
 const uploadPreviewUrls = new WeakMap();
 let pendingToastRequest = null;
 let toastReplacementInProgress = false;
@@ -1020,9 +1020,7 @@ function dismissToast(toast, options = {}) {
   if (!toast) return;
   clearToastSwitchTimers(toast);
   clearToastRemovalTimer(toast);
-  if (options.manual && toast.dataset.toastPersistent === "true" && toast.dataset.toastKey) {
-    dismissedPersistentToastKeys.add(toast.dataset.toastKey);
-  }
+  if (options.manual && toast.dataset.toastStateKey) deliveredToastStateKeys.add(toast.dataset.toastStateKey);
   const timer = toastTimers.get(toast);
   if (timer) window.clearTimeout(timer);
   toastTimers.delete(toast);
@@ -1174,6 +1172,7 @@ function applyToastMeta(toast, { key, ok, message, persistent, target, status, l
     `is-status-${normalizedStatus}`,
   ].filter(Boolean).join(" ");
   toast.dataset.toastKey = key;
+  toast.dataset.toastStateKey = `${key}:${normalizedStatus}`;
   toast.dataset.toastPersistent = persistent ? "true" : "false";
   toast.dataset.toastLongTask = longTask ? "true" : "false";
   toast.dataset.toastStatus = normalizedStatus;
@@ -1342,10 +1341,11 @@ function showToast(text, ok = true, options = {}) {
   const toastKey = String(options.key || `${ok ? "ok" : "bad"}:${message}`);
   const persistent = Boolean(options.persistent);
   const target = toastTargetForKind(options.kind || "", options);
-  if (!persistent) dismissedPersistentToastKeys.delete(toastKey);
-  if (persistent && dismissedPersistentToastKeys.has(toastKey)) return null;
-  const existingToast = Array.from(host.children).find((item) => item.dataset.toastKey === toastKey);
   const status = normalizeToastStatus(options.status || options.kind, ok, persistent);
+  const existingToast = Array.from(host.children).find((item) => item.dataset.toastKey === toastKey);
+  const toastStateKey = `${toastKey}:${status}`;
+  const deliverOnce = Boolean(options.oncePerState || options.taskId || persistent);
+  if (deliverOnce && !existingToast && deliveredToastStateKeys.has(toastStateKey)) return null;
   const longTask = options.longTask === undefined
     ? Boolean(options.taskId || persistent || existingToast?.dataset.toastLongTask === "true")
     : Boolean(options.longTask);
@@ -1353,6 +1353,7 @@ function showToast(text, ok = true, options = {}) {
   const duration = Number(options.duration || (ok ? 3200 : 5200));
   const scheduled = typeof options.scheduled === "boolean" ? options.scheduled : undefined;
   const request = { host, toastKey, ok, message, persistent, target, status, longTask, startedAt, duration, scheduled };
+  if (deliverOnce) deliveredToastStateKeys.add(toastStateKey);
 
   if (existingToast && !toastReplacementInProgress) {
     const previousMessage = existingToast.querySelector(".toast-message-text")?.textContent || "";
@@ -3328,12 +3329,24 @@ function socialTaskToastTerminal(task) {
     || (status === "need_manual" && !isUnfinishedTask(task));
 }
 
+function clearDeliveredToastStates(toastKey) {
+  const prefix = `${String(toastKey || "").trim()}:`;
+  if (!prefix || prefix === ":") return;
+  Array.from(deliveredToastStateKeys).forEach((stateKey) => {
+    if (stateKey.startsWith(prefix)) deliveredToastStateKeys.delete(stateKey);
+  });
+}
+
 function registerSocialTaskToastBatch(batchKey, tasks = []) {
   const cleanKey = String(batchKey || "").trim();
   const rows = (tasks || []).filter((task) => task?.id);
   if (!cleanKey || !rows.length) return;
   const taskIds = rows.map((task) => String(task.id));
   const previous = state.socialTaskToastBatches[cleanKey] || { taskIds: [], tasks: {} };
+  const hasNewTask = taskIds.some((taskId) => !previous.taskIds.includes(taskId));
+  const previousBatchFinished = previous.taskIds.length > 0
+    && previous.taskIds.every((taskId) => socialTaskToastTerminal(previous.tasks?.[taskId]));
+  if (hasNewTask && previousBatchFinished) clearDeliveredToastStates(cleanKey);
   state.socialTaskToastBatches[cleanKey] = {
     taskIds,
     tasks: {
@@ -7899,24 +7912,10 @@ async function submitPersonaPublishTask() {
     const waitingForSchedule = isFutureScheduledSocialTask(task);
     state.personaPublishResults[String(persona.id)] = renderPersonaPublishResult(task, []);
     updatePersonaPublishResultView(persona.id);
-    appendEvent("queued", waitingForSchedule
-      ? `${persona.name || persona.id} 已创建定时发布任务：${formatScheduledTime(task.scheduled_at)}`
-      : `${persona.name || persona.id} 已提交${sourceLabel}发布任务：${taskId || "-"}`, {
-      key: taskId ? `social-task:${taskId}` : undefined,
-      taskId,
-      taskPanel: "persona",
-      personaId: persona.id,
-      longTask: false,
-    });
-    showMsg("commandMsg", waitingForSchedule ? `发布任务已定时：${formatScheduledTime(task.scheduled_at)}` : `发布任务已提交：${taskId || "-"}`, true, {
-      key: taskId ? `social-task:${taskId}` : undefined,
-      kind: "queued",
-      taskId,
-      taskPanel: "persona",
-      personaId: persona.id,
-      persistent: Boolean(taskId),
-      longTask: false,
-    });
+    if (taskId) {
+      registerSocialTaskToastBatch(socialTaskToastLaneKey(task), [task]);
+      syncSocialTaskToast(task, { force: true });
+    }
     if (taskId && !waitingForSchedule) watchPersonaPublishTask(taskId, persona.id).catch((error) => {
       state.personaPublishResults[String(persona.id)] = `<div class="persona-warning-inline">${esc(error?.detail || error?.message || "任务结果轮询失败")}</div>`;
       updatePersonaPublishResultView(persona.id);
@@ -8612,7 +8611,7 @@ async function runPersonaThreadsTask(kind) {
       }),
     });
     showMsg("commandMsg", `${kind === "warmup" ? "养号" : "自动回复"}任务已提交：${result.task?.id || ""}`, true, {
-      key: result.task?.id ? `social-task:${result.task.id}` : undefined,
+      key: result.task?.id ? socialTaskToastKey(result.task.id, result.task) : undefined,
       kind: "queued",
       taskId: result.task?.id || "",
       taskPanel: "persona",
@@ -8741,7 +8740,7 @@ async function executeSimpleFlow() {
     const taskId = String(result?.task?.id || "").trim();
     if (taskId) {
       appendEvent("queued", `${taskType} 已提交到指纹浏览器任务队列`, {
-        key: `social-task:${taskId}`,
+        key: socialTaskToastKey(taskId, result?.task),
         taskId,
         taskPanel: personaId ? "persona" : "regular",
         personaId,
@@ -10117,13 +10116,7 @@ async function watchPersonaAutomationTask(taskId, accountId, step) {
     if (task) {
       state.personaAutomationResults[key] = renderSocialTaskResult(task, logs, "提交后，这里会显示任务状态、截图和执行日志。");
       updatePersonaAutomationResultView(accountId, step);
-      appendEvent(toastKindForTaskStatus(task.status), `${statusLabel(task.task_type || task.type || "自动化任务")}：${statusLabel(task.status || "")}`, {
-        key: `social-task:${taskId}`,
-        taskId,
-        taskPanel: "persona",
-        personaId: task.persona_id || "",
-        openBrowser: true,
-      });
+      syncSocialTaskToast(task, { force: true });
       if (["success", "failed", "cancelled"].includes(String(task.status || ""))) {
         delete state.personaAutomationWatchers[key];
         await loadSocial().catch(() => {});
@@ -10174,13 +10167,7 @@ async function watchPersonaPublishTask(taskId, personaId) {
     if (task) {
       state.personaPublishResults[key] = renderPersonaPublishResult(task, logs);
       updatePersonaPublishResultView(key);
-      appendEvent(toastKindForTaskStatus(task.status), `发布任务：${statusLabel(task.status || "")}`, {
-        key: `social-task:${taskId}`,
-        taskId,
-        taskPanel: "persona",
-        personaId,
-        openBrowser: true,
-      });
+      syncSocialTaskToast(task, { force: true });
       if (["success", "failed", "cancelled"].includes(String(task.status || ""))) {
         delete state.personaPublishWatchers[key];
         await Promise.all([
@@ -15698,7 +15685,7 @@ async function runAccountPoolThreadsTask(kind) {
       }),
     });
     showMsg("socialMsg", `${mode === "warmup" ? "养号" : "自动回复"}任务已提交：${result.task?.id || ""}`, true, {
-      key: result.task?.id ? `social-task:${result.task.id}` : undefined,
+      key: result.task?.id ? socialTaskToastKey(result.task.id, result.task) : undefined,
       kind: "queued",
       taskId: result.task?.id || "",
       taskPanel: "persona",
@@ -16868,7 +16855,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
       });
       const waitingForSchedule = isFutureScheduledSocialTask(result.task);
       showMsg(messageId, waitingForSchedule ? `浏览器任务已定时：${formatScheduledTime(result.task?.scheduled_at)}` : `浏览器任务已提交：${result.task?.id || ""}`, true, {
-        key: result.task?.id ? `social-task:${result.task.id}` : undefined,
+        key: result.task?.id ? socialTaskToastKey(result.task.id, result.task) : undefined,
         kind: "queued",
         taskId: result.task?.id || "",
         taskPanel: cleanPersonaId ? "persona" : "regular",
@@ -16927,7 +16914,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
     });
     const waitingForSchedule = isFutureScheduledSocialTask(result.task);
       showMsg(messageId, waitingForSchedule ? `浏览器任务已定时：${formatScheduledTime(result.task?.scheduled_at)}` : `浏览器任务已提交：${result.task?.id || ""}`, true, {
-      key: result.task?.id ? `social-task:${result.task.id}` : undefined,
+      key: result.task?.id ? socialTaskToastKey(result.task.id, result.task) : undefined,
       kind: "queued",
       taskId: result.task?.id || "",
       taskPanel: cleanPersonaId ? "persona" : "regular",

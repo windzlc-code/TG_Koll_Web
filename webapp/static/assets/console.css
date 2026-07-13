@@ -6676,7 +6676,7 @@ body.persona-touch-dragging .persona-list-card:active {
   padding: 10px 8px 10px 14px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: var(--panel-solid);
+  background: color-mix(in srgb, var(--panel-solid) 82%, #d7dee7);
   color: var(--ink);
   box-shadow: none;
   pointer-events: auto;
@@ -6701,7 +6701,7 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .toast-message.is-bad {
   border-color: color-mix(in srgb, var(--danger) 72%, var(--line));
-  background: color-mix(in srgb, var(--panel-solid) 92%, var(--danger-soft));
+  background: color-mix(in srgb, var(--panel-solid) 78%, var(--danger-soft));
 }
 
 .toast-message.is-persistent {
@@ -6732,6 +6732,7 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .toast-message.is-status-need_manual {
   --toast-state-color: #b45309;
+  background: color-mix(in srgb, var(--panel-solid) 80%, #e5cfae);
 }
 
 .toast-message.is-switching-out {
