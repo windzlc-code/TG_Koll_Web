@@ -288,6 +288,11 @@ const state = {
   personaListEditorMode: "",
   personaListPage: 1,
   personaListPageSize: storedPersonaListPageSize(),
+  personaBulkMode: false,
+  personaBulkScope: "personas",
+  personaBulkSelectedIds: new Set(),
+  personaBulkSelectedGroupIds: new Set(),
+  personaBulkDeleting: false,
   personaPostPageSize: storedPersonaPostPageSize(),
   personaGenerateCountDefault: storedPersonaGenerateCount(),
   personaGenerateTargetWordsDefault: storedPersonaGenerateTargetWords(),
@@ -7074,9 +7079,11 @@ function personaCollectionListNodes() {
   ];
 }
 
-function visiblePersonaCollectionListNodes() {
+function visiblePersonaCollectionListNodes(options = {}) {
   const pageSize = Math.min(Math.max(Number(state.personaListPageSize || 20), 5), 80);
-  const nodes = personaCollectionListNodes();
+  const nodes = options.groupsOnly === true
+    ? personaCollectionGroups().map((group) => ({ type: "group", group }))
+    : personaCollectionListNodes();
   const totalPages = Math.max(1, Math.ceil(nodes.length / pageSize));
   state.personaListPage = Math.min(Math.max(Number(state.personaListPage || 1), 1), totalPages);
   const start = (state.personaListPage - 1) * pageSize;
@@ -7103,6 +7110,68 @@ function personaIdsFromCollectionNodes(nodes = [], map = personaByIdMap()) {
     }
   });
   return Array.from(ids);
+}
+
+function personaBulkSelectedSet() {
+  if (!(state.personaBulkSelectedIds instanceof Set)) {
+    state.personaBulkSelectedIds = new Set(Array.isArray(state.personaBulkSelectedIds) ? state.personaBulkSelectedIds : []);
+  }
+  const validIds = new Set(state.personas.map((persona) => String(persona.id || "")).filter(Boolean));
+  Array.from(state.personaBulkSelectedIds).forEach((id) => {
+    if (!validIds.has(String(id || ""))) state.personaBulkSelectedIds.delete(id);
+  });
+  return state.personaBulkSelectedIds;
+}
+
+function visiblePersonaBulkIds() {
+  return personaIdsFromCollectionNodes(visiblePersonaCollectionListNodes().nodes);
+}
+
+function personaBulkScope() {
+  return state.personaBulkScope === "groups" ? "groups" : "personas";
+}
+
+function personaBulkSelectedGroupSet() {
+  if (!(state.personaBulkSelectedGroupIds instanceof Set)) {
+    state.personaBulkSelectedGroupIds = new Set(Array.isArray(state.personaBulkSelectedGroupIds) ? state.personaBulkSelectedGroupIds : []);
+  }
+  const validIds = new Set(personaCollectionGroups().map((group) => String(group.id || "")).filter(Boolean));
+  Array.from(state.personaBulkSelectedGroupIds).forEach((id) => {
+    if (!validIds.has(String(id || ""))) state.personaBulkSelectedGroupIds.delete(id);
+  });
+  return state.personaBulkSelectedGroupIds;
+}
+
+function visiblePersonaBulkGroupIds() {
+  return visiblePersonaCollectionListNodes({ groupsOnly: true }).nodes
+    .map((node) => String(node?.group?.id || "").trim())
+    .filter(Boolean);
+}
+
+function setPersonaBulkSelection(personaIds = [], selected = true) {
+  const selectedIds = personaBulkSelectedSet();
+  (Array.isArray(personaIds) ? personaIds : []).forEach((personaId) => {
+    const cleanId = String(personaId || "").trim();
+    if (!cleanId) return;
+    if (selected) selectedIds.add(cleanId);
+    else selectedIds.delete(cleanId);
+  });
+}
+
+function setPersonaBulkGroupSelection(groupIds = [], selected = true) {
+  const selectedIds = personaBulkSelectedGroupSet();
+  (Array.isArray(groupIds) ? groupIds : []).forEach((groupId) => {
+    const cleanId = String(groupId || "").trim();
+    if (!cleanId) return;
+    if (selected) selectedIds.add(cleanId);
+    else selectedIds.delete(cleanId);
+  });
+}
+
+function syncPersonaBulkCheckboxes() {
+  document.querySelectorAll("[data-persona-bulk-group]").forEach((input) => {
+    input.indeterminate = input.dataset.personaBulkPartial === "true";
+  });
 }
 
 function visiblePublishPersonaIdsForRefresh(mode = state.simpleBranches.publishing) {
@@ -8289,6 +8358,92 @@ async function deleteSelectedPersona(personaId = "") {
     state.personaListEditorMode = "";
   }
   await loadPersonas();
+}
+
+async function deleteBulkSelectedPersonas() {
+  if (state.personaBulkDeleting) return;
+  const selectedIds = Array.from(personaBulkSelectedSet());
+  if (!selectedIds.length) return;
+  const confirmed = await openConsoleModal({
+    title: "批量删除人设",
+    message: `确认删除已选的 ${selectedIds.length} 个人设？人设档案、草稿、发布记录、分组和记忆关联将一并清理，且不可恢复。`,
+    confirmText: `删除 ${selectedIds.length} 个`,
+    danger: true,
+  });
+  if (!confirmed) return;
+
+  state.personaBulkDeleting = true;
+  renderPersonaModule();
+  try {
+    const result = await api("/api/persona_dashboard/personas/batch-delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ persona_ids: selectedIds }),
+    });
+    const deletedIds = new Set((result.deleted_ids || selectedIds).map((id) => String(id || "")));
+    [
+      state.personaProfiles,
+      state.personaMemories,
+      state.personaImageLibraries,
+      state.personaDraftPosts,
+      state.personaFavoritePosts,
+      state.personaSelectedPostIds,
+      state.personaPostSources,
+      state.personaPostPages,
+      state.personaPublishHistories,
+      state.personaPublishAccountIds,
+      state.personaPublishResults,
+      state.personaAutomationResults,
+    ].forEach((cache) => {
+      if (!cache || typeof cache !== "object") return;
+      deletedIds.forEach((id) => delete cache[id]);
+    });
+    Object.values(state.personaFetches || {}).forEach((cache) => {
+      deletedIds.forEach((id) => delete cache?.[id]);
+    });
+    if (deletedIds.has(String(state.selectedPersonaId || ""))) {
+      state.selectedPersonaId = "";
+      setSelectedPersonaPostId("");
+      state.personaCreateMode = false;
+    }
+    state.personaBulkSelectedIds = new Set();
+    state.personaBulkMode = false;
+    await loadPersonas();
+    showMsg("commandMsg", `已删除 ${Number(result.deleted_count || deletedIds.size)} 个人设。`, true);
+  } finally {
+    state.personaBulkDeleting = false;
+    if (state.personaBulkMode) renderPersonaModule();
+  }
+}
+
+async function deleteBulkSelectedPersonaGroups() {
+  if (state.personaBulkDeleting) return;
+  const selectedIds = Array.from(personaBulkSelectedGroupSet());
+  if (!selectedIds.length) return;
+  const confirmed = await openConsoleModal({
+    title: "批量删除分组",
+    message: `确认删除已选的 ${selectedIds.length} 个分组？组内人设不会删除，将自动转为未分组。`,
+    confirmText: `删除 ${selectedIds.length} 个`,
+    danger: true,
+  });
+  if (!confirmed) return;
+
+  state.personaBulkDeleting = true;
+  renderPersonaModule();
+  try {
+    const result = await api("/api/persona_dashboard/groups/batch-delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ group_ids: selectedIds }),
+    });
+    state.personaBulkSelectedGroupIds = new Set();
+    state.personaBulkMode = false;
+    await loadPersonas();
+    showMsg("commandMsg", `已删除 ${Number(result.deleted_count || selectedIds.length)} 个分组，组内人设已转为未分组。`, true);
+  } finally {
+    state.personaBulkDeleting = false;
+    if (state.personaBulkMode) renderPersonaModule();
+  }
 }
 
 async function duplicatePersonaArchive(personaId = "") {
@@ -12197,11 +12352,15 @@ function renderPersonaCard(persona, groupId = "", options = {}) {
   const isAutomationContext = options.context === "automation";
   const isAccountPoolContext = options.context === "account_pool";
   const isSideListContext = isPublishContext || isAutomationContext || isAccountPoolContext;
-  const allowEdit = options.allowEdit !== false && !isSideListContext;
-  const allowReorder = options.allowReorder !== false;
+  const batchMode = options.batchMode === true && !isSideListContext;
+  const bulkDisabled = batchMode && options.bulkDisabled === true;
+  const allowEdit = options.allowEdit !== false && !isSideListContext && !batchMode;
+  const allowReorder = options.allowReorder !== false && !batchMode;
   const isMatrix = isPublishContext && publishMode === "matrix_start";
   const selectedIds = Array.isArray(options.selectedIds) ? options.selectedIds.map((id) => String(id || "")) : [];
-  const selected = String(persona.id || "") === String(state.selectedPersonaId || "");
+  const selected = batchMode
+    ? selectedIds.includes(String(persona.id || ""))
+    : String(persona.id || "") === String(state.selectedPersonaId || "");
   const publishSelected = isMatrix || isAccountPoolContext ? selectedIds.includes(String(persona.id || "")) : selected;
   const editing = allowEdit && String(state.personaListEditorId || "") === String(persona.id || "");
   const dragging = allowReorder && String(state.personaDrag?.id || "") === String(persona.id || "") && state.personaDrag?.type === "persona";
@@ -12226,13 +12385,16 @@ function renderPersonaCard(persona, groupId = "", options = {}) {
   const accountHealth = personaAccountHealth(persona);
   return `
     <article
-      class="persona-list-card persona-draggable-card persona-account-health--${esc(accountHealth.tone)} ${isSideListContext ? "publish-persona-card" : ""} ${isAutomationContext ? "automation-persona-card" : ""} ${publishSelected ? "is-active" : ""} ${editing ? "is-editing" : ""} ${dragging ? "is-dragging" : ""}"
+      class="persona-list-card ${allowReorder ? "persona-draggable-card" : ""} persona-account-health--${esc(accountHealth.tone)} ${isSideListContext ? "publish-persona-card" : ""} ${isAutomationContext ? "automation-persona-card" : ""} ${batchMode ? "is-bulk-selecting" : ""} ${batchMode && selected ? "is-bulk-selected" : ""} ${publishSelected ? "is-active" : ""} ${editing ? "is-editing" : ""} ${dragging ? "is-dragging" : ""}"
       data-persona-card="${esc(persona.id)}"
       ${allowReorder ? `data-persona-drag-persona="${esc(persona.id)}"` : ""}
       data-group-id="${esc(groupId)}"
       draggable="false"
     >
-      <button type="button" class="persona-list-item ${showSelectionCheck ? "publish-persona-select-item" : "persona-list-item--status"}" data-persona-select="${esc(persona.id)}">
+      ${batchMode ? `<label class="persona-bulk-check" title="选择${esc(persona.name || persona.id || "人设")}">
+        <input type="checkbox" data-persona-bulk-check="${esc(persona.id)}" ${selected ? "checked" : ""} aria-label="选择${esc(persona.name || persona.id || "人设")}" ${bulkDisabled ? "disabled" : ""} />
+      </label>` : ""}
+      <button type="button" class="persona-list-item ${showSelectionCheck ? "publish-persona-select-item" : "persona-list-item--status"}" ${batchMode ? `data-persona-bulk-toggle="${esc(persona.id)}" aria-pressed="${selected ? "true" : "false"}" ${bulkDisabled ? "disabled" : ""}` : `data-persona-select="${esc(persona.id)}"`}>
         ${showSelectionCheck ? `<span class="publish-persona-check ${publishSelected ? "is-checked" : ""}" aria-hidden="true"></span>` : ""}
         <span class="persona-card-copy ${isMatrix ? "publish-persona-copy" : ""}">
           <span class="persona-card-title">
@@ -12271,21 +12433,31 @@ function renderPersonaFolder(group, map, options = {}) {
   const isAutomationContext = options.context === "automation";
   const isAccountPoolContext = options.context === "account_pool";
   const isSideListContext = isPublishContext || isAutomationContext || isAccountPoolContext;
-  const allowEdit = options.allowEdit !== false && !isSideListContext;
+  const batchMode = options.batchMode === true && !isSideListContext;
+  const groupBatchMode = batchMode && options.groupBatchMode === true;
+  const bulkDisabled = batchMode && options.bulkDisabled === true;
+  const allowEdit = options.allowEdit !== false && !isSideListContext && !batchMode;
   const allowGroupEdit = options.allowGroupEdit === true || allowEdit;
-  const allowReorder = options.allowReorder !== false;
+  const allowReorder = options.allowReorder !== false && !batchMode;
   const isMatrix = isPublishContext && publishMode === "matrix_start";
   const selectedIds = Array.isArray(options.selectedIds) ? options.selectedIds.map((id) => String(id || "")) : [];
+  const selectedGroupIds = Array.isArray(options.selectedGroupIds) ? options.selectedGroupIds.map((id) => String(id || "")) : [];
   const personas = (group.persona_ids || []).map((id) => map.get(String(id))).filter(Boolean);
   const hasPersonas = personas.length > 0;
   const collapsed = Boolean(group.collapsed);
   const editing = allowGroupEdit && String(state.personaListEditorId || "") === `group:${String(group.id || "")}`;
   const selection = publishGroupSelectionState(group.persona_ids || [], selectedIds);
+  const groupSelected = groupBatchMode && selectedGroupIds.includes(String(group.id || ""));
   return `
     <div class="persona-layer-group ${isSideListContext ? "publish-persona-group" : ""} ${isAutomationContext ? "automation-persona-group" : ""} ${collapsed ? "is-collapsed" : ""} ${hasPersonas ? "" : "is-empty"}" data-persona-folder="${esc(group.id)}" ${allowReorder ? `data-persona-drop-zone="${esc(group.id)}"` : ""}>
-      <div class="persona-list-card persona-folder-card ${isSideListContext ? "publish-folder-card" : ""} ${isAutomationContext ? "automation-folder-card" : ""} ${selection.all ? "is-active" : ""} ${selection.partial ? "is-partial" : ""} ${editing ? "is-editing" : ""}" data-persona-folder-card="${esc(group.id)}">
+      <div class="persona-list-card persona-folder-card ${isSideListContext ? "publish-folder-card" : ""} ${isAutomationContext ? "automation-folder-card" : ""} ${batchMode && (groupBatchMode || hasPersonas) ? "is-bulk-selecting" : ""} ${groupBatchMode && groupSelected ? "is-bulk-selected" : ""} ${!groupBatchMode && batchMode && (selection.all || selection.partial) ? "is-bulk-selected" : ""} ${!groupBatchMode && selection.all ? "is-active" : ""} ${!groupBatchMode && selection.partial ? "is-partial" : ""} ${editing ? "is-editing" : ""}" data-persona-folder-card="${esc(group.id)}">
+        ${groupBatchMode ? `<label class="persona-bulk-check persona-bulk-check--group" title="选择分组${esc(group.name)}">
+          <input type="checkbox" data-persona-bulk-group-check="${esc(group.id)}" ${groupSelected ? "checked" : ""} aria-label="选择分组${esc(group.name)}" ${bulkDisabled ? "disabled" : ""} />
+        </label>` : (batchMode && hasPersonas ? `<label class="persona-bulk-check persona-bulk-check--group" title="选择分组${esc(group.name)}内全部人设">
+          <input type="checkbox" data-persona-bulk-group="${esc(group.id)}" data-persona-bulk-partial="${selection.partial ? "true" : "false"}" ${selection.all ? "checked" : ""} aria-label="选择${esc(group.name)}内全部人设" ${bulkDisabled ? "disabled" : ""} />
+        </label>` : "")}
         ${hasPersonas ? `
-        <button type="button" class="persona-folder-main" data-persona-toggle-folder="${esc(group.id)}" aria-label="${collapsed ? "展开分组" : "收起分组"}" aria-expanded="${collapsed ? "false" : "true"}">
+        <button type="button" class="persona-folder-main" ${groupBatchMode ? `data-persona-bulk-group-toggle="${esc(group.id)}" aria-label="${groupSelected ? "取消选择" : "选择"}分组${esc(group.name)}" aria-pressed="${groupSelected ? "true" : "false"}" ${bulkDisabled ? "disabled" : ""}` : `data-persona-toggle-folder="${esc(group.id)}" aria-label="${collapsed ? "展开分组" : "收起分组"}" aria-expanded="${collapsed ? "false" : "true"}`}>
           ${isMatrix ? `<span class="publish-persona-check ${selection.all ? "is-checked" : ""} ${selection.partial ? "is-partial" : ""}" data-matrix-group="${esc(group.id)}" aria-hidden="true"></span>` : `<span class="persona-folder-caret" aria-hidden="true"></span>`}
           <span class="persona-folder-copy">
             <span class="persona-card-title">
@@ -12293,11 +12465,11 @@ function renderPersonaFolder(group, map, options = {}) {
               <span class="persona-kind-badge persona-group-badge">分组</span>
               <span class="persona-kind-badge">${personas.length} 个</span>
             </span>
-            <small>${isMatrix ? `已选 ${selection.count}/${selection.total}` : (collapsed ? "已收起" : "已展开")}</small>
+            <small>${groupBatchMode ? "删除分组后人设保留" : (isMatrix ? `已选 ${selection.count}/${selection.total}` : (collapsed ? "已收起" : "已展开"))}</small>
           </span>
         </button>
         ` : `
-        <div class="persona-folder-main persona-folder-main--static" aria-label="空分组">
+        <${groupBatchMode ? "button type=\"button\"" : "div"} class="persona-folder-main persona-folder-main--static" ${groupBatchMode ? `data-persona-bulk-group-toggle="${esc(group.id)}" aria-label="${groupSelected ? "取消选择" : "选择"}空分组${esc(group.name)}" aria-pressed="${groupSelected ? "true" : "false"}" ${bulkDisabled ? "disabled" : ""}` : `aria-label="空分组"`}>
           <span class="persona-folder-copy">
             <span class="persona-card-title">
               <strong>${esc(group.name)}</strong>
@@ -12306,7 +12478,7 @@ function renderPersonaFolder(group, map, options = {}) {
             </span>
             <small>空分组</small>
           </span>
-        </div>
+        </${groupBatchMode ? "button" : "div"}>
         `}
         ${allowGroupEdit ? `<button type="button" class="persona-card-edit" data-persona-edit-group="${esc(group.id)}" title="编辑分组" aria-label="编辑分组">...</button>` : ""}
         ${allowGroupEdit && editing ? `
@@ -12322,7 +12494,7 @@ function renderPersonaFolder(group, map, options = {}) {
           </div>
         ` : ""}
       </div>
-      ${hasPersonas || allowReorder ? `<div class="persona-layer-children ${hasPersonas ? "" : "persona-layer-children--empty-drop"}" ${allowReorder ? `data-persona-drop-zone="${esc(group.id)}"` : ""}>${hasPersonas ? personas.map((persona) => renderPersonaCard(persona, group.id, options)).join("") : ""}</div>` : ""}
+      ${!groupBatchMode && (hasPersonas || allowReorder) ? `<div class="persona-layer-children ${hasPersonas ? "" : "persona-layer-children--empty-drop"}" ${allowReorder ? `data-persona-drop-zone="${esc(group.id)}"` : ""}>${hasPersonas ? personas.map((persona) => renderPersonaCard(persona, group.id, options)).join("") : ""}</div>` : ""}
     </div>`;
 }
 
@@ -12333,7 +12505,7 @@ function renderPersonaCollectionList(options = {}) {
   const isSideListContext = isPublishContext || isAutomationContext || isAccountPoolContext;
   const allowReorder = options.allowReorder !== false;
   const map = personaByIdMap();
-  const { pageSize, totalPages, currentPage, nodes: visibleNodes } = visiblePersonaCollectionListNodes();
+  const { pageSize, totalPages, currentPage, nodes: visibleNodes } = visiblePersonaCollectionListNodes({ groupsOnly: options.groupBatchMode === true });
   const pager = `
     <div class="persona-list-pager">
       <button type="button" data-persona-list-page="first" title="首页" aria-label="首页" ${currentPage <= 1 ? "disabled" : ""}><span class="ui-arrow-icon ui-arrow-icon--double-left" aria-hidden="true"></span></button>
@@ -12354,6 +12526,10 @@ function renderPersonaCollectionList(options = {}) {
 
 function personaListTotalPages(pageSize = Number(state.personaListPageSize || 20)) {
   const groups = personaCollectionGroups();
+  if (state.personaBulkMode && personaBulkScope() === "groups") {
+    const cleanPageSize = Math.min(Math.max(Number(pageSize || 20), 5), 80);
+    return Math.max(1, Math.ceil(groups.length / cleanPageSize));
+  }
   const assigned = personaAssignedIds();
   const ungroupedCount = state.personas.filter((persona) => !assigned.has(String(persona.id || ""))).length;
   const cleanPageSize = Math.min(Math.max(Number(pageSize || 20), 5), 80);
@@ -13105,6 +13281,15 @@ function renderPersonaModule() {
     return;
   }
   const current = selectedPersona();
+  const bulkGroups = personaCollectionGroups();
+  const groupBulkMode = state.personaBulkMode && personaBulkScope() === "groups";
+  const bulkSelectedIds = groupBulkMode ? personaBulkSelectedGroupSet() : personaBulkSelectedSet();
+  const currentPageIds = state.personaBulkMode
+    ? (groupBulkMode ? visiblePersonaBulkGroupIds() : visiblePersonaBulkIds())
+    : [];
+  const currentPageAllSelected = currentPageIds.length > 0 && currentPageIds.every((id) => bulkSelectedIds.has(String(id)));
+  const bulkTotal = groupBulkMode ? bulkGroups.length : state.personas.length;
+  const hasCollectionEntries = groupBulkMode ? bulkGroups.length > 0 : (state.personas.length > 0 || bulkGroups.length > 0);
   removePersonaCardEditorPortal();
   $("moduleBody").innerHTML = `
     <div class="persona-console-layout">
@@ -13114,26 +13299,48 @@ function renderPersonaModule() {
       <aside class="persona-list-shell">
         <div class="persona-inline-panel persona-list-toolbar">
           <div class="persona-list-head">
-            <div>
+            <div class="persona-head-copy">
               <strong>人设列表</strong>
-              <span>集中查看、选择和管理</span>
+              <span>${state.personaBulkMode ? (groupBulkMode ? "选择要删除的分组" : "选择要删除的人设") : "集中查看、选择和管理"}</span>
             </div>
-            <span>${esc(`${state.personas.length} 个`)}</span>
+            <span aria-live="polite">${esc(state.personaBulkMode ? `已选 ${bulkSelectedIds.size} / ${bulkTotal}` : `${state.personas.length} 个`)}</span>
           </div>
-          <div class="persona-list-actions">
-            <button type="button" class="primary" data-persona-open-create>新建人设</button>
-            <button type="button" data-persona-create-group>创建分组</button>
+          <div class="persona-list-actions ${state.personaBulkMode ? "persona-list-actions--bulk" : ""}" ${state.personaBulkDeleting ? `aria-busy="true"` : ""}>
+            ${state.personaBulkMode ? `
+              <div class="persona-bulk-scope" role="group" aria-label="批量管理对象">
+                <button type="button" data-persona-bulk-scope="personas" class="${groupBulkMode ? "" : "is-active"}" aria-pressed="${groupBulkMode ? "false" : "true"}" ${state.personaBulkDeleting ? "disabled" : ""}>人设</button>
+                <button type="button" data-persona-bulk-scope="groups" class="${groupBulkMode ? "is-active" : ""}" aria-pressed="${groupBulkMode ? "true" : "false"}" ${state.personaBulkDeleting ? "disabled" : ""}>分组</button>
+              </div>
+              <button type="button" data-persona-bulk-page ${currentPageIds.length && !state.personaBulkDeleting ? "" : "disabled"}>${currentPageAllSelected ? renderClearSelectionIcon() : renderSelectAllIcon()}<span>${currentPageAllSelected ? "取消本页" : "全选本页"}</span></button>
+              <button type="button" data-persona-bulk-clear ${bulkSelectedIds.size && !state.personaBulkDeleting ? "" : "disabled"}>${renderClearSelectionIcon()}<span>清空选择</span></button>
+              <button type="button" class="danger" data-persona-bulk-delete ${bulkSelectedIds.size && !state.personaBulkDeleting ? "" : "disabled"}>${renderTrashIcon()}<span>${state.personaBulkDeleting ? "正在删除" : `${groupBulkMode ? "删除分组" : "删除"} (${bulkSelectedIds.size})`}</span></button>
+              <button type="button" data-persona-bulk-exit ${state.personaBulkDeleting ? "disabled" : ""}>${renderClearSelectionIcon()}<span>完成</span></button>
+            ` : `
+              <button type="button" class="primary" data-persona-open-create>新建人设</button>
+              <button type="button" data-persona-create-group>创建分组</button>
+              <button type="button" data-persona-bulk-start>${renderSelectAllIcon()}<span>批量管理</span></button>
+            `}
           </div>
         </div>
-        ${state.personas.length ? `
-          ${renderPersonaCollectionList()}
-        ` : `<div class="empty-state">当前还没有人设，先点击“新建人设”。</div>`}
+        ${hasCollectionEntries ? `
+          ${renderPersonaCollectionList({
+            batchMode: state.personaBulkMode,
+            groupBatchMode: groupBulkMode,
+            selectedIds: Array.from(groupBulkMode ? personaBulkSelectedSet() : bulkSelectedIds),
+            selectedGroupIds: Array.from(groupBulkMode ? bulkSelectedIds : personaBulkSelectedGroupSet()),
+            bulkDisabled: state.personaBulkDeleting,
+            allowEdit: !state.personaBulkMode,
+            allowGroupEdit: !state.personaBulkMode,
+            allowReorder: !state.personaBulkMode,
+          })}
+        ` : `<div class="empty-state">${groupBulkMode ? "当前没有可管理的分组。" : "当前还没有人设，先点击“新建人设”。"}</div>`}
       </aside>
     </div>
   `;
   if (state.personaCreateMode || !current) renderPersonaDetail();
   else renderPersonaDetail();
   renderPersonaCardEditorPortal();
+  syncPersonaBulkCheckboxes();
   });
 }
 
@@ -16847,6 +17054,86 @@ function bindEvents() {
       event.stopPropagation();
       return;
     }
+    const startPersonaBulk = event.target.closest("[data-persona-bulk-start]");
+    if (startPersonaBulk) {
+      state.personaBulkMode = true;
+      state.personaBulkScope = "personas";
+      state.personaBulkSelectedIds = new Set();
+      state.personaBulkSelectedGroupIds = new Set();
+      state.personaListEditorId = "";
+      state.personaListEditorMode = "";
+      renderPersonaModule();
+      return;
+    }
+    const personaBulkScopeButton = event.target.closest("[data-persona-bulk-scope]");
+    if (personaBulkScopeButton && !state.personaBulkDeleting) {
+      state.personaBulkScope = personaBulkScopeButton.dataset.personaBulkScope === "groups" ? "groups" : "personas";
+      state.personaListPage = 1;
+      renderPersonaModule();
+      return;
+    }
+    if (event.target.closest("[data-persona-bulk-exit]")) {
+      state.personaBulkMode = false;
+      state.personaBulkScope = "personas";
+      state.personaBulkSelectedIds = new Set();
+      state.personaBulkSelectedGroupIds = new Set();
+      renderPersonaModule();
+      return;
+    }
+    if (event.target.closest("[data-persona-bulk-clear]")) {
+      if (personaBulkScope() === "groups") state.personaBulkSelectedGroupIds = new Set();
+      else state.personaBulkSelectedIds = new Set();
+      renderPersonaModule();
+      return;
+    }
+    if (event.target.closest("[data-persona-bulk-page]")) {
+      const groupMode = personaBulkScope() === "groups";
+      const pageIds = groupMode ? visiblePersonaBulkGroupIds() : visiblePersonaBulkIds();
+      const selectedIds = groupMode ? personaBulkSelectedGroupSet() : personaBulkSelectedSet();
+      const allSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.has(String(id)));
+      if (groupMode) setPersonaBulkGroupSelection(pageIds, !allSelected);
+      else setPersonaBulkSelection(pageIds, !allSelected);
+      renderPersonaModule();
+      return;
+    }
+    if (event.target.closest("[data-persona-bulk-delete]")) {
+      const operation = personaBulkScope() === "groups" ? deleteBulkSelectedPersonaGroups : deleteBulkSelectedPersonas;
+      operation().catch((error) => showMsg("commandMsg", error.detail || error.message || "批量删除失败", false));
+      return;
+    }
+    const personaBulkCheck = event.target.closest("[data-persona-bulk-check]");
+    if (personaBulkCheck) {
+      setPersonaBulkSelection([personaBulkCheck.dataset.personaBulkCheck || ""], personaBulkCheck.checked);
+      renderPersonaModule();
+      return;
+    }
+    const personaBulkGroup = event.target.closest("[data-persona-bulk-group]");
+    if (personaBulkGroup && personaBulkScope() === "personas") {
+      const group = personaCollectionGroups().find((item) => String(item.id || "") === String(personaBulkGroup.dataset.personaBulkGroup || ""));
+      setPersonaBulkSelection(group?.persona_ids || [], personaBulkGroup.checked);
+      renderPersonaModule();
+      return;
+    }
+    const personaBulkGroupCheck = event.target.closest("[data-persona-bulk-group-check]");
+    if (personaBulkGroupCheck && personaBulkScope() === "groups") {
+      setPersonaBulkGroupSelection([personaBulkGroupCheck.dataset.personaBulkGroupCheck || ""], personaBulkGroupCheck.checked);
+      renderPersonaModule();
+      return;
+    }
+    const personaBulkGroupToggle = event.target.closest("[data-persona-bulk-group-toggle]");
+    if (personaBulkGroupToggle && personaBulkScope() === "groups") {
+      const groupId = String(personaBulkGroupToggle.dataset.personaBulkGroupToggle || "");
+      setPersonaBulkGroupSelection([groupId], !personaBulkSelectedGroupSet().has(groupId));
+      renderPersonaModule();
+      return;
+    }
+    const personaBulkToggle = event.target.closest("[data-persona-bulk-toggle]");
+    if (personaBulkToggle && personaBulkScope() === "personas") {
+      const personaId = String(personaBulkToggle.dataset.personaBulkToggle || "");
+      setPersonaBulkSelection([personaId], !personaBulkSelectedSet().has(personaId));
+      renderPersonaModule();
+      return;
+    }
     const editableMediaCard = event.target.closest(".persona-edit-media-card[data-persona-select-post-media]");
     if (
       editableMediaCard
@@ -17559,7 +17846,7 @@ function bindEvents() {
       renderConfirmSummary();
     }
     const personaSelectButton = event.target.closest("[data-persona-select]") || (
-      event.target.closest(".persona-card-edit, .persona-card-menu, .persona-card-submenu, button, a, input, select, textarea")
+      event.target.closest(".persona-card-edit, .persona-card-menu, .persona-card-submenu, button, a, input, label, select, textarea")
         ? null
         : event.target.closest("[data-persona-card]")
     );

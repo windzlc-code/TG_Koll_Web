@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 import webapp.server as server
@@ -22,6 +23,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self._old_tool_runtime_dir = os.environ.get("TOOL_R18_RUNTIME_DIR")
         self._old_bootstrap_password = os.environ.get("ADMIN_BOOTSTRAP_PASSWORD")
         self._old_cookie_secure = os.environ.get("SESSION_COOKIE_SECURE")
+        self._old_password_vault_key = os.environ.get("PASSWORD_VAULT_KEY")
         self._old_server_runtime_config_path = server.RUNTIME_CONFIG_PATH
         self._old_server_tool_runtime_dir = server.TOOL_R18_RUNTIME_DIR
         self._old_social_tool_runtime_dir = social_automation_api._TOOL_R18_RUNTIME_DIR
@@ -41,6 +43,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         os.environ["TOOL_R18_RUNTIME_DIR"] = str(self.tool_runtime_dir)
         os.environ["ADMIN_BOOTSTRAP_PASSWORD"] = "admin123secure"
         os.environ["SESSION_COOKIE_SECURE"] = "0"
+        os.environ["PASSWORD_VAULT_KEY"] = Fernet.generate_key().decode("ascii")
         with server._AUTH_RATE_LOCK:
             server._AUTH_RATE_EVENTS.clear()
         server.RUNTIME_CONFIG_PATH = self.data_dir / "runtime_config.json"
@@ -62,6 +65,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self._restore_env("TOOL_R18_RUNTIME_DIR", self._old_tool_runtime_dir)
         self._restore_env("ADMIN_BOOTSTRAP_PASSWORD", self._old_bootstrap_password)
         self._restore_env("SESSION_COOKIE_SECURE", self._old_cookie_secure)
+        self._restore_env("PASSWORD_VAULT_KEY", self._old_password_vault_key)
         self._tmpdir.cleanup()
 
     def _restore_env(self, key, old_value):
@@ -564,6 +568,154 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(persisted["groups"][0]["persona_ids"], [])
         self.assertEqual(persisted["groups"][1]["persona_ids"], [])
 
+    def test_batch_delete_groups_preserves_personas_and_releases_them_in_order(self):
+        self._write_archives()
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        second = json.loads(json.dumps(archives[0]))
+        second.update({"id": "persona-2", "name": "Science Teacher"})
+        archives.append(second)
+        archives_path.write_text(json.dumps(archives), encoding="utf-8")
+
+        first = self.client.post("/api/persona_dashboard/groups", json={"name": "First"}).json()["group"]
+        second_group = self.client.post("/api/persona_dashboard/groups", json={"name": "Second"}).json()["group"]
+        self.client.post(f"/api/persona_dashboard/groups/{first['id']}/personas", json={"persona_id": "persona-1"})
+        self.client.post(f"/api/persona_dashboard/groups/{second_group['id']}/personas", json={"persona_id": "persona-2"})
+
+        resp = self.client.post(
+            "/api/persona_dashboard/groups/batch-delete",
+            json={"group_ids": [first["id"], second_group["id"], first["id"]]},
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(resp.json()["deleted_ids"], [first["id"], second_group["id"]])
+        self.assertEqual(resp.json()["deleted_count"], 2)
+        persisted = json.loads((self.tool_runtime_dir / "persona_groups.json").read_text(encoding="utf-8"))
+        self.assertEqual(persisted["groups"], [])
+        self.assertEqual(persisted["ungrouped_persona_ids"], ["persona-1", "persona-2"])
+        self.assertEqual(len(json.loads(archives_path.read_text(encoding="utf-8"))), 2)
+        conn = sqlite3.connect(str(self.data_dir / "app.db"))
+        try:
+            owner_count = conn.execute(
+                "SELECT COUNT(*) FROM persona_group_owners WHERE group_id IN (?, ?)",
+                (first["id"], second_group["id"]),
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(owner_count, 0)
+
+    def test_batch_delete_groups_supports_empty_group(self):
+        empty_group = self.client.post("/api/persona_dashboard/groups", json={"name": "Empty"}).json()["group"]
+
+        resp = self.client.post(
+            "/api/persona_dashboard/groups/batch-delete",
+            json={"group_ids": [empty_group["id"]]},
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(resp.json()["deleted_count"], 1)
+        self.assertEqual(resp.json()["released_persona_ids"], [])
+
+    def test_batch_delete_group_does_not_release_persona_kept_in_another_group(self):
+        groups_path = self.tool_runtime_dir / "persona_groups.json"
+        groups_path.write_text(json.dumps({
+            "groups": [
+                {"id": "delete-me", "name": "Delete", "persona_ids": ["persona-1"]},
+                {"id": "keep-me", "name": "Keep", "persona_ids": ["persona-1"]},
+            ],
+            "ungrouped_persona_ids": [],
+        }), encoding="utf-8")
+
+        resp = self.client.post(
+            "/api/persona_dashboard/groups/batch-delete",
+            json={"group_ids": ["delete-me"]},
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(resp.json()["released_persona_ids"], [])
+        persisted = json.loads(groups_path.read_text(encoding="utf-8"))
+        self.assertEqual([group["id"] for group in persisted["groups"]], ["keep-me"])
+        self.assertEqual(persisted["ungrouped_persona_ids"], [])
+
+    def test_group_mutations_preserve_existing_ungrouped_order(self):
+        groups_path = self.tool_runtime_dir / "persona_groups.json"
+        groups_path.write_text(json.dumps({
+            "groups": [],
+            "ungrouped_persona_ids": ["persona-2", "persona-1"],
+        }), encoding="utf-8")
+
+        group = self.client.post("/api/persona_dashboard/groups", json={"name": "Temporary"}).json()["group"]
+        rename = self.client.patch(
+            f"/api/persona_dashboard/groups/{group['id']}",
+            json={"name": "Renamed"},
+        )
+        self.assertEqual(rename.status_code, 200, rename.text)
+        collapse = self.client.post(
+            f"/api/persona_dashboard/groups/{group['id']}/collapse",
+            json={"collapsed": True},
+        )
+        self.assertEqual(collapse.status_code, 200, collapse.text)
+        delete = self.client.delete(f"/api/persona_dashboard/groups/{group['id']}")
+        self.assertEqual(delete.status_code, 200, delete.text)
+
+        persisted = json.loads(groups_path.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["ungrouped_persona_ids"], ["persona-2", "persona-1"])
+
+    def test_batch_delete_groups_rejects_missing_group_without_mutation(self):
+        first = self.client.post("/api/persona_dashboard/groups", json={"name": "Keep"}).json()["group"]
+        groups_path = self.tool_runtime_dir / "persona_groups.json"
+        before = groups_path.read_text(encoding="utf-8")
+
+        resp = self.client.post(
+            "/api/persona_dashboard/groups/batch-delete",
+            json={"group_ids": [first["id"], "missing-group"]},
+        )
+
+        self.assertEqual(resp.status_code, 404, resp.text)
+        self.assertEqual(groups_path.read_text(encoding="utf-8"), before)
+
+    def test_batch_delete_groups_requires_login(self):
+        resp = self.unauth_client.post(
+            "/api/persona_dashboard/groups/batch-delete",
+            json={"group_ids": ["group-1"]},
+        )
+        self.assertEqual(resp.status_code, 401, resp.text)
+
+    def test_batch_delete_groups_rejects_group_owned_by_another_user(self):
+        group = self.client.post("/api/persona_dashboard/groups", json={"name": "Admin only"}).json()["group"]
+        groups_path = self.tool_runtime_dir / "persona_groups.json"
+        before = groups_path.read_text(encoding="utf-8")
+        application = self.unauth_client.post("/api/auth/apply", json={
+            "username": "group_batch_user",
+            "password": "guest123",
+            "full_name": "Group Batch User",
+            "email": "group-batch@example.com",
+            "phone": "0912345678",
+            "company": "Vecto Test",
+            "use_case": "Group batch permission regression",
+        })
+        self.assertEqual(application.status_code, 200, application.text)
+        user_id = int(application.json()["id"])
+        approval = self.client.post(
+            f"/api/admin/users/{user_id}/approval",
+            json={"approval_status": "approved", "expected_approval_status": "pending"},
+        )
+        self.assertEqual(approval.status_code, 200, approval.text)
+        customer = TestClient(self.app)
+        login = customer.post(
+            "/api/auth/user-login",
+            json={"username": "group_batch_user", "password": "guest123"},
+        )
+        self.assertEqual(login.status_code, 200, login.text)
+
+        resp = customer.post(
+            "/api/persona_dashboard/groups/batch-delete",
+            json={"group_ids": [group["id"]]},
+        )
+
+        self.assertEqual(resp.status_code, 404, resp.text)
+        self.assertEqual(groups_path.read_text(encoding="utf-8"), before)
+
     def test_persona_groups_reorder_persists_drag_layout(self):
         self._write_archives()
         archives_path = self.tool_runtime_dir / "persona_archives.json"
@@ -752,6 +904,121 @@ class PersonaDashboardApiTests(unittest.TestCase):
         resp = self.client.delete("/api/persona_dashboard/personas/wf-1")
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(resp.json()["ok"])
+
+    def test_batch_delete_personas_cleans_related_runtime_state(self):
+        self._write_archives()
+        archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
+        second = json.loads(json.dumps(archives[0]))
+        second.update({"id": "persona-2", "name": "Science Teacher"})
+        archives.append(second)
+        primary_path = self.tool_runtime_dir / "persona_archives.json"
+        cache_path = self.tool_runtime_dir / "persona_archives_cache.json"
+        primary_path.write_text(json.dumps(archives), encoding="utf-8")
+        cache_path.write_text(json.dumps(archives), encoding="utf-8")
+        (self.tool_runtime_dir / "persona_groups.json").write_text(json.dumps({
+            "groups": [{"id": "group-1", "name": "Teachers", "persona_ids": ["persona-1", "persona-2"]}],
+        }), encoding="utf-8")
+        for filename in (
+            "persona_memory.json",
+            "persona_dashboard_deleted_posts.json",
+            "persona_dashboard_hidden_memories.json",
+        ):
+            (self.tool_runtime_dir / filename).write_text(json.dumps({
+                "persona-1": ["entry-1"],
+                "persona-2": ["entry-2"],
+            }), encoding="utf-8")
+        admin_id = self._admin_user_id()
+        conn = sqlite3.connect(str(self.data_dir / "app.db"))
+        try:
+            conn.executemany(
+                "INSERT INTO persona_owners(archive_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                [("persona-1", admin_id, 1, 1), ("persona-2", admin_id, 1, 1)],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        resp = self.client.post(
+            "/api/persona_dashboard/personas/batch-delete",
+            json={"persona_ids": ["persona-1", "persona-2", "persona-1"]},
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(resp.json()["deleted_ids"], ["persona-1", "persona-2"])
+        self.assertEqual(resp.json()["deleted_count"], 2)
+        self.assertEqual(json.loads(primary_path.read_text(encoding="utf-8")), [])
+        self.assertEqual(json.loads(cache_path.read_text(encoding="utf-8")), [])
+        groups = json.loads((self.tool_runtime_dir / "persona_groups.json").read_text(encoding="utf-8"))
+        self.assertEqual(groups["groups"][0]["persona_ids"], [])
+        for filename in (
+            "persona_memory.json",
+            "persona_dashboard_deleted_posts.json",
+            "persona_dashboard_hidden_memories.json",
+        ):
+            self.assertEqual(json.loads((self.tool_runtime_dir / filename).read_text(encoding="utf-8")), {})
+        conn = sqlite3.connect(str(self.data_dir / "app.db"))
+        try:
+            owner_count = conn.execute(
+                "SELECT COUNT(*) FROM persona_owners WHERE archive_id IN ('persona-1', 'persona-2')"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(owner_count, 0)
+
+    def test_batch_delete_rejects_missing_persona_without_mutation(self):
+        self._write_archives()
+        primary_path = self.tool_runtime_dir / "persona_archives.json"
+        before = primary_path.read_text(encoding="utf-8")
+
+        resp = self.client.post(
+            "/api/persona_dashboard/personas/batch-delete",
+            json={"persona_ids": ["persona-1", "missing-persona"]},
+        )
+
+        self.assertEqual(resp.status_code, 404, resp.text)
+        self.assertEqual(primary_path.read_text(encoding="utf-8"), before)
+
+    def test_batch_delete_personas_requires_login(self):
+        resp = self.unauth_client.post(
+            "/api/persona_dashboard/personas/batch-delete",
+            json={"persona_ids": ["persona-1"]},
+        )
+        self.assertEqual(resp.status_code, 401, resp.text)
+
+    def test_batch_delete_rejects_persona_owned_by_another_user(self):
+        self._write_archives()
+        primary_path = self.tool_runtime_dir / "persona_archives.json"
+        before = primary_path.read_text(encoding="utf-8")
+        application = self.unauth_client.post("/api/auth/apply", json={
+            "username": "batch_delete_user",
+            "password": "guest123",
+            "full_name": "Batch Delete User",
+            "email": "batch-delete@example.com",
+            "phone": "0912345678",
+            "company": "Vecto Test",
+            "use_case": "Batch delete permission regression",
+        })
+        self.assertEqual(application.status_code, 200, application.text)
+        user_id = int(application.json()["id"])
+        approval = self.client.post(
+            f"/api/admin/users/{user_id}/approval",
+            json={"approval_status": "approved", "expected_approval_status": "pending"},
+        )
+        self.assertEqual(approval.status_code, 200, approval.text)
+        customer = TestClient(self.app)
+        login = customer.post(
+            "/api/auth/user-login",
+            json={"username": "batch_delete_user", "password": "guest123"},
+        )
+        self.assertEqual(login.status_code, 200, login.text)
+
+        resp = customer.post(
+            "/api/persona_dashboard/personas/batch-delete",
+            json={"persona_ids": ["persona-1"]},
+        )
+
+        self.assertEqual(resp.status_code, 404, resp.text)
+        self.assertEqual(primary_path.read_text(encoding="utf-8"), before)
 
     def test_public_refresh_endpoint_returns_task_status(self):
         with mock.patch.object(server, "_start_persona_dashboard_refresh", return_value={"id": "pdr_test", "status": "queued", "message": "queued"}):
