@@ -3402,7 +3402,7 @@ function bindActions() {
   });
 
   el("btnToUser").addEventListener("click", () => {
-    location.href = "/console.html";
+    location.href = "/";
   });
 
   if (el("btnTaskRefresh")) {

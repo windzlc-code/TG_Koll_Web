@@ -40,7 +40,15 @@ from PIL import Image
 import get_gemini
 import asset_uploader
 import runninghub_common
-from .auth import SESSION_COOKIE, create_session, delete_session, get_current_user as _get_session_user, hash_password, verify_password
+from .auth import (
+    SESSION_COOKIE,
+    create_session,
+    delete_session,
+    get_current_user as _get_session_user,
+    get_user_allowing_password_change as _get_session_user_allowing_password_change,
+    hash_password,
+    verify_password,
+)
 from .db import db, get_admin_config, init_db, set_admin_config
 from .password_vault import (
     PasswordVaultDecryptError,
@@ -484,20 +492,13 @@ def _password_change_required_detail(user: dict[str, Any]) -> dict[str, Any]:
 def _get_user_allowing_password_change(
     session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
 ) -> dict[str, Any]:
-    return _get_session_user(session_token)
+    return _get_session_user_allowing_password_change(session_token)
 
 
 def get_current_user(
     session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
 ) -> dict[str, Any]:
-    user = _get_session_user(session_token)
-    if int(user.get("must_change_password") or 0) == 1:
-        expires_at = _password_expiry(user)
-        if expires_at <= _now_ts() and session_token:
-            with db() as conn:
-                delete_session(conn, str(session_token))
-        raise HTTPException(status_code=428, detail=_password_change_required_detail(user))
-    return user
+    return _get_session_user(session_token)
 
 
 def require_admin(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
@@ -549,13 +550,38 @@ def _identity_user_id(user: dict[str, Any]) -> int:
         return 0
 
 
-def _visible_persona_ids(user: dict[str, Any]) -> set[str] | None:
-    if _is_admin(user):
-        return None
+def _workspace_user_id(user: dict[str, Any]) -> int:
+    """Resolve the tenant used by regular console APIs for every role."""
+    user_id = _identity_user_id(user)
+    if user_id <= 0:
+        raise HTTPException(status_code=401, detail="invalid workspace identity")
+    return user_id
+
+
+TENANT_RESOURCE_LIFECYCLE_LOCK = threading.RLock()
+
+
+def _require_active_workspace_user(user: dict[str, Any]) -> int:
+    user_id = _workspace_user_id(user)
+    with db() as conn:
+        row = conn.execute(
+            "SELECT is_admin, is_disabled, approval_status FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+    if (
+        not row
+        or int(row["is_disabled"] or 0) == 1
+        or (int(row["is_admin"] or 0) != 1 and str(row["approval_status"] or "") != "approved")
+    ):
+        raise HTTPException(status_code=403, detail="账号已停用或不存在")
+    return user_id
+
+
+def _visible_persona_ids(user: dict[str, Any]) -> set[str]:
     with db() as conn:
         rows = conn.execute(
             "SELECT archive_id FROM persona_owners WHERE user_id = ?",
-            (_identity_user_id(user),),
+            (_workspace_user_id(user),),
         ).fetchall()
     return {str(row["archive_id"] or "").strip() for row in rows if str(row["archive_id"] or "").strip()}
 
@@ -566,6 +592,16 @@ def _record_persona_owner(archive_id: str, user: dict[str, Any]) -> None:
         raise HTTPException(status_code=500, detail="人设创建结果缺少 ID")
     now = _now_ts()
     with db() as conn:
+        active = conn.execute(
+            "SELECT is_admin, is_disabled, approval_status FROM users WHERE id = ?",
+            (_workspace_user_id(user),),
+        ).fetchone()
+        if (
+            not active
+            or int(active["is_disabled"] or 0) == 1
+            or (int(active["is_admin"] or 0) != 1 and str(active["approval_status"] or "") != "approved")
+        ):
+            raise HTTPException(status_code=403, detail="账号已停用或不存在")
         conn.execute(
             "INSERT INTO persona_owners(archive_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?) "
             "ON CONFLICT(archive_id) DO UPDATE SET user_id = excluded.user_id, updated_at = excluded.updated_at",
@@ -574,13 +610,11 @@ def _record_persona_owner(archive_id: str, user: dict[str, Any]) -> None:
 
 
 def _require_persona_access(archive_id: str, user: dict[str, Any]) -> None:
-    if _is_admin(user):
-        return
     clean_id = str(archive_id or "").strip()
     with db() as conn:
         row = conn.execute(
             "SELECT 1 FROM persona_owners WHERE archive_id = ? AND user_id = ?",
-            (clean_id, _identity_user_id(user)),
+            (clean_id, _workspace_user_id(user)),
         ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="人设不存在")
@@ -612,13 +646,11 @@ def _delete_persona_group_owners(group_ids: list[str]) -> None:
 def _require_social_account_access(account_id: str, user: dict[str, Any]) -> None:
     with db() as conn:
         row = conn.execute("SELECT user_id FROM social_accounts WHERE id = ?", (str(account_id or "").strip(),)).fetchone()
-    if not row or (not _is_admin(user) and int(row["user_id"] or 0) != _identity_user_id(user)):
+    if not row or int(row["user_id"] or 0) != _workspace_user_id(user):
         raise HTTPException(status_code=404, detail="执行账号不存在")
 
 
 def _require_user_media_paths(media_paths: list[str], user: dict[str, Any]) -> None:
-    if _is_admin(user):
-        return
     root = (UPLOAD_ROOT / str(user.get("username") or "")).resolve()
     for value in media_paths or []:
         try:
@@ -629,13 +661,11 @@ def _require_user_media_paths(media_paths: list[str], user: dict[str, Any]) -> N
             raise HTTPException(status_code=404, detail="媒体文件不存在")
 
 
-def _visible_persona_group_ids(user: dict[str, Any]) -> set[str] | None:
-    if _is_admin(user):
-        return None
+def _visible_persona_group_ids(user: dict[str, Any]) -> set[str]:
     with db() as conn:
         rows = conn.execute(
             "SELECT group_id FROM persona_group_owners WHERE user_id = ?",
-            (_identity_user_id(user),),
+            (_workspace_user_id(user),),
         ).fetchall()
     return {str(row["group_id"] or "").strip() for row in rows if str(row["group_id"] or "").strip()}
 
@@ -646,6 +676,16 @@ def _record_persona_group_owner(group_id: str, user: dict[str, Any]) -> None:
         raise HTTPException(status_code=500, detail="分组创建结果缺少 ID")
     now = _now_ts()
     with db() as conn:
+        active = conn.execute(
+            "SELECT is_admin, is_disabled, approval_status FROM users WHERE id = ?",
+            (_workspace_user_id(user),),
+        ).fetchone()
+        if (
+            not active
+            or int(active["is_disabled"] or 0) == 1
+            or (int(active["is_admin"] or 0) != 1 and str(active["approval_status"] or "") != "approved")
+        ):
+            raise HTTPException(status_code=403, detail="账号已停用或不存在")
         conn.execute(
             "INSERT INTO persona_group_owners(group_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?) "
             "ON CONFLICT(group_id) DO UPDATE SET user_id = excluded.user_id, updated_at = excluded.updated_at",
@@ -654,12 +694,10 @@ def _record_persona_group_owner(group_id: str, user: dict[str, Any]) -> None:
 
 
 def _require_persona_group_access(group_id: str, user: dict[str, Any]) -> None:
-    if _is_admin(user):
-        return
     with db() as conn:
         row = conn.execute(
             "SELECT 1 FROM persona_group_owners WHERE group_id = ? AND user_id = ?",
-            (str(group_id or "").strip(), _identity_user_id(user)),
+            (str(group_id or "").strip(), _workspace_user_id(user)),
         ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="分组不存在")
@@ -4113,9 +4151,7 @@ def _create_local_console_session() -> str:
 
 
 def _ensure_user_can_access_task(user: dict[str, Any], task_row: dict[str, Any]) -> None:
-    if int(user.get("is_admin") or 0) == 1:
-        return
-    if int(task_row.get("user_id") or 0) != int(user.get("id") or 0):
+    if int(task_row.get("user_id") or 0) != _workspace_user_id(user):
         raise HTTPException(status_code=404, detail="任务不存在")
 
 
@@ -10710,9 +10746,30 @@ def _read_json_file(path: Path) -> Any:
         return None
 
 
-def _write_json_file(path: Path, payload: Any) -> None:
+def _atomic_write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    temp_path = Path(temp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+        if os.name != "nt":
+            directory_fd = os.open(str(path.parent), os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+    except Exception:
+        with contextlib.suppress(FileNotFoundError):
+            temp_path.unlink()
+        raise
+
+
+def _write_json_file(path: Path, payload: Any) -> None:
+    _atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
 
 
 def _extract_persona_archive_list(raw: Any) -> list[dict[str, Any]]:
@@ -10753,6 +10810,8 @@ def _filter_active_persona_archives(archives: list[dict[str, Any]]) -> list[dict
 PERSONA_DASHBOARD_REFRESH_TASKS: dict[str, dict[str, Any]] = {}
 PERSONA_DASHBOARD_REFRESH_LOCK = threading.Lock()
 PERSONA_DASHBOARD_ARCHIVE_LOCK_TIMEOUT_SECONDS = 30
+PERSONA_DASHBOARD_ARCHIVE_THREAD_LOCK = threading.RLock()
+PERSONA_DASHBOARD_ARCHIVE_LOCK_STATE = threading.local()
 PERSONA_DASHBOARD_MONITOR_LOCK = threading.Lock()
 PERSONA_DASHBOARD_MONITOR_STARTED = False
 PERSONA_DASHBOARD_MONITOR_STATE: dict[str, Any] = {
@@ -10767,29 +10826,73 @@ PERSONA_DASHBOARD_MONITOR_STATE: dict[str, Any] = {
 }
 
 
+def _remove_stale_lock_file(lock_path: Path, *, max_age_seconds: int = 300) -> bool:
+    try:
+        raw = lock_path.read_text(encoding="utf-8").strip().split()
+        pid = int(raw[0]) if raw else 0
+        created_at = float(raw[1]) if len(raw) > 1 else float(lock_path.stat().st_mtime)
+    except Exception:
+        pid = 0
+        try:
+            created_at = float(lock_path.stat().st_mtime)
+        except Exception:
+            return False
+    stale = time.time() - created_at > max_age_seconds
+    if not stale and os.name != "nt" and pid > 0:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            stale = True
+        except (PermissionError, OSError):
+            pass
+    if not stale:
+        return False
+    try:
+        lock_path.unlink()
+        return True
+    except FileNotFoundError:
+        return True
+    except Exception:
+        return False
+
+
 @contextlib.contextmanager
 def _persona_archive_file_lock(timeout_seconds: int = PERSONA_DASHBOARD_ARCHIVE_LOCK_TIMEOUT_SECONDS):
-    lock_path = TOOL_R18_RUNTIME_DIR / "persona_archives.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    started = time.time()
-    fd: int | None = None
-    while True:
+    with PERSONA_DASHBOARD_ARCHIVE_THREAD_LOCK:
+        depth = int(getattr(PERSONA_DASHBOARD_ARCHIVE_LOCK_STATE, "depth", 0) or 0)
+        if depth > 0:
+            PERSONA_DASHBOARD_ARCHIVE_LOCK_STATE.depth = depth + 1
+            try:
+                yield
+            finally:
+                PERSONA_DASHBOARD_ARCHIVE_LOCK_STATE.depth = depth
+            return
+
+        lock_path = TOOL_R18_RUNTIME_DIR / "persona_archives.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        started = time.time()
+        fd: int | None = None
+        while True:
+            try:
+                fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.write(fd, f"{os.getpid()} {time.time()}\n".encode("utf-8"))
+                break
+            except FileExistsError:
+                if _remove_stale_lock_file(lock_path):
+                    continue
+                if time.time() - started > timeout_seconds:
+                    raise HTTPException(status_code=409, detail="人设归档正在写入，请稍后重试。")
+                time.sleep(0.1)
+        PERSONA_DASHBOARD_ARCHIVE_LOCK_STATE.depth = 1
         try:
-            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, f"{os.getpid()} {time.time()}\n".encode("utf-8"))
-            break
-        except FileExistsError:
-            if time.time() - started > timeout_seconds:
-                raise HTTPException(status_code=409, detail="人设归档正在写入，请稍后重试。")
-            time.sleep(0.1)
-    try:
-        yield
-    finally:
-        if fd is not None:
-            with contextlib.suppress(Exception):
-                os.close(fd)
-        with contextlib.suppress(FileNotFoundError):
-            lock_path.unlink()
+            yield
+        finally:
+            PERSONA_DASHBOARD_ARCHIVE_LOCK_STATE.depth = 0
+            if fd is not None:
+                with contextlib.suppress(Exception):
+                    os.close(fd)
+            with contextlib.suppress(FileNotFoundError):
+                lock_path.unlink()
 
 
 @contextlib.contextmanager
@@ -10804,6 +10907,8 @@ def _persona_group_file_lock(timeout_seconds: int = PERSONA_DASHBOARD_ARCHIVE_LO
             os.write(fd, f"{os.getpid()} {time.time()}\n".encode("utf-8"))
             break
         except FileExistsError:
+            if _remove_stale_lock_file(lock_path):
+                continue
             if time.time() - started > timeout_seconds:
                 raise HTTPException(status_code=409, detail="人设分组正在写入，请稍后重试。")
             time.sleep(0.1)
@@ -10820,6 +10925,16 @@ def _persona_group_file_lock(timeout_seconds: int = PERSONA_DASHBOARD_ARCHIVE_LO
 def _persona_group_write_locked(operation):
     def locked(*args, **kwargs):
         with _persona_group_file_lock():
+            return operation(*args, **kwargs)
+
+    locked.__name__ = operation.__name__
+    locked.__doc__ = operation.__doc__
+    return locked
+
+
+def _persona_archive_write_locked(operation):
+    def locked(*args, **kwargs):
+        with _persona_archive_file_lock():
             return operation(*args, **kwargs)
 
     locked.__name__ = operation.__name__
@@ -11300,6 +11415,7 @@ def _create_persona_group(payload: PersonaDashboardGroupCreatePayload) -> dict[s
     return {"ok": True, "group": group}
 
 
+@_persona_archive_write_locked
 def _rename_persona_archive(archive_id: str, payload: PersonaDashboardPersonaRenamePayload) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     name = str(payload.name or "").strip()
@@ -11604,7 +11720,12 @@ def _remove_persona_from_group(group_id: str, persona_id: str) -> dict[str, Any]
 
 
 @_persona_group_write_locked
-def _reorder_persona_groups(payload: PersonaDashboardGroupReorderPayload) -> dict[str, Any]:
+def _reorder_persona_groups(
+    payload: PersonaDashboardGroupReorderPayload,
+    *,
+    visible_group_ids: set[str],
+    visible_persona_ids: set[str],
+) -> dict[str, Any]:
     config = _read_persona_groups_config()
     current_groups = config.get("groups") if isinstance(config.get("groups"), list) else []
     current_by_id = {
@@ -11612,7 +11733,7 @@ def _reorder_persona_groups(payload: PersonaDashboardGroupReorderPayload) -> dic
         for group in current_groups
         if isinstance(group, dict) and str(group.get("id") or "").strip()
     }
-    reordered_groups: list[dict[str, Any]] = []
+    reordered_owned_groups: list[dict[str, Any]] = []
     seen_group_ids: set[str] = set()
     for item in payload.groups:
         group_id = str(item.id or "").strip()
@@ -11622,12 +11743,30 @@ def _reorder_persona_groups(payload: PersonaDashboardGroupReorderPayload) -> dic
         next_group = current_by_id[group_id]
         next_group["persona_ids"] = [str(pid or "").strip() for pid in item.persona_ids if str(pid or "").strip()]
         next_group["updated_at"] = _persona_dashboard_iso_now()
-        reordered_groups.append(next_group)
+        reordered_owned_groups.append(next_group)
     for group in current_groups:
         group_id = str(group.get("id") or "").strip()
-        if group_id and group_id not in seen_group_ids:
-            reordered_groups.append(group)
-    ungrouped_persona_ids = [str(pid or "").strip() for pid in payload.ungrouped_persona_ids if str(pid or "").strip()]
+        if group_id in visible_group_ids and group_id not in seen_group_ids:
+            reordered_owned_groups.append(group)
+
+    owned_iter = iter(reordered_owned_groups)
+    reordered_groups: list[dict[str, Any]] = []
+    for group in current_groups:
+        group_id = str(group.get("id") or "").strip()
+        reordered_groups.append(next(owned_iter) if group_id in visible_group_ids else group)
+    reordered_groups.extend(list(owned_iter))
+
+    preserved_foreign_ungrouped = [
+        str(pid or "").strip()
+        for pid in (config.get("ungrouped_persona_ids") if isinstance(config.get("ungrouped_persona_ids"), list) else [])
+        if str(pid or "").strip() and str(pid or "").strip() not in visible_persona_ids
+    ]
+    requested_owned_ungrouped = [
+        str(pid or "").strip()
+        for pid in payload.ungrouped_persona_ids
+        if str(pid or "").strip() in visible_persona_ids
+    ]
+    ungrouped_persona_ids = [*preserved_foreign_ungrouped, *requested_owned_ungrouped]
     _write_persona_groups_config({"groups": reordered_groups, "ungrouped_persona_ids": ungrouped_persona_ids})
     return {"ok": True, "groups": reordered_groups, "ungrouped_persona_ids": ungrouped_persona_ids}
 
@@ -12711,6 +12850,7 @@ def _list_persona_archive_publish_history(archive_id: str) -> list[dict[str, Any
     return rows
 
 
+@_persona_archive_write_locked
 def _requeue_persona_publish_record(archive_id: str, history_id: str) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     clean_history_id = str(history_id or "").strip()
@@ -12772,6 +12912,7 @@ def _requeue_persona_publish_record(archive_id: str, history_id: str) -> dict[st
     }
 
 
+@_persona_archive_write_locked
 def _create_persona_archive(payload: PersonaDashboardPersonaCreatePayload) -> dict[str, Any]:
     name = str(payload.name or "").strip()
     content = str(payload.content or "").strip()
@@ -12810,6 +12951,7 @@ def _create_persona_archive(payload: PersonaDashboardPersonaCreatePayload) -> di
     return _build_persona_dashboard_profile(archive)
 
 
+@_persona_archive_write_locked
 def _duplicate_persona_archive(archive_id: str) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     if not clean_id:
@@ -12942,6 +13084,7 @@ def _persona_dashboard_generate_profile_content(payload: PersonaDashboardPersona
     }
 
 
+@_persona_archive_write_locked
 def _create_persona_archive_post(archive_id: str, payload: PersonaDashboardDraftPostPayload) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     if not clean_id:
@@ -12987,6 +13130,7 @@ def _favorite_source_post_id(post: dict[str, Any]) -> str:
     return str(source_meta.get("favoriteSourcePostId") or post.get("id") or "").strip()
 
 
+@_persona_archive_write_locked
 def _add_persona_favorite_post(archive_id: str, post_id: str) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     clean_post_id = str(post_id or "").strip()
@@ -13037,6 +13181,7 @@ def _add_persona_favorite_post(archive_id: str, post_id: str) -> dict[str, Any]:
     return {"ok": True, "post": compact, "exists": False, "favorites": _list_persona_archive_posts(clean_id, "favorites")}
 
 
+@_persona_archive_write_locked
 def _delete_persona_favorite_post(archive_id: str, post_id: str) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     clean_post_id = str(post_id or "").strip()
@@ -13056,6 +13201,7 @@ def _delete_persona_favorite_post(archive_id: str, post_id: str) -> dict[str, An
     return {"ok": True, "archive_id": clean_id, "post_id": clean_post_id, "favorites": _list_persona_archive_posts(clean_id, "favorites")}
 
 
+@_persona_archive_write_locked
 def _update_persona_archive_post(archive_id: str, post_id: str, payload: PersonaDashboardDraftPostPayload, source: str = "posts") -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     clean_post_id = str(post_id or "").strip()
@@ -13131,6 +13277,7 @@ def _persona_post_media_items_from_paths(paths: list[str]) -> list[dict[str, str
     return items
 
 
+@_persona_archive_write_locked
 def _update_persona_archive_post_media(archive_id: str, post_id: str, *, media_paths: list[str], replace_existing: bool = False, source: str = "posts", replace_index: int | None = None) -> dict[str, Any]:
     clean_archive_id = str(archive_id or "").strip()
     clean_post_id = str(post_id or "").strip()
@@ -13194,6 +13341,7 @@ def _update_persona_archive_post_media(archive_id: str, post_id: str, *, media_p
     return {"ok": True, "post": compact}
 
 
+@_persona_archive_write_locked
 def _delete_persona_archive_post_media_item(archive_id: str, post_id: str, index: int, source: str = "posts") -> dict[str, Any]:
     clean_archive_id = str(archive_id or "").strip()
     clean_post_id = str(post_id or "").strip()
@@ -13606,7 +13754,6 @@ def _publish_persona_matrix(payload: PersonaDashboardMatrixPublishPayload, *, ow
 
 
 def _write_persona_archives_preserving_shape_unlocked(path: Path, raw: Any, archives: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
     if isinstance(raw, list):
         payload: Any = archives
     elif isinstance(raw, dict):
@@ -13622,7 +13769,7 @@ def _write_persona_archives_preserving_shape_unlocked(path: Path, raw: Any, arch
             payload[target_key] = archives
     else:
         payload = archives
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    _atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
 
 
 def _write_persona_archives_preserving_shape(path: Path, raw: Any, archives: list[dict[str, Any]]) -> None:
@@ -13630,6 +13777,7 @@ def _write_persona_archives_preserving_shape(path: Path, raw: Any, archives: lis
         _write_persona_archives_preserving_shape_unlocked(path, raw, archives)
 
 
+@_persona_archive_write_locked
 def _purge_workflow_persona_runtime_data() -> dict[str, Any]:
     primary = TOOL_R18_RUNTIME_DIR / "persona_archives.json"
     fallback = TOOL_R18_RUNTIME_DIR / "persona_archives_cache.json"
@@ -13667,6 +13815,7 @@ def _purge_workflow_persona_runtime_data() -> dict[str, Any]:
     }
 
 
+@_persona_archive_write_locked
 def _bind_persona_threads_username(archive_id: str, username: str) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     clean_username = _normalize_threads_username(username)
@@ -13711,6 +13860,7 @@ def _bind_persona_threads_username(archive_id: str, username: str) -> dict[str, 
     return {"ok": True, "archive_id": clean_id, "username": clean_username, "path": path.name}
 
 
+@_persona_archive_write_locked
 def _unbind_persona_threads_username(archive_id: str) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     if not clean_id:
@@ -13898,6 +14048,7 @@ def _serve_persona_archive_image(archive_id: str, image_id: str) -> Response:
     return FileResponse(str(path), filename=path.name)
 
 
+@_persona_archive_write_locked
 def _apply_persona_archive_reference_image(archive_id: str, image_id: str) -> dict[str, Any]:
     clean_archive_id = str(archive_id or "").strip()
     clean_image_id = str(image_id or "").strip()
@@ -13933,6 +14084,7 @@ def _apply_persona_archive_reference_image(archive_id: str, image_id: str) -> di
     return data
 
 
+@_persona_archive_write_locked
 def _persona_archive_persist_reference_image(archive_id: str, *, image_url: str, prompt: str = "", mode: str = "closed-model", source: str = "portrait", aspect_ratio: str = "1:1", notes: str = "current persona reference image") -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     image_url = str(image_url or "").strip()
@@ -13968,6 +14120,7 @@ def _persona_archive_persist_reference_image(archive_id: str, *, image_url: str,
     return data
 
 
+@_persona_archive_write_locked
 def _delete_persona_archive_image(archive_id: str, image_id: str) -> dict[str, Any]:
     clean_archive_id = str(archive_id or "").strip()
     clean_image_id = str(image_id or "").strip()
@@ -14059,44 +14212,52 @@ async def _replace_persona_archive_image(archive_id: str, image_id: str, usernam
     clean_image_id = str(image_id or "").strip()
     if not clean_archive_id or not clean_image_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID 或图片 ID。")
-    path, raw, archives = _persona_archive_source_for_write(clean_archive_id)
-    archive = _find_persona_archive(archives, clean_archive_id)
-    if not archive:
-        raise HTTPException(status_code=404, detail="人设不存在。")
-    library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
-    item_index = next(
-        (
-            index for index, row in enumerate(library)
-            if isinstance(row, dict) and str(row.get("id") or "").strip() == clean_image_id
-        ),
-        None,
-    )
-    if item_index is None:
-        raise HTTPException(status_code=404, detail="人设图不存在。")
-    item = library[item_index]
-    old_url = str(item.get("imageUrl") or "").strip()
-    current_reference_url = _persona_reference_image_url_from_archive(archive)
     uploaded_url = await _save_persona_archive_upload(username, image)
-    now = _persona_dashboard_iso_now()
-    replacement = dict(item)
-    replacement.update({
-        "imageUrl": uploaded_url,
-        "createdAt": now,
-        "mode": "custom-upload",
-        "source": "upload",
-        "notes": "custom uploaded replacement persona reference image",
-    })
-    library[item_index] = replacement
-    archive["personaImageLibrary"] = library
-    if old_url and old_url == current_reference_url:
-        setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
-        next_setup = dict(setup)
-        next_setup["personaImageSkipped"] = False
-        next_setup["personaImageReferenceUrl"] = uploaded_url
-        archive["setup"] = next_setup
-        archive["personaReferenceSheet"] = uploaded_url
-    archive["updatedAt"] = now
-    _write_persona_archives_preserving_shape(path, raw, archives)
+    try:
+        with _persona_archive_file_lock():
+            path, raw, archives = _persona_archive_source_for_write(clean_archive_id)
+            archive = _find_persona_archive(archives, clean_archive_id)
+            if not archive:
+                raise HTTPException(status_code=404, detail="人设不存在。")
+            library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
+            item_index = next(
+                (
+                    index for index, row in enumerate(library)
+                    if isinstance(row, dict) and str(row.get("id") or "").strip() == clean_image_id
+                ),
+                None,
+            )
+            if item_index is None:
+                raise HTTPException(status_code=404, detail="人设图不存在。")
+            item = library[item_index]
+            old_url = str(item.get("imageUrl") or "").strip()
+            current_reference_url = _persona_reference_image_url_from_archive(archive)
+            now = _persona_dashboard_iso_now()
+            replacement = dict(item)
+            replacement.update({
+                "imageUrl": uploaded_url,
+                "createdAt": now,
+                "mode": "custom-upload",
+                "source": "upload",
+                "notes": "custom uploaded replacement persona reference image",
+            })
+            library[item_index] = replacement
+            archive["personaImageLibrary"] = library
+            if old_url and old_url == current_reference_url:
+                setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+                next_setup = dict(setup)
+                next_setup["personaImageSkipped"] = False
+                next_setup["personaImageReferenceUrl"] = uploaded_url
+                archive["setup"] = next_setup
+                archive["personaReferenceSheet"] = uploaded_url
+            archive["updatedAt"] = now
+            _write_persona_archives_preserving_shape_unlocked(path, raw, archives)
+    except Exception:
+        with contextlib.suppress(Exception):
+            uploaded_path = Path(uploaded_url).expanduser().resolve()
+            if uploaded_path.is_relative_to(UPLOAD_ROOT.resolve()) and uploaded_path.is_file():
+                uploaded_path.unlink()
+        raise
 
     if (
         str(item.get("source") or "").strip() == "upload"
@@ -14190,6 +14351,7 @@ def _read_persona_dashboard_profile(archive_id: str) -> dict[str, Any]:
     raise HTTPException(status_code=404, detail="人设不存在。")
 
 
+@_persona_archive_write_locked
 def _update_persona_dashboard_profile(archive_id: str, payload: PersonaDashboardPersonaProfilePayload) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     explicit = payload.model_dump(exclude_unset=True)
@@ -14280,6 +14442,7 @@ def _update_persona_dashboard_profile(archive_id: str, payload: PersonaDashboard
     return _build_persona_dashboard_profile(changed_archive)
 
 
+@_persona_archive_write_locked
 def _delete_persona_dashboard_post(archive_id: str, post_key: str) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     clean_key = str(post_key or "").strip()
@@ -14553,7 +14716,47 @@ def _read_tool_r18_publish_queue_stats() -> dict[str, Any]:
     }
 
 
-def _read_tool_r18_sentiment_hot_stats() -> dict[str, Any]:
+def _scope_publish_queue_stats(stats: dict[str, Any], archive_ids: set[str] | None) -> dict[str, Any]:
+    if archive_ids is None:
+        return stats
+    rows = [
+        dict(row)
+        for row in (stats.get("rows") if isinstance(stats.get("rows"), list) else [])
+        if isinstance(row, dict) and str(row.get("archive_id") or "").strip() in archive_ids
+    ]
+    by_status: dict[str, int] = {}
+    by_platform: dict[str, int] = {}
+    by_pad: dict[str, int] = {}
+    by_archive: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        status = str(row.get("status") or "unknown").strip() or "unknown"
+        platform = str(row.get("platform") or "unknown").strip() or "unknown"
+        pad = str(row.get("pad_code") or "unknown").strip() or "unknown"
+        archive_id = str(row.get("archive_id") or "").strip()
+        by_status[status] = by_status.get(status, 0) + 1
+        by_platform[platform] = by_platform.get(platform, 0) + 1
+        by_pad[pad] = by_pad.get(pad, 0) + 1
+        item = by_archive.setdefault(archive_id, {"total": 0, "by_status": {}, "by_platform": {}, "latest": ""})
+        item["total"] += 1
+        item["by_status"][status] = item["by_status"].get(status, 0) + 1
+        item["by_platform"][platform] = item["by_platform"].get(platform, 0) + 1
+        latest = str(row.get("finished_at") or row.get("scheduled_at") or "")
+        if latest > str(item.get("latest") or ""):
+            item["latest"] = latest
+    return {
+        "path": stats.get("path"),
+        "exists": bool(stats.get("exists")),
+        "total": len(rows),
+        "by_status": by_status,
+        "by_platform": by_platform,
+        "by_pad": by_pad,
+        "by_archive": by_archive,
+        "unbound": 0,
+        "rows": rows,
+    }
+
+
+def _read_tool_r18_sentiment_hot_stats(visible_archive_ids: set[str] | None = None) -> dict[str, Any]:
     path = TOOL_R18_RUNTIME_DIR / "sentiment_hot_candidates.json"
     raw = _read_json_file(path)
     shown_count = 0
@@ -14562,13 +14765,24 @@ def _read_tool_r18_sentiment_hot_stats() -> dict[str, Any]:
     if isinstance(raw, dict):
         shown = raw.get("shown")
         if isinstance(shown, dict):
-            archive_count = len(shown)
-            for value in shown.values():
+            visible_shown = shown if visible_archive_ids is None else {
+                key: value for key, value in shown.items() if str(key or "").strip() in visible_archive_ids
+            }
+            archive_count = len(visible_shown)
+            for value in visible_shown.values():
                 if isinstance(value, list):
                     shown_count += len(value)
         for key, value in raw.items():
             if key == "shown":
                 continue
+            if visible_archive_ids is not None and str(key or "").strip() not in visible_archive_ids:
+                if not isinstance(value, dict):
+                    continue
+                value = {
+                    nested_key: nested_value
+                    for nested_key, nested_value in value.items()
+                    if str(nested_key or "").strip() in visible_archive_ids
+                }
             if isinstance(value, list):
                 cache_count += len(value)
             elif isinstance(value, dict):
@@ -15242,8 +15456,8 @@ def _build_persona_dashboard_overview(
     archives, archives_source = _read_tool_r18_persona_archives()
     if visible_archive_ids is not None:
         archives = [item for item in archives if str(item.get("id") or "").strip() in visible_archive_ids]
-    queue_stats = _read_tool_r18_publish_queue_stats()
-    sentiment_stats = _read_tool_r18_sentiment_hot_stats()
+    queue_stats = _scope_publish_queue_stats(_read_tool_r18_publish_queue_stats(), visible_archive_ids)
+    sentiment_stats = _read_tool_r18_sentiment_hot_stats(visible_archive_ids)
     deleted_posts = _read_persona_dashboard_deleted_posts()
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     platform_counts: dict[str, int] = {}
@@ -15543,7 +15757,14 @@ def _build_persona_dashboard_overview(
             "publish_queue": {k: v for k, v in queue_stats.items() if k != "rows"},
             "sentiment_hot_candidates": sentiment_stats,
             "persona_groups": {"path": persona_groups.get("source"), "count": len(persona_groups.get("groups") or [])},
-            "persona_dashboard_monitor": dict(PERSONA_DASHBOARD_MONITOR_STATE),
+            "persona_dashboard_monitor": (
+                dict(PERSONA_DASHBOARD_MONITOR_STATE)
+                if visible_archive_ids is None
+                else {
+                    "enabled": bool(PERSONA_DASHBOARD_MONITOR_STATE.get("enabled")),
+                    "status": "available" if PERSONA_DASHBOARD_MONITOR_STATE.get("enabled") else "disabled",
+                }
+            ),
         },
     }
 
@@ -15556,7 +15777,7 @@ def _build_persona_dashboard_console_overview(
     archives, archives_source = _read_tool_r18_persona_archives()
     if visible_archive_ids is not None:
         archives = [item for item in archives if str(item.get("id") or "").strip() in visible_archive_ids]
-    queue_stats = _read_tool_r18_publish_queue_stats()
+    queue_stats = _scope_publish_queue_stats(_read_tool_r18_publish_queue_stats(), visible_archive_ids)
     deleted_posts = _read_persona_dashboard_deleted_posts()
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     personas: list[dict[str, Any]] = []
@@ -15766,7 +15987,7 @@ def create_app() -> FastAPI:
     app.mount("/assets", StaticFiles(directory=str(STATIC_DIR / "assets")), name="assets")
 
     @app.get("/tool_r18_uploads/{file_path:path}", include_in_schema=False)
-    def tool_r18_upload(file_path: str, _user: dict[str, Any] = Depends(get_current_user)) -> FileResponse:
+    def tool_r18_upload(file_path: str, _user: dict[str, Any] = Depends(require_admin)) -> FileResponse:
         root = TOOL_R18_UPLOAD_ROOT.resolve()
         candidate = (root / str(file_path or "")).resolve()
         if root not in candidate.parents or not candidate.is_file():
@@ -15812,6 +16033,8 @@ def create_app() -> FastAPI:
             return RedirectResponse(url="/login.html", status_code=302)
         if int(user.get("must_change_password") or 0) == 1:
             return RedirectResponse(url="/change-password.html", status_code=302)
+        if _is_admin(user):
+            return RedirectResponse(url="/admin", status_code=302)
         try:
             console_bootstrap = _build_persona_dashboard_console_overview(
                 visible_archive_ids=_visible_persona_ids(user),
@@ -16134,8 +16357,10 @@ def create_app() -> FastAPI:
 
     @app.post("/api/persona_dashboard/personas")
     def api_persona_dashboard_create_persona(payload: PersonaDashboardPersonaCreatePayload, user: dict[str, Any] = Depends(get_current_user)):
-        result = _create_persona_archive(payload)
-        _record_persona_owner(str(result.get("id") or ""), user)
+        with TENANT_RESOURCE_LIFECYCLE_LOCK:
+            _require_active_workspace_user(user)
+            result = _create_persona_archive(payload)
+            _record_persona_owner(str(result.get("id") or ""), user)
         return result
 
     @app.post("/api/persona_dashboard/personas/ai_keywords")
@@ -16144,9 +16369,11 @@ def create_app() -> FastAPI:
 
     @app.post("/api/persona_dashboard/personas/ai_create")
     def api_persona_dashboard_persona_ai_create(payload: PersonaDashboardPersonaAiCreatePayload, user: dict[str, Any] = Depends(get_current_user)):
-        result = _persona_dashboard_create_persona_with_ai(payload)
-        profile = result.get("profile") if isinstance(result.get("profile"), dict) else {}
-        _record_persona_owner(str(profile.get("id") or ""), user)
+        with TENANT_RESOURCE_LIFECYCLE_LOCK:
+            _require_active_workspace_user(user)
+            result = _persona_dashboard_create_persona_with_ai(payload)
+            profile = result.get("profile") if isinstance(result.get("profile"), dict) else {}
+            _record_persona_owner(str(profile.get("id") or ""), user)
         return result
 
     @app.post("/api/persona_dashboard/personas/ai_profile")
@@ -16155,9 +16382,11 @@ def create_app() -> FastAPI:
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/duplicate")
     def api_persona_dashboard_duplicate_persona(archive_id: str, user: dict[str, Any] = Depends(require_persona_owner)):
-        result = _duplicate_persona_archive(archive_id)
-        profile = result.get("profile") if isinstance(result.get("profile"), dict) else {}
-        _record_persona_owner(str(profile.get("id") or ""), user)
+        with TENANT_RESOURCE_LIFECYCLE_LOCK:
+            _require_active_workspace_user(user)
+            result = _duplicate_persona_archive(archive_id)
+            profile = result.get("profile") if isinstance(result.get("profile"), dict) else {}
+            _record_persona_owner(str(profile.get("id") or ""), user)
         return result
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/posts")
@@ -16268,9 +16497,11 @@ def create_app() -> FastAPI:
 
     @app.post("/api/persona_dashboard/groups")
     def api_persona_dashboard_create_group(payload: PersonaDashboardGroupCreatePayload, user: dict[str, Any] = Depends(get_current_user)):
-        result = _create_persona_group(payload)
-        group = result.get("group") if isinstance(result.get("group"), dict) else {}
-        _record_persona_group_owner(str(group.get("id") or ""), user)
+        with TENANT_RESOURCE_LIFECYCLE_LOCK:
+            _require_active_workspace_user(user)
+            result = _create_persona_group(payload)
+            group = result.get("group") if isinstance(result.get("group"), dict) else {}
+            _record_persona_group_owner(str(group.get("id") or ""), user)
         return result
 
     @app.post("/api/persona_dashboard/groups/batch-delete")
@@ -16325,8 +16556,14 @@ def create_app() -> FastAPI:
                 _require_persona_access(persona_id, user)
         for persona_id in payload.ungrouped_persona_ids:
             _require_persona_access(persona_id, user)
-        result = _reorder_persona_groups(payload)
-        visible_groups = _visible_persona_group_ids(user)
+        visible_group_ids = _visible_persona_group_ids(user)
+        visible_persona_ids = _visible_persona_ids(user)
+        result = _reorder_persona_groups(
+            payload,
+            visible_group_ids=visible_group_ids,
+            visible_persona_ids=visible_persona_ids,
+        )
+        visible_groups = visible_group_ids
         if visible_groups is not None:
             result["groups"] = [group for group in result.get("groups", []) if str(group.get("id") or "") in visible_groups]
             result["ungrouped_persona_ids"] = [pid for pid in result.get("ungrouped_persona_ids", []) if pid in (_visible_persona_ids(user) or set())]
@@ -16437,7 +16674,7 @@ def create_app() -> FastAPI:
             archive_id,
             post_id,
             payload,
-            owner_user_id=None if _is_admin(user) else _identity_user_id(user),
+            owner_user_id=_workspace_user_id(user),
         )
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/favorites/{post_id}/publish")
@@ -16455,7 +16692,7 @@ def create_app() -> FastAPI:
             post_id,
             payload,
             source="favorites",
-            owner_user_id=None if _is_admin(user) else _identity_user_id(user),
+            owner_user_id=_workspace_user_id(user),
         )
 
     @app.post("/api/persona_dashboard/matrix_publish")
@@ -16465,7 +16702,7 @@ def create_app() -> FastAPI:
     ):
         for persona_id in payload.persona_ids:
             _require_persona_access(persona_id, user)
-        return _publish_persona_matrix(payload, owner_user_id=None if _is_admin(user) else _identity_user_id(user))
+        return _publish_persona_matrix(payload, owner_user_id=_workspace_user_id(user))
 
     @app.post("/api/persona_dashboard/personas/batch-delete")
     def api_persona_dashboard_batch_delete_personas(
@@ -16517,16 +16754,16 @@ def create_app() -> FastAPI:
     def api_persona_dashboard_refresh(payload: PersonaDashboardRefreshPayload, user: dict[str, Any] = Depends(get_current_user)):
         if payload.archive_id:
             _require_persona_access(payload.archive_id, user)
-        elif not _is_admin(user):
+        else:
             raise HTTPException(status_code=400, detail="普通用户刷新时必须指定人设")
         task = _start_persona_dashboard_refresh(payload.archive_id)
-        task["user_id"] = _identity_user_id(user)
+        task["user_id"] = _workspace_user_id(user)
         return task
 
     @app.get("/api/persona_dashboard/refresh/{task_id}")
     def api_persona_dashboard_refresh_status(task_id: str, user: dict[str, Any] = Depends(get_current_user)):
         task = PERSONA_DASHBOARD_REFRESH_TASKS.get(str(task_id or "").strip())
-        if not task or (not _is_admin(user) and int(task.get("user_id") or 0) != _identity_user_id(user)):
+        if not task or int(task.get("user_id") or 0) != _workspace_user_id(user):
             raise HTTPException(status_code=404, detail="刷新任务不存在。")
         return task
 
@@ -18361,23 +18598,128 @@ def create_app() -> FastAPI:
         current_id = int(user.get("id") or 0)
         if target_id == current_id:
             raise HTTPException(status_code=400, detail="不能删除当前登录管理员")
-        cancel_all_social_tasks("所属用户已删除", user_id=target_id)
-        with db() as conn:
-            row = conn.execute("SELECT id, is_admin FROM users WHERE id = ?", (target_id,)).fetchone()
-            if row is None:
-                raise HTTPException(status_code=404, detail="客户账号不存在")
-            task_rows = conn.execute("SELECT id FROM tasks WHERE user_id = ?", (target_id,)).fetchall()
-            task_ids = [str(r["id"]) for r in task_rows]
-            now = _now_ts()
-            conn.execute("UPDATE social_accounts SET user_id = 0, updated_at = ? WHERE user_id = ?", (now, target_id))
-            conn.execute("UPDATE social_proxies SET user_id = 0, updated_at = ? WHERE user_id = ?", (now, target_id))
-            conn.execute("UPDATE social_automation_tasks SET user_id = 0, updated_at = ? WHERE user_id = ?", (now, target_id))
-            conn.execute("UPDATE persona_owners SET user_id = 0, updated_at = ? WHERE user_id = ?", (now, target_id))
-            conn.execute("UPDATE persona_group_owners SET user_id = 0, updated_at = ? WHERE user_id = ?", (now, target_id))
-            conn.execute("DELETE FROM users WHERE id = ?", (target_id,))
+        with TENANT_RESOURCE_LIFECYCLE_LOCK:
+            with db() as conn:
+                row = conn.execute("SELECT id, username, is_admin FROM users WHERE id = ?", (target_id,)).fetchone()
+                if row is None:
+                    raise HTTPException(status_code=404, detail="客户账号不存在")
+                if int(row["is_admin"] or 0) == 1:
+                    raise HTTPException(status_code=400, detail="客户账号删除接口不能删除管理员")
+                username = str(row["username"] or "").strip()
+                now = _now_ts()
+                conn.execute("UPDATE users SET is_disabled = 1, updated_at = ? WHERE id = ?", (now, target_id))
+                conn.execute("DELETE FROM sessions WHERE user_id = ?", (target_id,))
+
+            cancel_all_social_tasks("所属用户已删除", user_id=target_id)
+
+            with db() as conn:
+                task_ids = [
+                    str(r["id"] or "").strip()
+                    for r in conn.execute("SELECT id FROM tasks WHERE user_id = ?", (target_id,)).fetchall()
+                    if str(r["id"] or "").strip()
+                ]
+                persona_ids = [
+                    str(r["archive_id"] or "").strip()
+                    for r in conn.execute("SELECT archive_id FROM persona_owners WHERE user_id = ?", (target_id,)).fetchall()
+                    if str(r["archive_id"] or "").strip()
+                ]
+                group_ids = [
+                    str(r["group_id"] or "").strip()
+                    for r in conn.execute("SELECT group_id FROM persona_group_owners WHERE user_id = ?", (target_id,)).fetchall()
+                    if str(r["group_id"] or "").strip()
+                ]
+                account_rows = conn.execute(
+                    "SELECT id, profile_dir FROM social_accounts WHERE user_id = ?",
+                    (target_id,),
+                ).fetchall()
+                profile_dirs = [str(r["profile_dir"] or "").strip() for r in account_rows if str(r["profile_dir"] or "").strip()]
+                social_task_ids = [
+                    str(r["id"] or "").strip()
+                    for r in conn.execute("SELECT id FROM social_automation_tasks WHERE user_id = ?", (target_id,)).fetchall()
+                    if str(r["id"] or "").strip()
+                ]
+                screenshot_paths: list[str] = []
+                if social_task_ids:
+                    placeholders = ",".join("?" for _ in social_task_ids)
+                    screenshot_paths = [
+                        str(r["screenshot_path"] or "").strip()
+                        for r in conn.execute(
+                            f"SELECT screenshot_path FROM social_automation_logs WHERE task_id IN ({placeholders}) AND screenshot_path != ''",
+                            social_task_ids,
+                        ).fetchall()
+                        if str(r["screenshot_path"] or "").strip()
+                    ]
+
+            existing_archive_ids = {
+                str(item.get("id") or "").strip()
+                for item in _read_tool_r18_persona_archives()[0]
+                if str(item.get("id") or "").strip()
+            }
+            owned_existing_archives = [archive_id for archive_id in persona_ids if archive_id in existing_archive_ids]
+            for offset in range(0, len(owned_existing_archives), 100):
+                _delete_persona_dashboard_personas(owned_existing_archives[offset:offset + 100])
+
+            existing_group_ids = {
+                str(item.get("id") or "").strip()
+                for item in (_read_persona_groups_config().get("groups") or [])
+                if isinstance(item, dict) and str(item.get("id") or "").strip()
+            }
+            owned_existing_groups = [group_id for group_id in group_ids if group_id in existing_group_ids]
+            for offset in range(0, len(owned_existing_groups), 100):
+                _delete_persona_groups(owned_existing_groups[offset:offset + 100])
+
+            with db() as conn:
+                if social_task_ids:
+                    placeholders = ",".join("?" for _ in social_task_ids)
+                    conn.execute(f"DELETE FROM social_automation_logs WHERE task_id IN ({placeholders})", social_task_ids)
+                conn.execute("DELETE FROM social_automation_tasks WHERE user_id = ?", (target_id,))
+                conn.execute("DELETE FROM social_accounts WHERE user_id = ?", (target_id,))
+                conn.execute("DELETE FROM social_proxies WHERE user_id = ?", (target_id,))
+                conn.execute("DELETE FROM persona_owners WHERE user_id = ?", (target_id,))
+                conn.execute("DELETE FROM persona_group_owners WHERE user_id = ?", (target_id,))
+                conn.execute("DELETE FROM users WHERE id = ?", (target_id,))
+
+        cleanup_failures: list[str] = []
+        cleanup_roots = [
+            (DATA_DIR / "social_automation" / "profiles").resolve(),
+            (DATA_DIR / "social_automation" / "uploads").resolve(),
+            UPLOAD_ROOT.resolve(),
+            OUTPUT_ROOT.resolve(),
+        ]
+        cleanup_dirs = [
+            *[Path(value).expanduser().resolve() for value in profile_dirs],
+            (DATA_DIR / "social_automation" / "uploads" / str(target_id)).resolve(),
+            (UPLOAD_ROOT / username).resolve(),
+            (OUTPUT_ROOT / username).resolve(),
+        ]
+        for path in cleanup_dirs:
+            if not any(root in path.parents for root in cleanup_roots):
+                cleanup_failures.append(str(path))
+                continue
+            try:
+                if path.exists():
+                    shutil.rmtree(path)
+            except Exception:
+                cleanup_failures.append(str(path))
+        screenshot_root = (DATA_DIR / "social_automation" / "screenshots").resolve()
+        for value in screenshot_paths:
+            try:
+                path = Path(value).expanduser().resolve()
+                if screenshot_root not in path.parents:
+                    cleanup_failures.append(str(path))
+                    continue
+                path.unlink(missing_ok=True)
+            except Exception:
+                cleanup_failures.append(str(value))
         for tid in task_ids:
             _delete_task_artifacts(tid)
-        return {"ok": True}
+        return {
+            "ok": not cleanup_failures,
+            "deleted_personas": len(persona_ids),
+            "deleted_groups": len(group_ids),
+            "deleted_tasks": len(task_ids),
+            "cleanup_pending": cleanup_failures,
+        }
 
     @app.post("/api/admin/users/{target_user_id}/recharge")
     def api_admin_recharge(

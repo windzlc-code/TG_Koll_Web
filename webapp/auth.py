@@ -62,7 +62,9 @@ def _get_user_by_id(conn, user_id: int) -> dict[str, Any] | None:
         return None
     return dict(row)
 
-def get_current_user(session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE)) -> dict[str, Any]:
+def get_user_allowing_password_change(
+    session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+) -> dict[str, Any]:
     token = str(session_token or "").strip()
     if not token:
         raise HTTPException(status_code=401, detail="未登录")
@@ -83,6 +85,30 @@ def get_current_user(session_token: str | None = Cookie(default=None, alias=SESS
         if int(user.get("is_disabled") or 0) == 1:
             raise HTTPException(status_code=403, detail="账号已禁用")
         return user
+
+def get_current_user(
+    session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+) -> dict[str, Any]:
+    user = get_user_allowing_password_change(session_token)
+    if int(user.get("must_change_password") or 0) == 1:
+        try:
+            expires_at = int(user.get("password_expires_at") or 0)
+        except (TypeError, ValueError):
+            expires_at = 0
+        code = "temporary_password_expired" if expires_at <= _now() else "password_change_required"
+        if code == "temporary_password_expired" and session_token:
+            with db() as conn:
+                delete_session(conn, str(session_token))
+        raise HTTPException(
+            status_code=428,
+            detail={
+                "code": code,
+                "message": "temporary password expired" if code == "temporary_password_expired" else "password change required",
+                "password_expires_at": expires_at,
+            },
+        )
+    return user
+
 
 def require_admin(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
     if int(user.get("is_admin") or 0) != 1:

@@ -1,8 +1,10 @@
 import os
 import base64
 import json
+import sqlite3
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -32,6 +34,7 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         self.old_runtime_path = server.RUNTIME_CONFIG_PATH
         self.old_sentiment_config_path = server.SENTIMENT_CONFIG_PATH
         self.old_tool_upload_root = server.TOOL_R18_UPLOAD_ROOT
+        self.old_tool_runtime_dir = server.TOOL_R18_RUNTIME_DIR
         self.old_data_dir = server.DATA_DIR
         self.old_upload_root = server.UPLOAD_ROOT
         self.old_output_root = server.OUTPUT_ROOT
@@ -50,6 +53,8 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         server.OUTPUT_ROOT = self.data_dir / "outputs"
         server.TOOL_R18_UPLOAD_ROOT = self.data_dir / "tool_r18_uploads"
         server.TOOL_R18_UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+        server.TOOL_R18_RUNTIME_DIR = self.data_dir / "tool_r18_runtime"
+        server.TOOL_R18_RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
         social_automation_api.configure_social_automation(data_dir=self.data_dir)
         with server._AUTH_RATE_LOCK:
             server._AUTH_RATE_EVENTS.clear()
@@ -59,6 +64,7 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         server.RUNTIME_CONFIG_PATH = self.old_runtime_path
         server.SENTIMENT_CONFIG_PATH = self.old_sentiment_config_path
         server.TOOL_R18_UPLOAD_ROOT = self.old_tool_upload_root
+        server.TOOL_R18_RUNTIME_DIR = self.old_tool_runtime_dir
         server.DATA_DIR = self.old_data_dir
         server.UPLOAD_ROOT = self.old_upload_root
         server.OUTPUT_ROOT = self.old_output_root
@@ -265,13 +271,92 @@ class AuthSecurityHardeningTests(unittest.TestCase):
             self.assertEqual(int(conn.execute("SELECT user_id FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()["user_id"]), owner_id)
 
         admin, _identity = self._admin_client()
-        self.assertGreaterEqual(len(admin.get("/api/persona_dashboard/automation/accounts").json()["accounts"]), 2)
+        self.assertEqual(admin.get("/api/persona_dashboard/automation/accounts").json()["accounts"], [])
+        self.assertEqual(admin.get(f"/api/persona_dashboard/personas/{owner_persona_id}/profile").status_code, 404)
+        admin_console = admin.get("/console.html", follow_redirects=False)
+        self.assertEqual(admin_console.status_code, 302)
+        self.assertEqual(admin_console.headers["location"], "/admin")
         owner_detail = admin.get(f"/api/admin/users/{owner_id}")
         self.assertEqual(owner_detail.status_code, 200, owner_detail.text)
         self.assertEqual(owner_detail.json()["resource_counts"]["personas"], 1)
         self.assertEqual(owner_detail.json()["resource_counts"]["social_accounts"], 1)
         self.assertEqual(owner_detail.json()["resource_counts"]["social_proxies"], 1)
         self.assertEqual(owner_detail.json()["resource_counts"]["social_tasks"], 1)
+
+    def test_deleting_customer_cascades_tenant_resources_without_user_zero_orphans(self):
+        customer, customer_id = self._approved_client("delete_tenant")
+        persona_response = customer.post(
+            "/api/persona_dashboard/personas",
+            json={"name": "Deleted tenant persona", "content": "Tenant-owned content"},
+        )
+        self.assertEqual(persona_response.status_code, 200, persona_response.text)
+        persona_id = persona_response.json()["id"]
+        group_response = customer.post("/api/persona_dashboard/groups", json={"name": "Deleted tenant group"})
+        self.assertEqual(group_response.status_code, 200, group_response.text)
+        group_id = group_response.json()["group"]["id"]
+        account_response = customer.post(
+            "/api/persona_dashboard/automation/accounts",
+            json={"platform": "threads", "username": "deleted_tenant_handle", "persona_id": persona_id},
+        )
+        self.assertEqual(account_response.status_code, 200, account_response.text)
+        account_id = account_response.json()["account"]["id"]
+        task_response = customer.post(
+            "/api/persona_dashboard/automation/tasks",
+            json={"account_id": account_id, "platform": "threads", "task_type": "check_login"},
+        )
+        self.assertEqual(task_response.status_code, 200, task_response.text)
+        social_task_id = task_response.json()["task"]["id"]
+        with server.db() as conn:
+            profile_dir = Path(conn.execute("SELECT profile_dir FROM social_accounts WHERE id = ?", (account_id,)).fetchone()["profile_dir"])
+            screenshot_dir = self.data_dir / "social_automation" / "screenshots"
+            screenshot_dir.mkdir(parents=True, exist_ok=True)
+            screenshot_path = screenshot_dir / f"screenshot_{social_task_id}.png"
+            screenshot_path.write_bytes(b"screenshot")
+            conn.execute(
+                "INSERT INTO social_automation_logs(task_id, level, stage, message, data_json, screenshot_path, created_at) VALUES (?, 'info', 'test', 'test', '{}', ?, 1)",
+                (social_task_id, str(screenshot_path)),
+            )
+        profile_marker = profile_dir / "Cookies"
+        profile_marker.write_text("sensitive cookie data", encoding="utf-8")
+        social_upload_dir = self.data_dir / "social_automation" / "uploads" / str(customer_id) / "upload"
+        social_upload_dir.mkdir(parents=True, exist_ok=True)
+        (social_upload_dir / "media.png").write_bytes(b"media")
+        regular_upload_dir = server.UPLOAD_ROOT / "delete_tenant" / "persona"
+        regular_upload_dir.mkdir(parents=True, exist_ok=True)
+        (regular_upload_dir / "reference.png").write_bytes(b"reference")
+
+        admin, _identity = self._admin_client()
+        deleted = admin.delete(f"/api/admin/users/{customer_id}")
+
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+        self.assertTrue(deleted.json()["ok"], deleted.text)
+        self.assertEqual(deleted.json()["deleted_personas"], 1)
+        self.assertEqual(deleted.json()["deleted_groups"], 1)
+        with server.db() as conn:
+            self.assertIsNone(conn.execute("SELECT id FROM users WHERE id = ?", (customer_id,)).fetchone())
+            for table in (
+                "persona_owners",
+                "persona_group_owners",
+                "social_accounts",
+                "social_proxies",
+                "social_automation_tasks",
+            ):
+                count = int(conn.execute(f"SELECT COUNT(*) AS c FROM {table} WHERE user_id = ?", (customer_id,)).fetchone()["c"])
+                self.assertEqual(count, 0, table)
+                orphan_count = int(conn.execute(f"SELECT COUNT(*) AS c FROM {table} WHERE user_id = 0").fetchone()["c"])
+                self.assertEqual(orphan_count, 0, table)
+        archive_ids = {str(item.get("id") or "") for item in server._read_tool_r18_persona_archives()[0]}
+        group_ids = {
+            str(item.get("id") or "")
+            for item in (server._read_persona_groups_config().get("groups") or [])
+            if isinstance(item, dict)
+        }
+        self.assertNotIn(persona_id, archive_ids)
+        self.assertNotIn(group_id, group_ids)
+        self.assertFalse(profile_dir.exists())
+        self.assertFalse((self.data_dir / "social_automation" / "uploads" / str(customer_id)).exists())
+        self.assertFalse((server.UPLOAD_ROOT / "delete_tenant").exists())
+        self.assertFalse(screenshot_path.exists())
 
     def test_tool_uploads_require_authenticated_session(self):
         sample = server.TOOL_R18_UPLOAD_ROOT / "security-sample.txt"
@@ -284,6 +369,196 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         allowed = admin.get("/tool_r18_uploads/security-sample.txt")
         self.assertEqual(allowed.status_code, 200, allowed.text)
         self.assertEqual(allowed.text, "protected upload")
+
+    def test_password_change_gate_applies_to_social_automation_routes(self):
+        customer, user_id = self._approved_client("password_gate_user")
+        with server.db() as conn:
+            conn.execute(
+                "UPDATE users SET must_change_password = 1, password_expires_at = ? WHERE id = ?",
+                (server._now_ts() + 3600, user_id),
+            )
+
+        persona_response = customer.get("/api/persona_dashboard/overview")
+        social_response = customer.get("/api/persona_dashboard/automation/overview")
+
+        self.assertEqual(persona_response.status_code, 428, persona_response.text)
+        self.assertEqual(social_response.status_code, 428, social_response.text)
+        self.assertEqual(social_response.json()["detail"]["code"], "password_change_required")
+
+    def test_social_task_cannot_override_account_persona(self):
+        owner, _owner_id = self._approved_client("task_owner")
+        stranger, _stranger_id = self._approved_client("task_stranger")
+        owner_persona = owner.post(
+            "/api/persona_dashboard/personas",
+            json={"name": "Owner task persona", "content": "Owner task content"},
+        ).json()["id"]
+        stranger_persona = stranger.post(
+            "/api/persona_dashboard/personas",
+            json={"name": "Stranger task persona", "content": "Stranger task content"},
+        ).json()["id"]
+        account_response = owner.post(
+            "/api/persona_dashboard/automation/accounts",
+            json={"platform": "threads", "username": "task_owner_handle", "persona_id": owner_persona},
+        )
+        self.assertEqual(account_response.status_code, 200, account_response.text)
+        account_id = account_response.json()["account"]["id"]
+
+        injected = owner.post(
+            "/api/persona_dashboard/automation/tasks",
+            json={
+                "account_id": account_id,
+                "persona_id": stranger_persona,
+                "platform": "threads",
+                "task_type": "check_login",
+            },
+        )
+
+        self.assertEqual(injected.status_code, 400, injected.text)
+        self.assertEqual(owner.get("/api/persona_dashboard/automation/tasks").json()["tasks"], [])
+
+    def test_social_task_media_cannot_read_another_tenant_upload(self):
+        owner, owner_id = self._approved_client("media_owner")
+        _stranger, stranger_id = self._approved_client("media_stranger")
+        persona_id = owner.post(
+            "/api/persona_dashboard/personas",
+            json={"name": "Media owner persona", "content": "Owner media content"},
+        ).json()["id"]
+        account_id = owner.post(
+            "/api/persona_dashboard/automation/accounts",
+            json={"platform": "threads", "username": "media_owner_handle", "persona_id": persona_id},
+        ).json()["account"]["id"]
+        victim_dir = self.data_dir / "social_automation" / "uploads" / str(stranger_id) / "private"
+        victim_dir.mkdir(parents=True, exist_ok=True)
+        victim_path = victim_dir / "private.png"
+        victim_path.write_bytes(b"private tenant media")
+
+        for endpoint in ("check_login", "open_login"):
+            denied = owner.post(
+                f"/api/persona_dashboard/automation/accounts/{account_id}/{endpoint}",
+                json={"payload": {"media_paths": [str(victim_path)]}},
+            )
+            self.assertEqual(denied.status_code, 404, denied.text)
+
+        legacy_task = social_automation_api.create_social_task(
+            social_automation_api.SocialTaskPayload(
+                persona_id=persona_id,
+                account_id=account_id,
+                platform="threads",
+                task_type="check_login",
+                payload={"media_paths": [str(victim_path)]},
+            )
+        )
+        with server.db() as conn:
+            self.assertEqual(
+                int(conn.execute("SELECT user_id FROM social_automation_tasks WHERE id = ?", (legacy_task["id"],)).fetchone()["user_id"]),
+                owner_id,
+            )
+        denied_download = owner.get(
+            f"/api/persona_dashboard/automation/tasks/{legacy_task['id']}/media/0"
+        )
+        self.assertEqual(denied_download.status_code, 404, denied_download.text)
+
+    def test_persona_overview_queue_stats_are_tenant_scoped(self):
+        owner, _owner_id = self._approved_client("queue_owner")
+        stranger, _stranger_id = self._approved_client("queue_stranger")
+        owner_persona = owner.post(
+            "/api/persona_dashboard/personas",
+            json={"name": "Queue owner", "content": "Queue owner content"},
+        ).json()["id"]
+        stranger_persona = stranger.post(
+            "/api/persona_dashboard/personas",
+            json={"name": "Queue stranger", "content": "Queue stranger content"},
+        ).json()["id"]
+        queue_db = server.TOOL_R18_RUNTIME_DIR / "publish_queue.db"
+        conn = sqlite3.connect(str(queue_db))
+        try:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS publish_tasks (id TEXT PRIMARY KEY, archive_id TEXT, archive_post_id TEXT, pad_code TEXT, platform TEXT, status TEXT, scheduled_at TEXT, finished_at TEXT)"
+            )
+            conn.execute("DELETE FROM publish_tasks")
+            conn.executemany(
+                "INSERT INTO publish_tasks VALUES (?, ?, '', ?, 'threads', ?, ?, '')",
+                [
+                    ("queue-owner", owner_persona, "PAD-A", "queued", "2026-07-14T01:00:00Z"),
+                    ("queue-stranger", stranger_persona, "PAD-B", "failed", "2026-07-14T02:00:00Z"),
+                ],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        owner_overview = owner.get("/api/persona_dashboard/overview").json()
+        stranger_overview = stranger.get("/api/persona_dashboard/overview").json()
+
+        self.assertEqual(owner_overview["summary"]["task_count"], 1)
+        self.assertEqual(stranger_overview["summary"]["task_count"], 1)
+        self.assertEqual(owner_overview["charts"]["task_status_distribution"], {"queued": 1})
+        self.assertEqual(stranger_overview["charts"]["task_status_distribution"], {"failed": 1})
+        self.assertEqual(set(owner_overview["data_sources"]["publish_queue"]["by_archive"]), {owner_persona})
+        self.assertEqual(set(stranger_overview["data_sources"]["publish_queue"]["by_archive"]), {stranger_persona})
+
+    def test_group_reorder_preserves_other_tenant_ungrouped_state(self):
+        owner, _owner_id = self._approved_client("group_owner")
+        stranger, _stranger_id = self._approved_client("group_stranger")
+        owner_persona = owner.post(
+            "/api/persona_dashboard/personas",
+            json={"name": "Group owner", "content": "Group owner content"},
+        ).json()["id"]
+        stranger_persona = stranger.post(
+            "/api/persona_dashboard/personas",
+            json={"name": "Group stranger", "content": "Group stranger content"},
+        ).json()["id"]
+        owner_group = owner.post("/api/persona_dashboard/groups", json={"name": "Owner group"}).json()["group"]["id"]
+        stranger_group = stranger.post("/api/persona_dashboard/groups", json={"name": "Stranger group"}).json()["group"]["id"]
+        self.assertEqual(
+            owner.post(f"/api/persona_dashboard/groups/{owner_group}/personas", json={"persona_id": owner_persona}).status_code,
+            200,
+        )
+        self.assertEqual(
+            stranger.post(f"/api/persona_dashboard/groups/{stranger_group}/personas", json={"persona_id": stranger_persona}).status_code,
+            200,
+        )
+        self.assertEqual(
+            stranger.delete(f"/api/persona_dashboard/groups/{stranger_group}/personas/{stranger_persona}").status_code,
+            200,
+        )
+
+        reordered = owner.post(
+            "/api/persona_dashboard/groups/reorder",
+            json={"groups": [{"id": owner_group, "persona_ids": [owner_persona]}], "ungrouped_persona_ids": []},
+        )
+        stranger_state = stranger.get("/api/persona_dashboard/groups").json()
+
+        self.assertEqual(reordered.status_code, 200, reordered.text)
+        self.assertEqual(stranger_state["ungrouped_persona_ids"], [stranger_persona])
+        self.assertEqual([group["id"] for group in stranger_state["groups"]], [stranger_group])
+
+    def test_concurrent_customer_persona_creation_preserves_both_tenants(self):
+        owner, _owner_id = self._approved_client("concurrent_owner")
+        stranger, _stranger_id = self._approved_client("concurrent_stranger")
+
+        def create(client, name):
+            return client.post(
+                "/api/persona_dashboard/personas",
+                json={"name": name, "content": f"{name} content"},
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            owner_future = executor.submit(create, owner, "Concurrent owner")
+            stranger_future = executor.submit(create, stranger, "Concurrent stranger")
+            owner_response = owner_future.result(timeout=10)
+            stranger_response = stranger_future.result(timeout=10)
+
+        self.assertEqual(owner_response.status_code, 200, owner_response.text)
+        self.assertEqual(stranger_response.status_code, 200, stranger_response.text)
+        self.assertEqual(
+            [row["id"] for row in owner.get("/api/persona_dashboard/overview").json()["personas"]],
+            [owner_response.json()["id"]],
+        )
+        self.assertEqual(
+            [row["id"] for row in stranger.get("/api/persona_dashboard/overview").json()["personas"]],
+            [stranger_response.json()["id"]],
+        )
 
     def test_dashboard_media_proxy_rejects_database_and_runtime_config_paths(self):
         admin, _identity = self._admin_client()

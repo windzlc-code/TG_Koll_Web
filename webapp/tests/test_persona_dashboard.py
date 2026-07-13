@@ -26,6 +26,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self._old_password_vault_key = os.environ.get("PASSWORD_VAULT_KEY")
         self._old_server_runtime_config_path = server.RUNTIME_CONFIG_PATH
         self._old_server_tool_runtime_dir = server.TOOL_R18_RUNTIME_DIR
+        self._old_server_upload_root = server.UPLOAD_ROOT
         self._old_social_tool_runtime_dir = social_automation_api._TOOL_R18_RUNTIME_DIR
         self._tmpdir = tempfile.TemporaryDirectory()
         self.root = Path(self._tmpdir.name)
@@ -33,7 +34,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.tool_runtime_dir = self.root / "tool_r18_runtime"
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.tool_runtime_dir.mkdir(parents=True, exist_ok=True)
-        self.draft_media_path = self.tool_runtime_dir / "draft_media.png"
+        (self.tool_runtime_dir / "admin").mkdir(parents=True, exist_ok=True)
+        self.draft_media_path = self.tool_runtime_dir / "admin" / "draft_media.png"
         self.draft_media_path.write_bytes(
             bytes.fromhex("89504E470D0A1A0A0000000D4948445200000001000000010802000000907753DE0000000C49444154789C636060000000040001F61738550000000049454E44AE426082")
         )
@@ -48,6 +50,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
             server._AUTH_RATE_EVENTS.clear()
         server.RUNTIME_CONFIG_PATH = self.data_dir / "runtime_config.json"
         server.TOOL_R18_RUNTIME_DIR = self.tool_runtime_dir
+        server.UPLOAD_ROOT = self.tool_runtime_dir
         social_automation_api._TOOL_R18_RUNTIME_DIR = self.tool_runtime_dir
         self.app = server.create_app()
         self.unauth_client = TestClient(self.app)
@@ -58,6 +61,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
     def tearDown(self):
         server.RUNTIME_CONFIG_PATH = self._old_server_runtime_config_path
         server.TOOL_R18_RUNTIME_DIR = self._old_server_tool_runtime_dir
+        server.UPLOAD_ROOT = self._old_server_upload_root
         social_automation_api._TOOL_R18_RUNTIME_DIR = self._old_social_tool_runtime_dir
         self._restore_env("APP_DB_PATH", self._old_db_path)
         self._restore_env("APP_RUNTIME_CONFIG_PATH", self._old_runtime_config_path)
@@ -196,6 +200,19 @@ class PersonaDashboardApiTests(unittest.TestCase):
         conn.close()
         return int(row[0])
 
+    def _assign_personas_to_admin(self, persona_ids):
+        now = 1
+        conn = sqlite3.connect(str(self.data_dir / "app.db"))
+        try:
+            conn.executemany(
+                "INSERT INTO persona_owners(archive_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(archive_id) DO UPDATE SET user_id = excluded.user_id, updated_at = excluded.updated_at",
+                [(str(persona_id), self._admin_user_id(), now, now) for persona_id in persona_ids],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     def _write_archives(self):
         archives = [
             {
@@ -271,6 +288,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
             }
         ]
         (self.tool_runtime_dir / "persona_archives.json").write_text(json.dumps(archives), encoding="utf-8")
+        self._assign_personas_to_admin([archive["id"] for archive in archives])
 
     def _write_queue(self):
         conn = sqlite3.connect(str(self.tool_runtime_dir / "publish_queue.db"))
@@ -312,19 +330,20 @@ class PersonaDashboardApiTests(unittest.TestCase):
         conn.execute(
             """
             INSERT OR IGNORE INTO social_proxies(
-              id, name, proxy_type, host, port, username, password, country, isp,
+              id, user_id, name, proxy_type, host, port, username, password, country, isp,
               status, last_check_at, last_check_result, created_at, updated_at
-            ) VALUES (?, ?, 'http', '127.0.0.1', 18080, '', '', '', '', 'active', 0, '', ?, ?)
+            ) VALUES (?, ?, ?, 'http', '127.0.0.1', 18080, '', '', '', '', 'active', 0, '', ?, ?)
             """,
-            (proxy_id, proxy_id, now, now),
+            (proxy_id, self._admin_user_id(), proxy_id, now, now),
         )
         conn.execute(
             """
-            INSERT INTO social_accounts(id, persona_id, platform, username, display_name, profile_dir, proxy_id, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO social_accounts(id, user_id, persona_id, platform, username, display_name, profile_dir, proxy_id, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 account_id,
+                self._admin_user_id(),
                 persona_id,
                 platform,
                 username,
@@ -357,14 +376,15 @@ class PersonaDashboardApiTests(unittest.TestCase):
         conn.execute(
             """
             INSERT INTO social_automation_tasks(
-              id, persona_id, account_id, platform, task_type, priority, status, scheduled_at,
+              id, user_id, persona_id, account_id, platform, task_type, priority, status, scheduled_at,
               started_at, finished_at, payload_json, result_json, error, retry_count, max_retries,
               created_by, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 task_id,
+                self._admin_user_id(),
                 persona_id,
                 account_id,
                 platform,
@@ -422,6 +442,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
             ]
         }
         (self.tool_runtime_dir / "persona_archives_cache.json").write_text(json.dumps(cache_archives, ensure_ascii=False), encoding="utf-8")
+        self._assign_personas_to_admin(["legacy-cache-only"])
 
         resp = self.client.get("/api/persona_dashboard/overview")
         self.assertEqual(resp.status_code, 200)
@@ -451,7 +472,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(data["summary"]["persona_count"], 1)
         self.assertEqual(data["summary"]["post_count"], 1)
         self.assertEqual(data["summary"]["published_count"], 1)
-        self.assertEqual(data["summary"]["task_count"], 2)
+        self.assertEqual(data["summary"]["task_count"], 1)
         self.assertEqual(data["charts"]["task_status_distribution"]["done"], 1)
         self.assertEqual(data["data_sources"]["sentiment_hot_candidates"]["shown_count"], 1)
         data_sources = json.dumps(data["data_sources"], ensure_ascii=False)
@@ -576,6 +597,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         second.update({"id": "persona-2", "name": "Science Teacher"})
         archives.append(second)
         archives_path.write_text(json.dumps(archives), encoding="utf-8")
+        self._assign_personas_to_admin(["persona-2"])
 
         first = self.client.post("/api/persona_dashboard/groups", json={"name": "First"}).json()["group"]
         second_group = self.client.post("/api/persona_dashboard/groups", json={"name": "Second"}).json()["group"]
@@ -625,6 +647,16 @@ class PersonaDashboardApiTests(unittest.TestCase):
             ],
             "ungrouped_persona_ids": [],
         }), encoding="utf-8")
+        now = 1
+        conn = sqlite3.connect(str(self.data_dir / "app.db"))
+        try:
+            conn.executemany(
+                "INSERT INTO persona_group_owners(group_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                [("delete-me", self._admin_user_id(), now, now), ("keep-me", self._admin_user_id(), now, now)],
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
         resp = self.client.post(
             "/api/persona_dashboard/groups/batch-delete",
@@ -727,6 +759,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
             item["setup"]["personaName"] = name
             archives.append(item)
         archives_path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+        self._assign_personas_to_admin(["persona-2", "persona-3"])
 
         first_group = self.client.post("/api/persona_dashboard/groups", json={"name": "First"}).json()["group"]
         second_group = self.client.post("/api/persona_dashboard/groups", json={"name": "Second"}).json()["group"]
@@ -901,6 +934,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
             }
         ]
         (self.tool_runtime_dir / "persona_archives.json").write_text(json.dumps(archives), encoding="utf-8")
+        self._assign_personas_to_admin(["wf-1"])
         resp = self.client.delete("/api/persona_dashboard/personas/wf-1")
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(resp.json()["ok"])
@@ -931,7 +965,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         conn = sqlite3.connect(str(self.data_dir / "app.db"))
         try:
             conn.executemany(
-                "INSERT INTO persona_owners(archive_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO persona_owners(archive_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?)",
                 [("persona-1", admin_id, 1, 1), ("persona-2", admin_id, 1, 1)],
             )
             conn.commit()
@@ -1021,6 +1055,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(primary_path.read_text(encoding="utf-8"), before)
 
     def test_public_refresh_endpoint_returns_task_status(self):
+        self._write_archives()
         with mock.patch.object(server, "_start_persona_dashboard_refresh", return_value={"id": "pdr_test", "status": "queued", "message": "queued"}):
             resp = self.client.post("/api/persona_dashboard/refresh", json={"archive_id": "persona-1"})
         self.assertEqual(resp.status_code, 200)
@@ -1180,7 +1215,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
     def test_create_persona_media_only_post_requires_explicit_media_intent(self):
         self._write_archives()
-        allowed_media_path = self.tool_runtime_dir / "media-only.png"
+        allowed_media_path = self.draft_media_path.parent / "media-only.png"
         allowed_media_path.write_bytes(self.draft_media_path.read_bytes())
 
         empty_resp = self.client.post(
@@ -1217,7 +1252,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
             "/api/persona_dashboard/personas/persona-1/posts",
             json={"title": "", "content": "", "media_paths": [str(outside_path)]},
         )
-        self.assertEqual(outside_resp.status_code, 400)
+        self.assertEqual(outside_resp.status_code, 404)
 
     def test_persona_draft_media_ops_are_atomic_when_final_content_is_empty(self):
         self._write_archives()
@@ -2028,7 +2063,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         )
         self.assertEqual(create_resp.status_code, 200)
         post = create_resp.json()
-        media_path = self.tool_runtime_dir / "publish-media.png"
+        media_path = self.draft_media_path.parent / "publish-media.png"
         media_path.write_bytes(self.draft_media_path.read_bytes())
         with mock.patch.object(server, "create_social_task", return_value={"id": "sat-1", "task_type": "publish_post", "status": "queued"}) as mocked:
             publish_resp = self.client.post(
@@ -2121,7 +2156,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self._write_archives()
         self._insert_social_account(account_id="acct-media", platform="threads", username="media_user")
         self._insert_social_task(account_id="acct-media", platform="threads", task_type="check_login")
-        media_path = self.tool_runtime_dir / "publish-media-only.png"
+        media_path = self.draft_media_path.parent / "publish-media-only.png"
         media_path.write_bytes(self.draft_media_path.read_bytes())
         create_resp = self.client.post(
             "/api/persona_dashboard/personas/persona-1/posts",

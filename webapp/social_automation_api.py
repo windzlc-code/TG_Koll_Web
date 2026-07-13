@@ -11,6 +11,7 @@ import uuid
 import contextlib
 import subprocess
 import shutil
+import tempfile
 from io import BytesIO
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -219,19 +220,12 @@ def _identity_user_id(user: dict[str, Any]) -> int:
         return 0
 
 
-def _identity_is_admin(user: dict[str, Any]) -> bool:
-    try:
-        return int(user.get("is_admin") or 0) == 1
-    except (TypeError, ValueError):
-        return False
-
-
 def _require_owned_resource(table: str, resource_id: str, user: dict[str, Any], *, label: str) -> Any:
     if table not in {"social_accounts", "social_proxies", "social_automation_tasks"}:
         raise RuntimeError("unsupported ownership table")
     with db() as conn:
         row = conn.execute(f"SELECT * FROM {table} WHERE id = ?", (str(resource_id or "").strip(),)).fetchone()
-    if not row or (not _identity_is_admin(user) and int(row["user_id"] or 0) != _identity_user_id(user)):
+    if not row or int(row["user_id"] or 0) != _identity_user_id(user):
         raise HTTPException(status_code=404, detail=f"{label}不存在")
     return row
 
@@ -250,7 +244,7 @@ def _require_task_access(task_id: str, user: dict[str, Any]) -> Any:
 
 def _require_persona_reference_access(persona_id: str, user: dict[str, Any]) -> None:
     clean_id = str(persona_id or "").strip()
-    if not clean_id or _identity_is_admin(user):
+    if not clean_id:
         return
     with db() as conn:
         row = conn.execute(
@@ -262,8 +256,6 @@ def _require_persona_reference_access(persona_id: str, user: dict[str, Any]) -> 
 
 
 def _validate_user_task_media_paths(payload: dict[str, Any], user: dict[str, Any]) -> None:
-    if _identity_is_admin(user):
-        return
     media_paths = payload.get("media_paths") if isinstance(payload, dict) else []
     root = (_DATA_DIR / "social_automation" / "uploads" / str(_identity_user_id(user))).resolve()
     for value in media_paths if isinstance(media_paths, list) else []:
@@ -275,14 +267,30 @@ def _validate_user_task_media_paths(payload: dict[str, Any], user: dict[str, Any
             raise HTTPException(status_code=404, detail="媒体文件不存在")
 
 
+def _require_active_owner_user(conn: Any, owner_user_id: int) -> None:
+    user_id = int(owner_user_id or 0)
+    if user_id <= 0:
+        return
+    row = conn.execute(
+        "SELECT is_admin, is_disabled, approval_status FROM users WHERE id = ?",
+        (user_id,),
+    ).fetchone()
+    if (
+        not row
+        or int(row["is_disabled"] or 0) == 1
+        or (int(row["is_admin"] or 0) != 1 and str(row["approval_status"] or "") != "approved")
+    ):
+        raise HTTPException(status_code=403, detail="账号已停用或不存在")
+
+
 def register_social_automation_routes(app: FastAPI) -> None:
     @app.get("/api/persona_dashboard/automation/overview")
     def api_social_automation_overview(user: dict[str, Any] = Depends(get_current_user)):
-        return build_social_automation_overview(user_id=None if _identity_is_admin(user) else _identity_user_id(user))
+        return build_social_automation_overview(user_id=_identity_user_id(user))
 
     @app.get("/api/persona_dashboard/automation/browser_sessions")
     def api_social_browser_sessions(user: dict[str, Any] = Depends(get_current_user)):
-        return {"ok": True, "sessions": _live_browser_sessions(user_id=None if _identity_is_admin(user) else _identity_user_id(user))}
+        return {"ok": True, "sessions": _live_browser_sessions(user_id=_identity_user_id(user))}
 
     @app.get("/api/persona_dashboard/automation/browser_settings")
     def api_social_browser_settings(_user: dict[str, Any] = Depends(get_current_user)):
@@ -334,17 +342,14 @@ def register_social_automation_routes(app: FastAPI) -> None:
     @app.get("/api/persona_dashboard/automation/accounts")
     def api_social_accounts(user: dict[str, Any] = Depends(get_current_user)):
         with db() as conn:
-            if _identity_is_admin(user):
-                rows = conn.execute("SELECT * FROM social_accounts ORDER BY updated_at DESC, created_at DESC").fetchall()
-            else:
-                rows = conn.execute("SELECT * FROM social_accounts WHERE user_id = ? ORDER BY updated_at DESC, created_at DESC", (_identity_user_id(user),)).fetchall()
+            rows = conn.execute("SELECT * FROM social_accounts WHERE user_id = ? ORDER BY updated_at DESC, created_at DESC", (_identity_user_id(user),)).fetchall()
             accounts = _account_public_rows(conn, rows)
         return {"ok": True, "accounts": accounts}
 
     @app.post("/api/persona_dashboard/automation/accounts")
     def api_social_account_create(payload: SocialAccountPayload, user: dict[str, Any] = Depends(get_current_user)):
         _require_persona_reference_access(payload.persona_id, user)
-        if payload.profile_dir and not _identity_is_admin(user):
+        if payload.profile_dir:
             raise HTTPException(status_code=400, detail="普通用户不能指定浏览器配置目录")
         account = create_social_account(payload, owner_user_id=_identity_user_id(user))
         return {"ok": True, "account": account}
@@ -354,7 +359,7 @@ def register_social_automation_routes(app: FastAPI) -> None:
         _require_account_access(account_id, user)
         if payload.persona_id is not None:
             _require_persona_reference_access(payload.persona_id, user)
-        if payload.profile_dir and not _identity_is_admin(user):
+        if payload.profile_dir:
             raise HTTPException(status_code=400, detail="普通用户不能指定浏览器配置目录")
         if payload.proxy_id:
             proxy = _require_proxy_access(payload.proxy_id, user)
@@ -369,7 +374,7 @@ def register_social_automation_routes(app: FastAPI) -> None:
 
     @app.post("/api/persona_dashboard/automation/accounts/dedupe")
     def api_social_accounts_dedupe(user: dict[str, Any] = Depends(get_current_user)):
-        return {"ok": True, **dedupe_social_accounts(user_id=None if _identity_is_admin(user) else _identity_user_id(user))}
+        return {"ok": True, **dedupe_social_accounts(user_id=_identity_user_id(user))}
 
     @app.get("/api/persona_dashboard/automation/accounts/{account_id}/credentials")
     def api_social_account_credentials(account_id: str, _user: dict[str, Any] = Depends(get_current_user)):
@@ -383,7 +388,9 @@ def register_social_automation_routes(app: FastAPI) -> None:
     ):
         _require_account_access(account_id, user)
         body = payload if isinstance(payload, dict) else {}
-        return {"ok": True, "task": create_account_task(account_id, "check_login", body.get("payload") if isinstance(body.get("payload"), dict) else body)}
+        task_payload = body.get("payload") if isinstance(body.get("payload"), dict) else body
+        _validate_user_task_media_paths(task_payload, user)
+        return {"ok": True, "task": create_account_task(account_id, "check_login", task_payload)}
 
     @app.post("/api/persona_dashboard/automation/accounts/{account_id}/open_login")
     def api_social_account_open_login(
@@ -397,16 +404,14 @@ def register_social_automation_routes(app: FastAPI) -> None:
         task_payload = body.get("payload") if isinstance(body.get("payload"), dict) else body
         task_payload = dict(task_payload or {})
         _validate_open_login_payload(task_payload)
+        _validate_user_task_media_paths(task_payload, user)
         task_payload.setdefault("login_wait_seconds", wait_seconds)
         return {"ok": True, "task": create_account_task(account_id, "open_login", task_payload)}
 
     @app.get("/api/persona_dashboard/automation/proxies")
     def api_social_proxies(user: dict[str, Any] = Depends(get_current_user)):
         with db() as conn:
-            if _identity_is_admin(user):
-                rows = conn.execute("SELECT * FROM social_proxies ORDER BY updated_at DESC, created_at DESC").fetchall()
-            else:
-                rows = conn.execute("SELECT * FROM social_proxies WHERE user_id = ? ORDER BY updated_at DESC, created_at DESC", (_identity_user_id(user),)).fetchall()
+            rows = conn.execute("SELECT * FROM social_proxies WHERE user_id = ? ORDER BY updated_at DESC, created_at DESC", (_identity_user_id(user),)).fetchall()
             proxies = _proxy_public_rows(conn, rows)
         return {"ok": True, "proxies": proxies}
 
@@ -431,7 +436,7 @@ def register_social_automation_routes(app: FastAPI) -> None:
 
     @app.get("/api/persona_dashboard/automation/tasks")
     def api_social_tasks(status: str = "", account_id: str = "", limit: int = 60, user: dict[str, Any] = Depends(get_current_user)):
-        return {"ok": True, "tasks": list_social_tasks(status=status, account_id=account_id, limit=limit, user_id=None if _identity_is_admin(user) else _identity_user_id(user))}
+        return {"ok": True, "tasks": list_social_tasks(status=status, account_id=account_id, limit=limit, user_id=_identity_user_id(user))}
 
     @app.post("/api/persona_dashboard/automation/tasks")
     def api_social_task_create(payload: SocialTaskPayload, user: dict[str, Any] = Depends(get_current_user)):
@@ -441,7 +446,7 @@ def register_social_automation_routes(app: FastAPI) -> None:
 
     @app.post("/api/persona_dashboard/automation/tasks/cancel_all")
     def api_social_tasks_cancel_all(payload: SocialTaskActionPayload | None = None, user: dict[str, Any] = Depends(get_current_user)):
-        return {"ok": True, **cancel_all_social_tasks((payload.reason if payload else ""), user_id=None if _identity_is_admin(user) else _identity_user_id(user))}
+        return {"ok": True, **cancel_all_social_tasks((payload.reason if payload else ""), user_id=_identity_user_id(user))}
 
     @app.get("/api/persona_dashboard/automation/tasks/{task_id}")
     def api_social_task_get(task_id: str, user: dict[str, Any] = Depends(get_current_user)):
@@ -450,7 +455,7 @@ def register_social_automation_routes(app: FastAPI) -> None:
 
     @app.delete("/api/persona_dashboard/automation/tasks")
     def api_social_tasks_clear(persona_id: str = "", account_id: str = "", user: dict[str, Any] = Depends(get_current_user)):
-        return {"ok": True, "cleared": clear_social_tasks(persona_id=persona_id, account_id=account_id, user_id=None if _identity_is_admin(user) else _identity_user_id(user))}
+        return {"ok": True, "cleared": clear_social_tasks(persona_id=persona_id, account_id=account_id, user_id=_identity_user_id(user))}
 
     @app.delete("/api/persona_dashboard/automation/tasks/{task_id}")
     def api_social_task_clear(task_id: str, user: dict[str, Any] = Depends(get_current_user)):
@@ -486,15 +491,12 @@ def register_social_automation_routes(app: FastAPI) -> None:
         if index < 0 or index >= len(media_paths):
             raise HTTPException(status_code=404, detail="媒体文件不存在")
         path = Path(media_paths[index]).expanduser().resolve()
-        allowed_roots = [
-            (_DATA_DIR / "social_automation" / "uploads").resolve(),
-            _TOOL_R18_RUNTIME_DIR.resolve(),
-        ]
+        allowed_root = (_DATA_DIR / "social_automation" / "uploads" / str(_identity_user_id(user))).resolve()
         if (
             not path.exists()
             or not path.is_file()
             or path.suffix.lower() not in SOCIAL_MEDIA_EXTENSIONS
-            or not any(root in path.parents for root in allowed_roots)
+            or allowed_root not in path.parents
         ):
             raise HTTPException(status_code=404, detail="媒体文件不存在")
         return FileResponse(str(path), filename=path.name)
@@ -553,15 +555,10 @@ def register_social_automation_routes(app: FastAPI) -> None:
     def api_social_screenshot(filename: str, thumbnail: bool = False, user: dict[str, Any] = Depends(get_current_user)):
         safe = Path(filename).name
         with db() as conn:
-            if _identity_is_admin(user):
-                rows = conn.execute(
-                    "SELECT l.screenshot_path FROM social_automation_logs l JOIN social_automation_tasks t ON t.id = l.task_id WHERE l.screenshot_path != ''"
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT l.screenshot_path FROM social_automation_logs l JOIN social_automation_tasks t ON t.id = l.task_id WHERE t.user_id = ? AND l.screenshot_path != ''",
-                    (_identity_user_id(user),),
-                ).fetchall()
+            rows = conn.execute(
+                "SELECT l.screenshot_path FROM social_automation_logs l JOIN social_automation_tasks t ON t.id = l.task_id WHERE t.user_id = ? AND l.screenshot_path != ''",
+                (_identity_user_id(user),),
+            ).fetchall()
         if not any(Path(str(row["screenshot_path"] or "")).name == safe for row in rows):
             raise HTTPException(status_code=404, detail="截图不存在")
         path = (_DATA_DIR / "social_automation" / "screenshots" / safe).resolve()
@@ -592,8 +589,10 @@ def _authenticate_live_browser_websocket(websocket: WebSocket) -> dict[str, Any]
 
 
 def _live_browser_session_accessible(session_id: str, user: dict[str, Any]) -> bool:
-    user_id = None if _identity_is_admin(user) else _identity_user_id(user)
-    return any(str(item.get("id") or item.get("session_id") or "") == str(session_id or "") for item in _live_browser_sessions(user_id=user_id))
+    return any(
+        str(item.get("id") or item.get("session_id") or "") == str(session_id or "")
+        for item in _live_browser_sessions(user_id=_identity_user_id(user))
+    )
 
 
 def _require_live_browser_session_access(session_id: str, user: dict[str, Any]) -> None:
@@ -897,7 +896,14 @@ def build_social_automation_overview(*, user_id: int | None = None) -> dict[str,
         "proxies": public_proxies,
         "tasks": [_task_public(row) for row in visible_tasks],
         "browser_sessions": _live_browser_sessions(user_id=user_id),
-        "worker": dict(_WORKER_STATE),
+        "worker": (
+            dict(_WORKER_STATE)
+            if user_id is None
+            else {
+                "status": str(_WORKER_STATE.get("status") or "idle"),
+                "running_count": counts.get("running", 0),
+            }
+        ),
         "supported_task_types": sorted(SOCIAL_TASK_TYPES),
     }
 
@@ -911,7 +917,7 @@ def _live_browser_sessions(*, user_id: int | None = None) -> list[dict[str, Any]
         return []
     task_ids = [str(session.get("task_id") or "").strip() for session in sessions if str(session.get("task_id") or "").strip()]
     if not task_ids:
-        return sessions
+        return sessions if user_id is None else []
     placeholders = ",".join("?" for _ in task_ids)
     try:
         with db() as conn:
@@ -923,7 +929,7 @@ def _live_browser_sessions(*, user_id: int | None = None) -> list[dict[str, Any]
             ).fetchall()
         task_status = {str(row["id"]): row for row in rows}
     except Exception:
-        return sessions
+        return sessions if user_id is None else []
     visible_sessions: list[dict[str, Any]] = []
     for session in sessions:
         row = task_status.get(str(session.get("task_id") or ""))
@@ -1150,6 +1156,7 @@ def create_social_proxy(payload: SocialProxyPayload, *, owner_user_id: int = 0) 
     if str(payload.ip_type or "static_residential").strip().lower() != "static_residential":
         raise HTTPException(status_code=400, detail="仅支持静态住宅 IP")
     with db() as conn:
+        _require_active_owner_user(conn, owner_user_id)
         row = _insert_social_proxy(
             conn,
             protocol=payload.proxy_type,
@@ -1479,6 +1486,7 @@ def create_social_account(payload: SocialAccountPayload, *, owner_user_id: int =
         raise HTTPException(status_code=400, detail="residential_proxy 与 proxy_id 不能同时提交")
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        _require_active_owner_user(conn, owner_user_id)
         if payload.proxy_id:
             _require_proxy(conn, payload.proxy_id, owner_user_id=owner_user_id)
         if persona_id:
@@ -1828,8 +1836,20 @@ def create_social_task(payload: SocialTaskPayload) -> dict[str, Any]:
                 raise HTTPException(status_code=409, detail="账号绑定的代理不可用，请先启用、修复或重新检测")
             if _proxy_is_expired(proxy):
                 raise HTTPException(status_code=409, detail="账号绑定的静态住宅代理已过期，请续费或更换后再执行任务")
-        persona_id = str(payload.persona_id or account["persona_id"] or "").strip()
         owner_user_id = int(account["user_id"] or 0)
+        _require_active_owner_user(conn, owner_user_id)
+        account_persona_id = str(account["persona_id"] or "").strip()
+        requested_persona_id = str(payload.persona_id or "").strip()
+        if requested_persona_id and requested_persona_id != account_persona_id:
+            raise HTTPException(status_code=400, detail="任务人设必须与执行账号绑定的人设一致")
+        persona_id = account_persona_id
+        if persona_id:
+            owner = conn.execute(
+                "SELECT 1 FROM persona_owners WHERE archive_id = ? AND user_id = ?",
+                (persona_id, owner_user_id),
+            ).fetchone()
+            if not owner:
+                raise HTTPException(status_code=409, detail="执行账号绑定的人设不属于当前账号")
         runtime_secrets: dict[str, str] = {}
         if task_type == "open_login" and auto_submit:
             submitted_password = str(task_payload.get("login_password") or "")
@@ -2513,6 +2533,8 @@ def _archive_file_lock(timeout_seconds: int = _ARCHIVE_LOCK_TIMEOUT_SECONDS):
             os.write(fd, f"{os.getpid()} {time.time()}\n".encode("utf-8"))
             break
         except FileExistsError:
+            if _remove_stale_archive_lock(lock_path):
+                continue
             if time.time() - started > timeout_seconds:
                 raise RuntimeError("人设归档正在被占用，请稍后重试。")
             time.sleep(0.1)
@@ -2524,6 +2546,58 @@ def _archive_file_lock(timeout_seconds: int = _ARCHIVE_LOCK_TIMEOUT_SECONDS):
                 os.close(fd)
         with contextlib.suppress(FileNotFoundError):
             lock_path.unlink()
+
+
+def _remove_stale_archive_lock(lock_path: Path, *, max_age_seconds: int = 300) -> bool:
+    try:
+        raw = lock_path.read_text(encoding="utf-8").strip().split()
+        pid = int(raw[0]) if raw else 0
+        created_at = float(raw[1]) if len(raw) > 1 else float(lock_path.stat().st_mtime)
+    except Exception:
+        pid = 0
+        try:
+            created_at = float(lock_path.stat().st_mtime)
+        except Exception:
+            return False
+    stale = time.time() - created_at > max_age_seconds
+    if not stale and os.name != "nt" and pid > 0:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            stale = True
+        except (PermissionError, OSError):
+            pass
+    if not stale:
+        return False
+    try:
+        lock_path.unlink()
+        return True
+    except FileNotFoundError:
+        return True
+    except Exception:
+        return False
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    temp_path = Path(temp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+        if os.name != "nt":
+            directory_fd = os.open(str(path.parent), os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+    except Exception:
+        with contextlib.suppress(FileNotFoundError):
+            temp_path.unlink()
+        raise
 
 
 def _write_archives_preserving_shape(path: Path, raw: Any, archives: list[dict[str, Any]]) -> None:
@@ -2542,8 +2616,7 @@ def _write_archives_preserving_shape(path: Path, raw: Any, archives: list[dict[s
             payload[target_key] = archives
     else:
         payload = archives
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    _atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
 
 
 def _archive_paths_for_sync() -> list[Path]:
@@ -2977,12 +3050,21 @@ def _sync_successful_task_to_persona_archive(task_id: str, result: dict[str, Any
             if not task_row:
                 return
             account_row = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (str(task_row["account_id"]),)).fetchone()
+            owner_row = conn.execute(
+                "SELECT 1 FROM persona_owners WHERE archive_id = ? AND user_id = ?",
+                (str(task_row["persona_id"] or "").strip(), int(task_row["user_id"] or 0)),
+            ).fetchone()
         task = dict(task_row)
         account = dict(account_row) if account_row else {}
         if str(task.get("task_type") or "").strip().lower() != "publish_post":
             return
         persona_id = str(task.get("persona_id") or account.get("persona_id") or "").strip()
-        if not persona_id:
+        if (
+            not persona_id
+            or not owner_row
+            or int(account.get("user_id") or 0) != int(task.get("user_id") or 0)
+            or str(account.get("persona_id") or "").strip() != persona_id
+        ):
             return
         payload = json.loads(str(task.get("payload_json") or "{}"))
         if not isinstance(payload, dict):

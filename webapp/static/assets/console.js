@@ -8,7 +8,6 @@ const PERSONA_GENERATE_TARGET_WORDS_KEY = "wk-persona-generate-target-words";
 const PERSONA_MEDIA_IMAGE_COUNT_KEY = "wk-persona-media-image-count";
 const PERSONA_HOT_IMPORTS_STORAGE_KEY = "wk-persona-hot-imports";
 const PERSONA_CONSOLE_OVERVIEW_CACHE_KEY = "wk-persona-console-overview-cache";
-const PERSONA_CONSOLE_OVERVIEW_CACHE_VERSION = 2;
 const SOCIAL_ACCOUNTS_CACHE_KEY = "wk-social-accounts-cache";
 const PERSONA_POSTS_CACHE_PREFIX = "wk-persona-posts-cache";
 const TASK_QUEUE_PERSONA_PAGE_SIZE_KEY = "wk-task-queue-persona-page-size";
@@ -18,6 +17,22 @@ const LIVE_BROWSER_AUTO_CLOSE_SECONDS_KEY = "wk-live-browser-auto-close-seconds"
 const LIVE_BROWSER_MAX_CONCURRENCY_KEY = "wk-live-browser-max-concurrency";
 const LIVE_BROWSER_TEXT_INPUT_MODE_KEY = "wk-live-browser-text-input-mode";
 const LIVE_BROWSER_LAYOUT_KEY = "wk-live-browser-layout";
+
+function purgeLegacyTenantContentCaches() {
+  try {
+    window.localStorage.removeItem(PERSONA_HOT_IMPORTS_STORAGE_KEY);
+    window.localStorage.removeItem(PERSONA_CONSOLE_OVERVIEW_CACHE_KEY);
+    window.localStorage.removeItem(SOCIAL_ACCOUNTS_CACHE_KEY);
+    for (let index = window.localStorage.length - 1; index >= 0; index -= 1) {
+      const key = String(window.localStorage.key(index) || "");
+      if (key === PERSONA_POSTS_CACHE_PREFIX || key.startsWith(`${PERSONA_POSTS_CACHE_PREFIX}:`)) {
+        window.localStorage.removeItem(key);
+      }
+    }
+  } catch {}
+}
+
+purgeLegacyTenantContentCaches();
 
 try {
   if (window.localStorage.getItem(THEME_STORAGE_KEY) === "dark") {
@@ -126,56 +141,23 @@ function storedLiveBrowserLayout() {
 }
 
 function storedPersonaHotImports() {
-  try {
-    const raw = JSON.parse(window.localStorage.getItem(PERSONA_HOT_IMPORTS_STORAGE_KEY) || "{}");
-    return raw && typeof raw === "object" ? raw : {};
-  } catch {
-    return {};
-  }
+  return {};
 }
 
 function storedPersonaConsoleOverview() {
-  try {
-    const raw = JSON.parse(window.localStorage.getItem(PERSONA_CONSOLE_OVERVIEW_CACHE_KEY) || "{}");
-    if (!raw || typeof raw !== "object" || !Array.isArray(raw.personas)) return null;
-    if (Number(raw.cache_version || 0) !== PERSONA_CONSOLE_OVERVIEW_CACHE_VERSION) return null;
-    return raw;
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 function savePersonaConsoleOverview(data) {
-  try {
-    if (!data || typeof data !== "object" || !Array.isArray(data.personas)) return;
-    window.localStorage.setItem(PERSONA_CONSOLE_OVERVIEW_CACHE_KEY, JSON.stringify({
-      cache_version: PERSONA_CONSOLE_OVERVIEW_CACHE_VERSION,
-      cached_at: Date.now(),
-      personas: data.personas,
-      persona_groups: data.persona_groups || { groups: [], assigned_persona_ids: [] },
-    }));
-  } catch {}
+  return data;
 }
 
 function storedSocialAccountsSnapshot() {
-  try {
-    const raw = JSON.parse(window.localStorage.getItem(SOCIAL_ACCOUNTS_CACHE_KEY) || "{}");
-    if (!raw || typeof raw !== "object" || !Array.isArray(raw.accounts)) return null;
-    return raw;
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 function saveSocialAccountsSnapshot({ accounts = state.socialAccounts, browserSessions = state.socialBrowserSessions } = {}) {
-  try {
-    if (!Array.isArray(accounts)) return;
-    window.localStorage.setItem(SOCIAL_ACCOUNTS_CACHE_KEY, JSON.stringify({
-      cached_at: Date.now(),
-      accounts,
-      browser_sessions: Array.isArray(browserSessions) ? browserSessions : [],
-    }));
-  } catch {}
+  return { accounts, browserSessions };
 }
 
 function hydrateSocialAccountsFromCache() {
@@ -193,26 +175,11 @@ function personaPostCacheKey(personaId, source = "posts") {
 }
 
 function storedPersonaPostRows(personaId, source = "posts") {
-  const cleanId = String(personaId || "").trim();
-  if (!cleanId) return null;
-  try {
-    const raw = JSON.parse(window.localStorage.getItem(personaPostCacheKey(cleanId, source)) || "{}");
-    if (!raw || typeof raw !== "object" || !Array.isArray(raw.rows)) return null;
-    return raw.rows;
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 function savePersonaPostRows(personaId, source = "posts", rows = []) {
-  const cleanId = String(personaId || "").trim();
-  if (!cleanId || !Array.isArray(rows)) return;
-  try {
-    window.localStorage.setItem(personaPostCacheKey(cleanId, source), JSON.stringify({
-      cached_at: Date.now(),
-      rows,
-    }));
-  } catch {}
+  return { personaId, source, rows };
 }
 
 function hydratePersonaPostRowsFromCache(personaId, source = "posts") {
@@ -2158,9 +2125,7 @@ function updatePersonaDraftEditVisualState() {
 }
 
 function persistPersonaHotImports() {
-  try {
-    window.localStorage.setItem(PERSONA_HOT_IMPORTS_STORAGE_KEY, JSON.stringify(state.personaHotImports || {}));
-  } catch {}
+  return state.personaHotImports;
 }
 
 function personaHotImportStore(personaId) {
