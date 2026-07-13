@@ -10,8 +10,14 @@
   <div class="layout admin-layout">
     <aside class="sidebar">
       <div class="brand">
-        <h1>运营后台</h1>
-        <p>管理员：<span id="adminName">...</span></p>
+        <div class="admin-brand-lockup">
+          <img class="admin-brand-mark" src="/assets/opc/vecto-logo-ui-icon.png" alt="Vecto">
+          <div>
+            <div class="admin-brand-eyebrow">Vecto OS</div>
+            <h1>运营后台</h1>
+            <p>管理员：<span id="adminName">...</span></p>
+          </div>
+        </div>
       </div>
 
       <div class="admin-rail-note">
@@ -37,7 +43,7 @@
       <div class="sidebar-actions admin-sidebar-actions">
         <a class="btn ghost admin-quick-setup-link" href="/console.html">进入 Web 控制台</a>
         <a class="btn ghost admin-quick-setup-link" href="/quick-setup.html">快速配置</a>
-        <a class="btn ghost admin-quick-setup-link" href="/persona-dashboard.html">人设数据看板</a>
+        <a class="btn ghost admin-quick-setup-link" href="/console.html?view=persona_dashboard">人设数据看板</a>
         <button id="btnToUser" class="ghost" type="button">返回客户端</button>
         <button id="btnLogout" class="danger" type="button">退出</button>
       </div>
@@ -51,7 +57,7 @@
           <div class="meta">优先处理客户账号、生成记录和额度策略，供应商配置集中放在后段维护。</div>
           <div class="admin-top-actions">
             <a class="btn ghost" href="/console.html">进入 Web 控制台</a>
-            <button id="btnQuickSetup" class="ghost" type="button">簡易配置</button>
+            <button id="btnQuickSetup" class="ghost" type="button">快速配置</button>
             <button id="btnPersonaDashboard" class="ghost" type="button">人设数据看板</button>
           </div>
         </div>
@@ -112,8 +118,9 @@
         <div class="section-head">
           <div>
             <h2>客户账号</h2>
-            <div class="meta">开通客户、分配额度、控制账号状态。常用动作放前，破坏性操作收敛到表格内。</div>
+            <div class="meta">审核游客申请、查看完整资料、分配额度并控制账号状态。</div>
           </div>
+          <div class="admin-pending-count"><strong id="adminPendingCount">0</strong><span>待授权</span></div>
         </div>
         <div class="admin-compose-shell">
           <div class="grid-2 admin-user-grid">
@@ -141,6 +148,7 @@
               <tr>
                 <th>ID</th>
                 <th>客户用户名</th>
+                <th>姓名 / 公司</th>
                 <th>角色</th>
                 <th>状态</th>
                 <th>额度(分)</th>
@@ -360,7 +368,6 @@
                           <button id="btnAddLlmPriorityModel" type="button" class="ghost admin-model-add-btn" title="从候选模型添加" aria-label="从候选模型添加">+</button>
                         </div>
                       </div>
-                    </div>
                     </div>
                   </div>
                   <div id="rtLlmModelSummary" class="admin-model-summary small"></div>
@@ -596,6 +603,42 @@
       </div>
       <div class="modal-footer">
         <button id="btnRechargeSubmit" type="button" class="primary">确认分配</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="userDetailModal" class="modal-overlay" style="display:none" aria-hidden="true">
+    <div class="modal-card admin-user-detail-modal" role="dialog" aria-modal="true" aria-labelledby="userDetailTitle">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title" id="userDetailTitle">账号详细资料</div>
+          <div class="small" id="userDetailSub">-</div>
+        </div>
+        <button id="btnUserDetailClose" type="button" class="ghost">关闭</button>
+      </div>
+      <div class="modal-body">
+        <div class="admin-user-detail-grid" id="userDetailBody"></div>
+        <section class="admin-user-password-section" id="userPasswordSection" aria-labelledby="userPasswordTitle">
+          <div class="admin-user-password-heading">
+            <div>
+              <strong id="userPasswordTitle">登录密码管理</strong>
+              <span>原密码采用安全哈希保存。重置后，新密码仅在当前弹窗显示一次。</span>
+            </div>
+            <button id="btnResetUserPassword" type="button" class="primary">重置并生成密码</button>
+          </div>
+          <div class="admin-user-password-result" id="userPasswordResult" hidden>
+            <span>密码已重置，请立即保存：</span>
+            <strong id="userPasswordResultValue"></strong>
+            <button id="btnCopyUserPassword" type="button" class="ghost">复制密码</button>
+          </div>
+        </section>
+        <label for="userApprovalNote">管理员审核备注</label>
+        <textarea id="userApprovalNote" rows="3" placeholder="记录授权或拒绝原因（选填）"></textarea>
+        <div id="userDetailMsg" class="msg"></div>
+      </div>
+      <div class="modal-footer admin-approval-actions">
+        <button id="btnRejectUser" type="button" class="danger">拒绝授权</button>
+        <button id="btnApproveUser" type="button" class="primary">授权并启用</button>
       </div>
     </div>
   </div>

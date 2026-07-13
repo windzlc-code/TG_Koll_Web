@@ -15,6 +15,8 @@ class AccountSettingsApiTests(unittest.TestCase):
         self._old_db_path = os.environ.get("APP_DB_PATH")
         self._old_runtime_config_path = os.environ.get("APP_RUNTIME_CONFIG_PATH")
         self._old_webapp_data_dir = os.environ.get("WEBAPP_DATA_DIR")
+        self._old_bootstrap_password = os.environ.get("ADMIN_BOOTSTRAP_PASSWORD")
+        self._old_cookie_secure = os.environ.get("SESSION_COOKIE_SECURE")
         self._old_server_runtime_config_path = server.RUNTIME_CONFIG_PATH
         self._tmpdir = tempfile.TemporaryDirectory()
         self.data_dir = Path(self._tmpdir.name)
@@ -23,6 +25,10 @@ class AccountSettingsApiTests(unittest.TestCase):
         os.environ["WEBAPP_DATA_DIR"] = str(self.data_dir)
         os.environ["APP_DB_PATH"] = str(self.db_path)
         os.environ["APP_RUNTIME_CONFIG_PATH"] = str(self.runtime_config_path)
+        os.environ["ADMIN_BOOTSTRAP_PASSWORD"] = "admin123secure"
+        os.environ["SESSION_COOKIE_SECURE"] = "0"
+        with server._AUTH_RATE_LOCK:
+            server._AUTH_RATE_EVENTS.clear()
         server.RUNTIME_CONFIG_PATH = self.runtime_config_path
         self.app = server.create_app()
         self.client = TestClient(self.app)
@@ -41,18 +47,26 @@ class AccountSettingsApiTests(unittest.TestCase):
             os.environ.pop("WEBAPP_DATA_DIR", None)
         else:
             os.environ["WEBAPP_DATA_DIR"] = self._old_webapp_data_dir
+        if self._old_bootstrap_password is None:
+            os.environ.pop("ADMIN_BOOTSTRAP_PASSWORD", None)
+        else:
+            os.environ["ADMIN_BOOTSTRAP_PASSWORD"] = self._old_bootstrap_password
+        if self._old_cookie_secure is None:
+            os.environ.pop("SESSION_COOKIE_SECURE", None)
+        else:
+            os.environ["SESSION_COOKIE_SECURE"] = self._old_cookie_secure
         self._tmpdir.cleanup()
 
     def test_admin_can_change_username_with_current_password(self):
         login_resp = self.client.post(
             "/api/auth/login",
-            json={"username": "admin", "password": "admin123"},
+            json={"username": "admin", "password": "admin123secure"},
         )
         self.assertEqual(login_resp.status_code, 200)
 
         change_resp = self.client.post(
             "/api/auth/change_username",
-            json={"password": "admin123", "new_username": "admin2"},
+            json={"password": "admin123secure", "new_username": "admin2"},
         )
         self.assertEqual(change_resp.status_code, 200)
         self.assertEqual(change_resp.json(), {"ok": True})
@@ -63,40 +77,40 @@ class AccountSettingsApiTests(unittest.TestCase):
 
         relogin_resp = self.client.post(
             "/api/auth/login",
-            json={"username": "admin2", "password": "admin123"},
+            json={"username": "admin2", "password": "admin123secure"},
         )
         self.assertEqual(relogin_resp.status_code, 200)
 
     def test_admin_can_change_password_with_current_password(self):
         login_resp = self.client.post(
             "/api/auth/login",
-            json={"username": "admin", "password": "admin123"},
+            json={"username": "admin", "password": "admin123secure"},
         )
         self.assertEqual(login_resp.status_code, 200)
 
         change_resp = self.client.post(
             "/api/auth/change_password",
-            json={"old_password": "admin123", "new_password": "admin456"},
+            json={"old_password": "admin123secure", "new_password": "admin456secure"},
         )
         self.assertEqual(change_resp.status_code, 200)
         self.assertEqual(change_resp.json(), {"ok": True})
 
         old_login_resp = self.client.post(
             "/api/auth/login",
-            json={"username": "admin", "password": "admin123"},
+            json={"username": "admin", "password": "admin123secure"},
         )
         self.assertEqual(old_login_resp.status_code, 401)
 
         new_login_resp = self.client.post(
             "/api/auth/login",
-            json={"username": "admin", "password": "admin456"},
+            json={"username": "admin", "password": "admin456secure"},
         )
         self.assertEqual(new_login_resp.status_code, 200)
 
     def test_change_password_rejects_wrong_current_password(self):
         login_resp = self.client.post(
             "/api/auth/login",
-            json={"username": "admin", "password": "admin123"},
+            json={"username": "admin", "password": "admin123secure"},
         )
         self.assertEqual(login_resp.status_code, 200)
 
@@ -138,7 +152,7 @@ class AccountSettingsApiTests(unittest.TestCase):
 
         login_resp = self.client.post(
             "/api/auth/login",
-            json={"username": "admin", "password": "admin123"},
+            json={"username": "admin", "password": "admin123secure"},
         )
         self.assertEqual(login_resp.status_code, 200)
 

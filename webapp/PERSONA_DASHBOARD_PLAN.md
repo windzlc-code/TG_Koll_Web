@@ -16,7 +16,7 @@
 ## 实现范围
 
 - 后端新增免登录只读接口 `GET /api/persona_dashboard/overview`。
-- 前端新增登录后入口 `#app-persona-dashboard`，并新增免登录页面 `/persona-dashboard.html`。
+- 前端在人设看板控制台视图 `console.html?view=persona_dashboard` 提供登录后入口。
 - 图表使用原生 HTML/CSS/SVG，不新增前端依赖。
 - 敏感字段脱敏展示，不返回明文 token、secret、password、session 等值。
 

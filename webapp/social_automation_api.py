@@ -10,6 +10,7 @@ import time
 import uuid
 import contextlib
 import subprocess
+import shutil
 from io import BytesIO
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -43,6 +44,14 @@ SOCIAL_TASK_TYPES = {
 }
 SOCIAL_ACCOUNT_STATUSES = {"pending_login", "ready", "need_verification", "cookie_expired", "disabled"}
 SOCIAL_TASK_STATUSES = {"queued", "running", "success", "failed", "cancelled", "need_manual"}
+SOCIAL_MEDIA_EXTENSIONS = {
+    ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif",
+    ".mp4", ".mov", ".webm", ".m4v", ".mp3", ".wav", ".m4a", ".aac",
+}
+SOCIAL_MEDIA_CONTENT_PREFIXES = ("image/", "video/", "audio/")
+SOCIAL_MEDIA_MAX_FILES = 10
+SOCIAL_MEDIA_MAX_FILE_BYTES = 50 * 1024 * 1024
+SOCIAL_MEDIA_MAX_TOTAL_BYTES = 100 * 1024 * 1024
 
 _DATA_DIR = Path(os.getenv("WEBAPP_DATA_DIR", str(Path(__file__).resolve().parent.parent / "webapp_data"))).resolve()
 _NEW_ID: Callable[[str], str] = lambda prefix: f"{prefix}_{uuid.uuid4().hex[:20]}"
@@ -203,100 +212,176 @@ def configure_social_automation(*, data_dir: Path, new_id: Callable[[str], str] 
         _NEW_ID = new_id
 
 
+def _identity_user_id(user: dict[str, Any]) -> int:
+    try:
+        return int(user.get("id") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _identity_is_admin(user: dict[str, Any]) -> bool:
+    try:
+        return int(user.get("is_admin") or 0) == 1
+    except (TypeError, ValueError):
+        return False
+
+
+def _require_owned_resource(table: str, resource_id: str, user: dict[str, Any], *, label: str) -> Any:
+    if table not in {"social_accounts", "social_proxies", "social_automation_tasks"}:
+        raise RuntimeError("unsupported ownership table")
+    with db() as conn:
+        row = conn.execute(f"SELECT * FROM {table} WHERE id = ?", (str(resource_id or "").strip(),)).fetchone()
+    if not row or (not _identity_is_admin(user) and int(row["user_id"] or 0) != _identity_user_id(user)):
+        raise HTTPException(status_code=404, detail=f"{label}不存在")
+    return row
+
+
+def _require_account_access(account_id: str, user: dict[str, Any]) -> Any:
+    return _require_owned_resource("social_accounts", account_id, user, label="账号")
+
+
+def _require_proxy_access(proxy_id: str, user: dict[str, Any]) -> Any:
+    return _require_owned_resource("social_proxies", proxy_id, user, label="代理")
+
+
+def _require_task_access(task_id: str, user: dict[str, Any]) -> Any:
+    return _require_owned_resource("social_automation_tasks", task_id, user, label="任务")
+
+
+def _require_persona_reference_access(persona_id: str, user: dict[str, Any]) -> None:
+    clean_id = str(persona_id or "").strip()
+    if not clean_id or _identity_is_admin(user):
+        return
+    with db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM persona_owners WHERE archive_id = ? AND user_id = ?",
+            (clean_id, _identity_user_id(user)),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="人设不存在")
+
+
+def _validate_user_task_media_paths(payload: dict[str, Any], user: dict[str, Any]) -> None:
+    if _identity_is_admin(user):
+        return
+    media_paths = payload.get("media_paths") if isinstance(payload, dict) else []
+    root = (_DATA_DIR / "social_automation" / "uploads" / str(_identity_user_id(user))).resolve()
+    for value in media_paths if isinstance(media_paths, list) else []:
+        try:
+            path = Path(str(value or "")).expanduser().resolve()
+        except Exception as exc:
+            raise HTTPException(status_code=404, detail="媒体文件不存在") from exc
+        if root not in path.parents or not path.is_file() or path.suffix.lower() not in SOCIAL_MEDIA_EXTENSIONS:
+            raise HTTPException(status_code=404, detail="媒体文件不存在")
+
+
 def register_social_automation_routes(app: FastAPI) -> None:
     @app.get("/api/persona_dashboard/automation/overview")
-    def api_social_automation_overview(_user: dict[str, Any] = Depends(get_current_user)):
-        return build_social_automation_overview()
+    def api_social_automation_overview(user: dict[str, Any] = Depends(get_current_user)):
+        return build_social_automation_overview(user_id=None if _identity_is_admin(user) else _identity_user_id(user))
 
     @app.get("/api/persona_dashboard/automation/browser_sessions")
-    def api_social_browser_sessions(_user: dict[str, Any] = Depends(get_current_user)):
-        return {"ok": True, "sessions": _live_browser_sessions()}
+    def api_social_browser_sessions(user: dict[str, Any] = Depends(get_current_user)):
+        return {"ok": True, "sessions": _live_browser_sessions(user_id=None if _identity_is_admin(user) else _identity_user_id(user))}
 
     @app.get("/api/persona_dashboard/automation/browser_settings")
     def api_social_browser_settings(_user: dict[str, Any] = Depends(get_current_user)):
         return {"ok": True, "settings": get_live_browser_settings()}
 
     @app.put("/api/persona_dashboard/automation/browser_settings")
-    def api_social_browser_settings_save(payload: LiveBrowserSettingsPayload, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_social_browser_settings_save(payload: LiveBrowserSettingsPayload, _user: dict[str, Any] = Depends(require_admin)):
         return {"ok": True, "settings": set_live_browser_settings(payload)}
 
     @app.post("/api/persona_dashboard/automation/browser_sessions/{session_id}/close")
-    def api_social_browser_session_close(session_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_social_browser_session_close(session_id: str, user: dict[str, Any] = Depends(get_current_user)):
+        _require_live_browser_session_access(session_id, user)
         close_live_browser_session(session_id)
         return {"ok": True, "closed": True}
 
     @app.post("/api/persona_dashboard/automation/browser_sessions/{session_id}/type")
-    def api_social_browser_session_type(session_id: str, payload: LiveBrowserTextPayload, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_social_browser_session_type(session_id: str, payload: LiveBrowserTextPayload, user: dict[str, Any] = Depends(get_current_user)):
+        _require_live_browser_session_access(session_id, user)
         return {"ok": True, **type_live_browser_session_text(session_id, payload.text, press_enter=payload.press_enter)}
 
     @app.post("/api/persona_dashboard/automation/browser_sessions/{session_id}/key")
-    def api_social_browser_session_key(session_id: str, payload: LiveBrowserKeyPayload, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_social_browser_session_key(session_id: str, payload: LiveBrowserKeyPayload, user: dict[str, Any] = Depends(get_current_user)):
+        _require_live_browser_session_access(session_id, user)
         return {"ok": True, **press_live_browser_session_key(session_id, payload.key)}
 
     @app.post("/api/persona_dashboard/automation/browser_sessions/{session_id}/screenshot")
-    def api_social_browser_session_screenshot(session_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_social_browser_session_screenshot(session_id: str, user: dict[str, Any] = Depends(get_current_user)):
+        _require_live_browser_session_access(session_id, user)
         return {"ok": True, **capture_live_browser_session_screenshot(session_id)}
 
     @app.websocket("/api/persona_dashboard/automation/browser_sessions/{session_id}/ws")
     async def api_social_browser_session_ws(websocket: WebSocket, session_id: str):
-        if not _authenticate_live_browser_websocket(websocket):
+        user = _authenticate_live_browser_websocket(websocket)
+        if not user or not _live_browser_session_accessible(session_id, user):
             await websocket.close(code=1008)
             return
         await _proxy_live_browser_websocket(websocket, session_id)
 
     @app.get("/api/persona_dashboard/automation/browser_sessions/{session_id}/kasm")
-    def api_social_browser_session_kasm_root(session_id: str, request: Request, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_social_browser_session_kasm_root(session_id: str, request: Request, user: dict[str, Any] = Depends(get_current_user)):
+        _require_live_browser_session_access(session_id, user)
         return _proxy_live_browser_http(session_id, "vnc.html", request)
 
     @app.get("/api/persona_dashboard/automation/browser_sessions/{session_id}/kasm/{path:path}")
-    def api_social_browser_session_kasm_path(session_id: str, path: str, request: Request, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_social_browser_session_kasm_path(session_id: str, path: str, request: Request, user: dict[str, Any] = Depends(get_current_user)):
+        _require_live_browser_session_access(session_id, user)
         return _proxy_live_browser_http(session_id, path or "vnc.html", request)
 
     @app.get("/api/persona_dashboard/automation/accounts")
-    def api_social_accounts(_user: dict[str, Any] = Depends(get_current_user)):
+    def api_social_accounts(user: dict[str, Any] = Depends(get_current_user)):
         with db() as conn:
-            rows = conn.execute("SELECT * FROM social_accounts ORDER BY updated_at DESC, created_at DESC").fetchall()
+            if _identity_is_admin(user):
+                rows = conn.execute("SELECT * FROM social_accounts ORDER BY updated_at DESC, created_at DESC").fetchall()
+            else:
+                rows = conn.execute("SELECT * FROM social_accounts WHERE user_id = ? ORDER BY updated_at DESC, created_at DESC", (_identity_user_id(user),)).fetchall()
             accounts = _account_public_rows(conn, rows)
         return {"ok": True, "accounts": accounts}
 
     @app.post("/api/persona_dashboard/automation/accounts")
-    def api_social_account_create(payload: SocialAccountPayload, _user: dict[str, Any] = Depends(get_current_user)):
-        account = create_social_account(payload)
+    def api_social_account_create(payload: SocialAccountPayload, user: dict[str, Any] = Depends(get_current_user)):
+        _require_persona_reference_access(payload.persona_id, user)
+        if payload.profile_dir and not _identity_is_admin(user):
+            raise HTTPException(status_code=400, detail="普通用户不能指定浏览器配置目录")
+        account = create_social_account(payload, owner_user_id=_identity_user_id(user))
         return {"ok": True, "account": account}
 
     @app.patch("/api/persona_dashboard/automation/accounts/{account_id}")
-    def api_social_account_patch(account_id: str, payload: SocialAccountPatchPayload, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_social_account_patch(account_id: str, payload: SocialAccountPatchPayload, user: dict[str, Any] = Depends(get_current_user)):
+        _require_account_access(account_id, user)
+        if payload.persona_id is not None:
+            _require_persona_reference_access(payload.persona_id, user)
+        if payload.profile_dir and not _identity_is_admin(user):
+            raise HTTPException(status_code=400, detail="普通用户不能指定浏览器配置目录")
+        if payload.proxy_id:
+            proxy = _require_proxy_access(payload.proxy_id, user)
+            if int(proxy["user_id"] or 0) != int(_require_account_access(account_id, user)["user_id"] or 0):
+                raise HTTPException(status_code=404, detail="代理不存在")
         return {"ok": True, "account": update_social_account(account_id, payload)}
 
     @app.delete("/api/persona_dashboard/automation/accounts/{account_id}")
-    def api_social_account_delete(account_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_social_account_delete(account_id: str, user: dict[str, Any] = Depends(get_current_user)):
+        _require_account_access(account_id, user)
         return {"ok": True, "deleted": delete_social_account(account_id)}
 
     @app.post("/api/persona_dashboard/automation/accounts/dedupe")
-    def api_social_accounts_dedupe(_user: dict[str, Any] = Depends(get_current_user)):
-        return {"ok": True, **dedupe_social_accounts()}
+    def api_social_accounts_dedupe(user: dict[str, Any] = Depends(get_current_user)):
+        return {"ok": True, **dedupe_social_accounts(user_id=None if _identity_is_admin(user) else _identity_user_id(user))}
 
     @app.get("/api/persona_dashboard/automation/accounts/{account_id}/credentials")
     def api_social_account_credentials(account_id: str, _user: dict[str, Any] = Depends(get_current_user)):
-        with db() as conn:
-            row = conn.execute("SELECT id, login_username, login_password, login_credentials_updated_at FROM social_accounts WHERE id = ?", (account_id,)).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="账号不存在")
-        return {
-            "ok": True,
-            "account_id": str(row["id"] or ""),
-            "login_username": str(row["login_username"] or ""),
-            "login_password": str(row["login_password"] or ""),
-            "login_password_configured": bool(str(row["login_password"] or "")),
-            "login_credentials_updated_at": int(row["login_credentials_updated_at"] or 0),
-        }
+        raise HTTPException(status_code=410, detail="已保存密码仅供自动化任务使用，不支持回显")
 
     @app.post("/api/persona_dashboard/automation/accounts/{account_id}/check_login")
     def api_social_account_check_login(
         account_id: str,
         payload: dict[str, Any] | None = Body(default=None),
-        _user: dict[str, Any] = Depends(get_current_user),
+        user: dict[str, Any] = Depends(get_current_user),
     ):
+        _require_account_access(account_id, user)
         body = payload if isinstance(payload, dict) else {}
         return {"ok": True, "task": create_account_task(account_id, "check_login", body.get("payload") if isinstance(body.get("payload"), dict) else body)}
 
@@ -304,8 +389,9 @@ def register_social_automation_routes(app: FastAPI) -> None:
     def api_social_account_open_login(
         account_id: str,
         payload: dict[str, Any] | None = Body(default=None),
-        _user: dict[str, Any] = Depends(get_current_user),
+        user: dict[str, Any] = Depends(get_current_user),
     ):
+        _require_account_access(account_id, user)
         wait_seconds = max(3600, int(os.getenv("SOCIAL_AUTOMATION_LOGIN_WAIT_SECONDS", "3600")))
         body = payload if isinstance(payload, dict) else {}
         task_payload = body.get("payload") if isinstance(body.get("payload"), dict) else body
@@ -315,62 +401,75 @@ def register_social_automation_routes(app: FastAPI) -> None:
         return {"ok": True, "task": create_account_task(account_id, "open_login", task_payload)}
 
     @app.get("/api/persona_dashboard/automation/proxies")
-    def api_social_proxies(_user: dict[str, Any] = Depends(get_current_user)):
+    def api_social_proxies(user: dict[str, Any] = Depends(get_current_user)):
         with db() as conn:
-            rows = conn.execute("SELECT * FROM social_proxies ORDER BY updated_at DESC, created_at DESC").fetchall()
+            if _identity_is_admin(user):
+                rows = conn.execute("SELECT * FROM social_proxies ORDER BY updated_at DESC, created_at DESC").fetchall()
+            else:
+                rows = conn.execute("SELECT * FROM social_proxies WHERE user_id = ? ORDER BY updated_at DESC, created_at DESC", (_identity_user_id(user),)).fetchall()
             proxies = _proxy_public_rows(conn, rows)
         return {"ok": True, "proxies": proxies}
 
     @app.post("/api/persona_dashboard/automation/proxies")
-    def api_social_proxy_create(payload: SocialProxyPayload, _user: dict[str, Any] = Depends(get_current_user)):
-        return {"ok": True, "proxy": create_social_proxy(payload)}
+    def api_social_proxy_create(payload: SocialProxyPayload, user: dict[str, Any] = Depends(get_current_user)):
+        return {"ok": True, "proxy": create_social_proxy(payload, owner_user_id=_identity_user_id(user))}
 
     @app.patch("/api/persona_dashboard/automation/proxies/{proxy_id}")
-    def api_social_proxy_patch(proxy_id: str, payload: SocialProxyPatchPayload, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_social_proxy_patch(proxy_id: str, payload: SocialProxyPatchPayload, user: dict[str, Any] = Depends(get_current_user)):
+        _require_proxy_access(proxy_id, user)
         return {"ok": True, "proxy": update_social_proxy(proxy_id, payload)}
 
     @app.delete("/api/persona_dashboard/automation/proxies/{proxy_id}")
-    def api_social_proxy_delete(proxy_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_social_proxy_delete(proxy_id: str, user: dict[str, Any] = Depends(get_current_user)):
+        _require_proxy_access(proxy_id, user)
         return {"ok": True, "deleted": delete_social_proxy(proxy_id)}
 
     @app.post("/api/persona_dashboard/automation/proxies/{proxy_id}/check")
-    def api_social_proxy_check(proxy_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_social_proxy_check(proxy_id: str, user: dict[str, Any] = Depends(get_current_user)):
+        _require_proxy_access(proxy_id, user)
         return {"ok": True, "proxy": check_social_proxy(proxy_id)}
 
     @app.get("/api/persona_dashboard/automation/tasks")
-    def api_social_tasks(status: str = "", account_id: str = "", limit: int = 60, _user: dict[str, Any] = Depends(get_current_user)):
-        return {"ok": True, "tasks": list_social_tasks(status=status, account_id=account_id, limit=limit)}
+    def api_social_tasks(status: str = "", account_id: str = "", limit: int = 60, user: dict[str, Any] = Depends(get_current_user)):
+        return {"ok": True, "tasks": list_social_tasks(status=status, account_id=account_id, limit=limit, user_id=None if _identity_is_admin(user) else _identity_user_id(user))}
 
     @app.post("/api/persona_dashboard/automation/tasks")
-    def api_social_task_create(payload: SocialTaskPayload, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_social_task_create(payload: SocialTaskPayload, user: dict[str, Any] = Depends(get_current_user)):
+        _require_account_access(payload.account_id, user)
+        _validate_user_task_media_paths(payload.payload, user)
         return {"ok": True, "task": create_social_task(payload)}
 
     @app.post("/api/persona_dashboard/automation/tasks/cancel_all")
-    def api_social_tasks_cancel_all(payload: SocialTaskActionPayload | None = None, _user: dict[str, Any] = Depends(get_current_user)):
-        return {"ok": True, **cancel_all_social_tasks((payload.reason if payload else ""))}
+    def api_social_tasks_cancel_all(payload: SocialTaskActionPayload | None = None, user: dict[str, Any] = Depends(get_current_user)):
+        return {"ok": True, **cancel_all_social_tasks((payload.reason if payload else ""), user_id=None if _identity_is_admin(user) else _identity_user_id(user))}
 
     @app.get("/api/persona_dashboard/automation/tasks/{task_id}")
-    def api_social_task_get(task_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_social_task_get(task_id: str, user: dict[str, Any] = Depends(get_current_user)):
+        _require_task_access(task_id, user)
         return {"ok": True, "task": get_social_task(task_id)}
 
     @app.delete("/api/persona_dashboard/automation/tasks")
-    def api_social_tasks_clear(persona_id: str = "", account_id: str = "", _user: dict[str, Any] = Depends(get_current_user)):
-        return {"ok": True, "cleared": clear_social_tasks(persona_id=persona_id, account_id=account_id)}
+    def api_social_tasks_clear(persona_id: str = "", account_id: str = "", user: dict[str, Any] = Depends(get_current_user)):
+        return {"ok": True, "cleared": clear_social_tasks(persona_id=persona_id, account_id=account_id, user_id=None if _identity_is_admin(user) else _identity_user_id(user))}
 
     @app.delete("/api/persona_dashboard/automation/tasks/{task_id}")
-    def api_social_task_clear(task_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_social_task_clear(task_id: str, user: dict[str, Any] = Depends(get_current_user)):
+        _require_task_access(task_id, user)
         return {"ok": True, "cleared": clear_social_task(task_id)}
 
     @app.post("/api/persona_dashboard/automation/tasks/{task_id}/cancel")
-    def api_social_task_cancel(task_id: str, payload: SocialTaskActionPayload | None = None, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_social_task_cancel(task_id: str, payload: SocialTaskActionPayload | None = None, user: dict[str, Any] = Depends(get_current_user)):
+        _require_task_access(task_id, user)
         return {"ok": True, "task": cancel_social_task(task_id, (payload.reason if payload else ""))}
 
     @app.post("/api/persona_dashboard/automation/tasks/{task_id}/retry")
-    def api_social_task_retry(task_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_social_task_retry(task_id: str, user: dict[str, Any] = Depends(get_current_user)):
+        _require_task_access(task_id, user)
         return {"ok": True, "task": retry_social_task(task_id)}
 
     @app.get("/api/persona_dashboard/automation/tasks/{task_id}/logs")
-    def api_social_task_logs(task_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_social_task_logs(task_id: str, user: dict[str, Any] = Depends(get_current_user)):
+        _require_task_access(task_id, user)
         with db() as conn:
             logs = conn.execute(
                 "SELECT * FROM social_automation_logs WHERE task_id = ? ORDER BY created_at ASC, id ASC",
@@ -379,38 +478,70 @@ def register_social_automation_routes(app: FastAPI) -> None:
         return {"ok": True, "logs": [_log_public(row) for row in logs]}
 
     @app.get("/api/persona_dashboard/automation/tasks/{task_id}/media/{index}")
-    def api_social_task_media(task_id: str, index: int, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_social_task_media(task_id: str, index: int, user: dict[str, Any] = Depends(get_current_user)):
+        _require_task_access(task_id, user)
         task = get_social_task(task_id)
         payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
         media_paths = [str(item or "").strip() for item in (payload.get("media_paths") or []) if str(item or "").strip()]
         if index < 0 or index >= len(media_paths):
             raise HTTPException(status_code=404, detail="媒体文件不存在")
         path = Path(media_paths[index]).expanduser().resolve()
-        if not path.exists() or not path.is_file():
+        allowed_roots = [
+            (_DATA_DIR / "social_automation" / "uploads").resolve(),
+            _TOOL_R18_RUNTIME_DIR.resolve(),
+        ]
+        if (
+            not path.exists()
+            or not path.is_file()
+            or path.suffix.lower() not in SOCIAL_MEDIA_EXTENSIONS
+            or not any(root in path.parents for root in allowed_roots)
+        ):
             raise HTTPException(status_code=404, detail="媒体文件不存在")
         return FileResponse(str(path), filename=path.name)
 
     @app.post("/api/persona_dashboard/automation/media")
-    async def api_social_media_upload(files: list[UploadFile] = File(default=[]), _user: dict[str, Any] = Depends(get_current_user)):
+    async def api_social_media_upload(files: list[UploadFile] = File(default=[]), user: dict[str, Any] = Depends(get_current_user)):
+        uploads = list(files or [])
+        if len(uploads) > SOCIAL_MEDIA_MAX_FILES:
+            raise HTTPException(status_code=413, detail=f"单次最多上传 {SOCIAL_MEDIA_MAX_FILES} 个媒体文件")
         saved: list[dict[str, str]] = []
         upload_id = _NEW_ID("social_media")
-        upload_dir = (_DATA_DIR / "social_automation" / "uploads" / upload_id).resolve()
+        upload_dir = (_DATA_DIR / "social_automation" / "uploads" / str(_identity_user_id(user)) / upload_id).resolve()
         upload_dir.mkdir(parents=True, exist_ok=True)
-        for index, upload in enumerate(files or [], start=1):
-            filename = Path(str(upload.filename or f"media_{index}")).name
-            suffix = Path(filename).suffix[:20]
-            target = (upload_dir / f"media_{index}{suffix}").resolve()
-            if upload_dir not in target.parents:
-                raise HTTPException(status_code=400, detail="素材文件名不合法")
-            with target.open("wb") as fh:
-                while True:
-                    chunk = await upload.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    fh.write(chunk)
-            await upload.close()
-            saved.append({"name": filename, "path": str(target)})
+        total_bytes = 0
+        try:
+            for index, upload in enumerate(uploads, start=1):
+                filename = Path(str(upload.filename or f"media_{index}")).name
+                suffix = Path(filename).suffix.lower()[:20]
+                content_type = str(upload.content_type or "").lower()
+                if suffix not in SOCIAL_MEDIA_EXTENSIONS or not content_type.startswith(SOCIAL_MEDIA_CONTENT_PREFIXES):
+                    raise HTTPException(status_code=415, detail=f"不支持的媒体文件：{filename}")
+                target = (upload_dir / f"media_{index}{suffix}").resolve()
+                if upload_dir not in target.parents:
+                    raise HTTPException(status_code=400, detail="素材文件名不合法")
+                file_bytes = 0
+                with target.open("wb") as fh:
+                    while True:
+                        chunk = await upload.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        file_bytes += len(chunk)
+                        total_bytes += len(chunk)
+                        if file_bytes > SOCIAL_MEDIA_MAX_FILE_BYTES or total_bytes > SOCIAL_MEDIA_MAX_TOTAL_BYTES:
+                            raise HTTPException(status_code=413, detail="媒体文件超过上传大小限制")
+                        fh.write(chunk)
+                await upload.close()
+                if file_bytes == 0:
+                    raise HTTPException(status_code=400, detail=f"媒体文件为空：{filename}")
+                saved.append({"name": filename, "path": str(target)})
+        except Exception:
+            for upload in uploads:
+                with contextlib.suppress(Exception):
+                    await upload.close()
+            shutil.rmtree(upload_dir, ignore_errors=True)
+            raise
         if not saved:
+            shutil.rmtree(upload_dir, ignore_errors=True)
             raise HTTPException(status_code=400, detail="请先选择要上传的素材")
         return {"ok": True, "files": saved}
 
@@ -419,8 +550,20 @@ def register_social_automation_routes(app: FastAPI) -> None:
         return {"ok": True, "result": run_social_automation_once()}
 
     @app.get("/api/persona_dashboard/automation/screenshots/{filename}")
-    def api_social_screenshot(filename: str, thumbnail: bool = False, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_social_screenshot(filename: str, thumbnail: bool = False, user: dict[str, Any] = Depends(get_current_user)):
         safe = Path(filename).name
+        with db() as conn:
+            if _identity_is_admin(user):
+                rows = conn.execute(
+                    "SELECT l.screenshot_path FROM social_automation_logs l JOIN social_automation_tasks t ON t.id = l.task_id WHERE l.screenshot_path != ''"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT l.screenshot_path FROM social_automation_logs l JOIN social_automation_tasks t ON t.id = l.task_id WHERE t.user_id = ? AND l.screenshot_path != ''",
+                    (_identity_user_id(user),),
+                ).fetchall()
+        if not any(Path(str(row["screenshot_path"] or "")).name == safe for row in rows):
+            raise HTTPException(status_code=404, detail="截图不存在")
         path = (_DATA_DIR / "social_automation" / "screenshots" / safe).resolve()
         root = (_DATA_DIR / "social_automation" / "screenshots").resolve()
         if root != path.parent or not path.exists():
@@ -438,15 +581,24 @@ def register_social_automation_routes(app: FastAPI) -> None:
         )
 
 
-def _authenticate_live_browser_websocket(websocket: WebSocket) -> bool:
+def _authenticate_live_browser_websocket(websocket: WebSocket) -> dict[str, Any] | None:
     token = str(websocket.cookies.get(SESSION_COOKIE) or "").strip()
     if not token:
-        return False
+        return None
     try:
-        get_current_user(session_token=token)
-        return True
+        return get_current_user(session_token=token)
     except Exception:
-        return False
+        return None
+
+
+def _live_browser_session_accessible(session_id: str, user: dict[str, Any]) -> bool:
+    user_id = None if _identity_is_admin(user) else _identity_user_id(user)
+    return any(str(item.get("id") or item.get("session_id") or "") == str(session_id or "") for item in _live_browser_sessions(user_id=user_id))
+
+
+def _require_live_browser_session_access(session_id: str, user: dict[str, Any]) -> None:
+    if not _live_browser_session_accessible(session_id, user):
+        raise HTTPException(status_code=404, detail="浏览器会话不存在")
 
 
 class _RfbClientMessageInspector:
@@ -704,16 +856,19 @@ def scrub_social_automation_task_secrets() -> int:
     return changed
 
 
-def build_social_automation_overview() -> dict[str, Any]:
+def build_social_automation_overview(*, user_id: int | None = None) -> dict[str, Any]:
+    scope = "" if user_id is None else " WHERE user_id = ?"
+    params: tuple[Any, ...] = () if user_id is None else (int(user_id),)
     with db() as conn:
-        accounts = conn.execute("SELECT * FROM social_accounts ORDER BY updated_at DESC, created_at DESC").fetchall()
-        proxies = conn.execute("SELECT * FROM social_proxies ORDER BY updated_at DESC, created_at DESC").fetchall()
+        accounts = conn.execute(f"SELECT * FROM social_accounts{scope} ORDER BY updated_at DESC, created_at DESC", params).fetchall()
+        proxies = conn.execute(f"SELECT * FROM social_proxies{scope} ORDER BY updated_at DESC, created_at DESC", params).fetchall()
         public_accounts = _account_public_rows(conn, accounts)
         public_proxies = _proxy_public_rows(conn, proxies)
         tasks = conn.execute(
-            "SELECT * FROM social_automation_tasks ORDER BY created_at DESC LIMIT 80"
+            f"SELECT * FROM social_automation_tasks{scope} ORDER BY created_at DESC LIMIT 80",
+            params,
         ).fetchall()
-        all_tasks = conn.execute("SELECT task_type, payload_json, status, finished_at FROM social_automation_tasks").fetchall()
+        all_tasks = conn.execute(f"SELECT task_type, payload_json, status, finished_at FROM social_automation_tasks{scope}", params).fetchall()
     visible_tasks = [
         row for row in tasks
         if not _is_manual_open_login_task(dict(row), _load_task_payload_object(row["payload_json"]))
@@ -741,13 +896,13 @@ def build_social_automation_overview() -> dict[str, Any]:
         "accounts": public_accounts,
         "proxies": public_proxies,
         "tasks": [_task_public(row) for row in visible_tasks],
-        "browser_sessions": _live_browser_sessions(),
+        "browser_sessions": _live_browser_sessions(user_id=user_id),
         "worker": dict(_WORKER_STATE),
         "supported_task_types": sorted(SOCIAL_TASK_TYPES),
     }
 
 
-def _live_browser_sessions() -> list[dict[str, Any]]:
+def _live_browser_sessions(*, user_id: int | None = None) -> list[dict[str, Any]]:
     try:
         from social_automation.live_browser import list_live_browser_sessions
 
@@ -760,17 +915,21 @@ def _live_browser_sessions() -> list[dict[str, Any]]:
     placeholders = ",".join("?" for _ in task_ids)
     try:
         with db() as conn:
+            owner_clause = "" if user_id is None else " AND user_id = ?"
+            owner_params: list[Any] = [] if user_id is None else [int(user_id)]
             rows = conn.execute(
-                f"SELECT id, status, task_type, payload_json, error, finished_at FROM social_automation_tasks WHERE id IN ({placeholders})",
-                task_ids,
+                f"SELECT id, status, task_type, payload_json, error, finished_at FROM social_automation_tasks WHERE id IN ({placeholders}){owner_clause}",
+                [*task_ids, *owner_params],
             ).fetchall()
         task_status = {str(row["id"]): row for row in rows}
     except Exception:
         return sessions
+    visible_sessions: list[dict[str, Any]] = []
     for session in sessions:
         row = task_status.get(str(session.get("task_id") or ""))
         if not row:
             continue
+        visible_sessions.append(session)
         status = str(row["status"] or "").strip().lower()
         if status:
             session["task_status"] = status
@@ -778,7 +937,7 @@ def _live_browser_sessions() -> list[dict[str, Any]]:
         if str(row["error"] or "").strip():
             session["task_error"] = str(row["error"] or "")
         session["task_finished_at"] = int(row["finished_at"] or 0)
-    return sessions
+    return visible_sessions
 
 
 def _bounded_env_int(name: str, fallback: int, minimum: int, maximum: int) -> int:
@@ -987,7 +1146,7 @@ def _normalize_live_browser_key(key: str) -> str:
     raise HTTPException(status_code=400, detail="不支持的按键")
 
 
-def create_social_proxy(payload: SocialProxyPayload) -> dict[str, Any]:
+def create_social_proxy(payload: SocialProxyPayload, *, owner_user_id: int = 0) -> dict[str, Any]:
     if str(payload.ip_type or "static_residential").strip().lower() != "static_residential":
         raise HTTPException(status_code=400, detail="仅支持静态住宅 IP")
     with db() as conn:
@@ -1009,6 +1168,7 @@ def create_social_proxy(payload: SocialProxyPayload) -> dict[str, Any]:
             note=payload.note,
             expires_at=payload.expires_at,
             status=payload.status,
+            owner_user_id=owner_user_id,
         )
     return _proxy_public(row)
 
@@ -1113,6 +1273,7 @@ def _insert_social_proxy(
     note: str = "",
     expires_at: int = 0,
     status: str = "pending",
+    owner_user_id: int = 0,
 ) -> Any:
     proxy_type = _normalize_proxy_type(protocol)
     clean_host = str(host or "").strip()
@@ -1126,13 +1287,14 @@ def _insert_social_proxy(
     conn.execute(
         """
         INSERT INTO social_proxies(
-          id, name, proxy_type, host, port, username, password, country, region, city, isp,
+          id, user_id, name, proxy_type, host, port, username, password, country, region, city, isp,
           source, ip_type, purchase_status, note, expires_at, status, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             proxy_id,
+            max(0, int(owner_user_id or 0)),
             str(name or f"{proxy_type}://{clean_host}:{clean_port}").strip(),
             proxy_type,
             clean_host,
@@ -1162,6 +1324,7 @@ def _save_account_residential_proxy(
     *,
     current_proxy_id: str = "",
     account_id: str = "",
+    owner_user_id: int = 0,
 ) -> Any:
     if str(payload.ip_type or "static_residential").strip().lower() != "static_residential":
         raise HTTPException(status_code=400, detail="仅支持静态住宅 IP")
@@ -1222,6 +1385,7 @@ def _save_account_residential_proxy(
             note=str(metadata["note"] or ""),
             expires_at=int(metadata["expires_at"] or 0),
             status=payload.status,
+            owner_user_id=owner_user_id,
         )
 
     updates: dict[str, Any] = {
@@ -1301,7 +1465,7 @@ def check_social_proxy(proxy_id: str) -> dict[str, Any]:
         updated = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
     return _proxy_public(updated)
 
-def create_social_account(payload: SocialAccountPayload) -> dict[str, Any]:
+def create_social_account(payload: SocialAccountPayload, *, owner_user_id: int = 0) -> dict[str, Any]:
     platform = _normalize_platform(payload.platform)
     username = str(payload.username or "").strip().lstrip("@")
     if not username:
@@ -1316,11 +1480,11 @@ def create_social_account(payload: SocialAccountPayload) -> dict[str, Any]:
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         if payload.proxy_id:
-            _require_proxy(conn, payload.proxy_id)
+            _require_proxy(conn, payload.proxy_id, owner_user_id=owner_user_id)
         if persona_id:
             bound = conn.execute(
-                "SELECT id FROM social_accounts WHERE persona_id = ? AND platform = ? LIMIT 1",
-                (persona_id, platform),
+                "SELECT id FROM social_accounts WHERE user_id = ? AND persona_id = ? AND platform = ? LIMIT 1",
+                (owner_user_id, persona_id, platform),
             ).fetchone()
             if bound:
                 raise HTTPException(status_code=409, detail="同一人设在同一平台最多绑定一个账号")
@@ -1329,12 +1493,13 @@ def create_social_account(payload: SocialAccountPayload) -> dict[str, Any]:
             SELECT *
             FROM social_accounts
             WHERE persona_id = ?
+              AND user_id = ?
               AND platform = ?
               AND lower(username) = lower(?)
             ORDER BY updated_at DESC, created_at DESC
             LIMIT 1
             """,
-            (persona_id, platform, username),
+            (persona_id, owner_user_id, platform, username),
         ).fetchone()
         if existing:
             raise HTTPException(status_code=409, detail="同平台账号用户名已存在")
@@ -1346,15 +1511,21 @@ def create_social_account(payload: SocialAccountPayload) -> dict[str, Any]:
         proxy_row = None
         proxy_id = str(payload.proxy_id or "").strip()
         if payload.residential_proxy is not None:
-            proxy_row = _save_account_residential_proxy(conn, payload.residential_proxy, account_id=account_id)
+            proxy_row = _save_account_residential_proxy(
+                conn,
+                payload.residential_proxy,
+                account_id=account_id,
+                owner_user_id=owner_user_id,
+            )
             proxy_id = str(proxy_row["id"] or "")
         conn.execute(
             """
-            INSERT INTO social_accounts(id, persona_id, platform, username, display_name, profile_dir, proxy_id, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO social_accounts(id, user_id, persona_id, platform, username, display_name, profile_dir, proxy_id, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 account_id,
+                max(0, int(owner_user_id or 0)),
                 persona_id,
                 platform,
                 username,
@@ -1413,29 +1584,31 @@ def update_social_account(account_id: str, payload: SocialAccountPatchPayload) -
         target_persona_id = str(updates.get("persona_id", existing["persona_id"]) or "").strip()
         target_platform = str(existing["platform"] or "").strip()
         target_username = str(updates.get("username", existing["username"]) or "").strip().lstrip("@")
+        owner_user_id = int(existing["user_id"] or 0)
         if target_persona_id:
             duplicate = conn.execute(
                 """
                 SELECT id
                 FROM social_accounts
                 WHERE id != ?
+                  AND user_id = ?
                   AND persona_id = ?
                   AND platform = ?
                 LIMIT 1
                 """,
-                (account_id, target_persona_id, target_platform),
+                (account_id, owner_user_id, target_persona_id, target_platform),
             ).fetchone()
             if duplicate:
                 raise HTTPException(status_code=409, detail="同一人设在同一平台最多绑定一个账号")
         else:
             duplicate = conn.execute(
-                "SELECT id FROM social_accounts WHERE id != ? AND persona_id = '' AND platform = ? AND lower(username) = lower(?) LIMIT 1",
-                (account_id, target_platform, target_username),
+                "SELECT id FROM social_accounts WHERE id != ? AND user_id = ? AND persona_id = '' AND platform = ? AND lower(username) = lower(?) LIMIT 1",
+                (account_id, owner_user_id, target_platform, target_username),
             ).fetchone()
             if duplicate:
                 raise HTTPException(status_code=409, detail="同平台未绑定账号用户名重复")
         if updates.get("proxy_id"):
-            _require_proxy(conn, updates["proxy_id"])
+            _require_proxy(conn, updates["proxy_id"], owner_user_id=owner_user_id)
         proxy_row = None
         if payload.residential_proxy is not None:
             proxy_row = _save_account_residential_proxy(
@@ -1443,6 +1616,7 @@ def update_social_account(account_id: str, payload: SocialAccountPatchPayload) -
                 payload.residential_proxy,
                 current_proxy_id=str(existing["proxy_id"] or ""),
                 account_id=account_id,
+                owner_user_id=owner_user_id,
             )
             updates["proxy_id"] = str(proxy_row["id"] or "")
         if updates.get("profile_dir"):
@@ -1547,19 +1721,25 @@ def _account_dedupe_rank(row: Any) -> tuple[int, int]:
     )
 
 
-def dedupe_social_accounts() -> dict[str, Any]:
+def dedupe_social_accounts(*, user_id: int | None = None) -> dict[str, Any]:
     deleted_ids: list[str] = []
     kept_ids: list[str] = []
     skipped_ids: list[str] = []
     with db() as conn:
-        rows = conn.execute("SELECT * FROM social_accounts ORDER BY updated_at DESC, created_at DESC").fetchall()
-        groups: dict[tuple[str, str], list[Any]] = {}
+        if user_id is None:
+            rows = conn.execute("SELECT * FROM social_accounts ORDER BY updated_at DESC, created_at DESC").fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM social_accounts WHERE user_id = ? ORDER BY updated_at DESC, created_at DESC",
+                (int(user_id),),
+            ).fetchall()
+        groups: dict[tuple[int, str, str], list[Any]] = {}
         for row in rows:
             username = str(row["username"] or "").strip().lower()
             platform = str(row["platform"] or "").strip().lower()
             if not username or not platform:
                 continue
-            groups.setdefault((platform, username), []).append(row)
+            groups.setdefault((int(row["user_id"] or 0), platform, username), []).append(row)
         for group_rows in groups.values():
             if len(group_rows) <= 1:
                 continue
@@ -1635,7 +1815,10 @@ def create_social_task(payload: SocialTaskPayload) -> dict[str, Any]:
             raise HTTPException(status_code=400, detail="任务平台与执行账号平台不一致")
         proxy_id = str(account["proxy_id"] or "").strip()
         if proxy_id:
-            proxy = conn.execute("SELECT status, ip_type FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
+            proxy = conn.execute(
+                "SELECT status, ip_type, expires_at FROM social_proxies WHERE id = ? AND user_id = ?",
+                (proxy_id, int(account["user_id"] or 0)),
+            ).fetchone()
             if not proxy:
                 raise HTTPException(status_code=409, detail="账号绑定的住宅代理不存在，不能创建任务")
             proxy_status = str(proxy["status"] or "").strip().lower()
@@ -1643,7 +1826,10 @@ def create_social_task(payload: SocialTaskPayload) -> dict[str, Any]:
                 raise HTTPException(status_code=409, detail="账号仅允许使用静态住宅 IP")
             if proxy_status != "active":
                 raise HTTPException(status_code=409, detail="账号绑定的代理不可用，请先启用、修复或重新检测")
+            if _proxy_is_expired(proxy):
+                raise HTTPException(status_code=409, detail="账号绑定的静态住宅代理已过期，请续费或更换后再执行任务")
         persona_id = str(payload.persona_id or account["persona_id"] or "").strip()
+        owner_user_id = int(account["user_id"] or 0)
         runtime_secrets: dict[str, str] = {}
         if task_type == "open_login" and auto_submit:
             submitted_password = str(task_payload.get("login_password") or "")
@@ -1657,13 +1843,14 @@ def create_social_task(payload: SocialTaskPayload) -> dict[str, Any]:
         conn.execute(
             """
             INSERT INTO social_automation_tasks(
-              id, persona_id, account_id, platform, task_type, priority, status, scheduled_at,
+              id, user_id, persona_id, account_id, platform, task_type, priority, status, scheduled_at,
               payload_json, result_json, max_retries, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, '{}', ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, '{}', ?, ?, ?)
             """,
             (
                 task_id,
+                owner_user_id,
                 persona_id,
                 payload.account_id,
                 platform,
@@ -1693,7 +1880,7 @@ def get_social_task(task_id: str) -> dict[str, Any]:
     return _task_public(row)
 
 
-def list_social_tasks(*, status: str = "", account_id: str = "", limit: int = 60) -> list[dict[str, Any]]:
+def list_social_tasks(*, status: str = "", account_id: str = "", limit: int = 60, user_id: int | None = None) -> list[dict[str, Any]]:
     clauses: list[str] = []
     params: list[Any] = []
     if status:
@@ -1702,6 +1889,9 @@ def list_social_tasks(*, status: str = "", account_id: str = "", limit: int = 60
     if account_id:
         clauses.append("account_id = ?")
         params.append(account_id)
+    if user_id is not None:
+        clauses.append("user_id = ?")
+        params.append(int(user_id))
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     limit = max(1, min(int(limit or 60), 200))
     with db() as conn:
@@ -1727,7 +1917,7 @@ def clear_social_task(task_id: str) -> int:
     return int(deleted or 0)
 
 
-def clear_social_tasks(*, persona_id: str = "", account_id: str = "") -> int:
+def clear_social_tasks(*, persona_id: str = "", account_id: str = "", user_id: int | None = None) -> int:
     if not str(persona_id or "").strip() and not str(account_id or "").strip():
         raise HTTPException(status_code=400, detail="清除全部日志必须指定人设或账号")
     clauses: list[str] = []
@@ -1738,6 +1928,9 @@ def clear_social_tasks(*, persona_id: str = "", account_id: str = "") -> int:
     if account_id:
         clauses.append("account_id = ?")
         params.append(account_id)
+    if user_id is not None:
+        clauses.append("user_id = ?")
+        params.append(int(user_id))
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     with db() as conn:
         rows = conn.execute(f"SELECT id, status FROM social_automation_tasks {where}", tuple(params)).fetchall()
@@ -1779,18 +1972,20 @@ def cancel_social_task(task_id: str, reason: str = "") -> dict[str, Any]:
     return _task_public(row)
 
 
-def cancel_all_social_tasks(reason: str = "") -> dict[str, Any]:
+def cancel_all_social_tasks(reason: str = "", *, user_id: int | None = None) -> dict[str, Any]:
     now = _now()
     clean_reason = reason or "用户停止全部自动化任务"
     with db() as conn:
+        owner_clause = "" if user_id is None else " AND user_id = ?"
+        owner_params: tuple[Any, ...] = () if user_id is None else (int(user_id),)
         cancelled_rows = conn.execute(
-            """
+            f"""
             UPDATE social_automation_tasks
             SET status = 'cancelled', finished_at = ?, error = ?, updated_at = ?
-            WHERE status IN ('queued', 'running', 'need_manual')
+            WHERE status IN ('queued', 'running', 'need_manual'){owner_clause}
             RETURNING id
             """,
-            (now, clean_reason, now),
+            (now, clean_reason, now, *owner_params),
         ).fetchall()
         task_ids = [str(row["id"] or "") for row in cancelled_rows if str(row["id"] or "")]
         if not task_ids:
@@ -2098,6 +2293,8 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
         raise RuntimeError("账号绑定的住宅代理不存在，已阻止浏览器启动")
     if proxy is not None and str(proxy.get("status") or "").strip().lower() != "active":
         raise RuntimeError("账号代理不可用，已阻止浏览器启动")
+    if proxy is not None and _proxy_is_expired(proxy):
+        raise RuntimeError("账号绑定的静态住宅代理已过期，已阻止浏览器启动")
     if _is_task_cancelled(task_id):
         _discard_ephemeral_task_secrets(task_id)
         return
@@ -3192,12 +3389,23 @@ def _log_public(row: Any) -> dict[str, Any]:
     }
 
 
-def _require_proxy(conn, proxy_id: str) -> None:
-    row = conn.execute("SELECT id, ip_type FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
+def _require_proxy(conn, proxy_id: str, *, owner_user_id: int | None = None) -> None:
+    if owner_user_id is None:
+        row = conn.execute("SELECT id, ip_type FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT id, ip_type FROM social_proxies WHERE id = ? AND user_id = ?",
+            (proxy_id, int(owner_user_id)),
+        ).fetchone()
     if row and str(row["ip_type"] or "").strip().lower() != "static_residential":
         raise HTTPException(status_code=400, detail="账号仅允许绑定静态住宅 IP")
     if not row:
         raise HTTPException(status_code=404, detail="绑定代理不存在")
+
+
+def _proxy_is_expired(proxy: Any) -> bool:
+    expires_at = int(proxy["expires_at"] or 0) if proxy else 0
+    return bool(expires_at and expires_at <= _now())
 
 
 def _normalize_platform(platform: str) -> str:

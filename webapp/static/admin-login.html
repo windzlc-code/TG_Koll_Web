@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>管理员登录 - Vecto OS</title>
+  <link rel="icon" type="image/png" href="/assets/opc/vecto-logo-ui-icon.png" />
+  <link rel="stylesheet" href="/assets/style.css?v=__STYLE_VERSION__" />
+</head>
+<body class="page-auth-shell page-admin-auth">
+  <main class="auth-shell">
+    <section class="auth-stage">
+      <div class="auth-stage-head">
+        <div class="auth-kicker">Vecto OS · 运营管理</div>
+        <h1 class="auth-stage-title">管理员后台</h1>
+        <p class="auth-stage-copy">客户审核、任务记录、额度计费与运行配置统一在独立后台维护。</p>
+      </div>
+      <div class="auth-stage-grid">
+        <article class="auth-stage-card">
+          <div class="auth-stage-card-title">账号审核</div>
+          <div class="small">查看申请资料，授权或停用客户账号。</div>
+        </article>
+        <article class="auth-stage-card">
+          <div class="auth-stage-card-title">运营监控</div>
+          <div class="small">集中查看任务状态、失败记录与客户额度。</div>
+        </article>
+        <article class="auth-stage-card">
+          <div class="auth-stage-card-title">系统配置</div>
+          <div class="small">敏感运行参数仅对管理员账号开放。</div>
+        </article>
+      </div>
+    </section>
+
+    <section class="auth-card auth-card-product">
+      <div class="auth-card-head">
+        <div class="auth-kicker">管理员专用入口</div>
+        <h2 class="auth-title">登录运营后台</h2>
+        <p class="auth-sub">此入口仅接受管理员账号</p>
+      </div>
+      <form id="adminLoginForm" class="auth-form" data-login-role="admin">
+        <label for="adminUsername">管理员账号</label>
+        <input id="adminUsername" name="username" autocomplete="username" required placeholder="请输入管理员账号" />
+
+        <label for="adminPassword">密码</label>
+        <input id="adminPassword" name="password" type="password" autocomplete="current-password" required placeholder="请输入密码" />
+
+        <div class="auth-submit-row">
+          <button class="primary" type="submit">进入运营后台</button>
+        </div>
+      </form>
+      <div id="authMsg" class="msg" role="status" aria-live="polite"></div>
+      <p class="auth-switch"><a href="/">返回用户首页</a></p>
+    </section>
+  </main>
+  <script src="/assets/auth.js?v=__AUTH_JS_VERSION__"></script>
+</body>
+</html>

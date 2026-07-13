@@ -1,5 +1,8 @@
+let personaDashboardRoot = null;
+let personaDashboardBoundRoot = null;
+
 function pdEl(id) {
-  return document.getElementById(id);
+  return personaDashboardRoot ? personaDashboardRoot.querySelector(`#${id}`) : document.getElementById(id);
 }
 
 async function pdApi(path, opts = {}) {
@@ -608,10 +611,8 @@ function pdRenderTrendChart(hostId, rows) {
 function pdMatches(persona) {
   const search = String((pdEl("personaDashboardSearch") && pdEl("personaDashboardSearch").value) || "").trim().toLowerCase();
   const platform = pdPlatformFilter();
-  const pad = String((pdEl("personaDashboardPad") && pdEl("personaDashboardPad").value) || "").trim();
   const haystack = [persona.name, persona.content, persona.bound_pad_code, persona.bound_pad_name, persona.owner_bot_name, persona.threads_account && persona.threads_account.handle].join(" ").toLowerCase();
   if (search && !haystack.includes(search)) return false;
-  if (pad && String(persona.bound_pad_code || "") !== pad) return false;
   if (platform) {
     const platforms = (persona.hot_platforms || [])
       .map((item) => String(item.platform || "").toLowerCase())
@@ -918,7 +919,7 @@ function pdRenderAutomationPanel(persona) {
   const savedLoginPassword = pdAutomationPasswordDisplayValue(selectedAccountId, selectedAccount);
   const savedLoginAt = Number((selectedAccount && selectedAccount.login_credentials_updated_at) || 0);
   const passwordCanReveal = !!String(personaDashboardPasswordDrafts[selectedAccountId] || "");
-  const passwordCanToggle = !!selectedAccountId && (passwordCanReveal || hasSavedLoginPassword);
+  const passwordCanToggle = !!selectedAccountId && passwordCanReveal;
   const passwordVisible = passwordCanReveal && String(personaDashboardVisiblePasswordAccountId || "") === selectedAccountId;
   const readyCount = accounts.filter((account) => account.status === "ready").length;
   const platformLabel = platform === "threads" ? "Threads" : "Instagram";
@@ -1866,15 +1867,6 @@ function pdRenderDashboard() {
   }
 }
 
-function pdSyncPadFilter(data) {
-  const select = pdEl("personaDashboardPad");
-  if (!select) return;
-  const current = select.value;
-  const pads = Array.from(new Set((data.personas || []).map((item) => String(item.bound_pad_code || "").trim()).filter(Boolean))).sort();
-  select.innerHTML = `<option value="">全部设备</option>${pads.map((pad) => `<option value="${pdEscape(pad)}">${pdEscape(pad)}</option>`).join("")}`;
-  if (pads.includes(current)) select.value = current;
-}
-
 function pdSetMsg(text, type = "ok") {
   const msg = pdEl("personaDashboardMsg");
   if (!msg) return;
@@ -1889,7 +1881,6 @@ async function pdLoadDashboard(options = {}) {
     const data = await pdApi("/api/persona_dashboard/overview");
     personaDashboardData = data;
     await pdLoadAutomationOverview({ silent: true });
-    pdSyncPadFilter(data);
     const updated = pdEl("personaDashboardUpdated");
     if (updated) {
       const latest = data.summary && data.summary.latest_data_at;
@@ -1908,6 +1899,12 @@ function pdStartAutoPoll() {
     if (document.hidden) return;
     pdLoadDashboard({ silent: true });
   }, 60000);
+}
+
+function pdStopAutoPoll() {
+  if (!personaDashboardAutoPollTimer) return;
+  window.clearInterval(personaDashboardAutoPollTimer);
+  personaDashboardAutoPollTimer = 0;
 }
 
 async function pdLoadAutomationOverview(options = {}) {
@@ -2020,15 +2017,6 @@ function pdAutomationTypedPassword(accountId) {
   return value;
 }
 
-async function pdRevealSavedAutomationPassword(accountId) {
-  const data = await pdApi(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(accountId)}/credentials`);
-  const password = String(data.login_password || "");
-  if (!password) return "";
-  personaDashboardPasswordDrafts[accountId] = password;
-  delete personaDashboardPasswordDirtyAccountIds[accountId];
-  return password;
-}
-
 function pdNormalizeAutomationPasswordField() {
   const input = pdEl("personaAutoLoginPassword");
   if (!input) return;
@@ -2041,10 +2029,13 @@ function pdNormalizeAutomationPasswordField() {
   const hasRevealableDraft = !!String(personaDashboardPasswordDrafts[accountId] || "");
   input.setAttribute("data-saved-mask", account && account.login_password_configured && !hasRevealableDraft ? "1" : "0");
   if (toggle) {
-    toggle.disabled = !(hasRevealableDraft || (account && account.login_password_configured));
+    toggle.disabled = !hasRevealableDraft;
     toggle.classList.toggle("is-visible", hasRevealableDraft && input.type === "text");
-    toggle.setAttribute("aria-label", input.type === "text" ? "隐藏密码" : "显示密码");
-    toggle.setAttribute("title", input.type === "text" ? "隐藏密码" : "显示密码");
+    const toggleLabel = !hasRevealableDraft && account && account.login_password_configured
+      ? "已保存密码不支持回显，请输入新密码"
+      : input.type === "text" ? "隐藏密码" : "显示密码";
+    toggle.setAttribute("aria-label", toggleLabel);
+    toggle.setAttribute("title", toggleLabel);
   }
   if (!expected) {
     input.type = "password";
@@ -2325,6 +2316,13 @@ function pdBindAutomationEvents(persona, root) {
       personaDashboardPasswordDrafts[accountId] = String(passwordField.value || "");
       personaDashboardPasswordDirtyAccountIds[accountId] = true;
       passwordField.setAttribute("data-saved-mask", "0");
+      const passwordToggle = pdEl("personaAutoTogglePassword");
+      const hasDraft = !!String(passwordField.value || "");
+      if (passwordToggle) {
+        passwordToggle.disabled = !hasDraft;
+        passwordToggle.setAttribute("aria-label", hasDraft ? "显示密码" : "请输入新密码后查看");
+        passwordToggle.setAttribute("title", hasDraft ? "显示密码" : "请输入新密码后查看");
+      }
     });
   }
   const togglePassword = pdEl("personaAutoTogglePassword");
@@ -2334,23 +2332,11 @@ function pdBindAutomationEvents(persona, root) {
       const account = pdSelectedAutomationAccount();
       const passwordInput = pdEl("personaAutoLoginPassword");
       if (!passwordInput) return;
-      let hasPassword = !!String(personaDashboardPasswordDrafts[accountId] || "");
-      if (!hasPassword && account && account.login_password_configured) {
-        try {
-          togglePassword.disabled = true;
-          const revealed = await pdRevealSavedAutomationPassword(accountId);
-          hasPassword = !!revealed;
-          if (revealed) {
-            passwordInput.value = revealed;
-            passwordInput.setAttribute("data-saved-mask", "0");
-          }
-        } catch (err) {
-          pdSetMsg(String((err && (err.detail || err.message)) || err || "读取已保存密码失败"), "err");
-        } finally {
-          togglePassword.disabled = false;
-        }
+      const hasPassword = !!String(personaDashboardPasswordDrafts[accountId] || "");
+      if (!hasPassword) {
+        if (account && account.login_password_configured) pdSetMsg("已保存密码不会回显；输入新密码后可查看并替换。", "err");
+        return;
       }
-      if (!hasPassword) return;
       const willShow = passwordInput.type === "password";
       personaDashboardVisiblePasswordAccountId = willShow ? accountId : "";
       passwordInput.type = willShow ? "text" : "password";
@@ -2739,12 +2725,14 @@ async function pdPollRefresh(taskId) {
   }
 }
 
-window.addEventListener("DOMContentLoaded", () => {
+function pdBindDashboard(root) {
+  if (!root || personaDashboardBoundRoot === root) return;
+  personaDashboardBoundRoot = root;
   const refresh = pdEl("btnPersonaDashboardRefresh");
   const refreshAll = pdEl("btnPersonaDashboardRefreshAll");
   if (refresh) refresh.addEventListener("click", () => pdLoadDashboard());
   if (refreshAll) refreshAll.addEventListener("click", () => pdStartRefresh(""));
-  ["personaDashboardSearch", "personaDashboardPlatform", "personaDashboardPad", "personaDashboardRange"].forEach((id) => {
+  ["personaDashboardSearch", "personaDashboardPlatform", "personaDashboardRange"].forEach((id) => {
     const node = pdEl(id);
     if (!node) return;
     node.addEventListener(id === "personaDashboardSearch" ? "input" : "change", () => {
@@ -2753,6 +2741,28 @@ window.addEventListener("DOMContentLoaded", () => {
       pdRenderDashboard();
     });
   });
+}
+
+function pdMountDashboard(root) {
+  if (!root) return;
+  personaDashboardRoot = root;
+  pdBindDashboard(root);
   pdLoadDashboard();
   pdStartAutoPoll();
+}
+
+function pdUnmountDashboard() {
+  pdStopAutoPoll();
+}
+
+window.PersonaDashboard = {
+  mount: pdMountDashboard,
+  unmount: pdUnmountDashboard,
+};
+
+window.addEventListener("DOMContentLoaded", () => {
+  const root = document.getElementById("personaDashboardApp");
+  const standalone = root && root.dataset.personaDashboardStandalone === "true";
+  const activeConsoleView = root && root.closest("[data-panel='persona_dashboard']")?.classList.contains("is-active");
+  if (standalone || activeConsoleView) pdMountDashboard(root);
 });

@@ -738,6 +738,107 @@ button.primary,
 
 .view.is-active { display: block; }
 
+.persona-dashboard-view {
+  padding: 0;
+  background: transparent;
+}
+
+.persona-dashboard-view .persona-dashboard-app {
+  display: grid;
+  gap: 14px;
+}
+
+.persona-dashboard-view .persona-dashboard-hero,
+.persona-dashboard-view .persona-dashboard-filters,
+.persona-dashboard-view .persona-chart-panel,
+.persona-dashboard-view .persona-dashboard-note,
+.persona-dashboard-view .persona-tab-rail,
+.persona-dashboard-view .persona-workbench-panel,
+.persona-dashboard-view .persona-settings-card,
+.persona-dashboard-view .persona-detail-card {
+  border-color: var(--line);
+  background: var(--panel);
+  box-shadow: var(--panel-shadow);
+  border-radius: var(--radius);
+}
+
+.persona-dashboard-view .persona-dashboard-hero {
+  align-items: center;
+  padding: 16px 18px;
+}
+
+.persona-dashboard-view .persona-dashboard-hero h2 {
+  margin: 2px 0 4px;
+  font-size: 22px;
+}
+
+.persona-dashboard-view .persona-dashboard-actions {
+  min-width: 0;
+  gap: 8px;
+}
+
+.persona-dashboard-view .persona-dashboard-action-buttons {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.persona-dashboard-view .persona-dashboard-action-buttons button {
+  min-height: 36px;
+}
+
+.persona-dashboard-view .persona-dashboard-filters {
+  grid-template-columns: minmax(240px, 1.6fr) repeat(2, minmax(160px, 1fr));
+  padding: 12px;
+}
+
+.persona-dashboard-view .persona-person-layout {
+  grid-template-columns: minmax(240px, 292px) minmax(0, 1fr);
+  gap: 14px;
+}
+
+.persona-dashboard-view .persona-tab-rail {
+  top: 14px;
+  padding: 12px;
+  max-height: calc(100vh - 136px);
+}
+
+.persona-dashboard-view .persona-workbench-panel {
+  padding: 14px;
+}
+
+.persona-dashboard-view .persona-chart-panel {
+  padding: 14px;
+}
+
+@media (max-width: 1180px) {
+  .persona-dashboard-view .persona-dashboard-filters,
+  .persona-dashboard-view .persona-person-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .persona-dashboard-view .persona-tab-rail {
+    position: static;
+    max-height: 320px;
+  }
+}
+
+@media (max-width: 760px) {
+  .persona-dashboard-view .persona-dashboard-hero {
+    align-items: stretch;
+  }
+
+  .persona-dashboard-view .persona-dashboard-actions,
+  .persona-dashboard-view .persona-dashboard-action-buttons {
+    justify-items: stretch;
+    justify-content: stretch;
+  }
+
+  .persona-dashboard-view .persona-dashboard-action-buttons button {
+    flex: 1;
+  }
+}
+
 .workbench-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -2193,7 +2294,7 @@ textarea:focus {
   padding-left: 14px;
   border-left: 1px solid var(--line);
   margin-left: 13px;
-  max-height: 1400px;
+  max-height: var(--persona-folder-content-height, 1400px);
   opacity: 1;
   overflow: visible;
   visibility: visible;
@@ -2403,6 +2504,10 @@ body.persona-touch-dragging .persona-list-card:active {
   background: transparent;
   color: var(--ink);
   cursor: pointer;
+}
+
+.persona-layer-group.is-pending .persona-folder-main {
+  cursor: wait;
 }
 
 .persona-list-item--status {
@@ -3342,6 +3447,32 @@ body.persona-touch-dragging .persona-list-card:active {
   line-height: 1.42;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+.persona-hot-freshness-control {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-solid);
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.persona-hot-freshness-control input {
+  width: 58px;
+  min-width: 0;
+  height: 28px;
+  padding: 3px 6px;
+  text-align: center;
+}
+
+.persona-hot-freshness-control:focus-within {
+  border-color: var(--ink);
 }
 
 .persona-hot-card-head .persona-media-type-badge {
@@ -8324,24 +8455,42 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .account-pool-card:not(.persona-account-pool-card) {
-  grid-template-columns: minmax(156px, 0.9fr) minmax(0, 2.1fr);
-  grid-template-rows: auto auto;
-  align-items: center;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto;
+  align-items: stretch;
 }
 
 .account-pool-card:not(.persona-account-pool-card) .account-pool-card-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
   grid-column: 1;
-  grid-row: 1;
+  grid-row: auto;
+}
+
+.account-pool-card:not(.persona-account-pool-card) .account-pool-card-copy strong,
+.account-pool-card:not(.persona-account-pool-card) .account-pool-bound-persona {
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.account-pool-card:not(.persona-account-pool-card) .account-pool-bound-persona {
+  width: auto;
+  max-width: none;
+  grid-column: 1;
+  grid-row: auto;
 }
 
 .account-pool-card:not(.persona-account-pool-card) .account-card-meta {
-  grid-column: 2;
-  grid-row: 1;
+  grid-column: 1;
+  grid-row: auto;
 }
 
 .account-pool-card:not(.persona-account-pool-card) .row-actions {
   grid-column: 1 / -1;
-  grid-row: 2;
+  grid-row: auto;
 }
 
 .account-pool-card .row-actions {
@@ -8660,6 +8809,19 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 @media (max-width: 760px) {
+  .account-pool-body {
+    grid-template-columns: 1fr;
+  }
+
+  .account-pool-automation-panel {
+    grid-column: auto;
+  }
+
+  .account-pool-platforms {
+    position: static;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .persona-account-pool-layout {
     grid-template-columns: 1fr;
   }

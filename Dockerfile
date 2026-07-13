@@ -12,7 +12,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     AUTO_TWEET_RUNTIME_DIR=/data/tool_r18_runtime \
     TOOL_R18_TELEGRAM_BOT_TOKEN_FILE=/data/tool_r18_runtime/telegram_bot_token.txt \
     TOOL_R18_LOCAL_BOT_ENV_PATH=/data/tool_r18_runtime/local-bot.env \
-    TOOL_R18_INTERNAL_WEBAPP_BASE_URL=http://127.0.0.1:8098 \
+    TOOL_R18_INTERNAL_WEBAPP_BASE_URL=http://127.0.0.1:8001 \
     TELEGRAM_WEBHOOK_PORT=8788 \
     TELEGRAM_PROXY_URL=direct
 
@@ -48,7 +48,7 @@ COPY . /app
 RUN chmod +x /app/docker/entrypoint.sh
 
 VOLUME ["/data"]
-EXPOSE 8098
+EXPOSE 8001
 EXPOSE 8788
 
 ENTRYPOINT ["/app/docker/entrypoint.sh"]

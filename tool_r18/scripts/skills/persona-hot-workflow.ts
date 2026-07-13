@@ -1,6 +1,6 @@
 import "@/runtime/node/browser-shim";
 import { installNodePersonaArchiveBridge } from "@/runtime/node/persona-archive-store";
-import { appendCustomPersonaArchivePost, loadPersonaArchive, updatePersonaArchivePostDraft } from "@/lib/persona-archives";
+import { appendCustomPersonaArchivePost, listPersonaArchives, loadPersonaArchive, updatePersonaArchivePostDraft } from "@/lib/persona-archives";
 import {
   cleanSentimentCandidateContent,
   downloadCandidateMedia,
@@ -24,6 +24,7 @@ type FetchHotCandidatesInput = {
   limit?: number;
   refresh?: boolean;
   searchMode?: "normal" | "strict";
+  freshnessDays?: number;
   memorySummaries?: string[];
 };
 
@@ -46,6 +47,7 @@ type WarmHotStrategyInput = {
 
 type PoolStatsInput = {
   action: "pool-stats";
+  archiveIds?: string[];
 };
 
 type PersonaHotWorkflowInput = FetchHotCandidatesInput | ImportHotCandidatesInput | RefreshHotPostInput | WarmHotStrategyInput | PoolStatsInput;
@@ -114,6 +116,7 @@ async function fetchHotCandidates(input: FetchHotCandidatesInput) {
     limit: Math.max(1, Math.min(Number(input.limit || 10), 20)),
     refresh: input.refresh === true,
     searchMode: input.searchMode === "normal" ? "normal" : "strict",
+    freshnessDays: input.freshnessDays,
   });
   return {
     ok: true,
@@ -121,6 +124,7 @@ async function fetchHotCandidates(input: FetchHotCandidatesInput) {
     archiveName: archive.name,
     keywords: result.keywords,
     searchMode: result.searchMode,
+    freshnessDays: result.freshnessDays,
     cookieStatuses: result.cookieStatuses,
     warnings: result.warnings,
     candidates: result.candidates,
@@ -242,7 +246,10 @@ async function main() {
     await printJsonAndExit(await warmHotStrategy(input));
   }
   if (input.action === "pool-stats") {
-    await printJsonAndExit({ ok: true, pools: listSentimentHotCandidatePoolStats() });
+    const requestedIds = new Set((input.archiveIds || []).map((id) => String(id || "").trim()).filter(Boolean));
+    const archives = (await listPersonaArchives()).filter((archive) => requestedIds.size === 0 || requestedIds.has(archive.id));
+    const pools = requestedIds.size > 0 && archives.length === 0 ? [] : listSentimentHotCandidatePoolStats(archives);
+    await printJsonAndExit({ ok: true, pools });
   }
   if (input.action === "import-hot-candidates") {
     await printJsonAndExit(await importHotCandidates(input));

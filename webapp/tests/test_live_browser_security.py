@@ -167,7 +167,10 @@ def _security_test_client() -> TestClient:
 @pytest.mark.parametrize("auto_submit", [1, "true", "false", None])
 def test_open_login_http_rejects_non_boolean_auto_submit(auto_submit):
     client = _security_test_client()
-    with mock.patch.object(social_automation_api, "create_account_task") as create_task:
+    with (
+        mock.patch.object(social_automation_api, "_require_account_access"),
+        mock.patch.object(social_automation_api, "create_account_task") as create_task,
+    ):
         response = client.post(
             "/api/persona_dashboard/automation/accounts/account-1/open_login",
             json={"auto_submit": auto_submit},
@@ -180,11 +183,14 @@ def test_open_login_http_rejects_non_boolean_auto_submit(auto_submit):
 @pytest.mark.parametrize("payload", [{}, {"auto_submit": False}, {"auto_submit": True}])
 def test_open_login_http_accepts_manual_and_boolean_auto_submit(payload):
     client = _security_test_client()
-    with mock.patch.object(
-        social_automation_api,
-        "create_account_task",
-        return_value={"id": "task-1"},
-    ) as create_task:
+    with (
+        mock.patch.object(social_automation_api, "_require_account_access"),
+        mock.patch.object(
+            social_automation_api,
+            "create_account_task",
+            return_value={"id": "task-1"},
+        ) as create_task,
+    ):
         response = client.post(
             "/api/persona_dashboard/automation/accounts/account-1/open_login",
             json=payload,
@@ -222,6 +228,7 @@ def test_http_text_input_enforces_live_task_permission(payload_json, expected_st
             "_type_live_browser_session_text_via_display",
             return_value={"typed": True},
         ) as type_text,
+        mock.patch.object(social_automation_api, "_require_live_browser_session_access"),
     ):
         response = client.post(
             "/api/persona_dashboard/automation/browser_sessions/live_task-1/type",

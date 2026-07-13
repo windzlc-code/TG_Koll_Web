@@ -21,20 +21,17 @@ function setMsg(text, ok) {
 }
 
 async function submitLogin(form) {
+  const loginRole = form.dataset.loginRole === "admin" ? "admin" : "user";
   const payload = {
     username: form.username.value.trim(),
     password: form.password.value,
   };
-  const me = await api("/api/auth/login", {
+  await api(`/api/auth/${loginRole}-login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (me && me.is_admin) {
-    location.href = "/admin.html#admin-overview";
-    return;
-  }
-  location.href = "/console.html";
+  location.href = loginRole === "admin" ? "/admin" : "/console.html";
 }
 
 async function submitRegister(form) {
@@ -42,30 +39,30 @@ async function submitRegister(form) {
     username: form.username.value.trim(),
     password: form.password.value,
   };
-  const me = await api("/api/auth/register", {
+  const result = await api("/api/auth/apply", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (me && me.is_admin) {
-    location.href = "/admin.html#admin-overview";
-    return;
-  }
-  location.href = "/console.html";
+  setMsg(result.message || "申请已提交，请等待管理员授权后登录", true);
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-  const loginForm = document.getElementById("loginForm");
+  const loginForm = document.getElementById("loginForm") || document.getElementById("adminLoginForm");
   const registerForm = document.getElementById("registerForm");
 
   if (loginForm) {
     loginForm.addEventListener("submit", async (e) => {
       e.preventDefault();
       setMsg("", true);
+      const submit = loginForm.querySelector("button[type='submit']");
+      if (submit?.disabled) return;
+      if (submit) submit.disabled = true;
       try {
         await submitLogin(loginForm);
       } catch (err) {
         setMsg(err.detail || String(err), false);
+        if (submit) submit.disabled = false;
       }
     });
   }
@@ -74,10 +71,15 @@ document.addEventListener("DOMContentLoaded", () => {
     registerForm.addEventListener("submit", async (e) => {
       e.preventDefault();
       setMsg("", true);
+      const submit = registerForm.querySelector("button[type='submit']");
+      if (submit?.disabled) return;
+      if (submit) submit.disabled = true;
       try {
         await submitRegister(registerForm);
       } catch (err) {
         setMsg(err.detail || String(err), false);
+      } finally {
+        if (submit) submit.disabled = false;
       }
     });
   }

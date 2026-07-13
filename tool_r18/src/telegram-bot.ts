@@ -27,7 +27,7 @@ import { resolvePersonaFreeContentTargetWords, usesJinjunyaFreeContentStyle } fr
 import { getMediaExtension, isVideoMediaUrl, parseDataUrlMedia } from "@/lib/media-utils";
 import { callTextUnderstandingModelWithFallback, extractText, getInlineData, isTextModelFallbackError } from "@/lib/gemini-client";
 import { cleanSentimentCandidateContent, downloadCandidateMedia, fetchSentimentHotCandidates, fetchThreadsProfileHotMetrics, getLiveSentimentBrowserAuthProfileBinding, getSentimentBrowserAuthProfileBinding, refreshSentimentBrowserCookiesForPlatform, refreshSentimentSourceMetrics, type SentimentCookieStatus } from "@/lib/sentiment-hot-importer";
-import { rememberSentimentHotImported, rememberSentimentHotSelected, type SentimentHotCandidate } from "@/lib/sentiment-candidate-store";
+import { rememberSentimentHotImported, type SentimentHotCandidate } from "@/lib/sentiment-candidate-store";
 import { stopSentimentRuntime } from "@/lib/sentiment-runtime-manager";
 import { buildPersonaVisualIdentityCue } from "@/lib/persona-image-search";
 import type { DramaSetup, EpisodeScript } from "@/types/drama";
@@ -5799,7 +5799,6 @@ async function importSentimentHotCandidate(args: {
     return;
   }
 
-  rememberSentimentHotSelected(pending.archiveId, candidate.id);
   const previousSelectedIndexes = getSentimentHotSelectedIndexes(pending);
   const saved = await appendSentimentHotCandidatePost({
     pending,
@@ -5864,7 +5863,6 @@ async function importSelectedSentimentHotCandidates(args: {
     const candidate = pending.candidates[index];
     if (!candidate) continue;
     try {
-      rememberSentimentHotSelected(pending.archiveId, candidate.id);
       await appendSentimentHotCandidatePost({ pending, candidate, index });
       rememberSentimentHotImported(pending.archiveId, candidate.id);
       importedIndexes.push(index);

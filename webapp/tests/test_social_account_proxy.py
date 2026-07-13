@@ -200,6 +200,17 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
         ready = self._account("ready", proxy=social_api.ResidentialProxyPayload(**self._proxy(host="ready.example")))
         self.assertEqual(self._task(ready["id"])["account_id"], ready["id"])
 
+    def test_task_creation_and_worker_reject_expired_proxy(self):
+        account = self._account(
+            "expired",
+            proxy=social_api.ResidentialProxyPayload(**self._proxy(host="expired.example", expires_at=social_api._now() - 1)),
+        )
+        with self.assertRaises(HTTPException) as create_error:
+            self._task(account["id"])
+        self.assertEqual(create_error.exception.status_code, 409)
+        with self.assertRaisesRegex(RuntimeError, "已过期"):
+            social_api._execute_claimed_task({"id": "expired-task-1", "account_id": account["id"]})
+
     def test_worker_runs_without_proxy_but_blocks_dangling_or_failed_proxy(self):
         no_proxy = self._account("legacy-no-proxy")
         no_proxy_task = self._task(no_proxy["id"])

@@ -11,6 +11,7 @@ import logging
 import os
 import queue
 import re
+import secrets
 import shutil
 import signal
 import sqlite3
@@ -21,13 +22,14 @@ import threading
 import time
 import uuid
 import zipfile
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import requests
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Cookie, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -42,6 +44,7 @@ from .auth import SESSION_COOKIE, create_session, delete_session, get_current_us
 from .db import db, get_admin_config, init_db, set_admin_config
 from .social_automation_api import (
     SocialTaskPayload,
+    cancel_all_social_tasks,
     configure_social_automation,
     create_social_task,
     ensure_social_automation_worker_started,
@@ -203,6 +206,8 @@ _COMFY_GPU_SEMAPHORE = threading.BoundedSemaphore(int(COMFY_GPU_LOCAL_SEMAPHORE_
 _COMFY_GPU_LOCK = threading.Lock()
 _COMFY_GPU_WAITING = 0
 _COMFY_GPU_RUNNING = 0
+_AUTH_RATE_LOCK = threading.Lock()
+_AUTH_RATE_EVENTS: dict[str, deque[float]] = {}
 
 
 class RuntimeConfigFileError(RuntimeError):
@@ -211,6 +216,72 @@ class RuntimeConfigFileError(RuntimeError):
 
 def _now_ts() -> int:
     return int(time.time())
+
+
+def _trusted_proxy_peers() -> set[str]:
+    configured = str(os.getenv("TRUSTED_PROXY_IPS", "127.0.0.1,::1") or "")
+    return {item.strip() for item in configured.split(",") if item.strip()}
+
+
+def _request_from_trusted_proxy(request: Request) -> bool:
+    peer = str(request.client.host if request.client else "").strip()
+    expected = str(os.getenv("TRUSTED_PROXY_SECRET", "") or "")
+    provided = str(request.headers.get("x-tg-trusted-proxy") or "")
+    return bool(expected) and peer in _trusted_proxy_peers() and hmac.compare_digest(provided, expected)
+
+
+def _request_client_ip(request: Request) -> str:
+    peer = str(request.client.host if request.client else "").strip()
+    if _request_from_trusted_proxy(request):
+        forwarded = str(request.headers.get("x-forwarded-for") or "").split(",", 1)[0].strip()
+        if forwarded:
+            return forwarded[:64]
+    return peer[:64] or "unknown"
+
+
+def _enforce_auth_rate_limit(bucket: str, key: str, *, limit: int, window_seconds: int) -> None:
+    now = time.monotonic()
+    rate_key = f"{bucket}:{key}"
+    with _AUTH_RATE_LOCK:
+        events = _AUTH_RATE_EVENTS.setdefault(rate_key, deque())
+        cutoff = now - max(int(window_seconds), 1)
+        while events and events[0] <= cutoff:
+            events.popleft()
+        if len(events) >= max(int(limit), 1):
+            retry_after = max(1, int(window_seconds - (now - events[0])))
+            raise HTTPException(
+                status_code=429,
+                detail="请求过于频繁，请稍后再试",
+                headers={"Retry-After": str(retry_after)},
+            )
+        events.append(now)
+
+
+def _clear_auth_rate_limit(bucket: str, key: str) -> None:
+    with _AUTH_RATE_LOCK:
+        _AUTH_RATE_EVENTS.pop(f"{bucket}:{key}", None)
+
+
+def _session_cookie_secure() -> bool:
+    configured = os.getenv("SESSION_COOKIE_SECURE")
+    if configured is None:
+        return _force_https_enabled()
+    value = str(configured or "").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def _force_https_enabled() -> bool:
+    value = str(os.getenv("FORCE_HTTPS", "0") or "0").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _request_uses_https(request: Request) -> bool:
+    peer = str(request.client.host if request.client else "").strip()
+    if _request_from_trusted_proxy(request):
+        forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip().lower()
+        if forwarded_proto:
+            return forwarded_proto == "https"
+    return str(request.url.scheme or "").lower() == "https"
 
 
 def _new_id(prefix: str) -> str:
@@ -225,7 +296,7 @@ def _is_admin(user: dict[str, Any]) -> bool:
 
 
 def _public_register_enabled() -> bool:
-    value = str(os.getenv("ALLOW_PUBLIC_REGISTER", "") or "").strip().lower()
+    value = str(os.getenv("ALLOW_PUBLIC_REGISTER", "1") or "1").strip().lower()
     return value in {"1", "true", "yes", "on"}
 
 
@@ -326,6 +397,12 @@ def _is_allowed_dashboard_media_path(path: Path) -> bool:
         resolved = path.expanduser().resolve()
     except Exception:
         return False
+    allowed_suffixes = {
+        ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif",
+        ".mp4", ".mov", ".webm", ".m4v", ".mp3", ".wav", ".m4a", ".aac",
+    }
+    if resolved.suffix.lower() not in allowed_suffixes:
+        return False
     roots = (DATA_DIR, TOOL_R18_RUNTIME_DIR, TOOL_R18_UPLOAD_ROOT)
     for root in roots:
         try:
@@ -335,6 +412,121 @@ def _is_allowed_dashboard_media_path(path: Path) -> bool:
         if resolved == root_resolved or root_resolved in resolved.parents:
             return True
     return False
+
+
+def _identity_user_id(user: dict[str, Any]) -> int:
+    try:
+        return int(user.get("id") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _visible_persona_ids(user: dict[str, Any]) -> set[str] | None:
+    if _is_admin(user):
+        return None
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT archive_id FROM persona_owners WHERE user_id = ?",
+            (_identity_user_id(user),),
+        ).fetchall()
+    return {str(row["archive_id"] or "").strip() for row in rows if str(row["archive_id"] or "").strip()}
+
+
+def _record_persona_owner(archive_id: str, user: dict[str, Any]) -> None:
+    clean_id = str(archive_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=500, detail="人设创建结果缺少 ID")
+    now = _now_ts()
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO persona_owners(archive_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(archive_id) DO UPDATE SET user_id = excluded.user_id, updated_at = excluded.updated_at",
+            (clean_id, _identity_user_id(user), now, now),
+        )
+
+
+def _require_persona_access(archive_id: str, user: dict[str, Any]) -> None:
+    if _is_admin(user):
+        return
+    clean_id = str(archive_id or "").strip()
+    with db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM persona_owners WHERE archive_id = ? AND user_id = ?",
+            (clean_id, _identity_user_id(user)),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="人设不存在")
+
+
+def _delete_persona_owner(archive_id: str) -> None:
+    with db() as conn:
+        conn.execute("DELETE FROM persona_owners WHERE archive_id = ?", (str(archive_id or "").strip(),))
+
+
+def _require_social_account_access(account_id: str, user: dict[str, Any]) -> None:
+    with db() as conn:
+        row = conn.execute("SELECT user_id FROM social_accounts WHERE id = ?", (str(account_id or "").strip(),)).fetchone()
+    if not row or (not _is_admin(user) and int(row["user_id"] or 0) != _identity_user_id(user)):
+        raise HTTPException(status_code=404, detail="执行账号不存在")
+
+
+def _require_user_media_paths(media_paths: list[str], user: dict[str, Any]) -> None:
+    if _is_admin(user):
+        return
+    root = (UPLOAD_ROOT / str(user.get("username") or "")).resolve()
+    for value in media_paths or []:
+        try:
+            path = Path(str(value or "")).expanduser().resolve()
+        except Exception as exc:
+            raise HTTPException(status_code=404, detail="媒体文件不存在") from exc
+        if root not in path.parents or not path.is_file() or not _is_allowed_dashboard_media_path(path):
+            raise HTTPException(status_code=404, detail="媒体文件不存在")
+
+
+def _visible_persona_group_ids(user: dict[str, Any]) -> set[str] | None:
+    if _is_admin(user):
+        return None
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT group_id FROM persona_group_owners WHERE user_id = ?",
+            (_identity_user_id(user),),
+        ).fetchall()
+    return {str(row["group_id"] or "").strip() for row in rows if str(row["group_id"] or "").strip()}
+
+
+def _record_persona_group_owner(group_id: str, user: dict[str, Any]) -> None:
+    clean_id = str(group_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=500, detail="分组创建结果缺少 ID")
+    now = _now_ts()
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO persona_group_owners(group_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(group_id) DO UPDATE SET user_id = excluded.user_id, updated_at = excluded.updated_at",
+            (clean_id, _identity_user_id(user), now, now),
+        )
+
+
+def _require_persona_group_access(group_id: str, user: dict[str, Any]) -> None:
+    if _is_admin(user):
+        return
+    with db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM persona_group_owners WHERE group_id = ? AND user_id = ?",
+            (str(group_id or "").strip(), _identity_user_id(user)),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="分组不存在")
+
+
+def require_persona_owner(archive_id: str, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    _require_persona_access(archive_id, user)
+    return user
+
+
+def require_persona_group_owner(group_id: str, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    _require_persona_group_access(group_id, user)
+    return user
 
 
 def _dashboard_media_proxy_url(path: Path) -> str:
@@ -586,6 +778,18 @@ def _mask_secret(value: Any) -> str:
     visible = 6 if len(text) >= 16 else 4
     masked_len = min(max(len(text) - (visible * 2), 8), 24)
     return f"{text[:visible]}{'•' * masked_len}{text[-visible:]}"
+
+
+def _redact_runtime_config(runtime: dict[str, Any]) -> dict[str, Any]:
+    redacted = dict(runtime or {})
+    for key in list(redacted):
+        if not _is_secret_key(key):
+            continue
+        value = str(redacted.get(key) or "").strip()
+        redacted[key] = ""
+        redacted[f"{key}_configured"] = bool(value)
+        redacted[f"{key}_masked"] = _mask_secret(value) if value else ""
+    return redacted
 
 
 def _date_key(value: Any) -> str:
@@ -3928,13 +4132,19 @@ def _ensure_admin_seed() -> None:
         row = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()
         if row and int(row["c"]) > 0:
             return
+        username = str(os.getenv("ADMIN_BOOTSTRAP_USERNAME", "admin") or "admin").strip()
+        password = str(os.getenv("ADMIN_BOOTSTRAP_PASSWORD", "") or "")
+        if not re.fullmatch(r"[A-Za-z0-9._-]{3,32}", username):
+            raise RuntimeError("ADMIN_BOOTSTRAP_USERNAME 必须为 3-32 位字母、数字或 ._-")
+        if len(password) < 12:
+            raise RuntimeError("空数据库首次启动必须设置至少 12 位的 ADMIN_BOOTSTRAP_PASSWORD")
         now = _now_ts()
         conn.execute(
             """
             INSERT INTO users(username, password_hash, is_admin, is_disabled, balance_cents, created_at, updated_at)
             VALUES (?, ?, 1, 0, 0, ?, ?)
             """,
-            ("admin", hash_password("admin123"), now, now),
+            (username, hash_password(password), now, now),
         )
 
 
@@ -10236,6 +10446,11 @@ def _delete_task_artifacts(task_id: str) -> None:
 class RegisterPayload(BaseModel):
     username: str
     password: str
+    full_name: str = ""
+    email: str = ""
+    phone: str = ""
+    company: str = ""
+    use_case: str = ""
 
 
 class LoginPayload(BaseModel):
@@ -10332,6 +10547,12 @@ class RechargePayload(BaseModel):
 
 class UserTogglePayload(BaseModel):
     is_disabled: bool
+
+
+class UserApprovalPayload(BaseModel):
+    approval_status: str
+    expected_approval_status: str = "pending"
+    admin_note: str = ""
 
 
 class AdminCreateUserPayload(BaseModel):
@@ -10502,6 +10723,7 @@ class PersonaDashboardHotCandidatesFetchPayload(BaseModel):
     refresh: bool = False
     limit: int = 10
     search_mode: str = "strict"
+    freshness_days: int = 0
     selected_memory_ids: list[str] = Field(default_factory=list)
 
 
@@ -10598,13 +10820,6 @@ def _filter_active_persona_archives(archives: list[dict[str, Any]]) -> list[dict
 
 PERSONA_DASHBOARD_REFRESH_TASKS: dict[str, dict[str, Any]] = {}
 PERSONA_DASHBOARD_REFRESH_LOCK = threading.Lock()
-PERSONA_HOT_PREFETCH_LOCK = threading.Lock()
-PERSONA_HOT_PREFETCH_WORKER_STARTED = False
-PERSONA_HOT_PREFETCH_WORKFLOW_LOCK = threading.Lock()
-PERSONA_HOT_PREFETCH_RECONCILE_AT = 0
-PERSONA_HOT_PREFETCH_LEASE_SECONDS = 300
-PERSONA_HOT_INTERACTIVE_LOCK = threading.Lock()
-PERSONA_HOT_INTERACTIVE_REQUESTS = 0
 PERSONA_DASHBOARD_ARCHIVE_LOCK_TIMEOUT_SECONDS = 30
 PERSONA_DASHBOARD_MONITOR_LOCK = threading.Lock()
 PERSONA_DASHBOARD_MONITOR_STARTED = False
@@ -11798,27 +12013,94 @@ def _normalize_hot_workflow_text(value: Any) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _run_persona_hot_workflow_cli(payload: dict[str, Any], timeout_seconds: int = 180) -> dict[str, Any]:
+_PERSONA_HOT_RUN_LOCK = threading.Lock()
+_PERSONA_HOT_PROCESS_LOCK = threading.Lock()
+_PERSONA_HOT_INTERACTIVE_REQUESTED = threading.Event()
+_PERSONA_HOT_BACKGROUND_PROCESS: subprocess.Popen[str] | None = None
+_PERSONA_HOT_LAST_INTERACTIVE_AT = 0.0
+
+
+class _PersonaHotBackgroundDeferred(RuntimeError):
+    pass
+
+
+def _terminate_persona_hot_process(process: subprocess.Popen[str] | None) -> None:
+    if process is None:
+        return
+    returncode = process.poll()
+    if isinstance(returncode, int):
+        return
+    if os.name == "nt":
+        process.terminate()
+    else:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGTERM)
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        if os.name == "nt":
+            process.kill()
+        else:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=2)
+
+
+def _run_persona_hot_workflow_cli(payload: dict[str, Any], timeout_seconds: int = 180, *, background: bool = False) -> dict[str, Any]:
+    global _PERSONA_HOT_BACKGROUND_PROCESS, _PERSONA_HOT_LAST_INTERACTIVE_AT
     _sync_tool_r18_api_config_for_persona_workflow()
     command = [*_tool_r18_node_command("scripts/skills/persona-hot-workflow.ts"), json.dumps(payload, ensure_ascii=True)]
+    timeout = min(max(30, int(timeout_seconds)), 120)
+    process: subprocess.Popen[str] | None = None
+    acquired = False
+    if background:
+        if _PERSONA_HOT_INTERACTIVE_REQUESTED.is_set() or not _PERSONA_HOT_RUN_LOCK.acquire(blocking=False):
+            raise _PersonaHotBackgroundDeferred("页面热点任务优先，后台补池已延后。")
+        acquired = True
+        if _PERSONA_HOT_INTERACTIVE_REQUESTED.is_set():
+            _PERSONA_HOT_RUN_LOCK.release()
+            raise _PersonaHotBackgroundDeferred("页面热点任务优先，后台补池已延后。")
+    else:
+        _PERSONA_HOT_INTERACTIVE_REQUESTED.set()
+        _PERSONA_HOT_LAST_INTERACTIVE_AT = time.time()
+        with _PERSONA_HOT_PROCESS_LOCK:
+            background_process = _PERSONA_HOT_BACKGROUND_PROCESS
+        _terminate_persona_hot_process(background_process)
+        _PERSONA_HOT_RUN_LOCK.acquire()
+        acquired = True
+        _PERSONA_HOT_INTERACTIVE_REQUESTED.clear()
     try:
-        completed = subprocess.run(
+        process = subprocess.Popen(
             command,
             cwd=str(ROOT_DIR / "tool_r18"),
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
-            timeout=max(30, int(timeout_seconds)),
-            check=False,
+            start_new_session=os.name != "nt",
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
         )
+        if background:
+            with _PERSONA_HOT_PROCESS_LOCK:
+                _PERSONA_HOT_BACKGROUND_PROCESS = process
+        stdout, stderr = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired as exc:
-        raise HTTPException(status_code=504, detail=f"热点抓取超时：{exc.timeout} 秒。") from exc
+        _terminate_persona_hot_process(process)
+        raise HTTPException(status_code=504, detail=f"热点抓取超过 {timeout} 秒，已终止本次任务。") from exc
     except FileNotFoundError as exc:
         raise HTTPException(status_code=500, detail="未找到 Node.js 或 tsx，无法执行热点抓取。") from exc
-    stdout = str(completed.stdout or "").strip()
-    stderr = str(completed.stderr or "").strip()
+    finally:
+        if background:
+            with _PERSONA_HOT_PROCESS_LOCK:
+                if _PERSONA_HOT_BACKGROUND_PROCESS is process:
+                    _PERSONA_HOT_BACKGROUND_PROCESS = None
+        if acquired:
+            _PERSONA_HOT_RUN_LOCK.release()
+    stdout = str(stdout or "").strip()
+    stderr = str(stderr or "").strip()
     data = _parse_tool_r18_json_output(stdout)
-    if completed.returncode != 0:
+    if process.returncode != 0:
         detail = str((data or {}).get("error") or stderr or stdout or "热点抓取失败。").strip()
         raise HTTPException(status_code=500, detail=detail)
     if not isinstance(data, dict):
@@ -11828,286 +12110,174 @@ def _run_persona_hot_workflow_cli(payload: dict[str, Any], timeout_seconds: int 
     return data
 
 
-def _persona_hot_prefetch_limits(search_mode: str) -> tuple[int, int]:
-    return (30, 80) if str(search_mode or "").strip().lower() == "normal" else (20, 50)
-
-
-def _persona_hot_prefetch_revision(archive: dict[str, Any]) -> str:
-    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
-    payload = {
-        "id": str(archive.get("id") or "").strip(),
-        "name": str(archive.get("name") or "").strip(),
-        "content": str(archive.get("content") or "").strip(),
-        "content_theme": str(setup.get("contentTheme") or "").strip(),
-        "persona_type": str(setup.get("personaType") or "").strip(),
-        "genres": setup.get("genres") if isinstance(setup.get("genres"), list) else [],
-        "interests": setup.get("interests") if isinstance(setup.get("interests"), list) else [],
-    }
-    return hashlib.sha1(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
-
-
-def _queue_persona_hot_prefetch(archive: dict[str, Any], search_mode: str, *, force: bool = False) -> None:
-    archive_id = str(archive.get("id") or "").strip()
-    if not archive_id:
+def _warm_persona_hot_strategy_async(archive_id: str) -> None:
+    clean_id = str(archive_id or "").strip()
+    if not clean_id:
         return
-    mode = "normal" if str(search_mode or "").strip().lower() == "normal" else "strict"
-    low_watermark, target_count = _persona_hot_prefetch_limits(mode)
-    revision = _persona_hot_prefetch_revision(archive)
-    now = int(time.time())
-    with db() as conn:
-        existing = conn.execute(
-            "SELECT strategy_revision, status, lease_until, next_run_at FROM persona_hot_prefetch_jobs WHERE archive_id = ? AND search_mode = ?",
-            (archive_id, mode),
-        ).fetchone()
-        if existing is None:
-            conn.execute(
-                """
-                INSERT INTO persona_hot_prefetch_jobs(
-                  archive_id, search_mode, strategy_revision, low_watermark, target_count, status,
-                  next_run_at, lease_until, failure_count, last_error, last_started_at, last_finished_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 'queued', ?, 0, 0, '', 0, 0, ?, ?)
-                """,
-                (archive_id, mode, revision, low_watermark, target_count, now, now, now),
-            )
-            return
-        running = str(existing["status"] or "") == "running" and int(existing["lease_until"] or 0) > now
-        expired_running = str(existing["status"] or "") == "running" and not running
-        changed = str(existing["strategy_revision"] or "") != revision
-        next_run_at = int(existing["next_run_at"] or 0)
-        should_queue = changed or force or expired_running or next_run_at <= 0
-        conn.execute(
-            """
-            UPDATE persona_hot_prefetch_jobs
-            SET strategy_revision = ?, low_watermark = ?, target_count = ?,
-                status = CASE WHEN ? THEN 'running' WHEN ? THEN 'queued' ELSE status END,
-                next_run_at = CASE WHEN ? THEN next_run_at WHEN ? THEN ? ELSE next_run_at END,
-                lease_until = CASE WHEN ? THEN 0 ELSE lease_until END,
-                lease_token = CASE WHEN ? THEN '' ELSE lease_token END,
-                failure_count = CASE WHEN ? THEN 0 ELSE failure_count END,
-                last_error = CASE WHEN ? THEN '' ELSE last_error END,
-                updated_at = ?
-            WHERE archive_id = ? AND search_mode = ?
-            """,
-            (
-                revision, low_watermark, target_count,
-                1 if running else 0, 1 if should_queue else 0,
-                1 if running else 0, 1 if should_queue else 0, now,
-                1 if expired_running else 0, 1 if expired_running else 0,
-                1 if changed else 0, 1 if changed else 0,
-                now, archive_id, mode,
-            ),
-        )
+    with _PERSONA_HOT_POOL_WORKER_LOCK:
+        _PERSONA_HOT_WARM_PENDING.add(clean_id)
+    _PERSONA_HOT_POOL_WAKE.set()
 
 
-def _queue_persona_hot_prefetch_for_archive(archive: dict[str, Any], *, force: bool = False) -> None:
-    _queue_persona_hot_prefetch(archive, "strict", force=force)
-    _queue_persona_hot_prefetch(archive, "normal", force=force)
+_PERSONA_HOT_POOL_WORKER_THREAD: threading.Thread | None = None
+_PERSONA_HOT_POOL_WORKER_LOCK = threading.Lock()
+_PERSONA_HOT_POOL_STOP = threading.Event()
+_PERSONA_HOT_POOL_WAKE = threading.Event()
+_PERSONA_HOT_POOL_ATTEMPTS: dict[str, float] = {}
+_PERSONA_HOT_WARM_PENDING: set[str] = set()
+_PERSONA_HOT_POOL_REFILLING: set[str] = set()
+_PERSONA_HOT_POOL_COUNTS: dict[tuple[str, str], int] = {}
+_PERSONA_HOT_POOL_STRATEGY_READY: dict[str, bool] = {}
+_PERSONA_HOT_WARM_ATTEMPTS: dict[str, float] = {}
+_PERSONA_HOT_POOL_CURSOR = 0
 
 
-def _persona_hot_prefetch_status(archive_id: str, search_mode: str) -> dict[str, Any]:
-    mode = "normal" if str(search_mode or "").strip().lower() == "normal" else "strict"
-    with db() as conn:
-        row = conn.execute(
-            "SELECT * FROM persona_hot_prefetch_jobs WHERE archive_id = ? AND search_mode = ?",
-            (str(archive_id or "").strip(), mode),
-        ).fetchone()
-    return dict(row) if row is not None else {}
+def _persona_hot_pool_worker_enabled() -> bool:
+    return _to_bool(os.getenv("PERSONA_HOT_POOL_WORKER_ENABLED", "1"), True)
 
 
-def _update_persona_hot_prefetch_ready(archive_id: str, search_mode: str, ready_count: int) -> dict[str, Any]:
-    mode = "normal" if str(search_mode or "").strip().lower() == "normal" else "strict"
-    now = int(time.time())
-    with db() as conn:
-        row = conn.execute(
-            "SELECT low_watermark, target_count, status FROM persona_hot_prefetch_jobs WHERE archive_id = ? AND search_mode = ?",
-            (str(archive_id or "").strip(), mode),
-        ).fetchone()
-        if row is None:
-            return {}
-        low_watermark = int(row["low_watermark"] or 10)
-        should_queue = int(ready_count or 0) < low_watermark and str(row["status"] or "") != "running"
-        conn.execute(
-            """
-            UPDATE persona_hot_prefetch_jobs
-            SET ready_count = ?, status = CASE WHEN ? THEN 'queued' ELSE status END,
-                next_run_at = CASE WHEN ? THEN ? ELSE next_run_at END, updated_at = ?
-            WHERE archive_id = ? AND search_mode = ?
-            """,
-            (int(ready_count or 0), 1 if should_queue else 0, 1 if should_queue else 0, now, now, str(archive_id or "").strip(), mode),
-        )
-    return _persona_hot_prefetch_status(archive_id, mode)
-
-
-def _reconcile_persona_hot_prefetch_jobs() -> None:
-    _, _, archives = _persona_archive_source_for_write()
-    for archive in archives:
-        if isinstance(archive, dict):
-            _queue_persona_hot_prefetch_for_archive(archive)
-
-
-def _claim_persona_hot_prefetch_job() -> dict[str, Any] | None:
-    now = int(time.time())
-    with db() as conn:
-        conn.execute(
-            """
-            UPDATE persona_hot_prefetch_jobs
-            SET status = 'queued', lease_until = 0, lease_token = '', next_run_at = ?, updated_at = ?
-            WHERE status = 'running' AND lease_until <= ?
-            """,
-            (now, now, now),
-        )
-        row = conn.execute(
-            """
-            SELECT * FROM persona_hot_prefetch_jobs
-            WHERE status IN ('queued', 'retry', 'blocked')
-              AND next_run_at <= ?
-              AND lease_until <= ?
-            ORDER BY CASE status WHEN 'queued' THEN 0 WHEN 'retry' THEN 1 WHEN 'ready' THEN 2 ELSE 3 END,
-                     updated_at ASC
-            LIMIT 1
-            """,
-            (now, now),
-        ).fetchone()
-        if row is None:
-            return None
-        archive_id = str(row["archive_id"] or "")
-        mode = str(row["search_mode"] or "strict")
-        lease_token = uuid.uuid4().hex
-        updated = conn.execute(
-            """
-            UPDATE persona_hot_prefetch_jobs
-            SET status = 'running', lease_until = ?, lease_token = ?, last_started_at = ?, updated_at = ?
-            WHERE archive_id = ? AND search_mode = ? AND lease_until <= ? AND status = ?
-            """,
-            (now + PERSONA_HOT_PREFETCH_LEASE_SECONDS, lease_token, now, now, archive_id, mode, now, str(row["status"] or "")),
-        )
-        if updated.rowcount != 1:
-            return None
-        claimed = dict(row)
-        claimed["lease_until"] = now + PERSONA_HOT_PREFETCH_LEASE_SECONDS
-        claimed["lease_token"] = lease_token
-        return claimed
-
-
-def _persona_hot_prefetch_failure_delay(error_text: str, failure_count: int) -> tuple[str, int]:
-    text = str(error_text or "").lower()
-    if any(token in text for token in ("cookie", "sessionid", "login", "登录", "授权")):
-        return "blocked", 15 * 60
-    if any(token in text for token in ("rate limit", "too many", "限流")):
-        return "retry", min(60 * 60, 5 * 60 * max(1, failure_count))
-    if "timeout" in text or "超时" in text:
-        return "retry", min(20 * 60, 90 * max(1, failure_count))
-    return "retry", min(30 * 60, 3 * 60 * max(1, failure_count))
-
-
-def run_persona_hot_prefetch_once() -> bool:
-    with PERSONA_HOT_INTERACTIVE_LOCK:
-        if PERSONA_HOT_INTERACTIVE_REQUESTS > 0:
-            return False
-    job = _claim_persona_hot_prefetch_job()
-    if not job:
-        return False
-    archive_id = str(job.get("archive_id") or "")
-    mode = str(job.get("search_mode") or "strict")
-    lease_token = str(job.get("lease_token") or "")
+def _persona_hot_pool_resources_available() -> bool:
     try:
-        _, _, archives = _persona_archive_source_for_write(archive_id)
-        archive = _find_persona_archive(archives, archive_id)
-        if not archive:
-            with db() as conn:
-                conn.execute(
-                    "DELETE FROM persona_hot_prefetch_jobs WHERE archive_id = ? AND search_mode = ? AND lease_token = ?",
-                    (archive_id, mode, lease_token),
-                )
-            return True
-        if _persona_hot_prefetch_revision(archive) != str(job.get("strategy_revision") or ""):
-            _queue_persona_hot_prefetch_for_archive(archive, force=True)
-        with PERSONA_HOT_PREFETCH_WORKFLOW_LOCK:
-            result = _run_persona_hot_workflow_cli(
-                {
-                    "action": "prefetch-hot-candidates",
-                    "archiveId": archive_id,
-                    "searchMode": mode,
-                    "lowWatermark": int(job.get("low_watermark") or 10),
-                    "targetCount": int(job.get("target_count") or 50),
-                },
-                timeout_seconds=190,
-            )
-        ready_count = _to_int(result.get("readyCount") or result.get("ready_count"), 0)
-        warnings = result.get("warnings") if isinstance(result.get("warnings"), list) else []
-        if result.get("ok") is not True:
-            raise RuntimeError(" / ".join(str(item) for item in warnings if str(item).strip()) or "候选池未达到可用水位。")
-        target_count = int(job.get("target_count") or 10)
-        previous_ready_count = int(job.get("ready_count") or 0)
-        if ready_count < target_count and ready_count <= previous_ready_count:
-            raise RuntimeError(
-                " / ".join(str(item) for item in warnings if str(item).strip())
-                or "候选池本轮未新增候选，已延后重试。"
-            )
-        next_status = "ready" if ready_count >= target_count else "queued"
-        finished_at = int(time.time())
-        next_run_at = finished_at + (5 * 60 if next_status == "ready" else 45)
-        with db() as conn:
-            conn.execute(
-                """
-                UPDATE persona_hot_prefetch_jobs
-                SET ready_count = ?, status = ?, next_run_at = ?, lease_until = 0, lease_token = '',
-                    failure_count = 0, last_error = '', last_finished_at = ?, updated_at = ?
-                WHERE archive_id = ? AND search_mode = ? AND lease_token = ?
-                """,
-                (ready_count, next_status, next_run_at, finished_at, finished_at, archive_id, mode, lease_token),
-            )
-    except Exception as exc:
-        error_text = str(getattr(exc, "detail", "") or exc or "候选池补充失败")
-        finished_at = int(time.time())
-        with db() as conn:
-            row = conn.execute(
-                "SELECT failure_count FROM persona_hot_prefetch_jobs WHERE archive_id = ? AND search_mode = ? AND lease_token = ?",
-                (archive_id, mode, lease_token),
-            ).fetchone()
-            if row is None:
-                return True
-            failures = int(row["failure_count"] or 0) + 1 if row else 1
-            status, delay = _persona_hot_prefetch_failure_delay(error_text, failures)
-            conn.execute(
-                """
-                UPDATE persona_hot_prefetch_jobs
-                SET status = ?, next_run_at = ?, lease_until = 0, lease_token = '', failure_count = ?, last_error = ?,
-                    last_finished_at = ?, updated_at = ?
-                WHERE archive_id = ? AND search_mode = ? AND lease_token = ?
-                """,
-                (status, finished_at + delay, failures, error_text[:1000], finished_at, finished_at, archive_id, mode, lease_token),
-            )
-        logger.warning("persona hot prefetch failed archive=%s mode=%s error=%s", archive_id, mode, error_text)
+        if hasattr(os, "getloadavg") and os.getloadavg()[0] > max(1.0, float(os.cpu_count() or 1) * 0.8):
+            return False
+        meminfo = Path("/proc/meminfo")
+        if meminfo.exists():
+            match = re.search(r"^MemAvailable:\s+(\d+)\s+kB", meminfo.read_text(encoding="utf-8"), re.MULTILINE)
+            if match and int(match.group(1)) < 768 * 1024:
+                return False
+    except Exception:
+        return False
     return True
 
 
-def _persona_hot_prefetch_loop() -> None:
-    global PERSONA_HOT_PREFETCH_RECONCILE_AT
-    while True:
-        now = int(time.time())
-        if now >= PERSONA_HOT_PREFETCH_RECONCILE_AT:
-            try:
-                _reconcile_persona_hot_prefetch_jobs()
-            except Exception:
-                logger.exception("persona hot prefetch reconciliation failed")
-            PERSONA_HOT_PREFETCH_RECONCILE_AT = now + 5 * 60
+def _persona_hot_pool_worker_loop() -> None:
+    global _PERSONA_HOT_POOL_CURSOR
+    low_watermark = max(10, _to_int(os.getenv("PERSONA_HOT_POOL_LOW_WATERMARK"), 60))
+    target_count = max(low_watermark, _to_int(os.getenv("PERSONA_HOT_POOL_TARGET_COUNT"), 100))
+    stats_batch_size = max(1, min(10, _to_int(os.getenv("PERSONA_HOT_POOL_STATS_BATCH_SIZE"), 1)))
+    interval_seconds = max(60, _to_int(os.getenv("PERSONA_HOT_POOL_INTERVAL_SECONDS"), 180))
+    idle_seconds = max(30, _to_int(os.getenv("PERSONA_HOT_POOL_IDLE_SECONDS"), 120))
+    cooldown_seconds = max(300, _to_int(os.getenv("PERSONA_HOT_POOL_COOLDOWN_SECONDS"), 900))
+    warm_cooldown_seconds = max(900, _to_int(os.getenv("PERSONA_HOT_WARM_COOLDOWN_SECONDS"), 3600))
+    while not _PERSONA_HOT_POOL_STOP.is_set():
+        _PERSONA_HOT_POOL_WAKE.wait(interval_seconds)
+        _PERSONA_HOT_POOL_WAKE.clear()
+        if _PERSONA_HOT_POOL_STOP.is_set():
+            break
         try:
-            ran = run_persona_hot_prefetch_once()
-        except Exception:
-            logger.exception("persona hot prefetch worker iteration failed")
-            time.sleep(15)
+            if not _persona_hot_pool_worker_enabled() or not _persona_hot_pool_resources_available():
+                continue
+            if time.time() - _PERSONA_HOT_LAST_INTERACTIVE_AT < idle_seconds:
+                continue
+            with _PERSONA_HOT_POOL_WORKER_LOCK:
+                pending_warm_id = next(iter(_PERSONA_HOT_WARM_PENDING), "")
+            if pending_warm_id:
+                try:
+                    _run_persona_hot_workflow_cli(
+                        {"action": "warm-hot-strategy", "archiveId": pending_warm_id},
+                        timeout_seconds=60,
+                        background=True,
+                    )
+                except _PersonaHotBackgroundDeferred:
+                    raise
+                except Exception:
+                    _PERSONA_HOT_WARM_ATTEMPTS[pending_warm_id] = time.time()
+                    with _PERSONA_HOT_POOL_WORKER_LOCK:
+                        _PERSONA_HOT_WARM_PENDING.discard(pending_warm_id)
+                    raise
+                else:
+                    _PERSONA_HOT_WARM_ATTEMPTS[pending_warm_id] = time.time()
+                    with _PERSONA_HOT_POOL_WORKER_LOCK:
+                        _PERSONA_HOT_WARM_PENDING.discard(pending_warm_id)
+                continue
+            archives, _ = _read_tool_r18_persona_archives()
+            archive_ids = [str(item.get("id") or "").strip() for item in archives if str(item.get("id") or "").strip()]
+            if not archive_ids:
+                continue
+            batch_size = min(stats_batch_size, len(archive_ids))
+            batch_ids = [archive_ids[(_PERSONA_HOT_POOL_CURSOR + offset) % len(archive_ids)] for offset in range(batch_size)]
+            _PERSONA_HOT_POOL_CURSOR = (_PERSONA_HOT_POOL_CURSOR + batch_size) % len(archive_ids)
+            stats_result = _run_persona_hot_workflow_cli(
+                {"action": "pool-stats", "archiveIds": batch_ids},
+                timeout_seconds=60,
+                background=True,
+            )
+            pool_rows = [
+                item for item in (stats_result.get("pools") if isinstance(stats_result.get("pools"), list) else [])
+                if isinstance(item, dict)
+            ]
+            pool_counts = {
+                (str(item.get("archiveId") or "").strip(), str(item.get("searchMode") or "strict").strip()): max(0, _to_int(item.get("readyCount"), 0))
+                for item in pool_rows
+            }
+            _PERSONA_HOT_POOL_COUNTS.update(pool_counts)
+            now = time.time()
+            strategy_missing_ids = {
+                str(item.get("archiveId") or "").strip()
+                for item in pool_rows
+                if item.get("strategyReady") is False and str(item.get("archiveId") or "").strip()
+            }
+            if strategy_missing_ids:
+                with _PERSONA_HOT_POOL_WORKER_LOCK:
+                    _PERSONA_HOT_WARM_PENDING.update(
+                        archive_id for archive_id in strategy_missing_ids
+                        if now - _PERSONA_HOT_WARM_ATTEMPTS.get(archive_id, 0.0) >= warm_cooldown_seconds
+                    )
+            for archive_id in batch_ids:
+                _PERSONA_HOT_POOL_STRATEGY_READY[archive_id] = archive_id not in strategy_missing_ids
+            candidates: list[tuple[int, int, float, str, str]] = []
+            for archive_id in archive_ids:
+                for search_mode in ("strict", "normal"):
+                    key = f"{archive_id}:{search_mode}"
+                    count_key = (archive_id, search_mode)
+                    if count_key not in _PERSONA_HOT_POOL_COUNTS:
+                        continue
+                    ready_count = _PERSONA_HOT_POOL_COUNTS[count_key]
+                    last_attempt = _PERSONA_HOT_POOL_ATTEMPTS.get(key, 0.0)
+                    if ready_count >= target_count:
+                        _PERSONA_HOT_POOL_REFILLING.discard(key)
+                        continue
+                    _PERSONA_HOT_POOL_REFILLING.add(key)
+                    if now - last_attempt >= cooldown_seconds:
+                        candidates.append((0 if ready_count < low_watermark else 1, ready_count, last_attempt, archive_id, search_mode))
+            if not candidates:
+                continue
+            _, _, _, archive_id, search_mode = min(candidates)
+            key = f"{archive_id}:{search_mode}"
+            _PERSONA_HOT_POOL_ATTEMPTS[key] = now
+            _run_persona_hot_workflow_cli({
+                "action": "fetch-hot-candidates",
+                "archiveId": archive_id,
+                "limit": 10,
+                "refresh": True,
+                "searchMode": search_mode,
+            }, timeout_seconds=60, background=True)
+        except _PersonaHotBackgroundDeferred:
             continue
-        time.sleep(3 if ran else 15)
+        except Exception as exc:
+            print(f"[persona-hot-pool] background refill skipped: {exc}", flush=True)
 
 
-def _ensure_persona_hot_prefetch_worker_started() -> None:
-    global PERSONA_HOT_PREFETCH_WORKER_STARTED
-    with PERSONA_HOT_PREFETCH_LOCK:
-        if PERSONA_HOT_PREFETCH_WORKER_STARTED:
+def _start_persona_hot_pool_worker() -> None:
+    global _PERSONA_HOT_POOL_WORKER_THREAD
+    if not _persona_hot_pool_worker_enabled():
+        return
+    with _PERSONA_HOT_POOL_WORKER_LOCK:
+        if _PERSONA_HOT_POOL_WORKER_THREAD is not None and _PERSONA_HOT_POOL_WORKER_THREAD.is_alive():
             return
-        PERSONA_HOT_PREFETCH_WORKER_STARTED = True
-        threading.Thread(target=_persona_hot_prefetch_loop, name="persona-hot-prefetch", daemon=True).start()
+        _PERSONA_HOT_POOL_STOP.clear()
+        _PERSONA_HOT_POOL_WAKE.clear()
+        thread = threading.Thread(target=_persona_hot_pool_worker_loop, name="persona-hot-pool-worker", daemon=True)
+        _PERSONA_HOT_POOL_WORKER_THREAD = thread
+        thread.start()
+
+
+def _stop_persona_hot_pool_worker() -> None:
+    _PERSONA_HOT_POOL_STOP.set()
+    _PERSONA_HOT_POOL_WAKE.set()
+    with _PERSONA_HOT_PROCESS_LOCK:
+        process = _PERSONA_HOT_BACKGROUND_PROCESS
+    _terminate_persona_hot_process(process)
 
 
 def _persona_hot_raw_candidate_count(result: dict[str, Any]) -> int:
@@ -12115,28 +12285,14 @@ def _persona_hot_raw_candidate_count(result: dict[str, Any]) -> int:
     return len(candidates) if isinstance(candidates, list) else 0
 
 
-@contextlib.contextmanager
-def _persona_hot_interactive_priority():
-    global PERSONA_HOT_INTERACTIVE_REQUESTS
-    with PERSONA_HOT_INTERACTIVE_LOCK:
-        PERSONA_HOT_INTERACTIVE_REQUESTS += 1
-    try:
-        yield
-    finally:
-        with PERSONA_HOT_INTERACTIVE_LOCK:
-            PERSONA_HOT_INTERACTIVE_REQUESTS = max(0, PERSONA_HOT_INTERACTIVE_REQUESTS - 1)
-
-
 def _persona_hot_user_warnings(raw_warnings: Any, candidate_count: int, limit: int, cookie_rows: Any = None) -> list[str]:
     count = max(0, int(candidate_count or 0))
     target = max(1, int(limit or 10))
-    if count <= 0:
-        messages = ["暂未找到符合条件的热点，请稍后刷新候选。"]
-    elif count < target:
-        messages = [f"已找到 {count} 条符合条件的热点，暂不足 {target} 条。"]
-    else:
-        messages = [f"已获取 {count} 条热点候选。"]
-
+    messages = [
+        "暂未找到符合条件的热点，请稍后刷新候选。"
+        if count <= 0
+        else (f"已找到 {count} 条符合条件的热点，暂不足 {target} 条。" if count < target else f"已获取 {count} 条热点候选。")
+    ]
     normalized = [
         _normalize_hot_workflow_text(item)
         for item in (raw_warnings if isinstance(raw_warnings, list) else [])
@@ -12144,8 +12300,7 @@ def _persona_hot_user_warnings(raw_warnings: Any, candidate_count: int, limit: i
     ]
     warning_text = " ".join(normalized).lower()
     threads_status = next((
-        item
-        for item in (cookie_rows if isinstance(cookie_rows, list) else [])
+        item for item in (cookie_rows if isinstance(cookie_rows, list) else [])
         if isinstance(item, dict) and str(item.get("platform") or "").strip().lower() == "threads"
     ), {})
     cookie_health = str(threads_status.get("health") or "").strip().lower()
@@ -12153,11 +12308,7 @@ def _persona_hot_user_warnings(raw_warnings: Any, candidate_count: int, limit: i
     valid_cookie_count = _to_int(threads_status.get("valid_cookie_count"), 0)
     expired_cookie_count = _to_int(threads_status.get("expired_cookie_count"), 0)
     model_unavailable = any(token in warning_text for token in (
-        "模型当前不可用",
-        "模型策略不可用",
-        "模型热点搜索策略暂不可用",
-        "模型生成热点搜索策略失败",
-        "模型未返回可用",
+        "模型当前不可用", "模型策略不可用", "模型热点搜索策略暂不可用", "模型生成热点搜索策略失败", "模型未返回可用",
     ))
     timed_out = "超时" in warning_text or "timeout" in warning_text or "timed out" in warning_text
     rate_limited = "限流" in warning_text or "rate limit" in warning_text or "too many requests" in warning_text
@@ -12170,9 +12321,9 @@ def _persona_hot_user_warnings(raw_warnings: Any, candidate_count: int, limit: i
     elif cookie_health == "degraded":
         messages.append("Threads Cookie 部分失效，请刷新账号授权后重试。")
     elif rate_limited:
-        messages.append("Threads 当前请求受限，已优先使用当前人设候选池。")
+        messages.append("Threads 当前请求受限，请稍后重试。")
     elif model_unavailable:
-        messages.append("模型暂不可用，已优先使用当前人设候选池。" if count > 0 else "模型暂不可用，请稍后重试。")
+        messages.append("模型暂不可用，请稍后重试。")
     elif timed_out:
         messages.append("本次抓取超时，结果可能不完整。")
     return messages[:2]
@@ -12197,23 +12348,20 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
     )[:8]
     limit = min(max(_to_int(payload.limit, 10), 1), 20)
     search_mode = "normal" if str(payload.search_mode or "").strip().lower() == "normal" else "strict"
-    _, _, archives = _persona_archive_source_for_write(clean_id)
-    archive = _find_persona_archive(archives, clean_id)
-    if not archive:
-        raise HTTPException(status_code=404, detail="persona not found")
-    with _persona_hot_interactive_priority():
-        result = _run_persona_hot_workflow_cli(
-            {
-                "action": "fetch-hot-candidates",
-                "archiveId": clean_id,
-                "prompt": str(payload.prompt or "").strip(),
-                "refresh": bool(payload.refresh),
-                "limit": limit,
-                "searchMode": search_mode,
-                "memorySummaries": selected_summaries,
-            },
-            timeout_seconds=180,
-        )
+    freshness_days = min(max(_to_int(payload.freshness_days, 0), 0), 15)
+    result = _run_persona_hot_workflow_cli(
+        {
+            "action": "fetch-hot-candidates",
+            "archiveId": clean_id,
+            "prompt": str(payload.prompt or "").strip(),
+            "refresh": bool(payload.refresh),
+            "limit": limit,
+            "searchMode": search_mode,
+            "freshnessDays": freshness_days,
+            "memorySummaries": selected_summaries,
+        },
+        timeout_seconds=120,
+    )
 
     cookie_rows = []
     for item in result.get("cookieStatuses") if isinstance(result.get("cookieStatuses"), list) else []:
@@ -12238,7 +12386,6 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
         )
         if normalized
     ][:limit]
-    _update_persona_hot_prefetch_ready(clean_id, search_mode, _to_int(result.get("readyCount"), len(candidates)))
     return {
         "ok": True,
         "archive_name": str(result.get("archiveName") or result.get("archive_name") or "").strip(),
@@ -12248,6 +12395,7 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
             if _normalize_hot_workflow_text(item)
         ],
         "search_mode": "normal" if str(result.get("searchMode") or search_mode).strip().lower() == "normal" else "strict",
+        "freshness_days": min(max(_to_int(result.get("freshnessDays"), freshness_days), 0), 15),
         "cookie_statuses": cookie_rows,
         "warnings": _persona_hot_user_warnings(result.get("warnings"), len(candidates), limit, cookie_rows),
         "candidates": candidates,
@@ -12279,10 +12427,6 @@ def _import_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHot
         post_id = str(item.get("id") or "").strip()
         if post_id and post_id in post_by_id:
             imported_posts.append(post_by_id[post_id])
-    _, _, archives = _persona_archive_source_for_write(clean_id)
-    archive = _find_persona_archive(archives, clean_id)
-    if archive:
-        _queue_persona_hot_prefetch_for_archive(archive, force=True)
     return {
         "ok": True,
         "archive_id": str(result.get("archiveId") or clean_id).strip(),
@@ -12619,11 +12763,7 @@ def _create_persona_archive(payload: PersonaDashboardPersonaCreatePayload) -> di
     }
     archives.append(archive)
     _write_persona_archives_preserving_shape(path, raw, archives)
-    _queue_persona_hot_prefetch_for_archive(archive, force=True)
-    hot_pool_warmup = {"ok": True, "status": "queued", "message": "热点候选池已转入后台补充。"}
-    profile = _build_persona_dashboard_profile(archive)
-    profile["hot_pool_warmup"] = hot_pool_warmup
-    return profile
+    return _build_persona_dashboard_profile(archive)
 
 
 def _duplicate_persona_archive(archive_id: str) -> dict[str, Any]:
@@ -12656,6 +12796,7 @@ def _duplicate_persona_archive(archive_id: str) -> dict[str, Any]:
     }
     archives.append(duplicate)
     _write_persona_archives_preserving_shape(path, raw, archives)
+    _warm_persona_hot_strategy_async(str(duplicate.get("id") or ""))
     return {"ok": True, "profile": _build_persona_dashboard_profile(duplicate)}
 
 
@@ -12703,6 +12844,7 @@ def _persona_dashboard_create_persona_with_ai(payload: PersonaDashboardPersonaAi
     })
     archive_id = str(result.get("archiveId") or "").strip()
     if archive_id:
+        _warm_persona_hot_strategy_async(archive_id)
         _, _, archives = _persona_archive_source_for_write(archive_id)
         archive = _find_persona_archive(archives, archive_id)
         if archive:
@@ -13065,6 +13207,7 @@ def _persona_publish_account_for_archive(
     archive_id: str,
     requested_account_id: str = "",
     preferred_platform: str = "",
+    owner_user_id: int | None = None,
 ) -> dict[str, Any]:
     clean_archive_id = str(archive_id or "").strip()
     clean_account_id = str(requested_account_id or "").strip()
@@ -13073,16 +13216,21 @@ def _persona_publish_account_for_archive(
         platform = "instagram"
     with db() as conn:
         if clean_account_id:
-            row = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (clean_account_id,)).fetchone()
+            if owner_user_id is None:
+                row = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (clean_account_id,)).fetchone()
+            else:
+                row = conn.execute("SELECT * FROM social_accounts WHERE id = ? AND user_id = ?", (clean_account_id, int(owner_user_id))).fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="执行账号不存在。")
             account = dict(row)
             if str(account.get("persona_id") or "").strip() != clean_archive_id:
                 raise HTTPException(status_code=400, detail="执行账号不属于当前人设。")
         else:
+            owner_clause = "" if owner_user_id is None else " AND user_id = ?"
+            params: tuple[Any, ...] = (clean_archive_id, platform) if owner_user_id is None else (clean_archive_id, platform, int(owner_user_id))
             row = conn.execute(
-                "SELECT * FROM social_accounts WHERE persona_id = ? AND platform = ? ORDER BY updated_at DESC, created_at DESC LIMIT 1",
-                (clean_archive_id, platform),
+                f"SELECT * FROM social_accounts WHERE persona_id = ? AND platform = ?{owner_clause} ORDER BY updated_at DESC, created_at DESC LIMIT 1",
+                params,
             ).fetchone()
             if not row:
                 raise HTTPException(status_code=400, detail=f"当前人设还没有可发布的 {platform} 执行账号。")
@@ -13180,6 +13328,7 @@ def _publish_persona_archive_post(
     post_id: str,
     payload: PersonaDashboardDraftPublishPayload,
     source: str = "posts",
+    owner_user_id: int | None = None,
 ) -> dict[str, Any]:
     clean_archive_id = str(archive_id or "").strip()
     clean_post_id = str(post_id or "").strip()
@@ -13204,7 +13353,7 @@ def _publish_persona_archive_post(
         media_paths = _post_media_paths_for_publish(post)
     if not content and not media_paths:
         raise HTTPException(status_code=400, detail="推文草稿内容为空，不能发布。")
-    account = _persona_publish_account_for_archive(clean_archive_id, payload.account_id, payload.platform)
+    account = _persona_publish_account_for_archive(clean_archive_id, payload.account_id, payload.platform, owner_user_id)
     platform = str(account.get("platform") or "instagram").strip().lower() or "instagram"
     login_task = _ensure_publish_login_task(account, scheduled_at=payload.scheduled_at or 0)
     if platform == "instagram" and not media_paths:
@@ -13295,7 +13444,7 @@ def _active_publish_task_for_post(*, persona_id: str, account_id: str, post_id: 
     return None
 
 
-def _publish_persona_matrix(payload: PersonaDashboardMatrixPublishPayload) -> dict[str, Any]:
+def _publish_persona_matrix(payload: PersonaDashboardMatrixPublishPayload, *, owner_user_id: int | None = None) -> dict[str, Any]:
     source = str(payload.source or "posts").strip().lower()
     if source not in {"posts", "favorites"}:
         raise HTTPException(status_code=400, detail="发布来源只能选择草稿或收藏。")
@@ -13323,7 +13472,7 @@ def _publish_persona_matrix(payload: PersonaDashboardMatrixPublishPayload) -> di
             continue
         persona_name = str(archive.get("name") or archive.get("title") or persona_id).strip()
         try:
-            account = _persona_publish_account_for_archive(persona_id, "", platform)
+            account = _persona_publish_account_for_archive(persona_id, "", platform, owner_user_id)
             login_task = _ensure_publish_login_task(account, scheduled_at=payload.scheduled_at or 0)
             rows = _archive_posts_for_matrix_source(archive, source)
             candidates: list[dict[str, Any]] = []
@@ -14741,11 +14890,11 @@ def _persona_dashboard_refresh_is_running() -> bool:
 
 
 def _persona_dashboard_monitor_interval_seconds() -> int:
-    raw = os.getenv("PERSONA_DASHBOARD_RSSHUB_POLL_SECONDS") or os.getenv("PERSONA_DASHBOARD_AUTO_REFRESH_SECONDS") or "300"
+    raw = os.getenv("PERSONA_DASHBOARD_RSSHUB_POLL_SECONDS") or os.getenv("PERSONA_DASHBOARD_AUTO_REFRESH_SECONDS") or "86400"
     try:
         return max(60, int(float(raw)))
     except Exception:
-        return 300
+        return 86400
 
 
 def _persona_dashboard_monitor_enabled() -> bool:
@@ -14755,6 +14904,15 @@ def _persona_dashboard_monitor_enabled() -> bool:
 def _persona_dashboard_monitor_loop() -> None:
     interval = _persona_dashboard_monitor_interval_seconds()
     source = (os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "rsshub").strip().lower() or "rsshub"
+    with PERSONA_DASHBOARD_MONITOR_LOCK:
+        PERSONA_DASHBOARD_MONITOR_STATE.update({
+            "enabled": _persona_dashboard_monitor_enabled(),
+            "source": source,
+            "status": "waiting",
+            "interval_seconds": interval,
+            "last_message": "\u540e\u53f0\u5168\u91cf\u5237\u65b0\u5df2\u6392\u7a0b\uff0c\u7b49\u5f85\u4e0b\u4e00\u4e2a\u6bcf\u65e5\u5468\u671f\u3002",
+        })
+    time.sleep(interval)
     while True:
         if not _persona_dashboard_monitor_enabled():
             with PERSONA_DASHBOARD_MONITOR_LOCK:
@@ -14830,8 +14988,14 @@ def _ensure_persona_dashboard_monitor_started() -> None:
     thread.start()
 
 
-def _build_persona_dashboard_overview() -> dict[str, Any]:
+def _build_persona_dashboard_overview(
+    *,
+    visible_archive_ids: set[str] | None = None,
+    visible_group_ids: set[str] | None = None,
+) -> dict[str, Any]:
     archives, archives_source = _read_tool_r18_persona_archives()
+    if visible_archive_ids is not None:
+        archives = [item for item in archives if str(item.get("id") or "").strip() in visible_archive_ids]
     queue_stats = _read_tool_r18_publish_queue_stats()
     sentiment_stats = _read_tool_r18_sentiment_hot_stats()
     deleted_posts = _read_persona_dashboard_deleted_posts()
@@ -15075,6 +15239,9 @@ def _build_persona_dashboard_overview() -> dict[str, Any]:
 
     personas.sort(key=lambda item: _number(item.get("hot", {}).get("hot_score"), 0), reverse=True)
     persona_groups = _read_persona_groups({str(item.get("id") or "").strip() for item in personas})
+    if visible_group_ids is not None:
+        persona_groups["groups"] = [group for group in persona_groups.get("groups", []) if str(group.get("id") or "") in visible_group_ids]
+        persona_groups["assigned_persona_ids"] = sorted({pid for group in persona_groups["groups"] for pid in group.get("persona_ids", [])})
     trend = [{"date": day, **values} for day, values in sorted(daily.items())]
     return {
         "ok": True,
@@ -15135,8 +15302,14 @@ def _build_persona_dashboard_overview() -> dict[str, Any]:
     }
 
 
-def _build_persona_dashboard_console_overview() -> dict[str, Any]:
+def _build_persona_dashboard_console_overview(
+    *,
+    visible_archive_ids: set[str] | None = None,
+    visible_group_ids: set[str] | None = None,
+) -> dict[str, Any]:
     archives, archives_source = _read_tool_r18_persona_archives()
+    if visible_archive_ids is not None:
+        archives = [item for item in archives if str(item.get("id") or "").strip() in visible_archive_ids]
     queue_stats = _read_tool_r18_publish_queue_stats()
     deleted_posts = _read_persona_dashboard_deleted_posts()
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -15213,6 +15386,9 @@ def _build_persona_dashboard_console_overview() -> dict[str, Any]:
 
     personas.sort(key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)
     persona_groups = _read_persona_groups({str(item.get("id") or "").strip() for item in personas})
+    if visible_group_ids is not None:
+        persona_groups["groups"] = [group for group in persona_groups.get("groups", []) if str(group.get("id") or "") in visible_group_ids]
+        persona_groups["assigned_persona_ids"] = sorted({pid for group in persona_groups["groups"] for pid in group.get("persona_ids", [])})
     return {
         "ok": True,
         "updated_at": now,
@@ -15249,14 +15425,44 @@ def create_app() -> FastAPI:
     async def lifespan(_: FastAPI):
         _ensure_tool_r18_stop_responder_started()
         _ensure_persona_dashboard_monitor_started()
-        _ensure_persona_hot_prefetch_worker_started()
         ensure_social_automation_worker_started()
-        yield
+        _start_persona_hot_pool_worker()
+        try:
+            yield
+        finally:
+            _stop_persona_hot_pool_worker()
 
-    app = FastAPI(title="Workflow WebApp", version="1.0.0", lifespan=lifespan)
+    app = FastAPI(
+        title="Workflow WebApp",
+        version="1.0.0",
+        lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
     app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+    @app.middleware("http")
+    async def enforce_https(request: Request, call_next):
+        if _force_https_enabled() and not _request_uses_https(request):
+            origin = str(os.getenv("HTTPS_CANONICAL_ORIGIN", "") or "").strip().rstrip("/")
+            if not origin.startswith("https://"):
+                return JSONResponse(status_code=503, content={"detail": "HTTPS_CANONICAL_ORIGIN 配置无效"})
+            target = f"{origin}{request.url.path}"
+            if request.url.query:
+                target = f"{target}?{request.url.query}"
+            return RedirectResponse(url=target, status_code=308)
+        return await call_next(request)
+
     app.mount("/assets", StaticFiles(directory=str(STATIC_DIR / "assets")), name="assets")
-    app.mount("/tool_r18_uploads", StaticFiles(directory=str(TOOL_R18_UPLOAD_ROOT)), name="tool_r18_uploads")
+
+    @app.get("/tool_r18_uploads/{file_path:path}", include_in_schema=False)
+    def tool_r18_upload(file_path: str, _user: dict[str, Any] = Depends(get_current_user)) -> FileResponse:
+        root = TOOL_R18_UPLOAD_ROOT.resolve()
+        candidate = (root / str(file_path or "")).resolve()
+        if root not in candidate.parents or not candidate.is_file():
+            raise HTTPException(status_code=404, detail="文件不存在")
+        return FileResponse(str(candidate), filename=candidate.name)
 
     @app.get("/", include_in_schema=False)
     def root() -> FileResponse:
@@ -15279,31 +15485,38 @@ def create_app() -> FastAPI:
         return FileResponse(str(STATIC_DIR / "index.html"))
 
     @app.get("/console.html", include_in_schema=False)
-    def page_console() -> HTMLResponse:
+    def page_console(session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE)) -> Response:
         try:
-            console_bootstrap = _build_persona_dashboard_console_overview()
+            user = get_current_user(session_token)
+        except HTTPException:
+            return RedirectResponse(url="/login.html", status_code=302)
+        try:
+            console_bootstrap = _build_persona_dashboard_console_overview(
+                visible_archive_ids=_visible_persona_ids(user),
+                visible_group_ids=_visible_persona_group_ids(user),
+            )
         except Exception as exc:
             logger.warning("Failed to build console bootstrap overview: %s", exc)
             console_bootstrap = None
-        response = _html_response_with_versions(
+        return _html_response_with_versions(
             "console.html",
             replacements={
+                "__STYLE_VERSION__": _asset_version("assets", "style.css"),
                 "__CONSOLE_CSS_VERSION__": _asset_version("assets", "console.css"),
                 "__CONSOLE_JS_VERSION__": _asset_version("assets", "console.js"),
+                "__PERSONA_DASHBOARD_JS_VERSION__": _asset_version("assets", "persona-dashboard.js"),
                 "__CONSOLE_BOOTSTRAP_JSON__": _json_script_payload(console_bootstrap),
             },
         )
-        response.set_cookie(
-            key=SESSION_COOKIE,
-            value=_create_local_console_session(),
-            httponly=True,
-            max_age=14 * 24 * 3600,
-            samesite="lax",
-        )
-        return response
 
     @app.get("/admin.html", include_in_schema=False)
-    def page_admin() -> HTMLResponse:
+    def page_admin(session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE)) -> Response:
+        try:
+            user = get_current_user(session_token)
+        except HTTPException:
+            return RedirectResponse(url="/admin", status_code=302)
+        if not _is_admin(user):
+            return RedirectResponse(url="/admin", status_code=302)
         return _html_response_with_versions(
             "admin.html",
             replacements={
@@ -15312,23 +15525,42 @@ def create_app() -> FastAPI:
             },
         )
 
+    def _admin_login_page() -> Response:
+        return _html_response_with_versions(
+            "admin-login.html",
+            replacements={
+                "__STYLE_VERSION__": _asset_version("assets", "style.css"),
+                "__AUTH_JS_VERSION__": _asset_version("assets", "auth.js"),
+            },
+        )
+
+    @app.get("/admin", include_in_schema=False)
+    def page_admin_entry(session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE)) -> Response:
+        try:
+            user = get_current_user(session_token)
+        except HTTPException:
+            return _admin_login_page()
+        if not _is_admin(user):
+            return _admin_login_page()
+        return RedirectResponse(url="/admin.html#admin-overview", status_code=302)
+
+    @app.get("/admin-login.html", include_in_schema=False)
+    def page_admin_login_alias() -> RedirectResponse:
+        return RedirectResponse(url="/admin", status_code=302)
+
     @app.get("/quick-setup.html", include_in_schema=False)
-    def page_quick_setup() -> HTMLResponse:
+    def page_quick_setup(session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE)) -> Response:
+        try:
+            user = get_current_user(session_token)
+        except HTTPException:
+            return RedirectResponse(url="/admin", status_code=302)
+        if not _is_admin(user):
+            return RedirectResponse(url="/admin", status_code=302)
         return _html_response_with_versions(
             "quick-setup.html",
             replacements={
                 "__STYLE_VERSION__": _asset_version("assets", "style.css"),
                 "__QUICK_SETUP_JS_VERSION__": _asset_version("assets", "quick-setup.js"),
-            },
-        )
-
-    @app.get("/persona-dashboard.html", include_in_schema=False)
-    def page_persona_dashboard() -> HTMLResponse:
-        return _html_response_with_versions(
-            "persona-dashboard.html",
-            replacements={
-                "__STYLE_VERSION__": _asset_version("assets", "style.css"),
-                "__PERSONA_DASHBOARD_JS_VERSION__": _asset_version("assets", "persona-dashboard.js"),
             },
         )
 
@@ -15341,7 +15573,7 @@ def create_app() -> FastAPI:
         return FileResponse(str(STATIC_DIR / "batch.html"))
 
     @app.get("/api/quick_setup/status")
-    def api_quick_setup_status():
+    def api_quick_setup_status(_user: dict[str, Any] = Depends(require_admin)):
         try:
             with db() as conn:
                 runtime = _get_runtime_config(conn)
@@ -15396,7 +15628,7 @@ def create_app() -> FastAPI:
     register_social_automation_routes(app)
 
     @app.post("/api/quick_setup/runtime_config")
-    def api_quick_setup_update_runtime_config(payload: RuntimeConfigPayload):
+    def api_quick_setup_update_runtime_config(payload: RuntimeConfigPayload, _user: dict[str, Any] = Depends(require_admin)):
         try:
             with db() as conn:
                 current_runtime = _get_runtime_config(conn)
@@ -15446,7 +15678,7 @@ def create_app() -> FastAPI:
         return api_quick_setup_status()
 
     @app.delete("/api/quick_setup/telegram_bot_token")
-    def api_quick_setup_clear_telegram_bot_token():
+    def api_quick_setup_clear_telegram_bot_token(_user: dict[str, Any] = Depends(require_admin)):
         try:
             with db() as conn:
                 current_runtime = _get_runtime_config(conn)
@@ -15470,7 +15702,7 @@ def create_app() -> FastAPI:
         return api_quick_setup_status()
 
     @app.delete("/api/quick_setup/grok_key")
-    def api_quick_setup_clear_grok_key():
+    def api_quick_setup_clear_grok_key(_user: dict[str, Any] = Depends(require_admin)):
         try:
             with db() as conn:
                 current_runtime = _get_runtime_config(conn)
@@ -15521,19 +15753,19 @@ def create_app() -> FastAPI:
         return api_quick_setup_status()
 
     @app.delete("/api/quick_setup/image_key")
-    def api_quick_setup_clear_image_key():
+    def api_quick_setup_clear_image_key(_user: dict[str, Any] = Depends(require_admin)):
         return _clear_quick_setup_runtime_keys(["image_model_provider_api_key_gemini"])
 
     @app.delete("/api/quick_setup/runninghub_key")
-    def api_quick_setup_clear_runninghub_key():
+    def api_quick_setup_clear_runninghub_key(_user: dict[str, Any] = Depends(require_admin)):
         return _clear_quick_setup_runtime_keys(["new_persona_runninghub_api_key"])
 
     @app.delete("/api/quick_setup/video_key")
-    def api_quick_setup_clear_video_key():
+    def api_quick_setup_clear_video_key(_user: dict[str, Any] = Depends(require_admin)):
         return _clear_quick_setup_runtime_keys(["mulerouter_api_key"])
 
     @app.post("/api/quick_setup/llm_models")
-    def api_quick_setup_llm_models(payload: LlmModelsPayload):
+    def api_quick_setup_llm_models(payload: LlmModelsPayload, _user: dict[str, Any] = Depends(require_admin)):
         base_url = str(payload.llm_base_url or "").strip()
         api_key = str(payload.llm_api_key or "").strip()
         if "***" in api_key:
@@ -15557,7 +15789,7 @@ def create_app() -> FastAPI:
         return {"ok": True, "count": len(models), "models": models}
 
     @app.post("/api/quick_setup/image_models")
-    def api_quick_setup_image_models(payload: ImageModelsPayload):
+    def api_quick_setup_image_models(payload: ImageModelsPayload, _user: dict[str, Any] = Depends(require_admin)):
         base_url = str(payload.base_url or "").strip()
         api_key = str(payload.api_key or "").strip()
         if "***" in api_key:
@@ -15581,7 +15813,7 @@ def create_app() -> FastAPI:
         return {"ok": True, "count": len(models), "models": models}
 
     @app.post("/api/quick_setup/video_models")
-    def api_quick_setup_video_models(payload: ModelLookupPayload):
+    def api_quick_setup_video_models(payload: ModelLookupPayload, _user: dict[str, Any] = Depends(require_admin)):
         base_url = str(payload.base_url or "").strip()
         api_key = str(payload.api_key or "").strip()
         endpoint = str(payload.endpoint or "").strip()
@@ -15607,7 +15839,7 @@ def create_app() -> FastAPI:
         return {"ok": True, "count": len(models), "models": models}
 
     @app.post("/api/quick_setup/process")
-    def api_quick_setup_process(payload: QuickSetupProcessPayload):
+    def api_quick_setup_process(payload: QuickSetupProcessPayload, _user: dict[str, Any] = Depends(require_admin)):
         action = str(payload.action or "").strip().lower()
         if action not in {"start", "stop"}:
             raise HTTPException(status_code=400, detail="action 必須是 start 或 stop")
@@ -15627,25 +15859,48 @@ def create_app() -> FastAPI:
         status["process"] = process
         return status
 
+    @app.post("/api/auth/apply")
     @app.post("/api/auth/register")
-    def api_register(payload: RegisterPayload):
+    def api_register(payload: RegisterPayload, request: Request):
         if not _public_register_enabled():
-            raise HTTPException(status_code=403, detail="账号由管理员开通，请联系运营管理员")
+            raise HTTPException(status_code=403, detail="当前未开放账号申请")
         username = str(payload.username or "").strip()
         password = str(payload.password or "")
-        if not username:
-            raise HTTPException(status_code=400, detail="用户名不能为空")
+        client_ip = _request_client_ip(request)
+        _enforce_auth_rate_limit("apply_ip", client_ip, limit=5, window_seconds=3600)
+        full_name = str(payload.full_name or "").strip()
+        email = str(payload.email or "").strip().lower()
+        phone = str(payload.phone or "").strip()
+        company = str(payload.company or "").strip()
+        use_case = str(payload.use_case or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9._-]{3,32}", username):
+            raise HTTPException(status_code=400, detail="用户名需为 3-32 位字母、数字或 ._- ")
+        if len(full_name) < 2 or len(full_name) > 80:
+            raise HTTPException(status_code=400, detail="请填写 2-80 位姓名")
+        if email and (len(email) > 160 or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email)):
+            raise HTTPException(status_code=400, detail="邮箱格式不正确")
+        if len(phone) < 6 or len(phone) > 32:
+            raise HTTPException(status_code=400, detail="请填写有效联系电话")
+        if len(company) > 120 or len(use_case) > 1000:
+            raise HTTPException(status_code=400, detail="申请资料过长")
+        if len(password) > 256:
+            raise HTTPException(status_code=400, detail="密码长度不能超过 256 位")
         now = _now_ts()
+        try:
+            password_hash = hash_password(password)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         with db() as conn:
-            count_row = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()
-            is_admin = 1 if count_row and int(count_row["c"] or 0) == 0 else 0
             try:
                 conn.execute(
                     """
-                    INSERT INTO users(username, password_hash, is_admin, is_disabled, balance_cents, created_at, updated_at)
-                    VALUES (?, ?, ?, 0, 0, ?, ?)
+                    INSERT INTO users(
+                      username, password_hash, is_admin, is_disabled, balance_cents,
+                      account_type, approval_status, full_name, email, phone, company, use_case,
+                      created_at, updated_at
+                    ) VALUES (?, ?, 0, 1, 0, 'guest', 'pending', ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (username, hash_password(password), int(is_admin), now, now),
+                    (username, password_hash, full_name, email, phone, company, use_case, now, now),
                 )
             except Exception as exc:
                 if "UNIQUE" in str(exc).upper():
@@ -15654,44 +15909,51 @@ def create_app() -> FastAPI:
             user_row = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
             if user_row is None:
                 raise HTTPException(status_code=500, detail="注册失败")
-            token = create_session(conn, int(user_row["id"]))
-
-        resp = {
+        return {
+            "ok": True,
             "id": int(user_row["id"]),
             "username": str(user_row["username"]),
-            "is_admin": bool(int(user_row["is_admin"] or 0)),
-            "balance_cents": int(user_row["balance_cents"] or 0),
+            "approval_status": "pending",
+            "message": "申请已提交，请等待管理员授权后登录",
         }
-        response = JSONResponse(content=resp)
-        response.set_cookie(
-            key=SESSION_COOKIE,
-            value=token,
-            httponly=True,
-            max_age=14 * 24 * 3600,
-            samesite="lax",
-        )
-        return response
 
-    @app.post("/api/auth/login")
-    def api_login(payload: LoginPayload):
+    def _login_response(payload: LoginPayload, request: Request, *, expected_admin: bool | None = None) -> JSONResponse:
         username = str(payload.username or "").strip()
         password = str(payload.password or "")
+        client_ip = _request_client_ip(request)
+        username_key = username.casefold()[:64] or "empty"
+        _enforce_auth_rate_limit("login_ip", client_ip, limit=30, window_seconds=300)
+        _enforce_auth_rate_limit("login_user", username_key, limit=8, window_seconds=900)
+        if len(password) > 256:
+            raise HTTPException(status_code=401, detail="用户名或密码错误")
         with db() as conn:
             row = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
             if row is None:
                 raise HTTPException(status_code=401, detail="用户名或密码错误")
             user = dict(row)
-            if int(user.get("is_disabled") or 0) == 1:
-                raise HTTPException(status_code=403, detail="账号已禁用")
             if not verify_password(password, str(user.get("password_hash") or "")):
                 raise HTTPException(status_code=401, detail="用户名或密码错误")
+            is_admin = bool(int(user.get("is_admin") or 0))
+            if expected_admin is True and not is_admin:
+                raise HTTPException(status_code=403, detail="此入口仅供管理员登录")
+            if expected_admin is False and is_admin:
+                raise HTTPException(status_code=403, detail="管理员请使用后台入口登录")
+            approval_status = str(user.get("approval_status") or "approved")
+            if not is_admin and approval_status != "approved":
+                detail = "账号申请正在等待管理员授权" if approval_status == "pending" else "账号申请未获授权，请联系管理员"
+                raise HTTPException(status_code=403, detail=detail)
+            if int(user.get("is_disabled") or 0) == 1:
+                raise HTTPException(status_code=403, detail="账号已禁用")
             token = create_session(conn, int(user["id"]))
+            conn.execute("UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?", (_now_ts(), _now_ts(), int(user["id"])))
+        _clear_auth_rate_limit("login_user", username_key)
 
         resp = {
             "id": int(user["id"]),
             "username": str(user["username"]),
-            "is_admin": bool(int(user.get("is_admin") or 0)),
+            "is_admin": is_admin,
             "balance_cents": int(user.get("balance_cents") or 0),
+            "approval_status": str(user.get("approval_status") or "approved"),
         }
         response = JSONResponse(content=resp)
         response.set_cookie(
@@ -15700,8 +15962,21 @@ def create_app() -> FastAPI:
             httponly=True,
             max_age=14 * 24 * 3600,
             samesite="lax",
+            secure=_session_cookie_secure(),
         )
         return response
+
+    @app.post("/api/auth/login")
+    def api_login(payload: LoginPayload, request: Request):
+        return _login_response(payload, request)
+
+    @app.post("/api/auth/user-login")
+    def api_user_login(payload: LoginPayload, request: Request):
+        return _login_response(payload, request, expected_admin=False)
+
+    @app.post("/api/auth/admin-login")
+    def api_admin_login(payload: LoginPayload, request: Request):
+        return _login_response(payload, request, expected_admin=True)
 
     @app.post("/api/auth/logout")
     def api_logout(request: Request):
@@ -15714,7 +15989,11 @@ def create_app() -> FastAPI:
         return response
 
     @app.post("/api/auth/change_password")
-    def api_change_password(payload: ChangePasswordPayload, user: dict[str, Any] = Depends(get_current_user)):
+    def api_change_password(
+        payload: ChangePasswordPayload,
+        request: Request,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
         old_pwd = str(payload.old_password or "")
         new_pwd = str(payload.new_password or "")
         if not verify_password(old_pwd, str(user.get("password_hash") or "")):
@@ -15727,6 +16006,11 @@ def create_app() -> FastAPI:
                 "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
                 (new_hash, _now_ts(), int(user["id"])),
             )
+            current_token = str(request.cookies.get(SESSION_COOKIE) or "").strip()
+            if current_token:
+                conn.execute("DELETE FROM sessions WHERE user_id = ? AND token <> ?", (int(user["id"]), current_token))
+            else:
+                conn.execute("DELETE FROM sessions WHERE user_id = ?", (int(user["id"]),))
         return {"ok": True}
 
     @app.post("/api/auth/change_username")
@@ -15770,99 +16054,114 @@ def create_app() -> FastAPI:
         return api_me(user)
 
     @app.get("/api/persona_dashboard/overview")
-    def api_persona_dashboard_overview():
-        return _build_persona_dashboard_overview()
+    def api_persona_dashboard_overview(user: dict[str, Any] = Depends(get_current_user)):
+        return _build_persona_dashboard_overview(
+            visible_archive_ids=_visible_persona_ids(user),
+            visible_group_ids=_visible_persona_group_ids(user),
+        )
 
     @app.get("/api/persona_dashboard/console_overview")
-    def api_persona_dashboard_console_overview(_user: dict[str, Any] = Depends(get_current_user)):
-        return _build_persona_dashboard_console_overview()
+    def api_persona_dashboard_console_overview(user: dict[str, Any] = Depends(get_current_user)):
+        return _build_persona_dashboard_console_overview(
+            visible_archive_ids=_visible_persona_ids(user),
+            visible_group_ids=_visible_persona_group_ids(user),
+        )
 
     @app.get("/api/persona_dashboard/monitor")
-    def api_persona_dashboard_monitor():
+    def api_persona_dashboard_monitor(_user: dict[str, Any] = Depends(require_admin)):
         return dict(PERSONA_DASHBOARD_MONITOR_STATE)
 
     @app.post("/api/persona_dashboard/personas")
-    def api_persona_dashboard_create_persona(payload: PersonaDashboardPersonaCreatePayload, _user: dict[str, Any] = Depends(get_current_user)):
-        return _create_persona_archive(payload)
+    def api_persona_dashboard_create_persona(payload: PersonaDashboardPersonaCreatePayload, user: dict[str, Any] = Depends(get_current_user)):
+        result = _create_persona_archive(payload)
+        _record_persona_owner(str(result.get("id") or ""), user)
+        return result
 
     @app.post("/api/persona_dashboard/personas/ai_keywords")
     def api_persona_dashboard_persona_ai_keywords(payload: PersonaDashboardPersonaAiKeywordsPayload, _user: dict[str, Any] = Depends(get_current_user)):
         return _persona_dashboard_suggest_keywords(payload)
 
     @app.post("/api/persona_dashboard/personas/ai_create")
-    def api_persona_dashboard_persona_ai_create(payload: PersonaDashboardPersonaAiCreatePayload, _user: dict[str, Any] = Depends(get_current_user)):
-        return _persona_dashboard_create_persona_with_ai(payload)
+    def api_persona_dashboard_persona_ai_create(payload: PersonaDashboardPersonaAiCreatePayload, user: dict[str, Any] = Depends(get_current_user)):
+        result = _persona_dashboard_create_persona_with_ai(payload)
+        profile = result.get("profile") if isinstance(result.get("profile"), dict) else {}
+        _record_persona_owner(str(profile.get("id") or ""), user)
+        return result
 
     @app.post("/api/persona_dashboard/personas/ai_profile")
     def api_persona_dashboard_persona_ai_profile(payload: PersonaDashboardPersonaAiProfilePayload, _user: dict[str, Any] = Depends(get_current_user)):
         return _persona_dashboard_generate_profile_content(payload)
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/duplicate")
-    def api_persona_dashboard_duplicate_persona(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
-        return _duplicate_persona_archive(archive_id)
+    def api_persona_dashboard_duplicate_persona(archive_id: str, user: dict[str, Any] = Depends(require_persona_owner)):
+        result = _duplicate_persona_archive(archive_id)
+        profile = result.get("profile") if isinstance(result.get("profile"), dict) else {}
+        _record_persona_owner(str(profile.get("id") or ""), user)
+        return result
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/posts")
-    def api_persona_dashboard_persona_posts(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_persona_posts(archive_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
         return {"ok": True, "posts": _list_persona_archive_posts(archive_id)}
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/favorites")
-    def api_persona_dashboard_persona_favorites(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_persona_favorites(archive_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
         return {"ok": True, "favorites": _list_persona_archive_posts(archive_id, "favorites")}
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/favorites/{post_id}")
-    def api_persona_dashboard_add_favorite(archive_id: str, post_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_add_favorite(archive_id: str, post_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _add_persona_favorite_post(archive_id, post_id)
 
     @app.patch("/api/persona_dashboard/personas/{archive_id}/favorites/{post_id}")
-    def api_persona_dashboard_update_favorite(archive_id: str, post_id: str, payload: PersonaDashboardDraftPostPayload, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_update_favorite(archive_id: str, post_id: str, payload: PersonaDashboardDraftPostPayload, user: dict[str, Any] = Depends(require_persona_owner)):
+        _require_user_media_paths(payload.media_paths, user)
         return _update_persona_archive_post(archive_id, post_id, payload, source="favorites")
 
     @app.delete("/api/persona_dashboard/personas/{archive_id}/favorites/{post_id}")
-    def api_persona_dashboard_delete_favorite(archive_id: str, post_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_delete_favorite(archive_id: str, post_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _delete_persona_favorite_post(archive_id, post_id)
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}/media/{index}")
-    def api_persona_dashboard_persona_post_media(archive_id: str, post_id: str, index: int, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_persona_post_media(archive_id: str, post_id: str, index: int, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _serve_persona_archive_post_media(archive_id, post_id, index)
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/favorites/{post_id}/media/{index}")
-    def api_persona_dashboard_persona_favorite_media(archive_id: str, post_id: str, index: int, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_persona_favorite_media(archive_id: str, post_id: str, index: int, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _serve_persona_archive_post_media(archive_id, post_id, index, source="favorites")
 
     @app.get("/api/persona_dashboard/media/{token}")
-    def api_persona_dashboard_media_proxy(token: str, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_media_proxy(token: str, _user: dict[str, Any] = Depends(require_admin)):
         return _serve_dashboard_media_proxy(token)
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/publish_history")
-    def api_persona_dashboard_persona_publish_history(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_persona_publish_history(archive_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
         return {"ok": True, "publish_history": _list_persona_archive_publish_history(archive_id)}
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/publish_history/{history_id}/media/{index}")
-    def api_persona_dashboard_persona_publish_history_media(archive_id: str, history_id: str, index: int, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_persona_publish_history_media(archive_id: str, history_id: str, index: int, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _serve_persona_archive_publish_history_media(archive_id, history_id, index)
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/publish_history/{history_id}/requeue")
-    def api_persona_dashboard_persona_publish_history_requeue(archive_id: str, history_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_persona_publish_history_requeue(archive_id: str, history_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _requeue_persona_publish_record(archive_id, history_id)
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/memories")
-    def api_persona_dashboard_persona_memories(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_persona_memories(archive_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
         return {"ok": True, "memories": _list_selectable_persona_memories(archive_id)}
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/memories")
-    def api_persona_dashboard_create_persona_memory(archive_id: str, payload: PersonaDashboardMemoryCreatePayload, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_create_persona_memory(archive_id: str, payload: PersonaDashboardMemoryCreatePayload, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _create_persona_dashboard_memory_entry(archive_id, payload.summary)
 
     @app.delete("/api/persona_dashboard/personas/{archive_id}/memories/{memory_id}")
-    def api_persona_dashboard_delete_persona_memory(archive_id: str, memory_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_delete_persona_memory(archive_id: str, memory_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _delete_persona_dashboard_memory_entry(archive_id, memory_id)
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/images")
-    def api_persona_dashboard_persona_images(archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_persona_images(archive_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _list_persona_archive_images(archive_id)
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/images/generate")
-    def api_persona_dashboard_generate_persona_image(archive_id: str, payload: PersonaDashboardPersonaImageGeneratePayload, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_generate_persona_image(archive_id: str, payload: PersonaDashboardPersonaImageGeneratePayload, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _run_persona_image_cli_for_web(
             archive_id,
             prompt=str(payload.prompt or "").strip(),
@@ -15872,72 +16171,102 @@ def create_app() -> FastAPI:
         )
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/images/{image_id}")
-    def api_persona_dashboard_persona_image(archive_id: str, image_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_persona_image(archive_id: str, image_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _serve_persona_archive_image(archive_id, image_id)
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/images/{image_id}/apply")
-    def api_persona_dashboard_apply_persona_image(archive_id: str, image_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_apply_persona_image(archive_id: str, image_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _apply_persona_archive_reference_image(archive_id, image_id)
 
     @app.get("/api/persona_dashboard/groups")
-    def api_persona_dashboard_groups(_user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_groups(user: dict[str, Any] = Depends(get_current_user)):
+        visible_personas = _visible_persona_ids(user)
         archives, _ = _read_tool_r18_persona_archives()
-        return _read_persona_groups({str(item.get("id") or "").strip() for item in archives})
+        archive_ids = {str(item.get("id") or "").strip() for item in archives}
+        if visible_personas is not None:
+            archive_ids &= visible_personas
+        result = _read_persona_groups(archive_ids)
+        visible_groups = _visible_persona_group_ids(user)
+        if visible_groups is not None:
+            result["groups"] = [group for group in result.get("groups", []) if str(group.get("id") or "") in visible_groups]
+            result["assigned_persona_ids"] = sorted({pid for group in result["groups"] for pid in group.get("persona_ids", [])})
+        return result
 
     @app.post("/api/persona_dashboard/groups")
-    def api_persona_dashboard_create_group(payload: PersonaDashboardGroupCreatePayload, _user: dict[str, Any] = Depends(get_current_user)):
-        return _create_persona_group(payload)
+    def api_persona_dashboard_create_group(payload: PersonaDashboardGroupCreatePayload, user: dict[str, Any] = Depends(get_current_user)):
+        result = _create_persona_group(payload)
+        group = result.get("group") if isinstance(result.get("group"), dict) else {}
+        _record_persona_group_owner(str(group.get("id") or ""), user)
+        return result
 
     @app.patch("/api/persona_dashboard/groups/{group_id}")
-    def api_persona_dashboard_rename_group(group_id: str, payload: PersonaDashboardGroupRenamePayload, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_rename_group(group_id: str, payload: PersonaDashboardGroupRenamePayload, _user: dict[str, Any] = Depends(require_persona_group_owner)):
         return _rename_persona_group(group_id, payload)
 
     @app.patch("/api/persona_dashboard/personas/{archive_id}/name")
-    def api_persona_dashboard_rename_persona(archive_id: str, payload: PersonaDashboardPersonaRenamePayload, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_rename_persona(archive_id: str, payload: PersonaDashboardPersonaRenamePayload, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _rename_persona_archive(archive_id, payload)
 
     @app.delete("/api/persona_dashboard/groups/{group_id}")
-    def api_persona_dashboard_delete_group(group_id: str, _user: dict[str, Any] = Depends(get_current_user)):
-        return _delete_persona_group(group_id)
+    def api_persona_dashboard_delete_group(group_id: str, _user: dict[str, Any] = Depends(require_persona_group_owner)):
+        result = _delete_persona_group(group_id)
+        with db() as conn:
+            conn.execute("DELETE FROM persona_group_owners WHERE group_id = ?", (str(group_id or "").strip(),))
+        return result
 
     @app.post("/api/persona_dashboard/groups/{group_id}/collapse")
-    def api_persona_dashboard_collapse_group(group_id: str, payload: dict[str, Any], _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_collapse_group(group_id: str, payload: dict[str, Any], _user: dict[str, Any] = Depends(require_persona_group_owner)):
         return _set_persona_group_collapsed(group_id, bool((payload or {}).get("collapsed")))
 
     @app.post("/api/persona_dashboard/groups/{group_id}/personas")
-    def api_persona_dashboard_add_group_persona(group_id: str, payload: PersonaDashboardGroupPersonaPayload, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_add_group_persona(group_id: str, payload: PersonaDashboardGroupPersonaPayload, user: dict[str, Any] = Depends(require_persona_group_owner)):
+        _require_persona_access(payload.persona_id, user)
         return _add_persona_to_group(group_id, payload)
 
     @app.delete("/api/persona_dashboard/groups/{group_id}/personas/{archive_id}")
-    def api_persona_dashboard_remove_group_persona(group_id: str, archive_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_remove_group_persona(group_id: str, archive_id: str, user: dict[str, Any] = Depends(require_persona_group_owner)):
+        _require_persona_access(archive_id, user)
         return _remove_persona_from_group(group_id, archive_id)
 
     @app.post("/api/persona_dashboard/groups/reorder")
-    def api_persona_dashboard_reorder_groups(payload: PersonaDashboardGroupReorderPayload, _user: dict[str, Any] = Depends(get_current_user)):
-        return _reorder_persona_groups(payload)
+    def api_persona_dashboard_reorder_groups(payload: PersonaDashboardGroupReorderPayload, user: dict[str, Any] = Depends(get_current_user)):
+        for item in payload.groups:
+            _require_persona_group_access(item.id, user)
+            for persona_id in item.persona_ids:
+                _require_persona_access(persona_id, user)
+        for persona_id in payload.ungrouped_persona_ids:
+            _require_persona_access(persona_id, user)
+        result = _reorder_persona_groups(payload)
+        visible_groups = _visible_persona_group_ids(user)
+        if visible_groups is not None:
+            result["groups"] = [group for group in result.get("groups", []) if str(group.get("id") or "") in visible_groups]
+            result["ungrouped_persona_ids"] = [pid for pid in result.get("ungrouped_persona_ids", []) if pid in (_visible_persona_ids(user) or set())]
+        return result
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/hot_candidates")
-    def api_persona_dashboard_fetch_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_fetch_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _fetch_persona_hot_candidates(archive_id, payload)
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/hot_candidates/import")
-    def api_persona_dashboard_import_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesImportPayload, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_import_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesImportPayload, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _import_persona_hot_candidates(archive_id, payload)
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}/hot_metrics/refresh")
-    def api_persona_dashboard_refresh_hot_post(archive_id: str, post_id: str, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_refresh_hot_post(archive_id: str, post_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _refresh_persona_hot_post(archive_id, post_id)
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/posts")
-    def api_persona_dashboard_create_post(archive_id: str, payload: PersonaDashboardDraftPostPayload, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_create_post(archive_id: str, payload: PersonaDashboardDraftPostPayload, user: dict[str, Any] = Depends(require_persona_owner)):
+        _require_user_media_paths(payload.media_paths, user)
         return _create_persona_archive_post(archive_id, payload)
 
     @app.patch("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}")
-    def api_persona_dashboard_update_post(archive_id: str, post_id: str, payload: PersonaDashboardDraftPostPayload, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_update_post(archive_id: str, post_id: str, payload: PersonaDashboardDraftPostPayload, user: dict[str, Any] = Depends(require_persona_owner)):
+        _require_user_media_paths(payload.media_paths, user)
         return _update_persona_archive_post(archive_id, post_id, payload)
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}/media/from_task")
-    def api_persona_dashboard_post_media_from_task(archive_id: str, post_id: str, payload: PersonaDashboardPostMediaTaskAttachPayload, user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_post_media_from_task(archive_id: str, post_id: str, payload: PersonaDashboardPostMediaTaskAttachPayload, user: dict[str, Any] = Depends(require_persona_owner)):
         return _attach_task_output_to_persona_post(
             archive_id,
             post_id,
@@ -15953,7 +16282,7 @@ def create_app() -> FastAPI:
         replace_existing: str = Form("0"),
         replace_index: str = Form(""),
         files: list[UploadFile] = File(default=[]),
-        user: dict[str, Any] = Depends(get_current_user),
+        user: dict[str, Any] = Depends(require_persona_owner),
     ):
         upload_id = _new_id("personamedia")
         saved_paths: list[str] = []
@@ -15976,7 +16305,7 @@ def create_app() -> FastAPI:
         replace_existing: str = Form("0"),
         replace_index: str = Form(""),
         files: list[UploadFile] = File(default=[]),
-        user: dict[str, Any] = Depends(get_current_user),
+        user: dict[str, Any] = Depends(require_persona_owner),
     ):
         upload_id = _new_id("personafavmedia")
         saved_paths: list[str] = []
@@ -15994,15 +16323,15 @@ def create_app() -> FastAPI:
         )
 
     @app.delete("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}/media/{index}")
-    def api_persona_dashboard_delete_post_media(archive_id: str, post_id: str, index: int, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_delete_post_media(archive_id: str, post_id: str, index: int, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _delete_persona_archive_post_media_item(archive_id, post_id, index)
 
     @app.delete("/api/persona_dashboard/personas/{archive_id}/favorites/{post_id}/media/{index}")
-    def api_persona_dashboard_delete_favorite_media(archive_id: str, post_id: str, index: int, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_delete_favorite_media(archive_id: str, post_id: str, index: int, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _delete_persona_archive_post_media_item(archive_id, post_id, index, source="favorites")
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/generate_posts")
-    def api_persona_dashboard_generate_posts(archive_id: str, payload: PersonaDashboardGeneratePostsPayload, _user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_generate_posts(archive_id: str, payload: PersonaDashboardGeneratePostsPayload, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _generate_persona_archive_posts(archive_id, payload)
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}/publish")
@@ -16010,62 +16339,89 @@ def create_app() -> FastAPI:
         archive_id: str,
         post_id: str,
         payload: PersonaDashboardDraftPublishPayload,
-        _user: dict[str, Any] = Depends(get_current_user),
+        user: dict[str, Any] = Depends(require_persona_owner),
     ):
-        return _publish_persona_archive_post(archive_id, post_id, payload)
+        _require_user_media_paths(payload.media_paths, user)
+        if payload.account_id:
+            _require_social_account_access(payload.account_id, user)
+        return _publish_persona_archive_post(
+            archive_id,
+            post_id,
+            payload,
+            owner_user_id=None if _is_admin(user) else _identity_user_id(user),
+        )
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/favorites/{post_id}/publish")
     def api_persona_dashboard_publish_favorite_post(
         archive_id: str,
         post_id: str,
         payload: PersonaDashboardDraftPublishPayload,
-        _user: dict[str, Any] = Depends(get_current_user),
+        user: dict[str, Any] = Depends(require_persona_owner),
     ):
-        return _publish_persona_archive_post(archive_id, post_id, payload, source="favorites")
+        _require_user_media_paths(payload.media_paths, user)
+        if payload.account_id:
+            _require_social_account_access(payload.account_id, user)
+        return _publish_persona_archive_post(
+            archive_id,
+            post_id,
+            payload,
+            source="favorites",
+            owner_user_id=None if _is_admin(user) else _identity_user_id(user),
+        )
 
     @app.post("/api/persona_dashboard/matrix_publish")
     def api_persona_dashboard_matrix_publish(
         payload: PersonaDashboardMatrixPublishPayload,
-        _user: dict[str, Any] = Depends(get_current_user),
+        user: dict[str, Any] = Depends(get_current_user),
     ):
-        return _publish_persona_matrix(payload)
+        for persona_id in payload.persona_ids:
+            _require_persona_access(persona_id, user)
+        return _publish_persona_matrix(payload, owner_user_id=None if _is_admin(user) else _identity_user_id(user))
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/threads_binding")
-    def api_persona_dashboard_bind_threads(archive_id: str, payload: PersonaDashboardThreadsBindingPayload):
+    def api_persona_dashboard_bind_threads(archive_id: str, payload: PersonaDashboardThreadsBindingPayload, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _bind_persona_threads_username(archive_id, payload.username)
 
     @app.delete("/api/persona_dashboard/personas/{archive_id}/threads_binding")
-    def api_persona_dashboard_unbind_threads(archive_id: str):
+    def api_persona_dashboard_unbind_threads(archive_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _unbind_persona_threads_username(archive_id)
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/profile")
-    def api_persona_dashboard_persona_profile(archive_id: str):
+    def api_persona_dashboard_persona_profile(archive_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _read_persona_dashboard_profile(archive_id)
 
     @app.patch("/api/persona_dashboard/personas/{archive_id}/profile")
-    def api_persona_dashboard_update_persona_profile(archive_id: str, payload: PersonaDashboardPersonaProfilePayload):
+    def api_persona_dashboard_update_persona_profile(archive_id: str, payload: PersonaDashboardPersonaProfilePayload, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _update_persona_dashboard_profile(archive_id, payload)
 
     @app.delete("/api/persona_dashboard/personas/{archive_id}")
-    def api_persona_dashboard_delete_persona(archive_id: str):
-        return _delete_persona_dashboard_persona(archive_id)
+    def api_persona_dashboard_delete_persona(archive_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
+        result = _delete_persona_dashboard_persona(archive_id)
+        _delete_persona_owner(archive_id)
+        return result
 
     @app.delete("/api/persona_dashboard/personas/{archive_id}/posts/by_id/{post_id}")
-    def api_persona_dashboard_delete_post_by_id(archive_id: str, post_id: str):
+    def api_persona_dashboard_delete_post_by_id(archive_id: str, post_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _delete_persona_dashboard_post_by_id(archive_id, post_id)
 
     @app.delete("/api/persona_dashboard/personas/{archive_id}/posts/{post_key}")
-    def api_persona_dashboard_delete_post(archive_id: str, post_key: str):
+    def api_persona_dashboard_delete_post(archive_id: str, post_key: str, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _delete_persona_dashboard_post(archive_id, post_key)
 
     @app.post("/api/persona_dashboard/refresh")
-    def api_persona_dashboard_refresh(payload: PersonaDashboardRefreshPayload):
-        return _start_persona_dashboard_refresh(payload.archive_id)
+    def api_persona_dashboard_refresh(payload: PersonaDashboardRefreshPayload, user: dict[str, Any] = Depends(get_current_user)):
+        if payload.archive_id:
+            _require_persona_access(payload.archive_id, user)
+        elif not _is_admin(user):
+            raise HTTPException(status_code=400, detail="普通用户刷新时必须指定人设")
+        task = _start_persona_dashboard_refresh(payload.archive_id)
+        task["user_id"] = _identity_user_id(user)
+        return task
 
     @app.get("/api/persona_dashboard/refresh/{task_id}")
-    def api_persona_dashboard_refresh_status(task_id: str):
+    def api_persona_dashboard_refresh_status(task_id: str, user: dict[str, Any] = Depends(get_current_user)):
         task = PERSONA_DASHBOARD_REFRESH_TASKS.get(str(task_id or "").strip())
-        if not task:
+        if not task or (not _is_admin(user) and int(task.get("user_id") or 0) != _identity_user_id(user)):
             raise HTTPException(status_code=404, detail="刷新任务不存在。")
         return task
 
@@ -17003,7 +17359,7 @@ def create_app() -> FastAPI:
                 runtime = _get_runtime_config(conn)
         except RuntimeConfigFileError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
-        return runtime
+        return _redact_runtime_config(runtime)
 
     @app.put("/api/admin/runtime_config")
     def api_admin_set_runtime_config(payload: RuntimeConfigPayload, user: dict[str, Any] = Depends(require_admin)):
@@ -17013,14 +17369,26 @@ def create_app() -> FastAPI:
         except RuntimeConfigFileError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         explicit_data = payload.model_dump(exclude_unset=True)
+        secret_preserve_keys = {
+            "telegram_bot_token",
+            "upload_file_api_key",
+            "llm_api_key",
+            "llm_api_key_gemini",
+            "llm_api_key_gpt",
+            "image_model_provider_api_key_gemini",
+            "image_model_provider_api_key_gpt",
+            "new_persona_runninghub_api_key",
+            "mulerouter_api_key",
+        }
+        for key in secret_preserve_keys:
+            value = str(explicit_data.get(key) or "").strip()
+            if key in explicit_data and (not value or "***" in value or "•" in value):
+                explicit_data.pop(key, None)
         new_telegram_bot_token = str(explicit_data.get("telegram_bot_token") or "").strip()
-        if "telegram_bot_token" in explicit_data and not new_telegram_bot_token:
-            explicit_data.pop("telegram_bot_token", None)
         merged = dict(DEFAULT_RUNTIME_CONFIG)
         if isinstance(current_runtime, dict):
             merged.update(current_runtime)
         merged.update({k: str(v).strip() if isinstance(v, str) else v for k, v in explicit_data.items()})
-        secret_preserve_keys = ("new_persona_runninghub_api_key",)
         for key in secret_preserve_keys:
             current_value = explicit_data.get(key)
             saved_value = current_runtime.get(key) if isinstance(current_runtime, dict) else None
@@ -17035,7 +17403,7 @@ def create_app() -> FastAPI:
             _sync_tool_r18_api_config_from_runtime(merged, explicit_data)
         except RuntimeConfigFileError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
-        return {"ok": True, "runtime_config": merged}
+        return {"ok": True, "runtime_config": _redact_runtime_config(merged)}
 
     @app.get("/browser-auth-extension/download")
     def browser_auth_extension_download(request: Request, user: dict[str, Any] = Depends(require_admin)):
@@ -17051,19 +17419,10 @@ def create_app() -> FastAPI:
 
     @app.get("/browser-auth-extension/config.json")
     def browser_auth_extension_config(request: Request):
-        try:
-            config, is_admin = _sentiment_browser_auth_config_access(request)
-        except HTTPException as exc:
-            if exc.status_code != 403:
-                raise
-            # The extension needs this config to bootstrap the first sync token.
-            # Older helpers can lose local storage, and requiring the token here
-            # makes automatic recovery impossible.
-            config = _read_sentiment_config_file()
-            is_admin = True
+        config, is_admin = _sentiment_browser_auth_config_access(request)
         return JSONResponse(
             _sentiment_browser_auth_extension_config(request, config, include_auth_token=is_admin),
-            headers={"Cache-Control": "no-cache", "Access-Control-Allow-Origin": "*"},
+            headers={"Cache-Control": "no-store", "Access-Control-Allow-Origin": "*"},
         )
 
     @app.options("/browser-auth-extension/config.json")
@@ -17413,7 +17772,9 @@ def create_app() -> FastAPI:
         with db() as conn:
             rows = conn.execute(
                 """
-                SELECT id, username, is_admin, is_disabled, balance_cents, created_at, updated_at
+                SELECT id, username, is_admin, is_disabled, balance_cents, account_type,
+                       approval_status, full_name, email, phone, company, use_case, admin_note,
+                       approved_at, approved_by, last_login_at, created_at, updated_at
                 FROM users
                 ORDER BY created_at DESC
                 LIMIT ?
@@ -17437,14 +17798,18 @@ def create_app() -> FastAPI:
             try:
                 conn.execute(
                     """
-                    INSERT INTO users(username, password_hash, is_admin, is_disabled, balance_cents, created_at, updated_at)
-                    VALUES (?, ?, ?, 0, ?, ?, ?)
+                    INSERT INTO users(
+                      username, password_hash, is_admin, is_disabled, balance_cents,
+                      account_type, approval_status, approved_at, approved_by, created_at, updated_at
+                    ) VALUES (?, ?, ?, 0, ?, 'managed', 'approved', ?, ?, ?, ?)
                     """,
                     (
                         username,
                         pwd_hash,
                         1 if bool(payload.is_admin) else 0,
                         max(int(payload.balance_cents or 0), 0),
+                        now,
+                        int(user.get("id") or 0),
                         now,
                         now,
                     ),
@@ -17454,12 +17819,115 @@ def create_app() -> FastAPI:
                     raise HTTPException(status_code=409, detail="用户名已存在") from exc
                 raise
             row = conn.execute(
-                "SELECT id, username, is_admin, is_disabled, balance_cents, created_at, updated_at FROM users WHERE username = ?",
+                """SELECT id, username, is_admin, is_disabled, balance_cents, account_type,
+                           approval_status, full_name, email, phone, company, use_case, admin_note,
+                           approved_at, approved_by, last_login_at, created_at, updated_at
+                    FROM users WHERE username = ?""",
                 (username,),
             ).fetchone()
         if row is None:
             raise HTTPException(status_code=500, detail="创建客户账号失败")
         return {"ok": True, "user": dict(row)}
+
+    @app.get("/api/admin/users/{target_user_id}")
+    def api_admin_user_detail(target_user_id: int, user: dict[str, Any] = Depends(require_admin)):
+        with db() as conn:
+            row = conn.execute(
+                """SELECT target.id, target.username, target.is_admin, target.is_disabled,
+                          target.balance_cents, target.account_type, target.approval_status,
+                          target.full_name, target.email, target.phone, target.company,
+                          target.use_case, target.admin_note, target.approved_at, target.approved_by,
+                          target.last_login_at, target.created_at, target.updated_at,
+                          CASE WHEN target.password_hash <> '' THEN 1 ELSE 0 END AS password_configured,
+                          approver.username AS approved_by_username
+                   FROM users AS target
+                   LEFT JOIN users AS approver ON approver.id = target.approved_by
+                   WHERE target.id = ?""",
+                (int(target_user_id),),
+            ).fetchone()
+            resource_counts = {
+                "personas": int(conn.execute("SELECT COUNT(*) AS c FROM persona_owners WHERE user_id = ?", (int(target_user_id),)).fetchone()["c"]),
+                "persona_groups": int(conn.execute("SELECT COUNT(*) AS c FROM persona_group_owners WHERE user_id = ?", (int(target_user_id),)).fetchone()["c"]),
+                "social_accounts": int(conn.execute("SELECT COUNT(*) AS c FROM social_accounts WHERE user_id = ?", (int(target_user_id),)).fetchone()["c"]),
+                "social_proxies": int(conn.execute("SELECT COUNT(*) AS c FROM social_proxies WHERE user_id = ?", (int(target_user_id),)).fetchone()["c"]),
+                "social_tasks": int(conn.execute("SELECT COUNT(*) AS c FROM social_automation_tasks WHERE user_id = ?", (int(target_user_id),)).fetchone()["c"]),
+            }
+        if row is None:
+            raise HTTPException(status_code=404, detail="客户账号不存在")
+        return {"user": dict(row), "resource_counts": resource_counts}
+
+    @app.post("/api/admin/users/{target_user_id}/reset-password")
+    def api_admin_reset_user_password(
+        target_user_id: int,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        temporary_password = secrets.token_urlsafe(18)
+        try:
+            password_hash = hash_password(temporary_password)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        now = _now_ts()
+        with db() as conn:
+            row = conn.execute(
+                "SELECT id, is_admin FROM users WHERE id = ?",
+                (int(target_user_id),),
+            ).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="客户账号不存在")
+            if int(row["is_admin"] or 0) == 1:
+                raise HTTPException(status_code=400, detail="管理员密码请在账号设置中修改")
+            conn.execute(
+                "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
+                (password_hash, now, int(target_user_id)),
+            )
+            conn.execute("DELETE FROM sessions WHERE user_id = ?", (int(target_user_id),))
+        return JSONResponse(
+            content={"ok": True, "temporary_password": temporary_password},
+            headers={
+                "Cache-Control": "no-store, max-age=0",
+                "Pragma": "no-cache",
+            },
+        )
+
+    @app.post("/api/admin/users/{target_user_id}/approval")
+    def api_admin_user_approval(
+        target_user_id: int,
+        payload: UserApprovalPayload,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        status = str(payload.approval_status or "").strip().lower()
+        expected_status = str(payload.expected_approval_status or "").strip().lower()
+        if status not in {"approved", "rejected"}:
+            raise HTTPException(status_code=400, detail="无效的授权状态")
+        allowed_transitions = {
+            "pending": {"approved", "rejected"},
+            "rejected": {"approved"},
+        }
+        if status not in allowed_transitions.get(expected_status, set()):
+            raise HTTPException(status_code=409, detail="当前账号状态不允许执行该审核操作")
+        note = str(payload.admin_note or "").strip()[:1000]
+        now = _now_ts()
+        with db() as conn:
+            row = conn.execute("SELECT id, is_admin, approval_status FROM users WHERE id = ?", (int(target_user_id),)).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="客户账号不存在")
+            if int(row["is_admin"] or 0) == 1:
+                raise HTTPException(status_code=400, detail="管理员账号不需要访客授权")
+            if str(row["approval_status"] or "") != expected_status:
+                raise HTTPException(status_code=409, detail="账号状态已变化，请刷新后重试")
+            updated = conn.execute(
+                """UPDATE users
+                   SET approval_status = ?, is_disabled = ?, admin_note = ?, approved_at = ?,
+                       approved_by = ?, updated_at = ?
+                   WHERE id = ? AND approval_status = ?""",
+                (status, 0 if status == "approved" else 1, note, now if status == "approved" else 0,
+                 int(user.get("id") or 0), now, int(target_user_id), expected_status),
+            )
+            if updated.rowcount != 1:
+                raise HTTPException(status_code=409, detail="账号状态已变化，请刷新后重试")
+            if status != "approved":
+                conn.execute("DELETE FROM sessions WHERE user_id = ?", (int(target_user_id),))
+        return {"ok": True, "approval_status": status}
 
     @app.delete("/api/admin/users/{target_user_id}")
     def api_admin_delete_user(target_user_id: int, user: dict[str, Any] = Depends(require_admin)):
@@ -17467,12 +17935,19 @@ def create_app() -> FastAPI:
         current_id = int(user.get("id") or 0)
         if target_id == current_id:
             raise HTTPException(status_code=400, detail="不能删除当前登录管理员")
+        cancel_all_social_tasks("所属用户已删除", user_id=target_id)
         with db() as conn:
             row = conn.execute("SELECT id, is_admin FROM users WHERE id = ?", (target_id,)).fetchone()
             if row is None:
                 raise HTTPException(status_code=404, detail="客户账号不存在")
             task_rows = conn.execute("SELECT id FROM tasks WHERE user_id = ?", (target_id,)).fetchall()
             task_ids = [str(r["id"]) for r in task_rows]
+            now = _now_ts()
+            conn.execute("UPDATE social_accounts SET user_id = 0, updated_at = ? WHERE user_id = ?", (now, target_id))
+            conn.execute("UPDATE social_proxies SET user_id = 0, updated_at = ? WHERE user_id = ?", (now, target_id))
+            conn.execute("UPDATE social_automation_tasks SET user_id = 0, updated_at = ? WHERE user_id = ?", (now, target_id))
+            conn.execute("UPDATE persona_owners SET user_id = 0, updated_at = ? WHERE user_id = ?", (now, target_id))
+            conn.execute("UPDATE persona_group_owners SET user_id = 0, updated_at = ? WHERE user_id = ?", (now, target_id))
             conn.execute("DELETE FROM users WHERE id = ?", (target_id,))
         for tid in task_ids:
             _delete_task_artifacts(tid)
@@ -17516,14 +17991,26 @@ def create_app() -> FastAPI:
         payload: UserTogglePayload,
         user: dict[str, Any] = Depends(require_admin),
     ):
+        target_id = int(target_user_id)
+        current_id = int(user.get("id") or 0)
+        if payload.is_disabled and target_id == current_id:
+            raise HTTPException(status_code=400, detail="不能禁用当前登录管理员")
         with db() as conn:
-            row = conn.execute("SELECT * FROM users WHERE id = ?", (int(target_user_id),)).fetchone()
+            row = conn.execute("SELECT * FROM users WHERE id = ?", (target_id,)).fetchone()
             if row is None:
                 raise HTTPException(status_code=404, detail="客户账号不存在")
+            if payload.is_disabled and int(row["is_admin"] or 0) == 1:
+                active_admins = conn.execute(
+                    "SELECT COUNT(*) AS count FROM users WHERE is_admin = 1 AND is_disabled = 0"
+                ).fetchone()
+                if active_admins is None or int(active_admins["count"] or 0) <= 1:
+                    raise HTTPException(status_code=409, detail="不能禁用最后一个可用管理员")
             conn.execute(
                 "UPDATE users SET is_disabled = ?, updated_at = ? WHERE id = ?",
-                (1 if payload.is_disabled else 0, _now_ts(), int(target_user_id)),
+                (1 if payload.is_disabled else 0, _now_ts(), target_id),
             )
+            if payload.is_disabled:
+                conn.execute("DELETE FROM sessions WHERE user_id = ?", (target_id,))
         return {"ok": True}
 
     @app.get("/api/admin/tasks")

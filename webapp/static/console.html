@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Web 任务控制台</title>
+  <link rel="stylesheet" href="/assets/style.css?v=__STYLE_VERSION__" />
   <link rel="stylesheet" href="/assets/console.css?v=__CONSOLE_CSS_VERSION__" />
 </head>
   <body>
@@ -32,7 +33,7 @@
       </nav>
 
       <div class="sidebar-bottom-actions">
-        <a href="/persona-dashboard.html">人设看板</a>
+        <button type="button" data-view="persona_dashboard">人设看板</button>
         <button id="consoleSettings" type="button" data-view="console_settings" class="settings-entry">
           <span class="settings-entry-icon" aria-hidden="true">⚙</span>
           <span>设置</span>
@@ -123,6 +124,99 @@
         <div id="consoleSettingsBody"></div>
         <div id="consoleSettingsMsg" class="notice"></div>
       </section>
+
+      <section class="view persona-dashboard-view" data-panel="persona_dashboard">
+        <div id="personaDashboardApp" class="persona-dashboard-app">
+          <section class="persona-dashboard-hero">
+            <div>
+              <div class="eyebrow">运营数据</div>
+              <h2>人设看板</h2>
+              <div class="meta">集中查看人设的素材、发布、热点和流量趋势；可按当前权限刷新已绑定账号的数据。</div>
+            </div>
+            <div class="persona-dashboard-actions">
+              <div class="small" id="personaDashboardUpdated">尚未加载</div>
+              <div class="persona-dashboard-action-buttons">
+                <button id="btnPersonaDashboardRefresh" type="button">刷新看板</button>
+                <button id="btnPersonaDashboardRefreshAll" class="primary" type="button">全量刷新</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="persona-dashboard-page">
+            <div class="persona-dashboard-filters">
+              <div>
+                <label for="personaDashboardSearch">搜索人设</label>
+                <input id="personaDashboardSearch" type="search" placeholder="输入人设名、内容关键词" />
+              </div>
+              <div>
+                <label for="personaDashboardPlatform">平台</label>
+                <select id="personaDashboardPlatform">
+                  <option value="">全部平台</option>
+                  <option value="threads">Threads</option>
+                </select>
+              </div>
+              <div>
+                <label for="personaDashboardRange">时间范围</label>
+                <select id="personaDashboardRange">
+                  <option value="all">全部</option>
+                  <option value="7">最近 7 天</option>
+                  <option value="30">最近 30 天</option>
+                  <option value="90">最近 90 天</option>
+                </select>
+              </div>
+            </div>
+
+            <div id="personaDashboardMsg" class="msg"></div>
+            <div class="persona-person-layout">
+              <aside id="personaDashboardTabs" class="persona-tab-rail" aria-label="人设分栏"></aside>
+              <div class="persona-workbench-panel">
+                <div id="personaOverviewPane" class="persona-overview-pane">
+                  <div class="persona-list-head">
+                    <div>
+                      <h3>总览首页</h3>
+                      <div class="small" id="personaDashboardMeta">正在加载人设明细...</div>
+                    </div>
+                  </div>
+                  <div id="personaDashboardSummary" class="persona-kpi-grid"></div>
+                  <div class="persona-chart-grid">
+                    <div class="persona-chart-panel persona-chart-panel-wide">
+                      <div class="persona-chart-head"><h3>人设热度排行</h3><span class="small">热度 = 逐帖浏览 + 点赞 + 评论 + 分享 + 转发，不含账号主页浏览</span></div>
+                      <div id="personaHotRankChart" class="persona-chart"></div>
+                    </div>
+                    <div class="persona-chart-panel">
+                      <div class="persona-chart-head"><h3>平台分布</h3><span class="small">发布与热点平台占比</span></div>
+                      <div id="personaPlatformChart" class="persona-chart"></div>
+                    </div>
+                    <div class="persona-chart-panel">
+                      <div class="persona-chart-head"><h3>热点覆盖</h3><span class="small">完整、部分、暂无数据</span></div>
+                      <div id="personaCoverageChart" class="persona-chart"></div>
+                    </div>
+                    <div class="persona-chart-panel persona-chart-panel-wide">
+                      <div class="persona-chart-head"><h3>流量走势</h3><span class="small">发布、互动、逐帖浏览按日期聚合</span></div>
+                      <div id="personaTrendChart" class="persona-chart persona-chart-tall"></div>
+                    </div>
+                    <div class="persona-chart-panel">
+                      <div class="persona-chart-head"><h3>互动构成</h3><span class="small">不含浏览量</span></div>
+                      <div id="personaEngagementChart" class="persona-chart"></div>
+                    </div>
+                    <div class="persona-chart-panel">
+                      <div class="persona-chart-head"><h3>任务状态</h3><span class="small">发布队列缓存</span></div>
+                      <div id="personaTaskStatusChart" class="persona-chart"></div>
+                    </div>
+                  </div>
+                  <div class="persona-dashboard-note"><strong>指标说明：</strong>账号主页浏览是账号主页级数据；逐帖浏览合计是单条帖子数据，两者分开展示，不合并。</div>
+                </div>
+                <div id="personaDashboardEmpty" class="task-empty" style="display:none">
+                  <div class="task-empty-title">暂无人设数据</div>
+                  <div class="small">当前缓存里没有可展示的人设归档。</div>
+                </div>
+                <div id="personaDashboardList" class="persona-dashboard-list"></div>
+                <div id="personaDashboardSettings" class="persona-settings-pane" style="display:none"></div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
     </main>
   </div>
 
@@ -130,5 +224,6 @@
     window.__CONSOLE_BOOTSTRAP__ = __CONSOLE_BOOTSTRAP_JSON__;
   </script>
   <script src="/assets/console.js?v=__CONSOLE_JS_VERSION__"></script>
+  <script src="/assets/persona-dashboard.js?v=__PERSONA_DASHBOARD_JS_VERSION__"></script>
 </body>
 </html>

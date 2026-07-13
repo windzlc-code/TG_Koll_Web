@@ -138,6 +138,7 @@ export interface FetchSentimentHotCandidatesResult {
   candidates: SentimentHotCandidate[];
   keywords: string[];
   searchMode: SentimentHotSearchMode;
+  freshnessDays: number;
   cookieStatuses: SentimentCookieStatus[];
   warnings: string[];
 }
@@ -973,6 +974,16 @@ function isConcreteSearchKeyword(value: unknown): boolean {
 
 function normalizeSentimentHotSearchMode(value: unknown): SentimentHotSearchMode {
   return String(value || "").trim().toLowerCase() === "normal" ? "normal" : "strict";
+}
+
+export function normalizeSentimentHotFreshnessDays(value: unknown): number {
+  const days = Math.round(Number(value));
+  return Number.isFinite(days) ? Math.min(15, Math.max(0, days)) : 0;
+}
+
+export function candidateMatchesRequestedFreshness(candidate: SentimentHotCandidate, value: unknown): boolean {
+  const freshnessDays = normalizeSentimentHotFreshnessDays(value);
+  return freshnessDays <= 0 || candidateHasAcceptableFreshness(candidate, freshnessDays);
 }
 
 function sentimentHotKeywordTargetForMode(mode: SentimentHotSearchMode): number {
@@ -1854,6 +1865,7 @@ async function waitForMoreSentimentHotCandidates(args: {
   limit: number;
   excludeShown: boolean;
   searchMode: SentimentHotSearchMode;
+  freshnessDays: number;
 }): Promise<SentimentHotCandidate[]> {
   let candidates = args.candidates;
   for (let attempt = 0; attempt < 3 && candidates.length < args.limit; attempt += 1) {
@@ -1868,6 +1880,7 @@ async function waitForMoreSentimentHotCandidates(args: {
     const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
     const byKey = new Set(candidates.map((candidate) => sentimentCandidateDedupeKey(candidate)));
     for (const candidate of databaseCandidates) {
+      if (!candidateMatchesRequestedFreshness(candidate, args.freshnessDays)) continue;
       const dedupeKey = sentimentCandidateDedupeKey(candidate);
       if (!byId.has(candidate.id) && !byKey.has(dedupeKey)) {
         byId.set(candidate.id, candidate);
@@ -1887,12 +1900,14 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   limit?: number;
   refresh?: boolean;
   searchMode?: SentimentHotSearchMode;
+  freshnessDays?: number;
 }): Promise<FetchSentimentHotCandidatesResult> {
   const startedAt = Date.now();
   const warnings: string[] = [];
   const archive = args.archive;
   const archiveId = cleanText(archive?.id) || "default";
   const searchMode = normalizeSentimentHotSearchMode(args.searchMode);
+  const freshnessDays = normalizeSentimentHotFreshnessDays(args.freshnessDays);
   const limit = args.limit || 10;
   const personaSeedKeywords = buildSentimentHotKeywords({
     archive,
@@ -1938,6 +1953,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   const provisionalCacheStartedAt = Date.now();
   const provisionalCachedCandidates = meaningfulNeedles(provisionalKeywords).length > 0
     ? readThreadsSearchCandidateCache(archiveId, provisionalKeywords, Math.max(limit * 4, 40), true, searchMode)
+      .filter((candidate) => candidateMatchesRequestedFreshness(candidate, freshnessDays))
     : [];
   console.info(`[sentiment_hot_stage] label=provisional-cache durationMs=${Date.now() - provisionalCacheStartedAt}`);
   const provisionalGlobalStartedAt = Date.now();
@@ -1947,7 +1963,8 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
         [...sentimentHotStrategyTermsForMode(prefetchedStrategy, searchMode), ...provisionalKeywords],
         Math.max(limit * 4, 40),
         searchMode,
-      ).filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, prefetchedStrategy, searchMode))
+      ).filter((candidate) => candidateMatchesRequestedFreshness(candidate, freshnessDays)
+        && candidateMatchesSentimentHotStrategyAnchors(candidate, prefetchedStrategy, searchMode))
     : [];
   console.info(`[sentiment_hot_stage] label=provisional-global durationMs=${Date.now() - provisionalGlobalStartedAt}`);
   const provisionalCandidateMap = new Map<string, SentimentHotCandidate>();
@@ -2028,6 +2045,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       })()
     : keywords;
   warnings.push(searchMode === "normal" ? "热点抓取模式：普通（泛垂直）。" : "热点抓取模式：严格（垂直收口）。");
+  warnings.push(freshnessDays > 0 ? `热点新鲜度：近 ${freshnessDays} 天。` : "热点新鲜度：不限时间。");
   const poolLimit = Math.max(limit * 40, SENTIMENT_HOT_CANDIDATE_POOL_TARGET);
   const semanticSourceTarget = hasModelStrategy ? Math.min(poolLimit, Math.max(limit, 25)) : limit;
   const hasSearchKeywords = meaningfulNeedles(keywords).length > 0;
@@ -2035,12 +2053,14 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   const initialCacheStartedAt = Date.now();
   let candidates = hasSearchKeywords
     ? sortSentimentHotCandidatePool(readThreadsSearchCandidateCache(archiveId, keywords, poolLimit, true, searchMode), keywords, poolLimit, searchMode)
+      .filter((candidate) => candidateMatchesRequestedFreshness(candidate, freshnessDays))
     : [];
   console.info(`[sentiment_hot_stage] label=initial-cache durationMs=${Date.now() - initialCacheStartedAt}`);
   const initialCacheCount = candidates.length;
   const channelStats: string[] = [];
   const provisionalSourceStartedAt = Date.now();
-  const provisionalCandidates = await provisionalSourcePromise;
+  const provisionalCandidates = (await provisionalSourcePromise)
+    .filter((candidate) => candidateMatchesRequestedFreshness(candidate, freshnessDays));
   console.info(`[sentiment_hot_stage] label=provisional-source-wait durationMs=${Date.now() - provisionalSourceStartedAt}`);
   if (provisionalCandidates.length > 0) {
     const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
@@ -2089,6 +2109,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       limit,
       refresh: true,
       searchMode,
+      freshnessDays,
       warnings,
     });
     candidates = candidates.slice(0, poolLimit);
@@ -2134,6 +2155,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
     const byKey = new Set(candidates.map((candidate) => sentimentCandidateDedupeKey(candidate)));
     for (const candidate of threadsCandidates) {
+      if (!candidateMatchesRequestedFreshness(candidate, freshnessDays)) continue;
       const dedupeKey = sentimentCandidateDedupeKey(candidate);
       if (!byId.has(candidate.id) && !byKey.has(dedupeKey)) {
         byId.set(candidate.id, candidate);
@@ -2159,6 +2181,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       limit,
       refresh: args.refresh === true,
       searchMode,
+      freshnessDays,
       warnings,
     });
     candidates = candidates.slice(0, Math.max(limit * 40, SENTIMENT_HOT_CANDIDATE_POOL_TARGET));
@@ -2196,6 +2219,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
       const byKey = new Set(candidates.map((candidate) => sentimentCandidateDedupeKey(candidate)));
       for (const candidate of instagramCandidates) {
+        if (!candidateMatchesRequestedFreshness(candidate, freshnessDays)) continue;
         const dedupeKey = sentimentCandidateDedupeKey(candidate);
         if (!byId.has(candidate.id) && !byKey.has(dedupeKey)) {
           byId.set(candidate.id, candidate);
@@ -2247,6 +2271,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
       const byKey = new Set(candidates.map((candidate) => sentimentCandidateDedupeKey(candidate)));
       for (const candidate of databaseCandidates) {
+        if (!candidateMatchesRequestedFreshness(candidate, freshnessDays)) continue;
         const dedupeKey = sentimentCandidateDedupeKey(candidate);
         if (!byId.has(candidate.id) && !byKey.has(dedupeKey)) {
           byId.set(candidate.id, candidate);
@@ -2268,6 +2293,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       limit: poolLimit,
       excludeShown: true,
       searchMode,
+      freshnessDays,
     });
     if (candidates.length > beforeWaitCount) {
       channelStats.push(`即時掃描新增 ${candidates.length - beforeWaitCount}`);
@@ -2284,6 +2310,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       limit,
       refresh: args.refresh === true,
       searchMode,
+      freshnessDays,
       warnings,
     });
     candidates = candidates.slice(0, Math.max(limit * 40, SENTIMENT_HOT_CANDIDATE_POOL_TARGET));
@@ -2311,7 +2338,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     candidates = strategyCandidatePool.filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode));
   }
   const displayCandidatePool = candidates;
-  candidates = finalizeSentimentHotCandidatesForDisplay(displayCandidatePool, limit, { archiveId, keywords, excludeShown: true, searchMode });
+  candidates = finalizeSentimentHotCandidatesForDisplay(displayCandidatePool, limit, { archiveId, keywords, excludeShown: true, searchMode, freshnessDays });
   if (candidates.length < limit) {
     const selectedKeys = new Set(candidates.flatMap((candidate) => getSentimentHotCandidateHistoryKeys(candidate)));
     const shownAtMap = getSentimentHotShownAtMap(archiveId);
@@ -2323,6 +2350,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       keywords,
       excludeShown: false,
       searchMode,
+      freshnessDays,
     })
       .filter((candidate) => {
         const historyKeys = getSentimentHotCandidateHistoryKeys(candidate);
@@ -2342,6 +2370,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       keywords,
       excludeShown: false,
       searchMode: "normal",
+      freshnessDays,
     })
       .filter((candidate) => getSentimentHotCandidateHistoryKeys(candidate).every((key) => !selectedKeys.has(key)))
       .slice(0, searchMode === "strict"
@@ -2366,6 +2395,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       keywords,
       excludeShown: false,
       searchMode: "normal",
+      freshnessDays,
     })
       .filter((candidate) => getSentimentHotCandidateHistoryKeys(candidate).every((key) => !selectedKeys.has(key)))
       .slice(0, searchMode === "strict"
@@ -2421,7 +2451,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     warnings.push(`\u672c\u6b21\u53ea\u627e\u5230\u0020${candidates.length}/${limit}\u0020\u7bc7\u9ad8\u71b1\u5ea6\u4e2d\u6587\u71b1\u9ede\uff0c\u5df2\u904e\u6ffe\u91cd\u8907\u3001\u975e\u4e2d\u6587\u6216\u4f4e\u71b1\u5ea6\u5167\u5bb9\u3002`);
   }
   scheduleSentimentRuntimeShutdown();
-  return { candidates, keywords, searchMode, cookieStatuses, warnings };
+  return { candidates, keywords, searchMode, freshnessDays, cookieStatuses, warnings };
 }
 
 export async function fetchSentimentHotCandidates(args: {
@@ -2431,6 +2461,7 @@ export async function fetchSentimentHotCandidates(args: {
   limit?: number;
   refresh?: boolean;
   searchMode?: SentimentHotSearchMode;
+  freshnessDays?: number;
 }): Promise<FetchSentimentHotCandidatesResult> {
   const archiveId = cleanText(args.archive?.id) || "default";
   const searchMode = normalizeSentimentHotSearchMode(args.searchMode);
@@ -2444,6 +2475,7 @@ async function fillSentimentHotCandidatesToLimit(args: {
   limit: number;
   refresh?: boolean;
   searchMode?: SentimentHotSearchMode;
+  freshnessDays?: number;
   warnings: string[];
 }): Promise<SentimentHotCandidate[]> {
   const out: SentimentHotCandidate[] = [];
@@ -2456,7 +2488,7 @@ async function fillSentimentHotCandidatesToLimit(args: {
     if (args.refresh === true && getSentimentHotCandidateHistoryKeys({ ...candidate, content }).some((key) => shownHistoryKeys.has(key))) return;
     const dedupeKey = sentimentCandidateDedupeKey(candidate, content);
     if (seenDedupeKeys.has(dedupeKey)) return;
-    const normalized = candidateMeetsDisplayQuality({ ...candidate, content }, qualityKeywords, qualityMode);
+    const normalized = candidateMeetsDisplayQuality({ ...candidate, content }, qualityKeywords, qualityMode, args.freshnessDays);
     if (!normalized) return;
     seen.add(normalized.id);
     seenDedupeKeys.add(dedupeKey);
@@ -2796,13 +2828,16 @@ function sentimentHotPublishedAtMs(candidate: SentimentHotCandidate): number | n
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function candidateHasAcceptableFreshness(candidate: SentimentHotCandidate): boolean {
+function candidateHasAcceptableFreshness(candidate: SentimentHotCandidate, freshnessDays = 0): boolean {
   const publishedAt = sentimentHotPublishedAtMs(candidate);
   if (publishedAt === null) {
+    if (normalizeSentimentHotFreshnessDays(freshnessDays) > 0) return false;
     return !isArchiveScopedFallbackCandidate(candidate) && sentimentCandidateSource(candidate) !== "database";
   }
   const age = Date.now() - publishedAt;
-  return age >= -24 * 60 * 60 * 1000 && age <= SENTIMENT_HOT_MAX_PUBLISHED_AGE_MS;
+  const requestedMaxAgeMs = normalizeSentimentHotFreshnessDays(freshnessDays) * 24 * 60 * 60 * 1000;
+  const maxAgeMs = requestedMaxAgeMs > 0 ? requestedMaxAgeMs : SENTIMENT_HOT_MAX_PUBLISHED_AGE_MS;
+  return age >= -24 * 60 * 60 * 1000 && age <= maxAgeMs;
 }
 
 function sentimentHotFreshnessRank(candidate: SentimentHotCandidate): number {
@@ -2821,7 +2856,7 @@ function compareSentimentHotFreshness(a: SentimentHotCandidate, b: SentimentHotC
   return (sentimentHotPublishedAtMs(b) || 0) - (sentimentHotPublishedAtMs(a) || 0);
 }
 
-function candidateMeetsDisplayQuality(candidate: SentimentHotCandidate, keywords: string[] = [], searchMode: SentimentHotSearchMode = "normal"): SentimentHotCandidate | null {
+function candidateMeetsDisplayQuality(candidate: SentimentHotCandidate, keywords: string[] = [], searchMode: SentimentHotSearchMode = "normal", freshnessDays = 0): SentimentHotCandidate | null {
   const content = cleanSentimentCandidateContent(candidate.content || "");
   if (!candidate?.id || !content) return null;
   if (isLowQualitySentimentContent(content) || !isChineseSentimentCandidate(content)) return null;
@@ -2834,7 +2869,7 @@ function candidateMeetsDisplayQuality(candidate: SentimentHotCandidate, keywords
     },
   };
   if ((normalized.metrics as any)?.semanticRelevant === false) return null;
-  if (!candidateHasAcceptableFreshness(normalized)) return null;
+  if (!candidateHasAcceptableFreshness(normalized, freshnessDays)) return null;
   if (!isUsefulHotCandidate(normalized)) return null;
   if (sentimentHotHanCount(content) < minimumSentimentHotHanCountForCandidate(normalized)) return null;
   if (isNoisyReaderCandidateContent(normalized, content)) return null;
@@ -2888,7 +2923,7 @@ function sortSentimentHotCandidatePool(candidates: SentimentHotCandidate[], keyw
     .slice(0, limit);
 }
 
-export function finalizeSentimentHotCandidatesForDisplay(candidates: SentimentHotCandidate[], limit: number, options?: { archiveId?: string; keywords?: string[]; excludeShown?: boolean; searchMode?: SentimentHotSearchMode }): SentimentHotCandidate[] {
+export function finalizeSentimentHotCandidatesForDisplay(candidates: SentimentHotCandidate[], limit: number, options?: { archiveId?: string; keywords?: string[]; excludeShown?: boolean; searchMode?: SentimentHotSearchMode; freshnessDays?: number }): SentimentHotCandidate[] {
   const out: SentimentHotCandidate[] = [];
   const seenKeys = new Set<string>();
   const shownIds = options?.archiveId ? getSentimentHotShownIds(options.archiveId) : new Set<string>();
@@ -2898,7 +2933,7 @@ export function finalizeSentimentHotCandidatesForDisplay(candidates: SentimentHo
   const searchMode = normalizeSentimentHotSearchMode(options?.searchMode);
   const relevanceNeedles = buildRelevanceNeedlesForMode(keywords, searchMode);
   const sorted = candidates
-    .map((candidate) => candidateMeetsDisplayQuality(candidate, keywords, searchMode))
+    .map((candidate) => candidateMeetsDisplayQuality(candidate, keywords, searchMode, options?.freshnessDays))
     .filter((candidate): candidate is SentimentHotCandidate => Boolean(candidate))
     .sort((a, b) => {
       if (searchMode === "strict" && relevanceNeedles.length > 0) {
@@ -5541,10 +5576,13 @@ function isLikelyInstagramAuthor(value: string) {
 }
 
 const THREADS_SEARCH_CACHE_FILE = resolveRuntimeFile("sentiment_threads_search_cache.json");
+const THREADS_SEARCH_CACHE_DIR = resolveRuntimeFile("sentiment_threads_search_cache");
+const THREADS_SEARCH_CACHE_MIGRATION_MARKER = path.join(THREADS_SEARCH_CACHE_DIR, ".legacy-migrated");
 const THREADS_SEARCH_CACHE_VERSION = 5;
 const THREADS_SEARCH_CACHE_COMPATIBLE_VERSIONS = new Set([3, 4, THREADS_SEARCH_CACHE_VERSION]);
 type ThreadsSearchCacheState = Record<string, { at: string; version?: number; candidates: SentimentHotCandidate[] }>;
-let threadsSearchCacheSnapshot: { mtimeMs: number; size: number; state: ThreadsSearchCacheState } | undefined;
+const threadsSearchCacheSnapshots = new Map<string, { mtimeMs: number; size: number; state: ThreadsSearchCacheState }>();
+let threadsSearchCacheMigrationChecked = false;
 
 function isCompatibleThreadsSearchCacheRow(
   row: { at: string; version?: number; candidates: SentimentHotCandidate[] } | undefined,
@@ -5604,6 +5642,110 @@ function compactThreadsSearchCacheState(state: ReturnType<typeof readThreadsSear
   }
 }
 
+function threadsSearchCacheKeyScope(key: string): { archiveId: string; searchMode: SentimentHotSearchMode } {
+  const parts = String(key || "").split("::");
+  const archiveId = cleanText(parts[0]) || "default";
+  return {
+    archiveId,
+    searchMode: parts[1] === "normal" ? "normal" : "strict",
+  };
+}
+
+function threadsSearchCacheShardPath(archiveId: string, searchMode: SentimentHotSearchMode): string {
+  const cleanArchiveId = cleanText(archiveId) || "default";
+  const safeName = cleanArchiveId.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "persona";
+  const suffix = crypto.createHash("sha1").update(cleanArchiveId).digest("hex").slice(0, 10);
+  return path.join(THREADS_SEARCH_CACHE_DIR, `${safeName}-${suffix}-${normalizeSentimentHotSearchMode(searchMode)}.json`);
+}
+
+function readThreadsSearchCacheFile(filePath: string, force = false): ThreadsSearchCacheState {
+  try {
+    if (!fs.existsSync(filePath)) return {};
+    const stat = fs.statSync(filePath);
+    const snapshot = threadsSearchCacheSnapshots.get(filePath);
+    if (!force && snapshot && snapshot.mtimeMs === stat.mtimeMs && snapshot.size === stat.size) return snapshot.state;
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const state = parsed && typeof parsed === "object" ? parsed as ThreadsSearchCacheState : {};
+    threadsSearchCacheSnapshots.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, state });
+    return state;
+  } catch {
+    return {};
+  }
+}
+
+function writeThreadsSearchCacheFile(filePath: string, state: ThreadsSearchCacheState): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tempFile = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tempFile, JSON.stringify(state, null, 2), "utf8");
+  fs.renameSync(tempFile, filePath);
+  const stat = fs.statSync(filePath);
+  threadsSearchCacheSnapshots.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, state });
+}
+
+function migrateLegacyThreadsSearchCache(): void {
+  if (threadsSearchCacheMigrationChecked) return;
+  threadsSearchCacheMigrationChecked = true;
+  try {
+    fs.mkdirSync(THREADS_SEARCH_CACHE_DIR, { recursive: true });
+    if (fs.existsSync(THREADS_SEARCH_CACHE_MIGRATION_MARKER) || !fs.existsSync(THREADS_SEARCH_CACHE_FILE)) return;
+    const migrated = withExclusiveJsonFileLock(THREADS_SEARCH_CACHE_FILE, () => {
+      if (fs.existsSync(THREADS_SEARCH_CACHE_MIGRATION_MARKER) || !fs.existsSync(THREADS_SEARCH_CACHE_FILE)) return;
+      const legacyState = readThreadsSearchCacheFile(THREADS_SEARCH_CACHE_FILE, true);
+      const shards = new Map<string, ThreadsSearchCacheState>();
+      for (const [key, row] of Object.entries(legacyState)) {
+        const scope = threadsSearchCacheKeyScope(key);
+        const shardPath = threadsSearchCacheShardPath(scope.archiveId, scope.searchMode);
+        const state = shards.get(shardPath) || {};
+        state[key] = row;
+        shards.set(shardPath, state);
+      }
+      for (const [shardPath, legacyShard] of shards) {
+        const shardWritten = withExclusiveJsonFileLock(shardPath, () => {
+          const state = structuredClone(readThreadsSearchCacheFile(shardPath, true));
+          for (const [key, legacyRow] of Object.entries(legacyShard)) {
+            const currentRow = state[key];
+            if (!currentRow) {
+              state[key] = legacyRow;
+              continue;
+            }
+            const scope = threadsSearchCacheKeyScope(key);
+            const byId = new Map<string, SentimentHotCandidate>();
+            const byDedupeKey = new Set<string>();
+            for (const candidate of [...(currentRow.candidates || []), ...(legacyRow.candidates || [])]) {
+              if (!candidate?.id || byId.has(candidate.id)) continue;
+              const dedupeKey = sentimentCandidateDedupeKey(candidate);
+              if (byDedupeKey.has(dedupeKey)) continue;
+              byId.set(candidate.id, candidate);
+              byDedupeKey.add(dedupeKey);
+            }
+            const keyword = threadsSearchStoredKeyword(key, scope.archiveId);
+            state[key] = {
+              at: String(currentRow.at || "") >= String(legacyRow.at || "") ? currentRow.at : legacyRow.at,
+              version: THREADS_SEARCH_CACHE_VERSION,
+              candidates: sortSentimentHotCandidatePool(
+                [...byId.values()],
+                keyword ? [keyword] : [],
+                THREADS_SEARCH_CACHE_CANDIDATE_LIMIT,
+                scope.searchMode,
+              ),
+            };
+          }
+          compactThreadsSearchCacheState(state);
+          writeThreadsSearchCacheFile(shardPath, state);
+        });
+        if (!shardWritten) throw new Error(`candidate cache shard migration lock timeout: ${path.basename(shardPath)}`);
+      }
+      fs.writeFileSync(THREADS_SEARCH_CACHE_MIGRATION_MARKER, new Date().toISOString(), "utf8");
+      fs.renameSync(THREADS_SEARCH_CACHE_FILE, `${THREADS_SEARCH_CACHE_FILE}.migrated-${Date.now()}`);
+      threadsSearchCacheSnapshots.delete(THREADS_SEARCH_CACHE_FILE);
+    });
+    if (!migrated) threadsSearchCacheMigrationChecked = false;
+  } catch (error) {
+    threadsSearchCacheMigrationChecked = false;
+    throw error;
+  }
+}
+
 function threadsSearchCacheKeys(archiveId: string, keywords: string[], searchMode: SentimentHotSearchMode = "strict"): string[] {
   const scope = cleanText(archiveId) || "default";
   const mode = normalizeSentimentHotSearchMode(searchMode);
@@ -5612,27 +5754,38 @@ function threadsSearchCacheKeys(archiveId: string, keywords: string[], searchMod
     .map((keyword) => `${scope}::${mode}::${keyword.toLowerCase()}`);
 }
 
-function readThreadsSearchCacheState(force = false): ThreadsSearchCacheState {
-  try {
-    if (!fs.existsSync(THREADS_SEARCH_CACHE_FILE)) return {};
-    const stat = fs.statSync(THREADS_SEARCH_CACHE_FILE);
-    if (!force && threadsSearchCacheSnapshot
-      && threadsSearchCacheSnapshot.mtimeMs === stat.mtimeMs
-      && threadsSearchCacheSnapshot.size === stat.size) {
-      return threadsSearchCacheSnapshot.state;
-    }
-    const parsed = JSON.parse(fs.readFileSync(THREADS_SEARCH_CACHE_FILE, "utf8"));
-    const state = parsed && typeof parsed === "object" ? parsed as ThreadsSearchCacheState : {};
-    threadsSearchCacheSnapshot = { mtimeMs: stat.mtimeMs, size: stat.size, state };
-    return state;
-  } catch {
-    return {};
+function readThreadsSearchCacheShardState(archiveId: string, searchMode: SentimentHotSearchMode, force = false): ThreadsSearchCacheState {
+  migrateLegacyThreadsSearchCache();
+  return readThreadsSearchCacheFile(threadsSearchCacheShardPath(archiveId, searchMode), force);
+}
+
+function readThreadsSearchCacheState(force = false, archiveId?: string, searchMode: SentimentHotSearchMode = "strict"): ThreadsSearchCacheState {
+  migrateLegacyThreadsSearchCache();
+  if (archiveId) {
+    const mode = normalizeSentimentHotSearchMode(searchMode);
+    const primary = readThreadsSearchCacheShardState(archiveId, mode, force);
+    return mode === "normal"
+      ? { ...readThreadsSearchCacheShardState(archiveId, "strict", force), ...primary }
+      : primary;
   }
+  const merged: ThreadsSearchCacheState = {};
+  try {
+    for (const entry of fs.readdirSync(THREADS_SEARCH_CACHE_DIR, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+      Object.assign(merged, readThreadsSearchCacheFile(path.join(THREADS_SEARCH_CACHE_DIR, entry.name), force));
+    }
+  } catch {
+    return merged;
+  }
+  return merged;
 }
 
 function writeThreadsSearchCandidateCache(archiveId: string, keywords: string[], candidates: SentimentHotCandidate[], searchMode: SentimentHotSearchMode = "strict") {
-  const written = withExclusiveJsonFileLock(THREADS_SEARCH_CACHE_FILE, () => {
-    const state = readThreadsSearchCacheState(true);
+  const mode = normalizeSentimentHotSearchMode(searchMode);
+  const shardPath = threadsSearchCacheShardPath(archiveId, mode);
+  migrateLegacyThreadsSearchCache();
+  const written = withExclusiveJsonFileLock(shardPath, () => {
+    const state = structuredClone(readThreadsSearchCacheFile(shardPath, true));
     const maxAgeMs = 24 * 60 * 60 * 1000;
     const now = new Date().toISOString();
     for (const key of threadsSearchCacheKeys(archiveId, keywords, searchMode)) {
@@ -5659,18 +5812,13 @@ function writeThreadsSearchCandidateCache(archiveId: string, keywords: string[],
       };
     }
     compactThreadsSearchCacheState(state);
-    fs.mkdirSync(path.dirname(THREADS_SEARCH_CACHE_FILE), { recursive: true });
-    const tempFile = `${THREADS_SEARCH_CACHE_FILE}.${process.pid}.${Date.now()}.tmp`;
-    fs.writeFileSync(tempFile, JSON.stringify(state, null, 2), "utf8");
-    fs.renameSync(tempFile, THREADS_SEARCH_CACHE_FILE);
-    const stat = fs.statSync(THREADS_SEARCH_CACHE_FILE);
-    threadsSearchCacheSnapshot = { mtimeMs: stat.mtimeMs, size: stat.size, state };
+    writeThreadsSearchCacheFile(shardPath, state);
   });
   if (!written) console.warn("[sentiment_hot_cache] candidate cache write skipped because the file is busy");
 }
 
 function readThreadsSearchCandidateCache(archiveId: string, keywords: string[], limit: number, excludeShown = false, searchMode: SentimentHotSearchMode = "strict"): SentimentHotCandidate[] {
-  const state = readThreadsSearchCacheState();
+  const state = readThreadsSearchCacheState(false, archiveId, searchMode);
   const excluded = excludeShown ? getSentimentHotRefreshExcludedIds(archiveId) : getSentimentHotExcludedIds(archiveId);
   const byId = new Map<string, SentimentHotCandidate>();
   const maxAgeMs = 24 * 60 * 60 * 1000;
@@ -5701,7 +5849,7 @@ function isArchiveScopedFallbackCandidate(candidate: SentimentHotCandidate): boo
 }
 
 function readArchiveScopedThreadsSearchKeywords(archiveId: string, limit: number, searchMode: SentimentHotSearchMode): string[] {
-  const state = readThreadsSearchCacheState();
+  const state = readThreadsSearchCacheState(false, archiveId, searchMode);
   const scopedPrefix = `${cleanText(archiveId) || "default"}::${normalizeSentimentHotSearchMode(searchMode)}::`;
   const maxAgeMs = SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS;
   const keywords: string[] = [];
@@ -5737,7 +5885,7 @@ function readArchiveScopedThreadsSearchKeywords(archiveId: string, limit: number
 }
 
 function readArchiveScopedThreadsCandidateBackfill(archiveId: string, keywords: string[], limit: number, excludeShown = false, searchMode: SentimentHotSearchMode = "strict"): SentimentHotCandidate[] {
-  const state = readThreadsSearchCacheState();
+  const state = readThreadsSearchCacheState(false, archiveId, searchMode);
   const excluded = excludeShown ? getSentimentHotRefreshExcludedIds(archiveId) : getSentimentHotExcludedIds(archiveId);
   const byId = new Map<string, SentimentHotCandidate>();
   const maxAgeMs = SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS;
@@ -5780,6 +5928,7 @@ export type SentimentHotCandidatePoolStat = {
   searchMode: SentimentHotSearchMode;
   readyCount: number;
   newestAt: string;
+  strategyReady: boolean;
 };
 
 function readGlobalThreadsCandidateBackfill(
@@ -5822,31 +5971,69 @@ function readGlobalThreadsCandidateBackfill(
   return sortSentimentHotCandidatePool([...byId.values()], keywords, limit, searchMode);
 }
 
-export function listSentimentHotCandidatePoolStats(): SentimentHotCandidatePoolStat[] {
-  const state = readThreadsSearchCacheState();
-  const archiveIds = [...new Set(Object.keys(state)
+export function listSentimentHotCandidatePoolStats(archives: PersonaArchive[] = []): SentimentHotCandidatePoolStat[] {
+  const fallbackState = archives.length > 0 ? {} : readThreadsSearchCacheState();
+  const archiveById = new Map(archives.map((archive) => [cleanText(archive.id), archive]));
+  const archiveIds = [...new Set([
+    ...archiveById.keys(),
+    ...Object.keys(fallbackState)
     .map((key) => cleanText(key.split("::", 1)[0]))
-    .filter(Boolean))];
+    .filter(Boolean),
+  ])];
   const stats: SentimentHotCandidatePoolStat[] = [];
   for (const archiveId of archiveIds) {
+    const archive = archiveById.get(archiveId);
+    const seedKeywords = archive ? buildSentimentHotKeywords({ archive }) : [];
+    const sourceText = archive ? [archive.name, archive.content].map(cleanText).filter(Boolean).join(" ") : "";
+    const strategy = archive ? readCachedSentimentHotSearchStrategy(buildSentimentHotSearchStrategyCacheKey({
+      archive,
+      personaText: "",
+    })) : null;
+    if (strategy && archive) {
+      applyPersonaGuardToSentimentHotStrategy({
+        strategy,
+        archiveName: archive.name,
+        personaSeedKeywords: buildSentimentHotKeywords({ archive: { name: archive.name } }),
+        sourceText: cleanText(archive.name),
+      });
+    }
     for (const searchMode of ["normal", "strict"] as const) {
-      const excluded = getSentimentHotExcludedIds(archiveId);
-      const byId = new Map<string, SentimentHotCandidate>();
+      const state = readThreadsSearchCacheState(false, archiveId, searchMode);
+      const strategySource = strategy ? sentimentHotStrategyTermsForMode(strategy, searchMode) : seedKeywords;
+      const keywords = prepareSentimentHotKeywordsForMode(strategySource, searchMode, {
+        sourceText,
+        useRuleDomainFallback: !strategy,
+      });
+      const cachedCandidates = keywords.length > 0
+        ? readThreadsSearchCandidateCache(
+            archiveId,
+            keywords,
+            SENTIMENT_HOT_CANDIDATE_POOL_TARGET,
+            true,
+            searchMode,
+          )
+        : [];
+      const anchoredCandidates = strategy
+        ? cachedCandidates.filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategy, searchMode))
+        : cachedCandidates;
+      const readyCandidates = finalizeSentimentHotCandidatesForDisplay(
+        anchoredCandidates,
+        SENTIMENT_HOT_CANDIDATE_POOL_TARGET,
+        { archiveId, keywords, excludeShown: true, searchMode },
+      );
       let newestAt = "";
       for (const key of threadsSearchArchiveCacheKeys(state, archiveId, searchMode)) {
         const row = state[key];
-        if (!isCompatibleThreadsSearchCacheRow(row, SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS)) continue;
+        if (!isCompatibleThreadsSearchCacheRow(row, 24 * 60 * 60 * 1000)) continue;
         if (String(row.at || "") > newestAt) newestAt = String(row.at || "");
-        const storedKeyword = threadsSearchStoredKeyword(key, archiveId);
-        if (!storedKeyword) continue;
-        for (const candidate of row.candidates || []) {
-          if (!candidate?.id || excluded.has(candidate.id) || byId.has(candidate.id)) continue;
-          const content = cleanThreadsReaderContent(candidate.content || "");
-          const normalized = candidateMeetsDisplayQuality({ ...candidate, content }, [storedKeyword], searchMode);
-          if (normalized) byId.set(normalized.id, normalized);
-        }
       }
-      stats.push({ archiveId, searchMode, readyCount: byId.size, newestAt });
+      stats.push({
+        archiveId,
+        searchMode,
+        readyCount: readyCandidates.length,
+        newestAt,
+        strategyReady: Boolean(strategy),
+      });
     }
   }
   return stats;

@@ -52,6 +52,17 @@ def init_db() -> None:
               is_admin INTEGER NOT NULL DEFAULT 0,
               is_disabled INTEGER NOT NULL DEFAULT 0,
               balance_cents INTEGER NOT NULL DEFAULT 0,
+              account_type TEXT NOT NULL DEFAULT 'managed',
+              approval_status TEXT NOT NULL DEFAULT 'approved',
+              full_name TEXT NOT NULL DEFAULT '',
+              email TEXT NOT NULL DEFAULT '',
+              phone TEXT NOT NULL DEFAULT '',
+              company TEXT NOT NULL DEFAULT '',
+              use_case TEXT NOT NULL DEFAULT '',
+              admin_note TEXT NOT NULL DEFAULT '',
+              approved_at INTEGER NOT NULL DEFAULT 0,
+              approved_by INTEGER NOT NULL DEFAULT 0,
+              last_login_at INTEGER NOT NULL DEFAULT 0,
               created_at INTEGER NOT NULL,
               updated_at INTEGER NOT NULL
             )
@@ -129,6 +140,7 @@ def init_db() -> None:
             """
             CREATE TABLE IF NOT EXISTS social_proxies (
               id TEXT PRIMARY KEY,
+              user_id INTEGER NOT NULL DEFAULT 0,
               name TEXT NOT NULL,
               proxy_type TEXT NOT NULL,
               host TEXT NOT NULL,
@@ -156,6 +168,7 @@ def init_db() -> None:
             """
             CREATE TABLE IF NOT EXISTS social_accounts (
               id TEXT PRIMARY KEY,
+              user_id INTEGER NOT NULL DEFAULT 0,
               persona_id TEXT NOT NULL,
               platform TEXT NOT NULL,
               username TEXT NOT NULL,
@@ -175,6 +188,7 @@ def init_db() -> None:
             """
             CREATE TABLE IF NOT EXISTS social_automation_tasks (
               id TEXT PRIMARY KEY,
+              user_id INTEGER NOT NULL DEFAULT 0,
               persona_id TEXT NOT NULL,
               account_id TEXT NOT NULL,
               platform TEXT NOT NULL,
@@ -212,41 +226,51 @@ def init_db() -> None:
         )
         conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS persona_hot_prefetch_jobs (
-              archive_id TEXT NOT NULL,
-              search_mode TEXT NOT NULL,
-              strategy_revision TEXT NOT NULL DEFAULT '',
-              ready_count INTEGER NOT NULL DEFAULT 0,
-              low_watermark INTEGER NOT NULL,
-              target_count INTEGER NOT NULL,
-              status TEXT NOT NULL DEFAULT 'queued',
-              next_run_at INTEGER NOT NULL DEFAULT 0,
-              lease_until INTEGER NOT NULL DEFAULT 0,
-              lease_token TEXT NOT NULL DEFAULT '',
-              failure_count INTEGER NOT NULL DEFAULT 0,
-              last_error TEXT NOT NULL DEFAULT '',
-              last_started_at INTEGER NOT NULL DEFAULT 0,
-              last_finished_at INTEGER NOT NULL DEFAULT 0,
+            CREATE TABLE IF NOT EXISTS persona_owners (
+              archive_id TEXT PRIMARY KEY,
+              user_id INTEGER NOT NULL DEFAULT 0,
               created_at INTEGER NOT NULL,
-              updated_at INTEGER NOT NULL,
-              PRIMARY KEY (archive_id, search_mode)
+              updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS persona_group_owners (
+              group_id TEXT PRIMARY KEY,
+              user_id INTEGER NOT NULL DEFAULT 0,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL
             )
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_social_accounts_persona ON social_accounts(persona_id)")
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_social_accounts_persona_platform_username "
-            "ON social_accounts(persona_id, platform, username COLLATE NOCASE)"
-        )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_social_tasks_queue ON social_automation_tasks(status, scheduled_at, priority, created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_social_tasks_account ON social_automation_tasks(account_id, created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_social_logs_task ON social_automation_logs(task_id, created_at)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_persona_hot_prefetch_due ON persona_hot_prefetch_jobs(status, next_run_at, lease_until)")
-        prefetch_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(persona_hot_prefetch_jobs)").fetchall()}
-        if "lease_token" not in prefetch_columns:
-            conn.execute("ALTER TABLE persona_hot_prefetch_jobs ADD COLUMN lease_token TEXT NOT NULL DEFAULT ''")
+        user_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+        user_column_migrations = {
+            "account_type": "TEXT NOT NULL DEFAULT 'managed'",
+            "approval_status": "TEXT NOT NULL DEFAULT 'approved'",
+            "full_name": "TEXT NOT NULL DEFAULT ''",
+            "email": "TEXT NOT NULL DEFAULT ''",
+            "phone": "TEXT NOT NULL DEFAULT ''",
+            "company": "TEXT NOT NULL DEFAULT ''",
+            "use_case": "TEXT NOT NULL DEFAULT ''",
+            "admin_note": "TEXT NOT NULL DEFAULT ''",
+            "approved_at": "INTEGER NOT NULL DEFAULT 0",
+            "approved_by": "INTEGER NOT NULL DEFAULT 0",
+            "last_login_at": "INTEGER NOT NULL DEFAULT 0",
+        }
+        for column, definition in user_column_migrations.items():
+            if column not in user_columns:
+                conn.execute(f"ALTER TABLE users ADD COLUMN {column} {definition}")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_users_approval ON users(approval_status, created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at)")
         proxy_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(social_proxies)").fetchall()}
         proxy_column_migrations = {
+            "user_id": "INTEGER NOT NULL DEFAULT 0",
             "source": "TEXT NOT NULL DEFAULT 'manual'",
             "ip_type": "TEXT NOT NULL DEFAULT 'static_residential'",
             "purchase_status": "TEXT NOT NULL DEFAULT 'owned'",
@@ -259,12 +283,27 @@ def init_db() -> None:
             if column not in proxy_columns:
                 conn.execute(f"ALTER TABLE social_proxies ADD COLUMN {column} {definition}")
         account_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(social_accounts)").fetchall()}
+        if "user_id" not in account_columns:
+            conn.execute("ALTER TABLE social_accounts ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0")
         if "login_username" not in account_columns:
             conn.execute("ALTER TABLE social_accounts ADD COLUMN login_username TEXT NOT NULL DEFAULT ''")
         if "login_password" not in account_columns:
             conn.execute("ALTER TABLE social_accounts ADD COLUMN login_password TEXT NOT NULL DEFAULT ''")
         if "login_credentials_updated_at" not in account_columns:
             conn.execute("ALTER TABLE social_accounts ADD COLUMN login_credentials_updated_at INTEGER NOT NULL DEFAULT 0")
+        task_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(social_automation_tasks)").fetchall()}
+        if "user_id" not in task_columns:
+            conn.execute("ALTER TABLE social_automation_tasks ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0")
+        conn.execute("DROP INDEX IF EXISTS idx_social_accounts_persona_platform_username")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_social_accounts_owner_persona_platform_username "
+            "ON social_accounts(user_id, persona_id, platform, username COLLATE NOCASE)"
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_social_accounts_user ON social_accounts(user_id, updated_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_social_proxies_user ON social_proxies(user_id, updated_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_social_tasks_user ON social_automation_tasks(user_id, created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_persona_owners_user ON persona_owners(user_id, archive_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_persona_group_owners_user ON persona_group_owners(user_id, group_id)")
 
 
 def get_admin_config(conn: sqlite3.Connection, key: str, default: Any) -> Any:

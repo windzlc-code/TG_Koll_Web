@@ -9,6 +9,7 @@ import {
 import {
   analyzeThreadsProfileVisibleSignals,
   buildSentimentHotKeywords,
+  candidateMatchesRequestedFreshness,
   candidateMatchesSentimentHotStrategyAnchors,
   candidateMatchesCurrentKeywords,
   cleanSentimentCandidateContent,
@@ -24,6 +25,7 @@ import {
   parseThreadsGraphqlSearchPageInfo,
   parseThreadsGraphqlProfilePagePayload,
   normalizeThreadsRelativeTime,
+  normalizeSentimentHotFreshnessDays,
   parseThreadsPostViewCountFromText,
   parseThreadsReaderSearchMarkdownCandidates,
   parseThreadsDetailEngagementMarkdown,
@@ -38,6 +40,31 @@ afterEach(() => {
 });
 
 describe("sentiment hot importer", () => {
+  it("clamps custom freshness to fifteen days", () => {
+    expect(normalizeSentimentHotFreshnessDays(0)).toBe(0);
+    expect(normalizeSentimentHotFreshnessDays(7)).toBe(7);
+    expect(normalizeSentimentHotFreshnessDays(15)).toBe(15);
+    expect(normalizeSentimentHotFreshnessDays(30)).toBe(15);
+  });
+
+  it("does not change the source pipeline when custom freshness is disabled", () => {
+    const candidate = {
+      id: "unknown-date",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@demo/post/unknown-date",
+      author: "demo",
+      content: "Test candidate without a published timestamp.",
+      media: [],
+      hotScore: 5000,
+      metrics: {},
+      capturedAt: new Date().toISOString(),
+    } as any;
+
+    expect(candidateMatchesRequestedFreshness(candidate, 0)).toBe(true);
+    expect(candidateMatchesRequestedFreshness(candidate, undefined)).toBe(true);
+    expect(candidateMatchesRequestedFreshness(candidate, 7)).toBe(false);
+  });
+
   it("builds persona-specific search keywords", () => {
     const beautyKeywords = buildSentimentHotKeywords({
       archive: {
@@ -475,6 +502,31 @@ describe("sentiment hot importer", () => {
     ] as any, 10, { keywords: ["海外信貸", "銀行貸款", "信用卡"] });
 
     expect(candidates.map((candidate) => candidate.id)).toEqual(["fresh-hot-30d", "old-hot"]);
+  });
+
+  it("filters candidates by the requested freshness window", () => {
+    const now = Date.now();
+    const content = "\u4fe1\u7528\u5361\u8d37\u6b3e\u5229\u7387\u4e0e\u94f6\u884c\u8fd8\u6b3e\u89c4\u5212\u662f\u5de5\u85aa\u65cf\u7406\u8d22\u7684\u91cd\u8981\u8bdd\u9898\uff0c\u9700\u8981\u6bd4\u8f83\u73b0\u91d1\u6d41\u3001\u8d1f\u503a\u6bd4\u548c\u957f\u671f\u6210\u672c\u3002".repeat(2);
+    const candidate = (id: string, publishedAt?: string) => ({
+      id,
+      platform: "threads",
+      sourceUrl: `https://www.threads.net/@finance/post/${id}`,
+      author: "finance",
+      content,
+      media: [],
+      hotScore: 5000,
+      metrics: {},
+      ...(publishedAt ? { publishedAt } : {}),
+      capturedAt: new Date(now).toISOString(),
+    });
+
+    const candidates = finalizeSentimentHotCandidatesForDisplay([
+      candidate("recent", new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString()),
+      candidate("old", new Date(now - 10 * 24 * 60 * 60 * 1000).toISOString()),
+      candidate("unknown"),
+    ] as any, 10, { freshnessDays: 7 });
+
+    expect(candidates.map((item) => item.id)).toEqual(["recent"]);
   });
 
   it("prioritizes a fresher unshown candidate over a hotter older candidate", () => {

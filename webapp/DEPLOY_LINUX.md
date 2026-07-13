@@ -15,21 +15,26 @@ pip install -r requirements.txt
 ```bash
 cd /path/to/工作流接单
 source .venv/bin/activate
+export ADMIN_BOOTSTRAP_USERNAME=admin
+export ADMIN_BOOTSTRAP_PASSWORD='replace-with-a-unique-password-of-at-least-12-characters'
+export SESSION_COOKIE_SECURE=1
+export FORCE_HTTPS=1
+export HTTPS_CANONICAL_ORIGIN='https://<server-ip-or-domain>'
 uvicorn webapp.server:app --host 0.0.0.0 --port 8000
 ```
 
 Open:
 
-- `http://<server-ip>:8000/login.html`
-- User page: `http://<server-ip>:8000/console.html`
-- Admin page: `http://<server-ip>:8000/admin.html`
+- `https://<server-ip-or-domain>/login.html`
+- User page: `https://<server-ip-or-domain>/console.html`
+- Admin page: `https://<server-ip-or-domain>/admin`
 
-## 3. Default admin account
+## 3. Initial admin account
 
-- Username: `admin`
-- Password: `admin123`
+- Username comes from `ADMIN_BOOTSTRAP_USERNAME` (defaults to `admin`).
+- Password must be supplied through `ADMIN_BOOTSTRAP_PASSWORD` and must contain at least 12 characters.
 
-Change password by creating a new admin account or updating DB manually.
+The service refuses to initialize an empty database without a secure bootstrap password. Existing databases are not reseeded.
 
 ## 4. Data location
 

@@ -10,7 +10,7 @@
     />
     <link rel="icon" type="image/png" href="/assets/opc/vecto-logo-ui-icon.png?v=20260711" />
     <link rel="preload" href="/assets/opc/vecto-ai-cockpit.png" as="image" />
-    <link rel="stylesheet" href="/assets/opc/styles.css?v=20260711" />
+    <link rel="stylesheet" href="/assets/opc/styles.css?v=20260713-2" />
   </head>
   <body>
     <header class="site-header" data-header>
@@ -29,12 +29,13 @@
         <a href="#agents">三帳架構</a>
         <a href="#scenarios">場景</a>
         <a href="#pricing">價格</a>
+        <a href="#service-difference">服務差異</a>
       </nav>
 
-      <a class="header-action" href="#contact">
-        <span aria-hidden="true">↘</span>
-        與我聯繫
-      </a>
+      <div class="header-actions">
+        <button class="header-login" type="button" data-open-login>帳號登入</button>
+        <a class="header-action" href="#contact">遊客申請</a>
+      </div>
     </header>
 
     <main id="top">
@@ -58,7 +59,7 @@
             </p>
 
             <div class="hero-actions" aria-label="主要操作">
-              <a class="button button-primary" href="#contact">預約導入諮詢</a>
+              <a class="button button-primary" href="#contact">申請使用</a>
               <a class="button button-ghost" href="#pricing">查看官方方案</a>
             </div>
 
@@ -79,32 +80,56 @@
           </div>
 
           <form class="lead-form" id="contact" novalidate>
-            <p class="form-kicker">與我聯繫</p>
-            <h2>留下 LINE 與手機</h2>
+            <p class="form-kicker">遊客帳號申請</p>
+            <h2>提交資料，等待管理員授權</h2>
 
-            <label class="field" for="lineId">
-              <span>LINE ID</span>
+            <div class="application-grid">
+              <label class="field" for="fullName">
+                <span>姓名</span>
+                <input id="fullName" name="fullName" autocomplete="name" placeholder="請輸入姓名" aria-describedby="fullNameError" required />
+                <small class="field-error" id="fullNameError"></small>
+              </label>
+
+              <label class="field" for="username">
+                <span>登入帳號</span>
+                <input id="username" name="username" autocomplete="username" placeholder="3-32 位英文或數字" aria-describedby="usernameError" required />
+                <small class="field-error" id="usernameError"></small>
+              </label>
+
+              <label class="field" for="applyPassword">
+                <span>登入密碼</span>
+                <input id="applyPassword" name="password" type="password" autocomplete="new-password" placeholder="至少 6 位" aria-describedby="applyPasswordError" required />
+                <small class="field-error" id="applyPasswordError"></small>
+              </label>
+
+              <label class="field" for="email">
+                <span>電子信箱</span>
+                <input id="email" name="email" type="email" autocomplete="email" placeholder="name@company.com" aria-describedby="emailError" />
+                <small class="field-error" id="emailError"></small>
+              </label>
+            </div>
+
+            <label class="field" for="company">
+              <span>公司 / 團隊</span>
               <input
-                id="lineId"
-                name="lineId"
+                id="company"
+                name="company"
                 type="text"
-                autocomplete="off"
-                placeholder="@vecto 或你的 LINE ID"
-                aria-describedby="lineError"
-                required
+                autocomplete="organization"
+                placeholder="公司或團隊名稱（選填）"
               />
-              <small class="field-error" id="lineError"></small>
+              <small class="field-error"></small>
             </label>
 
             <label class="field" for="phone">
-              <span>手機號碼</span>
+              <span>聯絡電話</span>
               <input
                 id="phone"
                 name="phone"
                 type="tel"
                 inputmode="tel"
                 autocomplete="tel"
-                placeholder="09xx xxx xxx"
+                placeholder="請輸入可聯絡的電話"
                 aria-describedby="phoneError"
                 required
               />
@@ -112,8 +137,8 @@
             </label>
 
             <label class="field" for="interest">
-              <span>想優先了解</span>
-              <select id="interest" name="interest">
+              <span>預計使用情境</span>
+              <select id="interest" name="useCase">
                 <option value="OPC導入">OPC 導入與三帳代營運</option>
                 <option value="算力計費">算力計費與預算規劃</option>
                 <option value="私域轉化">獨立站與私域轉化閉環</option>
@@ -123,25 +148,16 @@
 
             <label class="consent" for="consent">
               <input id="consent" name="consent" type="checkbox" required />
-              <span>我同意使用 LINE 與手機接收 Vecto OPC 服務回覆。</span>
+              <span>我同意提交以上資料供管理員審核帳號使用權限。</span>
             </label>
 
             <button class="submit-button" type="submit">
-              <span>送出並寄到信箱</span>
+              <span>提交遊客申請</span>
               <span aria-hidden="true">→</span>
             </button>
 
-            <div class="contact-shortcuts" aria-label="直接聯絡方式">
-              <a href="mailto:pingatou@gmail.com">寄信：pingatou@gmail.com</a>
-              <a href="https://line.me/R/ti/p/~0903247221" target="_blank" rel="noreferrer">加 LINE：0903247221</a>
-            </div>
-
-            <p class="form-note">送出後會開啟郵件 App，請確認寄出。也可直接加 LINE：0903247221。</p>
+            <p class="form-note">送出後不會立即登入。管理員授權後，使用申請的帳號密碼進入 Web 控制台。</p>
             <p class="form-status" id="formStatus" role="status" aria-live="polite"></p>
-
-            <button class="copy-button" type="button" id="copyLead" hidden>
-              複製聯絡卡
-            </button>
           </form>
         </div>
       </section>
@@ -384,6 +400,72 @@
         </div>
       </section>
 
+      <section class="difference-band" id="service-difference" aria-labelledby="difference-title">
+        <div class="section-shell">
+          <div class="difference-heading">
+            <div>
+              <p class="eyebrow">核心定位差異</p>
+              <h2 id="difference-title">Vecto OPC 服務型平台完整差異化打造方案</h2>
+            </div>
+            <p class="difference-lead">
+              市面同類產品是需要你操作的第三方 SaaS 工具；Vecto 是人機一體服務體系。智能體是你的專屬僕人，你即是 OPC，平台只做後台支撐，不佔據主體。
+            </p>
+          </div>
+
+          <div class="difference-grid" aria-label="競品與 Vecto OPC 底層定位比較">
+            <article class="difference-panel competitor-panel">
+              <div class="difference-panel-title">
+                <span>傳統工具</span>
+                <h3>競品傳統工具邏輯</h3>
+              </div>
+              <ol class="difference-list">
+                <li>
+                  <span>產品屬性</span>
+                  <p>獨立第三方系統、外掛工具，使用者是「操作員」。</p>
+                </li>
+                <li>
+                  <span>人機關係</span>
+                  <p>人操控軟體，AI 只是附帶功能，系統與用戶割裂。</p>
+                </li>
+                <li>
+                  <span>價值交付</span>
+                  <p>只交付功能，你要自己寫文案、調參數、盯數據、處理風險。</p>
+                </li>
+                <li>
+                  <span>所有權</span>
+                  <p>帳號、流量數據寄存平台，平台是獨立第三方中介。</p>
+                </li>
+              </ol>
+            </article>
+
+            <article class="difference-panel vecto-panel">
+              <div class="difference-panel-title">
+                <span>Vecto OPC</span>
+                <h3>人機一體僕從式架構</h3>
+              </div>
+              <ol class="difference-list">
+                <li>
+                  <span>產品屬性</span>
+                  <p>Agent-as-a-Service 服務載體，不是獨立平台，而是用戶的數位延伸。</p>
+                </li>
+                <li>
+                  <span>人機關係</span>
+                  <p>你是主體，三組 AI 智能體是專屬僕人，完全繼承你的人設、語氣與營運目標；OPC 是「你＋智能體」的整體代稱。</p>
+                </li>
+                <li>
+                  <span>價值交付</span>
+                  <p>交付完整營運結果，而非零散功能；智能體自主完成全流程，你只做方向審核與策略決策。</p>
+                </li>
+                <li>
+                  <span>所有權</span>
+                  <p>所有社媒帳號、私域客戶、流量數據與獨立站資產 100% 歸屬客戶，平台僅提供技術算力與落地服務。</p>
+                </li>
+              </ol>
+            </article>
+          </div>
+        </div>
+      </section>
+
       <section class="compliance-band" aria-labelledby="compliance-title">
         <div class="section-shell compliance-layout">
           <div>
@@ -410,9 +492,25 @@
           <span>OPC超級個體 AI駕駛倉</span>
         </div>
       </div>
-      <a class="button button-primary" href="#contact">留下 LINE 與手機</a>
+      <a class="button button-primary" href="#contact">申請遊客帳號</a>
     </footer>
 
-    <script src="/assets/opc/script.js"></script>
+    <div class="auth-overlay" id="loginModal" aria-hidden="true">
+      <section class="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
+        <button class="auth-close" type="button" data-close-login aria-label="關閉">×</button>
+        <p class="form-kicker">Vecto OS</p>
+        <h2 id="loginTitle">帳號登入</h2>
+        <p class="auth-copy">此處僅供已授權用戶登入，成功後直接進入 Web 任務控制台。</p>
+        <form id="homeLoginForm" novalidate>
+          <label class="field" for="loginUsername"><span>帳號</span><input id="loginUsername" name="username" autocomplete="username" required /></label>
+          <label class="field" for="loginPassword"><span>密碼</span><input id="loginPassword" name="password" type="password" autocomplete="current-password" required /></label>
+          <button class="submit-button" type="submit"><span>進入 Web 任務控制台</span><span aria-hidden="true">→</span></button>
+          <p class="form-status" id="loginStatus" role="status" aria-live="polite"></p>
+        </form>
+        <a class="auth-guest-link" href="#contact" data-close-login>尚未有帳號？提交遊客申請</a>
+      </section>
+    </div>
+
+    <script src="/assets/opc/script.js?v=20260713-2"></script>
   </body>
 </html>

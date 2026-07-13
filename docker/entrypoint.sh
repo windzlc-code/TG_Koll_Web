@@ -3,7 +3,7 @@ set -euo pipefail
 
 mkdir -p "${WEBAPP_DATA_DIR:-/data/webapp_data}" "${TOOL_R18_RUNTIME_DIR:-/data/tool_r18_runtime}"
 export TOOL_R18_UPLOAD_HOST_DIR="${TOOL_R18_UPLOAD_HOST_DIR:-${WEBAPP_DATA_DIR:-/data/webapp_data}/tool_r18_uploads}"
-export TOOL_R18_PUBLIC_URL="${TOOL_R18_PUBLIC_URL:-http://43.167.237.120}"
+export TOOL_R18_PUBLIC_URL="${TOOL_R18_PUBLIC_URL:-http://47.243.99.2:8001}"
 mkdir -p "$TOOL_R18_UPLOAD_HOST_DIR"
 
 CONTROL_FILE="${TOOL_R18_PROCESS_CONTROL_FILE:-${TOOL_R18_RUNTIME_DIR:-/data/tool_r18_runtime}/process-control.json}"
@@ -101,7 +101,8 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo "Starting Workflow Delivery Web backend..."
-"${VIRTUAL_ENV:-/opt/venv}/bin/uvicorn" webapp.server:app --host 0.0.0.0 --port 8098 &
+WEB_PORT="${WEBAPP_PORT:-8001}"
+"${VIRTUAL_ENV:-/opt/venv}/bin/uvicorn" webapp.server:app --host 0.0.0.0 --port "$WEB_PORT" &
 WEB_PID=$!
 
 if [[ "$(desired_state)" == "running" ]]; then
@@ -110,7 +111,7 @@ else
   write_status "stopped" ""
 fi
 
-echo "Web backend: http://0.0.0.0:8098"
+echo "Web backend: http://0.0.0.0:${WEB_PORT}"
 
 while true; do
   if ! kill -0 "$WEB_PID" 2>/dev/null; then

@@ -32,10 +32,10 @@
 
     <section class="auth-card auth-card-product">
       <div class="auth-card-head">
-        <h2 class="auth-title">账号登录</h2>
-        <p class="auth-sub">请使用运营管理员分配的账号登录</p>
+        <h2 class="auth-title">用户登录</h2>
+        <p class="auth-sub">请使用已通过管理员授权的用户账号</p>
       </div>
-      <form id="loginForm" class="auth-form">
+      <form id="loginForm" class="auth-form" data-login-role="user">
         <label for="username">用户名</label>
         <input id="username" name="username" autocomplete="username" required placeholder="请输入用户名" />
 
@@ -43,18 +43,16 @@
         <input id="password" name="password" type="password" autocomplete="current-password" required placeholder="请输入密码" />
 
         <div class="auth-submit-row">
-          <button class="primary" type="submit">登录</button>
+          <button class="primary" type="submit">进入 Web 任务控制台</button>
         </div>
       </form>
       <div id="authMsg" class="msg"></div>
       <div class="auth-quick-setup">
-        <a class="btn ghost auth-quick-setup-link" href="/console.html">进入 Web 控制台</a>
-        <a class="btn ghost auth-quick-setup-link" href="/quick-setup.html">快速配置</a>
-        <a class="btn ghost auth-quick-setup-link" href="/persona-dashboard.html">人设数据看板</a>
+        <a class="btn ghost auth-quick-setup-link" href="/">返回用户首页</a>
       </div>
-      <p class="auth-switch">没有账号？请联系运营管理员开通并分配额度。</p>
+      <p class="auth-switch">没有账号？请在首页提交游客申请，授权后即可登录。</p>
     </section>
   </main>
-  <script src="/assets/auth.js"></script>
+  <script src="/assets/auth.js?v=20260713-2"></script>
 </body>
 </html>
