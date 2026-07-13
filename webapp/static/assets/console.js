@@ -254,6 +254,7 @@ const initialConsoleView = new URLSearchParams(window.location.search).get("view
 const state = {
   view: ["workspace", "tasks", "accounts", "settings", "console_settings", "persona_dashboard"].includes(initialConsoleView) ? initialConsoleView : "workspace",
   activeModule: "personas",
+  transientWorkspaceLeaveAcknowledgement: "",
   accountBrowserPanel: "accounts",
   liveBrowserExpandedSessionId: "",
   workspaceMenuOpen: true,
@@ -13254,6 +13255,30 @@ function activePersonaCreateResultPreview() {
   return aiResult?.id ? { createState, aiResult } : null;
 }
 
+function transientWorkspaceFingerprint(kind, value) {
+  const normalize = (item) => {
+    if (Array.isArray(item)) return item.map(normalize);
+    if (!item || typeof item !== "object") return item;
+    if (
+      typeof item.name === "string"
+      && Number.isFinite(Number(item.size))
+      && Number.isFinite(Number(item.lastModified))
+    ) {
+      return {
+        name: item.name,
+        size: Number(item.size),
+        type: String(item.type || ""),
+        lastModified: Number(item.lastModified),
+      };
+    }
+    return Object.keys(item).sort().reduce((result, key) => {
+      result[key] = normalize(item[key]);
+      return result;
+    }, {});
+  };
+  return `${kind}:${JSON.stringify(normalize(value))}`;
+}
+
 function activeHotCandidateTransientState(persona = selectedPersona()) {
   if (!persona || !isPersonaWorkspaceModule()) return null;
   const form = personaFormState(persona.id).generate;
@@ -13277,7 +13302,22 @@ function activeHotCandidateTransientState(persona = selectedPersona()) {
     ? Object.values(form.hotReplacementPoolByCandidate).some((rows) => Array.isArray(rows) && rows.length)
     : false;
   if (!selectedIds.length && !edited && !deletedMedia && !replacementMedia && !stagedReplacementMedia) return null;
-  return { persona, selectedIds, edited, deletedMedia, replacementMedia, stagedReplacementMedia };
+  return {
+    persona,
+    selectedIds,
+    edited,
+    deletedMedia,
+    replacementMedia,
+    stagedReplacementMedia,
+    guardKey: transientWorkspaceFingerprint("hot_candidates", {
+      personaId: String(persona.id || ""),
+      selectedIds,
+      editedContent: form.hotEditedContentByCandidate || {},
+      deletedMedia: form.hotDeletedMediaByCandidate || {},
+      replacementMedia: form.hotReplacementFilesByCandidate || {},
+      replacementPool: form.hotReplacementPoolByCandidate || {},
+    }),
+  };
 }
 
 function activePublishCustomTransientState() {
@@ -13346,10 +13386,11 @@ function activeTransientWorkspaceState() {
   if (hotState) {
     return {
       kind: "hot_candidates",
-      title: "离开热点候选？",
-      message: "当前热点候选有已选择、已编辑正文或已调整媒体的内容，还没有导入为草稿。确定离开后这些临时选择会保留在本页状态中，但你会离开当前处理流程。",
-      confirmText: "离开并继续",
-      cancelText: "继续处理",
+      title: "暂时离开热点处理？",
+      message: "当前热点候选中有尚未导入草稿的选择或编辑。暂时离开后，这些内容仅保留在当前页面；返回“热点抓取”可继续处理。刷新或关闭页面可能导致内容丢失。",
+      confirmText: "暂时离开",
+      cancelText: "返回处理",
+      guardKey: hotState.guardKey,
     };
   }
   const publishCustom = activePublishCustomTransientState();
@@ -13378,6 +13419,10 @@ function activeTransientWorkspaceState() {
 async function confirmLeaveTransientWorkspaceState() {
   const activeState = activeTransientWorkspaceState();
   if (!activeState) return true;
+  if (
+    activeState.guardKey
+    && activeState.guardKey === state.transientWorkspaceLeaveAcknowledgement
+  ) return true;
   const confirmed = await openConsoleModal({
     title: activeState.title,
     message: activeState.message,
@@ -13385,7 +13430,12 @@ async function confirmLeaveTransientWorkspaceState() {
     cancelText: activeState.cancelText || "取消",
   });
   if (!confirmed) return false;
-  if (typeof activeState.clear === "function") activeState.clear();
+  if (typeof activeState.clear === "function") {
+    activeState.clear();
+    state.transientWorkspaceLeaveAcknowledgement = "";
+  } else if (activeState.guardKey) {
+    state.transientWorkspaceLeaveAcknowledgement = activeState.guardKey;
+  }
   return true;
 }
 
@@ -16723,7 +16773,12 @@ function bindEvents() {
   $("moduleBody").addEventListener("scroll", schedulePersonaCardEditorMenuPosition, true);
   window.addEventListener("resize", schedulePersonaCardEditorMenuPosition);
   window.addEventListener("beforeunload", (event) => {
-    if (!activeTransientWorkspaceState()) return;
+    const activeState = activeTransientWorkspaceState();
+    if (!activeState) return;
+    if (
+      activeState.guardKey
+      && activeState.guardKey === state.transientWorkspaceLeaveAcknowledgement
+    ) return;
     event.preventDefault();
     event.returnValue = "";
   });
