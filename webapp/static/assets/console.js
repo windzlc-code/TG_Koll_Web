@@ -420,6 +420,8 @@ const state = {
   socialTasks: [],
   socialTaskToastStatuses: {},
   socialTaskToastLabels: {},
+  socialTaskToastKeys: {},
+  socialTaskToastBatches: {},
   socialTaskPersonaRefreshSignatures: {},
   socialBrowserSessions: [],
   liveBrowserLayout: storedLiveBrowserLayout(),
@@ -884,6 +886,7 @@ function localizeConsoleMessage(text, status = 0) {
     "username 必填": "请填写账号用户名。",
   };
   if (exactMap[raw]) return exactMap[raw];
+  const lower = raw.toLowerCase();
   if (lower.startsWith("using text input mode:")) {
     const mode = raw.split(":").slice(1).join(":").trim();
     const modeLabel = { paste: "粘贴", fill: "填充", type: "逐字输入" }[mode.toLowerCase()] || mode;
@@ -1219,7 +1222,6 @@ function showToast(text, ok = true, options = {}) {
   if (existingToast) {
     applyToastMeta(existingToast, { key: toastKey, ok, message, persistent, target, status, longTask, startedAt });
     existingToast.classList.remove("is-leaving");
-    host.appendChild(existingToast);
     const existingTimer = toastTimers.get(existingToast);
     if (existingTimer) window.clearTimeout(existingTimer);
     if (persistent) {
@@ -3158,6 +3160,40 @@ function toastKindForTaskStatus(status) {
   return "progress";
 }
 
+function socialTaskToastKey(taskId) {
+  const cleanTaskId = String(taskId || "").trim();
+  return state.socialTaskToastKeys[cleanTaskId] || `social-task:${cleanTaskId}`;
+}
+
+function registerSocialTaskToastBatch(batchKey, tasks = []) {
+  const cleanKey = String(batchKey || "").trim();
+  const rows = (tasks || []).filter((task) => task?.id);
+  if (!cleanKey || !rows.length) return;
+  const taskIds = rows.map((task) => String(task.id));
+  const previous = state.socialTaskToastBatches[cleanKey] || { taskIds: [], tasks: {} };
+  state.socialTaskToastBatches[cleanKey] = {
+    taskIds,
+    tasks: {
+      ...previous.tasks,
+      ...Object.fromEntries(rows.map((task) => [String(task.id), { ...(previous.tasks?.[String(task.id)] || {}), ...task }])),
+    },
+  };
+  taskIds.forEach((taskId) => { state.socialTaskToastKeys[taskId] = cleanKey; });
+}
+
+function resolveSocialTaskToast(task) {
+  const incomingId = String(task?.id || "").trim();
+  const key = socialTaskToastKey(incomingId);
+  const batch = state.socialTaskToastBatches[key];
+  if (!batch) return { task, key };
+  batch.tasks[incomingId] = { ...(batch.tasks[incomingId] || {}), ...task };
+  const ordered = batch.taskIds.map((taskId) => batch.tasks[taskId]).filter(Boolean);
+  const terminalStatuses = new Set(["success", "failed", "cancelled"]);
+  const active = ordered.find((item) => !terminalStatuses.has(String(item?.status || "").trim()));
+  const failed = ordered.find((item) => ["failed", "cancelled"].includes(String(item?.status || "").trim()));
+  return { task: active || failed || ordered[ordered.length - 1] || task, key };
+}
+
 function socialTaskToastMessage(task) {
   const typeLabel = statusLabel(task?.task_type || "自动化任务");
   const taskId = String(task?.id || "").trim();
@@ -3174,12 +3210,16 @@ function socialTaskToastMessage(task) {
 }
 
 function syncSocialTaskToast(task, { force = false } = {}) {
+  const incomingTaskId = String(task?.id || "").trim();
+  if (!incomingTaskId) return;
+  const resolved = resolveSocialTaskToast(task);
+  task = resolved.task;
   const taskId = String(task?.id || "").trim();
-  if (!taskId) return;
   const status = String(task?.status || "").trim();
   const previous = state.socialTaskToastStatuses[taskId] || "";
+  state.socialTaskToastStatuses[incomingTaskId] = String((state.socialTaskToastBatches[resolved.key]?.tasks?.[incomingTaskId] || task)?.status || "").trim();
   state.socialTaskToastStatuses[taskId] = status;
-  const key = `social-task:${taskId}`;
+  const key = resolved.key;
   const existing = Array.from(ensureToastHost().children).find((item) => item.dataset.toastKey === key);
   const waitingForManual = status === "need_manual" && isUnfinishedTask(task);
   const waitingForSchedule = isFutureScheduledSocialTask(task);
@@ -3298,18 +3338,19 @@ async function cancelRegularTask(taskId, messageId = "commandMsg") {
 async function cancelSocialAutomationTask(taskId, messageId = "commandMsg") {
   const cleanTaskId = String(taskId || "").trim();
   if (!cleanTaskId) return null;
+  const toastKey = socialTaskToastKey(cleanTaskId);
   const result = await api(`/api/persona_dashboard/automation/tasks/${encodeURIComponent(cleanTaskId)}/cancel`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ reason: "user_cancel" }),
   });
   showMsg(messageId, "自动化任务已发送停止请求。", true, {
-    key: `social-task:${cleanTaskId}`,
+    key: toastKey,
     kind: "cancelled",
     taskId: cleanTaskId,
     taskPanel: "persona",
   });
-  window.setTimeout(() => dismissToastByKey(`social-task:${cleanTaskId}`), 4200);
+  window.setTimeout(() => dismissToastByKey(toastKey), 4200);
   await loadSocial().catch(() => {});
   return result;
 }
@@ -7085,7 +7126,10 @@ function renderSimpleFlowModule(moduleId) {
       renderSimpleFlowModule("publishing");
     });
   }
-  if ($("executeSimpleFlow")) $("executeSimpleFlow").addEventListener("click", () => executeSimpleFlow().catch((error) => showMsg("commandMsg", error.detail || error.message || "执行失败", false)));
+  if ($("executeSimpleFlow")) $("executeSimpleFlow").addEventListener("click", () => executeSimpleFlow().catch((error) => showMsg("commandMsg", error.detail || error.message || "执行失败", false, {
+    key: error?.toastKey || undefined,
+    kind: "failed",
+  })));
   });
 }
 
@@ -7597,6 +7641,7 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
   const platform = String(account.platform || "threads").trim().toLowerCase() || "threads";
   const scheduledAt = normalizeScheduleValueForApi($("simpleScheduleAt")?.value);
   const lockParts = ["publish_content", source, persona.id, cleanAccountId, selectedInSourceOrder.join("_"), scheduledAt || "now"];
+  const batchToastKey = `social-publish-batch:${persona.id}:${Date.now()}`;
   if (isActionLocked(...lockParts)) {
     showMsg(messageId, "当前发布任务正在提交，请等待当前操作完成。", false);
     return null;
@@ -7618,9 +7663,14 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
       }
     }
     const postSourcePath = source === "favorites" ? "favorites" : "posts";
-    showMsg(messageId, `正在提交 ${posts.length} 条${publishContentSourceLabel(source)}发布任务...`, true);
+    showMsg(messageId, `正在提交 ${posts.length} 条${publishContentSourceLabel(source)}发布任务...`, true, {
+      key: batchToastKey,
+      kind: "queued",
+      persistent: true,
+      longTask: false,
+    });
     const results = [];
-    for (const post of posts) {
+    for (const [index, post] of posts.entries()) {
       const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/${postSourcePath}/${encodeURIComponent(post.id)}/publish`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -7634,29 +7684,34 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
         }),
       });
       results.push(result);
+      const task = result?.task;
+      if (task?.id) {
+        state.socialTaskToastLabels[String(task.id)] = `${index + 1}/${posts.length} 篇 · ${account.username || account.display_name || ""}`;
+        registerSocialTaskToastBatch(batchToastKey, results.map((item) => item?.task).filter(Boolean));
+        syncSocialTaskToast(task, { force: true });
+      }
     }
-    showMsg(messageId, `已提交 ${results.length} 条发布任务。`, true);
-    results.forEach((item, index) => {
-      const task = item?.task;
-      if (!task?.id) return;
-      state.socialTaskToastLabels[String(task.id)] = `${index + 1}/${results.length} 篇 · ${account.username || account.display_name || ""}`;
-      syncSocialTaskToast({
-        ...task,
-      }, { force: true });
-    });
     const immediateTasks = results.map((item) => item?.task).filter((task) => task?.id && !isFutureScheduledSocialTask(task));
     const immediateTaskIds = immediateTasks.map((task) => String(task.id));
     const firstTaskId = immediateTaskIds[0] || "";
     if (firstTaskId) openLiveBrowserTaskView(firstTaskId);
     if (immediateTaskIds.length) {
       watchPersonaPublishTaskSequence(immediateTaskIds, persona.id).catch((error) => {
-        showMsg(messageId, error?.detail || error?.message || "连续发布状态跟踪失败", false);
+        showMsg(messageId, error?.detail || error?.message || "连续发布状态跟踪失败", false, {
+          key: socialTaskToastKey(immediateTaskIds[0]),
+          kind: "failed",
+        });
       });
     }
     await loadSocial();
     await loadPersonaDraftPosts(persona.id, { force: true }).catch(() => {});
     if (source === "favorites") await loadPersonaFavoritePosts(persona.id, { force: true }).catch(() => {});
     return results;
+  } catch (error) {
+    if (error && typeof error === "object") {
+      try { error.toastKey = batchToastKey; } catch (_) {}
+    }
+    throw error;
   } finally {
     setActionLocked(lockParts, false);
     if (state.activeModule === "publishing") renderSimpleFlowModule("publishing");
@@ -8259,12 +8314,6 @@ async function executeSimpleFlow() {
         ].filter(Boolean);
         if (taskIds.length || createdTasks.length) {
           const firstTaskId = taskIds[0] || "";
-          appendEvent("queued", `发布任务已提交到指纹浏览器任务队列${taskIds.length > 1 ? `：${taskIds.length} 条` : ""}`, {
-            key: firstTaskId ? `social-task:${firstTaskId}` : undefined,
-            taskId: firstTaskId,
-            taskPanel: "persona",
-            personaId: persona?.id || personaId,
-          });
           if (firstTaskId) openLiveBrowserTaskView(firstTaskId);
         }
         return;
@@ -9787,14 +9836,7 @@ async function watchPersonaPublishTaskSequence(taskIds = [], personaId = "") {
         state.personaPublishResults[key] = renderPersonaPublishResult(task, lastLogs);
         updatePersonaPublishResultView(key);
         if (statusChanged) {
-          appendEvent(toastKindForTaskStatus(status), `连续发布：${statusLabel(status)}`, {
-            key: `social-task:${taskId}`,
-            taskId,
-            taskPanel: "persona",
-            personaId,
-            openBrowser: true,
-            longTask: status === "running",
-          });
+          syncSocialTaskToast(task, { force: true });
         }
         lastStatus = status;
         if (terminal) {
@@ -9811,7 +9853,7 @@ async function watchPersonaPublishTaskSequence(taskIds = [], personaId = "") {
         state.personaPublishResults[key] = `<div class="persona-warning-inline">${esc(message)}</div>`;
         updatePersonaPublishResultView(key);
         appendEvent("warning", message, {
-          key: `social-task:${taskId}`,
+          key: socialTaskToastKey(taskId),
           taskId,
           taskPanel: "persona",
           personaId,
