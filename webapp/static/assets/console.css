@@ -24,6 +24,24 @@
   --success-soft-ink: #2f353b;
   --warning-soft: #fef3c7;
   --warning-soft-ink: #92400e;
+  --status-success-bg: #dcfce7;
+  --status-success-border: #86efac;
+  --status-success-ink: #166534;
+  --status-error-bg: #fee2e2;
+  --status-error-border: #fca5a5;
+  --status-error-ink: #991b1b;
+  --status-queued-bg: #dbeafe;
+  --status-queued-border: #93c5fd;
+  --status-queued-ink: #1d4ed8;
+  --status-manual-bg: #ffedd5;
+  --status-manual-border: #fdba74;
+  --status-manual-ink: #c2410c;
+  --status-running-bg: #cffafe;
+  --status-running-border: #67e8f9;
+  --status-running-ink: #0e7490;
+  --status-muted-bg: #f1f5f9;
+  --status-muted-border: #cbd5e1;
+  --status-muted-ink: #334155;
   --persona-status-running-ink: #9a5b00;
   --persona-status-success-ink: #1f6b42;
   --persona-status-error-ink: #b42318;
@@ -80,6 +98,9 @@
   --status-manual-bg: #3b2818;
   --status-manual-border: #d28a45;
   --status-manual-ink: #ffd0a0;
+  --status-running-bg: #12343b;
+  --status-running-border: #2f9baa;
+  --status-running-ink: #9be7f0;
   --status-muted-bg: #2a2d32;
   --status-muted-border: #646b76;
   --status-muted-ink: #d1d5dc;
@@ -8117,46 +8138,46 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .task-status-text.is-success,
 .task-detail-status.is-success {
-  background: #dcfce7;
-  border-color: #86efac;
-  color: #166534;
+  background: var(--status-success-bg);
+  border-color: var(--status-success-border);
+  color: var(--status-success-ink);
 }
 
 .task-status-text.is-error,
 .task-detail-status.is-error {
-  background: #fee2e2;
-  border-color: #fca5a5;
-  color: #991b1b;
+  background: var(--status-error-bg);
+  border-color: var(--status-error-border);
+  color: var(--status-error-ink);
 }
 
 .task-status-text.is-queued,
 .task-detail-status.is-queued {
-  background: #dbeafe;
-  border-color: #93c5fd;
-  color: #1d4ed8;
+  background: var(--status-queued-bg);
+  border-color: var(--status-queued-border);
+  color: var(--status-queued-ink);
 }
 
 .task-status-text.is-manual,
 .task-detail-status.is-manual {
-  background: #ffedd5;
-  border-color: #fdba74;
-  color: #c2410c;
+  background: var(--status-manual-bg);
+  border-color: var(--status-manual-border);
+  color: var(--status-manual-ink);
 }
 
 .task-status-text.is-running,
 .task-detail-status.is-running,
 .task-status-text.is-active,
 .task-detail-status.is-active {
-  background: #f8fafc;
-  border-color: #94a3b8;
-  color: #334155;
+  background: var(--status-running-bg);
+  border-color: var(--status-running-border);
+  color: var(--status-running-ink);
 }
 
 .task-status-text.is-muted,
 .task-detail-status.is-muted {
-  background: #f1f5f9;
-  border-color: #cbd5e1;
-  color: #334155;
+  background: var(--status-muted-bg);
+  border-color: var(--status-muted-border);
+  color: var(--status-muted-ink);
 }
 
 .task-detail-status {
@@ -10574,17 +10595,17 @@ body.live-browser-modal-open {
 }
 
 .task-row .task-status-text.is-success,
-.task-persona-queue-row .task-status-text.is-success { background: #dcfce7; color: #166534; }
+.task-persona-queue-row .task-status-text.is-success { background: var(--status-success-bg); color: var(--status-success-ink); }
 .task-row .task-status-text.is-error,
-.task-persona-queue-row .task-status-text.is-error { background: #fee2e2; color: #991b1b; }
+.task-persona-queue-row .task-status-text.is-error { background: var(--status-error-bg); color: var(--status-error-ink); }
 .task-row .task-status-text.is-queued,
-.task-persona-queue-row .task-status-text.is-queued { background: #dbeafe; color: #1d4ed8; }
+.task-persona-queue-row .task-status-text.is-queued { background: var(--status-queued-bg); color: var(--status-queued-ink); }
 .task-row .task-status-text.is-manual,
-.task-persona-queue-row .task-status-text.is-manual { background: #ffedd5; color: #c2410c; }
+.task-persona-queue-row .task-status-text.is-manual { background: var(--status-manual-bg); color: var(--status-manual-ink); }
 .task-row .task-status-text.is-running,
 .task-persona-queue-row .task-status-text.is-running,
 .task-row .task-status-text.is-active,
-.task-persona-queue-row .task-status-text.is-active { background: #f8fafc; color: #334155; }
+.task-persona-queue-row .task-status-text.is-active { background: var(--status-running-bg); color: var(--status-running-ink); }
 
 :root[data-theme="dark"] .task-row .task-status-text.is-success,
 :root[data-theme="dark"] .task-persona-queue-row .task-status-text.is-success {
@@ -10617,7 +10638,12 @@ body.live-browser-modal-open {
 :root[data-theme="dark"] .task-row .task-status-text.is-running,
 :root[data-theme="dark"] .task-persona-queue-row .task-status-text.is-running,
 :root[data-theme="dark"] .task-row .task-status-text.is-active,
-:root[data-theme="dark"] .task-persona-queue-row .task-status-text.is-active,
+:root[data-theme="dark"] .task-persona-queue-row .task-status-text.is-active {
+  background: var(--status-running-bg);
+  border-color: var(--status-running-border);
+  color: var(--status-running-ink);
+}
+
 :root[data-theme="dark"] .task-row .task-status-text.is-muted,
 :root[data-theme="dark"] .task-persona-queue-row .task-status-text.is-muted {
   background: var(--status-muted-bg);
@@ -10627,11 +10653,44 @@ body.live-browser-modal-open {
 
 .status.success,
 .status.ready,
-.status.standby { background: var(--success-soft); color: var(--success-soft-ink); }
+.status.standby,
+.status.active {
+  background: var(--status-success-bg);
+  color: var(--status-success-ink);
+}
 .status.failed,
-.status.cancelled { background: var(--danger-soft); color: var(--danger-soft-ink); }
+.status.error,
+.status.cookie_expired,
+.status.transient_error {
+  background: var(--status-error-bg);
+  color: var(--status-error-ink);
+}
+.status.queued,
+.status.scheduled,
+.status.pending {
+  background: var(--status-queued-bg);
+  color: var(--status-queued-ink);
+}
 .status.running,
-.status.need_manual { background: var(--warning-soft); color: var(--warning-soft-ink); }
+.status.checking,
+.status.browser_launch,
+.status.progress {
+  background: var(--status-running-bg);
+  color: var(--status-running-ink);
+}
+.status.need_manual,
+.status.pending_login,
+.status.need_verification {
+  background: var(--status-manual-bg);
+  color: var(--status-manual-ink);
+}
+.status.cancelled,
+.status.disabled,
+.status.inactive,
+.status.unknown {
+  background: var(--status-muted-bg);
+  color: var(--status-muted-ink);
+}
 
 .confirm-summary {
   display: grid;

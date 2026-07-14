@@ -8,12 +8,14 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONSOLE_JS = REPO_ROOT / "webapp" / "static" / "assets" / "console.js"
+CONSOLE_CSS = REPO_ROOT / "webapp" / "static" / "assets" / "console.css"
 
 
 class ConsoleSessionBoundaryTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.source = CONSOLE_JS.read_text(encoding="utf-8")
+        cls.styles = CONSOLE_CSS.read_text(encoding="utf-8")
 
     def _section(self, start_marker, end_marker):
         start = self.source.index(start_marker)
@@ -190,8 +192,115 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("if (includeOverview) renderLiveBrowserSessions()", account_refresh)
         self.assertNotIn("renderSocialTasks()", account_refresh)
         self.assertNotIn("renderSocialAccounts()", account_status)
+        self.assertNotIn("renderConfirmSummary()", account_status)
         self.assertIn('loadAutomationTasksShared().catch', task_refresh)
         self.assertNotIn("loadAutomationTasksShared({ force: true })", task_refresh)
+
+    def test_live_browser_polling_preserves_unchanged_placeholder_nodes(self):
+        browser_render = self._function_source("renderLiveBrowserSessions")
+        placeholder_sync = self._function_source("syncLiveBrowserPlaceholders")
+        card_insert = self._function_source("insertLiveBrowserSessionCard")
+
+        self.assertIn("syncLiveBrowserPlaceholders(grid, sessions.length)", browser_render)
+        self.assertIn("insertLiveBrowserSessionCard(grid, card)", browser_render)
+        self.assertNotIn('querySelectorAll("[data-live-browser-placeholder]").forEach', browser_render)
+        self.assertNotIn('insertAdjacentHTML("beforeend", renderLiveBrowserPlaceholders', browser_render)
+        self.assertIn('querySelectorAll("[data-live-browser-placeholder]")', placeholder_sync)
+        self.assertIn("existing.slice(desiredCount).forEach", placeholder_sync)
+        self.assertIn("missingCount", placeholder_sync)
+
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            {self._function_source("renderLiveBrowserPlaceholder")}
+            {placeholder_sync}
+            {card_insert}
+
+            const first = {{ removed: false, remove() {{ this.removed = true; }} }};
+            const second = {{ removed: false, remove() {{ this.removed = true; }} }};
+            const grid = {{
+              placeholders: [first],
+              inserted: "",
+              querySelectorAll() {{ return this.placeholders.filter((node) => !node.removed); }},
+              insertAdjacentHTML(_position, markup) {{ this.inserted += markup; }},
+            }};
+
+            syncLiveBrowserPlaceholders(grid, 1);
+            assert.strictEqual(first.removed, false);
+            assert.strictEqual(grid.inserted, "");
+
+            grid.placeholders.push(second);
+            syncLiveBrowserPlaceholders(grid, 1);
+            assert.strictEqual(first.removed, false);
+            assert.strictEqual(second.removed, true);
+
+            grid.placeholders = [];
+            syncLiveBrowserPlaceholders(grid, 0);
+            assert.strictEqual((grid.inserted.match(/data-live-browser-placeholder/g) || []).length, 2);
+
+            const placeholder = {{ kind: "placeholder" }};
+            const card = {{ kind: "session" }};
+            const orderedGrid = {{
+              children: [placeholder],
+              querySelector() {{ return this.children.find((node) => node.kind === "placeholder") || null; }},
+              insertBefore(node, anchor) {{
+                const index = anchor ? this.children.indexOf(anchor) : this.children.length;
+                this.children.splice(index, 0, node);
+              }},
+            }};
+            insertLiveBrowserSessionCard(orderedGrid, card);
+            assert.deepStrictEqual(orderedGrid.children, [card, placeholder]);
+            """
+        )
+        self._run_node(harness)
+
+    def test_status_tone_covers_live_detection_and_recovery_states(self):
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            {self._function_source("statusLabel")}
+            {self._function_source("statusTone")}
+            assert.strictEqual(statusTone("ready"), "success");
+            assert.strictEqual(statusTone("pending_login"), "manual");
+            assert.strictEqual(statusTone("cookie_expired"), "error");
+            assert.strictEqual(statusTone("checking"), "active");
+            assert.strictEqual(statusTone("browser_launch"), "active");
+            assert.strictEqual(statusTone("preparing"), "active");
+            assert.strictEqual(statusTone("login_wait_timeout"), "error");
+            assert.strictEqual(statusTone("disabled"), "muted");
+            assert.strictEqual(statusLabel("need_verification"), "需验证");
+            assert.strictEqual(statusLabel("preparing"), "准备执行");
+            """
+        )
+        self._run_node(harness)
+
+    def test_status_badges_have_distinct_semantic_color_groups(self):
+        for variable in (
+            "--status-success-bg",
+            "--status-error-bg",
+            "--status-queued-bg",
+            "--status-manual-bg",
+            "--status-running-bg",
+            "--status-muted-bg",
+        ):
+            self.assertIn(variable, self.styles)
+
+        for selector in (
+            ".status.pending_login",
+            ".status.need_verification",
+            ".status.cookie_expired",
+            ".status.transient_error",
+            ".status.checking",
+            ".status.disabled",
+        ):
+            self.assertIn(selector, self.styles)
+
+        task_rows = self.styles[
+            self.styles.index(".task-row .task-status-text.is-success"):
+            self.styles.index(".status.success")
+        ]
+        self.assertIn("background: var(--status-running-bg)", task_rows)
+        self.assertIn("color: var(--status-running-ink)", task_rows)
 
     def test_account_pool_bind_replaces_existing_persona_binding_in_one_action(self):
         bind_account = self._function_source("bindAccountPoolAccountToPersona")

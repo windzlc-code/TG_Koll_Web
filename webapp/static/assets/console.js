@@ -1740,6 +1740,7 @@ function statusLabel(status) {
     cancelled: "已取消",
     need_manual: "需人工",
     pending_login: "待登录",
+    need_verification: "需验证",
     cookie_expired: "登录已过期",
     transient_error: "登录页面异常",
     disabled: "已禁用",
@@ -1754,6 +1755,7 @@ function statusLabel(status) {
     login_wait_timeout: "登录等待超时",
     browser_launch: "启动浏览器",
     prepare: "准备执行",
+    preparing: "准备执行",
   };
   return map[String(status || "")] || String(status || "-");
 }
@@ -1761,10 +1763,10 @@ function statusLabel(status) {
 function statusTone(status) {
   const key = String(status || "").trim();
   if (["success", "ready", "standby"].includes(key)) return "success";
-  if (["failed", "error", "cookie_expired", "transient_error"].includes(key)) return "error";
-  if (key === "queued") return "queued";
+  if (["failed", "error", "cookie_expired", "transient_error", "login_wait_timeout"].includes(key)) return "error";
+  if (["queued", "scheduled", "pending"].includes(key)) return "queued";
   if (["need_manual", "pending_login", "need_verification"].includes(key)) return "manual";
-  if (key === "running") return "active";
+  if (["running", "checking", "browser_launch", "prepare", "preparing", "progress"].includes(key)) return "active";
   if (["cancelled", "disabled", "unknown"].includes(key)) return "muted";
   return "muted";
 }
@@ -14892,7 +14894,6 @@ function updateAccountStatusViews() {
       if (account) option.textContent = accountDisplayName(account);
     });
   });
-  renderConfirmSummary();
 }
 
 const accountPoolPlatforms = [
@@ -16776,7 +16777,6 @@ function renderLiveBrowserSessions() {
   const panelHint = panel.querySelector("[data-live-browser-panel-hint]");
   if (panelHint) panelHint.textContent = liveBrowserPanelHint(sessions);
 
-  grid.querySelectorAll("[data-live-browser-placeholder]").forEach((node) => node.remove());
   const cardsById = new Map(Array.from(grid.querySelectorAll("[data-live-browser-card]"))
     .map((card) => [String(card.dataset.liveBrowserCard || ""), card]));
   const desiredIds = new Set(sessions.map((session) => liveBrowserSessionId(session)));
@@ -16797,7 +16797,7 @@ function renderLiveBrowserSessions() {
     }
     if (!card) {
       card = createLiveBrowserSessionCard(session);
-      grid.append(card);
+      insertLiveBrowserSessionCard(grid, card);
     } else if (!expanded && card.dataset.liveBrowserStructureKey !== structureKey) {
       const replacement = createLiveBrowserSessionCard(session);
       card.replaceWith(replacement);
@@ -16811,7 +16811,7 @@ function renderLiveBrowserSessions() {
       card.setAttribute("aria-labelledby", liveBrowserDialogTitleId(sessionId));
     }
   });
-  grid.insertAdjacentHTML("beforeend", renderLiveBrowserPlaceholders(sessions.length));
+  syncLiveBrowserPlaceholders(grid, sessions.length);
   if (state.liveBrowserExpandedSessionId) {
     const expandedCard = grid.querySelector(`[data-live-browser-card="${CSS.escape(String(state.liveBrowserExpandedSessionId))}"]`);
     isolateLiveBrowserModalBackground(expandedCard, document.querySelector("[data-live-browser-modal-backdrop]"));
@@ -16954,9 +16954,22 @@ function setLiveBrowserLayout(layout = "grid") {
   });
 }
 
-function renderLiveBrowserPlaceholders(sessionCount = 0) {
-  const count = Math.max(1, Math.min(2, 2 - Number(sessionCount || 0)));
-  return Array.from({ length: count }, (_, index) => renderLiveBrowserPlaceholder(index + 1)).join("");
+function syncLiveBrowserPlaceholders(grid, sessionCount = 0) {
+  if (!grid) return;
+  const desiredCount = Math.max(1, Math.min(2, 2 - Number(sessionCount || 0)));
+  const existing = Array.from(grid.querySelectorAll("[data-live-browser-placeholder]"));
+  existing.slice(desiredCount).forEach((node) => node.remove());
+  const missingCount = Math.max(0, desiredCount - existing.length);
+  if (!missingCount) return;
+  const startIndex = existing.length + 1;
+  const markup = Array.from({ length: missingCount }, (_, index) => renderLiveBrowserPlaceholder(startIndex + index)).join("");
+  grid.insertAdjacentHTML("beforeend", markup);
+}
+
+function insertLiveBrowserSessionCard(grid, card) {
+  if (!grid || !card) return;
+  const firstPlaceholder = grid.querySelector("[data-live-browser-placeholder]");
+  grid.insertBefore(card, firstPlaceholder || null);
 }
 
 function renderLiveBrowserPlaceholder(index = 1) {
