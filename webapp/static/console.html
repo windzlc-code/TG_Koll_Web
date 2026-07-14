@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="admin-workspace-user-id" content="__ADMIN_WORKSPACE_USER_ID__" />
+  <meta name="admin-console-session" content="__ADMIN_CONSOLE_SESSION__" />
   <title>Web 任务控制台</title>
   <link rel="preload" as="style" href="/assets/style.css?v=__STYLE_VERSION__" />
   <link id="personaDashboardStyles" rel="stylesheet" href="/assets/style.css?v=__STYLE_VERSION__" media="not all" />
@@ -35,6 +36,7 @@
       </nav>
 
       <div class="sidebar-bottom-actions">
+        <button type="button" data-view="billing">订阅与算力</button>
         <button type="button" data-view="persona_dashboard">人设看板</button>
         <button id="consoleSettings" type="button" data-view="console_settings" class="settings-entry">
           <span class="settings-entry-icon" aria-hidden="true">⚙</span>
@@ -128,6 +130,42 @@
             <span>持久化浏览器环境 + 代理 + 有头模式。</span>
           </div>
         </div>
+      </section>
+
+      <section class="view billing-view" data-panel="billing" aria-labelledby="viewTitle">
+        <div class="billing-view-head">
+          <div>
+            <div class="eyebrow">账户计费</div>
+            <h3>订阅、算力与订单</h3>
+            <p>查看当前权益与消费明细，并提交线下付款订单。</p>
+          </div>
+          <div class="billing-view-actions">
+            <a class="button" href="/pricing.html">查看公开方案</a>
+            <button id="refreshBilling" type="button">刷新计费</button>
+          </div>
+        </div>
+        <div id="billingSummary" class="billing-summary-grid" aria-live="polite"></div>
+        <div class="billing-layout">
+          <section class="billing-section">
+            <div class="billing-section-head">
+              <div>
+                <div class="eyebrow">最近订单</div>
+                <h3>线下付款订单</h3>
+              </div>
+            </div>
+            <div id="billingOrders" class="billing-list"></div>
+          </section>
+          <section class="billing-section billing-ledger-section">
+            <div class="billing-section-head">
+              <div>
+                <div class="eyebrow">算力流水</div>
+                <h3>余额变动</h3>
+              </div>
+            </div>
+            <div id="billingLedger" class="billing-list"></div>
+          </section>
+        </div>
+        <div id="billingMsg" class="notice" role="status"></div>
       </section>
 
       <section class="view" data-panel="console_settings">

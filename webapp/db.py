@@ -231,6 +231,162 @@ def _ensure_username_reservation_triggers(conn: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_commercial_billing_schema(conn: sqlite3.Connection) -> None:
+    statements = (
+        """
+        CREATE TABLE IF NOT EXISTS billing_wallets (
+          user_id INTEGER PRIMARY KEY,
+          credit_units INTEGER NOT NULL DEFAULT 0 CHECK(credit_units >= 0),
+          billing_mode TEXT NOT NULL DEFAULT 'legacy' CHECK(billing_mode IN ('legacy', 'enforced')),
+          migrated_legacy_balance INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS billing_catalog_versions (
+          id TEXT PRIMARY KEY,
+          version_number INTEGER NOT NULL UNIQUE,
+          status TEXT NOT NULL CHECK(status IN ('draft', 'active', 'retired')),
+          catalog_json TEXT NOT NULL,
+          effective_at INTEGER NOT NULL DEFAULT 0,
+          created_by INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          published_at INTEGER NOT NULL DEFAULT 0
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS billing_orders (
+          id TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          kind TEXT NOT NULL CHECK(kind IN ('subscription', 'credit_pack')),
+          sku TEXT NOT NULL,
+          quantity INTEGER NOT NULL DEFAULT 1 CHECK(quantity > 0),
+          renewal_subscription_ids_json TEXT NOT NULL DEFAULT '[]',
+          amount_ntd_cents INTEGER NOT NULL CHECK(amount_ntd_cents >= 0),
+          catalog_version_id TEXT NOT NULL,
+          price_snapshot_json TEXT NOT NULL,
+          payer_name TEXT NOT NULL DEFAULT '',
+          payment_reference TEXT NOT NULL DEFAULT '',
+          paid_at INTEGER NOT NULL DEFAULT 0,
+          note TEXT NOT NULL DEFAULT '',
+          proof_path TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'rejected', 'cancelled')),
+          idempotency_key TEXT NOT NULL,
+          reviewed_by INTEGER NOT NULL DEFAULT 0,
+          reviewed_at INTEGER NOT NULL DEFAULT 0,
+          review_note TEXT NOT NULL DEFAULT '',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(user_id, idempotency_key)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS billing_subscriptions (
+          id TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          plan_sku TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'expired', 'cancelled')),
+          current_period_end INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS billing_subscription_periods (
+          id TEXT PRIMARY KEY,
+          subscription_id TEXT NOT NULL,
+          user_id INTEGER NOT NULL,
+          source_order_id TEXT NOT NULL,
+          start_at INTEGER NOT NULL,
+          end_at INTEGER NOT NULL,
+          status TEXT NOT NULL DEFAULT 'scheduled' CHECK(status IN ('scheduled', 'active', 'expired', 'cancelled')),
+          created_at INTEGER NOT NULL,
+          UNIQUE(subscription_id, start_at)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS billing_image_grants (
+          id TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          source_type TEXT NOT NULL CHECK(source_type IN ('subscription_monthly', 'credit_pack_bonus', 'admin_adjustment')),
+          source_ref TEXT NOT NULL,
+          total_count INTEGER NOT NULL CHECK(total_count >= 0),
+          remaining_count INTEGER NOT NULL CHECK(remaining_count >= 0),
+          available_at INTEGER NOT NULL DEFAULT 0,
+          expires_at INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(source_type, source_ref)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS billing_reservations (
+          id TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          ref_type TEXT NOT NULL,
+          ref_id TEXT NOT NULL,
+          sku TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('held', 'settled', 'released', 'waived')),
+          reserved_credit_units INTEGER NOT NULL DEFAULT 0,
+          reserved_image_count INTEGER NOT NULL DEFAULT 0,
+          settled_credit_units INTEGER NOT NULL DEFAULT 0,
+          settled_image_count INTEGER NOT NULL DEFAULT 0,
+          catalog_version_id TEXT NOT NULL DEFAULT '',
+          meta_json TEXT NOT NULL DEFAULT '{}',
+          idempotency_key TEXT NOT NULL UNIQUE,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(ref_type, ref_id, sku)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS billing_ledger (
+          id TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          asset_type TEXT NOT NULL CHECK(asset_type IN ('credit', 'image', 'subscription', 'audit')),
+          event_type TEXT NOT NULL,
+          amount_units INTEGER NOT NULL DEFAULT 0,
+          balance_after_units INTEGER NOT NULL DEFAULT 0,
+          ref_type TEXT NOT NULL DEFAULT '',
+          ref_id TEXT NOT NULL DEFAULT '',
+          order_id TEXT NOT NULL DEFAULT '',
+          reservation_id TEXT NOT NULL DEFAULT '',
+          meta_json TEXT NOT NULL DEFAULT '{}',
+          idempotency_key TEXT NOT NULL UNIQUE,
+          created_at INTEGER NOT NULL
+        )
+        """,
+    )
+    for statement in statements:
+        conn.execute(statement)
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_catalog_active ON billing_catalog_versions(status) WHERE status = 'active'")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_orders_user ON billing_orders(user_id, created_at DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_orders_status ON billing_orders(status, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_subscriptions_user ON billing_subscriptions(user_id, current_period_end)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_periods_user ON billing_subscription_periods(user_id, start_at, end_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_grants_user ON billing_image_grants(user_id, available_at, expires_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_reservations_ref ON billing_reservations(ref_type, ref_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_ledger_user ON billing_ledger(user_id, created_at DESC)")
+
+    task_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+    for column, definition in {
+        "billing_reservation_id": "TEXT NOT NULL DEFAULT ''",
+        "credit_cost_units": "INTEGER NOT NULL DEFAULT 0",
+        "free_image_count": "INTEGER NOT NULL DEFAULT 0",
+    }.items():
+        if column not in task_columns:
+            conn.execute(f"ALTER TABLE tasks ADD COLUMN {column} {definition}")
+    social_task_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(social_automation_tasks)").fetchall()}
+    for column, definition in {
+        "billing_reservation_id": "TEXT NOT NULL DEFAULT ''",
+        "credit_cost_units": "INTEGER NOT NULL DEFAULT 0",
+        "free_image_count": "INTEGER NOT NULL DEFAULT 0",
+    }.items():
+        if column not in social_task_columns:
+            conn.execute(f"ALTER TABLE social_automation_tasks ADD COLUMN {column} {definition}")
+
+
 def init_db() -> None:
     os.makedirs(os.path.dirname(get_db_path()), exist_ok=True)
     with db() as conn:
@@ -544,6 +700,10 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_social_tasks_user ON social_automation_tasks(user_id, created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_persona_owners_user ON persona_owners(user_id, archive_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_persona_group_owners_user ON persona_group_owners(user_id, group_id)")
+        _ensure_commercial_billing_schema(conn)
+        from .commercial_billing import bootstrap_billing
+
+        bootstrap_billing(conn)
         _ensure_username_reservation_triggers(conn)
         _ensure_social_integrity_triggers(conn)
 

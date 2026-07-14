@@ -168,7 +168,7 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         self.assertEqual(extension_config.status_code, 200, extension_config.text)
         self.assertNotIn("authToken", extension_config.json())
 
-    def test_saved_social_password_is_never_returned_by_api(self):
+    def test_saved_social_password_is_only_returned_by_owner_credentials_api(self):
         admin, _identity = self._admin_client()
         created = admin.post(
             "/api/persona_dashboard/automation/accounts",
@@ -183,9 +183,10 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         self.assertEqual(updated.status_code, 200, updated.text)
 
         response = admin.get(f"/api/persona_dashboard/automation/accounts/{account_id}/credentials")
-        self.assertEqual(response.status_code, 410, response.text)
-        self.assertNotIn("top-secret", response.text)
-        self.assertNotIn("login_password", response.text)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["login_username"], "security-login")
+        self.assertEqual(response.json()["login_password"], "top-secret")
+        self.assertIn("no-store", response.headers["cache-control"])
 
     def test_social_resources_are_isolated_between_ordinary_users(self):
         owner, owner_id = self._approved_client("owner_user")
@@ -277,7 +278,7 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         self.assertEqual(admin.get(f"/api/persona_dashboard/personas/{owner_persona_id}/profile").status_code, 404)
         admin_console = admin.get("/console.html", follow_redirects=False)
         self.assertEqual(admin_console.status_code, 302)
-        self.assertEqual(admin_console.headers["location"], "/admin")
+        self.assertEqual(admin_console.headers["location"], "/admin-console.html")
         owner_detail = admin.get(f"/api/admin/users/{owner_id}")
         self.assertEqual(owner_detail.status_code, 200, owner_detail.text)
         self.assertEqual(owner_detail.json()["resource_counts"]["personas"], 1)

@@ -21,12 +21,21 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
 from fastapi import Body, Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from PIL import Image
 from pydantic import BaseModel, Field
 
-from .auth import ADMIN_WORKSPACE_QUERY, SESSION_COOKIE, get_current_user, get_current_user_for_session, require_admin
+from .auth import (
+    ADMIN_CONSOLE_QUERY,
+    ADMIN_SESSION_COOKIE,
+    ADMIN_WORKSPACE_QUERY,
+    SESSION_COOKIE,
+    get_current_user,
+    get_current_user_for_session,
+    require_admin,
+)
 from .db import db
+from . import commercial_billing
 
 
 SOCIAL_TASK_TYPES = {
@@ -43,8 +52,54 @@ SOCIAL_TASK_TYPES = {
     "share_post",
     "repost_post",
 }
-SOCIAL_ACCOUNT_STATUSES = {"pending_login", "ready", "need_verification", "cookie_expired", "disabled"}
-SOCIAL_TASK_STATUSES = {"queued", "running", "success", "failed", "cancelled", "need_manual"}
+_ADMIN_BILLING_WAIVED_PAYLOAD_IDS: set[int] = set()
+_ADMIN_BILLING_WAIVED_PAYLOAD_IDS_LOCK = threading.Lock()
+_TRUSTED_BATCH_TASK_CONTEXTS: dict[int, dict[str, Any]] = {}
+_TRUSTED_BATCH_TASK_CONTEXTS_LOCK = threading.Lock()
+
+
+def mark_admin_billing_waived_payload(payload: Any) -> None:
+    with _ADMIN_BILLING_WAIVED_PAYLOAD_IDS_LOCK:
+        _ADMIN_BILLING_WAIVED_PAYLOAD_IDS.add(id(payload))
+
+
+def clear_admin_billing_waived_payload(payload: Any) -> None:
+    with _ADMIN_BILLING_WAIVED_PAYLOAD_IDS_LOCK:
+        _ADMIN_BILLING_WAIVED_PAYLOAD_IDS.discard(id(payload))
+
+
+def _consume_admin_billing_waiver(payload: Any) -> bool:
+    with _ADMIN_BILLING_WAIVED_PAYLOAD_IDS_LOCK:
+        marked = id(payload) in _ADMIN_BILLING_WAIVED_PAYLOAD_IDS
+        _ADMIN_BILLING_WAIVED_PAYLOAD_IDS.discard(id(payload))
+    return marked
+
+
+def mark_trusted_batch_task(
+    payload: Any,
+    *,
+    task_id: str,
+    reservation_id: str = "",
+    suppress_wake: bool = True,
+) -> None:
+    with _TRUSTED_BATCH_TASK_CONTEXTS_LOCK:
+        _TRUSTED_BATCH_TASK_CONTEXTS[id(payload)] = {
+            "task_id": str(task_id),
+            "reservation_id": str(reservation_id),
+            "suppress_wake": bool(suppress_wake),
+        }
+
+
+def clear_trusted_batch_task(payload: Any) -> None:
+    with _TRUSTED_BATCH_TASK_CONTEXTS_LOCK:
+        _TRUSTED_BATCH_TASK_CONTEXTS.pop(id(payload), None)
+
+
+def _consume_trusted_batch_task(payload: Any) -> dict[str, Any]:
+    with _TRUSTED_BATCH_TASK_CONTEXTS_LOCK:
+        return dict(_TRUSTED_BATCH_TASK_CONTEXTS.pop(id(payload), {}) or {})
+SOCIAL_ACCOUNT_STATUSES = {"pending_login", "ready", "need_verification", "cookie_expired", "transient_error", "disabled"}
+SOCIAL_TASK_STATUSES = {"preparing", "queued", "running", "success", "failed", "cancelled", "need_manual"}
 SOCIAL_MEDIA_EXTENSIONS = {
     ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif",
     ".mp4", ".mov", ".webm", ".m4v", ".mp3", ".wav", ".m4a", ".aac",
@@ -158,6 +213,8 @@ class SocialAccountPayload(BaseModel):
     profile_dir: str = ""
     proxy_id: str = ""
     status: str = "pending_login"
+    login_username: str = ""
+    login_password: str = ""
     residential_proxy: ResidentialProxyPayload | None = None
 
 
@@ -283,6 +340,21 @@ def _require_active_owner_user(conn: Any, owner_user_id: int) -> None:
         raise HTTPException(status_code=403, detail="账号已停用或不存在")
 
 
+def _billing_admin_waived(user: dict[str, Any]) -> bool:
+    return bool(int(user.get("_workspace_admin_user_id") or 0) or int(user.get("is_admin") or 0))
+
+
+def _create_social_task_for_user(payload: SocialTaskPayload, user: dict[str, Any]) -> dict[str, Any]:
+    waived = _billing_admin_waived(user)
+    if waived:
+        mark_admin_billing_waived_payload(payload)
+    try:
+        return create_social_task(payload)
+    finally:
+        if waived:
+            clear_admin_billing_waived_payload(payload)
+
+
 def register_social_automation_routes(app: FastAPI) -> None:
     @app.get("/api/persona_dashboard/automation/overview")
     def api_social_automation_overview(user: dict[str, Any] = Depends(get_current_user)):
@@ -355,7 +427,14 @@ def register_social_automation_routes(app: FastAPI) -> None:
         _require_persona_reference_access(payload.persona_id, user)
         if payload.profile_dir:
             raise HTTPException(status_code=400, detail="普通用户不能指定浏览器配置目录")
-        account = create_social_account(payload, owner_user_id=_identity_user_id(user))
+        waived = _billing_admin_waived(user)
+        if waived:
+            mark_admin_billing_waived_payload(payload)
+        try:
+            account = create_social_account(payload, owner_user_id=_identity_user_id(user))
+        finally:
+            if waived:
+                clear_admin_billing_waived_payload(payload)
         return {"ok": True, "account": account}
 
     @app.patch("/api/persona_dashboard/automation/accounts/{account_id}")
@@ -381,8 +460,17 @@ def register_social_automation_routes(app: FastAPI) -> None:
         return {"ok": True, **dedupe_social_accounts(user_id=_identity_user_id(user))}
 
     @app.get("/api/persona_dashboard/automation/accounts/{account_id}/credentials")
-    def api_social_account_credentials(account_id: str, _user: dict[str, Any] = Depends(get_current_user)):
-        raise HTTPException(status_code=410, detail="已保存密码仅供自动化任务使用，不支持回显")
+    def api_social_account_credentials(account_id: str, user: dict[str, Any] = Depends(get_current_user)):
+        account = _require_account_access(account_id, user)
+        response = JSONResponse(
+            content={
+                "ok": True,
+                "login_username": str(account["login_username"] or account["username"] or ""),
+                "login_password": str(account["login_password"] or ""),
+            }
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.post("/api/persona_dashboard/automation/accounts/{account_id}/check_login")
     def api_social_account_check_login(
@@ -446,7 +534,10 @@ def register_social_automation_routes(app: FastAPI) -> None:
     def api_social_task_create(payload: SocialTaskPayload, user: dict[str, Any] = Depends(get_current_user)):
         _require_account_access(payload.account_id, user)
         _validate_user_task_media_paths(payload.payload, user)
-        return {"ok": True, "task": create_social_task(payload)}
+        return {
+            "ok": True,
+            "task": _create_social_task_for_user(payload, user),
+        }
 
     @app.post("/api/persona_dashboard/automation/tasks/cancel_all")
     def api_social_tasks_cancel_all(payload: SocialTaskActionPayload | None = None, user: dict[str, Any] = Depends(get_current_user)):
@@ -474,7 +565,10 @@ def register_social_automation_routes(app: FastAPI) -> None:
     @app.post("/api/persona_dashboard/automation/tasks/{task_id}/retry")
     def api_social_task_retry(task_id: str, user: dict[str, Any] = Depends(get_current_user)):
         _require_task_access(task_id, user)
-        return {"ok": True, "task": retry_social_task(task_id)}
+        return {
+            "ok": True,
+            "task": retry_social_task(task_id, billing_admin_waived=True) if _billing_admin_waived(user) else retry_social_task(task_id),
+        }
 
     @app.get("/api/persona_dashboard/automation/tasks/{task_id}/logs")
     def api_social_task_logs(task_id: str, user: dict[str, Any] = Depends(get_current_user)):
@@ -583,11 +677,20 @@ def register_social_automation_routes(app: FastAPI) -> None:
 
 
 def _authenticate_live_browser_websocket(websocket: WebSocket) -> dict[str, Any] | None:
-    token = str(websocket.cookies.get(SESSION_COOKIE) or "").strip()
-    if not token:
-        return None
     query_params = getattr(websocket, "query_params", None)
     workspace_user_id = query_params.get(ADMIN_WORKSPACE_QUERY) if query_params is not None else None
+    admin_console = query_params.get(ADMIN_CONSOLE_QUERY) if query_params is not None else None
+    use_admin_session = bool(workspace_user_id) or str(admin_console or "").strip().lower() in {"1", "true", "yes", "on"}
+    if use_admin_session:
+        token = str(
+            websocket.cookies.get(ADMIN_SESSION_COOKIE)
+            or websocket.cookies.get(SESSION_COOKIE)
+            or ""
+        ).strip()
+    else:
+        token = str(websocket.cookies.get(SESSION_COOKIE) or "").strip()
+    if not token:
+        return None
     try:
         return get_current_user_for_session(token, admin_workspace_user_id=workspace_user_id)
     except Exception:
@@ -753,6 +856,30 @@ async def _live_browser_input_allowed(task_id: str) -> bool:
     return bool(await asyncio.to_thread(_query_live_browser_input_allowed, task_id))
 
 
+def _query_live_browser_write_access(task_id: str, user: dict[str, Any] | None) -> bool:
+    if _billing_admin_waived(user or {}):
+        return True
+    try:
+        with db() as conn:
+            row = conn.execute(
+                "SELECT user_id FROM social_automation_tasks WHERE id = ?",
+                (str(task_id or ""),),
+            ).fetchone()
+            if row is None:
+                return False
+            owner_user_id = int(row["user_id"] or 0)
+            if owner_user_id <= 0:
+                return True
+            commercial_billing.require_write_access(conn, owner_user_id)
+        return True
+    except Exception:
+        return False
+
+
+async def _live_browser_write_access(task_id: str, user: dict[str, Any] | None) -> bool:
+    return bool(await asyncio.to_thread(_query_live_browser_write_access, task_id, user))
+
+
 async def _proxy_live_browser_websocket(
     websocket: WebSocket,
     session_id: str,
@@ -793,6 +920,8 @@ async def _proxy_live_browser_websocket(
         inspection_payload = payload if isinstance(payload, bytes) else payload.encode("latin1", "ignore")
         requires_input = rfb_inspector.requires_input_permission(inspection_payload)
         if requires_input and not await _live_browser_input_allowed(session.task_id):
+            return False
+        if requires_input and not await _live_browser_write_access(session.task_id, user):
             return False
         if requires_input and not control_audited:
             _audit_admin_live_browser_action(user, "workspace.browser_session.control", session_id)
@@ -885,6 +1014,18 @@ def ensure_social_automation_worker_started() -> None:
     _WORKER_STOP.clear()
     _WORKER_THREAD = threading.Thread(target=_worker_loop, name="social-automation-worker", daemon=True)
     _WORKER_THREAD.start()
+
+
+def stop_social_automation_worker(*, timeout_seconds: float = 5.0) -> None:
+    global _WORKER_THREAD
+    _WORKER_STOP.set()
+    _WORKER_WAKE.set()
+    worker = _WORKER_THREAD
+    if worker and worker.is_alive() and worker is not threading.current_thread():
+        worker.join(timeout=max(float(timeout_seconds), 0.0))
+    if worker is None or not worker.is_alive():
+        _WORKER_THREAD = None
+    _WORKER_STATE["enabled"] = False
 
 
 def wake_social_automation_worker() -> None:
@@ -1525,11 +1666,21 @@ def check_social_proxy(proxy_id: str) -> dict[str, Any]:
         updated = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
     return _proxy_public(updated)
 
-def create_social_account(payload: SocialAccountPayload, *, owner_user_id: int = 0) -> dict[str, Any]:
+def create_social_account(
+    payload: SocialAccountPayload,
+    *,
+    owner_user_id: int = 0,
+    billing_admin_waived: bool = False,
+) -> dict[str, Any]:
+    billing_admin_waived = bool(billing_admin_waived or _consume_admin_billing_waiver(payload))
     platform = _normalize_platform(payload.platform)
     username = str(payload.username or "").strip().lstrip("@")
     if not username:
         raise HTTPException(status_code=400, detail="账号 username 必填")
+    login_username = str(payload.login_username or "").strip() or username
+    login_password = str(payload.login_password or "")
+    if login_password and _looks_like_non_password_text(login_password):
+        raise HTTPException(status_code=400, detail="登录密码内容看起来像说明文字，请填写真实密码")
     persona_id = str(payload.persona_id or "").strip()
     status = str(payload.status or "pending_login").strip()
     if status not in SOCIAL_ACCOUNT_STATUSES:
@@ -1540,6 +1691,27 @@ def create_social_account(payload: SocialAccountPayload, *, owner_user_id: int =
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         _require_active_owner_user(conn, owner_user_id)
+        if int(owner_user_id) > 0:
+            commercial_billing.require_write_access(
+                conn,
+                int(owner_user_id),
+                admin_waived=bool(billing_admin_waived),
+            )
+        if platform == "threads" and int(owner_user_id) > 0 and not billing_admin_waived:
+            account_limit = commercial_billing.threads_account_limit(conn, int(owner_user_id), now=now)
+            if account_limit is not None:
+                current_count = int(
+                    conn.execute(
+                        "SELECT COUNT(*) AS c FROM social_accounts WHERE user_id = ? AND lower(platform) = 'threads'",
+                        (int(owner_user_id),),
+                    ).fetchone()["c"]
+                )
+                if current_count >= int(account_limit):
+                    raise commercial_billing.BillingError(
+                        "THREADS_ACCOUNT_LIMIT",
+                        f"当前订阅最多允许 {int(account_limit)} 个 Threads 账号，请增加订阅后再创建",
+                        409,
+                    )
         if payload.proxy_id:
             _require_proxy(conn, payload.proxy_id, owner_user_id=owner_user_id)
         if persona_id:
@@ -1581,8 +1753,11 @@ def create_social_account(payload: SocialAccountPayload, *, owner_user_id: int =
             proxy_id = str(proxy_row["id"] or "")
         conn.execute(
             """
-            INSERT INTO social_accounts(id, user_id, persona_id, platform, username, display_name, profile_dir, proxy_id, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO social_accounts(
+              id, user_id, persona_id, platform, username, display_name, profile_dir, proxy_id, status,
+              login_username, login_password, login_credentials_updated_at, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 account_id,
@@ -1594,6 +1769,9 @@ def create_social_account(payload: SocialAccountPayload, *, owner_user_id: int =
                 profile_dir,
                 proxy_id,
                 status,
+                login_username,
+                login_password,
+                now if login_username or login_password else 0,
                 now,
                 now,
             ),
@@ -1743,6 +1921,45 @@ def _deletable_account_ids(conn: Any, account_ids: list[str]) -> set[str]:
     return {account_id for account_id in clean_ids if account_id not in active_ids}
 
 
+def _release_task_billing_reservation(conn: sqlite3.Connection, task: Any, *, now: int | None = None) -> bool:
+    if task is None or "billing_reservation_id" not in task.keys():
+        return False
+    reservation_id = str(task["billing_reservation_id"] or "").strip()
+    if not reservation_id:
+        return False
+    commercial_billing.release_reservation(conn, reservation_id, now=now)
+    return True
+
+
+def _release_terminal_task_billing_reservations(conn: sqlite3.Connection, now: int) -> None:
+    conn.execute(
+        """
+        UPDATE social_automation_tasks
+        SET status = 'cancelled', finished_at = ?, error = 'stale batch preparation', updated_at = ?
+        WHERE status = 'preparing' AND updated_at < ?
+        """,
+        (int(now), int(now), int(now) - 600),
+    )
+    rows = conn.execute(
+        """
+        SELECT t.billing_reservation_id
+        FROM social_automation_tasks t
+        JOIN billing_reservations r ON r.id = t.billing_reservation_id
+        WHERE (
+            t.status IN ('failed', 'cancelled')
+            OR (
+                t.status = 'need_manual'
+                AND t.finished_at != 0
+                AND t.task_type IN ('publish_post', 'threads_auto_reply')
+            )
+          )
+          AND r.status = 'held'
+        """
+    ).fetchall()
+    for row in rows:
+        _release_task_billing_reservation(conn, row, now=now)
+
+
 def delete_social_account(account_id: str) -> int:
     clean_id = str(account_id or "").strip()
     if not clean_id:
@@ -1752,7 +1969,6 @@ def delete_social_account(account_id: str) -> int:
         if not row:
             raise HTTPException(status_code=404, detail="account not found")
         task_rows = conn.execute("SELECT id, status FROM social_automation_tasks WHERE account_id = ?", (clean_id,)).fetchall()
-        task_ids = [str(task["id"] or "") for task in task_rows if str(task["id"] or "")]
         active_task_ids = [
             str(task["id"] or "") for task in task_rows
             if str(task["id"] or "") and str(task["status"] or "") in {"running", "need_manual"}
@@ -1760,7 +1976,13 @@ def delete_social_account(account_id: str) -> int:
     for task_id in active_task_ids:
         _force_stop_running_task(task_id)
     with db() as conn:
-        for task_id in task_ids:
+        deletion_task_rows = conn.execute(
+            "SELECT id, billing_reservation_id FROM social_automation_tasks WHERE account_id = ?",
+            (clean_id,),
+        ).fetchall()
+        for task in deletion_task_rows:
+            _release_task_billing_reservation(conn, task)
+            task_id = str(task["id"] or "")
             conn.execute("DELETE FROM social_automation_logs WHERE task_id = ?", (task_id,))
         conn.execute("DELETE FROM social_automation_tasks WHERE account_id = ?", (clean_id,))
         deleted = conn.execute("DELETE FROM social_accounts WHERE id = ?", (clean_id,)).rowcount
@@ -1774,6 +1996,7 @@ def _account_dedupe_rank(row: Any) -> tuple[int, int]:
         "need_verification": 4,
         "pending_login": 3,
         "cookie_expired": 2,
+        "transient_error": 2,
         "disabled": 1,
     }
     return (
@@ -1856,7 +2079,9 @@ def create_account_task(account_id: str, task_type: str, payload: dict[str, Any]
     )
 
 
-def create_social_task(payload: SocialTaskPayload) -> dict[str, Any]:
+def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool = False) -> dict[str, Any]:
+    billing_admin_waived = bool(billing_admin_waived or _consume_admin_billing_waiver(payload))
+    batch_context = _consume_trusted_batch_task(payload)
     platform = _normalize_platform(payload.platform)
     task_type = str(payload.task_type or "").strip()
     if task_type not in SOCIAL_TASK_TYPES:
@@ -1865,7 +2090,7 @@ def create_social_task(payload: SocialTaskPayload) -> dict[str, Any]:
     auto_submit = _validate_open_login_payload(task_payload) if task_type == "open_login" else False
     now = _now()
     scheduled_at = _parse_schedule(payload.scheduled_at)
-    task_id = _NEW_ID("social_task")
+    task_id = str(batch_context.get("task_id") or _NEW_ID("social_task"))
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         account = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (payload.account_id,)).fetchone()
@@ -1904,6 +2129,64 @@ def create_social_task(payload: SocialTaskPayload) -> dict[str, Any]:
             ).fetchone()
             if not owner:
                 raise HTTPException(status_code=409, detail="执行账号绑定的人设不属于当前账号")
+        if platform == "threads" and task_type == "publish_post":
+            archive_post_id = str(task_payload.get("archive_post_id") or "").strip()
+            archive_post_source = str(task_payload.get("archive_post_source") or "").strip()
+            if archive_post_id:
+                active_rows = conn.execute(
+                    """
+                    SELECT * FROM social_automation_tasks
+                    WHERE user_id = ? AND account_id = ? AND platform = 'threads'
+                      AND task_type = 'publish_post'
+                      AND status IN ('preparing', 'queued', 'running', 'need_manual')
+                    ORDER BY created_at DESC
+                    """,
+                    (owner_user_id, str(payload.account_id)),
+                ).fetchall()
+                for active_row in active_rows:
+                    active_payload = _loads(active_row["payload_json"], {})
+                    if (
+                        str(active_payload.get("archive_post_id") or "").strip() == archive_post_id
+                        and str(active_payload.get("archive_post_source") or "").strip() == archive_post_source
+                    ):
+                        if batch_context.get("task_id"):
+                            raise HTTPException(status_code=409, detail="已有相同推文的发布任务")
+                        reused = _task_public(active_row)
+                        reused["reused"] = True
+                        return reused
+        billing_reservation: dict[str, Any] | None = None
+        billing_sku = ""
+        if platform == "threads" and task_type == "publish_post":
+            billing_sku = "threads_text_publish"
+        elif platform == "threads" and task_type == "threads_auto_reply":
+            billing_sku = "threads_auto_reply_batch"
+        if billing_sku and owner_user_id > 0:
+            pre_reserved_id = str(batch_context.get("reservation_id") or "")
+            if pre_reserved_id:
+                billing_reservation = commercial_billing.claim_reservation(
+                    conn,
+                    reservation_id=pre_reserved_id,
+                    user_id=owner_user_id,
+                    ref_type="social_task",
+                    ref_id=task_id,
+                    sku=billing_sku,
+                )
+            else:
+                billing_reservation = commercial_billing.reserve_charge(
+                    conn,
+                    user_id=owner_user_id,
+                    ref_type="social_task",
+                    ref_id=task_id,
+                    sku=billing_sku,
+                    quantity=1,
+                    admin_waived=bool(billing_admin_waived),
+                )
+        elif owner_user_id > 0:
+            commercial_billing.require_write_access(
+                conn,
+                owner_user_id,
+                admin_waived=bool(billing_admin_waived),
+            )
         runtime_secrets: dict[str, str] = {}
         if task_type == "open_login" and auto_submit:
             submitted_password = str(task_payload.get("login_password") or "")
@@ -1914,13 +2197,14 @@ def create_social_task(payload: SocialTaskPayload) -> dict[str, Any]:
         task_payload, runtime_secrets = _extract_runtime_secrets(task_payload)
         if platform == "threads" and task_type in {"threads_warmup", "threads_auto_reply"}:
             task_payload = _enrich_threads_task_payload(persona_id, task_type, task_payload)
+        initial_status = "preparing" if bool(batch_context.get("suppress_wake")) else "queued"
         conn.execute(
             """
             INSERT INTO social_automation_tasks(
               id, user_id, persona_id, account_id, platform, task_type, priority, status, scheduled_at,
-              payload_json, result_json, max_retries, created_at, updated_at
+              payload_json, result_json, max_retries, billing_reservation_id, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, '{}', ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?)
             """,
             (
                 task_id,
@@ -1930,9 +2214,11 @@ def create_social_task(payload: SocialTaskPayload) -> dict[str, Any]:
                 platform,
                 task_type,
                 int(payload.priority or 50),
+                initial_status,
                 scheduled_at,
                 json.dumps(task_payload, ensure_ascii=False),
                 max(0, min(int(payload.max_retries or 0), 5)),
+                str((billing_reservation or {}).get("id") or ""),
                 now,
                 now,
             ),
@@ -1942,7 +2228,8 @@ def create_social_task(payload: SocialTaskPayload) -> dict[str, Any]:
             with _EPHEMERAL_TASK_SECRETS_LOCK:
                 _EPHEMERAL_TASK_SECRETS[task_id] = runtime_secrets
         row = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
-    wake_social_automation_worker()
+    if not bool(batch_context.get("suppress_wake")):
+        wake_social_automation_worker()
     return _task_public(row)
 
 
@@ -1985,6 +2272,7 @@ def clear_social_task(task_id: str) -> int:
     if status in {"running", "need_manual"}:
         _force_stop_running_task(task_id)
     with db() as conn:
+        _release_task_billing_reservation(conn, row)
         conn.execute("DELETE FROM social_automation_logs WHERE task_id = ?", (task_id,))
         deleted = conn.execute("DELETE FROM social_automation_tasks WHERE id = ?", (task_id,)).rowcount
     wake_social_automation_worker()
@@ -2007,7 +2295,7 @@ def clear_social_tasks(*, persona_id: str = "", account_id: str = "", user_id: i
         params.append(int(user_id))
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     with db() as conn:
-        rows = conn.execute(f"SELECT id, status FROM social_automation_tasks {where}", tuple(params)).fetchall()
+        rows = conn.execute(f"SELECT * FROM social_automation_tasks {where}", tuple(params)).fetchall()
     cleared = 0
     for row in rows:
         task_id = str(row["id"] or "")
@@ -2016,6 +2304,7 @@ def clear_social_tasks(*, persona_id: str = "", account_id: str = "", user_id: i
         if str(row["status"] or "") in {"running", "need_manual"}:
             _force_stop_running_task(task_id)
         with db() as conn:
+            _release_task_billing_reservation(conn, row)
             conn.execute("DELETE FROM social_automation_logs WHERE task_id = ?", (task_id,))
             cleared += int(conn.execute("DELETE FROM social_automation_tasks WHERE id = ?", (task_id,)).rowcount or 0)
     wake_social_automation_worker()
@@ -2037,6 +2326,8 @@ def cancel_social_task(task_id: str, reason: str = "") -> dict[str, Any]:
         row = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="任务不存在")
+        if cancelled or str(row["status"] or "") in {"failed", "cancelled"}:
+            _release_task_billing_reservation(conn, row, now=now)
         if cancelled:
             _insert_log(conn, task_id, "warn", "cancel", "任务已取消，正在停止执行上下文", {"reason": clean_reason})
     _discard_ephemeral_task_secrets(task_id)
@@ -2085,6 +2376,12 @@ def cancel_all_social_tasks(
         if not task_ids:
             return {"cancelled_count": 0, "task_ids": [], "tasks": []}
         placeholders = ", ".join("?" for _ in task_ids)
+        reservation_rows = conn.execute(
+            f"SELECT id, billing_reservation_id FROM social_automation_tasks WHERE id IN ({placeholders})",
+            tuple(task_ids),
+        ).fetchall()
+        for reservation_row in reservation_rows:
+            _release_task_billing_reservation(conn, reservation_row, now=now)
         for task_id in task_ids:
             _insert_log(conn, task_id, "warn", "cancel_all", "已通过总控停止任务", {"reason": clean_reason})
         updated_rows = conn.execute(
@@ -2104,13 +2401,12 @@ def cancel_all_social_tasks(
     }
 
 
-def retry_social_task(task_id: str) -> dict[str, Any]:
+def retry_social_task(task_id: str, *, billing_admin_waived: bool = False) -> dict[str, Any]:
     with db() as conn:
         row = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="任务不存在")
-    return create_social_task(
-        SocialTaskPayload(
+    payload = SocialTaskPayload(
             persona_id=str(row["persona_id"] or ""),
             account_id=str(row["account_id"] or ""),
             platform=str(row["platform"] or "instagram"),
@@ -2118,8 +2414,10 @@ def retry_social_task(task_id: str) -> dict[str, Any]:
             priority=int(row["priority"] or 50),
             payload=_loads(row["payload_json"], {}),
             max_retries=int(row["max_retries"] or 0),
-        )
     )
+    if billing_admin_waived:
+        mark_admin_billing_waived_payload(payload)
+    return create_social_task(payload)
 
 
 def run_social_automation_once() -> dict[str, Any] | None:
@@ -2242,6 +2540,7 @@ def _publish_login_dependency_blocks_claim(conn: sqlite3.Connection, row: Any, n
             """,
             (now, message, now, task_id),
         )
+        _release_task_billing_reservation(conn, row, now=now)
         _insert_log(conn, task_id, "error", "login_dependency_failed", message, {"login_task_id": login_task_id, "login_status": login_status})
     return True
 
@@ -2250,6 +2549,8 @@ def _claim_next_task() -> dict[str, Any] | None:
     now = _now()
     _recover_orphaned_manual_login_task(now)
     with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        _release_terminal_task_billing_reservations(conn, now)
         rows = conn.execute(
             """
             SELECT t.*
@@ -2276,10 +2577,12 @@ def _claim_next_task() -> dict[str, Any] | None:
         if not row:
             return None
         task_id = str(row["id"])
-        conn.execute(
+        claimed = conn.execute(
             "UPDATE social_automation_tasks SET status = 'running', started_at = ?, updated_at = ? WHERE id = ? AND status = 'queued'",
             (now, now, task_id),
-        )
+        ).rowcount
+        if not claimed:
+            return None
         _insert_log(conn, task_id, "info", "running", "后台执行器已领取任务", {})
         updated = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
     public = _task_public(updated)
@@ -2548,7 +2851,29 @@ def _finish_task(task_id: str, status: str, result: dict[str, Any], error: str, 
                 (status, now, result_json, error, now, task_id),
             ).rowcount
         if not completed:
+            current = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
+            if current is not None and str(current["status"] or "") in {"failed", "cancelled"}:
+                _release_task_billing_reservation(conn, current, now=now)
             return False
+        reservation_id = str(task["billing_reservation_id"] or "") if "billing_reservation_id" in task.keys() else ""
+        credit_cost_units = 0
+        free_image_count = 0
+        if reservation_id and status != "need_manual":
+            if status == "success":
+                commercial_billing.settle_reservation(conn, reservation_id, actual_quantity=1, success=True, now=now)
+            else:
+                _release_task_billing_reservation(conn, task, now=now)
+            billing_row = conn.execute(
+                "SELECT settled_credit_units, settled_image_count FROM billing_reservations WHERE id = ?",
+                (reservation_id,),
+            ).fetchone()
+            if billing_row is not None:
+                credit_cost_units = int(billing_row["settled_credit_units"] or 0)
+                free_image_count = int(billing_row["settled_image_count"] or 0)
+            conn.execute(
+                "UPDATE social_automation_tasks SET credit_cost_units = ?, free_image_count = ? WHERE id = ?",
+                (credit_cost_units, free_image_count, task_id),
+            )
         _insert_log(conn, task_id, "info" if status == "success" else "error", status, "任务执行完成" if status == "success" else error, result)
         if account_status:
             conn.execute(
@@ -3518,6 +3843,16 @@ def _task_public(row: Any) -> dict[str, Any]:
             account = {}
         account_username = account_username or str(account.get("username") or "").strip()
         account_display_name = account_display_name or str(account.get("display_name") or "").strip()
+    reservation_id = str(item.get("billing_reservation_id") or "")
+    task_status = str(item.get("status") or "")
+    billing_status = "unbilled"
+    if reservation_id:
+        if task_status in {"queued", "running", "need_manual"}:
+            billing_status = "held"
+        elif task_status == "success":
+            billing_status = "settled" if int(item.get("credit_cost_units") or 0) > 0 else "waived"
+        else:
+            billing_status = "released"
     return {
         "id": str(item.get("id") or ""),
         "persona_id": str(item.get("persona_id") or ""),
@@ -3539,6 +3874,12 @@ def _task_public(row: Any) -> dict[str, Any]:
         "created_by": str(item.get("created_by") or ""),
         "created_at": int(item.get("created_at") or 0),
         "updated_at": int(item.get("updated_at") or 0),
+        "billing": {
+            "reservation_id": reservation_id,
+            "status": billing_status,
+            "charged_points": commercial_billing.points_from_units(int(item.get("credit_cost_units") or 0)),
+            "free_images_used": int(item.get("free_image_count") or 0),
+        },
     }
 
 

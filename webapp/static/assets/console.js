@@ -18,25 +18,28 @@ const LIVE_BROWSER_MAX_CONCURRENCY_KEY = "wk-live-browser-max-concurrency";
 const LIVE_BROWSER_TEXT_INPUT_MODE_KEY = "wk-live-browser-text-input-mode";
 const LIVE_BROWSER_LAYOUT_KEY = "wk-live-browser-layout";
 const ADMIN_WORKSPACE_USER_ID = String(document.querySelector('meta[name="admin-workspace-user-id"]')?.content || "").trim();
+const ADMIN_CONSOLE_SESSION = document.querySelector('meta[name="admin-console-session"]')?.content === "1";
 
 function adminWorkspaceRequestOptions(options = {}) {
-  if (!ADMIN_WORKSPACE_USER_ID) return options;
+  if (!ADMIN_WORKSPACE_USER_ID && !ADMIN_CONSOLE_SESSION) return options;
   const headers = new Headers(options.headers || {});
-  headers.set("X-Admin-Workspace-User-ID", ADMIN_WORKSPACE_USER_ID);
+  if (ADMIN_WORKSPACE_USER_ID) headers.set("X-Admin-Workspace-User-ID", ADMIN_WORKSPACE_USER_ID);
+  if (ADMIN_CONSOLE_SESSION) headers.set("X-Admin-Console", "1");
   return { ...options, headers };
 }
 
 function adminWorkspaceUrl(value) {
   const text = String(value || "").trim();
-  if (!ADMIN_WORKSPACE_USER_ID || !text || !text.startsWith("/api/")) return text;
+  if ((!ADMIN_WORKSPACE_USER_ID && !ADMIN_CONSOLE_SESSION) || !text || !text.startsWith("/api/")) return text;
   const url = new URL(text, location.origin);
-  url.searchParams.set("admin_workspace_user_id", ADMIN_WORKSPACE_USER_ID);
+  if (ADMIN_WORKSPACE_USER_ID) url.searchParams.set("admin_workspace_user_id", ADMIN_WORKSPACE_USER_ID);
+  if (ADMIN_CONSOLE_SESSION) url.searchParams.set("admin_console", "1");
   return `${url.pathname}${url.search}${url.hash}`;
 }
 
 function adminWorkspaceLiveBrowserUrl(value) {
   const decorated = adminWorkspaceUrl(value);
-  if (!ADMIN_WORKSPACE_USER_ID || !decorated || !decorated.startsWith("/api/")) return decorated;
+  if ((!ADMIN_WORKSPACE_USER_ID && !ADMIN_CONSOLE_SESSION) || !decorated || !decorated.startsWith("/api/")) return decorated;
   const url = new URL(decorated, location.origin);
   const nestedPath = String(url.searchParams.get("path") || "").trim();
   if (!nestedPath) return `${url.pathname}${url.search}${url.hash}`;
@@ -266,7 +269,7 @@ function applyPersonaOverviewPostRows(persona) {
 
 const initialConsoleView = new URLSearchParams(window.location.search).get("view");
 const state = {
-  view: ["workspace", "tasks", "accounts", "settings", "console_settings", "persona_dashboard"].includes(initialConsoleView) ? initialConsoleView : "workspace",
+  view: ["workspace", "tasks", "accounts", "settings", "billing", "console_settings", "persona_dashboard"].includes(initialConsoleView) ? initialConsoleView : "workspace",
   activeModule: "personas",
   transientWorkspaceLeaveAcknowledgement: "",
   transientWorkspaceAllowNextUnload: false,
@@ -275,6 +278,15 @@ const state = {
   workspaceMenuOpen: true,
   currentUser: null,
   setupStatus: null,
+  billing: {
+    summary: null,
+    orders: [],
+    ledger: [],
+    loaded: false,
+    loading: false,
+    cancellingOrderId: "",
+    errors: {},
+  },
   personaGroup: "settings",
   personaPanels: {
     content: "generate",
@@ -519,6 +531,15 @@ function clearTenantInMemoryState() {
 
   state.currentUser = null;
   state.setupStatus = null;
+  state.billing = {
+    summary: null,
+    orders: [],
+    ledger: [],
+    loaded: false,
+    loading: false,
+    cancellingOrderId: "",
+    errors: {},
+  };
   state.publishFiles = [];
   state.socialFiles = [];
   state.tasks = [];
@@ -619,7 +640,8 @@ function handleSessionBoundary(status) {
   if (consoleBoundaryNavigationActive) return true;
   consoleBoundaryNavigationActive = true;
   clearTenantInMemoryState();
-  window.location.replace(normalizedStatus === 428 ? "/change-password.html" : "/login.html");
+  const isAdminConsole = typeof ADMIN_CONSOLE_SESSION !== "undefined" && ADMIN_CONSOLE_SESSION;
+  window.location.replace(normalizedStatus === 428 ? "/change-password.html" : (isAdminConsole ? "/admin" : "/login.html"));
   return true;
 }
 
@@ -1505,6 +1527,7 @@ function clearConsoleNotices() {
   clearMsg("commandMsg");
   clearMsg("taskQueueMsg");
   clearMsg("socialMsg");
+  clearMsg("billingMsg");
   clearMsg("consoleSettingsMsg");
 }
 
@@ -1516,7 +1539,7 @@ function closeConsoleModal(result) {
   if (typeof resolver === "function") resolver(result);
 }
 
-function openConsoleModal({ title = "确认操作", message = "", contentHtml = "", inputLabel = "", inputValue = "", confirmText = "确定", cancelText = "取消", danger = false, showCancel = true, extraActions = [] } = {}) {
+function openConsoleModal({ title = "确认操作", message = "", contentHtml = "", inputLabel = "", inputValue = "", fields = [], confirmText = "确定", cancelText = "取消", danger = false, showCancel = true, extraActions = [] } = {}) {
   closeConsoleModal(null);
   return new Promise((resolve) => {
     const modal = document.createElement("div");
@@ -1536,6 +1559,17 @@ function openConsoleModal({ title = "确认操作", message = "", contentHtml = 
             <input id="consoleModalInput" value="${esc(inputValue)}" />
           </label>
         ` : ""}
+        ${Array.isArray(fields) && fields.length ? `
+          <div class="console-modal-fields">
+            ${fields.map((field) => `
+              <label>${esc(field?.label || "")}
+                ${field?.multiline
+                  ? `<textarea data-console-modal-field="${esc(field?.name || "")}" rows="3" placeholder="${esc(field?.placeholder || "")}">${esc(field?.value || "")}</textarea>`
+                  : `<input data-console-modal-field="${esc(field?.name || "")}" type="${esc(field?.type || "text")}" value="${esc(field?.value || "")}" placeholder="${esc(field?.placeholder || "")}" ${field?.required ? "required" : ""} />`}
+              </label>
+            `).join("")}
+          </div>
+        ` : ""}
         <div class="console-modal-actions">
           ${showCancel ? `<button type="button" data-console-modal-cancel>${esc(cancelText)}</button>` : ""}
           ${Array.isArray(extraActions) ? extraActions.map((action) => `<button type="button" class="${action?.danger ? "danger" : ""}" data-console-modal-value="${esc(action?.value || "")}">${esc(action?.text || "")}</button>`).join("") : ""}
@@ -1545,9 +1579,11 @@ function openConsoleModal({ title = "确认操作", message = "", contentHtml = 
     `;
     document.body.appendChild(modal);
     const input = $("consoleModalInput");
-    if (input) {
-      input.focus();
-      input.select();
+    const fieldInputs = [...modal.querySelectorAll("[data-console-modal-field]")];
+    const firstInput = input || fieldInputs[0];
+    if (firstInput) {
+      firstInput.focus();
+      if (typeof firstInput.select === "function") firstInput.select();
     } else {
       modal.querySelector("[data-console-modal-confirm]")?.focus();
     }
@@ -1560,7 +1596,15 @@ function openConsoleModal({ title = "确认操作", message = "", contentHtml = 
         closeConsoleModal(valueButton.dataset.consoleModalValue || "");
       }
       if (event.target.closest("[data-console-modal-confirm]")) {
-        closeConsoleModal(input ? input.value : true);
+        const missing = fieldInputs.find((field) => field.required && !String(field.value || "").trim());
+        if (missing) {
+          missing.focus();
+          return;
+        }
+        const result = fieldInputs.length
+          ? Object.fromEntries(fieldInputs.map((field) => [field.dataset.consoleModalField || "", field.value]))
+          : (input ? input.value : true);
+        closeConsoleModal(result);
       }
     });
     modal.addEventListener("keydown", (event) => {
@@ -1621,6 +1665,7 @@ function statusLabel(status) {
     need_manual: "需人工",
     pending_login: "待登录",
     cookie_expired: "登录已过期",
+    transient_error: "登录页面异常",
     disabled: "已禁用",
     ready: "可用",
     open_login: "登录流程",
@@ -1640,7 +1685,7 @@ function statusLabel(status) {
 function statusTone(status) {
   const key = String(status || "").trim();
   if (["success", "ready", "standby"].includes(key)) return "success";
-  if (["failed", "error", "cookie_expired"].includes(key)) return "error";
+  if (["failed", "error", "cookie_expired", "transient_error"].includes(key)) return "error";
   if (key === "queued") return "queued";
   if (["need_manual", "pending_login", "need_verification"].includes(key)) return "manual";
   if (key === "running") return "active";
@@ -3614,7 +3659,7 @@ function syncSocialTaskScheduleWake() {
   const delay = Math.min(Math.max(nextScheduledAt - Date.now() + 1000, 1000), 2_147_000_000);
   state.socialTaskScheduleWakeTimer = window.setTimeout(() => {
     state.socialTaskScheduleWakeTimer = 0;
-    loadAutomationTasksShared({ force: true }).catch(() => {});
+    loadAutomationTasksShared().catch(() => {});
   }, delay);
 }
 
@@ -3637,7 +3682,7 @@ function syncSocialTaskToastAutoRefresh() {
       syncSocialTaskToastAutoRefresh();
       return;
     }
-    loadAutomationTasksShared({ force: true }).catch(() => {});
+    loadAutomationTasksShared().catch(() => {});
   }, 3000);
 }
 
@@ -3904,6 +3949,7 @@ function accountStatusRank(status) {
   if (value === "need_verification") return 4;
   if (value === "pending_login") return 3;
   if (value === "cookie_expired") return 2;
+  if (value === "transient_error") return 2;
   if (value === "disabled") return 1;
   return 0;
 }
@@ -4084,6 +4130,210 @@ function personaThreadsStrategyDetail(group) {
     </div>`;
 }
 
+function billingObject(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch {}
+  }
+  return {};
+}
+
+function billingRows(payload, keys = []) {
+  if (Array.isArray(payload)) return payload;
+  const source = billingObject(payload);
+  for (const key of keys) {
+    if (Array.isArray(source[key])) return source[key];
+    if (Array.isArray(source.data?.[key])) return source.data[key];
+  }
+  if (Array.isArray(source.data)) return source.data;
+  return [];
+}
+
+function billingCurrency(item = {}, root = {}) {
+  return String(item.currency || root.currency || "TWD").toUpperCase();
+}
+
+function billingMoney(item = {}, root = {}) {
+  const cents = item.price_ntd_cents ?? item.amount_ntd_cents ?? item.price_cents ?? item.amount_cents;
+  const major = cents != null ? Number(cents) / 100 : Number(item.price_ntd ?? item.amount_ntd ?? item.price ?? item.amount ?? 0);
+  const currency = billingCurrency(item, root);
+  const symbols = { TWD: "NT$", USD: "US$", CNY: "CN¥", RMB: "CN¥" };
+  const amount = Number.isFinite(major) ? major : 0;
+  return `${symbols[currency] || `${currency} `}${amount.toLocaleString("zh-CN", { maximumFractionDigits: 2 })}`;
+}
+
+function billingStatusMeta(status) {
+  const clean = String(status || "pending").toLowerCase();
+  const labels = {
+    pending: "待付款审核",
+    approved: "已生效",
+    active: "生效中",
+    paid: "已付款",
+    rejected: "已驳回",
+    cancelled: "已取消",
+    canceled: "已取消",
+    expired: "已到期",
+  };
+  const tone = ["approved", "active", "paid"].includes(clean)
+    ? "is-success"
+    : ["rejected", "cancelled", "canceled", "expired"].includes(clean) ? "is-danger" : "is-warning";
+  return { clean, label: labels[clean] || status || "待处理", tone };
+}
+
+function billingSummaryData() {
+  const source = billingObject(state.billing.summary);
+  const summary = billingObject(source.summary || source.data || source);
+  const wallet = billingObject(summary.wallet || summary.balance);
+  const subscriptions = billingRows(summary, ["subscriptions"]);
+  const subscription = billingObject(summary.active_subscription || summary.subscription || subscriptions.find((item) => String(item?.status || "active") === "active") || subscriptions[0]);
+  const imageQuota = billingObject(summary.free_images || summary.image_quota || summary.images);
+  const imageGrants = billingRows(summary, ["image_grants", "grants"]);
+  const imageRemaining = summary.image_remaining
+    ?? summary.remaining_images
+    ?? imageQuota.total_remaining
+    ?? imageQuota.remaining_count
+    ?? imageQuota.remaining
+    ?? imageGrants.reduce((total, item) => total + Number(item?.remaining_count || item?.remaining || 0), 0);
+  const creditPoints = summary.points ?? summary.credit_balance ?? wallet.points ?? wallet.amount ?? ((summary.credit_units ?? wallet.credit_units) != null ? Number(summary.credit_units ?? wallet.credit_units) / 100 : 0);
+  const pendingOrders = summary.pending_orders_count
+    ?? summary.pending_order_count
+    ?? billingRows(state.billing.orders, ["orders", "items", "results"]).filter((item) => String(item?.status || "pending") === "pending").length;
+  return { summary, wallet, subscription, imageQuota, imageRemaining, creditPoints, pendingOrders };
+}
+
+function renderBillingSummary() {
+  const host = $("billingSummary");
+  if (!host) return;
+  if (state.billing.loading && !state.billing.loaded) {
+    host.innerHTML = Array.from({ length: 4 }, () => '<div class="billing-loading">正在读取</div>').join("");
+    return;
+  }
+  const { summary, wallet, subscription, imageQuota, imageRemaining, creditPoints, pendingOrders } = billingSummaryData();
+  const subscriptionStatus = Object.keys(subscription).length ? billingStatusMeta(subscription.status || "active") : null;
+  const periodEnd = subscription.current_period_end || subscription.period_end || subscription.expires_at;
+  const billingMode = summary.billing_mode || wallet.billing_mode;
+  const legacyMode = billingMode === "legacy";
+  const planName = subscription.plan_name
+    || subscription.name
+    || subscription.plan_sku
+    || (legacyMode ? "存量账号" : (summary.subscription_active ? "已启用" : "暂无订阅"));
+  const cards = [
+    { label: "算力余额", value: `${numberText(creditPoints)} 点`, note: billingMode === "legacy" ? "旧版计费模式" : "可用算力" },
+    { label: "当前订阅", value: planName, note: legacyMode ? "免订阅过渡模式" : (periodEnd ? `有效至 ${formatTime(periodEnd)}` : (subscriptionStatus?.label || (summary.subscription_active ? "生效中" : "尚未生效"))) },
+    { label: "图片额度", value: `${numberText(imageRemaining)} 张`, note: imageQuota.monthly_remaining != null ? `月度 ${numberText(imageQuota.monthly_remaining)} · 长期 ${numberText(imageQuota.permanent_remaining)}` : "优先抵扣免费额度" },
+    { label: "待处理订单", value: numberText(pendingOrders), note: "线下付款待审核" },
+  ];
+  host.innerHTML = cards.map((card) => `<article class="billing-summary-card"><span>${esc(card.label)}</span><strong>${esc(card.value)}</strong><small>${esc(card.note)}</small></article>`).join("");
+}
+
+function renderBillingOrders() {
+  const host = $("billingOrders");
+  if (!host) return;
+  if (state.billing.loading && !state.billing.loaded) {
+    host.innerHTML = '<div class="billing-loading">正在加载订单...</div>';
+    return;
+  }
+  const orders = billingRows(state.billing.orders, ["orders", "items", "results"]);
+  if (!orders.length) {
+    const detail = state.billing.errors.orders?.detail || "暂无订单记录。";
+    host.innerHTML = `<div class="billing-empty">${esc(detail)}</div>`;
+    return;
+  }
+  host.innerHTML = orders.slice(0, 12).map((order) => {
+    const snapshot = billingObject(order.price_snapshot || order.price_snapshot_json);
+    const snapshotItem = billingObject(snapshot.item);
+    const status = billingStatusMeta(order.status);
+    const id = String(order.id || order.order_id || "");
+    const cancelable = order.can_cancel === true || status.clean === "pending";
+    const busy = state.billing.cancellingOrderId === id;
+    return `<article class="billing-order-card">
+      <div class="billing-order-head"><div><strong>${esc(snapshotItem.name || snapshot.name || order.name || order.sku || "线下订单")}</strong><div class="billing-order-meta"><span>${esc(id || "-")}</span><span>${esc(formatTime(order.created_at))}</span></div></div><span class="billing-status ${status.tone}">${esc(status.label)}</span></div>
+      ${order.payment_reference ? `<p class="billing-order-meta">付款参考：${esc(order.payment_reference)}</p>` : ""}
+      <div class="billing-order-foot"><strong>${esc(billingMoney({ amount_ntd_cents: order.amount_ntd_cents ?? order.amount_cents, currency: order.currency }, {}))}</strong>${cancelable ? `<button type="button" class="danger" data-billing-cancel-order="${esc(id)}" ${busy ? "disabled" : ""}>${busy ? "取消中..." : "取消订单"}</button>` : ""}</div>
+    </article>`;
+  }).join("");
+}
+
+function renderBillingLedger() {
+  const host = $("billingLedger");
+  if (!host) return;
+  if (state.billing.loading && !state.billing.loaded) {
+    host.innerHTML = '<div class="billing-loading">正在加载流水...</div>';
+    return;
+  }
+  const rows = billingRows(state.billing.ledger, ["ledger", "entries", "items", "results"]);
+  if (!rows.length) {
+    const detail = state.billing.errors.ledger?.detail || "暂无余额变动记录。";
+    host.innerHTML = `<div class="billing-empty">${esc(detail)}</div>`;
+    return;
+  }
+  host.innerHTML = rows.slice(0, 16).map((entry) => {
+    const amount = Number(entry.asset_type === "credit" && entry.amount_points != null ? entry.amount_points : (entry.amount_units ?? entry.amount ?? 0));
+    const asset = String(entry.asset_type || entry.asset || "credit");
+    const unit = asset === "image" ? "张" : asset === "subscription" ? "期" : "点";
+    const eventLabels = { opening_balance: "期初余额", reserve: "任务预扣", release: "预扣返还", reservation_refund: "任务退款", order_credit: "订单入账", admin_adjustment: "人工调整", image_grant: "图片额度入账", settled: "任务结算" };
+    const label = entry.label || entry.description || entry.event_name || eventLabels[entry.event_type] || entry.event_type || "余额调整";
+    const sign = amount > 0 ? "+" : "";
+    const balanceAfter = entry.asset_type === "credit" && entry.balance_after_points != null ? entry.balance_after_points : entry.balance_after_units;
+    return `<div class="billing-ledger-row"><div class="billing-ledger-copy"><strong>${esc(label)}</strong><time>${esc(formatTime(entry.created_at))}${balanceAfter != null ? ` · 余额 ${esc(numberText(balanceAfter))}` : ""}</time></div><span class="billing-ledger-amount ${amount > 0 ? "is-positive" : amount < 0 ? "is-negative" : ""}">${esc(`${sign}${numberText(amount)} ${unit}`)}</span></div>`;
+  }).join("");
+}
+
+function renderBilling() {
+  renderBillingSummary();
+  renderBillingOrders();
+  renderBillingLedger();
+}
+
+async function loadBilling({ force = false } = {}) {
+  if (state.billing.loading || (state.billing.loaded && !force)) return;
+  state.billing.loading = true;
+  state.billing.errors = {};
+  renderBilling();
+  const requests = {
+    summary: api("/api/billing/summary"),
+    orders: api("/api/billing/orders"),
+    ledger: api("/api/billing/ledger"),
+  };
+  const keys = Object.keys(requests);
+  const results = await Promise.allSettled(Object.values(requests));
+  results.forEach((result, index) => {
+    const key = keys[index];
+    if (result.status === "fulfilled") state.billing[key] = result.value;
+    else state.billing.errors[key] = result.reason || { detail: "加载失败" };
+  });
+  state.billing.loading = false;
+  state.billing.loaded = true;
+  renderBilling();
+}
+
+async function cancelBillingOrder(orderId) {
+  if (!orderId || state.billing.cancellingOrderId) return;
+  const confirmed = await openConsoleModal({
+    title: "取消线下订单",
+    message: "取消后该订单将不再进入付款审核，确定继续吗？",
+    confirmText: "取消订单",
+    danger: true,
+  });
+  if (!confirmed) return;
+  state.billing.cancellingOrderId = orderId;
+  renderBillingOrders();
+  try {
+    await api(`/api/billing/orders/${encodeURIComponent(orderId)}/cancel`, { method: "POST" });
+    state.billing.loaded = false;
+    await loadBilling({ force: true });
+    showMsg("billingMsg", "订单已取消", true, { target: { view: "billing" } });
+  } catch (error) {
+    showMsg("billingMsg", error.detail || error.message || "取消订单失败", false, { target: { view: "billing" } });
+  } finally {
+    state.billing.cancellingOrderId = "";
+    renderBillingOrders();
+  }
+}
+
 function syncPersonaDashboardStyles(view) {
   const stylesheet = $("personaDashboardStyles");
   if (!stylesheet) return;
@@ -4114,6 +4364,7 @@ function setView(view) {
     social: "浏览器发布",
     accounts: "账号管理自动化",
     settings: "系统状态",
+    billing: "订阅与算力",
     console_settings: "设置",
     persona_dashboard: "人设看板",
   };
@@ -4124,6 +4375,7 @@ function setView(view) {
   if (view === "persona_dashboard") window.PersonaDashboard?.mount?.($("personaDashboardApp"));
   else window.PersonaDashboard?.unmount?.();
   if (view === "tasks") loadTasks();
+  if (view === "billing") loadBilling().catch(() => {});
   if (view === "social" || view === "accounts" || view === "settings") loadSocial();
   syncTaskQueueAutoRefresh();
   syncAccountStatusAutoRefresh();
@@ -4173,7 +4425,7 @@ function syncAccountStatusAutoRefresh() {
       return;
     }
     refreshAccountStatusOnce().catch(() => {});
-  }, 5000);
+  }, 10000);
 }
 
 function setWorkspaceModule(moduleId) {
@@ -14438,10 +14690,16 @@ async function loadSocial({ render = true, force = false } = {}) {
   return overview;
 }
 
-async function refreshSocialAccountsOnly({ force = false } = {}) {
-  await fetchSocialDataShared({ force });
+async function refreshSocialAccountsOnly({ force = false, includeOverview = false } = {}) {
+  if (includeOverview) {
+    await fetchSocialDataShared({ force });
+  } else {
+    const accountsData = await api("/api/persona_dashboard/automation/accounts")
+      .catch((error) => ({ accounts: tenantArrayFallback(error, state.socialAccounts) }));
+    state.socialAccounts = Array.isArray(accountsData.accounts) ? accountsData.accounts : [];
+    saveSocialAccountsSnapshot();
+  }
   updateAccountStatusViews();
-  renderSocialTasks();
 }
 
 function refreshLiveBrowserSessionsSoon(taskId = "", attempts = 16, delayMs = 500) {
@@ -14450,7 +14708,7 @@ function refreshLiveBrowserSessionsSoon(taskId = "", attempts = 16, delayMs = 50
   const targetTaskId = String(taskId || "").trim();
   const run = async (attempt) => {
     if (state.liveBrowserRefreshToken !== token) return;
-    await refreshSocialAccountsOnly().catch(() => {});
+    await refreshSocialAccountsOnly({ includeOverview: true }).catch(() => {});
     const sessions = Array.isArray(state.socialBrowserSessions) ? state.socialBrowserSessions : [];
     const found = !targetTaskId || sessions.some((session) => String(session.task_id || "") === targetTaskId);
     if (found || attempt >= attempts || state.liveBrowserRefreshToken !== token) return;
@@ -14472,7 +14730,9 @@ function updateAccountStatusViews() {
   document.querySelectorAll("[data-account-status-for]").forEach((node) => {
     const account = accountById.get(String(node.dataset.accountStatusFor || ""));
     const status = String(account?.status || "unknown").trim();
-    node.className = `task-status-text is-${statusTone(status)} account-status-chip`;
+    node.className = node.classList.contains("status")
+      ? `status ${status}`
+      : `task-status-text is-${statusTone(status)} account-status-chip`;
     node.textContent = statusLabel(status);
   });
   ["simpleAccount", "socialAccount", "personaAutoAccount", "personaPublishAccountSelect"].forEach((id) => {
@@ -14484,7 +14744,6 @@ function updateAccountStatusViews() {
     });
   });
   renderConfirmSummary();
-  if (state.view === "accounts" || state.view === "social" || state.view === "settings") renderSocialAccounts();
 }
 
 const accountPoolPlatforms = [
@@ -14635,7 +14894,8 @@ function renderAccountPasswordField(account, { scope = "persona", inputId = "" }
   const revealed = Boolean(state.accountPasswordVisible[visibilityKey]);
   const password = String(state.accountPasswordValues[accountId] || "");
   const buttonLabel = revealed ? "隐藏登录密码" : "显示登录密码";
-  return `<label class="persona-account-inline-field persona-account-inline-field--password">
+  const modalClass = passwordScope === "pool-edit" ? " account-password-field--modal" : "";
+  return `<label class="persona-account-inline-field persona-account-inline-field--password${modalClass}">
     <span>登录密码</span>
     <span class="account-password-display account-password-display--input" data-account-password-display="${esc(accountId)}" data-account-password-scope="${passwordScope}" data-password-visible="${revealed ? "true" : "false"}">
       <input class="account-inline-password-input" ${inputId ? `id="${esc(inputId)}"` : ""} data-account-password-input ${passwordScope === "persona" ? "data-persona-account-password" : ""} ${passwordScope === "pool-edit" ? "data-account-pool-edit-password" : ""} type="${revealed ? "text" : "password"}" value="${esc(revealed ? password : "")}" placeholder="${esc(accountPasswordMask(account))}" autocomplete="new-password" />
@@ -14656,8 +14916,15 @@ async function toggleAccountPasswordVisibility(button) {
   const nextVisible = !wasVisible;
   let password = input?.value || String(state.accountPasswordValues[accountId] || "");
   if (nextVisible && !password && account.login_password_configured) {
-    showMsg(scope === "pool-edit" || scope === "pool" ? "socialMsg" : "commandMsg", "已保存密码不会回显；输入新密码后可查看并替换。", false);
-    return;
+    const result = await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(accountId)}/credentials`, {
+      cache: "no-store",
+    });
+    password = String(result?.login_password || "");
+    if (!password) {
+      showMsg(scope === "pool-edit" || scope === "pool" ? "socialMsg" : "commandMsg", "当前账号没有已保存的登录密码。", false);
+      return;
+    }
+    state.accountPasswordValues[accountId] = password;
   }
   state.accountPasswordVisible[visibilityKey] = nextVisible;
   button.dataset.passwordVisible = nextVisible ? "true" : "false";
@@ -14742,7 +15009,7 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
         <div class="account-pool-card-main">
           <span class="account-pool-card-copy">
             <strong>${esc(accountDisplayName(account))}</strong>
-            <span class="account-pool-card-subline"><small>${esc(platformLabel(account.platform || "threads"))}</small><span class="status ${esc(account.status)}">${esc(statusLabel(account.status))}</span></span>
+            <span class="account-pool-card-subline"><small>${esc(platformLabel(account.platform || "threads"))}</small><span class="status ${esc(account.status)}" data-account-status-for="${esc(accountId)}">${esc(statusLabel(account.status))}</span></span>
           </span>
         </div>
         <div class="persona-account-summary-meta" aria-label="账号重要信息">
@@ -14760,7 +15027,7 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
       <div class="account-pool-card-main">
         <span class="account-pool-card-copy">
           <strong>${esc(accountDisplayName(account))}</strong>
-          <span class="account-pool-card-subline"><small>${esc(platformLabel(account.platform || "threads"))}</small><span class="status ${esc(account.status)}">${esc(statusLabel(account.status))}</span></span>
+          <span class="account-pool-card-subline"><small>${esc(platformLabel(account.platform || "threads"))}</small><span class="status ${esc(account.status)}" data-account-status-for="${esc(accountId)}">${esc(statusLabel(account.status))}</span></span>
         </span>
       </div>
       <div class="persona-account-inline-fields" aria-label="账号资料">
@@ -14787,7 +15054,7 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
         <strong title="${esc(account.username || accountId)}">${esc(account.username || accountId)}</strong>
         <small>${esc(account.display_name && account.display_name !== account.username ? account.display_name : platformLabel(account.platform || "threads"))}</small>
       </span>
-      <span class="status ${esc(account.status)}">${esc(statusLabel(account.status))}</span>
+      <span class="status ${esc(account.status)}" data-account-status-for="${esc(accountId)}">${esc(statusLabel(account.status))}</span>
     </div>
     <strong class="account-pool-bound-persona ${persona ? "is-bound" : "is-unbound"}" title="${esc(persona ? `已绑定：${persona.name || persona.id}` : "未绑定人设")}">${esc(persona ? `已绑定：${persona.name || persona.id}` : "未绑定人设")}</strong>
     <div class="account-card-meta">
@@ -15510,6 +15777,8 @@ async function saveAccountPoolCreateForm() {
     username: accountPoolDraftValue("username").trim().replace(/^@+/, ""),
     display_name: accountPoolDraftValue("display_name").trim(),
     profile_dir: accountPoolDraftValue("profile_dir").trim(),
+    login_username: accountPoolDraftValue("login_username").trim(),
+    login_password: accountPoolDraftValue("login_password"),
   };
   if (!payload.username) {
     showMsg("socialMsg", "请填写账号用户名。", false);
@@ -15524,17 +15793,6 @@ async function saveAccountPoolCreateForm() {
     body: JSON.stringify(payload),
   });
   const account = result?.account || {};
-  const explicitLoginUsername = accountPoolDraftValue("login_username").trim();
-  const loginPassword = accountPoolDraftValue("login_password");
-  if (account.id && (explicitLoginUsername || loginPassword)) {
-    const loginPayload = { login_username: explicitLoginUsername || payload.username };
-    if (loginPassword) loginPayload.login_password = loginPassword;
-    await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(account.id)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(loginPayload),
-    });
-  }
   const proxyOk = residentialProxy ? await verifyAccountResidentialProxy(account.proxy_id) : true;
   state.accountPoolPlatform = normalizeAccountPoolPlatform(account.platform || payload.platform);
   state.accountPoolAccountId = String(account.id || "");
@@ -15719,7 +15977,7 @@ async function saveAccountPoolEditForm(accountId = "") {
   const residentialProxy = accountResidentialProxyPayload("accountPoolEdit", username, accountResidentialProxy(account));
   if ($("accountPoolEditProxyEnabled")?.checked && !residentialProxy) return false;
   if (residentialProxy) payload.residential_proxy = residentialProxy;
-  if (!$('accountPoolEditProxyEnabled')?.checked && accountResidentialProxy(account)) {
+  if (!$('accountPoolEditProxyEnabled')?.checked && String(account?.proxy_id || "").trim()) {
     payload.clear_residential_proxy = true;
   }
   const result = await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(cleanId)}`, {
@@ -17020,6 +17278,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
         target_url: targetUrl,
         post_url: targetUrl,
         username: taskType === "browse_profile" ? targetUrl : "",
+        auto_submit: taskType === "open_login" ? Boolean(selected?.login_password_configured) : undefined,
         media_paths: mediaPaths,
         target_urls: splitLines($("simpleTargetUrls")?.value || $("socialTargetUrls")?.value || ""),
         login_wait_seconds: loginWaitSeconds,
@@ -17076,6 +17335,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
       target_url: targetUrl,
       post_url: targetUrl,
       username: taskType === "browse_profile" ? targetUrl : "",
+      auto_submit: taskType === "open_login" ? Boolean(selected?.login_password_configured) : undefined,
       media_paths: mediaPaths,
       target_urls: splitLines($("simpleTargetUrls")?.value || $("socialTargetUrls")?.value || ""),
       login_wait_seconds: loginWaitSeconds,
@@ -17152,6 +17412,13 @@ function bindEvents() {
     if (nextView === "workspace") state.workspaceMenuOpen = true;
     setView(nextView);
   }));
+  $("refreshBilling")?.addEventListener("click", () => loadBilling({ force: true }).catch((error) => {
+    showMsg("billingMsg", error.detail || error.message || "刷新计费信息失败", false, { target: { view: "billing" } });
+  }));
+  $("billingOrders")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-billing-cancel-order]");
+    if (button) cancelBillingOrder(button.dataset.billingCancelOrder || "");
+  });
   $("moduleMenu").addEventListener("click", async (event) => {
     const viewButton = event.target.closest("[data-workspace-view]");
     if (viewButton) {
@@ -18591,6 +18858,7 @@ function bindEvents() {
   });
   $("refreshAll").addEventListener("click", () => {
     const refreshPublishing = state.activeModule === "publishing";
+    if (state.view === "billing") loadBilling({ force: true }).catch(() => {});
     renderWorkspace(false);
     loadTasks().then(() => scheduleWorkspaceRender(false)).catch(() => {});
     loadPersonas().then(() => scheduleWorkspaceRender(false)).catch(() => {});

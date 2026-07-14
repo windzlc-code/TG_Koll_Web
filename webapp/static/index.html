@@ -11,6 +11,7 @@
     <link rel="icon" type="image/png" href="/assets/opc/vecto-logo-ui-icon.png?v=20260711" />
     <link rel="preload" href="/assets/opc/vecto-ai-cockpit.png" as="image" />
     <link rel="stylesheet" href="/assets/opc/styles.css?v=20260713-2" />
+    <link rel="stylesheet" href="/assets/opc/pricing.css?v=20260714-1" />
   </head>
   <body>
     <header class="site-header" data-header>
@@ -28,7 +29,7 @@
         <a href="#solution">解決方案</a>
         <a href="#agents">三帳架構</a>
         <a href="#scenarios">場景</a>
-        <a href="#pricing">價格</a>
+        <a href="/pricing.html">方案與算力</a>
         <a href="#service-difference">服務差異</a>
       </nav>
 
@@ -60,7 +61,7 @@
 
             <div class="hero-actions" aria-label="主要操作">
               <a class="button button-primary" href="#contact">申請使用</a>
-              <a class="button button-ghost" href="#pricing">查看官方方案</a>
+              <a class="button button-ghost" href="/pricing.html">查看官方方案</a>
             </div>
 
             <dl class="hero-metrics" aria-label="方案重點">
@@ -347,55 +348,12 @@
             </p>
           </div>
 
-          <div class="pricing-layout">
-            <article class="subscription-card">
-              <span class="pricing-label">Vecto Vanguard OPC</span>
-              <h3>月度訂閱方案</h3>
-              <p class="price"><span>NT$</span>6,000<small>/ 月</small></p>
-              <ul>
-                <li>一組 OPC 超級個體服務</li>
-                <li>3 組 Threads 社媒帳號 AI 全自動駕駛權限</li>
-                <li>每月 10 張 AI 圖片免費額度</li>
-                <li>文案模板、發文邏輯、評論話術包無限使用</li>
-                <li>Vecto OS 排程發布、數據看板、算力明細</li>
-              </ul>
-            </article>
-
-            <div class="credit-panel" aria-label="算力計價標準">
-              <h3>算力點官方計價</h3>
-              <div class="unit-price">
-                <span>1 點</span>
-                <strong>NT$10</strong>
-              </div>
-              <div class="usage-grid">
-                <span>單篇文字推文</span><strong>0.1 點</strong>
-                <span>基礎完整貼文</span><strong>0.3 點</strong>
-                <span>AI 圖片</span><strong>0.6 點 / 張</strong>
-                <span>口播短片</span><strong>0.15 點 / 秒</strong>
-                <span>批量評論、Quote</span><strong>2 點 / 批</strong>
-              </div>
-            </div>
+          <div class="pricing-layout" id="homePricingLayout" aria-live="polite">
+            <div class="catalog-loading">正在讀取目前方案</div>
           </div>
 
-          <div class="package-grid" aria-label="算力儲值套餐">
-            <article>
-              <span>輕量儲值包</span>
-              <h3>100 點</h3>
-              <p>NT$1,000</p>
-              <small>日常少量發文、基礎素材製作</small>
-            </article>
-            <article class="featured">
-              <span>暢銷儲值包</span>
-              <h3>530 點</h3>
-              <p>NT$5,000</p>
-              <small>含 30 點加贈，適合穩定長期經營</small>
-            </article>
-            <article>
-              <span>企業頂級儲值包</span>
-              <h3>1,620 點</h3>
-              <p>NT$15,000</p>
-              <small>含 120 點與 20 張免費圖，適合批量事件營運</small>
-            </article>
+          <div class="package-grid" id="homePackageGrid" aria-label="算力儲值套餐" aria-live="polite">
+            <div class="catalog-loading">正在讀取算力儲值方案</div>
           </div>
         </div>
       </section>
@@ -511,6 +469,7 @@
       </section>
     </div>
 
-    <script src="/assets/opc/script.js?v=20260713-3"></script>
+    <script src="/assets/opc/script.js?v=20260714-1"></script>
+    <script src="/assets/opc/pricing.js?v=20260714-1"></script>
   </body>
 </html>

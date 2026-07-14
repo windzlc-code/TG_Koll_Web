@@ -41,18 +41,22 @@ import get_gemini
 import asset_uploader
 import runninghub_common
 from .auth import (
+    ADMIN_CONSOLE_HEADER,
+    ADMIN_SESSION_COOKIE,
     SESSION_COOKIE,
     create_session,
     delete_session,
     admin_workspace_target_from_request,
-    get_current_user as _get_session_user,
     get_current_user_for_session as _get_session_user_for_token,
     get_user_allowing_password_change as _get_session_user_allowing_password_change,
     hash_password,
+    request_uses_admin_session,
     resolve_admin_workspace_user,
+    session_token_for_request,
     verify_password,
 )
 from .db import db, get_admin_config, init_db, set_admin_config
+from . import commercial_billing
 from .password_vault import (
     PasswordVaultDecryptError,
     PasswordVaultUnavailableError,
@@ -62,11 +66,17 @@ from .password_vault import (
 from .social_automation_api import (
     SocialTaskPayload,
     cancel_all_social_tasks,
+    clear_admin_billing_waived_payload,
+    clear_trusted_batch_task,
     configure_social_automation,
     create_social_task,
     ensure_social_automation_worker_started,
     get_social_task,
+    mark_admin_billing_waived_payload,
+    mark_trusted_batch_task,
     register_social_automation_routes,
+    stop_social_automation_worker,
+    wake_social_automation_worker,
 )
 
 
@@ -118,6 +128,41 @@ DEFAULT_PRICING: dict[str, Any] = {
     "nano_usd_per_image": 0.134,
     "allow_negative_balance": False,
 }
+
+
+class BillingOrderCreatePayload(BaseModel):
+    sku: str
+    quantity: int = Field(default=1, ge=1, le=50)
+    renewal_subscription_ids: list[str] = Field(default_factory=list)
+    payer_name: str = Field(default="", max_length=120)
+    payment_reference: str = Field(default="", max_length=160)
+    paid_at: int = Field(default=0, ge=0)
+    note: str = Field(default="", max_length=1000)
+    proof_path: str = Field(default="", max_length=500)
+    idempotency_key: str = Field(min_length=8, max_length=128)
+
+
+class BillingCatalogDraftPayload(BaseModel):
+    source_id: str = Field(default="", max_length=120)
+
+
+class BillingCatalogUpdatePayload(BaseModel):
+    catalog: dict[str, Any]
+
+
+class BillingOrderReviewPayload(BaseModel):
+    note: str = Field(default="", max_length=1000)
+
+
+class BillingAdjustmentPayload(BaseModel):
+    delta_points: float
+    reason: str = Field(min_length=2, max_length=1000)
+
+
+class BillingManualSubscriptionPayload(BaseModel):
+    quantity: int = Field(default=1, ge=1, le=50)
+    renewal_subscription_ids: list[str] = Field(default_factory=list)
+    note: str = Field(default="管理员人工开通", max_length=1000)
 
 DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
     "telegram_bot_token": "",
@@ -219,6 +264,8 @@ _WORKERS: list[threading.Thread] = []
 _WORKERS_LOCK = threading.Lock()
 _NORMAL_TASK_CONTROLS: dict[str, threading.Event] = {}
 _NORMAL_TASK_CONTROLS_LOCK = threading.Lock()
+_ADMIN_BILLING_WAIVED_TASK_IDS: set[str] = set()
+_ADMIN_BILLING_WAIVED_TASK_IDS_LOCK = threading.Lock()
 _RUNTIME_CONFIG_LOCK = threading.RLock()
 _COMFY_GPU_SEMAPHORE = threading.BoundedSemaphore(int(COMFY_GPU_LOCAL_SEMAPHORE_LIMIT))
 _COMFY_GPU_LOCK = threading.Lock()
@@ -383,6 +430,14 @@ def _task_queue_worker(worker_id: int) -> None:
                 _task_worker(task_id, int(user_id), str(task_type), payload if isinstance(payload, dict) else {})
             except Exception:
                 with db() as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    failed_row = conn.execute(
+                        "SELECT billing_reservation_id FROM tasks WHERE id = ?",
+                        (str(task_id),),
+                    ).fetchone()
+                    reservation_id = str(failed_row["billing_reservation_id"] or "") if failed_row else ""
+                    if reservation_id:
+                        commercial_billing.release_reservation(conn, reservation_id)
                     conn.execute(
                         "UPDATE tasks SET status = ?, error = ?, updated_at = ? WHERE id = ?",
                         ("failed", "任务执行线程异常退出", _now_ts(), str(task_id)),
@@ -497,12 +552,21 @@ def _password_change_required_detail(user: dict[str, Any]) -> dict[str, Any]:
 def _get_user_allowing_password_change(
     request: Request,
     session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+    admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
     admin_workspace_user_id: str | None = Header(default=None, alias="X-Admin-Workspace-User-ID"),
 ) -> dict[str, Any]:
-    user = _get_session_user_allowing_password_change(session_token)
+    workspace_target = admin_workspace_target_from_request(request, admin_workspace_user_id)
+    user = _get_session_user_allowing_password_change(
+        session_token_for_request(
+            request,
+            session_token,
+            admin_session_token,
+            admin_workspace_user_id=workspace_target,
+        )
+    )
     return resolve_admin_workspace_user(
         user,
-        admin_workspace_target_from_request(request, admin_workspace_user_id),
+        workspace_target,
         request=request,
     )
 
@@ -510,12 +574,19 @@ def _get_user_allowing_password_change(
 def get_current_user(
     request: Request,
     session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+    admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
     admin_workspace_user_id: str | None = Header(default=None, alias="X-Admin-Workspace-User-ID"),
 ) -> dict[str, Any]:
-    return _get_session_user(
+    workspace_target = admin_workspace_target_from_request(request, admin_workspace_user_id)
+    return _get_session_user_for_token(
+        session_token_for_request(
+            request,
+            session_token,
+            admin_session_token,
+            admin_workspace_user_id=workspace_target,
+        ),
+        admin_workspace_user_id=workspace_target,
         request=request,
-        session_token=session_token,
-        admin_workspace_user_id=admin_workspace_user_id,
     )
 
 
@@ -925,11 +996,28 @@ def _start_cleanup_worker() -> None:
 
 
 def _resume_pending_tasks() -> None:
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        orphan_holds = conn.execute(
+            """
+            SELECT reservation.id
+            FROM billing_reservations AS reservation
+            LEFT JOIN tasks AS task
+              ON reservation.ref_type = 'normal_task' AND reservation.ref_id = task.id
+            WHERE reservation.status = 'held'
+              AND (
+                reservation.ref_type IN ('persona_post_generation', 'persona_image_generation')
+                OR (reservation.ref_type = 'normal_task' AND task.id IS NULL)
+              )
+            """
+        ).fetchall()
+        for hold in orphan_holds:
+            commercial_billing.release_reservation(conn, str(hold["id"]))
     rows = []
     with db() as conn:
         rows = conn.execute(
             """
-            SELECT id, user_id, type, status, input_json, created_at
+            SELECT id, user_id, type, status, input_json, billing_reservation_id, created_at
             FROM tasks
             WHERE status IN ('queued', 'running')
             ORDER BY created_at ASC
@@ -940,6 +1028,7 @@ def _resume_pending_tasks() -> None:
         return
 
     with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         for r in rows:
             tid = str(r["id"] or "").strip()
             if not tid:
@@ -952,6 +1041,9 @@ def _resume_pending_tasks() -> None:
                 continue
             payload = _apply_runtime_defaults(task_type, payload)
             if status == "running":
+                reservation_id = str(r["billing_reservation_id"] or "")
+                if reservation_id:
+                    commercial_billing.release_reservation(conn, reservation_id)
                 restart_error = "service restarted while task was still running; please resubmit the task"
                 conn.execute(
                     "UPDATE tasks SET status = ?, error = ?, updated_at = ? WHERE id = ?",
@@ -969,6 +1061,9 @@ def _resume_pending_tasks() -> None:
             try:
                 _TASK_QUEUE.put((tid, user_id, task_type, payload), block=False)
             except Exception:
+                reservation_id = str(r["billing_reservation_id"] or "")
+                if reservation_id:
+                    commercial_billing.release_reservation(conn, reservation_id)
                 conn.execute(
                     "UPDATE tasks SET status = ?, error = ?, updated_at = ? WHERE id = ?",
                     ("failed", "任务队列已满，无法入队", _now_ts(), tid),
@@ -4587,8 +4682,11 @@ def _build_task_detail_payload(*, task: dict[str, Any], include_logs: bool = Tru
     execution_trace = _build_task_execution_trace(task_type=str(task.get("type") or ""), output_data=raw_output)
     logs: list[dict[str, Any]] = []
     runtime: dict[str, Any] = {}
+    billing_payload = raw_output.get("billing") if isinstance(raw_output.get("billing"), dict) else None
     with db() as conn:
         runtime = _get_runtime_config(conn)
+        if billing_payload is None and str(task.get("billing_reservation_id") or ""):
+            billing_payload = commercial_billing.reservation_for_reference(conn, "normal_task", str(task.get("id") or ""))
         if include_logs:
             logs = _load_task_events(conn, task=task, limit=log_limit)
     batch_summary = _extract_batch_summary(safe_output)
@@ -4607,6 +4705,11 @@ def _build_task_detail_payload(*, task: dict[str, Any], include_logs: bool = Tru
         "input": safe_input,
         "output": safe_output,
         "usage": _json_loads(task.get("usage_json"), {}),
+        "billing": billing_payload or {
+            "status": "unbilled",
+            "charged_points": 0,
+            "free_images_used": 0,
+        },
         "created_at": int(task["created_at"]),
         "updated_at": int(task["updated_at"]),
         "workflow_name": workflow_meta.get("workflow_name"),
@@ -9726,11 +9829,13 @@ def _run_persona_image_task(task_id: str, payload: dict[str, Any]) -> dict[str, 
     except HTTPException as exc:
         raise RuntimeError(str(exc.detail or "人设图生成失败。")) from exc
     generation = result.get("generation") if isinstance(result.get("generation"), dict) else {}
+    image_url = str(generation.get("image_url") or result.get("current_reference_url") or "").strip()
     return {
         "ok": True,
         "message": "人设图生成完成",
         "related_persona_id": archive_id,
-        "image_url": str(generation.get("image_url") or result.get("current_reference_url") or "").strip(),
+        "image_url": image_url,
+        "image_count": 1 if image_url else 0,
         "saved_item_id": str(result.get("saved_item_id") or "").strip(),
         "library": result,
     }
@@ -9747,6 +9852,20 @@ TASK_RUNNERS = {
     "image_generate": _run_image_generate,
     "get_gemini": _run_get_gemini,
 }
+
+
+def _billing_actual_image_quantity(task_output: dict[str, Any]) -> int:
+    image_paths = task_output.get("image_paths")
+    image_urls = task_output.get("image_urls")
+    return max(
+        _to_int(task_output.get("image_count"), 0),
+        len(image_paths) if isinstance(image_paths, list) else 0,
+        len(image_urls) if isinstance(image_urls, list) else 0,
+        1 if str(task_output.get("image_url") or "").strip() else 0,
+        _to_int(task_output.get("nano_images"), 0),
+    )
+
+
 TG_AGENT_PRODUCTION_TASK_TYPES = set(TASK_RUNNERS.keys())
 
 
@@ -9779,10 +9898,13 @@ def _task_worker_with_control(
     cancel_event: threading.Event,
 ) -> None:
     with db() as conn:
-        row = conn.execute("SELECT status FROM tasks WHERE id = ?", (str(task_id),)).fetchone()
-        if row is None or str(row["status"] or "").strip().lower() != "queued":
+        conn.execute("BEGIN IMMEDIATE")
+        claimed = conn.execute(
+            "UPDATE tasks SET status = ?, updated_at = ? WHERE id = ? AND status = 'queued'",
+            ("running", _now_ts(), task_id),
+        )
+        if int(claimed.rowcount or 0) != 1:
             return
-        conn.execute("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?", ("running", _now_ts(), task_id))
         _insert_task_event(
             conn,
             task_id=task_id,
@@ -9872,7 +9994,9 @@ def _task_worker_with_control(
 
     discard_output = False
     with db() as conn:
-        current_row = conn.execute("SELECT status FROM tasks WHERE id = ?", (str(task_id),)).fetchone()
+        conn.execute("BEGIN IMMEDIATE")
+        current_row = conn.execute("SELECT status, billing_reservation_id FROM tasks WHERE id = ?", (str(task_id),)).fetchone()
+        reservation_id = str(current_row["billing_reservation_id"] or "") if current_row is not None else str(effective_payload.get("_billing_reservation_id") or "")
         if current_row is None:
             discard_output = True
         elif str(current_row["status"] or "").strip().lower() == "cancelled":
@@ -9894,11 +10018,33 @@ def _task_worker_with_control(
             cost_cents = 0
 
             output_to_store = dict(task_output)
-            output_to_store.pop("billing", None)
+            billing_payload: dict[str, Any] | None = None
+            credit_cost_units = 0
+            free_image_count = 0
+            if reservation_id:
+                if status == "success":
+                    actual_quantity = _billing_actual_image_quantity(task_output)
+                    billing_payload = commercial_billing.settle_reservation(
+                        conn,
+                        reservation_id,
+                        actual_quantity=actual_quantity,
+                        success=True,
+                    )
+                else:
+                    billing_payload = commercial_billing.release_reservation(conn, reservation_id)
+                billing_row = conn.execute(
+                    "SELECT settled_credit_units, settled_image_count FROM billing_reservations WHERE id = ?",
+                    (reservation_id,),
+                ).fetchone()
+                if billing_row is not None:
+                    credit_cost_units = int(billing_row["settled_credit_units"] or 0)
+                    free_image_count = int(billing_row["settled_image_count"] or 0)
+                output_to_store["billing"] = billing_payload
             conn.execute(
                 """
                 UPDATE tasks
-                SET status = ?, output_json = ?, error = ?, runninghub_task_id = ?, usage_json = ?, cost_cents = ?, updated_at = ?
+                SET status = ?, output_json = ?, error = ?, runninghub_task_id = ?, usage_json = ?, cost_cents = ?,
+                    credit_cost_units = ?, free_image_count = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -9908,6 +10054,8 @@ def _task_worker_with_control(
                     runninghub_task_id,
                     _json_dumps(usage_json),
                     int(cost_cents),
+                    int(credit_cost_units),
+                    int(free_image_count),
                     _now_ts(),
                     task_id,
                 ),
@@ -9991,13 +10139,55 @@ async def _save_upload_file(username: str, task_id: str, field_name: str, upload
     return str(target)
 
 
+def _insert_task_record_in_transaction(
+    conn: sqlite3.Connection,
+    task_id: str,
+    user_id: int,
+    task_type: str,
+    input_payload: dict[str, Any],
+) -> None:
+    now = _now_ts()
+    reservation_id = str(input_payload.get("_billing_reservation_id") or "")
+    conn.execute(
+        """
+        INSERT INTO tasks(
+          id, user_id, type, status, input_json, output_json, error, runninghub_task_id,
+          usage_json, cost_cents, billing_reservation_id, credit_cost_units, free_image_count,
+          created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
+        """,
+        (
+            task_id,
+            int(user_id),
+            str(task_type),
+            "queued",
+            _json_dumps(input_payload),
+            _json_dumps({}),
+            "",
+            "",
+            _json_dumps({}),
+            0,
+            reservation_id,
+            now,
+            now,
+        ),
+    )
+    _insert_task_event(conn, task_id=task_id, user_id=int(user_id), kind="queued", message="task queued", data={})
+
+
 def _create_task_record(task_id: str, user_id: int, task_type: str, input_payload: dict[str, Any]) -> None:
     now = _now_ts()
+    reservation_id = str(input_payload.get("_billing_reservation_id") or "")
     with db() as conn:
         conn.execute(
             """
-            INSERT INTO tasks(id, user_id, type, status, input_json, output_json, error, runninghub_task_id, usage_json, cost_cents, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO tasks(
+              id, user_id, type, status, input_json, output_json, error, runninghub_task_id,
+              usage_json, cost_cents, billing_reservation_id, credit_cost_units, free_image_count,
+              created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
             """,
             (
                 task_id,
@@ -10010,6 +10200,7 @@ def _create_task_record(task_id: str, user_id: int, task_type: str, input_payloa
                 "",
                 _json_dumps({}),
                 0,
+                reservation_id,
                 now,
                 now,
             ),
@@ -10051,7 +10242,7 @@ def _cancel_task_record_for_user(
         raise HTTPException(status_code=400, detail="task_id 不能为空")
     actor = str(requested_by or "用户").strip() or "用户"
     with db() as conn:
-        row = conn.execute("SELECT id, user_id, type, status, input_json FROM tasks WHERE id = ?", (tid,)).fetchone()
+        row = conn.execute("SELECT id, user_id, type, status, input_json, billing_reservation_id FROM tasks WHERE id = ?", (tid,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="任务不存在")
         task = dict(row)
@@ -10082,6 +10273,9 @@ def _cancel_task_record_for_user(
             """,
             ("cancelled", reason, now, tid),
         )
+        reservation_id = str(task.get("billing_reservation_id") or "")
+        if reservation_id:
+            commercial_billing.release_reservation(conn, reservation_id, now=now)
         _insert_task_event(
             conn,
             task_id=tid,
@@ -10261,18 +10455,60 @@ def _emit_stage(
         pass
 
 
-def _enqueue_task(task_id: str, user_id: int, task_type: str, payload: dict[str, Any]) -> None:
+def _normal_task_billing_spec(task_type: str, payload: dict[str, Any]) -> tuple[str, int, bool] | None:
+    typ = str(task_type or "").strip()
+    if typ not in {"persona_image", "persona_post_image", "text_to_image", "image_generate", "get_nano_banana"}:
+        return None
+    raw_count = payload.get("image_count") or payload.get("imageCount") or payload.get("nano_images") or payload.get("count") or 1
+    try:
+        count = min(max(int(float(raw_count)), 1), 20)
+    except (TypeError, ValueError):
+        count = 1
+    return "ai_image", count, True
+
+
+def _enqueue_task(
+    task_id: str,
+    user_id: int,
+    task_type: str,
+    payload: dict[str, Any],
+) -> None:
+    with _ADMIN_BILLING_WAIVED_TASK_IDS_LOCK:
+        billing_admin_waived = str(task_id) in _ADMIN_BILLING_WAIVED_TASK_IDS
+        _ADMIN_BILLING_WAIVED_TASK_IDS.discard(str(task_id))
     _require_persona_task_owner(task_type, payload, user_id)
     effective_payload = _apply_runtime_defaults(task_type, payload)
-    _create_task_record(task_id, user_id, task_type, effective_payload)
+    billing_reservation: dict[str, Any] | None = None
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        spec = _normal_task_billing_spec(task_type, effective_payload)
+        if spec is None:
+            commercial_billing.require_write_access(conn, int(user_id), admin_waived=bool(billing_admin_waived))
+        else:
+            sku, quantity, image = spec
+            billing_reservation = commercial_billing.reserve_charge(
+                conn,
+                user_id=int(user_id),
+                ref_type="normal_task",
+                ref_id=str(task_id),
+                sku=sku,
+                quantity=quantity,
+                image=image,
+                admin_waived=bool(billing_admin_waived),
+            )
+            effective_payload["_billing_reservation_id"] = str(billing_reservation.get("id") or "")
+        _insert_task_record_in_transaction(conn, task_id, user_id, task_type, effective_payload)
     try:
         _TASK_QUEUE.put((str(task_id), int(user_id), str(task_type), effective_payload), block=False)
     except Exception:
         with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             conn.execute(
                 "UPDATE tasks SET status = ?, error = ?, updated_at = ? WHERE id = ?",
                 ("failed", "任务队列已满，无法入队", _now_ts(), str(task_id)),
             )
+            if billing_reservation and billing_reservation.get("id"):
+                commercial_billing.release_reservation(conn, str(billing_reservation["id"]))
             _insert_task_event(
                 conn,
                 task_id=str(task_id),
@@ -10281,6 +10517,23 @@ def _enqueue_task(task_id: str, user_id: int, task_type: str, payload: dict[str,
                 message="任务失败",
                 data={"status": "failed", "error": "任务队列已满，无法入队", "cost_cents": 0},
             )
+
+
+def _enqueue_task_for_user(
+    task_id: str,
+    user_id: int,
+    task_type: str,
+    payload: dict[str, Any],
+    user: dict[str, Any],
+) -> None:
+    if _is_admin_workspace(user) or _is_admin(user):
+        with _ADMIN_BILLING_WAIVED_TASK_IDS_LOCK:
+            _ADMIN_BILLING_WAIVED_TASK_IDS.add(str(task_id))
+    try:
+        _enqueue_task(task_id, user_id, task_type, payload)
+    finally:
+        with _ADMIN_BILLING_WAIVED_TASK_IDS_LOCK:
+            _ADMIN_BILLING_WAIVED_TASK_IDS.discard(str(task_id))
 
 
 def _internal_tg_submit_user_id() -> int:
@@ -13770,7 +14023,7 @@ def _active_social_task_for_account(account_id: str, task_types: list[str]) -> d
             SELECT *
             FROM social_automation_tasks
             WHERE account_id = ?
-              AND status IN ('queued', 'running', 'need_manual')
+              AND status IN ('preparing', 'queued', 'running', 'need_manual')
               AND task_type IN ({placeholders})
             ORDER BY priority ASC, scheduled_at ASC, created_at DESC
             LIMIT 1
@@ -13780,7 +14033,38 @@ def _active_social_task_for_account(account_id: str, task_types: list[str]) -> d
     return dict(row) if row else None
 
 
-def _ensure_publish_login_task(account: dict[str, Any], *, scheduled_at: int | float = 0) -> dict[str, Any] | None:
+def _create_social_task_with_billing(
+    payload: SocialTaskPayload,
+    *,
+    billing_admin_waived: bool = False,
+    trusted_task_id: str = "",
+    trusted_reservation_id: str = "",
+    suppress_wake: bool = False,
+) -> dict[str, Any]:
+    if billing_admin_waived:
+        mark_admin_billing_waived_payload(payload)
+    if trusted_task_id:
+        mark_trusted_batch_task(
+            payload,
+            task_id=trusted_task_id,
+            reservation_id=trusted_reservation_id,
+            suppress_wake=suppress_wake,
+        )
+    try:
+        return create_social_task(payload)
+    finally:
+        if billing_admin_waived:
+            clear_admin_billing_waived_payload(payload)
+        if trusted_task_id:
+            clear_trusted_batch_task(payload)
+
+
+def _ensure_publish_login_task(
+    account: dict[str, Any],
+    *,
+    scheduled_at: int | float = 0,
+    billing_admin_waived: bool = False,
+) -> dict[str, Any] | None:
     account_id = str(account.get("id") or "").strip()
     if not account_id:
         return None
@@ -13791,7 +14075,7 @@ def _ensure_publish_login_task(account: dict[str, Any], *, scheduled_at: int | f
     if active:
         return active
     platform = str(account.get("platform") or "threads").strip().lower() or "threads"
-    return create_social_task(
+    return _create_social_task_with_billing(
         SocialTaskPayload(
             persona_id=str(account.get("persona_id") or "").strip(),
             account_id=account_id,
@@ -13810,7 +14094,8 @@ def _ensure_publish_login_task(account: dict[str, Any], *, scheduled_at: int | f
                 "reason": "publish_before_login",
             },
             max_retries=2,
-        )
+        ),
+        billing_admin_waived=bool(billing_admin_waived),
     )
 
 
@@ -13820,6 +14105,7 @@ def _publish_persona_archive_post(
     payload: PersonaDashboardDraftPublishPayload,
     source: str = "posts",
     owner_user_id: int | None = None,
+    billing_admin_waived: bool = False,
 ) -> dict[str, Any]:
     clean_archive_id = str(archive_id or "").strip()
     clean_post_id = str(post_id or "").strip()
@@ -13846,7 +14132,11 @@ def _publish_persona_archive_post(
         raise HTTPException(status_code=400, detail="推文草稿内容为空，不能发布。")
     account = _persona_publish_account_for_archive(clean_archive_id, payload.account_id, payload.platform, owner_user_id)
     platform = str(account.get("platform") or "instagram").strip().lower() or "instagram"
-    login_task = _ensure_publish_login_task(account, scheduled_at=payload.scheduled_at or 0)
+    login_task = _ensure_publish_login_task(
+        account,
+        scheduled_at=payload.scheduled_at or 0,
+        billing_admin_waived=bool(billing_admin_waived),
+    )
     if platform == "instagram" and not media_paths:
         raise HTTPException(status_code=400, detail="Instagram 发布至少需要一份媒体素材。")
     active_task = _active_publish_task_for_post(
@@ -13864,7 +14154,7 @@ def _publish_persona_archive_post(
             "task": get_social_task(str(active_task.get("id") or "")),
             "reused": True,
         }
-    task = create_social_task(
+    task = _create_social_task_with_billing(
         SocialTaskPayload(
             persona_id=clean_archive_id,
             account_id=str(account.get("id") or ""),
@@ -13885,7 +14175,8 @@ def _publish_persona_archive_post(
                 "login_task_id": str((login_task or {}).get("id") or ""),
             },
             max_retries=max(0, min(int(payload.max_retries), 5)),
-        )
+        ),
+        billing_admin_waived=bool(billing_admin_waived),
     )
     return {"ok": True, "persona_id": clean_archive_id, "post_id": clean_post_id, "source": source_name, "login_task": login_task, "task": task}
 
@@ -13935,7 +14226,12 @@ def _active_publish_task_for_post(*, persona_id: str, account_id: str, post_id: 
     return None
 
 
-def _publish_persona_matrix(payload: PersonaDashboardMatrixPublishPayload, *, owner_user_id: int | None = None) -> dict[str, Any]:
+def _publish_persona_matrix(
+    payload: PersonaDashboardMatrixPublishPayload,
+    *,
+    owner_user_id: int | None = None,
+    billing_admin_waived: bool = False,
+) -> dict[str, Any]:
     source = str(payload.source or "posts").strip().lower()
     if source not in {"posts", "favorites"}:
         raise HTTPException(status_code=400, detail="发布来源只能选择草稿或收藏。")
@@ -13953,6 +14249,7 @@ def _publish_persona_matrix(payload: PersonaDashboardMatrixPublishPayload, *, ow
     _, _, archives = _persona_archive_source_for_write()
     archive_map = {str(item.get("id") or "").strip(): item for item in archives if isinstance(item, dict)}
     created: list[dict[str, Any]] = []
+    pending: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     batch_id = _new_id("matrix_publish")
@@ -13964,7 +14261,7 @@ def _publish_persona_matrix(payload: PersonaDashboardMatrixPublishPayload, *, ow
         persona_name = str(archive.get("name") or archive.get("title") or persona_id).strip()
         try:
             account = _persona_publish_account_for_archive(persona_id, "", platform, owner_user_id)
-            login_task = _ensure_publish_login_task(account, scheduled_at=payload.scheduled_at or 0)
+            login_task = None
             rows = _archive_posts_for_matrix_source(archive, source)
             candidates: list[dict[str, Any]] = []
             for post in rows:
@@ -14003,8 +14300,7 @@ def _publish_persona_matrix(payload: PersonaDashboardMatrixPublishPayload, *, ow
                     })
                     continue
                 content = str(post.get("content") or "").strip()
-                task = create_social_task(
-                    SocialTaskPayload(
+                task_payload = SocialTaskPayload(
                         persona_id=persona_id,
                         account_id=str(account.get("id") or ""),
                         platform=platform,
@@ -14026,8 +14322,7 @@ def _publish_persona_matrix(payload: PersonaDashboardMatrixPublishPayload, *, ow
                         },
                         max_retries=max(0, min(int(payload.max_retries or 2), 5)),
                     )
-                )
-                created.append({
+                pending.append({
                     "persona_id": persona_id,
                     "persona_name": persona_name,
                     "post_id": post_id,
@@ -14035,13 +14330,96 @@ def _publish_persona_matrix(payload: PersonaDashboardMatrixPublishPayload, *, ow
                     "account_id": str(account.get("id") or ""),
                     "platform": platform,
                     "login_task": login_task,
-                    "task": task,
+                    "account": account,
+                    "task_payload": task_payload,
                 })
         except HTTPException as exc:
             errors.append({"persona_id": persona_id, "persona_name": persona_name, "reason": str(exc.detail)})
         except Exception as exc:
             logger.exception("matrix publish item failed: persona_id=%s", persona_id)
             errors.append({"persona_id": persona_id, "persona_name": persona_name, "reason": str(exc)})
+    if errors:
+        return {"ok": False, "batch_id": batch_id, "created": [], "skipped": skipped, "errors": errors}
+    reservation_ids: list[str] = []
+    for item in pending:
+        item["trusted_task_id"] = _new_id("social_task")
+        item["reservation_id"] = ""
+    if pending and platform == "threads" and int(owner_user_id or 0) > 0 and not billing_admin_waived:
+        try:
+            with db() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                wallet = commercial_billing.ensure_wallet(conn, int(owner_user_id))
+                if str(wallet.get("billing_mode") or "") == "enforced":
+                    for item in pending:
+                        reservation = commercial_billing.reserve_charge(
+                            conn,
+                            user_id=int(owner_user_id),
+                            ref_type="social_task",
+                            ref_id=str(item["trusted_task_id"]),
+                            sku="threads_text_publish",
+                            quantity=1,
+                        )
+                        item["reservation_id"] = str(reservation.get("id") or "")
+                        reservation_ids.append(str(reservation.get("id") or ""))
+        except commercial_billing.BillingError as exc:
+            errors.append({"persona_id": "", "persona_name": "", "reason": exc.detail, "code": exc.code})
+            return {"ok": False, "batch_id": batch_id, "created": [], "skipped": skipped, "errors": errors}
+
+    try:
+        for item in pending:
+            login_task = _ensure_publish_login_task(
+                item["account"],
+                scheduled_at=payload.scheduled_at or 0,
+                billing_admin_waived=bool(billing_admin_waived),
+            )
+            item["login_task"] = login_task
+            item["task_payload"].payload["auto_login_before_publish"] = bool(login_task)
+            item["task_payload"].payload["login_task_id"] = str((login_task or {}).get("id") or "")
+            task = _create_social_task_with_billing(
+                item["task_payload"],
+                billing_admin_waived=bool(billing_admin_waived),
+                trusted_task_id=str(item["trusted_task_id"]),
+                trusted_reservation_id=str(item.get("reservation_id") or ""),
+                suppress_wake=True,
+            )
+            created.append({
+                key: value
+                for key, value in item.items()
+                if key not in {"task_payload", "trusted_task_id", "reservation_id", "account"}
+            } | {"task": task})
+        if created:
+            created_task_ids = [str((item.get("task") or {}).get("id") or "") for item in created]
+            placeholders = ",".join("?" for _ in created_task_ids)
+            with db() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                activated = conn.execute(
+                    f"UPDATE social_automation_tasks SET status = 'queued', updated_at = ? WHERE id IN ({placeholders}) AND status = 'preparing'",
+                    (_now_ts(), *created_task_ids),
+                )
+                if int(activated.rowcount or 0) != len(created_task_ids):
+                    raise RuntimeError("matrix publish batch could not be activated atomically")
+            for created_item in created:
+                if isinstance(created_item.get("task"), dict):
+                    created_item["task"]["status"] = "queued"
+    except Exception as exc:
+        logger.exception("matrix publish batch creation failed: batch_id=%s", batch_id)
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            for item in pending:
+                task_id = str(item.get("trusted_task_id") or "")
+                if task_id:
+                    conn.execute(
+                        "UPDATE social_automation_tasks SET status = 'cancelled', finished_at = ?, error = ?, updated_at = ? WHERE id = ? AND status = 'preparing'",
+                        (_now_ts(), "matrix_batch_rollback", _now_ts(), task_id),
+                    )
+                reservation_id = str(item.get("reservation_id") or "")
+                if reservation_id:
+                    commercial_billing.release_reservation(conn, reservation_id)
+        errors.append({"persona_id": "", "persona_name": "", "reason": str(getattr(exc, "detail", exc))})
+        return {"ok": False, "batch_id": batch_id, "created": [], "skipped": skipped, "errors": errors}
+
+    if created:
+        wake_social_automation_worker()
     if not created and errors:
         return {"ok": False, "batch_id": batch_id, "created": created, "skipped": skipped, "errors": errors}
     return {"ok": True, "batch_id": batch_id, "created": created, "skipped": skipped, "errors": errors}
@@ -16288,6 +16666,7 @@ def create_app() -> FastAPI:
         try:
             yield
         finally:
+            stop_social_automation_worker()
             _stop_persona_hot_pool_worker()
 
     app = FastAPI(
@@ -16300,6 +16679,14 @@ def create_app() -> FastAPI:
     )
     app.add_middleware(GZipMiddleware, minimum_size=1024)
 
+    @app.exception_handler(commercial_billing.BillingError)
+    async def commercial_billing_error_handler(_request: Request, exc: commercial_billing.BillingError):
+        return JSONResponse(
+            status_code=int(exc.status_code),
+            content={"detail": str(exc.detail), "code": str(exc.code)},
+            headers={"X-Billing-Code": str(exc.code)},
+        )
+
     @app.middleware("http")
     async def enforce_https(request: Request, call_next):
         if _force_https_enabled() and not _request_uses_https(request):
@@ -16310,6 +16697,45 @@ def create_app() -> FastAPI:
             if request.url.query:
                 target = f"{target}?{request.url.query}"
             return RedirectResponse(url=target, status_code=308)
+        return await call_next(request)
+
+    @app.middleware("http")
+    async def enforce_active_commercial_subscription(request: Request, call_next):
+        path = str(request.url.path or "")
+        is_write = request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
+        exempt = (
+            path.startswith("/api/auth/")
+            or path.startswith("/api/billing/")
+            or path.startswith("/api/admin/")
+            or path.startswith("/api/internal/")
+            or path.endswith("/cancel")
+            or path.endswith("/cancel_all")
+        )
+        if not (commercial_billing.enforcement_enabled() and is_write and path.startswith("/api/") and not exempt):
+            return await call_next(request)
+        session_token = session_token_for_request(
+            request,
+            request.cookies.get(SESSION_COOKIE),
+            request.cookies.get(ADMIN_SESSION_COOKIE),
+            admin_workspace_user_id=request.headers.get("X-Admin-Workspace-User-ID") or request.query_params.get("admin_workspace_user_id"),
+        )
+        if not session_token:
+            return await call_next(request)
+        try:
+            session_user = _get_session_user_for_token(session_token)
+        except HTTPException:
+            return await call_next(request)
+        if int(session_user.get("is_admin") or 0) == 1:
+            return await call_next(request)
+        try:
+            with db() as conn:
+                commercial_billing.require_write_access(conn, int(session_user.get("id") or 0))
+        except commercial_billing.BillingError as exc:
+            return JSONResponse(
+                status_code=int(exc.status_code),
+                content={"detail": str(exc.detail), "code": str(exc.code)},
+                headers={"X-Billing-Code": str(exc.code)},
+            )
         return await call_next(request)
 
     @app.middleware("http")
@@ -16382,24 +16808,36 @@ def create_app() -> FastAPI:
     def page_index() -> FileResponse:
         return FileResponse(str(STATIC_DIR / "index.html"))
 
+    @app.get("/pricing.html", include_in_schema=False)
+    def page_pricing() -> FileResponse:
+        return FileResponse(str(STATIC_DIR / "pricing.html"))
+
     @app.get("/console.html", include_in_schema=False)
+    @app.get("/admin-console.html", include_in_schema=False)
     def page_console(
+        request: Request,
         manage_user_id: int = 0,
         session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+        admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
     ) -> Response:
+        admin_console = request.url.path == "/admin-console.html"
+        selected_token = admin_session_token or session_token if admin_console else session_token
         try:
-            user = _get_session_user_allowing_password_change(session_token)
+            user = _get_session_user_allowing_password_change(selected_token)
         except HTTPException:
-            return RedirectResponse(url="/login.html", status_code=302)
+            return RedirectResponse(url="/admin" if admin_console else "/login.html", status_code=302)
         if int(user.get("must_change_password") or 0) == 1:
             return RedirectResponse(url="/change-password.html", status_code=302)
-        if _is_admin(user):
-            if int(manage_user_id or 0) <= 0:
+        if admin_console:
+            if not _is_admin(user):
                 return RedirectResponse(url="/admin", status_code=302)
-            try:
-                user = resolve_admin_workspace_user(user, int(manage_user_id))
-            except HTTPException:
-                return RedirectResponse(url="/admin#users", status_code=302)
+            if int(manage_user_id or 0) > 0:
+                try:
+                    user = resolve_admin_workspace_user(user, int(manage_user_id))
+                except HTTPException:
+                    return RedirectResponse(url="/admin#users", status_code=302)
+        elif _is_admin(user):
+            return RedirectResponse(url="/admin-console.html", status_code=302)
         elif int(manage_user_id or 0) > 0:
             raise HTTPException(status_code=403, detail="administrator workspace access required")
         try:
@@ -16427,13 +16865,17 @@ def create_app() -> FastAPI:
                 "__PERSONA_DASHBOARD_JS_VERSION__": _asset_version("assets", "persona-dashboard.js"),
                 "__CONSOLE_BOOTSTRAP_JSON__": _json_script_payload(console_bootstrap),
                 "__ADMIN_WORKSPACE_USER_ID__": str(_workspace_user_id(user)) if _is_admin_workspace(user) else "",
+                "__ADMIN_CONSOLE_SESSION__": "1" if admin_console else "",
             },
         )
 
     @app.get("/admin.html", include_in_schema=False)
-    def page_admin(session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE)) -> Response:
+    def page_admin(
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+        admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
+    ) -> Response:
         try:
-            user = _get_session_user_for_token(session_token)
+            user = _get_session_user_for_token(admin_session_token or session_token)
         except HTTPException:
             return RedirectResponse(url="/admin", status_code=302)
         if not _is_admin(user):
@@ -16456,9 +16898,12 @@ def create_app() -> FastAPI:
         )
 
     @app.get("/admin", include_in_schema=False)
-    def page_admin_entry(session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE)) -> Response:
+    def page_admin_entry(
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+        admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
+    ) -> Response:
         try:
-            user = _get_session_user_for_token(session_token)
+            user = _get_session_user_for_token(admin_session_token or session_token)
         except HTTPException:
             return _admin_login_page()
         if not _is_admin(user):
@@ -16525,6 +16970,10 @@ def create_app() -> FastAPI:
                     (username, password_hash, full_name, email, phone, company, use_case, now, now),
                 )
                 user_id = int(inserted.lastrowid or 0)
+                conn.execute(
+                    "INSERT INTO billing_wallets(user_id, credit_units, billing_mode, migrated_legacy_balance, created_at, updated_at) VALUES (?, 0, 'enforced', 0, ?, ?)",
+                    (user_id, now, now),
+                )
                 _reserve_username(conn, user_id, username, now)
                 vault_ciphertext = _encrypt_password_for_vault(user_id, password)
                 _upsert_password_vault(conn, user_id, vault_ciphertext, now)
@@ -16557,6 +17006,7 @@ def create_app() -> FastAPI:
         if len(password) > 256:
             record_invalid_credentials()
             raise HTTPException(status_code=401, detail="用户名或密码错误")
+        legacy_admin_token = ""
         with db() as conn:
             row = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
             if row is None:
@@ -16579,10 +17029,33 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=403, detail="账号已禁用")
             if int(user.get("must_change_password") or 0) == 1 and _password_expiry(user) <= _now_ts():
                 raise HTTPException(status_code=403, detail=_password_change_required_detail(user))
-            previous_token = str(request.cookies.get(SESSION_COOKIE) or "").strip()
+            cookie_name = ADMIN_SESSION_COOKIE if is_admin else SESSION_COOKIE
+            previous_token = str(request.cookies.get(cookie_name) or "").strip()
             if previous_token:
                 delete_session(conn, previous_token)
             token = create_session(conn, int(user["id"]))
+            legacy_cookie_token = str(request.cookies.get(SESSION_COOKIE) or "").strip()
+            if is_admin:
+                legacy_cookie_is_same_admin = False
+                if legacy_cookie_token:
+                    legacy_row = conn.execute(
+                        """
+                        SELECT session.user_id, account.is_admin
+                        FROM sessions AS session
+                        JOIN users AS account ON account.id = session.user_id
+                        WHERE session.token = ?
+                        """,
+                        (legacy_cookie_token,),
+                    ).fetchone()
+                    legacy_cookie_is_same_admin = bool(
+                        legacy_row
+                        and int(legacy_row["user_id"] or 0) == int(user["id"])
+                        and int(legacy_row["is_admin"] or 0) == 1
+                    )
+                if not legacy_cookie_token or legacy_cookie_is_same_admin:
+                    if legacy_cookie_is_same_admin:
+                        delete_session(conn, legacy_cookie_token)
+                    legacy_admin_token = create_session(conn, int(user["id"]))
             login_at = _now_ts()
             conn.execute(
                 "UPDATE users SET last_login_at = ?, "
@@ -16602,13 +17075,22 @@ def create_app() -> FastAPI:
         }
         response = JSONResponse(content=resp)
         response.set_cookie(
-            key=SESSION_COOKIE,
+            key=ADMIN_SESSION_COOKIE if is_admin else SESSION_COOKIE,
             value=token,
             httponly=True,
             max_age=14 * 24 * 3600,
             samesite="lax",
             secure=_session_cookie_secure(request),
         )
+        if is_admin and legacy_admin_token:
+            response.set_cookie(
+                key=SESSION_COOKIE,
+                value=legacy_admin_token,
+                httponly=True,
+                max_age=14 * 24 * 3600,
+                samesite="lax",
+                secure=_session_cookie_secure(request),
+            )
         return response
 
     @app.post("/api/auth/login")
@@ -16625,12 +17107,13 @@ def create_app() -> FastAPI:
 
     @app.post("/api/auth/logout")
     def api_logout(request: Request):
-        token = str(request.cookies.get(SESSION_COOKIE) or "").strip()
+        cookie_name = ADMIN_SESSION_COOKIE if request_uses_admin_session(request) else SESSION_COOKIE
+        token = str(request.cookies.get(cookie_name) or "").strip()
         if token:
             with db() as conn:
                 delete_session(conn, token)
         response = JSONResponse(content={"ok": True})
-        response.delete_cookie(SESSION_COOKIE)
+        response.delete_cookie(cookie_name)
         return response
 
     @app.post("/api/auth/change_password")
@@ -16849,14 +17332,45 @@ def create_app() -> FastAPI:
         return _list_persona_archive_images(archive_id)
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/images/generate")
-    def api_persona_dashboard_generate_persona_image(archive_id: str, payload: PersonaDashboardPersonaImageGeneratePayload, _user: dict[str, Any] = Depends(require_persona_owner)):
-        return _run_persona_image_cli_for_web(
-            archive_id,
-            prompt=str(payload.prompt or "").strip(),
-            aspect_ratio=str(payload.aspect_ratio or "1:1").strip() or "1:1",
-            mode=str(payload.mode or "person").strip() or "person",
-            generate_reference_sheet=True,
-        )
+    def api_persona_dashboard_generate_persona_image(
+        archive_id: str,
+        payload: PersonaDashboardPersonaImageGeneratePayload,
+        user: dict[str, Any] = Depends(require_persona_owner),
+    ):
+        operation_id = _new_id("persona_image_generation")
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            reservation = commercial_billing.reserve_charge(
+                conn,
+                user_id=_workspace_user_id(user),
+                ref_type="persona_image_generation",
+                ref_id=operation_id,
+                sku="ai_image",
+                quantity=1,
+                image=True,
+                admin_waived=bool(_is_admin_workspace(user) or _is_admin(user)),
+            )
+        try:
+            result = _run_persona_image_cli_for_web(
+                archive_id,
+                prompt=str(payload.prompt or "").strip(),
+                aspect_ratio=str(payload.aspect_ratio or "1:1").strip() or "1:1",
+                mode=str(payload.mode or "person").strip() or "person",
+                generate_reference_sheet=True,
+            )
+        except Exception:
+            with db() as conn:
+                commercial_billing.release_reservation(conn, str(reservation["id"]))
+            raise
+        with db() as conn:
+            billing = commercial_billing.settle_reservation(
+                conn,
+                str(reservation["id"]),
+                actual_quantity=1,
+                success=True,
+            )
+        result["billing"] = billing
+        return result
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/images/{image_id}/replace")
     async def api_persona_dashboard_replace_persona_image(
@@ -17053,8 +17567,40 @@ def create_app() -> FastAPI:
         return _delete_persona_archive_post_media_item(archive_id, post_id, index, source="favorites")
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/generate_posts")
-    def api_persona_dashboard_generate_posts(archive_id: str, payload: PersonaDashboardGeneratePostsPayload, _user: dict[str, Any] = Depends(require_persona_owner)):
-        return _generate_persona_archive_posts(archive_id, payload)
+    def api_persona_dashboard_generate_posts(
+        archive_id: str,
+        payload: PersonaDashboardGeneratePostsPayload,
+        user: dict[str, Any] = Depends(require_persona_owner),
+    ):
+        operation_id = _new_id("post_generation")
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            reservation = commercial_billing.reserve_charge(
+                conn,
+                user_id=_workspace_user_id(user),
+                ref_type="persona_post_generation",
+                ref_id=operation_id,
+                sku="basic_text_post",
+                quantity=max(int(payload.count or 1), 1),
+                admin_waived=bool(_is_admin_workspace(user) or _is_admin(user)),
+            )
+        try:
+            result = _generate_persona_archive_posts(archive_id, payload)
+        except Exception:
+            with db() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                commercial_billing.release_reservation(conn, str(reservation["id"]))
+            raise
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            billing = commercial_billing.settle_reservation(
+                conn,
+                str(reservation["id"]),
+                actual_quantity=max(int((result or {}).get("generated_count") or 0), 0),
+                success=True,
+            )
+        result["billing"] = billing
+        return result
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}/publish")
     def api_persona_dashboard_publish_post(
@@ -17071,6 +17617,7 @@ def create_app() -> FastAPI:
             post_id,
             payload,
             owner_user_id=_workspace_user_id(user),
+            billing_admin_waived=bool(_is_admin_workspace(user) or _is_admin(user)),
         )
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/favorites/{post_id}/publish")
@@ -17089,6 +17636,7 @@ def create_app() -> FastAPI:
             payload,
             source="favorites",
             owner_user_id=_workspace_user_id(user),
+            billing_admin_waived=bool(_is_admin_workspace(user) or _is_admin(user)),
         )
 
     @app.post("/api/persona_dashboard/matrix_publish")
@@ -17098,7 +17646,11 @@ def create_app() -> FastAPI:
     ):
         for persona_id in payload.persona_ids:
             _require_persona_access(persona_id, user)
-        return _publish_persona_matrix(payload, owner_user_id=_workspace_user_id(user))
+        return _publish_persona_matrix(
+            payload,
+            owner_user_id=_workspace_user_id(user),
+            billing_admin_waived=bool(_is_admin_workspace(user) or _is_admin(user)),
+        )
 
     @app.post("/api/persona_dashboard/personas/batch-delete")
     def api_persona_dashboard_batch_delete_personas(
@@ -17794,7 +18346,6 @@ def create_app() -> FastAPI:
 
     @app.post("/api/tasks/{task_id}/retry")
     def api_task_retry(task_id: str, user: dict[str, Any] = Depends(get_current_user)):
-        _require_positive_balance(user)
         tid = str(task_id or "").strip()
         if not tid:
             raise HTTPException(status_code=400, detail="task_id 不能为空")
@@ -17858,8 +18409,168 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=409, detail="原任务素材已不存在，无法重试，请重新上传文件创建新任务")
 
         new_id = _new_id("task")
-        _enqueue_task(new_id, int(task.get("user_id") or 0), task_type, payload)
+        _enqueue_task_for_user(
+            new_id,
+            int(task.get("user_id") or 0),
+            task_type,
+            payload,
+            user,
+        )
         return {"id": new_id, "task_type": task_type, "source_task_id": tid}
+
+    @app.get("/api/billing/catalog")
+    def api_billing_catalog():
+        with db() as conn:
+            return commercial_billing.get_active_catalog(conn)
+
+    @app.get("/api/billing/summary")
+    def api_billing_summary(user: dict[str, Any] = Depends(get_current_user)):
+        with db() as conn:
+            return commercial_billing.billing_summary(conn, _workspace_user_id(user))
+
+    @app.get("/api/billing/orders")
+    def api_billing_orders(limit: int = 100, user: dict[str, Any] = Depends(get_current_user)):
+        with db() as conn:
+            return {"items": commercial_billing.list_orders(conn, user_id=_workspace_user_id(user), limit=limit)}
+
+    @app.post("/api/billing/orders")
+    def api_billing_order_create(payload: BillingOrderCreatePayload, user: dict[str, Any] = Depends(get_current_user)):
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            order = commercial_billing.create_order(
+                conn,
+                user_id=_workspace_user_id(user),
+                sku=payload.sku,
+                quantity=payload.quantity,
+                idempotency_key=payload.idempotency_key,
+                renewal_subscription_ids=payload.renewal_subscription_ids,
+                payer_name=payload.payer_name,
+                payment_reference=payload.payment_reference,
+                paid_at=payload.paid_at,
+                note=payload.note,
+                proof_path=payload.proof_path,
+            )
+        return {"ok": True, "order": order}
+
+    @app.post("/api/billing/orders/{order_id}/cancel")
+    def api_billing_order_cancel(order_id: str, user: dict[str, Any] = Depends(get_current_user)):
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            order = commercial_billing.cancel_order(conn, order_id, user_id=_workspace_user_id(user))
+        return {"ok": True, "order": order}
+
+    @app.get("/api/billing/ledger")
+    def api_billing_ledger(
+        limit: int = 100,
+        before: int = 0,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        with db() as conn:
+            items = commercial_billing.list_ledger(conn, user_id=_workspace_user_id(user), limit=limit, before=before)
+        return {"items": items, "next_before": int(items[-1]["created_at"]) if items else 0}
+
+    @app.get("/api/admin/billing/catalog/versions")
+    def api_admin_billing_catalog_versions(_user: dict[str, Any] = Depends(require_admin)):
+        with db() as conn:
+            return {"items": commercial_billing.list_catalog_versions(conn)}
+
+    @app.get("/api/admin/billing/migration-report")
+    def api_admin_billing_migration_report(_user: dict[str, Any] = Depends(require_admin)):
+        with db() as conn:
+            return commercial_billing.migration_report(conn)
+
+    @app.post("/api/admin/billing/catalog/versions")
+    def api_admin_billing_catalog_create(payload: BillingCatalogDraftPayload, user: dict[str, Any] = Depends(require_admin)):
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            item = commercial_billing.create_catalog_draft(conn, actor_user_id=_identity_user_id(user), source_id=payload.source_id)
+        return {"ok": True, "item": item}
+
+    @app.put("/api/admin/billing/catalog/versions/{catalog_id}")
+    def api_admin_billing_catalog_update(catalog_id: str, payload: BillingCatalogUpdatePayload, user: dict[str, Any] = Depends(require_admin)):
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            item = commercial_billing.update_catalog_draft(conn, catalog_id, payload.catalog, actor_user_id=_identity_user_id(user))
+        return {"ok": True, "item": item}
+
+    @app.post("/api/admin/billing/catalog/versions/{catalog_id}/publish")
+    def api_admin_billing_catalog_publish(catalog_id: str, user: dict[str, Any] = Depends(require_admin)):
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            item = commercial_billing.publish_catalog(conn, catalog_id, actor_user_id=_identity_user_id(user))
+        return {"ok": True, "item": item}
+
+    @app.get("/api/admin/billing/orders")
+    def api_admin_billing_orders(
+        status: str = "",
+        user_id: int = 0,
+        limit: int = 200,
+        _user: dict[str, Any] = Depends(require_admin),
+    ):
+        with db() as conn:
+            items = commercial_billing.list_orders(conn, user_id=int(user_id) if int(user_id or 0) > 0 else None, status=status, limit=limit)
+        return {"items": items}
+
+    @app.post("/api/admin/billing/orders/{order_id}/approve")
+    def api_admin_billing_order_approve(order_id: str, payload: BillingOrderReviewPayload, user: dict[str, Any] = Depends(require_admin)):
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            order = commercial_billing.approve_order(conn, order_id, actor_user_id=_identity_user_id(user), review_note=payload.note)
+        return {"ok": True, "order": order}
+
+    @app.post("/api/admin/billing/orders/{order_id}/reject")
+    def api_admin_billing_order_reject(order_id: str, payload: BillingOrderReviewPayload, user: dict[str, Any] = Depends(require_admin)):
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            order = commercial_billing.review_order(conn, order_id, actor_user_id=_identity_user_id(user), status="rejected", review_note=payload.note)
+        return {"ok": True, "order": order}
+
+    @app.get("/api/admin/users/{target_user_id}/billing")
+    def api_admin_user_billing(target_user_id: int, _user: dict[str, Any] = Depends(require_admin)):
+        with db() as conn:
+            user_row = conn.execute("SELECT id, username FROM users WHERE id = ?", (int(target_user_id),)).fetchone()
+            if user_row is None:
+                raise HTTPException(status_code=404, detail="用户不存在")
+            return {
+                "user": {"id": int(user_row["id"]), "username": str(user_row["username"])},
+                "summary": commercial_billing.billing_summary(conn, int(target_user_id)),
+                "orders": commercial_billing.list_orders(conn, user_id=int(target_user_id), limit=100),
+                "ledger": commercial_billing.list_ledger(conn, user_id=int(target_user_id), limit=100),
+            }
+
+    @app.post("/api/admin/users/{target_user_id}/billing/adjustments")
+    def api_admin_user_billing_adjustment(target_user_id: int, payload: BillingAdjustmentPayload, user: dict[str, Any] = Depends(require_admin)):
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            result = commercial_billing.adjust_credit(
+                conn,
+                user_id=int(target_user_id),
+                delta_units=int(round(float(payload.delta_points) * commercial_billing.POINT_SCALE)),
+                actor_user_id=_identity_user_id(user),
+                reason=payload.reason,
+            )
+        return {"ok": True, **result}
+
+    @app.post("/api/admin/users/{target_user_id}/billing/subscriptions")
+    def api_admin_user_billing_subscription(target_user_id: int, payload: BillingManualSubscriptionPayload, user: dict[str, Any] = Depends(require_admin)):
+        actor_id = _identity_user_id(user)
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            user_row = conn.execute("SELECT id FROM users WHERE id = ?", (int(target_user_id),)).fetchone()
+            if user_row is None:
+                raise HTTPException(status_code=404, detail="用户不存在")
+            order = commercial_billing.create_order(
+                conn,
+                user_id=int(target_user_id),
+                sku="vanguard_monthly",
+                quantity=payload.quantity,
+                renewal_subscription_ids=payload.renewal_subscription_ids,
+                idempotency_key=f"admin-manual:{actor_id}:{target_user_id}:{uuid.uuid4().hex}",
+                payer_name="管理员人工开通",
+                note=payload.note,
+            )
+            order = commercial_billing.approve_order(conn, order["id"], actor_user_id=actor_id, review_note=payload.note)
+        return {"ok": True, "order": order}
 
     @app.get("/api/ledger")
     def api_ledger(limit: int = 50, user: dict[str, Any] = Depends(get_current_user)):
@@ -17929,7 +18640,13 @@ def create_app() -> FastAPI:
         payload = dict(payload or {})
         payload["message"] = text
         payload["source"] = "agent_chat"
-        _enqueue_task(task_id, _workspace_user_id(user), task_type, payload)
+        _enqueue_task_for_user(
+            task_id,
+            _workspace_user_id(user),
+            task_type,
+            payload,
+            user,
+        )
         return {
             "id": task_id,
             "task_type": task_type,
@@ -17951,7 +18668,6 @@ def create_app() -> FastAPI:
         reference_image_file: UploadFile | None = File(None),
         user: dict[str, Any] = Depends(get_current_user),
     ):
-        _require_positive_balance(user)
         task_id = _new_id("task")
         payload = {
             "prompt": prompt,
@@ -17966,7 +18682,13 @@ def create_app() -> FastAPI:
         }
         payload["input_image_local_path"] = await _save_upload_file(_workspace_username(user), task_id, "input_image", input_image_file)
         payload["reference_image_local_path"] = await _save_upload_file(_workspace_username(user), task_id, "reference_image", reference_image_file)
-        _enqueue_task(task_id, _workspace_user_id(user), "get_nano_banana", payload)
+        _enqueue_task_for_user(
+            task_id,
+            _workspace_user_id(user),
+            "get_nano_banana",
+            payload,
+            user,
+        )
         return {"id": task_id}
 
     @app.post("/api/tasks/get_gemini")
@@ -17983,7 +18705,6 @@ def create_app() -> FastAPI:
         videos: list[UploadFile] = File(default=[]),
         user: dict[str, Any] = Depends(get_current_user),
     ):
-        _require_positive_balance(user)
         task_id = _new_id("task")
         payload: dict[str, Any] = {
             "user_input": user_input,
@@ -18010,7 +18731,13 @@ def create_app() -> FastAPI:
         payload["image_paths"] = image_paths
         payload["video_paths"] = video_paths
 
-        _enqueue_task(task_id, _workspace_user_id(user), "get_gemini", payload)
+        _enqueue_task_for_user(
+            task_id,
+            _workspace_user_id(user),
+            "get_gemini",
+            payload,
+            user,
+        )
         return {"id": task_id}
 
     @app.post("/api/tasks/submit")
@@ -18021,7 +18748,6 @@ def create_app() -> FastAPI:
         files: list[UploadFile] = File(default=[]),
         user: dict[str, Any] = Depends(get_current_user),
     ):
-        _require_positive_balance(user)
         typ = str(task_type or "").strip()
         if not typ:
             raise HTTPException(status_code=400, detail="task_type 不能为空")
@@ -18037,7 +18763,13 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=400, detail="人设图生成需要关联人设 ID")
             task_id = _new_id("task")
             payload["uploaded_files"] = []
-            _enqueue_task(task_id, _workspace_user_id(user), typ, payload)
+            _enqueue_task_for_user(
+                task_id,
+                _workspace_user_id(user),
+                typ,
+                payload,
+                user,
+            )
             return {"id": task_id, "task_type": typ}
         if typ == "persona_post_image":
             pass
@@ -18087,7 +18819,13 @@ def create_app() -> FastAPI:
             raise
 
         payload["uploaded_files"] = [{"name": s["name"], "kind": s["kind"]} for s in saved]
-        _enqueue_task(task_id, _workspace_user_id(user), typ, payload)
+        _enqueue_task_for_user(
+            task_id,
+            _workspace_user_id(user),
+            typ,
+            payload,
+            user,
+        )
         return {"id": task_id, "task_type": typ}
 
     @app.get("/api/admin/runtime_config")
@@ -18611,7 +19349,7 @@ def create_app() -> FastAPI:
                         username,
                         pwd_hash,
                         1 if bool(payload.is_admin) else 0,
-                        max(int(payload.balance_cents or 0), 0),
+                        0,
                         now,
                         int(user.get("id") or 0),
                         now,
@@ -18619,6 +19357,25 @@ def create_app() -> FastAPI:
                     ),
                 )
                 created_user_id = int(inserted.lastrowid or 0)
+                if not bool(payload.is_admin):
+                    initial_units = max(int(payload.balance_cents or 0), 0) * commercial_billing.POINT_SCALE
+                    conn.execute(
+                        "INSERT INTO billing_wallets(user_id, credit_units, billing_mode, migrated_legacy_balance, created_at, updated_at) VALUES (?, ?, 'enforced', 0, ?, ?)",
+                        (created_user_id, initial_units, now, now),
+                    )
+                    if initial_units:
+                        conn.execute(
+                            "INSERT INTO billing_ledger(id, user_id, asset_type, event_type, amount_units, balance_after_units, ref_type, ref_id, meta_json, idempotency_key, created_at) VALUES (?, ?, 'credit', 'admin_initial_credit', ?, ?, 'user_create', ?, '{}', ?, ?)",
+                            (
+                                _new_id("bill_entry"),
+                                created_user_id,
+                                initial_units,
+                                initial_units,
+                                str(created_user_id),
+                                f"user_create:{created_user_id}:credit",
+                                now,
+                            ),
+                        )
                 _reserve_username(conn, created_user_id, username, now)
                 if not bool(payload.is_admin):
                     vault_ciphertext = _encrypt_password_for_vault(created_user_id, password)
@@ -19310,6 +20067,16 @@ def create_app() -> FastAPI:
                     conn.execute("DELETE FROM social_proxies WHERE user_id = ?", (target_id,))
                     conn.execute("DELETE FROM persona_owners WHERE user_id = ?", (target_id,))
                     conn.execute("DELETE FROM persona_group_owners WHERE user_id = ?", (target_id,))
+                    for billing_table in (
+                        "billing_ledger",
+                        "billing_reservations",
+                        "billing_image_grants",
+                        "billing_subscription_periods",
+                        "billing_subscriptions",
+                        "billing_orders",
+                        "billing_wallets",
+                    ):
+                        conn.execute(f"DELETE FROM {billing_table} WHERE user_id = ?", (target_id,))
                     deleted_user = conn.execute("DELETE FROM users WHERE id = ?", (target_id,))
                     if deleted_user.rowcount != 1:
                         raise RuntimeError(f"purge target disappeared before commit: {target_id}")
@@ -19358,31 +20125,26 @@ def create_app() -> FastAPI:
         payload: RechargePayload,
         user: dict[str, Any] = Depends(require_admin),
     ):
-        amount = int(payload.amount_cents)
-        if amount <= 0:
-            raise HTTPException(status_code=400, detail="分配额度必须为正整数（分）")
+        points = int(payload.amount_cents)
+        if points <= 0:
+            raise HTTPException(status_code=400, detail="分配算力必须为正整数（点）")
         with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             target_row = conn.execute("SELECT * FROM users WHERE id = ?", (int(target_user_id),)).fetchone()
             if target_row is None:
                 raise HTTPException(status_code=404, detail="客户账号不存在")
-            conn.execute(
-                "UPDATE users SET balance_cents = balance_cents + ?, updated_at = ? WHERE id = ?",
-                (int(amount), _now_ts(), int(target_user_id)),
-            )
-            _insert_ledger(
+            adjusted = commercial_billing.adjust_credit(
                 conn,
                 user_id=int(target_user_id),
-                typ="recharge",
-                amount_cents=int(amount),
-                ref_task_id="",
-                meta={
-                    "note": str(payload.note or ""),
-                    "admin_id": int(user.get("id") or 0),
-                    "admin_username": str(user.get("username") or ""),
-                },
+                delta_units=points * commercial_billing.POINT_SCALE,
+                actor_user_id=_identity_user_id(user),
+                reason=str(payload.note or "管理员人工算力调整"),
             )
-            new_row = conn.execute("SELECT balance_cents FROM users WHERE id = ?", (int(target_user_id),)).fetchone()
-        return {"ok": True, "balance_cents": int(new_row["balance_cents"] or 0)}
+        return {
+            "ok": True,
+            "credit_units": int(adjusted["credit_units"]),
+            "points": adjusted["points"],
+        }
 
     @app.post("/api/admin/users/{target_user_id}/toggle")
     def api_admin_toggle_user(

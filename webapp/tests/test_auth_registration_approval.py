@@ -733,6 +733,55 @@ class RegistrationApprovalTests(unittest.TestCase):
         self.assertEqual(user_login.status_code, 200)
         self.assertFalse(user_login.json()["is_admin"])
 
+    def test_user_and_admin_sessions_can_coexist_in_one_browser(self):
+        applicant = TestClient(self.app)
+        applied = applicant.post("/api/auth/apply", json=self.application_payload())
+        self.assertEqual(applied.status_code, 200, applied.text)
+
+        admin = TestClient(self.app)
+        self.assertEqual(
+            admin.post(
+                "/api/auth/admin-login",
+                json={"username": "admin", "password": "admin123secure"},
+            ).status_code,
+            200,
+        )
+        approved = admin.post(
+            f"/api/admin/users/{applied.json()['id']}/approval",
+            json={"approval_status": "approved", "expected_approval_status": "pending"},
+        )
+        self.assertEqual(approved.status_code, 200, approved.text)
+
+        browser = TestClient(self.app)
+        user_login = browser.post(
+            "/api/auth/user-login",
+            json={"username": "guest001", "password": "guest123"},
+        )
+        self.assertEqual(user_login.status_code, 200, user_login.text)
+        user_token = browser.cookies.get("session_token")
+
+        admin_login = browser.post(
+            "/api/auth/admin-login",
+            json={"username": "admin", "password": "admin123secure"},
+        )
+        self.assertEqual(admin_login.status_code, 200, admin_login.text)
+        self.assertEqual(browser.cookies.get("session_token"), user_token)
+        self.assertTrue(browser.cookies.get("admin_session_token"))
+
+        user_me = browser.get("/api/me")
+        admin_me = browser.get("/api/me", headers={"X-Admin-Console": "1"})
+        user_console = browser.get("/console.html", follow_redirects=False)
+        admin_console = browser.get("/admin-console.html", follow_redirects=False)
+
+        self.assertEqual(user_me.status_code, 200, user_me.text)
+        self.assertEqual(user_me.json()["username"], "guest001")
+        self.assertFalse(user_me.json()["is_admin"])
+        self.assertEqual(admin_me.status_code, 200, admin_me.text)
+        self.assertEqual(admin_me.json()["username"], "admin")
+        self.assertTrue(admin_me.json()["is_admin"])
+        self.assertEqual(user_console.status_code, 200, user_console.text)
+        self.assertEqual(admin_console.status_code, 200, admin_console.text)
+
     def test_admin_entry_and_page_are_server_side_role_protected(self):
         anonymous = TestClient(self.app)
         admin_entry = anonymous.get("/admin", follow_redirects=False)
@@ -806,7 +855,7 @@ class RegistrationApprovalTests(unittest.TestCase):
         self.assertEqual(rendered_admin.status_code, 200)
         admin_console = admin.get("/console.html", follow_redirects=False)
         self.assertEqual(admin_console.status_code, 302)
-        self.assertEqual(admin_console.headers["location"], "/admin")
+        self.assertEqual(admin_console.headers["location"], "/admin-console.html")
         self.assertNotIn('href="/console.html"', rendered_admin.text)
         self.assertNotIn("快速配置", rendered_admin.text)
         self.assertNotIn("人设数据看板", rendered_admin.text)

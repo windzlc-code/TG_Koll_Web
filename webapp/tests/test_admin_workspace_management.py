@@ -461,9 +461,11 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
     def test_admin_workspace_console_bootstraps_target_identity(self):
         _customer, user_id = self._create_customer("console_workspace_owner")
 
-        page = self.admin.get(f"/console.html?manage_user_id={user_id}", follow_redirects=False)
+        page = self.admin.get(f"/admin-console.html?manage_user_id={user_id}", follow_redirects=False)
         me = self.admin.get("/api/me", headers=self._target_headers(user_id))
         normal_admin_console = self.admin.get("/console.html", follow_redirects=False)
+        personal_admin_console = self.admin.get("/admin-console.html", follow_redirects=False)
+        admin_me = self.admin.get("/api/me", headers={"X-Admin-Console": "1"})
 
         self.assertEqual(page.status_code, 200, page.text)
         self.assertIn(f'content="{user_id}"', page.text)
@@ -473,8 +475,38 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
         self.assertEqual(me.json()["username"], "console_workspace_owner")
         self.assertTrue(me.json()["acting_admin"])
         self.assertFalse(me.json()["is_admin"])
-        self.assertEqual(normal_admin_console.status_code, 302)
-        self.assertEqual(normal_admin_console.headers["location"], "/admin")
+        self.assertEqual(normal_admin_console.status_code, 302, normal_admin_console.text)
+        self.assertEqual(normal_admin_console.headers["location"], "/admin-console.html")
+        self.assertEqual(personal_admin_console.status_code, 200, personal_admin_console.text)
+        self.assertIn('name="admin-workspace-user-id" content=""', personal_admin_console.text)
+        self.assertIn('name="admin-console-session" content="1"', personal_admin_console.text)
+        self.assertNotIn(f'content="{user_id}"', personal_admin_console.text)
+        self.assertEqual(admin_me.status_code, 200, admin_me.text)
+        self.assertEqual(int(admin_me.json()["id"]), self.admin_user_id)
+        self.assertTrue(admin_me.json()["is_admin"])
+
+    def test_account_owner_can_reveal_saved_social_login_password(self):
+        customer, _user_id = self._create_customer("credential_workspace_owner")
+        created = customer.post(
+            "/api/persona_dashboard/automation/accounts",
+            json={
+                "platform": "threads",
+                "username": "credential-thread",
+                "login_username": "credential@example.com",
+                "login_password": "social-login-secret",
+            },
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        account_id = str(created.json()["account"]["id"])
+
+        credentials = customer.get(
+            f"/api/persona_dashboard/automation/accounts/{account_id}/credentials"
+        )
+
+        self.assertEqual(credentials.status_code, 200, credentials.text)
+        self.assertEqual(credentials.headers.get("cache-control"), "no-store")
+        self.assertEqual(credentials.json()["login_username"], "credential@example.com")
+        self.assertEqual(credentials.json()["login_password"], "social-login-secret")
 
     def test_admin_can_create_resources_owned_by_target_workspace(self):
         _customer, user_id = self._create_customer("admin_create_owner")

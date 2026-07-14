@@ -121,11 +121,16 @@ function setActiveAdminPage(page, updateHash = true) {
   if (nextPage === "sentimentCookies") {
     void refreshSentimentCookieProfilesIfActive();
   }
+  if (nextPage === "pricing") {
+    void ensureBillingLoaded();
+  }
   return true;
 }
 
 async function api(path, opts = {}) {
-  const res = await fetch(path, { credentials: "include", cache: "no-store", ...opts });
+  const headers = new Headers(opts.headers || {});
+  headers.set("X-Admin-Console", "1");
+  const res = await fetch(path, { credentials: "include", cache: "no-store", ...opts, headers });
   const text = await res.text();
   let data = null;
   try {
@@ -1160,6 +1165,15 @@ const adminState = {
   workflowChains: {},
   sentimentCookieProfiles: [],
   sentimentCookieRefreshPromise: null,
+  billingCatalogVersions: [],
+  billingActiveCatalog: null,
+  billingCatalogDraftId: null,
+  billingOrderRows: [],
+  billingPendingCount: 0,
+  billingSelectedUserId: null,
+  billingWalletPoints: new Map(),
+  billingLoaded: false,
+  billingLoadingPromise: null,
 };
 const REMOTE_COMFY_TASKS = [
   ["text_to_image", "文字生成图片"],
@@ -1976,7 +1990,7 @@ async function toggleSensitiveInput(button) {
 async function ensureAdmin() {
   const me = await api("/api/me");
   if (!me.is_admin) {
-    location.href = "/console.html";
+    location.href = "/admin-console.html";
     return null;
   }
   el("adminName").textContent = me.username;
@@ -2453,8 +2467,465 @@ async function savePricing() {
   });
 }
 
+function billingList(payload, keys) {
+  const roots = [payload, payload?.data].filter((item) => item && typeof item === "object");
+  for (const root of roots) {
+    for (const key of keys) {
+      if (Array.isArray(root[key])) return root[key];
+    }
+  }
+  return Array.isArray(payload) ? payload : [];
+}
+
+function billingCatalogOf(version) {
+  const raw = version?.catalog ?? version?.catalog_json ?? version?.data ?? null;
+  if (raw && typeof raw === "object") return raw;
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function formatBillingTime(value) {
+  if (value === null || value === undefined || value === "") return "-";
+  const numeric = Number(value);
+  const date = Number.isFinite(numeric)
+    ? new Date(numeric > 100000000000 ? numeric : numeric * 1000)
+    : new Date(String(value));
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString("zh-CN", { hour12: false });
+}
+
+function formatBillingUnits(value) {
+  const amount = Number(value || 0);
+  return Number.isFinite(amount) ? Math.trunc(amount).toLocaleString("zh-CN") : "0";
+}
+
+function formatBillingPoints(value) {
+  const points = Number(value);
+  return Number.isFinite(points)
+    ? points.toLocaleString("zh-CN", { maximumFractionDigits: 6 })
+    : "0";
+}
+
+function formatBillingNtd(cents) {
+  const value = Number(cents || 0) / 100;
+  return `NT$ ${value.toLocaleString("zh-TW", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+const BILLING_STATUS_LABELS = {
+  draft: "草稿",
+  active: "使用中",
+  retired: "已停用",
+  pending: "待审核",
+  approved: "已通过",
+  rejected: "已拒绝",
+  cancelled: "已取消",
+  legacy: "旧额度模式",
+  enforced: "商业计费",
+};
+
+function createBillingStatus(status) {
+  const normalized = String(status || "unknown").toLowerCase();
+  const badge = document.createElement("span");
+  badge.className = `admin-billing-status is-${normalized.replace(/[^a-z0-9_-]/g, "")}`;
+  badge.textContent = BILLING_STATUS_LABELS[normalized] || status || "未知";
+  return badge;
+}
+
+function createBillingCell(value, className = "") {
+  const cell = document.createElement("td");
+  if (className) cell.className = className;
+  cell.textContent = String(value === null || value === undefined || value === "" ? "-" : value);
+  return cell;
+}
+
+function createBillingAction(label, action, id, tone = "ghost") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `${tone} admin-compact-button`;
+  button.textContent = label;
+  button.dataset.billingAction = action;
+  button.dataset.id = String(id || "");
+  return button;
+}
+
+function renderBillingCatalog(payload) {
+  const versions = billingList(payload, ["versions", "items", "catalog_versions"]);
+  const active = payload?.active_version
+    || payload?.active
+    || payload?.data?.active_version
+    || versions.find((item) => String(item.status || "").toLowerCase() === "active")
+    || null;
+  adminState.billingCatalogVersions = versions;
+  adminState.billingActiveCatalog = active;
+
+  const activeSummary = el("billingCatalogActive");
+  if (activeSummary) {
+    activeSummary.replaceChildren();
+    if (active) {
+      const title = document.createElement("strong");
+      title.textContent = `当前版本 v${active.version_number ?? active.version ?? active.id ?? "-"}`;
+      const meta = document.createElement("span");
+      meta.textContent = `生效于 ${formatBillingTime(active.effective_at || active.published_at)}`;
+      activeSummary.append(title, createBillingStatus("active"), meta);
+    } else {
+      activeSummary.textContent = "当前没有已发布目录";
+    }
+  }
+
+  const body = el("billingCatalogBody");
+  if (!body) return;
+  body.replaceChildren();
+  if (!versions.length) {
+    const row = document.createElement("tr");
+    const cell = createBillingCell("暂无目录版本", "admin-billing-empty");
+    cell.colSpan = 5;
+    row.appendChild(cell);
+    body.appendChild(row);
+    return;
+  }
+  versions.forEach((version) => {
+    const row = document.createElement("tr");
+    const versionLabel = `v${version.version_number ?? version.version ?? version.id ?? "-"}`;
+    row.appendChild(createBillingCell(versionLabel, "admin-billing-strong"));
+    const statusCell = document.createElement("td");
+    statusCell.appendChild(createBillingStatus(version.status));
+    row.appendChild(statusCell);
+    row.appendChild(createBillingCell(formatBillingTime(version.effective_at || version.published_at)));
+    row.appendChild(createBillingCell(formatBillingTime(version.created_at)));
+    const actionCell = document.createElement("td");
+    actionCell.className = "admin-billing-actions";
+    const inspectButton = createBillingAction("查看", "catalog-inspect", version.id);
+    inspectButton.dataset.versionIndex = String(adminState.billingCatalogVersions.indexOf(version));
+    actionCell.appendChild(inspectButton);
+    if (String(version.status || "").toLowerCase() === "draft") {
+      actionCell.appendChild(createBillingAction("发布", "catalog-publish", version.id, "primary"));
+    }
+    row.appendChild(actionCell);
+    body.appendChild(row);
+  });
+}
+
+async function loadBillingCatalog() {
+  const body = el("billingCatalogBody");
+  body?.setAttribute("aria-busy", "true");
+  setMsg("billingCatalogMsg", "");
+  try {
+    const payload = await api("/api/admin/billing/catalog/versions");
+    renderBillingCatalog(payload || {});
+    return payload;
+  } finally {
+    body?.removeAttribute("aria-busy");
+  }
+}
+
+function useBillingCatalog(version) {
+  const catalog = billingCatalogOf(version);
+  if (!catalog) {
+    setMsg("billingCatalogMsg", "该版本没有可读取的目录 JSON", false);
+    return;
+  }
+  adminState.billingCatalogDraftId = String(version.status || "").toLowerCase() === "draft"
+    ? String(version.id || "")
+    : null;
+  el("billingCatalogJson").value = JSON.stringify(catalog, null, 2);
+  if (el("btnCreateCatalogDraft")) {
+    el("btnCreateCatalogDraft").textContent = adminState.billingCatalogDraftId ? "保存草稿" : "保存新草稿";
+  }
+  setMsg("billingCatalogMsg", `已载入版本 v${version.version_number ?? version.version ?? version.id ?? "-"}`, true);
+}
+
+async function createBillingCatalogDraft() {
+  const raw = String(el("billingCatalogJson")?.value || "").trim();
+  if (!raw) throw new Error("请填写目录 JSON");
+  let catalog;
+  try {
+    catalog = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`目录 JSON 格式错误：${err.message}`);
+  }
+  if (!catalog || Array.isArray(catalog) || typeof catalog !== "object") {
+    throw new Error("目录 JSON 顶层必须是对象");
+  }
+  let draftId = String(adminState.billingCatalogDraftId || "");
+  if (!draftId) {
+    const draft = await api("/api/admin/billing/catalog/versions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source_id: String(adminState.billingActiveCatalog?.id || "") }),
+    });
+    draftId = String(draft?.id || draft?.item?.id || draft?.data?.id || "");
+    if (!draftId) throw new Error("新草稿已创建，但接口未返回草稿 ID");
+  }
+  await api(`/api/admin/billing/catalog/versions/${encodeURIComponent(draftId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ catalog }),
+  });
+  adminState.billingCatalogDraftId = draftId;
+  await loadBillingCatalog();
+  if (el("btnCreateCatalogDraft")) el("btnCreateCatalogDraft").textContent = "保存草稿";
+  setMsg("billingCatalogMsg", "目录草稿已保存", true);
+}
+
+async function publishBillingCatalog(versionId) {
+  if (!versionId || !confirm("确认发布该商业目录版本吗？发布后客户购买页将使用此版本。")) return;
+  await api(`/api/admin/billing/catalog/versions/${encodeURIComponent(versionId)}/publish`, {
+    method: "POST",
+  });
+  adminState.billingCatalogDraftId = null;
+  if (el("btnCreateCatalogDraft")) el("btnCreateCatalogDraft").textContent = "保存新草稿";
+  await loadBillingCatalog();
+  setMsg("billingCatalogMsg", "目录版本已发布", true);
+}
+
+function renderBillingOrders(payload) {
+  const orders = billingList(payload, ["orders", "items"]);
+  adminState.billingOrderRows = orders;
+  const currentFilter = String(el("billingOrderStatus")?.value || "pending");
+  const pendingCount = Number(payload?.pending_count ?? payload?.data?.pending_count);
+  if (Number.isFinite(pendingCount)) {
+    adminState.billingPendingCount = Math.max(0, pendingCount);
+  } else if (currentFilter === "pending") {
+    adminState.billingPendingCount = orders.filter((order) => String(order.status || "pending") === "pending").length;
+  }
+  setText("billingPendingSummary", `待审核 ${adminState.billingPendingCount}`);
+
+  const body = el("billingOrderBody");
+  if (!body) return;
+  body.replaceChildren();
+  if (!orders.length) {
+    const row = document.createElement("tr");
+    const cell = createBillingCell(currentFilter === "all" ? "暂无订单" : "当前状态下没有订单", "admin-billing-empty");
+    cell.colSpan = 7;
+    row.appendChild(cell);
+    body.appendChild(row);
+    return;
+  }
+  orders.forEach((order) => {
+    const row = document.createElement("tr");
+    const identity = document.createElement("td");
+    const orderId = document.createElement("strong");
+    orderId.textContent = String(order.id || "-");
+    const user = document.createElement("span");
+    user.textContent = `${order.username || order.user_name || "客户"} · ID ${order.user_id ?? "-"}`;
+    identity.append(orderId, user);
+    row.appendChild(identity);
+    row.appendChild(createBillingCell(`${order.sku || "-"} × ${order.quantity || 1}`));
+    row.appendChild(createBillingCell(formatBillingNtd(order.amount_ntd_cents), "admin-billing-money"));
+    const payment = document.createElement("td");
+    const payer = document.createElement("strong");
+    payer.textContent = String(order.payer_name || "-");
+    const reference = document.createElement("span");
+    reference.textContent = String(order.payment_reference || "无付款参考号");
+    payment.append(payer, reference);
+    if (order.proof_path) {
+      const proof = document.createElement("span");
+      proof.textContent = `凭证：${String(order.proof_path)}`;
+      payment.appendChild(proof);
+    }
+    row.appendChild(payment);
+    const status = String(order.status || "pending").toLowerCase();
+    const statusCell = document.createElement("td");
+    statusCell.appendChild(createBillingStatus(status));
+    row.appendChild(statusCell);
+    row.appendChild(createBillingCell(formatBillingTime(order.created_at)));
+    const actions = document.createElement("td");
+    actions.className = "admin-billing-actions";
+    if (status === "pending") {
+      actions.append(
+        createBillingAction("拒绝", "order-reject", order.id, "danger"),
+        createBillingAction("通过", "order-approve", order.id, "primary"),
+      );
+    } else {
+      actions.textContent = order.review_note || "已处理";
+    }
+    row.appendChild(actions);
+    body.appendChild(row);
+  });
+}
+
+async function loadBillingOrders() {
+  const status = String(el("billingOrderStatus")?.value || "pending");
+  const query = status === "all" ? "" : `?status=${encodeURIComponent(status)}`;
+  const body = el("billingOrderBody");
+  body?.setAttribute("aria-busy", "true");
+  setMsg("billingOrderMsg", "");
+  try {
+    const payload = await api(`/api/admin/billing/orders${query}`);
+    renderBillingOrders(payload || {});
+    return payload;
+  } finally {
+    body?.removeAttribute("aria-busy");
+  }
+}
+
+async function reviewBillingOrder(orderId, status) {
+  const label = status === "approved" ? "通过" : "拒绝";
+  const note = prompt(`${label}订单 ${orderId}。请输入审核备注（可留空）：`, "");
+  if (note === null) return;
+  if (!confirm(`确认${label}订单 ${orderId} 吗？`)) return;
+  const action = status === "approved" ? "approve" : "reject";
+  await api(`/api/admin/billing/orders/${encodeURIComponent(orderId)}/${action}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ note: note.trim() }),
+  });
+  await loadBillingOrders();
+  setMsg("billingOrderMsg", `订单已${label}`, true);
+}
+
+function createBillingSummaryItem(label, value, tone = "") {
+  const item = document.createElement("div");
+  item.className = `admin-billing-summary-item${tone ? ` is-${tone}` : ""}`;
+  const title = document.createElement("span");
+  title.textContent = label;
+  const content = document.createElement("strong");
+  content.textContent = value;
+  item.append(title, content);
+  return item;
+}
+
+function renderUserBilling(payload, userId) {
+  const root = payload?.data && typeof payload.data === "object" ? payload.data : (payload || {});
+  const summaryData = root.summary && typeof root.summary === "object" ? root.summary : root;
+  const user = root.user || {};
+  const wallet = summaryData.wallet || summaryData.billing_wallet || {};
+  const subscriptions = billingList(summaryData, ["subscriptions", "subscription_items"]);
+  const grants = billingList(summaryData, ["image_grants", "grants"]);
+  const ledger = billingList(root, ["ledger", "ledger_items", "entries"]);
+  const availableImages = Number(summaryData.free_images?.total_remaining ?? summaryData.available_image_count ?? summaryData.image_balance ?? grants.reduce(
+    (total, grant) => total + Math.max(0, Number(grant.remaining_count || 0)),
+    0,
+  ));
+  const activeSubscriptions = Number.isFinite(Number(summaryData.active_subscription_count))
+    ? Number(summaryData.active_subscription_count)
+    : subscriptions.filter((item) => String(item.status || "active") === "active").length;
+  const creditPoints = Number(summaryData.points ?? wallet.points ?? wallet.credit_points ?? wallet.credit_units ?? summaryData.credit_units ?? 0);
+  const billingMode = String(wallet.billing_mode || summaryData.billing_mode || "legacy");
+
+  adminState.billingSelectedUserId = Number(user.id || root.user_id || userId);
+  if (el("billingUserId")) el("billingUserId").value = String(adminState.billingSelectedUserId);
+  const summary = el("billingUserSummary");
+  summary.replaceChildren(
+    createBillingSummaryItem("客户", `${user.username || root.username || `ID ${adminState.billingSelectedUserId}`}`),
+    createBillingSummaryItem("算力点余额", formatBillingPoints(creditPoints), creditPoints > 0 ? "positive" : "neutral"),
+    createBillingSummaryItem("可用图片", `${formatBillingUnits(availableImages)} 张`, availableImages > 0 ? "positive" : "neutral"),
+    createBillingSummaryItem("有效订阅", `${activeSubscriptions} 个`),
+    createBillingSummaryItem("计费模式", BILLING_STATUS_LABELS[billingMode] || billingMode),
+  );
+
+  const body = el("billingLedgerBody");
+  body.replaceChildren();
+  if (!ledger.length) {
+    const row = document.createElement("tr");
+    const cell = createBillingCell("暂无计费流水", "admin-billing-empty");
+    cell.colSpan = 6;
+    row.appendChild(cell);
+    body.appendChild(row);
+  } else {
+    ledger.forEach((entry) => {
+      const row = document.createElement("tr");
+      const amount = Number(entry.amount_points ?? entry.amount_units ?? 0);
+      const balanceAfter = Number(entry.balance_after_points ?? entry.balance_after_units ?? 0);
+      row.appendChild(createBillingCell(formatBillingTime(entry.created_at)));
+      row.appendChild(createBillingCell(entry.asset_type || "-"));
+      row.appendChild(createBillingCell(entry.event_type || entry.type || "-"));
+      row.appendChild(createBillingCell(`${amount > 0 ? "+" : ""}${amount.toLocaleString("zh-CN", { maximumFractionDigits: 6 })}`, amount > 0 ? "admin-billing-positive" : (amount < 0 ? "admin-billing-negative" : "")));
+      row.appendChild(createBillingCell(balanceAfter.toLocaleString("zh-CN", { maximumFractionDigits: 6 })));
+      row.appendChild(createBillingCell(entry.order_id || entry.ref_id || entry.ref_type || "-", "admin-billing-reference"));
+      body.appendChild(row);
+    });
+  }
+  el("billingUserPlaceholder").hidden = true;
+  el("billingUserWorkspace").hidden = false;
+}
+
+async function loadUserBilling(userId = el("billingUserId")?.value) {
+  const targetUserId = Math.floor(Number(userId || 0));
+  if (targetUserId <= 0) throw new Error("请输入有效的客户 ID");
+  setMsg("billingUserMsg", "");
+  el("billingUserWorkspace")?.setAttribute("aria-busy", "true");
+  try {
+    const payload = await api(`/api/admin/users/${targetUserId}/billing`);
+    renderUserBilling(payload || {}, targetUserId);
+    return payload;
+  } finally {
+    el("billingUserWorkspace")?.removeAttribute("aria-busy");
+  }
+}
+
+async function submitBillingAdjustment() {
+  const userId = Math.floor(Number(adminState.billingSelectedUserId || el("billingUserId")?.value || 0));
+  const adjustmentType = String(el("billingAdjustmentType")?.value || "credit");
+  const amount = Number(el("billingAdjustmentAmount")?.value || 0);
+  const note = String(el("billingAdjustmentNote")?.value || "").trim();
+  if (userId <= 0) throw new Error("请先查询客户计费详情");
+  if (!note) throw new Error("请填写调整原因");
+  if (adjustmentType === "subscription") {
+    const quantity = Math.floor(amount);
+    if (!Number.isInteger(amount) || quantity < 1 || quantity > 50) throw new Error("订阅套数必须是 1-50 的整数");
+    if (!confirm(`确认给客户 ID ${userId} 人工开通 ${quantity} 套月度订阅吗？`)) return;
+    await api(`/api/admin/users/${userId}/billing/subscriptions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ quantity, renewal_subscription_ids: [], note }),
+    });
+  } else {
+    const deltaPoints = amount;
+    if (!Number.isFinite(deltaPoints) || deltaPoints === 0) throw new Error("调整算力点必须是非零数值");
+    if (!confirm(`确认将客户 ID ${userId} 的算力点调整 ${deltaPoints > 0 ? "+" : ""}${deltaPoints} 吗？`)) return;
+    await api(`/api/admin/users/${userId}/billing/adjustments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ delta_points: deltaPoints, reason: note }),
+    });
+  }
+  el("billingAdjustmentAmount").value = "";
+  el("billingAdjustmentNote").value = "";
+  await loadUserBilling(userId);
+  setMsg("billingUserMsg", "人工调整已完成并写入审计流水", true);
+  await loadUsers();
+}
+
+function syncBillingAdjustmentType() {
+  const isSubscription = String(el("billingAdjustmentType")?.value || "credit") === "subscription";
+  const amount = el("billingAdjustmentAmount");
+  setText("billingAdjustmentAmountLabel", isSubscription ? "订阅套数" : "调整算力点");
+  if (amount) {
+    amount.value = "";
+    amount.step = isSubscription ? "1" : "0.000001";
+    amount.min = isSubscription ? "1" : "";
+    amount.max = isSubscription ? "50" : "";
+    amount.placeholder = isSubscription ? "1-50 个月" : "正数增加，负数扣减";
+  }
+}
+
+async function loadBillingWorkspace() {
+  setMsg("billingWorkspaceMsg", "");
+  const results = await Promise.allSettled([loadBillingCatalog(), loadBillingOrders()]);
+  const failures = results.filter((result) => result.status === "rejected");
+  adminState.billingLoaded = failures.length === 0;
+  if (failures.length) {
+    const message = failures.map((result) => getErrorMessage(result.reason)).filter(Boolean).join("；");
+    setMsg("billingWorkspaceMsg", message || "计费数据读取失败", false);
+  }
+  return results;
+}
+
+function ensureBillingLoaded(force = false) {
+  if (!force && adminState.billingLoaded) return Promise.resolve();
+  if (adminState.billingLoadingPromise) return adminState.billingLoadingPromise;
+  adminState.billingLoadingPromise = loadBillingWorkspace()
+    .finally(() => { adminState.billingLoadingPromise = null; });
+  return adminState.billingLoadingPromise;
+}
+
 const ADMIN_USER_ICONS = {
   detail: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.5"/></svg>',
+  billing: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3Z"/><path d="M9 8h6m-6 4h6m-6 4h4"/></svg>',
   balance: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 7h15a3 3 0 0 1 3 3v8H3V7Z"/><path d="M3 7V5h14v2M16 12h5"/><circle cx="16" cy="12" r="1"/></svg>',
   disable: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M12 3v8"/><path d="M7.1 5.7a8 8 0 1 0 9.8 0"/></svg>',
   enable: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 7.7-1.5M12 14v3"/></svg>',
@@ -2601,7 +3072,12 @@ async function loadUsers(page = adminState.userListPage) {
 
     const balanceCell = document.createElement("td");
     balanceCell.className = "admin-user-balance-cell";
-    balanceCell.textContent = u.is_admin ? "-" : String(Math.max(0, Number(u.balance_cents || 0)));
+    const responsePoints = u.points ?? u.wallet?.points ?? u.billing_wallet?.points;
+    if (!u.is_admin && responsePoints !== null && responsePoints !== undefined && Number.isFinite(Number(responsePoints))) {
+      adminState.billingWalletPoints.set(String(u.id), Number(responsePoints));
+    }
+    const walletPoints = adminState.billingWalletPoints.get(String(u.id));
+    balanceCell.textContent = u.is_admin || walletPoints === undefined ? "-" : formatBillingPoints(walletPoints);
     tr.appendChild(balanceCell);
 
     const actions = document.createElement("td");
@@ -2619,8 +3095,9 @@ async function loadUsers(page = adminState.userListPage) {
       actions.appendChild(button);
     };
     addAction("查看详情", "user_detail", "detail");
+    if (!u.is_admin) addAction("计费详情", "billing_detail", "billing", { name: u.username });
     if (!archived && u.approval_status === "approved") {
-      if (!u.is_admin) addAction("额度分配", "recharge", "balance", { name: u.username });
+      if (!u.is_admin) addAction("人工调整算力点", "recharge", "balance", { name: u.username });
       addAction(u.is_disabled ? "启用" : "禁用", "toggle", u.is_disabled ? "enable" : "disable", { disabled: u.is_disabled ? 1 : 0 });
     }
     if (!u.is_admin) {
@@ -2972,7 +3449,14 @@ async function openUserDetailModal(id) {
     ),
     detailRow("申请类型", user.account_type === "guest" ? "游客申请" : "后台创建"),
     detailRow("审核状态", user.approval_status),
-    detailRow("可用额度", `${user.balance_cents || 0} 分`),
+    detailRow(
+      "算力点余额",
+      user.is_admin
+        ? "-"
+        : (adminState.billingWalletPoints.has(String(user.id))
+          ? `${formatBillingPoints(adminState.billingWalletPoints.get(String(user.id)))} 算力点`
+          : "请在计费详情查看"),
+    ),
     detailRow("最后登录", user.last_login_at ? formatTime(user.last_login_at) : "尚未登录"),
     detailRow("创建时间", user.created_at ? formatTime(user.created_at) : "-"),
     detailRow("更新时间", user.updated_at ? formatTime(user.updated_at) : "-"),
@@ -3190,9 +3674,9 @@ async function runTaskAction(act, id) {
 
 function openRechargeModal(id, name) {
   adminState.rechargeTarget = { id: String(id || ""), name: String(name || id || "") };
-  if (el("rechargeSub")) el("rechargeSub").textContent = `客户：${adminState.rechargeTarget.name}`;
+  if (el("rechargeSub")) el("rechargeSub").textContent = `客户：${adminState.rechargeTarget.name} · 此入口为人工算力调整`;
   if (el("rechargeAmount")) el("rechargeAmount").value = "1000";
-  if (el("rechargeNote")) el("rechargeNote").value = "额度分配";
+  if (el("rechargeNote")) el("rechargeNote").value = "人工算力调整";
   setMsg("rechargeMsg", "");
   const modal = el("rechargeModal");
   if (modal) {
@@ -3215,20 +3699,128 @@ async function submitRecharge() {
   if (!target || !target.id) return;
   const amount = Number(el("rechargeAmount").value || 0);
   const note = String(el("rechargeNote").value || "").trim();
-  if (!Number.isFinite(amount) || amount <= 0) {
-    setMsg("rechargeMsg", "额度必须为正整数（分）", false);
+  if (!Number.isInteger(amount) || amount <= 0) {
+    setMsg("rechargeMsg", "算力点必须为正整数", false);
     return;
   }
-  await api(`/api/admin/users/${target.id}/recharge`, {
+  const response = await api(`/api/admin/users/${target.id}/recharge`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ amount_cents: Math.floor(amount), note }),
+    body: JSON.stringify({ amount_cents: amount, note }),
   });
-  closeRechargeModal();
-  await loadUsers();
+  const walletPoints = Number(response.points);
+  if (Number.isFinite(walletPoints)) {
+    adminState.billingWalletPoints.set(String(target.id), walletPoints);
+  }
+  setMsg(
+    "rechargeMsg",
+    Number.isFinite(walletPoints)
+      ? `人工算力调整已完成，当前钱包点数：${formatBillingPoints(walletPoints)} 算力点`
+      : "人工算力调整已完成",
+    true,
+  );
+  try {
+    await loadUsers();
+  } catch (err) {
+    setMsg("userMsg", `算力点已调整，但账号列表刷新失败：${getErrorMessage(err)}`, false);
+  }
+}
+
+function bindBillingActions() {
+  el("btnRefreshBilling")?.addEventListener("click", async () => {
+    setMsg("billingWorkspaceMsg", "");
+    await ensureBillingLoaded(true);
+  });
+  el("btnReloadBillingCatalog")?.addEventListener("click", async () => {
+    try {
+      await loadBillingCatalog();
+    } catch (err) {
+      setMsg("billingCatalogMsg", getErrorMessage(err), false);
+    }
+  });
+  el("btnUseActiveCatalog")?.addEventListener("click", () => {
+    if (!adminState.billingActiveCatalog) {
+      setMsg("billingCatalogMsg", "当前没有可载入的已发布目录", false);
+      return;
+    }
+    useBillingCatalog(adminState.billingActiveCatalog);
+  });
+  el("billingCatalogDraftForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    setMsg("billingCatalogMsg", "");
+    try {
+      await createBillingCatalogDraft();
+    } catch (err) {
+      setMsg("billingCatalogMsg", getErrorMessage(err), false);
+    }
+  });
+  el("billingCatalogBody")?.addEventListener("click", async (event) => {
+    const button = event.target.closest("button[data-billing-action]");
+    if (!button) return;
+    event.stopPropagation();
+    const action = button.dataset.billingAction;
+    try {
+      if (action === "catalog-inspect") {
+        const version = adminState.billingCatalogVersions[Number(button.dataset.versionIndex || -1)];
+        if (version) useBillingCatalog(version);
+      } else if (action === "catalog-publish") {
+        await publishBillingCatalog(button.dataset.id);
+      }
+    } catch (err) {
+      setMsg("billingCatalogMsg", getErrorMessage(err), false);
+    }
+  });
+
+  el("btnReloadBillingOrders")?.addEventListener("click", async () => {
+    try {
+      await loadBillingOrders();
+    } catch (err) {
+      setMsg("billingOrderMsg", getErrorMessage(err), false);
+    }
+  });
+  el("billingOrderStatus")?.addEventListener("change", async () => {
+    try {
+      await loadBillingOrders();
+    } catch (err) {
+      setMsg("billingOrderMsg", getErrorMessage(err), false);
+    }
+  });
+  el("billingOrderBody")?.addEventListener("click", async (event) => {
+    const button = event.target.closest("button[data-billing-action]");
+    if (!button) return;
+    event.stopPropagation();
+    const status = button.dataset.billingAction === "order-approve" ? "approved" : "rejected";
+    setMsg("billingOrderMsg", "");
+    try {
+      await reviewBillingOrder(button.dataset.id, status);
+    } catch (err) {
+      setMsg("billingOrderMsg", getErrorMessage(err), false);
+    }
+  });
+
+  el("billingUserLookupForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    setMsg("billingUserMsg", "");
+    try {
+      await loadUserBilling();
+    } catch (err) {
+      setMsg("billingUserMsg", getErrorMessage(err), false);
+    }
+  });
+  el("billingAdjustmentForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    setMsg("billingUserMsg", "");
+    try {
+      await submitBillingAdjustment();
+    } catch (err) {
+      setMsg("billingUserMsg", getErrorMessage(err), false);
+    }
+  });
+  el("billingAdjustmentType")?.addEventListener("change", syncBillingAdjustmentType);
 }
 
 function bindActions() {
+  bindBillingActions();
   bindModelTabs();
   bindTextModelContentTabs();
   bindRunningHubSlotTabs();
@@ -3418,15 +4010,6 @@ function bindActions() {
     });
   }
 
-  el("btnLogout").addEventListener("click", async () => {
-    await api("/api/auth/logout", { method: "POST" });
-    location.href = "/admin";
-  });
-
-  el("btnToUser").addEventListener("click", () => {
-    location.href = "/";
-  });
-
   if (el("btnTaskRefresh")) {
     el("btnTaskRefresh").addEventListener("click", async () => {
       try {
@@ -3571,7 +4154,7 @@ function bindActions() {
     el("btnManageUserWorkspace").addEventListener("click", () => {
       const user = adminState.selectedUser;
       if (!user?.id || user.is_admin) return;
-      window.location.assign(`/console.html?manage_user_id=${encodeURIComponent(user.id)}`);
+      window.location.assign(`/admin-console.html?manage_user_id=${encodeURIComponent(user.id)}`);
     });
   }
   if (el("btnApproveUser")) {
@@ -3802,6 +4385,17 @@ function bindActions() {
     }
     if (act === "recharge") {
       openRechargeModal(id, btn.dataset.name || id);
+      return;
+    }
+    if (act === "billing_detail") {
+      setActiveAdminPage("pricing", true);
+      if (el("billingUserId")) el("billingUserId").value = id;
+      try {
+        await loadUserBilling(id);
+        el("billingUserTitle")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      } catch (err) {
+        setMsg("billingUserMsg", getErrorMessage(err), false);
+      }
       return;
     }
     if (act === "user_detail") {

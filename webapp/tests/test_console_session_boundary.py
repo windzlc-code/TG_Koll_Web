@@ -181,6 +181,17 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("activeSocialAutomationTask(task)", refresh_check)
         self.assertNotIn('["queued", "running"].includes', refresh_check)
 
+    def test_status_refresh_does_not_replace_the_account_pool_dom(self):
+        account_refresh = self._section("async function refreshSocialAccountsOnly", "function refreshLiveBrowserSessionsSoon")
+        account_status = self._function_source("updateAccountStatusViews")
+        task_refresh = self._function_source("syncSocialTaskToastAutoRefresh")
+
+        self.assertIn('api("/api/persona_dashboard/automation/accounts")', account_refresh)
+        self.assertNotIn("renderSocialTasks()", account_refresh)
+        self.assertNotIn("renderSocialAccounts()", account_status)
+        self.assertIn('loadAutomationTasksShared().catch', task_refresh)
+        self.assertNotIn("loadAutomationTasksShared({ force: true })", task_refresh)
+
     def test_pageshow_and_focus_share_identity_revalidation(self):
         revalidation = self._section("async function revalidateConsoleIdentity()", "async function loadSetupStatus()")
         self.assertIn('api("/api/me")', revalidation)

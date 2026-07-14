@@ -59,6 +59,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(login_resp.status_code, 200)
 
     def tearDown(self):
+        self.unauth_client.close()
+        self.client.close()
         server.RUNTIME_CONFIG_PATH = self._old_server_runtime_config_path
         server.TOOL_R18_RUNTIME_DIR = self._old_server_tool_runtime_dir
         server.UPLOAD_ROOT = self._old_server_upload_root

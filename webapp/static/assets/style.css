@@ -7314,16 +7314,13 @@ body.page-admin {
 
 .page-admin .admin-sidebar-actions {
   display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
   align-items: center;
   gap: 7px;
   padding: 0;
   border: 0;
-}
-
-.page-admin .admin-sidebar-actions > :nth-child(2),
-.page-admin .admin-sidebar-actions > :nth-child(3),
-.page-admin .admin-sidebar-actions > :nth-child(4) {
-  display: none;
 }
 
 .page-admin .admin-sidebar-actions > a,
@@ -7332,6 +7329,11 @@ body.page-admin {
   min-height: 38px;
   padding: 7px 11px;
   white-space: nowrap;
+}
+
+.page-admin .admin-sidebar-actions .admin-console-link {
+  width: auto;
+  flex: 0 0 auto;
 }
 
 .page-admin .admin-sidebar-actions .ghost {
@@ -7478,12 +7480,17 @@ body.page-admin {
     font-size: 16px;
   }
 
-  .page-admin .admin-sidebar-actions > a {
-    display: none;
+  .page-admin .admin-sidebar-actions {
+    justify-self: end;
+    gap: 6px;
   }
 
-  .page-admin .admin-sidebar-actions > button {
-    display: block;
+  .page-admin .admin-sidebar-actions > a {
+    display: inline-flex;
+    width: auto;
+    min-height: 36px;
+    padding: 6px 8px;
+    font-size: 12px;
   }
 
   .page-admin .admin-nav button {
@@ -7758,5 +7765,375 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
     grid-template-columns: repeat(2, 40px);
     gap: 4px;
     justify-content: center;
+  }
+}
+
+/* Admin commercial billing workspace. */
+.page-admin #secPricing .admin-billing-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.page-admin #secPricing .admin-billing-panel {
+  min-width: 0;
+  border-radius: 8px;
+}
+
+.page-admin #secPricing .admin-billing-panel-head,
+.page-admin #secPricing .admin-billing-toolbar,
+.page-admin #secPricing .admin-billing-form-actions,
+.page-admin #secPricing .admin-billing-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.page-admin #secPricing .admin-billing-panel-head {
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.page-admin #secPricing .admin-billing-panel-head .admin-config-card-title {
+  margin-bottom: 3px;
+}
+
+.page-admin #secPricing .admin-billing-panel-head .small {
+  line-height: 1.5;
+}
+
+.page-admin #secPricing .admin-billing-pending,
+.page-admin #secPricing .admin-billing-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid #efd493;
+  border-radius: 999px;
+  color: #8a5a08;
+  background: #fff6dc;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.page-admin #secPricing .admin-billing-status.is-active,
+.page-admin #secPricing .admin-billing-status.is-approved,
+.page-admin #secPricing .admin-billing-status.is-enforced {
+  color: #176b4d;
+  background: #e8f7ef;
+  border-color: #b8e1ca;
+}
+
+.page-admin #secPricing .admin-billing-status.is-draft,
+.page-admin #secPricing .admin-billing-status.is-pending {
+  color: #8a5a08;
+  background: #fff6dc;
+  border-color: #efd493;
+}
+
+.page-admin #secPricing .admin-billing-status.is-rejected,
+.page-admin #secPricing .admin-billing-status.is-cancelled {
+  color: #a23737;
+  background: #fff0f0;
+  border-color: #efc2c2;
+}
+
+.page-admin #secPricing .admin-billing-status.is-retired,
+.page-admin #secPricing .admin-billing-status.is-legacy,
+.page-admin #secPricing .admin-billing-status.is-unknown {
+  color: #59636d;
+  background: #f1f3f5;
+  border-color: #d7dde2;
+}
+
+.page-admin #secPricing .admin-billing-active-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--admin-teal);
+  background: #f2faf7;
+  color: var(--admin-ink-soft);
+  font-size: 12px;
+}
+
+.page-admin #secPricing .admin-billing-active-summary strong {
+  color: var(--admin-ink);
+  font-size: 13px;
+}
+
+.page-admin #secPricing .admin-billing-catalog-layout,
+.page-admin #secPricing .admin-billing-user-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(260px, .7fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.page-admin #secPricing .admin-billing-table-wrap {
+  min-width: 0;
+  padding: 0;
+  border: 1px solid var(--admin-line);
+  border-radius: 7px;
+  background: #ffffff;
+}
+
+.page-admin #secPricing .admin-billing-table {
+  width: 100%;
+  min-width: 660px;
+}
+
+.page-admin #secPricing .admin-billing-order-table {
+  min-width: 960px;
+}
+
+.page-admin #secPricing .admin-billing-table th,
+.page-admin #secPricing .admin-billing-table td {
+  padding: 8px 9px;
+  vertical-align: middle;
+  font-size: 12px;
+}
+
+.page-admin #secPricing .admin-billing-table td > strong,
+.page-admin #secPricing .admin-billing-table td > span:not(.admin-billing-status) {
+  display: block;
+}
+
+.page-admin #secPricing .admin-billing-table td > span:not(.admin-billing-status) {
+  margin-top: 2px;
+  color: var(--admin-muted);
+  font-size: 11px;
+}
+
+.page-admin #secPricing .admin-billing-strong,
+.page-admin #secPricing .admin-billing-money {
+  color: var(--admin-ink);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.page-admin #secPricing .admin-billing-reference {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-admin #secPricing .admin-billing-actions {
+  min-width: 122px;
+  flex-wrap: wrap;
+  color: var(--admin-muted);
+  font-size: 11px;
+}
+
+.page-admin #secPricing .admin-compact-button,
+.page-admin #secPricing .admin-billing-actions button {
+  width: auto;
+  min-width: 0;
+  min-height: 30px;
+  padding: 4px 9px;
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.page-admin #secPricing .admin-billing-toolbar {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.page-admin #secPricing .admin-billing-toolbar input,
+.page-admin #secPricing .admin-billing-toolbar select {
+  width: auto;
+  min-width: 128px;
+  min-height: 32px;
+  padding: 4px 9px;
+  font-size: 12px;
+}
+
+.page-admin #secPricing .admin-billing-editor,
+.page-admin #secPricing .admin-billing-adjustment {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--admin-line);
+  border-radius: 7px;
+  background: #f8fbfa;
+}
+
+.page-admin #secPricing .admin-billing-editor label,
+.page-admin #secPricing .admin-billing-adjustment label {
+  margin: 0;
+  font-size: 12px;
+}
+
+.page-admin #secPricing .admin-billing-editor textarea {
+  min-height: 220px;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.page-admin #secPricing .admin-billing-form-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.page-admin #secPricing .admin-billing-empty,
+.page-admin #secPricing .admin-billing-empty-panel {
+  color: var(--admin-muted);
+  text-align: center;
+}
+
+.page-admin #secPricing .admin-billing-empty {
+  height: 72px;
+}
+
+.page-admin #secPricing .admin-billing-empty-panel {
+  min-height: 92px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--admin-line);
+  border-radius: 7px;
+  background: #fbfcfd;
+  font-size: 12px;
+}
+
+.page-admin #secPricing .admin-billing-empty-panel[hidden],
+.page-admin #secPricing #billingUserWorkspace[hidden] {
+  display: none;
+}
+
+.page-admin #secPricing .admin-billing-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.page-admin #secPricing .admin-billing-summary-item {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--admin-line);
+  border-radius: 7px;
+  background: #ffffff;
+}
+
+.page-admin #secPricing .admin-billing-summary-item span,
+.page-admin #secPricing .admin-billing-summary-item strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-admin #secPricing .admin-billing-summary-item span {
+  color: var(--admin-muted);
+  font-size: 11px;
+}
+
+.page-admin #secPricing .admin-billing-summary-item strong {
+  margin-top: 4px;
+  color: var(--admin-ink);
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
+.page-admin #secPricing .admin-billing-summary-item.is-positive strong,
+.page-admin #secPricing .admin-billing-positive {
+  color: #176b4d;
+}
+
+.page-admin #secPricing .admin-billing-negative {
+  color: #a23737;
+}
+
+.page-admin #secPricing .admin-billing-adjustment textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+
+.page-admin #secPricing .admin-billing-adjustment button {
+  justify-self: start;
+}
+
+.page-admin #secPricing .admin-billing-legacy summary {
+  display: flex;
+  cursor: pointer;
+  color: var(--admin-ink);
+  font-size: 13px;
+}
+
+.page-admin #secPricing .admin-billing-legacy summary span,
+.page-admin #secPricing .admin-billing-legacy summary small {
+  display: block;
+}
+
+.page-admin #secPricing .admin-billing-legacy summary small {
+  margin-top: 3px;
+  color: var(--admin-muted);
+  font-weight: 400;
+}
+
+.page-admin #secPricing .admin-billing-pricing-grid {
+  margin-top: 14px;
+}
+
+.page-admin #secPricing .admin-billing-pricing-actions {
+  margin-top: 12px;
+}
+
+.page-admin #secUsers .admin-user-table th:last-child,
+.page-admin #secUsers .admin-user-table td:last-child {
+  width: 196px;
+  min-width: 196px;
+}
+
+@media (max-width: 1100px) {
+  .page-admin #secPricing .admin-billing-catalog-layout,
+  .page-admin #secPricing .admin-billing-user-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .page-admin #secPricing .admin-billing-summary-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .page-admin #secPricing .admin-billing-panel-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .page-admin #secPricing .admin-billing-toolbar {
+    justify-content: flex-start;
+  }
+
+  .page-admin #secPricing .admin-billing-toolbar input,
+  .page-admin #secPricing .admin-billing-toolbar select {
+    flex: 1 1 128px;
+    width: auto;
+  }
+
+  .page-admin #secPricing .admin-billing-summary-grid,
+  .page-admin #secPricing .admin-billing-pricing-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .page-admin #secPricing .admin-billing-summary-item strong {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .page-admin #secUsers .admin-user-table th:last-child,
+  .page-admin #secUsers .admin-user-table td:last-child {
+    width: 112px;
+    min-width: 112px;
   }
 }

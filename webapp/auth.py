@@ -11,8 +11,38 @@ from fastapi import Cookie, Depends, Header, HTTPException, Request
 from .db import db
 
 SESSION_COOKIE = "session_token"
+ADMIN_SESSION_COOKIE = "admin_session_token"
 ADMIN_WORKSPACE_HEADER = "X-Admin-Workspace-User-ID"
 ADMIN_WORKSPACE_QUERY = "admin_workspace_user_id"
+ADMIN_CONSOLE_HEADER = "X-Admin-Console"
+ADMIN_CONSOLE_QUERY = "admin_console"
+
+
+def _truthy(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def request_uses_admin_session(request: Request, admin_workspace_user_id: Any = None) -> bool:
+    path = str(request.url.path or "")
+    workspace_target = str(admin_workspace_user_id or "").strip()
+    return bool(
+        workspace_target
+        or path.startswith("/api/admin/")
+        or _truthy(request.headers.get(ADMIN_CONSOLE_HEADER))
+        or _truthy(request.query_params.get(ADMIN_CONSOLE_QUERY))
+    )
+
+
+def session_token_for_request(
+    request: Request,
+    session_token: str | None,
+    admin_session_token: str | None,
+    *,
+    admin_workspace_user_id: Any = None,
+) -> str | None:
+    if request_uses_admin_session(request, admin_workspace_user_id):
+        return str(admin_session_token or session_token or "").strip() or None
+    return str(session_token or "").strip() or None
 
 def _now() -> int:
     return int(time.time())
@@ -170,11 +200,18 @@ def get_current_user_for_session(
 def get_current_user(
     request: Request,
     session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+    admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
     admin_workspace_user_id: str | None = Header(default=None, alias=ADMIN_WORKSPACE_HEADER),
 ) -> dict[str, Any]:
+    workspace_target = admin_workspace_target_from_request(request, admin_workspace_user_id)
     return get_current_user_for_session(
-        session_token,
-        admin_workspace_user_id=admin_workspace_target_from_request(request, admin_workspace_user_id),
+        session_token_for_request(
+            request,
+            session_token,
+            admin_session_token,
+            admin_workspace_user_id=workspace_target,
+        ),
+        admin_workspace_user_id=workspace_target,
         request=request,
     )
 

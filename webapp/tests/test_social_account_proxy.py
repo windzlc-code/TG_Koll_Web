@@ -3,6 +3,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
 
@@ -128,6 +129,36 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
         self.assertEqual(row, ("new-residential.example", 8443, "proxy-secret"))
         self.assertEqual(counts, (1, 1))
 
+    def test_login_credentials_are_created_atomically_and_survive_proxy_removal(self):
+        account = social_api.create_social_account(
+            social_api.SocialAccountPayload(
+                platform="threads",
+                username="credential-owner",
+                login_username="owner@example.com",
+                login_password="saved-login-secret",
+                profile_dir=str(self.root / "profiles" / "credential-owner"),
+                residential_proxy=social_api.ResidentialProxyPayload(**self._proxy()),
+            )
+        )
+
+        self.assertEqual(account["login_username"], "owner@example.com")
+        self.assertTrue(account["login_password_configured"])
+        self.assertTrue(account["proxy_id"])
+
+        updated = social_api.update_social_account(
+            account["id"],
+            social_api.SocialAccountPatchPayload(clear_residential_proxy=True),
+        )
+
+        self.assertEqual(updated["proxy_id"], "")
+        self.assertTrue(updated["login_password_configured"])
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT login_username, login_password, proxy_id FROM social_accounts WHERE id = ?",
+                (account["id"],),
+            ).fetchone()
+        self.assertEqual(row, ("owner@example.com", "saved-login-secret", ""))
+
     def test_persona_platform_conflicts_return_409_without_orphan_proxy(self):
         self._account(
             "first",
@@ -217,6 +248,56 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as inactive_status:
             self._task(inactive["id"])
         self.assertEqual(inactive_status.exception.status_code, 409)
+
+    def test_concurrent_duplicate_publish_reuses_one_active_task(self):
+        account = self._account("publish-dedup")
+
+        def create_publish_task():
+            return social_api.create_social_task(
+                social_api.SocialTaskPayload(
+                    account_id=account["id"],
+                    platform="threads",
+                    task_type="publish_post",
+                    payload={
+                        "content": "same publish content",
+                        "archive_post_id": "post-dedup-1",
+                        "archive_post_source": "draft",
+                    },
+                )
+            )
+
+        with mock.patch.object(social_api, "wake_social_automation_worker"):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                results = list(executor.map(lambda _index: create_publish_task(), range(2)))
+
+        self.assertEqual(results[0]["id"], results[1]["id"])
+        self.assertTrue(any(bool(item.get("reused")) for item in results))
+        with sqlite3.connect(self.db_path) as conn:
+            task_count = conn.execute(
+                "SELECT COUNT(*) FROM social_automation_tasks WHERE account_id = ? AND task_type = 'publish_post'",
+                (account["id"],),
+            ).fetchone()[0]
+        self.assertEqual(task_count, 1)
+
+    def test_social_worker_scheduler_stops_cleanly(self):
+        old_enabled = os.environ.get("SOCIAL_AUTOMATION_WORKER_ENABLED")
+        os.environ["SOCIAL_AUTOMATION_WORKER_ENABLED"] = "1"
+        try:
+            social_api.ensure_social_automation_worker_started()
+            worker = social_api._WORKER_THREAD
+            self.assertIsNotNone(worker)
+            self.assertTrue(worker.is_alive())
+
+            social_api.stop_social_automation_worker(timeout_seconds=2)
+
+            self.assertFalse(worker.is_alive())
+            self.assertIsNone(social_api._WORKER_THREAD)
+        finally:
+            social_api.stop_social_automation_worker(timeout_seconds=2)
+            if old_enabled is None:
+                os.environ.pop("SOCIAL_AUTOMATION_WORKER_ENABLED", None)
+            else:
+                os.environ["SOCIAL_AUTOMATION_WORKER_ENABLED"] = old_enabled
 
         ready = self._account("ready", proxy=social_api.ResidentialProxyPayload(**self._proxy(host="ready.example")))
         self.assertEqual(self._task(ready["id"])["account_id"], ready["id"])

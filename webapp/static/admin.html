@@ -41,9 +41,8 @@
       </div>
 
       <div class="sidebar-actions admin-sidebar-actions">
-        <a class="btn ghost admin-console-link" href="/admin.html#admin-users">客户账号管理</a>
-        <button id="btnToUser" class="ghost" type="button">返回网站首页</button>
-        <button id="btnLogout" class="danger" type="button">退出</button>
+        <a class="btn ghost admin-console-link" href="/">进入首页</a>
+        <a class="btn ghost admin-console-link" href="/admin-console.html">进入 Web 控制台</a>
       </div>
     </aside>
 
@@ -53,10 +52,6 @@
           <div class="section-kicker">运营与配置中心</div>
           <h2>素材生成后台</h2>
           <div class="meta">优先处理客户账号、生成记录和额度策略，供应商配置集中放在后段维护。</div>
-          <div class="admin-top-actions">
-            <a class="btn ghost" href="/">进入首页</a>
-            <a class="btn ghost" href="/admin.html#admin-users">选择客户工作区</a>
-          </div>
         </div>
         <div class="workspace-overview admin-overview-strip">
           <div class="overview-pod">
@@ -115,7 +110,7 @@
         <div class="section-head">
           <div>
             <h2 id="adminAccountsTitle">账号管理</h2>
-            <div class="meta" id="adminAccountsMeta">审核客户申请、查看业务数据、分配额度并控制账号状态。</div>
+            <div class="meta" id="adminAccountsMeta">审核客户申请、查看业务数据、人工调整算力点并控制账号状态。</div>
           </div>
           <div class="admin-pending-count"><strong id="adminPendingCount">0</strong><span>待授权</span></div>
         </div>
@@ -138,7 +133,7 @@
               <input id="newUserPassword" type="password" minlength="8" autocomplete="new-password" placeholder="输入登录密码">
             </label>
             <label class="admin-user-create-field admin-user-balance-field" id="newUserBalanceField">
-              <span>初始额度（分）</span>
+              <span>初始算力点</span>
               <input id="newUserBalance" type="number" min="0" value="0">
             </label>
             <button id="btnCreateUser" class="primary admin-create-user-button" type="button">
@@ -160,7 +155,7 @@
                 <th scope="col" class="admin-stat-column">人设</th>
                 <th scope="col" class="admin-stat-column">创建推文</th>
                 <th scope="col" class="admin-stat-column">已发推文</th>
-                <th scope="col">额度(分)</th>
+                <th scope="col">算力点</th>
                 <th scope="col" class="admin-user-actions-heading">操作</th>
               </tr>
             </thead>
@@ -311,30 +306,173 @@
         <div class="section-head">
           <div>
             <h2>额度与计费</h2>
-            <div class="meta">统一维护服务点换算、汇率和图像 / 识别成本，减少客户额度策略的频繁手算。</div>
+            <div class="meta">管理商业目录版本、审核线下付款订单，并查看或人工调整客户计费权益。</div>
+          </div>
+          <div class="section-head-side">
+            <span class="admin-billing-pending" id="billingPendingSummary">待审核 0</span>
+            <button id="btnRefreshBilling" class="ghost admin-compact-button" type="button">刷新计费</button>
           </div>
         </div>
-        <div class="admin-config-grid">
-          <div class="admin-config-card">
-            <div class="admin-config-card-title">换算规则</div>
-            <label>视频生成额度换算：10 RMB = ? 服务点</label>
-            <input id="priceRhCoins" type="number" value="2500">
-            <label>USD→RMB 汇率</label>
-            <input id="priceUsdRmb" type="number" step="0.01" value="7.2">
-            <label>图片生成成本（USD/张）</label>
-            <input id="priceNanoUsd" type="number" step="0.001" value="0.134">
-          </div>
-          <div class="admin-config-card">
-            <div class="admin-config-card-title">识别成本</div>
-            <label>素材识别输入成本（USD/1M tokens）</label>
-            <input id="priceGemIn" type="number" step="0.01" value="4.0">
-            <label>素材识别输出成本（USD/1M tokens）</label>
-            <input id="priceGemOut" type="number" step="0.01" value="18.0">
-          </div>
-        </div>
-        <div class="row" style="margin-top:12px">
-          <button id="btnSavePricing" class="primary" type="button">保存额度配置</button>
-          <div id="pricingMsg" class="msg"></div>
+
+        <div class="admin-billing-stack">
+          <section class="admin-config-card admin-billing-panel" aria-labelledby="billingCatalogTitle">
+            <div class="admin-billing-panel-head">
+              <div>
+                <div class="admin-config-card-title" id="billingCatalogTitle">商业目录版本</div>
+                <div class="small">新目录先保存为草稿，确认后再发布为客户当前可见版本。</div>
+              </div>
+              <button id="btnReloadBillingCatalog" class="ghost admin-compact-button" type="button">刷新版本</button>
+            </div>
+            <div id="billingCatalogActive" class="admin-billing-active-summary" aria-live="polite">当前没有已发布目录</div>
+            <div class="admin-billing-catalog-layout">
+              <div class="table-wrap admin-billing-table-wrap">
+                <table class="table admin-billing-table">
+                  <caption class="sr-only">商业计费目录版本列表</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">版本</th>
+                      <th scope="col">状态</th>
+                      <th scope="col">生效时间</th>
+                      <th scope="col">创建时间</th>
+                      <th scope="col">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="billingCatalogBody">
+                    <tr><td colspan="5" class="admin-billing-empty">正在读取目录版本...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <form id="billingCatalogDraftForm" class="admin-billing-editor" novalidate>
+                <label for="billingCatalogJson">目录 JSON</label>
+                <textarea id="billingCatalogJson" rows="10" spellcheck="false" placeholder='{"currency":"TWD","subscription_plans":[],"credit_packages":[]}'></textarea>
+                <div class="admin-billing-form-actions">
+                  <button id="btnUseActiveCatalog" class="ghost admin-compact-button" type="button">载入当前版本</button>
+                  <button id="btnCreateCatalogDraft" class="primary admin-compact-button" type="submit">保存新草稿</button>
+                </div>
+                <div id="billingCatalogMsg" class="msg" role="status" aria-live="polite"></div>
+              </form>
+            </div>
+          </section>
+
+          <section class="admin-config-card admin-billing-panel" aria-labelledby="billingOrdersTitle">
+            <div class="admin-billing-panel-head">
+              <div>
+                <div class="admin-config-card-title" id="billingOrdersTitle">订单审核</div>
+                <div class="small">核对付款人、付款参考号和订单金额后执行通过或拒绝。</div>
+              </div>
+              <div class="admin-billing-toolbar">
+                <label for="billingOrderStatus" class="sr-only">订单状态</label>
+                <select id="billingOrderStatus">
+                  <option value="pending">待审核</option>
+                  <option value="approved">已通过</option>
+                  <option value="rejected">已拒绝</option>
+                  <option value="cancelled">已取消</option>
+                  <option value="all">全部订单</option>
+                </select>
+                <button id="btnReloadBillingOrders" class="ghost admin-compact-button" type="button">刷新订单</button>
+              </div>
+            </div>
+            <div class="table-wrap admin-billing-table-wrap">
+              <table class="table admin-billing-table admin-billing-order-table">
+                <caption class="sr-only">商业计费订单审核列表</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">订单 / 客户</th>
+                    <th scope="col">商品</th>
+                    <th scope="col">金额</th>
+                    <th scope="col">付款资料</th>
+                    <th scope="col">状态</th>
+                    <th scope="col">提交时间</th>
+                    <th scope="col">操作</th>
+                  </tr>
+                </thead>
+                <tbody id="billingOrderBody">
+                  <tr><td colspan="7" class="admin-billing-empty">正在读取订单...</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div id="billingOrderMsg" class="msg" role="status" aria-live="polite"></div>
+          </section>
+
+          <section class="admin-config-card admin-billing-panel" aria-labelledby="billingUserTitle">
+            <div class="admin-billing-panel-head">
+              <div>
+                <div class="admin-config-card-title" id="billingUserTitle">用户计费详情与人工调整</div>
+                <div class="small">按客户 ID 查看钱包、订阅、图片权益与最近流水；人工调整会保留审计记录。</div>
+              </div>
+              <form id="billingUserLookupForm" class="admin-billing-toolbar" novalidate>
+                <label for="billingUserId" class="sr-only">客户 ID</label>
+                <input id="billingUserId" type="number" min="1" inputmode="numeric" placeholder="客户 ID">
+                <button id="btnLoadUserBilling" class="primary admin-compact-button" type="submit">查询计费</button>
+              </form>
+            </div>
+            <div id="billingUserPlaceholder" class="admin-billing-empty-panel">从客户账号列表点击计费按钮，或输入客户 ID 查询。</div>
+            <div id="billingUserWorkspace" hidden>
+              <div id="billingUserSummary" class="admin-billing-summary-grid" aria-live="polite"></div>
+              <div class="admin-billing-user-layout">
+                <div class="table-wrap admin-billing-table-wrap">
+                  <table class="table admin-billing-table">
+                    <caption class="sr-only">客户最近计费流水</caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">时间</th>
+                        <th scope="col">资产</th>
+                        <th scope="col">事件</th>
+                        <th scope="col">变动</th>
+                        <th scope="col">变动后</th>
+                        <th scope="col">参考</th>
+                      </tr>
+                    </thead>
+                    <tbody id="billingLedgerBody"></tbody>
+                  </table>
+                </div>
+                <form id="billingAdjustmentForm" class="admin-billing-adjustment" novalidate>
+                  <div class="admin-config-card-title">人工调整</div>
+                  <label for="billingAdjustmentType">调整类型</label>
+                  <select id="billingAdjustmentType">
+                    <option value="credit">调整算力点</option>
+                    <option value="subscription">开通月度订阅</option>
+                  </select>
+                  <label for="billingAdjustmentAmount" id="billingAdjustmentAmountLabel">调整算力点</label>
+                  <input id="billingAdjustmentAmount" type="number" step="0.000001" placeholder="正数增加，负数扣减">
+                  <label for="billingAdjustmentNote">调整原因</label>
+                  <textarea id="billingAdjustmentNote" rows="4" maxlength="500" placeholder="必填，用于审计记录"></textarea>
+                  <button id="btnSubmitBillingAdjustment" class="primary admin-compact-button" type="submit">确认人工调整</button>
+                  <div id="billingUserMsg" class="msg" role="status" aria-live="polite"></div>
+                </form>
+              </div>
+            </div>
+          </section>
+
+          <details class="admin-config-card admin-billing-panel admin-billing-legacy">
+            <summary>
+              <span>
+                <strong>基础换算参数</strong>
+                <small>原有服务点、汇率与识别成本配置</small>
+              </span>
+            </summary>
+            <div class="admin-config-grid admin-billing-pricing-grid">
+              <div>
+                <label>视频生成额度换算：10 RMB = ? 服务点</label>
+                <input id="priceRhCoins" type="number" value="2500">
+                <label>USD→RMB 汇率</label>
+                <input id="priceUsdRmb" type="number" step="0.01" value="7.2">
+                <label>图片生成成本（USD/张）</label>
+                <input id="priceNanoUsd" type="number" step="0.001" value="0.134">
+              </div>
+              <div>
+                <label>素材识别输入成本（USD/1M tokens）</label>
+                <input id="priceGemIn" type="number" step="0.01" value="4.0">
+                <label>素材识别输出成本（USD/1M tokens）</label>
+                <input id="priceGemOut" type="number" step="0.01" value="18.0">
+              </div>
+            </div>
+            <div class="row admin-billing-pricing-actions">
+              <button id="btnSavePricing" class="primary admin-compact-button" type="button">保存额度配置</button>
+              <div id="pricingMsg" class="msg"></div>
+            </div>
+          </details>
+          <div id="billingWorkspaceMsg" class="msg" role="status" aria-live="polite"></div>
         </div>
       </section>
 
@@ -559,20 +697,20 @@
     <div class="modal-card modal-card-narrow" role="dialog" aria-modal="true" aria-labelledby="rechargeTitle">
       <div class="modal-header">
         <div>
-          <div class="modal-title" id="rechargeTitle">额度分配</div>
+          <div class="modal-title" id="rechargeTitle">人工算力调整</div>
           <div class="small" id="rechargeSub">-</div>
         </div>
         <button id="btnRechargeClose" type="button" class="ghost">关闭</button>
       </div>
       <div class="modal-body">
-        <label for="rechargeAmount">分配额度（分）</label>
+        <label for="rechargeAmount">增加算力点</label>
         <input id="rechargeAmount" type="number" min="1" value="1000">
         <label for="rechargeNote">备注</label>
-        <input id="rechargeNote" placeholder="例如：首次开通额度">
+        <input id="rechargeNote" placeholder="例如：人工补充算力点">
         <div id="rechargeMsg" class="msg"></div>
       </div>
       <div class="modal-footer">
-        <button id="btnRechargeSubmit" type="button" class="primary">确认分配</button>
+        <button id="btnRechargeSubmit" type="button" class="primary">确认人工调整</button>
       </div>
     </div>
   </div>

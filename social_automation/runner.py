@@ -805,6 +805,19 @@ def _detect_threads_login_state(page) -> dict[str, Any]:
         body_text = page.locator("body").inner_text(timeout=5000).lower()
     except Exception:
         pass
+    transient_error_markers = [
+        "something went wrong",
+        "please try again later",
+        "try again later",
+        "unable to load",
+        "couldn't refresh",
+    ]
+    if any(marker in body_text for marker in transient_error_markers):
+        return {
+            "status": "transient_error",
+            "reason": "Threads 页面当前显示加载错误，尚未确认登录成功。",
+            "url": url,
+        }
     if any(marker in body_text for marker in _verification_text_markers()):
         return {"status": "need_verification", "reason": "检测到验证码或安全挑战文案。", "url": url}
     if "/login" in url:
@@ -856,6 +869,13 @@ def _detect_threads_login_state(page) -> dict[str, Any]:
     if any(marker in body_text for marker in challenge_markers):
         return {"status": "need_verification", "reason": "检测到验证或安全挑战文案。"}
 
+    if not _has_threads_session_cookie(page):
+        return {
+            "status": "cookie_expired",
+            "reason": "未检测到有效的 Threads/Instagram 登录会话。",
+            "url": url,
+        }
+
     account_markers = [
         '[aria-label*="New thread" i]',
         '[aria-label*="Create" i]',
@@ -879,6 +899,22 @@ def _detect_threads_login_state(page) -> dict[str, Any]:
     if any(marker in body_text for marker in ("log in", "continue with instagram", "continue with facebook", "sign up")):
         return {"status": "cookie_expired", "reason": "检测到 Threads 登录提示。", "url": url}
     return {"status": "cookie_expired", "reason": "尚未检测到 Threads 登录后的界面。", "url": url, "matched_markers": matched}
+
+
+def _has_threads_session_cookie(page) -> bool:
+    try:
+        cookies = page.context.cookies()
+    except Exception:
+        return False
+    for cookie in cookies or []:
+        if str(cookie.get("name") or "").strip().lower() != "sessionid":
+            continue
+        if not str(cookie.get("value") or "").strip():
+            continue
+        domain = str(cookie.get("domain") or "").strip().lower().lstrip(".")
+        if domain.endswith(("threads.net", "threads.com", "instagram.com")):
+            return True
+    return False
 
 
 def _platform_home(platform: str) -> str:
@@ -1054,7 +1090,7 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
                 last_status = stable_status
             if last_status.get("status") == "invalid_credentials":
                 invalid_hits += 1
-                if invalid_hits < 2 and self_heal_attempts < max_self_heal_attempts:
+                if auto_submit and invalid_hits < 2 and self_heal_attempts < max_self_heal_attempts:
                     self_heal_attempts += 1
                     _self_heal_login_page(page, platform, logger, task, screenshot_dir, str(last_status.get("reason") or "invalid_credentials"), self_heal_attempts, cancel_event)
                     continue
@@ -1083,7 +1119,7 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
                     {"url": str(page.url or ""), "screenshot_path": shot, "details": last_status},
                     shot,
                 )
-                if verification_hits < verification_confirmations and self_heal_attempts < max_self_heal_attempts:
+                if auto_submit and verification_hits < verification_confirmations and self_heal_attempts < max_self_heal_attempts:
                     self_heal_attempts += 1
                     _self_heal_login_page(page, platform, logger, task, screenshot_dir, str(last_status.get("reason") or "need_verification"), self_heal_attempts, cancel_event)
                     continue
@@ -1112,7 +1148,7 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
                     continue
             if _verification_visible(page):
                 verification_hits += 1
-                if verification_hits < verification_confirmations and self_heal_attempts < max_self_heal_attempts:
+                if auto_submit and verification_hits < verification_confirmations and self_heal_attempts < max_self_heal_attempts:
                     self_heal_attempts += 1
                     _self_heal_login_page(page, platform, logger, task, screenshot_dir, "verification_visible", self_heal_attempts, cancel_event)
                     continue
@@ -1147,7 +1183,9 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
             if "Target page, context or browser has been closed" in message or "has been closed" in message:
                 raise NeedManualError(f"{_platform_name(platform)} 登录确认前浏览器窗口已关闭，请重新打开登录窗口并保持到账号就绪。", "cookie_expired") from exc
             logger.log("warn", "open_login_poll", f"登录窗口状态检查失败：{exc}")
-        if self_heal_attempts < max_self_heal_attempts:
+        # A manual login session belongs to the user.  Do not press Escape,
+        # reload, or navigate away from the page they are actively handling.
+        if auto_submit and self_heal_attempts < max_self_heal_attempts:
             self_heal_attempts += 1
             _self_heal_login_page(page, platform, logger, task, screenshot_dir, "login_state_not_ready", self_heal_attempts, cancel_event)
             continue

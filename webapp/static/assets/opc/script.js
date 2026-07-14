@@ -152,7 +152,9 @@ loginForm?.addEventListener("submit", async (event) => {
         password: loginForm.password.value,
       }),
     });
-    window.location.assign(result?.must_change_password ? "/change-password.html" : "/console.html");
+    const pageRedirect = String(document.body.dataset.loginRedirect || "/console.html");
+    const safeRedirect = pageRedirect.startsWith("/") && !pageRedirect.startsWith("//") ? pageRedirect : "/console.html";
+    window.location.assign(result?.must_change_password ? "/change-password.html" : safeRedirect);
   } catch (error) {
     loginStatus.textContent = error.detail || "登入失敗，請檢查帳號與密碼。";
     submit.disabled = false;

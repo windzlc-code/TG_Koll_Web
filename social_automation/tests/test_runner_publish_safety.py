@@ -49,12 +49,111 @@ class _Locator:
         return None
 
 
+class _LoginStateLocator:
+    def __init__(self, *, text="", visible=False):
+        self.text = text
+        self.visible = visible
+
+    @property
+    def first(self):
+        return self
+
+    def count(self):
+        return 1 if self.visible else 0
+
+    def is_visible(self, **_kwargs):
+        return self.visible
+
+    def inner_text(self, **_kwargs):
+        return self.text
+
+
+class _ThreadsErrorPage:
+    url = "https://www.threads.com/"
+
+    def __init__(self):
+        self.body = _LoginStateLocator(
+            text="Something went wrong, please try again later. Retry",
+            visible=True,
+        )
+
+    def locator(self, selector):
+        if selector == "body":
+            return self.body
+        # The real error page still renders Threads sidebar controls.  Those
+        # controls must never be enough to declare a successful login.
+        return _LoginStateLocator(visible=("aria-label" in selector))
+
+
+class _CookieContext:
+    def __init__(self, cookies):
+        self._cookies = cookies
+
+    def cookies(self):
+        return self._cookies
+
+
+class _ThreadsShellPage:
+    url = "https://www.threads.com/"
+
+    def __init__(self, cookies):
+        self.context = _CookieContext(cookies)
+        self.body = _LoginStateLocator(text="", visible=True)
+
+    def locator(self, selector):
+        if selector == "body":
+            return self.body
+        return _LoginStateLocator(visible=("aria-label" in selector))
+
+
 class _Logger:
     def log(self, *_args, **_kwargs):
         return None
 
 
 class RunnerPublishSafetyTests(unittest.TestCase):
+    def test_threads_error_page_is_not_treated_as_ready(self):
+        status = runner._detect_threads_login_state(_ThreadsErrorPage())
+
+        self.assertNotEqual(status["status"], "ready")
+        self.assertEqual(status["status"], "transient_error")
+
+    def test_threads_sidebar_without_a_session_cookie_is_not_ready(self):
+        status = runner._detect_threads_login_state(_ThreadsShellPage([]))
+
+        self.assertEqual(status["status"], "cookie_expired")
+
+    def test_threads_authenticated_session_and_account_ui_is_ready(self):
+        status = runner._detect_threads_login_state(_ThreadsShellPage([
+            {"name": "sessionid", "value": "active-session", "domain": ".threads.net"},
+        ]))
+
+        self.assertEqual(status["status"], "ready")
+
+    def test_manual_login_does_not_auto_heal_or_navigate_the_user_page(self):
+        page = mock.Mock()
+        page.url = "https://www.threads.com/"
+        logger = _Logger()
+        with (
+            mock.patch.object(runner, "_detect_platform_login_state", return_value={"status": "cookie_expired", "reason": "login page"}),
+            mock.patch.object(runner, "_self_heal_login_page") as self_heal,
+            mock.patch.object(runner, "_screenshot", return_value="timeout.png"),
+            mock.patch.object(runner, "_wait_or_raise_manual", return_value={"status": "cookie_expired"}),
+            mock.patch.object(runner.time, "time", side_effect=[0, 1, 31]),
+        ):
+            result = runner._run_open_login(
+                page,
+                {"id": "manual-login"},
+                {},
+                {"login_wait_seconds": 1, "wait_for_manual": True},
+                Path("."),
+                logger,
+                "threads",
+            )
+
+        self.assertEqual(result["status"], "cookie_expired")
+        self_heal.assert_not_called()
+
     def test_screenshot_captures_current_viewport(self):
         page = mock.Mock()
 

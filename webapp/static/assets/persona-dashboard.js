@@ -1,6 +1,7 @@
 let personaDashboardRoot = null;
 let personaDashboardBoundRoot = null;
 const PD_ADMIN_WORKSPACE_USER_ID = String(document.querySelector('meta[name="admin-workspace-user-id"]')?.content || "").trim();
+const PD_ADMIN_CONSOLE_SESSION = document.querySelector('meta[name="admin-console-session"]')?.content === "1";
 
 function pdEl(id) {
   return personaDashboardRoot ? personaDashboardRoot.querySelector(`#${id}`) : document.getElementById(id);
@@ -8,11 +9,12 @@ function pdEl(id) {
 
 function pdAdminWorkspaceUrl(value) {
   const text = String(value || "").trim();
-  if (!PD_ADMIN_WORKSPACE_USER_ID || !text) return text;
+  if ((!PD_ADMIN_WORKSPACE_USER_ID && !PD_ADMIN_CONSOLE_SESSION) || !text) return text;
   try {
     const url = new URL(text, window.location.href);
     if (url.origin !== window.location.origin) return text;
-    url.searchParams.set("admin_workspace_user_id", PD_ADMIN_WORKSPACE_USER_ID);
+    if (PD_ADMIN_WORKSPACE_USER_ID) url.searchParams.set("admin_workspace_user_id", PD_ADMIN_WORKSPACE_USER_ID);
+    if (PD_ADMIN_CONSOLE_SESSION) url.searchParams.set("admin_console", "1");
     if (/^[a-z][a-z\d+.-]*:/i.test(text)) return url.href;
     return `${url.pathname}${url.search}${url.hash}`;
   } catch {
@@ -23,6 +25,7 @@ function pdAdminWorkspaceUrl(value) {
 async function pdApi(path, opts = {}) {
   const headers = { ...(opts.headers || {}) };
   if (PD_ADMIN_WORKSPACE_USER_ID) headers["X-Admin-Workspace-User-ID"] = PD_ADMIN_WORKSPACE_USER_ID;
+  if (PD_ADMIN_CONSOLE_SESSION) headers["X-Admin-Console"] = "1";
   let body = opts.body;
   if (body && typeof body !== "string") {
     headers["Content-Type"] = "application/json";

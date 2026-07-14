@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vecto Vanguard OPC 方案與算力</title>
+    <meta name="description" content="Vecto Vanguard OPC 月度訂閱、算力點計價與儲值方案。" />
+    <link rel="icon" type="image/png" href="/assets/opc/vecto-logo-ui-icon.png?v=20260711" />
+    <link rel="preload" href="/assets/opc/vecto-ai-cockpit.png" as="image" />
+    <link rel="stylesheet" href="/assets/opc/styles.css?v=20260713-2" />
+    <link rel="stylesheet" href="/assets/opc/pricing.css?v=20260714-1" />
+  </head>
+  <body data-login-redirect="/pricing.html">
+    <header class="site-header" data-header>
+      <a class="brand" href="/" aria-label="返回 Vecto 首頁">
+        <span class="brand-logo-frame" aria-hidden="true">
+          <img class="brand-logo" src="/assets/opc/vecto-logo-ui-icon.png?v=20260711" alt="" width="1024" height="1024" />
+        </span>
+        <span class="brand-text">
+          <span class="brand-name">Vecto</span>
+          <span class="brand-local">維拓 / 維圖</span>
+        </span>
+      </a>
+
+      <nav class="site-nav" aria-label="主要導覽">
+        <a href="/#solution">解決方案</a>
+        <a href="/#agents">三帳架構</a>
+        <a href="/#scenarios">場景</a>
+        <a href="/pricing.html" aria-current="page">方案與算力</a>
+        <a href="/#service-difference">服務差異</a>
+      </nav>
+
+      <div class="header-actions">
+        <button class="header-login" type="button" data-open-login>帳號登入</button>
+        <a class="header-action" href="/#contact">遊客申請</a>
+      </div>
+    </header>
+
+    <main>
+      <section class="pricing-page-hero" aria-labelledby="pricing-page-title">
+        <img class="pricing-page-hero-media" src="/assets/opc/vecto-ai-cockpit.png" alt="" width="1536" height="864" fetchpriority="high" />
+        <div class="pricing-page-hero-shade" aria-hidden="true"></div>
+        <div class="pricing-page-hero-copy">
+          <p class="eyebrow">Vecto Vanguard OPC</p>
+          <h1 id="pricing-page-title">方案與算力</h1>
+          <p>訂閱取得 Vecto OS 與三帳號服務權限；算力點用於實際內容生成、素材產製與互動任務，兩者獨立結算。</p>
+          <div class="pricing-page-hero-actions">
+            <a class="button button-primary" href="#plans">查看方案</a>
+            <button class="button button-ghost" type="button" data-open-login>登入購買</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="pricing-facts" aria-label="核心計費摘要">
+        <div><span>月度訂閱</span><strong id="pricingFactSubscription">NT$6,000</strong></div>
+        <div><span>Threads 容量</span><strong id="pricingFactAccounts">3 帳號</strong></div>
+        <div><span>每月圖片額度</span><strong id="pricingFactImages">10 張</strong></div>
+        <div><span>算力單價</span><strong id="pricingFactPoint">1 點 = NT$10</strong></div>
+      </section>
+
+      <section class="pricing-account-strip" id="pricingAccountBar" aria-live="polite">
+        <div>
+          <span>購買狀態</span>
+          <strong>登入後即可提交線下付款申請</strong>
+        </div>
+        <button class="button button-primary" type="button" data-open-login>帳號登入</button>
+      </section>
+
+      <section class="pricing-public-section" id="plans" aria-labelledby="plans-title">
+        <div class="pricing-public-heading">
+          <div>
+            <p class="eyebrow">月度訂閱</p>
+            <h2 id="plans-title">一套 OPC，三組 Threads 帳號</h2>
+          </div>
+          <p>每套有效訂閱提供 3 個 Threads 帳號容量與每週期 10 張免費 AI 圖片；多套訂閱共用同一算力池。</p>
+        </div>
+        <div id="pricingSubscription" class="pricing-subscription-shell" aria-live="polite">
+          <div class="pricing-public-loading">正在讀取目前方案</div>
+        </div>
+      </section>
+
+      <section class="pricing-rights-band" aria-labelledby="rights-title">
+        <div class="pricing-public-section">
+          <div class="pricing-public-heading compact">
+            <div>
+              <p class="eyebrow">完整權益</p>
+              <h2 id="rights-title">Vecto OS 前線部署服務</h2>
+            </div>
+          </div>
+          <ol class="pricing-rights-list">
+            <li><span>01</span><div><strong>三帳號 AI 駕駛艙</strong><p>一組 OPC 超級個體完整部署，開通三組獨立 Threads 帳號並交由 Vecto OS 管理。</p></div></li>
+            <li><span>02</span><div><strong>每月 10 張免費圖片</strong><p>每個訂閱週期優先抵扣免費圖片額度，使用完畢後才按 AI 圖片價格扣除算力。</p></div></li>
+            <li><span>03</span><div><strong>內容與互動資料庫</strong><p>全行業文案庫、產品對比模板與評論互動話術包開放使用。</p></div></li>
+            <li><span>04</span><div><strong>會員後台全功能</strong><p>三帳排程發布、流量數據看板、算力餘額與消耗明細集中管理。</p></div></li>
+            <li><span>05</span><div><strong>熱點、風控與分流</strong><p>多維熱點抓取、內容前置風控與多帳號流量分流機制完整開通。</p></div></li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="pricing-public-section" aria-labelledby="usage-title">
+        <div class="pricing-public-heading">
+          <div>
+            <p class="eyebrow">算力點計價</p>
+            <h2 id="usage-title">每個動作清楚扣點</h2>
+          </div>
+          <p>點數永久有效、不跨月清零。影片價格目前僅列入目錄，待真實執行鏈可核驗後才會啟用扣費。</p>
+        </div>
+        <div id="pricingActions" class="pricing-action-table" aria-live="polite">
+          <div class="pricing-public-loading">正在讀取算力標準</div>
+        </div>
+      </section>
+
+      <section class="pricing-packages-band" aria-labelledby="packages-title">
+        <div class="pricing-public-section">
+          <div class="pricing-public-heading">
+            <div>
+              <p class="eyebrow">算力儲值</p>
+              <h2 id="packages-title">獨立計價，永久累計</h2>
+            </div>
+            <p>多套 Vecto Vanguard OPC 共用同一算力池，企業方案另含永久有效的圖片額度。</p>
+          </div>
+          <div id="pricingPackages" class="pricing-package-grid" aria-live="polite">
+            <div class="pricing-public-loading">正在讀取儲值方案</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="pricing-public-section pricing-rules" aria-labelledby="rules-title">
+        <div class="pricing-public-heading compact">
+          <div>
+            <p class="eyebrow">抵扣規則</p>
+            <h2 id="rules-title">三類資產互不混用</h2>
+          </div>
+        </div>
+        <div class="pricing-rule-grid">
+          <article><span>訂閱</span><h3>服務權限</h3><p>月費只提供 Vecto OS 與帳號容量，不可折抵算力。</p></article>
+          <article><span>免費圖片</span><h3>優先抵扣</h3><p>先用最早到期的月度額度，再用永久圖片額度。</p></article>
+          <article><span>算力點</span><h3>永久有效</h3><p>圖片額度用完後才扣算力，點數可跨月及跨套帳號使用。</p></article>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="footer-brand">
+        <span class="footer-logo-frame" aria-hidden="true"><img class="footer-logo" src="/assets/opc/vecto-logo-ui-icon.png?v=20260711" alt="" width="1024" height="1024" /></span>
+        <div><strong>Vecto 維拓</strong><span>OPC 超級個體 AI 駕駛艙</span></div>
+      </div>
+      <a class="button button-primary" href="/#contact">申請遊客帳號</a>
+    </footer>
+
+    <div class="auth-overlay" id="loginModal" aria-hidden="true">
+      <section class="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
+        <button class="auth-close" type="button" data-close-login aria-label="關閉">×</button>
+        <p class="form-kicker">Vecto OS</p>
+        <h2 id="loginTitle">帳號登入</h2>
+        <p class="auth-copy">登入後留在方案頁提交購買申請；帳號資產與消費流水仍在 Web 控制台查看。</p>
+        <form id="homeLoginForm" novalidate>
+          <label class="field" for="loginUsername"><span>帳號</span><input id="loginUsername" name="username" autocomplete="username" required /></label>
+          <label class="field" for="loginPassword"><span>密碼</span><input id="loginPassword" name="password" type="password" autocomplete="current-password" required /></label>
+          <button class="submit-button" type="submit"><span>登入並繼續</span><span aria-hidden="true">→</span></button>
+          <p class="form-status" id="loginStatus" role="status" aria-live="polite"></p>
+        </form>
+        <a class="auth-guest-link" href="/#contact">尚未有帳號？提交遊客申請</a>
+      </section>
+    </div>
+
+    <div class="pricing-order-overlay" id="pricingOrderModal" aria-hidden="true">
+      <section class="pricing-order-dialog" role="dialog" aria-modal="true" aria-labelledby="pricingOrderTitle">
+        <button class="pricing-order-close" type="button" data-close-order aria-label="關閉">×</button>
+        <p class="form-kicker">線下付款申請</p>
+        <h2 id="pricingOrderTitle">建立訂單</h2>
+        <p id="pricingOrderDescription" class="pricing-order-copy"></p>
+        <form id="pricingOrderForm">
+          <div class="pricing-order-grid">
+            <label class="field"><span>數量</span><input name="quantity" type="number" min="1" max="50" step="1" value="1" required /></label>
+            <label class="field pricing-renewal-field" id="pricingRenewalField" hidden><span>訂閱方式</span><select name="renewal_subscription_id"><option value="">開通新訂閱</option></select></label>
+            <label class="field"><span>匯款人</span><input name="payer_name" maxlength="120" placeholder="姓名或公司名稱" required /></label>
+            <label class="field"><span>匯款參考</span><input name="payment_reference" maxlength="160" placeholder="銀行末五碼或交易編號" required /></label>
+            <label class="field"><span>付款時間</span><input name="paid_at" type="datetime-local" /></label>
+            <label class="field"><span>付款憑證（可選）</span><input name="proof_path" maxlength="500" placeholder="憑證連結或可核對位置" /></label>
+          </div>
+          <label class="field"><span>備註</span><textarea name="note" maxlength="1000" rows="3" placeholder="需要管理員注意的事項"></textarea></label>
+          <div class="pricing-order-actions">
+            <button class="button button-ghost" type="button" data-close-order>取消</button>
+            <button class="button button-primary" type="submit">提交付款申請</button>
+          </div>
+          <p class="form-status" id="pricingOrderStatus" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+    </div>
+
+    <script src="/assets/opc/script.js?v=20260714-1"></script>
+    <script src="/assets/opc/pricing.js?v=20260714-1"></script>
+  </body>
+</html>
