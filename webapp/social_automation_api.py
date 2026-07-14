@@ -886,7 +886,11 @@ def _live_browser_task_input_allowed(row: Any) -> bool:
     if running_mode in {"switching", "takeover_timeout"}:
         return False
     payload = _load_task_payload_object(task.get("payload_json"))
-    return payload is not None and _is_manual_open_login_task(task, payload)
+    return bool(
+        payload is not None
+        and payload.get("manual_takeover") is True
+        and _open_login_auto_submit_mode(payload) is False
+    )
 
 
 def _query_live_browser_input_allowed(task_id: str) -> bool:
@@ -2433,6 +2437,7 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
     if task_type == "open_login":
         _validate_open_login_payload(task_payload)
         task_payload["auto_submit"] = True
+        task_payload["wait_for_manual"] = True
     auto_submit = _validate_open_login_payload(task_payload) if task_type == "open_login" else False
     now = _now()
     scheduled_at = _parse_schedule(payload.scheduled_at)
@@ -2565,7 +2570,7 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
                 initial_status,
                 scheduled_at,
                 json.dumps(task_payload, ensure_ascii=False),
-                max(0, min(int(payload.max_retries or 0), 5)),
+                0 if task_type == "open_login" else max(0, min(int(payload.max_retries or 0), 5)),
                 str((billing_reservation or {}).get("id") or ""),
                 now,
                 now,
@@ -2754,6 +2759,10 @@ def retry_social_task(task_id: str, *, billing_admin_waived: bool = False) -> di
         row = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="任务不存在")
+    if str(row["task_type"] or "") == "open_login":
+        raise HTTPException(status_code=409, detail="登录任务不能重试，请重新点击打开登录")
+    if str(row["status"] or "") != "failed":
+        raise HTTPException(status_code=409, detail="仅失败任务可以重试")
     payload = SocialTaskPayload(
             persona_id=str(row["persona_id"] or ""),
             account_id=str(row["account_id"] or ""),

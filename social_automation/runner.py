@@ -75,6 +75,8 @@ def _attempt_publish_login_repair(
 ) -> dict[str, Any]:
     if str(task.get("task_type") or "") != "publish_post":
         return initial_status
+    if str(initial_status.get("status") or "") == "invalid_credentials":
+        return initial_status
     max_repair_attempts = _int_payload_or_env(payload, "publish_login_repair_attempts", "SOCIAL_AUTOMATION_PUBLISH_LOGIN_REPAIR_ATTEMPTS", 3, 0, 8)
     if max_repair_attempts <= 0:
         return initial_status
@@ -87,6 +89,8 @@ def _attempt_publish_login_repair(
     for attempt in range(1, max_repair_attempts + 1):
         _self_heal_login_page(page, platform, logger, task, screenshot_dir, str(initial_status.get("reason") or "publish_login_not_ready"), attempt, cancel_event)
         current = _detect_platform_login_state(page, platform)
+        if str(current.get("status") or "") == "invalid_credentials":
+            return current
         if current.get("status") == "ready":
             stable = _confirm_platform_ready(page, platform, logger, cancel_event)
             if stable.get("status") == "ready":
@@ -1048,8 +1052,11 @@ def _detect_platform_login_state(page, platform: str) -> dict[str, Any]:
 
 
 def _int_payload_or_env(payload: dict[str, Any], key: str, env_key: str, default: int, minimum: int, maximum: int) -> int:
+    raw = payload.get(key)
+    if raw is None or raw == "":
+        raw = os.getenv(env_key, str(default))
     try:
-        value = int(payload.get(key) or os.getenv(env_key, str(default)))
+        value = int(raw)
     except Exception:
         value = default
     return max(minimum, min(value, maximum))
@@ -1224,7 +1231,7 @@ def _run_open_login(
     wait_seconds = int(payload.get("login_wait_seconds") or os.getenv("SOCIAL_AUTOMATION_LOGIN_WAIT_SECONDS", "3600"))
     wait_seconds = max(30, min(wait_seconds, 3600))
     max_login_attempts = _int_payload_or_env(payload, "max_login_attempts", "SOCIAL_AUTOMATION_LOGIN_MAX_ATTEMPTS", 4, 1, 8)
-    max_self_heal_attempts = _int_payload_or_env(payload, "max_self_heal_attempts", "SOCIAL_AUTOMATION_LOGIN_SELF_HEAL_ATTEMPTS", 5, 0, 12)
+    max_self_heal_attempts = _int_payload_or_env(payload, "max_self_heal_attempts", "SOCIAL_AUTOMATION_LOGIN_SELF_HEAL_ATTEMPTS", 2, 0, 12)
     submit_grace_seconds = _int_payload_or_env(payload, "submit_grace_seconds", "SOCIAL_AUTOMATION_LOGIN_SUBMIT_GRACE_SECONDS", 30, 5, 120)
     wait_for_manual = bool(payload.get("wait_for_manual", True))
     manual_only_on_verification = bool(payload.get("manual_only_on_verification", False))
@@ -1312,7 +1319,7 @@ def _run_open_login(
             if last_status.get("status") == "invalid_credentials":
                 _request_manual_takeover(context_control)
                 shot = _screenshot(page, screenshot_dir, task, "login_invalid_credentials", logger)
-                return _wait_or_raise_manual(
+                return _wait_for_manual_login_completion(
                     page,
                     task,
                     screenshot_dir,
@@ -1323,8 +1330,6 @@ def _run_open_login(
                     "invalid_credentials",
                     shot,
                     last_status,
-                    wait_for_manual,
-                    manual_only_on_verification,
                 )
             if last_status.get("status") == "need_verification":
                 shot = _screenshot(page, screenshot_dir, task, "login_verification_required", logger)
@@ -1414,10 +1419,33 @@ def _run_open_login(
             continue
         if post_submit_grace_expired:
             last_submit_monotonic = None
-        if auto_submit and self_heal_attempts < max_self_heal_attempts:
-            self_heal_attempts += 1
-            _self_heal_login_page(page, platform, logger, task, screenshot_dir, "login_state_not_ready", self_heal_attempts, cancel_event, context_control)
-            continue
+        if auto_submit:
+            if self_heal_attempts < max_self_heal_attempts:
+                self_heal_attempts += 1
+                _self_heal_login_page(page, platform, logger, task, screenshot_dir, "login_state_not_ready", self_heal_attempts, cancel_event, context_control)
+                continue
+            _request_manual_takeover(context_control)
+            shot = _screenshot(page, screenshot_dir, task, "login_recovery_exhausted", logger)
+            reason = f"{_platform_name(platform)} 自动恢复已达到上限，请在已打开的浏览器中人工继续。"
+            logger.log(
+                "warn",
+                "login_recovery_exhausted",
+                reason,
+                {"status": str(last_status.get("status") or "need_manual"), "details": last_status},
+                shot,
+            )
+            return _wait_for_manual_login_completion(
+                page,
+                task,
+                screenshot_dir,
+                logger,
+                platform,
+                cancel_event,
+                reason,
+                str(last_status.get("status") or "need_manual"),
+                shot,
+                last_status,
+            )
         time.sleep(3 if auto_submit else 10)
     shot = _screenshot(page, screenshot_dir, task, "login_wait_timeout", logger)
     return _wait_or_raise_manual(

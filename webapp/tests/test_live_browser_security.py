@@ -120,17 +120,22 @@ def test_input_permission_queries_every_time_off_event_loop():
     assert to_thread.await_count == 2
 
 
-def test_manual_open_login_allows_input_while_running():
+def test_open_login_requires_takeover_before_input_is_allowed():
     assert social_automation_api._live_browser_task_input_allowed({
         "status": "running",
         "task_type": "open_login",
         "payload_json": "{}",
-    }) is True
+    }) is False
     assert social_automation_api._live_browser_task_input_allowed({
         "status": "running",
         "task_type": "open_login",
         "payload_json": '{"auto_submit": true}',
     }) is False
+    assert social_automation_api._live_browser_task_input_allowed({
+        "status": "running",
+        "task_type": "open_login",
+        "payload_json": '{"auto_submit": false, "manual_takeover": true}',
+    }) is True
 
 
 def test_auto_login_switched_to_manual_remains_visible_in_overview():
@@ -366,7 +371,13 @@ def test_manual_login_recovery_never_guesses_success_or_requeues_recent_task():
 
 @pytest.mark.parametrize(
     ("payload_json", "expected_status"),
-    [("{}", 200), ('{"auto_submit": false}', 200), ('{"auto_submit": true}', 409), ('{"auto_submit": 1}', 409)],
+    [
+        ("{}", 409),
+        ('{"auto_submit": false}', 409),
+        ('{"auto_submit": false, "manual_takeover": true}', 200),
+        ('{"auto_submit": true}', 409),
+        ('{"auto_submit": 1}', 409),
+    ],
 )
 def test_http_text_input_enforces_live_task_permission(payload_json, expected_status):
     client = _security_test_client()
