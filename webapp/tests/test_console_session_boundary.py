@@ -283,6 +283,16 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         set_mode = self._function_source("setLiveBrowserMode")
         self.assertIn('liveBrowserLoginMode(session) === "manual" && Boolean(session.input_allowed)', set_mode)
 
+    def test_live_browser_actions_bind_to_the_stable_module_root(self):
+        bind_events = self._function_source("bindEvents")
+
+        self.assertIn('$("moduleBody").addEventListener("click", (event) => {', bind_events)
+        self.assertNotIn(
+            'if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("click", (event) => {',
+            bind_events,
+        )
+        self.assertIn('const liveBrowserMode = event.target.closest("[data-live-browser-mode]")', bind_events)
+
     def test_account_edit_does_not_resubmit_unchanged_proxy_and_clears_revealed_password(self):
         modal = self._function_source("openAccountPoolEditModal")
         save = self._function_source("saveAccountPoolEditForm")

@@ -19474,7 +19474,7 @@ function bindEvents() {
   if ($("socialAccount")) $("socialAccount").addEventListener("change", syncStandaloneSocialForm);
   if ($("socialPlatform")) $("socialPlatform").addEventListener("change", syncStandaloneSocialForm);
   if ($("runSocialOnce")) $("runSocialOnce").addEventListener("click", () => api("/api/persona_dashboard/automation/worker/run_once", { method: "POST" }).then(loadSocial).catch((error) => showMsg("socialMsg", error.detail || error.message || "执行失败", false)));
-  if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("click", (event) => {
+  $("moduleBody").addEventListener("click", (event) => {
     if (event.target.closest("[data-live-browser-modal-close]")) {
       closeLiveBrowserLargeModal();
       return;
@@ -19742,7 +19742,7 @@ function bindEvents() {
     const cancel = event.target.closest("[data-social-cancel]");
     if (cancel) cancelSocialAutomationTask(cancel.dataset.socialCancel, "socialMsg").catch((error) => showMsg("socialMsg", error.detail || error.message || "停止任务失败", false));
   });
-  if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("keydown", (event) => {
+  $("moduleBody").addEventListener("keydown", (event) => {
     const liveBrowserInput = event.target.closest("[data-live-browser-text]");
     if (liveBrowserInput && event.key === "Enter") {
       event.preventDefault();
@@ -19765,10 +19765,10 @@ function bindEvents() {
       closeLiveBrowserLargeModal();
     }
   });
-  if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("input", (event) => {
+  $("moduleBody").addEventListener("input", (event) => {
     if (event.target.closest(".account-pool-create-panel")) syncAccountPoolCreateDraftFromForm();
   });
-  if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("change", (event) => {
+  $("moduleBody").addEventListener("change", (event) => {
     const proxyPageSize = event.target.closest("[data-proxy-page-size]");
     if (proxyPageSize) {
       state.proxyPoolPageSize = [10, 20, 50].includes(Number(proxyPageSize.value)) ? Number(proxyPageSize.value) : 10;

@@ -170,6 +170,38 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         page.reload.assert_not_called()
         goto.assert_not_called()
 
+    def test_threads_login_form_recovery_stays_on_instagram_login(self):
+        page = mock.Mock()
+        page.url = runner.INSTAGRAM_LOGIN
+        with (
+            mock.patch.object(runner, "_screenshot", return_value="blank.png"),
+            mock.patch.object(runner, "_click_text_button", return_value=False),
+            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner, "_goto") as goto,
+        ):
+            runner._self_heal_login_page(
+                page,
+                "threads",
+                _Logger(),
+                {"id": "blank-instagram-login"},
+                Path("."),
+                "auto_login_form_not_ready",
+                2,
+            )
+
+        goto.assert_called_once_with(
+            page,
+            runner.INSTAGRAM_LOGIN,
+            mock.ANY,
+            "login_self_heal_instagram_login",
+            timeout_ms=30000,
+            networkidle_ms=8000,
+        )
+        page.reload.assert_not_called()
+
+    def test_default_login_self_heal_attempts_allow_multiple_page_recoveries(self):
+        self.assertGreaterEqual(runner.DEFAULT_LOGIN_SELF_HEAL_ATTEMPTS, 4)
+
     def test_threads_feed_text_with_challenge_word_is_not_verification(self):
         page = _ThreadsShellPage(
             [{"name": "sessionid", "value": "active-session", "domain": ".threads.net"}],

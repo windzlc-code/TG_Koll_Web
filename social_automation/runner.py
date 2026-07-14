@@ -14,6 +14,8 @@ from urllib.parse import quote, quote_plus, urljoin, urlparse
 INSTAGRAM_HOME = "https://www.instagram.com/"
 INSTAGRAM_LOGIN = "https://www.instagram.com/accounts/login/"
 THREADS_HOME = "https://www.threads.net/"
+DEFAULT_LOGIN_SELF_HEAL_ATTEMPTS = 4
+LOGIN_FORM_WAIT_SECONDS = 12
 SUPPORTED_TASK_TYPES = {
     "check_login",
     "open_login",
@@ -1096,6 +1098,22 @@ def _self_heal_login_page(
             page.wait_for_load_state("domcontentloaded", timeout=15000)
         _sleep_between(1.5, 3.0)
         return
+    if platform == "threads" and reason == "auto_login_form_not_ready":
+        if attempt % 2:
+            with contextlib.suppress(Exception):
+                page.reload(wait_until="domcontentloaded", timeout=30000)
+                page.wait_for_load_state("networkidle", timeout=8000)
+        else:
+            _goto(
+                page,
+                INSTAGRAM_LOGIN,
+                logger,
+                "login_self_heal_instagram_login",
+                timeout_ms=30000,
+                networkidle_ms=8000,
+            )
+        _sleep_between(1.5, 3.0)
+        return
     with contextlib.suppress(Exception):
         if _manual_takeover_requested(context_control):
             return
@@ -1243,7 +1261,14 @@ def _run_open_login(
     wait_seconds = int(payload.get("login_wait_seconds") or os.getenv("SOCIAL_AUTOMATION_LOGIN_WAIT_SECONDS", "3600"))
     wait_seconds = max(30, min(wait_seconds, 3600))
     max_login_attempts = _int_payload_or_env(payload, "max_login_attempts", "SOCIAL_AUTOMATION_LOGIN_MAX_ATTEMPTS", 2, 1, 8)
-    max_self_heal_attempts = _int_payload_or_env(payload, "max_self_heal_attempts", "SOCIAL_AUTOMATION_LOGIN_SELF_HEAL_ATTEMPTS", 2, 0, 12)
+    max_self_heal_attempts = _int_payload_or_env(
+        payload,
+        "max_self_heal_attempts",
+        "SOCIAL_AUTOMATION_LOGIN_SELF_HEAL_ATTEMPTS",
+        DEFAULT_LOGIN_SELF_HEAL_ATTEMPTS,
+        0,
+        12,
+    )
     submit_grace_seconds = _int_payload_or_env(payload, "submit_grace_seconds", "SOCIAL_AUTOMATION_LOGIN_SUBMIT_GRACE_SECONDS", 30, 5, 120)
     wait_for_manual = bool(payload.get("wait_for_manual", True))
     manual_only_on_verification = bool(payload.get("manual_only_on_verification", False))
@@ -2369,7 +2394,7 @@ def _auto_submit_login_form(
                 _sleep_between(2.0, 4.0)
 
     logger.log("info", "auto_login_find_inputs", "正在查找用户名和密码输入框。", {"url": str(page.url or "")})
-    username_input = _visible_first(page, [
+    username_selectors = [
         'input[name="username"]',
         'input[autocomplete="username"]',
         'input[type="text"]',
@@ -2379,14 +2404,25 @@ def _auto_submit_login_form(
         'input[placeholder*="username" i]',
         'input[placeholder*="phone" i]',
         'input[placeholder*="email" i]',
-    ])
-    password_input = _visible_first(page, [
+    ]
+    password_selectors = [
         'input[name="password"]',
         'input[autocomplete="current-password"]',
         'input[type="password"]',
         'input[aria-label*="password" i]',
         'input[placeholder*="password" i]',
-    ])
+    ]
+    username_input = None
+    password_input = None
+    input_deadline = time.monotonic() + LOGIN_FORM_WAIT_SECONDS
+    while time.monotonic() < input_deadline:
+        if _manual_takeover_requested(context_control):
+            return False
+        username_input = _visible_first(page, username_selectors, 400)
+        password_input = _visible_first(page, password_selectors, 400)
+        if username_input is not None and password_input is not None:
+            break
+        time.sleep(0.5)
     if username_input is None or password_input is None:
         shot = _screenshot(page, screenshot_dir, task, "auto_login_inputs_missing", logger)
         logger.log("warn", "auto_login_inputs_missing", "未找到可见的登录输入框，无法自动填写凭据。", {"continued": continue_clicked, "url": str(page.url or "")}, shot)
