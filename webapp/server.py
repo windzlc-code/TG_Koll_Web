@@ -1870,7 +1870,9 @@ def _sentiment_browser_auth_config_access(request: Request) -> tuple[dict[str, A
     if expected_token and provided_token and hmac.compare_digest(provided_token, expected_token):
         return config, False
     with contextlib.suppress(HTTPException):
-        user = _get_session_user_for_token(request.cookies.get(SESSION_COOKIE))
+        user = _get_session_user_for_token(
+            request.cookies.get(ADMIN_SESSION_COOKIE) or request.cookies.get(SESSION_COOKIE)
+        )
         require_admin(user)
         return config, True
     raise HTTPException(status_code=403, detail="invalid browser auth token")
