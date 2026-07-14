@@ -29,7 +29,7 @@ from typing import Any, Iterable
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import requests
-from fastapi import Cookie, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -44,9 +44,12 @@ from .auth import (
     SESSION_COOKIE,
     create_session,
     delete_session,
+    admin_workspace_target_from_request,
     get_current_user as _get_session_user,
+    get_current_user_for_session as _get_session_user_for_token,
     get_user_allowing_password_change as _get_session_user_allowing_password_change,
     hash_password,
+    resolve_admin_workspace_user,
     verify_password,
 )
 from .db import db, get_admin_config, init_db, set_admin_config
@@ -492,15 +495,28 @@ def _password_change_required_detail(user: dict[str, Any]) -> dict[str, Any]:
 
 
 def _get_user_allowing_password_change(
+    request: Request,
     session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+    admin_workspace_user_id: str | None = Header(default=None, alias="X-Admin-Workspace-User-ID"),
 ) -> dict[str, Any]:
-    return _get_session_user_allowing_password_change(session_token)
+    user = _get_session_user_allowing_password_change(session_token)
+    return resolve_admin_workspace_user(
+        user,
+        admin_workspace_target_from_request(request, admin_workspace_user_id),
+        request=request,
+    )
 
 
 def get_current_user(
+    request: Request,
     session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+    admin_workspace_user_id: str | None = Header(default=None, alias="X-Admin-Workspace-User-ID"),
 ) -> dict[str, Any]:
-    return _get_session_user(session_token)
+    return _get_session_user(
+        request=request,
+        session_token=session_token,
+        admin_workspace_user_id=admin_workspace_user_id,
+    )
 
 
 def require_admin(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
@@ -554,10 +570,38 @@ def _identity_user_id(user: dict[str, Any]) -> int:
 
 def _workspace_user_id(user: dict[str, Any]) -> int:
     """Resolve the tenant used by regular console APIs for every role."""
-    user_id = _identity_user_id(user)
+    try:
+        user_id = int(user.get("_workspace_user_id") or _identity_user_id(user))
+    except (TypeError, ValueError):
+        user_id = 0
     if user_id <= 0:
         raise HTTPException(status_code=401, detail="invalid workspace identity")
     return user_id
+
+
+def _workspace_username(user: dict[str, Any]) -> str:
+    return str(user.get("_workspace_username") or user.get("username") or "").strip()
+
+
+def _is_admin_workspace(user: dict[str, Any]) -> bool:
+    return bool(int(user.get("_workspace_admin_user_id") or 0))
+
+
+def _admin_workspace_audit_action(method: str, path: str) -> str:
+    verb = str(method or "").strip().upper()
+    clean_path = str(path or "").strip()
+    mappings = (
+        ("PATCH", r"^/api/persona_dashboard/personas/[^/]+/profile$", "workspace.persona.update"),
+        ("PATCH", r"^/api/persona_dashboard/personas/[^/]+/name$", "workspace.persona.update"),
+        ("PATCH", r"^/api/persona_dashboard/groups/[^/]+$", "workspace.group.update"),
+        ("PATCH", r"^/api/persona_dashboard/automation/accounts/[^/]+$", "workspace.social_account.update"),
+        ("PATCH", r"^/api/persona_dashboard/automation/proxies/[^/]+$", "workspace.social_proxy.update"),
+    )
+    for expected_verb, pattern, action in mappings:
+        if verb == expected_verb and re.match(pattern, clean_path):
+            return action
+    resource = "read" if verb in {"GET", "HEAD"} else "write"
+    return f"workspace.{resource}"
 
 
 TENANT_RESOURCE_LIFECYCLE_LOCK = threading.RLock()
@@ -607,7 +651,7 @@ def _record_persona_owner(archive_id: str, user: dict[str, Any]) -> None:
         conn.execute(
             "INSERT INTO persona_owners(archive_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?) "
             "ON CONFLICT(archive_id) DO UPDATE SET user_id = excluded.user_id, updated_at = excluded.updated_at",
-            (clean_id, _identity_user_id(user), now, now),
+            (clean_id, _workspace_user_id(user), now, now),
         )
 
 
@@ -653,7 +697,7 @@ def _require_social_account_access(account_id: str, user: dict[str, Any]) -> Non
 
 
 def _require_user_media_paths(media_paths: list[str], user: dict[str, Any]) -> None:
-    root = (UPLOAD_ROOT / str(user.get("username") or "")).resolve()
+    root = (UPLOAD_ROOT / _workspace_username(user)).resolve()
     for value in media_paths or []:
         try:
             path = Path(str(value or "")).expanduser().resolve()
@@ -752,7 +796,7 @@ def _record_persona_group_owner(group_id: str, user: dict[str, Any]) -> None:
         conn.execute(
             "INSERT INTO persona_group_owners(group_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?) "
             "ON CONFLICT(group_id) DO UPDATE SET user_id = excluded.user_id, updated_at = excluded.updated_at",
-            (clean_id, _identity_user_id(user), now, now),
+            (clean_id, _workspace_user_id(user), now, now),
         )
 
 
@@ -1731,7 +1775,7 @@ def _sentiment_browser_auth_config_access(request: Request) -> tuple[dict[str, A
     if expected_token and provided_token and hmac.compare_digest(provided_token, expected_token):
         return config, False
     with contextlib.suppress(HTTPException):
-        user = get_current_user(session_token=request.cookies.get(SESSION_COOKIE))
+        user = _get_session_user_for_token(request.cookies.get(SESSION_COOKIE))
         require_admin(user)
         return config, True
     raise HTTPException(status_code=403, detail="invalid browser auth token")
@@ -10918,6 +10962,22 @@ def _atomic_write_text(path: Path, content: str) -> None:
         raise
 
 
+def _atomic_write_bytes(path: Path, content: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    temp_path = Path(temp_name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    except Exception:
+        with contextlib.suppress(FileNotFoundError):
+            temp_path.unlink()
+        raise
+
+
 def _write_json_file(path: Path, payload: Any) -> None:
     _atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
 
@@ -11080,6 +11140,93 @@ def _persona_group_write_locked(operation):
     locked.__name__ = operation.__name__
     locked.__doc__ = operation.__doc__
     return locked
+
+
+def _account_purge_workspace_paths() -> tuple[Path, ...]:
+    return (
+        TOOL_R18_RUNTIME_DIR / "persona_archives.json",
+        TOOL_R18_RUNTIME_DIR / "persona_archives_cache.json",
+        TOOL_R18_RUNTIME_DIR / "persona_groups.json",
+        TOOL_R18_RUNTIME_DIR / "persona_memory.json",
+        TOOL_R18_RUNTIME_DIR / "persona_dashboard_deleted_posts.json",
+        TOOL_R18_RUNTIME_DIR / "persona_dashboard_hidden_memories.json",
+        TOOL_R18_RUNTIME_DIR / "persona-list-summary-cache.json",
+        TOOL_R18_RUNTIME_DIR / "persona-trend-intel-cache.json",
+    )
+
+
+def _account_purge_journal_dir(user_id: int) -> Path:
+    return DATA_DIR / "account_purge_journal" / str(int(user_id))
+
+
+def _create_account_purge_journal(user_id: int) -> Path:
+    journal_dir = _account_purge_journal_dir(user_id)
+    if journal_dir.exists():
+        raise RuntimeError(f"purge journal already exists for user {int(user_id)}")
+    journal_root = journal_dir.parent
+    journal_root.mkdir(parents=True, exist_ok=True)
+    temp_dir = journal_root / f".{int(user_id)}-{uuid.uuid4().hex}.tmp"
+    temp_dir.mkdir(parents=False, exist_ok=False)
+    try:
+        entries: list[dict[str, Any]] = []
+        with _persona_archive_file_lock():
+            with _persona_group_file_lock():
+                for index, path in enumerate(_account_purge_workspace_paths()):
+                    if path.exists() and not path.is_file():
+                        raise RuntimeError(f"purge workspace path is not a file: {path}")
+                    existed = path.is_file()
+                    snapshot_name = f"{index}.snapshot"
+                    if existed:
+                        (temp_dir / snapshot_name).write_bytes(path.read_bytes())
+                    entries.append({"existed": existed, "snapshot": snapshot_name})
+        _write_json_file(
+            temp_dir / "manifest.json",
+            {"version": 1, "target_user_id": int(user_id), "files": entries},
+        )
+        os.replace(temp_dir, journal_dir)
+    except Exception:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
+    return journal_dir
+
+
+def _restore_account_purge_journal(user_id: int) -> None:
+    journal_dir = _account_purge_journal_dir(user_id)
+    manifest = _read_json_file(journal_dir / "manifest.json")
+    paths = _account_purge_workspace_paths()
+    entries = manifest.get("files") if isinstance(manifest, dict) else None
+    if (
+        not isinstance(entries, list)
+        or int(manifest.get("version") or 0) != 1
+        or int(manifest.get("target_user_id") or 0) != int(user_id)
+        or len(entries) != len(paths)
+    ):
+        raise RuntimeError(f"invalid purge journal for user {int(user_id)}")
+
+    restore_plan: list[tuple[Path, bytes | None]] = []
+    for index, (path, entry) in enumerate(zip(paths, entries)):
+        if not isinstance(entry, dict) or str(entry.get("snapshot") or "") != f"{index}.snapshot":
+            raise RuntimeError(f"invalid purge journal entry {index} for user {int(user_id)}")
+        if bool(entry.get("existed")):
+            restore_plan.append((path, (journal_dir / f"{index}.snapshot").read_bytes()))
+        else:
+            restore_plan.append((path, None))
+
+    with _persona_archive_file_lock():
+        with _persona_group_file_lock():
+            for path, content in restore_plan:
+                if content is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    _atomic_write_bytes(path, content)
+
+
+def _discard_account_purge_journal(user_id: int) -> None:
+    journal_dir = _account_purge_journal_dir(user_id)
+    if journal_dir.exists():
+        shutil.rmtree(journal_dir)
+    with contextlib.suppress(OSError):
+        journal_dir.parent.rmdir()
 
 
 def _persona_archive_write_locked(operation):
@@ -16168,6 +16315,35 @@ def create_app() -> FastAPI:
             return RedirectResponse(url=target, status_code=308)
         return await call_next(request)
 
+    @app.middleware("http")
+    async def audit_admin_workspace_requests(request: Request, call_next):
+        response = await call_next(request)
+        context = getattr(request.state, "admin_workspace_context", None)
+        if isinstance(context, dict):
+            try:
+                with db() as conn:
+                    conn.execute(
+                        "INSERT INTO admin_audit_log(admin_user_id, action, target_user_id, metadata_json, created_at) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (
+                            int(context.get("admin_user_id") or 0),
+                            _admin_workspace_audit_action(request.method, request.url.path),
+                            int(context.get("target_user_id") or 0),
+                            json.dumps(
+                                {
+                                    "method": request.method,
+                                    "path": request.url.path,
+                                    "status_code": int(response.status_code),
+                                },
+                                ensure_ascii=True,
+                            ),
+                            _now_ts(),
+                        ),
+                    )
+            except Exception:
+                logger.exception("Failed to record administrator workspace audit event")
+        return response
+
     app.mount("/assets", StaticFiles(directory=str(STATIC_DIR / "assets")), name="assets")
 
     @app.get("/tool_r18_uploads/{file_path:path}", include_in_schema=False)
@@ -16189,7 +16365,7 @@ def create_app() -> FastAPI:
     @app.get("/change-password.html", include_in_schema=False)
     def page_change_password(session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE)) -> Response:
         try:
-            user = _get_user_allowing_password_change(session_token)
+            user = _get_session_user_allowing_password_change(session_token)
         except HTTPException:
             return RedirectResponse(url="/login.html", status_code=302)
         if int(user.get("must_change_password") or 0) != 1:
@@ -16210,21 +16386,38 @@ def create_app() -> FastAPI:
         return FileResponse(str(STATIC_DIR / "index.html"))
 
     @app.get("/console.html", include_in_schema=False)
-    def page_console(session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE)) -> Response:
+    def page_console(
+        manage_user_id: int = 0,
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+    ) -> Response:
         try:
-            user = _get_user_allowing_password_change(session_token)
+            user = _get_session_user_allowing_password_change(session_token)
         except HTTPException:
             return RedirectResponse(url="/login.html", status_code=302)
         if int(user.get("must_change_password") or 0) == 1:
             return RedirectResponse(url="/change-password.html", status_code=302)
         if _is_admin(user):
-            return RedirectResponse(url="/admin", status_code=302)
+            if int(manage_user_id or 0) <= 0:
+                return RedirectResponse(url="/admin", status_code=302)
+            try:
+                user = resolve_admin_workspace_user(user, int(manage_user_id))
+            except HTTPException:
+                return RedirectResponse(url="/admin#users", status_code=302)
+        elif int(manage_user_id or 0) > 0:
+            raise HTTPException(status_code=403, detail="administrator workspace access required")
         try:
             console_bootstrap = _build_persona_dashboard_console_overview(
                 visible_archive_ids=_visible_persona_ids(user),
                 visible_group_ids=_visible_persona_group_ids(user),
             )
             console_bootstrap["user_id"] = _workspace_user_id(user)
+            if _is_admin_workspace(user):
+                console_bootstrap["admin_workspace"] = {
+                    "target_user_id": _workspace_user_id(user),
+                    "target_username": _workspace_username(user),
+                    "archived": int(user.get("_workspace_deleted_at") or 0) > 0,
+                    "disabled": bool(int(user.get("_workspace_is_disabled") or 0)),
+                }
         except Exception as exc:
             logger.warning("Failed to build console bootstrap overview: %s", exc)
             console_bootstrap = None
@@ -16236,13 +16429,14 @@ def create_app() -> FastAPI:
                 "__CONSOLE_JS_VERSION__": _asset_version("assets", "console.js"),
                 "__PERSONA_DASHBOARD_JS_VERSION__": _asset_version("assets", "persona-dashboard.js"),
                 "__CONSOLE_BOOTSTRAP_JSON__": _json_script_payload(console_bootstrap),
+                "__ADMIN_WORKSPACE_USER_ID__": str(_workspace_user_id(user)) if _is_admin_workspace(user) else "",
             },
         )
 
     @app.get("/admin.html", include_in_schema=False)
     def page_admin(session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE)) -> Response:
         try:
-            user = get_current_user(session_token)
+            user = _get_session_user_for_token(session_token)
         except HTTPException:
             return RedirectResponse(url="/admin", status_code=302)
         if not _is_admin(user):
@@ -16267,7 +16461,7 @@ def create_app() -> FastAPI:
     @app.get("/admin", include_in_schema=False)
     def page_admin_entry(session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE)) -> Response:
         try:
-            user = get_current_user(session_token)
+            user = _get_session_user_for_token(session_token)
         except HTTPException:
             return _admin_login_page()
         if not _is_admin(user):
@@ -16448,6 +16642,8 @@ def create_app() -> FastAPI:
         request: Request,
         user: dict[str, Any] = Depends(_get_user_allowing_password_change),
     ):
+        if _is_admin_workspace(user):
+            raise HTTPException(status_code=403, detail="请从管理员账号详情中修改客户密码")
         old_pwd = str(payload.old_password or "")
         new_pwd = str(payload.new_password or "")
         if not verify_password(old_pwd, str(user.get("password_hash") or "")):
@@ -16483,6 +16679,8 @@ def create_app() -> FastAPI:
 
     @app.post("/api/auth/change_username")
     def api_change_username(payload: ChangeUsernamePayload, user: dict[str, Any] = Depends(get_current_user)):
+        if _is_admin_workspace(user):
+            raise HTTPException(status_code=403, detail="管理员工作区不能使用客户自助账号设置")
         pwd = str(payload.password or "")
         new_username = str(payload.new_username or "").strip()
         current_username = str(user.get("username") or "").strip()
@@ -16512,6 +16710,24 @@ def create_app() -> FastAPI:
 
     @app.get("/api/me")
     def api_me(user: dict[str, Any] = Depends(_get_user_allowing_password_change)):
+        if _is_admin_workspace(user):
+            with db() as conn:
+                target = conn.execute("SELECT * FROM users WHERE id = ?", (_workspace_user_id(user),)).fetchone()
+            if target is None:
+                raise HTTPException(status_code=404, detail="customer workspace not found")
+            target_user = dict(target)
+            return {
+                "id": int(target_user.get("id") or 0),
+                "username": str(target_user.get("username") or ""),
+                "is_admin": False,
+                "is_disabled": bool(int(target_user.get("is_disabled") or 0)),
+                "is_archived": bool(int(target_user.get("deleted_at") or 0)),
+                "balance_cents": int(target_user.get("balance_cents") or 0),
+                "created_at": int(target_user.get("created_at") or 0),
+                "must_change_password": False,
+                "acting_admin": True,
+                "admin_user_id": _identity_user_id(user),
+            }
         return {
             "id": int(user.get("id") or 0),
             "username": str(user.get("username") or ""),
@@ -16652,7 +16868,7 @@ def create_app() -> FastAPI:
         image: UploadFile = File(...),
         user: dict[str, Any] = Depends(require_persona_owner),
     ):
-        return await _replace_persona_archive_image(archive_id, image_id, str(user.get("username") or ""), image)
+        return await _replace_persona_archive_image(archive_id, image_id, _workspace_username(user), image)
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/images/{image_id}")
     def api_persona_dashboard_persona_image(archive_id: str, image_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
@@ -16796,7 +17012,7 @@ def create_app() -> FastAPI:
         upload_id = _new_id("personamedia")
         saved_paths: list[str] = []
         for idx, upload in enumerate(files or [], start=1):
-            saved = await _save_upload_file(str(user.get("username") or ""), upload_id, f"post_media_{idx}", upload)
+            saved = await _save_upload_file(_workspace_username(user), upload_id, f"post_media_{idx}", upload)
             if saved:
                 saved_paths.append(saved)
         return _update_persona_archive_post_media(
@@ -16819,7 +17035,7 @@ def create_app() -> FastAPI:
         upload_id = _new_id("personafavmedia")
         saved_paths: list[str] = []
         for idx, upload in enumerate(files or [], start=1):
-            saved = await _save_upload_file(str(user.get("username") or ""), upload_id, f"favorite_media_{idx}", upload)
+            saved = await _save_upload_file(_workspace_username(user), upload_id, f"favorite_media_{idx}", upload)
             if saved:
                 saved_paths.append(saved)
         return _update_persona_archive_post_media(
@@ -17356,7 +17572,7 @@ def create_app() -> FastAPI:
                 ORDER BY created_at DESC
                 LIMIT ?
                 """,
-                (int(user["id"]), lim),
+                (_workspace_user_id(user), lim),
             ).fetchall()
         items: list[dict[str, Any]] = []
         for row in rows:
@@ -17381,7 +17597,7 @@ def create_app() -> FastAPI:
     def api_task_cancel(task_id: str, user: dict[str, Any] = Depends(get_current_user)):
         return _cancel_task_record_for_user(
             task_id=task_id,
-            user_id=int(user["id"]),
+            user_id=_workspace_user_id(user),
             requested_by="Web 控制台",
         )
 
@@ -17523,7 +17739,7 @@ def create_app() -> FastAPI:
                         ORDER BY id ASC
                         LIMIT 200
                         """,
-                        (tid, int(user["id"]), int(start_after)),
+                        (tid, _workspace_user_id(user), int(start_after)),
                     ).fetchall()
                     task_row = conn.execute("SELECT status FROM tasks WHERE id = ?", (tid,)).fetchone()
                 if rows:
@@ -17660,7 +17876,7 @@ def create_app() -> FastAPI:
                 ORDER BY created_at DESC
                 LIMIT ?
                 """,
-                (int(user["id"]), lim),
+                (_workspace_user_id(user), lim),
             ).fetchall()
         return {
             "items": [
@@ -17692,7 +17908,7 @@ def create_app() -> FastAPI:
         task_id = _new_id("task")
         saved_files: list[dict[str, str]] = []
         for idx, upload in enumerate(files or [], start=1):
-            saved = await _save_upload_file(str(user.get("username") or ""), task_id, f"attach_{idx}", upload)
+            saved = await _save_upload_file(_workspace_username(user), task_id, f"attach_{idx}", upload)
             if not saved:
                 continue
             saved_files.append(
@@ -17716,7 +17932,7 @@ def create_app() -> FastAPI:
         payload = dict(payload or {})
         payload["message"] = text
         payload["source"] = "agent_chat"
-        _enqueue_task(task_id, int(user["id"]), task_type, payload)
+        _enqueue_task(task_id, _workspace_user_id(user), task_type, payload)
         return {
             "id": task_id,
             "task_type": task_type,
@@ -17751,9 +17967,9 @@ def create_app() -> FastAPI:
             "gemini_output_tokens": gemini_output_tokens,
             "nano_images": nano_images,
         }
-        payload["input_image_local_path"] = await _save_upload_file(str(user.get("username") or ""), task_id, "input_image", input_image_file)
-        payload["reference_image_local_path"] = await _save_upload_file(str(user.get("username") or ""), task_id, "reference_image", reference_image_file)
-        _enqueue_task(task_id, int(user["id"]), "get_nano_banana", payload)
+        payload["input_image_local_path"] = await _save_upload_file(_workspace_username(user), task_id, "input_image", input_image_file)
+        payload["reference_image_local_path"] = await _save_upload_file(_workspace_username(user), task_id, "reference_image", reference_image_file)
+        _enqueue_task(task_id, _workspace_user_id(user), "get_nano_banana", payload)
         return {"id": task_id}
 
     @app.post("/api/tasks/get_gemini")
@@ -17786,18 +18002,18 @@ def create_app() -> FastAPI:
 
         image_paths: list[str] = []
         for idx, upload in enumerate(images or [], start=1):
-            saved = await _save_upload_file(str(user.get("username") or ""), task_id, f"image_{idx}", upload)
+            saved = await _save_upload_file(_workspace_username(user), task_id, f"image_{idx}", upload)
             if saved:
                 image_paths.append(saved)
         video_paths: list[str] = []
         for idx, upload in enumerate(videos or [], start=1):
-            saved = await _save_upload_file(str(user.get("username") or ""), task_id, f"video_{idx}", upload)
+            saved = await _save_upload_file(_workspace_username(user), task_id, f"video_{idx}", upload)
             if saved:
                 video_paths.append(saved)
         payload["image_paths"] = image_paths
         payload["video_paths"] = video_paths
 
-        _enqueue_task(task_id, int(user["id"]), "get_gemini", payload)
+        _enqueue_task(task_id, _workspace_user_id(user), "get_gemini", payload)
         return {"id": task_id}
 
     @app.post("/api/tasks/submit")
@@ -17824,7 +18040,7 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=400, detail="人设图生成需要关联人设 ID")
             task_id = _new_id("task")
             payload["uploaded_files"] = []
-            _enqueue_task(task_id, int(user["id"]), typ, payload)
+            _enqueue_task(task_id, _workspace_user_id(user), typ, payload)
             return {"id": task_id, "task_type": typ}
         if typ == "persona_post_image":
             pass
@@ -17836,7 +18052,7 @@ def create_app() -> FastAPI:
         task_id = _new_id("task")
         saved: list[dict[str, str]] = []
         for idx, upload in enumerate(files or [], start=1):
-            path = await _save_upload_file(str(user.get("username") or ""), task_id, f"file_{idx}", upload)
+            path = await _save_upload_file(_workspace_username(user), task_id, f"file_{idx}", upload)
             if not path:
                 continue
             saved.append({"path": path, "name": str(upload.filename or ""), "kind": _guess_file_kind(path)})
@@ -17874,7 +18090,7 @@ def create_app() -> FastAPI:
             raise
 
         payload["uploaded_files"] = [{"name": s["name"], "kind": s["kind"]} for s in saved]
-        _enqueue_task(task_id, int(user["id"]), typ, payload)
+        _enqueue_task(task_id, _workspace_user_id(user), typ, payload)
         return {"id": task_id, "task_type": typ}
 
     @app.get("/api/admin/runtime_config")
@@ -18336,7 +18552,8 @@ def create_app() -> FastAPI:
             )
             pending_count = int(
                 conn.execute(
-                    "SELECT COUNT(*) AS c FROM users WHERE is_admin = 0 AND approval_status = 'pending'"
+                    "SELECT COUNT(*) AS c FROM users "
+                    "WHERE is_admin = 0 AND approval_status = 'pending' AND deleted_at = 0"
                 ).fetchone()["c"]
             )
             rows = conn.execute(
@@ -18344,7 +18561,7 @@ def create_app() -> FastAPI:
                 SELECT id, username, is_admin, is_disabled, balance_cents, account_type,
                        approval_status, full_name, email, phone, company, use_case, admin_note,
                        approved_at, approved_by, last_login_at, must_change_password,
-                       password_expires_at, created_at, updated_at
+                       password_expires_at, deleted_at, deleted_by, created_at, updated_at
                 FROM users
                 {where_sql}
                 ORDER BY created_at DESC
@@ -18417,7 +18634,7 @@ def create_app() -> FastAPI:
                 """SELECT id, username, is_admin, is_disabled, balance_cents, account_type,
                            approval_status, full_name, email, phone, company, use_case, admin_note,
                            approved_at, approved_by, last_login_at, must_change_password,
-                           password_expires_at, created_at, updated_at
+                           password_expires_at, deleted_at, deleted_by, created_at, updated_at
                     FROM users WHERE username = ?""",
                 (username,),
             ).fetchone()
@@ -18434,7 +18651,7 @@ def create_app() -> FastAPI:
                           target.full_name, target.email, target.phone, target.company,
                           target.use_case, target.admin_note, target.approved_at, target.approved_by,
                            target.last_login_at, target.must_change_password, target.password_expires_at,
-                           target.created_at, target.updated_at,
+                           target.deleted_at, target.deleted_by, target.created_at, target.updated_at,
                            CASE WHEN target.password_hash <> '' THEN 1 ELSE 0 END AS password_configured,
                            CASE
                              WHEN target.is_admin = 1 THEN 'prohibited'
@@ -18755,11 +18972,16 @@ def create_app() -> FastAPI:
         note = str(payload.admin_note or "").strip()[:1000]
         now = _now_ts()
         with db() as conn:
-            row = conn.execute("SELECT id, is_admin, approval_status FROM users WHERE id = ?", (int(target_user_id),)).fetchone()
+            row = conn.execute(
+                "SELECT id, is_admin, approval_status, deleted_at FROM users WHERE id = ?",
+                (int(target_user_id),),
+            ).fetchone()
             if row is None:
                 raise HTTPException(status_code=404, detail="客户账号不存在")
             if int(row["is_admin"] or 0) == 1:
                 raise HTTPException(status_code=400, detail="管理员账号不需要访客授权")
+            if int(row["deleted_at"] or 0) > 0:
+                raise HTTPException(status_code=409, detail="归档账号必须先恢复，不能直接变更审核状态")
             if str(row["approval_status"] or "") != expected_status:
                 raise HTTPException(status_code=409, detail="账号状态已变化，请刷新后重试")
             updated = conn.execute(
@@ -18777,19 +18999,150 @@ def create_app() -> FastAPI:
         return {"ok": True, "approval_status": status}
 
     @app.delete("/api/admin/users/{target_user_id}")
-    def api_admin_delete_user(target_user_id: int, user: dict[str, Any] = Depends(require_admin)):
+    def api_admin_archive_user(target_user_id: int, user: dict[str, Any] = Depends(require_admin)):
+        target_id = int(target_user_id)
+        current_id = int(user.get("id") or 0)
+        if target_id == current_id:
+            raise HTTPException(status_code=400, detail="不能归档当前登录管理员")
+        now = _now_ts()
+        with TENANT_RESOURCE_LIFECYCLE_LOCK:
+            with db() as conn:
+                row = conn.execute(
+                    "SELECT id, username, is_admin, is_disabled, approval_status, deleted_at FROM users WHERE id = ?",
+                    (target_id,),
+                ).fetchone()
+                if row is None:
+                    raise HTTPException(status_code=404, detail="客户账号不存在")
+                if int(row["is_admin"] or 0) == 1:
+                    raise HTTPException(status_code=400, detail="客户账号归档接口不能归档管理员")
+                account_ids = [
+                    str(account_row["id"] or "").strip()
+                    for account_row in conn.execute(
+                        "SELECT id FROM social_accounts WHERE user_id = ?",
+                        (target_id,),
+                    ).fetchall()
+                    if str(account_row["id"] or "").strip()
+                ]
+                already_archived = int(row["deleted_at"] or 0) > 0
+                if not already_archived:
+                    conn.execute(
+                        "UPDATE users SET is_disabled = 1, deleted_at = ?, deleted_by = ?, updated_at = ? WHERE id = ?",
+                        (now, current_id, now, target_id),
+                    )
+                conn.execute("DELETE FROM sessions WHERE user_id = ?", (target_id,))
+                conn.execute(
+                    "INSERT INTO admin_audit_log(admin_user_id, action, target_user_id, metadata_json, created_at) "
+                    "VALUES (?, 'user.archive', ?, ?, ?)",
+                    (
+                        current_id,
+                        target_id,
+                        json.dumps(
+                            {
+                                "username": str(row["username"] or ""),
+                                "previous_is_disabled": int(row["is_disabled"] or 0),
+                                "approval_status": str(row["approval_status"] or ""),
+                                "already_archived": already_archived,
+                            },
+                            ensure_ascii=True,
+                        ),
+                        now,
+                    ),
+                )
+            cancel_all_social_tasks("所属用户已归档", user_id=target_id, account_ids=account_ids)
+            cancelled_normal_task_ids = _cancel_normal_tasks_for_deleted_user(target_id)
+            active_normal_task_ids = _wait_for_normal_tasks_to_stop(
+                cancelled_normal_task_ids,
+                timeout_seconds=max(_env_float("ACCOUNT_DELETE_TASK_WAIT_SECONDS", 30.0), 0.0),
+            )
+        return {
+            "ok": not active_normal_task_ids,
+            "archived": True,
+            "already_archived": already_archived,
+            "target_user_id": target_id,
+            "deleted_at": int(row["deleted_at"] or now) if already_archived else now,
+            "cleanup_pending": [f"active_task:{task_id}" for task_id in active_normal_task_ids],
+        }
+
+    @app.post("/api/admin/users/{target_user_id}/restore")
+    def api_admin_restore_user(target_user_id: int, user: dict[str, Any] = Depends(require_admin)):
+        target_id = int(target_user_id)
+        now = _now_ts()
+        with TENANT_RESOURCE_LIFECYCLE_LOCK:
+            with db() as conn:
+                row = conn.execute(
+                    "SELECT id, username, is_admin, approval_status, deleted_at FROM users WHERE id = ?",
+                    (target_id,),
+                ).fetchone()
+                if row is None:
+                    raise HTTPException(status_code=404, detail="客户账号不存在")
+                if int(row["is_admin"] or 0) == 1:
+                    raise HTTPException(status_code=400, detail="客户账号恢复接口不能恢复管理员")
+                if _account_purge_journal_dir(target_id).exists():
+                    raise HTTPException(status_code=409, detail="账号永久删除恢复待处理，请重试永久删除")
+                if int(row["deleted_at"] or 0) <= 0:
+                    raise HTTPException(status_code=409, detail="账号未归档")
+                enabled = str(row["approval_status"] or "") == "approved"
+                conn.execute(
+                    "UPDATE users SET is_disabled = ?, deleted_at = 0, deleted_by = 0, updated_at = ? WHERE id = ?",
+                    (0 if enabled else 1, now, target_id),
+                )
+                conn.execute(
+                    "INSERT INTO admin_audit_log(admin_user_id, action, target_user_id, metadata_json, created_at) "
+                    "VALUES (?, 'user.restore', ?, ?, ?)",
+                    (
+                        int(user.get("id") or 0),
+                        target_id,
+                        json.dumps(
+                            {
+                                "username": str(row["username"] or ""),
+                                "previous_deleted_at": int(row["deleted_at"] or 0),
+                                "enabled": enabled,
+                            },
+                            ensure_ascii=True,
+                        ),
+                        now,
+                    ),
+                )
+        return {"ok": True, "restored": True, "target_user_id": target_id, "is_disabled": not enabled}
+
+    @app.delete("/api/admin/users/{target_user_id}/purge")
+    def api_admin_purge_user(
+        target_user_id: int,
+        confirm_username: str = "",
+        user: dict[str, Any] = Depends(require_admin),
+    ):
         target_id = int(target_user_id)
         current_id = int(user.get("id") or 0)
         if target_id == current_id:
             raise HTTPException(status_code=400, detail="不能删除当前登录管理员")
         with TENANT_RESOURCE_LIFECYCLE_LOCK:
             with db() as conn:
-                row = conn.execute("SELECT id, username, is_admin FROM users WHERE id = ?", (target_id,)).fetchone()
+                row = conn.execute(
+                    "SELECT id, username, is_admin, deleted_at FROM users WHERE id = ?",
+                    (target_id,),
+                ).fetchone()
                 if row is None:
                     raise HTTPException(status_code=404, detail="客户账号不存在")
                 if int(row["is_admin"] or 0) == 1:
                     raise HTTPException(status_code=400, detail="客户账号删除接口不能删除管理员")
+                if int(row["deleted_at"] or 0) <= 0:
+                    raise HTTPException(status_code=409, detail="永久删除前必须先归档账号")
                 username = str(row["username"] or "").strip()
+                if not confirm_username or confirm_username != username:
+                    raise HTTPException(status_code=400, detail="永久删除必须确认完整用户名")
+                if _account_purge_journal_dir(target_id).exists():
+                    try:
+                        _restore_account_purge_journal(target_id)
+                        _discard_account_purge_journal(target_id)
+                    except Exception:
+                        logger.exception("Failed to recover interrupted purge for user %s", target_id)
+                        return {
+                            "ok": False,
+                            "deleted_personas": 0,
+                            "deleted_groups": 0,
+                            "deleted_tasks": 0,
+                            "cleanup_pending": [f"recovery:{target_id}"],
+                        }
                 now = _now_ts()
                 conn.execute("UPDATE users SET is_disabled = 1, updated_at = ? WHERE id = ?", (now, target_id))
                 conn.execute("DELETE FROM sessions WHERE user_id = ?", (target_id,))
@@ -18872,70 +19225,135 @@ def create_app() -> FastAPI:
                 if str(item.get("id") or "").strip()
             }
             owned_existing_archives = [archive_id for archive_id in persona_ids if archive_id in existing_archive_ids]
-            for offset in range(0, len(owned_existing_archives), 100):
-                _delete_persona_dashboard_personas(owned_existing_archives[offset:offset + 100])
-
             existing_group_ids = {
                 str(item.get("id") or "").strip()
                 for item in (_read_persona_groups_config().get("groups") or [])
                 if isinstance(item, dict) and str(item.get("id") or "").strip()
             }
             owned_existing_groups = [group_id for group_id in group_ids if group_id in existing_group_ids]
-            for offset in range(0, len(owned_existing_groups), 100):
-                _delete_persona_groups(owned_existing_groups[offset:offset + 100])
 
-        cleanup_failures: list[str] = []
-        cleanup_roots = [
-            (DATA_DIR / "social_automation" / "profiles").resolve(),
-            (DATA_DIR / "social_automation" / "uploads").resolve(),
-            UPLOAD_ROOT.resolve(),
-            OUTPUT_ROOT.resolve(),
-        ]
-        cleanup_dirs = [
-            *[Path(value).expanduser().resolve() for value in profile_dirs],
-            (DATA_DIR / "social_automation" / "uploads" / str(target_id)).resolve(),
-            (UPLOAD_ROOT / username).resolve(),
-            (OUTPUT_ROOT / username).resolve(),
-        ]
-        for path in cleanup_dirs:
-            if not any(root in path.parents for root in cleanup_roots):
-                cleanup_failures.append(str(path))
-                continue
-            try:
-                if path.exists():
-                    shutil.rmtree(path)
-            except Exception:
-                cleanup_failures.append(str(path))
-        screenshot_root = (DATA_DIR / "social_automation" / "screenshots").resolve()
-        for value in screenshot_paths:
-            try:
-                path = Path(value).expanduser().resolve()
-                if screenshot_root not in path.parents:
+            cleanup_failures: list[str] = []
+            cleanup_roots = [
+                (DATA_DIR / "social_automation" / "profiles").resolve(),
+                (DATA_DIR / "social_automation" / "uploads").resolve(),
+                UPLOAD_ROOT.resolve(),
+                OUTPUT_ROOT.resolve(),
+            ]
+            cleanup_dirs = [
+                *[Path(value).expanduser().resolve() for value in profile_dirs],
+                (DATA_DIR / "social_automation" / "uploads" / str(target_id)).resolve(),
+                (UPLOAD_ROOT / username).resolve(),
+                (OUTPUT_ROOT / username).resolve(),
+            ]
+            for path in cleanup_dirs:
+                if not any(root in path.parents for root in cleanup_roots):
                     cleanup_failures.append(str(path))
                     continue
-                path.unlink(missing_ok=True)
+                try:
+                    if path.exists():
+                        shutil.rmtree(path)
+                except Exception:
+                    cleanup_failures.append(str(path))
+            screenshot_root = (DATA_DIR / "social_automation" / "screenshots").resolve()
+            for value in screenshot_paths:
+                try:
+                    path = Path(value).expanduser().resolve()
+                    if screenshot_root not in path.parents:
+                        cleanup_failures.append(str(path))
+                        continue
+                    path.unlink(missing_ok=True)
+                except Exception:
+                    cleanup_failures.append(str(value))
+            for tid in task_ids:
+                _delete_task_artifacts(tid)
+            if cleanup_failures:
+                return {
+                    "ok": False,
+                    "deleted_personas": 0,
+                    "deleted_groups": 0,
+                    "deleted_tasks": 0,
+                    "cleanup_pending": cleanup_failures,
+                }
+
+            try:
+                _create_account_purge_journal(target_id)
             except Exception:
-                cleanup_failures.append(str(value))
-        for tid in task_ids:
-            _delete_task_artifacts(tid)
-        if not cleanup_failures:
-            with db() as conn:
-                if social_task_ids:
-                    placeholders = ",".join("?" for _ in social_task_ids)
-                    conn.execute(f"DELETE FROM social_automation_logs WHERE task_id IN ({placeholders})", social_task_ids)
-                    conn.execute(f"DELETE FROM social_automation_tasks WHERE id IN ({placeholders})", social_task_ids)
-                conn.execute("DELETE FROM social_accounts WHERE user_id = ?", (target_id,))
-                conn.execute("DELETE FROM social_proxies WHERE user_id = ?", (target_id,))
-                conn.execute("DELETE FROM persona_owners WHERE user_id = ?", (target_id,))
-                conn.execute("DELETE FROM persona_group_owners WHERE user_id = ?", (target_id,))
-                conn.execute("DELETE FROM users WHERE id = ?", (target_id,))
-        return {
-            "ok": not cleanup_failures,
-            "deleted_personas": len(persona_ids),
-            "deleted_groups": len(group_ids),
-            "deleted_tasks": len(task_ids),
-            "cleanup_pending": cleanup_failures,
-        }
+                logger.exception("Failed to create purge journal for user %s", target_id)
+                return {
+                    "ok": False,
+                    "deleted_personas": 0,
+                    "deleted_groups": 0,
+                    "deleted_tasks": 0,
+                    "cleanup_pending": [f"journal:{target_id}"],
+                }
+
+            cleanup_phase = f"workspace:{target_id}"
+            try:
+                deleted_persona_count = 0
+                for offset in range(0, len(owned_existing_archives), 100):
+                    batch = owned_existing_archives[offset:offset + 100]
+                    cleanup_phase = f"personas:{','.join(batch)}"
+                    _delete_persona_dashboard_personas(batch)
+                    deleted_persona_count += len(batch)
+
+                deleted_group_count = 0
+                for offset in range(0, len(owned_existing_groups), 100):
+                    batch = owned_existing_groups[offset:offset + 100]
+                    cleanup_phase = f"groups:{','.join(batch)}"
+                    _delete_persona_groups(batch)
+                    deleted_group_count += len(batch)
+
+                cleanup_phase = f"database:{target_id}"
+                with db() as conn:
+                    if social_task_ids:
+                        placeholders = ",".join("?" for _ in social_task_ids)
+                        conn.execute(f"DELETE FROM social_automation_logs WHERE task_id IN ({placeholders})", social_task_ids)
+                        conn.execute(f"DELETE FROM social_automation_tasks WHERE id IN ({placeholders})", social_task_ids)
+                    conn.execute("DELETE FROM social_accounts WHERE user_id = ?", (target_id,))
+                    conn.execute("DELETE FROM social_proxies WHERE user_id = ?", (target_id,))
+                    conn.execute("DELETE FROM persona_owners WHERE user_id = ?", (target_id,))
+                    conn.execute("DELETE FROM persona_group_owners WHERE user_id = ?", (target_id,))
+                    deleted_user = conn.execute("DELETE FROM users WHERE id = ?", (target_id,))
+                    if deleted_user.rowcount != 1:
+                        raise RuntimeError(f"purge target disappeared before commit: {target_id}")
+                    conn.execute(
+                        "INSERT INTO admin_audit_log(admin_user_id, action, target_user_id, metadata_json, created_at) "
+                        "VALUES (?, 'user.purge', ?, ?, ?)",
+                        (
+                            current_id,
+                            target_id,
+                            json.dumps({"username": username}, ensure_ascii=True),
+                            _now_ts(),
+                        ),
+                    )
+            except Exception:
+                logger.exception("Purge failed during %s", cleanup_phase)
+                cleanup_failures.append(cleanup_phase)
+                try:
+                    _restore_account_purge_journal(target_id)
+                    _discard_account_purge_journal(target_id)
+                except Exception:
+                    logger.exception("Failed to roll back purge journal for user %s", target_id)
+                    cleanup_failures.append(f"recovery:{target_id}")
+                return {
+                    "ok": False,
+                    "deleted_personas": 0,
+                    "deleted_groups": 0,
+                    "deleted_tasks": 0,
+                    "cleanup_pending": cleanup_failures,
+                }
+
+            try:
+                _discard_account_purge_journal(target_id)
+            except Exception:
+                logger.exception("Failed to discard completed purge journal for user %s", target_id)
+            return {
+                "ok": True,
+                "deleted_personas": deleted_persona_count,
+                "deleted_groups": deleted_group_count,
+                "deleted_tasks": len(task_ids),
+                "cleanup_pending": [],
+            }
 
     @app.post("/api/admin/users/{target_user_id}/recharge")
     def api_admin_recharge(
@@ -18983,6 +19401,8 @@ def create_app() -> FastAPI:
             row = conn.execute("SELECT * FROM users WHERE id = ?", (target_id,)).fetchone()
             if row is None:
                 raise HTTPException(status_code=404, detail="客户账号不存在")
+            if int(row["deleted_at"] or 0) > 0:
+                raise HTTPException(status_code=409, detail="归档账号必须通过恢复操作重新启用")
             if payload.is_disabled and int(row["is_admin"] or 0) == 1:
                 active_admins = conn.execute(
                     "SELECT COUNT(*) AS count FROM users WHERE is_admin = 1 AND is_disabled = 0"

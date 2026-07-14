@@ -25,7 +25,7 @@ from fastapi.responses import FileResponse, Response
 from PIL import Image
 from pydantic import BaseModel, Field
 
-from .auth import SESSION_COOKIE, get_current_user, require_admin
+from .auth import ADMIN_WORKSPACE_QUERY, SESSION_COOKIE, get_current_user, get_current_user_for_session, require_admin
 from .db import db
 
 
@@ -215,7 +215,7 @@ def configure_social_automation(*, data_dir: Path, new_id: Callable[[str], str] 
 
 def _identity_user_id(user: dict[str, Any]) -> int:
     try:
-        return int(user.get("id") or 0)
+        return int(user.get("_workspace_user_id") or user.get("id") or 0)
     except (TypeError, ValueError):
         return 0
 
@@ -327,7 +327,11 @@ def register_social_automation_routes(app: FastAPI) -> None:
         if not user or not _live_browser_session_accessible(session_id, user):
             await websocket.close(code=1008)
             return
-        await _proxy_live_browser_websocket(websocket, session_id)
+        _audit_admin_live_browser_action(user, "workspace.browser_session.connect", session_id)
+        try:
+            await _proxy_live_browser_websocket(websocket, session_id, user=user)
+        finally:
+            _audit_admin_live_browser_action(user, "workspace.browser_session.disconnect", session_id)
 
     @app.get("/api/persona_dashboard/automation/browser_sessions/{session_id}/kasm")
     def api_social_browser_session_kasm_root(session_id: str, request: Request, user: dict[str, Any] = Depends(get_current_user)):
@@ -582,22 +586,56 @@ def _authenticate_live_browser_websocket(websocket: WebSocket) -> dict[str, Any]
     token = str(websocket.cookies.get(SESSION_COOKIE) or "").strip()
     if not token:
         return None
+    query_params = getattr(websocket, "query_params", None)
+    workspace_user_id = query_params.get(ADMIN_WORKSPACE_QUERY) if query_params is not None else None
     try:
-        return get_current_user(session_token=token)
+        return get_current_user_for_session(token, admin_workspace_user_id=workspace_user_id)
     except Exception:
         return None
 
 
 def _live_browser_session_accessible(session_id: str, user: dict[str, Any]) -> bool:
+    if int(user.get("is_admin") or 0) == 1 and not user.get("_workspace_user_id"):
+        sessions = _live_browser_sessions(user_id=None)
+    else:
+        sessions = _live_browser_sessions(user_id=_identity_user_id(user))
     return any(
         str(item.get("id") or item.get("session_id") or "") == str(session_id or "")
-        for item in _live_browser_sessions(user_id=_identity_user_id(user))
+        for item in sessions
     )
 
 
 def _require_live_browser_session_access(session_id: str, user: dict[str, Any]) -> None:
     if not _live_browser_session_accessible(session_id, user):
         raise HTTPException(status_code=404, detail="浏览器会话不存在")
+
+
+def _audit_admin_live_browser_action(
+    user: dict[str, Any] | None,
+    action: str,
+    session_id: str,
+) -> None:
+    if not user:
+        return
+    admin_user_id = int(user.get("_workspace_admin_user_id") or 0)
+    target_user_id = int(user.get("_workspace_user_id") or 0)
+    if admin_user_id <= 0 or target_user_id <= 0:
+        return
+    try:
+        with db() as conn:
+            conn.execute(
+                "INSERT INTO admin_audit_log(admin_user_id, action, target_user_id, metadata_json, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    admin_user_id,
+                    str(action or "workspace.browser_session.control"),
+                    target_user_id,
+                    json.dumps({"session_id": str(session_id or "")}, ensure_ascii=True),
+                    int(time.time()),
+                ),
+            )
+    except Exception:
+        return
 
 
 class _RfbClientMessageInspector:
@@ -715,7 +753,12 @@ async def _live_browser_input_allowed(task_id: str) -> bool:
     return bool(await asyncio.to_thread(_query_live_browser_input_allowed, task_id))
 
 
-async def _proxy_live_browser_websocket(websocket: WebSocket, session_id: str) -> None:
+async def _proxy_live_browser_websocket(
+    websocket: WebSocket,
+    session_id: str,
+    *,
+    user: dict[str, Any] | None = None,
+) -> None:
     subprotocol = _requested_websocket_subprotocol(websocket)
     await websocket.accept(subprotocol=subprotocol)
     try:
@@ -743,6 +786,19 @@ async def _proxy_live_browser_websocket(websocket: WebSocket, session_id: str) -
         return
 
     rfb_inspector = _RfbClientMessageInspector()
+    control_audited = False
+
+    async def forward_client_message(payload: bytes | str) -> bool:
+        nonlocal control_audited
+        inspection_payload = payload if isinstance(payload, bytes) else payload.encode("latin1", "ignore")
+        requires_input = rfb_inspector.requires_input_permission(inspection_payload)
+        if requires_input and not await _live_browser_input_allowed(session.task_id):
+            return False
+        if requires_input and not control_audited:
+            _audit_admin_live_browser_action(user, "workspace.browser_session.control", session_id)
+            control_audited = True
+        await target.send(payload)
+        return True
 
     async def browser_to_kasm() -> None:
         while True:
@@ -751,15 +807,11 @@ async def _proxy_live_browser_websocket(websocket: WebSocket, session_id: str) -
                 break
             data = message.get("bytes")
             if data is not None:
-                if rfb_inspector.requires_input_permission(data) and not await _live_browser_input_allowed(session.task_id):
-                    continue
-                await target.send(data)
+                await forward_client_message(data)
                 continue
             text = message.get("text")
             if text is not None:
-                if rfb_inspector.requires_input_permission(text.encode("latin1", "ignore")) and not await _live_browser_input_allowed(session.task_id):
-                    continue
-                await target.send(text)
+                await forward_client_message(text)
 
     async def kasm_to_browser() -> None:
         while True:

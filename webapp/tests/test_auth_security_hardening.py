@@ -285,7 +285,7 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         self.assertEqual(owner_detail.json()["resource_counts"]["social_proxies"], 1)
         self.assertEqual(owner_detail.json()["resource_counts"]["social_tasks"], 1)
 
-    def test_deleting_customer_cascades_tenant_resources_without_user_zero_orphans(self):
+    def test_archiving_customer_preserves_tenant_resources_without_user_zero_orphans(self):
         customer, customer_id = self._approved_client("delete_tenant")
         persona_response = customer.post(
             "/api/persona_dashboard/personas",
@@ -332,19 +332,22 @@ class AuthSecurityHardeningTests(unittest.TestCase):
 
         self.assertEqual(deleted.status_code, 200, deleted.text)
         self.assertTrue(deleted.json()["ok"], deleted.text)
-        self.assertEqual(deleted.json()["deleted_personas"], 1)
-        self.assertEqual(deleted.json()["deleted_groups"], 1)
+        self.assertTrue(deleted.json()["archived"])
         with server.db() as conn:
-            self.assertIsNone(conn.execute("SELECT id FROM users WHERE id = ?", (customer_id,)).fetchone())
-            for table in (
-                "persona_owners",
-                "persona_group_owners",
-                "social_accounts",
-                "social_proxies",
-                "social_automation_tasks",
-            ):
+            archived_user = conn.execute("SELECT id, is_disabled, deleted_at FROM users WHERE id = ?", (customer_id,)).fetchone()
+            self.assertIsNotNone(archived_user)
+            self.assertEqual(int(archived_user["is_disabled"]), 1)
+            self.assertGreater(int(archived_user["deleted_at"]), 0)
+            expected_counts = {
+                "persona_owners": 1,
+                "persona_group_owners": 1,
+                "social_accounts": 1,
+                "social_proxies": 0,
+                "social_automation_tasks": 1,
+            }
+            for table, expected_count in expected_counts.items():
                 count = int(conn.execute(f"SELECT COUNT(*) AS c FROM {table} WHERE user_id = ?", (customer_id,)).fetchone()["c"])
-                self.assertEqual(count, 0, table)
+                self.assertEqual(count, expected_count, table)
                 orphan_count = int(conn.execute(f"SELECT COUNT(*) AS c FROM {table} WHERE user_id = 0").fetchone()["c"])
                 self.assertEqual(orphan_count, 0, table)
         archive_ids = {str(item.get("id") or "") for item in server._read_tool_r18_persona_archives()[0]}
@@ -353,44 +356,31 @@ class AuthSecurityHardeningTests(unittest.TestCase):
             for item in (server._read_persona_groups_config().get("groups") or [])
             if isinstance(item, dict)
         }
-        self.assertNotIn(persona_id, archive_ids)
-        self.assertNotIn(group_id, group_ids)
-        self.assertFalse(profile_dir.exists())
-        self.assertFalse((self.data_dir / "social_automation" / "uploads" / str(customer_id)).exists())
-        self.assertFalse((server.UPLOAD_ROOT / "delete_tenant").exists())
-        self.assertFalse(screenshot_path.exists())
+        self.assertIn(persona_id, archive_ids)
+        self.assertIn(group_id, group_ids)
+        self.assertTrue(profile_dir.exists())
+        self.assertTrue((self.data_dir / "social_automation" / "uploads" / str(customer_id)).exists())
+        self.assertTrue((server.UPLOAD_ROOT / "delete_tenant").exists())
+        self.assertTrue(screenshot_path.exists())
 
-    def test_deleted_username_stays_reserved_until_username_cleanup_finishes(self):
+    def test_archived_username_stays_reserved_and_files_are_preserved(self):
         _customer, customer_id = self._approved_client("cleanup_race")
         customer_upload_root = server.UPLOAD_ROOT / "cleanup_race"
         customer_upload_root.mkdir(parents=True, exist_ok=True)
         (customer_upload_root / "artifact.txt").write_text("owned", encoding="utf-8")
-        registration_statuses = []
-        original_rmtree = server.shutil.rmtree
-
-        def observe_cleanup(path, *args, **kwargs):
-            if Path(path).resolve() == customer_upload_root.resolve() and not registration_statuses:
-                response = TestClient(self.app).post(
-                    "/api/auth/apply",
-                    json=self.application_payload("cleanup_race"),
-                )
-                registration_statuses.append(response.status_code)
-            return original_rmtree(path, *args, **kwargs)
-
         admin, _identity = self._admin_client()
-        with patch.object(server.shutil, "rmtree", side_effect=observe_cleanup):
-            deleted = admin.delete(f"/api/admin/users/{customer_id}")
+        deleted = admin.delete(f"/api/admin/users/{customer_id}")
 
         self.assertEqual(deleted.status_code, 200, deleted.text)
         self.assertTrue(deleted.json()["ok"], deleted.text)
-        self.assertEqual(registration_statuses, [409])
+        self.assertTrue(customer_upload_root.exists())
         reused = TestClient(self.app).post(
             "/api/auth/apply",
             json=self.application_payload("cleanup_race"),
         )
         self.assertEqual(reused.status_code, 409, reused.text)
 
-    def test_account_deletion_cleans_legacy_zero_owner_tasks_bound_to_tenant_account(self):
+    def test_account_archive_cancels_legacy_zero_owner_tasks_bound_to_tenant_account(self):
         _customer, customer_id = self._approved_client("legacy_social_delete")
         with server.db() as conn:
             conn.execute(
@@ -420,14 +410,12 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         self.assertEqual(deleted.status_code, 200, deleted.text)
         self.assertTrue(deleted.json()["ok"], deleted.text)
         with server.db() as conn:
-            self.assertIsNone(
-                conn.execute("SELECT 1 FROM social_automation_tasks WHERE id = 'legacy-zero-task'").fetchone()
-            )
-            self.assertIsNone(
-                conn.execute("SELECT 1 FROM social_accounts WHERE id = 'legacy-delete-account'").fetchone()
-            )
+            task = conn.execute("SELECT status FROM social_automation_tasks WHERE id = 'legacy-zero-task'").fetchone()
+            self.assertIsNotNone(task)
+            self.assertEqual(str(task["status"]), "cancelled")
+            self.assertIsNotNone(conn.execute("SELECT 1 FROM social_accounts WHERE id = 'legacy-delete-account'").fetchone())
 
-    def test_account_deletion_retry_keeps_profile_cleanup_context(self):
+    def test_account_archive_preserves_profile_context(self):
         _customer, customer_id = self._approved_client("cleanup_retry")
         profile_dir = self.data_dir / "social_automation" / "profiles" / "cleanup-retry"
         profile_dir.mkdir(parents=True, exist_ok=True)
@@ -442,37 +430,19 @@ class AuthSecurityHardeningTests(unittest.TestCase):
                 (customer_id, str(profile_dir)),
             )
 
-        original_rmtree = server.shutil.rmtree
-        failed_once = False
-
-        def fail_profile_once(path, *args, **kwargs):
-            nonlocal failed_once
-            if Path(path).resolve() == profile_dir.resolve() and not failed_once:
-                failed_once = True
-                raise PermissionError("profile is temporarily locked")
-            return original_rmtree(path, *args, **kwargs)
-
         admin, _identity = self._admin_client()
-        with patch.object(server.shutil, "rmtree", side_effect=fail_profile_once):
-            first = admin.delete(f"/api/admin/users/{customer_id}")
+        first = admin.delete(f"/api/admin/users/{customer_id}")
 
         self.assertEqual(first.status_code, 200, first.text)
-        self.assertFalse(first.json()["ok"], first.text)
+        self.assertTrue(first.json()["ok"], first.text)
         self.assertTrue(profile_dir.exists())
         with server.db() as conn:
             self.assertIsNotNone(
                 conn.execute("SELECT 1 FROM social_accounts WHERE id = 'cleanup-retry-account'").fetchone()
             )
-
-        second = admin.delete(f"/api/admin/users/{customer_id}")
-        self.assertEqual(second.status_code, 200, second.text)
-        self.assertTrue(second.json()["ok"], second.text)
-        self.assertFalse(profile_dir.exists())
-        with server.db() as conn:
-            self.assertIsNone(conn.execute("SELECT 1 FROM users WHERE id = ?", (customer_id,)).fetchone())
-            self.assertIsNone(
-                conn.execute("SELECT 1 FROM social_accounts WHERE id = 'cleanup-retry-account'").fetchone()
-            )
+            archived = conn.execute("SELECT deleted_at FROM users WHERE id = ?", (customer_id,)).fetchone()
+            self.assertIsNotNone(archived)
+            self.assertGreater(int(archived["deleted_at"]), 0)
 
     def test_account_deletion_cancels_normal_task_and_discards_late_output(self):
         _customer, customer_id = self._approved_client("delete_worker")

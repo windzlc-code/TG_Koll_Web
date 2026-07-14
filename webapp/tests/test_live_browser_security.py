@@ -1,4 +1,5 @@
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest import mock
 
@@ -305,6 +306,107 @@ def test_websocket_rfb_input_is_blocked_when_task_permission_is_denied():
 
     input_allowed.assert_awaited_once_with("task-1")
     target.send.assert_not_awaited()
+
+
+def test_websocket_auth_resolves_admin_workspace_query():
+    websocket = SimpleNamespace(
+        cookies={"session_token": "admin-session"},
+        query_params={"admin_workspace_user_id": "42"},
+    )
+    resolved = {"id": 1, "is_admin": 1, "_workspace_user_id": 42}
+
+    with mock.patch.object(
+        social_automation_api,
+        "get_current_user_for_session",
+        return_value=resolved,
+    ) as authenticate:
+        user = social_automation_api._authenticate_live_browser_websocket(websocket)
+
+    assert user == resolved
+    authenticate.assert_called_once_with("admin-session", admin_workspace_user_id="42")
+
+
+def test_admin_workspace_websocket_audit_uses_actor_and_target_ids():
+    connection = mock.MagicMock()
+    database = mock.MagicMock()
+    database.return_value.__enter__.return_value = connection
+    user = {"id": 1, "is_admin": 1, "_workspace_admin_user_id": 1, "_workspace_user_id": 42}
+
+    with mock.patch.object(social_automation_api, "db", database):
+        social_automation_api._audit_admin_live_browser_action(
+            user,
+            "workspace.browser_session.connect",
+            "live_task-1",
+        )
+
+    args = connection.execute.call_args.args
+    assert args[1][0:3] == (1, "workspace.browser_session.connect", 42)
+    assert json.loads(args[1][3]) == {"session_id": "live_task-1"}
+
+
+def test_admin_workspace_websocket_control_is_audited_once():
+    key_event = bytes((4, 1, 0, 0, 0, 0, 0, 65))
+
+    class BrowserSocket:
+        headers = {}
+
+        def __init__(self):
+            self.messages = [
+                {"type": "websocket.receive", "bytes": key_event},
+                {"type": "websocket.receive", "bytes": key_event},
+                {"type": "websocket.disconnect"},
+            ]
+
+        async def accept(self, **_kwargs):
+            return None
+
+        async def receive(self):
+            return self.messages.pop(0)
+
+        async def close(self, **_kwargs):
+            return None
+
+    class TargetSocket:
+        def __init__(self):
+            self.send = mock.AsyncMock()
+
+        async def recv(self):
+            await asyncio.Event().wait()
+
+        async def close(self):
+            return None
+
+    user = {"id": 1, "is_admin": 1, "_workspace_admin_user_id": 1, "_workspace_user_id": 42}
+    browser = BrowserSocket()
+    target = TargetSocket()
+
+    with (
+        mock.patch.object(
+            live_browser,
+            "get_live_browser_session",
+            return_value=SimpleNamespace(web_port=6901, task_id="task-1"),
+        ),
+        mock.patch.dict(
+            "sys.modules",
+            {"websockets": SimpleNamespace(connect=mock.AsyncMock(return_value=target))},
+        ),
+        mock.patch.object(
+            social_automation_api,
+            "_live_browser_input_allowed",
+            new=mock.AsyncMock(return_value=True),
+        ),
+        mock.patch.object(social_automation_api, "_audit_admin_live_browser_action") as audit,
+    ):
+        asyncio.run(
+            social_automation_api._proxy_live_browser_websocket(
+                browser,
+                "live_task-1",
+                user=user,
+            )
+        )
+
+    assert target.send.await_count == 2
+    audit.assert_called_once_with(user, "workspace.browser_session.control", "live_task-1")
 
 
 def test_stop_restored_registry_session_terminates_processes_before_removal():

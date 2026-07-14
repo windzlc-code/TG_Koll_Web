@@ -2457,6 +2457,8 @@ const ADMIN_USER_ICONS = {
   balance: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 7h15a3 3 0 0 1 3 3v8H3V7Z"/><path d="M3 7V5h14v2M16 12h5"/><circle cx="16" cy="12" r="1"/></svg>',
   disable: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M12 3v8"/><path d="M7.1 5.7a8 8 0 1 0 9.8 0"/></svg>',
   enable: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 7.7-1.5M12 14v3"/></svg>',
+  archive: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M4 7h16v13H4V7Z"/><path d="M3 3h18v4H3V3Zm6 9h6"/></svg>',
+  restore: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M4 7h16v13H4V7Z"/><path d="M3 3h18v4H3V3Zm6 10 3-3 3 3m-3-3v6"/></svg>',
   delete: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M4 7h16M9 3h6l1 4H8l1-4ZM7 7l1 14h8l1-14M10 11v6m4-6v6"/></svg>',
 };
 
@@ -2555,7 +2557,8 @@ async function loadUsers(page = adminState.userListPage) {
   rows.forEach((u) => {
     const tr = document.createElement("tr");
     const role = u.is_admin ? "管理员" : "客户";
-    const state = u.approval_status === "pending" ? "待授权" : (u.approval_status === "rejected" ? "已拒绝" : (u.is_disabled ? "已禁用" : "已启用"));
+    const archived = Number(u.deleted_at || 0) > 0;
+    const state = archived ? "已归档" : (u.approval_status === "pending" ? "待授权" : (u.approval_status === "rejected" ? "已拒绝" : (u.is_disabled ? "已禁用" : "已启用")));
     const accountCell = document.createElement("td");
     accountCell.className = "admin-user-account-cell";
     const accountName = document.createElement("strong");
@@ -2574,9 +2577,11 @@ async function loadUsers(page = adminState.userListPage) {
     roleCell.appendChild(createAdminUserBadge(role, u.is_admin ? "admin" : "customer"));
     tr.appendChild(roleCell);
 
-    const stateTone = u.approval_status === "pending"
+    const stateTone = archived
+      ? "archived"
+      : (u.approval_status === "pending"
       ? "pending"
-      : (u.approval_status === "rejected" ? "rejected" : (u.is_disabled ? "disabled" : "enabled"));
+      : (u.approval_status === "rejected" ? "rejected" : (u.is_disabled ? "disabled" : "enabled")));
     const stateCell = document.createElement("td");
     stateCell.appendChild(createAdminUserBadge(state, stateTone));
     tr.appendChild(stateCell);
@@ -2598,7 +2603,7 @@ async function loadUsers(page = adminState.userListPage) {
     const addAction = (label, act, icon, extra = {}) => {
       const button = document.createElement("button");
       button.type = "button";
-      button.className = `ghost admin-user-icon-button${act === "delete_user" ? " is-danger" : ""}`;
+      button.className = `ghost admin-user-icon-button${act === "archive_user" ? " is-danger" : ""}`;
       button.innerHTML = ADMIN_USER_ICONS[icon] || ADMIN_USER_ICONS.detail;
       button.setAttribute("aria-label", `${label}：${u.username}`);
       button.title = label;
@@ -2608,11 +2613,14 @@ async function loadUsers(page = adminState.userListPage) {
       actions.appendChild(button);
     };
     addAction("查看详情", "user_detail", "detail");
-    if (u.approval_status === "approved") {
+    if (!archived && u.approval_status === "approved") {
       if (!u.is_admin) addAction("额度分配", "recharge", "balance", { name: u.username });
       addAction(u.is_disabled ? "启用" : "禁用", "toggle", u.is_disabled ? "enable" : "disable", { disabled: u.is_disabled ? 1 : 0 });
     }
-    addAction("删除", "delete_user", "delete", { name: u.username });
+    if (!u.is_admin) {
+      if (archived) addAction("恢复账号", "restore_user", "restore", { name: u.username });
+      else addAction("归档账号", "archive_user", "archive", { name: u.username });
+    }
     tr.appendChild(actions);
     body.appendChild(tr);
   });
@@ -2792,6 +2800,11 @@ function syncUserDetailActionState() {
   const user = adminState.selectedUser;
   const busy = adminState.userPasswordResetInFlight || adminState.userPasswordSetInFlight;
   if (el("btnUserDetailClose")) el("btnUserDetailClose").disabled = busy;
+  if (el("btnManageUserWorkspace")) {
+    el("btnManageUserWorkspace").hidden = !user || !!user.is_admin;
+    el("btnManageUserWorkspace").disabled = busy || !user || !!user.is_admin;
+    el("btnManageUserWorkspace").textContent = Number(user?.deleted_at || 0) > 0 ? "查看归档数据" : "管理工作区";
+  }
   if (el("btnResetUserPassword")) el("btnResetUserPassword").disabled = busy || !user || !!user.is_admin;
   if (el("btnOpenSetUserPassword")) el("btnOpenSetUserPassword").disabled = busy || !user || !!user.is_admin;
   if (el("btnCancelSetUserPassword")) el("btnCancelSetUserPassword").disabled = busy;
@@ -2812,8 +2825,9 @@ function syncUserDetailActionState() {
   }
   if (el("btnHideUserPassword")) el("btnHideUserPassword").disabled = busy;
   if (el("btnCopyRevealedUserPassword")) el("btnCopyRevealedUserPassword").disabled = busy;
-  if (el("btnApproveUser")) el("btnApproveUser").disabled = busy || !user || !!user.is_admin || user.approval_status === "approved";
-  if (el("btnRejectUser")) el("btnRejectUser").disabled = busy || !user || !!user.is_admin || user.approval_status !== "pending";
+  const archived = Number(user?.deleted_at || 0) > 0;
+  if (el("btnApproveUser")) el("btnApproveUser").disabled = busy || archived || !user || !!user.is_admin || user.approval_status === "approved";
+  if (el("btnRejectUser")) el("btnRejectUser").disabled = busy || archived || !user || !!user.is_admin || user.approval_status !== "pending";
 }
 
 async function setSelectedUserPassword() {
@@ -2958,6 +2972,7 @@ async function openUserDetailModal(id) {
     detailRow("更新时间", user.updated_at ? formatTime(user.updated_at) : "-"),
     detailRow("授权时间", user.approved_at ? formatTime(user.approved_at) : "尚未授权"),
     detailRow("授权管理员", user.approved_by_username ? `${user.approved_by_username} · ID ${user.approved_by}` : "-"),
+    detailRow("归档状态", Number(user.deleted_at || 0) > 0 ? `已归档 · ${formatTime(user.deleted_at)}` : "正常"),
     detailRow("人设 / 分组", `${Number(resourceCounts.personas || 0)} / ${Number(resourceCounts.persona_groups || 0)}`),
     detailRow("社媒账号 / 代理", `${Number(resourceCounts.social_accounts || 0)} / ${Number(resourceCounts.social_proxies || 0)}`),
     detailRow("自动化任务", Number(resourceCounts.social_tasks || 0)),
@@ -3026,8 +3041,9 @@ async function reviewSelectedUser(approvalStatus) {
   } finally {
     adminState.userReviewInFlight = false;
     if (adminState.selectedUser) {
-      el("btnApproveUser").disabled = !!user.is_admin || user.approval_status === "approved";
-      el("btnRejectUser").disabled = !!user.is_admin || user.approval_status !== "pending";
+      const archived = Number(user.deleted_at || 0) > 0;
+      el("btnApproveUser").disabled = archived || !!user.is_admin || user.approval_status === "approved";
+      el("btnRejectUser").disabled = archived || !!user.is_admin || user.approval_status !== "pending";
     }
   }
 }
@@ -3545,6 +3561,13 @@ function bindActions() {
   if (el("btnUserDetailClose")) {
     el("btnUserDetailClose").addEventListener("click", closeUserDetailModal);
   }
+  if (el("btnManageUserWorkspace")) {
+    el("btnManageUserWorkspace").addEventListener("click", () => {
+      const user = adminState.selectedUser;
+      if (!user?.id || user.is_admin) return;
+      window.location.assign(`/console.html?manage_user_id=${encodeURIComponent(user.id)}`);
+    });
+  }
   if (el("btnApproveUser")) {
     el("btnApproveUser").addEventListener("click", async () => {
       try {
@@ -3797,13 +3820,24 @@ function bindActions() {
       }
       return;
     }
-    if (act === "delete_user") {
+    if (act === "archive_user") {
       const name = btn.dataset.name || id;
-      if (!confirm(`确认删除客户 ${name} 吗？该客户的会话、生成记录和额度流水都会删除。`)) return;
+      if (!confirm(`确认归档客户 ${name} 吗？账号将无法登录，但人设、推文、任务、额度流水和其他业务数据都会保留。`)) return;
       try {
         await api(`/api/admin/users/${id}`, { method: "DELETE" });
         await loadUsers();
         await loadTasks();
+      } catch (err) {
+        setMsg("userMsg", getErrorMessage(err), false);
+      }
+      return;
+    }
+    if (act === "restore_user") {
+      const name = btn.dataset.name || id;
+      if (!confirm(`确认恢复客户 ${name} 的登录权限吗？`)) return;
+      try {
+        await api(`/api/admin/users/${id}/restore`, { method: "POST" });
+        await loadUsers();
       } catch (err) {
         setMsg("userMsg", getErrorMessage(err), false);
       }

@@ -1,12 +1,28 @@
 let personaDashboardRoot = null;
 let personaDashboardBoundRoot = null;
+const PD_ADMIN_WORKSPACE_USER_ID = String(document.querySelector('meta[name="admin-workspace-user-id"]')?.content || "").trim();
 
 function pdEl(id) {
   return personaDashboardRoot ? personaDashboardRoot.querySelector(`#${id}`) : document.getElementById(id);
 }
 
+function pdAdminWorkspaceUrl(value) {
+  const text = String(value || "").trim();
+  if (!PD_ADMIN_WORKSPACE_USER_ID || !text) return text;
+  try {
+    const url = new URL(text, window.location.href);
+    if (url.origin !== window.location.origin) return text;
+    url.searchParams.set("admin_workspace_user_id", PD_ADMIN_WORKSPACE_USER_ID);
+    if (/^[a-z][a-z\d+.-]*:/i.test(text)) return url.href;
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return text;
+  }
+}
+
 async function pdApi(path, opts = {}) {
   const headers = { ...(opts.headers || {}) };
+  if (PD_ADMIN_WORKSPACE_USER_ID) headers["X-Admin-Workspace-User-ID"] = PD_ADMIN_WORKSPACE_USER_ID;
   let body = opts.body;
   if (body && typeof body !== "string") {
     headers["Content-Type"] = "application/json";
@@ -671,7 +687,7 @@ function pdRenderPublishHistory(persona) {
       <td class="persona-post-time">${pdEscape(pdDate(row.published_at))}</td>
       <td>${pdEscape(row.status || "success")}</td>
       <td class="persona-post-actions">
-        ${row.published_url ? `<a class="ghost" href="${pdEscape(row.published_url)}" target="_blank" rel="noopener">打开</a>` : `<span class="small">-</span>`}
+        ${row.published_url ? `<a class="ghost" href="${pdEscape(pdAdminWorkspaceUrl(row.published_url))}" target="_blank" rel="noopener">打开</a>` : `<span class="small">-</span>`}
       </td>
     </tr>
   `).join("");
@@ -709,7 +725,7 @@ function pdRenderAutomationRecordRows(persona) {
         <td>${pdEscape(pdDate(row.published_at || row.captured_at))}</td>
         <td><span class="persona-auto-status persona-auto-status-${pdEscape(row.status || "success")}">${pdEscape(row.status || "success")}</span></td>
         <td><div class="persona-auto-row-actions">
-          ${taskId.startsWith("social_task_") ? `<button class="ghost" type="button" data-auto-logs="${pdEscape(taskId)}">日志</button>` : (row.published_url ? `<a class="ghost" href="${pdEscape(row.published_url)}" target="_blank" rel="noopener">打开</a>` : `<span class="small">-</span>`)}
+          ${taskId.startsWith("social_task_") ? `<button class="ghost" type="button" data-auto-logs="${pdEscape(taskId)}">日志</button>` : (row.published_url ? `<a class="ghost" href="${pdEscape(pdAdminWorkspaceUrl(row.published_url))}" target="_blank" rel="noopener">打开</a>` : `<span class="small">-</span>`)}
         </div></td>
       </tr>
     `;
@@ -1166,7 +1182,9 @@ function pdMediaType(item) {
 }
 
 function pdPostMediaItems(row) {
-  return Array.isArray(row.media_items) ? row.media_items.filter((item) => item && item.url) : [];
+  return Array.isArray(row.media_items)
+    ? row.media_items.filter((item) => item && item.url).map((item) => ({ ...item, url: pdAdminWorkspaceUrl(item.url) }))
+    : [];
 }
 
 function pdPostComposition(row) {
@@ -1251,18 +1269,20 @@ function pdRenderPostGallery(row) {
 }
 
 function pdAutomationLogMediaUrl(taskId, index) {
-  return `/api/persona_dashboard/automation/tasks/${encodeURIComponent(taskId)}/media/${encodeURIComponent(index)}`;
+  return pdAdminWorkspaceUrl(`/api/persona_dashboard/automation/tasks/${encodeURIComponent(taskId)}/media/${encodeURIComponent(index)}`);
 }
 
 function pdAutomationScreenshotUrl(path) {
   const name = String(path || "").split(/[\\/]/).pop();
-  return name ? `/api/persona_dashboard/automation/screenshots/${encodeURIComponent(name)}` : "";
+  return name ? pdAdminWorkspaceUrl(`/api/persona_dashboard/automation/screenshots/${encodeURIComponent(name)}`) : "";
 }
 
 function pdAutomationScreenshotThumbnailUrl(url) {
   const value = String(url || "");
-  if (!value.startsWith("/api/persona_dashboard/automation/screenshots/")) return value;
-  return `${value}${value.includes("?") ? "&" : "?"}thumbnail=1`;
+  if (!value.startsWith("/api/persona_dashboard/automation/screenshots/")) return pdAdminWorkspaceUrl(value);
+  const thumbnailUrl = new URL(value, window.location.href);
+  thumbnailUrl.searchParams.set("thumbnail", "1");
+  return pdAdminWorkspaceUrl(`${thumbnailUrl.pathname}${thumbnailUrl.search}${thumbnailUrl.hash}`);
 }
 
 function pdAutomationLogImages(task, logs) {
@@ -1272,7 +1292,7 @@ function pdAutomationLogImages(task, logs) {
     items.push({ label: `结果截图 ${index + 1}`, url: pdAutomationScreenshotUrl(path), path });
   });
   (logs || []).forEach((row) => {
-    if (row.screenshot_url && pdAutomationLogIsCheckpointScreenshot(row)) items.push({ label: `${pdAutomationLogStepText(row)}截图`, url: row.screenshot_url, path: row.screenshot_path });
+    if (row.screenshot_url && pdAutomationLogIsCheckpointScreenshot(row)) items.push({ label: `${pdAutomationLogStepText(row)}截图`, url: pdAdminWorkspaceUrl(row.screenshot_url), path: row.screenshot_path });
   });
   const seen = new Set();
   return items.filter((item) => {
@@ -1397,7 +1417,7 @@ function pdAutomationTaskSummary(task) {
 }
 
 function pdAutomationLogScreenshot(row) {
-  const url = row && row.screenshot_url;
+  const url = pdAdminWorkspaceUrl(row && row.screenshot_url);
   if (!url || !pdAutomationLogIsCheckpointScreenshot(row)) return "";
   const images = pdAutomationLogImages((personaDashboardAutomationLogData || {}).task, (personaDashboardAutomationLogData || {}).logs || []);
   const index = Math.max(0, images.findIndex((item) => item.url === url));
@@ -1426,7 +1446,7 @@ function pdRenderAutomationLogMedia(task, logs) {
     const galleryIndex = pdAutomationLogImages(task, logs).findIndex((image) => image.url === item.url);
     const imageButton = galleryIndex >= 0;
     return `
-    <${imageButton ? "button" : "a"} class="persona-auto-log-media-item" ${imageButton ? `type="button" data-auto-gallery-index="${pdEscape(String(galleryIndex))}"` : `href="${pdEscape(item.url)}" target="_blank" rel="noopener"`}>
+    <${imageButton ? "button" : "a"} class="persona-auto-log-media-item" ${imageButton ? `type="button" data-auto-gallery-index="${pdEscape(String(galleryIndex))}"` : `href="${pdEscape(pdAdminWorkspaceUrl(item.url))}" target="_blank" rel="noopener"`}>
       ${imageButton ? `<img src="${pdEscape(pdAutomationScreenshotThumbnailUrl(item.url))}" alt="${pdEscape(item.label)}" loading="lazy" />` : ""}
       <strong>${pdEscape(item.label)}</strong>
       <span>点击预览</span>
@@ -1451,7 +1471,7 @@ function pdRenderAutomationLogGallery(task, logs) {
           <button class="ghost" type="button" id="personaAutoGalleryClose">关闭相册</button>
         </div>
         <div class="persona-post-gallery-stage">
-          <img src="${pdEscape(item.url || "")}" alt="${pdEscape(item.label || "截图")}" />
+          <img src="${pdEscape(pdAdminWorkspaceUrl(item.url || ""))}" alt="${pdEscape(item.label || "截图")}" />
         </div>
         <div class="persona-post-gallery-actions">
           <button class="ghost" type="button" id="personaAutoGalleryPrev" ${index <= 0 ? "disabled" : ""}>上一张</button>
@@ -1545,7 +1565,7 @@ function pdRenderPostInfo(row) {
       ${items.map(([label, value]) => `
         <div>
           <span>${pdEscape(label)}</span>
-          ${label === "原始链接" ? `<a href="${pdEscape(value)}" target="_blank" rel="noreferrer">${pdEscape(value)}</a>` : `<strong>${pdEscape(value)}</strong>`}
+          ${label === "原始链接" ? `<a href="${pdEscape(pdAdminWorkspaceUrl(value))}" target="_blank" rel="noreferrer">${pdEscape(value)}</a>` : `<strong>${pdEscape(value)}</strong>`}
         </div>
       `).join("")}
     </div>

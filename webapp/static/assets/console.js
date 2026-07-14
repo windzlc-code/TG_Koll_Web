@@ -17,6 +17,53 @@ const LIVE_BROWSER_AUTO_CLOSE_SECONDS_KEY = "wk-live-browser-auto-close-seconds"
 const LIVE_BROWSER_MAX_CONCURRENCY_KEY = "wk-live-browser-max-concurrency";
 const LIVE_BROWSER_TEXT_INPUT_MODE_KEY = "wk-live-browser-text-input-mode";
 const LIVE_BROWSER_LAYOUT_KEY = "wk-live-browser-layout";
+const ADMIN_WORKSPACE_USER_ID = String(document.querySelector('meta[name="admin-workspace-user-id"]')?.content || "").trim();
+
+function adminWorkspaceRequestOptions(options = {}) {
+  if (!ADMIN_WORKSPACE_USER_ID) return options;
+  const headers = new Headers(options.headers || {});
+  headers.set("X-Admin-Workspace-User-ID", ADMIN_WORKSPACE_USER_ID);
+  return { ...options, headers };
+}
+
+function adminWorkspaceUrl(value) {
+  const text = String(value || "").trim();
+  if (!ADMIN_WORKSPACE_USER_ID || !text || !text.startsWith("/api/")) return text;
+  const url = new URL(text, location.origin);
+  url.searchParams.set("admin_workspace_user_id", ADMIN_WORKSPACE_USER_ID);
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+function adminWorkspaceLiveBrowserUrl(value) {
+  const decorated = adminWorkspaceUrl(value);
+  if (!ADMIN_WORKSPACE_USER_ID || !decorated || !decorated.startsWith("/api/")) return decorated;
+  const url = new URL(decorated, location.origin);
+  const nestedPath = String(url.searchParams.get("path") || "").trim();
+  if (!nestedPath) return `${url.pathname}${url.search}${url.hash}`;
+  const hadLeadingSlash = nestedPath.startsWith("/");
+  const nestedUrl = new URL(nestedPath, location.origin);
+  if (nestedUrl.pathname.startsWith("/api/")) {
+    nestedUrl.searchParams.set("admin_workspace_user_id", ADMIN_WORKSPACE_USER_ID);
+    const renderedPath = `${nestedUrl.pathname}${nestedUrl.search}${nestedUrl.hash}`;
+    url.searchParams.set("path", hadLeadingSlash ? renderedPath : renderedPath.replace(/^\//, ""));
+  }
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+function renderAdminWorkspaceBanner() {
+  const workspace = window.__CONSOLE_BOOTSTRAP__?.admin_workspace;
+  const banner = $("adminWorkspaceBanner");
+  if (!banner || !ADMIN_WORKSPACE_USER_ID || !workspace) return;
+  const username = $("adminWorkspaceUsername");
+  if (username) username.textContent = workspace.target_username || `ID ${workspace.target_user_id || ADMIN_WORKSPACE_USER_ID}`;
+  const status = $("adminWorkspaceStatus");
+  if (status) {
+    status.hidden = !workspace.archived;
+    status.textContent = workspace.archived ? "已归档" : "";
+  }
+  banner.hidden = false;
+  banner.classList.toggle("is-archived", Boolean(workspace.archived));
+}
 
 function purgeLegacyTenantContentCaches() {
   try {
@@ -952,7 +999,7 @@ async function api(path, options = {}) {
   const requestGeneration = tenantStateGeneration;
   let response;
   try {
-    response = await fetch(path, { credentials: "include", ...options });
+    response = await fetch(path, { credentials: "include", ...adminWorkspaceRequestOptions(options) });
   } catch (error) {
     if (error?.name === "AbortError" || error?.name === "TimeoutError") throw error;
     throw { detail: localizeConsoleMessage(error?.message || "网络请求失败", 0), status: 0 };
@@ -4416,7 +4463,8 @@ function directMediaPreviewUrl(value) {
     return "";
   }
   if (/^(?:https?:)?\/\//i.test(text)) return text;
-  if (/^(?:data:|blob:|\/api\/)/i.test(text)) return text;
+  if (/^\/api\//i.test(text)) return adminWorkspaceUrl(text);
+  if (/^(?:data:|blob:)/i.test(text)) return text;
   return "";
 }
 
@@ -4490,8 +4538,8 @@ function registerMediaPreviewGroup(items) {
   }
   const id = `media-group-${++state.mediaPreviewSeq}`;
   state.mediaPreviewGroups[id] = rows.map((item) => ({
-    previewUrl: String(item.previewUrl || "").trim(),
-    originalUrl: String(item.originalUrl || item.original_url || item.previewUrl || "").trim(),
+    previewUrl: adminWorkspaceUrl(item.previewUrl),
+    originalUrl: adminWorkspaceUrl(item.originalUrl || item.original_url || item.previewUrl),
     type: String(item.type || "image").trim() || "image",
     label: String(item.label || "").trim(),
   }));
@@ -4507,7 +4555,7 @@ function renderMediaPreviewButton(item, groupId, index, {
   const label = String(item?.label || "").trim();
   const type = String(item?.type || "image").trim() || "image";
   const text = caption || mediaKindLabel(type);
-  const displayUrl = String(item?.thumbnailUrl || item?.thumbnail_url || item?.previewUrl || "").trim();
+  const displayUrl = adminWorkspaceUrl(item?.thumbnailUrl || item?.thumbnail_url || item?.previewUrl);
   const rootTag = interactive ? "button" : "div";
   return `
     <${rootTag}
@@ -6109,7 +6157,7 @@ function renderTaskQueueView() {
       <div>${renderStatusText(task.status || "")}</div>
       <div class="row-actions">
         <button type="button" data-detail="${esc(task.id)}">详情</button>
-        ${task.has_download ? `<a href="/api/tasks/${encodeURIComponent(task.id)}/download">下载</a>` : ""}
+        ${task.has_download ? `<a href="${esc(adminWorkspaceUrl(`/api/tasks/${encodeURIComponent(task.id)}/download`))}">下载</a>` : ""}
         ${task.status === "failed" ? `<button type="button" data-retry="${esc(task.id)}">重试</button>` : ""}
         ${activeSocialAutomationTask(task) ? `<button type="button" class="danger" data-cancel-task="${esc(task.id)}">停止</button>` : ""}
         <button type="button" class="danger task-queue-delete-button" data-delete-task="${esc(task.id)}" title="删除" aria-label="删除">${renderTrashIcon()}</button>
@@ -7890,7 +7938,7 @@ function watchTask(taskId, options = {}) {
   const onDone = typeof options.onDone === "function" ? options.onDone : null;
   const onError = typeof options.onError === "function" ? options.onError : null;
   syncWatchingTaskChip(taskId);
-  state.events = new EventSource(`/api/tasks/${encodeURIComponent(taskId)}/events`, { withCredentials: true });
+  state.events = new EventSource(adminWorkspaceUrl(`/api/tasks/${encodeURIComponent(taskId)}/events`), { withCredentials: true });
   state.events.onmessage = (event) => {
     let payload = {};
     try { payload = JSON.parse(event.data || "{}"); } catch {}
@@ -10142,7 +10190,7 @@ function renderTaskDetailLayout(task = {}, logs = [], {
             <span>${esc(screenshots.length ? previewCountLabel : "链接")}</span>
           </div>
           <div class="row-actions">
-            ${downloadUrl ? `<a href="${esc(downloadUrl)}">下载结果文件</a>` : ""}
+            ${downloadUrl ? `<a href="${esc(adminWorkspaceUrl(downloadUrl))}">下载结果文件</a>` : ""}
             ${resultUrl ? `<a href="${esc(resultUrl)}" target="_blank" rel="noopener">查看任务结果</a>` : ""}
           </div>
           ${renderTaskScreenshotGallery(screenshots)}
@@ -16572,8 +16620,8 @@ async function captureLiveBrowserScreenshot(sessionId = "") {
 }
 
 function liveBrowserSessionUrl(session) {
-  if (session.view_path) return String(session.view_path);
-  if (session.novnc_path) return String(session.novnc_path);
+  if (session.view_path) return adminWorkspaceLiveBrowserUrl(session.view_path);
+  if (session.novnc_path) return adminWorkspaceLiveBrowserUrl(session.novnc_path);
   const publicUrl = String(session.public_url || "").trim();
   const base = publicUrl || `${location.protocol || "http:"}//${location.hostname}:${session.web_port}`;
   const params = new URLSearchParams({
@@ -19011,6 +19059,7 @@ function bindIdentityRevalidationEvents() {
 }
 
 async function init() {
+  renderAdminWorkspaceBanner();
   applyTheme(currentTheme());
   ensurePersonaMediaLightbox();
   beginWorkspaceBootstrapLoading();

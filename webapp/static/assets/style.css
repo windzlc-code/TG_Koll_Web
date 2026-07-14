@@ -2871,6 +2871,7 @@ select:focus {
 .page-admin .admin-user-badge-pending { color: #8a5a08; background: #fff6dc; border-color: #efd493; }
 .page-admin .admin-user-badge-disabled { color: #a23737; background: #fff0f0; border-color: #efc2c2; }
 .page-admin .admin-user-badge-rejected { color: #59636d; background: #f1f3f5; border-color: #d7dde2; }
+.page-admin .admin-user-badge-archived { color: #713f12; background: #fff7d6; border-color: #e6c85b; }
 
 .page-admin .admin-user-stat-cell,
 .page-admin .admin-user-balance-cell {
@@ -6930,6 +6931,37 @@ body.page-admin {
   background: #ffffff;
   border: 1px solid var(--admin-line);
   border-radius: 8px;
+}
+
+.page-admin .admin-user-detail-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.page-admin .admin-user-detail-modal .modal-header > div:first-child,
+.page-admin .admin-user-detail-modal #userDetailSub {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 800px) {
+  .page-admin .admin-user-detail-modal .modal-header {
+    align-items: stretch;
+    flex-direction: column;
+    padding: 16px;
+  }
+
+  .page-admin .admin-user-detail-header-actions {
+    width: 100%;
+  }
+
+  .page-admin .admin-user-detail-header-actions > button {
+    flex: 1 1 140px;
+    min-width: 0;
+    white-space: normal;
+  }
 }
 
 .page-admin .admin-user-detail-grid {

@@ -6,11 +6,13 @@ import secrets
 import time
 from typing import Any
 
-from fastapi import Cookie, Depends, HTTPException
+from fastapi import Cookie, Depends, Header, HTTPException, Request
 
 from .db import db
 
 SESSION_COOKIE = "session_token"
+ADMIN_WORKSPACE_HEADER = "X-Admin-Workspace-User-ID"
+ADMIN_WORKSPACE_QUERY = "admin_workspace_user_id"
 
 def _now() -> int:
     return int(time.time())
@@ -86,8 +88,63 @@ def get_user_allowing_password_change(
             raise HTTPException(status_code=403, detail="账号已禁用")
         return user
 
-def get_current_user(
-    session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+
+def resolve_admin_workspace_user(
+    user: dict[str, Any],
+    target_user_id: Any = None,
+    *,
+    request: Request | None = None,
+) -> dict[str, Any]:
+    if not isinstance(target_user_id, (str, int)):
+        return user
+    clean_target = str(target_user_id or "").strip()
+    if not clean_target:
+        return user
+    if int(user.get("is_admin") or 0) != 1:
+        raise HTTPException(status_code=403, detail="administrator workspace access required")
+    try:
+        target_id = int(clean_target)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="invalid admin workspace user id") from exc
+    if target_id <= 0:
+        raise HTTPException(status_code=400, detail="invalid admin workspace user id")
+    with db() as conn:
+        row = conn.execute(
+            "SELECT id, username, is_admin, is_disabled, approval_status, deleted_at FROM users WHERE id = ?",
+            (target_id,),
+        ).fetchone()
+    if row is None or int(row["is_admin"] or 0) == 1:
+        raise HTTPException(status_code=404, detail="customer workspace not found")
+    resolved = dict(user)
+    resolved["_workspace_user_id"] = target_id
+    resolved["_workspace_username"] = str(row["username"] or "")
+    resolved["_workspace_is_disabled"] = int(row["is_disabled"] or 0)
+    resolved["_workspace_approval_status"] = str(row["approval_status"] or "")
+    resolved["_workspace_deleted_at"] = int(row["deleted_at"] or 0)
+    resolved["_workspace_admin_user_id"] = int(user.get("id") or 0)
+    if request is not None:
+        request.state.admin_workspace_context = {
+            "admin_user_id": int(user.get("id") or 0),
+            "target_user_id": target_id,
+        }
+    return resolved
+
+
+def admin_workspace_target_from_request(
+    request: Request,
+    header_value: Any = None,
+) -> Any:
+    header_target = str(header_value or "").strip()
+    query_target = str(request.query_params.get(ADMIN_WORKSPACE_QUERY) or "").strip()
+    if header_target and query_target and header_target != query_target:
+        raise HTTPException(status_code=400, detail="conflicting admin workspace user ids")
+    return header_target or query_target
+
+def get_current_user_for_session(
+    session_token: str | None,
+    *,
+    admin_workspace_user_id: Any = None,
+    request: Request | None = None,
 ) -> dict[str, Any]:
     user = get_user_allowing_password_change(session_token)
     if int(user.get("must_change_password") or 0) == 1:
@@ -107,7 +164,19 @@ def get_current_user(
                 "password_expires_at": expires_at,
             },
         )
-    return user
+    return resolve_admin_workspace_user(user, admin_workspace_user_id, request=request)
+
+
+def get_current_user(
+    request: Request,
+    session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+    admin_workspace_user_id: str | None = Header(default=None, alias=ADMIN_WORKSPACE_HEADER),
+) -> dict[str, Any]:
+    return get_current_user_for_session(
+        session_token,
+        admin_workspace_user_id=admin_workspace_target_from_request(request, admin_workspace_user_id),
+        request=request,
+    )
 
 
 def require_admin(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:

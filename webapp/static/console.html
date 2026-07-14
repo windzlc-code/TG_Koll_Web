@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="admin-workspace-user-id" content="__ADMIN_WORKSPACE_USER_ID__" />
   <title>Web 任务控制台</title>
   <link rel="preload" as="style" href="/assets/style.css?v=__STYLE_VERSION__" />
   <link id="personaDashboardStyles" rel="stylesheet" href="/assets/style.css?v=__STYLE_VERSION__" media="not all" />
@@ -53,6 +54,14 @@
           <button id="openAdmin" type="button" class="admin-only" hidden>运营后台</button>
         </div>
       </header>
+
+      <div id="adminWorkspaceBanner" class="admin-workspace-banner" hidden>
+        <div>
+          <strong>管理员工作区</strong>
+          <span>正在管理 <b id="adminWorkspaceUsername">-</b><em id="adminWorkspaceStatus" class="admin-workspace-status" hidden></em> 的账号数据，所有操作都会记录。</span>
+        </div>
+        <a href="/admin#users">返回账号管理</a>
+      </div>
 
       <section class="view is-active" data-panel="workspace">
         <div class="workbench-layout">

@@ -256,6 +256,8 @@ def init_db() -> None:
               last_login_at INTEGER NOT NULL DEFAULT 0,
               must_change_password INTEGER NOT NULL DEFAULT 0,
               password_expires_at INTEGER NOT NULL DEFAULT 0,
+              deleted_at INTEGER NOT NULL DEFAULT 0,
+              deleted_by INTEGER NOT NULL DEFAULT 0,
               created_at INTEGER NOT NULL,
               updated_at INTEGER NOT NULL
             )
@@ -494,11 +496,14 @@ def init_db() -> None:
             "last_login_at": "INTEGER NOT NULL DEFAULT 0",
             "must_change_password": "INTEGER NOT NULL DEFAULT 0",
             "password_expires_at": "INTEGER NOT NULL DEFAULT 0",
+            "deleted_at": "INTEGER NOT NULL DEFAULT 0",
+            "deleted_by": "INTEGER NOT NULL DEFAULT 0",
         }
         for column, definition in user_column_migrations.items():
             if column not in user_columns:
                 conn.execute(f"ALTER TABLE users ADD COLUMN {column} {definition}")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_users_approval ON users(approval_status, created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_users_deleted ON users(deleted_at, created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit_log(created_at DESC)")
