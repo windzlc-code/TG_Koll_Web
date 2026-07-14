@@ -402,6 +402,20 @@ def test_http_text_input_enforces_live_task_permission(payload_json, expected_st
     assert type_text.called is (expected_status == 200)
 
 
+def test_running_control_lookup_supports_live_browser_screenshots():
+    control = {
+        "task": {"id": "task-1"},
+        "live_browser_session_id": "live-task-1",
+    }
+    with mock.patch.dict(
+        social_automation_api._RUNNING_TASK_CONTROLS,
+        {"task-1": control},
+        clear=True,
+    ):
+        assert social_automation_api._running_control_for_live_browser_session("live-task-1") is control
+        assert social_automation_api._running_control_for_live_browser_session("live-missing") is None
+
+
 def test_websocket_rfb_input_is_blocked_when_task_permission_is_denied():
     key_event = bytes((4, 1, 0, 0, 0, 0, 0, 65))
 

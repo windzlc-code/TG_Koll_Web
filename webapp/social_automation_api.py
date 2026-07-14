@@ -1435,6 +1435,17 @@ def press_live_browser_session_key(session_id: str, key: str) -> dict[str, Any]:
     return _press_live_browser_session_key_via_display(session_id, clean_key)
 
 
+def _running_control_for_live_browser_session(session_id: str) -> dict[str, Any] | None:
+    clean_id = str(session_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="浏览器会话不能为空")
+    with _RUNNING_TASK_CONTROLS_LOCK:
+        for control in _RUNNING_TASK_CONTROLS.values():
+            if str(control.get("live_browser_session_id") or "") == clean_id:
+                return control
+    return None
+
+
 def capture_live_browser_session_screenshot(session_id: str) -> dict[str, Any]:
     control = _running_control_for_live_browser_session(session_id)
     task_id = str(control.get("task", {}).get("id") or "") if control else str(session_id or "").replace("live_", "", 1)
