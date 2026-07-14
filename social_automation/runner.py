@@ -7,7 +7,7 @@ import re
 import threading
 import time
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 from urllib.parse import quote, quote_plus, urljoin, urlparse
 
 
@@ -147,7 +147,7 @@ def run_social_task(
         _sync_live_browser_viewport(page, context_control, logger)
         page.set_default_timeout(int(os.getenv("SOCIAL_AUTOMATION_DEFAULT_TIMEOUT_MS", "30000")))
         if task_type == "open_login":
-            return _run_open_login(page, task, account, payload, screenshot_dir, logger, platform, cancel_event)
+            return _run_open_login(page, task, account, payload, screenshot_dir, logger, platform, cancel_event, context_control)
         if task_type == "check_login":
             return _run_check_login(page, task, account, payload, screenshot_dir, logger, platform)
 
@@ -447,6 +447,36 @@ def _raise_if_cancelled(cancel_event: Any | None) -> None:
         raise RuntimeError("社交自动化任务已取消。")
 
 
+def _manual_takeover_event(context_control: dict[str, Any] | None) -> Any | None:
+    if not isinstance(context_control, dict):
+        return None
+    return context_control.get("manual_takeover_event")
+
+
+def _request_manual_takeover(context_control: dict[str, Any] | None) -> None:
+    event = _manual_takeover_event(context_control)
+    if event is not None:
+        event.set()
+    if isinstance(context_control, dict):
+        ack_event = context_control.get("manual_takeover_ack_event")
+        if ack_event is not None:
+            ack_event.set()
+        callback = context_control.get("manual_takeover_callback")
+        if callable(callback):
+            with contextlib.suppress(Exception):
+                callback()
+
+
+def _manual_takeover_requested(context_control: dict[str, Any] | None) -> bool:
+    event = _manual_takeover_event(context_control)
+    requested = bool(event is not None and getattr(event, "is_set", lambda: False)())
+    if requested and isinstance(context_control, dict):
+        ack_event = context_control.get("manual_takeover_ack_event")
+        if ack_event is not None:
+            ack_event.set()
+    return requested
+
+
 def _safe_int_env_or_payload(payload: dict[str, Any], key: str, env_key: str, fallback: int) -> int:
     raw = payload.get(key)
     if raw is None or raw == "":
@@ -586,8 +616,17 @@ def _sleep_between(min_s: float, max_s: float) -> None:
     time.sleep(random.uniform(min_s, max_s))
 
 
-def _human_type(page, text: str, min_delay: float = 0.08, max_delay: float = 0.18) -> None:
+def _human_type(
+    page,
+    text: str,
+    min_delay: float = 0.08,
+    max_delay: float = 0.18,
+    *,
+    abort_if: Callable[[], bool] | None = None,
+) -> None:
     for ch in str(text or ""):
+        if abort_if is not None and abort_if():
+            return
         page.keyboard.type(ch)
         time.sleep(random.uniform(min_delay, max_delay))
 
@@ -619,13 +658,27 @@ def _paste_text(page, text: str) -> bool:
         return False
 
 
-def _type_text(page, text: str, min_delay: float = 0.08, max_delay: float = 0.18, *, mode: str = "paste", logger: AutomationLogger | None = None, stage: str = "text_input") -> None:
+def _type_text(
+    page,
+    text: str,
+    min_delay: float = 0.08,
+    max_delay: float = 0.18,
+    *,
+    mode: str = "paste",
+    logger: AutomationLogger | None = None,
+    stage: str = "text_input",
+    abort_if: Callable[[], bool] | None = None,
+) -> None:
     clean_text = str(text or "")
+    if abort_if is not None and abort_if():
+        return
     input_mode = _normalize_text_input_mode(mode or os.getenv("SOCIAL_AUTOMATION_TEXT_INPUT_MODE", "paste"))
     if input_mode == "type":
         if logger is not None:
             logger.log("info", stage, "正在使用逐字输入方式填写内容。", {"mode": "type", "chars": len(clean_text)})
-        _human_type(page, clean_text, min_delay=min_delay, max_delay=max_delay)
+        _human_type(page, clean_text, min_delay=min_delay, max_delay=max_delay, abort_if=abort_if)
+        return
+    if abort_if is not None and abort_if():
         return
     if clean_text and _paste_text(page, clean_text):
         if logger is not None:
@@ -644,44 +697,66 @@ def _type_text(page, text: str, min_delay: float = 0.08, max_delay: float = 0.18
             pass
     if logger is not None:
         logger.log("info", stage, "Text input used per-character fallback.", {"mode": "type_fallback", "chars": len(clean_text)})
-    _human_type(page, clean_text, min_delay=min_delay, max_delay=max_delay)
+    _human_type(page, clean_text, min_delay=min_delay, max_delay=max_delay, abort_if=abort_if)
 
 
-def _human_click(page, locator, logger: AutomationLogger, stage: str = "click") -> None:
+def _human_click(
+    page,
+    locator,
+    logger: AutomationLogger,
+    stage: str = "click",
+    *,
+    abort_if: Callable[[], bool] | None = None,
+) -> bool:
+    if abort_if is not None and abort_if():
+        return False
     locator.wait_for(state="visible", timeout=30000)
+    if abort_if is not None and abort_if():
+        return False
     try:
         locator.scroll_into_view_if_needed(timeout=5000)
         _sleep_between(0.2, 0.5)
     except Exception:
         pass
     box = locator.bounding_box()
+    if abort_if is not None and abort_if():
+        return False
     if not box:
         locator.click(timeout=10000)
-        return
+        return True
     viewport = page.viewport_size or {"width": 1280, "height": 720}
     if box["y"] < 0 or box["y"] + box["height"] > viewport["height"] or box["x"] < 0 or box["x"] + box["width"] > viewport["width"]:
         locator.scroll_into_view_if_needed(timeout=5000)
         _sleep_between(0.2, 0.5)
         box = locator.bounding_box()
+        if abort_if is not None and abort_if():
+            return False
         if not box:
             locator.click(timeout=10000)
-            return
+            return True
     rel_x = random.uniform(box["width"] * 0.25, box["width"] * 0.75)
     rel_y = random.uniform(box["height"] * 0.25, box["height"] * 0.75)
     logger.log("debug", stage, "正在点击目标元素。", {"x": round(box["x"] + rel_x, 1), "y": round(box["y"] + rel_y, 1)})
     abs_x = box["x"] + rel_x
     abs_y = box["y"] + rel_y
+    if abort_if is not None and abort_if():
+        return False
     try:
         locator.click(position={"x": rel_x, "y": rel_y}, timeout=5000)
-        return
+        return True
     except Exception as exc:
         logger.log("warn", f"{stage}_locator_click_failed", "目标元素常规点击超时，改用坐标点击兜底。", {"error": str(exc)[:500]})
     try:
+        if abort_if is not None and abort_if():
+            return False
         page.mouse.click(abs_x, abs_y, delay=random.randint(60, 180))
-        return
+        return True
     except Exception as exc:
         logger.log("warn", f"{stage}_mouse_click_failed", "目标元素坐标点击失败，改用 DOM 点击兜底。", {"error": str(exc)[:500]})
+    if abort_if is not None and abort_if():
+        return False
     locator.evaluate("(node) => node.click()")
+    return True
 
 
 def _screenshot(page, screenshot_dir: Path, task: dict[str, Any], stage: str, logger: AutomationLogger) -> str:
@@ -983,8 +1058,11 @@ def _self_heal_login_page(
     reason: str,
     attempt: int,
     cancel_event: Any | None = None,
+    context_control: dict[str, Any] | None = None,
 ) -> None:
     _raise_if_cancelled(cancel_event)
+    if _manual_takeover_requested(context_control):
+        return
     shot = _screenshot(page, screenshot_dir, task, f"login_self_heal_{attempt}", logger)
     logger.log(
         "warn",
@@ -994,10 +1072,16 @@ def _self_heal_login_page(
         shot,
     )
     with contextlib.suppress(Exception):
+        if _manual_takeover_requested(context_control):
+            return
         page.keyboard.press("Escape")
     action = attempt % 4
+    if _manual_takeover_requested(context_control):
+        return
     if action == 1:
         with contextlib.suppress(Exception):
+            if _manual_takeover_requested(context_control):
+                return
             page.reload(wait_until="domcontentloaded", timeout=60000)
             page.wait_for_load_state("networkidle", timeout=12000)
     elif action == 2:
@@ -1114,14 +1198,23 @@ def _wait_or_raise_manual(
     raise AutoLoginFailedError(reason, status, screenshot_path)
 
 
-def _run_open_login(page, task, account, payload, screenshot_dir, logger, platform: str = "instagram", cancel_event: Any | None = None) -> dict[str, Any]:
+def _run_open_login(
+    page,
+    task,
+    account,
+    payload,
+    screenshot_dir,
+    logger,
+    platform: str = "instagram",
+    cancel_event: Any | None = None,
+    context_control: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     _goto(page, _platform_home(platform), logger, "open_login")
     wait_seconds = int(payload.get("login_wait_seconds") or os.getenv("SOCIAL_AUTOMATION_LOGIN_WAIT_SECONDS", "3600"))
     wait_seconds = max(30, min(wait_seconds, 3600))
     auto_submit = bool(payload.get("auto_submit") or payload.get("login_password") or payload.get("password"))
     max_login_attempts = _int_payload_or_env(payload, "max_login_attempts", "SOCIAL_AUTOMATION_LOGIN_MAX_ATTEMPTS", 4, 1, 8)
     max_self_heal_attempts = _int_payload_or_env(payload, "max_self_heal_attempts", "SOCIAL_AUTOMATION_LOGIN_SELF_HEAL_ATTEMPTS", 5, 0, 12)
-    verification_confirmations = _int_payload_or_env(payload, "verification_confirmations", "SOCIAL_AUTOMATION_VERIFICATION_CONFIRMATIONS", 3, 1, 6)
     wait_for_manual = bool(payload.get("wait_for_manual", True))
     manual_only_on_verification = bool(payload.get("manual_only_on_verification", False))
     if platform == "threads" and not auto_submit:
@@ -1136,6 +1229,26 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
     verification_logged = False
     while time.time() < deadline:
         _raise_if_cancelled(cancel_event)
+        if auto_submit and _manual_takeover_requested(context_control):
+            auto_submit = False
+            logger.log(
+                "warn",
+                "manual_takeover",
+                "已立即停止自动登录操作，当前浏览器已切换为人工接管。",
+                {"url": str(page.url or "")},
+            )
+            return _wait_for_manual_login_completion(
+                page,
+                task,
+                screenshot_dir,
+                logger,
+                platform,
+                cancel_event,
+                "用户已切换为人工接管，自动登录提示已停止。",
+                str(last_status.get("status") or "need_verification"),
+                "",
+                last_status,
+            )
         try:
             last_status = _detect_platform_login_state(page, platform)
             if platform == "threads" and not auto_submit:
@@ -1157,8 +1270,9 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
                 invalid_hits += 1
                 if auto_submit and invalid_hits < 2 and self_heal_attempts < max_self_heal_attempts:
                     self_heal_attempts += 1
-                    _self_heal_login_page(page, platform, logger, task, screenshot_dir, str(last_status.get("reason") or "invalid_credentials"), self_heal_attempts, cancel_event)
+                    _self_heal_login_page(page, platform, logger, task, screenshot_dir, str(last_status.get("reason") or "invalid_credentials"), self_heal_attempts, cancel_event, context_control)
                     continue
+                _request_manual_takeover(context_control)
                 shot = _screenshot(page, screenshot_dir, task, "login_invalid_credentials", logger)
                 return _wait_or_raise_manual(
                     page,
@@ -1184,10 +1298,7 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
                     {"url": str(page.url or ""), "screenshot_path": shot, "details": last_status},
                     shot,
                 )
-                if auto_submit and verification_hits < verification_confirmations and self_heal_attempts < max_self_heal_attempts:
-                    self_heal_attempts += 1
-                    _self_heal_login_page(page, platform, logger, task, screenshot_dir, str(last_status.get("reason") or "need_verification"), self_heal_attempts, cancel_event)
-                    continue
+                _request_manual_takeover(context_control)
                 return _wait_or_raise_manual(
                     page,
                     task,
@@ -1232,20 +1343,19 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
                     manual_only_on_verification,
                 )
             if auto_submit and login_attempts < max_login_attempts and str(last_status.get("status") or "") != "need_verification":
-                if _auto_submit_login_form(page, platform, payload, logger, task, screenshot_dir):
+                if _auto_submit_login_form(page, platform, payload, logger, task, screenshot_dir, context_control):
                     login_attempts += 1
                     time.sleep(3)
                     continue
+                elif _manual_takeover_requested(context_control):
+                    continue
                 elif self_heal_attempts < max_self_heal_attempts:
                     self_heal_attempts += 1
-                    _self_heal_login_page(page, platform, logger, task, screenshot_dir, "auto_login_form_not_ready", self_heal_attempts, cancel_event)
+                    _self_heal_login_page(page, platform, logger, task, screenshot_dir, "auto_login_form_not_ready", self_heal_attempts, cancel_event, context_control)
                     continue
             if _verification_visible(page):
                 verification_hits += 1
-                if auto_submit and verification_hits < verification_confirmations and self_heal_attempts < max_self_heal_attempts:
-                    self_heal_attempts += 1
-                    _self_heal_login_page(page, platform, logger, task, screenshot_dir, "verification_visible", self_heal_attempts, cancel_event)
-                    continue
+                _request_manual_takeover(context_control)
                 if not verification_logged:
                     shot = _screenshot(page, screenshot_dir, task, "login_verification_required", logger)
                     logger.log(
@@ -1281,7 +1391,7 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
         # reload, or navigate away from the page they are actively handling.
         if auto_submit and self_heal_attempts < max_self_heal_attempts:
             self_heal_attempts += 1
-            _self_heal_login_page(page, platform, logger, task, screenshot_dir, "login_state_not_ready", self_heal_attempts, cancel_event)
+            _self_heal_login_page(page, platform, logger, task, screenshot_dir, "login_state_not_ready", self_heal_attempts, cancel_event, context_control)
             continue
         time.sleep(3 if auto_submit else 10)
     shot = _screenshot(page, screenshot_dir, task, "login_wait_timeout", logger)
@@ -2006,8 +2116,17 @@ def _run_browse_profile(page, task, payload, screenshot_dir, logger) -> dict[str
     return {"ok": True, "url": page.url, "screenshot_path": shot}
 
 
-def _click_text_button(page, logger: AutomationLogger, names: list[str], stage: str):
+def _click_text_button(
+    page,
+    logger: AutomationLogger,
+    names: list[str],
+    stage: str,
+    *,
+    abort_if: Callable[[], bool] | None = None,
+):
     for name in names:
+        if abort_if is not None and abort_if():
+            return False
         locators = [
             page.get_by_role("button", name=name).first,
             page.get_by_text(name, exact=True).first,
@@ -2019,12 +2138,17 @@ def _click_text_button(page, logger: AutomationLogger, names: list[str], stage: 
             page.locator(f'[aria-label="{name}"]').first,
         ]
         for loc in locators:
+            if abort_if is not None and abort_if():
+                return False
             try:
                 if loc.count() and loc.is_visible(timeout=2500):
-                    _human_click(page, loc, logger, stage)
-                    return True
+                    if abort_if is not None and abort_if():
+                        return False
+                    return _human_click(page, loc, logger, stage, abort_if=abort_if)
             except Exception:
                 continue
+        if abort_if is not None and abort_if():
+            return False
         try:
             clicked = page.evaluate(
                 """label => {
@@ -2079,8 +2203,21 @@ def _visible_last(page, selectors: list[str], timeout_ms: int = 1200):
     return None
 
 
-def _clear_and_type(page, locator, text: str, *, mode: str = "paste", logger: AutomationLogger | None = None, stage: str = "text_input") -> None:
+def _clear_and_type(
+    page,
+    locator,
+    text: str,
+    *,
+    mode: str = "paste",
+    logger: AutomationLogger | None = None,
+    stage: str = "text_input",
+    abort_if: Callable[[], bool] | None = None,
+) -> None:
+    if abort_if is not None and abort_if():
+        return
     locator.wait_for(state="visible", timeout=10000)
+    if abort_if is not None and abort_if():
+        return
     locator.evaluate(
         """element => {
             element.focus();
@@ -2089,16 +2226,40 @@ def _clear_and_type(page, locator, text: str, *, mode: str = "paste", logger: Au
         }""",
         timeout=10000,
     )
+    if abort_if is not None and abort_if():
+        return
     page.keyboard.press("Control+A")
+    if abort_if is not None and abort_if():
+        return
     page.keyboard.press("Backspace")
-    _type_text(page, text, min_delay=0.07, max_delay=0.16, mode=mode, logger=logger, stage=stage)
+    _type_text(
+        page,
+        text,
+        min_delay=0.07,
+        max_delay=0.16,
+        mode=mode,
+        logger=logger,
+        stage=stage,
+        abort_if=abort_if,
+    )
 
 
-def _auto_submit_login_form(page, platform: str, payload: dict[str, Any], logger: AutomationLogger, task: dict[str, Any], screenshot_dir: Path) -> bool:
+def _auto_submit_login_form(
+    page,
+    platform: str,
+    payload: dict[str, Any],
+    logger: AutomationLogger,
+    task: dict[str, Any],
+    screenshot_dir: Path,
+    context_control: dict[str, Any] | None = None,
+) -> bool:
     username = str(payload.get("login_username") or payload.get("username") or "").strip()
     password = str(payload.get("login_password") or payload.get("password") or "").strip()
     if not username or not password:
         return False
+    if _manual_takeover_requested(context_control):
+        return False
+    takeover_requested = lambda: _manual_takeover_requested(context_control)
     start_shot = _screenshot(page, screenshot_dir, task, "auto_login_start", logger)
     logger.log("info", "auto_login_start", f"开始自动填写 {_platform_name(platform)} 登录凭据。", {"username": username, "url": str(page.url or "")}, start_shot)
 
@@ -2106,6 +2267,8 @@ def _auto_submit_login_form(page, platform: str, payload: dict[str, Any], logger
     if platform == "threads":
         username_entry_clicked = False
         for username_entry_attempt in range(1, 4):
+            if _manual_takeover_requested(context_control):
+                return False
             try:
                 page.keyboard.press("Escape")
             except Exception:
@@ -2115,6 +2278,7 @@ def _auto_submit_login_form(page, platform: str, payload: dict[str, Any], logger
                 logger,
                 ["Log in with username instead", "Log in with username", "Use username instead"],
                 "threads_login_username_instead",
+                abort_if=takeover_requested,
             ):
                 continue
             username_entry_clicked = True
@@ -2125,12 +2289,15 @@ def _auto_submit_login_form(page, platform: str, payload: dict[str, Any], logger
                 break
             logger.log("warn", "threads_login_username_instead", "Threads username login entry click did not expose inputs yet; retrying.", {"attempt": username_entry_attempt, "url": str(page.url or "")})
         if not continue_clicked:
+            if _manual_takeover_requested(context_control):
+                return False
             logger.log("info", "auto_login_continue", "正在查找 Threads 的 Instagram 登录按钮。", {"url": str(page.url or "")})
             continue_clicked = _click_text_button(
                 page,
                 logger,
                 ["Continue with Instagram", "Log in with Instagram", "缁х画浣跨敤 Instagram", "浣跨敤 Instagram 缁х画"],
                 "threads_continue_instagram",
+                abort_if=takeover_requested,
             )
             logger.log("info" if continue_clicked else "warn", "auto_login_continue", "Threads 的 Instagram 登录按钮已处理。", {"clicked": continue_clicked, "url": str(page.url or "")})
             if continue_clicked:
@@ -2162,10 +2329,30 @@ def _auto_submit_login_form(page, platform: str, payload: dict[str, Any], logger
 
     try:
         logger.log("info", "auto_login_type_username", "正在填写登录用户名。", {"username": username})
-        _clear_and_type(page, username_input, username, mode="type", logger=logger, stage="auto_login_type_username")
+        if _manual_takeover_requested(context_control):
+            return False
+        _clear_and_type(
+            page,
+            username_input,
+            username,
+            mode="type",
+            logger=logger,
+            stage="auto_login_type_username",
+            abort_if=takeover_requested,
+        )
         _sleep_between(0.4, 0.9)
+        if _manual_takeover_requested(context_control):
+            return False
         logger.log("info", "auto_login_type_password", "正在填写登录密码。", {"password": "***"})
-        _clear_and_type(page, password_input, password, mode="type", logger=logger, stage="auto_login_type_password")
+        _clear_and_type(
+            page,
+            password_input,
+            password,
+            mode="type",
+            logger=logger,
+            stage="auto_login_type_password",
+            abort_if=takeover_requested,
+        )
         _sleep_between(0.4, 0.9)
     except Exception as exc:
         shot = _screenshot(page, screenshot_dir, task, "auto_login_type_failed", logger)
@@ -2173,13 +2360,18 @@ def _auto_submit_login_form(page, platform: str, payload: dict[str, Any], logger
         return False
     filled_shot = _screenshot(page, screenshot_dir, task, "auto_login_form_filled", logger)
     logger.log("info", "auto_login_form_filled", "登录表单已填写完成。", {"username": username, "password": "***"}, filled_shot)
+    if _manual_takeover_requested(context_control):
+        return False
     clicked = _click_text_button(
         page,
         logger,
         ["Log in", "Log In", "Login", "Continue", "\u767b\u5f55", "\u767b\u5165", "\u7ee7\u7eed"],
         "auto_login_submit",
+        abort_if=takeover_requested,
     )
     if not clicked:
+        if takeover_requested():
+            return False
         page.keyboard.press("Enter")
     submit_shot = _screenshot(page, screenshot_dir, task, "auto_login_submitted", logger)
     logger.log("info", "auto_login_submit", "登录表单已提交，正在等待账号就绪或验证提示。", {"clicked_submit_button": clicked, "url": str(page.url or "")}, submit_shot)

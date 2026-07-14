@@ -1,4 +1,5 @@
 import unittest
+import threading
 from pathlib import Path
 from unittest import mock
 
@@ -154,6 +155,116 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "cookie_expired")
         self_heal.assert_not_called()
+
+    def test_running_auto_login_stops_immediately_after_manual_takeover(self):
+        page = mock.Mock()
+        page.url = "https://www.threads.com/login/"
+        event = threading.Event()
+        ack_event = threading.Event()
+        event.set()
+        with (
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_wait_for_manual_login_completion", return_value={"status": "manual"}) as wait_manual,
+            mock.patch.object(runner, "_auto_submit_login_form") as submit,
+        ):
+            result = runner._run_open_login(
+                page,
+                {"id": "auto-to-manual"},
+                {},
+                {"login_wait_seconds": 30, "auto_submit": True},
+                Path("."),
+                _Logger(),
+                "threads",
+                context_control={
+                    "manual_takeover_event": event,
+                    "manual_takeover_ack_event": ack_event,
+                },
+            )
+
+        self.assertEqual(result["status"], "manual")
+        wait_manual.assert_called_once()
+        submit.assert_not_called()
+        self.assertTrue(ack_event.is_set())
+
+    def test_verification_switches_auto_login_to_manual_mode(self):
+        page = mock.Mock()
+        page.url = "https://www.instagram.com/challenge/"
+        event = threading.Event()
+        ack_event = threading.Event()
+        with (
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_detect_platform_login_state", return_value={"status": "need_verification"}),
+            mock.patch.object(runner, "_screenshot", return_value="verification.png"),
+            mock.patch.object(runner, "_wait_or_raise_manual", return_value={"status": "need_verification"}),
+            mock.patch.object(runner, "_self_heal_login_page") as self_heal,
+        ):
+            result = runner._run_open_login(
+                page,
+                {"id": "auto-verification"},
+                {},
+                {"login_wait_seconds": 30, "auto_submit": True},
+                Path("."),
+                _Logger(),
+                "instagram",
+                context_control={
+                    "manual_takeover_event": event,
+                    "manual_takeover_ack_event": ack_event,
+                },
+            )
+
+        self.assertEqual(result["status"], "need_verification")
+        self.assertTrue(event.is_set())
+        self.assertTrue(ack_event.is_set())
+        self_heal.assert_not_called()
+
+    def test_manual_takeover_during_submit_lookup_never_falls_back_to_enter(self):
+        page = _Page(url="https://www.instagram.com/accounts/login/")
+        event = threading.Event()
+        ack_event = threading.Event()
+        locator = _Locator()
+
+        def request_takeover(*_args, **_kwargs):
+            event.set()
+            return False
+
+        with (
+            mock.patch.object(runner, "_screenshot", return_value="login.png"),
+            mock.patch.object(runner, "_visible_first", side_effect=[locator, locator]),
+            mock.patch.object(runner, "_clear_and_type"),
+            mock.patch.object(runner, "_click_text_button", side_effect=request_takeover),
+            mock.patch.object(runner, "_sleep_between"),
+        ):
+            submitted = runner._auto_submit_login_form(
+                page,
+                "instagram",
+                {"login_username": "user", "login_password": "password"},
+                _Logger(),
+                {"id": "takeover-during-submit"},
+                Path("."),
+                {
+                    "manual_takeover_event": event,
+                    "manual_takeover_ack_event": ack_event,
+                },
+            )
+
+        self.assertFalse(submitted)
+        self.assertNotIn("Enter", page.keyboard.pressed)
+        self.assertTrue(ack_event.is_set())
+
+    def test_system_manual_takeover_notifies_persistence_callback(self):
+        event = threading.Event()
+        ack_event = threading.Event()
+        callback = mock.Mock()
+
+        runner._request_manual_takeover({
+            "manual_takeover_event": event,
+            "manual_takeover_ack_event": ack_event,
+            "manual_takeover_callback": callback,
+        })
+
+        self.assertTrue(event.is_set())
+        self.assertTrue(ack_event.is_set())
+        callback.assert_called_once_with()
 
     def test_threads_transient_error_keeps_manual_login_page_untouched(self):
         page = mock.Mock()

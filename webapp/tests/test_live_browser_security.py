@@ -131,6 +131,41 @@ def test_manual_open_login_allows_input_while_running():
         "task_type": "open_login",
         "payload_json": '{"auto_submit": true}',
     }) is False
+
+
+def test_running_auto_login_allows_input_only_after_manual_takeover_acknowledgement():
+    request_event = mock.Mock()
+    request_event.is_set.return_value = True
+    ack_event = mock.Mock()
+    ack_event.is_set.return_value = False
+    timeout_event = mock.Mock()
+    timeout_event.is_set.return_value = False
+    with mock.patch.dict(
+        social_automation_api._RUNNING_TASK_CONTROLS,
+        {"task-1": {
+            "manual_takeover_event": request_event,
+            "manual_takeover_ack_event": ack_event,
+            "manual_takeover_timeout_event": timeout_event,
+        }},
+        clear=True,
+    ):
+        row = {
+            "id": "task-1",
+            "status": "running",
+            "task_type": "open_login",
+            "payload_json": '{"auto_submit": true}',
+        }
+        assert social_automation_api._running_task_login_mode("task-1") == "switching"
+        assert social_automation_api._live_browser_task_input_allowed(row) is False
+        timeout_event.is_set.return_value = True
+        assert social_automation_api._running_task_login_mode("task-1") == "takeover_timeout"
+        assert social_automation_api._live_browser_open_login_mode(row) == "takeover_timeout"
+        ack_event.is_set.return_value = True
+        allowed = social_automation_api._live_browser_task_input_allowed(row)
+        assert social_automation_api._running_task_login_mode("task-1") == "manual"
+        assert social_automation_api._live_browser_open_login_mode(row) == "manual"
+
+    assert allowed is True
     assert social_automation_api._live_browser_task_input_allowed({
         "status": "running",
         "task_type": "publish_post",
@@ -212,7 +247,108 @@ def test_open_login_http_accepts_manual_and_boolean_auto_submit(payload):
 
     assert response.status_code == 200
     submitted = create_task.call_args.args[2]
-    assert submitted.get("auto_submit", False) is payload.get("auto_submit", False)
+    assert submitted["auto_submit"] is payload.get("auto_submit", True)
+
+
+def test_live_browser_mode_endpoint_requests_manual_takeover():
+    client = _security_test_client()
+    with (
+        mock.patch.object(social_automation_api, "_require_live_browser_session_access"),
+        mock.patch.object(
+            social_automation_api,
+            "request_live_browser_manual_takeover",
+            return_value={"task_id": "task-1", "session_id": "live-task-1", "mode": "manual"},
+        ) as takeover,
+    ):
+        response = client.post(
+            "/api/persona_dashboard/automation/browser_sessions/live-task-1/mode",
+            json={"mode": "manual"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["mode"] == "manual"
+    takeover.assert_called_once_with("live-task-1")
+
+
+def test_late_manual_takeover_ack_is_persisted_by_watcher():
+    ack_event = mock.Mock()
+    ack_event.wait.return_value = True
+    with mock.patch.object(social_automation_api, "_persist_manual_takeover_ack") as persist:
+        social_automation_api._await_and_persist_manual_takeover_ack("task-1", "live-task-1", ack_event)
+
+    ack_event.wait.assert_called_once_with(timeout=30.0)
+    persist.assert_called_once_with("task-1", "live-task-1")
+
+
+def test_manual_takeover_watcher_exposes_timeout_and_allows_retry():
+    ack_event = mock.Mock()
+    ack_event.wait.return_value = False
+    timeout_event = mock.Mock()
+    control = {
+        "manual_takeover_ack_event": ack_event,
+        "manual_takeover_timeout_event": timeout_event,
+        "manual_takeover_ack_watcher_started": True,
+    }
+    with mock.patch.dict(social_automation_api._RUNNING_TASK_CONTROLS, {"task-1": control}, clear=True):
+        social_automation_api._await_and_persist_manual_takeover_ack("task-1", "live-task-1", ack_event)
+
+    timeout_event.set.assert_called_once_with()
+    assert control["manual_takeover_ack_watcher_started"] is False
+
+
+def test_manual_takeover_request_does_not_block_waiting_for_runner_ack():
+    event = mock.Mock()
+    ack_event = mock.Mock()
+    ack_event.is_set.return_value = False
+    timeout_event = mock.Mock()
+    control = {
+        "live_browser_session_id": "live-task-1",
+        "manual_takeover_event": event,
+        "manual_takeover_ack_event": ack_event,
+        "manual_takeover_timeout_event": timeout_event,
+    }
+    connection = mock.Mock()
+    connection.execute.return_value.fetchone.return_value = {
+        "id": "task-1",
+        "status": "running",
+        "task_type": "open_login",
+    }
+    database = mock.MagicMock()
+    database.return_value.__enter__.return_value = connection
+
+    with (
+        mock.patch.dict(social_automation_api._RUNNING_TASK_CONTROLS, {"task-1": control}, clear=True),
+        mock.patch.object(social_automation_api, "db", database),
+        mock.patch.object(social_automation_api, "_persist_manual_takeover_ack") as persist,
+        mock.patch.object(social_automation_api.threading, "Thread") as thread,
+    ):
+        result = social_automation_api.request_live_browser_manual_takeover("live-task-1")
+
+    event.set.assert_called_once_with()
+    ack_event.wait.assert_not_called()
+    persist.assert_called_once_with("task-1", "live-task-1")
+    thread.return_value.start.assert_called_once_with()
+    assert result["mode"] == "switching"
+    assert result["acknowledged"] is False
+
+
+def test_manual_login_recovery_never_guesses_success_or_requeues_recent_task():
+    connection = mock.Mock()
+    connection.execute.return_value.fetchall.return_value = []
+    database = mock.MagicMock()
+    database.return_value.__enter__.return_value = connection
+
+    with (
+        mock.patch.dict(social_automation_api._RUNNING_TASK_CONTROLS, {}, clear=True),
+        mock.patch.object(social_automation_api, "db", database),
+    ):
+        social_automation_api._recover_orphaned_manual_login_task(10_000)
+
+    statements = "\n".join(str(call.args[0]) for call in connection.execute.call_args_list)
+    assert "a.status = 'ready'" not in statements
+    assert "SET status = 'success'" not in statements
+    assert "SET status = 'queued'" not in statements
+    assert "updated_at < ?" in statements
 
 
 @pytest.mark.parametrize(

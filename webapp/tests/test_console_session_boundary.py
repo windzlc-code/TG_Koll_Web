@@ -187,6 +187,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         task_refresh = self._function_source("syncSocialTaskToastAutoRefresh")
 
         self.assertIn('api("/api/persona_dashboard/automation/accounts")', account_refresh)
+        self.assertIn("if (includeOverview) renderLiveBrowserSessions()", account_refresh)
         self.assertNotIn("renderSocialTasks()", account_refresh)
         self.assertNotIn("renderSocialAccounts()", account_status)
         self.assertIn('loadAutomationTasksShared().catch', task_refresh)
@@ -197,14 +198,69 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("!state.currentUser?.is_admin", preflight)
         self.assertIn("return { ready: true, issues: [] }", preflight)
 
-    def test_open_login_is_explicitly_manual_and_expired_toasts_are_not_revived(self):
+    def test_open_login_defaults_to_automatic_and_expired_toasts_are_not_revived(self):
         create_task = self._function_source("createSocialTask")
         toast = self._section("function showToast", "function defaultToastTargetForMessage")
-        self.assertIn('auto_submit: taskType === "open_login" ? false : undefined', create_task)
+        self.assertIn('auto_submit: taskType === "open_login" ? true : undefined', create_task)
+        self.assertIn("refreshLiveBrowserSessionsSoon", create_task)
         self.assertIn('existingToast.classList.contains("is-leaving")', toast)
         refresh_start = toast.index("if (isTaskRefresh)")
         refresh_end = toast.index("return existingToast;", refresh_start)
         self.assertNotIn("clearToastRemovalTimer", toast[refresh_start:refresh_end])
+
+    def test_manual_takeover_waits_for_backend_ack_and_keeps_task_refresh_active(self):
+        set_mode = self._section("async function setLiveBrowserMode", "function liveBrowserToolInput")
+        prompt_suppression = self._function_source("socialTaskPromptSuppressed")
+        active_refresh = self._function_source("hasActiveSocialTaskToast")
+
+        self.assertIn('result?.acknowledged ? "manual" : "switching"', set_mode)
+        self.assertIn("Boolean(result?.acknowledged)", set_mode)
+        self.assertIn("refreshLiveBrowserSessionsSoon(taskId, 40, 500)", set_mode)
+        self.assertIn("definitelyRejected", set_mode)
+        self.assertLess(set_mode.index("suppressedSocialTaskPromptIds.add"), set_mode.index("await api("))
+        self.assertIn("suppressedSocialTaskPromptIds", prompt_suppression)
+        self.assertNotIn("socialBrowserSessions", prompt_suppression)
+        self.assertNotIn("socialTaskPromptSuppressed", active_refresh)
+        browser_refresh = self._function_source("refreshLiveBrowserSessionsSoon")
+        self.assertIn('liveBrowserLoginMode(matched) === "switching"', browser_refresh)
+        self.assertIn("found && !takeoverPending", browser_refresh)
+        self.assertIn("liveBrowserRefreshTokens[refreshKey]", browser_refresh)
+        self.assertIn('matched.login_mode = "takeover_timeout"', browser_refresh)
+        self.assertIn("observedTarget || taskFinished", browser_refresh)
+        self.assertIn('["success", "failed", "cancelled"]', prompt_suppression)
+
+    def test_browser_session_refreshes_are_isolated_and_timeout_safely(self):
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            const state = {{ socialBrowserSessions: [], liveBrowserRefreshTokens: {{}} }};
+            const callbacks = [];
+            const window = {{ setTimeout(callback) {{ callbacks.push(callback); }} }};
+            async function refreshSocialAccountsOnly() {{}}
+            function liveBrowserLoginMode(session) {{ return session.login_mode || "automatic"; }}
+            function renderLiveBrowserSessions() {{}}
+            function showMsg() {{}}
+            {self._function_source("refreshLiveBrowserSessionsSoon")}
+
+            (async () => {{
+              refreshLiveBrowserSessionsSoon("task-a", 1, 1);
+              refreshLiveBrowserSessionsSoon("task-b", 1, 1);
+              assert.strictEqual(Object.keys(state.liveBrowserRefreshTokens).length, 2);
+              state.socialBrowserSessions = [{{ task_id: "task-a", login_mode: "switching", input_allowed: false }}];
+              await callbacks.shift()();
+              assert.strictEqual(state.socialBrowserSessions[0].login_mode, "takeover_timeout");
+              assert.ok(!state.liveBrowserRefreshTokens["task-a"]);
+              assert.ok(state.liveBrowserRefreshTokens["task-b"]);
+
+              state.socialBrowserSessions = [{{ task_id: "task-gone", login_mode: "switching" }}];
+              refreshLiveBrowserSessionsSoon("task-gone", 10, 1);
+              state.socialBrowserSessions = [];
+              await callbacks.pop()();
+              assert.ok(!state.liveBrowserRefreshTokens["task-gone"]);
+            }})().catch((error) => {{ console.error(error); process.exit(1); }});
+            """
+        )
+        self._run_node(harness)
 
     def test_account_edit_does_not_resubmit_unchanged_proxy_and_clears_revealed_password(self):
         modal = self._function_source("openAccountPoolEditModal")

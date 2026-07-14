@@ -616,7 +616,7 @@ function clearTenantInMemoryState() {
   state.socialTaskPersonaRefreshSignatures = {};
   state.socialBrowserSessions = [];
   state.liveBrowserExpandedSessionId = "";
-  state.liveBrowserRefreshToken = "";
+  state.liveBrowserRefreshTokens = {};
   state.events = null;
   state.mediaPreviewGroups = {};
   state.renderedPersonaId = "";
@@ -3573,7 +3573,12 @@ function socialTaskToastKey(taskId, task = null) {
 function socialTaskPromptSuppressed(task) {
   const taskId = String(task?.id || "").trim();
   if (!taskId) return false;
-  return Boolean(state.suppressedSocialTaskPromptIds?.has(taskId));
+  if (!state.suppressedSocialTaskPromptIds?.has(taskId)) return false;
+  if (["success", "failed", "cancelled"].includes(String(task?.status || "").trim())) {
+    state.suppressedSocialTaskPromptIds.delete(taskId);
+    return false;
+  }
+  return true;
 }
 
 function socialTaskToastTerminal(task) {
@@ -14794,18 +14799,50 @@ async function refreshSocialAccountsOnly({ force = false, includeOverview = fals
 
 function refreshLiveBrowserSessionsSoon(taskId = "", attempts = 16, delayMs = 500) {
   const token = `${Date.now()}:${Math.random()}`;
-  state.liveBrowserRefreshToken = token;
   const targetTaskId = String(taskId || "").trim();
+  const refreshKey = targetTaskId || "__all__";
+  state.liveBrowserRefreshTokens ||= {};
+  state.liveBrowserRefreshTokens[refreshKey] = token;
+  let observedTarget = Boolean(targetTaskId && (state.socialBrowserSessions || [])
+    .some((session) => String(session?.task_id || "") === targetTaskId));
+  const isCurrent = () => state.liveBrowserRefreshTokens?.[refreshKey] === token;
+  const finish = () => {
+    if (isCurrent()) delete state.liveBrowserRefreshTokens[refreshKey];
+  };
   const run = async (attempt) => {
-    if (state.liveBrowserRefreshToken !== token) return;
+    if (!isCurrent()) return;
     await refreshSocialAccountsOnly({ includeOverview: true }).catch(() => {});
     const sessions = Array.isArray(state.socialBrowserSessions) ? state.socialBrowserSessions : [];
     const matched = targetTaskId
       ? sessions.find((session) => String(session.task_id || "") === targetTaskId)
       : sessions[0];
+    if (matched) observedTarget = true;
     const found = !targetTaskId || Boolean(matched);
     const takeoverPending = Boolean(matched) && liveBrowserLoginMode(matched) === "switching";
-    if ((found && !takeoverPending) || attempt >= attempts || state.liveBrowserRefreshToken !== token) return;
+    const targetTask = targetTaskId
+      ? (state.socialTasks || []).find((task) => String(task?.id || "") === targetTaskId)
+      : null;
+    const taskFinished = Boolean(targetTask)
+      && !["queued", "running", "need_manual"].includes(String(targetTask?.status || "").trim());
+    if (!isCurrent()) return;
+    if (targetTaskId && !matched && (observedTarget || taskFinished)) {
+      finish();
+      return;
+    }
+    if (found && !takeoverPending) {
+      finish();
+      return;
+    }
+    if (attempt >= attempts) {
+      if (takeoverPending) {
+        matched.login_mode = "takeover_timeout";
+        matched.input_allowed = false;
+        renderLiveBrowserSessions();
+        showMsg("socialMsg", "自动登录未能及时停止，请重试人工接管或停止进程。", false);
+      }
+      finish();
+      return;
+    }
     window.setTimeout(() => run(attempt + 1), delayMs);
   };
   window.setTimeout(() => run(1), 250);
@@ -16817,12 +16854,12 @@ function updateLiveBrowserSessionCard(card, session) {
     const buttonMode = button.dataset.liveBrowserMode || "automatic";
     const active = buttonMode === loginMode;
     button.classList.toggle("is-active", active);
-    button.classList.toggle("is-pending", buttonMode === "manual" && loginMode === "switching");
+    button.classList.toggle("is-pending", buttonMode === "manual" && ["switching", "takeover_timeout"].includes(loginMode));
     button.setAttribute("aria-pressed", active ? "true" : "false");
     if (buttonMode === "manual") {
       button.dataset.liveBrowserModeSession = sessionId;
-      button.textContent = loginMode === "switching" ? "切换中..." : "人工接管";
-      button.disabled = !liveBrowserIsReady(session) || status !== "running" || loginMode !== "automatic";
+      button.textContent = loginMode === "switching" ? "切换中..." : (loginMode === "takeover_timeout" ? "重试接管" : "人工接管");
+      button.disabled = !liveBrowserIsReady(session) || status !== "running" || !["automatic", "takeover_timeout"].includes(loginMode);
     } else {
       button.disabled = true;
     }
@@ -16890,6 +16927,7 @@ function liveBrowserLoginMode(session) {
   if (String(session?.task_type || "").trim().toLowerCase() !== "open_login") return "";
   const mode = String(session?.login_mode || "").trim().toLowerCase();
   if (mode === "switching") return "switching";
+  if (mode === "takeover_timeout") return "takeover_timeout";
   if (mode === "manual") return "manual";
   return isManualOpenLoginSession(session) || liveBrowserTaskStatus(session) === "need_manual" ? "manual" : "automatic";
 }
@@ -16901,10 +16939,11 @@ function renderLiveBrowserModeToggle(session) {
   const running = liveBrowserTaskStatus(session) === "running";
   const browserReady = liveBrowserIsReady(session);
   const switching = mode === "switching";
+  const takeoverTimedOut = mode === "takeover_timeout";
   return `
     <div class="live-browser-mode-toggle" role="group" aria-label="登录操作模式">
       <button type="button" class="${mode === "automatic" ? "is-active" : ""}" aria-pressed="${mode === "automatic" ? "true" : "false"}" disabled>自动登录</button>
-      <button type="button" class="${mode === "manual" ? "is-active" : ""}${switching ? " is-pending" : ""}" data-live-browser-mode="manual" data-live-browser-mode-session="${esc(sessionId)}" aria-pressed="${mode === "manual" ? "true" : "false"}" ${running && browserReady && mode === "automatic" ? "" : "disabled"}>${switching ? "切换中..." : "人工接管"}</button>
+      <button type="button" class="${mode === "manual" ? "is-active" : ""}${switching || takeoverTimedOut ? " is-pending" : ""}" data-live-browser-mode="manual" data-live-browser-mode-session="${esc(sessionId)}" aria-pressed="${mode === "manual" ? "true" : "false"}" ${running && browserReady && ["automatic", "takeover_timeout"].includes(mode) ? "" : "disabled"}>${switching ? "切换中..." : (takeoverTimedOut ? "重试接管" : "人工接管")}</button>
     </div>`;
 }
 
@@ -16952,6 +16991,7 @@ function liveBrowserInteractionHint(session) {
   if (sessionStatus === "standby") return "任务已完成，浏览器处于待机状态，可等待系统自动关闭。";
   if (isOpenLoginBrowserStarting(session)) return "Camoufox 指纹浏览器正在启动，窗口就绪后即可人工操作。";
   if (liveBrowserLoginMode(session) === "switching") return "正在停止自动登录操作，确认后将开放人工输入。";
+  if (liveBrowserLoginMode(session) === "takeover_timeout") return "自动登录未能及时停止，人工输入仍保持锁定；可重试接管或停止进程。";
   if (isManualOpenLoginSession(session)) return "当前处于人工登录，可以直接操作浏览器窗口。";
   if (taskStatus === "need_manual") return "当前需要人工处理，可以直接操作浏览器窗口。";
   return "自动化执行中，当前仅展示实时画面，暂不允许人工输入。";
@@ -17153,22 +17193,43 @@ async function setLiveBrowserMode(sessionId = "", mode = "manual") {
   if (!cleanSessionId || cleanMode !== "manual") return;
   const session = (state.socialBrowserSessions || []).find((item) => liveBrowserSessionId(item) === cleanSessionId);
   const taskId = String(session?.task_id || "").trim();
-  const result = await api(`/api/persona_dashboard/automation/browser_sessions/${encodeURIComponent(cleanSessionId)}/mode`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mode: "manual" }),
-  });
   if (taskId) {
     state.suppressedSocialTaskPromptIds.add(taskId);
     dismissToastByKey(socialTaskToastKey(taskId), { manual: true });
+  }
+  if (session) {
+    session.login_mode = "switching";
+    session.input_allowed = false;
+  }
+  renderLiveBrowserSessions();
+  syncSocialTaskToastAutoRefresh();
+  let result;
+  try {
+    result = await api(`/api/persona_dashboard/automation/browser_sessions/${encodeURIComponent(cleanSessionId)}/mode`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "manual" }),
+    });
+  } catch (error) {
+    const status = Number(error?.status || 0);
+    const definitelyRejected = status >= 400 && status < 500;
+    if (definitelyRejected) {
+      if (taskId) state.suppressedSocialTaskPromptIds.delete(taskId);
+      if (session) session.login_mode = "automatic";
+    } else if (taskId) {
+      refreshLiveBrowserSessionsSoon(taskId, 40, 500);
+    }
+    if (session) session.input_allowed = false;
+    renderLiveBrowserSessions();
+    syncSocialTaskToastAutoRefresh();
+    throw error;
   }
   if (session) {
     session.login_mode = result?.acknowledged ? "manual" : "switching";
     session.input_allowed = Boolean(result?.acknowledged) && liveBrowserIsReady(session);
   }
   renderLiveBrowserSessions();
-  syncSocialTaskToastAutoRefresh();
-  if (taskId) refreshLiveBrowserSessionsSoon(taskId, 180, 500);
+  if (taskId) refreshLiveBrowserSessionsSoon(taskId, 40, 500);
   await refreshSocialAccountsOnly({ force: true, includeOverview: true }).catch(() => {});
 }
 

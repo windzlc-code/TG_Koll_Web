@@ -2413,6 +2413,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload_obj.payload["archive_post_id"], post["id"])
 
     def test_publish_task_waits_for_login_dependency_before_claim(self):
+        now = int(datetime.now(timezone.utc).timestamp())
         self._insert_social_account(account_id="acct-threads", platform="threads", username="threads_user", status="cookie_expired")
         self._insert_social_task(
             task_id="login-needed",
@@ -2421,6 +2422,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
             task_type="open_login",
             status="need_manual",
             priority=20,
+            created_at=now,
         )
         self._insert_social_task(
             task_id="publish-waiting",
@@ -2441,10 +2443,48 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIsNone(claimed)
         conn = sqlite3.connect(str(self.data_dir / "app.db"))
         try:
+            login_status = conn.execute("SELECT status FROM social_automation_tasks WHERE id = 'login-needed'").fetchone()[0]
             status = conn.execute("SELECT status FROM social_automation_tasks WHERE id = 'publish-waiting'").fetchone()[0]
         finally:
             conn.close()
+        self.assertEqual(login_status, "need_manual")
         self.assertEqual(status, "queued")
+
+    def test_stale_orphaned_login_dependency_fails_instead_of_locking_queue(self):
+        self._insert_social_account(account_id="acct-threads", platform="threads", username="threads_user", status="cookie_expired")
+        self._insert_social_task(
+            task_id="login-stale",
+            account_id="acct-threads",
+            platform="threads",
+            task_type="open_login",
+            status="need_manual",
+            priority=20,
+        )
+        self._insert_social_task(
+            task_id="publish-stale",
+            account_id="acct-threads",
+            platform="threads",
+            task_type="publish_post",
+            status="queued",
+            priority=50,
+            payload={
+                "archive_post_id": "post-1",
+                "auto_login_before_publish": True,
+                "login_task_id": "login-stale",
+            },
+        )
+
+        claimed = social_automation_api._claim_next_task()
+
+        self.assertIsNone(claimed)
+        conn = sqlite3.connect(str(self.data_dir / "app.db"))
+        try:
+            login_status = conn.execute("SELECT status FROM social_automation_tasks WHERE id = 'login-stale'").fetchone()[0]
+            publish_status = conn.execute("SELECT status FROM social_automation_tasks WHERE id = 'publish-stale'").fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(login_status, "failed")
+        self.assertEqual(publish_status, "failed")
 
     def test_publish_task_claims_after_login_dependency_succeeds(self):
         self._insert_social_account(account_id="acct-threads", platform="threads", username="threads_user", status="ready")

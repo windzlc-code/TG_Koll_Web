@@ -11241,7 +11241,7 @@ body.live-browser-modal-open {
   .console-modal-dialog input {
     min-height: 38px;
     padding: 7px 9px;
-    font-size: 14px;
+    font-size: 16px;
   }
 
   .command-actions button,

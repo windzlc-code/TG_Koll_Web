@@ -282,6 +282,10 @@ class LiveBrowserKeyPayload(BaseModel):
     key: str = Field(default="Enter", max_length=40)
 
 
+class LiveBrowserModePayload(BaseModel):
+    mode: str = Field(default="manual", max_length=20)
+
+
 def configure_social_automation(*, data_dir: Path, new_id: Callable[[str], str] | None = None) -> None:
     global _DATA_DIR, _NEW_ID
     _DATA_DIR = Path(data_dir).resolve()
@@ -396,6 +400,18 @@ def register_social_automation_routes(app: FastAPI) -> None:
         _require_live_browser_session_access(session_id, user)
         close_live_browser_session(session_id)
         return {"ok": True, "closed": True}
+
+    @app.post("/api/persona_dashboard/automation/browser_sessions/{session_id}/mode")
+    def api_social_browser_session_mode(
+        session_id: str,
+        payload: LiveBrowserModePayload,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        _require_live_browser_session_access(session_id, user)
+        mode = str(payload.mode or "").strip().lower()
+        if mode != "manual":
+            raise HTTPException(status_code=409, detail="人工接管后不能在同一登录任务中恢复自动模式，请重新发起登录任务")
+        return {"ok": True, **request_live_browser_manual_takeover(session_id)}
 
     @app.post("/api/persona_dashboard/automation/browser_sessions/{session_id}/type")
     def api_social_browser_session_type(session_id: str, payload: LiveBrowserTextPayload, user: dict[str, Any] = Depends(get_current_user)):
@@ -514,6 +530,7 @@ def register_social_automation_routes(app: FastAPI) -> None:
         body = payload if isinstance(payload, dict) else {}
         task_payload = body.get("payload") if isinstance(body.get("payload"), dict) else body
         task_payload = dict(task_payload or {})
+        task_payload.setdefault("auto_submit", True)
         _validate_open_login_payload(task_payload)
         _validate_user_task_media_paths(task_payload, user)
         task_payload.setdefault("login_wait_seconds", wait_seconds)
@@ -863,6 +880,11 @@ def _live_browser_task_input_allowed(row: Any) -> bool:
         return True
     if status != "running" or str(task.get("task_type") or "").strip() != "open_login":
         return False
+    running_mode = _running_task_login_mode(str(task.get("id") or ""))
+    if running_mode == "manual":
+        return True
+    if running_mode in {"switching", "takeover_timeout"}:
+        return False
     payload = _load_task_payload_object(task.get("payload_json"))
     return payload is not None and _is_manual_open_login_task(task, payload)
 
@@ -871,7 +893,7 @@ def _query_live_browser_input_allowed(task_id: str) -> bool:
     try:
         with db() as conn:
             row = conn.execute(
-                "SELECT status, task_type, payload_json FROM social_automation_tasks WHERE id = ?",
+                "SELECT id, status, task_type, payload_json FROM social_automation_tasks WHERE id = ?",
                 (str(task_id or ""),),
             ).fetchone()
         return _live_browser_task_input_allowed(row)
@@ -1160,6 +1182,8 @@ def _live_browser_sessions(*, user_id: int | None = None) -> list[dict[str, Any]
         if status:
             session["task_status"] = status
         session["input_allowed"] = bool(session.get("browser_ready")) and _live_browser_task_input_allowed(row)
+        if str(row["task_type"] or "").strip() == "open_login":
+            session["login_mode"] = _live_browser_open_login_mode(row)
         if str(row["error"] or "").strip():
             session["task_error"] = str(row["error"] or "")
         session["task_finished_at"] = int(row["finished_at"] or 0)
@@ -1239,6 +1263,142 @@ def close_live_browser_session(session_id: str, *, force: bool = False) -> None:
         raise HTTPException(status_code=500, detail=f"关闭实时浏览器失败: {exc}") from exc
 
 
+def _running_task_manual_mode(task_id: str) -> bool:
+    clean_task_id = str(task_id or "").strip()
+    if not clean_task_id:
+        return False
+    with _RUNNING_TASK_CONTROLS_LOCK:
+        control = _RUNNING_TASK_CONTROLS.get(clean_task_id)
+        event = control.get("manual_takeover_ack_event") if control else None
+    return bool(event is not None and getattr(event, "is_set", lambda: False)())
+
+
+def _running_task_login_mode(task_id: str) -> str:
+    clean_task_id = str(task_id or "").strip()
+    if not clean_task_id:
+        return "automatic"
+    with _RUNNING_TASK_CONTROLS_LOCK:
+        control = _RUNNING_TASK_CONTROLS.get(clean_task_id)
+        request_event = control.get("manual_takeover_event") if control else None
+        ack_event = control.get("manual_takeover_ack_event") if control else None
+        timeout_event = control.get("manual_takeover_timeout_event") if control else None
+    if ack_event is not None and getattr(ack_event, "is_set", lambda: False)():
+        return "manual"
+    if timeout_event is not None and getattr(timeout_event, "is_set", lambda: False)():
+        return "takeover_timeout"
+    if request_event is not None and getattr(request_event, "is_set", lambda: False)():
+        return "switching"
+    return "automatic"
+
+
+def _live_browser_open_login_mode(row: Any) -> str:
+    running_mode = _running_task_login_mode(str(row["id"] or ""))
+    if running_mode in {"switching", "takeover_timeout"}:
+        return running_mode
+    return "manual" if _live_browser_task_input_allowed(row) else "automatic"
+
+
+def _persist_manual_takeover_ack(task_id: str, session_id: str) -> None:
+    with db() as conn:
+        row = conn.execute(
+            "SELECT status, task_type, payload_json FROM social_automation_tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        if not row or str(row["status"] or "") not in {"running", "need_manual"}:
+            return
+        if str(row["task_type"] or "") != "open_login":
+            return
+        task_payload = _loads(row["payload_json"], {})
+        needs_persist = task_payload.get("auto_submit") is not False or not bool(task_payload.get("manual_takeover"))
+        if not needs_persist:
+            return
+        task_payload["auto_submit"] = False
+        task_payload["manual_takeover"] = True
+        conn.execute(
+            "UPDATE social_automation_tasks SET payload_json = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(task_payload, ensure_ascii=False), _now(), task_id),
+        )
+        _insert_log(
+            conn,
+            task_id,
+            "warn",
+            "manual_takeover_requested",
+            "用户已切换为人工接管，自动登录操作已停止。",
+            {"session_id": session_id},
+        )
+
+
+def _await_and_persist_manual_takeover_ack(task_id: str, session_id: str, ack_event: Any) -> None:
+    wait_seconds = max(5.0, min(float(os.getenv("SOCIAL_AUTOMATION_TAKEOVER_ACK_SECONDS", "30")), 120.0))
+    if bool(ack_event.wait(timeout=wait_seconds)):
+        with contextlib.suppress(Exception):
+            _persist_manual_takeover_ack(task_id, session_id)
+        return
+    with _RUNNING_TASK_CONTROLS_LOCK:
+        control = _RUNNING_TASK_CONTROLS.get(task_id)
+        if control is None or control.get("manual_takeover_ack_event") is not ack_event:
+            return
+        timeout_event = control.get("manual_takeover_timeout_event")
+        if timeout_event is not None:
+            timeout_event.set()
+        control["manual_takeover_ack_watcher_started"] = False
+
+
+def request_live_browser_manual_takeover(session_id: str) -> dict[str, Any]:
+    clean_id = str(session_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="缺少实时浏览器会话")
+    task_id = ""
+    event = None
+    ack_event = None
+    timeout_event = None
+    matched_control: dict[str, Any] | None = None
+    with _RUNNING_TASK_CONTROLS_LOCK:
+        for candidate_task_id, control in _RUNNING_TASK_CONTROLS.items():
+            if str(control.get("live_browser_session_id") or "") != clean_id:
+                continue
+            task_id = str(candidate_task_id or "")
+            event = control.get("manual_takeover_event")
+            ack_event = control.get("manual_takeover_ack_event")
+            timeout_event = control.get("manual_takeover_timeout_event")
+            matched_control = control
+            break
+    if not task_id or event is None or ack_event is None or timeout_event is None:
+        raise HTTPException(status_code=409, detail="当前登录任务尚未进入可接管的浏览器会话")
+    with db() as conn:
+        row = conn.execute(
+            "SELECT id, status, task_type FROM social_automation_tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+    if not row or str(row["status"] or "") != "running" or str(row["task_type"] or "") != "open_login":
+        raise HTTPException(status_code=409, detail="当前浏览器不是正在运行的登录任务")
+    already_manual = bool(getattr(ack_event, "is_set", lambda: False)())
+    timeout_event.clear()
+    event.set()
+    acknowledged = bool(getattr(ack_event, "is_set", lambda: False)())
+    _persist_manual_takeover_ack(task_id, clean_id)
+    if not acknowledged and matched_control is not None:
+        start_watcher = False
+        with _RUNNING_TASK_CONTROLS_LOCK:
+            if not matched_control.get("manual_takeover_ack_watcher_started"):
+                matched_control["manual_takeover_ack_watcher_started"] = True
+                start_watcher = True
+        if start_watcher:
+            threading.Thread(
+                target=_await_and_persist_manual_takeover_ack,
+                args=(task_id, clean_id, ack_event),
+                name=f"manual-takeover-ack-{task_id[:12]}",
+                daemon=True,
+            ).start()
+    return {
+        "task_id": task_id,
+        "session_id": clean_id,
+        "mode": "manual" if acknowledged else "switching",
+        "acknowledged": acknowledged,
+        "already_manual": already_manual,
+    }
+
+
 def _require_live_browser_manual_session(session_id: str) -> str:
     clean_id = str(session_id or "").strip()
     if not clean_id:
@@ -1253,7 +1413,7 @@ def _require_live_browser_manual_session(session_id: str) -> str:
         raise HTTPException(status_code=409, detail="当前浏览器会话未处于可人工操作状态")
     with db() as conn:
         row = conn.execute(
-            "SELECT status, task_type, payload_json FROM social_automation_tasks WHERE id = ?",
+            "SELECT id, status, task_type, payload_json FROM social_automation_tasks WHERE id = ?",
             (task_id,),
         ).fetchone()
     if not _live_browser_task_input_allowed(row):
@@ -2259,6 +2419,8 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
     if task_type not in SOCIAL_TASK_TYPES:
         raise HTTPException(status_code=400, detail=f"不支持的自动化任务类型: {task_type}")
     task_payload = dict(payload.payload or {})
+    if task_type == "open_login":
+        task_payload.setdefault("auto_submit", True)
     auto_submit = _validate_open_login_payload(task_payload) if task_type == "open_login" else False
     now = _now()
     scheduled_at = _parse_schedule(payload.scheduled_at)
@@ -2735,15 +2897,23 @@ def _claim_next_task() -> dict[str, Any] | None:
                 SELECT 1
                 FROM social_automation_tasks r
                 WHERE r.account_id = t.account_id
-                  AND r.status = 'running'
+                  AND r.status IN ('running', 'need_manual')
               )
             ORDER BY t.priority ASC, t.created_at ASC
             LIMIT 50
             """,
             (now,),
         ).fetchall()
+        with _RUNNING_TASK_CONTROLS_LOCK:
+            active_account_ids = {
+                str((control.get("task") or {}).get("account_id") or "")
+                for control in _RUNNING_TASK_CONTROLS.values()
+                if isinstance(control.get("task"), dict)
+            }
         row = None
         for candidate in rows:
+            if str(candidate["account_id"] or "") in active_account_ids:
+                continue
             if _publish_login_dependency_blocks_claim(conn, candidate, now):
                 continue
             row = candidate
@@ -2770,83 +2940,51 @@ def _recover_orphaned_manual_login_task(now: int) -> None:
     recovery_window = max(60, int(os.getenv("SOCIAL_AUTOMATION_MANUAL_RECOVERY_SECONDS", "7200")))
     recent_cutoff = now - recovery_window
     with db() as conn:
-        ready_rows = conn.execute(
+        stale_rows = conn.execute(
             """
-            SELECT t.id
-            FROM social_automation_tasks t
-            JOIN social_accounts a ON a.id = t.account_id
-            WHERE t.status = 'need_manual'
-              AND t.finished_at = 0
-              AND t.task_type = 'open_login'
-              AND a.status = 'ready'
-            LIMIT 20
-            """
+            SELECT id
+            FROM social_automation_tasks
+            WHERE status = 'need_manual'
+              AND task_type = 'open_login'
+              AND updated_at < ?
+            ORDER BY updated_at ASC
+            LIMIT 50
+            """,
+            (recent_cutoff,),
         ).fetchall()
-        for row in ready_rows:
+        for row in stale_rows:
             task_id = str(row["id"] or "")
             if not task_id or task_id in running_ids:
                 continue
-            result = json.dumps({"ok": True, "status": "ready", "recovered": True}, ensure_ascii=False)
+            message = "登录任务的执行进程已断开且超过恢复时限，请重新打开登录。"
             conn.execute(
                 """
                 UPDATE social_automation_tasks
-                SET status = 'success', result_json = ?, error = '', finished_at = ?, updated_at = ?
-                WHERE id = ? AND status = 'need_manual' AND finished_at = 0
+                SET status = 'failed', finished_at = ?, error = ?, updated_at = ?
+                WHERE id = ? AND status = 'need_manual'
                 """,
-                (result, now, now, task_id),
+                (now, message, now, task_id),
             )
-            _insert_log(
-                conn,
-                task_id,
-                "info",
-                "resume_manual_login",
-                "已恢复登录任务：当前账号已经处于登录成功状态。",
-                {},
-            )
-        rows = conn.execute(
-            """
-            SELECT *
-            FROM social_automation_tasks
-            WHERE status = 'need_manual'
-              AND finished_at = 0
-              AND task_type = 'open_login'
-              AND updated_at >= ?
-            ORDER BY account_id ASC, updated_at DESC, created_at DESC
-            LIMIT 20
-            """
-            ,
-            (recent_cutoff,),
-        ).fetchall()
-        seen_accounts: set[str] = set()
-        for row in rows:
-            task_id = str(row["id"] or "")
-            account_id = str(row["account_id"] or "")
-            if not task_id or task_id in running_ids or account_id in seen_accounts:
-                continue
-            seen_accounts.add(account_id)
-            conn.execute(
-                """
-                UPDATE social_automation_tasks
-                SET status = 'queued', error = '', updated_at = ?
-                WHERE id = ? AND status = 'need_manual' AND finished_at = 0
-                """,
-                (now, task_id),
-            )
-            _insert_log(
-                conn,
-                task_id,
-                "info",
-                "resume_manual_login",
-                "登录任务的实时执行进程已断开，系统已重新排队检查当前浏览器登录状态。",
-                {},
-            )
-            break
+            _insert_log(conn, task_id, "error", "manual_login_recovery_expired", message, {})
 
 
 def _execute_claimed_task(task: dict[str, Any]) -> None:
     task_id = str(task.get("id") or "")
     task = dict(task)
-    control = {"cancel_event": threading.Event(), "context": None, "manager": None, "task": dict(task), "live_browser_session_id": ""}
+    control = {
+        "cancel_event": threading.Event(),
+        "manual_takeover_event": threading.Event(),
+        "manual_takeover_ack_event": threading.Event(),
+        "manual_takeover_timeout_event": threading.Event(),
+        "context": None,
+        "manager": None,
+        "task": dict(task),
+        "live_browser_session_id": "",
+    }
+    control["manual_takeover_callback"] = lambda: _persist_manual_takeover_ack(
+        task_id,
+        str(control.get("live_browser_session_id") or ""),
+    )
     with _RUNNING_TASK_CONTROLS_LOCK:
         _RUNNING_TASK_CONTROLS[task_id] = control
     try:
@@ -3022,7 +3160,7 @@ def _finish_task(task_id: str, status: str, result: dict[str, Any], error: str, 
                 """
                 UPDATE social_automation_tasks
                 SET status = ?, finished_at = ?, result_json = ?, error = ?, updated_at = ?
-                WHERE id = ? AND status = 'running'
+                WHERE id = ? AND status IN ('running', 'need_manual')
                 """,
                 (status, now, result_json, error, now, task_id),
             ).rowcount
