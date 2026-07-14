@@ -3595,7 +3595,7 @@ function syncSocialTaskToasts(tasks = []) {
 
 function hasActiveSocialTaskToast() {
   return (state.socialTasks || []).some((task) => (
-    ["queued", "running"].includes(String(task?.status || "").trim())
+    activeSocialAutomationTask(task)
     && !isFutureScheduledSocialTask(task)
   ));
 }

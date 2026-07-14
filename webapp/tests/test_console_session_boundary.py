@@ -173,6 +173,14 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("[401, 428]", fallback)
         self.assertNotIn("403", fallback)
 
+    def test_unfinished_manual_tasks_keep_status_refresh_active(self):
+        active_task = self._function_source("activeSocialAutomationTask")
+        refresh_check = self._function_source("hasActiveSocialTaskToast")
+
+        self.assertIn('status === "need_manual" && isUnfinishedTask(task)', active_task)
+        self.assertIn("activeSocialAutomationTask(task)", refresh_check)
+        self.assertNotIn('["queued", "running"].includes', refresh_check)
+
     def test_pageshow_and_focus_share_identity_revalidation(self):
         revalidation = self._section("async function revalidateConsoleIdentity()", "async function loadSetupStatus()")
         self.assertIn('api("/api/me")', revalidation)

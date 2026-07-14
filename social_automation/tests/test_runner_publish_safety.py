@@ -172,6 +172,10 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         page.evaluate.return_value = ["https://www.threads.net/@alice/post/LATEST", "https://www.threads.net/@alice/post/OLDER"]
         self.assertEqual(runner._find_latest_threads_post_permalink(page), "https://www.threads.net/@alice/post/LATEST")
+        self.assertEqual(
+            runner._find_threads_post_permalinks(page),
+            ["https://www.threads.net/@alice/post/LATEST", "https://www.threads.net/@alice/post/OLDER"],
+        )
 
     def test_threads_profile_url_prefers_logged_in_navigation_handle(self):
         page = _Page("https://www.threads.net/")
@@ -219,6 +223,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             mock.patch.object(runner, "_dismiss_threads_compose_dialogs"),
             mock.patch.object(runner, "_goto"),
             mock.patch.object(runner, "_find_threads_post_permalink", return_value=old_permalink),
+            mock.patch.object(runner, "_find_latest_threads_post_permalink", return_value=old_permalink),
             mock.patch.object(runner.time, "time", side_effect=[0, 0, 91]),
             mock.patch.object(runner, "_sleep_between"),
         ):
@@ -233,12 +238,58 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertFalse(result["confirmed"])
 
+    def test_threads_caption_confirmation_rejects_older_matching_post(self):
+        latest_before = "https://www.threads.net/@alice/post/LATEST_BEFORE"
+        older_match = "https://www.threads.net/@alice/post/OLDER_MATCH"
+        page = _Page("https://www.threads.net/@alice")
+        with (
+            mock.patch.object(runner, "_dismiss_threads_compose_dialogs"),
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_find_threads_post_permalink", return_value=older_match),
+            mock.patch.object(runner, "_find_latest_threads_post_permalink", return_value=latest_before),
+            mock.patch.object(runner.time, "time", side_effect=[0, 0, 91]),
+            mock.patch.object(runner, "_sleep_between"),
+        ):
+            result = runner._wait_for_threads_own_post(
+                page,
+                "reused post body",
+                _Logger(),
+                {"username": "alice"},
+                {"profile_confirm_seconds": 90},
+                previous_permalinks={latest_before},
+            )
+
+        self.assertFalse(result["confirmed"])
+
+    def test_threads_caption_confirmation_requires_readable_baseline(self):
+        new_permalink = "https://www.threads.net/@alice/post/NEW"
+        page = _Page("https://www.threads.net/@alice")
+        with (
+            mock.patch.object(runner, "_dismiss_threads_compose_dialogs"),
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_find_threads_post_permalink", return_value=new_permalink),
+            mock.patch.object(runner, "_find_latest_threads_post_permalink", return_value=new_permalink),
+            mock.patch.object(runner.time, "time", side_effect=[0, 0, 91]),
+            mock.patch.object(runner, "_sleep_between"),
+        ):
+            result = runner._wait_for_threads_own_post(
+                page,
+                "new post body",
+                _Logger(),
+                {"username": "alice"},
+                {"profile_confirm_seconds": 90},
+                previous_permalinks=None,
+            )
+
+        self.assertFalse(result["confirmed"])
+
     def test_threads_confirmation_refreshes_profile_while_waiting_for_delayed_post(self):
         page = mock.Mock(url="https://www.threads.net/@alice")
         with (
             mock.patch.object(runner, "_dismiss_threads_compose_dialogs"),
             mock.patch.object(runner, "_goto"),
             mock.patch.object(runner, "_find_threads_post_permalink", return_value=""),
+            mock.patch.object(runner, "_find_latest_threads_post_permalink", return_value=""),
             mock.patch.object(runner.time, "time", side_effect=[0, 0, 1, 2, 9, 11, 91]),
             mock.patch.object(runner, "_sleep_between"),
         ):
@@ -288,7 +339,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
                 "_wait_for_threads_own_post",
                 return_value={"confirmed": False, "url": "https://www.threads.net/@alice"},
             ),
-            mock.patch.object(runner, "_find_latest_threads_post_permalink", return_value="https://www.threads.net/@alice/post/OLD"),
+            mock.patch.object(runner, "_find_threads_post_permalinks", return_value=["https://www.threads.net/@alice/post/OLD"]),
             mock.patch.object(runner, "_resolve_threads_profile_url", return_value="https://www.threads.net/@alice"),
             mock.patch.object(runner, "_screenshot", return_value="manual.png") as screenshot,
         ):
@@ -330,7 +381,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
                 "_wait_for_threads_own_post",
                 return_value={"confirmed": True, "url": permalink, "reason": "matched caption"},
             ) as confirm_profile,
-            mock.patch.object(runner, "_find_latest_threads_post_permalink", return_value="https://www.threads.net/@alice/post/OLD"),
+            mock.patch.object(runner, "_find_threads_post_permalinks", return_value=["https://www.threads.net/@alice/post/OLD"]),
             mock.patch.object(runner, "_resolve_threads_profile_url", return_value=resolved_profile),
             mock.patch.object(runner, "_capture_threads_publish_evidence", return_value="done.png") as screenshot,
         ):

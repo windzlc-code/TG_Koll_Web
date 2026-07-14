@@ -2269,9 +2269,14 @@ def _find_threads_post_permalink(page, caption: str) -> str:
 
 
 def _find_latest_threads_post_permalink(page) -> str:
+    permalinks = _find_threads_post_permalinks(page)
+    return permalinks[0] if permalinks else ""
+
+
+def _find_threads_post_permalinks(page) -> list[str] | None:
     current_url = _normalize_threads_post_permalink(getattr(page, "url", ""))
     if current_url:
-        return current_url
+        return [current_url]
     try:
         candidates = page.evaluate(
             r"""() => Array.from(document.querySelectorAll('a[href]'))
@@ -2279,12 +2284,13 @@ def _find_latest_threads_post_permalink(page) -> str:
                 .filter(href => /\/@[^/]+\/(?:post|thread)\/[^/?#]+/i.test(href))"""
         )
     except Exception:
-        return ""
+        return None
+    permalinks: list[str] = []
     for candidate in candidates if isinstance(candidates, list) else []:
         permalink = _normalize_threads_post_permalink(candidate)
-        if permalink:
-            return permalink
-    return ""
+        if permalink and permalink not in permalinks:
+            permalinks.append(permalink)
+    return permalinks
 
 
 def _wait_for_threads_publish_success(page, logger: AutomationLogger) -> dict[str, Any]:
@@ -2421,7 +2427,7 @@ def _resolve_threads_profile_url(page, account: dict[str, Any] | None = None) ->
     return _threads_profile_url(account)
 
 
-def _wait_for_threads_own_post(page, caption: str, logger: AutomationLogger, account: dict[str, Any] | None = None, payload: dict[str, Any] | None = None, previous_permalink: str = "", profile_url: str = "") -> dict[str, Any]:
+def _wait_for_threads_own_post(page, caption: str, logger: AutomationLogger, account: dict[str, Any] | None = None, payload: dict[str, Any] | None = None, previous_permalink: str = "", profile_url: str = "", previous_permalinks: set[str] | None = None) -> dict[str, Any]:
     _dismiss_threads_compose_dialogs(page, logger)
     target_url = _normalize_threads_profile_url(profile_url) or _resolve_threads_profile_url(page, account)
     # Threads can render a just-submitted media post on the profile noticeably later
@@ -2430,6 +2436,13 @@ def _wait_for_threads_own_post(page, caption: str, logger: AutomationLogger, acc
     confirm_seconds = _safe_int((payload or {}).get("profile_confirm_seconds") or os.getenv("SOCIAL_AUTOMATION_THREADS_PROFILE_CONFIRM_SECONDS"), 90)
     confirm_seconds = max(15, min(confirm_seconds, 120))
     nav_timeout_ms = max(3000, min(confirm_seconds * 1000, 12000))
+    normalized_previous = _normalize_threads_post_permalink(previous_permalink)
+    baseline_known = previous_permalinks is not None or bool(normalized_previous)
+    baseline_permalinks = {
+        normalized
+        for value in (previous_permalinks or set()) | ({previous_permalink} if previous_permalink else set())
+        if (normalized := _normalize_threads_post_permalink(value))
+    }
     try:
         _goto(page, target_url, logger, "threads_publish_profile", timeout_ms=nav_timeout_ms, networkidle_ms=2500)
     except Exception as exc:
@@ -2441,8 +2454,10 @@ def _wait_for_threads_own_post(page, caption: str, logger: AutomationLogger, acc
         if now >= deadline:
             break
         attempt += 1
-        permalink = _find_threads_post_permalink(page, caption) if str(caption or "").strip() else _find_latest_threads_post_permalink(page)
-        if permalink and permalink != _normalize_threads_post_permalink(previous_permalink):
+        latest_permalink = _find_latest_threads_post_permalink(page)
+        permalink = _find_threads_post_permalink(page, caption) if str(caption or "").strip() else latest_permalink
+        is_latest_caption_match = not str(caption or "").strip() or permalink == latest_permalink
+        if baseline_known and permalink and permalink not in baseline_permalinks and is_latest_caption_match:
             return {"confirmed": True, "reason": "已在账号主页定位到本次发布帖子的链接。", "url": permalink}
         _sleep_between(1.8, 2.6)
         if attempt % 3 == 0:
@@ -2467,15 +2482,16 @@ def _capture_threads_publish_evidence(page, permalink: str, caption: str, screen
     return _screenshot(page, screenshot_dir, task, "publish_done", logger)
 
 
-def _capture_threads_profile_baseline(page, profile_url: str, logger: AutomationLogger) -> str:
+def _capture_threads_profile_baseline(page, profile_url: str, logger: AutomationLogger) -> set[str] | None:
     if not profile_url:
-        return ""
+        return None
     try:
         _goto(page, profile_url, logger, "threads_publish_baseline", timeout_ms=12000, networkidle_ms=2500)
-        return _find_latest_threads_post_permalink(page)
+        permalinks = _find_threads_post_permalinks(page)
+        return set(permalinks) if permalinks is not None else None
     except Exception as exc:
         logger.log("debug", "threads_publish_baseline", "发布前未能读取账号主页最新帖子，将继续使用正文确认。", {"error": str(exc)[:500]})
-        return ""
+        return None
 
 
 def _run_threads_publish_post(page, task, payload, screenshot_dir, logger, account: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -2490,7 +2506,7 @@ def _run_threads_publish_post(page, task, payload, screenshot_dir, logger, accou
     _goto(page, THREADS_HOME, logger, "threads_publish_open")
     _dismiss_threads_compose_dialogs(page, logger)
     profile_url = _resolve_threads_profile_url(page, account)
-    previous_latest_permalink = _capture_threads_profile_baseline(page, profile_url, logger)
+    previous_permalinks = _capture_threads_profile_baseline(page, profile_url, logger)
     _goto(page, THREADS_HOME, logger, "threads_publish_open")
     _dismiss_threads_compose_dialogs(page, logger)
     try:
@@ -2538,7 +2554,7 @@ def _run_threads_publish_post(page, task, payload, screenshot_dir, logger, accou
     permalink = _normalize_threads_post_permalink(success.get("url")) if success.get("confirmed") else ""
     profile_confirmation: dict[str, Any] = {}
     if not permalink:
-        profile_confirmation = _wait_for_threads_own_post(page, caption, logger, account, payload, previous_permalink=previous_latest_permalink, profile_url=profile_url)
+        profile_confirmation = _wait_for_threads_own_post(page, caption, logger, account, payload, profile_url=profile_url, previous_permalinks=previous_permalinks)
         if profile_confirmation.get("confirmed"):
             permalink = _normalize_threads_post_permalink(profile_confirmation.get("url"))
     if not permalink:
