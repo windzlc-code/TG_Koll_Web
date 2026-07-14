@@ -217,6 +217,75 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertTrue(ack_event.is_set())
         self_heal.assert_not_called()
 
+    def test_auto_login_does_not_resubmit_or_self_heal_during_submit_grace(self):
+        page = mock.Mock()
+        page.url = "https://www.instagram.com/accounts/login/"
+        cancel_event = threading.Event()
+
+        def cancel_after_grace_poll(_seconds):
+            cancel_event.set()
+
+        with (
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_detect_platform_login_state", return_value={"status": "cookie_expired"}),
+            mock.patch.object(runner, "_auto_submit_login_form", return_value=True) as submit,
+            mock.patch.object(runner, "_verification_visible", return_value=False),
+            mock.patch.object(runner, "_self_heal_login_page") as self_heal,
+            mock.patch.object(runner.time, "time", return_value=0),
+            mock.patch.object(runner.time, "monotonic", side_effect=[100, 101]),
+            mock.patch.object(runner.time, "sleep", side_effect=cancel_after_grace_poll),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "取消"):
+                runner._run_open_login(
+                    page,
+                    {"id": "auto-submit-grace"},
+                    {},
+                    {
+                        "login_wait_seconds": 30,
+                        "auto_submit": True,
+                        "submit_grace_seconds": 30,
+                    },
+                    Path("."),
+                    _Logger(),
+                    "instagram",
+                    cancel_event=cancel_event,
+                )
+
+        submit.assert_called_once()
+        self_heal.assert_not_called()
+
+    def test_delayed_verification_is_detected_before_invalid_credentials_self_heal(self):
+        page = mock.Mock()
+        page.url = "https://www.instagram.com/challenge/"
+        event = threading.Event()
+        ack_event = threading.Event()
+        with (
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_detect_platform_login_state", return_value={"status": "invalid_credentials"}),
+            mock.patch.object(runner, "_verification_visible", return_value=True),
+            mock.patch.object(runner, "_screenshot", return_value="verification.png"),
+            mock.patch.object(runner, "_wait_or_raise_manual", return_value={"status": "need_verification"}),
+            mock.patch.object(runner, "_self_heal_login_page") as self_heal,
+        ):
+            result = runner._run_open_login(
+                page,
+                {"id": "delayed-verification"},
+                {},
+                {"login_wait_seconds": 30, "auto_submit": True},
+                Path("."),
+                _Logger(),
+                "instagram",
+                context_control={
+                    "manual_takeover_event": event,
+                    "manual_takeover_ack_event": ack_event,
+                },
+            )
+
+        self.assertEqual(result["status"], "need_verification")
+        self.assertTrue(event.is_set())
+        self.assertTrue(ack_event.is_set())
+        self_heal.assert_not_called()
+
     def test_manual_takeover_during_submit_lookup_never_falls_back_to_enter(self):
         page = _Page(url="https://www.instagram.com/accounts/login/")
         event = threading.Event()

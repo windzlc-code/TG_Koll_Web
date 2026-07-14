@@ -1215,6 +1215,7 @@ def _run_open_login(
     auto_submit = bool(payload.get("auto_submit") or payload.get("login_password") or payload.get("password"))
     max_login_attempts = _int_payload_or_env(payload, "max_login_attempts", "SOCIAL_AUTOMATION_LOGIN_MAX_ATTEMPTS", 4, 1, 8)
     max_self_heal_attempts = _int_payload_or_env(payload, "max_self_heal_attempts", "SOCIAL_AUTOMATION_LOGIN_SELF_HEAL_ATTEMPTS", 5, 0, 12)
+    submit_grace_seconds = _int_payload_or_env(payload, "submit_grace_seconds", "SOCIAL_AUTOMATION_LOGIN_SUBMIT_GRACE_SECONDS", 30, 5, 120)
     wait_for_manual = bool(payload.get("wait_for_manual", True))
     manual_only_on_verification = bool(payload.get("manual_only_on_verification", False))
     if platform == "threads" and not auto_submit:
@@ -1227,6 +1228,7 @@ def _run_open_login(
     verification_hits = 0
     invalid_hits = 0
     verification_logged = False
+    last_submit_monotonic: float | None = None
     while time.time() < deadline:
         _raise_if_cancelled(cancel_event)
         if auto_submit and _manual_takeover_requested(context_control):
@@ -1249,6 +1251,11 @@ def _run_open_login(
                 "",
                 last_status,
             )
+        post_submit_waiting = bool(
+            last_submit_monotonic is not None
+            and (time.monotonic() - last_submit_monotonic) < submit_grace_seconds
+        )
+        post_submit_grace_expired = bool(last_submit_monotonic is not None and not post_submit_waiting)
         try:
             last_status = _detect_platform_login_state(page, platform)
             if platform == "threads" and not auto_submit:
@@ -1266,8 +1273,38 @@ def _run_open_login(
                     )
                     return {"ok": True, "status": "ready", "screenshot_path": shot, "details": stable_status}
                 last_status = stable_status
+            if _verification_visible(page):
+                verification_hits += 1
+                _request_manual_takeover(context_control)
+                if not verification_logged:
+                    shot = _screenshot(page, screenshot_dir, task, "login_verification_required", logger)
+                    logger.log(
+                        "warn",
+                        "login_verification_required",
+                        "检测到验证码或安全挑战，正在等待人工在浏览器中处理。",
+                        {"url": str(page.url or ""), "screenshot_path": shot},
+                        shot,
+                    )
+                    verification_logged = True
+                return _wait_or_raise_manual(
+                    page,
+                    task,
+                    screenshot_dir,
+                    logger,
+                    platform,
+                    cancel_event,
+                    f"{_platform_name(platform)} 需要人工验证，浏览器会保持打开直到验证完成或任务取消。",
+                    "need_verification",
+                    shot,
+                    last_status,
+                    wait_for_manual,
+                    manual_only_on_verification,
+                )
             if last_status.get("status") == "invalid_credentials":
                 invalid_hits += 1
+                if auto_submit and post_submit_waiting and invalid_hits < 2:
+                    time.sleep(3)
+                    continue
                 if auto_submit and invalid_hits < 2 and self_heal_attempts < max_self_heal_attempts:
                     self_heal_attempts += 1
                     _self_heal_login_page(page, platform, logger, task, screenshot_dir, str(last_status.get("reason") or "invalid_credentials"), self_heal_attempts, cancel_event, context_control)
@@ -1322,6 +1359,9 @@ def _run_open_login(
                     {"url": str(page.url or ""), "screenshot_path": shot, "details": last_status},
                     shot,
                 )
+                if auto_submit and post_submit_waiting:
+                    time.sleep(3)
+                    continue
                 if auto_submit:
                     raise AutoLoginFailedError(
                         f"{_platform_name(platform)} returned a temporary error page; open a manual login session and try again.",
@@ -1342,10 +1382,16 @@ def _run_open_login(
                     wait_for_manual,
                     manual_only_on_verification,
                 )
-            if auto_submit and login_attempts < max_login_attempts and str(last_status.get("status") or "") != "need_verification":
+            if (
+                auto_submit
+                and not post_submit_waiting
+                and not post_submit_grace_expired
+                and login_attempts < max_login_attempts
+                and str(last_status.get("status") or "") != "need_verification"
+            ):
                 if _auto_submit_login_form(page, platform, payload, logger, task, screenshot_dir, context_control):
                     login_attempts += 1
-                    time.sleep(3)
+                    last_submit_monotonic = time.monotonic()
                     continue
                 elif _manual_takeover_requested(context_control):
                     continue
@@ -1353,33 +1399,6 @@ def _run_open_login(
                     self_heal_attempts += 1
                     _self_heal_login_page(page, platform, logger, task, screenshot_dir, "auto_login_form_not_ready", self_heal_attempts, cancel_event, context_control)
                     continue
-            if _verification_visible(page):
-                verification_hits += 1
-                _request_manual_takeover(context_control)
-                if not verification_logged:
-                    shot = _screenshot(page, screenshot_dir, task, "login_verification_required", logger)
-                    logger.log(
-                        "warn",
-                        "login_verification_required",
-                        "检测到验证码或安全挑战，正在等待人工在浏览器中处理。",
-                        {"url": str(page.url or ""), "screenshot_path": shot},
-                        shot,
-                    )
-                    verification_logged = True
-                return _wait_or_raise_manual(
-                    page,
-                    task,
-                    screenshot_dir,
-                    logger,
-                    platform,
-                    cancel_event,
-                    f"{_platform_name(platform)} 需要人工验证，浏览器会保持打开直到验证完成或任务取消。",
-                    "need_verification",
-                    shot,
-                    last_status,
-                    wait_for_manual,
-                    manual_only_on_verification,
-                )
         except NeedManualError:
             raise
         except Exception as exc:
@@ -1389,6 +1408,11 @@ def _run_open_login(
             logger.log("warn", "open_login_poll", f"登录窗口状态检查失败：{exc}")
         # A manual login session belongs to the user.  Do not press Escape,
         # reload, or navigate away from the page they are actively handling.
+        if auto_submit and post_submit_waiting:
+            time.sleep(3)
+            continue
+        if post_submit_grace_expired:
+            last_submit_monotonic = None
         if auto_submit and self_heal_attempts < max_self_heal_attempts:
             self_heal_attempts += 1
             _self_heal_login_page(page, platform, logger, task, screenshot_dir, "login_state_not_ready", self_heal_attempts, cancel_event, context_control)
