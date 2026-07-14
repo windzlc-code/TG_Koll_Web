@@ -1181,7 +1181,10 @@ def _wait_or_raise_manual(
     wait_for_manual: bool,
     manual_only_on_verification: bool = False,
 ) -> dict[str, Any]:
-    if wait_for_manual and (not manual_only_on_verification or status == "need_verification"):
+    if wait_for_manual and (
+        not manual_only_on_verification
+        or status in {"need_verification", "invalid_credentials"}
+    ):
         return _wait_for_manual_login_completion(
             page,
             task,
@@ -1233,7 +1236,6 @@ def _run_open_login(
     login_attempts = 0
     self_heal_attempts = 0
     verification_hits = 0
-    invalid_hits = 0
     verification_logged = False
     last_submit_monotonic: float | None = None
     while time.time() < deadline:
@@ -1308,14 +1310,6 @@ def _run_open_login(
                     manual_only_on_verification,
                 )
             if last_status.get("status") == "invalid_credentials":
-                invalid_hits += 1
-                if auto_submit and post_submit_waiting and invalid_hits < 2:
-                    time.sleep(3)
-                    continue
-                if auto_submit and invalid_hits < 2 and self_heal_attempts < max_self_heal_attempts:
-                    self_heal_attempts += 1
-                    _self_heal_login_page(page, platform, logger, task, screenshot_dir, str(last_status.get("reason") or "invalid_credentials"), self_heal_attempts, cancel_event, context_control)
-                    continue
                 _request_manual_takeover(context_control)
                 shot = _screenshot(page, screenshot_dir, task, "login_invalid_credentials", logger)
                 return _wait_or_raise_manual(
@@ -1326,7 +1320,7 @@ def _run_open_login(
                     platform,
                     cancel_event,
                     f"{_platform_name(platform)} 保存的账号密码被拒绝，请在打开的浏览器中手动修正并继续。",
-                    "cookie_expired",
+                    "invalid_credentials",
                     shot,
                     last_status,
                     wait_for_manual,

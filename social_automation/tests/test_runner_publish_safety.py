@@ -339,6 +339,46 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertTrue(ack_event.is_set())
         self_heal.assert_not_called()
 
+    def test_invalid_credentials_immediately_switches_to_manual_without_retry(self):
+        page = mock.Mock()
+        page.url = "https://www.instagram.com/accounts/login/"
+        event = threading.Event()
+        ack_event = threading.Event()
+        with (
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_detect_platform_login_state", return_value={"status": "invalid_credentials"}),
+            mock.patch.object(runner, "_verification_visible", return_value=False),
+            mock.patch.object(runner, "_screenshot", return_value="invalid.png"),
+            mock.patch.object(runner, "_wait_for_manual_login_completion", return_value={"status": "invalid_credentials"}) as wait_manual,
+            mock.patch.object(runner, "_auto_submit_login_form") as submit,
+            mock.patch.object(runner, "_self_heal_login_page") as self_heal,
+        ):
+            result = runner._run_open_login(
+                page,
+                {"id": "invalid-credentials"},
+                {},
+                {
+                    "login_wait_seconds": 30,
+                    "auto_submit": True,
+                    "wait_for_manual": True,
+                    "manual_only_on_verification": True,
+                },
+                Path("."),
+                _Logger(),
+                "instagram",
+                context_control={
+                    "manual_takeover_event": event,
+                    "manual_takeover_ack_event": ack_event,
+                },
+            )
+
+        self.assertEqual(result["status"], "invalid_credentials")
+        self.assertTrue(event.is_set())
+        self.assertTrue(ack_event.is_set())
+        wait_manual.assert_called_once()
+        submit.assert_not_called()
+        self_heal.assert_not_called()
+
     def test_manual_takeover_during_submit_lookup_never_falls_back_to_enter(self):
         page = _Page(url="https://www.instagram.com/accounts/login/")
         event = threading.Event()

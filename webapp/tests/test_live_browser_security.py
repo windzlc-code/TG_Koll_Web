@@ -243,7 +243,7 @@ def test_open_login_http_rejects_non_boolean_auto_submit(auto_submit):
 
 
 @pytest.mark.parametrize("payload", [{}, {"auto_submit": False}, {"auto_submit": True}])
-def test_open_login_http_accepts_manual_and_boolean_auto_submit(payload):
+def test_open_login_http_always_starts_automatic_mode(payload):
     client = _security_test_client()
     with (
         mock.patch.object(social_automation_api, "_require_account_access"),
@@ -260,7 +260,7 @@ def test_open_login_http_accepts_manual_and_boolean_auto_submit(payload):
 
     assert response.status_code == 200
     submitted = create_task.call_args.args[2]
-    assert submitted["auto_submit"] is payload.get("auto_submit", True)
+    assert submitted["auto_submit"] is True
 
 
 def test_live_browser_mode_endpoint_requests_manual_takeover():

@@ -530,8 +530,8 @@ def register_social_automation_routes(app: FastAPI) -> None:
         body = payload if isinstance(payload, dict) else {}
         task_payload = body.get("payload") if isinstance(body.get("payload"), dict) else body
         task_payload = dict(task_payload or {})
-        task_payload.setdefault("auto_submit", True)
         _validate_open_login_payload(task_payload)
+        task_payload["auto_submit"] = True
         _validate_user_task_media_paths(task_payload, user)
         task_payload.setdefault("login_wait_seconds", wait_seconds)
         return {"ok": True, "task": create_account_task(account_id, "open_login", task_payload)}
@@ -2420,7 +2420,8 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
         raise HTTPException(status_code=400, detail=f"不支持的自动化任务类型: {task_type}")
     task_payload = dict(payload.payload or {})
     if task_type == "open_login":
-        task_payload.setdefault("auto_submit", True)
+        _validate_open_login_payload(task_payload)
+        task_payload["auto_submit"] = True
     auto_submit = _validate_open_login_payload(task_payload) if task_type == "open_login" else False
     now = _now()
     scheduled_at = _parse_schedule(payload.scheduled_at)
