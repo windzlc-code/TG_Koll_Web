@@ -46,7 +46,8 @@ function adminWorkspaceLiveBrowserUrl(value) {
   const hadLeadingSlash = nestedPath.startsWith("/");
   const nestedUrl = new URL(nestedPath, location.origin);
   if (nestedUrl.pathname.startsWith("/api/")) {
-    nestedUrl.searchParams.set("admin_workspace_user_id", ADMIN_WORKSPACE_USER_ID);
+    if (ADMIN_WORKSPACE_USER_ID) nestedUrl.searchParams.set("admin_workspace_user_id", ADMIN_WORKSPACE_USER_ID);
+    if (ADMIN_CONSOLE_SESSION) nestedUrl.searchParams.set("admin_console", "1");
     const renderedPath = `${nestedUrl.pathname}${nestedUrl.search}${nestedUrl.hash}`;
     url.searchParams.set("path", hadLeadingSlash ? renderedPath : renderedPath.replace(/^\//, ""));
   }
