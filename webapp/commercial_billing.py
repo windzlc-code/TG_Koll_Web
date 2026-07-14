@@ -749,7 +749,14 @@ def order_public(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def list_orders(conn: sqlite3.Connection, *, user_id: int | None = None, status: str = "", limit: int = 100) -> list[dict[str, Any]]:
+def list_orders(
+    conn: sqlite3.Connection,
+    *,
+    user_id: int | None = None,
+    status: str = "",
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
     clauses: list[str] = []
     params: list[Any] = []
     if user_id is not None:
@@ -759,7 +766,12 @@ def list_orders(conn: sqlite3.Connection, *, user_id: int | None = None, status:
         clauses.append("status = ?")
         params.append(str(status))
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    rows = conn.execute(f"SELECT * FROM billing_orders {where} ORDER BY created_at DESC LIMIT ?", (*params, min(max(int(limit), 1), 500))).fetchall()
+    safe_limit = min(max(int(limit), 1), 500)
+    safe_offset = max(int(offset), 0)
+    rows = conn.execute(
+        f"SELECT * FROM billing_orders {where} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+        (*params, safe_limit, safe_offset),
+    ).fetchall()
     return [order_public(row) for row in rows]
 
 

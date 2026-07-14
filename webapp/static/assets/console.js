@@ -4261,7 +4261,7 @@ function billingMoney(item = {}, root = {}) {
 function billingStatusMeta(status) {
   const clean = String(status || "pending").toLowerCase();
   const labels = {
-    pending: "待付款审核",
+    pending: "待审批",
     approved: "已生效",
     active: "生效中",
     paid: "已付款",
@@ -4273,7 +4273,7 @@ function billingStatusMeta(status) {
   const tone = ["approved", "active", "paid"].includes(clean)
     ? "is-success"
     : ["rejected", "cancelled", "canceled", "expired"].includes(clean) ? "is-danger" : "is-warning";
-  return { clean, label: labels[clean] || status || "待处理", tone };
+  return { clean, label: labels[clean] || status || "待审批", tone };
 }
 
 function billingSummaryData() {
@@ -4317,7 +4317,7 @@ function renderBillingSummary() {
     { label: "算力余额", value: `${numberText(creditPoints)} 点`, note: billingMode === "legacy" ? "旧版计费模式" : "可用算力" },
     { label: "当前订阅", value: planName, note: legacyMode ? "免订阅过渡模式" : (periodEnd ? `有效至 ${formatTime(periodEnd)}` : (subscriptionStatus?.label || (summary.subscription_active ? "生效中" : "尚未生效"))) },
     { label: "图片额度", value: `${numberText(imageRemaining)} 张`, note: imageQuota.monthly_remaining != null ? `月度 ${numberText(imageQuota.monthly_remaining)} · 长期 ${numberText(imageQuota.permanent_remaining)}` : "优先抵扣免费额度" },
-    { label: "待处理订单", value: numberText(pendingOrders), note: "线下付款待审核" },
+    { label: "待审批申请", value: numberText(pendingOrders), note: "等待管理员审批" },
   ];
   host.innerHTML = cards.map((card) => `<article class="billing-summary-card"><span>${esc(card.label)}</span><strong>${esc(card.value)}</strong><small>${esc(card.note)}</small></article>`).join("");
 }
@@ -4326,12 +4326,12 @@ function renderBillingOrders() {
   const host = $("billingOrders");
   if (!host) return;
   if (state.billing.loading && !state.billing.loaded) {
-    host.innerHTML = '<div class="billing-loading">正在加载订单...</div>';
+    host.innerHTML = '<div class="billing-loading">正在加载申请...</div>';
     return;
   }
   const orders = billingRows(state.billing.orders, ["orders", "items", "results"]);
   if (!orders.length) {
-    const detail = state.billing.errors.orders?.detail || "暂无订单记录。";
+    const detail = state.billing.errors.orders?.detail || "暂无方案申请记录。";
     host.innerHTML = `<div class="billing-empty">${esc(detail)}</div>`;
     return;
   }
@@ -4343,9 +4343,9 @@ function renderBillingOrders() {
     const cancelable = order.can_cancel === true || status.clean === "pending";
     const busy = state.billing.cancellingOrderId === id;
     return `<article class="billing-order-card">
-      <div class="billing-order-head"><div><strong>${esc(snapshotItem.name || snapshot.name || order.name || order.sku || "线下订单")}</strong><div class="billing-order-meta"><span>${esc(id || "-")}</span><span>${esc(formatTime(order.created_at))}</span></div></div><span class="billing-status ${status.tone}">${esc(status.label)}</span></div>
-      ${order.payment_reference ? `<p class="billing-order-meta">付款参考：${esc(order.payment_reference)}</p>` : ""}
-      <div class="billing-order-foot"><strong>${esc(billingMoney({ amount_ntd_cents: order.amount_ntd_cents ?? order.amount_cents, currency: order.currency }, {}))}</strong>${cancelable ? `<button type="button" class="danger" data-billing-cancel-order="${esc(id)}" ${busy ? "disabled" : ""}>${busy ? "取消中..." : "取消订单"}</button>` : ""}</div>
+      <div class="billing-order-head"><div><strong>${esc(snapshotItem.name || snapshot.name || order.name || order.sku || "方案申请")}</strong><div class="billing-order-meta"><span>${esc(id || "-")}</span><span>${esc(formatTime(order.created_at))}</span></div></div><span class="billing-status ${status.tone}">${esc(status.label)}</span></div>
+      ${order.payment_reference ? `<p class="billing-order-meta">旧版附加资料：${esc(order.payment_reference)}</p>` : ""}
+      <div class="billing-order-foot"><strong>${esc(billingMoney({ amount_ntd_cents: order.amount_ntd_cents ?? order.amount_cents, currency: order.currency }, {}))}</strong>${cancelable ? `<button type="button" class="danger" data-billing-cancel-order="${esc(id)}" ${busy ? "disabled" : ""}>${busy ? "取消中..." : "取消申请"}</button>` : ""}</div>
     </article>`;
   }).join("");
 }
@@ -4367,7 +4367,7 @@ function renderBillingLedger() {
     const amount = Number(entry.asset_type === "credit" && entry.amount_points != null ? entry.amount_points : (entry.amount_units ?? entry.amount ?? 0));
     const asset = String(entry.asset_type || entry.asset || "credit");
     const unit = asset === "image" ? "张" : asset === "subscription" ? "期" : "点";
-    const eventLabels = { opening_balance: "期初余额", reserve: "任务预扣", release: "预扣返还", reservation_refund: "任务退款", order_credit: "订单入账", admin_adjustment: "人工调整", image_grant: "图片额度入账", settled: "任务结算" };
+    const eventLabels = { opening_balance: "期初余额", reserve: "任务预扣", release: "预扣返还", reservation_refund: "任务退款", order_credit: "申请批准入账", credit_pack_approved: "储值申请批准入账", credit_pack_bonus: "储值赠送图片", subscription_period_approved: "订阅申请批准生效", admin_adjustment: "人工调整", image_grant: "图片额度入账", settled: "任务结算" };
     const label = entry.label || entry.description || entry.event_name || eventLabels[entry.event_type] || entry.event_type || "余额调整";
     const sign = amount > 0 ? "+" : "";
     const balanceAfter = entry.asset_type === "credit" && entry.balance_after_points != null ? entry.balance_after_points : entry.balance_after_units;
@@ -4406,9 +4406,9 @@ async function loadBilling({ force = false } = {}) {
 async function cancelBillingOrder(orderId) {
   if (!orderId || state.billing.cancellingOrderId) return;
   const confirmed = await openConsoleModal({
-    title: "取消线下订单",
-    message: "取消后该订单将不再进入付款审核，确定继续吗？",
-    confirmText: "取消订单",
+    title: "取消方案申请",
+    message: "取消后该申请将不再进入管理员审批，确定继续吗？",
+    confirmText: "取消申请",
     danger: true,
   });
   if (!confirmed) return;
@@ -4418,9 +4418,9 @@ async function cancelBillingOrder(orderId) {
     await api(`/api/billing/orders/${encodeURIComponent(orderId)}/cancel`, { method: "POST" });
     state.billing.loaded = false;
     await loadBilling({ force: true });
-    showMsg("billingMsg", "订单已取消", true, { target: { view: "billing" } });
+    showMsg("billingMsg", "方案申请已取消", true, { target: { view: "billing" } });
   } catch (error) {
-    showMsg("billingMsg", error.detail || error.message || "取消订单失败", false, { target: { view: "billing" } });
+    showMsg("billingMsg", error.detail || error.message || "取消申请失败", false, { target: { view: "billing" } });
   } finally {
     state.billing.cancellingOrderId = "";
     renderBillingOrders();
@@ -16911,8 +16911,8 @@ function updateLiveBrowserSessionCard(card, session) {
     button.setAttribute("aria-pressed", active ? "true" : "false");
     if (buttonMode === "manual") {
       button.dataset.liveBrowserModeSession = sessionId;
-      button.textContent = loginMode === "switching" ? "切换中..." : (loginMode === "takeover_timeout" ? "重试接管" : "人工接管");
-      button.disabled = !liveBrowserIsReady(session) || status !== "running" || !["automatic", "takeover_timeout"].includes(loginMode);
+      button.textContent = loginMode === "switching" ? "再次强制接管" : (loginMode === "takeover_timeout" ? "重试接管" : "人工接管");
+      button.disabled = !sessionId || !["running", "need_manual"].includes(status) || loginMode === "manual";
     } else {
       button.disabled = true;
     }
@@ -16971,8 +16971,7 @@ function liveBrowserTaskStatus(session) {
 
 function isManualOpenLoginSession(session) {
   return String(session?.task_type || "").trim().toLowerCase() === "open_login"
-    && liveBrowserTaskStatus(session) === "running"
-    && liveBrowserIsReady(session)
+    && ["running", "need_manual"].includes(liveBrowserTaskStatus(session))
     && Boolean(session?.input_allowed);
 }
 
@@ -16989,14 +16988,13 @@ function renderLiveBrowserModeToggle(session) {
   if (String(session?.task_type || "").trim().toLowerCase() !== "open_login") return "";
   const sessionId = liveBrowserSessionId(session);
   const mode = liveBrowserLoginMode(session);
-  const running = liveBrowserTaskStatus(session) === "running";
-  const browserReady = liveBrowserIsReady(session);
+  const active = ["running", "need_manual"].includes(liveBrowserTaskStatus(session));
   const switching = mode === "switching";
   const takeoverTimedOut = mode === "takeover_timeout";
   return `
     <div class="live-browser-mode-toggle" role="group" aria-label="登录操作模式">
       <button type="button" class="${mode === "automatic" ? "is-active" : ""}" aria-pressed="${mode === "automatic" ? "true" : "false"}" disabled>自动登录</button>
-      <button type="button" class="${mode === "manual" ? "is-active" : ""}${switching || takeoverTimedOut ? " is-pending" : ""}" data-live-browser-mode="manual" data-live-browser-mode-session="${esc(sessionId)}" aria-pressed="${mode === "manual" ? "true" : "false"}" ${running && browserReady && ["automatic", "takeover_timeout"].includes(mode) ? "" : "disabled"}>${switching ? "切换中..." : (takeoverTimedOut ? "重试接管" : "人工接管")}</button>
+      <button type="button" class="${mode === "manual" ? "is-active" : ""}${switching || takeoverTimedOut ? " is-pending" : ""}" data-live-browser-mode="manual" data-live-browser-mode-session="${esc(sessionId)}" aria-pressed="${mode === "manual" ? "true" : "false"}" ${active && sessionId && mode !== "manual" ? "" : "disabled"}>${switching ? "再次强制接管" : (takeoverTimedOut ? "重试接管" : "人工接管")}</button>
     </div>`;
 }
 

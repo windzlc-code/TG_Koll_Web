@@ -1234,6 +1234,10 @@ const adminState = {
   billingCatalogDraftId: null,
   billingOrderRows: [],
   billingPendingCount: 0,
+  billingOrderOffset: 0,
+  billingOrderHasMore: false,
+  billingOrderRequestSequence: 0,
+  billingOrderLoading: false,
   billingSelectedUserId: null,
   billingWalletPoints: new Map(),
   billingLoaded: false,
@@ -2590,8 +2594,8 @@ const BILLING_STATUS_LABELS = {
   draft: "草稿",
   active: "使用中",
   retired: "已停用",
-  pending: "待审核",
-  approved: "已通过",
+  pending: "待审批",
+  approved: "已批准",
   rejected: "已拒绝",
   cancelled: "已取消",
   legacy: "旧额度模式",
@@ -2753,30 +2757,73 @@ async function publishBillingCatalog(versionId) {
   setMsg("billingCatalogMsg", "目录版本已发布", true);
 }
 
-function renderBillingOrders(payload) {
+function renderBillingOrders(payload, { append = false, requestOffset = 0 } = {}) {
   const orders = billingList(payload, ["orders", "items"]);
-  adminState.billingOrderRows = orders;
+  const data = payload?.data && typeof payload.data === "object" ? payload.data : {};
+  const metaValue = (key) => payload?.[key] ?? data?.[key];
+  const numericMeta = (key) => {
+    const value = metaValue(key);
+    if (value === null || value === undefined || value === "") return Number.NaN;
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : Number.NaN;
+  };
+  const rows = append ? [...adminState.billingOrderRows] : [];
+  const rowIndexes = new Map(rows.map((order, index) => [String(order?.id || ""), index]).filter(([id]) => id));
+  orders.forEach((order) => {
+    const id = String(order?.id || "");
+    if (id && rowIndexes.has(id)) {
+      rows[rowIndexes.get(id)] = order;
+      return;
+    }
+    if (id) rowIndexes.set(id, rows.length);
+    rows.push(order);
+  });
+  adminState.billingOrderRows = rows;
   const currentFilter = String(el("billingOrderStatus")?.value || "pending");
-  const pendingCount = Number(payload?.pending_count ?? payload?.data?.pending_count);
+  const pendingCount = Number(
+    metaValue("global_pending_count")
+      ?? metaValue("pending_count"),
+  );
   if (Number.isFinite(pendingCount)) {
     adminState.billingPendingCount = Math.max(0, pendingCount);
   } else if (currentFilter === "pending") {
-    adminState.billingPendingCount = orders.filter((order) => String(order.status || "pending") === "pending").length;
+    adminState.billingPendingCount = rows.filter((order) => String(order.status || "pending") === "pending").length;
   }
-  setText("billingPendingSummary", `待审核 ${adminState.billingPendingCount}`);
+  setText("billingPendingSummary", `待审批 ${adminState.billingPendingCount}`);
+
+  const responseOffset = numericMeta("offset");
+  const nextOffset = numericMeta("next_offset");
+  const total = Number.isFinite(numericMeta("total")) ? numericMeta("total") : numericMeta("total_count");
+  const resolvedOffset = Number.isFinite(responseOffset) ? Math.max(0, responseOffset) : Math.max(0, requestOffset);
+  adminState.billingOrderOffset = Number.isFinite(nextOffset)
+    ? Math.max(0, nextOffset)
+    : resolvedOffset + orders.length;
+  const hasMoreValue = metaValue("has_more");
+  adminState.billingOrderHasMore = typeof hasMoreValue === "boolean"
+    ? hasMoreValue
+    : (Number.isFinite(total) ? adminState.billingOrderOffset < total : false);
+  setText(
+    "billingOrderPageSummary",
+    Number.isFinite(total) ? `已加载 ${rows.length} / ${Math.max(0, total)} 条` : `已加载 ${rows.length} 条`,
+  );
+  const loadMore = el("btnLoadMoreBillingOrders");
+  if (loadMore) {
+    loadMore.hidden = !adminState.billingOrderHasMore;
+    loadMore.disabled = adminState.billingOrderLoading;
+  }
 
   const body = el("billingOrderBody");
   if (!body) return;
   body.replaceChildren();
-  if (!orders.length) {
+  if (!rows.length) {
     const row = document.createElement("tr");
-    const cell = createBillingCell(currentFilter === "all" ? "暂无订单" : "当前状态下没有订单", "admin-billing-empty");
+    const cell = createBillingCell(currentFilter === "all" ? "暂无方案申请" : "当前状态下没有方案申请", "admin-billing-empty");
     cell.colSpan = 7;
     row.appendChild(cell);
     body.appendChild(row);
     return;
   }
-  orders.forEach((order) => {
+  rows.forEach((order) => {
     const row = document.createElement("tr");
     const identity = document.createElement("td");
     const orderId = document.createElement("strong");
@@ -2787,18 +2834,19 @@ function renderBillingOrders(payload) {
     row.appendChild(identity);
     row.appendChild(createBillingCell(`${order.sku || "-"} × ${order.quantity || 1}`));
     row.appendChild(createBillingCell(formatBillingNtd(order.amount_ntd_cents), "admin-billing-money"));
-    const payment = document.createElement("td");
-    const payer = document.createElement("strong");
-    payer.textContent = String(order.payer_name || "-");
-    const reference = document.createElement("span");
-    reference.textContent = String(order.payment_reference || "无付款参考号");
-    payment.append(payer, reference);
+    const application = document.createElement("td");
+    const summary = document.createElement("strong");
+    summary.textContent = String(order.note || "线上方案申请");
+    const detail = document.createElement("span");
+    const legacyPayment = [order.payer_name, order.payment_reference].filter(Boolean).join(" · ");
+    detail.textContent = legacyPayment ? `旧版附加资料：${legacyPayment}` : "在线申请";
+    application.append(summary, detail);
     if (order.proof_path) {
       const proof = document.createElement("span");
-      proof.textContent = `凭证：${String(order.proof_path)}`;
-      payment.appendChild(proof);
+      proof.textContent = `旧版附件：${String(order.proof_path)}`;
+      application.appendChild(proof);
     }
-    row.appendChild(payment);
+    row.appendChild(application);
     const status = String(order.status || "pending").toLowerCase();
     const statusCell = document.createElement("td");
     statusCell.appendChild(createBillingStatus(status));
@@ -2809,7 +2857,7 @@ function renderBillingOrders(payload) {
     if (status === "pending") {
       actions.append(
         createBillingAction("拒绝", "order-reject", order.id, "danger"),
-        createBillingAction("通过", "order-approve", order.id, "primary"),
+        createBillingAction("批准", "order-approve", order.id, "primary"),
       );
     } else {
       actions.textContent = order.review_note || "已处理";
@@ -2819,26 +2867,61 @@ function renderBillingOrders(payload) {
   });
 }
 
-async function loadBillingOrders() {
+async function loadBillingOrders({ append = false } = {}) {
+  if (append && adminState.billingOrderLoading) return null;
   const status = String(el("billingOrderStatus")?.value || "pending");
-  const query = status === "all" ? "" : `?status=${encodeURIComponent(status)}`;
+  const requestOffset = append ? adminState.billingOrderOffset : 0;
+  if (!append) {
+    adminState.billingOrderRows = [];
+    adminState.billingOrderOffset = 0;
+    adminState.billingOrderHasMore = false;
+    setText("billingOrderPageSummary", "正在加载申请...");
+  }
+  const query = new URLSearchParams({ limit: "200", offset: String(requestOffset) });
+  if (status !== "all") query.set("status", status);
+  const requestSequence = ++adminState.billingOrderRequestSequence;
   const body = el("billingOrderBody");
   body?.setAttribute("aria-busy", "true");
-  setMsg("billingOrderMsg", "");
+  adminState.billingOrderLoading = true;
+  const loadMore = el("btnLoadMoreBillingOrders");
+  if (loadMore) {
+    loadMore.disabled = true;
+    if (!append) loadMore.hidden = true;
+    if (append) loadMore.textContent = "加载中...";
+  }
+  if (!append) setMsg("billingOrderMsg", "");
   try {
-    const payload = await api(`/api/admin/billing/orders${query}`);
-    renderBillingOrders(payload || {});
+    const payload = await api(`/api/admin/billing/orders?${query.toString()}`);
+    if (
+      requestSequence !== adminState.billingOrderRequestSequence
+      || status !== String(el("billingOrderStatus")?.value || "pending")
+    ) return null;
+    renderBillingOrders(payload || {}, { append, requestOffset });
     return payload;
+  } catch (error) {
+    if (
+      requestSequence !== adminState.billingOrderRequestSequence
+      || status !== String(el("billingOrderStatus")?.value || "pending")
+    ) return null;
+    throw error;
   } finally {
-    body?.removeAttribute("aria-busy");
+    if (requestSequence === adminState.billingOrderRequestSequence) {
+      adminState.billingOrderLoading = false;
+      body?.removeAttribute("aria-busy");
+      if (loadMore) {
+        loadMore.disabled = false;
+        loadMore.textContent = "加载更多";
+        loadMore.hidden = !adminState.billingOrderHasMore;
+      }
+    }
   }
 }
 
 async function reviewBillingOrder(orderId, status) {
-  const label = status === "approved" ? "通过" : "拒绝";
-  const note = prompt(`${label}订单 ${orderId}。请输入审核备注（可留空）：`, "");
+  const label = status === "approved" ? "批准" : "拒绝";
+  const note = prompt(`${label}方案申请 ${orderId}。请输入审批备注（可留空）：`, "");
   if (note === null) return;
-  if (!confirm(`确认${label}订单 ${orderId} 吗？`)) return;
+  if (!confirm(`确认${label}方案申请 ${orderId} 吗？${status === "approved" ? "批准后客户权益将立即生效。" : ""}`)) return;
   const action = status === "approved" ? "approve" : "reject";
   await api(`/api/admin/billing/orders/${encodeURIComponent(orderId)}/${action}`, {
     method: "POST",
@@ -2846,7 +2929,7 @@ async function reviewBillingOrder(orderId, status) {
     body: JSON.stringify({ note: note.trim() }),
   });
   await loadBillingOrders();
-  setMsg("billingOrderMsg", `订单已${label}`, true);
+  setMsg("billingOrderMsg", `方案申请已${label}`, true);
 }
 
 function createBillingSummaryItem(label, value, tone = "") {
@@ -3846,6 +3929,13 @@ function bindBillingActions() {
   el("btnReloadBillingOrders")?.addEventListener("click", async () => {
     try {
       await loadBillingOrders();
+    } catch (err) {
+      setMsg("billingOrderMsg", getErrorMessage(err), false);
+    }
+  });
+  el("btnLoadMoreBillingOrders")?.addEventListener("click", async () => {
+    try {
+      await loadBillingOrders({ append: true });
     } catch (err) {
       setMsg("billingOrderMsg", getErrorMessage(err), false);
     }

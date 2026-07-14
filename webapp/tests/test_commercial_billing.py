@@ -148,6 +148,38 @@ class CommercialBillingTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual(int(order_count["c"]), 1)
 
+    def test_list_orders_supports_stable_offset_pagination(self):
+        created_ids = []
+        with db_module.db() as conn:
+            for index in range(3):
+                order = commercial_billing.create_order(
+                    conn,
+                    user_id=self.user_id,
+                    sku="credits_100",
+                    quantity=1,
+                    idempotency_key=f"pagination-order-{index}",
+                    now=1_700_000_100 + index,
+                )
+                created_ids.append(order["id"])
+
+            first_page = commercial_billing.list_orders(
+                conn,
+                user_id=self.user_id,
+                status="pending",
+                limit=1,
+                offset=0,
+            )
+            second_page = commercial_billing.list_orders(
+                conn,
+                user_id=self.user_id,
+                status="pending",
+                limit=1,
+                offset=1,
+            )
+
+        self.assertEqual([item["id"] for item in first_page], [created_ids[2]])
+        self.assertEqual([item["id"] for item in second_page], [created_ids[1]])
+
     def test_concurrent_order_approval_credits_wallet_once(self):
         now = 1_700_000_100
         with db_module.db() as conn:

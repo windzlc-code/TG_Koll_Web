@@ -46,7 +46,7 @@
           <p>訂閱取得 Vecto OS 與三帳號服務權限；算力點用於實際內容生成、素材產製與互動任務，兩者獨立結算。</p>
           <div class="pricing-page-hero-actions">
             <a class="button button-primary" href="#plans">查看方案</a>
-            <button class="button button-ghost" type="button" data-open-login>登入購買</button>
+            <button class="button button-ghost" type="button" data-open-login>登入申請</button>
           </div>
         </div>
       </section>
@@ -60,8 +60,8 @@
 
       <section class="pricing-account-strip" id="pricingAccountBar" aria-live="polite">
         <div>
-          <span>購買狀態</span>
-          <strong>登入後即可提交線下付款申請</strong>
+          <span>申請狀態</span>
+          <strong>登入後即可在線提交方案申請，管理員批准後才會生效</strong>
         </div>
         <button class="button button-primary" type="button" data-open-login>帳號登入</button>
       </section>
@@ -153,7 +153,7 @@
         <button class="auth-close" type="button" data-close-login aria-label="關閉">×</button>
         <p class="form-kicker">Vecto OS</p>
         <h2 id="loginTitle">帳號登入</h2>
-        <p class="auth-copy">登入後留在方案頁提交購買申請；帳號資產與消費流水仍在 Web 控制台查看。</p>
+        <p class="auth-copy">登入後留在方案頁提交線上申請；申請送出後先等待管理員批准，不會立即開通或增加算力。</p>
         <form id="homeLoginForm" novalidate>
           <label class="field" for="loginUsername"><span>帳號</span><input id="loginUsername" name="username" autocomplete="username" required /></label>
           <label class="field" for="loginPassword">
@@ -180,22 +180,19 @@
     <div class="pricing-order-overlay" id="pricingOrderModal" aria-hidden="true">
       <section class="pricing-order-dialog" role="dialog" aria-modal="true" aria-labelledby="pricingOrderTitle">
         <button class="pricing-order-close" type="button" data-close-order aria-label="關閉">×</button>
-        <p class="form-kicker">線下付款申請</p>
-        <h2 id="pricingOrderTitle">建立訂單</h2>
+        <p class="form-kicker">線上方案申請</p>
+        <h2 id="pricingOrderTitle">提交方案申請</h2>
         <p id="pricingOrderDescription" class="pricing-order-copy"></p>
+        <p class="pricing-order-copy">送出後會建立待審批申請；管理員批准前，不會開通訂閱、增加算力點或發放圖片額度。</p>
         <form id="pricingOrderForm">
           <div class="pricing-order-grid">
             <label class="field"><span>數量</span><input name="quantity" type="number" min="1" max="50" step="1" value="1" required /></label>
             <label class="field pricing-renewal-field" id="pricingRenewalField" hidden><span>訂閱方式</span><select name="renewal_subscription_id"><option value="">開通新訂閱</option></select></label>
-            <label class="field"><span>匯款人</span><input name="payer_name" maxlength="120" placeholder="姓名或公司名稱" required /></label>
-            <label class="field"><span>匯款參考</span><input name="payment_reference" maxlength="160" placeholder="銀行末五碼或交易編號" required /></label>
-            <label class="field"><span>付款時間</span><input name="paid_at" type="datetime-local" /></label>
-            <label class="field"><span>付款憑證（可選）</span><input name="proof_path" maxlength="500" placeholder="憑證連結或可核對位置" /></label>
           </div>
-          <label class="field"><span>備註</span><textarea name="note" maxlength="1000" rows="3" placeholder="需要管理員注意的事項"></textarea></label>
+          <label class="field"><span>申請備註（可選）</span><textarea name="note" maxlength="1000" rows="3" placeholder="需要管理員注意的方案需求"></textarea></label>
           <div class="pricing-order-actions">
             <button class="button button-ghost" type="button" data-close-order>取消</button>
-            <button class="button button-primary" type="submit">提交付款申請</button>
+            <button class="button button-primary" type="submit">提交申請</button>
           </div>
           <p class="form-status" id="pricingOrderStatus" role="status" aria-live="polite"></p>
         </form>
@@ -203,6 +200,6 @@
     </div>
 
     <script src="/assets/opc/script.js?v=20260714-2"></script>
-    <script src="/assets/opc/pricing.js?v=20260714-1"></script>
+    <script src="/assets/opc/pricing.js?v=20260715-online-apply-v2"></script>
   </body>
 </html>

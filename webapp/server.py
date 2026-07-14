@@ -18512,8 +18512,17 @@ def create_app() -> FastAPI:
 
     @app.get("/api/billing/orders")
     def api_billing_orders(limit: int = 100, user: dict[str, Any] = Depends(get_current_user)):
+        user_id = _workspace_user_id(user)
         with db() as conn:
-            return {"items": commercial_billing.list_orders(conn, user_id=_workspace_user_id(user), limit=limit)}
+            conn.execute("BEGIN")
+            items = commercial_billing.list_orders(conn, user_id=user_id, limit=limit)
+            pending_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) AS c FROM billing_orders WHERE user_id = ? AND status = 'pending'",
+                    (user_id,),
+                ).fetchone()["c"]
+            )
+        return {"items": items, "pending_count": pending_count}
 
     @app.post("/api/billing/orders")
     def api_billing_order_create(payload: BillingOrderCreatePayload, user: dict[str, Any] = Depends(get_current_user)):
@@ -18587,11 +18596,64 @@ def create_app() -> FastAPI:
         status: str = "",
         user_id: int = 0,
         limit: int = 200,
+        offset: int = 0,
         _user: dict[str, Any] = Depends(require_admin),
     ):
+        clean_status = str(status or "").strip().lower()
+        if clean_status not in {"", "pending", "approved", "rejected", "cancelled"}:
+            raise HTTPException(status_code=400, detail="invalid billing order status")
+        target_user_id = int(user_id) if int(user_id or 0) > 0 else None
+        safe_limit = min(max(int(limit or 200), 1), 500)
+        safe_offset = max(int(offset or 0), 0)
+        count_clauses: list[str] = []
+        count_params: list[Any] = []
+        if target_user_id is not None:
+            count_clauses.append("user_id = ?")
+            count_params.append(target_user_id)
+        if clean_status:
+            count_clauses.append("status = ?")
+            count_params.append(clean_status)
+        count_where = f"WHERE {' AND '.join(count_clauses)}" if count_clauses else ""
         with db() as conn:
-            items = commercial_billing.list_orders(conn, user_id=int(user_id) if int(user_id or 0) > 0 else None, status=status, limit=limit)
-        return {"items": items}
+            conn.execute("BEGIN")
+            total = int(
+                conn.execute(
+                    f"SELECT COUNT(*) AS c FROM billing_orders {count_where}",
+                    tuple(count_params),
+                ).fetchone()["c"]
+            )
+            items = commercial_billing.list_orders(
+                conn,
+                user_id=target_user_id,
+                status=clean_status,
+                limit=safe_limit,
+                offset=safe_offset,
+            )
+            user_ids = sorted({int(item.get("user_id") or 0) for item in items if int(item.get("user_id") or 0) > 0})
+            usernames: dict[int, str] = {}
+            if user_ids:
+                placeholders = ",".join("?" for _ in user_ids)
+                user_rows = conn.execute(
+                    f"SELECT id, username FROM users WHERE id IN ({placeholders})",
+                    tuple(user_ids),
+                ).fetchall()
+                usernames = {int(row["id"]): str(row["username"] or "") for row in user_rows}
+            for item in items:
+                item["username"] = usernames.get(int(item.get("user_id") or 0), "")
+            global_pending_count = int(
+                conn.execute("SELECT COUNT(*) AS c FROM billing_orders WHERE status = 'pending'").fetchone()["c"]
+            )
+        has_more = safe_offset + len(items) < total
+        return {
+            "items": items,
+            "total": total,
+            "limit": safe_limit,
+            "offset": safe_offset,
+            "has_more": has_more,
+            "next_offset": safe_offset + len(items) if has_more else None,
+            "global_pending_count": global_pending_count,
+            "pending_count": global_pending_count,
+        }
 
     @app.post("/api/admin/billing/orders/{order_id}/approve")
     def api_admin_billing_order_approve(order_id: str, payload: BillingOrderReviewPayload, user: dict[str, Any] = Depends(require_admin)):

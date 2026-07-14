@@ -3,7 +3,17 @@
   const preview = document.querySelector("#homePricingLayout");
   if (!page && !preview) return;
 
-  const state = { catalog: null, user: null, summary: null, selected: null };
+  const state = {
+    catalog: null,
+    user: null,
+    summary: null,
+    summaryStatus: "idle",
+    orders: [],
+    ordersStatus: "idle",
+    pendingCount: null,
+    selected: null,
+    orderAttempt: null,
+  };
   const list = (value) => Array.isArray(value) ? value : [];
   const object = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : {};
   const escapeHtml = (value) => String(value == null ? "" : value).replace(/[&<>"']/g, (character) => ({
@@ -11,6 +21,49 @@
   }[character]));
   const money = (value) => `NT$${Number(value || 0).toLocaleString("zh-TW", { maximumFractionDigits: 2 })}`;
   const skuOf = (item) => String(item?.sku || "").trim();
+  const newOrderKey = () => `pricing-${Date.now()}-${globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2)}`;
+
+  function orderPayload(form) {
+    const renewalId = String(form.elements.renewal_subscription_id?.value || "");
+    return {
+      sku: skuOf(state.selected),
+      quantity: Number(form.elements.quantity.value || 1),
+      renewal_subscription_ids: renewalId ? [renewalId] : [],
+      note: String(form.elements.note.value || "").trim(),
+    };
+  }
+
+  function orderAttemptFor(payload) {
+    const fingerprint = JSON.stringify(payload);
+    if (!state.orderAttempt || state.orderAttempt.fingerprint !== fingerprint) {
+      state.orderAttempt = { fingerprint, idempotencyKey: newOrderKey() };
+    }
+    return state.orderAttempt;
+  }
+
+  function pendingCountFrom(payload) {
+    const rawCount = payload?.pending_count;
+    const explicit = rawCount === null || rawCount === undefined || rawCount === "" ? Number.NaN : Number(rawCount);
+    if (Number.isInteger(explicit) && explicit >= 0) return explicit;
+    const items = list(payload?.items);
+    return items.length < 100
+      ? items.filter((order) => String(order?.status || "") === "pending").length
+      : null;
+  }
+
+  function orderStatusKnown() {
+    return state.ordersStatus === "ready" && Number.isInteger(state.pendingCount);
+  }
+
+  function submissionBlockReason(item = state.selected) {
+    if (!orderStatusKnown()) {
+      return "申請狀態暫時無法讀取，為避免重複提交，請稍後重新整理再試。";
+    }
+    if (item?.kind === "subscription" && state.summaryStatus !== "ready") {
+      return "訂閱資料暫時無法讀取，為避免錯誤開通或續費，請稍後重新整理再試。";
+    }
+    return "";
+  }
 
   async function request(path, options = {}) {
     const response = await fetch(path, { credentials: "include", ...options });
@@ -90,12 +143,19 @@
     const host = document.querySelector("#pricingAccountBar");
     if (!host) return;
     if (!state.user) {
-      host.innerHTML = `<div><span>購買狀態</span><strong>登入後即可提交線下付款申請</strong></div><button class="button button-primary" type="button" data-open-login>帳號登入</button>`;
+      host.innerHTML = `<div><span>申請狀態</span><strong>登入後即可在線提交方案申請，管理員批准後才會生效</strong></div><button class="button button-primary" type="button" data-open-login>帳號登入</button>`;
       host.querySelector("[data-open-login]")?.addEventListener("click", () => document.querySelector(".header-login")?.click());
       return;
     }
-    const points = Number(state.summary?.points || 0).toLocaleString("zh-TW");
-    host.innerHTML = `<div><span>目前帳號</span><strong>${escapeHtml(state.user.username || "已登入")} · ${points} 點算力</strong></div><a class="button button-primary" href="/console.html?view=billing">查看帳戶明細</a>`;
+    const points = state.summaryStatus === "ready"
+      ? `${Number(state.summary?.points || 0).toLocaleString("zh-TW")} 點算力`
+      : "算力暫時無法讀取";
+    const applicationState = !orderStatusKnown()
+      ? `申請狀態暫時無法讀取 · ${points}`
+      : state.pendingCount
+        ? `待管理員批准 ${state.pendingCount} 項 · ${points}`
+        : `${points} · 可在線提交方案申請`;
+    host.innerHTML = `<div><span>目前帳號</span><strong>${escapeHtml(state.user.username || "已登入")} · ${escapeHtml(applicationState)}</strong></div><a class="button button-primary" href="/console.html?view=billing">查看申請與帳戶明細</a>`;
   }
 
   function closeOrder() {
@@ -119,17 +179,25 @@
     const subscription = object(state.catalog.subscription);
     const item = skuOf(subscription) === sku ? { ...subscription, kind: "subscription" } : list(state.catalog.packages).find((candidate) => skuOf(candidate) === sku);
     if (!item) return;
+    if (state.orderAttempt && skuOf(state.selected) !== skuOf(item)) state.orderAttempt = null;
     state.selected = item;
     const form = document.querySelector("#pricingOrderForm");
     form.reset();
     form.quantity.value = "1";
-    document.querySelector("#pricingOrderDescription").textContent = `申請「${item.name}」，目前單價 ${money(item.price_ntd)}。管理員將按送出時的價格快照審核。`;
+    const submit = form.querySelector("button[type='submit']");
+    const blockReason = submissionBlockReason(item);
+    submit.disabled = Boolean(blockReason);
+    submit.textContent = "提交申請";
+    document.querySelector("#pricingOrderDescription").textContent = `在線申請「${item.name}」，目前單價 ${money(item.price_ntd)}。管理員將按送出時的價格快照審核。`;
     const renewalField = document.querySelector("#pricingRenewalField");
     const renewalSelect = form.elements.renewal_subscription_id;
-    const subscriptions = activeSubscriptions();
+    const subscriptions = state.summaryStatus === "ready" ? activeSubscriptions() : [];
     renewalField.hidden = item.kind !== "subscription";
-    renewalSelect.innerHTML = `<option value="">開通新訂閱</option>${subscriptions.map((entry) => `<option value="${escapeHtml(entry.id)}">續費 ${escapeHtml(entry.plan_sku || entry.id)}</option>`).join("")}`;
-    document.querySelector("#pricingOrderStatus").textContent = "";
+    renewalSelect.disabled = item.kind === "subscription" && state.summaryStatus !== "ready";
+    renewalSelect.innerHTML = renewalSelect.disabled
+      ? '<option value="">訂閱資料暫時無法讀取</option>'
+      : `<option value="">開通新訂閱</option>${subscriptions.map((entry) => `<option value="${escapeHtml(entry.id)}">續費 ${escapeHtml(entry.plan_sku || entry.id)}</option>`).join("")}`;
+    document.querySelector("#pricingOrderStatus").textContent = blockReason;
     const modal = document.querySelector("#pricingOrderModal");
     modal.classList.add("is-open");
     modal.setAttribute("aria-hidden", "false");
@@ -140,11 +208,40 @@
   async function loadAccount() {
     try {
       state.user = await request("/api/auth/me");
-      state.summary = await request("/api/billing/summary");
     } catch (error) {
       if (error.status !== 401) console.warn("Unable to load billing account", error);
       state.user = null;
       state.summary = null;
+      state.summaryStatus = "idle";
+      state.orders = [];
+      state.ordersStatus = "idle";
+      state.pendingCount = null;
+      renderAccount();
+      return;
+    }
+    state.summaryStatus = "loading";
+    state.ordersStatus = "loading";
+    state.pendingCount = null;
+    const [summaryResult, ordersResult] = await Promise.allSettled([
+      request("/api/billing/summary"),
+      request("/api/billing/orders?limit=100"),
+    ]);
+    if (summaryResult.status === "fulfilled") {
+      state.summary = summaryResult.value;
+      state.summaryStatus = "ready";
+    } else {
+      state.summaryStatus = "error";
+      console.warn("Unable to load billing summary", summaryResult.reason);
+    }
+    if (ordersResult.status === "fulfilled") {
+      state.orders = list(ordersResult.value?.items);
+      state.pendingCount = pendingCountFrom(ordersResult.value);
+      state.ordersStatus = Number.isInteger(state.pendingCount) ? "ready" : "error";
+      if (state.ordersStatus === "error") console.warn("Billing applications response has no exact pending count");
+    } else {
+      state.ordersStatus = "error";
+      state.pendingCount = null;
+      console.warn("Unable to load billing applications", ordersResult.reason);
     }
     renderAccount();
   }
@@ -161,27 +258,31 @@
     const form = event.currentTarget;
     const submit = form.querySelector("button[type='submit']");
     const status = document.querySelector("#pricingOrderStatus");
+    const blockReason = submissionBlockReason();
+    if (blockReason) {
+      submit.disabled = true;
+      status.textContent = blockReason;
+      return;
+    }
     submit.disabled = true;
-    status.textContent = "正在提交付款申請";
-    const idempotencyKey = `pricing-${Date.now()}-${globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2)}`;
-    const renewalId = String(form.elements.renewal_subscription_id?.value || "");
+    status.textContent = "正在提交線上申請";
+    const payload = orderPayload(form);
+    const attempt = orderAttemptFor(payload);
+    let submitted = false;
     try {
       const result = await request("/api/billing/orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sku: skuOf(state.selected),
-          quantity: Number(form.elements.quantity.value || 1),
-          renewal_subscription_ids: renewalId ? [renewalId] : [],
-          payer_name: String(form.elements.payer_name.value || "").trim(),
-          payment_reference: String(form.elements.payment_reference.value || "").trim(),
-          paid_at: form.elements.paid_at.value ? Math.floor(new Date(form.elements.paid_at.value).getTime() / 1000) : 0,
-          proof_path: String(form.elements.proof_path.value || "").trim(),
-          note: String(form.elements.note.value || "").trim(),
-          idempotency_key: idempotencyKey,
-        }),
+        body: JSON.stringify({ ...payload, idempotency_key: attempt.idempotencyKey }),
       });
-      status.textContent = `付款申請已建立：${result.order?.id || "等待管理員審核"}`;
+      const order = object(result.order);
+      if (!order.id || String(order.status || "") !== "pending") {
+        throw { detail: "申請已送出，但伺服器未回傳待審批狀態，請在帳戶明細確認。" };
+      }
+      submitted = true;
+      state.orderAttempt = null;
+      submit.textContent = "已提交，待批准";
+      status.textContent = `申請已提交，等待管理員批准：${order.id}。批准前不會開通或增加算力。`;
       const url = new URL(window.location.href);
       url.searchParams.delete("product");
       window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
@@ -191,10 +292,10 @@
         closeOrder();
         openLoginForProduct(skuOf(state.selected));
       } else {
-        status.textContent = error.detail || "付款申請提交失敗";
+        status.textContent = error.detail || "線上申請提交失敗";
       }
     } finally {
-      submit.disabled = false;
+      if (!submitted) submit.disabled = false;
     }
   });
 

@@ -329,10 +329,10 @@
         <div class="section-head">
           <div>
             <h2>额度与计费</h2>
-            <div class="meta">管理商业目录版本、审核线下付款订单，并查看或人工调整客户计费权益。</div>
+            <div class="meta">管理商业目录版本、审核线上方案申请，并查看或人工调整客户计费权益。</div>
           </div>
           <div class="section-head-side">
-            <span class="admin-billing-pending" id="billingPendingSummary">待审核 0</span>
+            <span class="admin-billing-pending" id="billingPendingSummary">待审批 0</span>
             <button id="btnRefreshBilling" class="ghost admin-compact-button" type="button">刷新计费</button>
           </div>
         </div>
@@ -380,39 +380,43 @@
           <section class="admin-config-card admin-billing-panel" aria-labelledby="billingOrdersTitle">
             <div class="admin-billing-panel-head">
               <div>
-                <div class="admin-config-card-title" id="billingOrdersTitle">订单审核</div>
-                <div class="small">核对付款人、付款参考号和订单金额后执行通过或拒绝。</div>
+                <div class="admin-config-card-title" id="billingOrdersTitle">方案申请审批</div>
+                <div class="small">核对客户、申请方案、数量与金额后执行批准或拒绝；批准后权益才会生效。</div>
               </div>
               <div class="admin-billing-toolbar">
-                <label for="billingOrderStatus" class="sr-only">订单状态</label>
+                <label for="billingOrderStatus" class="sr-only">申请状态</label>
                 <select id="billingOrderStatus">
-                  <option value="pending">待审核</option>
-                  <option value="approved">已通过</option>
+                  <option value="pending">待审批</option>
+                  <option value="approved">已批准</option>
                   <option value="rejected">已拒绝</option>
                   <option value="cancelled">已取消</option>
-                  <option value="all">全部订单</option>
+                  <option value="all">全部申请</option>
                 </select>
-                <button id="btnReloadBillingOrders" class="ghost admin-compact-button" type="button">刷新订单</button>
+                <button id="btnReloadBillingOrders" class="ghost admin-compact-button" type="button">刷新申请</button>
               </div>
             </div>
             <div class="table-wrap admin-billing-table-wrap">
               <table class="table admin-billing-table admin-billing-order-table">
-                <caption class="sr-only">商业计费订单审核列表</caption>
+                <caption class="sr-only">线上方案申请审批列表</caption>
                 <thead>
                   <tr>
-                    <th scope="col">订单 / 客户</th>
-                    <th scope="col">商品</th>
+                    <th scope="col">申请 / 客户</th>
+                    <th scope="col">方案</th>
                     <th scope="col">金额</th>
-                    <th scope="col">付款资料</th>
+                    <th scope="col">申请资料</th>
                     <th scope="col">状态</th>
                     <th scope="col">提交时间</th>
                     <th scope="col">操作</th>
                   </tr>
                 </thead>
                 <tbody id="billingOrderBody">
-                  <tr><td colspan="7" class="admin-billing-empty">正在读取订单...</td></tr>
+                  <tr><td colspan="7" class="admin-billing-empty">正在读取申请...</td></tr>
                 </tbody>
               </table>
+            </div>
+            <div class="admin-billing-toolbar" aria-live="polite">
+              <span id="billingOrderPageSummary" class="small">已加载 0 条</span>
+              <button id="btnLoadMoreBillingOrders" class="ghost admin-compact-button" type="button" hidden>加载更多</button>
             </div>
             <div id="billingOrderMsg" class="msg" role="status" aria-live="polite"></div>
           </section>
