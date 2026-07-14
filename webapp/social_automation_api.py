@@ -250,6 +250,7 @@ class SocialTaskPayload(BaseModel):
 
 class SocialAccountPatchPayload(BaseModel):
     persona_id: str | None = None
+    replace_existing_binding: bool = False
     username: str | None = None
     display_name: str | None = None
     profile_dir: str | None = None
@@ -2177,7 +2178,14 @@ def update_social_account(account_id: str, payload: SocialAccountPatchPayload) -
         target_username = str(updates.get("username", existing["username"]) or "").strip().lstrip("@")
         owner_user_id = int(existing["user_id"] or 0)
         if target_persona_id:
-            duplicate = conn.execute(
+            if owner_user_id > 0:
+                persona_owner = conn.execute(
+                    "SELECT 1 FROM persona_owners WHERE archive_id = ? AND user_id = ? LIMIT 1",
+                    (target_persona_id, owner_user_id),
+                ).fetchone()
+                if not persona_owner:
+                    raise HTTPException(status_code=404, detail="人设不存在")
+            duplicates = conn.execute(
                 """
                 SELECT id
                 FROM social_accounts
@@ -2185,12 +2193,40 @@ def update_social_account(account_id: str, payload: SocialAccountPatchPayload) -
                   AND user_id = ?
                   AND persona_id = ?
                   AND platform = ?
-                LIMIT 1
                 """,
                 (account_id, owner_user_id, target_persona_id, target_platform),
-            ).fetchone()
-            if duplicate:
-                raise HTTPException(status_code=409, detail="同一人设在同一平台最多绑定一个账号")
+            ).fetchall()
+            if duplicates:
+                if not payload.replace_existing_binding:
+                    raise HTTPException(status_code=409, detail="同一人设在同一平台最多绑定一个账号")
+            if target_persona_id != str(existing["persona_id"] or "").strip() or duplicates:
+                affected_account_ids = [account_id, *(str(row["id"] or "") for row in duplicates)]
+                placeholders = ",".join("?" for _ in affected_account_ids)
+                active_task = conn.execute(
+                    f"""
+                    SELECT id
+                    FROM social_automation_tasks
+                    WHERE user_id = ?
+                      AND account_id IN ({placeholders})
+                      AND status IN ('preparing', 'queued', 'running', 'need_manual')
+                    LIMIT 1
+                    """,
+                    (owner_user_id, *affected_account_ids),
+                ).fetchone()
+                if active_task:
+                    raise HTTPException(status_code=409, detail="账号有进行中的自动化任务，请停止任务后再切换绑定")
+            if duplicates:
+                try:
+                    conn.execute(
+                        """
+                        UPDATE social_accounts
+                        SET persona_id = '', updated_at = ?
+                        WHERE id != ? AND user_id = ? AND persona_id = ? AND platform = ?
+                        """,
+                        (_now(), account_id, owner_user_id, target_persona_id, target_platform),
+                    )
+                except sqlite3.IntegrityError as exc:
+                    raise HTTPException(status_code=409, detail="原绑定账号与未绑定账号重复，无法自动切换") from exc
         else:
             duplicate = conn.execute(
                 "SELECT id FROM social_accounts WHERE id != ? AND user_id = ? AND persona_id = '' AND platform = ? AND lower(username) = lower(?) LIMIT 1",

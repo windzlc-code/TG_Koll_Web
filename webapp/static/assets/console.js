@@ -382,6 +382,7 @@ const state = {
   accountPoolAccountId: "",
   accountPoolSelectedAccountIds: [],
   accountPoolPersonaId: "",
+  accountPoolBinding: false,
   accountPasswordValues: {},
   accountPasswordVisible: {},
   personaAccountEditingIds: {},
@@ -575,6 +576,7 @@ function clearTenantInMemoryState() {
   state.accountPoolAccountId = "";
   state.accountPoolSelectedAccountIds = [];
   state.accountPoolPersonaId = "";
+  state.accountPoolBinding = false;
   state.accountPasswordValues = {};
   state.accountPasswordVisible = {};
   state.personaAccountEditingIds = {};
@@ -12971,7 +12973,7 @@ function renderPersonaCard(persona, groupId = "", options = {}) {
         </span>`}
       </button>
       ${isMatrix ? `<input class="publish-persona-hidden-check" type="checkbox" data-matrix-persona value="${esc(persona.id)}" ${publishSelected ? "checked" : ""} aria-hidden="true" tabindex="-1" />` : ""}
-      ${isAccountPoolContext ? `<button type="button" class="account-pool-bind-persona" data-account-pool-bind-persona="${esc(persona.id)}" title="绑定所选账号" aria-label="绑定所选账号" ${accountPoolSelectedCount === 1 ? "" : "disabled"}>
+      ${isAccountPoolContext ? `<button type="button" class="account-pool-bind-persona" data-account-pool-bind-persona="${esc(persona.id)}" title="绑定所选账号" aria-label="绑定所选账号" ${accountPoolSelectedCount === 1 && !state.accountPoolBinding ? "" : "disabled"}>
         <svg class="ui-link-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
           <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
           <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
@@ -16367,6 +16369,7 @@ function renderAccountPool() {
 }
 
 async function bindAccountPoolAccountToPersona(personaId = "") {
+  if (state.accountPoolBinding) return;
   const cleanPersonaId = String(personaId || "").trim();
   if (!cleanPersonaId) return;
   const accounts = selectedAccountPoolAccounts();
@@ -16379,40 +16382,26 @@ async function bindAccountPoolAccountToPersona(personaId = "") {
     return;
   }
   const account = accounts[0];
-  const existing = (state.socialAccounts || []).find((item) => (
+  const replacedAccount = (state.socialAccounts || []).find((item) => (
     String(item.id || "") !== String(account.id || "")
     && String(item.persona_id || "").trim() === cleanPersonaId
     && String(item.platform || "").trim().toLowerCase() === String(account.platform || "").trim().toLowerCase()
   ));
-  if (existing) {
-    showMsg("socialMsg", "该人设在当前平台已绑定账号，请先解绑原账号。", false);
-    return;
-  }
-  let bound = 0;
-  let skipped = 0;
-  for (const account of accounts) {
-    const accountPlatform = String(account.platform || "").trim().toLowerCase();
-    const accountUsername = String(account.username || "").trim().toLowerCase();
-    const existing = (state.socialAccounts || []).find((item) => (
-      String(item.id || "") !== String(account.id || "")
-      && String(item.persona_id || "").trim() === cleanPersonaId
-      && String(item.platform || "").trim().toLowerCase() === accountPlatform
-      && String(item.username || "").trim().toLowerCase() === accountUsername
-    ));
-    if (existing) {
-      skipped += 1;
-      continue;
-    }
+  state.accountPoolBinding = true;
+  renderSocialAccounts();
+  try {
     await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(account.id)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ persona_id: cleanPersonaId }),
+      body: JSON.stringify({ persona_id: cleanPersonaId, replace_existing_binding: true }),
     });
     state.accountPoolAccountId = String(account.id || "");
-    bound += 1;
+    await loadSocial({ force: true });
+    showMsg("socialMsg", replacedAccount ? "已切换人设绑定账号。" : "账号已绑定到人设。", true);
+  } finally {
+    state.accountPoolBinding = false;
+    renderSocialAccounts();
   }
-  showMsg("socialMsg", skipped ? `已绑定 ${bound} 个账号，跳过 ${skipped} 个重复账号。` : `已绑定 ${bound} 个账号。`, bound > 0);
-  await loadSocial();
 }
 
 async function runAccountPoolThreadsTask(kind) {

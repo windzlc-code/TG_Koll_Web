@@ -200,6 +200,105 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
             social_api.update_social_account(unbound_two["id"], social_api.SocialAccountPatchPayload(persona_id="persona-2"))
         self.assertEqual(update_error.exception.status_code, 409)
 
+    def test_account_binding_can_atomically_replace_existing_persona_account(self):
+        original = self._account("original-bound", persona_id="persona-switch")
+        replacement = self._account("replacement-unbound")
+
+        with self.assertRaises(HTTPException) as conflict:
+            social_api.update_social_account(
+                replacement["id"],
+                social_api.SocialAccountPatchPayload(persona_id="persona-switch"),
+            )
+        self.assertEqual(conflict.exception.status_code, 409)
+
+        updated = social_api.update_social_account(
+            replacement["id"],
+            social_api.SocialAccountPatchPayload(
+                persona_id="persona-switch",
+                replace_existing_binding=True,
+            ),
+        )
+
+        self.assertEqual(updated["persona_id"], "persona-switch")
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT id, persona_id FROM social_accounts WHERE id IN (?, ?) ORDER BY id",
+                (original["id"], replacement["id"]),
+            ).fetchall()
+        bindings = {account_id: persona_id for account_id, persona_id in rows}
+        self.assertEqual(bindings[original["id"]], "")
+        self.assertEqual(bindings[replacement["id"]], "persona-switch")
+
+    def test_account_binding_replacement_releases_all_legacy_duplicates(self):
+        first = self._account("legacy-first", persona_id="persona-legacy")
+        replacement = self._account("legacy-replacement")
+        second_id = "legacy-second-id"
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO social_accounts(
+                  id, user_id, persona_id, platform, username, profile_dir, status, created_at, updated_at
+                ) VALUES (?, 0, 'persona-legacy', 'threads', 'legacy-second', '', 'pending_login', 1, 1)
+                """,
+                (second_id,),
+            )
+
+        social_api.update_social_account(
+            replacement["id"],
+            social_api.SocialAccountPatchPayload(
+                persona_id="persona-legacy",
+                replace_existing_binding=True,
+            ),
+        )
+
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT id, persona_id FROM social_accounts WHERE id IN (?, ?, ?)",
+                (first["id"], second_id, replacement["id"]),
+            ).fetchall()
+        bindings = {account_id: persona_id for account_id, persona_id in rows}
+        self.assertEqual(bindings[first["id"]], "")
+        self.assertEqual(bindings[second_id], "")
+        self.assertEqual(bindings[replacement["id"]], "persona-legacy")
+
+    def test_account_binding_replacement_rolls_back_on_unbound_username_conflict(self):
+        original = self._account("duplicate-name", persona_id="persona-conflict")
+        self._account("duplicate-name")
+        replacement = self._account("replacement-conflict")
+
+        with self.assertRaises(HTTPException) as caught:
+            social_api.update_social_account(
+                replacement["id"],
+                social_api.SocialAccountPatchPayload(
+                    persona_id="persona-conflict",
+                    replace_existing_binding=True,
+                ),
+            )
+        self.assertEqual(caught.exception.status_code, 409)
+
+        with sqlite3.connect(self.db_path) as conn:
+            bindings = dict(conn.execute(
+                "SELECT id, persona_id FROM social_accounts WHERE id IN (?, ?)",
+                (original["id"], replacement["id"]),
+            ).fetchall())
+        self.assertEqual(bindings[original["id"]], "persona-conflict")
+        self.assertEqual(bindings[replacement["id"]], "")
+
+    def test_account_binding_replacement_rejects_active_tasks(self):
+        original = self._account("active-original", persona_id="persona-active")
+        replacement = self._account("active-replacement")
+        self._claimed_task("active-binding-task", original["id"])
+
+        with self.assertRaises(HTTPException) as caught:
+            social_api.update_social_account(
+                replacement["id"],
+                social_api.SocialAccountPatchPayload(
+                    persona_id="persona-active",
+                    replace_existing_binding=True,
+                ),
+            )
+        self.assertEqual(caught.exception.status_code, 409)
+
     def test_shared_proxy_is_cloned_before_account_specific_edit(self):
         shared = social_api.create_social_proxy(
             social_api.SocialProxyPayload(

@@ -193,6 +193,15 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('loadAutomationTasksShared().catch', task_refresh)
         self.assertNotIn("loadAutomationTasksShared({ force: true })", task_refresh)
 
+    def test_account_pool_bind_replaces_existing_persona_binding_in_one_action(self):
+        bind_account = self._function_source("bindAccountPoolAccountToPersona")
+
+        self.assertIn("replace_existing_binding: true", bind_account)
+        self.assertNotIn("请先解绑原账号", bind_account)
+        self.assertIn("if (state.accountPoolBinding) return", bind_account)
+        self.assertIn("state.accountPoolBinding = true", bind_account)
+        self.assertIn("state.accountPoolBinding = false", bind_account)
+
     def test_customer_persona_generation_does_not_read_admin_runtime_config(self):
         preflight = self._function_source("personaGeneratePreflight")
         self.assertIn("!state.currentUser?.is_admin", preflight)
