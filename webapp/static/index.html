@@ -10,7 +10,7 @@
     />
     <link rel="icon" type="image/png" href="/assets/opc/vecto-logo-ui-icon.png?v=20260711" />
     <link rel="preload" href="/assets/opc/vecto-ai-cockpit.png" as="image" />
-    <link rel="stylesheet" href="/assets/opc/styles.css?v=20260713-2" />
+    <link rel="stylesheet" href="/assets/opc/styles.css?v=20260714-2" />
     <link rel="stylesheet" href="/assets/opc/pricing.css?v=20260714-1" />
   </head>
   <body>
@@ -461,7 +461,20 @@
         <p class="auth-copy">此處僅供已授權用戶登入，成功後直接進入 Web 任務控制台。</p>
         <form id="homeLoginForm" novalidate>
           <label class="field" for="loginUsername"><span>帳號</span><input id="loginUsername" name="username" autocomplete="username" required /></label>
-          <label class="field" for="loginPassword"><span>密碼</span><input id="loginPassword" name="password" type="password" autocomplete="current-password" required /></label>
+          <label class="field" for="loginPassword">
+            <span>密碼</span>
+            <span class="auth-password-field">
+              <input id="loginPassword" name="password" type="password" autocomplete="current-password" required />
+              <button class="auth-password-toggle" type="button" data-login-password-toggle aria-label="顯示密碼" title="顯示密碼" aria-controls="loginPassword" aria-pressed="false">
+                <svg class="auth-eye-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path>
+                  <circle cx="12" cy="12" r="3"></circle>
+                  <path class="auth-eye-slash" d="M4 20L20 4"></path>
+                </svg>
+              </button>
+            </span>
+          </label>
+          <label class="auth-remember" data-login-remember><input name="remember_me" type="checkbox" /> <span>記住帳號與登入狀態</span></label>
           <button class="submit-button" type="submit"><span>進入 Web 任務控制台</span><span aria-hidden="true">→</span></button>
           <p class="form-status" id="loginStatus" role="status" aria-live="polite"></p>
         </form>
@@ -469,7 +482,7 @@
       </section>
     </div>
 
-    <script src="/assets/opc/script.js?v=20260714-1"></script>
+    <script src="/assets/opc/script.js?v=20260714-2"></script>
     <script src="/assets/opc/pricing.js?v=20260714-1"></script>
   </body>
 </html>

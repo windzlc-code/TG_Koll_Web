@@ -334,9 +334,9 @@ class PersonaDashboardApiTests(unittest.TestCase):
             INSERT OR IGNORE INTO social_proxies(
               id, user_id, name, proxy_type, host, port, username, password, country, isp,
               status, last_check_at, last_check_result, created_at, updated_at
-            ) VALUES (?, ?, ?, 'http', '127.0.0.1', 18080, '', '', '', '', 'active', 0, '', ?, ?)
+            ) VALUES (?, ?, ?, 'http', '127.0.0.1', 18080, '', '', '', '', 'active', ?, '{"ok": true}', ?, ?)
             """,
-            (proxy_id, self._admin_user_id(), proxy_id, now, now),
+            (proxy_id, self._admin_user_id(), proxy_id, now, now, now),
         )
         conn.execute(
             """

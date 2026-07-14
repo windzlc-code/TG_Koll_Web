@@ -40,6 +40,12 @@ def session_token_for_request(
     *,
     admin_workspace_user_id: Any = None,
 ) -> str | None:
+    # An explicitly selected admin console must never fall back to the regular
+    # user cookie.  Both sessions can coexist in one browser; after the admin
+    # session is logged out, the admin surface must be unauthorized rather
+    # than silently becoming the regular-user session.
+    if _truthy(request.headers.get(ADMIN_CONSOLE_HEADER)) or _truthy(request.query_params.get(ADMIN_CONSOLE_QUERY)):
+        return str(admin_session_token or "").strip() or None
     if request_uses_admin_session(request, admin_workspace_user_id):
         return str(admin_session_token or session_token or "").strip() or None
     return str(session_token or "").strip() or None

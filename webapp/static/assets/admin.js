@@ -2041,6 +2041,10 @@ function runtimeFormToPayload() {
     cleanup_enabled: !!el("rtCleanupEnabled").checked,
     cleanup_time: el("rtCleanupTime").value || "03:30",
     cleanup_retention_days: Number(el("rtCleanupRetentionDays").value || 7),
+    auth_remember_login_enabled: !!el("rtRememberLoginEnabled").checked,
+    auth_remember_login_default: !!el("rtRememberLoginDefault").checked,
+    auth_remember_login_days: Number(el("rtRememberLoginDays").value || 30),
+    auth_session_hours: Number(el("rtSessionHours").value || 12),
   };
 }
 
@@ -2093,6 +2097,10 @@ function fillRuntimeForm(data) {
   el("rtCleanupEnabled").checked = v.cleanup_enabled !== false;
   el("rtCleanupTime").value = v.cleanup_time || "03:30";
   el("rtCleanupRetentionDays").value = String(v.cleanup_retention_days || 7);
+  el("rtRememberLoginEnabled").checked = v.auth_remember_login_enabled !== false;
+  el("rtRememberLoginDefault").checked = v.auth_remember_login_default === true;
+  el("rtRememberLoginDays").value = String(v.auth_remember_login_days || 30);
+  el("rtSessionHours").value = String(v.auth_session_hours || 12);
 }
 
 async function loadRuntime() {

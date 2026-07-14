@@ -134,6 +134,34 @@ class AccountSettingsApiTests(unittest.TestCase):
         )
         self.assertEqual(new_login_resp.status_code, 200)
 
+    def test_admin_password_change_keeps_the_active_admin_session(self):
+        login_resp = self.client.post(
+            "/api/auth/admin-login",
+            json={"username": "admin", "password": "admin123secure"},
+        )
+        self.assertEqual(login_resp.status_code, 200, login_resp.text)
+        admin_token = self.client.cookies.get("admin_session_token")
+        legacy_token = self.client.cookies.get("session_token")
+        self.assertTrue(admin_token)
+        self.assertTrue(legacy_token)
+
+        change_resp = self.client.post(
+            "/api/auth/change_password",
+            headers={"X-Admin-Console": "1"},
+            json={"old_password": "admin123secure", "new_password": "admin456secure"},
+        )
+        self.assertEqual(change_resp.status_code, 200, change_resp.text)
+        current_admin = self.client.get("/api/me", headers={"X-Admin-Console": "1"})
+        self.assertEqual(current_admin.status_code, 200, current_admin.text)
+        self.assertEqual(current_admin.json()["username"], "admin")
+        with db_module.db() as conn:
+            active_tokens = {
+                str(row["token"])
+                for row in conn.execute("SELECT token FROM sessions WHERE user_id = ?", (int(current_admin.json()["id"]),))
+            }
+        self.assertIn(admin_token, active_tokens)
+        self.assertNotIn(legacy_token, active_tokens)
+
     def test_admin_password_change_requires_twelve_characters(self):
         self.assertEqual(
             self.client.post(

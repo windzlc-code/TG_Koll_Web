@@ -8632,6 +8632,89 @@ body.persona-touch-dragging .persona-list-card:active {
   grid-column: 1 / -1;
 }
 
+.proxy-network-check {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+}
+
+.proxy-network-check > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 40px;
+  padding: 0 14px;
+}
+
+.proxy-network-check > button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.proxy-check-result {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--soft);
+}
+
+.proxy-check-result.is-success {
+  border-color: color-mix(in srgb, var(--success-soft-ink) 34%, var(--line));
+  background: var(--success-soft);
+  color: var(--success-soft-ink);
+}
+
+.proxy-check-result.is-error {
+  border-color: color-mix(in srgb, var(--danger) 42%, var(--line));
+  background: var(--danger-soft);
+  color: var(--danger-soft-ink);
+}
+
+.proxy-check-result-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.proxy-check-result-head span {
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.proxy-check-result dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px 12px;
+  margin: 0;
+}
+
+.proxy-check-result dl > div {
+  min-width: 0;
+}
+
+.proxy-check-result dt {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.proxy-check-result dd {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.proxy-check-result p {
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+
 .account-pool-create-panel {
   min-height: 176px;
   padding: 12px;
@@ -10267,6 +10350,15 @@ body.live-browser-modal-open {
 
   .proxy-form-note {
     grid-column: 1;
+  }
+
+  .proxy-network-check {
+    grid-column: 1;
+    grid-template-columns: 1fr;
+  }
+
+  .proxy-check-result dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .proxy-pool-head,

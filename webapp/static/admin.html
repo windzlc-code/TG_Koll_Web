@@ -616,6 +616,18 @@
           </div>
 
           <div class="admin-config-card admin-runtime-panel admin-runtime-card-compact">
+            <div class="admin-config-card-title">登录与 Cookie</div>
+            <label>记住登录</label>
+            <label class="switch"><input id="rtRememberLoginEnabled" type="checkbox"> 启用</label>
+            <label>登录页默认选择</label>
+            <label class="switch"><input id="rtRememberLoginDefault" type="checkbox"> 默认记住</label>
+            <label>记住登录天数</label>
+            <input id="rtRememberLoginDays" type="number" min="1" max="90" value="30">
+            <label>普通会话小时数</label>
+            <input id="rtSessionHours" type="number" min="1" max="72" value="12">
+          </div>
+
+          <div class="admin-config-card admin-runtime-panel admin-runtime-card-compact">
             <div class="admin-config-card-title">磁盘自动清理</div>
             <div class="small">定时清理过期的生成产物（图片、视频、音频），防止磁盘被历史任务撑满。</div>
             <label>自动清理</label>

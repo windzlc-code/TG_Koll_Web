@@ -136,6 +136,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         logger = _Logger()
         with (
             mock.patch.object(runner, "_detect_platform_login_state", return_value={"status": "cookie_expired", "reason": "login page"}),
+            mock.patch.object(runner, "_prepare_manual_threads_login_page"),
             mock.patch.object(runner, "_self_heal_login_page") as self_heal,
             mock.patch.object(runner, "_screenshot", return_value="timeout.png"),
             mock.patch.object(runner, "_wait_or_raise_manual", return_value={"status": "cookie_expired"}),
@@ -153,6 +154,97 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "cookie_expired")
         self_heal.assert_not_called()
+
+    def test_threads_transient_error_keeps_manual_login_page_untouched(self):
+        page = mock.Mock()
+        page.url = "https://www.threads.com/"
+        logger = _Logger()
+        with (
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_prepare_manual_threads_login_page"),
+            mock.patch.object(runner, "_detect_platform_login_state", return_value={"status": "transient_error", "reason": "error page"}),
+            mock.patch.object(runner, "_self_heal_login_page") as self_heal,
+            mock.patch.object(runner, "_screenshot", return_value="error.png"),
+            mock.patch.object(runner, "_wait_or_raise_manual", return_value={"status": "transient_error"}),
+        ):
+            result = runner._run_open_login(
+                page,
+                {"id": "manual-transient-error"},
+                {},
+                {"login_wait_seconds": 30, "auto_submit": False, "wait_for_manual": True},
+                Path("."),
+                logger,
+                "threads",
+            )
+
+        self.assertEqual(result["status"], "transient_error")
+        self_heal.assert_not_called()
+
+    def test_manual_threads_login_retries_once_then_opens_instagram_handoff(self):
+        page = mock.Mock()
+        page.url = "https://www.threads.com/"
+        logger = _Logger()
+        with (
+            mock.patch.object(
+                runner,
+                "_detect_threads_login_state",
+                side_effect=[
+                    {"status": "transient_error", "reason": "error page"},
+                    {"status": "cookie_expired", "reason": "login prompt"},
+                ],
+            ),
+            mock.patch.object(runner, "_click_text_button", side_effect=[True, True]) as click,
+            mock.patch.object(runner, "_sleep_between"),
+        ):
+            runner._prepare_manual_threads_login_page(page, logger)
+
+        self.assertEqual(click.call_count, 2)
+        self.assertEqual(click.call_args_list[0].args[3], "manual_login_retry")
+        self.assertEqual(click.call_args_list[1].args[3], "manual_login_continue_instagram")
+        self.assertEqual(page.wait_for_load_state.call_count, 2)
+
+    def test_manual_threads_login_does_not_redirect_an_authenticated_session(self):
+        page = mock.Mock()
+        logger = _Logger()
+        with (
+            mock.patch.object(runner, "_detect_threads_login_state", return_value={"status": "ready"}),
+            mock.patch.object(runner, "_click_text_button") as click,
+        ):
+            runner._prepare_manual_threads_login_page(page, logger)
+
+        click.assert_not_called()
+
+    def test_manual_threads_login_falls_back_to_top_level_instagram_login(self):
+        page = mock.Mock()
+        page.url = "https://www.threads.com/"
+        logger = _Logger()
+        with (
+            mock.patch.object(runner, "_detect_threads_login_state", return_value={"status": "cookie_expired"}),
+            mock.patch.object(runner, "_click_text_button", return_value=False),
+            mock.patch.object(runner, "_goto") as goto,
+        ):
+            runner._prepare_manual_threads_login_page(page, logger)
+
+        goto.assert_called_once_with(
+            page,
+            "https://www.instagram.com/accounts/login/",
+            logger,
+            "manual_login_instagram_fallback",
+        )
+
+    def test_manual_threads_login_returns_from_instagram_for_final_confirmation(self):
+        page = mock.Mock()
+        page.url = "https://www.instagram.com/"
+        logger = _Logger()
+        with (
+            mock.patch.object(runner, "_goto") as goto,
+            mock.patch.object(runner, "_detect_threads_login_state", return_value={"status": "ready", "url": runner.THREADS_HOME}) as detect,
+        ):
+            result = runner._restore_threads_after_instagram_login(page, {"status": "ready"}, logger)
+
+        goto.assert_called_once_with(page, runner.THREADS_HOME, logger, "manual_login_return_threads")
+        detect.assert_called_once_with(page)
+        self.assertEqual(result["status"], "ready")
 
     def test_screenshot_captures_current_viewport(self):
         page = mock.Mock()

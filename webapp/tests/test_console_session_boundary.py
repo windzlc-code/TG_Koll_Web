@@ -192,6 +192,37 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('loadAutomationTasksShared().catch', task_refresh)
         self.assertNotIn("loadAutomationTasksShared({ force: true })", task_refresh)
 
+    def test_customer_persona_generation_does_not_read_admin_runtime_config(self):
+        preflight = self._function_source("personaGeneratePreflight")
+        self.assertIn("!state.currentUser?.is_admin", preflight)
+        self.assertIn("return { ready: true, issues: [] }", preflight)
+
+    def test_open_login_is_explicitly_manual_and_expired_toasts_are_not_revived(self):
+        create_task = self._function_source("createSocialTask")
+        toast = self._section("function showToast", "function defaultToastTargetForMessage")
+        self.assertIn('auto_submit: taskType === "open_login" ? false : undefined', create_task)
+        self.assertIn('existingToast.classList.contains("is-leaving")', toast)
+        refresh_start = toast.index("if (isTaskRefresh)")
+        refresh_end = toast.index("return existingToast;", refresh_start)
+        self.assertNotIn("clearToastRemovalTimer", toast[refresh_start:refresh_end])
+
+    def test_account_edit_does_not_resubmit_unchanged_proxy_and_clears_revealed_password(self):
+        modal = self._function_source("openAccountPoolEditModal")
+        save = self._function_source("saveAccountPoolEditForm")
+        clear_password = self._function_source("clearAccountPasswordReveal")
+
+        self.assertIn('modal.dataset.accountProxyDirty = "false"', modal)
+        self.assertIn('modal.dataset.accountProxyDirty = "true"', modal)
+        self.assertIn('clearAccountPasswordReveal(account.id, "pool-edit")', modal)
+        self.assertIn("delete state.accountPasswordValues[cleanId]", clear_password)
+        self.assertIn("delete state.accountPasswordVisible[accountPasswordStateKey(cleanId, scope)]", clear_password)
+        self.assertIn('const proxyFieldsDirty = $("consoleModal")?.dataset.accountProxyDirty === "true"', save)
+        self.assertIn("if (proxyEnabled && (proxyFieldsDirty || !existingProxy))", save)
+        self.assertNotIn(
+            'const residentialProxy = accountResidentialProxyPayload("accountPoolEdit", username, accountResidentialProxy(account))',
+            save,
+        )
+
     def test_pageshow_and_focus_share_identity_revalidation(self):
         revalidation = self._section("async function revalidateConsoleIdentity()", "async function loadSetupStatus()")
         self.assertIn('api("/api/me")', revalidation)

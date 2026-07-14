@@ -119,6 +119,12 @@ SECRET_KEY_HINTS = {
     "authorization",
     "session",
 }
+NON_SECRET_RUNTIME_KEYS = {
+    "auth_remember_login_enabled",
+    "auth_remember_login_default",
+    "auth_remember_login_days",
+    "auth_session_hours",
+}
 
 DEFAULT_PRICING: dict[str, Any] = {
     "rh_coins_per_10rmb": 2500,
@@ -206,6 +212,10 @@ DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
     "cleanup_enabled": True,
     "cleanup_time": "03:30",
     "cleanup_retention_days": 7,
+    "auth_remember_login_enabled": True,
+    "auth_remember_login_default": False,
+    "auth_remember_login_days": 30,
+    "auth_session_hours": 12,
 }
 
 BUILTIN_IMAGE_RUNNINGHUB_WORKFLOW_ID = ""
@@ -1174,6 +1184,8 @@ def _mask_secret_exact_length(value: Any) -> str:
 def _redact_runtime_config(runtime: dict[str, Any]) -> dict[str, Any]:
     redacted = dict(runtime or {})
     for key in list(redacted):
+        if key in NON_SECRET_RUNTIME_KEYS:
+            continue
         if not _is_secret_key(key):
             continue
         value = str(redacted.get(key) or "").strip()
@@ -3872,7 +3884,22 @@ def _normalize_runtime_config(raw: dict[str, Any] | None) -> dict[str, Any]:
     merged["cleanup_enabled"] = _to_bool(merged.get("cleanup_enabled"), True)
     merged["cleanup_time"] = str(merged.get("cleanup_time") or "03:30").strip() or "03:30"
     merged["cleanup_retention_days"] = max(_to_int(merged.get("cleanup_retention_days"), 7), 1)
+    merged["auth_remember_login_enabled"] = _to_bool(merged.get("auth_remember_login_enabled"), True)
+    merged["auth_remember_login_default"] = _to_bool(merged.get("auth_remember_login_default"), False)
+    merged["auth_remember_login_days"] = min(max(_to_int(merged.get("auth_remember_login_days"), 30), 1), 90)
+    merged["auth_session_hours"] = min(max(_to_int(merged.get("auth_session_hours"), 12), 1), 72)
     return merged
+
+
+def _auth_login_policy(runtime: dict[str, Any] | None) -> dict[str, Any]:
+    source = runtime if isinstance(runtime, dict) else {}
+    enabled = _to_bool(source.get("auth_remember_login_enabled"), True)
+    return {
+        "remember_login_enabled": enabled,
+        "remember_login_default": enabled and _to_bool(source.get("auth_remember_login_default"), False),
+        "remember_login_days": min(max(_to_int(source.get("auth_remember_login_days"), 30), 1), 90),
+        "session_hours": min(max(_to_int(source.get("auth_session_hours"), 12), 1), 72),
+    }
 
 
 def _write_tool_r18_bot_token_files(token: str) -> None:
@@ -10871,6 +10898,7 @@ class RegisterPayload(BaseModel):
 class LoginPayload(BaseModel):
     username: str
     password: str
+    remember_me: bool = False
 
 
 class ChangePasswordPayload(BaseModel):
@@ -10930,6 +10958,10 @@ class RuntimeConfigPayload(BaseModel):
     cleanup_enabled: bool = True
     cleanup_time: str = "03:30"
     cleanup_retention_days: int = 7
+    auth_remember_login_enabled: bool = True
+    auth_remember_login_default: bool = False
+    auth_remember_login_days: int = Field(default=30, ge=1, le=90)
+    auth_session_hours: int = Field(default=12, ge=1, le=72)
 
 
 class LlmModelsPayload(BaseModel):
@@ -16994,6 +17026,15 @@ def create_app() -> FastAPI:
             "message": "申请已提交，请等待管理员授权后登录",
         }
 
+    @app.get("/api/auth/policy")
+    def api_auth_policy():
+        try:
+            with db() as conn:
+                runtime = _get_runtime_config(conn)
+        except RuntimeConfigFileError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return _auth_login_policy(runtime)
+
     def _login_response(payload: LoginPayload, request: Request, *, expected_admin: bool | None = None) -> JSONResponse:
         username = str(payload.username or "").strip()
         password = str(payload.password or "")
@@ -17009,7 +17050,20 @@ def create_app() -> FastAPI:
             record_invalid_credentials()
             raise HTTPException(status_code=401, detail="用户名或密码错误")
         legacy_admin_token = ""
+        remember_login = False
+        session_ttl_seconds = 12 * 3600
         with db() as conn:
+            try:
+                runtime = _get_runtime_config(conn)
+            except RuntimeConfigFileError:
+                runtime = DEFAULT_RUNTIME_CONFIG
+            auth_policy = _auth_login_policy(runtime)
+            remember_login = bool(auth_policy["remember_login_enabled"] and payload.remember_me)
+            session_ttl_seconds = (
+                int(auth_policy["remember_login_days"]) * 24 * 3600
+                if remember_login
+                else int(auth_policy["session_hours"]) * 3600
+            )
             row = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
             if row is None:
                 record_invalid_credentials()
@@ -17035,7 +17089,7 @@ def create_app() -> FastAPI:
             previous_token = str(request.cookies.get(cookie_name) or "").strip()
             if previous_token:
                 delete_session(conn, previous_token)
-            token = create_session(conn, int(user["id"]))
+            token = create_session(conn, int(user["id"]), ttl_seconds=session_ttl_seconds)
             legacy_cookie_token = str(request.cookies.get(SESSION_COOKIE) or "").strip()
             if is_admin:
                 legacy_cookie_is_same_admin = False
@@ -17057,7 +17111,7 @@ def create_app() -> FastAPI:
                 if not legacy_cookie_token or legacy_cookie_is_same_admin:
                     if legacy_cookie_is_same_admin:
                         delete_session(conn, legacy_cookie_token)
-                    legacy_admin_token = create_session(conn, int(user["id"]))
+                    legacy_admin_token = create_session(conn, int(user["id"]), ttl_seconds=session_ttl_seconds)
             login_at = _now_ts()
             conn.execute(
                 "UPDATE users SET last_login_at = ?, "
@@ -17080,7 +17134,7 @@ def create_app() -> FastAPI:
             key=ADMIN_SESSION_COOKIE if is_admin else SESSION_COOKIE,
             value=token,
             httponly=True,
-            max_age=14 * 24 * 3600,
+            max_age=session_ttl_seconds if remember_login else None,
             samesite="lax",
             secure=_session_cookie_secure(request),
         )
@@ -17089,7 +17143,7 @@ def create_app() -> FastAPI:
                 key=SESSION_COOKIE,
                 value=legacy_admin_token,
                 httponly=True,
-                max_age=14 * 24 * 3600,
+                max_age=session_ttl_seconds if remember_login else None,
                 samesite="lax",
                 secure=_session_cookie_secure(request),
             )
@@ -17109,13 +17163,36 @@ def create_app() -> FastAPI:
 
     @app.post("/api/auth/logout")
     def api_logout(request: Request):
-        cookie_name = ADMIN_SESSION_COOKIE if request_uses_admin_session(request) else SESSION_COOKIE
-        token = str(request.cookies.get(cookie_name) or "").strip()
+        admin_logout = request_uses_admin_session(request)
+        admin_token = str(request.cookies.get(ADMIN_SESSION_COOKIE) or "").strip()
+        user_token = str(request.cookies.get(SESSION_COOKIE) or "").strip()
+        token = (admin_token or user_token) if admin_logout else user_token
+        clear_legacy_admin_cookie = False
         if token:
             with db() as conn:
+                owner = conn.execute("SELECT user_id FROM sessions WHERE token = ?", (token,)).fetchone()
                 delete_session(conn, token)
+                if admin_logout and owner is not None and user_token and user_token != token:
+                    legacy_owner = conn.execute(
+                        """
+                        SELECT session.user_id, account.is_admin
+                        FROM sessions AS session
+                        JOIN users AS account ON account.id = session.user_id
+                        WHERE session.token = ?
+                        """,
+                        (user_token,),
+                    ).fetchone()
+                    if (
+                        legacy_owner is not None
+                        and int(legacy_owner["user_id"] or 0) == int(owner["user_id"] or 0)
+                        and int(legacy_owner["is_admin"] or 0) == 1
+                    ):
+                        delete_session(conn, user_token)
+                        clear_legacy_admin_cookie = True
         response = JSONResponse(content={"ok": True})
-        response.delete_cookie(cookie_name)
+        response.delete_cookie(ADMIN_SESSION_COOKIE if admin_logout else SESSION_COOKIE)
+        if clear_legacy_admin_cookie or (admin_logout and not admin_token and token == user_token):
+            response.delete_cookie(SESSION_COOKIE)
         return response
 
     @app.post("/api/auth/change_password")
@@ -17126,12 +17203,16 @@ def create_app() -> FastAPI:
     ):
         if _is_admin_workspace(user):
             raise HTTPException(status_code=403, detail="请从管理员账号详情中修改客户密码")
+        current_token = session_token_for_request(
+            request,
+            request.cookies.get(SESSION_COOKIE),
+            request.cookies.get(ADMIN_SESSION_COOKIE),
+        )
         old_pwd = str(payload.old_password or "")
         new_pwd = str(payload.new_password or "")
         if not verify_password(old_pwd, str(user.get("password_hash") or "")):
             raise HTTPException(status_code=400, detail="原密码错误")
         if int(user.get("must_change_password") or 0) == 1 and _password_expiry(user) <= _now_ts():
-            current_token = str(request.cookies.get(SESSION_COOKIE) or "").strip()
             if current_token:
                 with db() as conn:
                     delete_session(conn, current_token)
@@ -17152,7 +17233,6 @@ def create_app() -> FastAPI:
             )
             if vault_ciphertext is not None:
                 _upsert_password_vault(conn, int(user["id"]), vault_ciphertext, now)
-            current_token = str(request.cookies.get(SESSION_COOKIE) or "").strip()
             if current_token:
                 conn.execute("DELETE FROM sessions WHERE user_id = ? AND token <> ?", (int(user["id"]), current_token))
             else:

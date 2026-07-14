@@ -672,6 +672,10 @@ function personaGenerateDefaults() {
 }
 
 function personaGeneratePreflight() {
+  // Runtime credentials are intentionally administrator-only.  A normal user
+  // cannot read them, so an absent admin snapshot must not be treated as a
+  // missing-model error or block persona generation.
+  if (!state.currentUser?.is_admin) return { ready: true, issues: [] };
   const runtime = runtimeConfigStatus();
   const hasBaseUrl = Boolean(String(runtime.llm_base_url || "").trim());
   const hasApiKey = Boolean(runtime.llm_api_key_configured || runtime.llm_api_key_gpt_configured);
@@ -1468,9 +1472,11 @@ function showToast(text, ok = true, options = {}) {
       || String(existingToast.dataset.toastStatus || "") !== status;
     const isTaskRefresh = !presentationChanged && Boolean(options.taskId);
     if (isTaskRefresh) {
+      // A polling refresh must not revive a toast that has reached its
+      // five-second expiry; otherwise the three-second task poll keeps it on
+      // screen forever.
+      if (existingToast.classList.contains("is-leaving")) return existingToast;
       clearToastSwitchTimers(existingToast);
-      clearToastRemovalTimer(existingToast);
-      existingToast.classList.remove("is-replacing-out", "is-leaving", "is-switching-out", "is-switching-in");
       applyToastMeta(existingToast, request);
       return existingToast;
     }
@@ -14877,6 +14883,13 @@ function clearAccountPasswordRevealState() {
   state.accountPasswordVisible = {};
 }
 
+function clearAccountPasswordReveal(accountId = "", scope = "pool") {
+  const cleanId = String(accountId || "").trim();
+  if (!cleanId) return;
+  delete state.accountPasswordValues[cleanId];
+  delete state.accountPasswordVisible[accountPasswordStateKey(cleanId, scope)];
+}
+
 function isPersonaAccountEditing(accountId = "") {
   return Boolean(state.personaAccountEditingIds[String(accountId || "").trim()]);
 }
@@ -15553,33 +15566,36 @@ function proxyDatetimeInputValue(value = "") {
   return local.toISOString().slice(0, 16);
 }
 
-function proxySourceSuggestions(current = "") {
-  const values = new Set(["OwlProxy"]);
-  (Array.isArray(state.socialProxies) ? state.socialProxies : []).forEach((proxy) => {
-    const value = String(proxy?.source || "").trim();
-    if (value && value !== "manual") values.add(value);
-  });
-  const selected = String(current || "").trim();
-  if (selected && selected !== "manual") values.add(selected);
-  return Array.from(values).map((value) => `<option value="${esc(value)}"></option>`).join("");
+function proxySourceOptions(current = "") {
+  return proxySelectOptions([
+    ["manual", "手动录入"],
+    ["owlproxy", "OwlProxy"],
+    ["provider", "其他购买代理"],
+    ["self_owned", "自有代理"],
+  ], current || "manual");
 }
 
 function sharedProxyFieldsHtml(prefix, proxy = null) {
   const protocol = ["socks5", "http", "https"].includes(proxyProtocol(proxy).toLowerCase()) ? proxyProtocol(proxy).toLowerCase() : "socks5";
-  const source = proxy?.source === "manual" ? "" : String(proxy?.source || "");
+  const source = String(proxy?.source || "manual");
   const expiryMode = Number(proxy?.expires_at || 0) > 0 ? "custom" : "permanent";
   return `
     <label><span>代理名称</span><input id="${esc(prefix)}Name" value="${esc(proxy?.name || "")}" placeholder="留空则自动生成" /></label>
-    <label><span>代理协议</span><select id="${esc(prefix)}Protocol">${proxySelectOptions([["socks5", "SOCKS5"], ["http", "HTTP"], ["https", "HTTPS"]], protocol)}</select></label>
-    <label><span>供应商 / 来源</span><input id="${esc(prefix)}Source" list="${esc(prefix)}SourceOptions" value="${esc(source)}" placeholder="选择或输入供应商" /><datalist id="${esc(prefix)}SourceOptions">${proxySourceSuggestions(source)}</datalist></label>
+    <label><span>代理类型</span><select id="${esc(prefix)}Protocol">${proxySelectOptions([["socks5", "SOCKS5"], ["http", "HTTP"], ["https", "HTTPS"]], protocol)}</select></label>
+    <label><span>代理方式</span><select id="${esc(prefix)}ConnectionMode"><option value="proxy" selected>Proxy（代理服务器）</option></select></label>
+    <label><span>供应商 / 来源</span><select id="${esc(prefix)}Source">${proxySourceOptions(source)}</select></label>
     <label><span>持有方式</span><select id="${esc(prefix)}PurchaseStatus">${proxySelectOptions([["owned", "自有"], ["leased", "租用"]], proxy?.purchase_status || "owned")}</select></label>
-    <label><span>Host</span><input id="${esc(prefix)}Host" value="${esc(proxy?.host || "")}" placeholder="proxy.example.com" autocomplete="off" /></label>
-    <label><span>端口</span><input id="${esc(prefix)}Port" type="number" min="1" max="65535" value="${esc(proxy?.port || "")}" placeholder="1080" /></label>
-    <label><span>认证用户名（可选）</span><input id="${esc(prefix)}Username" value="" placeholder="${proxy?.username_configured ? "留空则沿用已保存用户名" : "代理认证用户名"}" autocomplete="off" /></label>
+    <label><span>服务器地址</span><input id="${esc(prefix)}Host" value="${esc(proxy?.host || "")}" placeholder="208.113.11.225 或 proxy.example.com" autocomplete="off" /></label>
+    <label><span>服务端口</span><input id="${esc(prefix)}Port" type="number" min="1" max="65535" value="${esc(proxy?.port || "")}" placeholder="1080" /></label>
+    <label><span>认证账号（可选）</span><input id="${esc(prefix)}Username" value="" placeholder="${proxy?.username_configured ? "留空则沿用已保存账号" : "代理认证账号"}" autocomplete="off" /></label>
     <label><span>认证密码（可选）</span><input id="${esc(prefix)}Password" type="password" value="" placeholder="${proxy?.password_configured ? "留空则沿用已保存密码" : "代理认证密码"}" autocomplete="new-password" /></label>
     <label><span>有效期</span><select id="${esc(prefix)}ExpiryMode" data-proxy-expiry-mode data-proxy-expiry-target="${esc(prefix)}ExpiresAtWrap">${proxySelectOptions([["permanent", "长期"], ["30", "30 天"], ["90", "90 天"], ["180", "180 天"], ["custom", "自定义时间"]], expiryMode)}</select></label>
     <label id="${esc(prefix)}ExpiresAtWrap" ${expiryMode === "custom" ? "" : "hidden"}><span>自定义有效期</span><input id="${esc(prefix)}ExpiresAt" type="datetime-local" value="${esc(proxyDatetimeInputValue(proxy?.expires_at))}" /></label>
-    <label class="proxy-form-note"><span>备注（可选）</span><textarea id="${esc(prefix)}Note" rows="3" placeholder="用途或续费信息">${esc(proxy?.note || "")}</textarea></label>`;
+    <label class="proxy-form-note"><span>备注（可选）</span><textarea id="${esc(prefix)}Note" rows="3" placeholder="用途或续费信息">${esc(proxy?.note || "")}</textarea></label>
+    <div class="proxy-network-check">
+      <button type="button" data-proxy-inline-test="${esc(prefix)}" data-proxy-inline-id="${esc(proxy?.id || "")}">${renderRefreshIcon()}<span>网络检测</span></button>
+      <div id="${esc(prefix)}CheckResult" class="proxy-check-result" hidden></div>
+    </div>`;
 }
 
 function sharedProxyPayload(prefix, proxy = null) {
@@ -15587,6 +15603,10 @@ function sharedProxyPayload(prefix, proxy = null) {
   const port = Number.parseInt(String($(`${prefix}Port`)?.value || ""), 10);
   if (!host || !Number.isFinite(port) || port < 1 || port > 65535) {
     showMsg("socialMsg", "请填写有效的静态住宅代理 Host 和端口。", false);
+    return null;
+  }
+  if (/:\/\/|[\/?#@]|\s/.test(host) || (/^[^\[\]]+:[0-9]+$/.test(host) && !host.includes("::"))) {
+    showMsg("socialMsg", "服务器地址只能填写裸 IP 或域名，请勿包含协议、端口、路径或账号。", false);
     return null;
   }
   const expiryMode = String($(`${prefix}ExpiryMode`)?.value || "permanent");
@@ -15603,6 +15623,7 @@ function sharedProxyPayload(prefix, proxy = null) {
     ip_type: "static_residential",
     name: String($(`${prefix}Name`)?.value || "").trim(),
     proxy_type: String($(`${prefix}Protocol`)?.value || "socks5").trim().toLowerCase(),
+    connection_mode: String($(`${prefix}ConnectionMode`)?.value || "proxy").trim().toLowerCase(),
     source: String($(`${prefix}Source`)?.value || "manual").trim(),
     purchase_status: String($(`${prefix}PurchaseStatus`)?.value || "owned").trim(),
     host,
@@ -15616,6 +15637,66 @@ function sharedProxyPayload(prefix, proxy = null) {
   const password = String($(`${prefix}Password`)?.value || "");
   if (password) payload.password = password;
   return payload;
+}
+
+function proxyCheckRequestPayload(payload = {}, proxyId = "") {
+  const data = { ...payload };
+  if (data.protocol && !data.proxy_type) data.proxy_type = data.protocol;
+  return {
+    proxy_id: String(proxyId || "").trim(),
+    proxy_type: String(data.proxy_type || "socks5").trim().toLowerCase(),
+    connection_mode: String(data.connection_mode || "proxy").trim().toLowerCase(),
+    host: String(data.host || "").trim(),
+    port: Number(data.port || 0),
+    ...(Object.prototype.hasOwnProperty.call(data, "username") ? { username: String(data.username || "").trim() } : {}),
+    ...(Object.prototype.hasOwnProperty.call(data, "password") ? { password: String(data.password || "") } : {}),
+  };
+}
+
+function proxyResidentialStatusLabel(value = "") {
+  return { verified: "住宅属性通过", rejected: "非住宅网络", unknown: "住宅属性待确认" }[String(value || "").toLowerCase()] || "住宅属性待确认";
+}
+
+function renderProxyCheckResult(targetId = "", result = null) {
+  const target = $(targetId);
+  if (!target) return;
+  const response = result?.response && typeof result.response === "object" ? result.response : {};
+  const connection = response.connection && typeof response.connection === "object" ? response.connection : {};
+  const location = [response.country || response.country_code, response.region, response.city].filter(Boolean).join(" · ") || "未识别";
+  const ok = Boolean(result?.ok);
+  target.hidden = false;
+  target.classList.toggle("is-success", ok);
+  target.classList.toggle("is-error", !ok);
+  target.innerHTML = `
+    <div class="proxy-check-result-head"><strong>${ok ? "检测通过" : "检测未通过"}</strong><span>${esc(proxyResidentialStatusLabel(result?.residential_status))}</span></div>
+    <dl>
+      <div><dt>代理出口</dt><dd>${esc(result?.exit_ip || response.ip || "-")}</dd></div>
+      <div><dt>位置</dt><dd>${esc(location)}</dd></div>
+      <div><dt>运营商</dt><dd>${esc(connection.isp || connection.org || "未识别")}</dd></div>
+      <div><dt>延迟</dt><dd>${Number.isFinite(Number(result?.latency_ms)) ? `${Number(result.latency_ms)} ms` : "-"}</dd></div>
+      <div><dt>代理链路</dt><dd>${result?.route_verified === true ? "已确认" : result?.route_verified === false ? "未通过" : "待确认"}</dd></div>
+      <div><dt>静态一致性</dt><dd>${result?.static_consistent === true ? "一致" : result?.static_consistent === false ? "不一致" : "待确认"}</dd></div>
+    </dl>
+    ${result?.error ? `<p>${esc(result.error)}</p>` : ""}`;
+}
+
+async function testProxyConfiguration(payload = {}, proxyId = "", resultTargetId = "") {
+  const response = await api("/api/persona_dashboard/automation/proxies/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(proxyCheckRequestPayload(payload, proxyId)),
+  });
+  const result = response?.result || {};
+  if (resultTargetId) renderProxyCheckResult(resultTargetId, result);
+  return result;
+}
+
+async function testProxyForm(prefix = "", proxy = null) {
+  const payload = sharedProxyPayload(prefix, proxy);
+  if (!payload) return null;
+  const result = await testProxyConfiguration(payload, proxy?.id || "", `${prefix}CheckResult`);
+  showMsg("socialMsg", result.ok ? "代理网络检测通过。" : (result.error || "代理网络检测未通过。"), Boolean(result.ok));
+  return result;
 }
 
 function accountResidentialProxyFormHtml(prefix, proxy = null) {
@@ -15748,6 +15829,14 @@ function openAccountPoolCreateModal() {
       close();
       return;
     }
+    const testButton = event.target.closest("[data-proxy-inline-test]");
+    if (testButton) {
+      testButton.disabled = true;
+      testProxyForm("accountPoolProxy")
+        .catch((error) => showMsg("socialMsg", error.detail || error.message || "代理检测失败", false))
+        .finally(() => { testButton.disabled = false; });
+      return;
+    }
     const saveButton = event.target.closest("[data-account-pool-create-modal-save]");
     if (saveButton) {
       saveButton.disabled = true;
@@ -15787,14 +15876,28 @@ async function saveAccountPoolCreateForm() {
   }
   const residentialProxy = accountResidentialProxyPayload("accountPool", payload.username);
   if ($("accountPoolProxyEnabled")?.checked && !residentialProxy) return false;
-  if (residentialProxy) payload.residential_proxy = residentialProxy;
+  if (residentialProxy) {
+    const preflight = await testProxyConfiguration(residentialProxy, "", "accountPoolProxyCheckResult");
+    if (!preflight.ok) {
+      showMsg("socialMsg", preflight.error || "静态住宅代理检测未通过，账号尚未保存。", false);
+      return false;
+    }
+    payload.residential_proxy = residentialProxy;
+  }
   const result = await api("/api/persona_dashboard/automation/accounts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
   const account = result?.account || {};
-  const proxyOk = residentialProxy ? await verifyAccountResidentialProxy(account.proxy_id) : true;
+  let proxyOk = true;
+  if (residentialProxy) {
+    try {
+      proxyOk = await verifyAccountResidentialProxy(account.proxy_id);
+    } catch (_error) {
+      proxyOk = false;
+    }
+  }
   state.accountPoolPlatform = normalizeAccountPoolPlatform(account.platform || payload.platform);
   state.accountPoolAccountId = String(account.id || "");
   state.accountPoolSelectedAccountIds = account.id ? [String(account.id)] : [];
@@ -15884,6 +15987,7 @@ function openAccountPoolEditModal(accountId = "") {
   const modal = document.createElement("div");
   modal.id = "consoleModal";
   modal.className = "console-modal";
+  modal.dataset.accountProxyDirty = "false";
   modal.innerHTML = `
     <div class="console-modal-backdrop" data-account-pool-edit-cancel></div>
     <section class="console-modal-dialog account-pool-create-modal" role="dialog" aria-modal="true" aria-labelledby="accountPoolEditModalTitle">
@@ -15919,7 +16023,10 @@ function openAccountPoolEditModal(accountId = "") {
   document.body.appendChild(modal);
   syncAccountResidentialProxyFields("accountPoolEdit");
   $("accountPoolEditUsername")?.focus();
-  const close = () => modal.remove();
+  const close = () => {
+    clearAccountPasswordReveal(account.id, "pool-edit");
+    modal.remove();
+  };
   modal.addEventListener("click", (event) => {
     const passwordToggle = event.target.closest("[data-account-password-toggle]");
     if (passwordToggle) {
@@ -15929,6 +16036,14 @@ function openAccountPoolEditModal(accountId = "") {
     }
     if (event.target.closest("[data-account-pool-edit-cancel]")) {
       close();
+      return;
+    }
+    const testButton = event.target.closest("[data-proxy-inline-test]");
+    if (testButton) {
+      testButton.disabled = true;
+      testProxyForm("accountPoolEditProxy", accountResidentialProxy(account))
+        .catch((error) => showMsg("socialMsg", error.detail || error.message || "代理检测失败", false))
+        .finally(() => { testButton.disabled = false; });
       return;
     }
     const saveButton = event.target.closest("[data-account-pool-edit-save]");
@@ -15947,11 +16062,14 @@ function openAccountPoolEditModal(accountId = "") {
   modal.addEventListener("input", (event) => {
     const passwordInput = event.target.closest?.("[data-account-password-input]");
     if (passwordInput) passwordInput.dataset.passwordDirty = "true";
+    if (event.target.closest?.("#accountPoolEditProxyFields")) modal.dataset.accountProxyDirty = "true";
   });
   modal.addEventListener("change", (event) => {
     if (event.target.closest('[data-account-proxy-enabled="accountPoolEdit"]')) {
+      modal.dataset.accountProxyDirty = "true";
       syncAccountResidentialProxyFields("accountPoolEdit");
     }
+    if (event.target.closest?.("#accountPoolEditProxyFields")) modal.dataset.accountProxyDirty = "true";
   });
   modal.addEventListener("keydown", (event) => {
     if (event.key === "Escape") close();
@@ -15975,10 +16093,25 @@ async function saveAccountPoolEditForm(accountId = "") {
   const loginPasswordInput = $("accountPoolEditLoginPassword");
   const loginPassword = loginPasswordInput?.dataset.passwordDirty === "true" ? String(loginPasswordInput.value || "") : "";
   if (loginPassword) payload.login_password = loginPassword;
-  const residentialProxy = accountResidentialProxyPayload("accountPoolEdit", username, accountResidentialProxy(account));
-  if ($("accountPoolEditProxyEnabled")?.checked && !residentialProxy) return false;
-  if (residentialProxy) payload.residential_proxy = residentialProxy;
-  if (!$('accountPoolEditProxyEnabled')?.checked && String(account?.proxy_id || "").trim()) {
+  const existingProxy = accountResidentialProxy(account);
+  const proxyEnabled = Boolean($("accountPoolEditProxyEnabled")?.checked);
+  const proxyFieldsDirty = $("consoleModal")?.dataset.accountProxyDirty === "true";
+  let residentialProxy;
+  if (proxyEnabled && (proxyFieldsDirty || !existingProxy)) {
+    residentialProxy = accountResidentialProxyPayload("accountPoolEdit", username, existingProxy);
+    if (!residentialProxy) return false;
+    const preflight = await testProxyConfiguration(
+      residentialProxy,
+      account?.proxy_id || existingProxy?.id || "",
+      "accountPoolEditProxyCheckResult",
+    );
+    if (!preflight.ok) {
+      showMsg("socialMsg", preflight.error || "静态住宅代理检测未通过，修改尚未保存。", false);
+      return false;
+    }
+    payload.residential_proxy = residentialProxy;
+  }
+  if (!proxyEnabled && String(account?.proxy_id || "").trim()) {
     payload.clear_residential_proxy = true;
   }
   const result = await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(cleanId)}`, {
@@ -15987,10 +16120,17 @@ async function saveAccountPoolEditForm(accountId = "") {
     body: JSON.stringify(payload),
   });
   state.accountPoolAccountId = String(result.account?.id || cleanId);
+  let proxyOk = true;
+  if (residentialProxy) {
+    try {
+      proxyOk = await verifyAccountResidentialProxy(result.account?.proxy_id);
+    } catch (_error) {
+      proxyOk = false;
+    }
+  }
   await loadSocial({ force: true });
   renderSocialAccounts();
   if (isPersonaWorkspaceModule()) renderPersonaDetail();
-  const proxyOk = residentialProxy ? await verifyAccountResidentialProxy(result.account?.proxy_id) : true;
   showMsg("socialMsg", proxyOk ? "账号资料已保存。" : "账号资料已保存，但住宅代理检测失败；修复代理前不会执行自动化任务。", proxyOk);
   return true;
 }
@@ -16186,7 +16326,7 @@ function proxyStatusLabel(value = "") {
 
 function proxySourceLabel(value = "") {
   const clean = String(value || "").trim().toLowerCase();
-  return { manual: "手动录入", provider: "购买代理", self_owned: "自有代理" }[clean] || (value || "-");
+  return { manual: "手动录入", owlproxy: "OwlProxy", provider: "其他购买代理", self_owned: "自有代理" }[clean] || (value || "-");
 }
 
 function proxyPurchaseStatusLabel(value = "") {
@@ -16295,17 +16435,33 @@ function openProxyModal(proxyId = "") {
   const close = () => modal.remove();
   modal.addEventListener("click", (event) => {
     if (event.target.closest("[data-proxy-modal-cancel]")) { close(); return; }
+    const testButton = event.target.closest("[data-proxy-inline-test]");
+    if (testButton) {
+      testButton.disabled = true;
+      testProxyForm("proxyForm", proxy)
+        .catch((error) => showMsg("socialMsg", error.detail || error.message || "代理检测失败", false))
+        .finally(() => { testButton.disabled = false; });
+      return;
+    }
     const save = event.target.closest("[data-proxy-modal-save]");
     if (!save) return;
     const payload = proxyFormPayload(proxy);
     if (!payload) return;
     save.disabled = true;
     const id = String(save.dataset.proxyModalSave || "").trim();
-    api(id ? `/api/persona_dashboard/automation/proxies/${encodeURIComponent(id)}` : "/api/persona_dashboard/automation/proxies", {
+    testProxyConfiguration(payload, id, "proxyFormCheckResult").then((preflight) => {
+      if (!preflight.ok) {
+        save.disabled = false;
+        showMsg("socialMsg", preflight.error || "代理检测未通过，配置尚未保存。", false);
+        return null;
+      }
+      return api(id ? `/api/persona_dashboard/automation/proxies/${encodeURIComponent(id)}` : "/api/persona_dashboard/automation/proxies", {
       method: id ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
+      });
     }).then(async (data) => {
+      if (!data) return;
       close();
       const savedId = String(data?.proxy?.id || id || "").trim();
       let detected = false;
@@ -17279,7 +17435,10 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
         target_url: targetUrl,
         post_url: targetUrl,
         username: taskType === "browse_profile" ? targetUrl : "",
-        auto_submit: taskType === "open_login" ? Boolean(selected?.login_password_configured) : undefined,
+        // "Open login" is a user-controlled, freshly launched browser
+        // session.  Saved credentials must not silently turn it into an
+        // automated flow that refreshes or redirects the page.
+        auto_submit: taskType === "open_login" ? false : undefined,
         media_paths: mediaPaths,
         target_urls: splitLines($("simpleTargetUrls")?.value || $("socialTargetUrls")?.value || ""),
         login_wait_seconds: loginWaitSeconds,
@@ -17336,7 +17495,9 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
       target_url: targetUrl,
       post_url: targetUrl,
       username: taskType === "browse_profile" ? targetUrl : "",
-      auto_submit: taskType === "open_login" ? Boolean(selected?.login_password_configured) : undefined,
+      // See the matching publish-path payload above: explicit user login is
+      // always manual, even when an account has a saved password.
+      auto_submit: taskType === "open_login" ? false : undefined,
       media_paths: mediaPaths,
       target_urls: splitLines($("simpleTargetUrls")?.value || $("socialTargetUrls")?.value || ""),
       login_wait_seconds: loginWaitSeconds,

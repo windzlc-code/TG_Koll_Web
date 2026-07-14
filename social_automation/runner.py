@@ -1016,6 +1016,67 @@ def _self_heal_login_page(
     _sleep_between(1.5, 3.0)
 
 
+def _prepare_manual_threads_login_page(page, logger: AutomationLogger) -> None:
+    """Normalize the one-time Threads-to-Instagram handoff for manual login."""
+    status = _detect_threads_login_state(page)
+    if status.get("status") == "ready":
+        return
+
+    if status.get("status") == "transient_error":
+        retried = _click_text_button(page, logger, ["Retry", "Try again"], "manual_login_retry")
+        logger.log(
+            "info" if retried else "warn",
+            "manual_login_retry",
+            "Threads initial error page retry was handled.",
+            {"clicked": retried, "url": str(page.url or "")},
+        )
+        if retried:
+            _sleep_between(1.5, 3.0)
+            with contextlib.suppress(Exception):
+                page.wait_for_load_state("domcontentloaded", timeout=15000)
+            status = _detect_threads_login_state(page)
+
+    if status.get("status") == "ready":
+        return
+    continued = _click_text_button(
+        page,
+        logger,
+        ["Continue with Instagram", "Log in with Instagram", "继续使用 Instagram", "使用 Instagram 继续"],
+        "manual_login_continue_instagram",
+    )
+    logger.log(
+        "info" if continued else "warn",
+        "manual_login_continue_instagram",
+        "Threads manual login handoff was handled.",
+        {"clicked": continued, "url": str(page.url or "")},
+    )
+    if continued:
+        _sleep_between(2.0, 4.0)
+        with contextlib.suppress(Exception):
+            page.wait_for_load_state("domcontentloaded", timeout=15000)
+        return
+
+    _goto(
+        page,
+        "https://www.instagram.com/accounts/login/",
+        logger,
+        "manual_login_instagram_fallback",
+    )
+
+
+def _restore_threads_after_instagram_login(page, status: dict[str, Any], logger: AutomationLogger) -> dict[str, Any]:
+    if status.get("status") != "ready" or "instagram.com" not in str(page.url or "").lower():
+        return status
+    logger.log(
+        "info",
+        "manual_login_return_threads",
+        "Instagram login completed; returning to Threads for final session confirmation.",
+        {"url": str(page.url or "")},
+    )
+    _goto(page, THREADS_HOME, logger, "manual_login_return_threads")
+    return _detect_threads_login_state(page)
+
+
 def _wait_or_raise_manual(
     page,
     task,
@@ -1063,6 +1124,8 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
     verification_confirmations = _int_payload_or_env(payload, "verification_confirmations", "SOCIAL_AUTOMATION_VERIFICATION_CONFIRMATIONS", 3, 1, 6)
     wait_for_manual = bool(payload.get("wait_for_manual", True))
     manual_only_on_verification = bool(payload.get("manual_only_on_verification", False))
+    if platform == "threads" and not auto_submit:
+        _prepare_manual_threads_login_page(page, logger)
     logger.log("info", "open_login", "浏览器登录窗口已打开。", {"wait_seconds": wait_seconds, "auto_submit": auto_submit})
     deadline = time.time() + wait_seconds
     last_status: dict[str, Any] = {}
@@ -1075,6 +1138,8 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
         _raise_if_cancelled(cancel_event)
         try:
             last_status = _detect_platform_login_state(page, platform)
+            if platform == "threads" and not auto_submit:
+                last_status = _restore_threads_after_instagram_login(page, last_status, logger)
             if last_status.get("status") == "ready":
                 stable_status = _confirm_platform_ready(page, platform, logger, cancel_event)
                 if stable_status.get("status") == "ready":
@@ -1132,6 +1197,35 @@ def _run_open_login(page, task, account, payload, screenshot_dir, logger, platfo
                     cancel_event,
                     f"{_platform_name(platform)} 需要人工验证，浏览器会保持打开直到验证完成或任务取消。",
                     "need_verification",
+                    shot,
+                    last_status,
+                    wait_for_manual,
+                    manual_only_on_verification,
+                )
+            if last_status.get("status") == "transient_error":
+                shot = _screenshot(page, screenshot_dir, task, "login_transient_error", logger)
+                logger.log(
+                    "warn",
+                    "login_transient_error",
+                    f"{_platform_name(platform)} returned a temporary error page; leaving the browser untouched.",
+                    {"url": str(page.url or ""), "screenshot_path": shot, "details": last_status},
+                    shot,
+                )
+                if auto_submit:
+                    raise AutoLoginFailedError(
+                        f"{_platform_name(platform)} returned a temporary error page; open a manual login session and try again.",
+                        "transient_error",
+                        shot,
+                    )
+                return _wait_or_raise_manual(
+                    page,
+                    task,
+                    screenshot_dir,
+                    logger,
+                    platform,
+                    cancel_event,
+                    f"{_platform_name(platform)} returned a temporary error page. The manual login browser remains open without reloads.",
+                    "transient_error",
                     shot,
                     last_status,
                     wait_for_manual,

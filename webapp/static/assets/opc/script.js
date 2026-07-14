@@ -4,6 +4,9 @@ const applicationStatus = document.querySelector("#formStatus");
 const loginModal = document.querySelector("#loginModal");
 const loginForm = document.querySelector("#homeLoginForm");
 const loginStatus = document.querySelector("#loginStatus");
+const loginPassword = document.querySelector("#loginPassword");
+const loginPasswordToggle = document.querySelector("[data-login-password-toggle]");
+const loginRemember = loginForm?.elements?.remember_me || null;
 let loginReturnFocus = null;
 
 function setHeaderState() {
@@ -74,11 +77,21 @@ function openLogin(event) {
   window.setTimeout(() => document.querySelector("#loginUsername")?.focus(), 40);
 }
 
+function setLoginPasswordRevealed(revealed) {
+  if (!loginPassword || !loginPasswordToggle) return;
+  loginPassword.type = revealed ? "text" : "password";
+  loginPasswordToggle.classList.toggle("is-visible", revealed);
+  loginPasswordToggle.setAttribute("aria-pressed", revealed ? "true" : "false");
+  loginPasswordToggle.setAttribute("aria-label", revealed ? "隱藏密碼" : "顯示密碼");
+  loginPasswordToggle.title = revealed ? "隱藏密碼" : "顯示密碼";
+}
+
 function closeLogin() {
   if (!loginModal?.classList.contains("is-open")) return;
   loginModal.classList.remove("is-open");
   loginModal.setAttribute("aria-hidden", "true");
   document.body.classList.remove("modal-open");
+  setLoginPasswordRevealed(false);
   const returnFocus = loginReturnFocus;
   loginReturnFocus = null;
   if (returnFocus?.isConnected) returnFocus.focus();
@@ -86,8 +99,9 @@ function closeLogin() {
 
 document.querySelectorAll("[data-open-login]").forEach((button) => button.addEventListener("click", openLogin));
 document.querySelectorAll("[data-close-login]").forEach((button) => button.addEventListener("click", closeLogin));
-loginModal?.addEventListener("click", (event) => {
-  if (event.target === loginModal) closeLogin();
+loginPasswordToggle?.addEventListener("click", () => {
+  setLoginPasswordRevealed(loginPassword?.type === "password");
+  loginPassword?.focus({ preventScroll: true });
 });
 document.addEventListener("keydown", (event) => {
   if (!loginModal?.classList.contains("is-open")) return;
@@ -150,6 +164,7 @@ loginForm?.addEventListener("submit", async (event) => {
       body: JSON.stringify({
         username: loginForm.username.value.trim(),
         password: loginForm.password.value,
+        remember_me: Boolean(loginForm.remember_me?.checked),
       }),
     });
     const pageRedirect = String(document.body.dataset.loginRedirect || "/console.html");
@@ -161,8 +176,23 @@ loginForm?.addEventListener("submit", async (event) => {
   }
 });
 
+async function loadLoginPolicy() {
+  if (!loginForm || !loginRemember) return;
+  try {
+    const policy = await api("/api/auth/policy");
+    const enabled = policy.remember_login_enabled !== false;
+    loginRemember.disabled = !enabled;
+    loginRemember.checked = enabled && policy.remember_login_default === true;
+    const rememberField = loginForm.querySelector("[data-login-remember]");
+    if (rememberField) rememberField.hidden = !enabled;
+  } catch {
+    loginRemember.checked = false;
+  }
+}
+
 applicationForm?.querySelectorAll("input").forEach((input) => {
   input.addEventListener("input", () => setFieldError(input, ""));
 });
 window.addEventListener("scroll", setHeaderState, { passive: true });
+loadLoginPolicy();
 setHeaderState();

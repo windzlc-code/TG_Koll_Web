@@ -25,6 +25,7 @@ async function submitLogin(form) {
   const payload = {
     username: form.username.value.trim(),
     password: form.password.value,
+    remember_me: Boolean(form.remember_me?.checked),
   };
   const result = await api(`/api/auth/${loginRole}-login`, {
     method: "POST",
@@ -36,6 +37,30 @@ async function submitLogin(form) {
     return;
   }
   location.href = loginRole === "admin" ? "/admin" : "/console.html";
+}
+
+function setPasswordVisibility(button, revealed) {
+  const input = document.getElementById(button.getAttribute("aria-controls") || "");
+  if (!input) return;
+  input.type = revealed ? "text" : "password";
+  button.classList.toggle("is-visible", revealed);
+  button.setAttribute("aria-pressed", revealed ? "true" : "false");
+  button.setAttribute("aria-label", revealed ? "隐藏密码" : "显示密码");
+  button.title = revealed ? "隐藏密码" : "显示密码";
+}
+
+async function loadAuthPolicy(form) {
+  if (!form?.remember_me) return;
+  try {
+    const policy = await api("/api/auth/policy");
+    const enabled = policy.remember_login_enabled !== false;
+    form.remember_me.disabled = !enabled;
+    form.remember_me.checked = enabled && policy.remember_login_default === true;
+    const field = form.querySelector("[data-auth-remember]");
+    if (field) field.hidden = !enabled;
+  } catch {
+    form.remember_me.checked = false;
+  }
 }
 
 async function submitForcedPasswordChange(form) {
@@ -71,6 +96,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const forcePasswordForm = document.getElementById("forcePasswordForm");
 
   if (loginForm) {
+    loadAuthPolicy(loginForm);
     loginForm.addEventListener("submit", async (e) => {
       e.preventDefault();
       setMsg("", true);
@@ -85,6 +111,14 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     });
   }
+
+  document.querySelectorAll("[data-auth-password-toggle]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const input = document.getElementById(button.getAttribute("aria-controls") || "");
+      setPasswordVisibility(button, input?.type === "password");
+      input?.focus({ preventScroll: true });
+    });
+  });
 
   if (registerForm) {
     registerForm.addEventListener("submit", async (e) => {

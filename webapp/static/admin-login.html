@@ -42,7 +42,13 @@
         <input id="adminUsername" name="username" autocomplete="username" required placeholder="请输入管理员账号" />
 
         <label for="adminPassword">密码</label>
-        <input id="adminPassword" name="password" type="password" autocomplete="current-password" required placeholder="请输入密码" />
+        <span class="auth-login-password-field">
+          <input id="adminPassword" name="password" type="password" autocomplete="current-password" required placeholder="请输入密码" />
+          <button class="auth-login-password-toggle" type="button" data-auth-password-toggle aria-label="显示密码" title="显示密码" aria-controls="adminPassword" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="3"></circle><path class="auth-login-eye-slash" d="M4 20L20 4"></path></svg>
+          </button>
+        </span>
+        <label class="auth-login-remember" data-auth-remember><input name="remember_me" type="checkbox"> <span>记住账号与登录状态</span></label>
 
         <div class="auth-submit-row">
           <button class="primary" type="submit">进入运营后台</button>

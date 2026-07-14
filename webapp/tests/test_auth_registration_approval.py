@@ -782,6 +782,34 @@ class RegistrationApprovalTests(unittest.TestCase):
         self.assertEqual(user_console.status_code, 200, user_console.text)
         self.assertEqual(admin_console.status_code, 200, admin_console.text)
 
+        admin_logout = browser.post("/api/auth/logout", headers={"X-Admin-Console": "1"})
+        self.assertEqual(admin_logout.status_code, 200, admin_logout.text)
+        self.assertEqual(browser.get("/api/me").json()["username"], "guest001")
+        self.assertEqual(browser.get("/api/me", headers={"X-Admin-Console": "1"}).status_code, 401)
+
+    def test_admin_logout_revokes_legacy_and_admin_sessions(self):
+        browser = TestClient(self.app)
+        login = browser.post(
+            "/api/auth/admin-login",
+            json={"username": "admin", "password": "admin123secure"},
+        )
+        self.assertEqual(login.status_code, 200, login.text)
+        self.assertTrue(browser.cookies.get("session_token"))
+        self.assertTrue(browser.cookies.get("admin_session_token"))
+
+        logout = browser.post("/api/auth/logout", headers={"X-Admin-Console": "1"})
+        self.assertEqual(logout.status_code, 200, logout.text)
+        self.assertIsNone(browser.cookies.get("session_token"))
+        self.assertIsNone(browser.cookies.get("admin_session_token"))
+        self.assertEqual(browser.get("/api/me", headers={"X-Admin-Console": "1"}).status_code, 401)
+        with db_module.db() as conn:
+            admin = conn.execute("SELECT id FROM users WHERE username = 'admin'").fetchone()
+            session_count = conn.execute(
+                "SELECT COUNT(*) AS count FROM sessions WHERE user_id = ?",
+                (int(admin["id"]),),
+            ).fetchone()
+        self.assertEqual(int(session_count["count"]), 0)
+
     def test_admin_entry_and_page_are_server_side_role_protected(self):
         anonymous = TestClient(self.app)
         admin_entry = anonymous.get("/admin", follow_redirects=False)

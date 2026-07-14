@@ -43,6 +43,13 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
         values.update(overrides)
         return values
 
+    @staticmethod
+    def _json_response(payload, *, status_code=200):
+        response = mock.Mock(ok=200 <= status_code < 300, status_code=status_code)
+        response.json.return_value = payload
+        response.text = json.dumps(payload)
+        return response
+
     def _account(self, username: str, *, persona_id: str = "", proxy=None):
         return social_api.create_social_account(
             social_api.SocialAccountPayload(
@@ -85,6 +92,13 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
             )
         init_db()
 
+    def _mark_proxy_verified(self, proxy_id: str, exit_ip: str = "8.8.8.8") -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE social_proxies SET status = 'active', last_check_at = 100, last_check_result = ? WHERE id = ?",
+                (json.dumps({"ok": True, "exit_ip": exit_ip, "response": {"ip": exit_ip}}), proxy_id),
+            )
+
     def test_create_and_patch_proxy_are_atomic_and_password_is_write_only(self):
         account = self._account(
             "creator",
@@ -96,8 +110,8 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
         proxy_id = account["proxy_id"]
 
         self.assertEqual(account["residential_proxy"]["protocol"], "socks5")
-        self.assertEqual(account["residential_proxy"]["country"], "US")
-        self.assertEqual(account["residential_proxy"]["isp"], "Residential ISP")
+        self.assertEqual(account["residential_proxy"]["country"], "")
+        self.assertEqual(account["residential_proxy"]["isp"], "")
         self.assertEqual(account["residential_proxy"]["source"], "account-vendor")
         self.assertEqual(account["residential_proxy"]["ip_type"], "static_residential")
         self.assertEqual(account["residential_proxy"]["purchase_status"], "owned")
@@ -300,6 +314,7 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
                 os.environ["SOCIAL_AUTOMATION_WORKER_ENABLED"] = old_enabled
 
         ready = self._account("ready", proxy=social_api.ResidentialProxyPayload(**self._proxy(host="ready.example")))
+        self._mark_proxy_verified(ready["proxy_id"])
         self.assertEqual(self._task(ready["id"])["account_id"], ready["id"])
 
     def test_task_creation_and_worker_reject_expired_proxy(self):
@@ -413,7 +428,7 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
                 "SELECT username, password FROM social_proxies WHERE id = ?",
                 (proxy["id"],),
             ).fetchone()
-        self.assertEqual(stored, ("saved-user", "saved-secret"))
+        self.assertEqual(stored, ("", ""))
 
         account = social_api.create_social_account(
             social_api.SocialAccountPayload(
@@ -502,6 +517,101 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
             )
         self.assertEqual(account_error.exception.status_code, 400)
 
+    def test_proxy_endpoint_rejects_complete_urls_and_invalid_auth(self):
+        invalid_hosts = (
+            "socks5://208.113.11.225",
+            "user@example.com",
+            "proxy.example.com/path",
+            "proxy.example.com:1080",
+        )
+        for host in invalid_hosts:
+            with self.subTest(host=host):
+                with self.assertRaises(HTTPException) as caught:
+                    social_api.create_social_proxy(
+                        social_api.SocialProxyPayload(host=host, port=1080)
+                    )
+                self.assertEqual(caught.exception.status_code, 400)
+
+        with self.assertRaises(HTTPException) as password_only:
+            social_api.create_social_proxy(
+                social_api.SocialProxyPayload(
+                    host="208.113.11.225",
+                    port=7778,
+                    password="secret-without-user",
+                )
+            )
+        self.assertEqual(password_only.exception.status_code, 400)
+
+    def test_proxy_status_is_server_managed_and_connection_changes_require_recheck(self):
+        proxy = social_api.create_social_proxy(
+            social_api.SocialProxyPayload(
+                host="208.113.11.225",
+                port=7778,
+                status="active",
+            )
+        )
+        self.assertEqual(proxy["status"], "pending")
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE social_proxies SET status = 'active', last_check_at = 100, last_check_result = ? WHERE id = ?",
+                (json.dumps({"ok": True, "exit_ip": "208.113.11.225"}), proxy["id"]),
+            )
+        updated = social_api.update_social_proxy(
+            proxy["id"],
+            social_api.SocialProxyPatchPayload(host="208.113.11.226", status="active"),
+        )
+        self.assertEqual(updated["status"], "pending")
+        self.assertEqual(updated["last_check_at"], 0)
+        self.assertEqual(updated["last_check_result"], {})
+
+    def test_proxy_check_verifies_route_static_exit_and_residential_metadata(self):
+        proxy = social_api.create_social_proxy(
+            social_api.SocialProxyPayload(
+                proxy_type="socks5",
+                host="208.113.11.225",
+                port=7778,
+                username="region-user",
+                password="proxy-secret",
+            )
+        )
+        responses = [
+            self._json_response({"ip": "47.243.99.2"}),
+            self._json_response({"ip": "208.113.11.225"}),
+            self._json_response({
+                "success": True,
+                "ip": "208.113.11.225",
+                "country": "Taiwan",
+                "country_code": "TW",
+                "region": "Keelung City",
+                "city": "Taipei",
+                "connection": {"isp": "Bunny Communications", "org": "Bunny Communications"},
+            }),
+            self._json_response({
+                "ip": "208.113.11.225",
+                "is_bogon": False,
+                "is_datacenter": False,
+                "is_tor": False,
+                "is_vpn": False,
+                "company": {"type": "isp", "name": "Accelerated Connections Inc."},
+            }),
+        ]
+        with mock.patch.object(social_api.requests, "get", side_effect=responses) as request_get:
+            checked = social_api.check_social_proxy(proxy["id"])
+
+        self.assertEqual(request_get.call_count, 4)
+        self.assertEqual(checked["status"], "active")
+        self.assertEqual(checked["exit_ip"], "208.113.11.225")
+        self.assertEqual(checked["country"], "TW")
+        self.assertEqual(checked["region"], "Keelung City")
+        self.assertEqual(checked["city"], "Taipei")
+        self.assertEqual(checked["isp"], "Bunny Communications")
+        result = checked["last_check_result"]
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["route_verified"])
+        self.assertTrue(result["static_consistent"])
+        self.assertEqual(result["residential_status"], "verified")
+
     def test_proxy_routes_and_exit_ip_list_field(self):
         app = social_api.FastAPI()
         social_api.register_social_automation_routes(app)
@@ -513,19 +623,23 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
         proxy_path = "/api/persona_dashboard/automation/proxies/{proxy_id}"
         self.assertIn((proxy_path, "PATCH"), route_methods)
         self.assertIn((proxy_path, "DELETE"), route_methods)
+        self.assertIn(("/api/persona_dashboard/automation/proxies/test", "POST"), route_methods)
 
         proxy = social_api.create_social_proxy(
             social_api.SocialProxyPayload(host="exit.example", port=8080)
         )
-        response = mock.Mock(ok=True, status_code=200)
-        response.json.return_value = {
-            "success": True,
-            "ip": "203.0.113.10",
-            "country_code": "US",
-        }
-        with mock.patch.object(social_api.requests, "get", return_value=response):
+        responses = [
+            self._json_response({"ip": "47.243.99.2"}),
+            self._json_response({"ip": "8.8.8.8"}),
+            self._json_response({"success": True, "ip": "8.8.8.8", "country_code": "US"}),
+            self._json_response({
+                "ip": "8.8.8.8", "is_bogon": False, "is_datacenter": False,
+                "is_tor": False, "is_vpn": False, "company": {"type": "isp"},
+            }),
+        ]
+        with mock.patch.object(social_api.requests, "get", side_effect=responses):
             checked = social_api.check_social_proxy(proxy["id"])
-        self.assertEqual(checked["exit_ip"], "203.0.113.10")
+        self.assertEqual(checked["exit_ip"], "8.8.8.8")
         self.assertEqual(checked["country"], "US")
         self.assertEqual(checked["region"], "")
         self.assertEqual(checked["city"], "")
@@ -533,7 +647,7 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
         with social_api.db() as conn:
             rows = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (proxy["id"],)).fetchall()
             listed = social_api._proxy_public_rows(conn, rows)
-        self.assertEqual(listed[0]["exit_ip"], "203.0.113.10")
+        self.assertEqual(listed[0]["exit_ip"], "8.8.8.8")
         self.assertEqual(listed[0]["country"], "US")
         self.assertEqual(listed[0]["bound_account_count"], 0)
         self.assertEqual(listed[0]["bound_account_ids"], [])
@@ -550,14 +664,15 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
             )
         )
         encoded_url = "socks5://user%40region:p%40ss%3A%2F%3F%23@proxy.example:1080"
+        direct = self._json_response({"ip": "47.243.99.2"})
         with mock.patch.object(
             social_api.requests,
             "get",
-            side_effect=RuntimeError(f"proxy failed: {encoded_url}; password={password}"),
+            side_effect=[direct, RuntimeError(f"proxy failed: {encoded_url}; password={password}")],
         ) as request_get:
             checked = social_api.check_social_proxy(proxy["id"])
 
-        self.assertEqual(request_get.call_args.kwargs["proxies"]["http"], encoded_url)
+        self.assertEqual(request_get.call_args_list[1].kwargs["proxies"]["http"], encoded_url)
         public_json = json.dumps(checked, ensure_ascii=False)
         self.assertNotIn(password, public_json)
         self.assertNotIn("user@region", public_json)

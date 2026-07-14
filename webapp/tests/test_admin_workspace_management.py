@@ -157,6 +157,15 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
         )
         self.assertEqual(proxy_response.status_code, 200, proxy_response.text)
         proxy_id = str(proxy_response.json()["proxy"]["id"])
+        with server.db() as conn:
+            conn.execute(
+                "UPDATE social_proxies SET status = 'active', last_check_at = ?, last_check_result = ? WHERE id = ?",
+                (
+                    server._now_ts(),
+                    json.dumps({"ok": True, "exit_ip": "8.8.8.8", "response": {"ip": "8.8.8.8"}}),
+                    proxy_id,
+                ),
+            )
 
         account_response = customer.post(
             "/api/persona_dashboard/automation/accounts",

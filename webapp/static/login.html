@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>登录 - Web 素材生成平台</title>
-  <link rel="stylesheet" href="/assets/style.css" />
+  <link rel="stylesheet" href="/assets/style.css?v=20260714-1" />
 </head>
 <body class="page-auth-shell">
   <main class="auth-shell">
@@ -40,7 +40,13 @@
         <input id="username" name="username" autocomplete="username" required placeholder="请输入用户名" />
 
         <label for="password">密码</label>
-        <input id="password" name="password" type="password" autocomplete="current-password" required placeholder="请输入密码" />
+        <span class="auth-login-password-field">
+          <input id="password" name="password" type="password" autocomplete="current-password" required placeholder="请输入密码" />
+          <button class="auth-login-password-toggle" type="button" data-auth-password-toggle aria-label="显示密码" title="显示密码" aria-controls="password" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="3"></circle><path class="auth-login-eye-slash" d="M4 20L20 4"></path></svg>
+          </button>
+        </span>
+        <label class="auth-login-remember" data-auth-remember><input name="remember_me" type="checkbox"> <span>记住账号与登录状态</span></label>
 
         <div class="auth-submit-row">
           <button class="primary" type="submit">进入 Web 任务控制台</button>
@@ -53,6 +59,6 @@
       <p class="auth-switch">没有账号？请在首页提交游客申请，授权后即可登录。</p>
     </section>
   </main>
-  <script src="/assets/auth.js?v=20260713-3"></script>
+  <script src="/assets/auth.js?v=20260714-1"></script>
 </body>
 </html>

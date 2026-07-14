@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import asyncio
+import ipaddress
 import re
 import sqlite3
 import threading
@@ -148,9 +149,15 @@ _TOOL_R18_RUNTIME_DIR = Path(
 _ARCHIVE_LOCK_TIMEOUT_SECONDS = 30
 
 
-class SocialProxyPayload(BaseModel):
+class StrictProxyModel(BaseModel):
+    class Config:
+        extra = "forbid"
+
+
+class SocialProxyPayload(StrictProxyModel):
     name: str = ""
     proxy_type: str = "http"
+    connection_mode: str = "proxy"
     host: str = ""
     port: int = 0
     username: str = ""
@@ -167,9 +174,10 @@ class SocialProxyPayload(BaseModel):
     status: str = "pending"
 
 
-class SocialProxyPatchPayload(BaseModel):
+class SocialProxyPatchPayload(StrictProxyModel):
     name: str | None = None
     proxy_type: str | None = None
+    connection_mode: str | None = None
     host: str | None = None
     port: int | None = None
     username: str | None = None
@@ -186,8 +194,9 @@ class SocialProxyPatchPayload(BaseModel):
     status: str | None = None
 
 
-class ResidentialProxyPayload(BaseModel):
+class ResidentialProxyPayload(StrictProxyModel):
     protocol: str = "http"
+    connection_mode: str = "proxy"
     host: str = ""
     port: int = 0
     username: str = ""
@@ -203,6 +212,16 @@ class ResidentialProxyPayload(BaseModel):
     note: str = ""
     expires_at: int = Field(default=0, ge=0)
     status: str = "pending"
+
+
+class SocialProxyCheckPayload(StrictProxyModel):
+    proxy_id: str = ""
+    proxy_type: str = "socks5"
+    connection_mode: str = "proxy"
+    host: str = ""
+    port: int = 0
+    username: str | None = None
+    password: str | None = None
 
 
 class SocialAccountPayload(BaseModel):
@@ -511,6 +530,13 @@ def register_social_automation_routes(app: FastAPI) -> None:
     def api_social_proxy_create(payload: SocialProxyPayload, user: dict[str, Any] = Depends(get_current_user)):
         return {"ok": True, "proxy": create_social_proxy(payload, owner_user_id=_identity_user_id(user))}
 
+    @app.post("/api/persona_dashboard/automation/proxies/test")
+    def api_social_proxy_test(payload: SocialProxyCheckPayload, user: dict[str, Any] = Depends(get_current_user)):
+        if str(payload.proxy_id or "").strip():
+            _require_proxy_access(payload.proxy_id, user)
+        result = test_social_proxy(payload, owner_user_id=_identity_user_id(user))
+        return {"ok": True, "check_ok": bool(result.get("ok")), "result": result}
+
     @app.patch("/api/persona_dashboard/automation/proxies/{proxy_id}")
     def api_social_proxy_patch(proxy_id: str, payload: SocialProxyPatchPayload, user: dict[str, Any] = Depends(get_current_user)):
         _require_proxy_access(proxy_id, user)
@@ -524,7 +550,8 @@ def register_social_automation_routes(app: FastAPI) -> None:
     @app.post("/api/persona_dashboard/automation/proxies/{proxy_id}/check")
     def api_social_proxy_check(proxy_id: str, user: dict[str, Any] = Depends(get_current_user)):
         _require_proxy_access(proxy_id, user)
-        return {"ok": True, "proxy": check_social_proxy(proxy_id)}
+        proxy = check_social_proxy(proxy_id)
+        return {"ok": True, "check_ok": bool(proxy.get("last_check_result", {}).get("ok")), "proxy": proxy}
 
     @app.get("/api/persona_dashboard/automation/tasks")
     def api_social_tasks(status: str = "", account_id: str = "", limit: int = 60, user: dict[str, Any] = Depends(get_current_user)):
@@ -1346,6 +1373,7 @@ def _normalize_live_browser_key(key: str) -> str:
 
 
 def create_social_proxy(payload: SocialProxyPayload, *, owner_user_id: int = 0) -> dict[str, Any]:
+    _normalize_proxy_connection_mode(payload.connection_mode)
     if str(payload.ip_type or "static_residential").strip().lower() != "static_residential":
         raise HTTPException(status_code=400, detail="仅支持静态住宅 IP")
     with db() as conn:
@@ -1359,16 +1387,16 @@ def create_social_proxy(payload: SocialProxyPayload, *, owner_user_id: int = 0) 
             username=payload.username,
             password=payload.password,
             name=payload.name,
-            country=payload.country,
-            region=payload.region,
-            city=payload.city,
-            isp=payload.isp,
+            country="",
+            region="",
+            city="",
+            isp="",
             source=payload.source,
             ip_type="static_residential",
             purchase_status=payload.purchase_status,
             note=payload.note,
             expires_at=payload.expires_at,
-            status=payload.status,
+            status="pending",
             owner_user_id=owner_user_id,
         )
     return _proxy_public(row)
@@ -1382,11 +1410,16 @@ def update_social_proxy(proxy_id: str, payload: SocialProxyPatchPayload) -> dict
         if not current:
             raise HTTPException(status_code=404, detail="代理不存在")
 
-        effective_type = _normalize_proxy_type(payload.proxy_type if payload.proxy_type is not None else current["proxy_type"])
-        effective_host = str(payload.host if payload.host is not None else current["host"] or "").strip()
-        effective_port = int(payload.port if payload.port is not None else current["port"] or 0)
-        if not effective_host or effective_port <= 0 or effective_port > 65535:
-            raise HTTPException(status_code=400, detail="代理 host 和 port 必填，port 必须在 1-65535 之间")
+        if payload.connection_mode is not None:
+            _normalize_proxy_connection_mode(payload.connection_mode)
+        effective_type, effective_host, effective_port = _validate_proxy_endpoint(
+            payload.proxy_type if payload.proxy_type is not None else current["proxy_type"],
+            payload.host if payload.host is not None else current["host"],
+            payload.port if payload.port is not None else current["port"],
+        )
+        effective_username = str(payload.username).strip() if payload.username is not None else str(current["username"] or "").strip()
+        effective_password = str(payload.password) if payload.password is not None else str(current["password"] or "")
+        _validate_proxy_credentials(effective_username, effective_password)
 
         updates: dict[str, Any] = {}
         if payload.proxy_type is not None:
@@ -1399,9 +1432,9 @@ def update_social_proxy(proxy_id: str, payload: SocialProxyPatchPayload) -> dict
             updates["name"] = str(payload.name).strip()
         for field in ("username", "password"):
             value = getattr(payload, field)
-            if value is not None and str(value).strip():
+            if value is not None:
                 updates[field] = str(value).strip() if field == "username" else str(value)
-        for field in ("country", "region", "city", "isp", "note"):
+        for field in ("note",):
             value = getattr(payload, field)
             if value is not None:
                 updates[field] = str(value or "").strip()
@@ -1412,7 +1445,8 @@ def update_social_proxy(proxy_id: str, payload: SocialProxyPatchPayload) -> dict
         for field, default in metadata_defaults.items():
             value = getattr(payload, field)
             if value is not None:
-                updates[field] = str(value or default).strip() or default
+                normalizer = _normalize_proxy_source if field == "source" else _normalize_proxy_purchase_status
+                updates[field] = normalizer(value or default)
         if payload.ip_type is not None:
             clean_ip_type = str(payload.ip_type or "static_residential").strip().lower()
             if clean_ip_type != "static_residential":
@@ -1420,9 +1454,6 @@ def update_social_proxy(proxy_id: str, payload: SocialProxyPatchPayload) -> dict
             updates["ip_type"] = "static_residential"
         if payload.expires_at is not None:
             updates["expires_at"] = int(payload.expires_at)
-        if payload.status is not None and str(payload.status or "").strip():
-            updates["status"] = str(payload.status).strip()
-
         connection_fields = {"proxy_type", "host", "port", "username", "password"}
         if connection_fields.intersection(updates):
             updates["country"] = ""
@@ -1431,6 +1462,7 @@ def update_social_proxy(proxy_id: str, payload: SocialProxyPatchPayload) -> dict
             updates["isp"] = ""
             updates["last_check_at"] = 0
             updates["last_check_result"] = ""
+            updates["status"] = "pending"
         if updates:
             updates["updated_at"] = _now()
             assignments = ", ".join(f"{key} = ?" for key in updates)
@@ -1476,13 +1508,12 @@ def _insert_social_proxy(
     status: str = "pending",
     owner_user_id: int = 0,
 ) -> Any:
-    proxy_type = _normalize_proxy_type(protocol)
-    clean_host = str(host or "").strip()
-    clean_port = int(port or 0)
+    proxy_type, clean_host, clean_port = _validate_proxy_endpoint(protocol, host, port)
+    clean_username = str(username or "").strip()
+    clean_password = str(password or "")
+    _validate_proxy_credentials(clean_username, clean_password)
     if str(ip_type or "static_residential").strip().lower() != "static_residential":
         raise HTTPException(status_code=400, detail="仅支持静态住宅 IP")
-    if not clean_host or clean_port <= 0 or clean_port > 65535:
-        raise HTTPException(status_code=400, detail="代理 host 和 port 必填，port 必须在 1-65535 之间")
     now = _now()
     proxy_id = _NEW_ID("social_proxy")
     conn.execute(
@@ -1500,18 +1531,18 @@ def _insert_social_proxy(
             proxy_type,
             clean_host,
             clean_port,
-            str(username or "").strip(),
-            str(password or ""),
+            clean_username,
+            clean_password,
             str(country or "").strip(),
             str(region or "").strip(),
             str(city or "").strip(),
             str(isp or "").strip(),
-            str(source or "manual").strip() or "manual",
+            _normalize_proxy_source(source),
             "static_residential",
-            str(purchase_status or "owned").strip() or "owned",
+            _normalize_proxy_purchase_status(purchase_status),
             str(note or "").strip(),
             max(0, int(expires_at or 0)),
-            str(status or "active").strip() or "active",
+            "pending",
             now,
             now,
         ),
@@ -1527,17 +1558,14 @@ def _save_account_residential_proxy(
     account_id: str = "",
     owner_user_id: int = 0,
 ) -> Any:
+    _normalize_proxy_connection_mode(payload.connection_mode)
     if str(payload.ip_type or "static_residential").strip().lower() != "static_residential":
         raise HTTPException(status_code=400, detail="仅支持静态住宅 IP")
-    proxy_type = _normalize_proxy_type(payload.protocol)
-    host = str(payload.host or "").strip()
-    port = int(payload.port or 0)
-    country = str(payload.country or "").strip()
-    region = str(payload.region or "").strip()
-    city = str(payload.city or "").strip()
-    isp = str(payload.isp or "").strip()
-    if not host or port <= 0 or port > 65535:
-        raise HTTPException(status_code=400, detail="住宅代理 host 和 port 必填，port 必须在 1-65535 之间")
+    proxy_type, host, port = _validate_proxy_endpoint(payload.protocol, payload.host, payload.port)
+    country = ""
+    region = ""
+    city = ""
+    isp = ""
 
     clean_proxy_id = str(current_proxy_id or "").strip()
     current = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (clean_proxy_id,)).fetchone() if clean_proxy_id else None
@@ -1567,14 +1595,17 @@ def _save_account_residential_proxy(
         )
     password = str(payload.password or "")
     username = str(payload.username or "").strip()
+    effective_username = username or (str(current["username"] or "") if current is not None else "")
+    effective_password = password or (str(current["password"] or "") if current is not None else "")
+    _validate_proxy_credentials(effective_username, effective_password)
     if current is None or shared:
         return _insert_social_proxy(
             conn,
             protocol=proxy_type,
             host=host,
             port=port,
-            username=username or (str(current["username"] or "") if current is not None else ""),
-            password=password or (str(current["password"] or "") if current is not None else ""),
+            username=effective_username,
+            password=effective_password,
             name=str(payload.name or f"residential://{host}:{port}").strip(),
             country=country,
             region=region,
@@ -1585,7 +1616,7 @@ def _save_account_residential_proxy(
             purchase_status=str(metadata["purchase_status"] or "owned"),
             note=str(metadata["note"] or ""),
             expires_at=int(metadata["expires_at"] or 0),
-            status=payload.status,
+            status="pending",
             owner_user_id=owner_user_id,
         )
 
@@ -1599,12 +1630,12 @@ def _save_account_residential_proxy(
         "region": region,
         "city": city,
         "isp": isp,
-        "source": str(metadata["source"] or "manual").strip() or "manual",
+        "source": _normalize_proxy_source(metadata["source"] or "manual"),
         "ip_type": "static_residential",
-        "purchase_status": str(metadata["purchase_status"] or "owned").strip() or "owned",
+        "purchase_status": _normalize_proxy_purchase_status(metadata["purchase_status"] or "owned"),
         "note": str(metadata["note"] or "").strip(),
         "expires_at": max(0, int(metadata["expires_at"] or 0)),
-        "status": str(payload.status or "active").strip() or "active",
+        "status": "pending",
         "last_check_at": 0,
         "last_check_result": "",
         "updated_at": _now(),
@@ -1616,46 +1647,187 @@ def _save_account_residential_proxy(
     return conn.execute("SELECT * FROM social_proxies WHERE id = ?", (clean_proxy_id,)).fetchone()
 
 
+def _last_proxy_exit_ip(proxy: dict[str, Any]) -> str:
+    previous = _loads(proxy.get("last_check_result"), {})
+    response = previous.get("response") if isinstance(previous, dict) and isinstance(previous.get("response"), dict) else {}
+    return str(response.get("ip") or previous.get("exit_ip") or previous.get("ip") or "").strip()
+
+
+def _run_proxy_connection_check(proxy: dict[str, Any], *, previous_exit_ip: str = "") -> dict[str, Any]:
+    proxy_url = _proxy_url(proxy, include_password=True)
+    result: dict[str, Any] = {
+        "ok": False,
+        "checked_at": _now(),
+        "proxy": _proxy_url(proxy, include_password=False),
+        "connection_mode": "proxy",
+    }
+    try:
+        direct_data = _response_json(
+            requests.get("https://api.ipify.org?format=json", timeout=(5, 10)),
+            label="服务器直连出口检测",
+        )
+        direct_ip = _public_ip(direct_data.get("ip"), label="服务器直连出口检测")
+        proxy_map = {"http": proxy_url, "https": proxy_url}
+        started_at = time.monotonic()
+        exit_data = _response_json(
+            requests.get("https://api.ipify.org?format=json", proxies=proxy_map, timeout=(5, 12)),
+            label="代理出口检测",
+        )
+        latency_ms = max(0, int(round((time.monotonic() - started_at) * 1000)))
+        exit_ip = _public_ip(exit_data.get("ip"), label="代理出口检测")
+        result.update(
+            {
+                "direct_ip": direct_ip,
+                "exit_ip": exit_ip,
+                "latency_ms": latency_ms,
+                "route_verified": direct_ip != exit_ip,
+            }
+        )
+        who = _response_json(
+            requests.get(
+                f"https://ipwho.is/{quote(exit_ip, safe='')}?fields=success,message,ip,country,country_code,region,city,type,connection",
+                timeout=(5, 12),
+            ),
+            label="代理地理信息检测",
+        )
+        if who.get("success") is False:
+            raise RuntimeError(str(who.get("message") or "代理地理信息检测失败"))
+        who_ip = _public_ip(who.get("ip"), label="代理地理信息检测")
+        reputation = _response_json(
+            requests.get(f"https://api.ipapi.is/?q={quote(exit_ip, safe='')}", timeout=(5, 12)),
+            label="住宅网络属性检测",
+        )
+        reputation_ip = _public_ip(reputation.get("ip"), label="住宅网络属性检测")
+        if reputation_ip != exit_ip:
+            raise RuntimeError("住宅网络属性检测返回的 IP 与代理出口不一致")
+
+        route_verified = direct_ip != exit_ip
+        ip_consistent = who_ip == exit_ip
+        previous_ip = ""
+        if previous_exit_ip:
+            previous_ip = _public_ip(previous_exit_ip, label="上次代理出口记录")
+        static_consistent = bool(ip_consistent and (not previous_ip or previous_ip == exit_ip))
+        negative_flags = {
+            "bogon": bool(reputation.get("is_bogon")),
+            "datacenter": bool(reputation.get("is_datacenter")),
+            "tor": bool(reputation.get("is_tor")),
+            "vpn": bool(reputation.get("is_vpn")),
+        }
+        company = reputation.get("company") if isinstance(reputation.get("company"), dict) else {}
+        company_type = str(company.get("type") or "").strip().lower()
+        if any(negative_flags.values()):
+            residential_status = "rejected"
+            residential_reason = "IP 信誉数据标记为机房、VPN、Tor 或异常地址"
+        elif company_type in {"isp", "business", "education"}:
+            residential_status = "verified"
+            residential_reason = "IP 信誉数据未标记机房/VPN/Tor，网络归属为 ISP"
+        else:
+            residential_status = "unknown"
+            residential_reason = "网络可连接，但公开信誉数据不足以确认住宅属性"
+        connection = who.get("connection") if isinstance(who.get("connection"), dict) else {}
+        normalized_response = {
+            "success": True,
+            "ip": exit_ip,
+            "country": str(who.get("country") or "").strip(),
+            "country_code": str(who.get("country_code") or "").strip(),
+            "region": str(who.get("region") or "").strip(),
+            "city": str(who.get("city") or "").strip(),
+            "type": str(who.get("type") or "").strip(),
+            "connection": {
+                "asn": connection.get("asn"),
+                "org": str(connection.get("org") or "").strip(),
+                "isp": str(connection.get("isp") or "").strip(),
+                "domain": str(connection.get("domain") or "").strip(),
+            },
+        }
+        result.update(
+            {
+                "direct_ip": direct_ip,
+                "exit_ip": exit_ip,
+                "latency_ms": latency_ms,
+                "route_verified": route_verified,
+                "ip_consistent": ip_consistent,
+                "static_consistent": static_consistent,
+                "previous_exit_ip": previous_ip,
+                "residential_status": residential_status,
+                "residential_reason": residential_reason,
+                "response": normalized_response,
+                "reputation": {
+                    **negative_flags,
+                    "company_name": str(company.get("name") or "").strip(),
+                    "company_type": company_type,
+                },
+                "ok": bool(route_verified and static_consistent and residential_status == "verified"),
+            }
+        )
+        if not route_verified:
+            result["error"] = "代理出口与服务器直连出口相同，未确认流量经过代理"
+        elif not static_consistent:
+            result["error"] = "本次出口 IP 与重复检测或历史出口不一致，不符合静态 IP 要求"
+        elif residential_status != "verified":
+            result["error"] = residential_reason
+    except Exception as exc:
+        result.update({"ok": False, "error_code": type(exc).__name__, "error": _proxy_check_error_message(exc)})
+    return _redact_sensitive(
+        result,
+        secrets=(str(proxy.get("username") or ""), str(proxy.get("password") or "")),
+    )
+
+
+def test_social_proxy(payload: SocialProxyCheckPayload, *, owner_user_id: int = 0) -> dict[str, Any]:
+    _normalize_proxy_connection_mode(payload.connection_mode)
+    current: dict[str, Any] = {}
+    clean_proxy_id = str(payload.proxy_id or "").strip()
+    if clean_proxy_id:
+        with db() as conn:
+            row = conn.execute(
+                "SELECT * FROM social_proxies WHERE id = ? AND user_id = ?",
+                (clean_proxy_id, max(0, int(owner_user_id or 0))),
+            ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="代理不存在")
+        current = dict(row)
+    proxy_type, host, port = _validate_proxy_endpoint(payload.proxy_type, payload.host, payload.port)
+    username = str(payload.username).strip() if payload.username is not None else str(current.get("username") or "").strip()
+    password = str(payload.password) if payload.password is not None else str(current.get("password") or "")
+    _validate_proxy_credentials(username, password)
+    candidate = {
+        "proxy_type": proxy_type,
+        "host": host,
+        "port": port,
+        "username": username,
+        "password": password,
+    }
+    return _run_proxy_connection_check(candidate, previous_exit_ip=_last_proxy_exit_ip(current))
+
+
 def check_social_proxy(proxy_id: str) -> dict[str, Any]:
     with db() as conn:
         row = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="代理不存在")
     proxy = dict(row)
-    proxy_url = _proxy_url(proxy, include_password=True)
-    result: dict[str, Any] = {"ok": False, "checked_at": _now(), "proxy": _proxy_url(proxy, include_password=False)}
-    try:
-        resp = requests.get(
-            "https://ipwho.is/?fields=success,message,ip,country,country_code",
-            proxies={"http": proxy_url, "https": proxy_url},
-            timeout=20,
-        )
-        response = resp.json() if resp.ok else resp.text[:500]
-        response_ok = isinstance(response, dict) and response.get("success") is not False and bool(response.get("ip"))
-        result.update({"ok": bool(resp.ok and response_ok), "status_code": resp.status_code, "response": response})
-    except Exception as exc:
-        result.update({"ok": False, "error": str(exc)})
-    safe_result = _redact_sensitive(
-        result,
-        secrets=(str(proxy.get("username") or ""), str(proxy.get("password") or "")),
-    )
-    status = "active" if result.get("ok") else "failed"
-    response = result.get("response") if isinstance(result.get("response"), dict) else {}
-    detected_country = str(response.get("country_code") or response.get("country") or "").strip()
+    safe_result = _run_proxy_connection_check(proxy, previous_exit_ip=_last_proxy_exit_ip(proxy))
+    status = "active" if safe_result.get("ok") else "failed"
+    response = safe_result.get("response") if isinstance(safe_result.get("response"), dict) else {}
+    connection = response.get("connection") if isinstance(response.get("connection"), dict) else {}
+    detected_country = str(response.get("country_code") or response.get("country") or "").strip() if status == "active" else ""
+    detected_region = str(response.get("region") or "").strip() if status == "active" else ""
+    detected_city = str(response.get("city") or "").strip() if status == "active" else ""
+    detected_isp = str(connection.get("isp") or connection.get("org") or "").strip() if status == "active" else ""
     with db() as conn:
         checked_at = _now()
         cursor = conn.execute(
             """
             UPDATE social_proxies
-            SET status = ?, country = CASE WHEN ? != '' THEN ? ELSE country END,
+            SET status = ?, country = ?, region = ?, city = ?, isp = ?,
                 last_check_at = ?, last_check_result = ?, updated_at = ?
             WHERE id = ? AND proxy_type = ? AND host = ? AND port = ?
               AND username = ? AND password = ?
               AND updated_at = ? AND status = ?
             """,
             (
-                status,
-                detected_country, detected_country,
+                status, detected_country, detected_region, detected_city, detected_isp,
                 checked_at, json.dumps(safe_result, ensure_ascii=False), checked_at,
                 proxy_id, proxy["proxy_type"], proxy["host"], proxy["port"], proxy["username"], proxy["password"],
                 proxy["updated_at"], proxy["status"],
@@ -2103,7 +2275,7 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
         proxy_id = str(account["proxy_id"] or "").strip()
         if proxy_id:
             proxy = conn.execute(
-                "SELECT status, ip_type, expires_at FROM social_proxies WHERE id = ? AND user_id = ?",
+                "SELECT status, ip_type, expires_at, last_check_at, last_check_result FROM social_proxies WHERE id = ? AND user_id = ?",
                 (proxy_id, int(account["user_id"] or 0)),
             ).fetchone()
             if not proxy:
@@ -2111,10 +2283,12 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
             proxy_status = str(proxy["status"] or "").strip().lower()
             if str(proxy["ip_type"] or "").strip().lower() != "static_residential":
                 raise HTTPException(status_code=409, detail="账号仅允许使用静态住宅 IP")
-            if proxy_status != "active":
-                raise HTTPException(status_code=409, detail="账号绑定的代理不可用，请先启用、修复或重新检测")
             if _proxy_is_expired(proxy):
                 raise HTTPException(status_code=409, detail="账号绑定的静态住宅代理已过期，请续费或更换后再执行任务")
+            if proxy_status != "active":
+                raise HTTPException(status_code=409, detail="账号绑定的代理不可用，请先启用、修复或重新检测")
+            if not _proxy_has_verified_check(proxy):
+                raise HTTPException(status_code=409, detail="账号绑定的代理尚未通过真实网络检测，请先检测")
         owner_user_id = int(account["user_id"] or 0)
         _require_active_owner_user(conn, owner_user_id)
         account_persona_id = str(account["persona_id"] or "").strip()
@@ -2702,10 +2876,12 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
         raise RuntimeError("账号代理不是静态住宅 IP，已阻止浏览器启动")
     if proxy_id and proxy is None:
         raise RuntimeError("账号绑定的住宅代理不存在，已阻止浏览器启动")
-    if proxy is not None and str(proxy.get("status") or "").strip().lower() != "active":
-        raise RuntimeError("账号代理不可用，已阻止浏览器启动")
     if proxy is not None and _proxy_is_expired(proxy):
         raise RuntimeError("账号绑定的静态住宅代理已过期，已阻止浏览器启动")
+    if proxy is not None and str(proxy.get("status") or "").strip().lower() != "active":
+        raise RuntimeError("账号代理不可用，已阻止浏览器启动")
+    if proxy is not None and not _proxy_has_verified_check(proxy):
+        raise RuntimeError("账号代理尚未通过真实网络检测，已阻止浏览器启动")
     if _is_task_cancelled(task_id):
         _discard_ephemeral_task_secrets(task_id)
         return
@@ -3690,6 +3866,7 @@ def _residential_proxy_public(row: Any) -> dict[str, Any]:
     response = safe_result.get("response") if isinstance(safe_result.get("response"), dict) else {}
     return {
         "protocol": str(item.get("proxy_type") or ""),
+        "connection_mode": "proxy",
         "host": str(item.get("host") or ""),
         "port": int(item.get("port") or 0),
         "username_configured": bool(str(item.get("username") or "")),
@@ -3706,7 +3883,7 @@ def _residential_proxy_public(row: Any) -> dict[str, Any]:
         "status": str(item.get("status") or ""),
         "last_check_at": int(item.get("last_check_at") or 0),
         "last_check_result": safe_result,
-        "exit_ip": str(response.get("ip") or safe_result.get("ip") or ""),
+        "exit_ip": str(response.get("ip") or safe_result.get("exit_ip") or safe_result.get("ip") or ""),
     }
 
 
@@ -3805,6 +3982,7 @@ def _proxy_public(row: Any, *, bound_account_ids: list[str] | None = None) -> di
         "id": str(item.get("id") or ""),
         "name": str(item.get("name") or ""),
         "proxy_type": str(item.get("proxy_type") or ""),
+        "connection_mode": "proxy",
         "host": str(item.get("host") or ""),
         "port": int(item.get("port") or 0),
         "username_configured": bool(str(item.get("username") or "")),
@@ -3821,7 +3999,7 @@ def _proxy_public(row: Any, *, bound_account_ids: list[str] | None = None) -> di
         "status": str(item.get("status") or ""),
         "last_check_at": int(item.get("last_check_at") or 0),
         "last_check_result": last_check_result,
-        "exit_ip": str(response.get("ip") or last_check_result.get("ip") or ""),
+        "exit_ip": str(response.get("ip") or last_check_result.get("exit_ip") or last_check_result.get("ip") or ""),
         "created_at": int(item.get("created_at") or 0),
         "updated_at": int(item.get("updated_at") or 0),
     }
@@ -3918,6 +4096,13 @@ def _proxy_is_expired(proxy: Any) -> bool:
     return bool(expires_at and expires_at <= _now())
 
 
+def _proxy_has_verified_check(proxy: Any) -> bool:
+    if not proxy or int(proxy["last_check_at"] or 0) <= 0:
+        return False
+    result = _loads(proxy["last_check_result"], {})
+    return bool(isinstance(result, dict) and result.get("ok") is True)
+
+
 def _normalize_platform(platform: str) -> str:
     value = str(platform or "instagram").strip().lower()
     if value not in {"instagram", "threads"}:
@@ -3932,19 +4117,123 @@ def _normalize_proxy_type(proxy_type: str) -> str:
     return value
 
 
+def _normalize_proxy_connection_mode(value: str | None) -> str:
+    clean = str(value or "proxy").strip().lower()
+    if clean != "proxy":
+        raise HTTPException(status_code=400, detail="代理方式仅支持 Proxy（代理服务器）")
+    return "proxy"
+
+
+def _normalize_proxy_source(value: Any) -> str:
+    raw = str(value or "manual").strip()
+    clean = raw.lower()
+    aliases = {"owlproxy": "owlproxy", "owl proxy": "owlproxy"}
+    if clean in {"manual", "provider", "self_owned"} or clean in aliases:
+        return aliases.get(clean, clean)
+    if len(raw) > 80 or not re.fullmatch(r"[\w .&()\-/]+", raw, flags=re.UNICODE):
+        raise HTTPException(status_code=400, detail="代理来源格式无效")
+    return raw
+
+
+def _normalize_proxy_purchase_status(value: Any) -> str:
+    clean = str(value or "owned").strip().lower()
+    if clean not in {"owned", "leased"}:
+        raise HTTPException(status_code=400, detail="持有方式仅支持自有或租用")
+    return clean
+
+
+def _validate_proxy_endpoint(proxy_type: Any, host: Any, port: Any) -> tuple[str, str, int]:
+    scheme = _normalize_proxy_type(str(proxy_type or "http"))
+    clean_host = str(host or "").strip()
+    try:
+        clean_port = int(port or 0)
+    except (TypeError, ValueError):
+        clean_port = 0
+    if not clean_host or not 1 <= clean_port <= 65535:
+        raise HTTPException(status_code=400, detail="服务器地址和端口必填，端口必须在 1-65535 之间")
+    if any(token in clean_host for token in ("://", "/", "?", "#", "@")) or any(char.isspace() for char in clean_host):
+        raise HTTPException(status_code=400, detail="服务器地址只能填写裸 IP 或域名，不能包含协议、端口、路径或账号")
+    if clean_host.startswith("[") and clean_host.endswith("]"):
+        clean_host = clean_host[1:-1]
+    try:
+        parsed_ip = ipaddress.ip_address(clean_host)
+        clean_host = parsed_ip.compressed
+    except ValueError:
+        if ":" in clean_host:
+            raise HTTPException(status_code=400, detail="IPv6 地址格式无效")
+        try:
+            ascii_host = clean_host.rstrip(".").encode("idna").decode("ascii").lower()
+        except UnicodeError:
+            raise HTTPException(status_code=400, detail="服务器域名格式无效")
+        labels = ascii_host.split(".")
+        if (
+            len(ascii_host) > 253
+            or not labels
+            or any(not label or len(label) > 63 or not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", label) for label in labels)
+            or (all(label.isdigit() for label in labels) and len(labels) == 4)
+        ):
+            raise HTTPException(status_code=400, detail="服务器域名或 IP 格式无效")
+        clean_host = ascii_host
+    return scheme, clean_host, clean_port
+
+
+def _validate_proxy_credentials(username: Any, password: Any) -> None:
+    clean_username = str(username or "").strip()
+    raw_password = str(password or "")
+    if raw_password and not clean_username:
+        raise HTTPException(status_code=400, detail="填写代理密码时必须同时填写认证账号")
+
+
+def _public_ip(value: Any, *, label: str) -> str:
+    clean = str(value or "").strip()
+    try:
+        parsed = ipaddress.ip_address(clean)
+    except ValueError:
+        raise RuntimeError(f"{label}返回了无效 IP")
+    if not parsed.is_global:
+        raise RuntimeError(f"{label}返回的不是公网 IP")
+    return parsed.compressed
+
+
+def _response_json(response: Any, *, label: str) -> dict[str, Any]:
+    if not bool(getattr(response, "ok", False)):
+        raise RuntimeError(f"{label}请求失败（HTTP {int(getattr(response, 'status_code', 0) or 0)}）")
+    data = response.json()
+    if not isinstance(data, dict):
+        raise RuntimeError(f"{label}返回格式无效")
+    return data
+
+
+def _proxy_check_error_message(exc: Exception) -> str:
+    text = str(exc or "").lower()
+    if "timed out" in text or "timeout" in text:
+        return "代理检测超时，请确认代理服务在线后重试。"
+    if "name or service not known" in text or "getaddrinfo" in text or "failed to resolve" in text:
+        return "服务器地址无法解析，请检查 IP 或域名是否填写正确。"
+    if "connection refused" in text or "0x05" in text or "proxyerror" in text or "socks" in text:
+        return "代理服务器拒绝连接，请核对服务器地址、端口、代理类型和认证信息。"
+    if isinstance(exc, RuntimeError) and len(str(exc)) <= 160:
+        return str(exc)
+    return "代理网络检测失败，请检查连接参数后重试。"
+
+
 def _proxy_url(proxy: dict[str, Any], *, include_password: bool) -> str:
-    scheme = _normalize_proxy_type(str(proxy.get("proxy_type") or "http"))
-    host = str(proxy.get("host") or "").strip()
-    port = int(proxy.get("port") or 0)
+    scheme, host, port = _validate_proxy_endpoint(
+        proxy.get("proxy_type") or "http",
+        proxy.get("host") or "",
+        proxy.get("port") or 0,
+    )
+    display_host = f"[{host}]" if ":" in host else host
     username = str(proxy.get("username") or "").strip()
-    raw_password = str(proxy.get("password") or "").strip()
+    raw_password = str(proxy.get("password") or "")
+    _validate_proxy_credentials(username, raw_password)
     password = quote(raw_password, safe="") if include_password else ("***" if raw_password else "")
     auth = ""
     if username:
         encoded_username = quote(username, safe="")
         auth = encoded_username if not password else f"{encoded_username}:{password}"
         auth += "@"
-    return f"{scheme}://{auth}{host}:{port}"
+    return f"{scheme}://{auth}{display_host}:{port}"
 
 
 def _parse_schedule(value: int | str | None) -> int:

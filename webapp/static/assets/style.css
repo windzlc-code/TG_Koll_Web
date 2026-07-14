@@ -2604,6 +2604,84 @@ select:focus {
   gap: 2px;
 }
 
+.auth-login-password-field {
+  position: relative;
+  display: block;
+}
+
+.auth-login-password-field input {
+  padding-right: 48px;
+}
+
+.auth-login-password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 7px;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  color: #64748b;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.auth-login-password-toggle:hover,
+.auth-login-password-toggle:focus-visible {
+  color: #0f766e;
+  background: #ecf8f5;
+}
+
+.auth-login-password-toggle:focus-visible {
+  outline: 2px solid #14b8a6;
+  outline-offset: 1px;
+}
+
+.auth-login-password-toggle svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.auth-login-eye-slash {
+  opacity: 0;
+}
+
+.auth-login-password-toggle.is-visible .auth-login-eye-slash {
+  opacity: 1;
+}
+
+.auth-login-remember {
+  display: inline-flex;
+  gap: 9px;
+  align-items: center;
+  margin-top: 10px;
+  color: #475569;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.auth-login-remember[hidden] {
+  display: none;
+}
+
+.auth-login-remember input {
+  width: 18px;
+  height: 18px;
+  min-height: 18px;
+  margin: 0;
+  accent-color: #16a34a;
+}
+
 .auth-submit-row {
   display: flex;
   justify-content: stretch;
