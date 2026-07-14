@@ -17,6 +17,68 @@ const ADMIN_PAGE_LABELS = {
   sentimentCookies: "舆情 Cookie",
   account: "账号设置",
 };
+const ADMIN_MOBILE_NAV_QUERY = "(max-width: 760px)";
+const adminMobileNavMedia = window.matchMedia?.(ADMIN_MOBILE_NAV_QUERY);
+
+function isAdminMobileNavMode() {
+  return Boolean(adminMobileNavMedia?.matches);
+}
+
+function setAdminMobileNavOpen(open, { restoreFocus = false } = {}) {
+  const toggle = el("adminMobileNavToggle");
+  const drawer = el("adminMobileDrawer");
+  const backdrop = el("adminMobileNavBackdrop");
+  const main = document.querySelector(".page-admin .main");
+  if (!toggle || !drawer || !backdrop || !document.body) return;
+  const nextOpen = Boolean(open && isAdminMobileNavMode());
+  const shouldRestoreFocus = Boolean(!nextOpen && (restoreFocus || drawer.contains(document.activeElement)));
+  document.body.classList.toggle("admin-mobile-nav-open", nextOpen);
+  toggle.setAttribute("aria-expanded", nextOpen ? "true" : "false");
+  toggle.setAttribute("aria-label", nextOpen ? "关闭后台栏目菜单" : "打开后台栏目菜单");
+  toggle.inert = nextOpen;
+  drawer.setAttribute("aria-hidden", isAdminMobileNavMode() && !nextOpen ? "true" : "false");
+  drawer.inert = Boolean(isAdminMobileNavMode() && !nextOpen);
+  if (main) main.inert = nextOpen;
+  backdrop.hidden = !nextOpen;
+  if (nextOpen) {
+    const focusTarget = drawer.querySelector("[data-page].is-active") || drawer.querySelector("[data-page]");
+    window.requestAnimationFrame(() => focusTarget?.focus({ preventScroll: true }));
+  } else if (shouldRestoreFocus) {
+    toggle.focus({ preventScroll: true });
+  }
+}
+
+function bindAdminMobileNavigation() {
+  const toggle = el("adminMobileNavToggle");
+  const closeButton = el("adminMobileNavClose");
+  const backdrop = el("adminMobileNavBackdrop");
+  if (!toggle || !closeButton || !backdrop) return;
+  toggle.addEventListener("click", () => {
+    setAdminMobileNavOpen(toggle.getAttribute("aria-expanded") !== "true", { restoreFocus: true });
+  });
+  closeButton.addEventListener("click", () => setAdminMobileNavOpen(false, { restoreFocus: true }));
+  backdrop.addEventListener("click", () => setAdminMobileNavOpen(false, { restoreFocus: true }));
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Tab" && document.body.classList.contains("admin-mobile-nav-open")) {
+      const drawer = el("adminMobileDrawer");
+      const focusable = Array.from(drawer?.querySelectorAll("button:not([disabled]), a[href], [tabindex]:not([tabindex='-1'])") || [])
+        .filter((node) => !node.inert && node.getClientRects().length > 0);
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (first && last && (event.shiftKey ? document.activeElement === first : document.activeElement === last)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus({ preventScroll: true });
+      }
+    }
+    if (event.key === "Escape" && document.body.classList.contains("admin-mobile-nav-open")) {
+      setAdminMobileNavOpen(false, { restoreFocus: true });
+    }
+  });
+  const syncMode = () => setAdminMobileNavOpen(false);
+  if (typeof adminMobileNavMedia?.addEventListener === "function") adminMobileNavMedia.addEventListener("change", syncMode);
+  else adminMobileNavMedia?.addListener?.(syncMode);
+  setAdminMobileNavOpen(false);
+}
 
 const SENSITIVE_RUNTIME_INPUT_IDS = [
   "rtLlmApiKeyGpt",
@@ -113,6 +175,8 @@ function setActiveAdminPage(page, updateHash = true) {
     node.setAttribute("aria-hidden", active ? "false" : "true");
   });
   setText("adminCurrentPageLabel", pageLabel);
+  setText("adminMobileCurrentLabel", pageLabel);
+  setText("adminMobileDrawerCurrentLabel", pageLabel);
   document.title = `${pageLabel} - 运营后台 - Web 素材生成平台`;
   const targetHash = `admin-${nextPage}`;
   if (updateHash && String(location.hash || "").replace(/^#/, "") !== targetHash) {
@@ -4311,7 +4375,8 @@ function bindActions() {
 
   document.querySelectorAll("[data-page]").forEach((node) => {
     node.addEventListener("click", () => {
-      setActiveAdminPage(node.dataset.page || "overview");
+      const changed = setActiveAdminPage(node.dataset.page || "overview");
+      if (changed !== false) setAdminMobileNavOpen(false, { restoreFocus: true });
     });
   });
 
@@ -4502,6 +4567,7 @@ function bindTextModelContentTabs() {
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
+  bindAdminMobileNavigation();
   try {
     const me = await ensureAdmin();
     if (!me) return;

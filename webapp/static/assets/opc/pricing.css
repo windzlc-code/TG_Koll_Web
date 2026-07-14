@@ -519,3 +519,71 @@
   .pricing-order-overlay { align-items: end; padding: 0; }
   .pricing-order-dialog { width: 100%; max-height: 92vh; }
 }
+
+/* Final mobile overrides: contain long account/order data inside the viewport. */
+@media (max-width: 560px) {
+  .pricing-page-hero {
+    min-height: max(560px, 100svh);
+  }
+
+  .pricing-page-hero-copy {
+    width: calc(100% - 24px);
+    padding-top: max(128px, calc(104px + env(safe-area-inset-top)));
+    padding-bottom: 42px;
+  }
+
+  .pricing-page-hero-copy h1 {
+    font-size: clamp(40px, 14vw, 60px);
+  }
+
+  .pricing-page-hero-actions,
+  .pricing-order-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .pricing-page-hero-actions .button,
+  .pricing-order-actions .button {
+    width: 100%;
+    min-height: 48px;
+    justify-content: center;
+  }
+
+  .pricing-facts,
+  .pricing-account-strip,
+  .pricing-public-section {
+    width: calc(100% - 24px);
+  }
+
+  .pricing-account-strip,
+  .pricing-account-strip > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .pricing-account-strip strong,
+  .pricing-account-strip span,
+  .pricing-action-row > * {
+    overflow-wrap: anywhere;
+  }
+
+  .pricing-action-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .pricing-order-overlay {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .pricing-order-dialog {
+    max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    padding: 26px 18px max(22px, env(safe-area-inset-bottom));
+    overscroll-behavior: contain;
+  }
+
+  .pricing-order-close {
+    width: 44px;
+    height: 44px;
+  }
+}

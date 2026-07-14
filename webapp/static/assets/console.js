@@ -17,6 +17,7 @@ const LIVE_BROWSER_AUTO_CLOSE_SECONDS_KEY = "wk-live-browser-auto-close-seconds"
 const LIVE_BROWSER_MAX_CONCURRENCY_KEY = "wk-live-browser-max-concurrency";
 const LIVE_BROWSER_TEXT_INPUT_MODE_KEY = "wk-live-browser-text-input-mode";
 const LIVE_BROWSER_LAYOUT_KEY = "wk-live-browser-layout";
+const MOBILE_NAV_QUERY = "(max-width: 980px)";
 const ADMIN_WORKSPACE_USER_ID = String(document.querySelector('meta[name="admin-workspace-user-id"]')?.content || "").trim();
 const ADMIN_CONSOLE_SESSION = document.querySelector('meta[name="admin-console-session"]')?.content === "1";
 
@@ -460,6 +461,7 @@ const state = {
   socialTaskToastKeys: {},
   socialTaskToastBatches: {},
   socialTaskToastTransitions: {},
+  suppressedSocialTaskPromptIds: new Set(),
   socialTaskPersonaRefreshSignatures: {},
   socialBrowserSessions: [],
   liveBrowserLayout: storedLiveBrowserLayout(),
@@ -610,6 +612,7 @@ function clearTenantInMemoryState() {
   state.socialTaskToastKeys = {};
   state.socialTaskToastBatches = {};
   state.socialTaskToastTransitions = {};
+  state.suppressedSocialTaskPromptIds = new Set();
   state.socialTaskPersonaRefreshSignatures = {};
   state.socialBrowserSessions = [];
   state.liveBrowserExpandedSessionId = "";
@@ -772,6 +775,67 @@ function toggleTheme() {
   applyTheme(currentTheme() === "dark" ? "light" : "dark");
 }
 
+const mobileNavMedia = window.matchMedia?.(MOBILE_NAV_QUERY);
+
+function isMobileNavMode() {
+  return Boolean(mobileNavMedia?.matches);
+}
+
+function setMobileNavOpen(open, { restoreFocus = false } = {}) {
+  const toggle = $("mobileNavToggle");
+  const sidebar = $("consoleSidebar");
+  const backdrop = $("consoleNavBackdrop");
+  const main = document.querySelector(".console-main");
+  const toastHost = $("toastHost");
+  if (!toggle || !sidebar || !backdrop || !document.body) return;
+  const nextOpen = Boolean(open && isMobileNavMode());
+  const shouldRestoreFocus = Boolean(!nextOpen && (restoreFocus || sidebar.contains(document.activeElement)));
+  document.body.classList.toggle("mobile-nav-open", nextOpen);
+  toggle.setAttribute("aria-expanded", nextOpen ? "true" : "false");
+  toggle.setAttribute("aria-label", nextOpen ? "关闭导航" : "打开导航");
+  sidebar.setAttribute("aria-hidden", isMobileNavMode() && !nextOpen ? "true" : "false");
+  sidebar.inert = Boolean(isMobileNavMode() && !nextOpen);
+  if (main) main.inert = nextOpen;
+  if (toastHost) toastHost.inert = nextOpen;
+  backdrop.hidden = !nextOpen;
+  if (nextOpen) {
+    window.requestAnimationFrame(() => sidebar.querySelector("button.is-active, button, a")?.focus({ preventScroll: true }));
+  } else if (shouldRestoreFocus) {
+    toggle.focus({ preventScroll: true });
+  }
+}
+
+function bindMobileNavigation() {
+  const toggle = $("mobileNavToggle");
+  const closeButton = $("mobileNavClose");
+  const sidebar = $("consoleSidebar");
+  const backdrop = $("consoleNavBackdrop");
+  if (!toggle || !closeButton || !sidebar || !backdrop) return;
+  toggle.addEventListener("click", () => {
+    setMobileNavOpen(toggle.getAttribute("aria-expanded") !== "true", { restoreFocus: true });
+  });
+  backdrop.addEventListener("click", () => setMobileNavOpen(false, { restoreFocus: true }));
+  closeButton.addEventListener("click", () => setMobileNavOpen(false, { restoreFocus: true }));
+  sidebar.addEventListener("click", (event) => {
+    if (!isMobileNavMode()) return;
+    const target = event.target.closest("button, a");
+    if (!target) return;
+    if (target.matches(".nav-parent-toggle") && state.view === "workspace") return;
+    if (target.matches("[data-module], [data-workspace-view]")) {
+      window.requestAnimationFrame(() => setMobileNavOpen(false));
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && document.body.classList.contains("mobile-nav-open")) {
+      setMobileNavOpen(false, { restoreFocus: true });
+    }
+  });
+  const syncMode = () => setMobileNavOpen(false);
+  if (typeof mobileNavMedia?.addEventListener === "function") mobileNavMedia.addEventListener("change", syncMode);
+  else mobileNavMedia?.addListener?.(syncMode);
+  setMobileNavOpen(false);
+}
+
 const zhHantPhraseMap = [
   ["Web 任务控制台", "Web 任務控制台"],
   ["控制台", "控制台"],
@@ -863,7 +927,7 @@ function translateTextNode(node, language) {
 function translateElementAttributes(node, language) {
   if (!node || node.nodeType !== Node.ELEMENT_NODE) return;
   if (node.closest?.("[data-i18n-skip]")) return;
-  const attrs = ["title", "aria-label", "placeholder"];
+  const attrs = ["title", "aria-label", "placeholder", "data-mobile-label"];
   attrs.forEach((attr) => {
     if (!node.hasAttribute(attr)) return;
     let originals = i18nAttrOriginals.get(node);
@@ -895,7 +959,10 @@ function translateConsoleLanguage(root = document.body, language = currentLangua
   const textNodes = [];
   while (walker.nextNode()) textNodes.push(walker.currentNode);
   textNodes.forEach((node) => translateTextNode(node, language));
-  const elements = root.nodeType === Node.ELEMENT_NODE ? [root, ...root.querySelectorAll("[title], [aria-label], [placeholder]")] : Array.from(document.querySelectorAll("[title], [aria-label], [placeholder]"));
+  const translatedAttributeSelector = "[title], [aria-label], [placeholder], [data-mobile-label]";
+  const elements = root.nodeType === Node.ELEMENT_NODE
+    ? [root, ...root.querySelectorAll(translatedAttributeSelector)]
+    : Array.from(document.querySelectorAll(translatedAttributeSelector));
   elements.forEach((node) => translateElementAttributes(node, language));
   document.title = language === "zh-Hant" ? toTraditionalChinese("Web 任务控制台") : "Web 任务控制台";
 }
@@ -3503,6 +3570,12 @@ function socialTaskToastKey(taskId, task = null) {
   return state.socialTaskToastKeys[cleanTaskId] || socialTaskToastLaneKey(task) || `social-task:${cleanTaskId}`;
 }
 
+function socialTaskPromptSuppressed(task) {
+  const taskId = String(task?.id || "").trim();
+  if (!taskId) return false;
+  return Boolean(state.suppressedSocialTaskPromptIds?.has(taskId));
+}
+
 function socialTaskToastTerminal(task) {
   const status = String(task?.status || "").trim();
   // `need_manual` intentionally keeps its backend task open so the live
@@ -3601,6 +3674,10 @@ function socialTaskToastMessage(task) {
 function syncSocialTaskToast(task, { force = false } = {}) {
   const incomingTaskId = String(task?.id || "").trim();
   if (!incomingTaskId) return;
+  if (socialTaskPromptSuppressed(task)) {
+    dismissToastByKey(socialTaskToastKey(incomingTaskId, task), { manual: true });
+    return;
+  }
   const resolved = resolveSocialTaskToast(task);
   task = resolved.task;
   const taskId = String(task?.id || "").trim();
@@ -3671,12 +3748,16 @@ function syncSocialTaskScheduleWake() {
 }
 
 function syncSocialTaskToastAutoRefresh() {
-  if (!hasActiveSocialTaskToast()) {
+  if (document.hidden || !hasActiveSocialTaskToast()) {
     if (state.socialTaskToastRefreshTimer) {
       window.clearInterval(state.socialTaskToastRefreshTimer);
       state.socialTaskToastRefreshTimer = 0;
     }
-    syncSocialTaskScheduleWake();
+    if (document.hidden && state.socialTaskScheduleWakeTimer) {
+      window.clearTimeout(state.socialTaskScheduleWakeTimer);
+      state.socialTaskScheduleWakeTimer = 0;
+    }
+    if (!document.hidden) syncSocialTaskScheduleWake();
     return;
   }
   if (state.socialTaskScheduleWakeTimer) {
@@ -3685,7 +3766,7 @@ function syncSocialTaskToastAutoRefresh() {
   }
   if (state.socialTaskToastRefreshTimer) return;
   state.socialTaskToastRefreshTimer = window.setInterval(() => {
-    if (!hasActiveSocialTaskToast()) {
+    if (document.hidden || !hasActiveSocialTaskToast()) {
       syncSocialTaskToastAutoRefresh();
       return;
     }
@@ -4386,10 +4467,11 @@ function setView(view) {
   if (view === "social" || view === "accounts" || view === "settings") loadSocial();
   syncTaskQueueAutoRefresh();
   syncAccountStatusAutoRefresh();
+  setMobileNavOpen(false);
 }
 
 function syncTaskQueueAutoRefresh() {
-  const shouldRun = state.view === "tasks" || (state.view === "workspace" && state.activeModule === "queue");
+  const shouldRun = !document.hidden && (state.view === "tasks" || (state.view === "workspace" && state.activeModule === "queue"));
   if (!shouldRun) {
     if (state.taskQueueRefreshTimer) {
       window.clearInterval(state.taskQueueRefreshTimer);
@@ -4399,7 +4481,7 @@ function syncTaskQueueAutoRefresh() {
   }
   if (state.taskQueueRefreshTimer) return;
   state.taskQueueRefreshTimer = window.setInterval(() => {
-    if (!(state.view === "tasks" || (state.view === "workspace" && state.activeModule === "queue"))) {
+    if (document.hidden || !(state.view === "tasks" || (state.view === "workspace" && state.activeModule === "queue"))) {
       syncTaskQueueAutoRefresh();
       return;
     }
@@ -4418,7 +4500,7 @@ async function refreshAccountStatusOnce() {
 }
 
 function syncAccountStatusAutoRefresh() {
-  if (!shouldRefreshAccountStatus()) {
+  if (document.hidden || !shouldRefreshAccountStatus()) {
     if (state.accountStatusRefreshTimer) {
       window.clearInterval(state.accountStatusRefreshTimer);
       state.accountStatusRefreshTimer = 0;
@@ -4427,7 +4509,7 @@ function syncAccountStatusAutoRefresh() {
   }
   if (state.accountStatusRefreshTimer) return;
   state.accountStatusRefreshTimer = window.setInterval(() => {
-    if (!shouldRefreshAccountStatus()) {
+    if (document.hidden || !shouldRefreshAccountStatus()) {
       syncAccountStatusAutoRefresh();
       return;
     }
@@ -5511,17 +5593,17 @@ function renderPersonaDraftTableRows(posts, personaId, allRows = posts) {
                 <span>勾选</span>
               </label>
             </div>
-            <div class="persona-draft-table-cell persona-draft-table-index" role="cell">${esc(index + 1)}</div>
-            <div class="persona-draft-table-cell persona-draft-table-title ${hotMeta ? "is-hot-import" : ""}" role="cell">
+            <div class="persona-draft-table-cell persona-draft-table-index" role="cell" data-mobile-label="序号">${esc(index + 1)}</div>
+            <div class="persona-draft-table-cell persona-draft-table-title ${hotMeta ? "is-hot-import" : ""}" role="cell" data-mobile-label="草稿">
               <strong>${esc(displayTitle)}</strong>
               ${renderMediaTypeBadge(mediaItems)}
               ${hotMeta ? renderPersonaHotOrigin(hotMeta, { compact: true }) : ""}
               ${hotMeta ? renderPersonaHotInfo(hotMeta, post.id) : ""}
             </div>
-            <div class="persona-draft-table-cell persona-draft-table-time" role="cell">${esc(formatTime(post.published_at || post.updated_at || post.created_at))}</div>
-            <div class="persona-draft-table-cell persona-draft-table-content" role="cell">${esc(String(post.content || "").slice(0, 48))}</div>
-            <div class="persona-draft-table-cell" role="cell"><span class="module-chip ${isSelected ? "is-dark" : ""}">${isSelected ? "当前选中" : "待选择"}</span></div>
-            <div class="persona-draft-table-actions" role="cell">
+            <div class="persona-draft-table-cell persona-draft-table-time" role="cell" data-mobile-label="更新时间">${esc(formatTime(post.published_at || post.updated_at || post.created_at))}</div>
+            <div class="persona-draft-table-cell persona-draft-table-content" role="cell" data-mobile-label="内容">${esc(String(post.content || "").slice(0, 48))}</div>
+            <div class="persona-draft-table-cell" role="cell" data-mobile-label="状态"><span class="module-chip ${isSelected ? "is-dark" : ""}">${isSelected ? "当前选中" : "待选择"}</span></div>
+            <div class="persona-draft-table-actions" role="cell" data-mobile-label="操作">
               ${renderPersonaDraftPostActions(post, { source, isSelected })}
             </div>
           </article>`;
@@ -6330,14 +6412,14 @@ function renderPersonaQueueRows(rows) {
         <input type="checkbox" data-task-queue-select="persona:${esc(task.id)}" ${state.taskQueueSelectedPersonaIds.has(String(task.id || "")) ? "checked" : ""} />
         <span class="sr-only">选择</span>
       </label>
-      <div class="task-persona-queue-type">
+      <div class="task-persona-queue-type" data-mobile-label="任务">
         <strong>${esc(statusLabel(task.task_type || ""))}</strong>
       </div>
-      <div class="task-persona-queue-platform">${esc(queuePlatformLabel(task.platform || ""))}</div>
-      <div class="task-persona-queue-account">${esc(task.account_username || task.account_id || "-")}</div>
-      <div class="task-persona-queue-time">${esc(socialQueueTaskTime(task))}</div>
-      <div>${renderSocialQueueTaskStatus(task)}</div>
-      <div class="row-actions">
+      <div class="task-persona-queue-platform" data-mobile-label="平台">${esc(queuePlatformLabel(task.platform || ""))}</div>
+      <div class="task-persona-queue-account" data-mobile-label="账号">${esc(task.account_username || task.account_id || "-")}</div>
+      <div class="task-persona-queue-time" data-mobile-label="时间">${esc(socialQueueTaskTime(task))}</div>
+      <div data-mobile-label="状态">${renderSocialQueueTaskStatus(task)}</div>
+      <div class="row-actions" data-mobile-label="操作">
         <button type="button" data-social-log="${esc(task.id)}">日志</button>
         ${task.status === "failed" ? `<button type="button" data-social-retry="${esc(task.id)}">重试</button>` : ""}
         ${activeSocialAutomationTask(task) ? `<button type="button" class="muted" data-social-cancel="${esc(task.id)}">取消</button>` : ""}
@@ -6416,10 +6498,10 @@ function renderTaskQueueView() {
         <input type="checkbox" data-task-queue-select="regular:${esc(task.id)}" ${state.taskQueueSelectedRegularIds.has(String(task.id || "")) ? "checked" : ""} />
         <span class="sr-only">选择</span>
       </label>
-      <div><strong>${esc(task.workflow_name || task.type || "任务")}</strong><span>${esc(task.id)}</span></div>
-      <div>${esc(formatTime(task.created_at))}</div>
-      <div>${renderStatusText(task.status || "")}</div>
-      <div class="row-actions">
+      <div data-mobile-label="任务"><strong>${esc(task.workflow_name || task.type || "任务")}</strong><span>${esc(task.id)}</span></div>
+      <div data-mobile-label="创建时间">${esc(formatTime(task.created_at))}</div>
+      <div data-mobile-label="状态">${renderStatusText(task.status || "")}</div>
+      <div class="row-actions" data-mobile-label="操作">
         <button type="button" data-detail="${esc(task.id)}">详情</button>
         ${task.has_download ? `<a href="${esc(adminWorkspaceUrl(`/api/tasks/${encodeURIComponent(task.id)}/download`))}">下载</a>` : ""}
         ${task.status === "failed" ? `<button type="button" data-retry="${esc(task.id)}">重试</button>` : ""}
@@ -14707,6 +14789,7 @@ async function refreshSocialAccountsOnly({ force = false, includeOverview = fals
     saveSocialAccountsSnapshot();
   }
   updateAccountStatusViews();
+  if (includeOverview) renderLiveBrowserSessions();
 }
 
 function refreshLiveBrowserSessionsSoon(taskId = "", attempts = 16, delayMs = 500) {
@@ -14717,8 +14800,12 @@ function refreshLiveBrowserSessionsSoon(taskId = "", attempts = 16, delayMs = 50
     if (state.liveBrowserRefreshToken !== token) return;
     await refreshSocialAccountsOnly({ includeOverview: true }).catch(() => {});
     const sessions = Array.isArray(state.socialBrowserSessions) ? state.socialBrowserSessions : [];
-    const found = !targetTaskId || sessions.some((session) => String(session.task_id || "") === targetTaskId);
-    if (found || attempt >= attempts || state.liveBrowserRefreshToken !== token) return;
+    const matched = targetTaskId
+      ? sessions.find((session) => String(session.task_id || "") === targetTaskId)
+      : sessions[0];
+    const found = !targetTaskId || Boolean(matched);
+    const takeoverPending = Boolean(matched) && liveBrowserLoginMode(matched) === "switching";
+    if ((found && !takeoverPending) || attempt >= attempts || state.liveBrowserRefreshToken !== token) return;
     window.setTimeout(() => run(attempt + 1), delayMs);
   };
   window.setTimeout(() => run(1), 250);
@@ -16725,6 +16812,21 @@ function updateLiveBrowserSessionCard(card, session) {
     stopButton.hidden = !canStopTask;
     stopButton.disabled = !canStopTask;
   }
+  const loginMode = liveBrowserLoginMode(session);
+  card.querySelectorAll(".live-browser-mode-toggle button").forEach((button) => {
+    const buttonMode = button.dataset.liveBrowserMode || "automatic";
+    const active = buttonMode === loginMode;
+    button.classList.toggle("is-active", active);
+    button.classList.toggle("is-pending", buttonMode === "manual" && loginMode === "switching");
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+    if (buttonMode === "manual") {
+      button.dataset.liveBrowserModeSession = sessionId;
+      button.textContent = loginMode === "switching" ? "切换中..." : "人工接管";
+      button.disabled = !liveBrowserIsReady(session) || status !== "running" || loginMode !== "automatic";
+    } else {
+      button.disabled = true;
+    }
+  });
   const note = card.querySelector(".live-browser-interaction-note");
   if (note) note.textContent = liveBrowserInteractionHint(session);
 }
@@ -16784,6 +16886,28 @@ function isManualOpenLoginSession(session) {
     && Boolean(session?.input_allowed);
 }
 
+function liveBrowserLoginMode(session) {
+  if (String(session?.task_type || "").trim().toLowerCase() !== "open_login") return "";
+  const mode = String(session?.login_mode || "").trim().toLowerCase();
+  if (mode === "switching") return "switching";
+  if (mode === "manual") return "manual";
+  return isManualOpenLoginSession(session) || liveBrowserTaskStatus(session) === "need_manual" ? "manual" : "automatic";
+}
+
+function renderLiveBrowserModeToggle(session) {
+  if (String(session?.task_type || "").trim().toLowerCase() !== "open_login") return "";
+  const sessionId = liveBrowserSessionId(session);
+  const mode = liveBrowserLoginMode(session);
+  const running = liveBrowserTaskStatus(session) === "running";
+  const browserReady = liveBrowserIsReady(session);
+  const switching = mode === "switching";
+  return `
+    <div class="live-browser-mode-toggle" role="group" aria-label="登录操作模式">
+      <button type="button" class="${mode === "automatic" ? "is-active" : ""}" aria-pressed="${mode === "automatic" ? "true" : "false"}" disabled>自动登录</button>
+      <button type="button" class="${mode === "manual" ? "is-active" : ""}${switching ? " is-pending" : ""}" data-live-browser-mode="manual" data-live-browser-mode-session="${esc(sessionId)}" aria-pressed="${mode === "manual" ? "true" : "false"}" ${running && browserReady && mode === "automatic" ? "" : "disabled"}>${switching ? "切换中..." : "人工接管"}</button>
+    </div>`;
+}
+
 function liveBrowserIsReady(session) {
   if (Object.prototype.hasOwnProperty.call(session || {}, "browser_ready")) {
     return Boolean(session?.browser_ready);
@@ -16827,6 +16951,7 @@ function liveBrowserInteractionHint(session) {
   const sessionStatus = liveBrowserSessionStatus(session);
   if (sessionStatus === "standby") return "任务已完成，浏览器处于待机状态，可等待系统自动关闭。";
   if (isOpenLoginBrowserStarting(session)) return "Camoufox 指纹浏览器正在启动，窗口就绪后即可人工操作。";
+  if (liveBrowserLoginMode(session) === "switching") return "正在停止自动登录操作，确认后将开放人工输入。";
   if (isManualOpenLoginSession(session)) return "当前处于人工登录，可以直接操作浏览器窗口。";
   if (taskStatus === "need_manual") return "当前需要人工处理，可以直接操作浏览器窗口。";
   return "自动化执行中，当前仅展示实时画面，暂不允许人工输入。";
@@ -16869,6 +16994,7 @@ function renderLiveBrowserSession(session) {
           <span data-live-browser-meta>${esc(`${session.platform || "-"} · ${session.display || "-"} · ${session.width || 720}x${session.height || 1280}`)}</span>
         </div>
         <div class="live-browser-card-actions">
+          ${renderLiveBrowserModeToggle(session)}
           <button type="button" class="live-browser-expand-button" data-live-browser-fullscreen="${esc(sessionId)}" title="放大窗口" aria-label="放大窗口" aria-pressed="false">${renderExpandIcon()}</button>
           <button type="button" data-live-browser-close="${esc(sessionId)}" ${canCloseWindow ? "" : "hidden disabled"}>关闭窗口</button>
           <button type="button" class="danger" data-social-cancel="${esc(session.task_id || "")}" ${canStopTask ? "" : "hidden disabled"}>停止进程</button>
@@ -17019,6 +17145,31 @@ async function closeLiveBrowserSession(sessionId = "") {
     .filter((session) => String(session?.id || session?.session_id || "") !== cleanSessionId);
   renderLiveBrowserSessions();
   await refreshSocialAccountsOnly({ force: true });
+}
+
+async function setLiveBrowserMode(sessionId = "", mode = "manual") {
+  const cleanSessionId = String(sessionId || "").trim();
+  const cleanMode = String(mode || "").trim().toLowerCase();
+  if (!cleanSessionId || cleanMode !== "manual") return;
+  const session = (state.socialBrowserSessions || []).find((item) => liveBrowserSessionId(item) === cleanSessionId);
+  const taskId = String(session?.task_id || "").trim();
+  const result = await api(`/api/persona_dashboard/automation/browser_sessions/${encodeURIComponent(cleanSessionId)}/mode`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode: "manual" }),
+  });
+  if (taskId) {
+    state.suppressedSocialTaskPromptIds.add(taskId);
+    dismissToastByKey(socialTaskToastKey(taskId), { manual: true });
+  }
+  if (session) {
+    session.login_mode = result?.acknowledged ? "manual" : "switching";
+    session.input_allowed = Boolean(result?.acknowledged) && liveBrowserIsReady(session);
+  }
+  renderLiveBrowserSessions();
+  syncSocialTaskToastAutoRefresh();
+  if (taskId) refreshLiveBrowserSessionsSoon(taskId, 180, 500);
+  await refreshSocialAccountsOnly({ force: true, includeOverview: true }).catch(() => {});
 }
 
 function liveBrowserToolInput(sessionId = "") {
@@ -17435,10 +17586,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
         target_url: targetUrl,
         post_url: targetUrl,
         username: taskType === "browse_profile" ? targetUrl : "",
-        // "Open login" is a user-controlled, freshly launched browser
-        // session.  Saved credentials must not silently turn it into an
-        // automated flow that refreshes or redirects the page.
-        auto_submit: taskType === "open_login" ? false : undefined,
+        auto_submit: taskType === "open_login" ? true : undefined,
         media_paths: mediaPaths,
         target_urls: splitLines($("simpleTargetUrls")?.value || $("socialTargetUrls")?.value || ""),
         login_wait_seconds: loginWaitSeconds,
@@ -17495,9 +17643,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
       target_url: targetUrl,
       post_url: targetUrl,
       username: taskType === "browse_profile" ? targetUrl : "",
-      // See the matching publish-path payload above: explicit user login is
-      // always manual, even when an account has a saved password.
-      auto_submit: taskType === "open_login" ? false : undefined,
+      auto_submit: taskType === "open_login" ? true : undefined,
       media_paths: mediaPaths,
       target_urls: splitLines($("simpleTargetUrls")?.value || $("socialTargetUrls")?.value || ""),
       login_wait_seconds: loginWaitSeconds,
@@ -17530,6 +17676,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
       taskPanel: cleanPersonaId ? "persona" : "regular",
       personaId: cleanPersonaId,
     });
+    if (!waitingForSchedule) refreshLiveBrowserSessionsSoon(String(result.task?.id || ""), 60, 500);
     await loadSocial();
     return result;
   } finally {
@@ -17561,6 +17708,12 @@ function bindEvents() {
   if (languageToggle) languageToggle.addEventListener("click", toggleLanguage);
   startLanguageObserver();
   applyLanguage(currentLanguage());
+  bindMobileNavigation();
+  document.addEventListener("visibilitychange", () => {
+    syncSocialTaskToastAutoRefresh();
+    syncTaskQueueAutoRefresh();
+    syncAccountStatusAutoRefresh();
+  });
   document.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", async () => {
     const nextView = button.dataset.view;
     if (nextView === "workspace" && state.view === "workspace") {
@@ -19415,6 +19568,14 @@ function bindEvents() {
         deleteSocialAccountRecord(deleteAccount.dataset.socialDeleteAccount || "", "socialMsg")
           .catch((error) => showMsg("socialMsg", error.detail || error.message || "删除账号失败", false));
       });
+    }
+    const liveBrowserMode = event.target.closest("[data-live-browser-mode]");
+    if (liveBrowserMode) {
+      setLiveBrowserMode(
+        liveBrowserMode.dataset.liveBrowserModeSession || "",
+        liveBrowserMode.dataset.liveBrowserMode || "manual",
+      ).catch((error) => showMsg("socialMsg", error.detail || error.message || "切换人工接管失败", false));
+      return;
     }
     const fullscreen = event.target.closest("[data-live-browser-fullscreen]");
     if (fullscreen) {

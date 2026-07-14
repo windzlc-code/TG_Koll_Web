@@ -18,6 +18,17 @@
             <p>管理员：<span id="adminName">...</span></p>
           </div>
         </div>
+        <button
+          id="adminMobileNavToggle"
+          class="admin-mobile-nav-toggle"
+          type="button"
+          aria-controls="adminMobileDrawer"
+          aria-expanded="false"
+          aria-label="打开后台栏目菜单"
+        >
+          <span class="admin-mobile-nav-icon" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span id="adminMobileCurrentLabel">运营概览</span>
+        </button>
       </div>
 
       <div class="admin-rail-note">
@@ -30,21 +41,33 @@
         </div>
       </div>
 
-      <div class="nav admin-nav">
-        <button type="button" data-page="overview">运营概览</button>
-        <button type="button" data-page="users">客户账号 <span class="small" id="adminUserCount">0</span></button>
-        <button type="button" data-page="tasks">生成记录 <span class="small" id="adminTaskCount">0</span></button>
-        <button type="button" data-page="pricing">额度与计费</button>
-        <button type="button" data-page="runtime">系统配置</button>
-        <button type="button" data-page="sentimentCookies">舆情 Cookie</button>
-        <button type="button" data-page="account">账号设置</button>
-      </div>
+      <div id="adminMobileDrawer" class="admin-mobile-drawer" aria-hidden="true" inert>
+        <div class="admin-mobile-drawer-head">
+          <div>
+            <span>后台栏目</span>
+            <strong id="adminMobileDrawerCurrentLabel">运营概览</strong>
+          </div>
+          <button id="adminMobileNavClose" type="button" aria-label="关闭后台栏目菜单">×</button>
+        </div>
 
-      <div class="sidebar-actions admin-sidebar-actions">
-        <a class="btn ghost admin-console-link" href="/">进入首页</a>
-        <a class="btn ghost admin-console-link" href="/admin-console.html">进入 Web 控制台</a>
+        <nav id="adminPrimaryNav" class="nav admin-nav" aria-label="运营后台导航">
+          <button type="button" data-page="overview">运营概览</button>
+          <button type="button" data-page="users">客户账号 <span class="small" id="adminUserCount">0</span></button>
+          <button type="button" data-page="tasks">生成记录 <span class="small" id="adminTaskCount">0</span></button>
+          <button type="button" data-page="pricing">额度与计费</button>
+          <button type="button" data-page="runtime">系统配置</button>
+          <button type="button" data-page="sentimentCookies">舆情 Cookie</button>
+          <button type="button" data-page="account">账号设置</button>
+        </nav>
+
+        <div class="sidebar-actions admin-sidebar-actions">
+          <a class="btn ghost admin-console-link" href="/">进入首页</a>
+          <a class="btn ghost admin-console-link" href="/admin-console.html">进入 Web 控制台</a>
+        </div>
       </div>
     </aside>
+
+    <div id="adminMobileNavBackdrop" class="admin-mobile-nav-backdrop" aria-hidden="true" hidden></div>
 
     <main class="main">
       <section class="section page-title admin-page-title">

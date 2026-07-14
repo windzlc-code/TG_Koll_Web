@@ -1338,3 +1338,96 @@ body.modal-open {
     padding: 26px 20px 22px;
   }
 }
+
+/* Final mobile overrides: keep the public story and primary actions usable. */
+@media (max-width: 560px) {
+  .site-header {
+    padding-top: max(10px, env(safe-area-inset-top));
+  }
+
+  .hero-shell {
+    width: min(100% - 24px, 680px);
+    padding-top: max(96px, calc(76px + env(safe-area-inset-top)));
+    padding-bottom: max(32px, env(safe-area-inset-bottom));
+  }
+
+  .hero-copy {
+    min-width: 0;
+  }
+
+  .hero-lede {
+    display: block;
+    margin-bottom: 20px;
+    font-size: 16px;
+    line-height: 1.65;
+  }
+
+  .hero-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    margin-bottom: 0;
+  }
+
+  .hero-actions .button {
+    min-height: 48px;
+  }
+
+  .lead-form,
+  .auth-dialog {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .site-footer {
+    padding-bottom: max(26px, env(safe-area-inset-bottom));
+  }
+}
+
+@media (max-width: 380px) {
+  .site-header {
+    gap: 8px;
+    padding-right: 10px;
+    padding-left: 10px;
+  }
+
+  .brand {
+    min-width: 0;
+  }
+
+  .brand-logo-frame {
+    flex: 0 0 auto;
+    width: 36px;
+    height: 36px;
+  }
+
+  .brand-name {
+    font-size: 14px;
+  }
+
+  .header-action,
+  .header-login {
+    min-height: 44px;
+    padding-inline: 8px;
+    font-size: 11px;
+  }
+
+  h1 {
+    font-size: clamp(36px, 12vw, 46px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}

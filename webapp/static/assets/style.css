@@ -8215,3 +8215,537 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
     min-width: 112px;
   }
 }
+
+/* Final shared mobile overrides for auth, admin, and persona dashboard pages. */
+@media (max-width: 760px) {
+  .page-auth-shell,
+  .page-auth-shell .auth-shell {
+    min-height: 100dvh;
+  }
+
+  .page-auth-shell .auth-shell {
+    width: 100%;
+    min-width: 0;
+    padding:
+      max(12px, env(safe-area-inset-top))
+      max(12px, env(safe-area-inset-right))
+      max(12px, env(safe-area-inset-bottom))
+      max(12px, env(safe-area-inset-left));
+  }
+
+  .page-auth-shell .auth-card-product {
+    order: -1;
+  }
+
+  .page-auth-shell .auth-stage,
+  .page-auth-shell .auth-card-product,
+  .page-auth-shell .auth-stage-card,
+  .page-auth-shell .auth-form {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .page-auth-shell input,
+  .page-auth-shell select,
+  .page-auth-shell button,
+  .page-auth-shell .btn {
+    min-height: 44px;
+  }
+
+  .page-auth-shell .auth-login-password-toggle {
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+    right: 2px;
+  }
+
+  .page-auth-shell .auth-login-password-field input {
+    padding-right: 52px;
+  }
+
+  body.page-admin {
+    min-height: 100dvh;
+    overflow-x: hidden;
+  }
+
+  .page-admin .layout.admin-layout,
+  .page-admin .main,
+  .page-admin .admin-page-view,
+  .page-admin .section,
+  .page-admin .card,
+  .page-admin .admin-table-shell,
+  .page-admin .table-wrap {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .page-admin .sidebar {
+    padding-top: max(9px, env(safe-area-inset-top));
+    padding-right: max(10px, env(safe-area-inset-right));
+    padding-left: max(10px, env(safe-area-inset-left));
+  }
+
+  .page-admin .main {
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+  }
+
+  .page-admin button,
+  .page-admin .btn,
+  .page-admin .admin-nav button,
+  .page-admin .admin-sidebar-actions > a,
+  .page-admin .admin-sidebar-actions > button,
+  .page-admin .admin-user-table td:last-child button,
+  .page-admin .admin-task-actions button,
+  .page-admin .secret-toggle,
+  .page-admin .admin-model-add-btn,
+  .page-admin .admin-model-chip-remove,
+  .page-admin .admin-model-chip-order {
+    min-height: 44px;
+  }
+
+  .page-admin .table-wrap,
+  .page-admin .admin-table-shell {
+    width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .page-admin .table {
+    min-width: 680px;
+  }
+
+  .page-admin .admin-user-table {
+    min-width: 640px;
+  }
+
+  .persona-dashboard-view,
+  .persona-dashboard-app,
+  .persona-dashboard-page,
+  .persona-person-layout,
+  .persona-workbench-panel,
+  .persona-dashboard-list,
+  .persona-detail-card,
+  .persona-overview-pane {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .persona-dashboard-hero,
+  .persona-chart-head,
+  .persona-list-head,
+  .persona-table-toolbar {
+    gap: 12px;
+  }
+
+  .persona-dashboard-actions {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .persona-dashboard-action-buttons,
+  .persona-post-controls,
+  .persona-account-actions,
+  .persona-post-actions,
+  .persona-auto-row-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .persona-dashboard-action-buttons > button,
+  .persona-post-controls button,
+  .persona-account-actions button,
+  .persona-pager button,
+  .persona-tab-pager button,
+  .persona-post-actions button,
+  .persona-auto-row-actions button,
+  .persona-auto-log-switch button,
+  .persona-auto-log-tools button,
+  .persona-settings-row button,
+  .persona-tab,
+  .persona-dashboard-view input,
+  .persona-dashboard-view select {
+    min-height: 44px;
+  }
+
+  .persona-account-compact {
+    grid-template-columns: minmax(96px, 0.42fr) minmax(0, 1fr);
+    gap: 8px;
+    overflow: visible;
+    padding: 12px;
+  }
+
+  .persona-account-title,
+  .persona-account-actions {
+    grid-column: 1 / -1;
+  }
+
+  .persona-account-grid input,
+  .persona-account-grid select {
+    width: 100%;
+    height: 44px;
+  }
+
+  .persona-account-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .persona-account-actions button {
+    width: 100%;
+    white-space: normal;
+  }
+
+  .persona-table-wrap,
+  .persona-auto-table-wrap,
+  .persona-auto-log-shell {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .persona-post-table {
+    min-width: 820px;
+  }
+
+  .persona-auto-table,
+  .persona-auto-log-switch,
+  .persona-auto-log-tools {
+    min-width: 760px;
+  }
+
+  .persona-post-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 480px) {
+  .page-auth-shell .auth-stage,
+  .page-auth-shell .auth-card-product {
+    padding: 16px;
+    border-radius: 14px;
+  }
+
+  .page-auth-shell .auth-stage-title {
+    font-size: 28px;
+    overflow-wrap: anywhere;
+  }
+
+  .page-admin .sidebar {
+    grid-template-columns: 1fr;
+  }
+
+  .page-admin .admin-sidebar-actions {
+    grid-column: 1;
+    grid-row: 2;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .page-admin .admin-sidebar-actions > a,
+  .page-admin .admin-sidebar-actions > button {
+    width: 100%;
+    padding-inline: 8px;
+    white-space: normal;
+  }
+
+  .page-admin .admin-nav {
+    grid-column: 1;
+    grid-row: 3;
+  }
+
+  .page-admin .main {
+    width: calc(100% - 12px);
+  }
+
+  .page-admin .admin-page-title h2,
+  .persona-dashboard-hero h2 {
+    font-size: 26px;
+  }
+
+  .persona-dashboard-hero,
+  .persona-workbench-panel,
+  .persona-detail-card,
+  .persona-chart-panel {
+    padding: 12px;
+  }
+
+  .persona-dashboard-action-buttons {
+    display: grid;
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+
+  .persona-dashboard-action-buttons > button {
+    width: 100%;
+  }
+
+  .persona-account-compact {
+    grid-template-columns: 1fr;
+  }
+
+  .persona-account-title,
+  .persona-account-grid select,
+  .persona-account-grid input,
+  .persona-account-actions {
+    grid-column: 1;
+  }
+
+  .persona-table-title {
+    min-width: 0;
+  }
+
+  .persona-post-controls,
+  .persona-post-controls label,
+  .persona-post-controls select {
+    width: 100%;
+  }
+}
+
+/* Compact admin mobile header with an off-canvas page picker. */
+.page-admin .admin-mobile-nav-toggle,
+.page-admin .admin-mobile-drawer-head,
+.page-admin .admin-mobile-nav-backdrop {
+  display: none;
+}
+
+.page-admin .admin-mobile-drawer {
+  display: contents;
+}
+
+@media (max-width: 760px) {
+  body.page-admin.admin-mobile-nav-open {
+    overflow: hidden;
+  }
+
+  .page-admin .sidebar {
+    position: sticky;
+    top: 0;
+    z-index: 90;
+    display: block;
+    padding:
+      max(7px, env(safe-area-inset-top))
+      max(10px, env(safe-area-inset-right))
+      7px
+      max(10px, env(safe-area-inset-left));
+  }
+
+  body.page-admin.admin-mobile-nav-open .sidebar {
+    z-index: 1002;
+  }
+
+  .page-admin .brand {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .page-admin .admin-brand-lockup {
+    min-width: 0;
+    gap: 8px;
+  }
+
+  .page-admin .admin-brand-mark {
+    width: 30px;
+    height: 30px;
+  }
+
+  .page-admin .admin-brand-eyebrow {
+    font-size: 9px;
+  }
+
+  .page-admin .brand h1 {
+    margin-top: 1px;
+    font-size: 15px;
+    line-height: 1.1;
+  }
+
+  .page-admin .admin-mobile-nav-toggle {
+    display: inline-flex;
+    width: auto;
+    min-width: 0;
+    min-height: 36px;
+    height: 36px;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 10px;
+    color: #effff9;
+    border: 1px solid rgba(117, 241, 211, 0.28);
+    border-radius: 7px;
+    background: rgba(12, 154, 154, 0.16);
+    box-shadow: none;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .page-admin .admin-mobile-nav-icon {
+    display: grid;
+    width: 14px;
+    gap: 3px;
+  }
+
+  .page-admin .admin-mobile-nav-icon i {
+    display: block;
+    width: 100%;
+    height: 1.5px;
+    border-radius: 999px;
+    background: currentColor;
+  }
+
+  .page-admin .admin-mobile-drawer {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 1002;
+    display: flex;
+    width: min(84vw, 310px);
+    height: 100dvh;
+    min-height: 0;
+    flex-direction: column;
+    gap: 12px;
+    padding:
+      max(14px, env(safe-area-inset-top))
+      12px
+      max(14px, env(safe-area-inset-bottom))
+      max(12px, env(safe-area-inset-left));
+    overflow-y: auto;
+    color: #effff9;
+    border-right: 1px solid rgba(117, 241, 211, 0.2);
+    background: rgba(5, 18, 17, 0.985);
+    box-shadow: 24px 0 60px rgba(0, 0, 0, 0.36);
+    transform: translateX(-105%);
+    transition: transform 180ms ease;
+  }
+
+  .page-admin.admin-mobile-nav-open .admin-mobile-drawer,
+  body.page-admin.admin-mobile-nav-open .admin-mobile-drawer {
+    transform: translateX(0);
+  }
+
+  .page-admin .admin-mobile-drawer-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 0 2px 10px;
+    border-bottom: 1px solid rgba(218, 255, 243, 0.14);
+  }
+
+  .page-admin .admin-mobile-drawer-head > div {
+    display: grid;
+    gap: 2px;
+  }
+
+  .page-admin .admin-mobile-drawer-head span {
+    color: rgba(237, 255, 249, 0.6);
+    font-size: 10px;
+    letter-spacing: .08em;
+  }
+
+  .page-admin .admin-mobile-drawer-head strong {
+    font-size: 16px;
+  }
+
+  .page-admin #adminMobileNavClose {
+    width: 34px;
+    min-width: 34px;
+    height: 34px;
+    min-height: 34px;
+    padding: 0;
+    color: #effff9;
+    border: 1px solid rgba(218, 255, 243, 0.16);
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.05);
+    box-shadow: none;
+    font-size: 22px;
+    line-height: 1;
+  }
+
+  .page-admin .admin-nav {
+    position: static;
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    flex: 0 0 auto;
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: 4px;
+    overflow: visible;
+  }
+
+  .page-admin .admin-nav button,
+  .page-admin .admin-nav button.is-active {
+    width: 100%;
+    min-height: 39px;
+    padding: 8px 10px;
+    justify-content: space-between;
+    color: rgba(237, 255, 249, 0.78);
+    border: 1px solid transparent;
+    border-radius: 7px;
+    background: transparent;
+    font-size: 13px;
+    text-align: left;
+  }
+
+  .page-admin .admin-nav button.is-active {
+    color: #ffffff;
+    border-color: rgba(117, 241, 211, 0.3);
+    background: rgba(12, 154, 154, 0.2);
+  }
+
+  .page-admin .admin-nav button.is-active::before {
+    display: block;
+    left: 0;
+    top: 8px;
+    bottom: 8px;
+    width: 3px;
+  }
+
+  .page-admin .admin-sidebar-actions {
+    display: grid;
+    width: 100%;
+    margin-top: auto;
+    padding-top: 12px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+    border-top: 1px solid rgba(218, 255, 243, 0.13);
+  }
+
+  .page-admin .admin-sidebar-actions > a,
+  .page-admin .admin-sidebar-actions > button {
+    display: inline-flex;
+    width: 100%;
+    min-height: 34px;
+    height: 34px;
+    justify-content: center;
+    padding: 5px 7px;
+    font-size: 11px;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+
+  .page-admin .admin-mobile-nav-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1001;
+    display: block;
+    background: rgba(2, 10, 10, 0.56);
+    backdrop-filter: blur(2px);
+  }
+
+  .page-admin .admin-mobile-nav-backdrop[hidden] {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-admin .admin-mobile-drawer {
+    transition: none;
+  }
+}

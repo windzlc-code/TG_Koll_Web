@@ -13,13 +13,14 @@
   <body>
     <div id="toastHost" class="toast-host" aria-live="polite" aria-atomic="false"></div>
     <div class="console-shell">
-    <aside class="console-sidebar">
+    <aside id="consoleSidebar" class="console-sidebar">
       <div class="console-brand">
         <div class="brand-mark">WK</div>
         <div>
           <h1>Web 任务控制台</h1>
           <p>统一 Web 操作面板</p>
         </div>
+        <button id="mobileNavClose" class="mobile-nav-close" type="button" aria-label="关闭导航">×</button>
       </div>
 
       <nav class="console-nav" aria-label="控制台导航">
@@ -45,11 +46,32 @@
       </div>
     </aside>
 
+    <button
+      id="consoleNavBackdrop"
+      class="console-nav-backdrop"
+      type="button"
+      aria-label="关闭导航"
+      tabindex="-1"
+      hidden
+    ></button>
+
     <main class="console-main">
       <header class="console-topbar">
-        <div>
-          <div class="eyebrow">控制台</div>
-          <h2 id="viewTitle">任务工作台</h2>
+        <div class="console-topbar-heading">
+          <button
+            id="mobileNavToggle"
+            class="mobile-nav-toggle"
+            type="button"
+            aria-label="打开导航"
+            aria-controls="consoleSidebar"
+            aria-expanded="false"
+          >
+            <span class="mobile-nav-toggle-icon" aria-hidden="true"></span>
+          </button>
+          <div>
+            <div class="eyebrow">控制台</div>
+            <h2 id="viewTitle">任务工作台</h2>
+          </div>
         </div>
         <div class="topbar-actions">
           <button id="refreshAll" type="button">刷新</button>

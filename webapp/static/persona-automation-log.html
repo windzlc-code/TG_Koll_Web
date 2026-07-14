@@ -29,6 +29,43 @@
     .log-status.failed, .log-status.need_manual { background: #ffe4e8; color: #b42318; }
     .log-status.success, .log-status.ready { background: #dcfae6; color: #067647; }
     @media (max-width: 900px) { .log-grid { grid-template-columns: 1fr; } .log-shell { padding: 14px; } }
+    @media (max-width: 560px) {
+      body { min-height: 100dvh; overflow-x: hidden; }
+      .log-shell {
+        width: 100%;
+        min-width: 0;
+        padding:
+          max(12px, env(safe-area-inset-top))
+          max(12px, env(safe-area-inset-right))
+          max(16px, env(safe-area-inset-bottom))
+          max(12px, env(safe-area-inset-left));
+      }
+      .log-head { flex-direction: column; align-items: stretch; }
+      .log-title, .log-panel, .log-item, .log-pre { min-width: 0; max-width: 100%; }
+      .log-title h1 { font-size: 20px; overflow-wrap: anywhere; }
+      .log-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .log-actions > a, .log-actions > button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        min-height: 44px;
+        padding: 9px 10px;
+        text-align: center;
+        white-space: normal;
+      }
+      .log-grid { gap: 12px; }
+      .log-panel { padding: 12px; }
+      .log-meta { grid-template-columns: 1fr; gap: 3px; }
+      .log-meta strong { margin-bottom: 8px; overflow-wrap: anywhere; }
+      .log-list { max-height: none; overflow: visible; }
+      .log-item-top { flex-direction: column; gap: 3px; }
+      .log-media { grid-template-columns: 1fr; }
+      .log-pre { overscroll-behavior: contain; }
+    }
+    @media (max-width: 360px) {
+      .log-actions { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
