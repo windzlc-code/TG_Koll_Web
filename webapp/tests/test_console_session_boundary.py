@@ -394,6 +394,71 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_proxy_auto_detection_falls_back_and_autofills_editable_fields(self):
+        helper_source = "\n".join(
+            [
+                self._section("function proxyNameCanAutofill", "async function testProxyConfiguration"),
+                self._section("async function testProxyConfiguration", "async function testProxyForm"),
+            ]
+        )
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            const fields = {{
+              proxyFormProtocol: {{ value: "auto" }},
+              proxyFormName: {{ value: "" }},
+            }};
+            const calls = [];
+            let rendered = null;
+            function $(id) {{ return fields[id] || null; }}
+            function proxyCheckRequestPayload(payload) {{ return payload; }}
+            function renderProxyCheckResult(_target, result) {{ rendered = result; }}
+            async function api(_url, options) {{
+              const payload = JSON.parse(options.body);
+              calls.push(payload.proxy_type);
+              if (payload.proxy_type === "http") return {{ result: {{ ok: false, error: "wrong protocol" }} }};
+              return {{ result: {{
+                ok: true,
+                exit_ip: "194.143.193.241",
+                response: {{ ip: "194.143.193.241", country_code: "ES", city: "Zaragoza" }},
+              }} }};
+            }}
+            {helper_source}
+            (async () => {{
+              const payload = {{ proxy_type: "auto", host: "194.143.193.241", port: 8022, name: "" }};
+              const result = await testProxyConfiguration(payload, "", "result", "proxyForm");
+              assert.deepStrictEqual(calls, ["http", "socks5"]);
+              assert.strictEqual(result.ok, true);
+              assert.strictEqual(result.detected_proxy_type, "socks5");
+              assert.strictEqual(payload.proxy_type, "socks5");
+              assert.strictEqual(fields.proxyFormProtocol.value, "socks5");
+              assert.strictEqual(fields.proxyFormName.value, "[静态住宅] ES · Zaragoza · 194.143.193.241");
+              assert.strictEqual(payload.name, fields.proxyFormName.value);
+              assert.strictEqual(rendered, result);
+            }})().catch((error) => {{
+              console.error(error);
+              process.exitCode = 1;
+            }});
+            """
+        )
+        self._run_node(harness)
+
+    def test_proxy_detection_preserves_manual_name_and_keeps_metadata_in_preview(self):
+        self.assertIn('["auto", "自动检测（推荐）"]', self.source)
+        self.assertNotIn('id="${esc(prefix)}Country"', self.source)
+        helper_source = self._section("function proxyNameCanAutofill", "function applyProxyDetectionAutofill")
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            {helper_source}
+            const payload = {{ host: "proxy.example.com", port: 1080 }};
+            assert.strictEqual(proxyNameCanAutofill("", payload), true);
+            assert.strictEqual(proxyNameCanAutofill("socks5://proxy.example.com:1080", payload), true);
+            assert.strictEqual(proxyNameCanAutofill("西班牙主账号代理", payload), false);
+            """
+        )
+        self._run_node(harness)
+
 
 if __name__ == "__main__":
     unittest.main()

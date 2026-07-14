@@ -15700,12 +15700,12 @@ function proxySourceOptions(current = "") {
 }
 
 function sharedProxyFieldsHtml(prefix, proxy = null) {
-  const protocol = ["socks5", "http", "https"].includes(proxyProtocol(proxy).toLowerCase()) ? proxyProtocol(proxy).toLowerCase() : "socks5";
+  const protocol = ["socks5", "http", "https"].includes(proxyProtocol(proxy).toLowerCase()) ? proxyProtocol(proxy).toLowerCase() : "auto";
   const source = String(proxy?.source || "manual");
   const expiryMode = Number(proxy?.expires_at || 0) > 0 ? "custom" : "permanent";
   return `
-    <label><span>代理名称</span><input id="${esc(prefix)}Name" value="${esc(proxy?.name || "")}" placeholder="留空则自动生成" /></label>
-    <label><span>代理类型</span><select id="${esc(prefix)}Protocol">${proxySelectOptions([["socks5", "SOCKS5"], ["http", "HTTP"], ["https", "HTTPS"]], protocol)}</select></label>
+    <label><span>代理名称</span><input id="${esc(prefix)}Name" value="${esc(proxy?.name || "")}" placeholder="检测后自动生成，也可手动填写" /></label>
+    <label><span>代理类型</span><select id="${esc(prefix)}Protocol">${proxySelectOptions([["auto", "自动检测（推荐）"], ["http", "HTTP"], ["socks5", "SOCKS5"], ["https", "HTTPS"]], protocol)}</select></label>
     <label><span>代理方式</span><select id="${esc(prefix)}ConnectionMode"><option value="proxy" selected>Proxy（代理服务器）</option></select></label>
     <label><span>供应商 / 来源</span><select id="${esc(prefix)}Source">${proxySourceOptions(source)}</select></label>
     <label><span>持有方式</span><select id="${esc(prefix)}PurchaseStatus">${proxySelectOptions([["owned", "自有"], ["leased", "租用"]], proxy?.purchase_status || "owned")}</select></label>
@@ -15798,19 +15798,60 @@ function renderProxyCheckResult(targetId = "", result = null) {
       <div><dt>位置</dt><dd>${esc(location)}</dd></div>
       <div><dt>运营商</dt><dd>${esc(connection.isp || connection.org || "未识别")}</dd></div>
       <div><dt>延迟</dt><dd>${Number.isFinite(Number(result?.latency_ms)) ? `${Number(result.latency_ms)} ms` : "-"}</dd></div>
+      <div><dt>识别协议</dt><dd>${esc(String(result?.detected_proxy_type || "-").toUpperCase())}</dd></div>
       <div><dt>代理链路</dt><dd>${result?.route_verified === true ? "已确认" : result?.route_verified === false ? "未通过" : "待确认"}</dd></div>
       <div><dt>静态一致性</dt><dd>${result?.static_consistent === true ? "一致" : result?.static_consistent === false ? "不一致" : "待确认"}</dd></div>
     </dl>
     ${result?.error ? `<p>${esc(result.error)}</p>` : ""}`;
 }
 
-async function testProxyConfiguration(payload = {}, proxyId = "", resultTargetId = "") {
-  const response = await api("/api/persona_dashboard/automation/proxies/test", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(proxyCheckRequestPayload(payload, proxyId)),
-  });
-  const result = response?.result || {};
+function proxyNameCanAutofill(value = "", payload = {}) {
+  const current = String(value || "").trim();
+  if (!current) return true;
+  const host = String(payload.host || "").trim();
+  const port = Number(payload.port || 0);
+  if (!host || !port) return false;
+  return ["http", "https", "socks5"].some((protocol) => current.toLowerCase() === `${protocol}://${host}:${port}`.toLowerCase());
+}
+
+function applyProxyDetectionAutofill(prefix = "", result = null, payload = {}) {
+  if (!prefix || !result?.ok) return;
+  const detectedProtocol = String(result.detected_proxy_type || payload.proxy_type || "").trim().toLowerCase();
+  const protocolInput = $(`${prefix}Protocol`);
+  if (protocolInput && ["http", "https", "socks5"].includes(detectedProtocol)) protocolInput.value = detectedProtocol;
+  if (detectedProtocol) payload.proxy_type = detectedProtocol;
+
+  const nameInput = $(`${prefix}Name`);
+  if (!nameInput || !proxyNameCanAutofill(nameInput.value, payload)) return;
+  const response = result.response && typeof result.response === "object" ? result.response : {};
+  const country = String(response.country_code || response.country || "").trim();
+  const location = String(response.city || response.region || "").trim();
+  const exitIp = String(result.exit_ip || response.ip || "").trim();
+  const label = [country, location, exitIp].filter(Boolean).join(" · ");
+  if (!label) return;
+  nameInput.value = `[静态住宅] ${label}`;
+  payload.name = nameInput.value;
+}
+
+async function testProxyConfiguration(payload = {}, proxyId = "", resultTargetId = "", formPrefix = "") {
+  const selectedProtocol = String(payload.proxy_type || "auto").trim().toLowerCase();
+  const candidates = selectedProtocol === "auto" ? ["http", "socks5", "https"] : [selectedProtocol];
+  let result = {};
+  for (const protocol of candidates) {
+    const candidate = { ...payload, proxy_type: protocol };
+    const response = await api("/api/persona_dashboard/automation/proxies/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(proxyCheckRequestPayload(candidate, proxyId)),
+    });
+    result = { ...(response?.result || {}) };
+    result.detected_proxy_type = result.ok ? protocol : "";
+    if (result.ok) {
+      payload.proxy_type = protocol;
+      applyProxyDetectionAutofill(formPrefix, result, payload);
+      break;
+    }
+  }
   if (resultTargetId) renderProxyCheckResult(resultTargetId, result);
   return result;
 }
@@ -15818,7 +15859,7 @@ async function testProxyConfiguration(payload = {}, proxyId = "", resultTargetId
 async function testProxyForm(prefix = "", proxy = null) {
   const payload = sharedProxyPayload(prefix, proxy);
   if (!payload) return null;
-  const result = await testProxyConfiguration(payload, proxy?.id || "", `${prefix}CheckResult`);
+  const result = await testProxyConfiguration(payload, proxy?.id || "", `${prefix}CheckResult`, prefix);
   showMsg("socialMsg", result.ok ? "代理网络检测通过。" : (result.error || "代理网络检测未通过。"), Boolean(result.ok));
   return result;
 }
@@ -16001,7 +16042,7 @@ async function saveAccountPoolCreateForm() {
   const residentialProxy = accountResidentialProxyPayload("accountPool", payload.username);
   if ($("accountPoolProxyEnabled")?.checked && !residentialProxy) return false;
   if (residentialProxy) {
-    const preflight = await testProxyConfiguration(residentialProxy, "", "accountPoolProxyCheckResult");
+    const preflight = await testProxyConfiguration(residentialProxy, "", "accountPoolProxyCheckResult", "accountPoolProxy");
     if (!preflight.ok) {
       showMsg("socialMsg", preflight.error || "静态住宅代理检测未通过，账号尚未保存。", false);
       return false;
@@ -16228,6 +16269,7 @@ async function saveAccountPoolEditForm(accountId = "") {
       residentialProxy,
       account?.proxy_id || existingProxy?.id || "",
       "accountPoolEditProxyCheckResult",
+      "accountPoolEditProxy",
     );
     if (!preflight.ok) {
       showMsg("socialMsg", preflight.error || "静态住宅代理检测未通过，修改尚未保存。", false);
@@ -16555,6 +16597,17 @@ function openProxyModal(proxyId = "") {
       <div class="console-modal-actions"><button type="button" data-proxy-modal-cancel>取消</button><button type="button" class="primary" data-proxy-modal-save="${esc(proxy?.id || "")}">保存代理</button></div>
     </section>`;
   document.body.appendChild(modal);
+  const cachedResult = proxy?.last_check_result && typeof proxy.last_check_result === "object" ? proxy.last_check_result : null;
+  if (cachedResult?.ok) {
+    const previewResult = { ...cachedResult, detected_proxy_type: proxy.proxy_type };
+    renderProxyCheckResult("proxyFormCheckResult", previewResult);
+    applyProxyDetectionAutofill("proxyForm", previewResult, {
+      proxy_type: proxy.proxy_type,
+      host: proxy.host,
+      port: proxy.port,
+      name: proxy.name,
+    });
+  }
   $("proxyFormProtocol")?.focus();
   const close = () => modal.remove();
   modal.addEventListener("click", (event) => {
@@ -16573,7 +16626,7 @@ function openProxyModal(proxyId = "") {
     if (!payload) return;
     save.disabled = true;
     const id = String(save.dataset.proxyModalSave || "").trim();
-    testProxyConfiguration(payload, id, "proxyFormCheckResult").then((preflight) => {
+    testProxyConfiguration(payload, id, "proxyFormCheckResult", "proxyForm").then((preflight) => {
       if (!preflight.ok) {
         save.disabled = false;
         showMsg("socialMsg", preflight.error || "代理检测未通过，配置尚未保存。", false);
