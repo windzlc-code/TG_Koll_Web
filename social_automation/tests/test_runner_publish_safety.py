@@ -139,6 +139,37 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertEqual(status["status"], "cookie_expired")
 
+    def test_instagram_login_page_reports_invalid_credentials_before_login_form(self):
+        page = _ThreadsShellPage([], body_text="Your password was incorrect. Please try again.")
+        page.url = "https://www.instagram.com/accounts/login/"
+
+        status = runner._detect_instagram_login_state(page)
+
+        self.assertEqual(status["status"], "invalid_credentials")
+
+    def test_login_self_heal_uses_visible_retry_action_before_navigation(self):
+        page = mock.Mock()
+        page.url = "https://www.threads.com/"
+        with (
+            mock.patch.object(runner, "_screenshot", return_value="error.png"),
+            mock.patch.object(runner, "_click_text_button", return_value=True) as click_retry,
+            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner, "_goto") as goto,
+        ):
+            runner._self_heal_login_page(
+                page,
+                "threads",
+                _Logger(),
+                {"id": "retry-error-page"},
+                Path("."),
+                "transient_error",
+                1,
+            )
+
+        click_retry.assert_called_once()
+        page.reload.assert_not_called()
+        goto.assert_not_called()
+
     def test_threads_feed_text_with_challenge_word_is_not_verification(self):
         page = _ThreadsShellPage(
             [{"name": "sessionid", "value": "active-session", "domain": ".threads.net"}],

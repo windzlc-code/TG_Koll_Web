@@ -826,18 +826,6 @@ def _detect_instagram_login_state(page) -> dict[str, Any]:
     url = str(page.url or "")
     if _is_verification_url(url):
         return {"status": "need_verification", "reason": "Instagram 需要输入验证码。", "url": url}
-    if "/accounts/login" in url:
-        return {"status": "cookie_expired", "reason": "检测到 Instagram 登录页面。", "url": url}
-    login_inputs = page.locator(
-        'input[name="username"], input[name="password"], '
-        'input[aria-label*="username" i], input[aria-label*="email" i], input[aria-label*="password" i], '
-        'input[placeholder*="username" i], input[placeholder*="email" i], input[placeholder*="password" i]'
-    )
-    try:
-        if login_inputs.count() > 0 and login_inputs.first.is_visible():
-            return {"status": "cookie_expired", "reason": "检测到登录表单。"}
-    except Exception:
-        pass
     body_text = ""
     try:
         body_text = page.locator("body").inner_text(timeout=5000).lower()
@@ -852,12 +840,24 @@ def _detect_instagram_login_state(page) -> dict[str, Any]:
     ]
     if any(marker in body_text for marker in invalid_markers):
         return {"status": "invalid_credentials", "reason": "Instagram 提示保存的登录信息不正确。", "url": url}
-    login_markers = ["log into instagram", "log in with facebook", "forgot password", "create new account"]
-    if any(marker in body_text for marker in login_markers):
-        return {"status": "cookie_expired", "reason": "检测到 Instagram 登录页面文案。"}
     challenge_markers = _verification_text_markers()
     if any(marker in body_text for marker in challenge_markers):
         return {"status": "need_verification", "reason": "检测到验证或安全挑战文案。"}
+    if "/accounts/login" in url:
+        return {"status": "cookie_expired", "reason": "检测到 Instagram 登录页面。", "url": url}
+    login_inputs = page.locator(
+        'input[name="username"], input[name="password"], '
+        'input[aria-label*="username" i], input[aria-label*="email" i], input[aria-label*="password" i], '
+        'input[placeholder*="username" i], input[placeholder*="email" i], input[placeholder*="password" i]'
+    )
+    try:
+        if login_inputs.count() > 0 and login_inputs.first.is_visible():
+            return {"status": "cookie_expired", "reason": "检测到登录表单。"}
+    except Exception:
+        pass
+    login_markers = ["log into instagram", "log in with facebook", "forgot password", "create new account"]
+    if any(marker in body_text for marker in login_markers):
+        return {"status": "cookie_expired", "reason": "检测到 Instagram 登录页面文案。"}
     ready_markers = [
         '[aria-label="New post"]',
         'text=Create',
@@ -1084,6 +1084,18 @@ def _self_heal_login_page(
         {"attempt": attempt, "reason": reason, "url": str(page.url or "")},
         shot,
     )
+    retry_clicked = _click_text_button(
+        page,
+        logger,
+        ["Retry", "Try again", "重试", "再试一次"],
+        "login_self_heal_retry",
+        abort_if=lambda: _manual_takeover_requested(context_control),
+    )
+    if retry_clicked:
+        with contextlib.suppress(Exception):
+            page.wait_for_load_state("domcontentloaded", timeout=15000)
+        _sleep_between(1.5, 3.0)
+        return
     with contextlib.suppress(Exception):
         if _manual_takeover_requested(context_control):
             return
@@ -1230,7 +1242,7 @@ def _run_open_login(
     _goto(page, start_url, logger, "open_login")
     wait_seconds = int(payload.get("login_wait_seconds") or os.getenv("SOCIAL_AUTOMATION_LOGIN_WAIT_SECONDS", "3600"))
     wait_seconds = max(30, min(wait_seconds, 3600))
-    max_login_attempts = _int_payload_or_env(payload, "max_login_attempts", "SOCIAL_AUTOMATION_LOGIN_MAX_ATTEMPTS", 4, 1, 8)
+    max_login_attempts = _int_payload_or_env(payload, "max_login_attempts", "SOCIAL_AUTOMATION_LOGIN_MAX_ATTEMPTS", 2, 1, 8)
     max_self_heal_attempts = _int_payload_or_env(payload, "max_self_heal_attempts", "SOCIAL_AUTOMATION_LOGIN_SELF_HEAL_ATTEMPTS", 2, 0, 12)
     submit_grace_seconds = _int_payload_or_env(payload, "submit_grace_seconds", "SOCIAL_AUTOMATION_LOGIN_SUBMIT_GRACE_SECONDS", 30, 5, 120)
     wait_for_manual = bool(payload.get("wait_for_manual", True))

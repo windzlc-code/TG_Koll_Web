@@ -2442,6 +2442,7 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
     now = _now()
     scheduled_at = _parse_schedule(payload.scheduled_at)
     task_id = str(batch_context.get("task_id") or _NEW_ID("social_task"))
+    superseded_login_task_ids: list[str] = []
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         account = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (payload.account_id,)).fetchone()
@@ -2550,6 +2551,42 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
         task_payload, runtime_secrets = _extract_runtime_secrets(task_payload)
         if platform == "threads" and task_type in {"threads_warmup", "threads_auto_reply"}:
             task_payload = _enrich_threads_task_payload(persona_id, task_type, task_payload)
+        if task_type == "open_login":
+            active_login_rows = conn.execute(
+                """
+                SELECT id, billing_reservation_id
+                FROM social_automation_tasks
+                WHERE account_id = ?
+                  AND task_type = 'open_login'
+                  AND status IN ('preparing', 'queued', 'running', 'need_manual')
+                ORDER BY created_at ASC
+                """,
+                (str(payload.account_id),),
+            ).fetchall()
+            for active_login_row in active_login_rows:
+                active_task_id = str(active_login_row["id"] or "")
+                if not active_task_id:
+                    continue
+                cancelled = conn.execute(
+                    """
+                    UPDATE social_automation_tasks
+                    SET status = 'cancelled', finished_at = ?, error = ?, updated_at = ?
+                    WHERE id = ? AND status IN ('preparing', 'queued', 'running', 'need_manual')
+                    """,
+                    (now, "新的自动登录任务已替换旧登录会话", now, active_task_id),
+                ).rowcount
+                if not cancelled:
+                    continue
+                _release_task_billing_reservation(conn, active_login_row, now=now)
+                _insert_log(
+                    conn,
+                    active_task_id,
+                    "warn",
+                    "login_superseded",
+                    "用户重新打开登录，旧登录会话已停止。",
+                    {"replacement_task_id": task_id},
+                )
+                superseded_login_task_ids.append(active_task_id)
         initial_status = "preparing" if bool(batch_context.get("suppress_wake")) else "queued"
         conn.execute(
             """
@@ -2581,6 +2618,10 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
             with _EPHEMERAL_TASK_SECRETS_LOCK:
                 _EPHEMERAL_TASK_SECRETS[task_id] = runtime_secrets
         row = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
+    if superseded_login_task_ids:
+        _discard_ephemeral_task_secrets(*superseded_login_task_ids)
+        for superseded_task_id in superseded_login_task_ids:
+            _force_stop_running_task(superseded_task_id)
     if not bool(batch_context.get("suppress_wake")):
         wake_social_automation_worker()
     return _task_public(row)

@@ -56,17 +56,63 @@ class SocialTaskLifecycleIsolationTests(unittest.TestCase):
                 (account_id, user_id, platform, account_id, f"profiles/{account_id}"),
             )
 
-    def _insert_task(self, task_id: str, account_id: str, user_id: int, *, status: str = "running") -> None:
+    def _insert_task(
+        self,
+        task_id: str,
+        account_id: str,
+        user_id: int,
+        *,
+        status: str = "running",
+        task_type: str = "check_login",
+    ) -> None:
         with db() as conn:
             conn.execute(
                 """
                 INSERT INTO social_automation_tasks(
                   id, user_id, persona_id, account_id, platform, task_type,
                   priority, status, payload_json, result_json, created_at, updated_at
-                ) VALUES (?, ?, '', ?, 'threads', 'check_login', 50, ?, '{}', '{}', 1, 1)
+                ) VALUES (?, ?, '', ?, 'threads', ?, 50, ?, '{}', '{}', 1, 1)
                 """,
-                (task_id, user_id, account_id, status),
+                (task_id, user_id, account_id, task_type, status),
             )
+
+    def test_new_open_login_replaces_old_manual_session(self):
+        owner_id = self._insert_user("login-replacement")
+        self._insert_account("login-account", owner_id)
+        self._insert_task(
+            "old-login",
+            "login-account",
+            owner_id,
+            status="need_manual",
+            task_type="open_login",
+        )
+        cancel_event = threading.Event()
+        with social_api._RUNNING_TASK_CONTROLS_LOCK:
+            social_api._RUNNING_TASK_CONTROLS["old-login"] = {"cancel_event": cancel_event}
+
+        replacement = social_api.create_social_task(
+            social_api.SocialTaskPayload(
+                account_id="login-account",
+                platform="threads",
+                task_type="open_login",
+                payload={"auto_submit": True},
+            )
+        )
+
+        with db() as conn:
+            old = conn.execute(
+                "SELECT status, error FROM social_automation_tasks WHERE id = 'old-login'"
+            ).fetchone()
+            new = conn.execute(
+                "SELECT status, max_retries, payload_json FROM social_automation_tasks WHERE id = ?",
+                (replacement["id"],),
+            ).fetchone()
+        self.assertEqual(old["status"], "cancelled")
+        self.assertIn("替换", old["error"])
+        self.assertEqual(new["status"], "queued")
+        self.assertEqual(int(new["max_retries"]), 0)
+        self.assertIn('"auto_submit": true', new["payload_json"])
+        self.assertTrue(cancel_event.is_set())
 
     def test_integrity_triggers_are_installed_on_existing_database(self):
         with db() as conn:
