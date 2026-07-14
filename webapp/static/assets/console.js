@@ -14797,6 +14797,13 @@ async function refreshSocialAccountsOnly({ force = false, includeOverview = fals
   if (includeOverview) renderLiveBrowserSessions();
 }
 
+async function refreshLiveBrowserSessionsOnly() {
+  const data = await api("/api/persona_dashboard/automation/browser_sessions");
+  state.socialBrowserSessions = Array.isArray(data?.sessions) ? data.sessions : [];
+  renderLiveBrowserSessions();
+  return state.socialBrowserSessions;
+}
+
 function refreshLiveBrowserSessionsSoon(taskId = "", attempts = 16, delayMs = 500) {
   const token = `${Date.now()}:${Math.random()}`;
   const targetTaskId = String(taskId || "").trim();
@@ -14811,7 +14818,7 @@ function refreshLiveBrowserSessionsSoon(taskId = "", attempts = 16, delayMs = 50
   };
   const run = async (attempt) => {
     if (!isCurrent()) return;
-    await refreshSocialAccountsOnly({ includeOverview: true }).catch(() => {});
+    await refreshLiveBrowserSessionsOnly().catch(() => {});
     const sessions = Array.isArray(state.socialBrowserSessions) ? state.socialBrowserSessions : [];
     const matched = targetTaskId
       ? sessions.find((session) => String(session.task_id || "") === targetTaskId)
@@ -14819,6 +14826,10 @@ function refreshLiveBrowserSessionsSoon(taskId = "", attempts = 16, delayMs = 50
     if (matched) observedTarget = true;
     const found = !targetTaskId || Boolean(matched);
     const takeoverPending = Boolean(matched) && liveBrowserLoginMode(matched) === "switching";
+    const automaticLoginActive = Boolean(matched)
+      && String(matched?.task_type || "").trim().toLowerCase() === "open_login"
+      && liveBrowserTaskStatus(matched) === "running"
+      && liveBrowserLoginMode(matched) === "automatic";
     const targetTask = targetTaskId
       ? (state.socialTasks || []).find((task) => String(task?.id || "") === targetTaskId)
       : null;
@@ -14829,11 +14840,11 @@ function refreshLiveBrowserSessionsSoon(taskId = "", attempts = 16, delayMs = 50
       finish();
       return;
     }
-    if (found && !takeoverPending) {
+    if (found && !takeoverPending && !automaticLoginActive) {
       finish();
       return;
     }
-    if (attempt >= attempts) {
+    if (attempt >= attempts && takeoverPending) {
       if (takeoverPending) {
         matched.login_mode = "takeover_timeout";
         matched.input_allowed = false;
@@ -14843,7 +14854,12 @@ function refreshLiveBrowserSessionsSoon(taskId = "", attempts = 16, delayMs = 50
       finish();
       return;
     }
-    window.setTimeout(() => run(attempt + 1), delayMs);
+    if (attempt >= attempts && !observedTarget) {
+      finish();
+      return;
+    }
+    const nextAttempt = automaticLoginActive ? 1 : attempt + 1;
+    window.setTimeout(() => run(nextAttempt), automaticLoginActive ? Math.max(1000, delayMs) : delayMs);
   };
   window.setTimeout(() => run(1), 250);
 }

@@ -350,6 +350,66 @@ def test_manual_takeover_request_does_not_block_waiting_for_runner_ack():
     assert result["acknowledged"] is False
 
 
+def test_manual_takeover_remains_available_after_task_enters_need_manual():
+    event = mock.Mock()
+    ack_event = mock.Mock()
+    ack_event.is_set.side_effect = [False, True]
+    timeout_event = mock.Mock()
+    control = {
+        "live_browser_session_id": "live-task-1",
+        "manual_takeover_event": event,
+        "manual_takeover_ack_event": ack_event,
+        "manual_takeover_timeout_event": timeout_event,
+    }
+    connection = mock.Mock()
+    connection.execute.return_value.fetchone.return_value = {
+        "id": "task-1",
+        "status": "need_manual",
+        "task_type": "open_login",
+    }
+    database = mock.MagicMock()
+    database.return_value.__enter__.return_value = connection
+
+    with (
+        mock.patch.dict(social_automation_api._RUNNING_TASK_CONTROLS, {"task-1": control}, clear=True),
+        mock.patch.object(social_automation_api, "db", database),
+        mock.patch.object(social_automation_api, "_persist_manual_takeover_ack") as persist,
+    ):
+        result = social_automation_api.request_live_browser_manual_takeover("live-task-1")
+
+    event.set.assert_called_once_with()
+    ack_event.set.assert_called_once_with()
+    persist.assert_called_once_with("task-1", "live-task-1")
+    assert result["mode"] == "manual"
+    assert result["acknowledged"] is True
+
+
+def test_need_manual_status_overrides_stale_running_control_mode():
+    request_event = mock.Mock()
+    request_event.is_set.return_value = False
+    ack_event = mock.Mock()
+    ack_event.is_set.return_value = False
+    timeout_event = mock.Mock()
+    timeout_event.is_set.return_value = True
+    row = {
+        "id": "task-1",
+        "status": "need_manual",
+        "task_type": "open_login",
+        "payload_json": '{"auto_submit": false, "manual_takeover": true}',
+    }
+
+    with mock.patch.dict(
+        social_automation_api._RUNNING_TASK_CONTROLS,
+        {"task-1": {
+            "manual_takeover_event": request_event,
+            "manual_takeover_ack_event": ack_event,
+            "manual_takeover_timeout_event": timeout_event,
+        }},
+        clear=True,
+    ):
+        assert social_automation_api._live_browser_open_login_mode(row) == "manual"
+
+
 def test_manual_login_recovery_never_guesses_success_or_requeues_recent_task():
     connection = mock.Mock()
     connection.execute.return_value.fetchall.return_value = []

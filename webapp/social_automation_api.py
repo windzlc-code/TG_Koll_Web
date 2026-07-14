@@ -1296,6 +1296,8 @@ def _running_task_login_mode(task_id: str) -> str:
 
 
 def _live_browser_open_login_mode(row: Any) -> str:
+    if str(row["status"] or "").strip().lower() == "need_manual":
+        return "manual"
     running_mode = _running_task_login_mode(str(row["id"] or ""))
     if running_mode in {"switching", "takeover_timeout"}:
         return running_mode
@@ -1374,12 +1376,15 @@ def request_live_browser_manual_takeover(session_id: str) -> dict[str, Any]:
             "SELECT id, status, task_type FROM social_automation_tasks WHERE id = ?",
             (task_id,),
         ).fetchone()
-    if not row or str(row["status"] or "") != "running" or str(row["task_type"] or "") != "open_login":
+    status = str(row["status"] or "").strip().lower() if row else ""
+    if not row or status not in {"running", "need_manual"} or str(row["task_type"] or "") != "open_login":
         raise HTTPException(status_code=409, detail="当前浏览器不是正在运行的登录任务")
-    already_manual = bool(getattr(ack_event, "is_set", lambda: False)())
+    already_manual = status == "need_manual" or bool(getattr(ack_event, "is_set", lambda: False)())
     timeout_event.clear()
     event.set()
-    acknowledged = bool(getattr(ack_event, "is_set", lambda: False)())
+    if status == "need_manual":
+        ack_event.set()
+    acknowledged = status == "need_manual" or bool(getattr(ack_event, "is_set", lambda: False)())
     _persist_manual_takeover_ack(task_id, clean_id)
     if not acknowledged and matched_control is not None:
         start_watcher = False

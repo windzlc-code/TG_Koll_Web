@@ -224,6 +224,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         browser_refresh = self._function_source("refreshLiveBrowserSessionsSoon")
         self.assertIn('liveBrowserLoginMode(matched) === "switching"', browser_refresh)
         self.assertIn("found && !takeoverPending", browser_refresh)
+        self.assertIn("automaticLoginActive", browser_refresh)
+        self.assertIn("refreshLiveBrowserSessionsOnly", browser_refresh)
         self.assertIn("liveBrowserRefreshTokens[refreshKey]", browser_refresh)
         self.assertIn('matched.login_mode = "takeover_timeout"', browser_refresh)
         self.assertIn("observedTarget || taskFinished", browser_refresh)
@@ -236,8 +238,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             const state = {{ socialBrowserSessions: [], liveBrowserRefreshTokens: {{}} }};
             const callbacks = [];
             const window = {{ setTimeout(callback) {{ callbacks.push(callback); }} }};
-            async function refreshSocialAccountsOnly() {{}}
+            async function refreshLiveBrowserSessionsOnly() {{}}
             function liveBrowserLoginMode(session) {{ return session.login_mode || "automatic"; }}
+            function liveBrowserTaskStatus(session) {{ return session.task_status || session.status || "running"; }}
             function renderLiveBrowserSessions() {{}}
             function showMsg() {{}}
             {self._function_source("refreshLiveBrowserSessionsSoon")}
@@ -257,10 +260,25 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
               state.socialBrowserSessions = [];
               await callbacks.pop()();
               assert.ok(!state.liveBrowserRefreshTokens["task-gone"]);
+
+              state.socialBrowserSessions = [{{ task_id: "task-auto", task_type: "open_login", task_status: "running", login_mode: "automatic" }}];
+              refreshLiveBrowserSessionsSoon("task-auto", 1, 1);
+              await callbacks.pop()();
+              assert.ok(state.liveBrowserRefreshTokens["task-auto"]);
+              assert.ok(callbacks.length > 0);
             }})().catch((error) => {{ console.error(error); process.exit(1); }});
             """
         )
         self._run_node(harness)
+
+    def test_manual_takeover_button_is_available_for_every_active_login_session(self):
+        render_toggle = self._function_source("renderLiveBrowserModeToggle")
+        update_card = self._function_source("updateLiveBrowserSessionCard")
+
+        self.assertIn('["running", "need_manual"].includes', render_toggle)
+        self.assertNotIn("browserReady", render_toggle)
+        self.assertIn('!["running", "need_manual"].includes(status)', update_card)
+        self.assertNotIn('status !== "running"', update_card)
 
     def test_account_edit_does_not_resubmit_unchanged_proxy_and_clears_revealed_password(self):
         modal = self._function_source("openAccountPoolEditModal")
