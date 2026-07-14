@@ -277,8 +277,11 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
 
         self.assertIn('["running", "need_manual"].includes', render_toggle)
         self.assertNotIn("browserReady", render_toggle)
-        self.assertIn('!["running", "need_manual"].includes(status)', update_card)
+        self.assertIn('button.disabled = !sessionId || !["running", "need_manual"].includes(status)', update_card)
         self.assertNotIn('status !== "running"', update_card)
+
+        set_mode = self._function_source("setLiveBrowserMode")
+        self.assertIn('liveBrowserLoginMode(session) === "manual" && Boolean(session.input_allowed)', set_mode)
 
     def test_account_edit_does_not_resubmit_unchanged_proxy_and_clears_revealed_password(self):
         modal = self._function_source("openAccountPoolEditModal")

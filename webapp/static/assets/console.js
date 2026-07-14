@@ -16928,7 +16928,7 @@ function updateLiveBrowserSessionCard(card, session) {
     if (buttonMode === "manual") {
       button.dataset.liveBrowserModeSession = sessionId;
       button.textContent = loginMode === "switching" ? "再次强制接管" : (loginMode === "takeover_timeout" ? "重试接管" : "人工接管");
-      button.disabled = !sessionId || !["running", "need_manual"].includes(status) || loginMode === "manual";
+      button.disabled = !sessionId || !["running", "need_manual"].includes(status);
     } else {
       button.disabled = true;
     }
@@ -17010,7 +17010,7 @@ function renderLiveBrowserModeToggle(session) {
   return `
     <div class="live-browser-mode-toggle" role="group" aria-label="登录操作模式">
       <button type="button" class="${mode === "automatic" ? "is-active" : ""}" aria-pressed="${mode === "automatic" ? "true" : "false"}" disabled>自动登录</button>
-      <button type="button" class="${mode === "manual" ? "is-active" : ""}${switching || takeoverTimedOut ? " is-pending" : ""}" data-live-browser-mode="manual" data-live-browser-mode-session="${esc(sessionId)}" aria-pressed="${mode === "manual" ? "true" : "false"}" ${active && sessionId && mode !== "manual" ? "" : "disabled"}>${switching ? "再次强制接管" : (takeoverTimedOut ? "重试接管" : "人工接管")}</button>
+      <button type="button" class="${mode === "manual" ? "is-active" : ""}${switching || takeoverTimedOut ? " is-pending" : ""}" data-live-browser-mode="manual" data-live-browser-mode-session="${esc(sessionId)}" aria-pressed="${mode === "manual" ? "true" : "false"}" ${active && sessionId ? "" : "disabled"}>${switching ? "再次强制接管" : (takeoverTimedOut ? "重试接管" : "人工接管")}</button>
     </div>`;
 }
 
@@ -17263,6 +17263,11 @@ async function setLiveBrowserMode(sessionId = "", mode = "manual") {
   if (taskId) {
     state.suppressedSocialTaskPromptIds.add(taskId);
     dismissToastByKey(socialTaskToastKey(taskId), { manual: true });
+  }
+  if (session && liveBrowserLoginMode(session) === "manual" && Boolean(session.input_allowed)) {
+    renderLiveBrowserSessions();
+    syncSocialTaskToastAutoRefresh();
+    return;
   }
   if (session) {
     session.login_mode = "switching";
