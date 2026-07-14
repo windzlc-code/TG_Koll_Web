@@ -2900,12 +2900,12 @@ select:focus {
 }
 
 .page-admin .admin-user-table td:last-child .admin-user-icon-button {
-  inline-size: 36px;
-  block-size: 36px;
-  width: 36px;
-  height: 36px;
-  min-width: 36px;
-  min-height: 36px;
+  inline-size: 32px;
+  block-size: 32px;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
   padding: 0;
 }
 
@@ -7347,9 +7347,29 @@ body.page-admin {
 }
 
 .page-admin .admin-page-title {
-  min-height: 220px;
-  grid-template-columns: minmax(0, 1fr) minmax(420px, 0.78fr);
-  padding: clamp(24px, 3vw, 42px);
+  min-height: 164px;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.52fr);
+  padding: clamp(22px, 2.4vw, 32px);
+}
+
+.page-admin .admin-overview-strip {
+  align-self: center;
+  max-width: 430px;
+  gap: 6px;
+}
+
+.page-admin .overview-pod {
+  min-height: 64px;
+  padding: 9px 10px;
+}
+
+.page-admin .overview-label {
+  font-size: 11px;
+}
+
+.page-admin .overview-value {
+  margin-top: 4px;
+  font-size: 22px;
 }
 
 .page-admin .admin-page-title::before {
@@ -7714,6 +7734,14 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
   min-width: 164px;
 }
 
+.page-admin #secUsers .admin-user-table td.admin-user-actions {
+  display: flex;
+  grid-template-columns: none;
+  gap: 4px;
+  align-items: center;
+  justify-content: flex-start;
+}
+
 @media (max-width: 720px) {
   .page-admin #secUsers .admin-account-tab {
     min-width: 0;
@@ -7721,7 +7749,14 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
 
   .page-admin #secUsers .admin-user-table th:last-child,
   .page-admin #secUsers .admin-user-table td:last-child {
-    width: 140px;
-    min-width: 140px;
+    width: 112px;
+    min-width: 112px;
+  }
+
+  .page-admin #secUsers .admin-user-table td.admin-user-actions {
+    display: grid;
+    grid-template-columns: repeat(2, 40px);
+    gap: 4px;
+    justify-content: center;
   }
 }

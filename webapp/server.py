@@ -13301,10 +13301,7 @@ def _persona_dashboard_suggest_keywords(payload: PersonaDashboardPersonaAiKeywor
         if str(item or "").strip()
     ][:12]
     if len(keywords) != 5:
-        raise HTTPException(
-            status_code=502,
-            detail="关键词提炼失败：模型未返回 5 个有效关键词，请稍后重试。",
-        )
+        raise HTTPException(status_code=502, detail="关键词提炼失败：模型未返回 5 个有效关键词，请稍后重试。")
     return {
         "ok": True,
         "name": name,
@@ -18564,7 +18561,7 @@ def create_app() -> FastAPI:
                        password_expires_at, deleted_at, deleted_by, created_at, updated_at
                 FROM users
                 {where_sql}
-                ORDER BY created_at DESC
+                ORDER BY created_at DESC, id DESC
                 LIMIT ? OFFSET ?
                 """,
                 (*where_params, lim, off),

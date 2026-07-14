@@ -3453,8 +3453,11 @@ function socialTaskToastKey(taskId, task = null) {
 
 function socialTaskToastTerminal(task) {
   const status = String(task?.status || "").trim();
-  return ["success", "failed", "cancelled"].includes(status)
-    || (status === "need_manual" && !isUnfinishedTask(task));
+  // `need_manual` intentionally keeps its backend task open so the live
+  // browser can remain available. It is nevertheless terminal for the toast:
+  // automatic execution has stopped and the user should not see a running
+  // timer indefinitely while deciding whether to take over.
+  return ["success", "failed", "cancelled", "need_manual"].includes(status);
 }
 
 function clearDeliveredToastStates(toastKey) {
@@ -3557,7 +3560,6 @@ function syncSocialTaskToast(task, { force = false } = {}) {
   const activeTransition = state.socialTaskToastTransitions[key];
   if (!resolved.transition && activeTransition?.until > Date.now()) return;
   const existing = Array.from(ensureToastHost().children).find((item) => item.dataset.toastKey === key);
-  const waitingForManual = status === "need_manual" && isUnfinishedTask(task);
   const waitingForSchedule = isFutureScheduledSocialTask(task);
   const terminal = socialTaskToastTerminal(task);
   const changedToTerminal = terminal && previous && previous !== status;
@@ -3592,7 +3594,10 @@ function syncSocialTaskToasts(tasks = []) {
 }
 
 function hasActiveSocialTaskToast() {
-  return (state.socialTasks || []).some((task) => activeSocialAutomationTask(task) && !isFutureScheduledSocialTask(task));
+  return (state.socialTasks || []).some((task) => (
+    ["queued", "running"].includes(String(task?.status || "").trim())
+    && !isFutureScheduledSocialTask(task)
+  ));
 }
 
 function syncSocialTaskScheduleWake() {
@@ -7938,8 +7943,23 @@ function watchTask(taskId, options = {}) {
   const onDone = typeof options.onDone === "function" ? options.onDone : null;
   const onError = typeof options.onError === "function" ? options.onError : null;
   syncWatchingTaskChip(taskId);
-  state.events = new EventSource(adminWorkspaceUrl(`/api/tasks/${encodeURIComponent(taskId)}/events`), { withCredentials: true });
-  state.events.onmessage = (event) => {
+  const source = new EventSource(adminWorkspaceUrl(`/api/tasks/${encodeURIComponent(taskId)}/events`), { withCredentials: true });
+  let settled = false;
+  const closeWatcher = () => {
+    source.close();
+    if (state.events !== source) return;
+    state.events = null;
+    syncWatchingTaskChip("");
+  };
+  const settleTask = (payload, status) => {
+    if (settled) return;
+    settled = true;
+    closeWatcher();
+    if (onDone) onDone({ ...payload, status });
+    loadTasks();
+  };
+  state.events = source;
+  const handleTaskEvent = (event) => {
     let payload = {};
     try { payload = JSON.parse(event.data || "{}"); } catch {}
     const kind = String(payload.kind || payload.status || "progress");
@@ -7955,18 +7975,36 @@ function watchTask(taskId, options = {}) {
       taskPanel: options.taskPanel || "regular",
     });
     if (["success", "failed", "cancelled"].includes(eventKind)) {
-      state.events.close();
-      state.events = null;
-      syncWatchingTaskChip("");
-      if (onDone) onDone({ ...payload, status: eventKind });
-      loadTasks();
+      settleTask(payload, eventKind);
     }
   };
-  state.events.onerror = () => {
+  source.onmessage = handleTaskEvent;
+  ["queued", "running", "progress", "log", "done", "analysis", "warning"].forEach((eventName) => {
+    source.addEventListener(eventName, handleTaskEvent);
+  });
+  source.onerror = async () => {
+    if (settled || state.events !== source) {
+      source.close();
+      return;
+    }
+    source.close();
+    try {
+      const task = await api(`/api/tasks/${encodeURIComponent(taskId)}`);
+      const taskStatus = String(task?.status || "").trim();
+      if (["success", "failed", "cancelled"].includes(taskStatus)) {
+        const taskError = taskStatus === "failed" ? String(task?.error || task?.detail || "").trim() : "";
+        appendEvent(taskStatus, taskError || task?.message || `任务已${taskStatus === "success" ? "完成" : "结束"}。`, {
+          key: `task:${taskId}`,
+          taskId,
+          taskPanel: options.taskPanel || "regular",
+        });
+        settleTask({ kind: "done", data: task }, taskStatus);
+        return;
+      }
+    } catch {}
+    if (settled || state.events !== source) return;
     if (!suppressDisconnectWarning) appendEvent("warn", "事件流已断开，可在任务队列继续查看结果。");
-    if (state.events) state.events.close();
-    state.events = null;
-    syncWatchingTaskChip("");
+    closeWatcher();
     if (onError) onError();
   };
 }
@@ -11826,39 +11864,6 @@ async function applyPersonaReferenceImage(imageId) {
   showMsg("commandMsg", "当前人设图已切换。", true);
 }
 
-async function refreshPersonaMediaTask(personaId, postId, taskId) {
-  const detail = await api(`/api/tasks/${encodeURIComponent(taskId)}`);
-  const key = personaMediaTaskKey(personaId, postId);
-  const status = String(detail.status || "").trim();
-  const errorText = String(detail.error || "").trim();
-  const previousStatus = String(state.personaMediaTasks[key]?.status || "").trim();
-  const terminalStatuses = ["success", "failed", "cancelled"];
-  const becameTerminal = terminalStatuses.includes(status) && !terminalStatuses.includes(previousStatus);
-  const taskTitle = taskMeta[String(detail.type || state.personaMediaTasks[key]?.taskType || "persona_post_image")]?.title || statusLabel(detail.type || "") || "生成任务";
-  state.personaMediaTasks[key] = {
-    taskId,
-    taskType: String(detail.type || "").trim(),
-    status,
-    detail,
-  };
-  if (becameTerminal) {
-    const ok = status === "success";
-    appendEvent(ok ? "success" : (status === "failed" ? "failed" : "cancelled"), `${taskTitle}：${statusLabel(status)}`, {
-      key: `task:${taskId}`,
-      taskId,
-      taskPanel: "regular",
-      personaId,
-    });
-    setPersonaGenerateRunState(personaId, {
-      kind: "media",
-      status: ok ? "success" : "error",
-      message: ok ? `${taskTitle}已完成` : `${taskTitle}${statusLabel(status)}`,
-      taskId,
-      error: ok ? "" : (errorText || statusLabel(status)),
-      suppressToast: true,
-    });
-    dismissToastByKey(`persona-generate:${personaId}:media`);
-  }
 async function replacePersonaLibraryImage(imageId, file) {
   const persona = selectedPersona();
   const cleanImageId = String(imageId || "").trim();
@@ -11897,6 +11902,39 @@ async function deletePersonaLibraryImage(imageId) {
   showMsg("commandMsg", "人设图已删除。", true);
 }
 
+async function refreshPersonaMediaTask(personaId, postId, taskId) {
+  const detail = await api(`/api/tasks/${encodeURIComponent(taskId)}`);
+  const key = personaMediaTaskKey(personaId, postId);
+  const status = String(detail.status || "").trim();
+  const errorText = String(detail.error || "").trim();
+  const previousStatus = String(state.personaMediaTasks[key]?.status || "").trim();
+  const terminalStatuses = ["success", "failed", "cancelled"];
+  const becameTerminal = terminalStatuses.includes(status) && !terminalStatuses.includes(previousStatus);
+  const taskTitle = taskMeta[String(detail.type || state.personaMediaTasks[key]?.taskType || "persona_post_image")]?.title || statusLabel(detail.type || "") || "生成任务";
+  state.personaMediaTasks[key] = {
+    taskId,
+    taskType: String(detail.type || "").trim(),
+    status,
+    detail,
+  };
+  if (becameTerminal) {
+    const ok = status === "success";
+    appendEvent(ok ? "success" : (status === "failed" ? "failed" : "cancelled"), `${taskTitle}：${statusLabel(status)}`, {
+      key: `task:${taskId}`,
+      taskId,
+      taskPanel: "regular",
+      personaId,
+    });
+    setPersonaGenerateRunState(personaId, {
+      kind: "media",
+      status: ok ? "success" : "error",
+      message: ok ? `${taskTitle}已完成` : `${taskTitle}${statusLabel(status)}`,
+      taskId,
+      error: ok ? "" : (errorText || statusLabel(status)),
+      suppressToast: true,
+    });
+    dismissToastByKey(`persona-generate:${personaId}:media`);
+  }
   if (errorText && ["failed", "cancelled"].includes(status)) {
     showToast(errorText, false, {
       key: `persona-media-task:${taskId}:${status}:${errorText}`,
@@ -18243,6 +18281,30 @@ function bindEvents() {
     if (event.target.closest("[data-persona-clear-style]")) clearPersonaTweetStyle().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
     const applyPersonaImage = event.target.closest("[data-persona-apply-image]");
     if (applyPersonaImage) applyPersonaReferenceImage(applyPersonaImage.dataset.personaApplyImage || "").catch((error) => showMsg("commandMsg", error.detail || error.message || "切换人设图失败", false));
+    const replacePersonaImage = event.target.closest("[data-persona-replace-image]");
+    if (replacePersonaImage) {
+      const input = $("personaImageUploadFile");
+      if (input) {
+        input.dataset.personaReplaceImage = replacePersonaImage.dataset.personaReplaceImage || "";
+        input.click();
+      }
+      return;
+    }
+    const deletePersonaImage = event.target.closest("[data-persona-delete-image]");
+    if (deletePersonaImage) {
+      const imageId = deletePersonaImage.dataset.personaDeleteImage || "";
+      const isCurrent = deletePersonaImage.closest(".persona-image-library-card")?.classList.contains("is-reference");
+      const message = isCurrent
+        ? "确定删除当前人设图吗？系统会自动切换到最新的历史图；没有历史图时将清空当前参考图。"
+        : "确定删除这张历史人设图吗？删除后不可恢复。";
+      confirmDangerAction(message, { title: "删除人设图", confirmText: "删除图片" })
+        .then((ok) => {
+          if (!ok) return;
+          return deletePersonaLibraryImage(imageId);
+        })
+        .catch((error) => showMsg("commandMsg", error.detail || error.message || "删除人设图失败", false));
+      return;
+    }
     const linkPageButton = event.target.closest("[data-persona-link-page]");
     if (linkPageButton) {
       const profile = selectedPersonaProfile();
@@ -18276,30 +18338,6 @@ function bindEvents() {
       state.personaLinkPresetId = selectPreset.dataset.personaSelectPreset || "";
       renderPersonaDetail();
       renderConfirmSummary();
-    const replacePersonaImage = event.target.closest("[data-persona-replace-image]");
-    if (replacePersonaImage) {
-      const input = $("personaImageUploadFile");
-      if (input) {
-        input.dataset.personaReplaceImage = replacePersonaImage.dataset.personaReplaceImage || "";
-        input.click();
-      }
-      return;
-    }
-    const deletePersonaImage = event.target.closest("[data-persona-delete-image]");
-    if (deletePersonaImage) {
-      const imageId = deletePersonaImage.dataset.personaDeleteImage || "";
-      const isCurrent = deletePersonaImage.closest(".persona-image-library-card")?.classList.contains("is-reference");
-      const message = isCurrent
-        ? "确定删除当前人设图吗？系统会自动切换到最新的历史图；没有历史图时将清空当前参考图。"
-        : "确定删除这张历史人设图吗？删除后不可恢复。";
-      confirmDangerAction(message, { title: "删除人设图", confirmText: "删除图片" })
-        .then((ok) => {
-          if (!ok) return;
-          return deletePersonaLibraryImage(imageId);
-        })
-        .catch((error) => showMsg("commandMsg", error.detail || error.message || "删除人设图失败", false));
-      return;
-    }
       return;
     }
     if (event.target.closest("[data-persona-add-preset]")) addPersonaPreset().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
@@ -18440,6 +18478,15 @@ function bindEvents() {
       renderConfirmSummary();
       return;
     }
+    if (event.target?.matches?.("[data-persona-upload-image-file]")) {
+      const file = event.target.files?.[0] || null;
+      const imageId = String(event.target.dataset.personaReplaceImage || "").trim();
+      event.target.value = "";
+      delete event.target.dataset.personaReplaceImage;
+      if (!file || !imageId) return;
+      replacePersonaLibraryImage(imageId, file).catch((error) => showMsg("commandMsg", error.detail || error.message || "替换人设图失败", false));
+      return;
+    }
     if (event.target?.matches?.("[data-persona-memory-id]")) {
       snapshotPersonaCurrentForm();
       syncPersonaMemorySelectionState();
@@ -18471,15 +18518,6 @@ function bindEvents() {
       if (event.target.checked || !form.hotPreviewId) form.hotPreviewId = candidateId;
       renderPersonaDetail();
       renderConfirmSummary();
-      return;
-    }
-    if (event.target?.matches?.("[data-persona-upload-image-file]")) {
-      const file = event.target.files?.[0] || null;
-      const imageId = String(event.target.dataset.personaReplaceImage || "").trim();
-      event.target.value = "";
-      delete event.target.dataset.personaReplaceImage;
-      if (!file || !imageId) return;
-      replacePersonaLibraryImage(imageId, file).catch((error) => showMsg("commandMsg", error.detail || error.message || "替换人设图失败", false));
       return;
     }
     if (event.target?.id === "personaGenerateMode") {

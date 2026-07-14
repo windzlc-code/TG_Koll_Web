@@ -36,7 +36,6 @@ const SENSITIVE_EYE_ICON_SVG = `
     <circle cx="12" cy="12" r="3"></circle>
     <path class="sensitive-eye-slash" d="M4 20L20 4"></path>
   </svg>`;
-
 function getSensitiveToggleButton(inputId) {
   return document.querySelector(`.sensitive-toggle-btn[data-target="${inputId}"], [data-secret-target="${inputId}"]`);
 }
@@ -99,7 +98,9 @@ function setActiveAdminPage(page, updateHash = true) {
   }
   if (nextPage !== adminState.activePage) clearRevealedUserPassword();
   adminState.activePage = nextPage;
-  const pageLabel = ADMIN_PAGE_LABELS[nextPage] || "运营概览";
+  const pageLabel = nextPage === "users" && adminState.userListRole === "admin"
+    ? "管理员账号"
+    : (ADMIN_PAGE_LABELS[nextPage] || "运营概览");
   document.querySelectorAll("[data-page]").forEach((node) => {
     const active = String(node.dataset.page || "") === nextPage;
     node.classList.toggle("is-active", active);
@@ -2486,6 +2487,11 @@ function syncUserRoleView() {
   if (createButtonLabel) createButtonLabel.textContent = isAdmin ? "创建管理员账号" : "创建客户账号";
   const pending = document.querySelector(".admin-pending-count");
   if (pending instanceof HTMLElement) pending.hidden = isAdmin;
+  if (adminState.activePage === "users") {
+    const pageLabel = isAdmin ? "管理员账号" : "客户账号";
+    setText("adminCurrentPageLabel", pageLabel);
+    document.title = `${pageLabel} - 运营后台 - Web 素材生成平台`;
+  }
 }
 
 function renderUserPagination() {
