@@ -133,6 +133,19 @@ def test_manual_open_login_allows_input_while_running():
     }) is False
 
 
+def test_auto_login_switched_to_manual_remains_visible_in_overview():
+    task = {"task_type": "open_login"}
+
+    assert social_automation_api._is_manual_open_login_task(
+        task,
+        {"auto_submit": False, "manual_takeover": True},
+    ) is False
+    assert social_automation_api._is_manual_open_login_task(
+        task,
+        {"auto_submit": False},
+    ) is True
+
+
 def test_running_auto_login_allows_input_only_after_manual_takeover_acknowledgement():
     request_event = mock.Mock()
     request_event.is_set.return_value = True

@@ -12,6 +12,7 @@ from urllib.parse import quote, quote_plus, urljoin, urlparse
 
 
 INSTAGRAM_HOME = "https://www.instagram.com/"
+INSTAGRAM_LOGIN = "https://www.instagram.com/accounts/login/"
 THREADS_HOME = "https://www.threads.net/"
 SUPPORTED_TASK_TYPES = {
     "check_login",
@@ -868,7 +869,9 @@ def _detect_instagram_login_state(page) -> dict[str, Any]:
                 return {"status": "ready", "reason": "已检测到 Instagram 首页界面。", "url": url}
         except Exception:
             continue
-    return {"status": "ready", "reason": "未检测到登录或验证界面。", "url": url}
+    if _has_threads_session_cookie(page):
+        return {"status": "ready", "reason": "已检测到有效的 Instagram 登录会话。", "url": url}
+    return {"status": "cookie_expired", "reason": "尚未检测到有效的 Instagram 登录会话。", "url": url}
 
 
 def _detect_threads_login_state(page) -> dict[str, Any]:
@@ -1024,8 +1027,9 @@ def _verification_text_markers() -> list[str]:
         "authentication app",
         "6-digit code",
         "confirm it's you",
-        "suspicious",
-        "challenge",
+        "suspicious login attempt",
+        "unusual login attempt",
+        "security challenge",
         "verify your account",
         "help us confirm",
         "验证码",
@@ -1037,6 +1041,8 @@ def _verification_text_markers() -> list[str]:
 
 def _detect_platform_login_state(page, platform: str) -> dict[str, Any]:
     if platform == "threads":
+        if "instagram.com" in str(page.url or "").lower():
+            return _detect_instagram_login_state(page)
         return _detect_threads_login_state(page)
     return _detect_instagram_login_state(page)
 
@@ -1209,10 +1215,11 @@ def _run_open_login(
     cancel_event: Any | None = None,
     context_control: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    _goto(page, _platform_home(platform), logger, "open_login")
+    auto_submit = bool(payload.get("auto_submit") or payload.get("login_password") or payload.get("password"))
+    start_url = INSTAGRAM_LOGIN if platform == "threads" and auto_submit else _platform_home(platform)
+    _goto(page, start_url, logger, "open_login")
     wait_seconds = int(payload.get("login_wait_seconds") or os.getenv("SOCIAL_AUTOMATION_LOGIN_WAIT_SECONDS", "3600"))
     wait_seconds = max(30, min(wait_seconds, 3600))
-    auto_submit = bool(payload.get("auto_submit") or payload.get("login_password") or payload.get("password"))
     max_login_attempts = _int_payload_or_env(payload, "max_login_attempts", "SOCIAL_AUTOMATION_LOGIN_MAX_ATTEMPTS", 4, 1, 8)
     max_self_heal_attempts = _int_payload_or_env(payload, "max_self_heal_attempts", "SOCIAL_AUTOMATION_LOGIN_SELF_HEAL_ATTEMPTS", 5, 0, 12)
     submit_grace_seconds = _int_payload_or_env(payload, "submit_grace_seconds", "SOCIAL_AUTOMATION_LOGIN_SUBMIT_GRACE_SECONDS", 30, 5, 120)
@@ -1258,7 +1265,7 @@ def _run_open_login(
         post_submit_grace_expired = bool(last_submit_monotonic is not None and not post_submit_waiting)
         try:
             last_status = _detect_platform_login_state(page, platform)
-            if platform == "threads" and not auto_submit:
+            if platform == "threads":
                 last_status = _restore_threads_after_instagram_login(page, last_status, logger)
             if last_status.get("status") == "ready":
                 stable_status = _confirm_platform_ready(page, platform, logger, cancel_event)

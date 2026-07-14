@@ -3415,7 +3415,7 @@ def _load_task_payload_object(raw: Any) -> dict[str, Any] | None:
 def _is_manual_open_login_task(task: dict[str, Any], payload: dict[str, Any] | None = None) -> bool:
     if str(task.get("task_type") or "") != "open_login":
         return False
-    return _open_login_auto_submit_mode(payload) is False
+    return _open_login_auto_submit_mode(payload) is False and not bool((payload or {}).get("manual_takeover"))
 
 
 def _load_persona_archive(persona_id: str) -> dict[str, Any] | None:

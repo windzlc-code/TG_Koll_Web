@@ -97,9 +97,9 @@ class _CookieContext:
 class _ThreadsShellPage:
     url = "https://www.threads.com/"
 
-    def __init__(self, cookies):
+    def __init__(self, cookies, body_text=""):
         self.context = _CookieContext(cookies)
-        self.body = _LoginStateLocator(text="", visible=True)
+        self.body = _LoginStateLocator(text=body_text, visible=True)
 
     def locator(self, selector):
         if selector == "body":
@@ -130,6 +130,59 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         ]))
 
         self.assertEqual(status["status"], "ready")
+
+    def test_instagram_unknown_page_without_session_is_not_ready(self):
+        page = _ThreadsShellPage([])
+        page.url = "https://www.instagram.com/"
+        with mock.patch.object(page, "locator", return_value=_LoginStateLocator(visible=False)):
+            status = runner._detect_instagram_login_state(page)
+
+        self.assertEqual(status["status"], "cookie_expired")
+
+    def test_threads_feed_text_with_challenge_word_is_not_verification(self):
+        page = _ThreadsShellPage(
+            [{"name": "sessionid", "value": "active-session", "domain": ".threads.net"}],
+            body_text="Join my 30 day challenge and follow the daily updates.",
+        )
+
+        status = runner._detect_threads_login_state(page)
+
+        self.assertEqual(status["status"], "ready")
+
+    def test_threads_login_handoff_uses_instagram_state_detector(self):
+        page = mock.Mock()
+        page.url = "https://www.instagram.com/challenge/"
+        with mock.patch.object(
+            runner,
+            "_detect_instagram_login_state",
+            return_value={"status": "need_verification"},
+        ) as detect_instagram:
+            status = runner._detect_platform_login_state(page, "threads")
+
+        self.assertEqual(status["status"], "need_verification")
+        detect_instagram.assert_called_once_with(page)
+
+    def test_threads_auto_login_starts_at_instagram_login(self):
+        page = mock.Mock()
+        page.url = "https://www.instagram.com/challenge/"
+        with (
+            mock.patch.object(runner, "_goto") as goto,
+            mock.patch.object(runner, "_detect_platform_login_state", return_value={"status": "need_verification"}),
+            mock.patch.object(runner, "_screenshot", return_value="verification.png"),
+            mock.patch.object(runner, "_wait_or_raise_manual", return_value={"status": "need_verification"}),
+        ):
+            result = runner._run_open_login(
+                page,
+                {"id": "threads-auto-entry"},
+                {},
+                {"login_wait_seconds": 30, "auto_submit": True},
+                Path("."),
+                _Logger(),
+                "threads",
+            )
+
+        self.assertEqual(result["status"], "need_verification")
+        goto.assert_called_once_with(page, runner.INSTAGRAM_LOGIN, mock.ANY, "open_login")
 
     def test_manual_login_does_not_auto_heal_or_navigate_the_user_page(self):
         page = mock.Mock()
