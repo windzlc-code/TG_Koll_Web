@@ -411,6 +411,7 @@ const state = {
   taskQueueRegularPageSize: storedTaskQueueRegularPageSize(),
   browserPreferences: null,
   browserRecommendation: null,
+  browserDurationDrafts: {},
   taskQueueSelectedPersonaIds: new Set(),
   taskQueueSelectedRegularIds: new Set(),
   taskQueueRefreshTimer: 0,
@@ -597,6 +598,7 @@ function clearTenantInMemoryState() {
   state.socialBrowserSessions = [];
   state.browserPreferences = null;
   state.browserRecommendation = null;
+  state.browserDurationDrafts = {};
   state.browserPreferencesDirty = false;
   state.browserPolicySyncRevision += 1;
   state.browserPolicyLoaded = false;
@@ -9560,9 +9562,52 @@ function browserDurationLabel(seconds = 0) {
   return `${value} 秒`;
 }
 
-function browserDurationOptions(current, presets) {
-  const values = Array.from(new Set([...presets, Number(current) || 0])).sort((a, b) => a - b);
-  return values.map((value) => `<option value="${value}" ${Number(current) === value ? "selected" : ""}>${esc(browserDurationLabel(value))}${presets.includes(value) ? "" : "（当前）"}</option>`).join("");
+function browserDurationOptions(current, presets, forceCustom = false) {
+  const currentValue = Number(current) || 0;
+  const usesPreset = !forceCustom && presets.includes(currentValue);
+  return `${presets.map((value) => `<option value="${value}" ${usesPreset && currentValue === value ? "selected" : ""}>${esc(browserDurationLabel(value))}</option>`).join("")}<option value="custom" ${usesPreset ? "" : "selected"}>自定义时间</option>`;
+}
+
+function browserDurationValue(selectId, customInputId, fallback) {
+  const select = $(selectId);
+  if (!select) return fallback;
+  if (select.value !== "custom") return select.value;
+  return $(customInputId)?.value ?? fallback;
+}
+
+function browserDurationControlState(field, current, presets) {
+  const draft = state.browserDurationDrafts?.[field] || null;
+  const currentValue = Number(current) || 0;
+  return {
+    usesCustom: draft?.mode ? draft.mode === "custom" : !presets.includes(currentValue),
+    rawValue: draft && Object.hasOwn(draft, "rawValue") ? String(draft.rawValue) : String(currentValue),
+  };
+}
+
+function updateBrowserDurationDraft(field, values) {
+  state.browserDurationDrafts ||= {};
+  state.browserDurationDrafts[field] = {
+    ...(state.browserDurationDrafts[field] || {}),
+    ...values,
+  };
+}
+
+function syncBrowserDurationCustomField(select, { focus = false } = {}) {
+  if (!select) return;
+  const input = $(select.dataset.browserDurationCustomInput || "");
+  const wrapper = input?.closest(".browser-duration-custom");
+  const usesCustom = select.value === "custom";
+  const field = String(input?.dataset.browserDurationField || "");
+  if (field) updateBrowserDurationDraft(field, { mode: usesCustom ? "custom" : "preset" });
+  if (wrapper) wrapper.hidden = !usesCustom;
+  if (input) {
+    input.disabled = select.disabled || !usesCustom;
+    if (usesCustom && focus) {
+      input.focus();
+      input.select();
+    }
+  }
+  updateBrowserPreferencesDraft();
 }
 
 function browserPreferencesResponseValue(result) {
@@ -9643,9 +9688,12 @@ function renderConsoleSettingsPage() {
   const taskRegularPageSize = Math.min(Math.max(Number(state.taskQueueRegularPageSize || 20), 1), 100);
   const personaPostPageSize = Math.min(Math.max(Number(state.personaPostPageSize || 10), 5), 80);
   const preferences = normalizeBrowserPreferences(state.browserPreferences || {});
-  const manualTimeoutOptions = [300, 600, 900, 1800];
-  if (!manualTimeoutOptions.includes(preferences.manual_timeout_seconds)) manualTimeoutOptions.push(preferences.manual_timeout_seconds);
-  manualTimeoutOptions.sort((a, b) => a - b);
+  const standbyPresets = [0, 30, 60, 120, 300, 600, 1800, 3600];
+  const autoClosePresets = [10, 30, 60, 120, 300, 600, 1800, 3600, 7200, 21600, 43200, 86400];
+  const manualTimeoutPresets = [300, 600, 900, 1800];
+  const standbyControl = browserDurationControlState("standby_seconds", preferences.standby_seconds, standbyPresets);
+  const autoCloseControl = browserDurationControlState("auto_close_seconds", preferences.auto_close_seconds, autoClosePresets);
+  const manualTimeoutControl = browserDurationControlState("manual_timeout_seconds", preferences.manual_timeout_seconds, manualTimeoutPresets);
   host.innerHTML = `
     <div class="console-settings-page">
       <div class="console-settings-actions">
@@ -9680,23 +9728,42 @@ function renderConsoleSettingsPage() {
           </div>
           <label class="console-setting-card ${preferences.completion_policy === "review_hold" ? "" : "is-disabled"}">
             <span>完成后待机时间</span>
-            <select id="settingsBrowserStandbySeconds" data-browser-preference-field ${preferences.completion_policy === "review_hold" ? "" : "disabled"}>
-              ${browserDurationOptions(preferences.standby_seconds, [0, 30, 60, 120, 300, 600, 1800, 3600])}
-            </select>
+            <div class="browser-duration-control">
+              <select id="settingsBrowserStandbySeconds" data-browser-duration-select data-browser-duration-custom-input="settingsBrowserStandbyCustomSeconds" data-browser-preference-field ${preferences.completion_policy === "review_hold" ? "" : "disabled"}>
+                ${browserDurationOptions(preferences.standby_seconds, standbyPresets, standbyControl.usesCustom)}
+              </select>
+              <div class="browser-duration-custom" ${standbyControl.usesCustom ? "" : "hidden"}>
+                <input id="settingsBrowserStandbyCustomSeconds" data-browser-duration-field="standby_seconds" data-browser-preference-field type="number" min="0" max="3600" step="1" value="${esc(standbyControl.rawValue)}" ${preferences.completion_policy === "review_hold" && standbyControl.usesCustom ? "" : "disabled"} />
+                <span>秒</span>
+              </div>
+            </div>
             <em>任务结束后先保留实时窗口，最长可设 1 小时。</em>
           </label>
           <label class="console-setting-card ${preferences.completion_policy === "review_hold" ? "" : "is-disabled"}">
             <span>待机后自动关闭</span>
-            <select id="settingsBrowserAutoCloseSeconds" data-browser-preference-field ${preferences.completion_policy === "review_hold" ? "" : "disabled"}>
-              ${browserDurationOptions(preferences.auto_close_seconds, [10, 30, 60, 120, 300, 600, 1800, 3600, 7200, 21600, 43200, 86400])}
-            </select>
+            <div class="browser-duration-control">
+              <select id="settingsBrowserAutoCloseSeconds" data-browser-duration-select data-browser-duration-custom-input="settingsBrowserAutoCloseCustomSeconds" data-browser-preference-field ${preferences.completion_policy === "review_hold" ? "" : "disabled"}>
+                ${browserDurationOptions(preferences.auto_close_seconds, autoClosePresets, autoCloseControl.usesCustom)}
+              </select>
+              <div class="browser-duration-custom" ${autoCloseControl.usesCustom ? "" : "hidden"}>
+                <input id="settingsBrowserAutoCloseCustomSeconds" data-browser-duration-field="auto_close_seconds" data-browser-preference-field type="number" min="10" max="86400" step="1" value="${esc(autoCloseControl.rawValue)}" ${preferences.completion_policy === "review_hold" && autoCloseControl.usesCustom ? "" : "disabled"} />
+                <span>秒</span>
+              </div>
+            </div>
             <em>总保留时间为待机时间与自动关闭时间之和。</em>
           </label>
           <label class="console-setting-card">
             <span>人工接管超时</span>
-            <select id="settingsManualTimeoutSeconds" data-browser-preference-field>
-              ${manualTimeoutOptions.map((value) => `<option value="${value}" ${preferences.manual_timeout_seconds === value ? "selected" : ""}>${Number.isInteger(value / 60) ? value / 60 : (value / 60).toFixed(1)} 分钟${[300, 600, 900, 1800].includes(value) ? "" : "（当前）"}</option>`).join("")}
-            </select>
+            <div class="browser-duration-control">
+              <select id="settingsManualTimeoutSeconds" data-browser-duration-select data-browser-duration-custom-input="settingsManualTimeoutCustomSeconds" data-browser-preference-field>
+                ${browserDurationOptions(preferences.manual_timeout_seconds, manualTimeoutPresets, manualTimeoutControl.usesCustom)}
+              </select>
+              <div class="browser-duration-custom" ${manualTimeoutControl.usesCustom ? "" : "hidden"}>
+                <input id="settingsManualTimeoutCustomSeconds" data-browser-duration-field="manual_timeout_seconds" data-browser-preference-field type="number" min="300" max="1800" step="1" value="${esc(manualTimeoutControl.rawValue)}" ${manualTimeoutControl.usesCustom ? "" : "disabled"} />
+                <span>秒</span>
+              </div>
+            </div>
+            <em>可自定义 5 到 30 分钟内的任意秒数。</em>
           </label>
           <label class="console-setting-card">
             <span>请求并发任务数</span>
@@ -9722,10 +9789,10 @@ function updateBrowserPreferencesDraft() {
   const current = normalizeBrowserPreferences(state.browserPreferences || {});
   state.browserPreferences = normalizeBrowserPreferences({
     ...current,
-    standby_seconds: $("settingsBrowserStandbySeconds")?.value ?? current.standby_seconds,
-    auto_close_seconds: $("settingsBrowserAutoCloseSeconds")?.value ?? current.auto_close_seconds,
-    review_hold_seconds: Math.min(Number($("settingsBrowserAutoCloseSeconds")?.value ?? current.auto_close_seconds), 300),
-    manual_timeout_seconds: $("settingsManualTimeoutSeconds")?.value ?? current.manual_timeout_seconds,
+    standby_seconds: browserDurationValue("settingsBrowserStandbySeconds", "settingsBrowserStandbyCustomSeconds", current.standby_seconds),
+    auto_close_seconds: browserDurationValue("settingsBrowserAutoCloseSeconds", "settingsBrowserAutoCloseCustomSeconds", current.auto_close_seconds),
+    review_hold_seconds: Math.min(Number(browserDurationValue("settingsBrowserAutoCloseSeconds", "settingsBrowserAutoCloseCustomSeconds", current.auto_close_seconds)), 300),
+    manual_timeout_seconds: browserDurationValue("settingsManualTimeoutSeconds", "settingsManualTimeoutCustomSeconds", current.manual_timeout_seconds),
     requested_concurrency: $("settingsRequestedConcurrency")?.value ?? current.requested_concurrency,
   });
   state.browserPreferencesDirty = true;
@@ -9756,6 +9823,16 @@ async function saveConsoleSettingsPage() {
   const personaPostPageSize = Math.min(Math.max(Number.parseInt(String($("settingsPersonaPostPageSize")?.value || ""), 10) || 10, 5), 80);
   const taskPersonaPageSize = Math.min(Math.max(Number.parseInt(String($("settingsTaskQueuePersonaPageSize")?.value || ""), 10) || 12, 1), 100);
   const taskRegularPageSize = Math.min(Math.max(Number.parseInt(String($("settingsTaskQueueRegularPageSize")?.value || ""), 10) || 20, 1), 100);
+  const customDurationInputs = Array.from(document.querySelectorAll("#consoleSettingsBody [data-browser-duration-field]:not(:disabled)"));
+  const invalidDurationInput = customDurationInputs.find((input) => {
+    const value = Number(input.value);
+    return !input.value.trim() || !Number.isInteger(value) || value < Number(input.min) || value > Number(input.max);
+  });
+  if (invalidDurationInput) {
+    invalidDurationInput.focus();
+    showMsg("consoleSettingsMsg", `请输入 ${invalidDurationInput.min} 到 ${invalidDurationInput.max} 之间的整数秒数。`, false);
+    return;
+  }
   const browserPreferences = updateBrowserPreferencesDraft();
   state.personaListPageSize = pageSize;
   state.personaPostPageSize = personaPostPageSize;
@@ -9779,6 +9856,7 @@ async function saveConsoleSettingsPage() {
     });
     state.browserPreferences = browserPreferencesResponseValue(result);
     state.browserPreferencesDirty = false;
+    state.browserDurationDrafts = {};
   } catch (error) {
     showMsg("consoleSettingsMsg", error.detail || error.message || "分页设置已保存在本机，但浏览器策略保存失败。", false);
     return;
@@ -9804,7 +9882,10 @@ async function loadBrowserPolicySettings(options) {
         api("/api/persona_dashboard/automation/browser_recommendation"),
       ]);
       if (syncRevision !== state.browserPolicySyncRevision) return;
-      if (!state.browserPreferencesDirty) state.browserPreferences = browserPreferencesResponseValue(preferencesResult);
+      if (!state.browserPreferencesDirty) {
+        state.browserPreferences = browserPreferencesResponseValue(preferencesResult);
+        state.browserDurationDrafts = {};
+      }
       state.browserRecommendation = browserRecommendationResponseValue(recommendationResult);
     }
   } catch (error) {
@@ -9824,6 +9905,7 @@ async function autoConfigureBrowserPreferences() {
   try {
     await api("/api/persona_dashboard/automation/browser_preferences/auto_configure", { method: "POST" });
     state.browserPreferencesDirty = false;
+    state.browserDurationDrafts = {};
     state.browserPolicyLoaded = false;
     await loadBrowserPolicySettings();
     showMsg("consoleSettingsMsg", "已按当前环境完成一键配置。", true);
@@ -20172,9 +20254,23 @@ function bindEvents() {
     if (event.target.closest("#saveConsoleSettings")) saveConsoleSettingsPage();
   });
   $("consoleSettingsBody").addEventListener("input", (event) => {
+    const durationInput = event.target.closest("[data-browser-duration-field]");
+    if (durationInput) {
+      updateBrowserDurationDraft(durationInput.dataset.browserDurationField, { mode: "custom", rawValue: durationInput.value });
+    }
     if (event.target.closest("[data-browser-preference-field]")) updateBrowserPreferencesDraft();
   });
   $("consoleSettingsBody").addEventListener("change", (event) => {
+    const durationSelect = event.target.closest("[data-browser-duration-select]");
+    if (durationSelect) {
+      syncBrowserDurationCustomField(durationSelect, { focus: durationSelect.value === "custom" });
+      return;
+    }
+    const durationInput = event.target.closest("[data-browser-duration-field]");
+    if (durationInput) {
+      updateBrowserPreferencesDraft();
+      return;
+    }
     if (event.target.closest("[data-browser-preference-field]")) updateBrowserPreferencesDraft();
   });
 }

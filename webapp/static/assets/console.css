@@ -598,6 +598,34 @@ button.primary,
   padding: 7px 10px;
 }
 
+.browser-duration-control {
+  display: grid;
+  gap: 6px;
+}
+
+.browser-duration-control select,
+.browser-duration-custom input {
+  width: 100%;
+  min-width: 0;
+}
+
+.browser-duration-custom {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.browser-duration-custom[hidden] {
+  display: none;
+}
+
+.browser-duration-custom span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .console-setting-card.is-disabled {
   opacity: 0.62;
 }

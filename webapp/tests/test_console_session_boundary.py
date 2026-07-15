@@ -772,6 +772,26 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
         self._run_node(harness)
 
+    def test_browser_duration_controls_support_presets_and_custom_seconds(self):
+        render = self._function_source("renderConsoleSettingsPage")
+        update = self._function_source("updateBrowserPreferencesDraft")
+        sync = self._section("function syncBrowserDurationCustomField", "function browserPreferencesResponseValue")
+        options = self._function_source("browserDurationOptions")
+
+        self.assertIn('value="custom"', options)
+        self.assertIn("自定义时间", options)
+        self.assertIn("settingsBrowserStandbyCustomSeconds", render)
+        self.assertIn("settingsBrowserAutoCloseCustomSeconds", render)
+        self.assertIn("settingsManualTimeoutCustomSeconds", render)
+        self.assertIn('min="0" max="3600"', render)
+        self.assertIn('min="10" max="86400"', render)
+        self.assertIn('min="300" max="1800"', render)
+        self.assertIn("browserDurationValue", update)
+        self.assertIn("wrapper.hidden = !usesCustom", sync)
+        self.assertIn("input.focus()", sync)
+        self.assertIn("browserDurationDrafts", self.source)
+        self.assertIn("invalidDurationInput", self._function_source("saveConsoleSettingsPage"))
+
     def test_browser_recommendation_adapts_split_server_payload(self):
         harness = textwrap.dedent(
             f"""
