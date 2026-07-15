@@ -42,6 +42,10 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn(".console-page .site-header", self.styles)
         self.assertIn(".site-header", self.site_nav_styles)
         self.assertIn(".console-page .console-shell", self.styles)
+        self.assertIn("body.console-page", self.styles)
+        self.assertIn("padding-top: var(--site-header-height)", self.styles)
+        self.assertIn("grid-template-columns: 288px minmax(0, 1fr)", self.styles)
+        self.assertIn("top: calc(var(--site-header-height) + 16px)", self.styles)
 
     def test_console_reuses_global_theme_and_language_controls(self):
         self.assertIn('id="themeToggle"', self.site_nav_source)
