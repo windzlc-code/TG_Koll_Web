@@ -17282,7 +17282,7 @@ def create_app() -> FastAPI:
                         clear_legacy_admin_cookie = True
         response = JSONResponse(content={"ok": True})
         response.delete_cookie(ADMIN_SESSION_COOKIE if admin_logout else SESSION_COOKIE)
-        if clear_legacy_admin_cookie or (admin_logout and not admin_token and token == user_token):
+        if clear_legacy_admin_cookie or (admin_logout and user_token and token == user_token):
             response.delete_cookie(SESSION_COOKIE)
         return response
 

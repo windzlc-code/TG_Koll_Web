@@ -829,6 +829,12 @@ class RegistrationApprovalTests(unittest.TestCase):
         self.assertEqual(admin_api.status_code, 200, admin_api.text)
         self.assertEqual(admin_api.json()["username"], "admin")
 
+        logout = stale_browser.post("/api/auth/logout", headers={"X-Admin-Console": "1"})
+        self.assertEqual(logout.status_code, 200, logout.text)
+        self.assertIsNone(stale_browser.cookies.get("session_token"))
+        self.assertIsNone(stale_browser.cookies.get("admin_session_token"))
+        self.assertEqual(stale_browser.get("/api/me", headers={"X-Admin-Console": "1"}).status_code, 401)
+
     def test_admin_entry_and_page_are_server_side_role_protected(self):
         anonymous = TestClient(self.app)
         admin_entry = anonymous.get("/admin", follow_redirects=False)
