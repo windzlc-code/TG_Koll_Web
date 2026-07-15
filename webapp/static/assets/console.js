@@ -9521,6 +9521,10 @@ function normalizeBrowserPreferences(value) {
   const completionPolicy = String(raw.completion_policy || "immediate_close") === "review_hold" ? "review_hold" : "immediate_close";
   const rawReviewHoldSeconds = Number(raw.review_hold_seconds);
   const reviewHoldSeconds = Math.min(Math.max(Math.round(Number.isFinite(rawReviewHoldSeconds) ? rawReviewHoldSeconds : 30), 10), 300);
+  const rawStandbySeconds = Number(raw.standby_seconds);
+  const standbySeconds = Math.min(Math.max(Math.round(Number.isFinite(rawStandbySeconds) ? rawStandbySeconds : 0), 0), 3600);
+  const rawAutoCloseSeconds = Number(raw.auto_close_seconds);
+  const autoCloseSeconds = Math.min(Math.max(Math.round(Number.isFinite(rawAutoCloseSeconds) ? rawAutoCloseSeconds : reviewHoldSeconds), 10), 86400);
   const rawManualTimeout = Number(raw.manual_timeout_seconds);
   const manualTimeout = Math.min(Math.max(Math.round(Number.isFinite(rawManualTimeout) ? rawManualTimeout : 900), 300), 1800);
   const rawRequestedConcurrency = Number(raw.requested_concurrency);
@@ -9528,10 +9532,25 @@ function normalizeBrowserPreferences(value) {
   return {
     completion_policy: completionPolicy,
     review_hold_seconds: reviewHoldSeconds,
+    standby_seconds: standbySeconds,
+    auto_close_seconds: autoCloseSeconds,
     manual_timeout_seconds: manualTimeout,
     requested_concurrency: requestedConcurrency,
     text_input_mode: String(raw.text_input_mode || "paste") === "type" ? "type" : "paste",
   };
+}
+
+function browserDurationLabel(seconds = 0) {
+  const value = Math.max(0, Number(seconds) || 0);
+  if (value === 0) return "不额外等待";
+  if (value % 3600 === 0) return `${value / 3600} 小时`;
+  if (value % 60 === 0) return `${value / 60} 分钟`;
+  return `${value} 秒`;
+}
+
+function browserDurationOptions(current, presets) {
+  const values = Array.from(new Set([...presets, Number(current) || 0])).sort((a, b) => a - b);
+  return values.map((value) => `<option value="${value}" ${Number(current) === value ? "selected" : ""}>${esc(browserDurationLabel(value))}${presets.includes(value) ? "" : "（当前）"}</option>`).join("");
 }
 
 function browserPreferencesResponseValue(result) {
@@ -9648,9 +9667,18 @@ function renderConsoleSettingsPage() {
             <em>保留检查仅供检查，不提升速度。</em>
           </div>
           <label class="console-setting-card ${preferences.completion_policy === "review_hold" ? "" : "is-disabled"}">
-            <span>检查保留时间（秒）</span>
-            <input id="settingsReviewHoldSeconds" data-browser-preference-field type="number" min="10" max="300" step="10" value="${esc(preferences.review_hold_seconds)}" ${preferences.completion_policy === "review_hold" ? "" : "disabled"} />
-            <em>可设 10 到 300 秒，仅供任务完成后检查结果。</em>
+            <span>完成后待机时间</span>
+            <select id="settingsBrowserStandbySeconds" data-browser-preference-field ${preferences.completion_policy === "review_hold" ? "" : "disabled"}>
+              ${browserDurationOptions(preferences.standby_seconds, [0, 30, 60, 120, 300, 600, 1800, 3600])}
+            </select>
+            <em>任务结束后先保留实时窗口，最长可设 1 小时。</em>
+          </label>
+          <label class="console-setting-card ${preferences.completion_policy === "review_hold" ? "" : "is-disabled"}">
+            <span>待机后自动关闭</span>
+            <select id="settingsBrowserAutoCloseSeconds" data-browser-preference-field ${preferences.completion_policy === "review_hold" ? "" : "disabled"}>
+              ${browserDurationOptions(preferences.auto_close_seconds, [10, 30, 60, 120, 300, 600, 1800, 3600, 7200, 21600, 43200, 86400])}
+            </select>
+            <em>总保留时间为待机时间与自动关闭时间之和。</em>
           </label>
           <label class="console-setting-card">
             <span>人工接管超时</span>
@@ -9682,7 +9710,9 @@ function updateBrowserPreferencesDraft() {
   const current = normalizeBrowserPreferences(state.browserPreferences || {});
   state.browserPreferences = normalizeBrowserPreferences({
     ...current,
-    review_hold_seconds: $("settingsReviewHoldSeconds")?.value ?? current.review_hold_seconds,
+    standby_seconds: $("settingsBrowserStandbySeconds")?.value ?? current.standby_seconds,
+    auto_close_seconds: $("settingsBrowserAutoCloseSeconds")?.value ?? current.auto_close_seconds,
+    review_hold_seconds: Math.min(Number($("settingsBrowserAutoCloseSeconds")?.value ?? current.auto_close_seconds), 300),
     manual_timeout_seconds: $("settingsManualTimeoutSeconds")?.value ?? current.manual_timeout_seconds,
     requested_concurrency: $("settingsRequestedConcurrency")?.value ?? current.requested_concurrency,
   });

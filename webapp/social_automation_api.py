@@ -285,6 +285,8 @@ class LiveBrowserSettingsPayload(BaseModel):
 class BrowserPreferencesPayload(BaseModel):
     completion_policy: str = Field(default="immediate_close", max_length=30)
     review_hold_seconds: int = Field(default=30, ge=10, le=300)
+    standby_seconds: int | None = Field(default=None, ge=0, le=3600)
+    auto_close_seconds: int | None = Field(default=None, ge=10, le=86400)
     manual_timeout_seconds: int = Field(default=900, ge=300, le=1800)
     requested_concurrency: int = Field(default=1, ge=1, le=12)
     text_input_mode: str = Field(default="paste", max_length=20)
@@ -1309,6 +1311,8 @@ def _default_user_browser_preferences() -> dict[str, Any]:
     return {
         "completion_policy": "immediate_close",
         "review_hold_seconds": 30,
+        "standby_seconds": 0,
+        "auto_close_seconds": 30,
         "manual_timeout_seconds": 900,
         "requested_concurrency": max(1, min(2, global_limit)),
         "text_input_mode": "paste",
@@ -1330,6 +1334,8 @@ def get_user_browser_preferences(user_id: int) -> dict[str, Any]:
         return {
             "completion_policy": _normalize_completion_policy(row["completion_policy"]),
             "review_hold_seconds": max(10, min(int(row["review_hold_seconds"] or 30), 300)),
+            "standby_seconds": max(0, min(int(row["standby_seconds"] or 0), 3600)),
+            "auto_close_seconds": max(10, min(int(row["auto_close_seconds"] or 30), 86400)),
             "manual_timeout_seconds": max(300, min(int(row["manual_timeout_seconds"] or 900), 1800)),
             "requested_concurrency": max(1, min(int(row["requested_concurrency"] or 1), 12)),
             "text_input_mode": _normalize_text_input_mode(row["text_input_mode"]),
@@ -1345,9 +1351,13 @@ def effective_user_browser_preferences(preferences: dict[str, Any]) -> dict[str,
     global_limit = max(1, min(int(global_settings.get("max_concurrency") or 2), 12))
     policy = _normalize_completion_policy(preferences.get("completion_policy"))
     hold_seconds = max(10, min(int(preferences.get("review_hold_seconds") or 30), 300))
+    standby_seconds = max(0, min(int(preferences.get("standby_seconds") or 0), 3600))
+    auto_close_seconds = max(10, min(int(preferences.get("auto_close_seconds") or hold_seconds), 86400))
     return {
         "completion_policy": policy,
         "review_hold_seconds": hold_seconds if policy == "review_hold" else 0,
+        "standby_seconds": standby_seconds if policy == "review_hold" else 0,
+        "auto_close_seconds": auto_close_seconds if policy == "review_hold" else 10,
         "manual_timeout_seconds": max(300, min(int(preferences.get("manual_timeout_seconds") or 900), 1800)),
         "requested_concurrency": max(1, min(int(preferences.get("requested_concurrency") or 1), global_limit)),
         "text_input_mode": _normalize_text_input_mode(preferences.get("text_input_mode")),
@@ -1364,9 +1374,22 @@ def set_user_browser_preferences(
     clean_user_id = int(user_id or 0)
     if clean_user_id <= 0:
         raise HTTPException(status_code=401, detail="登录状态无效")
+    current_preferences = get_user_browser_preferences(clean_user_id)
+    standby_seconds = (
+        int(current_preferences.get("standby_seconds") or 0)
+        if payload.standby_seconds is None
+        else int(payload.standby_seconds)
+    )
+    auto_close_seconds = (
+        int(current_preferences.get("auto_close_seconds") or 30)
+        if payload.auto_close_seconds is None
+        else int(payload.auto_close_seconds)
+    )
     preferences = {
         "completion_policy": _normalize_completion_policy(payload.completion_policy),
-        "review_hold_seconds": max(10, min(int(payload.review_hold_seconds), 300)),
+        "review_hold_seconds": max(10, min(auto_close_seconds, 300)),
+        "standby_seconds": max(0, min(standby_seconds, 3600)),
+        "auto_close_seconds": max(10, min(auto_close_seconds, 86400)),
         "manual_timeout_seconds": max(300, min(int(payload.manual_timeout_seconds), 1800)),
         "requested_concurrency": max(1, min(int(payload.requested_concurrency), 12)),
         "text_input_mode": _normalize_text_input_mode(payload.text_input_mode),
@@ -1381,11 +1404,14 @@ def set_user_browser_preferences(
             """
             INSERT INTO user_browser_settings(
               user_id, completion_policy, review_hold_seconds, manual_timeout_seconds,
-              requested_concurrency, text_input_mode, auto_configured, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+              requested_concurrency, text_input_mode, auto_configured, updated_at,
+              standby_seconds, auto_close_seconds
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
               completion_policy = excluded.completion_policy,
               review_hold_seconds = excluded.review_hold_seconds,
+              standby_seconds = excluded.standby_seconds,
+              auto_close_seconds = excluded.auto_close_seconds,
               manual_timeout_seconds = excluded.manual_timeout_seconds,
               requested_concurrency = excluded.requested_concurrency,
               text_input_mode = excluded.text_input_mode,
@@ -1401,6 +1427,8 @@ def set_user_browser_preferences(
                 preferences["text_input_mode"],
                 int(preferences["auto_configured"]),
                 preferences["updated_at"],
+                preferences["standby_seconds"],
+                preferences["auto_close_seconds"],
             ),
         )
     wake_social_automation_worker()
@@ -1511,6 +1539,8 @@ def browser_environment_recommendation(user_id: int) -> dict[str, Any]:
         "recommended": {
             "completion_policy": "immediate_close",
             "review_hold_seconds": 30,
+            "standby_seconds": 0,
+            "auto_close_seconds": 30,
             "manual_timeout_seconds": 900,
             "requested_concurrency": recommended_concurrency,
             "text_input_mode": "paste",
@@ -1519,6 +1549,8 @@ def browser_environment_recommendation(user_id: int) -> dict[str, Any]:
         "limits": {
             "global_max_concurrency": global_limit,
             "max_review_hold_seconds": 300,
+            "max_standby_seconds": 3600,
+            "max_auto_close_seconds": 86400,
             "manual_timeout_min_seconds": 300,
             "manual_timeout_max_seconds": 1800,
         },
@@ -4525,8 +4557,8 @@ def _runtime_task_payload(task: dict[str, Any], account: dict[str, Any]) -> dict
     # These are internal runtime controls. Always overwrite client payload
     # values so a task cannot bypass its tenant or global resource limits.
     payload["retain_live_browser_after_finish"] = review_hold
-    payload["live_browser_standby_seconds"] = 0
-    payload["live_browser_auto_close_seconds"] = preferences["review_hold_seconds"] if review_hold else 10
+    payload["live_browser_standby_seconds"] = preferences["standby_seconds"] if review_hold else 0
+    payload["live_browser_auto_close_seconds"] = preferences["auto_close_seconds"] if review_hold else 10
     payload["manual_login_timeout_seconds"] = preferences["manual_timeout_seconds"]
     payload["text_input_mode"] = preferences["text_input_mode"]
     task_id = str(task.get("id") or "")

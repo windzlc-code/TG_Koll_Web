@@ -474,6 +474,24 @@ def init_db() -> None:
             )
             """
         )
+        browser_setting_columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(user_browser_settings)").fetchall()
+        }
+        if "standby_seconds" not in browser_setting_columns:
+            conn.execute(
+                "ALTER TABLE user_browser_settings ADD COLUMN standby_seconds INTEGER NOT NULL DEFAULT 0"
+            )
+        if "auto_close_seconds" not in browser_setting_columns:
+            conn.execute(
+                "ALTER TABLE user_browser_settings ADD COLUMN auto_close_seconds INTEGER NOT NULL DEFAULT 30"
+            )
+            conn.execute(
+                """
+                UPDATE user_browser_settings
+                SET auto_close_seconds = review_hold_seconds
+                """
+            )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS tasks (
