@@ -19476,7 +19476,7 @@ function bindEvents() {
   if ($("socialAccount")) $("socialAccount").addEventListener("change", syncStandaloneSocialForm);
   if ($("socialPlatform")) $("socialPlatform").addEventListener("change", syncStandaloneSocialForm);
   if ($("runSocialOnce")) $("runSocialOnce").addEventListener("click", () => api("/api/persona_dashboard/automation/worker/run_once", { method: "POST" }).then(loadSocial).catch((error) => showMsg("socialMsg", error.detail || error.message || "执行失败", false)));
-  $("moduleBody").addEventListener("click", (event) => {
+  if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("click", (event) => {
     if (event.target.closest("[data-live-browser-modal-close]")) {
       closeLiveBrowserLargeModal();
       return;
@@ -19639,8 +19639,11 @@ function bindEvents() {
       saveAccountPoolCreateForm().catch((error) => showMsg("socialMsg", error.detail || error.message || "添加账号失败", false));
       return;
     }
-    const accountCheck = event.target.closest("[data-account-pool-check]");
-    if (accountCheck) {
+    const accountCheckTarget = event.target.closest(".account-pool-card-check");
+    if (accountCheckTarget) {
+      event.preventDefault();
+      const accountCheck = accountCheckTarget.querySelector("[data-account-pool-check]");
+      if (!accountCheck) return;
       toggleAccountPoolAccount(accountCheck.dataset.accountPoolCheck || "");
       renderSocialAccounts();
       return;
@@ -19659,7 +19662,7 @@ function bindEvents() {
       return;
     }
     const accountCard = event.target.closest("[data-account-pool-account]");
-    const accountAction = event.target.closest("[data-social-open-login], [data-account-pool-edit], [data-account-pool-unbind], [data-social-delete-account], [data-account-pool-check]");
+    const accountAction = event.target.closest("[data-social-open-login], [data-account-pool-edit], [data-account-pool-unbind], [data-social-delete-account], .account-pool-card-check");
     if (accountCard && !accountAction) {
       selectAccountPoolAccount(accountCard.dataset.accountPoolAccount || "");
       renderSocialAccounts();
@@ -19744,7 +19747,7 @@ function bindEvents() {
     const cancel = event.target.closest("[data-social-cancel]");
     if (cancel) cancelSocialAutomationTask(cancel.dataset.socialCancel, "socialMsg").catch((error) => showMsg("socialMsg", error.detail || error.message || "停止任务失败", false));
   });
-  $("moduleBody").addEventListener("keydown", (event) => {
+  if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("keydown", (event) => {
     const liveBrowserInput = event.target.closest("[data-live-browser-text]");
     if (liveBrowserInput && event.key === "Enter") {
       event.preventDefault();
@@ -19767,10 +19770,10 @@ function bindEvents() {
       closeLiveBrowserLargeModal();
     }
   });
-  $("moduleBody").addEventListener("input", (event) => {
+  if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("input", (event) => {
     if (event.target.closest(".account-pool-create-panel")) syncAccountPoolCreateDraftFromForm();
   });
-  $("moduleBody").addEventListener("change", (event) => {
+  if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("change", (event) => {
     const proxyPageSize = event.target.closest("[data-proxy-page-size]");
     if (proxyPageSize) {
       state.proxyPoolPageSize = [10, 20, 50].includes(Number(proxyPageSize.value)) ? Number(proxyPageSize.value) : 10;

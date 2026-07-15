@@ -401,15 +401,27 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         set_mode = self._function_source("setLiveBrowserMode")
         self.assertIn('liveBrowserLoginMode(session) === "manual" && Boolean(session.input_allowed)', set_mode)
 
-    def test_live_browser_actions_bind_to_the_stable_module_root(self):
+    def test_account_browser_actions_bind_to_the_owning_shell(self):
         bind_events = self._function_source("bindEvents")
 
-        self.assertIn('$("moduleBody").addEventListener("click", (event) => {', bind_events)
-        self.assertNotIn(
-            'if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("click", (event) => {',
-            bind_events,
-        )
+        for event_name in ("click", "keydown", "input", "change"):
+            self.assertIn(
+                f'if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("{event_name}", (event) => {{',
+                bind_events,
+            )
         self.assertIn('const liveBrowserMode = event.target.closest("[data-live-browser-mode]")', bind_events)
+
+    def test_account_pool_visible_checkbox_uses_the_multi_select_path(self):
+        bind_events = self._function_source("bindEvents")
+        account_events = bind_events[
+            bind_events.index('if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("click"'):
+            bind_events.index('if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("keydown"')
+        ]
+
+        self.assertIn('const accountCheckTarget = event.target.closest(".account-pool-card-check")', account_events)
+        self.assertIn('accountCheckTarget.querySelector("[data-account-pool-check]")', account_events)
+        self.assertIn("event.preventDefault()", account_events)
+        self.assertIn(".account-pool-card-check", account_events)
 
     def test_account_edit_does_not_resubmit_unchanged_proxy_and_clears_revealed_password(self):
         modal = self._function_source("openAccountPoolEditModal")
