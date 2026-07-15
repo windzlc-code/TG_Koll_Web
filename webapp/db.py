@@ -456,6 +456,26 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS user_browser_settings (
+              user_id INTEGER PRIMARY KEY,
+              completion_policy TEXT NOT NULL DEFAULT 'immediate_close'
+                CHECK(completion_policy IN ('immediate_close', 'review_hold')),
+              review_hold_seconds INTEGER NOT NULL DEFAULT 30
+                CHECK(review_hold_seconds BETWEEN 10 AND 300),
+              manual_timeout_seconds INTEGER NOT NULL DEFAULT 900
+                CHECK(manual_timeout_seconds BETWEEN 300 AND 1800),
+              requested_concurrency INTEGER NOT NULL DEFAULT 1
+                CHECK(requested_concurrency BETWEEN 1 AND 12),
+              text_input_mode TEXT NOT NULL DEFAULT 'paste'
+                CHECK(text_input_mode IN ('paste', 'type')),
+              auto_configured INTEGER NOT NULL DEFAULT 0,
+              updated_at INTEGER NOT NULL,
+              FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS tasks (
               id TEXT PRIMARY KEY,
               user_id INTEGER NOT NULL,

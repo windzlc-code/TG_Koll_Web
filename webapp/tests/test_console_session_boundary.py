@@ -626,6 +626,105 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
                 self._section("function proxyNameCanAutofill", "async function testProxyConfiguration"),
                 self._section("async function testProxyConfiguration", "async function testProxyForm"),
             ]
+    def test_console_settings_use_user_browser_policy_endpoints_and_keep_pagination_local(self):
+        render = self._function_source("renderConsoleSettingsPage")
+        save = self._function_source("saveConsoleSettingsPage")
+        load = self._function_source("loadBrowserPolicySettings")
+        auto_configure = self._function_source("autoConfigureBrowserPreferences")
+
+        for field in (
+            "completion_policy",
+            "review_hold_seconds",
+            "manual_timeout_seconds",
+            "requested_concurrency",
+            "text_input_mode",
+        ):
+            self.assertIn(field, render)
+        self.assertIn("仅供检查，不提升速度", render)
+        self.assertIn("resource_level", self._function_source("renderBrowserRecommendationCard"))
+        self.assertIn("effective_limits", self._function_source("renderBrowserRecommendationCard"))
+        self.assertIn('api("/api/persona_dashboard/automation/browser_preferences", {', save)
+        self.assertIn('method: "PUT"', save)
+        self.assertIn('api("/api/persona_dashboard/automation/browser_preferences")', load)
+        self.assertIn('api("/api/persona_dashboard/automation/browser_recommendation")', load)
+        self.assertIn('api("/api/persona_dashboard/automation/browser_preferences/auto_configure"', auto_configure)
+        self.assertIn('method: "POST"', auto_configure)
+        self.assertIn("PERSONA_LIST_PAGE_SIZE_KEY", save)
+        self.assertNotIn("LIVE_BROWSER_", save)
+        self.assertNotIn("browser_settings", self.source)
+
+    def test_browser_preferences_normalize_server_payload_for_policy_controls(self):
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            {self._function_source("normalizeBrowserPreferences")}
+            {self._function_source("browserPreferencesResponseValue")}
+
+            assert.deepStrictEqual(
+              browserPreferencesResponseValue({{ preferences: {{
+                completion_policy: "review_hold",
+                review_hold_seconds: 999,
+                manual_timeout_seconds: 600,
+                requested_concurrency: 0,
+                text_input_mode: "type",
+              }} }}),
+              {{
+                completion_policy: "review_hold",
+                review_hold_seconds: 300,
+                manual_timeout_seconds: 600,
+                requested_concurrency: 1,
+                text_input_mode: "type",
+              }},
+            );
+            assert.deepStrictEqual(
+              normalizeBrowserPreferences({{
+                completion_policy: "unknown",
+                review_hold_seconds: 1,
+                manual_timeout_seconds: 750,
+                requested_concurrency: 99,
+                text_input_mode: "unknown",
+              }}),
+              {{
+                completion_policy: "immediate_close",
+                review_hold_seconds: 10,
+                manual_timeout_seconds: 750,
+                requested_concurrency: 12,
+                text_input_mode: "paste",
+              }},
+            );
+            """
+        )
+        self._run_node(harness)
+
+    def test_browser_recommendation_adapts_split_server_payload(self):
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            {self._function_source("browserRecommendationResponseValue")}
+
+            assert.deepStrictEqual(
+              browserRecommendationResponseValue({{
+                environment: {{ resource_level: "limited", summary: "2 核 CPU" }},
+                recommended: {{ requested_concurrency: 2, manual_timeout_seconds: 900 }},
+                reasons: ["优先释放资源"],
+                limits: {{ global_max_concurrency: 2 }},
+              }}),
+              {{
+                resource_level: "limited",
+                summary: "2 核 CPU",
+                recommended: {{ requested_concurrency: 2, manual_timeout_seconds: 900 }},
+                reasons: ["优先释放资源"],
+                limits: {{
+                  recommended_concurrency: 2,
+                  global_max_concurrency: 2,
+                  manual_timeout_minutes: 15,
+                }},
+              }},
+            );
+            """
+        )
+        self._run_node(harness)
+
         )
         harness = textwrap.dedent(
             f"""

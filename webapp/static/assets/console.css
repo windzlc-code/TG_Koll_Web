@@ -510,8 +510,16 @@ button.primary,
 .console-settings-actions {
   display: flex;
   align-items: center;
+  gap: 10px;
   justify-content: flex-end;
   min-height: 36px;
+}
+
+.console-settings-actions > span {
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .console-settings-actions .primary {
@@ -584,9 +592,106 @@ button.primary,
   line-height: 1.35;
 }
 
-.console-setting-card input {
+.console-setting-card input,
+.console-setting-card select {
   min-height: 36px;
   padding: 7px 10px;
+}
+
+.console-setting-card.is-disabled {
+  opacity: 0.62;
+}
+
+.browser-policy-grid {
+  align-items: stretch;
+}
+
+.browser-recommendation-card {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--panel-solid);
+}
+
+.browser-recommendation-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.browser-recommendation-head > div:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.browser-recommendation-head span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.browser-recommendation-head strong {
+  font-size: 16px;
+}
+
+.browser-recommendation-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.browser-recommendation-actions button {
+  min-height: 32px;
+  padding: 5px 10px;
+  white-space: nowrap;
+}
+
+.browser-recommendation-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.browser-effective-limits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.browser-effective-limits span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-height: 26px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--soft);
+  font-size: 12px;
+}
+
+.browser-effective-limits b {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.browser-effective-limits .is-empty {
+  color: var(--muted);
+}
+
+.browser-recommendation-card ul {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .console-main {
@@ -7306,10 +7411,30 @@ body.persona-touch-dragging .persona-list-card:active {
   }
 
   .console-settings-actions {
+    align-items: stretch;
+    flex-direction: column;
     justify-content: stretch;
   }
 
+  .console-settings-actions > span {
+    margin-right: 0;
+  }
+
   .console-settings-actions .primary {
+    width: 100%;
+  }
+
+  .browser-recommendation-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .browser-recommendation-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .browser-recommendation-actions button {
     width: 100%;
   }
 

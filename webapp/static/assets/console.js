@@ -12,10 +12,6 @@ const SOCIAL_ACCOUNTS_CACHE_KEY = "wk-social-accounts-cache";
 const PERSONA_POSTS_CACHE_PREFIX = "wk-persona-posts-cache";
 const TASK_QUEUE_PERSONA_PAGE_SIZE_KEY = "wk-task-queue-persona-page-size";
 const TASK_QUEUE_REGULAR_PAGE_SIZE_KEY = "wk-task-queue-regular-page-size";
-const LIVE_BROWSER_STANDBY_SECONDS_KEY = "wk-live-browser-standby-seconds";
-const LIVE_BROWSER_AUTO_CLOSE_SECONDS_KEY = "wk-live-browser-auto-close-seconds";
-const LIVE_BROWSER_MAX_CONCURRENCY_KEY = "wk-live-browser-max-concurrency";
-const LIVE_BROWSER_TEXT_INPUT_MODE_KEY = "wk-live-browser-text-input-mode";
 const LIVE_BROWSER_LAYOUT_KEY = "wk-live-browser-layout";
 const MOBILE_NAV_QUERY = "(max-width: 980px)";
 const ADMIN_WORKSPACE_USER_ID = String(document.querySelector('meta[name="admin-workspace-user-id"]')?.content || "").trim();
@@ -159,24 +155,6 @@ function storedTaskQueueRegularPageSize() {
     return Math.min(Math.max(Number.isFinite(value) ? Math.round(value) : 20, 1), 100);
   } catch {
     return 20;
-  }
-}
-
-function storedLiveBrowserSeconds(key, fallback, min, max) {
-  try {
-    const value = Number(window.localStorage.getItem(key) || fallback);
-    return Math.min(Math.max(Number.isFinite(value) ? Math.round(value) : fallback, min), max);
-  } catch {
-    return fallback;
-  }
-}
-
-function storedLiveBrowserTextInputMode() {
-  try {
-    const value = String(window.localStorage.getItem(LIVE_BROWSER_TEXT_INPUT_MODE_KEY) || "paste").trim().toLowerCase();
-    return ["paste", "type"].includes(value) ? value : "paste";
-  } catch {
-    return "paste";
   }
 }
 
@@ -431,12 +409,8 @@ const state = {
   taskQueueRegularPage: 1,
   taskQueuePersonaPageSize: storedTaskQueuePersonaPageSize(),
   taskQueueRegularPageSize: storedTaskQueueRegularPageSize(),
-  liveBrowserSettings: {
-    standby_seconds: storedLiveBrowserSeconds(LIVE_BROWSER_STANDBY_SECONDS_KEY, 60, 0, 3600),
-    auto_close_seconds: storedLiveBrowserSeconds(LIVE_BROWSER_AUTO_CLOSE_SECONDS_KEY, 300, 10, 86400),
-    max_concurrency: storedLiveBrowserSeconds(LIVE_BROWSER_MAX_CONCURRENCY_KEY, 4, 1, 12),
-    text_input_mode: storedLiveBrowserTextInputMode(),
-  },
+  browserPreferences: null,
+  browserRecommendation: null,
   taskQueueSelectedPersonaIds: new Set(),
   taskQueueSelectedRegularIds: new Set(),
   taskQueueRefreshTimer: 0,
@@ -466,8 +440,12 @@ const state = {
   socialTaskPersonaRefreshSignatures: {},
   socialBrowserSessions: [],
   liveBrowserLayout: storedLiveBrowserLayout(),
-  liveBrowserSettingsDirty: false,
-  liveBrowserSettingsSyncRevision: 0,
+  browserPreferencesDirty: false,
+  browserPolicySyncRevision: 0,
+  browserPolicyLoaded: false,
+  browserPolicyLoading: false,
+  browserRecommendationRefreshing: false,
+  browserAutoConfiguring: false,
   events: null,
   mediaPreviewGroups: {},
   mediaPreviewSeq: 0,
@@ -617,6 +595,14 @@ function clearTenantInMemoryState() {
   state.suppressedSocialTaskPromptIds = new Set();
   state.socialTaskPersonaRefreshSignatures = {};
   state.socialBrowserSessions = [];
+  state.browserPreferences = null;
+  state.browserRecommendation = null;
+  state.browserPreferencesDirty = false;
+  state.browserPolicySyncRevision += 1;
+  state.browserPolicyLoaded = false;
+  state.browserPolicyLoading = false;
+  state.browserRecommendationRefreshing = false;
+  state.browserAutoConfiguring = false;
   state.liveBrowserExpandedSessionId = "";
   state.liveBrowserRefreshTokens = {};
   state.events = null;
@@ -9530,94 +9516,185 @@ async function openPersonaCollectionCreateModal() {
   await createPersonaCollection(name);
 }
 
+function normalizeBrowserPreferences(value) {
+  const raw = value && typeof value === "object" ? value : {};
+  const completionPolicy = String(raw.completion_policy || "immediate_close") === "review_hold" ? "review_hold" : "immediate_close";
+  const rawReviewHoldSeconds = Number(raw.review_hold_seconds);
+  const reviewHoldSeconds = Math.min(Math.max(Math.round(Number.isFinite(rawReviewHoldSeconds) ? rawReviewHoldSeconds : 30), 10), 300);
+  const rawManualTimeout = Number(raw.manual_timeout_seconds);
+  const manualTimeout = Math.min(Math.max(Math.round(Number.isFinite(rawManualTimeout) ? rawManualTimeout : 900), 300), 1800);
+  const rawRequestedConcurrency = Number(raw.requested_concurrency);
+  const requestedConcurrency = Math.min(Math.max(Math.round(Number.isFinite(rawRequestedConcurrency) ? rawRequestedConcurrency : 2), 1), 12);
+  return {
+    completion_policy: completionPolicy,
+    review_hold_seconds: reviewHoldSeconds,
+    manual_timeout_seconds: manualTimeout,
+    requested_concurrency: requestedConcurrency,
+    text_input_mode: String(raw.text_input_mode || "paste") === "type" ? "type" : "paste",
+  };
+}
+
+function browserPreferencesResponseValue(result) {
+  const response = result && typeof result === "object" ? result : {};
+  return normalizeBrowserPreferences(response.preferences || response.browser_preferences || response.settings || response);
+}
+
+function browserRecommendationResponseValue(result) {
+  const response = result && typeof result === "object" ? result : {};
+  const legacy = response.recommendation || response.browser_recommendation;
+  if (legacy && typeof legacy === "object") return legacy;
+  const environment = response.environment && typeof response.environment === "object" ? response.environment : {};
+  const recommended = response.recommended && typeof response.recommended === "object" ? response.recommended : {};
+  const limits = response.limits && typeof response.limits === "object" ? response.limits : {};
+  return {
+    ...environment,
+    recommended,
+    reasons: Array.isArray(response.reasons) ? response.reasons : [],
+    limits: {
+      recommended_concurrency: recommended.requested_concurrency,
+      global_max_concurrency: limits.global_max_concurrency,
+      manual_timeout_minutes: Number(recommended.manual_timeout_seconds || 0) / 60 || undefined,
+    },
+  };
+}
+
+function browserResourceLevelLabel(value = "") {
+  const level = String(value || "").trim().toLowerCase();
+  return ({ low: "资源紧张", limited: "资源紧张", medium: "资源均衡", balanced: "资源均衡", high: "资源充足", strong: "资源充足", ample: "资源充足" })[level]
+    || String(value || "待检测");
+}
+
+function browserEffectiveLimitLabel(key = "") {
+  return ({
+    requested_concurrency: "请求并发",
+    recommended_concurrency: "建议并发",
+    global_max_concurrency: "系统并发上限",
+    manual_timeout_minutes: "人工接管分钟",
+    effective_concurrency: "有效并发",
+    max_concurrency: "并发上限",
+    browser_concurrency: "浏览器并发",
+    manual_sessions: "人工接管窗口",
+    memory_mb: "可用内存 MB",
+  })[String(key || "")] || String(key || "").replaceAll("_", " ");
+}
+
+function renderBrowserRecommendationCard() {
+  const recommendation = state.browserRecommendation || {};
+  const reasons = Array.isArray(recommendation.reasons) ? recommendation.reasons : [];
+  const limits = recommendation.effective_limits || recommendation.effectiveLimits || recommendation.limits || {};
+  const limitEntries = limits && typeof limits === "object" ? Object.entries(limits) : [];
+  const loading = state.browserRecommendationRefreshing || state.browserPolicyLoading;
+  return `
+    <article class="browser-recommendation-card" aria-busy="${loading ? "true" : "false"}">
+      <div class="browser-recommendation-head">
+        <div>
+          <span>环境建议</span>
+          <strong>${esc(loading && !state.browserRecommendation ? "正在检测环境" : browserResourceLevelLabel(recommendation.resource_level))}</strong>
+        </div>
+        <div class="browser-recommendation-actions">
+          <button type="button" data-browser-recommendation-refresh ${loading ? "disabled" : ""}>${state.browserRecommendationRefreshing ? "检测中" : "重新检测"}</button>
+          <button type="button" class="primary" data-browser-auto-configure ${state.browserAutoConfiguring || loading ? "disabled" : ""}>${state.browserAutoConfiguring ? "配置中" : "一键配置"}</button>
+        </div>
+      </div>
+      <p>${esc(recommendation.summary || (loading ? "正在评估当前设备可用资源。" : "检测后会给出适合当前环境的浏览器策略。"))}</p>
+      <div class="browser-effective-limits" aria-label="有效限制">
+        ${limitEntries.length ? limitEntries.map(([key, value]) => `<span><b>${esc(browserEffectiveLimitLabel(key))}</b>${esc(value)}</span>`).join("") : "<span class=\"is-empty\">有效限制等待检测</span>"}
+      </div>
+      ${reasons.length ? `<ul>${reasons.map((reason) => `<li>${esc(typeof reason === "string" ? reason : reason?.summary || reason?.message || "")}</li>`).join("")}</ul>` : ""}
+    </article>
+  `;
+}
+
 function renderConsoleSettingsPage() {
   const host = $("consoleSettingsBody");
   if (!host) return;
   const taskPersonaPageSize = Math.min(Math.max(Number(state.taskQueuePersonaPageSize || 12), 1), 100);
   const taskRegularPageSize = Math.min(Math.max(Number(state.taskQueueRegularPageSize || 20), 1), 100);
   const personaPostPageSize = Math.min(Math.max(Number(state.personaPostPageSize || 10), 5), 80);
-  const liveBrowserStandbySeconds = Math.min(Math.max(Number(state.liveBrowserSettings?.standby_seconds ?? 60), 0), 3600);
-  const liveBrowserAutoCloseSeconds = Math.min(Math.max(Number(state.liveBrowserSettings?.auto_close_seconds ?? 300), 10), 86400);
-  const liveBrowserMaxConcurrency = Math.min(Math.max(Number(state.liveBrowserSettings?.max_concurrency ?? 4), 1), 12);
-  const liveBrowserTextInputMode = normalizeLiveBrowserTextInputMode(state.liveBrowserSettings?.text_input_mode);
+  const preferences = normalizeBrowserPreferences(state.browserPreferences || {});
+  const manualTimeoutOptions = [300, 600, 900, 1800];
+  if (!manualTimeoutOptions.includes(preferences.manual_timeout_seconds)) manualTimeoutOptions.push(preferences.manual_timeout_seconds);
+  manualTimeoutOptions.sort((a, b) => a - b);
   host.innerHTML = `
     <div class="console-settings-page">
       <div class="console-settings-actions">
+        <span>浏览器策略按当前用户保存；分页设置仅保存在本机浏览器。</span>
         <button type="button" class="primary" id="saveConsoleSettings">保存设置</button>
       </div>
       <section class="console-settings-group">
         <div class="console-settings-group-head">
           <strong>列表与分页</strong>
-          <span>控制人设、草稿收藏和任务队列的分页展示数量，保存后会应用到对应列表。</span>
+          <span>控制人设、草稿收藏和任务队列的分页展示数量。</span>
         </div>
         <div class="console-settings-grid">
-          <label class="console-setting-card">
-            <span>人设列表每页数量</span>
-            <input id="settingsPersonaPageSize" type="number" min="5" max="80" step="1" value="${esc(state.personaListPageSize || 20)}" />
-          </label>
-          <label class="console-setting-card">
-            <span>草稿收藏每页数量</span>
-            <input id="settingsPersonaPostPageSize" type="number" min="5" max="80" step="1" value="${esc(personaPostPageSize)}" />
-          </label>
-          <label class="console-setting-card">
-            <span>人设队列每页数量</span>
-            <input id="settingsTaskQueuePersonaPageSize" type="number" min="1" max="100" step="1" value="${esc(taskPersonaPageSize)}" />
-          </label>
-          <label class="console-setting-card">
-            <span>通用队列每页数量</span>
-            <input id="settingsTaskQueueRegularPageSize" type="number" min="1" max="100" step="1" value="${esc(taskRegularPageSize)}" />
-          </label>
+          <label class="console-setting-card"><span>人设列表每页数量</span><input id="settingsPersonaPageSize" type="number" min="5" max="80" step="1" value="${esc(state.personaListPageSize || 20)}" /></label>
+          <label class="console-setting-card"><span>草稿收藏每页数量</span><input id="settingsPersonaPostPageSize" type="number" min="5" max="80" step="1" value="${esc(personaPostPageSize)}" /></label>
+          <label class="console-setting-card"><span>人设队列每页数量</span><input id="settingsTaskQueuePersonaPageSize" type="number" min="1" max="100" step="1" value="${esc(taskPersonaPageSize)}" /></label>
+          <label class="console-setting-card"><span>通用队列每页数量</span><input id="settingsTaskQueueRegularPageSize" type="number" min="1" max="100" step="1" value="${esc(taskRegularPageSize)}" /></label>
         </div>
       </section>
-      <section class="console-settings-group">
+      <section class="console-settings-group browser-policy-group">
         <div class="console-settings-group-head">
-          <strong>实时浏览器窗口</strong>
-          <span>任务完成后窗口进入待机，超过设定时间自动关闭；也可以在窗口卡片上手动关闭。</span>
+          <strong>浏览器执行策略</strong>
+          <span>这些设置跟随当前用户，用于控制任务完成、人工接管和并发行为。</span>
         </div>
-        <div class="console-settings-grid">
-          <label class="console-setting-card">
-            <span>完成后待机时间（秒）</span>
-            <input id="settingsLiveBrowserStandbySeconds" type="number" min="0" max="3600" step="10" value="${esc(liveBrowserStandbySeconds)}" />
+        <div class="console-settings-grid browser-policy-grid">
+          <div class="console-setting-card console-setting-card-wide">
+            <span>任务完成后</span>
+            <div class="automation-capsule-tabs console-input-mode-tabs" aria-label="任务完成策略">
+              <button type="button" class="${preferences.completion_policy === "immediate_close" ? "is-active" : ""}" data-browser-completion-policy="immediate_close">立即关闭</button>
+              <button type="button" class="${preferences.completion_policy === "review_hold" ? "is-active" : ""}" data-browser-completion-policy="review_hold">保留检查</button>
+            </div>
+            <em>保留检查仅供检查，不提升速度。</em>
+          </div>
+          <label class="console-setting-card ${preferences.completion_policy === "review_hold" ? "" : "is-disabled"}">
+            <span>检查保留时间（秒）</span>
+            <input id="settingsReviewHoldSeconds" data-browser-preference-field type="number" min="10" max="300" step="10" value="${esc(preferences.review_hold_seconds)}" ${preferences.completion_policy === "review_hold" ? "" : "disabled"} />
+            <em>可设 10 到 300 秒，仅供任务完成后检查结果。</em>
           </label>
           <label class="console-setting-card">
-            <span>待机后自动关闭（秒）</span>
-            <input id="settingsLiveBrowserAutoCloseSeconds" type="number" min="10" max="86400" step="10" value="${esc(liveBrowserAutoCloseSeconds)}" />
+            <span>人工接管超时</span>
+            <select id="settingsManualTimeoutSeconds" data-browser-preference-field>
+              ${manualTimeoutOptions.map((value) => `<option value="${value}" ${preferences.manual_timeout_seconds === value ? "selected" : ""}>${Number.isInteger(value / 60) ? value / 60 : (value / 60).toFixed(1)} 分钟${[300, 600, 900, 1800].includes(value) ? "" : "（当前）"}</option>`).join("")}
+            </select>
           </label>
           <label class="console-setting-card">
-            <span>并发任务数</span>
-            <input id="settingsLiveBrowserMaxConcurrency" type="number" min="1" max="12" step="1" value="${esc(liveBrowserMaxConcurrency)}" />
-            <em>不同账号可并行，超过数量自动排队。</em>
+            <span>请求并发任务数</span>
+            <input id="settingsRequestedConcurrency" data-browser-preference-field type="number" min="1" max="12" step="1" value="${esc(preferences.requested_concurrency)}" />
+            <em>实际并发会受环境建议中的有效限制约束。</em>
           </label>
-          <label class="console-setting-card console-setting-card-wide">
+          <div class="console-setting-card">
             <span>发布正文输入方式</span>
             <div class="automation-capsule-tabs console-input-mode-tabs" aria-label="发布正文输入方式">
-              <button type="button" class="${liveBrowserTextInputMode === "paste" ? "is-active" : ""}" data-live-browser-input-mode="paste">复制粘贴</button>
-              <button type="button" class="${liveBrowserTextInputMode === "type" ? "is-active" : ""}" data-live-browser-input-mode="type">逐字输入</button>
+              <button type="button" class="${preferences.text_input_mode === "paste" ? "is-active" : ""}" data-browser-text-input-mode="paste">复制粘贴</button>
+              <button type="button" class="${preferences.text_input_mode === "type" ? "is-active" : ""}" data-browser-text-input-mode="type">逐字输入</button>
             </div>
-            <em>复制粘贴会优先写入浏览器剪贴板并粘贴；逐字输入按字符模拟键入。</em>
-          </label>
+          </div>
+          ${renderBrowserRecommendationCard()}
         </div>
       </section>
     </div>
   `;
-  const syncRevision = ++state.liveBrowserSettingsSyncRevision;
-  syncLiveBrowserSettingsFromServer(syncRevision);
+  if (!state.browserPolicyLoaded && !state.browserPolicyLoading) loadBrowserPolicySettings();
 }
 
-function normalizeLiveBrowserTextInputMode(value = "paste") {
-  const mode = String(value || "").trim().toLowerCase();
-  return ["paste", "type"].includes(mode) ? mode : "paste";
-}
-
-function setLiveBrowserTextInputMode(mode = "paste") {
-  state.liveBrowserSettingsDirty = true;
-  state.liveBrowserSettings = {
-    ...(state.liveBrowserSettings || {}),
-    text_input_mode: normalizeLiveBrowserTextInputMode(mode),
-  };
-  document.querySelectorAll("[data-live-browser-input-mode]").forEach((button) => {
-    button.classList.toggle("is-active", String(button.dataset.liveBrowserInputMode || "") === state.liveBrowserSettings.text_input_mode);
+function updateBrowserPreferencesDraft() {
+  const current = normalizeBrowserPreferences(state.browserPreferences || {});
+  state.browserPreferences = normalizeBrowserPreferences({
+    ...current,
+    review_hold_seconds: $("settingsReviewHoldSeconds")?.value ?? current.review_hold_seconds,
+    manual_timeout_seconds: $("settingsManualTimeoutSeconds")?.value ?? current.manual_timeout_seconds,
+    requested_concurrency: $("settingsRequestedConcurrency")?.value ?? current.requested_concurrency,
   });
+  state.browserPreferencesDirty = true;
+  return state.browserPreferences;
+}
+
+function setBrowserPreferenceChoice(field, value) {
+  const current = updateBrowserPreferencesDraft();
+  state.browserPreferences = normalizeBrowserPreferences({ ...current, [field]: value });
+  state.browserPreferencesDirty = true;
+  renderConsoleSettingsPage();
 }
 
 function refreshConsoleSettingsDependents() {
@@ -9637,20 +9714,11 @@ async function saveConsoleSettingsPage() {
   const personaPostPageSize = Math.min(Math.max(Number.parseInt(String($("settingsPersonaPostPageSize")?.value || ""), 10) || 10, 5), 80);
   const taskPersonaPageSize = Math.min(Math.max(Number.parseInt(String($("settingsTaskQueuePersonaPageSize")?.value || ""), 10) || 12, 1), 100);
   const taskRegularPageSize = Math.min(Math.max(Number.parseInt(String($("settingsTaskQueueRegularPageSize")?.value || ""), 10) || 20, 1), 100);
-  const liveBrowserStandbySeconds = Math.min(Math.max(Number.parseInt(String($("settingsLiveBrowserStandbySeconds")?.value || ""), 10) || 0, 0), 3600);
-  const liveBrowserAutoCloseSeconds = Math.min(Math.max(Number.parseInt(String($("settingsLiveBrowserAutoCloseSeconds")?.value || ""), 10) || 300, 10), 86400);
-  const liveBrowserMaxConcurrency = Math.min(Math.max(Number.parseInt(String($("settingsLiveBrowserMaxConcurrency")?.value || ""), 10) || 4, 1), 12);
-  const liveBrowserTextInputMode = normalizeLiveBrowserTextInputMode(state.liveBrowserSettings?.text_input_mode);
+  const browserPreferences = updateBrowserPreferencesDraft();
   state.personaListPageSize = pageSize;
   state.personaPostPageSize = personaPostPageSize;
   state.taskQueuePersonaPageSize = taskPersonaPageSize;
   state.taskQueueRegularPageSize = taskRegularPageSize;
-  state.liveBrowserSettings = {
-    standby_seconds: liveBrowserStandbySeconds,
-    auto_close_seconds: liveBrowserAutoCloseSeconds,
-    max_concurrency: liveBrowserMaxConcurrency,
-    text_input_mode: liveBrowserTextInputMode,
-  };
   state.personaListPage = 1;
   state.personaPostPages = {};
   state.taskQueuePersonaPage = 1;
@@ -9660,21 +9728,17 @@ async function saveConsoleSettingsPage() {
     window.localStorage.setItem(PERSONA_POST_PAGE_SIZE_KEY, String(personaPostPageSize));
     window.localStorage.setItem(TASK_QUEUE_PERSONA_PAGE_SIZE_KEY, String(taskPersonaPageSize));
     window.localStorage.setItem(TASK_QUEUE_REGULAR_PAGE_SIZE_KEY, String(taskRegularPageSize));
-    window.localStorage.setItem(LIVE_BROWSER_STANDBY_SECONDS_KEY, String(liveBrowserStandbySeconds));
-    window.localStorage.setItem(LIVE_BROWSER_AUTO_CLOSE_SECONDS_KEY, String(liveBrowserAutoCloseSeconds));
-    window.localStorage.setItem(LIVE_BROWSER_MAX_CONCURRENCY_KEY, String(liveBrowserMaxConcurrency));
-    window.localStorage.setItem(LIVE_BROWSER_TEXT_INPUT_MODE_KEY, liveBrowserTextInputMode);
   } catch {}
   try {
-    const result = await api("/api/persona_dashboard/automation/browser_settings", {
+    const result = await api("/api/persona_dashboard/automation/browser_preferences", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(state.liveBrowserSettings),
+      body: JSON.stringify(browserPreferences),
     });
-    if (result.settings) state.liveBrowserSettings = result.settings;
-    state.liveBrowserSettingsDirty = false;
+    state.browserPreferences = browserPreferencesResponseValue(result);
+    state.browserPreferencesDirty = false;
   } catch (error) {
-    showMsg("consoleSettingsMsg", error.detail || error.message || "实时浏览器设置保存失败。", false);
+    showMsg("consoleSettingsMsg", error.detail || error.message || "分页设置已保存在本机，但浏览器策略保存失败。", false);
     return;
   }
   renderConsoleSettingsPage();
@@ -9682,23 +9746,51 @@ async function saveConsoleSettingsPage() {
   showMsg("consoleSettingsMsg", "设置已保存。", true);
 }
 
-async function syncLiveBrowserSettingsFromServer(syncRevision = state.liveBrowserSettingsSyncRevision) {
+async function loadBrowserPolicySettings(options) {
+  const recommendationOnly = Boolean(options?.recommendationOnly);
+  const syncRevision = ++state.browserPolicySyncRevision;
+  state.browserPolicyLoading = !recommendationOnly;
+  state.browserRecommendationRefreshing = recommendationOnly;
+  if (state.view === "console_settings" && $("consoleSettingsBody")) renderConsoleSettingsPage();
   try {
-    const result = await api("/api/persona_dashboard/automation/browser_settings");
-    if (!result.settings || syncRevision !== state.liveBrowserSettingsSyncRevision || state.liveBrowserSettingsDirty) return;
-    state.liveBrowserSettings = result.settings;
-    const standby = $("settingsLiveBrowserStandbySeconds");
-    const autoClose = $("settingsLiveBrowserAutoCloseSeconds");
-    const maxConcurrency = $("settingsLiveBrowserMaxConcurrency");
-    if (standby) standby.value = String(result.settings.standby_seconds ?? 60);
-    if (autoClose) autoClose.value = String(result.settings.auto_close_seconds ?? 300);
-    if (maxConcurrency) maxConcurrency.value = String(result.settings.max_concurrency ?? 4);
-    const inputMode = normalizeLiveBrowserTextInputMode(result.settings.text_input_mode || "paste");
-    state.liveBrowserSettings = { ...state.liveBrowserSettings, text_input_mode: inputMode };
-    document.querySelectorAll("[data-live-browser-input-mode]").forEach((button) => {
-      button.classList.toggle("is-active", String(button.dataset.liveBrowserInputMode || "") === inputMode);
-    });
-  } catch {}
+    if (recommendationOnly) {
+      const recommendationResult = await api("/api/persona_dashboard/automation/browser_recommendation");
+      if (syncRevision === state.browserPolicySyncRevision) state.browserRecommendation = browserRecommendationResponseValue(recommendationResult);
+    } else {
+      const [preferencesResult, recommendationResult] = await Promise.all([
+        api("/api/persona_dashboard/automation/browser_preferences"),
+        api("/api/persona_dashboard/automation/browser_recommendation"),
+      ]);
+      if (syncRevision !== state.browserPolicySyncRevision) return;
+      if (!state.browserPreferencesDirty) state.browserPreferences = browserPreferencesResponseValue(preferencesResult);
+      state.browserRecommendation = browserRecommendationResponseValue(recommendationResult);
+    }
+  } catch (error) {
+    if (recommendationOnly) showMsg("consoleSettingsMsg", error.detail || error.message || "环境重新检测失败。", false);
+  } finally {
+    if (syncRevision !== state.browserPolicySyncRevision) return;
+    state.browserPolicyLoaded = true;
+    state.browserPolicyLoading = false;
+    state.browserRecommendationRefreshing = false;
+    if (state.view === "console_settings" && $("consoleSettingsBody")) renderConsoleSettingsPage();
+  }
+}
+
+async function autoConfigureBrowserPreferences() {
+  state.browserAutoConfiguring = true;
+  renderConsoleSettingsPage();
+  try {
+    await api("/api/persona_dashboard/automation/browser_preferences/auto_configure", { method: "POST" });
+    state.browserPreferencesDirty = false;
+    state.browserPolicyLoaded = false;
+    await loadBrowserPolicySettings();
+    showMsg("consoleSettingsMsg", "已按当前环境完成一键配置。", true);
+  } catch (error) {
+    showMsg("consoleSettingsMsg", error.detail || error.message || "一键配置失败。", false);
+  } finally {
+    state.browserAutoConfiguring = false;
+    if (state.view === "console_settings" && $("consoleSettingsBody")) renderConsoleSettingsPage();
+  }
 }
 
 function syncPersonaCollectionCollapseDom(groupId, collapsed, pending = false) {
@@ -19820,9 +19912,22 @@ function bindEvents() {
     location.href = "/admin.html";
   });
   $("consoleSettingsBody").addEventListener("click", (event) => {
-    const inputMode = event.target.closest("[data-live-browser-input-mode]");
+    const completionPolicy = event.target.closest("[data-browser-completion-policy]");
+    if (completionPolicy) {
+      setBrowserPreferenceChoice("completion_policy", completionPolicy.dataset.browserCompletionPolicy || "immediate_close");
+      return;
+    }
+    const inputMode = event.target.closest("[data-browser-text-input-mode]");
     if (inputMode) {
-      setLiveBrowserTextInputMode(inputMode.dataset.liveBrowserInputMode || "paste");
+      setBrowserPreferenceChoice("text_input_mode", inputMode.dataset.browserTextInputMode || "paste");
+      return;
+    }
+    if (event.target.closest("[data-browser-recommendation-refresh]")) {
+      loadBrowserPolicySettings({ recommendationOnly: true });
+      return;
+    }
+    if (event.target.closest("[data-browser-auto-configure]")) {
+      autoConfigureBrowserPreferences();
       return;
     }
     if (event.target.closest("#saveConsoleSettings")) saveConsoleSettingsPage();
@@ -19881,3 +19986,9 @@ async function init() {
 init().catch((error) => {
   appendEvent("error", error.detail || error.message || "控制台初始化失败");
 });
+  $("consoleSettingsBody").addEventListener("input", (event) => {
+    if (event.target.closest("[data-browser-preference-field]")) updateBrowserPreferencesDraft();
+  });
+  $("consoleSettingsBody").addEventListener("change", (event) => {
+    if (event.target.closest("[data-browser-preference-field]")) updateBrowserPreferencesDraft();
+  });

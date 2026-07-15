@@ -112,6 +112,14 @@ class _Logger:
         return None
 
 
+class _RecordingLogger:
+    def __init__(self):
+        self.entries = []
+
+    def log(self, *args, **kwargs):
+        self.entries.append((args, kwargs))
+
+
 class RunnerPublishSafetyTests(unittest.TestCase):
     def test_threads_error_page_is_not_treated_as_ready(self):
         status = runner._detect_threads_login_state(_ThreadsErrorPage())
@@ -341,6 +349,132 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "cookie_expired")
         self_heal.assert_not_called()
+
+    def test_manual_login_timeout_uses_payload_default_and_clamped_bounds(self):
+        cases = [
+            ({}, 900),
+            ({"manual_login_timeout_seconds": 1}, 300),
+            ({"manual_login_timeout_seconds": 9999}, 1800),
+            ({"manual_login_timeout_seconds": "invalid"}, 900),
+        ]
+        for payload, expected_timeout in cases:
+            with self.subTest(payload=payload):
+                page = mock.Mock()
+                logger = _RecordingLogger()
+                with (
+                    mock.patch.object(runner.time, "monotonic", side_effect=[0.0, float(expected_timeout)]),
+                    mock.patch.object(runner, "_screenshot", return_value="manual-timeout.png") as screenshot,
+                ):
+                    with self.assertRaises(runner.AutoLoginFailedError) as raised:
+                        runner._wait_for_manual_login_completion(
+                            page,
+                            {"id": "manual-timeout", "task_type": "publish_post", "payload": payload},
+                            Path("."),
+                            logger,
+                            "threads",
+                            None,
+                            "manual login required",
+                        )
+
+                self.assertEqual(raised.exception.status, "cookie_expired")
+                self.assertEqual(raised.exception.screenshot_path, "manual-timeout.png")
+                self.assertIn(str(expected_timeout // 60), str(raised.exception))
+                screenshot.assert_called_once_with(page, Path("."), mock.ANY, "manual_login_timeout", logger)
+                timeout_entry = next(entry for entry in logger.entries if entry[0][1] == "manual_login_timeout")
+                self.assertEqual(timeout_entry[0][3]["timeout_seconds"], expected_timeout)
+
+    def test_manual_login_wait_uses_cancel_event_for_immediate_cancellation(self):
+        page = mock.Mock()
+        cancel_event = mock.Mock()
+        cancel_event.is_set.side_effect = [False, True]
+        cancel_event.wait.return_value = True
+        with (
+            mock.patch.object(runner.time, "monotonic", return_value=10.0),
+            mock.patch.object(runner, "_detect_platform_login_state", return_value={"status": "need_verification"}),
+            mock.patch.object(runner.time, "sleep") as sleep,
+        ):
+            with self.assertRaises(RuntimeError):
+                runner._wait_for_manual_login_completion(
+                    page,
+                    {"id": "manual-cancel", "payload": {"manual_login_timeout_seconds": 300}},
+                    Path("."),
+                    _Logger(),
+                    "instagram",
+                    cancel_event,
+                    "manual login required",
+                )
+
+        cancel_event.wait.assert_called_once_with(5.0)
+        sleep.assert_not_called()
+
+    def test_manual_login_success_logic_is_preserved_before_timeout(self):
+        page = mock.Mock()
+        page.url = "https://www.threads.net/"
+        with (
+            mock.patch.object(runner.time, "monotonic", return_value=1.0),
+            mock.patch.object(runner, "_detect_platform_login_state", return_value={"status": "ready"}),
+            mock.patch.object(runner, "_confirm_platform_ready", return_value={"status": "ready"}),
+            mock.patch.object(runner, "_screenshot", return_value="complete.png"),
+        ):
+            result = runner._wait_for_manual_login_completion(
+                page,
+                {"id": "manual-success", "payload": {"manual_login_timeout_seconds": 300}},
+                Path("."),
+                _Logger(),
+                "threads",
+                None,
+                "manual login required",
+            )
+
+        self.assertEqual(result["status"], "ready")
+        self.assertEqual(result["screenshot_path"], "complete.png")
+
+    def test_manual_login_hard_deadline_wins_over_late_ready_result(self):
+        page = mock.Mock()
+        page.url = "https://www.threads.net/"
+        with (
+            mock.patch.object(runner.time, "monotonic", side_effect=[0.0, 1.0, 1.0, 1.0, 300.0]),
+            mock.patch.object(runner, "_detect_platform_login_state", return_value={"status": "ready"}),
+            mock.patch.object(runner, "_confirm_platform_ready", return_value={"status": "ready"}),
+            mock.patch.object(runner, "_screenshot", return_value="late-timeout.png"),
+        ):
+            with self.assertRaises(runner.AutoLoginFailedError) as raised:
+                runner._wait_for_manual_login_completion(
+                    page,
+                    {"id": "late-ready", "payload": {"manual_login_timeout_seconds": 300}},
+                    Path("."),
+                    _Logger(),
+                    "threads",
+                    None,
+                    "manual login required",
+                )
+
+        self.assertEqual(raised.exception.status, "cookie_expired")
+        self.assertEqual(raised.exception.screenshot_path, "late-timeout.png")
+
+    def test_manual_login_timeout_exception_releases_browser_context(self):
+        page = mock.Mock()
+        context = mock.Mock()
+        manager = mock.MagicMock()
+        manager.__enter__.return_value = context
+        timeout_error = runner.AutoLoginFailedError("timed out", "manual_login_timeout", "timeout.png")
+        with (
+            mock.patch.object(runner, "_open_camoufox_context", return_value=manager),
+            mock.patch.object(runner, "_import_initial_cookies"),
+            mock.patch.object(runner, "_first_page", return_value=page),
+            mock.patch.object(runner, "_sync_live_browser_viewport"),
+            mock.patch.object(runner, "_run_open_login", side_effect=timeout_error),
+        ):
+            with self.assertRaises(runner.AutoLoginFailedError):
+                runner.run_social_task(
+                    task={"id": "manual-timeout", "task_type": "open_login", "platform": "threads", "payload": {}},
+                    account={"platform": "threads"},
+                    proxy=None,
+                    data_dir=Path("."),
+                    logger=_Logger(),
+                )
+
+        self.assertIs(manager.__exit__.call_args.args[0], runner.AutoLoginFailedError)
 
     def test_running_auto_login_stops_immediately_after_manual_takeover(self):
         page = mock.Mock()

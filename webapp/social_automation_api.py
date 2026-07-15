@@ -278,7 +278,15 @@ class SocialTaskActionPayload(BaseModel):
 class LiveBrowserSettingsPayload(BaseModel):
     standby_seconds: int = Field(default=60, ge=0, le=3600)
     auto_close_seconds: int = Field(default=300, ge=10, le=86400)
-    max_concurrency: int = Field(default=4, ge=1, le=12)
+    max_concurrency: int = Field(default=2, ge=1, le=12)
+    text_input_mode: str = Field(default="paste", max_length=20)
+
+
+class BrowserPreferencesPayload(BaseModel):
+    completion_policy: str = Field(default="immediate_close", max_length=30)
+    review_hold_seconds: int = Field(default=30, ge=10, le=300)
+    manual_timeout_seconds: int = Field(default=900, ge=300, le=1800)
+    requested_concurrency: int = Field(default=1, ge=1, le=12)
     text_input_mode: str = Field(default="paste", max_length=20)
 
 
@@ -403,6 +411,32 @@ def register_social_automation_routes(app: FastAPI) -> None:
     @app.put("/api/persona_dashboard/automation/browser_settings")
     def api_social_browser_settings_save(payload: LiveBrowserSettingsPayload, _user: dict[str, Any] = Depends(require_admin)):
         return {"ok": True, "settings": set_live_browser_settings(payload)}
+
+    @app.get("/api/persona_dashboard/automation/browser_preferences")
+    def api_browser_preferences(user: dict[str, Any] = Depends(get_current_user)):
+        return browser_preferences_response(_identity_user_id(user))
+
+    @app.put("/api/persona_dashboard/automation/browser_preferences")
+    def api_browser_preferences_save(payload: BrowserPreferencesPayload, user: dict[str, Any] = Depends(get_current_user)):
+        user_id = _identity_user_id(user)
+        preferences = set_user_browser_preferences(user_id, payload, auto_configured=False)
+        return browser_preferences_response(user_id, preferences=preferences)
+
+    @app.get("/api/persona_dashboard/automation/browser_recommendation")
+    def api_browser_recommendation(user: dict[str, Any] = Depends(get_current_user)):
+        return {"ok": True, **browser_environment_recommendation(_identity_user_id(user))}
+
+    @app.post("/api/persona_dashboard/automation/browser_preferences/auto_configure")
+    def api_browser_preferences_auto_configure(user: dict[str, Any] = Depends(get_current_user)):
+        user_id = _identity_user_id(user)
+        recommendation = browser_environment_recommendation(user_id)
+        recommended = recommendation["recommended"]
+        preferences = set_user_browser_preferences(
+            user_id,
+            BrowserPreferencesPayload(**recommended),
+            auto_configured=True,
+        )
+        return browser_preferences_response(user_id, preferences=preferences, recommendation=recommendation)
 
     @app.post("/api/persona_dashboard/automation/browser_sessions/{session_id}/close")
     def api_social_browser_session_close(session_id: str, user: dict[str, Any] = Depends(get_current_user)):
@@ -1223,7 +1257,7 @@ def get_live_browser_settings() -> dict[str, Any]:
     defaults = {
         "standby_seconds": _bounded_env_int("SOCIAL_AUTOMATION_LIVE_BROWSER_STANDBY_SECONDS", 60, 0, 3600),
         "auto_close_seconds": _bounded_env_int("SOCIAL_AUTOMATION_LIVE_BROWSER_AUTO_CLOSE_SECONDS", 300, 10, 86400),
-        "max_concurrency": _bounded_env_int("SOCIAL_AUTOMATION_WORKER_CONCURRENCY", 4, 1, 12),
+        "max_concurrency": _bounded_env_int("SOCIAL_AUTOMATION_WORKER_CONCURRENCY", 2, 1, 12),
         "text_input_mode": _normalize_text_input_mode(os.getenv("SOCIAL_AUTOMATION_TEXT_INPUT_MODE", "paste")),
     }
     try:
@@ -1263,6 +1297,251 @@ def set_live_browser_settings(payload: LiveBrowserSettingsPayload) -> dict[str, 
         _refresh_worker_state()
         wake_social_automation_worker()
     return settings
+
+
+def _normalize_completion_policy(value: Any) -> str:
+    policy = str(value or "").strip().lower()
+    return policy if policy in {"immediate_close", "review_hold"} else "immediate_close"
+
+
+def _default_user_browser_preferences() -> dict[str, Any]:
+    global_limit = int(get_live_browser_settings().get("max_concurrency") or 2)
+    return {
+        "completion_policy": "immediate_close",
+        "review_hold_seconds": 30,
+        "manual_timeout_seconds": 900,
+        "requested_concurrency": max(1, min(2, global_limit)),
+        "text_input_mode": "paste",
+        "auto_configured": False,
+        "updated_at": 0,
+    }
+
+
+def get_user_browser_preferences(user_id: int) -> dict[str, Any]:
+    defaults = _default_user_browser_preferences()
+    try:
+        with db() as conn:
+            row = conn.execute(
+                "SELECT * FROM user_browser_settings WHERE user_id = ?",
+                (int(user_id),),
+            ).fetchone()
+        if not row:
+            return defaults
+        return {
+            "completion_policy": _normalize_completion_policy(row["completion_policy"]),
+            "review_hold_seconds": max(10, min(int(row["review_hold_seconds"] or 30), 300)),
+            "manual_timeout_seconds": max(300, min(int(row["manual_timeout_seconds"] or 900), 1800)),
+            "requested_concurrency": max(1, min(int(row["requested_concurrency"] or 1), 12)),
+            "text_input_mode": _normalize_text_input_mode(row["text_input_mode"]),
+            "auto_configured": bool(row["auto_configured"]),
+            "updated_at": int(row["updated_at"] or 0),
+        }
+    except Exception:
+        return defaults
+
+
+def effective_user_browser_preferences(preferences: dict[str, Any]) -> dict[str, Any]:
+    global_settings = get_live_browser_settings()
+    global_limit = max(1, min(int(global_settings.get("max_concurrency") or 2), 12))
+    policy = _normalize_completion_policy(preferences.get("completion_policy"))
+    hold_seconds = max(10, min(int(preferences.get("review_hold_seconds") or 30), 300))
+    return {
+        "completion_policy": policy,
+        "review_hold_seconds": hold_seconds if policy == "review_hold" else 0,
+        "manual_timeout_seconds": max(300, min(int(preferences.get("manual_timeout_seconds") or 900), 1800)),
+        "requested_concurrency": max(1, min(int(preferences.get("requested_concurrency") or 1), global_limit)),
+        "text_input_mode": _normalize_text_input_mode(preferences.get("text_input_mode")),
+        "global_max_concurrency": global_limit,
+    }
+
+
+def set_user_browser_preferences(
+    user_id: int,
+    payload: BrowserPreferencesPayload,
+    *,
+    auto_configured: bool,
+) -> dict[str, Any]:
+    clean_user_id = int(user_id or 0)
+    if clean_user_id <= 0:
+        raise HTTPException(status_code=401, detail="登录状态无效")
+    preferences = {
+        "completion_policy": _normalize_completion_policy(payload.completion_policy),
+        "review_hold_seconds": max(10, min(int(payload.review_hold_seconds), 300)),
+        "manual_timeout_seconds": max(300, min(int(payload.manual_timeout_seconds), 1800)),
+        "requested_concurrency": max(1, min(int(payload.requested_concurrency), 12)),
+        "text_input_mode": _normalize_text_input_mode(payload.text_input_mode),
+        "auto_configured": bool(auto_configured),
+        "updated_at": _now(),
+    }
+    with db() as conn:
+        owner = conn.execute("SELECT 1 FROM users WHERE id = ? AND deleted_at = 0", (clean_user_id,)).fetchone()
+        if not owner:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        conn.execute(
+            """
+            INSERT INTO user_browser_settings(
+              user_id, completion_policy, review_hold_seconds, manual_timeout_seconds,
+              requested_concurrency, text_input_mode, auto_configured, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+              completion_policy = excluded.completion_policy,
+              review_hold_seconds = excluded.review_hold_seconds,
+              manual_timeout_seconds = excluded.manual_timeout_seconds,
+              requested_concurrency = excluded.requested_concurrency,
+              text_input_mode = excluded.text_input_mode,
+              auto_configured = excluded.auto_configured,
+              updated_at = excluded.updated_at
+            """,
+            (
+                clean_user_id,
+                preferences["completion_policy"],
+                preferences["review_hold_seconds"],
+                preferences["manual_timeout_seconds"],
+                preferences["requested_concurrency"],
+                preferences["text_input_mode"],
+                int(preferences["auto_configured"]),
+                preferences["updated_at"],
+            ),
+        )
+    wake_social_automation_worker()
+    return preferences
+
+
+def _memory_environment() -> dict[str, int]:
+    values: dict[str, int] = {}
+    try:
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            name, _, raw = line.partition(":")
+            if name in {"MemTotal", "MemAvailable", "SwapTotal"}:
+                values[name] = int(raw.strip().split()[0]) // 1024
+    except Exception:
+        pass
+    return {
+        "memory_total_mb": int(values.get("MemTotal") or 0),
+        "memory_available_mb": int(values.get("MemAvailable") or 0),
+        "swap_total_mb": int(values.get("SwapTotal") or 0),
+    }
+
+
+def _recent_user_task_continuity(user_id: int) -> dict[str, int]:
+    try:
+        with db() as conn:
+            rows = conn.execute(
+                """
+                SELECT account_id, started_at
+                FROM social_automation_tasks
+                WHERE user_id = ? AND started_at > 0
+                ORDER BY started_at DESC
+                LIMIT 100
+                """,
+                (int(user_id),),
+            ).fetchall()
+    except Exception:
+        rows = []
+    previous: dict[str, int] = {}
+    compared = 0
+    within_30_seconds = 0
+    for row in rows:
+        account_id = str(row["account_id"] or "")
+        started_at = int(row["started_at"] or 0)
+        if account_id in previous:
+            compared += 1
+            if 0 <= previous[account_id] - started_at <= 30:
+                within_30_seconds += 1
+        previous[account_id] = started_at
+    return {"compared": compared, "within_30_seconds": within_30_seconds}
+
+
+def browser_environment_recommendation(user_id: int) -> dict[str, Any]:
+    memory = _memory_environment()
+    cpu_cores = max(1, int(os.cpu_count() or 1))
+    total_mb = int(memory["memory_total_mb"] or 0)
+    available_mb = int(memory["memory_available_mb"] or 0)
+    swap_mb = int(memory["swap_total_mb"] or 0)
+    global_limit = max(1, min(int(get_live_browser_settings().get("max_concurrency") or 2), 12))
+    if cpu_cores <= 2 or (total_mb and total_mb <= 4096) or (available_mb and available_mb < 1024):
+        resource_level = "limited"
+        resource_label = "资源紧凑"
+    elif cpu_cores <= 4 or (total_mb and total_mb <= 8192):
+        resource_level = "balanced"
+        resource_label = "资源均衡"
+    else:
+        resource_level = "ample"
+        resource_label = "资源充足"
+    try:
+        active_browsers = len(_live_browser_sessions(user_id=int(user_id)))
+    except Exception:
+        active_browsers = 0
+    try:
+        with db() as conn:
+            running_tasks = int(conn.execute(
+                "SELECT COUNT(*) FROM social_automation_tasks WHERE user_id = ? AND status IN ('running', 'need_manual')",
+                (int(user_id),),
+            ).fetchone()[0])
+    except Exception:
+        running_tasks = 0
+    continuity = _recent_user_task_continuity(user_id)
+    recommended_concurrency = max(1, min(2 if resource_level != "ample" else 3, global_limit))
+    reasons = [
+        f"当前运行环境为{resource_label}，个人并发建议设为 {recommended_concurrency}。",
+        "任务结束后立即关闭浏览器，可释放 Camoufox 与实时画面占用的内存。",
+        "人工处理保留 15 分钟，兼顾验证码操作时间与并发槽回收。",
+    ]
+    if swap_mb <= 0:
+        reasons.append("当前环境未启用 Swap，不建议长期保留已完成的浏览器窗口。")
+    if continuity["compared"] and continuity["within_30_seconds"] * 4 < continuity["compared"]:
+        reasons.append("近期同账号连续任务较少，保留完成窗口不会明显缩短下一任务等待。")
+    summary_bits = [f"{cpu_cores} 核 CPU"]
+    if total_mb:
+        summary_bits.append(f"{round(total_mb / 1024, 1)} GB 内存")
+    summary_bits.append("无 Swap" if swap_mb <= 0 else "已启用 Swap")
+    return {
+        "environment": {
+            "resource_level": resource_level,
+            "resource_label": resource_label,
+            "summary": " · ".join(summary_bits),
+            "cpu_cores": cpu_cores,
+            "memory_total_mb": total_mb,
+            "memory_available_mb": available_mb,
+            "swap_enabled": swap_mb > 0,
+            "active_browsers": active_browsers,
+            "running_tasks": running_tasks,
+            "detected_at": _now(),
+        },
+        "recommended": {
+            "completion_policy": "immediate_close",
+            "review_hold_seconds": 30,
+            "manual_timeout_seconds": 900,
+            "requested_concurrency": recommended_concurrency,
+            "text_input_mode": "paste",
+        },
+        "reasons": reasons,
+        "limits": {
+            "global_max_concurrency": global_limit,
+            "max_review_hold_seconds": 300,
+            "manual_timeout_min_seconds": 300,
+            "manual_timeout_max_seconds": 1800,
+        },
+    }
+
+
+def browser_preferences_response(
+    user_id: int,
+    *,
+    preferences: dict[str, Any] | None = None,
+    recommendation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    current = preferences or get_user_browser_preferences(user_id)
+    result = recommendation or browser_environment_recommendation(user_id)
+    return {
+        "ok": True,
+        "preferences": current,
+        "effective": effective_user_browser_preferences(current),
+        "environment": result["environment"],
+        "recommended": result["recommended"],
+        "reasons": result["reasons"],
+        "limits": result["limits"],
+    }
 
 
 def close_live_browser_session(session_id: str, *, force: bool = False) -> None:
@@ -2188,6 +2467,23 @@ def update_social_account(account_id: str, payload: SocialAccountPatchPayload) -
         target_platform = str(existing["platform"] or "").strip()
         target_username = str(updates.get("username", existing["username"]) or "").strip().lstrip("@")
         owner_user_id = int(existing["user_id"] or 0)
+        current_proxy_id = str(existing["proxy_id"] or "").strip()
+        target_proxy_id = str(updates.get("proxy_id", current_proxy_id) or "").strip()
+        proxy_binding_changes = target_proxy_id != current_proxy_id or payload.residential_proxy is not None
+        if proxy_binding_changes:
+            active_proxy_task = conn.execute(
+                """
+                SELECT id
+                FROM social_automation_tasks
+                WHERE user_id = ?
+                  AND account_id = ?
+                  AND status IN ('preparing', 'queued', 'running', 'need_manual')
+                LIMIT 1
+                """,
+                (owner_user_id, account_id),
+            ).fetchone()
+            if active_proxy_task:
+                raise HTTPException(status_code=409, detail="账号有进行中的自动化任务，请停止任务后再切换代理 IP")
         if target_persona_id:
             if owner_user_id > 0:
                 persona_owner = conn.execute(
@@ -2897,9 +3193,9 @@ def _worker_loop() -> None:
 
 def _social_worker_max_concurrency() -> int:
     try:
-        value = int(get_live_browser_settings().get("max_concurrency", 4))
+        value = int(get_live_browser_settings().get("max_concurrency", 2))
     except Exception:
-        value = _bounded_env_int("SOCIAL_AUTOMATION_WORKER_CONCURRENCY", 4, 1, 12)
+        value = _bounded_env_int("SOCIAL_AUTOMATION_WORKER_CONCURRENCY", 2, 1, 12)
     return max(1, min(value, 12))
 
 
@@ -2998,6 +3294,7 @@ def _publish_login_dependency_blocks_claim(conn: sqlite3.Connection, row: Any, n
 def _claim_next_task() -> dict[str, Any] | None:
     now = _now()
     _recover_orphaned_manual_login_task(now)
+    global_concurrency = _social_worker_max_concurrency()
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         _release_terminal_task_billing_reservations(conn, now)
@@ -3024,9 +3321,30 @@ def _claim_next_task() -> dict[str, Any] | None:
                 for control in _RUNNING_TASK_CONTROLS.values()
                 if isinstance(control.get("task"), dict)
             }
+        running_by_user = {
+            int(item["user_id"] or 0): int(item["running_count"] or 0)
+            for item in conn.execute(
+                """
+                SELECT user_id, COUNT(*) AS running_count
+                FROM social_automation_tasks
+                WHERE status IN ('running', 'need_manual')
+                GROUP BY user_id
+                """
+            ).fetchall()
+        }
+        requested_by_user = {
+            int(item["user_id"] or 0): max(1, min(int(item["requested_concurrency"] or 1), global_concurrency))
+            for item in conn.execute(
+                "SELECT user_id, requested_concurrency FROM user_browser_settings"
+            ).fetchall()
+        }
         row = None
         for candidate in rows:
             if str(candidate["account_id"] or "") in active_account_ids:
+                continue
+            candidate_user_id = int(candidate["user_id"] or 0)
+            user_limit = requested_by_user.get(candidate_user_id, max(1, min(2, global_concurrency)))
+            if running_by_user.get(candidate_user_id, 0) >= user_limit:
                 continue
             if _publish_login_dependency_blocks_claim(conn, candidate, now):
                 continue
@@ -3137,8 +3455,7 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
     if _is_task_cancelled(task_id):
         _discard_ephemeral_task_secrets(task_id)
         return
-    task = dict(task)
-    task["payload"] = _runtime_task_payload(task, account)
+    task = _apply_runtime_task_preferences(task, account, control)
     from social_automation.runner import AutoLoginFailedError, NeedManualError, UnsupportedActionError, run_social_task
 
     logger = _DbTaskLogger(task["id"])
@@ -4202,10 +4519,16 @@ def _extract_runtime_secrets(payload: dict[str, Any]) -> tuple[dict[str, Any], d
 
 def _runtime_task_payload(task: dict[str, Any], account: dict[str, Any]) -> dict[str, Any]:
     payload = dict(task.get("payload") or {})
-    settings = get_live_browser_settings()
-    payload.setdefault("live_browser_standby_seconds", settings["standby_seconds"])
-    payload.setdefault("live_browser_auto_close_seconds", settings["auto_close_seconds"])
-    payload.setdefault("text_input_mode", settings.get("text_input_mode") or "paste")
+    owner_user_id = int(account.get("user_id") or task.get("user_id") or 0)
+    preferences = effective_user_browser_preferences(get_user_browser_preferences(owner_user_id))
+    review_hold = preferences["completion_policy"] == "review_hold"
+    # These are internal runtime controls. Always overwrite client payload
+    # values so a task cannot bypass its tenant or global resource limits.
+    payload["retain_live_browser_after_finish"] = review_hold
+    payload["live_browser_standby_seconds"] = 0
+    payload["live_browser_auto_close_seconds"] = preferences["review_hold_seconds"] if review_hold else 10
+    payload["manual_login_timeout_seconds"] = preferences["manual_timeout_seconds"]
+    payload["text_input_mode"] = preferences["text_input_mode"]
     task_id = str(task.get("id") or "")
     with _EPHEMERAL_TASK_SECRETS_LOCK:
         secrets = dict(_EPHEMERAL_TASK_SECRETS.get(task_id) or {})
@@ -4221,6 +4544,19 @@ def _runtime_task_payload(task: dict[str, Any], account: dict[str, Any]) -> dict
         if runtime_password:
             payload["login_password"] = runtime_password
     return payload
+
+
+def _apply_runtime_task_preferences(
+    task: dict[str, Any],
+    account: dict[str, Any],
+    context_control: dict[str, Any],
+) -> dict[str, Any]:
+    runtime_task = dict(task)
+    runtime_task["payload"] = _runtime_task_payload(runtime_task, account)
+    # Browser cleanup reads the task stored on context_control. Keep that copy
+    # synchronized with the server-owned runtime payload before the runner starts.
+    context_control["task"] = dict(runtime_task)
+    return runtime_task
 
 
 def _proxy_public(row: Any, *, bound_account_ids: list[str] | None = None) -> dict[str, Any]:

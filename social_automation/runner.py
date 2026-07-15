@@ -16,6 +16,9 @@ INSTAGRAM_LOGIN = "https://www.instagram.com/accounts/login/"
 THREADS_HOME = "https://www.threads.net/"
 DEFAULT_LOGIN_SELF_HEAL_ATTEMPTS = 4
 LOGIN_FORM_WAIT_SECONDS = 12
+DEFAULT_MANUAL_LOGIN_TIMEOUT_SECONDS = 900
+MIN_MANUAL_LOGIN_TIMEOUT_SECONDS = 300
+MAX_MANUAL_LOGIN_TIMEOUT_SECONDS = 1800
 SUPPORTED_TASK_TYPES = {
     "check_login",
     "open_login",
@@ -834,6 +837,7 @@ def _human_click(
 
 def _screenshot(page, screenshot_dir: Path, task: dict[str, Any], stage: str, logger: AutomationLogger) -> str:
     if str(task.get("task_type") or "").strip().lower() == "publish_post" and str(stage or "") not in {
+        "manual_login_timeout",
         "publish_done",
         "publish_submitted_unconfirmed",
     }:
@@ -858,6 +862,7 @@ def _should_capture_screenshot(stage: str) -> bool:
         "login_verification_required",
         "login_invalid_credentials",
         "login_wait_timeout",
+        "manual_login_timeout",
         "login_complete",
         "publish_done",
         "publish_submitted_unconfirmed",
@@ -1626,6 +1631,16 @@ def _wait_for_manual_login_completion(
     screenshot_path: str = "",
     last_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+    try:
+        manual_login_timeout_seconds = int(payload.get("manual_login_timeout_seconds"))
+    except (TypeError, ValueError):
+        manual_login_timeout_seconds = DEFAULT_MANUAL_LOGIN_TIMEOUT_SECONDS
+    manual_login_timeout_seconds = max(
+        MIN_MANUAL_LOGIN_TIMEOUT_SECONDS,
+        min(manual_login_timeout_seconds, MAX_MANUAL_LOGIN_TIMEOUT_SECONDS),
+    )
+    deadline = time.monotonic() + manual_login_timeout_seconds
     logger.log(
         "warn",
         "need_manual",
@@ -1634,18 +1649,43 @@ def _wait_for_manual_login_completion(
         screenshot_path,
     )
     last_seen_status = str(status or "")
+
+    def raise_manual_login_timeout() -> None:
+        shot = _screenshot(page, screenshot_dir, task, "manual_login_timeout", logger)
+        message = f"{_platform_name(platform)} 人工处理已超过 {manual_login_timeout_seconds // 60} 分钟，请重新打开登录任务。"
+        logger.log(
+            "error",
+            "manual_login_timeout",
+            message,
+            {
+                "status": "manual_login_timeout",
+                "timeout_seconds": manual_login_timeout_seconds,
+                "last_status": last_seen_status,
+            },
+            shot,
+        )
+        raise AutoLoginFailedError(message, "cookie_expired", shot)
+
     while True:
         _raise_if_cancelled(cancel_event)
+        if time.monotonic() >= deadline:
+            raise_manual_login_timeout()
         try:
             page.title(timeout=1000)
         except Exception as exc:
             message = str(exc)
             if "Target page, context or browser has been closed" in message or "has been closed" in message:
                 raise NeedManualError(f"{_platform_name(platform)} 登录确认前浏览器窗口已关闭，请重新启动登录任务。", status) from exc
+        if time.monotonic() >= deadline:
+            raise_manual_login_timeout()
         current_status = _detect_platform_login_state(page, platform)
+        if time.monotonic() >= deadline:
+            raise_manual_login_timeout()
         current_code = str(current_status.get("status") or "").strip()
         if current_code == "ready":
             stable_status = _confirm_platform_ready(page, platform, logger, cancel_event)
+            if time.monotonic() >= deadline:
+                raise_manual_login_timeout()
             if stable_status.get("status") == "ready":
                 shot = _screenshot(page, screenshot_dir, task, "login_complete", logger)
                 logger.log(
@@ -1666,7 +1706,16 @@ def _wait_for_manual_login_completion(
                 {"status": current_code, "details": current_status},
             )
             last_seen_status = current_code
-        time.sleep(5)
+        remaining_seconds = deadline - time.monotonic()
+        if remaining_seconds <= 0:
+            raise_manual_login_timeout()
+        wait_seconds = min(5.0, remaining_seconds)
+        wait = getattr(cancel_event, "wait", None) if cancel_event is not None else None
+        if callable(wait):
+            if wait(wait_seconds):
+                _raise_if_cancelled(cancel_event)
+        else:
+            time.sleep(wait_seconds)
 
 
 def _confirm_platform_ready(page, platform: str, logger: AutomationLogger, cancel_event: Any | None = None) -> dict[str, Any]:
