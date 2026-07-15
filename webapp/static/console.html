@@ -115,10 +115,9 @@
       <section class="view" data-panel="accounts">
         <div class="account-browser-shell" id="accountBrowserShell" data-account-browser-panel="accounts">
           <div class="account-browser-toolbar">
-            <div class="account-browser-tabs" role="tablist" aria-label="账号、代理与浏览器切换">
+            <div class="account-browser-tabs" role="tablist" aria-label="账号与代理切换">
               <button id="accountBrowserAccountsTab" type="button" class="is-active" data-account-browser-tab="accounts" role="tab" aria-selected="true" aria-controls="accountBrowserAccountsPage">账号池</button>
               <button id="accountBrowserProxiesTab" type="button" data-account-browser-tab="proxies" role="tab" aria-selected="false" aria-controls="accountBrowserProxiesPage">代理 IP</button>
-              <button id="accountBrowserBrowsersTab" type="button" data-account-browser-tab="browsers" role="tab" aria-selected="false" aria-controls="accountBrowserBrowsersPage">浏览器</button>
             </div>
             <button id="refreshAccounts" type="button">刷新账号</button>
           </div>
@@ -128,7 +127,7 @@
           <section id="accountBrowserProxiesPage" class="account-browser-page" data-account-browser-page="proxies" role="tabpanel" aria-labelledby="accountBrowserProxiesTab" hidden>
             <div id="proxyPool"></div>
           </section>
-          <section id="accountBrowserBrowsersPage" class="account-browser-page" data-account-browser-page="browsers" role="tabpanel" aria-labelledby="accountBrowserBrowsersTab" hidden>
+          <section id="accountBrowserBrowsersPage" class="account-browser-page" data-account-browser-page="browsers" role="tabpanel" aria-label="浏览器列表" hidden>
             <div id="liveBrowserSessions"></div>
           </section>
         </div>

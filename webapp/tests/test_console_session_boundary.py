@@ -314,6 +314,22 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn(".live-browser-card-actions", mobile_controls)
         self.assertIn("justify-content: flex-start;", mobile_controls)
 
+    def test_public_toast_uses_bottom_wide_layout(self):
+        host = self._css_block(".toast-host {")
+        message = self._css_block(".toast-message {")
+        slide = self._css_block("@keyframes toastSlideIn")
+
+        self.assertIn("left: 50%;", host)
+        self.assertIn("bottom: 22px;", host)
+        self.assertIn("width: min(560px, calc(100vw - 32px));", host)
+        self.assertIn("transform: translateX(-50%);", host)
+        self.assertNotIn("top: 16px;", host)
+        self.assertNotIn("right: 16px;", host)
+        self.assertIn("min-height: 64px;", message)
+        self.assertIn("padding: 18px 12px 18px 20px;", message)
+        self.assertIn("border: 2px solid var(--line);", message)
+        self.assertIn("transform: translateY(18px);", slide)
+
     def test_status_tone_covers_live_detection_and_recovery_states(self):
         harness = textwrap.dedent(
             f"""
@@ -387,8 +403,10 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("refreshLiveBrowserSessionsSoon", create_task)
         self.assertIn('existingToast.classList.contains("is-leaving")', toast)
         refresh_start = toast.index("if (isTaskRefresh)")
-        refresh_end = toast.index("return existingToast;", refresh_start)
+        refresh_end = toast.index("pendingToastRequest = request", refresh_start)
         self.assertNotIn("clearToastRemovalTimer", toast[refresh_start:refresh_end])
+        self.assertNotIn("applyToastMeta(existingToast", toast[refresh_start:refresh_end])
+        self.assertIn("keep the existing DOM and class", toast[refresh_start:refresh_end])
 
     def test_manual_takeover_waits_for_backend_ack_and_keeps_task_refresh_active(self):
         set_mode = self._section("async function setLiveBrowserMode", "function liveBrowserToolInput")
@@ -488,22 +506,76 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("event.preventDefault()", account_events)
         self.assertIn(".account-pool-card-check", account_events)
 
-    def test_account_edit_does_not_resubmit_unchanged_proxy_and_clears_revealed_password(self):
+    def test_account_proxy_picker_replaces_legacy_edit_checkbox_and_keeps_single_binding(self):
+        card = self._section("function renderAccountPoolCard", "function renderAccountPoolCards")
+        picker = self._function_source("openAccountProxyPickerModal")
         modal = self._function_source("openAccountPoolEditModal")
         save = self._function_source("saveAccountPoolEditForm")
         clear_password = self._function_source("clearAccountPasswordReveal")
 
-        self.assertIn('modal.dataset.accountProxyDirty = "false"', modal)
-        self.assertIn('modal.dataset.accountProxyDirty = "true"', modal)
+        self.assertIn('data-account-proxy-picker="${esc(accountId)}"', card)
+        self.assertIn("accountProxyOptionCardsHtml(account.proxy_id", picker)
+        self.assertIn("saveAccountProxyBinding", picker)
+        self.assertIn('modal.dataset.originalProxyId = String(account.proxy_id || "").trim()', picker)
+        self.assertIn('modal.dataset.accountProxyDirty = "false"', picker)
+        self.assertIn('if (modal.dataset.accountProxyDirty !== "true")', picker)
+        self.assertIn("reconcileAccountProxyBindingConflict", picker)
+        self.assertIn('modal.dataset.selectedProxyId = String(account.proxy_id || "").trim()', modal)
+        self.assertIn('modal.dataset.originalProxyId = String(account.proxy_id || "").trim()', modal)
+        self.assertIn("renderAccountProxyPickerPanel(account)", modal)
+        self.assertIn('event.target.closest("[data-account-proxy-choice]")', modal)
+        self.assertNotIn('accountResidentialProxyFormHtml("accountPoolEdit"', modal)
         self.assertIn('clearAccountPasswordReveal(account.id, "pool-edit")', modal)
         self.assertIn("delete state.accountPasswordValues[cleanId]", clear_password)
         self.assertIn("delete state.accountPasswordVisible[accountPasswordStateKey(cleanId, scope)]", clear_password)
-        self.assertIn('const proxyFieldsDirty = $("consoleModal")?.dataset.accountProxyDirty === "true"', save)
-        self.assertIn("if (proxyEnabled && (proxyFieldsDirty || !existingProxy))", save)
-        self.assertNotIn(
-            'const residentialProxy = accountResidentialProxyPayload("accountPoolEdit", username, accountResidentialProxy(account))',
-            save,
+        self.assertIn('const selectedProxyId = String(editModal?.dataset.selectedProxyId || "").trim()', save)
+        self.assertIn("accountProxyBindingChanged(originalProxyId, selectedProxyId)", save)
+        self.assertIn("payload.expected_proxy_id = originalProxyId", save)
+        self.assertIn("payload.proxy_id = selectedProxyId", save)
+        self.assertIn("payload.clear_residential_proxy = true", save)
+        self.assertNotIn("payload.residential_proxy", save)
+
+    def test_account_proxy_picker_matches_backend_eligibility_and_tracks_real_changes(self):
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            function proxyStatusLabel(value = "") {{
+              return {{ active: "正常", inactive: "停用", pending: "待检测", failed: "异常" }}[String(value || "").toLowerCase()] || String(value || "");
+            }}
+            {self._function_source("accountProxyEligibility")}
+            {self._function_source("accountProxyBindingChanged")}
+
+            const now = 2000;
+            const valid = {{ ip_type: "static_residential", expires_at: 3000, status: "active", last_check_at: 1900, last_check_result: {{ ok: true }} }};
+            assert.deepStrictEqual(accountProxyEligibility(null, now), {{ eligible: true, reason: "" }});
+            assert.strictEqual(accountProxyEligibility(valid, now).eligible, true);
+            assert.strictEqual(accountProxyEligibility({{ ...valid, ip_type: "datacenter" }}, now).reason, "仅支持静态住宅 IP");
+            assert.strictEqual(accountProxyEligibility({{ ...valid, expires_at: now }}, now).reason, "已过期");
+            assert.strictEqual(accountProxyEligibility({{ ...valid, status: "inactive" }}, now).eligible, false);
+            assert.strictEqual(accountProxyEligibility({{ ...valid, last_check_at: 0 }}, now).reason, "未通过网络检测");
+            assert.strictEqual(accountProxyEligibility({{ ...valid, last_check_result: {{ ok: false }} }}, now).eligible, false);
+            assert.strictEqual(accountProxyBindingChanged("proxy-a", "proxy-a"), false);
+            assert.strictEqual(accountProxyBindingChanged("proxy-a", "proxy-b"), true);
+            assert.strictEqual(accountProxyBindingChanged("", ""), false);
+            """
         )
+        self._run_node(harness)
+
+        options = self._section("function accountProxyOptionCardsHtml", "function updateAccountProxyChoice")
+        status_refresh = self._function_source("updateAccountStatusViews")
+        binding_save = self._function_source("saveAccountProxyBinding")
+        self.assertIn("accountProxyEligibility(proxy)", options)
+        self.assertIn('disabled aria-disabled=\\"true\\"', options)
+        self.assertIn("data-account-proxy-options", options)
+        self.assertIn("[data-account-proxy-for]", status_refresh)
+        self.assertIn("[data-account-proxy-picker]", status_refresh)
+        self.assertIn("expected_proxy_id", binding_save)
+
+        reconcile = self._function_source("reconcileAccountProxyBindingConflict")
+        self.assertIn("fetchSocialDataShared({ force: true })", reconcile)
+        self.assertIn("accountProxyBindingChanged(originalProxyId, latestProxyId)", reconcile)
+        self.assertIn("accountProxyOptionCardsHtml(latestProxyId", reconcile)
+        self.assertIn("modal.dataset.originalProxyId = latestProxyId", reconcile)
 
     def test_pageshow_and_focus_share_identity_revalidation(self):
         revalidation = self._section("async function revalidateConsoleIdentity()", "async function loadSetupStatus()")
@@ -620,12 +692,6 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_proxy_auto_detection_falls_back_and_autofills_editable_fields(self):
-        helper_source = "\n".join(
-            [
-                self._section("function proxyNameCanAutofill", "async function testProxyConfiguration"),
-                self._section("async function testProxyConfiguration", "async function testProxyForm"),
-            ]
     def test_console_settings_use_user_browser_policy_endpoints_and_keep_pagination_local(self):
         render = self._function_source("renderConsoleSettingsPage")
         save = self._function_source("saveConsoleSettingsPage")
@@ -634,12 +700,14 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
 
         for field in (
             "completion_policy",
-            "review_hold_seconds",
+            "standby_seconds",
+            "auto_close_seconds",
             "manual_timeout_seconds",
             "requested_concurrency",
             "text_input_mode",
         ):
             self.assertIn(field, render)
+        self.assertIn("review_hold_seconds", self._function_source("normalizeBrowserPreferences"))
         self.assertIn("仅供检查，不提升速度", render)
         self.assertIn("resource_level", self._function_source("renderBrowserRecommendationCard"))
         self.assertIn("effective_limits", self._function_source("renderBrowserRecommendationCard"))
@@ -664,6 +732,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
               browserPreferencesResponseValue({{ preferences: {{
                 completion_policy: "review_hold",
                 review_hold_seconds: 999,
+                standby_seconds: 120,
+                auto_close_seconds: 7200,
                 manual_timeout_seconds: 600,
                 requested_concurrency: 0,
                 text_input_mode: "type",
@@ -671,6 +741,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
               {{
                 completion_policy: "review_hold",
                 review_hold_seconds: 300,
+                standby_seconds: 120,
+                auto_close_seconds: 7200,
                 manual_timeout_seconds: 600,
                 requested_concurrency: 1,
                 text_input_mode: "type",
@@ -680,6 +752,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
               normalizeBrowserPreferences({{
                 completion_policy: "unknown",
                 review_hold_seconds: 1,
+                standby_seconds: 9999,
+                auto_close_seconds: 1,
                 manual_timeout_seconds: 750,
                 requested_concurrency: 99,
                 text_input_mode: "unknown",
@@ -687,6 +761,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
               {{
                 completion_policy: "immediate_close",
                 review_hold_seconds: 10,
+                standby_seconds: 3600,
+                auto_close_seconds: 10,
                 manual_timeout_seconds: 750,
                 requested_concurrency: 12,
                 text_input_mode: "paste",
@@ -725,6 +801,12 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
         self._run_node(harness)
 
+    def test_proxy_auto_detection_falls_back_and_autofills_editable_fields(self):
+        helper_source = "\n".join(
+            [
+                self._section("function proxyNameCanAutofill", "async function testProxyConfiguration"),
+                self._section("async function testProxyConfiguration", "async function testProxyForm"),
+            ]
         )
         harness = textwrap.dedent(
             f"""

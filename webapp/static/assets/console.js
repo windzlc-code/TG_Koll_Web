@@ -1031,7 +1031,8 @@ const modules = [
   { id: "personas", label: "我的人设", hint: "人设列表、详情、推文、账号", callback: "后台自动读取" },
   { id: "tweet_generation", label: "推文生成", hint: "新建推文、草稿库、收藏", callback: "后台自动读取" },
   { id: "publishing", label: "发布", hint: "草稿发布、批量发布、定时发布", callback: "后台自动排队" },
-  { id: "accounts", label: "账号管理自动化", hint: "账号池、自动回复、养号", view: "accounts" },
+  { id: "accounts", label: "账号管理自动化", hint: "账号池、自动回复、养号", view: "accounts", panels: ["accounts", "proxies"] },
+  { id: "browser_list", label: "浏览器列表", hint: "实时浏览器窗口、人工接管", view: "accounts", panel: "browsers" },
 ];
 
 const taskMeta = {
@@ -1525,14 +1526,17 @@ function showToast(text, ok = true, options = {}) {
     const previousMessage = existingToast.querySelector(".toast-message-text")?.textContent || "";
     const presentationChanged = previousMessage !== message
       || String(existingToast.dataset.toastStatus || "") !== status;
-    const isTaskRefresh = !presentationChanged && Boolean(options.taskId);
+    const activeTaskStatuses = new Set(["queued", "running", "progress"]);
+    const isActiveTaskRefresh = Boolean(options.taskId) && activeTaskStatuses.has(status);
+    const isTaskRefresh = (!presentationChanged && Boolean(options.taskId)) || isActiveTaskRefresh;
     if (isTaskRefresh) {
       // A polling refresh must not revive a toast that has reached its
       // five-second expiry; otherwise the three-second task poll keeps it on
       // screen forever.
       if (existingToast.classList.contains("is-leaving")) return existingToast;
-      clearToastSwitchTimers(existingToast);
-      applyToastMeta(existingToast, request);
+      // keep the existing DOM and class list intact. Re-applying meta here
+      // restarts the CSS entry animation on every browser-task poll, which
+      // looks like the toast is repeatedly disappearing and reappearing.
       return existingToast;
     }
   }
@@ -4465,7 +4469,7 @@ function setView(view) {
     workspace: "任务工作台",
     tasks: "任务队列",
     social: "浏览器发布",
-    accounts: "账号管理自动化",
+    accounts: state.accountBrowserPanel === "browsers" ? "浏览器列表" : "账号管理自动化",
     settings: "系统状态",
     billing: "订阅与算力",
     console_settings: "设置",
@@ -4649,10 +4653,14 @@ function updateWorkspaceFlow() {
 function renderModuleMenu() {
   updateWorkspaceFlow();
   $("moduleMenu").innerHTML = `<div class="module-accordion">${modules.map((item) => {
-    const isActive = item.view ? item.view === state.view : (state.view === "workspace" && item.id === state.activeModule);
+    const itemPanel = String(item.panel || "");
+    const itemPanels = Array.isArray(item.panels) ? item.panels.map((panel) => String(panel || "")) : [];
+    const isActive = item.view
+      ? (item.view === state.view && (itemPanel ? itemPanel === state.accountBrowserPanel : (!itemPanels.length || itemPanels.includes(state.accountBrowserPanel))))
+      : (state.view === "workspace" && item.id === state.activeModule);
     return `
       <div class="module-accordion-item">
-        <button type="button" class="module-trigger ${isActive ? "is-active" : ""}" ${item.view ? `data-workspace-view="${esc(item.view)}"` : `data-module="${esc(item.id)}"`}>
+        <button type="button" class="module-trigger ${isActive ? "is-active" : ""}" ${item.view ? `data-workspace-view="${esc(item.view)}" data-workspace-module="${esc(item.id)}"${itemPanel ? ` data-workspace-panel="${esc(itemPanel)}"` : ""}` : `data-module="${esc(item.id)}"`}>
           <span class="module-trigger-text">
             <span>${esc(item.label)}</span>
             <small>${esc(item.hint)}</small>
@@ -4671,7 +4679,11 @@ function syncModuleMenuState() {
     button.classList.toggle("is-active", isActive);
   });
   document.querySelectorAll("[data-workspace-view]").forEach((button) => {
-    button.classList.toggle("is-active", button.dataset.workspaceView === state.view);
+    const itemPanel = String(button.dataset.workspacePanel || "");
+    const itemId = String(button.dataset.workspaceModule || "");
+    const item = modules.find((entry) => String(entry.id || "") === itemId);
+    const itemPanels = Array.isArray(item?.panels) ? item.panels.map((panel) => String(panel || "")) : [];
+    button.classList.toggle("is-active", button.dataset.workspaceView === state.view && (itemPanel ? itemPanel === state.accountBrowserPanel : (!itemPanels.length || itemPanels.includes(state.accountBrowserPanel))));
   });
 }
 
@@ -15033,6 +15045,14 @@ function updateAccountStatusViews() {
       if (account) option.textContent = accountDisplayName(account);
     });
   });
+  document.querySelectorAll("[data-account-proxy-for]").forEach((node) => {
+    const account = accountById.get(String(node.dataset.accountProxyFor || ""));
+    if (account) node.textContent = accountResidentialProxyLabel(account);
+  });
+  document.querySelectorAll("[data-account-proxy-picker]").forEach((button) => {
+    const account = accountById.get(String(button.dataset.accountProxyPicker || ""));
+    if (account) button.textContent = String(account.proxy_id || "").trim() ? "切换代理" : "选择代理";
+  });
 }
 
 const accountPoolPlatforms = [
@@ -15311,7 +15331,7 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
         <div class="persona-account-summary-meta" aria-label="账号重要信息">
           ${String(account.login_username || "").trim() && String(account.login_username || "").trim() !== String(account.username || "").trim() ? `<span><small>登录账号</small><strong>${esc(account.login_username)}</strong></span>` : ""}
           <span><small>浏览器环境</small><strong>${esc(account.profile_dir ? "已配置" : "未配置")}</strong></span>
-          <span><small>代理 IP</small><strong>${esc(accountResidentialProxyLabel(account))}</strong></span>
+          <span><small>代理 IP</small><strong data-account-proxy-for="${esc(accountId)}">${esc(accountResidentialProxyLabel(account))}</strong></span>
         </div>
         <div class="row-actions persona-account-summary-actions">
           <button type="button" class="primary" data-persona-account-open-login="${esc(accountId)}">打开登录</button>
@@ -15355,10 +15375,11 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
     <strong class="account-pool-bound-persona ${persona ? "is-bound" : "is-unbound"}" title="${esc(persona ? `已绑定：${persona.name || persona.id}` : "未绑定人设")}">${esc(persona ? `已绑定：${persona.name || persona.id}` : "未绑定人设")}</strong>
     <div class="account-card-meta">
       <span>${esc(account.profile_dir ? "已配置浏览器环境" : "未配置浏览器环境")}</span>
-      <span>${esc(accountResidentialProxyLabel(account))}</span>
+      <span data-account-proxy-for="${esc(accountId)}">${esc(accountResidentialProxyLabel(account))}</span>
     </div>
     <div class="row-actions">
       <button type="button" class="primary" data-social-open-login="${esc(accountId)}">打开登录</button>
+      <button type="button" data-account-proxy-picker="${esc(accountId)}">${account?.proxy_id ? "切换代理" : "选择代理"}</button>
       <button type="button" data-account-pool-edit="${esc(accountId)}">编辑</button>
       <button type="button" data-account-pool-unbind="${esc(accountId)}" ${account.persona_id ? "" : "disabled"}>解绑</button>
       <button type="button" class="danger" data-social-delete-account="${esc(accountId)}">删除账号</button>
@@ -16299,6 +16320,204 @@ async function deleteSelectedAccountPoolAccounts() {
   renderSocialAccounts();
 }
 
+function accountProxyEligibility(proxy = null, nowSeconds = Math.floor(Date.now() / 1000)) {
+  if (!proxy) return { eligible: true, reason: "" };
+  if (String(proxy.ip_type || "").trim().toLowerCase() !== "static_residential") {
+    return { eligible: false, reason: "仅支持静态住宅 IP" };
+  }
+  const expiresAt = Number(proxy.expires_at || 0);
+  if (expiresAt > 0 && expiresAt <= Number(nowSeconds || 0)) {
+    return { eligible: false, reason: "已过期" };
+  }
+  if (String(proxy.status || "").trim().toLowerCase() !== "active") {
+    return { eligible: false, reason: proxyStatusLabel(proxy.status) || "未启用" };
+  }
+  const checkResult = proxy.last_check_result && typeof proxy.last_check_result === "object"
+    ? proxy.last_check_result
+    : {};
+  if (Number(proxy.last_check_at || 0) <= 0 || checkResult.ok !== true) {
+    return { eligible: false, reason: "未通过网络检测" };
+  }
+  return { eligible: true, reason: "可使用" };
+}
+
+function accountProxyBindingChanged(originalProxyId = "", selectedProxyId = "") {
+  return String(originalProxyId || "").trim() !== String(selectedProxyId || "").trim();
+}
+
+function accountProxyOptionCardsHtml(selectedProxyId = "", { scope = "modal" } = {}) {
+  const selectedId = String(selectedProxyId || "").trim();
+  const rows = proxyPoolRows();
+  const option = (proxy = null) => {
+    const proxyId = String(proxy?.id || "").trim();
+    const selected = proxyId === selectedId;
+    const eligibility = accountProxyEligibility(proxy);
+    const endpoint = proxy
+      ? [String(proxy.host || "").trim(), String(proxy.port || "").trim()].filter(Boolean).join(":") || "未填写地址"
+      : "账号将直接连接网络";
+    const location = proxy
+      ? [String(proxy.country || "").trim(), String(proxy.city || proxy.region || "").trim()].filter(Boolean).join(" · ") || "位置待识别"
+      : "随时可以重新选择代理 IP";
+    const exitIp = proxy ? proxyExitIp(proxy) : "";
+    const title = proxy ? String(proxy.name || (exitIp !== "-" ? exitIp : "") || endpoint).trim() : "不使用代理";
+    const detail = proxy
+      ? `${proxyProtocol(proxy)} · ${eligibility.eligible ? "可使用" : `不可选：${eligibility.reason}`} · 已绑 ${proxyBoundAccountCount(proxy)} 个账号`
+      : "清除当前账号的代理绑定";
+    return `<button type="button" class="account-proxy-option ${selected ? "is-selected" : ""}" data-account-proxy-choice="${esc(proxyId)}" data-account-proxy-choice-scope="${esc(scope)}" aria-pressed="${selected ? "true" : "false"}" ${eligibility.eligible ? "" : "disabled aria-disabled=\"true\""}>
+      <span class="account-proxy-option-check" aria-hidden="true"></span>
+      <strong>${esc(title)}</strong>
+      <span>${esc(endpoint)}</span>
+      <small>${esc(location)}</small>
+      <small>${esc(detail)}</small>
+    </button>`;
+  };
+  return `<div class="account-proxy-options" data-account-proxy-options role="group" aria-label="选择代理 IP">
+    ${option(null)}
+    ${rows.map((proxy) => option(proxy)).join("")}
+  </div>`;
+}
+
+function updateAccountProxyChoice(modal, proxyId = "") {
+  if (!modal) return;
+  const selectedId = String(proxyId || "").trim();
+  const proxy = socialProxyById(selectedId);
+  if (selectedId && !accountProxyEligibility(proxy).eligible) return false;
+  modal.dataset.selectedProxyId = selectedId;
+  if (Object.hasOwn(modal.dataset, "originalProxyId")) {
+    modal.dataset.accountProxyDirty = accountProxyBindingChanged(modal.dataset.originalProxyId || "", selectedId) ? "true" : "false";
+  }
+  modal.querySelectorAll("[data-account-proxy-choice]").forEach((button) => {
+    const selected = String(button.dataset.accountProxyChoice || "").trim() === selectedId;
+    button.classList.toggle("is-selected", selected);
+    button.setAttribute("aria-pressed", selected ? "true" : "false");
+  });
+  const summary = modal.querySelector("[data-account-proxy-selection-summary]");
+  if (summary) {
+    const exitIp = proxy ? proxyExitIp(proxy) : "";
+    summary.textContent = proxy ? `已选择：${proxy.name || (exitIp !== "-" ? exitIp : "") || proxy.host}` : "已选择：不使用代理";
+  }
+  return true;
+}
+
+async function reconcileAccountProxyBindingConflict(modal, accountId = "", error = null) {
+  if (!modal || Number(error?.status || 0) !== 409) return false;
+  await fetchSocialDataShared({ force: true });
+  updateAccountStatusViews();
+  const latestAccount = accountById(accountId);
+  if (!latestAccount) return false;
+  const originalProxyId = String(modal.dataset.originalProxyId || "").trim();
+  const latestProxyId = String(latestAccount.proxy_id || "").trim();
+  if (!accountProxyBindingChanged(originalProxyId, latestProxyId)) return false;
+  const scope = modal.querySelector("[data-account-proxy-choice]")?.dataset.accountProxyChoiceScope || "modal";
+  const options = modal.querySelector("[data-account-proxy-options]");
+  if (options) options.outerHTML = accountProxyOptionCardsHtml(latestProxyId, { scope });
+  modal.dataset.originalProxyId = latestProxyId;
+  updateAccountProxyChoice(modal, latestProxyId);
+  const summary = modal.querySelector("[data-account-proxy-selection-summary]");
+  if (summary) summary.textContent = "代理绑定已在其他页面更新，请重新选择。";
+  return true;
+}
+
+async function saveAccountProxyBinding(accountId = "", proxyId = "", expectedProxyId = "") {
+  const cleanAccountId = String(accountId || "").trim();
+  if (!cleanAccountId) return false;
+  const selectedProxyId = String(proxyId || "").trim();
+  const result = await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(cleanAccountId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(selectedProxyId
+      ? { proxy_id: selectedProxyId, expected_proxy_id: String(expectedProxyId || "").trim() }
+      : { clear_residential_proxy: true, expected_proxy_id: String(expectedProxyId || "").trim() }),
+  });
+  state.accountPoolAccountId = String(result.account?.id || cleanAccountId);
+  await loadSocial({ force: true });
+  renderSocialAccounts();
+  if (isPersonaWorkspaceModule()) renderPersonaDetail();
+  showMsg("socialMsg", selectedProxyId ? "代理 IP 已绑定。" : "代理 IP 已解绑。", true);
+  return true;
+}
+
+function openAccountProxyPickerModal(accountId = "") {
+  const account = accountById(accountId);
+  if (!account) {
+    showMsg("socialMsg", "账号不存在，请刷新后重试。", false);
+    return;
+  }
+  closeConsoleModal(null);
+  const modal = document.createElement("div");
+  modal.id = "consoleModal";
+  modal.className = "console-modal";
+  modal.dataset.selectedProxyId = String(account.proxy_id || "").trim();
+  modal.dataset.originalProxyId = String(account.proxy_id || "").trim();
+  modal.dataset.accountProxyDirty = "false";
+  modal.innerHTML = `
+    <div class="console-modal-backdrop"></div>
+    <section class="console-modal-dialog account-proxy-picker-modal" role="dialog" aria-modal="true" aria-labelledby="accountProxyPickerTitle">
+      <div class="console-modal-head">
+        <div><strong id="accountProxyPickerTitle">选择代理 IP</strong><p>${esc(accountDisplayName(account))} · 一个账号同时只绑定一个代理</p></div>
+      </div>
+      <div class="console-modal-content">
+        <p data-account-proxy-selection-summary>${account.proxy_id ? `当前绑定：${esc(accountResidentialProxyLabel(account))}` : "当前未使用代理 IP"}</p>
+        ${accountProxyOptionCardsHtml(account.proxy_id || "", { scope: "modal" })}
+      </div>
+      <div class="console-modal-actions">
+        <button type="button" data-account-proxy-picker-cancel>取消</button>
+        <button type="button" class="primary" data-account-proxy-picker-save="${esc(account.id)}">确认绑定</button>
+      </div>
+    </section>`;
+  document.body.appendChild(modal);
+  const close = () => modal.remove();
+  modal.addEventListener("click", (event) => {
+    const choice = event.target.closest("[data-account-proxy-choice]");
+    if (choice) {
+      if (choice.disabled) return;
+      updateAccountProxyChoice(modal, choice.dataset.accountProxyChoice || "");
+      return;
+    }
+    if (event.target.closest("[data-account-proxy-picker-cancel]")) {
+      close();
+      return;
+    }
+    const save = event.target.closest("[data-account-proxy-picker-save]");
+    if (!save) return;
+    if (modal.dataset.accountProxyDirty !== "true") {
+      close();
+      return;
+    }
+    save.disabled = true;
+    saveAccountProxyBinding(
+      save.dataset.accountProxyPickerSave || "",
+      modal.dataset.selectedProxyId || "",
+      modal.dataset.originalProxyId || "",
+    )
+      .then((saved) => {
+        if (saved !== false) close();
+        else save.disabled = false;
+      })
+      .catch(async (error) => {
+        save.disabled = false;
+        const reconciled = await reconcileAccountProxyBindingConflict(modal, save.dataset.accountProxyPickerSave || "", error);
+        showMsg("socialMsg", reconciled ? "代理绑定已更新，请重新选择。" : (error.detail || error.message || "代理绑定失败"), false);
+      });
+  });
+  modal.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") close();
+  });
+}
+
+function renderAccountProxyPickerPanel(account = null) {
+  const proxyId = String(account?.proxy_id || "").trim();
+  return `<section class="account-residential-proxy account-proxy-picker-panel">
+    <div class="account-residential-proxy-head">
+      <div><strong>代理 IP</strong><span data-account-proxy-selection-summary>${esc(proxyId ? accountResidentialProxyLabel(account) : "未使用代理 IP")}</span></div>
+      <button type="button" data-account-proxy-inline-toggle aria-expanded="false">${proxyId ? "切换代理" : "选择代理"}</button>
+    </div>
+    <div class="account-proxy-inline-options" data-account-proxy-inline-options hidden>
+      ${accountProxyOptionCardsHtml(proxyId, { scope: "edit" })}
+    </div>
+  </section>`;
+}
+
 function openAccountPoolEditModal(accountId = "") {
   const account = accountPoolAccounts().find((item) => String(item.id || "") === String(accountId || ""))
     || state.socialAccounts.find((item) => String(item.id || "") === String(accountId || ""));
@@ -16310,6 +16529,8 @@ function openAccountPoolEditModal(accountId = "") {
   const modal = document.createElement("div");
   modal.id = "consoleModal";
   modal.className = "console-modal";
+  modal.dataset.selectedProxyId = String(account.proxy_id || "").trim();
+  modal.dataset.originalProxyId = String(account.proxy_id || "").trim();
   modal.dataset.accountProxyDirty = "false";
   modal.innerHTML = `
     <div class="console-modal-backdrop" data-account-pool-edit-cancel></div>
@@ -16335,7 +16556,7 @@ function openAccountPoolEditModal(accountId = "") {
               <input id="accountPoolEditDisplayName" value="${esc(account.display_name || "")}" placeholder="用于区分账号，可留空" autocomplete="off" />
             </label>
           </div>
-          ${accountResidentialProxyFormHtml("accountPoolEdit", accountResidentialProxy(account))}
+          ${renderAccountProxyPickerPanel(account)}
         </div>
       </div>
       <div class="console-modal-actions">
@@ -16344,7 +16565,6 @@ function openAccountPoolEditModal(accountId = "") {
       </div>
     </section>`;
   document.body.appendChild(modal);
-  syncAccountResidentialProxyFields("accountPoolEdit");
   $("accountPoolEditUsername")?.focus();
   const close = () => {
     clearAccountPasswordReveal(account.id, "pool-edit");
@@ -16361,12 +16581,18 @@ function openAccountPoolEditModal(accountId = "") {
       close();
       return;
     }
-    const testButton = event.target.closest("[data-proxy-inline-test]");
-    if (testButton) {
-      testButton.disabled = true;
-      testProxyForm("accountPoolEditProxy", accountResidentialProxy(account))
-        .catch((error) => showMsg("socialMsg", error.detail || error.message || "代理检测失败", false))
-        .finally(() => { testButton.disabled = false; });
+    const toggle = event.target.closest("[data-account-proxy-inline-toggle]");
+    if (toggle) {
+      const options = modal.querySelector("[data-account-proxy-inline-options]");
+      const expanded = toggle.getAttribute("aria-expanded") === "true";
+      toggle.setAttribute("aria-expanded", expanded ? "false" : "true");
+      if (options) options.hidden = expanded;
+      return;
+    }
+    const choice = event.target.closest("[data-account-proxy-choice]");
+    if (choice) {
+      if (choice.disabled) return;
+      updateAccountProxyChoice(modal, choice.dataset.accountProxyChoice || "");
       return;
     }
     const saveButton = event.target.closest("[data-account-pool-edit-save]");
@@ -16377,22 +16603,15 @@ function openAccountPoolEditModal(accountId = "") {
         if (saved !== false) close();
         else saveButton.disabled = false;
       })
-      .catch((error) => {
+      .catch(async (error) => {
         saveButton.disabled = false;
-        showMsg("socialMsg", error.detail || error.message || "保存账号失败", false);
+        const reconciled = await reconcileAccountProxyBindingConflict(modal, saveButton.dataset.accountPoolEditSave || "", error);
+        showMsg("socialMsg", reconciled ? "代理绑定已更新，其他编辑内容仍保留，请确认后重新保存。" : (error.detail || error.message || "保存账号失败"), false);
       });
   });
   modal.addEventListener("input", (event) => {
     const passwordInput = event.target.closest?.("[data-account-password-input]");
     if (passwordInput) passwordInput.dataset.passwordDirty = "true";
-    if (event.target.closest?.("#accountPoolEditProxyFields")) modal.dataset.accountProxyDirty = "true";
-  });
-  modal.addEventListener("change", (event) => {
-    if (event.target.closest('[data-account-proxy-enabled="accountPoolEdit"]')) {
-      modal.dataset.accountProxyDirty = "true";
-      syncAccountResidentialProxyFields("accountPoolEdit");
-    }
-    if (event.target.closest?.("#accountPoolEditProxyFields")) modal.dataset.accountProxyDirty = "true";
   });
   modal.addEventListener("keydown", (event) => {
     if (event.key === "Escape") close();
@@ -16416,27 +16635,13 @@ async function saveAccountPoolEditForm(accountId = "") {
   const loginPasswordInput = $("accountPoolEditLoginPassword");
   const loginPassword = loginPasswordInput?.dataset.passwordDirty === "true" ? String(loginPasswordInput.value || "") : "";
   if (loginPassword) payload.login_password = loginPassword;
-  const existingProxy = accountResidentialProxy(account);
-  const proxyEnabled = Boolean($("accountPoolEditProxyEnabled")?.checked);
-  const proxyFieldsDirty = $("consoleModal")?.dataset.accountProxyDirty === "true";
-  let residentialProxy;
-  if (proxyEnabled && (proxyFieldsDirty || !existingProxy)) {
-    residentialProxy = accountResidentialProxyPayload("accountPoolEdit", username, existingProxy);
-    if (!residentialProxy) return false;
-    const preflight = await testProxyConfiguration(
-      residentialProxy,
-      account?.proxy_id || existingProxy?.id || "",
-      "accountPoolEditProxyCheckResult",
-      "accountPoolEditProxy",
-    );
-    if (!preflight.ok) {
-      showMsg("socialMsg", preflight.error || "静态住宅代理检测未通过，修改尚未保存。", false);
-      return false;
-    }
-    payload.residential_proxy = residentialProxy;
-  }
-  if (!proxyEnabled && String(account?.proxy_id || "").trim()) {
-    payload.clear_residential_proxy = true;
+  const editModal = $("consoleModal");
+  const selectedProxyId = String(editModal?.dataset.selectedProxyId || "").trim();
+  const originalProxyId = String(editModal?.dataset.originalProxyId || account?.proxy_id || "").trim();
+  if (accountProxyBindingChanged(originalProxyId, selectedProxyId)) {
+    payload.expected_proxy_id = originalProxyId;
+    if (selectedProxyId) payload.proxy_id = selectedProxyId;
+    else payload.clear_residential_proxy = true;
   }
   const result = await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(cleanId)}`, {
     method: "PATCH",
@@ -16444,18 +16649,10 @@ async function saveAccountPoolEditForm(accountId = "") {
     body: JSON.stringify(payload),
   });
   state.accountPoolAccountId = String(result.account?.id || cleanId);
-  let proxyOk = true;
-  if (residentialProxy) {
-    try {
-      proxyOk = await verifyAccountResidentialProxy(result.account?.proxy_id);
-    } catch (_error) {
-      proxyOk = false;
-    }
-  }
   await loadSocial({ force: true });
   renderSocialAccounts();
   if (isPersonaWorkspaceModule()) renderPersonaDetail();
-  showMsg("socialMsg", proxyOk ? "账号资料已保存。" : "账号资料已保存，但住宅代理检测失败；修复代理前不会执行自动化任务。", proxyOk);
+  showMsg("socialMsg", "账号资料已保存。", true);
   return true;
 }
 
@@ -16856,6 +17053,7 @@ function setAccountBrowserPanel(panel = "accounts") {
   if (normalized !== "accounts") resetAccountPoolCreateForm();
   state.accountBrowserPanel = normalized;
   syncAccountBrowserPanel();
+  if ($("moduleMenu")) syncModuleMenuState();
   if (normalized === "browsers") renderLiveBrowserSessions();
   else $("liveBrowserSessions")?.replaceChildren();
 }
@@ -16865,6 +17063,9 @@ function syncAccountBrowserPanel() {
   if (active !== "accounts" && state.accountPoolCreateOpen) resetAccountPoolCreateForm();
   const shell = $("accountBrowserShell");
   if (shell) shell.dataset.accountBrowserPanel = active;
+  if (state.view === "accounts" && $("viewTitle")) {
+    $("viewTitle").textContent = active === "browsers" ? "浏览器列表" : "账号管理自动化";
+  }
   const refreshButton = $("refreshAccounts");
   if (refreshButton) {
     const label = active === "proxies" ? "刷新代理" : (active === "browsers" ? "刷新浏览器" : "刷新账号");
@@ -18016,6 +18217,9 @@ function bindEvents() {
       if (nextView !== state.view && !(await confirmLeaveTransientWorkspaceState())) return;
       setMenuClickHighlight(viewButton, viewButton.closest(".module-accordion-item") || viewButton);
       state.workspaceMenuOpen = true;
+      if (nextView === "accounts") {
+        setAccountBrowserPanel(viewButton.dataset.workspacePanel || "accounts");
+      }
       setView(nextView);
       return;
     }
@@ -19792,6 +19996,11 @@ function bindEvents() {
       openAccountPoolEditModal(accountEdit.dataset.accountPoolEdit || "");
       return;
     }
+    const accountProxyPicker = event.target.closest("[data-account-proxy-picker]");
+    if (accountProxyPicker) {
+      openAccountProxyPickerModal(accountProxyPicker.dataset.accountProxyPicker || "");
+      return;
+    }
     const openLogin = event.target.closest("[data-social-open-login]");
     if (openLogin) {
       const accountId = String(openLogin.dataset.socialOpenLogin || "").trim();
@@ -19801,7 +20010,7 @@ function bindEvents() {
       return;
     }
     const accountCard = event.target.closest("[data-account-pool-account]");
-    const accountAction = event.target.closest("[data-social-open-login], [data-account-pool-edit], [data-account-pool-unbind], [data-social-delete-account], .account-pool-card-check");
+    const accountAction = event.target.closest("[data-social-open-login], [data-account-proxy-picker], [data-account-pool-edit], [data-account-pool-unbind], [data-social-delete-account], .account-pool-card-check");
     if (accountCard && !accountAction) {
       selectAccountPoolAccount(accountCard.dataset.accountPoolAccount || "");
       renderSocialAccounts();
@@ -19962,6 +20171,12 @@ function bindEvents() {
     }
     if (event.target.closest("#saveConsoleSettings")) saveConsoleSettingsPage();
   });
+  $("consoleSettingsBody").addEventListener("input", (event) => {
+    if (event.target.closest("[data-browser-preference-field]")) updateBrowserPreferencesDraft();
+  });
+  $("consoleSettingsBody").addEventListener("change", (event) => {
+    if (event.target.closest("[data-browser-preference-field]")) updateBrowserPreferencesDraft();
+  });
 }
 
 let identityRevalidationEventsBound = false;
@@ -20016,9 +20231,3 @@ async function init() {
 init().catch((error) => {
   appendEvent("error", error.detail || error.message || "控制台初始化失败");
 });
-  $("consoleSettingsBody").addEventListener("input", (event) => {
-    if (event.target.closest("[data-browser-preference-field]")) updateBrowserPreferencesDraft();
-  });
-  $("consoleSettingsBody").addEventListener("change", (event) => {
-    if (event.target.closest("[data-browser-preference-field]")) updateBrowserPreferencesDraft();
-  });

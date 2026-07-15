@@ -263,6 +263,7 @@ class SocialAccountPatchPayload(BaseModel):
     display_name: str | None = None
     profile_dir: str | None = None
     proxy_id: str | None = None
+    expected_proxy_id: str | None = None
     status: str | None = None
     login_username: str | None = None
     login_password: str | None = None
@@ -1958,7 +1959,39 @@ def update_social_proxy(proxy_id: str, payload: SocialProxyPatchPayload) -> dict
         if payload.expires_at is not None:
             updates["expires_at"] = int(payload.expires_at)
         connection_fields = {"proxy_type", "host", "port", "username", "password"}
-        if connection_fields.intersection(updates):
+        changed_connection_fields = {
+            field
+            for field in connection_fields.intersection(updates)
+            if updates[field] != current[field]
+        }
+        execution_fields = connection_fields | {"ip_type", "expires_at"}
+        changed_execution_fields = {
+            field
+            for field in execution_fields.intersection(updates)
+            if updates[field] != current[field]
+        }
+        requested_status_change = (
+            payload.status is not None
+            and str(payload.status or "").strip().lower() != str(current["status"] or "").strip().lower()
+        )
+        if changed_execution_fields or requested_status_change:
+            active_task = conn.execute(
+                """
+                SELECT task.id
+                FROM social_automation_tasks AS task
+                INNER JOIN social_accounts AS account ON account.id = task.account_id
+                WHERE account.proxy_id = ?
+                  AND task.status IN ('preparing', 'queued', 'running', 'need_manual')
+                LIMIT 1
+                """,
+                (clean_proxy_id,),
+            ).fetchone()
+            if active_task:
+                raise HTTPException(
+                    status_code=409,
+                    detail="代理正在被自动化任务使用，请停止任务后再修改执行配置",
+                )
+        if changed_connection_fields:
             updates["country"] = ""
             updates["region"] = ""
             updates["city"] = ""
@@ -2501,18 +2534,26 @@ def update_social_account(account_id: str, payload: SocialAccountPatchPayload) -
         owner_user_id = int(existing["user_id"] or 0)
         current_proxy_id = str(existing["proxy_id"] or "").strip()
         target_proxy_id = str(updates.get("proxy_id", current_proxy_id) or "").strip()
+        proxy_binding_requested = (
+            payload.proxy_id is not None
+            or bool(payload.clear_residential_proxy)
+            or payload.residential_proxy is not None
+        )
+        if proxy_binding_requested and payload.expected_proxy_id is not None:
+            expected_proxy_id = str(payload.expected_proxy_id or "").strip()
+            if current_proxy_id != expected_proxy_id:
+                raise HTTPException(status_code=409, detail="账号代理绑定已变更，请刷新后重试")
         proxy_binding_changes = target_proxy_id != current_proxy_id or payload.residential_proxy is not None
         if proxy_binding_changes:
             active_proxy_task = conn.execute(
                 """
                 SELECT id
                 FROM social_automation_tasks
-                WHERE user_id = ?
-                  AND account_id = ?
+                WHERE account_id = ?
                   AND status IN ('preparing', 'queued', 'running', 'need_manual')
                 LIMIT 1
                 """,
-                (owner_user_id, account_id),
+                (account_id,),
             ).fetchone()
             if active_proxy_task:
                 raise HTTPException(status_code=409, detail="账号有进行中的自动化任务，请停止任务后再切换代理 IP")
@@ -2573,8 +2614,14 @@ def update_social_account(account_id: str, payload: SocialAccountPatchPayload) -
             ).fetchone()
             if duplicate:
                 raise HTTPException(status_code=409, detail="同平台未绑定账号用户名重复")
-        if updates.get("proxy_id"):
-            _require_proxy(conn, updates["proxy_id"], owner_user_id=owner_user_id)
+        if target_proxy_id and proxy_binding_changes and payload.residential_proxy is None:
+            proxy = _require_proxy(conn, target_proxy_id, owner_user_id=owner_user_id)
+            if _proxy_is_expired(proxy):
+                raise HTTPException(status_code=409, detail="静态住宅代理已过期，请续费或更换后再绑定")
+            if str(proxy["status"] or "").strip().lower() != "active":
+                raise HTTPException(status_code=409, detail="代理不可用，请先启用、修复或重新检测")
+            if not _proxy_has_verified_check(proxy):
+                raise HTTPException(status_code=409, detail="代理尚未通过真实网络检测，请先检测后再绑定")
         proxy_row = None
         if payload.residential_proxy is not None:
             proxy_row = _save_account_residential_proxy(
@@ -4697,18 +4744,19 @@ def _log_public(row: Any) -> dict[str, Any]:
     }
 
 
-def _require_proxy(conn, proxy_id: str, *, owner_user_id: int | None = None) -> None:
+def _require_proxy(conn, proxy_id: str, *, owner_user_id: int | None = None) -> Any:
     if owner_user_id is None:
-        row = conn.execute("SELECT id, ip_type FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
+        row = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
     else:
         row = conn.execute(
-            "SELECT id, ip_type FROM social_proxies WHERE id = ? AND user_id = ?",
+            "SELECT * FROM social_proxies WHERE id = ? AND user_id = ?",
             (proxy_id, int(owner_user_id)),
         ).fetchone()
     if row and str(row["ip_type"] or "").strip().lower() != "static_residential":
         raise HTTPException(status_code=400, detail="账号仅允许绑定静态住宅 IP")
     if not row:
         raise HTTPException(status_code=404, detail="绑定代理不存在")
+    return row
 
 
 def _proxy_is_expired(proxy: Any) -> bool:

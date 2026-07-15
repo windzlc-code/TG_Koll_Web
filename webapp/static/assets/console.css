@@ -7607,29 +7607,30 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .toast-host {
   position: fixed;
-  top: 16px;
-  right: 16px;
+  left: 50%;
+  bottom: 22px;
   z-index: 9000;
   display: grid;
-  gap: 6px;
-  width: min(360px, calc(100vw - 32px));
+  gap: 8px;
+  width: min(560px, calc(100vw - 32px));
   pointer-events: none;
+  transform: translateX(-50%);
 }
 
 .toast-message {
   --toast-state-color: var(--ink);
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 24px;
+  grid-template-columns: minmax(0, 1fr) 30px;
   align-items: center;
-  gap: 8px;
-  min-height: 44px;
-  padding: 10px 8px 10px 14px;
-  border: 1px solid var(--line);
+  gap: 12px;
+  min-height: 64px;
+  padding: 18px 12px 18px 20px;
+  border: 2px solid var(--line);
   border-radius: 8px;
   background: color-mix(in srgb, var(--panel-solid) 82%, #d7dee7);
   color: var(--ink);
-  box-shadow: none;
+  box-shadow: 0 12px 34px color-mix(in srgb, var(--ink) 14%, transparent);
   pointer-events: auto;
   animation: toastSlideIn 180ms ease-out;
   overflow: hidden;
@@ -7683,14 +7684,14 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .toast-message.is-switching-out {
   opacity: 0;
-  transform: translateY(-5px) scale(.985);
+  transform: translateY(8px) scale(.985);
   transition: opacity 120ms ease-in, transform 120ms ease-in;
   pointer-events: none;
 }
 
 .toast-message.is-replacing-out {
   opacity: 0;
-  transform: translateY(-7px) scale(.985);
+  transform: translateY(10px) scale(.985);
   transition: opacity 180ms cubic-bezier(.4, 0, 1, 1), transform 180ms cubic-bezier(.4, 0, 1, 1);
   pointer-events: none;
 }
@@ -7705,15 +7706,15 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .toast-message.is-leaving {
   opacity: 0;
-  transform: translateX(16px);
+  transform: translateY(16px);
   transition: opacity 160ms ease, transform 160ms ease;
 }
 
 .toast-message-text {
   min-width: 0;
-  font-size: 15px;
+  font-size: 16px;
   line-height: 1.5;
-  font-weight: 400;
+  font-weight: 650;
   overflow-wrap: anywhere;
 }
 
@@ -7725,9 +7726,9 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .toast-message-close {
-  width: 24px;
-  min-width: 24px;
-  min-height: 24px;
+  width: 30px;
+  min-width: 30px;
+  min-height: 30px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -7745,11 +7746,11 @@ body.persona-touch-dragging .persona-list-card:active {
 @keyframes toastSlideIn {
   from {
     opacity: 0;
-    transform: translateX(18px);
+    transform: translateY(18px);
   }
   to {
     opacity: 1;
-    transform: translateX(0);
+    transform: translateY(0);
   }
 }
 
@@ -8459,6 +8460,10 @@ body.persona-touch-dragging .persona-list-card:active {
   background: var(--soft);
 }
 
+.account-browser-shell[data-account-browser-panel="browsers"] .account-browser-tabs {
+  display: none;
+}
+
 .account-browser-tabs button {
   min-height: 34px;
   padding: 0 18px;
@@ -8929,6 +8934,118 @@ body.persona-touch-dragging .persona-list-card:active {
 .account-residential-proxy-head .status {
   padding: 3px 8px;
   font-size: 11px;
+}
+
+.account-proxy-picker-modal {
+  width: min(880px, calc(100vw - 32px));
+}
+
+.account-proxy-picker-modal .console-modal-head > div,
+.account-proxy-picker-panel .account-residential-proxy-head > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.account-proxy-picker-modal .console-modal-head p,
+.account-proxy-picker-panel .account-residential-proxy-head span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.account-proxy-picker-panel .account-residential-proxy-head button {
+  flex: 0 0 auto;
+}
+
+.account-proxy-inline-options[hidden] {
+  display: none;
+}
+
+.account-proxy-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr));
+  gap: 10px;
+  align-items: stretch;
+}
+
+.account-proxy-option {
+  position: relative;
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  min-width: 0;
+  min-height: 118px;
+  padding: 13px 42px 13px 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  text-align: left;
+  box-shadow: none;
+}
+
+.account-proxy-option:hover {
+  border-color: var(--ink);
+  background: var(--soft);
+}
+
+.account-proxy-option.is-selected {
+  border-color: var(--ink);
+  outline: 2px solid var(--ink);
+  outline-offset: -2px;
+  background: var(--soft);
+}
+
+.account-proxy-option strong,
+.account-proxy-option span,
+.account-proxy-option small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.account-proxy-option strong {
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+.account-proxy-option span {
+  font-size: 12px;
+  font-weight: 780;
+}
+
+.account-proxy-option small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.account-proxy-option-check {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--line-strong, var(--line));
+  border-radius: 50%;
+  background: var(--surface);
+}
+
+.account-proxy-option.is-selected .account-proxy-option-check {
+  border-color: var(--ink);
+  background: var(--ink);
+}
+
+.account-proxy-option.is-selected .account-proxy-option-check::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 2px;
+  width: 5px;
+  height: 10px;
+  border: solid var(--surface);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
 }
 
 .account-proxy-enable {

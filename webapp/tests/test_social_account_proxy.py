@@ -70,16 +70,16 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
             )
         )
 
-    def _claimed_task(self, task_id: str, account_id: str):
+    def _claimed_task(self, task_id: str, account_id: str, *, status: str = "running", user_id: int = 0):
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 """
                 INSERT INTO social_automation_tasks(
                   id, user_id, persona_id, account_id, platform, task_type,
                   priority, status, payload_json, result_json, created_at, updated_at
-                ) VALUES (?, 0, '', ?, 'threads', 'check_login', 50, 'running', '{}', '{}', 1, 1)
+                ) VALUES (?, ?, '', ?, 'threads', 'check_login', 50, ?, '{}', '{}', 1, 1)
                 """,
-                (task_id, account_id),
+                (task_id, user_id, account_id, status),
             )
         return {"id": task_id, "account_id": account_id, "task_type": "check_login"}
 
@@ -554,6 +554,215 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as missing_error:
             social_api.delete_social_proxy(proxy["id"])
         self.assertEqual(missing_error.exception.status_code, 404)
+
+    def test_proxy_switch_is_blocked_for_every_active_task_status(self):
+        for status in ("preparing", "queued", "running", "need_manual"):
+            with self.subTest(status=status):
+                status_slug = status.replace("_", "-")
+                account = self._account(
+                    f"proxy-switch-{status}",
+                    proxy=social_api.ResidentialProxyPayload(**self._proxy(host=f"first-{status_slug}.example")),
+                )
+                replacement = social_api.create_social_proxy(
+                    social_api.SocialProxyPayload(
+                        name=f"replacement-{status}",
+                        proxy_type="socks5",
+                        host=f"second-{status_slug}.example",
+                        port=1080,
+                        ip_type="static_residential",
+                    )
+                )
+                self._mark_proxy_verified(replacement["id"])
+                task = self._claimed_task(f"{status}-proxy-switch", account["id"], status=status)
+
+                with self.assertRaises(HTTPException) as switch_error:
+                    social_api.update_social_account(
+                        account["id"],
+                        social_api.SocialAccountPatchPayload(proxy_id=replacement["id"]),
+                    )
+                self.assertEqual(switch_error.exception.status_code, 409)
+
+                with self.assertRaises(HTTPException) as clear_error:
+                    social_api.update_social_account(
+                        account["id"],
+                        social_api.SocialAccountPatchPayload(clear_residential_proxy=True),
+                    )
+                self.assertEqual(clear_error.exception.status_code, 409)
+
+                with sqlite3.connect(self.db_path) as conn:
+                    conn.execute(
+                        "UPDATE social_automation_tasks SET status = 'success' WHERE id = ?",
+                        (task["id"],),
+                    )
+
+                updated = social_api.update_social_account(
+                    account["id"],
+                    social_api.SocialAccountPatchPayload(proxy_id=replacement["id"]),
+                )
+                self.assertEqual(updated["proxy_id"], replacement["id"])
+
+    def test_proxy_switch_guard_catches_legacy_zero_user_task(self):
+        account = self._account("legacy-task-owner")
+        replacement = social_api.create_social_proxy(
+            social_api.SocialProxyPayload(host="legacy-replacement.example", port=8080)
+        )
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO users(id, username, password_hash, created_at, updated_at) VALUES (41, 'legacy-owner', 'x', 1, 1)"
+            )
+            conn.execute("UPDATE social_accounts SET user_id = 41 WHERE id = ?", (account["id"],))
+            conn.execute("DROP TRIGGER trg_social_tasks_integrity_insert")
+        try:
+            self._claimed_task("legacy-zero-user-task", account["id"], status="queued", user_id=0)
+        finally:
+            init_db()
+
+        with self.assertRaises(HTTPException) as caught:
+            social_api.update_social_account(
+                account["id"],
+                social_api.SocialAccountPatchPayload(proxy_id=replacement["id"]),
+            )
+        self.assertEqual(caught.exception.status_code, 409)
+        self.assertIn("自动化任务", caught.exception.detail)
+
+    def test_proxy_connection_update_is_blocked_but_metadata_edit_is_allowed_during_active_task(self):
+        for status in ("preparing", "queued", "running", "need_manual"):
+            with self.subTest(status=status):
+                status_slug = status.replace("_", "-")
+                proxy = social_api.create_social_proxy(
+                    social_api.SocialProxyPayload(
+                        name=f"active-{status}", host=f"active-{status_slug}.example", port=8080
+                    )
+                )
+                self._mark_proxy_verified(proxy["id"])
+                account = self._account(f"proxy-edit-{status}")
+                with sqlite3.connect(self.db_path) as conn:
+                    conn.execute("UPDATE social_accounts SET proxy_id = ? WHERE id = ?", (proxy["id"], account["id"]))
+                self._claimed_task(f"proxy-edit-{status}", account["id"], status=status)
+
+                with self.assertRaises(HTTPException) as caught:
+                    social_api.update_social_proxy(
+                        proxy["id"],
+                        social_api.SocialProxyPatchPayload(host=f"changed-{status_slug}.example"),
+                    )
+                self.assertEqual(caught.exception.status_code, 409)
+
+                metadata = social_api.update_social_proxy(
+                    proxy["id"],
+                    social_api.SocialProxyPatchPayload(
+                        name=f"renamed-{status}",
+                        note="metadata-only",
+                        host=f"active-{status_slug}.example",
+                        port=8080,
+                    ),
+                )
+                self.assertEqual(metadata["name"], f"renamed-{status}")
+                self.assertEqual(metadata["note"], "metadata-only")
+                self.assertEqual(metadata["status"], "active")
+
+                with self.assertRaises(HTTPException) as expiry_change:
+                    social_api.update_social_proxy(
+                        proxy["id"],
+                        social_api.SocialProxyPatchPayload(expires_at=9999999999),
+                    )
+                self.assertEqual(expiry_change.exception.status_code, 409)
+
+    def test_proxy_binding_rejects_unusable_proxy_and_accepts_verified_active_proxy(self):
+        account = self._account("binding-validation")
+        expired = social_api.create_social_proxy(
+            social_api.SocialProxyPayload(host="expired.example", port=8080, expires_at=1)
+        )
+        self._mark_proxy_verified(expired["id"])
+        inactive = social_api.create_social_proxy(
+            social_api.SocialProxyPayload(host="inactive.example", port=8080)
+        )
+        self._mark_proxy_verified(inactive["id"])
+        unverified = social_api.create_social_proxy(
+            social_api.SocialProxyPayload(host="unverified.example", port=8080)
+        )
+        valid = social_api.create_social_proxy(
+            social_api.SocialProxyPayload(host="valid.example", port=8080)
+        )
+        self._mark_proxy_verified(valid["id"])
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("UPDATE social_proxies SET status = 'failed' WHERE id = ?", (inactive["id"],))
+            conn.execute("UPDATE social_proxies SET status = 'active' WHERE id = ?", (unverified["id"],))
+
+        for proxy, message in (
+            (expired, "已过期"),
+            (inactive, "不可用"),
+            (unverified, "尚未通过真实网络检测"),
+        ):
+            with self.subTest(proxy=proxy["id"]):
+                with self.assertRaises(HTTPException) as caught:
+                    social_api.update_social_account(
+                        account["id"],
+                        social_api.SocialAccountPatchPayload(proxy_id=proxy["id"]),
+                    )
+                self.assertEqual(caught.exception.status_code, 409)
+                self.assertIn(message, caught.exception.detail)
+
+        updated = social_api.update_social_account(
+            account["id"],
+            social_api.SocialAccountPatchPayload(proxy_id=valid["id"], expected_proxy_id=""),
+        )
+        self.assertEqual(updated["proxy_id"], valid["id"])
+
+    def test_invalid_legacy_binding_remains_readable_editable_and_clearable(self):
+        proxy = social_api.create_social_proxy(
+            social_api.SocialProxyPayload(host="legacy-invalid.example", port=8080)
+        )
+        account = self._account("legacy-invalid-binding")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("UPDATE social_accounts SET proxy_id = ? WHERE id = ?", (proxy["id"], account["id"]))
+
+        self.assertEqual(social_api.get_social_account(account["id"])["proxy_id"], proxy["id"])
+        edited = social_api.update_social_account(
+            account["id"],
+            social_api.SocialAccountPatchPayload(display_name="Legacy readable"),
+        )
+        self.assertEqual(edited["display_name"], "Legacy readable")
+        cleared = social_api.update_social_account(
+            account["id"],
+            social_api.SocialAccountPatchPayload(
+                clear_residential_proxy=True,
+                expected_proxy_id=proxy["id"],
+            ),
+        )
+        self.assertEqual(cleared["proxy_id"], "")
+
+    def test_proxy_binding_optimistic_concurrency_rejects_stale_and_accepts_match(self):
+        first = social_api.create_social_proxy(
+            social_api.SocialProxyPayload(host="optimistic-first.example", port=8080)
+        )
+        second = social_api.create_social_proxy(
+            social_api.SocialProxyPayload(host="optimistic-second.example", port=8080)
+        )
+        self._mark_proxy_verified(first["id"])
+        self._mark_proxy_verified(second["id"])
+        account = self._account("optimistic-binding")
+        bound = social_api.update_social_account(
+            account["id"],
+            social_api.SocialAccountPatchPayload(proxy_id=first["id"], expected_proxy_id=""),
+        )
+
+        with self.assertRaises(HTTPException) as stale:
+            social_api.update_social_account(
+                account["id"],
+                social_api.SocialAccountPatchPayload(proxy_id=second["id"], expected_proxy_id=""),
+            )
+        self.assertEqual(stale.exception.status_code, 409)
+        self.assertIn("已变更", stale.exception.detail)
+        self.assertEqual(social_api.get_social_account(account["id"])["proxy_id"], bound["proxy_id"])
+
+        updated = social_api.update_social_account(
+            account["id"],
+            social_api.SocialAccountPatchPayload(
+                proxy_id=second["id"],
+                expected_proxy_id=first["id"],
+            ),
+        )
+        self.assertEqual(updated["proxy_id"], second["id"])
 
     def test_proxy_schema_migrates_existing_table_with_metadata_defaults(self):
         legacy_path = self.root / "legacy.db"
