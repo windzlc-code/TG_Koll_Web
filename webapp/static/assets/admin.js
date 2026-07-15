@@ -41,6 +41,7 @@ function setAdminMobileNavOpen(open, { restoreFocus = false } = {}) {
   if (main) main.inert = nextOpen;
   backdrop.hidden = !nextOpen;
   if (nextOpen) {
+    setAdminProfileMenuOpen(false);
     const focusTarget = drawer.querySelector("[data-page].is-active") || drawer.querySelector("[data-page]");
     window.requestAnimationFrame(() => focusTarget?.focus({ preventScroll: true }));
   } else if (shouldRestoreFocus) {
@@ -78,6 +79,54 @@ function bindAdminMobileNavigation() {
   if (typeof adminMobileNavMedia?.addEventListener === "function") adminMobileNavMedia.addEventListener("change", syncMode);
   else adminMobileNavMedia?.addListener?.(syncMode);
   setAdminMobileNavOpen(false);
+}
+
+function setAdminProfileMenuOpen(open, { restoreFocus = false } = {}) {
+  const toggle = el("adminProfileToggle");
+  const panel = el("adminProfilePanel");
+  if (!toggle || !panel) return;
+  const nextOpen = Boolean(open);
+  const shouldRestoreFocus = Boolean(!nextOpen && restoreFocus && panel.contains(document.activeElement));
+  toggle.setAttribute("aria-expanded", nextOpen ? "true" : "false");
+  toggle.setAttribute("aria-label", nextOpen ? "关闭管理员中心" : "打开管理员中心");
+  panel.hidden = !nextOpen;
+  panel.setAttribute("aria-hidden", nextOpen ? "false" : "true");
+  if (nextOpen) {
+    window.requestAnimationFrame(() => el("btnAdminAccountSettings")?.focus({ preventScroll: true }));
+  } else if (shouldRestoreFocus) {
+    toggle.focus({ preventScroll: true });
+  }
+}
+
+function bindAdminProfileMenu() {
+  const shell = el("adminProfileMenu");
+  const toggle = el("adminProfileToggle");
+  const panel = el("adminProfilePanel");
+  if (!shell || !toggle || !panel) return;
+  toggle.addEventListener("click", () => {
+    setAdminProfileMenuOpen(toggle.getAttribute("aria-expanded") !== "true", { restoreFocus: true });
+  });
+  el("adminProfileClose")?.addEventListener("click", () => {
+    setAdminProfileMenuOpen(false, { restoreFocus: true });
+  });
+  el("btnAdminAccountSettings")?.addEventListener("click", () => {
+    const changed = setActiveAdminPage("account");
+    if (changed !== false) {
+      setAdminProfileMenuOpen(false);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  });
+  document.addEventListener("click", (event) => {
+    if (toggle.getAttribute("aria-expanded") === "true" && !shell.contains(event.target)) {
+      setAdminProfileMenuOpen(false);
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && toggle.getAttribute("aria-expanded") === "true") {
+      event.preventDefault();
+      setAdminProfileMenuOpen(false, { restoreFocus: true });
+    }
+  });
 }
 
 const SENSITIVE_RUNTIME_INPUT_IDS = [
@@ -2062,8 +2111,31 @@ async function ensureAdmin() {
     return null;
   }
   el("adminName").textContent = me.username;
+  setText("adminSessionName", me.username || "管理员");
+  setText("adminSessionId", me.id ? `#${me.id}` : "-");
+  setText("adminSessionCreatedAt", formatTime(me.created_at));
   if (el("accCurrentUsername")) el("accCurrentUsername").value = me.username || "";
   return me;
+}
+
+async function logoutAdmin() {
+  const button = el("btnAdminLogout");
+  const message = el("adminLogoutMsg");
+  if (!button || button.disabled) return;
+  const idleText = button.textContent;
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  button.textContent = "正在退出...";
+  if (message) message.textContent = "";
+  try {
+    await api("/api/auth/logout", { method: "POST" });
+    window.location.replace("/admin");
+  } catch (err) {
+    if (message) message.textContent = getErrorMessage(err);
+    button.disabled = false;
+    button.removeAttribute("aria-busy");
+    button.textContent = idleText;
+  }
 }
 
 function runtimeFormToPayload() {
@@ -3986,6 +4058,7 @@ function bindActions() {
   bindModelTabs();
   bindTextModelContentTabs();
   bindRunningHubSlotTabs();
+  el("btnAdminLogout")?.addEventListener("click", logoutAdmin);
   el("btnSaveRuntime").addEventListener("click", async () => {
     setMsg("runtimeMsg", "");
     try {
@@ -4658,6 +4731,7 @@ function bindTextModelContentTabs() {
 
 window.addEventListener("DOMContentLoaded", async () => {
   bindAdminMobileNavigation();
+  bindAdminProfileMenu();
   try {
     const me = await ensureAdmin();
     if (!me) return;

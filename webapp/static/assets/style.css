@@ -8749,6 +8749,381 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
     transition: none;
   }
 }
+
+.page-admin .admin-profile-menu {
+  position: fixed;
+  top: 14px;
+  right: 18px;
+  z-index: 80;
+}
+
+.page-admin .admin-profile-toggle {
+  position: relative;
+  display: grid;
+  width: 46px;
+  min-width: 46px;
+  height: 46px;
+  min-height: 46px;
+  place-items: center;
+  padding: 0;
+  color: #173c38;
+  border: 1px solid #c8d8d4;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 8px 24px rgba(10, 35, 32, 0.12);
+}
+
+.page-admin .admin-profile-toggle:hover,
+.page-admin .admin-profile-toggle[aria-expanded="true"] {
+  color: #087b68;
+  border-color: #5de29b;
+  background: #f5fffb;
+}
+
+.page-admin .admin-profile-toggle svg {
+  width: 23px;
+  height: 23px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.page-admin .admin-profile-online {
+  position: absolute;
+  right: 1px;
+  bottom: 2px;
+  width: 10px;
+  height: 10px;
+  border: 2px solid #ffffff;
+  border-radius: 50%;
+  background: #31c985;
+}
+
+.page-admin .admin-profile-panel {
+  position: absolute;
+  top: 56px;
+  right: 0;
+  display: grid;
+  width: min(310px, calc(100vw - 28px));
+  max-height: calc(100dvh - 84px);
+  gap: 11px;
+  padding: 12px;
+  overflow-y: auto;
+  color: #effff9;
+  border: 1px solid rgba(117, 241, 211, 0.22);
+  border-radius: 10px;
+  background: rgba(5, 18, 17, 0.985);
+  box-shadow: 0 24px 64px rgba(3, 18, 16, 0.28);
+}
+
+.page-admin .admin-profile-panel[hidden] {
+  display: none;
+}
+
+.page-admin .admin-profile-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 1px 1px 10px;
+  border-bottom: 1px solid rgba(218, 255, 243, 0.13);
+}
+
+.page-admin .admin-profile-panel-head > div {
+  display: grid;
+  gap: 1px;
+}
+
+.page-admin .admin-profile-panel-head span {
+  color: rgba(237, 255, 249, 0.56);
+  font-size: 10px;
+}
+
+.page-admin .admin-profile-panel-head strong {
+  color: #ffffff;
+  font-size: 16px;
+}
+
+.page-admin #adminProfileClose {
+  display: grid;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  place-items: center;
+  padding: 0;
+  color: rgba(237, 255, 249, 0.78);
+  border: 1px solid rgba(218, 255, 243, 0.16);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 20px;
+  line-height: 1;
+}
+
+.page-admin .admin-session-card {
+  display: grid;
+  gap: 5px;
+  padding: 11px;
+  color: #effff9;
+  border: 1px solid rgba(117, 241, 211, 0.18);
+  border-radius: 7px;
+  background: rgba(12, 154, 154, 0.09);
+}
+
+.page-admin .admin-session-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: rgba(237, 255, 249, 0.64);
+  font-size: 10px;
+}
+
+.page-admin .admin-session-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #8ff0bd;
+  font-weight: 800;
+}
+
+.page-admin .admin-session-state i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #5de29b;
+  box-shadow: 0 0 0 3px rgba(93, 226, 155, 0.12);
+}
+
+.page-admin .admin-session-title {
+  margin-top: 2px;
+  color: rgba(237, 255, 249, 0.55);
+  font-size: 10px;
+}
+
+.page-admin .admin-session-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 15px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-admin .admin-session-meta {
+  display: grid;
+  gap: 2px;
+  color: rgba(237, 255, 249, 0.55);
+  font-size: 10px;
+}
+
+.page-admin .admin-session-meta span {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.page-admin .admin-session-meta b {
+  overflow: hidden;
+  color: rgba(237, 255, 249, 0.82);
+  font-weight: 700;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-admin .admin-profile-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 7px;
+  padding-top: 1px;
+}
+
+.page-admin .admin-profile-actions > .btn.ghost,
+.page-admin .admin-profile-actions > button.btn.ghost {
+  display: inline-flex;
+  width: 100%;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px;
+  color: #effff9;
+  border-color: rgba(218, 255, 243, 0.2);
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 11px;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.page-admin .admin-profile-actions > .admin-logout-btn.btn.ghost {
+  grid-column: 1 / -1;
+  color: #ffd7cf;
+  border-color: rgba(231, 93, 79, 0.38);
+  background: rgba(231, 93, 79, 0.1);
+}
+
+.page-admin .admin-profile-actions > .admin-logout-btn.btn.ghost:hover {
+  color: #ffffff;
+  border-color: rgba(231, 93, 79, 0.66);
+  background: rgba(231, 93, 79, 0.2);
+}
+
+.page-admin .admin-logout-msg {
+  min-height: 0;
+  color: #ffb5a7;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.page-admin .admin-logout-msg:empty {
+  display: none;
+}
+
+.page-admin .admin-public-links {
+  display: grid;
+  width: 100%;
+  margin-top: auto;
+  padding-top: 12px;
+  grid-template-columns: 1fr;
+  gap: 7px;
+  border-top: 1px solid rgba(218, 255, 243, 0.13);
+}
+
+.page-admin .admin-public-links > .btn.ghost {
+  display: inline-flex;
+  width: 100%;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px;
+  color: #effff9;
+  border-color: rgba(218, 255, 243, 0.22);
+  background: rgba(255, 255, 255, 0.07);
+  font-size: 11px;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.page-admin .admin-public-links > .btn.ghost:hover {
+  color: #ffffff;
+  border-color: rgba(117, 241, 211, 0.34);
+  background: rgba(12, 154, 154, 0.16);
+}
+
+@media (max-width: 760px) {
+  .page-admin .admin-profile-menu {
+    top: max(9px, env(safe-area-inset-top));
+    right: max(126px, calc(env(safe-area-inset-right) + 126px));
+    z-index: 95;
+  }
+
+  .page-admin .admin-profile-toggle {
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
+    min-height: 36px;
+  }
+
+  .page-admin .admin-profile-toggle svg {
+    width: 19px;
+    height: 19px;
+  }
+
+  .page-admin .admin-profile-online {
+    width: 9px;
+    height: 9px;
+  }
+
+  .page-admin .admin-profile-panel {
+    position: fixed;
+    top: calc(max(9px, env(safe-area-inset-top)) + 45px);
+    right: max(10px, env(safe-area-inset-right));
+    width: min(320px, calc(100vw - 20px));
+    max-height: calc(100dvh - 66px);
+  }
+
+  .page-admin .admin-public-links {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .page-admin .admin-public-links > .btn.ghost {
+    min-height: 34px;
+    padding: 5px 7px;
+    font-size: 11px;
+  }
+}
+
+/* Keep the admin navigation in a fixed vertical rail on desktop. */
+@media (min-width: 761px) {
+  .page-admin .layout.admin-layout {
+    display: grid;
+    grid-template-columns: 252px minmax(0, 1fr);
+    min-height: 100vh;
+    padding: 0;
+    gap: 0;
+    background: linear-gradient(90deg, rgba(5, 18, 17, 0.96) 0 252px, transparent 252px);
+  }
+
+  .page-admin .sidebar {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    display: flex;
+    width: 252px;
+    height: 100vh;
+    max-height: 100vh;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+    padding: 16px 14px;
+    overflow: hidden;
+    border: 0;
+    border-right: 1px solid rgba(218, 255, 243, 0.15);
+    border-radius: 0;
+  }
+
+  .page-admin .brand {
+    padding: 0 2px 14px;
+    border: 0;
+    border-bottom: 1px solid rgba(218, 255, 243, 0.13);
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .page-admin .admin-mobile-drawer {
+    display: flex;
+    min-height: 0;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .page-admin .admin-nav {
+    display: flex;
+    min-width: 0;
+    flex: 1 1 auto;
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: 4px;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .page-admin .admin-nav button {
+    width: 100%;
+    flex: 0 0 auto;
+    justify-content: space-between;
+    text-align: left;
+  }
+
+  .page-admin .main {
+    min-width: 0;
+  }
+}
+
 .auth-login-takeover {
   width: 100%;
   min-height: 42px;

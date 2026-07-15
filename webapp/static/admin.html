@@ -57,17 +57,70 @@
           <button type="button" data-page="pricing">额度与计费</button>
           <button type="button" data-page="runtime">系统配置</button>
           <button type="button" data-page="sentimentCookies">舆情 Cookie</button>
-          <button type="button" data-page="account">账号设置</button>
         </nav>
 
-        <div class="sidebar-actions admin-sidebar-actions">
-          <a class="btn ghost admin-console-link" href="/">进入首页</a>
-          <a class="btn ghost admin-console-link" href="/admin-console.html">进入 Web 控制台</a>
+        <div class="admin-public-links" id="adminPublicLinks" aria-label="公共入口">
+          <a class="btn ghost" href="/">进入首页</a>
+          <a class="btn ghost" href="/admin-console.html">进入 Web 控制台</a>
         </div>
       </div>
     </aside>
 
     <div id="adminMobileNavBackdrop" class="admin-mobile-nav-backdrop" aria-hidden="true" hidden></div>
+
+    <div class="admin-profile-menu" id="adminProfileMenu">
+      <button
+        class="admin-profile-toggle"
+        id="adminProfileToggle"
+        type="button"
+        aria-label="打开管理员中心"
+        aria-controls="adminProfilePanel"
+        aria-expanded="false"
+        aria-haspopup="dialog"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="8" r="3.5"></circle>
+          <path d="M5.5 19c.7-4 3-6 6.5-6s5.8 2 6.5 6"></path>
+        </svg>
+        <span class="admin-profile-online" aria-hidden="true"></span>
+      </button>
+
+      <div
+        class="admin-profile-panel"
+        id="adminProfilePanel"
+        role="dialog"
+        aria-labelledby="adminProfilePanelTitle"
+        aria-hidden="true"
+        hidden
+      >
+        <div class="admin-profile-panel-head">
+          <div>
+            <span>管理员账户</span>
+            <strong id="adminProfilePanelTitle">管理员中心</strong>
+          </div>
+          <button id="adminProfileClose" type="button" aria-label="关闭管理员中心">×</button>
+        </div>
+
+        <section class="admin-session-card" aria-labelledby="adminSessionTitle">
+          <div class="admin-session-card-head">
+            <span class="admin-session-state"><i aria-hidden="true"></i>已登录</span>
+            <span class="admin-session-role">管理员</span>
+          </div>
+          <div class="admin-session-title" id="adminSessionTitle">当前管理员</div>
+          <strong class="admin-session-name" id="adminSessionName">...</strong>
+          <div class="admin-session-meta">
+            <span>账号 ID <b id="adminSessionId">-</b></span>
+            <span>创建时间 <b id="adminSessionCreatedAt">-</b></span>
+          </div>
+        </section>
+
+        <div class="admin-profile-actions">
+          <button id="btnAdminAccountSettings" class="btn ghost" type="button">账号设置</button>
+          <button id="btnAdminLogout" class="btn ghost admin-logout-btn" type="button">退出账号</button>
+        </div>
+        <div id="adminLogoutMsg" class="admin-logout-msg" role="status" aria-live="polite"></div>
+      </div>
+    </div>
 
     <main class="main">
       <section class="section page-title admin-page-title">
