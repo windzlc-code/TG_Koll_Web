@@ -66,6 +66,19 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             index += 1
         self.fail(f"Could not extract JavaScript function {name}")
 
+    def _css_block(self, marker, start=0):
+        block_start = self.styles.index(marker, start)
+        brace = self.styles.index("{", block_start)
+        depth = 0
+        for index in range(brace, len(self.styles)):
+            if self.styles[index] == "{":
+                depth += 1
+            elif self.styles[index] == "}":
+                depth -= 1
+                if depth == 0:
+                    return self.styles[block_start:index + 1]
+        self.fail(f"Could not extract CSS block {marker}")
+
     def _run_node(self, script):
         node = shutil.which("node")
         if not node:
@@ -262,14 +275,44 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
         self._run_node(harness)
 
-    def test_live_browser_grid_keeps_two_columns_until_the_mobile_breakpoint(self):
+    def test_live_browser_grid_uses_container_width_and_mobile_fallback(self):
         desktop_selector = (
             '.account-browser-page[data-account-browser-page="browsers"] '
             '.live-browser-panel[data-live-browser-view="grid"] .live-browser-grid'
         )
-        self.assertGreaterEqual(self.styles.count(desktop_selector), 2)
-        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", self.styles)
-        self.assertIn("grid-template-columns: 1fr;", self.styles)
+        container_rule = self._css_block(
+            '.account-browser-page[data-account-browser-page="browsers"] .live-browser-panel {'
+        )
+        desktop_rule = self._css_block(desktop_selector)
+        wide_container_marker = "@container account-live-browser (min-width: 941px)"
+        wide_container_start = self.styles.index(wide_container_marker)
+        wide_container = self._css_block(wide_container_marker)
+        wide_rule = self._css_block(desktop_selector, wide_container_start)
+        compact_container = self._css_block("@container account-live-browser (max-width: 520px)")
+        mobile_rule_start = self.styles.rindex(desktop_selector)
+        mobile_media_start = self.styles.rfind("@media (max-width: 760px)", 0, mobile_rule_start)
+        mobile_media = self._css_block("@media (max-width: 760px)", mobile_media_start)
+        mobile_rule = self._css_block(desktop_selector, mobile_rule_start)
+        mobile_controls_start = self.styles.index(
+            "@media (max-width: 760px)",
+            self.styles.index(".live-browser-card-actions .live-browser-mode-toggle button:not"),
+        )
+        mobile_controls = self._css_block("@media (max-width: 760px)", mobile_controls_start)
+
+        self.assertIn("container: account-live-browser / inline-size;", container_rule)
+        self.assertIn("grid-template-columns: minmax(0, 1fr);", desktop_rule)
+        self.assertIn(wide_rule, wide_container)
+        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", wide_rule)
+        self.assertIn(".live-browser-card-head", compact_container)
+        self.assertIn("flex-direction: column;", compact_container)
+        self.assertIn(".live-browser-card-actions", compact_container)
+        self.assertIn("justify-content: flex-start;", compact_container)
+        self.assertIn(mobile_rule, mobile_media)
+        self.assertIn("grid-template-columns: 1fr;", mobile_rule)
+        self.assertIn(".live-browser-card-head", mobile_controls)
+        self.assertIn("flex-direction: column;", mobile_controls)
+        self.assertIn(".live-browser-card-actions", mobile_controls)
+        self.assertIn("justify-content: flex-start;", mobile_controls)
 
     def test_status_tone_covers_live_detection_and_recovery_states(self):
         harness = textwrap.dedent(

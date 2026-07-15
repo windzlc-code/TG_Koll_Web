@@ -10040,10 +10040,20 @@ body.persona-touch-dragging .persona-list-card:active {
     align-items: stretch;
   }
 
+  .live-browser-card-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
   .live-browser-head-actions {
     width: 100%;
     justify-content: flex-end;
     flex-wrap: wrap;
+  }
+
+  .live-browser-card-actions {
+    width: 100%;
+    justify-content: flex-start;
   }
 }
 
@@ -10127,9 +10137,31 @@ body.persona-touch-dragging .persona-list-card:active {
   max-width: none;
 }
 
+.account-browser-page[data-account-browser-page="browsers"] .live-browser-panel {
+  container: account-live-browser / inline-size;
+}
+
 .account-browser-page[data-account-browser-page="browsers"] .live-browser-panel[data-live-browser-view="grid"] .live-browser-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   justify-items: stretch;
+}
+
+@container account-live-browser (min-width: 941px) {
+  .account-browser-page[data-account-browser-page="browsers"] .live-browser-panel[data-live-browser-view="grid"] .live-browser-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container account-live-browser (max-width: 520px) {
+  .account-browser-page[data-account-browser-page="browsers"] .live-browser-panel .live-browser-card-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .account-browser-page[data-account-browser-page="browsers"] .live-browser-panel .live-browser-card-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
 }
 
 .account-browser-page[data-account-browser-page="browsers"] .live-browser-card {
