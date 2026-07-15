@@ -953,6 +953,114 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         self.assertEqual(current_client.get("/api/me").status_code, 200)
         self.assertEqual(other_client.get("/api/me").status_code, 401)
 
+    def test_second_browser_login_for_customer_returns_session_conflict(self):
+        first_browser, _user_id = self._approved_client("single_session_customer")
+        second_browser = TestClient(self.app)
+
+        conflict = second_browser.post(
+            "/api/auth/user-login",
+            json={"username": "single_session_customer", "password": "guest123"},
+        )
+
+        self.assertEqual(conflict.status_code, 409, conflict.text)
+        self.assertEqual(conflict.json()["detail"]["code"], "SESSION_CONFLICT")
+        self.assertRegex(conflict.json()["detail"]["message"], r"[\u4e00-\u9fff]")
+        self.assertEqual(first_browser.get("/api/me").status_code, 200)
+
+    def test_customer_can_relogin_with_current_token_and_rotate_session(self):
+        browser, _user_id = self._approved_client("same_browser_rotation")
+        stale_token = browser.cookies.get("session_token")
+
+        relogin = browser.post(
+            "/api/auth/user-login",
+            json={"username": "same_browser_rotation", "password": "guest123"},
+        )
+
+        self.assertEqual(relogin.status_code, 200, relogin.text)
+        current_token = browser.cookies.get("session_token")
+        self.assertNotEqual(current_token, stale_token)
+        self.assertEqual(browser.get("/api/me").status_code, 200)
+        stale_browser = TestClient(self.app, cookies={"session_token": stale_token})
+        self.assertEqual(stale_browser.get("/api/me").status_code, 401)
+
+    def test_force_takeover_revokes_all_customer_sessions_before_login(self):
+        first_browser, user_id = self._approved_client("takeover_customer")
+        first_token = first_browser.cookies.get("session_token")
+        second_browser = TestClient(self.app)
+
+        takeover = second_browser.post(
+            "/api/auth/user-login",
+            json={
+                "username": "takeover_customer",
+                "password": "guest123",
+                "force_takeover": True,
+            },
+        )
+
+        self.assertEqual(takeover.status_code, 200, takeover.text)
+        self.assertEqual(first_browser.get("/api/me").status_code, 401)
+        with server.db() as conn:
+            rows = conn.execute("SELECT token FROM sessions WHERE user_id = ?", (user_id,)).fetchall()
+        self.assertEqual([str(row["token"]) for row in rows], [second_browser.cookies.get("session_token")])
+        self.assertNotEqual(second_browser.cookies.get("session_token"), first_token)
+
+    def test_expired_customer_sessions_are_cleaned_before_login(self):
+        expired_browser, user_id = self._approved_client("expired_session_customer")
+        expired_token = expired_browser.cookies.get("session_token")
+        with server.db() as conn:
+            conn.execute("UPDATE sessions SET expires_at = 1 WHERE user_id = ?", (user_id,))
+
+        replacement_browser = TestClient(self.app)
+        replacement = replacement_browser.post(
+            "/api/auth/user-login",
+            json={"username": "expired_session_customer", "password": "guest123"},
+        )
+
+        self.assertEqual(replacement.status_code, 200, replacement.text)
+        with server.db() as conn:
+            rows = conn.execute("SELECT token FROM sessions WHERE user_id = ?", (user_id,)).fetchall()
+        self.assertEqual([str(row["token"]) for row in rows], [replacement_browser.cookies.get("session_token")])
+        self.assertNotIn(expired_token, {str(row["token"]) for row in rows})
+
+    def test_concurrent_customer_logins_allow_only_one_session(self):
+        initial_browser, user_id = self._approved_client("concurrent_login_customer")
+        self.assertEqual(initial_browser.post("/api/auth/logout").status_code, 200)
+        barrier = threading.Barrier(2)
+
+        def login_from_new_browser():
+            browser = TestClient(self.app)
+            barrier.wait(timeout=5)
+            return browser.post(
+                "/api/auth/user-login",
+                json={"username": "concurrent_login_customer", "password": "guest123"},
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(executor.map(lambda _index: login_from_new_browser(), range(2)))
+
+        self.assertEqual(sorted(response.status_code for response in responses), [200, 409])
+        conflict = next(response for response in responses if response.status_code == 409)
+        self.assertEqual(conflict.json()["detail"]["code"], "SESSION_CONFLICT")
+        with server.db() as conn:
+            session_count = conn.execute(
+                "SELECT COUNT(*) AS count FROM sessions WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()["count"]
+        self.assertEqual(int(session_count), 1)
+
+    def test_admin_login_keeps_existing_multi_session_behavior(self):
+        first_browser = TestClient(self.app)
+        second_browser = TestClient(self.app)
+        credentials = {"username": "admin", "password": self.ADMIN_PASSWORD}
+
+        first = first_browser.post("/api/auth/login", json=credentials)
+        second = second_browser.post("/api/auth/login", json=credentials)
+
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertEqual(first_browser.get("/api/me").status_code, 200)
+        self.assertEqual(second_browser.get("/api/me").status_code, 200)
+
     def test_repeated_login_attempts_are_rate_limited(self):
         client = TestClient(self.app)
         statuses = [

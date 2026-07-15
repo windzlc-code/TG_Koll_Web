@@ -20,12 +20,25 @@ function setMsg(text, ok) {
   el.className = `msg ${ok ? "ok" : "err"}`;
 }
 
-async function submitLogin(form) {
+function apiErrorDetail(error) {
+  const detail = error?.detail;
+  if (typeof detail === "string" && detail.trim()) return { code: "", message: detail.trim() };
+  if (detail && typeof detail === "object") {
+    return {
+      code: String(detail.code || "").trim(),
+      message: String(detail.message || detail.detail || "").trim(),
+    };
+  }
+  return { code: "", message: String(error || "").trim() };
+}
+
+async function submitLogin(form, forceTakeover = false) {
   const loginRole = form.dataset.loginRole === "admin" ? "admin" : "user";
   const payload = {
     username: form.username.value.trim(),
     password: form.password.value,
     remember_me: Boolean(form.remember_me?.checked),
+    force_takeover: loginRole === "user" && Boolean(forceTakeover),
   };
   const result = await api(`/api/auth/${loginRole}-login`, {
     method: "POST",
@@ -96,6 +109,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const forcePasswordForm = document.getElementById("forcePasswordForm");
 
   if (loginForm) {
+    const takeover = document.querySelector("[data-auth-login-takeover]");
     loadAuthPolicy(loginForm);
     loginForm.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -104,11 +118,28 @@ document.addEventListener("DOMContentLoaded", () => {
       if (submit?.disabled) return;
       if (submit) submit.disabled = true;
       try {
-        await submitLogin(loginForm);
+        await submitLogin(loginForm, false);
       } catch (err) {
-        setMsg(err.detail || String(err), false);
+        const detail = apiErrorDetail(err);
+        setMsg(detail.message || "登录失败，请检查账号与密码", false);
+        if (takeover) takeover.hidden = detail.code !== "SESSION_CONFLICT";
         if (submit) submit.disabled = false;
       }
+    });
+    takeover?.addEventListener("click", async () => {
+      if (takeover.disabled) return;
+      takeover.disabled = true;
+      setMsg("", true);
+      try {
+        await submitLogin(loginForm, true);
+      } catch (err) {
+        const detail = apiErrorDetail(err);
+        setMsg(detail.message || "强制登录失败，请稍后再试", false);
+        takeover.disabled = false;
+      }
+    });
+    loginForm.addEventListener("input", () => {
+      if (takeover) takeover.hidden = true;
     });
   }
 

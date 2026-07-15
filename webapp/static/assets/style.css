@@ -8749,3 +8749,18 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
     transition: none;
   }
 }
+.auth-login-takeover {
+  width: 100%;
+  min-height: 42px;
+  margin-top: 10px;
+  color: #8a2d17;
+  background: #fff4ed;
+  border: 1px solid #e3a38f;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.auth-login-takeover[hidden] {
+  display: none;
+}

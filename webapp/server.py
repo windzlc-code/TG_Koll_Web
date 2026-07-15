@@ -10899,6 +10899,7 @@ class LoginPayload(BaseModel):
     username: str
     password: str
     remember_me: bool = False
+    force_takeover: bool = False
 
 
 class ChangePasswordPayload(BaseModel):
@@ -16812,12 +16813,23 @@ def create_app() -> FastAPI:
         return FileResponse(str(candidate), filename=candidate.name)
 
     @app.get("/", include_in_schema=False)
-    def root() -> FileResponse:
-        return FileResponse(str(STATIC_DIR / "index.html"))
+    def root() -> HTMLResponse:
+        return _html_response_with_versions(
+            "index.html",
+            replacements={
+                "__OPC_STYLES_VERSION__": _asset_version("assets", "opc", "styles.css"),
+                "__OPC_PRICING_CSS_VERSION__": _asset_version("assets", "opc", "pricing.css"),
+                "__OPC_SCRIPT_VERSION__": _asset_version("assets", "opc", "script.js"),
+                "__OPC_PRICING_JS_VERSION__": _asset_version("assets", "opc", "pricing.js"),
+            },
+        )
 
     @app.get("/login.html", include_in_schema=False)
-    def page_login() -> FileResponse:
-        return FileResponse(str(STATIC_DIR / "login.html"))
+    def page_login() -> HTMLResponse:
+        return _html_response_with_versions(
+            "login.html",
+            replacements={"__AUTH_JS_VERSION__": _asset_version("assets", "auth.js")},
+        )
 
     @app.get("/change-password.html", include_in_schema=False)
     def page_change_password(session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE)) -> Response:
@@ -16839,12 +16851,28 @@ def create_app() -> FastAPI:
         return FileResponse(str(STATIC_DIR / "register.html"))
 
     @app.get("/index.html", include_in_schema=False)
-    def page_index() -> FileResponse:
-        return FileResponse(str(STATIC_DIR / "index.html"))
+    def page_index() -> HTMLResponse:
+        return _html_response_with_versions(
+            "index.html",
+            replacements={
+                "__OPC_STYLES_VERSION__": _asset_version("assets", "opc", "styles.css"),
+                "__OPC_PRICING_CSS_VERSION__": _asset_version("assets", "opc", "pricing.css"),
+                "__OPC_SCRIPT_VERSION__": _asset_version("assets", "opc", "script.js"),
+                "__OPC_PRICING_JS_VERSION__": _asset_version("assets", "opc", "pricing.js"),
+            },
+        )
 
     @app.get("/pricing.html", include_in_schema=False)
-    def page_pricing() -> FileResponse:
-        return FileResponse(str(STATIC_DIR / "pricing.html"))
+    def page_pricing() -> HTMLResponse:
+        return _html_response_with_versions(
+            "pricing.html",
+            replacements={
+                "__OPC_STYLES_VERSION__": _asset_version("assets", "opc", "styles.css"),
+                "__OPC_PRICING_CSS_VERSION__": _asset_version("assets", "opc", "pricing.css"),
+                "__OPC_SCRIPT_VERSION__": _asset_version("assets", "opc", "script.js"),
+                "__OPC_PRICING_JS_VERSION__": _asset_version("assets", "opc", "pricing.js"),
+            },
+        )
 
     @app.get("/console.html", include_in_schema=False)
     @app.get("/admin-console.html", include_in_schema=False)
@@ -17069,6 +17097,13 @@ def create_app() -> FastAPI:
                 record_invalid_credentials()
                 raise HTTPException(status_code=401, detail="用户名或密码错误")
             user = dict(row)
+            if not bool(int(user.get("is_admin") or 0)):
+                conn.execute("BEGIN IMMEDIATE")
+                locked_row = conn.execute("SELECT * FROM users WHERE id = ?", (int(user["id"]),)).fetchone()
+                if locked_row is None:
+                    record_invalid_credentials()
+                    raise HTTPException(status_code=401, detail="用户名或密码错误")
+                user = dict(locked_row)
             if not verify_password(password, str(user.get("password_hash") or "")):
                 record_invalid_credentials()
                 raise HTTPException(status_code=401, detail="用户名或密码错误")
@@ -17087,9 +17122,27 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=403, detail=_password_change_required_detail(user))
             cookie_name = ADMIN_SESSION_COOKIE if is_admin else SESSION_COOKIE
             previous_token = str(request.cookies.get(cookie_name) or "").strip()
-            if previous_token:
-                delete_session(conn, previous_token)
-            token = create_session(conn, int(user["id"]), ttl_seconds=session_ttl_seconds)
+            session_conflict = False
+            if is_admin:
+                if previous_token:
+                    delete_session(conn, previous_token)
+                token = create_session(conn, int(user["id"]), ttl_seconds=session_ttl_seconds)
+            else:
+                now_ts = _now_ts()
+                conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (now_ts,))
+                active_sessions = conn.execute(
+                    "SELECT token FROM sessions WHERE user_id = ?",
+                    (int(user["id"]),),
+                ).fetchall()
+                active_tokens = {str(session["token"]) for session in active_sessions}
+                if payload.force_takeover:
+                    conn.execute("DELETE FROM sessions WHERE user_id = ?", (int(user["id"]),))
+                elif previous_token and previous_token in active_tokens and len(active_tokens) == 1:
+                    delete_session(conn, previous_token)
+                elif active_tokens:
+                    session_conflict = True
+                if not session_conflict:
+                    token = create_session(conn, int(user["id"]), ttl_seconds=session_ttl_seconds)
             legacy_cookie_token = str(request.cookies.get(SESSION_COOKIE) or "").strip()
             if is_admin:
                 legacy_cookie_is_same_admin = False
@@ -17112,11 +17165,20 @@ def create_app() -> FastAPI:
                     if legacy_cookie_is_same_admin:
                         delete_session(conn, legacy_cookie_token)
                     legacy_admin_token = create_session(conn, int(user["id"]), ttl_seconds=session_ttl_seconds)
-            login_at = _now_ts()
-            conn.execute(
-                "UPDATE users SET last_login_at = ?, "
-                "updated_at = CASE WHEN updated_at >= ? THEN updated_at + 1 ELSE ? END WHERE id = ?",
-                (login_at, login_at, login_at, int(user["id"])),
+            if not session_conflict:
+                login_at = _now_ts()
+                conn.execute(
+                    "UPDATE users SET last_login_at = ?, "
+                    "updated_at = CASE WHEN updated_at >= ? THEN updated_at + 1 ELSE ? END WHERE id = ?",
+                    (login_at, login_at, login_at, int(user["id"])),
+                )
+        if session_conflict:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "SESSION_CONFLICT",
+                    "message": "该账号已在其他浏览器登录。如需继续，请选择强制接管当前会话。",
+                },
             )
         _clear_auth_rate_limit("login_user", username_key)
 

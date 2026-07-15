@@ -184,6 +184,36 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn("remember_me: Boolean(form.remember_me?.checked)", self.auth_js)
         self.assertIn('api("/api/auth/policy")', self.auth_js)
 
+    def test_public_login_handles_session_conflict_and_structured_errors(self):
+        for page_name in ("index.html", "pricing.html"):
+            page = (self.static_dir / page_name).read_text(encoding="utf-8")
+            self.assertIn('data-login-takeover', page)
+
+        self.assertIn('force_takeover: Boolean(forceTakeover)', self.script)
+        self.assertIn('detail.code !== "SESSION_CONFLICT"', self.script)
+        self.assertIn('loginTakeover.hidden = detail.code !== "SESSION_CONFLICT"', self.script)
+        self.assertIn('apiErrorDetail(error)', self.script)
+        self.assertNotIn('loginStatus.textContent = error.detail ||', self.script)
+
+        login_page = (self.static_dir / "login.html").read_text(encoding="utf-8")
+        self.assertIn('data-auth-login-takeover', login_page)
+        self.assertIn('force_takeover: loginRole === "user" && Boolean(forceTakeover)', self.auth_js)
+        self.assertIn('detail.code !== "SESSION_CONFLICT"', self.auth_js)
+        self.assertIn('apiErrorDetail(err)', self.auth_js)
+
+    def test_public_pages_use_runtime_asset_versions_and_disable_html_cache(self):
+        client = TestClient(server.create_app())
+        for path in ("/", "/index.html", "/pricing.html", "/login.html"):
+            response = client.get(path)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertIn("no-store", response.headers.get("cache-control", ""))
+            if path == "/login.html":
+                self.assertNotIn("__AUTH_JS_VERSION__", response.text)
+                self.assertRegex(response.text, r'/assets/auth\.js\?v=\d+-\d+')
+            else:
+                self.assertNotIn("__OPC_SCRIPT_VERSION__", response.text)
+                self.assertRegex(response.text, r'/assets/opc/script\.js\?v=\d+-\d+')
+
     def test_admin_runtime_form_exposes_cookie_policy(self):
         for field_id in (
             "rtRememberLoginEnabled",

@@ -10,8 +10,8 @@
     />
     <link rel="icon" type="image/png" href="/assets/opc/vecto-logo-ui-icon.png?v=20260711" />
     <link rel="preload" href="/assets/opc/vecto-ai-cockpit.png" as="image" />
-    <link rel="stylesheet" href="/assets/opc/styles.css?v=20260715-mobile" />
-    <link rel="stylesheet" href="/assets/opc/pricing.css?v=20260715-mobile" />
+    <link rel="stylesheet" href="/assets/opc/styles.css?v=__OPC_STYLES_VERSION__" />
+    <link rel="stylesheet" href="/assets/opc/pricing.css?v=__OPC_PRICING_CSS_VERSION__" />
   </head>
   <body>
     <header class="site-header" data-header>
@@ -477,12 +477,13 @@
           <label class="auth-remember" data-login-remember><input name="remember_me" type="checkbox" /> <span>記住帳號與登入狀態</span></label>
           <button class="submit-button" type="submit"><span>進入 Web 任務控制台</span><span aria-hidden="true">→</span></button>
           <p class="form-status" id="loginStatus" role="status" aria-live="polite"></p>
+          <button class="auth-takeover-button" type="button" data-login-takeover hidden>強制登入此帳號</button>
         </form>
         <a class="auth-guest-link" href="#contact" data-close-login>尚未有帳號？提交遊客申請</a>
       </section>
     </div>
 
-    <script src="/assets/opc/script.js?v=20260714-2"></script>
-    <script src="/assets/opc/pricing.js?v=20260715-online-apply-v2"></script>
+    <script src="/assets/opc/script.js?v=__OPC_SCRIPT_VERSION__"></script>
+    <script src="/assets/opc/pricing.js?v=__OPC_PRICING_JS_VERSION__"></script>
   </body>
 </html>

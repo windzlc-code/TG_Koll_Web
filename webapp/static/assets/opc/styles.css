@@ -644,6 +644,26 @@ body.modal-open {
   font-weight: 800;
 }
 
+.auth-takeover-button {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 8px;
+  color: #8a2d17;
+  background: #fff4ed;
+  border: 1px solid #e3a38f;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.auth-takeover-button:hover {
+  background: #ffe8dc;
+}
+
+.auth-takeover-button[hidden] {
+  display: none;
+}
+
 .section-shell {
   width: min(1180px, calc(100% - 36px));
   margin: 0 auto;

@@ -7,6 +7,7 @@ const loginStatus = document.querySelector("#loginStatus");
 const loginPassword = document.querySelector("#loginPassword");
 const loginPasswordToggle = document.querySelector("[data-login-password-toggle]");
 const loginRemember = loginForm?.elements?.remember_me || null;
+const loginTakeover = document.querySelector("[data-login-takeover]");
 let loginReturnFocus = null;
 
 function setHeaderState() {
@@ -24,6 +25,20 @@ async function api(path, options = {}) {
   }
   if (!response.ok) throw data;
   return data;
+}
+
+function apiErrorDetail(error) {
+  const detail = error?.detail;
+  if (typeof detail === "string" && detail.trim()) {
+    return { code: "", message: detail.trim() };
+  }
+  if (detail && typeof detail === "object") {
+    return {
+      code: String(detail.code || "").trim(),
+      message: String(detail.message || detail.detail || "").trim(),
+    };
+  }
+  return { code: "", message: "" };
 }
 
 function setFieldError(input, message) {
@@ -74,6 +89,7 @@ function openLogin(event) {
   loginModal.setAttribute("aria-hidden", "false");
   document.body.classList.add("modal-open");
   loginStatus.textContent = "";
+  if (loginTakeover) loginTakeover.hidden = true;
   window.setTimeout(() => document.querySelector("#loginUsername")?.focus(), 40);
 }
 
@@ -152,11 +168,12 @@ applicationForm?.addEventListener("submit", async (event) => {
   }
 });
 
-loginForm?.addEventListener("submit", async (event) => {
-  event.preventDefault();
+async function submitUserLogin(forceTakeover = false) {
+  if (!loginForm || !loginStatus) return;
   loginStatus.textContent = "";
   const submit = loginForm.querySelector("button[type='submit']");
   submit.disabled = true;
+  if (loginTakeover) loginTakeover.disabled = true;
   try {
     const result = await api("/api/auth/user-login", {
       method: "POST",
@@ -165,15 +182,32 @@ loginForm?.addEventListener("submit", async (event) => {
         username: loginForm.username.value.trim(),
         password: loginForm.password.value,
         remember_me: Boolean(loginForm.remember_me?.checked),
+        force_takeover: Boolean(forceTakeover),
       }),
     });
     const pageRedirect = String(document.body.dataset.loginRedirect || "/console.html");
     const safeRedirect = pageRedirect.startsWith("/") && !pageRedirect.startsWith("//") ? pageRedirect : "/console.html";
     window.location.assign(result?.must_change_password ? "/change-password.html" : safeRedirect);
   } catch (error) {
-    loginStatus.textContent = error.detail || "登入失敗，請檢查帳號與密碼。";
+    const detail = apiErrorDetail(error);
+    loginStatus.textContent = detail.message || "登入失敗，請檢查帳號與密碼。";
+    if (loginTakeover) loginTakeover.hidden = detail.code !== "SESSION_CONFLICT";
     submit.disabled = false;
+    if (loginTakeover) loginTakeover.disabled = false;
   }
+}
+
+loginForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await submitUserLogin(false);
+});
+
+loginTakeover?.addEventListener("click", async () => {
+  await submitUserLogin(true);
+});
+
+loginForm?.addEventListener("input", () => {
+  if (loginTakeover) loginTakeover.hidden = true;
 });
 
 async function loadLoginPolicy() {

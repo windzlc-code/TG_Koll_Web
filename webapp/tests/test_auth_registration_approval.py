@@ -373,14 +373,14 @@ class RegistrationApprovalTests(unittest.TestCase):
             json={"username": "managed001", "password": "oldpass123"},
         )
         self.assertEqual(old_login.status_code, 401)
-        new_login = TestClient(self.app).post(
+        temporary_client = TestClient(self.app)
+        new_login = temporary_client.post(
             "/api/auth/user-login",
             json={"username": "managed001", "password": temporary_password},
         )
         self.assertEqual(new_login.status_code, 200)
         self.assertTrue(new_login.json()["must_change_password"])
 
-        temporary_client = TestClient(self.app)
         self.assertEqual(
             temporary_client.post(
                 "/api/auth/user-login",
