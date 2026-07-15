@@ -8,35 +8,56 @@
     <link rel="icon" type="image/png" href="/assets/opc/vecto-logo-ui-icon.png?v=20260711" />
     <link rel="preload" href="/assets/opc/vecto-ai-cockpit.png" as="image" />
     <link rel="stylesheet" href="/assets/opc/styles.css?v=__OPC_STYLES_VERSION__" />
+    <link rel="stylesheet" href="/assets/opc/site-navigation.css?v=20260715" />
     <link rel="stylesheet" href="/assets/opc/pricing.css?v=__OPC_PRICING_CSS_VERSION__" />
+    <script defer src="/assets/opc/site-navigation.js?v=20260715"></script>
   </head>
   <body data-login-redirect="/pricing.html">
-    <header class="site-header" data-header>
-      <a class="brand" href="/" aria-label="返回 Vecto 首頁">
-        <span class="brand-logo-frame" aria-hidden="true">
-          <img class="brand-logo" src="/assets/opc/vecto-logo-ui-icon.png?v=20260711" alt="" width="1024" height="1024" />
-        </span>
-        <span class="brand-text">
-          <span class="brand-name">Vecto</span>
-          <span class="brand-local">維拓 / 維圖</span>
-        </span>
+    <a class="site-skip-link" href="#main-content" data-site-copy="skip">跳至主要內容</a>
+    <header class="site-header" data-header data-site-header data-site-page="pricing" data-site-mode="public" data-i18n-skip="true">
+      <a class="brand" href="/" aria-label="Vecto 首頁" data-site-home-label>
+        <span class="brand-logo-frame" aria-hidden="true"><img class="brand-logo" src="/assets/opc/vecto-logo-ui-icon.png?v=20260711" alt="" width="1024" height="1024" /></span>
+        <span class="brand-text"><span class="brand-name">Vecto</span><span class="brand-local" data-site-copy="brandLocal">維拓 / 維圖</span></span>
       </a>
-
-      <nav class="site-nav" aria-label="主要導覽">
-        <a href="/#solution">解決方案</a>
-        <a href="/#agents">三帳架構</a>
-        <a href="/#scenarios">場景</a>
-        <a href="/pricing.html" aria-current="page">方案與算力</a>
-        <a href="/#service-difference">服務差異</a>
+      <nav class="site-nav" aria-label="站內導覽" data-site-navigation>
+        <a href="/#solution"><span data-site-copy="solution">解決方案</span></a>
+        <a href="/#agents"><span data-site-copy="accounts">三帳架構</span></a>
+        <a href="/#scenarios"><span data-site-copy="scenarios">應用場景</span></a>
+        <a href="/pricing.html" aria-current="page"><span data-site-copy="pricing">方案與算力</span></a>
+        <a href="/#service-difference"><span data-site-copy="difference">服務差異</span></a>
+        <a href="/console.html" data-console-entry><span data-site-copy="console">Web 控制台</span></a>
       </nav>
-
       <div class="header-actions">
-        <button class="header-login" type="button" data-open-login>帳號登入</button>
-        <a class="header-action" href="/#contact">遊客申請</a>
+        <details class="site-mobile-menu" data-site-mobile-menu>
+          <summary class="site-menu-toggle" data-site-menu-toggle aria-expanded="false">
+            <svg class="site-menu-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h14"></path></svg>
+            <span data-site-copy="menu">導覽</span>
+          </summary>
+          <nav class="site-mobile-menu-panel" aria-label="站內導覽" data-site-navigation>
+            <a href="/#solution"><span data-site-copy="solution">解決方案</span></a>
+            <a href="/#agents"><span data-site-copy="accounts">三帳架構</span></a>
+            <a href="/#scenarios"><span data-site-copy="scenarios">應用場景</span></a>
+            <a href="/pricing.html" aria-current="page"><span data-site-copy="pricing">方案與算力</span></a>
+            <a href="/#service-difference"><span data-site-copy="difference">服務差異</span></a>
+            <a href="/console.html" data-console-entry><span data-site-copy="console">Web 控制台</span></a>
+            <a class="site-mobile-menu-extra" href="/#contact"><span data-site-copy="guest">遊客申請</span></a>
+          </nav>
+        </details>
+        <div class="site-global-controls" aria-label="全域顯示設定" data-site-global-controls>
+          <button id="themeToggle" class="site-icon-button" type="button" aria-label="切換到暗色模式" aria-pressed="false" data-site-theme-toggle>
+            <svg class="site-theme-icon site-theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>
+            <svg class="site-theme-icon site-theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 15.2A8.5 8.5 0 0 1 8.8 3.5 8.7 8.7 0 1 0 20.5 15.2Z"></path></svg>
+          </button>
+          <button id="languageToggle" class="site-icon-button site-language-button" type="button" aria-label="切換到簡體中文" aria-pressed="true" data-site-language-toggle>
+            <svg class="site-language-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.4 2.5 3.6 5.5 3.6 9S14.4 18.5 12 21M12 3C9.6 5.5 8.4 8.5 8.4 12s1.2 6.5 3.6 9"></path></svg><span class="site-language-state" data-site-language-state>繁</span>
+          </button>
+        </div>
+        <button class="header-login" type="button" data-open-login><span data-site-copy="login">帳號登入</span></button>
+        <a class="header-action site-guest-action" href="/#contact"><span data-site-copy="guest">遊客申請</span></a>
       </div>
     </header>
 
-    <main>
+    <main id="main-content" tabindex="-1">
       <section class="pricing-page-hero" aria-labelledby="pricing-page-title">
         <img class="pricing-page-hero-media" src="/assets/opc/vecto-ai-cockpit.png" alt="" width="1536" height="864" fetchpriority="high" />
         <div class="pricing-page-hero-shade" aria-hidden="true"></div>
@@ -200,6 +221,9 @@
       </section>
     </div>
 
+    <script src="/assets/vendor/opencc-js/st-characters.js?v=1.4.1"></script>
+    <script src="/assets/vendor/opencc-js/ts-characters.js?v=1.4.1"></script>
+    <script src="/assets/vendor/opencc-js/ts-phrases.js?v=1.4.1"></script>
     <script src="/assets/opc/script.js?v=__OPC_SCRIPT_VERSION__"></script>
     <script src="/assets/opc/pricing.js?v=__OPC_PRICING_JS_VERSION__"></script>
   </body>

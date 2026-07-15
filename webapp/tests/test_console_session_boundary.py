@@ -9,6 +9,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONSOLE_JS = REPO_ROOT / "webapp" / "static" / "assets" / "console.js"
 CONSOLE_CSS = REPO_ROOT / "webapp" / "static" / "assets" / "console.css"
+CONSOLE_HTML = REPO_ROOT / "webapp" / "static" / "console.html"
+SITE_NAV_JS = REPO_ROOT / "webapp" / "static" / "assets" / "opc" / "site-navigation.js"
+SITE_NAV_CSS = REPO_ROOT / "webapp" / "static" / "assets" / "opc" / "site-navigation.css"
+OPENCC_ST_CHARACTERS_JS = REPO_ROOT / "webapp" / "static" / "assets" / "vendor" / "opencc-js" / "st-characters.js"
 
 
 class ConsoleSessionBoundaryTests(unittest.TestCase):
@@ -16,6 +20,45 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
     def setUpClass(cls):
         cls.source = CONSOLE_JS.read_text(encoding="utf-8")
         cls.styles = CONSOLE_CSS.read_text(encoding="utf-8")
+        cls.markup = CONSOLE_HTML.read_text(encoding="utf-8")
+        cls.site_nav_source = SITE_NAV_JS.read_text(encoding="utf-8")
+        cls.site_nav_styles = SITE_NAV_CSS.read_text(encoding="utf-8")
+
+    def test_console_uses_vecto_site_navigation_without_replacing_workspace_navigation(self):
+        self.assertIn('data-site-header data-site-page="console"', self.markup)
+        self.assertIn('<a class="site-skip-link"', self.markup)
+        self.assertIn('class="site-nav"', self.markup)
+        self.assertIn('data-site-mobile-menu', self.markup)
+        self.assertIn('<script defer src="/assets/opc/site-navigation.js', self.markup)
+        self.assertIn('/assets/opc/site-navigation.css', self.markup)
+        self.assertIn('/assets/vendor/opencc-js/st-characters.js?v=1.4.1', self.markup)
+        self.assertTrue(OPENCC_ST_CHARACTERS_JS.exists())
+        self.assertIn('id="consoleMeName"', self.site_nav_source)
+        self.assertIn('src="/assets/opc/vecto-logo-ui-icon.png', self.site_nav_source)
+        for required_id in ("consoleSidebar", "moduleMenu", "refreshAll", "viewTitle"):
+            self.assertIn(f'id="{required_id}"', self.markup)
+        for view in ("workspace", "tasks", "settings", "billing", "persona_dashboard", "console_settings"):
+            self.assertIn(f'data-view="{view}"', self.markup)
+        self.assertNotIn(".console-page .site-header", self.styles)
+        self.assertIn(".site-header", self.site_nav_styles)
+        self.assertIn(".console-page .console-shell", self.styles)
+
+    def test_console_reuses_global_theme_and_language_controls(self):
+        self.assertIn('id="themeToggle"', self.site_nav_source)
+        self.assertIn('id="languageToggle"', self.site_nav_source)
+        self.assertIn('window.addEventListener("vecto:theme-change"', self.source)
+        self.assertIn('window.addEventListener("vecto:language-change"', self.source)
+        self.assertIn("window.VectoOpenCcStCharacters", self.source)
+        self.assertIn("protectedPhrases", self.source)
+        self.assertIn('const CONSOLE_I18N_MARKER = "data-i18n-ui"', self.source)
+        self.assertIn("markConsoleStaticUi", self.source)
+        self.assertIn("setConsoleUiAttribute", self.source)
+        self.assertIn('setConsoleUiAttribute(toggle, "aria-label"', self.source)
+        self.assertIn('window.addEventListener("storage"', self.site_nav_source)
+        ensure_theme = self._function_source("ensureThemeToggle")
+        ensure_language = self._function_source("ensureLanguageToggle")
+        self.assertNotIn("document.createElement", ensure_theme)
+        self.assertNotIn("document.createElement", ensure_language)
 
     def _section(self, start_marker, end_marker):
         start = self.source.index(start_marker)

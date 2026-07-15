@@ -158,6 +158,9 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         cls.static_dir = Path(server.__file__).resolve().parent / "static"
         cls.script = (cls.static_dir / "assets" / "opc" / "script.js").read_text(encoding="utf-8")
         cls.styles = (cls.static_dir / "assets" / "opc" / "styles.css").read_text(encoding="utf-8")
+        cls.pricing_styles = (cls.static_dir / "assets" / "opc" / "pricing.css").read_text(encoding="utf-8")
+        cls.site_nav_script = (cls.static_dir / "assets" / "opc" / "site-navigation.js").read_text(encoding="utf-8")
+        cls.site_nav_styles = (cls.static_dir / "assets" / "opc" / "site-navigation.css").read_text(encoding="utf-8")
         cls.admin_js = (cls.static_dir / "assets" / "admin.js").read_text(encoding="utf-8")
         cls.admin_html = (cls.static_dir / "admin.html").read_text(encoding="utf-8")
         cls.auth_js = (cls.static_dir / "assets" / "auth.js").read_text(encoding="utf-8")
@@ -165,6 +168,53 @@ class PublicLoginUiSourceTests(unittest.TestCase):
     def test_backdrop_click_does_not_close_login(self):
         self.assertNotIn("if (event.target === loginModal) closeLogin()", self.script)
         self.assertIn('[data-close-login]', self.script)
+
+    def test_home_navigation_opens_console_or_existing_login_dialog(self):
+        page = (self.static_dir / "index.html").read_text(encoding="utf-8")
+        pricing = (self.static_dir / "pricing.html").read_text(encoding="utf-8")
+        for markup, page_name in ((page, "home"), (pricing, "pricing")):
+            self.assertIn(f'data-site-header data-site-page="{page_name}"', markup)
+            self.assertIn('<a class="site-skip-link"', markup)
+            self.assertIn('class="site-nav"', markup)
+            self.assertIn('data-site-mobile-menu', markup)
+            self.assertIn('<script defer src="/assets/opc/site-navigation.js', markup)
+            self.assertIn('/assets/opc/site-navigation.css', markup)
+            self.assertIn('/assets/vendor/opencc-js/st-characters.js?v=1.4.1', markup)
+            self.assertIn('/assets/vendor/opencc-js/ts-characters.js?v=1.4.1', markup)
+            self.assertIn('/assets/vendor/opencc-js/ts-phrases.js?v=1.4.1', markup)
+        self.assertIn('key: "console", href: "/console.html"', self.site_nav_script)
+        self.assertIn("data-console-entry", self.site_nav_script)
+        self.assertIn('fetch("/api/auth/me"', self.script)
+        self.assertIn('response.status === 401 || response.status === 403', self.script)
+        self.assertIn('window.location.assign("/console.html")', self.script)
+        self.assertIn('openLogin(event)', self.script)
+        self.assertEqual(page.count('id="loginModal"'), 1)
+
+    def test_shared_navigation_owns_global_svg_preferences(self):
+        for expected in ('id="themeToggle"', 'id="languageToggle"', "site-theme-icon", "site-language-icon"):
+            self.assertIn(expected, self.site_nav_script)
+        self.assertIn('const THEME_STORAGE_KEY = "wk-console-theme"', self.site_nav_script)
+        self.assertIn('const LANGUAGE_STORAGE_KEY = "wk-console-language"', self.site_nav_script)
+        self.assertIn('window.addEventListener("storage"', self.site_nav_script)
+        self.assertIn('data-site-mobile-menu', self.site_nav_script)
+        self.assertIn('window.addEventListener("vecto:language-change"', self.script)
+        self.assertIn("applyPublicLanguage", self.script)
+        self.assertIn(':root[data-theme="dark"]', self.site_nav_styles)
+        self.assertNotIn(".site-header {", self.styles)
+
+    def test_public_dark_theme_covers_forms_cards_and_dialogs(self):
+        for selector in (
+            ':root[data-theme="dark"] .lead-form',
+            ':root[data-theme="dark"] input',
+            ':root[data-theme="dark"] .auth-dialog',
+        ):
+            self.assertIn(selector, self.styles)
+        for selector in (
+            ':root[data-theme="dark"] .pricing-facts',
+            ':root[data-theme="dark"] .pricing-package-grid article',
+            ':root[data-theme="dark"] .pricing-order-dialog',
+        ):
+            self.assertIn(selector, self.pricing_styles)
 
     def test_public_login_has_svg_password_toggle_and_remember_option(self):
         for page_name in ("index.html", "pricing.html"):
@@ -183,6 +233,15 @@ class PublicLoginUiSourceTests(unittest.TestCase):
             self.assertIn('name="remember_me"', page)
         self.assertIn("remember_me: Boolean(form.remember_me?.checked)", self.auth_js)
         self.assertIn('api("/api/auth/policy")', self.auth_js)
+
+    def test_public_language_translation_is_ui_scoped_and_keeps_dynamic_state(self):
+        self.assertIn('const PUBLIC_I18N_MARKER = "data-i18n-ui"', self.script)
+        self.assertIn('const PUBLIC_I18N_DYNAMIC_MARKER = "data-i18n-dynamic"', self.script)
+        self.assertIn("markPublicStaticUi", self.script)
+        self.assertIn("setPublicUiAttribute", self.script)
+        self.assertIn('setPublicUiAttribute(loginPasswordToggle, "aria-label"', self.script)
+        for phrase in ('["头发", "頭髮"]', '["皇后", "皇后"]', '["干杯", "乾杯"]'):
+            self.assertIn(phrase, self.script)
 
     def test_public_login_handles_session_conflict_and_structured_errors(self):
         for page_name in ("index.html", "pricing.html"):

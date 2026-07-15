@@ -8,17 +8,64 @@
   <title>Web 任务控制台</title>
   <link rel="preload" as="style" href="/assets/style.css?v=__STYLE_VERSION__" />
   <link id="personaDashboardStyles" rel="stylesheet" href="/assets/style.css?v=__STYLE_VERSION__" media="not all" />
+  <link rel="stylesheet" href="/assets/opc/site-navigation.css?v=20260715" />
   <link rel="stylesheet" href="/assets/console.css?v=__CONSOLE_CSS_VERSION__" />
+  <script defer src="/assets/opc/site-navigation.js?v=20260715"></script>
 </head>
-  <body>
+  <body class="console-page">
+    <a class="site-skip-link" href="#main-content" data-site-copy="skip">跳至主要内容</a>
+    <header class="site-header" data-site-header data-site-page="console" data-site-mode="authenticated" data-site-variant="solid" data-i18n-skip="true">
+      <a class="brand" href="/" aria-label="Vecto 首页" data-site-home-label>
+        <span class="brand-logo-frame" aria-hidden="true"><img class="brand-logo" src="/assets/opc/vecto-logo-ui-icon.png?v=20260711" alt="" width="1024" height="1024" /></span>
+        <span class="brand-text"><span class="brand-name">Vecto</span><span class="brand-local" data-site-copy="brandLocal">维拓 / 维图</span></span>
+      </a>
+      <nav class="site-nav" aria-label="站内导航" data-site-navigation>
+        <a href="/#solution"><span data-site-copy="solution">解决方案</span></a>
+        <a href="/#agents"><span data-site-copy="accounts">三账号架构</span></a>
+        <a href="/#scenarios"><span data-site-copy="scenarios">应用场景</span></a>
+        <a href="/pricing.html"><span data-site-copy="pricing">方案与算力</span></a>
+        <a href="/#service-difference"><span data-site-copy="difference">服务差异</span></a>
+        <a href="/console.html" aria-current="page" data-console-entry><span data-site-copy="console">Web 控制台</span></a>
+      </nav>
+      <div class="header-actions">
+        <details class="site-mobile-menu" data-site-mobile-menu>
+          <summary class="site-menu-toggle" data-site-menu-toggle aria-expanded="false">
+            <svg class="site-menu-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h14"></path></svg>
+            <span data-site-copy="menu">导航</span>
+          </summary>
+          <nav class="site-mobile-menu-panel" aria-label="站内导航" data-site-navigation>
+            <a href="/#solution"><span data-site-copy="solution">解决方案</span></a>
+            <a href="/#agents"><span data-site-copy="accounts">三账号架构</span></a>
+            <a href="/#scenarios"><span data-site-copy="scenarios">应用场景</span></a>
+            <a href="/pricing.html"><span data-site-copy="pricing">方案与算力</span></a>
+            <a href="/#service-difference"><span data-site-copy="difference">服务差异</span></a>
+            <a href="/console.html" aria-current="page" data-console-entry><span data-site-copy="console">Web 控制台</span></a>
+            <a class="site-mobile-menu-extra" href="/"><span data-site-copy="home">返回首页</span></a>
+          </nav>
+        </details>
+        <div class="site-global-controls" aria-label="全局显示设置" data-site-global-controls>
+          <button id="themeToggle" class="site-icon-button" type="button" aria-label="切换到暗色模式" aria-pressed="false" data-site-theme-toggle>
+            <svg class="site-theme-icon site-theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>
+            <svg class="site-theme-icon site-theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 15.2A8.5 8.5 0 0 1 8.8 3.5 8.7 8.7 0 1 0 20.5 15.2Z"></path></svg>
+          </button>
+          <button id="languageToggle" class="site-icon-button site-language-button" type="button" aria-label="切换到繁体中文" aria-pressed="false" data-site-language-toggle>
+            <svg class="site-language-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.4 2.5 3.6 5.5 3.6 9S14.4 18.5 12 21M12 3C9.6 5.5 8.4 8.5 8.4 12s1.2 6.5 3.6 9"></path></svg><span class="site-language-state" data-site-language-state>简</span>
+          </button>
+        </div>
+        <span class="site-user" title="当前登录账号" data-site-user-title>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20c.8-4 3.1-6 7-6s6.2 2 7 6"></path></svg><span id="consoleMeName" data-site-account-name>账户</span>
+        </span>
+        <a class="header-action" href="/"><span data-site-copy="home">返回首页</span></a>
+      </div>
+    </header>
     <div id="toastHost" class="toast-host" aria-live="polite" aria-atomic="false"></div>
     <div class="console-shell">
     <aside id="consoleSidebar" class="console-sidebar">
       <div class="console-brand">
-        <div class="brand-mark">WK</div>
+        <div class="brand-mark"><img src="/assets/opc/vecto-logo-ui-icon.png?v=20260711" alt="" width="32" height="32" /></div>
         <div>
-          <h1>Web 任务控制台</h1>
-          <p>统一 Web 操作面板</p>
+          <h1>任务控制台</h1>
+          <p>Vecto OS 运营工作区</p>
         </div>
         <button id="mobileNavClose" class="mobile-nav-close" type="button" aria-label="关闭导航">×</button>
       </div>
@@ -55,7 +102,7 @@
       hidden
     ></button>
 
-    <main class="console-main">
+    <main id="main-content" class="console-main" tabindex="-1">
       <header class="console-topbar">
         <div class="console-topbar-heading">
           <button
@@ -292,6 +339,7 @@
   <script>
     window.__CONSOLE_BOOTSTRAP__ = __CONSOLE_BOOTSTRAP_JSON__;
   </script>
+  <script src="/assets/vendor/opencc-js/st-characters.js?v=1.4.1"></script>
   <script src="/assets/console.js?v=__CONSOLE_JS_VERSION__"></script>
   <script src="/assets/persona-dashboard.js?v=__PERSONA_DASHBOARD_JS_VERSION__"></script>
 </body>

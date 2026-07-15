@@ -740,6 +740,10 @@ function currentTheme() {
 }
 
 function syncThemeToggle() {
+  if (window.VectoSiteNavigation) {
+    window.VectoSiteNavigation.sync();
+    return;
+  }
   const button = $("themeToggle");
   if (!button) return;
   const isDark = currentTheme() === "dark";
@@ -761,10 +765,6 @@ function applyTheme(theme) {
   syncThemeToggle();
 }
 
-function toggleTheme() {
-  applyTheme(currentTheme() === "dark" ? "light" : "dark");
-}
-
 const mobileNavMedia = window.matchMedia?.(MOBILE_NAV_QUERY);
 
 function isMobileNavMode() {
@@ -782,7 +782,7 @@ function setMobileNavOpen(open, { restoreFocus = false } = {}) {
   const shouldRestoreFocus = Boolean(!nextOpen && (restoreFocus || sidebar.contains(document.activeElement)));
   document.body.classList.toggle("mobile-nav-open", nextOpen);
   toggle.setAttribute("aria-expanded", nextOpen ? "true" : "false");
-  toggle.setAttribute("aria-label", nextOpen ? "关闭导航" : "打开导航");
+  setConsoleUiAttribute(toggle, "aria-label", nextOpen ? "关闭导航" : "打开导航");
   sidebar.setAttribute("aria-hidden", isMobileNavMode() && !nextOpen ? "true" : "false");
   sidebar.inert = Boolean(isMobileNavMode() && !nextOpen);
   if (main) main.inert = nextOpen;
@@ -828,7 +828,30 @@ function bindMobileNavigation() {
 
 const zhHantPhraseMap = [
   ["Web 任务控制台", "Web 任務控制台"],
+  ["头发", "頭髮"],
+  ["发型", "髮型"],
+  ["理发", "理髮"],
+  ["美发", "美髮"],
+  ["长发", "長髮"],
+  ["短发", "短髮"],
+  ["白发", "白髮"],
+  ["皇后", "皇后"],
+  ["太后", "太后"],
+  ["王后", "王后"],
+  ["干杯", "乾杯"],
+  ["饼干", "餅乾"],
+  ["干燥", "乾燥"],
+  ["干净", "乾淨"],
+  ["干脆", "乾脆"],
+  ["晒干", "曬乾"],
+  ["风干", "風乾"],
+  ["烘干", "烘乾"],
+  ["干涉", "干涉"],
+  ["干预", "干預"],
+  ["干扰", "干擾"],
+  ["若干", "若干"],
   ["控制台", "控制台"],
+  ["控制", "控制"],
   ["运营后台", "營運後台"],
   ["统一 Web 操作面板", "統一 Web 操作面板"],
   ["后台自动", "後台自動"],
@@ -836,6 +859,7 @@ const zhHantPhraseMap = [
   ["任务队列", "任務佇列"],
   ["执行账号", "執行帳號"],
   ["账号设置", "帳號設定"],
+  ["账号", "帳號"],
   ["指纹浏览器", "指紋瀏覽器"],
   ["网页登录", "網頁登入"],
   ["登录", "登入"],
@@ -887,38 +911,111 @@ const zhHantCharMap = {
   果: "果", 库: "庫", 转: "轉", 换: "換", 语: "語", 言: "言", 详: "詳", 纹: "紋", 绑: "綁",
 };
 
+let zhHantCharacterMap = null;
+
+function getZhHantCharacterMap() {
+  if (zhHantCharacterMap) return zhHantCharacterMap;
+  zhHantCharacterMap = new Map(Object.entries(zhHantCharMap));
+  const dictionary = window.VectoOpenCcStCharacters;
+  if (typeof dictionary !== "string") return zhHantCharacterMap;
+  dictionary.split("|").forEach((entry) => {
+    const separator = entry.indexOf(" ");
+    if (separator <= 0) return;
+    zhHantCharacterMap.set(entry.slice(0, separator), entry.slice(separator + 1));
+  });
+  return zhHantCharacterMap;
+}
+
 const i18nTextOriginals = new WeakMap();
 const i18nAttrOriginals = new WeakMap();
 let languageObserver = null;
+
+const CONSOLE_I18N_MARKER = "data-i18n-ui";
+const CONSOLE_I18N_SKIP_SELECTOR = "[data-i18n-skip], [data-site-header], script, style, textarea";
+const CONSOLE_I18N_ATTRIBUTES = ["title", "aria-label", "placeholder", "data-mobile-label"];
+const CONSOLE_DYNAMIC_UI_IDS = new Set([
+  "mobileNavClose",
+  "mobileNavToggle",
+  "viewTitle",
+  "moduleEyebrow",
+  "moduleTitle",
+  "refreshAll",
+  "openAdmin",
+  "accountBrowserAccountsTab",
+  "accountBrowserProxiesTab",
+  "refreshAccounts",
+  "workerState",
+  "refreshBilling",
+  "btnPersonaDashboardRefresh",
+  "btnPersonaDashboardRefreshAll",
+]);
 
 function currentLanguage() {
   return document.documentElement.dataset.language === "zh-Hant" ? "zh-Hant" : "zh-Hans";
 }
 
+function markConsoleUiElement(node) {
+  if (!node || node.nodeType !== Node.ELEMENT_NODE || node.closest(CONSOLE_I18N_SKIP_SELECTOR)) return;
+  node.setAttribute(CONSOLE_I18N_MARKER, "true");
+}
+
+function markConsoleStaticUi(root = document.body) {
+  if (!root) return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const parent = node.parentElement;
+      if (!node.nodeValue?.trim() || parent?.closest(CONSOLE_I18N_SKIP_SELECTOR)) return NodeFilter.FILTER_REJECT;
+      if (parent?.id && !CONSOLE_DYNAMIC_UI_IDS.has(parent.id)) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  while (walker.nextNode()) markConsoleUiElement(walker.currentNode.parentElement);
+  root.querySelectorAll("[title], [aria-label], [placeholder], [data-mobile-label]")
+    .forEach((node) => markConsoleUiElement(node));
+}
+
+function consoleUiElements(root) {
+  if (!root) return [];
+  if (root.nodeType === Node.TEXT_NODE) {
+    const parent = root.parentElement;
+    return parent?.matches(`[${CONSOLE_I18N_MARKER}]`) ? [parent] : [];
+  }
+  if (root.nodeType !== Node.ELEMENT_NODE && root.nodeType !== Node.DOCUMENT_NODE) return [];
+  const elements = [];
+  if (root.nodeType === Node.ELEMENT_NODE && root.matches(`[${CONSOLE_I18N_MARKER}]`)) elements.push(root);
+  root.querySelectorAll?.(`[${CONSOLE_I18N_MARKER}]`).forEach((node) => elements.push(node));
+  return elements;
+}
+
 function toTraditionalChinese(value) {
   let text = String(value || "");
-  zhHantPhraseMap.forEach(([source, target]) => {
-    text = text.split(source).join(target);
-  });
-  text = Array.from(text).map((char) => zhHantCharMap[char] || char).join("");
-  zhHantPhraseMap.forEach(([source, target]) => {
-    text = text.split(source).join(target);
+  const protectedPhrases = [];
+  [...zhHantPhraseMap]
+    .sort((left, right) => right[0].length - left[0].length)
+    .forEach(([source, target], index) => {
+      if (!text.includes(source)) return;
+      const token = `\uE000${index}\uE001`;
+      text = text.split(source).join(token);
+      protectedPhrases.push([token, target]);
+    });
+  const characters = getZhHantCharacterMap();
+  text = Array.from(text).map((char) => characters.get(char) || char).join("");
+  protectedPhrases.forEach(([token, target]) => {
+    text = text.split(token).join(target);
   });
   return text;
 }
 
 function translateTextNode(node, language) {
-  if (!node || !node.nodeValue || !node.nodeValue.trim()) return;
+  if (!node?.nodeValue?.trim() || !node.parentElement?.matches(`[${CONSOLE_I18N_MARKER}]`)) return;
   if (!i18nTextOriginals.has(node)) i18nTextOriginals.set(node, node.nodeValue);
   const original = i18nTextOriginals.get(node);
   node.nodeValue = language === "zh-Hant" ? toTraditionalChinese(original) : original;
 }
 
 function translateElementAttributes(node, language) {
-  if (!node || node.nodeType !== Node.ELEMENT_NODE) return;
-  if (node.closest?.("[data-i18n-skip]")) return;
-  const attrs = ["title", "aria-label", "placeholder", "data-mobile-label"];
-  attrs.forEach((attr) => {
+  if (!node?.matches?.(`[${CONSOLE_I18N_MARKER}]`) || node.closest(CONSOLE_I18N_SKIP_SELECTOR)) return;
+  CONSOLE_I18N_ATTRIBUTES.forEach((attr) => {
     if (!node.hasAttribute(attr)) return;
     let originals = i18nAttrOriginals.get(node);
     if (!originals) {
@@ -931,33 +1028,68 @@ function translateElementAttributes(node, language) {
   });
 }
 
+function refreshConsoleUiAttributeSource(node, attr, language) {
+  if (!node?.matches?.(`[${CONSOLE_I18N_MARKER}]`) || !CONSOLE_I18N_ATTRIBUTES.includes(attr)) return;
+  let originals = i18nAttrOriginals.get(node);
+  if (!originals) {
+    originals = {};
+    i18nAttrOriginals.set(node, originals);
+  }
+  const current = node.getAttribute(attr) || "";
+  const previous = originals[attr];
+  const translatedPrevious = previous === undefined
+    ? null
+    : language === "zh-Hant" ? toTraditionalChinese(previous) : previous;
+  if (previous !== undefined && current === translatedPrevious) return;
+  originals[attr] = current;
+  const translated = language === "zh-Hant" ? toTraditionalChinese(current) : current;
+  if (current !== translated) node.setAttribute(attr, translated);
+}
+
+function refreshConsoleUiTextSource(node, language) {
+  if (!node?.nodeValue?.trim() || !node.parentElement?.matches(`[${CONSOLE_I18N_MARKER}]`)) return;
+  const current = node.nodeValue;
+  const previous = i18nTextOriginals.get(node);
+  const translatedPrevious = previous === undefined
+    ? null
+    : language === "zh-Hant" ? toTraditionalChinese(previous) : previous;
+  if (previous !== undefined && current === translatedPrevious) return;
+  i18nTextOriginals.set(node, current);
+  translateTextNode(node, language);
+}
+
+function setConsoleUiAttribute(node, attr, sourceValue) {
+  if (!node) return;
+  markConsoleUiElement(node);
+  let originals = i18nAttrOriginals.get(node);
+  if (!originals) {
+    originals = {};
+    i18nAttrOriginals.set(node, originals);
+  }
+  originals[attr] = String(sourceValue || "");
+  node.setAttribute(attr, currentLanguage() === "zh-Hant" ? toTraditionalChinese(originals[attr]) : originals[attr]);
+}
+
 function translateConsoleLanguage(root = document.body, language = currentLanguage()) {
   if (!root) return;
-  const skip = new Set(["SCRIPT", "STYLE", "TEXTAREA", "INPUT", "SELECT", "OPTION"]);
   if (root.nodeType === Node.TEXT_NODE) {
     translateTextNode(root, language);
     return;
   }
-  if (root.nodeType !== Node.ELEMENT_NODE && root.nodeType !== Node.DOCUMENT_NODE) return;
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    acceptNode(node) {
-      const parent = node.parentElement;
-      if (!parent || skip.has(parent.tagName) || parent.closest("[data-i18n-skip]")) return NodeFilter.FILTER_REJECT;
-      return node.nodeValue && node.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
-    },
+  consoleUiElements(root).forEach((node) => {
+    Array.from(node.childNodes).forEach((child) => {
+      if (child.nodeType === Node.TEXT_NODE) translateTextNode(child, language);
+    });
+    translateElementAttributes(node, language);
   });
-  const textNodes = [];
-  while (walker.nextNode()) textNodes.push(walker.currentNode);
-  textNodes.forEach((node) => translateTextNode(node, language));
-  const translatedAttributeSelector = "[title], [aria-label], [placeholder], [data-mobile-label]";
-  const elements = root.nodeType === Node.ELEMENT_NODE
-    ? [root, ...root.querySelectorAll(translatedAttributeSelector)]
-    : Array.from(document.querySelectorAll(translatedAttributeSelector));
-  elements.forEach((node) => translateElementAttributes(node, language));
   document.title = language === "zh-Hant" ? toTraditionalChinese("Web 任务控制台") : "Web 任务控制台";
 }
 
 function syncLanguageToggle() {
+  if (window.VectoSiteNavigation) {
+    window.VectoSiteNavigation.sync();
+    return;
+  }
   const button = $("languageToggle");
   if (!button) return;
   const isTraditional = currentLanguage() === "zh-Hant";
@@ -977,23 +1109,8 @@ function applyLanguage(language) {
   translateConsoleLanguage(document.body, nextLanguage);
 }
 
-function toggleLanguage() {
-  applyLanguage(currentLanguage() === "zh-Hant" ? "zh-Hans" : "zh-Hant");
-}
-
 function ensureLanguageToggle() {
-  const actions = document.querySelector(".topbar-actions");
-  const refreshButton = $("refreshAll");
-  if (!actions || !refreshButton) return null;
-  let button = $("languageToggle");
-  if (!button) {
-    button = document.createElement("button");
-    button.id = "languageToggle";
-    button.type = "button";
-    button.className = "language-toggle";
-    button.dataset.i18nSkip = "true";
-    actions.insertBefore(button, refreshButton);
-  }
+  const button = $("languageToggle");
   syncLanguageToggle();
   return button;
 }
@@ -1001,30 +1118,30 @@ function ensureLanguageToggle() {
 function startLanguageObserver() {
   if (languageObserver || !document.body) return;
   languageObserver = new MutationObserver((mutations) => {
-    if (currentLanguage() !== "zh-Hant") return;
+    const language = currentLanguage();
     mutations.forEach((mutation) => {
-      mutation.addedNodes.forEach((node) => translateConsoleLanguage(node, "zh-Hant"));
+      if (mutation.type === "attributes") {
+        refreshConsoleUiAttributeSource(mutation.target, mutation.attributeName, language);
+        return;
+      }
+      if (mutation.type === "characterData") {
+        refreshConsoleUiTextSource(mutation.target, language);
+        return;
+      }
+      mutation.addedNodes.forEach((node) => translateConsoleLanguage(node, language));
     });
   });
   languageObserver.observe(document.body, {
+    attributes: true,
+    attributeFilter: CONSOLE_I18N_ATTRIBUTES,
+    characterData: true,
     childList: true,
     subtree: true,
   });
 }
 
 function ensureThemeToggle() {
-  const actions = document.querySelector(".topbar-actions");
-  const refreshButton = $("refreshAll");
-  if (!actions || !refreshButton) return null;
-  let button = $("themeToggle");
-  if (!button) {
-    button = document.createElement("button");
-    button.id = "themeToggle";
-    button.type = "button";
-    button.className = "theme-toggle";
-    button.dataset.i18nSkip = "true";
-    actions.insertBefore(button, refreshButton);
-  }
+  const button = $("themeToggle");
   syncThemeToggle();
   return button;
 }
@@ -18259,10 +18376,11 @@ async function showSocialLog(id) {
 }
 
 function bindEvents() {
-  const themeToggle = ensureThemeToggle();
-  if (themeToggle) themeToggle.addEventListener("click", toggleTheme);
-  const languageToggle = ensureLanguageToggle();
-  if (languageToggle) languageToggle.addEventListener("click", toggleLanguage);
+  ensureThemeToggle();
+  ensureLanguageToggle();
+  window.addEventListener("vecto:theme-change", (event) => applyTheme(event.detail?.theme));
+  window.addEventListener("vecto:language-change", (event) => applyLanguage(event.detail?.language));
+  markConsoleStaticUi();
   startLanguageObserver();
   applyLanguage(currentLanguage());
   bindMobileNavigation();

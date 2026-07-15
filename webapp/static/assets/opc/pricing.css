@@ -490,6 +490,29 @@
   background: #ffffff;
 }
 
+:root[data-theme="dark"] .pricing-facts,
+:root[data-theme="dark"] .pricing-package-grid article,
+:root[data-theme="dark"] .pricing-rule-grid article,
+:root[data-theme="dark"] .pricing-account-strip,
+:root[data-theme="dark"] .pricing-account-card {
+  color: var(--ink);
+  background: var(--paper);
+  border-color: var(--line);
+}
+
+:root[data-theme="dark"] .pricing-order-dialog {
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line);
+}
+
+:root[data-theme="dark"] .pricing-order-close,
+:root[data-theme="dark"] .pricing-order-actions .button-ghost {
+  color: var(--ink);
+  background: var(--surface-strong);
+  border-color: var(--line);
+}
+
 @media (max-width: 920px) {
   .pricing-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .pricing-facts div:nth-child(2) { border-right: 0; }
