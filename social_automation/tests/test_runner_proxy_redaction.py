@@ -122,6 +122,56 @@ class RunnerProxyRedactionTests(unittest.TestCase):
         self.assertEqual(sorted(observed), [(':90', ':90'), (':91', ':91')])
         self.assertEqual(os.environ.get("DISPLAY"), original_display)
 
+    def test_completed_task_closes_live_browser_by_default(self):
+        manager = runner._BrowserContextManager(
+            {"id": "account-1"},
+            None,
+            _RecordingLogger(),
+            {"task": {"payload": {}}},
+        )
+        manager.cm = mock.MagicMock()
+        manager.live_session = SimpleNamespace(id="live-1")
+
+        with (
+            mock.patch.object(manager, "_detach_live_browser_for_standby") as detach,
+            mock.patch.object(manager, "_stop_live_browser_session") as stop,
+        ):
+            manager.__exit__(None, None, None)
+
+        detach.assert_not_called()
+        manager.cm.__exit__.assert_called_once_with(None, None, None)
+        stop.assert_called_once_with()
+
+    def test_completed_task_can_explicitly_retain_live_browser(self):
+        manager = runner._BrowserContextManager(
+            {"id": "account-1"},
+            None,
+            _RecordingLogger(),
+            {"task": {"payload": {"retain_live_browser_after_finish": True}}},
+        )
+
+        with (
+            mock.patch.object(manager, "_detach_live_browser_for_standby", return_value=True) as detach,
+            mock.patch.object(manager, "_stop_live_browser_session") as stop,
+        ):
+            manager.__exit__(None, None, None)
+
+        detach.assert_called_once_with()
+        stop.assert_not_called()
+
+    def test_camoufox_exit_failure_still_stops_live_browser(self):
+        manager = runner._BrowserContextManager({"id": "account-1"}, None, _RecordingLogger())
+        manager.cm = mock.MagicMock()
+        manager.cm.__exit__.side_effect = RuntimeError("close failed")
+
+        with (
+            mock.patch.object(manager, "_stop_live_browser_session") as stop,
+            self.assertRaisesRegex(RuntimeError, "close failed"),
+        ):
+            manager.__exit__(None, None, None)
+
+        stop.assert_called_once_with()
+
 
 if __name__ == "__main__":
     unittest.main()

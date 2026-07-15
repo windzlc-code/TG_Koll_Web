@@ -406,7 +406,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         browser_refresh = self._function_source("refreshLiveBrowserSessionsSoon")
         self.assertIn('liveBrowserLoginMode(matched) === "switching"', browser_refresh)
         self.assertIn("found && !takeoverPending", browser_refresh)
-        self.assertIn("automaticLoginActive", browser_refresh)
+        self.assertNotIn("automaticLoginActive", browser_refresh)
         self.assertIn("refreshLiveBrowserSessionsOnly", browser_refresh)
         self.assertIn("liveBrowserRefreshTokens[refreshKey]", browser_refresh)
         self.assertIn('matched.login_mode = "takeover_timeout"', browser_refresh)
@@ -443,11 +443,12 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
               await callbacks.pop()();
               assert.ok(!state.liveBrowserRefreshTokens["task-gone"]);
 
+              callbacks.length = 0;
               state.socialBrowserSessions = [{{ task_id: "task-auto", task_type: "open_login", task_status: "running", login_mode: "automatic" }}];
               refreshLiveBrowserSessionsSoon("task-auto", 1, 1);
               await callbacks.pop()();
-              assert.ok(state.liveBrowserRefreshTokens["task-auto"]);
-              assert.ok(callbacks.length > 0);
+              assert.ok(!state.liveBrowserRefreshTokens["task-auto"]);
+              assert.strictEqual(callbacks.length, 0);
             }})().catch((error) => {{ console.error(error); process.exit(1); }});
             """
         )

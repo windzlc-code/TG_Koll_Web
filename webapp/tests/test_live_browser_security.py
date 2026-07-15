@@ -240,6 +240,14 @@ def _security_test_client() -> TestClient:
     return TestClient(app)
 
 
+def test_browser_sessions_strict_lookup_reports_backend_failure():
+    with mock.patch.object(live_browser, "list_live_browser_sessions", side_effect=OSError("registry unavailable")):
+        with pytest.raises(social_automation_api.HTTPException) as raised:
+            social_automation_api._live_browser_sessions(user_id=1, raise_on_error=True)
+
+    assert raised.value.status_code == 503
+
+
 @pytest.mark.parametrize("auto_submit", [1, "true", "false", None])
 def test_open_login_http_rejects_non_boolean_auto_submit(auto_submit):
     client = _security_test_client()

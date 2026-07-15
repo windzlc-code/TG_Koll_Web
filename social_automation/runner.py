@@ -286,18 +286,26 @@ class _BrowserContextManager:
         return self.context
 
     def __exit__(self, exc_type, exc, tb):
-        if exc_type is None and self._detach_live_browser_for_standby():
+        if exc_type is None and self._retain_live_browser_after_finish() and self._detach_live_browser_for_standby():
             return None
         if self.context_control is not None:
             self.context_control["context"] = None
             self.context_control["manager"] = None
             self.context_control["live_browser_session_id"] = ""
         if self.cm:
-            result = self.cm.__exit__(exc_type, exc, tb)
-            self._stop_live_browser_session()
-            return result
+            try:
+                return self.cm.__exit__(exc_type, exc, tb)
+            finally:
+                self._stop_live_browser_session()
         self._stop_live_browser_session()
         return None
+
+    def _retain_live_browser_after_finish(self) -> bool:
+        task = {}
+        if self.context_control is not None and isinstance(self.context_control.get("task"), dict):
+            task = self.context_control.get("task") or {}
+        payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+        return bool(payload.get("retain_live_browser_after_finish"))
 
     def _detach_live_browser_for_standby(self) -> bool:
         if self.live_session is None or self.context is None:

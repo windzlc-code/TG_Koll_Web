@@ -394,7 +394,7 @@ def register_social_automation_routes(app: FastAPI) -> None:
 
     @app.get("/api/persona_dashboard/automation/browser_sessions")
     def api_social_browser_sessions(user: dict[str, Any] = Depends(get_current_user)):
-        return {"ok": True, "sessions": _live_browser_sessions(user_id=_identity_user_id(user))}
+        return {"ok": True, "sessions": _live_browser_sessions(user_id=_identity_user_id(user), raise_on_error=True)}
 
     @app.get("/api/persona_dashboard/automation/browser_settings")
     def api_social_browser_settings(_user: dict[str, Any] = Depends(get_current_user)):
@@ -1162,12 +1162,14 @@ def build_social_automation_overview(*, user_id: int | None = None) -> dict[str,
     }
 
 
-def _live_browser_sessions(*, user_id: int | None = None) -> list[dict[str, Any]]:
+def _live_browser_sessions(*, user_id: int | None = None, raise_on_error: bool = False) -> list[dict[str, Any]]:
     try:
         from social_automation.live_browser import list_live_browser_sessions
 
         sessions = list_live_browser_sessions()
-    except Exception:
+    except Exception as exc:
+        if raise_on_error:
+            raise HTTPException(status_code=503, detail="实时浏览器会话暂时不可用") from exc
         return []
     task_ids = [str(session.get("task_id") or "").strip() for session in sessions if str(session.get("task_id") or "").strip()]
     if not task_ids:
@@ -1182,7 +1184,9 @@ def _live_browser_sessions(*, user_id: int | None = None) -> list[dict[str, Any]
                 [*task_ids, *owner_params],
             ).fetchall()
         task_status = {str(row["id"]): row for row in rows}
-    except Exception:
+    except Exception as exc:
+        if raise_on_error:
+            raise HTTPException(status_code=503, detail="实时浏览器会话暂时不可用") from exc
         return sessions if user_id is None else []
     visible_sessions: list[dict[str, Any]] = []
     for session in sessions:
