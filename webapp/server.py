@@ -52,19 +52,27 @@ from .auth import (
     hash_password,
     request_uses_admin_session,
     resolve_admin_workspace_user,
+    session_storage_token,
     session_token_for_request,
     verify_password,
 )
 from .db import db, get_admin_config, init_db, set_admin_config
 from . import commercial_billing
+from . import governance
 from .password_vault import (
     PasswordVaultDecryptError,
     PasswordVaultUnavailableError,
+    ciphertext_key_version as password_vault_ciphertext_key_version,
     decrypt_password as decrypt_vault_password,
+    decrypt_secret as decrypt_vault_secret,
     encrypt_password as encrypt_vault_password,
+    encrypt_secret as encrypt_vault_secret,
+    health_check as password_vault_health_check,
+    key_version as password_vault_key_version,
 )
 from .social_automation_api import (
     SocialTaskPayload,
+    _live_browser_sessions,
     cancel_all_social_tasks,
     clear_admin_billing_waived_payload,
     clear_trusted_batch_task,
@@ -283,6 +291,8 @@ _COMFY_GPU_WAITING = 0
 _COMFY_GPU_RUNNING = 0
 _AUTH_RATE_LOCK = threading.Lock()
 _AUTH_RATE_EVENTS: dict[str, deque[float]] = {}
+_ADMIN_DASHBOARD_CACHE_LOCK = threading.Lock()
+_ADMIN_DASHBOARD_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
 class RuntimeConfigFileError(RuntimeError):
@@ -406,6 +416,59 @@ def _require_same_origin(request: Request) -> None:
 
 def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:20]}"
+
+
+def _invalidate_admin_dashboard_cache() -> None:
+    with _ADMIN_DASHBOARD_CACHE_LOCK:
+        _ADMIN_DASHBOARD_CACHE.clear()
+
+
+def _sync_password_vault_key_status(existing_conn: sqlite3.Connection | None = None) -> dict[str, Any]:
+    connection_scope = contextlib.nullcontext(existing_conn) if existing_conn is not None else db()
+    with connection_scope as conn:
+        current_version = password_vault_key_version()
+        current_status = conn.execute(
+            "SELECT persistent_probe FROM password_vault_key_status WHERE key_version = ?",
+            (current_version,),
+        ).fetchone()
+        health = dict(
+            password_vault_health_check(
+                persistent_probe=str(current_status["persistent_probe"] or "") if current_status else "",
+                probe_key_version=current_version,
+            )
+        )
+        checked = _now_ts()
+        version = str(health.get("key_version") or current_version)[:40]
+        result = str(health.get("detail") or "unknown")[:500]
+        status = "active" if bool(health.get("healthy")) else "unavailable"
+        persistent_probe = str(health.get("persistent_probe") or "")
+        conn.execute(
+            """
+            INSERT INTO password_vault_key_status(
+              key_version, status, activated_at, last_health_check_at, last_health_result, persistent_probe
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(key_version) DO UPDATE SET
+              status = excluded.status,
+              last_health_check_at = excluded.last_health_check_at,
+              last_health_result = excluded.last_health_result,
+              persistent_probe = CASE
+                WHEN password_vault_key_status.persistent_probe = '' THEN excluded.persistent_probe
+                ELSE password_vault_key_status.persistent_probe
+              END
+            """,
+            (version, status, checked, checked, result, persistent_probe),
+        )
+        if status != "active":
+            governance.upsert_alert(
+                conn,
+                alert_type="password_vault_unavailable",
+                severity="critical",
+                title="密码保险库密钥不可用",
+                summary=result,
+                fingerprint=f"password-vault:{version}",
+                created_at=checked,
+            )
+    return health
 
 
 def _is_admin(user: dict[str, Any]) -> bool:
@@ -566,14 +629,11 @@ def _get_user_allowing_password_change(
     admin_workspace_user_id: str | None = Header(default=None, alias="X-Admin-Workspace-User-ID"),
 ) -> dict[str, Any]:
     workspace_target = admin_workspace_target_from_request(request, admin_workspace_user_id)
-    user = _get_session_user_allowing_password_change(
-        session_token_for_request(
-            request,
-            session_token,
-            admin_session_token,
-            admin_workspace_user_id=workspace_target,
-        )
+    selected_token = session_token_for_request(
+        request, session_token, admin_session_token, admin_workspace_user_id=workspace_target,
     )
+    request.state.auth_session_fingerprint = governance.token_digest(selected_token)[:16] if selected_token else ""
+    user = _get_session_user_allowing_password_change(selected_token)
     return resolve_admin_workspace_user(
         user,
         workspace_target,
@@ -588,16 +648,18 @@ def get_current_user(
     admin_workspace_user_id: str | None = Header(default=None, alias="X-Admin-Workspace-User-ID"),
 ) -> dict[str, Any]:
     workspace_target = admin_workspace_target_from_request(request, admin_workspace_user_id)
-    return _get_session_user_for_token(
-        session_token_for_request(
-            request,
-            session_token,
-            admin_session_token,
-            admin_workspace_user_id=workspace_target,
-        ),
+    selected_token = session_token_for_request(
+        request, session_token, admin_session_token, admin_workspace_user_id=workspace_target,
+    )
+    request.state.auth_session_fingerprint = governance.token_digest(selected_token)[:16] if selected_token else ""
+    user = _get_session_user_for_token(
+        selected_token,
         admin_workspace_user_id=workspace_target,
         request=request,
     )
+    if _is_admin(user):
+        request.state.authenticated_admin_user_id = int(user.get("id") or 0)
+    return user
 
 
 def require_admin(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
@@ -629,7 +691,24 @@ def _upsert_password_vault(
     user_id: int,
     ciphertext: str,
     now: int,
+    *,
+    actor_user_id: int = 0,
+    source: str = "unknown",
 ) -> None:
+    existing = conn.execute(
+        "SELECT ciphertext FROM password_vault WHERE user_id = ?",
+        (int(user_id),),
+    ).fetchone()
+    if existing is not None and str(existing["ciphertext"] or "") != str(ciphertext or ""):
+        governance.archive_password_ciphertext(
+            conn,
+            user_id=int(user_id),
+            ciphertext=str(existing["ciphertext"] or ""),
+            actor_user_id=int(actor_user_id or 0),
+            source=str(source or "unknown"),
+            key_version=password_vault_ciphertext_key_version(str(existing["ciphertext"] or "")),
+            created_at=int(now),
+        )
     conn.execute(
         """
         INSERT INTO password_vault(user_id, ciphertext, created_at, updated_at)
@@ -640,6 +719,223 @@ def _upsert_password_vault(
         """,
         (int(user_id), ciphertext, int(now), int(now)),
     )
+
+
+def _mfa_secret(user_id: int, ciphertext: str) -> str:
+    try:
+        return decrypt_vault_secret(int(user_id), "totp", str(ciphertext or ""))
+    except PasswordVaultUnavailableError as exc:
+        raise HTTPException(status_code=503, detail={"code": "password_vault_unavailable", "message": str(exc)}) from exc
+    except PasswordVaultDecryptError as exc:
+        raise HTTPException(status_code=409, detail={"code": "mfa_secret_invalid", "message": str(exc)}) from exc
+
+
+def _verify_mfa_code(
+    conn: sqlite3.Connection,
+    user_id: int,
+    code: str,
+    *,
+    require_enabled: bool = True,
+    consume_recovery: bool = True,
+) -> bool:
+    row = conn.execute(
+        "SELECT secret_ciphertext, recovery_codes_json, enabled_at, last_totp_counter, "
+        "failed_attempt_count, failure_window_at, locked_until FROM user_mfa WHERE user_id = ?",
+        (int(user_id),),
+    ).fetchone()
+    if row is None or (require_enabled and int(row["enabled_at"] or 0) <= 0):
+        raise HTTPException(
+            status_code=428,
+            detail={"code": "mfa_setup_required", "message": "请先在管理员账号设置中绑定动态验证码。"},
+        )
+    verified_at = _now_ts()
+    if int(row["locked_until"] or 0) > verified_at:
+        raise HTTPException(
+            status_code=429,
+            detail={"code": "mfa_rate_limited", "message": "MFA 尝试次数过多，请稍后重试。", "retry_after": int(row["locked_until"]) - verified_at},
+        )
+    candidate = str(code or "").strip()
+    secret_ciphertext = str(row["secret_ciphertext"] or "")
+    if secret_ciphertext:
+        matched_counter = governance.matching_totp_counter(_mfa_secret(int(user_id), secret_ciphertext), candidate, at=verified_at)
+        if matched_counter is not None and matched_counter > int(row["last_totp_counter"] or 0):
+            conn.execute(
+                "UPDATE user_mfa SET last_verified_at = ?, last_totp_counter = ?, failed_attempt_count = 0, "
+                "failure_window_at = 0, locked_until = 0, updated_at = ? WHERE user_id = ?",
+                (verified_at, int(matched_counter), verified_at, int(user_id)),
+            )
+            return True
+    try:
+        recovery_digests = [str(item) for item in json.loads(str(row["recovery_codes_json"] or "[]"))]
+    except Exception:
+        recovery_digests = []
+    digest = governance.recovery_code_digest(candidate)
+    if digest in recovery_digests:
+        if consume_recovery:
+            recovery_digests.remove(digest)
+            conn.execute(
+                "UPDATE user_mfa SET recovery_codes_json = ?, last_verified_at = ?, failed_attempt_count = 0, "
+                "failure_window_at = 0, locked_until = 0, updated_at = ? WHERE user_id = ?",
+                (json.dumps(recovery_digests), verified_at, verified_at, int(user_id)),
+            )
+        return True
+    failure_window = int(row["failure_window_at"] or 0)
+    failures = int(row["failed_attempt_count"] or 0) + 1 if failure_window >= verified_at - 300 else 1
+    locked_until = verified_at + 300 if failures >= 5 else 0
+    conn.execute(
+        "UPDATE user_mfa SET failed_attempt_count = ?, failure_window_at = ?, locked_until = ?, updated_at = ? WHERE user_id = ?",
+        (failures, verified_at, locked_until, verified_at, int(user_id)),
+    )
+    if failures >= 5:
+        governance.upsert_alert(
+            conn,
+            alert_type="mfa_failures",
+            severity="high",
+            title="MFA 验证连续失败",
+            summary="账号在 5 分钟内连续多次提交无效或已使用的 MFA 验证码。",
+            target_user_id=int(user_id),
+            fingerprint=f"mfa-failures:{int(user_id)}:{verified_at // 300}",
+            created_at=verified_at,
+        )
+    return False
+
+
+def _verify_mfa_code_atomic(user_id: int, code: str) -> bool:
+    deferred_error: HTTPException | None = None
+    verified = False
+    with db() as auth_conn:
+        try:
+            verified = _verify_mfa_code(auth_conn, int(user_id), code)
+        except HTTPException as exc:
+            deferred_error = exc
+    if deferred_error is not None:
+        raise deferred_error
+    return verified
+
+
+def _require_admin_step_up_with_conn(
+    conn: sqlite3.Connection,
+    admin: dict[str, Any],
+    *,
+    admin_password: str,
+    totp_code: str,
+) -> None:
+    admin_id = int(admin.get("id") or 0)
+    rate_key = str(admin_id)
+    _check_auth_rate_limit("admin_step_up", rate_key, limit=5, window_seconds=300)
+    row = conn.execute(
+        "SELECT password_hash, is_admin, is_disabled FROM users WHERE id = ?",
+        (admin_id,),
+    ).fetchone()
+    if (
+        row is None
+        or int(row["is_admin"] or 0) != 1
+        or int(row["is_disabled"] or 0) == 1
+        or not verify_password(str(admin_password or ""), str(row["password_hash"] or ""))
+    ):
+        _record_auth_rate_limit("admin_step_up", rate_key, window_seconds=300)
+        raise HTTPException(status_code=403, detail={"code": "admin_reauthentication_failed", "message": "管理员密码错误。"})
+    if not _verify_mfa_code(conn, admin_id, totp_code):
+        raise HTTPException(status_code=403, detail={"code": "mfa_code_invalid", "message": "动态验证码或恢复码错误。"})
+    _clear_auth_rate_limit("admin_step_up", rate_key)
+
+
+def _require_admin_step_up(
+    _business_conn: sqlite3.Connection,
+    admin: dict[str, Any],
+    *,
+    admin_password: str,
+    totp_code: str,
+) -> None:
+    # Authentication state has its own transaction. A later business conflict
+    # cannot commit or roll back MFA counters and recovery-code consumption.
+    deferred_error: HTTPException | None = None
+    with db() as auth_conn:
+        try:
+            _require_admin_step_up_with_conn(
+                auth_conn,
+                admin,
+                admin_password=admin_password,
+                totp_code=totp_code,
+            )
+        except HTTPException as exc:
+            deferred_error = exc
+    if deferred_error is not None:
+        raise deferred_error
+
+
+def _user_lifecycle_legacy_values(status: str) -> tuple[str, int]:
+    normalized = str(status or "").strip().lower()
+    if normalized == "pending":
+        return "pending", 1
+    if normalized == "rejected":
+        return "rejected", 1
+    if normalized in {"suspended", "locked", "archived", "deleted"}:
+        return "approved", 1
+    return "approved", 0
+
+
+def _set_user_lifecycle(
+    conn: sqlite3.Connection,
+    *,
+    user_id: int,
+    status: str,
+    reason: str,
+    actor_user_id: int,
+    at: int,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    normalized = str(status or "").strip().lower()
+    if normalized not in governance.LIFECYCLE_STATUSES:
+        raise HTTPException(status_code=400, detail="invalid lifecycle status")
+    row = conn.execute("SELECT * FROM users WHERE id = ?", (int(user_id),)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="customer account does not exist")
+    before = dict(row)
+    if int(before.get("is_admin") or 0) == 1 and normalized != "active":
+        active_admins = conn.execute(
+            "SELECT COUNT(*) AS count FROM users WHERE is_admin = 1 AND is_disabled = 0 AND lifecycle_status = 'active'"
+        ).fetchone()
+        if int(active_admins["count"] or 0) <= 1:
+            raise HTTPException(status_code=409, detail="cannot disable the last active administrator")
+    approval, disabled = _user_lifecycle_legacy_values(normalized)
+    deleted_at = int(before.get("deleted_at") or 0)
+    deleted_by = int(before.get("deleted_by") or 0)
+    if normalized == "deleted":
+        deleted_at = int(at)
+        deleted_by = int(actor_user_id)
+    elif normalized == "active":
+        deleted_at = 0
+        deleted_by = 0
+    locked_at = int(at) if normalized == "locked" else 0
+    locked_by = int(actor_user_id) if normalized == "locked" else 0
+    conn.execute(
+        """
+        UPDATE users
+        SET lifecycle_status = ?, lifecycle_reason = ?, approval_status = ?, is_disabled = ?,
+            deleted_at = ?, deleted_by = ?, locked_at = ?, locked_by = ?,
+            row_version = row_version + 1, updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            normalized,
+            str(reason or "")[:1000],
+            approval,
+            disabled,
+            deleted_at,
+            deleted_by,
+            locked_at,
+            locked_by,
+            int(at),
+            int(user_id),
+        ),
+    )
+    if normalized != "active":
+        conn.execute(
+            "UPDATE sessions SET revoked_at = ?, revoke_reason = ? WHERE user_id = ? AND revoked_at = 0",
+            (int(at), f"lifecycle_{normalized}", int(user_id)),
+        )
+    after_row = conn.execute("SELECT * FROM users WHERE id = ?", (int(user_id),)).fetchone()
+    return before, dict(after_row) if after_row else {}
 
 
 def _identity_user_id(user: dict[str, Any]) -> int:
@@ -10597,17 +10893,44 @@ def _internal_tg_submit_user_id() -> int:
 def _require_internal_tg_request(request: Request) -> None:
     expected_token = str(os.getenv("TG_INTERNAL_API_TOKEN") or "").strip()
     provided_token = str(request.headers.get("x-tg-internal-token") or "").strip()
-    if expected_token:
-        if provided_token != expected_token:
-            raise HTTPException(status_code=403, detail="TG 内部提交 token 不正确")
+    authorization = str(request.headers.get("authorization") or "").strip()
+    service_credential = str(request.headers.get("x-service-credential") or "").strip()
+    if authorization.lower().startswith("bearer "):
+        service_credential = authorization[7:].strip()
+    if expected_token and provided_token and hmac.compare_digest(provided_token, expected_token):
         return
-    client_host = ""
-    try:
-        client_host = str(request.client.host if request.client else "")
-    except Exception:
-        client_host = ""
-    if client_host not in {"127.0.0.1", "::1", "localhost"}:
-        raise HTTPException(status_code=403, detail="TG 内部提交接口仅允许本机调用")
+    if not service_credential:
+        # Tool R18 historically sends this header. When it is not the legacy
+        # shared token, treat it as a scoped service-account credential.
+        service_credential = provided_token
+    if not service_credential:
+        raise HTTPException(status_code=401, detail="internal service credential required")
+    now = _now_ts()
+    with db() as conn:
+        service = conn.execute(
+            "SELECT id, allowed_scopes_json, expires_at FROM service_accounts "
+            "WHERE credential_hash = ? AND status = 'active' AND revoked_at = 0",
+            (governance.token_digest(service_credential),),
+        ).fetchone()
+        if service is None or (int(service["expires_at"] or 0) > 0 and int(service["expires_at"]) <= now):
+            raise HTTPException(status_code=403, detail="internal service credential invalid or expired")
+        try:
+            scopes = [str(item).strip() for item in json.loads(str(service["allowed_scopes_json"] or "[]"))]
+        except Exception:
+            scopes = []
+        path = str(request.url.path or "")
+        allowed = any(
+            scope in {"*", "internal:*", "internal:tg"}
+            or (scope.endswith("*") and path.startswith(scope[:-1]))
+            or scope == path
+            for scope in scopes
+        )
+        if not allowed:
+            raise HTTPException(status_code=403, detail="service account scope does not allow this endpoint")
+        conn.execute(
+            "UPDATE service_accounts SET last_used_at = ?, last_used_ip = ?, updated_at = ? WHERE id = ?",
+            (now, _request_client_ip(request), now, str(service["id"])),
+        )
 
 
 def _validated_local_file(value: Any, *, label: str) -> str:
@@ -10883,10 +11206,10 @@ def _tg_prompt_preview(payload: dict[str, Any]) -> str:
     text = " / ".join(dict.fromkeys(candidates))
     return text[:500]
 
-def _delete_task_artifacts(task_id: str) -> None:
+def _task_artifact_paths(task_id: str) -> list[Path]:
     tid = str(task_id or "").strip()
     if not tid:
-        return
+        return []
     candidates: list[Path] = [UPLOAD_ROOT / tid, OUTPUT_ROOT / tid]
     try:
         candidates.extend(list(UPLOAD_ROOT.glob(f"*/{tid}")))
@@ -10896,7 +11219,19 @@ def _delete_task_artifacts(task_id: str) -> None:
         candidates.extend(list(OUTPUT_ROOT.glob(f"*/{tid}")))
     except Exception:
         pass
-    for p in candidates:
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        resolved = candidate.expanduser().resolve()
+        key = str(resolved)
+        if key not in seen:
+            seen.add(key)
+            unique.append(resolved)
+    return unique
+
+
+def _delete_task_artifacts(task_id: str) -> None:
+    for p in _task_artifact_paths(task_id):
         try:
             if p.exists():
                 shutil.rmtree(p, ignore_errors=True)
@@ -10919,6 +11254,8 @@ class LoginPayload(BaseModel):
     password: str
     remember_me: bool = False
     force_takeover: bool = False
+    mfa_code: str = Field(default="", max_length=32)
+    device_id: str = Field(default="", max_length=128)
 
 
 class ChangePasswordPayload(BaseModel):
@@ -11023,16 +11360,91 @@ class AdminCreateUserPayload(BaseModel):
     password: str
     is_admin: bool = False
     balance_cents: int = 0
+    admin_password: str = Field(default="", max_length=256)
+    totp_code: str = Field(default="", max_length=32)
+    reason: str = Field(default="", max_length=1000)
 
 
 class AdminResetPasswordPayload(BaseModel):
     expected_updated_at: int = Field(ge=1)
+    admin_password: str = Field(min_length=1, max_length=256)
+    totp_code: str = Field(default="", max_length=32)
+    reason: str = Field(min_length=2, max_length=1000)
 
 
 class AdminSetPasswordPayload(BaseModel):
     password: str
     admin_password: str
     expected_updated_at: int = Field(ge=1)
+    totp_code: str = Field(default="", max_length=32)
+    reason: str = Field(min_length=2, max_length=1000)
+
+
+class AdminSensitiveActionPayload(BaseModel):
+    admin_password: str = Field(min_length=1, max_length=256)
+    totp_code: str = Field(default="", max_length=32)
+    reason: str = Field(min_length=2, max_length=1000)
+
+
+class AdminPasswordRestorePayload(AdminSensitiveActionPayload):
+    history_id: str = Field(min_length=8, max_length=100)
+    expected_updated_at: int = Field(ge=1)
+
+
+class AdminPurgePayload(AdminSensitiveActionPayload):
+    confirm_username: str = Field(min_length=1, max_length=128)
+
+
+class MfaSetupPayload(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+
+
+class MfaSetupVerifyPayload(BaseModel):
+    code: str = Field(min_length=6, max_length=16)
+
+
+class MfaVerifyPayload(BaseModel):
+    code: str = Field(min_length=6, max_length=32)
+
+
+class CustomerGroupPayload(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    description: str = Field(default="", max_length=500)
+    color: str = Field(default="neutral", max_length=32)
+
+
+class CustomerTagPayload(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    color: str = Field(default="neutral", max_length=32)
+
+
+class AdminUserBatchPayload(BaseModel):
+    action: str = Field(min_length=2, max_length=80)
+    user_ids: list[int] = Field(min_length=1, max_length=500)
+    reason: str = Field(min_length=2, max_length=1000)
+    group_id: str = Field(default="", max_length=100)
+    tag_ids: list[str] = Field(default_factory=list, max_length=100)
+    preview: bool = False
+
+
+class SecurityAlertUpdatePayload(BaseModel):
+    status: str = Field(max_length=32)
+    assigned_admin_id: int | None = Field(default=None, ge=0)
+    note: str = Field(default="", max_length=2000)
+
+
+class ServiceAccountCreatePayload(AdminSensitiveActionPayload):
+    name: str = Field(min_length=2, max_length=120)
+    purpose: str = Field(default="", max_length=500)
+    allowed_scopes: list[str] = Field(default_factory=list, max_length=100)
+    expires_at: int = Field(default=0, ge=0)
+
+
+class ServiceAccountUpdatePayload(AdminSensitiveActionPayload):
+    status: str = Field(default="active", max_length=32)
+    purpose: str = Field(default="", max_length=500)
+    allowed_scopes: list[str] = Field(default_factory=list, max_length=100)
+    expires_at: int = Field(default=0, ge=0)
 
 
 class SentimentBrowserAuthCookiePayload(BaseModel):
@@ -11497,6 +11909,41 @@ def _create_account_purge_journal(user_id: int) -> Path:
     return journal_dir
 
 
+def _stage_account_purge_paths(user_id: int, paths: list[Path]) -> None:
+    journal_dir = _account_purge_journal_dir(user_id)
+    manifest_path = journal_dir / "manifest.json"
+    manifest = _read_json_file(manifest_path)
+    if not isinstance(manifest, dict) or int(manifest.get("target_user_id") or 0) != int(user_id):
+        raise RuntimeError(f"invalid purge journal for user {int(user_id)}")
+    entries = manifest.get("staged_paths")
+    if not isinstance(entries, list):
+        entries = []
+        manifest["staged_paths"] = entries
+    seen = {str(item.get("original") or "") for item in entries if isinstance(item, dict)}
+    stage_root = journal_dir / "staged"
+    stage_root.mkdir(parents=True, exist_ok=True)
+    for path in paths:
+        original = path.expanduser().resolve()
+        original_text = str(original)
+        if original_text in seen or not original.exists():
+            continue
+        staged_rel = f"staged/{len(entries)}"
+        entry = {
+            "original": original_text,
+            "staged": staged_rel,
+            "kind": "directory" if original.is_dir() else "file",
+            "status": "pending",
+        }
+        entries.append(entry)
+        _write_json_file(manifest_path, manifest)
+        staged_path = journal_dir / staged_rel
+        staged_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(original), str(staged_path))
+        entry["status"] = "staged"
+        _write_json_file(manifest_path, manifest)
+        seen.add(original_text)
+
+
 def _restore_account_purge_journal(user_id: int) -> None:
     journal_dir = _account_purge_journal_dir(user_id)
     manifest = _read_json_file(journal_dir / "manifest.json")
@@ -11518,6 +11965,23 @@ def _restore_account_purge_journal(user_id: int) -> None:
             restore_plan.append((path, (journal_dir / f"{index}.snapshot").read_bytes()))
         else:
             restore_plan.append((path, None))
+
+    staged_entries = manifest.get("staged_paths") or []
+    if not isinstance(staged_entries, list):
+        raise RuntimeError(f"invalid staged purge entries for user {int(user_id)}")
+    for entry in reversed(staged_entries):
+        if not isinstance(entry, dict):
+            raise RuntimeError(f"invalid staged purge entry for user {int(user_id)}")
+        original = Path(str(entry.get("original") or "")).expanduser().resolve()
+        staged = (journal_dir / str(entry.get("staged") or "")).resolve()
+        if journal_dir.resolve() not in staged.parents:
+            raise RuntimeError(f"invalid staged purge path for user {int(user_id)}")
+        if not staged.exists():
+            continue
+        if original.exists():
+            raise RuntimeError(f"purge restore target already exists: {original}")
+        original.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(staged), str(original))
 
     with _persona_archive_file_lock():
         with _persona_group_file_lock():
@@ -16707,6 +17171,7 @@ def create_app() -> FastAPI:
     _ensure_default_pricing()
     _ensure_default_runtime_config()
     _ensure_admin_seed()
+    _sync_password_vault_key_status()
     _resume_pending_tasks()
     _start_task_workers()
     _start_cleanup_worker()
@@ -16793,29 +17258,95 @@ def create_app() -> FastAPI:
         return await call_next(request)
 
     @app.middleware("http")
+    async def reject_cross_origin_authenticated_writes(request: Request, call_next):
+        path = str(request.url.path or "")
+        method = request.method.upper()
+        has_auth_cookie = bool(request.cookies.get(SESSION_COOKIE) or request.cookies.get(ADMIN_SESSION_COOKIE))
+        if path.startswith("/api/") and method in {"POST", "PUT", "PATCH", "DELETE"} and has_auth_cookie:
+            fetch_site = str(request.headers.get("sec-fetch-site") or "").strip().lower()
+            if fetch_site in {"cross-site", "none"}:
+                return JSONResponse(status_code=403, content={"detail": "cross-origin request rejected", "code": "csrf_rejected"})
+            if request.headers.get("origin") or request.headers.get("referer"):
+                try:
+                    _require_same_origin(request)
+                except HTTPException as exc:
+                    return JSONResponse(status_code=int(exc.status_code), content={"detail": exc.detail, "code": "csrf_rejected"})
+        return await call_next(request)
+
+    @app.middleware("http")
+    async def audit_admin_api_coverage(request: Request, call_next):
+        request_id = _new_id("req")
+        request.state.request_id = request_id
+        request.state.client_request_id = str(request.headers.get("x-request-id") or "")[:128]
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        path = str(request.url.path or "")
+        method = request.method.upper()
+        sensitive_read = method == "GET" and (
+            bool(re.fullmatch(r"/api/admin/users/[0-9]+", path))
+            or any(
+                marker in path
+                for marker in (
+                    "/password-history",
+                    "/sessions",
+                    "/billing/",
+                    "/audit/",
+                    "/service-accounts",
+                )
+            )
+        )
+        if not path.startswith("/api/admin/") or (method == "GET" and not sensitive_read):
+            return response
+        actor_user_id = int(getattr(request.state, "authenticated_admin_user_id", 0) or 0)
+        if actor_user_id <= 0:
+            return response
+        try:
+            normalized_path = re.sub(r"/[0-9]+(?=/|$)", "/{id}", path)
+            with db() as conn:
+                exists = conn.execute(
+                    "SELECT 1 FROM audit_events WHERE request_id = ? AND actor_user_id = ? LIMIT 1",
+                    (request_id, actor_user_id),
+                ).fetchone()
+                if exists is None:
+                    governance.record_audit(
+                        conn,
+                        actor_user_id=actor_user_id,
+                        action=f"admin_api.{method.lower()}",
+                        resource_type="admin_api",
+                        resource_id=normalized_path,
+                        after={"method": method, "path": normalized_path, "status_code": int(response.status_code)},
+                        outcome="success" if int(response.status_code) < 400 else "failed",
+                        error_code="" if int(response.status_code) < 400 else f"http_{int(response.status_code)}",
+                        risk_level="medium" if method != "GET" else "low",
+                        **governance.request_context(request),
+                    )
+        except Exception:
+            logger.exception("Failed to record administrator API audit coverage event")
+        return response
+
+    @app.middleware("http")
     async def audit_admin_workspace_requests(request: Request, call_next):
         response = await call_next(request)
         context = getattr(request.state, "admin_workspace_context", None)
         if isinstance(context, dict):
             try:
                 with db() as conn:
-                    conn.execute(
-                        "INSERT INTO admin_audit_log(admin_user_id, action, target_user_id, metadata_json, created_at) "
-                        "VALUES (?, ?, ?, ?, ?)",
-                        (
-                            int(context.get("admin_user_id") or 0),
-                            _admin_workspace_audit_action(request.method, request.url.path),
-                            int(context.get("target_user_id") or 0),
-                            json.dumps(
-                                {
-                                    "method": request.method,
-                                    "path": request.url.path,
-                                    "status_code": int(response.status_code),
-                                },
-                                ensure_ascii=True,
-                            ),
-                            _now_ts(),
-                        ),
+                    governance.record_audit(
+                        conn,
+                        actor_user_id=int(context.get("admin_user_id") or 0),
+                        target_user_id=int(context.get("target_user_id") or 0),
+                        action=_admin_workspace_audit_action(request.method, request.url.path),
+                        resource_type="admin_workspace",
+                        resource_id=str(context.get("target_user_id") or ""),
+                        after={
+                            "method": request.method,
+                            "path": request.url.path,
+                            "status_code": int(response.status_code),
+                        },
+                        outcome="success" if int(response.status_code) < 400 else "failed",
+                        error_code="" if int(response.status_code) < 400 else f"http_{int(response.status_code)}",
+                        risk_level="medium" if request.method.upper() != "GET" else "low",
+                        **governance.request_context(request),
                     )
             except Exception:
                 logger.exception("Failed to record administrator workspace audit event")
@@ -17055,8 +17586,8 @@ def create_app() -> FastAPI:
                     INSERT INTO users(
                       username, password_hash, is_admin, is_disabled, balance_cents,
                       account_type, approval_status, full_name, email, phone, company, use_case,
-                      created_at, updated_at
-                    ) VALUES (?, ?, 0, 1, 0, 'guest', 'pending', ?, ?, ?, ?, ?, ?, ?)
+                      lifecycle_status, source_channel, created_at, updated_at
+                    ) VALUES (?, ?, 0, 1, 0, 'guest', 'pending', ?, ?, ?, ?, ?, 'pending', 'public_application', ?, ?)
                     """,
                     (username, password_hash, full_name, email, phone, company, use_case, now, now),
                 )
@@ -17067,7 +17598,7 @@ def create_app() -> FastAPI:
                 )
                 _reserve_username(conn, user_id, username, now)
                 vault_ciphertext = _encrypt_password_for_vault(user_id, password)
-                _upsert_password_vault(conn, user_id, vault_ciphertext, now)
+                _upsert_password_vault(conn, user_id, vault_ciphertext, now, actor_user_id=user_id, source="application")
             except Exception as exc:
                 if "UNIQUE" in str(exc).upper() or "RESERVED" in str(exc).upper():
                     raise HTTPException(status_code=409, detail="客户账号已存在") from exc
@@ -17107,6 +17638,7 @@ def create_app() -> FastAPI:
             record_invalid_credentials()
             raise HTTPException(status_code=401, detail="用户名或密码错误")
         legacy_admin_token = ""
+        session_conflict_details: dict[str, Any] = {}
         remember_login = False
         session_ttl_seconds = 12 * 3600
         with db() as conn:
@@ -17134,9 +17666,66 @@ def create_app() -> FastAPI:
                     raise HTTPException(status_code=401, detail="用户名或密码错误")
                 user = dict(locked_row)
             if not verify_password(password, str(user.get("password_hash") or "")):
+                failed_now = _now_ts()
+                window_at = int(user.get("failed_login_window_at") or 0)
+                failed_count = int(user.get("failed_login_count") or 0) + 1 if window_at >= failed_now - 900 else 1
+                conn.execute(
+                    "UPDATE users SET failed_login_count = ?, failed_login_window_at = ?, updated_at = MAX(updated_at, ?) WHERE id = ?",
+                    (failed_count, failed_now, failed_now, int(user["id"])),
+                )
+                if not bool(int(user.get("is_admin") or 0)) and failed_count >= 8:
+                    conn.execute(
+                        "UPDATE users SET lifecycle_status = 'locked', lifecycle_reason = 'too_many_failed_logins', "
+                        "is_disabled = 1, locked_at = ?, locked_until = ?, row_version = row_version + 1 WHERE id = ?",
+                        (failed_now, failed_now + 1800, int(user["id"])),
+                    )
+                    governance.upsert_alert(
+                        conn,
+                        alert_type="login_failure_lock",
+                        severity="high",
+                        title="客户账号因连续登录失败被锁定",
+                        summary=f"账号 {username} 在 15 分钟内连续登录失败。",
+                        target_user_id=int(user["id"]),
+                        fingerprint=f"login-lock:{int(user['id'])}",
+                        created_at=failed_now,
+                    )
+                elif bool(int(user.get("is_admin") or 0)) and failed_count >= 5:
+                    governance.upsert_alert(
+                        conn,
+                        alert_type="administrator_login_failures",
+                        severity="critical",
+                        title="管理员账号连续登录失败",
+                        summary=f"管理员账号 {username} 在 15 分钟内连续登录失败，请立即核查来源 IP。",
+                        target_user_id=int(user["id"]),
+                        fingerprint=f"admin-login-failures:{int(user['id'])}:{failed_now // 900}",
+                        created_at=failed_now,
+                    )
                 record_invalid_credentials()
                 raise HTTPException(status_code=401, detail="用户名或密码错误")
             is_admin = bool(int(user.get("is_admin") or 0))
+            mfa_row = conn.execute(
+                "SELECT enabled_at, required_after FROM user_mfa WHERE user_id = ?",
+                (int(user["id"]),),
+            ).fetchone()
+            if mfa_row is None:
+                migration = conn.execute(
+                    "SELECT applied_at FROM schema_migrations WHERE version = 'governance_v1'"
+                ).fetchone()
+                governance_started_at = int(migration["applied_at"] or _now_ts()) if migration else _now_ts()
+                required_after = governance_started_at + (7 * 86400 if is_admin else 0)
+                conn.execute(
+                    "INSERT INTO user_mfa(user_id, required_after, updated_at) VALUES (?, ?, ?)",
+                    (int(user["id"]), required_after, _now_ts()),
+                )
+                mfa_row = conn.execute(
+                    "SELECT enabled_at, required_after FROM user_mfa WHERE user_id = ?",
+                    (int(user["id"]),),
+                ).fetchone()
+            mfa_enabled = bool(mfa_row and int(mfa_row["enabled_at"] or 0) > 0)
+            mfa_required = bool(is_admin and mfa_row and int(mfa_row["required_after"] or 0) <= _now_ts())
+            if mfa_enabled:
+                if not _verify_mfa_code_atomic(int(user["id"]), payload.mfa_code):
+                    raise HTTPException(status_code=401, detail={"code": "mfa_code_invalid", "message": "动态验证码或恢复码错误。"})
             if expected_admin is True and not is_admin:
                 raise HTTPException(status_code=403, detail="此入口仅供管理员登录")
             if expected_admin is False and is_admin:
@@ -17155,23 +17744,52 @@ def create_app() -> FastAPI:
             if is_admin:
                 if previous_token:
                     delete_session(conn, previous_token)
-                token = create_session(conn, int(user["id"]), ttl_seconds=session_ttl_seconds)
+                token = create_session(
+                    conn,
+                    int(user["id"]),
+                    ttl_seconds=session_ttl_seconds,
+                    request=request,
+                    is_admin_session=True,
+                    device_id=payload.device_id,
+                )
             else:
                 now_ts = _now_ts()
                 conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (now_ts,))
                 active_sessions = conn.execute(
-                    "SELECT token FROM sessions WHERE user_id = ?",
-                    (int(user["id"]),),
+                    "SELECT token, device_id, ip_address, user_agent, created_at, last_seen_at, expires_at "
+                    "FROM sessions WHERE user_id = ? AND revoked_at = 0 AND expires_at > ? "
+                    "ORDER BY last_seen_at DESC, created_at DESC",
+                    (int(user["id"]), now_ts),
                 ).fetchall()
                 active_tokens = {str(session["token"]) for session in active_sessions}
                 if payload.force_takeover:
-                    conn.execute("DELETE FROM sessions WHERE user_id = ?", (int(user["id"]),))
-                elif previous_token and previous_token in active_tokens and len(active_tokens) == 1:
+                    conn.execute(
+                        "UPDATE sessions SET revoked_at = ?, revoke_reason = 'customer_force_takeover' "
+                        "WHERE user_id = ? AND revoked_at = 0",
+                        (now_ts, int(user["id"])),
+                    )
+                elif previous_token and session_storage_token(previous_token) in active_tokens and len(active_tokens) == 1:
                     delete_session(conn, previous_token)
                 elif active_tokens:
                     session_conflict = True
+                    current_session = active_sessions[0]
+                    session_conflict_details = {
+                        "device_id": str(current_session["device_id"] or ""),
+                        "ip_address": str(current_session["ip_address"] or ""),
+                        "user_agent": str(current_session["user_agent"] or ""),
+                        "created_at": int(current_session["created_at"] or 0),
+                        "last_seen_at": int(current_session["last_seen_at"] or 0),
+                        "expires_at": int(current_session["expires_at"] or 0),
+                    }
                 if not session_conflict:
-                    token = create_session(conn, int(user["id"]), ttl_seconds=session_ttl_seconds)
+                    token = create_session(
+                        conn,
+                        int(user["id"]),
+                        ttl_seconds=session_ttl_seconds,
+                        request=request,
+                        is_admin_session=False,
+                        device_id=payload.device_id,
+                    )
             legacy_cookie_token = str(request.cookies.get(SESSION_COOKIE) or "").strip()
             if is_admin:
                 legacy_cookie_is_same_admin = False
@@ -17183,7 +17801,7 @@ def create_app() -> FastAPI:
                         JOIN users AS account ON account.id = session.user_id
                         WHERE session.token = ?
                         """,
-                        (legacy_cookie_token,),
+                        (session_storage_token(legacy_cookie_token),),
                     ).fetchone()
                     legacy_cookie_is_same_admin = bool(
                         legacy_row
@@ -17193,20 +17811,61 @@ def create_app() -> FastAPI:
                 if not legacy_cookie_token or legacy_cookie_is_same_admin:
                     if legacy_cookie_is_same_admin:
                         delete_session(conn, legacy_cookie_token)
-                    legacy_admin_token = create_session(conn, int(user["id"]), ttl_seconds=session_ttl_seconds)
+                    legacy_admin_token = create_session(
+                        conn,
+                        int(user["id"]),
+                        ttl_seconds=session_ttl_seconds,
+                        request=request,
+                        is_admin_session=True,
+                        device_id=payload.device_id,
+                    )
             if not session_conflict:
                 login_at = _now_ts()
+                login_device_id = str(payload.device_id or request.headers.get("x-device-id") or "")[:128]
+                previous_device_id = str(user.get("last_device_id") or "")[:128]
                 conn.execute(
-                    "UPDATE users SET last_login_at = ?, "
+                    "UPDATE users SET last_login_at = ?, last_login_ip = ?, last_login_user_agent = ?, "
+                    "last_device_id = ?, failed_login_count = 0, failed_login_window_at = 0, "
                     "updated_at = CASE WHEN updated_at >= ? THEN updated_at + 1 ELSE ? END WHERE id = ?",
-                    (login_at, login_at, login_at, int(user["id"])),
+                    (
+                        login_at,
+                        client_ip,
+                        str(request.headers.get("user-agent") or "")[:500],
+                        login_device_id,
+                        login_at,
+                        login_at,
+                        int(user["id"]),
+                    ),
                 )
+                governance.record_audit(
+                    conn,
+                    actor_user_id=int(user["id"]),
+                    target_user_id=int(user["id"]),
+                    action="auth.login",
+                    resource_type="session",
+                    resource_id=governance.token_digest(token)[:16],
+                    after={"is_admin": is_admin, "device_id": login_device_id, "remember_login": remember_login},
+                    risk_level="low",
+                    **governance.request_context(request),
+                )
+                if login_device_id and login_device_id != previous_device_id:
+                    governance.upsert_alert(
+                        conn,
+                        alert_type="new_device_login",
+                        severity="medium" if previous_device_id else "low",
+                        title="账号从新设备登录",
+                        summary=f"账号 {username} 使用新的设备标识登录。",
+                        target_user_id=int(user["id"]),
+                        fingerprint=f"new-device:{int(user['id'])}:{governance.token_digest(login_device_id)[:16]}",
+                        created_at=login_at,
+                    )
         if session_conflict:
             raise HTTPException(
                 status_code=409,
                 detail={
                     "code": "SESSION_CONFLICT",
                     "message": "该账号已在其他浏览器登录。如需继续，请选择强制接管当前会话。",
+                    "active_session": session_conflict_details,
                 },
             )
         _clear_auth_rate_limit("login_user", username_key)
@@ -17219,6 +17878,9 @@ def create_app() -> FastAPI:
             "approval_status": str(user.get("approval_status") or "approved"),
             "must_change_password": bool(int(user.get("must_change_password") or 0)),
             "password_expires_at": _password_expiry(user),
+            "mfa_enabled": mfa_enabled,
+            "mfa_required": mfa_required,
+            "mfa_required_after": int(mfa_row["required_after"] or 0) if mfa_row else 0,
         }
         response = JSONResponse(content=resp)
         response.set_cookie(
@@ -17261,7 +17923,10 @@ def create_app() -> FastAPI:
         clear_legacy_admin_cookie = False
         if token:
             with db() as conn:
-                owner = conn.execute("SELECT user_id FROM sessions WHERE token = ?", (token,)).fetchone()
+                owner = conn.execute(
+                    "SELECT user_id FROM sessions WHERE token = ?",
+                    (session_storage_token(token),),
+                ).fetchone()
                 delete_session(conn, token)
                 if admin_logout and owner is not None and user_token and user_token != token:
                     legacy_owner = conn.execute(
@@ -17271,7 +17936,7 @@ def create_app() -> FastAPI:
                         JOIN users AS account ON account.id = session.user_id
                         WHERE session.token = ?
                         """,
-                        (user_token,),
+                        (session_storage_token(user_token),),
                     ).fetchone()
                     if (
                         legacy_owner is not None
@@ -17323,9 +17988,20 @@ def create_app() -> FastAPI:
                 (new_hash, now, int(user["id"])),
             )
             if vault_ciphertext is not None:
-                _upsert_password_vault(conn, int(user["id"]), vault_ciphertext, now)
+                _upsert_password_vault(
+                    conn,
+                    int(user["id"]),
+                    vault_ciphertext,
+                    now,
+                    actor_user_id=int(user["id"]),
+                    source="self_change",
+                )
             if current_token:
-                conn.execute("DELETE FROM sessions WHERE user_id = ? AND token <> ?", (int(user["id"]), current_token))
+                conn.execute(
+                    "UPDATE sessions SET revoked_at = ?, revoke_reason = 'password_changed_other_session' "
+                    "WHERE user_id = ? AND token <> ? AND revoked_at = 0",
+                    (now, int(user["id"]), session_storage_token(current_token)),
+                )
             else:
                 conn.execute("DELETE FROM sessions WHERE user_id = ?", (int(user["id"]),))
         return {"ok": True}
@@ -17395,6 +18071,211 @@ def create_app() -> FastAPI:
     @app.get("/api/auth/me")
     def api_auth_me(user: dict[str, Any] = Depends(_get_user_allowing_password_change)):
         return api_me(user)
+
+    @app.get("/api/auth/mfa")
+    def api_mfa_status(user: dict[str, Any] = Depends(_get_user_allowing_password_change)):
+        user_id = int(user.get("id") or 0)
+        with db() as conn:
+            row = conn.execute(
+                "SELECT enabled_at, required_after, recovery_codes_json, pending_secret_ciphertext, last_verified_at FROM user_mfa WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+            if row is None:
+                migration = conn.execute(
+                    "SELECT applied_at FROM schema_migrations WHERE version = 'governance_v1'"
+                ).fetchone()
+                required_after = (int(migration["applied_at"] or _now_ts()) + 7 * 86400) if _is_admin(user) else 0
+                conn.execute(
+                    "INSERT INTO user_mfa(user_id, required_after, updated_at) VALUES (?, ?, ?)",
+                    (user_id, required_after, _now_ts()),
+                )
+                row = conn.execute(
+                    "SELECT enabled_at, required_after, recovery_codes_json, pending_secret_ciphertext, last_verified_at FROM user_mfa WHERE user_id = ?",
+                    (user_id,),
+                ).fetchone()
+        try:
+            recovery_count = len(json.loads(str(row["recovery_codes_json"] or "[]"))) if row else 0
+        except Exception:
+            recovery_count = 0
+        return {
+            "enabled": bool(row and int(row["enabled_at"] or 0) > 0),
+            "enabled_at": int(row["enabled_at"] or 0) if row else 0,
+            "required": bool(_is_admin(user)),
+            "required_after": int(row["required_after"] or 0) if row else 0,
+            "setup_pending": bool(row and str(row["pending_secret_ciphertext"] or "")),
+            "recovery_codes_remaining": recovery_count,
+            "last_verified_at": int(row["last_verified_at"] or 0) if row else 0,
+        }
+
+    @app.post("/api/auth/mfa/setup")
+    def api_mfa_setup(
+        payload: MfaSetupPayload,
+        request: Request,
+        user: dict[str, Any] = Depends(_get_user_allowing_password_change),
+    ):
+        _require_same_origin(request)
+        user_id = int(user.get("id") or 0)
+        _check_auth_rate_limit("mfa_setup_reauth", str(user_id), limit=5, window_seconds=300)
+        with db() as conn:
+            credential = conn.execute("SELECT password_hash FROM users WHERE id = ?", (user_id,)).fetchone()
+            if credential is None or not verify_password(payload.current_password, str(credential["password_hash"] or "")):
+                _record_auth_rate_limit("mfa_setup_reauth", str(user_id), window_seconds=300)
+                raise HTTPException(status_code=403, detail={"code": "reauthentication_failed", "message": "当前密码错误。"})
+        _clear_auth_rate_limit("mfa_setup_reauth", str(user_id))
+        secret = governance.generate_totp_secret()
+        recovery_codes = governance.generate_recovery_codes()
+        try:
+            secret_ciphertext = encrypt_vault_secret(user_id, "totp", secret)
+        except PasswordVaultUnavailableError as exc:
+            raise HTTPException(status_code=503, detail={"code": "password_vault_unavailable", "message": str(exc)}) from exc
+        with db() as conn:
+            existing = conn.execute("SELECT enabled_at FROM user_mfa WHERE user_id = ?", (user_id,)).fetchone()
+            if existing is not None and int(existing["enabled_at"] or 0) > 0:
+                raise HTTPException(status_code=409, detail={"code": "mfa_already_enabled", "message": "MFA 已启用，如需更换请由管理员执行恢复流程。"})
+            required_after = _now_ts() if _is_admin(user) else 0
+            conn.execute(
+                """
+                INSERT INTO user_mfa(user_id, pending_secret_ciphertext, recovery_codes_json, required_after, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                  pending_secret_ciphertext = excluded.pending_secret_ciphertext,
+                  recovery_codes_json = excluded.recovery_codes_json,
+                  required_after = CASE WHEN user_mfa.required_after > 0 THEN user_mfa.required_after ELSE excluded.required_after END,
+                  updated_at = excluded.updated_at
+                """,
+                (
+                    user_id,
+                    secret_ciphertext,
+                    json.dumps([governance.recovery_code_digest(code) for code in recovery_codes]),
+                    required_after,
+                    _now_ts(),
+                ),
+            )
+        return JSONResponse(
+            content={
+                "secret": secret,
+                "otpauth_uri": governance.totp_uri(secret, str(user.get("username") or user_id)),
+                "recovery_codes": recovery_codes,
+            },
+            headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+        )
+
+    @app.post("/api/auth/mfa/verify-setup")
+    def api_mfa_verify_setup(
+        payload: MfaSetupVerifyPayload,
+        request: Request,
+        user: dict[str, Any] = Depends(_get_user_allowing_password_change),
+    ):
+        _require_same_origin(request)
+        user_id = int(user.get("id") or 0)
+        _check_auth_rate_limit("mfa_setup_verify", str(user_id), limit=5, window_seconds=300)
+        with db() as conn:
+            row = conn.execute(
+                "SELECT pending_secret_ciphertext FROM user_mfa WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+            if row is None or not str(row["pending_secret_ciphertext"] or ""):
+                raise HTTPException(status_code=409, detail={"code": "mfa_setup_missing", "message": "没有待验证的 MFA 设置。"})
+            secret = _mfa_secret(user_id, str(row["pending_secret_ciphertext"] or ""))
+            if not governance.verify_totp(secret, payload.code):
+                _record_auth_rate_limit("mfa_setup_verify", str(user_id), window_seconds=300)
+                raise HTTPException(status_code=400, detail={"code": "mfa_code_invalid", "message": "动态验证码错误。"})
+            verified_at = _now_ts()
+            conn.execute(
+                "UPDATE user_mfa SET secret_ciphertext = pending_secret_ciphertext, pending_secret_ciphertext = '', enabled_at = ?, last_verified_at = ?, updated_at = ? WHERE user_id = ?",
+                (verified_at, verified_at, verified_at, user_id),
+            )
+            if _is_admin(user):
+                governance.record_audit(
+                    conn,
+                    actor_user_id=user_id,
+                    target_user_id=user_id,
+                    action="admin.mfa_enabled",
+                    resource_type="user_mfa",
+                    resource_id=str(user_id),
+                    risk_level="medium",
+                    **governance.request_context(request),
+                )
+        _clear_auth_rate_limit("mfa_setup_verify", str(user_id))
+        return {"ok": True, "enabled_at": verified_at}
+
+    @app.get("/api/account/sessions")
+    def api_account_sessions(
+        request: Request,
+        user: dict[str, Any] = Depends(_get_user_allowing_password_change),
+    ):
+        target_user_id = _workspace_user_id(user)
+        current_raw = session_token_for_request(
+            request,
+            request.cookies.get(SESSION_COOKIE),
+            request.cookies.get(ADMIN_SESSION_COOKIE),
+        )
+        current_token = session_storage_token(current_raw) if current_raw else ""
+        with db() as conn:
+            rows = conn.execute(
+                """
+                SELECT token, device_id, ip_address, user_agent, created_at, last_seen_at,
+                       expires_at, revoked_at, revoke_reason, is_admin_session
+                FROM sessions
+                WHERE user_id = ? AND revoked_at = 0 AND expires_at > ?
+                ORDER BY last_seen_at DESC, created_at DESC LIMIT 100
+                """,
+                (target_user_id, _now_ts()),
+            ).fetchall()
+        return {
+            "sessions": [
+                {
+                    "id": str(row["token"] or "")[:16],
+                    "device_id": str(row["device_id"] or ""),
+                    "ip_address": str(row["ip_address"] or ""),
+                    "user_agent": str(row["user_agent"] or ""),
+                    "created_at": int(row["created_at"] or 0),
+                    "last_seen_at": int(row["last_seen_at"] or 0),
+                    "expires_at": int(row["expires_at"] or 0),
+                    "revoked_at": int(row["revoked_at"] or 0),
+                    "revoke_reason": str(row["revoke_reason"] or ""),
+                    "is_admin_session": bool(int(row["is_admin_session"] or 0)),
+                    "current": hmac.compare_digest(str(row["token"] or ""), current_token),
+                }
+                for row in rows
+            ]
+        }
+
+    @app.delete("/api/account/sessions/{session_id}")
+    def api_account_revoke_session(
+        session_id: str,
+        request: Request,
+        user: dict[str, Any] = Depends(_get_user_allowing_password_change),
+    ):
+        _require_same_origin(request)
+        target_user_id = _workspace_user_id(user)
+        clean_id = str(session_id or "").strip().lower()
+        if len(clean_id) != 16 or not re.fullmatch(r"[a-f0-9]{16}", clean_id):
+            raise HTTPException(status_code=400, detail="invalid session id")
+        with db() as conn:
+            row = conn.execute(
+                "SELECT token FROM sessions WHERE user_id = ? AND substr(token, 1, 16) = ?",
+                (target_user_id, clean_id),
+            ).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="session not found")
+            conn.execute(
+                "UPDATE sessions SET revoked_at = ?, revoke_reason = 'user_revoked' WHERE token = ? AND revoked_at = 0",
+                (_now_ts(), str(row["token"])),
+            )
+            if int(user.get("_workspace_admin_user_id") or 0) > 0:
+                governance.record_audit(
+                    conn,
+                    actor_user_id=int(user.get("_workspace_admin_user_id") or 0),
+                    target_user_id=target_user_id,
+                    action="user.session_revoke",
+                    resource_type="user_session",
+                    resource_id=clean_id,
+                    reason="administrator workspace session revocation",
+                    risk_level="medium",
+                    **governance.request_context(request),
+                )
+        return {"ok": True}
 
     @app.get("/api/persona_dashboard/overview")
     def api_persona_dashboard_overview(user: dict[str, Any] = Depends(get_current_user)):
@@ -19485,11 +20366,885 @@ def create_app() -> FastAPI:
             set_admin_config(conn, "pricing", data, _now_ts())
         return {"ok": True, "pricing": data}
 
+    @app.get("/api/admin/dashboard")
+    def api_admin_dashboard(
+        days: int = 30,
+        start_at: int = 0,
+        end_at: int = 0,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        snapshot_at = int(end_at or _now_ts())
+        if int(start_at or 0) > 0:
+            if int(start_at) > snapshot_at:
+                raise HTTPException(status_code=400, detail="start_at must not be later than end_at")
+            safe_days = max(1, min(((snapshot_at - int(start_at)) // 86400) + 1, 366))
+        else:
+            safe_days = max(1, min(int(days or 30), 366))
+        cache_key = f"{safe_days}:{snapshot_at // 15 if end_at else 'current'}"
+        monotonic_now = time.monotonic()
+        with _ADMIN_DASHBOARD_CACHE_LOCK:
+            cached = _ADMIN_DASHBOARD_CACHE.get(cache_key)
+            if cached and monotonic_now - cached[0] < 15:
+                return cached[1]
+        with db() as conn:
+            payload = governance.dashboard_snapshot(conn, days=safe_days, at=snapshot_at)
+            vault_health = _sync_password_vault_key_status(conn)
+            payload["health"] = {
+                "database": "healthy",
+                "password_vault": vault_health,
+                "billing_enforcement": commercial_billing.enforcement_enabled(),
+            }
+            if not bool(vault_health.get("healthy")):
+                payload["summary"]["service_health"] = "degraded"
+        browser_sessions = _live_browser_sessions(user_id=None)
+        browser_counts = {"running": 0, "idle": 0, "manual": 0, "error": 0, "reclaimable": 0}
+        manual_queue: list[dict[str, Any]] = []
+        for session in browser_sessions:
+            task_status = str(session.get("task_status") or "").strip().lower()
+            login_mode = str(session.get("login_mode") or "").strip().lower()
+            if login_mode == "manual" or bool(session.get("input_allowed")):
+                browser_counts["manual"] += 1
+                manual_queue.append(
+                    {
+                        "session_id": str(session.get("id") or session.get("session_id") or ""),
+                        "task_id": str(session.get("task_id") or ""),
+                        "title": str(session.get("title") or session.get("username") or "需要人工处理的浏览器"),
+                        "task_status": task_status,
+                    }
+                )
+            elif task_status in {"failed", "error"} or session.get("task_error"):
+                browser_counts["error"] += 1
+            elif task_status in {"completed", "success", "cancelled", "canceled"}:
+                browser_counts["reclaimable"] += 1
+            elif task_status in {"queued", "pending"}:
+                browser_counts["idle"] += 1
+            else:
+                browser_counts["running"] += 1
+        payload.setdefault("distributions", {})["browsers"] = [
+            {"label": label, "value": value} for label, value in browser_counts.items()
+        ]
+        payload.setdefault("queues", {})["manual_browsers"] = manual_queue[:8]
+        payload["summary"]["browser_sessions"] = len(browser_sessions)
+        with _ADMIN_DASHBOARD_CACHE_LOCK:
+            _ADMIN_DASHBOARD_CACHE[cache_key] = (monotonic_now, payload)
+        return payload
+
+    @app.get("/api/admin/customer-groups")
+    def api_admin_customer_groups(user: dict[str, Any] = Depends(require_admin)):
+        with db() as conn:
+            rows = conn.execute(
+                """
+                SELECT groups.*, COUNT(members.user_id) AS member_count
+                FROM customer_groups AS groups
+                LEFT JOIN customer_group_members AS members ON members.group_id = groups.id
+                GROUP BY groups.id ORDER BY groups.name COLLATE NOCASE
+                """
+            ).fetchall()
+        return {"items": [dict(row) for row in rows]}
+
+    @app.post("/api/admin/customer-groups")
+    def api_admin_create_customer_group(
+        payload: CustomerGroupPayload,
+        request: Request,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        _require_same_origin(request)
+        created = _now_ts()
+        group_id = _new_id("customer_group")
+        with db() as conn:
+            try:
+                conn.execute(
+                    "INSERT INTO customer_groups(id, name, description, color, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        group_id,
+                        str(payload.name).strip(),
+                        str(payload.description).strip(),
+                        str(payload.color).strip() or "neutral",
+                        int(user.get("id") or 0),
+                        created,
+                        created,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise HTTPException(status_code=409, detail="group name already exists") from exc
+            governance.record_audit(
+                conn,
+                actor_user_id=int(user.get("id") or 0),
+                action="customer_group.create",
+                resource_type="customer_group",
+                resource_id=group_id,
+                after=payload.model_dump(),
+                **governance.request_context(request),
+            )
+        return {"ok": True, "id": group_id}
+
+    @app.patch("/api/admin/customer-groups/{group_id}")
+    def api_admin_update_customer_group(
+        group_id: str,
+        payload: CustomerGroupPayload,
+        request: Request,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        _require_same_origin(request)
+        with db() as conn:
+            before = conn.execute("SELECT * FROM customer_groups WHERE id = ?", (str(group_id),)).fetchone()
+            if before is None:
+                raise HTTPException(status_code=404, detail="group not found")
+            try:
+                conn.execute(
+                    "UPDATE customer_groups SET name = ?, description = ?, color = ?, updated_at = ? WHERE id = ?",
+                    (
+                        str(payload.name).strip(),
+                        str(payload.description).strip(),
+                        str(payload.color).strip() or "neutral",
+                        _now_ts(),
+                        str(group_id),
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise HTTPException(status_code=409, detail="group name already exists") from exc
+            governance.record_audit(
+                conn,
+                actor_user_id=int(user.get("id") or 0),
+                action="customer_group.update",
+                resource_type="customer_group",
+                resource_id=str(group_id),
+                before=dict(before),
+                after=payload.model_dump(),
+                **governance.request_context(request),
+            )
+        return {"ok": True}
+
+    @app.get("/api/admin/tags")
+    def api_admin_customer_tags(user: dict[str, Any] = Depends(require_admin)):
+        with db() as conn:
+            rows = conn.execute(
+                """
+                SELECT tags.*, COUNT(assignments.user_id) AS member_count
+                FROM customer_tags AS tags
+                LEFT JOIN customer_tag_assignments AS assignments ON assignments.tag_id = tags.id
+                GROUP BY tags.id ORDER BY tags.name COLLATE NOCASE
+                """
+            ).fetchall()
+        return {"items": [dict(row) for row in rows]}
+
+    @app.post("/api/admin/tags")
+    def api_admin_create_customer_tag(
+        payload: CustomerTagPayload,
+        request: Request,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        _require_same_origin(request)
+        created = _now_ts()
+        tag_id = _new_id("customer_tag")
+        with db() as conn:
+            try:
+                conn.execute(
+                    "INSERT INTO customer_tags(id, name, color, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        tag_id,
+                        str(payload.name).strip(),
+                        str(payload.color).strip() or "neutral",
+                        int(user.get("id") or 0),
+                        created,
+                        created,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise HTTPException(status_code=409, detail="tag name already exists") from exc
+            governance.record_audit(
+                conn,
+                actor_user_id=int(user.get("id") or 0),
+                action="customer_tag.create",
+                resource_type="customer_tag",
+                resource_id=tag_id,
+                after=payload.model_dump(),
+                **governance.request_context(request),
+            )
+        return {"ok": True, "id": tag_id}
+
+    @app.patch("/api/admin/tags/{tag_id}")
+    def api_admin_update_customer_tag(
+        tag_id: str,
+        payload: CustomerTagPayload,
+        request: Request,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        _require_same_origin(request)
+        with db() as conn:
+            before = conn.execute("SELECT * FROM customer_tags WHERE id = ?", (str(tag_id),)).fetchone()
+            if before is None:
+                raise HTTPException(status_code=404, detail="tag not found")
+            try:
+                conn.execute(
+                    "UPDATE customer_tags SET name = ?, color = ?, updated_at = ? WHERE id = ?",
+                    (str(payload.name).strip(), str(payload.color).strip() or "neutral", _now_ts(), str(tag_id)),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise HTTPException(status_code=409, detail="tag name already exists") from exc
+            governance.record_audit(
+                conn,
+                actor_user_id=int(user.get("id") or 0),
+                action="customer_tag.update",
+                resource_type="customer_tag",
+                resource_id=str(tag_id),
+                before=dict(before),
+                after=payload.model_dump(),
+                **governance.request_context(request),
+            )
+        return {"ok": True}
+
+    @app.post("/api/admin/users/batch-actions")
+    def api_admin_user_batch_actions(
+        payload: AdminUserBatchPayload,
+        request: Request,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        _require_same_origin(request)
+        action = str(payload.action or "").strip().lower()
+        allowed = {"approve", "reject", "enable", "suspend", "lock", "archive", "revoke_sessions", "assign_group", "add_tags"}
+        if action not in allowed:
+            raise HTTPException(status_code=400, detail="unsupported batch action")
+        user_ids = list(dict.fromkeys(int(item) for item in payload.user_ids if int(item) > 0))
+        placeholders = ",".join("?" for _ in user_ids)
+        with db() as conn:
+            if action == "add_tags":
+                requested_tag_ids = list(dict.fromkeys(str(item).strip() for item in payload.tag_ids if str(item).strip()))
+                if not requested_tag_ids:
+                    raise HTTPException(status_code=400, detail="at least one tag_id is required")
+                tag_placeholders = ",".join("?" for _ in requested_tag_ids)
+                existing_tag_ids = {
+                    str(row["id"])
+                    for row in conn.execute(
+                        f"SELECT id FROM customer_tags WHERE id IN ({tag_placeholders})",
+                        tuple(requested_tag_ids),
+                    ).fetchall()
+                }
+                missing_tag_ids = [tag_id for tag_id in requested_tag_ids if tag_id not in existing_tag_ids]
+                if missing_tag_ids:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={"code": "invalid_tag_ids", "missing_tag_ids": missing_tag_ids},
+                    )
+                payload.tag_ids = requested_tag_ids
+            rows = conn.execute(
+                f"SELECT id, username, is_admin, lifecycle_status, approval_status FROM users WHERE id IN ({placeholders}) ORDER BY id",
+                tuple(user_ids),
+            ).fetchall()
+            impact = [dict(row) for row in rows]
+            if payload.preview:
+                return {"preview": True, "action": action, "matched": len(impact), "items": impact}
+            job_id = _new_id("admin_batch")
+            started = _now_ts()
+            conn.execute(
+                "INSERT INTO admin_batch_jobs(id, action, status, request_json, total_count, created_by, created_at, started_at) VALUES (?, ?, 'running', ?, ?, ?, ?, ?)",
+                (job_id, action, governance.json_text(payload.model_dump()), len(impact), int(user.get("id") or 0), started, started),
+            )
+            success = failed = skipped = 0
+            for row in rows:
+                target_id = int(row["id"])
+                result_status = "success"
+                message = ""
+                try:
+                    if int(row["is_admin"] or 0) == 1 and action not in {"revoke_sessions"}:
+                        result_status = "skipped"
+                        message = "administrator lifecycle is not changed by customer batch actions"
+                        skipped += 1
+                    elif action == "revoke_sessions":
+                        revoked = conn.execute(
+                            "UPDATE sessions SET revoked_at = ?, revoke_reason = 'admin_batch_revoke' WHERE user_id = ? AND revoked_at = 0",
+                            (started, target_id),
+                        )
+                        governance.record_audit(
+                            conn,
+                            actor_user_id=int(user.get("id") or 0),
+                            target_user_id=target_id,
+                            action="user.batch_revoke_sessions",
+                            resource_type="user_session",
+                            resource_id=str(target_id),
+                            reason=payload.reason,
+                            after={"revoked_count": int(revoked.rowcount or 0)},
+                            risk_level="medium",
+                            **governance.request_context(request),
+                        )
+                        success += 1
+                    elif action == "assign_group":
+                        if not payload.group_id:
+                            raise ValueError("group_id is required")
+                        if conn.execute("SELECT 1 FROM customer_groups WHERE id = ?", (payload.group_id,)).fetchone() is None:
+                            raise ValueError("group does not exist")
+                        conn.execute("DELETE FROM customer_group_members WHERE user_id = ?", (target_id,))
+                        conn.execute(
+                            "INSERT INTO customer_group_members(group_id, user_id, created_by, created_at) VALUES (?, ?, ?, ?)",
+                            (payload.group_id, target_id, int(user.get("id") or 0), started),
+                        )
+                        governance.record_audit(
+                            conn,
+                            actor_user_id=int(user.get("id") or 0), target_user_id=target_id,
+                            action="user.batch_assign_group", resource_type="customer_group_membership",
+                            resource_id=str(target_id), reason=payload.reason,
+                            after={"group_id": payload.group_id}, risk_level="low",
+                            **governance.request_context(request),
+                        )
+                        success += 1
+                    elif action == "add_tags":
+                        for tag_id in payload.tag_ids:
+                            conn.execute(
+                                "INSERT OR IGNORE INTO customer_tag_assignments(tag_id, user_id, created_by, created_at) VALUES (?, ?, ?, ?)",
+                                (str(tag_id), target_id, int(user.get("id") or 0), started),
+                            )
+                        governance.record_audit(
+                            conn,
+                            actor_user_id=int(user.get("id") or 0), target_user_id=target_id,
+                            action="user.batch_add_tags", resource_type="customer_tag_assignment",
+                            resource_id=str(target_id), reason=payload.reason,
+                            after={"tag_ids": list(payload.tag_ids)}, risk_level="low",
+                            **governance.request_context(request),
+                        )
+                        success += 1
+                    else:
+                        approval = str(row["approval_status"] or "")
+                        lifecycle = str(row["lifecycle_status"] or "")
+                        if action == "enable" and approval != "approved":
+                            result_status = "skipped"
+                            message = "pending or rejected accounts must use approve"
+                            skipped += 1
+                            raise StopIteration
+                        if action in {"suspend", "lock", "archive"} and lifecycle != "active":
+                            result_status = "skipped"
+                            message = f"account lifecycle is {lifecycle}, expected active"
+                            skipped += 1
+                            raise StopIteration
+                        status_map = {
+                            "approve": "active",
+                            "reject": "rejected",
+                            "enable": "active",
+                            "suspend": "suspended",
+                            "lock": "locked",
+                            "archive": "archived",
+                        }
+                        before, after = _set_user_lifecycle(
+                            conn,
+                            user_id=target_id,
+                            status=status_map[action],
+                            reason=payload.reason,
+                            actor_user_id=int(user.get("id") or 0),
+                            at=started,
+                        )
+                        governance.record_audit(
+                            conn,
+                            actor_user_id=int(user.get("id") or 0),
+                            target_user_id=target_id,
+                            action=f"user.batch_{action}",
+                            resource_type="user",
+                            resource_id=str(target_id),
+                            reason=payload.reason,
+                            before=before,
+                            after=after,
+                            risk_level="high" if action in {"lock", "archive"} else "medium",
+                            **governance.request_context(request),
+                        )
+                        success += 1
+                except StopIteration:
+                    pass
+                except Exception as exc:
+                    result_status = "failed"
+                    message = str(exc)[:500]
+                    failed += 1
+                conn.execute(
+                    "INSERT INTO admin_batch_job_results(id, job_id, user_id, status, message, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (_new_id("batch_result"), job_id, target_id, result_status, message, _now_ts()),
+                )
+            conn.execute(
+                "UPDATE admin_batch_jobs SET status = 'completed', success_count = ?, failed_count = ?, skipped_count = ?, finished_at = ? WHERE id = ?",
+                (success, failed, skipped, _now_ts(), job_id),
+            )
+            governance.record_audit(
+                conn,
+                actor_user_id=int(user.get("id") or 0),
+                action=f"user.batch_{action}",
+                resource_type="admin_batch_job",
+                resource_id=job_id,
+                reason=payload.reason,
+                after={"success": success, "failed": failed, "skipped": skipped},
+                risk_level="high" if action in {"lock", "archive"} else "medium",
+                **governance.request_context(request),
+            )
+        _invalidate_admin_dashboard_cache()
+        return {"ok": True, "job_id": job_id, "success": success, "failed": failed, "skipped": skipped}
+
+    @app.get("/api/admin/users/{target_user_id}/sessions")
+    def api_admin_user_sessions(target_user_id: int, user: dict[str, Any] = Depends(require_admin)):
+        with db() as conn:
+            rows = conn.execute(
+                """
+                SELECT token, device_id, ip_address, user_agent, created_at, last_seen_at,
+                       expires_at, revoked_at, revoke_reason, is_admin_session
+                FROM sessions WHERE user_id = ? ORDER BY last_seen_at DESC, created_at DESC LIMIT 200
+                """,
+                (int(target_user_id),),
+            ).fetchall()
+        return {"items": [{**dict(row), "token": str(row["token"] or "")[:16]} for row in rows]}
+
+    @app.post("/api/admin/users/{target_user_id}/sessions/revoke")
+    def api_admin_revoke_user_sessions(
+        target_user_id: int,
+        request: Request,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        _require_same_origin(request)
+        revoked_at = _now_ts()
+        with db() as conn:
+            result = conn.execute(
+                "UPDATE sessions SET revoked_at = ?, revoke_reason = 'administrator_revoked' WHERE user_id = ? AND revoked_at = 0",
+                (revoked_at, int(target_user_id)),
+            )
+            governance.record_audit(
+                conn,
+                actor_user_id=int(user.get("id") or 0),
+                target_user_id=int(target_user_id),
+                action="user.sessions_revoke",
+                resource_type="session",
+                resource_id=str(target_user_id),
+                after={"revoked_count": int(result.rowcount or 0)},
+                risk_level="medium",
+                **governance.request_context(request),
+            )
+        return {"ok": True, "revoked_count": int(result.rowcount or 0)}
+
+    @app.get("/api/admin/users/{target_user_id}/password-history")
+    def api_admin_password_history(target_user_id: int, user: dict[str, Any] = Depends(require_admin)):
+        with db() as conn:
+            target = conn.execute("SELECT is_admin FROM users WHERE id = ?", (int(target_user_id),)).fetchone()
+            if target is None:
+                raise HTTPException(status_code=404, detail="customer account does not exist")
+            if int(target["is_admin"] or 0) == 1:
+                raise HTTPException(status_code=403, detail="administrator password history is not available")
+            governance.prune_password_history(conn, int(target_user_id))
+            rows = conn.execute(
+                "SELECT id, key_version, source, actor_user_id, created_at, expires_at, restored_at FROM password_vault_history WHERE user_id = ? ORDER BY created_at DESC LIMIT 5",
+                (int(target_user_id),),
+            ).fetchall()
+        return {"items": [dict(row) for row in rows]}
+
+    @app.post("/api/admin/users/{target_user_id}/restore-password")
+    def api_admin_restore_user_password(
+        target_user_id: int,
+        payload: AdminPasswordRestorePayload,
+        request: Request,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        _require_same_origin(request)
+        target_id = int(target_user_id)
+        with db() as conn:
+            _require_admin_step_up(
+                conn,
+                user,
+                admin_password=payload.admin_password,
+                totp_code=payload.totp_code,
+            )
+            target = conn.execute(
+                "SELECT id, is_admin, updated_at FROM users WHERE id = ?",
+                (target_id,),
+            ).fetchone()
+            if target is None:
+                raise HTTPException(status_code=404, detail="customer account does not exist")
+            if int(target["is_admin"] or 0) == 1:
+                raise HTTPException(status_code=403, detail="administrator passwords cannot be restored")
+            if int(target["updated_at"] or 0) != int(payload.expected_updated_at):
+                raise HTTPException(status_code=409, detail="account changed; refresh and retry")
+            history = conn.execute(
+                "SELECT * FROM password_vault_history WHERE id = ? AND user_id = ? AND expires_at > ?",
+                (str(payload.history_id), target_id, _now_ts()),
+            ).fetchone()
+            if history is None:
+                raise HTTPException(status_code=404, detail="password history entry not found or expired")
+            try:
+                restored_password = decrypt_vault_password(target_id, str(history["ciphertext"] or ""))
+            except PasswordVaultUnavailableError as exc:
+                governance.upsert_alert(
+                    conn,
+                    alert_type="password_vault_unavailable",
+                    severity="critical",
+                    title="密码保险库不可用",
+                    summary=str(exc),
+                    target_user_id=target_id,
+                    fingerprint="password-vault-unavailable",
+                )
+                raise HTTPException(status_code=503, detail={"code": "password_vault_unavailable", "message": str(exc)}) from exc
+            except PasswordVaultDecryptError as exc:
+                governance.upsert_alert(
+                    conn,
+                    alert_type="password_vault_integrity_failure",
+                    severity="critical",
+                    title="密码历史密文完整性校验失败",
+                    summary=str(exc),
+                    target_user_id=target_id,
+                    fingerprint=f"password-history-integrity:{payload.history_id}",
+                )
+                raise HTTPException(status_code=409, detail={"code": "password_history_invalid", "message": str(exc)}) from exc
+            changed_at = max(_now_ts(), int(target["updated_at"] or 0) + 1)
+            new_ciphertext = _encrypt_password_for_vault(target_id, restored_password)
+            _upsert_password_vault(
+                conn,
+                target_id,
+                new_ciphertext,
+                changed_at,
+                actor_user_id=int(user.get("id") or 0),
+                source="admin_restore",
+            )
+            conn.execute(
+                "UPDATE users SET password_hash = ?, must_change_password = 0, password_expires_at = 0, updated_at = ?, row_version = row_version + 1 WHERE id = ?",
+                (hash_password(restored_password), changed_at, target_id),
+            )
+            conn.execute(
+                "UPDATE password_vault_history SET restored_at = ? WHERE id = ?",
+                (changed_at, str(payload.history_id)),
+            )
+            conn.execute(
+                "UPDATE sessions SET revoked_at = ?, revoke_reason = 'password_history_restored' WHERE user_id = ? AND revoked_at = 0",
+                (changed_at, target_id),
+            )
+            audit_id = governance.record_audit(
+                conn,
+                actor_user_id=int(user.get("id") or 0),
+                target_user_id=target_id,
+                action="user.password_restore",
+                resource_type="password_vault_history",
+                resource_id=str(payload.history_id),
+                reason=payload.reason,
+                after={"updated_at": changed_at, "sessions_revoked": True},
+                risk_level="critical",
+                **governance.request_context(request),
+            )
+            governance.upsert_alert(
+                conn,
+                alert_type="admin_password_restore",
+                severity="high",
+                title="管理员恢复了客户历史密码",
+                summary=payload.reason,
+                target_user_id=target_id,
+                related_audit_id=audit_id,
+                fingerprint=f"password-restore:{target_id}:{changed_at}",
+            )
+        return {"ok": True, "updated_at": changed_at}
+
+    @app.get("/api/admin/audit/events")
+    def api_admin_audit_events(
+        limit: int = 100,
+        offset: int = 0,
+        actor_user_id: int = 0,
+        target_user_id: int = 0,
+        action: str = "",
+        outcome: str = "",
+        risk_level: str = "",
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        clauses: list[str] = []
+        params: list[Any] = []
+        for column, value in (("actor_user_id", actor_user_id), ("target_user_id", target_user_id)):
+            if int(value or 0) > 0:
+                clauses.append(f"{column} = ?")
+                params.append(int(value))
+        for column, value in (("action", action), ("outcome", outcome), ("risk_level", risk_level)):
+            clean = str(value or "").strip()
+            if clean:
+                clauses.append(f"{column} = ?")
+                params.append(clean)
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        safe_limit = min(max(int(limit or 100), 1), 1000)
+        safe_offset = max(int(offset or 0), 0)
+        with db() as conn:
+            total = int(conn.execute(f"SELECT COUNT(*) AS count FROM audit_events {where_sql}", tuple(params)).fetchone()["count"])
+            rows = conn.execute(
+                f"SELECT * FROM audit_events {where_sql} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+                (*params, safe_limit, safe_offset),
+            ).fetchall()
+        return {"items": [dict(row) for row in rows], "total": total, "limit": safe_limit, "offset": safe_offset}
+
+    @app.post("/api/admin/audit/export")
+    def api_admin_audit_export(
+        request: Request,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        _require_same_origin(request)
+        with db() as conn:
+            rows = conn.execute("SELECT * FROM audit_events ORDER BY created_at DESC LIMIT 10000").fetchall()
+            governance.record_audit(
+                conn,
+                actor_user_id=int(user.get("id") or 0),
+                action="audit.export",
+                resource_type="audit_event",
+                reason="administrator export",
+                after={"event_count": len(rows)},
+                risk_level="high",
+                **governance.request_context(request),
+            )
+        filename = f"vecto-audit-{datetime.now(governance.TAIPEI).strftime('%Y%m%d-%H%M%S')}.csv"
+        return Response(
+            content=governance.audit_rows_to_csv(rows),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "no-store"},
+        )
+
+    @app.get("/api/admin/security/alerts")
+    def api_admin_security_alerts(
+        status: str = "",
+        severity: str = "",
+        limit: int = 100,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        clauses: list[str] = []
+        params: list[Any] = []
+        if str(status or "").strip():
+            clauses.append("status = ?")
+            params.append(str(status).strip())
+        if str(severity or "").strip():
+            clauses.append("severity = ?")
+            params.append(str(severity).strip())
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with db() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM security_alerts {where_sql} ORDER BY last_seen_at DESC LIMIT ?",
+                (*params, min(max(int(limit or 100), 1), 500)),
+            ).fetchall()
+        return {"items": [dict(row) for row in rows]}
+
+    @app.patch("/api/admin/security/alerts/{alert_id}")
+    def api_admin_update_security_alert(
+        alert_id: str,
+        payload: SecurityAlertUpdatePayload,
+        request: Request,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        _require_same_origin(request)
+        status = str(payload.status or "").strip().lower()
+        if status not in governance.ALERT_STATUSES:
+            raise HTTPException(status_code=400, detail="invalid alert status")
+        changed_at = _now_ts()
+        with db() as conn:
+            before = conn.execute("SELECT * FROM security_alerts WHERE id = ?", (str(alert_id),)).fetchone()
+            if before is None:
+                raise HTTPException(status_code=404, detail="security alert not found")
+            assigned_admin_id = (
+                int(before["assigned_admin_id"] or 0)
+                if payload.assigned_admin_id is None
+                else int(payload.assigned_admin_id)
+            )
+            conn.execute(
+                "UPDATE security_alerts SET status = ?, assigned_admin_id = ?, resolved_at = ?, updated_at = ? WHERE id = ?",
+                (status, assigned_admin_id, changed_at if status == "resolved" else 0, changed_at, str(alert_id)),
+            )
+            conn.execute(
+                "INSERT INTO security_alert_timeline(id, alert_id, actor_user_id, event_type, note, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (_new_id("alert_event"), str(alert_id), int(user.get("id") or 0), status, str(payload.note or ""), changed_at),
+            )
+            governance.record_audit(
+                conn,
+                actor_user_id=int(user.get("id") or 0),
+                target_user_id=int(before["target_user_id"] or 0),
+                action="security_alert.update",
+                resource_type="security_alert",
+                resource_id=str(alert_id),
+                reason=payload.note,
+                before=dict(before),
+                after={"status": status, "assigned_admin_id": assigned_admin_id},
+                risk_level=str(before["severity"] or "medium"),
+                **governance.request_context(request),
+            )
+        _invalidate_admin_dashboard_cache()
+        return {"ok": True}
+
+    @app.get("/api/admin/service-accounts")
+    def api_admin_service_accounts(user: dict[str, Any] = Depends(require_admin)):
+        with db() as conn:
+            rows = conn.execute(
+                "SELECT id, name, purpose, allowed_scopes_json, status, expires_at, last_used_at, last_used_ip, created_by, created_at, updated_at, revoked_at FROM service_accounts ORDER BY created_at DESC"
+            ).fetchall()
+        items = []
+        for row in rows:
+            item = dict(row)
+            try:
+                item["allowed_scopes"] = json.loads(str(item.pop("allowed_scopes_json") or "[]"))
+            except Exception:
+                item["allowed_scopes"] = []
+            items.append(item)
+        return {"items": items}
+
+    @app.post("/api/admin/service-accounts")
+    def api_admin_create_service_account(
+        payload: ServiceAccountCreatePayload,
+        request: Request,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        _require_same_origin(request)
+        credential = secrets.token_urlsafe(40)
+        service_id = _new_id("service")
+        created = _now_ts()
+        scopes = sorted({str(scope).strip() for scope in payload.allowed_scopes if str(scope).strip()})
+        if not scopes:
+            raise HTTPException(status_code=400, detail="at least one service scope is required")
+        if int(payload.expires_at or 0) < created + 300 or int(payload.expires_at) > created + 365 * 86400:
+            raise HTTPException(status_code=400, detail="service credential expiry must be between 5 minutes and 365 days")
+        with db() as conn:
+            _require_admin_step_up(
+                conn, user, admin_password=payload.admin_password, totp_code=payload.totp_code,
+            )
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO service_accounts(
+                      id, name, purpose, allowed_scopes_json, credential_hash, status,
+                      expires_at, created_by, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
+                    """,
+                    (
+                        service_id,
+                        str(payload.name).strip(),
+                        str(payload.purpose).strip(),
+                        json.dumps(scopes),
+                        governance.token_digest(credential),
+                        int(payload.expires_at or 0),
+                        int(user.get("id") or 0),
+                        created,
+                        created,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise HTTPException(status_code=409, detail="service account name already exists") from exc
+            governance.record_audit(
+                conn,
+                actor_user_id=int(user.get("id") or 0),
+                action="service_account.create",
+                resource_type="service_account",
+                resource_id=service_id,
+                reason=payload.reason,
+                after={"name": payload.name, "purpose": payload.purpose, "allowed_scopes": scopes, "expires_at": payload.expires_at},
+                risk_level="high",
+                **governance.request_context(request),
+            )
+        return JSONResponse(
+            content={"ok": True, "id": service_id, "credential": credential},
+            headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+        )
+
+    @app.patch("/api/admin/service-accounts/{service_id}")
+    def api_admin_update_service_account(
+        service_id: str,
+        payload: ServiceAccountUpdatePayload,
+        request: Request,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        _require_same_origin(request)
+        status = str(payload.status or "active").strip().lower()
+        if status not in {"active", "disabled", "revoked"}:
+            raise HTTPException(status_code=400, detail="invalid service account status")
+        scopes = sorted({str(scope).strip() for scope in payload.allowed_scopes if str(scope).strip()})
+        changed = _now_ts()
+        if status != "revoked" and not scopes:
+            raise HTTPException(status_code=400, detail="at least one service scope is required")
+        if status != "revoked" and (int(payload.expires_at or 0) < changed + 300 or int(payload.expires_at) > changed + 365 * 86400):
+            raise HTTPException(status_code=400, detail="service credential expiry must be between 5 minutes and 365 days")
+        with db() as conn:
+            _require_admin_step_up(
+                conn, user, admin_password=payload.admin_password, totp_code=payload.totp_code,
+            )
+            before = conn.execute("SELECT * FROM service_accounts WHERE id = ?", (str(service_id),)).fetchone()
+            if before is None:
+                raise HTTPException(status_code=404, detail="service account not found")
+            if str(before["status"] or "") == "revoked" and status != "revoked":
+                raise HTTPException(status_code=409, detail="revoked service accounts cannot be re-enabled")
+            conn.execute(
+                "UPDATE service_accounts SET purpose = ?, allowed_scopes_json = ?, status = ?, expires_at = ?, revoked_at = ?, updated_at = ? WHERE id = ?",
+                (
+                    str(payload.purpose or "").strip(),
+                    json.dumps(scopes),
+                    status,
+                    int(payload.expires_at or 0),
+                    changed if status == "revoked" else 0,
+                    changed,
+                    str(service_id),
+                ),
+            )
+            governance.record_audit(
+                conn,
+                actor_user_id=int(user.get("id") or 0),
+                action="service_account.update",
+                resource_type="service_account",
+                resource_id=str(service_id),
+                reason=payload.reason,
+                before=dict(before),
+                after={"status": status, "purpose": payload.purpose, "allowed_scopes": scopes, "expires_at": payload.expires_at},
+                risk_level="high",
+                **governance.request_context(request),
+            )
+        return {"ok": True}
+
+    @app.post("/api/admin/service-accounts/{service_id}/rotate")
+    def api_admin_rotate_service_account(
+        service_id: str,
+        payload: AdminSensitiveActionPayload,
+        request: Request,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        _require_same_origin(request)
+        credential = secrets.token_urlsafe(40)
+        changed = _now_ts()
+        with db() as conn:
+            _require_admin_step_up(
+                conn,
+                user,
+                admin_password=payload.admin_password,
+                totp_code=payload.totp_code,
+            )
+            before = conn.execute(
+                "SELECT id, name, status, expires_at, allowed_scopes_json FROM service_accounts WHERE id = ?",
+                (str(service_id),),
+            ).fetchone()
+            if before is None:
+                raise HTTPException(status_code=404, detail="service account not found")
+            if str(before["status"] or "") == "revoked":
+                raise HTTPException(status_code=409, detail="revoked service account cannot be rotated")
+            conn.execute(
+                "UPDATE service_accounts SET credential_hash = ?, status = 'active', revoked_at = 0, updated_at = ? WHERE id = ?",
+                (governance.token_digest(credential), changed, str(service_id)),
+            )
+            governance.record_audit(
+                conn,
+                actor_user_id=int(user.get("id") or 0),
+                action="service_account.rotate",
+                resource_type="service_account",
+                resource_id=str(service_id),
+                reason=payload.reason,
+                before={"status": str(before["status"] or "")},
+                after={"status": "active", "rotated_at": changed},
+                risk_level="high",
+                **governance.request_context(request),
+            )
+        return JSONResponse(
+            content={"ok": True, "id": str(service_id), "credential": credential, "rotated_at": changed},
+            headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+        )
+
     @app.get("/api/admin/users")
     def api_admin_users(
         limit: int = 200,
         offset: int = 0,
         role: str = "all",
+        query: str = "",
+        lifecycle_status: str = "",
+        risk_level: str = "",
+        owner_admin_id: int = 0,
+        group_id: str = "",
+        tag_id: str = "",
+        online: str = "",
+        subscription_status: str = "",
+        balance_min_units: int = -1,
+        balance_max_units: int = -1,
+        created_from: int = 0,
+        created_to: int = 0,
+        last_activity_from: int = 0,
+        last_activity_to: int = 0,
         user: dict[str, Any] = Depends(require_admin),
     ):
         lim = min(max(int(limit or 200), 1), 1000)
@@ -19497,14 +21252,81 @@ def create_app() -> FastAPI:
         clean_role = str(role or "all").strip().lower()
         if clean_role not in {"all", "customer", "admin"}:
             raise HTTPException(status_code=400, detail="role must be all, customer, or admin")
-        where_sql = ""
-        where_params: tuple[int, ...] = ()
+        clauses: list[str] = []
+        where_params: list[Any] = []
         if clean_role == "customer":
-            where_sql = "WHERE is_admin = ?"
-            where_params = (0,)
+            clauses.append("is_admin = ?")
+            where_params.append(0)
         elif clean_role == "admin":
-            where_sql = "WHERE is_admin = ?"
-            where_params = (1,)
+            clauses.append("is_admin = ?")
+            where_params.append(1)
+        clean_query = str(query or "").strip()
+        if clean_query:
+            clauses.append("(username LIKE ? OR full_name LIKE ? OR email LIKE ? OR phone LIKE ? OR company LIKE ?)")
+            pattern = f"%{clean_query[:120]}%"
+            where_params.extend([pattern] * 5)
+        clean_lifecycle = str(lifecycle_status or "").strip().lower()
+        if clean_lifecycle:
+            if clean_lifecycle not in governance.LIFECYCLE_STATUSES:
+                raise HTTPException(status_code=400, detail="invalid lifecycle status")
+            clauses.append("lifecycle_status = ?")
+            where_params.append(clean_lifecycle)
+        clean_risk = str(risk_level or "").strip().lower()
+        if clean_risk:
+            if clean_risk not in governance.RISK_LEVELS:
+                raise HTTPException(status_code=400, detail="invalid risk level")
+            clauses.append("risk_level = ?")
+            where_params.append(clean_risk)
+        if int(owner_admin_id or 0) > 0:
+            clauses.append("owner_admin_id = ?")
+            where_params.append(int(owner_admin_id))
+        if str(group_id or "").strip():
+            clauses.append("id IN (SELECT user_id FROM customer_group_members WHERE group_id = ?)")
+            where_params.append(str(group_id).strip())
+        if str(tag_id or "").strip():
+            clauses.append("id IN (SELECT user_id FROM customer_tag_assignments WHERE tag_id = ?)")
+            where_params.append(str(tag_id).strip())
+        clean_online = str(online or "").strip().lower()
+        if clean_online in {"1", "true", "online"}:
+            clauses.append("id IN (SELECT user_id FROM sessions WHERE revoked_at = 0 AND expires_at > ?)")
+            where_params.append(_now_ts())
+        elif clean_online in {"0", "false", "offline"}:
+            clauses.append("id NOT IN (SELECT user_id FROM sessions WHERE revoked_at = 0 AND expires_at > ?)")
+            where_params.append(_now_ts())
+        clean_subscription = str(subscription_status or "").strip().lower()
+        subscription_now = _now_ts()
+        if clean_subscription == "legacy":
+            clauses.append("id IN (SELECT user_id FROM billing_wallets WHERE billing_mode = 'legacy')")
+        elif clean_subscription == "active":
+            clauses.append("id IN (SELECT user_id FROM billing_subscriptions WHERE status = 'active' AND current_period_end > ?)")
+            where_params.append(subscription_now)
+        elif clean_subscription == "expiring":
+            clauses.append("id IN (SELECT user_id FROM billing_subscriptions WHERE status = 'active' AND current_period_end > ? AND current_period_end <= ?)")
+            where_params.extend([subscription_now, subscription_now + 7 * 86400])
+        elif clean_subscription == "expired":
+            clauses.append("id IN (SELECT user_id FROM billing_wallets WHERE billing_mode = 'enforced') AND id NOT IN (SELECT user_id FROM billing_subscriptions WHERE status = 'active' AND current_period_end > ?)")
+            where_params.append(subscription_now)
+        elif clean_subscription:
+            raise HTTPException(status_code=400, detail="invalid subscription status")
+        if int(balance_min_units or -1) >= 0:
+            clauses.append("id IN (SELECT user_id FROM billing_wallets WHERE credit_units >= ?)")
+            where_params.append(int(balance_min_units))
+        if int(balance_max_units or -1) >= 0:
+            clauses.append("id IN (SELECT user_id FROM billing_wallets WHERE credit_units <= ?)")
+            where_params.append(int(balance_max_units))
+        if int(created_from or 0) > 0:
+            clauses.append("created_at >= ?")
+            where_params.append(int(created_from))
+        if int(created_to or 0) > 0:
+            clauses.append("created_at <= ?")
+            where_params.append(int(created_to))
+        if int(last_activity_from or 0) > 0:
+            clauses.append("last_login_at >= ?")
+            where_params.append(int(last_activity_from))
+        if int(last_activity_to or 0) > 0:
+            clauses.append("last_login_at <= ?")
+            where_params.append(int(last_activity_to))
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with db() as conn:
             account_counts = conn.execute(
                 """SELECT
@@ -19517,7 +21339,7 @@ def create_app() -> FastAPI:
             total = int(
                 conn.execute(
                     f"SELECT COUNT(*) AS c FROM users {where_sql}",
-                    where_params,
+                    tuple(where_params),
                 ).fetchone()["c"]
             )
             pending_count = int(
@@ -19531,7 +21353,14 @@ def create_app() -> FastAPI:
                 SELECT id, username, is_admin, is_disabled, balance_cents, account_type,
                        approval_status, full_name, email, phone, company, use_case, admin_note,
                        approved_at, approved_by, last_login_at, must_change_password,
-                       password_expires_at, deleted_at, deleted_by, created_at, updated_at
+                       password_expires_at, deleted_at, deleted_by, created_at, updated_at,
+                       lifecycle_status, lifecycle_reason, risk_level, owner_admin_id,
+                        source_channel, last_login_ip, last_login_user_agent, last_device_id,
+                        row_version,
+                        COALESCE((SELECT credit_units FROM billing_wallets WHERE billing_wallets.user_id = users.id), 0) AS credit_units,
+                        COALESCE((SELECT billing_mode FROM billing_wallets WHERE billing_wallets.user_id = users.id), '') AS billing_mode,
+                        (SELECT COUNT(*) FROM sessions WHERE sessions.user_id = users.id AND revoked_at = 0 AND expires_at > {int(_now_ts())}) AS active_session_count,
+                        (SELECT COUNT(*) FROM billing_subscriptions WHERE billing_subscriptions.user_id = users.id AND status = 'active' AND current_period_end > {int(_now_ts())}) AS active_subscription_count
                 FROM users
                 {where_sql}
                 ORDER BY created_at DESC, id DESC
@@ -19558,7 +21387,11 @@ def create_app() -> FastAPI:
         }
 
     @app.post("/api/admin/users")
-    def api_admin_create_user(payload: AdminCreateUserPayload, user: dict[str, Any] = Depends(require_admin)):
+    def api_admin_create_user(
+        payload: AdminCreateUserPayload,
+        request: Request,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
         username = str(payload.username or "").strip()
         password = str(payload.password or "")
         minimum_length = _minimum_password_length(is_admin=bool(payload.is_admin))
@@ -19571,14 +21404,26 @@ def create_app() -> FastAPI:
             pwd_hash = hash_password(password)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if bool(payload.is_admin):
+            _require_same_origin(request)
+            if len(str(payload.reason or "").strip()) < 2:
+                raise HTTPException(status_code=400, detail="administrator creation reason is required")
         with db() as conn:
+            if bool(payload.is_admin):
+                _require_admin_step_up(
+                    conn,
+                    user,
+                    admin_password=payload.admin_password,
+                    totp_code=payload.totp_code,
+                )
             try:
                 inserted = conn.execute(
                     """
                     INSERT INTO users(
                       username, password_hash, is_admin, is_disabled, balance_cents,
-                      account_type, approval_status, approved_at, approved_by, created_at, updated_at
-                    ) VALUES (?, ?, ?, 0, ?, 'managed', 'approved', ?, ?, ?, ?)
+                      account_type, approval_status, lifecycle_status, source_channel,
+                      approved_at, approved_by, created_at, updated_at
+                    ) VALUES (?, ?, ?, 0, ?, 'managed', 'approved', 'active', 'admin_created', ?, ?, ?, ?)
                     """,
                     (
                         username,
@@ -19614,7 +21459,26 @@ def create_app() -> FastAPI:
                 _reserve_username(conn, created_user_id, username, now)
                 if not bool(payload.is_admin):
                     vault_ciphertext = _encrypt_password_for_vault(created_user_id, password)
-                    _upsert_password_vault(conn, created_user_id, vault_ciphertext, now)
+                    _upsert_password_vault(
+                        conn,
+                        created_user_id,
+                        vault_ciphertext,
+                        now,
+                        actor_user_id=int(user.get("id") or 0),
+                        source="admin_create",
+                    )
+                governance.record_audit(
+                    conn,
+                    actor_user_id=int(user.get("id") or 0),
+                    target_user_id=created_user_id,
+                    action="user.admin_create" if bool(payload.is_admin) else "user.create",
+                    resource_type="user",
+                    resource_id=str(created_user_id),
+                    reason=str(payload.reason or "admin created customer account"),
+                    after={"id": created_user_id, "username": username, "is_admin": bool(payload.is_admin)},
+                    risk_level="high" if bool(payload.is_admin) else "medium",
+                    **governance.request_context(request),
+                )
             except Exception as exc:
                 if "UNIQUE" in str(exc).upper() or "RESERVED" in str(exc).upper():
                     raise HTTPException(status_code=409, detail="用户名已存在") from exc
@@ -19641,6 +21505,9 @@ def create_app() -> FastAPI:
                           target.use_case, target.admin_note, target.approved_at, target.approved_by,
                            target.last_login_at, target.must_change_password, target.password_expires_at,
                            target.deleted_at, target.deleted_by, target.created_at, target.updated_at,
+                           target.lifecycle_status, target.lifecycle_reason, target.risk_level,
+                           target.owner_admin_id, target.source_channel, target.last_login_ip,
+                           target.last_login_user_agent, target.last_device_id, target.row_version,
                            CASE WHEN target.password_hash <> '' THEN 1 ELSE 0 END AS password_configured,
                            CASE
                              WHEN target.is_admin = 1 THEN 'prohibited'
@@ -19661,21 +21528,56 @@ def create_app() -> FastAPI:
                 "social_proxies": int(conn.execute("SELECT COUNT(*) AS c FROM social_proxies WHERE user_id = ?", (int(target_user_id),)).fetchone()["c"]),
                 "social_tasks": int(conn.execute("SELECT COUNT(*) AS c FROM social_automation_tasks WHERE user_id = ?", (int(target_user_id),)).fetchone()["c"]),
             }
+            resource_counts.update(_admin_user_content_metrics(conn, [int(target_user_id)]).get(int(target_user_id), {}))
+            groups = conn.execute(
+                "SELECT groups.id, groups.name, groups.color FROM customer_groups AS groups JOIN customer_group_members AS members ON members.group_id = groups.id WHERE members.user_id = ? ORDER BY groups.name",
+                (int(target_user_id),),
+            ).fetchall()
+            tags = conn.execute(
+                "SELECT tags.id, tags.name, tags.color FROM customer_tags AS tags JOIN customer_tag_assignments AS assignments ON assignments.tag_id = tags.id WHERE assignments.user_id = ? ORDER BY tags.name",
+                (int(target_user_id),),
+            ).fetchall()
+            active_session_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) AS count FROM sessions WHERE user_id = ? AND revoked_at = 0 AND expires_at > ?",
+                    (int(target_user_id), _now_ts()),
+                ).fetchone()["count"]
+            )
+            open_alert_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) AS count FROM security_alerts WHERE target_user_id = ? AND status IN ('open','acknowledged','investigating')",
+                    (int(target_user_id),),
+                ).fetchone()["count"]
+            )
         if row is None:
             raise HTTPException(status_code=404, detail="客户账号不存在")
         user_payload = dict(row)
         user_payload["password_reveal_available"] = user_payload.get("password_reveal_status") == "available"
-        return {"user": user_payload, "resource_counts": resource_counts}
+        return {
+            "user": user_payload,
+            "resource_counts": resource_counts,
+            "groups": [dict(item) for item in groups],
+            "tags": [dict(item) for item in tags],
+            "active_session_count": active_session_count,
+            "open_alert_count": open_alert_count,
+        }
 
     @app.post("/api/admin/users/{target_user_id}/reveal-password")
     def api_admin_reveal_user_password(
         target_user_id: int,
+        payload: AdminSensitiveActionPayload,
         request: Request,
         user: dict[str, Any] = Depends(require_admin),
     ):
         _require_same_origin(request)
         target_id = int(target_user_id)
         with db() as conn:
+            _require_admin_step_up(
+                conn,
+                user,
+                admin_password=payload.admin_password,
+                totp_code=payload.totp_code,
+            )
             row = conn.execute(
                 """
                 SELECT users.id, users.is_admin, password_vault.ciphertext,
@@ -19709,16 +21611,29 @@ def create_app() -> FastAPI:
             if reveal_expires_at:
                 metadata["reveal_expires_at"] = int(reveal_expires_at)
             with db() as conn:
-                conn.execute(
-                    "INSERT INTO admin_audit_log(admin_user_id, action, target_user_id, metadata_json, created_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (
-                        int(user.get("id") or 0),
-                        "user.password_reveal",
-                        target_id,
-                        json.dumps(metadata, ensure_ascii=True, separators=(",", ":")),
-                        _now_ts(),
-                    ),
+                audit_id = governance.record_audit(
+                    conn,
+                    actor_user_id=int(user.get("id") or 0),
+                    target_user_id=target_id,
+                    action="user.password_reveal",
+                    resource_type="password_vault",
+                    resource_id=str(target_id),
+                    reason=payload.reason,
+                    after=metadata,
+                    outcome="success" if result == "revealed" else "denied",
+                    error_code="" if result == "revealed" else result,
+                    risk_level="high",
+                    **governance.request_context(request),
+                )
+                governance.upsert_alert(
+                    conn,
+                    alert_type="admin_password_reveal",
+                    severity="high",
+                    title="管理员查看了客户当前密码",
+                    summary=payload.reason,
+                    target_user_id=target_id,
+                    related_audit_id=audit_id,
+                    fingerprint=f"password-reveal:{target_id}:{_now_ts() // 300}",
                 )
 
         if int(row["is_admin"] or 0) == 1:
@@ -19801,6 +21716,12 @@ def create_app() -> FastAPI:
         expires_at = now + ttl_seconds
         expected_updated_at = int(payload.expected_updated_at)
         with db() as conn:
+            _require_admin_step_up(
+                conn,
+                user,
+                admin_password=payload.admin_password,
+                totp_code=payload.totp_code,
+            )
             row = conn.execute(
                 "SELECT id, is_admin, updated_at FROM users WHERE id = ?",
                 (int(target_user_id),),
@@ -19821,27 +21742,40 @@ def create_app() -> FastAPI:
             )
             if int(updated.rowcount or 0) != 1:
                 raise HTTPException(status_code=409, detail="account changed; refresh and retry")
-            _upsert_password_vault(conn, int(target_user_id), vault_ciphertext, new_updated_at)
-            conn.execute("DELETE FROM sessions WHERE user_id = ?", (int(target_user_id),))
+            _upsert_password_vault(
+                conn,
+                int(target_user_id),
+                vault_ciphertext,
+                new_updated_at,
+                actor_user_id=int(user.get("id") or 0),
+                source="admin_reset",
+            )
             conn.execute(
-                "INSERT INTO admin_audit_log(admin_user_id, action, target_user_id, metadata_json, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (
-                    int(user.get("id") or 0),
-                    "user.password_reset",
-                    int(target_user_id),
-                    json.dumps(
-                        {
-                            "client_ip": _request_client_ip(request),
-                            "previous_updated_at": current_updated_at,
-                            "new_updated_at": new_updated_at,
-                            "expires_at": expires_at,
-                        },
-                        ensure_ascii=True,
-                        separators=(",", ":"),
-                    ),
-                    now,
-                ),
+                "UPDATE sessions SET revoked_at = ?, revoke_reason = 'admin_password_reset' WHERE user_id = ? AND revoked_at = 0",
+                (new_updated_at, int(target_user_id)),
+            )
+            audit_id = governance.record_audit(
+                conn,
+                actor_user_id=int(user.get("id") or 0),
+                target_user_id=int(target_user_id),
+                action="user.password_reset",
+                resource_type="password_vault",
+                resource_id=str(target_user_id),
+                reason=payload.reason,
+                before={"updated_at": current_updated_at},
+                after={"updated_at": new_updated_at, "expires_at": expires_at, "sessions_revoked": True},
+                risk_level="high",
+                **governance.request_context(request),
+            )
+            governance.upsert_alert(
+                conn,
+                alert_type="admin_password_reset",
+                severity="high",
+                title="管理员重置了客户密码",
+                summary=payload.reason,
+                target_user_id=int(target_user_id),
+                related_audit_id=audit_id,
+                fingerprint=f"password-reset:{int(target_user_id)}:{now}",
             )
         return JSONResponse(
             content={
@@ -19882,6 +21816,8 @@ def create_app() -> FastAPI:
                 "SELECT password_hash FROM users WHERE id = ? AND is_admin = 1",
                 (int(user.get("id") or 0),),
             ).fetchone()
+            if not _verify_mfa_code_atomic(int(user.get("id") or 0), payload.totp_code):
+                raise HTTPException(status_code=403, detail={"code": "mfa_code_invalid", "message": "动态验证码或恢复码错误。"})
             if admin_row is None or not verify_password(
                 str(payload.admin_password or ""),
                 str(admin_row["password_hash"] or ""),
@@ -19908,26 +21844,40 @@ def create_app() -> FastAPI:
             )
             if int(updated.rowcount or 0) != 1:
                 raise HTTPException(status_code=409, detail="账号资料已更新，请刷新详情后重试")
-            _upsert_password_vault(conn, target_id, vault_ciphertext, new_updated_at)
-            conn.execute("DELETE FROM sessions WHERE user_id = ?", (target_id,))
+            _upsert_password_vault(
+                conn,
+                target_id,
+                vault_ciphertext,
+                new_updated_at,
+                actor_user_id=int(user.get("id") or 0),
+                source="admin_set",
+            )
             conn.execute(
-                "INSERT INTO admin_audit_log(admin_user_id, action, target_user_id, metadata_json, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (
-                    int(user.get("id") or 0),
-                    "user.password_set",
-                    target_id,
-                    json.dumps(
-                        {
-                            "client_ip": _request_client_ip(request),
-                            "previous_updated_at": current_updated_at,
-                            "new_updated_at": new_updated_at,
-                        },
-                        ensure_ascii=True,
-                        separators=(",", ":"),
-                    ),
-                    now,
-                ),
+                "UPDATE sessions SET revoked_at = ?, revoke_reason = 'admin_password_set' WHERE user_id = ? AND revoked_at = 0",
+                (new_updated_at, target_id),
+            )
+            audit_id = governance.record_audit(
+                conn,
+                actor_user_id=int(user.get("id") or 0),
+                target_user_id=target_id,
+                action="user.password_set",
+                resource_type="password_vault",
+                resource_id=str(target_id),
+                reason=payload.reason,
+                before={"updated_at": current_updated_at},
+                after={"updated_at": new_updated_at, "sessions_revoked": True},
+                risk_level="high",
+                **governance.request_context(request),
+            )
+            governance.upsert_alert(
+                conn,
+                alert_type="admin_password_set",
+                severity="high",
+                title="管理员修改了客户密码",
+                summary=payload.reason,
+                target_user_id=target_id,
+                related_audit_id=audit_id,
+                fingerprint=f"password-set:{target_id}:{now}",
             )
         return JSONResponse(
             content={
@@ -19946,6 +21896,7 @@ def create_app() -> FastAPI:
     def api_admin_user_approval(
         target_user_id: int,
         payload: UserApprovalPayload,
+        request: Request,
         user: dict[str, Any] = Depends(require_admin),
     ):
         status = str(payload.approval_status or "").strip().lower()
@@ -19976,19 +21927,38 @@ def create_app() -> FastAPI:
             updated = conn.execute(
                 """UPDATE users
                    SET approval_status = ?, is_disabled = ?, admin_note = ?, approved_at = ?,
-                       approved_by = ?, updated_at = ?
+                       approved_by = ?, lifecycle_status = ?, lifecycle_reason = ?,
+                       row_version = row_version + 1, updated_at = ?
                    WHERE id = ? AND approval_status = ?""",
                 (status, 0 if status == "approved" else 1, note, now if status == "approved" else 0,
-                 int(user.get("id") or 0), now, int(target_user_id), expected_status),
+                 int(user.get("id") or 0), "active" if status == "approved" else "rejected", note,
+                 now, int(target_user_id), expected_status),
             )
             if updated.rowcount != 1:
                 raise HTTPException(status_code=409, detail="账号状态已变化，请刷新后重试")
             if status != "approved":
-                conn.execute("DELETE FROM sessions WHERE user_id = ?", (int(target_user_id),))
+                conn.execute(
+                    "UPDATE sessions SET revoked_at = ?, revoke_reason = 'approval_state_changed' WHERE user_id = ? AND revoked_at = 0",
+                    (now, int(target_user_id)),
+                )
+            governance.record_audit(
+                conn,
+                actor_user_id=int(user.get("id") or 0),
+                target_user_id=int(target_user_id),
+                action=f"user.approval_{status}",
+                resource_type="user",
+                resource_id=str(target_user_id),
+                reason=note or f"approval changed from {expected_status} to {status}",
+                before={"approval_status": expected_status},
+                after={"approval_status": status, "lifecycle_status": "active" if status == "approved" else "rejected"},
+                risk_level="medium",
+                **governance.request_context(request),
+            )
+        _invalidate_admin_dashboard_cache()
         return {"ok": True, "approval_status": status}
 
     @app.delete("/api/admin/users/{target_user_id}")
-    def api_admin_archive_user(target_user_id: int, user: dict[str, Any] = Depends(require_admin)):
+    def api_admin_archive_user(target_user_id: int, request: Request, user: dict[str, Any] = Depends(require_admin)):
         target_id = int(target_user_id)
         current_id = int(user.get("id") or 0)
         if target_id == current_id:
@@ -19997,7 +21967,7 @@ def create_app() -> FastAPI:
         with TENANT_RESOURCE_LIFECYCLE_LOCK:
             with db() as conn:
                 row = conn.execute(
-                    "SELECT id, username, is_admin, is_disabled, approval_status, deleted_at FROM users WHERE id = ?",
+                    "SELECT id, username, is_admin, is_disabled, approval_status, lifecycle_status, deleted_at FROM users WHERE id = ?",
                     (target_id,),
                 ).fetchone()
                 if row is None:
@@ -20012,30 +21982,29 @@ def create_app() -> FastAPI:
                     ).fetchall()
                     if str(account_row["id"] or "").strip()
                 ]
-                already_archived = int(row["deleted_at"] or 0) > 0
+                already_archived = int(row["deleted_at"] or 0) > 0 and str(row["lifecycle_status"] or "") == "deleted"
                 if not already_archived:
                     conn.execute(
-                        "UPDATE users SET is_disabled = 1, deleted_at = ?, deleted_by = ?, updated_at = ? WHERE id = ?",
+                        "UPDATE users SET is_disabled = 1, lifecycle_status = 'deleted', lifecycle_reason = 'administrator_soft_delete', "
+                        "deleted_at = ?, deleted_by = ?, row_version = row_version + 1, updated_at = ? WHERE id = ?",
                         (now, current_id, now, target_id),
                     )
-                conn.execute("DELETE FROM sessions WHERE user_id = ?", (target_id,))
                 conn.execute(
-                    "INSERT INTO admin_audit_log(admin_user_id, action, target_user_id, metadata_json, created_at) "
-                    "VALUES (?, 'user.archive', ?, ?, ?)",
-                    (
-                        current_id,
-                        target_id,
-                        json.dumps(
-                            {
-                                "username": str(row["username"] or ""),
-                                "previous_is_disabled": int(row["is_disabled"] or 0),
-                                "approval_status": str(row["approval_status"] or ""),
-                                "already_archived": already_archived,
-                            },
-                            ensure_ascii=True,
-                        ),
-                        now,
-                    ),
+                    "UPDATE sessions SET revoked_at = ?, revoke_reason = 'account_archived' WHERE user_id = ? AND revoked_at = 0",
+                    (now, target_id),
+                )
+                governance.record_audit(
+                    conn,
+                    actor_user_id=current_id,
+                    target_user_id=target_id,
+                    action="user.soft_delete",
+                    resource_type="user",
+                    resource_id=str(target_id),
+                    reason="administrator soft delete",
+                    before=dict(row),
+                    after={"lifecycle_status": "deleted", "deleted_at": now, "business_data_preserved": True},
+                    risk_level="high",
+                    **governance.request_context(request),
                 )
             cancel_all_social_tasks("所属用户已归档", user_id=target_id, account_ids=account_ids)
             cancelled_normal_task_ids = _cancel_normal_tasks_for_deleted_user(target_id)
@@ -20043,9 +22012,11 @@ def create_app() -> FastAPI:
                 cancelled_normal_task_ids,
                 timeout_seconds=max(_env_float("ACCOUNT_DELETE_TASK_WAIT_SECONDS", 30.0), 0.0),
             )
+        _invalidate_admin_dashboard_cache()
         return {
             "ok": not active_normal_task_ids,
             "archived": True,
+            "soft_deleted": True,
             "already_archived": already_archived,
             "target_user_id": target_id,
             "deleted_at": int(row["deleted_at"] or now) if already_archived else now,
@@ -20053,7 +22024,7 @@ def create_app() -> FastAPI:
         }
 
     @app.post("/api/admin/users/{target_user_id}/restore")
-    def api_admin_restore_user(target_user_id: int, user: dict[str, Any] = Depends(require_admin)):
+    def api_admin_restore_user(target_user_id: int, request: Request, user: dict[str, Any] = Depends(require_admin)):
         target_id = int(target_user_id)
         now = _now_ts()
         with TENANT_RESOURCE_LIFECYCLE_LOCK:
@@ -20070,54 +22041,103 @@ def create_app() -> FastAPI:
                     raise HTTPException(status_code=409, detail="账号永久删除恢复待处理，请重试永久删除")
                 if int(row["deleted_at"] or 0) <= 0:
                     raise HTTPException(status_code=409, detail="账号未归档")
-                enabled = str(row["approval_status"] or "") == "approved"
+                approval_status = str(row["approval_status"] or "")
+                enabled = approval_status == "approved"
+                restored_lifecycle = "active" if enabled else ("rejected" if approval_status == "rejected" else "pending")
                 conn.execute(
-                    "UPDATE users SET is_disabled = ?, deleted_at = 0, deleted_by = 0, updated_at = ? WHERE id = ?",
-                    (0 if enabled else 1, now, target_id),
+                    "UPDATE users SET is_disabled = ?, lifecycle_status = ?, lifecycle_reason = 'administrator_restore', "
+                    "deleted_at = 0, deleted_by = 0, row_version = row_version + 1, updated_at = ? WHERE id = ?",
+                    (0 if enabled else 1, restored_lifecycle, now, target_id),
                 )
-                conn.execute(
-                    "INSERT INTO admin_audit_log(admin_user_id, action, target_user_id, metadata_json, created_at) "
-                    "VALUES (?, 'user.restore', ?, ?, ?)",
-                    (
-                        int(user.get("id") or 0),
-                        target_id,
-                        json.dumps(
-                            {
-                                "username": str(row["username"] or ""),
-                                "previous_deleted_at": int(row["deleted_at"] or 0),
-                                "enabled": enabled,
-                            },
-                            ensure_ascii=True,
-                        ),
-                        now,
-                    ),
+                governance.record_audit(
+                    conn,
+                    actor_user_id=int(user.get("id") or 0),
+                    target_user_id=target_id,
+                    action="user.restore",
+                    resource_type="user",
+                    resource_id=str(target_id),
+                    reason="administrator restore",
+                    before=dict(row),
+                    after={"lifecycle_status": restored_lifecycle, "is_disabled": not enabled},
+                    risk_level="medium",
+                    **governance.request_context(request),
                 )
+        _invalidate_admin_dashboard_cache()
         return {"ok": True, "restored": True, "target_user_id": target_id, "is_disabled": not enabled}
+
+    @app.get("/api/admin/users/{target_user_id}/purge-preview")
+    def api_admin_purge_user_preview(
+        target_user_id: int,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        target_id = int(target_user_id)
+        with db() as conn:
+            row = conn.execute(
+                "SELECT id, username, is_admin, lifecycle_status, deleted_at FROM users WHERE id = ?",
+                (target_id,),
+            ).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="customer account does not exist")
+            if int(row["is_admin"] or 0) == 1:
+                raise HTTPException(status_code=400, detail="administrator accounts cannot use customer purge")
+            resources = {
+                "personas": int(conn.execute("SELECT COUNT(*) AS count FROM persona_owners WHERE user_id = ?", (target_id,)).fetchone()["count"]),
+                "persona_groups": int(conn.execute("SELECT COUNT(*) AS count FROM persona_group_owners WHERE user_id = ?", (target_id,)).fetchone()["count"]),
+                "social_accounts": int(conn.execute("SELECT COUNT(*) AS count FROM social_accounts WHERE user_id = ?", (target_id,)).fetchone()["count"]),
+                "social_proxies": int(conn.execute("SELECT COUNT(*) AS count FROM social_proxies WHERE user_id = ?", (target_id,)).fetchone()["count"]),
+                "social_tasks": int(conn.execute("SELECT COUNT(*) AS count FROM social_automation_tasks WHERE user_id = ?", (target_id,)).fetchone()["count"]),
+                "tasks": int(conn.execute("SELECT COUNT(*) AS count FROM tasks WHERE user_id = ?", (target_id,)).fetchone()["count"]),
+                "billing_ledger": int(conn.execute("SELECT COUNT(*) AS count FROM billing_ledger WHERE user_id = ?", (target_id,)).fetchone()["count"]),
+                "subscriptions": int(conn.execute("SELECT COUNT(*) AS count FROM billing_subscriptions WHERE user_id = ?", (target_id,)).fetchone()["count"]),
+                "orders": int(conn.execute("SELECT COUNT(*) AS count FROM billing_orders WHERE user_id = ?", (target_id,)).fetchone()["count"]),
+            }
+        return {
+            "user": dict(row),
+            "resources": resources,
+            "total_resources": sum(resources.values()),
+            "ready": int(row["deleted_at"] or 0) > 0 and str(row["lifecycle_status"] or "") == "deleted",
+            "requires": ["confirm_username", "admin_password", "totp_code", "reason"],
+        }
 
     @app.delete("/api/admin/users/{target_user_id}/purge")
     def api_admin_purge_user(
         target_user_id: int,
-        confirm_username: str = "",
+        payload: AdminPurgePayload,
+        request: Request,
         user: dict[str, Any] = Depends(require_admin),
     ):
+        _require_same_origin(request)
         target_id = int(target_user_id)
         current_id = int(user.get("id") or 0)
         if target_id == current_id:
             raise HTTPException(status_code=400, detail="不能删除当前登录管理员")
         with TENANT_RESOURCE_LIFECYCLE_LOCK:
             with db() as conn:
+                _require_admin_step_up(
+                    conn,
+                    user,
+                    admin_password=payload.admin_password,
+                    totp_code=payload.totp_code,
+                )
                 row = conn.execute(
-                    "SELECT id, username, is_admin, deleted_at FROM users WHERE id = ?",
+                    "SELECT id, username, is_admin, lifecycle_status, deleted_at FROM users WHERE id = ?",
                     (target_id,),
                 ).fetchone()
+                if row is None and _account_purge_journal_dir(target_id).exists():
+                    try:
+                        _discard_account_purge_journal(target_id)
+                    except Exception:
+                        logger.exception("Failed to retry purge journal cleanup for user %s", target_id)
+                        return {"ok": False, "purged": True, "cleanup_pending": [f"journal:{target_id}"]}
+                    return {"ok": True, "purged": True, "cleanup_retried": True, "cleanup_pending": []}
                 if row is None:
                     raise HTTPException(status_code=404, detail="客户账号不存在")
                 if int(row["is_admin"] or 0) == 1:
                     raise HTTPException(status_code=400, detail="客户账号删除接口不能删除管理员")
-                if int(row["deleted_at"] or 0) <= 0:
-                    raise HTTPException(status_code=409, detail="永久删除前必须先归档账号")
+                if int(row["deleted_at"] or 0) <= 0 or str(row["lifecycle_status"] or "") != "deleted":
+                    raise HTTPException(status_code=409, detail="永久删除前必须先软删除账号")
                 username = str(row["username"] or "").strip()
-                if not confirm_username or confirm_username != username:
+                if not payload.confirm_username or payload.confirm_username != username:
                     raise HTTPException(status_code=400, detail="永久删除必须确认完整用户名")
                 if _account_purge_journal_dir(target_id).exists():
                     try:
@@ -20134,7 +22154,10 @@ def create_app() -> FastAPI:
                         }
                 now = _now_ts()
                 conn.execute("UPDATE users SET is_disabled = 1, updated_at = ? WHERE id = ?", (now, target_id))
-                conn.execute("DELETE FROM sessions WHERE user_id = ?", (target_id,))
+                conn.execute(
+                    "UPDATE sessions SET revoked_at = ?, revoke_reason = 'account_status_changed' WHERE user_id = ? AND revoked_at = 0",
+                    (now, target_id),
+                )
                 account_ids = [
                     str(account_row["id"] or "").strip()
                     for account_row in conn.execute(
@@ -20234,15 +22257,12 @@ def create_app() -> FastAPI:
                 (UPLOAD_ROOT / username).resolve(),
                 (OUTPUT_ROOT / username).resolve(),
             ]
+            staged_paths: list[Path] = []
             for path in cleanup_dirs:
                 if not any(root in path.parents for root in cleanup_roots):
                     cleanup_failures.append(str(path))
                     continue
-                try:
-                    if path.exists():
-                        shutil.rmtree(path)
-                except Exception:
-                    cleanup_failures.append(str(path))
+                staged_paths.append(path)
             screenshot_root = (DATA_DIR / "social_automation" / "screenshots").resolve()
             for value in screenshot_paths:
                 try:
@@ -20250,11 +22270,15 @@ def create_app() -> FastAPI:
                     if screenshot_root not in path.parents:
                         cleanup_failures.append(str(path))
                         continue
-                    path.unlink(missing_ok=True)
+                    staged_paths.append(path)
                 except Exception:
                     cleanup_failures.append(str(value))
             for tid in task_ids:
-                _delete_task_artifacts(tid)
+                for path in _task_artifact_paths(tid):
+                    if UPLOAD_ROOT.resolve() in path.parents or OUTPUT_ROOT.resolve() in path.parents:
+                        staged_paths.append(path)
+                    else:
+                        cleanup_failures.append(str(path))
             if cleanup_failures:
                 return {
                     "ok": False,
@@ -20266,8 +22290,15 @@ def create_app() -> FastAPI:
 
             try:
                 _create_account_purge_journal(target_id)
+                _stage_account_purge_paths(target_id, staged_paths)
             except Exception:
-                logger.exception("Failed to create purge journal for user %s", target_id)
+                logger.exception("Failed to create or stage purge journal for user %s", target_id)
+                try:
+                    if _account_purge_journal_dir(target_id).exists():
+                        _restore_account_purge_journal(target_id)
+                        _discard_account_purge_journal(target_id)
+                except Exception:
+                    logger.exception("Failed to restore staged purge paths for user %s", target_id)
                 return {
                     "ok": False,
                     "deleted_personas": 0,
@@ -20315,15 +22346,24 @@ def create_app() -> FastAPI:
                     deleted_user = conn.execute("DELETE FROM users WHERE id = ?", (target_id,))
                     if deleted_user.rowcount != 1:
                         raise RuntimeError(f"purge target disappeared before commit: {target_id}")
-                    conn.execute(
-                        "INSERT INTO admin_audit_log(admin_user_id, action, target_user_id, metadata_json, created_at) "
-                        "VALUES (?, 'user.purge', ?, ?, ?)",
-                        (
-                            current_id,
-                            target_id,
-                            json.dumps({"username": username}, ensure_ascii=True),
-                            _now_ts(),
-                        ),
+                    governance.record_audit(
+                        conn,
+                        actor_user_id=current_id,
+                        target_user_id=target_id,
+                        action="user.purge",
+                        resource_type="user",
+                        resource_id=str(target_id),
+                        reason=payload.reason,
+                        before={"username": username, "lifecycle_status": "deleted"},
+                        after={
+                            "permanently_deleted": True,
+                            "deleted_personas": len(persona_ids),
+                            "deleted_groups": len(group_ids),
+                            "deleted_tasks": len(task_ids),
+                            "deleted_social_accounts": len(account_ids),
+                        },
+                        risk_level="critical",
+                        **governance.request_context(request),
                     )
             except Exception:
                 logger.exception("Purge failed during %s", cleanup_phase)
@@ -20346,6 +22386,17 @@ def create_app() -> FastAPI:
                 _discard_account_purge_journal(target_id)
             except Exception:
                 logger.exception("Failed to discard completed purge journal for user %s", target_id)
+                cleanup_failures.append(f"journal:{target_id}")
+                _invalidate_admin_dashboard_cache()
+                return {
+                    "ok": False,
+                    "purged": True,
+                    "deleted_personas": deleted_persona_count,
+                    "deleted_groups": deleted_group_count,
+                    "deleted_tasks": len(task_ids),
+                    "cleanup_pending": cleanup_failures,
+                }
+            _invalidate_admin_dashboard_cache()
             return {
                 "ok": True,
                 "deleted_personas": deleted_persona_count,
@@ -20385,6 +22436,7 @@ def create_app() -> FastAPI:
     def api_admin_toggle_user(
         target_user_id: int,
         payload: UserTogglePayload,
+        request: Request,
         user: dict[str, Any] = Depends(require_admin),
     ):
         target_id = int(target_user_id)
@@ -20404,11 +22456,35 @@ def create_app() -> FastAPI:
                 if active_admins is None or int(active_admins["count"] or 0) <= 1:
                     raise HTTPException(status_code=409, detail="不能禁用最后一个可用管理员")
             conn.execute(
-                "UPDATE users SET is_disabled = ?, updated_at = ? WHERE id = ?",
-                (1 if payload.is_disabled else 0, _now_ts(), target_id),
+                "UPDATE users SET is_disabled = ?, lifecycle_status = ?, lifecycle_reason = ?, "
+                "row_version = row_version + 1, updated_at = ? WHERE id = ?",
+                (
+                    1 if payload.is_disabled else 0,
+                    "suspended" if payload.is_disabled else "active",
+                    "administrator_disabled" if payload.is_disabled else "administrator_enabled",
+                    _now_ts(),
+                    target_id,
+                ),
             )
             if payload.is_disabled:
-                conn.execute("DELETE FROM sessions WHERE user_id = ?", (target_id,))
+                conn.execute(
+                    "UPDATE sessions SET revoked_at = ?, revoke_reason = 'account_disabled' WHERE user_id = ? AND revoked_at = 0",
+                    (_now_ts(), target_id),
+                )
+            governance.record_audit(
+                conn,
+                actor_user_id=current_id,
+                target_user_id=target_id,
+                action="user.suspend" if payload.is_disabled else "user.enable",
+                resource_type="user",
+                resource_id=str(target_id),
+                reason="administrator account status change",
+                before={"is_disabled": bool(row["is_disabled"]), "lifecycle_status": str(row["lifecycle_status"] or "")},
+                after={"is_disabled": bool(payload.is_disabled), "lifecycle_status": "suspended" if payload.is_disabled else "active"},
+                risk_level="medium",
+                **governance.request_context(request),
+            )
+        _invalidate_admin_dashboard_cache()
         return {"ok": True}
 
     @app.get("/api/admin/tasks")

@@ -9391,10 +9391,12 @@ async function loadMe() {
     }
     state.currentUser = me;
     if (meName) meName.textContent = me.username || "-";
+    window.VectoSiteNavigation?.setAccount(me);
     if (me.is_admin) $("openAdmin").hidden = false;
     return me;
   } catch (error) {
     state.currentUser = null;
+    window.VectoSiteNavigation?.setAccount(null);
     if (meName) meName.textContent = "本地控制台";
     $("openAdmin").hidden = true;
     if (!consoleBoundaryNavigationActive) {
@@ -9422,6 +9424,7 @@ async function revalidateConsoleIdentity() {
       state.currentUser = me;
       const meName = $("consoleMeName");
       if (meName) meName.textContent = me.username || "-";
+      window.VectoSiteNavigation?.setAccount(me);
       unmaskConsoleAfterIdentityRevalidation();
       return me;
     })
@@ -9429,12 +9432,34 @@ async function revalidateConsoleIdentity() {
       if (!consoleBoundaryNavigationActive && !error?.stale) {
         appendEvent("warning", error.detail || error.message || "会话身份校验失败");
       }
+      unmaskConsoleAfterIdentityRevalidation();
       return null;
     })
     .finally(() => {
       identityRevalidationPromise = null;
     });
   return identityRevalidationPromise;
+}
+
+let consoleLogoutPending = false;
+
+async function logoutConsoleSession() {
+  if (consoleLogoutPending || consoleBoundaryNavigationActive) return;
+  consoleLogoutPending = true;
+  window.VectoSiteNavigation?.setLogoutPending(true);
+  try {
+    await api("/api/auth/logout", { method: "POST" });
+    consoleBoundaryNavigationActive = true;
+    clearTenantInMemoryState();
+    purgeLegacyTenantContentCaches();
+    window.VectoSiteNavigation?.setAccount(null);
+    window.location.replace(ADMIN_CONSOLE_SESSION ? "/admin" : "/");
+  } catch (error) {
+    consoleLogoutPending = false;
+    const message = error?.detail || error?.message || "退出失败，请重试。";
+    window.VectoSiteNavigation?.setLogoutPending(false, message);
+    showToast(message, false);
+  }
 }
 
 async function loadSetupStatus() {
@@ -20441,6 +20466,13 @@ async function init() {
     scheduleWorkspaceRender(false);
   });
 }
+
+window.addEventListener("vecto:logout-request", () => {
+  void logoutConsoleSession();
+});
+window.addEventListener("vecto:navigation-ready", () => {
+  if (state.currentUser) window.VectoSiteNavigation?.setAccount(state.currentUser);
+});
 
 init().catch((error) => {
   appendEvent("error", error.detail || error.message || "控制台初始化失败");

@@ -3,9 +3,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
-from webapp import db as db_module
+from webapp import db as db_module, governance
 import webapp.server as server
 
 
@@ -20,6 +21,7 @@ class BillingApiClosedLoopTests(unittest.TestCase):
                 "ADMIN_BOOTSTRAP_PASSWORD",
                 "SESSION_COOKIE_SECURE",
                 "COMMERCIAL_BILLING_ENABLED",
+                "PASSWORD_VAULT_KEY",
             )
         }
         self.old_runtime_path = server.RUNTIME_CONFIG_PATH
@@ -31,6 +33,7 @@ class BillingApiClosedLoopTests(unittest.TestCase):
         os.environ["ADMIN_BOOTSTRAP_PASSWORD"] = "billing-admin-12345"
         os.environ["SESSION_COOKIE_SECURE"] = "0"
         os.environ["COMMERCIAL_BILLING_ENABLED"] = "1"
+        os.environ["PASSWORD_VAULT_KEY"] = Fernet.generate_key().decode("ascii")
         server.RUNTIME_CONFIG_PATH = self.data_dir / "runtime.json"
         self.app = server.create_app()
         now = server._now_ts()
@@ -183,9 +186,29 @@ class BillingApiClosedLoopTests(unittest.TestCase):
 
         archived = self.admin.delete(f"/api/admin/users/{self.user_id}")
         self.assertEqual(archived.status_code, 200, archived.text)
-        purged = self.admin.delete(
+        setup = self.admin.post(
+            "/api/auth/mfa/setup",
+            headers={"Origin": "http://testserver"},
+            json={"current_password": "billing-admin-12345"},
+        )
+        self.assertEqual(setup.status_code, 200, setup.text)
+        secret = str(setup.json()["secret"])
+        verified = self.admin.post(
+            "/api/auth/mfa/verify-setup",
+            headers={"Origin": "http://testserver"},
+            json={"code": governance.totp_code(secret)},
+        )
+        self.assertEqual(verified.status_code, 200, verified.text)
+        purged = self.admin.request(
+            "DELETE",
             f"/api/admin/users/{self.user_id}/purge",
-            params={"confirm_username": "billing_user"},
+            headers={"Origin": "http://testserver"},
+            json={
+                "confirm_username": "billing_user",
+                "admin_password": "billing-admin-12345",
+                "totp_code": governance.totp_code(secret),
+                "reason": "billing cleanup regression",
+            },
         )
         self.assertEqual(purged.status_code, 200, purged.text)
         self.assertTrue(purged.json()["ok"], purged.text)
@@ -331,9 +354,9 @@ class BillingApiClosedLoopTests(unittest.TestCase):
             f"/api/admin/billing/orders/{order_id}/reject",
             json={"note": "must not reject"},
         )
-        self.assertEqual(customer_list.status_code, 403, customer_list.text)
-        self.assertEqual(customer_approve.status_code, 403, customer_approve.text)
-        self.assertEqual(customer_reject.status_code, 403, customer_reject.text)
+        self.assertEqual(customer_list.status_code, 401, customer_list.text)
+        self.assertEqual(customer_approve.status_code, 401, customer_approve.text)
+        self.assertEqual(customer_reject.status_code, 401, customer_reject.text)
 
         rejected = self.admin.post(
             f"/api/admin/billing/orders/{order_id}/reject",

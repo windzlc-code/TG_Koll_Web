@@ -53,7 +53,11 @@
         <nav id="adminPrimaryNav" class="nav admin-nav" aria-label="运营后台导航">
           <button type="button" data-page="overview">运营概览</button>
           <button type="button" data-page="users">客户账号 <span class="small" id="adminUserCount">0</span></button>
+          <button type="button" data-page="taxonomy">客户治理</button>
           <button type="button" data-page="tasks">生成记录 <span class="small" id="adminTaskCount">0</span></button>
+          <button type="button" data-page="audit">审计日志</button>
+          <button type="button" data-page="security">安全告警 <span class="small" id="adminAlertCount">0</span></button>
+          <button type="button" data-page="serviceAccounts">服务账号</button>
           <button type="button" data-page="pricing">额度与计费</button>
           <button type="button" data-page="runtime">系统配置</button>
           <button type="button" data-page="sentimentCookies">舆情 Cookie</button>
@@ -149,37 +153,121 @@
         </div>
       </section>
 
+      <section class="admin-mfa-banner" id="adminMfaBanner" aria-labelledby="adminMfaBannerTitle" hidden>
+        <div class="admin-mfa-banner-icon" aria-hidden="true">2FA</div>
+        <div>
+          <strong id="adminMfaBannerTitle">管理员账号需要启用动态验证</strong>
+          <span id="adminMfaBannerText">敏感操作需要管理员密码和动态验证码，请先完成 MFA 登记。</span>
+        </div>
+        <button id="btnOpenMfaSetup" type="button" class="primary">立即设置</button>
+      </section>
+
       <section class="card section admin-page-view" id="secOverview" data-page-view="overview">
-        <div class="section-head">
+        <div class="section-head admin-governance-head">
           <div>
-            <h2>运营概览</h2>
-            <div class="meta">从客户开通、失败排查和处理中任务三个方向看当前工作量。</div>
+            <h2>治理概览</h2>
+            <div class="meta">账号、任务、安全与服务健康的统一运行视图。</div>
+          </div>
+          <div class="admin-governance-refresh">
+            <select id="governanceRange" aria-label="仪表盘统计范围"><option value="7">7 天</option><option value="30" selected>30 天</option><option value="90">90 天</option><option value="custom">自定义</option></select>
+            <input id="governanceStartDate" type="date" aria-label="统计开始日期" hidden>
+            <input id="governanceEndDate" type="date" aria-label="统计结束日期" hidden>
+            <span class="admin-live-status"><i aria-hidden="true"></i>30 秒自动刷新</span>
+            <span class="small" id="governanceUpdatedAt">尚未刷新</span>
+            <button id="btnRefreshGovernance" type="button" class="ghost">刷新</button>
           </div>
         </div>
-        <div class="task-summary-shell">
-          <div class="task-summary overview-summary">
-            <div class="kpi task-kpi">
-              <div class="label">客户账号</div>
-              <div class="num" id="overviewUserCountMirror">0</div>
-              <div class="small">已开通账号</div>
-            </div>
-            <div class="kpi task-kpi">
-              <div class="label">生成记录</div>
-              <div class="num" id="overviewTaskCountMirror">0</div>
-              <div class="small">最近生成记录</div>
-            </div>
-            <div class="kpi task-kpi">
-              <div class="label">失败记录</div>
-              <div class="num" id="overviewFailedCountMirror">0</div>
-              <div class="small">需排查</div>
-            </div>
-            <div class="kpi task-kpi">
-              <div class="label">运行中</div>
-              <div class="num" id="overviewRunningCountMirror">0</div>
-              <div class="small">排队 / 生成中</div>
-            </div>
-          </div>
+
+        <div class="admin-governance-kpis" aria-label="治理关键指标">
+          <article class="admin-governance-kpi is-neutral"><span>客户总数</span><strong id="govKpiCustomers">0</strong><small id="govKpiCustomersMeta">0 个活跃</small></article>
+          <article class="admin-governance-kpi is-success"><span>启用客户</span><strong id="govKpiActive">0</strong><small id="govKpiActiveMeta">停用 0 · 锁定 0</small></article>
+          <article class="admin-governance-kpi is-warning"><span>待审核账号</span><strong id="govKpiPending">0</strong><small>需要运营处理</small></article>
+          <article class="admin-governance-kpi is-info"><span>活跃会话</span><strong id="govKpiSessions">0</strong><small>当前有效登录</small></article>
+          <article class="admin-governance-kpi is-info"><span>运行中任务</span><strong id="govKpiRunning">0</strong><small>排队与处理中</small></article>
+          <article class="admin-governance-kpi is-success"><span>今日成功</span><strong id="govKpiSuccess">0</strong><small>已完成任务</small></article>
+          <article class="admin-governance-kpi is-danger"><span>今日失败</span><strong id="govKpiFailed">0</strong><small>需要排查</small></article>
+          <article class="admin-governance-kpi is-danger"><span>开放告警</span><strong id="govKpiAlerts">0</strong><small>未解决安全事件</small></article>
+          <article class="admin-governance-kpi is-success"><span>有效订阅</span><strong id="govKpiSubscriptions">0</strong><small>当前有效客户</small></article>
+          <article class="admin-governance-kpi is-neutral"><span>算力余额</span><strong id="govKpiWallet">0</strong><small id="govKpiWalletMeta">当期消耗 0 点</small></article>
+          <article class="admin-governance-kpi is-health"><span>服务健康</span><strong id="govKpiHealth">-</strong><small id="govKpiHealthMeta">正在检查</small></article>
         </div>
+
+        <div class="admin-governance-chart-grid">
+          <article class="admin-governance-panel admin-chart-panel">
+            <header><div><strong>客户趋势</strong><span id="governanceUsersRangeLabel">近 30 天新增与启用</span></div><div class="admin-chart-legend"><i class="is-blue"></i>新增 <i class="is-green"></i>启用</div></header>
+            <div class="admin-governance-chart"><canvas id="governanceUsersChart" role="img" aria-label="近 30 天客户新增与启用趋势"></canvas></div>
+            <p id="governanceUsersChartSummary" class="admin-chart-summary">暂无用户趋势数据</p>
+          </article>
+          <article class="admin-governance-panel admin-chart-panel">
+            <header><div><strong>任务趋势</strong><span id="governanceTasksRangeLabel">近 30 天成功与失败</span></div><div class="admin-chart-legend"><i class="is-green"></i>成功 <i class="is-red"></i>失败</div></header>
+            <div class="admin-governance-chart"><canvas id="governanceTasksChart" role="img" aria-label="近 30 天任务成功与失败趋势"></canvas></div>
+            <p id="governanceTasksChartSummary" class="admin-chart-summary">暂无任务趋势数据</p>
+          </article>
+          <article class="admin-governance-panel admin-chart-panel">
+            <header><div><strong>计费趋势</strong><span id="governanceBillingRangeLabel">近 30 天充值、消费与退款</span></div><div class="admin-chart-legend"><i class="is-blue"></i>充值 <i class="is-red"></i>消费 <i class="is-green"></i>退款</div></header>
+            <div class="admin-governance-chart"><canvas id="governanceBillingChart" role="img" aria-label="算力充值消费退款趋势"></canvas></div>
+            <p id="governanceBillingChartSummary" class="admin-chart-summary">暂无计费趋势数据</p>
+          </article>
+        </div>
+
+        <div class="admin-governance-lower-grid">
+          <article class="admin-governance-panel admin-distribution-panel">
+            <header><div><strong>账号生命周期</strong><span>客户当前状态分布</span></div></header>
+            <div id="governanceLifecycleDistribution" class="admin-distribution-list"></div>
+          </article>
+          <article class="admin-governance-panel admin-distribution-panel">
+            <header><div><strong>告警严重度</strong><span>开放告警风险构成</span></div></header>
+            <div id="governanceAlertDistribution" class="admin-distribution-list"></div>
+          </article>
+          <article class="admin-governance-panel admin-distribution-panel">
+            <header><div><strong>订阅分布</strong><span>有效、即将到期与已到期</span></div></header>
+            <div id="governanceSubscriptionDistribution" class="admin-distribution-list"></div>
+          </article>
+          <article class="admin-governance-panel admin-distribution-panel">
+            <header><div><strong>浏览器资源</strong><span>运行、人工、异常与待回收</span></div></header>
+            <div id="governanceBrowserDistribution" class="admin-distribution-list"></div>
+          </article>
+          <article class="admin-governance-panel admin-health-panel">
+            <header><div><strong>服务状态</strong><span>关键依赖检查</span></div></header>
+            <div id="governanceHealthList" class="admin-health-list"></div>
+          </article>
+        </div>
+
+        <div class="admin-governance-queue-grid">
+          <article class="admin-governance-panel admin-queue-panel">
+            <header><div><strong>待审核客户</strong><span>按申请时间排序</span></div><button type="button" class="ghost" data-page-jump="users">查看全部</button></header>
+            <div id="governancePendingQueue" class="admin-queue-list"></div>
+          </article>
+          <article class="admin-governance-panel admin-queue-panel">
+            <header><div><strong>最近失败任务</strong><span>跨生成与自动化任务</span></div><button type="button" class="ghost" data-page-jump="tasks">查看全部</button></header>
+            <div id="governanceFailureQueue" class="admin-queue-list"></div>
+          </article>
+          <article class="admin-governance-panel admin-queue-panel">
+            <header><div><strong>安全告警</strong><span>高风险优先</span></div><button type="button" class="ghost" data-page-jump="security">进入处置</button></header>
+            <div id="governanceSecurityQueue" class="admin-queue-list"></div>
+          </article>
+          <article class="admin-governance-panel admin-queue-panel">
+            <header><div><strong>最近审计事件</strong><span>敏感操作追踪</span></div><button type="button" class="ghost" data-page-jump="audit">查看日志</button></header>
+            <div id="governanceAuditQueue" class="admin-queue-list"></div>
+          </article>
+          <article class="admin-governance-panel admin-queue-panel">
+            <header><div><strong>人工浏览器任务</strong><span>需要人工接管</span></div></header>
+            <div id="governanceBrowserQueue" class="admin-queue-list"></div>
+          </article>
+          <article class="admin-governance-panel admin-queue-panel">
+            <header><div><strong>即将到期订阅</strong><span>7 天内到期</span></div></header>
+            <div id="governanceSubscriptionQueue" class="admin-queue-list"></div>
+          </article>
+          <article class="admin-governance-panel admin-queue-panel">
+            <header><div><strong>密码敏感操作</strong><span>查看、修改、重置与恢复</span></div></header>
+            <div id="governancePasswordQueue" class="admin-queue-list"></div>
+          </article>
+          <article class="admin-governance-panel admin-queue-panel">
+            <header><div><strong>后台批量作业</strong><span>最近执行结果</span></div></header>
+            <div id="governanceBatchQueue" class="admin-queue-list"></div>
+          </article>
+        </div>
+        <div id="governanceMsg" class="msg" role="status" aria-live="polite"></div>
       </section>
 
       <section class="card section admin-page-view" id="secUsers" data-page-view="users">
@@ -197,6 +285,26 @@
           <button class="admin-account-tab" id="tabAdminAccounts" type="button" aria-pressed="false" data-user-role="admin">
             <span>管理员账号</span><strong id="adminManagerCount">0</strong>
           </button>
+        </div>
+        <form id="adminUserFilterForm" class="admin-user-filter-bar" autocomplete="off">
+          <label><span class="sr-only">搜索账号</span><input id="adminUserQuery" placeholder="账号、姓名、公司、邮箱或电话"></label>
+          <label><span class="sr-only">生命周期</span><select id="adminUserLifecycle"><option value="">全部状态</option><option value="pending">待审核</option><option value="active">正常使用</option><option value="rejected">已拒绝</option><option value="suspended">临时停用</option><option value="locked">安全锁定</option><option value="archived">只读归档</option><option value="deleted">软删除</option></select></label>
+          <label><span class="sr-only">风险等级</span><select id="adminUserRisk"><option value="">全部风险</option><option value="low">低风险</option><option value="medium">中风险</option><option value="high">高风险</option><option value="critical">严重风险</option></select></label>
+          <label class="admin-customer-filter"><span class="sr-only">订阅状态</span><select id="adminUserSubscription"><option value="">全部订阅</option><option value="active">有效订阅</option><option value="expiring">即将到期</option><option value="expired">已到期</option><option value="legacy">Legacy</option></select></label>
+          <label><span class="sr-only">在线状态</span><select id="adminUserOnline"><option value="">全部会话</option><option value="online">在线</option><option value="offline">离线</option></select></label>
+          <button type="submit" class="primary">筛选</button>
+          <button id="btnResetUserFilters" type="button" class="ghost">重置</button>
+        </form>
+        <div id="adminUserBatchBar" class="admin-user-batch-bar">
+          <div class="admin-user-batch-selection"><strong id="adminSelectedUserCount">0</strong><span>个客户已选择</span></div>
+          <label><span class="sr-only">批量操作</span><select id="adminUserBatchAction"><option value="">选择批量操作</option><option value="approve">审核通过</option><option value="reject">拒绝申请</option><option value="enable">启用账号</option><option value="suspend">临时停用</option><option value="lock">安全锁定</option><option value="archive">只读归档</option><option value="revoke_sessions">强制全部下线</option><option value="assign_group">调整分组</option><option value="add_tags">添加标签</option></select></label>
+          <label><span class="sr-only">批量操作原因</span><input id="adminUserBatchReason" maxlength="500" placeholder="填写操作原因"></label>
+          <label id="adminBatchGroupField" hidden><span class="sr-only">客户分组</span><select id="adminUserBatchGroup"><option value="">选择客户分组</option></select></label>
+          <label id="adminBatchTagsField" hidden><span class="sr-only">客户标签</span><select id="adminUserBatchTags" multiple aria-label="客户标签"></select></label>
+          <button id="btnPreviewUserBatch" type="button" class="ghost">预览影响</button>
+          <button id="btnRunUserBatch" type="button" class="primary" disabled>确认执行</button>
+          <button id="btnClearUserSelection" type="button" class="ghost">清除选择</button>
+          <div id="adminUserBatchMsg" class="msg" role="status" aria-live="polite"></div>
         </div>
         <div class="admin-compose-shell">
           <div class="admin-user-create-row">
@@ -217,6 +325,17 @@
               <span>创建客户账号</span>
             </button>
           </div>
+          <div class="admin-step-up-panel" id="adminCreateStepUpPanel" hidden>
+            <div class="admin-step-up-copy">
+              <strong>创建管理员敏感操作确认</strong>
+              <span>创建管理员账号前必须完成当前管理员二次验证。</span>
+            </div>
+            <div class="admin-step-up-fields">
+              <label for="adminCreateAdminPassword"><span>管理员当前密码</span><input id="adminCreateAdminPassword" type="password" autocomplete="current-password" placeholder="确认管理员身份"></label>
+              <label for="adminCreateTotpCode"><span>动态验证码或恢复码</span><input id="adminCreateTotpCode" inputmode="text" autocomplete="one-time-code" autocapitalize="characters" maxlength="32" placeholder="6 位验证码或恢复码"></label>
+              <label for="adminCreateReason"><span>操作原因</span><input id="adminCreateReason" maxlength="1000" placeholder="说明创建原因，至少 2 个字符"></label>
+            </div>
+          </div>
           <div id="userMsg" class="msg" role="status" aria-live="polite"></div>
         </div>
         <div class="table-wrap admin-table-shell">
@@ -224,6 +343,7 @@
             <caption class="sr-only">账号列表及业务数据</caption>
             <thead>
               <tr>
+                <th scope="col" class="admin-user-select-heading"><input id="adminSelectAllUsers" type="checkbox" aria-label="选择当前页全部客户"></th>
                 <th scope="col">账号</th>
                 <th scope="col">姓名 / 公司</th>
                 <th scope="col">角色</th>
@@ -246,6 +366,38 @@
             <button id="btnUserPageNext" type="button" class="ghost" aria-label="下一页">下一页</button>
           </div>
         </nav>
+      </section>
+
+      <section class="card section admin-page-view" id="secTaxonomy" data-page-view="taxonomy">
+        <div class="section-head admin-governance-head">
+          <div>
+            <h2>客户治理</h2>
+            <div class="meta">维护客户分组和标签词表，供账号治理与批量操作使用。</div>
+          </div>
+          <button id="btnRefreshTaxonomy" type="button" class="ghost">刷新</button>
+        </div>
+        <div class="admin-taxonomy-grid">
+          <section class="admin-governance-panel" aria-labelledby="customerGroupTitle">
+            <header><div><strong id="customerGroupTitle">客户分组</strong><span>互斥的运营归属</span></div></header>
+            <form id="customerGroupForm" class="admin-inline-create-form">
+              <input id="customerGroupName" maxlength="80" placeholder="分组名称" required>
+              <input id="customerGroupDescription" maxlength="500" placeholder="用途说明">
+              <select id="customerGroupColor" aria-label="分组颜色"><option value="neutral">中性</option><option value="blue">蓝色</option><option value="green">绿色</option><option value="amber">橙色</option><option value="red">红色</option></select>
+              <button type="submit" class="primary">新增</button>
+            </form>
+            <div id="customerGroupList" class="admin-taxonomy-list"></div>
+          </section>
+          <section class="admin-governance-panel" aria-labelledby="customerTagTitle">
+            <header><div><strong id="customerTagTitle">客户标签</strong><span>可叠加的业务标记</span></div></header>
+            <form id="customerTagForm" class="admin-inline-create-form admin-inline-create-form-tags">
+              <input id="customerTagName" maxlength="80" placeholder="标签名称" required>
+              <select id="customerTagColor" aria-label="标签颜色"><option value="neutral">中性</option><option value="blue">蓝色</option><option value="green">绿色</option><option value="amber">橙色</option><option value="red">红色</option></select>
+              <button type="submit" class="primary">新增</button>
+            </form>
+            <div id="customerTagList" class="admin-taxonomy-list"></div>
+          </section>
+        </div>
+        <div id="taxonomyMsg" class="msg" role="status" aria-live="polite"></div>
       </section>
 
       <section class="card section admin-page-view" id="secTasks" data-page-view="tasks">
@@ -300,6 +452,86 @@
         <div class="small task-meta-line" id="taskMetaLine">正在加载生成记录...</div>
         <div id="taskEmpty" class="task-empty" style="display:none">当前筛选条件下没有生成记录</div>
         <div id="taskList" class="task-list"></div>
+      </section>
+
+      <section class="card section admin-page-view" id="secAudit" data-page-view="audit">
+        <div class="section-head admin-governance-head">
+          <div>
+            <h2>审计日志</h2>
+            <div class="meta">按操作者、对象、动作、结果和风险级别追踪后台敏感操作。</div>
+          </div>
+          <div class="admin-governance-refresh">
+            <span class="small" id="auditResultSummary">尚未查询</span>
+            <button id="btnExportAudit" type="button" class="ghost">导出 CSV</button>
+            <button id="btnRefreshAudit" type="button" class="primary">查询</button>
+          </div>
+        </div>
+        <form id="auditFilterForm" class="admin-governance-filters">
+          <label><span>操作者 ID</span><input id="auditActorId" type="number" min="1" placeholder="全部"></label>
+          <label><span>目标用户 ID</span><input id="auditTargetId" type="number" min="1" placeholder="全部"></label>
+          <label><span>动作</span><input id="auditAction" placeholder="例如 user.password_reset"></label>
+          <label><span>结果</span><select id="auditOutcome"><option value="">全部</option><option value="success">成功</option><option value="denied">拒绝</option><option value="failed">失败</option></select></label>
+          <label><span>风险</span><select id="auditRisk"><option value="">全部</option><option value="critical">严重</option><option value="high">高</option><option value="medium">中</option><option value="low">低</option></select></label>
+        </form>
+        <div class="table-wrap admin-table-shell admin-governance-table-shell">
+          <table class="table admin-governance-table">
+            <thead><tr><th>时间</th><th>动作 / 资源</th><th>操作者</th><th>目标</th><th>风险</th><th>结果</th><th>原因 / 来源</th></tr></thead>
+            <tbody id="auditBody"></tbody>
+          </table>
+        </div>
+        <div id="auditMsg" class="msg" role="status" aria-live="polite"></div>
+      </section>
+
+      <section class="card section admin-page-view" id="secSecurity" data-page-view="security">
+        <div class="section-head admin-governance-head">
+          <div>
+            <h2>安全告警</h2>
+            <div class="meta">集中确认、调查和解决账号、凭证与敏感操作风险。</div>
+          </div>
+          <button id="btnRefreshSecurity" type="button" class="ghost">刷新</button>
+        </div>
+        <form id="securityFilterForm" class="admin-governance-filters admin-security-filters">
+          <label><span>状态</span><select id="securityStatus"><option value="">全部</option><option value="open">开放</option><option value="acknowledged">已确认</option><option value="investigating">调查中</option><option value="resolved">已解决</option><option value="ignored">已忽略</option></select></label>
+          <label><span>严重度</span><select id="securitySeverity"><option value="">全部</option><option value="critical">严重</option><option value="high">高</option><option value="medium">中</option><option value="low">低</option></select></label>
+        </form>
+        <div id="securityAlertList" class="admin-security-list"></div>
+        <div id="securityMsg" class="msg" role="status" aria-live="polite"></div>
+      </section>
+
+      <section class="card section admin-page-view" id="secServiceAccounts" data-page-view="serviceAccounts">
+        <div class="section-head admin-governance-head">
+          <div>
+            <h2>服务账号</h2>
+            <div class="meta">管理系统间凭证、最小权限范围和到期时间。新凭证只显示一次。</div>
+          </div>
+          <button id="btnRefreshServiceAccounts" type="button" class="ghost">刷新</button>
+        </div>
+        <form id="serviceAccountForm" class="admin-service-account-form">
+          <label><span>名称</span><input id="serviceAccountName" maxlength="120" placeholder="例如 billing-reporter" required></label>
+          <label><span>用途</span><input id="serviceAccountPurpose" maxlength="500" placeholder="说明调用方与业务用途"></label>
+          <label><span>权限范围</span><input id="serviceAccountScopes" placeholder="逗号分隔，例如 internal:tg 或 /api/internal/tg/*"></label>
+          <label><span>到期时间</span><input id="serviceAccountExpiresAt" type="datetime-local" required></label>
+          <button type="submit" class="primary">创建服务账号</button>
+        </form>
+        <div class="admin-service-rotate-stepup">
+          <strong>服务凭据敏感操作确认</strong>
+          <label><span>管理员密码</span><input id="serviceRotateAdminPassword" type="password" autocomplete="current-password"></label>
+          <label><span>动态验证码或恢复码</span><input id="serviceRotateTotpCode" inputmode="text" autocomplete="one-time-code" autocapitalize="characters" maxlength="32"></label>
+          <label><span>操作原因</span><input id="serviceRotateReason" maxlength="1000" placeholder="至少 2 个字符"></label>
+        </div>
+        <div id="serviceCredentialResult" class="admin-one-time-secret" hidden>
+          <div><strong>一次性凭证</strong><span>关闭或刷新后无法再次查看。</span></div>
+          <input id="serviceCredentialValue" readonly autocomplete="off" spellcheck="false">
+          <button id="btnCopyServiceCredential" type="button" class="ghost">复制</button>
+          <button id="btnHideServiceCredential" type="button" class="ghost">清除</button>
+        </div>
+        <div class="table-wrap admin-table-shell admin-governance-table-shell">
+          <table class="table admin-governance-table admin-service-table">
+            <thead><tr><th>服务账号</th><th>用途</th><th>权限范围</th><th>状态</th><th>到期 / 最近使用</th><th>操作</th></tr></thead>
+            <tbody id="serviceAccountBody"></tbody>
+          </table>
+        </div>
+        <div id="serviceAccountMsg" class="msg" role="status" aria-live="polite"></div>
       </section>
 
       <section class="card section admin-page-view" id="secSentimentCookies" data-page-view="sentimentCookies">
@@ -832,6 +1064,17 @@
               <button id="btnResetUserPassword" type="button" class="primary">重置并生成密码</button>
             </div>
           </div>
+          <div class="admin-step-up-panel" id="userStepUpPanel">
+            <div class="admin-step-up-copy">
+              <strong>敏感操作确认</strong>
+              <span>查看、修改、重置或恢复密码前必须完成管理员二次验证。</span>
+            </div>
+            <div class="admin-step-up-fields">
+              <label for="userStepUpAdminPassword"><span>管理员当前密码</span><input id="userStepUpAdminPassword" type="password" autocomplete="current-password" placeholder="确认管理员身份"></label>
+              <label for="userStepUpTotpCode"><span>动态验证码或恢复码</span><input id="userStepUpTotpCode" inputmode="text" autocomplete="one-time-code" autocapitalize="characters" maxlength="32" placeholder="6 位验证码或恢复码"></label>
+              <label for="userStepUpReason"><span>操作原因</span><input id="userStepUpReason" maxlength="1000" placeholder="说明业务原因，至少 2 个字符"></label>
+            </div>
+          </div>
           <form class="admin-user-password-manual-form" id="userPasswordManualForm" hidden novalidate>
             <div class="admin-user-password-manual-copy">
               <strong>设置新的登录密码</strong>
@@ -845,10 +1088,6 @@
               <label for="userPasswordManualConfirm">
                 <span>确认新密码</span>
                 <input id="userPasswordManualConfirm" type="password" minlength="8" maxlength="256" autocomplete="new-password" spellcheck="false" placeholder="再次输入新密码" required>
-              </label>
-              <label for="userPasswordAdminConfirm">
-                <span>管理员当前密码</span>
-                <input id="userPasswordAdminConfirm" type="password" autocomplete="current-password" spellcheck="false" placeholder="用于确认本次管理员操作" required>
               </label>
             </div>
             <div class="admin-user-password-manual-footer">
@@ -880,6 +1119,34 @@
             <button id="btnCopyUserPassword" type="button" class="ghost">复制密码</button>
           </div>
         </section>
+        <section class="admin-user-governance-section" id="userSessionSection" aria-labelledby="userSessionTitle">
+          <div class="admin-user-governance-heading">
+            <div><strong id="userSessionTitle">登录会话</strong><span>查看设备、来源与撤销状态。</span></div>
+            <div><button id="btnRefreshUserSessions" type="button" class="ghost">刷新</button><button id="btnRevokeUserSessions" type="button" class="danger">撤销全部有效会话</button></div>
+          </div>
+          <div id="userSessionList" class="admin-session-list"></div>
+        </section>
+        <section class="admin-user-governance-section" id="userPasswordHistorySection" aria-labelledby="userPasswordHistoryTitle">
+          <div class="admin-user-governance-heading">
+            <div><strong id="userPasswordHistoryTitle">密码历史</strong><span>最多保留 5 条可恢复记录；恢复后现有会话失效。</span></div>
+            <button id="btnRefreshPasswordHistory" type="button" class="ghost">刷新</button>
+          </div>
+          <div id="userPasswordHistoryList" class="admin-password-history-list"></div>
+        </section>
+        <section class="admin-user-danger-section" id="userPurgeSection" hidden aria-labelledby="userPurgeTitle">
+          <div class="admin-user-governance-heading">
+            <div><strong id="userPurgeTitle">永久删除客户数据</strong><span>仅软删除账号可进入此流程，操作完成后无法恢复。</span></div>
+            <button id="btnLoadUserPurgePreview" type="button" class="danger">查看影响范围</button>
+          </div>
+          <div id="userPurgePreview" class="admin-purge-preview" hidden></div>
+          <form id="userPurgeForm" class="admin-purge-form" hidden>
+            <label><span>输入完整客户用户名</span><input id="userPurgeUsername" autocomplete="off"></label>
+            <label><span>管理员当前密码</span><input id="userPurgeAdminPassword" type="password" autocomplete="current-password"></label>
+            <label><span>动态验证码或恢复码</span><input id="userPurgeTotpCode" inputmode="text" autocomplete="one-time-code" autocapitalize="characters" maxlength="32"></label>
+            <label><span>永久删除原因</span><input id="userPurgeReason" maxlength="1000"></label>
+            <button id="btnPurgeUser" type="submit" class="danger">永久删除全部关联数据</button>
+          </form>
+        </section>
         <label for="userApprovalNote">管理员审核备注</label>
         <textarea id="userApprovalNote" rows="3" placeholder="记录授权或拒绝原因（选填）"></textarea>
         <div id="userDetailMsg" class="msg" role="status" aria-live="polite" aria-atomic="true"></div>
@@ -891,6 +1158,38 @@
     </div>
   </div>
 
+  <div id="adminMfaModal" class="modal-overlay" style="display:none" aria-hidden="true">
+    <div class="modal-card admin-mfa-modal" role="dialog" aria-modal="true" aria-labelledby="adminMfaTitle">
+      <div class="modal-header">
+        <div><div class="modal-title" id="adminMfaTitle">设置动态验证</div><div class="small">管理员敏感操作必须使用 MFA。</div></div>
+        <button id="btnCloseMfaSetup" type="button" class="ghost">关闭</button>
+      </div>
+      <div class="modal-body">
+        <div id="adminMfaIntro" class="admin-mfa-intro">
+          <strong>使用身份验证器保护管理员账号</strong>
+          <span>先重新输入当前密码，再将密钥添加到身份验证器并完成验证。</span>
+          <label for="adminMfaCurrentPassword"><span>管理员当前密码</span><input id="adminMfaCurrentPassword" type="password" autocomplete="current-password"></label>
+          <button id="btnStartMfaSetup" type="button" class="primary">生成设置密钥</button>
+        </div>
+        <div id="adminMfaSetupDetails" class="admin-mfa-setup-details" hidden>
+          <label for="adminMfaSecret"><span>设置密钥</span><input id="adminMfaSecret" readonly autocomplete="off" spellcheck="false"></label>
+          <label for="adminMfaUri"><span>身份验证器 URI</span><textarea id="adminMfaUri" rows="2" readonly spellcheck="false"></textarea></label>
+          <div class="admin-mfa-recovery">
+            <strong>恢复码</strong><span>每个恢复码只能使用一次，请保存到受控位置。</span>
+            <pre id="adminMfaRecoveryCodes"></pre>
+          </div>
+          <label for="adminMfaVerifyCode"><span>动态验证码</span><input id="adminMfaVerifyCode" inputmode="numeric" autocomplete="one-time-code" maxlength="16" placeholder="输入 6 位验证码"></label>
+        </div>
+        <div id="adminMfaMsg" class="msg" role="status" aria-live="polite"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="btnCopyMfaSetup" type="button" class="ghost" hidden>复制设置资料</button>
+        <button id="btnVerifyMfaSetup" type="button" class="primary" hidden>验证并启用</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/assets/vendor/chart.js/chart.umd.js?v=4.4.9"></script>
   <script src="/assets/admin.js?v=__ADMIN_JS_VERSION__"></script>
 </body>
 </html>

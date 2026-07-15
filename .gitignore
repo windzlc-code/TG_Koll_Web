@@ -25,6 +25,7 @@ logs/
 .codex-tmp/
 .codex_tmp_py/
 .playwright-mcp/
+.playwright-cli/
 .serena/
 .gstack/
 .claude/
@@ -40,6 +41,23 @@ runninghub_batch_test/
 tmp_tg_test_images/
 tmp_task_*/
 qa_task_*/
+output/
+profiles/
+tmp_*.py
+tmp_*.png
+*.tsbuildinfo
+
+# Local visual QA captures are generated artifacts, not application assets.
+*-review.png
+*-final.png
+*-verified.png
+account-*.png
+persona-*.png
+publish-*.png
+public-home-*.png
+scheduled-task-*.png
+status-color-*.png
+toast-*.png
 
 .deploy_commit
 *.bak

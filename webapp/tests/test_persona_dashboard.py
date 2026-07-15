@@ -102,7 +102,19 @@ class PersonaDashboardApiTests(unittest.TestCase):
         ]
 
         server._SENTIMENT_THREADS_LIVE_AUTH_CACHE.clear()
-        with mock.patch.object(server, "_probe_threads_live_auth_with_browser", return_value={"ok": True, "status": "verified"}):
+        response = mock.Mock(
+            status_code=200,
+            text="Threads home",
+            url="https://www.threads.com/",
+            headers={},
+        )
+        response.raw.headers.get_all.return_value = []
+        session = mock.Mock()
+        session.get.return_value = response
+        with (
+            mock.patch.object(server.requests, "Session", return_value=session),
+            mock.patch.object(server, "_probe_threads_live_auth_with_browser", return_value={"ok": True, "status": "verified"}),
+        ):
             state = server._sentiment_threads_live_auth_state(profile, cookies)
 
         self.assertTrue(state["liveAuthUsable"])

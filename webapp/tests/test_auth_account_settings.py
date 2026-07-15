@@ -7,7 +7,7 @@ from pathlib import Path
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
-from webapp import db as db_module
+from webapp import db as db_module, governance
 import webapp.server as server
 
 
@@ -159,8 +159,8 @@ class AccountSettingsApiTests(unittest.TestCase):
                 str(row["token"])
                 for row in conn.execute("SELECT token FROM sessions WHERE user_id = ?", (int(current_admin.json()["id"]),))
             }
-        self.assertIn(admin_token, active_tokens)
-        self.assertNotIn(legacy_token, active_tokens)
+        self.assertIn(governance.token_digest(admin_token), active_tokens)
+        self.assertIn(governance.token_digest(legacy_token), active_tokens)
 
     def test_admin_password_change_requires_twelve_characters(self):
         self.assertEqual(

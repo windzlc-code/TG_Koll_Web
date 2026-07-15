@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import Cookie, Depends, Header, HTTPException, Request
 
 from .db import db
+from .governance import token_digest
 
 SESSION_COOKIE = "session_token"
 ADMIN_SESSION_COOKIE = "admin_session_token"
@@ -47,7 +48,7 @@ def session_token_for_request(
     if _truthy(request.headers.get(ADMIN_CONSOLE_HEADER)) or _truthy(request.query_params.get(ADMIN_CONSOLE_QUERY)):
         return str(admin_session_token or "").strip() or None
     if request_uses_admin_session(request, admin_workspace_user_id):
-        return str(admin_session_token or session_token or "").strip() or None
+        return str(admin_session_token or "").strip() or None
     return str(session_token or "").strip() or None
 
 def _now() -> int:
@@ -81,18 +82,44 @@ def verify_password(password: str, stored: str) -> bool:
     computed = _pbkdf2_hash(str(password or ""), salt=salt, iterations=iterations)
     return hmac.compare_digest(computed, digest_b64)
 
-def create_session(conn, user_id: int, *, ttl_seconds: int = 14 * 24 * 3600) -> str:
+def session_storage_token(token: str | None) -> str:
+    return token_digest(str(token or ""))
+
+
+def create_session(
+    conn,
+    user_id: int,
+    *,
+    ttl_seconds: int = 14 * 24 * 3600,
+    request: Request | None = None,
+    is_admin_session: bool = False,
+    device_id: str = "",
+) -> str:
     token = secrets.token_urlsafe(32)
     now_ts = _now()
     expires_at = now_ts + int(ttl_seconds)
+    ip_address = str(request.client.host if request is not None and request.client else "")[:64]
+    user_agent = str(request.headers.get("user-agent") if request is not None else "")[:500]
+    clean_device_id = str(device_id or (request.headers.get("x-device-id") if request is not None else "") or "")[:128]
     conn.execute(
-        "INSERT INTO sessions(token, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
-        (token, int(user_id), int(expires_at), int(now_ts)),
+        """
+        INSERT INTO sessions(
+          token, user_id, expires_at, created_at, device_id, ip_address,
+          user_agent, last_seen_at, revoked_at, revoke_reason, is_admin_session
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, '', ?)
+        """,
+        (
+            session_storage_token(token), int(user_id), int(expires_at), int(now_ts),
+            clean_device_id, ip_address, user_agent, int(now_ts), 1 if is_admin_session else 0,
+        ),
     )
     return token
 
-def delete_session(conn, token: str) -> None:
-    conn.execute("DELETE FROM sessions WHERE token = ?", (str(token),))
+def delete_session(conn, token: str, *, reason: str = "logout") -> None:
+    conn.execute(
+        "UPDATE sessions SET revoked_at = ?, revoke_reason = ? WHERE token = ?",
+        (_now(), str(reason or "revoked")[:160], session_storage_token(token)),
+    )
 
 def _get_user_by_id(conn, user_id: int) -> dict[str, Any] | None:
     row = conn.execute("SELECT * FROM users WHERE id = ?", (int(user_id),)).fetchone()
@@ -108,15 +135,20 @@ def get_user_allowing_password_change(
         raise HTTPException(status_code=401, detail="未登录")
     now_ts = _now()
     with db() as conn:
+        stored_token = session_storage_token(token)
         row = conn.execute(
-            "SELECT user_id, expires_at FROM sessions WHERE token = ?",
-            (token,),
+            "SELECT user_id, expires_at, revoked_at FROM sessions WHERE token = ?",
+            (stored_token,),
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=401, detail="登录已过期")
-        if int(row["expires_at"]) <= now_ts:
-            conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
+        if int(row["expires_at"]) <= now_ts or int(row["revoked_at"] or 0) > 0:
+            conn.execute("DELETE FROM sessions WHERE token = ?", (stored_token,))
             raise HTTPException(status_code=401, detail="登录已过期")
+        conn.execute(
+            "UPDATE sessions SET last_seen_at = ? WHERE token = ? AND last_seen_at < ?",
+            (now_ts, stored_token, now_ts - 30),
+        )
         user = _get_user_by_id(conn, int(row["user_id"]))
         if user is None:
             raise HTTPException(status_code=401, detail="登录已失效")
@@ -200,6 +232,31 @@ def get_current_user_for_session(
                 "password_expires_at": expires_at,
             },
         )
+    if request is not None and int(user.get("is_admin") or 0) == 1:
+        allowed_paths = {
+            "/api/me",
+            "/api/auth/me",
+            "/api/auth/mfa",
+            "/api/auth/mfa/setup",
+            "/api/auth/mfa/verify-setup",
+            "/api/auth/logout",
+        }
+        with db() as conn:
+            mfa = conn.execute(
+                "SELECT enabled_at, required_after FROM user_mfa WHERE user_id = ?",
+                (int(user.get("id") or 0),),
+            ).fetchone()
+        if (
+            mfa is not None
+            and int(mfa["required_after"] or 0) > 0
+            and int(mfa["required_after"] or 0) <= _now()
+            and int(mfa["enabled_at"] or 0) <= 0
+            and str(request.url.path or "") not in allowed_paths
+        ):
+            raise HTTPException(
+                status_code=428,
+                detail={"code": "mfa_setup_required", "message": "administrator MFA enrollment is required"},
+            )
     return resolve_admin_workspace_user(user, admin_workspace_user_id, request=request)
 
 

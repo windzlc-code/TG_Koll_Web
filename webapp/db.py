@@ -739,6 +739,9 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_persona_owners_user ON persona_owners(user_id, archive_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_persona_group_owners_user ON persona_group_owners(user_id, group_id)")
         _ensure_commercial_billing_schema(conn)
+        from .governance import ensure_schema as ensure_governance_schema
+
+        ensure_governance_schema(conn)
         from .commercial_billing import bootstrap_billing
 
         bootstrap_billing(conn)

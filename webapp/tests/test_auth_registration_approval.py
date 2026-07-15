@@ -1,6 +1,7 @@
 import json
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -8,7 +9,7 @@ from unittest import mock
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
-from webapp import db as db_module
+from webapp import db as db_module, governance
 import webapp.server as server
 
 
@@ -33,6 +34,9 @@ class RegistrationApprovalTests(unittest.TestCase):
             server._AUTH_RATE_EVENTS.clear()
         server.RUNTIME_CONFIG_PATH = self.data_dir / "runtime.json"
         self.app = server.create_app()
+        self._admin_mfa_secret = ""
+        self._admin_recovery_codes: list[str] = []
+        self._admin_step_up_count = 0
 
     def tearDown(self):
         server.RUNTIME_CONFIG_PATH = self.old_runtime_path
@@ -53,6 +57,26 @@ class RegistrationApprovalTests(unittest.TestCase):
             "phone": "0912345678",
             "company": "Vecto Test",
             "use_case": "OPC 导入测试",
+        }
+
+    def admin_step_up(self, admin: TestClient, reason: str = "security regression") -> dict[str, str]:
+        if not self._admin_mfa_secret:
+            setup = admin.post("/api/auth/mfa/setup", headers={"Origin": "http://testserver"}, json={"current_password": "admin123secure"})
+            self.assertEqual(setup.status_code, 200, setup.text)
+            self._admin_mfa_secret = str(setup.json()["secret"])
+            self._admin_recovery_codes = [str(code) for code in setup.json()["recovery_codes"]]
+            verified = admin.post(
+                "/api/auth/mfa/verify-setup",
+                headers={"Origin": "http://testserver"},
+                json={"code": governance.totp_code(self._admin_mfa_secret)},
+            )
+            self.assertEqual(verified.status_code, 200, verified.text)
+        code = governance.totp_code(self._admin_mfa_secret) if self._admin_step_up_count == 0 else self._admin_recovery_codes.pop(0)
+        self._admin_step_up_count += 1
+        return {
+            "admin_password": "admin123secure",
+            "totp_code": code,
+            "reason": reason,
         }
 
     def test_pending_application_has_no_session_and_cannot_login(self):
@@ -134,19 +158,22 @@ class RegistrationApprovalTests(unittest.TestCase):
         listing = admin.get("/api/admin/users")
         self.assertNotIn("ciphertext", listing.text)
         self.assertNotIn(password, listing.text)
+        step_up = self.admin_step_up(admin, "reveal customer password")
 
         self.assertEqual(admin.get(f"/api/admin/users/{user_id}/reveal-password").status_code, 405)
-        self.assertEqual(admin.post(f"/api/admin/users/{user_id}/reveal-password").status_code, 403)
+        self.assertEqual(admin.post(f"/api/admin/users/{user_id}/reveal-password", json=step_up).status_code, 403)
         self.assertEqual(
             admin.post(
                 f"/api/admin/users/{user_id}/reveal-password",
                 headers={"Origin": "https://attacker.example"},
+                json=step_up,
             ).status_code,
             403,
         )
         revealed = admin.post(
             f"/api/admin/users/{user_id}/reveal-password",
             headers={"Origin": "http://testserver"},
+            json=step_up,
         )
         self.assertEqual(revealed.status_code, 200, revealed.text)
         self.assertEqual(revealed.json()["password"], password)
@@ -161,7 +188,7 @@ class RegistrationApprovalTests(unittest.TestCase):
                 ("user.password_reveal", user_id),
             ).fetchone()
         self.assertIsNotNone(audit)
-        self.assertEqual(json.loads(str(audit["metadata_json"]))["result"], "revealed")
+        self.assertEqual(json.loads(str(audit["metadata_json"]))["outcome"], "success")
         self.assertNotIn(password, str(audit["metadata_json"]))
 
     def test_historical_and_admin_passwords_are_not_revealable(self):
@@ -189,9 +216,11 @@ class RegistrationApprovalTests(unittest.TestCase):
         detail = admin.get(f"/api/admin/users/{historical_id}")
         self.assertEqual(detail.json()["user"]["password_reveal_status"], "unavailable")
         self.assertFalse(detail.json()["user"]["password_reveal_available"])
+        step_up = self.admin_step_up(admin, "verify historical password state")
         unavailable = admin.post(
             f"/api/admin/users/{historical_id}/reveal-password",
             headers={"Origin": "http://testserver"},
+            json=step_up,
         )
         self.assertEqual(unavailable.status_code, 404, unavailable.text)
         self.assertEqual(unavailable.json()["detail"]["code"], "password_unavailable")
@@ -202,6 +231,7 @@ class RegistrationApprovalTests(unittest.TestCase):
         prohibited = admin.post(
             "/api/admin/users/1/reveal-password",
             headers={"Origin": "http://testserver"},
+            json=self.admin_step_up(admin, "verify admin password prohibition"),
         )
         self.assertEqual(prohibited.status_code, 403, prohibited.text)
         self.assertEqual(prohibited.json()["detail"]["code"], "admin_password_not_revealable")
@@ -252,6 +282,7 @@ class RegistrationApprovalTests(unittest.TestCase):
             response = admin.post(
                 f"/api/admin/users/{applied.json()['id']}/reveal-password",
                 headers={"Origin": "http://testserver"},
+                json=self.admin_step_up(admin, "test unavailable vault key"),
             )
             self.assertEqual(response.status_code, 409, response.text)
             self.assertEqual(response.json()["detail"]["code"], "password_unavailable")
@@ -294,7 +325,7 @@ class RegistrationApprovalTests(unittest.TestCase):
         me = user_client.get("/api/me")
         self.assertEqual(me.json()["username"], "guest001")
         self.assertFalse(me.json()["is_admin"])
-        self.assertEqual(user_client.get("/api/admin/users").status_code, 403)
+        self.assertEqual(user_client.get("/api/admin/users").status_code, 401)
 
     def test_console_requires_login(self):
         response = TestClient(self.app).get("/console.html", follow_redirects=False)
@@ -329,16 +360,18 @@ class RegistrationApprovalTests(unittest.TestCase):
         self.assertEqual(
             user.post(
                 f"/api/admin/users/{user_id}/reset-password",
-                json={"expected_updated_at": created_user["updated_at"]},
+                json={"expected_updated_at": created_user["updated_at"], "admin_password": "invalid", "totp_code": "000000", "reason": "unauthorized access"},
                 headers={"Origin": "http://testserver"},
             ).status_code,
-            403,
+            401,
         )
 
         detail_before_reset = admin.get(f"/api/admin/users/{user_id}").json()["user"]
+        step_up = self.admin_step_up(admin, "manage customer password")
         initial_reveal = admin.post(
             f"/api/admin/users/{user_id}/reveal-password",
             headers={"Origin": "http://testserver"},
+            json=step_up,
         )
         self.assertEqual(initial_reveal.status_code, 200, initial_reveal.text)
         self.assertEqual(initial_reveal.json()["password"], "oldpass123")
@@ -346,12 +379,13 @@ class RegistrationApprovalTests(unittest.TestCase):
             user.post(
                 f"/api/admin/users/{user_id}/reveal-password",
                 headers={"Origin": "http://testserver"},
+                json={"admin_password": "invalid", "totp_code": "000000", "reason": "unauthorized access"},
             ).status_code,
-            403,
+            401,
         )
         reset = admin.post(
             f"/api/admin/users/{user_id}/reset-password",
-            json={"expected_updated_at": detail_before_reset["updated_at"]},
+            json={"expected_updated_at": detail_before_reset["updated_at"], **self.admin_step_up(admin, "reset customer password")},
             headers={"Origin": "http://testserver"},
         )
         self.assertEqual(reset.status_code, 200)
@@ -361,6 +395,7 @@ class RegistrationApprovalTests(unittest.TestCase):
         reset_reveal = admin.post(
             f"/api/admin/users/{user_id}/reveal-password",
             headers={"Origin": "http://testserver"},
+            json=self.admin_step_up(admin, "verify reset password"),
         )
         self.assertEqual(reset_reveal.status_code, 200, reset_reveal.text)
         self.assertEqual(reset_reveal.json()["password"], temporary_password)
@@ -409,6 +444,7 @@ class RegistrationApprovalTests(unittest.TestCase):
         changed_reveal = admin.post(
             f"/api/admin/users/{user_id}/reveal-password",
             headers={"Origin": "http://testserver"},
+            json=self.admin_step_up(admin, "verify changed password"),
         )
         self.assertEqual(changed_reveal.status_code, 200, changed_reveal.text)
         self.assertEqual(changed_reveal.json()["password"], "permanent123")
@@ -441,7 +477,7 @@ class RegistrationApprovalTests(unittest.TestCase):
         ).json()["user"]
         user_id = int(created["id"])
         expected_updated_at = int(created["updated_at"])
-        payload = {"expected_updated_at": expected_updated_at}
+        payload = {"expected_updated_at": expected_updated_at, **self.admin_step_up(admin, "reset customer password")}
 
         self.assertEqual(
             admin.post(f"/api/admin/users/{user_id}/reset-password", json=payload).status_code,
@@ -463,20 +499,19 @@ class RegistrationApprovalTests(unittest.TestCase):
         self.assertEqual(first.status_code, 200, first.text)
         stale = admin.post(
             f"/api/admin/users/{user_id}/reset-password",
-            json=payload,
+            json={**payload, **self.admin_step_up(admin, "verify stale reset version")},
             headers={"Origin": "http://testserver"},
         )
         self.assertEqual(stale.status_code, 409, stale.text)
 
         with db_module.db() as conn:
             row = conn.execute(
-                "SELECT metadata_json FROM admin_audit_log WHERE action = ? AND target_user_id = ?",
+                "SELECT before_json, after_json FROM audit_events WHERE action = ? AND target_user_id = ?",
                 ("user.password_reset", user_id),
             ).fetchone()
         self.assertIsNotNone(row)
-        metadata = json.loads(str(row["metadata_json"]))
-        self.assertEqual(metadata["previous_updated_at"], expected_updated_at)
-        self.assertNotIn("password", str(row["metadata_json"]).lower())
+        self.assertEqual(json.loads(str(row["before_json"]))["updated_at"], expected_updated_at)
+        self.assertNotIn("password", f"{row['before_json']} {row['after_json']}".lower())
 
     def test_admin_can_manually_set_user_password_and_revoke_existing_sessions(self):
         admin = TestClient(self.app)
@@ -502,10 +537,11 @@ class RegistrationApprovalTests(unittest.TestCase):
             200,
         )
         detail_before_change = admin.get(f"/api/admin/users/{user_id}").json()["user"]
+        step_up = self.admin_step_up(admin, "set customer password")
         payload = {
             "password": "chosen-password-456",
-            "admin_password": "admin123secure",
             "expected_updated_at": int(detail_before_change["updated_at"]),
+            **step_up,
         }
         self.assertEqual(
             admin.post(f"/api/admin/users/{user_id}/set-password", json=payload).status_code,
@@ -520,7 +556,11 @@ class RegistrationApprovalTests(unittest.TestCase):
         self.assertEqual(
             admin.post(
                 f"/api/admin/users/{user_id}/set-password",
-                json={**payload, "password": "seven77"},
+                json={
+                    **payload,
+                    **self.admin_step_up(admin, "reject a short customer password"),
+                    "password": "seven77",
+                },
                 headers={"Origin": "http://testserver"},
             ).status_code,
             400,
@@ -528,14 +568,18 @@ class RegistrationApprovalTests(unittest.TestCase):
         self.assertEqual(
             admin.post(
                 f"/api/admin/users/{user_id}/set-password",
-                json={**payload, "password": "x" * 257},
+                json={
+                    **payload,
+                    **self.admin_step_up(admin, "reject an oversized customer password"),
+                    "password": "x" * 257,
+                },
                 headers={"Origin": "http://testserver"},
             ).status_code,
             400,
         )
         changed = admin.post(
             f"/api/admin/users/{user_id}/set-password",
-            json=payload,
+            json={**payload, **self.admin_step_up(admin, "set customer password")},
             headers={"Origin": "http://testserver"},
         )
         self.assertEqual(changed.status_code, 200, changed.text)
@@ -563,13 +607,14 @@ class RegistrationApprovalTests(unittest.TestCase):
         revealed = admin.post(
             f"/api/admin/users/{user_id}/reveal-password",
             headers={"Origin": "http://testserver"},
+            json=self.admin_step_up(admin, "verify manually set password"),
         )
         self.assertEqual(revealed.status_code, 200, revealed.text)
         self.assertEqual(revealed.json()["password"], "chosen-password-456")
 
         stale = admin.post(
             f"/api/admin/users/{user_id}/set-password",
-            json=payload,
+            json={**payload, **self.admin_step_up(admin, "verify stale password version")},
             headers={"Origin": "http://testserver"},
         )
         self.assertEqual(stale.status_code, 409, stale.text)
@@ -597,7 +642,7 @@ class RegistrationApprovalTests(unittest.TestCase):
         ).json()["user"]
         reset = admin.post(
             f"/api/admin/users/{created['id']}/reset-password",
-            json={"expected_updated_at": created["updated_at"]},
+            json={"expected_updated_at": created["updated_at"], **self.admin_step_up(admin, "reset expiring password")},
             headers={"Origin": "http://testserver"},
         )
         temporary_password = reset.json()["temporary_password"]
@@ -652,10 +697,15 @@ class RegistrationApprovalTests(unittest.TestCase):
             "/api/admin/users",
             json={"username": "metrics-customer", "password": "password123", "is_admin": False},
         ).json()["user"]
-        manager = admin.post(
-            "/api/admin/users",
-            json={"username": "metrics-admin", "password": "adminpassword123", "is_admin": True},
-        ).json()["user"]
+        with db_module.db() as conn:
+            now = int(time.time())
+            inserted = conn.execute(
+                "INSERT INTO users(username, password_hash, is_admin, is_disabled, balance_cents, "
+                "account_type, approval_status, lifecycle_status, created_at, updated_at) "
+                "VALUES (?, ?, 1, 0, 0, 'managed', 'approved', 'active', ?, ?)",
+                ("metrics-admin", server.hash_password("adminpassword123"), now, now),
+            )
+            manager = dict(conn.execute("SELECT * FROM users WHERE id = ?", (int(inserted.lastrowid),)).fetchone())
 
         archives = [{
             "id": "metrics-persona",
@@ -805,7 +855,7 @@ class RegistrationApprovalTests(unittest.TestCase):
         with db_module.db() as conn:
             admin = conn.execute("SELECT id FROM users WHERE username = 'admin'").fetchone()
             session_count = conn.execute(
-                "SELECT COUNT(*) AS count FROM sessions WHERE user_id = ?",
+                "SELECT COUNT(*) AS count FROM sessions WHERE user_id = ? AND revoked_at = 0",
                 (int(admin["id"]),),
             ).fetchone()
         self.assertEqual(int(session_count["count"]), 0)

@@ -10,7 +10,7 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 import webapp.server as server
-from webapp import social_automation_api
+from webapp import governance, social_automation_api
 
 
 class AdminWorkspaceManagementTests(unittest.TestCase):
@@ -75,6 +75,9 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
         )
         self.assertEqual(admin_login.status_code, 200, admin_login.text)
         self.admin_user_id = int(admin_login.json()["id"])
+        self._admin_mfa_secret = ""
+        self._admin_recovery_codes: list[str] = []
+        self._purge_step_up_count = 0
 
     def tearDown(self):
         server.RUNTIME_CONFIG_PATH = self.old_runtime_path
@@ -124,6 +127,27 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
         )
         self.assertEqual(login.status_code, 200, login.text)
         return customer, user_id
+
+    def _purge_payload(self, username: str) -> dict[str, str]:
+        if not self._admin_mfa_secret:
+            setup = self.admin.post("/api/auth/mfa/setup", headers={"Origin": "http://testserver"}, json={"current_password": self.ADMIN_PASSWORD})
+            self.assertEqual(setup.status_code, 200, setup.text)
+            self._admin_mfa_secret = str(setup.json()["secret"])
+            self._admin_recovery_codes = [str(code) for code in setup.json()["recovery_codes"]]
+            verified = self.admin.post(
+                "/api/auth/mfa/verify-setup",
+                headers={"Origin": "http://testserver"},
+                json={"code": governance.totp_code(self._admin_mfa_secret)},
+            )
+            self.assertEqual(verified.status_code, 200, verified.text)
+        code = governance.totp_code(self._admin_mfa_secret) if self._purge_step_up_count == 0 else self._admin_recovery_codes.pop(0)
+        self._purge_step_up_count += 1
+        return {
+            "confirm_username": username,
+            "admin_password": self.ADMIN_PASSWORD,
+            "totp_code": code,
+            "reason": "permanent cleanup regression",
+        }
 
     def _seed_workspace(self, customer: TestClient, user_id: int, label: str) -> dict[str, str]:
         persona_response = customer.post(
@@ -244,7 +268,11 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
             self.assertEqual(int(user_row["is_disabled"]), 1)
             self.assertEqual(
                 int(conn.execute("SELECT COUNT(*) AS c FROM sessions WHERE user_id = ?", (user_id,)).fetchone()["c"]),
-                0,
+                1,
+            )
+            self.assertEqual(
+                int(conn.execute("SELECT COUNT(*) AS c FROM sessions WHERE user_id = ? AND revoked_at > 0", (user_id,)).fetchone()["c"]),
+                1,
             )
             expected_rows = {
                 "persona_owners": ("archive_id", resources["persona_id"]),
@@ -419,7 +447,7 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
             ),
         )
         self.assertTrue(
-            all(response.status_code == 403 for response in admin_workspace_attempts),
+            all(response.status_code == 401 for response in admin_workspace_attempts),
             [(response.status_code, response.text) for response in admin_workspace_attempts],
         )
 
@@ -454,7 +482,7 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
                 """
                 SELECT admin_user_id, action, target_user_id, metadata_json, created_at
                 FROM admin_audit_log
-                WHERE action = 'user.archive' AND target_user_id = ?
+                WHERE action = 'user.soft_delete' AND target_user_id = ?
                 ORDER BY id DESC
                 LIMIT 1
                 """,
@@ -462,7 +490,7 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
             ).fetchone()
         self.assertIsNotNone(row)
         self.assertEqual(int(row["admin_user_id"]), self.admin_user_id)
-        self.assertEqual(str(row["action"]), "user.archive")
+        self.assertEqual(str(row["action"]), "user.soft_delete")
         self.assertEqual(int(row["target_user_id"]), user_id)
         self.assertIsInstance(json.loads(str(row["metadata_json"])), dict)
         self.assertGreater(int(row["created_at"]), 0)
@@ -580,7 +608,7 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
 
         self.assertEqual(target_response.status_code, 200, target_response.text)
         self.assertEqual(own_admin_response.status_code, 404, own_admin_response.text)
-        self.assertEqual(ordinary_response.status_code, 403, ordinary_response.text)
+        self.assertEqual(ordinary_response.status_code, 401, ordinary_response.text)
 
     def test_admin_workspace_rejects_customer_self_service_identity_changes(self):
         _customer, user_id = self._create_customer("self_service_guard")
@@ -615,9 +643,11 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
         customer, user_id = self._create_customer("active_purge_guard")
         resources = self._seed_workspace(customer, user_id, "active-purge")
 
-        response = self.admin.delete(
+        response = self.admin.request(
+            "DELETE",
             f"/api/admin/users/{user_id}/purge",
-            params={"confirm_username": "active_purge_guard"},
+            json=self._purge_payload("active_purge_guard"),
+            headers={"Origin": "http://testserver"},
         )
 
         self.assertEqual(response.status_code, 409, response.text)
@@ -638,15 +668,29 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
         upload_dir = server.UPLOAD_ROOT / "purge_cleanup_failure"
         upload_dir.mkdir(parents=True, exist_ok=True)
         (upload_dir / "artifact.txt").write_text("keep until purge succeeds", encoding="utf-8")
+        output_dir = server.OUTPUT_ROOT / "purge_cleanup_failure"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "result.txt").write_text("restore staged output", encoding="utf-8")
 
-        with patch.object(server.shutil, "rmtree", side_effect=OSError("injected cleanup failure")):
-            response = self.admin.delete(
+        original_move = server.shutil.move
+
+        def fail_output_stage(source, destination, *args, **kwargs):
+            if Path(source).resolve() == output_dir.resolve():
+                raise OSError("injected staging failure")
+            return original_move(source, destination, *args, **kwargs)
+
+        with patch.object(server.shutil, "move", side_effect=fail_output_stage):
+            response = self.admin.request(
+                "DELETE",
                 f"/api/admin/users/{user_id}/purge",
-                params={"confirm_username": "purge_cleanup_failure"},
+                json=self._purge_payload("purge_cleanup_failure"),
+                headers={"Origin": "http://testserver"},
             )
 
         self.assertEqual(response.status_code, 200, response.text)
         self.assertFalse(response.json()["ok"], response.text)
+        self.assertTrue((upload_dir / "artifact.txt").is_file())
+        self.assertTrue((output_dir / "result.txt").is_file())
         with server.db() as conn:
             self.assertIsNotNone(conn.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone())
             self.assertIsNotNone(
@@ -677,9 +721,11 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
         self.assertEqual(archived.status_code, 200, archived.text)
 
         with patch.object(server, "_delete_persona_groups", side_effect=OSError("injected group cleanup failure")):
-            response = self.admin.delete(
+            response = self.admin.request(
+                "DELETE",
                 f"/api/admin/users/{user_id}/purge",
-                params={"confirm_username": "purge_group_failure"},
+                json=self._purge_payload("purge_group_failure"),
+                headers={"Origin": "http://testserver"},
             )
 
         self.assertEqual(response.status_code, 200, response.text)
@@ -711,9 +757,11 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
         self.assertIn(resources["persona_id"], persona_ids)
         self.assertIn(resources["group_id"], group_ids)
 
-        retried = self.admin.delete(
+        retried = self.admin.request(
+            "DELETE",
             f"/api/admin/users/{user_id}/purge",
-            params={"confirm_username": "purge_group_failure"},
+            json=self._purge_payload("purge_group_failure"),
+            headers={"Origin": "http://testserver"},
         )
 
         self.assertEqual(retried.status_code, 200, retried.text)
@@ -729,6 +777,39 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
         self.assertNotIn(resources["persona_id"], persona_ids)
         self.assertNotIn(resources["group_id"], group_ids)
 
+    def test_completed_purge_with_journal_cleanup_failure_can_be_retried(self):
+        customer, user_id = self._create_customer("purge_journal_retry")
+        self._seed_workspace(customer, user_id, "purge-journal-retry")
+        archived = self.admin.delete(f"/api/admin/users/{user_id}")
+        self.assertEqual(archived.status_code, 200, archived.text)
+
+        with patch.object(server, "_discard_account_purge_journal", side_effect=OSError("injected discard failure")):
+            response = self.admin.request(
+                "DELETE",
+                f"/api/admin/users/{user_id}/purge",
+                json=self._purge_payload("purge_journal_retry"),
+                headers={"Origin": "http://testserver"},
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertFalse(response.json()["ok"], response.text)
+        self.assertTrue(response.json()["purged"], response.text)
+        self.assertIn(f"journal:{user_id}", response.json()["cleanup_pending"])
+        with server.db() as conn:
+            self.assertIsNone(conn.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone())
+        self.assertTrue(server._account_purge_journal_dir(user_id).exists())
+
+        retried = self.admin.request(
+            "DELETE",
+            f"/api/admin/users/{user_id}/purge",
+            json=self._purge_payload("purge_journal_retry"),
+            headers={"Origin": "http://testserver"},
+        )
+        self.assertEqual(retried.status_code, 200, retried.text)
+        self.assertTrue(retried.json()["ok"], retried.text)
+        self.assertTrue(retried.json()["cleanup_retried"], retried.text)
+        self.assertFalse(server._account_purge_journal_dir(user_id).exists())
+
     def test_interrupted_purge_blocks_restore_and_recovers_on_retry(self):
         customer, user_id = self._create_customer("interrupted_purge")
         resources = self._seed_workspace(customer, user_id, "interrupted-purge")
@@ -739,9 +820,11 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
         server._delete_persona_dashboard_personas([resources["persona_id"]])
 
         restore = self.admin.post(f"/api/admin/users/{user_id}/restore")
-        retried = self.admin.delete(
+        retried = self.admin.request(
+            "DELETE",
             f"/api/admin/users/{user_id}/purge",
-            params={"confirm_username": "interrupted_purge"},
+            json=self._purge_payload("interrupted_purge"),
+            headers={"Origin": "http://testserver"},
         )
 
         self.assertEqual(restore.status_code, 409, restore.text)
@@ -778,20 +861,22 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
         allow_purge = threading.Event()
         restore_finished = threading.Event()
         responses: dict[str, object] = {}
-        original_rmtree = server.shutil.rmtree
+        original_move = server.shutil.move
 
-        def blocking_rmtree(path, *args, **kwargs):
-            if Path(path).resolve() == upload_dir.resolve():
+        def blocking_move(source, destination, *args, **kwargs):
+            if Path(source).resolve() == upload_dir.resolve():
                 purge_paused.set()
                 if not allow_purge.wait(timeout=5):
                     raise TimeoutError("test did not release purge")
-            return original_rmtree(path, *args, **kwargs)
+            return original_move(source, destination, *args, **kwargs)
 
         def run_purge():
             try:
-                responses["purge"] = self.admin.delete(
+                responses["purge"] = self.admin.request(
+                    "DELETE",
                     f"/api/admin/users/{user_id}/purge",
-                    params={"confirm_username": "purge_restore_race"},
+                    json=self._purge_payload("purge_restore_race"),
+                    headers={"Origin": "http://testserver"},
                 )
             except BaseException as exc:
                 responses["purge_error"] = exc
@@ -804,7 +889,7 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
             finally:
                 restore_finished.set()
 
-        with patch.object(server.shutil, "rmtree", side_effect=blocking_rmtree):
+        with patch.object(server.shutil, "move", side_effect=blocking_move):
             purge_thread = threading.Thread(target=run_purge, daemon=True)
             restore_thread = threading.Thread(target=run_restore, daemon=True)
             purge_thread.start()

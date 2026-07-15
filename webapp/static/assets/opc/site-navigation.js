@@ -3,7 +3,11 @@
   const LANGUAGE_STORAGE_KEY = "wk-console-language";
   const EVENT_THEME = "vecto:theme-change";
   const EVENT_LANGUAGE = "vecto:language-change";
+  const EVENT_LOGOUT = "vecto:logout-request";
   const DEFAULT_LANGUAGE = document.documentElement.lang === "zh-Hant" ? "zh-Hant" : "zh-Hans";
+  let currentAccount = null;
+  let logoutPending = false;
+  let logoutMessage = "";
 
   const copy = {
     "zh-Hans": {
@@ -23,6 +27,14 @@
       home: "返回首页",
       currentAccount: "当前登录账号",
       accountFallback: "账户",
+      accountStatus: "已登录",
+      accountRole: "普通账号",
+      accountAdminRole: "管理员",
+      accountManagedRole: "管理员代管",
+      accountId: "账号 ID",
+      logout: "退出登录",
+      logoutPending: "正在退出...",
+      logoutFailed: "退出失败，请重试。",
       globalSettings: "全局显示设置",
       themeDark: "切换到暗色模式",
       themeLight: "切换到亮色模式",
@@ -46,6 +58,14 @@
       home: "返回首頁",
       currentAccount: "目前登入帳號",
       accountFallback: "帳戶",
+      accountStatus: "已登入",
+      accountRole: "一般帳號",
+      accountAdminRole: "管理員",
+      accountManagedRole: "管理員代管",
+      accountId: "帳號 ID",
+      logout: "退出登入",
+      logoutPending: "正在退出...",
+      logoutFailed: "退出失敗，請重試。",
       globalSettings: "全域顯示設定",
       themeDark: "切換到暗色模式",
       themeLight: "切換到亮色模式",
@@ -128,6 +148,29 @@
     return `<svg class="site-menu-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h14"></path></svg>`;
   }
 
+  function accountIcon(className = "") {
+    const classAttribute = className ? ` class="${className}"` : "";
+    return `<svg${classAttribute} viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20c.8-4 3.1-6 7-6s6.2 2 7 6"></path></svg>`;
+  }
+
+  function accountMenuMarkup() {
+    return `<div class="site-account-menu" data-site-account-menu>
+      <button class="site-user" type="button" aria-controls="siteAccountPopover" aria-expanded="false" data-site-user-title data-site-account-trigger>
+        ${accountIcon("site-user-avatar")}<span id="consoleMeName" data-site-account-name></span><svg class="site-user-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 10 4 4 4-4"></path></svg>
+      </button>
+      <div id="siteAccountPopover" class="site-account-popover" data-site-account-popover hidden>
+        <div class="site-account-summary">
+          <span class="site-account-avatar" aria-hidden="true">${accountIcon()}</span>
+          <span class="site-account-identity"><strong data-site-account-name></strong><span data-site-account-role></span></span>
+          <span class="site-account-status"><i aria-hidden="true"></i><span data-site-copy="accountStatus"></span></span>
+        </div>
+        <div class="site-account-detail"><span data-site-copy="accountId"></span><strong data-site-account-id>-</strong></div>
+        <button class="site-account-logout" type="button" data-site-account-logout><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4M14 8l4 4-4 4M18 12H9"></path></svg><span data-site-copy="logout"></span></button>
+        <span class="site-account-message" role="status" aria-live="polite" data-site-account-message></span>
+      </div>
+    </div>`;
+  }
+
   function renderMobileMenu(page, current, mode) {
     const extraLink = mode === "authenticated"
       ? navLink({ key: "home", href: "/", current, className: "site-mobile-menu-extra" })
@@ -139,7 +182,7 @@
     const controls = `<div class="site-global-controls" data-site-global-controls><button id="themeToggle" class="site-icon-button" type="button" data-site-theme-toggle>${themeIcon()}</button><button id="languageToggle" class="site-icon-button site-language-button" type="button" data-site-language-toggle>${languageIcon()}</button></div>`;
     const mobileMenu = renderMobileMenu(page, current, mode);
     if (mode === "authenticated") {
-      return `${mobileMenu}${controls}<span class="site-user" data-site-user-title><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20c.8-4 3.1-6 7-6s6.2 2 7 6"></path></svg><span id="consoleMeName" data-site-account-name></span></span><a class="header-action" href="/"><span data-site-copy="home"></span></a>`;
+      return `${mobileMenu}${controls}${accountMenuMarkup()}<a class="header-action" href="/"><span data-site-copy="home"></span></a>`;
     }
     return `${mobileMenu}${controls}<button class="header-login" type="button" data-open-login><span data-site-copy="login"></span></button><a class="header-action site-guest-action" href="${page === "home" ? "#contact" : "/#contact"}"><span data-site-copy="guest"></span></a>`;
   }
@@ -159,6 +202,58 @@
     if (toggle) toggle.setAttribute("aria-expanded", menu.open ? "true" : "false");
   }
 
+  function setAccountMenuOpen(menu, open, { restoreFocus = false } = {}) {
+    if (!menu) return;
+    const trigger = menu.querySelector("[data-site-account-trigger]");
+    const popover = menu.querySelector("[data-site-account-popover]");
+    if (!trigger || !popover) return;
+    const nextOpen = Boolean(open);
+    const shouldRestoreFocus = !nextOpen && restoreFocus && popover.contains(document.activeElement);
+    trigger.setAttribute("aria-expanded", nextOpen ? "true" : "false");
+    popover.hidden = !nextOpen;
+    menu.classList.toggle("is-open", nextOpen);
+    if (nextOpen) {
+      document.querySelectorAll("[data-site-mobile-menu][open]").forEach((mobileMenu) => mobileMenu.removeAttribute("open"));
+    } else if (shouldRestoreFocus) {
+      trigger.focus({ preventScroll: true });
+    }
+  }
+
+  function accountRoleLabel(account, labels) {
+    if (account?.acting_admin) return labels.accountManagedRole;
+    return account?.is_admin ? labels.accountAdminRole : labels.accountRole;
+  }
+
+  function syncAccount() {
+    const labels = copy[currentLanguage()];
+    const username = String(currentAccount?.username || "").trim() || labels.accountFallback;
+    document.querySelectorAll("[data-site-account-name]").forEach((node) => node.textContent = username);
+    document.querySelectorAll("[data-site-account-role]").forEach((node) => node.textContent = accountRoleLabel(currentAccount, labels));
+    document.querySelectorAll("[data-site-account-id]").forEach((node) => {
+      node.textContent = currentAccount?.id ? `#${currentAccount.id}` : "-";
+    });
+  }
+
+  function setAccount(account) {
+    currentAccount = account && typeof account === "object" ? { ...account } : null;
+    syncAccount();
+  }
+
+  function setLogoutPending(pending, message = "") {
+    logoutPending = Boolean(pending);
+    logoutMessage = message ? String(message) : "";
+    const labels = copy[currentLanguage()];
+    document.querySelectorAll("[data-site-account-logout]").forEach((button) => {
+      button.disabled = logoutPending;
+      button.setAttribute("aria-busy", logoutPending ? "true" : "false");
+      const label = button.querySelector("span");
+      if (label) label.textContent = logoutPending ? labels.logoutPending : labels.logout;
+    });
+    document.querySelectorAll("[data-site-account-message]").forEach((node) => {
+      node.textContent = logoutMessage;
+    });
+  }
+
   function mount(header) {
     if (!header || header.dataset.siteReady === "true") return header;
     const page = header.dataset.sitePage || "home";
@@ -176,8 +271,19 @@
     header.querySelector("[data-site-language-toggle]")?.addEventListener("click", () => setLanguage(currentLanguage() === "zh-Hant" ? "zh-Hans" : "zh-Hant"));
     header.querySelectorAll("[data-site-mobile-menu]").forEach((menu) => {
       syncMenuState(menu);
-      menu.addEventListener("toggle", () => syncMenuState(menu));
+      menu.addEventListener("toggle", () => {
+        syncMenuState(menu);
+        if (menu.open) header.querySelectorAll("[data-site-account-menu]").forEach((accountMenu) => setAccountMenuOpen(accountMenu, false));
+      });
       menu.querySelectorAll("a").forEach((link) => link.addEventListener("click", () => menu.removeAttribute("open")));
+    });
+    header.querySelectorAll("[data-site-account-menu]").forEach((menu) => {
+      const trigger = menu.querySelector("[data-site-account-trigger]");
+      trigger?.addEventListener("click", () => setAccountMenuOpen(menu, trigger.getAttribute("aria-expanded") !== "true", { restoreFocus: true }));
+      menu.querySelector("[data-site-account-logout]")?.addEventListener("click", () => {
+        setLogoutPending(true);
+        window.dispatchEvent(new CustomEvent(EVENT_LOGOUT));
+      });
     });
     sync();
     return header;
@@ -213,11 +319,16 @@
       button.setAttribute("aria-pressed", language === "zh-Hant" ? "true" : "false");
     });
     document.querySelectorAll("[data-site-language-state]").forEach((node) => node.textContent = labels.languageState);
+    syncAccount();
+    setLogoutPending(logoutPending, logoutMessage);
   }
 
   document.addEventListener("click", (event) => {
     document.querySelectorAll("[data-site-mobile-menu][open]").forEach((menu) => {
       if (!menu.contains(event.target)) menu.removeAttribute("open");
+    });
+    document.querySelectorAll("[data-site-account-menu].is-open").forEach((menu) => {
+      if (!menu.contains(event.target)) setAccountMenuOpen(menu, false);
     });
   });
   document.addEventListener("keydown", (event) => {
@@ -226,6 +337,7 @@
       menu.removeAttribute("open");
       menu.querySelector("[data-site-menu-toggle]")?.focus();
     });
+    document.querySelectorAll("[data-site-account-menu].is-open").forEach((menu) => setAccountMenuOpen(menu, false, { restoreFocus: true }));
   });
   window.addEventListener("storage", (event) => {
     if (event.key === THEME_STORAGE_KEY) {
@@ -244,5 +356,6 @@
   setTheme(storedValue(THEME_STORAGE_KEY, "light"), { persist: false });
   setLanguage(storedValue(LANGUAGE_STORAGE_KEY, DEFAULT_LANGUAGE), { persist: false });
 
-  window.VectoSiteNavigation = { mount, sync, setTheme, setLanguage, currentTheme, currentLanguage };
+  window.VectoSiteNavigation = { mount, sync, setTheme, setLanguage, setAccount, setLogoutPending, currentTheme, currentLanguage };
+  window.dispatchEvent(new CustomEvent("vecto:navigation-ready"));
 })();

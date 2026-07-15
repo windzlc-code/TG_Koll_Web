@@ -14,7 +14,7 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 import webapp.server as server
-from webapp import social_automation_api
+from webapp import governance, social_automation_api
 
 
 class AuthSecurityHardeningTests(unittest.TestCase):
@@ -1000,8 +1000,8 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         self.assertEqual(takeover.status_code, 200, takeover.text)
         self.assertEqual(first_browser.get("/api/me").status_code, 401)
         with server.db() as conn:
-            rows = conn.execute("SELECT token FROM sessions WHERE user_id = ?", (user_id,)).fetchall()
-        self.assertEqual([str(row["token"]) for row in rows], [second_browser.cookies.get("session_token")])
+            rows = conn.execute("SELECT token FROM sessions WHERE user_id = ? AND revoked_at = 0", (user_id,)).fetchall()
+        self.assertEqual([str(row["token"]) for row in rows], [governance.token_digest(second_browser.cookies.get("session_token"))])
         self.assertNotEqual(second_browser.cookies.get("session_token"), first_token)
 
     def test_expired_customer_sessions_are_cleaned_before_login(self):
@@ -1018,9 +1018,9 @@ class AuthSecurityHardeningTests(unittest.TestCase):
 
         self.assertEqual(replacement.status_code, 200, replacement.text)
         with server.db() as conn:
-            rows = conn.execute("SELECT token FROM sessions WHERE user_id = ?", (user_id,)).fetchall()
-        self.assertEqual([str(row["token"]) for row in rows], [replacement_browser.cookies.get("session_token")])
-        self.assertNotIn(expired_token, {str(row["token"]) for row in rows})
+            rows = conn.execute("SELECT token FROM sessions WHERE user_id = ? AND revoked_at = 0", (user_id,)).fetchall()
+        self.assertEqual([str(row["token"]) for row in rows], [governance.token_digest(replacement_browser.cookies.get("session_token"))])
+        self.assertNotIn(governance.token_digest(expired_token), {str(row["token"]) for row in rows})
 
     def test_concurrent_customer_logins_allow_only_one_session(self):
         initial_browser, user_id = self._approved_client("concurrent_login_customer")
@@ -1043,7 +1043,7 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         self.assertEqual(conflict.json()["detail"]["code"], "SESSION_CONFLICT")
         with server.db() as conn:
             session_count = conn.execute(
-                "SELECT COUNT(*) AS count FROM sessions WHERE user_id = ?",
+                "SELECT COUNT(*) AS count FROM sessions WHERE user_id = ? AND revoked_at = 0",
                 (user_id,),
             ).fetchone()["count"]
         self.assertEqual(int(session_count), 1)

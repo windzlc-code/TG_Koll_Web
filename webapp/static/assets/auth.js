@@ -32,6 +32,20 @@ function apiErrorDetail(error) {
   return { code: "", message: String(error || "").trim() };
 }
 
+function browserDeviceId() {
+  const key = "vecto-device-id";
+  try {
+    let value = localStorage.getItem(key) || "";
+    if (!value) {
+      value = globalThis.crypto?.randomUUID?.() || `device-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      localStorage.setItem(key, value);
+    }
+    return value.slice(0, 128);
+  } catch {
+    return "";
+  }
+}
+
 async function submitLogin(form, forceTakeover = false) {
   const loginRole = form.dataset.loginRole === "admin" ? "admin" : "user";
   const payload = {
@@ -39,6 +53,8 @@ async function submitLogin(form, forceTakeover = false) {
     password: form.password.value,
     remember_me: Boolean(form.remember_me?.checked),
     force_takeover: loginRole === "user" && Boolean(forceTakeover),
+    mfa_code: loginRole === "admin" ? String(form.mfa_code?.value || "").trim() : "",
+    device_id: browserDeviceId(),
   };
   const result = await api(`/api/auth/${loginRole}-login`, {
     method: "POST",
@@ -122,6 +138,7 @@ document.addEventListener("DOMContentLoaded", () => {
       } catch (err) {
         const detail = apiErrorDetail(err);
         setMsg(detail.message || "登录失败，请检查账号与密码", false);
+        if (detail.code === "mfa_code_invalid") loginForm.mfa_code?.focus();
         if (takeover) takeover.hidden = detail.code !== "SESSION_CONFLICT";
         if (submit) submit.disabled = false;
       }

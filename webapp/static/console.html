@@ -8,9 +8,9 @@
   <title>Web 任务控制台</title>
   <link rel="preload" as="style" href="/assets/style.css?v=__STYLE_VERSION__" />
   <link id="personaDashboardStyles" rel="stylesheet" href="/assets/style.css?v=__STYLE_VERSION__" media="not all" />
-  <link rel="stylesheet" href="/assets/opc/site-navigation.css?v=20260715" />
+  <link rel="stylesheet" href="/assets/opc/site-navigation.css?v=20260716" />
   <link rel="stylesheet" href="/assets/console.css?v=__CONSOLE_CSS_VERSION__" />
-  <script defer src="/assets/opc/site-navigation.js?v=20260715"></script>
+  <script defer src="/assets/opc/site-navigation.js?v=20260716"></script>
 </head>
   <body class="console-page">
     <a class="site-skip-link" href="#main-content" data-site-copy="skip">跳至主要内容</a>
@@ -52,9 +52,26 @@
             <svg class="site-language-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.4 2.5 3.6 5.5 3.6 9S14.4 18.5 12 21M12 3C9.6 5.5 8.4 8.5 8.4 12s1.2 6.5 3.6 9"></path></svg><span class="site-language-state" data-site-language-state>简</span>
           </button>
         </div>
-        <span class="site-user" title="当前登录账号" data-site-user-title>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20c.8-4 3.1-6 7-6s6.2 2 7 6"></path></svg><span id="consoleMeName" data-site-account-name>账户</span>
-        </span>
+        <div class="site-account-menu" data-site-account-menu>
+          <button class="site-user" type="button" title="当前登录账号" aria-controls="siteAccountPopover" aria-expanded="false" data-site-user-title data-site-account-trigger>
+            <svg class="site-user-avatar" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20c.8-4 3.1-6 7-6s6.2 2 7 6"></path></svg>
+            <span id="consoleMeName" data-site-account-name>账户</span>
+            <svg class="site-user-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 10 4 4 4-4"></path></svg>
+          </button>
+          <div id="siteAccountPopover" class="site-account-popover" data-site-account-popover hidden>
+            <div class="site-account-summary">
+              <span class="site-account-avatar" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20c.8-4 3.1-6 7-6s6.2 2 7 6"></path></svg></span>
+              <span class="site-account-identity"><strong data-site-account-name>账户</strong><span data-site-account-role>普通账号</span></span>
+              <span class="site-account-status"><i aria-hidden="true"></i><span data-site-copy="accountStatus">已登录</span></span>
+            </div>
+            <div class="site-account-detail"><span data-site-copy="accountId">账号 ID</span><strong data-site-account-id>-</strong></div>
+            <button class="site-account-logout" type="button" data-site-account-logout>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4M14 8l4 4-4 4M18 12H9"></path></svg>
+              <span data-site-copy="logout">退出登录</span>
+            </button>
+            <span class="site-account-message" role="status" aria-live="polite" data-site-account-message></span>
+          </div>
+        </div>
         <a class="header-action" href="/"><span data-site-copy="home">返回首页</span></a>
       </div>
     </header>

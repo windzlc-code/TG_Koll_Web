@@ -19,9 +19,9 @@ const DEFAULT_TEXT_MODEL_MAPPINGS = {
 function getApiConfig() {
   const config = readRuntimeApiConfig();
   return {
-    apiKey: config.geminiTextKey || config.geminiKey || config.zhanhuKey || "",
+    apiKey: config.geminiTextKey || config.geminiKey || config.zhanhuKey || process.env.GEMINI_TEXT_API_KEY || process.env.GEMINI_API_KEY || "",
     endpoint: config.geminiTextEndpoint || config.geminiEndpoint || config.zhanhuEndpoint || DEFAULT_API_BASE_URL,
-    gptKey: config.gptKey || "",
+    gptKey: config.gptKey || process.env.OPENAI_API_KEY || "",
     gptEndpoint: config.gptEndpoint || "",
     modelMappings: { ...DEFAULT_TEXT_MODEL_MAPPINGS, ...(config.modelMappings || {}) },
   };

@@ -64,6 +64,33 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("document.createElement", ensure_theme)
         self.assertNotIn("document.createElement", ensure_language)
 
+    def test_console_account_menu_uses_current_identity_and_supports_logout(self):
+        for marker in (
+            'data-site-account-menu',
+            'data-site-account-trigger',
+            'data-site-account-popover',
+            'data-site-account-logout',
+        ):
+            self.assertIn(marker, self.markup)
+            self.assertIn(marker, self.site_nav_source)
+        self.assertIn("function setAccount(account)", self.site_nav_source)
+        self.assertIn('event.key !== "Escape"', self.site_nav_source)
+        self.assertIn('const EVENT_LOGOUT = "vecto:logout-request"', self.site_nav_source)
+        self.assertIn("window.dispatchEvent(new CustomEvent(EVENT_LOGOUT))", self.site_nav_source)
+        self.assertIn("window.VectoSiteNavigation?.setAccount(me)", self.source)
+        self.assertIn('window.addEventListener("vecto:navigation-ready"', self.source)
+        self.assertIn('window.dispatchEvent(new CustomEvent("vecto:navigation-ready"))', self.site_nav_source)
+        self.assertIn('window.addEventListener("vecto:logout-request"', self.source)
+        self.assertIn('await api("/api/auth/logout", { method: "POST" })', self.source)
+        self.assertIn("clearTenantInMemoryState()", self.source)
+        self.assertIn("purgeLegacyTenantContentCaches()", self.source)
+
+    def test_console_header_boundary_has_no_drop_shadow(self):
+        start = self.site_nav_styles.index('.site-header.is-scrolled,')
+        end = self.site_nav_styles.index('}', start)
+        solid_header = self.site_nav_styles[start:end]
+        self.assertIn("box-shadow: none", solid_header)
+
     def _section(self, start_marker, end_marker):
         start = self.source.index(start_marker)
         end = self.source.index(end_marker, start)
@@ -633,7 +660,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("reloadForIdentityChange()", revalidation)
         self.assertIn("handleSessionBoundary(428)", revalidation)
         catch_branch = revalidation[revalidation.index(".catch((error)") :]
-        self.assertNotIn("unmaskConsoleAfterIdentityRevalidation()", catch_branch)
+        self.assertIn("unmaskConsoleAfterIdentityRevalidation()", catch_branch)
 
         event_binding = self._section("function bindIdentityRevalidationEvents()", "async function init()")
         self.assertIn('window.addEventListener("pageshow"', event_binding)
@@ -693,13 +720,13 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
               state.currentUser = {{ id: "7", username: "old" }};
               apiImpl = async () => {{ throw {{ status: 500, detail: "down" }}; }};
               await revalidateConsoleIdentity();
-              assert.strictEqual(document.documentElement.hidden, true);
+              assert.strictEqual(document.documentElement.hidden, false);
               assert.strictEqual(warnings, 1);
 
               document.documentElement.hidden = false;
               apiImpl = async () => {{ throw new TypeError("network"); }};
               await revalidateConsoleIdentity();
-              assert.strictEqual(document.documentElement.hidden, true);
+              assert.strictEqual(document.documentElement.hidden, false);
               assert.strictEqual(warnings, 2);
 
               document.documentElement.hidden = false;

@@ -48,6 +48,9 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="3"></circle><path class="auth-login-eye-slash" d="M4 20L20 4"></path></svg>
           </button>
         </span>
+
+        <label for="adminMfaCode">动态验证码或恢复码</label>
+        <input id="adminMfaCode" name="mfa_code" inputmode="text" autocomplete="one-time-code" autocapitalize="characters" maxlength="32" placeholder="已启用 MFA 时填写" />
         <label class="auth-login-remember" data-auth-remember><input name="remember_me" type="checkbox"> <span>记住账号与登录状态</span></label>
 
         <div class="auth-submit-row">

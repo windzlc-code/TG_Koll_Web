@@ -11,7 +11,11 @@ function setText(id, value) {
 const ADMIN_PAGE_LABELS = {
   overview: "运营概览",
   users: "客户账号",
+  taxonomy: "客户治理",
   tasks: "生成记录",
+  audit: "审计日志",
+  security: "安全告警",
+  serviceAccounts: "服务账号",
   pricing: "额度与计费",
   runtime: "系统配置",
   sentimentCookies: "舆情 Cookie",
@@ -207,7 +211,12 @@ function setActiveAdminPage(page, updateHash = true) {
     }
     return false;
   }
-  if (nextPage !== adminState.activePage) clearRevealedUserPassword();
+  if (nextPage !== adminState.activePage) {
+    clearRevealedUserPassword();
+    clearUserPasswordReset();
+    clearServiceCredential();
+    clearAdminCreateStepUp();
+  }
   adminState.activePage = nextPage;
   const pageLabel = nextPage === "users" && adminState.userListRole === "admin"
     ? "管理员账号"
@@ -237,6 +246,11 @@ function setActiveAdminPage(page, updateHash = true) {
   if (nextPage === "pricing") {
     void ensureBillingLoaded();
   }
+  if (nextPage === "overview") void loadGovernanceDashboard();
+  if (nextPage === "taxonomy") void loadTaxonomyWorkspace();
+  if (nextPage === "audit") void loadAuditEvents();
+  if (nextPage === "security") void loadSecurityAlerts();
+  if (nextPage === "serviceAccounts") void loadServiceAccounts();
   return true;
 }
 
@@ -1239,6 +1253,7 @@ function closeModelPickersOnOutsideClick(target) {
 
 const TASK_POLL_INTERVAL_MS = 10000;
 const SENTIMENT_COOKIE_POLL_INTERVAL_MS = 10000;
+const GOVERNANCE_POLL_INTERVAL_MS = 30000;
 const taskState = {
   rows: [],
   inspectText: "",
@@ -1252,11 +1267,15 @@ const adminState = {
   userListPageSize: 20,
   userListTotal: 0,
   userListRole: "customer",
+  userListFilters: {},
+  selectedUserIds: new Set(),
+  userBatchPreview: null,
   userCustomerCount: 0,
   userAdminCount: 0,
   userPasswordResetRequestId: 0,
   userPasswordResetUserId: null,
   userPasswordResetInFlight: false,
+  userPasswordResetTimer: null,
   userPasswordSetRequestId: 0,
   userPasswordSetUserId: null,
   userPasswordSetInFlight: false,
@@ -1291,17 +1310,34 @@ const adminState = {
   billingWalletPoints: new Map(),
   billingLoaded: false,
   billingLoadingPromise: null,
+  governanceLoadingPromise: null,
+  governanceRequestId: 0,
+  governanceLastPayload: null,
+  governanceCharts: new Map(),
+  auditRows: [],
+  securityRows: [],
+  serviceAccountRows: [],
+  customerGroupRows: [],
+  customerTagRows: [],
+  taxonomyLoadingPromise: null,
+  serviceCredentialTimer: null,
+  mfaStatus: null,
+  mfaSetup: null,
 };
 const REMOTE_COMFY_TASKS = [
   ["text_to_image", "文字生成图片"],
   ["persona_post_image", "推文生成配图"],
 ];
 const TASK_TYPE_LABELS = { text_to_image: "文字生成图片", persona_post_image: "推文生成配图" };
-const ADMIN_PAGES = new Set(["overview", "users", "tasks", "pricing", "runtime", "sentimentCookies", "account"]);
+const ADMIN_PAGES = new Set(["overview", "users", "taxonomy", "tasks", "audit", "security", "serviceAccounts", "pricing", "runtime", "sentimentCookies", "account"]);
 const ADMIN_PAGE_ALIASES = {
   secOverview: "overview",
   secUsers: "users",
+  secTaxonomy: "taxonomy",
   secTasks: "tasks",
+  secAudit: "audit",
+  secSecurity: "security",
+  secServiceAccounts: "serviceAccounts",
   secPricing: "pricing",
   secRuntime: "runtime",
   secSentimentCookies: "sentimentCookies",
@@ -3181,6 +3217,8 @@ function syncUserRoleView() {
   if (el("newUserName")) el("newUserName").placeholder = isAdmin ? "manager001" : "customer001";
   if (el("newUserPassword")) el("newUserPassword").minLength = isAdmin ? 12 : 8;
   if (el("newUserBalanceField")) el("newUserBalanceField").hidden = isAdmin;
+  if (el("adminCreateStepUpPanel")) el("adminCreateStepUpPanel").hidden = !isAdmin;
+  if (!isAdmin) clearAdminCreateStepUp();
   const createButtonLabel = el("btnCreateUser")?.querySelector("span");
   if (createButtonLabel) createButtonLabel.textContent = isAdmin ? "创建管理员账号" : "创建客户账号";
   const pending = document.querySelector(".admin-pending-count");
@@ -3190,6 +3228,7 @@ function syncUserRoleView() {
     setText("adminCurrentPageLabel", pageLabel);
     document.title = `${pageLabel} - 运营后台 - Web 素材生成平台`;
   }
+  syncUserBatchSelection();
 }
 
 function renderUserPagination() {
@@ -3205,17 +3244,133 @@ function renderUserPagination() {
   if (el("btnUserPageNext")) el("btnUserPageNext").disabled = page >= totalPages;
 }
 
+const USER_LIFECYCLE_META = {
+  pending: ["待审核", "pending"],
+  active: ["正常使用", "enabled"],
+  rejected: ["已拒绝", "rejected"],
+  suspended: ["临时停用", "disabled"],
+  locked: ["安全锁定", "locked"],
+  archived: ["只读归档", "archived"],
+  deleted: ["软删除", "deleted"],
+};
+
+function readUserListFilters() {
+  return {
+    query: String(el("adminUserQuery")?.value || "").trim(),
+    lifecycle_status: String(el("adminUserLifecycle")?.value || ""),
+    risk_level: String(el("adminUserRisk")?.value || ""),
+    subscription_status: adminState.userListRole === "customer" ? String(el("adminUserSubscription")?.value || "") : "",
+    online: String(el("adminUserOnline")?.value || ""),
+  };
+}
+
+function syncUserBatchSelection() {
+  const isCustomer = adminState.userListRole === "customer";
+  const batchBar = el("adminUserBatchBar");
+  if (batchBar) batchBar.hidden = !isCustomer;
+  document.querySelectorAll(".admin-customer-filter").forEach((node) => { node.hidden = !isCustomer; });
+  setText("adminSelectedUserCount", adminState.selectedUserIds.size);
+  document.querySelectorAll("input[data-user-select]").forEach((input) => {
+    input.checked = adminState.selectedUserIds.has(String(input.dataset.userSelect || ""));
+  });
+  const selectable = Array.from(document.querySelectorAll("input[data-user-select]"));
+  const selectAll = el("adminSelectAllUsers");
+  if (selectAll) {
+    selectAll.hidden = !isCustomer;
+    selectAll.checked = Boolean(selectable.length) && selectable.every((input) => input.checked);
+    selectAll.indeterminate = selectable.some((input) => input.checked) && !selectAll.checked;
+  }
+  const action = String(el("adminUserBatchAction")?.value || "");
+  if (el("adminBatchGroupField")) el("adminBatchGroupField").hidden = action !== "assign_group";
+  if (el("adminBatchTagsField")) el("adminBatchTagsField").hidden = action !== "add_tags";
+  if (el("btnRunUserBatch")) el("btnRunUserBatch").disabled = !adminState.userBatchPreview;
+}
+
+function clearUserBatchSelection() {
+  adminState.selectedUserIds.clear();
+  adminState.userBatchPreview = null;
+  setMsg("adminUserBatchMsg", "");
+  syncUserBatchSelection();
+}
+
+function buildUserBatchPayload(preview) {
+  return {
+    action: String(el("adminUserBatchAction")?.value || ""),
+    user_ids: Array.from(adminState.selectedUserIds, (value) => Number(value)),
+    reason: String(el("adminUserBatchReason")?.value || "").trim(),
+    group_id: String(el("adminUserBatchGroup")?.value || ""),
+    tag_ids: Array.from(el("adminUserBatchTags")?.selectedOptions || [], (option) => String(option.value)),
+    preview: Boolean(preview),
+  };
+}
+
+function userBatchSignature(payload) {
+  return JSON.stringify({
+    action: payload.action,
+    user_ids: [...payload.user_ids].sort((a, b) => a - b),
+    reason: payload.reason,
+    group_id: payload.group_id,
+    tag_ids: [...payload.tag_ids].sort(),
+  });
+}
+
+async function previewUserBatchAction() {
+  const payload = buildUserBatchPayload(true);
+  if (!payload.action) throw new Error("请选择批量操作");
+  if (!payload.user_ids.length) throw new Error("请先勾选客户账号");
+  if (payload.reason.length < 2) throw new Error("请填写至少 2 个字符的操作原因");
+  if (payload.action === "assign_group" && !payload.group_id) throw new Error("请选择客户分组");
+  if (payload.action === "add_tags" && !payload.tag_ids.length) throw new Error("请至少选择一个客户标签");
+  const result = await api("/api/admin/users/batch-actions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  adminState.userBatchPreview = { ...payload, matched: Number(result.matched || 0) };
+  setMsg("adminUserBatchMsg", `影响预览：匹配 ${Number(result.matched || 0)} 个客户。确认账号与操作原因无误后再执行。`, true);
+  syncUserBatchSelection();
+}
+
+async function runUserBatchAction() {
+  const current = buildUserBatchPayload(false);
+  const preview = adminState.userBatchPreview;
+  if (!preview || userBatchSignature(current) !== userBatchSignature(preview)) {
+    adminState.userBatchPreview = null;
+    syncUserBatchSelection();
+    throw new Error("操作内容已变化，请重新预览影响");
+  }
+  const label = el("adminUserBatchAction")?.selectedOptions?.[0]?.textContent || current.action;
+  if (!confirm(`确认对 ${preview.matched} 个客户执行“${label}”吗？`)) return;
+  const result = await api("/api/admin/users/batch-actions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(current),
+  });
+  setMsg("adminUserBatchMsg", `作业完成：成功 ${Number(result.success || 0)}，失败 ${Number(result.failed || 0)}，跳过 ${Number(result.skipped || 0)}。`, Number(result.failed || 0) === 0);
+  adminState.selectedUserIds.clear();
+  adminState.userBatchPreview = null;
+  syncUserBatchSelection();
+  await Promise.all([loadUsers(), loadGovernanceDashboard({ force: true })]);
+}
+
 async function loadUsers(page = adminState.userListPage) {
   const pageSize = Math.max(1, Number(adminState.userListPageSize || 20));
   const requestedPage = Math.max(1, Math.floor(Number(page || 1)));
   adminState.userListPage = requestedPage;
   const requestId = ++adminState.userListRequestId;
   const role = adminState.userListRole === "admin" ? "admin" : "customer";
+  const filters = adminState.userListFilters;
+  const params = new URLSearchParams({
+    role,
+    limit: String(pageSize),
+    offset: String((requestedPage - 1) * pageSize),
+  });
+  Object.entries(filters).forEach(([key, value]) => { if (value !== "" && value !== null && value !== undefined) params.set(key, String(value)); });
   const body = el("userBody");
   body?.setAttribute("aria-busy", "true");
   let payload;
   try {
-    payload = await api(`/api/admin/users?role=${encodeURIComponent(role)}&limit=${pageSize}&offset=${(requestedPage - 1) * pageSize}`);
+    payload = await api(`/api/admin/users?${params.toString()}`);
   } finally {
     if (requestId === adminState.userListRequestId) body?.removeAttribute("aria-busy");
   }
@@ -3252,7 +3407,7 @@ async function loadUsers(page = adminState.userListPage) {
     const emptyRow = document.createElement("tr");
     const emptyCell = document.createElement("td");
     emptyCell.className = "admin-user-empty";
-    emptyCell.colSpan = 9;
+    emptyCell.colSpan = 10;
     emptyCell.textContent = role === "admin" ? "暂无管理员账号" : "暂无客户账号";
     emptyRow.appendChild(emptyCell);
     body.appendChild(emptyRow);
@@ -3261,8 +3416,20 @@ async function loadUsers(page = adminState.userListPage) {
   rows.forEach((u) => {
     const tr = document.createElement("tr");
     const role = u.is_admin ? "管理员" : "客户";
-    const archived = Number(u.deleted_at || 0) > 0;
-    const state = archived ? "已归档" : (u.approval_status === "pending" ? "待授权" : (u.approval_status === "rejected" ? "已拒绝" : (u.is_disabled ? "已禁用" : "已启用")));
+    const lifecycle = String(u.lifecycle_status || (Number(u.deleted_at || 0) > 0 ? "deleted" : (u.is_disabled ? "suspended" : "active")));
+    const [state, stateTone] = USER_LIFECYCLE_META[lifecycle] || [lifecycle || "未知", "disabled"];
+    const archived = lifecycle === "archived" || lifecycle === "deleted";
+    const selectCell = document.createElement("td");
+    selectCell.className = "admin-user-select-cell";
+    if (!u.is_admin) {
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.dataset.userSelect = String(u.id);
+      checkbox.setAttribute("aria-label", `选择客户 ${u.username}`);
+      checkbox.checked = adminState.selectedUserIds.has(String(u.id));
+      selectCell.appendChild(checkbox);
+    }
+    tr.appendChild(selectCell);
     const accountCell = document.createElement("td");
     accountCell.className = "admin-user-account-cell";
     const accountName = document.createElement("strong");
@@ -3281,11 +3448,6 @@ async function loadUsers(page = adminState.userListPage) {
     roleCell.appendChild(createAdminUserBadge(role, u.is_admin ? "admin" : "customer"));
     tr.appendChild(roleCell);
 
-    const stateTone = archived
-      ? "archived"
-      : (u.approval_status === "pending"
-      ? "pending"
-      : (u.approval_status === "rejected" ? "rejected" : (u.is_disabled ? "disabled" : "enabled")));
     const stateCell = document.createElement("td");
     stateCell.appendChild(createAdminUserBadge(state, stateTone));
     tr.appendChild(stateCell);
@@ -3299,7 +3461,9 @@ async function loadUsers(page = adminState.userListPage) {
 
     const balanceCell = document.createElement("td");
     balanceCell.className = "admin-user-balance-cell";
-    const responsePoints = u.points ?? u.wallet?.points ?? u.billing_wallet?.points;
+    const responsePoints = u.credit_units !== null && u.credit_units !== undefined
+      ? Number(u.credit_units) / 100
+      : (u.points ?? u.wallet?.points ?? u.billing_wallet?.points);
     if (!u.is_admin && responsePoints !== null && responsePoints !== undefined && Number.isFinite(Number(responsePoints))) {
       adminState.billingWalletPoints.set(String(u.id), Number(responsePoints));
     }
@@ -3323,17 +3487,18 @@ async function loadUsers(page = adminState.userListPage) {
     };
     addAction("查看详情", "user_detail", "detail");
     if (!u.is_admin) addAction("计费详情", "billing_detail", "billing", { name: u.username });
-    if (!archived && u.approval_status === "approved") {
+    if (!archived && lifecycle === "active") {
       if (!u.is_admin) addAction("人工调整算力点", "recharge", "balance", { name: u.username });
       addAction(u.is_disabled ? "启用" : "禁用", "toggle", u.is_disabled ? "enable" : "disable", { disabled: u.is_disabled ? 1 : 0 });
     }
     if (!u.is_admin) {
-      if (archived) addAction("恢复账号", "restore_user", "restore", { name: u.username });
-      else addAction("归档账号", "archive_user", "archive", { name: u.username });
+      if (lifecycle === "deleted") addAction("恢复账号", "restore_user", "restore", { name: u.username });
+      else addAction("软删除账号", "archive_user", "delete", { name: u.username });
     }
     tr.appendChild(actions);
     body.appendChild(tr);
   });
+  syncUserBatchSelection();
   if (focusSelector) body.querySelector(focusSelector)?.focus();
 }
 
@@ -3349,8 +3514,20 @@ function detailRow(label, value) {
 }
 
 function clearUserPasswordReset() {
+  if (adminState.userPasswordResetTimer) {
+    window.clearTimeout(adminState.userPasswordResetTimer);
+    adminState.userPasswordResetTimer = null;
+  }
   if (el("userPasswordResultValue")) el("userPasswordResultValue").value = "";
   if (el("userPasswordResult")) el("userPasswordResult").hidden = true;
+}
+
+function scheduleUserPasswordResetClear() {
+  if (adminState.userPasswordResetTimer) window.clearTimeout(adminState.userPasswordResetTimer);
+  adminState.userPasswordResetTimer = window.setTimeout(() => {
+    clearUserPasswordReset();
+    setMsg("userDetailMsg", "临时密码已自动清除。", true);
+  }, 60000);
 }
 
 function clearManualUserPassword(options = {}) {
@@ -3358,12 +3535,55 @@ function clearManualUserPassword(options = {}) {
   const form = el("userPasswordManualForm");
   if (el("userPasswordManualValue")) el("userPasswordManualValue").value = "";
   if (el("userPasswordManualConfirm")) el("userPasswordManualConfirm").value = "";
-  if (el("userPasswordAdminConfirm")) el("userPasswordAdminConfirm").value = "";
   setMsg("userPasswordManualMsg", "");
   if (form && !keepOpen) form.hidden = true;
   if (el("btnOpenSetUserPassword")) {
     el("btnOpenSetUserPassword").setAttribute("aria-expanded", keepOpen ? "true" : "false");
   }
+}
+
+function clearUserStepUp() {
+  if (el("userStepUpAdminPassword")) el("userStepUpAdminPassword").value = "";
+  if (el("userStepUpTotpCode")) el("userStepUpTotpCode").value = "";
+  if (el("userStepUpReason")) el("userStepUpReason").value = "";
+}
+
+function readAdminStepUp({
+  adminPasswordId,
+  totpCodeId,
+  reasonId,
+  messageTarget = "userDetailMsg",
+} = {}) {
+  const payload = {
+    admin_password: String(el(adminPasswordId)?.value || ""),
+    totp_code: String(el(totpCodeId)?.value || "").trim(),
+    reason: String(el(reasonId)?.value || "").trim(),
+  };
+  if (!payload.admin_password) {
+    setMsg(messageTarget, "请输入管理员当前密码。", false);
+    el(adminPasswordId)?.focus();
+    return null;
+  }
+  if (!payload.totp_code) {
+    setMsg(messageTarget, "请输入动态验证码或恢复码。", false);
+    el(totpCodeId)?.focus();
+    return null;
+  }
+  if (payload.reason.length < 2) {
+    setMsg(messageTarget, "请填写至少 2 个字符的操作原因。", false);
+    el(reasonId)?.focus();
+    return null;
+  }
+  return payload;
+}
+
+function readUserStepUp(messageTarget = "userDetailMsg") {
+  return readAdminStepUp({
+    adminPasswordId: "userStepUpAdminPassword",
+    totpCodeId: "userStepUpTotpCode",
+    reasonId: "userStepUpReason",
+    messageTarget,
+  });
 }
 
 function setManualUserPasswordFormOpen(open) {
@@ -3422,6 +3642,8 @@ function setUserPasswordRevealAvailability(available) {
 async function revealSelectedUserPassword() {
   const user = adminState.selectedUser;
   if (!user?.id || user.is_admin || adminState.userPasswordRevealInFlight) return;
+  const stepUp = readUserStepUp();
+  if (!stepUp) return;
   if (!confirm(`确认查看账号 ${user.username || user.id} 的当前登录密码吗？请确保周围没有无关人员。`)) return;
   clearRevealedUserPassword();
   const targetUserId = String(user.id);
@@ -3430,7 +3652,11 @@ async function revealSelectedUserPassword() {
   adminState.userPasswordRevealUserId = targetUserId;
   syncUserDetailActionState();
   try {
-    const response = await api(`/api/admin/users/${user.id}/reveal-password`, { method: "POST" });
+    const response = await api(`/api/admin/users/${user.id}/reveal-password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(stepUp),
+    });
     const modalOpen = el("userDetailModal")?.getAttribute("aria-hidden") === "false";
     const responseStillCurrent = requestId === adminState.userPasswordRevealRequestId
       && targetUserId === String(adminState.userPasswordRevealUserId || "")
@@ -3449,6 +3675,7 @@ async function revealSelectedUserPassword() {
     el("userPasswordRevealValue").value = String(response.password);
     el("userPasswordRevealResult").hidden = false;
     el("btnHideUserPassword").hidden = false;
+    clearUserStepUp();
     setMsg("userDetailMsg", "当前密码已显示，将在 60 秒后自动清除。", true);
     scheduleRevealedUserPasswordClear();
   } finally {
@@ -3524,7 +3751,9 @@ function syncUserDetailActionState() {
   }
   if (el("userPasswordManualValue")) el("userPasswordManualValue").disabled = busy;
   if (el("userPasswordManualConfirm")) el("userPasswordManualConfirm").disabled = busy;
-  if (el("userPasswordAdminConfirm")) el("userPasswordAdminConfirm").disabled = busy;
+  if (el("userStepUpAdminPassword")) el("userStepUpAdminPassword").disabled = busy;
+  if (el("userStepUpTotpCode")) el("userStepUpTotpCode").disabled = busy;
+  if (el("userStepUpReason")) el("userStepUpReason").disabled = busy;
   if (el("btnRevealUserPassword")) {
     el("btnRevealUserPassword").disabled = busy
       || adminState.userPasswordRevealInFlight
@@ -3535,6 +3764,9 @@ function syncUserDetailActionState() {
   }
   if (el("btnHideUserPassword")) el("btnHideUserPassword").disabled = busy;
   if (el("btnCopyRevealedUserPassword")) el("btnCopyRevealedUserPassword").disabled = busy;
+  if (el("btnRefreshUserSessions")) el("btnRefreshUserSessions").disabled = busy || !user;
+  if (el("btnRevokeUserSessions")) el("btnRevokeUserSessions").disabled = busy || !user;
+  if (el("btnRefreshPasswordHistory")) el("btnRefreshPasswordHistory").disabled = busy || !user || !!user.is_admin;
   const archived = Number(user?.deleted_at || 0) > 0;
   if (el("btnApproveUser")) el("btnApproveUser").disabled = busy || archived || !user || !!user.is_admin || user.approval_status === "approved";
   if (el("btnRejectUser")) el("btnRejectUser").disabled = busy || archived || !user || !!user.is_admin || user.approval_status !== "pending";
@@ -3545,7 +3777,6 @@ async function setSelectedUserPassword() {
   if (!user?.id || user.is_admin || adminState.userPasswordSetInFlight || adminState.userPasswordResetInFlight) return;
   const password = String(el("userPasswordManualValue")?.value || "");
   const confirmation = String(el("userPasswordManualConfirm")?.value || "");
-  const adminPassword = String(el("userPasswordAdminConfirm")?.value || "");
   if (password.length < 8 || password.length > 256) {
     setMsg("userPasswordManualMsg", "密码长度需为 8-256 位。", false);
     el("userPasswordManualValue")?.focus();
@@ -3556,11 +3787,8 @@ async function setSelectedUserPassword() {
     el("userPasswordManualConfirm")?.focus();
     return;
   }
-  if (!adminPassword) {
-    setMsg("userPasswordManualMsg", "请输入管理员当前密码确认操作。", false);
-    el("userPasswordAdminConfirm")?.focus();
-    return;
-  }
+  const stepUp = readUserStepUp("userPasswordManualMsg");
+  if (!stepUp) return;
   if (!confirm(`确认修改账号 ${user.username || user.id} 的登录密码吗？该账号现有登录会话会立即失效。`)) return;
 
   const targetUserId = String(user.id);
@@ -3577,7 +3805,7 @@ async function setSelectedUserPassword() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         password,
-        admin_password: adminPassword,
+        ...stepUp,
         expected_updated_at: Number(user.updated_at || 0),
       }),
     });
@@ -3592,6 +3820,7 @@ async function setSelectedUserPassword() {
     }
     setUserPasswordRevealAvailability(true);
     clearManualUserPassword();
+    clearUserStepUp();
     setMsg("userDetailMsg", "登录密码已修改，旧密码和该用户的现有登录会话已失效。", true);
     el("btnOpenSetUserPassword")?.focus();
   } finally {
@@ -3606,6 +3835,8 @@ async function setSelectedUserPassword() {
 async function resetSelectedUserPassword() {
   const user = adminState.selectedUser;
   if (!user?.id || user.is_admin || adminState.userPasswordResetInFlight) return;
+  const stepUp = readUserStepUp();
+  if (!stepUp) return;
   if (!confirm(`确认重置账号 ${user.username || user.id} 的登录密码吗？该账号现有登录会话会立即失效。`)) return;
   const targetUserId = String(user.id);
   const requestId = ++adminState.userPasswordResetRequestId;
@@ -3619,7 +3850,7 @@ async function resetSelectedUserPassword() {
     const response = await api(`/api/admin/users/${user.id}/reset-password`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ expected_updated_at: Number(user.updated_at || 0) }),
+      body: JSON.stringify({ expected_updated_at: Number(user.updated_at || 0), ...stepUp }),
     });
     const modalOpen = el("userDetailModal")?.getAttribute("aria-hidden") === "false";
     const responseStillCurrent = requestId === adminState.userPasswordResetRequestId
@@ -3634,6 +3865,8 @@ async function resetSelectedUserPassword() {
     setUserPasswordRevealAvailability(true);
     el("userPasswordResultValue").value = String(response.temporary_password || "");
     el("userPasswordResult").hidden = false;
+    scheduleUserPasswordResetClear();
+    clearUserStepUp();
     setMsg("userDetailMsg", "密码已重置，旧登录会话已失效。请立即复制并安全交付给用户。", true);
   } finally {
     if (requestId === adminState.userPasswordResetRequestId) {
@@ -3644,12 +3877,204 @@ async function resetSelectedUserPassword() {
   }
 }
 
+function renderUserSessions(payload = {}) {
+  const container = el("userSessionList");
+  if (!container) return;
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  container.replaceChildren();
+  if (!items.length) {
+    container.appendChild(createEmptyState("该账号没有登录会话"));
+    return;
+  }
+  const now = Math.floor(Date.now() / 1000);
+  items.forEach((item) => {
+    const active = !Number(item.revoked_at || 0) && Number(item.expires_at || 0) > now;
+    const row = document.createElement("div");
+    row.className = "admin-session-item";
+    const copy = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = `${item.device_id || "未知设备"} · ${item.ip_address || "未知 IP"}`;
+    const detail = document.createElement("span");
+    const ended = item.revoked_at ? `撤销于 ${formatTime(item.revoked_at)}${item.revoke_reason ? ` · ${item.revoke_reason}` : ""}` : `到期 ${formatTime(item.expires_at)}`;
+    detail.textContent = `${oneLine(item.user_agent || "未知客户端")} · 最近活动 ${formatTime(item.last_seen_at || item.created_at)} · ${ended}`;
+    copy.append(title, detail);
+    row.append(copy, createGovernanceBadge(active ? "active" : (item.revoked_at ? "revoked" : "expired"), active ? "success" : "neutral"));
+    container.appendChild(row);
+  });
+}
+
+async function loadSelectedUserSessions() {
+  const user = adminState.selectedUser;
+  if (!user?.id) return null;
+  const expectedId = String(user.id);
+  try {
+    const payload = await api(`/api/admin/users/${user.id}/sessions`);
+    if (String(adminState.selectedUser?.id || "") !== expectedId) return null;
+    renderUserSessions(payload || {});
+    return payload;
+  } catch (error) {
+    const container = el("userSessionList");
+    container?.replaceChildren(createEmptyState(`会话读取失败：${getErrorMessage(error)}`));
+    return null;
+  }
+}
+
+async function revokeSelectedUserSessions() {
+  const user = adminState.selectedUser;
+  if (!user?.id) return;
+  const targetUserId = String(user.id);
+  if (!confirm(`确认撤销账号 ${user.username || user.id} 的全部有效登录会话吗？`)) return;
+  const button = el("btnRevokeUserSessions");
+  if (button) button.disabled = true;
+  try {
+    const result = await api(`/api/admin/users/${encodeURIComponent(targetUserId)}/sessions/revoke`, { method: "POST" });
+    if (!selectedUserStillMatches(targetUserId)) return;
+    await loadSelectedUserSessions();
+    if (!selectedUserStillMatches(targetUserId)) return;
+    setMsg("userDetailMsg", `已撤销 ${Number(result.revoked_count || 0)} 个有效会话。`, true);
+  } catch (error) {
+    if (selectedUserStillMatches(targetUserId)) setMsg("userDetailMsg", getErrorMessage(error), false);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function renderPasswordHistory(payload = {}) {
+  const container = el("userPasswordHistoryList");
+  if (!container) return;
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  container.replaceChildren();
+  if (!items.length) {
+    container.appendChild(createEmptyState("没有可恢复的密码历史"));
+    return;
+  }
+  const now = Math.floor(Date.now() / 1000);
+  items.forEach((item) => {
+    const available = Number(item.expires_at || 0) > now && !Number(item.restored_at || 0);
+    const row = document.createElement("div");
+    row.className = "admin-password-history-item";
+    const copy = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = `${formatTime(item.created_at)} · ${item.source || "password_change"}`;
+    const detail = document.createElement("span");
+    detail.textContent = Number(item.restored_at || 0)
+      ? `已于 ${formatTime(item.restored_at)} 恢复`
+      : `有效至 ${formatTime(item.expires_at)} · 操作者 ${item.actor_user_id || "用户本人"}`;
+    copy.append(title, detail);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "ghost";
+    button.textContent = available ? "恢复此密码" : "不可恢复";
+    button.disabled = !available;
+    button.dataset.passwordRestore = String(item.id || "");
+    row.append(copy, button);
+    container.appendChild(row);
+  });
+}
+
+async function loadSelectedPasswordHistory() {
+  const user = adminState.selectedUser;
+  if (!user?.id || user.is_admin) return null;
+  const expectedId = String(user.id);
+  try {
+    const payload = await api(`/api/admin/users/${user.id}/password-history`);
+    if (String(adminState.selectedUser?.id || "") !== expectedId) return null;
+    renderPasswordHistory(payload || {});
+    return payload;
+  } catch (error) {
+    const container = el("userPasswordHistoryList");
+    container?.replaceChildren(createEmptyState(`密码历史读取失败：${getErrorMessage(error)}`));
+    return null;
+  }
+}
+
+async function restoreSelectedUserPassword(historyId, button) {
+  const user = adminState.selectedUser;
+  if (!user?.id || user.is_admin || !historyId) return;
+  const targetUserId = String(user.id);
+  const stepUp = readUserStepUp();
+  if (!stepUp) return;
+  if (!confirm(`确认恢复账号 ${user.username || user.id} 的历史密码吗？该账号现有登录会话会立即失效。`)) return;
+  button.disabled = true;
+  try {
+    const response = await api(`/api/admin/users/${encodeURIComponent(targetUserId)}/restore-password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ history_id: historyId, expected_updated_at: Number(user.updated_at || 0), ...stepUp }),
+    });
+    if (!selectedUserStillMatches(targetUserId)) return;
+    if (Number(response.updated_at || 0) > 0) adminState.selectedUser.updated_at = Number(response.updated_at);
+    clearUserStepUp();
+    clearRevealedUserPassword();
+    await Promise.all([loadSelectedPasswordHistory(), loadSelectedUserSessions()]);
+    if (!selectedUserStillMatches(targetUserId)) return;
+    setMsg("userDetailMsg", "历史密码已恢复，现有登录会话已撤销。", true);
+  } catch (error) {
+    if (selectedUserStillMatches(targetUserId)) setMsg("userDetailMsg", getErrorMessage(error), false);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function selectedUserStillMatches(userId) {
+  return String(adminState.selectedUser?.id || "") === String(userId || "");
+}
+
+async function loadSelectedUserPurgePreview() {
+  const user = adminState.selectedUser;
+  if (!user?.id || user.is_admin) return;
+  const payload = await api(`/api/admin/users/${user.id}/purge-preview`);
+  if (String(adminState.selectedUser?.id || "") !== String(user.id)) return;
+  const preview = el("userPurgePreview");
+  const form = el("userPurgeForm");
+  preview?.replaceChildren();
+  const resources = payload.resources || {};
+  Object.entries(resources).forEach(([key, value]) => {
+    const item = document.createElement("span");
+    item.textContent = `${({ personas: "人设", persona_groups: "人设分组", social_accounts: "社媒账号", social_proxies: "代理", social_tasks: "自动化任务", tasks: "生成任务", billing_ledger: "账单流水", subscriptions: "订阅", orders: "订单" })[key] || key} ${Number(value || 0)}`;
+    preview?.appendChild(item);
+  });
+  const summary = document.createElement("strong");
+  summary.textContent = `共 ${Number(payload.total_resources || 0)} 条关联资源，永久删除后无法恢复。`;
+  preview?.prepend(summary);
+  if (preview) preview.hidden = false;
+  if (form) form.hidden = !payload.ready;
+  if (el("userPurgeUsername")) el("userPurgeUsername").placeholder = `输入 ${user.username}`;
+  if (!payload.ready) throw new Error("账号尚未完成软删除，不能进入永久删除流程");
+}
+
+async function purgeSelectedUser(event) {
+  event?.preventDefault();
+  const user = adminState.selectedUser;
+  if (!user?.id || user.is_admin) return;
+  const payload = {
+    confirm_username: String(el("userPurgeUsername")?.value || "").trim(),
+    admin_password: String(el("userPurgeAdminPassword")?.value || ""),
+    totp_code: String(el("userPurgeTotpCode")?.value || "").trim(),
+    reason: String(el("userPurgeReason")?.value || "").trim(),
+  };
+  if (payload.confirm_username !== String(user.username || "")) throw new Error("请输入完整客户用户名确认");
+  if (!payload.admin_password || !payload.totp_code) throw new Error("请输入管理员密码和动态验证码");
+  if (payload.reason.length < 2) throw new Error("请填写至少 2 个字符的永久删除原因");
+  if (!confirm(`最后确认：永久删除 ${user.username} 及其全部关联资源？此操作无法撤销。`)) return;
+  const result = await api(`/api/admin/users/${user.id}/purge`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (result.ok === false) throw new Error(`清理未完成：${(result.cleanup_pending || []).join("、") || "存在运行中资源"}`);
+  closeUserDetailModal();
+  await Promise.all([loadUsers(), loadGovernanceDashboard({ force: true })]);
+  setMsg("userMsg", `客户 ${user.username} 及关联数据已永久删除。`, true);
+}
+
 async function openUserDetailModal(id) {
   if (adminState.userPasswordResetInFlight || adminState.userPasswordSetInFlight) {
     setMsg("userDetailMsg", "密码正在保存，请等待操作完成后再切换账号。", false);
     return;
   }
   clearRevealedUserPassword();
+  clearUserStepUp();
   adminState.userDetailReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const requestId = ++adminState.userDetailRequestId;
   const response = await api(`/api/admin/users/${id}`);
@@ -3667,7 +4092,7 @@ async function openUserDetailModal(id) {
     detailRow("电子邮箱", user.email),
     detailRow("联系电话", user.phone),
     detailRow("账号角色", user.is_admin ? "管理员" : "客户"),
-    detailRow("账号状态", user.is_disabled ? "已禁用" : "已启用"),
+    detailRow("账号状态", (USER_LIFECYCLE_META[String(user.lifecycle_status || "")] || [user.is_disabled ? "已禁用" : "已启用"])[0]),
     detailRow(
       "密码状态",
       user.password_configured
@@ -3689,7 +4114,7 @@ async function openUserDetailModal(id) {
     detailRow("更新时间", user.updated_at ? formatTime(user.updated_at) : "-"),
     detailRow("授权时间", user.approved_at ? formatTime(user.approved_at) : "尚未授权"),
     detailRow("授权管理员", user.approved_by_username ? `${user.approved_by_username} · ID ${user.approved_by}` : "-"),
-    detailRow("归档状态", Number(user.deleted_at || 0) > 0 ? `已归档 · ${formatTime(user.deleted_at)}` : "正常"),
+    detailRow("删除状态", Number(user.deleted_at || 0) > 0 ? `已软删除 · ${formatTime(user.deleted_at)}` : "正常"),
     detailRow("人设 / 分组", `${Number(resourceCounts.personas || 0)} / ${Number(resourceCounts.persona_groups || 0)}`),
     detailRow("社媒账号 / 代理", `${Number(resourceCounts.social_accounts || 0)} / ${Number(resourceCounts.social_proxies || 0)}`),
     detailRow("自动化任务", Number(resourceCounts.social_tasks || 0)),
@@ -3701,12 +4126,20 @@ async function openUserDetailModal(id) {
   clearManualUserPassword();
   setUserPasswordRevealAvailability(user.password_reveal_available);
   el("userPasswordSection").hidden = !!user.is_admin;
+  el("userPasswordHistorySection").hidden = !!user.is_admin;
+  const purgeSection = el("userPurgeSection");
+  if (purgeSection) purgeSection.hidden = !!user.is_admin || String(user.lifecycle_status || "") !== "deleted";
+  if (el("userPurgePreview")) { el("userPurgePreview").hidden = true; el("userPurgePreview").replaceChildren(); }
+  if (el("userPurgeForm")) { el("userPurgeForm").hidden = true; el("userPurgeForm").reset(); }
+  el("userSessionList")?.replaceChildren(createEmptyState("正在读取会话..."));
+  el("userPasswordHistoryList")?.replaceChildren(createEmptyState("正在读取密码历史..."));
   el("userApprovalNote").value = user.admin_note || "";
   setMsg("userDetailMsg", "");
   el("userDetailModal").style.display = "grid";
   el("userDetailModal").setAttribute("aria-hidden", "false");
   setUserDetailBackgroundInert(true);
   syncUserDetailActionState();
+  void Promise.all([loadSelectedUserSessions(), loadSelectedPasswordHistory()]);
   window.setTimeout(() => el("btnUserDetailClose")?.focus(), 0);
 }
 
@@ -3726,6 +4159,9 @@ function closeUserDetailModal() {
   clearRevealedUserPassword();
   clearUserPasswordReset();
   clearManualUserPassword();
+  clearUserStepUp();
+  el("userSessionList")?.replaceChildren();
+  el("userPasswordHistoryList")?.replaceChildren();
   modal.style.display = "none";
   modal.setAttribute("aria-hidden", "true");
   setUserDetailBackgroundInert(false);
@@ -3798,6 +4234,978 @@ async function loadTasks() {
   if (lastUpdated) lastUpdated.textContent = `最近刷新：${new Date().toLocaleTimeString()}`;
 }
 
+function governanceTone(value) {
+  const normalized = String(value || "").toLowerCase();
+  if (["critical", "high", "failed", "failure", "denied", "locked", "degraded", "unhealthy", "revoked"].includes(normalized)) return "danger";
+  if (["medium", "pending", "open", "acknowledged", "investigating", "expiring", "suspended"].includes(normalized)) return "warning";
+  if (["healthy", "success", "succeeded", "active", "enabled", "resolved", "completed"].includes(normalized)) return "success";
+  if (["low", "info", "running", "queued"].includes(normalized)) return "info";
+  return "neutral";
+}
+
+function governanceLabel(value) {
+  const normalized = String(value || "").toLowerCase();
+  return ({
+    critical: "严重", high: "高", medium: "中", low: "低",
+    healthy: "健康", degraded: "降级", unhealthy: "异常",
+    open: "开放", acknowledged: "已确认", investigating: "调查中", resolved: "已解决", ignored: "已忽略",
+    success: "成功", failed: "失败", denied: "拒绝", active: "活跃", pending: "待处理",
+    suspended: "已停用", archived: "已归档", deleted: "已软删除", locked: "已锁定", disabled: "已禁用", revoked: "已撤销",
+    expiring: "即将到期", expired: "已到期", legacy: "Legacy", running: "运行中", idle: "空闲", manual: "人工接管", error: "异常", reclaimable: "待回收",
+  })[normalized] || String(value || "-");
+}
+
+function createGovernanceBadge(value, tone = governanceTone(value)) {
+  const badge = document.createElement("span");
+  badge.className = `admin-semantic-badge is-${tone}`;
+  badge.textContent = governanceLabel(value);
+  return badge;
+}
+
+function createEmptyState(message) {
+  const node = document.createElement("div");
+  node.className = "admin-empty-state";
+  node.textContent = message;
+  return node;
+}
+
+function updateGovernanceChart(canvasId, rows, series) {
+  const canvas = el(canvasId);
+  if (!canvas || typeof globalThis.Chart !== "function") return;
+  const items = Array.isArray(rows) ? rows : [];
+  const palette = {
+    "series-blue": { border: "#2563eb", background: "rgba(37, 99, 235, 0.10)" },
+    "series-green": { border: "#0f9d78", background: "rgba(15, 157, 120, 0.10)" },
+    "series-red": { border: "#dc2626", background: "rgba(220, 38, 38, 0.08)" },
+  };
+  const labels = {
+    created: "新增客户", activated: "启用客户", active_logins: "活跃登录",
+    success: "成功", failed: "失败", cancelled: "取消", running: "运行中",
+    credited_units: "充值", consumed_units: "消费", refunded_units: "退款", adjusted_units: "管理员调整",
+  };
+  const datasets = series.map((item) => {
+    const colors = palette[item.className] || palette["series-blue"];
+    const unitScale = item.key.endsWith("_units") ? 100 : 1;
+    return {
+      label: labels[item.key] || item.key,
+      data: items.map((row) => Math.max(0, Number(row?.[item.key] || 0)) / unitScale),
+      borderColor: colors.border,
+      backgroundColor: colors.background,
+      borderWidth: 2,
+      pointRadius: items.length > 45 ? 0 : 2,
+      pointHoverRadius: 4,
+      fill: true,
+      tension: 0.22,
+    };
+  });
+  const summary = series.map((item) => {
+    const unitScale = item.key.endsWith("_units") ? 100 : 1;
+    const total = items.reduce((sum, row) => sum + Math.max(0, Number(row?.[item.key] || 0)) / unitScale, 0);
+    return `${labels[item.key] || item.key} ${total}`;
+  }).join("，");
+  setText(`${canvasId}Summary`, items.length ? summary : "暂无趋势数据");
+  const existing = adminState.governanceCharts.get(canvasId);
+  if (existing) {
+    existing.data.labels = items.map((row) => String(row?.day || "").slice(5));
+    existing.data.datasets = datasets;
+    existing.update("none");
+    return;
+  }
+  const chart = new globalThis.Chart(canvas.getContext("2d"), {
+    type: "line",
+    data: { labels: items.map((row) => String(row?.day || "").slice(5)), datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      normalized: true,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: true, position: "bottom", labels: { usePointStyle: true, boxWidth: 8 } },
+        tooltip: { enabled: true },
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { maxTicksLimit: 6 } },
+        y: { beginAtZero: true, ticks: { precision: 0 }, grid: { color: "rgba(100, 116, 139, 0.16)" } },
+      },
+    },
+  });
+  adminState.governanceCharts.set(canvasId, chart);
+}
+
+function renderGovernanceDistribution(containerId, rows, labelMap = {}) {
+  const container = el(containerId);
+  if (!container) return;
+  const items = Array.isArray(rows) ? rows : [];
+  container.replaceChildren();
+  if (!items.length) {
+    container.appendChild(createEmptyState("暂无分布数据"));
+    return;
+  }
+  const max = Math.max(1, ...items.map((item) => Number(item.value || 0)));
+  items.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "admin-distribution-row";
+    const label = document.createElement("span");
+    const key = String(item.label || "unknown");
+    label.textContent = labelMap[key] || governanceLabel(key);
+    const track = document.createElement("div");
+    track.className = "admin-distribution-track";
+    const fill = document.createElement("div");
+    fill.className = `admin-distribution-fill is-${governanceTone(key)}`;
+    fill.style.width = `${Math.max(4, Number(item.value || 0) / max * 100)}%`;
+    track.appendChild(fill);
+    const value = document.createElement("strong");
+    value.textContent = String(Number(item.value || 0));
+    row.append(label, track, value);
+    container.appendChild(row);
+  });
+}
+
+function renderGovernanceHealth(health = {}) {
+  const container = el("governanceHealthList");
+  if (!container) return;
+  const vault = health.password_vault || {};
+  const rows = [
+    ["数据库", health.database || "unknown", "连接与查询"],
+    ["密码保险库", vault.healthy ? "healthy" : "degraded", vault.error || vault.status || "加密密钥检查"],
+    ["计费执行", health.billing_enforcement ? "active" : "disabled", health.billing_enforcement ? "已启用" : "未启用"],
+  ];
+  container.replaceChildren();
+  rows.forEach(([name, status, detail]) => {
+    const row = document.createElement("div");
+    row.className = "admin-health-row";
+    const copy = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = name;
+    const description = document.createElement("span");
+    description.textContent = String(detail || "-");
+    copy.append(title, description);
+    row.append(copy, createGovernanceBadge(status));
+    container.appendChild(row);
+  });
+}
+
+function renderGovernanceQueue(containerId, items, emptyMessage, renderItem) {
+  const container = el(containerId);
+  if (!container) return;
+  container.replaceChildren();
+  if (!Array.isArray(items) || !items.length) {
+    container.appendChild(createEmptyState(emptyMessage));
+    return;
+  }
+  items.forEach((item) => container.appendChild(renderItem(item)));
+}
+
+function governanceQueueItem(title, detail, badgeValue, badgeTone) {
+  const row = document.createElement("div");
+  row.className = "admin-queue-item";
+  const copy = document.createElement("div");
+  const strong = document.createElement("strong");
+  strong.textContent = String(title || "-");
+  const meta = document.createElement("span");
+  meta.textContent = String(detail || "-");
+  copy.append(strong, meta);
+  row.append(copy, createGovernanceBadge(badgeValue, badgeTone));
+  return row;
+}
+
+function renderGovernanceDashboard(payload = {}) {
+  const summary = payload.summary || {};
+  const health = payload.health || {};
+  setText("govKpiCustomers", Number(summary.customers || 0));
+  setText("govKpiCustomersMeta", `${Number(summary.active || 0)} 个活跃 · ${Number(summary.disabled || 0)} 个停用`);
+  setText("govKpiActive", Number(summary.active || 0));
+  setText("govKpiActiveMeta", `停用 ${Number(summary.disabled || 0)} · 锁定 ${Number(summary.locked || 0)}`);
+  setText("govKpiPending", Number(summary.pending || 0));
+  setText("govKpiSessions", Number(summary.active_sessions || 0));
+  setText("govKpiRunning", Number(summary.running_tasks || 0));
+  setText("govKpiSuccess", Number(summary.success_today || 0));
+  setText("govKpiFailed", Number(summary.failed_today || 0));
+  setText("govKpiAlerts", Number(summary.open_alerts || 0));
+  setText("govKpiSubscriptions", Number(summary.active_subscriptions || 0));
+  setText("govKpiWallet", Number(summary.wallet_points || 0));
+  setText("govKpiWalletMeta", `当期消耗 ${Number(summary.consumed_points || 0)} 点`);
+  setText("adminAlertCount", Number(summary.open_alerts || 0));
+  const healthLabel = governanceLabel(summary.service_health || "unknown");
+  setText("govKpiHealth", healthLabel);
+  setText("govKpiHealthMeta", health.password_vault?.healthy === false ? "密码保险库异常" : "关键依赖可用");
+  const healthKpi = el("govKpiHealth")?.closest(".admin-governance-kpi");
+  healthKpi?.classList.toggle("is-danger", String(summary.service_health) !== "healthy");
+  healthKpi?.classList.toggle("is-health", String(summary.service_health) === "healthy");
+  updateGovernanceChart("governanceUsersChart", payload.trends?.users || [], [
+    { key: "created", className: "series-blue" },
+    { key: "activated", className: "series-green" },
+  ]);
+  updateGovernanceChart("governanceTasksChart", payload.trends?.tasks || [], [
+    { key: "success", className: "series-green" },
+    { key: "failed", className: "series-red" },
+  ]);
+  updateGovernanceChart("governanceBillingChart", payload.trends?.billing || [], [
+    { key: "credited_units", className: "series-blue" },
+    { key: "consumed_units", className: "series-red" },
+    { key: "refunded_units", className: "series-green" },
+  ]);
+  renderGovernanceDistribution("governanceLifecycleDistribution", payload.distributions?.lifecycle || [], {
+    active: "活跃", pending: "待审核", suspended: "已停用", archived: "已归档", deleted: "已软删除", locked: "已锁定", rejected: "已拒绝",
+  });
+  renderGovernanceDistribution("governanceAlertDistribution", payload.distributions?.alerts || []);
+  renderGovernanceDistribution("governanceSubscriptionDistribution", payload.distributions?.subscriptions || []);
+  renderGovernanceDistribution("governanceBrowserDistribution", payload.distributions?.browsers || []);
+  renderGovernanceHealth(health);
+  renderGovernanceQueue("governancePendingQueue", payload.queues?.pending_users, "没有待审核客户", (item) =>
+    governanceQueueItem(item.username, `${item.full_name || item.company || "未填写资料"} · ${formatTime(item.created_at)}`, "pending"));
+  renderGovernanceQueue("governanceFailureQueue", payload.queues?.failed_tasks, "近期没有失败任务", (item) =>
+    governanceQueueItem(item.id, `${oneLine(item.error || "无错误摘要")} · ${formatTime(item.updated_at)}`, "failed"));
+  renderGovernanceQueue("governanceSecurityQueue", payload.queues?.security_alerts, "没有开放安全告警", (item) =>
+    governanceQueueItem(item.title, `用户 ${item.target_user_id || "-"} · ${formatTime(item.last_seen_at)}`, item.severity));
+  renderGovernanceQueue("governanceAuditQueue", payload.queues?.recent_audits, "暂无审计事件", (item) =>
+    governanceQueueItem(item.action, `操作者 ${item.actor_user_id || "-"} · ${formatTime(item.created_at)}`, item.risk_level));
+  renderGovernanceQueue("governanceBrowserQueue", payload.queues?.manual_browsers, "没有待人工接管的浏览器", (item) =>
+    governanceQueueItem(item.title, `${item.task_id || item.session_id || "-"} · ${governanceLabel(item.task_status)}`, "manual", "warning"));
+  renderGovernanceQueue("governanceSubscriptionQueue", payload.queues?.expiring_subscriptions, "7 天内没有到期订阅", (item) =>
+    governanceQueueItem(item.plan_sku, `用户 ${item.user_id || "-"} · ${formatTime(item.current_period_end)}`, "expiring"));
+  renderGovernanceQueue("governancePasswordQueue", payload.queues?.password_operations, "暂无密码敏感操作", (item) =>
+    governanceQueueItem(item.action, `目标 ${item.target_user_id || "-"} · ${formatTime(item.created_at)}`, item.risk_level));
+  renderGovernanceQueue("governanceBatchQueue", payload.queues?.batch_jobs, "暂无批量作业", (item) =>
+    governanceQueueItem(item.action, `成功 ${item.success_count || 0} · 失败 ${item.failed_count || 0} · 跳过 ${item.skipped_count || 0}`, item.status));
+  const generatedAt = Number(payload.generated_at || 0);
+  setText("governanceUpdatedAt", generatedAt ? `数据时间：${formatTime(generatedAt)}` : `刷新于 ${new Date().toLocaleTimeString()}`);
+}
+
+function syncGovernanceRangeControls() {
+  const custom = String(el("governanceRange")?.value || "30") === "custom";
+  const localDateValue = (date) => new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  const endInput = el("governanceEndDate");
+  const startInput = el("governanceStartDate");
+  if (startInput && !startInput.value) startInput.value = localDateValue(new Date(Date.now() - 29 * 86400000));
+  if (endInput && !endInput.value) endInput.value = localDateValue(new Date());
+  if (startInput) startInput.hidden = !custom;
+  if (endInput) endInput.hidden = !custom;
+  syncGovernanceChartRangeLabels();
+}
+
+function governanceRangeLabel() {
+  const range = String(el("governanceRange")?.value || "30");
+  if (range !== "custom") return `近 ${["7", "30", "90"].includes(range) ? range : "30"} 天`;
+  const start = String(el("governanceStartDate")?.value || "");
+  const end = String(el("governanceEndDate")?.value || "");
+  return start && end ? `${start} 至 ${end}` : "自定义范围";
+}
+
+function syncGovernanceChartRangeLabels() {
+  const rangeLabel = governanceRangeLabel();
+  setText("governanceUsersRangeLabel", `${rangeLabel}新增与启用`);
+  setText("governanceTasksRangeLabel", `${rangeLabel}成功与失败`);
+  setText("governanceBillingRangeLabel", `${rangeLabel}充值、消费与退款`);
+  el("governanceUsersChart")?.setAttribute("aria-label", `${rangeLabel}客户新增与启用趋势`);
+  el("governanceTasksChart")?.setAttribute("aria-label", `${rangeLabel}任务成功与失败趋势`);
+  el("governanceBillingChart")?.setAttribute("aria-label", `${rangeLabel}算力充值消费退款趋势`);
+}
+
+async function loadGovernanceDashboard({ force = false } = {}) {
+  if (adminState.governanceLoadingPromise && !force) return adminState.governanceLoadingPromise;
+  const button = el("btnRefreshGovernance");
+  if (button) button.disabled = true;
+  const query = new URLSearchParams();
+  const range = String(el("governanceRange")?.value || "30");
+  if (range === "custom") {
+    const start = String(el("governanceStartDate")?.value || "");
+    const end = String(el("governanceEndDate")?.value || "");
+    const startAt = Date.parse(`${start}T00:00:00+08:00`);
+    const endAt = Date.parse(`${end}T23:59:59+08:00`);
+    if (Number.isFinite(startAt) && Number.isFinite(endAt) && startAt <= endAt) {
+      query.set("start_at", String(Math.floor(startAt / 1000)));
+      query.set("end_at", String(Math.floor(endAt / 1000)));
+    } else {
+      setMsg("governanceMsg", "请选择有效的自定义日期范围", false);
+      if (button) button.disabled = false;
+      return null;
+    }
+  } else {
+    query.set("days", ["7", "30", "90"].includes(range) ? range : "30");
+  }
+  syncGovernanceChartRangeLabels();
+  const requestId = ++adminState.governanceRequestId;
+  const request = api(`/api/admin/dashboard?${query.toString()}`)
+    .then((payload) => {
+      if (requestId !== adminState.governanceRequestId) return null;
+      adminState.governanceLastPayload = payload || {};
+      renderGovernanceDashboard(payload || {});
+      setMsg("governanceMsg", "");
+      return payload;
+    })
+    .catch((error) => {
+      if (requestId !== adminState.governanceRequestId) return null;
+      setMsg("governanceMsg", `治理概览刷新失败：${getErrorMessage(error)}`, false);
+      return null;
+    })
+    .finally(() => {
+      if (button && requestId === adminState.governanceRequestId) button.disabled = false;
+      if (adminState.governanceLoadingPromise === request) adminState.governanceLoadingPromise = null;
+    });
+  adminState.governanceLoadingPromise = request;
+  return request;
+}
+
+function appendCell(row, primary, secondary = "") {
+  const cell = document.createElement("td");
+  const strong = document.createElement("strong");
+  strong.textContent = String(primary === null || primary === undefined || primary === "" ? "-" : primary);
+  cell.appendChild(strong);
+  if (secondary) {
+    const meta = document.createElement("span");
+    meta.textContent = String(secondary);
+    cell.appendChild(meta);
+  }
+  row.appendChild(cell);
+  return cell;
+}
+
+function auditQuery() {
+  const query = new URLSearchParams({ limit: "200", offset: "0" });
+  const values = {
+    actor_user_id: el("auditActorId")?.value,
+    target_user_id: el("auditTargetId")?.value,
+    action: el("auditAction")?.value?.trim(),
+    outcome: el("auditOutcome")?.value,
+    risk_level: el("auditRisk")?.value,
+  };
+  Object.entries(values).forEach(([key, value]) => {
+    if (String(value || "").trim()) query.set(key, String(value).trim());
+  });
+  return query;
+}
+
+function renderAuditEvents(payload = {}) {
+  const body = el("auditBody");
+  if (!body) return;
+  const rows = Array.isArray(payload.items) ? payload.items : [];
+  adminState.auditRows = rows;
+  body.replaceChildren();
+  if (!rows.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 7;
+    cell.appendChild(createEmptyState("当前筛选条件下没有审计事件"));
+    row.appendChild(cell);
+    body.appendChild(row);
+  } else {
+    rows.forEach((item) => {
+      const row = document.createElement("tr");
+      appendCell(row, formatTime(item.created_at), item.request_id ? `请求 ${item.request_id}` : "");
+      appendCell(row, item.action, `${item.resource_type || "resource"} · ${item.resource_id || "-"}`);
+      appendCell(row, item.actor_username || `ID ${item.actor_user_id || "-"}`, item.ip_address || "");
+      appendCell(row, item.target_username || `ID ${item.target_user_id || "-"}`);
+      const risk = document.createElement("td");
+      risk.appendChild(createGovernanceBadge(item.risk_level));
+      row.appendChild(risk);
+      const outcome = document.createElement("td");
+      outcome.appendChild(createGovernanceBadge(item.outcome));
+      row.appendChild(outcome);
+      appendCell(row, oneLine(item.reason || item.error_code || "-"), item.user_agent || "");
+      body.appendChild(row);
+    });
+  }
+  setText("auditResultSummary", `显示 ${rows.length} / ${Number(payload.total || rows.length)} 条`);
+}
+
+async function loadAuditEvents() {
+  const body = el("auditBody");
+  body?.setAttribute("aria-busy", "true");
+  try {
+    const payload = await api(`/api/admin/audit/events?${auditQuery().toString()}`);
+    renderAuditEvents(payload || {});
+    setMsg("auditMsg", "");
+    return payload;
+  } catch (error) {
+    setMsg("auditMsg", `审计日志读取失败：${getErrorMessage(error)}`, false);
+    return null;
+  } finally {
+    body?.removeAttribute("aria-busy");
+  }
+}
+
+async function exportAuditEvents() {
+  const button = el("btnExportAudit");
+  if (button) button.disabled = true;
+  try {
+    const response = await fetch("/api/admin/audit/export", {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+      headers: { "X-Admin-Console": "1" },
+    });
+    if (!response.ok) throw new Error(`导出失败：HTTP ${response.status}`);
+    const blob = await response.blob();
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const match = disposition.match(/filename="?([^";]+)"?/i);
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = match?.[1] || "vecto-audit.csv";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(link.href);
+    setMsg("auditMsg", "审计日志已导出", true);
+  } catch (error) {
+    setMsg("auditMsg", getErrorMessage(error), false);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function renderSecurityAlerts(payload = {}) {
+  const container = el("securityAlertList");
+  if (!container) return;
+  const rows = Array.isArray(payload.items) ? payload.items : [];
+  adminState.securityRows = rows;
+  container.replaceChildren();
+  if (!rows.length) {
+    container.appendChild(createEmptyState("当前筛选条件下没有安全告警"));
+    return;
+  }
+  rows.forEach((item) => {
+    const article = document.createElement("article");
+    article.className = `admin-security-alert is-${String(item.severity || "low").toLowerCase()}`;
+    const copy = document.createElement("div");
+    copy.className = "admin-security-alert-copy";
+    const title = document.createElement("strong");
+    title.textContent = String(item.title || item.alert_type || "安全告警");
+    const summary = document.createElement("span");
+    summary.textContent = oneLine(item.summary || "无摘要");
+    copy.append(title, summary);
+    const meta = document.createElement("div");
+    meta.className = "admin-security-alert-meta";
+    meta.append(createGovernanceBadge(item.severity), createGovernanceBadge(item.status));
+    const seen = document.createElement("span");
+    seen.textContent = `最近：${formatTime(item.last_seen_at || item.updated_at)} · 用户 ${item.target_user_id || "-"}`;
+    meta.appendChild(seen);
+    const actions = document.createElement("div");
+    actions.className = "admin-security-alert-actions";
+    const status = document.createElement("select");
+    status.setAttribute("aria-label", `${title.textContent} 状态`);
+    ["open", "acknowledged", "investigating", "resolved", "ignored"].forEach((value) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = governanceLabel(value);
+      option.selected = String(item.status) === value;
+      status.appendChild(option);
+    });
+    const note = document.createElement("input");
+    note.maxLength = 2000;
+    note.placeholder = "处置备注";
+    note.setAttribute("aria-label", `${title.textContent} 处置备注`);
+    const save = document.createElement("button");
+    save.type = "button";
+    save.className = "primary";
+    save.textContent = "保存";
+    save.dataset.securitySave = String(item.id || "");
+    save.dataset.statusControl = "";
+    actions.append(status, note, save);
+    article.append(copy, meta, actions);
+    container.appendChild(article);
+  });
+}
+
+async function loadSecurityAlerts() {
+  const query = new URLSearchParams({ limit: "200" });
+  if (el("securityStatus")?.value) query.set("status", el("securityStatus").value);
+  if (el("securitySeverity")?.value) query.set("severity", el("securitySeverity").value);
+  try {
+    const payload = await api(`/api/admin/security/alerts?${query.toString()}`);
+    renderSecurityAlerts(payload || {});
+    setMsg("securityMsg", "");
+    return payload;
+  } catch (error) {
+    setMsg("securityMsg", `安全告警读取失败：${getErrorMessage(error)}`, false);
+    return null;
+  }
+}
+
+async function saveSecurityAlert(button) {
+  const article = button.closest(".admin-security-alert");
+  const status = article?.querySelector("select")?.value || "open";
+  const note = article?.querySelector("input")?.value?.trim() || "";
+  button.disabled = true;
+  try {
+    await api(`/api/admin/security/alerts/${encodeURIComponent(button.dataset.securitySave || "")}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status, note }),
+    });
+    await Promise.all([loadSecurityAlerts(), loadGovernanceDashboard({ force: true })]);
+    setMsg("securityMsg", "告警状态已更新", true);
+  } catch (error) {
+    setMsg("securityMsg", getErrorMessage(error), false);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function parseScopeInput(value) {
+  return [...new Set(String(value || "").split(/[，,\s]+/).map((item) => item.trim()).filter(Boolean))];
+}
+
+function timestampFromLocalInput(value) {
+  const date = value ? new Date(value) : null;
+  return date && Number.isFinite(date.getTime()) ? Math.floor(date.getTime() / 1000) : 0;
+}
+
+function localInputFromTimestamp(value) {
+  const date = new Date(Number(value || 0) * 1000);
+  if (!Number(value) || !Number.isFinite(date.getTime())) return "";
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 16);
+}
+
+function setDefaultServiceAccountExpiry() {
+  const input = el("serviceAccountExpiresAt");
+  if (!input || input.value) return;
+  const expires = new Date(Date.now() + 30 * 86400000);
+  expires.setMinutes(expires.getMinutes() - expires.getTimezoneOffset());
+  input.value = expires.toISOString().slice(0, 16);
+}
+
+function renderServiceAccounts(payload = {}) {
+  const body = el("serviceAccountBody");
+  if (!body) return;
+  const rows = Array.isArray(payload.items) ? payload.items : [];
+  adminState.serviceAccountRows = rows;
+  body.replaceChildren();
+  if (!rows.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 6;
+    cell.appendChild(createEmptyState("尚未创建服务账号"));
+    row.appendChild(cell);
+    body.appendChild(row);
+    return;
+  }
+  rows.forEach((item) => {
+    const row = document.createElement("tr");
+    appendCell(row, item.name, item.id);
+    const purposeCell = document.createElement("td");
+    const purpose = document.createElement("input");
+    purpose.value = String(item.purpose || "");
+    purpose.maxLength = 500;
+    purpose.setAttribute("aria-label", `${item.name} 用途`);
+    purposeCell.appendChild(purpose);
+    row.appendChild(purposeCell);
+    const scopeCell = document.createElement("td");
+    const scopes = document.createElement("input");
+    scopes.value = (item.allowed_scopes || []).join(", ");
+    scopes.setAttribute("aria-label", `${item.name} 权限范围`);
+    scopeCell.appendChild(scopes);
+    row.appendChild(scopeCell);
+    const statusCell = document.createElement("td");
+    const status = document.createElement("select");
+    ["active", "disabled", "revoked"].forEach((value) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = governanceLabel(value);
+      option.selected = String(item.status) === value;
+      status.appendChild(option);
+    });
+    statusCell.appendChild(status);
+    row.appendChild(statusCell);
+    const timeCell = document.createElement("td");
+    const expires = document.createElement("input");
+    expires.type = "datetime-local";
+    expires.value = localInputFromTimestamp(item.expires_at);
+    expires.setAttribute("aria-label", `${item.name} 到期时间`);
+    const lastUsed = document.createElement("span");
+    lastUsed.textContent = item.last_used_at ? `最近使用 ${formatTime(item.last_used_at)} · ${item.last_used_ip || "-"}` : "尚未使用";
+    timeCell.append(expires, lastUsed);
+    row.appendChild(timeCell);
+    const actionCell = document.createElement("td");
+    actionCell.className = "admin-service-actions";
+    const save = document.createElement("button");
+    save.type = "button";
+    save.className = "primary";
+    save.textContent = "保存";
+    save.dataset.serviceSave = String(item.id || "");
+    const rotate = document.createElement("button");
+    rotate.type = "button";
+    rotate.className = "ghost";
+    rotate.textContent = "轮换";
+    rotate.dataset.serviceRotate = String(item.id || "");
+    rotate.disabled = String(item.status || "") === "revoked";
+    actionCell.append(save, rotate);
+    row.appendChild(actionCell);
+    body.appendChild(row);
+  });
+}
+
+async function loadServiceAccounts() {
+  try {
+    const payload = await api("/api/admin/service-accounts");
+    renderServiceAccounts(payload || {});
+    setMsg("serviceAccountMsg", "");
+    return payload;
+  } catch (error) {
+    setMsg("serviceAccountMsg", `服务账号读取失败：${getErrorMessage(error)}`, false);
+    return null;
+  }
+}
+
+async function createServiceAccount() {
+  const stepUp = readServiceAccountStepUp();
+  if (!stepUp) return;
+  const payload = {
+    name: el("serviceAccountName")?.value?.trim() || "",
+    purpose: el("serviceAccountPurpose")?.value?.trim() || "",
+    allowed_scopes: parseScopeInput(el("serviceAccountScopes")?.value),
+    expires_at: timestampFromLocalInput(el("serviceAccountExpiresAt")?.value),
+    ...stepUp,
+  };
+  if (payload.name.length < 2) throw new Error("服务账号名称至少 2 个字符");
+  if (!payload.expires_at) throw new Error("请选择服务凭据到期时间");
+  const result = await api("/api/admin/service-accounts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  el("serviceCredentialValue").value = String(result.credential || "");
+  el("serviceCredentialResult").hidden = false;
+  scheduleServiceCredentialClear();
+  el("serviceAccountForm")?.reset();
+  setDefaultServiceAccountExpiry();
+  clearServiceAccountStepUp();
+  await loadServiceAccounts();
+  setMsg("serviceAccountMsg", "服务账号已创建，请立即保存一次性凭证", true);
+}
+
+async function saveServiceAccount(button) {
+  const row = button.closest("tr");
+  const controls = row ? Array.from(row.querySelectorAll("input, select")) : [];
+  const [purpose, scopes, status, expires] = controls;
+  const stepUp = readServiceAccountStepUp();
+  if (!stepUp) return;
+  button.disabled = true;
+  try {
+    await api(`/api/admin/service-accounts/${encodeURIComponent(button.dataset.serviceSave || "")}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        purpose: purpose?.value?.trim() || "",
+        allowed_scopes: parseScopeInput(scopes?.value),
+        status: status?.value || "active",
+        expires_at: timestampFromLocalInput(expires?.value),
+        ...stepUp,
+      }),
+    });
+    await loadServiceAccounts();
+    clearServiceAccountStepUp();
+    setMsg("serviceAccountMsg", "服务账号已更新", true);
+  } catch (error) {
+    setMsg("serviceAccountMsg", getErrorMessage(error), false);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function rotateServiceAccount(button) {
+  const payload = readServiceAccountStepUp();
+  if (!payload) return;
+  if (!confirm("轮换后旧凭证会立即失效，确认继续吗？")) return;
+  button.disabled = true;
+  try {
+    const result = await api(`/api/admin/service-accounts/${encodeURIComponent(button.dataset.serviceRotate || "")}/rotate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    el("serviceCredentialValue").value = String(result.credential || "");
+    el("serviceCredentialResult").hidden = false;
+    scheduleServiceCredentialClear();
+    clearServiceAccountStepUp();
+    await loadServiceAccounts();
+    setMsg("serviceAccountMsg", "凭证已轮换，请立即保存新凭证", true);
+  } catch (error) {
+    setMsg("serviceAccountMsg", getErrorMessage(error), false);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function clearServiceCredential() {
+  if (adminState.serviceCredentialTimer) {
+    window.clearTimeout(adminState.serviceCredentialTimer);
+    adminState.serviceCredentialTimer = null;
+  }
+  if (el("serviceCredentialValue")) el("serviceCredentialValue").value = "";
+  if (el("serviceCredentialResult")) el("serviceCredentialResult").hidden = true;
+}
+
+function scheduleServiceCredentialClear() {
+  if (adminState.serviceCredentialTimer) window.clearTimeout(adminState.serviceCredentialTimer);
+  adminState.serviceCredentialTimer = window.setTimeout(() => {
+    clearServiceCredential();
+    setMsg("serviceAccountMsg", "一次性凭证已自动清除", true);
+  }, 60000);
+}
+
+function readServiceAccountStepUp() {
+  const payload = {
+    admin_password: String(el("serviceRotateAdminPassword")?.value || ""),
+    totp_code: String(el("serviceRotateTotpCode")?.value || "").trim(),
+    reason: String(el("serviceRotateReason")?.value || "").trim(),
+  };
+  if (!payload.admin_password) return setMsg("serviceAccountMsg", "请输入管理员当前密码", false);
+  if (!payload.totp_code) return setMsg("serviceAccountMsg", "请输入动态验证码或恢复码", false);
+  if (payload.reason.length < 2) return setMsg("serviceAccountMsg", "请输入至少 2 个字符的操作原因", false);
+  return payload;
+}
+
+function clearServiceAccountStepUp() {
+  ["serviceRotateAdminPassword", "serviceRotateTotpCode", "serviceRotateReason"].forEach((id) => { if (el(id)) el(id).value = ""; });
+}
+
+function renderTaxonomyList(containerId, items, kind) {
+  const container = el(containerId);
+  if (!container) return;
+  container.replaceChildren();
+  if (!items.length) {
+    container.appendChild(createEmptyState(kind === "group" ? "尚未创建客户分组" : "尚未创建客户标签"));
+    return;
+  }
+  items.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = `admin-taxonomy-item${kind === "tag" ? " is-tag" : ""}`;
+    const name = document.createElement("input");
+    name.value = String(item.name || "");
+    name.maxLength = 80;
+    row.appendChild(name);
+    if (kind === "group") {
+      const description = document.createElement("input");
+      description.value = String(item.description || "");
+      description.maxLength = 500;
+      row.appendChild(description);
+    }
+    const color = document.createElement("select");
+    ["neutral", "blue", "green", "amber", "red"].forEach((value) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = ({ neutral: "中性", blue: "蓝色", green: "绿色", amber: "橙色", red: "红色" })[value];
+      option.selected = String(item.color || "neutral") === value;
+      color.appendChild(option);
+    });
+    const count = document.createElement("span");
+    count.className = "admin-taxonomy-count";
+    count.textContent = `${Number(item.member_count || 0)} 位客户`;
+    const save = document.createElement("button");
+    save.type = "button";
+    save.className = "ghost";
+    save.textContent = "保存";
+    save.dataset.taxonomySave = String(item.id || "");
+    save.dataset.taxonomyKind = kind;
+    row.append(color, count, save);
+    container.appendChild(row);
+  });
+}
+
+async function loadTaxonomyWorkspace() {
+  if (adminState.taxonomyLoadingPromise) return adminState.taxonomyLoadingPromise;
+  const request = Promise.all([api("/api/admin/customer-groups"), api("/api/admin/tags")])
+    .then(([groups, tags]) => {
+      adminState.customerGroupRows = groups?.items || [];
+      adminState.customerTagRows = tags?.items || [];
+      renderTaxonomyList("customerGroupList", adminState.customerGroupRows, "group");
+      renderTaxonomyList("customerTagList", adminState.customerTagRows, "tag");
+      const groupSelect = el("adminUserBatchGroup");
+      if (groupSelect) {
+        const selected = groupSelect.value;
+        groupSelect.replaceChildren(new Option("选择客户分组", ""));
+        adminState.customerGroupRows.forEach((item) => groupSelect.add(new Option(String(item.name || item.id), String(item.id))));
+        groupSelect.value = selected;
+      }
+      const tagSelect = el("adminUserBatchTags");
+      if (tagSelect) {
+        const selected = new Set(Array.from(tagSelect.selectedOptions, (option) => option.value));
+        tagSelect.replaceChildren();
+        adminState.customerTagRows.forEach((item) => {
+          const option = new Option(String(item.name || item.id), String(item.id));
+          option.selected = selected.has(option.value);
+          tagSelect.add(option);
+        });
+      }
+      setMsg("taxonomyMsg", "");
+      return { groups, tags };
+    })
+    .catch((error) => {
+      setMsg("taxonomyMsg", `客户治理数据读取失败：${getErrorMessage(error)}`, false);
+      return null;
+    })
+    .finally(() => {
+      if (adminState.taxonomyLoadingPromise === request) adminState.taxonomyLoadingPromise = null;
+    });
+  adminState.taxonomyLoadingPromise = request;
+  return request;
+}
+
+async function createTaxonomyItem(kind) {
+  const isGroup = kind === "group";
+  const payload = {
+    name: el(isGroup ? "customerGroupName" : "customerTagName")?.value?.trim() || "",
+    color: el(isGroup ? "customerGroupColor" : "customerTagColor")?.value || "neutral",
+  };
+  if (isGroup) payload.description = el("customerGroupDescription")?.value?.trim() || "";
+  if (!payload.name) throw new Error("名称不能为空");
+  await api(isGroup ? "/api/admin/customer-groups" : "/api/admin/tags", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  el(isGroup ? "customerGroupForm" : "customerTagForm")?.reset();
+  await loadTaxonomyWorkspace();
+}
+
+async function saveTaxonomyItem(button) {
+  const kind = button.dataset.taxonomyKind;
+  const row = button.closest(".admin-taxonomy-item");
+  const controls = row ? Array.from(row.querySelectorAll("input, select")) : [];
+  const payload = kind === "group"
+    ? { name: controls[0]?.value?.trim() || "", description: controls[1]?.value?.trim() || "", color: controls[2]?.value || "neutral" }
+    : { name: controls[0]?.value?.trim() || "", color: controls[1]?.value || "neutral" };
+  if (!payload.name) return setMsg("taxonomyMsg", "名称不能为空", false);
+  button.disabled = true;
+  try {
+    const base = kind === "group" ? "/api/admin/customer-groups" : "/api/admin/tags";
+    await api(`${base}/${encodeURIComponent(button.dataset.taxonomySave || "")}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    await loadTaxonomyWorkspace();
+    setMsg("taxonomyMsg", "客户治理词表已更新", true);
+  } catch (error) {
+    setMsg("taxonomyMsg", getErrorMessage(error), false);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderMfaStatus(status = {}) {
+  adminState.mfaStatus = status;
+  const banner = el("adminMfaBanner");
+  if (!banner) return;
+  const needsSetup = Boolean(status.required && !status.enabled);
+  banner.hidden = !needsSetup;
+  if (needsSetup) {
+    const deadline = Number(status.required_after || 0);
+    setText(
+      "adminMfaBannerText",
+      status.setup_pending
+        ? "动态验证设置尚未完成，请重新生成密钥并验证。"
+        : (deadline && deadline > Math.floor(Date.now() / 1000)
+          ? `请在 ${formatTime(deadline)} 前完成登记，敏感操作将使用动态验证码。`
+          : "敏感操作需要管理员密码和动态验证码，请立即完成 MFA 登记。"),
+    );
+  }
+}
+
+async function loadMfaStatus() {
+  try {
+    const status = await api("/api/auth/mfa");
+    renderMfaStatus(status || {});
+    return status;
+  } catch (error) {
+    setMsg("adminMfaMsg", `MFA 状态读取失败：${getErrorMessage(error)}`, false);
+    return null;
+  }
+}
+
+function setMfaModalOpen(open) {
+  const modal = el("adminMfaModal");
+  if (!modal) return;
+  modal.style.display = open ? "grid" : "none";
+  modal.setAttribute("aria-hidden", open ? "false" : "true");
+  if (open) {
+    setMsg("adminMfaMsg", "");
+    window.setTimeout(() => (adminState.mfaSetup ? el("adminMfaVerifyCode") : el("btnStartMfaSetup"))?.focus(), 0);
+  } else {
+    adminState.mfaSetup = null;
+    if (el("adminMfaSecret")) el("adminMfaSecret").value = "";
+    if (el("adminMfaUri")) el("adminMfaUri").value = "";
+    if (el("adminMfaRecoveryCodes")) el("adminMfaRecoveryCodes").textContent = "";
+    if (el("adminMfaVerifyCode")) el("adminMfaVerifyCode").value = "";
+    if (el("adminMfaSetupDetails")) el("adminMfaSetupDetails").hidden = true;
+    if (el("adminMfaIntro")) el("adminMfaIntro").hidden = false;
+    if (el("btnCopyMfaSetup")) el("btnCopyMfaSetup").hidden = true;
+    if (el("btnVerifyMfaSetup")) el("btnVerifyMfaSetup").hidden = true;
+  }
+}
+
+async function startMfaSetup() {
+  const button = el("btnStartMfaSetup");
+  if (button) button.disabled = true;
+  try {
+    const currentPassword = String(el("adminMfaCurrentPassword")?.value || "");
+    if (!currentPassword) throw new Error("请输入管理员当前密码");
+    const setup = await api("/api/auth/mfa/setup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ current_password: currentPassword }),
+    });
+    el("adminMfaCurrentPassword").value = "";
+    adminState.mfaSetup = setup || {};
+    el("adminMfaSecret").value = String(setup.secret || "");
+    el("adminMfaUri").value = String(setup.otpauth_uri || "");
+    el("adminMfaRecoveryCodes").textContent = (setup.recovery_codes || []).join("\n");
+    el("adminMfaIntro").hidden = true;
+    el("adminMfaSetupDetails").hidden = false;
+    el("btnCopyMfaSetup").hidden = false;
+    el("btnVerifyMfaSetup").hidden = false;
+    setMsg("adminMfaMsg", "密钥已生成。请先保存恢复码，再输入身份验证器中的动态验证码。", true);
+    el("adminMfaVerifyCode")?.focus();
+  } catch (error) {
+    setMsg("adminMfaMsg", getErrorMessage(error), false);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function verifyMfaSetup() {
+  const code = String(el("adminMfaVerifyCode")?.value || "").trim();
+  if (code.length < 6) {
+    setMsg("adminMfaMsg", "请输入身份验证器中的动态验证码。", false);
+    return el("adminMfaVerifyCode")?.focus();
+  }
+  const button = el("btnVerifyMfaSetup");
+  if (button) button.disabled = true;
+  try {
+    await api("/api/auth/mfa/verify-setup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    await loadMfaStatus();
+    setMsg("adminMfaMsg", "动态验证已启用。", true);
+    window.setTimeout(() => setMfaModalOpen(false), 700);
+  } catch (error) {
+    setMsg("adminMfaMsg", getErrorMessage(error), false);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function copyMfaSetup() {
+  const setup = adminState.mfaSetup || {};
+  const text = [
+    `设置密钥：${setup.secret || ""}`,
+    `URI：${setup.otpauth_uri || ""}`,
+    "恢复码：",
+    ...(setup.recovery_codes || []),
+  ].join("\n");
+  try {
+    await navigator.clipboard.writeText(text);
+    setMsg("adminMfaMsg", "设置资料已复制。", true);
+  } catch {
+    setMsg("adminMfaMsg", "复制失败，请手动保存密钥和恢复码。", false);
+  }
+}
+
 async function createUser() {
   const isAdmin = adminState.userListRole === "admin";
   const payload = {
@@ -3811,6 +5219,16 @@ async function createUser() {
   if (!payload.password || payload.password.length < minimumPasswordLength) {
     throw new Error(`密码至少 ${minimumPasswordLength} 位`);
   }
+  if (payload.is_admin) {
+    const stepUp = readAdminStepUp({
+      adminPasswordId: "adminCreateAdminPassword",
+      totpCodeId: "adminCreateTotpCode",
+      reasonId: "adminCreateReason",
+      messageTarget: "userMsg",
+    });
+    if (!stepUp) return false;
+    Object.assign(payload, stepUp);
+  }
   await api("/api/admin/users", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -3819,6 +5237,14 @@ async function createUser() {
   el("newUserName").value = "";
   el("newUserPassword").value = "";
   el("newUserBalance").value = "0";
+  clearAdminCreateStepUp();
+  return true;
+}
+
+function clearAdminCreateStepUp() {
+  ["adminCreateAdminPassword", "adminCreateTotpCode", "adminCreateReason"].forEach((id) => {
+    if (el(id)) el(id).value = "";
+  });
 }
 
 async function runTaskAction(act, id) {
@@ -4058,6 +5484,60 @@ function bindActions() {
   bindModelTabs();
   bindTextModelContentTabs();
   bindRunningHubSlotTabs();
+  el("btnRefreshGovernance")?.addEventListener("click", () => void loadGovernanceDashboard({ force: true }));
+  el("governanceRange")?.addEventListener("change", () => { syncGovernanceRangeControls(); void loadGovernanceDashboard({ force: true }); });
+  el("governanceStartDate")?.addEventListener("change", () => void loadGovernanceDashboard({ force: true }));
+  el("governanceEndDate")?.addEventListener("change", () => void loadGovernanceDashboard({ force: true }));
+  syncGovernanceRangeControls();
+  el("btnRefreshAudit")?.addEventListener("click", () => void loadAuditEvents());
+  el("btnExportAudit")?.addEventListener("click", () => void exportAuditEvents());
+  el("auditFilterForm")?.addEventListener("submit", (event) => { event.preventDefault(); void loadAuditEvents(); });
+  el("btnRefreshSecurity")?.addEventListener("click", () => void loadSecurityAlerts());
+  el("securityFilterForm")?.addEventListener("change", () => void loadSecurityAlerts());
+  el("btnRefreshServiceAccounts")?.addEventListener("click", () => void loadServiceAccounts());
+  setDefaultServiceAccountExpiry();
+  el("serviceAccountForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try { await createServiceAccount(); } catch (error) { setMsg("serviceAccountMsg", getErrorMessage(error), false); }
+  });
+  el("btnCopyServiceCredential")?.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(el("serviceCredentialValue")?.value || "");
+      setMsg("serviceAccountMsg", "一次性凭证已复制", true);
+    } catch { setMsg("serviceAccountMsg", "复制失败，请手动复制已选中的凭证", false); }
+  });
+  el("btnHideServiceCredential")?.addEventListener("click", () => {
+    clearServiceCredential();
+  });
+  el("btnRefreshTaxonomy")?.addEventListener("click", () => void loadTaxonomyWorkspace());
+  el("customerGroupForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try { await createTaxonomyItem("group"); setMsg("taxonomyMsg", "客户分组已创建", true); } catch (error) { setMsg("taxonomyMsg", getErrorMessage(error), false); }
+  });
+  el("customerTagForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try { await createTaxonomyItem("tag"); setMsg("taxonomyMsg", "客户标签已创建", true); } catch (error) { setMsg("taxonomyMsg", getErrorMessage(error), false); }
+  });
+  el("btnRefreshUserSessions")?.addEventListener("click", () => void loadSelectedUserSessions());
+  el("btnRevokeUserSessions")?.addEventListener("click", () => void revokeSelectedUserSessions());
+  el("btnRefreshPasswordHistory")?.addEventListener("click", () => void loadSelectedPasswordHistory());
+  el("btnLoadUserPurgePreview")?.addEventListener("click", async () => {
+    try { await loadSelectedUserPurgePreview(); } catch (error) { setMsg("userDetailMsg", getErrorMessage(error), false); }
+  });
+  el("userPurgeForm")?.addEventListener("submit", async (event) => {
+    try { await purgeSelectedUser(event); } catch (error) { event.preventDefault(); setMsg("userDetailMsg", getErrorMessage(error), false); }
+  });
+  el("btnOpenMfaSetup")?.addEventListener("click", () => setMfaModalOpen(true));
+  el("btnCloseMfaSetup")?.addEventListener("click", () => setMfaModalOpen(false));
+  el("btnStartMfaSetup")?.addEventListener("click", () => void startMfaSetup());
+  el("btnVerifyMfaSetup")?.addEventListener("click", () => void verifyMfaSetup());
+  el("btnCopyMfaSetup")?.addEventListener("click", () => void copyMfaSetup());
+  el("adminMfaVerifyCode")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); void verifyMfaSetup(); }
+  });
+  el("adminMfaModal")?.addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) setMfaModalOpen(false);
+  });
   el("btnAdminLogout")?.addEventListener("click", logoutAdmin);
   el("btnSaveRuntime").addEventListener("click", async () => {
     setMsg("runtimeMsg", "");
@@ -4169,12 +5649,62 @@ function bindActions() {
   el("btnCreateUser").addEventListener("click", async () => {
     setMsg("userMsg", "");
     try {
-      await createUser();
+      const created = await createUser();
+      if (!created) return;
       setMsg("userMsg", `${adminState.userListRole === "admin" ? "管理员" : "客户"}账号已创建`, true);
       await loadUsers();
     } catch (err) {
       setMsg("userMsg", err.detail || err.message || String(err), false);
     }
+  });
+
+  el("adminUserFilterForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    adminState.userListFilters = readUserListFilters();
+    adminState.userListPage = 1;
+    clearUserBatchSelection();
+    try { await loadUsers(1); } catch (error) { setMsg("userMsg", getErrorMessage(error), false); }
+  });
+  el("btnResetUserFilters")?.addEventListener("click", async () => {
+    el("adminUserFilterForm")?.reset();
+    adminState.userListFilters = {};
+    adminState.userListPage = 1;
+    clearUserBatchSelection();
+    try { await loadUsers(1); } catch (error) { setMsg("userMsg", getErrorMessage(error), false); }
+  });
+  el("adminSelectAllUsers")?.addEventListener("change", (event) => {
+    document.querySelectorAll("input[data-user-select]").forEach((input) => {
+      const id = String(input.dataset.userSelect || "");
+      if (event.currentTarget.checked) adminState.selectedUserIds.add(id);
+      else adminState.selectedUserIds.delete(id);
+    });
+    adminState.userBatchPreview = null;
+    syncUserBatchSelection();
+  });
+  el("userBody")?.addEventListener("change", (event) => {
+    const input = event.target.closest?.("input[data-user-select]");
+    if (!input) return;
+    const id = String(input.dataset.userSelect || "");
+    if (input.checked) adminState.selectedUserIds.add(id);
+    else adminState.selectedUserIds.delete(id);
+    adminState.userBatchPreview = null;
+    syncUserBatchSelection();
+  });
+  el("adminUserBatchAction")?.addEventListener("change", async () => {
+    adminState.userBatchPreview = null;
+    syncUserBatchSelection();
+    if (["assign_group", "add_tags"].includes(String(el("adminUserBatchAction")?.value || ""))) await loadTaxonomyWorkspace();
+  });
+  ["adminUserBatchReason", "adminUserBatchGroup", "adminUserBatchTags"].forEach((id) => {
+    el(id)?.addEventListener("change", () => { adminState.userBatchPreview = null; syncUserBatchSelection(); });
+    el(id)?.addEventListener("input", () => { adminState.userBatchPreview = null; syncUserBatchSelection(); });
+  });
+  el("btnClearUserSelection")?.addEventListener("click", clearUserBatchSelection);
+  el("btnPreviewUserBatch")?.addEventListener("click", async () => {
+    try { await previewUserBatchAction(); } catch (error) { setMsg("adminUserBatchMsg", getErrorMessage(error), false); }
+  });
+  el("btnRunUserBatch")?.addEventListener("click", async () => {
+    try { await runUserBatchAction(); } catch (error) { setMsg("adminUserBatchMsg", getErrorMessage(error), false); }
   });
 
   document.querySelectorAll("[data-user-role]").forEach((button) => {
@@ -4183,6 +5713,9 @@ function bindActions() {
       if (nextRole === adminState.userListRole) return;
       adminState.userListRole = nextRole;
       adminState.userListPage = 1;
+      adminState.userListFilters = readUserListFilters();
+      if (nextRole === "admin") adminState.userListFilters.subscription_status = "";
+      clearUserBatchSelection();
       syncUserRoleView();
       setMsg("userMsg", "");
       try {
@@ -4516,12 +6049,17 @@ function bindActions() {
       closeTaskInspectModal();
       closeRechargeModal();
       closeUserDetailModal();
+      setMfaModalOpen(false);
     }
   });
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
       clearRevealedUserPassword();
+      clearUserPasswordReset();
+      clearServiceCredential();
+      clearAdminCreateStepUp();
       if (!adminState.userPasswordSetInFlight) clearManualUserPassword();
+      if (el("adminMfaModal")?.getAttribute("aria-hidden") === "false") setMfaModalOpen(false);
       return;
     }
     void refreshSentimentCookieProfilesIfActive();
@@ -4553,6 +6091,30 @@ function bindActions() {
       return;
     }
     const btn = target.closest("button") || target;
+    if (btn.dataset?.pageJump) {
+      setActiveAdminPage(btn.dataset.pageJump);
+      return;
+    }
+    if (btn.dataset?.securitySave) {
+      await saveSecurityAlert(btn);
+      return;
+    }
+    if (btn.dataset?.serviceSave) {
+      await saveServiceAccount(btn);
+      return;
+    }
+    if (btn.dataset?.serviceRotate) {
+      await rotateServiceAccount(btn);
+      return;
+    }
+    if (btn.dataset?.taxonomySave) {
+      await saveTaxonomyItem(btn);
+      return;
+    }
+    if (btn.dataset?.passwordRestore) {
+      await restoreSelectedUserPassword(btn.dataset.passwordRestore, btn);
+      return;
+    }
     if (btn.classList.contains("admin-model-chip-remove")) {
       const idx = Number(btn.dataset.idx || -1);
       const listName = String(btn.dataset.list || "");
@@ -4658,7 +6220,7 @@ function bindActions() {
     }
     if (act === "archive_user") {
       const name = btn.dataset.name || id;
-      if (!confirm(`确认归档客户 ${name} 吗？账号将无法登录，但人设、推文、任务、额度流水和其他业务数据都会保留。`)) return;
+      if (!confirm(`确认软删除客户 ${name} 吗？账号身份将立即下线，但人设、推文、任务、额度流水和其他业务数据都会保留，可由管理员恢复。`)) return;
       try {
         await api(`/api/admin/users/${id}`, { method: "DELETE" });
         await loadUsers();
@@ -4744,6 +6306,8 @@ window.addEventListener("DOMContentLoaded", async () => {
     return;
   }
 
+  await Promise.allSettled([loadMfaStatus(), loadGovernanceDashboard()]);
+
   try {
     await loadRuntime();
     setMsg("runtimeMsg", "");
@@ -4791,6 +6355,9 @@ window.addEventListener("DOMContentLoaded", async () => {
   setInterval(() => {
     void refreshSentimentCookieProfilesIfActive();
   }, SENTIMENT_COOKIE_POLL_INTERVAL_MS);
+  setInterval(() => {
+    if (!document.hidden && adminState.activePage === "overview") void loadGovernanceDashboard({ force: true });
+  }, GOVERNANCE_POLL_INTERVAL_MS);
 });
 
 window.addEventListener("hashchange", () => {
