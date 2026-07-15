@@ -810,6 +810,25 @@ class RegistrationApprovalTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual(int(session_count["count"]), 0)
 
+    def test_admin_pages_promote_verified_legacy_admin_session_cookie(self):
+        login_browser = TestClient(self.app)
+        login = login_browser.post(
+            "/api/auth/admin-login",
+            json={"username": "admin", "password": "admin123secure"},
+        )
+        self.assertEqual(login.status_code, 200, login.text)
+        legacy_admin_token = login_browser.cookies.get("session_token")
+        self.assertTrue(legacy_admin_token)
+
+        stale_browser = TestClient(self.app, cookies={"session_token": legacy_admin_token})
+        page = stale_browser.get("/admin-console.html", follow_redirects=False)
+        self.assertEqual(page.status_code, 200, page.text)
+        self.assertIn(f"admin_session_token={legacy_admin_token}", page.headers.get("set-cookie", ""))
+
+        admin_api = stale_browser.get("/api/me", headers={"X-Admin-Console": "1"})
+        self.assertEqual(admin_api.status_code, 200, admin_api.text)
+        self.assertEqual(admin_api.json()["username"], "admin")
+
     def test_admin_entry_and_page_are_server_side_role_protected(self):
         anonymous = TestClient(self.app)
         admin_entry = anonymous.get("/admin", follow_redirects=False)
@@ -856,6 +875,9 @@ class RegistrationApprovalTests(unittest.TestCase):
         user_admin_page = user.get("/admin.html", follow_redirects=False)
         self.assertEqual(user_admin_page.status_code, 302)
         self.assertEqual(user_admin_page.headers["location"], "/admin")
+        user_admin_console = user.get("/admin-console.html", follow_redirects=False)
+        self.assertEqual(user_admin_console.status_code, 302)
+        self.assertEqual(user_admin_console.headers["location"], "/admin")
         self.assertEqual(user.get("/quick-setup.html", follow_redirects=False).status_code, 404)
         self.assertEqual(user.get("/api/quick_setup/status").status_code, 404)
 

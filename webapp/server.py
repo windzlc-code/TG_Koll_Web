@@ -4300,6 +4300,25 @@ def _html_response_with_versions(filename: str, replacements: dict[str, str] | N
     )
 
 
+def _ensure_admin_cookie_for_verified_admin(
+    response: Response,
+    request: Request,
+    session_token: str | None,
+    admin_session_token: str | None,
+    user: dict[str, Any] | None,
+) -> Response:
+    if admin_session_token or not session_token or not user or not _is_admin(user):
+        return response
+    response.set_cookie(
+        key=ADMIN_SESSION_COOKIE,
+        value=str(session_token),
+        httponly=True,
+        samesite="lax",
+        secure=_session_cookie_secure(request),
+    )
+    return response
+
+
 def _json_script_payload(value: Any) -> str:
     try:
         payload = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
@@ -16899,7 +16918,9 @@ def create_app() -> FastAPI:
                 except HTTPException:
                     return RedirectResponse(url="/admin#users", status_code=302)
         elif _is_admin(user):
-            return RedirectResponse(url="/admin-console.html", status_code=302)
+            response = RedirectResponse(url="/admin-console.html", status_code=302)
+            _ensure_admin_cookie_for_verified_admin(response, request, session_token, admin_session_token, user)
+            return response
         elif int(manage_user_id or 0) > 0:
             raise HTTPException(status_code=403, detail="administrator workspace access required")
         try:
@@ -16918,7 +16939,7 @@ def create_app() -> FastAPI:
         except Exception as exc:
             logger.warning("Failed to build console bootstrap overview: %s", exc)
             console_bootstrap = None
-        return _html_response_with_versions(
+        response = _html_response_with_versions(
             "console.html",
             replacements={
                 "__STYLE_VERSION__": _asset_version("assets", "style.css"),
@@ -16930,9 +16951,12 @@ def create_app() -> FastAPI:
                 "__ADMIN_CONSOLE_SESSION__": "1" if admin_console else "",
             },
         )
+        _ensure_admin_cookie_for_verified_admin(response, request, session_token, admin_session_token, user)
+        return response
 
     @app.get("/admin.html", include_in_schema=False)
     def page_admin(
+        request: Request,
         session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
         admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
     ) -> Response:
@@ -16942,13 +16966,15 @@ def create_app() -> FastAPI:
             return RedirectResponse(url="/admin", status_code=302)
         if not _is_admin(user):
             return RedirectResponse(url="/admin", status_code=302)
-        return _html_response_with_versions(
+        response = _html_response_with_versions(
             "admin.html",
             replacements={
                 "__STYLE_VERSION__": _asset_version("assets", "style.css"),
                 "__ADMIN_JS_VERSION__": _asset_version("assets", "admin.js"),
             },
         )
+        _ensure_admin_cookie_for_verified_admin(response, request, session_token, admin_session_token, user)
+        return response
 
     def _admin_login_page() -> Response:
         return _html_response_with_versions(
@@ -16961,6 +16987,7 @@ def create_app() -> FastAPI:
 
     @app.get("/admin", include_in_schema=False)
     def page_admin_entry(
+        request: Request,
         session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
         admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
     ) -> Response:
@@ -16970,7 +16997,9 @@ def create_app() -> FastAPI:
             return _admin_login_page()
         if not _is_admin(user):
             return _admin_login_page()
-        return RedirectResponse(url="/admin.html#admin-overview", status_code=302)
+        response = RedirectResponse(url="/admin.html#admin-overview", status_code=302)
+        _ensure_admin_cookie_for_verified_admin(response, request, session_token, admin_session_token, user)
+        return response
 
     @app.get("/admin-login.html", include_in_schema=False)
     def page_admin_login_alias() -> RedirectResponse:
