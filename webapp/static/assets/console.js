@@ -16956,7 +16956,7 @@ function setLiveBrowserLayout(layout = "grid") {
 
 function syncLiveBrowserPlaceholders(grid, sessionCount = 0) {
   if (!grid) return;
-  const desiredCount = Math.max(1, Math.min(2, 2 - Number(sessionCount || 0)));
+  const desiredCount = Math.max(0, Math.min(2, 2 - Number(sessionCount || 0)));
   const existing = Array.from(grid.querySelectorAll("[data-live-browser-placeholder]"));
   existing.slice(desiredCount).forEach((node) => node.remove());
   const missingCount = Math.max(0, desiredCount - existing.length);

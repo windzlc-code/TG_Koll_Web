@@ -10127,7 +10127,7 @@ body.persona-touch-dragging .persona-list-card:active {
   max-width: none;
 }
 
-.account-browser-page[data-account-browser-page="browsers"] .live-browser-grid {
+.account-browser-page[data-account-browser-page="browsers"] .live-browser-panel[data-live-browser-view="grid"] .live-browser-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   justify-items: stretch;
 }
@@ -10947,7 +10947,7 @@ body.live-browser-modal-open {
     flex-wrap: wrap;
   }
 
-  .account-browser-page[data-account-browser-page="browsers"] .live-browser-grid {
+  .account-browser-page[data-account-browser-page="browsers"] .live-browser-panel[data-live-browser-view="grid"] .live-browser-grid {
     grid-template-columns: 1fr;
   }
 }

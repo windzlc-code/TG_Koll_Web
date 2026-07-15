@@ -234,6 +234,14 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             assert.strictEqual(first.removed, false);
             assert.strictEqual(second.removed, true);
 
+            syncLiveBrowserPlaceholders(grid, 2);
+            assert.strictEqual(first.removed, true);
+
+            const overflowPlaceholder = {{ removed: false, remove() {{ this.removed = true; }} }};
+            grid.placeholders = [overflowPlaceholder];
+            syncLiveBrowserPlaceholders(grid, 3);
+            assert.strictEqual(overflowPlaceholder.removed, true);
+
             grid.placeholders = [];
             syncLiveBrowserPlaceholders(grid, 0);
             assert.strictEqual((grid.inserted.match(/data-live-browser-placeholder/g) || []).length, 2);
@@ -253,6 +261,15 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             """
         )
         self._run_node(harness)
+
+    def test_live_browser_grid_keeps_two_columns_until_the_mobile_breakpoint(self):
+        desktop_selector = (
+            '.account-browser-page[data-account-browser-page="browsers"] '
+            '.live-browser-panel[data-live-browser-view="grid"] .live-browser-grid'
+        )
+        self.assertGreaterEqual(self.styles.count(desktop_selector), 2)
+        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", self.styles)
+        self.assertIn("grid-template-columns: 1fr;", self.styles)
 
     def test_status_tone_covers_live_detection_and_recovery_states(self):
         harness = textwrap.dedent(
