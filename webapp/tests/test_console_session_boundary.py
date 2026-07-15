@@ -320,8 +320,10 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             const assert = require("assert");
             {self._function_source("statusLabel")}
             {self._function_source("statusTone")}
+            {self._function_source("accountStatusClassNames")}
             assert.strictEqual(statusTone("ready"), "success");
             assert.strictEqual(statusTone("pending_login"), "manual");
+            assert.strictEqual(statusTone("account_confirmation_required"), "manual");
             assert.strictEqual(statusTone("cookie_expired"), "error");
             assert.strictEqual(statusTone("checking"), "active");
             assert.strictEqual(statusTone("browser_launch"), "active");
@@ -329,6 +331,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             assert.strictEqual(statusTone("login_wait_timeout"), "error");
             assert.strictEqual(statusTone("disabled"), "muted");
             assert.strictEqual(statusLabel("need_verification"), "需验证");
+            assert.strictEqual(statusLabel("account_confirmation_required"), "需确认关联账号");
+            assert.strictEqual(accountStatusClassNames("account_confirmation_required"), "account_confirmation_required need_verification");
             assert.strictEqual(statusLabel("preparing"), "准备执行");
             """
         )
@@ -376,10 +380,10 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("!state.currentUser?.is_admin", preflight)
         self.assertIn("return { ready: true, issues: [] }", preflight)
 
-    def test_open_login_defaults_to_automatic_and_expired_toasts_are_not_revived(self):
+    def test_open_login_uses_saved_credentials_and_expired_toasts_are_not_revived(self):
         create_task = self._function_source("createSocialTask")
         toast = self._section("function showToast", "function defaultToastTargetForMessage")
-        self.assertIn('auto_submit: taskType === "open_login" ? true : undefined', create_task)
+        self.assertIn('auto_submit: taskType === "open_login" ? Boolean(selected?.login_password_configured) : undefined', create_task)
         self.assertIn("refreshLiveBrowserSessionsSoon", create_task)
         self.assertIn('existingToast.classList.contains("is-leaving")', toast)
         refresh_start = toast.index("if (isTaskRefresh)")

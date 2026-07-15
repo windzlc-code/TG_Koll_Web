@@ -131,6 +131,27 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertEqual(status["status"], "ready")
 
+    def test_threads_authenticated_session_with_say_more_prompt_is_not_expired(self):
+        page = _ThreadsShellPage(
+            [{"name": "sessionid", "value": "active-session", "domain": ".threads.net"}],
+            body_text="Say more with Threads Continue with Instagram mysticshadowxp214",
+        )
+
+        status = runner._detect_threads_login_state(page)
+
+        self.assertNotEqual(status["status"], "cookie_expired")
+
+    def test_instagram_verification_selfie_requires_manual_verification(self):
+        page = _ThreadsShellPage(
+            [{"name": "sessionid", "value": "active-session", "domain": ".instagram.com"}],
+            body_text="Upload a verification selfie",
+        )
+        page.url = "https://www.instagram.com/accounts/secure/"
+
+        status = runner._detect_instagram_login_state(page)
+
+        self.assertEqual(status["status"], "need_verification")
+
     def test_instagram_unknown_page_without_session_is_not_ready(self):
         page = _ThreadsShellPage([])
         page.url = "https://www.instagram.com/"
@@ -202,6 +223,49 @@ class RunnerPublishSafetyTests(unittest.TestCase):
     def test_default_login_self_heal_attempts_allow_multiple_page_recoveries(self):
         self.assertGreaterEqual(runner.DEFAULT_LOGIN_SELF_HEAL_ATTEMPTS, 4)
 
+    def test_generic_persistent_context_timeout_does_not_rebuild_profile(self):
+        error = RuntimeError("Timeout 30000ms exceeded while launch_persistent_context")
+
+        self.assertFalse(runner._should_rebuild_profile_after_launch_error(error))
+
+    def test_human_click_relocates_after_first_click_failure_without_mouse_coordinates(self):
+        page = mock.Mock()
+        page.viewport_size = {"width": 1600, "height": 900}
+        locator = mock.Mock()
+        locator.bounding_box.return_value = {"x": 100, "y": 200, "width": 120, "height": 40}
+        locator.click.side_effect = [RuntimeError("layout shifted"), None]
+
+        with mock.patch.object(runner, "_sleep_between"):
+            clicked = runner._human_click(page, locator, _Logger(), "stable_login_click")
+
+        self.assertTrue(clicked)
+        self.assertEqual(locator.click.call_count, 2)
+        locator.wait_for.assert_any_call(state="visible", timeout=5000)
+        page.mouse.click.assert_not_called()
+
+    def test_live_browser_viewport_records_actual_geometry_without_resizing_page(self):
+        page = mock.Mock()
+        page.evaluate.return_value = {
+            "screenX": 0,
+            "screenY": 0,
+            "outerWidth": 1600,
+            "outerHeight": 900,
+            "innerWidth": 1600,
+            "innerHeight": 810,
+            "devicePixelRatio": 1,
+        }
+        control = {
+            "live_browser_session_id": "live-1",
+            "live_browser_width": 1600,
+            "live_browser_height": 900,
+        }
+
+        runner._sync_live_browser_viewport(page, control, _Logger())
+
+        page.set_viewport_size.assert_not_called()
+        self.assertEqual(control["live_browser_viewport_width"], 1600)
+        self.assertEqual(control["live_browser_viewport_height"], 810)
+
     def test_threads_feed_text_with_challenge_word_is_not_verification(self):
         page = _ThreadsShellPage(
             [{"name": "sessionid", "value": "active-session", "domain": ".threads.net"}],
@@ -225,27 +289,33 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertEqual(status["status"], "need_verification")
         detect_instagram.assert_called_once_with(page)
 
-    def test_threads_auto_login_starts_at_instagram_login(self):
+    def test_threads_auto_login_checks_existing_session_before_instagram_login(self):
         page = mock.Mock()
-        page.url = "https://www.instagram.com/challenge/"
+        page.url = runner.THREADS_HOME
         with (
             mock.patch.object(runner, "_goto") as goto,
-            mock.patch.object(runner, "_detect_platform_login_state", return_value={"status": "need_verification"}),
-            mock.patch.object(runner, "_screenshot", return_value="verification.png"),
-            mock.patch.object(runner, "_wait_or_raise_manual", return_value={"status": "need_verification"}),
+            mock.patch.object(runner, "_detect_platform_login_state", return_value={"status": "ready"}) as detect,
+            mock.patch.object(runner, "_confirm_platform_ready", return_value={"status": "ready"}),
+            mock.patch.object(runner, "_screenshot", return_value="login-complete.png"),
         ):
             result = runner._run_open_login(
                 page,
-                {"id": "threads-auto-entry"},
+                {"id": "threads-existing-session"},
                 {},
-                {"login_wait_seconds": 30, "auto_submit": True},
+                {
+                    "login_wait_seconds": 30,
+                    "auto_submit": True,
+                    "login_username": "saved-user",
+                    "login_password": "saved-password",
+                },
                 Path("."),
                 _Logger(),
                 "threads",
             )
 
-        self.assertEqual(result["status"], "need_verification")
-        goto.assert_called_once_with(page, runner.INSTAGRAM_LOGIN, mock.ANY, "open_login")
+        self.assertEqual(result["status"], "ready")
+        detect.assert_called()
+        self.assertNotIn(runner.INSTAGRAM_LOGIN, [call.args[1] for call in goto.call_args_list])
 
     def test_manual_login_does_not_auto_heal_or_navigate_the_user_page(self):
         page = mock.Mock()
@@ -287,7 +357,12 @@ class RunnerPublishSafetyTests(unittest.TestCase):
                 page,
                 {"id": "auto-to-manual"},
                 {},
-                {"login_wait_seconds": 30, "auto_submit": True},
+                {
+                    "login_wait_seconds": 30,
+                    "auto_submit": True,
+                    "login_username": "saved-user",
+                    "login_password": "saved-password",
+                },
                 Path("."),
                 _Logger(),
                 "threads",
@@ -359,6 +434,8 @@ class RunnerPublishSafetyTests(unittest.TestCase):
                     {
                         "login_wait_seconds": 30,
                         "auto_submit": True,
+                        "login_username": "saved-user",
+                        "login_password": "saved-password",
                         "submit_grace_seconds": 30,
                     },
                     Path("."),
@@ -462,6 +539,8 @@ class RunnerPublishSafetyTests(unittest.TestCase):
                 {
                     "login_wait_seconds": 30,
                     "auto_submit": True,
+                    "login_username": "saved-user",
+                    "login_password": "saved-password",
                     "max_login_attempts": 1,
                     "max_self_heal_attempts": 0,
                 },

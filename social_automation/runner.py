@@ -235,6 +235,14 @@ class _BrowserContextManager:
             "headless": headless,
             "humanize": float(os.getenv("SOCIAL_AUTOMATION_HUMANIZE_MAX_SECONDS", "0.5")),
         }
+        if self.live_session is not None:
+            # Keep the native browser window aligned with the Xvnc framebuffer.
+            # Camoufox otherwise generates a random outer window geometry which
+            # can be restored by a persistent profile on the next launch.
+            kwargs["window"] = (
+                int(getattr(self.live_session, "width", 1600) or 1600),
+                int(getattr(self.live_session, "height", 900) or 900),
+            )
         if proxy_config:
             kwargs["proxy"] = proxy_config
             kwargs["geoip"] = True
@@ -422,6 +430,18 @@ def _cleanup_stale_profile_locks(profile_dir: Path, logger: AutomationLogger) ->
         if not path.exists():
             continue
         try:
+            age_seconds = max(0.0, time.time() - path.stat().st_mtime)
+        except Exception:
+            age_seconds = 0.0
+        if name != ".startup-incomplete" or age_seconds < 600:
+            logger.log(
+                "warn",
+                "profile_lock_present",
+                "检测到浏览器配置锁；为保护当前登录会话，未自动删除。",
+                {"path": str(path), "age_seconds": round(age_seconds, 1)},
+            )
+            continue
+        try:
             path.unlink()
             removed.append(name)
         except PermissionError:
@@ -434,7 +454,16 @@ def _cleanup_stale_profile_locks(profile_dir: Path, logger: AutomationLogger) ->
 
 def _should_rebuild_profile_after_launch_error(exc: Exception) -> bool:
     text = str(exc).lower()
-    return "timeout" in text and "launch_persistent_context" in text
+    # A generic launch timeout can be caused by a slow X11/browser startup and
+    # is not evidence that the persistent profile is corrupt. Rebuilding on a
+    # timeout silently replaces a valid logged-in profile with an empty one.
+    corruption_markers = (
+        "profile is corrupt",
+        "profile cannot be loaded",
+        "corrupt profile",
+        "invalid profile",
+    )
+    return any(marker in text for marker in corruption_markers)
 
 
 def _quarantine_profile_dir(profile_dir: Path, logger: AutomationLogger) -> Path | None:
@@ -557,15 +586,34 @@ def _sync_live_browser_viewport(page, context_control: dict[str, Any] | None, lo
         return
     width = _safe_int(context_control.get("live_browser_width"), 1600)
     height = _safe_int(context_control.get("live_browser_height"), 900)
-    viewport = {
-        "width": max(1024, width),
-        "height": max(640, height - 90),
-    }
+    expected = {"width": max(1024, width), "height": max(640, height)}
     try:
-        page.set_viewport_size(viewport)
-        logger.log("info", "live_browser_viewport", "已同步实时监控窗口尺寸。", viewport)
+        geometry = page.evaluate(
+            """() => ({
+                screenX: window.screenX,
+                screenY: window.screenY,
+                outerWidth: window.outerWidth,
+                outerHeight: window.outerHeight,
+                innerWidth: window.innerWidth,
+                innerHeight: window.innerHeight,
+                devicePixelRatio: window.devicePixelRatio
+            })"""
+        )
+        context_control["live_browser_viewport_width"] = int(geometry.get("innerWidth") or 0)
+        context_control["live_browser_viewport_height"] = int(geometry.get("innerHeight") or 0)
+        logger.log(
+            "info",
+            "live_browser_viewport",
+            "已固定实时监控浏览器外框并记录页面坐标系。",
+            {"framebuffer": expected, "geometry": geometry},
+        )
     except Exception as exc:
-        logger.log("warn", "live_browser_viewport_failed", "实时监控窗口尺寸同步失败，任务继续执行。", {"error": str(exc), "viewport": viewport})
+        logger.log(
+            "warn",
+            "live_browser_viewport_failed",
+            "实时监控窗口坐标系读取失败；已停止强制调整页面尺寸。",
+            {"error": str(exc), "framebuffer": expected},
+        )
 
 
 def _safe_int(value: Any, fallback: int) -> int:
@@ -731,7 +779,17 @@ def _human_click(
     if not box:
         locator.click(timeout=10000)
         return True
-    viewport = page.viewport_size or {"width": 1280, "height": 720}
+    viewport = page.viewport_size
+    if not viewport:
+        try:
+            measured = page.evaluate("() => ({ width: window.innerWidth, height: window.innerHeight })")
+            viewport = {
+                "width": int(measured.get("width") or 0),
+                "height": int(measured.get("height") or 0),
+            }
+        except Exception:
+            viewport = None
+    viewport = viewport or {"width": 1280, "height": 720}
     if box["y"] < 0 or box["y"] + box["height"] > viewport["height"] or box["x"] < 0 or box["x"] + box["width"] > viewport["width"]:
         locator.scroll_into_view_if_needed(timeout=5000)
         _sleep_between(0.2, 0.5)
@@ -744,22 +802,22 @@ def _human_click(
     rel_x = random.uniform(box["width"] * 0.25, box["width"] * 0.75)
     rel_y = random.uniform(box["height"] * 0.25, box["height"] * 0.75)
     logger.log("debug", stage, "正在点击目标元素。", {"x": round(box["x"] + rel_x, 1), "y": round(box["y"] + rel_y, 1)})
-    abs_x = box["x"] + rel_x
-    abs_y = box["y"] + rel_y
     if abort_if is not None and abort_if():
         return False
     try:
         locator.click(position={"x": rel_x, "y": rel_y}, timeout=5000)
         return True
     except Exception as exc:
-        logger.log("warn", f"{stage}_locator_click_failed", "目标元素常规点击超时，改用坐标点击兜底。", {"error": str(exc)[:500]})
+        logger.log("warn", f"{stage}_locator_click_failed", "目标元素点击超时，正在重新定位后重试。", {"error": str(exc)[:500]})
     try:
         if abort_if is not None and abort_if():
             return False
-        page.mouse.click(abs_x, abs_y, delay=random.randint(60, 180))
+        locator.wait_for(state="visible", timeout=5000)
+        locator.scroll_into_view_if_needed(timeout=5000)
+        locator.click(timeout=10000)
         return True
     except Exception as exc:
-        logger.log("warn", f"{stage}_mouse_click_failed", "目标元素坐标点击失败，改用 DOM 点击兜底。", {"error": str(exc)[:500]})
+        logger.log("warn", f"{stage}_locator_retry_failed", "重新定位点击失败，改用目标元素 DOM 点击兜底。", {"error": str(exc)[:500]})
     if abort_if is not None and abort_if():
         return False
     locator.evaluate("(node) => node.click()")
@@ -830,7 +888,7 @@ def _detect_instagram_login_state(page) -> dict[str, Any]:
         return {"status": "need_verification", "reason": "Instagram 需要输入验证码。", "url": url}
     body_text = ""
     try:
-        body_text = page.locator("body").inner_text(timeout=5000).lower()
+        body_text = str(page.locator("body").inner_text(timeout=5000) or "").lower()
     except Exception:
         pass
     invalid_markers = [
@@ -886,7 +944,7 @@ def _detect_threads_login_state(page) -> dict[str, Any]:
         return {"status": "need_verification", "reason": "Threads/Instagram 需要输入验证码。", "url": url}
     body_text = ""
     try:
-        body_text = page.locator("body").inner_text(timeout=5000).lower()
+        body_text = str(page.locator("body").inner_text(timeout=5000) or "").lower()
     except Exception:
         pass
     transient_error_markers = [
@@ -904,16 +962,35 @@ def _detect_threads_login_state(page) -> dict[str, Any]:
         }
     if any(marker in body_text for marker in _verification_text_markers()):
         return {"status": "need_verification", "reason": "检测到验证码或安全挑战文案。", "url": url}
+    if any(marker in body_text for marker in ("say more with threads", "continue with instagram")):
+        return {
+            "status": "account_confirmation_required",
+            "reason": "Threads 已识别关联账号，等待确认继续使用该账号。",
+            "url": url,
+        }
     if "/login" in url:
         return {"status": "cookie_expired", "reason": "检测到 Threads 登录页面。", "url": url}
-    login_prompt_selectors = [
-        'text="Log in or sign up for Threads"',
+    account_confirmation_selectors = [
         'text="Continue with Instagram"',
-        'text="Log in with username instead"',
         'text="Say more with Threads"',
         '[role="dialog"] >> text="Continue with Instagram"',
         'button:has-text("Continue with Instagram")',
         'a:has-text("Continue with Instagram")',
+    ]
+    for selector in account_confirmation_selectors:
+        try:
+            loc = page.locator(selector).first
+            if loc.count() and loc.is_visible(timeout=1500):
+                return {
+                    "status": "account_confirmation_required",
+                    "reason": "Threads 已识别关联账号，等待确认继续使用该账号。",
+                    "url": url,
+                }
+        except Exception:
+            continue
+    login_prompt_selectors = [
+        'text="Log in or sign up for Threads"',
+        'text="Log in with username instead"',
     ]
     for selector in login_prompt_selectors:
         try:
@@ -934,7 +1011,7 @@ def _detect_threads_login_state(page) -> dict[str, Any]:
         pass
     body_text = ""
     try:
-        body_text = page.locator("body").inner_text(timeout=5000).lower()
+        body_text = str(page.locator("body").inner_text(timeout=5000) or "").lower()
     except Exception:
         pass
     invalid_markers = [
@@ -1038,6 +1115,11 @@ def _verification_text_markers() -> list[str]:
         "security challenge",
         "verify your account",
         "help us confirm",
+        "upload a verification selfie",
+        "verification selfie",
+        "video selfie",
+        "take a selfie video",
+        "identity confirmation",
         "验证码",
         "两步验证",
         "双重验证",
@@ -1255,9 +1337,15 @@ def _run_open_login(
     cancel_event: Any | None = None,
     context_control: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    auto_submit = bool(payload.get("auto_submit") or payload.get("login_password") or payload.get("password"))
-    start_url = INSTAGRAM_LOGIN if platform == "threads" and auto_submit else _platform_home(platform)
-    _goto(page, start_url, logger, "open_login")
+    login_username = str(payload.get("login_username") or payload.get("username") or "").strip()
+    login_password = str(payload.get("login_password") or payload.get("password") or "").strip()
+    has_credentials = bool(login_username and login_password)
+    requested_auto_submit = payload.get("auto_submit")
+    auto_submit = has_credentials if requested_auto_submit is None else bool(requested_auto_submit) and has_credentials
+    # Detect the persistent Threads/Instagram session before navigating to any
+    # login URL. This preserves a valid session and lets account-confirmation
+    # prompts continue without clearing or retyping credentials.
+    _goto(page, _platform_home(platform), logger, "open_login")
     wait_seconds = int(payload.get("login_wait_seconds") or os.getenv("SOCIAL_AUTOMATION_LOGIN_WAIT_SECONDS", "3600"))
     wait_seconds = max(30, min(wait_seconds, 3600))
     max_login_attempts = _int_payload_or_env(payload, "max_login_attempts", "SOCIAL_AUTOMATION_LOGIN_MAX_ATTEMPTS", 2, 1, 8)
@@ -1326,6 +1414,23 @@ def _run_open_login(
                     )
                     return {"ok": True, "status": "ready", "screenshot_path": shot, "details": stable_status}
                 last_status = stable_status
+            if platform == "threads" and last_status.get("status") == "account_confirmation_required":
+                continued = _click_text_button(
+                    page,
+                    logger,
+                    ["Continue with Instagram", "Log in with Instagram", "继续使用 Instagram", "使用 Instagram 继续"],
+                    "threads_account_confirmation",
+                    abort_if=lambda: _manual_takeover_requested(context_control),
+                )
+                logger.log(
+                    "info" if continued else "warn",
+                    "threads_account_confirmation",
+                    "Threads 关联账号确认流程已处理。" if continued else "Threads 关联账号确认按钮尚不可用，页面保持原状。",
+                    {"clicked": continued, "url": str(page.url or "")},
+                )
+                if continued:
+                    _sleep_between(1.5, 3.0)
+                    continue
             if _verification_visible(page):
                 verification_hits += 1
                 _request_manual_takeover(context_control)
@@ -2220,11 +2325,9 @@ def _click_text_button(
         locators = [
             page.get_by_role("button", name=name).first,
             page.get_by_text(name, exact=True).first,
-            page.get_by_text(name, exact=False).first,
             page.locator(f'button:has-text("{name}")').first,
             page.locator(f'a:has-text("{name}")').first,
             page.locator(f'[role="button"]:has-text("{name}")').first,
-            page.locator(f'div:has-text("{name}")').filter(has=page.locator("img, svg, [aria-label], span")).first,
             page.locator(f'[aria-label="{name}"]').first,
         ]
         for loc in locators:
@@ -2243,17 +2346,16 @@ def _click_text_button(
             clicked = page.evaluate(
                 """label => {
                     const wanted = String(label || '').trim().toLowerCase();
-                    const candidates = Array.from(document.querySelectorAll('button, a, [role="button"], div, span'));
+                    const candidates = Array.from(document.querySelectorAll('button, a, [role="button"]'));
                     for (const node of candidates) {
                         const text = String(node.innerText || node.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
-                        if (!text || !text.includes(wanted)) continue;
+                        if (!text || text !== wanted) continue;
                         const rect = node.getBoundingClientRect();
                         if (rect.width <= 0 || rect.height <= 0) continue;
                         const style = window.getComputedStyle(node);
                         if (style.visibility === 'hidden' || style.display === 'none' || style.pointerEvents === 'none') continue;
-                        const clickable = node.closest('button, a, [role="button"]') || node;
-                        clickable.scrollIntoView({block: 'center', inline: 'center'});
-                        clickable.click();
+                        node.scrollIntoView({block: 'center', inline: 'center'});
+                        node.click();
                         return true;
                     }
                     return false;
@@ -2495,13 +2597,18 @@ def _verification_visible(page) -> bool:
         "challenge",
         "verify your account",
         "help us confirm",
+        "upload a verification selfie",
+        "verification selfie",
+        "video selfie",
+        "take a selfie video",
+        "identity confirmation",
         "验证码",
         "验证提示",
         "安全码",
         "安全提示",
     ]
     try:
-        text = page.locator("body").inner_text(timeout=3000).lower()
+        text = str(page.locator("body").inner_text(timeout=3000) or "").lower()
     except Exception:
         text = ""
     return any(marker in text for marker in markers)

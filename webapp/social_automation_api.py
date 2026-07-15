@@ -99,7 +99,15 @@ def clear_trusted_batch_task(payload: Any) -> None:
 def _consume_trusted_batch_task(payload: Any) -> dict[str, Any]:
     with _TRUSTED_BATCH_TASK_CONTEXTS_LOCK:
         return dict(_TRUSTED_BATCH_TASK_CONTEXTS.pop(id(payload), {}) or {})
-SOCIAL_ACCOUNT_STATUSES = {"pending_login", "ready", "need_verification", "cookie_expired", "transient_error", "disabled"}
+SOCIAL_ACCOUNT_STATUSES = {
+    "pending_login",
+    "ready",
+    "account_confirmation_required",
+    "need_verification",
+    "cookie_expired",
+    "transient_error",
+    "disabled",
+}
 SOCIAL_TASK_STATUSES = {"preparing", "queued", "running", "success", "failed", "cancelled", "need_manual"}
 SOCIAL_MEDIA_EXTENSIONS = {
     ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif",
@@ -532,7 +540,6 @@ def register_social_automation_routes(app: FastAPI) -> None:
         task_payload = body.get("payload") if isinstance(body.get("payload"), dict) else body
         task_payload = dict(task_payload or {})
         _validate_open_login_payload(task_payload)
-        task_payload["auto_submit"] = True
         _validate_user_task_media_paths(task_payload, user)
         task_payload.setdefault("login_wait_seconds", wait_seconds)
         return {"ok": True, "task": create_account_task(account_id, "open_login", task_payload)}
@@ -2381,6 +2388,7 @@ def delete_social_account(account_id: str) -> int:
 def _account_dedupe_rank(row: Any) -> tuple[int, int]:
     status_rank = {
         "ready": 5,
+        "account_confirmation_required": 4,
         "need_verification": 4,
         "pending_login": 3,
         "cookie_expired": 2,
@@ -2477,7 +2485,6 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
     task_payload = dict(payload.payload or {})
     if task_type == "open_login":
         _validate_open_login_payload(task_payload)
-        task_payload["auto_submit"] = True
         task_payload["wait_for_manual"] = True
     auto_submit = _validate_open_login_payload(task_payload) if task_type == "open_login" else False
     now = _now()

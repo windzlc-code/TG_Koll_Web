@@ -224,6 +224,15 @@ def test_invalid_or_damaged_open_login_payload_fails_closed():
     }) is False
 
 
+def test_account_confirmation_status_is_allowed_and_ranked_for_account_updates():
+    assert "account_confirmation_required" in social_automation_api.SOCIAL_ACCOUNT_STATUSES
+    assert social_automation_api._account_dedupe_rank({
+        "status": "account_confirmation_required",
+        "updated_at": 42,
+        "created_at": 1,
+    }) == (4, 42)
+
+
 def _security_test_client() -> TestClient:
     app = FastAPI()
     social_automation_api.register_social_automation_routes(app)
@@ -248,7 +257,7 @@ def test_open_login_http_rejects_non_boolean_auto_submit(auto_submit):
 
 
 @pytest.mark.parametrize("payload", [{}, {"auto_submit": False}, {"auto_submit": True}])
-def test_open_login_http_always_starts_automatic_mode(payload):
+def test_open_login_http_preserves_requested_submit_mode(payload):
     client = _security_test_client()
     with (
         mock.patch.object(social_automation_api, "_require_account_access"),
@@ -265,7 +274,10 @@ def test_open_login_http_always_starts_automatic_mode(payload):
 
     assert response.status_code == 200
     submitted = create_task.call_args.args[2]
-    assert submitted["auto_submit"] is True
+    if "auto_submit" in payload:
+        assert submitted["auto_submit"] is payload["auto_submit"]
+    else:
+        assert "auto_submit" not in submitted
 
 
 def test_live_browser_mode_endpoint_requests_manual_takeover():

@@ -1740,6 +1740,7 @@ function statusLabel(status) {
     cancelled: "已取消",
     need_manual: "需人工",
     pending_login: "待登录",
+    account_confirmation_required: "需确认关联账号",
     need_verification: "需验证",
     cookie_expired: "登录已过期",
     transient_error: "登录页面异常",
@@ -1765,7 +1766,7 @@ function statusTone(status) {
   if (["success", "ready", "standby"].includes(key)) return "success";
   if (["failed", "error", "cookie_expired", "transient_error", "login_wait_timeout"].includes(key)) return "error";
   if (["queued", "scheduled", "pending"].includes(key)) return "queued";
-  if (["need_manual", "pending_login", "need_verification"].includes(key)) return "manual";
+  if (["need_manual", "pending_login", "account_confirmation_required", "need_verification"].includes(key)) return "manual";
   if (["running", "checking", "browser_launch", "prepare", "preparing", "progress"].includes(key)) return "active";
   if (["cancelled", "disabled", "unknown"].includes(key)) return "muted";
   return "muted";
@@ -1777,12 +1778,29 @@ function renderStatusText(status, { className = "" } = {}) {
   return `<span class="${esc(classes)}">${esc(statusLabel(key))}</span>`;
 }
 
+function accountLastLoginCheckLabel(account) {
+  if (!account) return "上次检测：未知 · 尚未检测";
+  const status = String(account.status || "unknown").trim();
+  const checkedAt = Number(account.last_login_check_at || 0);
+  const checkedDate = checkedAt > 0 ? new Date(checkedAt * 1000) : null;
+  const checkedTime = checkedDate && !Number.isNaN(checkedDate.getTime())
+    ? checkedDate.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })
+    : "尚未检测";
+  return `上次检测：${statusLabel(status)} · ${checkedTime}`;
+}
+
+function accountStatusClassNames(status) {
+  const key = String(status || "unknown").trim();
+  return key === "account_confirmation_required" ? `${key} need_verification` : key;
+}
+
 function renderAccountStatusChip(account, { emptyLabel = "未选择" } = {}) {
   if (!account) return `<span class="task-status-text is-muted account-status-chip">${esc(emptyLabel)}</span>`;
   const accountId = String(account.id || "");
   const key = String(account.status || "unknown").trim();
   const classes = ["task-status-text", `is-${statusTone(key)}`, "account-status-chip"].join(" ");
-  return `<span class="${esc(classes)}" data-account-status-for="${esc(accountId)}">${esc(statusLabel(key))}</span>`;
+  const label = accountLastLoginCheckLabel(account);
+  return `<span class="${esc(classes)}" data-account-status-for="${esc(accountId)}" title="${esc(label)}">${esc(label)}</span>`;
 }
 
 function renderAccountFieldHead(label, account, options = {}) {
@@ -3382,6 +3400,7 @@ function publishAccountBlockMessage(account) {
   const status = String(account?.status || "").trim().toLowerCase();
   if (status === "cookie_expired") return "当前发布账号登录已过期，提交发布后系统会自动打开浏览器执行登录流程。";
   if (status === "pending_login") return "当前发布账号还未完成登录，提交发布后系统会自动打开浏览器执行登录流程。";
+  if (status === "account_confirmation_required") return "当前发布账号已识别登录资料，但仍需确认关联账号后才能继续。";
   if (status === "need_verification") return "当前发布账号需要验证，提交发布后系统会自动打开浏览器并等待处理。";
   if (status === "disabled") return "当前发布账号已停用，请到账号管理自动化启用或更换账号后再发布。";
   return "当前发布账号将由系统在发布流程中自动检测登录状态。";
@@ -4043,6 +4062,7 @@ function accountOptionKey(account) {
 function accountStatusRank(status) {
   const value = String(status || "").trim().toLowerCase();
   if (value === "ready") return 5;
+  if (value === "account_confirmation_required") return 4;
   if (value === "need_verification") return 4;
   if (value === "pending_login") return 3;
   if (value === "cookie_expired") return 2;
@@ -14882,9 +14902,11 @@ function updateAccountStatusViews() {
     const account = accountById.get(String(node.dataset.accountStatusFor || ""));
     const status = String(account?.status || "unknown").trim();
     node.className = node.classList.contains("status")
-      ? `status ${status}`
+      ? `status ${accountStatusClassNames(status)}`
       : `task-status-text is-${statusTone(status)} account-status-chip`;
-    node.textContent = statusLabel(status);
+    const label = accountLastLoginCheckLabel(account);
+    node.textContent = label;
+    node.title = label;
   });
   ["simpleAccount", "socialAccount", "personaAutoAccount", "personaPublishAccountSelect"].forEach((id) => {
     const select = $(id);
@@ -15166,7 +15188,7 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
         <div class="account-pool-card-main">
           <span class="account-pool-card-copy">
             <strong>${esc(accountDisplayName(account))}</strong>
-            <span class="account-pool-card-subline"><small>${esc(platformLabel(account.platform || "threads"))}</small><span class="status ${esc(account.status)}" data-account-status-for="${esc(accountId)}">${esc(statusLabel(account.status))}</span></span>
+            <span class="account-pool-card-subline"><small>${esc(platformLabel(account.platform || "threads"))}</small><span class="status ${esc(accountStatusClassNames(account.status))}" data-account-status-for="${esc(accountId)}" title="${esc(accountLastLoginCheckLabel(account))}">${esc(accountLastLoginCheckLabel(account))}</span></span>
           </span>
         </div>
         <div class="persona-account-summary-meta" aria-label="账号重要信息">
@@ -15184,7 +15206,7 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
       <div class="account-pool-card-main">
         <span class="account-pool-card-copy">
           <strong>${esc(accountDisplayName(account))}</strong>
-          <span class="account-pool-card-subline"><small>${esc(platformLabel(account.platform || "threads"))}</small><span class="status ${esc(account.status)}" data-account-status-for="${esc(accountId)}">${esc(statusLabel(account.status))}</span></span>
+          <span class="account-pool-card-subline"><small>${esc(platformLabel(account.platform || "threads"))}</small><span class="status ${esc(accountStatusClassNames(account.status))}" data-account-status-for="${esc(accountId)}" title="${esc(accountLastLoginCheckLabel(account))}">${esc(accountLastLoginCheckLabel(account))}</span></span>
         </span>
       </div>
       <div class="persona-account-inline-fields" aria-label="账号资料">
@@ -15211,7 +15233,7 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
         <strong title="${esc(account.username || accountId)}">${esc(account.username || accountId)}</strong>
         <small>${esc(account.display_name && account.display_name !== account.username ? account.display_name : platformLabel(account.platform || "threads"))}</small>
       </span>
-      <span class="status ${esc(account.status)}" data-account-status-for="${esc(accountId)}">${esc(statusLabel(account.status))}</span>
+      <span class="status ${esc(accountStatusClassNames(account.status))}" data-account-status-for="${esc(accountId)}" title="${esc(accountLastLoginCheckLabel(account))}">${esc(accountLastLoginCheckLabel(account))}</span>
     </div>
     <strong class="account-pool-bound-persona ${persona ? "is-bound" : "is-unbound"}" title="${esc(persona ? `已绑定：${persona.name || persona.id}` : "未绑定人设")}">${esc(persona ? `已绑定：${persona.name || persona.id}` : "未绑定人设")}</strong>
     <div class="account-card-meta">
@@ -17721,7 +17743,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
         target_url: targetUrl,
         post_url: targetUrl,
         username: taskType === "browse_profile" ? targetUrl : "",
-        auto_submit: taskType === "open_login" ? true : undefined,
+        auto_submit: taskType === "open_login" ? Boolean(selected?.login_password_configured) : undefined,
         media_paths: mediaPaths,
         target_urls: splitLines($("simpleTargetUrls")?.value || $("socialTargetUrls")?.value || ""),
         login_wait_seconds: loginWaitSeconds,
@@ -17778,7 +17800,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
       target_url: targetUrl,
       post_url: targetUrl,
       username: taskType === "browse_profile" ? targetUrl : "",
-      auto_submit: taskType === "open_login" ? true : undefined,
+      auto_submit: taskType === "open_login" ? Boolean(selected?.login_password_configured) : undefined,
       media_paths: mediaPaths,
       target_urls: splitLines($("simpleTargetUrls")?.value || $("socialTargetUrls")?.value || ""),
       login_wait_seconds: loginWaitSeconds,
