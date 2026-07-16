@@ -64,6 +64,7 @@ class BillingApiClosedLoopTests(unittest.TestCase):
         )
         self.assertEqual(customer_login.status_code, 200, customer_login.text)
         self.assertEqual(admin_login.status_code, 200, admin_login.text)
+        self.admin.headers["X-Admin-Console"] = "1"
 
     def tearDown(self):
         self.customer.close()

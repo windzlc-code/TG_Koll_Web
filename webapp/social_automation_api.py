@@ -563,7 +563,15 @@ def register_social_automation_routes(app: FastAPI) -> None:
         body = payload if isinstance(payload, dict) else {}
         task_payload = body.get("payload") if isinstance(body.get("payload"), dict) else body
         _validate_user_task_media_paths(task_payload, user)
-        return {"ok": True, "task": create_account_task(account_id, "check_login", task_payload)}
+        return {
+            "ok": True,
+            "task": create_account_task(
+                account_id,
+                "check_login",
+                task_payload,
+                billing_admin_waived=_billing_admin_waived(user),
+            ),
+        }
 
     @app.post("/api/persona_dashboard/automation/accounts/{account_id}/open_login")
     def api_social_account_open_login(
@@ -586,7 +594,15 @@ def register_social_automation_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=409, detail="请先保存登录账号和密码，再打开自动登录")
         task_payload["auto_submit"] = True
         task_payload.setdefault("login_wait_seconds", wait_seconds)
-        return {"ok": True, "task": create_account_task(account_id, "open_login", task_payload)}
+        return {
+            "ok": True,
+            "task": create_account_task(
+                account_id,
+                "open_login",
+                task_payload,
+                billing_admin_waived=_billing_admin_waived(user),
+            ),
+        }
 
     @app.get("/api/persona_dashboard/automation/proxies")
     def api_social_proxies(user: dict[str, Any] = Depends(get_current_user)):
@@ -2959,7 +2975,13 @@ def dedupe_social_accounts(*, user_id: int | None = None) -> dict[str, Any]:
     }
 
 
-def create_account_task(account_id: str, task_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+def create_account_task(
+    account_id: str,
+    task_type: str,
+    payload: dict[str, Any],
+    *,
+    billing_admin_waived: bool = False,
+) -> dict[str, Any]:
     with db() as conn:
         account = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (account_id,)).fetchone()
     if not account:
@@ -2973,7 +2995,8 @@ def create_account_task(account_id: str, task_type: str, payload: dict[str, Any]
             payload=payload,
             priority=20 if task_type in {"check_login", "open_login"} else 50,
             max_retries=0,
-        )
+        ),
+        billing_admin_waived=bool(billing_admin_waived),
     )
 
 

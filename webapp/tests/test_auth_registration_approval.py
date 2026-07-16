@@ -61,13 +61,17 @@ class RegistrationApprovalTests(unittest.TestCase):
 
     def admin_step_up(self, admin: TestClient, reason: str = "security regression") -> dict[str, str]:
         if not self._admin_mfa_secret:
-            setup = admin.post("/api/auth/mfa/setup", headers={"Origin": "http://testserver"}, json={"current_password": "admin123secure"})
+            setup = admin.post(
+                "/api/auth/mfa/setup",
+                headers={"Origin": "http://testserver", "X-Admin-Console": "1"},
+                json={"current_password": "admin123secure"},
+            )
             self.assertEqual(setup.status_code, 200, setup.text)
             self._admin_mfa_secret = str(setup.json()["secret"])
             self._admin_recovery_codes = [str(code) for code in setup.json()["recovery_codes"]]
             verified = admin.post(
                 "/api/auth/mfa/verify-setup",
-                headers={"Origin": "http://testserver"},
+                headers={"Origin": "http://testserver", "X-Admin-Console": "1"},
                 json={"code": governance.totp_code(self._admin_mfa_secret)},
             )
             self.assertEqual(verified.status_code, 200, verified.text)
@@ -298,7 +302,7 @@ class RegistrationApprovalTests(unittest.TestCase):
         user_id = applied.json()["id"]
 
         admin = TestClient(self.app)
-        admin_login = admin.post("/api/auth/login", json={"username": "admin", "password": "admin123secure"})
+        admin_login = admin.post("/api/auth/admin-login", json={"username": "admin", "password": "admin123secure"})
         self.assertEqual(admin_login.status_code, 200)
         self.assertTrue(admin_login.json()["is_admin"])
 
@@ -767,6 +771,13 @@ class RegistrationApprovalTests(unittest.TestCase):
         self.assertEqual(rejected_admin.status_code, 403)
         self.assertNotIn("session_token", wrong_admin_entry.cookies)
 
+        rejected_legacy_admin = wrong_admin_entry.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "admin123secure"},
+        )
+        self.assertEqual(rejected_legacy_admin.status_code, 403)
+        self.assertNotIn("admin_session_token", wrong_admin_entry.cookies)
+
         wrong_user_entry = TestClient(self.app)
         rejected_user = wrong_user_entry.post(
             "/api/auth/admin-login",
@@ -837,14 +848,14 @@ class RegistrationApprovalTests(unittest.TestCase):
         self.assertEqual(browser.get("/api/me").json()["username"], "guest001")
         self.assertEqual(browser.get("/api/me", headers={"X-Admin-Console": "1"}).status_code, 401)
 
-    def test_admin_logout_revokes_legacy_and_admin_sessions(self):
+    def test_admin_login_uses_only_admin_cookie_and_logout_revokes_it(self):
         browser = TestClient(self.app)
         login = browser.post(
             "/api/auth/admin-login",
             json={"username": "admin", "password": "admin123secure"},
         )
         self.assertEqual(login.status_code, 200, login.text)
-        self.assertTrue(browser.cookies.get("session_token"))
+        self.assertIsNone(browser.cookies.get("session_token"))
         self.assertTrue(browser.cookies.get("admin_session_token"))
 
         logout = browser.post("/api/auth/logout", headers={"X-Admin-Console": "1"})
@@ -860,31 +871,63 @@ class RegistrationApprovalTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual(int(session_count["count"]), 0)
 
-    def test_admin_pages_promote_verified_legacy_admin_session_cookie(self):
+    def test_admin_logout_without_admin_cookie_never_revokes_customer_session(self):
+        applicant = TestClient(self.app)
+        applied = applicant.post("/api/auth/apply", json=self.application_payload())
+        self.assertEqual(applied.status_code, 200, applied.text)
+        admin = TestClient(self.app)
+        self.assertEqual(
+            admin.post(
+                "/api/auth/admin-login",
+                json={"username": "admin", "password": "admin123secure"},
+            ).status_code,
+            200,
+        )
+        self.assertEqual(
+            admin.post(
+                f"/api/admin/users/{applied.json()['id']}/approval",
+                json={"approval_status": "approved", "expected_approval_status": "pending"},
+            ).status_code,
+            200,
+        )
+        browser = TestClient(self.app)
+        login = browser.post(
+            "/api/auth/user-login",
+            json={"username": "guest001", "password": "guest123"},
+        )
+        self.assertEqual(login.status_code, 200, login.text)
+        customer_token = browser.cookies.get("session_token")
+
+        logout = browser.post("/api/auth/logout", headers={"X-Admin-Console": "1"})
+
+        self.assertEqual(logout.status_code, 200, logout.text)
+        self.assertEqual(browser.cookies.get("session_token"), customer_token)
+        self.assertEqual(browser.get("/api/me").status_code, 200)
+        with db_module.db() as conn:
+            row = conn.execute(
+                "SELECT revoked_at FROM sessions WHERE token = ?",
+                (governance.token_digest(customer_token),),
+            ).fetchone()
+        self.assertEqual(int(row["revoked_at"] or 0), 0)
+
+    def test_admin_pages_do_not_accept_ordinary_session_cookie(self):
         login_browser = TestClient(self.app)
         login = login_browser.post(
             "/api/auth/admin-login",
             json={"username": "admin", "password": "admin123secure"},
         )
         self.assertEqual(login.status_code, 200, login.text)
-        legacy_admin_token = login_browser.cookies.get("session_token")
-        self.assertTrue(legacy_admin_token)
+        admin_token = login_browser.cookies.get("admin_session_token")
+        self.assertTrue(admin_token)
 
-        stale_browser = TestClient(self.app, cookies={"session_token": legacy_admin_token})
+        stale_browser = TestClient(self.app, cookies={"session_token": admin_token})
         page = stale_browser.get("/admin-console.html", follow_redirects=False)
-        self.assertEqual(page.status_code, 200, page.text)
-        self.assertIn(f"admin_session_token={legacy_admin_token}", page.headers.get("set-cookie", ""))
+        self.assertEqual(page.status_code, 302, page.text)
+        self.assertEqual(page.headers["location"], "/admin")
+        self.assertNotIn("admin_session_token", page.headers.get("set-cookie", ""))
 
         admin_api = stale_browser.get("/api/me", headers={"X-Admin-Console": "1"})
-        self.assertEqual(admin_api.status_code, 200, admin_api.text)
-        self.assertEqual(admin_api.json()["username"], "admin")
-
-        logout = stale_browser.post("/api/auth/logout", headers={"X-Admin-Console": "1"})
-        self.assertEqual(logout.status_code, 200, logout.text)
-        logout_cookies = logout.headers.get_list("set-cookie")
-        self.assertTrue(any(value.startswith('session_token=""') for value in logout_cookies), logout_cookies)
-        self.assertTrue(any(value.startswith('admin_session_token=""') for value in logout_cookies), logout_cookies)
-        self.assertEqual(stale_browser.get("/api/me", headers={"X-Admin-Console": "1"}).status_code, 401)
+        self.assertEqual(admin_api.status_code, 401, admin_api.text)
 
     def test_admin_entry_and_page_are_server_side_role_protected(self):
         anonymous = TestClient(self.app)

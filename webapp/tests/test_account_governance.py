@@ -92,6 +92,7 @@ class AccountGovernanceTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200, response.text)
         self.assertTrue(response.json()["is_admin"])
+        client.headers["X-Admin-Console"] = "1"
         return client, response.json()
 
     def _create_customer(
@@ -288,10 +289,11 @@ class AccountGovernanceTests(unittest.TestCase):
 
     def test_admin_api_requires_admin_cookie_and_server_request_ids_cannot_be_reused(self):
         admin, _ = self._admin_client()
-        legacy_token = str(admin.cookies.get("session_token") or "")
-        self.assertTrue(legacy_token)
-        legacy_only = TestClient(self.app, cookies={"session_token": legacy_token})
-        self.assertEqual(legacy_only.get("/api/admin/users").status_code, 401)
+        admin_token = str(admin.cookies.get("admin_session_token") or "")
+        self.assertTrue(admin_token)
+        self.assertFalse(admin.cookies.get("session_token"))
+        wrong_cookie = TestClient(self.app, cookies={"session_token": admin_token})
+        self.assertEqual(wrong_cookie.get("/api/admin/users").status_code, 401)
 
         pricing = admin.get("/api/admin/pricing").json()
         headers = {**self.ORIGIN_HEADERS, "X-Request-ID": "client-reused-request-id"}

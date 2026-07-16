@@ -4596,25 +4596,6 @@ def _html_response_with_versions(filename: str, replacements: dict[str, str] | N
     )
 
 
-def _ensure_admin_cookie_for_verified_admin(
-    response: Response,
-    request: Request,
-    session_token: str | None,
-    admin_session_token: str | None,
-    user: dict[str, Any] | None,
-) -> Response:
-    if admin_session_token or not session_token or not user or not _is_admin(user):
-        return response
-    response.set_cookie(
-        key=ADMIN_SESSION_COOKIE,
-        value=str(session_token),
-        httponly=True,
-        samesite="lax",
-        secure=_session_cookie_secure(request),
-    )
-    return response
-
-
 def _json_script_payload(value: Any) -> str:
     try:
         payload = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
@@ -17433,7 +17414,9 @@ def create_app() -> FastAPI:
         admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
     ) -> Response:
         admin_console = request.url.path == "/admin-console.html"
-        selected_token = admin_session_token or session_token if admin_console else session_token
+        if not admin_console and not session_token and admin_session_token:
+            return RedirectResponse(url="/admin-console.html", status_code=302)
+        selected_token = admin_session_token if admin_console else session_token
         try:
             user = _get_session_user_allowing_password_change(selected_token)
         except HTTPException:
@@ -17449,9 +17432,7 @@ def create_app() -> FastAPI:
                 except HTTPException:
                     return RedirectResponse(url="/admin#users", status_code=302)
         elif _is_admin(user):
-            response = RedirectResponse(url="/admin-console.html", status_code=302)
-            _ensure_admin_cookie_for_verified_admin(response, request, session_token, admin_session_token, user)
-            return response
+            return RedirectResponse(url="/admin-console.html", status_code=302)
         elif int(manage_user_id or 0) > 0:
             raise HTTPException(status_code=403, detail="administrator workspace access required")
         try:
@@ -17482,7 +17463,6 @@ def create_app() -> FastAPI:
                 "__ADMIN_CONSOLE_SESSION__": "1" if admin_console else "",
             },
         )
-        _ensure_admin_cookie_for_verified_admin(response, request, session_token, admin_session_token, user)
         return response
 
     @app.get("/admin.html", include_in_schema=False)
@@ -17492,7 +17472,7 @@ def create_app() -> FastAPI:
         admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
     ) -> Response:
         try:
-            user = _get_session_user_for_token(admin_session_token or session_token)
+            user = _get_session_user_for_token(admin_session_token)
         except HTTPException:
             return RedirectResponse(url="/admin", status_code=302)
         if not _is_admin(user):
@@ -17504,7 +17484,6 @@ def create_app() -> FastAPI:
                 "__ADMIN_JS_VERSION__": _asset_version("assets", "admin.js"),
             },
         )
-        _ensure_admin_cookie_for_verified_admin(response, request, session_token, admin_session_token, user)
         return response
 
     def _admin_login_page() -> Response:
@@ -17523,13 +17502,12 @@ def create_app() -> FastAPI:
         admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
     ) -> Response:
         try:
-            user = _get_session_user_for_token(admin_session_token or session_token)
+            user = _get_session_user_for_token(admin_session_token)
         except HTTPException:
             return _admin_login_page()
         if not _is_admin(user):
             return _admin_login_page()
         response = RedirectResponse(url="/admin.html#admin-overview", status_code=302)
-        _ensure_admin_cookie_for_verified_admin(response, request, session_token, admin_session_token, user)
         return response
 
     @app.get("/admin-login.html", include_in_schema=False)
@@ -17637,7 +17615,6 @@ def create_app() -> FastAPI:
         if len(password) > 256:
             record_invalid_credentials()
             raise HTTPException(status_code=401, detail="用户名或密码错误")
-        legacy_admin_token = ""
         session_conflict_details: dict[str, Any] = {}
         remember_login = False
         session_ttl_seconds = 12 * 3600
@@ -17790,35 +17767,6 @@ def create_app() -> FastAPI:
                         is_admin_session=False,
                         device_id=payload.device_id,
                     )
-            legacy_cookie_token = str(request.cookies.get(SESSION_COOKIE) or "").strip()
-            if is_admin:
-                legacy_cookie_is_same_admin = False
-                if legacy_cookie_token:
-                    legacy_row = conn.execute(
-                        """
-                        SELECT session.user_id, account.is_admin
-                        FROM sessions AS session
-                        JOIN users AS account ON account.id = session.user_id
-                        WHERE session.token = ?
-                        """,
-                        (session_storage_token(legacy_cookie_token),),
-                    ).fetchone()
-                    legacy_cookie_is_same_admin = bool(
-                        legacy_row
-                        and int(legacy_row["user_id"] or 0) == int(user["id"])
-                        and int(legacy_row["is_admin"] or 0) == 1
-                    )
-                if not legacy_cookie_token or legacy_cookie_is_same_admin:
-                    if legacy_cookie_is_same_admin:
-                        delete_session(conn, legacy_cookie_token)
-                    legacy_admin_token = create_session(
-                        conn,
-                        int(user["id"]),
-                        ttl_seconds=session_ttl_seconds,
-                        request=request,
-                        is_admin_session=True,
-                        device_id=payload.device_id,
-                    )
             if not session_conflict:
                 login_at = _now_ts()
                 login_device_id = str(payload.device_id or request.headers.get("x-device-id") or "")[:128]
@@ -17891,20 +17839,11 @@ def create_app() -> FastAPI:
             samesite="lax",
             secure=_session_cookie_secure(request),
         )
-        if is_admin and legacy_admin_token:
-            response.set_cookie(
-                key=SESSION_COOKIE,
-                value=legacy_admin_token,
-                httponly=True,
-                max_age=session_ttl_seconds if remember_login else None,
-                samesite="lax",
-                secure=_session_cookie_secure(request),
-            )
         return response
 
     @app.post("/api/auth/login")
     def api_login(payload: LoginPayload, request: Request):
-        return _login_response(payload, request)
+        return _login_response(payload, request, expected_admin=False)
 
     @app.post("/api/auth/user-login")
     def api_user_login(payload: LoginPayload, request: Request):
@@ -17919,36 +17858,12 @@ def create_app() -> FastAPI:
         admin_logout = request_uses_admin_session(request)
         admin_token = str(request.cookies.get(ADMIN_SESSION_COOKIE) or "").strip()
         user_token = str(request.cookies.get(SESSION_COOKIE) or "").strip()
-        token = (admin_token or user_token) if admin_logout else user_token
-        clear_legacy_admin_cookie = False
+        token = admin_token if admin_logout else user_token
         if token:
             with db() as conn:
-                owner = conn.execute(
-                    "SELECT user_id FROM sessions WHERE token = ?",
-                    (session_storage_token(token),),
-                ).fetchone()
                 delete_session(conn, token)
-                if admin_logout and owner is not None and user_token and user_token != token:
-                    legacy_owner = conn.execute(
-                        """
-                        SELECT session.user_id, account.is_admin
-                        FROM sessions AS session
-                        JOIN users AS account ON account.id = session.user_id
-                        WHERE session.token = ?
-                        """,
-                        (session_storage_token(user_token),),
-                    ).fetchone()
-                    if (
-                        legacy_owner is not None
-                        and int(legacy_owner["user_id"] or 0) == int(owner["user_id"] or 0)
-                        and int(legacy_owner["is_admin"] or 0) == 1
-                    ):
-                        delete_session(conn, user_token)
-                        clear_legacy_admin_cookie = True
         response = JSONResponse(content={"ok": True})
         response.delete_cookie(ADMIN_SESSION_COOKIE if admin_logout else SESSION_COOKIE)
-        if clear_legacy_admin_cookie or (admin_logout and user_token and token == user_token):
-            response.delete_cookie(SESSION_COOKIE)
         return response
 
     @app.post("/api/auth/change_password")

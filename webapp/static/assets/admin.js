@@ -3740,7 +3740,7 @@ function syncUserDetailActionState() {
   if (el("btnManageUserWorkspace")) {
     el("btnManageUserWorkspace").hidden = !user || !!user.is_admin;
     el("btnManageUserWorkspace").disabled = busy || !user || !!user.is_admin;
-    el("btnManageUserWorkspace").textContent = Number(user?.deleted_at || 0) > 0 ? "查看归档数据" : "管理工作区";
+    el("btnManageUserWorkspace").textContent = Number(user?.deleted_at || 0) > 0 ? "查看归档数据" : "登录用户控制台";
   }
   if (el("btnResetUserPassword")) el("btnResetUserPassword").disabled = busy || !user || !!user.is_admin;
   if (el("btnOpenSetUserPassword")) el("btnOpenSetUserPassword").disabled = busy || !user || !!user.is_admin;

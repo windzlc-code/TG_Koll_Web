@@ -104,11 +104,12 @@ class AuthSecurityHardeningTests(unittest.TestCase):
     def _admin_client(self) -> tuple[TestClient, dict]:
         client = TestClient(self.app)
         response = client.post(
-            "/api/auth/login",
+            "/api/auth/admin-login",
             json={"username": "admin", "password": self.ADMIN_PASSWORD},
         )
         self.assertEqual(response.status_code, 200, response.text)
         self.assertTrue(response.json()["is_admin"])
+        client.headers["X-Admin-Console"] = "1"
         return client, response.json()
 
     def _apply(self, username: str) -> int:
@@ -857,7 +858,7 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         os.environ["FORCE_HTTPS"] = "0"
         client = TestClient(self.app, base_url="https://testserver")
         response = client.post(
-            "/api/auth/login",
+            "/api/auth/admin-login",
             json={"username": "admin", "password": self.ADMIN_PASSWORD},
         )
         self.assertEqual(response.status_code, 200, response.text)
@@ -891,7 +892,7 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         self._configure_environment(bootstrap_dir, bootstrap_password="one-time-admin-password")
         app = server.create_app()
         login = TestClient(app).post(
-            "/api/auth/login",
+            "/api/auth/admin-login",
             json={"username": "admin", "password": "one-time-admin-password"},
         )
         self.assertEqual(login.status_code, 200, login.text)
@@ -906,7 +907,7 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         )
 
         self.assertIn(response.status_code, (400, 409), response.text)
-        self.assertEqual(admin.get("/api/me").status_code, 200)
+        self.assertEqual(admin.get("/api/me", headers={"X-Admin-Console": "1"}).status_code, 200)
 
     def test_approval_endpoint_enforces_allowed_state_transitions(self):
         pending_to_approved = self._apply("pending-approved")
@@ -941,17 +942,18 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         current_client = TestClient(self.app)
         other_client = TestClient(self.app)
         credentials = {"username": "admin", "password": self.ADMIN_PASSWORD}
-        self.assertEqual(current_client.post("/api/auth/login", json=credentials).status_code, 200)
-        self.assertEqual(other_client.post("/api/auth/login", json=credentials).status_code, 200)
+        self.assertEqual(current_client.post("/api/auth/admin-login", json=credentials).status_code, 200)
+        self.assertEqual(other_client.post("/api/auth/admin-login", json=credentials).status_code, 200)
 
         changed = current_client.post(
             "/api/auth/change_password",
+            headers={"X-Admin-Console": "1"},
             json={"old_password": self.ADMIN_PASSWORD, "new_password": "rotated-admin-password"},
         )
 
         self.assertEqual(changed.status_code, 200, changed.text)
-        self.assertEqual(current_client.get("/api/me").status_code, 200)
-        self.assertEqual(other_client.get("/api/me").status_code, 401)
+        self.assertEqual(current_client.get("/api/me", headers={"X-Admin-Console": "1"}).status_code, 200)
+        self.assertEqual(other_client.get("/api/me", headers={"X-Admin-Console": "1"}).status_code, 401)
 
     def test_second_browser_login_for_customer_returns_session_conflict(self):
         first_browser, _user_id = self._approved_client("single_session_customer")
@@ -1053,13 +1055,13 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         second_browser = TestClient(self.app)
         credentials = {"username": "admin", "password": self.ADMIN_PASSWORD}
 
-        first = first_browser.post("/api/auth/login", json=credentials)
-        second = second_browser.post("/api/auth/login", json=credentials)
+        first = first_browser.post("/api/auth/admin-login", json=credentials)
+        second = second_browser.post("/api/auth/admin-login", json=credentials)
 
         self.assertEqual(first.status_code, 200, first.text)
         self.assertEqual(second.status_code, 200, second.text)
-        self.assertEqual(first_browser.get("/api/me").status_code, 200)
-        self.assertEqual(second_browser.get("/api/me").status_code, 200)
+        self.assertEqual(first_browser.get("/api/me", headers={"X-Admin-Console": "1"}).status_code, 200)
+        self.assertEqual(second_browser.get("/api/me", headers={"X-Admin-Console": "1"}).status_code, 200)
 
     def test_repeated_login_attempts_are_rate_limited(self):
         client = TestClient(self.app)
@@ -1076,15 +1078,15 @@ class AuthSecurityHardeningTests(unittest.TestCase):
     def test_successful_logins_do_not_accumulate_ip_rate_limit_and_rotate_session(self):
         client = TestClient(self.app)
         credentials = {"username": "admin", "password": self.ADMIN_PASSWORD}
-        first = client.post("/api/auth/login", json=credentials)
+        first = client.post("/api/auth/admin-login", json=credentials)
         self.assertEqual(first.status_code, 200, first.text)
-        stale_token = first.cookies.get("session_token")
+        stale_token = first.cookies.get("admin_session_token")
 
-        statuses = [client.post("/api/auth/login", json=credentials).status_code for _ in range(35)]
+        statuses = [client.post("/api/auth/admin-login", json=credentials).status_code for _ in range(35)]
         self.assertEqual(set(statuses), {200}, statuses)
 
-        stale_client = TestClient(self.app, cookies={"session_token": stale_token})
-        self.assertEqual(stale_client.get("/api/me").status_code, 401)
+        stale_client = TestClient(self.app, cookies={"admin_session_token": stale_token})
+        self.assertEqual(stale_client.get("/api/me", headers={"X-Admin-Console": "1"}).status_code, 401)
 
     def test_successful_login_does_not_clear_ip_failure_history(self):
         client = TestClient(self.app)
@@ -1096,7 +1098,7 @@ class AuthSecurityHardeningTests(unittest.TestCase):
             self.assertEqual(response.status_code, 401, response.text)
 
         success = client.post(
-            "/api/auth/login",
+            "/api/auth/admin-login",
             json={"username": "admin", "password": self.ADMIN_PASSWORD},
         )
         self.assertEqual(success.status_code, 200, success.text)

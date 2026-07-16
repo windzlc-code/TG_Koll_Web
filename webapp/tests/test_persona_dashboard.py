@@ -55,8 +55,9 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.app = server.create_app()
         self.unauth_client = TestClient(self.app)
         self.client = TestClient(self.app)
-        login_resp = self.client.post("/api/auth/login", json={"username": "admin", "password": "admin123secure"})
+        login_resp = self.client.post("/api/auth/admin-login", json={"username": "admin", "password": "admin123secure"})
         self.assertEqual(login_resp.status_code, 200)
+        self.client.headers["X-Admin-Console"] = "1"
 
     def tearDown(self):
         self.unauth_client.close()

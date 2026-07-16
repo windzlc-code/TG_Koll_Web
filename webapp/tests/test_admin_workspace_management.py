@@ -24,6 +24,7 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
         "ALLOW_PUBLIC_REGISTER",
         "PASSWORD_VAULT_KEY",
         "PASSWORD_VAULT_KEY_FILE",
+        "COMMERCIAL_BILLING_ENABLED",
     )
     ADMIN_PASSWORD = "admin-workspace-secret"
     CUSTOMER_PASSWORD = "customer123"
@@ -74,6 +75,7 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
             json={"username": "admin", "password": self.ADMIN_PASSWORD},
         )
         self.assertEqual(admin_login.status_code, 200, admin_login.text)
+        self.admin.headers["X-Admin-Console"] = "1"
         self.admin_user_id = int(admin_login.json()["id"])
         self._admin_mfa_secret = ""
         self._admin_recovery_codes: list[str] = []
@@ -130,13 +132,17 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
 
     def _purge_payload(self, username: str) -> dict[str, str]:
         if not self._admin_mfa_secret:
-            setup = self.admin.post("/api/auth/mfa/setup", headers={"Origin": "http://testserver"}, json={"current_password": self.ADMIN_PASSWORD})
+            setup = self.admin.post(
+                "/api/auth/mfa/setup",
+                headers={"Origin": "http://testserver", "X-Admin-Console": "1"},
+                json={"current_password": self.ADMIN_PASSWORD},
+            )
             self.assertEqual(setup.status_code, 200, setup.text)
             self._admin_mfa_secret = str(setup.json()["secret"])
             self._admin_recovery_codes = [str(code) for code in setup.json()["recovery_codes"]]
             verified = self.admin.post(
                 "/api/auth/mfa/verify-setup",
-                headers={"Origin": "http://testserver"},
+                headers={"Origin": "http://testserver", "X-Admin-Console": "1"},
                 json={"code": governance.totp_code(self._admin_mfa_secret)},
             )
             self.assertEqual(verified.status_code, 200, verified.text)
@@ -521,6 +527,141 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
         self.assertEqual(admin_me.status_code, 200, admin_me.text)
         self.assertEqual(int(admin_me.json()["id"]), self.admin_user_id)
         self.assertTrue(admin_me.json()["is_admin"])
+
+    def test_admin_workspace_does_not_revoke_customer_session(self):
+        customer, user_id = self._create_customer("parallel_workspace_owner")
+        customer_token = customer.cookies.get("session_token")
+        self.assertTrue(customer_token)
+
+        with server.db() as conn:
+            before = conn.execute(
+                "SELECT revoked_at FROM sessions WHERE token = ?",
+                (governance.token_digest(customer_token),),
+            ).fetchone()
+        page = self.admin.get(f"/admin-console.html?manage_user_id={user_id}", follow_redirects=False)
+        admin_me = self.admin.get("/api/me", headers=self._target_headers(user_id))
+        customer_me = customer.get("/api/me")
+        with server.db() as conn:
+            after = conn.execute(
+                "SELECT revoked_at FROM sessions WHERE token = ?",
+                (governance.token_digest(customer_token),),
+            ).fetchone()
+
+        self.assertEqual(page.status_code, 200, page.text)
+        self.assertTrue(admin_me.json()["acting_admin"])
+        self.assertEqual(customer_me.status_code, 200, customer_me.text)
+        self.assertEqual(int(customer_me.json()["id"]), user_id)
+        self.assertEqual(int(before["revoked_at"] or 0), 0)
+        self.assertEqual(int(after["revoked_at"] or 0), 0)
+
+    def test_admin_workspace_login_helpers_bypass_subscription_without_charging(self):
+        customer, user_id = self._create_customer("waived_login_owner")
+        resources = self._seed_workspace(customer, user_id, "waived-login")
+        now = server._now_ts()
+        with server.db() as conn:
+            conn.execute(
+                "UPDATE social_accounts SET login_username = ?, login_password = ? WHERE id = ?",
+                ("waived@example.com", "waived-social-password", resources["account_id"]),
+            )
+            conn.execute("UPDATE billing_wallets SET billing_mode = 'enforced', credit_units = 700 WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM billing_subscriptions WHERE user_id = ?", (user_id,))
+            conn.execute(
+                "UPDATE social_automation_tasks SET status = 'failed', finished_at = ?, updated_at = ? WHERE user_id = ?",
+                (now, now, user_id),
+            )
+        os.environ["COMMERCIAL_BILLING_ENABLED"] = "1"
+        headers = self._target_headers(user_id)
+
+        with patch.object(social_automation_api, "wake_social_automation_worker"):
+            checked = self.admin.post(
+                f"/api/persona_dashboard/automation/accounts/{resources['account_id']}/check_login",
+                headers=headers,
+            )
+            opened = self.admin.post(
+                f"/api/persona_dashboard/automation/accounts/{resources['account_id']}/open_login",
+                headers=headers,
+                json={},
+            )
+            customer_blocked = customer.post(
+                f"/api/persona_dashboard/automation/accounts/{resources['account_id']}/check_login"
+            )
+
+        self.assertEqual(checked.status_code, 200, checked.text)
+        self.assertEqual(opened.status_code, 200, opened.text)
+        self.assertEqual(customer_blocked.status_code, 402, customer_blocked.text)
+        with server.db() as conn:
+            wallet = conn.execute("SELECT credit_units FROM billing_wallets WHERE user_id = ?", (user_id,)).fetchone()
+            tasks = conn.execute(
+                "SELECT task_type FROM social_automation_tasks WHERE user_id = ? AND id IN (?, ?)",
+                (user_id, checked.json()["task"]["id"], opened.json()["task"]["id"]),
+            ).fetchall()
+        self.assertEqual(int(wallet["credit_units"]), 700)
+        self.assertEqual({str(row["task_type"]) for row in tasks}, {"check_login", "open_login"})
+
+    def test_admin_workspace_billable_tasks_are_waived_without_consuming_assets(self):
+        customer, user_id = self._create_customer("waived_billing_owner")
+        resources = self._seed_workspace(customer, user_id, "waived-billing")
+        now = server._now_ts()
+        with server.db() as conn:
+            conn.execute("UPDATE billing_wallets SET billing_mode = 'enforced', credit_units = 700 WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM billing_subscriptions WHERE user_id = ?", (user_id,))
+            conn.execute(
+                "INSERT INTO billing_image_grants(id, user_id, source_type, source_ref, total_count, remaining_count, available_at, expires_at, created_at, updated_at) "
+                "VALUES ('admin-waiver-images', ?, 'credit_pack_bonus', 'admin-waiver-test', 3, 3, ?, 0, ?, ?)",
+                (user_id, now, now, now),
+            )
+            conn.execute(
+                "UPDATE social_automation_tasks SET status = 'failed', finished_at = ?, updated_at = ? WHERE user_id = ?",
+                (now, now, user_id),
+            )
+        os.environ["COMMERCIAL_BILLING_ENABLED"] = "1"
+        headers = self._target_headers(user_id)
+
+        with (
+            patch.object(server, "_TASK_QUEUE") as task_queue,
+            patch.object(social_automation_api, "wake_social_automation_worker"),
+        ):
+            image_task = self.admin.post(
+                "/api/tasks/submit",
+                headers=headers,
+                data={
+                    "task_type": "text_to_image",
+                    "params_json": json.dumps({"prompt": "administrator managed image", "image_count": 1}),
+                },
+            )
+            publish_task = self.admin.post(
+                "/api/persona_dashboard/automation/tasks",
+                headers=headers,
+                json={
+                    "account_id": resources["account_id"],
+                    "platform": "threads",
+                    "task_type": "publish_post",
+                    "payload": {"content": "administrator managed publish"},
+                },
+            )
+
+        self.assertEqual(image_task.status_code, 200, image_task.text)
+        self.assertEqual(publish_task.status_code, 200, publish_task.text)
+        task_queue.put.assert_called_once()
+        task_ids = [str(image_task.json()["id"]), str(publish_task.json()["task"]["id"])]
+        with server.db() as conn:
+            wallet = conn.execute("SELECT credit_units FROM billing_wallets WHERE user_id = ?", (user_id,)).fetchone()
+            images = conn.execute(
+                "SELECT COALESCE(SUM(remaining_count), 0) AS count FROM billing_image_grants WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+            reservations = conn.execute(
+                "SELECT ref_id, status FROM billing_reservations WHERE user_id = ? AND ref_id IN (?, ?)",
+                (user_id, *task_ids),
+            ).fetchall()
+            waived_events = conn.execute(
+                "SELECT ref_id FROM billing_ledger WHERE user_id = ? AND event_type = 'admin_waived' AND ref_id IN (?, ?)",
+                (user_id, *task_ids),
+            ).fetchall()
+        self.assertEqual(int(wallet["credit_units"]), 700)
+        self.assertEqual(int(images["count"]), 3)
+        self.assertEqual({str(row["ref_id"]): str(row["status"]) for row in reservations}, {task_id: "waived" for task_id in task_ids})
+        self.assertEqual({str(row["ref_id"]) for row in waived_events}, set(task_ids))
 
     def test_account_owner_can_reveal_saved_social_login_password(self):
         customer, _user_id = self._create_customer("credential_workspace_owner")

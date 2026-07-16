@@ -72,24 +72,25 @@ class AccountSettingsApiTests(unittest.TestCase):
 
     def test_admin_can_change_username_with_current_password(self):
         login_resp = self.client.post(
-            "/api/auth/login",
+            "/api/auth/admin-login",
             json={"username": "admin", "password": "admin123secure"},
         )
         self.assertEqual(login_resp.status_code, 200)
 
         change_resp = self.client.post(
             "/api/auth/change_username",
+            headers={"X-Admin-Console": "1"},
             json={"password": "admin123secure", "new_username": "admin2"},
         )
         self.assertEqual(change_resp.status_code, 200)
         self.assertEqual(change_resp.json(), {"ok": True})
 
-        me_resp = self.client.get("/api/me")
+        me_resp = self.client.get("/api/me", headers={"X-Admin-Console": "1"})
         self.assertEqual(me_resp.status_code, 200)
         self.assertEqual(me_resp.json()["username"], "admin2")
 
         relogin_resp = self.client.post(
-            "/api/auth/login",
+            "/api/auth/admin-login",
             json={"username": "admin2", "password": "admin123secure"},
         )
         self.assertEqual(relogin_resp.status_code, 200)
@@ -110,26 +111,27 @@ class AccountSettingsApiTests(unittest.TestCase):
 
     def test_admin_can_change_password_with_current_password(self):
         login_resp = self.client.post(
-            "/api/auth/login",
+            "/api/auth/admin-login",
             json={"username": "admin", "password": "admin123secure"},
         )
         self.assertEqual(login_resp.status_code, 200)
 
         change_resp = self.client.post(
             "/api/auth/change_password",
+            headers={"X-Admin-Console": "1"},
             json={"old_password": "admin123secure", "new_password": "admin456secure"},
         )
         self.assertEqual(change_resp.status_code, 200)
         self.assertEqual(change_resp.json(), {"ok": True})
 
         old_login_resp = self.client.post(
-            "/api/auth/login",
+            "/api/auth/admin-login",
             json={"username": "admin", "password": "admin123secure"},
         )
         self.assertEqual(old_login_resp.status_code, 401)
 
         new_login_resp = self.client.post(
-            "/api/auth/login",
+            "/api/auth/admin-login",
             json={"username": "admin", "password": "admin456secure"},
         )
         self.assertEqual(new_login_resp.status_code, 200)
@@ -143,7 +145,7 @@ class AccountSettingsApiTests(unittest.TestCase):
         admin_token = self.client.cookies.get("admin_session_token")
         legacy_token = self.client.cookies.get("session_token")
         self.assertTrue(admin_token)
-        self.assertTrue(legacy_token)
+        self.assertIsNone(legacy_token)
 
         change_resp = self.client.post(
             "/api/auth/change_password",
@@ -160,31 +162,33 @@ class AccountSettingsApiTests(unittest.TestCase):
                 for row in conn.execute("SELECT token FROM sessions WHERE user_id = ?", (int(current_admin.json()["id"]),))
             }
         self.assertIn(governance.token_digest(admin_token), active_tokens)
-        self.assertIn(governance.token_digest(legacy_token), active_tokens)
+        self.assertEqual(active_tokens, {governance.token_digest(admin_token)})
 
     def test_admin_password_change_requires_twelve_characters(self):
         self.assertEqual(
             self.client.post(
-                "/api/auth/login",
+                "/api/auth/admin-login",
                 json={"username": "admin", "password": "admin123secure"},
             ).status_code,
             200,
         )
         response = self.client.post(
             "/api/auth/change_password",
+            headers={"X-Admin-Console": "1"},
             json={"old_password": "admin123secure", "new_password": "short888"},
         )
         self.assertEqual(response.status_code, 400, response.text)
 
     def test_change_password_rejects_wrong_current_password(self):
         login_resp = self.client.post(
-            "/api/auth/login",
+            "/api/auth/admin-login",
             json={"username": "admin", "password": "admin123secure"},
         )
         self.assertEqual(login_resp.status_code, 200)
 
         change_resp = self.client.post(
             "/api/auth/change_password",
+            headers={"X-Admin-Console": "1"},
             json={"old_password": "wrong-pass", "new_password": "admin456"},
         )
         self.assertEqual(change_resp.status_code, 400)
@@ -220,7 +224,7 @@ class AccountSettingsApiTests(unittest.TestCase):
             )
 
         login_resp = self.client.post(
-            "/api/auth/login",
+            "/api/auth/admin-login",
             json={"username": "admin", "password": "admin123secure"},
         )
         self.assertEqual(login_resp.status_code, 200)
