@@ -474,6 +474,12 @@
     sync();
   }
 
+  function showGuestAccount(header) {
+    if (!header || header.dataset.siteMode !== "public") return;
+    header.dataset.siteAuthState = "guest";
+    sync();
+  }
+
   async function hydratePublicSession(header) {
     if (!header || header.dataset.siteMode !== "public") return null;
     try {
@@ -482,11 +488,15 @@
         cache: "no-store",
         headers: { Accept: "application/json" },
       });
-      if (!response.ok) return null;
+      if (!response.ok) {
+        showGuestAccount(header);
+        return null;
+      }
       const account = await response.json();
       showAuthenticatedAccount(header, account);
       return account;
     } catch {
+      showGuestAccount(header);
       return null;
     }
   }
@@ -497,6 +507,8 @@
     const mode = header.dataset.siteMode || (page === "console" ? "authenticated" : "public");
     const resolvedMode = mode === "public" ? page : mode;
     const current = page === "pricing" || page === "console" ? page : "";
+
+    if (mode === "public" && !header.dataset.siteAuthState) header.dataset.siteAuthState = "pending";
 
     if (!header.querySelector(".brand")) {
       header.innerHTML = fallbackMarkup(page, resolvedMode, current);

@@ -158,6 +158,18 @@
   gap: 7px;
 }
 
+.site-header[data-site-mode="public"][data-site-auth-state="pending"] .header-actions {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+@media (min-width: 1121px) {
+  .site-header[data-site-mode="public"] .header-actions {
+    min-width: 274px;
+    justify-content: flex-end;
+  }
+}
+
 .site-global-controls {
   padding-right: 2px;
 }
