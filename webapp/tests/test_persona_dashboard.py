@@ -1145,6 +1145,48 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(duplicate["publishHistory"], [])
         self.assertEqual(duplicate["personaImageLibrary"], [])
 
+    def test_persona_image_upload_creates_current_reference_for_follow_up_generation(self):
+        self._write_archives()
+        image_bytes = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
+        response = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/images/upload",
+            files={"image": ("persona-front-view.png", image_bytes, "image/png")},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertTrue(body["saved_item_id"])
+        self.assertEqual(body["current_reference_url"], body["items"][0]["image_url"])
+        archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
+        archive = archives[0]
+        self.assertEqual(archive["personaReferenceSheet"], body["current_reference_url"])
+        self.assertEqual(archive["setup"]["personaImageReferenceUrl"], body["current_reference_url"])
+        self.assertEqual(server._persona_reference_image_url_from_archive(archive), body["current_reference_url"])
+        uploaded = next(item for item in archive["personaImageLibrary"] if item["id"] == body["saved_item_id"])
+        self.assertEqual(uploaded["source"], "manual-upload")
+        self.assertIsNone(uploaded.get("mode"))
+
+    def test_persona_image_upload_rejects_unsupported_format_and_oversize_file(self):
+        self._write_archives()
+        unsupported = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/images/upload",
+            files={"image": ("persona.svg", b"<svg></svg>", "image/svg+xml")},
+        )
+        self.assertEqual(unsupported.status_code, 400, unsupported.text)
+
+        old_limit = server.MAX_PERSONA_IMAGE_UPLOAD_BYTES
+        try:
+            server.MAX_PERSONA_IMAGE_UPLOAD_BYTES = 3
+            oversized = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/images/upload",
+                files={"image": ("persona.png", b"1234", "image/png")},
+            )
+        finally:
+            server.MAX_PERSONA_IMAGE_UPLOAD_BYTES = old_limit
+        self.assertEqual(oversized.status_code, 413, oversized.text)
+
     def test_persona_ai_keywords_calls_cli_and_returns_keywords(self):
         with mock.patch.object(
             server,

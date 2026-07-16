@@ -242,6 +242,7 @@ VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
 UPLOAD_CHUNK_SIZE = 1024 * 1024
 MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
+MAX_PERSONA_IMAGE_UPLOAD_BYTES = 50 * 1024 * 1024
 MAX_ZIP_MEMBERS = 5000
 MAX_ZIP_MEMBER_BYTES = 512 * 1024 * 1024
 MAX_ZIP_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
@@ -2089,7 +2090,7 @@ def _sentiment_browser_auth_extension_config(request: Request, config: dict[str,
         config = _read_sentiment_config_file()
     payload: dict[str, Any] = {
         "ok": True,
-        "version": "1.0.8",
+        "version": "1.0.13",
         "apiBase": _request_public_origin(request),
         "profiles": _sentiment_browser_auth_profiles_for_extension(),
         "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -10450,7 +10451,7 @@ def _task_worker_with_control(
     )
 
 
-async def _save_upload_file(username: str, task_id: str, field_name: str, upload: UploadFile | None) -> str:
+async def _save_upload_file(username: str, task_id: str, field_name: str, upload: UploadFile | None, *, max_bytes: int | None = None) -> str:
     if upload is None:
         return ""
     filename = str(upload.filename or "")
@@ -10460,6 +10461,7 @@ async def _save_upload_file(username: str, task_id: str, field_name: str, upload
     upload_dir.mkdir(parents=True, exist_ok=True)
     target = upload_dir / f"{field_name}{suffix}"
     written = 0
+    byte_limit = max(1, int(max_bytes or MAX_UPLOAD_BYTES))
     try:
         with target.open("wb") as f:
             while True:
@@ -10467,7 +10469,7 @@ async def _save_upload_file(username: str, task_id: str, field_name: str, upload
                 if not chunk:
                     break
                 written += len(chunk)
-                if written > MAX_UPLOAD_BYTES:
+                if written > byte_limit:
                     raise HTTPException(status_code=413, detail="上传文件过大")
                 f.write(chunk)
     except Exception:
@@ -15220,7 +15222,7 @@ def _apply_persona_archive_reference_image(archive_id: str, image_id: str) -> di
 
 
 @_persona_archive_write_locked
-def _persona_archive_persist_reference_image(archive_id: str, *, image_url: str, prompt: str = "", mode: str = "closed-model", source: str = "portrait", aspect_ratio: str = "1:1", notes: str = "current persona reference image") -> dict[str, Any]:
+def _persona_archive_persist_reference_image(archive_id: str, *, image_url: str, prompt: str = "", mode: str | None = "closed-model", source: str = "portrait", aspect_ratio: str = "1:1", notes: str = "current persona reference image") -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     image_url = str(image_url or "").strip()
     if not clean_id or not image_url:
@@ -15306,7 +15308,7 @@ def _delete_persona_archive_image(archive_id: str, image_id: str) -> dict[str, A
     # Only remove files that were explicitly uploaded for this web application.
     # Generated and remote images may be shared or managed by their own provider.
     if (
-        str(deleted_item.get("source") or "").strip() == "upload"
+        str(deleted_item.get("source") or "").strip() in {"upload", "manual-upload"}
         and deleted_url
         and not any(str(row.get("imageUrl") or "").strip() == deleted_url for row in remaining if isinstance(row, dict))
     ):
@@ -15329,7 +15331,15 @@ async def _save_persona_archive_upload(username: str, image: UploadFile | None) 
     if suffix not in IMAGE_EXTS:
         raise HTTPException(status_code=400, detail="仅支持上传 PNG、JPG、JPEG、WEBP、BMP、GIF、TIFF 或 HEIC 图片。")
     upload_id = _new_id("personaimg")
-    image_path = Path(await _save_upload_file(username, upload_id, "persona_image", image)).resolve()
+    image_path = Path(
+        await _save_upload_file(
+            username,
+            upload_id,
+            "persona_image",
+            image,
+            max_bytes=MAX_PERSONA_IMAGE_UPLOAD_BYTES,
+        )
+    ).resolve()
     try:
         with Image.open(image_path) as candidate:
             candidate.verify()
@@ -15340,6 +15350,26 @@ async def _save_persona_archive_upload(username: str, image: UploadFile | None) 
             pass
         raise HTTPException(status_code=400, detail="上传的文件不是有效图片。") from error
     return str(image_path)
+
+
+async def _upload_persona_archive_image(archive_id: str, username: str, image: UploadFile | None) -> dict[str, Any]:
+    uploaded_url = await _save_persona_archive_upload(username, image)
+    try:
+        return _persona_archive_persist_reference_image(
+            archive_id,
+            image_url=uploaded_url,
+            prompt="自定义上传人设图",
+            mode=None,
+            source="manual-upload",
+            aspect_ratio="1:1",
+            notes="custom uploaded persona reference image",
+        )
+    except Exception:
+        with contextlib.suppress(Exception):
+            uploaded_path = Path(uploaded_url).expanduser().resolve()
+            if uploaded_path.is_relative_to(UPLOAD_ROOT.resolve()) and uploaded_path.is_file():
+                uploaded_path.unlink()
+        raise
 
 
 async def _replace_persona_archive_image(archive_id: str, image_id: str, username: str, image: UploadFile | None) -> dict[str, Any]:
@@ -15369,11 +15399,11 @@ async def _replace_persona_archive_image(archive_id: str, image_id: str, usernam
             current_reference_url = _persona_reference_image_url_from_archive(archive)
             now = _persona_dashboard_iso_now()
             replacement = dict(item)
+            replacement.pop("mode", None)
             replacement.update({
                 "imageUrl": uploaded_url,
                 "createdAt": now,
-                "mode": "custom-upload",
-                "source": "upload",
+                "source": "manual-upload",
                 "notes": "custom uploaded replacement persona reference image",
             })
             library[item_index] = replacement
@@ -15395,7 +15425,7 @@ async def _replace_persona_archive_image(archive_id: str, image_id: str, usernam
         raise
 
     if (
-        str(item.get("source") or "").strip() == "upload"
+        str(item.get("source") or "").strip() in {"upload", "manual-upload"}
         and old_url
         and old_url != uploaded_url
         and not any(str(row.get("imageUrl") or "").strip() == old_url for row in library if isinstance(row, dict))
@@ -18264,6 +18294,14 @@ def create_app() -> FastAPI:
     def api_persona_dashboard_persona_images(archive_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _list_persona_archive_images(archive_id)
 
+    @app.post("/api/persona_dashboard/personas/{archive_id}/images/upload")
+    async def api_persona_dashboard_upload_persona_image(
+        archive_id: str,
+        image: UploadFile = File(...),
+        user: dict[str, Any] = Depends(require_persona_owner),
+    ):
+        return await _upload_persona_archive_image(archive_id, _workspace_username(user), image)
+
     @app.post("/api/persona_dashboard/personas/{archive_id}/images/generate")
     def api_persona_dashboard_generate_persona_image(
         archive_id: str,
@@ -19956,6 +19994,20 @@ def create_app() -> FastAPI:
                 _sentiment_browser_auth_admin_from_cookie(request)
                 admin_ok = True
         if not token_ok and not admin_ok:
+            expected_hash = hashlib.sha256(expected_token.encode("utf-8")).hexdigest()[:12] if expected_token else ""
+            provided_hash = hashlib.sha256(provided_token.encode("utf-8")).hexdigest()[:12] if provided_token else ""
+            logger.warning(
+                "sentiment browser auth rejected profile=%s source=%s domain=%s origin=%s token_len=%s expected_len=%s token_hash=%s expected_hash=%s ua=%s",
+                str(payload.profileKey or ""),
+                str(payload.sourceKey or ""),
+                str(payload.domain or ""),
+                str(request.headers.get("origin") or ""),
+                len(provided_token),
+                len(expected_token),
+                provided_hash,
+                expected_hash,
+                str(request.headers.get("user-agent") or "")[:160],
+            )
             return JSONResponse({"ok": False, "error": "invalid browser auth token"}, status_code=403, headers=cors_headers)
         profiles = _sentiment_profiles_container(config)
         profile_key = str(payload.profileKey or payload.sourceKey or "").strip()

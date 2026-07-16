@@ -6359,7 +6359,8 @@ function renderPersonaImagePanel(persona) {
       </div>
       <div class="row-actions">
         <button type="button" class="primary" data-persona-generate-image ${imageBusy ? "disabled" : ""}>${renderBusyButtonContent(generateLabel, imageBusy, imageBusyStartedAt)}</button>
-        <input id="personaImageUploadFile" type="file" accept="image/*" data-persona-upload-image-file hidden />
+        <button type="button" data-persona-upload-image-trigger>${renderPlusIcon()}上传自定义人设图</button>
+        <input id="personaImageUploadFile" type="file" accept=".png,.jpg,.jpeg,.webp,.bmp,.gif,.tif,.tiff,.heic" data-persona-upload-image-file hidden />
       </div>
       <div class="persona-inline-panel persona-inline-panel--nested">
         <strong>图库预览</strong>
@@ -7187,6 +7188,10 @@ function setUploadDropzoneFiles(zone, fileList) {
 
 function uploadDropzoneFromEvent(event) {
   return event.target?.closest?.("[data-upload-dropzone]") || null;
+}
+
+function personaImageUploadDropzoneFromEvent(event) {
+  return event.target?.closest?.("[data-persona-upload-image-dropzone]") || null;
 }
 
 function syncStandaloneSocialForm() {
@@ -12840,6 +12845,33 @@ async function replacePersonaLibraryImage(imageId, file) {
   showMsg("commandMsg", "自定义人设图已替换。", true);
 }
 
+function isPersonaImageFile(file) {
+  return /\.(png|jpe?g|webp|bmp|gif|tiff?|heic)$/i.test(String(file?.name || ""));
+}
+
+async function uploadPersonaReferenceImage(file) {
+  const persona = selectedPersona();
+  if (!persona || !file) return;
+  if (!isPersonaImageFile(file)) {
+    throw new Error("请上传图片文件。");
+  }
+  const form = new FormData();
+  form.append("image", file, file.name || "persona-image");
+  showMsg("commandMsg", "正在上传自定义人设图...", true);
+  const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/images/upload`, {
+    method: "POST",
+    body: form,
+  });
+  state.personaImageLibraries[String(persona.id)] = result;
+  await Promise.all([
+    loadPersonas(),
+    loadPersonaProfile(persona.id, { force: true }).catch(() => {}),
+  ]);
+  renderPersonaDetail();
+  renderConfirmSummary();
+  showMsg("commandMsg", "自定义人设图已上传并设为当前参考图。", true);
+}
+
 async function deletePersonaLibraryImage(imageId) {
   const persona = selectedPersona();
   const cleanImageId = String(imageId || "").trim();
@@ -14247,7 +14279,19 @@ function updatePersonaEditableMediaSelectionDom(card, index) {
 
 function renderPersonaImageLibraryGrid(library) {
   const rows = Array.isArray(library?.items) ? library.items : [];
-  if (!rows.length) return `<div class="empty-state">当前还没有人设图。生成后会在这里直接预览。</div>`;
+  if (!rows.length) {
+    return `
+      <div class="persona-image-library-grid persona-image-library-grid--empty">
+        <div class="persona-image-library-card persona-image-library-card--empty">
+          <button type="button" class="persona-image-upload-placeholder" data-persona-upload-image-dropzone data-persona-upload-image-trigger aria-label="上传自定义人设图">
+            <span class="persona-image-upload-placeholder-icon">${renderPlusIcon()}</span>
+            <strong>上传自定义人设图</strong>
+            <small>拖拽图片到这里，或点击选择</small>
+            <small class="persona-image-upload-placeholder-tip">建议优先使用三视图</small>
+          </button>
+        </div>
+      </div>`;
+  }
   const previewable = rows
     .map((item) => ({
       id: String(item.id || "").trim(),
@@ -18786,6 +18830,36 @@ function bindEvents() {
     zone.classList.remove("dragging");
     setUploadDropzoneFiles(zone, event.dataTransfer?.files);
   });
+  document.addEventListener("dragenter", (event) => {
+    const zone = personaImageUploadDropzoneFromEvent(event);
+    if (!zone) return;
+    event.preventDefault();
+    zone.classList.add("is-dragging");
+  });
+  document.addEventListener("dragover", (event) => {
+    const zone = personaImageUploadDropzoneFromEvent(event);
+    if (!zone) return;
+    event.preventDefault();
+    zone.classList.add("is-dragging");
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+  });
+  document.addEventListener("dragleave", (event) => {
+    const zone = personaImageUploadDropzoneFromEvent(event);
+    if (!zone || zone.contains(event.relatedTarget)) return;
+    zone.classList.remove("is-dragging");
+  });
+  document.addEventListener("drop", (event) => {
+    const zone = personaImageUploadDropzoneFromEvent(event);
+    if (!zone) return;
+    event.preventDefault();
+    zone.classList.remove("is-dragging");
+    const file = Array.from(event.dataTransfer?.files || []).find((item) => isPersonaImageFile(item));
+    if (!file) {
+      showMsg("commandMsg", "请拖入图片文件。", false);
+      return;
+    }
+    uploadPersonaReferenceImage(file).catch((error) => showMsg("commandMsg", error.detail || error.message || "上传人设图失败", false));
+  });
   $("moduleBody").addEventListener("dragstart", (event) => {
     if (event.target.closest?.("[data-persona-drag-persona]")) event.preventDefault();
   });
@@ -19831,6 +19905,15 @@ function bindEvents() {
     if (event.target.closest("[data-persona-unbind-threads]")) unbindPersonaThreadsBinding().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
     if (event.target.closest("[data-persona-save-style]")) savePersonaTweetStyle().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
     if (event.target.closest("[data-persona-clear-style]")) clearPersonaTweetStyle().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
+    const uploadPersonaImage = event.target.closest("[data-persona-upload-image-trigger]");
+    if (uploadPersonaImage) {
+      const input = $("personaImageUploadFile");
+      if (input) {
+        delete input.dataset.personaReplaceImage;
+        input.click();
+      }
+      return;
+    }
     const applyPersonaImage = event.target.closest("[data-persona-apply-image]");
     if (applyPersonaImage) applyPersonaReferenceImage(applyPersonaImage.dataset.personaApplyImage || "").catch((error) => showMsg("commandMsg", error.detail || error.message || "切换人设图失败", false));
     const replacePersonaImage = event.target.closest("[data-persona-replace-image]");
@@ -20035,8 +20118,9 @@ function bindEvents() {
       const imageId = String(event.target.dataset.personaReplaceImage || "").trim();
       event.target.value = "";
       delete event.target.dataset.personaReplaceImage;
-      if (!file || !imageId) return;
-      replacePersonaLibraryImage(imageId, file).catch((error) => showMsg("commandMsg", error.detail || error.message || "替换人设图失败", false));
+      if (!file) return;
+      const upload = imageId ? replacePersonaLibraryImage(imageId, file) : uploadPersonaReferenceImage(file);
+      upload.catch((error) => showMsg("commandMsg", error.detail || error.message || (imageId ? "替换人设图失败" : "上传人设图失败"), false));
       return;
     }
     if (event.target?.matches?.("[data-persona-memory-id]")) {

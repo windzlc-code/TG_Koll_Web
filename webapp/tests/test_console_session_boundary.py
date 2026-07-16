@@ -78,6 +78,21 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("document.createElement", ensure_theme)
         self.assertNotIn("document.createElement", ensure_language)
 
+    def test_persona_image_empty_state_supports_custom_upload_and_drop_placeholder(self):
+        for marker in (
+            "data-persona-upload-image-file",
+            "data-persona-upload-image-trigger",
+            "data-persona-upload-image-dropzone",
+            "uploadPersonaReferenceImage",
+            "/images/upload",
+            "建议优先使用三视图",
+            "accept=\".png,.jpg,.jpeg,.webp,.bmp,.gif,.tif,.tiff,.heic\"",
+        ):
+            self.assertIn(marker, self.source)
+        self.assertIn("persona-image-library-card--empty", self.styles)
+        self.assertIn("persona-image-upload-placeholder", self.styles)
+        self.assertIn("aspect-ratio: 1 / 1", self.styles)
+
     def test_console_account_menu_uses_current_identity_and_supports_logout(self):
         for marker in (
             'data-site-account-menu',

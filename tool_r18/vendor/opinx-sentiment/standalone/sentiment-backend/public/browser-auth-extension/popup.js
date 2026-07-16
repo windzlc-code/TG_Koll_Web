@@ -19,9 +19,37 @@ function friendlyError(message) {
     return "连接后端失败。请确认后端地址正确，或从安装说明加载固定助手目录。";
   }
   if (/invalid browser auth token|403/i.test(text)) {
-    return "授权校验已自动刷新，请重新点击同步。";
+    return "同步未保存：后台授权校验失败。请点击“重置授权状态”后，再点“同步当前页面”。";
   }
   return text || "操作失败";
+}
+
+function normalizeStoredStatus(message) {
+  const text = String(message || "").trim();
+  if (!text) return "等待同步";
+  if (/授权校验已自动刷新，请重新点击同步/.test(text)) {
+    return "等待同步当前页面。";
+  }
+  return text;
+}
+
+function formatSyncResult(result) {
+  const items = Array.isArray(result?.result) ? result.result : [];
+  const saved = items.filter((item) => item?.ok && item?.value?.ok !== false);
+  const failed = items.filter((item) => !item?.ok || item?.value?.ok === false);
+  if (!items.length) return "当前页面 Cookie 已同步。";
+  const savedText = saved.map((item) => {
+    const count = Number(item?.value?.savedCookieCount || 0);
+    return `${item.profileKey}${count ? ` ${count} 个 Cookie` : ""}`;
+  }).join("；");
+  const failedText = failed.map((item) => `${item.profileKey}: ${item.error || item?.value?.error || item?.value?.reason || "同步失败"}`).join("；");
+  if (saved.length && failed.length) {
+    return `已保存：${savedText}\n未保存：${failedText}`;
+  }
+  if (saved.length) {
+    return `已保存当前页面授权：${savedText}`;
+  }
+  return failedText || "当前页面未保存 Cookie。";
 }
 
 function displayApiBase(value) {
@@ -73,7 +101,7 @@ async function loadState() {
   const values = await chrome.storage.local.get(["apiBase", "apiBaseSource", "lastStatus"]);
   const nextApiBase = await preferredApiBase(values.apiBase, values.apiBaseSource);
   $("apiBase").value = nextApiBase;
-  setStatus(values.lastStatus || "等待同步");
+  setStatus(normalizeStoredStatus(values.lastStatus));
   if (nextApiBase && nextApiBase !== displayApiBase(values.apiBase)) {
     const result = await send({ type: "set-api-base", apiBase: nextApiBase, apiBaseSource: "injected" });
     if (!result.ok) {
@@ -89,6 +117,16 @@ $("saveApi").addEventListener("click", async () => {
   setStatus(result.ok ? `已保存：${result.apiBase}\n已尝试刷新后端配置。` : friendlyError(result.error));
 });
 
+$("resetAuth").addEventListener("click", async () => {
+  const apiBase = displayApiBase($("apiBase").value);
+  $("apiBase").value = apiBase;
+  setStatus("正在重置授权状态...");
+  const result = await send({ type: "reset-auth-state", apiBase });
+  setStatus(result.ok
+    ? `已重置授权状态：${result.apiBase}\n版本：${result.extensionVersion || ""}\nToken：${result.hasAuthToken ? "已加载" : "未加载"}\nProfiles：${(result.profileKeys || []).join(", ")}`
+    : friendlyError(result.error));
+});
+
 $("openAuth").addEventListener("click", async () => {
   const result = await send({ type: "open-auth-pages" });
   setStatus(result.ok ? "已打开授权页面，请逐个登录。" : friendlyError(result.error));
@@ -102,7 +140,7 @@ $("syncCurrent").addEventListener("click", async () => {
     const result = await send({ type: "sync-current-tab" });
     const values = await chrome.storage.local.get(["apiBase", "apiBaseSource"]);
     $("apiBase").value = await preferredApiBase(values.apiBase, values.apiBaseSource);
-    setStatus(result.ok ? "当前页面 Cookie 已同步。" : friendlyError(result.error));
+    setStatus(result.ok ? formatSyncResult(result) : friendlyError(result.error));
   } catch (error) {
     setStatus(friendlyError(error.message));
   } finally {

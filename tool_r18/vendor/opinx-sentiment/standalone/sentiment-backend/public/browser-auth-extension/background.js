@@ -1,6 +1,6 @@
 const DEFAULT_API_BASE = "";
 const DEFAULT_AUTH_TOKEN = "";
-const DEFAULT_EXTENSION_VERSION = "1.0.9";
+const DEFAULT_EXTENSION_VERSION = "1.0.13";
 const AUTO_SYNC_ALARM = "opinx-browser-auth-auto-sync";
 const AUTO_SYNC_INTERVAL_MINUTES = 10;
 const MIN_PROFILE_SYNC_GAP_MS = 2 * 60 * 1000;
@@ -206,6 +206,14 @@ function normalizeApiBase(value = "") {
   return String(value || "").trim().replace(/\/+$/, "");
 }
 
+function hostFromUrl(value = "") {
+  try {
+    return new URL(String(value || "")).hostname || "";
+  } catch {
+    return "";
+  }
+}
+
 async function apiBase() {
   const values = await storageGet(["apiBase", "apiBaseSource"]);
   const stored = normalizeApiBase(values.apiBase);
@@ -217,6 +225,13 @@ async function apiBase() {
 async function authToken() {
   const values = await storageGet(["authToken"]);
   return String(values.authToken || DEFAULT_AUTH_TOKEN || "").trim();
+}
+
+function uniqueTokenCandidates(...values) {
+  return values
+    .map(value => String(value || "").trim())
+    .filter(Boolean)
+    .filter((value, index, list) => index === list.indexOf(value));
 }
 
 async function fetchExtensionConfigFromBase(base, token) {
@@ -240,13 +255,16 @@ async function discoverApiBase(currentBase, token) {
     .map(normalizeApiBase)
     .filter(Boolean);
   const uniqueBases = [...new Set(bases)];
+  const tokenCandidates = [...uniqueTokenCandidates(token, DEFAULT_AUTH_TOKEN), ""];
   let lastError = null;
   for (const base of uniqueBases) {
-    try {
-      const payload = await fetchExtensionConfigFromBase(base, token);
-      return { base, payload };
-    } catch (error) {
-      lastError = error;
+    for (const candidateToken of tokenCandidates) {
+      try {
+        const payload = await fetchExtensionConfigFromBase(base, candidateToken);
+        return { base, payload, token: candidateToken };
+      } catch (error) {
+        lastError = error;
+      }
     }
   }
   throw lastError || new Error("无法识别可用后端地址");
@@ -272,7 +290,8 @@ async function refreshExtensionConfig(options = {}) {
       // let a stale apiBase value from an older deployment replace it.
       apiBase: normalizeApiBase(discovered.base),
     };
-    if (payload.authToken) next.authToken = String(payload.authToken).trim();
+    const refreshedToken = String(payload.authToken || discovered.token || "").trim();
+    if (refreshedToken) next.authToken = refreshedToken;
     if (Array.isArray(payload.profiles) && payload.profiles.length) next.profiles = payload.profiles;
     await storageSet(next);
     return { ok: true, version: next.extensionVersion, profileCount: Array.isArray(next.profiles) ? next.profiles.length : undefined };
@@ -303,6 +322,23 @@ async function refreshExtensionConfig(options = {}) {
 async function activeProfiles() {
   const values = await storageGet(["profiles"]);
   return Array.isArray(values.profiles) && values.profiles.length ? values.profiles : PROFILES;
+}
+
+async function resetStoredConfigToBundledDefaults(apiBaseValue, source = "manual") {
+  const next = {
+    apiBase: normalizeApiBase(apiBaseValue || DEFAULT_API_BASE),
+    apiBaseSource: source === "manual" ? "manual" : "injected",
+    lastConfigRefreshAt: "",
+    extensionVersion: DEFAULT_EXTENSION_VERSION,
+  };
+  const bundledToken = String(DEFAULT_AUTH_TOKEN || "").trim();
+  // Always replace the stored value, including with an empty string.  Leaving
+  // an old token behind makes Reset appear to work while the next POST still
+  // uses the stale credential.
+  next.authToken = bundledToken;
+  if (Array.isArray(PROFILES) && PROFILES.length) next.profiles = PROFILES;
+  await storageSet(next);
+  return next;
 }
 
 function profilesForUrlFromList(url = "", profiles = PROFILES) {
@@ -389,6 +425,9 @@ async function syncProfileCookies(profile, options = {}) {
       expires: cookie.expirationDate,
     }));
   if (!usefulCookies.length) {
+    if (options.silentStatus) {
+      return { ok: false, savedCookieCount: 0, error: "no cookies", reason: domainSummary };
+    }
     await storageSet({ lastStatus: `${profile.key}: 未读取到 Cookie（${domainSummary}），请先登录或检查扩展站点权限` });
     return { ok: false, savedCookieCount: 0 };
   }
@@ -397,8 +436,9 @@ async function syncProfileCookies(profile, options = {}) {
     await refreshExtensionConfig({ force: true }).catch(() => undefined);
     token = await authToken();
   }
-  if (!token) {
-    await storageSet({ lastStatus: `${profile.key}: missing auth token` });
+  const initialTokenCandidates = uniqueTokenCandidates(token, DEFAULT_AUTH_TOKEN);
+  if (!initialTokenCandidates.length) {
+    if (!options.silentStatus) await storageSet({ lastStatus: `${profile.key}: missing auth token` });
     return { ok: false, savedCookieCount: 0, error: "missing auth token" };
   }
   const postCookies = async (nextToken) => {
@@ -420,14 +460,39 @@ async function syncProfileCookies(profile, options = {}) {
     const result = await response.json().catch(() => ({}));
     return { response, result };
   };
-  let { response, result } = await postCookies(token);
-  if (response.status === 403 || /invalid browser auth token/i.test(String(result.error || ""))) {
+  let response = null;
+  let result = {};
+  let tokenUsed = "";
+  const triedTokens = new Set();
+  const tryPostWithCandidates = async (candidates) => {
+    for (const candidate of candidates) {
+      if (!candidate || triedTokens.has(candidate)) continue;
+      triedTokens.add(candidate);
+      const attempt = await postCookies(candidate);
+      response = attempt.response;
+      result = attempt.result;
+      tokenUsed = candidate;
+      if (response.status !== 403 && !/invalid browser auth token/i.test(String(result.error || ""))) {
+        return true;
+      }
+    }
+    return false;
+  };
+  await tryPostWithCandidates(initialTokenCandidates);
+  if (response?.status === 403 || /invalid browser auth token/i.test(String(result.error || ""))) {
     await refreshExtensionConfig({ force: true });
     token = await authToken();
-    ({ response, result } = await postCookies(token));
+    await tryPostWithCandidates(uniqueTokenCandidates(token, DEFAULT_AUTH_TOKEN));
   }
   if (!response.ok || !result.ok) {
     throw new Error(result.error || `同步失败：${response.status}`);
+  }
+  if (tokenUsed) {
+    await storageSet({ authToken: tokenUsed });
+  }
+  if (options.silentStatus) {
+    await storageSet({ [`lastSync:${profile.key}`]: new Date().toISOString() });
+    return result;
   }
   await storageSet({
     lastStatus: `${profile.key}: 已同步 ${result.savedCookieCount || usefulCookies.length} 个 Cookie（${domainSummary}）`,
@@ -453,10 +518,10 @@ async function syncAllProfiles(options = {}) {
   const profiles = await activeProfiles();
   const token = await authToken();
   if (!token) {
-    await storageSet({ lastStatus: "missing auth token" });
+    await storageSet({ lastAutoStatus: "missing auth token" });
     return [];
   }
-  const results = await Promise.allSettled(profiles.map(profile => syncProfileCookies(profile, options)));
+  const results = await Promise.allSettled(profiles.map(profile => syncProfileCookies(profile, { ...options, silentStatus: true })));
   const okCount = results.filter(result => result.status === "fulfilled" && result.value?.ok).length;
   const failed = results
     .map((result, index) => ({ result, profile: profiles[index] }))
@@ -467,9 +532,31 @@ async function syncAllProfiles(options = {}) {
   }).join("；");
   await storageSet({
     lastAutoSyncAt: new Date().toISOString(),
-    lastStatus: failed.length ? `auto sync ${okCount}/${profiles.length}; ${failedText}` : `auto sync ${okCount}/${profiles.length}`,
+    lastAutoStatus: failed.length ? `auto sync ${okCount}/${profiles.length}; ${failedText}` : `auto sync ${okCount}/${profiles.length}`,
   });
   return results;
+}
+
+function summarizeSyncSettledResults(profiles, results, prefix = "自动同步") {
+  const saved = [];
+  const failed = [];
+  results.forEach((result, index) => {
+    const profile = profiles[index] || {};
+    const key = profile.key || "unknown";
+    if (result.status === "fulfilled" && result.value?.ok) {
+      const count = Number(result.value?.savedCookieCount || 0);
+      saved.push(`${key}${count ? ` ${count} 个 Cookie` : ""}`);
+      return;
+    }
+    const reason = result.status === "rejected"
+      ? String(result.reason?.message || result.reason || "同步失败")
+      : String(result.value?.error || result.value?.reason || "同步失败");
+    failed.push(`${key}: ${reason}`);
+  });
+  if (saved.length && failed.length) return `${prefix}已保存：${saved.join("；")}；未保存：${failed.slice(0, 3).join("；")}`;
+  if (saved.length) return `${prefix}已保存：${saved.join("；")}`;
+  if (failed.length) return `${prefix}未保存：${failed.slice(0, 3).join("；")}`;
+  return `${prefix}无可同步项目`;
 }
 
 function ensureAutoSyncAlarm() {
@@ -493,32 +580,24 @@ chrome.runtime.onInstalled.addListener(async () => {
   });
   ensureAutoSyncAlarm();
   await refreshExtensionConfig({ force: true }).catch(() => undefined);
-  void syncAllProfiles({ force: true }).catch(() => undefined);
 });
 
 chrome.runtime.onStartup?.addListener(() => {
   ensureAutoSyncAlarm();
   void refreshExtensionConfig().catch(() => undefined);
-  void syncAllProfiles().catch(() => undefined);
 });
 
 chrome.alarms?.onAlarm?.addListener((alarm) => {
   if (alarm?.name !== AUTO_SYNC_ALARM) return;
-  void syncAllProfiles().catch(() => undefined);
+  void refreshExtensionConfig().catch(() => undefined);
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== "complete" || !tab?.url) return;
   profilesForUrl(tab.url).then(profiles => {
     if (!profiles.length) return null;
-    return Promise.allSettled(profiles.map(profile => syncProfileCookies(profile))).then(async results => {
-    const statusText = results.map((result, index) => {
-      const profile = profiles[index];
-      return result.status === "fulfilled"
-        ? `${profile.key}: OK`
-        : `${profile.key}: ${result.reason?.message || result.reason}`;
-    }).join("；");
-    await storageSet({ lastStatus: statusText });
+    return Promise.allSettled(profiles.map(profile => syncProfileCookies(profile, { silentStatus: true }))).then(async results => {
+      await storageSet({ lastStatus: summarizeSyncSettledResults(profiles, results, "自动同步") });
     });
   });
 });
@@ -533,25 +612,34 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === "sync-current-tab") {
       await refreshExtensionConfig({ force: true }).catch(() => undefined);
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      const profiles = await profilesForUrl(tab?.url || "");
+      const tabUrl = tab?.url || "";
+      const tabHost = hostFromUrl(tabUrl);
+      const profiles = await profilesForUrl(tabUrl);
       if (!profiles.length) {
-        sendResponse({ ok: false, error: "当前标签页不是受支持的授权站点" });
+        sendResponse({ ok: false, error: `当前标签未匹配授权站点：${tabHost || tabUrl || "unknown"}` });
         return;
       }
       const results = await Promise.allSettled(profiles.map(profile => syncProfileCookies(profile, { force: true })));
       const failures = results
         .map((result, index) => ({ result, profile: profiles[index] }))
-        .filter(item => item.result.status === "rejected");
-      if (failures.length === results.length) {
-        sendResponse({ ok: false, error: failures.map(item => `${item.profile.key}: ${item.result.reason?.message || item.result.reason}`).join("；") });
+        .filter(item => item.result.status === "rejected" || !item.result.value?.ok);
+      const successes = results
+        .map((result, index) => ({ result, profile: profiles[index] }))
+        .filter(item => item.result.status === "fulfilled" && item.result.value?.ok);
+      const statusText = summarizeSyncSettledResults(profiles, results, "手动同步");
+      await storageSet({ lastStatus: statusText });
+      if (!successes.length) {
+        const profileKeys = profiles.map(profile => profile.key).join(", ");
+        sendResponse({ ok: false, error: `${tabHost || "unknown"} 匹配 ${profileKeys}：${failures.map(item => `${item.profile.key}: ${item.result.status === "rejected" ? (item.result.reason?.message || item.result.reason) : (item.result.value?.error || item.result.value?.reason || "同步失败")}`).join("；")}` });
         return;
       }
       sendResponse({
         ok: true,
+        message: statusText,
         result: results.map((result, index) => ({
           profileKey: profiles[index].key,
-          ok: result.status === "fulfilled",
-          error: result.status === "rejected" ? String(result.reason?.message || result.reason) : undefined,
+          ok: result.status === "fulfilled" && result.value?.ok,
+          error: result.status === "rejected" ? String(result.reason?.message || result.reason) : (result.value?.ok ? undefined : String(result.value?.error || result.value?.reason || "同步失败")),
           value: result.status === "fulfilled" ? result.value : undefined,
         })),
       });
@@ -564,18 +652,42 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         return;
       }
       const source = message.apiBaseSource === "manual" ? "manual" : "injected";
-      await storageSet({ apiBase: base, apiBaseSource: source });
+      await resetStoredConfigToBundledDefaults(base, source);
       ensureAutoSyncAlarm();
       await refreshExtensionConfig({ force: true }).catch(() => undefined);
       const values = await storageGet(["apiBase"]);
       sendResponse({ ok: true, apiBase: normalizeApiBase(values.apiBase || base) });
       return;
     }
+    if (message?.type === "reset-auth-state") {
+      const base = normalizeApiBase(message.apiBase || await apiBase() || DEFAULT_API_BASE);
+      await resetStoredConfigToBundledDefaults(base, "manual");
+      const refreshed = await refreshExtensionConfig({ force: true }).catch(error => ({ ok: false, error: error.message }));
+      const values = await storageGet(["apiBase", "authToken", "profiles", "extensionVersion"]);
+      const refreshOk = refreshed?.ok === true;
+      await storageSet({
+        lastStatus: refreshOk
+          ? `授权状态已重置：${values.extensionVersion || DEFAULT_EXTENSION_VERSION}`
+          : `授权配置刷新失败：${String(refreshed?.error || "无法获取后端授权配置")}`,
+        lastAutoStatus: "",
+        lastAutoSyncAt: "",
+      });
+      sendResponse({
+        ok: refreshOk,
+        apiBase: normalizeApiBase(values.apiBase || base),
+        hasAuthToken: Boolean(String(values.authToken || "").trim()),
+        profileKeys: (Array.isArray(values.profiles) ? values.profiles : []).map(profile => profile.key).filter(Boolean),
+        extensionVersion: values.extensionVersion || DEFAULT_EXTENSION_VERSION,
+        refresh: refreshed,
+        error: refreshOk ? undefined : String(refreshed?.error || "无法获取后端授权配置"),
+      });
+      return;
+    }
     if (message?.type === "set-auth-token") {
       const token = String(message.authToken || "").trim();
       await storageSet({ authToken: token });
       ensureAutoSyncAlarm();
-      if (token) void syncAllProfiles({ force: true }).catch(() => undefined);
+      if (token) void refreshExtensionConfig({ force: true }).catch(() => undefined);
       sendResponse({ ok: true, hasAuthToken: Boolean(token) });
       return;
     }
@@ -586,7 +698,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 function bootAutoSync() {
   ensureAutoSyncAlarm();
-  void syncAllProfiles({ force: true }).catch(() => undefined);
+  void refreshExtensionConfig().catch(() => undefined);
 }
 
 bootAutoSync();
