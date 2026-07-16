@@ -215,6 +215,36 @@ class SocialTaskCancellationTests(unittest.TestCase):
         self.assertFalse(payload["auto_submit"])
         self.assertTrue(payload["manual_takeover"])
 
+    def test_publish_takeover_ack_enters_manual_and_can_resume_running(self):
+        self._insert_account(status="ready")
+        self._insert_task("publish-risk-challenge", "running", task_type="publish_post")
+
+        social_automation_api._persist_manual_takeover_ack(
+            "publish-risk-challenge",
+            "live-publish-risk-challenge",
+        )
+        self.assertEqual(self._status("publish-risk-challenge"), "need_manual")
+
+        social_automation_api._persist_manual_takeover_resolved(
+            "publish-risk-challenge",
+            "live-publish-risk-challenge",
+        )
+        self.assertEqual(self._status("publish-risk-challenge"), "running")
+
+    def test_orphaned_manual_publish_fails_and_releases_billing_reservation(self):
+        self._insert_account(status="need_verification")
+        self._insert_task("orphaned-publish", "need_manual", task_type="publish_post")
+
+        with (
+            mock.patch.dict(social_automation_api._RUNNING_TASK_CONTROLS, {}, clear=True),
+            mock.patch.object(social_automation_api, "_release_task_billing_reservation") as release,
+        ):
+            social_automation_api._recover_orphaned_manual_task(10_000)
+
+        self.assertEqual(self._status("orphaned-publish"), "failed")
+        release.assert_called_once()
+        self.assertEqual(str(release.call_args.args[1]["id"]), "orphaned-publish")
+
     def test_already_manual_open_login_still_transitions_out_of_running(self):
         self._insert_account(status="cookie_expired")
         self._insert_task("login-already-manual", "running", task_type="open_login")

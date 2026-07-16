@@ -8,6 +8,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONSOLE_JS = REPO_ROOT / "webapp" / "static" / "assets" / "console.js"
+PERSONA_DASHBOARD_JS = REPO_ROOT / "webapp" / "static" / "assets" / "persona-dashboard.js"
 CONSOLE_CSS = REPO_ROOT / "webapp" / "static" / "assets" / "console.css"
 CONSOLE_HTML = REPO_ROOT / "webapp" / "static" / "console.html"
 SITE_NAV_JS = REPO_ROOT / "webapp" / "static" / "assets" / "opc" / "site-navigation.js"
@@ -19,6 +20,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.source = CONSOLE_JS.read_text(encoding="utf-8")
+        cls.persona_dashboard_source = PERSONA_DASHBOARD_JS.read_text(encoding="utf-8")
         cls.styles = CONSOLE_CSS.read_text(encoding="utf-8")
         cls.markup = CONSOLE_HTML.read_text(encoding="utf-8")
         cls.site_nav_source = SITE_NAV_JS.read_text(encoding="utf-8")
@@ -158,19 +160,19 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         end = self.source.index(end_marker, start)
         return self.source[start:end]
 
-    def _function_source(self, name):
+    def _javascript_function_source(self, source, name):
         marker = f"function {name}("
-        start = self.source.index(marker)
-        brace = self.source.index("{", start)
+        start = source.index(marker)
+        brace = source.index("{", start)
         depth = 0
         quote = None
         escaped = False
         line_comment = False
         block_comment = False
         index = brace
-        while index < len(self.source):
-            char = self.source[index]
-            next_char = self.source[index + 1] if index + 1 < len(self.source) else ""
+        while index < len(source):
+            char = source[index]
+            next_char = source[index + 1] if index + 1 < len(source) else ""
             if line_comment:
                 if char == "\n":
                     line_comment = False
@@ -198,9 +200,15 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             elif char == "}":
                 depth -= 1
                 if depth == 0:
-                    return self.source[start:index + 1]
+                    return source[start:index + 1]
             index += 1
         self.fail(f"Could not extract JavaScript function {name}")
+
+    def _function_source(self, name):
+        return self._javascript_function_source(self.source, name)
+
+    def _persona_dashboard_function_source(self, name):
+        return self._javascript_function_source(self.persona_dashboard_source, name)
 
     def _css_block(self, marker, start=0):
         block_start = self.styles.index(marker, start)
@@ -623,12 +631,57 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
         self._run_node(harness)
 
-    def test_manual_takeover_button_is_available_for_every_active_login_session(self):
-        render_toggle = self._function_source("renderLiveBrowserModeToggle")
-        update_card = self._function_source("updateLiveBrowserSessionCard")
+    def test_manual_takeover_button_is_available_for_active_login_sessions_only(self):
+        helpers = "\n".join([
+            self._function_source("liveBrowserSessionId"),
+            self._function_source("liveBrowserTaskStatus"),
+            self._function_source("isManualOpenLoginSession"),
+            self._function_source("liveBrowserLoginMode"),
+            self._function_source("renderLiveBrowserModeToggle"),
+            self._function_source("liveBrowserIsReady"),
+            self._function_source("isOpenLoginBrowserStarting"),
+            self._function_source("liveBrowserPresentationStatus"),
+            self._function_source("liveBrowserPresentationLabel"),
+        ])
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            function esc(value) {{ return String(value || ""); }}
+            function statusLabel(value) {{ return String(value || ""); }}
+            {helpers}
 
-        self.assertIn('["running", "need_manual"].includes', render_toggle)
-        self.assertNotIn("browserReady", render_toggle)
+            const publishSession = {{
+              id: "publish-session",
+              task_type: "publish_post",
+              task_status: "running",
+              login_mode: "automatic",
+              input_allowed: false,
+            }};
+            assert.strictEqual(renderLiveBrowserModeToggle(publishSession), "");
+
+            const loginToggle = renderLiveBrowserModeToggle({{
+              id: "login-session",
+              task_type: "open_login",
+              task_status: "running",
+              login_mode: "automatic",
+            }});
+            assert.ok(loginToggle.includes("自动登录"));
+
+            const manualLogin = {{
+              id: "manual-login-session",
+              task_type: "open_login",
+              task_status: "need_manual",
+              login_mode: "manual",
+              input_allowed: true,
+            }};
+            assert.strictEqual(liveBrowserLoginMode(manualLogin), "manual");
+            assert.strictEqual(liveBrowserPresentationStatus(manualLogin), "need_manual");
+            assert.strictEqual(liveBrowserPresentationLabel(manualLogin), "人工登录");
+            """
+        )
+        self._run_node(harness)
+
+        update_card = self._function_source("updateLiveBrowserSessionCard")
         self.assertIn('button.disabled = !sessionId || !["running", "need_manual"].includes(status)', update_card)
         self.assertNotIn('status !== "running"', update_card)
 
@@ -943,33 +996,173 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("browserDurationDrafts", self.source)
         self.assertIn("invalidDurationInput", self._function_source("saveConsoleSettingsPage"))
 
-    def test_publish_waiting_for_manual_login_uses_manual_status(self):
+    def test_publish_waiting_for_manual_login_uses_manual_status_everywhere(self):
         helpers = "\n".join([
             self._function_source("socialTaskPayload"),
             self._function_source("socialTaskLoginDependency"),
             self._function_source("socialTaskWaitsForManualLogin"),
             self._function_source("socialTaskPresentationStatus"),
+            self._function_source("isFutureScheduledSocialTask"),
+            self._function_source("renderSocialQueueTaskStatus"),
+            self._function_source("socialTaskDisplayStatus"),
+            self._function_source("socialTaskToastMessage"),
+            self._function_source("renderSocialTasks"),
         ])
         harness = textwrap.dedent(
             f"""
             const assert = require("assert");
-            const state = {{ socialTasks: [{{ id: "login-1", task_type: "open_login", status: "need_manual" }}] }};
+            const host = {{ innerHTML: "" }};
+            const state = {{
+              socialTasks: [{{ id: "login-1", task_type: "open_login", status: "need_manual" }}],
+              socialTaskToastLabels: {{}},
+            }};
+            function $(id) {{ return id === "socialTaskList" ? host : null; }}
+            function esc(value) {{ return String(value || ""); }}
+            function statusLabel(value) {{ return value === "need_manual" ? "需人工处理" : String(value || ""); }}
+            function renderStatusText(value) {{ return `<span>${{value}}</span>`; }}
+            function formatScheduledTime() {{ return ""; }}
+            function timeValue() {{ return 0; }}
+            function activeSocialAutomationTask() {{ return false; }}
             {helpers}
             const publishTask = {{
               id: "publish-1",
               task_type: "publish_post",
               status: "queued",
+              platform: "threads",
+              account_id: "account-1",
               payload: {{ login_task_id: "login-1" }},
             }};
+            state.socialTasks.push(publishTask);
             assert.strictEqual(socialTaskWaitsForManualLogin(publishTask), true);
             assert.strictEqual(socialTaskPresentationStatus(publishTask), "need_manual");
+            assert.ok(renderSocialQueueTaskStatus(publishTask).includes("need_manual"));
+            assert.strictEqual(socialTaskDisplayStatus(publishTask), "需人工处理");
+            assert.ok(socialTaskToastMessage(publishTask).includes("需要人工处理"));
+            renderSocialTasks();
+            assert.ok(host.innerHTML.includes('class="status need_manual"'));
+            assert.ok(host.innerHTML.includes("需人工处理"));
             """
         )
         self._run_node(harness)
 
-    def test_manual_takeover_login_tasks_remain_visible_in_persona_dashboard(self):
-        source = (REPO_ROOT / "webapp" / "static" / "assets" / "persona-dashboard.js").read_text(encoding="utf-8")
-        self.assertIn("payload.manual_takeover !== true", source)
+    def test_persona_dashboard_keeps_all_login_tasks_and_uses_automatic_login_body(self):
+        helpers = "\n".join([
+            self._persona_dashboard_function_source("pdAutomationAccountsForPersona"),
+            self._persona_dashboard_function_source("pdAutomationTaskPayload"),
+            self._persona_dashboard_function_source("pdAutomationTaskNeedsManualVerification"),
+            self._persona_dashboard_function_source("pdAutomationTasksForPersona"),
+            self._persona_dashboard_function_source("pdBuildAutomaticLoginTaskBody"),
+        ])
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            const personaDashboardAutomation = {{
+              accounts: [{{ id: "account-1", persona_id: "persona-1" }}],
+              tasks: [
+                {{ id: "manual-login", account_id: "account-1", task_type: "open_login", status: "need_manual", payload: {{}} }},
+                {{ id: "auto-login", account_id: "account-1", task_type: "open_login", payload: {{ auto_submit: true }} }},
+                {{ id: "other-persona", account_id: "account-2", task_type: "open_login", payload: {{}} }},
+              ],
+            }};
+            {helpers}
+
+            assert.deepStrictEqual(
+              pdAutomationTasksForPersona({{ id: "persona-1" }}).map((task) => task.id),
+              ["manual-login", "auto-login"],
+            );
+            assert.deepStrictEqual(
+              pdBuildAutomaticLoginTaskBody({{ id: "persona-1" }}, "account-1", "threads", "saved-user", ""),
+              {{
+                persona_id: "persona-1",
+                account_id: "account-1",
+                platform: "threads",
+                task_type: "open_login",
+                priority: 20,
+                max_retries: 0,
+                payload: {{ auto_submit: true, login_username: "saved-user", login_wait_seconds: 600 }},
+              }},
+            );
+            """
+        )
+        self._run_node(harness)
+        self.assertNotIn('data-auto-account-action="open_login"', self.persona_dashboard_source)
+        self.assertEqual(self.persona_dashboard_source.count('data-auto-login="1"'), 1)
+        account_action_handler = self._persona_dashboard_function_source("pdBindAutomationEvents")
+        self.assertIn('if (action !== "check_login") return;', account_action_handler)
+        self.assertNotIn('action === "open_login"', account_action_handler)
+
+    def test_persona_dashboard_manual_task_opens_live_session_or_browser_monitor(self):
+        helpers = "\n".join([
+            self._persona_dashboard_function_source("pdAdminWorkspaceUrl"),
+            self._persona_dashboard_function_source("pdAutomationTaskPayload"),
+            self._persona_dashboard_function_source("pdAutomationTaskNeedsManualVerification"),
+            self._persona_dashboard_function_source("pdAutomationBrowserSessionForTask"),
+            self._persona_dashboard_function_source("pdAutomationBrowserMonitorUrl"),
+            self._persona_dashboard_function_source("pdRenderAutomationBrowserAction"),
+        ])
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            const PD_ADMIN_WORKSPACE_USER_ID = "42";
+            const PD_ADMIN_CONSOLE_SESSION = true;
+            const window = {{ location: {{ href: "https://app.test/persona-dashboard.html", origin: "https://app.test" }} }};
+            function pdEscape(value) {{ return String(value || "").replaceAll("&", "&amp;"); }}
+            const personaDashboardAutomation = {{
+              browser_sessions: [{{ id: "live-1", task_id: "task-1", view_path: "/api/persona_dashboard/automation/browser_sessions/live-1/kasm/vnc.html?autoconnect=1&path=live-1" }}],
+            }};
+            {helpers}
+
+            const direct = pdRenderAutomationBrowserAction({{
+              id: "task-1",
+              status: "need_manual",
+              payload: {{ manual_takeover: true }},
+            }});
+            assert.ok(direct.includes("/browser_sessions/live-1/kasm"));
+            assert.ok(direct.includes("autoconnect=1"));
+            assert.ok(direct.includes("path=live-1"));
+            assert.ok(direct.includes("admin_workspace_user_id=42"));
+            assert.ok(direct.includes("admin_console=1"));
+            assert.ok(direct.includes("打开浏览器验证"));
+            assert.ok(direct.includes('target="_blank"'));
+
+            const fallback = pdRenderAutomationBrowserAction({{ id: "task-2", status: "need_manual" }});
+            assert.ok(fallback.includes("/console.html?view=accounts&amp;browser_panel=browsers"));
+            assert.ok(fallback.includes("admin_workspace_user_id=42"));
+            assert.ok(fallback.includes("前往浏览器监控"));
+            assert.strictEqual(pdRenderAutomationBrowserAction({{ id: "task-3", status: "running" }}), "");
+            assert.ok(pdRenderAutomationBrowserAction({{ id: "task-1", status: "running", payload: {{ manual_takeover: true }} }}));
+            assert.strictEqual(pdRenderAutomationBrowserAction({{ id: "task-1", status: "success", payload: {{ manual_takeover: true }} }}), "");
+            assert.strictEqual(pdRenderAutomationBrowserAction({{ id: "task-1", status: "failed", payload_json: '{{"manual_takeover":true}}' }}), "");
+            assert.strictEqual(pdRenderAutomationBrowserAction({{ id: "task-1", status: "need_manual", finished_at: 123 }}), "");
+            """
+        )
+        self._run_node(harness)
+
+    def test_persona_dashboard_manual_tasks_are_not_evicted_by_recent_history_limit(self):
+        helpers = "\n".join([
+            self._persona_dashboard_function_source("pdAutomationAccountsForPersona"),
+            self._persona_dashboard_function_source("pdAutomationTaskPayload"),
+            self._persona_dashboard_function_source("pdAutomationTaskNeedsManualVerification"),
+            self._persona_dashboard_function_source("pdAutomationTasksForPersona"),
+        ])
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            const personaDashboardAutomation = {{
+              accounts: [{{ id: "account-1", persona_id: "persona-1" }}],
+              tasks: [
+                ...Array.from({{ length: 9 }}, (_, index) => ({{ id: `recent-${{index}}`, account_id: "account-1", status: "success" }})),
+                {{ id: "manual-old", account_id: "account-1", status: "need_manual", finished_at: 0 }},
+              ],
+            }};
+            {helpers}
+            const rows = pdAutomationTasksForPersona({{ id: "persona-1" }});
+            assert.strictEqual(rows.length, 8);
+            assert.strictEqual(rows[0].id, "manual-old");
+            assert.ok(rows.some((task) => task.id === "manual-old"));
+            """
+        )
+        self._run_node(harness)
 
     def test_browser_recommendation_adapts_split_server_payload(self):
         harness = textwrap.dedent(

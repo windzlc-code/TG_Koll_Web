@@ -886,11 +886,69 @@ function pdAutomationAccountsForPlatform(persona, platform) {
 
 function pdAutomationTasksForPersona(persona) {
   const accountIds = new Set(pdAutomationAccountsForPersona(persona).map((account) => String(account.id || "")));
-  return (personaDashboardAutomation.tasks || []).filter((task) => {
-    if (!accountIds.has(String(task.account_id || ""))) return false;
-    const payload = task.payload && typeof task.payload === "object" ? task.payload : {};
-    return !(String(task.task_type || "") === "open_login" && payload.auto_submit !== true && payload.manual_takeover !== true);
-  }).slice(0, 8);
+  const rows = (personaDashboardAutomation.tasks || [])
+    .filter((task) => accountIds.has(String(task.account_id || "")));
+  const manualRows = rows.filter((task) => pdAutomationTaskNeedsManualVerification(task));
+  const manualIds = new Set(manualRows.map((task) => String(task.id || "")));
+  const historyRows = rows.filter((task) => !manualIds.has(String(task.id || "")));
+  return [...manualRows, ...historyRows.slice(0, Math.max(0, 8 - manualRows.length))];
+}
+
+function pdAutomationTaskPayload(task) {
+  let payload = task?.payload || task?.payload_json || {};
+  if (typeof payload === "string") {
+    try { payload = JSON.parse(payload || "{}"); } catch (_) { payload = {}; }
+  }
+  return payload && typeof payload === "object" ? payload : {};
+}
+
+function pdAutomationTaskNeedsManualVerification(task) {
+  const status = String(task?.status || "").trim();
+  if (Number(task?.finished_at || task?.finishedAt || 0) > 0) return false;
+  return ["running", "need_manual"].includes(status)
+    && (status === "need_manual" || pdAutomationTaskPayload(task).manual_takeover === true);
+}
+
+function pdAutomationBrowserSessionForTask(task) {
+  const taskId = String(task?.id || "").trim();
+  if (!taskId) return null;
+  const sessions = Array.isArray(personaDashboardAutomation.browser_sessions)
+    ? personaDashboardAutomation.browser_sessions
+    : [];
+  return sessions.find((session) => String(session?.task_id || "").trim() === taskId) || null;
+}
+
+function pdAutomationBrowserMonitorUrl(task) {
+  const session = pdAutomationBrowserSessionForTask(task);
+  const viewPath = String(session?.view_path || session?.novnc_path || "").trim();
+  if (viewPath) {
+    return pdAdminWorkspaceUrl(viewPath);
+  }
+  return pdAdminWorkspaceUrl("/console.html?view=accounts&browser_panel=browsers");
+}
+
+function pdRenderAutomationBrowserAction(task) {
+  if (!pdAutomationTaskNeedsManualVerification(task)) return "";
+  const session = pdAutomationBrowserSessionForTask(task);
+  const hasSession = Boolean(String(session?.view_path || session?.novnc_path || "").trim());
+  return `<a class="ghost" href="${pdEscape(pdAutomationBrowserMonitorUrl(task))}" target="_blank" rel="noopener">${hasSession ? "打开浏览器验证" : "前往浏览器监控"}</a>`;
+}
+
+function pdBuildAutomaticLoginTaskBody(persona, accountId, platform, loginUsername, loginPassword = "") {
+  return {
+    persona_id: String(persona?.id || ""),
+    account_id: String(accountId || ""),
+    platform: String(platform || "threads"),
+    task_type: "open_login",
+    priority: 20,
+    max_retries: 0,
+    payload: {
+      auto_submit: true,
+      login_username: String(loginUsername || "").trim(),
+      ...(loginPassword ? { login_password: loginPassword } : {}),
+      login_wait_seconds: 600,
+    },
+  };
 }
 
 function pdAutomationStatusLabel(value) {
@@ -973,6 +1031,7 @@ function pdRenderAutomationPanel(persona) {
       <td><div class="persona-auto-result" title="${pdEscape(task.error || (task.result && (task.result.url || task.result.screenshot_path)) || "-")}">${pdEscape(task.error || (task.result && (task.result.url || task.result.screenshot_path)) || "-")}</div></td>
       <td><div class="persona-auto-row-actions">
         <button class="ghost" type="button" data-auto-logs="${pdEscape(task.id)}">日志</button>
+        ${pdRenderAutomationBrowserAction(task)}
         <button class="ghost" type="button" data-auto-clear-log="${pdEscape(task.id)}">清除</button>
         ${["queued", "running", "need_manual"].includes(String(task.status || "")) ? `<button class="ghost persona-auto-cancel" type="button" data-auto-cancel="${pdEscape(task.id)}">取消</button>` : ""}
       </div></td>
@@ -1034,8 +1093,7 @@ function pdRenderAutomationPanel(persona) {
             <button class="ghost" type="button" id="personaAutoClearLogin" ${hasSavedLoginPassword ? "" : "disabled"}>删除登录资料</button>
           </div>
           <div class="persona-auto-actions">
-            <button class="ghost" type="button" data-auto-account-action="open_login" ${accounts.length ? "" : "disabled"}>打开登录窗口</button>
-            <button class="ghost" type="button" data-auto-login="1" ${accounts.length ? "" : "disabled"}>自动登录</button>
+            <button class="ghost" type="button" data-auto-login="1" ${accounts.length ? "" : "disabled"}>打开登录窗口</button>
             <button class="ghost" type="button" data-auto-account-action="check_login" ${accounts.length ? "" : "disabled"}>检查登录</button>
             ${platform === "threads" ? "" : `<button class="ghost" type="button" data-auto-task="browse_feed" ${accounts.length ? "" : "disabled"}>浏览首页</button>`}
           </div>
@@ -2444,6 +2502,7 @@ function pdBindAutomationEvents(persona, root) {
   root.querySelectorAll("[data-auto-account-action]").forEach((node) => {
     node.addEventListener("click", async () => {
       const action = String(node.getAttribute("data-auto-account-action") || "");
+      if (action !== "check_login") return;
       const accountId = pdSelectedAutomationAccountId();
       if (!accountId) {
         pdSetMsg("请先选择执行账号。", "err");
@@ -2455,7 +2514,7 @@ function pdBindAutomationEvents(persona, root) {
           method: "POST",
         });
         await pdLoadAutomationOverview();
-        pdSetMsg(action === "open_login" ? "已打开登录窗口，请在有头浏览器里完成登录。" : "已创建登录检查任务。", "ok");
+        pdSetMsg("已创建登录检查任务。", "ok");
         pdRenderDashboard();
       } catch (err) {
         pdSetMsg(String((err && (err.detail || err.message)) || err || "创建任务失败"), "err");
@@ -2486,20 +2545,7 @@ function pdBindAutomationEvents(persona, root) {
         }
         const created = await pdApi("/api/persona_dashboard/automation/tasks", {
           method: "POST",
-          body: {
-            persona_id: persona.id,
-            account_id: accountId,
-            platform,
-            task_type: "open_login",
-            priority: 20,
-            max_retries: 0,
-            payload: {
-              auto_submit: true,
-              login_username: loginUsername,
-              ...(loginPassword ? { login_password: loginPassword } : {}),
-              login_wait_seconds: 600,
-            },
-          },
+          body: pdBuildAutomaticLoginTaskBody(persona, accountId, platform, loginUsername, loginPassword),
         });
         personaDashboardVisiblePasswordAccountId = "";
         if (loginPassword) personaDashboardPasswordDrafts[accountId] = loginPassword;

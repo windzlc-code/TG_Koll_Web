@@ -264,11 +264,15 @@ def test_open_login_http_rejects_non_boolean_auto_submit(auto_submit):
     create_task.assert_not_called()
 
 
-@pytest.mark.parametrize("payload", [{}, {"auto_submit": False}, {"auto_submit": True}])
-def test_open_login_http_preserves_requested_submit_mode(payload):
+@pytest.mark.parametrize("payload", [{}, {"auto_submit": True}])
+def test_open_login_http_always_starts_in_automatic_mode(payload):
     client = _security_test_client()
     with (
-        mock.patch.object(social_automation_api, "_require_account_access"),
+        mock.patch.object(
+            social_automation_api,
+            "_require_account_access",
+            return_value={"login_username": "saved-user", "username": "saved-user", "login_password": "saved-password"},
+        ),
         mock.patch.object(
             social_automation_api,
             "create_account_task",
@@ -282,10 +286,74 @@ def test_open_login_http_preserves_requested_submit_mode(payload):
 
     assert response.status_code == 200
     submitted = create_task.call_args.args[2]
-    if "auto_submit" in payload:
-        assert submitted["auto_submit"] is payload["auto_submit"]
-    else:
-        assert "auto_submit" not in submitted
+    assert submitted["auto_submit"] is True
+
+
+def test_open_login_http_rejects_manual_start_mode():
+    client = _security_test_client()
+    with (
+        mock.patch.object(
+            social_automation_api,
+            "_require_account_access",
+            return_value={"login_username": "saved-user", "username": "saved-user", "login_password": "saved-password"},
+        ),
+        mock.patch.object(social_automation_api, "create_account_task") as create_task,
+    ):
+        response = client.post(
+            "/api/persona_dashboard/automation/accounts/account-1/open_login",
+            json={"auto_submit": False},
+        )
+
+    assert response.status_code == 409
+    create_task.assert_not_called()
+
+
+def test_generic_task_http_rejects_manual_login_start_mode():
+    client = _security_test_client()
+    with (
+        mock.patch.object(social_automation_api, "_require_account_access"),
+        mock.patch.object(social_automation_api, "_validate_user_task_media_paths"),
+        mock.patch.object(social_automation_api, "_create_social_task_for_user") as create_task,
+    ):
+        response = client.post(
+            "/api/persona_dashboard/automation/tasks",
+            json={
+                "persona_id": "persona-1",
+                "account_id": "account-1",
+                "platform": "threads",
+                "task_type": "open_login",
+                "payload": {"auto_submit": False},
+            },
+        )
+
+    assert response.status_code == 409
+    create_task.assert_not_called()
+
+
+def test_generic_task_http_rejects_automatic_login_without_effective_credentials():
+    client = _security_test_client()
+    with (
+        mock.patch.object(
+            social_automation_api,
+            "_require_account_access",
+            return_value={"login_username": "", "username": "", "login_password": ""},
+        ),
+        mock.patch.object(social_automation_api, "_validate_user_task_media_paths"),
+        mock.patch.object(social_automation_api, "_create_social_task_for_user") as create_task,
+    ):
+        response = client.post(
+            "/api/persona_dashboard/automation/tasks",
+            json={
+                "persona_id": "persona-1",
+                "account_id": "account-1",
+                "platform": "threads",
+                "task_type": "open_login",
+                "payload": {"auto_submit": True},
+            },
+        )
+
+    assert response.status_code == 409
+    create_task.assert_not_called()
 
 
 def test_live_browser_mode_endpoint_requests_manual_takeover():
@@ -404,6 +472,37 @@ def test_manual_takeover_remains_available_after_task_enters_need_manual():
     assert result["acknowledged"] is True
 
 
+def test_manual_takeover_endpoint_rejects_running_publish_task():
+    event = mock.Mock()
+    ack_event = mock.Mock()
+    ack_event.is_set.return_value = False
+    timeout_event = mock.Mock()
+    control = {
+        "live_browser_session_id": "live-publish-1",
+        "manual_takeover_event": event,
+        "manual_takeover_ack_event": ack_event,
+        "manual_takeover_timeout_event": timeout_event,
+    }
+    connection = mock.Mock()
+    connection.execute.return_value.fetchone.return_value = {
+        "id": "publish-task-1",
+        "status": "running",
+        "task_type": "publish_post",
+    }
+    database = mock.MagicMock()
+    database.return_value.__enter__.return_value = connection
+
+    with (
+        mock.patch.dict(social_automation_api._RUNNING_TASK_CONTROLS, {"publish-task-1": control}, clear=True),
+        mock.patch.object(social_automation_api, "db", database),
+    ):
+        with pytest.raises(social_automation_api.HTTPException) as raised:
+            social_automation_api.request_live_browser_manual_takeover("live-publish-1")
+
+    assert raised.value.status_code == 409
+    event.set.assert_not_called()
+
+
 def test_need_manual_status_overrides_stale_running_control_mode():
     request_event = mock.Mock()
     request_event.is_set.return_value = False
@@ -430,7 +529,7 @@ def test_need_manual_status_overrides_stale_running_control_mode():
         assert social_automation_api._live_browser_open_login_mode(row) == "manual"
 
 
-def test_manual_login_recovery_never_guesses_success_or_requeues_recent_task():
+def test_manual_task_recovery_never_guesses_success_or_requeues_recent_task():
     connection = mock.Mock()
     connection.execute.return_value.fetchall.return_value = []
     database = mock.MagicMock()
@@ -440,7 +539,7 @@ def test_manual_login_recovery_never_guesses_success_or_requeues_recent_task():
         mock.patch.dict(social_automation_api._RUNNING_TASK_CONTROLS, {}, clear=True),
         mock.patch.object(social_automation_api, "db", database),
     ):
-        social_automation_api._recover_orphaned_manual_login_task(10_000)
+        social_automation_api._recover_orphaned_manual_task(10_000)
 
     statements = "\n".join(str(call.args[0]) for call in connection.execute.call_args_list)
     assert "a.status = 'ready'" not in statements

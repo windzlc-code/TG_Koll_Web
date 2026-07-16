@@ -571,13 +571,20 @@ def register_social_automation_routes(app: FastAPI) -> None:
         payload: dict[str, Any] | None = Body(default=None),
         user: dict[str, Any] = Depends(get_current_user),
     ):
-        _require_account_access(account_id, user)
+        account = _require_account_access(account_id, user)
         wait_seconds = max(3600, int(os.getenv("SOCIAL_AUTOMATION_LOGIN_WAIT_SECONDS", "3600")))
         body = payload if isinstance(payload, dict) else {}
         task_payload = body.get("payload") if isinstance(body.get("payload"), dict) else body
         task_payload = dict(task_payload or {})
-        _validate_open_login_payload(task_payload)
         _validate_user_task_media_paths(task_payload, user)
+        requested_mode = _open_login_auto_submit_mode(task_payload)
+        if requested_mode is False and "auto_submit" in task_payload:
+            raise HTTPException(status_code=409, detail="打开登录默认使用自动模式；需要人工操作时请在浏览器窗口中切换人工接管")
+        if requested_mode is None:
+            raise HTTPException(status_code=422, detail="auto_submit must be a boolean when provided")
+        if not str(account["login_username"] or account["username"] or "").strip() or not str(account["login_password"] or ""):
+            raise HTTPException(status_code=409, detail="请先保存登录账号和密码，再打开自动登录")
+        task_payload["auto_submit"] = True
         task_payload.setdefault("login_wait_seconds", wait_seconds)
         return {"ok": True, "task": create_account_task(account_id, "open_login", task_payload)}
 
@@ -621,8 +628,16 @@ def register_social_automation_routes(app: FastAPI) -> None:
 
     @app.post("/api/persona_dashboard/automation/tasks")
     def api_social_task_create(payload: SocialTaskPayload, user: dict[str, Any] = Depends(get_current_user)):
-        _require_account_access(payload.account_id, user)
+        account = _require_account_access(payload.account_id, user)
         _validate_user_task_media_paths(payload.payload, user)
+        if str(payload.task_type or "").strip() == "open_login":
+            if _open_login_auto_submit_mode(payload.payload) is not True:
+                raise HTTPException(status_code=409, detail="登录任务必须从自动模式启动；运行后可随时切换人工接管")
+            task_payload = payload.payload if isinstance(payload.payload, dict) else {}
+            effective_username = str(task_payload.get("login_username") or account["login_username"] or account["username"] or "").strip()
+            effective_password = str(task_payload.get("login_password") or account["login_password"] or "")
+            if not effective_username or not effective_password:
+                raise HTTPException(status_code=409, detail="请先提供或保存登录账号和密码，再创建自动登录任务")
         return {
             "ok": True,
             "task": _create_social_task_for_user(payload, user),
@@ -1702,19 +1717,21 @@ def _live_browser_open_login_mode(row: Any) -> str:
     return "manual" if _live_browser_task_input_allowed(row) else "automatic"
 
 
-def _persist_manual_takeover_ack(task_id: str, session_id: str) -> None:
+def _persist_manual_takeover_ack(task_id: str, session_id: str) -> bool:
     with db() as conn:
         row = conn.execute(
             "SELECT status, task_type, payload_json FROM social_automation_tasks WHERE id = ?",
             (task_id,),
         ).fetchone()
         if not row or str(row["status"] or "") not in {"running", "need_manual"}:
-            return
-        if str(row["task_type"] or "") != "open_login":
-            return
+            return False
+        task_type = str(row["task_type"] or "")
+        status_changed = str(row["status"] or "") != "need_manual"
         task_payload = _loads(row["payload_json"], {})
-        needs_persist = task_payload.get("auto_submit") is not False or not bool(task_payload.get("manual_takeover"))
-        if needs_persist:
+        payload_changed = task_type == "open_login" and (
+            task_payload.get("auto_submit") is not False or not bool(task_payload.get("manual_takeover"))
+        )
+        if payload_changed:
             task_payload["auto_submit"] = False
             task_payload["manual_takeover"] = True
         conn.execute(
@@ -1725,8 +1742,8 @@ def _persist_manual_takeover_ack(task_id: str, session_id: str) -> None:
             """,
             (json.dumps(task_payload, ensure_ascii=False), _now(), task_id),
         )
-        if not needs_persist:
-            return
+        if not status_changed and not payload_changed:
+            return True
         _insert_log(
             conn,
             task_id,
@@ -1735,6 +1752,32 @@ def _persist_manual_takeover_ack(task_id: str, session_id: str) -> None:
             "用户已切换为人工接管，自动登录操作已停止。",
             {"session_id": session_id},
         )
+    return True
+
+
+def _persist_manual_takeover_resolved(task_id: str, session_id: str) -> bool:
+    now = _now()
+    with db() as conn:
+        resumed = conn.execute(
+            """
+            UPDATE social_automation_tasks
+            SET status = 'running', updated_at = ?
+            WHERE id = ? AND status = 'need_manual'
+            """,
+            (now, task_id),
+        ).rowcount
+        if resumed:
+            _insert_log(
+                conn,
+                task_id,
+                "info",
+                "manual_takeover_resolved",
+                "人工验证已完成，自动化任务继续执行。",
+                {"session_id": session_id},
+            )
+            return True
+        row = conn.execute("SELECT status FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
+        return bool(row and str(row["status"] or "") == "running")
 
 
 def _await_and_persist_manual_takeover_ack(task_id: str, session_id: str, ack_event: Any) -> None:
@@ -3452,7 +3495,7 @@ def _publish_login_dependency_blocks_claim(conn: sqlite3.Connection, row: Any, n
 
 def _claim_next_task() -> dict[str, Any] | None:
     now = _now()
-    _recover_orphaned_manual_login_task(now)
+    _recover_orphaned_manual_task(now)
     global_concurrency = _social_worker_max_concurrency()
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -3525,7 +3568,7 @@ def _claim_next_task() -> dict[str, Any] | None:
     return public
 
 
-def _recover_orphaned_manual_login_task(now: int) -> None:
+def _recover_orphaned_manual_task(now: int) -> None:
     with _RUNNING_TASK_CONTROLS_LOCK:
         running_ids = set(_RUNNING_TASK_CONTROLS.keys())
     recovery_window = max(60, int(os.getenv("SOCIAL_AUTOMATION_MANUAL_RECOVERY_SECONDS", "7200")))
@@ -3533,10 +3576,9 @@ def _recover_orphaned_manual_login_task(now: int) -> None:
     with db() as conn:
         stale_rows = conn.execute(
             """
-            SELECT id
+            SELECT *
             FROM social_automation_tasks
             WHERE status = 'need_manual'
-              AND task_type = 'open_login'
               AND updated_at < ?
             ORDER BY updated_at ASC
             LIMIT 50
@@ -3547,16 +3589,23 @@ def _recover_orphaned_manual_login_task(now: int) -> None:
             task_id = str(row["id"] or "")
             if not task_id or task_id in running_ids:
                 continue
-            message = "登录任务的执行进程已断开且超过恢复时限，请重新打开登录。"
-            conn.execute(
+            task_type = str(row["task_type"] or "")
+            message = (
+                "登录任务的执行进程已断开且超过恢复时限，请重新打开登录。"
+                if task_type == "open_login"
+                else "等待人工处理的任务执行进程已断开且超过恢复时限，请重新提交任务。"
+            )
+            failed = conn.execute(
                 """
                 UPDATE social_automation_tasks
                 SET status = 'failed', finished_at = ?, error = ?, updated_at = ?
                 WHERE id = ? AND status = 'need_manual'
                 """,
                 (now, message, now, task_id),
-            )
-            _insert_log(conn, task_id, "error", "manual_login_recovery_expired", message, {})
+            ).rowcount
+            if failed:
+                _release_task_billing_reservation(conn, row, now=now)
+                _insert_log(conn, task_id, "error", "manual_recovery_expired", message, {"task_type": task_type})
 
 
 def _execute_claimed_task(task: dict[str, Any]) -> None:
@@ -3578,6 +3627,10 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
         status,
     )
     control["manual_takeover_callback"] = lambda: _persist_manual_takeover_ack(
+        task_id,
+        str(control.get("live_browser_session_id") or ""),
+    )
+    control["manual_takeover_resolved_callback"] = lambda: _persist_manual_takeover_resolved(
         task_id,
         str(control.get("live_browser_session_id") or ""),
     )

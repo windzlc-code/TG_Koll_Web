@@ -216,6 +216,51 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         callback.assert_called_once_with("ready")
 
+    def test_publish_verification_keeps_browser_open_until_manual_login_completes(self):
+        page = mock.Mock()
+        context = mock.Mock()
+        manager = mock.MagicMock()
+        manager.__enter__.return_value = context
+        account_status = mock.Mock()
+        takeover = mock.Mock()
+        resolved = mock.Mock()
+        control = {
+            "account_login_status_callback": account_status,
+            "manual_takeover_event": threading.Event(),
+            "manual_takeover_ack_event": threading.Event(),
+            "manual_takeover_callback": takeover,
+            "manual_takeover_resolved_callback": resolved,
+        }
+        verification = {"status": "need_verification", "reason": "security challenge"}
+
+        with (
+            mock.patch.object(runner, "_open_camoufox_context", return_value=manager),
+            mock.patch.object(runner, "_import_initial_cookies"),
+            mock.patch.object(runner, "_first_page", return_value=page),
+            mock.patch.object(runner, "_sync_live_browser_viewport"),
+            mock.patch.object(runner, "_check_platform_login", return_value=verification),
+            mock.patch.object(runner, "_attempt_publish_login_repair", return_value=verification),
+            mock.patch.object(runner, "_wait_for_manual_login_completion", return_value={"status": "ready"}) as wait_manual,
+            mock.patch.object(runner, "_screenshot", return_value="verification.png"),
+            mock.patch.object(runner, "_run_publish_post", return_value={"ok": True}) as publish,
+        ):
+            result = runner.run_social_task(
+                task={"id": "publish-verification", "task_type": "publish_post", "platform": "threads", "payload": {}},
+                account={"platform": "threads"},
+                proxy=None,
+                data_dir=Path("."),
+                logger=_Logger(),
+                context_control=control,
+            )
+
+        self.assertTrue(result["ok"])
+        wait_manual.assert_called_once()
+        publish.assert_called_once()
+        self.assertEqual(account_status.call_args_list, [mock.call("need_verification"), mock.call("ready")])
+        self.assertTrue(takeover.called)
+        resolved.assert_called_once_with()
+        self.assertIsNone(manager.__exit__.call_args.args[0])
+
     def test_threads_error_page_is_not_treated_as_ready(self):
         status = runner._detect_threads_login_state(_ThreadsErrorPage())
 
@@ -571,6 +616,26 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertIs(manager.__exit__.call_args.args[0], runner.AutoLoginFailedError)
 
+    def test_closed_manual_browser_fails_instead_of_leaving_unresolvable_manual_task(self):
+        page = mock.Mock()
+        page.title.side_effect = RuntimeError("Target page, context or browser has been closed")
+
+        with self.assertRaises(runner.AutoLoginFailedError) as raised:
+            runner._wait_for_manual_login_completion(
+                page,
+                {"id": "closed-manual", "payload": {"manual_login_timeout_seconds": 300}},
+                Path("."),
+                _Logger(),
+                "threads",
+                None,
+                "manual login required",
+                "need_verification",
+                "challenge.png",
+            )
+
+        self.assertEqual(raised.exception.status, "cookie_expired")
+        self.assertEqual(raised.exception.screenshot_path, "challenge.png")
+
     def test_running_auto_login_stops_immediately_after_manual_takeover(self):
         page = mock.Mock()
         page.url = "https://www.threads.com/login/"
@@ -611,6 +676,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         page.url = "https://www.instagram.com/challenge/"
         event = threading.Event()
         ack_event = threading.Event()
+        account_status = mock.Mock()
         with (
             mock.patch.object(runner, "_goto"),
             mock.patch.object(runner, "_detect_platform_login_state", return_value={"status": "need_verification"}),
@@ -629,12 +695,14 @@ class RunnerPublishSafetyTests(unittest.TestCase):
                 context_control={
                     "manual_takeover_event": event,
                     "manual_takeover_ack_event": ack_event,
+                    "account_login_status_callback": account_status,
                 },
             )
 
         self.assertEqual(result["status"], "need_verification")
         self.assertTrue(event.is_set())
         self.assertTrue(ack_event.is_set())
+        account_status.assert_called_once_with("need_verification")
         self_heal.assert_not_called()
 
     def test_auto_login_does_not_resubmit_or_self_heal_during_submit_grace(self):
@@ -836,6 +904,72 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertTrue(event.is_set())
         self.assertTrue(ack_event.is_set())
         callback.assert_called_once_with()
+
+    def test_late_user_takeover_ack_always_notifies_persistence_callback(self):
+        event = threading.Event()
+        event.set()
+        ack_event = threading.Event()
+        callback = mock.Mock()
+
+        requested = runner._manual_takeover_requested({
+            "manual_takeover_event": event,
+            "manual_takeover_ack_event": ack_event,
+            "manual_takeover_callback": callback,
+        })
+
+        self.assertTrue(requested)
+        self.assertTrue(ack_event.is_set())
+        callback.assert_called_once_with()
+
+    def test_manual_takeover_ack_retries_persistence_before_unlocking_input(self):
+        event = threading.Event()
+        ack_event = threading.Event()
+        callback = mock.Mock(side_effect=[OSError("busy"), OSError("busy"), True])
+
+        with mock.patch.object(runner.time, "sleep") as sleep:
+            runner._request_manual_takeover({
+                "manual_takeover_event": event,
+                "manual_takeover_ack_event": ack_event,
+                "manual_takeover_callback": callback,
+            })
+
+        self.assertEqual(callback.call_count, 3)
+        self.assertTrue(ack_event.is_set())
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_manual_takeover_persistence_failure_keeps_input_locked(self):
+        event = threading.Event()
+        ack_event = threading.Event()
+        callback = mock.Mock(return_value=False)
+
+        with (
+            mock.patch.object(runner.time, "sleep"),
+            self.assertRaisesRegex(RuntimeError, "人工接管状态持久化失败"),
+        ):
+            runner._request_manual_takeover({
+                "manual_takeover_event": event,
+                "manual_takeover_ack_event": ack_event,
+                "manual_takeover_callback": callback,
+            })
+
+        self.assertTrue(event.is_set())
+        self.assertFalse(ack_event.is_set())
+
+    def test_manual_resume_persistence_failure_keeps_manual_events_set(self):
+        event = threading.Event()
+        ack_event = threading.Event()
+        event.set()
+        ack_event.set()
+
+        with self.assertRaisesRegex(RuntimeError, "人工验证恢复状态持久化失败"):
+            runner._resume_after_manual_takeover({
+                "manual_takeover_event": event,
+                "manual_takeover_ack_event": ack_event,
+                "manual_takeover_resolved_callback": mock.Mock(return_value=False),
+            })
+
+        self.assertTrue(event.is_set())
+        self.assertTrue(ack_event.is_set())
 
     def test_threads_transient_error_keeps_manual_login_page_untouched(self):
         page = mock.Mock()

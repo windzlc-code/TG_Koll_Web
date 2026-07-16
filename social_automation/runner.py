@@ -165,6 +165,33 @@ def run_social_task(
         login = _check_platform_login(page, platform, logger)
         if login.get("status") != "ready":
             login = _attempt_publish_login_repair(page, task, account, payload, screenshot_dir, logger, platform, cancel_event, login)
+        if task_type == "publish_post" and login.get("status") in {"need_verification", "invalid_credentials"}:
+            detected_status = str(login.get("status") or "need_verification")
+            account_status = "need_verification" if detected_status == "need_verification" else "cookie_expired"
+            _report_account_login_status(context_control, account_status, logger)
+            _request_manual_takeover(context_control)
+            shot = _screenshot(page, screenshot_dir, task, "login_verification_required", logger)
+            logger.log(
+                "warn",
+                "publish_login_manual_takeover",
+                str(login.get("reason") or f"{_platform_name(platform)} 发布前需要人工完成登录验证。"),
+                {"details": login, "screenshot_path": shot},
+                shot,
+            )
+            login = _wait_for_manual_login_completion(
+                page,
+                task,
+                screenshot_dir,
+                logger,
+                platform,
+                cancel_event,
+                f"{_platform_name(platform)} 发布前需要人工验证，完成后系统会继续发布。",
+                detected_status,
+                shot,
+                login,
+            )
+            if login.get("status") == "ready":
+                _resume_after_manual_takeover(context_control)
         if login.get("status") != "ready":
             shot = _screenshot(page, screenshot_dir, task, "login_not_ready", logger)
             logger.log("warn", "need_manual", str(login.get("reason") or f"{_platform_name(platform)} 账号需要人工登录或验证。"), {"details": login}, shot)
@@ -527,24 +554,51 @@ def _request_manual_takeover(context_control: dict[str, Any] | None) -> None:
     event = _manual_takeover_event(context_control)
     if event is not None:
         event.set()
+    _acknowledge_manual_takeover(context_control)
+
+
+def _run_manual_transition_callback(context_control: dict[str, Any], key: str, action: str) -> None:
+    callback = context_control.get(key)
+    if not callable(callback):
+        return
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            if callback() is not False:
+                return
+            last_error = RuntimeError(f"{action}未写入任务状态")
+        except Exception as exc:
+            last_error = exc
+        if attempt < 2:
+            time.sleep(0.1 * (attempt + 1))
+    raise RuntimeError(f"{action}失败，已停止继续操作：{last_error}") from last_error
+
+
+def _acknowledge_manual_takeover(context_control: dict[str, Any] | None) -> None:
     if isinstance(context_control, dict):
+        _run_manual_transition_callback(context_control, "manual_takeover_callback", "人工接管状态持久化")
         ack_event = context_control.get("manual_takeover_ack_event")
         if ack_event is not None:
             ack_event.set()
-        callback = context_control.get("manual_takeover_callback")
-        if callable(callback):
-            with contextlib.suppress(Exception):
-                callback()
 
 
 def _manual_takeover_requested(context_control: dict[str, Any] | None) -> bool:
     event = _manual_takeover_event(context_control)
     requested = bool(event is not None and getattr(event, "is_set", lambda: False)())
-    if requested and isinstance(context_control, dict):
-        ack_event = context_control.get("manual_takeover_ack_event")
-        if ack_event is not None:
-            ack_event.set()
+    if requested:
+        _acknowledge_manual_takeover(context_control)
     return requested
+
+
+def _resume_after_manual_takeover(context_control: dict[str, Any] | None) -> None:
+    if not isinstance(context_control, dict):
+        return
+    _run_manual_transition_callback(context_control, "manual_takeover_resolved_callback", "人工验证恢复状态持久化")
+    for key in ("manual_takeover_event", "manual_takeover_ack_event", "manual_takeover_timeout_event"):
+        event = context_control.get(key)
+        if event is not None:
+            with contextlib.suppress(Exception):
+                event.clear()
 
 
 def _safe_int_env_or_payload(payload: dict[str, Any], key: str, env_key: str, fallback: int) -> int:
@@ -860,6 +914,8 @@ def _human_click(
 
 def _screenshot(page, screenshot_dir: Path, task: dict[str, Any], stage: str, logger: AutomationLogger) -> str:
     if str(task.get("task_type") or "").strip().lower() == "publish_post" and str(stage or "") not in {
+        "login_verification_required",
+        "login_invalid_credentials",
         "manual_login_timeout",
         "publish_done",
         "publish_submitted_unconfirmed",
@@ -1472,6 +1528,7 @@ def _run_open_login(
                     continue
             if _verification_visible(page):
                 verification_hits += 1
+                _report_account_login_status(context_control, "need_verification", logger)
                 _request_manual_takeover(context_control)
                 if not verification_logged:
                     shot = _screenshot(page, screenshot_dir, task, "login_verification_required", logger)
@@ -1515,6 +1572,7 @@ def _run_open_login(
             if last_status.get("status") == "need_verification":
                 shot = _screenshot(page, screenshot_dir, task, "login_verification_required", logger)
                 verification_hits += 1
+                _report_account_login_status(context_control, "need_verification", logger)
                 logger.log(
                     "warn",
                     "login_verification_required",
@@ -1701,7 +1759,11 @@ def _wait_for_manual_login_completion(
         except Exception as exc:
             message = str(exc)
             if "Target page, context or browser has been closed" in message or "has been closed" in message:
-                raise NeedManualError(f"{_platform_name(platform)} 登录确认前浏览器窗口已关闭，请重新启动登录任务。", status) from exc
+                raise AutoLoginFailedError(
+                    f"{_platform_name(platform)} 登录确认前浏览器窗口已关闭，请重新启动登录任务。",
+                    "cookie_expired",
+                    screenshot_path,
+                ) from exc
         if time.monotonic() >= deadline:
             raise_manual_login_timeout()
         current_status = _detect_platform_login_state(page, platform)

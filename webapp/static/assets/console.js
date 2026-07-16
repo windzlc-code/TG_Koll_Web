@@ -247,13 +247,15 @@ function applyPersonaOverviewPostRows(persona) {
   }
 }
 
-const initialConsoleView = new URLSearchParams(window.location.search).get("view");
+const initialConsoleParams = new URLSearchParams(window.location.search);
+const initialConsoleView = initialConsoleParams.get("view");
+const initialAccountBrowserPanel = initialConsoleParams.get("browser_panel");
 const state = {
   view: ["workspace", "tasks", "accounts", "settings", "billing", "console_settings", "persona_dashboard"].includes(initialConsoleView) ? initialConsoleView : "workspace",
   activeModule: "personas",
   transientWorkspaceLeaveAcknowledgement: "",
   transientWorkspaceAllowNextUnload: false,
-  accountBrowserPanel: "accounts",
+  accountBrowserPanel: initialAccountBrowserPanel === "browsers" ? "browsers" : "accounts",
   liveBrowserExpandedSessionId: "",
   workspaceMenuOpen: true,
   currentUser: null,
@@ -3731,7 +3733,7 @@ function socialTaskPromptSuppressed(task) {
 }
 
 function socialTaskToastTerminal(task) {
-  const status = String(task?.status || "").trim();
+  const status = socialTaskPresentationStatus(task);
   // `need_manual` intentionally keeps its backend task open so the live
   // browser can remain available. It is nevertheless terminal for the toast:
   // automatic execution has stopped and the user should not see a running
@@ -3815,7 +3817,7 @@ function socialTaskToastMessage(task) {
   const taskId = String(task?.id || "").trim();
   const accountLabel = String(state.socialTaskToastLabels[taskId] || task?.account_username || task?.account_display_name || task?.account_id || "").trim();
   const suffix = accountLabel ? ` · ${accountLabel}` : "";
-  const status = String(task?.status || "").trim();
+  const status = socialTaskPresentationStatus(task);
   if (isFutureScheduledSocialTask(task)) return `${typeLabel}定时等待${suffix} · 计划 ${formatScheduledTime(task.scheduled_at)}`;
   if (status === "success") return `${typeLabel}已完成${suffix}`;
   if (status === "failed") return `${typeLabel}执行失败${suffix}`;
@@ -3835,9 +3837,11 @@ function syncSocialTaskToast(task, { force = false } = {}) {
   const resolved = resolveSocialTaskToast(task);
   task = resolved.task;
   const taskId = String(task?.id || "").trim();
-  const status = String(task?.status || "").trim();
+  const status = socialTaskPresentationStatus(task);
   const previous = state.socialTaskToastStatuses[taskId] || "";
-  state.socialTaskToastStatuses[incomingTaskId] = String((state.socialTaskToastBatches[resolved.key]?.tasks?.[incomingTaskId] || task)?.status || "").trim();
+  state.socialTaskToastStatuses[incomingTaskId] = socialTaskPresentationStatus(
+    state.socialTaskToastBatches[resolved.key]?.tasks?.[incomingTaskId] || task,
+  );
   state.socialTaskToastStatuses[taskId] = status;
   const key = resolved.key;
   const activeTransition = state.socialTaskToastTransitions[key];
@@ -3953,6 +3957,18 @@ function socialTaskLoginDependency(task) {
   const loginTaskId = String(payload.login_task_id || "").trim();
   if (!loginTaskId) return null;
   return (state.socialTasks || []).find((candidate) => String(candidate?.id || "").trim() === loginTaskId) || null;
+}
+
+function mergeSocialTaskState(...tasks) {
+  const next = Array.isArray(state.socialTasks) ? state.socialTasks.slice() : [];
+  tasks.flat().filter((task) => task?.id).forEach((task) => {
+    const taskId = String(task.id || "").trim();
+    const index = next.findIndex((candidate) => String(candidate?.id || "").trim() === taskId);
+    if (index >= 0) next[index] = { ...next[index], ...task };
+    else next.unshift(task);
+  });
+  state.socialTasks = next;
+  return next;
 }
 
 function socialTaskWaitsForManualLogin(task) {
@@ -6669,12 +6685,12 @@ function isFutureScheduledSocialTask(task) {
 }
 
 function renderSocialQueueTaskStatus(task) {
-  if (!isFutureScheduledSocialTask(task)) return renderStatusText(task?.status || "");
+  if (!isFutureScheduledSocialTask(task)) return renderStatusText(socialTaskPresentationStatus(task));
   return `<span class="task-status-text is-queued">定时等待</span>`;
 }
 
 function socialTaskDisplayStatus(task) {
-  return isFutureScheduledSocialTask(task) ? "定时等待" : statusLabel(task?.status || "");
+  return isFutureScheduledSocialTask(task) ? "定时等待" : statusLabel(socialTaskPresentationStatus(task));
 }
 
 function socialQueueTaskTime(task) {
@@ -8715,6 +8731,7 @@ async function submitPersonaPublishTask() {
     const task = result.task || {};
     const taskId = String(task.id || "").trim();
     const waitingForSchedule = isFutureScheduledSocialTask(task);
+    mergeSocialTaskState(result.login_task, task);
     state.personaPublishResults[String(persona.id)] = renderPersonaPublishResult(task, []);
     updatePersonaPublishResultView(persona.id);
     if (taskId) {
@@ -8810,6 +8827,7 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
       results.push(result);
       const task = result?.task;
       if (task?.id) {
+        mergeSocialTaskState(result?.login_task, task);
         state.socialTaskToastLabels[String(task.id)] = `${index + 1}/${posts.length} 篇 · ${account.username || account.display_name || ""}`;
         registerSocialTaskToastBatch(batchToastKey, results.map((item) => item?.task).filter(Boolean));
         syncSocialTaskToast(task, { force: true });
@@ -11108,12 +11126,13 @@ function renderTaskDetailLayout(task = {}, logs = [], {
   downloadUrl = "",
 } = {}) {
   const resultUrl = taskResultUrl(task);
+  const presentationStatus = kind === "social" ? socialTaskPresentationStatus(task) : String(task.status || "");
   const screenshots = collectTaskScreenshots(task, logs);
   const previewCountLabel = kind === "regular" ? `${screenshots.length} 张图片` : `${screenshots.length} 张截图`;
   const fields = kind === "social"
     ? [
       renderTaskDetailField("任务类型", statusLabel(task.task_type || task.workflow_name || task.type || title)),
-      renderTaskDetailStatusField(task.status || "", socialTaskDisplayStatus(task)),
+      renderTaskDetailStatusField(presentationStatus, socialTaskDisplayStatus(task)),
       renderTaskDetailField("平台", queuePlatformLabel(task.platform || "")),
       renderTaskDetailField("账号", task.account_username || task.account_id || "-"),
       task.scheduled_at ? renderTaskDetailField("计划执行", formatScheduledTime(task.scheduled_at)) : "",
@@ -11132,7 +11151,7 @@ function renderTaskDetailLayout(task = {}, logs = [], {
     <div class="console-modal-detail task-detail-modal task-detail-modal--stacked">
       <section class="task-detail-summary-card">
         <span>${esc(kind === "social" ? "自动化任务" : "任务详情")}</span>
-        <strong class="task-detail-status is-${esc(statusTone(task.status || ""))}">${esc((kind === "social" ? socialTaskDisplayStatus(task) : statusLabel(task.status || "")) || title)}</strong>
+        <strong class="task-detail-status is-${esc(statusTone(presentationStatus))}">${esc((kind === "social" ? socialTaskDisplayStatus(task) : statusLabel(task.status || "")) || title)}</strong>
         <p>${esc(task.workflow_name || statusLabel(task.task_type || task.type || "") || task.id || "")}</p>
       </section>
       <section class="task-detail-field-grid">
@@ -18167,7 +18186,7 @@ function renderSocialTasks() {
   host.innerHTML = state.socialTasks.length ? state.socialTasks.map((task) => `
     <article class="social-task">
       <div><strong>${esc(statusLabel(task.task_type))}</strong><span>${esc(task.platform)} · ${esc(task.account_username || task.account_id || "")}</span></div>
-      <span class="status ${esc(task.status)}">${esc(statusLabel(task.status))}</span>
+      <span class="status ${esc(socialTaskPresentationStatus(task))}">${esc(statusLabel(socialTaskPresentationStatus(task)))}</span>
       <div class="row-actions">
         <button type="button" data-social-preview="${esc(task.id)}">预览</button>
         <button type="button" data-social-log="${esc(task.id)}">日志</button>
@@ -18413,6 +18432,7 @@ async function submitMatrixPublishTask(messageId = "commandMsg") {
     const created = Array.isArray(result.created) ? result.created : [];
     const skipped = Array.isArray(result.skipped) ? result.skipped : [];
     const errors = Array.isArray(result.errors) ? result.errors : [];
+    created.forEach((item) => mergeSocialTaskState(item?.login_task, item?.task || item));
     const matrixToastTarget = { view: "tasks", taskPanel: "persona" };
     const matrixToastKey = `matrix-publish:${result.batch_id || Date.now()}`;
     showMsg(messageId, `矩阵发布已提交 ${created.length} 条任务，跳过 ${skipped.length} 条，失败 ${errors.length} 条。`, created.length > 0, {
