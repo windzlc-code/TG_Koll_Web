@@ -105,13 +105,13 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
 
     def test_console_actions_share_static_navigation_gradient_and_only_busy_buttons_animate(self):
         self.assertIn("--vecto-action-static-gradient", self.styles)
-        self.assertIn("--vecto-action-sheen-gradient", self.styles)
+        self.assertNotIn("--vecto-action-sheen-gradient", self.styles)
         self.assertIn("--vecto-action-running-gradient", self.styles)
         self.assertIn("@keyframes vecto-action-running-sheen", self.styles)
         self.assertIn('button[aria-busy="true"]', self.styles)
         self.assertIn("background-repeat: no-repeat", self.styles)
-        self.assertIn("background-position: -140% 0, 50% 0", self.styles)
-        self.assertIn("background-position: 240% 0, 50% 0", self.styles)
+        self.assertIn("background-size: 200% 100%", self.styles)
+        self.assertIn("background-position: 0% 0", self.styles)
         self.assertIn("border: 1px solid var(--vecto-action-border)", self.styles)
         self.assertIn(':disabled:not([aria-busy="true"])', self.styles)
         self.assertIn('--vecto-action-border: #4f817a;', self.styles)
