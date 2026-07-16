@@ -1958,13 +1958,13 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     : provisionalKeywords;
   const provisionalKeywordBatches = [provisionalQueryKeywords];
   const provisionalCacheStartedAt = Date.now();
-  const provisionalCachedCandidates = meaningfulNeedles(provisionalKeywords).length > 0
+  const provisionalCachedCandidates = !liveOnlyRefresh && meaningfulNeedles(provisionalKeywords).length > 0
     ? readThreadsSearchCandidateCache(archiveId, provisionalKeywords, Math.max(limit * 4, 40), true, searchMode)
       .filter((candidate) => candidateMatchesRequestedFreshness(candidate, freshnessDays))
     : [];
   console.info(`[sentiment_hot_stage] label=provisional-cache durationMs=${Date.now() - provisionalCacheStartedAt}`);
   const provisionalGlobalStartedAt = Date.now();
-  const provisionalGlobalCandidates = prefetchedStrategy
+  const provisionalGlobalCandidates = !liveOnlyRefresh && prefetchedStrategy
     ? readGlobalThreadsCandidateBackfill(
         archiveId,
         [...sentimentHotStrategyTermsForMode(prefetchedStrategy, searchMode), ...provisionalKeywords],
@@ -2185,7 +2185,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       : "已從當前人設候選池刷新熱點。");
   }
 
-  if (hasSearchKeywords && shouldFetchLiveCandidates && candidates.length < limit) {
+  if (hasSearchKeywords && shouldFetchLiveCandidates && !liveOnlyRefresh && candidates.length < limit) {
     candidates = await fillSentimentHotCandidatesToLimit({
       archiveId,
       keywords,
