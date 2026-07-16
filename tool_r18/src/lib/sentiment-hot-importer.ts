@@ -1979,9 +1979,11 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   const provisionalReadyCount = prefetchedStrategy
     ? provisionalCandidatesForReadiness.filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, prefetchedStrategy, searchMode)).length
     : sortRelevantHotCandidates(provisionalCandidatesForReadiness, provisionalKeywords, Math.max(limit * 4, 40), searchMode).length;
-  const provisionalSourceAttempted = args.refresh === true
-    && meaningfulNeedles(provisionalKeywords).length > 0
-    && provisionalReadyCount < limit;
+  // A refresh must use one live search after the final model strategy is ready.
+  // Starting a provisional browser search here can race the final search and
+  // launch two Chromium sessions for the same persona, which makes Threads
+  // rate-limit the second request and intermittently hide the GraphQL template.
+  const provisionalSourceAttempted = false;
   const provisionalSourcePromise = provisionalSourceAttempted
     ? Promise.all(provisionalKeywordBatches.map((batch) => fetchThreadsSearchPageCandidates({
         archiveId,
@@ -2124,7 +2126,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       : sortRelevantHotCandidates(candidates, keywords, poolLimit, searchMode).length)
     : 0;
   const shouldFetchLiveCandidates = hasSearchKeywords
-    && (candidates.length < semanticSourceTarget || cachedReadyCount < semanticSourceTarget);
+    && (args.refresh === true || candidates.length < semanticSourceTarget || cachedReadyCount < semanticSourceTarget);
   if (hasSearchKeywords && args.refresh === true && candidates.length >= limit && cachedReadyCount < semanticSourceTarget) {
     warnings.push(`當前相關候選不足，已繼續補充實時來源。`);
   }
