@@ -844,6 +844,24 @@ Search • Threads
     expect(candidates[0].engagement?.rawSignals).toEqual([12000, 340, 88]);
   });
 
+  it("parses Threads reader links returned over plain http", () => {
+    const candidates = parseThreadsReaderSearchMarkdownCandidates({
+      query: "汽車維修",
+      keywords: ["汽車維修"],
+      sourceUrl: "https://www.threads.com/search?q=%E6%B1%BD%E8%BB%8A%E7%B6%AD%E4%BF%AE",
+      text: `
+Search Threads
+
+[Demo](http://www.threads.com/@demo)
+[01/02/2026](http://www.threads.com/@demo/post/http123)
+汽車維修保養與煞車安全是車主近期最關心的實用議題，這篇內容整理常見故障與檢查方式。
+`,
+    });
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].sourceUrl).toBe("http://www.threads.com/@demo/post/http123");
+  });
+
   it("parses Threads account-search GraphQL posts with real engagement totals", () => {
     const candidates = parseThreadsGraphqlSearchPayload({
       query: "醫療",
