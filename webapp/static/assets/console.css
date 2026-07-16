@@ -12263,6 +12263,7 @@ body.console-page {
   background-image: var(--vecto-action-static-gradient);
   background-size: 100% 100%;
   background-position: 50% 0;
+  background-repeat: no-repeat;
   border-color: var(--vecto-action-border);
   box-shadow: none;
   text-shadow: none;

@@ -106,6 +106,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("--vecto-action-running-gradient", self.styles)
         self.assertIn("@keyframes vecto-action-running-sheen", self.styles)
         self.assertIn('button[aria-busy="true"]', self.styles)
+        self.assertIn("background-repeat: no-repeat", self.styles)
         self.assertIn(':disabled:not([aria-busy="true"])', self.styles)
         self.assertIn('--vecto-action-border: #4f817a;', self.styles)
         self.assertNotIn("#43e4c7 50%", self.styles)
