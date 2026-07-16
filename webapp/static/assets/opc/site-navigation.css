@@ -459,6 +459,69 @@
   font-size: 12px;
 }
 
+.site-account-preferences {
+  display: grid;
+  gap: 6px;
+  padding: 10px 0 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.site-account-section-label {
+  color: rgba(239, 248, 245, 0.58);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.site-account-preference {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 10px;
+  color: #eff8f5;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 7px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 750;
+  text-align: left;
+  cursor: pointer;
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.site-account-preference:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(119, 216, 195, 0.46);
+}
+
+.site-account-preference-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  color: #9fe9d4;
+}
+
+.site-account-preference-icon svg {
+  grid-area: 1 / 1;
+  width: 18px;
+  height: 18px;
+}
+
+.site-account-preference .site-language-state {
+  font-size: 8px;
+}
+
+.site-account-preference strong {
+  color: rgba(239, 248, 245, 0.64);
+  font-size: 11px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
 .site-account-logout {
   display: inline-flex;
   align-items: center;

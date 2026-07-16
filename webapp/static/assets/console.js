@@ -19874,7 +19874,7 @@ function bindEvents() {
       applyPersonaMemoryFilter(event.target.value || "");
     }
   });
-  $("refreshAll").addEventListener("click", () => {
+  $("refreshAll")?.addEventListener("click", () => {
     const refreshPublishing = state.activeModule === "publishing";
     if (state.view === "billing") loadBilling({ force: true }).catch(() => {});
     renderWorkspace(false);

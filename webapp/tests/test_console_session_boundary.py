@@ -35,8 +35,10 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertTrue(OPENCC_ST_CHARACTERS_JS.exists())
         self.assertIn('id="consoleMeName"', self.site_nav_source)
         self.assertIn('src="/assets/opc/vecto-logo-ui-icon.png', self.site_nav_source)
-        for required_id in ("consoleSidebar", "moduleMenu", "refreshAll", "viewTitle"):
+        for required_id in ("consoleSidebar", "moduleMenu", "viewTitle"):
             self.assertIn(f'id="{required_id}"', self.markup)
+        self.assertNotIn('id="refreshAll"', self.markup)
+        self.assertNotIn('class="header-action" href="/"', self.markup)
         for view in ("workspace", "tasks", "settings", "billing", "persona_dashboard", "console_settings"):
             self.assertIn(f'data-view="{view}"', self.markup)
         self.assertNotIn(".console-page .site-header", self.styles)
@@ -69,6 +71,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             'data-site-account-menu',
             'data-site-account-trigger',
             'data-site-account-popover',
+            'data-site-theme-toggle',
+            'data-site-language-toggle',
             'data-site-account-logout',
         ):
             self.assertIn(marker, self.markup)
@@ -84,6 +88,16 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('await api("/api/auth/logout", { method: "POST" })', self.source)
         self.assertIn("clearTenantInMemoryState()", self.source)
         self.assertIn("purgeLegacyTenantContentCaches()", self.source)
+        self.assertIn('class="site-account-preferences"', self.markup)
+        self.assertIn('data-site-personal-controls', self.markup)
+        self.assertIn('function accountPreferencesMarkup()', self.site_nav_source)
+
+    def test_publish_mode_active_buttons_use_navigation_dark_sheen_without_inset_ghosting(self):
+        self.assertIn("@keyframes vecto-publish-button-sheen", self.styles)
+        self.assertIn("background-size: 220% 100%", self.styles)
+        active_rule = self.styles.split(".publish-mode-tabs button.is-active {", 1)[1].split("}", 1)[0]
+        self.assertIn("#071112", active_rule)
+        self.assertIn("box-shadow: none", active_rule)
 
     def test_console_header_boundary_has_no_drop_shadow(self):
         start = self.site_nav_styles.index('.site-header.is-scrolled,')

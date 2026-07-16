@@ -36,6 +36,13 @@
       logoutPending: "正在退出...",
       logoutFailed: "退出失败，请重试。",
       globalSettings: "全局显示设置",
+      personalSettings: "个人设置",
+      appearance: "外观",
+      languageSetting: "语言",
+      themeLightState: "亮色",
+      themeDarkState: "暗色",
+      languageSimplifiedState: "简体中文",
+      languageTraditionalState: "繁体中文",
       themeDark: "切换到暗色模式",
       themeLight: "切换到亮色模式",
       language: "切换到繁体中文",
@@ -67,6 +74,13 @@
       logoutPending: "正在退出...",
       logoutFailed: "退出失敗，請重試。",
       globalSettings: "全域顯示設定",
+      personalSettings: "個人設定",
+      appearance: "外觀",
+      languageSetting: "語言",
+      themeLightState: "亮色",
+      themeDarkState: "暗色",
+      languageSimplifiedState: "簡體中文",
+      languageTraditionalState: "繁體中文",
       themeDark: "切換到暗色模式",
       themeLight: "切換到亮色模式",
       language: "切換到簡體中文",
@@ -153,6 +167,22 @@
     return `<svg${classAttribute} viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20c.8-4 3.1-6 7-6s6.2 2 7 6"></path></svg>`;
   }
 
+  function accountPreferencesMarkup() {
+    return `<div class="site-account-preferences" data-site-personal-controls>
+      <span class="site-account-section-label" data-site-copy="personalSettings"></span>
+      <button id="themeToggle" class="site-account-preference" type="button" data-site-theme-toggle>
+        <span class="site-account-preference-icon" aria-hidden="true">${themeIcon()}</span>
+        <span data-site-copy="appearance"></span>
+        <strong data-site-theme-state></strong>
+      </button>
+      <button id="languageToggle" class="site-account-preference" type="button" data-site-language-toggle>
+        <span class="site-account-preference-icon" aria-hidden="true">${languageIcon()}</span>
+        <span data-site-copy="languageSetting"></span>
+        <strong data-site-language-preference-state></strong>
+      </button>
+    </div>`;
+  }
+
   function accountMenuMarkup() {
     return `<div class="site-account-menu" data-site-account-menu>
       <button class="site-user" type="button" aria-controls="siteAccountPopover" aria-expanded="false" data-site-user-title data-site-account-trigger>
@@ -165,6 +195,7 @@
           <span class="site-account-status"><i aria-hidden="true"></i><span data-site-copy="accountStatus"></span></span>
         </div>
         <div class="site-account-detail"><span data-site-copy="accountId"></span><strong data-site-account-id>-</strong></div>
+        ${accountPreferencesMarkup()}
         <button class="site-account-logout" type="button" data-site-account-logout><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4M14 8l4 4-4 4M18 12H9"></path></svg><span data-site-copy="logout"></span></button>
         <span class="site-account-message" role="status" aria-live="polite" data-site-account-message></span>
       </div>
@@ -173,7 +204,7 @@
 
   function renderMobileMenu(page, current, mode) {
     const extraLink = mode === "authenticated"
-      ? navLink({ key: "home", href: "/", current, className: "site-mobile-menu-extra" })
+      ? ""
       : navLink({ key: "guest", href: page === "home" ? "#contact" : "/#contact", current, className: "site-mobile-menu-extra" });
     return `<details class="site-mobile-menu" data-site-mobile-menu><summary class="site-menu-toggle" data-site-menu-toggle>${menuIcon()}<span data-site-copy="menu"></span></summary><nav class="site-mobile-menu-panel" data-site-navigation>${navigationLinks(page, current)}${extraLink}</nav></details>`;
   }
@@ -182,7 +213,7 @@
     const controls = `<div class="site-global-controls" data-site-global-controls><button id="themeToggle" class="site-icon-button" type="button" data-site-theme-toggle>${themeIcon()}</button><button id="languageToggle" class="site-icon-button site-language-button" type="button" data-site-language-toggle>${languageIcon()}</button></div>`;
     const mobileMenu = renderMobileMenu(page, current, mode);
     if (mode === "authenticated") {
-      return `${mobileMenu}${controls}${accountMenuMarkup()}<a class="header-action" href="/"><span data-site-copy="home"></span></a>`;
+      return `${mobileMenu}${accountMenuMarkup()}`;
     }
     return `${mobileMenu}${controls}<button class="header-login" type="button" data-open-login><span data-site-copy="login"></span></button><a class="header-action site-guest-action" href="${page === "home" ? "#contact" : "/#contact"}"><span data-site-copy="guest"></span></a>`;
   }
@@ -272,6 +303,19 @@
     }
   }
 
+  function bindPreferenceControls(root) {
+    root.querySelectorAll("[data-site-theme-toggle]").forEach((button) => {
+      if (button.dataset.sitePreferenceReady === "true") return;
+      button.dataset.sitePreferenceReady = "true";
+      button.addEventListener("click", () => setTheme(currentTheme() === "dark" ? "light" : "dark"));
+    });
+    root.querySelectorAll("[data-site-language-toggle]").forEach((button) => {
+      if (button.dataset.sitePreferenceReady === "true") return;
+      button.dataset.sitePreferenceReady = "true";
+      button.addEventListener("click", () => setLanguage(currentLanguage() === "zh-Hant" ? "zh-Hans" : "zh-Hant"));
+    });
+  }
+
   function bindAccountMenus(header) {
     header.querySelectorAll("[data-site-account-menu]").forEach((menu) => {
       if (menu.dataset.siteAccountReady === "true") return;
@@ -294,11 +338,13 @@
     const actions = header.querySelector(".header-actions");
     if (!actions) return;
     actions.querySelectorAll("[data-open-login], .site-guest-action").forEach((node) => node.remove());
+    actions.querySelectorAll(":scope > .site-global-controls").forEach((node) => node.remove());
     actions.querySelectorAll(".site-mobile-menu-extra").forEach((node) => node.remove());
     if (!actions.querySelector("[data-site-account-menu]")) {
       actions.insertAdjacentHTML("beforeend", accountMenuMarkup());
     }
     header.dataset.siteAuthState = "authenticated";
+    bindPreferenceControls(header);
     bindAccountMenus(header);
     setAccount(account);
     sync();
@@ -334,8 +380,7 @@
 
     header.dataset.siteReady = "true";
     header.dataset.i18nSkip = "true";
-    header.querySelector("[data-site-theme-toggle]")?.addEventListener("click", () => setTheme(currentTheme() === "dark" ? "light" : "dark"));
-    header.querySelector("[data-site-language-toggle]")?.addEventListener("click", () => setLanguage(currentLanguage() === "zh-Hant" ? "zh-Hans" : "zh-Hant"));
+    bindPreferenceControls(header);
     header.querySelectorAll("[data-site-mobile-menu]").forEach((menu) => {
       syncMenuState(menu);
       menu.addEventListener("toggle", () => {
@@ -360,6 +405,7 @@
     document.querySelectorAll("[data-site-home-label]").forEach((node) => node.setAttribute("aria-label", labels.homeLabel));
     document.querySelectorAll("[data-site-navigation]").forEach((node) => node.setAttribute("aria-label", labels.navigationLabel));
     document.querySelectorAll("[data-site-global-controls]").forEach((node) => node.setAttribute("aria-label", labels.globalSettings));
+    document.querySelectorAll("[data-site-personal-controls]").forEach((node) => node.setAttribute("aria-label", labels.personalSettings));
     document.querySelectorAll("[data-site-console-label]").forEach((node) => node.setAttribute("aria-label", labels.console));
     document.querySelectorAll("[data-site-user-title]").forEach((node) => node.title = labels.currentAccount);
     document.querySelectorAll("[data-site-account-name]").forEach((node) => {
@@ -380,6 +426,12 @@
       button.setAttribute("aria-pressed", language === "zh-Hant" ? "true" : "false");
     });
     document.querySelectorAll("[data-site-language-state]").forEach((node) => node.textContent = labels.languageState);
+    document.querySelectorAll("[data-site-theme-state]").forEach((node) => {
+      node.textContent = currentTheme() === "dark" ? labels.themeDarkState : labels.themeLightState;
+    });
+    document.querySelectorAll("[data-site-language-preference-state]").forEach((node) => {
+      node.textContent = language === "zh-Hant" ? labels.languageTraditionalState : labels.languageSimplifiedState;
+    });
     syncAccount();
     setLogoutPending(logoutPending, logoutMessage);
   }

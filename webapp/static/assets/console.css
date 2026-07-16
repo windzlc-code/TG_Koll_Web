@@ -1278,21 +1278,40 @@ textarea:focus {
 }
 
 .publish-mode-tabs button {
+  appearance: none;
   min-height: 36px;
   padding: 7px 16px;
   border-radius: 999px;
-  border-color: transparent;
+  border: 1px solid transparent;
   background: transparent;
   color: var(--muted);
   white-space: nowrap;
   box-shadow: none;
+  transition: background-color var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast);
 }
 
 .publish-mode-tabs button.is-active {
-  background: var(--accent);
-  color: var(--accent-ink);
-  border-color: var(--accent);
-  box-shadow: var(--active-shadow);
+  color: #ffffff;
+  background: linear-gradient(110deg, #071112 0%, #071112 46%, #102729 50%, #071112 54%, #071112 100%);
+  background-size: 220% 100%;
+  border-color: #071112;
+  box-shadow: none;
+  text-shadow: none;
+  animation: vecto-publish-button-sheen 760ms ease-out 1 both;
+}
+
+.publish-mode-tabs button.is-active:hover,
+.publish-mode-tabs button.is-active:focus-visible,
+.publish-mode-tabs button.is-active:active {
+  color: #ffffff;
+  border-color: #071112;
+  box-shadow: none;
+  transform: none;
+}
+
+@keyframes vecto-publish-button-sheen {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
 }
 
 .publish-account-badge {
@@ -12212,5 +12231,10 @@ body.console-page {
 @media (prefers-reduced-motion: reduce) {
   .console-page .view.is-active {
     animation: none;
+  }
+
+  .publish-mode-tabs button.is-active {
+    animation: none;
+    background-position: 50% 0;
   }
 }

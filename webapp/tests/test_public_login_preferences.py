@@ -203,6 +203,9 @@ class PublicLoginUiSourceTests(unittest.TestCase):
     def test_shared_navigation_owns_global_svg_preferences(self):
         for expected in ('id="themeToggle"', 'id="languageToggle"', "site-theme-icon", "site-language-icon"):
             self.assertIn(expected, self.site_nav_script)
+        self.assertIn("function accountPreferencesMarkup()", self.site_nav_script)
+        self.assertIn('class="site-account-preferences"', self.site_nav_script)
+        self.assertIn('actions.querySelectorAll(":scope > .site-global-controls")', self.site_nav_script)
         self.assertIn('const THEME_STORAGE_KEY = "wk-console-theme"', self.site_nav_script)
         self.assertIn('const LANGUAGE_STORAGE_KEY = "wk-console-language"', self.site_nav_script)
         self.assertIn('window.addEventListener("storage"', self.site_nav_script)

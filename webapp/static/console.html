@@ -8,9 +8,9 @@
   <title>Web 任务控制台</title>
   <link rel="preload" as="style" href="/assets/style.css?v=__STYLE_VERSION__" />
   <link id="personaDashboardStyles" rel="stylesheet" href="/assets/style.css?v=__STYLE_VERSION__" media="not all" />
-  <link rel="stylesheet" href="/assets/opc/site-navigation.css?v=2026071602" />
+  <link rel="stylesheet" href="/assets/opc/site-navigation.css?v=2026071603" />
   <link rel="stylesheet" href="/assets/console.css?v=__CONSOLE_CSS_VERSION__" />
-  <script defer src="/assets/opc/site-navigation.js?v=2026071602"></script>
+  <script defer src="/assets/opc/site-navigation.js?v=2026071603"></script>
 </head>
   <body class="console-page">
     <a class="site-skip-link" href="#main-content" data-site-copy="skip">跳至主要内容</a>
@@ -40,18 +40,8 @@
             <a href="/pricing.html"><span data-site-copy="pricing">方案与算力</span></a>
             <a href="/#service-difference"><span data-site-copy="difference">服务差异</span></a>
             <a href="/console.html" aria-current="page" data-console-entry><span data-site-copy="console">Web 控制台</span></a>
-            <a class="site-mobile-menu-extra" href="/"><span data-site-copy="home">返回首页</span></a>
           </nav>
         </details>
-        <div class="site-global-controls" aria-label="全局显示设置" data-site-global-controls>
-          <button id="themeToggle" class="site-icon-button" type="button" aria-label="切换到暗色模式" aria-pressed="false" data-site-theme-toggle>
-            <svg class="site-theme-icon site-theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>
-            <svg class="site-theme-icon site-theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 15.2A8.5 8.5 0 0 1 8.8 3.5 8.7 8.7 0 1 0 20.5 15.2Z"></path></svg>
-          </button>
-          <button id="languageToggle" class="site-icon-button site-language-button" type="button" aria-label="切换到繁体中文" aria-pressed="false" data-site-language-toggle>
-            <svg class="site-language-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.4 2.5 3.6 5.5 3.6 9S14.4 18.5 12 21M12 3C9.6 5.5 8.4 8.5 8.4 12s1.2 6.5 3.6 9"></path></svg><span class="site-language-state" data-site-language-state>简</span>
-          </button>
-        </div>
         <div class="site-account-menu" data-site-account-menu>
           <button class="site-user" type="button" title="当前登录账号" aria-controls="siteAccountPopover" aria-expanded="false" data-site-user-title data-site-account-trigger>
             <svg class="site-user-avatar" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20c.8-4 3.1-6 7-6s6.2 2 7 6"></path></svg>
@@ -65,6 +55,20 @@
               <span class="site-account-status"><i aria-hidden="true"></i><span data-site-copy="accountStatus">已登录</span></span>
             </div>
             <div class="site-account-detail"><span data-site-copy="accountId">账号 ID</span><strong data-site-account-id>-</strong></div>
+            <div class="site-account-preferences" aria-label="个人设置" data-site-personal-controls>
+              <span class="site-account-section-label" data-site-copy="personalSettings">个人设置</span>
+              <button id="themeToggle" class="site-account-preference" type="button" aria-label="切换到暗色模式" aria-pressed="false" data-site-theme-toggle>
+                <span class="site-account-preference-icon" aria-hidden="true">
+                  <svg class="site-theme-icon site-theme-icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>
+                  <svg class="site-theme-icon site-theme-icon-moon" viewBox="0 0 24 24"><path d="M20.5 15.2A8.5 8.5 0 0 1 8.8 3.5 8.7 8.7 0 1 0 20.5 15.2Z"></path></svg>
+                </span>
+                <span data-site-copy="appearance">外观</span><strong data-site-theme-state>亮色</strong>
+              </button>
+              <button id="languageToggle" class="site-account-preference" type="button" aria-label="切换到繁体中文" aria-pressed="false" data-site-language-toggle>
+                <span class="site-account-preference-icon" aria-hidden="true"><svg class="site-language-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.4 2.5 3.6 5.5 3.6 9S14.4 18.5 12 21M12 3C9.6 5.5 8.4 8.5 8.4 12s1.2 6.5 3.6 9"></path></svg><span class="site-language-state" data-site-language-state>简</span></span>
+                <span data-site-copy="languageSetting">语言</span><strong data-site-language-preference-state>简体中文</strong>
+              </button>
+            </div>
             <button class="site-account-logout" type="button" data-site-account-logout>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4M14 8l4 4-4 4M18 12H9"></path></svg>
               <span data-site-copy="logout">退出登录</span>
@@ -72,7 +76,6 @@
             <span class="site-account-message" role="status" aria-live="polite" data-site-account-message></span>
           </div>
         </div>
-        <a class="header-action" href="/"><span data-site-copy="home">返回首页</span></a>
       </div>
     </header>
     <div id="toastHost" class="toast-host" aria-live="polite" aria-atomic="false"></div>
@@ -138,7 +141,6 @@
           </div>
         </div>
         <div class="topbar-actions">
-          <button id="refreshAll" type="button">刷新</button>
           <button id="openAdmin" type="button" class="admin-only" hidden>运营后台</button>
         </div>
       </header>
