@@ -17237,7 +17237,12 @@ def create_app() -> FastAPI:
         path = str(request.url.path or "")
         method = request.method.upper()
         has_auth_cookie = bool(request.cookies.get(SESSION_COOKIE) or request.cookies.get(ADMIN_SESSION_COOKIE))
-        if path.startswith("/api/") and method in {"POST", "PUT", "PATCH", "DELETE"} and has_auth_cookie:
+        # Browser-auth helper writes are authenticated by their dedicated
+        # x-sentiment-browser-auth token, not the console session cookie. The
+        # extension may still carry that cookie cross-origin, so let this one
+        # token-authenticated endpoint reach its own strict auth check.
+        is_browser_auth_cookie_write = path == "/api/sentiment/browser-auth/cookies"
+        if path.startswith("/api/") and method in {"POST", "PUT", "PATCH", "DELETE"} and has_auth_cookie and not is_browser_auth_cookie_write:
             fetch_site = str(request.headers.get("sec-fetch-site") or "").strip().lower()
             if fetch_site in {"cross-site", "none"}:
                 return JSONResponse(status_code=403, content={"detail": "cross-origin request rejected", "code": "csrf_rejected"})
