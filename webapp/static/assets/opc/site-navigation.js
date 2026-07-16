@@ -254,6 +254,73 @@
     });
   }
 
+  async function logoutPublicSession() {
+    try {
+      const response = await fetch("/api/auth/logout", {
+        method: "POST",
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data?.detail || copy[currentLanguage()].logoutFailed);
+      }
+      setAccount(null);
+      window.location.reload();
+    } catch (error) {
+      setLogoutPending(false, error?.message || copy[currentLanguage()].logoutFailed);
+    }
+  }
+
+  function bindAccountMenus(header) {
+    header.querySelectorAll("[data-site-account-menu]").forEach((menu) => {
+      if (menu.dataset.siteAccountReady === "true") return;
+      menu.dataset.siteAccountReady = "true";
+      const trigger = menu.querySelector("[data-site-account-trigger]");
+      trigger?.addEventListener("click", () => setAccountMenuOpen(menu, trigger.getAttribute("aria-expanded") !== "true", { restoreFocus: true }));
+      menu.querySelector("[data-site-account-logout]")?.addEventListener("click", () => {
+        setLogoutPending(true);
+        if (header.dataset.siteMode === "public") {
+          void logoutPublicSession();
+          return;
+        }
+        window.dispatchEvent(new CustomEvent(EVENT_LOGOUT));
+      });
+    });
+  }
+
+  function showAuthenticatedAccount(header, account) {
+    if (!header || header.dataset.siteMode !== "public") return;
+    const actions = header.querySelector(".header-actions");
+    if (!actions) return;
+    actions.querySelectorAll("[data-open-login], .site-guest-action").forEach((node) => node.remove());
+    actions.querySelectorAll(".site-mobile-menu-extra").forEach((node) => node.remove());
+    if (!actions.querySelector("[data-site-account-menu]")) {
+      actions.insertAdjacentHTML("beforeend", accountMenuMarkup());
+    }
+    header.dataset.siteAuthState = "authenticated";
+    bindAccountMenus(header);
+    setAccount(account);
+    sync();
+  }
+
+  async function hydratePublicSession(header) {
+    if (!header || header.dataset.siteMode !== "public") return null;
+    try {
+      const response = await fetch("/api/auth/me", {
+        credentials: "include",
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) return null;
+      const account = await response.json();
+      showAuthenticatedAccount(header, account);
+      return account;
+    } catch {
+      return null;
+    }
+  }
+
   function mount(header) {
     if (!header || header.dataset.siteReady === "true") return header;
     const page = header.dataset.sitePage || "home";
@@ -277,15 +344,9 @@
       });
       menu.querySelectorAll("a").forEach((link) => link.addEventListener("click", () => menu.removeAttribute("open")));
     });
-    header.querySelectorAll("[data-site-account-menu]").forEach((menu) => {
-      const trigger = menu.querySelector("[data-site-account-trigger]");
-      trigger?.addEventListener("click", () => setAccountMenuOpen(menu, trigger.getAttribute("aria-expanded") !== "true", { restoreFocus: true }));
-      menu.querySelector("[data-site-account-logout]")?.addEventListener("click", () => {
-        setLogoutPending(true);
-        window.dispatchEvent(new CustomEvent(EVENT_LOGOUT));
-      });
-    });
+    bindAccountMenus(header);
     sync();
+    if (mode === "public") void hydratePublicSession(header);
     return header;
   }
 

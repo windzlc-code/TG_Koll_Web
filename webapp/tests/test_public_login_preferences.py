@@ -190,6 +190,16 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn('openLogin(event)', self.script)
         self.assertEqual(page.count('id="loginModal"'), 1)
 
+    def test_public_navigation_preserves_authenticated_account_state(self):
+        self.assertIn("async function hydratePublicSession(header)", self.site_nav_script)
+        self.assertIn('fetch("/api/auth/me"', self.site_nav_script)
+        self.assertIn("function showAuthenticatedAccount(header, account)", self.site_nav_script)
+        self.assertIn('header.dataset.siteAuthState = "authenticated"', self.site_nav_script)
+        self.assertIn("accountMenuMarkup()", self.site_nav_script)
+        self.assertIn("async function logoutPublicSession()", self.site_nav_script)
+        self.assertIn('fetch("/api/auth/logout"', self.site_nav_script)
+        self.assertIn("window.location.reload()", self.site_nav_script)
+
     def test_shared_navigation_owns_global_svg_preferences(self):
         for expected in ('id="themeToggle"', 'id="languageToggle"', "site-theme-icon", "site-language-icon"):
             self.assertIn(expected, self.site_nav_script)
