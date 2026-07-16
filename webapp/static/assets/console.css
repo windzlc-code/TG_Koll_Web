@@ -12066,8 +12066,8 @@ body.live-browser-modal-open {
   --panel-shadow: 0 10px 30px rgba(7, 31, 31, 0.06);
   --vecto-action-border: #071112;
   --vecto-action-ink: #ffffff;
-  --vecto-action-static-gradient: linear-gradient(112deg, #071112 0%, #0a1c1d 34%, #113b39 68%, #1b5e59 100%);
-  --vecto-action-running-gradient: linear-gradient(112deg, #071112 0%, #0d2725 32%, #164843 66%, #206c65 100%);
+  --vecto-action-static-gradient: linear-gradient(112deg, #071112 0%, #0c2525 32%, #18514d 68%, #26796f 100%);
+  --vecto-action-running-gradient: linear-gradient(112deg, #071112 0%, #10322f 30%, #1c5d57 64%, #287f75 100%);
 }
 
 :root[data-theme="dark"] {
@@ -12093,8 +12093,8 @@ body.live-browser-modal-open {
   --active-shadow: inset 0 0 0 2px rgba(119, 216, 195, 0.22);
   --panel-shadow: 0 12px 34px rgba(0, 0, 0, 0.3);
   --vecto-action-border: #55706e;
-  --vecto-action-static-gradient: linear-gradient(112deg, #071112 0%, #0d2625 34%, #174642 68%, #205d59 100%);
-  --vecto-action-running-gradient: linear-gradient(112deg, #071112 0%, #10322f 32%, #1a514c 66%, #246a64 100%);
+  --vecto-action-static-gradient: linear-gradient(112deg, #071112 0%, #102e2d 32%, #1b5651 68%, #2a746d 100%);
+  --vecto-action-running-gradient: linear-gradient(112deg, #071112 0%, #123a36 30%, #20635d 64%, #2d8177 100%);
 }
 
 body.console-page {
@@ -12261,7 +12261,7 @@ body.console-page {
   color: var(--vecto-action-ink);
   background-color: #071112;
   background-image: var(--vecto-action-static-gradient);
-  background-size: 220% 100%;
+  background-size: 100% 100%;
   background-position: 50% 0;
   border-color: var(--vecto-action-border);
   box-shadow: none;
@@ -12322,9 +12322,37 @@ body.console-page {
   button[data-browser-recommendation-refresh]
 ):hover:not(:disabled) {
   color: var(--vecto-action-ink);
-  background-position: 43% 0;
   border-color: #2a9184;
   box-shadow: 0 0 0 3px rgba(35, 124, 114, 0.16);
+  animation: vecto-action-click-sheen 720ms ease-out 1 both;
+}
+
+.console-page .console-shell :is(
+  .console-nav button.is-active,
+  .module-trigger.is-active,
+  .publish-mode-tabs button.is-active,
+  .persona-group-tabs button.is-active,
+  .persona-keyword-grid button.is-active,
+  .persona-quick-actions button.is-active:not(.danger),
+  .persona-subflow-tabs button.is-active,
+  .persona-draft-view-toggle button.is-active,
+  .persona-compose-toggle button.is-active,
+  .persona-source-toggle button.is-active,
+  .persona-media-operation-toggle button.is-active,
+  .account-browser-tabs button.is-active,
+  .account-pool-platforms button.is-active,
+  .automation-capsule-tabs button.is-active,
+  .live-browser-mode-toggle button.is-active:not(.is-pending),
+  .persona-list-actions--bulk .persona-bulk-scope button.is-active
+) {
+  animation: vecto-action-click-sheen 720ms ease-out 1 both;
+}
+
+.console-page .console-shell :is(
+  .console-nav button.is-click-highlight,
+  .module-trigger.is-click-highlight
+) {
+  animation: vecto-action-click-sheen 720ms ease-out 1 both;
 }
 
 .console-page .console-shell :is(
@@ -12360,6 +12388,17 @@ body.console-page {
   to { background-position: 0% 0; }
 }
 
+@keyframes vecto-action-click-sheen {
+  from {
+    background-size: 220% 100%;
+    background-position: 100% 0;
+  }
+  to {
+    background-size: 100% 100%;
+    background-position: 50% 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .console-page .view.is-active {
     animation: none;
@@ -12367,6 +12406,31 @@ body.console-page {
 
   .console-page .console-shell button[aria-busy="true"]:not(.danger),
   .console-page .console-shell button:has(> .task-button-busy):not(.danger) {
+    animation: none !important;
+    background-position: 50% 0;
+  }
+
+  .console-page .console-shell :is(
+    .console-nav button.is-active,
+    .module-trigger.is-active,
+    .publish-mode-tabs button.is-active,
+    .persona-group-tabs button.is-active,
+    .persona-keyword-grid button.is-active,
+    .persona-quick-actions button.is-active:not(.danger),
+    .persona-subflow-tabs button.is-active,
+    .persona-draft-view-toggle button.is-active,
+    .persona-compose-toggle button.is-active,
+    .persona-source-toggle button.is-active,
+    .persona-media-operation-toggle button.is-active,
+    .account-browser-tabs button.is-active,
+    .account-pool-platforms button.is-active,
+    .automation-capsule-tabs button.is-active,
+    .live-browser-mode-toggle button.is-active:not(.is-pending),
+    .persona-list-actions--bulk .persona-bulk-scope button.is-active,
+    .console-nav button.is-click-highlight,
+    .module-trigger.is-click-highlight
+  ),
+  .console-page .console-shell button:hover:not(:disabled) {
     animation: none !important;
     background-position: 50% 0;
   }
