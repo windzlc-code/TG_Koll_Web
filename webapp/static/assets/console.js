@@ -6359,7 +6359,6 @@ function renderPersonaImagePanel(persona) {
       </div>
       <div class="row-actions">
         <button type="button" class="primary" data-persona-generate-image ${imageBusy ? "disabled" : ""}>${renderBusyButtonContent(generateLabel, imageBusy, imageBusyStartedAt)}</button>
-        <button type="button" data-persona-upload-image-trigger>${renderPlusIcon()}上传自定义人设图</button>
         <input id="personaImageUploadFile" type="file" accept=".png,.jpg,.jpeg,.webp,.bmp,.gif,.tif,.tiff,.heic" data-persona-upload-image-file hidden />
       </div>
       <div class="persona-inline-panel persona-inline-panel--nested">
@@ -14279,19 +14278,6 @@ function updatePersonaEditableMediaSelectionDom(card, index) {
 
 function renderPersonaImageLibraryGrid(library) {
   const rows = Array.isArray(library?.items) ? library.items : [];
-  if (!rows.length) {
-    return `
-      <div class="persona-image-library-grid persona-image-library-grid--empty">
-        <div class="persona-image-library-card persona-image-library-card--empty">
-          <button type="button" class="persona-image-upload-placeholder" data-persona-upload-image-dropzone data-persona-upload-image-trigger aria-label="上传自定义人设图">
-            <span class="persona-image-upload-placeholder-icon">${renderPlusIcon()}</span>
-            <strong>上传自定义人设图</strong>
-            <small>拖拽图片到这里，或点击选择</small>
-            <small class="persona-image-upload-placeholder-tip">建议优先使用三视图</small>
-          </button>
-        </div>
-      </div>`;
-  }
   const previewable = rows
     .map((item) => ({
       id: String(item.id || "").trim(),
@@ -14302,6 +14288,25 @@ function renderPersonaImageLibraryGrid(library) {
       createdAt: String(item.created_at || "").trim(),
     }))
     .filter((item) => item.previewUrl);
+  if (!previewable.length) {
+    return `
+      <div class="persona-image-library-grid persona-image-library-grid--empty">
+        <div class="persona-image-library-card persona-image-library-card--empty">
+          <button type="button" class="persona-image-upload-placeholder" data-persona-upload-image-dropzone data-persona-upload-image-trigger aria-label="上传自定义人设图">
+            <span class="persona-image-upload-placeholder-icon">${renderPlusIcon()}</span>
+            <strong>上传自定义人设图</strong>
+            <small>拖拽图片到这里，或点击选择</small>
+            <small class="persona-image-upload-placeholder-tip">建议优先使用三视图</small>
+          </button>
+          <small class="persona-image-library-meta-placeholder">未上传人设图</small>
+          <div class="persona-image-library-actions persona-image-library-actions--placeholder" aria-hidden="true">
+            <span class="persona-image-library-action-placeholder persona-image-library-apply"></span>
+            <span class="persona-image-library-action-placeholder"></span>
+            <span class="persona-image-library-action-placeholder"></span>
+          </div>
+        </div>
+      </div>`;
+  }
   const groupId = registerMediaPreviewGroup(previewable);
   return `<div class="persona-image-library-grid">${previewable.map((item, index) => `
     <div class="persona-image-library-card ${item.isReference ? "is-reference" : ""}">
