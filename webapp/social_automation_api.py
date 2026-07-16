@@ -109,6 +109,8 @@ SOCIAL_ACCOUNT_STATUSES = {
     "disabled",
 }
 SOCIAL_TASK_STATUSES = {"preparing", "queued", "running", "success", "failed", "cancelled", "need_manual"}
+DAILY_PUBLISH_LIMIT = 15
+DAILY_PUBLISH_LIMIT_MESSAGE = "每日最多发布 15 篇。超过 15 篇会有封号风险，系统已强制禁止继续发布。"
 SOCIAL_MEDIA_EXTENSIONS = {
     ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif",
     ".mp4", ".mov", ".webm", ".m4v", ".mp3", ".wav", ".m4a", ".aac",
@@ -383,6 +385,246 @@ def _require_active_owner_user(conn: Any, owner_user_id: int) -> None:
         raise HTTPException(status_code=403, detail="账号已停用或不存在")
 
 
+def _daily_publish_timezone():
+    timezone_name = str(os.getenv("WEBAPP_TIMEZONE") or "Asia/Shanghai").strip() or "Asia/Shanghai"
+    try:
+        return ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        return timezone(timedelta(hours=8))
+
+
+def _daily_publish_window(target_at: int | float | None = None) -> tuple[int, int, str]:
+    target_ts = int(target_at or _now())
+    try:
+        local_time = datetime.fromtimestamp(target_ts, tz=_daily_publish_timezone())
+    except (OverflowError, OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="发布时间超出支持范围") from exc
+    start = local_time.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = start + timedelta(days=1)
+    return int(start.timestamp()), int(end.timestamp()), start.date().isoformat()
+
+
+def _owner_is_admin(conn: Any, user_id: int) -> bool:
+    row = conn.execute("SELECT is_admin FROM users WHERE id = ?", (int(user_id or 0),)).fetchone()
+    return bool(row and int(row["is_admin"] or 0) == 1)
+
+
+def _daily_publish_day(target_at: int | float | None = None) -> str:
+    return _daily_publish_window(target_at)[2]
+
+
+def _daily_publish_used_count(
+    conn: Any,
+    user_id: int,
+    quota_day: str,
+    *,
+    include_active_carryover: bool = False,
+) -> int:
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS task_count
+        FROM social_daily_publish_slots
+        WHERE user_id = ?
+          AND waived = 0
+          AND (
+            (quota_day = ? AND state NOT IN ('released', 'waived'))
+            OR (? = 1 AND quota_day != ? AND state IN ('reserved', 'armed'))
+          )
+        """,
+        (int(user_id), str(quota_day), 1 if include_active_carryover else 0, str(quota_day)),
+    ).fetchone()
+    return int(row["task_count"] or 0) if row else 0
+
+
+def _daily_publish_execution_count(
+    conn: Any,
+    user_id: int,
+    quota_day: str,
+    *,
+    exclude_task_id: str = "",
+) -> int:
+    exclude_clause = " AND task_id != ?" if exclude_task_id else ""
+    params: list[Any] = [int(user_id), str(quota_day)]
+    if exclude_task_id:
+        params.append(str(exclude_task_id))
+    row = conn.execute(
+        f"""
+        SELECT COUNT(*) AS task_count
+        FROM social_daily_publish_slots
+        WHERE user_id = ?
+          AND waived = 0
+          AND (
+            state IN ('reserved', 'armed')
+            OR (quota_day = ? AND state IN ('submitted', 'confirmed', 'unknown'))
+          )
+          {exclude_clause}
+        """,
+        tuple(params),
+    ).fetchone()
+    return int(row["task_count"] or 0) if row else 0
+
+
+def _ensure_daily_publish_slot(conn: Any, task: Any, *, now: int | None = None) -> Any:
+    task_id = str(task["id"] or "")
+    slot = conn.execute("SELECT * FROM social_daily_publish_slots WHERE task_id = ?", (task_id,)).fetchone()
+    if slot is not None:
+        return slot
+    current = int(now or _now())
+    waived = bool(int(task["daily_publish_waived"] or 0) or _owner_is_admin(conn, int(task["user_id"] or 0)))
+    committed = bool(int(task["daily_publish_committed"] or 0))
+    quota_at = int(task["daily_publish_committed_at"] or 0) if committed else int(task["scheduled_at"] or task["created_at"] or current)
+    state = "waived" if waived else (
+        "confirmed" if committed and str(task["status"] or "") == "success"
+        else ("submitted" if committed else ("reserved" if str(task["status"] or "") in {"running", "need_manual"} else "planned"))
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO social_daily_publish_slots(
+          task_id, user_id, quota_day, state, waived, submitted_at,
+          released_at, release_reason, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 0, '', ?, ?)
+        """,
+        (
+            task_id,
+            int(task["user_id"] or 0),
+            _daily_publish_day(quota_at),
+            state,
+            1 if waived else 0,
+            int(task["daily_publish_committed_at"] or 0),
+            int(task["created_at"] or current),
+            current,
+        ),
+    )
+    return conn.execute("SELECT * FROM social_daily_publish_slots WHERE task_id = ?", (task_id,)).fetchone()
+
+
+def _release_daily_publish_slot(conn: Any, task_id: str, reason: str, *, now: int | None = None) -> None:
+    current = int(now or _now())
+    conn.execute(
+        """
+        UPDATE social_daily_publish_slots
+        SET state = CASE
+              WHEN state = 'armed' THEN 'unknown'
+              WHEN state IN ('submitted', 'confirmed', 'unknown') THEN state
+              WHEN state = 'waived' THEN 'waived'
+              ELSE 'released'
+            END,
+            released_at = CASE WHEN state IN ('armed', 'submitted', 'confirmed', 'unknown', 'waived') THEN released_at ELSE ? END,
+            release_reason = CASE WHEN state IN ('armed', 'submitted', 'confirmed', 'unknown', 'waived') THEN release_reason ELSE ? END,
+            updated_at = ?
+        WHERE task_id = ?
+        """,
+        (current, str(reason or "released"), current, str(task_id)),
+    )
+
+
+def _set_daily_publish_slot_state(
+    conn: Any,
+    task_id: str,
+    state: str,
+    *,
+    now: int | None = None,
+    quota_day: str = "",
+) -> None:
+    current = int(now or _now())
+    submitted_at = current if state in {"submitted", "confirmed", "unknown"} else 0
+    conn.execute(
+        """
+        UPDATE social_daily_publish_slots
+        SET state = CASE WHEN waived = 1 THEN 'waived' ELSE ? END,
+            quota_day = CASE WHEN ? != '' AND waived = 0 THEN ? ELSE quota_day END,
+            submitted_at = CASE WHEN submitted_at > 0 THEN submitted_at WHEN ? > 0 THEN ? ELSE 0 END,
+            updated_at = ?
+        WHERE task_id = ?
+        """,
+        (state, quota_day, quota_day, submitted_at, submitted_at, current, str(task_id)),
+    )
+
+
+def _daily_publish_policy_in_transaction(
+    conn: Any,
+    user_id: int,
+    *,
+    scheduled_at: int | str | None = None,
+    requested_count: int = 0,
+    admin_waived: bool = False,
+) -> dict[str, Any]:
+    clean_user_id = int(user_id or 0)
+    current = _now()
+    target_at = _parse_schedule(scheduled_at)
+    start_at, end_at, day = _daily_publish_window(target_at or current)
+    waived = bool(admin_waived or _owner_is_admin(conn, clean_user_id))
+    current_day = _daily_publish_day(current)
+    used = 0 if waived else _daily_publish_used_count(
+        conn,
+        clean_user_id,
+        day,
+        include_active_carryover=day == current_day,
+    )
+    remaining = max(0, DAILY_PUBLISH_LIMIT - used)
+    requested = max(0, int(requested_count or 0))
+    locked = bool(not waived and used >= DAILY_PUBLISH_LIMIT)
+    request_blocked = bool(not waived and requested > remaining)
+    message = ""
+    if locked:
+        message = DAILY_PUBLISH_LIMIT_MESSAGE
+    elif request_blocked:
+        message = f"本次发布将超过每日 {DAILY_PUBLISH_LIMIT} 篇上限。超过 {DAILY_PUBLISH_LIMIT} 篇会有封号风险，系统已禁止提交。"
+    return {
+        "limit": DAILY_PUBLISH_LIMIT,
+        "used": used,
+        "remaining": remaining,
+        "requested": requested,
+        "locked": locked,
+        "request_blocked": request_blocked,
+        "can_publish": bool(waived or (not locked and not request_blocked)),
+        "waived": waived,
+        "day": day,
+        "day_start": start_at,
+        "day_end": end_at,
+        "timezone": str(getattr(_daily_publish_timezone(), "key", "UTC+08:00")),
+        "message": message,
+    }
+
+
+def get_daily_publish_policy(
+    user_id: int,
+    *,
+    scheduled_at: int | str | None = None,
+    requested_count: int = 0,
+    admin_waived: bool = False,
+) -> dict[str, Any]:
+    with db() as conn:
+        return _daily_publish_policy_in_transaction(
+            conn,
+            user_id,
+            scheduled_at=scheduled_at,
+            requested_count=requested_count,
+            admin_waived=admin_waived,
+        )
+
+
+def require_daily_publish_capacity(
+    user_id: int,
+    *,
+    requested_count: int = 1,
+    scheduled_at: int | str | None = None,
+    admin_waived: bool = False,
+) -> dict[str, Any]:
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        policy = _daily_publish_policy_in_transaction(
+            conn,
+            user_id,
+            scheduled_at=scheduled_at,
+            requested_count=requested_count,
+            admin_waived=admin_waived,
+        )
+        if not policy["can_publish"]:
+            raise HTTPException(status_code=429, detail=policy["message"] or DAILY_PUBLISH_LIMIT_MESSAGE)
+        return policy
+
+
 def _billing_admin_waived(user: dict[str, Any]) -> bool:
     return bool(int(user.get("_workspace_admin_user_id") or 0) or int(user.get("is_admin") or 0))
 
@@ -401,7 +643,10 @@ def _create_social_task_for_user(payload: SocialTaskPayload, user: dict[str, Any
 def register_social_automation_routes(app: FastAPI) -> None:
     @app.get("/api/persona_dashboard/automation/overview")
     def api_social_automation_overview(user: dict[str, Any] = Depends(get_current_user)):
-        return build_social_automation_overview(user_id=_identity_user_id(user))
+        return build_social_automation_overview(
+            user_id=_identity_user_id(user),
+            admin_waived=_billing_admin_waived(user),
+        )
 
     @app.get("/api/persona_dashboard/automation/browser_sessions")
     def api_social_browser_sessions(user: dict[str, Any] = Depends(get_current_user)):
@@ -640,7 +885,28 @@ def register_social_automation_routes(app: FastAPI) -> None:
 
     @app.get("/api/persona_dashboard/automation/tasks")
     def api_social_tasks(status: str = "", account_id: str = "", limit: int = 60, user: dict[str, Any] = Depends(get_current_user)):
-        return {"ok": True, "tasks": list_social_tasks(status=status, account_id=account_id, limit=limit, user_id=_identity_user_id(user))}
+        user_id = _identity_user_id(user)
+        return {
+            "ok": True,
+            "tasks": list_social_tasks(status=status, account_id=account_id, limit=limit, user_id=user_id),
+            "publish_policy": get_daily_publish_policy(user_id, admin_waived=_billing_admin_waived(user)),
+        }
+
+    @app.get("/api/persona_dashboard/automation/publish_policy")
+    def api_social_publish_policy(
+        scheduled_at: str = "",
+        requested_count: int = 0,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        return {
+            "ok": True,
+            "publish_policy": get_daily_publish_policy(
+                _identity_user_id(user),
+                scheduled_at=scheduled_at,
+                requested_count=max(0, min(int(requested_count or 0), 100)),
+                admin_waived=_billing_admin_waived(user),
+            ),
+        }
 
     @app.post("/api/persona_dashboard/automation/tasks")
     def api_social_task_create(payload: SocialTaskPayload, user: dict[str, Any] = Depends(get_current_user)):
@@ -1251,7 +1517,7 @@ def scrub_social_automation_task_secrets() -> int:
     return changed
 
 
-def build_social_automation_overview(*, user_id: int | None = None) -> dict[str, Any]:
+def build_social_automation_overview(*, user_id: int | None = None, admin_waived: bool = False) -> dict[str, Any]:
     scope = "" if user_id is None else " WHERE user_id = ?"
     params: tuple[Any, ...] = () if user_id is None else (int(user_id),)
     with db() as conn:
@@ -1308,6 +1574,11 @@ def build_social_automation_overview(*, user_id: int | None = None) -> dict[str,
             }
         ),
         "supported_task_types": sorted(SOCIAL_TASK_TYPES),
+        "publish_policy": (
+            get_daily_publish_policy(int(user_id), admin_waived=admin_waived)
+            if user_id is not None
+            else {"limit": DAILY_PUBLISH_LIMIT, "used": 0, "remaining": DAILY_PUBLISH_LIMIT, "locked": False, "waived": True}
+        ),
     }
 
 
@@ -2854,6 +3125,10 @@ def _release_task_billing_reservation(conn: sqlite3.Connection, task: Any, *, no
 
 
 def _release_terminal_task_billing_reservations(conn: sqlite3.Connection, now: int) -> None:
+    stale_preparing = conn.execute(
+        "SELECT * FROM social_automation_tasks WHERE status = 'preparing' AND updated_at < ?",
+        (int(now) - 600,),
+    ).fetchall()
     conn.execute(
         """
         UPDATE social_automation_tasks
@@ -2862,6 +3137,10 @@ def _release_terminal_task_billing_reservations(conn: sqlite3.Connection, now: i
         """,
         (int(now), int(now), int(now) - 600),
     )
+    for task in stale_preparing:
+        if str(task["task_type"] or "") == "publish_post":
+            _ensure_daily_publish_slot(conn, task, now=now)
+            _release_daily_publish_slot(conn, str(task["id"] or ""), "stale_batch_preparation", now=now)
     rows = conn.execute(
         """
         SELECT t.billing_reservation_id
@@ -2891,7 +3170,7 @@ def delete_social_account(account_id: str) -> int:
         row = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (clean_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="account not found")
-        task_rows = conn.execute("SELECT id, status FROM social_automation_tasks WHERE account_id = ?", (clean_id,)).fetchall()
+        task_rows = conn.execute("SELECT * FROM social_automation_tasks WHERE account_id = ?", (clean_id,)).fetchall()
         active_task_ids = [
             str(task["id"] or "") for task in task_rows
             if str(task["id"] or "") and str(task["status"] or "") in {"running", "need_manual"}
@@ -2905,6 +3184,10 @@ def delete_social_account(account_id: str) -> int:
             "UPDATE social_automation_tasks SET status = 'cancelled', finished_at = ?, error = ?, updated_at = ? WHERE account_id = ? AND status IN ('preparing', 'queued', 'running', 'need_manual')",
             (now, "account deleted", now, clean_id),
         )
+        for task in task_rows:
+            if str(task["task_type"] or "") == "publish_post":
+                _ensure_daily_publish_slot(conn, task, now=now)
+                _release_daily_publish_slot(conn, str(task["id"] or ""), "account_deleted", now=now)
     for task_id in active_task_ids:
         _force_stop_running_task(task_id)
     with db() as conn:
@@ -3107,6 +3390,16 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
                         )
                         reused["reused"] = True
                         return reused
+        daily_publish_waived = bool(billing_admin_waived or _owner_is_admin(conn, owner_user_id))
+        if task_type == "publish_post" and not daily_publish_waived:
+            publish_policy = _daily_publish_policy_in_transaction(
+                conn,
+                owner_user_id,
+                scheduled_at=scheduled_at,
+                requested_count=1,
+            )
+            if not publish_policy["can_publish"]:
+                raise HTTPException(status_code=429, detail=publish_policy["message"] or DAILY_PUBLISH_LIMIT_MESSAGE)
         billing_reservation: dict[str, Any] | None = None
         billing_sku = ""
         if platform == "threads" and task_type == "publish_post":
@@ -3191,9 +3484,9 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
             """
             INSERT INTO social_automation_tasks(
               id, user_id, persona_id, account_id, platform, task_type, priority, status, scheduled_at,
-              payload_json, result_json, max_retries, billing_reservation_id, created_at, updated_at
+              payload_json, result_json, max_retries, billing_reservation_id, daily_publish_waived, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, ?)
             """,
             (
                 task_id,
@@ -3208,11 +3501,31 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
                 json.dumps(task_payload, ensure_ascii=False),
                 0 if task_type == "open_login" else max(0, min(int(payload.max_retries or 0), 5)),
                 str((billing_reservation or {}).get("id") or ""),
+                1 if daily_publish_waived else 0,
                 now,
                 now,
             ),
         )
         _insert_log(conn, task_id, "info", "queued", "任务已加入自动化队列", {"task_type": task_type})
+        if task_type == "publish_post":
+            quota_day = _daily_publish_day(scheduled_at or now)
+            conn.execute(
+                """
+                INSERT INTO social_daily_publish_slots(
+                  task_id, user_id, quota_day, state, waived, submitted_at,
+                  released_at, release_reason, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 0, 0, '', ?, ?)
+                """,
+                (
+                    task_id,
+                    owner_user_id,
+                    quota_day,
+                    "waived" if daily_publish_waived else "planned",
+                    1 if daily_publish_waived else 0,
+                    now,
+                    now,
+                ),
+            )
         if runtime_secrets:
             with _EPHEMERAL_TASK_SECRETS_LOCK:
                 _EPHEMERAL_TASK_SECRETS[task_id] = runtime_secrets
@@ -3280,6 +3593,9 @@ def clear_social_task(task_id: str) -> int:
             "UPDATE social_automation_tasks SET status = 'cancelled', finished_at = ?, error = ?, updated_at = ? WHERE id = ? AND status IN ('preparing', 'queued', 'running', 'need_manual')",
             (now, "task cleared", now, task_id),
         )
+        if str(row["task_type"] or "") == "publish_post":
+            _ensure_daily_publish_slot(conn, row, now=now)
+            _release_daily_publish_slot(conn, task_id, "task_cleared", now=now)
     if status in {"running", "need_manual"}:
         _force_stop_running_task(task_id)
     with db() as conn:
@@ -3320,6 +3636,10 @@ def clear_social_tasks(*, persona_id: str = "", account_id: str = "", user_id: i
                 f"UPDATE social_automation_tasks SET status = 'cancelled', finished_at = ?, error = ?, updated_at = ? WHERE id IN ({placeholders}) AND status IN ('preparing', 'queued', 'running', 'need_manual')",
                 (now, "tasks cleared", now, *task_ids),
             )
+            for row in rows:
+                if str(row["task_type"] or "") == "publish_post":
+                    _ensure_daily_publish_slot(conn, row, now=now)
+                    _release_daily_publish_slot(conn, str(row["id"] or ""), "tasks_cleared", now=now)
     for row in rows:
         task_id = str(row["id"] or "")
         if str(row["status"] or "") in {"running", "need_manual"}:
@@ -3342,6 +3662,7 @@ def cancel_social_task(task_id: str, reason: str = "") -> dict[str, Any]:
     now = _now()
     clean_reason = reason or "用户取消"
     with db() as conn:
+        original = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
         cancelled = conn.execute(
             """
             UPDATE social_automation_tasks
@@ -3353,6 +3674,9 @@ def cancel_social_task(task_id: str, reason: str = "") -> dict[str, Any]:
         row = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="任务不存在")
+        if cancelled and original is not None and str(original["task_type"] or "") == "publish_post":
+            _ensure_daily_publish_slot(conn, original, now=now)
+            _release_daily_publish_slot(conn, task_id, clean_reason, now=now)
         if cancelled or str(row["status"] or "") in {"failed", "cancelled"}:
             _release_task_billing_reservation(conn, row, now=now)
         if cancelled:
@@ -3419,6 +3743,10 @@ def cancel_all_social_tasks(
             f"SELECT * FROM social_automation_tasks WHERE id IN ({placeholders})",
             tuple(task_ids),
         ).fetchall()
+        for updated_row in updated_rows:
+            if str(updated_row["task_type"] or "") == "publish_post":
+                _ensure_daily_publish_slot(conn, updated_row, now=now)
+                _release_daily_publish_slot(conn, str(updated_row["id"] or ""), clean_reason, now=now)
         billing_statuses = _billing_reservation_statuses(conn, list(updated_rows))
 
     _discard_ephemeral_task_secrets(*task_ids)
@@ -3585,6 +3913,9 @@ def _publish_login_dependency_blocks_claim(conn: sqlite3.Connection, row: Any, n
             """,
             (now, message, now, task_id),
         )
+        if str(row["task_type"] or "") == "publish_post":
+            _ensure_daily_publish_slot(conn, row, now=now)
+            _release_daily_publish_slot(conn, task_id, "login_dependency_failed", now=now)
         _release_task_billing_reservation(conn, row, now=now)
         _insert_log(conn, task_id, "error", "login_dependency_failed", message, {"login_task_id": login_task_id, "login_status": login_status})
     return True
@@ -3598,23 +3929,6 @@ def _claim_next_task() -> dict[str, Any] | None:
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         _release_terminal_task_billing_reservations(conn, now)
-        rows = conn.execute(
-            """
-            SELECT t.*
-            FROM social_automation_tasks t
-            WHERE t.status = 'queued'
-              AND (t.scheduled_at = 0 OR t.scheduled_at <= ?)
-              AND NOT EXISTS (
-                SELECT 1
-                FROM social_automation_tasks r
-                WHERE r.account_id = t.account_id
-                  AND r.status IN ('running', 'need_manual')
-              )
-            ORDER BY t.priority ASC, t.created_at ASC
-            LIMIT 50
-            """,
-            (now,),
-        ).fetchall()
         with _RUNNING_TASK_CONTROLS_LOCK:
             active_account_ids = {
                 str((control.get("task") or {}).get("account_id") or "")
@@ -3639,17 +3953,77 @@ def _claim_next_task() -> dict[str, Any] | None:
             ).fetchall()
         }
         row = None
-        for candidate in rows:
-            if str(candidate["account_id"] or "") in active_account_ids:
-                continue
-            candidate_user_id = int(candidate["user_id"] or 0)
-            user_limit = requested_by_user.get(candidate_user_id, max(1, min(2, global_concurrency)))
-            if running_by_user.get(candidate_user_id, 0) >= user_limit:
-                continue
-            if _publish_login_dependency_blocks_claim(conn, candidate, now):
-                continue
-            row = candidate
-            break
+        publish_day = _daily_publish_day(now)
+        admin_by_user: dict[int, bool] = {}
+        publish_count_by_user: dict[int, int] = {}
+        cursor: tuple[int, int, str] | None = None
+        while row is None:
+            cursor_clause = ""
+            query_params: list[Any] = [now]
+            if cursor is not None:
+                cursor_clause = """
+                  AND (
+                    t.priority > ?
+                    OR (t.priority = ? AND t.created_at > ?)
+                    OR (t.priority = ? AND t.created_at = ? AND t.id > ?)
+                  )
+                """
+                query_params.extend([cursor[0], cursor[0], cursor[1], cursor[0], cursor[1], cursor[2]])
+            rows = conn.execute(
+                f"""
+                SELECT t.*
+                FROM social_automation_tasks t
+                WHERE t.status = 'queued'
+                  AND (t.scheduled_at = 0 OR t.scheduled_at <= ?)
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM social_automation_tasks r
+                    WHERE r.account_id = t.account_id
+                      AND r.status IN ('running', 'need_manual')
+                  )
+                  {cursor_clause}
+                ORDER BY t.priority ASC, t.created_at ASC, t.id ASC
+                LIMIT 50
+                """,
+                tuple(query_params),
+            ).fetchall()
+            if not rows:
+                break
+            for candidate in rows:
+                if str(candidate["account_id"] or "") in active_account_ids:
+                    continue
+                candidate_user_id = int(candidate["user_id"] or 0)
+                user_limit = requested_by_user.get(candidate_user_id, max(1, min(2, global_concurrency)))
+                if running_by_user.get(candidate_user_id, 0) >= user_limit:
+                    continue
+                slot = None
+                if str(candidate["task_type"] or "") == "publish_post":
+                    slot = _ensure_daily_publish_slot(conn, candidate, now=now)
+                    slot_state = str(slot["state"] or "") if slot is not None else ""
+                    slot_waived = bool(slot is not None and int(slot["waived"] or 0))
+                    confirmation_only = slot_state in {"armed", "submitted", "confirmed", "unknown"}
+                    if not slot_waived and not confirmation_only:
+                        if candidate_user_id not in admin_by_user:
+                            admin_by_user[candidate_user_id] = _owner_is_admin(conn, candidate_user_id)
+                        if not admin_by_user[candidate_user_id]:
+                            if candidate_user_id not in publish_count_by_user:
+                                publish_count_by_user[candidate_user_id] = _daily_publish_execution_count(
+                                    conn,
+                                    candidate_user_id,
+                                    publish_day,
+                                )
+                            if publish_count_by_user[candidate_user_id] >= DAILY_PUBLISH_LIMIT:
+                                continue
+                if _publish_login_dependency_blocks_claim(conn, candidate, now):
+                    continue
+                if slot is not None and not bool(int(slot["waived"] or 0)):
+                    slot_state = str(slot["state"] or "")
+                    if slot_state not in {"armed", "submitted", "confirmed", "unknown"}:
+                        _set_daily_publish_slot_state(conn, str(candidate["id"] or ""), "reserved", now=now, quota_day=publish_day)
+                row = candidate
+                break
+            last = rows[-1]
+            cursor = (int(last["priority"] or 0), int(last["created_at"] or 0), str(last["id"] or ""))
         if not row:
             return None
         task_id = str(row["id"])
@@ -3743,6 +4117,9 @@ def _recover_orphaned_manual_task(now: int) -> None:
                 (now, message, now, task_id),
             ).rowcount
             if failed:
+                if task_type == "publish_post":
+                    _ensure_daily_publish_slot(conn, row, now=now)
+                    _release_daily_publish_slot(conn, task_id, "manual_recovery_expired", now=now)
                 _release_task_billing_reservation(conn, row, now=now)
                 _insert_log(conn, task_id, "error", "manual_recovery_expired", message, {"task_type": task_type})
 
@@ -3815,8 +4192,14 @@ def _requeue_publish_confirmation(task_id: str, exc: BaseException) -> bool:
         if attempt >= max_attempts:
             payload["_publish_confirmation"] = confirmation
             conn.execute(
-                "UPDATE social_automation_tasks SET payload_json = ?, updated_at = ? WHERE id = ? AND status = 'running'",
-                (json.dumps(payload, ensure_ascii=False), now, task_id),
+                """
+                UPDATE social_automation_tasks
+                SET payload_json = ?, daily_publish_committed = 1,
+                    daily_publish_committed_at = CASE WHEN daily_publish_committed_at > 0 THEN daily_publish_committed_at ELSE ? END,
+                    updated_at = ?
+                WHERE id = ? AND status = 'running'
+                """,
+                (json.dumps(payload, ensure_ascii=False), now, now, task_id),
             )
             with contextlib.suppress(Exception):
                 setattr(exc, "confirmation", confirmation)
@@ -3836,7 +4219,9 @@ def _requeue_publish_confirmation(task_id: str, exc: BaseException) -> bool:
             """
             UPDATE social_automation_tasks
             SET status = 'queued', scheduled_at = ?, started_at = 0, finished_at = 0,
-                payload_json = ?, result_json = ?, error = ?, updated_at = ?
+                payload_json = ?, result_json = ?, error = ?, daily_publish_committed = 1,
+                daily_publish_committed_at = CASE WHEN daily_publish_committed_at > 0 THEN daily_publish_committed_at ELSE ? END,
+                updated_at = ?
             WHERE id = ? AND status = 'running'
             """,
             (
@@ -3845,10 +4230,12 @@ def _requeue_publish_confirmation(task_id: str, exc: BaseException) -> bool:
                 json.dumps(pending_result, ensure_ascii=False),
                 str(exc),
                 now,
+                now,
                 task_id,
             ),
         ).rowcount
         if updated:
+            _set_daily_publish_slot_state(conn, task_id, "submitted", now=now)
             conn.execute(
                 "UPDATE social_accounts SET status = 'ready', last_login_check_at = ?, last_run_at = ?, last_error = '', updated_at = ? WHERE id = ?",
                 (now, now, now, str(row["account_id"] or "")),
@@ -3912,10 +4299,17 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
     except NeedManualError as exc:
         if not _is_task_cancelled(str(task["id"])):
             detected_status = str(getattr(exc, "status", "") or "need_verification")
+            manual_result = {"screenshot_path": str(getattr(exc, "screenshot_path", "") or "")}
+            if detected_status == "publish_submitted_unconfirmed":
+                manual_result.update({
+                    "publish_submitted": True,
+                    "publish_outcome_unknown": True,
+                    "retryable": False,
+                })
             _finish_task(
                 task["id"],
                 "need_manual",
-                {"screenshot_path": str(getattr(exc, "screenshot_path", "") or "")},
+                manual_result,
                 str(exc),
                 account_status="ready" if detected_status == "publish_submitted_unconfirmed" else detected_status,
             )
@@ -4078,11 +4472,23 @@ def _persist_publish_confirmation_context(task_id: str, confirmation: dict[str, 
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT payload_json FROM social_automation_tasks WHERE id = ? AND status = 'running'",
+            "SELECT * FROM social_automation_tasks WHERE id = ? AND status = 'running'",
             (clean_task_id,),
         ).fetchone()
         if row is None:
             return False
+        slot = _ensure_daily_publish_slot(conn, row, now=now)
+        publish_day = _daily_publish_day(now)
+        if slot is not None and not bool(int(slot["waived"] or 0)):
+            slot_state = str(slot["state"] or "")
+            needs_capacity = str(slot["quota_day"] or "") != publish_day or slot_state == "released"
+            if needs_capacity and _daily_publish_execution_count(
+                conn,
+                int(row["user_id"] or 0),
+                publish_day,
+                exclude_task_id=clean_task_id,
+            ) >= DAILY_PUBLISH_LIMIT:
+                return False
         payload = _loads(row["payload_json"], {})
         if not isinstance(payload, dict):
             payload = {}
@@ -4090,10 +4496,17 @@ def _persist_publish_confirmation_context(task_id: str, confirmation: dict[str, 
         existing = existing if isinstance(existing, dict) else {}
         payload["_publish_confirmation"] = {**existing, **clean_confirmation}
         updated = conn.execute(
-            "UPDATE social_automation_tasks SET payload_json = ?, updated_at = ? WHERE id = ? AND status = 'running'",
-            (json.dumps(payload, ensure_ascii=False), now, clean_task_id),
+            """
+            UPDATE social_automation_tasks
+            SET payload_json = ?, daily_publish_committed = 1,
+                daily_publish_committed_at = CASE WHEN daily_publish_committed_at > 0 THEN daily_publish_committed_at ELSE ? END,
+                updated_at = ?
+            WHERE id = ? AND status = 'running'
+            """,
+            (json.dumps(payload, ensure_ascii=False), now, now, clean_task_id),
         ).rowcount
         if updated:
+            _set_daily_publish_slot_state(conn, clean_task_id, "armed", now=now, quota_day=publish_day)
             _insert_log(
                 conn,
                 clean_task_id,
@@ -4118,29 +4531,60 @@ def _finish_task(
         if not task:
             return False
         result_json = json.dumps(result or {}, ensure_ascii=False)
+        existing_committed = bool(int(task["daily_publish_committed"] or 0))
+        publish_committed = bool(
+            existing_committed
+            or (
+                str(task["task_type"] or "") == "publish_post"
+                and (status == "success" or bool((result or {}).get("publish_submitted")))
+            )
+        )
+        committed_at = int(task["daily_publish_committed_at"] or 0) if existing_committed else 0
+        if publish_committed and committed_at <= 0:
+            committed_at = now
         if status == "need_manual":
             completed = conn.execute(
                 """
                 UPDATE social_automation_tasks
-                SET status = 'need_manual', finished_at = 0, result_json = ?, error = ?, updated_at = ?
+                SET status = 'need_manual', finished_at = 0, result_json = ?, error = ?,
+                    daily_publish_committed = ?, daily_publish_committed_at = ?, updated_at = ?
                 WHERE id = ? AND status IN ('running', 'need_manual')
                 """,
-                (result_json, error, now, task_id),
+                (result_json, error, 1 if publish_committed else 0, committed_at, now, task_id),
             ).rowcount
         else:
             completed = conn.execute(
                 """
                 UPDATE social_automation_tasks
-                SET status = ?, finished_at = ?, result_json = ?, error = ?, updated_at = ?
+                SET status = ?, finished_at = ?, result_json = ?, error = ?,
+                    daily_publish_committed = ?, daily_publish_committed_at = ?, updated_at = ?
                 WHERE id = ? AND status IN ('running', 'need_manual')
                 """,
-                (status, now, result_json, error, now, task_id),
+                (status, now, result_json, error, 1 if publish_committed else 0, committed_at, now, task_id),
             ).rowcount
         if not completed:
             current = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
             if current is not None and str(current["status"] or "") in {"failed", "cancelled"}:
                 _release_task_billing_reservation(conn, current, now=now)
             return False
+        if str(task["task_type"] or "") == "publish_post":
+            _ensure_daily_publish_slot(conn, task, now=now)
+            if status == "success":
+                _set_daily_publish_slot_state(
+                    conn,
+                    task_id,
+                    "confirmed",
+                    now=now,
+                    quota_day="" if existing_committed else _daily_publish_day(now),
+                )
+            elif bool((result or {}).get("publish_outcome_unknown")) or existing_committed:
+                _set_daily_publish_slot_state(conn, task_id, "unknown", now=now)
+            elif bool((result or {}).get("publish_submitted")):
+                _set_daily_publish_slot_state(conn, task_id, "submitted", now=now, quota_day=_daily_publish_day(now))
+            elif status in {"failed", "cancelled"}:
+                _release_daily_publish_slot(conn, task_id, error or status, now=now)
+            elif status == "need_manual":
+                _set_daily_publish_slot_state(conn, task_id, "reserved", now=now)
         if status == "success":
             clean_payload = _loads(task["payload_json"], {})
             if isinstance(clean_payload, dict) and clean_payload.pop("_publish_confirmation", None) is not None:

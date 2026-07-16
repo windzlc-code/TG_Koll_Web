@@ -608,6 +608,9 @@ def init_db() -> None:
               retry_count INTEGER NOT NULL DEFAULT 0,
               max_retries INTEGER NOT NULL DEFAULT 1,
               created_by TEXT NOT NULL DEFAULT 'web',
+              daily_publish_waived INTEGER NOT NULL DEFAULT 0,
+              daily_publish_committed INTEGER NOT NULL DEFAULT 0,
+              daily_publish_committed_at INTEGER NOT NULL DEFAULT 0,
               created_at INTEGER NOT NULL,
               updated_at INTEGER NOT NULL
             )
@@ -728,6 +731,46 @@ def init_db() -> None:
         task_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(social_automation_tasks)").fetchall()}
         if "user_id" not in task_columns:
             conn.execute("ALTER TABLE social_automation_tasks ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0")
+        if "daily_publish_waived" not in task_columns:
+            conn.execute("ALTER TABLE social_automation_tasks ADD COLUMN daily_publish_waived INTEGER NOT NULL DEFAULT 0")
+        if "daily_publish_committed" not in task_columns:
+            conn.execute("ALTER TABLE social_automation_tasks ADD COLUMN daily_publish_committed INTEGER NOT NULL DEFAULT 0")
+        if "daily_publish_committed_at" not in task_columns:
+            conn.execute("ALTER TABLE social_automation_tasks ADD COLUMN daily_publish_committed_at INTEGER NOT NULL DEFAULT 0")
+        conn.execute(
+            """
+            UPDATE social_automation_tasks
+            SET daily_publish_committed = 1,
+                daily_publish_committed_at = CASE
+                  WHEN daily_publish_committed_at > 0 THEN daily_publish_committed_at
+                  WHEN finished_at > 0 THEN finished_at
+                  ELSE updated_at
+                END
+            WHERE task_type = 'publish_post'
+              AND daily_publish_committed = 0
+              AND (
+                status = 'success'
+                OR REPLACE(result_json, ' ', '') LIKE '%\"publish_submitted\":true%'
+                OR REPLACE(result_json, ' ', '') LIKE '%\"publish_outcome_unknown\":true%'
+              )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS social_daily_publish_slots (
+              task_id TEXT PRIMARY KEY,
+              user_id INTEGER NOT NULL,
+              quota_day TEXT NOT NULL,
+              state TEXT NOT NULL CHECK(state IN ('planned', 'reserved', 'armed', 'submitted', 'confirmed', 'unknown', 'released', 'waived')),
+              waived INTEGER NOT NULL DEFAULT 0,
+              submitted_at INTEGER NOT NULL DEFAULT 0,
+              released_at INTEGER NOT NULL DEFAULT 0,
+              release_reason TEXT NOT NULL DEFAULT '',
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL
+            )
+            """
+        )
         conn.execute("DROP INDEX IF EXISTS idx_social_accounts_persona_platform_username")
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_social_accounts_owner_persona_platform_username "
@@ -736,9 +779,95 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_social_accounts_user ON social_accounts(user_id, updated_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_social_proxies_user ON social_proxies(user_id, updated_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_social_tasks_user ON social_automation_tasks(user_id, created_at)")
+        conn.execute("DROP INDEX IF EXISTS idx_social_tasks_daily_publish")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_social_tasks_daily_publish "
+            "ON social_automation_tasks(user_id, task_type, daily_publish_waived, daily_publish_committed, daily_publish_committed_at, status, scheduled_at, created_at)"
+        )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_persona_owners_user ON persona_owners(user_id, archive_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_persona_group_owners_user ON persona_group_owners(user_id, group_id)")
         _ensure_commercial_billing_schema(conn)
+        conn.execute(
+            """
+            UPDATE social_automation_tasks
+            SET daily_publish_waived = 1
+            WHERE daily_publish_waived = 0
+              AND (
+                (
+                  billing_reservation_id != ''
+                  AND EXISTS (
+                    SELECT 1
+                    FROM billing_reservations reservation
+                    WHERE reservation.id = social_automation_tasks.billing_reservation_id
+                      AND reservation.status = 'waived'
+                      AND REPLACE(reservation.meta_json, ' ', '') LIKE '%\"waived_reason\":\"admin\"%'
+                  )
+                )
+                OR EXISTS (
+                  SELECT 1
+                  FROM billing_ledger ledger
+                  WHERE ledger.event_type = 'admin_waived'
+                    AND ledger.ref_type = 'social_task'
+                    AND ledger.ref_id = social_automation_tasks.id
+                )
+              )
+            """
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO social_daily_publish_slots(
+              task_id, user_id, quota_day, state, waived, submitted_at,
+              released_at, release_reason, created_at, updated_at
+            )
+            SELECT
+              task.id,
+              task.user_id,
+              strftime(
+                '%Y-%m-%d',
+                CASE
+                  WHEN task.daily_publish_committed_at > 0 THEN task.daily_publish_committed_at
+                  WHEN task.scheduled_at > 0 THEN task.scheduled_at
+                  ELSE task.created_at
+                END,
+                'unixepoch',
+                '+8 hours'
+              ),
+              CASE
+                WHEN task.daily_publish_waived = 1 OR owner.is_admin = 1 THEN 'waived'
+                WHEN task.daily_publish_committed = 1 AND task.status = 'success' THEN 'confirmed'
+                WHEN task.daily_publish_committed = 1 AND REPLACE(task.result_json, ' ', '') LIKE '%\"publish_outcome_unknown\":true%' THEN 'unknown'
+                WHEN task.daily_publish_committed = 1 THEN 'submitted'
+                WHEN task.status IN ('preparing', 'queued') THEN 'planned'
+                WHEN task.status IN ('running', 'need_manual') THEN 'reserved'
+                ELSE 'released'
+              END,
+              CASE WHEN task.daily_publish_waived = 1 OR owner.is_admin = 1 THEN 1 ELSE 0 END,
+              task.daily_publish_committed_at,
+              CASE WHEN task.status IN ('failed', 'cancelled') AND task.daily_publish_committed = 0 THEN COALESCE(NULLIF(task.finished_at, 0), task.updated_at) ELSE 0 END,
+              CASE WHEN task.status IN ('failed', 'cancelled') AND task.daily_publish_committed = 0 THEN 'historical_terminal_task' ELSE '' END,
+              task.created_at,
+              task.updated_at
+            FROM social_automation_tasks task
+            LEFT JOIN users owner ON owner.id = task.user_id
+            WHERE task.task_type = 'publish_post'
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_daily_publish_slots_usage "
+            "ON social_daily_publish_slots(user_id, quota_day, waived, state)"
+        )
+        conn.execute(
+            """
+            UPDATE social_daily_publish_slots
+            SET waived = 1, state = 'waived', updated_at = CASE WHEN updated_at > 0 THEN updated_at ELSE created_at END
+            WHERE task_id IN (
+              SELECT task.id
+              FROM social_automation_tasks task
+              LEFT JOIN users owner ON owner.id = task.user_id
+              WHERE task.daily_publish_waived = 1 OR owner.is_admin = 1
+            )
+            """
+        )
         from .governance import ensure_schema as ensure_governance_schema
 
         ensure_governance_schema(conn)

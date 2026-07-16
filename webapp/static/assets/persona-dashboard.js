@@ -1109,7 +1109,7 @@ function pdRenderAutomationPanel(persona) {
                     <strong>发布推文</strong>
                     <small>支持正文直发，可选附图；不再强制要求媒体文件。</small>
                   </div>
-                  <button class="ghost persona-strategy-action" type="button" data-auto-task="publish_post" ${accounts.length ? "" : "disabled"}>执行发布</button>
+                  <button class="ghost persona-strategy-action" type="button" data-auto-task="publish_post" data-daily-publish-action="true" ${accounts.length ? "" : "disabled"}>执行发布</button>
                 </div>
                 <div class="persona-strategy-row persona-strategy-row-compact">
                   <div class="persona-strategy-fields">
@@ -1193,7 +1193,7 @@ function pdRenderAutomationPanel(persona) {
             <label>媒体路径</label>
             <input id="personaAutoMedia" type="text" placeholder="本地图片/视频路径，多个用英文逗号分隔" />
             <div class="persona-auto-actions">
-              <button class="primary" type="button" data-auto-task="publish_post" ${accounts.length ? "" : "disabled"}>发帖</button>
+              <button class="primary" type="button" data-auto-task="publish_post" data-daily-publish-action="true" ${accounts.length ? "" : "disabled"}>发帖</button>
               <button class="ghost" type="button" data-auto-task="browse_profile" ${accounts.length ? "" : "disabled"}>浏览主页</button>
               <button class="ghost" type="button" data-auto-task="like_post" ${accounts.length ? "" : "disabled"}>点赞</button>
               <button class="ghost" type="button" data-auto-task="comment_post" ${accounts.length ? "" : "disabled"}>评论</button>
@@ -1989,9 +1989,11 @@ function pdStopAutoPoll() {
 }
 
 async function pdLoadAutomationOverview(options = {}) {
+  const publishPolicyRequestSeq = window.VectoPublishRiskGuard?.beginRequest?.() || 0;
   try {
     const data = await pdApi("/api/persona_dashboard/automation/overview");
     personaDashboardAutomation = data || { accounts: [], proxies: [], tasks: [], summary: {}, worker: {} };
+    window.VectoPublishRiskGuard?.updatePolicy?.(data?.publish_policy, { requestSeq: publishPolicyRequestSeq });
   } catch (err) {
     if (!(options && options.silent)) {
       pdSetMsg(String((err && (err.detail || err.message)) || err || "自动化模块加载失败"), "err");
@@ -2278,6 +2280,7 @@ function pdParseProxyUrl(raw) {
 }
 
 function pdBindAutomationEvents(persona, root) {
+  window.VectoPublishRiskGuard?.apply?.(root);
   root.querySelectorAll("[data-auto-pane]").forEach((node) => {
     node.addEventListener("click", () => {
       const pane = String(node.getAttribute("data-auto-pane") || "tasks");
@@ -2593,6 +2596,12 @@ function pdBindAutomationEvents(persona, root) {
       if (validation) {
         pdSetMsg(validation, "err");
         return;
+      }
+      if (taskType === "publish_post") {
+        const publishAllowed = window.VectoPublishRiskGuard?.ensureCapacity
+          ? await window.VectoPublishRiskGuard.ensureCapacity(1)
+          : true;
+        if (!publishAllowed) return;
       }
       try {
         pdSetMsg(payload.strategy_label ? `正在创建任务：${payload.strategy_label}...` : "正在创建社媒自动化任务...", "ok");

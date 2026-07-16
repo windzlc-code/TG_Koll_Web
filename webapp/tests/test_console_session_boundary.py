@@ -1363,6 +1363,166 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn('确认已发布', self.source)
         self.assertNotIn('确认未发布', self.source)
 
+    def test_daily_publish_policy_locks_customers_but_waives_admins(self):
+        normalize_policy = self._section(
+            "function normalizeDailyPublishPolicy",
+            "function isDailyPublishLimitMessage",
+        )
+        is_locked = self._section(
+            "function dailyPublishIsLocked",
+            "function dailyPublishActionAttrs",
+        )
+        limit_message = self._function_source("isDailyPublishLimitMessage")
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            const state = {{ dailyPublishPolicy: {{ limit: 15, used: 0, remaining: 15 }} }};
+            {normalize_policy}
+            {limit_message}
+            {is_locked}
+            assert.strictEqual(dailyPublishIsLocked({{ limit: 15, used: 14, remaining: 1 }}), false);
+            assert.strictEqual(dailyPublishIsLocked({{ limit: 15, used: 15, remaining: 0 }}), true);
+            assert.strictEqual(dailyPublishIsLocked({{ limit: 15, used: 99, remaining: 0, waived: true }}), false);
+            assert.strictEqual(dailyPublishIsLocked({{ limit: 15, used: 0, remaining: 15, check_failed: true }}), true);
+            const batch = normalizeDailyPublishPolicy({{
+              limit: 15,
+              used: 14,
+              remaining: 1,
+              requested: 2,
+              request_blocked: true,
+            }});
+            assert.strictEqual(batch.request_blocked, true);
+            assert.strictEqual(isDailyPublishLimitMessage("超过 15 篇会有封号风险"), true);
+            assert.strictEqual(isDailyPublishLimitMessage("超過 15 篇會有封號風險"), true);
+            """
+        )
+        self._run_node(harness)
+
+    def test_every_publish_entry_uses_the_shared_daily_limit_guard(self):
+        capacity_guard = self._section(
+            "async function ensureDailyPublishCapacity",
+            "function renderDailyPublishLimitBanner",
+        )
+        self.assertIn("/automation/publish_policy?", capacity_guard)
+        self.assertIn("showDailyPublishLimitWarning", capacity_guard)
+        api_source = self._section("async function api(", "async function apiWithTimeout")
+        self.assertIn("requested_count=0", api_source)
+        self.assertIn("updateDailyPublishPolicy", api_source)
+        for function_name in (
+            "submitPersonaPublishTask",
+            "submitPublishContentTasks",
+            "submitMatrixPublishTask",
+            "createSocialTask",
+        ):
+            self.assertIn("ensureDailyPublishCapacity", self._function_source(function_name))
+        self.assertGreaterEqual(self.source.count('data-daily-publish-action="true"'), 1)
+        self.assertIn("data-daily-publish-action", self.persona_dashboard_source)
+        persona_events = self._persona_dashboard_function_source("pdBindAutomationEvents")
+        self.assertIn("VectoPublishRiskGuard", persona_events)
+        self.assertIn("ensureCapacity", persona_events)
+        bind_events = self._function_source("bindEvents")
+        self.assertIn("handleDailyPublishActionGate", bind_events)
+        action_gate = self._function_source("handleDailyPublishActionGate")
+        self.assertIn("stopImmediatePropagation", action_gate)
+        self.assertIn("showDailyPublishLimitWarning", action_gate)
+        warning_modal = self._section(
+            "async function showDailyPublishLimitWarning",
+            "function beginDailyPublishPolicyRequest",
+        )
+        self.assertIn("dailyPublishWarningPromise", warning_modal)
+        self.assertIn("dailyPublishPendingWarning", warning_modal)
+        self.assertIn('modalKey: "daily-publish-limit"', warning_modal)
+        modal_source = self._section("function openConsoleModal", "const DAILY_PUBLISH_LIMIT_WARNING")
+        self.assertIn("translateConsoleLanguage(modal, currentLanguage())", modal_source)
+
+    def test_daily_publish_gate_blocks_business_click_and_policy_failures_close(self):
+        normalize_policy = self._section(
+            "function normalizeDailyPublishPolicy",
+            "function isDailyPublishLimitMessage",
+        )
+        is_locked = self._section(
+            "function dailyPublishIsLocked",
+            "function dailyPublishActionAttrs",
+        )
+        begin_request = self._function_source("beginDailyPublishPolicyRequest")
+        update_policy = self._section(
+            "function updateDailyPublishPolicy",
+            "async function ensureDailyPublishCapacity",
+        )
+        ensure_capacity = self._section(
+            "async function ensureDailyPublishCapacity",
+            "function renderDailyPublishLimitBanner",
+        )
+        action_gate = self._function_source("handleDailyPublishActionGate")
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            const state = {{
+              dailyPublishPolicy: {{ limit: 15, used: 15, remaining: 0, locked: true, waived: false }},
+              dailyPublishPolicyRequestSeq: 0,
+              dailyPublishPolicyAppliedSeq: 0,
+            }};
+            let warningCount = 0;
+            let prevented = false;
+            let stopped = false;
+            function applyDailyPublishButtonLocks() {{}}
+            async function showDailyPublishLimitWarning() {{ warningCount += 1; return false; }}
+            async function api() {{ throw {{ status: 500, detail: "down" }}; }}
+            {normalize_policy}
+            {is_locked}
+            {begin_request}
+            {update_policy}
+            {ensure_capacity}
+            {action_gate}
+            const blocked = handleDailyPublishActionGate({{
+              target: {{ closest: () => ({{}}) }},
+              preventDefault: () => {{ prevented = true; }},
+              stopImmediatePropagation: () => {{ stopped = true; }},
+            }});
+            assert.strictEqual(blocked, true);
+            assert.strictEqual(prevented, true);
+            assert.strictEqual(stopped, true);
+            (async () => {{
+              state.dailyPublishPolicy = {{ limit: 15, used: 0, remaining: 15, locked: false, waived: false }};
+              const allowed = await ensureDailyPublishCapacity(1);
+              assert.strictEqual(allowed, false);
+              assert.strictEqual(state.dailyPublishPolicy.locked, true);
+              assert.strictEqual(state.dailyPublishPolicy.check_failed, true);
+              assert.ok(warningCount >= 2);
+            }})().catch((error) => {{ console.error(error); process.exitCode = 1; }});
+            """
+        )
+        self._run_node(harness)
+
+    def test_daily_publish_policy_ignores_out_of_order_responses(self):
+        normalize_policy = self._section(
+            "function normalizeDailyPublishPolicy",
+            "function isDailyPublishLimitMessage",
+        )
+        update_policy = self._section(
+            "function updateDailyPublishPolicy",
+            "async function ensureDailyPublishCapacity",
+        )
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            const state = {{
+              dailyPublishPolicy: {{ limit: 15, used: 0, remaining: 15, locked: false, waived: false }},
+              dailyPublishPolicyAppliedSeq: 0,
+              dailyPublishWarningDay: "",
+            }};
+            function applyDailyPublishButtonLocks() {{}}
+            async function showDailyPublishLimitWarning() {{ return false; }}
+            {normalize_policy}
+            {update_policy}
+            updateDailyPublishPolicy({{ limit: 15, used: 15, remaining: 0, locked: true }}, {{ requestSeq: 2, notify: false }});
+            updateDailyPublishPolicy({{ limit: 15, used: 14, remaining: 1, locked: false }}, {{ requestSeq: 1, notify: false }});
+            assert.strictEqual(state.dailyPublishPolicy.used, 15);
+            assert.strictEqual(state.dailyPublishPolicy.locked, true);
+            """
+        )
+        self._run_node(harness)
+
     def test_account_menu_preserves_admin_managed_workspace_context(self):
         start = self.site_nav_source.index("function openAccountConsoleView")
         end = self.site_nav_source.index("function showAuthenticatedAccount", start)

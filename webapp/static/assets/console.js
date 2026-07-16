@@ -447,6 +447,12 @@ const state = {
   suppressedSocialTaskPromptIds: new Set(),
   socialTaskPersonaRefreshSignatures: {},
   socialBrowserSessions: [],
+  dailyPublishPolicy: { limit: 15, used: 0, remaining: 15, locked: false, waived: false, day: "" },
+  dailyPublishWarningDay: "",
+  dailyPublishPolicyRequestSeq: 0,
+  dailyPublishPolicyAppliedSeq: 0,
+  dailyPublishWarningPromise: null,
+  dailyPublishPendingWarning: null,
   liveBrowserLayout: storedLiveBrowserLayout(),
   browserPreferencesDirty: false,
   browserPolicySyncRevision: 0,
@@ -614,6 +620,12 @@ function clearTenantInMemoryState() {
   state.suppressedSocialTaskPromptIds = new Set();
   state.socialTaskPersonaRefreshSignatures = {};
   state.socialBrowserSessions = [];
+  state.dailyPublishPolicy = { limit: 15, used: 0, remaining: 15, locked: false, waived: false, day: "" };
+  state.dailyPublishWarningDay = "";
+  state.dailyPublishPolicyRequestSeq = 0;
+  state.dailyPublishPolicyAppliedSeq = 0;
+  state.dailyPublishWarningPromise = null;
+  state.dailyPublishPendingWarning = null;
   state.browserPreferences = null;
   state.browserRecommendation = null;
   state.browserDurationDrafts = {};
@@ -1236,6 +1248,33 @@ async function api(path, options = {}) {
   if (!response.ok) {
     handleSessionBoundary(response.status);
     const detail = localizeConsoleMessage(data?.detail || data?.message || text || "", response.status);
+    if (response.status === 429 && isDailyPublishLimitMessage(detail)) {
+      let scheduledRequest = false;
+      try {
+        const requestBody = typeof options?.body === "string" ? JSON.parse(options.body) : options?.body;
+        scheduledRequest = Boolean(requestBody?.scheduled_at);
+      } catch {}
+      const lockedPolicy = normalizeDailyPublishPolicy({
+        ...state.dailyPublishPolicy,
+        limit: Number(state.dailyPublishPolicy?.limit || 15),
+        used: Math.max(Number(state.dailyPublishPolicy?.used || 0), Number(state.dailyPublishPolicy?.limit || 15)),
+        remaining: 0,
+        locked: true,
+        message: detail,
+      });
+      if (!scheduledRequest) {
+        updateDailyPublishPolicy(lockedPolicy, {
+          notify: false,
+          requestSeq: beginDailyPublishPolicyRequest(),
+          force: true,
+        });
+      }
+      void showDailyPublishLimitWarning(lockedPolicy);
+      const refreshRequestSeq = beginDailyPublishPolicyRequest();
+      void api("/api/persona_dashboard/automation/publish_policy?requested_count=0")
+        .then((result) => updateDailyPublishPolicy(result?.publish_policy || result, { notify: false, requestSeq: refreshRequestSeq }))
+        .catch(() => {});
+    }
     if (data && typeof data === "object") {
       data.detail = detail;
       data.status = response.status;
@@ -1746,14 +1785,20 @@ function closeConsoleModal(result) {
   const resolver = modal.__resolve;
   modal.remove();
   if (typeof resolver === "function") resolver(result);
+  if (state.dailyPublishPendingWarning && !state.dailyPublishWarningPromise) {
+    const pending = state.dailyPublishPendingWarning;
+    state.dailyPublishPendingWarning = null;
+    window.setTimeout(() => void showDailyPublishLimitWarning(pending), 0);
+  }
 }
 
-function openConsoleModal({ title = "确认操作", message = "", contentHtml = "", inputLabel = "", inputValue = "", fields = [], confirmText = "确定", cancelText = "取消", danger = false, showCancel = true, extraActions = [] } = {}) {
+function openConsoleModal({ title = "确认操作", message = "", contentHtml = "", inputLabel = "", inputValue = "", fields = [], confirmText = "确定", cancelText = "取消", danger = false, showCancel = true, extraActions = [], modalKey = "" } = {}) {
   closeConsoleModal(null);
   return new Promise((resolve) => {
     const modal = document.createElement("div");
     modal.id = "consoleModal";
     modal.className = "console-modal";
+    modal.dataset.modalKey = String(modalKey || "");
     modal.__resolve = resolve;
     modal.innerHTML = `
       <div class="console-modal-backdrop" data-console-modal-cancel></div>
@@ -1787,6 +1832,8 @@ function openConsoleModal({ title = "确认操作", message = "", contentHtml = 
       </section>
     `;
     document.body.appendChild(modal);
+    modal.querySelectorAll("strong, p, label, button, [title], [aria-label], [placeholder]").forEach(markConsoleUiElement);
+    translateConsoleLanguage(modal, currentLanguage());
     const input = $("consoleModalInput");
     const fieldInputs = [...modal.querySelectorAll("[data-console-modal-field]")];
     const firstInput = input || fieldInputs[0];
@@ -1821,6 +1868,155 @@ function openConsoleModal({ title = "确认操作", message = "", contentHtml = 
       if (event.key === "Enter" && input) closeConsoleModal(input.value);
     });
   });
+}
+
+const DAILY_PUBLISH_LIMIT_WARNING = "超过 15 篇会有封号风险，系统已强制禁止继续发布。";
+
+function normalizeDailyPublishPolicy(value = {}) {
+  const limit = Math.max(1, Number(value?.limit || 15));
+  const used = Math.max(0, Number(value?.used || 0));
+  const remaining = Math.max(0, Number.isFinite(Number(value?.remaining)) ? Number(value.remaining) : limit - used);
+  const waived = Boolean(value?.waived);
+  return {
+    ...value,
+    limit,
+    used,
+    remaining,
+    requested: Math.max(0, Number(value?.requested || 0)),
+    waived,
+    check_failed: Boolean(!waived && value?.check_failed),
+    locked: Boolean(!waived && (value?.locked || value?.check_failed || used >= limit)),
+    request_blocked: Boolean(!waived && value?.request_blocked),
+    day: String(value?.day || ""),
+  };
+}
+
+function isDailyPublishLimitMessage(value) {
+  const text = String(value || "");
+  return text.includes("15") && (text.includes("封号风险") || text.includes("封號風險"));
+}
+
+function dailyPublishIsLocked(policy = state.dailyPublishPolicy) {
+  const normalized = normalizeDailyPublishPolicy(policy);
+  return Boolean(!normalized.waived && normalized.locked);
+}
+
+function dailyPublishActionAttrs() {
+  const locked = dailyPublishIsLocked();
+  return `data-daily-publish-action="true" aria-disabled="${locked ? "true" : "false"}"${locked ? ` title="${esc(DAILY_PUBLISH_LIMIT_WARNING)}"` : ""}`;
+}
+
+function applyDailyPublishButtonLocks(root = document) {
+  const locked = dailyPublishIsLocked();
+  root?.querySelectorAll?.("[data-daily-publish-action]").forEach((button) => {
+    button.classList.toggle("is-daily-publish-locked", locked);
+    button.setAttribute("aria-disabled", locked ? "true" : "false");
+    button.toggleAttribute("data-daily-publish-locked", locked);
+    if (locked) button.setAttribute("title", DAILY_PUBLISH_LIMIT_WARNING);
+    else if (button.getAttribute("title") === DAILY_PUBLISH_LIMIT_WARNING) button.removeAttribute("title");
+  });
+}
+
+async function showDailyPublishLimitWarning(policy = state.dailyPublishPolicy) {
+  const normalized = normalizeDailyPublishPolicy(policy);
+  if (state.dailyPublishWarningPromise) return state.dailyPublishWarningPromise;
+  const activeModal = $("consoleModal");
+  if (activeModal && activeModal.dataset.modalKey !== "daily-publish-limit") {
+    state.dailyPublishPendingWarning = normalized;
+    return false;
+  }
+  const message = String(normalized.message || DAILY_PUBLISH_LIMIT_WARNING);
+  const warningPromise = openConsoleModal({
+    title: "发布风险警告",
+    message,
+    contentHtml: `
+      <div class="daily-publish-risk-panel" role="alert">
+        <strong>今日发布额度：${esc(`${normalized.used} / ${normalized.limit}`)}</strong>
+        <p>为降低社媒账号被封禁的风险，系统不会继续创建发布任务。管理员操作不受此限制。</p>
+      </div>`,
+    confirmText: "我知道了",
+    showCancel: false,
+    modalKey: "daily-publish-limit",
+  }).then(() => false);
+  state.dailyPublishWarningPromise = warningPromise;
+  return warningPromise.finally(() => {
+    if (state.dailyPublishWarningPromise === warningPromise) state.dailyPublishWarningPromise = null;
+  });
+}
+
+function beginDailyPublishPolicyRequest() {
+  state.dailyPublishPolicyRequestSeq += 1;
+  return state.dailyPublishPolicyRequestSeq;
+}
+
+function updateDailyPublishPolicy(value, { notify = true, requestSeq = 0, force = false } = {}) {
+  if (!value || typeof value !== "object") return state.dailyPublishPolicy;
+  const cleanRequestSeq = Math.max(0, Number(requestSeq || 0));
+  if (!force && cleanRequestSeq && cleanRequestSeq < state.dailyPublishPolicyAppliedSeq) return state.dailyPublishPolicy;
+  if (cleanRequestSeq) state.dailyPublishPolicyAppliedSeq = Math.max(state.dailyPublishPolicyAppliedSeq, cleanRequestSeq);
+  const previous = normalizeDailyPublishPolicy(state.dailyPublishPolicy);
+  const next = normalizeDailyPublishPolicy(value);
+  state.dailyPublishPolicy = next;
+  applyDailyPublishButtonLocks();
+  if (notify && next.locked && !next.waived && (!previous.locked || state.dailyPublishWarningDay !== next.day)) {
+    state.dailyPublishWarningDay = next.day || "current";
+    void showDailyPublishLimitWarning(next);
+  }
+  return next;
+}
+
+async function ensureDailyPublishCapacity(requestedCount = 1, { scheduledAt = "" } = {}) {
+  const requested = Math.max(1, Number(requestedCount || 1));
+  let policy = normalizeDailyPublishPolicy(state.dailyPublishPolicy);
+  const requestSeq = beginDailyPublishPolicyRequest();
+  try {
+    const query = new URLSearchParams({ requested_count: String(requested) });
+    if (scheduledAt) query.set("scheduled_at", String(scheduledAt));
+    const result = await api(`/api/persona_dashboard/automation/publish_policy?${query.toString()}`);
+    policy = normalizeDailyPublishPolicy(result?.publish_policy || result || policy);
+    if (!scheduledAt) updateDailyPublishPolicy(policy, { notify: false, requestSeq });
+  } catch (error) {
+    if (Number(error?.status || 0) === 401 || Number(error?.status || 0) === 403) throw error;
+    if (policy.waived) return true;
+    policy = updateDailyPublishPolicy({
+      ...policy,
+      locked: true,
+      check_failed: true,
+      message: "暂时无法确认今日发布额度，系统已暂停发布，请稍后重试。",
+    }, { notify: false, requestSeq, force: true });
+    return showDailyPublishLimitWarning(policy);
+  }
+  if (policy.waived || (!policy.locked && !policy.request_blocked && requested <= policy.remaining)) return true;
+  return showDailyPublishLimitWarning(policy);
+}
+
+function renderDailyPublishLimitBanner() {
+  const policy = normalizeDailyPublishPolicy(state.dailyPublishPolicy);
+  if (policy.waived) return "";
+  const tone = policy.locked ? "is-locked" : (policy.remaining <= 3 ? "is-warning" : "is-normal");
+  return `
+    <div class="daily-publish-limit-banner ${tone}">
+      <div><strong>每日发布保护</strong><span>今日 ${esc(`${policy.used} / ${policy.limit}`)} 篇</span></div>
+      <p>${policy.locked ? esc(DAILY_PUBLISH_LIMIT_WARNING) : `今日还可发布 ${esc(String(policy.remaining))} 篇。达到上限后系统会锁定全部发布入口。`}</p>
+    </div>`;
+}
+
+window.VectoPublishRiskGuard = {
+  apply: applyDailyPublishButtonLocks,
+  beginRequest: beginDailyPublishPolicyRequest,
+  ensureCapacity: ensureDailyPublishCapacity,
+  isLocked: dailyPublishIsLocked,
+  showWarning: showDailyPublishLimitWarning,
+  updatePolicy: updateDailyPublishPolicy,
+};
+
+function handleDailyPublishActionGate(event) {
+  const action = event.target?.closest?.("[data-daily-publish-action]");
+  if (!action || !dailyPublishIsLocked()) return false;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  void showDailyPublishLimitWarning();
+  return true;
 }
 
 function sleep(ms) {
@@ -5847,7 +6043,7 @@ function renderPersonaDraftPostActions(post, { source = personaPostSource(), isS
             : `<button type="button" class="danger" data-persona-delete-post="${esc(post.id)}">删除草稿</button>`}
         </div>
       </div>
-      <button type="button" class="primary" data-persona-open-publishing="${esc(post.id)}">${source === "favorites" ? "发布收藏" : "发布"}</button>
+      <button type="button" class="primary" data-persona-open-publishing="${esc(post.id)}" ${dailyPublishActionAttrs()}>${source === "favorites" ? "发布收藏" : "发布"}</button>
     </div>`;
 }
 
@@ -8213,8 +8409,9 @@ function renderSimpleFlowModule(moduleId) {
   const actionLabel = moduleId === "queue" ? "打开任务队列" : (moduleId === "publishing" && publishModeForAction === "matrix_start" ? "提交矩阵发布" : "确认执行");
   const actionBusy = Boolean(state.simpleFlowPending && state.simpleFlowPendingModule === moduleId);
   const actionBlocked = Boolean(state.simpleFlowPending && !actionBusy);
-  const actionHtml = moduleId === "automation" || publishModeForAction === "publish_history" ? "" : `<div class="command-actions ${moduleId === "publishing" ? "publish-command-actions" : ""}"><button id="executeSimpleFlow" type="button" class="primary" aria-busy="${actionBusy ? "true" : "false"}" ${actionBusy || actionBlocked ? "disabled" : ""}>${actionBusy ? renderBusyButtonContent(`${actionLabel}中`, true, state.simpleFlowPendingStartedAt) : (actionBlocked ? "其他任务执行中" : esc(actionLabel))}</button></div>`;
+  const actionHtml = moduleId === "automation" || publishModeForAction === "publish_history" ? "" : `<div class="command-actions ${moduleId === "publishing" ? "publish-command-actions" : ""}"><button id="executeSimpleFlow" type="button" class="primary" aria-busy="${actionBusy ? "true" : "false"}" ${moduleId === "publishing" ? dailyPublishActionAttrs() : ""} ${actionBusy || actionBlocked ? "disabled" : ""}>${actionBusy ? renderBusyButtonContent(`${actionLabel}中`, true, state.simpleFlowPendingStartedAt) : (actionBlocked ? "其他任务执行中" : (moduleId === "publishing" && dailyPublishIsLocked() ? "今日发布已锁定" : esc(actionLabel)))}</button></div>`;
   $("moduleBody").innerHTML = `
+    ${moduleId === "publishing" ? renderDailyPublishLimitBanner() : ""}
     ${body}
     ${actionHtml}
   `;
@@ -8224,6 +8421,7 @@ function renderSimpleFlowModule(moduleId) {
     $("simplePublishMode").value = modes.includes(branch) ? branch : "publish_now";
   }
   bindSimpleFlowInputs(moduleId);
+  applyDailyPublishButtonLocks($("moduleBody"));
   if (moduleId === "publishing" && normalizedPublishMode(branch) === "matrix_start") {
     document.querySelector("[data-matrix-select-all]")?.addEventListener("click", () => {
       state.matrixPublish.personaIds = publishOrderedPersonaIds();
@@ -8716,6 +8914,8 @@ async function submitPersonaPublishTask() {
     return;
   }
   const platform = String(account.platform || "instagram").trim().toLowerCase() || "instagram";
+  const scheduledAt = normalizeScheduleValueForApi($("personaPublishScheduleAt")?.value);
+  if (!(await ensureDailyPublishCapacity(1, { scheduledAt }))) return;
   setActionLocked(lockParts, true);
   renderPersonaDetail();
   try {
@@ -8725,7 +8925,6 @@ async function submitPersonaPublishTask() {
       showMsg("commandMsg", `Instagram 发布至少需要上传一份媒体，或先给当前${sourceLabel}添加媒体。`, false);
       return;
     }
-    const scheduledAt = normalizeScheduleValueForApi($("personaPublishScheduleAt")?.value);
     showMsg("commandMsg", `正在提交 ${publishPlatformLabel(account)} 发布任务到浏览器执行队列...`, true);
     const postSourcePath = source === "favorites" ? "favorites" : "posts";
     const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/${postSourcePath}/${encodeURIComponent(post.id)}/publish`, {
@@ -8791,6 +8990,7 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
   }
   const platform = String(account.platform || "threads").trim().toLowerCase() || "threads";
   const scheduledAt = normalizeScheduleValueForApi($("simpleScheduleAt")?.value);
+  if (!(await ensureDailyPublishCapacity(posts.length, { scheduledAt }))) return null;
   const lockParts = ["publish_content", source, persona.id, cleanAccountId, selectedInSourceOrder.join("_"), scheduledAt || "now"];
   const batchToastKey = socialTaskToastLaneKey({
     task_type: "publish_post",
@@ -11635,11 +11835,13 @@ async function loadPersonaPublishHistory(personaId, { force = false } = {}) {
 async function loadAutomationTasksShared({ force = false } = {}) {
   if (!force && state.socialTasksFetch) return state.socialTasksFetch;
   const previousById = new Map((state.socialTasks || []).map((task) => [String(task?.id || ""), task]));
+  const publishPolicyRequestSeq = beginDailyPublishPolicyRequest();
   const request = api("/api/persona_dashboard/automation/tasks?limit=80")
     .catch((error) => ({ tasks: tenantArrayFallback(error, state.socialTasks) }))
     .then(async (data) => {
       const tasks = Array.isArray(data.tasks) ? data.tasks : [];
       state.socialTasks = tasks;
+      if (data?.publish_policy) updateDailyPublishPolicy(data.publish_policy, { requestSeq: publishPolicyRequestSeq });
       syncSocialTaskToasts(tasks);
       await refreshPersonaAfterPublishTasks(tasks, previousById);
       return { tasks };
@@ -15284,7 +15486,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
           <div class="row-actions">
             <button type="button" data-persona-open-new-draft ${personaDraftEditState(persona.id).editing ? "disabled" : ""}>新建草稿</button>
             ${selectedPost ? `<button type="button" data-persona-edit-post="${esc(selectedPost.id)}">编辑</button>` : ""}
-            ${selectedPost ? `<button type="button" class="primary" data-persona-open-publishing>进入发布</button>` : ""}
+            ${selectedPost ? `<button type="button" class="primary" data-persona-open-publishing ${dailyPublishActionAttrs()}>进入发布</button>` : ""}
             ${renderPersonaDraftViewToggle(draftViewMode)}
           </div>
         </div>
@@ -15348,7 +15550,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
         ${personaPublishPreview(selectedPost)}
         ${renderUploadDropzone("personaPublishFiles", { label: "发布素材", hint: publishHint || "拖动图片或视频到这里，或点击选择。" })}
         <div class="row-actions">
-          <button type="button" class="primary" data-persona-publish-submit ${(publishCanSubmit && selectedPost && !publishBusy) ? "" : "disabled"}>${publishWaitsForManualLogin ? "等待人工验证" : (publishBusy ? renderBusyButtonContent("发布任务执行中", true, publishBusyStartedAt) : "发布内容")}</button>
+          <button type="button" class="primary" data-persona-publish-submit ${dailyPublishActionAttrs()} ${(publishCanSubmit && selectedPost && !publishBusy) ? "" : "disabled"}>${dailyPublishIsLocked() ? "今日发布已锁定" : (publishWaitsForManualLogin ? "等待人工验证" : (publishBusy ? renderBusyButtonContent("发布任务执行中", true, publishBusyStartedAt) : "发布内容"))}</button>
         </div>
         <div id="personaPublishResult">${publishResult || `<div class="empty-state">提交后，这里会显示任务状态、截图和发布结果。</div>`}</div>
       </div>`;
@@ -15393,7 +15595,9 @@ async function showTaskDetail(id) {
 }
 
 async function loadSocialOverview() {
+  const publishPolicyRequestSeq = beginDailyPublishPolicyRequest();
   const overview = await api("/api/persona_dashboard/automation/overview");
+  if (overview?.publish_policy) updateDailyPublishPolicy(overview.publish_policy, { requestSeq: publishPolicyRequestSeq });
   const worker = overview.worker || overview.worker_state || {};
   $("workerState").textContent = worker.running ? "运行中" : (worker.enabled === false ? "已关闭" : "待命");
   $("workerDetail").textContent = worker.last_error || `最近任务：${worker.last_task_id || "-"}`;
@@ -17388,21 +17592,21 @@ function renderProxyPool() {
             const country = String(proxy.country || "").trim() || "待识别";
             const authLabel = proxy.username_configured || proxy.password_configured ? "需认证" : "无认证";
             return `<div class="proxy-table-row" role="row">
-              <span role="cell" class="proxy-detail-cell proxy-numeric">${offset + index + 1}</span>
-              <span role="cell" class="proxy-detail-cell">未分组</span>
-              <span role="cell" class="proxy-detail-cell">${esc(proxyIpTypeLabel(proxy.ip_type))}</span>
-              <span role="cell" class="proxy-detail-cell">${esc(proxySourceLabel(proxy.source))}</span>
-              <span role="cell" class="proxy-detail-cell">${esc(proxyPurchaseStatusLabel(proxy.purchase_status))}</span>
-              <span role="cell" class="proxy-detail-cell"><strong>${esc(proxy.name || endpoint)}</strong></span>
-              <span role="cell" class="proxy-detail-cell"><strong>${esc(endpoint)}</strong><small>${esc(authLabel)}</small></span>
-              <span role="cell" class="proxy-detail-cell">${esc(proxy.note || "-")}</span>
-              <span role="cell" class="proxy-detail-cell proxy-status-stack"><span class="status ${esc(proxy.status || "")}">${esc(proxyStatusLabel(proxy.status))}</span><small>${proxy.last_check_at ? esc(formatTime(proxy.last_check_at)) : "未检测"}</small></span>
-              <span role="cell" class="proxy-detail-cell">${esc(country)}</span>
-              <span role="cell" class="proxy-detail-cell">${esc(proxyExitIp(proxy))}</span>
-              <span role="cell" class="proxy-detail-cell proxy-numeric">${proxyBoundAccountCount(proxy)}</span>
-              <span role="cell" class="proxy-detail-cell">${esc(proxyProtocol(proxy))}</span>
-              <span role="cell" class="proxy-detail-cell proxy-numeric">${proxy.expires_at ? esc(formatTime(proxy.expires_at)) : "长期"}</span>
-              <span role="cell" class="proxy-table-actions">
+              <span role="cell" class="proxy-detail-cell proxy-numeric" data-mobile-label="序号">${offset + index + 1}</span>
+              <span role="cell" class="proxy-detail-cell" data-mobile-label="分组">未分组</span>
+              <span role="cell" class="proxy-detail-cell" data-mobile-label="IP 类型">${esc(proxyIpTypeLabel(proxy.ip_type))}</span>
+              <span role="cell" class="proxy-detail-cell" data-mobile-label="来源">${esc(proxySourceLabel(proxy.source))}</span>
+              <span role="cell" class="proxy-detail-cell" data-mobile-label="购买状态">${esc(proxyPurchaseStatusLabel(proxy.purchase_status))}</span>
+              <span role="cell" class="proxy-detail-cell" data-mobile-label="代理名称"><strong>${esc(proxy.name || endpoint)}</strong></span>
+              <span role="cell" class="proxy-detail-cell" data-mobile-label="代理资讯"><strong>${esc(endpoint)}</strong><small>${esc(authLabel)}</small></span>
+              <span role="cell" class="proxy-detail-cell" data-mobile-label="备注">${esc(proxy.note || "-")}</span>
+              <span role="cell" class="proxy-detail-cell proxy-status-stack" data-mobile-label="代理状态"><span class="status ${esc(proxy.status || "")}">${esc(proxyStatusLabel(proxy.status))}</span><small>${proxy.last_check_at ? esc(formatTime(proxy.last_check_at)) : "未检测"}</small></span>
+              <span role="cell" class="proxy-detail-cell" data-mobile-label="代理归属">${esc(country)}</span>
+              <span role="cell" class="proxy-detail-cell" data-mobile-label="出口 IP">${esc(proxyExitIp(proxy))}</span>
+              <span role="cell" class="proxy-detail-cell proxy-numeric" data-mobile-label="已绑账号">${proxyBoundAccountCount(proxy)}</span>
+              <span role="cell" class="proxy-detail-cell" data-mobile-label="代理协议">${esc(proxyProtocol(proxy))}</span>
+              <span role="cell" class="proxy-detail-cell proxy-numeric" data-mobile-label="有效时间">${proxy.expires_at ? esc(formatTime(proxy.expires_at)) : "长期"}</span>
+              <span role="cell" class="proxy-table-actions" data-mobile-label="操作">
                 <button type="button" data-proxy-check="${esc(proxy.id)}" title="检测代理" aria-label="检测代理">${renderRefreshIcon()}</button>
                 <button type="button" data-proxy-edit="${esc(proxy.id)}" title="编辑代理" aria-label="编辑代理">${renderEditIcon()}</button>
                 <button type="button" class="danger" data-proxy-delete="${esc(proxy.id)}" title="${proxyBoundAccountCount(proxy) ? "代理已绑定账号，不能删除" : "删除代理"}" aria-label="删除代理" ${proxyBoundAccountCount(proxy) ? "disabled" : ""}>${renderTrashIcon()}</button>
@@ -18480,6 +18684,17 @@ async function submitMatrixPublishTask(messageId = "commandMsg") {
     return null;
   }
   const scheduledAt = normalizeScheduleValueForApi($("simpleScheduleAt")?.value);
+  const requestedCount = personaIds.reduce((total, personaId) => {
+    const persona = state.personas.find((item) => String(item.id || "") === String(personaId || ""));
+    if (!persona) return total;
+    const available = publishSourceRows(persona, source).filter((post) => (
+      String(post?.id || "").trim()
+      && !String(post?.publishedAt || post?.published_at || "").trim()
+      && (String(post?.content || "").trim() || (Array.isArray(post?.media_items) && post.media_items.length))
+    )).length;
+    return total + Math.min(available, perPersonaCount);
+  }, 0);
+  if (requestedCount > 0 && !(await ensureDailyPublishCapacity(requestedCount, { scheduledAt }))) return null;
   setActionLocked(lockParts, true);
   renderSimpleFlowModule("publishing");
   try {
@@ -18561,6 +18776,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
   ];
   const loginWaitSeconds = taskType === "open_login" ? 3600 : 180;
   let mediaPaths = [];
+  if (taskType === "publish_post" && !(await ensureDailyPublishCapacity(1, { scheduledAt }))) return null;
   setActionLocked(lockParts, true);
   if (state.activeModule && ["publishing", "automation"].includes(state.activeModule)) renderSimpleFlowModule(state.activeModule);
   renderSocialAccounts();
@@ -18706,6 +18922,7 @@ async function openPersonalConsoleView(view) {
 }
 
 function bindEvents() {
+  document.addEventListener("click", handleDailyPublishActionGate, true);
   ensureThemeToggle();
   ensureLanguageToggle();
   window.addEventListener("vecto:theme-change", (event) => applyTheme(event.detail?.theme));
@@ -19559,6 +19776,10 @@ function bindEvents() {
     }
     const openPublishingButton = event.target.closest("[data-persona-open-publishing]");
     if (openPublishingButton) {
+      if (dailyPublishIsLocked()) {
+        await showDailyPublishLimitWarning();
+        return;
+      }
       if (!(await confirmLeaveTransientWorkspaceState())) return;
       const persona = selectedPersona();
       if (persona) {

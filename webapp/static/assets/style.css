@@ -9978,6 +9978,16 @@ html[data-theme="dark"] .page-admin .admin-preference-button .admin-theme-icon-m
   }
 }
 
+@media (max-width: 360px) {
+  .page-admin .admin-brand-lockup > div {
+    display: none;
+  }
+
+  .page-admin .brand {
+    gap: 6px;
+  }
+}
+
 /* Dark administration surfaces. The root attribute is restored before CSS loads. */
 html[data-theme="dark"] body.page-admin {
   --admin-ink: #edf8f5;
@@ -10122,4 +10132,102 @@ html[data-theme="dark"] body.page-admin .admin-user-danger-section {
   color: #ffd7d7;
   border-color: #a64444;
   background: #2a1719;
+}
+.daily-publish-limit-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line, #d7e0e0);
+  border-left: 4px solid #23866f;
+  border-radius: 6px;
+  background: color-mix(in srgb, #23866f 7%, var(--panel, #fff));
+}
+
+.daily-publish-limit-banner > div {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  white-space: nowrap;
+}
+
+.daily-publish-limit-banner p {
+  margin: 0;
+  color: var(--muted, #667575);
+  text-align: right;
+}
+
+.daily-publish-limit-banner.is-warning {
+  border-left-color: #b7791f;
+  background: color-mix(in srgb, #b7791f 9%, var(--panel, #fff));
+}
+
+.daily-publish-limit-banner.is-locked {
+  border-color: #d86a62;
+  border-left-color: #b8322a;
+  background: color-mix(in srgb, #b8322a 9%, var(--panel, #fff));
+}
+
+[data-daily-publish-action][aria-disabled="true"],
+[data-daily-publish-action].is-daily-publish-locked {
+  border-color: #d86a62 !important;
+  background: #f7e8e6 !important;
+  color: #8d2721 !important;
+  box-shadow: none !important;
+  cursor: not-allowed !important;
+  opacity: 1 !important;
+}
+
+.daily-publish-risk-panel {
+  padding: 14px;
+  border: 1px solid #d86a62;
+  border-radius: 6px;
+  background: #fff4f2;
+  color: #6f211d;
+}
+
+.daily-publish-risk-panel strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.daily-publish-risk-panel p {
+  margin: 0;
+  line-height: 1.65;
+}
+
+@media (max-width: 760px) {
+  .daily-publish-limit-banner {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .daily-publish-limit-banner > div {
+    max-width: 100%;
+    flex-wrap: wrap;
+    white-space: normal;
+  }
+
+  .daily-publish-limit-banner p {
+    width: 100%;
+    overflow-wrap: anywhere;
+    text-align: left;
+  }
+
+  .persona-bar-row {
+    grid-template-columns: minmax(0, 1fr) 56px;
+    gap: 6px;
+  }
+
+  .persona-bar-track {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .persona-bar-value {
+    grid-column: 2;
+    grid-row: 1;
+  }
 }

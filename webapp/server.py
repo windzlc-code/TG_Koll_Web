@@ -82,6 +82,7 @@ from .social_automation_api import (
     get_social_task,
     mark_admin_billing_waived_payload,
     mark_trusted_batch_task,
+    require_daily_publish_capacity,
     register_social_automation_routes,
     stop_social_automation_worker,
     wake_social_automation_worker,
@@ -14813,6 +14814,14 @@ def _publish_persona_matrix(
             errors.append({"persona_id": persona_id, "persona_name": persona_name, "reason": str(exc)})
     if errors:
         return {"ok": False, "batch_id": batch_id, "created": [], "skipped": skipped, "errors": errors}
+
+    if pending:
+        require_daily_publish_capacity(
+            int(owner_user_id or 0),
+            requested_count=len(pending),
+            scheduled_at=payload.scheduled_at or 0,
+            admin_waived=bool(billing_admin_waived),
+        )
     reservation_ids: list[str] = []
     for item in pending:
         item["trusted_task_id"] = _new_id("social_task")
@@ -14876,6 +14885,17 @@ def _publish_persona_matrix(
                     conn.execute(
                         "UPDATE social_automation_tasks SET status = 'cancelled', finished_at = ?, error = ?, updated_at = ? WHERE id = ? AND status = 'preparing'",
                         (_now_ts(), "matrix_batch_rollback", _now_ts(), task_id),
+                    )
+                    conn.execute(
+                        """
+                        UPDATE social_daily_publish_slots
+                        SET state = CASE WHEN state IN ('armed', 'submitted', 'confirmed', 'unknown') THEN 'unknown' ELSE 'released' END,
+                            released_at = CASE WHEN state IN ('armed', 'submitted', 'confirmed', 'unknown') THEN released_at ELSE ? END,
+                            release_reason = CASE WHEN state IN ('armed', 'submitted', 'confirmed', 'unknown') THEN release_reason ELSE 'matrix_batch_rollback' END,
+                            updated_at = ?
+                        WHERE task_id = ? AND waived = 0
+                        """,
+                        (_now_ts(), _now_ts(), task_id),
                     )
                 reservation_id = str(item.get("reservation_id") or "")
                 if reservation_id:
