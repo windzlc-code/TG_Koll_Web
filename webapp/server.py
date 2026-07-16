@@ -11609,7 +11609,7 @@ class PersonaDashboardHotCandidatesFetchPayload(BaseModel):
     refresh: bool = False
     limit: int = 10
     search_mode: str = "strict"
-    freshness_days: int = 0
+    freshness_days: int = 7
     selected_memory_ids: list[str] = Field(default_factory=list)
 
 
@@ -13604,7 +13604,7 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
     )[:8]
     limit = min(max(_to_int(payload.limit, 10), 1), 20)
     search_mode = "normal" if str(payload.search_mode or "").strip().lower() == "normal" else "strict"
-    freshness_days = min(max(_to_int(payload.freshness_days, 0), 0), 15)
+    freshness_days = min(max(_to_int(payload.freshness_days, 7), 0), 15)
     result = _run_persona_hot_workflow_cli(
         {
             "action": "fetch-hot-candidates",
