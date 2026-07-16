@@ -4,6 +4,15 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>运营后台 - Web 素材生成平台</title>
+  <script>
+    (() => {
+      try {
+        if (window.localStorage.getItem("wk-console-theme") === "dark") {
+          document.documentElement.dataset.theme = "dark";
+        }
+      } catch {}
+    })();
+  </script>
   <link rel="stylesheet" href="/assets/style.css?v=__STYLE_VERSION__">
 </head>
 <body class="page-admin">
@@ -73,6 +82,55 @@
     <div id="adminMobileNavBackdrop" class="admin-mobile-nav-backdrop" aria-hidden="true" hidden></div>
 
     <div class="admin-profile-menu" id="adminProfileMenu">
+      <button
+        class="admin-preference-button admin-theme-toggle"
+        id="adminThemeToggle"
+        type="button"
+        data-site-theme-toggle
+        aria-label="切换到暗色模式"
+        aria-pressed="false"
+      >
+        <svg class="admin-theme-icon admin-theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="4"></circle>
+          <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path>
+        </svg>
+        <svg class="admin-theme-icon admin-theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M20.5 15.2A8.5 8.5 0 0 1 8.8 3.5 8.7 8.7 0 1 0 20.5 15.2Z"></path>
+        </svg>
+      </button>
+
+      <div class="admin-language-menu" id="adminLanguageMenu">
+        <button
+          class="admin-preference-button admin-language-toggle"
+          id="adminLanguageToggle"
+          type="button"
+          aria-label="选择界面语言"
+          aria-controls="adminLanguagePanel"
+          aria-expanded="false"
+          aria-haspopup="menu"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="9"></circle>
+            <path d="M3 12h18M12 3c2.4 2.5 3.6 5.5 3.6 9S14.4 18.5 12 21M12 3C9.6 5.5 8.4 8.5 8.4 12s1.2 6.5 3.6 9"></path>
+          </svg>
+        </button>
+        <div
+          class="admin-language-panel"
+          id="adminLanguagePanel"
+          role="menu"
+          aria-label="界面语言"
+          aria-hidden="true"
+          hidden
+        >
+          <button type="button" role="menuitemradio" aria-checked="true" data-admin-language="zh-Hans">
+            <span>简体中文</span><small>zh-Hans</small>
+          </button>
+          <button type="button" role="menuitemradio" aria-checked="false" data-admin-language="zh-Hant">
+            <span>繁體中文</span><small>zh-Hant</small>
+          </button>
+        </div>
+      </div>
+
       <button
         class="admin-profile-toggle"
         id="adminProfileToggle"
@@ -1190,6 +1248,8 @@
   </div>
 
   <script src="/assets/vendor/chart.js/chart.umd.js?v=4.4.9"></script>
+  <script src="/assets/vendor/opencc-js/st-characters.js?v=1.4.1"></script>
+  <script src="/assets/opc/site-navigation.js?v=2026071701"></script>
   <script src="/assets/admin.js?v=__ADMIN_JS_VERSION__"></script>
 </body>
 </html>

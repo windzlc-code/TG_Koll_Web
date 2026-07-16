@@ -10901,7 +10901,8 @@ function automationScreenshotUrlFromPath(pathValue) {
   if (value.startsWith("/api/")) return directMediaPreviewUrl(value);
   const parts = value.split(/[\\/]/).filter(Boolean);
   const filename = parts[parts.length - 1] || "";
-  return filename ? `/api/persona_dashboard/automation/screenshots/${encodeURIComponent(filename)}` : "";
+  const screenshotUrl = filename ? `/api/persona_dashboard/automation/screenshots/${encodeURIComponent(filename)}` : "";
+  return screenshotUrl ? adminWorkspaceUrl(screenshotUrl) : "";
 }
 
 function automationScreenshotThumbnailUrl(urlValue) {
@@ -11021,11 +11022,11 @@ function taskScreenshotFromValue(value) {
 function collectTaskScreenshots(task = {}, logs = []) {
   const rows = [];
   const seen = new Set();
-  const push = (value, label = "任务截图", time = "") => {
+  const push = (value, label = "任务截图", time = "", meta = {}) => {
     const url = taskScreenshotFromValue(value);
     if (!url || seen.has(url)) return;
     seen.add(url);
-    rows.push({ previewUrl: url, originalUrl: url, thumbnailUrl: automationScreenshotThumbnailUrl(url), url, type: "image", label, time });
+    rows.push({ previewUrl: url, originalUrl: url, thumbnailUrl: automationScreenshotThumbnailUrl(url), url, type: "image", label, time, ...meta });
   };
   const pushMedia = (item, index = 0, labelPrefix = "任务图片") => {
     if (!item) return;
@@ -11048,8 +11049,8 @@ function collectTaskScreenshots(task = {}, logs = []) {
     push(result.image_url || result.imageUrl, "输出图片", task.finished_at || task.updated_at || "");
     push(result.download_path || result.downloadPath ? (taskMediaUrl(0) || result.download_path || result.downloadPath) : "", "输出文件", task.finished_at || task.updated_at || "");
   }
-  push(result.screenshot_url || result.screenshotUrl, "最终截图", task.finished_at || task.updated_at || "");
-  push(result.screenshot_path || result.screenshotPath || result.screenshot, "最终截图", task.finished_at || task.updated_at || "");
+  push(result.screenshot_url || result.screenshotUrl, "最终截图", task.finished_at || task.updated_at || "", { source: "result" });
+  push(result.screenshot_path || result.screenshotPath || result.screenshot, "最终截图", task.finished_at || task.updated_at || "", { source: "result" });
   (Array.isArray(result.checkpoints) ? result.checkpoints : []).forEach((checkpoint, index) => {
     push(
       checkpoint?.screenshot_url || checkpoint?.screenshotUrl || checkpoint?.screenshot_path || checkpoint?.screenshotPath || checkpoint?.screenshot,
@@ -11064,8 +11065,14 @@ function collectTaskScreenshots(task = {}, logs = []) {
       log?.screenshot_url || log?.screenshotUrl || log?.screenshot_path || log?.screenshotPath || data.screenshot_url || data.screenshotUrl || data.screenshot_path || data.screenshotPath || snapshot.screenshot_url || snapshot.screenshotUrl || snapshot.screenshot_path || snapshot.screenshotPath || snapshot.download_path || snapshot.downloadPath,
       logStageLabel(log?.stage, log?.level) || `日志截图 ${index + 1}`,
       log?.created_at || log?.ts || "",
+      { source: "log", stage: String(log?.stage || "") },
     );
   });
+  if (String(task?.task_type || "") === "publish_post" && String(task?.status || "") === "success") {
+    const finalScreenshot = rows.find((item) => item.source === "result")
+      || rows.slice().reverse().find((item) => item.source === "log" && item.stage === "publish_done");
+    return finalScreenshot ? [finalScreenshot] : [];
+  }
   return rows;
 }
 
@@ -11100,7 +11107,7 @@ function renderTaskDetailStatusField(status, label = "") {
     </div>`;
 }
 
-function renderTaskDetailLogs(logs = [], { limit = 30 } = {}) {
+function renderTaskDetailLogs(logs = [], { limit = 30, hideScreenshots = false } = {}) {
   const rows = (Array.isArray(logs) ? logs : []).slice(-limit).reverse();
   return `
     <section class="task-detail-log-list">
@@ -11109,7 +11116,7 @@ function renderTaskDetailLogs(logs = [], { limit = 30 } = {}) {
         <span>${esc(`${rows.length} 条`)}</span>
       </div>
       ${rows.length ? rows.map((log) => {
-        const screenshotUrl = taskScreenshotFromValue(log.screenshot_url || log.screenshot_path || "");
+        const screenshotUrl = hideScreenshots ? "" : taskScreenshotFromValue(log.screenshot_url || log.screenshot_path || "");
         const screenshotItem = screenshotUrl ? { previewUrl: screenshotUrl, originalUrl: screenshotUrl, thumbnailUrl: automationScreenshotThumbnailUrl(screenshotUrl), url: screenshotUrl, type: "image", label: logStageLabel(log.stage, log.level) } : null;
         const screenshotGroupId = screenshotItem ? registerMediaPreviewGroup([screenshotItem]) : "";
         return `
@@ -11178,7 +11185,10 @@ function renderTaskDetailLayout(task = {}, logs = [], {
           </div>
           ${renderTaskScreenshotGallery(screenshots)}
         </section>` : ""}
-      ${renderTaskDetailLogs(logs, { limit: kind === "social" ? 30 : 12 })}
+      ${renderTaskDetailLogs(logs, {
+        limit: kind === "social" ? 30 : 12,
+        hideScreenshots: String(task?.task_type || "") === "publish_post" && String(task?.status || "") === "success",
+      })}
     </div>`;
 }
 

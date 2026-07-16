@@ -165,6 +165,41 @@ class SocialTaskCancellationTests(unittest.TestCase):
         self.assertEqual(account[0], "ready")
         self.assertGreater(account[1], 0)
 
+    def test_check_login_completes_without_blocking_account_when_session_is_expired(self):
+        self._insert_account(status="ready")
+        self._insert_task("check-expired", "running", task_type="check_login")
+        task = {
+            "id": "check-expired",
+            "account_id": "account-1",
+            "platform": "threads",
+            "task_type": "check_login",
+            "payload": {},
+        }
+        control = {
+            "cancel_event": threading.Event(),
+            "task": dict(task),
+            "live_browser_session_id": "",
+        }
+
+        with mock.patch.object(
+            social_automation_api,
+            "_run_social_task_in_clean_thread",
+            return_value={"ok": True, "status": "cookie_expired", "details": {}},
+        ):
+            social_automation_api._execute_claimed_task_with_control(task, control)
+
+        with sqlite3.connect(self.db_path) as conn:
+            task_status = conn.execute(
+                "SELECT status FROM social_automation_tasks WHERE id = ?",
+                ("check-expired",),
+            ).fetchone()[0]
+            account_status = conn.execute(
+                "SELECT status FROM social_accounts WHERE id = ?",
+                ("account-1",),
+            ).fetchone()[0]
+        self.assertEqual(task_status, "success")
+        self.assertEqual(account_status, "cookie_expired")
+
     def test_publish_confirmation_timeout_requeues_confirmation_without_manual_state(self):
         self._insert_account(status="cookie_expired")
         self._insert_task("publish-review", "running")

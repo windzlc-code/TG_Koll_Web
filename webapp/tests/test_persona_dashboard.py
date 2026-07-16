@@ -2376,7 +2376,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertFalse(any(post.get("id") == "favorite-1" for post in synced["posts"]))
         self.assertEqual(synced["publishHistory"][0]["archivePostId"], "favorite-1")
 
-    def test_publish_persona_post_queues_login_and_publish_for_non_ready_account(self):
+    def test_publish_persona_post_checks_login_inside_publish_task_for_non_ready_account(self):
         self._write_archives()
         self._insert_social_account(account_id="acct-threads", platform="threads", username="threads_user", status="cookie_expired")
         create_resp = self.client.post(
@@ -2398,10 +2398,10 @@ class PersonaDashboardApiTests(unittest.TestCase):
                 json={"account_id": "acct-threads", "platform": "threads", "media_paths": []},
             )
         self.assertEqual(publish_resp.status_code, 200)
-        self.assertEqual([payload.task_type for payload, _ in created_tasks], ["open_login", "publish_post"])
-        publish_payload = created_tasks[1][0]
-        self.assertTrue(publish_payload.payload["auto_login_before_publish"])
-        self.assertEqual(publish_payload.payload["login_task_id"], "sat-1")
+        self.assertEqual([payload.task_type for payload, _ in created_tasks], ["publish_post"])
+        publish_payload = created_tasks[0][0]
+        self.assertNotIn("auto_login_before_publish", publish_payload.payload)
+        self.assertNotIn("login_task_id", publish_payload.payload)
         self.assertEqual(publish_payload.payload["archive_post_id"], post["id"])
 
     def test_publish_persona_post_does_not_require_manual_login_check(self):
@@ -2421,8 +2421,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(publish_resp.status_code, 200)
         payload_obj = mocked.call_args.args[0]
         self.assertEqual(payload_obj.task_type, "publish_post")
-        self.assertFalse(payload_obj.payload["auto_login_before_publish"])
-        self.assertEqual(payload_obj.payload["login_task_id"], "")
+        self.assertNotIn("auto_login_before_publish", payload_obj.payload)
+        self.assertNotIn("login_task_id", payload_obj.payload)
         self.assertEqual(payload_obj.payload["archive_post_id"], post["id"])
 
     def test_publish_task_waits_for_login_dependency_before_claim(self):

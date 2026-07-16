@@ -11,9 +11,9 @@
     <link rel="icon" type="image/png" href="/assets/opc/vecto-logo-ui-icon.png?v=20260711" />
     <link rel="preload" href="/assets/opc/vecto-ai-cockpit.png" as="image" />
     <link rel="stylesheet" href="/assets/opc/styles.css?v=__OPC_STYLES_VERSION__" />
-    <link rel="stylesheet" href="/assets/opc/site-navigation.css?v=2026071604" />
+    <link rel="stylesheet" href="/assets/opc/site-navigation.css?v=2026071703" />
     <link rel="stylesheet" href="/assets/opc/pricing.css?v=__OPC_PRICING_CSS_VERSION__" />
-    <script defer src="/assets/opc/site-navigation.js?v=2026071605"></script>
+    <script defer src="/assets/opc/site-navigation.js?v=2026071702"></script>
   </head>
   <body>
     <a class="site-skip-link" href="#top" data-site-copy="skip">跳至主要內容</a>
@@ -23,12 +23,12 @@
         <span class="brand-text"><span class="brand-name">Vecto</span><span class="brand-local" data-site-copy="brandLocal">維拓 / 維圖</span></span>
       </a>
       <nav class="site-nav" aria-label="站內導覽" data-site-navigation>
-        <a href="#solution"><span data-site-copy="solution">解決方案</span></a>
-        <a href="#agents"><span data-site-copy="accounts">三帳架構</span></a>
-        <a href="#scenarios"><span data-site-copy="scenarios">應用場景</span></a>
-        <a href="/pricing.html"><span data-site-copy="pricing">方案與算力</span></a>
-        <a href="#service-difference"><span data-site-copy="difference">服務差異</span></a>
-        <a href="/console.html" data-console-entry><span data-site-copy="console">Web 控制台</span></a>
+        <a data-site-nav-key="solution" href="#solution"><span data-site-copy="solution">解決方案</span></a>
+        <a data-site-nav-key="accounts" href="#agents"><span data-site-copy="accounts">三帳架構</span></a>
+        <a data-site-nav-key="scenarios" href="#scenarios"><span data-site-copy="scenarios">應用場景</span></a>
+        <a data-site-nav-key="pricing" href="/pricing.html"><span data-site-copy="pricing">方案與算力</span></a>
+        <a data-site-nav-key="difference" href="#service-difference"><span data-site-copy="difference">服務差異</span></a>
+        <a data-site-nav-key="console" href="/console.html" data-console-entry><span data-site-copy="console">Web 控制台</span></a>
       </nav>
       <div class="header-actions">
         <details class="site-mobile-menu" data-site-mobile-menu>
@@ -47,10 +47,6 @@
           </nav>
         </details>
         <div class="site-global-controls" aria-label="全域顯示設定" data-site-global-controls>
-          <button id="themeToggle" class="site-icon-button" type="button" aria-label="切換到暗色模式" aria-pressed="false" data-site-theme-toggle>
-            <svg class="site-theme-icon site-theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>
-            <svg class="site-theme-icon site-theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 15.2A8.5 8.5 0 0 1 8.8 3.5 8.7 8.7 0 1 0 20.5 15.2Z"></path></svg>
-          </button>
           <button id="languageToggle" class="site-icon-button site-language-button" type="button" aria-label="切換到簡體中文" aria-pressed="true" data-site-language-toggle>
             <svg class="site-language-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.4 2.5 3.6 5.5 3.6 9S14.4 18.5 12 21M12 3C9.6 5.5 8.4 8.5 8.4 12s1.2 6.5 3.6 9"></path></svg><span class="site-language-state" data-site-language-state>繁</span>
           </button>

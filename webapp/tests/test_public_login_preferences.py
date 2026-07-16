@@ -200,15 +200,25 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn('header.dataset.siteAuthState = "guest"', self.site_nav_script)
         self.assertIn('[data-site-auth-state="pending"] .header-actions', self.site_nav_styles)
         self.assertIn("min-width: 274px", self.site_nav_styles)
-        self.assertIn("accountMenuMarkup()", self.site_nav_script)
+        self.assertIn('accountMenuMarkup(header.dataset.sitePage || "home")', self.site_nav_script)
         self.assertIn("async function logoutPublicSession()", self.site_nav_script)
         self.assertIn('fetch("/api/auth/logout"', self.site_nav_script)
         self.assertIn("window.location.reload()", self.site_nav_script)
 
-    def test_shared_navigation_owns_global_svg_preferences(self):
+    def test_shared_navigation_keeps_public_language_and_scopes_theme_to_console(self):
         for expected in ('id="themeToggle"', 'id="languageToggle"', "site-theme-icon", "site-language-icon"):
             self.assertIn(expected, self.site_nav_script)
-        self.assertIn("function accountPreferencesMarkup()", self.site_nav_script)
+        for page_name in ("index.html", "pricing.html"):
+            markup = (self.static_dir / page_name).read_text(encoding="utf-8")
+            self.assertNotIn("data-site-theme-toggle", markup)
+            self.assertIn("data-site-language-toggle", markup)
+        self.assertIn("function themeEnabled()", self.site_nav_script)
+        self.assertIn('return page === "console" || document.body?.classList.contains("page-admin")', self.site_nav_script)
+        self.assertIn('accountMenuMarkup(header.dataset.sitePage || "home")', self.site_nav_script)
+        public_controls = self.site_nav_script.split("function renderActions", 1)[1].split("function fallbackMarkup", 1)[0]
+        self.assertNotIn("data-site-theme-toggle", public_controls.split("const controls", 1)[1].split("const mobileMenu", 1)[0])
+        self.assertIn("data-site-language-toggle", public_controls)
+        self.assertIn('function accountPreferencesMarkup(page = "console")', self.site_nav_script)
         self.assertIn('class="site-account-preferences"', self.site_nav_script)
         self.assertIn('actions.querySelectorAll(":scope > .site-global-controls")', self.site_nav_script)
         self.assertIn('const THEME_STORAGE_KEY = "wk-console-theme"', self.site_nav_script)

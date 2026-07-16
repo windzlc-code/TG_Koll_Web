@@ -3952,7 +3952,13 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
     if _is_task_cancelled(str(task["id"])):
         return
     status = "success" if result.get("ok") else "failed"
-    account_status = "ready" if status == "success" else ""
+    detected_account_status = str(result.get("status") or "").strip().lower()
+    if str(task.get("task_type") or "") == "check_login" and detected_account_status:
+        account_status = "cookie_expired" if detected_account_status == "invalid_credentials" else detected_account_status
+        if account_status not in SOCIAL_ACCOUNT_STATUSES:
+            account_status = ""
+    else:
+        account_status = "ready" if status == "success" else ""
     _finish_task(task["id"], status, result, "" if status == "success" else str(result.get("error") or "执行失败"), account_status=account_status)
 
 

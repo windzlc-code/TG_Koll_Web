@@ -8,6 +8,301 @@ function setText(id, value) {
   node.textContent = String(value == null ? "" : value);
 }
 
+const ADMIN_I18N_MARKER = "data-admin-i18n-ui";
+const ADMIN_I18N_ATTRIBUTES = ["title", "aria-label", "placeholder"];
+const ADMIN_I18N_SKIP_SELECTOR = [
+  "[data-admin-i18n-skip]",
+  "script",
+  "style",
+  "textarea",
+  "pre",
+  "code",
+  "tbody",
+  ".msg",
+  ".task-list",
+  ".admin-health-list",
+  ".admin-taxonomy-list",
+  ".admin-security-list",
+  ".admin-session-list",
+  ".admin-password-history-list",
+  "#adminName",
+  "#adminSessionName",
+  "#adminSessionId",
+  "#adminSessionCreatedAt",
+  "#taskInspectBody",
+  "#taskInspectSub",
+  "#userDetailBody",
+  "#userDetailSub",
+].join(", ");
+const ADMIN_ZH_HANT_PHRASES = [
+  ["账号", "帳號"],
+  ["账户", "帳戶"],
+  ["运营", "營運"],
+  ["后台", "後台"],
+  ["信息", "資訊"],
+  ["配置", "設定"],
+  ["默认", "預設"],
+  ["创建", "建立"],
+  ["日志", "日誌"],
+  ["动态验证码", "動態驗證碼"],
+  ["二维码", "QR Code"],
+].sort((left, right) => right[0].length - left[0].length);
+
+const adminI18nTextOriginals = new WeakMap();
+const adminI18nAttributeOriginals = new WeakMap();
+let adminZhHantCharacterMap = null;
+let adminLanguageObserver = null;
+let adminDocumentTitleSource = document.title;
+
+function currentAdminLanguage() {
+  return document.documentElement.dataset.language === "zh-Hant" ? "zh-Hant" : "zh-Hans";
+}
+
+function getAdminZhHantCharacterMap() {
+  if (adminZhHantCharacterMap) return adminZhHantCharacterMap;
+  adminZhHantCharacterMap = new Map();
+  const dictionary = window.VectoOpenCcStCharacters;
+  if (typeof dictionary !== "string") return adminZhHantCharacterMap;
+  dictionary.split("|").forEach((entry) => {
+    const separator = entry.indexOf(" ");
+    if (separator <= 0) return;
+    adminZhHantCharacterMap.set(entry.slice(0, separator), entry.slice(separator + 1));
+  });
+  return adminZhHantCharacterMap;
+}
+
+function toAdminTraditionalChinese(value) {
+  let text = String(value || "");
+  const protectedPhrases = [];
+  ADMIN_ZH_HANT_PHRASES.forEach(([source, target], index) => {
+    if (!text.includes(source)) return;
+    const token = `\uE300${index}\uE301`;
+    text = text.split(source).join(token);
+    protectedPhrases.push([token, target]);
+  });
+  const characters = getAdminZhHantCharacterMap();
+  text = Array.from(text).map((character) => characters.get(character) || character).join("");
+  protectedPhrases.forEach(([token, target]) => {
+    text = text.split(token).join(target);
+  });
+  return text;
+}
+
+function adminTranslatedValue(value, language = currentAdminLanguage()) {
+  return language === "zh-Hant" ? toAdminTraditionalChinese(value) : String(value || "");
+}
+
+function markAdminUiElement(node) {
+  if (!node || node.nodeType !== Node.ELEMENT_NODE || node.closest(ADMIN_I18N_SKIP_SELECTOR)) return;
+  node.setAttribute(ADMIN_I18N_MARKER, "true");
+}
+
+function markAdminStaticUi(root = document.body) {
+  if (!root) return;
+  if (root.nodeType === Node.TEXT_NODE) {
+    markAdminUiElement(root.parentElement);
+    return;
+  }
+  if (root.nodeType !== Node.ELEMENT_NODE && root.nodeType !== Node.DOCUMENT_NODE) return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      if (!node.nodeValue?.trim() || node.parentElement?.closest(ADMIN_I18N_SKIP_SELECTOR)) {
+        return NodeFilter.FILTER_REJECT;
+      }
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  while (walker.nextNode()) markAdminUiElement(walker.currentNode.parentElement);
+  root.querySelectorAll("[title], [aria-label], [placeholder]").forEach(markAdminUiElement);
+}
+
+function translateAdminTextNode(node, language) {
+  if (!node?.nodeValue?.trim() || !node.parentElement?.matches(`[${ADMIN_I18N_MARKER}]`)) return;
+  if (!adminI18nTextOriginals.has(node)) adminI18nTextOriginals.set(node, node.nodeValue);
+  const original = adminI18nTextOriginals.get(node);
+  const translated = adminTranslatedValue(original, language);
+  if (node.nodeValue !== translated) node.nodeValue = translated;
+}
+
+function translateAdminAttributes(node, language) {
+  if (!node?.matches?.(`[${ADMIN_I18N_MARKER}]`)) return;
+  ADMIN_I18N_ATTRIBUTES.forEach((attribute) => {
+    if (!node.hasAttribute(attribute)) return;
+    let originals = adminI18nAttributeOriginals.get(node);
+    if (!originals) {
+      originals = {};
+      adminI18nAttributeOriginals.set(node, originals);
+    }
+    if (!Object.prototype.hasOwnProperty.call(originals, attribute)) originals[attribute] = node.getAttribute(attribute) || "";
+    const translated = adminTranslatedValue(originals[attribute], language);
+    if (node.getAttribute(attribute) !== translated) node.setAttribute(attribute, translated);
+  });
+}
+
+function adminUiElements(root) {
+  if (!root) return [];
+  if (root.nodeType === Node.TEXT_NODE) {
+    return root.parentElement?.matches(`[${ADMIN_I18N_MARKER}]`) ? [root.parentElement] : [];
+  }
+  if (root.nodeType !== Node.ELEMENT_NODE && root.nodeType !== Node.DOCUMENT_NODE) return [];
+  const elements = [];
+  if (root.nodeType === Node.ELEMENT_NODE && root.matches(`[${ADMIN_I18N_MARKER}]`)) elements.push(root);
+  root.querySelectorAll?.(`[${ADMIN_I18N_MARKER}]`).forEach((node) => elements.push(node));
+  return elements;
+}
+
+function translateAdminLanguage(root = document.body, language = currentAdminLanguage()) {
+  if (!root) return;
+  if (root.nodeType === Node.TEXT_NODE) {
+    translateAdminTextNode(root, language);
+    return;
+  }
+  adminUiElements(root).forEach((node) => {
+    Array.from(node.childNodes).forEach((child) => {
+      if (child.nodeType === Node.TEXT_NODE) translateAdminTextNode(child, language);
+    });
+    translateAdminAttributes(node, language);
+  });
+  document.title = adminTranslatedValue(adminDocumentTitleSource, language);
+}
+
+function refreshAdminUiTextSource(node, language) {
+  if (!node?.nodeValue?.trim() || !node.parentElement?.matches(`[${ADMIN_I18N_MARKER}]`)) return;
+  const current = node.nodeValue;
+  const previous = adminI18nTextOriginals.get(node);
+  const translatedPrevious = previous === undefined ? null : adminTranslatedValue(previous, language);
+  if (previous !== undefined && current === translatedPrevious) return;
+  adminI18nTextOriginals.set(node, current);
+  translateAdminTextNode(node, language);
+}
+
+function refreshAdminUiAttributeSource(node, attribute, language) {
+  if (!node?.matches?.(`[${ADMIN_I18N_MARKER}]`) || !ADMIN_I18N_ATTRIBUTES.includes(attribute)) return;
+  let originals = adminI18nAttributeOriginals.get(node);
+  if (!originals) {
+    originals = {};
+    adminI18nAttributeOriginals.set(node, originals);
+  }
+  const current = node.getAttribute(attribute) || "";
+  const previous = originals[attribute];
+  const translatedPrevious = previous === undefined ? null : adminTranslatedValue(previous, language);
+  if (previous !== undefined && current === translatedPrevious) return;
+  originals[attribute] = current;
+  translateAdminAttributes(node, language);
+}
+
+function startAdminLanguageObserver() {
+  if (adminLanguageObserver || !document.body) return;
+  adminLanguageObserver = new MutationObserver((mutations) => {
+    const language = currentAdminLanguage();
+    mutations.forEach((mutation) => {
+      if (mutation.type === "attributes") {
+        refreshAdminUiAttributeSource(mutation.target, mutation.attributeName, language);
+      } else if (mutation.type === "characterData") {
+        refreshAdminUiTextSource(mutation.target, language);
+      } else {
+        mutation.addedNodes.forEach((node) => {
+          markAdminStaticUi(node);
+          translateAdminLanguage(node, language);
+        });
+      }
+    });
+  });
+  adminLanguageObserver.observe(document.body, {
+    attributes: true,
+    attributeFilter: ADMIN_I18N_ATTRIBUTES,
+    characterData: true,
+    childList: true,
+    subtree: true,
+  });
+}
+
+function setAdminDocumentTitle(source) {
+  adminDocumentTitleSource = String(source || "");
+  document.title = adminTranslatedValue(adminDocumentTitleSource);
+}
+
+function syncAdminPreferenceControls() {
+  const language = currentAdminLanguage();
+  const isDark = document.documentElement.dataset.theme === "dark";
+  const themeToggle = el("adminThemeToggle");
+  if (themeToggle) {
+    const label = isDark ? "切换到亮色模式" : "切换到暗色模式";
+    themeToggle.setAttribute("aria-label", adminTranslatedValue(label, language));
+    themeToggle.setAttribute("title", adminTranslatedValue(label, language));
+    themeToggle.setAttribute("aria-pressed", isDark ? "true" : "false");
+  }
+  const languageToggle = el("adminLanguageToggle");
+  if (languageToggle) {
+    const label = adminTranslatedValue("选择界面语言", language);
+    languageToggle.setAttribute("aria-label", label);
+    languageToggle.setAttribute("title", label);
+  }
+  document.querySelectorAll("[data-admin-language]").forEach((option) => {
+    option.setAttribute("aria-checked", option.dataset.adminLanguage === language ? "true" : "false");
+  });
+}
+
+function setAdminLanguageMenuOpen(open, { restoreFocus = false } = {}) {
+  const menu = el("adminLanguageMenu");
+  const toggle = el("adminLanguageToggle");
+  const panel = el("adminLanguagePanel");
+  if (!menu || !toggle || !panel) return;
+  const nextOpen = Boolean(open);
+  const shouldRestoreFocus = Boolean(!nextOpen && restoreFocus && panel.contains(document.activeElement));
+  toggle.setAttribute("aria-expanded", nextOpen ? "true" : "false");
+  panel.hidden = !nextOpen;
+  panel.setAttribute("aria-hidden", nextOpen ? "false" : "true");
+  menu.classList.toggle("is-open", nextOpen);
+  if (nextOpen) {
+    setAdminProfileMenuOpen(false);
+    const selected = panel.querySelector(`[data-admin-language="${currentAdminLanguage()}"]`);
+    window.requestAnimationFrame(() => selected?.focus({ preventScroll: true }));
+  } else if (shouldRestoreFocus) {
+    toggle.focus({ preventScroll: true });
+  }
+}
+
+function applyAdminLanguage(language) {
+  const nextLanguage = language === "zh-Hant" ? "zh-Hant" : "zh-Hans";
+  translateAdminLanguage(document.body, nextLanguage);
+  syncAdminPreferenceControls();
+}
+
+function bindAdminPreferenceControls() {
+  const themeToggle = el("adminThemeToggle");
+  const languageMenu = el("adminLanguageMenu");
+  const languageToggle = el("adminLanguageToggle");
+  const languagePanel = el("adminLanguagePanel");
+  themeToggle?.addEventListener("click", () => {
+    const nextTheme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+    window.VectoSiteNavigation?.setTheme(nextTheme);
+  });
+  languageToggle?.addEventListener("click", () => {
+    setAdminLanguageMenuOpen(languageToggle.getAttribute("aria-expanded") !== "true", { restoreFocus: true });
+  });
+  languagePanel?.querySelectorAll("[data-admin-language]").forEach((option) => {
+    option.addEventListener("click", () => {
+      window.VectoSiteNavigation?.setLanguage(option.dataset.adminLanguage);
+      setAdminLanguageMenuOpen(false, { restoreFocus: true });
+    });
+  });
+  document.addEventListener("click", (event) => {
+    if (languageToggle?.getAttribute("aria-expanded") === "true" && !languageMenu?.contains(event.target)) {
+      setAdminLanguageMenuOpen(false);
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && languageToggle?.getAttribute("aria-expanded") === "true") {
+      event.preventDefault();
+      setAdminLanguageMenuOpen(false, { restoreFocus: true });
+    }
+  });
+  window.addEventListener("vecto:theme-change", syncAdminPreferenceControls);
+  window.addEventListener("vecto:language-change", (event) => applyAdminLanguage(event.detail?.language));
+  syncAdminPreferenceControls();
+}
+
 const ADMIN_PAGE_LABELS = {
   overview: "运营概览",
   users: "客户账号",
@@ -46,6 +341,7 @@ function setAdminMobileNavOpen(open, { restoreFocus = false } = {}) {
   backdrop.hidden = !nextOpen;
   if (nextOpen) {
     setAdminProfileMenuOpen(false);
+    setAdminLanguageMenuOpen(false);
     const focusTarget = drawer.querySelector("[data-page].is-active") || drawer.querySelector("[data-page]");
     window.requestAnimationFrame(() => focusTarget?.focus({ preventScroll: true }));
   } else if (shouldRestoreFocus) {
@@ -96,6 +392,7 @@ function setAdminProfileMenuOpen(open, { restoreFocus = false } = {}) {
   panel.hidden = !nextOpen;
   panel.setAttribute("aria-hidden", nextOpen ? "false" : "true");
   if (nextOpen) {
+    setAdminLanguageMenuOpen(false);
     window.requestAnimationFrame(() => el("btnAdminAccountSettings")?.focus({ preventScroll: true }));
   } else if (shouldRestoreFocus) {
     toggle.focus({ preventScroll: true });
@@ -235,7 +532,7 @@ function setActiveAdminPage(page, updateHash = true) {
   setText("adminCurrentPageLabel", pageLabel);
   setText("adminMobileCurrentLabel", pageLabel);
   setText("adminMobileDrawerCurrentLabel", pageLabel);
-  document.title = `${pageLabel} - 运营后台 - Web 素材生成平台`;
+  setAdminDocumentTitle(`${pageLabel} - 运营后台 - Web 素材生成平台`);
   const targetHash = `admin-${nextPage}`;
   if (updateHash && String(location.hash || "").replace(/^#/, "") !== targetHash) {
     location.hash = targetHash;
@@ -1490,10 +1787,10 @@ function formatTime(ts) {
 function statusPill(status) {
   const s = String(status || "").trim() || "unknown";
   const labels = { success: "已完成", failed: "失败", queued: "排队中", running: "生成中" };
-  if (s === "success") return `<span class="pill success">${escapeHtml(labels[s])}</span>`;
-  if (s === "failed") return `<span class="pill failed">${escapeHtml(labels[s])}</span>`;
-  if (s === "queued") return `<span class="pill queued">${escapeHtml(labels[s])}</span>`;
-  return `<span class="pill running">${escapeHtml(labels[s] || s)}</span>`;
+  if (s === "success") return `<span class="pill success" data-admin-i18n-ui="true">${escapeHtml(labels[s])}</span>`;
+  if (s === "failed") return `<span class="pill failed" data-admin-i18n-ui="true">${escapeHtml(labels[s])}</span>`;
+  if (s === "queued") return `<span class="pill queued" data-admin-i18n-ui="true">${escapeHtml(labels[s])}</span>`;
+  return `<span class="pill running" data-admin-i18n-ui="true">${escapeHtml(labels[s] || s)}</span>`;
 }
 
 function oneLine(text) {
@@ -1958,17 +2255,17 @@ function renderTaskSummary(allRows, visibleRows) {
 function taskActionButtons(task) {
   const taskType = String((task && task.type) || "");
   const buttons = [
-    `<button class="ghost task-action-btn" type="button" data-act="detail" data-id="${escapeHtml(task.id)}">详情</button>`,
-    `<button class="ghost task-action-btn" type="button" data-act="logs" data-id="${escapeHtml(task.id)}">处理记录</button>`,
-    `<button class="ghost task-action-btn" type="button" data-act="export_logs" data-id="${escapeHtml(task.id)}">导出</button>`,
+    `<button class="ghost task-action-btn" type="button" data-admin-i18n-ui="true" data-act="detail" data-id="${escapeHtml(task.id)}">详情</button>`,
+    `<button class="ghost task-action-btn" type="button" data-admin-i18n-ui="true" data-act="logs" data-id="${escapeHtml(task.id)}">处理记录</button>`,
+    `<button class="ghost task-action-btn" type="button" data-admin-i18n-ui="true" data-act="export_logs" data-id="${escapeHtml(task.id)}">导出</button>`,
   ];
   if (task && task.has_download) {
-    buttons.push(`<button class="blue task-action-btn" type="button" data-act="download" data-id="${escapeHtml(task.id)}">下载结果</button>`);
+    buttons.push(`<button class="blue task-action-btn" type="button" data-admin-i18n-ui="true" data-act="download" data-id="${escapeHtml(task.id)}">下载结果</button>`);
   }
   if (String((task && task.status) || "") === "failed") {
-    buttons.push(`<button class="primary task-action-btn" type="button" data-act="retry" data-id="${escapeHtml(task.id)}">重试</button>`);
+    buttons.push(`<button class="primary task-action-btn" type="button" data-admin-i18n-ui="true" data-act="retry" data-id="${escapeHtml(task.id)}">重试</button>`);
   }
-  buttons.push(`<button class="ghost task-action-btn" type="button" data-act="delete_task" data-id="${escapeHtml(task.id)}">删除</button>`);
+  buttons.push(`<button class="ghost task-action-btn" type="button" data-admin-i18n-ui="true" data-act="delete_task" data-id="${escapeHtml(task.id)}">删除</button>`);
   return buttons.join("");
 }
 
@@ -1992,38 +2289,38 @@ function renderTaskCard(task) {
             <div class="task-card-title">${escapeHtml(workflowName)}</div>
             ${statusPill(task.status)}
           </div>
-          <div class="task-card-subtitle">生成类型：${escapeHtml(taskType)} · 客户：${escapeHtml(userName)}</div>
-          ${workflowChainSummary ? `<div class="small" style="margin-top:4px">链路摘要：${escapeHtml(workflowChainSummary)}</div>` : ""}
+          <div class="task-card-subtitle"><span data-admin-i18n-ui="true">生成类型：</span>${escapeHtml(taskType)} · <span data-admin-i18n-ui="true">客户：</span>${escapeHtml(userName)}</div>
+          ${workflowChainSummary ? `<div class="small" style="margin-top:4px"><span data-admin-i18n-ui="true">链路摘要：</span>${escapeHtml(workflowChainSummary)}</div>` : ""}
         </div>
         <div class="task-card-actions">
           ${taskActionButtons(task)}
         </div>
       </div>
       <div class="task-chip-row">
-        <span class="meta-chip">生成编号：${escapeHtml(task.id)}</span>
-        <span class="meta-chip">内部流程编号：${escapeHtml(workflowId)}</span>
-        <span class="meta-chip">创建时间：${escapeHtml(formatTime(task.created_at))}</span>
-        <span class="meta-chip">额度消耗：${escapeHtml(String(task.cost_cents || 0))} 分</span>
+        <span class="meta-chip"><span data-admin-i18n-ui="true">生成编号：</span>${escapeHtml(task.id)}</span>
+        <span class="meta-chip"><span data-admin-i18n-ui="true">内部流程编号：</span>${escapeHtml(workflowId)}</span>
+        <span class="meta-chip"><span data-admin-i18n-ui="true">创建时间：</span>${escapeHtml(formatTime(task.created_at))}</span>
+        <span class="meta-chip"><span data-admin-i18n-ui="true">额度消耗：</span>${escapeHtml(String(task.cost_cents || 0))} <span data-admin-i18n-ui="true">分</span></span>
       </div>
       <div class="task-card-grid">
         <div class="task-card-item">
-          <div class="task-card-label">批量进度</div>
-          <div class="task-card-value">${escapeHtml(batchText)}</div>
+          <div class="task-card-label" data-admin-i18n-ui="true">批量进度</div>
+          <div class="task-card-value" data-admin-i18n-ui="true">${escapeHtml(batchText)}</div>
         </div>
         <div class="task-card-item">
-          <div class="task-card-label">更新时间</div>
+          <div class="task-card-label" data-admin-i18n-ui="true">更新时间</div>
           <div class="task-card-value">${escapeHtml(formatTime(task.updated_at || task.created_at))}</div>
         </div>
         <div class="task-card-item task-card-item-wide">
-          <div class="task-card-label">供应商记录</div>
+          <div class="task-card-label" data-admin-i18n-ui="true">供应商记录</div>
           <div class="task-card-value task-card-rh">
             ${runninghubIds.length
               ? runninghubIds.map((id) => `<span class="meta-chip meta-chip-code">${escapeHtml(id)}</span>`).join("")
-              : `<span class="small">暂无供应商记录编号</span>`}
+              : `<span class="small" data-admin-i18n-ui="true">暂无供应商记录编号</span>`}
           </div>
         </div>
       </div>
-      ${errorText ? `<div class="task-card-alert">错误：${escapeHtml(errorText)}</div>` : ""}
+      ${errorText ? `<div class="task-card-alert"><span data-admin-i18n-ui="true">错误：</span>${escapeHtml(errorText)}</div>` : ""}
     </article>
   `;
 }
@@ -6299,6 +6596,10 @@ function bindTextModelContentTabs() {
 
 window.addEventListener("DOMContentLoaded", async () => {
   bindAdminMobileNavigation();
+  markAdminStaticUi();
+  startAdminLanguageObserver();
+  bindAdminPreferenceControls();
+  applyAdminLanguage(currentAdminLanguage());
   bindAdminProfileMenu();
   try {
     const me = await ensureAdmin();

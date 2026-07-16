@@ -2,6 +2,10 @@
   --site-header-height: 68px;
 }
 
+html {
+  scrollbar-gutter: stable;
+}
+
 .site-skip-link {
   position: fixed;
   top: 8px;
@@ -42,11 +46,14 @@
   z-index: 140;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
+  width: 100%;
+  box-sizing: border-box;
   align-items: center;
   gap: clamp(18px, 2.5vw, 34px);
   min-height: var(--site-header-height);
   padding: 12px clamp(18px, 4vw, 56px);
   color: #f9fffd;
+  font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
   background: rgba(7, 17, 18, 0.58);
   border-bottom: 1px solid rgba(255, 255, 255, 0.12);
   backdrop-filter: blur(16px);
@@ -122,6 +129,17 @@
   transition: color 160ms ease;
 }
 
+/* Keep shared navigation slots stable when page defaults use different Chinese variants. */
+.site-nav > a[data-site-nav-key] {
+  display: inline-flex;
+  flex: 0 0 70px;
+  justify-content: center;
+}
+
+.site-nav > a[data-site-nav-key="console"] {
+  flex-basis: 80px;
+}
+
 .site-nav a:hover,
 .site-nav a[aria-current="page"] {
   color: #ffffff;
@@ -146,6 +164,16 @@
   content: "";
 }
 
+.site-nav > a[data-site-nav-key]::after {
+  right: 7px;
+  left: 7px;
+}
+
+.site-nav > a[data-site-nav-key="console"]::after {
+  right: 1px;
+  left: 1px;
+}
+
 .site-nav a[aria-busy="true"] {
   opacity: 0.58;
   cursor: wait;
@@ -165,6 +193,12 @@
 
 @media (min-width: 1121px) {
   .site-header[data-site-mode="public"] .header-actions {
+    min-width: 274px;
+    justify-content: flex-end;
+  }
+
+  /* Keep the console and public pages on the same grid anchor when a nav link navigates between them. */
+  .site-header[data-site-page="console"] .header-actions {
     min-width: 274px;
     justify-content: flex-end;
   }

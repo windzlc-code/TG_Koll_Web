@@ -130,6 +130,11 @@
     return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
   }
 
+  function themeEnabled() {
+    const page = document.querySelector("[data-site-header]")?.dataset.sitePage || "";
+    return page === "console" || document.body?.classList.contains("page-admin");
+  }
+
   function currentLanguage() {
     return document.documentElement.dataset.language === "zh-Hant" ? "zh-Hant" : "zh-Hans";
   }
@@ -141,6 +146,11 @@
   }
 
   function setTheme(theme, { emit = true, persist = true } = {}) {
+    if (!themeEnabled()) {
+      delete document.documentElement.dataset.theme;
+      sync();
+      return;
+    }
     const nextTheme = theme === "dark" ? "dark" : "light";
     if (nextTheme === "dark") document.documentElement.dataset.theme = "dark";
     else delete document.documentElement.dataset.theme;
@@ -166,7 +176,7 @@
     const busy = key === "console" ? " data-console-entry" : "";
     const active = current === key ? ' aria-current="page"' : "";
     const classAttribute = className ? ` class="${className}"` : "";
-    return `<a${classAttribute} href="${href}"${active}${busy}><span data-site-copy="${key}"></span></a>`;
+    return `<a${classAttribute} data-site-nav-key="${key}" href="${href}"${active}${busy}><span data-site-copy="${key}"></span></a>`;
   }
 
   function navigationLinks(page, current) {
@@ -197,14 +207,15 @@
     return `<svg${classAttribute} viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20c.8-4 3.1-6 7-6s6.2 2 7 6"></path></svg>`;
   }
 
-  function accountPreferencesMarkup() {
-    return `<div class="site-account-preferences" data-site-personal-controls>
-      <span class="site-account-section-label" data-site-copy="personalSettings"></span>
-      <button id="themeToggle" class="site-account-preference" type="button" data-site-theme-toggle>
+  function accountPreferencesMarkup(page = "console") {
+    const themePreference = page === "console" ? `<button id="themeToggle" class="site-account-preference" type="button" data-site-theme-toggle>
         <span class="site-account-preference-icon" aria-hidden="true">${themeIcon()}</span>
         <span data-site-copy="appearance"></span>
         <strong data-site-theme-state></strong>
-      </button>
+      </button>` : "";
+    return `<div class="site-account-preferences" data-site-personal-controls>
+      <span class="site-account-section-label" data-site-copy="personalSettings"></span>
+      ${themePreference}
       <button id="languageToggle" class="site-account-preference" type="button" data-site-language-toggle>
         <span class="site-account-preference-icon" aria-hidden="true">${languageIcon()}</span>
         <span data-site-copy="languageSetting"></span>
@@ -213,7 +224,7 @@
     </div>`;
   }
 
-  function accountMenuMarkup() {
+  function accountMenuMarkup(page = "console") {
     return `<div class="site-account-menu" data-site-account-menu>
       <button class="site-user" type="button" aria-controls="siteAccountPopover" aria-haspopup="dialog" aria-expanded="false" data-site-user-title data-site-account-trigger>
         ${accountIcon("site-user-avatar")}<span id="consoleMeName" data-site-account-name></span><svg class="site-user-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 10 4 4 4-4"></path></svg>
@@ -241,7 +252,7 @@
             <button type="button" data-site-open-settings data-site-copy="accountSettings"></button>
           </div>
         </section>
-        ${accountPreferencesMarkup()}
+        ${accountPreferencesMarkup(page)}
         <button class="site-account-logout" type="button" data-site-account-logout><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4M14 8l4 4-4 4M18 12H9"></path></svg><span data-site-copy="logout"></span></button>
         <span class="site-account-message" role="status" aria-live="polite" data-site-account-message></span>
       </div>
@@ -256,10 +267,10 @@
   }
 
   function renderActions(mode, page, current) {
-    const controls = `<div class="site-global-controls" data-site-global-controls><button id="themeToggle" class="site-icon-button" type="button" data-site-theme-toggle>${themeIcon()}</button><button id="languageToggle" class="site-icon-button site-language-button" type="button" data-site-language-toggle>${languageIcon()}</button></div>`;
+    const controls = `<div class="site-global-controls" data-site-global-controls><button id="languageToggle" class="site-icon-button site-language-button" type="button" data-site-language-toggle>${languageIcon()}</button></div>`;
     const mobileMenu = renderMobileMenu(page, current, mode);
     if (mode === "authenticated") {
-      return `${mobileMenu}${accountMenuMarkup()}`;
+      return `${mobileMenu}${accountMenuMarkup(page)}`;
     }
     return `${mobileMenu}${controls}<button class="header-login" type="button" data-open-login><span data-site-copy="login"></span></button><a class="header-action site-guest-action" href="${page === "home" ? "#contact" : "/#contact"}"><span data-site-copy="guest"></span></a>`;
   }
@@ -461,7 +472,7 @@
     actions.querySelectorAll(":scope > .site-global-controls").forEach((node) => node.remove());
     actions.querySelectorAll(".site-mobile-menu-extra").forEach((node) => node.remove());
     if (!actions.querySelector("[data-site-account-menu]")) {
-      actions.insertAdjacentHTML("beforeend", accountMenuMarkup());
+      actions.insertAdjacentHTML("beforeend", accountMenuMarkup(header.dataset.sitePage || "home"));
     }
     actions.querySelector("[data-site-account-billing]")?.toggleAttribute(
       "hidden",
@@ -591,22 +602,25 @@
   });
   window.addEventListener("storage", (event) => {
     if (event.key === THEME_STORAGE_KEY) {
-      setTheme(event.newValue || "light", { persist: false });
+      if (themeEnabled()) setTheme(event.newValue || "light", { persist: false });
+      else delete document.documentElement.dataset.theme;
     }
     if (event.key === LANGUAGE_STORAGE_KEY) {
       setLanguage(event.newValue || DEFAULT_LANGUAGE, { persist: false });
     }
     if (event.key === null) {
-      setTheme("light", { persist: false });
+      if (themeEnabled()) setTheme("light", { persist: false });
+      else delete document.documentElement.dataset.theme;
       setLanguage(DEFAULT_LANGUAGE, { persist: false });
     }
   });
 
   syncAdminWorkspaceContext();
   document.querySelectorAll("[data-site-header]").forEach(mount);
-  setTheme(storedValue(THEME_STORAGE_KEY, "light"), { persist: false });
+  if (themeEnabled()) setTheme(storedValue(THEME_STORAGE_KEY, "light"), { persist: false });
+  else delete document.documentElement.dataset.theme;
   setLanguage(storedValue(LANGUAGE_STORAGE_KEY, DEFAULT_LANGUAGE), { persist: false });
 
-  window.VectoSiteNavigation = { mount, sync, setTheme, setLanguage, setAccount, setLogoutPending, currentTheme, currentLanguage };
+  window.VectoSiteNavigation = { mount, sync, setTheme, setLanguage, setAccount, setLogoutPending, currentTheme, currentLanguage, themeEnabled };
   window.dispatchEvent(new CustomEvent("vecto:navigation-ready"));
 })();

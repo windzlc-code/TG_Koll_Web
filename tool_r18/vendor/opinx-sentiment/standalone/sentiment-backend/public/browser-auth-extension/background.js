@@ -405,6 +405,7 @@ async function syncProfileCookies(profile, options = {}) {
     const nextBase = await apiBase();
     const response = await fetch(`${nextBase}/api/sentiment/browser-auth/cookies`, {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
         "x-sentiment-browser-auth": nextToken,

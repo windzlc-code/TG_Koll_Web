@@ -54,6 +54,12 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("padding-top: var(--site-header-height)", self.styles)
         self.assertIn("grid-template-columns: 288px minmax(0, 1fr)", self.styles)
         self.assertIn("top: calc(var(--site-header-height) + 16px)", self.styles)
+        self.assertIn('.site-header[data-site-page="console"] .header-actions', self.site_nav_styles)
+        self.assertIn("min-width: 274px", self.site_nav_styles)
+        self.assertIn("scrollbar-gutter: stable", self.site_nav_styles)
+        self.assertIn('font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif', self.site_nav_styles)
+        self.assertIn('data-site-nav-key="${key}"', self.site_nav_source)
+        self.assertIn('.site-nav > a[data-site-nav-key]', self.site_nav_styles)
 
     def test_console_reuses_global_theme_and_language_controls(self):
         self.assertIn('id="themeToggle"', self.site_nav_source)
@@ -96,7 +102,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("purgeLegacyTenantContentCaches()", self.source)
         self.assertIn('class="site-account-preferences"', self.markup)
         self.assertIn('data-site-personal-controls', self.markup)
-        self.assertIn('function accountPreferencesMarkup()', self.site_nav_source)
+        self.assertIn('function accountPreferencesMarkup(page = "console")', self.site_nav_source)
         self.assertIn('data-site-account-billing', self.markup)
         self.assertIn('data-site-open-billing', self.markup)
         self.assertIn('data-site-open-settings', self.markup)
@@ -901,6 +907,86 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_task_screenshot_gallery_deduplicates_result_and_log_in_admin_workspace(self):
+        harness = textwrap.dedent(f"""
+            const assert = require("node:assert/strict");
+            const ADMIN_WORKSPACE_USER_ID = "42";
+            const ADMIN_CONSOLE_SESSION = true;
+            const location = {{ origin: "https://example.test" }};
+            {self._function_source("adminWorkspaceUrl")}
+            {self._function_source("directMediaPreviewUrl")}
+            {self._function_source("automationScreenshotUrlFromPath")}
+            {self._function_source("automationScreenshotThumbnailUrl")}
+            {self._function_source("taskScreenshotFromValue")}
+            function logStageLabel(stage) {{ return stage || "日志截图"; }}
+            {self._section("function collectTaskScreenshots", "\nfunction renderTaskScreenshotGallery")}
+
+            const filename = "task-1_publish_done_123.png";
+            const rows = collectTaskScreenshots({{
+              id: "task-1",
+              task_type: "publish_post",
+              status: "success",
+              finished_at: 123,
+              result: {{ screenshot_path: `/data/webapp_data/social_automation/screenshots/${{filename}}` }},
+            }}, [
+              {{
+                stage: "publish_submitted_unconfirmed",
+                created_at: 122,
+                screenshot_url: "/api/persona_dashboard/automation/screenshots/task-1_pending_122.png",
+              }},
+              {{
+                stage: "publish_done",
+                created_at: 123,
+                screenshot_url: `/api/persona_dashboard/automation/screenshots/${{filename}}`,
+              }},
+            ]);
+            assert.equal(rows.length, 1);
+            assert.equal(rows[0].label, "最终截图");
+            assert.match(rows[0].url, /admin_workspace_user_id=42/);
+            assert.match(rows[0].url, /admin_console=1/);
+
+            const missingFinal = collectTaskScreenshots({{
+              id: "task-2",
+              task_type: "publish_post",
+              status: "success",
+              result: {{}},
+            }}, [{{
+              stage: "need_manual",
+              screenshot_url: "/api/persona_dashboard/automation/screenshots/task-2_login.png",
+            }}]);
+            assert.equal(missingFinal.length, 0);
+
+            const logOnlyFinal = collectTaskScreenshots({{
+              id: "task-3",
+              task_type: "publish_post",
+              status: "success",
+              result: {{}},
+            }}, [{{
+              stage: "publish_done",
+              screenshot_url: "/api/persona_dashboard/automation/screenshots/task-3_publish_done.png",
+            }}]);
+            assert.equal(logOnlyFinal.length, 1);
+
+            const otherTask = collectTaskScreenshots({{
+              id: "task-4",
+              task_type: "check_login",
+              status: "success",
+              result: {{}},
+            }}, [{{
+              stage: "check_login",
+              screenshot_url: "/api/persona_dashboard/automation/screenshots/task-4_check_login.png",
+            }}]);
+            assert.equal(otherTask.length, 1);
+        """)
+        self._run_node(harness)
+        log_renderer = self._section("function renderTaskDetailLogs", "\nfunction renderTaskDetailLayout")
+        self.assertIn("hideScreenshots = false", log_renderer)
+        self.assertIn("task-log-screenshot-button", log_renderer)
+        self.assertIn("renderMediaPreviewButton", log_renderer)
+        layout_renderer = self._section("function renderTaskDetailLayout", "\nfunction updatePersonaPublishResultView")
+        self.assertIn('String(task?.task_type || "") === "publish_post"', layout_renderer)
+        self.assertIn('String(task?.status || "") === "success"', layout_renderer)
 
     def test_console_settings_use_user_browser_policy_endpoints_and_keep_pagination_local(self):
         render = self._function_source("renderConsoleSettingsPage")

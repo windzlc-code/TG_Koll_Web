@@ -2175,15 +2175,36 @@ def _sentiment_browser_auth_config_access(request: Request) -> tuple[dict[str, A
     config = _read_sentiment_config_file()
     expected_token = _sentiment_browser_auth_token(config, create=False)
     provided_token = str(request.headers.get("x-sentiment-browser-auth") or "").strip()
-    if expected_token and provided_token and hmac.compare_digest(provided_token, expected_token):
-        return config, False
     with contextlib.suppress(HTTPException):
         user = _get_session_user_for_token(
             request.cookies.get(ADMIN_SESSION_COOKIE) or request.cookies.get(SESSION_COOKIE)
         )
         require_admin(user)
         return config, True
+    if expected_token and provided_token and hmac.compare_digest(provided_token, expected_token):
+        return config, False
     raise HTTPException(status_code=403, detail="invalid browser auth token")
+
+
+def _sentiment_browser_auth_admin_from_cookie(request: Request) -> dict[str, Any]:
+    token = str(request.cookies.get(ADMIN_SESSION_COOKIE) or request.cookies.get(SESSION_COOKIE) or "").strip()
+    user = _get_session_user_for_token(token)
+    require_admin(user)
+    return user
+
+
+def _sentiment_browser_auth_cors_headers(request: Request) -> dict[str, str]:
+    origin = str(request.headers.get("origin") or "").strip()
+    headers = {
+        "Access-Control-Allow-Origin": origin or "*",
+        "Access-Control-Allow-Headers": "Content-Type, X-Sentiment-Browser-Auth",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Max-Age": "86400",
+    }
+    if origin:
+        headers["Access-Control-Allow-Credentials"] = "true"
+        headers["Vary"] = "Origin"
+    return headers
 
 
 def _build_sentiment_browser_auth_extension_zip(request: Request) -> bytes:
@@ -13483,7 +13504,7 @@ def _persona_hot_pool_worker_loop() -> None:
                 "limit": 10,
                 "refresh": True,
                 "searchMode": search_mode,
-            }, timeout_seconds=60, background=True)
+            }, timeout_seconds=120, background=True)
         except _PersonaHotBackgroundDeferred:
             continue
         except Exception as exc:
@@ -14558,46 +14579,6 @@ def _create_social_task_with_billing(
             clear_trusted_batch_task(payload)
 
 
-def _ensure_publish_login_task(
-    account: dict[str, Any],
-    *,
-    scheduled_at: int | float = 0,
-    billing_admin_waived: bool = False,
-) -> dict[str, Any] | None:
-    account_id = str(account.get("id") or "").strip()
-    if not account_id:
-        return None
-    account_status = str(account.get("status") or "").strip().lower()
-    if account_status == "ready":
-        return None
-    active = _active_social_task_for_account(account_id, ["open_login"])
-    if active:
-        return active
-    platform = str(account.get("platform") or "threads").strip().lower() or "threads"
-    return _create_social_task_with_billing(
-        SocialTaskPayload(
-            persona_id=str(account.get("persona_id") or "").strip(),
-            account_id=account_id,
-            platform=platform,
-            task_type="open_login",
-            priority=20,
-            scheduled_at=scheduled_at or 0,
-            payload={
-                "auto_submit": True,
-                "login_wait_seconds": 180,
-                "wait_for_manual": True,
-                "manual_only_on_verification": True,
-                "max_login_attempts": 4,
-                "max_self_heal_attempts": 6,
-                "verification_confirmations": 3,
-                "reason": "publish_before_login",
-            },
-            max_retries=2,
-        ),
-        billing_admin_waived=bool(billing_admin_waived),
-    )
-
-
 def _publish_persona_archive_post(
     archive_id: str,
     post_id: str,
@@ -14631,11 +14612,6 @@ def _publish_persona_archive_post(
         raise HTTPException(status_code=400, detail="推文草稿内容为空，不能发布。")
     account = _persona_publish_account_for_archive(clean_archive_id, payload.account_id, payload.platform, owner_user_id)
     platform = str(account.get("platform") or "instagram").strip().lower() or "instagram"
-    login_task = _ensure_publish_login_task(
-        account,
-        scheduled_at=payload.scheduled_at or 0,
-        billing_admin_waived=bool(billing_admin_waived),
-    )
     if platform == "instagram" and not media_paths:
         raise HTTPException(status_code=400, detail="Instagram 发布至少需要一份媒体素材。")
     active_task = _active_publish_task_for_post(
@@ -14649,7 +14625,7 @@ def _publish_persona_archive_post(
             "persona_id": clean_archive_id,
             "post_id": clean_post_id,
             "source": source_name,
-            "login_task": login_task,
+            "login_task": None,
             "task": get_social_task(str(active_task.get("id") or "")),
             "reused": True,
         }
@@ -14670,14 +14646,12 @@ def _publish_persona_archive_post(
                 "archive_post_id": clean_post_id,
                 "archive_post_title": str(post.get("title") or ""),
                 "archive_post_source": source_name,
-                "auto_login_before_publish": bool(login_task),
-                "login_task_id": str((login_task or {}).get("id") or ""),
             },
             max_retries=max(0, min(int(payload.max_retries), 5)),
         ),
         billing_admin_waived=bool(billing_admin_waived),
     )
-    return {"ok": True, "persona_id": clean_archive_id, "post_id": clean_post_id, "source": source_name, "login_task": login_task, "task": task}
+    return {"ok": True, "persona_id": clean_archive_id, "post_id": clean_post_id, "source": source_name, "login_task": None, "task": task}
 
 
 def _archive_posts_for_matrix_source(archive: dict[str, Any], source: str) -> list[dict[str, Any]]:
@@ -14816,8 +14790,6 @@ def _publish_persona_matrix(
                             "archive_post_title": str(post.get("title") or ""),
                             "archive_post_source": source,
                             "matrix_publish_batch_id": batch_id,
-                            "auto_login_before_publish": bool(login_task),
-                            "login_task_id": str((login_task or {}).get("id") or ""),
                         },
                         max_retries=max(0, min(int(payload.max_retries or 2), 5)),
                     )
@@ -14866,14 +14838,6 @@ def _publish_persona_matrix(
 
     try:
         for item in pending:
-            login_task = _ensure_publish_login_task(
-                item["account"],
-                scheduled_at=payload.scheduled_at or 0,
-                billing_admin_waived=bool(billing_admin_waived),
-            )
-            item["login_task"] = login_task
-            item["task_payload"].payload["auto_login_before_publish"] = bool(login_task)
-            item["task_payload"].payload["login_task_id"] = str((login_task or {}).get("id") or "")
             task = _create_social_task_with_billing(
                 item["task_payload"],
                 billing_admin_waived=bool(billing_admin_waived),
@@ -19945,7 +19909,8 @@ def create_app() -> FastAPI:
         return {"ok": True, "runtime_config": _redact_runtime_config(merged)}
 
     @app.get("/browser-auth-extension/download")
-    def browser_auth_extension_download(request: Request, user: dict[str, Any] = Depends(require_admin)):
+    def browser_auth_extension_download(request: Request):
+        _sentiment_browser_auth_admin_from_cookie(request)
         zip_body = _build_sentiment_browser_auth_extension_zip(request)
         return Response(
             content=zip_body,
@@ -19961,45 +19926,36 @@ def create_app() -> FastAPI:
         config, is_admin = _sentiment_browser_auth_config_access(request)
         return JSONResponse(
             _sentiment_browser_auth_extension_config(request, config, include_auth_token=is_admin),
-            headers={"Cache-Control": "no-store", "Access-Control-Allow-Origin": "*"},
+            headers={"Cache-Control": "no-store", **_sentiment_browser_auth_cors_headers(request)},
         )
 
     @app.options("/browser-auth-extension/config.json")
-    def browser_auth_extension_config_options():
-        return Response(
-            status_code=204,
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Headers": "Content-Type, X-Sentiment-Browser-Auth",
-                "Access-Control-Allow-Methods": "GET, OPTIONS",
-                "Access-Control-Max-Age": "86400",
-            },
-        )
+    def browser_auth_extension_config_options(request: Request):
+        return Response(status_code=204, headers=_sentiment_browser_auth_cors_headers(request))
 
     @app.get("/browser-auth-extension/{file_name}")
-    def browser_auth_extension_file(file_name: str, request: Request, user: dict[str, Any] = Depends(require_admin)):
+    def browser_auth_extension_file(file_name: str, request: Request):
+        _sentiment_browser_auth_admin_from_cookie(request)
         body, media_type = _sentiment_browser_auth_text(file_name, request)
         return Response(content=body, media_type=media_type, headers={"Cache-Control": "no-cache"})
 
     @app.options("/api/sentiment/browser-auth/cookies")
-    def api_sentiment_browser_auth_cookies_options():
-        return Response(
-            status_code=204,
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Headers": "Content-Type, X-Sentiment-Browser-Auth",
-                "Access-Control-Allow-Methods": "POST, OPTIONS",
-                "Access-Control-Max-Age": "86400",
-            },
-        )
+    def api_sentiment_browser_auth_cookies_options(request: Request):
+        return Response(status_code=204, headers=_sentiment_browser_auth_cors_headers(request))
 
     @app.post("/api/sentiment/browser-auth/cookies")
     def api_sentiment_browser_auth_cookies(payload: SentimentBrowserAuthExtensionCookiePayload, request: Request):
-        cors_headers = {"Access-Control-Allow-Origin": "*"}
+        cors_headers = _sentiment_browser_auth_cors_headers(request)
         config = _read_sentiment_config_file()
         expected_token = _sentiment_browser_auth_token(config, create=False)
         provided_token = str(request.headers.get("x-sentiment-browser-auth") or "").strip()
-        if not expected_token or not provided_token or not hmac.compare_digest(provided_token, expected_token):
+        token_ok = bool(expected_token and provided_token and hmac.compare_digest(provided_token, expected_token))
+        admin_ok = False
+        if not token_ok:
+            with contextlib.suppress(HTTPException):
+                _sentiment_browser_auth_admin_from_cookie(request)
+                admin_ok = True
+        if not token_ok and not admin_ok:
             return JSONResponse({"ok": False, "error": "invalid browser auth token"}, status_code=403, headers=cors_headers)
         profiles = _sentiment_profiles_container(config)
         profile_key = str(payload.profileKey or payload.sourceKey or "").strip()

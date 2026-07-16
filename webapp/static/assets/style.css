@@ -9825,3 +9825,301 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
   .page-admin #adminUserBatchMsg { grid-column: 1 / -1; }
   .page-admin .admin-purge-form { grid-template-columns: 1fr; }
 }
+
+/* Admin preferences use the shared site state but keep their own accessible menus. */
+.page-admin .admin-profile-menu {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.page-admin .admin-language-menu {
+  position: static;
+}
+
+.page-admin .admin-preference-button {
+  display: grid;
+  width: 46px;
+  min-width: 46px;
+  height: 46px;
+  min-height: 46px;
+  place-items: center;
+  padding: 0;
+  color: #173c38;
+  border: 1px solid #c8d8d4;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 8px 24px rgba(10, 35, 32, 0.12);
+  line-height: 0;
+}
+
+.page-admin .admin-preference-button:hover,
+.page-admin .admin-preference-button:focus-visible,
+.page-admin .admin-preference-button[aria-expanded="true"] {
+  color: #087b68;
+  border-color: #5de29b;
+  background: #f5fffb;
+}
+
+.page-admin .admin-preference-button svg,
+.page-admin .admin-language-toggle svg {
+  display: block;
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.page-admin .admin-preference-button .admin-theme-icon-sun {
+  display: none;
+}
+
+html[data-theme="dark"] .page-admin .admin-preference-button .admin-theme-icon-sun {
+  display: block;
+}
+
+html[data-theme="dark"] .page-admin .admin-preference-button .admin-theme-icon-moon {
+  display: none;
+}
+
+.page-admin .admin-language-panel {
+  position: absolute;
+  top: 56px;
+  right: 0;
+  display: grid;
+  width: min(240px, calc(100vw - 28px));
+  gap: 5px;
+  padding: 8px;
+  color: #effff9;
+  border: 1px solid rgba(117, 241, 211, 0.22);
+  border-radius: 8px;
+  background: rgba(5, 18, 17, 0.985);
+  box-shadow: 0 24px 64px rgba(3, 18, 16, 0.28);
+}
+
+.page-admin .admin-language-panel[hidden] {
+  display: none;
+}
+
+.page-admin .admin-language-panel button {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 42px;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  color: rgba(237, 255, 249, 0.78);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+}
+
+.page-admin .admin-language-panel button:hover,
+.page-admin .admin-language-panel button:focus-visible {
+  color: #ffffff;
+  border-color: rgba(117, 241, 211, 0.24);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.page-admin .admin-language-panel button[aria-checked="true"] {
+  color: #ffffff;
+  border-color: rgba(117, 241, 211, 0.34);
+  background: rgba(12, 154, 154, 0.2);
+}
+
+.page-admin .admin-language-panel button[aria-checked="true"]::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 11px;
+  width: 6px;
+  height: 6px;
+  transform: translateY(-50%);
+  border-radius: 50%;
+  background: #5de29b;
+  box-shadow: 0 0 0 3px rgba(93, 226, 155, 0.12);
+}
+
+.page-admin .admin-language-panel button[aria-checked="true"] span {
+  grid-column: 1;
+  grid-row: 1;
+  padding-left: 15px;
+}
+
+.page-admin .admin-language-panel small {
+  color: rgba(237, 255, 249, 0.52);
+  font: 700 11px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+@media (max-width: 760px) {
+  .page-admin .admin-preference-button {
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
+    min-height: 36px;
+  }
+
+  .page-admin .admin-preference-button svg,
+  .page-admin .admin-language-toggle svg {
+    width: 19px;
+    height: 19px;
+  }
+
+  .page-admin .admin-language-panel {
+    position: fixed;
+    top: calc(max(9px, env(safe-area-inset-top)) + 45px);
+    right: max(10px, env(safe-area-inset-right));
+    width: min(320px, calc(100vw - 20px));
+  }
+}
+
+/* Dark administration surfaces. The root attribute is restored before CSS loads. */
+html[data-theme="dark"] body.page-admin {
+  --admin-ink: #edf8f5;
+  --admin-ink-soft: #c1d3cf;
+  --admin-muted: #95aaa6;
+  --admin-paper: #111b1c;
+  --admin-surface: #0a1213;
+  --admin-line: #304344;
+  --admin-teal: #25aaa7;
+  --admin-teal-dark: #168985;
+  --gov-blue-soft: #152a3c;
+  --gov-green-soft: #142d23;
+  --gov-amber-soft: #342816;
+  --gov-red-soft: #351d20;
+  --gov-neutral-soft: #1b2829;
+  --line: #304344;
+  --panel-soft: #162122;
+  color-scheme: dark;
+  background: #0a1213;
+  color: var(--admin-ink);
+}
+
+html[data-theme="dark"] body.page-admin .card,
+html[data-theme="dark"] body.page-admin .task-summary-shell,
+html[data-theme="dark"] body.page-admin .admin-compose-shell,
+html[data-theme="dark"] body.page-admin .admin-table-shell,
+html[data-theme="dark"] body.page-admin .task-toolbar,
+html[data-theme="dark"] body.page-admin .admin-config-card,
+html[data-theme="dark"] body.page-admin .account-grid > div,
+html[data-theme="dark"] body.page-admin .admin-runtime-block,
+html[data-theme="dark"] body.page-admin .admin-governance-panel,
+html[data-theme="dark"] body.page-admin .admin-governance-kpi,
+html[data-theme="dark"] body.page-admin .admin-taxonomy-item,
+html[data-theme="dark"] body.page-admin .admin-session-item,
+html[data-theme="dark"] body.page-admin .admin-password-history-item,
+html[data-theme="dark"] body.page-admin .admin-user-filter-bar,
+html[data-theme="dark"] body.page-admin .admin-user-batch-bar {
+  color: var(--admin-ink);
+  border-color: var(--admin-line);
+  background: #121d1e;
+}
+
+html[data-theme="dark"] body.page-admin .admin-governance-kpi.is-info,
+html[data-theme="dark"] body.page-admin .admin-governance-kpi.is-success,
+html[data-theme="dark"] body.page-admin .admin-governance-kpi.is-health,
+html[data-theme="dark"] body.page-admin .admin-governance-kpi.is-warning,
+html[data-theme="dark"] body.page-admin .admin-governance-kpi.is-danger {
+  background: #121d1e;
+}
+
+html[data-theme="dark"] body.page-admin #secOverview > .admin-governance-head {
+  color: var(--admin-ink);
+  border-color: var(--admin-line);
+  background: #121d1e;
+}
+
+html[data-theme="dark"] body.page-admin input,
+html[data-theme="dark"] body.page-admin select,
+html[data-theme="dark"] body.page-admin textarea {
+  color: var(--admin-ink);
+  border-color: var(--admin-line);
+  background: #0c1617;
+}
+
+html[data-theme="dark"] body.page-admin input::placeholder,
+html[data-theme="dark"] body.page-admin textarea::placeholder {
+  color: #718783;
+}
+
+html[data-theme="dark"] body.page-admin button.ghost,
+html[data-theme="dark"] body.page-admin .btn.ghost {
+  color: var(--admin-ink-soft);
+  border-color: var(--admin-line);
+  background: #162223;
+}
+
+html[data-theme="dark"] body.page-admin button.ghost:hover,
+html[data-theme="dark"] body.page-admin .btn.ghost:hover {
+  color: #e8fffa;
+  border-color: #3d7772;
+  background: #1b3030;
+}
+
+html[data-theme="dark"] body.page-admin .table-wrap,
+html[data-theme="dark"] body.page-admin .table th,
+html[data-theme="dark"] body.page-admin .table td {
+  border-color: var(--admin-line);
+}
+
+html[data-theme="dark"] body.page-admin .table th {
+  color: var(--admin-ink-soft);
+  background: #172526;
+}
+
+html[data-theme="dark"] body.page-admin .table td,
+html[data-theme="dark"] body.page-admin .admin-user-table td:last-child {
+  color: var(--admin-ink);
+  background: #101a1b;
+}
+
+html[data-theme="dark"] body.page-admin .table tr:hover td {
+  background: #182627;
+}
+
+html[data-theme="dark"] body.page-admin .modal-overlay {
+  background: rgba(0, 7, 8, 0.72);
+}
+
+html[data-theme="dark"] body.page-admin .modal-card,
+html[data-theme="dark"] body.page-admin .modal-header,
+html[data-theme="dark"] body.page-admin .modal-body,
+html[data-theme="dark"] body.page-admin .modal-footer {
+  color: var(--admin-ink);
+  border-color: var(--admin-line);
+  background: #111c1d;
+}
+
+html[data-theme="dark"] body.page-admin .admin-profile-panel,
+html[data-theme="dark"] body.page-admin .admin-language-panel {
+  color: #effff9;
+  border-color: rgba(117, 241, 211, 0.24);
+  background: #071313;
+}
+
+html[data-theme="dark"] body.page-admin .admin-preference-button,
+html[data-theme="dark"] body.page-admin .admin-profile-toggle {
+  color: #bfe9df;
+  border-color: #385a57;
+  background: #101d1d;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+html[data-theme="dark"] body.page-admin .admin-user-pagination,
+html[data-theme="dark"] body.page-admin .admin-mfa-recovery,
+html[data-theme="dark"] body.page-admin .admin-purge-preview span {
+  color: var(--admin-ink);
+  border-color: var(--admin-line);
+  background: #142021;
+}
+
+html[data-theme="dark"] body.page-admin .admin-user-danger-section {
+  color: #ffd7d7;
+  border-color: #a64444;
+  background: #2a1719;
+}

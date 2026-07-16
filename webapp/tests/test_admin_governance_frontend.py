@@ -111,6 +111,57 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn('.admin-user-batch-bar', self.styles)
         self.assertIn('@media (max-width: 720px)', self.styles)
 
+    def test_admin_preferences_reuse_shared_navigation_without_language_toggle_binding(self):
+        st_script = '/assets/vendor/opencc-js/st-characters.js?v=1.4.1'
+        navigation_script = '/assets/opc/site-navigation.js?v=2026071701'
+        admin_script = '/assets/admin.js?v=__ADMIN_JS_VERSION__'
+        stylesheet = '/assets/style.css?v=__STYLE_VERSION__'
+        self.assertLess(self.html.index('window.localStorage.getItem("wk-console-theme")'), self.html.index(stylesheet))
+        self.assertLess(self.html.index(st_script), self.html.index(admin_script))
+        self.assertLess(self.html.index(navigation_script), self.html.index(admin_script))
+        self.assertIn('id="adminThemeToggle"', self.html)
+        self.assertIn('data-site-theme-toggle', self.html)
+        language_tag = self.html[self.html.index('id="adminLanguageToggle"') :].split('>', 1)[0]
+        self.assertNotIn('data-site-language-toggle', language_tag)
+        self.assertIn('data-admin-language="zh-Hans"', self.html)
+        self.assertIn('data-admin-language="zh-Hant"', self.html)
+        self.assertIn('window.VectoSiteNavigation?.setTheme(nextTheme)', self.script)
+        self.assertIn('window.VectoSiteNavigation?.setLanguage(option.dataset.adminLanguage)', self.script)
+
+    def test_admin_language_menu_accessibility_and_ui_only_translation(self):
+        self.assertIn('function setAdminLanguageMenuOpen', self.script)
+        self.assertIn('setAdminProfileMenuOpen(false)', self.script)
+        self.assertIn('setAdminLanguageMenuOpen(false)', self.script)
+        self.assertIn('event.key === "Escape"', self.script)
+        self.assertIn('toggle.focus({ preventScroll: true })', self.script)
+        self.assertIn('markAdminStaticUi()', self.script)
+        self.assertIn('markAdminStaticUi(node);', self.script)
+        self.assertIn('data-admin-i18n-ui="true" data-act="detail"', self.script)
+        self.assertIn('<span data-admin-i18n-ui="true">生成类型：</span>', self.script)
+        for excluded_data_surface in (
+            'tbody',
+            '.task-list',
+            '.admin-security-list',
+            '#adminName',
+            '#adminSessionName',
+            '#taskInspectBody',
+            '#userDetailBody',
+        ):
+            self.assertIn(f'"{excluded_data_surface}"', self.script)
+        self.assertIn('window.addEventListener("vecto:language-change"', self.script)
+
+    def test_admin_preference_icons_are_centered_and_dark_theme_is_readable(self):
+        self.assertIn('.page-admin .admin-preference-button', self.styles)
+        for declaration in ('display: grid;', 'place-items: center;', 'padding: 0;', 'line-height: 0;'):
+            self.assertIn(declaration, self.styles)
+        self.assertIn('.page-admin .admin-language-toggle svg', self.styles)
+        self.assertIn('display: block;', self.styles)
+        self.assertIn('.admin-preference-button .admin-theme-icon-sun', self.styles)
+        self.assertIn('html[data-theme="dark"] body.page-admin', self.styles)
+        self.assertIn('#secOverview > .admin-governance-head', self.styles)
+        for surface in ('modal-card', 'admin-profile-panel', 'table th', 'input'):
+            self.assertIn(surface, self.styles)
+
 
 if __name__ == "__main__":
     unittest.main()

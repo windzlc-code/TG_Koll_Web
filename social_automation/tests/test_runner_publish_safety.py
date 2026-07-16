@@ -30,6 +30,27 @@ class _Context:
         self.permissions.append((permissions, origin))
 
 
+class _BackgroundPage:
+    def __init__(self, url="about:blank"):
+        self.url = url
+        self.closed = False
+        self.reload = mock.Mock()
+
+    def close(self):
+        self.closed = True
+
+
+class _BackgroundContext(_Context):
+    def __init__(self):
+        super().__init__()
+        self.pages = []
+
+    def new_page(self):
+        page = _BackgroundPage()
+        self.pages.append(page)
+        return page
+
+
 class _Page:
     def __init__(self, url="https://www.threads.net/"):
         self.url = url
@@ -40,6 +61,16 @@ class _Page:
     def evaluate(self, script, value=None):
         self.evaluations.append((script, value))
         return None
+
+
+class _PageWithBackground(_Page):
+    def __init__(self, url="https://www.threads.net/"):
+        super().__init__(url)
+        self.context = _BackgroundContext()
+        self.brought_to_front = 0
+
+    def bring_to_front(self):
+        self.brought_to_front += 1
 
 
 class _Locator:
@@ -315,6 +346,39 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         status = runner._detect_instagram_login_state(page)
 
         self.assertEqual(status["status"], "invalid_credentials")
+
+    def test_publish_login_probe_uses_background_page_without_navigating_main_page(self):
+        page = _PageWithBackground()
+        with mock.patch.object(runner, "_check_platform_login", return_value={"status": "ready"}) as check:
+            status = runner._check_platform_login_without_disrupting(page, "threads", _Logger())
+
+        self.assertEqual(status["status"], "ready")
+        self.assertEqual(len(page.context.pages), 1)
+        probe = page.context.pages[0]
+        check.assert_called_once_with(probe, "threads", mock.ANY)
+        self.assertTrue(probe.closed)
+        self.assertGreaterEqual(page.brought_to_front, 1)
+
+    def test_check_login_reports_expired_session_as_completed_diagnostic(self):
+        page = _Page()
+        detected = {"status": "cookie_expired", "reason": "login prompt"}
+        with (
+            mock.patch.object(runner, "_check_platform_login", return_value=detected),
+            mock.patch.object(runner, "_screenshot", return_value="check.png"),
+        ):
+            result = runner._run_check_login(
+                page,
+                {"id": "check-task"},
+                {"id": "account-1"},
+                {},
+                Path("."),
+                _Logger(),
+                "threads",
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "cookie_expired")
+        self.assertEqual(result["screenshot_path"], "check.png")
 
     def test_login_self_heal_uses_visible_retry_action_before_navigation(self):
         page = mock.Mock()
@@ -1657,7 +1721,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
     def test_threads_success_returns_specific_permalink(self):
         permalink = "https://www.threads.net/@alice/post/ABC123"
         resolved_profile = "https://www.threads.net/@real_handle"
-        page = _Page("https://www.threads.net/@alice")
+        page = _PageWithBackground("https://www.threads.net/@alice")
         with (
             mock.patch.object(runner, "_dismiss_threads_compose_dialogs"),
             mock.patch.object(runner, "_goto") as goto,
@@ -1694,8 +1758,11 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertEqual(result["url"], permalink)
         self.assertEqual(result["published"]["url"], permalink)
         self.assertTrue(any(call.args[1] == resolved_profile and call.args[3] == "threads_publish_baseline" for call in goto.call_args_list))
+        self.assertEqual(len(page.context.pages), 3)
+        self.assertIs(confirm_profile.call_args.args[0], page.context.pages[1])
         self.assertEqual(confirm_profile.call_args.kwargs["profile_url"], resolved_profile)
-        screenshot.assert_called_once_with(page, permalink, "hello threads", Path("."), {"id": "publish-task"}, mock.ANY)
+        screenshot.assert_called_once_with(page.context.pages[2], permalink, "hello threads", Path("."), {"id": "publish-task"}, mock.ANY)
+        self.assertTrue(all(background.closed for background in page.context.pages))
 
 
 if __name__ == "__main__":

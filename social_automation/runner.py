@@ -173,7 +173,13 @@ def run_social_task(
             return _run_check_login(page, task, account, payload, screenshot_dir, logger, platform)
 
         _raise_if_cancelled(cancel_event)
-        login = _check_platform_login(page, platform, logger)
+        if task_type == "publish_post":
+            login = _check_platform_login_without_disrupting(page, platform, logger)
+            if login.get("status") != "ready":
+                # Recovery and manual takeover must remain visible on the primary page.
+                login = _check_platform_login(page, platform, logger)
+        else:
+            login = _check_platform_login(page, platform, logger)
         if login.get("status") != "ready":
             login = _attempt_publish_login_repair(page, task, account, payload, screenshot_dir, logger, platform, cancel_event, login)
         if task_type == "publish_post" and login.get("status") in {"need_verification", "invalid_credentials"}:
@@ -1011,6 +1017,37 @@ def _check_platform_login(page, platform: str, logger: AutomationLogger) -> dict
     if platform == "threads":
         return _check_threads_login(page, logger)
     return _check_instagram_login(page, logger)
+
+
+@contextlib.contextmanager
+def _temporary_background_page(page, logger: AutomationLogger, stage: str):
+    background = page
+    try:
+        browser_context = getattr(page, "context", None)
+        new_page = getattr(browser_context, "new_page", None)
+        if callable(new_page):
+            candidate = new_page()
+            if candidate is not None and candidate is not page:
+                background = candidate
+                with contextlib.suppress(Exception):
+                    page.bring_to_front()
+                logger.log("debug", stage, "Background browser page opened for a non-disruptive check.", {})
+    except Exception as exc:
+        background = page
+        logger.log("debug", stage, "Background page unavailable; using the primary page.", {"error": str(exc)[:500]})
+    try:
+        yield background
+    finally:
+        if background is not page:
+            with contextlib.suppress(Exception):
+                background.close()
+            with contextlib.suppress(Exception):
+                page.bring_to_front()
+
+
+def _check_platform_login_without_disrupting(page, platform: str, logger: AutomationLogger) -> dict[str, Any]:
+    with _temporary_background_page(page, logger, "publish_login_probe") as probe:
+        return _check_platform_login(probe, platform, logger)
 
 
 def _detect_instagram_login_state(page) -> dict[str, Any]:
@@ -1868,8 +1905,8 @@ def _run_check_login(page, task, account, payload, screenshot_dir, logger, platf
     status = _check_platform_login(page, platform, logger)
     shot = _screenshot(page, screenshot_dir, task, "check_login", logger)
     if status.get("status") != "ready":
-        logger.log("warn", "need_manual", str(status.get("reason") or f"{_platform_name(platform)} 账号未就绪。"), {"details": status}, shot)
-        raise NeedManualError(str(status.get("reason") or f"{_platform_name(platform)} 账号未就绪。"), str(status.get("status") or "need_verification"), shot)
+        logger.log("warn", "check_login_not_ready", str(status.get("reason") or f"{_platform_name(platform)} 账号未就绪。"), {"details": status}, shot)
+        return {"ok": True, "status": str(status.get("status") or "cookie_expired"), "screenshot_path": shot, "details": status}
     logger.log("info", "completion_node", f"{_platform_name(platform)} 登录检查完成节点已确认。", {"details": status}, shot)
     return {"ok": True, "status": "ready", "screenshot_path": shot, "details": status}
 
@@ -3338,19 +3375,21 @@ def _run_threads_publish_post(
             for value in raw_baseline
             if (permalink := _normalize_threads_post_permalink(value))
         }
-        profile_confirmation = _wait_for_threads_own_post(
-            page,
-            caption,
-            logger,
-            account,
-            payload,
-            profile_url=profile_url,
-            previous_permalinks=previous_permalinks,
-        )
-        permalink = _normalize_threads_post_permalink(profile_confirmation.get("url")) if profile_confirmation.get("confirmed") else ""
+        with _temporary_background_page(page, logger, "threads_publish_confirmation_background") as verification_page:
+            profile_confirmation = _wait_for_threads_own_post(
+                verification_page,
+                caption,
+                logger,
+                account,
+                payload,
+                profile_url=profile_url,
+                previous_permalinks=previous_permalinks,
+            )
+            permalink = _normalize_threads_post_permalink(profile_confirmation.get("url")) if profile_confirmation.get("confirmed") else ""
+            shot = _capture_threads_publish_evidence(verification_page, permalink, caption, screenshot_dir, task, logger) if permalink else ""
         if not permalink:
             reason = str(profile_confirmation.get("reason") or "Threads publish is still awaiting permalink confirmation.")
-            shot = _screenshot(page, screenshot_dir, task, "publish_confirmation_pending", logger)
+            shot = ""
             logger.log(
                 "warn",
                 "threads_publish_confirmation_pending",
@@ -3359,7 +3398,6 @@ def _run_threads_publish_post(
                 shot,
             )
             raise PublishConfirmationPendingError(reason, shot, confirmation_state)
-        shot = _capture_threads_publish_evidence(page, permalink, caption, screenshot_dir, task, logger)
         published = {
             **profile_confirmation,
             "confirmed": True,
@@ -3382,10 +3420,13 @@ def _run_threads_publish_post(
     _goto(page, THREADS_HOME, logger, "threads_publish_open")
     _dismiss_threads_compose_dialogs(page, logger)
     profile_url = _resolve_threads_profile_url(page, account)
-    previous_permalinks = _capture_threads_profile_baseline(page, profile_url, logger)
+    with _temporary_background_page(page, logger, "threads_publish_baseline_background") as verification_page:
+        baseline_used_primary_page = verification_page is page
+        previous_permalinks = _capture_threads_profile_baseline(verification_page, profile_url, logger)
     if previous_permalinks is None:
         raise RuntimeError("发布前无法读取 Threads 账号主页基线，已停止任务且未点击发布按钮。")
-    _goto(page, THREADS_HOME, logger, "threads_publish_open")
+    if baseline_used_primary_page:
+        _goto(page, THREADS_HOME, logger, "threads_publish_open")
     _dismiss_threads_compose_dialogs(page, logger)
     try:
         compose = _ensure_threads_compose_ready(page, logger)
@@ -3464,16 +3505,18 @@ def _run_threads_publish_post(
     permalink = _normalize_threads_post_permalink(success.get("url")) if success.get("confirmed") else ""
     profile_confirmation: dict[str, Any] = {}
     if not permalink:
-        profile_confirmation = _wait_for_threads_own_post(page, caption, logger, account, payload, profile_url=profile_url, previous_permalinks=previous_permalinks)
-        if profile_confirmation.get("confirmed"):
-            permalink = _normalize_threads_post_permalink(profile_confirmation.get("url"))
+        with _temporary_background_page(page, logger, "threads_publish_confirmation_background") as verification_page:
+            profile_confirmation = _wait_for_threads_own_post(verification_page, caption, logger, account, payload, profile_url=profile_url, previous_permalinks=previous_permalinks)
+            if profile_confirmation.get("confirmed"):
+                permalink = _normalize_threads_post_permalink(profile_confirmation.get("url"))
     if not permalink:
         reason = str(profile_confirmation.get("reason") or success.get("reason") or "Threads 已提交，但尚未确认发布结果。")
         message = f"{reason} 自动确认窗口已结束；为避免重复发布，任务不会自动重发。"
         shot = _screenshot(page, screenshot_dir, task, "publish_submitted_unconfirmed", logger)
         logger.log("warn", "threads_publish_confirmation_pending", message, {"submit": success, "profile": profile_confirmation}, shot)
         raise PublishConfirmationPendingError(message, shot, confirmation_state)
-    shot = _capture_threads_publish_evidence(page, permalink, caption, screenshot_dir, task, logger)
+    with _temporary_background_page(page, logger, "threads_publish_evidence_background") as verification_page:
+        shot = _capture_threads_publish_evidence(verification_page, permalink, caption, screenshot_dir, task, logger)
     published = {
         **success,
         **profile_confirmation,
