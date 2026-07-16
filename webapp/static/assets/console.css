@@ -12066,6 +12066,7 @@ body.live-browser-modal-open {
   --panel-shadow: 0 10px 30px rgba(7, 31, 31, 0.06);
   --vecto-action-border: #1f665f;
   --vecto-action-ink: #ffffff;
+  --vecto-action-sheen-gradient: linear-gradient(105deg, rgba(206, 255, 244, 0) 18%, rgba(174, 255, 235, 0.12) 36%, rgba(224, 255, 248, 0.58) 50%, rgba(174, 255, 235, 0.12) 64%, rgba(206, 255, 244, 0) 82%);
   --vecto-action-static-gradient: linear-gradient(112deg, #071112 0%, #0c2525 32%, #18514d 68%, #26796f 100%);
   --vecto-action-running-gradient: linear-gradient(112deg, #071112 0%, #10322f 30%, #1c5d57 64%, #287f75 100%);
 }
@@ -12260,9 +12261,9 @@ body.console-page {
   appearance: none;
   color: var(--vecto-action-ink);
   background-color: #071112;
-  background-image: var(--vecto-action-static-gradient);
-  background-size: 100% 100%;
-  background-position: 50% 0;
+  background-image: var(--vecto-action-sheen-gradient), var(--vecto-action-static-gradient);
+  background-size: 56% 100%, 100% 100%;
+  background-position: -140% 0, 50% 0;
   background-repeat: no-repeat;
   border: 1px solid var(--vecto-action-border);
   box-shadow: none;
@@ -12396,12 +12397,10 @@ body.console-page {
 
 @keyframes vecto-action-click-sheen {
   from {
-    background-size: 220% 100%;
-    background-position: 100% 0;
+    background-position: -140% 0, 50% 0;
   }
   to {
-    background-size: 100% 100%;
-    background-position: 50% 0;
+    background-position: 240% 0, 50% 0;
   }
 }
 
