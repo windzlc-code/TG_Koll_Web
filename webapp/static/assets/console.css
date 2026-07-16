@@ -12264,7 +12264,7 @@ body.console-page {
   background-size: 100% 100%;
   background-position: 50% 0;
   background-repeat: no-repeat;
-  border-color: var(--vecto-action-border);
+  border: 1px solid var(--vecto-action-border);
   box-shadow: none;
   text-shadow: none;
   animation: none;
