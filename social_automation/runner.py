@@ -63,6 +63,12 @@ class AutoLoginFailedError(RuntimeError):
         self.screenshot_path = str(screenshot_path or "")
 
 
+class PublishConfirmationFailedError(RuntimeError):
+    def __init__(self, message: str, screenshot_path: str = ""):
+        super().__init__(message)
+        self.screenshot_path = str(screenshot_path or "")
+
+
 class UnsupportedActionError(RuntimeError):
     pass
 
@@ -2970,16 +2976,49 @@ def _find_threads_post_permalinks(page) -> list[str] | None:
     return permalinks
 
 
-def _wait_for_threads_publish_success(page, logger: AutomationLogger) -> dict[str, Any]:
+def _threads_permalink_belongs_to_profile(permalink: str, profile_url: str) -> bool:
+    post = urlparse(_normalize_threads_post_permalink(permalink))
+    profile = urlparse(_normalize_threads_profile_url(profile_url))
+    post_match = re.match(r"^/(@[^/]+)/", str(post.path or ""), flags=re.IGNORECASE)
+    profile_match = re.match(r"^/(@[^/]+)$", str(profile.path or ""), flags=re.IGNORECASE)
+    return bool(post_match and profile_match and post_match.group(1).lower() == profile_match.group(1).lower())
+
+
+def _wait_for_threads_publish_success(
+    page,
+    logger: AutomationLogger,
+    *,
+    caption: str = "",
+    profile_url: str = "",
+    previous_permalinks: set[str] | None = None,
+) -> dict[str, Any]:
     deadline = time.time() + 90
     saw_dialog = False
+    baseline = {
+        normalized
+        for value in (previous_permalinks or set())
+        if (normalized := _normalize_threads_post_permalink(value))
+    }
+    baseline_known = previous_permalinks is not None
     while time.time() < deadline:
         try:
             permalink = _normalize_threads_post_permalink(page.url)
-            if permalink:
+            if permalink and (
+                not profile_url
+                or (_threads_permalink_belongs_to_profile(permalink, profile_url) and (not baseline_known or permalink not in baseline))
+            ):
                 return {"confirmed": True, "submitted": True, "reason": "已检测到 Threads 帖子链接。", "url": permalink}
         except Exception:
             pass
+        if baseline_known and caption and profile_url:
+            candidate = _find_threads_post_permalink(page, caption)
+            if candidate and candidate not in baseline and _threads_permalink_belongs_to_profile(candidate, profile_url):
+                return {
+                    "confirmed": True,
+                    "submitted": True,
+                    "reason": "已在提交后的页面识别到本账号新帖链接。",
+                    "url": candidate,
+                }
         dialog_compose = _threads_dialog_compose_box(page)
         dialog_post_button = _threads_dialog_post_button(page)
         if dialog_compose is not None or dialog_post_button is not None:
@@ -3109,10 +3148,12 @@ def _wait_for_threads_own_post(page, caption: str, logger: AutomationLogger, acc
     target_url = _normalize_threads_profile_url(profile_url) or _resolve_threads_profile_url(page, account)
     # Threads can render a just-submitted media post on the profile noticeably later
     # than a text-only post. Keep polling long enough to observe the permalink before
-    # falling back to manual confirmation, without retrying the publish action.
-    confirm_seconds = _safe_int((payload or {}).get("profile_confirm_seconds") or os.getenv("SOCIAL_AUTOMATION_THREADS_PROFILE_CONFIRM_SECONDS"), 90)
-    confirm_seconds = max(15, min(confirm_seconds, 120))
-    nav_timeout_ms = max(3000, min(confirm_seconds * 1000, 12000))
+    # ending automatic confirmation, without retrying the publish action.
+    confirm_seconds = _safe_int((payload or {}).get("profile_confirm_seconds") or os.getenv("SOCIAL_AUTOMATION_THREADS_PROFILE_CONFIRM_SECONDS"), 150)
+    confirm_seconds = max(30, min(confirm_seconds, 300))
+    nav_timeout_ms = max(5000, min(confirm_seconds * 1000, 20000))
+    refresh_limit = _safe_int((payload or {}).get("profile_confirm_refreshes") or os.getenv("SOCIAL_AUTOMATION_THREADS_PROFILE_CONFIRM_REFRESHES"), 2)
+    refresh_limit = max(0, min(refresh_limit, 3))
     normalized_previous = _normalize_threads_post_permalink(previous_permalink)
     baseline_known = previous_permalinks is not None or bool(normalized_previous)
     baseline_permalinks = {
@@ -3124,22 +3165,34 @@ def _wait_for_threads_own_post(page, caption: str, logger: AutomationLogger, acc
         _goto(page, target_url, logger, "threads_publish_profile", timeout_ms=nav_timeout_ms, networkidle_ms=2500)
     except Exception as exc:
         logger.log("warn", "threads_publish_profile_open_slow", "提交后打开账号主页超时，将继续轮询确认发布结果。", {"error": str(exc)[:500], "timeout_ms": nav_timeout_ms})
-    deadline = time.time() + confirm_seconds
+    started_at = time.monotonic()
+    deadline = started_at + confirm_seconds
     attempt = 0
+    refresh_count = 0
     while True:
-        now = time.time()
+        now = time.monotonic()
         if now >= deadline:
             break
         attempt += 1
-        latest_permalink = _find_latest_threads_post_permalink(page)
-        permalink = _find_threads_post_permalink(page, caption) if str(caption or "").strip() else latest_permalink
-        is_latest_caption_match = not str(caption or "").strip() or permalink == latest_permalink
-        if baseline_known and permalink and permalink not in baseline_permalinks and is_latest_caption_match:
+        current_permalinks = _find_threads_post_permalinks(page) or []
+        new_own_permalinks = [
+            candidate
+            for candidate in current_permalinks
+            if candidate not in baseline_permalinks and _threads_permalink_belongs_to_profile(candidate, target_url)
+        ]
+        if str(caption or "").strip():
+            matched_permalink = _find_threads_post_permalink(page, caption)
+            permalink = matched_permalink if matched_permalink in new_own_permalinks else ""
+        else:
+            permalink = new_own_permalinks[0] if len(new_own_permalinks) == 1 else ""
+        if baseline_known and permalink:
             return {"confirmed": True, "reason": "已在账号主页定位到本次发布帖子的链接。", "url": permalink}
         _sleep_between(1.8, 2.6)
-        if attempt % 3 == 0:
+        refresh_due = refresh_count < refresh_limit and now - started_at >= ((refresh_count + 1) * confirm_seconds / (refresh_limit + 1))
+        if refresh_due:
+            refresh_count += 1
             try:
-                page.reload(wait_until="domcontentloaded", timeout=nav_timeout_ms)
+                page.reload(wait_until="commit", timeout=min(nav_timeout_ms, 5000))
             except Exception as exc:
                 logger.log("debug", "threads_publish_profile_refresh", "账号主页刷新未完成，将继续确认发布结果。", {"error": str(exc)[:500]})
     return {"confirmed": False, "reason": "发布已提交，但账号主页未看到本次发布内容。", "url": str(page.url or target_url)}
@@ -3162,13 +3215,19 @@ def _capture_threads_publish_evidence(page, permalink: str, caption: str, screen
 def _capture_threads_profile_baseline(page, profile_url: str, logger: AutomationLogger) -> set[str] | None:
     if not profile_url:
         return None
-    try:
-        _goto(page, profile_url, logger, "threads_publish_baseline", timeout_ms=12000, networkidle_ms=2500)
-        permalinks = _find_threads_post_permalinks(page)
-        return set(permalinks) if permalinks is not None else None
-    except Exception as exc:
-        logger.log("debug", "threads_publish_baseline", "发布前未能读取账号主页最新帖子，将继续使用正文确认。", {"error": str(exc)[:500]})
-        return None
+    last_error = ""
+    for attempt in range(2):
+        try:
+            _goto(page, profile_url, logger, "threads_publish_baseline", timeout_ms=5000, networkidle_ms=1500)
+            permalinks = _find_threads_post_permalinks(page)
+            if permalinks is not None:
+                return set(permalinks)
+        except Exception as exc:
+            last_error = str(exc)
+        if attempt == 0:
+            _sleep_between(0.8, 1.2)
+    logger.log("warn", "threads_publish_baseline_failed", "发布前连续两次无法读取账号主页基线，任务不会点击发布。", {"error": last_error[:500]})
+    return None
 
 
 def _run_threads_publish_post(page, task, payload, screenshot_dir, logger, account: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -3184,6 +3243,8 @@ def _run_threads_publish_post(page, task, payload, screenshot_dir, logger, accou
     _dismiss_threads_compose_dialogs(page, logger)
     profile_url = _resolve_threads_profile_url(page, account)
     previous_permalinks = _capture_threads_profile_baseline(page, profile_url, logger)
+    if previous_permalinks is None:
+        raise RuntimeError("发布前无法读取 Threads 账号主页基线，已停止任务且未点击发布按钮。")
     _goto(page, THREADS_HOME, logger, "threads_publish_open")
     _dismiss_threads_compose_dialogs(page, logger)
     try:
@@ -3227,7 +3288,13 @@ def _run_threads_publish_post(page, task, payload, screenshot_dir, logger, accou
         raise RuntimeError("未找到 Threads 发布按钮。")
     if not post_clicked:
         _human_click(page, post_button, logger, "threads_publish_submit")
-    success = _wait_for_threads_publish_success(page, logger)
+    success = _wait_for_threads_publish_success(
+        page,
+        logger,
+        caption=caption,
+        profile_url=profile_url,
+        previous_permalinks=previous_permalinks,
+    )
     permalink = _normalize_threads_post_permalink(success.get("url")) if success.get("confirmed") else ""
     profile_confirmation: dict[str, Any] = {}
     if not permalink:
@@ -3236,10 +3303,10 @@ def _run_threads_publish_post(page, task, payload, screenshot_dir, logger, accou
             permalink = _normalize_threads_post_permalink(profile_confirmation.get("url"))
     if not permalink:
         reason = str(profile_confirmation.get("reason") or success.get("reason") or "Threads 已提交，但尚未确认发布结果。")
-        message = f"{reason} 为避免重复发布，任务已停止自动重试，请人工核对账号主页。"
+        message = f"{reason} 自动确认窗口已结束；为避免重复发布，任务不会自动重发。"
         shot = _screenshot(page, screenshot_dir, task, "publish_submitted_unconfirmed", logger)
-        logger.log("warn", "threads_publish_unconfirmed", message, {"submit": success, "profile": profile_confirmation, "retryable": False}, shot)
-        raise NeedManualError(message, "publish_submitted_unconfirmed", shot)
+        logger.log("error", "threads_publish_confirmation_failed", message, {"submit": success, "profile": profile_confirmation, "retryable": False}, shot)
+        raise PublishConfirmationFailedError(message, shot)
     shot = _capture_threads_publish_evidence(page, permalink, caption, screenshot_dir, task, logger)
     published = {
         **success,

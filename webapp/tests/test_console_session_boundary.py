@@ -1246,6 +1246,15 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
         self._run_node(harness)
 
+    def test_unconfirmed_publish_cannot_show_automatic_retry_action(self):
+        queue = self._function_source("renderPersonaQueueRows")
+        legacy_queue = self._function_source("renderSocialTasks")
+        self.assertIn('task?.result?.retryable !== false', queue)
+        self.assertIn('task?.result?.retryable !== false', legacy_queue)
+        self.assertIn('data-social-retry', queue)
+        self.assertNotIn('确认已发布', self.source)
+        self.assertNotIn('确认未发布', self.source)
+
     def test_proxy_detection_preserves_manual_name_and_keeps_metadata_in_preview(self):
         self.assertIn('["auto", "自动检测（推荐）"]', self.source)
         self.assertNotIn('id="${esc(prefix)}Country"', self.source)

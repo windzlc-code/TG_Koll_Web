@@ -2151,6 +2151,8 @@ function logStageLabel(stage, level) {
     threads_publish_focus: "聚焦 Threads 发布输入框",
     threads_publish_cleanup: "清理 Threads 发帖弹窗",
     threads_publish_open_after_baseline: "重新打开 Threads 发布页面",
+    threads_publish_baseline: "读取 Threads 发布前主页基线",
+    threads_publish_baseline_failed: "读取 Threads 发布前主页基线失败",
     threads_publish_media_baseline: "读取 Threads 发布前状态",
     threads_publish_media_baseline_failed: "读取 Threads 发布前状态失败",
     threads_publish_text_input: "输入 Threads 发布文案",
@@ -2161,6 +2163,7 @@ function logStageLabel(stage, level) {
     threads_publish_profile: "打开 Threads 个人主页",
     threads_publish_profile_open_slow: "Threads 个人主页加载较慢",
     threads_publish_unconfirmed: "Threads 发布结果待确认",
+    threads_publish_confirmation_failed: "Threads 发布自动确认失败",
     threads_auto_reply_backfill: "补定位",
     open_login: "登录流程",
     check_login: "登录状态同步",
@@ -6714,7 +6717,7 @@ function renderPersonaQueueRows(rows) {
       <div data-mobile-label="状态">${renderSocialQueueTaskStatus(task)}</div>
       <div class="row-actions" data-mobile-label="操作">
         <button type="button" data-social-log="${esc(task.id)}">日志</button>
-        ${task.status === "failed" ? `<button type="button" data-social-retry="${esc(task.id)}">重试</button>` : ""}
+        ${task.status === "failed" && task?.result?.retryable !== false ? `<button type="button" data-social-retry="${esc(task.id)}">重试</button>` : ""}
         ${activeSocialAutomationTask(task) ? `<button type="button" class="muted" data-social-cancel="${esc(task.id)}">取消</button>` : ""}
         <button type="button" class="danger task-queue-delete-button" data-social-delete="${esc(task.id)}" title="删除" aria-label="删除">${renderTrashIcon()}</button>
       </div>
@@ -18190,7 +18193,7 @@ function renderSocialTasks() {
       <div class="row-actions">
         <button type="button" data-social-preview="${esc(task.id)}">预览</button>
         <button type="button" data-social-log="${esc(task.id)}">日志</button>
-        ${task.status === "failed" ? `<button type="button" data-social-retry="${esc(task.id)}">重试</button>` : ""}
+        ${task.status === "failed" && task?.result?.retryable !== false ? `<button type="button" data-social-retry="${esc(task.id)}">重试</button>` : ""}
         ${activeSocialAutomationTask(task) ? `<button type="button" data-social-cancel="${esc(task.id)}">取消</button>` : ""}
       </div>
     </article>

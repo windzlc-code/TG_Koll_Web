@@ -2834,8 +2834,26 @@ def _deletable_account_ids(conn: Any, account_ids: list[str]) -> set[str]:
     return {account_id for account_id in clean_ids if account_id not in active_ids}
 
 
+def _task_has_unresolved_publish_confirmation(conn: sqlite3.Connection, task: Any) -> bool:
+    if task is None:
+        return False
+    keys = set(task.keys())
+    raw_result = task["result_json"] if "result_json" in keys else ""
+    if "id" in keys and str(task["id"] or "").strip():
+        row = conn.execute(
+            "SELECT result_json FROM social_automation_tasks WHERE id = ?",
+            (str(task["id"] or ""),),
+        ).fetchone()
+        if row is not None:
+            raw_result = row["result_json"]
+    result = _loads(raw_result, {})
+    return isinstance(result, dict) and result.get("confirmation_failed") is True
+
+
 def _release_task_billing_reservation(conn: sqlite3.Connection, task: Any, *, now: int | None = None) -> bool:
     if task is None or "billing_reservation_id" not in task.keys():
+        return False
+    if _task_has_unresolved_publish_confirmation(conn, task):
         return False
     reservation_id = str(task["billing_reservation_id"] or "").strip()
     if not reservation_id:
@@ -2855,7 +2873,7 @@ def _release_terminal_task_billing_reservations(conn: sqlite3.Connection, now: i
     )
     rows = conn.execute(
         """
-        SELECT t.billing_reservation_id
+        SELECT t.billing_reservation_id, t.result_json
         FROM social_automation_tasks t
         JOIN billing_reservations r ON r.id = t.billing_reservation_id
         WHERE (
@@ -2870,6 +2888,9 @@ def _release_terminal_task_billing_reservations(conn: sqlite3.Connection, now: i
         """
     ).fetchall()
     for row in rows:
+        result = _loads(row["result_json"], {})
+        if isinstance(result, dict) and result.get("confirmation_failed") is True:
+            continue
         _release_task_billing_reservation(conn, row, now=now)
 
 
@@ -2881,7 +2902,9 @@ def delete_social_account(account_id: str) -> int:
         row = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (clean_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="account not found")
-        task_rows = conn.execute("SELECT id, status FROM social_automation_tasks WHERE account_id = ?", (clean_id,)).fetchall()
+        task_rows = conn.execute("SELECT id, status, result_json FROM social_automation_tasks WHERE account_id = ?", (clean_id,)).fetchall()
+        if any(_task_has_unresolved_publish_confirmation(conn, task) for task in task_rows):
+            raise HTTPException(status_code=409, detail="该账号仍有发布结果和计费预占等待自动确认，暂时不能删除。")
         active_task_ids = [
             str(task["id"] or "") for task in task_rows
             if str(task["id"] or "") and str(task["status"] or "") in {"running", "need_manual"}
@@ -3235,6 +3258,8 @@ def clear_social_task(task_id: str) -> int:
         row = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="任务不存在")
+        if _task_has_unresolved_publish_confirmation(conn, row):
+            raise HTTPException(status_code=409, detail="发布结果和计费预占仍在等待自动确认，暂时不能删除任务。")
         status = str(row["status"] or "")
     if status in {"running", "need_manual"}:
         _force_stop_running_task(task_id)
@@ -3268,6 +3293,9 @@ def clear_social_tasks(*, persona_id: str = "", account_id: str = "", user_id: i
         task_id = str(row["id"] or "")
         if not task_id:
             continue
+        with db() as conn:
+            if _task_has_unresolved_publish_confirmation(conn, row):
+                continue
         if str(row["status"] or "") in {"running", "need_manual"}:
             _force_stop_running_task(task_id)
         with db() as conn:
@@ -3377,6 +3405,9 @@ def retry_social_task(task_id: str, *, billing_admin_waived: bool = False) -> di
         raise HTTPException(status_code=409, detail="登录任务不能重试，请重新点击打开登录")
     if str(row["status"] or "") != "failed":
         raise HTTPException(status_code=409, detail="仅失败任务可以重试")
+    previous_result = _loads(row["result_json"], {})
+    if isinstance(previous_result, dict) and previous_result.get("retryable") is False:
+        raise HTTPException(status_code=409, detail="该任务的发布结果无法安全确认，为避免重复发布，禁止自动重试。")
     payload = SocialTaskPayload(
             persona_id=str(row["persona_id"] or ""),
             account_id=str(row["account_id"] or ""),
@@ -3696,7 +3727,7 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
         _discard_ephemeral_task_secrets(task_id)
         return
     task = _apply_runtime_task_preferences(task, account, control)
-    from social_automation.runner import AutoLoginFailedError, NeedManualError, UnsupportedActionError, run_social_task
+    from social_automation.runner import AutoLoginFailedError, NeedManualError, PublishConfirmationFailedError, UnsupportedActionError, run_social_task
 
     logger = _DbTaskLogger(task["id"])
     try:
@@ -3724,6 +3755,22 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
     except AutoLoginFailedError as exc:
         if not _is_task_cancelled(str(task["id"])):
             _finish_task(task["id"], "failed", {"auto_login_failed": True, "screenshot_path": str(getattr(exc, "screenshot_path", "") or "")}, str(exc), account_status=str(getattr(exc, "status", "") or "cookie_expired"))
+        return
+    except PublishConfirmationFailedError as exc:
+        if not _is_task_cancelled(str(task["id"])):
+            _finish_task(
+                task["id"],
+                "failed",
+                {
+                    "publish_submitted": True,
+                    "confirmation_failed": True,
+                    "retryable": False,
+                    "screenshot_path": str(getattr(exc, "screenshot_path", "") or ""),
+                },
+                str(exc),
+                account_status="ready",
+                preserve_billing_reservation=True,
+            )
         return
     except UnsupportedActionError as exc:
         if not _is_task_cancelled(str(task["id"])):
@@ -3838,7 +3885,15 @@ def _persist_running_account_login_status(task_id: str, account_id: str, status:
     return bool(updated)
 
 
-def _finish_task(task_id: str, status: str, result: dict[str, Any], error: str, account_status: str = "") -> bool:
+def _finish_task(
+    task_id: str,
+    status: str,
+    result: dict[str, Any],
+    error: str,
+    account_status: str = "",
+    *,
+    preserve_billing_reservation: bool = False,
+) -> bool:
     now = _now()
     with db() as conn:
         task = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
@@ -3871,7 +3926,7 @@ def _finish_task(task_id: str, status: str, result: dict[str, Any], error: str, 
         reservation_id = str(task["billing_reservation_id"] or "") if "billing_reservation_id" in task.keys() else ""
         credit_cost_units = 0
         free_image_count = 0
-        if reservation_id and status != "need_manual":
+        if reservation_id and status != "need_manual" and not preserve_billing_reservation:
             if status == "success":
                 commercial_billing.settle_reservation(conn, reservation_id, actual_quantity=1, success=True, now=now)
             else:
@@ -4880,9 +4935,11 @@ def _task_public(row: Any) -> dict[str, Any]:
         account_display_name = account_display_name or str(account.get("display_name") or "").strip()
     reservation_id = str(item.get("billing_reservation_id") or "")
     task_status = str(item.get("status") or "")
+    task_result = _loads(item.get("result_json"), {})
+    confirmation_failed = isinstance(task_result, dict) and task_result.get("confirmation_failed") is True
     billing_status = "unbilled"
     if reservation_id:
-        if task_status in {"queued", "running", "need_manual"}:
+        if task_status in {"queued", "running", "need_manual"} or confirmation_failed:
             billing_status = "held"
         elif task_status == "success":
             billing_status = "settled" if int(item.get("credit_cost_units") or 0) > 0 else "waived"
@@ -4902,7 +4959,7 @@ def _task_public(row: Any) -> dict[str, Any]:
         "started_at": int(item.get("started_at") or 0),
         "finished_at": int(item.get("finished_at") or 0),
         "payload": _redact_sensitive(_loads(item.get("payload_json"), {})),
-        "result": _redact_sensitive(_loads(item.get("result_json"), {})),
+        "result": _redact_sensitive(task_result),
         "error": str(item.get("error") or ""),
         "retry_count": int(item.get("retry_count") or 0),
         "max_retries": int(item.get("max_retries") or 0),
