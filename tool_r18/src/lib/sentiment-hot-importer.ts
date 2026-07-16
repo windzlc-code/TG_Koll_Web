@@ -38,6 +38,7 @@ const THREADS_BROWSER_QUERY_LIMIT = 24;
 const THREADS_BROWSER_QUERY_BATCH_SIZE = 6;
 const THREADS_BROWSER_PAGE_LIMIT = 2;
 const THREADS_BROWSER_BOOTSTRAP_QUERY_LIMIT = 4;
+const THREADS_BROWSER_REQUEST_TIMEOUT_MS = 5_000;
 const SENTIMENT_MODEL_KEYWORD_TARGET = 20;
 const SENTIMENT_HOT_KEYWORD_MODEL = "xai/grok-4.3";
 const THREADS_READER_INITIAL_QUERY_LIMIT = 24;
@@ -3275,7 +3276,7 @@ async function requestThreadsGraphqlSearchPayload(args: {
   const endpoint = method === "GET"
     ? `${args.template.endpoint.split("?")[0]}?${params.toString()}`
     : args.template.endpoint;
-  const timeoutMs = Math.min(18_000, remainingSentimentDeadlineMs(args.deadlineAt, 18_000));
+  const timeoutMs = Math.min(THREADS_BROWSER_REQUEST_TIMEOUT_MS, remainingSentimentDeadlineMs(args.deadlineAt, THREADS_BROWSER_REQUEST_TIMEOUT_MS));
   if (timeoutMs < 1_000) return null;
   const response = await args.page.evaluate(async ({ endpoint, method, body, headers, timeoutMs }: any) => {
     const controller = new AbortController();
@@ -3410,7 +3411,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
             const warmupQuery = queries[1];
             await secondPage.goto(`https://www.threads.com/search?q=${encodeURIComponent(warmupQuery)}`, {
               waitUntil: "domcontentloaded",
-              timeout: Math.min(6_000, remainingSentimentDeadlineMs(args.deadlineAt, 6_000)),
+              timeout: Math.min(3_000, remainingSentimentDeadlineMs(args.deadlineAt, 3_000)),
             }).catch(() => undefined);
             if (String(secondPage.url?.() || "").startsWith("http")) {
               searchPages.push(secondPage);
