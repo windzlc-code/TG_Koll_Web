@@ -364,7 +364,7 @@ def test_manual_takeover_request_does_not_block_waiting_for_runner_ack():
 
     event.set.assert_called_once_with()
     ack_event.wait.assert_not_called()
-    persist.assert_called_once_with("task-1", "live-task-1")
+    persist.assert_not_called()
     thread.return_value.start.assert_called_once_with()
     assert result["mode"] == "switching"
     assert result["acknowledged"] is False

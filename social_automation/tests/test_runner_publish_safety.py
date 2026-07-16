@@ -165,6 +165,29 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertEqual(status["status"], "need_verification")
 
+    def test_publish_verification_state_skips_automatic_login_repair(self):
+        initial_status = {"status": "need_verification", "reason": "security challenge"}
+
+        with (
+            mock.patch.object(runner, "_self_heal_login_page") as self_heal,
+            mock.patch.object(runner, "_run_open_login") as open_login,
+        ):
+            result = runner._attempt_publish_login_repair(
+                mock.Mock(),
+                {"task_type": "publish_post"},
+                {"login_password": "saved-password"},
+                {},
+                Path("."),
+                _Logger(),
+                "instagram",
+                None,
+                initial_status,
+            )
+
+        self.assertIs(result, initial_status)
+        self_heal.assert_not_called()
+        open_login.assert_not_called()
+
     def test_publish_reports_ready_login_before_running_action(self):
         page = mock.Mock()
         context = mock.Mock()

@@ -3948,6 +3948,23 @@ function activeSocialTaskFor({ accountId = "", personaId = "", taskType = "", po
   }) || null;
 }
 
+function socialTaskLoginDependency(task) {
+  const payload = socialTaskPayload(task);
+  const loginTaskId = String(payload.login_task_id || "").trim();
+  if (!loginTaskId) return null;
+  return (state.socialTasks || []).find((candidate) => String(candidate?.id || "").trim() === loginTaskId) || null;
+}
+
+function socialTaskWaitsForManualLogin(task) {
+  if (String(task?.task_type || "").trim() !== "publish_post") return false;
+  if (String(task?.status || "").trim() !== "queued") return false;
+  return String(socialTaskLoginDependency(task)?.status || "").trim() === "need_manual";
+}
+
+function socialTaskPresentationStatus(task) {
+  return socialTaskWaitsForManualLogin(task) ? "need_manual" : String(task?.status || "").trim();
+}
+
 function personaMediaTaskIsActive(personaId, postId, taskType = "") {
   const taskState = personaMediaTaskState(personaId, postId);
   if (!taskState || !activeTaskStatus(taskState.status)) return false;
@@ -10905,10 +10922,12 @@ function renderPersonaPublishResult(task, logs = []) {
 function renderSocialTaskResult(task, logs = [], emptyText = "提交后，这里会显示任务状态、截图和执行结果。") {
   if (!task || !task.id) return `<div class="empty-state">${esc(emptyText)}</div>`;
   const result = task.result || {};
+  const presentationStatus = socialTaskPresentationStatus(task);
+  const waitsForManualLogin = socialTaskWaitsForManualLogin(task);
   const screenshotUrl = latestSocialTaskScreenshot(task, logs);
   const publishedUrl = String(result.published_url || result.publishedUrl || result.url || result.post_url || "").trim();
   const recentLogs = (logs || []).slice(-4).reverse();
-  const terminal = ["success", "failed", "cancelled", "need_manual"].includes(String(task.status || ""));
+  const terminal = ["success", "failed", "cancelled", "need_manual"].includes(presentationStatus);
   const canCancel = activeTaskStatus(task.status);
   const screenshotReason = legacyMediaPreviewReason(screenshotUrl);
   const screenshotItem = screenshotUrl && !screenshotReason
@@ -10921,9 +10940,10 @@ function renderSocialTaskResult(task, logs = [], emptyText = "提交后，这里
     <div class="persona-inline-panel persona-publish-result-card">
       <div class="flow-box">
         <span>任务状态</span>
-        <strong>${esc(statusLabel(task.status || ""))}</strong>
+        <strong>${esc(statusLabel(presentationStatus))}</strong>
         <span>${esc(task.id || "")}</span>
       </div>
+      ${waitsForManualLogin ? `<div class="persona-warning-inline">发布任务正在等待账号人工验证，请在浏览器窗口完成验证后继续。</div>` : ""}
       ${task.error ? `<div class="persona-warning-inline">${esc(task.error)}</div>` : ""}
       ${publishedUrl || canCancel ? `<div class="row-actions">
         ${publishedUrl ? `<a href="${esc(publishedUrl)}" target="_blank" rel="noopener">查看任务结果</a>` : ""}
@@ -15212,6 +15232,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
     const publishBusy = publishCanSubmit && selectedPost
       ? (isActionLocked("publish", publishSource, persona.id, selectedPost.id, publishAccount.id) || publishTask)
       : false;
+    const publishWaitsForManualLogin = Boolean(publishTask && socialTaskWaitsForManualLogin(publishTask));
     const publishBusyStartedAt = actionTaskStartedAt(publishTask, "publish", publishSource, persona.id, selectedPost?.id || "", publishAccount?.id || "");
     const publishScheduleAt = String(state.personaPublishScheduleValues[String(persona.id)] || "");
     return `
@@ -15240,7 +15261,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
         ${personaPublishPreview(selectedPost)}
         ${renderUploadDropzone("personaPublishFiles", { label: "发布素材", hint: publishHint || "拖动图片或视频到这里，或点击选择。" })}
         <div class="row-actions">
-          <button type="button" class="primary" data-persona-publish-submit ${(publishCanSubmit && selectedPost && !publishBusy) ? "" : "disabled"}>${publishBusy ? renderBusyButtonContent("发布任务执行中", true, publishBusyStartedAt) : "发布内容"}</button>
+          <button type="button" class="primary" data-persona-publish-submit ${(publishCanSubmit && selectedPost && !publishBusy) ? "" : "disabled"}>${publishWaitsForManualLogin ? "等待人工验证" : (publishBusy ? renderBusyButtonContent("发布任务执行中", true, publishBusyStartedAt) : "发布内容")}</button>
         </div>
         <div id="personaPublishResult">${publishResult || `<div class="empty-state">提交后，这里会显示任务状态、截图和发布结果。</div>`}</div>
       </div>`;

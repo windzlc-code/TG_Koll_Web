@@ -1788,8 +1788,9 @@ def request_live_browser_manual_takeover(session_id: str) -> dict[str, Any]:
     if status == "need_manual":
         ack_event.set()
     acknowledged = status == "need_manual" or bool(getattr(ack_event, "is_set", lambda: False)())
-    _persist_manual_takeover_ack(task_id, clean_id)
-    if not acknowledged and matched_control is not None:
+    if acknowledged:
+        _persist_manual_takeover_ack(task_id, clean_id)
+    elif matched_control is not None:
         start_watcher = False
         with _RUNNING_TASK_CONTROLS_LOCK:
             if not matched_control.get("manual_takeover_ack_watcher_started"):

@@ -943,6 +943,34 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("browserDurationDrafts", self.source)
         self.assertIn("invalidDurationInput", self._function_source("saveConsoleSettingsPage"))
 
+    def test_publish_waiting_for_manual_login_uses_manual_status(self):
+        helpers = "\n".join([
+            self._function_source("socialTaskPayload"),
+            self._function_source("socialTaskLoginDependency"),
+            self._function_source("socialTaskWaitsForManualLogin"),
+            self._function_source("socialTaskPresentationStatus"),
+        ])
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            const state = {{ socialTasks: [{{ id: "login-1", task_type: "open_login", status: "need_manual" }}] }};
+            {helpers}
+            const publishTask = {{
+              id: "publish-1",
+              task_type: "publish_post",
+              status: "queued",
+              payload: {{ login_task_id: "login-1" }},
+            }};
+            assert.strictEqual(socialTaskWaitsForManualLogin(publishTask), true);
+            assert.strictEqual(socialTaskPresentationStatus(publishTask), "need_manual");
+            """
+        )
+        self._run_node(harness)
+
+    def test_manual_takeover_login_tasks_remain_visible_in_persona_dashboard(self):
+        source = (REPO_ROOT / "webapp" / "static" / "assets" / "persona-dashboard.js").read_text(encoding="utf-8")
+        self.assertIn("payload.manual_takeover !== true", source)
+
     def test_browser_recommendation_adapts_split_server_payload(self):
         harness = textwrap.dedent(
             f"""

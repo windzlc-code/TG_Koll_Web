@@ -889,7 +889,7 @@ function pdAutomationTasksForPersona(persona) {
   return (personaDashboardAutomation.tasks || []).filter((task) => {
     if (!accountIds.has(String(task.account_id || ""))) return false;
     const payload = task.payload && typeof task.payload === "object" ? task.payload : {};
-    return !(String(task.task_type || "") === "open_login" && payload.auto_submit !== true);
+    return !(String(task.task_type || "") === "open_login" && payload.auto_submit !== true && payload.manual_takeover !== true);
   }).slice(0, 8);
 }
 

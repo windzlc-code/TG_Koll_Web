@@ -80,7 +80,7 @@ def _attempt_publish_login_repair(
 ) -> dict[str, Any]:
     if str(task.get("task_type") or "") != "publish_post":
         return initial_status
-    if str(initial_status.get("status") or "") == "invalid_credentials":
+    if str(initial_status.get("status") or "") in {"need_verification", "invalid_credentials"}:
         return initial_status
     max_repair_attempts = _int_payload_or_env(payload, "publish_login_repair_attempts", "SOCIAL_AUTOMATION_PUBLISH_LOGIN_REPAIR_ATTEMPTS", 3, 0, 8)
     if max_repair_attempts <= 0:
@@ -94,7 +94,7 @@ def _attempt_publish_login_repair(
     for attempt in range(1, max_repair_attempts + 1):
         _self_heal_login_page(page, platform, logger, task, screenshot_dir, str(initial_status.get("reason") or "publish_login_not_ready"), attempt, cancel_event)
         current = _detect_platform_login_state(page, platform)
-        if str(current.get("status") or "") == "invalid_credentials":
+        if str(current.get("status") or "") in {"need_verification", "invalid_credentials"}:
             return current
         if current.get("status") == "ready":
             stable = _confirm_platform_ready(page, platform, logger, cancel_event)
