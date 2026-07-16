@@ -4467,6 +4467,45 @@ function renderBillingSummary() {
   host.innerHTML = cards.map((card) => `<article class="billing-summary-card"><span>${esc(card.label)}</span><strong>${esc(card.value)}</strong><small>${esc(card.note)}</small></article>`).join("");
 }
 
+function renderPersonalBillingSummary() {
+  const host = document.querySelector("[data-site-account-billing]");
+  if (!host) return;
+  const traditional = currentLanguage() === "zh-Hant";
+  const billingCopy = {
+    loading: traditional ? "讀取中…" : "读取中…",
+    click: traditional ? "點擊查看" : "点击查看",
+    ready: traditional ? "已同步" : "已同步",
+    partial: traditional ? "部分不可用" : "部分不可用",
+  };
+  const statusNode = host.querySelector("[data-site-billing-status]");
+  const pointsNode = host.querySelector("[data-site-billing-points]");
+  const subscriptionNode = host.querySelector("[data-site-billing-subscription]");
+  const imagesNode = host.querySelector("[data-site-billing-images]");
+  const pendingNode = host.querySelector("[data-site-billing-pending]");
+  if (state.billing.loading && !state.billing.loaded) {
+    if (statusNode) statusNode.textContent = billingCopy.loading;
+    [pointsNode, subscriptionNode, imagesNode, pendingNode].forEach((node) => {
+      if (node) node.textContent = "…";
+    });
+    return;
+  }
+  if (!state.billing.loaded) {
+    if (statusNode) statusNode.textContent = billingCopy.click;
+    return;
+  }
+  const { summary, wallet, subscription, imageRemaining, creditPoints, pendingOrders } = billingSummaryData();
+  const billingMode = summary.billing_mode || wallet.billing_mode;
+  const planName = subscription.plan_name
+    || subscription.name
+    || subscription.plan_sku
+    || (billingMode === "legacy" ? "存量账号" : (summary.subscription_active ? "已启用" : "暂无订阅"));
+  if (statusNode) statusNode.textContent = Object.keys(state.billing.errors || {}).length ? billingCopy.partial : billingCopy.ready;
+  if (pointsNode) pointsNode.textContent = `${numberText(creditPoints)} 点`;
+  if (subscriptionNode) subscriptionNode.textContent = planName;
+  if (imagesNode) imagesNode.textContent = `${numberText(imageRemaining)} 张`;
+  if (pendingNode) pendingNode.textContent = numberText(pendingOrders);
+}
+
 function renderBillingOrders() {
   const host = $("billingOrders");
   if (!host) return;
@@ -4521,6 +4560,7 @@ function renderBillingLedger() {
 }
 
 function renderBilling() {
+  renderPersonalBillingSummary();
   renderBillingSummary();
   renderBillingOrders();
   renderBillingLedger();
@@ -18508,11 +18548,28 @@ async function showSocialLog(id) {
   });
 }
 
+async function openPersonalConsoleView(view) {
+  if (!view || view === state.view) return;
+  if (state.view === "workspace" && isPersonaWorkspaceModule() && !(await canLeaveCurrentPersonaDraftEdit("leave"))) return;
+  if (state.view === "workspace" && !(await confirmLeaveTransientWorkspaceState())) return;
+  setView(view);
+}
+
 function bindEvents() {
   ensureThemeToggle();
   ensureLanguageToggle();
   window.addEventListener("vecto:theme-change", (event) => applyTheme(event.detail?.theme));
   window.addEventListener("vecto:language-change", (event) => applyLanguage(event.detail?.language));
+  window.addEventListener("vecto:account-menu-open", () => {
+    renderPersonalBillingSummary();
+    loadBilling().catch(() => {});
+  });
+  window.addEventListener("vecto:account-billing-request", () => {
+    openPersonalConsoleView("billing").catch(() => {});
+  });
+  window.addEventListener("vecto:account-settings-request", () => {
+    openPersonalConsoleView("console_settings").catch(() => {});
+  });
   markConsoleStaticUi();
   startLanguageObserver();
   applyLanguage(currentLanguage());

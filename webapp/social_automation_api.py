@@ -1087,6 +1087,10 @@ def _proxy_live_browser_http(session_id: str, path: str, request: Request) -> Re
         upstream = requests.get(url, params=dict(request.query_params), timeout=8)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"KasmVNC 页面代理失败: {exc}") from exc
+    if upstream.status_code == 404 and clean_path.startswith("assets/"):
+        static_response = _local_kasm_static_response(clean_path)
+        if static_response is not None:
+            return static_response
     headers = {}
     content_type = upstream.headers.get("content-type")
     if content_type:
@@ -1095,6 +1099,20 @@ def _proxy_live_browser_http(session_id: str, path: str, request: Request) -> Re
     if cache_control:
         headers["cache-control"] = cache_control
     return Response(content=upstream.content, status_code=upstream.status_code, headers=headers)
+
+
+def _local_kasm_static_response(clean_path: str) -> FileResponse | None:
+    asset_root = Path("/usr/share/kasmvnc/www/assets").resolve()
+    relative_path = str(clean_path or "").removeprefix("assets/").lstrip("/")
+    if not relative_path or ".." in Path(relative_path).parts:
+        return None
+    asset_path = (asset_root / relative_path).resolve()
+    if asset_root not in asset_path.parents or not asset_path.is_file():
+        return None
+    return FileResponse(
+        str(asset_path),
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 def ensure_social_automation_worker_started() -> None:

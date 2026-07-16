@@ -4,6 +4,9 @@
   const EVENT_THEME = "vecto:theme-change";
   const EVENT_LANGUAGE = "vecto:language-change";
   const EVENT_LOGOUT = "vecto:logout-request";
+  const EVENT_ACCOUNT_MENU_OPEN = "vecto:account-menu-open";
+  const EVENT_BILLING_REQUEST = "vecto:account-billing-request";
+  const EVENT_SETTINGS_REQUEST = "vecto:account-settings-request";
   const DEFAULT_LANGUAGE = document.documentElement.lang === "zh-Hant" ? "zh-Hant" : "zh-Hans";
   let currentAccount = null;
   let logoutPending = false;
@@ -47,6 +50,19 @@
       themeLight: "切换到亮色模式",
       language: "切换到繁体中文",
       languageState: "简",
+      billing: "订阅与算力",
+      billingView: "查看详情",
+      accountSettings: "账户设置",
+      personalProfile: "个人信息",
+      billingPoints: "算力余额",
+      billingSubscription: "当前订阅",
+      billingImages: "图片额度",
+      billingPending: "待审批",
+      billingUnread: "尚未读取",
+      billingLoading: "读取中…",
+      billingReady: "已同步",
+      billingPartial: "部分不可用",
+      billingClick: "点击查看",
     },
     "zh-Hant": {
       brandLocal: "維拓 / 維圖",
@@ -85,6 +101,19 @@
       themeLight: "切換到亮色模式",
       language: "切換到簡體中文",
       languageState: "繁",
+      billing: "訂閱與算力",
+      billingView: "查看詳情",
+      accountSettings: "帳戶設定",
+      personalProfile: "個人資訊",
+      billingPoints: "算力餘額",
+      billingSubscription: "目前訂閱",
+      billingImages: "圖片額度",
+      billingPending: "待審批",
+      billingUnread: "尚未讀取",
+      billingLoading: "讀取中…",
+      billingReady: "已同步",
+      billingPartial: "部分不可用",
+      billingClick: "點擊查看",
     },
   };
 
@@ -185,16 +214,32 @@
 
   function accountMenuMarkup() {
     return `<div class="site-account-menu" data-site-account-menu>
-      <button class="site-user" type="button" aria-controls="siteAccountPopover" aria-expanded="false" data-site-user-title data-site-account-trigger>
+      <button class="site-user" type="button" aria-controls="siteAccountPopover" aria-haspopup="dialog" aria-expanded="false" data-site-user-title data-site-account-trigger>
         ${accountIcon("site-user-avatar")}<span id="consoleMeName" data-site-account-name></span><svg class="site-user-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 10 4 4 4-4"></path></svg>
       </button>
-      <div id="siteAccountPopover" class="site-account-popover" data-site-account-popover hidden>
+      <div id="siteAccountPopover" class="site-account-popover" data-site-account-popover hidden role="dialog" aria-label="个人信息">
         <div class="site-account-summary">
           <span class="site-account-avatar" aria-hidden="true">${accountIcon()}</span>
           <span class="site-account-identity"><strong data-site-account-name></strong><span data-site-account-role></span></span>
           <span class="site-account-status"><i aria-hidden="true"></i><span data-site-copy="accountStatus"></span></span>
         </div>
         <div class="site-account-detail"><span data-site-copy="accountId"></span><strong data-site-account-id>-</strong></div>
+        <section class="site-account-billing" data-site-account-billing aria-labelledby="siteAccountBillingTitle">
+          <div class="site-account-section-head">
+            <span id="siteAccountBillingTitle" data-site-copy="billing"></span>
+            <span class="site-account-billing-state" data-site-billing-status data-site-copy="billingUnread">尚未读取</span>
+          </div>
+          <div class="site-account-billing-grid" aria-live="polite">
+            <div class="site-account-billing-card"><span data-site-copy="billingPoints">算力余额</span><strong data-site-billing-points>—</strong></div>
+            <div class="site-account-billing-card"><span data-site-copy="billingSubscription">当前订阅</span><strong data-site-billing-subscription>—</strong></div>
+            <div class="site-account-billing-card"><span data-site-copy="billingImages">图片额度</span><strong data-site-billing-images>—</strong></div>
+            <div class="site-account-billing-card"><span data-site-copy="billingPending">待审批</span><strong data-site-billing-pending>—</strong></div>
+          </div>
+          <div class="site-account-action-row">
+            <button type="button" data-site-open-billing data-site-copy="billingView"></button>
+            <button type="button" data-site-open-settings data-site-copy="accountSettings"></button>
+          </div>
+        </section>
         ${accountPreferencesMarkup()}
         <button class="site-account-logout" type="button" data-site-account-logout><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4M14 8l4 4-4 4M18 12H9"></path></svg><span data-site-copy="logout"></span></button>
         <span class="site-account-message" role="status" aria-live="polite" data-site-account-message></span>
@@ -245,6 +290,7 @@
     menu.classList.toggle("is-open", nextOpen);
     if (nextOpen) {
       document.querySelectorAll("[data-site-mobile-menu][open]").forEach((mobileMenu) => mobileMenu.removeAttribute("open"));
+      window.dispatchEvent(new CustomEvent(EVENT_ACCOUNT_MENU_OPEN, { detail: { account: currentAccount } }));
     } else if (shouldRestoreFocus) {
       trigger.focus({ preventScroll: true });
     }
@@ -320,8 +366,54 @@
     header.querySelectorAll("[data-site-account-menu]").forEach((menu) => {
       if (menu.dataset.siteAccountReady === "true") return;
       menu.dataset.siteAccountReady = "true";
+      let hoverCloseTimer = 0;
       const trigger = menu.querySelector("[data-site-account-trigger]");
-      trigger?.addEventListener("click", () => setAccountMenuOpen(menu, trigger.getAttribute("aria-expanded") !== "true", { restoreFocus: true }));
+      const popover = menu.querySelector("[data-site-account-popover]");
+      const cancelHoverClose = () => {
+        if (hoverCloseTimer) window.clearTimeout(hoverCloseTimer);
+        hoverCloseTimer = 0;
+      };
+      const scheduleHoverClose = () => {
+        cancelHoverClose();
+        hoverCloseTimer = window.setTimeout(() => {
+          if (!menu.matches(":hover") && !popover?.contains(document.activeElement)) {
+            setAccountMenuOpen(menu, false);
+          }
+        }, 140);
+      };
+      trigger?.addEventListener("click", () => {
+        cancelHoverClose();
+        setAccountMenuOpen(menu, trigger.getAttribute("aria-expanded") !== "true", { restoreFocus: true });
+      });
+      menu.addEventListener("pointerenter", (event) => {
+        if (event.pointerType && event.pointerType !== "mouse") return;
+        cancelHoverClose();
+        setAccountMenuOpen(menu, true);
+      });
+      menu.addEventListener("pointerleave", (event) => {
+        if (event.pointerType && event.pointerType !== "mouse") return;
+        scheduleHoverClose();
+      });
+      menu.addEventListener("focusin", (event) => {
+        // Focusing the trigger happens before a mouse click. Let the click
+        // handler own the toggle so focusin cannot immediately close it.
+        if (event.target === trigger) return;
+        cancelHoverClose();
+        setAccountMenuOpen(menu, true);
+      });
+      menu.addEventListener("focusout", (event) => {
+        if (!menu.contains(event.relatedTarget)) scheduleHoverClose();
+      });
+      menu.querySelector("[data-site-open-billing]")?.addEventListener("click", () => {
+        setAccountMenuOpen(menu, false);
+        if (window.location.pathname === "/console.html") window.dispatchEvent(new CustomEvent(EVENT_BILLING_REQUEST));
+        else window.location.assign("/console.html?view=billing");
+      });
+      menu.querySelector("[data-site-open-settings]")?.addEventListener("click", () => {
+        setAccountMenuOpen(menu, false);
+        if (window.location.pathname === "/console.html") window.dispatchEvent(new CustomEvent(EVENT_SETTINGS_REQUEST));
+        else window.location.assign("/console.html?view=console_settings");
+      });
       menu.querySelector("[data-site-account-logout]")?.addEventListener("click", () => {
         setLogoutPending(true);
         if (header.dataset.siteMode === "public") {
@@ -343,6 +435,10 @@
     if (!actions.querySelector("[data-site-account-menu]")) {
       actions.insertAdjacentHTML("beforeend", accountMenuMarkup());
     }
+    actions.querySelector("[data-site-account-billing]")?.toggleAttribute(
+      "hidden",
+      header.dataset.sitePage !== "console",
+    );
     header.dataset.siteAuthState = "authenticated";
     bindPreferenceControls(header);
     bindAccountMenus(header);
@@ -406,6 +502,7 @@
     document.querySelectorAll("[data-site-navigation]").forEach((node) => node.setAttribute("aria-label", labels.navigationLabel));
     document.querySelectorAll("[data-site-global-controls]").forEach((node) => node.setAttribute("aria-label", labels.globalSettings));
     document.querySelectorAll("[data-site-personal-controls]").forEach((node) => node.setAttribute("aria-label", labels.personalSettings));
+    document.querySelectorAll("[data-site-account-popover]").forEach((node) => node.setAttribute("aria-label", labels.personalProfile));
     document.querySelectorAll("[data-site-console-label]").forEach((node) => node.setAttribute("aria-label", labels.console));
     document.querySelectorAll("[data-site-user-title]").forEach((node) => node.title = labels.currentAccount);
     document.querySelectorAll("[data-site-account-name]").forEach((node) => {

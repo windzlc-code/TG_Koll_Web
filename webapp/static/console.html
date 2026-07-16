@@ -43,18 +43,34 @@
           </nav>
         </details>
         <div class="site-account-menu" data-site-account-menu>
-          <button class="site-user" type="button" title="当前登录账号" aria-controls="siteAccountPopover" aria-expanded="false" data-site-user-title data-site-account-trigger>
+          <button class="site-user" type="button" title="当前登录账号" aria-controls="siteAccountPopover" aria-haspopup="dialog" aria-expanded="false" data-site-user-title data-site-account-trigger>
             <svg class="site-user-avatar" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20c.8-4 3.1-6 7-6s6.2 2 7 6"></path></svg>
             <span id="consoleMeName" data-site-account-name>账户</span>
             <svg class="site-user-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 10 4 4 4-4"></path></svg>
           </button>
-          <div id="siteAccountPopover" class="site-account-popover" data-site-account-popover hidden>
+          <div id="siteAccountPopover" class="site-account-popover" data-site-account-popover hidden role="dialog" aria-label="个人信息">
             <div class="site-account-summary">
               <span class="site-account-avatar" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20c.8-4 3.1-6 7-6s6.2 2 7 6"></path></svg></span>
               <span class="site-account-identity"><strong data-site-account-name>账户</strong><span data-site-account-role>普通账号</span></span>
               <span class="site-account-status"><i aria-hidden="true"></i><span data-site-copy="accountStatus">已登录</span></span>
             </div>
             <div class="site-account-detail"><span data-site-copy="accountId">账号 ID</span><strong data-site-account-id>-</strong></div>
+            <section class="site-account-billing" data-site-account-billing aria-labelledby="siteAccountBillingTitle">
+              <div class="site-account-section-head">
+                <span id="siteAccountBillingTitle" data-site-copy="billing">订阅与算力</span>
+                <span class="site-account-billing-state" data-site-billing-status data-site-copy="billingUnread">尚未读取</span>
+              </div>
+              <div class="site-account-billing-grid" aria-live="polite">
+                <div class="site-account-billing-card"><span data-site-copy="billingPoints">算力余额</span><strong data-site-billing-points>—</strong></div>
+                <div class="site-account-billing-card"><span data-site-copy="billingSubscription">当前订阅</span><strong data-site-billing-subscription>—</strong></div>
+                <div class="site-account-billing-card"><span data-site-copy="billingImages">图片额度</span><strong data-site-billing-images>—</strong></div>
+                <div class="site-account-billing-card"><span data-site-copy="billingPending">待审批</span><strong data-site-billing-pending>—</strong></div>
+              </div>
+              <div class="site-account-action-row">
+                <button type="button" data-site-open-billing data-site-copy="billingView">查看详情</button>
+                <button type="button" data-site-open-settings data-site-copy="accountSettings">账户设置</button>
+              </div>
+            </section>
             <div class="site-account-preferences" aria-label="个人设置" data-site-personal-controls>
               <span class="site-account-section-label" data-site-copy="personalSettings">个人设置</span>
               <button id="themeToggle" class="site-account-preference" type="button" aria-label="切换到暗色模式" aria-pressed="false" data-site-theme-toggle>
@@ -104,7 +120,6 @@
       </nav>
 
       <div class="sidebar-bottom-actions">
-        <button type="button" data-view="billing">订阅与算力</button>
         <button type="button" data-view="persona_dashboard">人设看板</button>
         <button id="consoleSettings" type="button" data-view="console_settings" class="settings-entry">
           <span class="settings-entry-icon" aria-hidden="true">⚙</span>

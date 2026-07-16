@@ -327,19 +327,27 @@
 }
 
 .site-user {
-  gap: 7px;
-  max-width: 164px;
-  padding: 0 12px;
-  overflow: hidden;
+  display: inline-grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  max-width: 40px;
+  padding: 0;
   color: rgba(255, 255, 255, 0.8);
-  background: rgba(255, 255, 255, 0.07);
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(119, 216, 195, 0.1);
+  border: 1px solid rgba(119, 216, 195, 0.36);
+  border-radius: 50%;
   cursor: pointer;
 }
 
-.site-user span {
-  overflow: hidden;
-  text-overflow: ellipsis;
+.site-user .site-user-avatar {
+  width: 20px;
+  height: 20px;
+}
+
+.site-user [data-site-account-name],
+.site-user .site-user-chevron {
+  display: none;
 }
 
 .site-account-menu {
@@ -350,8 +358,9 @@
 .site-user:hover,
 .site-account-menu.is-open .site-user {
   color: #ffffff;
-  background: rgba(255, 255, 255, 0.14);
-  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(119, 216, 195, 0.2);
+  border-color: #77d8c3;
+  box-shadow: 0 0 0 4px rgba(119, 216, 195, 0.12);
 }
 
 .site-user .site-user-chevron {
@@ -367,17 +376,30 @@
 
 .site-account-popover {
   position: absolute;
-  top: calc(100% + 14px);
+  top: calc(100% + 8px);
   right: 0;
   z-index: 155;
   display: grid;
-  width: min(300px, calc(100vw - 24px));
-  padding: 12px;
+  width: min(328px, calc(100vw - 20px));
+  max-height: calc(100dvh - var(--site-header-height) - 16px);
+  gap: 8px;
+  padding: 10px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   color: #eff8f5;
   background: #0b1718;
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 8px;
   box-shadow: 0 18px 46px rgba(0, 0, 0, 0.3);
+}
+
+.site-account-popover::before {
+  position: absolute;
+  top: -10px;
+  right: 0;
+  left: 0;
+  height: 10px;
+  content: "";
 }
 
 .site-account-popover[hidden] {
@@ -457,6 +479,84 @@
 .site-account-detail strong {
   color: #ffffff;
   font-size: 12px;
+}
+
+.site-account-billing {
+  display: grid;
+  gap: 7px;
+  padding: 9px 0 2px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.site-account-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.site-account-billing-state {
+  color: rgba(239, 248, 245, 0.48);
+  font-size: 10px;
+}
+
+.site-account-billing-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.site-account-billing-card {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 7px 8px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+}
+
+.site-account-billing-card span {
+  overflow: hidden;
+  color: rgba(239, 248, 245, 0.56);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.site-account-billing-card strong {
+  overflow: hidden;
+  color: #ffffff;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.site-account-action-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.site-account-action-row button {
+  min-height: 34px;
+  padding: 0 8px;
+  color: #dffbf1;
+  background: rgba(119, 216, 195, 0.08);
+  border: 1px solid rgba(119, 216, 195, 0.28);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.site-account-action-row button:hover,
+.site-account-action-row button:focus-visible {
+  color: #071314;
+  background: #77d8c3;
+  border-color: #77d8c3;
 }
 
 .site-account-preferences {
@@ -568,8 +668,17 @@
 }
 
 @media (max-width: 1120px) {
+  .site-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+  }
+
   .site-header > .site-nav {
     display: none;
+  }
+
+  .site-header .header-actions {
+    justify-self: end;
   }
 
   .site-mobile-menu {

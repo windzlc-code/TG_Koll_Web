@@ -12066,8 +12066,8 @@ body.live-browser-modal-open {
   --panel-shadow: 0 10px 30px rgba(7, 31, 31, 0.06);
   --vecto-action-border: #071112;
   --vecto-action-ink: #ffffff;
-  --vecto-action-static-gradient: linear-gradient(112deg, #071112 0%, #071112 34%, #123032 44%, #237c72 50%, #123032 56%, #071112 66%, #071112 100%);
-  --vecto-action-running-gradient: linear-gradient(112deg, #071112 0%, #071112 34%, #104a47 42%, #237c72 50%, #104a47 58%, #071112 66%, #071112 100%);
+  --vecto-action-static-gradient: linear-gradient(112deg, #071112 0%, #0a1c1d 34%, #113b39 68%, #1b5e59 100%);
+  --vecto-action-running-gradient: linear-gradient(112deg, #071112 0%, #0d2725 32%, #164843 66%, #206c65 100%);
 }
 
 :root[data-theme="dark"] {
@@ -12093,8 +12093,8 @@ body.live-browser-modal-open {
   --active-shadow: inset 0 0 0 2px rgba(119, 216, 195, 0.22);
   --panel-shadow: 0 12px 34px rgba(0, 0, 0, 0.3);
   --vecto-action-border: #55706e;
-  --vecto-action-static-gradient: linear-gradient(112deg, #071112 0%, #071112 32%, #163b3b 43%, #2a746d 50%, #163b3b 57%, #071112 68%, #071112 100%);
-  --vecto-action-running-gradient: linear-gradient(112deg, #071112 0%, #071112 32%, #15514d 42%, #2a746d 50%, #15514d 58%, #071112 68%, #071112 100%);
+  --vecto-action-static-gradient: linear-gradient(112deg, #071112 0%, #0d2625 34%, #174642 68%, #205d59 100%);
+  --vecto-action-running-gradient: linear-gradient(112deg, #071112 0%, #10322f 32%, #1a514c 66%, #246a64 100%);
 }
 
 body.console-page {
@@ -12356,8 +12356,8 @@ body.console-page {
 }
 
 @keyframes vecto-action-running-sheen {
-  from { background-position: 120% 0; }
-  to { background-position: -120% 0; }
+  from { background-position: 100% 0; }
+  to { background-position: 0% 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {

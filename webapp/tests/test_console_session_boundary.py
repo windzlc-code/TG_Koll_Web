@@ -39,8 +39,10 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             self.assertIn(f'id="{required_id}"', self.markup)
         self.assertNotIn('id="refreshAll"', self.markup)
         self.assertNotIn('class="header-action" href="/"', self.markup)
-        for view in ("workspace", "tasks", "settings", "billing", "persona_dashboard", "console_settings"):
+        for view in ("workspace", "tasks", "settings", "persona_dashboard", "console_settings"):
             self.assertIn(f'data-view="{view}"', self.markup)
+        self.assertIn('data-site-open-billing', self.markup)
+        self.assertIn('data-panel="billing"', self.markup)
         self.assertNotIn(".console-page .site-header", self.styles)
         self.assertIn(".site-header", self.site_nav_styles)
         self.assertIn(".console-page .console-shell", self.styles)
@@ -91,6 +93,14 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('class="site-account-preferences"', self.markup)
         self.assertIn('data-site-personal-controls', self.markup)
         self.assertIn('function accountPreferencesMarkup()', self.site_nav_source)
+        self.assertIn('data-site-account-billing', self.markup)
+        self.assertIn('data-site-open-billing', self.markup)
+        self.assertIn('data-site-open-settings', self.markup)
+        self.assertIn('EVENT_ACCOUNT_MENU_OPEN', self.site_nav_source)
+        self.assertIn('pointerenter', self.site_nav_source)
+        self.assertIn('if (event.target === trigger) return;', self.site_nav_source)
+        self.assertIn('border-radius: 50%', self.site_nav_styles)
+
     def test_console_actions_share_static_navigation_gradient_and_only_busy_buttons_animate(self):
         self.assertIn("--vecto-action-static-gradient", self.styles)
         self.assertIn("--vecto-action-running-gradient", self.styles)
