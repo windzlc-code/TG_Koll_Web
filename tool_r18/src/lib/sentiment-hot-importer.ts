@@ -36,7 +36,7 @@ const THREADS_SEARCH_CACHE_CANDIDATE_LIMIT = 2000;
 const THREADS_SEARCH_CACHE_MAX_ROWS_PER_ARCHIVE = 40;
 const THREADS_BROWSER_QUERY_LIMIT = 24;
 const THREADS_BROWSER_QUERY_BATCH_SIZE = 6;
-const THREADS_BROWSER_PAGE_LIMIT = 2;
+const THREADS_BROWSER_PAGE_LIMIT = 3;
 const THREADS_BROWSER_BOOTSTRAP_QUERY_LIMIT = 4;
 const THREADS_BROWSER_REQUEST_TIMEOUT_MS = 5_000;
 const SENTIMENT_MODEL_KEYWORD_TARGET = 20;
@@ -3406,20 +3406,20 @@ async function fetchThreadsBrowserSearchCandidates(args: {
         const searchPages: any[] = [page];
         const requestedPageCount = Math.min(THREADS_BROWSER_PAGE_LIMIT, queries.length);
         if (requestedPageCount > 1 && (!args.deadlineAt || remainingSentimentDeadlineMs(args.deadlineAt, 0) >= 4_000)) {
-          const secondPage = await context.newPage().catch(() => null);
-          if (secondPage) {
-            const warmupQuery = queries[1];
-            await secondPage.goto(`https://www.threads.com/search?q=${encodeURIComponent(warmupQuery)}`, {
+          const extraPages = await Promise.all(Array.from({ length: requestedPageCount - 1 }, async (_, pageIndex) => {
+            const extraPage = await context.newPage().catch(() => null);
+            if (!extraPage) return null;
+            const warmupQuery = queries[pageIndex + 1];
+            await extraPage.goto(`https://www.threads.com/search?q=${encodeURIComponent(warmupQuery)}`, {
               waitUntil: "domcontentloaded",
               timeout: Math.min(3_000, remainingSentimentDeadlineMs(args.deadlineAt, 3_000)),
             }).catch(() => undefined);
-            if (String(secondPage.url?.() || "").startsWith("http")) {
-              searchPages.push(secondPage);
-              stats.pages = searchPages.length;
-            } else {
-              await secondPage.close().catch(() => undefined);
-            }
-          }
+            if (String(extraPage.url?.() || "").startsWith("http")) return extraPage;
+            await extraPage.close().catch(() => undefined);
+            return null;
+          }));
+          searchPages.push(...extraPages.filter(Boolean));
+          stats.pages = searchPages.length;
         }
         const processPageQueries = async (searchPage: any, pageQueries: string[], pageIndex: number) => {
           for (let offset = 0; offset < pageQueries.length && results.length < args.limit; offset += THREADS_BROWSER_QUERY_BATCH_SIZE) {
