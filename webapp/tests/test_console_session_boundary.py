@@ -107,7 +107,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("@keyframes vecto-action-running-sheen", self.styles)
         self.assertIn('button[aria-busy="true"]', self.styles)
         self.assertIn(':disabled:not([aria-busy="true"])', self.styles)
-        self.assertIn('--vecto-action-border: #55706e;', self.styles)
+        self.assertIn('--vecto-action-border: #4f817a;', self.styles)
         self.assertNotIn("#43e4c7 50%", self.styles)
         self.assertIn("button:has(> .task-button-busy)", self.styles)
         self.assertNotIn("vecto-publish-button-sheen", self.styles)

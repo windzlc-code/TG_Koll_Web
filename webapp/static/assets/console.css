@@ -12064,7 +12064,7 @@ body.live-browser-modal-open {
   --hover-shadow: inset 0 0 0 1px rgba(10, 129, 127, 0.12), 0 0 0 3px rgba(10, 129, 127, 0.08);
   --active-shadow: inset 0 0 0 2px rgba(10, 129, 127, 0.18);
   --panel-shadow: 0 10px 30px rgba(7, 31, 31, 0.06);
-  --vecto-action-border: #071112;
+  --vecto-action-border: #1f665f;
   --vecto-action-ink: #ffffff;
   --vecto-action-static-gradient: linear-gradient(112deg, #071112 0%, #0c2525 32%, #18514d 68%, #26796f 100%);
   --vecto-action-running-gradient: linear-gradient(112deg, #071112 0%, #10322f 30%, #1c5d57 64%, #287f75 100%);
@@ -12092,7 +12092,7 @@ body.live-browser-modal-open {
   --hover-shadow: inset 0 0 0 1px rgba(119, 216, 195, 0.18), 0 0 0 3px rgba(119, 216, 195, 0.08);
   --active-shadow: inset 0 0 0 2px rgba(119, 216, 195, 0.22);
   --panel-shadow: 0 12px 34px rgba(0, 0, 0, 0.3);
-  --vecto-action-border: #55706e;
+  --vecto-action-border: #4f817a;
   --vecto-action-static-gradient: linear-gradient(112deg, #071112 0%, #102e2d 32%, #1b5651 68%, #2a746d 100%);
   --vecto-action-running-gradient: linear-gradient(112deg, #071112 0%, #123a36 30%, #20635d 64%, #2d8177 100%);
 }
@@ -12268,6 +12268,11 @@ body.console-page {
   text-shadow: none;
   animation: none;
   transition: background-position 320ms ease, border-color var(--motion-fast), box-shadow var(--motion-fast), transform var(--motion-fast);
+}
+
+.console-page .console-shell button:focus-visible {
+  outline: 2px solid var(--hover-border);
+  outline-offset: 2px;
 }
 
 .console-page .console-shell :is(
