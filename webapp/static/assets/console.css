@@ -7030,11 +7030,6 @@ body.persona-touch-dragging .persona-list-card:active {
   padding: 8px;
 }
 
-.persona-image-library-card,
-.persona-image-library-card--empty {
-  grid-template-rows: auto 18px auto;
-}
-
 .persona-image-upload-placeholder {
   display: grid;
   align-content: center;
@@ -7043,8 +7038,6 @@ body.persona-touch-dragging .persona-list-card:active {
   width: 100%;
   aspect-ratio: 1 / 1;
   min-height: 0;
-  min-width: 0;
-  box-sizing: border-box;
   padding: 14px 10px;
   color: var(--muted);
   border: 1px dashed var(--line);
@@ -7066,19 +7059,21 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-image-upload-placeholder-icon {
   display: grid;
   place-items: center;
-  width: 48px;
-  height: 48px;
+  width: 42px;
+  height: 42px;
   color: var(--ink);
+  border: 1px solid currentColor;
+  border-radius: 50%;
 }
 
 .persona-image-upload-placeholder-icon .ui-action-icon {
-  width: 40px;
-  height: 40px;
+  width: 24px;
+  height: 24px;
   fill: none;
   stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 2.2;
+  stroke-width: 1.8;
 }
 
 .persona-image-upload-placeholder strong,
@@ -7099,28 +7094,8 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .persona-image-upload-placeholder-tip {
-  color: var(--ink);
+  color: var(--accent-ink, var(--ink));
   font-weight: 800;
-}
-
-.persona-image-library-actions--placeholder {
-  visibility: hidden;
-  pointer-events: none;
-}
-
-.persona-image-library-meta-placeholder {
-  min-height: 18px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 18px;
-}
-
-.persona-image-library-action-placeholder {
-  display: block;
-  min-height: 38px;
-  padding: 10px 12px;
-  border: 1px solid transparent;
-  border-radius: 8px;
 }
 
 .persona-image-library-card.is-reference {
