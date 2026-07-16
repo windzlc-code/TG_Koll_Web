@@ -254,6 +254,10 @@ function setActiveAdminPage(page, updateHash = true) {
   return true;
 }
 
+function clearStoredAdminWorkspaceContext() {
+  try { window.sessionStorage.removeItem("vecto-admin-workspace-user-id"); } catch (_) {}
+}
+
 async function api(path, opts = {}) {
   const headers = new Headers(opts.headers || {});
   headers.set("X-Admin-Console", "1");
@@ -266,6 +270,7 @@ async function api(path, opts = {}) {
     data = { detail: text || `HTTP ${res.status}` };
   }
   if (res.status === 401) {
+    clearStoredAdminWorkspaceContext();
     window.location.replace("/admin");
     throw data || { detail: "管理员登录已过期" };
   }
@@ -2165,6 +2170,7 @@ async function logoutAdmin() {
   if (message) message.textContent = "";
   try {
     await api("/api/auth/logout", { method: "POST" });
+    clearStoredAdminWorkspaceContext();
     window.location.replace("/admin");
   } catch (err) {
     if (message) message.textContent = getErrorMessage(err);

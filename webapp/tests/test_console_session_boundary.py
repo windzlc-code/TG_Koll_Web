@@ -8,6 +8,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONSOLE_JS = REPO_ROOT / "webapp" / "static" / "assets" / "console.js"
+ADMIN_JS = REPO_ROOT / "webapp" / "static" / "assets" / "admin.js"
 PERSONA_DASHBOARD_JS = REPO_ROOT / "webapp" / "static" / "assets" / "persona-dashboard.js"
 CONSOLE_CSS = REPO_ROOT / "webapp" / "static" / "assets" / "console.css"
 CONSOLE_HTML = REPO_ROOT / "webapp" / "static" / "console.html"
@@ -20,6 +21,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.source = CONSOLE_JS.read_text(encoding="utf-8")
+        cls.admin_source = ADMIN_JS.read_text(encoding="utf-8")
         cls.persona_dashboard_source = PERSONA_DASHBOARD_JS.read_text(encoding="utf-8")
         cls.styles = CONSOLE_CSS.read_text(encoding="utf-8")
         cls.markup = CONSOLE_HTML.read_text(encoding="utf-8")
@@ -1254,6 +1256,27 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('data-social-retry', queue)
         self.assertNotIn('确认已发布', self.source)
         self.assertNotIn('确认未发布', self.source)
+
+    def test_account_menu_preserves_admin_managed_workspace_context(self):
+        start = self.site_nav_source.index("function openAccountConsoleView")
+        end = self.site_nav_source.index("function showAuthenticatedAccount", start)
+        helper = self.site_nav_source[start:end]
+        local_switch = helper.index('window.location.pathname === "/console.html"')
+        managed_redirect = helper.index('params.set("manage_user_id", adminWorkspaceUserId)')
+        self.assertLess(local_switch, managed_redirect)
+        self.assertIn("window.dispatchEvent(new CustomEvent", helper)
+        self.assertIn("new URLSearchParams({ view: targetView })", helper)
+        self.assertIn("sessionStorage.getItem(ADMIN_WORKSPACE_STORAGE_KEY)", helper)
+        self.assertIn("sessionStorage.setItem(ADMIN_WORKSPACE_STORAGE_KEY", helper)
+        self.assertNotIn("/admin-console.html?view=", helper)
+
+    def test_admin_logout_and_session_expiry_clear_managed_workspace_context(self):
+        marker = 'sessionStorage.removeItem("vecto-admin-workspace-user-id")'
+        self.assertIn(marker, self.source)
+        self.assertIn(marker, self.admin_source)
+        self.assertIn("if (isAdminConsole) clearStoredAdminWorkspaceContext()", self.source)
+        self.assertIn("if (res.status === 401)", self.admin_source)
+        self.assertIn("clearStoredAdminWorkspaceContext();", self.admin_source)
 
     def test_proxy_detection_preserves_manual_name_and_keeps_metadata_in_preview(self):
         self.assertIn('["auto", "自动检测（推荐）"]', self.source)

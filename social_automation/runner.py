@@ -63,10 +63,15 @@ class AutoLoginFailedError(RuntimeError):
         self.screenshot_path = str(screenshot_path or "")
 
 
-class PublishConfirmationFailedError(RuntimeError):
-    def __init__(self, message: str, screenshot_path: str = ""):
+class PublishConfirmationPendingError(RuntimeError):
+    def __init__(self, message: str, screenshot_path: str = "", confirmation: dict[str, Any] | None = None):
         super().__init__(message)
         self.screenshot_path = str(screenshot_path or "")
+        self.confirmation = dict(confirmation or {})
+
+
+class PublishClickUncertainError(RuntimeError):
+    pass
 
 
 class UnsupportedActionError(RuntimeError):
@@ -225,7 +230,16 @@ def run_social_task(
             return _run_browse_profile(page, task, payload, screenshot_dir, logger)
         if task_type == "publish_post":
             _raise_if_cancelled(cancel_event)
-            return _run_publish_post(page, task, payload, screenshot_dir, logger, platform, account=account)
+            return _run_publish_post(
+                page,
+                task,
+                payload,
+                screenshot_dir,
+                logger,
+                platform,
+                account=account,
+                context_control=context_control,
+            )
         if task_type == "comment_post":
             _raise_if_cancelled(cancel_event)
             return _run_comment_post(page, task, payload, screenshot_dir, logger)
@@ -260,6 +274,25 @@ def _report_account_login_status(
             "Account login status was detected but could not be synchronized immediately.",
             {"status": str(status or ""), "error": str(exc)},
         )
+
+
+def _persist_publish_confirmation_context(
+    context_control: dict[str, Any] | None,
+    confirmation: dict[str, Any],
+    logger: AutomationLogger,
+) -> None:
+    if not isinstance(context_control, dict):
+        return
+    callback = context_control.get("publish_confirmation_callback")
+    if not callable(callback):
+        return
+    try:
+        persisted = callback(dict(confirmation))
+    except Exception as exc:
+        logger.log("error", "threads_publish_confirmation_persist_failed", "发布前无法保存确认上下文，已停止且未点击发布。", {"error": str(exc)[:500]})
+        raise RuntimeError("Unable to persist Threads publish confirmation context before submit.") from exc
+    if persisted is False:
+        raise RuntimeError("Unable to persist Threads publish confirmation context before submit.")
 
 
 class _BrowserContextManager:
@@ -2892,7 +2925,7 @@ def _normalize_threads_post_permalink(value: Any) -> str:
     path = str(parsed.path or "").rstrip("/")
     if not re.fullmatch(r"/@[^/\s]+/(?:post|thread)/[^/\s]+", path, flags=re.IGNORECASE):
         return ""
-    return f"https://{host}{path}"
+    return f"https://www.threads.net{path}"
 
 
 def _find_threads_post_permalink(page, caption: str) -> str:
@@ -3059,10 +3092,11 @@ def _threads_active_dialog_text(page) -> str:
         return ""
 
 
-def _click_threads_active_dialog_post(page, logger: AutomationLogger) -> bool:
+def _click_threads_active_dialog_post(page, logger: AutomationLogger, before_click: Callable[[], None] | None = None) -> bool:
     try:
-        clicked = page.evaluate(
+        marked = page.evaluate(
             r"""() => {
+                document.querySelectorAll('[data-vecto-publish-target]').forEach(node => node.removeAttribute('data-vecto-publish-target'));
                 const visible = Array.from(document.querySelectorAll('[role="dialog"]')).filter((node) => {
                     const rect = node.getBoundingClientRect();
                     const style = window.getComputedStyle(node);
@@ -3085,18 +3119,27 @@ def _click_threads_active_dialog_post(page, logger: AutomationLogger) -> bool:
                     const style = window.getComputedStyle(clickable);
                     if (clickable.disabled || clickable.getAttribute('aria-disabled') === 'true' || style.pointerEvents === 'none') continue;
                     clickable.scrollIntoView({block: 'center', inline: 'center'});
-                    clickable.click();
+                    clickable.setAttribute('data-vecto-publish-target', '1');
                     return true;
                 }
                 return false;
             }"""
         )
-        if clicked:
-            logger.log("debug", "threads_publish_submit", "已点击当前 Threads 弹窗内的发布按钮。", {})
-            return True
     except Exception as exc:
-        logger.log("warn", "threads_publish_submit_dom_failed", "当前弹窗的发布按钮点击失败。", {"error": str(exc)[:500]})
-    return False
+        logger.log("warn", "threads_publish_submit_dom_failed", "无法定位当前弹窗的发布按钮，尚未执行点击。", {"error": str(exc)[:500]})
+        raise RuntimeError("Unable to locate the active Threads publish button before submit.") from exc
+    if not marked:
+        return False
+    if callable(before_click):
+        before_click()
+    try:
+        target = page.locator('[data-vecto-publish-target="1"]').first
+        _human_click(page, target, logger, "threads_publish_submit")
+        logger.log("debug", "threads_publish_submit", "已点击当前 Threads 弹窗内的发布按钮。", {})
+        return True
+    except Exception as exc:
+        logger.log("warn", "threads_publish_submit_click_uncertain", "发布按钮点击期间页面已变化，将仅检查发布结果。", {"error": str(exc)[:500]})
+        raise PublishClickUncertainError("Threads publish click may have completed while the page was navigating.") from exc
 
 
 def _threads_profile_url(account: dict[str, Any] | None) -> str:
@@ -3115,7 +3158,7 @@ def _normalize_threads_profile_url(value: Any) -> str:
         return ""
     if not re.fullmatch(r"/@[^/\s]+", path):
         return ""
-    return f"https://{host}{path}"
+    return f"https://www.threads.net{path}"
 
 
 def _resolve_threads_profile_url(page, account: dict[str, Any] | None = None) -> str:
@@ -3216,12 +3259,19 @@ def _capture_threads_profile_baseline(page, profile_url: str, logger: Automation
     if not profile_url:
         return None
     last_error = ""
+    stable_empty_count = 0
     for attempt in range(2):
         try:
             _goto(page, profile_url, logger, "threads_publish_baseline", timeout_ms=5000, networkidle_ms=1500)
             permalinks = _find_threads_post_permalinks(page)
-            if permalinks is not None:
+            if permalinks:
                 return set(permalinks)
+            if permalinks == [] and _threads_profile_is_stably_empty(page, profile_url):
+                stable_empty_count += 1
+                if stable_empty_count >= 2:
+                    return set()
+            else:
+                stable_empty_count = 0
         except Exception as exc:
             last_error = str(exc)
         if attempt == 0:
@@ -3230,7 +3280,97 @@ def _capture_threads_profile_baseline(page, profile_url: str, logger: Automation
     return None
 
 
-def _run_threads_publish_post(page, task, payload, screenshot_dir, logger, account: dict[str, Any] | None = None) -> dict[str, Any]:
+def _threads_profile_is_stably_empty(page, profile_url: str) -> bool:
+    expected = _normalize_threads_profile_url(profile_url)
+    current = _normalize_threads_profile_url(getattr(page, "url", ""))
+    if not expected or current != expected:
+        return False
+    state = _detect_threads_login_state(page)
+    if str(state.get("status") or "") != "ready":
+        return False
+    try:
+        body_text = " ".join(str(page.locator("body").inner_text(timeout=5000) or "").lower().split())
+    except Exception:
+        return False
+    blocked_markers = (
+        "something went wrong",
+        "please try again later",
+        "try again",
+        "unable to load",
+        "couldn't refresh",
+        "log in",
+        "continue with instagram",
+        "challenge",
+        "verification",
+    )
+    if any(marker in body_text for marker in blocked_markers):
+        return False
+    empty_markers = (
+        "no threads yet",
+        "no posts yet",
+        "hasn't posted yet",
+        "has not posted yet",
+        "尚未发布任何内容",
+        "還沒有任何串文",
+        "尚未發佈任何內容",
+    )
+    return any(marker in body_text for marker in empty_markers)
+
+
+def _run_threads_publish_post(
+    page,
+    task,
+    payload,
+    screenshot_dir,
+    logger,
+    account: dict[str, Any] | None = None,
+    context_control: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    confirmation_state = payload.get("_publish_confirmation")
+    if isinstance(confirmation_state, dict) and confirmation_state.get("phase") == "confirm_only":
+        caption = str(confirmation_state.get("caption") or payload.get("caption") or payload.get("content") or payload.get("text") or "").strip()
+        profile_url = _normalize_threads_profile_url(confirmation_state.get("profile_url"))
+        raw_baseline = confirmation_state.get("baseline_permalinks")
+        if not profile_url or not isinstance(raw_baseline, list):
+            raise RuntimeError("Threads publish confirmation context is incomplete; refusing to publish again.")
+        previous_permalinks = {
+            permalink
+            for value in raw_baseline
+            if (permalink := _normalize_threads_post_permalink(value))
+        }
+        profile_confirmation = _wait_for_threads_own_post(
+            page,
+            caption,
+            logger,
+            account,
+            payload,
+            profile_url=profile_url,
+            previous_permalinks=previous_permalinks,
+        )
+        permalink = _normalize_threads_post_permalink(profile_confirmation.get("url")) if profile_confirmation.get("confirmed") else ""
+        if not permalink:
+            reason = str(profile_confirmation.get("reason") or "Threads publish is still awaiting permalink confirmation.")
+            shot = _screenshot(page, screenshot_dir, task, "publish_confirmation_pending", logger)
+            logger.log(
+                "warn",
+                "threads_publish_confirmation_pending",
+                reason,
+                {"profile": profile_confirmation, "confirm_only": True},
+                shot,
+            )
+            raise PublishConfirmationPendingError(reason, shot, confirmation_state)
+        shot = _capture_threads_publish_evidence(page, permalink, caption, screenshot_dir, task, logger)
+        published = {
+            **profile_confirmation,
+            "confirmed": True,
+            "submitted": True,
+            "url": permalink,
+            "permalink": permalink,
+            "profile_confirmed": True,
+            "confirmation_source": "profile_caption_permalink",
+        }
+        return {"ok": True, "published": published, "url": permalink, "screenshot_path": shot}
+
     media_paths = [str(p) for p in (payload.get("media_paths") or []) if str(p or "").strip()]
     caption = str(payload.get("caption") or payload.get("content") or payload.get("text") or "").strip()
     if not caption and not media_paths:
@@ -3282,11 +3422,33 @@ def _run_threads_publish_post(page, task, payload, screenshot_dir, logger, accou
         logger.log("info", "threads_publish_upload", "正在上传 Threads 媒体文件。", {"count": len(media_paths)})
         file_input.set_input_files(media_paths)
         _sleep_between(1.0, 2.2)
-    post_clicked = _click_threads_active_dialog_post(page, logger)
+    confirmation_state = {
+        "phase": "confirm_only",
+        "profile_url": profile_url,
+        "baseline_permalinks": sorted(previous_permalinks),
+        "caption": caption,
+        "submitted_at": int(time.time()),
+    }
+    confirmation_persisted = False
+
+    def persist_confirmation_before_click() -> None:
+        nonlocal confirmation_persisted
+        if confirmation_persisted:
+            return
+        _persist_publish_confirmation_context(context_control, confirmation_state, logger)
+        confirmation_persisted = True
+
+    click_uncertain = False
+    try:
+        post_clicked = _click_threads_active_dialog_post(page, logger, before_click=persist_confirmation_before_click)
+    except PublishClickUncertainError:
+        post_clicked = True
+        click_uncertain = True
     post_button = None if post_clicked else (_threads_dialog_post_button(page) or _threads_post_button(page))
     if not post_clicked and post_button is None:
         raise RuntimeError("未找到 Threads 发布按钮。")
     if not post_clicked:
+        persist_confirmation_before_click()
         _human_click(page, post_button, logger, "threads_publish_submit")
     success = _wait_for_threads_publish_success(
         page,
@@ -3295,6 +3457,10 @@ def _run_threads_publish_post(page, task, payload, screenshot_dir, logger, accou
         profile_url=profile_url,
         previous_permalinks=previous_permalinks,
     )
+    if click_uncertain:
+        success["submitted"] = True
+        if not str(success.get("reason") or "").strip():
+            success["reason"] = "Threads publish click was submitted while the page was navigating; checking the profile only."
     permalink = _normalize_threads_post_permalink(success.get("url")) if success.get("confirmed") else ""
     profile_confirmation: dict[str, Any] = {}
     if not permalink:
@@ -3305,8 +3471,8 @@ def _run_threads_publish_post(page, task, payload, screenshot_dir, logger, accou
         reason = str(profile_confirmation.get("reason") or success.get("reason") or "Threads 已提交，但尚未确认发布结果。")
         message = f"{reason} 自动确认窗口已结束；为避免重复发布，任务不会自动重发。"
         shot = _screenshot(page, screenshot_dir, task, "publish_submitted_unconfirmed", logger)
-        logger.log("error", "threads_publish_confirmation_failed", message, {"submit": success, "profile": profile_confirmation, "retryable": False}, shot)
-        raise PublishConfirmationFailedError(message, shot)
+        logger.log("warn", "threads_publish_confirmation_pending", message, {"submit": success, "profile": profile_confirmation}, shot)
+        raise PublishConfirmationPendingError(message, shot, confirmation_state)
     shot = _capture_threads_publish_evidence(page, permalink, caption, screenshot_dir, task, logger)
     published = {
         **success,
@@ -3321,9 +3487,18 @@ def _run_threads_publish_post(page, task, payload, screenshot_dir, logger, accou
     return {"ok": True, "published": published, "url": permalink, "screenshot_path": shot}
 
 
-def _run_publish_post(page, task, payload, screenshot_dir, logger, platform: str = "instagram", account: dict[str, Any] | None = None) -> dict[str, Any]:
+def _run_publish_post(
+    page,
+    task,
+    payload,
+    screenshot_dir,
+    logger,
+    platform: str = "instagram",
+    account: dict[str, Any] | None = None,
+    context_control: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     if platform == "threads":
-        return _run_threads_publish_post(page, task, payload, screenshot_dir, logger, account)
+        return _run_threads_publish_post(page, task, payload, screenshot_dir, logger, account, context_control)
     media_paths = [str(p) for p in (payload.get("media_paths") or []) if str(p or "").strip()]
     caption = str(payload.get("caption") or "").strip()
     if not media_paths:

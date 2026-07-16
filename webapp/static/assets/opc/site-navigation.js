@@ -7,6 +7,7 @@
   const EVENT_ACCOUNT_MENU_OPEN = "vecto:account-menu-open";
   const EVENT_BILLING_REQUEST = "vecto:account-billing-request";
   const EVENT_SETTINGS_REQUEST = "vecto:account-settings-request";
+  const ADMIN_WORKSPACE_STORAGE_KEY = "vecto-admin-workspace-user-id";
   const DEFAULT_LANGUAGE = document.documentElement.lang === "zh-Hant" ? "zh-Hant" : "zh-Hans";
   let currentAccount = null;
   let logoutPending = false;
@@ -406,15 +407,14 @@
       });
       menu.querySelector("[data-site-open-billing]")?.addEventListener("click", () => {
         setAccountMenuOpen(menu, false);
-        if (window.location.pathname === "/console.html") window.dispatchEvent(new CustomEvent(EVENT_BILLING_REQUEST));
-        else window.location.assign("/console.html?view=billing");
+        openAccountConsoleView("billing");
       });
       menu.querySelector("[data-site-open-settings]")?.addEventListener("click", () => {
         setAccountMenuOpen(menu, false);
-        if (window.location.pathname === "/console.html") window.dispatchEvent(new CustomEvent(EVENT_SETTINGS_REQUEST));
-        else window.location.assign("/console.html?view=console_settings");
+        openAccountConsoleView("console_settings");
       });
       menu.querySelector("[data-site-account-logout]")?.addEventListener("click", () => {
+        try { window.sessionStorage.removeItem(ADMIN_WORKSPACE_STORAGE_KEY); } catch (_) {}
         setLogoutPending(true);
         if (header.dataset.siteMode === "public") {
           void logoutPublicSession();
@@ -423,6 +423,34 @@
         window.dispatchEvent(new CustomEvent(EVENT_LOGOUT));
       });
     });
+  }
+
+  function openAccountConsoleView(view) {
+    const targetView = view === "console_settings" ? "console_settings" : "billing";
+    const pageWorkspaceUserId = String(document.querySelector('meta[name="admin-workspace-user-id"]')?.content || "").trim();
+    const isAdminConsole = document.querySelector('meta[name="admin-console-session"]')?.content === "1";
+    let storedWorkspaceUserId = "";
+    try {
+      storedWorkspaceUserId = String(window.sessionStorage.getItem(ADMIN_WORKSPACE_STORAGE_KEY) || "").trim();
+    } catch (_) {}
+    const adminWorkspaceUserId = pageWorkspaceUserId || storedWorkspaceUserId;
+    if (window.location.pathname === "/console.html" || window.location.pathname === "/admin-console.html") {
+      window.dispatchEvent(new CustomEvent(targetView === "billing" ? EVENT_BILLING_REQUEST : EVENT_SETTINGS_REQUEST));
+      return;
+    }
+    const params = new URLSearchParams({ view: targetView });
+    if (adminWorkspaceUserId) params.set("manage_user_id", adminWorkspaceUserId);
+    window.location.assign(`${isAdminConsole || adminWorkspaceUserId ? "/admin-console.html" : "/console.html"}?${params.toString()}`);
+  }
+
+  function syncAdminWorkspaceContext() {
+    const isAdminConsole = document.querySelector('meta[name="admin-console-session"]')?.content === "1";
+    if (!isAdminConsole) return;
+    const workspaceUserId = String(document.querySelector('meta[name="admin-workspace-user-id"]')?.content || "").trim();
+    try {
+      if (workspaceUserId) window.sessionStorage.setItem(ADMIN_WORKSPACE_STORAGE_KEY, workspaceUserId);
+      else window.sessionStorage.removeItem(ADMIN_WORKSPACE_STORAGE_KEY);
+    } catch (_) {}
   }
 
   function showAuthenticatedAccount(header, account) {
@@ -562,6 +590,7 @@
     }
   });
 
+  syncAdminWorkspaceContext();
   document.querySelectorAll("[data-site-header]").forEach(mount);
   setTheme(storedValue(THEME_STORAGE_KEY, "light"), { persist: false });
   setLanguage(storedValue(LANGUAGE_STORAGE_KEY, DEFAULT_LANGUAGE), { persist: false });

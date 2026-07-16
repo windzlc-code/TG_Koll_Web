@@ -647,6 +647,10 @@ function clearTenantInMemoryState() {
   window.PersonaDashboard?.unmount?.();
 }
 
+function clearStoredAdminWorkspaceContext() {
+  try { window.sessionStorage.removeItem("vecto-admin-workspace-user-id"); } catch (_) {}
+}
+
 function handleSessionBoundary(status) {
   const normalizedStatus = Number(status || 0);
   if (![401, 428].includes(normalizedStatus)) return false;
@@ -654,6 +658,7 @@ function handleSessionBoundary(status) {
   consoleBoundaryNavigationActive = true;
   clearTenantInMemoryState();
   const isAdminConsole = typeof ADMIN_CONSOLE_SESSION !== "undefined" && ADMIN_CONSOLE_SESSION;
+  if (isAdminConsole) clearStoredAdminWorkspaceContext();
   window.location.replace(normalizedStatus === 428 ? "/change-password.html" : (isAdminConsole ? "/admin" : "/login.html"));
   return true;
 }
@@ -9639,6 +9644,7 @@ async function logoutConsoleSession() {
     consoleBoundaryNavigationActive = true;
     clearTenantInMemoryState();
     purgeLegacyTenantContentCaches();
+    if (ADMIN_CONSOLE_SESSION) clearStoredAdminWorkspaceContext();
     window.VectoSiteNavigation?.setAccount(null);
     window.location.replace(ADMIN_CONSOLE_SESSION ? "/admin" : "/");
   } catch (error) {

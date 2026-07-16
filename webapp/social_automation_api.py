@@ -1263,6 +1263,7 @@ def build_social_automation_overview(*, user_id: int | None = None) -> dict[str,
             f"SELECT * FROM social_automation_tasks{scope} ORDER BY created_at DESC LIMIT 80",
             params,
         ).fetchall()
+        task_billing_statuses = _billing_reservation_statuses(conn, list(tasks))
         all_tasks = conn.execute(f"SELECT task_type, payload_json, status, finished_at FROM social_automation_tasks{scope}", params).fetchall()
     visible_tasks = [
         row for row in tasks
@@ -1290,7 +1291,13 @@ def build_social_automation_overview(*, user_id: int | None = None) -> dict[str,
         },
         "accounts": public_accounts,
         "proxies": public_proxies,
-        "tasks": [_task_public(row) for row in visible_tasks],
+        "tasks": [
+            _task_public(
+                row,
+                billing_reservation_status=task_billing_statuses.get(str(row["billing_reservation_id"] or ""), ""),
+            )
+            for row in visible_tasks
+        ],
         "browser_sessions": _live_browser_sessions(user_id=user_id),
         "worker": (
             dict(_WORKER_STATE)
@@ -2834,29 +2841,13 @@ def _deletable_account_ids(conn: Any, account_ids: list[str]) -> set[str]:
     return {account_id for account_id in clean_ids if account_id not in active_ids}
 
 
-def _task_has_unresolved_publish_confirmation(conn: sqlite3.Connection, task: Any) -> bool:
-    if task is None:
-        return False
-    keys = set(task.keys())
-    raw_result = task["result_json"] if "result_json" in keys else ""
-    if "id" in keys and str(task["id"] or "").strip():
-        row = conn.execute(
-            "SELECT result_json FROM social_automation_tasks WHERE id = ?",
-            (str(task["id"] or ""),),
-        ).fetchone()
-        if row is not None:
-            raw_result = row["result_json"]
-    result = _loads(raw_result, {})
-    return isinstance(result, dict) and result.get("confirmation_failed") is True
-
-
 def _release_task_billing_reservation(conn: sqlite3.Connection, task: Any, *, now: int | None = None) -> bool:
     if task is None or "billing_reservation_id" not in task.keys():
         return False
-    if _task_has_unresolved_publish_confirmation(conn, task):
-        return False
     reservation_id = str(task["billing_reservation_id"] or "").strip()
     if not reservation_id:
+        return False
+    if conn.execute("SELECT 1 FROM billing_reservations WHERE id = ?", (reservation_id,)).fetchone() is None:
         return False
     commercial_billing.release_reservation(conn, reservation_id, now=now)
     return True
@@ -2873,7 +2864,7 @@ def _release_terminal_task_billing_reservations(conn: sqlite3.Connection, now: i
     )
     rows = conn.execute(
         """
-        SELECT t.billing_reservation_id, t.result_json
+        SELECT t.billing_reservation_id
         FROM social_automation_tasks t
         JOIN billing_reservations r ON r.id = t.billing_reservation_id
         WHERE (
@@ -2888,9 +2879,6 @@ def _release_terminal_task_billing_reservations(conn: sqlite3.Connection, now: i
         """
     ).fetchall()
     for row in rows:
-        result = _loads(row["result_json"], {})
-        if isinstance(result, dict) and result.get("confirmation_failed") is True:
-            continue
         _release_task_billing_reservation(conn, row, now=now)
 
 
@@ -2899,19 +2887,30 @@ def delete_social_account(account_id: str) -> int:
     if not clean_id:
         raise HTTPException(status_code=400, detail="account_id required")
     with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         row = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (clean_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="account not found")
-        task_rows = conn.execute("SELECT id, status, result_json FROM social_automation_tasks WHERE account_id = ?", (clean_id,)).fetchall()
-        if any(_task_has_unresolved_publish_confirmation(conn, task) for task in task_rows):
-            raise HTTPException(status_code=409, detail="该账号仍有发布结果和计费预占等待自动确认，暂时不能删除。")
+        task_rows = conn.execute("SELECT id, status FROM social_automation_tasks WHERE account_id = ?", (clean_id,)).fetchall()
         active_task_ids = [
             str(task["id"] or "") for task in task_rows
             if str(task["id"] or "") and str(task["status"] or "") in {"running", "need_manual"}
         ]
+        now = _now()
+        conn.execute(
+            "UPDATE social_accounts SET status = 'disabled', updated_at = ? WHERE id = ?",
+            (now, clean_id),
+        )
+        conn.execute(
+            "UPDATE social_automation_tasks SET status = 'cancelled', finished_at = ?, error = ?, updated_at = ? WHERE account_id = ? AND status IN ('preparing', 'queued', 'running', 'need_manual')",
+            (now, "account deleted", now, clean_id),
+        )
     for task_id in active_task_ids:
         _force_stop_running_task(task_id)
     with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if not conn.execute("SELECT 1 FROM social_accounts WHERE id = ?", (clean_id,)).fetchone():
+            return 0
         deletion_task_rows = conn.execute(
             "SELECT id, billing_reservation_id FROM social_automation_tasks WHERE account_id = ?",
             (clean_id,),
@@ -3101,7 +3100,11 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
                     ):
                         if batch_context.get("task_id"):
                             raise HTTPException(status_code=409, detail="已有相同推文的发布任务")
-                        reused = _task_public(active_row)
+                        reused_statuses = _billing_reservation_statuses(conn, [active_row])
+                        reused = _task_public(
+                            active_row,
+                            billing_reservation_status=reused_statuses.get(str(active_row["billing_reservation_id"] or ""), ""),
+                        )
                         reused["reused"] = True
                         return reused
         billing_reservation: dict[str, Any] | None = None
@@ -3214,21 +3217,29 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
             with _EPHEMERAL_TASK_SECRETS_LOCK:
                 _EPHEMERAL_TASK_SECRETS[task_id] = runtime_secrets
         row = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
+        row_billing_statuses = _billing_reservation_statuses(conn, [row])
     if superseded_login_task_ids:
         _discard_ephemeral_task_secrets(*superseded_login_task_ids)
         for superseded_task_id in superseded_login_task_ids:
             _force_stop_running_task(superseded_task_id)
     if not bool(batch_context.get("suppress_wake")):
         wake_social_automation_worker()
-    return _task_public(row)
+    return _task_public(
+        row,
+        billing_reservation_status=row_billing_statuses.get(str(row["billing_reservation_id"] or ""), ""),
+    )
 
 
 def get_social_task(task_id: str) -> dict[str, Any]:
     with db() as conn:
         row = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
+        billing_statuses = _billing_reservation_statuses(conn, [row] if row else [])
     if not row:
         raise HTTPException(status_code=404, detail="任务不存在")
-    return _task_public(row)
+    return _task_public(
+        row,
+        billing_reservation_status=billing_statuses.get(str(row["billing_reservation_id"] or ""), ""),
+    )
 
 
 def list_social_tasks(*, status: str = "", account_id: str = "", limit: int = 60, user_id: int | None = None) -> list[dict[str, Any]]:
@@ -3250,21 +3261,33 @@ def list_social_tasks(*, status: str = "", account_id: str = "", limit: int = 60
             f"SELECT * FROM social_automation_tasks {where} ORDER BY created_at DESC LIMIT ?",
             (*params, limit),
         ).fetchall()
-    return [_task_public(row) for row in rows]
+        billing_statuses = _billing_reservation_statuses(conn, list(rows))
+    return [
+        _task_public(row, billing_reservation_status=billing_statuses.get(str(row["billing_reservation_id"] or ""), ""))
+        for row in rows
+    ]
 
 
 def clear_social_task(task_id: str) -> int:
     with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         row = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="任务不存在")
-        if _task_has_unresolved_publish_confirmation(conn, row):
-            raise HTTPException(status_code=409, detail="发布结果和计费预占仍在等待自动确认，暂时不能删除任务。")
         status = str(row["status"] or "")
+        now = _now()
+        conn.execute(
+            "UPDATE social_automation_tasks SET status = 'cancelled', finished_at = ?, error = ?, updated_at = ? WHERE id = ? AND status IN ('preparing', 'queued', 'running', 'need_manual')",
+            (now, "task cleared", now, task_id),
+        )
     if status in {"running", "need_manual"}:
         _force_stop_running_task(task_id)
     with db() as conn:
-        _release_task_billing_reservation(conn, row)
+        conn.execute("BEGIN IMMEDIATE")
+        current = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
+        if not current:
+            return 0
+        _release_task_billing_reservation(conn, current)
         conn.execute("DELETE FROM social_automation_logs WHERE task_id = ?", (task_id,))
         deleted = conn.execute("DELETE FROM social_automation_tasks WHERE id = ?", (task_id,)).rowcount
     wake_social_automation_worker()
@@ -3287,21 +3310,30 @@ def clear_social_tasks(*, persona_id: str = "", account_id: str = "", user_id: i
         params.append(int(user_id))
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         rows = conn.execute(f"SELECT * FROM social_automation_tasks {where}", tuple(params)).fetchall()
-    cleared = 0
+        task_ids = [str(row["id"] or "") for row in rows if str(row["id"] or "")]
+        if task_ids:
+            placeholders = ",".join("?" for _ in task_ids)
+            now = _now()
+            conn.execute(
+                f"UPDATE social_automation_tasks SET status = 'cancelled', finished_at = ?, error = ?, updated_at = ? WHERE id IN ({placeholders}) AND status IN ('preparing', 'queued', 'running', 'need_manual')",
+                (now, "tasks cleared", now, *task_ids),
+            )
     for row in rows:
         task_id = str(row["id"] or "")
-        if not task_id:
-            continue
-        with db() as conn:
-            if _task_has_unresolved_publish_confirmation(conn, row):
-                continue
         if str(row["status"] or "") in {"running", "need_manual"}:
             _force_stop_running_task(task_id)
+    cleared = 0
+    if task_ids:
         with db() as conn:
-            _release_task_billing_reservation(conn, row)
-            conn.execute("DELETE FROM social_automation_logs WHERE task_id = ?", (task_id,))
-            cleared += int(conn.execute("DELETE FROM social_automation_tasks WHERE id = ?", (task_id,)).rowcount or 0)
+            conn.execute("BEGIN IMMEDIATE")
+            placeholders = ",".join("?" for _ in task_ids)
+            current_rows = conn.execute(f"SELECT * FROM social_automation_tasks WHERE id IN ({placeholders})", tuple(task_ids)).fetchall()
+            for current in current_rows:
+                _release_task_billing_reservation(conn, current)
+            conn.execute(f"DELETE FROM social_automation_logs WHERE task_id IN ({placeholders})", tuple(task_ids))
+            cleared = int(conn.execute(f"DELETE FROM social_automation_tasks WHERE id IN ({placeholders})", tuple(task_ids)).rowcount or 0)
     wake_social_automation_worker()
     return cleared
 
@@ -3325,11 +3357,15 @@ def cancel_social_task(task_id: str, reason: str = "") -> dict[str, Any]:
             _release_task_billing_reservation(conn, row, now=now)
         if cancelled:
             _insert_log(conn, task_id, "warn", "cancel", "任务已取消，正在停止执行上下文", {"reason": clean_reason})
+        billing_statuses = _billing_reservation_statuses(conn, [row])
     _discard_ephemeral_task_secrets(task_id)
     if cancelled:
         _force_stop_running_task(task_id)
         wake_social_automation_worker()
-    return _task_public(row)
+    return _task_public(
+        row,
+        billing_reservation_status=billing_statuses.get(str(row["billing_reservation_id"] or ""), ""),
+    )
 
 
 def cancel_all_social_tasks(
@@ -3383,6 +3419,7 @@ def cancel_all_social_tasks(
             f"SELECT * FROM social_automation_tasks WHERE id IN ({placeholders})",
             tuple(task_ids),
         ).fetchall()
+        billing_statuses = _billing_reservation_statuses(conn, list(updated_rows))
 
     _discard_ephemeral_task_secrets(*task_ids)
     # Mark every task cancelled before signalling browsers so queued work cannot be claimed mid-stop.
@@ -3392,7 +3429,13 @@ def cancel_all_social_tasks(
     return {
         "cancelled_count": len(task_ids),
         "task_ids": task_ids,
-        "tasks": [_task_public(row) for row in updated_rows],
+        "tasks": [
+            _task_public(
+                row,
+                billing_reservation_status=billing_statuses.get(str(row["billing_reservation_id"] or ""), ""),
+            )
+            for row in updated_rows
+        ],
     }
 
 
@@ -3549,6 +3592,7 @@ def _publish_login_dependency_blocks_claim(conn: sqlite3.Connection, row: Any, n
 
 def _claim_next_task() -> dict[str, Any] | None:
     now = _now()
+    _recover_orphaned_publish_confirmation_tasks(now)
     _recover_orphaned_manual_task(now)
     global_concurrency = _social_worker_max_concurrency()
     with db() as conn:
@@ -3617,9 +3661,50 @@ def _claim_next_task() -> dict[str, Any] | None:
             return None
         _insert_log(conn, task_id, "info", "running", "后台执行器已领取任务", {})
         updated = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
-    public = _task_public(updated)
+        billing_statuses = _billing_reservation_statuses(conn, [updated])
+    public = _task_public(
+        updated,
+        billing_reservation_status=billing_statuses.get(str(updated["billing_reservation_id"] or ""), ""),
+    )
     public["payload"] = _loads(updated["payload_json"], {})
     return public
+
+
+def _recover_orphaned_publish_confirmation_tasks(now: int) -> None:
+    with _RUNNING_TASK_CONTROLS_LOCK:
+        running_ids = set(_RUNNING_TASK_CONTROLS.keys())
+    try:
+        recovery_seconds = int(os.getenv("SOCIAL_AUTOMATION_CONFIRMATION_RECOVERY_SECONDS", "600") or 600)
+    except (TypeError, ValueError):
+        recovery_seconds = 600
+    stale_cutoff = now - max(60, min(recovery_seconds, 3600))
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        stale_rows = conn.execute(
+            "SELECT * FROM social_automation_tasks WHERE status = 'running' AND task_type = 'publish_post' AND updated_at < ? ORDER BY updated_at ASC LIMIT 50",
+            (stale_cutoff,),
+        ).fetchall()
+        for row in stale_rows:
+            task_id = str(row["id"] or "")
+            if not task_id or task_id in running_ids:
+                continue
+            payload = _loads(row["payload_json"], {})
+            confirmation = payload.get("_publish_confirmation") if isinstance(payload, dict) else None
+            if not isinstance(confirmation, dict) or confirmation.get("phase") != "confirm_only":
+                continue
+            recovered = conn.execute(
+                "UPDATE social_automation_tasks SET status = 'queued', scheduled_at = ?, started_at = 0, finished_at = 0, error = ?, updated_at = ? WHERE id = ? AND status = 'running'",
+                (now, "confirmation worker restarted; confirmation-only check requeued", now, task_id),
+            ).rowcount
+            if recovered:
+                _insert_log(
+                    conn,
+                    task_id,
+                    "warn",
+                    "threads_publish_confirmation_recovered",
+                    "确认进程中断，已恢复为仅检查发布结果的任务，不会重复发布。",
+                    {},
+                )
 
 
 def _recover_orphaned_manual_task(now: int) -> None:
@@ -3680,6 +3765,10 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
         str(task.get("account_id") or ""),
         status,
     )
+    control["publish_confirmation_callback"] = lambda confirmation: _persist_publish_confirmation_context(
+        task_id,
+        confirmation,
+    )
     control["manual_takeover_callback"] = lambda: _persist_manual_takeover_ack(
         task_id,
         str(control.get("live_browser_session_id") or ""),
@@ -3696,6 +3785,85 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
         _discard_ephemeral_task_secrets(task_id)
         with _RUNNING_TASK_CONTROLS_LOCK:
             _RUNNING_TASK_CONTROLS.pop(task_id, None)
+
+
+def _requeue_publish_confirmation(task_id: str, exc: BaseException) -> bool:
+    now = _now()
+    try:
+        configured_max = int(os.getenv("SOCIAL_AUTOMATION_THREADS_CONFIRM_ATTEMPTS", "3") or 3)
+    except (TypeError, ValueError):
+        configured_max = 3
+    max_attempts = max(1, min(configured_max, 6))
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
+        if row is None or str(row["status"] or "") != "running":
+            return False
+        payload = _loads(row["payload_json"], {})
+        if not isinstance(payload, dict):
+            payload = {}
+        previous = payload.get("_publish_confirmation")
+        previous = previous if isinstance(previous, dict) else {}
+        supplied = getattr(exc, "confirmation", {})
+        supplied = supplied if isinstance(supplied, dict) else {}
+        confirmation = {**previous, **supplied}
+        try:
+            attempt = int(previous.get("attempt") or 0) + 1
+        except (TypeError, ValueError):
+            attempt = 1
+        confirmation.update({"phase": "confirm_only", "attempt": attempt, "max_attempts": max_attempts})
+        if attempt >= max_attempts:
+            payload["_publish_confirmation"] = confirmation
+            conn.execute(
+                "UPDATE social_automation_tasks SET payload_json = ?, updated_at = ? WHERE id = ? AND status = 'running'",
+                (json.dumps(payload, ensure_ascii=False), now, task_id),
+            )
+            with contextlib.suppress(Exception):
+                setattr(exc, "confirmation", confirmation)
+            return False
+        delay_seconds = min(300, 30 * (3 ** max(0, attempt - 1)))
+        payload["_publish_confirmation"] = confirmation
+        pending_result = {
+            "publish_submitted": True,
+            "confirmation_pending": True,
+            "retryable": False,
+            "confirmation_attempt": attempt,
+            "confirmation_max_attempts": max_attempts,
+            "next_confirmation_at": now + delay_seconds,
+            "screenshot_path": str(getattr(exc, "screenshot_path", "") or ""),
+        }
+        updated = conn.execute(
+            """
+            UPDATE social_automation_tasks
+            SET status = 'queued', scheduled_at = ?, started_at = 0, finished_at = 0,
+                payload_json = ?, result_json = ?, error = ?, updated_at = ?
+            WHERE id = ? AND status = 'running'
+            """,
+            (
+                now + delay_seconds,
+                json.dumps(payload, ensure_ascii=False),
+                json.dumps(pending_result, ensure_ascii=False),
+                str(exc),
+                now,
+                task_id,
+            ),
+        ).rowcount
+        if updated:
+            conn.execute(
+                "UPDATE social_accounts SET status = 'ready', last_login_check_at = ?, last_run_at = ?, last_error = '', updated_at = ? WHERE id = ?",
+                (now, now, now, str(row["account_id"] or "")),
+            )
+            _insert_log(
+                conn,
+                task_id,
+                "warn",
+                "threads_publish_confirmation_retry",
+                "发布已提交，稍后仅重新检查发布结果，不会重复点击发布。",
+                {"attempt": attempt, "max_attempts": max_attempts, "delay_seconds": delay_seconds},
+            )
+    if updated:
+        wake_social_automation_worker()
+    return bool(updated)
 
 
 def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, Any]) -> None:
@@ -3727,7 +3895,7 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
         _discard_ephemeral_task_secrets(task_id)
         return
     task = _apply_runtime_task_preferences(task, account, control)
-    from social_automation.runner import AutoLoginFailedError, NeedManualError, PublishConfirmationFailedError, UnsupportedActionError, run_social_task
+    from social_automation.runner import AutoLoginFailedError, NeedManualError, PublishConfirmationPendingError, UnsupportedActionError, run_social_task
 
     logger = _DbTaskLogger(task["id"])
     try:
@@ -3756,20 +3924,25 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
         if not _is_task_cancelled(str(task["id"])):
             _finish_task(task["id"], "failed", {"auto_login_failed": True, "screenshot_path": str(getattr(exc, "screenshot_path", "") or "")}, str(exc), account_status=str(getattr(exc, "status", "") or "cookie_expired"))
         return
-    except PublishConfirmationFailedError as exc:
+    except PublishConfirmationPendingError as exc:
         if not _is_task_cancelled(str(task["id"])):
+            if _requeue_publish_confirmation(str(task["id"]), exc):
+                return
             _finish_task(
                 task["id"],
                 "failed",
                 {
                     "publish_submitted": True,
                     "confirmation_failed": True,
+                    "confirmation_exhausted": True,
+                    "publish_outcome_unknown": True,
                     "retryable": False,
+                    "confirmation_attempt": int((getattr(exc, "confirmation", {}) or {}).get("attempt") or 0),
+                    "confirmation_max_attempts": int((getattr(exc, "confirmation", {}) or {}).get("max_attempts") or 0),
                     "screenshot_path": str(getattr(exc, "screenshot_path", "") or ""),
                 },
                 str(exc),
                 account_status="ready",
-                preserve_billing_reservation=True,
             )
         return
     except UnsupportedActionError as exc:
@@ -3885,14 +4058,53 @@ def _persist_running_account_login_status(task_id: str, account_id: str, status:
     return bool(updated)
 
 
+def _persist_publish_confirmation_context(task_id: str, confirmation: dict[str, Any]) -> bool:
+    clean_task_id = str(task_id or "").strip()
+    clean_confirmation = dict(confirmation or {})
+    if (
+        not clean_task_id
+        or clean_confirmation.get("phase") != "confirm_only"
+        or not str(clean_confirmation.get("profile_url") or "").strip()
+        or not isinstance(clean_confirmation.get("baseline_permalinks"), list)
+    ):
+        return False
+    now = _now()
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT payload_json FROM social_automation_tasks WHERE id = ? AND status = 'running'",
+            (clean_task_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        payload = _loads(row["payload_json"], {})
+        if not isinstance(payload, dict):
+            payload = {}
+        existing = payload.get("_publish_confirmation")
+        existing = existing if isinstance(existing, dict) else {}
+        payload["_publish_confirmation"] = {**existing, **clean_confirmation}
+        updated = conn.execute(
+            "UPDATE social_automation_tasks SET payload_json = ?, updated_at = ? WHERE id = ? AND status = 'running'",
+            (json.dumps(payload, ensure_ascii=False), now, clean_task_id),
+        ).rowcount
+        if updated:
+            _insert_log(
+                conn,
+                clean_task_id,
+                "info",
+                "threads_publish_confirmation_persisted",
+                "发布前已保存仅确认上下文，后续恢复不会重复发布。",
+                {},
+            )
+    return bool(updated)
+
+
 def _finish_task(
     task_id: str,
     status: str,
     result: dict[str, Any],
     error: str,
     account_status: str = "",
-    *,
-    preserve_billing_reservation: bool = False,
 ) -> bool:
     now = _now()
     with db() as conn:
@@ -3923,10 +4135,17 @@ def _finish_task(
             if current is not None and str(current["status"] or "") in {"failed", "cancelled"}:
                 _release_task_billing_reservation(conn, current, now=now)
             return False
+        if status == "success":
+            clean_payload = _loads(task["payload_json"], {})
+            if isinstance(clean_payload, dict) and clean_payload.pop("_publish_confirmation", None) is not None:
+                conn.execute(
+                    "UPDATE social_automation_tasks SET payload_json = ? WHERE id = ?",
+                    (json.dumps(clean_payload, ensure_ascii=False), task_id),
+                )
         reservation_id = str(task["billing_reservation_id"] or "") if "billing_reservation_id" in task.keys() else ""
         credit_cost_units = 0
         free_image_count = 0
-        if reservation_id and status != "need_manual" and not preserve_billing_reservation:
+        if reservation_id and status != "need_manual":
             if status == "success":
                 commercial_billing.settle_reservation(conn, reservation_id, actual_quantity=1, success=True, now=now)
             else:
@@ -4625,6 +4844,30 @@ def _fail_task_safely(task_id: str, exc: Exception) -> None:
         if _is_task_cancelled(task_id):
             return
         row = get_social_task(task_id)
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        confirmation = payload.get("_publish_confirmation") if isinstance(payload, dict) else None
+        if isinstance(confirmation, dict) and confirmation.get("phase") == "confirm_only":
+            from social_automation.runner import PublishConfirmationPendingError
+
+            pending = PublishConfirmationPendingError(str(exc), "", confirmation)
+            if _requeue_publish_confirmation(task_id, pending):
+                return
+            _finish_task(
+                task_id,
+                "failed",
+                {
+                    "publish_submitted": True,
+                    "confirmation_failed": True,
+                    "confirmation_exhausted": True,
+                    "publish_outcome_unknown": True,
+                    "retryable": False,
+                    "confirmation_attempt": int((pending.confirmation or {}).get("attempt") or 0),
+                    "confirmation_max_attempts": int((pending.confirmation or {}).get("max_attempts") or 0),
+                },
+                str(exc),
+                account_status="ready",
+            )
+            return
         retry_count = int(row.get("retry_count") or 0)
         max_retries = int(row.get("max_retries") or 0)
         if retry_count < max_retries:
@@ -4921,7 +5164,25 @@ def _proxy_public(row: Any, *, bound_account_ids: list[str] | None = None) -> di
     return public
 
 
-def _task_public(row: Any) -> dict[str, Any]:
+def _billing_reservation_statuses(conn: sqlite3.Connection, rows: list[Any]) -> dict[str, str]:
+    reservation_ids = list(
+        dict.fromkeys(
+            str(dict(row).get("billing_reservation_id") or "").strip()
+            for row in rows
+            if str(dict(row).get("billing_reservation_id") or "").strip()
+        )
+    )
+    if not reservation_ids:
+        return {}
+    placeholders = ",".join("?" for _ in reservation_ids)
+    status_rows = conn.execute(
+        f"SELECT id, status FROM billing_reservations WHERE id IN ({placeholders})",
+        tuple(reservation_ids),
+    ).fetchall()
+    return {str(item["id"] or ""): str(item["status"] or "") for item in status_rows}
+
+
+def _task_public(row: Any, *, billing_reservation_status: str = "") -> dict[str, Any]:
     item = dict(row)
     account_id = str(item.get("account_id") or "")
     account_username = str(item.get("account_username") or item.get("username") or "").strip()
@@ -4934,17 +5195,18 @@ def _task_public(row: Any) -> dict[str, Any]:
         account_username = account_username or str(account.get("username") or "").strip()
         account_display_name = account_display_name or str(account.get("display_name") or "").strip()
     reservation_id = str(item.get("billing_reservation_id") or "")
-    task_status = str(item.get("status") or "")
     task_result = _loads(item.get("result_json"), {})
-    confirmation_failed = isinstance(task_result, dict) and task_result.get("confirmation_failed") is True
     billing_status = "unbilled"
     if reservation_id:
-        if task_status in {"queued", "running", "need_manual"} or confirmation_failed:
-            billing_status = "held"
-        elif task_status == "success":
-            billing_status = "settled" if int(item.get("credit_cost_units") or 0) > 0 else "waived"
-        else:
-            billing_status = "released"
+        exact_status = str(billing_reservation_status or item.get("billing_reservation_status") or "").strip().lower()
+        if not exact_status:
+            try:
+                with db() as conn:
+                    status_row = conn.execute("SELECT status FROM billing_reservations WHERE id = ?", (reservation_id,)).fetchone()
+                exact_status = str(status_row["status"] or "").strip().lower() if status_row else ""
+            except Exception:
+                exact_status = ""
+        billing_status = exact_status if exact_status in {"held", "settled", "released", "waived"} else "unknown"
     return {
         "id": str(item.get("id") or ""),
         "persona_id": str(item.get("persona_id") or ""),

@@ -18,6 +18,15 @@ class SocialTaskCancellationTests(unittest.TestCase):
         self.db_path = Path(self._tmpdir.name) / "app.db"
         os.environ["APP_DB_PATH"] = str(self.db_path)
         init_db()
+        with sqlite3.connect(self.db_path) as conn:
+            created = conn.execute(
+                "INSERT INTO users(username, password_hash, is_admin, is_disabled, balance_cents, created_at, updated_at) VALUES ('task-cancel-customer', 'hash', 0, 0, 0, 1, 1)"
+            )
+            self.user_id = int(created.lastrowid)
+            conn.execute(
+                "INSERT INTO billing_wallets(user_id, credit_units, billing_mode, migrated_legacy_balance, created_at, updated_at) VALUES (?, 0, 'enforced', 0, 1, 1)",
+                (self.user_id,),
+            )
         with social_automation_api._EPHEMERAL_TASK_SECRETS_LOCK:
             social_automation_api._EPHEMERAL_TASK_SECRETS.clear()
 
@@ -36,13 +45,13 @@ class SocialTaskCancellationTests(unittest.TestCase):
             conn.execute(
                 """
                 INSERT INTO social_automation_tasks(
-                  id, persona_id, account_id, platform, task_type, priority, status,
+                  id, user_id, persona_id, account_id, platform, task_type, priority, status,
                   scheduled_at, started_at, finished_at, payload_json, result_json,
                   error, retry_count, max_retries, created_by, created_at, updated_at
-                ) VALUES (?, 'persona-1', 'account-1', 'threads', ?, 50, ?, 0, 1, 0,
+                ) VALUES (?, ?, 'persona-1', 'account-1', 'threads', ?, 50, ?, 0, 1, 0,
                           '{}', '{}', '', 0, 1, 'web', 1, 1)
                 """,
-                (task_id, task_type, status),
+                (task_id, self.user_id, task_type, status),
             )
 
     def _insert_account(self, status: str = "ready") -> None:
@@ -50,14 +59,14 @@ class SocialTaskCancellationTests(unittest.TestCase):
             conn.execute(
                 """
                 INSERT OR IGNORE INTO social_accounts(
-                  id, persona_id, platform, username, display_name, profile_dir,
+                  id, user_id, persona_id, platform, username, display_name, profile_dir,
                   status, created_at, updated_at
                 ) VALUES (
-                  'account-1', 'persona-1', 'threads', 'tester', 'Tester',
+                  'account-1', ?, 'persona-1', 'threads', 'tester', 'Tester',
                   'profiles/account-1', ?, 1, 1
                 )
                 """,
-                (status,),
+                (self.user_id, status),
             )
 
     def _status(self, task_id: str) -> str:
@@ -156,12 +165,16 @@ class SocialTaskCancellationTests(unittest.TestCase):
         self.assertEqual(account[0], "ready")
         self.assertGreater(account[1], 0)
 
-    def test_publish_confirmation_timeout_finishes_failed_without_manual_state(self):
+    def test_publish_confirmation_timeout_requeues_confirmation_without_manual_state(self):
         self._insert_account(status="cookie_expired")
         self._insert_task("publish-review", "running")
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 "UPDATE social_automation_tasks SET billing_reservation_id = 'held-confirmation' WHERE id = 'publish-review'"
+            )
+            conn.execute(
+                "INSERT INTO billing_reservations(id, user_id, ref_type, ref_id, sku, status, idempotency_key, created_at, updated_at) VALUES ('held-confirmation', ?, 'social_task', 'publish-review', 'threads_text_publish', 'held', 'confirm-test', 1, 1)",
+                (self.user_id,),
             )
         task = {
             "id": "publish-review",
@@ -176,13 +189,22 @@ class SocialTaskCancellationTests(unittest.TestCase):
             "live_browser_session_id": "",
         }
 
-        from social_automation.runner import PublishConfirmationFailedError
+        from social_automation.runner import PublishConfirmationPendingError
 
         with (
             mock.patch.object(
                 social_automation_api,
                 "_run_social_task_in_clean_thread",
-                side_effect=PublishConfirmationFailedError("publish confirmation timed out", "confirmation.png"),
+                side_effect=PublishConfirmationPendingError(
+                    "publish confirmation timed out",
+                    "confirmation.png",
+                    {
+                        "phase": "confirm_only",
+                        "profile_url": "https://www.threads.net/@tester",
+                        "baseline_permalinks": [],
+                        "caption": "hello",
+                    },
+                ),
             ),
             mock.patch.object(social_automation_api, "_release_task_billing_reservation") as release,
         ):
@@ -194,21 +216,24 @@ class SocialTaskCancellationTests(unittest.TestCase):
                 ("account-1",),
             ).fetchone()[0]
             task_status = conn.execute(
-                "SELECT status, result_json FROM social_automation_tasks WHERE id = ?",
+                "SELECT status, result_json, payload_json, scheduled_at FROM social_automation_tasks WHERE id = ?",
                 ("publish-review",),
             ).fetchone()
         self.assertEqual(account_status, "ready")
-        self.assertEqual(task_status[0], "failed")
+        self.assertEqual(task_status[0], "queued")
         result = json.loads(task_status[1])
-        self.assertTrue(result["confirmation_failed"])
+        payload = json.loads(task_status[2])
+        self.assertTrue(result["confirmation_pending"])
         self.assertFalse(result["retryable"])
+        self.assertEqual(payload["_publish_confirmation"]["attempt"], 1)
+        self.assertGreater(task_status[3], 1)
         release.assert_not_called()
         self.assertEqual(social_automation_api.get_social_task("publish-review")["billing"]["status"], "held")
         with self.assertRaises(social_automation_api.HTTPException) as raised:
             social_automation_api.retry_social_task("publish-review")
         self.assertEqual(raised.exception.status_code, 409)
 
-    def test_cleanup_preserves_held_charge_for_unconfirmed_publish(self):
+    def test_cleanup_releases_held_charge_for_terminal_unconfirmed_publish(self):
         self._insert_task("publish-held", "failed")
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
@@ -219,8 +244,10 @@ class SocialTaskCancellationTests(unittest.TestCase):
                 """
                 INSERT INTO billing_reservations(
                   id, user_id, ref_type, ref_id, sku, status, idempotency_key, created_at, updated_at
-                ) VALUES ('reservation-held', 0, 'social_task', 'publish-held', 'threads_text_publish', 'held', 'held-test', 1, 1)
+                ) VALUES ('reservation-held', ?, 'social_task', 'publish-held', 'threads_text_publish', 'held', 'held-test', 1, 1)
                 """
+                ,
+                (self.user_id,),
             )
 
         with social_automation_api.db() as conn:
@@ -230,34 +257,173 @@ class SocialTaskCancellationTests(unittest.TestCase):
             status = conn.execute(
                 "SELECT status FROM billing_reservations WHERE id = 'reservation-held'"
             ).fetchone()[0]
-        self.assertEqual(status, "held")
+        self.assertEqual(status, "released")
 
-    def test_unconfirmed_publish_cannot_be_deleted_or_refunded_through_generic_paths(self):
-        self._insert_task("publish-protected", "failed")
-        with social_automation_api.db() as conn:
-            stale_task = conn.execute(
-                "SELECT * FROM social_automation_tasks WHERE id = 'publish-protected'"
+    def test_publish_confirmation_exhaustion_fails_and_releases_reservation(self):
+        self._insert_account(status="ready")
+        self._insert_task("publish-exhausted", "running")
+        confirmation = {
+            "phase": "confirm_only",
+            "attempt": 2,
+            "max_attempts": 3,
+            "profile_url": "https://www.threads.net/@tester",
+            "baseline_permalinks": [],
+            "caption": "hello",
+        }
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE social_automation_tasks SET billing_reservation_id = 'exhausted-hold', payload_json = ? WHERE id = 'publish-exhausted'",
+                (json.dumps({"_publish_confirmation": confirmation}),),
+            )
+            conn.execute(
+                "INSERT INTO billing_reservations(id, user_id, ref_type, ref_id, sku, status, idempotency_key, created_at, updated_at) VALUES ('exhausted-hold', ?, 'social_task', 'publish-exhausted', 'threads_text_publish', 'held', 'exhausted-test', 1, 1)",
+                (self.user_id,),
+            )
+        task = {
+            "id": "publish-exhausted",
+            "account_id": "account-1",
+            "platform": "threads",
+            "task_type": "publish_post",
+            "payload": {"_publish_confirmation": confirmation},
+        }
+        control = {"cancel_event": threading.Event(), "task": dict(task), "live_browser_session_id": ""}
+        from social_automation.runner import PublishConfirmationPendingError
+
+        with mock.patch.object(
+            social_automation_api,
+            "_run_social_task_in_clean_thread",
+            side_effect=PublishConfirmationPendingError("still unconfirmed", "last.png", confirmation),
+        ):
+            social_automation_api._execute_claimed_task_with_control(task, control)
+
+        with sqlite3.connect(self.db_path) as conn:
+            task_row = conn.execute(
+                "SELECT status, result_json, payload_json FROM social_automation_tasks WHERE id = 'publish-exhausted'"
             ).fetchone()
+            reservation_status = conn.execute(
+                "SELECT status FROM billing_reservations WHERE id = 'exhausted-hold'"
+            ).fetchone()[0]
+        result = json.loads(task_row[1])
+        self.assertEqual(task_row[0], "failed")
+        self.assertTrue(result["confirmation_exhausted"])
+        self.assertTrue(result["publish_outcome_unknown"])
+        self.assertEqual(result["confirmation_attempt"], 3)
+        self.assertFalse(result["retryable"])
+        self.assertEqual(json.loads(task_row[2])["_publish_confirmation"]["attempt"], 3)
+        self.assertEqual(reservation_status, "released")
+        self.assertEqual(social_automation_api.get_social_task("publish-exhausted")["billing"]["status"], "released")
+
+    def test_task_public_uses_actual_waived_reservation_status(self):
+        self._insert_task("publish-waived", "queued")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE social_automation_tasks SET billing_reservation_id = 'waived-reservation' WHERE id = 'publish-waived'"
+            )
+            conn.execute(
+                "INSERT INTO billing_reservations(id, user_id, ref_type, ref_id, sku, status, idempotency_key, created_at, updated_at) VALUES ('waived-reservation', ?, 'social_task', 'publish-waived', 'threads_text_publish', 'waived', 'waived-test', 1, 1)",
+                (self.user_id,),
+            )
+
+        self.assertEqual(social_automation_api.get_social_task("publish-waived")["billing"]["status"], "waived")
+        listed = social_automation_api.list_social_tasks(account_id="account-1")
+        self.assertEqual(next(item for item in listed if item["id"] == "publish-waived")["billing"]["status"], "waived")
+
+    def test_successful_confirmation_removes_internal_confirmation_context(self):
+        self._insert_task("publish-confirmed", "running")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE social_automation_tasks SET payload_json = ? WHERE id = 'publish-confirmed'",
+                (json.dumps({"caption": "hello", "_publish_confirmation": {"phase": "confirm_only", "attempt": 1}}),),
+            )
+
+        self.assertTrue(social_automation_api._finish_task("publish-confirmed", "success", {"ok": True}, ""))
+        with sqlite3.connect(self.db_path) as conn:
+            payload = json.loads(conn.execute("SELECT payload_json FROM social_automation_tasks WHERE id = 'publish-confirmed'").fetchone()[0])
+        self.assertNotIn("_publish_confirmation", payload)
+
+    def test_orphaned_confirmation_only_task_is_requeued_after_worker_restart(self):
+        self._insert_task("publish-orphan", "running")
+        confirmation = {
+            "phase": "confirm_only",
+            "attempt": 1,
+            "profile_url": "https://www.threads.net/@tester",
+            "baseline_permalinks": [],
+        }
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE social_automation_tasks SET payload_json = ?, updated_at = 1 WHERE id = 'publish-orphan'",
+                (json.dumps({"_publish_confirmation": confirmation}),),
+            )
+
+        social_automation_api._recover_orphaned_publish_confirmation_tasks(1000)
+
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT status, scheduled_at, started_at FROM social_automation_tasks WHERE id = 'publish-orphan'"
+            ).fetchone()
+        self.assertEqual(row, ("queued", 1000, 0))
+
+    def test_generic_failure_after_submit_requeues_confirmation_only_payload(self):
+        self._insert_task("publish-after-click-error", "running")
+        confirmation = {
+            "phase": "confirm_only",
+            "profile_url": "https://www.threads.net/@tester",
+            "baseline_permalinks": [],
+            "caption": "hello",
+        }
+        self.assertTrue(
+            social_automation_api._persist_publish_confirmation_context(
+                "publish-after-click-error",
+                confirmation,
+            )
+        )
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("UPDATE social_automation_tasks SET max_retries = 0 WHERE id = 'publish-after-click-error'")
+
+        social_automation_api._fail_task_safely(
+            "publish-after-click-error",
+            RuntimeError("browser exited after submit"),
+        )
+
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT status, payload_json, retry_count FROM social_automation_tasks WHERE id = 'publish-after-click-error'"
+            ).fetchone()
+        self.assertEqual(row[0], "queued")
+        self.assertEqual(json.loads(row[1])["_publish_confirmation"]["phase"], "confirm_only")
+        self.assertEqual(row[2], 0)
+
+    def test_terminal_unconfirmed_publish_can_be_cleared_and_refunded(self):
+        self._insert_task("publish-protected", "failed")
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 "UPDATE social_automation_tasks SET billing_reservation_id = 'protected-hold', result_json = ? WHERE id = 'publish-protected'",
                 (json.dumps({"confirmation_failed": True, "retryable": False}),),
             )
+            conn.execute(
+                "INSERT INTO billing_reservations(id, user_id, ref_type, ref_id, sku, status, idempotency_key, created_at, updated_at) VALUES ('protected-hold', ?, 'social_task', 'publish-protected', 'threads_text_publish', 'held', 'protected-test', 1, 1)",
+                (self.user_id,),
+            )
 
-        with self.assertRaises(social_automation_api.HTTPException) as clear_error:
-            social_automation_api.clear_social_task("publish-protected")
-        self.assertEqual(clear_error.exception.status_code, 409)
-        self.assertEqual(social_automation_api.clear_social_tasks(account_id="account-1"), 0)
-        with self.assertRaises(social_automation_api.HTTPException) as delete_error:
-            social_automation_api.delete_social_account("account-1")
-        self.assertEqual(delete_error.exception.status_code, 409)
+        self.assertEqual(social_automation_api.clear_social_task("publish-protected"), 1)
+        with sqlite3.connect(self.db_path) as conn:
+            task = conn.execute("SELECT 1 FROM social_automation_tasks WHERE id = 'publish-protected'").fetchone()
+            reservation_status = conn.execute("SELECT status FROM billing_reservations WHERE id = 'protected-hold'").fetchone()[0]
+        self.assertIsNone(task)
+        self.assertEqual(reservation_status, "released")
 
-        with mock.patch.object(social_automation_api.commercial_billing, "release_reservation") as release:
-            with social_automation_api.db() as conn:
-                self.assertFalse(social_automation_api._release_task_billing_reservation(conn, stale_task))
-            social_automation_api.cancel_social_task("publish-protected")
-        release.assert_not_called()
-        self.assertEqual(self._status("publish-protected"), "failed")
+    def test_account_is_disabled_before_running_tasks_are_stopped_for_deletion(self):
+        self._insert_task("delete-running", "running")
+        observed_statuses = []
+
+        def observe_disabled(_task_id):
+            with sqlite3.connect(self.db_path) as conn:
+                observed_statuses.append(conn.execute("SELECT status FROM social_accounts WHERE id = 'account-1'").fetchone()[0])
+
+        with mock.patch.object(social_automation_api, "_force_stop_running_task", side_effect=observe_disabled):
+            self.assertEqual(social_automation_api.delete_social_account("account-1"), 1)
+
+        self.assertEqual(observed_statuses, ["disabled"])
 
     def test_manual_takeover_ack_marks_open_login_task_need_manual(self):
         self._insert_account(status="cookie_expired")
