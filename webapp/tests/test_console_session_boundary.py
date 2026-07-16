@@ -91,13 +91,49 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('class="site-account-preferences"', self.markup)
         self.assertIn('data-site-personal-controls', self.markup)
         self.assertIn('function accountPreferencesMarkup()', self.site_nav_source)
-
-    def test_publish_mode_active_buttons_use_navigation_dark_sheen_without_inset_ghosting(self):
-        self.assertIn("@keyframes vecto-publish-button-sheen", self.styles)
-        self.assertIn("background-size: 220% 100%", self.styles)
+    def test_console_actions_share_static_navigation_gradient_and_only_busy_buttons_animate(self):
+        self.assertIn("--vecto-action-static-gradient", self.styles)
+        self.assertIn("--vecto-action-running-gradient", self.styles)
+        self.assertIn("@keyframes vecto-action-running-sheen", self.styles)
+        self.assertIn('button[aria-busy="true"]', self.styles)
+        self.assertIn(':disabled:not([aria-busy="true"])', self.styles)
+        self.assertIn('--vecto-action-border: #55706e;', self.styles)
+        self.assertNotIn("#43e4c7 50%", self.styles)
+        self.assertIn("button:has(> .task-button-busy)", self.styles)
+        self.assertNotIn("vecto-publish-button-sheen", self.styles)
         active_rule = self.styles.split(".publish-mode-tabs button.is-active {", 1)[1].split("}", 1)[0]
         self.assertIn("#071112", active_rule)
         self.assertIn("box-shadow: none", active_rule)
+        self.assertIn("animation: none", active_rule)
+        self.assertIn('aria-busy="${busy ? "true" : "false"}"', self.source)
+        for marker in (
+            'id="executeSimpleFlow"',
+            "data-persona-regenerate-profile-content aria-busy=",
+            "data-browser-recommendation-refresh aria-busy=",
+            "data-persona-create-ai-keywords aria-busy=",
+            "data-persona-create-ai-submit aria-busy=",
+            "data-persona-create aria-busy=",
+            "data-persona-run-media-task aria-busy=",
+        ):
+            self.assertIn(marker, self.source)
+        self.assertIn('trigger.setAttribute("aria-busy", "true")', self.source)
+        self.assertNotIn("state.simpleFlowPendingStartedAt = Date.now();\n    renderSimpleFlowModule(moduleId);", self.source)
+        self.assertIn('state.simpleFlowPendingModule === moduleId', self.source)
+        self.assertIn('state.simpleFlowPendingModule = moduleId', self.source)
+        self.assertIn('state.simpleFlowPendingModule = ""', self.source)
+        self.assertIn('if (!isPersonaWorkspaceModule(state.activeModule)) renderSimpleFlowModule(state.activeModule);', self.source)
+
+    def test_social_task_snapshots_files_and_schedule_before_busy_rerender(self):
+        task_source = self.source.split("async function createSocialTask(", 1)[1].split("async function ", 1)[0]
+        snapshot_index = task_source.index('const mediaFiles = [')
+        rerender_index = task_source.index('renderSimpleFlowModule(state.activeModule)')
+        upload_index = task_source.index('uploadAutomationMedia(mediaFiles, messageId)')
+
+        self.assertLess(snapshot_index, rerender_index)
+        self.assertLess(rerender_index, upload_index)
+        self.assertIn('const targetUrls = $("simpleTargetUrls")?.value', task_source)
+        self.assertIn('const scheduledAt = normalizeScheduleValueForApi($("simpleScheduleAt")?.value);', task_source)
+        self.assertIn('target_urls: splitLines(targetUrls)', task_source)
 
     def test_console_header_boundary_has_no_drop_shadow(self):
         start = self.site_nav_styles.index('.site-header.is-scrolled,')
@@ -407,12 +443,12 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         message = self._css_block(".toast-message {")
         slide = self._css_block("@keyframes toastSlideIn")
 
-        self.assertIn("left: 50%;", host)
+        self.assertIn("left: auto;", host)
+        self.assertIn("right: 16px;", host)
         self.assertIn("bottom: 22px;", host)
         self.assertIn("width: min(560px, calc(100vw - 32px));", host)
-        self.assertIn("transform: translateX(-50%);", host)
+        self.assertNotIn("transform: translateX(-50%);", host)
         self.assertNotIn("top: 16px;", host)
-        self.assertNotIn("right: 16px;", host)
         self.assertIn("min-height: 64px;", message)
         self.assertIn("padding: 18px 12px 18px 20px;", message)
         self.assertIn("border: 2px solid var(--line);", message)

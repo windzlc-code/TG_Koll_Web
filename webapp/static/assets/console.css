@@ -1292,12 +1292,11 @@ textarea:focus {
 
 .publish-mode-tabs button.is-active {
   color: #ffffff;
-  background: linear-gradient(110deg, #071112 0%, #071112 46%, #102729 50%, #071112 54%, #071112 100%);
-  background-size: 220% 100%;
+  background: #071112;
   border-color: #071112;
   box-shadow: none;
   text-shadow: none;
-  animation: vecto-publish-button-sheen 760ms ease-out 1 both;
+  animation: none;
 }
 
 .publish-mode-tabs button.is-active:hover,
@@ -1307,11 +1306,6 @@ textarea:focus {
   border-color: #071112;
   box-shadow: none;
   transform: none;
-}
-
-@keyframes vecto-publish-button-sheen {
-  from { background-position: 100% 0; }
-  to { background-position: -100% 0; }
 }
 
 .publish-account-badge {
@@ -5243,7 +5237,7 @@ body.persona-touch-dragging .persona-list-card:active {
   border-radius: var(--radius);
   background: var(--panel-solid);
   box-shadow: 0 18px 42px rgba(15, 23, 42, 0.13);
-  animation: personaPreviewDockIn 180ms ease-out;
+  animation: none;
 }
 
 .persona-generated-preview-dock-head {
@@ -7654,14 +7648,14 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .toast-host {
   position: fixed;
-  left: 50%;
+  left: auto;
+  right: 16px;
   bottom: 22px;
   z-index: 9000;
   display: grid;
   gap: 8px;
   width: min(560px, calc(100vw - 32px));
   pointer-events: none;
-  transform: translateX(-50%);
 }
 
 .toast-message {
@@ -12070,6 +12064,10 @@ body.live-browser-modal-open {
   --hover-shadow: inset 0 0 0 1px rgba(10, 129, 127, 0.12), 0 0 0 3px rgba(10, 129, 127, 0.08);
   --active-shadow: inset 0 0 0 2px rgba(10, 129, 127, 0.18);
   --panel-shadow: 0 10px 30px rgba(7, 31, 31, 0.06);
+  --vecto-action-border: #071112;
+  --vecto-action-ink: #ffffff;
+  --vecto-action-static-gradient: linear-gradient(112deg, #071112 0%, #071112 34%, #123032 44%, #237c72 50%, #123032 56%, #071112 66%, #071112 100%);
+  --vecto-action-running-gradient: linear-gradient(112deg, #071112 0%, #071112 34%, #104a47 42%, #237c72 50%, #104a47 58%, #071112 66%, #071112 100%);
 }
 
 :root[data-theme="dark"] {
@@ -12094,6 +12092,9 @@ body.live-browser-modal-open {
   --hover-shadow: inset 0 0 0 1px rgba(119, 216, 195, 0.18), 0 0 0 3px rgba(119, 216, 195, 0.08);
   --active-shadow: inset 0 0 0 2px rgba(119, 216, 195, 0.22);
   --panel-shadow: 0 12px 34px rgba(0, 0, 0, 0.3);
+  --vecto-action-border: #55706e;
+  --vecto-action-static-gradient: linear-gradient(112deg, #071112 0%, #071112 32%, #163b3b 43%, #2a746d 50%, #163b3b 57%, #071112 68%, #071112 100%);
+  --vecto-action-running-gradient: linear-gradient(112deg, #071112 0%, #071112 32%, #15514d 42%, #2a746d 50%, #15514d 58%, #071112 68%, #071112 100%);
 }
 
 body.console-page {
@@ -12197,7 +12198,7 @@ body.console-page {
 }
 
 .console-page .view.is-active {
-  animation: vecto-console-enter 180ms ease-out both;
+  animation: none;
 }
 
 @keyframes vecto-console-enter {
@@ -12228,13 +12229,145 @@ body.console-page {
   }
 }
 
+/* Shared action language: static deep navigation gradient by default. */
+.console-page .console-shell :is(
+  button.primary:not(.danger),
+  .chip-button.primary:not(.danger),
+  .console-nav button.is-active,
+  .console-nav button.is-click-highlight,
+  .module-trigger.is-active,
+  .module-trigger.is-click-highlight,
+  .publish-mode-tabs button.is-active,
+  .persona-group-tabs button.is-active,
+  .persona-keyword-grid button.is-active,
+  .persona-quick-actions button.is-active:not(.danger),
+  .persona-subflow-tabs button.is-active,
+  .persona-draft-view-toggle button.is-active,
+  .persona-compose-toggle button.is-active,
+  .persona-source-toggle button.is-active,
+  .persona-media-operation-toggle button.is-active,
+  .account-browser-tabs button.is-active,
+  .account-pool-platforms button.is-active,
+  .automation-capsule-tabs button.is-active,
+  .live-browser-mode-toggle button.is-active:not(.is-pending),
+  .persona-list-actions--bulk .persona-bulk-scope button.is-active,
+  .account-pool-create-actions button,
+  button[data-persona-run-threads],
+  button[data-account-pool-run-threads],
+  button[data-persona-regenerate-profile-content],
+  button[data-browser-recommendation-refresh]
+) {
+  appearance: none;
+  color: var(--vecto-action-ink);
+  background-color: #071112;
+  background-image: var(--vecto-action-static-gradient);
+  background-size: 220% 100%;
+  background-position: 50% 0;
+  border-color: var(--vecto-action-border);
+  box-shadow: none;
+  text-shadow: none;
+  animation: none;
+  transition: background-position 320ms ease, border-color var(--motion-fast), box-shadow var(--motion-fast), transform var(--motion-fast);
+}
+
+.console-page .console-shell :is(
+  button.primary:not(.danger),
+  .chip-button.primary:not(.danger),
+  .console-nav button.is-active,
+  .console-nav button.is-click-highlight,
+  .module-trigger.is-active,
+  .module-trigger.is-click-highlight,
+  .publish-mode-tabs button.is-active,
+  .persona-group-tabs button.is-active,
+  .persona-keyword-grid button.is-active,
+  .persona-quick-actions button.is-active:not(.danger),
+  .persona-subflow-tabs button.is-active,
+  .persona-draft-view-toggle button.is-active,
+  .persona-compose-toggle button.is-active,
+  .persona-source-toggle button.is-active,
+  .persona-media-operation-toggle button.is-active,
+  .account-browser-tabs button.is-active,
+  .account-pool-platforms button.is-active,
+  .automation-capsule-tabs button.is-active,
+  .live-browser-mode-toggle button.is-active:not(.is-pending),
+  .persona-list-actions--bulk .persona-bulk-scope button.is-active,
+  .account-pool-create-actions button,
+  button[data-persona-run-threads],
+  button[data-account-pool-run-threads],
+  button[data-persona-regenerate-profile-content],
+  button[data-browser-recommendation-refresh]
+) :is(span, small) {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.console-page .console-shell :is(
+  button.primary:not(.danger),
+  .chip-button.primary:not(.danger),
+  .publish-mode-tabs button.is-active,
+  .persona-group-tabs button.is-active,
+  .persona-keyword-grid button.is-active,
+  .persona-quick-actions button.is-active:not(.danger),
+  .persona-subflow-tabs button.is-active,
+  .persona-draft-view-toggle button.is-active,
+  .persona-compose-toggle button.is-active,
+  .persona-source-toggle button.is-active,
+  .persona-media-operation-toggle button.is-active,
+  .account-browser-tabs button.is-active,
+  .account-pool-platforms button.is-active,
+  .automation-capsule-tabs button.is-active,
+  .account-pool-create-actions button,
+  button[data-persona-run-threads],
+  button[data-account-pool-run-threads],
+  button[data-persona-regenerate-profile-content],
+  button[data-browser-recommendation-refresh]
+):hover:not(:disabled) {
+  color: var(--vecto-action-ink);
+  background-position: 43% 0;
+  border-color: #2a9184;
+  box-shadow: 0 0 0 3px rgba(35, 124, 114, 0.16);
+}
+
+.console-page .console-shell :is(
+  button.primary:not(.danger),
+  .chip-button.primary:not(.danger),
+  button[data-persona-run-threads],
+  button[data-account-pool-run-threads],
+  button[data-persona-regenerate-profile-content],
+  button[data-browser-recommendation-refresh]
+):disabled:not([aria-busy="true"]) {
+  opacity: 0.46;
+  cursor: not-allowed;
+  box-shadow: none;
+  filter: saturate(0.62);
+}
+
+/* Continuous sheen is reserved for real long-running button states. */
+.console-page .console-shell button[aria-busy="true"]:not(.danger),
+.console-page .console-shell button:has(> .task-button-busy):not(.danger) {
+  color: #ffffff !important;
+  background-color: #071112 !important;
+  background-image: var(--vecto-action-running-gradient) !important;
+  background-size: 240% 100% !important;
+  border-color: #2aa994 !important;
+  box-shadow: 0 0 0 3px rgba(67, 228, 199, 0.18) !important;
+  opacity: 1 !important;
+  cursor: progress;
+  animation: vecto-action-running-sheen 1.25s linear infinite !important;
+}
+
+@keyframes vecto-action-running-sheen {
+  from { background-position: 120% 0; }
+  to { background-position: -120% 0; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .console-page .view.is-active {
     animation: none;
   }
 
-  .publish-mode-tabs button.is-active {
-    animation: none;
+  .console-page .console-shell button[aria-busy="true"]:not(.danger),
+  .console-page .console-shell button:has(> .task-button-busy):not(.danger) {
+    animation: none !important;
     background-position: 50% 0;
   }
 }

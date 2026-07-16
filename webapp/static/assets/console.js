@@ -280,6 +280,9 @@ const state = {
   },
   preferredAccountId: "",
   simpleBranches: {},
+  simpleFlowPending: false,
+  simpleFlowPendingModule: "",
+  simpleFlowPendingStartedAt: 0,
   publishFiles: [],
   socialFiles: [],
   tasks: [],
@@ -474,12 +477,21 @@ function consoleUserId(value) {
 }
 
 function maskConsoleForIdentityRevalidation() {
-  document.documentElement.hidden = true;
+  // Keep the current layout mounted while /api/me is checked. Setting
+  // `hidden` on <html> removes the whole document from layout, which makes
+  // the browser clamp scrollY to 0 and produces a visible white flash.
+  const root = document.documentElement;
+  if (!root) return;
+  if (root.dataset) root.dataset.consoleIdentityChecking = "true";
+  else root.hidden = true;
 }
 
 function unmaskConsoleAfterIdentityRevalidation() {
   if (consoleBoundaryNavigationActive) return;
-  document.documentElement.hidden = false;
+  const root = document.documentElement;
+  if (!root) return;
+  if (root.dataset) delete root.dataset.consoleIdentityChecking;
+  else root.hidden = false;
 }
 
 function consoleBootstrapUserId() {
@@ -4567,6 +4579,9 @@ function syncPersonaDashboardStyles(view) {
 }
 
 function setView(view) {
+  const scrollSnapshot = snapshotConsoleScrollState();
+  const layoutLocks = captureConsoleLayoutLocks();
+  try {
   if (state.liveBrowserExpandedSessionId) closeLiveBrowserLargeModal({ restoreFocus: false });
   clearAccountPasswordRevealState();
   state.personaAccountEditingIds = {};
@@ -4606,6 +4621,10 @@ function setView(view) {
   syncTaskQueueAutoRefresh();
   syncAccountStatusAutoRefresh();
   setMobileNavOpen(false);
+  } finally {
+    restoreConsoleScrollState(scrollSnapshot);
+    releaseConsoleLayoutLocks(layoutLocks);
+  }
 }
 
 function syncTaskQueueAutoRefresh() {
@@ -4700,6 +4719,29 @@ function snapshotConsoleScrollState() {
   };
 }
 
+function captureConsoleLayoutLocks() {
+  return [$('moduleBody'), $('personaDetail')]
+    .filter(Boolean)
+    .map((node) => {
+      const height = Math.ceil(node.getBoundingClientRect().height || 0);
+      if (height <= 0) return null;
+      const previous = node.style.minHeight;
+      node.style.minHeight = `${Math.max(height, node.offsetHeight || 0)}px`;
+      return { node, previous };
+    })
+    .filter(Boolean);
+}
+
+function releaseConsoleLayoutLocks(locks = []) {
+  if (!locks.length) return;
+  const release = () => {
+    locks.forEach(({ node, previous }) => {
+      if (node?.isConnected) node.style.minHeight = previous;
+    });
+  };
+  window.requestAnimationFrame(() => window.requestAnimationFrame(release));
+}
+
 function restoreConsoleScrollState(snapshot) {
   if (!snapshot) return;
   const apply = () => {
@@ -4753,10 +4795,12 @@ async function confirmDangerAction(message, { title = "确认删除", confirmTex
 
 function withConsoleScrollPreserved(callback) {
   const snapshot = snapshotConsoleScrollState();
+  const layoutLocks = captureConsoleLayoutLocks();
   try {
     return callback();
   } finally {
     restoreConsoleScrollState(snapshot);
+    releaseConsoleLayoutLocks(layoutLocks);
   }
 }
 
@@ -6331,7 +6375,7 @@ function renderPersonaSettingsPanelV2(persona, account, profile, step) {
             </label>
             <div class="row-actions">
               <button type="button" class="primary" data-persona-save-profile ${isProfileRegenEditing ? "disabled" : ""}>保存资料</button>
-              <button type="button" data-persona-regenerate-profile-content ${state.personaCreateBusy?.profileContent ? "disabled" : ""}>${state.personaCreateBusy?.profileContent ? "正在生成..." : (isProfileRegenEditing ? "确认生成" : "AI 重新生成")}</button>
+              <button type="button" data-persona-regenerate-profile-content aria-busy="${state.personaCreateBusy?.profileContent ? "true" : "false"}" ${state.personaCreateBusy?.profileContent ? "disabled" : ""}>${state.personaCreateBusy?.profileContent ? "正在生成..." : (isProfileRegenEditing ? "确认生成" : "AI 重新生成")}</button>
             </div>
           </section>
           <aside class="persona-profile-image-side">
@@ -6898,7 +6942,7 @@ function renderUnifiedAutomationModule() {
         ` : ""}
         ${personaThreadsStrategyDetail(strategyGroup)}
         <div class="row-actions">
-          <button type="button" data-persona-run-threads="${currentStep === "reply_hot" ? "reply_hot" : "reply_comment"}" ${selectedAccount && !replyBusy ? "" : "disabled"}>${replyBusy ? renderBusyButtonContent("自动回复执行中", true, replyBusyStartedAt) : "提交自动回复任务"}</button>
+          <button type="button" data-persona-run-threads="${currentStep === "reply_hot" ? "reply_hot" : "reply_comment"}" aria-busy="${replyBusy ? "true" : "false"}" ${selectedAccount && !replyBusy ? "" : "disabled"}>${replyBusy ? renderBusyButtonContent("自动回复执行中", true, replyBusyStartedAt) : "提交自动回复任务"}</button>
         </div>
       </div>`;
   } else {
@@ -6928,7 +6972,7 @@ function renderUnifiedAutomationModule() {
         ` : ""}
         ${personaThreadsStrategyDetail("threads_warmup")}
         <div class="row-actions">
-          <button type="button" data-persona-run-threads="warmup" ${selectedAccount && !warmupBusy ? "" : "disabled"}>${warmupBusy ? renderBusyButtonContent("养号执行中", true, warmupBusyStartedAt) : "提交养号任务"}</button>
+          <button type="button" data-persona-run-threads="warmup" aria-busy="${warmupBusy ? "true" : "false"}" ${selectedAccount && !warmupBusy ? "" : "disabled"}>${warmupBusy ? renderBusyButtonContent("养号执行中", true, warmupBusyStartedAt) : "提交养号任务"}</button>
         </div>
       </div>`;
   }
@@ -7416,6 +7460,21 @@ function renderPublishSourceActions(persona = selectedPersona(), source = state.
     </div>`;
 }
 
+function renderPublishPreviewCard(activePost, sourceRows = [], persona = selectedPersona()) {
+  const activeMediaItems = activePost
+    ? personaPublishPostMediaItems(String(persona?.id || ""), activePost)
+    : [];
+  return `
+    <article class="publish-preview-card">
+      <div class="publish-preview-card-head">
+        <strong>${esc(activePost ? personaDraftDisplayTitleForPost(activePost, sourceRows) : "待发布内容")}</strong>
+        ${renderMediaTypeBadge(activeMediaItems)}
+      </div>
+      <p>${esc(String(activePost?.content || "").trim() || "当前内容为空。")}</p>
+      ${renderPublishPreviewMedia(activeMediaItems)}
+    </article>`;
+}
+
 function renderPublishPostSelectionList(persona = selectedPersona(), source = state.publishContentSource) {
   const cleanSource = normalizePublishContentSource(source);
   if (cleanSource === "custom") {
@@ -7468,7 +7527,6 @@ function renderPublishContentPreview(persona = selectedPersona(), source = state
   const sourceRows = publishSourceRows(persona, cleanSource);
   const selectedPosts = selectedPublishPosts(persona, cleanSource);
   const activePost = activePublishPreviewPost(selectedPosts);
-  const activeMediaItems = activePost ? personaPublishPostMediaItems(String(persona?.id || ""), activePost) : [];
   return `
     <section class="publish-content-preview">
       <div class="publish-panel-head">
@@ -7496,14 +7554,7 @@ function renderPublishContentPreview(persona = selectedPersona(), source = state
                 </button>`;
             }).join("")}
           </div>
-          <article class="publish-preview-card">
-            <div class="publish-preview-card-head">
-              <strong>${esc(activePost ? personaDraftDisplayTitleForPost(activePost, sourceRows) : "待发布内容")}</strong>
-              ${renderMediaTypeBadge(activeMediaItems)}
-            </div>
-            <p>${esc(String(activePost?.content || "").trim() || "当前内容为空。")}</p>
-            ${renderPublishPreviewMedia(activeMediaItems)}
-          </article>
+          ${renderPublishPreviewCard(activePost, sourceRows, persona)}
         </div>
       ` : `<div class="empty-state">请先在左侧选择要发布的内容。</div>`}
       <input id="simpleContent" type="hidden" value="${esc(activePost?.content || "")}" />
@@ -8045,7 +8096,9 @@ function renderSimpleFlowModule(moduleId) {
   }
   const publishModeForAction = moduleId === "publishing" ? normalizedPublishMode(branch) : "";
   const actionLabel = moduleId === "queue" ? "打开任务队列" : (moduleId === "publishing" && publishModeForAction === "matrix_start" ? "提交矩阵发布" : "确认执行");
-  const actionHtml = moduleId === "automation" || publishModeForAction === "publish_history" ? "" : `<div class="command-actions ${moduleId === "publishing" ? "publish-command-actions" : ""}"><button id="executeSimpleFlow" type="button" class="primary">${esc(actionLabel)}</button></div>`;
+  const actionBusy = Boolean(state.simpleFlowPending && state.simpleFlowPendingModule === moduleId);
+  const actionBlocked = Boolean(state.simpleFlowPending && !actionBusy);
+  const actionHtml = moduleId === "automation" || publishModeForAction === "publish_history" ? "" : `<div class="command-actions ${moduleId === "publishing" ? "publish-command-actions" : ""}"><button id="executeSimpleFlow" type="button" class="primary" aria-busy="${actionBusy ? "true" : "false"}" ${actionBusy || actionBlocked ? "disabled" : ""}>${actionBusy ? renderBusyButtonContent(`${actionLabel}中`, true, state.simpleFlowPendingStartedAt) : (actionBlocked ? "其他任务执行中" : esc(actionLabel))}</button></div>`;
   $("moduleBody").innerHTML = `
     ${body}
     ${actionHtml}
@@ -8068,10 +8121,31 @@ function renderSimpleFlowModule(moduleId) {
       renderSimpleFlowModule("publishing");
     });
   }
-  if ($("executeSimpleFlow")) $("executeSimpleFlow").addEventListener("click", () => executeSimpleFlow().catch((error) => showMsg("commandMsg", error.detail || error.message || "执行失败", false, {
-    key: error?.toastKey || undefined,
-    kind: "failed",
-  })));
+  if ($("executeSimpleFlow")) $("executeSimpleFlow").addEventListener("click", async () => {
+    if (state.simpleFlowPending) return;
+    state.simpleFlowPending = true;
+    state.simpleFlowPendingModule = moduleId;
+    state.simpleFlowPendingStartedAt = Date.now();
+    const trigger = $("executeSimpleFlow");
+    if (trigger) {
+      trigger.disabled = true;
+      trigger.setAttribute("aria-busy", "true");
+      trigger.innerHTML = renderBusyButtonContent(`${actionLabel}中`, true, state.simpleFlowPendingStartedAt);
+    }
+    try {
+      await executeSimpleFlow();
+    } catch (error) {
+      showMsg("commandMsg", error.detail || error.message || "执行失败", false, {
+        key: error?.toastKey || undefined,
+        kind: "failed",
+      });
+    } finally {
+      state.simpleFlowPending = false;
+      state.simpleFlowPendingModule = "";
+      state.simpleFlowPendingStartedAt = 0;
+      if (!isPersonaWorkspaceModule(state.activeModule)) renderSimpleFlowModule(state.activeModule);
+    }
+  });
   });
 }
 
@@ -8221,7 +8295,10 @@ function bindSimpleFlowInputs(moduleId) {
     document.querySelectorAll("[data-publish-preview-post]").forEach((node) => {
       node.addEventListener("click", () => {
         state.publishPreviewPostId = String(node.dataset.publishPreviewPost || "").trim();
-        renderSimpleFlowModule("publishing");
+        // Preview tabs only change the active post. Keep the surrounding
+        // publish workspace and its scroll containers mounted to avoid a
+        // full module repaint and the resulting scroll jump/white flash.
+        if (!syncPublishPreviewSelectionDom()) renderSimpleFlowModule("publishing");
       });
     });
     document.querySelectorAll("[data-publish-history-card]").forEach((node) => {
@@ -9810,8 +9887,8 @@ function renderBrowserRecommendationCard() {
           <strong>${esc(loading && !state.browserRecommendation ? "正在检测环境" : browserResourceLevelLabel(recommendation.resource_level))}</strong>
         </div>
         <div class="browser-recommendation-actions">
-          <button type="button" data-browser-recommendation-refresh ${loading ? "disabled" : ""}>${state.browserRecommendationRefreshing ? "检测中" : "重新检测"}</button>
-          <button type="button" class="primary" data-browser-auto-configure ${state.browserAutoConfiguring || loading ? "disabled" : ""}>${state.browserAutoConfiguring ? "配置中" : "一键配置"}</button>
+          <button type="button" data-browser-recommendation-refresh aria-busy="${state.browserRecommendationRefreshing ? "true" : "false"}" ${loading ? "disabled" : ""}>${state.browserRecommendationRefreshing ? "检测中" : "重新检测"}</button>
+          <button type="button" class="primary" data-browser-auto-configure aria-busy="${state.browserAutoConfiguring ? "true" : "false"}" ${state.browserAutoConfiguring || loading ? "disabled" : ""}>${state.browserAutoConfiguring ? "配置中" : "一键配置"}</button>
         </div>
       </div>
       <p>${esc(recommendation.summary || (loading ? "正在评估当前设备可用资源。" : "检测后会给出适合当前环境的浏览器策略。"))}</p>
@@ -9821,6 +9898,26 @@ function renderBrowserRecommendationCard() {
       ${reasons.length ? `<ul>${reasons.map((reason) => `<li>${esc(typeof reason === "string" ? reason : reason?.summary || reason?.message || "")}</li>`).join("")}</ul>` : ""}
     </article>
   `;
+}
+
+function syncPublishPreviewSelectionDom() {
+  const persona = selectedPersona();
+  const source = normalizePublishContentSource();
+  if (!persona || source === "custom") return false;
+  const sourceRows = publishSourceRows(persona, source);
+  const selectedPosts = selectedPublishPosts(persona, source);
+  const activePost = activePublishPreviewPost(selectedPosts);
+  document.querySelectorAll("[data-publish-preview-post]").forEach((node) => {
+    const active = String(node.dataset.publishPreviewPost || "") === String(activePost?.id || "");
+    node.classList.toggle("is-active", active);
+    node.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+  const card = document.querySelector(".publish-preview-card");
+  if (card) card.outerHTML = renderPublishPreviewCard(activePost, sourceRows, persona);
+  const content = $("simpleContent");
+  if (content) content.value = String(activePost?.content || "");
+  renderConfirmSummary();
+  return true;
 }
 
 function renderConsoleSettingsPage() {
@@ -14153,7 +14250,7 @@ function renderPersonaCreateWorkbench() {
         </label>
         ${createState.aiStep === "input" ? `
           <div class="row-actions">
-            <button type="button" class="primary" data-persona-create-ai-keywords ${anyCreateBusy ? "disabled" : ""}>${aiKeywordsBusy ? "正在提炼关键词..." : (anyCreateBusy ? `${busyLabel}中` : "下一步：提炼关键词")}</button>
+            <button type="button" class="primary" data-persona-create-ai-keywords aria-busy="${aiKeywordsBusy ? "true" : "false"}" ${anyCreateBusy ? "disabled" : ""}>${aiKeywordsBusy ? "正在提炼关键词..." : (anyCreateBusy ? `${busyLabel}中` : "下一步：提炼关键词")}</button>
             ${aiKeywordsBusy ? `<button type="button" data-persona-create-ai-cancel-keywords>取消</button>` : ""}
           </div>
         ` : `
@@ -14171,7 +14268,7 @@ function renderPersonaCreateWorkbench() {
             <div class="persona-create-actions">
               <button type="button" data-persona-create-ai-back ${aiCreateBusy ? "disabled" : ""}>返回修改提示词</button>
               <button type="button" data-persona-create-ai-clear ${aiSelectedKeywords.length && !aiCreateBusy ? "" : "disabled"}>清空选择</button>
-              <button type="button" class="primary" data-persona-create-ai-submit ${anyCreateBusy ? "disabled" : ""}>${aiCreateBusy ? "正在生成人设..." : (anyCreateBusy ? `${busyLabel}中` : "确认并生成人设")}</button>
+              <button type="button" class="primary" data-persona-create-ai-submit aria-busy="${aiCreateBusy ? "true" : "false"}" ${anyCreateBusy ? "disabled" : ""}>${aiCreateBusy ? "正在生成人设..." : (anyCreateBusy ? `${busyLabel}中` : "确认并生成人设")}</button>
             </div>
           </div>
           ${resultMarkup}
@@ -14184,7 +14281,7 @@ function renderPersonaCreateWorkbench() {
           <textarea id="personaCreateContent" rows="8" placeholder="填写人设的背景、内容方向和说话方式。">${esc(createState.manualContent || "")}</textarea>
         </label>
         <div class="row-actions">
-          <button type="button" class="primary" data-persona-create ${anyCreateBusy ? "disabled" : ""}>${manualBusy ? "正在创建人设..." : (anyCreateBusy ? `${busyLabel}中` : "直接创建人设")}</button>
+          <button type="button" class="primary" data-persona-create aria-busy="${manualBusy ? "true" : "false"}" ${anyCreateBusy ? "disabled" : ""}>${manualBusy ? "正在创建人设..." : (anyCreateBusy ? `${busyLabel}中` : "直接创建人设")}</button>
         </div>
       `}
     </div>
@@ -14657,6 +14754,7 @@ function selectGeneratedPreviewPost(postId) {
 
 function renderPersonaDetail() {
   const scrollSnapshot = snapshotConsoleScrollState();
+  const layoutLocks = captureConsoleLayoutLocks();
   try {
   snapshotPersonaCurrentForm();
   const persona = selectedPersona();
@@ -14733,6 +14831,7 @@ function renderPersonaDetail() {
   state.renderedPersonaId = String(persona.id || "");
   } finally {
     restoreConsoleScrollState(scrollSnapshot);
+    releaseConsoleLayoutLocks(layoutLocks);
   }
 }
 
@@ -14968,7 +15067,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
                   hint: mediaMeta.files || "拖动任务需要的素材到这里，或点击选择。",
                 }) : ""}
                 <div class="row-actions">
-                  <button type="button" class="primary" data-persona-run-media-task ${mediaBusy ? "disabled" : ""}>${mediaBusy ? "配图任务执行中" : "生成预览"}</button>
+                  <button type="button" class="primary" data-persona-run-media-task aria-busy="${mediaBusy ? "true" : "false"}" ${mediaBusy ? "disabled" : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, actionLockStartedAt("media_task", persona.id, post.id, currentTaskType)) : "生成预览"}</button>
                 </div>
               </div>
               <div class="persona-inline-panel persona-inline-panel--nested">
@@ -15763,7 +15862,7 @@ function renderAccountPoolAutomationPanel(selectedAccount) {
         ` : ""}
         ${personaThreadsStrategyDetail(strategyGroup)}
         <div class="row-actions">
-          <button type="button" data-account-pool-run-threads="${esc(mode)}" ${busy ? "disabled" : ""}>${busy ? renderBusyButtonContent("自动回复执行中", true, busyStartedAt) : "提交自动回复任务"}</button>
+          <button type="button" data-account-pool-run-threads="${esc(mode)}" aria-busy="${busy ? "true" : "false"}" ${busy ? "disabled" : ""}>${busy ? renderBusyButtonContent("自动回复执行中", true, busyStartedAt) : "提交自动回复任务"}</button>
         </div>
       </div>`;
   } else {
@@ -15794,7 +15893,7 @@ function renderAccountPoolAutomationPanel(selectedAccount) {
         ` : ""}
         ${personaThreadsStrategyDetail("threads_warmup")}
         <div class="row-actions">
-          <button type="button" data-account-pool-run-threads="warmup" ${busy ? "disabled" : ""}>${busy ? renderBusyButtonContent("养号执行中", true, busyStartedAt) : "提交养号任务"}</button>
+          <button type="button" data-account-pool-run-threads="warmup" aria-busy="${busy ? "true" : "false"}" ${busy ? "disabled" : ""}>${busy ? renderBusyButtonContent("养号执行中", true, busyStartedAt) : "提交养号任务"}</button>
         </div>
       </div>`;
   }
@@ -15875,7 +15974,7 @@ function renderAccountPoolAutomationPanel(selectedAccount) {
           <textarea id="accountPoolAutoReplyText" rows="3" placeholder="留空则按当前人设自动生成。"></textarea>
         </label>
         <div class="row-actions">
-          <button type="button" data-account-pool-run-threads="${esc(mode)}" ${busy ? "disabled" : ""}>${busy ? renderBusyButtonContent("任务执行中", true, busyStartedAt) : "提交自动化任务"}</button>
+          <button type="button" data-account-pool-run-threads="${esc(mode)}" aria-busy="${busy ? "true" : "false"}" ${busy ? "disabled" : ""}>${busy ? renderBusyButtonContent("任务执行中", true, busyStartedAt) : "提交自动化任务"}</button>
         </div>
       </div>`;
   } else {
@@ -15903,7 +16002,7 @@ function renderAccountPoolAutomationPanel(selectedAccount) {
           <textarea id="accountPoolAutoReplyText" rows="3" placeholder="可选，多条换行。留空则按人设自动生成。"></textarea>
         </label>
         <div class="row-actions">
-          <button type="button" data-account-pool-run-threads="warmup" ${busy ? "disabled" : ""}>${busy ? renderBusyButtonContent("养号执行中", true, busyStartedAt) : "提交养号任务"}</button>
+          <button type="button" data-account-pool-run-threads="warmup" aria-busy="${busy ? "true" : "false"}" ${busy ? "disabled" : ""}>${busy ? renderBusyButtonContent("养号执行中", true, busyStartedAt) : "提交养号任务"}</button>
         </div>
       </div>`;
   }
@@ -16003,7 +16102,7 @@ function renderAccountPoolAutomationPanel(selectedAccount) {
           </label>
         ` : accountPoolStrategyParamSummary(strategyGroup)}
         <div class="row-actions">
-          <button type="button" data-account-pool-run-threads="${esc(mode)}" ${busy ? "disabled" : ""}>${busy ? "任务执行中" : "提交自动化任务"}</button>
+          <button type="button" data-account-pool-run-threads="${esc(mode)}" aria-busy="${busy ? "true" : "false"}" ${busy ? "disabled" : ""}>${busy ? "任务执行中" : "提交自动化任务"}</button>
         </div>
       </div>`;
   } else {
@@ -16033,7 +16132,7 @@ function renderAccountPoolAutomationPanel(selectedAccount) {
           </label>
         ` : accountPoolStrategyParamSummary("threads_warmup")}
         <div class="row-actions">
-          <button type="button" data-account-pool-run-threads="warmup" ${busy ? "disabled" : ""}>${busy ? "养号执行中" : "提交养号任务"}</button>
+          <button type="button" data-account-pool-run-threads="warmup" aria-busy="${busy ? "true" : "false"}" ${busy ? "disabled" : ""}>${busy ? "养号执行中" : "提交养号任务"}</button>
         </div>
       </div>`;
   }
@@ -17266,20 +17365,25 @@ function renderSocialAccounts() {
   const grid = $("accountGrid");
   renderProxyPool();
   if (state.accountBrowserPanel === "browsers") renderLiveBrowserSessions();
-  else $("liveBrowserSessions")?.replaceChildren();
   if (!grid) return;
   grid.innerHTML = renderAccountPool();
   });
 }
 
 function setAccountBrowserPanel(panel = "accounts") {
+  const scrollSnapshot = snapshotConsoleScrollState();
+  const layoutLocks = captureConsoleLayoutLocks();
+  try {
   const normalized = ["accounts", "proxies", "browsers"].includes(panel) ? panel : "accounts";
   if (normalized !== "accounts") resetAccountPoolCreateForm();
   state.accountBrowserPanel = normalized;
   syncAccountBrowserPanel();
   if ($("moduleMenu")) syncModuleMenuState();
   if (normalized === "browsers") renderLiveBrowserSessions();
-  else $("liveBrowserSessions")?.replaceChildren();
+  } finally {
+    restoreConsoleScrollState(scrollSnapshot);
+    releaseConsoleLayoutLocks(layoutLocks);
+  }
 }
 
 function syncAccountBrowserPanel() {
@@ -17389,7 +17493,10 @@ function liveBrowserSessionId(session) {
 
 function liveBrowserSessionStructureKey(session) {
   return JSON.stringify([
-    liveBrowserSessionUrl(session),
+    // The public Kasm/noVNC URL is session-scoped. Query/path tokens can be
+    // refreshed by polling, but rebuilding the card for those changes
+    // destroys the iframe and resets the remote page scroll position.
+    liveBrowserSessionId(session),
     Math.max(1, Number(session?.width || 1280)),
     Math.max(1, Number(session?.height || 720)),
   ]);
@@ -18256,6 +18363,12 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
   }
   const content = $("socialContent")?.value.trim() || $("simpleContent")?.value.trim() || "";
   const targetUrl = $("socialTargetUrl")?.value.trim() || $("simpleTargetUrl")?.value.trim() || "";
+  const targetUrls = $("simpleTargetUrls")?.value || $("socialTargetUrls")?.value || "";
+  const scheduledAt = normalizeScheduleValueForApi($("simpleScheduleAt")?.value);
+  const mediaFiles = [
+    ...filesFromInput("simpleMediaFiles"),
+    ...filesFromInput("socialMediaFiles"),
+  ];
   const loginWaitSeconds = taskType === "open_login" ? 3600 : 180;
   let mediaPaths = [];
   setActionLocked(lockParts, true);
@@ -18263,10 +18376,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
   renderSocialAccounts();
   if (taskType === "publish_post") {
     try {
-      mediaPaths = await uploadAutomationMedia([
-        ...filesFromInput("simpleMediaFiles"),
-        ...filesFromInput("socialMediaFiles"),
-      ], messageId);
+      mediaPaths = await uploadAutomationMedia(mediaFiles, messageId);
       if (platform === "instagram" && mediaPaths.length === 0) {
         showMsg(messageId, "Instagram 发布至少需要上传一份媒体素材。", false);
         return;
@@ -18287,7 +18397,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
         username: taskType === "browse_profile" ? targetUrl : "",
         auto_submit: taskType === "open_login" ? Boolean(selected?.login_password_configured) : undefined,
         media_paths: mediaPaths,
-        target_urls: splitLines($("simpleTargetUrls")?.value || $("socialTargetUrls")?.value || ""),
+        target_urls: splitLines(targetUrls),
         login_wait_seconds: loginWaitSeconds,
         reply_templates: splitLines(content),
       });
@@ -18295,7 +18405,6 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
         ...defaultPayloadForTask(taskType),
         ...userPayload,
       });
-      const scheduledAt = normalizeScheduleValueForApi($("simpleScheduleAt")?.value);
       const result = await api("/api/persona_dashboard/automation/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -18344,7 +18453,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
       username: taskType === "browse_profile" ? targetUrl : "",
       auto_submit: taskType === "open_login" ? Boolean(selected?.login_password_configured) : undefined,
       media_paths: mediaPaths,
-      target_urls: splitLines($("simpleTargetUrls")?.value || $("socialTargetUrls")?.value || ""),
+      target_urls: splitLines(targetUrls),
       login_wait_seconds: loginWaitSeconds,
       reply_templates: splitLines(content),
     });
@@ -18352,7 +18461,6 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
       ...defaultPayloadForTask(taskType),
       ...userPayload,
     });
-    const scheduledAt = normalizeScheduleValueForApi($("simpleScheduleAt")?.value);
     const result = await api("/api/persona_dashboard/automation/tasks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
