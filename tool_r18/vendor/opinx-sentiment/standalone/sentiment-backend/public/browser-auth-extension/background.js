@@ -445,7 +445,10 @@ async function syncProfileCookies(profile, options = {}) {
     const nextBase = await apiBase();
     const response = await fetch(`${nextBase}/api/sentiment/browser-auth/cookies`, {
       method: "POST",
-      credentials: "include",
+      // This endpoint is authenticated by the extension token. Do not send
+      // the console's admin/session cookies, otherwise the server's CSRF
+      // guard correctly rejects the cross-origin write.
+      credentials: "omit",
       headers: {
         "Content-Type": "application/json",
         "x-sentiment-browser-auth": nextToken,
