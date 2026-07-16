@@ -86,6 +86,23 @@ class _ThreadsErrorPage:
         return _LoginStateLocator(visible=("aria-label" in selector))
 
 
+class _InstagramRiskyContactPage:
+    def __init__(self, url="https://www.instagram.com/accounts/update_risky_contactpoint/?challenge_context=secure-account"):
+        self.url = url
+        self.context = _CookieContext(
+            [{"name": "sessionid", "value": "active-session", "domain": ".instagram.com"}]
+        )
+        self.body = _LoginStateLocator(
+            text="Your email may not be secure. Update email address to secure your account.",
+            visible=True,
+        )
+
+    def locator(self, selector):
+        if selector == "body":
+            return self.body
+        return _LoginStateLocator(visible=False)
+
+
 class _CookieContext:
     def __init__(self, cookies):
         self._cookies = cookies
@@ -121,6 +138,33 @@ class _RecordingLogger:
 
 
 class RunnerPublishSafetyTests(unittest.TestCase):
+    def test_risky_contactpoint_page_requires_immediate_manual_verification(self):
+        page = _InstagramRiskyContactPage()
+
+        status = runner._detect_instagram_login_state(page)
+
+        self.assertEqual(status["status"], "need_verification")
+        self.assertEqual(status["url"], page.url)
+
+    def test_risky_contactpoint_query_is_a_verification_url(self):
+        self.assertTrue(
+            runner._is_verification_url(
+                "https://www.instagram.com/accounts/update_risky_contactpoint/"
+            )
+        )
+
+    def test_threads_delegation_preserves_risky_contactpoint_verification(self):
+        status = runner._detect_platform_login_state(_InstagramRiskyContactPage(), "threads")
+
+        self.assertEqual(status["status"], "need_verification")
+
+    def test_risky_contactpoint_text_requires_verification_on_another_instagram_url(self):
+        page = _InstagramRiskyContactPage("https://www.instagram.com/accounts/edit/")
+
+        status = runner._detect_instagram_login_state(page)
+
+        self.assertEqual(status["status"], "need_verification")
+
     def test_publish_reports_ready_login_before_running_action(self):
         page = mock.Mock()
         context = mock.Mock()

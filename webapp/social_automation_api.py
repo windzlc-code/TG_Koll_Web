@@ -1714,14 +1714,19 @@ def _persist_manual_takeover_ack(task_id: str, session_id: str) -> None:
             return
         task_payload = _loads(row["payload_json"], {})
         needs_persist = task_payload.get("auto_submit") is not False or not bool(task_payload.get("manual_takeover"))
-        if not needs_persist:
-            return
-        task_payload["auto_submit"] = False
-        task_payload["manual_takeover"] = True
+        if needs_persist:
+            task_payload["auto_submit"] = False
+            task_payload["manual_takeover"] = True
         conn.execute(
-            "UPDATE social_automation_tasks SET payload_json = ?, updated_at = ? WHERE id = ?",
+            """
+            UPDATE social_automation_tasks
+            SET status = 'need_manual', payload_json = ?, updated_at = ?
+            WHERE id = ? AND status IN ('running', 'need_manual')
+            """,
             (json.dumps(task_payload, ensure_ascii=False), _now(), task_id),
         )
+        if not needs_persist:
+            return
         _insert_log(
             conn,
             task_id,

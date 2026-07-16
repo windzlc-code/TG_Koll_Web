@@ -1123,13 +1123,15 @@ def _platform_name(platform: str) -> str:
 
 
 def _is_verification_url(url: str) -> bool:
+    normalized = str(url or "").strip().lower()
     return any(
-        part in url
+        part in normalized
         for part in (
             "/challenge",
             "/checkpoint",
             "/two_step_verification",
             "two_factor_login",
+            "/accounts/update_risky_contactpoint",
         )
     )
 
@@ -1156,6 +1158,7 @@ def _verification_text_markers() -> list[str]:
         "video selfie",
         "take a selfie video",
         "identity confirmation",
+        "your email may not be secure",
         "验证码",
         "两步验证",
         "双重验证",

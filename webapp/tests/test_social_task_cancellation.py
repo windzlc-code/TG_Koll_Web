@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 import tempfile
@@ -194,6 +195,41 @@ class SocialTaskCancellationTests(unittest.TestCase):
             ).fetchone()[0]
         self.assertEqual(account_status, "ready")
         self.assertEqual(task_status, "need_manual")
+
+    def test_manual_takeover_ack_marks_open_login_task_need_manual(self):
+        self._insert_account(status="cookie_expired")
+        self._insert_task("login-risk-challenge", "running", task_type="open_login")
+
+        social_automation_api._persist_manual_takeover_ack(
+            "login-risk-challenge",
+            "live-login-risk-challenge",
+        )
+
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT status, payload_json FROM social_automation_tasks WHERE id = ?",
+                ("login-risk-challenge",),
+            ).fetchone()
+        payload = json.loads(row[1])
+        self.assertEqual(row[0], "need_manual")
+        self.assertFalse(payload["auto_submit"])
+        self.assertTrue(payload["manual_takeover"])
+
+    def test_already_manual_open_login_still_transitions_out_of_running(self):
+        self._insert_account(status="cookie_expired")
+        self._insert_task("login-already-manual", "running", task_type="open_login")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE social_automation_tasks SET payload_json = ? WHERE id = ?",
+                (json.dumps({"auto_submit": False, "manual_takeover": True}), "login-already-manual"),
+            )
+
+        social_automation_api._persist_manual_takeover_ack(
+            "login-already-manual",
+            "live-login-already-manual",
+        )
+
+        self.assertEqual(self._status("login-already-manual"), "need_manual")
 
     def test_retry_path_cannot_requeue_after_cancellation_wins(self):
         self._insert_task("cancelled-retry", "cancelled")
