@@ -6359,6 +6359,7 @@ function renderPersonaImagePanel(persona) {
       </div>
       <div class="row-actions">
         <button type="button" class="primary" data-persona-generate-image ${imageBusy ? "disabled" : ""}>${renderBusyButtonContent(generateLabel, imageBusy, imageBusyStartedAt)}</button>
+        <button type="button" data-persona-upload-image-trigger>${renderPlusIcon()}上传自定义人设图</button>
         <input id="personaImageUploadFile" type="file" accept=".png,.jpg,.jpeg,.webp,.bmp,.gif,.tif,.tiff,.heic" data-persona-upload-image-file hidden />
       </div>
       <div class="persona-inline-panel persona-inline-panel--nested">
@@ -14288,15 +14289,19 @@ function renderPersonaImageLibraryGrid(library) {
             <small>拖拽图片到这里，或点击选择</small>
             <small class="persona-image-upload-placeholder-tip">建议优先使用三视图</small>
           </button>
-          <small class="persona-image-library-meta-placeholder">未上传人设图</small>
-          <div class="persona-image-library-actions persona-image-library-actions--placeholder" aria-hidden="true">
-            <span class="persona-image-library-action-placeholder persona-image-library-apply"></span>
-            <span class="persona-image-library-action-placeholder"></span>
-            <span class="persona-image-library-action-placeholder"></span>
-          </div>
         </div>
       </div>`;
   }
+  const previewable = rows
+    .map((item) => ({
+      id: String(item.id || "").trim(),
+      previewUrl: String(item.preview_url || item.image_url || "").trim(),
+      type: "image",
+      label: String(item.prompt || item.created_at || "人设图").trim() || "人设图",
+      isReference: Boolean(item.is_reference || item.isReference),
+      createdAt: String(item.created_at || "").trim(),
+    }))
+    .filter((item) => item.previewUrl);
   const groupId = registerMediaPreviewGroup(previewable);
   return `<div class="persona-image-library-grid">${previewable.map((item, index) => `
     <div class="persona-image-library-card ${item.isReference ? "is-reference" : ""}">

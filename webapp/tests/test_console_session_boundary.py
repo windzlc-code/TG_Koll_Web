@@ -92,11 +92,6 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("persona-image-library-card--empty", self.styles)
         self.assertIn("persona-image-upload-placeholder", self.styles)
         self.assertIn("aspect-ratio: 1 / 1", self.styles)
-        self.assertIn("box-sizing: border-box", self.styles)
-        self.assertIn("grid-template-rows: auto 18px auto", self.styles)
-        self.assertIn("persona-image-library-meta-placeholder", self.source)
-        self.assertIn("persona-image-library-actions--placeholder", self.source)
-        self.assertNotIn("data-persona-upload-image-trigger", self._function_source("renderPersonaImagePanel"))
 
     def test_console_account_menu_uses_current_identity_and_supports_logout(self):
         for marker in (
