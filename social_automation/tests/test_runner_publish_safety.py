@@ -121,6 +121,34 @@ class _RecordingLogger:
 
 
 class RunnerPublishSafetyTests(unittest.TestCase):
+    def test_publish_reports_ready_login_before_running_action(self):
+        page = mock.Mock()
+        context = mock.Mock()
+        manager = mock.MagicMock()
+        manager.__enter__.return_value = context
+        callback = mock.Mock()
+        control = {"account_login_status_callback": callback}
+
+        with (
+            mock.patch.object(runner, "_open_camoufox_context", return_value=manager),
+            mock.patch.object(runner, "_import_initial_cookies"),
+            mock.patch.object(runner, "_first_page", return_value=page),
+            mock.patch.object(runner, "_sync_live_browser_viewport"),
+            mock.patch.object(runner, "_check_platform_login", return_value={"status": "ready"}),
+            mock.patch.object(runner, "_run_publish_post", return_value={"ok": True}),
+        ):
+            result = runner.run_social_task(
+                task={"id": "publish-task", "task_type": "publish_post", "platform": "threads", "payload": {}},
+                account={"platform": "threads"},
+                proxy=None,
+                data_dir=Path("."),
+                logger=_Logger(),
+                context_control=control,
+            )
+
+        self.assertTrue(result["ok"])
+        callback.assert_called_once_with("ready")
+
     def test_threads_error_page_is_not_treated_as_ready(self):
         status = runner._detect_threads_login_state(_ThreadsErrorPage())
 

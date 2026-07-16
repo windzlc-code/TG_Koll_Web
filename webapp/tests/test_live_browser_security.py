@@ -577,7 +577,7 @@ def test_websocket_auth_resolves_admin_workspace_query():
         user = social_automation_api._authenticate_live_browser_websocket(websocket)
 
     assert user == resolved
-    authenticate.assert_called_once_with("admin-session", admin_workspace_user_id="42")
+    authenticate.assert_called_once_with("admin-session", admin_workspace_user_id="42", request=None)
 
 
 def test_admin_workspace_websocket_audit_uses_actor_and_target_ids():
@@ -734,6 +734,52 @@ def test_expired_registry_session_uses_process_stopping_cleanup():
 
     assert sessions == []
     stop_session.assert_called_once_with(session.id)
+
+
+def test_starting_session_is_visible_before_kasmvnc_is_ready(tmp_path, monkeypatch):
+    monkeypatch.setenv("SOCIAL_AUTOMATION_KASMVNC_WWW_DIR", str(tmp_path))
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+    process = mock.Mock()
+    process.pid = 4321
+    process.poll.return_value = None
+    observed = {}
+    saved_statuses = []
+
+    def wait_until_ready(session):
+        observed["session"] = live_browser._SESSIONS.get(session.id)
+        observed["status"] = session.status
+
+    def record_registry(session):
+        saved_statuses.append(session.status)
+
+    live_browser._SESSIONS.clear()
+    try:
+        with (
+            mock.patch.object(live_browser, "live_browser_enabled", return_value=True),
+            mock.patch.object(live_browser, "_stop_standby_sessions_for_account"),
+            mock.patch.object(live_browser, "_cleanup_orphaned_live_browser_processes"),
+            mock.patch.object(live_browser.shutil, "which", return_value="/usr/bin/Xvnc"),
+            mock.patch.object(live_browser, "_allocate_display_number", return_value=91),
+            mock.patch.object(live_browser, "_allocate_tcp_port", return_value=6901),
+            mock.patch.object(live_browser.tempfile, "mkdtemp", return_value=str(session_dir)),
+            mock.patch.object(live_browser.subprocess, "Popen", return_value=process),
+            mock.patch.object(live_browser, "_capture_session_process_identities"),
+            mock.patch.object(live_browser, "_wait_for_live_browser_ready", side_effect=wait_until_ready),
+            mock.patch.object(live_browser, "_save_session_registry", side_effect=record_registry),
+        ):
+            session = live_browser.start_live_browser_session(
+                task={"id": "publish-1", "task_type": "publish_post", "platform": "threads"},
+                account={"id": "account-1", "username": "tester", "platform": "threads"},
+            )
+
+        assert observed["session"] is session
+        assert observed["status"] == "starting"
+        assert saved_statuses == ["starting", "running"]
+        assert session.status == "running"
+    finally:
+        live_browser._SESSIONS.clear()
+        session_dir.rmdir()
 
 
 def test_cancel_without_memory_control_reclaims_registry_session():

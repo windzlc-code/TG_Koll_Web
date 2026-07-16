@@ -137,11 +137,12 @@ def start_live_browser_session(
                 stderr=subprocess.DEVNULL,
             )
         )
-        _wait_for_live_browser_ready(session)
         _capture_session_process_identities(session)
-        session.status = "running"
         with _LOCK:
             _SESSIONS[session.id] = session
+        _save_session_registry(session)
+        _wait_for_live_browser_ready(session)
+        session.status = "running"
         _save_session_registry(session)
         _log(
             logger,

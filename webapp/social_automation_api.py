@@ -476,8 +476,8 @@ def register_social_automation_routes(app: FastAPI) -> None:
 
     @app.websocket("/api/persona_dashboard/automation/browser_sessions/{session_id}/ws")
     async def api_social_browser_session_ws(websocket: WebSocket, session_id: str):
-        user = _authenticate_live_browser_websocket(websocket)
-        if not user or not _live_browser_session_accessible(session_id, user):
+        user = _authenticate_live_browser_websocket(websocket, session_id)
+        if not user:
             await websocket.close(code=1008)
             return
         _audit_admin_live_browser_action(user, "workspace.browser_session.connect", session_id)
@@ -487,13 +487,13 @@ def register_social_automation_routes(app: FastAPI) -> None:
             _audit_admin_live_browser_action(user, "workspace.browser_session.disconnect", session_id)
 
     @app.get("/api/persona_dashboard/automation/browser_sessions/{session_id}/kasm")
-    def api_social_browser_session_kasm_root(session_id: str, request: Request, user: dict[str, Any] = Depends(get_current_user)):
-        _require_live_browser_session_access(session_id, user)
+    def api_social_browser_session_kasm_root(session_id: str, request: Request):
+        _authenticate_live_browser_http_request(request, session_id)
         return _proxy_live_browser_http(session_id, "vnc.html", request)
 
     @app.get("/api/persona_dashboard/automation/browser_sessions/{session_id}/kasm/{path:path}")
-    def api_social_browser_session_kasm_path(session_id: str, path: str, request: Request, user: dict[str, Any] = Depends(get_current_user)):
-        _require_live_browser_session_access(session_id, user)
+    def api_social_browser_session_kasm_path(session_id: str, path: str, request: Request):
+        _authenticate_live_browser_http_request(request, session_id)
         return _proxy_live_browser_http(session_id, path or "vnc.html", request)
 
     @app.get("/api/persona_dashboard/automation/accounts")
@@ -765,25 +765,81 @@ def register_social_automation_routes(app: FastAPI) -> None:
         )
 
 
-def _authenticate_live_browser_websocket(websocket: WebSocket) -> dict[str, Any] | None:
+def _authenticate_live_browser_websocket(websocket: WebSocket, session_id: str = "") -> dict[str, Any] | None:
     query_params = getattr(websocket, "query_params", None)
     workspace_user_id = query_params.get(ADMIN_WORKSPACE_QUERY) if query_params is not None else None
     admin_console = query_params.get(ADMIN_CONSOLE_QUERY) if query_params is not None else None
     use_admin_session = bool(workspace_user_id) or str(admin_console or "").strip().lower() in {"1", "true", "yes", "on"}
-    if use_admin_session:
-        token = str(
-            websocket.cookies.get(ADMIN_SESSION_COOKIE)
-            or websocket.cookies.get(SESSION_COOKIE)
-            or ""
-        ).strip()
-    else:
-        token = str(websocket.cookies.get(SESSION_COOKIE) or "").strip()
-    if not token:
-        return None
-    try:
-        return get_current_user_for_session(token, admin_workspace_user_id=workspace_user_id)
-    except Exception:
-        return None
+    tokens = _live_browser_auth_tokens(
+        session_token=websocket.cookies.get(SESSION_COOKIE),
+        admin_session_token=websocket.cookies.get(ADMIN_SESSION_COOKIE),
+        use_admin_session=use_admin_session,
+    )
+    return _first_live_browser_user_for_tokens(
+        tokens,
+        admin_workspace_user_id=workspace_user_id,
+        session_id=session_id,
+    )
+
+
+def _authenticate_live_browser_http_request(request: Request, session_id: str = "") -> dict[str, Any]:
+    workspace_user_id = request.query_params.get(ADMIN_WORKSPACE_QUERY)
+    admin_console = request.query_params.get(ADMIN_CONSOLE_QUERY)
+    use_admin_session = bool(workspace_user_id) or str(admin_console or "").strip().lower() in {"1", "true", "yes", "on"}
+    tokens = _live_browser_auth_tokens(
+        session_token=request.cookies.get(SESSION_COOKIE),
+        admin_session_token=request.cookies.get(ADMIN_SESSION_COOKIE),
+        use_admin_session=use_admin_session,
+    )
+    user = _first_live_browser_user_for_tokens(
+        tokens,
+        admin_workspace_user_id=workspace_user_id,
+        request=request,
+        session_id=session_id,
+    )
+    if user is None:
+        raise HTTPException(status_code=401, detail="未登录")
+    return user
+
+
+def _live_browser_auth_tokens(
+    *,
+    session_token: str | None,
+    admin_session_token: str | None,
+    use_admin_session: bool,
+) -> list[str]:
+    session = str(session_token or "").strip()
+    admin = str(admin_session_token or "").strip()
+    ordered = [admin, session] if use_admin_session else [session, admin]
+    tokens: list[str] = []
+    for token in ordered:
+        if token and token not in tokens:
+            tokens.append(token)
+    return tokens
+
+
+def _first_live_browser_user_for_tokens(
+    tokens: list[str],
+    *,
+    admin_workspace_user_id: Any = None,
+    request: Request | None = None,
+    session_id: str = "",
+) -> dict[str, Any] | None:
+    first_user: dict[str, Any] | None = None
+    for token in tokens:
+        try:
+            user = get_current_user_for_session(token, admin_workspace_user_id=admin_workspace_user_id, request=request)
+        except Exception:
+            continue
+        if not first_user:
+            first_user = user
+        if session_id and _live_browser_session_accessible(session_id, user):
+            return user
+        if not session_id:
+            return user
+    if session_id and first_user is not None:
+        raise HTTPException(status_code=404, detail="浏览器会话不存在")
+    return None
 
 
 def _live_browser_session_accessible(session_id: str, user: dict[str, Any]) -> bool:
@@ -3510,6 +3566,11 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
         "task": dict(task),
         "live_browser_session_id": "",
     }
+    control["account_login_status_callback"] = lambda status: _persist_running_account_login_status(
+        task_id,
+        str(task.get("account_id") or ""),
+        status,
+    )
     control["manual_takeover_callback"] = lambda: _persist_manual_takeover_ack(
         task_id,
         str(control.get("live_browser_session_id") or ""),
@@ -3569,12 +3630,13 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
         )
     except NeedManualError as exc:
         if not _is_task_cancelled(str(task["id"])):
+            detected_status = str(getattr(exc, "status", "") or "need_verification")
             _finish_task(
                 task["id"],
                 "need_manual",
                 {"screenshot_path": str(getattr(exc, "screenshot_path", "") or "")},
                 str(exc),
-                account_status=str(getattr(exc, "status", "") or "need_verification"),
+                account_status="ready" if detected_status == "publish_submitted_unconfirmed" else detected_status,
             )
         return
     except AutoLoginFailedError as exc:
@@ -3588,9 +3650,7 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
     if _is_task_cancelled(str(task["id"])):
         return
     status = "success" if result.get("ok") else "failed"
-    account_status = ""
-    if task.get("task_type") in {"check_login", "open_login"} and result.get("status") == "ready":
-        account_status = "ready"
+    account_status = "ready" if status == "success" else ""
     _finish_task(task["id"], status, result, "" if status == "success" else str(result.get("error") or "执行失败"), account_status=account_status)
 
 
@@ -3667,6 +3727,35 @@ def _force_stop_running_task(task_id: str) -> None:
             _insert_log(conn, task_id, "warn", "force_stop", "已发送强制停止信号并关闭浏览器上下文", {})
 
 
+def _persist_running_account_login_status(task_id: str, account_id: str, status: str) -> bool:
+    clean_task_id = str(task_id or "").strip()
+    clean_account_id = str(account_id or "").strip()
+    clean_status = str(status or "").strip().lower()
+    if not clean_task_id or not clean_account_id or clean_status not in SOCIAL_ACCOUNT_STATUSES:
+        return False
+    now = _now()
+    with db() as conn:
+        task = conn.execute(
+            "SELECT account_id, status FROM social_automation_tasks WHERE id = ?",
+            (clean_task_id,),
+        ).fetchone()
+        if (
+            task is None
+            or str(task["account_id"] or "") != clean_account_id
+            or str(task["status"] or "") not in {"running", "need_manual"}
+        ):
+            return False
+        updated = conn.execute(
+            """
+            UPDATE social_accounts
+            SET status = ?, last_login_check_at = ?, last_error = '', updated_at = ?
+            WHERE id = ?
+            """,
+            (clean_status, now, now, clean_account_id),
+        ).rowcount
+    return bool(updated)
+
+
 def _finish_task(task_id: str, status: str, result: dict[str, Any], error: str, account_status: str = "") -> bool:
     now = _now()
     with db() as conn:
@@ -3717,10 +3806,11 @@ def _finish_task(task_id: str, status: str, result: dict[str, Any], error: str, 
                 (credit_cost_units, free_image_count, task_id),
             )
         _insert_log(conn, task_id, "info" if status == "success" else "error", status, "任务执行完成" if status == "success" else error, result)
-        if account_status:
+        normalized_account_status = str(account_status or "").strip().lower()
+        if normalized_account_status in SOCIAL_ACCOUNT_STATUSES:
             conn.execute(
                 "UPDATE social_accounts SET status = ?, last_login_check_at = ?, last_run_at = ?, last_error = '', updated_at = ? WHERE id = ?",
-                (account_status, now, now, now, str(task["account_id"])),
+                (normalized_account_status, now, now, now, str(task["account_id"])),
             )
         else:
             conn.execute(

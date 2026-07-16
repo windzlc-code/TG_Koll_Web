@@ -136,6 +136,65 @@ class SocialTaskCancellationTests(unittest.TestCase):
         self.assertEqual(self._status("cancelled-manual"), "cancelled")
         self.assertEqual(account_status, "ready")
 
+    def test_running_login_detection_updates_account_immediately(self):
+        self._insert_account(status="cookie_expired")
+        self._insert_task("publish-running", "running")
+
+        updated = social_automation_api._persist_running_account_login_status(
+            "publish-running",
+            "account-1",
+            "ready",
+        )
+
+        with sqlite3.connect(self.db_path) as conn:
+            account = conn.execute(
+                "SELECT status, last_login_check_at FROM social_accounts WHERE id = ?",
+                ("account-1",),
+            ).fetchone()
+        self.assertTrue(updated)
+        self.assertEqual(account[0], "ready")
+        self.assertGreater(account[1], 0)
+
+    def test_publish_manual_review_keeps_confirmed_login_ready(self):
+        self._insert_account(status="cookie_expired")
+        self._insert_task("publish-review", "running")
+        task = {
+            "id": "publish-review",
+            "account_id": "account-1",
+            "platform": "threads",
+            "task_type": "publish_post",
+            "payload": {},
+        }
+        control = {
+            "cancel_event": threading.Event(),
+            "task": dict(task),
+            "live_browser_session_id": "",
+        }
+
+        from social_automation.runner import NeedManualError
+
+        with mock.patch.object(
+            social_automation_api,
+            "_run_social_task_in_clean_thread",
+            side_effect=NeedManualError(
+                "publish needs manual confirmation",
+                "publish_submitted_unconfirmed",
+            ),
+        ):
+            social_automation_api._execute_claimed_task_with_control(task, control)
+
+        with sqlite3.connect(self.db_path) as conn:
+            account_status = conn.execute(
+                "SELECT status FROM social_accounts WHERE id = ?",
+                ("account-1",),
+            ).fetchone()[0]
+            task_status = conn.execute(
+                "SELECT status FROM social_automation_tasks WHERE id = ?",
+                ("publish-review",),
+            ).fetchone()[0]
+        self.assertEqual(account_status, "ready")
+        self.assertEqual(task_status, "need_manual")
+
     def test_retry_path_cannot_requeue_after_cancellation_wins(self):
         self._insert_task("cancelled-retry", "cancelled")
 

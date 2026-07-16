@@ -174,6 +174,8 @@ def run_social_task(
                 shot,
             )
 
+        _report_account_login_status(context_control, "ready", logger)
+
         if task_type == "browse_feed":
             _raise_if_cancelled(cancel_event)
             if platform == "threads":
@@ -204,6 +206,27 @@ def run_social_task(
             _raise_if_cancelled(cancel_event)
             return _run_share_post(page, task, payload, screenshot_dir, logger)
     raise UnsupportedActionError(f"未处理的社交自动化任务类型：{task_type}")
+
+
+def _report_account_login_status(
+    context_control: dict[str, Any] | None,
+    status: str,
+    logger: AutomationLogger,
+) -> None:
+    if not isinstance(context_control, dict):
+        return
+    callback = context_control.get("account_login_status_callback")
+    if not callable(callback):
+        return
+    try:
+        callback(str(status or "").strip())
+    except Exception as exc:
+        logger.log(
+            "warn",
+            "account_login_status_sync_failed",
+            "Account login status was detected but could not be synchronized immediately.",
+            {"status": str(status or ""), "error": str(exc)},
+        )
 
 
 class _BrowserContextManager:

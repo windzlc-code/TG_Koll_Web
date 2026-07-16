@@ -343,6 +343,21 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('loadAutomationTasksShared().catch', task_refresh)
         self.assertNotIn("loadAutomationTasksShared({ force: true })", task_refresh)
 
+    def test_account_and_browser_status_refresh_while_publish_is_running(self):
+        account_refresh = self._function_source("syncAccountStatusAutoRefresh")
+        browser_refresh = self._function_source("syncLiveBrowserAutoRefresh")
+        browser_fetch = self._function_source("refreshLiveBrowserSessionsOnly")
+        panel_switch = self._function_source("setAccountBrowserPanel")
+
+        self.assertIn("}, 3000)", account_refresh)
+        self.assertIn("refreshLiveBrowserSessionsOnly().catch", browser_refresh)
+        self.assertIn("}, 2000)", browser_refresh)
+        self.assertIn('state.accountBrowserPanel === "browsers"', self._function_source("shouldRefreshLiveBrowserSessions"))
+        self.assertIn("state.liveBrowserSessionsFetch", browser_fetch)
+        self.assertIn("syncLiveBrowserAutoRefresh()", panel_switch)
+        self.assertIn("refreshLiveBrowserSessionsSoon(taskId, 40, 500)", self._function_source("submitPersonaPublishTask"))
+        self.assertIn("refreshLiveBrowserSessionsSoon(String(task.id), 40, 500)", self._function_source("submitPublishContentTasks"))
+
     def test_live_browser_polling_preserves_unchanged_placeholder_nodes(self):
         browser_render = self._function_source("renderLiveBrowserSessions")
         placeholder_sync = self._function_source("syncLiveBrowserPlaceholders")

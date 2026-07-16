@@ -419,6 +419,7 @@ const state = {
   taskQueueSelectedRegularIds: new Set(),
   taskQueueRefreshTimer: 0,
   accountStatusRefreshTimer: 0,
+  liveBrowserRefreshTimer: 0,
   socialTaskToastRefreshTimer: 0,
   socialTaskScheduleWakeTimer: 0,
   publishTimingMode: "immediate",
@@ -431,6 +432,7 @@ const state = {
   publishCustomContent: "",
   socialTasksFetch: null,
   socialRefreshFetch: null,
+  liveBrowserSessionsFetch: null,
   socialCancelAllPending: false,
   socialAccounts: [],
   socialProxies: [],
@@ -518,6 +520,7 @@ function clearTenantInMemoryState() {
   if (state.personaDetailRenderTimer) window.clearTimeout(state.personaDetailRenderTimer);
   if (state.taskQueueRefreshTimer) window.clearInterval(state.taskQueueRefreshTimer);
   if (state.accountStatusRefreshTimer) window.clearInterval(state.accountStatusRefreshTimer);
+  if (state.liveBrowserRefreshTimer) window.clearInterval(state.liveBrowserRefreshTimer);
   if (state.socialTaskToastRefreshTimer) window.clearInterval(state.socialTaskToastRefreshTimer);
   if (state.socialTaskScheduleWakeTimer) window.clearTimeout(state.socialTaskScheduleWakeTimer);
   Object.values(state.socialTaskToastTransitions || {}).forEach((transition) => {
@@ -596,6 +599,7 @@ function clearTenantInMemoryState() {
   state.publishCustomContent = "";
   state.socialTasksFetch = null;
   state.socialRefreshFetch = null;
+  state.liveBrowserSessionsFetch = null;
   state.socialCancelAllPending = false;
   state.socialAccounts = [];
   state.socialProxies = [];
@@ -626,6 +630,7 @@ function clearTenantInMemoryState() {
   state.personaDetailRenderTimer = 0;
   state.taskQueueRefreshTimer = 0;
   state.accountStatusRefreshTimer = 0;
+  state.liveBrowserRefreshTimer = 0;
   state.socialTaskToastRefreshTimer = 0;
   state.socialTaskScheduleWakeTimer = 0;
   state.matrixPublish = {
@@ -4630,6 +4635,7 @@ function setView(view) {
   syncPersonaDashboardStyles(view);
   syncTaskQueueAutoRefresh();
   syncAccountStatusAutoRefresh();
+  syncLiveBrowserAutoRefresh();
   if (!["workspace", "accounts"].includes(view)) state.workspaceMenuOpen = false;
   document.querySelectorAll("[data-view]").forEach((button) => {
     const isActive = button.dataset.view === view;
@@ -4711,7 +4717,30 @@ function syncAccountStatusAutoRefresh() {
       return;
     }
     refreshAccountStatusOnce().catch(() => {});
-  }, 10000);
+  }, 3000);
+}
+
+function shouldRefreshLiveBrowserSessions() {
+  return !document.hidden && state.view === "accounts" && state.accountBrowserPanel === "browsers";
+}
+
+function syncLiveBrowserAutoRefresh() {
+  if (!shouldRefreshLiveBrowserSessions()) {
+    if (state.liveBrowserRefreshTimer) {
+      window.clearInterval(state.liveBrowserRefreshTimer);
+      state.liveBrowserRefreshTimer = 0;
+    }
+    return;
+  }
+  if (state.liveBrowserRefreshTimer) return;
+  refreshLiveBrowserSessionsOnly().catch(() => {});
+  state.liveBrowserRefreshTimer = window.setInterval(() => {
+    if (!shouldRefreshLiveBrowserSessions()) {
+      syncLiveBrowserAutoRefresh();
+      return;
+    }
+    refreshLiveBrowserSessionsOnly().catch(() => {});
+  }, 2000);
 }
 
 function setWorkspaceModule(moduleId) {
@@ -4914,6 +4943,7 @@ function setModule(moduleId) {
   renderWorkspace();
   syncTaskQueueAutoRefresh();
   syncAccountStatusAutoRefresh();
+  syncLiveBrowserAutoRefresh();
 }
 
 function selectedBranch(moduleId) {
@@ -8673,6 +8703,7 @@ async function submitPersonaPublishTask() {
     if (taskId) {
       registerSocialTaskToastBatch(socialTaskToastLaneKey(task), [task]);
       syncSocialTaskToast(task, { force: true });
+      if (!waitingForSchedule) refreshLiveBrowserSessionsSoon(taskId, 40, 500);
     }
     if (taskId && !waitingForSchedule) watchPersonaPublishTask(taskId, persona.id).catch((error) => {
       state.personaPublishResults[String(persona.id)] = `<div class="persona-warning-inline">${esc(error?.detail || error?.message || "任务结果轮询失败")}</div>`;
@@ -8765,6 +8796,7 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
         state.socialTaskToastLabels[String(task.id)] = `${index + 1}/${posts.length} 篇 · ${account.username || account.display_name || ""}`;
         registerSocialTaskToastBatch(batchToastKey, results.map((item) => item?.task).filter(Boolean));
         syncSocialTaskToast(task, { force: true });
+        if (!isFutureScheduledSocialTask(task)) refreshLiveBrowserSessionsSoon(String(task.id), 40, 500);
       }
     }
     const immediateTasks = results.map((item) => item?.task).filter((task) => task?.id && !isFutureScheduledSocialTask(task));
@@ -15319,10 +15351,18 @@ async function refreshSocialAccountsOnly({ force = false, includeOverview = fals
 }
 
 async function refreshLiveBrowserSessionsOnly() {
-  const data = await api("/api/persona_dashboard/automation/browser_sessions");
-  state.socialBrowserSessions = Array.isArray(data?.sessions) ? data.sessions : [];
-  renderLiveBrowserSessions();
-  return state.socialBrowserSessions;
+  if (state.liveBrowserSessionsFetch) return state.liveBrowserSessionsFetch;
+  const request = api("/api/persona_dashboard/automation/browser_sessions")
+    .then((data) => {
+      state.socialBrowserSessions = Array.isArray(data?.sessions) ? data.sessions : [];
+      renderLiveBrowserSessions();
+      return state.socialBrowserSessions;
+    })
+    .finally(() => {
+      if (state.liveBrowserSessionsFetch === request) state.liveBrowserSessionsFetch = null;
+    });
+  state.liveBrowserSessionsFetch = request;
+  return request;
 }
 
 function refreshLiveBrowserSessionsSoon(taskId = "", attempts = 16, delayMs = 500) {
@@ -17420,6 +17460,7 @@ function setAccountBrowserPanel(panel = "accounts") {
   syncAccountBrowserPanel();
   if ($("moduleMenu")) syncModuleMenuState();
   if (normalized === "browsers") renderLiveBrowserSessions();
+  syncLiveBrowserAutoRefresh();
   } finally {
     restoreConsoleScrollState(scrollSnapshot);
     releaseConsoleLayoutLocks(layoutLocks);
@@ -18578,6 +18619,7 @@ function bindEvents() {
     syncSocialTaskToastAutoRefresh();
     syncTaskQueueAutoRefresh();
     syncAccountStatusAutoRefresh();
+    syncLiveBrowserAutoRefresh();
   });
   document.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", async () => {
     const nextView = button.dataset.view;
