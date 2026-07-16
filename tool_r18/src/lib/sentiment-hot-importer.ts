@@ -2340,7 +2340,13 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   if (hasModelStrategy && strategyResult) {
     const strategyCandidatePool = candidates;
     modelParentCandidatePool = strategyCandidatePool.filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, "normal"));
-    candidates = strategyCandidatePool.filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode));
+    // Normal mode is the broad vertical search path. Its keyword quality
+    // filter has already removed off-topic results; applying model anchors a
+    // second time here can collapse a healthy live pool (for example 29
+    // browser results down to 3). Keep anchor narrowing for strict mode only.
+    candidates = searchMode === "strict"
+      ? strategyCandidatePool.filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode))
+      : strategyCandidatePool;
   }
   const displayCandidatePool = candidates;
   candidates = finalizeSentimentHotCandidatesForDisplay(displayCandidatePool, limit, { archiveId, keywords, excludeShown: true, searchMode, freshnessDays });
