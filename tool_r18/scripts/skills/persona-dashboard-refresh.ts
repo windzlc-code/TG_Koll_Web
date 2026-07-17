@@ -352,7 +352,9 @@ async function main() {
   }, null, 2));
 }
 
-main().catch((error) => {
-  console.error(JSON.stringify({ ok: false, message: error instanceof Error ? error.message : String(error || "refresh failed") }));
-  process.exit(1);
-});
+main()
+  .then(() => process.exit(0))
+  .catch((error) => {
+    console.error(JSON.stringify({ ok: false, message: error instanceof Error ? error.message : String(error || "refresh failed") }));
+    process.exit(1);
+  });
