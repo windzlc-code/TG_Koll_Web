@@ -1011,7 +1011,7 @@ Demo post body
     expect(candidate.metrics).toMatchObject({ view_count: 99 });
   });
 
-  it("applies the 1000 display threshold to account, Reader, and search-page candidates", () => {
+  it("keeps the 1000 display threshold except for rendered search-page fallback candidates", () => {
     const base = {
       platform: "threads",
       author: "demo",
@@ -1038,7 +1038,7 @@ Demo post body
       })),
     ] as any, 10, { keywords: ["醫療", "醫生", "醫院"] });
 
-    expect(candidates.map((candidate) => candidate.id)).toEqual(["account-accepted"]);
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["account-accepted", "below-threshold-2"]);
   });
 
   it("parses Instagram reader candidates as extra sentiment sources", () => {
@@ -1363,6 +1363,29 @@ bunundoc
     expect(candidates[0].content).toContain("醫療");
     expect(candidates[0].content).not.toContain("翻譯");
     expect(candidates[0].sourceUrl).toBe("https://www.threads.net/@mls_muttering/post/medical-report");
+  });
+
+  it("keeps rendered reaction counts when Threads UI labels and relative age are present", () => {
+    const candidates = parseThreadsSearchTextCandidates({
+      query: "\u623f\u8cb8",
+      keywords: ["\u623f\u8cb8"],
+      sourceUrl: "https://www.threads.com/search?q=house-loan",
+      text: [
+        "@demo",
+        "\u623f\u8cb8",
+        "1d",
+        "\u9019\u662f\u4e00\u6bb5\u5305\u542b\u623f\u8cb8\u548c\u9280\u884c\u8cc7\u8a0a\u7684\u4e2d\u6587\u5167\u5bb9\u8d85\u904e\u5341\u516b\u500b\u6f22\u5b57",
+        "Translate",
+        "27",
+        "40",
+        "9",
+      ].join("\n"),
+    });
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].author).toBe("demo");
+    expect(candidates[0].hotScore).toBe(76);
+    expect(candidates[0].engagement?.rawSignals).toEqual([27, 40, 9]);
   });
 
   it("keeps visible Threads profile metrics from the page body", () => {

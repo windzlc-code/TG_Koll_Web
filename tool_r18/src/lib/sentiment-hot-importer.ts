@@ -30,6 +30,10 @@ import {
 const require = createRequire(import.meta.url);
 const Database = require("better-sqlite3");
 const MIN_SENTIMENT_HOT_SCORE = 1000;
+// Threads' rendered search page exposes only small reaction counts (and no
+// stable GraphQL search payload). Keep this fallback useful without relaxing
+// the score floor for reader/API/database candidates.
+const MIN_THREADS_SEARCH_PAGE_HOT_SCORE = 0;
 const MIN_SENTIMENT_HOT_QUALITY_HAN_COUNT = 60;
 const SENTIMENT_HOT_CANDIDATE_POOL_TARGET = 400;
 const THREADS_SEARCH_CACHE_CANDIDATE_LIMIT = 2000;
@@ -2783,7 +2787,11 @@ function buildDirectRelevanceNeedles(keywords: string[]): string[] {
 }
 
 function isUsefulHotCandidate(candidate: SentimentHotCandidate): boolean {
-  return Number(candidate.hotScore || 0) >= MIN_SENTIMENT_HOT_SCORE;
+  const source = sentimentCandidateSource(candidate);
+  const minimum = source === "threads-search-page"
+    ? MIN_THREADS_SEARCH_PAGE_HOT_SCORE
+    : MIN_SENTIMENT_HOT_SCORE;
+  return Number(candidate.hotScore || 0) >= minimum;
 }
 
 function sentimentCandidateSource(candidate: SentimentHotCandidate): string {
@@ -3020,6 +3028,10 @@ export function candidateMatchesCurrentKeywords(candidate: SentimentHotCandidate
   const matchedStrongCount = countMatchedNeedles(candidate, strongNeedles);
   if (matchedCount <= 0) return false;
   if (candidateLooksOffTopic(candidate) && countMatchedNeedles(candidate, buildDirectRelevanceNeedles(keywords)) < 1) return false;
+  // A rendered Threads search result is already scoped by the exact query
+  // used for this candidate. Requiring a second persona keyword here drops
+  // most valid fresh posts because the page exposes only one topic term.
+  if (searchMode === "normal" && sentimentCandidateSource(candidate) === "threads-search-page") return true;
   if (searchMode === "normal") return matchedCount >= 2;
   if (strongNeedles.length > 0 && matchedStrongCount <= 0 && matchedCount < 2) return false;
 
@@ -3364,6 +3376,8 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           const variables = safeJson(params.get("variables") || "");
           if (!variables || typeof variables !== "object") return;
           const requestQuery = threadsSearchVariableQuery(variables);
+          const isApiGraphql = /\/api\/graphql(?:[/?]|$)/i.test(requestUrl.pathname);
+          if (isApiGraphql && !/search/i.test(friendlyName)) return;
           if (!/search/i.test(friendlyName) && !requestQuery) return;
           const requestParams: Record<string, string> = {};
           for (const [key, value] of params.entries()) {
@@ -3387,27 +3401,27 @@ async function fetchThreadsBrowserSearchCandidates(args: {
       };
       page.on("request", captureTemplate);
       const bootstrapQueries = [...new Set(args.queries.slice(0, THREADS_BROWSER_BOOTSTRAP_QUERY_LIMIT).filter(Boolean))];
-      for (const bootstrapQuery of bootstrapQueries) {
-        if (template || (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 3_000)) break;
-        await page.goto(`https://www.threads.com/search?q=${encodeURIComponent(bootstrapQuery)}`, {
+      const collectDomCandidates = async (searchPage: any, query: string, scrollAttempts = 6) => {
+        if (results.length >= args.limit) return;
+        await searchPage.goto(`https://www.threads.com/search?q=${encodeURIComponent(query)}`, {
           waitUntil: "domcontentloaded",
           timeout: Math.min(12_000, remainingSentimentDeadlineMs(args.deadlineAt, 12_000)),
         }).catch(() => undefined);
-        for (let attempt = 0; !template && attempt < 6; attempt += 1) {
+        for (let attempt = 0; !template && attempt < scrollAttempts; attempt += 1) {
           if (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 2_000) break;
-          await page.mouse.wheel(0, 2200).catch(() => undefined);
-          await page.waitForTimeout(Math.min(600, remainingSentimentDeadlineMs(args.deadlineAt, 600))).catch(() => undefined);
+          await searchPage.mouse.wheel(0, 2200).catch(() => undefined);
+          await searchPage.waitForTimeout(Math.min(600, remainingSentimentDeadlineMs(args.deadlineAt, 600))).catch(() => undefined);
         }
-        const bodyText = await page.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
-        const postUrls = await page.$$eval('a[href*="/post/"]', (anchors: any[]) => anchors
+        const bodyText = await searchPage.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
+        const postUrls = await searchPage.$$eval('a[href*="/post/"]', (anchors: any[]) => anchors
           .map((anchor) => String(anchor.href || anchor.getAttribute?.("href") || "").trim())
           .filter(Boolean)).catch(() => []);
         const domCandidates = parseThreadsSearchTextCandidates({
           text: bodyText,
-          query: bootstrapQuery,
+          query,
           keywords: args.keywords,
           limit: Math.max(0, args.limit - results.length),
-          sourceUrl: String(page.url?.() || `https://www.threads.com/search?q=${encodeURIComponent(bootstrapQuery)}`),
+          sourceUrl: String(searchPage.url?.() || `https://www.threads.com/search?q=${encodeURIComponent(query)}`),
           sourceUrls: postUrls,
         });
         for (const candidate of domCandidates) {
@@ -3420,8 +3434,36 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           resultKeys.add(dedupeKey);
           if (results.length >= args.limit) break;
         }
+      };
+      for (const bootstrapQuery of bootstrapQueries) {
+        if (template || (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 3_000)) break;
+        await collectDomCandidates(page, bootstrapQuery);
       }
       page.off("request", captureTemplate);
+
+      if (!template && results.length < args.limit) {
+        const fallbackQueries = args.queries.slice(
+          bootstrapQueries.length,
+          Math.min(THREADS_BROWSER_QUERY_LIMIT, bootstrapQueries.length + 8),
+        );
+        const fallbackPageCount = Math.min(THREADS_BROWSER_PAGE_LIMIT - 1, fallbackQueries.length);
+        if (fallbackPageCount > 0 && (!args.deadlineAt || remainingSentimentDeadlineMs(args.deadlineAt, 0) >= 4_000)) {
+          const extraPages = await Promise.all(Array.from({ length: fallbackPageCount }, async () => {
+            const extraPage = await context.newPage().catch(() => null);
+            if (!extraPage) return null;
+            return extraPage;
+          }));
+          const usableExtraPages = extraPages.filter(Boolean);
+          stats.pages = 1 + usableExtraPages.length;
+          stats.queries += fallbackQueries.length;
+          await Promise.all(usableExtraPages.map(async (extraPage: any, pageIndex) => {
+            for (let queryIndex = pageIndex; queryIndex < fallbackQueries.length && results.length < args.limit; queryIndex += usableExtraPages.length) {
+              if (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 2_000) break;
+              await collectDomCandidates(extraPage, fallbackQueries[queryIndex], 3);
+            }
+          }));
+        }
+      }
 
       if (template) {
         const shouldPageQueries = args.limit >= 40;
@@ -6299,7 +6341,8 @@ function isLikelyThreadsHandle(line: string): boolean {
   const text = line.trim();
   if (!/^@?[A-Za-z0-9_.]{2,32}$/.test(text)) return false;
   if (!/[A-Za-z_]/.test(text)) return false;
-  return !/^(?:threads|instagram|search|login|home|profile|www|net|com|t)$/i.test(text);
+  if (/^\d+(?:s|m|h|d|w)$/i.test(text)) return false;
+  return !/^(?:threads|instagram|search|login|home|profile|www|net|com|t|translate|top|recent|profiles|messages|activity|insights|saved|feeds|edit|following|ghost|posts|more|for|you|new|thread)$/i.test(text);
 }
 
 export function parseThreadsSearchTextCandidates(args: {
@@ -6339,7 +6382,7 @@ export function parseThreadsSearchTextCandidates(args: {
     const content = cleanSentimentCandidateContent(contentLines.join(" "));
     if (isLowQualitySentimentContent(content)) continue;
     if (!isChineseSentimentCandidate(content)) continue;
-    if ((content.match(/[\u3400-\u9fff]/gu) || []).length < 18) continue;
+    if ((content.match(/[\u3400-\u9fff]/gu) || []).length < 12) continue;
     const haystack = [content, chunk.author].join(" ").toLowerCase();
     const matchedNeedles = needles.filter((needle) => haystack.includes(needle.toLowerCase()));
     if (needles.length && matchedNeedles.length === 0) continue;
