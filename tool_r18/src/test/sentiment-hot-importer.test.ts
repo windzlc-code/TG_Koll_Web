@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildSentimentCandidateId,
   getSentimentHotExcludedIds,
+  getSentimentHotRefreshExcludedIds,
+  getSentimentHotShownHistoryKeys,
   rememberSentimentHotImported,
   rememberSentimentHotSelected,
   rememberSentimentHotShown,
@@ -32,6 +34,7 @@ import {
   parseThreadsDetailMediaMarkdown,
   parseThreadsSearchTextCandidates,
   refreshSentimentSourceMetrics,
+  resolveSentimentHotStrategyTimeoutMs,
   shouldTreatThreadsProfileAsLoginWall,
 } from "@/lib/sentiment-hot-importer";
 
@@ -45,6 +48,12 @@ describe("sentiment hot importer", () => {
     expect(normalizeSentimentHotFreshnessDays(7)).toBe(7);
     expect(normalizeSentimentHotFreshnessDays(15)).toBe(15);
     expect(normalizeSentimentHotFreshnessDays(30)).toBe(15);
+  });
+
+  it("keeps a live refresh from consuming the browser stage with model strategy time", () => {
+    expect(resolveSentimentHotStrategyTimeoutMs(true, 50_000)).toBe(12_000);
+    expect(resolveSentimentHotStrategyTimeoutMs(false, 50_000)).toBe(30_000);
+    expect(resolveSentimentHotStrategyTimeoutMs(true, 5_000)).toBe(5_000);
   });
 
   it("does not change the source pipeline when custom freshness is disabled", () => {
@@ -417,7 +426,7 @@ describe("sentiment hot importer", () => {
     expect(candidates.map((candidate) => candidate.hotScore)).toEqual([30000, 18000, 5000]);
   });
 
-  it("keeps previewed posts eligible until the user imports them", () => {
+  it("excludes previewed posts and URL variants on the next refresh", () => {
     const archiveId = `test-refresh-exclude-shown-${Date.now()}`;
     const base = {
       platform: "threads",
@@ -448,19 +457,24 @@ describe("sentiment hot importer", () => {
     };
 
     rememberSentimentHotShown(archiveId, [shown] as any);
+    const shownHistory = getSentimentHotShownHistoryKeys(archiveId);
+    expect(shownHistory.has("id:shown-hot")).toBe(true);
+    expect(shownHistory.has("url:https://threads.net/@demo/post/shown-hot")).toBe(true);
     const candidates = finalizeSentimentHotCandidatesForDisplay([shown, shownUrlVariant, fresh] as any, 10, {
       archiveId,
       keywords: ["海外信貸", "銀行貸款", "信用卡"],
       excludeShown: true,
     });
 
-    expect(candidates.map((candidate) => candidate.id)).toEqual(["fresh-hot", "shown-url-variant"]);
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["fresh-hot"]);
     const limitedCandidates = finalizeSentimentHotCandidatesForDisplay([shown, fresh] as any, 1, {
       archiveId,
       keywords: ["海外信貸", "銀行貸款", "信用卡"],
       excludeShown: true,
     });
     expect(limitedCandidates.map((candidate) => candidate.id)).toEqual(["fresh-hot"]);
+    expect(getSentimentHotExcludedIds(archiveId).has("shown-hot")).toBe(false);
+    expect(getSentimentHotRefreshExcludedIds(archiveId).has("shown-hot")).toBe(true);
   });
 
   it("only excludes a candidate after its draft import succeeds", () => {

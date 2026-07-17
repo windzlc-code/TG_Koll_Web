@@ -129,15 +129,23 @@ export function getSentimentHotCandidateHistoryKeys(candidate: Partial<Sentiment
 }
 
 export function getSentimentHotShownHistoryKeys(archiveId: string): Set<string> {
-  // Previewing candidates, including automated tests, must not consume them.
-  // Existing shown records are presentation history only and are intentionally
-  // excluded from refresh deduplication.
-  void archiveId;
-  return new Set<string>();
+  const keys = new Set<string>();
+  for (const entry of readState().shown[archiveId] || []) {
+    const id = shownEntryId(entry);
+    if (id) keys.add(`id:${id}`);
+    if (typeof entry === "string") continue;
+    if (entry.urlKey) keys.add(`url:${entry.urlKey}`);
+    if (entry.contentKey) keys.add(`content:${entry.contentKey}`);
+  }
+  return keys;
 }
 
 export function getSentimentHotRefreshExcludedIds(archiveId: string): Set<string> {
-  return getSentimentHotExcludedIds(archiveId);
+  const state = readState();
+  return new Set([
+    ...(state.shown[archiveId] || []).map(shownEntryId).filter(Boolean),
+    ...(state.imported[archiveId] || []),
+  ]);
 }
 
 export function getSentimentHotShownIds(archiveId: string): Set<string> {

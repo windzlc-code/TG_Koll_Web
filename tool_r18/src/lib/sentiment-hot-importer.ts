@@ -16,6 +16,7 @@ import {
   getSentimentHotShownHistoryKeys,
   getSentimentHotShownAtMap,
   getSentimentHotShownIds,
+  rememberSentimentHotShown,
   type SentimentHotCandidate,
   type SentimentHotMedia,
   type SentimentHotPlatform,
@@ -41,7 +42,7 @@ const THREADS_SEARCH_CACHE_MAX_ROWS_PER_ARCHIVE = 40;
 const THREADS_BROWSER_QUERY_LIMIT = 24;
 const THREADS_BROWSER_QUERY_BATCH_SIZE = 6;
 const THREADS_BROWSER_PAGE_LIMIT = 3;
-const THREADS_BROWSER_BOOTSTRAP_QUERY_LIMIT = 4;
+const THREADS_BROWSER_BOOTSTRAP_QUERY_LIMIT = 2;
 const THREADS_BROWSER_REQUEST_TIMEOUT_MS = 5_000;
 const SENTIMENT_MODEL_KEYWORD_TARGET = 20;
 const SENTIMENT_HOT_KEYWORD_MODEL = "xai/grok-4.3";
@@ -52,6 +53,7 @@ const INSTAGRAM_READER_QUERY_LIMIT = 48;
 const DEFAULT_REFRESH_FRESHNESS_DAYS = 7;
 const SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS = 20_000;
 const SENTIMENT_HOT_TOTAL_TIMEOUT_MS = 55_000;
+const SENTIMENT_HOT_REFRESH_STRATEGY_TIMEOUT_MS = 12_000;
 const SENTIMENT_HOT_SUPPLEMENT_MIN_REMAINING_MS = 12_000;
 const SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT = 2;
 const SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS = 72 * 60 * 60 * 1000;
@@ -64,6 +66,12 @@ const SENTIMENT_HOT_STRICT_KEYWORD_TARGET = 36;
 const SENTIMENT_HOT_SEARCH_STRATEGY_CACHE_FILE = resolveRuntimeFile("sentiment_hot_search_strategy_cache.json");
 const SENTIMENT_HOT_SEARCH_STRATEGY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const SENTIMENT_HOT_SEMANTIC_RELEVANCE_VERSION = 4;
+
+export function resolveSentimentHotStrategyTimeoutMs(refresh: boolean, remainingMs: number): number {
+  const availableMs = Number.isFinite(remainingMs) ? Math.max(1_000, remainingMs) : 1_000;
+  return Math.min(refresh ? SENTIMENT_HOT_REFRESH_STRATEGY_TIMEOUT_MS : 30_000, availableMs);
+}
+
 const SENTIMENT_HOT_GENERIC_QUERY_INTENTS = [
   "經驗",
   "心得",
@@ -2011,7 +2019,10 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
         return [...byKey.values()];
       })
     : Promise.resolve([] as SentimentHotCandidate[]);
-  const strategyTimeoutMs = Math.min(30_000, remainingSentimentHotTotalBudgetMs(startedAt, 25_000));
+  const strategyTimeoutMs = resolveSentimentHotStrategyTimeoutMs(
+    args.refresh === true,
+    remainingSentimentHotTotalBudgetMs(startedAt, 25_000),
+  );
   const strategyResult = await measureSentimentStage(
     warnings,
     "search-strategy",
@@ -2471,6 +2482,13 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     warnings.push("\u672a\u627e\u5230\u7b26\u5408\u689d\u4ef6\u7684\u9ad8\u71b1\u5ea6\u4e2d\u6587\u71b1\u9ede\uff1b\u8acb\u5237\u65b0\u6216\u63db\u66f4\u4eba\u8a2d\u95dc\u9375\u8a5e\u3002");
   } else if (candidates.length < limit) {
     warnings.push(`\u672c\u6b21\u53ea\u627e\u5230\u0020${candidates.length}/${limit}\u0020\u7bc7\u9ad8\u71b1\u5ea6\u4e2d\u6587\u71b1\u9ede\uff0c\u5df2\u904e\u6ffe\u91cd\u8907\u3001\u975e\u4e2d\u6587\u6216\u4f4e\u71b1\u5ea6\u5167\u5bb9\u3002`);
+  }
+  if (candidates.length > 0) {
+    try {
+      rememberSentimentHotShown(archiveId, candidates);
+    } catch (error) {
+      warnings.push(`热点展示历史记录失败：${error instanceof Error ? error.message : String(error)}`);
+    }
   }
   scheduleSentimentRuntimeShutdown();
   return { candidates, keywords, searchMode, freshnessDays, cookieStatuses, warnings };
@@ -3401,7 +3419,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
       };
       page.on("request", captureTemplate);
       const bootstrapQueries = [...new Set(args.queries.slice(0, THREADS_BROWSER_BOOTSTRAP_QUERY_LIMIT).filter(Boolean))];
-      const collectDomCandidates = async (searchPage: any, query: string, scrollAttempts = 6) => {
+      const collectDomCandidates = async (searchPage: any, query: string, scrollAttempts = 3) => {
         if (results.length >= args.limit) return;
         await searchPage.goto(`https://www.threads.com/search?q=${encodeURIComponent(query)}`, {
           waitUntil: "domcontentloaded",
