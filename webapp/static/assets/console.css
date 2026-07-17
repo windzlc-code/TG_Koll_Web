@@ -8922,6 +8922,69 @@ body.persona-touch-dragging .persona-list-card:active {
   background: var(--soft);
 }
 
+.publish-history-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.publish-history-metrics span {
+  display: grid;
+  align-content: center;
+  gap: 2px;
+  min-height: 54px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+}
+
+.publish-history-metrics small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.publish-history-metrics strong {
+  color: var(--ink);
+  font-size: 17px;
+  line-height: 1.15;
+}
+
+.publish-history-hot-status,
+.publish-history-refresh-status {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--muted);
+  background: var(--soft);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.publish-history-hot-status.is-complete {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  color: var(--accent-dark);
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel-solid));
+}
+
+.publish-post-picker > .publish-panel-head > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.publish-post-picker > .publish-panel-head > div > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.publish-post-picker > .publish-panel-head > button {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 6px 10px;
+}
+
 .account-browser-shell[data-account-browser-panel="browsers"] .account-browser-tabs {
   display: none;
 }
@@ -13022,6 +13085,38 @@ body.console-page {
   border-color: var(--line);
 }
 
+.console-page .sidebar-flow-divider {
+  background: var(--line);
+}
+
+.console-page .module-accordion-item + .module-accordion-item {
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
+.console-page .console-nav > button:not(.nav-parent-toggle),
+.console-page .sidebar-bottom-actions > * {
+  position: relative;
+}
+
+.console-page .console-nav > button:not(.nav-parent-toggle)::before,
+.console-page .sidebar-bottom-actions > * + *::before {
+  position: absolute;
+  top: -5px;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: var(--line);
+  content: "";
+  pointer-events: none;
+}
+
+.console-page .sidebar-bottom-actions {
+  gap: 8px;
+  padding-top: 9px;
+  border-top: 1px solid var(--line);
+}
+
 .console-page .console-nav button.is-click-highlight,
 .console-page .sidebar-bottom-actions button.is-click-highlight,
 .console-page .sidebar-bottom-actions a.is-click-highlight,
@@ -13307,6 +13402,19 @@ body.console-page {
 }
 
 @media (max-width: 760px) {
+  .publish-history-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .publish-post-picker > .publish-panel-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .publish-post-picker > .publish-panel-head > button {
+    width: 100%;
+  }
+
   .daily-publish-limit-banner {
     align-items: flex-start;
     flex-direction: column;

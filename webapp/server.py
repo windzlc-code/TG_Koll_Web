@@ -24,6 +24,7 @@ import uuid
 import zipfile
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 from urllib.parse import quote, urlsplit, urlunsplit
@@ -11560,6 +11561,7 @@ class PersonaDashboardMemoryCreatePayload(BaseModel):
 
 class PersonaDashboardRefreshPayload(BaseModel):
     archive_id: str = ""
+    source: str = ""
 
 
 class PersonaDashboardDraftPostPayload(BaseModel):
@@ -11763,7 +11765,7 @@ PERSONA_DASHBOARD_MONITOR_LOCK = threading.Lock()
 PERSONA_DASHBOARD_MONITOR_STARTED = False
 PERSONA_DASHBOARD_MONITOR_STATE: dict[str, Any] = {
     "enabled": False,
-    "source": "rsshub",
+    "source": "browser",
     "status": "idle",
     "last_task_id": "",
     "last_started_at": "",
@@ -13920,7 +13922,7 @@ def _list_persona_archive_publish_history(archive_id: str) -> list[dict[str, Any
     for record in publish_history:
         if not _is_persona_publish_history_record(record):
             continue
-        compact = _compact_publish_record(record)
+        compact = _compact_publish_record(record, _publish_history_hot_metrics(record, archive))
         compact["media_items"] = _previewable_persona_media_items(
             compact.get("media_items") if isinstance(compact.get("media_items"), list) else [],
             archive_id=clean_id,
@@ -16052,7 +16054,37 @@ def _compact_dashboard_setup(setup: dict[str, Any]) -> dict[str, Any]:
     return compact
 
 
-def _compact_publish_record(record: dict[str, Any]) -> dict[str, Any]:
+def _published_record_url(record: dict[str, Any]) -> str:
+    published_meta = record.get("publishedMeta") if isinstance(record.get("publishedMeta"), dict) else {}
+    candidates: list[Any] = [
+        record.get("publishedUrl"),
+        record.get("published_url"),
+        record.get("postUrl"),
+        record.get("post_url"),
+        record.get("url"),
+        published_meta.get("publishedUrl"),
+        published_meta.get("published_url"),
+        published_meta.get("sourceUrl"),
+        published_meta.get("source_url"),
+    ]
+    for target in record.get("publishedTargets") if isinstance(record.get("publishedTargets"), list) else []:
+        if not isinstance(target, dict):
+            continue
+        target_meta = target.get("publishedMeta") if isinstance(target.get("publishedMeta"), dict) else {}
+        candidates.extend([
+            target.get("publishedUrl"),
+            target.get("published_url"),
+            target.get("sourceUrl"),
+            target.get("source_url"),
+            target_meta.get("publishedUrl"),
+            target_meta.get("published_url"),
+            target_meta.get("sourceUrl"),
+            target_meta.get("source_url"),
+        ])
+    return next((str(value).strip() for value in candidates if str(value or "").strip()), "")
+
+
+def _compact_publish_record(record: dict[str, Any], hot_metrics: dict[str, Any] | None = None) -> dict[str, Any]:
     published_meta = record.get("publishedMeta") if isinstance(record.get("publishedMeta"), dict) else {}
     source_meta = record.get("sourceMeta") if isinstance(record.get("sourceMeta"), dict) else {}
     published_targets = record.get("publishedTargets") if isinstance(record.get("publishedTargets"), list) else []
@@ -16079,6 +16111,25 @@ def _compact_publish_record(record: dict[str, Any]) -> dict[str, Any]:
         if text:
             content = text
             break
+    snapshot_metrics = {
+        "likes": _source_metric(published_meta, "likeCount", "like_count"),
+        "comments": _source_metric(published_meta, "commentCount", "comment_count"),
+        "shares": _source_metric(published_meta, "shareCount", "share_count", "send_count"),
+        "reposts": _source_metric(published_meta, "repostCount", "repost_count"),
+        "views": _source_metric(published_meta, "viewCount", "view_count"),
+    }
+    resolved_hot_metrics = dict(hot_metrics or {})
+    if not resolved_hot_metrics:
+        resolved_hot_metrics = {
+            "hot_score": _sum_numbers(*snapshot_metrics.values()),
+            **snapshot_metrics,
+            "refreshed_at": published_meta.get("capturedAt") or published_meta.get("captured_at"),
+            "complete": False,
+            "matched": False,
+            "stale": True,
+            "source": "published_snapshot",
+            "scope": "published_snapshot",
+        }
     return {
         "id": record.get("id"),
         "archive_post_id": record.get("archivePostId") or record.get("archive_post_id"),
@@ -16087,12 +16138,15 @@ def _compact_publish_record(record: dict[str, Any]) -> dict[str, Any]:
         "content": content[:220],
         "published_at": record.get("publishedAt") or record.get("published_at"),
         "status": record.get("status"),
-        "source_url": published_meta.get("sourceUrl") or published_meta.get("source_url"),
-        "captured_at": published_meta.get("capturedAt") or published_meta.get("captured_at"),
-        "likes": _source_metric(published_meta, "likeCount", "like_count"),
-        "comments": _source_metric(published_meta, "commentCount", "comment_count"),
-        "shares": _source_metric(published_meta, "shareCount", "share_count", "send_count"),
-        "views": _source_metric(published_meta, "viewCount", "view_count"),
+        "source_url": _published_record_url(record),
+        "captured_at": resolved_hot_metrics.get("refreshed_at") or published_meta.get("capturedAt") or published_meta.get("captured_at"),
+        "hot_score": _number(resolved_hot_metrics.get("hot_score"), 0),
+        "likes": _number(resolved_hot_metrics.get("likes"), snapshot_metrics["likes"]),
+        "comments": _number(resolved_hot_metrics.get("comments"), snapshot_metrics["comments"]),
+        "shares": _number(resolved_hot_metrics.get("shares"), snapshot_metrics["shares"]),
+        "reposts": _number(resolved_hot_metrics.get("reposts"), snapshot_metrics["reposts"]),
+        "views": _number(resolved_hot_metrics.get("views"), snapshot_metrics["views"]),
+        "hot_metrics": resolved_hot_metrics,
         "automation_task_type": automation_task_type,
         "automation_task_id": record.get("automationTaskId") or record.get("automation_task_id") or published_meta.get("taskId") or published_meta.get("task_id"),
         "media_items": _compact_dashboard_media_items(record, published_meta, source_meta, published_targets),
@@ -16267,6 +16321,170 @@ def _dashboard_rows_match(left: Any, right: Any) -> bool:
     return bool(left_tokens and right_tokens and left_tokens.intersection(right_tokens))
 
 
+def _normalized_dashboard_post_url(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = urlsplit(text if "://" in text else f"https://{text.lstrip('/')}")
+    except Exception:
+        return ""
+    host = parsed.netloc.lower().split("@")[-1].split(":")[0]
+    if host.startswith("www."):
+        host = host[4:]
+    if host == "threads.net":
+        host = "threads.com"
+    path = re.sub(r"/+", "/", parsed.path or "/").rstrip("/").lower()
+    return f"{host}{path}" if host and path else ""
+
+
+def _dashboard_post_code(value: Any) -> str:
+    normalized = _normalized_dashboard_post_url(value)
+    match = re.search(r"/post/([^/?#]+)$", normalized, re.I)
+    return match.group(1).lower() if match else ""
+
+
+def _normalized_dashboard_post_content(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip()).lower()
+
+
+def _publish_record_match_values(record: Any) -> tuple[set[str], set[str], str]:
+    if not isinstance(record, dict):
+        return set(), set(), ""
+    published_meta = record.get("publishedMeta") if isinstance(record.get("publishedMeta"), dict) else {}
+    sources: list[dict[str, Any]] = [record, published_meta]
+    for target in record.get("publishedTargets") if isinstance(record.get("publishedTargets"), list) else []:
+        if not isinstance(target, dict):
+            continue
+        sources.append(target)
+        if isinstance(target.get("publishedMeta"), dict):
+            sources.append(target["publishedMeta"])
+    urls: set[str] = set()
+    codes: set[str] = set()
+    for source in sources:
+        for key in ("publishedUrl", "published_url", "sourceUrl", "source_url", "postUrl", "post_url", "url"):
+            normalized = _normalized_dashboard_post_url(source.get(key))
+            if normalized:
+                urls.add(normalized)
+                code = _dashboard_post_code(source.get(key))
+                if code:
+                    codes.add(code)
+        for key in ("code", "shortcode", "postCode", "post_code"):
+            code = str(source.get(key) or "").strip().lower()
+            if code:
+                codes.add(code)
+    content = _normalized_dashboard_post_content(
+        record.get("content")
+        or record.get("text")
+        or record.get("caption")
+        or published_meta.get("originalContent")
+        or published_meta.get("content")
+        or published_meta.get("text")
+    )
+    return urls, codes, content
+
+
+def _hot_metric_row_match_values(row: Any) -> tuple[set[str], set[str], str]:
+    if not isinstance(row, dict):
+        return set(), set(), ""
+    urls: set[str] = set()
+    codes: set[str] = set()
+    for key in ("sourceUrl", "source_url", "publishedUrl", "published_url", "postUrl", "post_url", "url"):
+        normalized = _normalized_dashboard_post_url(row.get(key))
+        if normalized:
+            urls.add(normalized)
+            code = _dashboard_post_code(row.get(key))
+            if code:
+                codes.add(code)
+    for key in ("code", "shortcode", "postCode", "post_code"):
+        code = str(row.get(key) or "").strip().lower()
+        if code:
+            codes.add(code)
+    content = _normalized_dashboard_post_content(
+        row.get("content") or row.get("originalContent") or row.get("text") or row.get("caption")
+    )
+    return urls, codes, content
+
+
+def _publish_history_hot_metrics(record: dict[str, Any], archive: dict[str, Any]) -> dict[str, Any]:
+    published_meta = record.get("publishedMeta") if isinstance(record.get("publishedMeta"), dict) else {}
+    snapshot = {
+        "likes": _source_metric(published_meta, "likeCount", "like_count"),
+        "comments": _source_metric(published_meta, "commentCount", "comment_count"),
+        "shares": _source_metric(published_meta, "shareCount", "share_count", "send_count"),
+        "reposts": _source_metric(published_meta, "repostCount", "repost_count"),
+        "views": _source_metric(published_meta, "viewCount", "view_count"),
+    }
+    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+    hot_metrics = setup.get("hotMetrics") if isinstance(setup.get("hotMetrics"), dict) else {}
+    record_platform = str(record.get("platform") or published_meta.get("platform") or "").strip().lower()
+    record_urls, record_codes, record_content = _publish_record_match_values(record)
+    platform_candidates: list[dict[str, Any]] = []
+    matched: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for platform_key, platform_metric in hot_metrics.items():
+        if not isinstance(platform_metric, dict):
+            continue
+        platform_name = str(platform_metric.get("platform") or platform_key or "").strip().lower()
+        if record_platform and platform_name and record_platform != platform_name:
+            continue
+        platform_candidates.append(platform_metric)
+        for row in platform_metric.get("postMetrics") if isinstance(platform_metric.get("postMetrics"), list) else []:
+            if not isinstance(row, dict):
+                continue
+            row_urls, row_codes, row_content = _hot_metric_row_match_values(row)
+            exact_identity = bool(
+                (record_urls and row_urls and record_urls.intersection(row_urls))
+                or (record_codes and row_codes and record_codes.intersection(row_codes))
+            )
+            content_match = bool(
+                len(record_content) >= 16
+                and record_content == row_content
+            )
+            if exact_identity or content_match:
+                matched.append((row, platform_metric))
+    if matched:
+        row, platform_metric = max(
+            matched,
+            key=lambda item: str(
+                item[0].get("capturedAt")
+                or item[0].get("captured_at")
+                or item[1].get("refreshedAt")
+                or item[1].get("lightRefreshedAt")
+                or ""
+            ),
+        )
+        values = {
+            "likes": _metric_value(row, "likeCount", "like_count"),
+            "comments": _metric_value(row, "commentCount", "comment_count"),
+            "shares": _metric_value(row, "shareCount", "share_count", "send_count"),
+            "reposts": _metric_value(row, "repostCount", "repost_count"),
+            "views": _metric_value(row, "viewCount", "view_count"),
+        }
+        scope = str(platform_metric.get("scope") or "").strip()
+        complete = bool(platform_metric.get("complete") is True and scope == "authenticated_full_profile")
+        return {
+            "hot_score": _sum_numbers(*values.values()),
+            **values,
+            "refreshed_at": row.get("capturedAt") or row.get("captured_at") or platform_metric.get("refreshedAt") or platform_metric.get("lightRefreshedAt"),
+            "complete": complete,
+            "matched": True,
+            "stale": not complete,
+            "source": str(platform_metric.get("method") or "unknown"),
+            "scope": scope or "unknown",
+        }
+    platform_metric = platform_candidates[0] if platform_candidates else {}
+    return {
+        "hot_score": _sum_numbers(*snapshot.values()),
+        **snapshot,
+        "refreshed_at": published_meta.get("capturedAt") or published_meta.get("captured_at") or platform_metric.get("refreshedAt") or platform_metric.get("lightRefreshedAt"),
+        "complete": False,
+        "matched": False,
+        "stale": True,
+        "source": "published_snapshot",
+        "scope": "published_snapshot",
+    }
+
+
 def _related_dashboard_media_items(row: dict[str, Any], posts: list[Any], publish_history: list[Any]) -> list[dict[str, str]]:
     sources: list[Any] = [row]
     for post in posts:
@@ -16428,7 +16646,7 @@ def _start_persona_dashboard_refresh(
     archive_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     task_id = f"pdr_{uuid.uuid4().hex[:12]}"
-    refresh_source = (source or os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "rsshub").strip().lower() or "rsshub"
+    refresh_source = (source or os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "browser").strip().lower() or "browser"
     scoped_archive_ids = list(dict.fromkeys(
         str(item or "").strip() for item in (archive_ids or []) if str(item or "").strip()
     ))
@@ -16478,7 +16696,7 @@ def _persona_dashboard_refresh_worker_v2(
     archive_ids: list[str] | None = None,
 ) -> None:
     started = time.time()
-    refresh_source = (source or os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "rsshub").strip().lower() or "rsshub"
+    refresh_source = (source or os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "browser").strip().lower() or "browser"
     scope = "单个人设" if archive_id else (
         f"当前账号的 {len(archive_ids)} 个人设"
         if archive_ids is not None
@@ -16607,18 +16825,77 @@ def _persona_dashboard_monitor_enabled() -> bool:
     return str(os.getenv("PERSONA_DASHBOARD_AUTO_REFRESH_ENABLED", "1")).strip().lower() not in {"0", "false", "no", "off"}
 
 
+def _persona_dashboard_monitor_source() -> str:
+    source = (os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "browser").strip().lower() or "browser"
+    return source if source in {"rsshub", "browser"} else "browser"
+
+
+def _persona_dashboard_refresh_timestamp(value: Any) -> float:
+    text = str(value or "").strip()
+    if not text:
+        return 0.0
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+    except Exception:
+        return 0.0
+
+
+def _persona_dashboard_monitor_initial_delay(interval: int, source: str, now: float | None = None) -> float:
+    archives, _ = _read_tool_r18_persona_archives()
+    required_scope = "rsshub_feed_monitor" if source == "rsshub" else "authenticated_full_profile"
+    refresh_times: list[float] = []
+    bound_count = 0
+    for archive in archives:
+        if not isinstance(archive, dict):
+            continue
+        setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+        account_management = setup.get("accountManagement") if isinstance(setup.get("accountManagement"), dict) else {}
+        threads = account_management.get("threads") if isinstance(account_management.get("threads"), dict) else {}
+        if not _normalize_threads_username(threads.get("handle")):
+            continue
+        bound_count += 1
+        hot_metrics = setup.get("hotMetrics") if isinstance(setup.get("hotMetrics"), dict) else {}
+        candidates = [
+            metric for metric in hot_metrics.values()
+            if (
+                isinstance(metric, dict)
+                and str(metric.get("platform") or "threads").strip().lower() == "threads"
+                and str(metric.get("scope") or "").strip() == required_scope
+            )
+        ]
+        latest = max(
+            (
+                _persona_dashboard_refresh_timestamp(metric.get("refreshedAt") or metric.get("lightRefreshedAt"))
+                for metric in candidates
+            ),
+            default=0.0,
+        )
+        if latest <= 0:
+            return 0.0
+        refresh_times.append(latest)
+    if not bound_count:
+        return float(interval)
+    oldest_refresh = min(refresh_times) if refresh_times else 0.0
+    return max(0.0, float(interval) - (float(now if now is not None else time.time()) - oldest_refresh))
+
+
 def _persona_dashboard_monitor_loop() -> None:
     interval = _persona_dashboard_monitor_interval_seconds()
-    source = (os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "rsshub").strip().lower() or "rsshub"
+    source = _persona_dashboard_monitor_source()
+    initial_delay = _persona_dashboard_monitor_initial_delay(interval, source)
     with PERSONA_DASHBOARD_MONITOR_LOCK:
         PERSONA_DASHBOARD_MONITOR_STATE.update({
             "enabled": _persona_dashboard_monitor_enabled(),
             "source": source,
             "status": "waiting",
             "interval_seconds": interval,
-            "last_message": "\u540e\u53f0\u5168\u91cf\u5237\u65b0\u5df2\u6392\u7a0b\uff0c\u7b49\u5f85\u4e0b\u4e00\u4e2a\u6bcf\u65e5\u5468\u671f\u3002",
+            "last_message": "后台全量刷新已排程。" if initial_delay else "检测到全量数据已过期，即将刷新。",
         })
-    time.sleep(interval)
+    if initial_delay > 0:
+        time.sleep(initial_delay)
     while True:
         if not _persona_dashboard_monitor_enabled():
             with PERSONA_DASHBOARD_MONITOR_LOCK:
@@ -16634,6 +16911,7 @@ def _persona_dashboard_monitor_loop() -> None:
         try:
             if not _persona_dashboard_refresh_is_running():
                 task = _start_persona_dashboard_refresh("", source=source, trigger="auto_monitor")
+                logger.info("persona dashboard automatic full refresh started: task=%s source=%s", task.get("id", ""), source)
                 with PERSONA_DASHBOARD_MONITOR_LOCK:
                     PERSONA_DASHBOARD_MONITOR_STATE.update({
                         "enabled": True,
@@ -16654,6 +16932,11 @@ def _persona_dashboard_monitor_loop() -> None:
                                 "last_finished_at": current.get("finished_at", ""),
                                 "last_message": current.get("message", ""),
                             })
+                        logger.info(
+                            "persona dashboard automatic full refresh finished: task=%s status=%s",
+                            task.get("id", ""),
+                            current.get("status", ""),
+                        )
                         break
                     time.sleep(5)
             else:
@@ -16685,12 +16968,12 @@ def _ensure_persona_dashboard_monitor_started() -> None:
         PERSONA_DASHBOARD_MONITOR_STARTED = True
         PERSONA_DASHBOARD_MONITOR_STATE.update({
             "enabled": _persona_dashboard_monitor_enabled(),
-            "source": (os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "rsshub").strip().lower() or "rsshub",
+            "source": _persona_dashboard_monitor_source(),
             "status": "starting",
             "interval_seconds": _persona_dashboard_monitor_interval_seconds(),
             "last_message": "后台自动监控启动中。",
         })
-    thread = threading.Thread(target=_persona_dashboard_monitor_loop, name="persona-dashboard-rsshub-monitor", daemon=True)
+    thread = threading.Thread(target=_persona_dashboard_monitor_loop, name="persona-dashboard-full-refresh-monitor", daemon=True)
     thread.start()
 
 
@@ -16938,7 +17221,11 @@ def _build_persona_dashboard_overview(
             "hot_score_formula": "热度 = 逐帖浏览合计 + 点赞 + 评论 + 分享 + 转发；不包含账号主页浏览。",
             "hot_platforms": hot_platforms,
             "post_metrics": post_metric_rows[:80],
-            "publish_history": [_compact_publish_record(item) for item in visible_publish_history[:20] if isinstance(item, dict)],
+            "publish_history": [
+                _compact_publish_record(item, _publish_history_hot_metrics(item, archive))
+                for item in visible_publish_history[:20]
+                if isinstance(item, dict)
+            ],
             "queue": queue_for_archive,
             "warnings": _persona_dashboard_warnings(setup, hot_platforms, post_metric_rows),
         })
@@ -18790,7 +19077,10 @@ def create_app() -> FastAPI:
     @app.post("/api/persona_dashboard/refresh")
     def api_persona_dashboard_refresh(payload: PersonaDashboardRefreshPayload, user: dict[str, Any] = Depends(get_current_user)):
         archive_ids = _persona_dashboard_refresh_archive_ids(payload.archive_id, user)
-        task = _start_persona_dashboard_refresh(payload.archive_id, archive_ids=archive_ids)
+        requested_source = str(payload.source or "").strip().lower()
+        if requested_source not in {"", "rsshub", "browser"}:
+            raise HTTPException(status_code=400, detail="刷新来源仅支持 rsshub 或 browser。")
+        task = _start_persona_dashboard_refresh(payload.archive_id, source=requested_source, archive_ids=archive_ids)
         task["user_id"] = _workspace_user_id(user)
         return task
 

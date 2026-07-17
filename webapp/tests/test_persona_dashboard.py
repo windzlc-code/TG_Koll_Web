@@ -1071,10 +1071,43 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
     def test_public_refresh_endpoint_returns_task_status(self):
         self._write_archives()
-        with mock.patch.object(server, "_start_persona_dashboard_refresh", return_value={"id": "pdr_test", "status": "queued", "message": "queued"}):
-            resp = self.client.post("/api/persona_dashboard/refresh", json={"archive_id": "persona-1"})
+        with mock.patch.object(server, "_start_persona_dashboard_refresh", return_value={"id": "pdr_test", "status": "queued", "message": "queued"}) as start:
+            resp = self.client.post("/api/persona_dashboard/refresh", json={"archive_id": "persona-1", "source": "browser"})
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["id"], "pdr_test")
+        start.assert_called_once_with("persona-1", source="browser", archive_ids=["persona-1"])
+
+        invalid = self.client.post("/api/persona_dashboard/refresh", json={"archive_id": "persona-1", "source": "unknown"})
+        self.assertEqual(invalid.status_code, 400)
+
+    def test_daily_full_refresh_is_due_immediately_when_authenticated_data_is_stale(self):
+        now = datetime(2026, 7, 17, 12, 0, tzinfo=timezone.utc).timestamp()
+        stale_archive = {
+            "id": "persona-1",
+            "setup": {
+                "accountManagement": {"threads": {"handle": "@history"}},
+                "hotMetrics": {
+                    "threads": {
+                        "platform": "threads",
+                        "scope": "authenticated_full_profile",
+                        "refreshedAt": "2026-07-15T12:00:00Z",
+                    }
+                },
+            },
+        }
+        fresh_archive = json.loads(json.dumps(stale_archive))
+        fresh_archive["setup"]["hotMetrics"]["threads"]["refreshedAt"] = "2026-07-17T11:30:00Z"
+
+        with mock.patch.object(server, "_read_tool_r18_persona_archives", return_value=([stale_archive], {})):
+            self.assertEqual(server._persona_dashboard_monitor_initial_delay(86400, "browser", now), 0)
+        with mock.patch.object(server, "_read_tool_r18_persona_archives", return_value=([fresh_archive], {})):
+            delay = server._persona_dashboard_monitor_initial_delay(86400, "browser", now)
+        self.assertEqual(delay, 84600)
+
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertTrue(server._persona_dashboard_monitor_enabled())
+            self.assertEqual(server._persona_dashboard_monitor_interval_seconds(), 86400)
+            self.assertEqual(server._persona_dashboard_monitor_source(), "browser")
 
     def test_create_persona_requires_auth_and_persists_archive(self):
         resp = self.client.post(
@@ -1597,6 +1630,89 @@ class PersonaDashboardApiTests(unittest.TestCase):
         media_resp = self.client.get(preview_path)
         self.assertEqual(media_resp.status_code, 200)
         self.assertEqual(media_resp.headers["content-type"], "image/png")
+
+    def test_persona_publish_history_merges_full_hot_metrics_by_published_url(self):
+        self._write_archives()
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        record = archives[0]["publishHistory"][0]
+        record["publishedUrl"] = "https://www.threads.net/@history/post/abc/?utm_source=console"
+        platform_metrics = archives[0]["setup"]["hotMetrics"]["threads"]
+        platform_metrics.update({
+            "method": "browser",
+            "scope": "authenticated_full_profile",
+            "refreshedAt": "2026-07-17T01:02:03Z",
+            "complete": True,
+        })
+        platform_metrics["postMetrics"][0]["repostCount"] = 4
+        archives_path.write_text(json.dumps(archives), encoding="utf-8")
+
+        resp = self.client.get("/api/persona_dashboard/personas/persona-1/publish_history")
+
+        self.assertEqual(resp.status_code, 200)
+        row = resp.json()["publish_history"][0]
+        self.assertEqual(row["source_url"], record["publishedUrl"])
+        self.assertEqual(row["likes"], 10)
+        self.assertEqual(row["comments"], 5)
+        self.assertEqual(row["shares"], 2)
+        self.assertEqual(row["reposts"], 4)
+        self.assertEqual(row["views"], 300)
+        self.assertEqual(row["hot_score"], 321)
+        self.assertEqual(
+            row["hot_metrics"],
+            {
+                "hot_score": 321,
+                "likes": 10,
+                "comments": 5,
+                "shares": 2,
+                "reposts": 4,
+                "views": 300,
+                "refreshed_at": "2026-06-30T01:00:00Z",
+                "complete": True,
+                "matched": True,
+                "stale": False,
+                "source": "browser",
+                "scope": "authenticated_full_profile",
+            },
+        )
+
+    def test_persona_publish_history_uses_content_fallback_and_marks_snapshot_stale(self):
+        self._write_archives()
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        record = archives[0]["publishHistory"][0]
+        record["content"] = "A unique published sentence that can be matched safely."
+        hot_metrics = archives[0]["setup"]["hotMetrics"]["threads"]
+        hot_metrics.update({
+            "method": "rsshub",
+            "scope": "rsshub_feed_monitor",
+            "refreshedAt": "2026-07-17T01:02:03Z",
+            "complete": True,
+        })
+        hot_metrics["postMetrics"][0].update({
+            "sourceUrl": "https://www.threads.com/@history/post/content-only",
+            "content": record["content"],
+        })
+        archives_path.write_text(json.dumps(archives), encoding="utf-8")
+
+        resp = self.client.get("/api/persona_dashboard/personas/persona-1/publish_history")
+
+        self.assertEqual(resp.status_code, 200)
+        metrics = resp.json()["publish_history"][0]["hot_metrics"]
+        self.assertTrue(metrics["matched"])
+        self.assertFalse(metrics["complete"])
+        self.assertTrue(metrics["stale"])
+        self.assertEqual(metrics["scope"], "rsshub_feed_monitor")
+
+        archives[0]["publishHistory"][0]["content"] = "No matching published content."
+        archives_path.write_text(json.dumps(archives), encoding="utf-8")
+        resp = self.client.get("/api/persona_dashboard/personas/persona-1/publish_history")
+        row = resp.json()["publish_history"][0]
+        self.assertFalse(row["hot_metrics"]["matched"])
+        self.assertTrue(row["hot_metrics"]["stale"])
+        self.assertEqual(row["likes"], 3)
+        self.assertEqual(row["comments"], 1)
+        self.assertEqual(row["views"], 40)
 
     def test_missing_media_is_retained_as_unavailable_item(self):
         self._write_archives()

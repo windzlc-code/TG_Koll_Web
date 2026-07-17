@@ -431,6 +431,8 @@ const state = {
   publishSelectedPostIds: {},
   publishPreviewPostId: "",
   publishHistoryPreviewId: "",
+  publishHistoryRefreshTaskId: "",
+  publishHistoryRefreshStatus: null,
   publishCustomContent: "",
   socialTasksFetch: null,
   socialRefreshFetch: null,
@@ -8051,12 +8053,20 @@ function renderPublishHistoryPreview(persona = selectedPersona()) {
   const activeRecord = activePublishHistoryRecord(rows);
   const activeMediaItems = activeRecord ? personaHistoryMediaItems(activeRecord) : [];
   const publishedUrl = String(activeRecord?.source_url || activeRecord?.published_url || activeRecord?.url || activeRecord?.post_url || "").trim();
+  const hotMetrics = activeRecord?.hot_metrics || activeRecord || {};
   const metrics = activeRecord ? [
-    ["点赞", activeRecord.likes],
-    ["评论", activeRecord.comments],
-    ["转发", activeRecord.shares],
-    ["浏览", activeRecord.views],
-  ].filter(([, value]) => Number(value || 0) > 0) : [];
+    ["热度", hotMetrics.hot_score],
+    ["浏览", hotMetrics.views],
+    ["点赞", hotMetrics.likes],
+    ["评论", hotMetrics.comments],
+    ["分享", hotMetrics.shares],
+    ["转发", hotMetrics.reposts],
+  ] : [];
+  const hotStatus = hotMetrics.complete
+    ? `全量互动 · 更新于 ${formatTime(hotMetrics.refreshed_at) || "时间未知"}`
+    : (hotMetrics.matched
+      ? `已匹配监测数据 · 非完整互动 · 更新于 ${formatTime(hotMetrics.refreshed_at) || "时间未知"}`
+      : `发布快照 · 尚未匹配全量热点${hotMetrics.refreshed_at ? ` · ${formatTime(hotMetrics.refreshed_at)}` : ""}`);
   return `
     <section class="publish-content-preview publish-history-preview">
       <div class="publish-panel-head">
@@ -8076,7 +8086,8 @@ function renderPublishHistoryPreview(persona = selectedPersona()) {
               ${activeRecord?.status ? `<span>${esc(statusLabel(activeRecord.status))}</span>` : ""}
             </div>
             <p>${esc(String(activeRecord?.content || activeRecord?.caption || activeRecord?.text || activeRecord?.source_url || "").trim() || "该记录没有正文或链接摘要。")}</p>
-            ${metrics.length ? `<div class="publish-history-metrics">${metrics.map(([label, value]) => `<span>${esc(label)} ${esc(value)}</span>`).join("")}</div>` : ""}
+            ${metrics.length ? `<div class="publish-history-metrics">${metrics.map(([label, value]) => `<span><small>${esc(label)}</small><strong>${esc(Number(value || 0).toLocaleString("zh-CN"))}</strong></span>`).join("")}</div>` : ""}
+            <div class="publish-history-hot-status ${hotMetrics.complete ? "is-complete" : "is-stale"}">${esc(hotStatus)}</div>
             <div class="row-actions publish-history-actions">
               ${publishedUrl ? `<a href="${esc(publishedUrl)}" target="_blank" rel="noopener">查看来源</a>` : ""}
               <button type="button" data-publish-history-requeue="${esc(String(activeRecord?.id || ""))}">重入队</button>
@@ -8089,15 +8100,18 @@ function renderPublishHistoryPreview(persona = selectedPersona()) {
 }
 
 function renderPublishHistoryPanel(persona = selectedPersona()) {
+  const refreshing = Boolean(state.publishHistoryRefreshTaskId);
+  const refreshStatus = state.publishHistoryRefreshStatus;
   return `
     <div class="publish-content-layout">
       ${renderPublishHistoryPreview(persona)}
       <section class="publish-post-picker">
         <div class="publish-panel-head">
-          <strong>发布历史</strong>
-          <span>${esc(persona?.name || "当前人设")}</span>
+          <div><strong>发布历史</strong><span>${esc(persona?.name || "当前人设")}</span></div>
+          <button type="button" data-publish-history-refresh class="primary" aria-busy="${refreshing ? "true" : "false"}" ${refreshing || !persona?.id ? "disabled" : ""}>${refreshing ? `刷新中 ${esc(Number(refreshStatus?.progress || 0))}%` : "刷新热点数据"}</button>
         </div>
-        <div class="publish-history-note">这里只查看当前人设的已发布记录，不会创建新的发布任务。</div>
+        <div class="publish-history-note">这里只查看当前人设的已发布记录。系统每天自动同步一次；也可手动刷新真实互动数据。</div>
+        ${refreshStatus?.message ? `<div class="publish-history-refresh-status">${esc(refreshStatus.message)}</div>` : ""}
         ${renderPublishHistorySelectionList(persona)}
       </section>
     </div>`;
@@ -8133,6 +8147,58 @@ async function requeuePublishHistoryRecord(historyId = "", persona = selectedPer
     showMsg("commandMsg", error.detail || error.message || "重入队失败", false);
   } finally {
     setActionLocked(lockParts, false);
+  }
+}
+
+async function refreshPublishHistoryHotData(persona = selectedPersona()) {
+  const cleanPersonaId = String(persona?.id || "").trim();
+  if (!cleanPersonaId) {
+    showMsg("commandMsg", "请先选择要刷新的发布人设。", false);
+    return;
+  }
+  if (state.publishHistoryRefreshTaskId) {
+    showMsg("commandMsg", "热点数据刷新正在进行，请等待完成。", false);
+    return;
+  }
+  try {
+    state.publishHistoryRefreshTaskId = "starting";
+    state.publishHistoryRefreshStatus = { progress: 0, message: "正在启动全量热点刷新..." };
+    renderSimpleFlowModule("publishing");
+    const task = await api("/api/persona_dashboard/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archive_id: cleanPersonaId, source: "browser" }),
+    });
+    const taskId = String(task?.id || "").trim();
+    if (!taskId) throw new Error("刷新任务未返回任务 ID");
+    state.publishHistoryRefreshTaskId = taskId;
+    while (state.publishHistoryRefreshTaskId === taskId) {
+      const current = await api(`/api/persona_dashboard/refresh/${encodeURIComponent(taskId)}`);
+      state.publishHistoryRefreshStatus = {
+        progress: Number(current?.progress || 0),
+        message: `${current?.step ? `${current.step} · ` : ""}${current?.message || "正在刷新热点数据..."}`,
+      };
+      if (state.activeModule === "publishing" && normalizedPublishMode(state.simpleBranches.publishing) === "publish_history") {
+        renderSimpleFlowModule("publishing");
+      }
+      if (!["queued", "running"].includes(String(current?.status || ""))) {
+        if (current?.status !== "success") throw new Error(current?.message || "热点数据刷新失败");
+        break;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 2500));
+    }
+    await loadPersonas().catch(() => {});
+    await loadPersonaPublishHistory(cleanPersonaId, { force: true });
+    state.publishHistoryRefreshStatus = { progress: 100, message: "全量热点刷新完成，发布历史已更新。" };
+    showMsg("commandMsg", "全量热点刷新完成，发布历史已更新。", true);
+  } catch (error) {
+    state.publishHistoryRefreshStatus = { progress: 100, message: error.detail || error.message || "热点数据刷新失败" };
+    showMsg("commandMsg", state.publishHistoryRefreshStatus.message, false);
+  } finally {
+    state.publishHistoryRefreshTaskId = "";
+    if (state.activeModule === "publishing" && normalizedPublishMode(state.simpleBranches.publishing) === "publish_history") {
+      renderSimpleFlowModule("publishing");
+    }
   }
 }
 
@@ -8723,6 +8789,11 @@ function bindSimpleFlowInputs(moduleId) {
     document.querySelectorAll("[data-publish-history-requeue]").forEach((node) => {
       node.addEventListener("click", () => {
         requeuePublishHistoryRecord(node.dataset.publishHistoryRequeue || "").catch(() => {});
+      });
+    });
+    document.querySelectorAll("[data-publish-history-refresh]").forEach((node) => {
+      node.addEventListener("click", () => {
+        refreshPublishHistoryHotData(selectedPersona()).catch(() => {});
       });
     });
     document.querySelectorAll("[data-publish-use-persona]").forEach((node) => {

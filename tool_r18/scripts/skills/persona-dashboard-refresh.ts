@@ -1,5 +1,9 @@
+import "@/runtime/node/browser-shim";
 import { fetchThreadsProfileHotMetrics, getLiveSentimentBrowserAuthProfileBinding, refreshSentimentBrowserCookiesForPlatform } from "@/lib/sentiment-hot-importer";
 import { listPersonaArchives, updatePersonaArchiveProfile } from "@/lib/persona-archives";
+import { installNodePersonaArchiveBridge } from "@/runtime/node/persona-archive-store";
+
+installNodePersonaArchiveBridge();
 
 function normalizeThreadsUsername(value: unknown): string {
   return String(value || "")
@@ -223,7 +227,7 @@ function isCompleteMetrics(metrics: any): boolean {
 async function main() {
   const targetId = argValue("archive-id");
   const scopedTargetIds = new Set([targetId, ...archiveIdsFromArgs()].filter(Boolean));
-  const source = (argValue("source") || process.env.PERSONA_DASHBOARD_REFRESH_SOURCE || "rsshub").toLowerCase();
+  const source = (argValue("source") || process.env.PERSONA_DASHBOARD_REFRESH_SOURCE || "browser").toLowerCase();
   const archives = await listPersonaArchives();
   const targets = scopedTargetIds.size
     ? archives.filter((archive) => scopedTargetIds.has(String(archive.id || "")))
