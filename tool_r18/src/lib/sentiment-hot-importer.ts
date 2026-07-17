@@ -2605,7 +2605,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       warnings.push(`当前人设候选不足，已用模型父领域真实候选补充 ${globalSupplements.length} 篇。`);
     }
   }
-  if (strictFreshOnly && candidates.length < limit) {
+  if (!liveOnlyRefresh && strictFreshOnly && candidates.length < limit) {
     // The live/15-day pool can be smaller than the requested display count
     // even after both search rounds. As a last resort, rotate compliant
     // same-persona history so the UI remains usable; freshness, heat, Chinese
