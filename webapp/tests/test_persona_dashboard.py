@@ -2670,6 +2670,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
             platform="threads",
             task_type="open_login",
             status="success",
+            result={"status": "ready", "diagnostic_outcome": "ready"},
             priority=20,
         )
         self._insert_social_task(

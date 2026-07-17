@@ -592,6 +592,7 @@ def init_db() -> None:
               status TEXT NOT NULL DEFAULT 'active',
               last_check_at INTEGER NOT NULL DEFAULT 0,
               last_check_result TEXT NOT NULL DEFAULT '',
+              client_request_id TEXT NOT NULL DEFAULT '',
               created_at INTEGER NOT NULL,
               updated_at INTEGER NOT NULL
             )
@@ -767,10 +768,15 @@ def init_db() -> None:
             "city": "TEXT NOT NULL DEFAULT ''",
             "note": "TEXT NOT NULL DEFAULT ''",
             "expires_at": "INTEGER NOT NULL DEFAULT 0",
+            "client_request_id": "TEXT NOT NULL DEFAULT ''",
         }
         for column, definition in proxy_column_migrations.items():
             if column not in proxy_columns:
                 conn.execute(f"ALTER TABLE social_proxies ADD COLUMN {column} {definition}")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_social_proxies_client_request "
+            "ON social_proxies(user_id, client_request_id) WHERE client_request_id <> ''"
+        )
         account_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(social_accounts)").fetchall()}
         if "user_id" not in account_columns:
             conn.execute("ALTER TABLE social_accounts ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0")

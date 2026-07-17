@@ -1135,8 +1135,19 @@ def register_social_automation_routes(app: FastAPI) -> None:
         return {"ok": True, "proxies": proxies}
 
     @app.post("/api/persona_dashboard/automation/proxies")
-    def api_social_proxy_create(payload: SocialProxyPayload, user: dict[str, Any] = Depends(get_current_user)):
-        return {"ok": True, "proxy": create_social_proxy(payload, owner_user_id=_identity_user_id(user))}
+    def api_social_proxy_create(
+        payload: SocialProxyPayload,
+        request: Request,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        return {
+            "ok": True,
+            "proxy": create_social_proxy(
+                payload,
+                owner_user_id=_identity_user_id(user),
+                idempotency_key=str(request.headers.get("Idempotency-Key") or ""),
+            ),
+        }
 
     @app.post("/api/persona_dashboard/automation/proxies/test")
     def api_social_proxy_test(payload: SocialProxyCheckPayload, user: dict[str, Any] = Depends(get_current_user)):
@@ -2571,13 +2582,28 @@ def _normalize_live_browser_key(key: str) -> str:
     raise HTTPException(status_code=400, detail="不支持的按键")
 
 
-def create_social_proxy(payload: SocialProxyPayload, *, owner_user_id: int = 0) -> dict[str, Any]:
+def create_social_proxy(
+    payload: SocialProxyPayload,
+    *,
+    owner_user_id: int = 0,
+    idempotency_key: str = "",
+) -> dict[str, Any]:
     _normalize_proxy_connection_mode(payload.connection_mode)
+    request_id = str(idempotency_key or "").strip()
+    if request_id and not re.fullmatch(r"[A-Za-z0-9._:-]{8,128}", request_id):
+        raise HTTPException(status_code=400, detail="Idempotency-Key 格式无效")
     if str(payload.ip_type or "static_residential").strip().lower() != "static_residential":
         raise HTTPException(status_code=400, detail="仅支持静态住宅 IP")
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         _require_active_owner_user(conn, owner_user_id)
+        if request_id:
+            existing = conn.execute(
+                "SELECT * FROM social_proxies WHERE user_id = ? AND client_request_id = ?",
+                (max(0, int(owner_user_id or 0)), request_id),
+            ).fetchone()
+            if existing:
+                return _proxy_public(existing)
         row = _insert_social_proxy(
             conn,
             protocol=payload.proxy_type,
@@ -2597,6 +2623,7 @@ def create_social_proxy(payload: SocialProxyPayload, *, owner_user_id: int = 0) 
             expires_at=payload.expires_at,
             status="pending",
             owner_user_id=owner_user_id,
+            client_request_id=request_id,
         )
     return _proxy_public(row)
 
@@ -2738,6 +2765,7 @@ def _insert_social_proxy(
     expires_at: int = 0,
     status: str = "pending",
     owner_user_id: int = 0,
+    client_request_id: str = "",
 ) -> Any:
     proxy_type, clean_host, clean_port = _validate_proxy_endpoint(protocol, host, port)
     clean_username = str(username or "").strip()
@@ -2751,9 +2779,9 @@ def _insert_social_proxy(
         """
         INSERT INTO social_proxies(
           id, user_id, name, proxy_type, host, port, username, password, country, region, city, isp,
-          source, ip_type, purchase_status, note, expires_at, status, created_at, updated_at
+          source, ip_type, purchase_status, note, expires_at, status, client_request_id, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             proxy_id,
@@ -2774,6 +2802,7 @@ def _insert_social_proxy(
             str(note or "").strip(),
             max(0, int(expires_at or 0)),
             "pending",
+            str(client_request_id or "").strip(),
             now,
             now,
         ),

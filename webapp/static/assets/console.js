@@ -6961,6 +6961,32 @@ function renderRefreshIcon() {
   </svg>`;
 }
 
+function renderClipboardIcon() {
+  return `<svg class="ui-action-icon ui-clipboard-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <rect x="8" y="8" width="11" height="12" rx="2"></rect>
+    <path d="M16 8V6a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h1"></path>
+  </svg>`;
+}
+
+async function copyTextToClipboard(value = "") {
+  const text = String(value || "");
+  if (!text) throw new Error("没有可复制的内容");
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const input = document.createElement("textarea");
+  input.value = text;
+  input.setAttribute("readonly", "");
+  input.style.position = "fixed";
+  input.style.left = "-9999px";
+  document.body.appendChild(input);
+  input.select();
+  const copied = document.execCommand("copy");
+  input.remove();
+  if (!copied) throw new Error("浏览器未允许复制");
+}
+
 function renderInfoIcon() {
   return `<svg class="ui-action-icon ui-info-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
     <circle cx="12" cy="12" r="10"></circle>
@@ -12405,7 +12431,8 @@ async function createPersonaDraftPost() {
   const editingSource = form.editingSource === "favorites" ? "favorites" : "posts";
   const queuedMediaOps = editingPostId && Array.isArray(form.mediaOps) ? [...form.mediaOps] : [];
   const pendingMediaFiles = filesFromInput("personaPostMediaUploadFiles");
-  const hasExistingMedia = Boolean(editingPostId && Array.isArray(form.mediaItems) && form.mediaItems.length);
+  const currentMediaItems = editingPostId && Array.isArray(form.mediaItems) ? form.mediaItems : [];
+  const hasExistingMedia = Boolean(editingPostId && currentMediaItems.length);
   const hasMediaContent = pendingMediaFiles.length > 0 || hasExistingMedia;
   if (!content && !hasMediaContent) {
     showMsg("commandMsg", "请填写推文正文或上传至少一个媒体文件。", false);
@@ -15479,7 +15506,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
               </div>
             ` : ""}
         ${composeMode === "custom" || generateMode === "custom" ? `
-          ${editingHotMeta ? renderPersonaHotOrigin(editingHotMeta) : ""}
+          ${!isEditingDraft && editingHotMeta ? renderPersonaHotOrigin(editingHotMeta) : ""}
           <label>草稿标题（可选）
             <input id="personaDraftTitle" value="${esc(draftForm.title || "")}" placeholder="例如：今日主题帖" />
           </label>
@@ -15954,8 +15981,10 @@ function updateAccountStatusViews() {
     const checking = Boolean(activeSocialTaskFor({ accountId, taskType: "check_login" }));
     button.disabled = checking;
     button.setAttribute("aria-busy", checking ? "true" : "false");
-    button.title = checking ? "正在同步登录状态" : "同步登录状态";
+    button.title = checking ? "正在检测登录与平台状态" : "检测登录与平台状态";
     button.setAttribute("aria-label", button.title);
+    const label = button.querySelector("[data-account-status-check-label]");
+    if (label) label.textContent = checking ? "检测中" : "检测状态";
   });
 }
 
@@ -16286,7 +16315,7 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
     </div>
     <div class="row-actions">
       <button type="button" class="primary" data-social-open-login="${esc(accountId)}">打开登录</button>
-      <button type="button" class="account-status-check" data-social-check-status="${esc(accountId)}" title="同步登录状态" aria-label="同步登录状态" aria-busy="${activeSocialTaskFor({ accountId, taskType: "check_login" }) ? "true" : "false"}" ${activeSocialTaskFor({ accountId, taskType: "check_login" }) ? "disabled" : ""}>${renderRefreshIcon()}</button>
+      <button type="button" class="account-status-check" data-social-check-status="${esc(accountId)}" title="检测登录与平台状态" aria-label="检测登录与平台状态" aria-busy="${activeSocialTaskFor({ accountId, taskType: "check_login" }) ? "true" : "false"}" ${activeSocialTaskFor({ accountId, taskType: "check_login" }) ? "disabled" : ""}>${renderRefreshIcon()}<span data-account-status-check-label>${activeSocialTaskFor({ accountId, taskType: "check_login" }) ? "检测中" : "检测状态"}</span></button>
       <button type="button" data-account-proxy-picker="${esc(accountId)}">${account?.proxy_id ? "切换代理" : "选择代理"}</button>
       <button type="button" data-account-pool-edit="${esc(accountId)}">编辑</button>
       <button type="button" data-account-pool-unbind="${esc(accountId)}" ${account.persona_id ? "" : "disabled"}>解绑</button>
@@ -17286,9 +17315,69 @@ function accountProxyOptionCardsHtml(selectedProxyId = "", { scope = "modal" } =
 }
 
 function accountProxyCustomAddButtonHtml(scope = "modal") {
-  return `<button type="button" class="account-proxy-custom-add" data-account-proxy-custom-add data-account-proxy-choice-scope="${esc(scope)}">
+  return `<button type="button" class="account-proxy-custom-add" data-account-proxy-custom-add data-account-proxy-choice-scope="${esc(scope)}" aria-expanded="false">
     ${renderPlusIcon()}<span>添加自定义代理</span>
   </button>`;
+}
+
+function accountProxyInlineCustomFormHtml(scope = "edit") {
+  return `<section class="account-proxy-inline-custom" data-account-proxy-inline-custom data-account-proxy-choice-scope="${esc(scope)}" hidden>
+    <div class="account-proxy-inline-custom-head">
+      <div><strong>添加自定义代理</strong><span>填写后先进行真实网络检测，通过后保存并自动选中。</span></div>
+    </div>
+    <div class="proxy-form-grid">
+      ${sharedProxyFieldsHtml("accountProxyCustom")}
+    </div>
+    <div class="account-proxy-inline-custom-actions">
+      <button type="button" data-account-proxy-custom-cancel>取消</button>
+      <button type="button" class="primary" data-account-proxy-custom-save>检测并添加</button>
+    </div>
+  </section>`;
+}
+
+function setAccountProxyInlineMode(container, mode = "") {
+  if (!container) return;
+  const normalized = ["options", "custom"].includes(mode) ? mode : "";
+  const options = container.querySelector("[data-account-proxy-inline-options]");
+  const custom = container.querySelector("[data-account-proxy-inline-custom]");
+  if (options) options.hidden = normalized !== "options";
+  if (custom) custom.hidden = normalized !== "custom";
+  container.querySelectorAll("[data-account-proxy-inline-toggle]").forEach((button) => {
+    button.setAttribute("aria-expanded", normalized === "options" ? "true" : "false");
+  });
+  container.querySelectorAll("[data-account-proxy-custom-add]").forEach((button) => {
+    button.setAttribute("aria-expanded", normalized === "custom" ? "true" : "false");
+  });
+  if (normalized === "custom") container.querySelector("#accountProxyCustomProtocol")?.focus();
+}
+
+function accountProxyCustomIsBusy(container) {
+  return container?.querySelector("[data-account-proxy-inline-custom]")?.dataset.proxyCustomBusy === "true";
+}
+
+function accountProxyCustomIsOpen(container) {
+  const form = container?.querySelector("[data-account-proxy-inline-custom]");
+  return Boolean(form && !form.hidden);
+}
+
+function setAccountProxyCustomBusy(container, busy = false) {
+  const form = container?.querySelector("[data-account-proxy-inline-custom]");
+  if (!form) return;
+  form.dataset.proxyCustomBusy = busy ? "true" : "false";
+  form.setAttribute("aria-busy", busy ? "true" : "false");
+  form.querySelectorAll("input, select, textarea, button").forEach((control) => {
+    if (busy) {
+      control.dataset.proxyCustomWasDisabled = control.disabled ? "true" : "false";
+      control.disabled = true;
+      return;
+    }
+    control.disabled = control.dataset.proxyCustomWasDisabled === "true";
+    delete control.dataset.proxyCustomWasDisabled;
+  });
+}
+
+function accountProxyCustomBusyMessage() {
+  showMsg("socialMsg", "代理正在检测和保存，请等待当前操作完成。", false);
 }
 
 function selectNewCustomProxy(modal, proxy = null, scope = "modal") {
@@ -17359,6 +17448,61 @@ async function saveAccountProxyBinding(accountId = "", proxyId = "", expectedPro
   return true;
 }
 
+async function saveAccountInlineCustomProxy(container, button, scope = "edit") {
+  if (!container || !button || accountProxyCustomIsBusy(container)) return false;
+  const payload = sharedProxyPayload("accountProxyCustom");
+  if (!payload) return false;
+  const customForm = container.querySelector("[data-account-proxy-inline-custom]");
+  const payloadFingerprint = JSON.stringify(payload);
+  if (customForm?.dataset.proxyCustomRequestFingerprint !== payloadFingerprint) {
+    customForm.dataset.proxyCustomRequestFingerprint = payloadFingerprint;
+    customForm.dataset.proxyCustomRequestId = globalThis.crypto?.randomUUID?.()
+      || `proxy-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+  const requestId = String(customForm?.dataset.proxyCustomRequestId || "");
+  setAccountProxyCustomBusy(container, true);
+  try {
+    const preflight = await testProxyConfiguration(payload, "", "accountProxyCustomCheckResult", "accountProxyCustom");
+    if (!preflight.ok) {
+      showMsg("socialMsg", preflight.error || "代理检测未通过，配置尚未保存。", false);
+      return false;
+    }
+    if (!container.isConnected) return false;
+    const data = await api("/api/persona_dashboard/automation/proxies", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": requestId,
+      },
+      body: JSON.stringify(payload),
+    });
+    const savedId = String(data?.proxy?.id || "").trim();
+    if (!savedId) throw new Error("代理已保存，但未返回代理 ID");
+    if (!container.isConnected) return false;
+    const checked = await api(`/api/persona_dashboard/automation/proxies/${encodeURIComponent(savedId)}/check`, { method: "POST" });
+    await refreshProxyPool();
+    if (!container.isConnected) return false;
+    const savedProxy = socialProxyById(savedId) || checked?.proxy || data?.proxy || null;
+    if (!checked?.proxy?.last_check_result?.ok || !accountProxyEligibility(savedProxy).eligible) {
+      showMsg("socialMsg", "自定义代理已保存，但实时检测未通过，暂不能绑定账号。", false);
+      return false;
+    }
+    selectNewCustomProxy(container, savedProxy, scope);
+    if (customForm) {
+      delete customForm.dataset.proxyCustomRequestFingerprint;
+      delete customForm.dataset.proxyCustomRequestId;
+    }
+    setAccountProxyInlineMode(container, "options");
+    showMsg("socialMsg", "自定义代理已添加并选中，保存账号后完成绑定。", true);
+    return true;
+  } catch (error) {
+    showMsg("socialMsg", error.detail || error.message || "添加自定义代理失败", false);
+    return false;
+  } finally {
+    if (container.isConnected) setAccountProxyCustomBusy(container, false);
+  }
+}
+
 function openAccountProxyPickerModal(accountId = "") {
   const account = accountById(accountId);
   if (!account) {
@@ -17383,7 +17527,10 @@ function openAccountProxyPickerModal(accountId = "") {
           <p data-account-proxy-selection-summary>${account.proxy_id ? `当前绑定：${esc(accountResidentialProxyLabel(account))}` : "当前未使用代理 IP"}</p>
           ${accountProxyCustomAddButtonHtml("modal")}
         </div>
-        ${accountProxyOptionCardsHtml(account.proxy_id || "", { scope: "modal" })}
+        <div data-account-proxy-inline-options>
+          ${accountProxyOptionCardsHtml(account.proxy_id || "", { scope: "modal" })}
+        </div>
+        ${accountProxyInlineCustomFormHtml("modal")}
       </div>
       <div class="console-modal-actions">
         <button type="button" data-account-proxy-picker-cancel>取消</button>
@@ -17391,16 +17538,47 @@ function openAccountProxyPickerModal(accountId = "") {
       </div>
     </section>`;
   document.body.appendChild(modal);
-  const close = () => modal.remove();
+  const close = () => {
+    if (accountProxyCustomIsBusy(modal)) {
+      accountProxyCustomBusyMessage();
+      return false;
+    }
+    modal.remove();
+    return true;
+  };
   modal.addEventListener("click", (event) => {
     const customAdd = event.target.closest("[data-account-proxy-custom-add]");
     if (customAdd) {
-      openProxyModal("", {
-        preserveParent: true,
-        onSaved(savedProxy) {
-          selectNewCustomProxy(modal, savedProxy, "modal");
-        },
-      });
+      if (accountProxyCustomIsBusy(modal)) {
+        accountProxyCustomBusyMessage();
+        return;
+      }
+      const expanded = customAdd.getAttribute("aria-expanded") === "true";
+      setAccountProxyInlineMode(modal, expanded ? "options" : "custom");
+      return;
+    }
+    if (event.target.closest("[data-account-proxy-custom-cancel]")) {
+      if (accountProxyCustomIsBusy(modal)) {
+        accountProxyCustomBusyMessage();
+        return;
+      }
+      setAccountProxyInlineMode(modal, "options");
+      return;
+    }
+    const customTest = event.target.closest('[data-proxy-inline-test="accountProxyCustom"]');
+    if (customTest) {
+      if (accountProxyCustomIsBusy(modal)) return;
+      setAccountProxyCustomBusy(modal, true);
+      testProxyForm("accountProxyCustom")
+        .catch((error) => showMsg("socialMsg", error.detail || error.message || "代理检测失败", false))
+        .finally(() => {
+          if (modal.isConnected) setAccountProxyCustomBusy(modal, false);
+        });
+      return;
+    }
+    const customSave = event.target.closest("[data-account-proxy-custom-save]");
+    if (customSave) {
+      void saveAccountInlineCustomProxy(modal, customSave, "modal");
       return;
     }
     const choice = event.target.closest("[data-account-proxy-choice]");
@@ -17415,6 +17593,10 @@ function openAccountProxyPickerModal(accountId = "") {
     }
     const save = event.target.closest("[data-account-proxy-picker-save]");
     if (!save) return;
+    if (accountProxyCustomIsOpen(modal)) {
+      showMsg("socialMsg", "请先完成自定义代理添加，或点击取消收起该表单。", false);
+      return;
+    }
     if (modal.dataset.accountProxyDirty !== "true") {
       close();
       return;
@@ -17444,15 +17626,16 @@ function renderAccountProxyPickerPanel(account = null) {
   const proxyId = String(account?.proxy_id || "").trim();
   return `<section class="account-residential-proxy account-proxy-picker-panel">
     <div class="account-residential-proxy-head">
-      <div><strong>代理 IP</strong><span data-account-proxy-selection-summary>${esc(proxyId ? accountResidentialProxyLabel(account) : "未使用代理 IP")}</span></div>
-      <button type="button" data-account-proxy-inline-toggle aria-expanded="false">${proxyId ? "切换代理" : "选择代理"}</button>
-    </div>
-    <div class="account-proxy-inline-options" data-account-proxy-inline-options hidden>
-      <div class="account-proxy-inline-toolbar">
+      <div class="account-proxy-inline-summary"><strong>代理 IP</strong><span data-account-proxy-selection-summary>${esc(proxyId ? accountResidentialProxyLabel(account) : "未使用代理 IP")}</span></div>
+      <div class="account-proxy-inline-head-actions">
+        <button type="button" data-account-proxy-inline-toggle aria-expanded="false">${proxyId ? "切换代理" : "选择代理"}</button>
         ${accountProxyCustomAddButtonHtml("edit")}
       </div>
+    </div>
+    <div class="account-proxy-inline-options" data-account-proxy-inline-options hidden>
       ${accountProxyOptionCardsHtml(proxyId, { scope: "edit" })}
     </div>
+    ${accountProxyInlineCustomFormHtml("edit")}
   </section>`;
 }
 
@@ -17503,6 +17686,7 @@ function createAccountTotpController(modal, account) {
   let lastTotp = null;
   let lastCode = null;
   let lastCodeReceivedAt = 0;
+  let lastCodeExpiresAt = 0;
 
   const clearCodeTimers = () => {
     if (countdownTimer) window.clearInterval(countdownTimer);
@@ -17557,7 +17741,10 @@ function createAccountTotpController(modal, account) {
         <div class="account-totp-code-card" data-account-totp-code-card>
           <div class="account-totp-code-main">
             <span>当前验证码</span>
-            <strong data-account-totp-code>------</strong>
+            <div class="account-totp-code-value">
+              <strong data-account-totp-code>------</strong>
+              <button type="button" data-account-totp-copy title="复制验证码" aria-label="复制当前验证码" disabled>${renderClipboardIcon()}</button>
+            </div>
           </div>
           <div class="account-totp-countdown" data-account-totp-ring-wrap aria-label="验证码剩余时间">
             <svg viewBox="0 0 42 42" aria-hidden="true" focusable="false">
@@ -17580,9 +17767,12 @@ function createAccountTotpController(modal, account) {
     }
     card.querySelector("[data-account-totp-updated]").textContent = accountTotpDateLabel(totp?.updated_at);
     card.querySelector("[data-account-totp-verified]").textContent = accountTotpDateLabel(totp?.last_verified_at);
+    const copyButton = card.querySelector("[data-account-totp-copy]");
+    const codeValue = String(currentCode?.code || "").trim();
     if (currentCode) {
-      card.querySelector("[data-account-totp-code]").textContent = String(currentCode.code || "------");
+      card.querySelector("[data-account-totp-code]").textContent = codeValue || "------";
     }
+    if (copyButton) copyButton.disabled = true;
   };
 
   const scheduleAtBoundary = (currentCode = {}, responseReceivedAt = Date.now()) => {
@@ -17597,18 +17787,23 @@ function createAccountTotpController(modal, account) {
       || accountTotpTimestampMs(currentCode.expires_at)
       || (serverTime && validForMs ? serverTime + validForMs : 0);
     const periodMs = Math.max(1000, Number(currentCode.period_seconds || 30) * 1000);
+    const codeValue = String(currentCode.code || "").trim();
     if (!serverTime || !expiresAt) {
       countdown.textContent = "--";
       if (ring) ring.style.strokeDashoffset = "100";
       return;
     }
     const serverNow = () => serverTime + (Date.now() - responseReceivedAt);
+    const copySafetyMs = 1500;
+    lastCodeExpiresAt = responseReceivedAt + Math.max(0, expiresAt - serverTime) - copySafetyMs;
     const updateCountdown = () => {
       const remaining = Math.max(0, expiresAt - serverNow());
       const seconds = Math.ceil(remaining / 1000);
       const progress = Math.max(0, Math.min(1, remaining / periodMs));
       countdown.textContent = String(seconds);
       if (ring) ring.style.strokeDashoffset = String(100 - progress * 100);
+      const copyButton = body?.querySelector("[data-account-totp-copy]");
+      if (copyButton) copyButton.disabled = Date.now() >= lastCodeExpiresAt || !/^\d{6,8}$/.test(codeValue);
       if (ringWrap) {
         ringWrap.dataset.urgent = remaining <= 5000 ? "true" : "false";
         ringWrap.setAttribute("aria-label", `验证码剩余 ${seconds} 秒`);
@@ -17618,6 +17813,8 @@ function createAccountTotpController(modal, account) {
     countdownTimer = window.setInterval(updateCountdown, 250);
     boundaryTimer = window.setTimeout(() => {
       clearCodeTimers();
+      const copyButton = body?.querySelector("[data-account-totp-copy]");
+      if (copyButton) copyButton.disabled = true;
       void refreshCode();
     }, Math.max(50, expiresAt - serverNow() + 50));
   };
@@ -17637,6 +17834,7 @@ function createAccountTotpController(modal, account) {
         lastTotp = null;
         lastCode = null;
         lastCodeReceivedAt = 0;
+        lastCodeExpiresAt = 0;
         renderEntry({ configured: false });
         return;
       }
@@ -17658,6 +17856,7 @@ function createAccountTotpController(modal, account) {
         lastTotp = null;
         lastCode = null;
         lastCodeReceivedAt = 0;
+        lastCodeExpiresAt = 0;
         renderEntry({ configured: false });
         return;
       }
@@ -17665,10 +17864,32 @@ function createAccountTotpController(modal, account) {
       const code = body?.querySelector("[data-account-totp-code]");
       const countdown = body?.querySelector("[data-account-totp-countdown]");
       const ring = body?.querySelector("[data-account-totp-ring]");
+      const copyButton = body?.querySelector("[data-account-totp-copy]");
       if (code) code.textContent = "------";
       if (countdown) countdown.textContent = "--";
       if (ring) ring.style.strokeDashoffset = "100";
+      if (copyButton) copyButton.disabled = true;
       setMessage(error.detail || error.message || "读取验证码失败。", "error");
+    }
+  };
+
+  const copyCode = async (button) => {
+    const code = String(lastCode?.code || "").trim();
+    const codeIsCurrent = () => Boolean(lastCodeExpiresAt && Date.now() < lastCodeExpiresAt);
+    if (!/^\d{6,8}$/.test(code) || !codeIsCurrent() || button?.disabled) {
+      setMessage("当前验证码尚未就绪，请稍后重试。", "warning");
+      return;
+    }
+    button.disabled = true;
+    try {
+      await copyTextToClipboard(code);
+      setMessage("验证码已复制。", "success");
+    } catch (error) {
+      setMessage(error?.message || "复制验证码失败。", "error");
+    } finally {
+      if (button?.isConnected && String(lastCode?.code || "").trim() === code && codeIsCurrent()) {
+        button.disabled = false;
+      }
     }
   };
 
@@ -17745,6 +17966,7 @@ function createAccountTotpController(modal, account) {
       lastTotp = null;
       lastCode = null;
       lastCodeReceivedAt = 0;
+      lastCodeExpiresAt = 0;
       renderEntry({ configured: false, message: "2FA 已移除。" });
     } catch (error) {
       if (closed || error?.name === "AbortError" || requestGeneration !== viewGeneration) return;
@@ -17768,6 +17990,7 @@ function createAccountTotpController(modal, account) {
   return {
     submit,
     remove,
+    copyCode,
     showUpdate() {
       renderEntry({ configured: true });
     },
@@ -17850,10 +18073,20 @@ function openAccountPoolEditModal(accountId = "") {
     clearAccountPasswordReveal(account.id, "pool-edit");
   };
   const close = () => {
+    if (accountProxyCustomIsBusy(modal)) {
+      accountProxyCustomBusyMessage();
+      return false;
+    }
     modal.__cleanup();
     modal.remove();
+    return true;
   };
   modal.addEventListener("click", (event) => {
+    const totpCopy = event.target.closest("[data-account-totp-copy]");
+    if (totpCopy) {
+      void totpController.copyCode(totpCopy);
+      return;
+    }
     const totpSubmit = event.target.closest("[data-account-totp-submit]");
     if (totpSubmit) {
       void totpController.submit(totpSubmit);
@@ -17884,20 +18117,46 @@ function openAccountPoolEditModal(accountId = "") {
     }
     const toggle = event.target.closest("[data-account-proxy-inline-toggle]");
     if (toggle) {
-      const options = modal.querySelector("[data-account-proxy-inline-options]");
+      if (accountProxyCustomIsBusy(modal)) {
+        accountProxyCustomBusyMessage();
+        return;
+      }
       const expanded = toggle.getAttribute("aria-expanded") === "true";
-      toggle.setAttribute("aria-expanded", expanded ? "false" : "true");
-      if (options) options.hidden = expanded;
+      setAccountProxyInlineMode(modal, expanded ? "" : "options");
       return;
     }
     const customAdd = event.target.closest("[data-account-proxy-custom-add]");
     if (customAdd) {
-      openProxyModal("", {
-        preserveParent: true,
-        onSaved(savedProxy) {
-          selectNewCustomProxy(modal, savedProxy, "edit");
-        },
-      });
+      if (accountProxyCustomIsBusy(modal)) {
+        accountProxyCustomBusyMessage();
+        return;
+      }
+      const expanded = customAdd.getAttribute("aria-expanded") === "true";
+      setAccountProxyInlineMode(modal, expanded ? "" : "custom");
+      return;
+    }
+    if (event.target.closest("[data-account-proxy-custom-cancel]")) {
+      if (accountProxyCustomIsBusy(modal)) {
+        accountProxyCustomBusyMessage();
+        return;
+      }
+      setAccountProxyInlineMode(modal, "");
+      return;
+    }
+    const customTest = event.target.closest('[data-proxy-inline-test="accountProxyCustom"]');
+    if (customTest) {
+      if (accountProxyCustomIsBusy(modal)) return;
+      setAccountProxyCustomBusy(modal, true);
+      testProxyForm("accountProxyCustom")
+        .catch((error) => showMsg("socialMsg", error.detail || error.message || "代理检测失败", false))
+        .finally(() => {
+          if (modal.isConnected) setAccountProxyCustomBusy(modal, false);
+        });
+      return;
+    }
+    const customSave = event.target.closest("[data-account-proxy-custom-save]");
+    if (customSave) {
+      void saveAccountInlineCustomProxy(modal, customSave, "edit");
       return;
     }
     const choice = event.target.closest("[data-account-proxy-choice]");
@@ -17908,6 +18167,10 @@ function openAccountPoolEditModal(accountId = "") {
     }
     const saveButton = event.target.closest("[data-account-pool-edit-save]");
     if (!saveButton) return;
+    if (accountProxyCustomIsOpen(modal)) {
+      showMsg("socialMsg", "请先完成自定义代理添加，或点击取消收起该表单。", false);
+      return;
+    }
     saveButton.disabled = true;
     saveAccountPoolEditForm(saveButton.dataset.accountPoolEditSave || "")
       .then((saved) => {
@@ -18228,16 +18491,16 @@ function proxyFormPayload(proxy = null) {
   return sharedProxyPayload("proxyForm", proxy);
 }
 
-function openProxyModal(proxyId = "", { onSaved = null, preserveParent = false } = {}) {
+function openProxyModal(proxyId = "") {
   const proxy = proxyId ? socialProxyById(proxyId) : null;
   if (proxyId && !proxy) {
     showMsg("socialMsg", "代理不存在，请刷新后重试。", false);
     return;
   }
-  if (!preserveParent) closeConsoleModal(null);
+  closeConsoleModal(null);
   const modal = document.createElement("div");
-  modal.id = preserveParent ? "proxyModal" : "consoleModal";
-  modal.className = `console-modal ${preserveParent ? "console-modal--nested" : ""}`.trim();
+  modal.id = "consoleModal";
+  modal.className = "console-modal";
   modal.innerHTML = `
     <div class="console-modal-backdrop" data-proxy-modal-cancel></div>
     <section class="console-modal-dialog proxy-edit-modal" role="dialog" aria-modal="true" aria-labelledby="proxyModalTitle">
@@ -18304,8 +18567,6 @@ function openProxyModal(proxyId = "", { onSaved = null, preserveParent = false }
         }
       }
       await refreshProxyPool();
-      const savedProxy = socialProxyById(savedId) || data?.proxy || null;
-      if (detected && typeof onSaved === "function" && savedProxy) await onSaved(savedProxy);
       showMsg("socialMsg", detected ? `${id ? "代理已更新" : "代理已新增"}，出口 IP 和国家已自动识别。` : `${id ? "代理已更新" : "代理已新增"}，自动检测未通过，请检查连接参数后重试。`, detected);
     }).catch((error) => {
       save.disabled = false;
@@ -19133,7 +19394,9 @@ function defaultPayloadForTask(taskType) {
 }
 
 function validateTaskForPlatform(taskType, platform, { includePublish = false } = {}) {
-  if (taskType === "open_login") return ["threads", "instagram"].includes(String(platform || "").trim().toLowerCase());
+  if (["open_login", "check_login"].includes(taskType)) {
+    return ["threads", "instagram"].includes(String(platform || "").trim().toLowerCase());
+  }
   const allowed = taskOptionsForPlatform(platform, { includePublish }).map(([value]) => value);
   return allowed.includes(taskType);
 }

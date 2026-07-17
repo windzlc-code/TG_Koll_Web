@@ -6582,6 +6582,10 @@ body.persona-touch-dragging .persona-list-card:active {
   top: 12px;
 }
 
+.console-page .persona-compose-media-side {
+  top: calc(var(--site-header-height) + 12px);
+}
+
 .persona-production-step-head {
   display: grid;
   gap: 4px;
@@ -9516,9 +9520,12 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .account-pool-card .row-actions .account-status-check {
-  width: 30px;
-  min-width: 30px;
-  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 0 9px;
+  white-space: nowrap;
 }
 
 .account-pool-card .row-actions .account-status-check .ui-action-icon {
@@ -9658,6 +9665,36 @@ body.persona-touch-dragging .persona-list-card:active {
   font-size: 24px;
   line-height: 1.1;
   letter-spacing: 0;
+}
+
+.account-totp-code-value {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.account-totp-code-value > strong {
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 24px;
+  line-height: 1.1;
+  letter-spacing: 0;
+}
+
+.account-totp-code-value > button {
+  display: inline-grid;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+  place-items: center;
+}
+
+.account-totp-code-value > button .ui-action-icon {
+  width: 15px;
+  height: 15px;
 }
 
 .account-totp-countdown {
@@ -9811,6 +9848,14 @@ body.persona-touch-dragging .persona-list-card:active {
   .account-totp-code-actions {
     grid-column: 1 / -1;
   }
+
+  .account-residential-proxy-head {
+    align-items: flex-start;
+  }
+
+  .account-proxy-inline-custom-actions > button {
+    flex: 1 1 0;
+  }
 }
 
 .account-residential-proxy {
@@ -9837,7 +9882,7 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .account-proxy-picker-modal .console-modal-head > div,
-.account-proxy-picker-panel .account-residential-proxy-head > div {
+.account-proxy-picker-panel .account-proxy-inline-summary {
   display: grid;
   gap: 3px;
   min-width: 0;
@@ -9879,16 +9924,54 @@ body.persona-touch-dragging .persona-list-card:active {
   height: 16px;
 }
 
-.console-modal--nested {
-  z-index: 6200;
-}
-
 .account-proxy-picker-panel .account-residential-proxy-head button {
   flex: 0 0 auto;
 }
 
+.account-proxy-inline-head-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+}
+
 .account-proxy-inline-options[hidden] {
   display: none;
+}
+
+.account-proxy-inline-custom {
+  display: grid;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.account-proxy-inline-custom[hidden] {
+  display: none;
+}
+
+.account-proxy-inline-custom-head > div {
+  display: grid;
+  gap: 3px;
+}
+
+.account-proxy-inline-custom-head strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.account-proxy-inline-custom-head span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.account-proxy-inline-custom-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .account-proxy-options {

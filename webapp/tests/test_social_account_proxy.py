@@ -173,6 +173,31 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual(row, ("owner@example.com", "saved-login-secret", ""))
 
+    def test_proxy_create_idempotency_key_reuses_the_original_record(self):
+        payload = social_api.SocialProxyPayload(
+            proxy_type="socks5",
+            host="idempotent-proxy.example",
+            port=1080,
+            username="region-user",
+            password="proxy-secret",
+        )
+        first = social_api.create_social_proxy(
+            payload,
+            idempotency_key="proxy-create-request-0001",
+        )
+        second = social_api.create_social_proxy(
+            payload,
+            idempotency_key="proxy-create-request-0001",
+        )
+
+        self.assertEqual(second["id"], first["id"])
+        with sqlite3.connect(self.db_path) as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM social_proxies WHERE client_request_id = ?",
+                ("proxy-create-request-0001",),
+            ).fetchone()[0]
+        self.assertEqual(count, 1)
+
     def test_persona_platform_conflicts_return_409_without_orphan_proxy(self):
         self._account(
             "first",

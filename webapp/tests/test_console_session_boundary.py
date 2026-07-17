@@ -400,7 +400,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("renderAccountHealthChip", card)
         self.assertNotIn("data-account-health-for", card)
         self.assertIn("data-social-check-status", card)
-        self.assertIn('title="同步登录状态"', card)
+        self.assertIn('title="检测登录与平台状态"', card)
+        self.assertIn("data-account-status-check-label", card)
         self.assertIn("updateAccountStatusViews()", task_loader)
 
     def test_effective_account_status_has_deterministic_precedence(self):
@@ -858,19 +859,27 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
     def test_account_proxy_picker_can_create_and_select_a_custom_proxy(self):
         picker = self._function_source("openAccountProxyPickerModal")
         edit_modal = self._function_source("openAccountPoolEditModal")
-        proxy_modal = self._section("function openProxyModal", "async function refreshProxyPool")
         picker_panel = self._function_source("renderAccountProxyPickerPanel")
+        inline_save = self._function_source("saveAccountInlineCustomProxy")
+        proxy_modal = self._section("function openProxyModal", "async function refreshProxyPool")
 
         self.assertIn("data-account-proxy-custom-add", picker)
-        self.assertIn("openProxyModal", picker)
-        self.assertIn("onSaved", picker)
+        self.assertIn("accountProxyInlineCustomFormHtml", picker)
+        self.assertIn("saveAccountInlineCustomProxy", picker)
+        self.assertNotIn("openProxyModal", picker)
         self.assertIn("data-account-proxy-custom-add", edit_modal)
-        self.assertIn("openProxyModal", edit_modal)
-        self.assertIn("onSaved", edit_modal)
+        self.assertIn("saveAccountInlineCustomProxy", edit_modal)
+        self.assertNotIn("openProxyModal", edit_modal)
         self.assertIn('accountProxyCustomAddButtonHtml("edit")', picker_panel)
-        self.assertIn("onSaved", proxy_modal)
-        self.assertIn("savedProxy", proxy_modal)
-        self.assertIn('if (detected && typeof onSaved === "function"', proxy_modal)
+        self.assertIn('accountProxyInlineCustomFormHtml("edit")', picker_panel)
+        self.assertIn('testProxyConfiguration(payload, "", "accountProxyCustomCheckResult"', inline_save)
+        self.assertIn('"Idempotency-Key": requestId', inline_save)
+        self.assertIn("setAccountProxyCustomBusy(container, true)", inline_save)
+        self.assertIn("if (!container.isConnected) return false", inline_save)
+        self.assertIn("selectNewCustomProxy(container, savedProxy, scope)", inline_save)
+        self.assertIn('setAccountProxyInlineMode(container, "options")', inline_save)
+        self.assertNotIn("preserveParent", proxy_modal)
+        self.assertNotIn("onSaved", proxy_modal)
 
     def test_totp_code_card_uses_stable_svg_ring_and_millisecond_clock(self):
         controller = self._function_source("createAccountTotpController")
@@ -885,7 +894,17 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("requestStartedAt", controller)
         self.assertIn("(requestStartedAt + Date.now()) / 2", controller)
         self.assertIn('if (!card)', controller)
+        self.assertIn("data-account-totp-copy", controller)
+        self.assertIn("renderClipboardIcon()", controller)
+        self.assertIn("copyTextToClipboard(code)", controller)
+        self.assertIn("copyButton.disabled = Date.now() >= lastCodeExpiresAt", controller)
+        self.assertIn("Date.now() < lastCodeExpiresAt", controller)
         self.assertNotIn('countdown.textContent = `${Math.ceil(remaining / 1000)} 秒`', controller)
+
+    def test_account_status_check_is_allowed_for_both_supported_platforms(self):
+        validate = self._section("function validateTaskForPlatform", "function publishOrderedPersonaIds")
+        self.assertIn('["open_login", "check_login"].includes(taskType)', validate)
+        self.assertIn('["threads", "instagram"].includes', validate)
 
     def test_pageshow_and_focus_share_identity_revalidation(self):
         revalidation = self._section("async function revalidateConsoleIdentity()", "async function loadSetupStatus()")
