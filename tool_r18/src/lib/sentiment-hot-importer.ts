@@ -2238,9 +2238,14 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     // when another query window has usable material. Run one bounded second
     // round only while the result is still short; queryRound rotates the
     // search window so this is not a duplicate burst of the first round.
-    const liveReadyCount = hasModelStrategy && strategyResult
-      ? candidates.filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode)).length
-      : sortRelevantHotCandidates(candidates, keywords, poolLimit, searchMode).length;
+    const liveReadyPool = hasModelStrategy && strategyResult
+      ? candidates.filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode))
+      : candidates;
+    const liveReadyCount = finalizeSentimentHotCandidatesForDisplay(
+      strictFreshOnly ? liveReadyPool.filter((candidate) => !isHistoricalSupplementCandidate(candidate)) : liveReadyPool,
+      limit,
+      { archiveId, keywords, excludeShown: true, searchMode, freshnessDays: operationalFreshnessDays },
+    ).length;
     if (liveReadyCount < limit && hasSentimentHotTotalBudget(startedAt, 18_000)) {
       const secondRoundTimeoutMs = Math.min(20_000, remainingSentimentHotTotalBudgetMs(startedAt, 18_000));
       if (secondRoundTimeoutMs >= 4_000) {
