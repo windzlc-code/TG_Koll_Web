@@ -1,7 +1,7 @@
 import "@/runtime/node/browser-shim";
 import { fetchThreadsProfileHotMetrics, getLiveSentimentBrowserAuthProfileBinding, refreshSentimentBrowserCookiesForPlatform } from "@/lib/sentiment-hot-importer";
-import { listPersonaArchives, updatePersonaArchiveProfile } from "@/lib/persona-archives";
-import { installNodePersonaArchiveBridge } from "@/runtime/node/persona-archive-store";
+import { listPersonaArchives } from "@/lib/persona-archives";
+import { installNodePersonaArchiveBridge, updatePersonaArchiveThreadsHotMetrics } from "@/runtime/node/persona-archive-store";
 
 installNodePersonaArchiveBridge();
 
@@ -304,22 +304,28 @@ async function main() {
             scannedPosts: metrics.scannedPosts,
             error: metrics.error || (usable ? "本次只读取到局部资料，未覆盖为完整热点数据。" : "未读取到可用热点数据。"),
           };
-      await updatePersonaArchiveProfile(archive.id, {
-        setup: {
-          ...setup,
-          accountManagement: {
-            ...accounts,
-            threads: {
-              ...(accounts.threads || {}),
-              handle: username,
-              authProfileKey: auth.profileKey,
-              authProfileBoundAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            },
-          },
-          hotMetrics: { ...existingHotMetrics, [key]: nextMetric },
-        },
+      const updatedAt = new Date().toISOString();
+      const saved = updatePersonaArchiveThreadsHotMetrics({
+        archiveId: archive.id,
+        expectedHandle: username,
+        metricKey: key,
+        metric: nextMetric,
+        authProfileKey: auth.profileKey,
+        updatedAt,
       });
+      if (!saved.ok) {
+        results.push({
+          archiveId: archive.id,
+          name: archive.name,
+          username,
+          ok: false,
+          skipped: true,
+          message: saved.reason === "threads_binding_changed"
+            ? "刷新期间 Threads 绑定已变化，本次结果未写入。"
+            : "人设已不存在，本次结果未写入。",
+        });
+        continue;
+      }
       results.push({
         archiveId: archive.id,
         name: archive.name,

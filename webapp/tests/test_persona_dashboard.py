@@ -1075,10 +1075,49 @@ class PersonaDashboardApiTests(unittest.TestCase):
             resp = self.client.post("/api/persona_dashboard/refresh", json={"archive_id": "persona-1", "source": "browser"})
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["id"], "pdr_test")
-        start.assert_called_once_with("persona-1", source="browser", archive_ids=["persona-1"])
+        start.assert_called_once_with(
+            "persona-1",
+            source="browser",
+            archive_ids=["persona-1"],
+            user_id=1,
+        )
 
         invalid = self.client.post("/api/persona_dashboard/refresh", json={"archive_id": "persona-1", "source": "unknown"})
         self.assertEqual(invalid.status_code, 400)
+
+    def test_full_refresh_reuses_identical_task_and_rejects_concurrent_scope(self):
+        active = {
+            "id": "pdr_active",
+            "user_id": 1,
+            "archive_id": "persona-1",
+            "archive_ids": ["persona-1"],
+            "source": "browser",
+            "status": "running",
+        }
+        with server.PERSONA_DASHBOARD_REFRESH_LOCK:
+            original = dict(server.PERSONA_DASHBOARD_REFRESH_TASKS)
+            server.PERSONA_DASHBOARD_REFRESH_TASKS.clear()
+            server.PERSONA_DASHBOARD_REFRESH_TASKS["pdr_active"] = dict(active)
+        try:
+            reused = server._start_persona_dashboard_refresh(
+                "persona-1",
+                source="browser",
+                archive_ids=["persona-1"],
+                user_id=1,
+            )
+            self.assertEqual(reused["id"], "pdr_active")
+            with self.assertRaises(server.HTTPException) as raised:
+                server._start_persona_dashboard_refresh(
+                    "persona-2",
+                    source="browser",
+                    archive_ids=["persona-2"],
+                    user_id=1,
+                )
+            self.assertEqual(raised.exception.status_code, 409)
+        finally:
+            with server.PERSONA_DASHBOARD_REFRESH_LOCK:
+                server.PERSONA_DASHBOARD_REFRESH_TASKS.clear()
+                server.PERSONA_DASHBOARD_REFRESH_TASKS.update(original)
 
     def test_daily_full_refresh_is_due_immediately_when_authenticated_data_is_stale(self):
         now = datetime(2026, 7, 17, 12, 0, tzinfo=timezone.utc).timestamp()
@@ -1713,6 +1752,47 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(row["likes"], 3)
         self.assertEqual(row["comments"], 1)
         self.assertEqual(row["views"], 40)
+
+    def test_persona_publish_history_does_not_guess_between_duplicate_content_rows(self):
+        self._write_archives()
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        record = archives[0]["publishHistory"][0]
+        record["content"] = "The same reusable published sentence appears twice."
+        record.pop("publishedUrl", None)
+        record["publishedMeta"] = {
+            "likeCount": 3,
+            "commentCount": 1,
+            "viewCount": 40,
+        }
+        hot_metrics = archives[0]["setup"]["hotMetrics"]["threads"]
+        first = dict(hot_metrics["postMetrics"][0])
+        first.update({
+            "sourceUrl": "https://www.threads.com/@history/post/duplicate-1",
+            "content": record["content"],
+        })
+        second = dict(first)
+        second["sourceUrl"] = "https://www.threads.com/@history/post/duplicate-2"
+        second["likeCount"] = 999
+        hot_metrics["postMetrics"] = [first, second]
+        archives_path.write_text(json.dumps(archives), encoding="utf-8")
+
+        resp = self.client.get("/api/persona_dashboard/personas/persona-1/publish_history")
+
+        self.assertEqual(resp.status_code, 200)
+        row = resp.json()["publish_history"][0]
+        self.assertFalse(row["hot_metrics"]["matched"])
+        self.assertEqual(row["likes"], 3)
+
+    def test_publish_history_rejects_non_https_source_urls(self):
+        self.assertEqual(
+            server._published_record_url({"publishedUrl": "javascript:alert(1)"}),
+            "",
+        )
+        self.assertEqual(
+            server._published_record_url({"publishedUrl": "https://www.threads.com/@safe/post/1"}),
+            "https://www.threads.com/@safe/post/1",
+        )
 
     def test_missing_media_is_retained_as_unavailable_item(self):
         self._write_archives()

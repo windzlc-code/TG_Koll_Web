@@ -139,3 +139,64 @@ export function installNodePersonaArchiveBridge() {
     },
   };
 }
+
+function normalizeThreadsHandle(value: unknown): string {
+  return String(value || "")
+    .trim()
+    .replace(/^https?:\/\/(?:www\.)?threads\.(?:net|com)\//i, "")
+    .replace(/^@/, "")
+    .split(/[/?#\s]/)[0]
+    .trim()
+    .toLowerCase();
+}
+
+export function updatePersonaArchiveThreadsHotMetrics(input: {
+  archiveId: string;
+  expectedHandle: string;
+  metricKey: string;
+  metric: Record<string, unknown>;
+  authProfileKey?: string;
+  updatedAt: string;
+}): { ok: boolean; reason?: string } {
+  return withArchiveFileLock(() => {
+    const items = readAll();
+    const index = items.findIndex((item) => item.id === input.archiveId);
+    if (index < 0) return { ok: false, reason: "archive_missing" };
+    const archive = items[index];
+    const setup = archive.setup && typeof archive.setup === "object" ? archive.setup : {};
+    const accountManagement = setup.accountManagement && typeof setup.accountManagement === "object"
+      ? setup.accountManagement as Record<string, unknown>
+      : {};
+    const threads = accountManagement.threads && typeof accountManagement.threads === "object"
+      ? accountManagement.threads as Record<string, unknown>
+      : {};
+    if (normalizeThreadsHandle(threads.handle) !== normalizeThreadsHandle(input.expectedHandle)) {
+      return { ok: false, reason: "threads_binding_changed" };
+    }
+    const hotMetrics = setup.hotMetrics && typeof setup.hotMetrics === "object"
+      ? setup.hotMetrics as Record<string, unknown>
+      : {};
+    items[index] = {
+      ...archive,
+      updatedAt: input.updatedAt,
+      setup: {
+        ...setup,
+        accountManagement: {
+          ...accountManagement,
+          threads: {
+            ...threads,
+            authProfileKey: input.authProfileKey,
+            authProfileBoundAt: input.updatedAt,
+            updatedAt: input.updatedAt,
+          },
+        },
+        hotMetrics: {
+          ...hotMetrics,
+          [input.metricKey]: input.metric,
+        },
+      },
+    };
+    writeAllUnlocked(items);
+    return { ok: true };
+  });
+}

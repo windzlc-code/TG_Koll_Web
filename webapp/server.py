@@ -16081,7 +16081,17 @@ def _published_record_url(record: dict[str, Any]) -> str:
             target_meta.get("sourceUrl"),
             target_meta.get("source_url"),
         ])
-    return next((str(value).strip() for value in candidates if str(value or "").strip()), "")
+    for value in candidates:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        try:
+            parsed = urlsplit(text)
+        except ValueError:
+            continue
+        if parsed.scheme.lower() == "https" and parsed.netloc:
+            return text
+    return ""
 
 
 def _compact_publish_record(record: dict[str, Any], hot_metrics: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -16420,7 +16430,8 @@ def _publish_history_hot_metrics(record: dict[str, Any], archive: dict[str, Any]
     record_platform = str(record.get("platform") or published_meta.get("platform") or "").strip().lower()
     record_urls, record_codes, record_content = _publish_record_match_values(record)
     platform_candidates: list[dict[str, Any]] = []
-    matched: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    identity_matches: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    content_matches: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for platform_key, platform_metric in hot_metrics.items():
         if not isinstance(platform_metric, dict):
             continue
@@ -16440,8 +16451,11 @@ def _publish_history_hot_metrics(record: dict[str, Any], archive: dict[str, Any]
                 len(record_content) >= 16
                 and record_content == row_content
             )
-            if exact_identity or content_match:
-                matched.append((row, platform_metric))
+            if exact_identity:
+                identity_matches.append((row, platform_metric))
+            elif content_match:
+                content_matches.append((row, platform_metric))
+    matched = identity_matches or (content_matches if len(content_matches) == 1 else [])
     if matched:
         row, platform_metric = max(
             matched,
@@ -16644,6 +16658,7 @@ def _start_persona_dashboard_refresh(
     source: str = "",
     trigger: str = "manual",
     archive_ids: list[str] | None = None,
+    user_id: int = 0,
 ) -> dict[str, Any]:
     task_id = f"pdr_{uuid.uuid4().hex[:12]}"
     refresh_source = (source or os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "browser").strip().lower() or "browser"
@@ -16657,9 +16672,25 @@ def _start_persona_dashboard_refresh(
         if archive_ids is not None
         else "全部已绑定人设"
     )
+    owner_user_id = max(0, int(user_id or 0))
     with PERSONA_DASHBOARD_REFRESH_LOCK:
+        active = next((
+            task for task in PERSONA_DASHBOARD_REFRESH_TASKS.values()
+            if str(task.get("status") or "") in {"queued", "running"}
+        ), None)
+        if active:
+            same_request = (
+                int(active.get("user_id") or 0) == owner_user_id
+                and str(active.get("archive_id") or "") == str(archive_id or "").strip()
+                and list(active.get("archive_ids") or []) == scoped_archive_ids
+                and str(active.get("source") or "") == refresh_source
+            )
+            if same_request:
+                return dict(active)
+            raise HTTPException(status_code=409, detail="已有全量热点刷新任务正在运行，请等待当前任务完成后再试。")
         PERSONA_DASHBOARD_REFRESH_TASKS[task_id] = {
             "id": task_id,
+            "user_id": owner_user_id,
             "archive_id": str(archive_id or "").strip(),
             "archive_ids": scoped_archive_ids,
             "source": refresh_source,
@@ -19080,8 +19111,12 @@ def create_app() -> FastAPI:
         requested_source = str(payload.source or "").strip().lower()
         if requested_source not in {"", "rsshub", "browser"}:
             raise HTTPException(status_code=400, detail="刷新来源仅支持 rsshub 或 browser。")
-        task = _start_persona_dashboard_refresh(payload.archive_id, source=requested_source, archive_ids=archive_ids)
-        task["user_id"] = _workspace_user_id(user)
+        task = _start_persona_dashboard_refresh(
+            payload.archive_id,
+            source=requested_source,
+            archive_ids=archive_ids,
+            user_id=_workspace_user_id(user),
+        )
         return task
 
     @app.get("/api/persona_dashboard/refresh/{task_id}")

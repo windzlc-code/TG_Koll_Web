@@ -432,6 +432,7 @@ const state = {
   publishPreviewPostId: "",
   publishHistoryPreviewId: "",
   publishHistoryRefreshTaskId: "",
+  publishHistoryRefreshPersonaId: "",
   publishHistoryRefreshStatus: null,
   publishCustomContent: "",
   socialTasksFetch: null,
@@ -1234,6 +1235,17 @@ function esc(value) {
     '"': "&quot;",
     "'": "&#39;",
   }[ch]));
+}
+
+function safeExternalHttpUrl(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  try {
+    const url = new URL(text);
+    return url.protocol === "https:" && url.hostname ? url.href : "";
+  } catch {
+    return "";
+  }
 }
 
 async function api(path, options = {}) {
@@ -8078,7 +8090,7 @@ function renderPublishHistoryPreview(persona = selectedPersona()) {
   const rows = personaPublishHistoryRows(persona);
   const activeRecord = activePublishHistoryRecord(rows);
   const activeMediaItems = activeRecord ? personaHistoryMediaItems(activeRecord) : [];
-  const publishedUrl = String(activeRecord?.source_url || activeRecord?.published_url || activeRecord?.url || activeRecord?.post_url || "").trim();
+  const publishedUrl = safeExternalHttpUrl(activeRecord?.source_url || activeRecord?.published_url || activeRecord?.url || activeRecord?.post_url);
   const hotMetrics = activeRecord?.hot_metrics || activeRecord || {};
   const metrics = activeRecord ? [
     ["热度", hotMetrics.hot_score],
@@ -8126,8 +8138,10 @@ function renderPublishHistoryPreview(persona = selectedPersona()) {
 }
 
 function renderPublishHistoryPanel(persona = selectedPersona()) {
-  const refreshing = Boolean(state.publishHistoryRefreshTaskId);
-  const refreshStatus = state.publishHistoryRefreshStatus;
+  const personaId = String(persona?.id || "");
+  const ownsRefresh = Boolean(personaId && state.publishHistoryRefreshPersonaId === personaId);
+  const refreshing = Boolean(ownsRefresh && state.publishHistoryRefreshTaskId);
+  const refreshStatus = ownsRefresh ? state.publishHistoryRefreshStatus : null;
   return `
     <div class="publish-content-layout">
       ${renderPublishHistoryPreview(persona)}
@@ -8137,10 +8151,28 @@ function renderPublishHistoryPanel(persona = selectedPersona()) {
           <button type="button" data-publish-history-refresh class="primary" aria-busy="${refreshing ? "true" : "false"}" ${refreshing || !persona?.id ? "disabled" : ""}>${refreshing ? `刷新中 ${esc(Number(refreshStatus?.progress || 0))}%` : "刷新热点数据"}</button>
         </div>
         <div class="publish-history-note">这里只查看当前人设的已发布记录。系统每天自动同步一次；也可手动刷新真实互动数据。</div>
-        ${refreshStatus?.message ? `<div class="publish-history-refresh-status">${esc(refreshStatus.message)}</div>` : ""}
+        <div class="publish-history-refresh-status" data-publish-history-refresh-status ${refreshStatus?.message ? "" : "hidden"}>${esc(refreshStatus?.message || "")}</div>
         ${renderPublishHistorySelectionList(persona)}
       </section>
     </div>`;
+}
+
+function syncPublishHistoryRefreshDom(persona = selectedPersona()) {
+  const personaId = String(persona?.id || "");
+  const ownsRefresh = Boolean(personaId && state.publishHistoryRefreshPersonaId === personaId);
+  const refreshing = Boolean(ownsRefresh && state.publishHistoryRefreshTaskId);
+  const refreshStatus = ownsRefresh ? state.publishHistoryRefreshStatus : null;
+  const button = document.querySelector("[data-publish-history-refresh]");
+  if (button) {
+    button.disabled = refreshing || !personaId;
+    button.setAttribute("aria-busy", refreshing ? "true" : "false");
+    button.textContent = refreshing ? `刷新中 ${Number(refreshStatus?.progress || 0)}%` : "刷新热点数据";
+  }
+  const status = document.querySelector("[data-publish-history-refresh-status]");
+  if (status) {
+    status.hidden = !refreshStatus?.message;
+    status.textContent = refreshStatus?.message || "";
+  }
 }
 
 async function requeuePublishHistoryRecord(historyId = "", persona = selectedPersona()) {
@@ -8188,8 +8220,9 @@ async function refreshPublishHistoryHotData(persona = selectedPersona()) {
   }
   try {
     state.publishHistoryRefreshTaskId = "starting";
+    state.publishHistoryRefreshPersonaId = cleanPersonaId;
     state.publishHistoryRefreshStatus = { progress: 0, message: "正在启动全量热点刷新..." };
-    renderSimpleFlowModule("publishing");
+    syncPublishHistoryRefreshDom(persona);
     const task = await api("/api/persona_dashboard/refresh", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -8205,7 +8238,7 @@ async function refreshPublishHistoryHotData(persona = selectedPersona()) {
         message: `${current?.step ? `${current.step} · ` : ""}${current?.message || "正在刷新热点数据..."}`,
       };
       if (state.activeModule === "publishing" && normalizedPublishMode(state.simpleBranches.publishing) === "publish_history") {
-        renderSimpleFlowModule("publishing");
+        syncPublishHistoryRefreshDom();
       }
       if (!["queued", "running"].includes(String(current?.status || ""))) {
         if (current?.status !== "success") throw new Error(current?.message || "热点数据刷新失败");
@@ -8225,6 +8258,12 @@ async function refreshPublishHistoryHotData(persona = selectedPersona()) {
     if (state.activeModule === "publishing" && normalizedPublishMode(state.simpleBranches.publishing) === "publish_history") {
       renderSimpleFlowModule("publishing");
     }
+    window.setTimeout(() => {
+      if (state.publishHistoryRefreshTaskId || state.publishHistoryRefreshPersonaId !== cleanPersonaId) return;
+      state.publishHistoryRefreshPersonaId = "";
+      state.publishHistoryRefreshStatus = null;
+      syncPublishHistoryRefreshDom();
+    }, 8000);
   }
 }
 
@@ -17448,18 +17487,25 @@ async function saveAccountProxyBinding(accountId = "", proxyId = "", expectedPro
   return true;
 }
 
+const accountProxyCustomRequestState = new WeakMap();
+
 async function saveAccountInlineCustomProxy(container, button, scope = "edit") {
   if (!container || !button || accountProxyCustomIsBusy(container)) return false;
   const payload = sharedProxyPayload("accountProxyCustom");
   if (!payload) return false;
   const customForm = container.querySelector("[data-account-proxy-inline-custom]");
+  const requestOwner = customForm || container;
   const payloadFingerprint = JSON.stringify(payload);
-  if (customForm?.dataset.proxyCustomRequestFingerprint !== payloadFingerprint) {
-    customForm.dataset.proxyCustomRequestFingerprint = payloadFingerprint;
-    customForm.dataset.proxyCustomRequestId = globalThis.crypto?.randomUUID?.()
-      || `proxy-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  let requestState = accountProxyCustomRequestState.get(requestOwner);
+  if (!requestState || requestState.payloadFingerprint !== payloadFingerprint) {
+    requestState = {
+      payloadFingerprint,
+      requestId: globalThis.crypto?.randomUUID?.()
+        || `proxy-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    };
+    accountProxyCustomRequestState.set(requestOwner, requestState);
   }
-  const requestId = String(customForm?.dataset.proxyCustomRequestId || "");
+  const requestId = String(requestState.requestId || "");
   setAccountProxyCustomBusy(container, true);
   try {
     const preflight = await testProxyConfiguration(payload, "", "accountProxyCustomCheckResult", "accountProxyCustom");
@@ -17488,10 +17534,7 @@ async function saveAccountInlineCustomProxy(container, button, scope = "edit") {
       return false;
     }
     selectNewCustomProxy(container, savedProxy, scope);
-    if (customForm) {
-      delete customForm.dataset.proxyCustomRequestFingerprint;
-      delete customForm.dataset.proxyCustomRequestId;
-    }
+    accountProxyCustomRequestState.delete(requestOwner);
     setAccountProxyInlineMode(container, "options");
     showMsg("socialMsg", "自定义代理已添加并选中，保存账号后完成绑定。", true);
     return true;
