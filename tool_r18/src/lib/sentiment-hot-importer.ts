@@ -79,6 +79,7 @@ const SENTIMENT_HOT_SEMANTIC_RELEVANCE_VERSION = 4;
 // item back-to-back while still allowing a small persona pool to reach ten.
 const SENTIMENT_HOT_REPEAT_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 const SENTIMENT_HOT_REPEAT_ROTATION_BUCKET_MS = 10 * 60 * 1000;
+const SENTIMENT_HOT_RECENT_CACHE_REUSE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 export function resolveSentimentHotStrategyTimeoutMs(refresh: boolean, remainingMs: number): number {
   const availableMs = Number.isFinite(remainingMs) ? Math.max(1_000, remainingMs) : 1_000;
@@ -1021,6 +1022,20 @@ export function candidateMatchesRequestedFreshness(candidate: SentimentHotCandid
   return freshnessDays <= 0 || candidateHasAcceptableFreshness(candidate, freshnessDays);
 }
 
+function candidateMatchesOperationalFreshness(candidate: SentimentHotCandidate, value: unknown): boolean {
+  const freshnessDays = normalizeSentimentHotFreshnessDays(value);
+  if (freshnessDays <= 0 || candidateMatchesRequestedFreshness(candidate, freshnessDays)) return true;
+  // A same-persona fallback row may have an older original publication date,
+  // but it is still eligible for the shortage rotation when it was captured
+  // recently. This is intentionally narrower than a generic stale backfill:
+  // missing capture times and old fallback rows remain rejected.
+  if (!isHistoricalSupplementCandidate(candidate)) return false;
+  const capturedAt = Date.parse(String(candidate.capturedAt || ""));
+  if (!Number.isFinite(capturedAt)) return false;
+  const age = Date.now() - capturedAt;
+  return age >= -24 * 60 * 60 * 1000 && age <= SENTIMENT_HOT_RECENT_CACHE_REUSE_MAX_AGE_MS;
+}
+
 function sentimentHotKeywordTargetForMode(mode: SentimentHotSearchMode): number {
   return mode === "normal" ? SENTIMENT_HOT_NORMAL_KEYWORD_TARGET : SENTIMENT_HOT_STRICT_KEYWORD_TARGET;
 }
@@ -1915,7 +1930,7 @@ async function waitForMoreSentimentHotCandidates(args: {
     const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
     const byKey = new Set(candidates.map((candidate) => sentimentCandidateDedupeKey(candidate)));
     for (const candidate of databaseCandidates) {
-      if (!candidateMatchesRequestedFreshness(candidate, args.freshnessDays)) continue;
+      if (!candidateMatchesOperationalFreshness(candidate, args.freshnessDays)) continue;
       const dedupeKey = sentimentCandidateDedupeKey(candidate);
       if (!byId.has(candidate.id) && !byKey.has(dedupeKey)) {
         byId.set(candidate.id, candidate);
@@ -2004,7 +2019,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   const provisionalCacheStartedAt = Date.now();
   const provisionalCachedCandidates = !liveOnlyRefresh && meaningfulNeedles(provisionalKeywords).length > 0
     ? readThreadsSearchCandidateCache(archiveId, provisionalKeywords, Math.max(limit * 4, 40), true, searchMode)
-      .filter((candidate) => candidateMatchesRequestedFreshness(candidate, operationalFreshnessDays))
+      .filter((candidate) => candidateMatchesOperationalFreshness(candidate, operationalFreshnessDays))
     : [];
   console.info(`[sentiment_hot_stage] label=provisional-cache durationMs=${Date.now() - provisionalCacheStartedAt}`);
   const provisionalGlobalStartedAt = Date.now();
@@ -2014,7 +2029,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
         [...sentimentHotStrategyTermsForMode(prefetchedStrategy, searchMode), ...provisionalKeywords],
         Math.max(limit * 4, 40),
         searchMode,
-      ).filter((candidate) => candidateMatchesRequestedFreshness(candidate, operationalFreshnessDays)
+      ).filter((candidate) => candidateMatchesOperationalFreshness(candidate, operationalFreshnessDays)
         && candidateMatchesSentimentHotStrategyAnchors(candidate, prefetchedStrategy, searchMode))
     : [];
   console.info(`[sentiment_hot_stage] label=provisional-global durationMs=${Date.now() - provisionalGlobalStartedAt}`);
@@ -2118,14 +2133,14 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   const initialCacheStartedAt = Date.now();
   let candidates = hasSearchKeywords && !liveOnlyRefresh
     ? sortSentimentHotCandidatePool(readThreadsSearchCandidateCache(archiveId, keywords, poolLimit, true, searchMode), keywords, poolLimit, searchMode)
-      .filter((candidate) => candidateMatchesRequestedFreshness(candidate, operationalFreshnessDays))
+      .filter((candidate) => candidateMatchesOperationalFreshness(candidate, operationalFreshnessDays))
     : [];
   console.info(`[sentiment_hot_stage] label=initial-cache durationMs=${Date.now() - initialCacheStartedAt}`);
   const initialCacheCount = candidates.length;
   const channelStats: string[] = [];
   const provisionalSourceStartedAt = Date.now();
   const provisionalCandidates = (await provisionalSourcePromise)
-    .filter((candidate) => candidateMatchesRequestedFreshness(candidate, operationalFreshnessDays));
+    .filter((candidate) => candidateMatchesOperationalFreshness(candidate, operationalFreshnessDays));
   console.info(`[sentiment_hot_stage] label=provisional-source-wait durationMs=${Date.now() - provisionalSourceStartedAt}`);
   if (provisionalCandidates.length > 0) {
     const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
@@ -2222,7 +2237,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     const byKey = new Set(candidates.map((candidate) => sentimentCandidateDedupeKey(candidate)));
     const mergeThreadsCandidates = (items: SentimentHotCandidate[]) => {
       for (const candidate of items) {
-        if (!candidateMatchesRequestedFreshness(candidate, operationalFreshnessDays)) continue;
+        if (!candidateMatchesOperationalFreshness(candidate, operationalFreshnessDays)) continue;
         const dedupeKey = sentimentCandidateDedupeKey(candidate);
         if (!byId.has(candidate.id) && !byKey.has(dedupeKey)) {
           byId.set(candidate.id, candidate);
@@ -2245,7 +2260,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       strictFreshOnly
         ? liveReadyPool.filter((candidate) => (
           !isHistoricalSupplementCandidate(candidate)
-          || candidateMatchesRequestedFreshness(candidate, operationalFreshnessDays)
+          || candidateMatchesOperationalFreshness(candidate, operationalFreshnessDays)
         ))
         : liveReadyPool,
       limit,
@@ -2337,7 +2352,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
       const byKey = new Set(candidates.map((candidate) => sentimentCandidateDedupeKey(candidate)));
       for (const candidate of instagramCandidates) {
-        if (!candidateMatchesRequestedFreshness(candidate, operationalFreshnessDays)) continue;
+        if (!candidateMatchesOperationalFreshness(candidate, operationalFreshnessDays)) continue;
         const dedupeKey = sentimentCandidateDedupeKey(candidate);
         if (!byId.has(candidate.id) && !byKey.has(dedupeKey)) {
           byId.set(candidate.id, candidate);
@@ -2389,7 +2404,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
       const byKey = new Set(candidates.map((candidate) => sentimentCandidateDedupeKey(candidate)));
       for (const candidate of databaseCandidates) {
-        if (!candidateMatchesRequestedFreshness(candidate, operationalFreshnessDays)) continue;
+        if (!candidateMatchesOperationalFreshness(candidate, operationalFreshnessDays)) continue;
         const dedupeKey = sentimentCandidateDedupeKey(candidate);
         if (!byId.has(candidate.id) && !byKey.has(dedupeKey)) {
           byId.set(candidate.id, candidate);
@@ -2464,7 +2479,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   const displayCandidatePool = strictFreshOnly
     ? candidates.filter((candidate) => (
       !isHistoricalSupplementCandidate(candidate)
-      || candidateMatchesRequestedFreshness(candidate, operationalFreshnessDays)
+      || candidateMatchesOperationalFreshness(candidate, operationalFreshnessDays)
     ))
     : candidates;
   candidates = finalizeSentimentHotCandidatesForDisplay(displayCandidatePool, limit, { archiveId, keywords, excludeShown: true, searchMode, freshnessDays: operationalFreshnessDays });
@@ -3056,7 +3071,7 @@ function candidateMeetsDisplayQuality(candidate: SentimentHotCandidate, keywords
     },
   };
   if ((normalized.metrics as any)?.semanticRelevant === false) return null;
-  if (!candidateHasAcceptableFreshness(normalized, freshnessDays)) return null;
+  if (!candidateMatchesOperationalFreshness(normalized, freshnessDays)) return null;
   if (!isUsefulHotCandidate(normalized)) return null;
   if (sentimentHotHanCount(content) < minimumSentimentHotHanCountForCandidate(normalized)) return null;
   if (isNoisyReaderCandidateContent(normalized, content)) return null;
@@ -3265,7 +3280,7 @@ function collectSentimentHotSupplementCandidates(args: {
     if (
       args.strictFreshOnly
       && isHistoricalSupplementCandidate(candidate)
-      && !candidateMatchesRequestedFreshness(candidate, args.freshnessDays)
+      && !candidateMatchesOperationalFreshness(candidate, args.freshnessDays)
     ) return;
     if (args.strictFreshOnly && requireCooldown && !isSentimentHotCandidateRepeatEligibleWithState(candidate, shownHistoryKeys, shownAtMap)) return;
     const historyKeys = getSentimentHotCandidateHistoryKeys(candidate);
@@ -3358,7 +3373,7 @@ async function fetchThreadsSearchPageCandidates(args: {
   const addAll = (candidates: SentimentHotCandidate[]) => {
     for (const candidate of candidates) {
       if (args.freshnessDays && isHistoricalSupplementCandidate(candidate)) continue;
-      if (!candidateMatchesRequestedFreshness(candidate, args.freshnessDays)) continue;
+      if (!candidateMatchesOperationalFreshness(candidate, args.freshnessDays)) continue;
       const key = sentimentCandidateDedupeKey(candidate);
       if (getSentimentHotCandidateHistoryKeys(candidate).some((historyKey) => excludedHistoryKeys.has(historyKey))) continue;
       if (byId.has(candidate.id) || dedupeKeys.has(key)) continue;

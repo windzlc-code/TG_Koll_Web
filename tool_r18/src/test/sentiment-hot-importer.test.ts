@@ -631,6 +631,25 @@ describe("sentiment hot importer", () => {
     expect(candidates.map((item) => item.id)).toEqual(["recent"]);
   });
 
+  it("allows a recently captured same-persona fallback during strict shortage rotation", () => {
+    const now = Date.now();
+    const content = "\u4fe1\u7528\u5361\u8d37\u6b3e\u5229\u7387\u4e0e\u94f6\u884c\u8fd8\u6b3e\u89c4\u5212\u662f\u5de5\u85aa\u65cf\u7406\u8d22\u7684\u91cd\u8981\u8bdd\u9898\uff0c\u9700\u8981\u6bd4\u8f83\u73b0\u91d1\u6d41\u3001\u8d1f\u503a\u6bd4\u548c\u957f\u671f\u6210\u672c\u3002".repeat(2);
+    const candidates = finalizeSentimentHotCandidatesForDisplay([{
+      id: "recent-fallback-cache",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@finance/post/recent-fallback-cache",
+      author: "finance",
+      content,
+      media: [],
+      hotScore: 5000,
+      metrics: { archiveScopedFallback: true },
+      publishedAt: new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString(),
+      capturedAt: new Date(now - 2 * 60 * 60 * 1000).toISOString(),
+    }] as any, 10, { freshnessDays: 15 });
+
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["recent-fallback-cache"]);
+  });
+
   it("prioritizes a fresher unshown candidate over a hotter older candidate", () => {
     const now = Date.now();
     const candidates = finalizeSentimentHotCandidatesForDisplay([
