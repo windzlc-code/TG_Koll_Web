@@ -3445,6 +3445,13 @@ type ThreadsSearchGraphqlTemplate = {
   headers: Record<string, string>;
 };
 
+// A second search round in the same workflow should not depend on Threads
+// emitting a fresh bootstrap request while it is rate-limiting the browser.
+// Keep the captured template only for the lifetime of a short-lived process;
+// cookies and request variables are still replaced for every query.
+const THREADS_BROWSER_TEMPLATE_CACHE_TTL_MS = 5 * 60_000;
+let recentThreadsSearchTemplate: { template: ThreadsSearchGraphqlTemplate; capturedAt: number } | null = null;
+
 function threadsSearchVariableQuery(value: unknown): string {
   if (!value || typeof value !== "object") return "";
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
@@ -3661,7 +3668,11 @@ async function fetchThreadsBrowserSearchCandidates(args: {
       });
       await addCookiesBestEffort(context, cookies as any[]);
       const page = await context.newPage();
-      let template: ThreadsSearchGraphqlTemplate | null = null;
+      const cachedTemplate = recentThreadsSearchTemplate
+        && Date.now() - recentThreadsSearchTemplate.capturedAt <= THREADS_BROWSER_TEMPLATE_CACHE_TTL_MS
+        ? recentThreadsSearchTemplate.template
+        : null;
+      let template: ThreadsSearchGraphqlTemplate | null = cachedTemplate;
       const captureTemplate = async (request: any) => {
         try {
           const requestUrlText = String(request.url?.() || "");
@@ -3691,11 +3702,12 @@ async function fetchThreadsBrowserSearchCandidates(args: {
             variables,
             headers,
           };
+          recentThreadsSearchTemplate = { template, capturedAt: Date.now() };
         } catch {
           // Continue waiting for the next search request.
         }
       };
-      page.on("request", captureTemplate);
+      if (!template) page.on("request", captureTemplate);
       const bootstrapQueries = [...new Set(args.queries.slice(0, THREADS_BROWSER_BOOTSTRAP_QUERY_LIMIT).filter(Boolean))];
       const recentSearch = Number(args.freshnessDays || 0) > 0;
       const collectDomCandidates = async (searchPage: any, query: string, scrollAttempts = 3) => {
@@ -3732,11 +3744,18 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           if (results.length >= args.limit) break;
         }
       };
-      for (const bootstrapQuery of bootstrapQueries) {
-        if (template || (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 3_000)) break;
-        await collectDomCandidates(page, bootstrapQuery, THREADS_BROWSER_TEMPLATE_WAIT_ATTEMPTS);
+      if (template) {
+        await page.goto(buildThreadsSearchUrl(args.queries[0] || "", recentSearch), {
+          waitUntil: "domcontentloaded",
+          timeout: Math.min(3_000, remainingSentimentDeadlineMs(args.deadlineAt, 3_000)),
+        }).catch(() => undefined);
+      } else {
+        for (const bootstrapQuery of bootstrapQueries) {
+          if (template || (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 3_000)) break;
+          await collectDomCandidates(page, bootstrapQuery, THREADS_BROWSER_TEMPLATE_WAIT_ATTEMPTS);
+        }
       }
-      page.off("request", captureTemplate);
+      if (!cachedTemplate) page.off("request", captureTemplate);
 
       if (!template && results.length < args.limit) {
         const fallbackQueries = args.queries.slice(
