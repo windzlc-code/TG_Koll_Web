@@ -3462,7 +3462,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
       if (!template && results.length < args.limit) {
         const fallbackQueries = args.queries.slice(
           bootstrapQueries.length,
-          Math.min(THREADS_BROWSER_QUERY_LIMIT, bootstrapQueries.length + 8),
+          THREADS_BROWSER_QUERY_LIMIT,
         );
         const fallbackPageCount = Math.min(THREADS_BROWSER_PAGE_LIMIT - 1, fallbackQueries.length);
         if (fallbackPageCount > 0 && (!args.deadlineAt || remainingSentimentDeadlineMs(args.deadlineAt, 0) >= 4_000)) {
