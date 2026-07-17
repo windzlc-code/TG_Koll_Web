@@ -32,10 +32,10 @@ import {
 const require = createRequire(import.meta.url);
 const Database = require("better-sqlite3");
 const MIN_SENTIMENT_HOT_SCORE = 1000;
-// Threads' rendered search page exposes only small reaction counts (and no
-// stable GraphQL search payload). Keep this fallback useful without relaxing
-// the score floor for reader/API/database candidates.
-const MIN_THREADS_SEARCH_PAGE_HOT_SCORE = 0;
+// Heat is a hard display gate for every source, including rendered search
+// pages and recent GraphQL results. Search expansion and repeat rotation must
+// never compensate by admitting a low-heat candidate.
+const MIN_THREADS_SEARCH_PAGE_HOT_SCORE = MIN_SENTIMENT_HOT_SCORE;
 const MIN_SENTIMENT_HOT_QUALITY_HAN_COUNT = 60;
 const SENTIMENT_HOT_CANDIDATE_POOL_TARGET = 400;
 const THREADS_SEARCH_CACHE_CANDIDATE_LIMIT = 2000;

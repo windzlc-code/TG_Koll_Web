@@ -1134,7 +1134,7 @@ Demo post body
     expect(candidate.metrics).toMatchObject({ view_count: 99 });
   });
 
-  it("keeps the 1000 display threshold except for rendered search-page fallback candidates", () => {
+  it("keeps the 1000 display threshold for every source", () => {
     const base = {
       platform: "threads",
       author: "demo",
@@ -1161,7 +1161,7 @@ Demo post body
       })),
     ] as any, 10, { keywords: ["醫療", "醫生", "醫院"] });
 
-    expect(candidates.map((candidate) => candidate.id)).toEqual(["account-accepted", "below-threshold-2"]);
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["account-accepted"]);
   });
 
   it("parses Instagram reader candidates as extra sentiment sources", () => {
