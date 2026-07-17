@@ -4,7 +4,7 @@ const PD_ADMIN_WORKSPACE_USER_ID = String(document.querySelector('meta[name="adm
 const PD_ADMIN_CONSOLE_SESSION = document.querySelector('meta[name="admin-console-session"]')?.content === "1";
 
 function pdEl(id) {
-  return personaDashboardRoot ? personaDashboardRoot.querySelector(`#${id}`) : document.getElementById(id);
+  return personaDashboardRoot?.querySelector(`#${id}`) || document.getElementById(id);
 }
 
 function pdAdminWorkspaceUrl(value) {
@@ -574,7 +574,7 @@ function pdRenderDonutChart(hostId, entries) {
     host.innerHTML = `<div class="persona-chart-empty">暂无可展示数据</div>`;
     return;
   }
-  const colors = ["#2563eb", "#f59e0b", "#16a34a", "#dc2626", "#7c3aed", "#0f766e"];
+  const colors = ["var(--accent)", "#d8992b", "#3f8d67", "#ba554f", "#7b6a9b", "#4f7775"];
   let cursor = 0;
   const segments = rows.map((row, index) => {
     const start = cursor;
@@ -608,9 +608,9 @@ function pdRenderTrendChart(hostId, rows) {
   const height = 220;
   const pad = 28;
   const series = [
-    { key: "published", label: "发布", color: "#2563eb" },
-    { key: "post_views", label: "帖子浏览", color: "#f59e0b" },
-    { key: "likes", label: "点赞", color: "#16a34a" },
+    { key: "published", label: "发布", color: "var(--accent)" },
+    { key: "post_views", label: "帖子浏览", color: "#d8992b" },
+    { key: "likes", label: "点赞", color: "#3f8d67" },
   ];
   const max = Math.max(1, ...items.flatMap((row) => series.map((s) => Number(row[s.key] || 0))));
   const x = (index) => pad + (items.length === 1 ? 0 : (index / (items.length - 1)) * (width - pad * 2));

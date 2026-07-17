@@ -16398,23 +16398,55 @@ def _persona_dashboard_refresh_worker(task_id: str, archive_id: str = "") -> Non
             })
 
 
-def _start_persona_dashboard_refresh(archive_id: str = "", source: str = "", trigger: str = "manual") -> dict[str, Any]:
+def _persona_dashboard_refresh_archive_ids(archive_id: str, user: dict[str, Any]) -> list[str]:
+    clean_archive_id = str(archive_id or "").strip()
+    if clean_archive_id:
+        _require_persona_access(clean_archive_id, user)
+        return [clean_archive_id]
+    visible_archive_ids = sorted(_visible_persona_ids(user))
+    if not visible_archive_ids:
+        raise HTTPException(status_code=400, detail="当前账号暂无可同步的人设")
+    return visible_archive_ids
+
+
+def _start_persona_dashboard_refresh(
+    archive_id: str = "",
+    source: str = "",
+    trigger: str = "manual",
+    archive_ids: list[str] | None = None,
+) -> dict[str, Any]:
     task_id = f"pdr_{uuid.uuid4().hex[:12]}"
     refresh_source = (source or os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "rsshub").strip().lower() or "rsshub"
+    scoped_archive_ids = list(dict.fromkeys(
+        str(item or "").strip() for item in (archive_ids or []) if str(item or "").strip()
+    ))
+    if archive_id:
+        scoped_archive_ids = [str(archive_id).strip()]
+    scope = "单个人设" if archive_id else (
+        f"当前账号的 {len(scoped_archive_ids)} 个人设"
+        if archive_ids is not None
+        else "全部已绑定人设"
+    )
     with PERSONA_DASHBOARD_REFRESH_LOCK:
         PERSONA_DASHBOARD_REFRESH_TASKS[task_id] = {
             "id": task_id,
             "archive_id": str(archive_id or "").strip(),
+            "archive_ids": scoped_archive_ids,
             "source": refresh_source,
             "trigger": str(trigger or "manual"),
             "status": "queued",
             "step": "排队中",
             "progress": 0,
-            "scope": "单个人设" if archive_id else "全部已绑定人设",
+            "scope": scope,
             "message": "已加入刷新队列。",
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
-    thread = threading.Thread(target=_persona_dashboard_refresh_worker_v2, args=(task_id, str(archive_id or "").strip(), refresh_source), daemon=True)
+    worker_archive_ids = scoped_archive_ids if archive_ids is not None else None
+    thread = threading.Thread(
+        target=_persona_dashboard_refresh_worker_v2,
+        args=(task_id, str(archive_id or "").strip(), refresh_source, worker_archive_ids),
+        daemon=True,
+    )
     thread.start()
     return PERSONA_DASHBOARD_REFRESH_TASKS[task_id]
 
@@ -16427,10 +16459,19 @@ def _read_text_tail(path: Path, max_chars: int = 1200) -> str:
     return text[-max_chars:]
 
 
-def _persona_dashboard_refresh_worker_v2(task_id: str, archive_id: str = "", source: str = "") -> None:
+def _persona_dashboard_refresh_worker_v2(
+    task_id: str,
+    archive_id: str = "",
+    source: str = "",
+    archive_ids: list[str] | None = None,
+) -> None:
     started = time.time()
     refresh_source = (source or os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "rsshub").strip().lower() or "rsshub"
-    scope = "单个人设" if archive_id else "全部已绑定人设"
+    scope = "单个人设" if archive_id else (
+        f"当前账号的 {len(archive_ids)} 个人设"
+        if archive_ids is not None
+        else "全部已绑定人设"
+    )
     with PERSONA_DASHBOARD_REFRESH_LOCK:
         PERSONA_DASHBOARD_REFRESH_TASKS[task_id].update({
             "status": "running",
@@ -16444,6 +16485,11 @@ def _persona_dashboard_refresh_worker_v2(task_id: str, archive_id: str = "", sou
     args = ["node", "--import", "tsx", str(script), f"--source={refresh_source}"]
     if archive_id:
         args.append(f"--archive-id={archive_id}")
+    elif archive_ids is not None:
+        encoded_archive_ids = base64.urlsafe_b64encode(
+            json.dumps(archive_ids, ensure_ascii=False).encode("utf-8")
+        ).decode("ascii").rstrip("=")
+        args.append(f"--archive-ids-b64={encoded_archive_ids}")
     env = os.environ.copy()
     env.setdefault("TOOL_R18_RUNTIME_DIR", str(TOOL_R18_RUNTIME_DIR))
     env.setdefault("NODE_PATH", str(ROOT_DIR / "tool_r18" / "node_modules"))
@@ -18700,11 +18746,8 @@ def create_app() -> FastAPI:
 
     @app.post("/api/persona_dashboard/refresh")
     def api_persona_dashboard_refresh(payload: PersonaDashboardRefreshPayload, user: dict[str, Any] = Depends(get_current_user)):
-        if payload.archive_id:
-            _require_persona_access(payload.archive_id, user)
-        else:
-            raise HTTPException(status_code=400, detail="普通用户刷新时必须指定人设")
-        task = _start_persona_dashboard_refresh(payload.archive_id)
+        archive_ids = _persona_dashboard_refresh_archive_ids(payload.archive_id, user)
+        task = _start_persona_dashboard_refresh(payload.archive_id, archive_ids=archive_ids)
         task["user_id"] = _workspace_user_id(user)
         return task
 

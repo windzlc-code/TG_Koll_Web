@@ -19,6 +19,18 @@ function argValue(name: string): string {
   return process.argv.find((arg) => arg.startsWith(prefix))?.slice(prefix.length) || "";
 }
 
+function archiveIdsFromArgs(): string[] {
+  const encoded = argValue("archive-ids-b64");
+  if (!encoded) return [];
+  try {
+    const parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+    if (!Array.isArray(parsed)) throw new Error("archive ids must be an array");
+    return Array.from(new Set(parsed.map((item) => String(item || "").trim()).filter(Boolean)));
+  } catch {
+    throw new Error("invalid archive-ids-b64 argument");
+  }
+}
+
 function decodeXml(value: string): string {
   return String(value || "")
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
@@ -210,9 +222,12 @@ function isCompleteMetrics(metrics: any): boolean {
 
 async function main() {
   const targetId = argValue("archive-id");
+  const scopedTargetIds = new Set([targetId, ...archiveIdsFromArgs()].filter(Boolean));
   const source = (argValue("source") || process.env.PERSONA_DASHBOARD_REFRESH_SOURCE || "rsshub").toLowerCase();
   const archives = await listPersonaArchives();
-  const targets = targetId ? archives.filter((archive) => archive.id === targetId) : archives;
+  const targets = scopedTargetIds.size
+    ? archives.filter((archive) => scopedTargetIds.has(String(archive.id || "")))
+    : archives;
   const useRssHub = source === "rsshub";
   const refreshAuth = useRssHub ? { ok: true, message: "RSSHub 模式不需要浏览器 Cookie" } : await refreshSentimentBrowserCookiesForPlatform("threads").catch((error: any) => ({
     ok: false,

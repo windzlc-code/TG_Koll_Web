@@ -4954,6 +4954,8 @@ function setView(view) {
     persona_dashboard: "人设看板",
   };
   $("viewTitle").textContent = titles[view] || "控制台";
+  const personaTopbarActions = $("personaDashboardTopbarActions");
+  if (personaTopbarActions) personaTopbarActions.hidden = view !== "persona_dashboard";
   updateWorkspaceFlow();
   if ($("moduleMenu")) syncModuleMenuState();
   if (view === "console_settings") renderConsoleSettingsPage();

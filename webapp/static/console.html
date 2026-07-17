@@ -156,6 +156,25 @@
           </div>
         </div>
         <div class="topbar-actions">
+          <div id="personaDashboardTopbarActions" class="persona-dashboard-topbar-actions" hidden>
+            <div class="persona-dashboard-topbar-status">
+              <span>数据状态</span>
+              <strong id="personaDashboardUpdated">尚未加载</strong>
+            </div>
+            <div class="persona-dashboard-action-buttons">
+              <button
+                id="btnPersonaDashboardRefresh"
+                type="button"
+                title="重新读取当前缓存并刷新页面显示，不会重新采集平台数据"
+              >刷新显示</button>
+              <button
+                id="btnPersonaDashboardRefreshAll"
+                class="primary"
+                type="button"
+                title="重新采集并更新当前账号有权限查看的全部人设数据"
+              >同步全部数据</button>
+            </div>
+          </div>
           <button id="openAdmin" type="button" class="admin-only" hidden>运营后台</button>
         </div>
       </header>
@@ -277,21 +296,6 @@
 
       <section class="view persona-dashboard-view" data-panel="persona_dashboard">
         <div id="personaDashboardApp" class="persona-dashboard-app">
-          <section class="persona-dashboard-hero">
-            <div>
-              <div class="eyebrow">运营数据</div>
-              <h2>人设看板</h2>
-              <div class="meta">集中查看人设的素材、发布、热点和流量趋势；可按当前权限刷新已绑定账号的数据。</div>
-            </div>
-            <div class="persona-dashboard-actions">
-              <div class="small" id="personaDashboardUpdated">尚未加载</div>
-              <div class="persona-dashboard-action-buttons">
-                <button id="btnPersonaDashboardRefresh" type="button">刷新看板</button>
-                <button id="btnPersonaDashboardRefreshAll" class="primary" type="button">全量刷新</button>
-              </div>
-            </div>
-          </section>
-
           <section class="persona-dashboard-page">
             <div class="persona-dashboard-filters">
               <div>
