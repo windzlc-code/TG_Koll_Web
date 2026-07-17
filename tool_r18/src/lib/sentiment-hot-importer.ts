@@ -1545,6 +1545,7 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
   memorySummaries?: string[];
   warnings: string[];
   timeoutMs?: number;
+  useCache?: boolean;
 }): Promise<SentimentHotSearchStrategy> {
   const archive = args.archive || {};
   const setup = archive.setup || {};
@@ -1567,7 +1568,7 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
     memorySummaries: args.memorySummaries,
     personaText,
   });
-  const cached = readCachedSentimentHotSearchStrategy(cacheKey);
+  const cached = args.useCache === false ? null : readCachedSentimentHotSearchStrategy(cacheKey);
   if (cached) return cached;
 
   try {
@@ -1626,7 +1627,7 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
     });
     if (sentimentHotStrategyHasModelTerms(strategy)) {
       console.info(`[sentiment_hot_model_strategy] model=${JSON.stringify(result.model)} domain=${JSON.stringify(strategy.domainSummary)}`);
-      writeCachedSentimentHotSearchStrategy(cacheKey, strategy);
+      if (args.useCache !== false) writeCachedSentimentHotSearchStrategy(cacheKey, strategy);
       return strategy;
     }
     args.warnings.push("模型未返回可用热点搜索策略，已改用当前人设核心领域词继续抓取。");
@@ -2076,7 +2077,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     warnings,
     "search-strategy",
     () => withSentimentTimeout(
-      buildSentimentHotSearchStrategyWithModel({ archive, prompt: args.prompt, memorySummaries: args.memorySummaries, warnings, timeoutMs: strategyTimeoutMs }),
+      buildSentimentHotSearchStrategyWithModel({ archive, prompt: args.prompt, memorySummaries: args.memorySummaries, warnings, timeoutMs: strategyTimeoutMs, useCache: !liveOnlyRefresh }),
       strategyTimeoutMs + 250,
       emptySentimentHotSearchStrategy(),
     ),
@@ -2095,7 +2096,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   if (keywords.length === 0 && personaSeedKeywords.length > 0) {
     keywords = [...personaSeedKeywords];
   }
-  if (keywords.length === 0) {
+  if (keywords.length === 0 && !liveOnlyRefresh) {
     const cachedKeywords = readArchiveScopedThreadsSearchKeywords(archiveId, SENTIMENT_MODEL_KEYWORD_TARGET, searchMode);
     if (cachedKeywords.length > 0) {
       keywords = cachedKeywords;
@@ -2406,7 +2407,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   const usableSources = cookieStatuses
     .filter(sentimentCookieStatusHasUsableCookies)
     .map((status) => status.platform);
-  if (shouldFetchLiveCandidates && !hasFastReturnCandidates && runtime.ok && usableSources.length > 0 && hasSentimentHotTotalBudget(startedAt, 4_000)) {
+  if (!liveOnlyRefresh && shouldFetchLiveCandidates && !hasFastReturnCandidates && runtime.ok && usableSources.length > 0 && hasSentimentHotTotalBudget(startedAt, 4_000)) {
     await measureSentimentStage(warnings, "realtime-scan", () => withSentimentTimeout(triggerRealtimeSentimentScan(usableSources, warnings), Math.min(6_000, remainingSentimentHotTotalBudgetMs(startedAt, 3_000)), undefined));
   }
 
