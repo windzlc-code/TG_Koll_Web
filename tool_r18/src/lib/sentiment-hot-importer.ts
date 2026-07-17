@@ -1952,6 +1952,8 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   searchMode?: SentimentHotSearchMode;
   freshnessDays?: number;
   freshnessPolicy?: SentimentHotFreshnessPolicy;
+  /** Test-only mode: exclude cache/database/history backfills and do not write shown history. */
+  liveOnly?: boolean;
 }): Promise<FetchSentimentHotCandidatesResult> {
   const startedAt = Date.now();
   const warnings: string[] = [];
@@ -1973,7 +1975,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   // same-persona cache row from the last 24 hours. This keeps tests reliable
   // when the live source is rate-limited without admitting stale history.
   const strictFreshOnly = strictFreshness && freshnessDays > 0;
-  const liveOnlyRefresh = false;
+  const liveOnlyRefresh = args.liveOnly === true;
   const limit = args.limit || 10;
   const personaSeedKeywords = buildSentimentHotKeywords({
     archive,
@@ -1988,7 +1990,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     url: resolveSentimentBackendUrl(),
     warning: error instanceof Error ? error.message : String(error || "unknown"),
   }));
-  const prefetchedStrategy = readCachedSentimentHotSearchStrategy(buildSentimentHotSearchStrategyCacheKey({
+  const prefetchedStrategy = liveOnlyRefresh ? null : readCachedSentimentHotSearchStrategy(buildSentimentHotSearchStrategyCacheKey({
     archive,
     prompt: args.prompt,
     memorySummaries: args.memorySummaries,
@@ -2116,6 +2118,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       })()
     : keywords;
   warnings.push(searchMode === "normal" ? "热点抓取模式：普通（泛垂直）。" : "热点抓取模式：严格（垂直收口）。");
+  if (liveOnlyRefresh) warnings.push("测试模式：仅统计本轮实时来源，不读取或写入缓存、数据库、共享候选和展示历史。");
   if (strictFreshness) {
     warnings.push(freshnessDays > 0 ? `热点新鲜度：近 ${freshnessDays} 天。` : "热点新鲜度：不限时间。");
   } else {
@@ -2223,6 +2226,8 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
           refresh: args.refresh === true,
           freshnessDays: operationalFreshnessDays,
           allowCacheFallback: !liveOnlyRefresh,
+          ignoreHistory: liveOnlyRefresh,
+          writeCache: !liveOnlyRefresh,
           searchMode,
           deadlineAt: Date.now() + threadsTimeoutMs - 500,
         }),
@@ -2264,7 +2269,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
         ))
         : liveReadyPool,
       limit,
-      { archiveId, keywords, excludeShown: true, searchMode, freshnessDays: operationalFreshnessDays },
+      { archiveId, keywords, excludeShown: !liveOnlyRefresh, searchMode, freshnessDays: operationalFreshnessDays },
     ).length;
     if (liveReadyCount < limit && hasSentimentHotTotalBudget(startedAt, 18_000)) {
       const secondRoundTimeoutMs = Math.min(20_000, remainingSentimentHotTotalBudgetMs(startedAt, 18_000));
@@ -2283,6 +2288,8 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
               refresh: args.refresh === true,
               freshnessDays: operationalFreshnessDays,
               allowCacheFallback: !liveOnlyRefresh,
+              ignoreHistory: liveOnlyRefresh,
+              writeCache: !liveOnlyRefresh,
               searchMode,
               deadlineAt: Date.now() + secondRoundTimeoutMs - 500,
             }),
@@ -2331,7 +2338,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
         ? preInstagramReadyPool.filter((candidate) => candidateMatchesOperationalFreshness(candidate, operationalFreshnessDays))
         : preInstagramReadyPool,
       limit,
-      { archiveId, keywords, excludeShown: true, searchMode, freshnessDays: operationalFreshnessDays },
+      { archiveId, keywords, excludeShown: !liveOnlyRefresh, searchMode, freshnessDays: operationalFreshnessDays },
     ).length
     : 0;
   if (shouldFetchLiveCandidates && preInstagramReadyCount < limit && hasSentimentHotTotalBudget(startedAt, SENTIMENT_HOT_SUPPLEMENT_MIN_REMAINING_MS)) {
@@ -2489,8 +2496,8 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       || candidateMatchesOperationalFreshness(candidate, operationalFreshnessDays)
     ))
     : candidates;
-  candidates = finalizeSentimentHotCandidatesForDisplay(displayCandidatePool, limit, { archiveId, keywords, excludeShown: true, searchMode, freshnessDays: operationalFreshnessDays });
-  const shownHistoryKeys = getSentimentHotShownHistoryKeys(archiveId);
+  candidates = finalizeSentimentHotCandidatesForDisplay(displayCandidatePool, limit, { archiveId, keywords, excludeShown: !liveOnlyRefresh, searchMode, freshnessDays: operationalFreshnessDays });
+  const shownHistoryKeys = liveOnlyRefresh ? new Set<string>() : getSentimentHotShownHistoryKeys(archiveId);
   if (!liveOnlyRefresh && candidates.length < limit) {
     const selectedKeys = new Set(candidates.flatMap((candidate) => getSentimentHotCandidateHistoryKeys(candidate)));
     const supplementLimit = limit - candidates.length;
@@ -2669,7 +2676,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       || typeof (candidate.metrics as any)?.views === "number"
     )).length;
     channelStats.push(`原帖浏览 ${resolvedViewCount}/${candidates.length}，耗时 ${Date.now() - detailStartedAt}ms`);
-    if (resolvedViewCount > 0) {
+    if (resolvedViewCount > 0 && !liveOnlyRefresh) {
       writeThreadsSearchCandidateCache(archiveId, keywords, candidates, searchMode);
     }
     if (resolvedViewCount < candidates.length) {
@@ -2689,7 +2696,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   } else if (candidates.length < limit) {
     warnings.push(`\u672c\u6b21\u53ea\u627e\u5230\u0020${candidates.length}/${limit}\u0020\u7bc7\u9ad8\u71b1\u5ea6\u4e2d\u6587\u71b1\u9ede\uff0c\u5df2\u904e\u6ffe\u91cd\u8907\u3001\u975e\u4e2d\u6587\u6216\u4f4e\u71b1\u5ea6\u5167\u5bb9\u3002`);
   }
-  if (candidates.length > 0) {
+  if (candidates.length > 0 && !liveOnlyRefresh) {
     try {
       rememberSentimentHotShown(archiveId, candidates);
     } catch (error) {
@@ -2709,6 +2716,7 @@ export async function fetchSentimentHotCandidates(args: {
   searchMode?: SentimentHotSearchMode;
   freshnessDays?: number;
   freshnessPolicy?: SentimentHotFreshnessPolicy;
+  liveOnly?: boolean;
 }): Promise<FetchSentimentHotCandidatesResult> {
   const archiveId = cleanText(args.archive?.id) || "default";
   const searchMode = normalizeSentimentHotSearchMode(args.searchMode);
@@ -3404,15 +3412,18 @@ async function fetchThreadsSearchPageCandidates(args: {
   refresh?: boolean;
   freshnessDays?: number;
   allowCacheFallback?: boolean;
+  /** Test-only: do not read shown-id/history state or write candidate cache. */
+  ignoreHistory?: boolean;
+  writeCache?: boolean;
   searchMode?: SentimentHotSearchMode;
   deadlineAt?: number;
 }): Promise<SentimentHotCandidate[]> {
   const baseQueries = args.queryKeywords?.length
     ? buildModelOrderedThreadsSearchQueries(args.queryKeywords)
     : buildThreadsSearchQueries(args.keywords);
-  const shownIds = getSentimentHotShownIds(args.archiveId);
-  const excluded = getSentimentHotRefreshExcludedIds(args.archiveId);
-  const excludedHistoryKeys = getSentimentHotShownHistoryKeys(args.archiveId);
+  const shownIds = args.ignoreHistory ? new Set<string>() : getSentimentHotShownIds(args.archiveId);
+  const excluded = args.ignoreHistory ? new Set<string>() : getSentimentHotRefreshExcludedIds(args.archiveId);
+  const excludedHistoryKeys = args.ignoreHistory ? new Set<string>() : getSentimentHotShownHistoryKeys(args.archiveId);
   const queryRound = Math.max(0, Math.floor(Number(args.queryRound) || 0));
   const baseSeed = shownIds.size + (args.refresh ? Math.floor(shownIds.size / Math.max(1, args.limit)) : 0);
   const roundSeed = baseSeed + queryRound * Math.max(1, Math.floor(baseQueries.length / 3));
@@ -3454,6 +3465,7 @@ async function fetchThreadsSearchPageCandidates(args: {
       deadlineAt: args.deadlineAt
         ? Math.min(args.deadlineAt, Date.now() + SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS)
         : Date.now() + SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS,
+      ignoreHistory: args.ignoreHistory,
       searchMode: args.searchMode,
     }).catch(() => []), sourceTimeoutMs, [])
     : Promise.resolve([]);
@@ -3503,7 +3515,7 @@ async function fetchThreadsSearchPageCandidates(args: {
   }
 
   const sorted = sortSentimentHotCandidatePool([...byId.values()], args.keywords, args.limit, args.searchMode);
-  if (sorted.length > 0) writeThreadsSearchCandidateCache(args.archiveId, args.keywords, sorted, args.searchMode);
+  if (sorted.length > 0 && args.writeCache !== false) writeThreadsSearchCandidateCache(args.archiveId, args.keywords, sorted, args.searchMode);
   return sorted;
 }
 
@@ -3713,6 +3725,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
   excludeIds?: Set<string>;
   deadlineAt?: number;
   freshnessDays?: number;
+  ignoreHistory?: boolean;
   searchMode?: SentimentHotSearchMode;
 }): Promise<SentimentHotCandidate[]> {
   const cookies = readSentimentBrowserAuthCookies("threads");
@@ -3723,7 +3736,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
   }
   console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} sessionid=${sessionCookieCount} cookies=${cookies.length} queries=${args.queries.length} status=start`);
   const excluded = args.excludeIds || getSentimentHotRefreshExcludedIds(args.archiveId);
-  const excludedHistoryKeys = getSentimentHotShownHistoryKeys(args.archiveId);
+  const excludedHistoryKeys = args.ignoreHistory ? new Set<string>() : getSentimentHotShownHistoryKeys(args.archiveId);
   const results: SentimentHotCandidate[] = [];
   const resultKeys = new Set<string>();
   const stats = { pages: 1, queries: 0, graphql: 0, accepted: 0 };

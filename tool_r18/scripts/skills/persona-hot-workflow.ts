@@ -26,6 +26,8 @@ type FetchHotCandidatesInput = {
   searchMode?: "normal" | "strict";
   freshnessDays?: number;
   freshnessPolicy?: "legacy" | "strict";
+  /** Test-only mode: count only candidates returned by this live search run. */
+  liveOnly?: boolean;
   memorySummaries?: string[];
 };
 
@@ -119,6 +121,7 @@ async function fetchHotCandidates(input: FetchHotCandidatesInput) {
     searchMode: input.searchMode === "normal" ? "normal" : "strict",
     freshnessDays: input.freshnessDays,
     freshnessPolicy: input.freshnessPolicy === "strict" ? "strict" : "legacy",
+    liveOnly: input.liveOnly === true,
   });
   return {
     ok: true,
@@ -128,6 +131,7 @@ async function fetchHotCandidates(input: FetchHotCandidatesInput) {
     searchMode: result.searchMode,
     freshnessDays: result.freshnessDays,
     freshnessPolicy: result.freshnessPolicy,
+    liveOnly: input.liveOnly === true,
     cookieStatuses: result.cookieStatuses,
     warnings: result.warnings,
     candidates: result.candidates,
