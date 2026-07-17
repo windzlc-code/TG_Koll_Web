@@ -5408,6 +5408,7 @@ async function sendSentimentHotCandidatePicker(args: {
         memorySummaries,
         limit: 10,
         refresh: args.refresh === true,
+        freshnessPolicy: "legacy",
       }),
       SENTIMENT_HOT_PICKER_TIMEOUT_MS,
       "热点抓取超时，请稍后刷新重试；系统已停止等待本次抓取结果。",

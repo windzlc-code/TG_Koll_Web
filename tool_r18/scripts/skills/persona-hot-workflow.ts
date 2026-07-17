@@ -25,6 +25,7 @@ type FetchHotCandidatesInput = {
   refresh?: boolean;
   searchMode?: "normal" | "strict";
   freshnessDays?: number;
+  freshnessPolicy?: "legacy" | "strict";
   memorySummaries?: string[];
 };
 
@@ -117,6 +118,7 @@ async function fetchHotCandidates(input: FetchHotCandidatesInput) {
     refresh: input.refresh === true,
     searchMode: input.searchMode === "normal" ? "normal" : "strict",
     freshnessDays: input.freshnessDays,
+    freshnessPolicy: input.freshnessPolicy === "strict" ? "strict" : "legacy",
   });
   return {
     ok: true,
@@ -125,6 +127,7 @@ async function fetchHotCandidates(input: FetchHotCandidatesInput) {
     keywords: result.keywords,
     searchMode: result.searchMode,
     freshnessDays: result.freshnessDays,
+    freshnessPolicy: result.freshnessPolicy,
     cookieStatuses: result.cookieStatuses,
     warnings: result.warnings,
     candidates: result.candidates,

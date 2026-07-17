@@ -1990,6 +1990,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
                     "refresh": True,
                     "limit": 6,
                     "freshness_days": 30,
+                    "freshness_policy": "strict",
                     "selected_memory_ids": ["mem-1"],
                 },
             )
@@ -2011,6 +2012,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload["limit"], 6)
         self.assertEqual(payload["searchMode"], "strict")
         self.assertEqual(payload["freshnessDays"], 15)
+        self.assertEqual(payload["freshnessPolicy"], "strict")
         self.assertEqual(payload["memorySummaries"], ["记忆一"])
         self.assertNotIn("recordShown", payload)
         self.assertNotIn("forceLive", payload)
@@ -2045,6 +2047,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload["prompt"], "")
         self.assertFalse(payload["refresh"])
         self.assertEqual(payload["limit"], 10)
+        self.assertEqual(payload["freshnessPolicy"], "legacy")
         self.assertEqual(payload["memorySummaries"], [f"记忆{index}" for index in range(10, 2, -1)])
 
     def test_import_persona_hot_candidates_returns_hot_source_meta(self):

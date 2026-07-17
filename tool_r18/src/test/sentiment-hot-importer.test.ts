@@ -28,6 +28,8 @@ import {
   parseThreadsGraphqlProfilePagePayload,
   normalizeThreadsRelativeTime,
   normalizeSentimentHotFreshnessDays,
+  normalizeSentimentHotFreshnessPolicy,
+  orderSentimentHotCandidatesForLegacyFallback,
   parseThreadsPostViewCountFromText,
   parseThreadsReaderSearchMarkdownCandidates,
   parseThreadsDetailEngagementMarkdown,
@@ -48,6 +50,37 @@ describe("sentiment hot importer", () => {
     expect(normalizeSentimentHotFreshnessDays(7)).toBe(7);
     expect(normalizeSentimentHotFreshnessDays(15)).toBe(15);
     expect(normalizeSentimentHotFreshnessDays(30)).toBe(15);
+  });
+
+  it("keeps freshness policy explicit so strict tests cannot silently use legacy backfill", () => {
+    expect(normalizeSentimentHotFreshnessPolicy("strict")).toBe("strict");
+    expect(normalizeSentimentHotFreshnessPolicy("legacy")).toBe("legacy");
+    expect(normalizeSentimentHotFreshnessPolicy("unknown")).toBe("legacy");
+  });
+
+  it("prioritizes unshown legacy candidates before rotating shown history", () => {
+    const archiveId = `test-legacy-rotation-${Date.now()}`;
+    const shown = {
+      id: "legacy-shown",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@demo/post/legacy-shown",
+      author: "demo",
+      content: "這是一條已經展示過的金融理財經驗分享內容，包含足夠的中文內容。",
+      media: [],
+      hotScore: 5000,
+      metrics: {},
+      publishedAt: new Date().toISOString(),
+      capturedAt: new Date().toISOString(),
+    } as any;
+    const fresh = {
+      ...shown,
+      id: "legacy-fresh",
+      sourceUrl: "https://www.threads.net/@demo/post/legacy-fresh",
+      content: "這是一條尚未展示的金融理財經驗分享內容，應該優先出現在候選列表。",
+    } as any;
+    rememberSentimentHotShown(archiveId, [shown]);
+    const ordered = orderSentimentHotCandidatesForLegacyFallback([shown, fresh], archiveId);
+    expect(ordered.map((candidate) => candidate.id)).toEqual(["legacy-fresh", "legacy-shown"]);
   });
 
   it("keeps a live refresh from consuming the browser stage with model strategy time", () => {
@@ -72,6 +105,14 @@ describe("sentiment hot importer", () => {
     expect(candidateMatchesRequestedFreshness(candidate, 0)).toBe(true);
     expect(candidateMatchesRequestedFreshness(candidate, undefined)).toBe(true);
     expect(candidateMatchesRequestedFreshness(candidate, 7)).toBe(false);
+    expect(candidateMatchesRequestedFreshness({
+      ...candidate,
+      metrics: { archiveScopedFallback: true },
+    } as any, 0)).toBe(true);
+    expect(candidateMatchesRequestedFreshness({
+      ...candidate,
+      metrics: { archiveScopedFallback: true },
+    } as any, 7)).toBe(false);
   });
 
   it("builds persona-specific search keywords", () => {

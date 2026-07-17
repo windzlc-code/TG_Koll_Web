@@ -11610,6 +11610,7 @@ class PersonaDashboardHotCandidatesFetchPayload(BaseModel):
     limit: int = 10
     search_mode: str = "strict"
     freshness_days: int = 7
+    freshness_policy: str = "legacy"
     selected_memory_ids: list[str] = Field(default_factory=list)
 
 
@@ -13614,6 +13615,7 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
             "limit": limit,
             "searchMode": search_mode,
             "freshnessDays": freshness_days,
+            "freshnessPolicy": "strict" if str(payload.freshness_policy or "").strip().lower() == "strict" else "legacy",
             "memorySummaries": selected_summaries,
         },
         timeout_seconds=120,
@@ -13652,6 +13654,7 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
         ],
         "search_mode": "normal" if str(result.get("searchMode") or search_mode).strip().lower() == "normal" else "strict",
         "freshness_days": min(max(_to_int(result.get("freshnessDays"), freshness_days), 0), 15),
+        "freshness_policy": "strict" if str(result.get("freshnessPolicy") or payload.freshness_policy or "").strip().lower() == "strict" else "legacy",
         "cookie_statuses": cookie_rows,
         "warnings": _persona_hot_user_warnings(result.get("warnings"), len(candidates), limit, cookie_rows),
         "candidates": candidates,

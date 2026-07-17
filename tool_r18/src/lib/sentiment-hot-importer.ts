@@ -14,6 +14,7 @@ import {
   getSentimentHotExcludedIds,
   getSentimentHotRefreshExcludedIds,
   getSentimentHotShownHistoryKeys,
+  getSentimentHotShownHistoryAtMap,
   getSentimentHotShownAtMap,
   getSentimentHotShownIds,
   rememberSentimentHotShown,
@@ -132,6 +133,11 @@ async function addCookiesBestEffort(context: any, cookies: any[]) {
 
 export type SentimentCookieHealth = "healthy" | "watch" | "degraded" | "expired" | "missing" | "unknown";
 export type SentimentHotSearchMode = "normal" | "strict";
+export type SentimentHotFreshnessPolicy = "legacy" | "strict";
+
+export function normalizeSentimentHotFreshnessPolicy(value: unknown): SentimentHotFreshnessPolicy {
+  return String(value || "").trim().toLowerCase() === "strict" ? "strict" : "legacy";
+}
 
 export interface SentimentCookieStatus {
   platform: SentimentHotPlatform;
@@ -155,6 +161,7 @@ export interface FetchSentimentHotCandidatesResult {
   keywords: string[];
   searchMode: SentimentHotSearchMode;
   freshnessDays: number;
+  freshnessPolicy: SentimentHotFreshnessPolicy;
   cookieStatuses: SentimentCookieStatus[];
   warnings: string[];
 }
@@ -1917,16 +1924,20 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   refresh?: boolean;
   searchMode?: SentimentHotSearchMode;
   freshnessDays?: number;
+  freshnessPolicy?: SentimentHotFreshnessPolicy;
 }): Promise<FetchSentimentHotCandidatesResult> {
   const startedAt = Date.now();
   const warnings: string[] = [];
   const archive = args.archive;
   const archiveId = cleanText(archive?.id) || "default";
   const searchMode = normalizeSentimentHotSearchMode(args.searchMode);
+  const freshnessPolicy = normalizeSentimentHotFreshnessPolicy(args.freshnessPolicy);
   const freshnessDays = normalizeSentimentHotFreshnessDays(
     args.freshnessDays ?? (args.refresh === true ? DEFAULT_REFRESH_FRESHNESS_DAYS : 0),
   );
-  const liveOnlyRefresh = args.refresh === true && freshnessDays > 0;
+  const strictFreshness = freshnessPolicy === "strict";
+  const operationalFreshnessDays = strictFreshness ? freshnessDays : 0;
+  const liveOnlyRefresh = strictFreshness && freshnessDays > 0;
   const limit = args.limit || 10;
   const personaSeedKeywords = buildSentimentHotKeywords({
     archive,
@@ -1972,7 +1983,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   const provisionalCacheStartedAt = Date.now();
   const provisionalCachedCandidates = !liveOnlyRefresh && meaningfulNeedles(provisionalKeywords).length > 0
     ? readThreadsSearchCandidateCache(archiveId, provisionalKeywords, Math.max(limit * 4, 40), true, searchMode)
-      .filter((candidate) => candidateMatchesRequestedFreshness(candidate, freshnessDays))
+      .filter((candidate) => candidateMatchesRequestedFreshness(candidate, operationalFreshnessDays))
     : [];
   console.info(`[sentiment_hot_stage] label=provisional-cache durationMs=${Date.now() - provisionalCacheStartedAt}`);
   const provisionalGlobalStartedAt = Date.now();
@@ -1982,7 +1993,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
         [...sentimentHotStrategyTermsForMode(prefetchedStrategy, searchMode), ...provisionalKeywords],
         Math.max(limit * 4, 40),
         searchMode,
-      ).filter((candidate) => candidateMatchesRequestedFreshness(candidate, freshnessDays)
+      ).filter((candidate) => candidateMatchesRequestedFreshness(candidate, operationalFreshnessDays)
         && candidateMatchesSentimentHotStrategyAnchors(candidate, prefetchedStrategy, searchMode))
     : [];
   console.info(`[sentiment_hot_stage] label=provisional-global durationMs=${Date.now() - provisionalGlobalStartedAt}`);
@@ -2069,8 +2080,12 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       })()
     : keywords;
   warnings.push(searchMode === "normal" ? "热点抓取模式：普通（泛垂直）。" : "热点抓取模式：严格（垂直收口）。");
-  warnings.push(freshnessDays > 0 ? `热点新鲜度：近 ${freshnessDays} 天。` : "热点新鲜度：不限时间。");
-  if (liveOnlyRefresh) warnings.push(`刷新已启用实时新鲜模式：仅保留近 ${freshnessDays} 天实时来源，禁止历史/缓存补充。`);
+  if (strictFreshness) {
+    warnings.push(freshnessDays > 0 ? `热点新鲜度：近 ${freshnessDays} 天。` : "热点新鲜度：不限时间。");
+  } else {
+    warnings.push("正式抓取使用旧策略：实时来源优先，候选不足时允许缓存/历史候选轮换补足。");
+  }
+  if (liveOnlyRefresh) warnings.push(`已启用严格实时模式：仅保留近 ${freshnessDays} 天实时来源，禁止历史/缓存补充。`);
   const poolLimit = Math.max(limit * 40, SENTIMENT_HOT_CANDIDATE_POOL_TARGET);
   const semanticSourceTarget = hasModelStrategy ? Math.min(poolLimit, Math.max(limit, 25)) : limit;
   const hasSearchKeywords = meaningfulNeedles(keywords).length > 0;
@@ -2078,14 +2093,14 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   const initialCacheStartedAt = Date.now();
   let candidates = hasSearchKeywords && !liveOnlyRefresh
     ? sortSentimentHotCandidatePool(readThreadsSearchCandidateCache(archiveId, keywords, poolLimit, true, searchMode), keywords, poolLimit, searchMode)
-      .filter((candidate) => candidateMatchesRequestedFreshness(candidate, freshnessDays))
+      .filter((candidate) => candidateMatchesRequestedFreshness(candidate, operationalFreshnessDays))
     : [];
   console.info(`[sentiment_hot_stage] label=initial-cache durationMs=${Date.now() - initialCacheStartedAt}`);
   const initialCacheCount = candidates.length;
   const channelStats: string[] = [];
   const provisionalSourceStartedAt = Date.now();
   const provisionalCandidates = (await provisionalSourcePromise)
-    .filter((candidate) => candidateMatchesRequestedFreshness(candidate, freshnessDays));
+    .filter((candidate) => candidateMatchesRequestedFreshness(candidate, operationalFreshnessDays));
   console.info(`[sentiment_hot_stage] label=provisional-source-wait durationMs=${Date.now() - provisionalSourceStartedAt}`);
   if (provisionalCandidates.length > 0) {
     const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
@@ -2134,7 +2149,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       limit,
       refresh: true,
       searchMode,
-      freshnessDays,
+      freshnessDays: operationalFreshnessDays,
       warnings,
     });
     candidates = candidates.slice(0, poolLimit);
@@ -2166,7 +2181,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
           queryKeywords,
           limit: liveCollectionLimit,
           refresh: args.refresh === true,
-          freshnessDays,
+          freshnessDays: operationalFreshnessDays,
           allowCacheFallback: !liveOnlyRefresh,
           searchMode,
           deadlineAt: Date.now() + threadsTimeoutMs - 500,
@@ -2182,7 +2197,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
     const byKey = new Set(candidates.map((candidate) => sentimentCandidateDedupeKey(candidate)));
     for (const candidate of threadsCandidates) {
-      if (!candidateMatchesRequestedFreshness(candidate, freshnessDays)) continue;
+      if (!candidateMatchesRequestedFreshness(candidate, operationalFreshnessDays)) continue;
       const dedupeKey = sentimentCandidateDedupeKey(candidate);
       if (!byId.has(candidate.id) && !byKey.has(dedupeKey)) {
         byId.set(candidate.id, candidate);
@@ -2208,7 +2223,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       limit,
       refresh: args.refresh === true,
       searchMode,
-      freshnessDays,
+      freshnessDays: operationalFreshnessDays,
       warnings,
     });
     candidates = candidates.slice(0, Math.max(limit * 40, SENTIMENT_HOT_CANDIDATE_POOL_TARGET));
@@ -2246,7 +2261,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
       const byKey = new Set(candidates.map((candidate) => sentimentCandidateDedupeKey(candidate)));
       for (const candidate of instagramCandidates) {
-        if (!candidateMatchesRequestedFreshness(candidate, freshnessDays)) continue;
+        if (!candidateMatchesRequestedFreshness(candidate, operationalFreshnessDays)) continue;
         const dedupeKey = sentimentCandidateDedupeKey(candidate);
         if (!byId.has(candidate.id) && !byKey.has(dedupeKey)) {
           byId.set(candidate.id, candidate);
@@ -2298,7 +2313,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
       const byKey = new Set(candidates.map((candidate) => sentimentCandidateDedupeKey(candidate)));
       for (const candidate of databaseCandidates) {
-        if (!candidateMatchesRequestedFreshness(candidate, freshnessDays)) continue;
+        if (!candidateMatchesRequestedFreshness(candidate, operationalFreshnessDays)) continue;
         const dedupeKey = sentimentCandidateDedupeKey(candidate);
         if (!byId.has(candidate.id) && !byKey.has(dedupeKey)) {
           byId.set(candidate.id, candidate);
@@ -2320,7 +2335,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       limit: poolLimit,
       excludeShown: true,
       searchMode,
-      freshnessDays,
+      freshnessDays: operationalFreshnessDays,
     });
     if (candidates.length > beforeWaitCount) {
       channelStats.push(`即時掃描新增 ${candidates.length - beforeWaitCount}`);
@@ -2337,7 +2352,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       limit,
       refresh: args.refresh === true,
       searchMode,
-      freshnessDays,
+      freshnessDays: operationalFreshnessDays,
       warnings,
     });
     candidates = candidates.slice(0, Math.max(limit * 40, SENTIMENT_HOT_CANDIDATE_POOL_TARGET));
@@ -2371,44 +2386,48 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       : strategyCandidatePool;
   }
   const displayCandidatePool = candidates;
-  candidates = finalizeSentimentHotCandidatesForDisplay(displayCandidatePool, limit, { archiveId, keywords, excludeShown: true, searchMode, freshnessDays });
+  candidates = finalizeSentimentHotCandidatesForDisplay(displayCandidatePool, limit, { archiveId, keywords, excludeShown: true, searchMode, freshnessDays: operationalFreshnessDays });
   if (!liveOnlyRefresh && candidates.length < limit) {
     const selectedKeys = new Set(candidates.flatMap((candidate) => getSentimentHotCandidateHistoryKeys(candidate)));
-    const shownAtMap = getSentimentHotShownAtMap(archiveId);
+    const shownHistoryKeys = getSentimentHotShownHistoryKeys(archiveId);
     const supplementLimit = limit - candidates.length;
     const archiveHistory = readThreadsSearchCandidateCache(archiveId, keywords, poolLimit, false, searchMode)
       .filter((candidate) => !hasModelStrategy || !strategyResult || candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode));
-    const supplements = finalizeSentimentHotCandidatesForDisplay([...displayCandidatePool, ...archiveHistory], poolLimit, {
-      archiveId,
-      keywords,
-      excludeShown: false,
-      searchMode,
-      freshnessDays,
-    })
-      .filter((candidate) => {
+    const supplements = orderSentimentHotCandidatesForLegacyFallback(
+      finalizeSentimentHotCandidatesForDisplay([...displayCandidatePool, ...archiveHistory], poolLimit, {
+        archiveId,
+        keywords,
+        excludeShown: false,
+        searchMode,
+        freshnessDays: operationalFreshnessDays,
+      }).filter((candidate) => {
         const historyKeys = getSentimentHotCandidateHistoryKeys(candidate);
         return historyKeys.every((key) => !selectedKeys.has(key));
-      })
-      .sort((a, b) => compareSentimentHotFreshness(a, b) || (shownAtMap.get(a.id) || 0) - (shownAtMap.get(b.id) || 0))
-      .slice(0, supplementLimit);
+      }),
+      archiveId,
+    ).slice(0, supplementLimit);
     if (supplements.length > 0) {
       candidates = [...candidates, ...supplements];
-      warnings.push(`新候選不足時已按新鮮度補充 ${supplements.length} 篇同人設高熱度候選。`);
+      const rotated = supplements.filter((candidate) => getSentimentHotCandidateHistoryKeys(candidate).some((key) => shownHistoryKeys.has(key))).length;
+      warnings.push(rotated > 0
+        ? `新候選不足時先按未展示優先，另輪換 ${rotated} 篇最久未展示歷史候選。`
+        : `新候選不足時已按未展示優先補充 ${supplements.length} 篇同人設高熱度候選。`);
     }
   }
   if (!liveOnlyRefresh && candidates.length < limit && modelParentCandidatePool.length > 0) {
     const selectedKeys = new Set(candidates.flatMap((candidate) => getSentimentHotCandidateHistoryKeys(candidate)));
-    const parentSupplements = finalizeSentimentHotCandidatesForDisplay(modelParentCandidatePool, poolLimit, {
+    const parentSupplements = orderSentimentHotCandidatesForLegacyFallback(
+      finalizeSentimentHotCandidatesForDisplay(modelParentCandidatePool, poolLimit, {
+        archiveId,
+        keywords,
+        excludeShown: false,
+        searchMode: "normal",
+        freshnessDays: operationalFreshnessDays,
+      }).filter((candidate) => getSentimentHotCandidateHistoryKeys(candidate).every((key) => !selectedKeys.has(key))),
       archiveId,
-      keywords,
-      excludeShown: false,
-      searchMode: "normal",
-      freshnessDays,
-    })
-      .filter((candidate) => getSentimentHotCandidateHistoryKeys(candidate).every((key) => !selectedKeys.has(key)))
-      .slice(0, searchMode === "strict"
-        ? Math.min(limit - candidates.length, SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT - parentSupplementCount)
-        : limit - candidates.length);
+    ).slice(0, searchMode === "strict"
+      ? Math.min(limit - candidates.length, SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT - parentSupplementCount)
+      : limit - candidates.length);
     if (parentSupplements.length > 0) {
       candidates = [...candidates, ...parentSupplements];
       parentSupplementCount += parentSupplements.length;
@@ -2423,17 +2442,18 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       "normal",
     ).filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, "normal"));
     const selectedKeys = new Set(candidates.flatMap((candidate) => getSentimentHotCandidateHistoryKeys(candidate)));
-    const globalSupplements = finalizeSentimentHotCandidatesForDisplay(globalParentPool, poolLimit, {
+    const globalSupplements = orderSentimentHotCandidatesForLegacyFallback(
+      finalizeSentimentHotCandidatesForDisplay(globalParentPool, poolLimit, {
+        archiveId,
+        keywords,
+        excludeShown: false,
+        searchMode: "normal",
+        freshnessDays: operationalFreshnessDays,
+      }).filter((candidate) => getSentimentHotCandidateHistoryKeys(candidate).every((key) => !selectedKeys.has(key))),
       archiveId,
-      keywords,
-      excludeShown: false,
-      searchMode: "normal",
-      freshnessDays,
-    })
-      .filter((candidate) => getSentimentHotCandidateHistoryKeys(candidate).every((key) => !selectedKeys.has(key)))
-      .slice(0, searchMode === "strict"
-        ? Math.min(limit - candidates.length, SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT - parentSupplementCount)
-        : limit - candidates.length);
+    ).slice(0, searchMode === "strict"
+      ? Math.min(limit - candidates.length, SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT - parentSupplementCount)
+      : limit - candidates.length);
     if (globalSupplements.length > 0) {
       candidates = [...candidates, ...globalSupplements];
       parentSupplementCount += globalSupplements.length;
@@ -2491,7 +2511,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     }
   }
   scheduleSentimentRuntimeShutdown();
-  return { candidates, keywords, searchMode, freshnessDays, cookieStatuses, warnings };
+  return { candidates, keywords, searchMode, freshnessDays, freshnessPolicy, cookieStatuses, warnings };
 }
 
 export async function fetchSentimentHotCandidates(args: {
@@ -2502,6 +2522,7 @@ export async function fetchSentimentHotCandidates(args: {
   refresh?: boolean;
   searchMode?: SentimentHotSearchMode;
   freshnessDays?: number;
+  freshnessPolicy?: SentimentHotFreshnessPolicy;
 }): Promise<FetchSentimentHotCandidatesResult> {
   const archiveId = cleanText(args.archive?.id) || "default";
   const searchMode = normalizeSentimentHotSearchMode(args.searchMode);
@@ -2876,7 +2897,7 @@ function candidateHasAcceptableFreshness(candidate: SentimentHotCandidate, fresh
   const publishedAt = sentimentHotPublishedAtMs(candidate);
   if (publishedAt === null) {
     if (normalizeSentimentHotFreshnessDays(freshnessDays) > 0) return false;
-    return !isArchiveScopedFallbackCandidate(candidate) && sentimentCandidateSource(candidate) !== "database";
+    return true;
   }
   const age = Date.now() - publishedAt;
   const requestedMaxAgeMs = normalizeSentimentHotFreshnessDays(freshnessDays) * 24 * 60 * 60 * 1000;
@@ -3014,6 +3035,38 @@ export function finalizeSentimentHotCandidatesForDisplay(candidates: SentimentHo
     if (out.length >= limit) break;
   }
   return out;
+}
+
+export function orderSentimentHotCandidatesForLegacyFallback(candidates: SentimentHotCandidate[], archiveId: string): SentimentHotCandidate[] {
+  const shownHistoryKeys = getSentimentHotShownHistoryKeys(archiveId);
+  const shownAtMap = getSentimentHotShownHistoryAtMap(archiveId);
+  const shownAt = (candidate: SentimentHotCandidate) => {
+    const values = getSentimentHotCandidateHistoryKeys(candidate)
+      .map((key) => shownAtMap.get(key))
+      .filter((value): value is number => typeof value === "number");
+    return values.length ? Math.max(...values) : 0;
+  };
+  const isShown = (candidate: SentimentHotCandidate) => getSentimentHotCandidateHistoryKeys(candidate)
+    .some((key) => shownHistoryKeys.has(key));
+  const unique: SentimentHotCandidate[] = [];
+  const sorted = [...candidates].sort((a, b) => {
+    const aShown = isShown(a) ? 1 : 0;
+    const bShown = isShown(b) ? 1 : 0;
+    if (aShown !== bShown) return aShown - bShown;
+    if (aShown) {
+      const shownDelta = shownAt(a) - shownAt(b);
+      if (shownDelta !== 0) return shownDelta;
+    }
+    return compareSentimentHotFreshness(a, b) || Number(b.hotScore || 0) - Number(a.hotScore || 0);
+  });
+  const seenKeys = new Set<string>();
+  for (const candidate of sorted) {
+    const keys = getSentimentHotCandidateHistoryKeys(candidate);
+    if (keys.some((key) => seenKeys.has(key))) continue;
+    keys.forEach((key) => seenKeys.add(key));
+    unique.push(candidate);
+  }
+  return unique;
 }
 
 function candidateLooksOffTopic(candidate: SentimentHotCandidate): boolean {
