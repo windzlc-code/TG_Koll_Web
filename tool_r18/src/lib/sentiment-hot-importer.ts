@@ -1966,17 +1966,19 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     args.freshnessDays ?? (args.refresh === true ? DEFAULT_REFRESH_FRESHNESS_DAYS : 0),
   );
   const strictFreshness = freshnessPolicy === "strict";
+  const liveOnlyRefresh = args.liveOnly === true;
   // Keep the requested window as the priority, but allow a bounded recent
   // window up to 15 days when the live recent feed cannot supply ten unique
   // compliant posts. Historical/global backfill is still rejected below.
-  const operationalFreshnessDays = strictFreshness && freshnessDays > 0
+  const operationalFreshnessDays = liveOnlyRefresh && strictFreshness && freshnessDays > 0
+    ? freshnessDays
+    : strictFreshness && freshnessDays > 0
     ? Math.min(15, Math.max(freshnessDays, 15))
     : 0;
   // Strict tests enforce the publishedAt window, but may reuse a fresh
   // same-persona cache row from the last 24 hours. This keeps tests reliable
   // when the live source is rate-limited without admitting stale history.
   const strictFreshOnly = strictFreshness && freshnessDays > 0;
-  const liveOnlyRefresh = args.liveOnly === true;
   const limit = args.limit || 10;
   const personaSeedKeywords = buildSentimentHotKeywords({
     archive,
