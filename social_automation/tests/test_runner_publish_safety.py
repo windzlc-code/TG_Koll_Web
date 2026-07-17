@@ -429,6 +429,18 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertNotEqual(status["status"], "ready")
         self.assertEqual(status["status"], "transient_error")
 
+    def test_threads_disabled_page_is_classified_as_banned(self):
+        page = _ThreadsShellPage(
+            [],
+            body_text="Your account has been disabled. Visit the Help Center for more information.",
+        )
+        page.url = "https://www.threads.com/checkpoint/disabled"
+
+        status = runner._detect_threads_login_state(page)
+
+        self.assertEqual(status["status"], "cookie_expired")
+        self.assertEqual(status["health_status"], "banned")
+
     def test_threads_sidebar_without_a_session_cookie_is_not_ready(self):
         status = runner._detect_threads_login_state(_ThreadsShellPage([]))
 
@@ -461,6 +473,18 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         status = runner._detect_instagram_login_state(page)
 
         self.assertEqual(status["status"], "need_verification")
+
+    def test_instagram_disabled_page_is_classified_as_banned(self):
+        page = _ThreadsShellPage(
+            [],
+            body_text="We suspended your account because it does not follow our rules.",
+        )
+        page.url = "https://www.instagram.com/checkpoint/disabled"
+
+        status = runner._detect_instagram_login_state(page)
+
+        self.assertEqual(status["status"], "cookie_expired")
+        self.assertEqual(status["health_status"], "banned")
 
     def test_instagram_unknown_page_without_session_is_not_ready(self):
         page = _ThreadsShellPage([])
@@ -509,7 +533,27 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["status"], "cookie_expired")
+        self.assertEqual(result["health_status"], "unknown")
+        self.assertEqual(result["diagnostic_outcome"], "not_ready")
         self.assertEqual(result["screenshot_path"], "check.png")
+
+    def test_check_login_reports_ready_account_as_alive(self):
+        with (
+            mock.patch.object(runner, "_check_platform_login", return_value={"status": "ready"}),
+            mock.patch.object(runner, "_screenshot", return_value="check.png"),
+        ):
+            result = runner._run_check_login(
+                _Page(),
+                {"id": "check-task-ready"},
+                {"id": "account-1"},
+                {},
+                Path("."),
+                _Logger(),
+                "threads",
+            )
+
+        self.assertEqual(result["health_status"], "alive")
+        self.assertEqual(result["diagnostic_outcome"], "ready")
 
     def test_login_self_heal_uses_visible_retry_action_before_navigation(self):
         page = mock.Mock()

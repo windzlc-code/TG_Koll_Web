@@ -386,8 +386,46 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("updateAccountTotpBadgeViews(", account_status)
         self.assertIn("accountById.get(String(node.dataset.accountTotpFor", account_status)
         self.assertIn("updateAccountTotpBadgeNode(node, account)", account_status)
+        self.assertIn('document.querySelectorAll("[data-social-check-status]")', account_status)
+        self.assertIn('button.setAttribute("aria-busy"', account_status)
         self.assertIn('loadAutomationTasksShared().catch', task_refresh)
         self.assertNotIn("loadAutomationTasksShared({ force: true })", task_refresh)
+
+    def test_account_card_uses_one_combined_login_status(self):
+        card = self._section("function renderAccountPoolCard", "function renderAccountPoolCards")
+        task_loader = self._section("async function loadAutomationTasksShared", "async function activateCreatedPersona")
+
+        self.assertIn("accountDisplayedStatus(account)", card)
+        self.assertIn("data-account-status-for", card)
+        self.assertNotIn("renderAccountHealthChip", card)
+        self.assertNotIn("data-account-health-for", card)
+        self.assertIn("data-social-check-status", card)
+        self.assertIn('title="同步登录状态"', card)
+        self.assertIn("updateAccountStatusViews()", task_loader)
+
+    def test_effective_account_status_has_deterministic_precedence(self):
+        effective = self._function_source("accountEffectiveStatus")
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            {effective}
+            assert.strictEqual(accountEffectiveStatus({{ status: "ready", health_status: "alive" }}), "ready");
+            assert.strictEqual(accountEffectiveStatus({{ status: "ready", health_status: "unknown" }}), "ready_unverified");
+            assert.strictEqual(accountEffectiveStatus({{ status: "ready", health_status: "abnormal" }}), "abnormal");
+            assert.strictEqual(accountEffectiveStatus({{ status: "ready", health_status: "banned" }}), "banned");
+            assert.strictEqual(accountEffectiveStatus({{ status: "cookie_expired", health_status: "alive" }}), "cookie_expired");
+            assert.strictEqual(accountEffectiveStatus({{ status: "disabled", health_status: "banned" }}), "disabled");
+            assert.strictEqual(accountEffectiveStatus({{
+              status: "ready",
+              health_status: "alive",
+              last_login_check_at: 10,
+              health_checked_at: 10,
+              status_attempted_at: 20,
+              status_attempt_error: "browser launch failed"
+            }}), "check_failed");
+            """
+        )
+        self._run_node(harness)
 
     def test_account_and_browser_status_refresh_while_publish_is_running(self):
         account_refresh = self._function_source("syncAccountStatusAutoRefresh")
@@ -816,6 +854,38 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("accountProxyBindingChanged(originalProxyId, latestProxyId)", reconcile)
         self.assertIn("accountProxyOptionCardsHtml(latestProxyId", reconcile)
         self.assertIn("modal.dataset.originalProxyId = latestProxyId", reconcile)
+
+    def test_account_proxy_picker_can_create_and_select_a_custom_proxy(self):
+        picker = self._function_source("openAccountProxyPickerModal")
+        edit_modal = self._function_source("openAccountPoolEditModal")
+        proxy_modal = self._section("function openProxyModal", "async function refreshProxyPool")
+        picker_panel = self._function_source("renderAccountProxyPickerPanel")
+
+        self.assertIn("data-account-proxy-custom-add", picker)
+        self.assertIn("openProxyModal", picker)
+        self.assertIn("onSaved", picker)
+        self.assertIn("data-account-proxy-custom-add", edit_modal)
+        self.assertIn("openProxyModal", edit_modal)
+        self.assertIn("onSaved", edit_modal)
+        self.assertIn('accountProxyCustomAddButtonHtml("edit")', picker_panel)
+        self.assertIn("onSaved", proxy_modal)
+        self.assertIn("savedProxy", proxy_modal)
+        self.assertIn('if (detected && typeof onSaved === "function"', proxy_modal)
+
+    def test_totp_code_card_uses_stable_svg_ring_and_millisecond_clock(self):
+        controller = self._function_source("createAccountTotpController")
+
+        self.assertIn('data-account-totp-code-card', controller)
+        self.assertIn('pathLength="100"', controller)
+        self.assertIn('data-account-totp-ring', controller)
+        self.assertIn("currentCode.server_time_ms", controller)
+        self.assertIn("currentCode.expires_at_ms", controller)
+        self.assertIn("currentCode.period_seconds", controller)
+        self.assertIn("ring.style.strokeDashoffset", controller)
+        self.assertIn("requestStartedAt", controller)
+        self.assertIn("(requestStartedAt + Date.now()) / 2", controller)
+        self.assertIn('if (!card)', controller)
+        self.assertNotIn('countdown.textContent = `${Math.ceil(remaining / 1000)} 秒`', controller)
 
     def test_pageshow_and_focus_share_identity_revalidation(self):
         revalidation = self._section("async function revalidateConsoleIdentity()", "async function loadSetupStatus()")

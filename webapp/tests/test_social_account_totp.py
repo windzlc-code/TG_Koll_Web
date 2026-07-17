@@ -224,9 +224,17 @@ class SocialAccountTotpApiTests(unittest.TestCase):
 
         self.assertEqual(current.status_code, 200, current.text)
         self.assertIn("no-store", current.headers.get("cache-control", "").lower())
-        code = str(current.json()["current_code"]["code"])
+        current_code = current.json()["current_code"]
+        code = str(current_code["code"])
         self.assertRegex(code, r"^\d{6}$")
         self.assertTrue(governance.verify_totp(self.TOTP_SECRET, code))
+        self.assertEqual(current_code["period_seconds"], 30)
+        self.assertGreater(current_code["server_time_ms"], 0)
+        self.assertGreater(current_code["expires_at_ms"], current_code["server_time_ms"])
+        self.assertLessEqual(
+            current_code["expires_at_ms"] - current_code["server_time_ms"],
+            current_code["period_seconds"] * 1000,
+        )
         self._assert_no_totp_material(current.json(), self.TOTP_SECRET)
 
         deleted = self.owner.delete(self._totp_path())

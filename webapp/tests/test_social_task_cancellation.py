@@ -146,6 +146,209 @@ class SocialTaskCancellationTests(unittest.TestCase):
         self.assertEqual(self._status("cancelled-manual"), "cancelled")
         self.assertEqual(account_status, "ready")
 
+    def test_check_login_finish_persists_independent_account_health(self):
+        self._insert_account(status="cookie_expired")
+        self._insert_task("health-check", "running", task_type="check_login")
+
+        completed = social_automation_api._finish_task(
+            "health-check",
+            "success",
+            {
+                "ok": True,
+                "status": "ready",
+                "health_status": "alive",
+                "health_reason": "account is available",
+            },
+            "",
+            account_status="ready",
+        )
+
+        with sqlite3.connect(self.db_path) as conn:
+            account = conn.execute(
+                """
+                SELECT status, health_status, health_checked_at, health_detail
+                FROM social_accounts
+                WHERE id = ?
+                """,
+                ("account-1",),
+            ).fetchone()
+        self.assertTrue(completed)
+        self.assertEqual(account[0], "ready")
+        self.assertEqual(account[1], "alive")
+        self.assertGreater(account[2], 0)
+        self.assertEqual(account[3], "account is available")
+
+    def test_failed_check_login_does_not_replace_last_confirmed_health(self):
+        self._insert_account(status="ready")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE social_accounts
+                SET health_status = 'alive', health_checked_at = 10, health_detail = 'confirmed'
+                WHERE id = 'account-1'
+                """
+            )
+        self._insert_task("health-check-failed", "running", task_type="check_login")
+
+        completed = social_automation_api._finish_task(
+            "health-check-failed",
+            "failed",
+            {"ok": False, "error": "browser launch failed"},
+            "browser launch failed",
+        )
+
+        with sqlite3.connect(self.db_path) as conn:
+            account = conn.execute(
+                """
+                SELECT health_status, health_checked_at, health_detail
+                FROM social_accounts
+                WHERE id = ?
+                """,
+                ("account-1",),
+            ).fetchone()
+        self.assertTrue(completed)
+        self.assertEqual(account, ("alive", 10, "confirmed"))
+
+    def test_effective_account_status_combines_login_and_platform_health(self):
+        effective = social_automation_api._account_effective_status
+
+        self.assertEqual(effective({"status": "ready", "health_status": "alive"}), "ready")
+        self.assertEqual(effective({"status": "ready", "health_status": "unknown"}), "ready_unverified")
+        self.assertEqual(effective({"status": "ready", "health_status": "abnormal"}), "abnormal")
+        self.assertEqual(effective({"status": "ready", "health_status": "banned"}), "banned")
+        self.assertEqual(effective({"status": "cookie_expired", "health_status": "alive"}), "cookie_expired")
+        self.assertEqual(effective({"status": "disabled", "health_status": "banned"}), "disabled")
+        self.assertEqual(
+            effective(
+                {
+                    "status": "ready",
+                    "health_status": "alive",
+                    "last_login_check_at": 10,
+                    "health_checked_at": 10,
+                    "status_attempted_at": 20,
+                    "status_attempt_error": "browser launch failed",
+                }
+            ),
+            "check_failed",
+        )
+
+    def test_failed_check_exposes_latest_attempt_without_erasing_confirmed_health(self):
+        self._insert_account(status="ready")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE social_accounts
+                SET health_status = 'alive', health_checked_at = 10, health_detail = 'confirmed'
+                WHERE id = 'account-1'
+                """
+            )
+        self._insert_task("health-check-launch-failed", "running", task_type="check_login")
+
+        social_automation_api._finish_task(
+            "health-check-launch-failed",
+            "failed",
+            {"ok": False},
+            "browser launch failed",
+        )
+
+        with social_automation_api.db() as conn:
+            account = conn.execute("SELECT * FROM social_accounts WHERE id = 'account-1'").fetchone()
+        public = social_automation_api._account_public(account)
+        self.assertEqual(public["health_status"], "alive")
+        self.assertEqual(public["effective_status"], "check_failed")
+        self.assertEqual(public["status_detail"], "browser launch failed")
+        self.assertEqual(public["status_source_task_id"], "health-check-launch-failed")
+
+    def test_successful_login_clears_stale_banned_health(self):
+        self._insert_account(status="cookie_expired")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE social_accounts
+                SET health_status = 'banned', health_checked_at = 10, health_detail = 'stale ban'
+                WHERE id = 'account-1'
+                """
+            )
+        self._insert_task("open-login-success", "running", task_type="open_login")
+
+        social_automation_api._finish_task(
+            "open-login-success",
+            "success",
+            {"ok": True, "status": "ready"},
+            "",
+            account_status="ready",
+        )
+
+        with social_automation_api.db() as conn:
+            account = conn.execute("SELECT * FROM social_accounts WHERE id = 'account-1'").fetchone()
+        public = social_automation_api._account_public(account)
+        self.assertEqual(public["health_status"], "alive")
+        self.assertEqual(public["effective_status"], "ready")
+
+    def test_failed_login_preserves_account_error(self):
+        self._insert_account(status="ready")
+        self._insert_task("open-login-failed", "running", task_type="open_login")
+
+        social_automation_api._finish_task(
+            "open-login-failed",
+            "failed",
+            {"ok": False},
+            "automatic login timed out",
+            account_status="cookie_expired",
+        )
+
+        with sqlite3.connect(self.db_path) as conn:
+            account = conn.execute(
+                "SELECT status, last_error, status_attempt_error, status_source_task_id FROM social_accounts WHERE id = 'account-1'"
+            ).fetchone()
+        self.assertEqual(
+            account,
+            ("cookie_expired", "automatic login timed out", "automatic login timed out", "open-login-failed"),
+        )
+
+    def test_publish_dependency_rejects_successful_but_not_ready_login_diagnostic(self):
+        self._insert_task("login-diagnostic", "success", task_type="check_login")
+        self._insert_task("publish-after-login", "queued", task_type="publish_post")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE social_automation_tasks SET result_json = ? WHERE id = 'login-diagnostic'",
+                (json.dumps({"status": "cookie_expired", "diagnostic_outcome": "not_ready"}),),
+            )
+            conn.execute(
+                "UPDATE social_automation_tasks SET payload_json = ? WHERE id = 'publish-after-login'",
+                (json.dumps({"auto_login_before_publish": True, "login_task_id": "login-diagnostic"}),),
+            )
+
+        with social_automation_api.db() as conn:
+            row = conn.execute(
+                "SELECT * FROM social_automation_tasks WHERE id = 'publish-after-login'"
+            ).fetchone()
+            blocked = social_automation_api._publish_login_dependency_blocks_claim(conn, row, 100)
+
+        self.assertTrue(blocked)
+        self.assertEqual(self._status("publish-after-login"), "failed")
+
+    def test_banned_account_rejects_non_diagnostic_tasks(self):
+        self._insert_account(status="cookie_expired")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE social_accounts SET health_status = 'banned' WHERE id = 'account-1'"
+            )
+
+        with self.assertRaises(social_automation_api.HTTPException) as raised:
+            social_automation_api.create_social_task(
+                social_automation_api.SocialTaskPayload(
+                    persona_id="persona-1",
+                    account_id="account-1",
+                    platform="threads",
+                    task_type="browse_feed",
+                    payload={},
+                )
+            )
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("已被封禁", str(raised.exception.detail))
+
     def test_running_login_detection_updates_account_immediately(self):
         self._insert_account(status="cookie_expired")
         self._insert_task("publish-running", "running")

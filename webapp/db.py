@@ -418,6 +418,7 @@ def _ensure_commercial_billing_schema(conn: sqlite3.Connection) -> None:
 def init_db() -> None:
     os.makedirs(os.path.dirname(get_db_path()), exist_ok=True)
     with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -608,6 +609,12 @@ def init_db() -> None:
               profile_dir TEXT NOT NULL,
               proxy_id TEXT NOT NULL DEFAULT '',
               status TEXT NOT NULL DEFAULT 'pending_login',
+              health_status TEXT NOT NULL DEFAULT 'unknown',
+              health_checked_at INTEGER NOT NULL DEFAULT 0,
+              health_detail TEXT NOT NULL DEFAULT '',
+              status_attempted_at INTEGER NOT NULL DEFAULT 0,
+              status_attempt_error TEXT NOT NULL DEFAULT '',
+              status_source_task_id TEXT NOT NULL DEFAULT '',
               last_login_check_at INTEGER NOT NULL DEFAULT 0,
               last_run_at INTEGER NOT NULL DEFAULT 0,
               last_error TEXT NOT NULL DEFAULT '',
@@ -773,6 +780,18 @@ def init_db() -> None:
             conn.execute("ALTER TABLE social_accounts ADD COLUMN login_password TEXT NOT NULL DEFAULT ''")
         if "login_credentials_updated_at" not in account_columns:
             conn.execute("ALTER TABLE social_accounts ADD COLUMN login_credentials_updated_at INTEGER NOT NULL DEFAULT 0")
+        if "health_status" not in account_columns:
+            conn.execute("ALTER TABLE social_accounts ADD COLUMN health_status TEXT NOT NULL DEFAULT 'unknown'")
+        if "health_checked_at" not in account_columns:
+            conn.execute("ALTER TABLE social_accounts ADD COLUMN health_checked_at INTEGER NOT NULL DEFAULT 0")
+        if "health_detail" not in account_columns:
+            conn.execute("ALTER TABLE social_accounts ADD COLUMN health_detail TEXT NOT NULL DEFAULT ''")
+        if "status_attempted_at" not in account_columns:
+            conn.execute("ALTER TABLE social_accounts ADD COLUMN status_attempted_at INTEGER NOT NULL DEFAULT 0")
+        if "status_attempt_error" not in account_columns:
+            conn.execute("ALTER TABLE social_accounts ADD COLUMN status_attempt_error TEXT NOT NULL DEFAULT ''")
+        if "status_source_task_id" not in account_columns:
+            conn.execute("ALTER TABLE social_accounts ADD COLUMN status_source_task_id TEXT NOT NULL DEFAULT ''")
         task_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(social_automation_tasks)").fetchall()}
         if "user_id" not in task_columns:
             conn.execute("ALTER TABLE social_automation_tasks ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0")

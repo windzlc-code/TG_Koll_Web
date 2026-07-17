@@ -114,6 +114,7 @@ SOCIAL_ACCOUNT_STATUSES = {
     "transient_error",
     "disabled",
 }
+SOCIAL_ACCOUNT_HEALTH_STATUSES = {"unknown", "alive", "abnormal", "banned"}
 SOCIAL_TASK_STATUSES = {"preparing", "queued", "running", "success", "failed", "cancelled", "need_manual"}
 DAILY_PUBLISH_LIMIT = 15
 DAILY_PUBLISH_LIMIT_MESSAGE = "每日最多发布 15 篇。超过 15 篇会有封号风险，系统已强制禁止继续发布。"
@@ -416,15 +417,19 @@ def _decrypt_social_account_totp_secret(row: Any) -> str:
         raise RuntimeError("账号 2FA 密钥暂时不可用") from exc
 
 
-def _social_account_totp_code_payload(row: Any, *, at: int | None = None) -> dict[str, Any]:
-    now = int(at or time.time())
+def _social_account_totp_code_payload(row: Any, *, at: int | float | None = None) -> dict[str, Any]:
+    now_ms = int(float(at) * 1000) if at is not None else int(time.time() * 1000)
+    now = now_ms // 1000
     secret = _decrypt_social_account_totp_secret(row)
     code = governance.totp_code(secret, at=now)
     expires_at = ((now // SOCIAL_ACCOUNT_TOTP_PERIOD_SECONDS) + 1) * SOCIAL_ACCOUNT_TOTP_PERIOD_SECONDS
     return {
         "code": code,
         "server_time": now,
+        "server_time_ms": now_ms,
         "expires_at": expires_at,
+        "expires_at_ms": expires_at * 1000,
+        "period_seconds": SOCIAL_ACCOUNT_TOTP_PERIOD_SECONDS,
         "valid_for_seconds": max(0, expires_at - now),
     }
 
@@ -3604,6 +3609,11 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
             raise HTTPException(status_code=404, detail="账号不存在")
         if str(account["status"] or "") == "disabled":
             raise HTTPException(status_code=409, detail="账号已停用，不能创建任务")
+        if (
+            str(account["health_status"] or "").strip().lower() == "banned"
+            and task_type not in {"check_login", "open_login"}
+        ):
+            raise HTTPException(status_code=409, detail="平台账号已被封禁，只能重新检测或打开登录处理。")
         if str(account["platform"] or "").strip().lower() != platform:
             raise HTTPException(status_code=400, detail="任务平台与执行账号平台不一致")
         proxy_id = str(account["proxy_id"] or "").strip()
@@ -4172,15 +4182,23 @@ def _publish_login_dependency_blocks_claim(conn: sqlite3.Connection, row: Any, n
     login_task_id = str(payload.get("login_task_id") or "").strip()
     if not login_task_id:
         return False
-    login_row = conn.execute("SELECT status, error FROM social_automation_tasks WHERE id = ?", (login_task_id,)).fetchone()
+    login_row = conn.execute(
+        "SELECT task_type, status, result_json, error FROM social_automation_tasks WHERE id = ?",
+        (login_task_id,),
+    ).fetchone()
     if not login_row:
         return False
     login_status = str(login_row["status"] or "").strip()
     if login_status == "success":
-        return False
-    if login_status in {"failed", "cancelled"}:
+        login_result = _loads(login_row["result_json"], {})
+        diagnostic_outcome = str(login_result.get("diagnostic_outcome") or "").strip().lower()
+        detected_status = str(login_result.get("status") or "").strip().lower()
+        if diagnostic_outcome == "ready" or detected_status == "ready":
+            return False
+        login_status = diagnostic_outcome or detected_status or "not_ready"
+    if login_status in {"failed", "cancelled", "not_ready", "banned", "cookie_expired", "need_verification"}:
         task_id = str(row["id"] or "")
-        message = str(login_row["error"] or "发布前自动登录任务未成功，发布任务已停止。")
+        message = str(login_row["error"] or "发布前账号状态未达到正常可用，发布任务已停止。")
         conn.execute(
             """
             UPDATE social_automation_tasks
@@ -4901,14 +4919,75 @@ def _finish_task(
         _insert_log(conn, task_id, "info" if status == "success" else "error", status, "任务执行完成" if status == "success" else error, result)
         normalized_account_status = str(account_status or "").strip().lower()
         if normalized_account_status in SOCIAL_ACCOUNT_STATUSES:
+            account_error = "" if status == "success" else str(error or "")
             conn.execute(
-                "UPDATE social_accounts SET status = ?, last_login_check_at = ?, last_run_at = ?, last_error = '', updated_at = ? WHERE id = ?",
-                (normalized_account_status, now, now, now, str(task["account_id"])),
+                "UPDATE social_accounts SET status = ?, last_login_check_at = ?, last_run_at = ?, last_error = ?, updated_at = ? WHERE id = ?",
+                (normalized_account_status, now, now, account_error, now, str(task["account_id"])),
             )
         else:
             conn.execute(
                 "UPDATE social_accounts SET last_run_at = ?, last_error = ?, updated_at = ? WHERE id = ?",
                 (now, error, now, str(task["account_id"])),
+            )
+        task_type = str(task["task_type"] or "")
+        if task_type in {"check_login", "open_login"}:
+            conn.execute(
+                """
+                UPDATE social_accounts
+                SET status_attempted_at = ?, status_attempt_error = ?, status_source_task_id = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    now,
+                    "" if status == "success" else str(error or "状态检测执行失败")[:1000],
+                    str(task["id"] or ""),
+                    now,
+                    str(task["account_id"]),
+                ),
+            )
+        if task_type == "check_login" and status != "need_manual":
+            health_status = str((result or {}).get("health_status") or "").strip().lower()
+            if health_status not in SOCIAL_ACCOUNT_HEALTH_STATUSES and status == "success":
+                if normalized_account_status == "ready":
+                    health_status = "alive"
+                elif normalized_account_status == "disabled":
+                    health_status = "banned"
+                elif normalized_account_status == "transient_error":
+                    health_status = "abnormal"
+                else:
+                    health_status = "unknown"
+            if health_status in SOCIAL_ACCOUNT_HEALTH_STATUSES:
+                details = (result or {}).get("details")
+                health_detail = str(
+                    (result or {}).get("health_reason")
+                    or (details.get("reason") if isinstance(details, dict) else "")
+                    or error
+                    or health_status
+                )[:1000]
+                conn.execute(
+                    """
+                    UPDATE social_accounts
+                    SET health_status = ?, health_checked_at = ?, health_detail = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (health_status, now, health_detail, now, str(task["account_id"])),
+                )
+        elif status == "success" and normalized_account_status == "ready":
+            conn.execute(
+                """
+                UPDATE social_accounts
+                SET health_status = 'alive', health_checked_at = ?, health_detail = ?,
+                    status_attempted_at = ?, status_attempt_error = '', status_source_task_id = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    now,
+                    "登录成功，平台账号正常可用。",
+                    now,
+                    str(task["id"] or ""),
+                    now,
+                    str(task["account_id"]),
+                ),
             )
     if completed and status == "success":
         _sync_successful_task_to_persona_archive(task_id, result)
@@ -5719,9 +5798,48 @@ def _proxy_public_rows(conn: Any, rows: list[Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _account_effective_status(row: Any) -> str:
+    item = dict(row)
+    raw_status = str(item.get("status") or "unknown").strip().lower()
+    health_status = str(item.get("health_status") or "unknown").strip().lower()
+    observed_at = max(
+        int(item.get("last_login_check_at") or 0),
+        int(item.get("health_checked_at") or 0),
+    )
+    attempted_at = int(item.get("status_attempted_at") or 0)
+    attempt_error = str(item.get("status_attempt_error") or "").strip()
+    if raw_status == "disabled":
+        return "disabled"
+    if health_status == "banned":
+        return "banned"
+    if raw_status != "ready":
+        return raw_status or "unknown"
+    if attempt_error and attempted_at >= observed_at:
+        return "check_failed"
+    if health_status == "abnormal":
+        return "abnormal"
+    if health_status == "unknown":
+        return "ready_unverified"
+    return "ready"
+
+
 def _account_public(row: Any, proxy_row: Any | None = None, totp_row: Any | None = None) -> dict[str, Any]:
     item = dict(row)
     totp = _social_account_totp_public(totp_row)
+    raw_status = str(item.get("status") or "unknown").strip().lower()
+    health_status = str(item.get("health_status") or "unknown").strip().lower()
+    effective_status = _account_effective_status(item)
+    status_checked_at = max(
+        int(item.get("last_login_check_at") or 0),
+        int(item.get("health_checked_at") or 0),
+        int(item.get("status_attempted_at") or 0),
+    )
+    status_detail = str(
+        item.get("status_attempt_error")
+        or item.get("health_detail")
+        or item.get("last_error")
+        or ""
+    )
     return {
         "id": str(item.get("id") or ""),
         "persona_id": str(item.get("persona_id") or ""),
@@ -5731,7 +5849,16 @@ def _account_public(row: Any, proxy_row: Any | None = None, totp_row: Any | None
         "profile_dir": str(item.get("profile_dir") or ""),
         "proxy_id": str(item.get("proxy_id") or ""),
         "residential_proxy": _residential_proxy_public(proxy_row) if proxy_row is not None else None,
-        "status": str(item.get("status") or ""),
+        "status": raw_status,
+        "effective_status": effective_status,
+        "status_checked_at": status_checked_at,
+        "status_detail": status_detail,
+        "status_attempted_at": int(item.get("status_attempted_at") or 0),
+        "status_attempt_error": str(item.get("status_attempt_error") or ""),
+        "status_source_task_id": str(item.get("status_source_task_id") or ""),
+        "health_status": health_status,
+        "health_checked_at": int(item.get("health_checked_at") or 0),
+        "health_detail": str(item.get("health_detail") or ""),
         "login_username": str(item.get("login_username") or "") or str(item.get("username") or ""),
         "login_password_configured": bool(str(item.get("login_password") or "")),
         "login_credentials_updated_at": int(item.get("login_credentials_updated_at") or 0),

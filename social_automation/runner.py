@@ -1187,15 +1187,64 @@ def _check_platform_login_without_disrupting(page, platform: str, logger: Automa
         return _check_platform_login(probe, platform, logger)
 
 
+def _detect_platform_account_restriction(url: str, body_text: str, platform: str) -> dict[str, Any] | None:
+    clean_url = str(url or "").lower()
+    clean_text = str(body_text or "").lower()
+    url_markers = (
+        "/disabled/",
+        "/suspended/",
+        "/checkpoint/disabled",
+        "/accounts/disabled",
+    )
+    text_markers = (
+        "your account has been disabled",
+        "your account was disabled",
+        "we disabled your account",
+        "your account has been suspended",
+        "your account was suspended",
+        "we suspended your account",
+        "account has been deactivated",
+        "account is disabled",
+    )
+    if not any(marker in clean_url for marker in url_markers) and not any(
+        marker in clean_text for marker in text_markers
+    ):
+        return None
+    platform_name = _platform_name(platform)
+    return {
+        "status": "cookie_expired",
+        "health_status": "banned",
+        "reason": f"{platform_name} account appears disabled or suspended.",
+        "url": str(url or ""),
+    }
+
+
+def _account_health_from_login_state(status: dict[str, Any]) -> tuple[str, str]:
+    explicit = str(status.get("health_status") or "").strip().lower()
+    if explicit in {"unknown", "alive", "abnormal", "banned"}:
+        return explicit, str(status.get("reason") or explicit)
+    login_status = str(status.get("status") or "").strip().lower()
+    if login_status == "ready":
+        return "alive", str(status.get("reason") or "Account is available.")
+    if login_status == "disabled":
+        return "banned", str(status.get("reason") or "Account is disabled or suspended.")
+    if login_status == "transient_error":
+        return "abnormal", str(status.get("reason") or "Platform page is temporarily abnormal.")
+    return "unknown", str(status.get("reason") or "Platform health could not be confirmed before login.")
+
+
 def _detect_instagram_login_state(page) -> dict[str, Any]:
     url = str(page.url or "")
-    if _is_verification_url(url):
-        return {"status": "need_verification", "reason": "Instagram 需要输入验证码。", "url": url}
     body_text = ""
     try:
         body_text = str(page.locator("body").inner_text(timeout=5000) or "").lower()
     except Exception:
         pass
+    restriction = _detect_platform_account_restriction(url, body_text, "instagram")
+    if restriction is not None:
+        return restriction
+    if _is_verification_url(url):
+        return {"status": "need_verification", "reason": "Instagram 需要输入验证码。", "url": url}
     invalid_markers = [
         "login information you entered is incorrect",
         "your password was incorrect",
@@ -1245,13 +1294,16 @@ def _detect_instagram_login_state(page) -> dict[str, Any]:
 
 def _detect_threads_login_state(page) -> dict[str, Any]:
     url = str(page.url or "")
-    if _is_verification_url(url):
-        return {"status": "need_verification", "reason": "Threads/Instagram 需要输入验证码。", "url": url}
     body_text = ""
     try:
         body_text = str(page.locator("body").inner_text(timeout=5000) or "").lower()
     except Exception:
         pass
+    restriction = _detect_platform_account_restriction(url, body_text, "threads")
+    if restriction is not None:
+        return restriction
+    if _is_verification_url(url):
+        return {"status": "need_verification", "reason": "Threads/Instagram 需要输入验证码。", "url": url}
     transient_error_markers = [
         "something went wrong",
         "please try again later",
@@ -2071,12 +2123,30 @@ def _confirm_platform_ready(page, platform: str, logger: AutomationLogger, cance
 
 def _run_check_login(page, task, account, payload, screenshot_dir, logger, platform: str = "instagram") -> dict[str, Any]:
     status = _check_platform_login(page, platform, logger)
+    health_status, health_reason = _account_health_from_login_state(status)
+    diagnostic_outcome = "banned" if health_status == "banned" else ("ready" if status.get("status") == "ready" else "not_ready")
     shot = _screenshot(page, screenshot_dir, task, "check_login", logger)
     if status.get("status") != "ready":
         logger.log("warn", "check_login_not_ready", str(status.get("reason") or f"{_platform_name(platform)} 账号未就绪。"), {"details": status}, shot)
-        return {"ok": True, "status": str(status.get("status") or "cookie_expired"), "screenshot_path": shot, "details": status}
+        return {
+            "ok": True,
+            "status": str(status.get("status") or "cookie_expired"),
+            "health_status": health_status,
+            "health_reason": health_reason,
+            "diagnostic_outcome": diagnostic_outcome,
+            "screenshot_path": shot,
+            "details": status,
+        }
     logger.log("info", "completion_node", f"{_platform_name(platform)} 登录检查完成节点已确认。", {"details": status}, shot)
-    return {"ok": True, "status": "ready", "screenshot_path": shot, "details": status}
+    return {
+        "ok": True,
+        "status": "ready",
+        "health_status": health_status,
+        "health_reason": health_reason,
+        "diagnostic_outcome": diagnostic_outcome,
+        "screenshot_path": shot,
+        "details": status,
+    }
 
 
 def _warmup_scroll(page, logger: AutomationLogger, times: int = 2) -> None:

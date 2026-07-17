@@ -2066,6 +2066,7 @@ function statusLabel(status) {
   const map = {
     queued: "排队中",
     running: "执行中",
+    checking: "检测中",
     success: "成功",
     failed: "失败",
     cancelled: "已取消",
@@ -2076,7 +2077,11 @@ function statusLabel(status) {
     cookie_expired: "登录已过期",
     transient_error: "登录页面异常",
     disabled: "已禁用",
-    ready: "可用",
+    banned: "已封禁",
+    abnormal: "账号异常",
+    check_failed: "检测失败",
+    ready_unverified: "可用·待核验",
+    ready: "正常可用",
     open_login: "登录流程",
     check_login: "登录状态同步",
     publish_post: "发布内容",
@@ -2095,9 +2100,9 @@ function statusLabel(status) {
 function statusTone(status) {
   const key = String(status || "").trim();
   if (["success", "ready", "standby"].includes(key)) return "success";
-  if (["failed", "error", "cookie_expired", "transient_error", "login_wait_timeout"].includes(key)) return "error";
+  if (["failed", "error", "cookie_expired", "transient_error", "login_wait_timeout", "abnormal", "banned", "check_failed"].includes(key)) return "error";
   if (["queued", "scheduled", "pending"].includes(key)) return "queued";
-  if (["need_manual", "pending_login", "account_confirmation_required", "need_verification"].includes(key)) return "manual";
+  if (["need_manual", "pending_login", "account_confirmation_required", "need_verification", "ready_unverified"].includes(key)) return "manual";
   if (["running", "checking", "browser_launch", "prepare", "preparing", "progress"].includes(key)) return "active";
   if (["cancelled", "disabled", "unknown"].includes(key)) return "muted";
   return "muted";
@@ -2109,15 +2114,40 @@ function renderStatusText(status, { className = "" } = {}) {
   return `<span class="${esc(classes)}">${esc(statusLabel(key))}</span>`;
 }
 
+function accountEffectiveStatus(account = null) {
+  if (!account) return "unknown";
+  const supplied = String(account.effective_status || "").trim().toLowerCase();
+  if (supplied) return supplied;
+  const loginStatus = String(account.status || "unknown").trim().toLowerCase();
+  const healthStatus = String(account.health_status || "unknown").trim().toLowerCase();
+  const observedAt = Math.max(Number(account.last_login_check_at || 0), Number(account.health_checked_at || 0));
+  const attemptedAt = Number(account.status_attempted_at || 0);
+  const attemptError = String(account.status_attempt_error || "").trim();
+  if (loginStatus === "disabled") return "disabled";
+  if (healthStatus === "banned") return "banned";
+  if (loginStatus !== "ready") return loginStatus;
+  if (attemptError && attemptedAt >= observedAt) return "check_failed";
+  if (healthStatus === "abnormal") return "abnormal";
+  if (healthStatus === "unknown") return "ready_unverified";
+  return "ready";
+}
+
+function accountDisplayedStatus(account = null) {
+  const accountId = String(account?.id || "").trim();
+  if (accountId && activeSocialTaskFor({ accountId, taskType: "check_login" })) return "checking";
+  return accountEffectiveStatus(account);
+}
+
 function accountLastLoginCheckLabel(account) {
-  if (!account) return "上次检测：未知 · 尚未检测";
-  const status = String(account.status || "unknown").trim();
-  const checkedAt = Number(account.last_login_check_at || 0);
+  if (!account) return "登录状态：未知 · 尚未检测";
+  const status = accountDisplayedStatus(account);
+  const checkedAt = Number(account.status_checked_at || 0)
+    || Math.max(Number(account.last_login_check_at || 0), Number(account.health_checked_at || 0));
   const checkedDate = checkedAt > 0 ? new Date(checkedAt * 1000) : null;
   const checkedTime = checkedDate && !Number.isNaN(checkedDate.getTime())
     ? checkedDate.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })
     : "尚未检测";
-  return `上次检测：${statusLabel(status)} · ${checkedTime}`;
+  return `登录状态：${statusLabel(status)} · ${checkedTime}`;
 }
 
 function accountStatusClassNames(status) {
@@ -2125,13 +2155,19 @@ function accountStatusClassNames(status) {
   return key === "account_confirmation_required" ? `${key} need_verification` : key;
 }
 
+function accountStatusTitle(account = null) {
+  const label = accountLastLoginCheckLabel(account);
+  const detail = String(account?.status_detail || account?.health_detail || account?.last_error || "").trim();
+  return [label, detail].filter(Boolean).join(" · ");
+}
+
 function renderAccountStatusChip(account, { emptyLabel = "未选择" } = {}) {
   if (!account) return `<span class="task-status-text is-muted account-status-chip">${esc(emptyLabel)}</span>`;
   const accountId = String(account.id || "");
-  const key = String(account.status || "unknown").trim();
+  const key = accountDisplayedStatus(account);
   const classes = ["task-status-text", `is-${statusTone(key)}`, "account-status-chip"].join(" ");
   const label = accountLastLoginCheckLabel(account);
-  return `<span class="${esc(classes)}" data-account-status-for="${esc(accountId)}" title="${esc(label)}">${esc(label)}</span>`;
+  return `<span class="${esc(classes)}" data-account-status-for="${esc(accountId)}" title="${esc(accountStatusTitle(account))}">${esc(label)}</span>`;
 }
 
 function renderAccountFieldHead(label, account, options = {}) {
@@ -3701,11 +3737,11 @@ function personaAccountHealth(persona) {
   const accounts = personaAccounts(persona).filter(isPublishPlatformAccount);
   if (!accounts.length) return { tone: "unbound", label: "未绑定平台账号" };
   const unavailable = new Set(["disabled", "banned", "blocked", "suspended", "platform_restricted", "unavailable"]);
-  const details = accounts.map((account) => `${publishPlatformLabel(account)}：${statusLabel(account.status || "unknown")}`).join("；");
-  if (accounts.some((account) => unavailable.has(String(account.status || "").trim().toLowerCase()))) {
+  const details = accounts.map((account) => `${publishPlatformLabel(account)}：${statusLabel(accountEffectiveStatus(account))}`).join("；");
+  if (accounts.some((account) => unavailable.has(accountEffectiveStatus(account)))) {
     return { tone: "danger", label: `存在不可用平台账号；${details}` };
   }
-  if (accounts.every((account) => String(account.status || "").trim().toLowerCase() === "ready")) {
+  if (accounts.every((account) => ["ready", "ready_unverified"].includes(accountEffectiveStatus(account)))) {
     return { tone: "healthy", label: `所绑定平台账号均正常；${details}` };
   }
   return { tone: "warning", label: `存在异常平台账号；${details}` };
@@ -3729,7 +3765,7 @@ function isPublishPlatformAccount(account) {
 }
 
 function isReadyPublishAccount(account) {
-  return isPublishPlatformAccount(account) && String(account?.status || "").trim().toLowerCase() === "ready";
+  return isPublishPlatformAccount(account) && ["ready", "ready_unverified"].includes(accountEffectiveStatus(account));
 }
 
 function canSubmitPublishWithAccount(account) {
@@ -11907,6 +11943,7 @@ async function loadAutomationTasksShared({ force = false } = {}) {
       state.socialTasks = tasks;
       if (data?.publish_policy) updateDailyPublishPolicy(data.publish_policy, { requestSeq: publishPolicyRequestSeq });
       syncSocialTaskToasts(tasks);
+      updateAccountStatusViews();
       await refreshPersonaAfterPublishTasks(tasks, previousById);
       return { tasks };
     })
@@ -15813,13 +15850,13 @@ function updateAccountStatusViews() {
   const accountById = new Map((state.socialAccounts || []).map((account) => [String(account.id || ""), account]));
   document.querySelectorAll("[data-account-status-for]").forEach((node) => {
     const account = accountById.get(String(node.dataset.accountStatusFor || ""));
-    const status = String(account?.status || "unknown").trim();
+    const status = accountDisplayedStatus(account);
     node.className = node.classList.contains("status")
       ? `status ${accountStatusClassNames(status)}`
       : `task-status-text is-${statusTone(status)} account-status-chip`;
     const label = accountLastLoginCheckLabel(account);
     node.textContent = label;
-    node.title = label;
+    node.title = accountStatusTitle(account);
   });
   ["simpleAccount", "socialAccount", "personaAutoAccount", "personaPublishAccountSelect"].forEach((id) => {
     const select = $(id);
@@ -15840,6 +15877,14 @@ function updateAccountStatusViews() {
   document.querySelectorAll("[data-account-totp-for]").forEach((node) => {
     const account = accountById.get(String(node.dataset.accountTotpFor || ""));
     if (account) updateAccountTotpBadgeNode(node, account);
+  });
+  document.querySelectorAll("[data-social-check-status]").forEach((button) => {
+    const accountId = String(button.dataset.socialCheckStatus || "").trim();
+    const checking = Boolean(activeSocialTaskFor({ accountId, taskType: "check_login" }));
+    button.disabled = checking;
+    button.setAttribute("aria-busy", checking ? "true" : "false");
+    button.title = checking ? "正在同步登录状态" : "同步登录状态";
+    button.setAttribute("aria-label", button.title);
   });
 }
 
@@ -16113,7 +16158,7 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
         <div class="account-pool-card-main">
           <span class="account-pool-card-copy">
             <strong>${esc(accountDisplayName(account))}</strong>
-            <span class="account-pool-card-subline"><small>${esc(platformLabel(account.platform || "threads"))}</small><span class="status ${esc(accountStatusClassNames(account.status))}" data-account-status-for="${esc(accountId)}" title="${esc(accountLastLoginCheckLabel(account))}">${esc(accountLastLoginCheckLabel(account))}</span>${renderAccountTotpBadge(account)}</span>
+            <span class="account-pool-card-subline"><small>${esc(platformLabel(account.platform || "threads"))}</small><span class="status ${esc(accountStatusClassNames(accountDisplayedStatus(account)))}" data-account-status-for="${esc(accountId)}" title="${esc(accountStatusTitle(account))}">${esc(accountLastLoginCheckLabel(account))}</span>${renderAccountTotpBadge(account)}</span>
           </span>
         </div>
         <div class="persona-account-summary-meta" aria-label="账号重要信息">
@@ -16131,7 +16176,7 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
       <div class="account-pool-card-main">
         <span class="account-pool-card-copy">
           <strong>${esc(accountDisplayName(account))}</strong>
-          <span class="account-pool-card-subline"><small>${esc(platformLabel(account.platform || "threads"))}</small><span class="status ${esc(accountStatusClassNames(account.status))}" data-account-status-for="${esc(accountId)}" title="${esc(accountLastLoginCheckLabel(account))}">${esc(accountLastLoginCheckLabel(account))}</span>${renderAccountTotpBadge(account)}</span>
+          <span class="account-pool-card-subline"><small>${esc(platformLabel(account.platform || "threads"))}</small><span class="status ${esc(accountStatusClassNames(accountDisplayedStatus(account)))}" data-account-status-for="${esc(accountId)}" title="${esc(accountStatusTitle(account))}">${esc(accountLastLoginCheckLabel(account))}</span>${renderAccountTotpBadge(account)}</span>
         </span>
       </div>
       <div class="persona-account-inline-fields" aria-label="账号资料">
@@ -16159,7 +16204,7 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
         <small>${esc(account.display_name && account.display_name !== account.username ? account.display_name : platformLabel(account.platform || "threads"))}</small>
       </span>
       <span class="account-pool-card-flags">
-        <span class="status ${esc(accountStatusClassNames(account.status))}" data-account-status-for="${esc(accountId)}" title="${esc(accountLastLoginCheckLabel(account))}">${esc(accountLastLoginCheckLabel(account))}</span>
+        <span class="status ${esc(accountStatusClassNames(accountDisplayedStatus(account)))}" data-account-status-for="${esc(accountId)}" title="${esc(accountStatusTitle(account))}">${esc(accountLastLoginCheckLabel(account))}</span>
         ${renderAccountTotpBadge(account)}
       </span>
     </div>
@@ -16170,6 +16215,7 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
     </div>
     <div class="row-actions">
       <button type="button" class="primary" data-social-open-login="${esc(accountId)}">打开登录</button>
+      <button type="button" class="account-status-check" data-social-check-status="${esc(accountId)}" title="同步登录状态" aria-label="同步登录状态" aria-busy="${activeSocialTaskFor({ accountId, taskType: "check_login" }) ? "true" : "false"}" ${activeSocialTaskFor({ accountId, taskType: "check_login" }) ? "disabled" : ""}>${renderRefreshIcon()}</button>
       <button type="button" data-account-proxy-picker="${esc(accountId)}">${account?.proxy_id ? "切换代理" : "选择代理"}</button>
       <button type="button" data-account-pool-edit="${esc(accountId)}">编辑</button>
       <button type="button" data-account-pool-unbind="${esc(accountId)}" ${account.persona_id ? "" : "disabled"}>解绑</button>
@@ -17168,6 +17214,20 @@ function accountProxyOptionCardsHtml(selectedProxyId = "", { scope = "modal" } =
   </div>`;
 }
 
+function accountProxyCustomAddButtonHtml(scope = "modal") {
+  return `<button type="button" class="account-proxy-custom-add" data-account-proxy-custom-add data-account-proxy-choice-scope="${esc(scope)}">
+    ${renderPlusIcon()}<span>添加自定义代理</span>
+  </button>`;
+}
+
+function selectNewCustomProxy(modal, proxy = null, scope = "modal") {
+  const proxyId = String(proxy?.id || "").trim();
+  if (!modal?.isConnected || !proxyId || !accountProxyEligibility(proxy).eligible) return;
+  const options = modal.querySelector("[data-account-proxy-options]");
+  if (options) options.outerHTML = accountProxyOptionCardsHtml(proxyId, { scope });
+  updateAccountProxyChoice(modal, proxyId);
+}
+
 function updateAccountProxyChoice(modal, proxyId = "") {
   if (!modal) return;
   const selectedId = String(proxyId || "").trim();
@@ -17248,7 +17308,10 @@ function openAccountProxyPickerModal(accountId = "") {
         <div><strong id="accountProxyPickerTitle">选择代理 IP</strong><p>${esc(accountDisplayName(account))} · 一个账号同时只绑定一个代理</p></div>
       </div>
       <div class="console-modal-content">
-        <p data-account-proxy-selection-summary>${account.proxy_id ? `当前绑定：${esc(accountResidentialProxyLabel(account))}` : "当前未使用代理 IP"}</p>
+        <div class="account-proxy-picker-toolbar">
+          <p data-account-proxy-selection-summary>${account.proxy_id ? `当前绑定：${esc(accountResidentialProxyLabel(account))}` : "当前未使用代理 IP"}</p>
+          ${accountProxyCustomAddButtonHtml("modal")}
+        </div>
         ${accountProxyOptionCardsHtml(account.proxy_id || "", { scope: "modal" })}
       </div>
       <div class="console-modal-actions">
@@ -17259,6 +17322,16 @@ function openAccountProxyPickerModal(accountId = "") {
   document.body.appendChild(modal);
   const close = () => modal.remove();
   modal.addEventListener("click", (event) => {
+    const customAdd = event.target.closest("[data-account-proxy-custom-add]");
+    if (customAdd) {
+      openProxyModal("", {
+        preserveParent: true,
+        onSaved(savedProxy) {
+          selectNewCustomProxy(modal, savedProxy, "modal");
+        },
+      });
+      return;
+    }
     const choice = event.target.closest("[data-account-proxy-choice]");
     if (choice) {
       if (choice.disabled) return;
@@ -17304,6 +17377,9 @@ function renderAccountProxyPickerPanel(account = null) {
       <button type="button" data-account-proxy-inline-toggle aria-expanded="false">${proxyId ? "切换代理" : "选择代理"}</button>
     </div>
     <div class="account-proxy-inline-options" data-account-proxy-inline-options hidden>
+      <div class="account-proxy-inline-toolbar">
+        ${accountProxyCustomAddButtonHtml("edit")}
+      </div>
       ${accountProxyOptionCardsHtml(proxyId, { scope: "edit" })}
     </div>
   </section>`;
@@ -17404,48 +17480,68 @@ function createAccountTotpController(modal, account) {
     clearCodeTimers();
     setState(totp?.status, true);
     if (!body) return;
-    body.innerHTML = `
-      <div class="account-totp-code-card">
-        <div class="account-totp-code-main">
-          <span>当前验证码</span>
-          <strong data-account-totp-code>------</strong>
+    let card = body.querySelector("[data-account-totp-code-card]");
+    if (!card) {
+      body.innerHTML = `
+        <div class="account-totp-code-card" data-account-totp-code-card>
+          <div class="account-totp-code-main">
+            <span>当前验证码</span>
+            <strong data-account-totp-code>------</strong>
+          </div>
+          <div class="account-totp-countdown" data-account-totp-ring-wrap aria-label="验证码剩余时间">
+            <svg viewBox="0 0 42 42" aria-hidden="true" focusable="false">
+              <circle class="account-totp-ring-track" cx="21" cy="21" r="16" pathLength="100"></circle>
+              <circle class="account-totp-ring-value" data-account-totp-ring cx="21" cy="21" r="16" pathLength="100"></circle>
+            </svg>
+            <span><strong data-account-totp-countdown>--</strong><small>秒</small></span>
+          </div>
+          <dl class="account-totp-meta">
+            <div><dt>更新时间</dt><dd data-account-totp-updated>尚无记录</dd></div>
+            <div><dt>最近验证</dt><dd data-account-totp-verified>尚无记录</dd></div>
+          </dl>
+          <div class="account-totp-code-actions">
+            <button type="button" data-account-totp-update>更新密钥</button>
+            <button type="button" class="danger" data-account-totp-delete>移除 2FA</button>
+          </div>
         </div>
-        <div class="account-totp-countdown">
-          <span>剩余时间</span>
-          <strong data-account-totp-countdown>同步中</strong>
-        </div>
-        <dl class="account-totp-meta">
-          <div><dt>更新时间</dt><dd data-account-totp-updated>尚无记录</dd></div>
-          <div><dt>最近验证</dt><dd data-account-totp-verified>尚无记录</dd></div>
-        </dl>
-        <div class="account-totp-code-actions">
-          <button type="button" data-account-totp-update>更新密钥</button>
-          <button type="button" class="danger" data-account-totp-delete>移除 2FA</button>
-        </div>
-      </div>
-      <p class="account-totp-message" data-account-totp-message hidden></p>`;
-    body.querySelector("[data-account-totp-updated]").textContent = accountTotpDateLabel(totp?.updated_at);
-    body.querySelector("[data-account-totp-verified]").textContent = accountTotpDateLabel(totp?.last_verified_at);
+        <p class="account-totp-message" data-account-totp-message hidden></p>`;
+      card = body.querySelector("[data-account-totp-code-card]");
+    }
+    card.querySelector("[data-account-totp-updated]").textContent = accountTotpDateLabel(totp?.updated_at);
+    card.querySelector("[data-account-totp-verified]").textContent = accountTotpDateLabel(totp?.last_verified_at);
     if (currentCode) {
-      body.querySelector("[data-account-totp-code]").textContent = String(currentCode.code || "------");
+      card.querySelector("[data-account-totp-code]").textContent = String(currentCode.code || "------");
     }
   };
 
   const scheduleAtBoundary = (currentCode = {}, responseReceivedAt = Date.now()) => {
     const countdown = body?.querySelector("[data-account-totp-countdown]");
+    const ring = body?.querySelector("[data-account-totp-ring]");
+    const ringWrap = body?.querySelector("[data-account-totp-ring-wrap]");
     if (!countdown) return;
-    const serverTime = accountTotpTimestampMs(currentCode.server_time);
+    const serverTime = Number(currentCode.server_time_ms || 0)
+      || accountTotpTimestampMs(currentCode.server_time);
     const validForMs = Math.max(0, Number(currentCode.valid_for_seconds || 0) * 1000);
-    const expiresAt = accountTotpTimestampMs(currentCode.expires_at)
+    const expiresAt = Number(currentCode.expires_at_ms || 0)
+      || accountTotpTimestampMs(currentCode.expires_at)
       || (serverTime && validForMs ? serverTime + validForMs : 0);
+    const periodMs = Math.max(1000, Number(currentCode.period_seconds || 30) * 1000);
     if (!serverTime || !expiresAt) {
-      countdown.textContent = "时间不可用";
+      countdown.textContent = "--";
+      if (ring) ring.style.strokeDashoffset = "100";
       return;
     }
     const serverNow = () => serverTime + (Date.now() - responseReceivedAt);
     const updateCountdown = () => {
       const remaining = Math.max(0, expiresAt - serverNow());
-      countdown.textContent = `${Math.ceil(remaining / 1000)} 秒`;
+      const seconds = Math.ceil(remaining / 1000);
+      const progress = Math.max(0, Math.min(1, remaining / periodMs));
+      countdown.textContent = String(seconds);
+      if (ring) ring.style.strokeDashoffset = String(100 - progress * 100);
+      if (ringWrap) {
+        ringWrap.dataset.urgent = remaining <= 5000 ? "true" : "false";
+        ringWrap.setAttribute("aria-label", `验证码剩余 ${seconds} 秒`);
+      }
     };
     updateCountdown();
     countdownTimer = window.setInterval(updateCountdown, 250);
@@ -17457,6 +17553,7 @@ function createAccountTotpController(modal, account) {
 
   const refreshCode = async () => {
     const requestGeneration = ++viewGeneration;
+    const requestStartedAt = Date.now();
     try {
       const result = await api(`${basePath}/code`, {
         cache: "no-store",
@@ -17474,7 +17571,7 @@ function createAccountTotpController(modal, account) {
       }
       lastTotp = totp;
       lastCode = result?.current_code || {};
-      lastCodeReceivedAt = Date.now();
+      lastCodeReceivedAt = (requestStartedAt + Date.now()) / 2;
       renderCodeCard(lastTotp, lastCode);
       scheduleAtBoundary(lastCode, lastCodeReceivedAt);
     } catch (error) {
@@ -17496,8 +17593,10 @@ function createAccountTotpController(modal, account) {
       clearCodeTimers();
       const code = body?.querySelector("[data-account-totp-code]");
       const countdown = body?.querySelector("[data-account-totp-countdown]");
+      const ring = body?.querySelector("[data-account-totp-ring]");
       if (code) code.textContent = "------";
-      if (countdown) countdown.textContent = "同步失败";
+      if (countdown) countdown.textContent = "--";
+      if (ring) ring.style.strokeDashoffset = "100";
       setMessage(error.detail || error.message || "读取验证码失败。", "error");
     }
   };
@@ -17718,6 +17817,16 @@ function openAccountPoolEditModal(accountId = "") {
       const expanded = toggle.getAttribute("aria-expanded") === "true";
       toggle.setAttribute("aria-expanded", expanded ? "false" : "true");
       if (options) options.hidden = expanded;
+      return;
+    }
+    const customAdd = event.target.closest("[data-account-proxy-custom-add]");
+    if (customAdd) {
+      openProxyModal("", {
+        preserveParent: true,
+        onSaved(savedProxy) {
+          selectNewCustomProxy(modal, savedProxy, "edit");
+        },
+      });
       return;
     }
     const choice = event.target.closest("[data-account-proxy-choice]");
@@ -18048,16 +18157,16 @@ function proxyFormPayload(proxy = null) {
   return sharedProxyPayload("proxyForm", proxy);
 }
 
-function openProxyModal(proxyId = "") {
+function openProxyModal(proxyId = "", { onSaved = null, preserveParent = false } = {}) {
   const proxy = proxyId ? socialProxyById(proxyId) : null;
   if (proxyId && !proxy) {
     showMsg("socialMsg", "代理不存在，请刷新后重试。", false);
     return;
   }
-  closeConsoleModal(null);
+  if (!preserveParent) closeConsoleModal(null);
   const modal = document.createElement("div");
-  modal.id = "consoleModal";
-  modal.className = "console-modal";
+  modal.id = preserveParent ? "proxyModal" : "consoleModal";
+  modal.className = `console-modal ${preserveParent ? "console-modal--nested" : ""}`.trim();
   modal.innerHTML = `
     <div class="console-modal-backdrop" data-proxy-modal-cancel></div>
     <section class="console-modal-dialog proxy-edit-modal" role="dialog" aria-modal="true" aria-labelledby="proxyModalTitle">
@@ -18124,6 +18233,8 @@ function openProxyModal(proxyId = "") {
         }
       }
       await refreshProxyPool();
+      const savedProxy = socialProxyById(savedId) || data?.proxy || null;
+      if (detected && typeof onSaved === "function" && savedProxy) await onSaved(savedProxy);
       showMsg("socialMsg", detected ? `${id ? "代理已更新" : "代理已新增"}，出口 IP 和国家已自动识别。` : `${id ? "代理已更新" : "代理已新增"}，自动检测未通过，请检查连接参数后重试。`, detected);
     }).catch((error) => {
       save.disabled = false;
@@ -21228,8 +21339,16 @@ function bindEvents() {
         .catch((error) => showMsg("socialMsg", error.detail || error.message || "打开登录失败", false));
       return;
     }
+    const statusCheck = event.target.closest("[data-social-check-status]");
+    if (statusCheck) {
+      const accountId = String(statusCheck.dataset.socialCheckStatus || "").trim();
+      const account = selectedSocialAccount(accountId);
+      createSocialTask("check_login", accountId, account?.persona_id || "", "socialMsg")
+        .catch((error) => showMsg("socialMsg", error.detail || error.message || "登录状态同步失败", false));
+      return;
+    }
     const accountCard = event.target.closest("[data-account-pool-account]");
-    const accountAction = event.target.closest("[data-social-open-login], [data-account-proxy-picker], [data-account-pool-edit], [data-account-pool-unbind], [data-social-delete-account], .account-pool-card-check");
+    const accountAction = event.target.closest("[data-social-open-login], [data-social-check-status], [data-account-proxy-picker], [data-account-pool-edit], [data-account-pool-unbind], [data-social-delete-account], .account-pool-card-check");
     if (accountCard && !accountAction) {
       selectAccountPoolAccount(accountCard.dataset.accountPoolAccount || "");
       renderSocialAccounts();
