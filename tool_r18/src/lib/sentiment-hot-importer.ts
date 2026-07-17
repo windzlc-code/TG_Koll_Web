@@ -2272,7 +2272,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
         ))
         : liveReadyPool,
       limit,
-      { archiveId, keywords, excludeShown: !liveOnlyRefresh, searchMode, freshnessDays: operationalFreshnessDays },
+      { archiveId: liveOnlyRefresh ? undefined : archiveId, keywords, excludeShown: !liveOnlyRefresh, searchMode, freshnessDays: operationalFreshnessDays },
     ).length;
     if (liveReadyCount < limit && hasSentimentHotTotalBudget(startedAt, 18_000)) {
       const secondRoundTimeoutMs = Math.min(20_000, remainingSentimentHotTotalBudgetMs(startedAt, 18_000));
@@ -2341,7 +2341,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
         ? preInstagramReadyPool.filter((candidate) => candidateMatchesOperationalFreshness(candidate, operationalFreshnessDays))
         : preInstagramReadyPool,
       limit,
-      { archiveId, keywords, excludeShown: !liveOnlyRefresh, searchMode, freshnessDays: operationalFreshnessDays },
+      { archiveId: liveOnlyRefresh ? undefined : archiveId, keywords, excludeShown: !liveOnlyRefresh, searchMode, freshnessDays: operationalFreshnessDays },
     ).length
     : 0;
   if (shouldFetchLiveCandidates && preInstagramReadyCount < limit && hasSentimentHotTotalBudget(startedAt, SENTIMENT_HOT_SUPPLEMENT_MIN_REMAINING_MS)) {
@@ -2499,7 +2499,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       || candidateMatchesOperationalFreshness(candidate, operationalFreshnessDays)
     ))
     : candidates;
-  candidates = finalizeSentimentHotCandidatesForDisplay(displayCandidatePool, limit, { archiveId, keywords, excludeShown: !liveOnlyRefresh, searchMode, freshnessDays: operationalFreshnessDays });
+  candidates = finalizeSentimentHotCandidatesForDisplay(displayCandidatePool, limit, { archiveId: liveOnlyRefresh ? undefined : archiveId, keywords, excludeShown: !liveOnlyRefresh, searchMode, freshnessDays: operationalFreshnessDays });
   const shownHistoryKeys = liveOnlyRefresh ? new Set<string>() : getSentimentHotShownHistoryKeys(archiveId);
   if (!liveOnlyRefresh && candidates.length < limit) {
     const selectedKeys = new Set(candidates.flatMap((candidate) => getSentimentHotCandidateHistoryKeys(candidate)));
