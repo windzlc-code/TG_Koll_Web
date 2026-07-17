@@ -2598,6 +2598,54 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       warnings.push(`当前人设候选不足，已用模型父领域真实候选补充 ${globalSupplements.length} 篇。`);
     }
   }
+  if (strictFreshOnly && candidates.length < limit) {
+    // The live/15-day pool can be smaller than the requested display count
+    // even after both search rounds. As a last resort, rotate compliant
+    // same-persona history so the UI remains usable; freshness, heat, Chinese
+    // content, relevance and final dedupe still apply. This path is explicit
+    // in the channel warning and never runs while a fresh pool is complete.
+    const emergencyKeywords = hasModelStrategy && strategyResult
+      ? sentimentHotStrategyTermsForMode(strategyResult, "normal")
+      : keywords;
+    const emergencyHistory = [
+      ...readThreadsSearchCandidateCache(archiveId, emergencyKeywords, poolLimit, false, "normal"),
+      ...readThreadsSearchCandidateCache(archiveId, keywords, poolLimit, false, searchMode),
+      ...(await readCandidatesFromDatabase({
+        archiveId,
+        keywords: emergencyKeywords,
+        limit: poolLimit,
+        excludeShown: false,
+      }).catch(() => [])),
+      ...(hasModelStrategy && strategyResult
+        ? readGlobalThreadsCandidateBackfill(
+          archiveId,
+          [...emergencyKeywords, ...keywords],
+          poolLimit,
+          "normal",
+        )
+        : []),
+    ];
+    const emergencyPool = finalizeSentimentHotCandidatesForDisplay(emergencyHistory, poolLimit, {
+      archiveId,
+      keywords: emergencyKeywords,
+      excludeShown: false,
+      searchMode: "normal",
+      freshnessDays: 0,
+    });
+    const emergencySupplements = collectSentimentHotSupplementCandidates({
+      ordered: orderSentimentHotCandidatesForLegacyFallback(emergencyPool, archiveId, { allowShownRepeat: true }),
+      archiveId,
+      selectedKeys: new Set(candidates.flatMap((candidate) => getSentimentHotCandidateHistoryKeys(candidate))),
+      limit: limit - candidates.length,
+      strictFreshOnly: false,
+      freshnessDays: 0,
+    });
+    if (emergencySupplements.length > 0) {
+      candidates = [...candidates, ...emergencySupplements];
+      channelStats.push(`新鲜池不足，合规同人设轮换补充 ${emergencySupplements.length}`);
+      warnings.push(`近 ${freshnessDays || 15} 天新候选不足，已按同人设合规候选轮换补足，避免重复集中出现。`);
+    }
+  }
   const forceDetailRefresh = false;
   const detailTargetCount = args.refresh === true ? 0 : candidates.filter((candidate) => (
     candidate.platform === "threads"
