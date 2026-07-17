@@ -12377,6 +12377,10 @@ async function fetchPersonaHotCandidates(refresh = false) {
         limit: 10,
         search_mode: form.hotSearchMode,
         freshness_days: form.hotFreshnessDays,
+        // A positive freshness window is an explicit request for fresh-only
+        // candidates.  Keep the legacy path available when the user enters 0
+        // (unbounded freshness), which is also how older callers behaved.
+        freshness_policy: form.hotFreshnessDays > 0 ? "strict" : "legacy",
       }),
     });
     state.personaHotCandidateResults[String(persona.id)] = {

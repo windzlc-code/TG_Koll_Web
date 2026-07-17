@@ -2000,6 +2000,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(body["archive_name"], "History Teacher")
         self.assertEqual(body["keywords"], ["历史", "课堂"])
         self.assertEqual(body["freshness_days"], 15)
+        self.assertEqual(body["freshness_policy"], "strict")
         self.assertEqual(body["candidates"][0]["candidate_id"], "hot-1")
         self.assertEqual(body["candidates"][0]["id"], "hot-1")
         self.assertEqual(body["candidates"][0]["full_content"], "完整热点正文")
@@ -2048,6 +2049,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertFalse(payload["refresh"])
         self.assertEqual(payload["limit"], 10)
         self.assertEqual(payload["freshnessPolicy"], "legacy")
+        self.assertEqual(resp.json()["freshness_policy"], "legacy")
         self.assertEqual(payload["memorySummaries"], [f"记忆{index}" for index in range(10, 2, -1)])
 
     def test_import_persona_hot_candidates_returns_hot_source_meta(self):

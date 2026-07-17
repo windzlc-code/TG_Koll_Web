@@ -32,6 +32,7 @@ import {
   normalizeSentimentHotFreshnessDays,
   normalizeSentimentHotFreshnessPolicy,
   orderSentimentHotCandidatesForLegacyFallback,
+  isSentimentHotCandidateRepeatEligible,
   parseThreadsPostViewCountFromText,
   parseThreadsReaderSearchMarkdownCandidates,
   parseThreadsDetailEngagementMarkdown,
@@ -98,8 +99,39 @@ describe("sentiment hot importer", () => {
     expect(ordered.map((candidate) => candidate.id)).toEqual(["legacy-fresh", "legacy-shown"]);
   });
 
+  it("keeps heat and length gates hard while rotating shown candidates after cooldown", () => {
+    const archiveId = `test-repeat-cooldown-${Date.now()}`;
+    const shown = {
+      id: "repeatable-hot",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@demo/post/repeatable-hot",
+      author: "demo",
+      content: "這是一段已展示過但仍符合主題的金融理財經驗分享，包含足夠的中文內容和完整背景說明。",
+      media: [],
+      hotScore: 5000,
+      metrics: { source: "threads-reader-search" },
+      publishedAt: new Date().toISOString(),
+      capturedAt: new Date().toISOString(),
+    } as any;
+    const belowHeat = { ...shown, id: "below-heat", hotScore: 999 } as any;
+    const belowLength = { ...shown, id: "below-length", content: "金融理財" } as any;
+    rememberSentimentHotShown(archiveId, [shown]);
+
+    expect(isSentimentHotCandidateRepeatEligible(shown, archiveId, { now: Date.now() })).toBe(false);
+    const afterCooldown = Date.now() + 6 * 60 * 60 * 1000 + 1;
+    expect(isSentimentHotCandidateRepeatEligible(shown, archiveId, { now: afterCooldown })).toBe(true);
+    expect(orderSentimentHotCandidatesForLegacyFallback([shown], archiveId, {
+      allowShownRepeat: true,
+      now: afterCooldown,
+    }).map((candidate) => candidate.id)).toEqual(["repeatable-hot"]);
+    expect(finalizeSentimentHotCandidatesForDisplay([belowHeat, belowLength], 10, {
+      keywords: ["金融理財"],
+      searchMode: "normal",
+    })).toEqual([]);
+  });
+
   it("keeps a live refresh from consuming the browser stage with model strategy time", () => {
-    expect(resolveSentimentHotStrategyTimeoutMs(true, 50_000)).toBe(12_000);
+    expect(resolveSentimentHotStrategyTimeoutMs(true, 50_000)).toBe(18_000);
     expect(resolveSentimentHotStrategyTimeoutMs(false, 50_000)).toBe(30_000);
     expect(resolveSentimentHotStrategyTimeoutMs(true, 5_000)).toBe(5_000);
   });

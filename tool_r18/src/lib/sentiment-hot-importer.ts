@@ -40,9 +40,9 @@ const MIN_SENTIMENT_HOT_QUALITY_HAN_COUNT = 60;
 const SENTIMENT_HOT_CANDIDATE_POOL_TARGET = 400;
 const THREADS_SEARCH_CACHE_CANDIDATE_LIMIT = 2000;
 const THREADS_SEARCH_CACHE_MAX_ROWS_PER_ARCHIVE = 40;
-const THREADS_BROWSER_QUERY_LIMIT = 24;
+const THREADS_BROWSER_QUERY_LIMIT = 36;
 const THREADS_BROWSER_QUERY_BATCH_SIZE = 6;
-const THREADS_BROWSER_PAGE_LIMIT = 3;
+const THREADS_BROWSER_PAGE_LIMIT = 4;
 const THREADS_BROWSER_BOOTSTRAP_QUERY_LIMIT = 1;
 const THREADS_BROWSER_REQUEST_TIMEOUT_MS = 5_000;
 const SENTIMENT_MODEL_KEYWORD_TARGET = 20;
@@ -54,7 +54,7 @@ const INSTAGRAM_READER_QUERY_LIMIT = 48;
 const DEFAULT_REFRESH_FRESHNESS_DAYS = 7;
 const SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS = 35_000;
 const SENTIMENT_HOT_TOTAL_TIMEOUT_MS = 90_000;
-const SENTIMENT_HOT_REFRESH_STRATEGY_TIMEOUT_MS = 12_000;
+const SENTIMENT_HOT_REFRESH_STRATEGY_TIMEOUT_MS = 18_000;
 const SENTIMENT_HOT_SUPPLEMENT_MIN_REMAINING_MS = 12_000;
 const SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT = 2;
 const SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS = 72 * 60 * 60 * 1000;
@@ -67,6 +67,11 @@ const SENTIMENT_HOT_STRICT_KEYWORD_TARGET = 36;
 const SENTIMENT_HOT_SEARCH_STRATEGY_CACHE_FILE = resolveRuntimeFile("sentiment_hot_search_strategy_cache.json");
 const SENTIMENT_HOT_SEARCH_STRATEGY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const SENTIMENT_HOT_SEMANTIC_RELEVANCE_VERSION = 4;
+// Re-showing a compliant post is allowed only after fresh/unshown candidates
+// are exhausted. The cooldown keeps manual refreshes from showing the same
+// item back-to-back while still allowing a small persona pool to reach ten.
+const SENTIMENT_HOT_REPEAT_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+const SENTIMENT_HOT_REPEAT_ROTATION_BUCKET_MS = 10 * 60 * 1000;
 
 export function resolveSentimentHotStrategyTimeoutMs(refresh: boolean, remainingMs: number): number {
   const availableMs = Number.isFinite(remainingMs) ? Math.max(1_000, remainingMs) : 1_000;
@@ -2183,7 +2188,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     const beforeThreadsCount = candidates.length;
     const liveDeficit = Math.max(1, semanticSourceTarget - cachedReadyCount);
     const liveCollectionLimit = Math.min(poolLimit, Math.max(semanticSourceTarget, Math.min(30, liveDeficit * 3)));
-    const threadsTimeoutMs = Math.min(20_000, remainingSentimentHotTotalBudgetMs(startedAt, 18_000));
+    const threadsTimeoutMs = Math.min(SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS, remainingSentimentHotTotalBudgetMs(startedAt, 18_000));
     const threadsCandidates = await measureSentimentStage(
       warnings,
       "threads-search",
@@ -2408,48 +2413,54 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     const supplementLimit = limit - candidates.length;
     const archiveHistory = readThreadsSearchCandidateCache(archiveId, keywords, poolLimit, false, searchMode)
       .filter((candidate) => !hasModelStrategy || !strategyResult || candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode));
-    const supplements = orderSentimentHotCandidatesForLegacyFallback(
+    const orderedSupplements = orderSentimentHotCandidatesForLegacyFallback(
       finalizeSentimentHotCandidatesForDisplay([...displayCandidatePool, ...archiveHistory], poolLimit, {
         archiveId,
         keywords,
         excludeShown: false,
         searchMode,
         freshnessDays: operationalFreshnessDays,
-      }).filter((candidate) => {
-        const historyKeys = getSentimentHotCandidateHistoryKeys(candidate);
-        return historyKeys.every((key) => !selectedKeys.has(key))
-          && (!strictFreshOnly || !isHistoricalSupplementCandidate(candidate))
-          && (!strictFreshOnly || historyKeys.every((key) => !shownHistoryKeys.has(key)));
       }),
       archiveId,
-    ).slice(0, supplementLimit);
+      strictFreshOnly ? { allowShownRepeat: true } : undefined,
+    );
+    const supplements = collectSentimentHotSupplementCandidates({
+      ordered: orderedSupplements,
+      archiveId,
+      selectedKeys,
+      limit: supplementLimit,
+      strictFreshOnly,
+    });
     if (supplements.length > 0) {
       candidates = [...candidates, ...supplements];
       const rotated = supplements.filter((candidate) => getSentimentHotCandidateHistoryKeys(candidate).some((key) => shownHistoryKeys.has(key))).length;
       warnings.push(rotated > 0
-        ? `新候選不足時先按未展示優先，另輪換 ${rotated} 篇最久未展示歷史候選。`
-        : `新候選不足時已按未展示優先補充 ${supplements.length} 篇同人設高熱度候選。`);
+        ? `候選池不足，已補充 ${rotated} 篇符合條件的候選。`
+        : `候選池不足，已補充 ${supplements.length} 篇符合條件的同人設候選。`);
     }
   }
   if (!liveOnlyRefresh && candidates.length < limit && modelParentCandidatePool.length > 0) {
     const selectedKeys = new Set(candidates.flatMap((candidate) => getSentimentHotCandidateHistoryKeys(candidate)));
-    const parentSupplements = orderSentimentHotCandidatesForLegacyFallback(
+    const orderedParentSupplements = orderSentimentHotCandidatesForLegacyFallback(
       finalizeSentimentHotCandidatesForDisplay(modelParentCandidatePool, poolLimit, {
         archiveId,
         keywords,
         excludeShown: false,
         searchMode: "normal",
         freshnessDays: operationalFreshnessDays,
-      }).filter((candidate) => {
-        const historyKeys = getSentimentHotCandidateHistoryKeys(candidate);
-        return historyKeys.every((key) => !selectedKeys.has(key))
-          && (!strictFreshOnly || !isHistoricalSupplementCandidate(candidate))
-          && (!strictFreshOnly || historyKeys.every((key) => !shownHistoryKeys.has(key)));
       }),
       archiveId,
-    ).slice(0, searchMode === "strict"
-      ? Math.min(limit - candidates.length, SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT - parentSupplementCount)
-      : limit - candidates.length);
+      strictFreshOnly ? { allowShownRepeat: true } : undefined,
+    );
+    const parentSupplements = collectSentimentHotSupplementCandidates({
+      ordered: orderedParentSupplements,
+      archiveId,
+      selectedKeys,
+      limit: searchMode === "strict"
+        ? Math.min(limit - candidates.length, SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT - parentSupplementCount)
+        : limit - candidates.length,
+      strictFreshOnly,
+    });
     if (parentSupplements.length > 0) {
       candidates = [...candidates, ...parentSupplements];
       parentSupplementCount += parentSupplements.length;
@@ -2464,23 +2475,26 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       "normal",
     ).filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, "normal"));
     const selectedKeys = new Set(candidates.flatMap((candidate) => getSentimentHotCandidateHistoryKeys(candidate)));
-    const globalSupplements = orderSentimentHotCandidatesForLegacyFallback(
+    const orderedGlobalSupplements = orderSentimentHotCandidatesForLegacyFallback(
       finalizeSentimentHotCandidatesForDisplay(globalParentPool, poolLimit, {
         archiveId,
         keywords,
         excludeShown: false,
         searchMode: "normal",
         freshnessDays: operationalFreshnessDays,
-      }).filter((candidate) => {
-        const historyKeys = getSentimentHotCandidateHistoryKeys(candidate);
-        return historyKeys.every((key) => !selectedKeys.has(key))
-          && (!strictFreshOnly || !isHistoricalSupplementCandidate(candidate))
-          && (!strictFreshOnly || historyKeys.every((key) => !shownHistoryKeys.has(key)));
       }),
       archiveId,
-    ).slice(0, searchMode === "strict"
-      ? Math.min(limit - candidates.length, SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT - parentSupplementCount)
-      : limit - candidates.length);
+      strictFreshOnly ? { allowShownRepeat: true } : undefined,
+    );
+    const globalSupplements = collectSentimentHotSupplementCandidates({
+      ordered: orderedGlobalSupplements,
+      archiveId,
+      selectedKeys,
+      limit: searchMode === "strict"
+        ? Math.min(limit - candidates.length, SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT - parentSupplementCount)
+        : limit - candidates.length,
+      strictFreshOnly,
+    });
     if (globalSupplements.length > 0) {
       candidates = [...candidates, ...globalSupplements];
       parentSupplementCount += globalSupplements.length;
@@ -3065,9 +3079,50 @@ export function finalizeSentimentHotCandidatesForDisplay(candidates: SentimentHo
   return out;
 }
 
-export function orderSentimentHotCandidatesForLegacyFallback(candidates: SentimentHotCandidate[], archiveId: string): SentimentHotCandidate[] {
+function latestSentimentHotShownAt(candidate: SentimentHotCandidate, shownAtMap: Map<string, number>): number {
+  return Math.max(0, ...getSentimentHotCandidateHistoryKeys(candidate).map((key) => shownAtMap.get(key) || 0));
+}
+
+function isSentimentHotCandidateRepeatEligibleWithState(
+  candidate: SentimentHotCandidate,
+  shownHistoryKeys: Set<string>,
+  shownAtMap: Map<string, number>,
+  options?: { cooldownMs?: number; now?: number },
+): boolean {
+  const historyKeys = getSentimentHotCandidateHistoryKeys(candidate);
+  if (!historyKeys.some((key) => shownHistoryKeys.has(key))) return true;
+  const shownAt = latestSentimentHotShownAt(candidate, shownAtMap);
+  // Legacy string-only entries have no timestamp; treat them as eligible so a
+  // migration cannot permanently starve a persona's candidate pool.
+  if (!shownAt) return true;
+  const now = options?.now ?? Date.now();
+  const cooldownMs = Math.max(0, Number(options?.cooldownMs ?? SENTIMENT_HOT_REPEAT_COOLDOWN_MS));
+  return now - shownAt >= cooldownMs;
+}
+
+export function isSentimentHotCandidateRepeatEligible(candidate: SentimentHotCandidate, archiveId: string, options?: { cooldownMs?: number; now?: number }): boolean {
+  const shownHistoryKeys = getSentimentHotShownHistoryKeys(archiveId);
+  return isSentimentHotCandidateRepeatEligibleWithState(
+    candidate,
+    shownHistoryKeys,
+    getSentimentHotShownHistoryAtMap(archiveId),
+    options,
+  );
+}
+
+export interface SentimentHotFallbackOrderOptions {
+  allowShownRepeat?: boolean;
+  cooldownMs?: number;
+  now?: number;
+}
+
+export function orderSentimentHotCandidatesForLegacyFallback(candidates: SentimentHotCandidate[], archiveId: string, options?: SentimentHotFallbackOrderOptions): SentimentHotCandidate[] {
   const shownHistoryKeys = getSentimentHotShownHistoryKeys(archiveId);
   const shownAtMap = getSentimentHotShownHistoryAtMap(archiveId);
+  const allowShownRepeat = options?.allowShownRepeat === true;
+  const now = options?.now ?? Date.now();
+  const cooldownMs = Math.max(0, Number(options?.cooldownMs ?? SENTIMENT_HOT_REPEAT_COOLDOWN_MS));
+  const rotationBucket = Math.floor(now / SENTIMENT_HOT_REPEAT_ROTATION_BUCKET_MS);
   const shownAt = (candidate: SentimentHotCandidate) => {
     const values = getSentimentHotCandidateHistoryKeys(candidate)
       .map((key) => shownAtMap.get(key))
@@ -3076,14 +3131,30 @@ export function orderSentimentHotCandidatesForLegacyFallback(candidates: Sentime
   };
   const isShown = (candidate: SentimentHotCandidate) => getSentimentHotCandidateHistoryKeys(candidate)
     .some((key) => shownHistoryKeys.has(key));
+  const isCooldownEligible = (candidate: SentimentHotCandidate) => isSentimentHotCandidateRepeatEligibleWithState(
+    candidate,
+    shownHistoryKeys,
+    shownAtMap,
+    { cooldownMs, now },
+  );
+  const rotationKey = (candidate: SentimentHotCandidate) => crypto
+    .createHash("sha1")
+    .update(`${candidate.id}:${rotationBucket}`)
+    .digest("hex");
   const unique: SentimentHotCandidate[] = [];
   const sorted = [...candidates].sort((a, b) => {
     const aShown = isShown(a) ? 1 : 0;
     const bShown = isShown(b) ? 1 : 0;
     if (aShown !== bShown) return aShown - bShown;
     if (aShown) {
+      if (allowShownRepeat) {
+        const aCoolingDown = isCooldownEligible(a) ? 0 : 1;
+        const bCoolingDown = isCooldownEligible(b) ? 0 : 1;
+        if (aCoolingDown !== bCoolingDown) return aCoolingDown - bCoolingDown;
+      }
       const shownDelta = shownAt(a) - shownAt(b);
       if (shownDelta !== 0) return shownDelta;
+      if (allowShownRepeat) return rotationKey(a).localeCompare(rotationKey(b));
     }
     return compareSentimentHotFreshness(a, b) || Number(b.hotScore || 0) - Number(a.hotScore || 0);
   });
@@ -3095,6 +3166,35 @@ export function orderSentimentHotCandidatesForLegacyFallback(candidates: Sentime
     unique.push(candidate);
   }
   return unique;
+}
+
+function collectSentimentHotSupplementCandidates(args: {
+  ordered: SentimentHotCandidate[];
+  archiveId: string;
+  selectedKeys: Set<string>;
+  limit: number;
+  strictFreshOnly: boolean;
+}): SentimentHotCandidate[] {
+  const out: SentimentHotCandidate[] = [];
+  const seenKeys = new Set<string>();
+  const shownHistoryKeys = getSentimentHotShownHistoryKeys(args.archiveId);
+  const shownAtMap = getSentimentHotShownHistoryAtMap(args.archiveId);
+  const add = (candidate: SentimentHotCandidate, requireCooldown: boolean) => {
+    if (out.length >= args.limit) return;
+    if (args.strictFreshOnly && isHistoricalSupplementCandidate(candidate)) return;
+    if (args.strictFreshOnly && requireCooldown && !isSentimentHotCandidateRepeatEligibleWithState(candidate, shownHistoryKeys, shownAtMap)) return;
+    const historyKeys = getSentimentHotCandidateHistoryKeys(candidate);
+    if (historyKeys.some((key) => args.selectedKeys.has(key) || seenKeys.has(key))) return;
+    historyKeys.forEach((key) => seenKeys.add(key));
+    out.push(candidate);
+  };
+  // First use never-recently-shown candidates. If the pool is still short,
+  // allow a controlled emergency rotation (oldest/hash-rotated first).
+  for (const candidate of args.ordered) add(candidate, true);
+  if (out.length < args.limit) {
+    for (const candidate of args.ordered) add(candidate, false);
+  }
+  return out;
 }
 
 function candidateLooksOffTopic(candidate: SentimentHotCandidate): boolean {
@@ -3575,7 +3675,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
 
       if (template) {
         const shouldPageQueries = args.limit >= 40;
-        const queries = args.queries.slice(0, shouldPageQueries ? Math.min(24, THREADS_BROWSER_QUERY_LIMIT) : THREADS_BROWSER_QUERY_LIMIT);
+        const queries = args.queries.slice(0, THREADS_BROWSER_QUERY_LIMIT);
         const searchPages: any[] = [page];
         const requestedPageCount = Math.min(THREADS_BROWSER_PAGE_LIMIT, queries.length);
         if (requestedPageCount > 1 && (!args.deadlineAt || remainingSentimentDeadlineMs(args.deadlineAt, 0) >= 4_000)) {
