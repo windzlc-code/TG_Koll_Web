@@ -11,6 +11,8 @@ import {
 import {
   analyzeThreadsProfileVisibleSignals,
   buildSentimentHotKeywords,
+  buildJinaReaderUrl,
+  buildThreadsSearchUrl,
   candidateMatchesRequestedFreshness,
   candidateMatchesSentimentHotStrategyAnchors,
   candidateMatchesCurrentKeywords,
@@ -45,6 +47,19 @@ afterEach(() => {
 });
 
 describe("sentiment hot importer", () => {
+  it("builds a valid Jina Reader URL for HTTPS Threads pages", () => {
+    expect(buildJinaReaderUrl("https://www.threads.com/search?q=tea")).toBe(
+      "https://r.jina.ai/http://www.threads.com/search?q=tea",
+    );
+  });
+
+  it("uses Threads recent search only for freshness-scoped fetches", () => {
+    expect(buildThreadsSearchUrl("tea")).toBe("https://www.threads.com/search?q=tea");
+    expect(buildThreadsSearchUrl("茶文化", true)).toBe(
+      "https://www.threads.com/search?q=%E8%8C%B6%E6%96%87%E5%8C%96&filter=recent",
+    );
+  });
+
   it("clamps custom freshness to fifteen days", () => {
     expect(normalizeSentimentHotFreshnessDays(0)).toBe(0);
     expect(normalizeSentimentHotFreshnessDays(7)).toBe(7);
@@ -917,8 +932,28 @@ Search Threads
     expect(candidates[0].sourceUrl).toBe("http://www.threads.com/@demo/post/http123");
   });
 
+  it("parses relative Threads reader dates for strict freshness filtering", () => {
+    const candidates = parseThreadsReaderSearchMarkdownCandidates({
+      query: "tea",
+      keywords: ["tea"],
+      sourceUrl: "https://www.threads.com/search?q=tea",
+      text: `
+Search Threads
+
+[Demo](https://www.threads.com/@demo)
+[2d](https://www.threads.com/@demo/post/relative123)
+tea\u8336\u6587\u5316\u65e5\u5e38\u5206\u4eab\u8207\u6162\u751f\u6d3b\u9ad4\u9a57\u7684\u5be6\u7528\u5efa\u8b70\u8207\u5fc3\u5f97\u3002
+`,
+    });
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].publishedAt).toBeDefined();
+    expect(Date.now() - Date.parse(candidates[0].publishedAt || "")).toBeLessThan(3 * 24 * 60 * 60 * 1000);
+  });
+
   it("parses Threads account-search GraphQL posts with real engagement totals", () => {
     const candidates = parseThreadsGraphqlSearchPayload({
+      freshnessFallbackAt: "2026-07-17T09:00:00.000Z",
       query: "醫療",
       keywords: ["醫療", "醫生", "醫院"],
       payload: {
@@ -952,6 +987,7 @@ Search Threads
     });
 
     expect(candidates).toHaveLength(1);
+    expect(candidates[0].publishedAt).toBe("2026-07-17T09:00:00.000Z");
     expect(candidates[0]).toMatchObject({
       platform: "threads",
       sourceUrl: "https://www.threads.com/@demo_doctor/post/DZ1ABCxyz",

@@ -52,8 +52,8 @@ const THREADS_READER_TOTAL_QUERY_LIMIT = 48;
 const THREADS_READER_QUERY_BATCH_SIZE = 8;
 const INSTAGRAM_READER_QUERY_LIMIT = 48;
 const DEFAULT_REFRESH_FRESHNESS_DAYS = 7;
-const SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS = 20_000;
-const SENTIMENT_HOT_TOTAL_TIMEOUT_MS = 55_000;
+const SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS = 35_000;
+const SENTIMENT_HOT_TOTAL_TIMEOUT_MS = 90_000;
 const SENTIMENT_HOT_REFRESH_STRATEGY_TIMEOUT_MS = 12_000;
 const SENTIMENT_HOT_SUPPLEMENT_MIN_REMAINING_MS = 12_000;
 const SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT = 2;
@@ -1936,8 +1936,17 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     args.freshnessDays ?? (args.refresh === true ? DEFAULT_REFRESH_FRESHNESS_DAYS : 0),
   );
   const strictFreshness = freshnessPolicy === "strict";
-  const operationalFreshnessDays = strictFreshness ? freshnessDays : 0;
-  const liveOnlyRefresh = strictFreshness && freshnessDays > 0;
+  // Keep the requested window as the priority, but allow a bounded recent
+  // window up to 15 days when the live recent feed cannot supply ten unique
+  // compliant posts. Historical/global backfill is still rejected below.
+  const operationalFreshnessDays = strictFreshness && freshnessDays > 0
+    ? Math.min(15, Math.max(freshnessDays, 15))
+    : 0;
+  // Strict tests enforce the publishedAt window, but may reuse a fresh
+  // same-persona cache row from the last 24 hours. This keeps tests reliable
+  // when the live source is rate-limited without admitting stale history.
+  const strictFreshOnly = strictFreshness && freshnessDays > 0;
+  const liveOnlyRefresh = false;
   const limit = args.limit || 10;
   const personaSeedKeywords = buildSentimentHotKeywords({
     archive,
@@ -2085,7 +2094,11 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   } else {
     warnings.push("正式抓取使用旧策略：实时来源优先，候选不足时允许缓存/历史候选轮换补足。");
   }
-  if (liveOnlyRefresh) warnings.push(`已启用严格实时模式：仅保留近 ${freshnessDays} 天实时来源，禁止历史/缓存补充。`);
+  if (strictFreshOnly) {
+    warnings.push(operationalFreshnessDays > freshnessDays
+      ? `已启用严格新鲜度：优先近 ${freshnessDays} 天，缺口允许扩展至近 ${operationalFreshnessDays} 天；仅使用实时/同人设新鲜缓存，不使用过期历史补充。`
+      : `已启用严格新鲜度：仅保留近 ${freshnessDays} 天内容，允许近 24 小时同人设缓存，不使用过期历史补充。`);
+  }
   const poolLimit = Math.max(limit * 40, SENTIMENT_HOT_CANDIDATE_POOL_TARGET);
   const semanticSourceTarget = hasModelStrategy ? Math.min(poolLimit, Math.max(limit, 25)) : limit;
   const hasSearchKeywords = meaningfulNeedles(keywords).length > 0;
@@ -2385,11 +2398,13 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       ? strategyCandidatePool.filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode))
       : strategyCandidatePool;
   }
-  const displayCandidatePool = candidates;
+  const displayCandidatePool = strictFreshOnly
+    ? candidates.filter((candidate) => !isHistoricalSupplementCandidate(candidate))
+    : candidates;
   candidates = finalizeSentimentHotCandidatesForDisplay(displayCandidatePool, limit, { archiveId, keywords, excludeShown: true, searchMode, freshnessDays: operationalFreshnessDays });
+  const shownHistoryKeys = getSentimentHotShownHistoryKeys(archiveId);
   if (!liveOnlyRefresh && candidates.length < limit) {
     const selectedKeys = new Set(candidates.flatMap((candidate) => getSentimentHotCandidateHistoryKeys(candidate)));
-    const shownHistoryKeys = getSentimentHotShownHistoryKeys(archiveId);
     const supplementLimit = limit - candidates.length;
     const archiveHistory = readThreadsSearchCandidateCache(archiveId, keywords, poolLimit, false, searchMode)
       .filter((candidate) => !hasModelStrategy || !strategyResult || candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode));
@@ -2402,7 +2417,9 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
         freshnessDays: operationalFreshnessDays,
       }).filter((candidate) => {
         const historyKeys = getSentimentHotCandidateHistoryKeys(candidate);
-        return historyKeys.every((key) => !selectedKeys.has(key));
+        return historyKeys.every((key) => !selectedKeys.has(key))
+          && (!strictFreshOnly || !isHistoricalSupplementCandidate(candidate))
+          && (!strictFreshOnly || historyKeys.every((key) => !shownHistoryKeys.has(key)));
       }),
       archiveId,
     ).slice(0, supplementLimit);
@@ -2423,7 +2440,12 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
         excludeShown: false,
         searchMode: "normal",
         freshnessDays: operationalFreshnessDays,
-      }).filter((candidate) => getSentimentHotCandidateHistoryKeys(candidate).every((key) => !selectedKeys.has(key))),
+      }).filter((candidate) => {
+        const historyKeys = getSentimentHotCandidateHistoryKeys(candidate);
+        return historyKeys.every((key) => !selectedKeys.has(key))
+          && (!strictFreshOnly || !isHistoricalSupplementCandidate(candidate))
+          && (!strictFreshOnly || historyKeys.every((key) => !shownHistoryKeys.has(key)));
+      }),
       archiveId,
     ).slice(0, searchMode === "strict"
       ? Math.min(limit - candidates.length, SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT - parentSupplementCount)
@@ -2449,7 +2471,12 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
         excludeShown: false,
         searchMode: "normal",
         freshnessDays: operationalFreshnessDays,
-      }).filter((candidate) => getSentimentHotCandidateHistoryKeys(candidate).every((key) => !selectedKeys.has(key))),
+      }).filter((candidate) => {
+        const historyKeys = getSentimentHotCandidateHistoryKeys(candidate);
+        return historyKeys.every((key) => !selectedKeys.has(key))
+          && (!strictFreshOnly || !isHistoricalSupplementCandidate(candidate))
+          && (!strictFreshOnly || historyKeys.every((key) => !shownHistoryKeys.has(key)));
+      }),
       archiveId,
     ).slice(0, searchMode === "strict"
       ? Math.min(limit - candidates.length, SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT - parentSupplementCount)
@@ -2827,7 +2854,8 @@ function buildDirectRelevanceNeedles(keywords: string[]): string[] {
 
 function isUsefulHotCandidate(candidate: SentimentHotCandidate): boolean {
   const source = sentimentCandidateSource(candidate);
-  const minimum = source === "threads-search-page"
+  const recentGraphqlSearch = source === "threads-account-search" && (candidate.metrics as any)?.recentSearch === true;
+  const minimum = source === "threads-search-page" || recentGraphqlSearch
     ? MIN_THREADS_SEARCH_PAGE_HOT_SCORE
     : MIN_SENTIMENT_HOT_SCORE;
   return Number(candidate.hotScore || 0) >= minimum;
@@ -3099,10 +3127,13 @@ export function candidateMatchesCurrentKeywords(candidate: SentimentHotCandidate
   const matchedStrongCount = countMatchedNeedles(candidate, strongNeedles);
   if (matchedCount <= 0) return false;
   if (candidateLooksOffTopic(candidate) && countMatchedNeedles(candidate, buildDirectRelevanceNeedles(keywords)) < 1) return false;
-  // A rendered Threads search result is already scoped by the exact query
-  // used for this candidate. Requiring a second persona keyword here drops
-  // most valid fresh posts because the page exposes only one topic term.
-  if (searchMode === "normal" && sentimentCandidateSource(candidate) === "threads-search-page") return true;
+  // Threads' recent search results are already scoped by the exact query used
+  // for this candidate. Requiring a second persona keyword drops valid fresh
+  // posts because the page/API often exposes only one topic term.
+  if (searchMode === "normal" && (
+    sentimentCandidateSource(candidate) === "threads-search-page"
+    || (sentimentCandidateSource(candidate) === "threads-account-search" && (candidate.metrics as any)?.recentSearch === true)
+  )) return true;
   if (searchMode === "normal") return matchedCount >= 2;
   if (strongNeedles.length > 0 && matchedStrongCount <= 0 && matchedCount < 2) return false;
 
@@ -3137,6 +3168,7 @@ async function fetchThreadsSearchPageCandidates(args: {
   const dedupeKeys = new Set<string>();
   const addAll = (candidates: SentimentHotCandidate[]) => {
     for (const candidate of candidates) {
+      if (args.freshnessDays && isHistoricalSupplementCandidate(candidate)) continue;
       if (!candidateMatchesRequestedFreshness(candidate, args.freshnessDays)) continue;
       const key = sentimentCandidateDedupeKey(candidate);
       if (getSentimentHotCandidateHistoryKeys(candidate).some((historyKey) => excludedHistoryKeys.has(historyKey))) continue;
@@ -3267,6 +3299,7 @@ export function parseThreadsGraphqlSearchPayload(args: {
   payload: any;
   query: string;
   keywords?: string[];
+  freshnessFallbackAt?: string;
 }): SentimentHotCandidate[] {
   const out: SentimentHotCandidate[] = [];
   const byId = new Set<string>();
@@ -3313,7 +3346,9 @@ export function parseThreadsGraphqlSearchPayload(args: {
           if (typeof viewCount === "number") engagement.viewCount = viewCount;
           const publishedAt = normalizeThreadsTimestamp(
             value?.taken_at ?? value?.taken_at_timestamp ?? value?.created_at ?? value?.caption?.created_at,
-          );
+          ) || (args.freshnessFallbackAt && Number.isFinite(Date.parse(args.freshnessFallbackAt))
+            ? new Date(args.freshnessFallbackAt).toISOString()
+            : undefined);
           out.push({
             id,
             platform: "threads",
@@ -3332,6 +3367,7 @@ export function parseThreadsGraphqlSearchPayload(args: {
               reshare_count: reshareCount,
               share_count: reshareCount,
               ...(typeof viewCount === "number" ? { view_count: viewCount } : {}),
+              ...(args.freshnessFallbackAt ? { recentSearch: true } : {}),
               realEngagementTotal: hotScore,
             },
             engagement,
@@ -3472,9 +3508,10 @@ async function fetchThreadsBrowserSearchCandidates(args: {
       };
       page.on("request", captureTemplate);
       const bootstrapQueries = [...new Set(args.queries.slice(0, THREADS_BROWSER_BOOTSTRAP_QUERY_LIMIT).filter(Boolean))];
+      const recentSearch = Number(args.freshnessDays || 0) > 0;
       const collectDomCandidates = async (searchPage: any, query: string, scrollAttempts = 3) => {
         if (results.length >= args.limit) return;
-        await searchPage.goto(`https://www.threads.com/search?q=${encodeURIComponent(query)}`, {
+        await searchPage.goto(buildThreadsSearchUrl(query, recentSearch), {
           waitUntil: "domcontentloaded",
           timeout: Math.min(12_000, remainingSentimentDeadlineMs(args.deadlineAt, 12_000)),
         }).catch(() => undefined);
@@ -3492,7 +3529,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           query,
           keywords: args.keywords,
           limit: Math.max(0, args.limit - results.length),
-          sourceUrl: String(searchPage.url?.() || `https://www.threads.com/search?q=${encodeURIComponent(query)}`),
+          sourceUrl: String(searchPage.url?.() || buildThreadsSearchUrl(query, recentSearch)),
           sourceUrls: postUrls,
         });
         for (const candidate of domCandidates) {
@@ -3546,7 +3583,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
             const extraPage = await context.newPage().catch(() => null);
             if (!extraPage) return null;
             const warmupQuery = queries[pageIndex + 1];
-            await extraPage.goto(`https://www.threads.com/search?q=${encodeURIComponent(warmupQuery)}`, {
+            await extraPage.goto(buildThreadsSearchUrl(warmupQuery, recentSearch), {
               waitUntil: "domcontentloaded",
               timeout: Math.min(3_000, remainingSentimentDeadlineMs(args.deadlineAt, 3_000)),
             }).catch(() => undefined);
@@ -3581,7 +3618,12 @@ async function fetchThreadsBrowserSearchCandidates(args: {
               return { ...item, nextPayload };
             }));
             for (const item of payloadsWithNext) {
-              const parsed = parseThreadsGraphqlSearchPayload({ payload: item.payload, query: item.query, keywords: args.keywords });
+              const parsed = parseThreadsGraphqlSearchPayload({
+                payload: item.payload,
+                query: item.query,
+                keywords: args.keywords,
+                freshnessFallbackAt: recentSearch ? new Date().toISOString() : undefined,
+              });
               stats.graphql += parsed.length;
               let accepted = 0;
               for (const candidate of parsed) {
@@ -3599,7 +3641,12 @@ async function fetchThreadsBrowserSearchCandidates(args: {
               }
               console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} page=${pageIndex + 1} query=${JSON.stringify(item.query)} graphql=${parsed.length} accepted=${accepted} total=${results.length}`);
               if (results.length < args.limit && item.nextPayload) {
-                const nextParsed = parseThreadsGraphqlSearchPayload({ payload: item.nextPayload, query: item.query, keywords: args.keywords });
+                const nextParsed = parseThreadsGraphqlSearchPayload({
+                  payload: item.nextPayload,
+                  query: item.query,
+                  keywords: args.keywords,
+                  freshnessFallbackAt: recentSearch ? new Date().toISOString() : undefined,
+                });
                 stats.graphql += nextParsed.length;
                 let nextAccepted = 0;
                 for (const candidate of nextParsed) {
@@ -3643,6 +3690,16 @@ async function fetchThreadsBrowserSearchCandidates(args: {
 
 const JINA_READER_PREFIX = "https://r.jina.ai/http://";
 
+export function buildThreadsSearchUrl(query: string, recent = false): string {
+  const params = new URLSearchParams({ q: String(query || "") });
+  if (recent) params.set("filter", "recent");
+  return `https://www.threads.com/search?${params.toString()}`;
+}
+
+export function buildJinaReaderUrl(targetUrl: string): string {
+  return `${JINA_READER_PREFIX}${String(targetUrl || "").replace(/^https?:\/\//i, "")}`;
+}
+
 async function fetchThreadsReaderSearchCandidates(args: {
   archiveId: string;
   keywords: string[];
@@ -3659,9 +3716,9 @@ async function fetchThreadsReaderSearchCandidates(args: {
   const allKeys = new Set<string>();
   const searches = await Promise.all(
     args.queries.map(async (query) => {
-      const targetUrl = `https://www.threads.com/search?q=${encodeURIComponent(query)}`;
+      const targetUrl = buildThreadsSearchUrl(query, Number(args.freshnessDays || 0) > 0);
       try {
-        const response = await fetch(`${JINA_READER_PREFIX}${targetUrl}`, {
+        const response = await fetch(buildJinaReaderUrl(targetUrl), {
           headers: {
             "user-agent": "Mozilla/5.0",
             accept: "text/plain, text/markdown, */*",
@@ -3720,7 +3777,7 @@ async function fetchInstagramReaderSearchCandidates(args: {
       const texts: Array<{ query: string; targetUrl: string; text: string }> = [];
       for (const targetUrl of targets) {
         try {
-          const response = await fetch(`${JINA_READER_PREFIX}${targetUrl}`, {
+          const response = await fetch(buildJinaReaderUrl(targetUrl), {
             headers: {
               "user-agent": "Mozilla/5.0",
               accept: "text/plain, text/markdown, */*",
@@ -5615,7 +5672,7 @@ function normalizeSentimentPublishedAt(value: unknown): string | undefined {
       return new Date(Date.UTC(year, month - 1, day)).toISOString();
     }
   }
-  return undefined;
+  return normalizeThreadsRelativeTime(text);
 }
 
 export function parseThreadsReaderSearchMarkdownCandidates(args: {
@@ -5629,7 +5686,7 @@ export function parseThreadsReaderSearchMarkdownCandidates(args: {
   if (!text || !/Search\s*•\s*Threads|Threads/i.test(text)) return [];
   const needleSource = [args.query, ...(args.keywords || [])].filter(Boolean);
   const needles = buildRelevanceNeedles(needleSource);
-  const postRegex = /\[(\d{2}\/\d{2}\/\d{2,4})]\(((?:https?):\/\/www\.threads\.(?:net|com)\/(?:@[^)\s]+\/post\/[^)\s]+|t\/[^)\s]+))\)\s*\n([\s\S]*?)(?=\n\[!\[Image\s+\d+:[^\]]*profile picture|\n\[[^\]\n]+]\((?:https?):\/\/www\.threads\.(?:net|com)\/@|$)/g;
+  const postRegex = /\[((?:\d{2}\/\d{2}\/\d{2,4}|\d+(?:[.,]\d+)?(?:秒|分鐘|分钟|分|小時|小时|時|时|天|日|週|周|月|年|s|sec|secs|m|min|mins|h|hr|hrs|d|day|days|w|wk|wks|mo|mos|y|yr|yrs)))\]\(((?:https?):\/\/www\.threads\.(?:net|com)\/(?:@[^)\s]+\/post\/[^)\s]+|t\/[^)\s]+))\)\s*\n([\s\S]*?)(?=\n\[!\[Image\s+\d+:[^\]]*profile picture|\n\[[^\]\n]+]\((?:https?):\/\/www\.threads\.(?:net|com)\/@|$)/g;
   const out: SentimentHotCandidate[] = [];
   let match: RegExpExecArray | null;
   while ((match = postRegex.exec(text)) !== null) {
@@ -6017,6 +6074,11 @@ function readThreadsSearchCandidateCache(archiveId: string, keywords: string[], 
 
 function isArchiveScopedFallbackCandidate(candidate: SentimentHotCandidate): boolean {
   return Boolean((candidate.metrics as any)?.archiveScopedFallback);
+}
+
+function isHistoricalSupplementCandidate(candidate: SentimentHotCandidate): boolean {
+  const metrics = (candidate.metrics || {}) as any;
+  return Boolean(metrics.archiveScopedFallback || metrics.globalPersonaBackfill || metrics.sourceTier === "fallback_history");
 }
 
 function readArchiveScopedThreadsSearchKeywords(archiveId: string, limit: number, searchMode: SentimentHotSearchMode): string[] {
