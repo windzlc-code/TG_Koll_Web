@@ -41,7 +41,10 @@ const SENTIMENT_HOT_CANDIDATE_POOL_TARGET = 400;
 const THREADS_SEARCH_CACHE_CANDIDATE_LIMIT = 2000;
 const THREADS_SEARCH_CACHE_MAX_ROWS_PER_ARCHIVE = 40;
 const THREADS_BROWSER_QUERY_LIMIT = 36;
-const THREADS_BROWSER_QUERY_BATCH_SIZE = 6;
+// Keep the total number of in-flight GraphQL requests bounded. Four pages are
+// still used for coverage, but three requests per page avoids the burst that
+// previously caused Threads to throttle or abort otherwise valid searches.
+const THREADS_BROWSER_QUERY_BATCH_SIZE = 3;
 const THREADS_BROWSER_PAGE_LIMIT = 4;
 const THREADS_BROWSER_BOOTSTRAP_QUERY_LIMIT = 3;
 // Threads can render the search page first and emit its GraphQL request a few
@@ -2193,7 +2196,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     const liveDeficit = Math.max(1, semanticSourceTarget - cachedReadyCount);
     const liveCollectionLimit = Math.min(poolLimit, Math.max(semanticSourceTarget, Math.min(30, liveDeficit * 3)));
     const threadsTimeoutMs = Math.min(SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS, remainingSentimentHotTotalBudgetMs(startedAt, 18_000));
-    const threadsCandidates = await measureSentimentStage(
+    let threadsCandidates = await measureSentimentStage(
       warnings,
       "threads-search",
       () => withSentimentTimeout(
@@ -2215,19 +2218,57 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       warnings.push("\u0054\u0068\u0072\u0065\u0061\u0064\u0073\u0020\u0072\u0065\u0061\u0064\u0065\u0072\u0020\u6293\u53d6\u5931\u6557\uff1a" + (error instanceof Error ? error.message : String(error)));
       return [];
     });
-    liveThreadsCandidateCount = threadsCandidates.length;
     const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
     const byKey = new Set(candidates.map((candidate) => sentimentCandidateDedupeKey(candidate)));
-    for (const candidate of threadsCandidates) {
-      if (!candidateMatchesRequestedFreshness(candidate, operationalFreshnessDays)) continue;
-      const dedupeKey = sentimentCandidateDedupeKey(candidate);
-      if (!byId.has(candidate.id) && !byKey.has(dedupeKey)) {
-        byId.set(candidate.id, candidate);
-        byKey.add(dedupeKey);
+    const mergeThreadsCandidates = (items: SentimentHotCandidate[]) => {
+      for (const candidate of items) {
+        if (!candidateMatchesRequestedFreshness(candidate, operationalFreshnessDays)) continue;
+        const dedupeKey = sentimentCandidateDedupeKey(candidate);
+        if (!byId.has(candidate.id) && !byKey.has(dedupeKey)) {
+          byId.set(candidate.id, candidate);
+          byKey.add(dedupeKey);
+        }
       }
-    }
+    };
+    mergeThreadsCandidates(threadsCandidates);
     candidates = sortSentimentHotCandidatePool([...byId.values()], keywords, poolLimit, searchMode);
     channelStats.push(`Threads 原始 ${threadsCandidates.length}，新增 ${Math.max(0, candidates.length - beforeThreadsCount)}`);
+
+    // A single live pass can return mostly low-heat or off-topic posts even
+    // when another query window has usable material. Run one bounded second
+    // round only while the result is still short; queryRound rotates the
+    // search window so this is not a duplicate burst of the first round.
+    if (candidates.length < limit && hasSentimentHotTotalBudget(startedAt, 18_000)) {
+      const secondRoundTimeoutMs = Math.min(20_000, remainingSentimentHotTotalBudgetMs(startedAt, 18_000));
+      if (secondRoundTimeoutMs >= 4_000) {
+        const secondRoundBefore = candidates.length;
+        const secondRoundCandidates = await measureSentimentStage(
+          warnings,
+          "threads-search-round-2",
+          () => withSentimentTimeout(
+            fetchThreadsSearchPageCandidates({
+              archiveId,
+              keywords,
+              queryKeywords,
+              queryRound: 1,
+              limit: Math.min(poolLimit, Math.max(limit, (limit - candidates.length) * 3)),
+              refresh: args.refresh === true,
+              freshnessDays: operationalFreshnessDays,
+              allowCacheFallback: !liveOnlyRefresh,
+              searchMode,
+              deadlineAt: Date.now() + secondRoundTimeoutMs - 500,
+            }),
+            secondRoundTimeoutMs,
+            [],
+          ),
+        ).catch(() => []);
+        threadsCandidates = [...threadsCandidates, ...secondRoundCandidates];
+        mergeThreadsCandidates(secondRoundCandidates);
+        candidates = sortSentimentHotCandidatePool([...byId.values()], keywords, poolLimit, searchMode);
+        channelStats.push(`Threads 第二轮原始 ${secondRoundCandidates.length}，新增 ${Math.max(0, candidates.length - secondRoundBefore)}`);
+      }
+    }
+    liveThreadsCandidateCount = threadsCandidates.length;
   }
   if (candidates.length > 0) {
     warnings.push(shouldFetchLiveCandidates
@@ -2761,7 +2802,12 @@ function buildOrderedSentimentQueries(baseQueries: string[], seed: number, refre
   const pool = buildSentimentRefreshQueryPool(baseQueries);
   const baseSet = new Set(baseQueries);
   const supplemental = pool.filter((query) => !baseSet.has(query));
-  return [...baseQueries, ...rotateSentimentQueries(supplemental, refresh ? seed : 0)];
+  // On refresh, rotate the base window itself. Previously only supplemental
+  // variants were rotated after the base list, but the browser/Reader stages
+  // slice the first 36/24 queries, so repeated refreshes kept searching the
+  // same keywords and never reached the rotated variants.
+  const orderedBase = refresh ? rotateSentimentQueries(baseQueries, seed) : baseQueries;
+  return [...orderedBase, ...rotateSentimentQueries(supplemental, refresh ? seed : 0)];
 }
 
 function buildDynamicSearchQueryVariants(baseQueries: string[]): string[] {
@@ -3259,6 +3305,7 @@ async function fetchThreadsSearchPageCandidates(args: {
   archiveId: string;
   keywords: string[];
   queryKeywords?: string[];
+  queryRound?: number;
   limit: number;
   refresh?: boolean;
   freshnessDays?: number;
@@ -3272,10 +3319,13 @@ async function fetchThreadsSearchPageCandidates(args: {
   const shownIds = getSentimentHotShownIds(args.archiveId);
   const excluded = getSentimentHotRefreshExcludedIds(args.archiveId);
   const excludedHistoryKeys = getSentimentHotShownHistoryKeys(args.archiveId);
+  const queryRound = Math.max(0, Math.floor(Number(args.queryRound) || 0));
+  const baseSeed = shownIds.size + (args.refresh ? Math.floor(shownIds.size / Math.max(1, args.limit)) : 0);
+  const roundSeed = baseSeed + queryRound * Math.max(1, Math.floor(baseQueries.length / 3));
   const queries = buildOrderedSentimentQueries(
     baseQueries,
-    shownIds.size + (args.refresh ? Math.floor(shownIds.size / Math.max(1, args.limit)) : 0),
-    args.refresh === true,
+    roundSeed,
+    args.refresh === true || queryRound > 0,
   );
   if (queries.length === 0) return [];
 
@@ -3829,43 +3879,53 @@ async function fetchThreadsReaderSearchCandidates(args: {
   const excluded = args.excludeIds || (args.refresh ? getSentimentHotRefreshExcludedIds(args.archiveId) : getSentimentHotExcludedIds(args.archiveId));
   const all: SentimentHotCandidate[] = [];
   const allKeys = new Set<string>();
-  const searches = await Promise.all(
-    args.queries.map(async (query) => {
-      const targetUrl = buildThreadsSearchUrl(query, Number(args.freshnessDays || 0) > 0);
-      try {
-        const response = await fetch(buildJinaReaderUrl(targetUrl), {
-          headers: {
-            "user-agent": "Mozilla/5.0",
-            accept: "text/plain, text/markdown, */*",
-            "cache-control": "max-age=300",
-          },
-          signal: AbortSignal.timeout(Math.min(6_000, remainingSentimentDeadlineMs(args.deadlineAt, 6_000))),
-        });
-        if (!response.ok) return { query, targetUrl, text: "" };
-        return { query, targetUrl, text: await response.text() };
-      } catch {
-        return { query, targetUrl, text: "" };
+  const consumeSearches = (searches: Array<{ query: string; targetUrl: string; text: string }>) => {
+    for (const search of searches) {
+      const parsed = parseThreadsReaderSearchMarkdownCandidates({
+        text: search.text,
+        query: search.query,
+        keywords: args.keywords,
+        sourceUrl: search.targetUrl,
+        limit: Math.max(50, args.limit * 5),
+      });
+      for (const candidate of parsed) {
+        if (excluded.has(candidate.id)) continue;
+        const normalized = candidateMeetsDisplayQuality(candidate, args.keywords, args.searchMode, args.freshnessDays);
+        if (!normalized) continue;
+        const dedupeKey = sentimentCandidateDedupeKey(normalized);
+        if (all.some((item) => item.id === normalized.id) || allKeys.has(dedupeKey)) continue;
+        allKeys.add(dedupeKey);
+        all.push(normalized);
+        if (all.length >= args.limit) break;
       }
-    }),
-  );
-  for (const search of searches) {
-    const parsed = parseThreadsReaderSearchMarkdownCandidates({
-      text: search.text,
-      query: search.query,
-      keywords: args.keywords,
-      sourceUrl: search.targetUrl,
-      limit: Math.max(50, args.limit * 5),
-    });
-    for (const candidate of parsed) {
-      if (excluded.has(candidate.id)) continue;
-      const normalized = candidateMeetsDisplayQuality(candidate, args.keywords, args.searchMode, args.freshnessDays);
-      if (!normalized) continue;
-      const dedupeKey = sentimentCandidateDedupeKey(normalized);
-      if (all.some((item) => item.id === normalized.id) || allKeys.has(dedupeKey)) continue;
-      allKeys.add(dedupeKey);
-      all.push(normalized);
       if (all.length >= args.limit) break;
     }
+  };
+  // Jina/Reader is useful as a second source, but firing all 24 requests at
+  // once competes with the browser GraphQL burst. Process bounded batches so
+  // a slow or rate-limited request cannot starve every other query.
+  for (let offset = 0; offset < args.queries.length; offset += THREADS_READER_QUERY_BATCH_SIZE) {
+    if (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 2_000) break;
+    const batchSearches = await Promise.all(
+      args.queries.slice(offset, offset + THREADS_READER_QUERY_BATCH_SIZE).map(async (query) => {
+        const targetUrl = buildThreadsSearchUrl(query, Number(args.freshnessDays || 0) > 0);
+        try {
+          const response = await fetch(buildJinaReaderUrl(targetUrl), {
+            headers: {
+              "user-agent": "Mozilla/5.0",
+              accept: "text/plain, text/markdown, */*",
+              "cache-control": "max-age=300",
+            },
+            signal: AbortSignal.timeout(Math.min(6_000, remainingSentimentDeadlineMs(args.deadlineAt, 6_000))),
+          });
+          if (!response.ok) return { query, targetUrl, text: "" };
+          return { query, targetUrl, text: await response.text() };
+        } catch {
+          return { query, targetUrl, text: "" };
+        }
+      }),
+    );
+    consumeSearches(batchSearches);
     if (all.length >= args.limit) break;
   }
   return sortSentimentHotCandidatePool(all, args.keywords, args.limit, args.searchMode);
