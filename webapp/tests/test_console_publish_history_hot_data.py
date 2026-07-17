@@ -55,6 +55,9 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         self.assertIn("installNodePersonaArchiveBridge();", REFRESH_SCRIPT)
         self.assertIn("updatePersonaArchiveThreadsHotMetrics", REFRESH_SCRIPT)
         self.assertIn(".then(() => process.exit(0))", REFRESH_SCRIPT)
+        self.assertIn("sentimentAuthStatusIsUsable", REFRESH_SCRIPT)
+        self.assertIn('["healthy", "watch"]', REFRESH_SCRIPT)
+        self.assertIn("authorizationNeedsRefresh !== true", REFRESH_SCRIPT)
         self.assertIn("withArchiveFileLock", ARCHIVE_STORE)
         self.assertIn("threads_binding_changed", ARCHIVE_STORE)
 

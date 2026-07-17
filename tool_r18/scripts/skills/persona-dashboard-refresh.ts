@@ -224,6 +224,12 @@ function isCompleteMetrics(metrics: any): boolean {
     && metrics.postMetrics.length >= scannedPosts;
 }
 
+function sentimentAuthStatusIsUsable(status: any): boolean {
+  return ["healthy", "watch"].includes(String(status?.health || ""))
+    && status?.hasRequiredSessionCookie !== false
+    && status?.authorizationNeedsRefresh !== true;
+}
+
 async function main() {
   const targetId = argValue("archive-id");
   const scopedTargetIds = new Set([targetId, ...archiveIdsFromArgs()].filter(Boolean));
@@ -237,10 +243,19 @@ async function main() {
     ok: false,
     message: error instanceof Error ? error.message : String(error || "unknown"),
   }));
-  const auth = useRssHub ? { ok: true, message: "RSSHub 模式不需要浏览器 Cookie", profileKey: "rsshub" } : await getLiveSentimentBrowserAuthProfileBinding("threads").catch((error: any) => ({
-    ok: false,
+  const liveAuthStatus: any = useRssHub ? null : await getLiveSentimentBrowserAuthProfileBinding("threads").catch((error: any) => ({
+    health: "missing",
+    hasRequiredSessionCookie: false,
+    authorizationNeedsRefresh: true,
     message: error instanceof Error ? error.message : String(error || "unknown"),
-  } as any));
+  }));
+  const auth: any = useRssHub
+    ? { ok: true, message: "RSSHub 模式不需要浏览器 Cookie", profileKey: "rsshub" }
+    : {
+        ...liveAuthStatus,
+        ok: sentimentAuthStatusIsUsable(liveAuthStatus),
+        profileKey: liveAuthStatus?.profileKey || "threads",
+      };
   const results: any[] = [];
 
   for (const archive of targets) {
