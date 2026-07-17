@@ -2411,8 +2411,19 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   if (!liveOnlyRefresh && candidates.length < limit) {
     const selectedKeys = new Set(candidates.flatMap((candidate) => getSentimentHotCandidateHistoryKeys(candidate)));
     const supplementLimit = limit - candidates.length;
-    const archiveHistory = readThreadsSearchCandidateCache(archiveId, keywords, poolLimit, false, searchMode)
-      .filter((candidate) => !hasModelStrategy || !strategyResult || candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode));
+    // Re-open the same-persona cache/database for the shortage path. Refresh
+    // searches exclude shown IDs while collecting live results; if the fresh
+    // pool is still short, compliant same-persona rows may rotate back in
+    // under the cooldown policy instead of collapsing the result count.
+    const archiveHistory = [
+      ...readThreadsSearchCandidateCache(archiveId, keywords, poolLimit, false, searchMode),
+      ...(await readCandidatesFromDatabase({
+        archiveId,
+        keywords,
+       limit: poolLimit,
+       excludeShown: false,
+     }).catch(() => [])),
+    ].filter((candidate) => !hasModelStrategy || !strategyResult || candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode));
     const orderedSupplements = orderSentimentHotCandidatesForLegacyFallback(
       finalizeSentimentHotCandidatesForDisplay([...displayCandidatePool, ...archiveHistory], poolLimit, {
         archiveId,
