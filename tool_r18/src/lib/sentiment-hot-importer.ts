@@ -2322,10 +2322,17 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
 
   const hasFastReturnCandidates = cachedReadyCount >= semanticSourceTarget;
 
+  const preInstagramReadyPool = hasModelStrategy && strategyResult
+    ? candidates.filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode))
+    : candidates;
   const preInstagramReadyCount = hasSearchKeywords
-    ? (hasModelStrategy && strategyResult
-      ? candidates.filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode)).length
-      : sortRelevantHotCandidates(candidates, keywords, poolLimit, searchMode).length)
+    ? finalizeSentimentHotCandidatesForDisplay(
+      strictFreshOnly
+        ? preInstagramReadyPool.filter((candidate) => candidateMatchesOperationalFreshness(candidate, operationalFreshnessDays))
+        : preInstagramReadyPool,
+      limit,
+      { archiveId, keywords, excludeShown: true, searchMode, freshnessDays: operationalFreshnessDays },
+    ).length
     : 0;
   if (shouldFetchLiveCandidates && preInstagramReadyCount < limit && hasSentimentHotTotalBudget(startedAt, SENTIMENT_HOT_SUPPLEMENT_MIN_REMAINING_MS)) {
     const beforeInstagramCount = candidates.length;
