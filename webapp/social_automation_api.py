@@ -1186,12 +1186,31 @@ def register_social_automation_routes(app: FastAPI) -> None:
 
     @app.patch("/api/persona_dashboard/automation/proxies/{proxy_id}")
     def api_social_proxy_patch(proxy_id: str, payload: SocialProxyPatchPayload, user: dict[str, Any] = Depends(get_current_user)):
-        _require_proxy_access(proxy_id, user)
+        proxy = _require_proxy_access(proxy_id, user)
+        if str(proxy["market_item_id"] or ""):
+            raise HTTPException(
+                status_code=409,
+                detail="商城代理的连接配置由管理员统一维护，用户只能绑定、检测或释放",
+            )
         return {"ok": True, "proxy": update_social_proxy(proxy_id, payload)}
 
     @app.delete("/api/persona_dashboard/automation/proxies/{proxy_id}")
-    def api_social_proxy_delete(proxy_id: str, user: dict[str, Any] = Depends(get_current_user)):
-        _require_proxy_access(proxy_id, user)
+    def api_social_proxy_delete(
+        proxy_id: str,
+        request: Request,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        proxy = _require_proxy_access(proxy_id, user)
+        if str(proxy["market_item_id"] or ""):
+            from .proxy_market import release_market_proxy
+
+            released = release_market_proxy(
+                proxy_id,
+                owner_user_id=_identity_user_id(user),
+                actor_user_id=int(user.get("id") or 0),
+                request=request,
+            )
+            return {"ok": True, "deleted": 1, "released": True, **released}
         return {"ok": True, "deleted": delete_social_proxy(proxy_id)}
 
     @app.post("/api/persona_dashboard/automation/proxies/{proxy_id}/check")
@@ -5851,8 +5870,32 @@ def _proxy_public_rows(conn: Any, rows: list[Any]) -> list[dict[str, Any]]:
         ).fetchall()
         for account in account_rows:
             bound_accounts.setdefault(str(account["proxy_id"] or ""), []).append(str(account["id"] or ""))
+    market_allocations: dict[str, dict[str, Any]] = {}
+    if proxy_ids:
+        placeholders = ",".join("?" for _ in proxy_ids)
+        allocation_rows = conn.execute(
+            f"""
+            SELECT allocation.social_proxy_id, allocation.id AS allocation_id,
+                   allocation.seen_at, allocation.claimed_at,
+                   item.id AS market_item_id, item.sku, item.display_name,
+                   item.provider_key, item.health_status, item.published_at
+            FROM proxy_market_allocations allocation
+            JOIN proxy_market_items item ON item.id = allocation.item_id
+            WHERE allocation.social_proxy_id IN ({placeholders})
+              AND allocation.status = 'active'
+            """,
+            tuple(proxy_ids),
+        ).fetchall()
+        market_allocations = {
+            str(row["social_proxy_id"] or ""): dict(row)
+            for row in allocation_rows
+        }
     return [
-        _proxy_public(row, bound_account_ids=bound_accounts.get(str(row["id"] or ""), []))
+        _proxy_public(
+            row,
+            bound_account_ids=bound_accounts.get(str(row["id"] or ""), []),
+            market_allocation=market_allocations.get(str(row["id"] or "")),
+        )
         for row in rows
     ]
 
@@ -6070,7 +6113,12 @@ def _apply_runtime_task_preferences(
     return runtime_task
 
 
-def _proxy_public(row: Any, *, bound_account_ids: list[str] | None = None) -> dict[str, Any]:
+def _proxy_public(
+    row: Any,
+    *,
+    bound_account_ids: list[str] | None = None,
+    market_allocation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     item = dict(row)
     last_check_result = _redact_sensitive(
         _loads(item.get("last_check_result"), {}),
@@ -6101,7 +6149,21 @@ def _proxy_public(row: Any, *, bound_account_ids: list[str] | None = None) -> di
         "exit_ip": str(response.get("ip") or last_check_result.get("exit_ip") or last_check_result.get("ip") or ""),
         "created_at": int(item.get("created_at") or 0),
         "updated_at": int(item.get("updated_at") or 0),
+        "market_item_id": str(item.get("market_item_id") or ""),
+        "market_allocation_id": str(item.get("market_allocation_id") or ""),
     }
+    if market_allocation is not None:
+        public["marketplace"] = {
+            "allocation_id": str(market_allocation.get("allocation_id") or ""),
+            "item_id": str(market_allocation.get("market_item_id") or ""),
+            "sku": str(market_allocation.get("sku") or ""),
+            "display_name": str(market_allocation.get("display_name") or ""),
+            "provider_key": str(market_allocation.get("provider_key") or ""),
+            "health_status": str(market_allocation.get("health_status") or "pending"),
+            "claimed_at": int(market_allocation.get("claimed_at") or 0),
+            "published_at": int(market_allocation.get("published_at") or 0),
+            "is_new": int(market_allocation.get("seen_at") or 0) <= 0,
+        }
     if bound_account_ids is not None:
         public["bound_account_count"] = len(bound_account_ids)
         public["bound_account_ids"] = list(bound_account_ids)

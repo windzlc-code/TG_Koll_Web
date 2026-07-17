@@ -91,6 +91,7 @@ from .social_automation_api import (
     stop_social_automation_worker,
     wake_social_automation_worker,
 )
+from .proxy_market import register_proxy_market_routes
 
 
 logger = logging.getLogger(__name__)
@@ -17611,6 +17612,7 @@ def create_app() -> FastAPI:
         exempt = (
             path.startswith("/api/auth/")
             or path.startswith("/api/billing/")
+            or path.startswith("/api/proxy-market/")
             or path.startswith("/api/admin/")
             or path.startswith("/api/internal/")
             or path.endswith("/cancel")
@@ -17827,6 +17829,18 @@ def create_app() -> FastAPI:
             },
         )
 
+    @app.get("/proxy-market.html", include_in_schema=False)
+    def page_proxy_market() -> HTMLResponse:
+        return _html_response_with_versions(
+            "proxy-market.html",
+            replacements={
+                "__OPC_STYLES_VERSION__": _asset_version("assets", "opc", "styles.css"),
+                "__PROXY_MARKET_CSS_VERSION__": _asset_version("assets", "opc", "proxy-market.css"),
+                "__OPC_SCRIPT_VERSION__": _asset_version("assets", "opc", "script.js"),
+                "__PROXY_MARKET_JS_VERSION__": _asset_version("assets", "opc", "proxy-market.js"),
+            },
+        )
+
     @app.get("/profile.html", include_in_schema=False)
     @app.get("/admin-profile.html", include_in_schema=False)
     def page_profile(
@@ -17987,6 +18001,7 @@ def create_app() -> FastAPI:
         return FileResponse(str(STATIC_DIR / "batch.html"))
 
     register_social_automation_routes(app)
+    register_proxy_market_routes(app)
 
     @app.post("/api/auth/apply")
     @app.post("/api/auth/register")

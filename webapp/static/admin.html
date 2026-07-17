@@ -14,6 +14,249 @@
     })();
   </script>
   <link rel="stylesheet" href="/assets/style.css?v=__STYLE_VERSION__">
+  <style>
+    .proxy-market-admin-head-actions,
+    .proxy-market-admin-actions,
+    .proxy-market-table-actions {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .proxy-market-admin-head-actions svg,
+    .proxy-market-admin-actions svg,
+    .proxy-market-table-actions svg {
+      width: 16px;
+      height: 16px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      flex: 0 0 auto;
+    }
+
+    .proxy-market-admin-head-actions .btn,
+    .proxy-market-admin-head-actions button,
+    .proxy-market-admin-actions button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+    }
+
+    .proxy-market-admin-stats {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(110px, 1fr));
+      border-block: 1px solid var(--line, #d9e0e8);
+      margin: 18px 0 14px;
+    }
+
+    .proxy-market-admin-stat {
+      min-width: 0;
+      padding: 12px 14px;
+      border-right: 1px solid var(--line, #d9e0e8);
+    }
+
+    .proxy-market-admin-stat:last-child {
+      border-right: 0;
+    }
+
+    .proxy-market-admin-stat strong {
+      display: block;
+      margin-top: 3px;
+      font-size: 22px;
+      line-height: 1.1;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .proxy-market-admin-filters {
+      display: grid;
+      grid-template-columns: minmax(220px, 1.7fr) minmax(130px, .75fr) minmax(130px, .75fr) auto;
+      gap: 10px;
+      align-items: end;
+    }
+
+    .proxy-market-admin-filters label,
+    .proxy-market-admin-form label,
+    .proxy-market-settings-form label {
+      min-width: 0;
+      margin: 0;
+    }
+
+    .proxy-market-admin-filters label > span,
+    .proxy-market-admin-form label > span,
+    .proxy-market-settings-form label > span {
+      display: block;
+      margin-bottom: 5px;
+    }
+
+    .proxy-market-admin-band {
+      padding-top: 20px;
+      margin-top: 20px;
+      border-top: 1px solid var(--line, #d9e0e8);
+    }
+
+    .proxy-market-admin-band-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 12px;
+    }
+
+    .proxy-market-admin-band-head h3 {
+      margin: 0 0 4px;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+
+    .proxy-market-admin-form {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .proxy-market-admin-form .span-2 {
+      grid-column: span 2;
+    }
+
+    .proxy-market-admin-form .span-4 {
+      grid-column: 1 / -1;
+    }
+
+    .proxy-market-admin-form textarea {
+      min-height: 82px;
+      resize: vertical;
+    }
+
+    .proxy-market-credential-note {
+      display: flex;
+      align-items: center;
+      min-height: 36px;
+      padding: 8px 10px;
+      border-left: 3px solid var(--accent, #2563eb);
+      background: color-mix(in srgb, var(--accent, #2563eb) 7%, transparent);
+    }
+
+    .proxy-market-admin-editor-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+      grid-column: 1 / -1;
+      padding-top: 2px;
+    }
+
+    .proxy-market-admin-table td {
+      vertical-align: middle;
+    }
+
+    .proxy-market-admin-table td > span,
+    .proxy-market-admin-table td > small {
+      display: block;
+      margin-top: 3px;
+    }
+
+    .proxy-market-endpoint {
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 12px;
+      word-break: break-all;
+    }
+
+    .proxy-market-table-actions {
+      min-width: 152px;
+    }
+
+    .proxy-market-table-actions select {
+      width: auto;
+      min-width: 92px;
+      padding-block: 7px;
+    }
+
+    .proxy-market-icon-button {
+      width: 34px;
+      min-width: 34px;
+      height: 34px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .proxy-market-settings-form {
+      display: grid;
+      grid-template-columns: minmax(160px, 220px) minmax(190px, 260px) auto;
+      align-items: end;
+      gap: 12px;
+    }
+
+    .proxy-market-loading {
+      opacity: .65;
+      pointer-events: none;
+    }
+
+    @media (max-width: 1100px) {
+      .proxy-market-admin-stats {
+        grid-template-columns: repeat(3, minmax(110px, 1fr));
+      }
+
+      .proxy-market-admin-stat:nth-child(3) {
+        border-right: 0;
+      }
+
+      .proxy-market-admin-stat:nth-child(n + 4) {
+        border-top: 1px solid var(--line, #d9e0e8);
+      }
+
+      .proxy-market-admin-form {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .proxy-market-admin-form .span-4 {
+        grid-column: 1 / -1;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .proxy-market-admin-head-actions,
+      .proxy-market-admin-band-head,
+      .proxy-market-admin-editor-actions {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .proxy-market-admin-head-actions .btn,
+      .proxy-market-admin-head-actions button,
+      .proxy-market-admin-actions button {
+        width: 100%;
+      }
+
+      .proxy-market-admin-stats,
+      .proxy-market-admin-filters,
+      .proxy-market-admin-form,
+      .proxy-market-settings-form {
+        grid-template-columns: 1fr;
+      }
+
+      .proxy-market-admin-stat,
+      .proxy-market-admin-stat:nth-child(3) {
+        border-right: 0;
+        border-top: 1px solid var(--line, #d9e0e8);
+      }
+
+      .proxy-market-admin-stat:first-child {
+        border-top: 0;
+      }
+
+      .proxy-market-admin-form .span-2,
+      .proxy-market-admin-form .span-4 {
+        grid-column: auto;
+      }
+    }
+  </style>
 </head>
 <body class="page-admin">
   <div class="layout admin-layout">
@@ -67,6 +310,7 @@
           <button type="button" data-page="audit">审计日志</button>
           <button type="button" data-page="security">安全告警 <span class="small" id="adminAlertCount">0</span></button>
           <button type="button" data-page="serviceAccounts">服务账号</button>
+          <button type="button" data-page="proxyMarket">代理商城</button>
           <button type="button" data-page="pricing">额度与计费</button>
           <button type="button" data-page="runtime">系统配置</button>
           <button type="button" data-page="sentimentCookies">舆情 Cookie</button>
@@ -567,7 +811,7 @@
         <form id="serviceAccountForm" class="admin-service-account-form">
           <label><span>名称</span><input id="serviceAccountName" maxlength="120" placeholder="例如 billing-reporter" required></label>
           <label><span>用途</span><input id="serviceAccountPurpose" maxlength="500" placeholder="说明调用方与业务用途"></label>
-          <label><span>权限范围</span><input id="serviceAccountScopes" placeholder="逗号分隔，例如 internal:tg 或 /api/internal/tg/*"></label>
+          <label><span>权限范围</span><input id="serviceAccountScopes" placeholder="逗号分隔，例如 audit:read, users:read"></label>
           <label><span>到期时间</span><input id="serviceAccountExpiresAt" type="datetime-local" required></label>
           <button type="submit" class="primary">创建服务账号</button>
         </form>
@@ -590,6 +834,188 @@
           </table>
         </div>
         <div id="serviceAccountMsg" class="msg" role="status" aria-live="polite"></div>
+      </section>
+
+      <section class="card section admin-page-view" id="secProxyMarket" data-page-view="proxyMarket">
+        <div class="section-head admin-governance-head">
+          <div>
+            <h2>代理商城管理</h2>
+            <div class="meta">维护静态住宅代理库存。连接配置只有通过真实检测后才会发布到公共商城。</div>
+          </div>
+          <div class="proxy-market-admin-head-actions">
+            <a class="btn ghost" href="/proxy-market.html" target="_blank" rel="noopener">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5"></path><path d="M10 14 19 5"></path><path d="M19 13v6H5V5h6"></path></svg>
+              进入公共商城
+            </a>
+            <button id="btnRefreshProxyMarket" type="button" class="ghost">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5"></path><path d="M4 18v-5h5"></path><path d="M6.1 9A7 7 0 0 1 18.7 6L20 11"></path><path d="M17.9 15A7 7 0 0 1 5.3 18L4 13"></path></svg>
+              刷新
+            </button>
+          </div>
+        </div>
+
+        <div class="proxy-market-admin-stats" aria-label="代理库存摘要">
+          <div class="proxy-market-admin-stat"><span class="small">筛选结果</span><strong id="proxyMarketStatTotal">0</strong></div>
+          <div class="proxy-market-admin-stat"><span class="small">可领取</span><strong id="proxyMarketStatAvailable">0</strong></div>
+          <div class="proxy-market-admin-stat"><span class="small">健康</span><strong id="proxyMarketStatHealthy">0</strong></div>
+          <div class="proxy-market-admin-stat"><span class="small">已分配</span><strong id="proxyMarketStatAllocated">0</strong></div>
+          <div class="proxy-market-admin-stat"><span class="small">需处理</span><strong id="proxyMarketStatAttention">0</strong></div>
+        </div>
+
+        <form id="proxyMarketFilterForm" class="proxy-market-admin-filters">
+          <label><span>搜索</span><input id="proxyMarketQuery" type="search" placeholder="SKU、名称、主机或 ISP"></label>
+          <label><span>库存状态</span>
+            <select id="proxyMarketStatusFilter">
+              <option value="">全部</option>
+              <option value="draft">草稿</option>
+              <option value="active">已发布</option>
+              <option value="allocated">已分配</option>
+              <option value="maintenance">维护中</option>
+              <option value="disabled">已禁用</option>
+              <option value="archived">已归档</option>
+            </select>
+          </label>
+          <label><span>健康状态</span>
+            <select id="proxyMarketHealthFilter">
+              <option value="">全部</option>
+              <option value="healthy">健康</option>
+              <option value="pending">待检测</option>
+              <option value="failed">检测失败</option>
+            </select>
+          </label>
+          <div class="proxy-market-admin-actions">
+            <button type="submit" class="primary">筛选</button>
+            <button id="btnResetProxyMarketFilters" type="button" class="ghost" title="重置筛选" aria-label="重置代理商城筛选">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4v6h6"></path><path d="M5.5 15a7 7 0 1 0 .6-7.7L4 10"></path></svg>
+            </button>
+          </div>
+        </form>
+
+        <div class="proxy-market-admin-band">
+          <div class="proxy-market-admin-band-head">
+            <div>
+              <h3>库存</h3>
+              <div class="small" id="proxyMarketInventorySummary">尚未加载</div>
+            </div>
+            <button id="btnNewProxyMarketItem" type="button" class="primary">
+              <svg viewBox="0 0 24 24" aria-hidden="true" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round"><path d="M12 5v14M5 12h14"></path></svg>
+              新建代理
+            </button>
+          </div>
+          <div class="table-wrap admin-table-shell admin-governance-table-shell">
+            <table class="table admin-governance-table proxy-market-admin-table">
+              <thead><tr><th>SKU / 名称</th><th>连接 / 地区</th><th>健康</th><th>库存状态</th><th>价格 / 到期</th><th>操作</th></tr></thead>
+              <tbody id="proxyMarketItemBody">
+                <tr><td colspan="6">进入页面后加载库存...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="proxy-market-admin-band" id="proxyMarketEditor">
+          <div class="proxy-market-admin-band-head">
+            <div>
+              <h3 id="proxyMarketEditorTitle">新建代理</h3>
+              <div class="small" id="proxyMarketEditorHint">先保存草稿，或直接执行真实检测并发布。</div>
+            </div>
+          </div>
+          <form id="proxyMarketItemForm" class="proxy-market-admin-form" novalidate>
+            <label><span>SKU</span><input id="proxyMarketSku" maxlength="80" pattern="[A-Za-z0-9._-]{2,80}" placeholder="TW-TPE-001" required></label>
+            <label><span>显示名称</span><input id="proxyMarketDisplayName" maxlength="120" placeholder="台湾台北静态住宅代理"></label>
+            <label><span>供应商键</span><input id="proxyMarketProviderKey" maxlength="80" placeholder="provider-a"></label>
+            <label><span>代理协议</span><select id="proxyMarketProxyType"><option value="socks5">SOCKS5</option><option value="https">HTTPS</option><option value="http">HTTP</option></select></label>
+
+            <label class="span-2"><span>主机</span><input id="proxyMarketHost" maxlength="255" placeholder="proxy.example.com" required></label>
+            <label><span>端口</span><input id="proxyMarketPort" type="number" min="1" max="65535" inputmode="numeric" required></label>
+            <label><span>到期时间</span><input id="proxyMarketExpiresAt" type="datetime-local"></label>
+
+            <label><span>用户名</span><input id="proxyMarketUsername" maxlength="255" autocomplete="off" placeholder="编辑时留空保留"></label>
+            <label><span>密码</span><input id="proxyMarketPassword" type="password" maxlength="512" autocomplete="new-password" placeholder="编辑时留空保留"></label>
+            <div class="proxy-market-credential-note span-2 small" id="proxyMarketCredentialNote">后台不会回显已保存凭据。编辑时空密码不会覆盖原密码。</div>
+
+            <label><span>国家 / 地区</span><input id="proxyMarketCountry" maxlength="80" placeholder="TW"></label>
+            <label><span>州 / 省</span><input id="proxyMarketRegion" maxlength="100" placeholder="Taipei"></label>
+            <label><span>城市</span><input id="proxyMarketCity" maxlength="100" placeholder="Taipei"></label>
+            <label><span>ISP</span><input id="proxyMarketIsp" maxlength="160" placeholder="ISP 名称"></label>
+
+            <label><span>售价（分）</span><input id="proxyMarketPriceCents" type="number" min="0" step="1" value="0"></label>
+            <label><span>币种</span><input id="proxyMarketCurrency" maxlength="10" value="TWD"></label>
+            <label><span>计费周期</span><select id="proxyMarketBillingCycle"><option value="month">每月</option><option value="week">每周</option><option value="day">每日</option><option value="once">一次性</option></select></label>
+            <label><span>IP 类型</span><input value="静态住宅" disabled></label>
+
+            <label class="span-2"><span>标签</span><input id="proxyMarketTags" placeholder="逗号分隔，例如 台湾, 低延迟"></label>
+            <label class="span-2"><span>适用场景</span><input id="proxyMarketUseCases" placeholder="逗号分隔，例如 社媒运营, 本地化测试"></label>
+            <label class="span-4"><span>公开说明</span><textarea id="proxyMarketDescription" maxlength="1200" placeholder="向商城用户说明线路能力与使用限制"></textarea></label>
+
+            <div class="proxy-market-admin-editor-actions">
+              <span class="small" id="proxyMarketEditorState">当前为新建模式</span>
+              <div class="proxy-market-admin-actions">
+                <button id="btnCancelProxyMarketEdit" type="button" class="ghost">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
+                  清空
+                </button>
+                <button id="btnSaveProxyMarketItem" type="submit" class="ghost">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h12l2 2v14H5Z"></path><path d="M8 4v6h8V4M8 20v-6h8v6"></path></svg>
+                  保存草稿
+                </button>
+                <button id="btnPublishProxyMarketItem" type="button" class="primary">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 12 2.5 2.5L16 9"></path><circle cx="12" cy="12" r="9"></circle></svg>
+                  真实检测并发布
+                </button>
+              </div>
+            </div>
+          </form>
+          <div id="proxyMarketItemMsg" class="msg" role="status" aria-live="polite"></div>
+        </div>
+
+        <div class="proxy-market-admin-band">
+          <div class="proxy-market-admin-band-head">
+            <div>
+              <h3>分配记录</h3>
+              <div class="small" id="proxyMarketAllocationSummary">尚未加载</div>
+            </div>
+            <label><span class="small">状态</span>
+              <select id="proxyMarketAllocationStatus">
+                <option value="">全部</option>
+                <option value="active">使用中</option>
+                <option value="released">已释放</option>
+                <option value="revoked">已回收</option>
+              </select>
+            </label>
+          </div>
+          <div class="table-wrap admin-table-shell admin-governance-table-shell">
+            <table class="table admin-governance-table proxy-market-admin-table">
+              <thead><tr><th>客户</th><th>代理</th><th>状态</th><th>绑定账号</th><th>领取 / 更新</th><th>操作</th></tr></thead>
+              <tbody id="proxyMarketAllocationBody">
+                <tr><td colspan="6">进入页面后加载分配记录...</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div id="proxyMarketAllocationMsg" class="msg" role="status" aria-live="polite"></div>
+        </div>
+
+        <div class="proxy-market-admin-band">
+          <div class="proxy-market-admin-band-head">
+            <div>
+              <h3>领取与健康策略</h3>
+              <div class="small">默认上限适用于未设置单独额度的客户；过期健康检测会阻止代理被领取。</div>
+            </div>
+          </div>
+          <form id="proxyMarketSettingsForm" class="proxy-market-settings-form">
+            <label><span>默认领取上限</span><input id="proxyMarketDefaultClaimLimit" type="number" min="0" max="100" step="1" required></label>
+            <label><span>健康有效时长（小时）</span><input id="proxyMarketHealthMaxAgeHours" type="number" min="0.0834" max="168" step="0.5" required></label>
+            <button type="submit" class="primary">保存设置</button>
+          </form>
+          <div id="proxyMarketSettingsMsg" class="msg" role="status" aria-live="polite"></div>
+          <form id="proxyMarketUserLimitForm" class="proxy-market-settings-form proxy-market-admin-band">
+            <label><span>客户 ID</span><input id="proxyMarketLimitUserId" type="number" min="1" step="1" placeholder="例如 12" required></label>
+            <label><span>客户单独上限</span><input id="proxyMarketUserClaimLimit" type="number" min="0" max="100" step="1" placeholder="留空恢复默认"></label>
+            <button type="submit" class="ghost">保存客户额度</button>
+          </form>
+          <div id="proxyMarketUserLimitMsg" class="msg" role="status" aria-live="polite"></div>
+        </div>
+
+        <div id="proxyMarketMsg" class="msg" role="status" aria-live="polite"></div>
       </section>
 
       <section class="card section admin-page-view" id="secSentimentCookies" data-page-view="sentimentCookies">

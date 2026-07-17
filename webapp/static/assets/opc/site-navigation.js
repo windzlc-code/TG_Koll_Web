@@ -25,6 +25,7 @@
       accounts: "三账号架构",
       scenarios: "应用场景",
       pricing: "订阅方案",
+      proxyMarket: "代理商城",
       difference: "服务差异",
       console: "Web 控制台",
       login: "账号登录",
@@ -78,6 +79,7 @@
       accounts: "三帳架構",
       scenarios: "應用場景",
       pricing: "訂閱方案",
+      proxyMarket: "代理商城",
       difference: "服務差異",
       console: "Web 控制台",
       login: "帳號登入",
@@ -236,6 +238,7 @@
       navLink({ key: "accounts", href: navHref(page, "#agents"), current }),
       navLink({ key: "scenarios", href: navHref(page, "#scenarios"), current }),
       navLink({ key: "pricing", href: "/subscription.html", current }),
+      navLink({ key: "proxyMarket", href: "/proxy-market.html", current }),
       navLink({ key: "difference", href: navHref(page, "#service-difference"), current }),
       navLink({ key: "console", href: "/console.html", current }),
     ].join("");
@@ -665,6 +668,7 @@
       }
       currentSessionMode = session.mode === "admin" ? "admin" : "user";
       showAuthenticatedAccount(header, session.account);
+      void syncProxyMarketBadge();
       return session.account;
     } catch {
       showGuestAccount(header);
@@ -677,7 +681,7 @@
     const page = header.dataset.sitePage || "home";
     const mode = header.dataset.siteMode || (page === "console" ? "authenticated" : "public");
     const resolvedMode = mode === "public" ? page : mode;
-    const current = page === "pricing" || page === "console" ? page : "";
+    const current = page === "pricing" || page === "console" || page === "proxyMarket" ? page : "";
 
     if (mode === "public" && !header.dataset.siteAuthState) header.dataset.siteAuthState = "pending";
 
@@ -744,6 +748,36 @@
     setLogoutPending(logoutPending, logoutMessage);
   }
 
+  async function syncProxyMarketBadge() {
+    if (currentSessionMode === "guest") return;
+    const headers = new Headers({ Accept: "application/json" });
+    if (currentSessionMode === "admin") {
+      headers.set("X-Admin-Console", "1");
+      const workspaceUserId = storedAdminWorkspaceUserId();
+      if (workspaceUserId) headers.set("X-Admin-Workspace-User-ID", workspaceUserId);
+    }
+    try {
+      const response = await fetch("/api/proxy-market/me", {
+        credentials: "same-origin",
+        headers,
+      });
+      if (!response.ok) return;
+      const payload = await response.json();
+      const count = Math.max(0, Number(payload?.unread_catalog_count || 0));
+      document.querySelectorAll('[data-site-nav-key="proxyMarket"]').forEach((link) => {
+        let badge = link.querySelector(".site-nav-badge");
+        if (!badge && count > 0) {
+          badge = document.createElement("span");
+          badge.className = "site-nav-badge";
+          link.appendChild(badge);
+        }
+        if (!badge) return;
+        badge.textContent = count > 99 ? "99+" : String(count);
+        badge.hidden = count <= 0;
+      });
+    } catch {}
+  }
+
   document.addEventListener("click", (event) => {
     document.querySelectorAll("[data-site-mobile-menu][open]").forEach((menu) => {
       if (!menu.contains(event.target)) menu.removeAttribute("open");
@@ -773,7 +807,9 @@
       else delete document.documentElement.dataset.theme;
       setLanguage(DEFAULT_LANGUAGE, { persist: false });
     }
+    if (event.key === "vecto-proxy-market-read") void syncProxyMarketBadge();
   });
+  window.addEventListener("vecto:proxy-market-read", () => void syncProxyMarketBadge());
 
   syncAdminWorkspaceContext();
   document.querySelectorAll("[data-site-header]").forEach(mount);
@@ -794,6 +830,7 @@
     openConsoleEntry,
     markAdminConsoleContext,
     clearAdminConsoleContext,
+    syncProxyMarketBadge,
   };
   window.dispatchEvent(new CustomEvent("vecto:navigation-ready"));
 })();

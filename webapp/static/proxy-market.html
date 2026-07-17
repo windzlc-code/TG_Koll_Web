@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>代理 IP 商城 | Vecto Vanguard OPC</title>
+    <meta name="description" content="瀏覽 Vecto 代理 IP 目錄，依地區、線路與使用情境篩選，登入後將節點加入代理池。" />
+    <link rel="icon" type="image/png" href="/assets/opc/vecto-logo-ui-icon.png?v=20260711" />
+    <link rel="preload" href="/assets/opc/vecto-ai-cockpit.png" as="image" />
+    <link rel="stylesheet" href="/assets/opc/styles.css?v=__OPC_STYLES_VERSION__" />
+    <link rel="stylesheet" href="/assets/opc/site-navigation.css?v=__SITE_NAVIGATION_CSS_VERSION__" />
+    <link rel="stylesheet" href="/assets/opc/proxy-market.css?v=__PROXY_MARKET_CSS_VERSION__" />
+    <script defer src="/assets/opc/site-navigation.js?v=__SITE_NAVIGATION_JS_VERSION__"></script>
+  </head>
+  <body class="proxy-market-page" data-login-redirect="/proxy-market.html">
+    <a class="site-skip-link" href="#main-content" data-site-copy="skip">跳至主要內容</a>
+    <header class="site-header" data-header data-site-header data-site-page="proxyMarket" data-site-mode="public" data-site-auth-state="pending" data-i18n-skip="true">
+      <a class="brand" href="/" aria-label="Vecto 首頁" data-site-home-label>
+        <span class="brand-logo-frame" aria-hidden="true"><img class="brand-logo" src="/assets/opc/vecto-logo-ui-icon.png?v=20260711" alt="" width="1024" height="1024" /></span>
+        <span class="brand-text"><span class="brand-name">Vecto</span><span class="brand-local" data-site-copy="brandLocal">維拓 / 維團</span></span>
+      </a>
+      <nav class="site-nav" aria-label="站內導覽" data-site-navigation>
+        <a data-site-nav-key="solution" href="/#solution"><span data-site-copy="solution">解決方案</span></a>
+        <a data-site-nav-key="accounts" href="/#agents"><span data-site-copy="accounts">三帳架構</span></a>
+        <a data-site-nav-key="scenarios" href="/#scenarios"><span data-site-copy="scenarios">應用場景</span></a>
+        <a data-site-nav-key="pricing" href="/subscription.html"><span data-site-copy="pricing">訂閱方案</span></a>
+        <a class="proxy-market-nav-link" data-site-nav-key="proxyMarket" href="/proxy-market.html" aria-current="page"><span data-site-copy="proxyMarket">代理商城</span></a>
+        <a data-site-nav-key="difference" href="/#service-difference"><span data-site-copy="difference">服務差異</span></a>
+        <a data-site-nav-key="console" href="/console.html" data-console-entry><span data-site-copy="console">Web 控制台</span></a>
+      </nav>
+      <div class="header-actions">
+        <details class="site-mobile-menu" data-site-mobile-menu>
+          <summary class="site-menu-toggle" data-site-menu-toggle aria-expanded="false">
+            <svg class="site-menu-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h14"></path></svg>
+            <span data-site-copy="menu">導覽</span>
+          </summary>
+          <nav class="site-mobile-menu-panel" aria-label="站內導覽" data-site-navigation>
+            <a href="/#solution"><span data-site-copy="solution">解決方案</span></a>
+            <a href="/#agents"><span data-site-copy="accounts">三帳架構</span></a>
+            <a href="/#scenarios"><span data-site-copy="scenarios">應用場景</span></a>
+            <a href="/subscription.html"><span data-site-copy="pricing">訂閱方案</span></a>
+            <a data-site-nav-key="proxyMarket" href="/proxy-market.html" aria-current="page"><span data-site-copy="proxyMarket">代理商城</span></a>
+            <a href="/#service-difference"><span data-site-copy="difference">服務差異</span></a>
+            <a href="/console.html" data-console-entry><span data-site-copy="console">Web 控制台</span></a>
+            <a class="site-mobile-menu-extra" href="/#contact"><span data-site-copy="guest">遊客申請</span></a>
+          </nav>
+        </details>
+        <div class="site-global-controls" aria-label="全域顯示設定" data-site-global-controls>
+          <button id="languageToggle" class="site-icon-button site-language-button" type="button" aria-label="切換語言" aria-pressed="true" data-site-language-toggle>
+            <svg class="site-language-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.4 2.5 3.6 5.5 3.6 9S14.4 18.5 12 21M12 3C9.6 5.5 8.4 8.5 8.4 12s1.2 6.5 3.6 9"></path></svg><span class="site-language-state" data-site-language-state>繁</span>
+          </button>
+        </div>
+        <button class="header-login" type="button" data-open-login><span data-site-copy="login">帳號登入</span></button>
+        <a class="header-action site-guest-action" href="/#contact"><span data-site-copy="guest">遊客申請</span></a>
+      </div>
+    </header>
+
+    <main id="main-content" tabindex="-1">
+      <section class="proxy-market-hero" aria-labelledby="proxy-market-title">
+        <img class="proxy-market-hero-media" src="/assets/opc/vecto-ai-cockpit.png" alt="" width="1536" height="864" fetchpriority="high" />
+        <div class="proxy-market-hero-shade" aria-hidden="true"></div>
+        <div class="proxy-market-hero-copy">
+          <p class="eyebrow">Vecto Network Supply</p>
+          <h1 id="proxy-market-title">靜態住宅代理 IP 商城</h1>
+          <p>從可用地區與線路規格中快速選擇節點。目錄對游客開放，登入後即可將合適的代理加入個人代理池。</p>
+          <a class="button button-primary" href="#catalog">瀏覽可用節點</a>
+        </div>
+      </section>
+
+      <section class="proxy-market-facts" aria-label="商城摘要">
+        <div><span>可瀏覽節點</span><strong id="marketCatalogCount">讀取中</strong></div>
+        <div><span>覆蓋地區</span><strong id="marketRegionCount">讀取中</strong></div>
+        <div><span>我的領取額度</span><strong id="marketQuotaSummary">登入後查看</strong></div>
+        <div><span>交付方式</span><strong>加入個人代理池</strong></div>
+      </section>
+
+      <section class="proxy-market-account" id="marketAccountBar" aria-live="polite">
+        <div class="proxy-market-account-copy">
+          <span id="marketAccountLabel">游客瀏覽</span>
+          <strong id="marketAccountMessage">目錄可直接查看；登入後可領取可用節點。</strong>
+        </div>
+        <button class="button button-primary" type="button" data-market-login>登入後領取</button>
+      </section>
+
+      <section class="proxy-market-filters" aria-labelledby="filter-title">
+        <div class="proxy-market-section-heading">
+          <div>
+            <p class="eyebrow">精準縮小目錄</p>
+            <h2 id="filter-title">節點篩選</h2>
+          </div>
+          <button class="proxy-filter-reset" type="button" id="marketFilterReset">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path><path d="M3 3v5h5"></path></svg>
+            <span>重設</span>
+          </button>
+        </div>
+        <form id="marketFilterForm" class="proxy-filter-form">
+          <label><span>國家 / 地區</span><select id="marketCountryOptions" name="country"><option value="">全部國家</option></select></label>
+          <label><span>州 / 區域</span><select id="marketRegionOptions" name="region"><option value="">全部區域</option></select></label>
+          <label><span>城市</span><select id="marketCityOptions" name="city"><option value="">全部城市</option></select></label>
+          <label><span>網路供應商</span><select id="marketIspOptions" name="isp"><option value="">全部 ISP</option></select></label>
+          <label><span>代理協定</span><select name="proxy_type"><option value="">全部協定</option><option value="http">HTTP</option><option value="https">HTTPS</option><option value="socks5">SOCKS5</option></select></label>
+          <label><span>IP 類型</span><select name="ip_type"><option value="">全部類型</option><option value="static_residential">靜態住宅</option></select></label>
+          <label><span>健康狀態</span><select name="health_status"><option value="">全部健康狀態</option><option value="healthy">健康</option><option value="pending">待檢測</option><option value="failed">異常</option></select></label>
+          <label><span>使用情境</span><select id="marketUseCaseOptions" name="use_case"><option value="">全部情境</option></select></label>
+          <label><span>標籤</span><select id="marketTagOptions" name="tag"><option value="">全部標籤</option></select></label>
+          <label><span>庫存狀態</span><select name="availability"><option value="available">可領取</option><option value="">全部狀態</option><option value="unavailable">暫不可用</option></select></label>
+          <label><span>最低參考價（分）</span><input name="min_price_cents" type="number" min="0" step="1" placeholder="不限" /></label>
+          <label><span>最高參考價（分）</span><input name="max_price_cents" type="number" min="0" step="1" placeholder="不限" /></label>
+          <label><span>至少有效</span><select name="valid_for_days"><option value="">不限</option><option value="7">7 天</option><option value="30">30 天</option><option value="90">90 天</option></select></label>
+          <label><span>排序</span><select name="sort"><option value="">推薦排序</option><option value="newest">最新上架</option><option value="latency">延遲較低</option><option value="price_asc">價格由低至高</option><option value="price_desc">價格由高至低</option></select></label>
+          <label><span>每頁顯示</span><select name="page_size"><option value="12">12 筆</option><option value="24">24 筆</option><option value="48">48 筆</option></select></label>
+          <button class="proxy-filter-submit" type="submit">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg>
+            <span>套用篩選</span>
+          </button>
+        </form>
+      </section>
+
+      <section class="proxy-market-catalog" id="catalog" aria-labelledby="catalog-title">
+        <div class="proxy-market-section-heading catalog-heading">
+          <div>
+            <p class="eyebrow">Live Catalog</p>
+            <h2 id="catalog-title">可用代理節點</h2>
+          </div>
+          <p id="marketResultSummary" class="proxy-result-summary" role="status" aria-live="polite">正在讀取目錄</p>
+        </div>
+
+        <div id="marketCatalogStatus" class="proxy-catalog-status" role="status" aria-live="polite"></div>
+        <div id="marketCatalogGrid" class="proxy-catalog-grid" aria-busy="true">
+          <div class="proxy-card-skeleton" aria-hidden="true"></div>
+          <div class="proxy-card-skeleton" aria-hidden="true"></div>
+          <div class="proxy-card-skeleton" aria-hidden="true"></div>
+        </div>
+
+        <div id="marketEmptyState" class="proxy-empty-state" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M6 7l1 13h10l1-13M9 7V4h6v3"></path><path d="M9 12h6"></path></svg>
+          <h3>目前沒有符合條件的節點</h3>
+          <p>調整地區或線路條件後再查看目錄。</p>
+          <button class="button button-primary" type="button" data-clear-filters>清除篩選</button>
+        </div>
+
+        <nav id="marketPagination" class="proxy-pagination" aria-label="代理目錄分頁" hidden>
+          <button type="button" data-page-action="previous" aria-label="上一頁">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
+          </button>
+          <span id="marketPageSummary">第 1 頁</span>
+          <button type="button" data-page-action="next" aria-label="下一頁">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>
+          </button>
+        </nav>
+      </section>
+    </main>
+
+    <aside id="marketClaimSuccess" class="proxy-claim-success" aria-labelledby="claim-success-title" aria-live="polite" hidden>
+      <div class="proxy-success-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"></path></svg></div>
+      <div>
+        <p class="eyebrow">已完成領取</p>
+        <h2 id="claim-success-title">節點已加入代理池</h2>
+        <p id="marketClaimSuccessCopy">現在可以前往 Web 控制台進行綁定與連線檢查。</p>
+        <div class="proxy-success-actions">
+          <a class="button button-primary" href="/console.html?view=accounts&amp;browser_panel=proxies" data-proxy-pool-link>前往代理池</a>
+          <button class="button button-ghost" type="button" data-close-success>繼續瀏覽</button>
+        </div>
+      </div>
+      <button class="proxy-success-close" type="button" data-close-success aria-label="關閉成功提示">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
+      </button>
+    </aside>
+
+    <footer class="site-footer">
+      <div class="footer-brand">
+        <span class="footer-logo-frame" aria-hidden="true"><img class="footer-logo" src="/assets/opc/vecto-logo-ui-icon.png?v=20260711" alt="" width="1024" height="1024" /></span>
+        <div><strong>Vecto 維拓</strong><span>OPC 超級個體 AI 駕駛艙</span></div>
+      </div>
+      <a class="button button-primary" href="/console.html">開啟 Web 控制台</a>
+    </footer>
+
+    <div class="auth-overlay" id="loginModal" aria-hidden="true">
+      <section class="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
+        <button class="auth-close" type="button" data-close-login aria-label="關閉">×</button>
+        <p class="form-kicker">Vecto OS</p>
+        <h2 id="loginTitle">帳號登入</h2>
+        <p class="auth-copy">登入後將返回目前商城目錄，並可把可用節點加入個人代理池。</p>
+        <form id="homeLoginForm" novalidate>
+          <label class="field" for="loginUsername"><span>帳號</span><input id="loginUsername" name="username" autocomplete="username" required /></label>
+          <label class="field" for="loginPassword">
+            <span>密碼</span>
+            <span class="auth-password-field">
+              <input id="loginPassword" name="password" type="password" autocomplete="current-password" required />
+              <button class="auth-password-toggle" type="button" data-login-password-toggle aria-label="顯示密碼" title="顯示密碼" aria-controls="loginPassword" aria-pressed="false">
+                <svg class="auth-eye-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path>
+                  <circle cx="12" cy="12" r="3"></circle>
+                  <path class="auth-eye-slash" d="M4 20L20 4"></path>
+                </svg>
+              </button>
+            </span>
+          </label>
+          <label class="auth-remember" data-login-remember><input name="remember_me" type="checkbox" /> <span>記住帳號與登入狀態</span></label>
+          <button class="submit-button" type="submit"><span>登入並返回商城</span><span aria-hidden="true">→</span></button>
+          <p class="form-status" id="loginStatus" role="status" aria-live="polite"></p>
+          <button class="auth-takeover-button" type="button" data-login-takeover hidden>強制登入此帳號</button>
+        </form>
+        <a class="auth-guest-link" href="/#contact">尚未有帳號？提交游客申請</a>
+      </section>
+    </div>
+
+    <script src="/assets/vendor/opencc-js/st-characters.js?v=1.4.1"></script>
+    <script src="/assets/vendor/opencc-js/ts-characters.js?v=1.4.1"></script>
+    <script src="/assets/vendor/opencc-js/ts-phrases.js?v=1.4.1"></script>
+    <script src="/assets/opc/script.js?v=__OPC_SCRIPT_VERSION__"></script>
+    <script src="/assets/opc/proxy-market.js?v=__PROXY_MARKET_JS_VERSION__"></script>
+  </body>
+</html>

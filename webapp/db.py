@@ -627,6 +627,79 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS proxy_market_items (
+              id TEXT PRIMARY KEY,
+              sku TEXT NOT NULL UNIQUE COLLATE NOCASE,
+              display_name TEXT NOT NULL,
+              provider_key TEXT NOT NULL DEFAULT '',
+              proxy_type TEXT NOT NULL DEFAULT 'socks5',
+              host TEXT NOT NULL,
+              port INTEGER NOT NULL,
+              credential_owner_user_id INTEGER NOT NULL DEFAULT 0,
+              username_ciphertext TEXT NOT NULL DEFAULT '',
+              password_ciphertext TEXT NOT NULL DEFAULT '',
+              country TEXT NOT NULL DEFAULT '',
+              region TEXT NOT NULL DEFAULT '',
+              city TEXT NOT NULL DEFAULT '',
+              isp TEXT NOT NULL DEFAULT '',
+              ip_type TEXT NOT NULL DEFAULT 'static_residential',
+              description TEXT NOT NULL DEFAULT '',
+              tags_json TEXT NOT NULL DEFAULT '[]',
+              use_cases_json TEXT NOT NULL DEFAULT '[]',
+              display_price_cents INTEGER NOT NULL DEFAULT 0,
+              currency TEXT NOT NULL DEFAULT 'TWD',
+              billing_cycle TEXT NOT NULL DEFAULT 'month',
+              status TEXT NOT NULL DEFAULT 'draft',
+              health_status TEXT NOT NULL DEFAULT 'pending',
+              latency_ms INTEGER NOT NULL DEFAULT 0,
+              last_check_at INTEGER NOT NULL DEFAULT 0,
+              last_check_result_json TEXT NOT NULL DEFAULT '{}',
+              expires_at INTEGER NOT NULL DEFAULT 0,
+              published_at INTEGER NOT NULL DEFAULT 0,
+              created_by INTEGER NOT NULL DEFAULT 0,
+              updated_by INTEGER NOT NULL DEFAULT 0,
+              version INTEGER NOT NULL DEFAULT 1,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS proxy_market_allocations (
+              id TEXT PRIMARY KEY,
+              item_id TEXT NOT NULL,
+              user_id INTEGER NOT NULL,
+              social_proxy_id TEXT NOT NULL,
+              status TEXT NOT NULL DEFAULT 'active',
+              claim_mode TEXT NOT NULL DEFAULT 'free_add',
+              display_price_cents_snapshot INTEGER NOT NULL DEFAULT 0,
+              currency TEXT NOT NULL DEFAULT 'TWD',
+              idempotency_key TEXT NOT NULL DEFAULT '',
+              claimed_at INTEGER NOT NULL,
+              released_at INTEGER NOT NULL DEFAULT 0,
+              seen_at INTEGER NOT NULL DEFAULT 0,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL,
+              FOREIGN KEY(item_id) REFERENCES proxy_market_items(id),
+              FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS proxy_market_user_state (
+              user_id INTEGER PRIMARY KEY,
+              last_catalog_seen_at INTEGER NOT NULL DEFAULT 0,
+              last_proxy_pool_seen_at INTEGER NOT NULL DEFAULT 0,
+              claim_limit_override INTEGER,
+              updated_at INTEGER NOT NULL,
+              FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS social_account_totp_secrets (
               account_id TEXT PRIMARY KEY,
               user_id INTEGER NOT NULL,
@@ -771,6 +844,8 @@ def init_db() -> None:
             "note": "TEXT NOT NULL DEFAULT ''",
             "expires_at": "INTEGER NOT NULL DEFAULT 0",
             "client_request_id": "TEXT NOT NULL DEFAULT ''",
+            "market_item_id": "TEXT NOT NULL DEFAULT ''",
+            "market_allocation_id": "TEXT NOT NULL DEFAULT ''",
         }
         for column, definition in proxy_column_migrations.items():
             if column not in proxy_columns:
@@ -778,6 +853,30 @@ def init_db() -> None:
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_social_proxies_client_request "
             "ON social_proxies(user_id, client_request_id) WHERE client_request_id <> ''"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_social_proxies_market_item "
+            "ON social_proxies(market_item_id) WHERE market_item_id <> ''"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_proxy_market_active_item "
+            "ON proxy_market_allocations(item_id) WHERE status = 'active'"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_proxy_market_active_proxy "
+            "ON proxy_market_allocations(social_proxy_id) WHERE status = 'active'"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_proxy_market_idempotency "
+            "ON proxy_market_allocations(user_id, idempotency_key) WHERE idempotency_key <> ''"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_proxy_market_catalog "
+            "ON proxy_market_items(status, health_status, published_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_proxy_market_user_allocations "
+            "ON proxy_market_allocations(user_id, status, claimed_at DESC)"
         )
         account_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(social_accounts)").fetchall()}
         if "user_id" not in account_columns:

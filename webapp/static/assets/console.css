@@ -9017,6 +9017,25 @@ body.persona-touch-dragging .persona-list-card:active {
   color: var(--panel-solid);
 }
 
+.account-browser-tab-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  margin-left: 6px;
+  padding: 0 5px;
+  color: #06221d;
+  background: #6ee7c6;
+  border-radius: 9px;
+  font-size: 10px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+
+.account-browser-tab-badge[hidden] {
+  display: none;
+}
+
 .account-browser-page {
   min-width: 0;
 }
@@ -10216,6 +10235,40 @@ body.persona-touch-dragging .persona-list-card:active {
   flex: 0 0 auto;
 }
 
+.proxy-pool-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.proxy-market-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 0 11px;
+  color: var(--ink);
+  background: var(--panel-solid);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 850;
+  text-decoration: none;
+}
+
+.proxy-market-link:hover,
+.proxy-market-link:focus-visible {
+  color: #083d34;
+  border-color: #2f9d87;
+  box-shadow: 0 0 0 2px rgba(47, 157, 135, 0.12);
+}
+
+.proxy-market-link svg {
+  width: 17px;
+  height: 17px;
+}
+
 .proxy-pool-add svg {
   width: 17px;
   height: 17px;
@@ -10244,6 +10297,47 @@ body.persona-touch-dragging .persona-list-card:active {
   border: 1px solid var(--line);
   border-radius: 7px;
   background: var(--panel-solid);
+}
+
+.proxy-table-row.is-marketplace {
+  border-left: 3px solid #2f9d87;
+  background: color-mix(in srgb, var(--panel-solid) 96%, #dff8f0);
+}
+
+.proxy-table-row.is-custom {
+  border-left: 3px solid #9aa9b5;
+}
+
+.proxy-source-badge,
+.proxy-new-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  min-height: 20px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1;
+}
+
+.proxy-source-badge.is-marketplace {
+  color: #0b6957;
+  background: #ddf7ef;
+  border: 1px solid #a7dfd1;
+}
+
+.proxy-source-badge.is-custom {
+  color: #4f6170;
+  background: #edf1f4;
+  border: 1px solid #d1dae0;
+}
+
+.proxy-new-badge {
+  margin-top: 3px;
+  color: #7a4300;
+  background: #fff0cf;
+  border: 1px solid #f0c879;
 }
 
 .proxy-table-row--head {

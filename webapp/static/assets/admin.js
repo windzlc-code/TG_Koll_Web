@@ -311,6 +311,7 @@ const ADMIN_PAGE_LABELS = {
   audit: "审计日志",
   security: "安全告警",
   serviceAccounts: "服务账号",
+  proxyMarket: "代理商城",
   pricing: "额度与计费",
   runtime: "系统配置",
   sentimentCookies: "舆情 Cookie",
@@ -548,6 +549,7 @@ function setActiveAdminPage(page, updateHash = true) {
   if (nextPage === "audit") void loadAuditEvents();
   if (nextPage === "security") void loadSecurityAlerts();
   if (nextPage === "serviceAccounts") void loadServiceAccounts();
+  if (nextPage === "proxyMarket") void loadProxyMarketWorkspace();
   return true;
 }
 
@@ -1624,6 +1626,11 @@ const adminState = {
   auditRows: [],
   securityRows: [],
   serviceAccountRows: [],
+  proxyMarketItemRows: [],
+  proxyMarketAllocationRows: [],
+  proxyMarketSelectedItemId: null,
+  proxyMarketSettings: null,
+  proxyMarketLoadingPromise: null,
   customerGroupRows: [],
   customerTagRows: [],
   taxonomyLoadingPromise: null,
@@ -1636,7 +1643,7 @@ const REMOTE_COMFY_TASKS = [
   ["persona_post_image", "推文生成配图"],
 ];
 const TASK_TYPE_LABELS = { text_to_image: "文字生成图片", persona_post_image: "推文生成配图" };
-const ADMIN_PAGES = new Set(["overview", "users", "taxonomy", "tasks", "audit", "security", "serviceAccounts", "pricing", "runtime", "sentimentCookies", "account"]);
+const ADMIN_PAGES = new Set(["overview", "users", "taxonomy", "tasks", "audit", "security", "serviceAccounts", "proxyMarket", "pricing", "runtime", "sentimentCookies", "account"]);
 const ADMIN_PAGE_ALIASES = {
   secOverview: "overview",
   secUsers: "users",
@@ -1645,6 +1652,7 @@ const ADMIN_PAGE_ALIASES = {
   secAudit: "audit",
   secSecurity: "security",
   secServiceAccounts: "serviceAccounts",
+  secProxyMarket: "proxyMarket",
   secPricing: "pricing",
   secRuntime: "runtime",
   secSentimentCookies: "sentimentCookies",
@@ -5270,6 +5278,627 @@ function clearServiceAccountStepUp() {
   ["serviceRotateAdminPassword", "serviceRotateTotpCode", "serviceRotateReason"].forEach((id) => { if (el(id)) el(id).value = ""; });
 }
 
+const PROXY_MARKET_STATUS_LABELS = {
+  draft: "草稿",
+  active: "已发布",
+  allocated: "已分配",
+  maintenance: "维护中",
+  disabled: "已禁用",
+  archived: "已归档",
+  pending: "待检测",
+  healthy: "健康",
+  failed: "检测失败",
+  released: "已释放",
+  revoked: "已回收",
+};
+
+function proxyMarketTone(value) {
+  const status = String(value || "").toLowerCase();
+  if (["healthy", "active"].includes(status)) return "success";
+  if (["pending", "draft", "maintenance"].includes(status)) return "warning";
+  if (["failed", "disabled", "revoked"].includes(status)) return "danger";
+  if (["allocated"].includes(status)) return "info";
+  return "neutral";
+}
+
+function createProxyMarketBadge(value) {
+  const badge = createGovernanceBadge(value, proxyMarketTone(value));
+  badge.textContent = PROXY_MARKET_STATUS_LABELS[String(value || "").toLowerCase()] || String(value || "-");
+  return badge;
+}
+
+function parseProxyMarketList(value) {
+  return [...new Set(String(value || "").split(/[,，\n]+/).map((item) => item.trim()).filter(Boolean))];
+}
+
+function proxyMarketItemById(itemId) {
+  return adminState.proxyMarketItemRows.find((item) => String(item.id || "") === String(itemId || "")) || null;
+}
+
+function formatProxyMarketPrice(item) {
+  const cents = Math.max(0, Number(item?.display_price_cents || 0));
+  const amount = (cents / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `${String(item?.currency || "TWD").toUpperCase()} ${amount}`;
+}
+
+function createProxyMarketIconButton(label, action, itemId, icon, className = "ghost") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `${className} proxy-market-icon-button`;
+  button.dataset.proxyMarketAction = action;
+  button.dataset.id = String(itemId || "");
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${icon}</svg>`;
+  return button;
+}
+
+function renderProxyMarketStats(rows) {
+  const items = Array.isArray(rows) ? rows : [];
+  setText("proxyMarketStatTotal", items.length);
+  setText("proxyMarketStatAvailable", items.filter((item) => Boolean(item.available)).length);
+  setText("proxyMarketStatHealthy", items.filter((item) => String(item.health_status) === "healthy").length);
+  setText("proxyMarketStatAllocated", items.filter((item) => String(item.status) === "allocated").length);
+  setText(
+    "proxyMarketStatAttention",
+    items.filter((item) => (
+      ["pending", "failed"].includes(String(item.health_status))
+      || ["maintenance", "disabled"].includes(String(item.status))
+    )).length,
+  );
+}
+
+function renderProxyMarketItems(payload = {}) {
+  const body = el("proxyMarketItemBody");
+  if (!body) return;
+  const rows = Array.isArray(payload.items) ? payload.items : [];
+  adminState.proxyMarketItemRows = rows;
+  renderProxyMarketStats(rows);
+  setText("proxyMarketInventorySummary", `显示 ${rows.length} 条库存`);
+  body.replaceChildren();
+  if (!rows.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 6;
+    cell.appendChild(createEmptyState("当前筛选条件下没有代理库存"));
+    row.appendChild(cell);
+    body.appendChild(row);
+    return;
+  }
+  rows.forEach((item) => {
+    const row = document.createElement("tr");
+    appendCell(row, item.sku || item.id, item.display_name || "未设置显示名称");
+
+    const endpointCell = document.createElement("td");
+    const endpoint = document.createElement("strong");
+    endpoint.className = "proxy-market-endpoint";
+    endpoint.textContent = `${String(item.proxy_type || "").toUpperCase()} ${item.host || "-"}:${Number(item.port || 0) || "-"}`;
+    const location = document.createElement("span");
+    location.textContent = [item.country, item.region, item.city, item.isp].filter(Boolean).join(" · ") || "未标注地区";
+    endpointCell.append(endpoint, location);
+    row.appendChild(endpointCell);
+
+    const healthCell = document.createElement("td");
+    healthCell.appendChild(createProxyMarketBadge(item.health_status));
+    const healthMeta = document.createElement("span");
+    healthMeta.textContent = item.last_check_at
+      ? `${Number(item.latency_ms || 0)} ms · ${formatTime(item.last_check_at)}`
+      : "尚未检测";
+    healthCell.appendChild(healthMeta);
+    row.appendChild(healthCell);
+
+    const statusCell = document.createElement("td");
+    statusCell.appendChild(createProxyMarketBadge(item.status));
+    const statusMeta = document.createElement("span");
+    statusMeta.textContent = item.available ? "公共商城可领取" : "当前不可领取";
+    statusCell.appendChild(statusMeta);
+    row.appendChild(statusCell);
+
+    const priceCell = document.createElement("td");
+    const price = document.createElement("strong");
+    price.textContent = `${formatProxyMarketPrice(item)} / ${item.billing_cycle || "month"}`;
+    const expiry = document.createElement("span");
+    expiry.textContent = item.expires_at ? `到期 ${formatTime(item.expires_at)}` : "未设置到期时间";
+    priceCell.append(price, expiry);
+    row.appendChild(priceCell);
+
+    const actionCell = document.createElement("td");
+    actionCell.className = "proxy-market-table-actions";
+    const edit = createProxyMarketIconButton(
+      `编辑 ${item.sku || item.id}`,
+      "edit",
+      item.id,
+      '<path d="M4 20h4l11-11-4-4L4 16v4Z"></path><path d="m13.5 6.5 4 4"></path>',
+    );
+    const publish = createProxyMarketIconButton(
+      `真实检测并发布 ${item.sku || item.id}`,
+      "publish",
+      item.id,
+      '<circle cx="12" cy="12" r="9"></circle><path d="m8 12 2.5 2.5L16 9"></path>',
+      "primary",
+    );
+    publish.disabled = String(item.status) === "archived";
+    const status = document.createElement("select");
+    status.dataset.proxyMarketStatus = String(item.id || "");
+    status.setAttribute("aria-label", `${item.sku || item.id} 库存状态`);
+    const currentStatus = String(item.status || "draft");
+    const statusOptions = currentStatus === "draft" || !Number(item.published_at || 0)
+      ? ["draft", "disabled"]
+      : currentStatus === "allocated"
+        ? ["allocated", "maintenance", "disabled"]
+        : ["active", "maintenance", "disabled"];
+    statusOptions.forEach((value) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = PROXY_MARKET_STATUS_LABELS[value];
+      option.selected = currentStatus === value;
+      option.disabled = value === "allocated";
+      status.appendChild(option);
+    });
+    if (currentStatus === "archived") {
+      const option = document.createElement("option");
+      option.value = "archived";
+      option.textContent = PROXY_MARKET_STATUS_LABELS.archived;
+      option.selected = true;
+      status.prepend(option);
+      status.disabled = true;
+    }
+    const archive = createProxyMarketIconButton(
+      `归档 ${item.sku || item.id}`,
+      "archive",
+      item.id,
+      '<path d="M4 7h16v13H4Z"></path><path d="M3 4h18v3H3ZM9 11h6"></path>',
+      "danger",
+    );
+    archive.disabled = String(item.status) === "archived";
+    actionCell.append(edit, publish, status, archive);
+    row.appendChild(actionCell);
+    body.appendChild(row);
+  });
+}
+
+function proxyMarketItemQuery() {
+  const query = new URLSearchParams();
+  const values = {
+    query: el("proxyMarketQuery")?.value?.trim(),
+    status: el("proxyMarketStatusFilter")?.value,
+    health_status: el("proxyMarketHealthFilter")?.value,
+  };
+  Object.entries(values).forEach(([key, value]) => {
+    if (String(value || "").trim()) query.set(key, String(value).trim());
+  });
+  return query.toString();
+}
+
+async function loadProxyMarketItems() {
+  const body = el("proxyMarketItemBody");
+  body?.setAttribute("aria-busy", "true");
+  try {
+    const query = proxyMarketItemQuery();
+    const payload = await api(`/api/admin/proxy-market/items${query ? `?${query}` : ""}`);
+    renderProxyMarketItems(payload || {});
+    setMsg("proxyMarketMsg", "");
+    return payload;
+  } catch (error) {
+    setMsg("proxyMarketMsg", `代理库存读取失败：${getErrorMessage(error)}`, false);
+    throw error;
+  } finally {
+    body?.removeAttribute("aria-busy");
+  }
+}
+
+function renderProxyMarketAllocations(payload = {}) {
+  const body = el("proxyMarketAllocationBody");
+  if (!body) return;
+  const rows = Array.isArray(payload.items) ? payload.items : [];
+  adminState.proxyMarketAllocationRows = rows;
+  setText("proxyMarketAllocationSummary", `显示 ${rows.length} 条分配记录`);
+  body.replaceChildren();
+  if (!rows.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 6;
+    cell.appendChild(createEmptyState("当前筛选条件下没有分配记录"));
+    row.appendChild(cell);
+    body.appendChild(row);
+    return;
+  }
+  rows.forEach((item) => {
+    const row = document.createElement("tr");
+    appendCell(row, item.username || `用户 ${item.user_id || "-"}`, `用户 ID ${item.user_id || "-"}`);
+    appendCell(row, item.display_name || item.sku || item.item_id, item.proxy_name || item.sku || "");
+    const statusCell = document.createElement("td");
+    statusCell.appendChild(createProxyMarketBadge(item.status));
+    row.appendChild(statusCell);
+    appendCell(
+      row,
+      `${Number(item.bound_account_count || 0)} 个绑定账号`,
+      `${Number(item.running_task_count || 0)} 个运行任务 · ${item.social_proxy_id || ""}`,
+    );
+    appendCell(row, formatTime(item.claimed_at), `更新 ${formatTime(item.updated_at || item.claimed_at)}`);
+    const actionCell = document.createElement("td");
+    if (String(item.status) === "active") {
+      const revoke = createProxyMarketIconButton(
+        `回收 ${item.display_name || item.sku || item.id}`,
+        "revoke",
+        item.id,
+        '<path d="M4 4v6h6"></path><path d="M5.5 15a7 7 0 1 0 .6-7.7L4 10"></path>',
+        "danger",
+      );
+      actionCell.appendChild(revoke);
+    } else {
+      actionCell.textContent = "-";
+    }
+    row.appendChild(actionCell);
+    body.appendChild(row);
+  });
+}
+
+async function loadProxyMarketAllocations() {
+  const body = el("proxyMarketAllocationBody");
+  body?.setAttribute("aria-busy", "true");
+  try {
+    const query = new URLSearchParams();
+    if (el("proxyMarketAllocationStatus")?.value) query.set("status", el("proxyMarketAllocationStatus").value);
+    const suffix = query.toString();
+    const payload = await api(`/api/admin/proxy-market/allocations${suffix ? `?${suffix}` : ""}`);
+    renderProxyMarketAllocations(payload || {});
+    setMsg("proxyMarketAllocationMsg", "");
+    return payload;
+  } catch (error) {
+    setMsg("proxyMarketAllocationMsg", `分配记录读取失败：${getErrorMessage(error)}`, false);
+    throw error;
+  } finally {
+    body?.removeAttribute("aria-busy");
+  }
+}
+
+function renderProxyMarketSettings(payload = {}) {
+  const settings = payload.settings && typeof payload.settings === "object" ? payload.settings : payload;
+  adminState.proxyMarketSettings = settings || {};
+  if (el("proxyMarketDefaultClaimLimit")) {
+    el("proxyMarketDefaultClaimLimit").value = String(Number(settings?.default_claim_limit ?? 3));
+  }
+  if (el("proxyMarketHealthMaxAgeHours")) {
+    const hours = Number(settings?.health_max_age_seconds ?? 86400) / 3600;
+    el("proxyMarketHealthMaxAgeHours").value = String(Number(hours.toFixed(4)));
+  }
+}
+
+async function loadProxyMarketSettings() {
+  try {
+    const payload = await api("/api/admin/proxy-market/settings");
+    renderProxyMarketSettings(payload || {});
+    setMsg("proxyMarketSettingsMsg", "");
+    return payload;
+  } catch (error) {
+    setMsg("proxyMarketSettingsMsg", `商城设置读取失败：${getErrorMessage(error)}`, false);
+    throw error;
+  }
+}
+
+async function loadProxyMarketWorkspace() {
+  if (adminState.proxyMarketLoadingPromise) return adminState.proxyMarketLoadingPromise;
+  const section = el("secProxyMarket");
+  section?.classList.add("proxy-market-loading");
+  const request = Promise.allSettled([
+    loadProxyMarketItems(),
+    loadProxyMarketAllocations(),
+    loadProxyMarketSettings(),
+  ]).finally(() => {
+    section?.classList.remove("proxy-market-loading");
+    if (adminState.proxyMarketLoadingPromise === request) adminState.proxyMarketLoadingPromise = null;
+  });
+  adminState.proxyMarketLoadingPromise = request;
+  return request;
+}
+
+function resetProxyMarketEditor({ focus = false } = {}) {
+  adminState.proxyMarketSelectedItemId = null;
+  el("proxyMarketItemForm")?.reset();
+  if (el("proxyMarketSku")) el("proxyMarketSku").disabled = false;
+  if (el("proxyMarketCurrency")) el("proxyMarketCurrency").value = "TWD";
+  if (el("proxyMarketPriceCents")) el("proxyMarketPriceCents").value = "0";
+  if (el("proxyMarketProxyType")) el("proxyMarketProxyType").value = "socks5";
+  if (el("proxyMarketBillingCycle")) el("proxyMarketBillingCycle").value = "month";
+  setText("proxyMarketEditorTitle", "新建代理");
+  setText("proxyMarketEditorHint", "先保存草稿，或直接执行真实检测并发布。");
+  setText("proxyMarketEditorState", "当前为新建模式");
+  setText("proxyMarketCredentialNote", "后台不会回显已保存凭据。编辑时空密码不会覆盖原密码。");
+  setMsg("proxyMarketItemMsg", "");
+  if (focus) {
+    el("proxyMarketEditor")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    window.setTimeout(() => el("proxyMarketSku")?.focus(), 250);
+  }
+}
+
+function editProxyMarketItem(itemId, { focus = true } = {}) {
+  const item = proxyMarketItemById(itemId);
+  if (!item) return;
+  adminState.proxyMarketSelectedItemId = String(item.id || "");
+  const values = {
+    proxyMarketSku: item.sku,
+    proxyMarketDisplayName: item.display_name,
+    proxyMarketProviderKey: item.provider_key,
+    proxyMarketProxyType: item.proxy_type || "socks5",
+    proxyMarketHost: item.host,
+    proxyMarketPort: item.port,
+    proxyMarketExpiresAt: localInputFromTimestamp(item.expires_at),
+    proxyMarketUsername: "",
+    proxyMarketPassword: "",
+    proxyMarketCountry: item.country,
+    proxyMarketRegion: item.region,
+    proxyMarketCity: item.city,
+    proxyMarketIsp: item.isp,
+    proxyMarketPriceCents: item.display_price_cents,
+    proxyMarketCurrency: item.currency || "TWD",
+    proxyMarketBillingCycle: item.billing_cycle || "month",
+    proxyMarketTags: (item.tags || []).join(", "),
+    proxyMarketUseCases: (item.use_cases || []).join(", "),
+    proxyMarketDescription: item.description,
+  };
+  Object.entries(values).forEach(([id, value]) => {
+    if (el(id)) el(id).value = String(value ?? "");
+  });
+  if (el("proxyMarketSku")) el("proxyMarketSku").disabled = true;
+  setText("proxyMarketEditorTitle", `编辑 ${item.sku || item.id}`);
+  setText("proxyMarketEditorHint", "元数据可直接保存；连接、端口与新凭据只有真实检测成功后才会替换线上配置。");
+  setText("proxyMarketEditorState", `库存状态：${PROXY_MARKET_STATUS_LABELS[item.status] || item.status || "-"} · 版本 ${Number(item.version || 1)}`);
+  const configured = [];
+  if (item.username_configured) configured.push("用户名");
+  if (item.password_configured) configured.push("密码");
+  setText(
+    "proxyMarketCredentialNote",
+    configured.length
+      ? `已配置${configured.join("和")}，内容不会回显；输入新值会在检测成功后替换，空密码保留原密码。`
+      : "当前未保存认证凭据；如代理需要认证，请在检测发布前填写。",
+  );
+  setMsg("proxyMarketItemMsg", "");
+  if (focus) {
+    el("proxyMarketEditor")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    window.setTimeout(() => el("proxyMarketDisplayName")?.focus(), 250);
+  }
+}
+
+function readProxyMarketItemForm() {
+  const form = el("proxyMarketItemForm");
+  if (!form?.reportValidity()) return null;
+  const payload = {
+    sku: el("proxyMarketSku")?.value?.trim() || "",
+    display_name: el("proxyMarketDisplayName")?.value?.trim() || "",
+    provider_key: el("proxyMarketProviderKey")?.value?.trim() || "",
+    proxy_type: el("proxyMarketProxyType")?.value || "socks5",
+    host: el("proxyMarketHost")?.value?.trim() || "",
+    port: Number(el("proxyMarketPort")?.value || 0),
+    username: String(el("proxyMarketUsername")?.value || ""),
+    password: String(el("proxyMarketPassword")?.value || ""),
+    country: el("proxyMarketCountry")?.value?.trim() || "",
+    region: el("proxyMarketRegion")?.value?.trim() || "",
+    city: el("proxyMarketCity")?.value?.trim() || "",
+    isp: el("proxyMarketIsp")?.value?.trim() || "",
+    ip_type: "static_residential",
+    description: el("proxyMarketDescription")?.value?.trim() || "",
+    tags: parseProxyMarketList(el("proxyMarketTags")?.value),
+    use_cases: parseProxyMarketList(el("proxyMarketUseCases")?.value),
+    display_price_cents: Math.max(0, Math.round(Number(el("proxyMarketPriceCents")?.value || 0))),
+    currency: el("proxyMarketCurrency")?.value?.trim()?.toUpperCase() || "TWD",
+    billing_cycle: el("proxyMarketBillingCycle")?.value || "month",
+    expires_at: timestampFromLocalInput(el("proxyMarketExpiresAt")?.value),
+  };
+  if (!adminState.proxyMarketSelectedItemId && !/^[A-Za-z0-9._-]{2,80}$/.test(payload.sku)) {
+    setMsg("proxyMarketItemMsg", "SKU 需为 2-80 位字母、数字、点、下划线或短横线", false);
+    return null;
+  }
+  return payload;
+}
+
+function proxyMarketPatchPayload(payload) {
+  return {
+    display_name: payload.display_name,
+    provider_key: payload.provider_key,
+    country: payload.country,
+    region: payload.region,
+    city: payload.city,
+    isp: payload.isp,
+    description: payload.description,
+    tags: payload.tags,
+    use_cases: payload.use_cases,
+    display_price_cents: payload.display_price_cents,
+    currency: payload.currency,
+    billing_cycle: payload.billing_cycle,
+    expires_at: payload.expires_at,
+  };
+}
+
+function proxyMarketPublishPayload(payload) {
+  const result = {
+    proxy_type: payload.proxy_type,
+    host: payload.host,
+    port: payload.port,
+    expires_at: payload.expires_at,
+  };
+  if (payload.username) result.username = payload.username;
+  if (payload.password) result.password = payload.password;
+  return result;
+}
+
+async function saveProxyMarketItem({ publish = false } = {}) {
+  const payload = readProxyMarketItemForm();
+  if (!payload) return null;
+  const selectedId = adminState.proxyMarketSelectedItemId;
+  const saveButton = el("btnSaveProxyMarketItem");
+  const publishButton = el("btnPublishProxyMarketItem");
+  if (saveButton) saveButton.disabled = true;
+  if (publishButton) publishButton.disabled = true;
+  setMsg("proxyMarketItemMsg", publish ? "正在执行真实连接检测..." : "正在保存代理库存...");
+  try {
+    let result;
+    if (selectedId) {
+      result = await api(`/api/admin/proxy-market/items/${encodeURIComponent(selectedId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(proxyMarketPatchPayload(payload)),
+      });
+    } else {
+      result = await api("/api/admin/proxy-market/items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    }
+    const itemId = String(result?.item?.id || selectedId || "");
+    if (publish) {
+      result = await api(`/api/admin/proxy-market/items/${encodeURIComponent(itemId)}/test-and-publish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(proxyMarketPublishPayload(payload)),
+      });
+    }
+    await loadProxyMarketItems();
+    const updated = result?.item || proxyMarketItemById(itemId);
+    if (updated && !proxyMarketItemById(itemId)) adminState.proxyMarketItemRows.unshift(updated);
+    editProxyMarketItem(itemId, { focus: false });
+    if (el("proxyMarketUsername")) el("proxyMarketUsername").value = "";
+    if (el("proxyMarketPassword")) el("proxyMarketPassword").value = "";
+    setMsg(
+      "proxyMarketItemMsg",
+      publish
+        ? `真实检测通过，代理已发布${Number(result?.item?.latency_ms || 0) ? `，延迟 ${Number(result.item.latency_ms)} ms` : ""}`
+        : "代理库存已保存",
+      true,
+    );
+    return result;
+  } finally {
+    if (saveButton) saveButton.disabled = false;
+    if (publishButton) publishButton.disabled = false;
+  }
+}
+
+async function publishProxyMarketRow(itemId, button) {
+  const item = proxyMarketItemById(itemId);
+  if (!item) return;
+  if (!confirm(`将对 ${item.sku || item.id} 执行真实连接检测，成功后立即发布，确认继续吗？`)) return;
+  button.disabled = true;
+  setMsg("proxyMarketMsg", `正在检测 ${item.sku || item.id}...`);
+  try {
+    const result = await api(`/api/admin/proxy-market/items/${encodeURIComponent(item.id)}/test-and-publish`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        proxy_type: item.proxy_type,
+        host: item.host,
+        port: Number(item.port || 0),
+        expires_at: Number(item.expires_at || 0),
+      }),
+    });
+    await loadProxyMarketItems();
+    setMsg("proxyMarketMsg", `真实检测通过，${item.sku || item.id} 已发布，延迟 ${Number(result?.item?.latency_ms || 0)} ms`, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function updateProxyMarketStatus(itemId, status, control) {
+  const item = proxyMarketItemById(itemId);
+  if (!item || status === String(item.status || "")) return;
+  control.disabled = true;
+  try {
+    await api(`/api/admin/proxy-market/items/${encodeURIComponent(itemId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    });
+    await loadProxyMarketItems();
+    setMsg("proxyMarketMsg", `${item.sku || item.id} 已切换为${PROXY_MARKET_STATUS_LABELS[status] || status}`, true);
+  } catch (error) {
+    control.value = String(item.status || "");
+    throw error;
+  } finally {
+    control.disabled = false;
+  }
+}
+
+async function archiveProxyMarketItem(itemId, button) {
+  const item = proxyMarketItemById(itemId);
+  if (!item) return;
+  if (!confirm(`确认归档 ${item.sku || item.id} 吗？商城将停止展示，关联代理也会被禁用。`)) return;
+  button.disabled = true;
+  try {
+    await api(`/api/admin/proxy-market/items/${encodeURIComponent(itemId)}/archive`, { method: "POST" });
+    if (String(adminState.proxyMarketSelectedItemId || "") === String(itemId)) resetProxyMarketEditor();
+    await loadProxyMarketItems();
+    setMsg("proxyMarketMsg", `${item.sku || item.id} 已归档`, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function revokeProxyMarketAllocation(allocationId, button) {
+  const allocation = adminState.proxyMarketAllocationRows.find((item) => String(item.id || "") === String(allocationId || ""));
+  if (!allocation) return;
+  const boundCount = Number(allocation.bound_account_count || 0);
+  const taskCount = Number(allocation.running_task_count || 0);
+  const impact = boundCount || taskCount
+    ? `\n\n此操作会停止 ${taskCount} 个运行任务，并解除 ${boundCount} 个账号绑定。`
+    : "";
+  if (!confirm(`确认回收客户 ${allocation.username || allocation.user_id || "-"} 的 ${allocation.sku || allocation.item_id || "代理"} 吗？${impact}`)) return;
+  button.disabled = true;
+  try {
+    await api(`/api/admin/proxy-market/allocations/${encodeURIComponent(allocationId)}/revoke`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm_impact: true }),
+    });
+    await Promise.all([loadProxyMarketAllocations(), loadProxyMarketItems()]);
+    setMsg("proxyMarketAllocationMsg", "代理分配已回收", true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function saveProxyMarketSettings() {
+  const claimLimit = Math.round(Number(el("proxyMarketDefaultClaimLimit")?.value));
+  const healthHours = Number(el("proxyMarketHealthMaxAgeHours")?.value);
+  if (!Number.isFinite(claimLimit) || claimLimit < 0 || claimLimit > 100) throw new Error("默认领取上限需在 0-100 之间");
+  if (!Number.isFinite(healthHours) || healthHours < (5 / 60) || healthHours > 168) throw new Error("健康有效时长需在 5 分钟至 168 小时之间");
+  const payload = {
+    default_claim_limit: claimLimit,
+    health_max_age_seconds: Math.max(300, Math.min(604800, Math.round(healthHours * 3600))),
+  };
+  const result = await api("/api/admin/proxy-market/settings", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  renderProxyMarketSettings(result || {});
+  await loadProxyMarketItems();
+  setMsg("proxyMarketSettingsMsg", "代理商城领取与健康策略已保存", true);
+  return result;
+}
+
+async function saveProxyMarketUserLimit() {
+  const userId = Math.round(Number(el("proxyMarketLimitUserId")?.value || 0));
+  const rawLimit = String(el("proxyMarketUserClaimLimit")?.value || "").trim();
+  const claimLimit = rawLimit === "" ? null : Math.round(Number(rawLimit));
+  if (!Number.isInteger(userId) || userId <= 0) throw new Error("请输入有效的客户 ID");
+  if (claimLimit !== null && (!Number.isInteger(claimLimit) || claimLimit < 0 || claimLimit > 100)) {
+    throw new Error("客户单独上限需在 0-100 之间，留空可恢复默认");
+  }
+  const result = await api(`/api/admin/users/${encodeURIComponent(userId)}/proxy-market-limit`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ claim_limit_override: claimLimit }),
+  });
+  setMsg(
+    "proxyMarketUserLimitMsg",
+    claimLimit === null
+      ? `客户 ${userId} 已恢复默认额度，当前上限 ${Number(result?.claim_limit || 0)}`
+      : `客户 ${userId} 的领取上限已设为 ${Number(result?.claim_limit || claimLimit)}`,
+    true,
+  );
+  return result;
+}
+
 function renderTaxonomyList(containerId, items, kind) {
   const container = el(containerId);
   if (!container) return;
@@ -5817,6 +6446,95 @@ function bindActions() {
   el("btnHideServiceCredential")?.addEventListener("click", () => {
     clearServiceCredential();
   });
+  el("btnRefreshProxyMarket")?.addEventListener("click", async () => {
+    setMsg("proxyMarketMsg", "正在刷新代理商城...");
+    await loadProxyMarketWorkspace();
+  });
+  el("proxyMarketFilterForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await loadProxyMarketItems();
+    } catch {}
+  });
+  el("btnResetProxyMarketFilters")?.addEventListener("click", async () => {
+    ["proxyMarketQuery", "proxyMarketStatusFilter", "proxyMarketHealthFilter"].forEach((id) => {
+      if (el(id)) el(id).value = "";
+    });
+    try {
+      await loadProxyMarketItems();
+    } catch {}
+  });
+  el("btnNewProxyMarketItem")?.addEventListener("click", () => resetProxyMarketEditor({ focus: true }));
+  el("btnCancelProxyMarketEdit")?.addEventListener("click", () => resetProxyMarketEditor({ focus: true }));
+  el("proxyMarketItemForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await saveProxyMarketItem();
+    } catch (error) {
+      setMsg("proxyMarketItemMsg", getErrorMessage(error), false);
+    }
+  });
+  el("btnPublishProxyMarketItem")?.addEventListener("click", async () => {
+    try {
+      await saveProxyMarketItem({ publish: true });
+    } catch (error) {
+      setMsg("proxyMarketItemMsg", `检测发布失败：${getErrorMessage(error)}`, false);
+    }
+  });
+  el("proxyMarketItemBody")?.addEventListener("click", async (event) => {
+    const button = event.target instanceof Element ? event.target.closest("button[data-proxy-market-action]") : null;
+    if (!(button instanceof HTMLButtonElement)) return;
+    const itemId = button.dataset.id || "";
+    try {
+      if (button.dataset.proxyMarketAction === "edit") editProxyMarketItem(itemId);
+      if (button.dataset.proxyMarketAction === "publish") await publishProxyMarketRow(itemId, button);
+      if (button.dataset.proxyMarketAction === "archive") await archiveProxyMarketItem(itemId, button);
+    } catch (error) {
+      setMsg("proxyMarketMsg", getErrorMessage(error), false);
+    }
+  });
+  el("proxyMarketItemBody")?.addEventListener("change", async (event) => {
+    const control = event.target;
+    if (!(control instanceof HTMLSelectElement) || !control.dataset.proxyMarketStatus) return;
+    try {
+      await updateProxyMarketStatus(control.dataset.proxyMarketStatus, control.value, control);
+    } catch (error) {
+      setMsg("proxyMarketMsg", getErrorMessage(error), false);
+    }
+  });
+  el("proxyMarketAllocationStatus")?.addEventListener("change", async () => {
+    try {
+      await loadProxyMarketAllocations();
+    } catch {}
+  });
+  el("proxyMarketAllocationBody")?.addEventListener("click", async (event) => {
+    const button = event.target instanceof Element ? event.target.closest("button[data-proxy-market-action='revoke']") : null;
+    if (!(button instanceof HTMLButtonElement)) return;
+    try {
+      await revokeProxyMarketAllocation(button.dataset.id || "", button);
+    } catch (error) {
+      setMsg("proxyMarketAllocationMsg", getErrorMessage(error), false);
+    }
+  });
+  el("proxyMarketSettingsForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    setMsg("proxyMarketSettingsMsg", "正在保存商城策略...");
+    try {
+      await saveProxyMarketSettings();
+    } catch (error) {
+      setMsg("proxyMarketSettingsMsg", getErrorMessage(error), false);
+    }
+  });
+  el("proxyMarketUserLimitForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    setMsg("proxyMarketUserLimitMsg", "正在保存客户领取额度...");
+    try {
+      await saveProxyMarketUserLimit();
+    } catch (error) {
+      setMsg("proxyMarketUserLimitMsg", getErrorMessage(error), false);
+    }
+  });
+  resetProxyMarketEditor();
   el("btnRefreshTaxonomy")?.addEventListener("click", () => void loadTaxonomyWorkspace());
   el("customerGroupForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();

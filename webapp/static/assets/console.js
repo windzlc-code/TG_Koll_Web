@@ -255,7 +255,11 @@ const state = {
   activeModule: "personas",
   transientWorkspaceLeaveAcknowledgement: "",
   transientWorkspaceAllowNextUnload: false,
-  accountBrowserPanel: initialAccountBrowserPanel === "browsers" ? "browsers" : "accounts",
+  accountBrowserPanel: ["browsers", "proxies"].includes(initialAccountBrowserPanel) ? initialAccountBrowserPanel : "accounts",
+  proxyMarketUnreadCount: 0,
+  proxyMarketSummaryLoaded: false,
+  proxyMarketReadRevision: 0,
+  proxyMarketMarkReadPromise: null,
   liveBrowserExpandedSessionId: "",
   workspaceMenuOpen: true,
   currentUser: null,
@@ -15934,6 +15938,7 @@ async function fetchSocialDataShared({ force = false } = {}) {
     api("/api/persona_dashboard/automation/accounts").catch((error) => ({ accounts: tenantArrayFallback(error, state.socialAccounts) })),
     api("/api/persona_dashboard/automation/proxies").catch((error) => ({ proxies: tenantArrayFallback(error, state.socialProxies) })),
     loadAutomationTasksShared({ force }).catch((error) => ({ tasks: tenantArrayFallback(error, state.socialTasks) })),
+    loadProxyMarketSummary().catch(() => null),
   ]).then(([overview, accountsData, proxiesData, tasksData]) => {
     state.socialBrowserSessions = Array.isArray(overview.browser_sessions) ? overview.browser_sessions : tenantArrayFallback(null, state.socialBrowserSessions);
     state.socialAccounts = Array.isArray(accountsData.accounts) ? accountsData.accounts : [];
@@ -18514,7 +18519,7 @@ function proxyStatusLabel(value = "") {
 
 function proxySourceLabel(value = "") {
   const clean = String(value || "").trim().toLowerCase();
-  return { manual: "手动录入", owlproxy: "OwlProxy", provider: "其他购买代理", self_owned: "自有代理" }[clean] || (value || "-");
+  return { manual: "自定义添加", marketplace: "商城添加", owlproxy: "OwlProxy", provider: "其他购买代理", self_owned: "自有代理" }[clean] || (value || "-");
 }
 
 function proxyPurchaseStatusLabel(value = "") {
@@ -18547,7 +18552,10 @@ function renderProxyPool() {
     <section class="proxy-pool-panel">
       <div class="proxy-pool-head">
         <div><strong>代理 IP</strong><span>独立维护代理信息并查看账号绑定情况。</span></div>
-        <button type="button" class="primary proxy-pool-add" data-proxy-add>${renderPlusIcon()}<span>新增代理</span></button>
+        <div class="proxy-pool-head-actions">
+          <a class="proxy-market-link" href="/proxy-market.html">${renderNetworkIcon()}<span>代理商城</span></a>
+          <button type="button" class="primary proxy-pool-add" data-proxy-add>${renderPlusIcon()}<span>自定义代理</span></button>
+        </div>
       </div>
       <div class="proxy-table-wrap">
         <div class="proxy-table" role="table" aria-label="代理 IP 列表">
@@ -18556,11 +18564,14 @@ function renderProxyPool() {
             const endpoint = [String(proxy.host || "").trim(), String(proxy.port || "").trim()].filter(Boolean).join(":") || "-";
             const country = String(proxy.country || "").trim() || "待识别";
             const authLabel = proxy.username_configured || proxy.password_configured ? "需认证" : "无认证";
-            return `<div class="proxy-table-row" role="row">
+            const isMarketplace = String(proxy.source || "").trim().toLowerCase() === "marketplace";
+            const isNew = Boolean(proxy.marketplace?.is_new);
+            const sourceClass = isMarketplace ? "marketplace" : "custom";
+            return `<div class="proxy-table-row ${isMarketplace ? "is-marketplace" : "is-custom"}" role="row">
               <span role="cell" class="proxy-detail-cell proxy-numeric" data-mobile-label="序号">${offset + index + 1}</span>
               <span role="cell" class="proxy-detail-cell" data-mobile-label="分组">未分组</span>
               <span role="cell" class="proxy-detail-cell" data-mobile-label="IP 类型">${esc(proxyIpTypeLabel(proxy.ip_type))}</span>
-              <span role="cell" class="proxy-detail-cell" data-mobile-label="来源">${esc(proxySourceLabel(proxy.source))}</span>
+              <span role="cell" class="proxy-detail-cell" data-mobile-label="来源"><span class="proxy-source-badge is-${sourceClass}">${esc(proxySourceLabel(proxy.source))}</span>${isNew ? '<span class="proxy-new-badge">新</span>' : ""}</span>
               <span role="cell" class="proxy-detail-cell" data-mobile-label="购买状态">${esc(proxyPurchaseStatusLabel(proxy.purchase_status))}</span>
               <span role="cell" class="proxy-detail-cell" data-mobile-label="代理名称"><strong>${esc(proxy.name || endpoint)}</strong></span>
               <span role="cell" class="proxy-detail-cell" data-mobile-label="代理资讯"><strong>${esc(endpoint)}</strong><small>${esc(authLabel)}</small></span>
@@ -18573,8 +18584,8 @@ function renderProxyPool() {
               <span role="cell" class="proxy-detail-cell proxy-numeric" data-mobile-label="有效时间">${proxy.expires_at ? esc(formatTime(proxy.expires_at)) : "长期"}</span>
               <span role="cell" class="proxy-table-actions" data-mobile-label="操作">
                 <button type="button" data-proxy-check="${esc(proxy.id)}" title="检测代理" aria-label="检测代理">${renderRefreshIcon()}</button>
-                <button type="button" data-proxy-edit="${esc(proxy.id)}" title="编辑代理" aria-label="编辑代理">${renderEditIcon()}</button>
-                <button type="button" class="danger" data-proxy-delete="${esc(proxy.id)}" title="${proxyBoundAccountCount(proxy) ? "代理已绑定账号，不能删除" : "删除代理"}" aria-label="删除代理" ${proxyBoundAccountCount(proxy) ? "disabled" : ""}>${renderTrashIcon()}</button>
+                <button type="button" data-proxy-edit="${esc(proxy.id)}" title="${isMarketplace ? "商城代理由管理员统一维护" : "编辑代理"}" aria-label="${isMarketplace ? "商城代理不可编辑" : "编辑代理"}" ${isMarketplace ? "disabled" : ""}>${renderEditIcon()}</button>
+                <button type="button" class="danger" data-proxy-delete="${esc(proxy.id)}" title="${proxyBoundAccountCount(proxy) ? "代理已绑定账号，不能释放" : (isMarketplace ? "释放并退回商城" : "删除代理")}" aria-label="${isMarketplace ? "释放商城代理" : "删除代理"}" ${proxyBoundAccountCount(proxy) ? "disabled" : ""}>${renderTrashIcon()}</button>
               </span>
             </div>`;
           }).join("") : `<div class="empty-state proxy-pool-empty">暂无代理 IP，点击新增代理开始配置。</div>`}
@@ -18601,6 +18612,10 @@ function openProxyModal(proxyId = "") {
   const proxy = proxyId ? socialProxyById(proxyId) : null;
   if (proxyId && !proxy) {
     showMsg("socialMsg", "代理不存在，请刷新后重试。", false);
+    return;
+  }
+  if (proxy && String(proxy.source || "").trim().toLowerCase() === "marketplace") {
+    showMsg("socialMsg", "商城代理的连接配置由管理员统一维护。", false);
     return;
   }
   closeConsoleModal(null);
@@ -18701,11 +18716,68 @@ async function deleteProxy(proxyId = "") {
   const cleanId = String(proxyId || "").trim();
   const proxy = socialProxyById(cleanId);
   if (!cleanId || !proxy) return;
-  const ok = await confirmDangerAction(`确定删除代理“${proxy.name || proxy.host || cleanId}”吗？`, { title: "删除代理", confirmText: "删除代理" });
+  const isMarketplace = String(proxy.source || "").trim().toLowerCase() === "marketplace";
+  const ok = await confirmDangerAction(
+    isMarketplace
+      ? `确定释放商城代理“${proxy.name || proxy.host || cleanId}”并退回商城吗？`
+      : `确定删除代理“${proxy.name || proxy.host || cleanId}”吗？`,
+    {
+      title: isMarketplace ? "释放商城代理" : "删除代理",
+      confirmText: isMarketplace ? "释放代理" : "删除代理",
+    },
+  );
   if (!ok) return;
   await api(`/api/persona_dashboard/automation/proxies/${encodeURIComponent(cleanId)}`, { method: "DELETE" });
   await refreshProxyPool();
-  showMsg("socialMsg", "代理已删除。", true);
+  showMsg("socialMsg", isMarketplace ? "商城代理已释放并退回商城。" : "代理已删除。", true);
+}
+
+function syncProxyMarketUnreadBadge() {
+  const badge = $("proxyMarketUnreadBadge");
+  if (!badge) return;
+  const count = Math.max(0, Number(state.proxyMarketUnreadCount || 0));
+  badge.textContent = count > 99 ? "99+" : String(count);
+  badge.hidden = count <= 0;
+}
+
+async function loadProxyMarketSummary() {
+  const revision = Number(state.proxyMarketReadRevision || 0);
+  try {
+    const summary = await api("/api/proxy-market/me");
+    if (revision !== Number(state.proxyMarketReadRevision || 0)) return summary;
+    state.proxyMarketUnreadCount = Math.max(0, Number(summary?.unread_proxy_count || 0));
+    state.proxyMarketSummaryLoaded = true;
+    syncProxyMarketUnreadBadge();
+    return summary;
+  } catch {
+    return null;
+  }
+}
+
+async function markProxyPoolRead() {
+  if (state.accountBrowserPanel !== "proxies" || state.view !== "accounts") return;
+  if (state.proxyMarketMarkReadPromise) return state.proxyMarketMarkReadPromise;
+  state.proxyMarketReadRevision = Number(state.proxyMarketReadRevision || 0) + 1;
+  const request = api("/api/proxy-market/read", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope: "proxy_pool" }),
+    }).then(() => {
+    state.proxyMarketUnreadCount = 0;
+    (state.socialProxies || []).forEach((proxy) => {
+      if (proxy?.marketplace) proxy.marketplace.is_new = false;
+    });
+    syncProxyMarketUnreadBadge();
+    renderProxyPool();
+    try {
+      localStorage.setItem("vecto-proxy-market-read", String(Date.now()));
+    } catch {}
+    window.dispatchEvent(new CustomEvent("vecto:proxy-market-read"));
+  }).catch(() => null).finally(() => {
+    if (state.proxyMarketMarkReadPromise === request) state.proxyMarketMarkReadPromise = null;
+  });
+  state.proxyMarketMarkReadPromise = request;
+  return request;
 }
 
 function renderSocialAccounts() {
@@ -18721,6 +18793,16 @@ function renderSocialAccounts() {
   }
   const grid = $("accountGrid");
   renderProxyPool();
+  if (
+    state.view === "accounts"
+    && state.accountBrowserPanel === "proxies"
+    && (
+      Number(state.proxyMarketUnreadCount || 0) > 0
+      || (state.socialProxies || []).some((proxy) => Boolean(proxy?.marketplace?.is_new))
+    )
+  ) {
+    window.setTimeout(() => void markProxyPoolRead(), 0);
+  }
   if (state.accountBrowserPanel === "browsers") renderLiveBrowserSessions();
   if (!grid) return;
   grid.innerHTML = renderAccountPool();
@@ -18737,6 +18819,7 @@ function setAccountBrowserPanel(panel = "accounts") {
   syncAccountBrowserPanel();
   if ($("moduleMenu")) syncModuleMenuState();
   if (normalized === "browsers") renderLiveBrowserSessions();
+  if (normalized === "proxies") window.setTimeout(() => void markProxyPoolRead(), 0);
   syncLiveBrowserAutoRefresh();
   } finally {
     restoreConsoleScrollState(scrollSnapshot);
@@ -18768,6 +18851,7 @@ function syncAccountBrowserPanel() {
     page.classList.toggle("is-active", selected);
     page.hidden = !selected;
   });
+  syncProxyMarketUnreadBadge();
 }
 
 function renderLiveBrowserSessions() {
@@ -22018,6 +22102,13 @@ window.addEventListener("vecto:logout-request", () => {
 window.addEventListener("vecto:navigation-ready", () => {
   if (state.currentUser) window.VectoSiteNavigation?.setAccount(state.currentUser);
 });
+window.addEventListener("storage", (event) => {
+  if (event.key === "vecto-proxy-market-read") void loadProxyMarketSummary();
+});
+if ("BroadcastChannel" in window) {
+  const proxyMarketChannel = new BroadcastChannel("vecto-proxy-market");
+  proxyMarketChannel.addEventListener("message", () => void loadProxyMarketSummary());
+}
 
 init().catch((error) => {
   appendEvent("error", error.detail || error.message || "控制台初始化失败");
