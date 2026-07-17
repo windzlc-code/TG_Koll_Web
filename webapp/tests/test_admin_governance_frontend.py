@@ -113,7 +113,7 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
 
     def test_admin_preferences_reuse_shared_navigation_without_language_toggle_binding(self):
         st_script = '/assets/vendor/opencc-js/st-characters.js?v=1.4.1'
-        navigation_script = '/assets/opc/site-navigation.js?v=2026071701'
+        navigation_script = '/assets/opc/site-navigation.js?v=2026071706'
         admin_script = '/assets/admin.js?v=__ADMIN_JS_VERSION__'
         stylesheet = '/assets/style.css?v=__STYLE_VERSION__'
         self.assertLess(self.html.index('window.localStorage.getItem("wk-console-theme")'), self.html.index(stylesheet))

@@ -560,6 +560,38 @@ button.primary,
   gap: 8px;
 }
 
+.console-profile-settings {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+}
+
+.console-profile-settings .row-actions {
+  grid-column: 2;
+  margin: 0;
+}
+
+.console-profile-avatar-preview {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  overflow: hidden;
+  color: var(--accent);
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  font-size: 24px;
+  font-weight: 900;
+}
+
+.console-profile-avatar-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .console-setting-card {
   display: grid;
   gap: 6px;
@@ -9519,16 +9551,16 @@ body.persona-touch-dragging .persona-list-card:active {
   display: none;
 }
 
-.account-pool-card .row-actions .account-status-check {
+.account-pool-card .row-actions .account-pool-delete-icon {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  min-width: 0;
-  padding: 0 9px;
-  white-space: nowrap;
+  justify-content: center;
+  width: 36px;
+  min-width: 36px;
+  padding: 0;
 }
 
-.account-pool-card .row-actions .account-status-check .ui-action-icon {
+.account-pool-card .row-actions .account-pool-delete-icon .ui-trash-icon {
   width: 15px;
   height: 15px;
 }
@@ -13574,5 +13606,212 @@ body.console-page {
     width: 40px;
     min-width: 40px;
     min-height: 40px;
+  }
+}
+
+/* Keep compact mobile controls visually dense without shrinking their hit area. */
+@media (max-width: 760px) {
+  .console-page {
+    --mobile-touch-target: 44px;
+    --mobile-control-gap: 8px;
+  }
+
+  .console-page :is(
+    button,
+    .button,
+    .chip-button,
+    a[role="button"],
+    [role="button"],
+    input[type="button"],
+    input[type="submit"]
+  ) {
+    min-height: var(--mobile-touch-target);
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: rgba(35, 134, 111, 0.16);
+  }
+
+  .console-page :is(
+    input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+    select
+  ) {
+    min-height: var(--mobile-touch-target);
+  }
+
+  .mobile-nav-toggle,
+  .mobile-nav-close,
+  .topbar-actions .theme-toggle,
+  .persona-hot-refresh-button,
+  .persona-hot-info,
+  .persona-favorite-star,
+  .persona-draft-more-trigger,
+  .persona-draft-view-toggle button,
+  .account-pool-edit-toolbar > button:not(.account-pool-add-button),
+  .account-password-toggle,
+  .account-pool-bind-persona,
+  .toast-message-close,
+  .proxy-table-actions button,
+  .persona-list-pager button,
+  .task-queue-pager button,
+  .proxy-pager button {
+    display: inline-grid;
+    width: var(--mobile-touch-target);
+    min-width: var(--mobile-touch-target);
+    height: var(--mobile-touch-target);
+    min-height: var(--mobile-touch-target);
+    max-height: none;
+    place-items: center;
+    padding: 0;
+  }
+
+  .console-nav button,
+  .sidebar-bottom-actions button,
+  .sidebar-bottom-actions a,
+  .module-trigger,
+  .topbar-actions button,
+  .command-actions button,
+  .row-actions button,
+  .row-actions a,
+  .console-modal-actions button,
+  .persona-list-actions:not(.persona-list-actions--bulk) button,
+  .persona-list-toolbar button,
+  .billing-view-actions :is(.button, button),
+  .console-settings-actions .primary,
+  .account-browser-toolbar > #refreshAccounts,
+  .account-browser-tabs button,
+  .account-pool-platforms button,
+  .publish-mode-tabs button,
+  .automation-capsule-tabs button,
+  .task-queue-actionbar > button,
+  .task-queue-bulk-controls button,
+  .proxy-pool-add,
+  .proxy-pager select,
+  .live-browser-head-actions button {
+    min-height: var(--mobile-touch-target);
+    height: auto;
+    max-height: none;
+  }
+
+  .topbar-actions,
+  .command-actions,
+  .row-actions,
+  .account-pool-edit-toolbar,
+  .persona-list-actions,
+  .persona-list-toolbar,
+  .persona-list-pager,
+  .task-queue-pager,
+  .proxy-pager,
+  .account-browser-tabs,
+  .publish-mode-tabs,
+  .automation-capsule-tabs,
+  .task-queue-actionbar,
+  .task-queue-bulk-controls,
+  .live-browser-head-actions,
+  .console-modal-actions {
+    gap: var(--mobile-control-gap);
+  }
+
+  .account-pool-edit-toolbar {
+    grid-template-columns: minmax(0, 1fr) repeat(4, var(--mobile-touch-target));
+  }
+
+  .account-pool-section-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .account-pool-edit-toolbar .account-pool-selection-count {
+    min-width: 0;
+    justify-content: flex-start;
+    overflow: hidden;
+    padding-inline: 0;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .account-pool-edit-toolbar .account-pool-add-button {
+    grid-column: 1 / -1;
+    width: 100%;
+    justify-content: center;
+  }
+
+  .proxy-table-row:not(.proxy-table-row--head) > .proxy-table-actions {
+    grid-template-columns: minmax(0, 1fr) repeat(3, var(--mobile-touch-target));
+    gap: var(--mobile-control-gap);
+  }
+
+  .toast-host {
+    right: max(12px, env(safe-area-inset-right));
+    bottom: max(12px, env(safe-area-inset-bottom));
+  }
+}
+
+@media (max-width: 360px) {
+  .persona-list-pager,
+  .task-queue-pager {
+    flex-wrap: wrap;
+  }
+
+  .persona-list-pager > span,
+  .task-queue-pager > span {
+    order: -1;
+    flex: 1 0 100%;
+    min-width: 0;
+  }
+}
+
+/* Bound desktop-sized work areas on narrow screens without shrinking controls. */
+@media (max-width: 760px) {
+  .publish-post-picker,
+  .publish-content-preview {
+    height: clamp(300px, 44dvh, 400px);
+    min-height: clamp(300px, 44dvh, 400px);
+    max-height: clamp(300px, 44dvh, 400px);
+  }
+
+  .publish-post-list,
+  .publish-preview-tabs,
+  .publish-preview-card,
+  .browser-policy-grid,
+  .task-table-inner,
+  .proxy-table-wrap,
+  .console-modal-content {
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+
+  .task-table-inner,
+  .proxy-table-wrap {
+    max-height: min(62dvh, 560px);
+    overflow-y: auto;
+  }
+
+  .browser-policy-grid {
+    max-height: min(62dvh, 520px);
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding-right: 2px;
+  }
+
+  .live-browser-card.is-portrait:not(.is-live-browser-modal) .live-browser-frame {
+    height: min(52dvh, 420px);
+    max-height: min(52dvh, 420px);
+    aspect-ratio: auto;
+  }
+
+  .live-browser-card.is-live-browser-modal {
+    grid-template-rows: auto auto auto auto;
+    align-content: start;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .live-browser-card.is-live-browser-modal .live-browser-frame,
+  .live-browser-card.is-live-browser-modal.is-portrait .live-browser-frame {
+    height: auto;
+    max-height: min(52dvh, 480px);
+    aspect-ratio: var(--live-browser-ratio, 16 / 9);
   }
 }

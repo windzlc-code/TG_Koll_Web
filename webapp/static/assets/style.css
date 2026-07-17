@@ -10231,3 +10231,209 @@ html[data-theme="dark"] body.page-admin .admin-user-danger-section {
     grid-row: 1;
   }
 }
+
+/* Mobile interaction baseline shared by public, authentication and admin pages. */
+@media (max-width: 760px) {
+  body:not(.console-page) :is(
+    button,
+    .btn,
+    a.btn,
+    [role="button"],
+    input[type="button"],
+    input[type="submit"]
+  ) {
+    min-height: 44px;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: rgba(35, 134, 111, 0.16);
+  }
+
+  .page-admin :is(
+    #adminMobileNavClose,
+    #adminProfileClose,
+    .admin-profile-toggle,
+    .admin-preference-button,
+    .admin-language-toggle,
+    .secret-toggle,
+    .admin-model-chip-remove,
+    .admin-model-chip-order
+  ) {
+    display: inline-grid;
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+    place-items: center;
+    padding: 0;
+  }
+
+  .page-admin :is(
+    .admin-mobile-nav-toggle,
+    .admin-nav button,
+    .admin-sidebar-actions > a,
+    .admin-sidebar-actions > button,
+    .admin-public-links > .btn.ghost,
+    .admin-profile-actions > .btn,
+    #secUsers .admin-account-tab,
+    #secPricing .admin-compact-button,
+    #secPricing .admin-billing-actions button
+  ) {
+    min-height: 44px;
+    height: auto;
+  }
+
+  .page-admin :is(
+    .admin-user-filter-bar input,
+    .admin-user-filter-bar select,
+    .admin-user-batch-bar input,
+    .admin-user-batch-bar select,
+    #secPricing .admin-billing-toolbar input,
+    #secPricing .admin-billing-toolbar select,
+    label.switch
+  ) {
+    min-height: 44px;
+  }
+
+  .page-admin .admin-mobile-nav-toggle {
+    max-width: calc(100vw - 212px);
+  }
+
+  .page-admin #adminMobileCurrentLabel {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .page-admin :is(
+    .admin-nav,
+    .admin-sidebar-actions,
+    .admin-public-links,
+    .admin-page-actions,
+    .admin-task-actions,
+    .admin-modal-actions,
+    .persona-dashboard-action-buttons,
+    .persona-post-controls,
+    .persona-account-actions,
+    .persona-post-actions,
+    .persona-auto-row-actions
+  ) {
+    gap: 8px;
+  }
+}
+
+/* Keep dense admin data usable on phones by scrolling inside bounded sections. */
+@media (max-width: 760px) {
+  .page-admin .admin-governance-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .page-admin .admin-governance-kpi {
+    min-height: 96px;
+    padding: 10px;
+  }
+
+  .page-admin .admin-governance-kpi > strong {
+    font-size: clamp(18px, 6vw, 24px);
+  }
+
+  .page-admin :is(
+    .admin-governance-chart-grid,
+    .admin-governance-lower-grid,
+    .admin-governance-queue-grid
+  ) {
+    max-height: min(62dvh, 520px);
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding-right: 2px;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+
+  .page-admin :is(.table-wrap, .admin-table-shell) {
+    max-height: min(68dvh, 600px);
+    overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+
+  .page-admin #taskList {
+    max-height: min(68dvh, 600px);
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+
+  .page-admin :is(
+    .admin-runtime-stack,
+    .admin-runtime-grid,
+    .admin-runtime-column
+  ) {
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .page-admin :is(
+    .admin-runtime-stack > *,
+    .admin-runtime-panel,
+    .admin-runtime-card
+  ) {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .page-admin .admin-runtime-panel {
+    overflow-x: clip;
+  }
+
+  .page-admin .admin-user-table td:last-child .admin-user-icon-button {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+    padding: 0;
+  }
+
+  .page-admin #secRuntime #btnSaveRuntime {
+    min-height: 44px;
+  }
+
+  .page-admin .sentiment-cookie-editor .admin-create-actions {
+    flex-wrap: wrap;
+  }
+
+  .page-admin .sentiment-cookie-editor .admin-create-actions > button {
+    flex: 1 1 180px;
+    min-width: 0;
+  }
+
+  .page-admin .admin-model-add-btn {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+  }
+
+  .page-admin .modal-overlay {
+    padding:
+      max(12px, env(safe-area-inset-top))
+      max(12px, env(safe-area-inset-right))
+      max(12px, env(safe-area-inset-bottom))
+      max(12px, env(safe-area-inset-left));
+    overscroll-behavior: contain;
+  }
+
+  .page-admin .modal-card {
+    max-height: 100%;
+  }
+
+  .page-admin-auth .auth-switch a {
+    display: inline-flex;
+    min-height: 44px;
+    align-items: center;
+  }
+}

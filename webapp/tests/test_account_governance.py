@@ -309,6 +309,28 @@ class AccountGovernanceTests(unittest.TestCase):
         self.assertEqual(len(audits), 2)
         self.assertEqual(len({str(row["request_id"]) for row in audits}), 2)
 
+    def test_social_publish_policy_requires_same_origin_and_records_audit(self):
+        admin, _ = self._admin_client()
+        rejected = admin.put("/api/admin/social_publish_policy", json={"limit": 7})
+        self.assertEqual(rejected.status_code, 403, rejected.text)
+
+        updated = admin.put(
+            "/api/admin/social_publish_policy",
+            headers=self.ORIGIN_HEADERS,
+            json={"limit": 7},
+        )
+        self.assertEqual(updated.status_code, 200, updated.text)
+        self.assertEqual(updated.json()["policy"]["limit"], 7)
+        self.assertEqual(admin.get("/api/admin/social_publish_policy").json()["policy"]["limit"], 7)
+        with db_module.db() as conn:
+            audit = conn.execute(
+                "SELECT action, risk_level, before_json, after_json FROM audit_events "
+                "WHERE action = 'social_publish_policy.update' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        self.assertIsNotNone(audit)
+        self.assertEqual(str(audit["risk_level"]), "medium")
+        self.assertEqual(json.loads(str(audit["after_json"]))["limit"], 7)
+
     def test_password_vault_keyring_reads_old_ciphertext_and_detects_same_version_drift(self):
         key_v1 = os.environ["PASSWORD_VAULT_KEY"]
         os.environ["PASSWORD_VAULT_KEY_VERSION"] = "v1"

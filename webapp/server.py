@@ -80,11 +80,14 @@ from .social_automation_api import (
     configure_social_automation,
     create_social_task,
     ensure_social_automation_worker_started,
+    get_daily_publish_limit,
+    get_daily_publish_policy,
     get_social_task,
     mark_admin_billing_waived_payload,
     mark_trusted_batch_task,
     require_daily_publish_capacity,
     register_social_automation_routes,
+    set_daily_publish_limit,
     stop_social_automation_worker,
     wake_social_automation_worker,
 )
@@ -11286,6 +11289,15 @@ class ChangeUsernamePayload(BaseModel):
     new_username: str
 
 
+class UserProfilePayload(BaseModel):
+    full_name: str = Field(default="", max_length=80)
+    avatar_url: str = Field(default="", max_length=200000)
+
+
+class SocialPublishPolicyPayload(BaseModel):
+    limit: int = Field(default=15, ge=1, le=200)
+
+
 class PricingPayload(BaseModel):
     rh_coins_per_10rmb: int = 2500
     usd_to_rmb: float = 7.2
@@ -18382,6 +18394,47 @@ def create_app() -> FastAPI:
             )
         return {"ok": True}
 
+    def _clean_user_avatar_url(value: str) -> str:
+        clean = str(value or "").strip()
+        if not clean:
+            return ""
+        if len(clean) > 200000:
+            raise HTTPException(status_code=400, detail="avatar image is too large")
+        lower = clean.lower()
+        if lower.startswith("data:image/"):
+            if ";base64," not in lower[:64]:
+                raise HTTPException(status_code=400, detail="avatar data url must be base64 image")
+            return clean
+        if lower.startswith(("https://", "http://", "/assets/", "/uploads/")):
+            return clean[:200000]
+        raise HTTPException(status_code=400, detail="avatar must be an image url")
+
+    def _user_profile_payload(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "full_name": str(row.get("full_name") or ""),
+            "avatar_url": str(row.get("avatar_url") or ""),
+        }
+
+    @app.patch("/api/me/profile")
+    def api_update_me_profile(payload: UserProfilePayload, user: dict[str, Any] = Depends(get_current_user)):
+        if _is_admin_workspace(user):
+            raise HTTPException(status_code=403, detail="管理员工作区不能修改客户个人资料")
+        full_name = str(payload.full_name or "").strip()
+        if full_name and (len(full_name) < 2 or len(full_name) > 80):
+            raise HTTPException(status_code=400, detail="显示名称长度需在 2-80 个字符之间")
+        avatar_url = _clean_user_avatar_url(payload.avatar_url)
+        now = _now_ts()
+        with db() as conn:
+            conn.execute(
+                "UPDATE users SET full_name = ?, avatar_url = ?, updated_at = ? WHERE id = ?",
+                (full_name, avatar_url, now, int(user["id"])),
+            )
+            row = conn.execute("SELECT * FROM users WHERE id = ?", (int(user["id"]),)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="user not found")
+        profile = _user_profile_payload(dict(row))
+        return {"ok": True, "profile": profile, **profile}
+
     @app.get("/api/me")
     def api_me(user: dict[str, Any] = Depends(_get_user_allowing_password_change)):
         if _is_admin_workspace(user):
@@ -18397,10 +18450,13 @@ def create_app() -> FastAPI:
                 "is_disabled": bool(int(target_user.get("is_disabled") or 0)),
                 "is_archived": bool(int(target_user.get("deleted_at") or 0)),
                 "balance_cents": int(target_user.get("balance_cents") or 0),
+                "full_name": str(target_user.get("full_name") or ""),
+                "avatar_url": str(target_user.get("avatar_url") or ""),
                 "created_at": int(target_user.get("created_at") or 0),
                 "must_change_password": False,
                 "acting_admin": True,
                 "admin_user_id": _identity_user_id(user),
+                "publish_policy": get_daily_publish_policy(_workspace_user_id(user), admin_waived=True),
             }
         return {
             "id": int(user.get("id") or 0),
@@ -18408,9 +18464,12 @@ def create_app() -> FastAPI:
             "is_admin": bool(int(user.get("is_admin") or 0)),
             "is_disabled": bool(int(user.get("is_disabled") or 0)),
             "balance_cents": int(user.get("balance_cents") or 0),
+            "full_name": str(user.get("full_name") or ""),
+            "avatar_url": str(user.get("avatar_url") or ""),
             "created_at": int(user.get("created_at") or 0),
             "must_change_password": bool(int(user.get("must_change_password") or 0)),
             "password_expires_at": _password_expiry(user),
+            "publish_policy": get_daily_publish_policy(_identity_user_id(user), admin_waived=bool(int(user.get("is_admin") or 0))),
         }
 
     @app.get("/api/auth/me")
@@ -20728,6 +20787,33 @@ def create_app() -> FastAPI:
         with db() as conn:
             set_admin_config(conn, "pricing", data, _now_ts())
         return {"ok": True, "pricing": data}
+
+    @app.get("/api/admin/social_publish_policy")
+    def api_admin_get_social_publish_policy(user: dict[str, Any] = Depends(require_admin)):
+        return {"ok": True, "policy": {"limit": get_daily_publish_limit()}}
+
+    @app.put("/api/admin/social_publish_policy")
+    def api_admin_set_social_publish_policy(
+        payload: SocialPublishPolicyPayload,
+        request: Request,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        _require_same_origin(request)
+        before = {"limit": get_daily_publish_limit()}
+        policy = set_daily_publish_limit(payload.limit)
+        with db() as conn:
+            governance.record_audit(
+                conn,
+                actor_user_id=int(user.get("id") or 0),
+                action="social_publish_policy.update",
+                resource_type="admin_config",
+                resource_id="social_publish_policy",
+                before=before,
+                after=policy,
+                risk_level="medium",
+                **governance.request_context(request),
+            )
+        return {"ok": True, "policy": policy}
 
     @app.get("/api/admin/dashboard")
     def api_admin_dashboard(

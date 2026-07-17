@@ -8,9 +8,9 @@
   <title>Web 任务控制台</title>
   <link rel="preload" as="style" href="/assets/style.css?v=__STYLE_VERSION__" />
   <link id="personaDashboardStyles" rel="stylesheet" href="/assets/style.css?v=__STYLE_VERSION__" media="not all" />
-  <link rel="stylesheet" href="/assets/opc/site-navigation.css?v=2026071704" />
+  <link rel="stylesheet" href="/assets/opc/site-navigation.css?v=2026071706" />
   <link rel="stylesheet" href="/assets/console.css?v=__CONSOLE_CSS_VERSION__" />
-    <script defer src="/assets/opc/site-navigation.js?v=2026071705"></script>
+    <script defer src="/assets/opc/site-navigation.js?v=2026071706"></script>
 </head>
   <body class="console-page">
     <a class="site-skip-link" href="#main-content" data-site-copy="skip">跳至主要内容</a>
@@ -44,13 +44,13 @@
         </details>
         <div class="site-account-menu" data-site-account-menu>
           <button class="site-user" type="button" title="当前登录账号" aria-controls="siteAccountPopover" aria-haspopup="dialog" aria-expanded="false" data-site-user-title data-site-account-trigger>
-            <svg class="site-user-avatar" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20c.8-4 3.1-6 7-6s6.2 2 7 6"></path></svg>
+            <span class="site-user-avatar" data-site-account-avatar><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20c.8-4 3.1-6 7-6s6.2 2 7 6"></path></svg></span>
             <span id="consoleMeName" data-site-account-name>账户</span>
             <svg class="site-user-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 10 4 4 4-4"></path></svg>
           </button>
           <div id="siteAccountPopover" class="site-account-popover" data-site-account-popover hidden role="dialog" aria-label="个人信息">
             <div class="site-account-summary">
-              <span class="site-account-avatar" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20c.8-4 3.1-6 7-6s6.2 2 7 6"></path></svg></span>
+              <span class="site-account-avatar" aria-hidden="true" data-site-account-avatar><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20c.8-4 3.1-6 7-6s6.2 2 7 6"></path></svg></span>
               <span class="site-account-identity"><strong data-site-account-name>账户</strong><span data-site-account-role>普通账号</span></span>
               <span class="site-account-status"><i aria-hidden="true"></i><span data-site-copy="accountStatus">已登录</span></span>
             </div>
@@ -65,6 +65,8 @@
                 <div class="site-account-billing-card"><span data-site-copy="billingSubscription">当前订阅</span><strong data-site-billing-subscription>—</strong></div>
                 <div class="site-account-billing-card"><span data-site-copy="billingImages">图片额度</span><strong data-site-billing-images>—</strong></div>
                 <div class="site-account-billing-card"><span data-site-copy="billingPending">待审批</span><strong data-site-billing-pending>—</strong></div>
+                <div class="site-account-billing-card"><span data-site-copy="publishToday">今日发布</span><strong data-site-publish-used>—</strong></div>
+                <div class="site-account-billing-card"><span data-site-copy="publishRemaining">剩余额度</span><strong data-site-publish-remaining>—</strong></div>
               </div>
               <div class="site-account-action-row">
                 <button type="button" data-site-open-billing data-site-copy="billingView">查看详情</button>
@@ -78,11 +80,9 @@
                   <svg class="site-theme-icon site-theme-icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>
                   <svg class="site-theme-icon site-theme-icon-moon" viewBox="0 0 24 24"><path d="M20.5 15.2A8.5 8.5 0 0 1 8.8 3.5 8.7 8.7 0 1 0 20.5 15.2Z"></path></svg>
                 </span>
-                <span data-site-copy="appearance">外观</span><strong data-site-theme-state>亮色</strong>
               </button>
               <button id="languageToggle" class="site-account-preference" type="button" aria-label="切换到繁体中文" aria-pressed="false" data-site-language-toggle>
                 <span class="site-account-preference-icon" aria-hidden="true"><svg class="site-language-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.4 2.5 3.6 5.5 3.6 9S14.4 18.5 12 21M12 3C9.6 5.5 8.4 8.5 8.4 12s1.2 6.5 3.6 9"></path></svg><span class="site-language-state" data-site-language-state>简</span></span>
-                <span data-site-copy="languageSetting">语言</span><strong data-site-language-preference-state>简体中文</strong>
               </button>
             </div>
             <button class="site-account-logout" type="button" data-site-account-logout>

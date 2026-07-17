@@ -1321,3 +1321,85 @@ body.modal-open {
     transition-duration: .01ms !important;
   }
 }
+
+@media (max-width: 760px) {
+  :is(
+    button,
+    .button,
+    .submit-button,
+    .copy-button,
+    .auth-takeover-button,
+    [role="button"]
+  ) {
+    min-height: 44px;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: rgba(12, 154, 154, 0.16);
+  }
+
+  .auth-close,
+  .auth-password-toggle {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+  }
+
+  .auth-password-field input {
+    padding-right: 56px;
+  }
+
+  .consent,
+  .auth-remember {
+    min-height: 44px;
+    align-items: center;
+  }
+
+  .consent input,
+  .auth-remember input {
+    margin-block: 0;
+  }
+
+  .auth-overlay,
+  .auth-dialog {
+    overscroll-behavior: contain;
+  }
+}
+
+@media (max-width: 560px) {
+  .intro-band,
+  .flow-band,
+  .scenario-band,
+  .pricing-band,
+  .difference-band,
+  .compliance-band,
+  .pain-section,
+  .modules-section {
+    padding-block: 48px;
+  }
+
+  .section-heading,
+  .split-heading,
+  .difference-heading {
+    margin-bottom: 24px;
+  }
+
+  .system-card,
+  .pain-grid article,
+  .agent-card,
+  .scenario-grid article,
+  .flow-list li,
+  .difference-panel,
+  .subscription-card,
+  .credit-panel,
+  .package-grid article {
+    padding: 18px;
+  }
+
+  .difference-panel-title {
+    padding-bottom: 16px;
+  }
+
+  .difference-list li {
+    padding-block: 16px;
+  }
+}

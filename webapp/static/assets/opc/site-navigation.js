@@ -61,6 +61,8 @@
       billingSubscription: "当前订阅",
       billingImages: "图片额度",
       billingPending: "待审批",
+      publishToday: "今日发布",
+      publishRemaining: "剩余额度",
       billingUnread: "尚未读取",
       billingLoading: "读取中…",
       billingReady: "已同步",
@@ -112,6 +114,8 @@
       billingSubscription: "目前訂閱",
       billingImages: "圖片額度",
       billingPending: "待審批",
+      publishToday: "今日發布",
+      publishRemaining: "剩餘額度",
       billingUnread: "尚未讀取",
       billingLoading: "讀取中…",
       billingReady: "已同步",
@@ -255,19 +259,38 @@
     return `<svg${classAttribute} viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20c.8-4 3.1-6 7-6s6.2 2 7 6"></path></svg>`;
   }
 
+  function safeAvatarUrl(account) {
+    const value = String(account?.avatar_url || account?.avatarUrl || "").trim();
+    const lower = value.toLowerCase();
+    if (!value) return "";
+    if (lower.startsWith("data:image/") || lower.startsWith("https://") || lower.startsWith("http://") || lower.startsWith("/assets/") || lower.startsWith("/uploads/")) return value;
+    return "";
+  }
+
+  function renderAccountAvatar(node, className = "") {
+    if (!node) return;
+    const avatarUrl = safeAvatarUrl(currentAccount);
+    node.textContent = "";
+    if (avatarUrl) {
+      const image = document.createElement("img");
+      image.src = avatarUrl;
+      image.alt = "";
+      if (className) image.className = className;
+      node.appendChild(image);
+      return;
+    }
+    node.innerHTML = accountIcon(className);
+  }
+
   function accountPreferencesMarkup(page = "console") {
     const themePreference = page === "console" ? `<button id="themeToggle" class="site-account-preference" type="button" data-site-theme-toggle>
         <span class="site-account-preference-icon" aria-hidden="true">${themeIcon()}</span>
-        <span data-site-copy="appearance"></span>
-        <strong data-site-theme-state></strong>
       </button>` : "";
     return `<div class="site-account-preferences" data-site-personal-controls>
       <span class="site-account-section-label" data-site-copy="personalSettings"></span>
       ${themePreference}
       <button id="languageToggle" class="site-account-preference" type="button" data-site-language-toggle>
         <span class="site-account-preference-icon" aria-hidden="true">${languageIcon()}</span>
-        <span data-site-copy="languageSetting"></span>
-        <strong data-site-language-preference-state></strong>
       </button>
     </div>`;
   }
@@ -275,11 +298,11 @@
   function accountMenuMarkup(page = "console") {
     return `<div class="site-account-menu" data-site-account-menu>
       <button class="site-user" type="button" aria-controls="siteAccountPopover" aria-haspopup="dialog" aria-expanded="false" data-site-user-title data-site-account-trigger>
-        ${accountIcon("site-user-avatar")}<span id="consoleMeName" data-site-account-name></span><svg class="site-user-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 10 4 4 4-4"></path></svg>
+        <span class="site-user-avatar" data-site-account-avatar>${accountIcon()}</span><span id="consoleMeName" data-site-account-name></span><svg class="site-user-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 10 4 4 4-4"></path></svg>
       </button>
       <div id="siteAccountPopover" class="site-account-popover" data-site-account-popover hidden role="dialog" aria-label="个人信息">
         <div class="site-account-summary">
-          <span class="site-account-avatar" aria-hidden="true">${accountIcon()}</span>
+          <span class="site-account-avatar" aria-hidden="true" data-site-account-avatar>${accountIcon()}</span>
           <span class="site-account-identity"><strong data-site-account-name></strong><span data-site-account-role></span></span>
           <span class="site-account-status"><i aria-hidden="true"></i><span data-site-copy="accountStatus"></span></span>
         </div>
@@ -294,6 +317,8 @@
             <div class="site-account-billing-card"><span data-site-copy="billingSubscription">当前订阅</span><strong data-site-billing-subscription>—</strong></div>
             <div class="site-account-billing-card"><span data-site-copy="billingImages">图片额度</span><strong data-site-billing-images>—</strong></div>
             <div class="site-account-billing-card"><span data-site-copy="billingPending">待审批</span><strong data-site-billing-pending>—</strong></div>
+            <div class="site-account-billing-card"><span data-site-copy="publishToday">今日发布</span><strong data-site-publish-used>—</strong></div>
+            <div class="site-account-billing-card"><span data-site-copy="publishRemaining">剩余额度</span><strong data-site-publish-remaining>—</strong></div>
           </div>
           <div class="site-account-action-row">
             <button type="button" data-site-open-billing data-site-copy="billingView"></button>
@@ -363,11 +388,14 @@
 
   function syncAccount() {
     const labels = copy[currentLanguage()];
-    const username = String(currentAccount?.username || "").trim() || labels.accountFallback;
+    const username = String(currentAccount?.full_name || currentAccount?.display_name || currentAccount?.username || "").trim() || labels.accountFallback;
     document.querySelectorAll("[data-site-account-name]").forEach((node) => node.textContent = username);
     document.querySelectorAll("[data-site-account-role]").forEach((node) => node.textContent = accountRoleLabel(currentAccount, labels));
     document.querySelectorAll("[data-site-account-id]").forEach((node) => {
       node.textContent = currentAccount?.id ? `#${currentAccount.id}` : "-";
+    });
+    document.querySelectorAll("[data-site-account-avatar]").forEach((node) => {
+      renderAccountAvatar(node, node.classList.contains("site-user-avatar") ? "" : "");
     });
   }
 

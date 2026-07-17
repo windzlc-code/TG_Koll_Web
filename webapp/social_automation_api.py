@@ -36,7 +36,7 @@ from .auth import (
     get_current_user_for_session,
     require_admin,
 )
-from .db import db
+from .db import db, get_admin_config, set_admin_config
 from . import commercial_billing, governance
 from .password_vault import (
     PasswordVaultError,
@@ -117,6 +117,7 @@ SOCIAL_ACCOUNT_STATUSES = {
 SOCIAL_ACCOUNT_HEALTH_STATUSES = {"unknown", "alive", "abnormal", "banned"}
 SOCIAL_TASK_STATUSES = {"preparing", "queued", "running", "success", "failed", "cancelled", "need_manual"}
 DAILY_PUBLISH_LIMIT = 15
+DAILY_PUBLISH_POLICY_CONFIG_KEY = "social_publish_policy"
 DAILY_PUBLISH_LIMIT_MESSAGE = "每日最多发布 15 篇。超过 15 篇会有封号风险，系统已强制禁止继续发布。"
 SOCIAL_ACCOUNT_TOTP_PERIOD_SECONDS = 30
 SOCIAL_ACCOUNT_TOTP_MIN_VALIDITY_SECONDS = 15
@@ -133,6 +134,32 @@ _DATA_DIR = Path(os.getenv("WEBAPP_DATA_DIR", str(Path(__file__).resolve().paren
 _NEW_ID: Callable[[str], str] = lambda prefix: f"{prefix}_{uuid.uuid4().hex[:20]}"
 _WORKER_THREAD: threading.Thread | None = None
 _WORKER_STOP = threading.Event()
+
+
+def normalize_daily_publish_limit(value: Any = DAILY_PUBLISH_LIMIT) -> int:
+    try:
+        numeric = int(value)
+    except Exception:
+        numeric = DAILY_PUBLISH_LIMIT
+    return min(max(numeric, 1), 200)
+
+
+def get_daily_publish_limit(conn: Any | None = None) -> int:
+    def _from_conn(active_conn: Any) -> int:
+        config = get_admin_config(active_conn, DAILY_PUBLISH_POLICY_CONFIG_KEY, {})
+        return normalize_daily_publish_limit((config or {}).get("limit", DAILY_PUBLISH_LIMIT) if isinstance(config, dict) else DAILY_PUBLISH_LIMIT)
+
+    if conn is not None:
+        return _from_conn(conn)
+    with db() as active_conn:
+        return _from_conn(active_conn)
+
+
+def set_daily_publish_limit(limit: int) -> dict[str, Any]:
+    normalized = normalize_daily_publish_limit(limit)
+    with db() as conn:
+        set_admin_config(conn, DAILY_PUBLISH_POLICY_CONFIG_KEY, {"limit": normalized}, _now())
+    return {"limit": normalized}
 _WORKER_WAKE = threading.Event()
 _WORKER_LOCK = threading.Lock()
 _WORKER_TASK_THREADS: dict[str, threading.Thread] = {}
@@ -737,6 +764,7 @@ def _daily_publish_policy_in_transaction(
     target_at = _parse_schedule(scheduled_at)
     start_at, end_at, day = _daily_publish_window(target_at or current)
     waived = bool(admin_waived or _owner_is_admin(conn, clean_user_id))
+    limit = get_daily_publish_limit(conn)
     current_day = _daily_publish_day(current)
     used = 0 if waived else _daily_publish_used_count(
         conn,
@@ -744,17 +772,17 @@ def _daily_publish_policy_in_transaction(
         day,
         include_active_carryover=day == current_day,
     )
-    remaining = max(0, DAILY_PUBLISH_LIMIT - used)
+    remaining = max(0, limit - used)
     requested = max(0, int(requested_count or 0))
-    locked = bool(not waived and used >= DAILY_PUBLISH_LIMIT)
+    locked = bool(not waived and used >= limit)
     request_blocked = bool(not waived and requested > remaining)
     message = ""
     if locked:
-        message = DAILY_PUBLISH_LIMIT_MESSAGE
+        message = f"每日最多发布 {limit} 篇。超过 {limit} 篇会有封号风险，系统已强制禁止继续发布。"
     elif request_blocked:
-        message = f"本次发布将超过每日 {DAILY_PUBLISH_LIMIT} 篇上限。超过 {DAILY_PUBLISH_LIMIT} 篇会有封号风险，系统已禁止提交。"
+        message = f"本次发布将超过每日 {limit} 篇上限。超过 {limit} 篇会有封号风险，系统已禁止提交。"
     return {
-        "limit": DAILY_PUBLISH_LIMIT,
+        "limit": limit,
         "used": used,
         "remaining": remaining,
         "requested": requested,
@@ -1866,7 +1894,7 @@ def build_social_automation_overview(*, user_id: int | None = None, admin_waived
         "publish_policy": (
             get_daily_publish_policy(int(user_id), admin_waived=admin_waived)
             if user_id is not None
-            else {"limit": DAILY_PUBLISH_LIMIT, "used": 0, "remaining": DAILY_PUBLISH_LIMIT, "locked": False, "waived": True}
+            else {"limit": get_daily_publish_limit(), "used": 0, "remaining": get_daily_publish_limit(), "locked": False, "waived": True}
         ),
     }
 
@@ -4277,6 +4305,7 @@ def _claim_next_task() -> dict[str, Any] | None:
         }
         row = None
         publish_day = _daily_publish_day(now)
+        publish_limit = get_daily_publish_limit(conn)
         admin_by_user: dict[int, bool] = {}
         publish_count_by_user: dict[int, int] = {}
         cursor: tuple[int, int, str] | None = None
@@ -4335,7 +4364,7 @@ def _claim_next_task() -> dict[str, Any] | None:
                                     candidate_user_id,
                                     publish_day,
                                 )
-                            if publish_count_by_user[candidate_user_id] >= DAILY_PUBLISH_LIMIT:
+                            if publish_count_by_user[candidate_user_id] >= publish_limit:
                                 continue
                 if _publish_login_dependency_blocks_claim(conn, candidate, now):
                     continue
@@ -4813,6 +4842,7 @@ def _persist_publish_confirmation_context(task_id: str, confirmation: dict[str, 
             return False
         slot = _ensure_daily_publish_slot(conn, row, now=now)
         publish_day = _daily_publish_day(now)
+        publish_limit = get_daily_publish_limit(conn)
         if slot is not None and not bool(int(slot["waived"] or 0)):
             slot_state = str(slot["state"] or "")
             needs_capacity = str(slot["quota_day"] or "") != publish_day or slot_state == "released"
@@ -4821,7 +4851,7 @@ def _persist_publish_confirmation_context(task_id: str, confirmation: dict[str, 
                 int(row["user_id"] or 0),
                 publish_day,
                 exclude_task_id=clean_task_id,
-            ) >= DAILY_PUBLISH_LIMIT:
+            ) >= publish_limit:
                 return False
         payload = _loads(row["payload_json"], {})
         if not isinstance(payload, dict):

@@ -259,6 +259,10 @@ const state = {
   liveBrowserExpandedSessionId: "",
   workspaceMenuOpen: true,
   currentUser: null,
+  profileSaving: false,
+  socialPublishPolicy: { limit: 15 },
+  socialPublishPolicyLoaded: false,
+  socialPublishPolicySaving: false,
   setupStatus: null,
   billing: {
     summary: null,
@@ -539,6 +543,10 @@ function clearTenantInMemoryState() {
   });
 
   state.currentUser = null;
+  state.profileSaving = false;
+  state.socialPublishPolicy = { limit: 15 };
+  state.socialPublishPolicyLoaded = false;
+  state.socialPublishPolicySaving = false;
   state.setupStatus = null;
   state.billing = {
     summary: null,
@@ -1973,7 +1981,9 @@ function updateDailyPublishPolicy(value, { notify = true, requestSeq = 0, force 
   const previous = normalizeDailyPublishPolicy(state.dailyPublishPolicy);
   const next = normalizeDailyPublishPolicy(value);
   state.dailyPublishPolicy = next;
+  if (state.currentUser) state.currentUser.publish_policy = next;
   applyDailyPublishButtonLocks();
+  if (typeof renderPersonalBillingSummary === "function") renderPersonalBillingSummary();
   if (notify && next.locked && !next.waived && (!previous.locked || state.dailyPublishWarningDay !== next.day)) {
     state.dailyPublishWarningDay = next.day || "current";
     void showDailyPublishLimitWarning(next);
@@ -4836,28 +4846,32 @@ function renderPersonalBillingSummary() {
   const subscriptionNode = host.querySelector("[data-site-billing-subscription]");
   const imagesNode = host.querySelector("[data-site-billing-images]");
   const pendingNode = host.querySelector("[data-site-billing-pending]");
+  const publishUsedNode = host.querySelector("[data-site-publish-used]");
+  const publishRemainingNode = host.querySelector("[data-site-publish-remaining]");
   if (state.billing.loading && !state.billing.loaded) {
     if (statusNode) statusNode.textContent = billingCopy.loading;
     [pointsNode, subscriptionNode, imagesNode, pendingNode].forEach((node) => {
       if (node) node.textContent = "…";
     });
-    return;
   }
-  if (!state.billing.loaded) {
+  if (!state.billing.loaded && !state.billing.loading) {
     if (statusNode) statusNode.textContent = billingCopy.click;
-    return;
+  } else if (state.billing.loaded) {
+    const { summary, wallet, subscription, imageRemaining, creditPoints, pendingOrders } = billingSummaryData();
+    const billingMode = summary.billing_mode || wallet.billing_mode;
+    const planName = subscription.plan_name
+      || subscription.name
+      || subscription.plan_sku
+      || (billingMode === "legacy" ? "存量账号" : (summary.subscription_active ? "已启用" : "暂无订阅"));
+    if (statusNode) statusNode.textContent = Object.keys(state.billing.errors || {}).length ? billingCopy.partial : billingCopy.ready;
+    if (pointsNode) pointsNode.textContent = `${numberText(creditPoints)} 点`;
+    if (subscriptionNode) subscriptionNode.textContent = planName;
+    if (imagesNode) imagesNode.textContent = `${numberText(imageRemaining)} 张`;
+    if (pendingNode) pendingNode.textContent = numberText(pendingOrders);
   }
-  const { summary, wallet, subscription, imageRemaining, creditPoints, pendingOrders } = billingSummaryData();
-  const billingMode = summary.billing_mode || wallet.billing_mode;
-  const planName = subscription.plan_name
-    || subscription.name
-    || subscription.plan_sku
-    || (billingMode === "legacy" ? "存量账号" : (summary.subscription_active ? "已启用" : "暂无订阅"));
-  if (statusNode) statusNode.textContent = Object.keys(state.billing.errors || {}).length ? billingCopy.partial : billingCopy.ready;
-  if (pointsNode) pointsNode.textContent = `${numberText(creditPoints)} 点`;
-  if (subscriptionNode) subscriptionNode.textContent = planName;
-  if (imagesNode) imagesNode.textContent = `${numberText(imageRemaining)} 张`;
-  if (pendingNode) pendingNode.textContent = numberText(pendingOrders);
+  const publishPolicy = normalizeDailyPublishPolicy(state.dailyPublishPolicy || state.currentUser?.publish_policy || {});
+  if (publishUsedNode) publishUsedNode.textContent = publishPolicy.waived ? "不限" : `${numberText(publishPolicy.used)} / ${numberText(publishPolicy.limit)}`;
+  if (publishRemainingNode) publishRemainingNode.textContent = publishPolicy.waived ? "不限" : `${numberText(publishPolicy.remaining)} 篇`;
 }
 
 function renderBillingOrders() {
@@ -10022,7 +10036,8 @@ async function loadMe() {
       return null;
     }
     state.currentUser = me;
-    if (meName) meName.textContent = me.username || "-";
+    if (me.publish_policy) updateDailyPublishPolicy(me.publish_policy, { notify: false, requestSeq: beginDailyPublishPolicyRequest(), force: true });
+    if (meName) meName.textContent = me.full_name || me.username || "-";
     window.VectoSiteNavigation?.setAccount(me);
     if (me.is_admin) $("openAdmin").hidden = false;
     return me;
@@ -10054,8 +10069,9 @@ async function revalidateConsoleIdentity() {
         return null;
       }
       state.currentUser = me;
+      if (me.publish_policy) updateDailyPublishPolicy(me.publish_policy, { notify: false, requestSeq: beginDailyPublishPolicyRequest(), force: true });
       const meName = $("consoleMeName");
-      if (meName) meName.textContent = me.username || "-";
+      if (meName) meName.textContent = me.full_name || me.username || "-";
       window.VectoSiteNavigation?.setAccount(me);
       unmaskConsoleAfterIdentityRevalidation();
       return me;
@@ -10489,12 +10505,44 @@ function renderConsoleSettingsPage() {
   const standbyControl = browserDurationControlState("standby_seconds", preferences.standby_seconds, standbyPresets);
   const autoCloseControl = browserDurationControlState("auto_close_seconds", preferences.auto_close_seconds, autoClosePresets);
   const manualTimeoutControl = browserDurationControlState("manual_timeout_seconds", preferences.manual_timeout_seconds, manualTimeoutPresets);
+  const currentUser = state.currentUser || {};
+  const displayName = String(currentUser.full_name || "").trim();
+  const avatarUrl = String(currentUser.avatar_url || "").trim();
+  const publishLimit = Math.min(Math.max(Number(state.socialPublishPolicy?.limit || state.dailyPublishPolicy?.limit || 15), 1), 200);
   host.innerHTML = `
     <div class="console-settings-page">
       <div class="console-settings-actions">
         <span>浏览器策略按当前用户保存；分页设置仅保存在本机浏览器。</span>
         <button type="button" class="primary" id="saveConsoleSettings">保存设置</button>
       </div>
+      <section class="console-settings-group">
+        <div class="console-settings-group-head">
+          <strong>个人资料</strong>
+          <span>用于右上角账号信息展示，不会修改登录用户名。</span>
+        </div>
+        <div class="console-profile-settings">
+          <div class="console-profile-avatar-preview" aria-hidden="true">
+            ${avatarUrl ? `<img src="${esc(avatarUrl)}" alt="" />` : `<span>${esc((displayName || currentUser.username || "V").slice(0, 1).toUpperCase())}</span>`}
+          </div>
+          <div class="console-settings-grid">
+            <label class="console-setting-card"><span>显示名称</span><input id="settingsProfileFullName" type="text" maxlength="80" value="${esc(displayName)}" placeholder="${esc(currentUser.username || "账户")}" /></label>
+            <label class="console-setting-card"><span>头像 URL</span><input id="settingsProfileAvatarUrl" type="text" value="${esc(avatarUrl)}" placeholder="https://... 或选择本地图片" /></label>
+            <label class="console-setting-card"><span>上传头像</span><input id="settingsProfileAvatarFile" type="file" accept="image/*" /></label>
+          </div>
+          <div class="row-actions"><button type="button" id="saveProfileSettings" class="primary" ${state.profileSaving ? "disabled" : ""}>${state.profileSaving ? "保存中..." : "保存个人资料"}</button></div>
+        </div>
+      </section>
+      ${state.currentUser?.is_admin ? `
+      <section class="console-settings-group">
+        <div class="console-settings-group-head">
+          <strong>发布保护参数</strong>
+          <span>控制普通用户每日发布任务上限；管理员和代管操作仍按豁免策略处理。</span>
+        </div>
+        <div class="console-settings-grid">
+          <label class="console-setting-card"><span>每日发布上限</span><input id="settingsDailyPublishLimit" type="number" min="1" max="200" step="1" value="${esc(publishLimit)}" /><em>当前发布入口和后台执行队列都会使用这个值。</em></label>
+        </div>
+        <div class="row-actions"><button type="button" id="savePublishPolicySettings" class="primary" ${state.socialPublishPolicySaving ? "disabled" : ""}>${state.socialPublishPolicySaving ? "保存中..." : "保存发布上限"}</button></div>
+      </section>` : ""}
       <section class="console-settings-group">
         <div class="console-settings-group-head">
           <strong>列表与分页</strong>
@@ -10578,6 +10626,7 @@ function renderConsoleSettingsPage() {
     </div>
   `;
   if (!state.browserPolicyLoaded && !state.browserPolicyLoading) loadBrowserPolicySettings();
+  if (state.currentUser?.is_admin && !state.socialPublishPolicyLoaded) loadAdminSocialPublishPolicy();
 }
 
 function updateBrowserPreferencesDraft() {
@@ -10659,6 +10708,90 @@ async function saveConsoleSettingsPage() {
   renderConsoleSettingsPage();
   refreshConsoleSettingsDependents();
   showMsg("consoleSettingsMsg", "设置已保存。", true);
+}
+
+async function saveProfileSettings() {
+  if (state.profileSaving) return;
+  const fullName = String($("settingsProfileFullName")?.value || "").trim();
+  const avatarUrl = String($("settingsProfileAvatarUrl")?.value || "").trim();
+  state.profileSaving = true;
+  renderConsoleSettingsPage();
+  try {
+    const result = await api("/api/me/profile", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        full_name: fullName,
+        avatar_url: avatarUrl,
+      }),
+    });
+    state.currentUser = { ...(state.currentUser || {}), ...(result.profile || result || {}) };
+    window.VectoSiteNavigation?.setAccount(state.currentUser);
+    renderPersonalBillingSummary();
+    showMsg("consoleSettingsMsg", "个人资料已保存。", true);
+  } catch (error) {
+    showMsg("consoleSettingsMsg", error.detail || error.message || "个人资料保存失败。", false);
+  } finally {
+    state.profileSaving = false;
+    renderConsoleSettingsPage();
+  }
+}
+
+async function loadAdminSocialPublishPolicy({ force = false } = {}) {
+  if (!state.currentUser?.is_admin || (state.socialPublishPolicyLoaded && !force)) return;
+  try {
+    const result = await api("/api/admin/social_publish_policy");
+    state.socialPublishPolicy = result.policy || result || state.socialPublishPolicy;
+    state.socialPublishPolicyLoaded = true;
+  } catch (error) {
+    showMsg("consoleSettingsMsg", error.detail || error.message || "发布保护参数读取失败。", false);
+  } finally {
+    if (state.view === "console_settings" && $("consoleSettingsBody")) renderConsoleSettingsPage();
+  }
+}
+
+async function saveAdminSocialPublishPolicy() {
+  if (!state.currentUser?.is_admin || state.socialPublishPolicySaving) return;
+  const limit = Math.min(Math.max(Number.parseInt(String($("settingsDailyPublishLimit")?.value || ""), 10) || 15, 1), 200);
+  state.socialPublishPolicySaving = true;
+  renderConsoleSettingsPage();
+  try {
+    const result = await api("/api/admin/social_publish_policy", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ limit }),
+    });
+    state.socialPublishPolicy = result.policy || { limit };
+    state.socialPublishPolicyLoaded = true;
+    const policyResult = await api("/api/persona_dashboard/automation/publish_policy?requested_count=0");
+    updateDailyPublishPolicy(policyResult?.publish_policy || policyResult, { notify: false, requestSeq: beginDailyPublishPolicyRequest(), force: true });
+    showMsg("consoleSettingsMsg", "发布上限已保存。", true);
+  } catch (error) {
+    showMsg("consoleSettingsMsg", error.detail || error.message || "发布上限保存失败。", false);
+  } finally {
+    state.socialPublishPolicySaving = false;
+    renderConsoleSettingsPage();
+  }
+}
+
+function loadProfileAvatarFile(file) {
+  if (!file) return;
+  if (!String(file.type || "").startsWith("image/")) {
+    showMsg("consoleSettingsMsg", "请选择图片文件。", false);
+    return;
+  }
+  if (file.size > 140 * 1024) {
+    showMsg("consoleSettingsMsg", "头像图片请控制在 140KB 内。", false);
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    if ($("settingsProfileAvatarUrl")) $("settingsProfileAvatarUrl").value = String(reader.result || "");
+    const preview = document.querySelector(".console-profile-avatar-preview");
+    if (preview) preview.innerHTML = `<img src="${esc(String(reader.result || ""))}" alt="" />`;
+  };
+  reader.onerror = () => showMsg("consoleSettingsMsg", "头像读取失败。", false);
+  reader.readAsDataURL(file);
 }
 
 async function loadBrowserPolicySettings(options) {
@@ -16358,7 +16491,7 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
       <button type="button" data-account-proxy-picker="${esc(accountId)}">${account?.proxy_id ? "切换代理" : "选择代理"}</button>
       <button type="button" data-account-pool-edit="${esc(accountId)}">编辑</button>
       <button type="button" data-account-pool-unbind="${esc(accountId)}" ${account.persona_id ? "" : "disabled"}>解绑</button>
-      <button type="button" class="danger" data-social-delete-account="${esc(accountId)}">删除账号</button>
+      <button type="button" class="danger account-pool-delete-icon" data-social-delete-account="${esc(accountId)}" title="删除账号" aria-label="删除账号">${renderTrashIcon()}</button>
     </div>
   </article>`;
 }
@@ -21884,6 +22017,14 @@ function bindEvents() {
       autoConfigureBrowserPreferences();
       return;
     }
+    if (event.target.closest("#saveProfileSettings")) {
+      saveProfileSettings();
+      return;
+    }
+    if (event.target.closest("#savePublishPolicySettings")) {
+      saveAdminSocialPublishPolicy();
+      return;
+    }
     if (event.target.closest("#saveConsoleSettings")) saveConsoleSettingsPage();
   });
   $("consoleSettingsBody").addEventListener("input", (event) => {
@@ -21902,6 +22043,11 @@ function bindEvents() {
     const durationInput = event.target.closest("[data-browser-duration-field]");
     if (durationInput) {
       updateBrowserPreferencesDraft();
+      return;
+    }
+    const avatarInput = event.target.closest("#settingsProfileAvatarFile");
+    if (avatarInput) {
+      loadProfileAvatarFile(avatarInput.files?.[0]);
       return;
     }
     if (event.target.closest("[data-browser-preference-field]")) updateBrowserPreferencesDraft();
