@@ -43,7 +43,11 @@ const THREADS_SEARCH_CACHE_MAX_ROWS_PER_ARCHIVE = 40;
 const THREADS_BROWSER_QUERY_LIMIT = 36;
 const THREADS_BROWSER_QUERY_BATCH_SIZE = 6;
 const THREADS_BROWSER_PAGE_LIMIT = 4;
-const THREADS_BROWSER_BOOTSTRAP_QUERY_LIMIT = 1;
+const THREADS_BROWSER_BOOTSTRAP_QUERY_LIMIT = 3;
+// Threads can render the search page first and emit its GraphQL request a few
+// seconds later. Keep the capture listener alive long enough to observe that
+// request before falling back to DOM-only parsing.
+const THREADS_BROWSER_TEMPLATE_WAIT_ATTEMPTS = 12;
 const THREADS_BROWSER_REQUEST_TIMEOUT_MS = 5_000;
 const SENTIMENT_MODEL_KEYWORD_TARGET = 20;
 const SENTIMENT_HOT_KEYWORD_MODEL = "xai/grok-4.3";
@@ -3656,7 +3660,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
       };
       for (const bootstrapQuery of bootstrapQueries) {
         if (template || (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 3_000)) break;
-        await collectDomCandidates(page, bootstrapQuery);
+        await collectDomCandidates(page, bootstrapQuery, THREADS_BROWSER_TEMPLATE_WAIT_ATTEMPTS);
       }
       page.off("request", captureTemplate);
 
