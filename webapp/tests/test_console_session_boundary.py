@@ -1532,13 +1532,45 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         end = self.site_nav_source.index("function showAuthenticatedAccount", start)
         helper = self.site_nav_source[start:end]
         local_switch = helper.index('window.location.pathname === "/console.html"')
-        managed_redirect = helper.index('params.set("manage_user_id", adminWorkspaceUserId)')
+        managed_redirect = helper.index("adminConsoleTarget(targetView, adminWorkspaceUserId)")
         self.assertLess(local_switch, managed_redirect)
         self.assertIn("window.dispatchEvent(new CustomEvent", helper)
         self.assertIn("new URLSearchParams({ view: targetView })", helper)
-        self.assertIn("sessionStorage.getItem(ADMIN_WORKSPACE_STORAGE_KEY)", helper)
-        self.assertIn("sessionStorage.setItem(ADMIN_WORKSPACE_STORAGE_KEY", helper)
+        self.assertIn("storedAdminWorkspaceUserId()", helper)
+        self.assertIn('currentSessionMode === "admin"', helper)
+        self.assertIn("hasAdminConsoleContext()", helper)
         self.assertNotIn("/admin-console.html?view=", helper)
+
+    def test_public_admin_context_fails_closed_when_admin_probe_errors(self):
+        resolve_start = self.site_nav_source.index("async function resolvePublicSession()")
+        resolve_end = self.site_nav_source.index("async function openConsoleEntry", resolve_start)
+        resolve_source = self.site_nav_source[resolve_start:resolve_end]
+        self._run_node(
+            f"""
+            const assert = require("assert");
+            let regularProbeCount = 0;
+            function hasAdminConsoleContext() {{ return true; }}
+            function storedAdminWorkspaceUserId() {{ return ""; }}
+            function removeSessionValue() {{}}
+            function markAdminConsoleContext() {{}}
+            function clearAdminConsoleContext() {{}}
+            async function fetchSessionAccount(options = {{}}) {{
+              if (options.admin) {{
+                return {{ response: {{ ok: false, status: 500 }}, account: null }};
+              }}
+              regularProbeCount += 1;
+              return {{
+                response: {{ ok: true, status: 200 }},
+                account: {{ id: 32, username: "other-user" }},
+              }};
+            }}
+            {resolve_source}
+            (async () => {{
+              await assert.rejects(resolvePublicSession(), /Admin session validation failed/);
+              assert.strictEqual(regularProbeCount, 0);
+            }})();
+            """
+        )
 
     def test_admin_logout_and_session_expiry_clear_managed_workspace_context(self):
         marker = 'sessionStorage.removeItem("vecto-admin-workspace-user-id")'

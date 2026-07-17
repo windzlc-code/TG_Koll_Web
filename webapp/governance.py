@@ -185,6 +185,31 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             "UPDATE sessions SET token = ? WHERE token = ?",
             (token_digest(raw_token), raw_token),
         )
+    # Before the admin-specific cookie existed, administrator sessions were
+    # stored with the regular-session default. They must not remain usable via
+    # the customer cookie after the boundary is introduced.
+    session_boundary_at = now_ts()
+    conn.execute(
+        """
+        UPDATE sessions
+        SET revoked_at = ?, revoke_reason = 'admin_session_boundary_migration'
+        WHERE revoked_at = 0
+          AND expires_at > ?
+          AND is_admin_session = 0
+          AND user_id IN (SELECT id FROM users WHERE is_admin = 1)
+        """,
+        (session_boundary_at, session_boundary_at),
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO schema_migrations(version, description, applied_at)
+        VALUES ('admin_session_boundary_v1', ?, ?)
+        """,
+        (
+            "Revoke legacy administrator sessions issued as regular sessions",
+            session_boundary_at,
+        ),
+    )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS customer_groups (

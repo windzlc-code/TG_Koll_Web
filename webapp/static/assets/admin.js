@@ -553,6 +553,11 @@ function setActiveAdminPage(page, updateHash = true) {
 
 function clearStoredAdminWorkspaceContext() {
   try { window.sessionStorage.removeItem("vecto-admin-workspace-user-id"); } catch (_) {}
+  try { window.sessionStorage.removeItem("vecto-admin-console-context"); } catch (_) {}
+}
+
+function markAdminConsoleContext() {
+  try { window.sessionStorage.setItem("vecto-admin-console-context", "1"); } catch (_) {}
 }
 
 async function api(path, opts = {}) {
@@ -6595,6 +6600,7 @@ function bindTextModelContentTabs() {
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
+  markAdminConsoleContext();
   bindAdminMobileNavigation();
   markAdminStaticUi();
   startAdminLanguageObserver();

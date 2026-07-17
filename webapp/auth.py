@@ -129,6 +129,8 @@ def _get_user_by_id(conn, user_id: int) -> dict[str, Any] | None:
 
 def get_user_allowing_password_change(
     session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+    *,
+    expected_admin_session: bool | None = None,
 ) -> dict[str, Any]:
     token = str(session_token or "").strip()
     if not token:
@@ -137,13 +139,18 @@ def get_user_allowing_password_change(
     with db() as conn:
         stored_token = session_storage_token(token)
         row = conn.execute(
-            "SELECT user_id, expires_at, revoked_at FROM sessions WHERE token = ?",
+            "SELECT user_id, expires_at, revoked_at, is_admin_session FROM sessions WHERE token = ?",
             (stored_token,),
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=401, detail="登录已过期")
         if int(row["expires_at"]) <= now_ts or int(row["revoked_at"] or 0) > 0:
             conn.execute("DELETE FROM sessions WHERE token = ?", (stored_token,))
+            raise HTTPException(status_code=401, detail="登录已过期")
+        if (
+            expected_admin_session is not None
+            and bool(int(row["is_admin_session"] or 0)) is not bool(expected_admin_session)
+        ):
             raise HTTPException(status_code=401, detail="登录已过期")
         conn.execute(
             "UPDATE sessions SET last_seen_at = ? WHERE token = ? AND last_seen_at < ?",
@@ -211,10 +218,27 @@ def admin_workspace_target_from_request(
 def get_current_user_for_session(
     session_token: str | None,
     *,
+    expected_admin_session: bool | None = None,
     admin_workspace_user_id: Any = None,
     request: Request | None = None,
 ) -> dict[str, Any]:
-    user = get_user_allowing_password_change(session_token)
+    if expected_admin_session is None and request is not None:
+        clean_token = str(session_token or "").strip()
+        regular_cookie = str(request.cookies.get(SESSION_COOKIE) or "").strip()
+        admin_cookie = str(request.cookies.get(ADMIN_SESSION_COOKIE) or "").strip()
+        if clean_token and clean_token == admin_cookie and clean_token != regular_cookie:
+            expected_admin_session = True
+        elif clean_token and clean_token == regular_cookie and clean_token != admin_cookie:
+            expected_admin_session = False
+        elif clean_token and clean_token == regular_cookie and clean_token == admin_cookie:
+            expected_admin_session = request_uses_admin_session(
+                request,
+                admin_workspace_user_id,
+            )
+    user = get_user_allowing_password_change(
+        session_token,
+        expected_admin_session=expected_admin_session,
+    )
     if int(user.get("must_change_password") or 0) == 1:
         try:
             expires_at = int(user.get("password_expires_at") or 0)
@@ -267,6 +291,7 @@ def get_current_user(
     admin_workspace_user_id: str | None = Header(default=None, alias=ADMIN_WORKSPACE_HEADER),
 ) -> dict[str, Any]:
     workspace_target = admin_workspace_target_from_request(request, admin_workspace_user_id)
+    uses_admin_session = request_uses_admin_session(request, workspace_target)
     return get_current_user_for_session(
         session_token_for_request(
             request,
@@ -274,6 +299,7 @@ def get_current_user(
             admin_session_token,
             admin_workspace_user_id=workspace_target,
         ),
+        expected_admin_session=uses_admin_session,
         admin_workspace_user_id=workspace_target,
         request=request,
     )

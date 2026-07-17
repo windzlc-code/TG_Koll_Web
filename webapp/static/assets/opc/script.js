@@ -411,27 +411,13 @@ function closeLogin() {
 document.querySelectorAll("[data-open-login]").forEach((button) => button.addEventListener("click", openLogin));
 document.querySelectorAll("[data-console-entry]").forEach((link) => link.addEventListener("click", async (event) => {
   event.preventDefault();
-  link.setAttribute("aria-busy", "true");
-  try {
-    const response = await fetch("/api/auth/me", {
-      credentials: "include",
-      cache: "no-store",
-      headers: { Accept: "application/json" },
-    });
-    if (response.ok) {
-      window.location.assign("/console.html");
-      return;
-    }
-    if (response.status === 401 || response.status === 403) {
-      openLogin(event);
-      return;
-    }
-    window.location.assign("/console.html");
-  } catch {
-    window.location.assign("/console.html");
-  } finally {
-    link.removeAttribute("aria-busy");
+  if (!window.VectoSiteNavigation?.openConsoleEntry) {
+    openLogin({ currentTarget: link });
+    return;
   }
+  await window.VectoSiteNavigation.openConsoleEntry(link, {
+    onUnauthorized: () => openLogin({ currentTarget: link }),
+  });
 }));
 document.querySelectorAll("[data-close-login]").forEach((button) => button.addEventListener("click", closeLogin));
 loginPasswordToggle?.addEventListener("click", () => {

@@ -8,8 +8,10 @@
   const EVENT_BILLING_REQUEST = "vecto:account-billing-request";
   const EVENT_SETTINGS_REQUEST = "vecto:account-settings-request";
   const ADMIN_WORKSPACE_STORAGE_KEY = "vecto-admin-workspace-user-id";
+  const ADMIN_CONTEXT_STORAGE_KEY = "vecto-admin-console-context";
   const DEFAULT_LANGUAGE = document.documentElement.lang === "zh-Hant" ? "zh-Hant" : "zh-Hans";
   let currentAccount = null;
+  let currentSessionMode = "guest";
   let logoutPending = false;
   let logoutMessage = "";
 
@@ -124,6 +126,52 @@
     } catch {
       return fallback;
     }
+  }
+
+  function sessionValue(key, fallback = "") {
+    try {
+      return window.sessionStorage.getItem(key) || fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  function writeSessionValue(key, value) {
+    try {
+      window.sessionStorage.setItem(key, value);
+    } catch {}
+  }
+
+  function removeSessionValue(key) {
+    try {
+      window.sessionStorage.removeItem(key);
+    } catch {}
+  }
+
+  function markAdminConsoleContext() {
+    writeSessionValue(ADMIN_CONTEXT_STORAGE_KEY, "1");
+  }
+
+  function clearAdminConsoleContext() {
+    removeSessionValue(ADMIN_CONTEXT_STORAGE_KEY);
+    removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
+    if (currentSessionMode === "admin") currentSessionMode = "guest";
+  }
+
+  function hasAdminConsoleContext() {
+    return sessionValue(ADMIN_CONTEXT_STORAGE_KEY) === "1";
+  }
+
+  function storedAdminWorkspaceUserId() {
+    return String(sessionValue(ADMIN_WORKSPACE_STORAGE_KEY) || "").trim();
+  }
+
+  function adminConsoleTarget(view = "", workspaceUserId = storedAdminWorkspaceUserId()) {
+    const params = new URLSearchParams();
+    if (view) params.set("view", view);
+    if (workspaceUserId) params.set("manage_user_id", workspaceUserId);
+    const query = params.toString();
+    return query ? `/admin-console.html?${query}` : "/admin-console.html";
   }
 
   function currentTheme() {
@@ -345,16 +393,20 @@
 
   async function logoutPublicSession() {
     try {
+      const headers = new Headers({ Accept: "application/json" });
+      if (currentSessionMode === "admin") headers.set("X-Admin-Console", "1");
       const response = await fetch("/api/auth/logout", {
         method: "POST",
         credentials: "include",
-        headers: { Accept: "application/json" },
+        headers,
       });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
         throw new Error(data?.detail || copy[currentLanguage()].logoutFailed);
       }
       setAccount(null);
+      if (currentSessionMode === "admin") clearAdminConsoleContext();
+      currentSessionMode = "guest";
       window.location.reload();
     } catch (error) {
       setLogoutPending(false, error?.message || copy[currentLanguage()].logoutFailed);
@@ -425,7 +477,6 @@
         openAccountConsoleView("console_settings");
       });
       menu.querySelector("[data-site-account-logout]")?.addEventListener("click", () => {
-        try { window.sessionStorage.removeItem(ADMIN_WORKSPACE_STORAGE_KEY); } catch (_) {}
         setLogoutPending(true);
         if (header.dataset.siteMode === "public") {
           void logoutPublicSession();
@@ -440,28 +491,31 @@
     const targetView = view === "console_settings" ? "console_settings" : "billing";
     const pageWorkspaceUserId = String(document.querySelector('meta[name="admin-workspace-user-id"]')?.content || "").trim();
     const isAdminConsole = document.querySelector('meta[name="admin-console-session"]')?.content === "1";
-    let storedWorkspaceUserId = "";
-    try {
-      storedWorkspaceUserId = String(window.sessionStorage.getItem(ADMIN_WORKSPACE_STORAGE_KEY) || "").trim();
-    } catch (_) {}
-    const adminWorkspaceUserId = pageWorkspaceUserId || storedWorkspaceUserId;
+    const adminWorkspaceUserId = pageWorkspaceUserId || storedAdminWorkspaceUserId();
     if (window.location.pathname === "/console.html" || window.location.pathname === "/admin-console.html") {
       window.dispatchEvent(new CustomEvent(targetView === "billing" ? EVENT_BILLING_REQUEST : EVENT_SETTINGS_REQUEST));
       return;
     }
-    const params = new URLSearchParams({ view: targetView });
-    if (adminWorkspaceUserId) params.set("manage_user_id", adminWorkspaceUserId);
-    window.location.assign(`${isAdminConsole || adminWorkspaceUserId ? "/admin-console.html" : "/console.html"}?${params.toString()}`);
+    if (isAdminConsole || currentSessionMode === "admin" || hasAdminConsoleContext() || adminWorkspaceUserId) {
+      window.location.assign(adminConsoleTarget(targetView, adminWorkspaceUserId));
+      return;
+    }
+    window.location.assign(`/console.html?${new URLSearchParams({ view: targetView }).toString()}`);
   }
 
   function syncAdminWorkspaceContext() {
-    const isAdminConsole = document.querySelector('meta[name="admin-console-session"]')?.content === "1";
-    if (!isAdminConsole) return;
+    const adminSessionMeta = document.querySelector('meta[name="admin-console-session"]');
+    if (!adminSessionMeta) return;
+    const isAdminConsole = adminSessionMeta.content === "1";
+    if (!isAdminConsole) {
+      clearAdminConsoleContext();
+      return;
+    }
+    markAdminConsoleContext();
+    currentSessionMode = "admin";
     const workspaceUserId = String(document.querySelector('meta[name="admin-workspace-user-id"]')?.content || "").trim();
-    try {
-      if (workspaceUserId) window.sessionStorage.setItem(ADMIN_WORKSPACE_STORAGE_KEY, workspaceUserId);
-      else window.sessionStorage.removeItem(ADMIN_WORKSPACE_STORAGE_KEY);
-    } catch (_) {}
+    if (workspaceUserId) writeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY, workspaceUserId);
+    else removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
   }
 
   function showAuthenticatedAccount(header, account) {
@@ -488,24 +542,97 @@
   function showGuestAccount(header) {
     if (!header || header.dataset.siteMode !== "public") return;
     header.dataset.siteAuthState = "guest";
+    currentSessionMode = "guest";
     sync();
+  }
+
+  async function fetchSessionAccount({ admin = false, workspaceUserId = "" } = {}) {
+    const headers = new Headers({ Accept: "application/json" });
+    if (admin) headers.set("X-Admin-Console", "1");
+    if (admin && workspaceUserId) headers.set("X-Admin-Workspace-User-ID", workspaceUserId);
+    const response = await fetch("/api/auth/me", {
+      credentials: "include",
+      cache: "no-store",
+      headers,
+    });
+    if (!response.ok) return { response, account: null };
+    return { response, account: await response.json() };
+  }
+
+  async function resolvePublicSession() {
+    if (hasAdminConsoleContext()) {
+      let workspaceUserId = storedAdminWorkspaceUserId();
+      let adminResult = await fetchSessionAccount({ admin: true, workspaceUserId });
+      if (workspaceUserId && [400, 404].includes(adminResult.response.status)) {
+        removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
+        workspaceUserId = "";
+        adminResult = await fetchSessionAccount({ admin: true });
+      }
+      if (adminResult.response.ok && adminResult.account) {
+        markAdminConsoleContext();
+        return {
+          mode: "admin",
+          account: adminResult.account,
+          workspaceUserId,
+          path: "/admin-console.html",
+        };
+      }
+      if ([401, 403].includes(adminResult.response.status)) {
+        clearAdminConsoleContext();
+      } else {
+        throw new Error(`Admin session validation failed: HTTP ${adminResult.response.status}`);
+      }
+    }
+
+    const userResult = await fetchSessionAccount();
+    if (userResult.response.ok && userResult.account) {
+      return {
+        mode: "user",
+        account: userResult.account,
+        workspaceUserId: "",
+        path: "/console.html",
+      };
+    }
+    return { mode: "guest", account: null, workspaceUserId: "", path: "" };
+  }
+
+  async function openConsoleEntry(link, { onUnauthorized } = {}) {
+    link?.setAttribute("aria-busy", "true");
+    try {
+      const session = await resolvePublicSession();
+      if (session.mode === "admin") {
+        window.location.assign(adminConsoleTarget("", session.workspaceUserId));
+        return session;
+      }
+      if (session.mode === "user") {
+        window.location.assign(session.path);
+        return session;
+      }
+      if (typeof onUnauthorized === "function") onUnauthorized();
+      return session;
+    } catch {
+      if (hasAdminConsoleContext()) {
+        window.location.assign(adminConsoleTarget());
+        return null;
+      }
+      if (typeof onUnauthorized === "function") onUnauthorized();
+      return null;
+    } finally {
+      link?.removeAttribute("aria-busy");
+    }
   }
 
   async function hydratePublicSession(header) {
     if (!header || header.dataset.siteMode !== "public") return null;
     try {
-      const response = await fetch("/api/auth/me", {
-        credentials: "include",
-        cache: "no-store",
-        headers: { Accept: "application/json" },
-      });
-      if (!response.ok) {
+      const session = await resolvePublicSession();
+      if (!session.account) {
         showGuestAccount(header);
         return null;
       }
-      const account = await response.json();
-      showAuthenticatedAccount(header, account);
-      return account;
+      currentSessionMode = session.mode === "admin" ? "admin" : "user";
+      showAuthenticatedAccount(header, session.account);
+      return session.account;
     } catch {
       showGuestAccount(header);
       return null;
@@ -621,6 +748,19 @@
   else delete document.documentElement.dataset.theme;
   setLanguage(storedValue(LANGUAGE_STORAGE_KEY, DEFAULT_LANGUAGE), { persist: false });
 
-  window.VectoSiteNavigation = { mount, sync, setTheme, setLanguage, setAccount, setLogoutPending, currentTheme, currentLanguage, themeEnabled };
+  window.VectoSiteNavigation = {
+    mount,
+    sync,
+    setTheme,
+    setLanguage,
+    setAccount,
+    setLogoutPending,
+    currentTheme,
+    currentLanguage,
+    themeEnabled,
+    openConsoleEntry,
+    markAdminConsoleContext,
+    clearAdminConsoleContext,
+  };
   window.dispatchEvent(new CustomEvent("vecto:navigation-ready"));
 })();

@@ -631,11 +631,15 @@ def _get_user_allowing_password_change(
     admin_workspace_user_id: str | None = Header(default=None, alias="X-Admin-Workspace-User-ID"),
 ) -> dict[str, Any]:
     workspace_target = admin_workspace_target_from_request(request, admin_workspace_user_id)
+    uses_admin_session = request_uses_admin_session(request, workspace_target)
     selected_token = session_token_for_request(
         request, session_token, admin_session_token, admin_workspace_user_id=workspace_target,
     )
     request.state.auth_session_fingerprint = governance.token_digest(selected_token)[:16] if selected_token else ""
-    user = _get_session_user_allowing_password_change(selected_token)
+    user = _get_session_user_allowing_password_change(
+        selected_token,
+        expected_admin_session=uses_admin_session,
+    )
     return resolve_admin_workspace_user(
         user,
         workspace_target,
@@ -650,12 +654,14 @@ def get_current_user(
     admin_workspace_user_id: str | None = Header(default=None, alias="X-Admin-Workspace-User-ID"),
 ) -> dict[str, Any]:
     workspace_target = admin_workspace_target_from_request(request, admin_workspace_user_id)
+    uses_admin_session = request_uses_admin_session(request, workspace_target)
     selected_token = session_token_for_request(
         request, session_token, admin_session_token, admin_workspace_user_id=workspace_target,
     )
     request.state.auth_session_fingerprint = governance.token_digest(selected_token)[:16] if selected_token else ""
     user = _get_session_user_for_token(
         selected_token,
+        expected_admin_session=uses_admin_session,
         admin_workspace_user_id=workspace_target,
         request=request,
     )
@@ -2178,8 +2184,10 @@ def _sentiment_browser_auth_config_access(request: Request) -> tuple[dict[str, A
     expected_token = _sentiment_browser_auth_token(config, create=False)
     provided_token = str(request.headers.get("x-sentiment-browser-auth") or "").strip()
     with contextlib.suppress(HTTPException):
+        uses_admin_session = bool(request.cookies.get(ADMIN_SESSION_COOKIE))
         user = _get_session_user_for_token(
-            request.cookies.get(ADMIN_SESSION_COOKIE) or request.cookies.get(SESSION_COOKIE)
+            request.cookies.get(ADMIN_SESSION_COOKIE) or request.cookies.get(SESSION_COOKIE),
+            expected_admin_session=uses_admin_session,
         )
         require_admin(user)
         return config, True
@@ -2189,8 +2197,12 @@ def _sentiment_browser_auth_config_access(request: Request) -> tuple[dict[str, A
 
 
 def _sentiment_browser_auth_admin_from_cookie(request: Request) -> dict[str, Any]:
+    uses_admin_session = bool(request.cookies.get(ADMIN_SESSION_COOKIE))
     token = str(request.cookies.get(ADMIN_SESSION_COOKIE) or request.cookies.get(SESSION_COOKIE) or "").strip()
-    user = _get_session_user_for_token(token)
+    user = _get_session_user_for_token(
+        token,
+        expected_admin_session=uses_admin_session,
+    )
     require_admin(user)
     return user
 
@@ -4714,7 +4726,7 @@ def _create_local_console_session() -> str:
             )
         if user is None:
             raise HTTPException(status_code=500, detail="无法创建本地控制台会话")
-        return create_session(conn, int(user["id"]))
+        return create_session(conn, int(user["id"]), is_admin_session=True)
 
 
 def _ensure_user_can_access_task(user: dict[str, Any], task_row: dict[str, Any]) -> None:
@@ -17276,16 +17288,24 @@ def create_app() -> FastAPI:
         )
         if not (commercial_billing.enforcement_enabled() and is_write and path.startswith("/api/") and not exempt):
             return await call_next(request)
+        workspace_target = (
+            request.headers.get("X-Admin-Workspace-User-ID")
+            or request.query_params.get("admin_workspace_user_id")
+        )
+        uses_admin_session = request_uses_admin_session(request, workspace_target)
         session_token = session_token_for_request(
             request,
             request.cookies.get(SESSION_COOKIE),
             request.cookies.get(ADMIN_SESSION_COOKIE),
-            admin_workspace_user_id=request.headers.get("X-Admin-Workspace-User-ID") or request.query_params.get("admin_workspace_user_id"),
+            admin_workspace_user_id=workspace_target,
         )
         if not session_token:
             return await call_next(request)
         try:
-            session_user = _get_session_user_for_token(session_token)
+            session_user = _get_session_user_for_token(
+                session_token,
+                expected_admin_session=uses_admin_session,
+            )
         except HTTPException:
             return await call_next(request)
         if int(session_user.get("is_admin") or 0) == 1:
@@ -17433,7 +17453,10 @@ def create_app() -> FastAPI:
     @app.get("/change-password.html", include_in_schema=False)
     def page_change_password(session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE)) -> Response:
         try:
-            user = _get_session_user_allowing_password_change(session_token)
+            user = _get_session_user_allowing_password_change(
+                session_token,
+                expected_admin_session=False,
+            )
         except HTTPException:
             return RedirectResponse(url="/login.html", status_code=302)
         if int(user.get("must_change_password") or 0) != 1:
@@ -17487,7 +17510,10 @@ def create_app() -> FastAPI:
             return RedirectResponse(url="/admin-console.html", status_code=302)
         selected_token = admin_session_token if admin_console else session_token
         try:
-            user = _get_session_user_allowing_password_change(selected_token)
+            user = _get_session_user_allowing_password_change(
+                selected_token,
+                expected_admin_session=admin_console,
+            )
         except HTTPException:
             return RedirectResponse(url="/admin" if admin_console else "/login.html", status_code=302)
         if int(user.get("must_change_password") or 0) == 1:
@@ -17541,7 +17567,10 @@ def create_app() -> FastAPI:
         admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
     ) -> Response:
         try:
-            user = _get_session_user_for_token(admin_session_token)
+            user = _get_session_user_for_token(
+                admin_session_token,
+                expected_admin_session=True,
+            )
         except HTTPException:
             return RedirectResponse(url="/admin", status_code=302)
         if not _is_admin(user):
@@ -17571,7 +17600,10 @@ def create_app() -> FastAPI:
         admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
     ) -> Response:
         try:
-            user = _get_session_user_for_token(admin_session_token)
+            user = _get_session_user_for_token(
+                admin_session_token,
+                expected_admin_session=True,
+            )
         except HTTPException:
             return _admin_login_page()
         if not _is_admin(user):
@@ -17788,6 +17820,17 @@ def create_app() -> FastAPI:
             previous_token = str(request.cookies.get(cookie_name) or "").strip()
             session_conflict = False
             if is_admin:
+                boundary_at = _now_ts()
+                conn.execute(
+                    """
+                    UPDATE sessions
+                    SET revoked_at = ?, revoke_reason = 'admin_session_boundary_login'
+                    WHERE user_id = ?
+                      AND revoked_at = 0
+                      AND is_admin_session = 0
+                    """,
+                    (boundary_at, int(user["id"])),
+                )
                 if previous_token:
                     delete_session(conn, previous_token)
                 token = create_session(

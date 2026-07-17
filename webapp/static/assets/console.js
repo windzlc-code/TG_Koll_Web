@@ -661,6 +661,7 @@ function clearTenantInMemoryState() {
 
 function clearStoredAdminWorkspaceContext() {
   try { window.sessionStorage.removeItem("vecto-admin-workspace-user-id"); } catch (_) {}
+  try { window.sessionStorage.removeItem("vecto-admin-console-context"); } catch (_) {}
 }
 
 function handleSessionBoundary(status) {

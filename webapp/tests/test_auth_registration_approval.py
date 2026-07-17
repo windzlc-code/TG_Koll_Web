@@ -828,6 +828,22 @@ class RegistrationApprovalTests(unittest.TestCase):
         self.assertEqual(admin_login.status_code, 200, admin_login.text)
         self.assertEqual(browser.cookies.get("session_token"), user_token)
         self.assertTrue(browser.cookies.get("admin_session_token"))
+        admin_token = browser.cookies.get("admin_session_token")
+        with db_module.db() as conn:
+            user_session = conn.execute(
+                "SELECT revoked_at, is_admin_session FROM sessions WHERE token = ?",
+                (governance.token_digest(user_token),),
+            ).fetchone()
+            admin_session = conn.execute(
+                "SELECT revoked_at, is_admin_session FROM sessions WHERE token = ?",
+                (governance.token_digest(admin_token),),
+            ).fetchone()
+        self.assertIsNotNone(user_session)
+        self.assertEqual(int(user_session["revoked_at"] or 0), 0)
+        self.assertEqual(int(user_session["is_admin_session"] or 0), 0)
+        self.assertIsNotNone(admin_session)
+        self.assertEqual(int(admin_session["revoked_at"] or 0), 0)
+        self.assertEqual(int(admin_session["is_admin_session"] or 0), 1)
 
         user_me = browser.get("/api/me")
         admin_me = browser.get("/api/me", headers={"X-Admin-Console": "1"})
@@ -847,6 +863,130 @@ class RegistrationApprovalTests(unittest.TestCase):
         self.assertEqual(admin_logout.status_code, 200, admin_logout.text)
         self.assertEqual(browser.get("/api/me").json()["username"], "guest001")
         self.assertEqual(browser.get("/api/me", headers={"X-Admin-Console": "1"}).status_code, 401)
+
+    def test_session_cookie_kind_must_match_persisted_session_kind(self):
+        applicant = TestClient(self.app)
+        applied = applicant.post("/api/auth/apply", json=self.application_payload())
+        self.assertEqual(applied.status_code, 200, applied.text)
+
+        admin = TestClient(self.app)
+        admin_login = admin.post(
+            "/api/auth/admin-login",
+            json={"username": "admin", "password": "admin123secure"},
+        )
+        self.assertEqual(admin_login.status_code, 200, admin_login.text)
+        approved = admin.post(
+            f"/api/admin/users/{applied.json()['id']}/approval",
+            json={"approval_status": "approved", "expected_approval_status": "pending"},
+        )
+        self.assertEqual(approved.status_code, 200, approved.text)
+
+        customer = TestClient(self.app)
+        customer_login = customer.post(
+            "/api/auth/user-login",
+            json={"username": "guest001", "password": "guest123"},
+        )
+        self.assertEqual(customer_login.status_code, 200, customer_login.text)
+
+        admin_token = admin.cookies.get("admin_session_token")
+        customer_token = customer.cookies.get("session_token")
+        self.assertTrue(admin_token)
+        self.assertTrue(customer_token)
+
+        admin_token_in_regular_cookie = TestClient(
+            self.app,
+            cookies={"session_token": admin_token},
+        )
+        self.assertEqual(admin_token_in_regular_cookie.get("/api/me").status_code, 401)
+
+        customer_token_in_admin_cookie = TestClient(
+            self.app,
+            cookies={"admin_session_token": customer_token},
+        )
+        self.assertEqual(
+            customer_token_in_admin_cookie.get(
+                "/api/me",
+                headers={"X-Admin-Console": "1"},
+            ).status_code,
+            401,
+        )
+
+    def test_admin_legacy_regular_sessions_are_revoked_by_schema_and_login(self):
+        admin = TestClient(self.app)
+        first_login = admin.post(
+            "/api/auth/admin-login",
+            json={"username": "admin", "password": "admin123secure"},
+        )
+        self.assertEqual(first_login.status_code, 200, first_login.text)
+        valid_admin_token = admin.cookies.get("admin_session_token")
+        self.assertTrue(valid_admin_token)
+
+        with db_module.db() as conn:
+            admin_user = conn.execute(
+                "SELECT id FROM users WHERE username = 'admin'"
+            ).fetchone()
+            admin_id = int(admin_user["id"])
+            conn.execute(
+                """
+                INSERT INTO sessions(
+                  token, user_id, expires_at, created_at, revoked_at,
+                  revoke_reason, is_admin_session
+                ) VALUES (?, ?, ?, ?, 0, '', 0)
+                """,
+                (
+                    governance.token_digest("legacy-admin-regular-before-schema"),
+                    admin_id,
+                    4_000_000_000,
+                    1,
+                ),
+            )
+            governance.ensure_schema(conn)
+            schema_revoked = conn.execute(
+                "SELECT revoked_at, revoke_reason FROM sessions WHERE token = ?",
+                (governance.token_digest("legacy-admin-regular-before-schema"),),
+            ).fetchone()
+            valid_after_schema = conn.execute(
+                "SELECT revoked_at, is_admin_session FROM sessions WHERE token = ?",
+                (governance.token_digest(valid_admin_token),),
+            ).fetchone()
+        self.assertGreater(int(schema_revoked["revoked_at"] or 0), 0)
+        self.assertEqual(
+            str(schema_revoked["revoke_reason"] or ""),
+            "admin_session_boundary_migration",
+        )
+        self.assertEqual(int(valid_after_schema["revoked_at"] or 0), 0)
+        self.assertEqual(int(valid_after_schema["is_admin_session"] or 0), 1)
+
+        with db_module.db() as conn:
+            conn.execute(
+                """
+                INSERT INTO sessions(
+                  token, user_id, expires_at, created_at, revoked_at,
+                  revoke_reason, is_admin_session
+                ) VALUES (?, ?, ?, ?, 0, '', 0)
+                """,
+                (
+                    governance.token_digest("legacy-admin-regular-before-login"),
+                    admin_id,
+                    4_000_000_000,
+                    2,
+                ),
+            )
+        second_login = admin.post(
+            "/api/auth/admin-login",
+            json={"username": "admin", "password": "admin123secure"},
+        )
+        self.assertEqual(second_login.status_code, 200, second_login.text)
+        with db_module.db() as conn:
+            login_revoked = conn.execute(
+                "SELECT revoked_at, revoke_reason FROM sessions WHERE token = ?",
+                (governance.token_digest("legacy-admin-regular-before-login"),),
+            ).fetchone()
+        self.assertGreater(int(login_revoked["revoked_at"] or 0), 0)
+        self.assertEqual(
+            str(login_revoked["revoke_reason"] or ""),
+            "admin_session_boundary_login",
+        )
 
     def test_admin_login_uses_only_admin_cookie_and_logout_revokes_it(self):
         browser = TestClient(self.app)

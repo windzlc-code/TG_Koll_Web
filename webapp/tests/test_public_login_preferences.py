@@ -162,6 +162,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         cls.site_nav_script = (cls.static_dir / "assets" / "opc" / "site-navigation.js").read_text(encoding="utf-8")
         cls.site_nav_styles = (cls.static_dir / "assets" / "opc" / "site-navigation.css").read_text(encoding="utf-8")
         cls.admin_js = (cls.static_dir / "assets" / "admin.js").read_text(encoding="utf-8")
+        cls.console_js = (cls.static_dir / "assets" / "console.js").read_text(encoding="utf-8")
         cls.admin_html = (cls.static_dir / "admin.html").read_text(encoding="utf-8")
         cls.auth_js = (cls.static_dir / "assets" / "auth.js").read_text(encoding="utf-8")
 
@@ -185,11 +186,61 @@ class PublicLoginUiSourceTests(unittest.TestCase):
             self.assertIn('/assets/vendor/opencc-js/ts-phrases.js?v=1.4.1', markup)
         self.assertIn('key: "console", href: "/console.html"', self.site_nav_script)
         self.assertIn("data-console-entry", self.site_nav_script)
-        self.assertIn('fetch("/api/auth/me"', self.script)
-        self.assertIn('response.status === 401 || response.status === 403', self.script)
-        self.assertIn('window.location.assign("/console.html")', self.script)
+        self.assertIn("window.VectoSiteNavigation?.openConsoleEntry", self.script)
         self.assertIn('openLogin(event)', self.script)
         self.assertEqual(page.count('id="loginModal"'), 1)
+
+    def test_admin_origin_is_preserved_and_server_validated_on_public_navigation(self):
+        self.assertIn(
+            'const ADMIN_CONTEXT_STORAGE_KEY = "vecto-admin-console-context"',
+            self.site_nav_script,
+        )
+        self.assertIn("function markAdminConsoleContext()", self.site_nav_script)
+        self.assertIn("function clearAdminConsoleContext()", self.site_nav_script)
+        self.assertIn("async function resolvePublicSession()", self.site_nav_script)
+        self.assertIn('headers.set("X-Admin-Console", "1")', self.site_nav_script)
+        self.assertIn(
+            'headers.set("X-Admin-Workspace-User-ID", workspaceUserId)',
+            self.site_nav_script,
+        )
+        self.assertIn("async function openConsoleEntry", self.site_nav_script)
+        self.assertIn('path: "/admin-console.html"', self.site_nav_script)
+        self.assertIn('path: "/console.html"', self.site_nav_script)
+        self.assertIn("openConsoleEntry,", self.site_nav_script)
+
+        click_handler = self.script.split(
+            'document.querySelectorAll("[data-console-entry]")',
+            1,
+        )[1].split(
+            'document.querySelectorAll("[data-close-login]")',
+            1,
+        )[0]
+        self.assertIn("window.VectoSiteNavigation?.openConsoleEntry", click_handler)
+        self.assertNotIn('fetch("/api/auth/me"', click_handler)
+        self.assertNotIn('window.location.assign("/console.html")', click_handler)
+
+        self.assertIn(
+            'sessionStorage.setItem("vecto-admin-console-context", "1")',
+            self.admin_js,
+        )
+        for source in (self.admin_js, self.console_js):
+            with self.subTest(source=source[:32]):
+                self.assertIn(
+                    'removeItem("vecto-admin-console-context")',
+                    source,
+                )
+        self.assertIn(
+            "removeSessionValue(ADMIN_CONTEXT_STORAGE_KEY)",
+            self.site_nav_script,
+        )
+
+        for page_name in ("index.html", "pricing.html", "console.html", "admin.html"):
+            page = (self.static_dir / page_name).read_text(encoding="utf-8")
+            with self.subTest(page=page_name):
+                self.assertIn(
+                    "/assets/opc/site-navigation.js?v=2026071705",
+                    page,
+                )
 
     def test_public_navigation_preserves_authenticated_account_state(self):
         self.assertIn("async function hydratePublicSession(header)", self.site_nav_script)
