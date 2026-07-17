@@ -259,7 +259,6 @@ const state = {
   liveBrowserExpandedSessionId: "",
   workspaceMenuOpen: true,
   currentUser: null,
-  profileSaving: false,
   socialPublishPolicy: { limit: 15 },
   socialPublishPolicyLoaded: false,
   socialPublishPolicySaving: false,
@@ -543,7 +542,6 @@ function clearTenantInMemoryState() {
   });
 
   state.currentUser = null;
-  state.profileSaving = false;
   state.socialPublishPolicy = { limit: 15 };
   state.socialPublishPolicyLoaded = false;
   state.socialPublishPolicySaving = false;
@@ -6987,6 +6985,16 @@ function renderRefreshIcon() {
   </svg>`;
 }
 
+function renderNetworkIcon() {
+  return `<svg class="ui-action-icon ui-network-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none">
+    <circle cx="12" cy="12" r="9"></circle>
+    <path d="M3.6 9h16.8"></path>
+    <path d="M3.6 15h16.8"></path>
+    <path d="M12 3a14 14 0 0 1 0 18"></path>
+    <path d="M12 3a14 14 0 0 0 0 18"></path>
+  </svg>`;
+}
+
 function renderClipboardIcon() {
   return `<svg class="ui-action-icon ui-clipboard-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
     <rect x="8" y="8" width="11" height="12" rx="2"></rect>
@@ -10505,9 +10513,6 @@ function renderConsoleSettingsPage() {
   const standbyControl = browserDurationControlState("standby_seconds", preferences.standby_seconds, standbyPresets);
   const autoCloseControl = browserDurationControlState("auto_close_seconds", preferences.auto_close_seconds, autoClosePresets);
   const manualTimeoutControl = browserDurationControlState("manual_timeout_seconds", preferences.manual_timeout_seconds, manualTimeoutPresets);
-  const currentUser = state.currentUser || {};
-  const displayName = String(currentUser.full_name || "").trim();
-  const avatarUrl = String(currentUser.avatar_url || "").trim();
   const publishLimit = Math.min(Math.max(Number(state.socialPublishPolicy?.limit || state.dailyPublishPolicy?.limit || 15), 1), 200);
   host.innerHTML = `
     <div class="console-settings-page">
@@ -10515,23 +10520,6 @@ function renderConsoleSettingsPage() {
         <span>浏览器策略按当前用户保存；分页设置仅保存在本机浏览器。</span>
         <button type="button" class="primary" id="saveConsoleSettings">保存设置</button>
       </div>
-      <section class="console-settings-group">
-        <div class="console-settings-group-head">
-          <strong>个人资料</strong>
-          <span>用于右上角账号信息展示，不会修改登录用户名。</span>
-        </div>
-        <div class="console-profile-settings">
-          <div class="console-profile-avatar-preview" aria-hidden="true">
-            ${avatarUrl ? `<img src="${esc(avatarUrl)}" alt="" />` : `<span>${esc((displayName || currentUser.username || "V").slice(0, 1).toUpperCase())}</span>`}
-          </div>
-          <div class="console-settings-grid">
-            <label class="console-setting-card"><span>显示名称</span><input id="settingsProfileFullName" type="text" maxlength="80" value="${esc(displayName)}" placeholder="${esc(currentUser.username || "账户")}" /></label>
-            <label class="console-setting-card"><span>头像 URL</span><input id="settingsProfileAvatarUrl" type="text" value="${esc(avatarUrl)}" placeholder="https://... 或选择本地图片" /></label>
-            <label class="console-setting-card"><span>上传头像</span><input id="settingsProfileAvatarFile" type="file" accept="image/*" /></label>
-          </div>
-          <div class="row-actions"><button type="button" id="saveProfileSettings" class="primary" ${state.profileSaving ? "disabled" : ""}>${state.profileSaving ? "保存中..." : "保存个人资料"}</button></div>
-        </div>
-      </section>
       ${state.currentUser?.is_admin ? `
       <section class="console-settings-group">
         <div class="console-settings-group-head">
@@ -10710,33 +10698,6 @@ async function saveConsoleSettingsPage() {
   showMsg("consoleSettingsMsg", "设置已保存。", true);
 }
 
-async function saveProfileSettings() {
-  if (state.profileSaving) return;
-  const fullName = String($("settingsProfileFullName")?.value || "").trim();
-  const avatarUrl = String($("settingsProfileAvatarUrl")?.value || "").trim();
-  state.profileSaving = true;
-  renderConsoleSettingsPage();
-  try {
-    const result = await api("/api/me/profile", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        full_name: fullName,
-        avatar_url: avatarUrl,
-      }),
-    });
-    state.currentUser = { ...(state.currentUser || {}), ...(result.profile || result || {}) };
-    window.VectoSiteNavigation?.setAccount(state.currentUser);
-    renderPersonalBillingSummary();
-    showMsg("consoleSettingsMsg", "个人资料已保存。", true);
-  } catch (error) {
-    showMsg("consoleSettingsMsg", error.detail || error.message || "个人资料保存失败。", false);
-  } finally {
-    state.profileSaving = false;
-    renderConsoleSettingsPage();
-  }
-}
-
 async function loadAdminSocialPublishPolicy({ force = false } = {}) {
   if (!state.currentUser?.is_admin || (state.socialPublishPolicyLoaded && !force)) return;
   try {
@@ -10772,26 +10733,6 @@ async function saveAdminSocialPublishPolicy() {
     state.socialPublishPolicySaving = false;
     renderConsoleSettingsPage();
   }
-}
-
-function loadProfileAvatarFile(file) {
-  if (!file) return;
-  if (!String(file.type || "").startsWith("image/")) {
-    showMsg("consoleSettingsMsg", "请选择图片文件。", false);
-    return;
-  }
-  if (file.size > 140 * 1024) {
-    showMsg("consoleSettingsMsg", "头像图片请控制在 140KB 内。", false);
-    return;
-  }
-  const reader = new FileReader();
-  reader.onload = () => {
-    if ($("settingsProfileAvatarUrl")) $("settingsProfileAvatarUrl").value = String(reader.result || "");
-    const preview = document.querySelector(".console-profile-avatar-preview");
-    if (preview) preview.innerHTML = `<img src="${esc(String(reader.result || ""))}" alt="" />`;
-  };
-  reader.onerror = () => showMsg("consoleSettingsMsg", "头像读取失败。", false);
-  reader.readAsDataURL(file);
 }
 
 async function loadBrowserPolicySettings(options) {
@@ -16148,16 +16089,6 @@ function updateAccountStatusViews() {
     const account = accountById.get(String(node.dataset.accountTotpFor || ""));
     if (account) updateAccountTotpBadgeNode(node, account);
   });
-  document.querySelectorAll("[data-social-check-status]").forEach((button) => {
-    const accountId = String(button.dataset.socialCheckStatus || "").trim();
-    const checking = Boolean(activeSocialTaskFor({ accountId, taskType: "check_login" }));
-    button.disabled = checking;
-    button.setAttribute("aria-busy", checking ? "true" : "false");
-    button.title = checking ? "正在检测登录与平台状态" : "检测登录与平台状态";
-    button.setAttribute("aria-label", button.title);
-    const label = button.querySelector("[data-account-status-check-label]");
-    if (label) label.textContent = checking ? "检测中" : "检测状态";
-  });
 }
 
 const accountPoolPlatforms = [
@@ -16487,7 +16418,6 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
     </div>
     <div class="row-actions">
       <button type="button" class="primary" data-social-open-login="${esc(accountId)}">打开登录</button>
-      <button type="button" class="account-status-check" data-social-check-status="${esc(accountId)}" title="检测登录与平台状态" aria-label="检测登录与平台状态" aria-busy="${activeSocialTaskFor({ accountId, taskType: "check_login" }) ? "true" : "false"}" ${activeSocialTaskFor({ accountId, taskType: "check_login" }) ? "disabled" : ""}>${renderRefreshIcon()}<span data-account-status-check-label>${activeSocialTaskFor({ accountId, taskType: "check_login" }) ? "检测中" : "检测状态"}</span></button>
       <button type="button" data-account-proxy-picker="${esc(accountId)}">${account?.proxy_id ? "切换代理" : "选择代理"}</button>
       <button type="button" data-account-pool-edit="${esc(accountId)}">编辑</button>
       <button type="button" data-account-pool-unbind="${esc(accountId)}" ${account.persona_id ? "" : "disabled"}>解绑</button>
@@ -16955,7 +16885,7 @@ function accountResidentialProxy(account = null) {
 function accountResidentialProxyLabel(account = null) {
   const proxy = accountResidentialProxy(account);
   if (!proxy) return "未使用代理 IP";
-  const checkedIp = String(proxy.last_check_result?.response?.ip || "").trim();
+    const checkedIp = String(proxy.last_check_result?.response?.ip || "").trim();
   const endpoint = checkedIp || String(proxy.host || "").trim();
   const region = String(proxy.country || "").trim();
   const status = String(proxy.status || "").toLowerCase() === "failed" ? "检测失败" : "住宅 IP";
@@ -17005,7 +16935,7 @@ function sharedProxyFieldsHtml(prefix, proxy = null) {
     <label id="${esc(prefix)}ExpiresAtWrap" ${expiryMode === "custom" ? "" : "hidden"}><span>自定义有效期</span><input id="${esc(prefix)}ExpiresAt" type="datetime-local" value="${esc(proxyDatetimeInputValue(proxy?.expires_at))}" /></label>
     <label class="proxy-form-note"><span>备注（可选）</span><textarea id="${esc(prefix)}Note" rows="3" placeholder="用途或续费信息">${esc(proxy?.note || "")}</textarea></label>
     <div class="proxy-network-check">
-      <button type="button" data-proxy-inline-test="${esc(prefix)}" data-proxy-inline-id="${esc(proxy?.id || "")}">${renderRefreshIcon()}<span>网络检测</span></button>
+      <button type="button" class="account-inline-action" data-proxy-inline-test="${esc(prefix)}" data-proxy-inline-id="${esc(proxy?.id || "")}">${renderNetworkIcon()}<span>网络检测</span></button>
       <div id="${esc(prefix)}CheckResult" class="proxy-check-result" hidden></div>
     </div>`;
 }
@@ -17501,8 +17431,8 @@ function accountProxyInlineCustomFormHtml(scope = "edit") {
       ${sharedProxyFieldsHtml("accountProxyCustom")}
     </div>
     <div class="account-proxy-inline-custom-actions">
-      <button type="button" data-account-proxy-custom-cancel>取消</button>
-      <button type="button" class="primary" data-account-proxy-custom-save>检测并添加</button>
+      <button type="button" class="account-inline-action" data-account-proxy-custom-cancel>取消</button>
+      <button type="button" class="primary account-inline-action" data-account-proxy-custom-save>${renderNetworkIcon()}<span>检测并添加</span></button>
     </div>
   </section>`;
 }
@@ -17899,7 +17829,7 @@ function createAccountTotpController(modal, account) {
         </label>
         <div class="account-totp-entry-actions">
           ${configured ? `<button type="button" data-account-totp-update-cancel>取消</button>` : ""}
-          <button type="button" class="primary" data-account-totp-submit>${configured ? "更新 2FA" : "添加 2FA"}</button>
+          <button type="button" class="primary account-inline-action" data-account-totp-submit>${configured ? renderReplaceIcon() : renderPlusIcon()}<span>${configured ? "更新 2FA" : "添加 2FA"}</span></button>
         </div>
       </div>
       <p class="account-totp-message" data-account-totp-message hidden></p>`;
@@ -17934,8 +17864,8 @@ function createAccountTotpController(modal, account) {
             <div><dt>最近验证</dt><dd data-account-totp-verified>尚无记录</dd></div>
           </dl>
           <div class="account-totp-code-actions">
-            <button type="button" data-account-totp-update>更新密钥</button>
-            <button type="button" class="danger" data-account-totp-delete>移除 2FA</button>
+            <button type="button" class="account-inline-action" data-account-totp-update>${renderReplaceIcon()}<span>更新密钥</span></button>
+            <button type="button" class="danger account-inline-action" data-account-totp-delete>${renderTrashIcon()}<span>移除 2FA</span></button>
           </div>
         </div>
         <p class="account-totp-message" data-account-totp-message hidden></p>`;
@@ -19093,7 +19023,6 @@ function isManualOpenLoginSession(session) {
 }
 
 function liveBrowserLoginMode(session) {
-  if (String(session?.task_type || "").trim().toLowerCase() !== "open_login") return "";
   const mode = String(session?.login_mode || "").trim().toLowerCase();
   if (mode === "switching") return "switching";
   if (mode === "takeover_timeout") return "takeover_timeout";
@@ -19102,8 +19031,8 @@ function liveBrowserLoginMode(session) {
 }
 
 function renderLiveBrowserModeToggle(session) {
-  if (String(session?.task_type || "").trim().toLowerCase() !== "open_login") return "";
   const sessionId = liveBrowserSessionId(session);
+  if (!sessionId) return "";
   const mode = liveBrowserLoginMode(session);
   const active = ["running", "need_manual"].includes(liveBrowserTaskStatus(session));
   const switching = mode === "switching";
@@ -19970,9 +19899,6 @@ function bindEvents() {
   });
   window.addEventListener("vecto:account-billing-request", () => {
     openPersonalConsoleView("billing").catch(() => {});
-  });
-  window.addEventListener("vecto:account-settings-request", () => {
-    openPersonalConsoleView("console_settings").catch(() => {});
   });
   markConsoleStaticUi();
   startLanguageObserver();
@@ -21849,16 +21775,8 @@ function bindEvents() {
         .catch((error) => showMsg("socialMsg", error.detail || error.message || "打开登录失败", false));
       return;
     }
-    const statusCheck = event.target.closest("[data-social-check-status]");
-    if (statusCheck) {
-      const accountId = String(statusCheck.dataset.socialCheckStatus || "").trim();
-      const account = selectedSocialAccount(accountId);
-      createSocialTask("check_login", accountId, account?.persona_id || "", "socialMsg")
-        .catch((error) => showMsg("socialMsg", error.detail || error.message || "登录状态同步失败", false));
-      return;
-    }
     const accountCard = event.target.closest("[data-account-pool-account]");
-    const accountAction = event.target.closest("[data-social-open-login], [data-social-check-status], [data-account-proxy-picker], [data-account-pool-edit], [data-account-pool-unbind], [data-social-delete-account], .account-pool-card-check");
+    const accountAction = event.target.closest("[data-social-open-login], [data-account-proxy-picker], [data-account-pool-edit], [data-account-pool-unbind], [data-social-delete-account], .account-pool-card-check");
     if (accountCard && !accountAction) {
       selectAccountPoolAccount(accountCard.dataset.accountPoolAccount || "");
       renderSocialAccounts();
@@ -22017,10 +21935,6 @@ function bindEvents() {
       autoConfigureBrowserPreferences();
       return;
     }
-    if (event.target.closest("#saveProfileSettings")) {
-      saveProfileSettings();
-      return;
-    }
     if (event.target.closest("#savePublishPolicySettings")) {
       saveAdminSocialPublishPolicy();
       return;
@@ -22043,11 +21957,6 @@ function bindEvents() {
     const durationInput = event.target.closest("[data-browser-duration-field]");
     if (durationInput) {
       updateBrowserPreferencesDraft();
-      return;
-    }
-    const avatarInput = event.target.closest("#settingsProfileAvatarFile");
-    if (avatarInput) {
-      loadProfileAvatarFile(avatarInput.files?.[0]);
       return;
     }
     if (event.target.closest("[data-browser-preference-field]")) updateBrowserPreferencesDraft();

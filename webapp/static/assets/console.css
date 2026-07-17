@@ -560,38 +560,6 @@ button.primary,
   gap: 8px;
 }
 
-.console-profile-settings {
-  display: grid;
-  grid-template-columns: 74px minmax(0, 1fr);
-  align-items: start;
-  gap: 12px;
-}
-
-.console-profile-settings .row-actions {
-  grid-column: 2;
-  margin: 0;
-}
-
-.console-profile-avatar-preview {
-  display: grid;
-  place-items: center;
-  width: 64px;
-  height: 64px;
-  overflow: hidden;
-  color: var(--accent);
-  background: var(--soft);
-  border: 1px solid var(--line);
-  border-radius: 50%;
-  font-size: 24px;
-  font-weight: 900;
-}
-
-.console-profile-avatar-preview img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
 .console-setting-card {
   display: grid;
   gap: 6px;
@@ -7987,13 +7955,21 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .console-modal-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 10px;
+  padding-top: 2px;
 }
 
 .console-modal-actions button {
-  min-height: 38px;
-  padding: 0 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 74px;
+  min-height: 40px;
+  padding: 0 15px;
+  border-radius: 8px;
+  line-height: 1;
 }
 
 .console-modal-actions .danger {
@@ -9660,6 +9636,7 @@ body.persona-touch-dragging .persona-list-card:active {
 .account-totp-entry-actions,
 .account-totp-code-actions {
   display: flex;
+  align-items: center;
   gap: 8px;
 }
 
@@ -9716,11 +9693,12 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .account-totp-code-value > button {
   display: inline-grid;
-  width: 30px;
-  min-width: 30px;
-  height: 30px;
-  min-height: 30px;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
   padding: 0;
+  border-radius: 8px;
   place-items: center;
 }
 
@@ -9819,8 +9797,37 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .account-totp-code-actions button {
-  min-height: 32px;
-  padding: 0 10px;
+  min-height: 34px;
+  padding: 0 11px;
+}
+
+.account-inline-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 11px;
+  border-radius: 8px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.account-inline-action svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.account-inline-action span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1em;
 }
 
 .account-totp-message {
@@ -9947,8 +9954,13 @@ body.persona-touch-dragging .persona-list-card:active {
 .account-proxy-custom-add {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   flex: 0 0 auto;
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 8px;
+  line-height: 1;
 }
 
 .account-proxy-custom-add .ui-action-icon {
@@ -10002,6 +10014,7 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .account-proxy-inline-custom-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 8px;
 }
@@ -10396,14 +10409,22 @@ body.persona-touch-dragging .persona-list-card:active {
 .proxy-network-check > button {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 7px;
-  min-height: 40px;
-  padding: 0 14px;
+  min-height: 34px;
+  padding: 0 11px;
+  border-radius: 8px;
+  line-height: 1;
 }
 
 .proxy-network-check > button svg {
   width: 16px;
   height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .proxy-check-result {

@@ -14,6 +14,9 @@ CONSOLE_CSS = REPO_ROOT / "webapp" / "static" / "assets" / "console.css"
 CONSOLE_HTML = REPO_ROOT / "webapp" / "static" / "console.html"
 SITE_NAV_JS = REPO_ROOT / "webapp" / "static" / "assets" / "opc" / "site-navigation.js"
 SITE_NAV_CSS = REPO_ROOT / "webapp" / "static" / "assets" / "opc" / "site-navigation.css"
+PROFILE_HTML = REPO_ROOT / "webapp" / "static" / "profile.html"
+PROFILE_JS = REPO_ROOT / "webapp" / "static" / "assets" / "profile.js"
+PROFILE_CSS = REPO_ROOT / "webapp" / "static" / "assets" / "profile.css"
 OPENCC_ST_CHARACTERS_JS = REPO_ROOT / "webapp" / "static" / "assets" / "vendor" / "opencc-js" / "st-characters.js"
 
 
@@ -27,6 +30,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         cls.markup = CONSOLE_HTML.read_text(encoding="utf-8")
         cls.site_nav_source = SITE_NAV_JS.read_text(encoding="utf-8")
         cls.site_nav_styles = SITE_NAV_CSS.read_text(encoding="utf-8")
+        cls.profile_markup = PROFILE_HTML.read_text(encoding="utf-8")
+        cls.profile_source = PROFILE_JS.read_text(encoding="utf-8")
+        cls.profile_styles = PROFILE_CSS.read_text(encoding="utf-8")
 
     def test_console_uses_vecto_site_navigation_without_replacing_workspace_navigation(self):
         self.assertIn('data-site-header data-site-page="console"', self.markup)
@@ -77,6 +83,40 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         ensure_language = self._function_source("ensureLanguageToggle")
         self.assertNotIn("document.createElement", ensure_theme)
         self.assertNotIn("document.createElement", ensure_language)
+
+    def test_personal_profile_is_a_separate_bright_page_with_svg_upload(self):
+        for removed_console_profile_marker in (
+            "settingsProfileFullName",
+            "settingsProfileAvatarFile",
+            "saveProfileSettings",
+            "loadProfileAvatarFile",
+        ):
+            self.assertNotIn(removed_console_profile_marker, self.source)
+
+        self.assertIn("function openProfilePage()", self.site_nav_source)
+        self.assertIn('"/profile.html"', self.site_nav_source)
+        self.assertIn('"/admin-profile.html"', self.site_nav_source)
+        self.assertIn('data-site-copy="personalProfile"', self.site_nav_source)
+        self.assertIn('page === "console" ? "" : " hidden"', self.site_nav_source)
+
+        self.assertIn('id="profileAvatarButton"', self.profile_markup)
+        self.assertIn('id="profileAvatarFile"', self.profile_markup)
+        self.assertIn(" hidden", self.profile_markup)
+        self.assertIn('<svg viewBox="0 0 24 24"', self.profile_markup)
+        self.assertIn('<path d="M12 5v14M5 12h14"', self.profile_markup)
+        self.assertNotIn("选择文件", self.profile_markup)
+        self.assertIn("/assets/profile.css?v=__PROFILE_CSS_VERSION__", self.profile_markup)
+        self.assertIn("/assets/profile.js?v=__PROFILE_JS_VERSION__", self.profile_markup)
+
+        self.assertIn("color-scheme: light", self.profile_styles)
+        self.assertIn("body.profile-page", self.profile_styles)
+        self.assertIn("@media (max-width: 720px)", self.profile_styles)
+        self.assertIn('$("profileAvatarFile")?.click()', self.profile_source)
+        self.assertIn("file.size > 140 * 1024", self.profile_source)
+        self.assertIn('api("/api/me/profile"', self.profile_source)
+        self.assertIn('error?.code === "mfa_setup_required"', self.profile_source)
+        self.assertIn('"/admin#account"', self.profile_source)
+        self.assertIn('"/change-password.html"', self.profile_source)
 
     def test_persona_image_empty_state_supports_custom_upload_and_drop_placeholder(self):
         for marker in (

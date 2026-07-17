@@ -17827,6 +17827,39 @@ def create_app() -> FastAPI:
             },
         )
 
+    @app.get("/profile.html", include_in_schema=False)
+    @app.get("/admin-profile.html", include_in_schema=False)
+    def page_profile(
+        request: Request,
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+        admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
+    ) -> Response:
+        admin_profile = request.url.path == "/admin-profile.html"
+        if not admin_profile and not session_token and admin_session_token:
+            return RedirectResponse(url="/admin-profile.html", status_code=302)
+        selected_token = admin_session_token if admin_profile else session_token
+        try:
+            user = _get_session_user_allowing_password_change(
+                selected_token,
+                expected_admin_session=admin_profile,
+            )
+        except HTTPException:
+            return RedirectResponse(url="/admin" if admin_profile else "/login.html", status_code=302)
+        if int(user.get("must_change_password") or 0) == 1:
+            return RedirectResponse(url="/change-password.html", status_code=302)
+        if admin_profile and not _is_admin(user):
+            return RedirectResponse(url="/admin", status_code=302)
+        if not admin_profile and _is_admin(user):
+            return RedirectResponse(url="/admin-profile.html", status_code=302)
+        return _html_response_with_versions(
+            "profile.html",
+            replacements={
+                "__PROFILE_CSS_VERSION__": _asset_version("assets", "profile.css"),
+                "__PROFILE_JS_VERSION__": _asset_version("assets", "profile.js"),
+                "__ADMIN_CONSOLE_SESSION__": "1" if admin_profile else "0",
+            },
+        )
+
     @app.get("/console.html", include_in_schema=False)
     @app.get("/admin-console.html", include_in_schema=False)
     def page_console(

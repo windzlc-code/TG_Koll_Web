@@ -107,7 +107,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             markup = (STATIC_ROOT / page).read_text(encoding="utf-8")
             with self.subTest(page=page):
                 self.assertIn(
-                    "/assets/opc/site-navigation.css?v=2026071706",
+                    "/assets/opc/site-navigation.css?v=2026071801",
                     markup,
                 )
 

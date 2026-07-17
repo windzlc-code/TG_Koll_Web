@@ -6,7 +6,6 @@
   const EVENT_LOGOUT = "vecto:logout-request";
   const EVENT_ACCOUNT_MENU_OPEN = "vecto:account-menu-open";
   const EVENT_BILLING_REQUEST = "vecto:account-billing-request";
-  const EVENT_SETTINGS_REQUEST = "vecto:account-settings-request";
   const ADMIN_WORKSPACE_STORAGE_KEY = "vecto-admin-workspace-user-id";
   const ADMIN_CONTEXT_STORAGE_KEY = "vecto-admin-console-context";
   const DEFAULT_LANGUAGE = document.documentElement.lang === "zh-Hant" ? "zh-Hant" : "zh-Hans";
@@ -307,7 +306,7 @@
           <span class="site-account-status"><i aria-hidden="true"></i><span data-site-copy="accountStatus"></span></span>
         </div>
         <div class="site-account-detail"><span data-site-copy="accountId"></span><strong data-site-account-id>-</strong></div>
-        <section class="site-account-billing" data-site-account-billing aria-labelledby="siteAccountBillingTitle">
+        <section class="site-account-billing" data-site-account-billing aria-labelledby="siteAccountBillingTitle"${page === "console" ? "" : " hidden"}>
           <div class="site-account-section-head">
             <span id="siteAccountBillingTitle" data-site-copy="billing"></span>
             <span class="site-account-billing-state" data-site-billing-status data-site-copy="billingUnread">尚未读取</span>
@@ -322,7 +321,7 @@
           </div>
           <div class="site-account-action-row">
             <button type="button" data-site-open-billing data-site-copy="billingView"></button>
-            <button type="button" data-site-open-settings data-site-copy="accountSettings"></button>
+            <button type="button" data-site-open-settings data-site-copy="personalProfile"></button>
           </div>
         </section>
         ${accountPreferencesMarkup(page)}
@@ -502,7 +501,7 @@
       });
       menu.querySelector("[data-site-open-settings]")?.addEventListener("click", () => {
         setAccountMenuOpen(menu, false);
-        openAccountConsoleView("console_settings");
+        openProfilePage();
       });
       menu.querySelector("[data-site-account-logout]")?.addEventListener("click", () => {
         setLogoutPending(true);
@@ -516,12 +515,12 @@
   }
 
   function openAccountConsoleView(view) {
-    const targetView = view === "console_settings" ? "console_settings" : "billing";
+    const targetView = "billing";
     const pageWorkspaceUserId = String(document.querySelector('meta[name="admin-workspace-user-id"]')?.content || "").trim();
     const isAdminConsole = document.querySelector('meta[name="admin-console-session"]')?.content === "1";
     const adminWorkspaceUserId = pageWorkspaceUserId || storedAdminWorkspaceUserId();
     if (window.location.pathname === "/console.html" || window.location.pathname === "/admin-console.html") {
-      window.dispatchEvent(new CustomEvent(targetView === "billing" ? EVENT_BILLING_REQUEST : EVENT_SETTINGS_REQUEST));
+      window.dispatchEvent(new CustomEvent(EVENT_BILLING_REQUEST));
       return;
     }
     if (isAdminConsole || currentSessionMode === "admin" || hasAdminConsoleContext() || adminWorkspaceUserId) {
@@ -529,6 +528,12 @@
       return;
     }
     window.location.assign(`/console.html?${new URLSearchParams({ view: targetView }).toString()}`);
+  }
+
+  function openProfilePage() {
+    const isAdminConsole = document.querySelector('meta[name="admin-console-session"]')?.content === "1";
+    const adminContext = isAdminConsole || currentSessionMode === "admin" || hasAdminConsoleContext();
+    window.location.assign(adminContext ? "/admin-profile.html" : "/profile.html");
   }
 
   function syncAdminWorkspaceContext() {

@@ -70,6 +70,105 @@ class AccountSettingsApiTests(unittest.TestCase):
             os.environ["PASSWORD_VAULT_KEY_FILE"] = self._old_vault_key_file
         self._tmpdir.cleanup()
 
+    def test_profile_page_is_protected_and_keeps_admin_session_isolated(self):
+        anonymous = TestClient(self.app)
+        regular_redirect = anonymous.get("/profile.html", follow_redirects=False)
+        admin_redirect = anonymous.get("/admin-profile.html", follow_redirects=False)
+        self.assertEqual(regular_redirect.status_code, 302)
+        self.assertEqual(regular_redirect.headers["location"], "/login.html")
+        self.assertEqual(admin_redirect.status_code, 302)
+        self.assertEqual(admin_redirect.headers["location"], "/admin")
+
+        login_resp = self.client.post(
+            "/api/auth/admin-login",
+            json={"username": "admin", "password": "admin123secure"},
+        )
+        self.assertEqual(login_resp.status_code, 200, login_resp.text)
+
+        regular_profile = self.client.get("/profile.html", follow_redirects=False)
+        self.assertEqual(regular_profile.status_code, 302)
+        self.assertEqual(regular_profile.headers["location"], "/admin-profile.html")
+
+        admin_profile = self.client.get("/admin-profile.html")
+        self.assertEqual(admin_profile.status_code, 200, admin_profile.text)
+        self.assertIn('meta name="admin-console-session" content="1"', admin_profile.text)
+        self.assertIn('id="profileAvatarButton"', admin_profile.text)
+        self.assertIn('id="profileAvatarFile"', admin_profile.text)
+        self.assertNotIn("__PROFILE_CSS_VERSION__", admin_profile.text)
+        self.assertNotIn("__PROFILE_JS_VERSION__", admin_profile.text)
+
+        avatar_url = "data:image/png;base64,iVBORw0KGgo="
+        update_resp = self.client.patch(
+            "/api/me/profile",
+            headers={"X-Admin-Console": "1"},
+            json={"full_name": "Admin Profile", "avatar_url": avatar_url},
+        )
+        self.assertEqual(update_resp.status_code, 200, update_resp.text)
+        self.assertEqual(update_resp.json()["profile"]["full_name"], "Admin Profile")
+        self.assertEqual(update_resp.json()["profile"]["avatar_url"], avatar_url)
+
+        me_resp = self.client.get("/api/me", headers={"X-Admin-Console": "1"})
+        self.assertEqual(me_resp.status_code, 200, me_resp.text)
+        self.assertEqual(me_resp.json()["full_name"], "Admin Profile")
+        self.assertEqual(me_resp.json()["avatar_url"], avatar_url)
+
+    def test_regular_user_can_open_and_persist_profile_page(self):
+        applicant = TestClient(self.app)
+        applied = applicant.post(
+            "/api/auth/apply",
+            json={
+                "username": "profile_user",
+                "password": "profile123",
+                "full_name": "Profile User",
+                "email": "profile@example.test",
+                "phone": "0912345678",
+                "company": "Vecto Profile QA",
+                "use_case": "Verify the independent profile page",
+            },
+        )
+        self.assertEqual(applied.status_code, 200, applied.text)
+
+        self.assertEqual(
+            self.client.post(
+                "/api/auth/admin-login",
+                json={"username": "admin", "password": "admin123secure"},
+            ).status_code,
+            200,
+        )
+        approved = self.client.post(
+            f"/api/admin/users/{applied.json()['id']}/approval",
+            json={
+                "approval_status": "approved",
+                "expected_approval_status": "pending",
+                "admin_note": "Profile page verification",
+            },
+        )
+        self.assertEqual(approved.status_code, 200, approved.text)
+
+        customer = TestClient(self.app)
+        login = customer.post(
+            "/api/auth/login",
+            json={"username": "profile_user", "password": "profile123"},
+        )
+        self.assertEqual(login.status_code, 200, login.text)
+        self.assertIsNotNone(customer.cookies.get("session_token"))
+        self.assertIsNone(customer.cookies.get("admin_session_token"))
+
+        page = customer.get("/profile.html")
+        self.assertEqual(page.status_code, 200, page.text)
+        self.assertIn('meta name="admin-console-session" content="0"', page.text)
+
+        saved = customer.patch(
+            "/api/me/profile",
+            json={"full_name": "Updated Profile", "avatar_url": ""},
+        )
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(saved.json()["profile"]["full_name"], "Updated Profile")
+
+        refreshed = customer.get("/api/me")
+        self.assertEqual(refreshed.status_code, 200, refreshed.text)
+        self.assertEqual(refreshed.json()["full_name"], "Updated Profile")
+
     def test_admin_can_change_username_with_current_password(self):
         login_resp = self.client.post(
             "/api/auth/admin-login",

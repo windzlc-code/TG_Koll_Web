@@ -238,7 +238,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
             page = (self.static_dir / page_name).read_text(encoding="utf-8")
             with self.subTest(page=page_name):
                 self.assertIn(
-                    "/assets/opc/site-navigation.js?v=2026071706",
+                    "/assets/opc/site-navigation.js?v=2026071801",
                     page,
                 )
 
