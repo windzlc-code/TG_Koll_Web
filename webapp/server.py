@@ -17412,6 +17412,7 @@ def create_app() -> FastAPI:
             },
         )
 
+    @app.get("/subscription.html", include_in_schema=False)
     @app.get("/pricing.html", include_in_schema=False)
     def page_pricing() -> HTMLResponse:
         return _html_response_with_versions(

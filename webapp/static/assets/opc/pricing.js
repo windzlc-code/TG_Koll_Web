@@ -85,7 +85,7 @@
       <h3>${escapeHtml(subscription.name || "月度訂閱方案")}</h3>
       <p class="price"><span>NT$</span>${Number(subscription.price_ntd || 0).toLocaleString("zh-TW")}<small>/ 月</small></p>
       <ul>${list(subscription.features).map((feature) => `<li>${escapeHtml(feature)}</li>`).join("")}</ul>
-      <div class="catalog-purchase"><a class="button button-primary" href="/pricing.html">查看完整方案</a></div>
+      <div class="catalog-purchase"><a class="button button-primary" href="/subscription.html">查看完整方案</a></div>
     </article>
     <div class="credit-panel" aria-label="算力計價標準">
       <h3>算力點官方計價</h3>
@@ -95,7 +95,7 @@
     packages.innerHTML = list(catalog.packages).map((item, index) => `<article class="${index === 1 ? "featured" : ""}">
       <span>${escapeHtml(item.name)}</span><h3>${Number(item.total_points || 0).toLocaleString("zh-TW")} 點</h3>
       <p>${money(item.price_ntd)}</p><small>${item.bonus_points ? `含 ${Number(item.bonus_points).toLocaleString("zh-TW")} 點加贈` : "算力點永久有效"}</small>
-      <div class="catalog-purchase"><a class="button button-primary" href="/pricing.html?product=${encodeURIComponent(skuOf(item))}">查看方案</a></div>
+      <div class="catalog-purchase"><a class="button button-primary" href="/subscription.html?product=${encodeURIComponent(skuOf(item))}">查看方案</a></div>
     </article>`).join("");
   }
 
@@ -166,7 +166,7 @@
   }
 
   function openLoginForProduct(sku) {
-    const target = `/pricing.html?product=${encodeURIComponent(sku)}`;
+    const target = `/subscription.html?product=${encodeURIComponent(sku)}`;
     document.body.dataset.loginRedirect = target;
     document.querySelector(".header-login")?.click();
   }
@@ -297,6 +297,18 @@
     } finally {
       if (!submitted) submit.disabled = false;
     }
+  });
+
+  const comparisonTable = document.querySelector(".pricing-comparison-table");
+  const comparisonTierButtons = [...document.querySelectorAll("[data-comparison-tier]")];
+  comparisonTierButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const tier = String(button.dataset.comparisonTier || "advanced");
+      if (comparisonTable) comparisonTable.dataset.mobileTier = tier;
+      comparisonTierButtons.forEach((candidate) => {
+        candidate.setAttribute("aria-pressed", String(candidate === button));
+      });
+    });
   });
 
   Promise.all([request("/api/billing/catalog"), loadAccount()])

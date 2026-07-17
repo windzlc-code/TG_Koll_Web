@@ -3,8 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Vecto Vanguard OPC 方案與算力</title>
-    <meta name="description" content="Vecto Vanguard OPC 月度訂閱、算力點計價與儲值方案。" />
+    <title>Vecto Vanguard OPC 訂閱中心</title>
+    <meta name="description" content="Vecto Vanguard OPC 訂閱方案、版本權益、算力點計價與儲值方案。" />
     <link rel="icon" type="image/png" href="/assets/opc/vecto-logo-ui-icon.png?v=20260711" />
     <link rel="preload" href="/assets/opc/vecto-ai-cockpit.png" as="image" />
     <link rel="stylesheet" href="/assets/opc/styles.css?v=__OPC_STYLES_VERSION__" />
@@ -12,7 +12,7 @@
     <link rel="stylesheet" href="/assets/opc/pricing.css?v=__OPC_PRICING_CSS_VERSION__" />
     <script defer src="/assets/opc/site-navigation.js?v=2026071702"></script>
   </head>
-  <body data-login-redirect="/pricing.html">
+  <body data-login-redirect="/subscription.html">
     <a class="site-skip-link" href="#main-content" data-site-copy="skip">跳至主要內容</a>
     <header class="site-header" data-header data-site-header data-site-page="pricing" data-site-mode="public" data-site-auth-state="pending" data-i18n-skip="true">
       <a class="brand" href="/" aria-label="Vecto 首頁" data-site-home-label>
@@ -23,7 +23,7 @@
         <a data-site-nav-key="solution" href="/#solution"><span data-site-copy="solution">解決方案</span></a>
         <a data-site-nav-key="accounts" href="/#agents"><span data-site-copy="accounts">三帳架構</span></a>
         <a data-site-nav-key="scenarios" href="/#scenarios"><span data-site-copy="scenarios">應用場景</span></a>
-        <a data-site-nav-key="pricing" href="/pricing.html" aria-current="page"><span data-site-copy="pricing">方案與算力</span></a>
+        <a data-site-nav-key="pricing" href="/subscription.html" aria-current="page"><span data-site-copy="pricing">訂閱方案</span></a>
         <a data-site-nav-key="difference" href="/#service-difference"><span data-site-copy="difference">服務差異</span></a>
         <a data-site-nav-key="console" href="/console.html" data-console-entry><span data-site-copy="console">Web 控制台</span></a>
       </nav>
@@ -37,7 +37,7 @@
             <a href="/#solution"><span data-site-copy="solution">解決方案</span></a>
             <a href="/#agents"><span data-site-copy="accounts">三帳架構</span></a>
             <a href="/#scenarios"><span data-site-copy="scenarios">應用場景</span></a>
-            <a href="/pricing.html" aria-current="page"><span data-site-copy="pricing">方案與算力</span></a>
+            <a href="/subscription.html" aria-current="page"><span data-site-copy="pricing">訂閱方案</span></a>
             <a href="/#service-difference"><span data-site-copy="difference">服務差異</span></a>
             <a href="/console.html" data-console-entry><span data-site-copy="console">Web 控制台</span></a>
             <a class="site-mobile-menu-extra" href="/#contact"><span data-site-copy="guest">遊客申請</span></a>
@@ -59,11 +59,11 @@
         <div class="pricing-page-hero-shade" aria-hidden="true"></div>
         <div class="pricing-page-hero-copy">
           <p class="eyebrow">Vecto Vanguard OPC</p>
-          <h1 id="pricing-page-title">方案與算力</h1>
-          <p>訂閱取得 Vecto OS 與三帳號服務權限；算力點用於實際內容生成、素材產製與互動任務，兩者獨立結算。</p>
+          <h1 id="pricing-page-title">訂閱，讓增長系統完整運轉</h1>
+          <p>從資料採集、RPA 與 AI 行銷，到 iOS 智控與 TikTok 矩陣，一頁看懂版本權益、月度訂閱、算力計價與申請方式。</p>
           <div class="pricing-page-hero-actions">
-            <a class="button button-primary" href="#plans">查看方案</a>
-            <button class="button button-ghost" type="button" data-open-login>登入申請</button>
+            <a class="button button-primary" href="#plans">查看訂閱</a>
+            <a class="button button-ghost" href="#comparison">對比版本</a>
           </div>
         </div>
       </section>
@@ -83,11 +83,19 @@
         <button class="button button-primary" type="button" data-open-login>帳號登入</button>
       </section>
 
+      <nav class="pricing-section-nav" aria-label="訂閱頁章節導覽">
+        <a href="#plans"><span>01</span>訂閱方案</a>
+        <a href="#comparison"><span>02</span>版本權益</a>
+        <a href="#usage"><span>03</span>算力計價</a>
+        <a href="#packages"><span>04</span>儲值方案</a>
+        <a href="#rules"><span>05</span>使用規則</a>
+      </nav>
+
       <section class="pricing-public-section" id="plans" aria-labelledby="plans-title">
         <div class="pricing-public-heading">
           <div>
-            <p class="eyebrow">月度訂閱</p>
-            <h2 id="plans-title">一套 OPC，三組 Threads 帳號</h2>
+            <p class="eyebrow">目前可申請方案</p>
+            <h2 id="plans-title">一套 OPC，開通完整服務入口</h2>
           </div>
           <p>每套有效訂閱提供 3 個 Threads 帳號容量與每週期 10 張免費 AI 圖片；多套訂閱共用同一算力池。</p>
         </div>
@@ -114,7 +122,90 @@
         </div>
       </section>
 
-      <section class="pricing-public-section" aria-labelledby="usage-title">
+      <section class="pricing-comparison-band" id="comparison" aria-labelledby="comparison-title">
+        <div class="pricing-comparison-shell">
+          <div class="pricing-public-heading pricing-comparison-heading">
+            <div>
+              <p class="eyebrow">版本能力地圖</p>
+              <h2 id="comparison-title">三個版本，對應三種增長深度</h2>
+            </div>
+            <p>版本名稱與能力範圍依產品資料展示；實際開通內容以服務合約及管理員批准結果為準。</p>
+          </div>
+
+          <div class="pricing-tier-overview" aria-label="版本定位摘要">
+            <article>
+              <span class="pricing-tier-index">STANDARD · 01</span>
+              <h3>標準版</h3>
+              <strong>200 控</strong>
+              <p>多平台資料採集與 RPA 行銷的基礎作業台。</p>
+            </article>
+            <article class="is-featured">
+              <span class="pricing-tier-badge">AI 增強</span>
+              <span class="pricing-tier-index">ADVANCED · 02</span>
+              <h3>高級版</h3>
+              <strong>1000 控</strong>
+              <p>加入 AI 行銷、iOS 智控與獨立站部署能力。</p>
+            </article>
+            <article>
+              <span class="pricing-tier-index">ULTIMATE · 03</span>
+              <h3>至尊版</h3>
+              <strong>1000 控</strong>
+              <p>完整開放 TikTok 登入、養號、發布、私信與互動矩陣。</p>
+            </article>
+          </div>
+
+          <div class="pricing-mobile-tier-switch" role="group" aria-label="選擇要查看的版本">
+            <button type="button" data-comparison-tier="standard" aria-pressed="false">標準版</button>
+            <button type="button" data-comparison-tier="advanced" aria-pressed="true">高級版</button>
+            <button type="button" data-comparison-tier="ultimate" aria-pressed="false">至尊版</button>
+          </div>
+          <div class="pricing-comparison-note" id="comparison-scroll-note">選擇版本查看完整權益</div>
+          <div class="pricing-comparison-scroll" tabindex="0" role="region" aria-labelledby="comparison-title" aria-describedby="comparison-scroll-note">
+            <table class="pricing-comparison-table" data-mobile-tier="advanced">
+              <caption class="sr-only">標準版、高級版與至尊版完整功能權益對比</caption>
+              <thead>
+                <tr>
+                  <th scope="col">產品模組</th>
+                  <th scope="col">核心功能</th>
+                  <th scope="col"><span>標準版</span><small>STANDARD</small></th>
+                  <th scope="col" class="is-featured"><span>高級版</span><small>ADVANCED</small></th>
+                  <th scope="col"><span>至尊版</span><small>ULTIMATE</small></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="rowgroup">指紋管理</th>
+                  <th scope="row">指紋窗口</th>
+                  <td><strong>200 控</strong></td><td class="is-featured"><strong>1000 控</strong></td><td><strong>1000 控</strong></td>
+                </tr>
+                <tr><th scope="rowgroup" rowspan="4">資料採集</th><th scope="row">Facebook 採集</th><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td><td class="is-featured"><span class="tier-yes" role="img" aria-label="支援">✓</span></td><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td></tr>
+                <tr><th scope="row">Instagram 採集</th><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td><td class="is-featured"><span class="tier-yes" role="img" aria-label="支援">✓</span></td><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td></tr>
+                <tr><th scope="row">Google 採集</th><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td><td class="is-featured"><span class="tier-yes" role="img" aria-label="支援">✓</span></td><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td></tr>
+                <tr><th scope="row">TikTok 採集</th><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td><td class="is-featured"><span class="tier-yes" role="img" aria-label="支援">✓</span></td><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td></tr>
+                <tr><th scope="rowgroup" rowspan="7">行銷觸達</th><th scope="row">RPA 行銷 · Facebook</th><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td><td class="is-featured"><span class="tier-yes" role="img" aria-label="支援">✓</span></td><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td></tr>
+                <tr><th scope="row">RPA 行銷 · Instagram</th><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td><td class="is-featured"><span class="tier-yes" role="img" aria-label="支援">✓</span></td><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td></tr>
+                <tr><th scope="row">RPA 行銷 · Threads</th><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td><td class="is-featured"><span class="tier-yes" role="img" aria-label="支援">✓</span></td><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td></tr>
+                <tr><th scope="row">RPA 行銷 · YouTube</th><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td><td class="is-featured"><span class="tier-yes" role="img" aria-label="支援">✓</span></td><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td></tr>
+                <tr><th scope="row">RPA 行銷 · WhatsApp</th><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td><td class="is-featured"><span class="tier-yes" role="img" aria-label="支援">✓</span></td><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td></tr>
+                <tr><th scope="row">AI 行銷 · Facebook</th><td><span class="tier-no" aria-label="不支援">—</span></td><td class="is-featured"><span class="tier-yes" role="img" aria-label="支援">✓</span></td><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td></tr>
+                <tr><th scope="row">AI 行銷 · Instagram</th><td><span class="tier-no" aria-label="不支援">—</span></td><td class="is-featured"><span class="tier-yes" role="img" aria-label="支援">✓</span></td><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td></tr>
+                <tr><th scope="rowgroup">iOS 智控系統</th><th scope="row">iOS 智控系統</th><td><span class="tier-no" aria-label="不支援">—</span></td><td class="is-featured"><span class="tier-yes" role="img" aria-label="支援">✓</span></td><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td></tr>
+                <tr><th scope="rowgroup" rowspan="7">TikTok 矩陣系統</th><th scope="row">TikTok 登入</th><td><span class="tier-no" aria-label="不支援">—</span></td><td class="is-featured"><span class="tier-no" aria-label="不支援">—</span></td><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td></tr>
+                <tr><th scope="row">TikTok 養號</th><td><span class="tier-no" aria-label="不支援">—</span></td><td class="is-featured"><span class="tier-no" aria-label="不支援">—</span></td><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td></tr>
+                <tr><th scope="row">TikTok 發布作品</th><td><span class="tier-no" aria-label="不支援">—</span></td><td class="is-featured"><span class="tier-no" aria-label="不支援">—</span></td><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td></tr>
+                <tr><th scope="row">TikTok 私信</th><td><span class="tier-no" aria-label="不支援">—</span></td><td class="is-featured"><span class="tier-no" aria-label="不支援">—</span></td><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td></tr>
+                <tr><th scope="row">TikTok 互動</th><td><span class="tier-no" aria-label="不支援">—</span></td><td class="is-featured"><span class="tier-no" aria-label="不支援">—</span></td><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td></tr>
+                <tr><th scope="row">TikTok 內容管理</th><td><span class="tier-no" aria-label="不支援">—</span></td><td class="is-featured"><span class="tier-no" aria-label="不支援">—</span></td><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td></tr>
+                <tr><th scope="row">TikTok 採集</th><td><span class="tier-no" aria-label="不支援">—</span></td><td class="is-featured"><span class="tier-no" aria-label="不支援">—</span></td><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td></tr>
+                <tr><th scope="rowgroup" rowspan="2">增值模組</th><th scope="row">獨立站建站部署</th><td><span class="tier-no" aria-label="不支援">—</span></td><td class="is-featured"><span class="tier-yes" role="img" aria-label="支援">✓</span></td><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td></tr>
+                <tr><th scope="row">軟體版本持續升級</th><td><span class="tier-no" aria-label="不支援">—</span></td><td class="is-featured"><span class="tier-yes" role="img" aria-label="支援">✓</span></td><td><span class="tier-yes" role="img" aria-label="支援">✓</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="pricing-public-section" id="usage" aria-labelledby="usage-title">
         <div class="pricing-public-heading">
           <div>
             <p class="eyebrow">算力點計價</p>
@@ -127,7 +218,7 @@
         </div>
       </section>
 
-      <section class="pricing-packages-band" aria-labelledby="packages-title">
+      <section class="pricing-packages-band" id="packages" aria-labelledby="packages-title">
         <div class="pricing-public-section">
           <div class="pricing-public-heading">
             <div>
@@ -142,7 +233,7 @@
         </div>
       </section>
 
-      <section class="pricing-public-section pricing-rules" aria-labelledby="rules-title">
+      <section class="pricing-public-section pricing-rules" id="rules" aria-labelledby="rules-title">
         <div class="pricing-public-heading compact">
           <div>
             <p class="eyebrow">抵扣規則</p>
