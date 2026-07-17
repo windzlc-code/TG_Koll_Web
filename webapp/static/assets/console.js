@@ -14169,7 +14169,7 @@ function renderPersonaHotCandidatePicker(persona, form) {
           <span data-persona-hot-freshness-unit>${hotFreshnessDays > 0 ? "天内" : "不限"}</span>
         </label>
         <button type="button" class="primary" data-persona-fetch-hot ${hotBusy ? "disabled" : ""}>${hotBusy ? renderBusyButtonContent("正在抓取热点", true, hotBusyStartedAt) : "抓取热点"}</button>
-        <button type="button" data-persona-fetch-hot-refresh ${candidates.length && !hotBusy ? "" : "disabled"}>${hotBusy ? "正在刷新..." : "刷新候选"}</button>
+        <button type="button" data-persona-fetch-hot-refresh ${!hotBusy ? "" : "disabled"}>${hotBusy ? "正在刷新..." : "刷新候选"}</button>
       </div>
     </div>
     ${(keywords.length || warnings.length || cookieStatuses.length) ? `

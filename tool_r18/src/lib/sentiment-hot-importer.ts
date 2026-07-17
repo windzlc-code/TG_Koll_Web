@@ -3356,8 +3356,9 @@ async function fetchThreadsBrowserSearchCandidates(args: {
       let template: ThreadsSearchGraphqlTemplate | null = null;
       const captureTemplate = async (request: any) => {
         try {
-          if (template || !/graphql\/query/i.test(String(request.url?.() || ""))) return;
-          const requestUrl = new URL(String(request.url?.() || ""));
+          const requestUrlText = String(request.url?.() || "");
+          if (template || !/(?:\/graphql\/query|\/api\/graphql)(?:[/?]|$)/i.test(requestUrlText)) return;
+          const requestUrl = new URL(requestUrlText);
           const params = new URLSearchParams(String(request.postData?.() || "") || requestUrl.search);
           const friendlyName = cleanText(params.get("fb_api_req_friendly_name"));
           const variables = safeJson(params.get("variables") || "");
