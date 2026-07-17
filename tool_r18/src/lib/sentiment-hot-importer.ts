@@ -2242,7 +2242,12 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       ? candidates.filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode))
       : candidates;
     const liveReadyCount = finalizeSentimentHotCandidatesForDisplay(
-      strictFreshOnly ? liveReadyPool.filter((candidate) => !isHistoricalSupplementCandidate(candidate)) : liveReadyPool,
+      strictFreshOnly
+        ? liveReadyPool.filter((candidate) => (
+          !isHistoricalSupplementCandidate(candidate)
+          || candidateMatchesRequestedFreshness(candidate, operationalFreshnessDays)
+        ))
+        : liveReadyPool,
       limit,
       { archiveId, keywords, excludeShown: true, searchMode, freshnessDays: operationalFreshnessDays },
     ).length;
@@ -2457,7 +2462,10 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       : strategyCandidatePool;
   }
   const displayCandidatePool = strictFreshOnly
-    ? candidates.filter((candidate) => !isHistoricalSupplementCandidate(candidate))
+    ? candidates.filter((candidate) => (
+      !isHistoricalSupplementCandidate(candidate)
+      || candidateMatchesRequestedFreshness(candidate, operationalFreshnessDays)
+    ))
     : candidates;
   candidates = finalizeSentimentHotCandidatesForDisplay(displayCandidatePool, limit, { archiveId, keywords, excludeShown: true, searchMode, freshnessDays: operationalFreshnessDays });
   const shownHistoryKeys = getSentimentHotShownHistoryKeys(archiveId);
