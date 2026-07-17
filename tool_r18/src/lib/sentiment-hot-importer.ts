@@ -2502,6 +2502,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       selectedKeys,
       limit: supplementLimit,
       strictFreshOnly,
+      freshnessDays: operationalFreshnessDays,
     });
     if (supplements.length > 0) {
       candidates = [...candidates, ...supplements];
@@ -2532,6 +2533,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
         ? Math.min(limit - candidates.length, SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT - parentSupplementCount)
         : limit - candidates.length,
       strictFreshOnly,
+      freshnessDays: operationalFreshnessDays,
     });
     if (parentSupplements.length > 0) {
       candidates = [...candidates, ...parentSupplements];
@@ -2566,6 +2568,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
         ? Math.min(limit - candidates.length, SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT - parentSupplementCount)
         : limit - candidates.length,
       strictFreshOnly,
+      freshnessDays: operationalFreshnessDays,
     });
     if (globalSupplements.length > 0) {
       candidates = [...candidates, ...globalSupplements];
@@ -3251,6 +3254,7 @@ function collectSentimentHotSupplementCandidates(args: {
   selectedKeys: Set<string>;
   limit: number;
   strictFreshOnly: boolean;
+  freshnessDays?: number;
 }): SentimentHotCandidate[] {
   const out: SentimentHotCandidate[] = [];
   const seenKeys = new Set<string>();
@@ -3258,7 +3262,11 @@ function collectSentimentHotSupplementCandidates(args: {
   const shownAtMap = getSentimentHotShownHistoryAtMap(args.archiveId);
   const add = (candidate: SentimentHotCandidate, requireCooldown: boolean) => {
     if (out.length >= args.limit) return;
-    if (args.strictFreshOnly && isHistoricalSupplementCandidate(candidate)) return;
+    if (
+      args.strictFreshOnly
+      && isHistoricalSupplementCandidate(candidate)
+      && !candidateMatchesRequestedFreshness(candidate, args.freshnessDays)
+    ) return;
     if (args.strictFreshOnly && requireCooldown && !isSentimentHotCandidateRepeatEligibleWithState(candidate, shownHistoryKeys, shownAtMap)) return;
     const historyKeys = getSentimentHotCandidateHistoryKeys(candidate);
     if (historyKeys.some((key) => args.selectedKeys.has(key) || seenKeys.has(key))) return;
