@@ -1783,6 +1783,7 @@ function closeConsoleModal(result) {
   const modal = $("consoleModal");
   if (!modal) return;
   const resolver = modal.__resolve;
+  if (typeof modal.__cleanup === "function") modal.__cleanup();
   modal.remove();
   if (typeof resolver === "function") resolver(result);
   if (state.dailyPublishPendingWarning && !state.dailyPublishWarningPromise) {
@@ -2142,6 +2143,58 @@ function renderAccountFieldHead(label, account, options = {}) {
 
 function accountDisplayName(account) {
   return String(account?.username || account?.account_username || account?.id || "").trim() || "未命名账号";
+}
+
+function accountTotpStatusLabel(status = "", configured = false) {
+  const key = String(status || "").trim().toLowerCase();
+  if (!configured) return "2FA 未配置";
+  if (key === "verified") return "2FA 已验证";
+  if (key === "pending") return "2FA 待验证";
+  if (["invalid", "error"].includes(key)) return "2FA 异常";
+  if (key === "disabled") return "2FA 已停用";
+  return "2FA 已配置";
+}
+
+function renderAccountTotpBadge(account) {
+  const accountId = String(account?.id || "");
+  const configured = Boolean(account?.totp_configured);
+  const status = String(account?.totp_status || "").trim().toLowerCase();
+  const label = accountTotpStatusLabel(status, configured);
+  return `<span class="account-totp-badge" data-account-totp-for="${esc(accountId)}" data-totp-status="${esc(status)}" ${configured ? "" : "hidden"} title="${esc(label)}">${esc(label)}</span>`;
+}
+
+function updateAccountTotpBadgeNode(node, account) {
+  if (!node || !account) return;
+  const configured = Boolean(account.totp_configured ?? account.configured);
+  const status = String(account.totp_status ?? account.status ?? "");
+  const label = accountTotpStatusLabel(status, configured);
+  node.hidden = !configured;
+  node.dataset.totpStatus = status.trim().toLowerCase();
+  node.textContent = label;
+  node.title = label;
+}
+
+function updateAccountTotpBadgeViews(accountId = "", totp = null) {
+  const cleanId = String(accountId || "").trim();
+  const account = totp || accountById(cleanId);
+  if (!cleanId || !account) return;
+  document.querySelectorAll("[data-account-totp-for]").forEach((node) => {
+    if (String(node.dataset.accountTotpFor || "") !== cleanId) return;
+    updateAccountTotpBadgeNode(node, account);
+  });
+}
+
+function applyAccountTotpState(accountId = "", totp = {}) {
+  const cleanId = String(accountId || "").trim();
+  if (!cleanId) return null;
+  const account = accountById(cleanId);
+  if (!account) return null;
+  if (Object.prototype.hasOwnProperty.call(totp, "configured")) account.totp_configured = Boolean(totp.configured);
+  if (Object.prototype.hasOwnProperty.call(totp, "status")) account.totp_status = String(totp.status || "");
+  if (Object.prototype.hasOwnProperty.call(totp, "updated_at")) account.totp_updated_at = totp.updated_at;
+  if (Object.prototype.hasOwnProperty.call(totp, "last_verified_at")) account.totp_last_verified_at = totp.last_verified_at;
+  updateAccountTotpBadgeViews(cleanId, account);
+  return account;
 }
 
 function queuePlatformLabel(platform) {
@@ -4190,6 +4243,14 @@ function personaMediaTaskIsActive(personaId, postId, taskType = "") {
   if (!taskState || !activeTaskStatus(taskState.status)) return false;
   if (!taskType) return true;
   return String(taskState.taskType || taskState.detail?.type || "").trim() === String(taskType || "").trim();
+}
+
+function personaMediaTaskStartedAt(personaId, postId, taskType = "") {
+  const taskState = personaMediaTaskState(personaId, postId);
+  const taskStartedAt = taskState && (!taskType || String(taskState.taskType || taskState.detail?.type || "").trim() === String(taskType || "").trim())
+    ? actionTaskStartedAt(taskState.detail || {}, "media_task", personaId, postId, taskType)
+    : 0;
+  return taskStartedAt || actionLockStartedAt("media_task", personaId, postId, taskType);
 }
 
 async function cancelRegularTask(taskId, messageId = "commandMsg") {
@@ -14324,7 +14385,7 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
   const uploadAccept = "image/*";
   const showSourceUpload = Number(mediaMeta.minImages || 0) > 0;
   const mediaBusy = !isFavoriteMedia && post && (isActionLocked("media_task", persona.id, post.id, currentTaskType) || personaMediaTaskIsActive(persona.id, post.id, currentTaskType));
-  const mediaBusyStartedAt = actionLockStartedAt("media_task", persona.id, post?.id || "", currentTaskType);
+  const mediaBusyStartedAt = personaMediaTaskStartedAt(persona.id, post?.id || "", currentTaskType);
   const operationMode = isFavoriteMedia ? "replace" : (mediaForm.operationMode === "generate" ? "generate" : "replace");
   return `
     <section class="persona-compose-media-side persona-production-section">
@@ -15364,6 +15425,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
     const uploadAccept = "image/*";
     const showSourceUpload = Number(mediaMeta.minImages || 0) > 0;
     const mediaBusy = post && (isActionLocked("media_task", persona.id, post.id, currentTaskType) || personaMediaTaskIsActive(persona.id, post.id, currentTaskType));
+    const mediaBusyStartedAt = post ? personaMediaTaskStartedAt(persona.id, post.id, currentTaskType) : 0;
     return `
       <div class="persona-inline-panel">
         <div class="persona-head-copy">
@@ -15448,7 +15510,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
                   hint: mediaMeta.files || "拖动任务需要的素材到这里，或点击选择。",
                 }) : ""}
                 <div class="row-actions">
-                  <button type="button" class="primary" data-persona-run-media-task aria-busy="${mediaBusy ? "true" : "false"}" ${mediaBusy ? "disabled" : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, actionLockStartedAt("media_task", persona.id, post.id, currentTaskType)) : "生成预览"}</button>
+                  <button type="button" class="primary" data-persona-run-media-task aria-busy="${mediaBusy ? "true" : "false"}" ${mediaBusy ? "disabled" : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, mediaBusyStartedAt) : "生成预览"}</button>
                 </div>
               </div>
               <div class="persona-inline-panel persona-inline-panel--nested">
@@ -15768,6 +15830,10 @@ function updateAccountStatusViews() {
     const account = accountById.get(String(button.dataset.accountProxyPicker || ""));
     if (account) button.textContent = String(account.proxy_id || "").trim() ? "切换代理" : "选择代理";
   });
+  document.querySelectorAll("[data-account-totp-for]").forEach((node) => {
+    const account = accountById.get(String(node.dataset.accountTotpFor || ""));
+    if (account) updateAccountTotpBadgeNode(node, account);
+  });
 }
 
 const accountPoolPlatforms = [
@@ -16040,7 +16106,7 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
         <div class="account-pool-card-main">
           <span class="account-pool-card-copy">
             <strong>${esc(accountDisplayName(account))}</strong>
-            <span class="account-pool-card-subline"><small>${esc(platformLabel(account.platform || "threads"))}</small><span class="status ${esc(accountStatusClassNames(account.status))}" data-account-status-for="${esc(accountId)}" title="${esc(accountLastLoginCheckLabel(account))}">${esc(accountLastLoginCheckLabel(account))}</span></span>
+            <span class="account-pool-card-subline"><small>${esc(platformLabel(account.platform || "threads"))}</small><span class="status ${esc(accountStatusClassNames(account.status))}" data-account-status-for="${esc(accountId)}" title="${esc(accountLastLoginCheckLabel(account))}">${esc(accountLastLoginCheckLabel(account))}</span>${renderAccountTotpBadge(account)}</span>
           </span>
         </div>
         <div class="persona-account-summary-meta" aria-label="账号重要信息">
@@ -16058,7 +16124,7 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
       <div class="account-pool-card-main">
         <span class="account-pool-card-copy">
           <strong>${esc(accountDisplayName(account))}</strong>
-          <span class="account-pool-card-subline"><small>${esc(platformLabel(account.platform || "threads"))}</small><span class="status ${esc(accountStatusClassNames(account.status))}" data-account-status-for="${esc(accountId)}" title="${esc(accountLastLoginCheckLabel(account))}">${esc(accountLastLoginCheckLabel(account))}</span></span>
+          <span class="account-pool-card-subline"><small>${esc(platformLabel(account.platform || "threads"))}</small><span class="status ${esc(accountStatusClassNames(account.status))}" data-account-status-for="${esc(accountId)}" title="${esc(accountLastLoginCheckLabel(account))}">${esc(accountLastLoginCheckLabel(account))}</span>${renderAccountTotpBadge(account)}</span>
         </span>
       </div>
       <div class="persona-account-inline-fields" aria-label="账号资料">
@@ -16085,7 +16151,10 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
         <strong title="${esc(account.username || accountId)}">${esc(account.username || accountId)}</strong>
         <small>${esc(account.display_name && account.display_name !== account.username ? account.display_name : platformLabel(account.platform || "threads"))}</small>
       </span>
-      <span class="status ${esc(accountStatusClassNames(account.status))}" data-account-status-for="${esc(accountId)}" title="${esc(accountLastLoginCheckLabel(account))}">${esc(accountLastLoginCheckLabel(account))}</span>
+      <span class="account-pool-card-flags">
+        <span class="status ${esc(accountStatusClassNames(account.status))}" data-account-status-for="${esc(accountId)}" title="${esc(accountLastLoginCheckLabel(account))}">${esc(accountLastLoginCheckLabel(account))}</span>
+        ${renderAccountTotpBadge(account)}
+      </span>
     </div>
     <strong class="account-pool-bound-persona ${persona ? "is-bound" : "is-unbound"}" title="${esc(persona ? `已绑定：${persona.name || persona.id}` : "未绑定人设")}">${esc(persona ? `已绑定：${persona.name || persona.id}` : "未绑定人设")}</strong>
     <div class="account-card-meta">
@@ -17233,6 +17302,322 @@ function renderAccountProxyPickerPanel(account = null) {
   </section>`;
 }
 
+function renderAccountTotpSection(account = null) {
+  return `<section class="account-totp-section" data-account-totp-section>
+    <div class="account-totp-head">
+      <div>
+        <strong>两步验证 (2FA)</strong>
+        <span>支持 Base32 密钥或 otpauth URI</span>
+      </div>
+      <span class="account-totp-state" data-account-totp-state></span>
+    </div>
+    <div class="account-totp-body" data-account-totp-body></div>
+  </section>`;
+}
+
+function accountTotpTimestampMs(value) {
+  if (value == null || value === "") return 0;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) return numeric > 1e12 ? numeric : numeric * 1000;
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function accountTotpDateLabel(value) {
+  const timestamp = accountTotpTimestampMs(value);
+  if (!timestamp) return "尚无记录";
+  return new Date(timestamp).toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+function createAccountTotpController(modal, account) {
+  const accountId = String(account?.id || "").trim();
+  const basePath = `/api/persona_dashboard/automation/accounts/${encodeURIComponent(accountId)}/totp`;
+  const section = modal.querySelector("[data-account-totp-section]");
+  const body = section?.querySelector("[data-account-totp-body]");
+  const stateNode = section?.querySelector("[data-account-totp-state]");
+  const requestController = new AbortController();
+  let closed = false;
+  let countdownTimer = 0;
+  let boundaryTimer = 0;
+  let viewGeneration = 0;
+  let lastTotp = null;
+  let lastCode = null;
+  let lastCodeReceivedAt = 0;
+
+  const clearCodeTimers = () => {
+    if (countdownTimer) window.clearInterval(countdownTimer);
+    if (boundaryTimer) window.clearTimeout(boundaryTimer);
+    countdownTimer = 0;
+    boundaryTimer = 0;
+  };
+
+  const setState = (status = "", configured = false) => {
+    if (!stateNode) return;
+    stateNode.textContent = accountTotpStatusLabel(status, configured);
+    stateNode.dataset.totpStatus = String(status || "").trim().toLowerCase();
+    stateNode.classList.toggle("is-configured", configured);
+  };
+
+  const setMessage = (message = "", tone = "") => {
+    const node = body?.querySelector("[data-account-totp-message]");
+    if (!node) return;
+    node.textContent = String(message || "");
+    node.dataset.tone = tone;
+    node.hidden = !message;
+  };
+
+  const renderEntry = ({ configured = false, message = "" } = {}) => {
+    clearCodeTimers();
+    viewGeneration += 1;
+    setState(account?.totp_status, configured);
+    if (!body) return;
+    body.innerHTML = `
+      <div class="account-totp-entry">
+        <label>
+          <span>${configured ? "新的 2FA 密钥" : "2FA 密钥"}</span>
+          <input type="password" data-account-totp-secret placeholder="输入 Base32 或 otpauth://..." autocomplete="off" autocapitalize="off" spellcheck="false" />
+        </label>
+        <div class="account-totp-entry-actions">
+          ${configured ? `<button type="button" data-account-totp-update-cancel>取消</button>` : ""}
+          <button type="button" class="primary" data-account-totp-submit>${configured ? "更新 2FA" : "添加 2FA"}</button>
+        </div>
+      </div>
+      <p class="account-totp-message" data-account-totp-message hidden></p>`;
+    if (message) setMessage(message, "success");
+    body.querySelector("[data-account-totp-secret]")?.focus();
+  };
+
+  const renderCodeCard = (totp = {}, currentCode = null) => {
+    clearCodeTimers();
+    setState(totp?.status, true);
+    if (!body) return;
+    body.innerHTML = `
+      <div class="account-totp-code-card">
+        <div class="account-totp-code-main">
+          <span>当前验证码</span>
+          <strong data-account-totp-code>------</strong>
+        </div>
+        <div class="account-totp-countdown">
+          <span>剩余时间</span>
+          <strong data-account-totp-countdown>同步中</strong>
+        </div>
+        <dl class="account-totp-meta">
+          <div><dt>更新时间</dt><dd data-account-totp-updated>尚无记录</dd></div>
+          <div><dt>最近验证</dt><dd data-account-totp-verified>尚无记录</dd></div>
+        </dl>
+        <div class="account-totp-code-actions">
+          <button type="button" data-account-totp-update>更新密钥</button>
+          <button type="button" class="danger" data-account-totp-delete>移除 2FA</button>
+        </div>
+      </div>
+      <p class="account-totp-message" data-account-totp-message hidden></p>`;
+    body.querySelector("[data-account-totp-updated]").textContent = accountTotpDateLabel(totp?.updated_at);
+    body.querySelector("[data-account-totp-verified]").textContent = accountTotpDateLabel(totp?.last_verified_at);
+    if (currentCode) {
+      body.querySelector("[data-account-totp-code]").textContent = String(currentCode.code || "------");
+    }
+  };
+
+  const scheduleAtBoundary = (currentCode = {}, responseReceivedAt = Date.now()) => {
+    const countdown = body?.querySelector("[data-account-totp-countdown]");
+    if (!countdown) return;
+    const serverTime = accountTotpTimestampMs(currentCode.server_time);
+    const validForMs = Math.max(0, Number(currentCode.valid_for_seconds || 0) * 1000);
+    const expiresAt = accountTotpTimestampMs(currentCode.expires_at)
+      || (serverTime && validForMs ? serverTime + validForMs : 0);
+    if (!serverTime || !expiresAt) {
+      countdown.textContent = "时间不可用";
+      return;
+    }
+    const serverNow = () => serverTime + (Date.now() - responseReceivedAt);
+    const updateCountdown = () => {
+      const remaining = Math.max(0, expiresAt - serverNow());
+      countdown.textContent = `${Math.ceil(remaining / 1000)} 秒`;
+    };
+    updateCountdown();
+    countdownTimer = window.setInterval(updateCountdown, 250);
+    boundaryTimer = window.setTimeout(() => {
+      clearCodeTimers();
+      void refreshCode();
+    }, Math.max(50, expiresAt - serverNow() + 50));
+  };
+
+  const refreshCode = async () => {
+    const requestGeneration = ++viewGeneration;
+    try {
+      const result = await api(`${basePath}/code`, {
+        cache: "no-store",
+        signal: requestController.signal,
+      });
+      if (closed || requestGeneration !== viewGeneration) return;
+      const totp = result?.totp || {};
+      applyAccountTotpState(accountId, totp);
+      if (totp.configured === false) {
+        lastTotp = null;
+        lastCode = null;
+        lastCodeReceivedAt = 0;
+        renderEntry({ configured: false });
+        return;
+      }
+      lastTotp = totp;
+      lastCode = result?.current_code || {};
+      lastCodeReceivedAt = Date.now();
+      renderCodeCard(lastTotp, lastCode);
+      scheduleAtBoundary(lastCode, lastCodeReceivedAt);
+    } catch (error) {
+      if (closed || error?.name === "AbortError" || requestGeneration !== viewGeneration) return;
+      if (Number(error?.status || 0) === 404) {
+        const cleared = {
+          configured: false,
+          status: "disabled",
+          updated_at: null,
+          last_verified_at: null,
+        };
+        applyAccountTotpState(accountId, cleared);
+        lastTotp = null;
+        lastCode = null;
+        lastCodeReceivedAt = 0;
+        renderEntry({ configured: false });
+        return;
+      }
+      clearCodeTimers();
+      const code = body?.querySelector("[data-account-totp-code]");
+      const countdown = body?.querySelector("[data-account-totp-countdown]");
+      if (code) code.textContent = "------";
+      if (countdown) countdown.textContent = "同步失败";
+      setMessage(error.detail || error.message || "读取验证码失败。", "error");
+    }
+  };
+
+  const submit = async (button) => {
+    const input = body?.querySelector("[data-account-totp-secret]");
+    const secretOrUri = String(input?.value || "").trim();
+    if (!secretOrUri) {
+      setMessage("请输入 Base32 密钥或 otpauth URI。", "error");
+      input?.focus();
+      return;
+    }
+    if (input) input.value = "";
+    const requestGeneration = ++viewGeneration;
+    button.disabled = true;
+    setMessage("");
+    try {
+      const result = await api(basePath, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ secret_or_uri: secretOrUri }),
+        signal: requestController.signal,
+      });
+      if (closed || requestGeneration !== viewGeneration) return;
+      const totp = result?.totp || {
+        configured: true,
+        status: "configured",
+        updated_at: Date.now() / 1000,
+        last_verified_at: account?.totp_last_verified_at || null,
+      };
+      applyAccountTotpState(accountId, totp);
+      const currentCode = result?.current_code || null;
+      if (currentCode) {
+        lastTotp = totp;
+        lastCode = currentCode;
+        lastCodeReceivedAt = Date.now();
+        renderCodeCard(lastTotp, lastCode);
+        scheduleAtBoundary(lastCode, lastCodeReceivedAt);
+      } else {
+        renderCodeCard(totp);
+        await refreshCode();
+      }
+    } catch (error) {
+      if (closed || error?.name === "AbortError" || requestGeneration !== viewGeneration) return;
+      setMessage(error.detail || error.message || "保存 2FA 失败。", "error");
+      body?.querySelector("[data-account-totp-secret]")?.focus();
+    } finally {
+      if (button?.isConnected) button.disabled = false;
+    }
+  };
+
+  const remove = async (button) => {
+    if (button.dataset.totpConfirm !== "true") {
+      button.dataset.totpConfirm = "true";
+      button.textContent = "确认移除";
+      setMessage("再次点击确认移除该账号的 2FA。", "warning");
+      return;
+    }
+    const requestGeneration = ++viewGeneration;
+    clearCodeTimers();
+    button.disabled = true;
+    try {
+      const result = await api(basePath, {
+        method: "DELETE",
+        signal: requestController.signal,
+      });
+      if (closed || requestGeneration !== viewGeneration) return;
+      const cleared = result?.totp || {
+        configured: false,
+        status: "disabled",
+        updated_at: null,
+        last_verified_at: null,
+      };
+      applyAccountTotpState(accountId, cleared);
+      lastTotp = null;
+      lastCode = null;
+      lastCodeReceivedAt = 0;
+      renderEntry({ configured: false, message: "2FA 已移除。" });
+    } catch (error) {
+      if (closed || error?.name === "AbortError" || requestGeneration !== viewGeneration) return;
+      button.disabled = false;
+      setMessage(error.detail || error.message || "移除 2FA 失败。", "error");
+    }
+  };
+
+  if (account?.totp_configured) {
+    renderCodeCard({
+      configured: true,
+      status: account.totp_status,
+      updated_at: account.totp_updated_at,
+      last_verified_at: account.totp_last_verified_at,
+    });
+    void refreshCode();
+  } else {
+    renderEntry();
+  }
+
+  return {
+    submit,
+    remove,
+    showUpdate() {
+      renderEntry({ configured: true });
+    },
+    cancelUpdate() {
+      if (lastCode) {
+        renderCodeCard(lastTotp || {}, lastCode);
+        scheduleAtBoundary(lastCode, lastCodeReceivedAt);
+        return;
+      }
+      renderCodeCard({
+        configured: true,
+        status: account.totp_status,
+        updated_at: account.totp_updated_at,
+        last_verified_at: account.totp_last_verified_at,
+      });
+      void refreshCode();
+    },
+    close() {
+      if (closed) return;
+      closed = true;
+      viewGeneration += 1;
+      clearCodeTimers();
+      requestController.abort();
+    },
+  };
+}
+
 function openAccountPoolEditModal(accountId = "") {
   const account = accountPoolAccounts().find((item) => String(item.id || "") === String(accountId || ""))
     || state.socialAccounts.find((item) => String(item.id || "") === String(accountId || ""));
@@ -17271,6 +17656,7 @@ function openAccountPoolEditModal(accountId = "") {
               <input id="accountPoolEditDisplayName" value="${esc(account.display_name || "")}" placeholder="用于区分账号，可留空" autocomplete="off" />
             </label>
           </div>
+          ${renderAccountTotpSection(account)}
           ${renderAccountProxyPickerPanel(account)}
         </div>
       </div>
@@ -17280,12 +17666,35 @@ function openAccountPoolEditModal(accountId = "") {
       </div>
     </section>`;
   document.body.appendChild(modal);
+  const totpController = createAccountTotpController(modal, account);
   $("accountPoolEditUsername")?.focus();
-  const close = () => {
+  modal.__cleanup = () => {
+    totpController.close();
     clearAccountPasswordReveal(account.id, "pool-edit");
+  };
+  const close = () => {
+    modal.__cleanup();
     modal.remove();
   };
   modal.addEventListener("click", (event) => {
+    const totpSubmit = event.target.closest("[data-account-totp-submit]");
+    if (totpSubmit) {
+      void totpController.submit(totpSubmit);
+      return;
+    }
+    if (event.target.closest("[data-account-totp-update]")) {
+      totpController.showUpdate();
+      return;
+    }
+    if (event.target.closest("[data-account-totp-update-cancel]")) {
+      totpController.cancelUpdate();
+      return;
+    }
+    const totpDelete = event.target.closest("[data-account-totp-delete]");
+    if (totpDelete) {
+      void totpController.remove(totpDelete);
+      return;
+    }
     const passwordToggle = event.target.closest("[data-account-password-toggle]");
     if (passwordToggle) {
       toggleAccountPasswordVisibility(passwordToggle)
@@ -18950,6 +19359,7 @@ function bindEvents() {
   document.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", async () => {
     const nextView = button.dataset.view;
     if (nextView === "workspace" && state.view === "workspace") {
+      setMenuClickHighlight(button, button);
       state.workspaceMenuOpen = !state.workspaceMenuOpen;
       updateWorkspaceFlow();
       return;

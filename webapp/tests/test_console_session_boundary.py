@@ -382,6 +382,10 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("renderSocialTasks()", account_refresh)
         self.assertNotIn("renderSocialAccounts()", account_status)
         self.assertNotIn("renderConfirmSummary()", account_status)
+        self.assertEqual(account_status.count('document.querySelectorAll("[data-account-totp-for]")'), 1)
+        self.assertNotIn("updateAccountTotpBadgeViews(", account_status)
+        self.assertIn("accountById.get(String(node.dataset.accountTotpFor", account_status)
+        self.assertIn("updateAccountTotpBadgeNode(node, account)", account_status)
         self.assertIn('loadAutomationTasksShared().catch', task_refresh)
         self.assertNotIn("loadAutomationTasksShared({ force: true })", task_refresh)
 

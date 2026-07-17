@@ -19,6 +19,9 @@ LOGIN_FORM_WAIT_SECONDS = 12
 DEFAULT_MANUAL_LOGIN_TIMEOUT_SECONDS = 900
 MIN_MANUAL_LOGIN_TIMEOUT_SECONDS = 300
 MAX_MANUAL_LOGIN_TIMEOUT_SECONDS = 1800
+MAX_AUTO_TOTP_ATTEMPTS = 2
+AUTO_TOTP_RESULT_WAIT_SECONDS = 20
+AUTO_TOTP_MIN_SUBMIT_REMAINING_SECONDS = 3
 SUPPORTED_TASK_TYPES = {
     "check_login",
     "open_login",
@@ -78,6 +81,72 @@ class UnsupportedActionError(RuntimeError):
     pass
 
 
+def _wait_for_publish_login_transition(
+    page,
+    task: dict[str, Any],
+    payload: dict[str, Any],
+    screenshot_dir: Path,
+    logger: AutomationLogger,
+    platform: str,
+    cancel_event: Any | None,
+    initial_status: dict[str, Any],
+    context_control: dict[str, Any] | None,
+) -> dict[str, Any]:
+    timeout_seconds = _int_payload_or_env(
+        payload,
+        "totp_transition_wait_seconds",
+        "SOCIAL_AUTOMATION_TOTP_TRANSITION_WAIT_SECONDS",
+        30,
+        5,
+        120,
+    )
+    deadline = time.monotonic() + timeout_seconds
+    current = dict(initial_status or {})
+    confirmation_clicked = False
+    while time.monotonic() < deadline:
+        _raise_if_cancelled(cancel_event)
+        if _manual_takeover_requested(context_control):
+            return {
+                "status": "need_verification",
+                "reason": "用户已切换为人工接管，自动验证确认已停止。",
+            }
+        if (
+            str(current.get("status") or "") == "account_confirmation_required"
+            and not confirmation_clicked
+        ):
+            confirmation_clicked = _click_text_button(
+                page,
+                logger,
+                ["Continue with Instagram", "Log in with Instagram", "继续使用 Instagram", "使用 Instagram 继续"],
+                "threads_account_confirmation",
+                abort_if=lambda: _manual_takeover_requested(context_control),
+            )
+        current = _detect_platform_login_state(page, platform)
+        if platform == "threads":
+            current = _restore_threads_after_instagram_login(page, current, logger)
+        if str(current.get("status") or "") == "ready":
+            stable = _confirm_platform_ready(page, platform, logger, cancel_event)
+            if str(stable.get("status") or "") == "ready":
+                _complete_pending_totp_verification(context_control)
+                return _safe_login_status(stable)
+            current = stable
+        if str(current.get("status") or "") == "invalid_credentials":
+            return _safe_login_status(current)
+        if not _wait_interruptibly(0.5, cancel_event, context_control):
+            return {
+                "status": "need_verification",
+                "reason": "用户已切换为人工接管，自动验证确认已停止。",
+            }
+    return {
+        "status": "need_verification",
+        "reason": str(
+            current.get("reason")
+            or "2FA 验证已提交，但平台未在等待时间内确认登录，请人工继续处理。"
+        ),
+        "details": _safe_login_status(current),
+    }
+
+
 def _attempt_publish_login_repair(
     page,
     task: dict[str, Any],
@@ -88,11 +157,32 @@ def _attempt_publish_login_repair(
     platform: str,
     cancel_event: Any | None,
     initial_status: dict[str, Any],
+    context_control: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if str(task.get("task_type") or "") != "publish_post":
         return initial_status
-    if str(initial_status.get("status") or "") in {"need_verification", "invalid_credentials"}:
+    initial_code = str(initial_status.get("status") or "")
+    if initial_code == "invalid_credentials":
         return initial_status
+    if initial_code == "need_verification":
+        totp_result = _try_auto_totp_challenge(
+            page,
+            task,
+            screenshot_dir,
+            logger,
+            platform,
+            cancel_event,
+            context_control,
+        )
+        if totp_result is None or str(totp_result.get("status") or "") == "need_verification":
+            return totp_result or initial_status
+        if str(totp_result.get("status") or "") == "ready":
+            return totp_result
+        if str(totp_result.get("status") or "") in {
+            "account_confirmation_required",
+            "totp_submitted",
+        }:
+            return totp_result
     max_repair_attempts = _int_payload_or_env(payload, "publish_login_repair_attempts", "SOCIAL_AUTOMATION_PUBLISH_LOGIN_REPAIR_ATTEMPTS", 3, 0, 8)
     if max_repair_attempts <= 0:
         return initial_status
@@ -103,7 +193,17 @@ def _attempt_publish_login_repair(
         {"status": initial_status, "attempts": max_repair_attempts},
     )
     for attempt in range(1, max_repair_attempts + 1):
-        _self_heal_login_page(page, platform, logger, task, screenshot_dir, str(initial_status.get("reason") or "publish_login_not_ready"), attempt, cancel_event)
+        _self_heal_login_page(
+            page,
+            platform,
+            logger,
+            task,
+            screenshot_dir,
+            str(initial_status.get("reason") or "publish_login_not_ready"),
+            attempt,
+            cancel_event,
+            context_control,
+        )
         current = _detect_platform_login_state(page, platform)
         if str(current.get("status") or "") in {"need_verification", "invalid_credentials"}:
             return current
@@ -124,7 +224,17 @@ def _attempt_publish_login_repair(
     repair_payload.setdefault("max_self_heal_attempts", max_repair_attempts)
     repair_payload.setdefault("max_login_attempts", 2)
     try:
-        result = _run_open_login(page, task, account, repair_payload, screenshot_dir, logger, platform, cancel_event)
+        result = _run_open_login(
+            page,
+            task,
+            account,
+            repair_payload,
+            screenshot_dir,
+            logger,
+            platform,
+            cancel_event,
+            context_control,
+        )
     except NeedManualError as exc:
         return {"status": str(exc.status or "need_verification"), "reason": str(exc), "screenshot_path": str(exc.screenshot_path or "")}
     if result.get("status") == "ready":
@@ -181,7 +291,33 @@ def run_social_task(
         else:
             login = _check_platform_login(page, platform, logger)
         if login.get("status") != "ready":
-            login = _attempt_publish_login_repair(page, task, account, payload, screenshot_dir, logger, platform, cancel_event, login)
+            login = _attempt_publish_login_repair(
+                page,
+                task,
+                account,
+                payload,
+                screenshot_dir,
+                logger,
+                platform,
+                cancel_event,
+                login,
+                context_control,
+            )
+        if task_type == "publish_post" and login.get("status") in {
+            "totp_submitted",
+            "account_confirmation_required",
+        }:
+            login = _wait_for_publish_login_transition(
+                page,
+                task,
+                payload,
+                screenshot_dir,
+                logger,
+                platform,
+                cancel_event,
+                login,
+                context_control,
+            )
         if task_type == "publish_post" and login.get("status") in {"need_verification", "invalid_credentials"}:
             detected_status = str(login.get("status") or "need_verification")
             account_status = "need_verification" if detected_status == "need_verification" else "cookie_expired"
@@ -206,6 +342,7 @@ def run_social_task(
                 detected_status,
                 shot,
                 login,
+                context_control,
             )
             if login.get("status") == "ready":
                 _resume_after_manual_takeover(context_control)
@@ -1336,7 +1473,7 @@ def _self_heal_login_page(
         "warn",
         "login_self_heal",
         f"{_platform_name(platform)} login is unstable; running automatic recovery attempt {attempt}.",
-        {"attempt": attempt, "reason": reason, "url": str(page.url or "")},
+        {"attempt": attempt, "reason": reason, "url": _safe_navigation_url(page.url)},
         shot,
     )
     retry_clicked = _click_text_button(
@@ -1408,7 +1545,7 @@ def _prepare_manual_threads_login_page(page, logger: AutomationLogger) -> None:
             "info" if retried else "warn",
             "manual_login_retry",
             "Threads initial error page retry was handled.",
-            {"clicked": retried, "url": str(page.url or "")},
+            {"clicked": retried, "url": _safe_navigation_url(page.url)},
         )
         if retried:
             _sleep_between(1.5, 3.0)
@@ -1428,7 +1565,7 @@ def _prepare_manual_threads_login_page(page, logger: AutomationLogger) -> None:
         "info" if continued else "warn",
         "manual_login_continue_instagram",
         "Threads manual login handoff was handled.",
-        {"clicked": continued, "url": str(page.url or "")},
+        {"clicked": continued, "url": _safe_navigation_url(page.url)},
     )
     if continued:
         _sleep_between(2.0, 4.0)
@@ -1451,7 +1588,7 @@ def _restore_threads_after_instagram_login(page, status: dict[str, Any], logger:
         "info",
         "manual_login_return_threads",
         "Instagram login completed; returning to Threads for final session confirmation.",
-        {"url": str(page.url or "")},
+        {"url": _safe_navigation_url(page.url)},
     )
     _goto(page, THREADS_HOME, logger, "manual_login_return_threads")
     return _detect_threads_login_state(page)
@@ -1470,6 +1607,7 @@ def _wait_or_raise_manual(
     last_status: dict[str, Any] | None,
     wait_for_manual: bool,
     manual_only_on_verification: bool = False,
+    context_control: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if wait_for_manual and (
         not manual_only_on_verification
@@ -1486,6 +1624,7 @@ def _wait_or_raise_manual(
             status,
             screenshot_path,
             last_status,
+            context_control,
         )
     logger.log(
         "error",
@@ -1549,7 +1688,7 @@ def _run_open_login(
                 "warn",
                 "manual_takeover",
                 "已立即停止自动登录操作，当前浏览器已切换为人工接管。",
-                {"url": str(page.url or "")},
+                {"url": _safe_navigation_url(page.url)},
             )
             return _wait_for_manual_login_completion(
                 page,
@@ -1562,6 +1701,7 @@ def _run_open_login(
                 str(last_status.get("status") or "need_verification"),
                 "",
                 last_status,
+                context_control,
             )
         post_submit_waiting = bool(
             last_submit_monotonic is not None
@@ -1575,12 +1715,13 @@ def _run_open_login(
             if last_status.get("status") == "ready":
                 stable_status = _confirm_platform_ready(page, platform, logger, cancel_event)
                 if stable_status.get("status") == "ready":
+                    _complete_pending_totp_verification(context_control)
                     shot = _screenshot(page, screenshot_dir, task, "login_complete", logger)
                     logger.log(
                         "info",
                         "completion_node",
                         f"{_platform_name(platform)} 登录成功节点已确认。",
-                        {"url": str(page.url or ""), "details": stable_status},
+                        {"url": _safe_navigation_url(page.url), "details": _safe_login_status(stable_status)},
                         shot,
                     )
                     return {"ok": True, "status": "ready", "screenshot_path": shot, "details": stable_status}
@@ -1597,12 +1738,31 @@ def _run_open_login(
                     "info" if continued else "warn",
                     "threads_account_confirmation",
                     "Threads 关联账号确认流程已处理。" if continued else "Threads 关联账号确认按钮尚不可用，页面保持原状。",
-                    {"clicked": continued, "url": str(page.url or "")},
+                    {"clicked": continued, "url": _safe_navigation_url(page.url)},
                 )
                 if continued:
                     _sleep_between(1.5, 3.0)
                     continue
             if _verification_visible(page):
+                totp_result = _try_auto_totp_challenge(
+                    page,
+                    task,
+                    screenshot_dir,
+                    logger,
+                    platform,
+                    cancel_event,
+                    context_control,
+                )
+                if totp_result is not None:
+                    last_status = totp_result
+                    if str(totp_result.get("status") or "") == "totp_submitted":
+                        _mark_totp_verification_pending(context_control)
+                    if str(totp_result.get("status") or "") in {
+                        "ready",
+                        "account_confirmation_required",
+                        "totp_submitted",
+                    }:
+                        continue
                 verification_hits += 1
                 _report_account_login_status(context_control, "need_verification", logger)
                 _request_manual_takeover(context_control)
@@ -1612,7 +1772,7 @@ def _run_open_login(
                         "warn",
                         "login_verification_required",
                         "检测到验证码或安全挑战，正在等待人工在浏览器中处理。",
-                        {"url": str(page.url or ""), "screenshot_path": shot},
+                        {"url": _safe_navigation_url(page.url), "screenshot_path": shot},
                         shot,
                     )
                     verification_logged = True
@@ -1629,6 +1789,7 @@ def _run_open_login(
                     last_status,
                     wait_for_manual,
                     manual_only_on_verification,
+                    context_control,
                 )
             if last_status.get("status") == "invalid_credentials":
                 _request_manual_takeover(context_control)
@@ -1644,6 +1805,7 @@ def _run_open_login(
                     "invalid_credentials",
                     shot,
                     last_status,
+                    context_control,
                 )
             if last_status.get("status") == "need_verification":
                 shot = _screenshot(page, screenshot_dir, task, "login_verification_required", logger)
@@ -1653,7 +1815,7 @@ def _run_open_login(
                     "warn",
                     "login_verification_required",
                     f"{_platform_name(platform)} 需要输入验证码。",
-                    {"url": str(page.url or ""), "screenshot_path": shot, "details": last_status},
+                    {"url": _safe_navigation_url(page.url), "screenshot_path": shot, "details": _safe_login_status(last_status)},
                     shot,
                 )
                 _request_manual_takeover(context_control)
@@ -1670,6 +1832,7 @@ def _run_open_login(
                     last_status,
                     wait_for_manual,
                     manual_only_on_verification,
+                    context_control,
                 )
             if last_status.get("status") == "transient_error":
                 shot = _screenshot(page, screenshot_dir, task, "login_transient_error", logger)
@@ -1677,7 +1840,7 @@ def _run_open_login(
                     "warn",
                     "login_transient_error",
                     f"{_platform_name(platform)} returned a temporary error page; leaving the browser untouched.",
-                    {"url": str(page.url or ""), "screenshot_path": shot, "details": last_status},
+                    {"url": _safe_navigation_url(page.url), "screenshot_path": shot, "details": _safe_login_status(last_status)},
                     shot,
                 )
                 if auto_submit and post_submit_waiting:
@@ -1702,6 +1865,7 @@ def _run_open_login(
                     last_status,
                     wait_for_manual,
                     manual_only_on_verification,
+                    context_control,
                 )
             if (
                 auto_submit
@@ -1760,6 +1924,7 @@ def _run_open_login(
                 str(last_status.get("status") or "need_manual"),
                 shot,
                 last_status,
+                context_control,
             )
         time.sleep(3 if auto_submit else 10)
     shot = _screenshot(page, screenshot_dir, task, "login_wait_timeout", logger)
@@ -1776,6 +1941,7 @@ def _run_open_login(
         last_status,
         wait_for_manual,
         manual_only_on_verification,
+        context_control,
     )
 
 
@@ -1790,6 +1956,7 @@ def _wait_for_manual_login_completion(
     status: str = "need_verification",
     screenshot_path: str = "",
     last_status: dict[str, Any] | None = None,
+    context_control: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
     try:
@@ -1851,12 +2018,13 @@ def _wait_for_manual_login_completion(
             if time.monotonic() >= deadline:
                 raise_manual_login_timeout()
             if stable_status.get("status") == "ready":
+                _complete_pending_totp_verification(context_control)
                 shot = _screenshot(page, screenshot_dir, task, "login_complete", logger)
                 logger.log(
                     "info",
                     "completion_node",
                     f"{_platform_name(platform)} 登录成功节点已确认。",
-                    {"url": str(page.url or ""), "details": stable_status, "manual_completion": True},
+                    {"url": _safe_navigation_url(page.url), "details": _safe_login_status(stable_status), "manual_completion": True},
                     shot,
                 )
                 return {"ok": True, "status": "ready", "screenshot_path": shot, "details": stable_status}
@@ -2616,6 +2784,521 @@ def _visible_last(page, selectors: list[str], timeout_ms: int = 1200):
     return None
 
 
+def _page_body_text_lower(page, timeout_ms: int = 3000) -> str:
+    try:
+        return str(page.locator("body").inner_text(timeout=timeout_ms) or "").lower()
+    except Exception:
+        return ""
+
+
+def _safe_navigation_url(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urlparse(raw)
+        if not parsed.scheme or not parsed.netloc:
+            return parsed.path or ""
+        return parsed._replace(params="", query="", fragment="").geturl()
+    except Exception:
+        return raw.split("?", 1)[0].split("#", 1)[0]
+
+
+def _safe_login_status(status: dict[str, Any] | None) -> dict[str, Any]:
+    result = dict(status or {})
+    if "url" in result:
+        result["url"] = _safe_navigation_url(result.get("url"))
+    return result
+
+
+def _verification_code_input(page):
+    return _visible_first(
+        page,
+        [
+            'input[autocomplete="one-time-code"]',
+            'input[name="approvals_code"]',
+            'input[name*="security_code" i]',
+            'input[name*="verification_code" i]',
+            'input[name*="code" i]',
+            'input[aria-label*="code" i]',
+            'input[placeholder*="code" i]',
+            'input[inputmode="numeric"]',
+            'input[type="tel"]',
+        ],
+        timeout_ms=500,
+    )
+
+
+def _classify_verification_challenge(page) -> dict[str, Any]:
+    url = str(page.url or "")
+    text = _page_body_text_lower(page)
+    code_input = _verification_code_input(page)
+    has_code_input = code_input is not None
+
+    authenticator_markers = (
+        "go to your authentication app",
+        "authentication app",
+        "authenticator app",
+        "authenticator code",
+        "code generator",
+        "验证器应用",
+        "身份验证器",
+        "认证应用",
+    )
+    sms_markers = (
+        "text message",
+        "via sms",
+        "sent a code to your phone",
+        "code to your phone",
+        "手机短信",
+        "短信验证码",
+    )
+    email_markers = (
+        "sent a code to your email",
+        "code to your email",
+        "check your email",
+        "email address",
+        "邮箱验证码",
+        "电子邮件验证码",
+        "检查你的邮箱",
+    )
+    identity_markers = (
+        "upload a verification selfie",
+        "verification selfie",
+        "video selfie",
+        "take a selfie video",
+        "identity confirmation",
+        "your email may not be secure",
+        "update your email address",
+        "confirm your identity",
+        "身份确认",
+        "验证自拍",
+    )
+    method_markers = (
+        "choose a way to confirm",
+        "choose how to verify",
+        "select a verification method",
+        "try another way",
+        "选择验证方式",
+        "选择确认方式",
+    )
+    generic_markers = tuple(_verification_text_markers()) + (
+        "enter your login code",
+        "enter a 6-digit code",
+        "请输入验证码",
+    )
+
+    challenge_type = "none"
+    if any(marker in text for marker in identity_markers):
+        challenge_type = "identity_challenge"
+    elif any(marker in text for marker in method_markers) and not has_code_input:
+        challenge_type = "method_selection"
+    elif has_code_input and any(marker in text for marker in sms_markers):
+        challenge_type = "sms_code"
+    elif has_code_input and any(marker in text for marker in email_markers):
+        challenge_type = "email_code"
+    elif has_code_input and any(marker in text for marker in authenticator_markers):
+        challenge_type = "authenticator_totp"
+    elif has_code_input and (
+        _is_verification_url(url)
+        or any(marker in text for marker in generic_markers)
+    ):
+        challenge_type = "unknown_code"
+    elif _is_verification_url(url) or any(marker in text for marker in generic_markers):
+        challenge_type = "unknown_challenge"
+    return {
+        "type": challenge_type,
+        "url": _safe_navigation_url(url),
+        "has_code_input": has_code_input,
+        "code_input": code_input,
+    }
+
+
+def _totp_provider(context_control: dict[str, Any] | None) -> Callable[[], dict[str, Any]] | None:
+    if not isinstance(context_control, dict):
+        return None
+    provider = context_control.get("totp_code_provider")
+    return provider if callable(provider) else None
+
+
+def _report_totp_outcome(context_control: dict[str, Any] | None, outcome: str) -> None:
+    if not isinstance(context_control, dict):
+        return
+    clean_outcome = str(outcome or "failed")
+    if clean_outcome in {
+        "verified",
+        "rejected",
+        "invalid",
+        "unavailable",
+        "failed",
+        "inconclusive",
+    }:
+        context_control.pop("_totp_verification_pending", None)
+    callback = context_control.get("totp_outcome_callback")
+    if callable(callback):
+        with contextlib.suppress(Exception):
+            callback(clean_outcome)
+
+
+def _mark_totp_verification_pending(context_control: dict[str, Any] | None) -> None:
+    if isinstance(context_control, dict):
+        context_control["_totp_verification_pending"] = True
+
+
+def _complete_pending_totp_verification(context_control: dict[str, Any] | None) -> None:
+    if isinstance(context_control, dict) and context_control.get("_totp_verification_pending"):
+        _report_totp_outcome(context_control, "verified")
+
+
+def _clear_verification_code(page, code_input) -> None:
+    if code_input is None:
+        return
+    with contextlib.suppress(Exception):
+        code_input.evaluate(
+            """element => {
+                element.focus();
+                if (typeof element.select === 'function') element.select();
+            }"""
+        )
+        page.keyboard.press("Control+A")
+        page.keyboard.press("Backspace")
+
+
+def _wait_interruptibly(
+    seconds: float,
+    cancel_event: Any | None,
+    context_control: dict[str, Any] | None,
+) -> bool:
+    remaining = max(0.0, float(seconds))
+    while remaining > 0:
+        _raise_if_cancelled(cancel_event)
+        if _manual_takeover_requested(context_control):
+            return False
+        interval = min(0.25, remaining)
+        time.sleep(interval)
+        remaining -= interval
+    return not _manual_takeover_requested(context_control)
+
+
+def _try_auto_totp_challenge(
+    page,
+    task: dict[str, Any],
+    screenshot_dir: Path,
+    logger: AutomationLogger,
+    platform: str,
+    cancel_event: Any | None,
+    context_control: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    challenge = _classify_verification_challenge(page)
+    if str(challenge.get("type") or "") != "authenticator_totp":
+        return None
+    provider = _totp_provider(context_control)
+    if provider is None:
+        return {
+            "status": "need_verification",
+            "reason": "检测到身份验证器验证码，但该账号尚未配置 2FA 密钥。",
+            "challenge_type": "authenticator_totp",
+            "url": _safe_navigation_url(page.url),
+        }
+
+    logger.log(
+        "info",
+        "auto_totp_detected",
+        "检测到身份验证器验证码，正在自动完成验证。",
+        {"challenge_type": "authenticator_totp", "url": _safe_navigation_url(page.url)},
+    )
+    attempt = 0
+    deadline = time.monotonic() + 70.0
+    while attempt < MAX_AUTO_TOTP_ATTEMPTS and time.monotonic() < deadline:
+        _raise_if_cancelled(cancel_event)
+        if _manual_takeover_requested(context_control):
+            return {
+                "status": "need_verification",
+                "reason": "用户已切换为人工接管，自动验证码输入已停止。",
+                "challenge_type": "authenticator_totp",
+            }
+        challenge = _classify_verification_challenge(page)
+        challenge_type = str(challenge.get("type") or "")
+        challenge_text = _page_body_text_lower(page, timeout_ms=1000)
+        continuing_expired_totp = bool(
+            attempt > 0
+            and challenge.get("code_input") is not None
+            and any(marker in challenge_text for marker in (
+                "code has expired",
+                "code expired",
+                "expired code",
+                "验证码已过期",
+            ))
+        )
+        if continuing_expired_totp:
+            challenge_type = "authenticator_totp"
+        if challenge_type != "authenticator_totp":
+            current = _detect_platform_login_state(page, platform)
+            if platform == "threads":
+                current = _restore_threads_after_instagram_login(page, current, logger)
+            if str(current.get("status") or "") == "ready":
+                stable = _confirm_platform_ready(page, platform, logger, cancel_event)
+                if str(stable.get("status") or "") == "ready":
+                    _report_totp_outcome(context_control, "verified")
+                    return _safe_login_status(stable)
+            if challenge_type in {"sms_code", "email_code", "identity_challenge", "method_selection"}:
+                _report_totp_outcome(context_control, "inconclusive")
+                return {
+                    "status": "need_verification",
+                    "reason": "验证流程已切换为短信、邮箱或身份确认，需要人工处理。",
+                    "challenge_type": challenge_type,
+                    "url": _safe_navigation_url(page.url),
+                }
+            current_status = str(current.get("status") or "")
+            if current_status == "account_confirmation_required":
+                _report_totp_outcome(context_control, "verified")
+                return {**_safe_login_status(current), "challenge_type": challenge_type}
+            if challenge_type != "none" or current_status in {"need_verification", "invalid_credentials"}:
+                _report_totp_outcome(context_control, "failed")
+                return {
+                    "status": "need_verification",
+                    "reason": str(current.get("reason") or "2FA 验证尚未完成，需要人工处理。"),
+                    "challenge_type": challenge_type,
+                }
+            _mark_totp_verification_pending(context_control)
+            return {
+                **_safe_login_status(current),
+                "status": "totp_submitted",
+                "challenge_type": challenge_type,
+            }
+
+        code_input = challenge.get("code_input")
+        if code_input is None:
+            return {
+                "status": "need_verification",
+                "reason": "检测到身份验证器验证，但验证码输入框尚不可用。",
+                "challenge_type": "authenticator_totp",
+            }
+        try:
+            reservation = provider()
+        except Exception:
+            reservation = {"available": False, "reason": "provider_failed"}
+        if not bool(reservation.get("available")):
+            reason = str(reservation.get("reason") or "unavailable")
+            if reason in {"period_ending", "counter_already_used"}:
+                wait_seconds = max(1, min(int(reservation.get("wait_seconds") or 1), 31))
+                if not _wait_interruptibly(wait_seconds, cancel_event, context_control):
+                    return {
+                        "status": "need_verification",
+                        "reason": "用户已切换为人工接管，自动验证码输入已停止。",
+                        "challenge_type": "authenticator_totp",
+                    }
+                continue
+            _report_totp_outcome(context_control, "unavailable")
+            return {
+                "status": "need_verification",
+                "reason": "该账号的 2FA 密钥不可用，请人工完成验证或重新配置。",
+                "challenge_type": "authenticator_totp",
+                "totp_reason": reason,
+            }
+
+        code = str(reservation.get("code") or "").strip()
+        if not re.fullmatch(r"\d{6}", code):
+            _report_totp_outcome(context_control, "failed")
+            return {
+                "status": "need_verification",
+                "reason": "无法生成有效的 2FA 验证码，请人工处理。",
+                "challenge_type": "authenticator_totp",
+            }
+        expires_at = float(reservation.get("expires_at") or 0)
+
+        def code_window_closing() -> bool:
+            return bool(
+                expires_at > 0
+                and expires_at - time.time() < AUTO_TOTP_MIN_SUBMIT_REMAINING_SECONDS
+            )
+
+        def totp_input_aborted() -> bool:
+            return _manual_takeover_requested(context_control) or code_window_closing()
+
+        try:
+            _clear_and_type(
+                page,
+                code_input,
+                code,
+                mode="type",
+                logger=logger,
+                stage="auto_totp_input",
+                abort_if=totp_input_aborted,
+            )
+            if _manual_takeover_requested(context_control):
+                _clear_verification_code(page, code_input)
+                return {
+                    "status": "need_verification",
+                    "reason": "用户已切换为人工接管，自动验证码输入已停止。",
+                    "challenge_type": "authenticator_totp",
+                }
+            if code_window_closing():
+                _clear_verification_code(page, code_input)
+                remaining = max(0.0, expires_at - time.time())
+                logger.log(
+                    "info",
+                    "auto_totp_period_rollover",
+                    "当前 2FA 验证码临近刷新，已停止提交并等待下一组验证码。",
+                    {
+                        "remaining_seconds": round(remaining, 3),
+                        "minimum_submit_seconds": AUTO_TOTP_MIN_SUBMIT_REMAINING_SECONDS,
+                    },
+                )
+                if not _wait_interruptibly(
+                    min(31.0, remaining + 1.0),
+                    cancel_event,
+                    context_control,
+                ):
+                    return {
+                        "status": "need_verification",
+                        "reason": "用户已切换为人工接管，自动验证码输入已停止。",
+                        "challenge_type": "authenticator_totp",
+                    }
+                continue
+            clicked = _click_text_button(
+                page,
+                logger,
+                ["Continue", "Confirm", "Verify", "Submit", "Next", "继续", "确认", "验证", "提交", "下一步"],
+                "auto_totp_submit",
+                abort_if=totp_input_aborted,
+            )
+            if not clicked and code_window_closing():
+                _clear_verification_code(page, code_input)
+                remaining = max(0.0, expires_at - time.time())
+                logger.log(
+                    "info",
+                    "auto_totp_period_rollover",
+                    "提交按钮等待期间验证码已临近刷新，已放弃旧码并等待下一组验证码。",
+                    {
+                        "remaining_seconds": round(remaining, 3),
+                        "minimum_submit_seconds": AUTO_TOTP_MIN_SUBMIT_REMAINING_SECONDS,
+                    },
+                )
+                if not _wait_interruptibly(
+                    min(31.0, remaining + 1.0),
+                    cancel_event,
+                    context_control,
+                ):
+                    return {
+                        "status": "need_verification",
+                        "reason": "用户已切换为人工接管，自动验证码输入已停止。",
+                        "challenge_type": "authenticator_totp",
+                    }
+                continue
+            if not clicked and not _manual_takeover_requested(context_control):
+                page.keyboard.press("Enter")
+        except Exception:
+            _report_totp_outcome(context_control, "failed")
+            _clear_verification_code(page, code_input)
+            return {
+                "status": "need_verification",
+                "reason": "自动填写 2FA 验证码失败，请人工处理。",
+                "challenge_type": "authenticator_totp",
+            }
+        attempt += 1
+        logger.log(
+            "info",
+            "auto_totp_submitted",
+            "2FA 验证码已自动提交，正在确认登录结果。",
+            {"attempt": attempt, "url": _safe_navigation_url(page.url)},
+        )
+
+        max_result_checks = max(1, int(AUTO_TOTP_RESULT_WAIT_SECONDS / 0.5))
+        for _ in range(max_result_checks):
+            if not _wait_interruptibly(0.5, cancel_event, context_control):
+                _clear_verification_code(page, code_input)
+                _mark_totp_verification_pending(context_control)
+                return {
+                    "status": "need_verification",
+                    "reason": "用户已切换为人工接管，自动验证码确认已停止。",
+                    "challenge_type": "authenticator_totp",
+                }
+            detected = _detect_platform_login_state(page, platform)
+            if platform == "threads":
+                detected = _restore_threads_after_instagram_login(page, detected, logger)
+            if str(detected.get("status") or "") == "ready":
+                stable = _confirm_platform_ready(page, platform, logger, cancel_event)
+                if str(stable.get("status") or "") == "ready":
+                    _report_totp_outcome(context_control, "verified")
+                    return _safe_login_status(stable)
+            current_challenge = _classify_verification_challenge(page)
+            current_type = str(current_challenge.get("type") or "")
+            text = _page_body_text_lower(page, timeout_ms=1000)
+            if any(marker in text for marker in (
+                "incorrect code",
+                "code you entered is incorrect",
+                "invalid code",
+                "code isn't valid",
+                "验证码不正确",
+                "验证码无效",
+            )):
+                _report_totp_outcome(context_control, "rejected")
+                _clear_verification_code(page, code_input)
+                return {
+                    "status": "need_verification",
+                    "reason": "身份验证器验证码被拒绝，已停止自动重试，请检查 2FA 密钥。",
+                    "challenge_type": "authenticator_totp",
+                }
+            if any(marker in text for marker in (
+                "code has expired",
+                "code expired",
+                "expired code",
+                "验证码已过期",
+            )):
+                _report_totp_outcome(context_control, "expired")
+                _clear_verification_code(page, code_input)
+                break
+            if current_type != "authenticator_totp":
+                current = detected
+                if str(current.get("status") or "") == "ready":
+                    stable = _confirm_platform_ready(page, platform, logger, cancel_event)
+                    if str(stable.get("status") or "") == "ready":
+                        _report_totp_outcome(context_control, "verified")
+                        return stable
+                if current_type in {"sms_code", "email_code", "identity_challenge", "method_selection"}:
+                    _report_totp_outcome(context_control, "inconclusive")
+                    _clear_verification_code(page, code_input)
+                    return {
+                        "status": "need_verification",
+                        "reason": "验证流程已切换为短信、邮箱或身份确认，需要人工处理。",
+                        "challenge_type": current_type,
+                    }
+                current_status = str(current.get("status") or "")
+                if current_status == "account_confirmation_required":
+                    _report_totp_outcome(context_control, "verified")
+                    return {**_safe_login_status(current), "challenge_type": current_type}
+                if current_type != "none" or current_status in {"need_verification", "invalid_credentials"}:
+                    _report_totp_outcome(context_control, "failed")
+                    _clear_verification_code(page, code_input)
+                    return {
+                        "status": "need_verification",
+                        "reason": str(current.get("reason") or "2FA 验证尚未完成，需要人工处理。"),
+                        "challenge_type": current_type,
+                    }
+                _mark_totp_verification_pending(context_control)
+                return {
+                    **_safe_login_status(current),
+                    "status": "totp_submitted",
+                    "challenge_type": current_type,
+                }
+        else:
+            _report_totp_outcome(context_control, "failed")
+            _clear_verification_code(page, code_input)
+            return {
+                "status": "need_verification",
+                "reason": "2FA 验证结果超时，已停止自动重试，请人工确认。",
+                "challenge_type": "authenticator_totp",
+            }
+
+    _clear_verification_code(page, challenge.get("code_input") if isinstance(challenge, dict) else None)
+    return {
+        "status": "need_verification",
+        "reason": "2FA 自动验证未成功，已达到 2 次尝试上限，请人工处理。",
+        "challenge_type": "authenticator_totp",
+    }
+
+
 def _clear_and_type(
     page,
     locator,
@@ -2674,7 +3357,7 @@ def _auto_submit_login_form(
         return False
     takeover_requested = lambda: _manual_takeover_requested(context_control)
     start_shot = _screenshot(page, screenshot_dir, task, "auto_login_start", logger)
-    logger.log("info", "auto_login_start", f"开始自动填写 {_platform_name(platform)} 登录凭据。", {"username": username, "url": str(page.url or "")}, start_shot)
+    logger.log("info", "auto_login_start", f"开始自动填写 {_platform_name(platform)} 登录凭据。", {"username": username, "url": _safe_navigation_url(page.url)}, start_shot)
 
     continue_clicked = False
     if platform == "threads":
@@ -2697,14 +3380,14 @@ def _auto_submit_login_form(
             username_entry_clicked = True
             _sleep_between(1.2, 2.2)
             if _visible_first(page, ['input[name="username"]', 'input[autocomplete="username"]', 'input[type="text"]'], 700) and _visible_first(page, ['input[type="password"]', 'input[autocomplete="current-password"]'], 700):
-                logger.log("info", "threads_login_username_instead", "Threads username/password login entry was opened.", {"attempt": username_entry_attempt, "url": str(page.url or "")})
+                logger.log("info", "threads_login_username_instead", "Threads username/password login entry was opened.", {"attempt": username_entry_attempt, "url": _safe_navigation_url(page.url)})
                 continue_clicked = True
                 break
-            logger.log("warn", "threads_login_username_instead", "Threads username login entry click did not expose inputs yet; retrying.", {"attempt": username_entry_attempt, "url": str(page.url or "")})
+            logger.log("warn", "threads_login_username_instead", "Threads username login entry click did not expose inputs yet; retrying.", {"attempt": username_entry_attempt, "url": _safe_navigation_url(page.url)})
         if not continue_clicked:
             if _manual_takeover_requested(context_control):
                 return False
-            logger.log("info", "auto_login_continue", "正在查找 Threads 的 Instagram 登录按钮。", {"url": str(page.url or "")})
+            logger.log("info", "auto_login_continue", "正在查找 Threads 的 Instagram 登录按钮。", {"url": _safe_navigation_url(page.url)})
             continue_clicked = _click_text_button(
                 page,
                 logger,
@@ -2712,11 +3395,11 @@ def _auto_submit_login_form(
                 "threads_continue_instagram",
                 abort_if=takeover_requested,
             )
-            logger.log("info" if continue_clicked else "warn", "auto_login_continue", "Threads 的 Instagram 登录按钮已处理。", {"clicked": continue_clicked, "url": str(page.url or "")})
+            logger.log("info" if continue_clicked else "warn", "auto_login_continue", "Threads 的 Instagram 登录按钮已处理。", {"clicked": continue_clicked, "url": _safe_navigation_url(page.url)})
             if continue_clicked:
                 _sleep_between(2.0, 4.0)
 
-    logger.log("info", "auto_login_find_inputs", "正在查找用户名和密码输入框。", {"url": str(page.url or "")})
+    logger.log("info", "auto_login_find_inputs", "正在查找用户名和密码输入框。", {"url": _safe_navigation_url(page.url)})
     username_selectors = [
         'input[name="username"]',
         'input[autocomplete="username"]',
@@ -2748,7 +3431,7 @@ def _auto_submit_login_form(
         time.sleep(0.5)
     if username_input is None or password_input is None:
         shot = _screenshot(page, screenshot_dir, task, "auto_login_inputs_missing", logger)
-        logger.log("warn", "auto_login_inputs_missing", "未找到可见的登录输入框，无法自动填写凭据。", {"continued": continue_clicked, "url": str(page.url or "")}, shot)
+        logger.log("warn", "auto_login_inputs_missing", "未找到可见的登录输入框，无法自动填写凭据。", {"continued": continue_clicked, "url": _safe_navigation_url(page.url)}, shot)
         return False
 
     try:
@@ -2780,7 +3463,7 @@ def _auto_submit_login_form(
         _sleep_between(0.4, 0.9)
     except Exception as exc:
         shot = _screenshot(page, screenshot_dir, task, "auto_login_type_failed", logger)
-        logger.log("warn", "auto_login_type_failed", "自动填写登录凭据失败。", {"error": str(exc), "url": str(page.url or "")}, shot)
+        logger.log("warn", "auto_login_type_failed", "自动填写登录凭据失败。", {"error": str(exc), "url": _safe_navigation_url(page.url)}, shot)
         return False
     filled_shot = _screenshot(page, screenshot_dir, task, "auto_login_form_filled", logger)
     logger.log("info", "auto_login_form_filled", "登录表单已填写完成。", {"username": username, "password": "***"}, filled_shot)
@@ -2798,41 +3481,13 @@ def _auto_submit_login_form(
             return False
         page.keyboard.press("Enter")
     submit_shot = _screenshot(page, screenshot_dir, task, "auto_login_submitted", logger)
-    logger.log("info", "auto_login_submit", "登录表单已提交，正在等待账号就绪或验证提示。", {"clicked_submit_button": clicked, "url": str(page.url or "")}, submit_shot)
+    logger.log("info", "auto_login_submit", "登录表单已提交，正在等待账号就绪或验证提示。", {"clicked_submit_button": clicked, "url": _safe_navigation_url(page.url)}, submit_shot)
     _sleep_between(4.0, 7.0)
     return True
 
 
 def _verification_visible(page) -> bool:
-    url = str(page.url or "")
-    if _is_verification_url(url):
-        return True
-    markers = [
-        "verification code",
-        "enter the code",
-        "security code",
-        "two-factor",
-        "two factor",
-        "confirm it's you",
-        "suspicious",
-        "challenge",
-        "verify your account",
-        "help us confirm",
-        "upload a verification selfie",
-        "verification selfie",
-        "video selfie",
-        "take a selfie video",
-        "identity confirmation",
-        "验证码",
-        "验证提示",
-        "安全码",
-        "安全提示",
-    ]
-    try:
-        text = str(page.locator("body").inner_text(timeout=3000) or "").lower()
-    except Exception:
-        text = ""
-    return any(marker in text for marker in markers)
+    return str(_classify_verification_challenge(page).get("type") or "none") != "none"
 
 
 def _threads_compose_box(page):

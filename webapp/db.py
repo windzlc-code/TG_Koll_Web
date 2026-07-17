@@ -101,6 +101,32 @@ def _ensure_social_integrity_triggers(conn: sqlite3.Connection) -> None:
         END
         """,
         """
+        CREATE TRIGGER IF NOT EXISTS trg_social_account_totp_integrity_insert
+        BEFORE INSERT ON social_account_totp_secrets
+        BEGIN
+          SELECT CASE
+            WHEN NOT EXISTS (
+              SELECT 1 FROM social_accounts
+              WHERE id = NEW.account_id AND user_id = NEW.user_id
+            )
+            THEN RAISE(ABORT, 'social account TOTP owner mismatch')
+          END;
+        END
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_social_account_totp_integrity_update
+        BEFORE UPDATE OF account_id, user_id ON social_account_totp_secrets
+        BEGIN
+          SELECT CASE
+            WHEN NOT EXISTS (
+              SELECT 1 FROM social_accounts
+              WHERE id = NEW.account_id AND user_id = NEW.user_id
+            )
+            THEN RAISE(ABORT, 'social account TOTP owner mismatch')
+          END;
+        END
+        """,
+        """
         CREATE TRIGGER IF NOT EXISTS trg_social_tasks_integrity_insert
         BEFORE INSERT ON social_automation_tasks
         BEGIN
@@ -164,6 +190,8 @@ def _ensure_social_integrity_triggers(conn: sqlite3.Connection) -> None:
         "trg_social_proxies_integrity_update",
         "trg_social_accounts_integrity_insert",
         "trg_social_accounts_integrity_update",
+        "trg_social_account_totp_integrity_insert",
+        "trg_social_account_totp_integrity_update",
         "trg_social_tasks_integrity_insert",
         "trg_social_tasks_integrity_update",
         "trg_social_users_delete_restrict",
@@ -585,6 +613,23 @@ def init_db() -> None:
               last_error TEXT NOT NULL DEFAULT '',
               created_at INTEGER NOT NULL,
               updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS social_account_totp_secrets (
+              account_id TEXT PRIMARY KEY,
+              user_id INTEGER NOT NULL,
+              secret_ciphertext TEXT NOT NULL,
+              status TEXT NOT NULL DEFAULT 'pending',
+              last_used_counter INTEGER NOT NULL DEFAULT -1,
+              last_attempt_at INTEGER NOT NULL DEFAULT 0,
+              last_verified_at INTEGER NOT NULL DEFAULT 0,
+              last_error TEXT NOT NULL DEFAULT '',
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL,
+              FOREIGN KEY(account_id) REFERENCES social_accounts(id) ON DELETE CASCADE
             )
             """
         )

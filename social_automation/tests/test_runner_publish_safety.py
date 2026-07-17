@@ -169,6 +169,137 @@ class _RecordingLogger:
 
 
 class RunnerPublishSafetyTests(unittest.TestCase):
+    @staticmethod
+    def _totp_verification_page(text):
+        page = mock.Mock()
+        page.url = "https://www.instagram.com/challenge/"
+        page.keyboard = _Keyboard()
+        body = mock.Mock()
+        body.first = body
+        body.count.return_value = 1
+        body.is_visible.return_value = True
+        body.inner_text.return_value = text
+        field = mock.Mock()
+        field.first = field
+        field.count.return_value = 1
+        field.is_visible.return_value = True
+        field.input_value.return_value = ""
+        field.nth.return_value = field
+        field.filter.return_value = field
+
+        def locator(selector):
+            return body if selector == "body" else field
+
+        page.locator.side_effect = locator
+        page.get_by_role.return_value = field
+        page.get_by_text.return_value = field
+        return page, body
+
+    @staticmethod
+    def _totp_state_detector(body, states):
+        index = 0
+
+        def detect(_page, _platform):
+            nonlocal index
+            state = states[min(index, len(states) - 1)]
+            index += 1
+            body.inner_text.return_value = state["text"]
+            return {
+                "status": state["status"],
+                "reason": state["text"],
+                "verification_method": state.get("verification_method", ""),
+            }
+
+        return detect
+
+    def _run_totp_case(self, task_id, states, provider):
+        page, body = self._totp_verification_page(states[0]["text"])
+        outcome = mock.Mock()
+        wait_manual = mock.Mock(return_value={"status": "need_verification"})
+        code_input = page.locator('input[autocomplete="one-time-code"]')
+        challenge_states = [states[0], states[0]]
+        for state in states[1:-1]:
+            challenge_states.extend((state, state))
+        if len(states) > 1:
+            challenge_states.append(states[-1])
+        challenge_index = 0
+        current_text = states[0]["text"]
+        monotonic_value = 0
+
+        def classify(_page):
+            nonlocal challenge_index, current_text
+            state = challenge_states[min(challenge_index, len(challenge_states) - 1)]
+            challenge_index += 1
+            current_text = state["text"]
+            method = state.get("verification_method", "")
+            challenge_type = {
+                "authenticator": "authenticator_totp",
+                "sms": "sms_code",
+                "email": "email_code",
+                "unknown": "unknown_code",
+            }.get(method, "none")
+            return {
+                "type": challenge_type,
+                "url": str(page.url or ""),
+                "has_code_input": challenge_type != "none",
+                "code_input": code_input if challenge_type != "none" else None,
+            }
+
+        def monotonic():
+            nonlocal monotonic_value
+            monotonic_value += 1
+            return float(monotonic_value)
+
+        with (
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(
+                runner,
+                "_detect_platform_login_state",
+                side_effect=self._totp_state_detector(body, states),
+            ),
+            mock.patch.object(runner, "_verification_visible", return_value=True),
+            mock.patch.object(
+                runner,
+                "_classify_verification_challenge",
+                side_effect=classify,
+            ),
+            mock.patch.object(
+                runner,
+                "_page_body_text_lower",
+                side_effect=lambda *_args, **_kwargs: current_text.lower(),
+            ),
+            mock.patch.object(runner, "_wait_interruptibly", return_value=True),
+            mock.patch.object(runner, "_confirm_platform_ready", return_value={"status": "ready"}),
+            mock.patch.object(runner, "_screenshot", return_value=f"{task_id}.png"),
+            mock.patch.object(runner, "_wait_or_raise_manual", wait_manual),
+            mock.patch.object(runner, "_click_text_button", return_value=True),
+            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner.time, "sleep"),
+            mock.patch.object(runner.time, "time", return_value=0),
+            mock.patch.object(runner.time, "monotonic", side_effect=monotonic),
+        ):
+            result = runner._run_open_login(
+                page,
+                {"id": task_id},
+                {},
+                {
+                    "login_wait_seconds": 30,
+                    "auto_submit": True,
+                    "login_username": "saved-user",
+                    "login_password": "saved-password",
+                },
+                Path("."),
+                _Logger(),
+                "instagram",
+                context_control={
+                    "manual_takeover_event": threading.Event(),
+                    "manual_takeover_ack_event": threading.Event(),
+                    "totp_code_provider": provider,
+                    "totp_outcome_callback": outcome,
+                },
+            )
+        return result, outcome, wait_manual
+
     def test_risky_contactpoint_page_requires_immediate_manual_verification(self):
         page = _InstagramRiskyContactPage()
 
@@ -705,6 +836,9 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         page.url = "https://www.threads.com/login/"
         event = threading.Event()
         ack_event = threading.Event()
+        totp_provider = mock.Mock(
+            return_value={"available": True, "code": "123456", "counter": 100}
+        )
         event.set()
         with (
             mock.patch.object(runner, "_goto"),
@@ -727,12 +861,14 @@ class RunnerPublishSafetyTests(unittest.TestCase):
                 context_control={
                     "manual_takeover_event": event,
                     "manual_takeover_ack_event": ack_event,
+                    "totp_code_provider": totp_provider,
                 },
             )
 
         self.assertEqual(result["status"], "manual")
         wait_manual.assert_called_once()
         submit.assert_not_called()
+        totp_provider.assert_not_called()
         self.assertTrue(ack_event.is_set())
 
     def test_verification_switches_auto_login_to_manual_mode(self):
@@ -767,6 +903,547 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertTrue(event.is_set())
         self.assertTrue(ack_event.is_set())
         account_status.assert_called_once_with("need_verification")
+        self_heal.assert_not_called()
+
+    def test_authenticator_challenge_uses_stored_totp_once_and_marks_success(self):
+        page, _body = self._totp_verification_page(
+            "Enter the 6-digit code from your authentication app."
+        )
+        self.assertEqual(
+            runner._classify_verification_challenge(page)["type"],
+            "authenticator_totp",
+        )
+        provider = mock.Mock(
+            return_value={
+                "available": True,
+                "code": "123456",
+                "counter": 100,
+                "expires_at": 3030,
+                "valid_for_seconds": 20,
+            }
+        )
+        states = [
+            {
+                "status": "need_verification",
+                "text": "Enter the 6-digit code from your authentication app.",
+                "verification_method": "authenticator",
+            },
+            {"status": "ready", "text": "Instagram home"},
+        ]
+        result, outcome, wait_manual = self._run_totp_case(
+            "totp-success",
+            states,
+            provider,
+        )
+
+        self.assertEqual(result["status"], "ready")
+        provider.assert_called_once_with()
+        outcome.assert_called_with("verified")
+        wait_manual.assert_not_called()
+
+    def test_totp_expiring_before_submit_is_cleared_and_replaced_next_period(self):
+        page, _body = self._totp_verification_page(
+            "Enter the 6-digit code from your authentication app."
+        )
+        code_input = page.locator('input[autocomplete="one-time-code"]')
+        provider = mock.Mock(
+            side_effect=[
+                {
+                    "available": True,
+                    "code": "123456",
+                    "counter": 100,
+                    "expires_at": 1002,
+                    "valid_for_seconds": 15,
+                },
+                {
+                    "available": True,
+                    "code": "654321",
+                    "counter": 101,
+                    "expires_at": 1030,
+                    "valid_for_seconds": 27,
+                },
+            ]
+        )
+        outcome = mock.Mock()
+        events = []
+        clock = {"now": 1000.0}
+
+        def record_input(_page, _locator, value, **_kwargs):
+            events.append(("fill", value))
+
+        def clear_input(_page, locator):
+            self.assertIs(locator, code_input)
+            events.append(("clear", None))
+
+        def wait_interruptibly(seconds, _cancel_event, _context_control):
+            events.append(("wait", seconds))
+            if seconds > 1:
+                clock["now"] = 1003.0
+            return True
+
+        def click_submit(*_args, **_kwargs):
+            events.append(("submit", None))
+            return True
+
+        with (
+            mock.patch.object(
+                runner,
+                "_classify_verification_challenge",
+                return_value={
+                    "type": "authenticator_totp",
+                    "url": str(page.url),
+                    "has_code_input": True,
+                    "code_input": code_input,
+                },
+            ),
+            mock.patch.object(runner, "_page_body_text_lower", return_value=""),
+            mock.patch.object(runner, "_clear_and_type", side_effect=record_input),
+            mock.patch.object(
+                runner,
+                "_clear_verification_code",
+                side_effect=clear_input,
+            ),
+            mock.patch.object(
+                runner,
+                "_wait_interruptibly",
+                side_effect=wait_interruptibly,
+            ),
+            mock.patch.object(
+                runner,
+                "_click_text_button",
+                side_effect=click_submit,
+            ) as submit,
+            mock.patch.object(
+                runner,
+                "_detect_platform_login_state",
+                return_value={"status": "ready"},
+            ),
+            mock.patch.object(
+                runner,
+                "_confirm_platform_ready",
+                return_value={"status": "ready"},
+            ),
+            mock.patch.object(runner.time, "time", side_effect=lambda: clock["now"]),
+            mock.patch.object(runner.time, "monotonic", return_value=0),
+        ):
+            result = runner._try_auto_totp_challenge(
+                page,
+                {"id": "totp-period-rollover"},
+                Path("."),
+                _Logger(),
+                "instagram",
+                None,
+                {
+                    "manual_takeover_event": threading.Event(),
+                    "totp_code_provider": provider,
+                    "totp_outcome_callback": outcome,
+                },
+            )
+
+        self.assertEqual(result["status"], "ready")
+        self.assertEqual(provider.call_count, 2)
+        self.assertEqual(
+            [event for event in events if event[0] in {"fill", "clear", "submit"}],
+            [
+                ("fill", "123456"),
+                ("clear", None),
+                ("fill", "654321"),
+                ("submit", None),
+            ],
+        )
+        submit.assert_called_once()
+        self.assertNotIn("Enter", page.keyboard.pressed)
+        outcome.assert_called_once_with("verified")
+
+    def test_sms_email_and_unknown_challenges_never_use_stored_totp(self):
+        cases = (
+            ("sms", "Enter the code we sent to your phone via SMS."),
+            ("email", "Enter the security code sent to your email address."),
+            ("unknown", "Confirm it is you to continue."),
+        )
+        for verification_method, text in cases:
+            with self.subTest(verification_method=verification_method):
+                page, _body = self._totp_verification_page(text)
+                expected_type = {
+                    "sms": "sms_code",
+                    "email": "email_code",
+                    "unknown": "unknown_code",
+                }[verification_method]
+                self.assertEqual(
+                    runner._classify_verification_challenge(page)["type"],
+                    expected_type,
+                )
+                provider = mock.Mock(
+                    return_value={"available": True, "code": "123456", "counter": 100}
+                )
+                states = [
+                    {
+                        "status": "need_verification",
+                        "text": text,
+                        "verification_method": verification_method,
+                    }
+                ]
+                result, outcome, wait_manual = self._run_totp_case(
+                    f"totp-{verification_method}",
+                    states,
+                    provider,
+                )
+
+                self.assertEqual(result["status"], "need_verification")
+                provider.assert_not_called()
+                outcome.assert_not_called()
+                wait_manual.assert_called_once()
+
+    def test_explicit_incorrect_totp_goes_manual_without_second_code(self):
+        provider = mock.Mock(
+            return_value={"available": True, "code": "123456", "counter": 100}
+        )
+        states = [
+            {
+                "status": "need_verification",
+                "text": "Enter the 6-digit code from your authentication app.",
+                "verification_method": "authenticator",
+            },
+            {
+                "status": "need_verification",
+                "text": "Incorrect code. Try again.",
+                "verification_method": "authenticator",
+            },
+        ]
+        result, outcome, wait_manual = self._run_totp_case(
+            "totp-incorrect",
+            states,
+            provider,
+        )
+
+        self.assertEqual(result["status"], "need_verification")
+        provider.assert_called_once_with()
+        self.assertIn(outcome.call_args.args[0], {"invalid", "rejected"})
+        wait_manual.assert_called_once()
+
+    def test_ambiguous_authenticator_result_goes_manual_without_second_code(self):
+        prompt = "Enter the 6-digit code from your authentication app."
+        provider = mock.Mock(
+            return_value={"available": True, "code": "123456", "counter": 100}
+        )
+        states = [
+            {
+                "status": "need_verification",
+                "text": prompt,
+                "verification_method": "authenticator",
+            },
+            {
+                "status": "need_verification",
+                "text": prompt,
+                "verification_method": "authenticator",
+            },
+        ]
+        result, outcome, wait_manual = self._run_totp_case(
+            "totp-ambiguous",
+            states,
+            provider,
+        )
+
+        self.assertEqual(result["status"], "need_verification")
+        provider.assert_called_once_with()
+        self.assertNotIn(
+            "expired",
+            [call.args[0] for call in outcome.call_args_list],
+        )
+        wait_manual.assert_called_once()
+
+    def test_only_explicit_expiry_allows_one_next_totp_counter_with_max_two_attempts(self):
+        provider = mock.Mock(
+            side_effect=[
+                {"available": True, "code": "123456", "counter": 100},
+                {"available": True, "code": "654321", "counter": 101},
+            ]
+        )
+        states = [
+            {
+                "status": "need_verification",
+                "text": "Enter the 6-digit code from your authentication app.",
+                "verification_method": "authenticator",
+            },
+            {
+                "status": "need_verification",
+                "text": "That code has expired. Request a new code.",
+                "verification_method": "authenticator",
+            },
+            {
+                "status": "need_verification",
+                "text": "That code has expired. Request a new code.",
+                "verification_method": "authenticator",
+            },
+        ]
+        result, outcome, wait_manual = self._run_totp_case(
+            "totp-expired-twice",
+            states,
+            provider,
+        )
+
+        self.assertEqual(result["status"], "need_verification")
+        self.assertEqual(provider.call_count, 2)
+        self.assertEqual(
+            [call.args[0] for call in outcome.call_args_list].count("expired"),
+            2,
+        )
+        wait_manual.assert_called_once()
+
+    def test_publish_totp_transition_does_not_trigger_self_heal_or_reload(self):
+        for status in ("totp_submitted", "account_confirmation_required"):
+            with self.subTest(status=status):
+                page = mock.Mock()
+                page.url = "https://www.instagram.com/challenge/"
+                totp_result = {
+                    "status": status,
+                    "reason": "TOTP accepted; platform redirect is still settling.",
+                }
+                with (
+                    mock.patch.object(
+                        runner,
+                        "_try_auto_totp_challenge",
+                        return_value=totp_result,
+                    ),
+                    mock.patch.object(
+                        runner,
+                        "_detect_platform_login_state",
+                        return_value={"status": status},
+                    ) as detect,
+                    mock.patch.object(runner, "_self_heal_login_page") as self_heal,
+                ):
+                    result = runner._attempt_publish_login_repair(
+                        page,
+                        {"id": f"publish-{status}", "task_type": "publish_post"},
+                        {"login_password": "saved-password"},
+                        {"publish_login_repair_attempts": 3},
+                        Path("."),
+                        _Logger(),
+                        "instagram",
+                        None,
+                        {"status": "need_verification"},
+                        {"totp_code_provider": mock.Mock()},
+                    )
+
+                self.assertEqual(result["status"], status)
+                detect.assert_not_called()
+                self_heal.assert_not_called()
+                page.reload.assert_not_called()
+
+    def test_totp_challenge_logs_strip_query_and_fragment(self):
+        page, _body = self._totp_verification_page(
+            "Enter the 6-digit code from your authentication app."
+        )
+        page.url = (
+            "https://www.instagram.com/challenge/two_factor/"
+            "?encrypted_context=top-secret&challenge_context=private"
+            "#verification-fragment"
+        )
+        code_input = page.locator('input[autocomplete="one-time-code"]')
+        challenge = {
+            "type": "authenticator_totp",
+            "url": page.url,
+            "has_code_input": True,
+            "code_input": code_input,
+        }
+        logger = _RecordingLogger()
+        outcome = mock.Mock()
+        with (
+            mock.patch.object(
+                runner,
+                "_classify_verification_challenge",
+                return_value=challenge,
+            ),
+            mock.patch.object(
+                runner,
+                "_page_body_text_lower",
+                return_value="enter the 6-digit code from your authentication app.",
+            ),
+            mock.patch.object(runner, "_clear_and_type"),
+            mock.patch.object(runner, "_click_text_button", return_value=True),
+            mock.patch.object(runner, "_wait_interruptibly", return_value=True),
+            mock.patch.object(
+                runner,
+                "_detect_platform_login_state",
+                return_value={"status": "ready"},
+            ),
+            mock.patch.object(
+                runner,
+                "_confirm_platform_ready",
+                return_value={"status": "ready"},
+            ),
+        ):
+            result = runner._try_auto_totp_challenge(
+                page,
+                {"id": "totp-log-redaction"},
+                Path("."),
+                logger,
+                "instagram",
+                None,
+                {
+                    "totp_code_provider": mock.Mock(
+                        return_value={
+                            "available": True,
+                            "code": "123456",
+                            "counter": 100,
+                        }
+                    ),
+                    "totp_outcome_callback": outcome,
+                },
+            )
+
+        self.assertEqual(result["status"], "ready")
+        outcome.assert_called_with("verified")
+        logged_urls = [
+            str(args[3]["url"])
+            for args, _kwargs in logger.entries
+            if len(args) > 3
+            and isinstance(args[3], dict)
+            and "url" in args[3]
+        ]
+        self.assertTrue(logged_urls)
+        for logged_url in logged_urls:
+            self.assertEqual(
+                logged_url,
+                "https://www.instagram.com/challenge/two_factor/",
+            )
+            self.assertNotIn("encrypted_context", logged_url)
+            self.assertNotIn("challenge_context", logged_url)
+            self.assertNotIn("#", logged_url)
+
+    def test_totp_method_switch_does_not_report_configuration_failure(self):
+        for challenge_type in ("sms_code", "email_code", "method_selection"):
+            with self.subTest(challenge_type=challenge_type):
+                page, _body = self._totp_verification_page(
+                    "Enter the 6-digit code from your authentication app."
+                )
+                code_input = page.locator('input[autocomplete="one-time-code"]')
+                authenticator = {
+                    "type": "authenticator_totp",
+                    "url": page.url,
+                    "has_code_input": True,
+                    "code_input": code_input,
+                }
+                switched = {
+                    "type": challenge_type,
+                    "url": page.url,
+                    "has_code_input": challenge_type != "method_selection",
+                    "code_input": (
+                        code_input if challenge_type != "method_selection" else None
+                    ),
+                }
+                outcome = mock.Mock()
+                with (
+                    mock.patch.object(
+                        runner,
+                        "_classify_verification_challenge",
+                        side_effect=[authenticator, authenticator, switched],
+                    ),
+                    mock.patch.object(
+                        runner,
+                        "_page_body_text_lower",
+                        return_value="choose another verification method",
+                    ),
+                    mock.patch.object(runner, "_clear_and_type"),
+                    mock.patch.object(runner, "_clear_verification_code"),
+                    mock.patch.object(runner, "_click_text_button", return_value=True),
+                    mock.patch.object(runner, "_wait_interruptibly", return_value=True),
+                    mock.patch.object(
+                        runner,
+                        "_detect_platform_login_state",
+                        return_value={
+                            "status": "need_verification",
+                            "reason": "A different verification method is required.",
+                        },
+                    ),
+                ):
+                    result = runner._try_auto_totp_challenge(
+                        page,
+                        {"id": f"totp-switch-{challenge_type}"},
+                        Path("."),
+                        _Logger(),
+                        "instagram",
+                        None,
+                        {
+                            "totp_code_provider": mock.Mock(
+                                return_value={
+                                    "available": True,
+                                    "code": "123456",
+                                    "counter": 100,
+                                }
+                            ),
+                            "totp_outcome_callback": outcome,
+                        },
+                    )
+
+                self.assertEqual(result["status"], "need_verification")
+                outcomes = [str(call.args[0]) for call in outcome.call_args_list]
+                self.assertNotIn("failed", outcomes)
+                self.assertNotIn("error", outcomes)
+
+    def test_delayed_totp_success_marks_configuration_verified(self):
+        page = mock.Mock()
+        page.url = "https://www.instagram.com/challenge/"
+        outcome = mock.Mock()
+        with (
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(
+                runner,
+                "_detect_platform_login_state",
+                side_effect=[
+                    {"status": "need_verification"},
+                    {"status": "ready"},
+                ],
+            ),
+            mock.patch.object(
+                runner,
+                "_verification_visible",
+                return_value=True,
+            ),
+            mock.patch.object(
+                runner,
+                "_try_auto_totp_challenge",
+                return_value={
+                    "status": "totp_submitted",
+                    "challenge_type": "none",
+                },
+            ),
+            mock.patch.object(
+                runner,
+                "_confirm_platform_ready",
+                return_value={"status": "ready"},
+            ),
+            mock.patch.object(
+                runner,
+                "_screenshot",
+                return_value="login-complete.png",
+            ),
+            mock.patch.object(runner, "_self_heal_login_page") as self_heal,
+            mock.patch.object(runner.time, "time", return_value=0),
+        ):
+            result = runner._run_open_login(
+                page,
+                {"id": "totp-delayed-success"},
+                {},
+                {
+                    "login_wait_seconds": 30,
+                    "auto_submit": True,
+                    "login_username": "saved-user",
+                    "login_password": "saved-password",
+                },
+                Path("."),
+                _Logger(),
+                "instagram",
+                context_control={
+                    "manual_takeover_event": threading.Event(),
+                    "manual_takeover_ack_event": threading.Event(),
+                    "totp_code_provider": mock.Mock(),
+                    "totp_outcome_callback": outcome,
+                },
+            )
+
+        self.assertEqual(result["status"], "ready")
+        outcome.assert_called_with("verified")
         self_heal.assert_not_called()
 
     def test_auto_login_does_not_resubmit_or_self_heal_during_submit_grace(self):

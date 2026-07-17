@@ -9113,6 +9113,253 @@ body.persona-touch-dragging .persona-list-card:active {
   gap: 12px;
 }
 
+.account-totp-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 7px;
+  border: 1px solid #86b99a;
+  border-radius: 6px;
+  background: #edf8f1;
+  color: #17613a;
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.account-totp-badge[hidden] {
+  display: none;
+}
+
+.account-totp-section {
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.account-totp-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.account-totp-head > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.account-totp-head strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.account-totp-head > div > span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.account-totp-state {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--soft);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.account-totp-state.is-configured {
+  border-color: #86b99a;
+  background: #edf8f1;
+  color: #17613a;
+}
+
+.account-totp-badge[data-totp-status="pending"],
+.account-totp-state[data-totp-status="pending"] {
+  border-color: #d4a564;
+  background: #fff7e8;
+  color: #8a4b0f;
+}
+
+.account-totp-badge[data-totp-status="error"],
+.account-totp-badge[data-totp-status="invalid"],
+.account-totp-state[data-totp-status="error"],
+.account-totp-state[data-totp-status="invalid"] {
+  border-color: #db8e91;
+  background: #fff0f0;
+  color: var(--danger);
+}
+
+.account-totp-body {
+  min-width: 0;
+}
+
+.account-totp-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.account-totp-entry label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.account-totp-entry label > span {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.account-totp-entry input {
+  width: 100%;
+  min-height: 40px;
+}
+
+.account-totp-entry-actions,
+.account-totp-code-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.account-totp-entry-actions button {
+  min-height: 40px;
+  white-space: nowrap;
+}
+
+.account-totp-code-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px 16px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+}
+
+.account-totp-code-main,
+.account-totp-countdown {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.account-totp-code-main > span,
+.account-totp-countdown > span,
+.account-totp-meta dt {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.account-totp-code-main > strong {
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 26px;
+  line-height: 1.1;
+  letter-spacing: 0;
+}
+
+.account-totp-countdown {
+  justify-items: end;
+  text-align: right;
+}
+
+.account-totp-countdown > strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.account-totp-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.account-totp-meta > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.account-totp-meta dt,
+.account-totp-meta dd {
+  margin: 0;
+}
+
+.account-totp-meta dd {
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.account-totp-code-actions {
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+}
+
+.account-totp-code-actions button {
+  min-height: 32px;
+  padding: 0 10px;
+}
+
+.account-totp-message {
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.account-totp-message[data-tone="success"] {
+  color: #17613a;
+}
+
+.account-totp-message[data-tone="warning"] {
+  color: #8a4b0f;
+}
+
+.account-totp-message[data-tone="error"] {
+  color: var(--danger);
+}
+
+@media (max-width: 620px) {
+  .account-totp-head {
+    align-items: flex-start;
+  }
+
+  .account-totp-entry,
+  .account-totp-code-card {
+    grid-template-columns: 1fr;
+  }
+
+  .account-totp-entry-actions,
+  .account-totp-code-actions {
+    grid-column: 1;
+    justify-content: stretch;
+  }
+
+  .account-totp-entry-actions button,
+  .account-totp-code-actions button {
+    flex: 1 1 0;
+  }
+
+  .account-totp-countdown {
+    justify-items: start;
+    text-align: left;
+  }
+}
+
 .account-residential-proxy {
   display: grid;
   gap: 10px;
@@ -9860,6 +10107,7 @@ body.persona-touch-dragging .persona-list-card:active {
 .account-pool-card-subline {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   min-width: 0;
 }
@@ -12341,8 +12589,10 @@ body.console-page {
   border-color: var(--line);
 }
 
-.console-page .console-nav button.is-active,
 .console-page .console-nav button.is-click-highlight,
+.console-page .sidebar-bottom-actions button.is-click-highlight,
+.console-page .sidebar-bottom-actions a.is-click-highlight,
+.console-page .module-trigger.is-active,
 .console-page .module-trigger.is-click-highlight {
   color: #ffffff;
   background: #102729;
@@ -12350,8 +12600,10 @@ body.console-page {
   box-shadow: none;
 }
 
-:root[data-theme="dark"] .console-page .console-nav button.is-active,
 :root[data-theme="dark"] .console-page .console-nav button.is-click-highlight,
+:root[data-theme="dark"] .console-page .sidebar-bottom-actions button.is-click-highlight,
+:root[data-theme="dark"] .console-page .sidebar-bottom-actions a.is-click-highlight,
+:root[data-theme="dark"] .console-page .module-trigger.is-active,
 :root[data-theme="dark"] .console-page .module-trigger.is-click-highlight {
   color: #071314;
   background: #a4ead8;
@@ -12402,8 +12654,9 @@ body.console-page {
 .console-page .console-shell :is(
   button.primary:not(.danger),
   .chip-button.primary:not(.danger),
-  .console-nav button.is-active,
   .console-nav button.is-click-highlight,
+  .sidebar-bottom-actions button.is-click-highlight,
+  .sidebar-bottom-actions a.is-click-highlight,
   .module-trigger.is-active,
   .module-trigger.is-click-highlight,
   .publish-mode-tabs button.is-active,
@@ -12448,8 +12701,9 @@ body.console-page {
 .console-page .console-shell :is(
   button.primary:not(.danger),
   .chip-button.primary:not(.danger),
-  .console-nav button.is-active,
   .console-nav button.is-click-highlight,
+  .sidebar-bottom-actions button.is-click-highlight,
+  .sidebar-bottom-actions a.is-click-highlight,
   .module-trigger.is-active,
   .module-trigger.is-click-highlight,
   .publish-mode-tabs button.is-active,
@@ -12473,6 +12727,14 @@ body.console-page {
   button[data-browser-recommendation-refresh]
 ) :is(span, small) {
   color: rgba(255, 255, 255, 0.82);
+}
+
+.console-page .console-nav button.is-active:not(.is-click-highlight) {
+  color: var(--ink);
+  background: transparent;
+  background-image: none;
+  border-color: transparent;
+  box-shadow: none;
 }
 
 .console-page .console-shell :is(

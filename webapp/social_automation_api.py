@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import binascii
 import json
 import os
 import asyncio
@@ -17,7 +18,7 @@ from io import BytesIO
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
@@ -36,7 +37,12 @@ from .auth import (
     require_admin,
 )
 from .db import db
-from . import commercial_billing
+from . import commercial_billing, governance
+from .password_vault import (
+    PasswordVaultError,
+    decrypt_secret as decrypt_vault_secret,
+    encrypt_secret as encrypt_vault_secret,
+)
 
 
 SOCIAL_TASK_TYPES = {
@@ -111,6 +117,8 @@ SOCIAL_ACCOUNT_STATUSES = {
 SOCIAL_TASK_STATUSES = {"preparing", "queued", "running", "success", "failed", "cancelled", "need_manual"}
 DAILY_PUBLISH_LIMIT = 15
 DAILY_PUBLISH_LIMIT_MESSAGE = "每日最多发布 15 篇。超过 15 篇会有封号风险，系统已强制禁止继续发布。"
+SOCIAL_ACCOUNT_TOTP_PERIOD_SECONDS = 30
+SOCIAL_ACCOUNT_TOTP_MIN_VALIDITY_SECONDS = 15
 SOCIAL_MEDIA_EXTENSIONS = {
     ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif",
     ".mp4", ".mov", ".webm", ".m4v", ".mp3", ".wav", ".m4a", ".aac",
@@ -274,6 +282,10 @@ class SocialAccountPatchPayload(BaseModel):
     residential_proxy: ResidentialProxyPayload | None = None
 
 
+class SocialAccountTotpPayload(BaseModel):
+    secret_or_uri: str = Field(min_length=1, max_length=2048)
+
+
 class SocialTaskActionPayload(BaseModel):
     reason: str = ""
 
@@ -334,6 +346,172 @@ def _require_owned_resource(table: str, resource_id: str, user: dict[str, Any], 
 
 def _require_account_access(account_id: str, user: dict[str, Any]) -> Any:
     return _require_owned_resource("social_accounts", account_id, user, label="账号")
+
+
+def _social_account_totp_purpose(account_id: str) -> str:
+    clean_id = str(account_id or "").strip()
+    if not clean_id:
+        raise ValueError("account_id is required")
+    return f"social-account-totp:{clean_id}"
+
+
+def _normalize_social_account_totp_secret(secret_or_uri: str) -> str:
+    value = str(secret_or_uri or "").strip()
+    if value.lower().startswith("otpauth://"):
+        parsed = urlparse(value)
+        if parsed.scheme.lower() != "otpauth" or parsed.netloc.lower() != "totp":
+            raise HTTPException(status_code=400, detail="仅支持 TOTP 身份验证器密钥")
+        params = parse_qs(parsed.query, keep_blank_values=True)
+        algorithm = str((params.get("algorithm") or ["SHA1"])[0] or "SHA1").strip().upper()
+        digits_text = str((params.get("digits") or ["6"])[0] or "6").strip()
+        period_text = str((params.get("period") or ["30"])[0] or "30").strip()
+        if algorithm != "SHA1" or digits_text != "6" or period_text != "30":
+            raise HTTPException(status_code=400, detail="当前仅支持 SHA1、6 位、30 秒周期的 TOTP 密钥")
+        value = str((params.get("secret") or [""])[0] or "")
+    normalized = re.sub(r"[\s-]+", "", value).upper()
+    if "=" in normalized.rstrip("="):
+        raise HTTPException(status_code=400, detail="2FA 密钥格式不正确，请填写 Base32 密钥或 otpauth URI")
+    normalized = normalized.rstrip("=")
+    if len(normalized) < 16 or not re.fullmatch(r"[A-Z2-7]+", normalized):
+        raise HTTPException(status_code=400, detail="2FA 密钥格式不正确，请填写 Base32 密钥或 otpauth URI")
+    try:
+        governance.totp_code(normalized)
+    except (binascii.Error, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="2FA 密钥无法生成有效验证码") from exc
+    return normalized
+
+
+def _social_account_totp_public(row: Any | None) -> dict[str, Any]:
+    if row is None:
+        return {
+            "configured": False,
+            "status": "not_configured",
+            "updated_at": 0,
+            "last_verified_at": 0,
+        }
+    item = dict(row)
+    return {
+        "configured": bool(str(item.get("secret_ciphertext") or "")),
+        "status": str(item.get("status") or "pending"),
+        "updated_at": int(item.get("updated_at") or 0),
+        "last_verified_at": int(item.get("last_verified_at") or 0),
+    }
+
+
+def _social_account_totp_row(conn: Any, account_id: str) -> Any | None:
+    return conn.execute(
+        "SELECT * FROM social_account_totp_secrets WHERE account_id = ?",
+        (str(account_id or "").strip(),),
+    ).fetchone()
+
+
+def _decrypt_social_account_totp_secret(row: Any) -> str:
+    item = dict(row)
+    account_id = str(item.get("account_id") or "")
+    user_id = int(item.get("user_id") or 0)
+    ciphertext = str(item.get("secret_ciphertext") or "")
+    try:
+        return decrypt_vault_secret(user_id, _social_account_totp_purpose(account_id), ciphertext)
+    except PasswordVaultError as exc:
+        raise RuntimeError("账号 2FA 密钥暂时不可用") from exc
+
+
+def _social_account_totp_code_payload(row: Any, *, at: int | None = None) -> dict[str, Any]:
+    now = int(at or time.time())
+    secret = _decrypt_social_account_totp_secret(row)
+    code = governance.totp_code(secret, at=now)
+    expires_at = ((now // SOCIAL_ACCOUNT_TOTP_PERIOD_SECONDS) + 1) * SOCIAL_ACCOUNT_TOTP_PERIOD_SECONDS
+    return {
+        "code": code,
+        "server_time": now,
+        "expires_at": expires_at,
+        "valid_for_seconds": max(0, expires_at - now),
+    }
+
+
+def _reserve_social_account_totp_code(account_id: str, user_id: int) -> dict[str, Any]:
+    now = int(time.time())
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = _social_account_totp_row(conn, account_id)
+        if row is None or int(row["user_id"] or 0) != int(user_id or 0):
+            return {"available": False, "reason": "not_configured"}
+        counter = now // SOCIAL_ACCOUNT_TOTP_PERIOD_SECONDS
+        expires_at = (counter + 1) * SOCIAL_ACCOUNT_TOTP_PERIOD_SECONDS
+        valid_for = max(0, expires_at - now)
+        if valid_for < SOCIAL_ACCOUNT_TOTP_MIN_VALIDITY_SECONDS:
+            return {
+                "available": False,
+                "reason": "period_ending",
+                "wait_seconds": valid_for + 1,
+                "expires_at": expires_at,
+            }
+        last_used_counter = int(
+            row["last_used_counter"] if row["last_used_counter"] is not None else -1
+        )
+        if last_used_counter >= counter:
+            return {
+                "available": False,
+                "reason": "counter_already_used",
+                "wait_seconds": valid_for + 1,
+                "expires_at": expires_at,
+            }
+        try:
+            payload = _social_account_totp_code_payload(row, at=now)
+        except RuntimeError:
+            return {"available": False, "reason": "vault_unavailable"}
+        conn.execute(
+            """
+            UPDATE social_account_totp_secrets
+            SET last_used_counter = ?, last_attempt_at = ?, updated_at = ?
+            WHERE account_id = ? AND user_id = ?
+            """,
+            (counter, now, now, str(account_id), int(user_id)),
+        )
+    return {"available": True, "counter": counter, **payload}
+
+
+def _record_social_account_totp_outcome(account_id: str, user_id: int, outcome: str) -> bool:
+    clean_outcome = str(outcome or "").strip().lower()
+    now = int(time.time())
+    status: str | None = None
+    last_verified_at = 0
+    last_error: str | None = None
+    if clean_outcome == "verified":
+        status = "verified"
+        last_verified_at = now
+        last_error = ""
+    elif clean_outcome in {"rejected", "invalid"}:
+        status = "error"
+        last_error = "code_rejected"
+    elif clean_outcome == "expired":
+        last_error = "code_expired"
+    elif clean_outcome == "unavailable":
+        status = "error"
+        last_error = "automatic_submission_failed"
+    elif clean_outcome == "failed":
+        last_error = "verification_inconclusive"
+    with db() as conn:
+        updated = conn.execute(
+            """
+            UPDATE social_account_totp_secrets
+            SET status = COALESCE(?, status),
+                last_verified_at = CASE WHEN ? > 0 THEN ? ELSE last_verified_at END,
+                last_error = COALESCE(?, last_error),
+                updated_at = ?
+            WHERE account_id = ? AND user_id = ?
+            """,
+            (
+                status,
+                last_verified_at,
+                last_verified_at,
+                last_error,
+                now,
+                str(account_id),
+                int(user_id),
+            ),
+        ).rowcount
+    return bool(updated)
 
 
 def _require_proxy_access(proxy_id: str, user: dict[str, Any]) -> Any:
@@ -793,6 +971,101 @@ def register_social_automation_routes(app: FastAPI) -> None:
                 "ok": True,
                 "login_username": str(account["login_username"] or account["username"] or ""),
                 "login_password": str(account["login_password"] or ""),
+            }
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.put("/api/persona_dashboard/automation/accounts/{account_id}/totp")
+    def api_social_account_totp_set(
+        account_id: str,
+        payload: SocialAccountTotpPayload,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        account = _require_account_access(account_id, user)
+        clean_id = str(account["id"] or "")
+        owner_user_id = int(account["user_id"] or 0)
+        secret = _normalize_social_account_totp_secret(payload.secret_or_uri)
+        try:
+            ciphertext = encrypt_vault_secret(
+                owner_user_id,
+                _social_account_totp_purpose(clean_id),
+                secret,
+            )
+        except PasswordVaultError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="密码保险库不可用，暂时无法保存 2FA 密钥",
+            ) from exc
+        now = int(time.time())
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                INSERT INTO social_account_totp_secrets(
+                  account_id, user_id, secret_ciphertext, status,
+                  last_used_counter, last_attempt_at, last_verified_at,
+                  last_error, created_at, updated_at
+                )
+                VALUES (?, ?, ?, 'pending', -1, 0, 0, '', ?, ?)
+                ON CONFLICT(account_id) DO UPDATE SET
+                  user_id = excluded.user_id,
+                  secret_ciphertext = excluded.secret_ciphertext,
+                  status = 'pending',
+                  last_used_counter = -1,
+                  last_attempt_at = 0,
+                  last_verified_at = 0,
+                  last_error = '',
+                  updated_at = excluded.updated_at
+                """,
+                (clean_id, owner_user_id, ciphertext, now, now),
+            )
+            row = _social_account_totp_row(conn, clean_id)
+        response = JSONResponse(
+            content={
+                "ok": True,
+                "totp": _social_account_totp_public(row),
+                "current_code": _social_account_totp_code_payload(row, at=now),
+            }
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.get("/api/persona_dashboard/automation/accounts/{account_id}/totp/code")
+    def api_social_account_totp_code(account_id: str, user: dict[str, Any] = Depends(get_current_user)):
+        account = _require_account_access(account_id, user)
+        with db() as conn:
+            row = _social_account_totp_row(conn, str(account["id"] or ""))
+        if row is None:
+            raise HTTPException(status_code=404, detail="该账号尚未配置 2FA 密钥")
+        try:
+            current_code = _social_account_totp_code_payload(row)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        response = JSONResponse(
+            content={
+                "ok": True,
+                "totp": _social_account_totp_public(row),
+                "current_code": current_code,
+            }
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.delete("/api/persona_dashboard/automation/accounts/{account_id}/totp")
+    def api_social_account_totp_delete(account_id: str, user: dict[str, Any] = Depends(get_current_user)):
+        account = _require_account_access(account_id, user)
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            deleted = conn.execute(
+                "DELETE FROM social_account_totp_secrets WHERE account_id = ? AND user_id = ?",
+                (str(account["id"] or ""), int(account["user_id"] or 0)),
+            ).rowcount
+        response = JSONResponse(
+            content={
+                "ok": True,
+                "deleted": int(deleted),
+                "totp": _social_account_totp_public(None),
             }
         )
         response.headers["Cache-Control"] = "no-store"
@@ -2904,7 +3177,8 @@ def create_social_account(
         row = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (account_id,)).fetchone()
         if proxy_row is None and proxy_id:
             proxy_row = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
-    return _account_public(row, proxy_row)
+        totp_row = _social_account_totp_row(conn, account_id)
+    return _account_public(row, proxy_row, totp_row)
 
 
 def update_social_account(account_id: str, payload: SocialAccountPatchPayload) -> dict[str, Any]:
@@ -3059,7 +3333,8 @@ def update_social_account(account_id: str, payload: SocialAccountPatchPayload) -
         row = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (account_id,)).fetchone()
         if proxy_row is None and str(row["proxy_id"] or ""):
             proxy_row = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (row["proxy_id"],)).fetchone()
-    return _account_public(row, proxy_row)
+        totp_row = _social_account_totp_row(conn, account_id)
+    return _account_public(row, proxy_row, totp_row)
 
 
 def _looks_like_non_password_text(value: str) -> bool:
@@ -3089,9 +3364,10 @@ def _looks_like_non_password_text(value: str) -> bool:
 def get_social_account(account_id: str) -> dict[str, Any]:
     with db() as conn:
         row = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (account_id,)).fetchone()
+        totp_row = _social_account_totp_row(conn, account_id) if row else None
     if not row:
         raise HTTPException(status_code=404, detail="账号不存在")
-    return _account_public(row)
+    return _account_public(row, None, totp_row)
 
 
 def _deletable_account_ids(conn: Any, account_ids: list[str]) -> set[str]:
@@ -4281,6 +4557,17 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
     if _is_task_cancelled(task_id):
         _discard_ephemeral_task_secrets(task_id)
         return
+    account_id = str(account.get("id") or task.get("account_id") or "")
+    owner_user_id = int(account.get("user_id") or task.get("user_id") or 0)
+    control["totp_code_provider"] = lambda: _reserve_social_account_totp_code(
+        account_id,
+        owner_user_id,
+    )
+    control["totp_outcome_callback"] = lambda outcome: _record_social_account_totp_outcome(
+        account_id,
+        owner_user_id,
+        str(outcome or ""),
+    )
     task = _apply_runtime_task_preferences(task, account, control)
     from social_automation.runner import AutoLoginFailedError, NeedManualError, PublishConfirmationPendingError, UnsupportedActionError, run_social_task
 
@@ -5386,12 +5673,28 @@ def _insert_log(conn, task_id: str, level: str, stage: str, message: str, data: 
 
 def _account_public_rows(conn: Any, rows: list[Any]) -> list[dict[str, Any]]:
     proxy_ids = {str(row["proxy_id"] or "").strip() for row in rows if str(row["proxy_id"] or "").strip()}
+    account_ids = {str(row["id"] or "").strip() for row in rows if str(row["id"] or "").strip()}
     proxies: dict[str, Any] = {}
+    totp_rows: dict[str, Any] = {}
     if proxy_ids:
         placeholders = ",".join("?" for _ in proxy_ids)
         proxy_rows = conn.execute(f"SELECT * FROM social_proxies WHERE id IN ({placeholders})", tuple(proxy_ids)).fetchall()
         proxies = {str(row["id"] or ""): row for row in proxy_rows}
-    return [_account_public(row, proxies.get(str(row["proxy_id"] or ""))) for row in rows]
+    if account_ids:
+        placeholders = ",".join("?" for _ in account_ids)
+        secret_rows = conn.execute(
+            f"SELECT * FROM social_account_totp_secrets WHERE account_id IN ({placeholders})",
+            tuple(account_ids),
+        ).fetchall()
+        totp_rows = {str(row["account_id"] or ""): row for row in secret_rows}
+    return [
+        _account_public(
+            row,
+            proxies.get(str(row["proxy_id"] or "")),
+            totp_rows.get(str(row["id"] or "")),
+        )
+        for row in rows
+    ]
 
 
 def _proxy_public_rows(conn: Any, rows: list[Any]) -> list[dict[str, Any]]:
@@ -5416,8 +5719,9 @@ def _proxy_public_rows(conn: Any, rows: list[Any]) -> list[dict[str, Any]]:
     ]
 
 
-def _account_public(row: Any, proxy_row: Any | None = None) -> dict[str, Any]:
+def _account_public(row: Any, proxy_row: Any | None = None, totp_row: Any | None = None) -> dict[str, Any]:
     item = dict(row)
+    totp = _social_account_totp_public(totp_row)
     return {
         "id": str(item.get("id") or ""),
         "persona_id": str(item.get("persona_id") or ""),
@@ -5431,6 +5735,10 @@ def _account_public(row: Any, proxy_row: Any | None = None) -> dict[str, Any]:
         "login_username": str(item.get("login_username") or "") or str(item.get("username") or ""),
         "login_password_configured": bool(str(item.get("login_password") or "")),
         "login_credentials_updated_at": int(item.get("login_credentials_updated_at") or 0),
+        "totp_configured": bool(totp["configured"]),
+        "totp_status": str(totp["status"]),
+        "totp_updated_at": int(totp["updated_at"]),
+        "totp_last_verified_at": int(totp["last_verified_at"]),
         "last_login_check_at": int(item.get("last_login_check_at") or 0),
         "last_run_at": int(item.get("last_run_at") or 0),
         "last_error": str(item.get("last_error") or ""),
