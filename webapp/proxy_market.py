@@ -96,6 +96,10 @@ class ProxyMarketPublishPayload(BaseModel):
     expires_at: int | None = Field(default=None, ge=0)
 
 
+class ProxyMarketCheckedPublishPayload(BaseModel):
+    check_id: str = Field(default="", max_length=80)
+
+
 class ProxyMarketInspectPayload(BaseModel):
     item_id: str = Field(default="", max_length=80)
     proxy_type: str = Field(default="socks5", max_length=20)
@@ -270,6 +274,29 @@ def _fresh_and_healthy(
     )
 
 
+def _prune_proxy_market_checks(
+    conn: sqlite3.Connection,
+    *,
+    now: int,
+    max_age_seconds: int,
+) -> None:
+    conn.execute(
+        """
+        UPDATE proxy_market_item_checks
+        SET username_ciphertext = '', password_ciphertext = ''
+        WHERE consumed_at > 0
+          AND (username_ciphertext != '' OR password_ciphertext != '')
+        """
+    )
+    conn.execute(
+        """
+        DELETE FROM proxy_market_item_checks
+        WHERE consumed_at = 0 AND checked_at < ?
+        """,
+        (int(now) - int(max_age_seconds),),
+    )
+
+
 def _market_public(
     item: dict[str, Any],
     *,
@@ -309,11 +336,19 @@ def _market_public(
     }
 
 
-def _admin_public(item: dict[str, Any]) -> dict[str, Any]:
+def _admin_public(
+    item: dict[str, Any],
+    *,
+    health_max_age_seconds: int | None = None,
+) -> dict[str, Any]:
     result = _market_public(
         item,
         now=_now(),
-        health_max_age_seconds=_settings_for_item_admin(),
+        health_max_age_seconds=(
+            int(health_max_age_seconds)
+            if health_max_age_seconds is not None
+            else _settings_for_item_admin()
+        ),
     )
     result.update(
         {
@@ -323,6 +358,9 @@ def _admin_public(item: dict[str, Any]) -> dict[str, Any]:
             "password_configured": bool(str(item.get("password_ciphertext") or "")),
             "status": str(item.get("status") or "draft"),
             "last_check_result": _safe_check_result(item.get("last_check_result_json")),
+            "pending_check_id": str(item.get("pending_check_id") or ""),
+            "pending_check_status": str(item.get("pending_check_status") or ""),
+            "pending_checked_at": int(item.get("pending_checked_at") or 0),
             "version": int(item.get("version") or 1),
             "created_at": int(item.get("created_at") or 0),
             "updated_at": int(item.get("updated_at") or 0),
@@ -1067,19 +1105,41 @@ def register_proxy_market_routes(app: FastAPI) -> None:
         filters = ["1 = 1"]
         params: list[Any] = []
         if str(status or "").strip():
-            filters.append("status = ?")
+            filters.append("item.status = ?")
             params.append(str(status).strip())
         if str(health_status or "").strip():
-            filters.append("health_status = ?")
+            filters.append("item.health_status = ?")
             params.append(str(health_status).strip())
         if str(query or "").strip():
-            filters.append("(sku LIKE ? OR display_name LIKE ? OR host LIKE ? OR isp LIKE ?)")
+            filters.append(
+                "(item.sku LIKE ? OR item.display_name LIKE ? OR item.host LIKE ? OR item.isp LIKE ?)"
+            )
             like = f"%{str(query).strip()}%"
             params.extend([like, like, like, like])
+        now = _now()
         with db() as conn:
+            health_max_age_seconds = int(_settings(conn)["health_max_age_seconds"])
+            _prune_proxy_market_checks(
+                conn,
+                now=now,
+                max_age_seconds=health_max_age_seconds,
+            )
             rows = conn.execute(
-                f"SELECT * FROM proxy_market_items WHERE {' AND '.join(filters)} ORDER BY updated_at DESC",
-                tuple(params),
+                f"""
+                SELECT item.*,
+                       candidate.check_id AS pending_check_id,
+                       candidate.health_status AS pending_check_status,
+                       candidate.checked_at AS pending_checked_at
+                FROM proxy_market_items item
+                LEFT JOIN proxy_market_item_checks candidate
+                  ON candidate.item_id = item.id
+                 AND candidate.consumed_at = 0
+                 AND candidate.base_version = item.version
+                 AND candidate.checked_at >= ?
+                WHERE {' AND '.join(filters)}
+                ORDER BY item.updated_at DESC
+                """,
+                (now - health_max_age_seconds, *params),
             ).fetchall()
         return {"ok": True, "items": [_admin_public(dict(row)) for row in rows]}
 
@@ -1225,16 +1285,10 @@ def register_proxy_market_routes(app: FastAPI) -> None:
                         detail="已有有效领取的代理不能转为 draft",
                     )
                 if requested == "active":
-                    if not _fresh_and_healthy(
-                        current_data,
-                        now=now,
-                        max_age_seconds=_settings(conn)["health_max_age_seconds"],
-                    ):
-                        raise HTTPException(
-                            status_code=409,
-                            detail="代理必须先通过有效的真实检测才能设为可领取",
-                        )
-                    requested = "allocated" if active_allocation is not None else "active"
+                    raise HTTPException(
+                        status_code=409,
+                        detail="代理只能通过“真实检测”后使用“发布”进入可领取状态",
+                    )
                 updates["status"] = requested
             requested_expiry = int(
                 updates.get("expires_at", current_data.get("expires_at") or 0) or 0
@@ -1254,6 +1308,10 @@ def register_proxy_market_routes(app: FastAPI) -> None:
                 conn.execute(
                     f"UPDATE proxy_market_items SET {assignments}, version = version + 1 WHERE id = ?",
                     (*updates.values(), str(item_id)),
+                )
+                conn.execute(
+                    "DELETE FROM proxy_market_item_checks WHERE item_id = ?",
+                    (str(item_id),),
                 )
             proxy_field_map = {
                 "display_name": "name",
@@ -1389,8 +1447,8 @@ def register_proxy_market_routes(app: FastAPI) -> None:
             )
         return {"ok": True, "check": safe_result}
 
-    @app.post("/api/admin/proxy-market/items/{item_id}/test-and-publish")
-    def api_admin_proxy_market_test_publish(
+    @app.post("/api/admin/proxy-market/items/{item_id}/test")
+    def api_admin_proxy_market_test(
         item_id: str,
         payload: ProxyMarketPublishPayload,
         request: Request,
@@ -1405,23 +1463,10 @@ def register_proxy_market_routes(app: FastAPI) -> None:
             if str(current.get("status") or "") in {"disabled", "archived"}:
                 raise HTTPException(
                     status_code=409,
-                    detail="已停用或归档的商城代理不能直接检测发布",
+                    detail="已停用或归档的商城代理不能执行真实检测",
                 )
             expected_version = int(current.get("version") or 1)
-            active_task = conn.execute(
-                """
-                SELECT task.id
-                FROM social_automation_tasks task
-                JOIN social_accounts account ON account.id = task.account_id
-                JOIN social_proxies proxy ON proxy.id = account.proxy_id
-                WHERE proxy.market_item_id = ?
-                  AND task.status IN ('preparing', 'queued', 'running', 'need_manual')
-                LIMIT 1
-                """,
-                (str(item_id),),
-            ).fetchone()
-            if active_task is not None:
-                raise HTTPException(status_code=409, detail="该代理正在执行任务，请停止任务后再发布连接配置")
+            health_max_age_seconds = int(_settings(conn)["health_max_age_seconds"])
         old_username, old_password = _decrypt_credentials(current)
         username = old_username if payload.username is None else str(payload.username)
         password = old_password if payload.password is None else str(payload.password)
@@ -1440,29 +1485,26 @@ def register_proxy_market_routes(app: FastAPI) -> None:
             else int(payload.expires_at)
         )
         if candidate_expires_at and candidate_expires_at <= _now():
-            raise HTTPException(status_code=409, detail="已过期的商城代理不能检测发布")
+            raise HTTPException(status_code=409, detail="已过期的商城代理不能执行真实检测")
         result = _run_proxy_connection_check(candidate)
-        if not bool(result.get("ok")):
-            with db() as conn:
-                _record_audit(
-                    conn,
-                    request,
-                    actor_user_id=actor_id,
-                    action="proxy_market.item.test_publish",
-                    resource_type="proxy_market_item",
-                    resource_id=str(item_id),
-                    after={"candidate_check": "failed", "error_code": str(result.get("error_code") or "")},
-                    risk_level="medium",
-                )
-            raise HTTPException(status_code=409, detail={"message": "代理检测失败，现有线上配置未被替换", "check": governance.redact(result)})
-        username_ciphertext, password_ciphertext = _encrypt_credentials(
-            str(item_id),
-            actor_id,
+        safe_result = _scrub_inspection_secrets(
+            _proxy_inspection_response(result),
             username,
             password,
         )
+        check_ok = bool(safe_result.get("ok"))
+        username_ciphertext = ""
+        password_ciphertext = ""
+        if check_ok:
+            username_ciphertext, password_ciphertext = _encrypt_credentials(
+                str(item_id),
+                actor_id,
+                username,
+                password,
+            )
+        check_id = _new_id("proxy_check")
         now = _now()
-        response = result.get("response") if isinstance(result.get("response"), dict) else {}
+        detected = safe_result.get("detected") if isinstance(safe_result.get("detected"), dict) else {}
         with db() as conn:
             conn.execute("BEGIN IMMEDIATE")
             status_row = conn.execute(
@@ -1476,6 +1518,159 @@ def register_proxy_market_routes(app: FastAPI) -> None:
                     status_code=409,
                     detail="商城代理已被其他管理员修改，请重新检测后发布",
                 )
+            conn.execute(
+                """
+                INSERT INTO proxy_market_item_checks(
+                  item_id, check_id, base_version, proxy_type, host, port,
+                  credential_owner_user_id, username_ciphertext, password_ciphertext,
+                  country, region, city, isp, expires_at, health_status, latency_ms,
+                  checked_at, result_json, created_by, created_at, consumed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                ON CONFLICT(item_id) DO UPDATE SET
+                  check_id = excluded.check_id,
+                  base_version = excluded.base_version,
+                  proxy_type = excluded.proxy_type,
+                  host = excluded.host,
+                  port = excluded.port,
+                  credential_owner_user_id = excluded.credential_owner_user_id,
+                  username_ciphertext = excluded.username_ciphertext,
+                  password_ciphertext = excluded.password_ciphertext,
+                  country = excluded.country,
+                  region = excluded.region,
+                  city = excluded.city,
+                  isp = excluded.isp,
+                  expires_at = excluded.expires_at,
+                  health_status = excluded.health_status,
+                  latency_ms = excluded.latency_ms,
+                  checked_at = excluded.checked_at,
+                  result_json = excluded.result_json,
+                  created_by = excluded.created_by,
+                  created_at = excluded.created_at,
+                  consumed_at = 0
+                """,
+                (
+                    str(item_id),
+                    check_id,
+                    expected_version,
+                    candidate["proxy_type"],
+                    candidate["host"],
+                    candidate["port"],
+                    actor_id,
+                    username_ciphertext,
+                    password_ciphertext,
+                    str(detected.get("country") or current.get("country") or ""),
+                    str(detected.get("region") or current.get("region") or ""),
+                    str(detected.get("city") or current.get("city") or ""),
+                    str(detected.get("isp") or current.get("isp") or ""),
+                    candidate_expires_at,
+                    "healthy" if check_ok else "failed",
+                    int(safe_result.get("latency_ms") or 0),
+                    int(safe_result.get("checked_at") or now),
+                    json.dumps(safe_result, ensure_ascii=False, separators=(",", ":")),
+                    actor_id,
+                    now,
+                ),
+            )
+            _record_audit(
+                conn,
+                request,
+                actor_user_id=actor_id,
+                action="proxy_market.item.test",
+                resource_type="proxy_market_item",
+                resource_id=str(item_id),
+                after={
+                    "check_id": check_id,
+                    "candidate_check": "healthy" if check_ok else "failed",
+                    "latency_ms": int(safe_result.get("latency_ms") or 0),
+                    "error_code": str(safe_result.get("error_code") or ""),
+                },
+                risk_level="medium",
+                outcome="success" if check_ok else "failed",
+                error_code=str(safe_result.get("error_code") or ""),
+            )
+        response_payload = {
+            "ok": check_ok,
+            "check_id": check_id,
+            "base_version": expected_version,
+            "publishable_until": now + health_max_age_seconds,
+            "check": safe_result,
+        }
+        if not check_ok:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "代理检测失败，现有线上配置未被替换",
+                    **response_payload,
+                },
+            )
+        return response_payload
+
+    @app.post("/api/admin/proxy-market/items/{item_id}/publish")
+    def api_admin_proxy_market_publish(
+        item_id: str,
+        request: Request,
+        payload: ProxyMarketCheckedPublishPayload | None = None,
+        admin: dict[str, Any] = Depends(require_admin),
+    ):
+        actor_id = _actor_user_id(admin)
+        now = _now()
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM proxy_market_items WHERE id = ?",
+                (str(item_id),),
+            ).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="商城代理不存在")
+            current = dict(row)
+            check_id = str(payload.check_id if payload is not None else "").strip()
+            if not check_id:
+                raise HTTPException(status_code=409, detail="请先完成真实检测后再发布")
+            check_row = conn.execute(
+                """
+                SELECT *
+                FROM proxy_market_item_checks
+                WHERE item_id = ? AND check_id = ?
+                """,
+                (str(item_id), check_id),
+            ).fetchone()
+            if check_row is None:
+                raise HTTPException(status_code=409, detail="检测记录不存在或已被更新，请重新检测")
+            candidate = dict(check_row)
+            settings = _settings(conn)
+            if int(candidate.get("consumed_at") or 0) > 0:
+                try:
+                    receipt = json.loads(str(candidate.get("publish_result_json") or "{}"))
+                except json.JSONDecodeError:
+                    receipt = {}
+                if isinstance(receipt, dict) and isinstance(receipt.get("item"), dict):
+                    return {
+                        "ok": True,
+                        "replayed": True,
+                        "item": receipt["item"],
+                    }
+                raise HTTPException(
+                    status_code=409,
+                    detail="检测结果已使用且缺少发布回执，请刷新库存状态",
+                )
+            if str(current.get("status") or "") in {"disabled", "archived"}:
+                raise HTTPException(status_code=409, detail="已停用或归档的商城代理不能发布")
+            if (
+                str(candidate.get("health_status") or "") != "healthy"
+                or int(candidate.get("checked_at") or 0)
+                < now - int(settings["health_max_age_seconds"])
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="检测结果已失败、过期或已使用，请重新检测",
+                )
+            if int(candidate.get("base_version") or 0) != int(current.get("version") or 1):
+                raise HTTPException(
+                    status_code=409,
+                    detail="检测后库存已发生修改，请重新检测",
+                )
+            if int(candidate.get("expires_at") or 0) and int(candidate["expires_at"]) <= now:
+                raise HTTPException(status_code=409, detail="已过期的商城代理不能发布")
             active_task = conn.execute(
                 """
                 SELECT task.id
@@ -1491,7 +1686,7 @@ def register_proxy_market_routes(app: FastAPI) -> None:
             if active_task is not None:
                 raise HTTPException(
                     status_code=409,
-                    detail="代理检测期间出现执行中任务，请停止任务后重新发布",
+                    detail="该代理正在执行任务，请停止任务后再发布连接配置",
                 )
             active_allocation = conn.execute(
                 """
@@ -1503,53 +1698,45 @@ def register_proxy_market_routes(app: FastAPI) -> None:
                 (str(item_id),),
             ).fetchone()
             next_status = "allocated" if active_allocation is not None else "active"
-            published_at = int(status_row["published_at"] or 0) or now
-            expires_at = candidate_expires_at
+            published_at = int(current.get("published_at") or 0) or now
             updated_count = conn.execute(
                 """
                 UPDATE proxy_market_items
                 SET proxy_type = ?, host = ?, port = ?, credential_owner_user_id = ?,
                     username_ciphertext = ?, password_ciphertext = ?,
-                    country = CASE WHEN ? != '' THEN ? ELSE country END,
-                    region = CASE WHEN ? != '' THEN ? ELSE region END,
-                    city = CASE WHEN ? != '' THEN ? ELSE city END,
-                    isp = CASE WHEN ? != '' THEN ? ELSE isp END,
+                    country = ?, region = ?, city = ?, isp = ?, expires_at = ?,
                     status = ?, health_status = 'healthy', latency_ms = ?,
-                    last_check_at = ?, last_check_result_json = ?, expires_at = ?,
-                    published_at = ?, updated_by = ?, updated_at = ?, version = version + 1
+                    last_check_at = ?, last_check_result_json = ?, published_at = ?,
+                    updated_by = ?, updated_at = ?, version = version + 1
                 WHERE id = ? AND version = ?
                 """,
                 (
-                    candidate["proxy_type"],
-                    candidate["host"],
-                    candidate["port"],
-                    actor_id,
-                    username_ciphertext,
-                    password_ciphertext,
-                    str(response.get("country_code") or response.get("country") or ""),
-                    str(response.get("country_code") or response.get("country") or ""),
-                    str(response.get("region") or ""),
-                    str(response.get("region") or ""),
-                    str(response.get("city") or ""),
-                    str(response.get("city") or ""),
-                    str((response.get("connection") or {}).get("isp") or (response.get("connection") or {}).get("org") or ""),
-                    str((response.get("connection") or {}).get("isp") or (response.get("connection") or {}).get("org") or ""),
+                    str(candidate.get("proxy_type") or "socks5"),
+                    str(candidate.get("host") or ""),
+                    int(candidate.get("port") or 0),
+                    int(candidate.get("credential_owner_user_id") or 0),
+                    str(candidate.get("username_ciphertext") or ""),
+                    str(candidate.get("password_ciphertext") or ""),
+                    str(candidate.get("country") or ""),
+                    str(candidate.get("region") or ""),
+                    str(candidate.get("city") or ""),
+                    str(candidate.get("isp") or ""),
+                    int(candidate.get("expires_at") or 0),
                     next_status,
-                    int(result.get("latency_ms") or 0),
-                    now,
-                    json.dumps(result, ensure_ascii=False, separators=(",", ":")),
-                    expires_at,
+                    int(candidate.get("latency_ms") or 0),
+                    int(candidate.get("checked_at") or 0),
+                    str(candidate.get("result_json") or "{}"),
                     published_at,
                     actor_id,
                     now,
                     str(item_id),
-                    expected_version,
+                    int(current.get("version") or 1),
                 ),
             ).rowcount
             if updated_count != 1:
                 raise HTTPException(
                     status_code=409,
-                    detail="商城代理已被其他管理员修改，请重新检测后发布",
+                    detail="商城代理已被其他管理员修改，请刷新后重试",
                 )
             conn.execute(
                 """
@@ -1560,32 +1747,78 @@ def register_proxy_market_routes(app: FastAPI) -> None:
                 WHERE market_item_id = ?
                 """,
                 (
-                    candidate["proxy_type"],
-                    candidate["host"],
-                    candidate["port"],
-                    str(response.get("country_code") or response.get("country") or current.get("country") or ""),
-                    str(response.get("region") or current.get("region") or ""),
-                    str(response.get("city") or current.get("city") or ""),
-                    str((response.get("connection") or {}).get("isp") or (response.get("connection") or {}).get("org") or current.get("isp") or ""),
-                    expires_at,
-                    now,
-                    json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+                    str(candidate.get("proxy_type") or "socks5"),
+                    str(candidate.get("host") or ""),
+                    int(candidate.get("port") or 0),
+                    str(candidate.get("country") or ""),
+                    str(candidate.get("region") or ""),
+                    str(candidate.get("city") or ""),
+                    str(candidate.get("isp") or ""),
+                    int(candidate.get("expires_at") or 0),
+                    int(candidate.get("checked_at") or 0),
+                    str(candidate.get("result_json") or "{}"),
                     now,
                     str(item_id),
+                ),
+            )
+            updated = conn.execute(
+                "SELECT * FROM proxy_market_items WHERE id = ?",
+                (str(item_id),),
+            ).fetchone()
+            published_item = _admin_public(
+                dict(updated),
+                health_max_age_seconds=int(settings["health_max_age_seconds"]),
+            )
+            conn.execute(
+                """
+                UPDATE proxy_market_item_checks
+                SET consumed_at = ?,
+                    username_ciphertext = '',
+                    password_ciphertext = '',
+                    published_item_version = ?,
+                    publish_result_json = ?
+                WHERE item_id = ? AND check_id = ? AND consumed_at = 0
+                """,
+                (
+                    now,
+                    int(published_item.get("version") or 0),
+                    json.dumps(
+                        {"item": published_item},
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                    str(item_id),
+                    check_id,
                 ),
             )
             _record_audit(
                 conn,
                 request,
                 actor_user_id=actor_id,
-                action="proxy_market.item.test_publish",
+                action="proxy_market.item.publish",
                 resource_type="proxy_market_item",
                 resource_id=str(item_id),
-                after={"status": next_status, "health_status": "healthy", "latency_ms": int(result.get("latency_ms") or 0)},
+                after={"status": next_status, "health_status": "healthy", "check_id": check_id},
                 risk_level="high",
             )
-            updated = conn.execute("SELECT * FROM proxy_market_items WHERE id = ?", (str(item_id),)).fetchone()
-        return {"ok": True, "item": _admin_public(dict(updated)), "check": governance.redact(result)}
+        return {"ok": True, "item": published_item}
+
+    @app.post("/api/admin/proxy-market/items/{item_id}/test-and-publish")
+    def api_admin_proxy_market_test_publish(
+        item_id: str,
+        payload: ProxyMarketPublishPayload,
+        request: Request,
+        admin: dict[str, Any] = Depends(require_admin),
+    ):
+        tested = api_admin_proxy_market_test(item_id, payload, request, admin)
+        published = api_admin_proxy_market_publish(
+            item_id,
+            request,
+            ProxyMarketCheckedPublishPayload(check_id=str(tested.get("check_id") or "")),
+            admin,
+        )
+        published["check"] = tested.get("check")
+        return published
 
     @app.post("/api/admin/proxy-market/items/{item_id}/archive")
     def api_admin_proxy_market_archive(

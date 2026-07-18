@@ -1630,6 +1630,8 @@ const adminState = {
   proxyMarketAllocationRows: [],
   proxyMarketSelectedItemId: null,
   proxyMarketInspectRequestId: 0,
+  proxyMarketPendingCheckId: "",
+  proxyMarketEditorBusy: false,
   proxyMarketSettings: null,
   proxyMarketLoadingPromise: null,
   customerGroupRows: [],
@@ -5359,6 +5361,44 @@ function decodeProxyMarketCredential(value) {
   }
 }
 
+const PROXY_MARKET_COUNTRY_ALIASES = new Map([
+  ["tw", { code: "TW", label: "台湾" }],
+  ["taiwan", { code: "TW", label: "台湾" }],
+  ["台湾", { code: "TW", label: "台湾" }],
+  ["台灣", { code: "TW", label: "台湾" }],
+  ["中国台湾", { code: "TW", label: "台湾" }],
+  ["中國台灣", { code: "TW", label: "台湾" }],
+]);
+
+function normalizeProxyMarketCountry(value) {
+  const clean = String(value || "").trim();
+  return PROXY_MARKET_COUNTRY_ALIASES.get(clean.toLowerCase())
+    || PROXY_MARKET_COUNTRY_ALIASES.get(clean)
+    || null;
+}
+
+function inferProxyMarketProviderKey(hosts) {
+  const ignoredLabels = new Set(["api", "direct", "gateway", "gw", "proxy", "res", "residential", "static"]);
+  for (const rawHost of hosts || []) {
+    const host = String(rawHost || "").trim().toLowerCase();
+    if (!host || /^[\d.]+$/.test(host) || host.includes(":")) continue;
+    const labels = host.split(".").filter(Boolean);
+    const candidates = labels.slice(0, -1).filter((label) => !ignoredLabels.has(label));
+    if (candidates.length) return candidates[candidates.length - 1].replace(/[^a-z0-9_-]+/g, "");
+  }
+  return "";
+}
+
+function isProxyMarketLiteralHost(host) {
+  const clean = String(host || "").trim().replace(/^\[|\]$/g, "");
+  if (clean.includes(":")) return true;
+  const octets = clean.split(".");
+  return (
+    octets.length === 4
+    && octets.every((octet) => /^\d{1,3}$/.test(octet) && Number(octet) <= 255)
+  );
+}
+
 function parseProxyMarketEndpoint(value) {
   const raw = String(value || "").trim();
   if (!raw) return {};
@@ -5456,8 +5496,72 @@ function parseProxyMarketSmartInput(value) {
       matchedPair = true;
       if (pair[3] !== "" || mapped === "username" || mapped === "password") parsed[mapped] = pair[3];
     });
-    if (matchedPair) inputMode = "structured";
-    else parsed = parseProxyMarketEndpoint(raw);
+    if (matchedPair) {
+      inputMode = "structured";
+    } else {
+      const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+      if (lines.length > 1) {
+        inputMode = "multi_endpoint";
+        const endpoints = [];
+        const countries = [];
+        lines.forEach((line, index) => {
+          const endpoint = parseProxyMarketEndpoint(line);
+          if (endpoint.host && endpoint.port) {
+            endpoints.push({ ...endpoint, _line: index + 1 });
+            return;
+          }
+          const country = normalizeProxyMarketCountry(line);
+          if (country) {
+            countries.push(country);
+            return;
+          }
+          errors.push(`第 ${index + 1} 行无法识别`);
+        });
+        if (endpoints.length) {
+          const literalEndpoints = endpoints.filter((endpoint) => isProxyMarketLiteralHost(endpoint.host));
+          let primaryEndpoint = null;
+          if (literalEndpoints.length === 1) {
+            primaryEndpoint = literalEndpoints[0];
+          } else if (literalEndpoints.length > 1) {
+            errors.push("输入中包含多个 IP 主连接，请每次只填写一个库存代理");
+          } else if (endpoints.length === 1) {
+            primaryEndpoint = endpoints[0];
+          } else {
+            errors.push("输入中包含多个域名连接，无法自动判断主连接，请每次只填写一个");
+          }
+          parsed = primaryEndpoint ? { ...primaryEndpoint } : {};
+          delete parsed._line;
+          const primaryUsername = String(parsed.username || "");
+          const primaryPassword = String(parsed.password || "");
+          const inconsistentCredentials = primaryEndpoint && endpoints.find((endpoint) => (
+            endpoint !== primaryEndpoint
+            && (
+            String(endpoint.username || "") !== primaryUsername
+            || String(endpoint.password || "") !== primaryPassword
+            )
+          ));
+          if (inconsistentCredentials) {
+            errors.push(`第 ${inconsistentCredentials._line} 行的账号或密码与主连接不一致`);
+          }
+          const providerEndpoints = primaryEndpoint
+            ? endpoints.filter((endpoint) => endpoint !== primaryEndpoint)
+            : [];
+          const providerKey = inferProxyMarketProviderKey(
+            providerEndpoints.map((endpoint) => endpoint.host),
+          );
+          if (providerKey) parsed.provider_key = providerKey;
+          if (countries.length) {
+            const countryCodes = new Set(countries.map((country) => country.code));
+            if (countryCodes.size > 1) errors.push("输入中包含多个不同国家或地区");
+            else parsed.country = countries[0].code;
+          }
+          parsed._country_label = countries[0]?.label || "";
+          parsed._provider_endpoint_count = providerEndpoints.length;
+        }
+      } else {
+        parsed = parseProxyMarketEndpoint(raw);
+      }
+    }
   }
   const hasOwn = (field) => Object.prototype.hasOwnProperty.call(parsed, field);
   if (inputMode === "structured") {
@@ -5520,14 +5624,13 @@ function proxyMarketStableHash(value) {
   return (hash >>> 0).toString(36).padStart(7, "0");
 }
 
-function proxyMarketGeneratedSku(host, port, proxyType = "", username = "", providerKey = "") {
+function proxyMarketGeneratedSku(host, port, proxyType = "", providerKey = "") {
   const normalizedHost = String(host || "").trim().toLowerCase();
   const normalizedPort = Number(port || 0);
   const fingerprint = [
     normalizeProxyMarketProtocol(proxyType) || "proxy",
     normalizedHost,
     normalizedPort,
-    String(username || "").trim(),
     String(providerKey || "").trim(),
   ].join("|");
   const hostLabel = normalizedHost.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 42) || "proxy";
@@ -5545,6 +5648,32 @@ function setProxyMarketSmartResult(message, state = "") {
   else delete node.dataset.state;
 }
 
+function syncProxyMarketEditorActions() {
+  const busy = Boolean(adminState.proxyMarketEditorBusy);
+  const canPublish = Boolean(
+    adminState.proxyMarketSelectedItemId
+    && adminState.proxyMarketPendingCheckId
+    && !busy
+  );
+  if (el("btnCancelProxyMarketEdit")) el("btnCancelProxyMarketEdit").disabled = busy;
+  if (el("btnSaveProxyMarketItem")) el("btnSaveProxyMarketItem").disabled = busy;
+  if (el("btnTestProxyMarketItem")) el("btnTestProxyMarketItem").disabled = busy;
+  if (el("btnPublishProxyMarketItem")) el("btnPublishProxyMarketItem").disabled = !canPublish;
+}
+
+function setProxyMarketEditorBusy(busy) {
+  adminState.proxyMarketEditorBusy = Boolean(busy);
+  syncProxyMarketEditorActions();
+}
+
+function invalidateProxyMarketPendingCheck(message = "字段已修改，请重新执行真实检测后再发布。") {
+  if (!adminState.proxyMarketPendingCheckId) return false;
+  adminState.proxyMarketPendingCheckId = "";
+  setText("proxyMarketEditorHint", message);
+  syncProxyMarketEditorActions();
+  return true;
+}
+
 function applyProxyMarketSmartInput({ quiet = false } = {}) {
   const input = el("proxyMarketSmartInput");
   if (!input?.value?.trim()) return null;
@@ -5556,8 +5685,8 @@ function applyProxyMarketSmartInput({ quiet = false } = {}) {
   const previousHost = el("proxyMarketHost")?.value?.trim() || "";
   const previousPort = Number(el("proxyMarketPort")?.value || 0);
   const previousProxyType = el("proxyMarketProxyType")?.value || "";
-  const previousUsername = el("proxyMarketUsername")?.value || "";
   const previousProviderKey = el("proxyMarketProviderKey")?.value || "";
+  const previousCountry = el("proxyMarketCountry")?.value?.trim() || "";
   const currentSku = el("proxyMarketSku")?.value?.trim() || "";
   const currentDisplayName = el("proxyMarketDisplayName")?.value?.trim() || "";
   const skuCanAutofill = !currentSku || (
@@ -5567,13 +5696,15 @@ function applyProxyMarketSmartInput({ quiet = false } = {}) {
       previousHost,
       previousPort,
       previousProxyType,
-      previousUsername,
       previousProviderKey,
     )
   );
   const displayNameCanAutofill = !currentDisplayName || (
     previousHost
-    && currentDisplayName === `${previousHost} 静态住宅代理`
+    && (
+      currentDisplayName === `${previousHost} 静态住宅代理`
+      || currentDisplayName === `${normalizeProxyMarketCountry(previousCountry)?.label || previousCountry}静态住宅代理`
+    )
   );
   const fieldMap = {
     proxy_type: "proxyMarketProxyType", host: "proxyMarketHost", port: "proxyMarketPort",
@@ -5610,19 +5741,24 @@ function applyProxyMarketSmartInput({ quiet = false } = {}) {
       host,
       port,
       el("proxyMarketProxyType")?.value || "",
-      el("proxyMarketUsername")?.value || "",
       el("proxyMarketProviderKey")?.value || "",
     );
     applied.push("sku");
   }
   if (host && displayNameCanAutofill) {
-    el("proxyMarketDisplayName").value = `${host} 静态住宅代理`;
+    const countryLabel = parsed._country_label
+      || normalizeProxyMarketCountry(parsed.country || el("proxyMarketCountry")?.value)?.label
+      || "";
+    el("proxyMarketDisplayName").value = countryLabel
+      ? `${countryLabel}静态住宅代理`
+      : `${host} 静态住宅代理`;
     applied.push("display_name");
   }
   if (!applied.length) {
     if (!quiet && input?.value?.trim()) setProxyMarketSmartResult("未识别到有效代理字段，请检查格式。", "error");
     return null;
   }
+  invalidateProxyMarketPendingCheck("智能识别已更新字段，请重新执行真实检测后再发布。");
   if (input) input.value = "";
   const labels = [];
   if (parsed.proxy_type) labels.push(String(parsed.proxy_type).toUpperCase());
@@ -5638,7 +5774,12 @@ function applyProxyMarketSmartInput({ quiet = false } = {}) {
   ) labels.push("无认证");
   const metadataLabels = { country: "国家", region: "地区", city: "城市", isp: "ISP" };
   Object.entries(metadataLabels).forEach(([field, label]) => { if (parsed[field]) labels.push(label); });
-  setProxyMarketSmartResult(`已填充${labels.length ? `：${labels.join("、")}` : "可识别字段"}；原始代理串已从输入框清除。`, "success");
+  if (parsed.provider_key) labels.push("供应商");
+  if (parsed._provider_endpoint_count) labels.push(`${parsed._provider_endpoint_count} 个供应商入口`);
+  const primaryHint = parsed._provider_endpoint_count
+    ? "；IP 行作为主连接，域名行仅用于识别供应商"
+    : "";
+  setProxyMarketSmartResult(`已填充${labels.length ? `：${labels.join("、")}` : "可识别字段"}${primaryHint}；原始代理串已从输入框清除。`, "success");
   setText("proxyMarketEditorHint", "智能识别结果尚未保存；连接与凭据需通过真实检测后才会发布。");
   return parsed;
 }
@@ -5692,6 +5833,7 @@ async function inspectProxyMarketConnection() {
     ].forEach(([id, value]) => {
       if (el(id) && String(value || "").trim()) el(id).value = String(value).trim();
     });
+    invalidateProxyMarketPendingCheck("检测已自动填写地区字段，请重新执行真实检测后再发布。");
     const location = [detected.country_name || detected.country, detected.region, detected.city].filter(Boolean).join(" / ");
     setProxyMarketSmartResult(
       `检测通过${location ? `：${location}` : ""}${detected.isp ? ` · ${detected.isp}` : ""}${Number(check.latency_ms || 0) ? ` · ${Number(check.latency_ms)} ms` : ""}`,
@@ -5830,13 +5972,17 @@ function renderProxyMarketItems(payload = {}) {
       '<path d="M4 20h4l11-11-4-4L4 16v4Z"></path><path d="m13.5 6.5 4 4"></path>',
     );
     const publish = createProxyMarketIconButton(
-      `真实检测并发布 ${item.sku || item.id}`,
+      `发布 ${item.sku || item.id}`,
       "publish",
       item.id,
       '<circle cx="12" cy="12" r="9"></circle><path d="m8 12 2.5 2.5L16 9"></path>',
       "primary",
     );
-    publish.disabled = String(item.status) === "archived";
+    publish.disabled = (
+      String(item.status) === "archived"
+      || String(item.pending_check_status || "") !== "healthy"
+      || !String(item.pending_check_id || "")
+    );
     const status = document.createElement("select");
     status.dataset.proxyMarketStatus = String(item.id || "");
     status.setAttribute("aria-label", `${item.sku || item.id} 库存状态`);
@@ -6015,6 +6161,7 @@ async function loadProxyMarketWorkspace() {
 function resetProxyMarketEditor({ focus = false } = {}) {
   adminState.proxyMarketInspectRequestId += 1;
   adminState.proxyMarketSelectedItemId = null;
+  adminState.proxyMarketPendingCheckId = "";
   el("proxyMarketItemForm")?.reset();
   if (el("btnInspectProxyMarketConnection")) el("btnInspectProxyMarketConnection").disabled = false;
   if (proxyMarketSmartParseTimer) window.clearTimeout(proxyMarketSmartParseTimer);
@@ -6024,11 +6171,12 @@ function resetProxyMarketEditor({ focus = false } = {}) {
   if (el("proxyMarketProxyType")) el("proxyMarketProxyType").value = "socks5";
   if (el("proxyMarketBillingCycle")) el("proxyMarketBillingCycle").value = "month";
   setText("proxyMarketEditorTitle", "新建代理");
-  setText("proxyMarketEditorHint", "先保存草稿，或直接执行真实检测并发布。");
+  setText("proxyMarketEditorHint", "先保存草稿，再依次执行真实检测和发布。");
   setText("proxyMarketEditorState", "当前为新建模式");
   setText("proxyMarketCredentialNote", "后台不会回显已保存凭据。编辑时空密码不会覆盖原密码。");
   setProxyMarketSmartResult("粘贴后会即时识别；真实网络检测仅在点击检测按钮时执行。");
   setMsg("proxyMarketItemMsg", "");
+  setProxyMarketEditorBusy(false);
   if (focus) {
     el("proxyMarketEditor")?.scrollIntoView({ behavior: "smooth", block: "start" });
     window.setTimeout(() => el("proxyMarketSku")?.focus(), 250);
@@ -6040,6 +6188,7 @@ function editProxyMarketItem(itemId, { focus = true } = {}) {
   if (!item) return;
   adminState.proxyMarketInspectRequestId += 1;
   adminState.proxyMarketSelectedItemId = String(item.id || "");
+  adminState.proxyMarketPendingCheckId = String(item.pending_check_id || "");
   if (el("btnInspectProxyMarketConnection")) el("btnInspectProxyMarketConnection").disabled = false;
   if (el("proxyMarketSmartInput")) el("proxyMarketSmartInput").value = "";
   setProxyMarketSmartResult("可粘贴新连接信息覆盖候选字段；已保存凭据不会回显。");
@@ -6081,6 +6230,7 @@ function editProxyMarketItem(itemId, { focus = true } = {}) {
       : "当前未保存认证凭据；如代理需要认证，请在检测发布前填写。",
   );
   setMsg("proxyMarketItemMsg", "");
+  syncProxyMarketEditorActions();
   if (focus) {
     el("proxyMarketEditor")?.scrollIntoView({ behavior: "smooth", block: "start" });
     window.setTimeout(() => el("proxyMarketDisplayName")?.focus(), 250);
@@ -6149,17 +6299,14 @@ function proxyMarketPublishPayload(payload) {
   return result;
 }
 
-async function saveProxyMarketItem({ publish = false } = {}) {
+async function saveProxyMarketItem({ test = false } = {}) {
   const payload = readProxyMarketItemForm();
   if (!payload) return null;
   const selectedId = adminState.proxyMarketSelectedItemId;
   const createdDraft = !selectedId;
   const existingItem = selectedId ? proxyMarketItemById(selectedId) : null;
-  const saveButton = el("btnSaveProxyMarketItem");
-  const publishButton = el("btnPublishProxyMarketItem");
-  if (saveButton) saveButton.disabled = true;
-  if (publishButton) publishButton.disabled = true;
-  setMsg("proxyMarketItemMsg", publish ? "正在执行真实连接检测..." : "正在保存代理库存...");
+  setProxyMarketEditorBusy(true);
+  setMsg("proxyMarketItemMsg", test ? "正在保存并执行真实连接检测..." : "正在保存代理库存...");
   try {
     let result;
     if (selectedId) {
@@ -6168,6 +6315,7 @@ async function saveProxyMarketItem({ publish = false } = {}) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(proxyMarketPatchPayload(payload)),
       });
+      adminState.proxyMarketPendingCheckId = "";
     } else {
       result = await api("/api/admin/proxy-market/items", {
         method: "POST",
@@ -6191,62 +6339,84 @@ async function saveProxyMarketItem({ publish = false } = {}) {
     });
     adminState.proxyMarketSelectedItemId = itemId;
     editProxyMarketItem(itemId, { focus: false });
-    if (publish) {
+    if (test) {
       try {
-        result = await api(`/api/admin/proxy-market/items/${encodeURIComponent(itemId)}/test-and-publish`, {
+        result = await api(`/api/admin/proxy-market/items/${encodeURIComponent(itemId)}/test`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(proxyMarketPublishPayload(payload)),
         });
       } catch (error) {
+        adminState.proxyMarketPendingCheckId = "";
         error.proxyMarketDraftSaved = createdDraft;
         error.proxyMarketChangesSaved = true;
         throw error;
       }
-      applyProxyMarketItemLocally(result?.item, { id: itemId });
-      editProxyMarketItem(itemId, { focus: false });
+      adminState.proxyMarketPendingCheckId = String(result?.check_id || "");
     }
     if (el("proxyMarketUsername")) el("proxyMarketUsername").value = "";
     if (el("proxyMarketPassword")) el("proxyMarketPassword").value = "";
-    const successMessage = publish
-      ? `真实检测通过，代理已发布${Number(result?.item?.latency_ms || 0) ? `，延迟 ${Number(result.item.latency_ms)} ms` : ""}`
+    const successMessage = test
+      ? `真实检测通过，配置待发布${Number(result?.check?.latency_ms || 0) ? `，延迟 ${Number(result.check.latency_ms)} ms` : ""}`
       : "代理库存已保存";
     await refreshProxyMarketItemsAfterWrite("proxyMarketItemMsg", successMessage);
     return result;
   } finally {
-    if (saveButton) saveButton.disabled = false;
-    if (publishButton) publishButton.disabled = false;
+    setProxyMarketEditorBusy(false);
   }
 }
 
 async function publishProxyMarketRow(itemId, button) {
   const item = proxyMarketItemById(itemId);
   if (!item) return;
-  if (!confirm(`将对 ${item.sku || item.id} 执行真实连接检测，成功后立即发布，确认继续吗？`)) return;
+  const checkId = String(item.pending_check_id || "");
+  if (!checkId) throw new Error("请先编辑该代理并完成真实检测");
+  if (!confirm(`将发布 ${item.sku || item.id} 最近一次通过真实检测的配置，确认继续吗？`)) return;
   button.disabled = true;
-  setMsg("proxyMarketMsg", `正在检测 ${item.sku || item.id}...`);
+  setMsg("proxyMarketMsg", `正在发布 ${item.sku || item.id}...`);
   try {
-    const result = await api(`/api/admin/proxy-market/items/${encodeURIComponent(item.id)}/test-and-publish`, {
+    const result = await api(`/api/admin/proxy-market/items/${encodeURIComponent(item.id)}/publish`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        proxy_type: item.proxy_type,
-        host: item.host,
-        port: Number(item.port || 0),
-        expires_at: Number(item.expires_at || 0),
-      }),
+      body: JSON.stringify({ check_id: checkId }),
     });
     applyProxyMarketItemLocally(result?.item, {
       ...item,
       status: "active",
       health_status: "healthy",
+      pending_check_id: "",
+      pending_check_status: "",
     });
     await refreshProxyMarketItemsAfterWrite(
       "proxyMarketMsg",
-      `真实检测通过，${item.sku || item.id} 已发布，延迟 ${Number(result?.item?.latency_ms || 0)} ms`,
+      `${item.sku || item.id} 已发布`,
     );
   } finally {
     button.disabled = false;
+  }
+}
+
+async function publishProxyMarketEditorItem() {
+  const itemId = String(adminState.proxyMarketSelectedItemId || "");
+  if (!itemId) throw new Error("请先保存并完成真实检测");
+  const checkId = String(adminState.proxyMarketPendingCheckId || "");
+  if (!checkId) throw new Error("请先完成真实检测后再发布");
+  setProxyMarketEditorBusy(true);
+  setMsg("proxyMarketItemMsg", "正在发布最近一次通过检测的配置...");
+  try {
+    const result = await api(`/api/admin/proxy-market/items/${encodeURIComponent(itemId)}/publish`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ check_id: checkId }),
+    });
+    adminState.proxyMarketPendingCheckId = "";
+    applyProxyMarketItemLocally(result?.item, { id: itemId });
+    editProxyMarketItem(itemId, { focus: false });
+    adminState.proxyMarketPendingCheckId = "";
+    await refreshProxyMarketItemsAfterWrite("proxyMarketItemMsg", "代理已发布");
+    return result;
+  } finally {
+    setProxyMarketEditorBusy(false);
   }
 }
 
@@ -6966,16 +7136,27 @@ function bindActions() {
       setMsg("proxyMarketItemMsg", getErrorMessage(error), false);
     }
   });
-  el("btnPublishProxyMarketItem")?.addEventListener("click", async () => {
+  el("proxyMarketItemForm")?.addEventListener("input", (event) => {
+    if (!(event.target instanceof Element) || event.target.id === "proxyMarketSmartInput") return;
+    invalidateProxyMarketPendingCheck();
+  });
+  el("btnTestProxyMarketItem")?.addEventListener("click", async () => {
     try {
-      await saveProxyMarketItem({ publish: true });
+      await saveProxyMarketItem({ test: true });
     } catch (error) {
       const prefix = error?.proxyMarketDraftSaved
-        ? "草稿已保存并保留在编辑器中；检测发布失败"
+        ? "草稿已保存并保留在编辑器中；真实检测失败"
         : error?.proxyMarketChangesSaved
-          ? "库存修改已保存；检测发布失败"
-          : "检测发布失败";
+          ? "库存修改已保存；真实检测失败"
+          : "真实检测失败";
       setMsg("proxyMarketItemMsg", `${prefix}：${getErrorMessage(error)}`, false);
+    }
+  });
+  el("btnPublishProxyMarketItem")?.addEventListener("click", async () => {
+    try {
+      await publishProxyMarketEditorItem();
+    } catch (error) {
+      setMsg("proxyMarketItemMsg", `发布失败：${getErrorMessage(error)}`, false);
     }
   });
   el("proxyMarketItemBody")?.addEventListener("click", async (event) => {

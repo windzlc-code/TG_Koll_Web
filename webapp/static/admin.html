@@ -969,7 +969,7 @@
           <div class="proxy-market-admin-band-head">
             <div>
               <h3 id="proxyMarketEditorTitle">新建代理</h3>
-              <div class="small" id="proxyMarketEditorHint">先保存草稿，或直接执行真实检测并发布。</div>
+              <div class="small" id="proxyMarketEditorHint">先保存草稿，再依次执行真实检测和发布。</div>
             </div>
           </div>
           <form id="proxyMarketItemForm" class="proxy-market-admin-form" novalidate>
@@ -985,7 +985,7 @@
                 aria-label="待识别的代理信息"
                 autocomplete="off"
                 spellcheck="false"
-                placeholder="例如 socks5://user:password@208.113.11.225:7778&#10;也支持 208.113.11.225:7778:user:password 或 JSON / 多行键值"
+                placeholder="例如 165.101.86.27:8022:user:password&#10;direct.provider.example:8001:user:password&#10;台湾&#10;也支持代理链接、JSON 或多行键值"
               ></textarea>
               <div class="proxy-market-smart-import-actions">
                 <span class="small proxy-market-smart-result" id="proxyMarketSmartResult" role="status" aria-live="polite">粘贴后会即时识别；真实网络检测仅在点击检测按钮时执行。</span>
@@ -1000,7 +1000,7 @@
                   </button>
                   <button id="btnInspectProxyMarketConnection" type="button" class="primary">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="m16 16 4 4M8 11h6M11 8v6"></path></svg>
-                    检测并补全地区
+                    检测自动填写字段
                   </button>
                 </div>
               </div>
@@ -1044,9 +1044,13 @@
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h12l2 2v14H5Z"></path><path d="M8 4v6h8V4M8 20v-6h8v6"></path></svg>
                   保存草稿
                 </button>
-                <button id="btnPublishProxyMarketItem" type="button" class="primary">
+                <button id="btnTestProxyMarketItem" type="button" class="ghost">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h4l2-5 4 10 2-5h4"></path><circle cx="12" cy="12" r="9"></circle></svg>
+                  真实检测
+                </button>
+                <button id="btnPublishProxyMarketItem" type="button" class="primary" disabled>
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 12 2.5 2.5L16 9"></path><circle cx="12" cy="12" r="9"></circle></svg>
-                  真实检测并发布
+                  发布
                 </button>
               </div>
             </div>

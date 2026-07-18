@@ -339,6 +339,257 @@ class ProxyMarketTests(unittest.TestCase):
         self.assertEqual(proxy["city"], "板桥")
         self.assertEqual(proxy["isp"], "Synced ISP")
 
+    def test_admin_test_and_publish_are_independent_steps(self):
+        created = self.admin.post(
+            "/api/admin/proxy-market/items",
+            headers=self.origin,
+            json={
+                "sku": "TW-TPE-SPLIT",
+                "display_name": "Split workflow",
+                "proxy_type": "socks5",
+                "host": "203.0.113.80",
+                "port": 1080,
+                "username": "split-user",
+                "password": "split-password",
+                "country": "TW",
+            },
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        item = created.json()["item"]
+
+        before_test = self.admin.post(
+            f"/api/admin/proxy-market/items/{item['id']}/publish",
+            headers=self.origin,
+        )
+        self.assertEqual(before_test.status_code, 409, before_test.text)
+
+        check_result = {
+            "ok": True,
+            "latency_ms": 31,
+            "response": {
+                "country_code": "TW",
+                "region": "Taipei",
+                "city": "Taipei",
+                "connection": {"isp": "Split ISP"},
+            },
+        }
+        with patch(
+            "webapp.proxy_market._run_proxy_connection_check",
+            return_value=check_result,
+        ) as connection_check:
+            tested = self.admin.post(
+                f"/api/admin/proxy-market/items/{item['id']}/test",
+                headers=self.origin,
+                json={
+                    "proxy_type": "socks5",
+                    "host": "198.51.100.27",
+                    "port": 8022,
+                    "username": "fixture-user",
+                    "password": "fixture-password",
+                },
+            )
+        self.assertEqual(tested.status_code, 200, tested.text)
+        connection_check.assert_called_once()
+        self.assertTrue(tested.json()["check_id"])
+        with db() as conn:
+            stored_after_test = dict(
+                conn.execute(
+                    "SELECT * FROM proxy_market_items WHERE id = ?",
+                    (item["id"],),
+                ).fetchone()
+            )
+        self.assertEqual(stored_after_test["status"], "draft")
+        self.assertEqual(stored_after_test["health_status"], "pending")
+        self.assertEqual(stored_after_test["host"], "203.0.113.80")
+        self.assertEqual(int(stored_after_test["published_at"]), 0)
+
+        with patch("webapp.proxy_market._run_proxy_connection_check") as connection_check:
+            published = self.admin.post(
+                f"/api/admin/proxy-market/items/{item['id']}/publish",
+                headers=self.origin,
+                json={"check_id": tested.json()["check_id"]},
+            )
+        self.assertEqual(published.status_code, 200, published.text)
+        connection_check.assert_not_called()
+        self.assertEqual(published.json()["item"]["status"], "active")
+        self.assertGreater(int(published.json()["item"]["published_at"]), 0)
+        replayed = self.admin.post(
+            f"/api/admin/proxy-market/items/{item['id']}/publish",
+            headers=self.origin,
+            json={"check_id": tested.json()["check_id"]},
+        )
+        self.assertEqual(replayed.status_code, 200, replayed.text)
+        self.assertTrue(replayed.json()["replayed"])
+        self.assertEqual(
+            replayed.json()["item"]["version"],
+            published.json()["item"]["version"],
+        )
+        with db() as conn:
+            consumed = dict(
+                conn.execute(
+                    "SELECT * FROM proxy_market_item_checks WHERE item_id = ?",
+                    (item["id"],),
+                ).fetchone()
+            )
+        self.assertGreater(int(consumed["consumed_at"]), 0)
+        self.assertEqual(consumed["username_ciphertext"], "")
+        self.assertEqual(consumed["password_ciphertext"], "")
+        self.assertNotIn("split-password", consumed["publish_result_json"])
+
+    def test_tested_candidate_does_not_change_claimed_proxy_before_publish(self):
+        item = self._market_item("TW-TPE-CANDIDATE")
+        customer, _ = self._customer("candidate_isolation_buyer")
+        claimed = customer.post(
+            f"/api/proxy-market/items/{item['id']}/claim",
+            headers={**self.origin, "Idempotency-Key": "candidate-isolation"},
+        )
+        self.assertEqual(claimed.status_code, 200, claimed.text)
+        proxy_id = claimed.json()["allocation"]["social_proxy_id"]
+        check_result = {
+            "ok": True,
+            "latency_ms": 24,
+            "response": {
+                "country_code": "TW",
+                "region": "Taipei",
+                "city": "Taipei",
+                "connection": {"isp": "Candidate ISP"},
+            },
+        }
+        with patch(
+            "webapp.proxy_market._run_proxy_connection_check",
+            return_value=check_result,
+        ):
+            tested = self.admin.post(
+                f"/api/admin/proxy-market/items/{item['id']}/test",
+                headers=self.origin,
+                json={
+                    "proxy_type": "https",
+                    "host": "198.51.100.27",
+                    "port": 8022,
+                    "username": "candidate-user",
+                    "password": "candidate-password",
+                },
+            )
+        self.assertEqual(tested.status_code, 200, tested.text)
+        with db() as conn:
+            stored_item = dict(
+                conn.execute(
+                    "SELECT * FROM proxy_market_items WHERE id = ?",
+                    (item["id"],),
+                ).fetchone()
+            )
+            stored_proxy = dict(
+                conn.execute(
+                    "SELECT * FROM social_proxies WHERE id = ?",
+                    (proxy_id,),
+                ).fetchone()
+            )
+            candidate = dict(
+                conn.execute(
+                    "SELECT * FROM proxy_market_item_checks WHERE item_id = ?",
+                    (item["id"],),
+                ).fetchone()
+            )
+        self.assertEqual(stored_item["host"], "203.0.113.10")
+        self.assertEqual(stored_proxy["host"], "203.0.113.10")
+        self.assertEqual(proxy_market._decrypt_credentials(stored_item), ("proxy-user", "proxy-password"))
+        self.assertEqual(candidate["host"], "198.51.100.27")
+        self.assertEqual(
+            proxy_market._decrypt_credentials({**candidate, "id": candidate["item_id"]}),
+            ("candidate-user", "candidate-password"),
+        )
+
+        published = self.admin.post(
+            f"/api/admin/proxy-market/items/{item['id']}/publish",
+            headers=self.origin,
+            json={"check_id": tested.json()["check_id"]},
+        )
+        self.assertEqual(published.status_code, 200, published.text)
+        with db() as conn:
+            live_item = dict(
+                conn.execute(
+                    "SELECT * FROM proxy_market_items WHERE id = ?",
+                    (item["id"],),
+                ).fetchone()
+            )
+            live_proxy = dict(
+                conn.execute(
+                    "SELECT * FROM social_proxies WHERE id = ?",
+                    (proxy_id,),
+                ).fetchone()
+            )
+        self.assertEqual(live_item["host"], "198.51.100.27")
+        self.assertEqual(live_proxy["host"], "198.51.100.27")
+        self.assertEqual(
+            proxy_market._decrypt_credentials(live_item),
+            ("candidate-user", "candidate-password"),
+        )
+
+    def test_inventory_edit_invalidates_pending_test(self):
+        item = self._market_item("TW-TPE-INVALIDATE")
+        with patch(
+            "webapp.proxy_market._run_proxy_connection_check",
+            return_value={"ok": True, "latency_ms": 18, "response": {"connection": {}}},
+        ):
+            tested = self.admin.post(
+                f"/api/admin/proxy-market/items/{item['id']}/test",
+                headers=self.origin,
+                json={"host": "198.51.100.27", "port": 8022},
+            )
+        self.assertEqual(tested.status_code, 200, tested.text)
+        changed = self.admin.patch(
+            f"/api/admin/proxy-market/items/{item['id']}",
+            headers=self.origin,
+            json={"display_name": "Edited after test"},
+        )
+        self.assertEqual(changed.status_code, 200, changed.text)
+        rejected = self.admin.post(
+            f"/api/admin/proxy-market/items/{item['id']}/publish",
+            headers=self.origin,
+            json={"check_id": tested.json()["check_id"]},
+        )
+        self.assertEqual(rejected.status_code, 409, rejected.text)
+        with db() as conn:
+            pending = conn.execute(
+                "SELECT 1 FROM proxy_market_item_checks WHERE item_id = ?",
+                (item["id"],),
+            ).fetchone()
+        self.assertIsNone(pending)
+
+    def test_allocation_version_change_hides_stale_pending_check(self):
+        item = self._market_item("TW-TPE-STALE-CHECK")
+        customer, _ = self._customer("stale_check_buyer")
+        with patch(
+            "webapp.proxy_market._run_proxy_connection_check",
+            return_value={"ok": True, "latency_ms": 18, "response": {"connection": {}}},
+        ):
+            tested = self.admin.post(
+                f"/api/admin/proxy-market/items/{item['id']}/test",
+                headers=self.origin,
+                json={"host": "198.51.100.27", "port": 8022},
+            )
+        self.assertEqual(tested.status_code, 200, tested.text)
+        claimed = customer.post(
+            f"/api/proxy-market/items/{item['id']}/claim",
+            headers={**self.origin, "Idempotency-Key": "stale-check-claim"},
+        )
+        self.assertEqual(claimed.status_code, 200, claimed.text)
+
+        listed = self.admin.get("/api/admin/proxy-market/items")
+        self.assertEqual(listed.status_code, 200, listed.text)
+        listed_item = next(
+            row for row in listed.json()["items"] if row["id"] == item["id"]
+        )
+        self.assertEqual(listed_item["pending_check_id"], "")
+        self.assertEqual(listed_item["pending_check_status"], "")
+
+        rejected = self.admin.post(
+            f"/api/admin/proxy-market/items/{item['id']}/publish",
+            headers=self.origin,
+            json={"check_id": tested.json()["check_id"]},
+        )
+        self.assertEqual(rejected.status_code, 409, rejected.text)
+
     def test_proxy_check_pins_validated_ip_across_dns_rebinding(self):
         dns_answers = [
             [

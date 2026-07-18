@@ -9,9 +9,21 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ADMIN_JS = ROOT / "static" / "assets" / "admin.js"
+ADMIN_HTML = ROOT / "static" / "admin.html"
 
 
 class ProxyMarketFrontendTests(unittest.TestCase):
+    def test_admin_proxy_market_actions_are_split_and_labels_are_clear(self):
+        html = ADMIN_HTML.read_text(encoding="utf-8")
+        self.assertIn('id="btnInspectProxyMarketConnection"', html)
+        self.assertIn("检测自动填写字段", html)
+        self.assertIn('id="btnTestProxyMarketItem"', html)
+        self.assertIn(">真实检测<", "".join(html.split()))
+        self.assertIn('id="btnPublishProxyMarketItem"', html)
+        self.assertIn(">发布<", "".join(html.split()))
+        self.assertNotIn("检测并补全地区", html)
+        self.assertNotIn("真实检测并发布", html)
+
     def _run_node(self, body: str):
         node = shutil.which("node")
         if not node:
@@ -47,6 +59,10 @@ class ProxyMarketFrontendTests(unittest.TestCase):
               ["proxyMarketCity", ""],
               ["proxyMarketIsp", ""],
               ["btnInspectProxyMarketConnection", ""],
+              ["btnCancelProxyMarketEdit", ""],
+              ["btnSaveProxyMarketItem", ""],
+              ["btnTestProxyMarketItem", ""],
+              ["btnPublishProxyMarketItem", ""],
             ].forEach(([id, value]) => control(id, value));
 
             let apiImpl = async () => ({{}});
@@ -60,6 +76,8 @@ class ProxyMarketFrontendTests(unittest.TestCase):
               adminState: {{
                 proxyMarketSelectedItemId: null,
                 proxyMarketInspectRequestId: 0,
+                proxyMarketPendingCheckId: "",
+                proxyMarketEditorBusy: false,
               }},
               el: (id) => controls.get(id) || null,
               setText: (id, value) => {{
@@ -130,7 +148,9 @@ class ProxyMarketFrontendTests(unittest.TestCase):
               host: "json.example",
               port: 9000,
             });
+            context.adminState.proxyMarketPendingCheckId = "proxy-check-stale";
             assert.ok(apply());
+            assert.equal(context.adminState.proxyMarketPendingCheckId, "");
             assert.equal(controls.get("proxyMarketHost").value, "json.example");
             assert.equal(controls.get("proxyMarketPort").value, "9000");
             assert.equal(controls.get("proxyMarketUsername").value, "saved-user");
@@ -145,6 +165,34 @@ class ProxyMarketFrontendTests(unittest.TestCase):
             controls.get("proxyMarketSmartInput").value = "manual.example:9002";
             assert.ok(apply());
             assert.equal(controls.get("proxyMarketSku").value, "MANUAL-SKU");
+            """
+        )
+
+    def test_editor_publish_action_tracks_candidate_and_busy_state(self):
+        self._run_node(
+            """
+            const sync = context.syncProxyMarketEditorActions;
+            const invalidate = context.invalidateProxyMarketPendingCheck;
+            context.adminState.proxyMarketSelectedItemId = "proxy-item-1";
+            context.adminState.proxyMarketPendingCheckId = "";
+            sync();
+            assert.equal(controls.get("btnPublishProxyMarketItem").disabled, true);
+
+            context.adminState.proxyMarketPendingCheckId = "proxy-check-1";
+            sync();
+            assert.equal(controls.get("btnPublishProxyMarketItem").disabled, false);
+
+            context.setProxyMarketEditorBusy(true);
+            assert.equal(controls.get("btnCancelProxyMarketEdit").disabled, true);
+            assert.equal(controls.get("btnSaveProxyMarketItem").disabled, true);
+            assert.equal(controls.get("btnTestProxyMarketItem").disabled, true);
+            assert.equal(controls.get("btnPublishProxyMarketItem").disabled, true);
+
+            context.setProxyMarketEditorBusy(false);
+            assert.equal(controls.get("btnPublishProxyMarketItem").disabled, false);
+            assert.equal(invalidate(), true);
+            assert.equal(context.adminState.proxyMarketPendingCheckId, "");
+            assert.equal(controls.get("btnPublishProxyMarketItem").disabled, true);
             """
         )
 
@@ -205,18 +253,78 @@ class ProxyMarketFrontendTests(unittest.TestCase):
             """
         )
 
+    def test_multiline_provider_format_fills_primary_endpoint_and_region(self):
+        self._run_node(
+            """
+            const parse = context.parseProxyMarketSmartInput;
+            const apply = context.applyProxyMarketSmartInput;
+            const source = [
+              "198.51.100.27:8022:fixture-user:fixture-password",
+              "direct.provider.example:8001:fixture-user:fixture-password",
+              "台湾",
+            ].join("\\n");
+            const parsed = parse(source);
+            assert.deepEqual(parsed._errors, undefined);
+            assert.equal(parsed.host, "198.51.100.27");
+            assert.equal(parsed.port, 8022);
+            assert.equal(parsed.username, "fixture-user");
+            assert.equal(parsed.password, "fixture-password");
+            assert.equal(parsed.country, "TW");
+            assert.equal(parsed.provider_key, "provider");
+            assert.equal(parsed._provider_endpoint_count, 1);
+
+            controls.get("proxyMarketSmartInput").value = source;
+            assert.ok(apply());
+            assert.equal(controls.get("proxyMarketHost").value, "198.51.100.27");
+            assert.equal(controls.get("proxyMarketPort").value, "8022");
+            assert.equal(controls.get("proxyMarketCountry").value, "TW");
+            assert.equal(controls.get("proxyMarketProviderKey").value, "provider");
+            assert.equal(controls.get("proxyMarketDisplayName").value, "台湾静态住宅代理");
+            assert.ok(!controls.get("proxyMarketSmartResult").textContent.includes("fixture-password"));
+
+            const oldHost = controls.get("proxyMarketHost").value;
+            controls.get("proxyMarketSmartInput").value = [
+              "198.51.100.27:8022:user-a:pass-a",
+              "direct.provider.example:8001:user-b:pass-b",
+              "台湾",
+            ].join("\\n");
+            assert.equal(apply(), null);
+            assert.equal(controls.get("proxyMarketHost").value, oldHost);
+            assert.ok(controls.get("proxyMarketSmartInput").value.includes("pass-b"));
+            """
+        )
+
+    def test_multiline_parser_rejects_ambiguous_primary_connections(self):
+        self._run_node(
+            """
+            const parse = context.parseProxyMarketSmartInput;
+            const multipleIps = parse([
+              "198.51.100.27:8022:user:password",
+              "198.51.100.28:8022:user:password",
+              "台湾",
+            ].join("\\n"));
+            assert.ok(multipleIps._errors.some((message) => message.includes("多个 IP 主连接")));
+
+            const multipleDomains = parse([
+              "direct-a.example.com:8001:user:password",
+              "direct-b.example.com:8001:user:password",
+              "台湾",
+            ].join("\\n"));
+            assert.ok(multipleDomains._errors.some((message) => message.includes("多个域名连接")));
+            """
+        )
+
     def test_generated_sku_is_stable_bounded_and_connection_specific(self):
         self._run_node(
             """
             const sku = context.proxyMarketGeneratedSku;
-            const base = sku("gateway.example", 1080, "socks5", "user-a", "provider-a");
-            assert.equal(base, sku("gateway.example", 1080, "socks5", "user-a", "provider-a"));
-            assert.notEqual(base, sku("gateway.example", 1080, "http", "user-a", "provider-a"));
-            assert.notEqual(base, sku("gateway.example", 1080, "socks5", "user-b", "provider-a"));
-            assert.notEqual(base, sku("gateway.example", 1080, "socks5", "user-a", "provider-b"));
+            const base = sku("gateway.example", 1080, "socks5", "provider-a");
+            assert.equal(base, sku("gateway.example", 1080, "socks5", "provider-a"));
+            assert.notEqual(base, sku("gateway.example", 1080, "http", "provider-a"));
+            assert.notEqual(base, sku("gateway.example", 1080, "socks5", "provider-b"));
             const longHost = "a".repeat(120) + ".example";
-            const first = sku(longHost, 1080, "socks5", "", "");
-            const second = sku(longHost, 1081, "socks5", "", "");
+            const first = sku(longHost, 1080, "socks5", "");
+            const second = sku(longHost, 1081, "socks5", "");
             assert.notEqual(first, second);
             assert.ok(first.length <= 80);
             assert.ok(first.includes("-1080-"));
