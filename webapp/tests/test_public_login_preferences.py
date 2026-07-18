@@ -170,6 +170,13 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertNotIn("if (event.target === loginModal) closeLogin()", self.script)
         self.assertIn('[data-close-login]', self.script)
 
+    def test_pricing_mobile_hero_clamps_intrinsic_grid_width(self):
+        self.assertIn("grid-template-columns: minmax(0, 1fr);", self.pricing_styles)
+        self.assertIn(".pricing-page-hero-copy {\n    min-width: 0;", self.pricing_styles)
+        self.assertIn("max-width: 100%;", self.pricing_styles)
+        self.assertIn("overflow-wrap: anywhere;", self.pricing_styles)
+        self.assertIn("word-break: break-word;", self.pricing_styles)
+
     def test_home_navigation_opens_console_or_existing_login_dialog(self):
         page = (self.static_dir / "index.html").read_text(encoding="utf-8")
         pricing = (self.static_dir / "pricing.html").read_text(encoding="utf-8")

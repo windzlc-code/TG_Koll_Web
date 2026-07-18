@@ -918,16 +918,28 @@
 @media (max-width: 560px) {
   .pricing-page-hero {
     min-height: max(560px, 100svh);
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .pricing-page-hero-copy {
+    min-width: 0;
     width: calc(100% - 24px);
+    max-width: 100%;
     padding-top: max(128px, calc(104px + env(safe-area-inset-top)));
     padding-bottom: 42px;
   }
 
   .pricing-page-hero-copy h1 {
+    min-width: 0;
     font-size: clamp(40px, 14vw, 60px);
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .pricing-page-hero-copy > p:not(.eyebrow),
+  .pricing-page-hero-actions {
+    min-width: 0;
+    max-width: 100%;
   }
 
   .pricing-page-hero-actions,
