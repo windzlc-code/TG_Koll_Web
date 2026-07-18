@@ -177,6 +177,14 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn("overflow-wrap: anywhere;", self.pricing_styles)
         self.assertIn("word-break: break-word;", self.pricing_styles)
 
+    def test_mobile_site_icon_controls_center_their_svg(self):
+        self.assertIn(
+            ".site-header :is(.site-menu-toggle, .site-language-button) {\n"
+            "    grid-template-columns: minmax(0, 1fr);",
+            self.site_nav_styles,
+        )
+        self.assertIn(".site-header .site-global-controls .site-language-state {", self.site_nav_styles)
+
     def test_home_navigation_opens_console_or_existing_login_dialog(self):
         page = (self.static_dir / "index.html").read_text(encoding="utf-8")
         pricing = (self.static_dir / "pricing.html").read_text(encoding="utf-8")

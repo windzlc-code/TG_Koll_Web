@@ -1031,6 +1031,22 @@ html {
     height: 44px;
   }
 
+  /* Mobile icon controls are square buttons; keep their SVGs on the true center axis. */
+  .site-header :is(.site-menu-toggle, .site-language-button) {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    padding-inline: 0;
+  }
+
+  .site-header .site-global-controls .site-language-state {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
   .site-header :is(.header-actions, .site-global-controls) {
     gap: 8px;
   }
