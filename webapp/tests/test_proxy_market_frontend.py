@@ -1,0 +1,229 @@
+import json
+import shutil
+import subprocess
+import tempfile
+import textwrap
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+ADMIN_JS = ROOT / "static" / "assets" / "admin.js"
+
+
+class ProxyMarketFrontendTests(unittest.TestCase):
+    def _run_node(self, body: str):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+        source = ADMIN_JS.read_text(encoding="utf-8")
+        start = source.index("const PROXY_MARKET_SMART_FIELD_ALIASES")
+        end = source.index("function proxyMarketItemById", start)
+        smart_source = source[start:end]
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("node:assert/strict");
+            const vm = require("node:vm");
+
+            const controls = new Map();
+            const control = (id, value = "") => {{
+              const node = {{ id, value: String(value), disabled: false, dataset: {{}}, textContent: "" }};
+              controls.set(id, node);
+              return node;
+            }};
+            [
+              ["proxyMarketSmartInput", ""],
+              ["proxyMarketSmartResult", ""],
+              ["proxyMarketHost", "old.example"],
+              ["proxyMarketPort", "8080"],
+              ["proxyMarketProxyType", "socks5"],
+              ["proxyMarketUsername", "saved-user"],
+              ["proxyMarketPassword", "saved-password"],
+              ["proxyMarketProviderKey", "provider-a"],
+              ["proxyMarketSku", ""],
+              ["proxyMarketDisplayName", ""],
+              ["proxyMarketCountry", ""],
+              ["proxyMarketRegion", ""],
+              ["proxyMarketCity", ""],
+              ["proxyMarketIsp", ""],
+              ["btnInspectProxyMarketConnection", ""],
+            ].forEach(([id, value]) => control(id, value));
+
+            let apiImpl = async () => ({{}});
+            let apiCalls = 0;
+            const context = {{
+              URL,
+              console,
+              setTimeout,
+              clearTimeout,
+              window: {{ setTimeout, clearTimeout }},
+              adminState: {{
+                proxyMarketSelectedItemId: null,
+                proxyMarketInspectRequestId: 0,
+              }},
+              el: (id) => controls.get(id) || null,
+              setText: (id, value) => {{
+                const node = controls.get(id);
+                if (node) node.textContent = String(value || "");
+              }},
+              localInputFromTimestamp: (value) => String(value),
+              api: async (...args) => {{
+                apiCalls += 1;
+                return apiImpl(...args);
+              }},
+              getErrorMessage: (error) => error?.message || String(error),
+            }};
+            vm.createContext(context);
+            vm.runInContext({json.dumps(smart_source)}, context);
+
+            async function main() {{
+            {textwrap.indent(textwrap.dedent(body), "  ")}
+            }}
+            main().catch((error) => {{
+              console.error(error);
+              process.exitCode = 1;
+            }});
+            """
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            harness_path = Path(temp_dir) / "proxy-market-frontend-test.cjs"
+            harness_path.write_text(harness, encoding="utf-8")
+            result = subprocess.run(
+                [node, str(harness_path)],
+                cwd=ROOT.parent,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_smart_parser_is_atomic_and_preserves_structured_credentials(self):
+        self._run_node(
+            """
+            const parse = context.parseProxyMarketSmartInput;
+            const apply = context.applyProxyMarketSmartInput;
+
+            const originalValues = Object.fromEntries(
+              [...controls.entries()].map(([id, node]) => [id, node.value])
+            );
+            controls.get("proxyMarketSmartInput").value = '{"host":';
+            assert.equal(apply(), null);
+            assert.equal(controls.get("proxyMarketSmartInput").value, '{"host":');
+            for (const id of [
+              "proxyMarketHost", "proxyMarketPort", "proxyMarketProxyType",
+              "proxyMarketUsername", "proxyMarketPassword", "proxyMarketSku",
+              "proxyMarketDisplayName",
+            ]) {
+              assert.equal(controls.get(id).value, originalValues[id]);
+            }
+
+            const invalid = parse("host: new.example\\nport: 70000");
+            assert.ok(invalid._errors.some((message) => message.includes("1-65535")));
+
+            controls.get("proxyMarketSmartInput").value = "host: new.example\\nport: 70000";
+            assert.equal(apply(), null);
+            assert.equal(controls.get("proxyMarketHost").value, "old.example");
+            assert.equal(controls.get("proxyMarketPort").value, "8080");
+
+            controls.get("proxyMarketSmartInput").value = JSON.stringify({
+              host: "json.example",
+              port: 9000,
+            });
+            assert.ok(apply());
+            assert.equal(controls.get("proxyMarketHost").value, "json.example");
+            assert.equal(controls.get("proxyMarketPort").value, "9000");
+            assert.equal(controls.get("proxyMarketUsername").value, "saved-user");
+            assert.equal(controls.get("proxyMarketPassword").value, "saved-password");
+
+            controls.get("proxyMarketSmartInput").value = "plain.example:9001";
+            assert.ok(apply());
+            assert.equal(controls.get("proxyMarketUsername").value, "");
+            assert.equal(controls.get("proxyMarketPassword").value, "");
+
+            controls.get("proxyMarketSku").value = "MANUAL-SKU";
+            controls.get("proxyMarketSmartInput").value = "manual.example:9002";
+            assert.ok(apply());
+            assert.equal(controls.get("proxyMarketSku").value, "MANUAL-SKU");
+            """
+        )
+
+    def test_inspection_rejects_invalid_input_and_ignores_stale_response(self):
+        self._run_node(
+            """
+            const inspect = context.inspectProxyMarketConnection;
+
+            controls.get("proxyMarketSmartInput").value = "host: invalid.example\\nport: 99999";
+            assert.equal(await inspect(), null);
+            assert.equal(apiCalls, 0);
+            assert.equal(controls.get("proxyMarketHost").value, "old.example");
+
+            controls.get("proxyMarketSmartInput").value = "";
+            let resolveRequest;
+            apiImpl = () => new Promise((resolve) => { resolveRequest = resolve; });
+            const pending = inspect();
+            assert.equal(apiCalls, 1);
+            controls.get("proxyMarketHost").value = "different.example";
+            resolveRequest({
+              check: {
+                latency_ms: 20,
+                detected: { country: "TW", city: "Taipei", isp: "Example ISP" },
+              },
+            });
+            assert.equal(await pending, null);
+            assert.equal(controls.get("proxyMarketCountry").value, "");
+            assert.equal(controls.get("proxyMarketCity").value, "");
+            assert.equal(controls.get("proxyMarketIsp").value, "");
+
+            const pendingResolvers = [];
+            apiImpl = () => new Promise((resolve) => pendingResolvers.push(resolve));
+            controls.get("proxyMarketHost").value = "first.example";
+            const first = inspect();
+            controls.get("proxyMarketHost").value = "second.example";
+            const second = inspect();
+            pendingResolvers[1]({
+              check: {
+                latency_ms: 10,
+                detected: { country: "JP", city: "Tokyo", isp: "Latest ISP" },
+              },
+            });
+            assert.ok(await second);
+            assert.equal(controls.get("proxyMarketCountry").value, "JP");
+            assert.equal(controls.get("proxyMarketIsp").value, "Latest ISP");
+            assert.equal(controls.get("btnInspectProxyMarketConnection").disabled, false);
+            pendingResolvers[0]({
+              check: {
+                latency_ms: 99,
+                detected: { country: "US", city: "Old City", isp: "Stale ISP" },
+              },
+            });
+            assert.equal(await first, null);
+            assert.equal(controls.get("proxyMarketCountry").value, "JP");
+            assert.equal(controls.get("proxyMarketCity").value, "Tokyo");
+            assert.equal(controls.get("proxyMarketIsp").value, "Latest ISP");
+            assert.equal(controls.get("btnInspectProxyMarketConnection").disabled, false);
+            """
+        )
+
+    def test_generated_sku_is_stable_bounded_and_connection_specific(self):
+        self._run_node(
+            """
+            const sku = context.proxyMarketGeneratedSku;
+            const base = sku("gateway.example", 1080, "socks5", "user-a", "provider-a");
+            assert.equal(base, sku("gateway.example", 1080, "socks5", "user-a", "provider-a"));
+            assert.notEqual(base, sku("gateway.example", 1080, "http", "user-a", "provider-a"));
+            assert.notEqual(base, sku("gateway.example", 1080, "socks5", "user-b", "provider-a"));
+            assert.notEqual(base, sku("gateway.example", 1080, "socks5", "user-a", "provider-b"));
+            const longHost = "a".repeat(120) + ".example";
+            const first = sku(longHost, 1080, "socks5", "", "");
+            const second = sku(longHost, 1081, "socks5", "", "");
+            assert.notEqual(first, second);
+            assert.ok(first.length <= 80);
+            assert.ok(first.includes("-1080-"));
+            assert.match(first, /^[A-Za-z0-9._-]+$/);
+            """
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

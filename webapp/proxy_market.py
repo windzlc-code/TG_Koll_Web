@@ -1,14 +1,26 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import re
+import socket
 import sqlite3
 import time
+import types
 import uuid
 from typing import Any
+from urllib.parse import quote, urlsplit
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
+import requests
+from requests.adapters import HTTPAdapter
+from requests.exceptions import ProxyError
+from urllib3 import ProxyManager
+from urllib3.connection import HTTPConnection, HTTPSConnection
+from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
+from urllib3.exceptions import ConnectTimeoutError, NewConnectionError
+from urllib3.util import connection as urllib3_connection
 
 from . import governance
 from .auth import get_current_user, require_admin
@@ -19,7 +31,9 @@ from .proxy_market_credentials import (
     encrypt_market_credentials,
 )
 from .social_automation_api import (
-    _run_proxy_connection_check,
+    _run_proxy_connection_check as _social_run_proxy_connection_check,
+    _validate_proxy_credentials,
+    _validate_proxy_endpoint,
     cancel_social_tasks_in_transaction,
     cleanup_cancelled_social_tasks_runtime,
 )
@@ -80,6 +94,15 @@ class ProxyMarketPublishPayload(BaseModel):
     username: str | None = Field(default=None, max_length=255)
     password: str | None = Field(default=None, max_length=512)
     expires_at: int | None = Field(default=None, ge=0)
+
+
+class ProxyMarketInspectPayload(BaseModel):
+    item_id: str = Field(default="", max_length=80)
+    proxy_type: str = Field(default="socks5", max_length=20)
+    host: str = Field(default="", max_length=255)
+    port: int = Field(default=0, ge=0, le=65535)
+    username: str = Field(default="", max_length=255)
+    password: str = Field(default="", max_length=512)
 
 
 class ProxyMarketReadPayload(BaseModel):
@@ -323,6 +346,234 @@ def _safe_check_result(value: Any) -> dict[str, Any]:
     return governance.redact(data)
 
 
+def _proxy_inspection_response(result: dict[str, Any]) -> dict[str, Any]:
+    response = result.get("response") if isinstance(result.get("response"), dict) else {}
+    connection = response.get("connection") if isinstance(response.get("connection"), dict) else {}
+    return {
+        "ok": bool(result.get("ok")),
+        "checked_at": int(result.get("checked_at") or _now()),
+        "exit_ip": str(result.get("exit_ip") or response.get("ip") or "").strip(),
+        "latency_ms": max(0, int(result.get("latency_ms") or 0)),
+        "route_verified": bool(result.get("route_verified")),
+        "static_consistent": bool(result.get("static_consistent")),
+        "residential_status": str(result.get("residential_status") or "").strip(),
+        "residential_reason": str(result.get("residential_reason") or "").strip(),
+        "error_code": str(result.get("error_code") or "").strip(),
+        "error": str(result.get("error") or "").strip(),
+        "detected": {
+            "country": str(response.get("country_code") or response.get("country") or "").strip(),
+            "country_name": str(response.get("country") or "").strip(),
+            "region": str(response.get("region") or "").strip(),
+            "city": str(response.get("city") or "").strip(),
+            "isp": str(connection.get("isp") or connection.get("org") or "").strip(),
+        },
+    }
+
+
+def _scrub_inspection_secrets(result: dict[str, Any], *secrets: str) -> dict[str, Any]:
+    clean = dict(result)
+    for field in ("error", "residential_reason"):
+        value = str(clean.get(field) or "")
+        for secret in secrets:
+            if secret:
+                variants = {secret, quote(secret, safe="")}
+                for variant in sorted(variants, key=len, reverse=True):
+                    value = value.replace(variant, "***")
+        clean[field] = value
+    return clean
+
+
+class _PinnedConnectionMixin:
+    def __init__(self, *args: Any, pinned_proxy_ip: str, **kwargs: Any) -> None:
+        self._pinned_proxy_ip = pinned_proxy_ip
+        super().__init__(*args, **kwargs)
+
+    def _new_conn(self):
+        try:
+            return urllib3_connection.create_connection(
+                (self._pinned_proxy_ip, self.port),
+                self.timeout,
+                source_address=self.source_address,
+                socket_options=self.socket_options,
+            )
+        except socket.timeout as exc:
+            raise ConnectTimeoutError(
+                self,
+                f"Connection to {self.host} timed out. (connect timeout={self.timeout})",
+            ) from exc
+        except OSError as exc:
+            raise NewConnectionError(
+                self,
+                f"Failed to establish a new connection: {exc}",
+            ) from exc
+
+
+class _PinnedHTTPConnection(_PinnedConnectionMixin, HTTPConnection):
+    pass
+
+
+class _PinnedHTTPSConnection(_PinnedConnectionMixin, HTTPSConnection):
+    pass
+
+
+class _PinnedHTTPConnectionPool(HTTPConnectionPool):
+    ConnectionCls = _PinnedHTTPConnection
+
+
+class _PinnedHTTPSConnectionPool(HTTPSConnectionPool):
+    ConnectionCls = _PinnedHTTPSConnection
+
+
+class _PinnedProxyManager(ProxyManager):
+    def __init__(self, proxy_url: str, *, pinned_proxy_ip: str, **kwargs: Any) -> None:
+        self._pinned_proxy_ip = pinned_proxy_ip
+        super().__init__(proxy_url, **kwargs)
+        self.pool_classes_by_scheme = {
+            "http": _PinnedHTTPConnectionPool,
+            "https": _PinnedHTTPSConnectionPool,
+        }
+
+    def _new_pool(
+        self,
+        scheme: str,
+        host: str,
+        port: int,
+        request_context: dict[str, Any] | None = None,
+    ):
+        context = dict(request_context or self.connection_pool_kw)
+        context["pinned_proxy_ip"] = self._pinned_proxy_ip
+        return super()._new_pool(scheme, host, port, context)
+
+
+class _PinnedProxyAdapter(HTTPAdapter):
+    def __init__(
+        self,
+        *,
+        original_host: str,
+        original_port: int,
+        pinned_ip: str,
+    ) -> None:
+        self._original_host = original_host.rstrip(".").lower()
+        self._original_port = int(original_port)
+        self._pinned_ip = str(ipaddress.ip_address(pinned_ip))
+        super().__init__()
+
+    def proxy_manager_for(self, proxy: str, **proxy_kwargs: Any):
+        if proxy in self.proxy_manager:
+            return self.proxy_manager[proxy]
+
+        parsed = urlsplit(proxy)
+        try:
+            parsed_port = parsed.port
+        except ValueError as exc:
+            raise ProxyError("Pinned proxy endpoint is malformed") from exc
+        if (
+            str(parsed.hostname or "").rstrip(".").lower() != self._original_host
+            or int(parsed_port or 0) != self._original_port
+        ):
+            raise ProxyError("Pinned proxy endpoint does not match the validated endpoint")
+
+        if parsed.scheme.lower().startswith("socks"):
+            manager = super().proxy_manager_for(proxy, **proxy_kwargs)
+            socks_options = dict(manager.connection_pool_kw["_socks_options"])
+            socks_options["proxy_host"] = self._pinned_ip
+            manager.connection_pool_kw["_socks_options"] = socks_options
+        else:
+            manager = _PinnedProxyManager(
+                proxy,
+                pinned_proxy_ip=self._pinned_ip,
+                proxy_headers=self.proxy_headers(proxy),
+                num_pools=self._pool_connections,
+                maxsize=self._pool_maxsize,
+                block=self._pool_block,
+                **proxy_kwargs,
+            )
+            self.proxy_manager[proxy] = manager
+        return manager
+
+
+class _PinnedRequests:
+    def __init__(self, pinned_session: requests.Session) -> None:
+        self._pinned_session = pinned_session
+
+    def get(self, url: str, **kwargs: Any):
+        if kwargs.get("proxies"):
+            return self._pinned_session.get(url, **kwargs)
+        return requests.get(url, **kwargs)
+
+
+def _validate_public_proxy_host(host: str, port: int) -> str:
+    try:
+        literal = ipaddress.ip_address(str(host or "").strip())
+    except ValueError:
+        literal = None
+    if literal is not None:
+        if not literal.is_global:
+            raise HTTPException(status_code=400, detail="真实检测仅允许公网代理地址")
+        return str(literal)
+    try:
+        resolved = [
+            str(entry[4][0])
+            for entry in socket.getaddrinfo(
+                str(host or "").strip(),
+                int(port),
+                type=socket.SOCK_STREAM,
+            )
+            if entry and len(entry) >= 5 and entry[4]
+        ]
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail="代理主机无法解析") from exc
+    if not resolved:
+        raise HTTPException(status_code=400, detail="代理主机无法解析")
+    pinned_ip = ""
+    for address in resolved:
+        try:
+            parsed = ipaddress.ip_address(address)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="代理主机解析结果无效") from exc
+        if not parsed.is_global:
+            raise HTTPException(status_code=400, detail="真实检测不允许连接内网、回环或保留地址")
+        if not pinned_ip:
+            pinned_ip = str(parsed)
+    return pinned_ip
+
+
+def _run_proxy_connection_check(
+    proxy: dict[str, Any],
+    *,
+    previous_exit_ip: str = "",
+) -> dict[str, Any]:
+    _, host, port = _validate_proxy_endpoint(
+        proxy.get("proxy_type") or "http",
+        proxy.get("host") or "",
+        proxy.get("port") or 0,
+    )
+    pinned_ip = _validate_public_proxy_host(host, port)
+    session = requests.Session()
+    adapter = _PinnedProxyAdapter(
+        original_host=host,
+        original_port=port,
+        pinned_ip=pinned_ip,
+    )
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+
+    check_globals = dict(_social_run_proxy_connection_check.__globals__)
+    check_globals["requests"] = _PinnedRequests(session)
+    pinned_check = types.FunctionType(
+        _social_run_proxy_connection_check.__code__,
+        check_globals,
+        _social_run_proxy_connection_check.__name__,
+        _social_run_proxy_connection_check.__defaults__,
+        _social_run_proxy_connection_check.__closure__,
+    )
+    pinned_check.__kwdefaults__ = _social_run_proxy_connection_check.__kwdefaults__
+    try:
+        return pinned_check(proxy, previous_exit_ip=previous_exit_ip)
+    finally:
+        session.close()
+
+
 def _record_audit(
     conn: sqlite3.Connection,
     request: Request,
@@ -334,6 +585,8 @@ def _record_audit(
     resource_id: str,
     after: dict[str, Any],
     risk_level: str = "low",
+    outcome: str = "success",
+    error_code: str = "",
 ) -> None:
     governance.record_audit(
         conn,
@@ -344,6 +597,8 @@ def _record_audit(
         resource_id=resource_id,
         after=after,
         risk_level=risk_level,
+        outcome=outcome,
+        error_code=error_code,
         **governance.request_context(request),
     )
 
@@ -1050,6 +1305,90 @@ def register_proxy_market_routes(app: FastAPI) -> None:
             row = conn.execute("SELECT * FROM proxy_market_items WHERE id = ?", (str(item_id),)).fetchone()
         return {"ok": True, "item": _admin_public(dict(row))}
 
+    @app.post("/api/admin/proxy-market/inspect")
+    def api_admin_proxy_market_inspect(
+        payload: ProxyMarketInspectPayload,
+        request: Request,
+        admin: dict[str, Any] = Depends(require_admin),
+    ):
+        username = str(payload.username or "")
+        password = str(payload.password or "")
+        resource_id = str(payload.item_id or "").strip() or "candidate"
+        item: dict[str, Any] | None = None
+        if resource_id != "candidate":
+            with db() as conn:
+                item_row = conn.execute(
+                    "SELECT * FROM proxy_market_items WHERE id = ?",
+                    (resource_id,),
+                ).fetchone()
+            if item_row is None:
+                raise HTTPException(status_code=404, detail="商城代理不存在")
+            item = dict(item_row)
+        proxy_type, host, port = _validate_proxy_endpoint(
+            payload.proxy_type,
+            payload.host,
+            payload.port,
+        )
+        if item is not None:
+            current_proxy_type, current_host, current_port = _validate_proxy_endpoint(
+                item.get("proxy_type"),
+                item.get("host"),
+                item.get("port"),
+            )
+            endpoint_unchanged = (
+                proxy_type == current_proxy_type
+                and host == current_host
+                and port == current_port
+            )
+            if endpoint_unchanged:
+                saved_username, saved_password = _decrypt_credentials(item)
+                if not username:
+                    username = saved_username
+                if not password:
+                    password = saved_password
+        _validate_proxy_credentials(username, password)
+        result = _run_proxy_connection_check(
+            {
+                "proxy_type": proxy_type,
+                "host": host,
+                "port": port,
+                "username": username,
+                "password": password,
+            }
+        )
+        safe_result = _scrub_inspection_secrets(
+            _proxy_inspection_response(result),
+            username,
+            password,
+        )
+        actor_id = _actor_user_id(admin)
+        with db() as conn:
+            _record_audit(
+                conn,
+                request,
+                actor_user_id=actor_id,
+                action="proxy_market.item.inspect",
+                resource_type="proxy_market_item",
+                resource_id=resource_id,
+                after={
+                    "proxy_type": proxy_type,
+                    "port": port,
+                    "country": safe_result["detected"]["country"],
+                },
+                risk_level="low" if safe_result["ok"] else "medium",
+                outcome="success" if safe_result["ok"] else "failed",
+                error_code=safe_result["error_code"],
+            )
+        if not safe_result["ok"]:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": safe_result["error"] or "代理检测失败，请检查连接信息后重试",
+                    "check": safe_result,
+                },
+            )
+        return {"ok": True, "check": safe_result}
+
     @app.post("/api/admin/proxy-market/items/{item_id}/test-and-publish")
     def api_admin_proxy_market_test_publish(
         item_id: str,
@@ -1187,14 +1526,14 @@ def register_proxy_market_routes(app: FastAPI) -> None:
                     actor_id,
                     username_ciphertext,
                     password_ciphertext,
-                    str(response.get("country") or ""),
-                    str(response.get("country") or ""),
+                    str(response.get("country_code") or response.get("country") or ""),
+                    str(response.get("country_code") or response.get("country") or ""),
                     str(response.get("region") or ""),
                     str(response.get("region") or ""),
                     str(response.get("city") or ""),
                     str(response.get("city") or ""),
-                    str((response.get("connection") or {}).get("isp") or ""),
-                    str((response.get("connection") or {}).get("isp") or ""),
+                    str((response.get("connection") or {}).get("isp") or (response.get("connection") or {}).get("org") or ""),
+                    str((response.get("connection") or {}).get("isp") or (response.get("connection") or {}).get("org") or ""),
                     next_status,
                     int(result.get("latency_ms") or 0),
                     now,
@@ -1224,10 +1563,10 @@ def register_proxy_market_routes(app: FastAPI) -> None:
                     candidate["proxy_type"],
                     candidate["host"],
                     candidate["port"],
-                    str(response.get("country") or current.get("country") or ""),
+                    str(response.get("country_code") or response.get("country") or current.get("country") or ""),
                     str(response.get("region") or current.get("region") or ""),
                     str(response.get("city") or current.get("city") or ""),
-                    str((response.get("connection") or {}).get("isp") or current.get("isp") or ""),
+                    str((response.get("connection") or {}).get("isp") or (response.get("connection") or {}).get("org") or current.get("isp") or ""),
                     expires_at,
                     now,
                     json.dumps(result, ensure_ascii=False, separators=(",", ":")),

@@ -1,4 +1,5 @@
 import os
+import socket
 import tempfile
 import threading
 import time
@@ -312,9 +313,10 @@ class ProxyMarketTests(unittest.TestCase):
             "latency_ms": 82,
             "response": {
                 "country": "台湾",
+                "country_code": "TW",
                 "region": "新北",
                 "city": "板桥",
-                "connection": {"isp": "Synced ISP"},
+                "connection": {"isp": "", "org": "Synced ISP"},
             },
         }
         with patch("webapp.proxy_market._run_proxy_connection_check", return_value=check_result):
@@ -333,8 +335,266 @@ class ProxyMarketTests(unittest.TestCase):
         proxy = customer.get("/api/persona_dashboard/automation/proxies").json()["proxies"][0]
         self.assertEqual(proxy["proxy_type"], "https")
         self.assertEqual(proxy["host"], "198.51.100.20")
+        self.assertEqual(proxy["country"], "TW")
         self.assertEqual(proxy["city"], "板桥")
         self.assertEqual(proxy["isp"], "Synced ISP")
+
+    def test_proxy_check_pins_validated_ip_across_dns_rebinding(self):
+        dns_answers = [
+            [
+                (
+                    socket.AF_INET,
+                    socket.SOCK_STREAM,
+                    socket.IPPROTO_TCP,
+                    "",
+                    ("93.184.216.34", 8443),
+                )
+            ],
+            [
+                (
+                    socket.AF_INET,
+                    socket.SOCK_STREAM,
+                    socket.IPPROTO_TCP,
+                    "",
+                    ("127.0.0.1", 8443),
+                )
+            ],
+        ]
+
+        with patch(
+            "webapp.proxy_market.socket.getaddrinfo",
+            side_effect=dns_answers,
+        ) as resolver:
+            pinned_ip = proxy_market._validate_public_proxy_host(
+                "proxy-rebind.example",
+                8443,
+            )
+            adapter = proxy_market._PinnedProxyAdapter(
+                original_host="proxy-rebind.example",
+                original_port=8443,
+                pinned_ip=pinned_ip,
+            )
+            manager = adapter.proxy_manager_for(
+                "https://proxy-user:proxy-password@proxy-rebind.example:8443"
+            )
+            pool = manager.connection_from_host(
+                "api.ipify.org",
+                port=443,
+                scheme="https",
+            )
+            https_connection = pool._new_conn()
+            http_manager = adapter.proxy_manager_for(
+                "http://proxy-user:proxy-password@proxy-rebind.example:8443"
+            )
+            http_pool = http_manager.connection_from_host(
+                "api.ipify.org",
+                port=80,
+                scheme="http",
+            )
+            http_connection = http_pool._new_conn()
+            sentinel_socket = object()
+            with patch(
+                "webapp.proxy_market.urllib3_connection.create_connection",
+                return_value=sentinel_socket,
+            ) as create_connection:
+                https_connected = https_connection._new_conn()
+                http_connected = http_connection._new_conn()
+
+        self.assertIs(https_connected, sentinel_socket)
+        self.assertIs(http_connected, sentinel_socket)
+        self.assertEqual(resolver.call_count, 1)
+        self.assertEqual(manager.proxy.host, "proxy-rebind.example")
+        self.assertEqual(https_connection.host, "proxy-rebind.example")
+        self.assertEqual(http_connection.host, "proxy-rebind.example")
+        self.assertEqual(
+            [call.args[0] for call in create_connection.call_args_list],
+            [("93.184.216.34", 8443), ("93.184.216.34", 8443)],
+        )
+
+        socks_manager = adapter.proxy_manager_for(
+            "socks5://proxy-user:proxy-password@proxy-rebind.example:8443"
+        )
+        self.assertIn("proxy-rebind.example", socks_manager.proxy_url)
+        self.assertEqual(
+            socks_manager.connection_pool_kw["_socks_options"]["proxy_host"],
+            "93.184.216.34",
+        )
+
+    def test_admin_can_inspect_candidate_without_saving_or_exposing_credentials(self):
+        check_result = {
+            "ok": True,
+            "checked_at": int(time.time()),
+            "exit_ip": "8.8.8.8",
+            "latency_ms": 41,
+            "route_verified": True,
+            "static_consistent": True,
+            "residential_status": "verified",
+            "response": {
+                "country": "Taiwan",
+                "country_code": "TW",
+                "region": "Taipei",
+                "city": "Taipei",
+                "connection": {"isp": "", "org": "Detected ISP"},
+            },
+        }
+        with patch(
+            "webapp.proxy_market._run_proxy_connection_check",
+            return_value=check_result,
+        ) as connection_check:
+            inspected = self.admin.post(
+                "/api/admin/proxy-market/inspect",
+                headers=self.origin,
+                json={
+                    "proxy_type": "SOCKS5",
+                    "host": "8.8.8.8",
+                    "port": 1080,
+                    "username": "candidate-user",
+                    "password": "candidate-password",
+                },
+            )
+        self.assertEqual(inspected.status_code, 200, inspected.text)
+        candidate = connection_check.call_args.args[0]
+        self.assertEqual(candidate["proxy_type"], "socks5")
+        self.assertEqual(candidate["username"], "candidate-user")
+        self.assertEqual(candidate["password"], "candidate-password")
+        payload = inspected.json()
+        self.assertEqual(payload["check"]["detected"]["country"], "TW")
+        self.assertEqual(payload["check"]["detected"]["isp"], "Detected ISP")
+        self.assertNotIn("candidate-user", inspected.text)
+        self.assertNotIn("candidate-password", inspected.text)
+        with db() as conn:
+            self.assertEqual(
+                int(conn.execute("SELECT COUNT(*) FROM proxy_market_items").fetchone()[0]),
+                0,
+            )
+            audit = conn.execute(
+                "SELECT after_json FROM audit_events WHERE action = 'proxy_market.item.inspect' ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+        self.assertIsNotNone(audit)
+        self.assertNotIn("candidate-user", str(audit["after_json"]))
+        self.assertNotIn("candidate-password", str(audit["after_json"]))
+
+    def test_proxy_market_inspection_requires_admin_and_redacts_failed_check(self):
+        customer, _ = self._customer("inspect_customer")
+        denied = customer.post(
+            "/api/admin/proxy-market/inspect",
+            headers=self.origin,
+            json={"proxy_type": "http", "host": "1.1.1.1", "port": 8080},
+        )
+        self.assertEqual(denied.status_code, 401, denied.text)
+        blocked = self.admin.post(
+            "/api/admin/proxy-market/inspect",
+            headers=self.origin,
+            json={"proxy_type": "http", "host": "127.0.0.1", "port": 8080},
+        )
+        self.assertEqual(blocked.status_code, 400, blocked.text)
+        with patch(
+            "webapp.proxy_market._run_proxy_connection_check",
+            return_value={
+                "ok": False,
+                "error_code": "ProxyError",
+                "error": "candidate%2Buser:candidate%2Fpassword%3F was rejected",
+            },
+        ):
+            failed = self.admin.post(
+                "/api/admin/proxy-market/inspect",
+                headers=self.origin,
+                json={
+                    "proxy_type": "http",
+                    "host": "1.1.1.1",
+                    "port": 8080,
+                    "username": "candidate+user",
+                    "password": "candidate/password?",
+                },
+            )
+        self.assertEqual(failed.status_code, 409, failed.text)
+        self.assertNotIn("candidate+user", failed.text)
+        self.assertNotIn("candidate/password?", failed.text)
+        self.assertNotIn("candidate%2Buser", failed.text)
+        self.assertNotIn("candidate%2Fpassword%3F", failed.text)
+        with db() as conn:
+            audit = conn.execute(
+                """
+                SELECT outcome, error_code, after_json
+                FROM audit_events
+                WHERE action = 'proxy_market.item.inspect'
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        self.assertEqual(audit["outcome"], "failed")
+        self.assertEqual(audit["error_code"], "ProxyError")
+        self.assertNotIn("candidate+user", str(audit["after_json"]))
+        self.assertNotIn("candidate/password?", str(audit["after_json"]))
+        self.assertNotIn("candidate%2Buser", str(audit["after_json"]))
+        self.assertNotIn("candidate%2Fpassword%3F", str(audit["after_json"]))
+
+    def test_inspection_reuses_saved_credentials_only_for_unchanged_endpoint(self):
+        item = self._market_item("TW-TPE-INSPECT-CREDENTIALS")
+        with db() as conn:
+            before = dict(
+                conn.execute(
+                    """
+                    SELECT username_ciphertext, password_ciphertext, version, status,
+                           health_status, updated_at
+                    FROM proxy_market_items
+                    WHERE id = ?
+                    """,
+                    (item["id"],),
+                ).fetchone()
+            )
+        check_result = {
+            "ok": True,
+            "response": {"country_code": "TW", "connection": {}},
+        }
+        with (
+            patch(
+                "webapp.proxy_market._run_proxy_connection_check",
+                return_value=check_result,
+            ) as connection_check,
+            patch("webapp.proxy_market._validate_public_proxy_host"),
+        ):
+            unchanged = self.admin.post(
+                "/api/admin/proxy-market/inspect",
+                headers=self.origin,
+                json={
+                    "item_id": item["id"],
+                    "proxy_type": "socks5",
+                    "host": "203.0.113.10",
+                    "port": 1080,
+                },
+            )
+            changed = self.admin.post(
+                "/api/admin/proxy-market/inspect",
+                headers=self.origin,
+                json={
+                    "item_id": item["id"],
+                    "proxy_type": "socks5",
+                    "host": "203.0.113.11",
+                    "port": 1080,
+                },
+            )
+        self.assertEqual(unchanged.status_code, 200, unchanged.text)
+        self.assertEqual(changed.status_code, 200, changed.text)
+        first_candidate = connection_check.call_args_list[0].args[0]
+        second_candidate = connection_check.call_args_list[1].args[0]
+        self.assertEqual(first_candidate["username"], "proxy-user")
+        self.assertEqual(first_candidate["password"], "proxy-password")
+        self.assertEqual(second_candidate["username"], "")
+        self.assertEqual(second_candidate["password"], "")
+        with db() as conn:
+            after = dict(
+                conn.execute(
+                    """
+                    SELECT username_ciphertext, password_ciphertext, version, status,
+                           health_status, updated_at
+                    FROM proxy_market_items
+                    WHERE id = ?
+                    """,
+                    (item["id"],),
+                ).fetchone()
+            )
+        self.assertEqual(after, before)
 
     def test_draft_cannot_be_published_without_a_fresh_health_check(self):
         created = self.admin.post(

@@ -131,6 +131,58 @@
       resize: vertical;
     }
 
+    .proxy-market-smart-import {
+      grid-column: 1 / -1;
+      padding: 12px;
+      border: 1px solid var(--line, #d9e0e8);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--accent, #2563eb) 4%, var(--surface, #fff));
+    }
+
+    .proxy-market-smart-import-head,
+    .proxy-market-smart-import-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .proxy-market-smart-import-head {
+      margin-bottom: 8px;
+    }
+
+    .proxy-market-smart-import-head strong {
+      display: block;
+      margin-bottom: 2px;
+    }
+
+    .proxy-market-smart-import textarea {
+      width: 100%;
+      min-height: 68px;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+
+    .proxy-market-smart-import-actions {
+      margin-top: 8px;
+    }
+
+    .proxy-market-smart-import-actions .proxy-market-admin-actions {
+      flex-shrink: 0;
+    }
+
+    .proxy-market-smart-result {
+      min-width: 0;
+      color: var(--muted, #64748b);
+    }
+
+    .proxy-market-smart-result[data-state="success"] {
+      color: var(--success, #14804a);
+    }
+
+    .proxy-market-smart-result[data-state="error"] {
+      color: var(--danger, #c62828);
+    }
+
     .proxy-market-credential-note {
       display: flex;
       align-items: center;
@@ -223,7 +275,8 @@
     @media (max-width: 760px) {
       .proxy-market-admin-head-actions,
       .proxy-market-admin-band-head,
-      .proxy-market-admin-editor-actions {
+      .proxy-market-admin-editor-actions,
+      .proxy-market-smart-import-actions {
         align-items: stretch;
         flex-direction: column;
       }
@@ -920,6 +973,39 @@
             </div>
           </div>
           <form id="proxyMarketItemForm" class="proxy-market-admin-form" novalidate>
+            <div class="proxy-market-smart-import">
+              <div class="proxy-market-smart-import-head">
+                <div>
+                  <strong>智能识别代理信息</strong>
+                  <div class="small">粘贴代理链接、主机端口凭据、JSON 或键值文本，系统会自动拆分到对应字段。</div>
+                </div>
+              </div>
+              <textarea
+                id="proxyMarketSmartInput"
+                aria-label="待识别的代理信息"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="例如 socks5://user:password@208.113.11.225:7778&#10;也支持 208.113.11.225:7778:user:password 或 JSON / 多行键值"
+              ></textarea>
+              <div class="proxy-market-smart-import-actions">
+                <span class="small proxy-market-smart-result" id="proxyMarketSmartResult" role="status" aria-live="polite">粘贴后会即时识别；真实网络检测仅在点击检测按钮时执行。</span>
+                <div class="proxy-market-admin-actions">
+                  <button id="btnPasteProxyMarketSmartInput" type="button" class="ghost" title="从剪贴板粘贴">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5h6M9 3h6v4H9z"></path><path d="M7 5H5v16h14V5h-2"></path></svg>
+                    粘贴
+                  </button>
+                  <button id="btnParseProxyMarketSmartInput" type="button" class="ghost">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M4 12h7M4 17h5"></path><path d="m15 15 2 2 4-5"></path></svg>
+                    识别并填充
+                  </button>
+                  <button id="btnInspectProxyMarketConnection" type="button" class="primary">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="m16 16 4 4M8 11h6M11 8v6"></path></svg>
+                    检测并补全地区
+                  </button>
+                </div>
+              </div>
+            </div>
+
             <label><span>SKU</span><input id="proxyMarketSku" maxlength="80" pattern="[A-Za-z0-9._-]{2,80}" placeholder="TW-TPE-001" required></label>
             <label><span>显示名称</span><input id="proxyMarketDisplayName" maxlength="120" placeholder="台湾台北静态住宅代理"></label>
             <label><span>供应商键</span><input id="proxyMarketProviderKey" maxlength="80" placeholder="provider-a"></label>

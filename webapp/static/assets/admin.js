@@ -1629,6 +1629,7 @@ const adminState = {
   proxyMarketItemRows: [],
   proxyMarketAllocationRows: [],
   proxyMarketSelectedItemId: null,
+  proxyMarketInspectRequestId: 0,
   proxyMarketSettings: null,
   proxyMarketLoadingPromise: null,
   customerGroupRows: [],
@@ -5311,6 +5312,400 @@ function parseProxyMarketList(value) {
   return [...new Set(String(value || "").split(/[,，\n]+/).map((item) => item.trim()).filter(Boolean))];
 }
 
+const PROXY_MARKET_SMART_FIELD_ALIASES = {
+  protocol: "proxy_type", proxytype: "proxy_type", type: "proxy_type",
+  协议: "proxy_type", 代理协议: "proxy_type", 代理类型: "proxy_type",
+  host: "host", hostname: "host", server: "host", serveraddress: "host", address: "host", ip: "host",
+  主机: "host", 地址: "host", 服务器: "host", 服务器地址: "host",
+  port: "port", 端口: "port",
+  username: "username", user: "username", account: "username", login: "username",
+  用户名: "username", 用户: "username", 账号: "username",
+  password: "password", passwd: "password", pass: "password", pwd: "password", 密码: "password",
+  country: "country", countrycode: "country", 国家: "country", 国家地区: "country",
+  region: "region", state: "region", province: "region", 地区: "region", 州: "region", 省: "region", 州省: "region",
+  city: "city", 城市: "city",
+  isp: "isp", operator: "isp", carrier: "isp", 运营商: "isp", 供应商: "isp",
+  sku: "sku",
+  name: "display_name", displayname: "display_name", 名称: "display_name", 显示名称: "display_name",
+  provider: "provider_key", providerkey: "provider_key", 供应商键: "provider_key",
+  expires: "expires_at", expiry: "expires_at", expiresat: "expires_at", 到期: "expires_at", 到期时间: "expires_at",
+  pricecents: "display_price_cents", 售价分: "display_price_cents",
+  currency: "currency", 币种: "currency",
+  billingcycle: "billing_cycle", 计费周期: "billing_cycle",
+  tags: "tags", 标签: "tags",
+  usecases: "use_cases", 用途: "use_cases", 适用场景: "use_cases",
+  description: "description", note: "description", 说明: "description", 公开说明: "description",
+};
+
+let proxyMarketSmartParseTimer = 0;
+
+function normalizeProxyMarketSmartKey(value) {
+  return String(value || "").trim().toLowerCase().replace(/[\s_.\-/]+/g, "");
+}
+
+function normalizeProxyMarketProtocol(value) {
+  const clean = String(value || "").trim().toLowerCase().replace(/:$/, "");
+  if (["socks", "socks5", "socks5h"].includes(clean)) return "socks5";
+  if (clean === "http") return "http";
+  if (clean === "https") return "https";
+  return "";
+}
+
+function decodeProxyMarketCredential(value) {
+  try {
+    return decodeURIComponent(String(value || ""));
+  } catch {
+    return String(value || "");
+  }
+}
+
+function parseProxyMarketEndpoint(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return {};
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
+    try {
+      const parsed = new URL(raw);
+      const proxyType = normalizeProxyMarketProtocol(parsed.protocol);
+      if (
+        !proxyType
+        || !parsed.hostname
+        || (parsed.pathname && parsed.pathname !== "/")
+        || parsed.search
+        || parsed.hash
+      ) return {};
+      const defaultPort = proxyType === "http" ? 80 : proxyType === "https" ? 443 : 1080;
+      return {
+        proxy_type: proxyType,
+        host: parsed.hostname.replace(/^\[|\]$/g, ""),
+        port: Number(parsed.port || defaultPort),
+        username: decodeProxyMarketCredential(parsed.username),
+        password: decodeProxyMarketCredential(parsed.password),
+        _credentials_specified: true,
+      };
+    } catch {
+      return {};
+    }
+  }
+  let match = raw.match(/^([^:@\s]+):([^@\s]*)@(\[[^\]]+\]|[^:\s]+):(\d{1,5})$/);
+  if (match) {
+    return {
+      host: match[3].replace(/^\[|\]$/g, ""),
+      port: Number(match[4]),
+      username: decodeProxyMarketCredential(match[1]),
+      password: decodeProxyMarketCredential(match[2]),
+      _credentials_specified: true,
+    };
+  }
+  match = raw.match(/^(\[[^\]]+\]|[^:\s|]+)[|:](\d{1,5})[|:]([^:|]*)[|:](.*)$/);
+  if (match) {
+    return {
+      host: match[1].replace(/^\[|\]$/g, ""),
+      port: Number(match[2]),
+      username: decodeProxyMarketCredential(match[3]),
+      password: decodeProxyMarketCredential(match[4]),
+      _credentials_specified: true,
+    };
+  }
+  match = raw.match(/^(\[[^\]]+\]|[^:\s|]+)[|:](\d{1,5})$/);
+  if (match) {
+    return {
+      host: match[1].replace(/^\[|\]$/g, ""),
+      port: Number(match[2]),
+      username: "",
+      password: "",
+      _credentials_specified: true,
+    };
+  }
+  return {};
+}
+
+function flattenProxyMarketSmartObject(value, output = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return output;
+  Object.entries(value).forEach(([key, fieldValue]) => {
+    if (fieldValue && typeof fieldValue === "object" && !Array.isArray(fieldValue)) {
+      flattenProxyMarketSmartObject(fieldValue, output);
+      return;
+    }
+    const mapped = PROXY_MARKET_SMART_FIELD_ALIASES[normalizeProxyMarketSmartKey(key)];
+    if (mapped && fieldValue !== null && fieldValue !== undefined) output[mapped] = fieldValue;
+  });
+  return output;
+}
+
+function parseProxyMarketSmartInput(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return {};
+  let parsed = {};
+  const errors = [];
+  let inputMode = "endpoint";
+  if (raw.startsWith("{")) {
+    inputMode = "structured";
+    try {
+      parsed = flattenProxyMarketSmartObject(JSON.parse(raw));
+    } catch {
+      errors.push("JSON 格式无法识别");
+    }
+  } else {
+    const hasPairSeparators = /\n/.test(raw);
+    let matchedPair = false;
+    raw.split(/\n+/).forEach((segment) => {
+      const pair = segment.match(/^\s*([^:=：]+?)\s*([:=：])\s*(.*?)\s*$/);
+      if (!pair) return;
+      const mapped = PROXY_MARKET_SMART_FIELD_ALIASES[normalizeProxyMarketSmartKey(pair[1])];
+      if (!mapped || (pair[2] === ":" && !hasPairSeparators)) return;
+      matchedPair = true;
+      if (pair[3] !== "" || mapped === "username" || mapped === "password") parsed[mapped] = pair[3];
+    });
+    if (matchedPair) inputMode = "structured";
+    else parsed = parseProxyMarketEndpoint(raw);
+  }
+  const hasOwn = (field) => Object.prototype.hasOwnProperty.call(parsed, field);
+  if (inputMode === "structured") {
+    parsed._username_specified = hasOwn("username");
+    parsed._password_specified = hasOwn("password");
+    parsed._credentials_specified = parsed._username_specified || parsed._password_specified;
+  } else if (parsed.host && parsed.port) {
+    parsed._username_specified = true;
+    parsed._password_specified = true;
+    parsed._credentials_specified = true;
+  }
+  const connectionFields = ["proxy_type", "host", "port", "username", "password"];
+  const hasConnectionInput = connectionFields.some((field) => hasOwn(field));
+  if (hasOwn("proxy_type")) {
+    const protocol = normalizeProxyMarketProtocol(parsed.proxy_type);
+    if (protocol) parsed.proxy_type = protocol;
+    else errors.push("代理协议仅支持 SOCKS5、HTTP 或 HTTPS");
+  }
+  if (hasOwn("host")) {
+    parsed.host = String(parsed.host || "").trim().replace(/^\[|\]$/g, "");
+    if (!parsed.host || /\s/.test(parsed.host)) errors.push("代理主机格式无效");
+  }
+  if (hasOwn("port")) {
+    const port = Number(parsed.port);
+    if (Number.isInteger(port) && port >= 1 && port <= 65535) parsed.port = port;
+    else errors.push("代理端口必须是 1-65535 的整数");
+  }
+  if (hasConnectionInput && (!hasOwn("host") || !hasOwn("port"))) {
+    errors.push("连接信息必须同时包含主机和端口");
+  }
+  if (!Object.keys(parsed).some((field) => !field.startsWith("_")) && !errors.length) {
+    errors.push("未识别到有效代理字段，请检查格式");
+  }
+  if (parsed.expires_at) {
+    const numericExpiry = Number(parsed.expires_at);
+    const expiresAt = Number.isFinite(numericExpiry)
+      ? (numericExpiry < 1_000_000_000_000 ? numericExpiry * 1000 : numericExpiry)
+      : Date.parse(String(parsed.expires_at));
+    if (Number.isFinite(expiresAt) && expiresAt > 0) {
+      parsed.expires_at = localInputFromTimestamp(Math.floor(expiresAt / 1000));
+    } else {
+      errors.push("到期时间格式无法识别");
+    }
+  }
+  if (parsed.display_price_cents !== undefined) {
+    const price = Math.round(Number(parsed.display_price_cents));
+    if (Number.isFinite(price) && price >= 0) parsed.display_price_cents = price;
+    else errors.push("售价（分）必须为非负整数");
+  }
+  if (errors.length) parsed._errors = errors;
+  return parsed;
+}
+
+function proxyMarketStableHash(value) {
+  let hash = 0x811c9dc5;
+  for (const character of String(value || "")) {
+    hash ^= character.codePointAt(0);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36).padStart(7, "0");
+}
+
+function proxyMarketGeneratedSku(host, port, proxyType = "", username = "", providerKey = "") {
+  const normalizedHost = String(host || "").trim().toLowerCase();
+  const normalizedPort = Number(port || 0);
+  const fingerprint = [
+    normalizeProxyMarketProtocol(proxyType) || "proxy",
+    normalizedHost,
+    normalizedPort,
+    String(username || "").trim(),
+    String(providerKey || "").trim(),
+  ].join("|");
+  const hostLabel = normalizedHost.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 42) || "proxy";
+  return `IP-${hostLabel}-${normalizedPort}-${proxyMarketStableHash(fingerprint)}`
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 80);
+}
+
+function setProxyMarketSmartResult(message, state = "") {
+  const node = el("proxyMarketSmartResult");
+  if (!node) return;
+  node.textContent = message || "";
+  if (state) node.dataset.state = state;
+  else delete node.dataset.state;
+}
+
+function applyProxyMarketSmartInput({ quiet = false } = {}) {
+  const input = el("proxyMarketSmartInput");
+  if (!input?.value?.trim()) return null;
+  const parsed = parseProxyMarketSmartInput(input?.value);
+  if (parsed._errors?.length) {
+    setProxyMarketSmartResult(parsed._errors.join("；"), "error");
+    return null;
+  }
+  const previousHost = el("proxyMarketHost")?.value?.trim() || "";
+  const previousPort = Number(el("proxyMarketPort")?.value || 0);
+  const previousProxyType = el("proxyMarketProxyType")?.value || "";
+  const previousUsername = el("proxyMarketUsername")?.value || "";
+  const previousProviderKey = el("proxyMarketProviderKey")?.value || "";
+  const currentSku = el("proxyMarketSku")?.value?.trim() || "";
+  const currentDisplayName = el("proxyMarketDisplayName")?.value?.trim() || "";
+  const skuCanAutofill = !currentSku || (
+    previousHost
+    && previousPort
+    && currentSku === proxyMarketGeneratedSku(
+      previousHost,
+      previousPort,
+      previousProxyType,
+      previousUsername,
+      previousProviderKey,
+    )
+  );
+  const displayNameCanAutofill = !currentDisplayName || (
+    previousHost
+    && currentDisplayName === `${previousHost} 静态住宅代理`
+  );
+  const fieldMap = {
+    proxy_type: "proxyMarketProxyType", host: "proxyMarketHost", port: "proxyMarketPort",
+    username: "proxyMarketUsername", password: "proxyMarketPassword",
+    country: "proxyMarketCountry", region: "proxyMarketRegion", city: "proxyMarketCity", isp: "proxyMarketIsp",
+    sku: "proxyMarketSku", display_name: "proxyMarketDisplayName", provider_key: "proxyMarketProviderKey",
+    expires_at: "proxyMarketExpiresAt", display_price_cents: "proxyMarketPriceCents",
+    currency: "proxyMarketCurrency", billing_cycle: "proxyMarketBillingCycle",
+    tags: "proxyMarketTags", use_cases: "proxyMarketUseCases", description: "proxyMarketDescription",
+  };
+  const applied = [];
+  Object.entries(fieldMap).forEach(([field, id]) => {
+    if (parsed[field] === undefined || parsed[field] === null || parsed[field] === "") return;
+    const control = el(id);
+    if (!control || control.disabled) return;
+    control.value = Array.isArray(parsed[field]) ? parsed[field].join(", ") : String(parsed[field]);
+    applied.push(field);
+  });
+  if (parsed._username_specified && el("proxyMarketUsername")) {
+    el("proxyMarketUsername").value = String(parsed.username || "");
+    applied.push("username");
+  }
+  if (parsed._password_specified && el("proxyMarketPassword")) {
+    el("proxyMarketPassword").value = String(parsed.password || "");
+    applied.push("password");
+  }
+  if (parsed._credentials_specified) {
+    applied.push("credentials");
+  }
+  const host = String(parsed.host || el("proxyMarketHost")?.value || "").trim();
+  const port = Number(parsed.port || el("proxyMarketPort")?.value || 0);
+  if (!adminState.proxyMarketSelectedItemId && host && port && skuCanAutofill) {
+    el("proxyMarketSku").value = proxyMarketGeneratedSku(
+      host,
+      port,
+      el("proxyMarketProxyType")?.value || "",
+      el("proxyMarketUsername")?.value || "",
+      el("proxyMarketProviderKey")?.value || "",
+    );
+    applied.push("sku");
+  }
+  if (host && displayNameCanAutofill) {
+    el("proxyMarketDisplayName").value = `${host} 静态住宅代理`;
+    applied.push("display_name");
+  }
+  if (!applied.length) {
+    if (!quiet && input?.value?.trim()) setProxyMarketSmartResult("未识别到有效代理字段，请检查格式。", "error");
+    return null;
+  }
+  if (input) input.value = "";
+  const labels = [];
+  if (parsed.proxy_type) labels.push(String(parsed.proxy_type).toUpperCase());
+  if (parsed.host) labels.push("主机");
+  if (parsed.port) labels.push("端口");
+  if (parsed._username_specified && parsed.username) labels.push("账号");
+  if (parsed._password_specified && parsed.password) labels.push("密码（已隐藏）");
+  if (
+    parsed._username_specified
+    && parsed._password_specified
+    && !parsed.username
+    && !parsed.password
+  ) labels.push("无认证");
+  const metadataLabels = { country: "国家", region: "地区", city: "城市", isp: "ISP" };
+  Object.entries(metadataLabels).forEach(([field, label]) => { if (parsed[field]) labels.push(label); });
+  setProxyMarketSmartResult(`已填充${labels.length ? `：${labels.join("、")}` : "可识别字段"}；原始代理串已从输入框清除。`, "success");
+  setText("proxyMarketEditorHint", "智能识别结果尚未保存；连接与凭据需通过真实检测后才会发布。");
+  return parsed;
+}
+
+async function inspectProxyMarketConnection() {
+  if (el("proxyMarketSmartInput")?.value?.trim() && !applyProxyMarketSmartInput()) return null;
+  const host = el("proxyMarketHost")?.value?.trim() || "";
+  const port = Number(el("proxyMarketPort")?.value || 0);
+  if (!host || !Number.isInteger(port) || port < 1 || port > 65535) {
+    setProxyMarketSmartResult("请先提供有效的主机和 1-65535 端口。", "error");
+    return null;
+  }
+  const requestId = ++adminState.proxyMarketInspectRequestId;
+  const itemId = String(adminState.proxyMarketSelectedItemId || "");
+  const proxyType = el("proxyMarketProxyType")?.value || "socks5";
+  const username = String(el("proxyMarketUsername")?.value || "");
+  const password = String(el("proxyMarketPassword")?.value || "");
+  const connectionStillMatches = () => (
+    requestId === adminState.proxyMarketInspectRequestId
+    && itemId === String(adminState.proxyMarketSelectedItemId || "")
+    && proxyType === (el("proxyMarketProxyType")?.value || "socks5")
+    && host === (el("proxyMarketHost")?.value?.trim() || "")
+    && port === Number(el("proxyMarketPort")?.value || 0)
+    && username === String(el("proxyMarketUsername")?.value || "")
+    && password === String(el("proxyMarketPassword")?.value || "")
+  );
+  const button = el("btnInspectProxyMarketConnection");
+  if (button) button.disabled = true;
+  setProxyMarketSmartResult("正在进行真实网络检测并识别地区、城市和 ISP...");
+  try {
+    const result = await api("/api/admin/proxy-market/inspect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        item_id: itemId,
+        proxy_type: proxyType,
+        host,
+        port,
+        username,
+        password,
+      }),
+    });
+    if (!connectionStillMatches()) return null;
+    const check = result?.check || {};
+    const detected = check.detected || {};
+    [
+      ["proxyMarketCountry", detected.country],
+      ["proxyMarketRegion", detected.region],
+      ["proxyMarketCity", detected.city],
+      ["proxyMarketIsp", detected.isp],
+    ].forEach(([id, value]) => {
+      if (el(id) && String(value || "").trim()) el(id).value = String(value).trim();
+    });
+    const location = [detected.country_name || detected.country, detected.region, detected.city].filter(Boolean).join(" / ");
+    setProxyMarketSmartResult(
+      `检测通过${location ? `：${location}` : ""}${detected.isp ? ` · ${detected.isp}` : ""}${Number(check.latency_ms || 0) ? ` · ${Number(check.latency_ms)} ms` : ""}`,
+      "success",
+    );
+    return result;
+  } catch (error) {
+    if (connectionStillMatches()) setProxyMarketSmartResult(`检测失败：${getErrorMessage(error)}`, "error");
+    throw error;
+  } finally {
+    if (button && requestId === adminState.proxyMarketInspectRequestId) button.disabled = false;
+  }
+}
+
 function proxyMarketItemById(itemId) {
   return adminState.proxyMarketItemRows.find((item) => String(item.id || "") === String(itemId || "")) || null;
 }
@@ -5618,8 +6013,11 @@ async function loadProxyMarketWorkspace() {
 }
 
 function resetProxyMarketEditor({ focus = false } = {}) {
+  adminState.proxyMarketInspectRequestId += 1;
   adminState.proxyMarketSelectedItemId = null;
   el("proxyMarketItemForm")?.reset();
+  if (el("btnInspectProxyMarketConnection")) el("btnInspectProxyMarketConnection").disabled = false;
+  if (proxyMarketSmartParseTimer) window.clearTimeout(proxyMarketSmartParseTimer);
   if (el("proxyMarketSku")) el("proxyMarketSku").disabled = false;
   if (el("proxyMarketCurrency")) el("proxyMarketCurrency").value = "TWD";
   if (el("proxyMarketPriceCents")) el("proxyMarketPriceCents").value = "0";
@@ -5629,6 +6027,7 @@ function resetProxyMarketEditor({ focus = false } = {}) {
   setText("proxyMarketEditorHint", "先保存草稿，或直接执行真实检测并发布。");
   setText("proxyMarketEditorState", "当前为新建模式");
   setText("proxyMarketCredentialNote", "后台不会回显已保存凭据。编辑时空密码不会覆盖原密码。");
+  setProxyMarketSmartResult("粘贴后会即时识别；真实网络检测仅在点击检测按钮时执行。");
   setMsg("proxyMarketItemMsg", "");
   if (focus) {
     el("proxyMarketEditor")?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -5639,7 +6038,11 @@ function resetProxyMarketEditor({ focus = false } = {}) {
 function editProxyMarketItem(itemId, { focus = true } = {}) {
   const item = proxyMarketItemById(itemId);
   if (!item) return;
+  adminState.proxyMarketInspectRequestId += 1;
   adminState.proxyMarketSelectedItemId = String(item.id || "");
+  if (el("btnInspectProxyMarketConnection")) el("btnInspectProxyMarketConnection").disabled = false;
+  if (el("proxyMarketSmartInput")) el("proxyMarketSmartInput").value = "";
+  setProxyMarketSmartResult("可粘贴新连接信息覆盖候选字段；已保存凭据不会回显。");
   const values = {
     proxyMarketSku: item.sku,
     proxyMarketDisplayName: item.display_name,
@@ -6522,6 +6925,39 @@ function bindActions() {
   });
   el("btnNewProxyMarketItem")?.addEventListener("click", () => resetProxyMarketEditor({ focus: true }));
   el("btnCancelProxyMarketEdit")?.addEventListener("click", () => resetProxyMarketEditor({ focus: true }));
+  el("btnPasteProxyMarketSmartInput")?.addEventListener("click", async () => {
+    try {
+      const value = await navigator.clipboard.readText();
+      if (!value.trim()) {
+        setProxyMarketSmartResult("剪贴板中没有可识别的文本。", "error");
+        return;
+      }
+      if (el("proxyMarketSmartInput")) el("proxyMarketSmartInput").value = value;
+      applyProxyMarketSmartInput();
+    } catch {
+      el("proxyMarketSmartInput")?.focus();
+      setProxyMarketSmartResult("浏览器未允许读取剪贴板，请手动粘贴后识别。", "error");
+    }
+  });
+  el("btnParseProxyMarketSmartInput")?.addEventListener("click", () => applyProxyMarketSmartInput());
+  el("btnInspectProxyMarketConnection")?.addEventListener("click", async () => {
+    try {
+      await inspectProxyMarketConnection();
+    } catch {}
+  });
+  el("proxyMarketSmartInput")?.addEventListener("paste", () => {
+    if (proxyMarketSmartParseTimer) window.clearTimeout(proxyMarketSmartParseTimer);
+    proxyMarketSmartParseTimer = window.setTimeout(() => applyProxyMarketSmartInput(), 0);
+  });
+  el("proxyMarketSmartInput")?.addEventListener("blur", () => {
+    if (el("proxyMarketSmartInput")?.value?.trim()) applyProxyMarketSmartInput({ quiet: true });
+  });
+  el("proxyMarketSmartInput")?.addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+      event.preventDefault();
+      applyProxyMarketSmartInput();
+    }
+  });
   el("proxyMarketItemForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
