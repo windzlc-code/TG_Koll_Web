@@ -6025,7 +6025,8 @@ function renderProxyMarketItems(payload = {}) {
     row.appendChild(priceCell);
 
     const actionCell = document.createElement("td");
-    actionCell.className = "proxy-market-table-actions";
+    const actionRow = document.createElement("div");
+    actionRow.className = "proxy-market-table-actions";
     const edit = createProxyMarketIconButton(
       `编辑 ${item.sku || item.id}`,
       "edit",
@@ -6077,7 +6078,8 @@ function renderProxyMarketItems(payload = {}) {
       "danger",
     );
     archive.disabled = String(item.status) === "archived";
-    actionCell.append(edit, publish, status, archive);
+    actionRow.append(edit, publish, status, archive);
+    actionCell.appendChild(actionRow);
     row.appendChild(actionCell);
     body.appendChild(row);
   });

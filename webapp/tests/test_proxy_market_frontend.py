@@ -29,8 +29,13 @@ class ProxyMarketFrontendTests(unittest.TestCase):
         self.assertIn('rows="6"', html)
         self.assertIn("height: 136px", html)
         self.assertIn("min-height: 136px", html)
+        self.assertIn("min-width: 248px", html)
+        self.assertIn("flex-wrap: nowrap", html)
+        self.assertIn("height: 36px", html)
+        self.assertIn("height: 44px", html)
         source = ADMIN_JS.read_text(encoding="utf-8")
         self.assertIn('String(item.pending_check_status || "") === "healthy"', source)
+        self.assertIn('actionRow.className = "proxy-market-table-actions"', source)
 
     def _run_node(self, body: str):
         node = shutil.which("node")

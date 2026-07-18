@@ -1298,10 +1298,24 @@ def register_proxy_market_routes(app: FastAPI) -> None:
                         detail="已有有效领取的代理不能转为 draft",
                     )
                 if requested == "active":
-                    raise HTTPException(
-                        status_code=409,
-                        detail="代理只能通过“真实检测”后使用“发布”进入可领取状态",
-                    )
+                    if str(current_data.get("status") or "") == "archived":
+                        raise HTTPException(status_code=409, detail="已归档的商城代理不能恢复发布")
+                    if not int(current_data.get("published_at") or 0):
+                        raise HTTPException(
+                            status_code=409,
+                            detail="代理首次发布前必须先完成真实检测",
+                        )
+                    settings = _settings(conn)
+                    if not _fresh_and_healthy(
+                        current_data,
+                        now=now,
+                        max_age_seconds=int(settings["health_max_age_seconds"]),
+                    ):
+                        raise HTTPException(
+                            status_code=409,
+                            detail="代理健康检测已过期或异常，请重新执行真实检测后发布",
+                        )
+                    requested = "allocated" if active_allocation is not None else "active"
                 updates["status"] = requested
             requested_expiry = int(
                 updates.get("expires_at", current_data.get("expires_at") or 0) or 0
@@ -1473,10 +1487,10 @@ def register_proxy_market_routes(app: FastAPI) -> None:
             if row is None:
                 raise HTTPException(status_code=404, detail="商城代理不存在")
             current = dict(row)
-            if str(current.get("status") or "") in {"disabled", "archived"}:
+            if str(current.get("status") or "") == "archived":
                 raise HTTPException(
                     status_code=409,
-                    detail="已停用或归档的商城代理不能执行真实检测",
+                    detail="已归档的商城代理不能执行真实检测",
                 )
             expected_version = int(current.get("version") or 1)
             health_max_age_seconds = int(_settings(conn)["health_max_age_seconds"])
@@ -1674,8 +1688,8 @@ def register_proxy_market_routes(app: FastAPI) -> None:
                 raise HTTPException(status_code=409, detail="检测记录不存在或已被更新，请重新检测")
             candidate = dict(check_row)
             settings = _settings(conn)
-            if str(current.get("status") or "") in {"disabled", "archived"}:
-                raise HTTPException(status_code=409, detail="已停用或归档的商城代理不能发布")
+            if str(current.get("status") or "") == "archived":
+                raise HTTPException(status_code=409, detail="已归档的商城代理不能发布")
             if (
                 str(candidate.get("health_status") or "") != "healthy"
                 or int(candidate.get("checked_at") or 0)

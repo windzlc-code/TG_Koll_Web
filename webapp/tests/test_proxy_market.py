@@ -905,6 +905,97 @@ class ProxyMarketTests(unittest.TestCase):
         catalog = TestClient(self.app).get("/api/proxy-market/catalog").json()
         self.assertEqual(catalog["total"], 0)
 
+    def test_fresh_published_item_can_resume_after_status_pause(self):
+        item = self._market_item("TW-TPE-RESUME")
+        for paused_status in ("maintenance", "disabled"):
+            paused = self.admin.patch(
+                f"/api/admin/proxy-market/items/{item['id']}",
+                headers=self.origin,
+                json={"status": paused_status},
+            )
+            self.assertEqual(paused.status_code, 200, paused.text)
+            self.assertEqual(paused.json()["item"]["status"], paused_status)
+
+            resumed = self.admin.patch(
+                f"/api/admin/proxy-market/items/{item['id']}",
+                headers=self.origin,
+                json={"status": "active"},
+            )
+            self.assertEqual(resumed.status_code, 200, resumed.text)
+            self.assertEqual(resumed.json()["item"]["status"], "active")
+            self.assertTrue(resumed.json()["item"]["available"])
+
+    def test_claimed_item_resumes_to_allocated_and_reenables_proxy(self):
+        item = self._market_item("TW-TPE-RESUME-ALLOCATED")
+        customer, _ = self._customer("resume_allocated_buyer")
+        claimed = customer.post(
+            f"/api/proxy-market/items/{item['id']}/claim",
+            headers={**self.origin, "Idempotency-Key": "resume-allocated-claim"},
+        )
+        self.assertEqual(claimed.status_code, 200, claimed.text)
+        proxy_id = claimed.json()["allocation"]["social_proxy_id"]
+
+        paused = self.admin.patch(
+            f"/api/admin/proxy-market/items/{item['id']}",
+            headers=self.origin,
+            json={"status": "maintenance"},
+        )
+        self.assertEqual(paused.status_code, 200, paused.text)
+        with db() as conn:
+            proxy = conn.execute(
+                "SELECT status FROM social_proxies WHERE id = ?",
+                (proxy_id,),
+            ).fetchone()
+        self.assertEqual(proxy["status"], "maintenance")
+
+        resumed = self.admin.patch(
+            f"/api/admin/proxy-market/items/{item['id']}",
+            headers=self.origin,
+            json={"status": "active"},
+        )
+        self.assertEqual(resumed.status_code, 200, resumed.text)
+        self.assertEqual(resumed.json()["item"]["status"], "allocated")
+        with db() as conn:
+            proxy = conn.execute(
+                "SELECT status FROM social_proxies WHERE id = ?",
+                (proxy_id,),
+            ).fetchone()
+        self.assertEqual(proxy["status"], "active")
+
+    def test_resume_requires_current_health_and_rejects_archived_items(self):
+        stale = self._market_item("TW-TPE-RESUME-STALE")
+        paused = self.admin.patch(
+            f"/api/admin/proxy-market/items/{stale['id']}",
+            headers=self.origin,
+            json={"status": "maintenance"},
+        )
+        self.assertEqual(paused.status_code, 200, paused.text)
+        with db() as conn:
+            conn.execute(
+                "UPDATE proxy_market_items SET last_check_at = ? WHERE id = ?",
+                (int(time.time()) - 8 * 24 * 60 * 60, stale["id"]),
+            )
+        rejected = self.admin.patch(
+            f"/api/admin/proxy-market/items/{stale['id']}",
+            headers=self.origin,
+            json={"status": "active"},
+        )
+        self.assertEqual(rejected.status_code, 409, rejected.text)
+
+        archived = self._market_item("TW-TPE-RESUME-ARCHIVED")
+        archived_response = self.admin.patch(
+            f"/api/admin/proxy-market/items/{archived['id']}",
+            headers=self.origin,
+            json={"status": "archived"},
+        )
+        self.assertEqual(archived_response.status_code, 200, archived_response.text)
+        restore_archived = self.admin.patch(
+            f"/api/admin/proxy-market/items/{archived['id']}",
+            headers=self.origin,
+            json={"status": "active"},
+        )
+        self.assertEqual(restore_archived.status_code, 409, restore_archived.text)
+
     def test_failed_candidate_check_keeps_the_live_claimed_proxy(self):
         item = self._market_item("TW-TPE-STABLE")
         customer, _ = self._customer("stable_buyer")
@@ -1174,26 +1265,52 @@ class ProxyMarketTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual(expired_proxy["status"], "maintenance")
 
-    def test_disabled_and_archived_items_cannot_be_republished(self):
-        for status in ("disabled", "archived"):
-            item = self._market_item(f"TW-TPE-{status.upper()}")
-            changed = self.admin.patch(
-                f"/api/admin/proxy-market/items/{item['id']}",
+    def test_archived_item_cannot_be_republished(self):
+        item = self._market_item("TW-TPE-ARCHIVED")
+        changed = self.admin.patch(
+            f"/api/admin/proxy-market/items/{item['id']}",
+            headers=self.origin,
+            json={"status": "archived"},
+        )
+        self.assertEqual(changed.status_code, 200, changed.text)
+        with patch(
+            "webapp.proxy_market._run_proxy_connection_check",
+            return_value={"ok": True, "latency_ms": 20, "response": {}},
+        ) as connection_check:
+            published = self.admin.post(
+                f"/api/admin/proxy-market/items/{item['id']}/test-and-publish",
                 headers=self.origin,
-                json={"status": status},
+                json={"host": "198.51.100.44", "port": 1081},
             )
-            self.assertEqual(changed.status_code, 200, changed.text)
-            with patch(
-                "webapp.proxy_market._run_proxy_connection_check",
-                return_value={"ok": True, "latency_ms": 20, "response": {}},
-            ) as connection_check:
-                published = self.admin.post(
-                    f"/api/admin/proxy-market/items/{item['id']}/test-and-publish",
-                    headers=self.origin,
-                    json={"host": "198.51.100.44", "port": 1081},
-                )
-            self.assertEqual(published.status_code, 409, published.text)
-            connection_check.assert_not_called()
+        self.assertEqual(published.status_code, 409, published.text)
+        connection_check.assert_not_called()
+
+    def test_stale_disabled_item_can_be_retested_and_published(self):
+        item = self._market_item("TW-TPE-DISABLED-RETEST")
+        changed = self.admin.patch(
+            f"/api/admin/proxy-market/items/{item['id']}",
+            headers=self.origin,
+            json={"status": "disabled"},
+        )
+        self.assertEqual(changed.status_code, 200, changed.text)
+        with db() as conn:
+            conn.execute(
+                "UPDATE proxy_market_items SET last_check_at = ? WHERE id = ?",
+                (int(time.time()) - 8 * 24 * 60 * 60, item["id"]),
+            )
+        with patch(
+            "webapp.proxy_market._run_proxy_connection_check",
+            return_value={"ok": True, "latency_ms": 20, "response": {}},
+        ) as connection_check:
+            published = self.admin.post(
+                f"/api/admin/proxy-market/items/{item['id']}/test-and-publish",
+                headers=self.origin,
+                json={"host": "198.51.100.44", "port": 1081},
+            )
+        self.assertEqual(published.status_code, 200, published.text)
+        self.assertEqual(published.json()["item"]["status"], "active")
+        self.assertTrue(published.json()["item"]["available"])
+        connection_check.assert_called_once()
 
     def test_publish_omitted_protocol_preserves_existing_protocol(self):
         item = self._market_item("TW-TPE-PROTOCOL")

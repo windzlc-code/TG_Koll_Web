@@ -207,6 +207,16 @@
       vertical-align: middle;
     }
 
+    .proxy-market-admin-table {
+      min-width: 1050px;
+    }
+
+    .proxy-market-admin-table th:last-child,
+    .proxy-market-admin-table td:last-child {
+      width: 248px;
+      min-width: 248px;
+    }
+
     .proxy-market-admin-table td > span,
     .proxy-market-admin-table td > small {
       display: block;
@@ -220,19 +230,25 @@
     }
 
     .proxy-market-table-actions {
-      min-width: 152px;
+      min-width: 0;
+      flex-wrap: nowrap;
+      justify-content: flex-start;
     }
 
-    .proxy-market-table-actions select {
+    .page-admin .proxy-market-table-actions select {
       width: auto;
       min-width: 92px;
-      padding-block: 7px;
+      height: 36px;
+      min-height: 36px;
+      padding-block: 0;
     }
 
-    .proxy-market-icon-button {
-      width: 34px;
-      min-width: 34px;
-      height: 34px;
+    .page-admin .proxy-market-icon-button {
+      box-sizing: border-box;
+      width: 36px;
+      min-width: 36px;
+      height: 36px;
+      min-height: 36px;
       padding: 0;
       display: inline-flex;
       align-items: center;
@@ -303,6 +319,24 @@
 
       .proxy-market-admin-stat:first-child {
         border-top: 0;
+      }
+
+      .proxy-market-admin-table th:last-child,
+      .proxy-market-admin-table td:last-child {
+        width: 272px;
+        min-width: 272px;
+      }
+
+      .page-admin .proxy-market-icon-button {
+        width: 44px;
+        min-width: 44px;
+        height: 44px;
+        min-height: 44px;
+      }
+
+      .page-admin .proxy-market-table-actions select {
+        height: 44px;
+        min-height: 44px;
       }
 
       .proxy-market-admin-form .span-2,
