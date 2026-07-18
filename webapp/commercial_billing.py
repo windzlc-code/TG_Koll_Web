@@ -41,11 +41,13 @@ DEFAULT_CATALOG: dict[str, Any] = {
         {"sku": "ai_image", "name": "AI 图片素材", "points": 0.6, "unit": "张", "implemented": True},
         {"sku": "oral_video_second", "name": "口播类短片", "points": 0.15, "unit": "秒", "implemented": False},
         {"sku": "ad_video_480p_second", "name": "广告短片 480p", "points": 1.2, "unit": "秒", "implemented": False},
-        {"sku": "ad_video_720p_second", "name": "广告短片 720p", "points": 1.4, "unit": "秒", "implemented": False},
-        {"sku": "ad_video_1080p_second", "name": "广告短片 1080p", "points": 1.6, "unit": "秒", "implemented": False},
+        {"sku": "ad_video_720p_second", "name": "广告短片 720p", "points": 1.4, "unit": "秒", "implemented": True},
+        {"sku": "ad_video_1080p_second", "name": "广告短片 1080p", "points": 1.6, "unit": "秒", "implemented": True},
         {"sku": "ad_video_2k_second", "name": "广告短片 2K", "points": 2.0, "unit": "秒", "implemented": False},
         {"sku": "ad_video_4k_second", "name": "广告短片 4K", "points": 2.4, "unit": "秒", "implemented": False},
         {"sku": "threads_auto_reply_batch", "name": "批量评论互动任务", "points": 2.0, "unit": "批", "implemented": True},
+        {"sku": "instagram_publish", "name": "Instagram 内容发布", "points": 0.1, "unit": "次", "implemented": True},
+        {"sku": "social_interaction", "name": "社交互动操作", "points": 0.1, "unit": "次", "implemented": True},
     ],
     "packages": [
         {"sku": "credits_100", "name": "轻量储值包", "price_ntd": 1000, "paid_points": 100, "bonus_points": 0, "total_points": 100, "bonus_images": 0},
@@ -98,13 +100,17 @@ def units_from_points(points: Any) -> int:
         return 0
 
 
-def enforcement_enabled() -> bool:
-    return str(os.getenv("COMMERCIAL_BILLING_ENABLED", "0") or "0").strip().lower() not in {
+def _env_enabled(name: str, default: str = "0") -> bool:
+    return str(os.getenv(name, default) or default).strip().lower() not in {
         "0",
         "false",
         "no",
         "off",
     }
+
+
+def enforcement_enabled() -> bool:
+    return _env_enabled("COMMERCIAL_BILLING_ENABLED")
 
 
 def add_calendar_month(start_ts: int) -> int:
@@ -144,6 +150,125 @@ def bootstrap_billing(conn: sqlite3.Connection, *, now: int | None = None) -> No
         conn.execute(
             "INSERT INTO billing_catalog_versions(id, version_number, status, catalog_json, effective_at, created_by, created_at, published_at) VALUES (?, 1, 'active', ?, ?, 0, ?, ?)",
             (_id("catalog"), _dumps(DEFAULT_CATALOG), current, current, current),
+        )
+    catalog_migration = conn.execute(
+        "SELECT value_json FROM admin_config WHERE key = 'commercial_billing_catalog_v2'"
+    ).fetchone()
+    if catalog_migration is None:
+        active_row = conn.execute(
+            "SELECT * FROM billing_catalog_versions WHERE status = 'active' ORDER BY version_number DESC LIMIT 1"
+        ).fetchone()
+        active_catalog = _loads(active_row["catalog_json"], {}) if active_row else {}
+        actions = list(active_catalog.get("actions") or []) if isinstance(active_catalog, dict) else []
+        action_by_sku = {
+            str(item.get("sku") or ""): item
+            for item in actions
+            if isinstance(item, dict) and str(item.get("sku") or "")
+        }
+        changed = False
+        for default_action in DEFAULT_CATALOG["actions"]:
+            sku = str(default_action["sku"])
+            current_action = action_by_sku.get(sku)
+            if current_action is None:
+                actions.append(dict(default_action))
+                action_by_sku[sku] = actions[-1]
+                changed = True
+            elif sku in {"ad_video_720p_second", "ad_video_1080p_second"} and not bool(current_action.get("implemented")):
+                current_action["implemented"] = True
+                changed = True
+        if changed and active_row is not None:
+            next_version = int(
+                conn.execute("SELECT COALESCE(MAX(version_number), 0) + 1 AS n FROM billing_catalog_versions").fetchone()["n"]
+            )
+            active_catalog["actions"] = actions
+            validate_catalog(active_catalog)
+            conn.execute("UPDATE billing_catalog_versions SET status = 'retired' WHERE status = 'active'")
+            conn.execute(
+                """
+                INSERT INTO billing_catalog_versions(
+                  id, version_number, status, catalog_json, effective_at,
+                  created_by, created_at, published_at
+                ) VALUES (?, ?, 'active', ?, ?, 0, ?, ?)
+                """,
+                (_id("catalog"), next_version, _dumps(active_catalog), current, current, current),
+            )
+        conn.execute(
+            "INSERT INTO admin_config(key, value_json, updated_at) VALUES ('commercial_billing_catalog_v2', ?, ?)",
+            (_dumps({"completed_at": current, "changed": changed}), current),
+        )
+
+    enforcement_migration = conn.execute(
+        "SELECT value_json FROM admin_config WHERE key = 'commercial_billing_enforcement_v2'"
+    ).fetchone()
+    if (
+        enforcement_migration is None
+        and enforcement_enabled()
+        and _env_enabled("COMMERCIAL_BILLING_MIGRATE_LEGACY")
+    ):
+        migrated_user_ids: list[int] = []
+        transition_end = add_calendar_month(current)
+        free_images = int(get_active_catalog(conn)["subscription"]["monthly_free_images"])
+        rows = conn.execute(
+            """
+            SELECT wallet.user_id
+            FROM billing_wallets AS wallet
+            JOIN users AS user ON user.id = wallet.user_id
+            WHERE wallet.billing_mode = 'legacy' AND user.is_admin = 0
+            """
+        ).fetchall()
+        for row in rows:
+            user_id = int(row["user_id"])
+            subscription_id = _id("subscription")
+            period_id = _id("period")
+            source_ref = f"billing-enforcement-v2:{user_id}"
+            conn.execute(
+                "UPDATE billing_wallets SET billing_mode = 'enforced', updated_at = ? WHERE user_id = ?",
+                (current, user_id),
+            )
+            if _active_subscription_count(conn, user_id, current) <= 0:
+                conn.execute(
+                    """
+                    INSERT INTO billing_subscriptions(
+                      id, user_id, plan_sku, status, current_period_end, created_at, updated_at
+                    ) VALUES (?, ?, 'vanguard_monthly', 'active', ?, ?, ?)
+                    """,
+                    (subscription_id, user_id, transition_end, current, current),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO billing_subscription_periods(
+                      id, subscription_id, user_id, source_order_id, start_at, end_at, status, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?)
+                    """,
+                    (period_id, subscription_id, user_id, source_ref, current, transition_end, current),
+                )
+                if free_images > 0:
+                    conn.execute(
+                        """
+                        INSERT INTO billing_image_grants(
+                          id, user_id, source_type, source_ref, total_count, remaining_count,
+                          available_at, expires_at, created_at, updated_at
+                        ) VALUES (?, ?, 'subscription_monthly', ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (_id("image_grant"), user_id, source_ref, free_images, free_images, current, transition_end, current, current),
+                    )
+            _insert_ledger(
+                conn,
+                user_id=user_id,
+                asset_type="audit",
+                event_type="billing_enforcement_enabled",
+                amount_units=0,
+                balance_after_units=int(ensure_wallet(conn, user_id, now=current)["credit_units"]),
+                ref_type="migration",
+                ref_id="commercial_billing_enforcement_v2",
+                idempotency_key=f"commercial_billing_enforcement_v2:{user_id}",
+                meta={"transition_subscription_end": transition_end},
+                now=current,
+            )
+            migrated_user_ids.append(user_id)
+        conn.execute(
+            "INSERT INTO admin_config(key, value_json, updated_at) VALUES ('commercial_billing_enforcement_v2', ?, ?)",
+            (_dumps({"completed_at": current, "user_ids": migrated_user_ids}), current),
         )
 
 
@@ -402,6 +527,7 @@ def _insert_ledger(
 
 def _reservation_public(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     item = dict(row)
+    meta = _loads(item.get("meta_json"), {})
     return {
         "id": str(item.get("id") or ""),
         "sku": str(item.get("sku") or ""),
@@ -410,6 +536,7 @@ def _reservation_public(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
         "charged_points": points_from_units(int(item.get("settled_credit_units") or 0)),
         "reserved_images": int(item.get("reserved_image_count") or 0),
         "free_images_used": int(item.get("settled_image_count") or 0),
+        "unlimited_compute": bool(meta.get("unlimited_compute")),
     }
 
 
@@ -463,6 +590,7 @@ def reserve_charge(
         return _reservation_public(existing)
     wallet = require_write_access(conn, int(user_id), admin_waived=admin_waived, now=current)
     rate_units, catalog_version_id = action_rate_units(conn, str(sku))
+    unlimited_compute = bool(int(wallet.get("unlimited_compute") or 0))
     waived_reason = (
         "feature_disabled"
         if not enforcement_enabled()
@@ -481,6 +609,52 @@ def reserve_charge(
                 reservation_id=reservation_id, idempotency_key=f"{idem}:waived", meta={"sku": sku, "quantity": qty}, now=current,
             )
         return _reservation_public(conn.execute("SELECT * FROM billing_reservations WHERE id = ?", (reservation_id,)).fetchone())
+
+    if unlimited_compute:
+        meta = {
+            "quantity": qty,
+            "unit_credit_units": rate_units,
+            "image": bool(image),
+            "unlimited_compute": True,
+            "theoretical_credit_units": qty * rate_units,
+        }
+        conn.execute(
+            """
+            INSERT INTO billing_reservations(
+              id, user_id, ref_type, ref_id, sku, status,
+              catalog_version_id, meta_json, idempotency_key, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 'held', ?, ?, ?, ?, ?)
+            """,
+            (
+                reservation_id,
+                int(user_id),
+                str(ref_type),
+                str(ref_id),
+                str(sku),
+                catalog_version_id,
+                _dumps(meta),
+                idem,
+                current,
+                current,
+            ),
+        )
+        _insert_ledger(
+            conn,
+            user_id=int(user_id),
+            asset_type="audit",
+            event_type="unlimited_compute_reserved",
+            amount_units=0,
+            balance_after_units=int(wallet["credit_units"]),
+            ref_type=ref_type,
+            ref_id=ref_id,
+            reservation_id=reservation_id,
+            idempotency_key=f"{idem}:unlimited",
+            meta={"sku": sku, "quantity": qty, "theoretical_credit_units": qty * rate_units},
+            now=current,
+        )
+        return _reservation_public(
+            conn.execute("SELECT * FROM billing_reservations WHERE id = ?", (reservation_id,)).fetchone()
+        )
 
     grant_holds: list[dict[str, Any]] = []
     free_images = 0
@@ -563,6 +737,33 @@ def settle_reservation(conn: sqlite3.Connection, reservation_id: str, *, actual_
     reserved_qty = max(int(meta.get("quantity") or 0), 0)
     actual = reserved_qty if actual_quantity is None else max(min(int(actual_quantity or 0), reserved_qty), 0)
     rate_units = max(int(meta.get("unit_credit_units") or 0), 0)
+    if bool(meta.get("unlimited_compute")):
+        wallet = ensure_wallet(conn, int(row["user_id"]), now=current)
+        conn.execute(
+            "UPDATE billing_reservations SET status = 'settled', updated_at = ? WHERE id = ? AND status = 'held'",
+            (current, str(row["id"])),
+        )
+        _insert_ledger(
+            conn,
+            user_id=int(row["user_id"]),
+            asset_type="audit",
+            event_type="unlimited_compute_settled",
+            amount_units=0,
+            balance_after_units=int(wallet["credit_units"]),
+            ref_type=str(row["ref_type"]),
+            ref_id=str(row["ref_id"]),
+            reservation_id=str(row["id"]),
+            idempotency_key=f"{row['id']}:unlimited_settled",
+            meta={
+                "sku": str(row["sku"]),
+                "actual_quantity": actual,
+                "theoretical_credit_units": actual * rate_units,
+            },
+            now=current,
+        )
+        return _reservation_public(
+            conn.execute("SELECT * FROM billing_reservations WHERE id = ?", (str(row["id"]),)).fetchone()
+        )
     image = bool(meta.get("image"))
     reserved_credit = int(row["reserved_credit_units"] or 0)
     reserved_images = int(row["reserved_image_count"] or 0)
@@ -911,7 +1112,60 @@ def adjust_credit(conn: sqlite3.Connection, *, user_id: int, delta_units: int, a
         balance_after_units=after, ref_type="admin_adjustment", ref_id=ref_id,
         idempotency_key=f"adjustment:{ref_id}", meta={"reason": str(reason), "actor_user_id": int(actor_user_id)}, now=current,
     )
-    return {"user_id": int(user_id), "credit_units": after, "points": points_from_units(after)}
+    return {
+        "user_id": int(user_id),
+        "credit_units": after,
+        "points": points_from_units(after),
+        "unlimited_compute": bool(int(wallet.get("unlimited_compute") or 0)),
+    }
+
+
+def set_unlimited_compute(
+    conn: sqlite3.Connection,
+    *,
+    user_id: int,
+    enabled: bool,
+    actor_user_id: int,
+    reason: str,
+    now: int | None = None,
+) -> dict[str, Any]:
+    if not str(reason or "").strip():
+        raise BillingError("ADJUSTMENT_REASON_REQUIRED", "人工调整必须填写原因", 400)
+    _ensure_immediate_transaction(conn)
+    current = int(now or _now())
+    wallet = ensure_wallet(conn, int(user_id), now=current)
+    before = bool(int(wallet.get("unlimited_compute") or 0))
+    after = bool(enabled)
+    if before != after:
+        conn.execute(
+            "UPDATE billing_wallets SET unlimited_compute = ?, updated_at = ? WHERE user_id = ?",
+            (1 if after else 0, current, int(user_id)),
+        )
+        ref_id = _id("unlimited_compute")
+        _insert_ledger(
+            conn,
+            user_id=int(user_id),
+            asset_type="audit",
+            event_type="unlimited_compute_enabled" if after else "unlimited_compute_disabled",
+            amount_units=0,
+            balance_after_units=int(wallet["credit_units"]),
+            ref_type="admin_adjustment",
+            ref_id=ref_id,
+            idempotency_key=f"unlimited_compute:{ref_id}",
+            meta={
+                "reason": str(reason),
+                "actor_user_id": int(actor_user_id),
+                "before": before,
+                "after": after,
+            },
+            now=current,
+        )
+    return {
+        "user_id": int(user_id),
+        "credit_units": int(wallet["credit_units"]),
+        "points": points_from_units(int(wallet["credit_units"])),
+        "unlimited_compute": after,
+    }
 
 
 def billing_summary(conn: sqlite3.Connection, user_id: int, *, now: int | None = None) -> dict[str, Any]:
@@ -938,6 +1192,7 @@ def billing_summary(conn: sqlite3.Connection, user_id: int, *, now: int | None =
         "user_id": int(user_id),
         "enforcement_enabled": enforcement_enabled(),
         "billing_mode": str(wallet["billing_mode"]),
+        "unlimited_compute": bool(int(wallet.get("unlimited_compute") or 0)),
         "credit_units": int(wallet["credit_units"]),
         "points": points_from_units(int(wallet["credit_units"])),
         "subscription_active": active_count > 0 or str(wallet["billing_mode"]) == "legacy",

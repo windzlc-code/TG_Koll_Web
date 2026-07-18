@@ -8136,6 +8136,31 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
   resize: vertical;
 }
 
+.page-admin .admin-billing-unlimited-option {
+  width: fit-content;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 1px solid var(--admin-line);
+  border-radius: 7px;
+  background: #ffffff;
+  color: var(--admin-ink);
+  font-weight: 750;
+}
+
+.page-admin .admin-billing-unlimited-option:has(input:checked) {
+  border-color: #54b99c;
+  background: #e9f8f2;
+  color: #176b4d;
+}
+
+.page-admin .admin-billing-unlimited-option:has(input:disabled) {
+  opacity: .55;
+}
+
+.page-admin #rechargeModal .admin-billing-unlimited-option {
+  margin-bottom: 4px;
+}
+
 .page-admin #secPricing .admin-billing-adjustment button {
   justify-self: start;
 }
@@ -8191,6 +8216,11 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
 
   .page-admin #secPricing .admin-billing-toolbar {
     justify-content: flex-start;
+  }
+
+  .page-admin .admin-billing-unlimited-option {
+    width: 100%;
+    min-height: 44px;
   }
 
   .page-admin #secPricing .admin-billing-toolbar input,

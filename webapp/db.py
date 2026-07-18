@@ -266,6 +266,7 @@ def _ensure_commercial_billing_schema(conn: sqlite3.Connection) -> None:
           user_id INTEGER PRIMARY KEY,
           credit_units INTEGER NOT NULL DEFAULT 0 CHECK(credit_units >= 0),
           billing_mode TEXT NOT NULL DEFAULT 'legacy' CHECK(billing_mode IN ('legacy', 'enforced')),
+          unlimited_compute INTEGER NOT NULL DEFAULT 0 CHECK(unlimited_compute IN (0, 1)),
           migrated_legacy_balance INTEGER NOT NULL DEFAULT 0,
           created_at INTEGER NOT NULL,
           updated_at INTEGER NOT NULL
@@ -388,6 +389,12 @@ def _ensure_commercial_billing_schema(conn: sqlite3.Connection) -> None:
     )
     for statement in statements:
         conn.execute(statement)
+    wallet_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(billing_wallets)").fetchall()}
+    if "unlimited_compute" not in wallet_columns:
+        conn.execute(
+            "ALTER TABLE billing_wallets ADD COLUMN unlimited_compute INTEGER NOT NULL DEFAULT 0 "
+            "CHECK(unlimited_compute IN (0, 1))"
+        )
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_catalog_active ON billing_catalog_versions(status) WHERE status = 'active'")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_orders_user ON billing_orders(user_id, created_at DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_orders_status ON billing_orders(status, created_at)")

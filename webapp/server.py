@@ -26,7 +26,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import requests
@@ -175,7 +175,8 @@ class BillingOrderReviewPayload(BaseModel):
 
 
 class BillingAdjustmentPayload(BaseModel):
-    delta_points: float
+    delta_points: float = 0
+    unlimited: bool | None = None
     reason: str = Field(min_length=2, max_length=1000)
 
 
@@ -9745,6 +9746,17 @@ def _billing_actual_image_quantity(task_output: dict[str, Any]) -> int:
     )
 
 
+def _billing_actual_quantity(task_type: str, task_output: dict[str, Any], payload: dict[str, Any]) -> int:
+    typ = str(task_type or "").strip()
+    if typ in {"persona_image", "persona_post_image", "text_to_image", "image_generate", "get_nano_banana"}:
+        return _billing_actual_image_quantity(task_output)
+    if typ == "video_i2v":
+        return min(max(_to_int(payload.get("duration_seconds") or payload.get("mulerouter_wan_i2v_duration"), 2), 2), 15)
+    if typ == "get_gemini":
+        return 1
+    return 0
+
+
 TG_AGENT_PRODUCTION_TASK_TYPES = set(TASK_RUNNERS.keys())
 
 
@@ -9902,7 +9914,7 @@ def _task_worker_with_control(
             free_image_count = 0
             if reservation_id:
                 if status == "success":
-                    actual_quantity = _billing_actual_image_quantity(task_output)
+                    actual_quantity = _billing_actual_quantity(task_type, task_output, effective_payload)
                     billing_payload = commercial_billing.settle_reservation(
                         conn,
                         reservation_id,
@@ -10329,14 +10341,21 @@ def _emit_stage(
 
 def _normal_task_billing_spec(task_type: str, payload: dict[str, Any]) -> tuple[str, int, bool] | None:
     typ = str(task_type or "").strip()
-    if typ not in {"persona_image", "persona_post_image", "text_to_image", "image_generate", "get_nano_banana"}:
-        return None
-    raw_count = payload.get("image_count") or payload.get("imageCount") or payload.get("nano_images") or payload.get("count") or 1
-    try:
-        count = min(max(int(float(raw_count)), 1), 20)
-    except (TypeError, ValueError):
-        count = 1
-    return "ai_image", count, True
+    if typ in {"persona_image", "persona_post_image", "text_to_image", "image_generate", "get_nano_banana"}:
+        raw_count = payload.get("image_count") or payload.get("imageCount") or payload.get("nano_images") or payload.get("count") or 1
+        try:
+            count = min(max(int(float(raw_count)), 1), 20)
+        except (TypeError, ValueError):
+            count = 1
+        return "ai_image", count, True
+    if typ == "get_gemini":
+        return "basic_text_post", 1, False
+    if typ == "video_i2v":
+        resolution = str(payload.get("mulerouter_wan_i2v_resolution") or payload.get("resolution") or "720p").strip()
+        sku = "ad_video_1080p_second" if resolution == "1080p" else "ad_video_720p_second"
+        duration = min(max(_to_int(payload.get("duration_seconds") or payload.get("mulerouter_wan_i2v_duration"), 2), 2), 15)
+        return sku, duration, False
+    return None
 
 
 def _enqueue_task(
@@ -10881,7 +10900,8 @@ class ModelLookupPayload(BaseModel):
 
 
 class RechargePayload(BaseModel):
-    amount_cents: int
+    amount_cents: int = 0
+    unlimited: bool | None = None
     note: str = ""
 
 
@@ -14119,6 +14139,45 @@ def _create_social_task_with_billing(
             clear_admin_billing_waived_payload(payload)
         if trusted_task_id:
             clear_trusted_batch_task(payload)
+
+
+def _run_billable_operation(
+    user: dict[str, Any],
+    *,
+    ref_type: str,
+    sku: str,
+    quantity: int,
+    operation: Callable[[], dict[str, Any]],
+) -> dict[str, Any]:
+    operation_id = _new_id(ref_type)
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        reservation = commercial_billing.reserve_charge(
+            conn,
+            user_id=_workspace_user_id(user),
+            ref_type=ref_type,
+            ref_id=operation_id,
+            sku=sku,
+            quantity=max(int(quantity or 1), 1),
+            admin_waived=bool(_is_admin_workspace(user) or _is_admin(user)),
+        )
+    try:
+        result = operation()
+    except Exception:
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            commercial_billing.release_reservation(conn, str(reservation["id"]))
+        raise
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        billing = commercial_billing.settle_reservation(
+            conn,
+            str(reservation["id"]),
+            actual_quantity=max(int(quantity or 1), 1),
+            success=True,
+        )
+    result["billing"] = billing
+    return result
 
 
 def _publish_persona_archive_post(
@@ -18304,19 +18363,40 @@ def create_app() -> FastAPI:
         return result
 
     @app.post("/api/persona_dashboard/personas/ai_keywords")
-    def api_persona_dashboard_persona_ai_keywords(payload: PersonaDashboardPersonaAiKeywordsPayload, _user: dict[str, Any] = Depends(get_current_user)):
-        return _persona_dashboard_suggest_keywords(payload)
+    def api_persona_dashboard_persona_ai_keywords(payload: PersonaDashboardPersonaAiKeywordsPayload, user: dict[str, Any] = Depends(get_current_user)):
+        return _run_billable_operation(
+            user,
+            ref_type="persona_ai_keywords",
+            sku="basic_text_post",
+            quantity=1,
+            operation=lambda: _persona_dashboard_suggest_keywords(payload),
+        )
 
     @app.post("/api/persona_dashboard/personas/ai_create")
     def api_persona_dashboard_persona_ai_create(payload: PersonaDashboardPersonaAiCreatePayload, user: dict[str, Any] = Depends(get_current_user)):
         with TENANT_RESOURCE_LIFECYCLE_LOCK:
             _require_active_workspace_user(user)
-            result = _create_persona_with_owner(user, lambda: _persona_dashboard_create_persona_with_ai(payload))
+            result = _run_billable_operation(
+                user,
+                ref_type="persona_ai_create",
+                sku="basic_text_post",
+                quantity=1,
+                operation=lambda: _create_persona_with_owner(
+                    user,
+                    lambda: _persona_dashboard_create_persona_with_ai(payload),
+                ),
+            )
         return result
 
     @app.post("/api/persona_dashboard/personas/ai_profile")
-    def api_persona_dashboard_persona_ai_profile(payload: PersonaDashboardPersonaAiProfilePayload, _user: dict[str, Any] = Depends(get_current_user)):
-        return _persona_dashboard_generate_profile_content(payload)
+    def api_persona_dashboard_persona_ai_profile(payload: PersonaDashboardPersonaAiProfilePayload, user: dict[str, Any] = Depends(get_current_user)):
+        return _run_billable_operation(
+            user,
+            ref_type="persona_ai_profile",
+            sku="basic_text_post",
+            quantity=1,
+            operation=lambda: _persona_dashboard_generate_profile_content(payload),
+        )
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/duplicate")
     def api_persona_dashboard_duplicate_persona(archive_id: str, user: dict[str, Any] = Depends(require_persona_owner)):
@@ -19671,13 +19751,27 @@ def create_app() -> FastAPI:
     def api_admin_user_billing_adjustment(target_user_id: int, payload: BillingAdjustmentPayload, user: dict[str, Any] = Depends(require_admin)):
         with db() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            result = commercial_billing.adjust_credit(
-                conn,
-                user_id=int(target_user_id),
-                delta_units=int(round(float(payload.delta_points) * commercial_billing.POINT_SCALE)),
-                actor_user_id=_identity_user_id(user),
-                reason=payload.reason,
-            )
+            result: dict[str, Any] | None = None
+            if payload.unlimited is not None:
+                result = commercial_billing.set_unlimited_compute(
+                    conn,
+                    user_id=int(target_user_id),
+                    enabled=bool(payload.unlimited),
+                    actor_user_id=_identity_user_id(user),
+                    reason=payload.reason,
+                )
+            if float(payload.delta_points) != 0:
+                result = commercial_billing.adjust_credit(
+                    conn,
+                    user_id=int(target_user_id),
+                    delta_units=int(round(float(payload.delta_points) * commercial_billing.POINT_SCALE)),
+                    actor_user_id=_identity_user_id(user),
+                    reason=payload.reason,
+                )
+                if payload.unlimited is not None:
+                    result["unlimited_compute"] = bool(payload.unlimited)
+            if result is None:
+                raise HTTPException(status_code=400, detail="请选择无限算力或填写非零算力点")
         return {"ok": True, **result}
 
     @app.post("/api/admin/users/{target_user_id}/billing/subscriptions")
@@ -21401,6 +21495,7 @@ def create_app() -> FastAPI:
                         row_version,
                         COALESCE((SELECT credit_units FROM billing_wallets WHERE billing_wallets.user_id = users.id), 0) AS credit_units,
                         COALESCE((SELECT billing_mode FROM billing_wallets WHERE billing_wallets.user_id = users.id), '') AS billing_mode,
+                        COALESCE((SELECT unlimited_compute FROM billing_wallets WHERE billing_wallets.user_id = users.id), 0) AS unlimited_compute,
                         (SELECT COUNT(*) FROM sessions WHERE sessions.user_id = users.id AND revoked_at = 0 AND expires_at > {int(_now_ts())}) AS active_session_count,
                         (SELECT COUNT(*) FROM billing_subscriptions WHERE billing_subscriptions.user_id = users.id AND status = 'active' AND current_period_end > {int(_now_ts())}) AS active_subscription_count
                 FROM users
@@ -22489,25 +22584,38 @@ def create_app() -> FastAPI:
         payload: RechargePayload,
         user: dict[str, Any] = Depends(require_admin),
     ):
-        points = int(payload.amount_cents)
-        if points <= 0:
-            raise HTTPException(status_code=400, detail="分配算力必须为正整数（点）")
         with db() as conn:
             conn.execute("BEGIN IMMEDIATE")
             target_row = conn.execute("SELECT * FROM users WHERE id = ?", (int(target_user_id),)).fetchone()
             if target_row is None:
                 raise HTTPException(status_code=404, detail="客户账号不存在")
-            adjusted = commercial_billing.adjust_credit(
-                conn,
-                user_id=int(target_user_id),
-                delta_units=points * commercial_billing.POINT_SCALE,
-                actor_user_id=_identity_user_id(user),
-                reason=str(payload.note or "管理员人工算力调整"),
-            )
+            adjusted: dict[str, Any] | None = None
+            if payload.unlimited is not None:
+                adjusted = commercial_billing.set_unlimited_compute(
+                    conn,
+                    user_id=int(target_user_id),
+                    enabled=bool(payload.unlimited),
+                    actor_user_id=_identity_user_id(user),
+                    reason=str(payload.note or "管理员人工调整无限算力"),
+                )
+            points = int(payload.amount_cents)
+            if points > 0:
+                adjusted = commercial_billing.adjust_credit(
+                    conn,
+                    user_id=int(target_user_id),
+                    delta_units=points * commercial_billing.POINT_SCALE,
+                    actor_user_id=_identity_user_id(user),
+                    reason=str(payload.note or "管理员人工算力调整"),
+                )
+                if payload.unlimited is not None:
+                    adjusted["unlimited_compute"] = bool(payload.unlimited)
+            if adjusted is None:
+                raise HTTPException(status_code=400, detail="请选择无限算力或填写正整数算力点")
         return {
             "ok": True,
             "credit_units": int(adjusted["credit_units"]),
             "points": adjusted["points"],
+            "unlimited_compute": bool(adjusted.get("unlimited_compute")),
         }
 
     @app.post("/api/admin/users/{target_user_id}/toggle")

@@ -1229,6 +1229,10 @@
                     <option value="credit">调整算力点</option>
                     <option value="subscription">开通月度订阅</option>
                   </select>
+                  <label id="billingAdjustmentUnlimitedField" class="switch admin-billing-unlimited-option">
+                    <input id="billingAdjustmentUnlimited" type="checkbox">
+                    <span>无限算力</span>
+                  </label>
                   <label for="billingAdjustmentAmount" id="billingAdjustmentAmountLabel">调整算力点</label>
                   <input id="billingAdjustmentAmount" type="number" step="0.000001" placeholder="正数增加，负数扣减">
                   <label for="billingAdjustmentNote">调整原因</label>
@@ -1511,6 +1515,10 @@
         <button id="btnRechargeClose" type="button" class="ghost">关闭</button>
       </div>
       <div class="modal-body">
+        <label class="switch admin-billing-unlimited-option">
+          <input id="rechargeUnlimited" type="checkbox">
+          <span>无限算力</span>
+        </label>
         <label for="rechargeAmount">增加算力点</label>
         <input id="rechargeAmount" type="number" min="1" value="1000">
         <label for="rechargeNote">备注</label>

@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import threading
@@ -13,9 +14,11 @@ class CommercialBillingTests(unittest.TestCase):
     def setUp(self):
         self.old_db_path = os.environ.get("APP_DB_PATH")
         self.old_billing_enabled = os.environ.get("COMMERCIAL_BILLING_ENABLED")
+        self.old_migrate_legacy = os.environ.get("COMMERCIAL_BILLING_MIGRATE_LEGACY")
         self.tmpdir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         os.environ["APP_DB_PATH"] = str(Path(self.tmpdir.name) / "app.db")
         os.environ["COMMERCIAL_BILLING_ENABLED"] = "1"
+        os.environ.pop("COMMERCIAL_BILLING_MIGRATE_LEGACY", None)
         db_module.init_db()
         with db_module.db() as conn:
             customer = conn.execute(
@@ -40,6 +43,10 @@ class CommercialBillingTests(unittest.TestCase):
             os.environ.pop("COMMERCIAL_BILLING_ENABLED", None)
         else:
             os.environ["COMMERCIAL_BILLING_ENABLED"] = self.old_billing_enabled
+        if self.old_migrate_legacy is None:
+            os.environ.pop("COMMERCIAL_BILLING_MIGRATE_LEGACY", None)
+        else:
+            os.environ["COMMERCIAL_BILLING_MIGRATE_LEGACY"] = self.old_migrate_legacy
         self.tmpdir.cleanup()
 
     def _approve_subscription(self, *, now=1_700_000_000):
@@ -79,8 +86,163 @@ class CommercialBillingTests(unittest.TestCase):
             versions = commercial_billing.list_catalog_versions(conn)
         self.assertEqual(catalog["subscription"]["price_ntd"], 6000)
         self.assertEqual([item["total_points"] for item in catalog["packages"]], [100, 530, 1620])
-        self.assertEqual(len(catalog["actions"]), 10)
+        self.assertEqual(len(catalog["actions"]), 12)
+        actions = {item["sku"]: item for item in catalog["actions"]}
+        self.assertTrue(actions["ad_video_720p_second"]["implemented"])
+        self.assertTrue(actions["ad_video_1080p_second"]["implemented"])
+        self.assertEqual(actions["instagram_publish"]["points"], 0.1)
+        self.assertEqual(actions["social_interaction"]["points"], 0.1)
         self.assertEqual(len([item for item in versions if item["status"] == "active"]), 1)
+
+    def test_existing_active_catalog_is_versioned_when_new_billable_actions_are_added(self):
+        with db_module.db() as conn:
+            active = conn.execute(
+                "SELECT id, version_number, catalog_json FROM billing_catalog_versions WHERE status = 'active'"
+            ).fetchone()
+            catalog = json.loads(str(active["catalog_json"]))
+            catalog["actions"] = [
+                {
+                    **item,
+                    "implemented": False
+                    if item["sku"] in {"ad_video_720p_second", "ad_video_1080p_second"}
+                    else item["implemented"],
+                }
+                for item in catalog["actions"]
+                if item["sku"] not in {"instagram_publish", "social_interaction"}
+            ]
+            conn.execute(
+                "UPDATE billing_catalog_versions SET catalog_json = ? WHERE id = ?",
+                (json.dumps(catalog, ensure_ascii=False), str(active["id"])),
+            )
+            conn.execute("DELETE FROM admin_config WHERE key = 'commercial_billing_catalog_v2'")
+            commercial_billing.bootstrap_billing(conn, now=1_700_000_000)
+            upgraded = commercial_billing.get_active_catalog(conn)
+            versions = commercial_billing.list_catalog_versions(conn)
+
+        actions = {item["sku"]: item for item in upgraded["actions"]}
+        self.assertEqual(int(upgraded["version"]), int(active["version_number"]) + 1)
+        self.assertTrue(actions["ad_video_720p_second"]["implemented"])
+        self.assertTrue(actions["ad_video_1080p_second"]["implemented"])
+        self.assertIn("instagram_publish", actions)
+        self.assertIn("social_interaction", actions)
+        self.assertEqual(len([item for item in versions if item["status"] == "active"]), 1)
+
+    def test_unlimited_compute_keeps_subscription_gate_but_never_deducts_points(self):
+        now = 1_700_000_000
+        with db_module.db() as conn:
+            result = commercial_billing.set_unlimited_compute(
+                conn,
+                user_id=self.user_id,
+                enabled=True,
+                actor_user_id=self.admin_id,
+                reason="enterprise unlimited plan",
+                now=now,
+            )
+            self.assertTrue(result["unlimited_compute"])
+            with self.assertRaises(commercial_billing.BillingError) as raised:
+                commercial_billing.reserve_charge(
+                    conn,
+                    user_id=self.user_id,
+                    ref_type="normal_task",
+                    ref_id="unlimited-without-subscription",
+                    sku="basic_text_post",
+                    quantity=1,
+                    now=now,
+                )
+            self.assertEqual(raised.exception.code, "SUBSCRIPTION_REQUIRED")
+
+        self._approve_subscription(now=now)
+        with db_module.db() as conn:
+            before = commercial_billing.billing_summary(conn, self.user_id, now=now)
+            held = commercial_billing.reserve_charge(
+                conn,
+                user_id=self.user_id,
+                ref_type="normal_task",
+                ref_id="unlimited-billable-task",
+                sku="basic_text_post",
+                quantity=3,
+                now=now,
+            )
+            settled = commercial_billing.settle_reservation(
+                conn,
+                held["id"],
+                actual_quantity=2,
+                now=now,
+            )
+            after = commercial_billing.billing_summary(conn, self.user_id, now=now)
+            entries = commercial_billing.list_ledger(conn, user_id=self.user_id)
+
+        self.assertEqual(held["status"], "held")
+        self.assertTrue(held["unlimited_compute"])
+        self.assertEqual(settled["status"], "settled")
+        self.assertEqual(settled["charged_points"], 0)
+        self.assertEqual(before["points"], after["points"])
+        self.assertTrue(after["unlimited_compute"])
+        self.assertTrue(any(entry["event_type"] == "unlimited_compute_settled" for entry in entries))
+
+    def test_disabling_unlimited_compute_restores_normal_balance_checks(self):
+        now = 1_700_000_000
+        self._approve_subscription(now=now)
+        with db_module.db() as conn:
+            commercial_billing.set_unlimited_compute(
+                conn,
+                user_id=self.user_id,
+                enabled=True,
+                actor_user_id=self.admin_id,
+                reason="temporary unlimited",
+                now=now,
+            )
+            commercial_billing.set_unlimited_compute(
+                conn,
+                user_id=self.user_id,
+                enabled=False,
+                actor_user_id=self.admin_id,
+                reason="return to metered billing",
+                now=now + 1,
+            )
+            with self.assertRaises(commercial_billing.BillingError) as raised:
+                commercial_billing.reserve_charge(
+                    conn,
+                    user_id=self.user_id,
+                    ref_type="normal_task",
+                    ref_id="metered-again",
+                    sku="basic_text_post",
+                    quantity=1,
+                    now=now + 1,
+                )
+            summary = commercial_billing.billing_summary(conn, self.user_id, now=now + 1)
+
+        self.assertEqual(raised.exception.code, "INSUFFICIENT_POINTS")
+        self.assertFalse(summary["unlimited_compute"])
+
+    def test_production_migration_enforces_legacy_wallets_with_transition_subscription(self):
+        now = 1_700_000_000
+        with db_module.db() as conn:
+            inserted = conn.execute(
+                "INSERT INTO users(username, password_hash, is_admin, is_disabled, balance_cents, created_at, updated_at) "
+                "VALUES ('legacy_transition', 'hash', 0, 0, 12, ?, ?)",
+                (now, now),
+            )
+            legacy_user_id = int(inserted.lastrowid)
+            conn.execute(
+                "INSERT INTO billing_wallets(user_id, credit_units, billing_mode, migrated_legacy_balance, created_at, updated_at) "
+                "VALUES (?, 1200, 'legacy', 12, ?, ?)",
+                (legacy_user_id, now, now),
+            )
+        os.environ["COMMERCIAL_BILLING_MIGRATE_LEGACY"] = "1"
+        with db_module.db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            commercial_billing.bootstrap_billing(conn, now=now)
+            summary = commercial_billing.billing_summary(conn, legacy_user_id, now=now)
+            marker = conn.execute(
+                "SELECT value_json FROM admin_config WHERE key = 'commercial_billing_enforcement_v2'"
+            ).fetchone()
+
+        self.assertEqual(summary["billing_mode"], "enforced")
+        self.assertTrue(summary["subscription_active"])
+        self.assertEqual(summary["points"], 12)
+        self.assertEqual(summary["threads_account_limit"], 3)
+        self.assertIsNotNone(marker)
 
     def test_subscription_approval_enables_enforcement_and_monthly_images(self):
         now = 1_700_000_000

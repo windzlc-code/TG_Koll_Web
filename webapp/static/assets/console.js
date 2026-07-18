@@ -268,6 +268,9 @@ const state = {
   socialPublishPolicySaving: false,
   setupStatus: null,
   billing: {
+    catalog: null,
+    catalogLoaded: false,
+    catalogPromise: null,
     summary: null,
     orders: [],
     ledger: [],
@@ -4756,6 +4759,46 @@ function billingRows(payload, keys = []) {
   return [];
 }
 
+function billingCatalogAction(sku) {
+  const cleanSku = String(sku || "").trim();
+  if (!cleanSku) return null;
+  return billingRows(state.billing.catalog, ["actions"]).find((item) => String(item?.sku || "").trim() === cleanSku) || null;
+}
+
+function billingActionPriceLabel(sku, quantity = 1, { estimated = false } = {}) {
+  const action = billingCatalogAction(sku);
+  const unitPoints = Number(action?.points);
+  const normalizedQuantity = Math.max(0, Number(quantity || 0));
+  if (!action || !Number.isFinite(unitPoints) || normalizedQuantity <= 0) return "";
+  const total = unitPoints * normalizedQuantity;
+  const formatted = total.toLocaleString("zh-CN", { maximumFractionDigits: 6 });
+  return `${estimated ? "预计 " : ""}${formatted} 点`;
+}
+
+function renderBillingPricePill(sku, quantity = 1, { estimated = false, quantityInputId = "" } = {}) {
+  const label = billingActionPriceLabel(sku, quantity, { estimated });
+  if (!label) return "";
+  const action = billingCatalogAction(sku);
+  const normalizedQuantity = Math.max(0, Number(quantity || 0));
+  const unitPoints = Number(action?.points || 0);
+  const title = estimated
+    ? `${action?.name || sku}：${normalizedQuantity} × ${unitPoints.toLocaleString("zh-CN", { maximumFractionDigits: 6 })} 点`
+    : `${action?.name || sku}：${label}`;
+  return `<span class="billing-price-pill" data-billing-price-sku="${esc(sku)}" data-billing-price-quantity="${esc(normalizedQuantity)}" data-billing-price-estimated="${estimated ? "true" : "false"}"${quantityInputId ? ` data-billing-price-quantity-input="${esc(quantityInputId)}"` : ""} title="${esc(title)}">${esc(label)}</span>`;
+}
+
+function updateBillingPricePills(root = document) {
+  root?.querySelectorAll?.("[data-billing-price-sku]").forEach((pill) => {
+    const quantityInputId = String(pill.dataset.billingPriceQuantityInput || "").trim();
+    const quantity = quantityInputId
+      ? Number($(quantityInputId)?.value || 0)
+      : Number(pill.dataset.billingPriceQuantity || 0);
+    const estimated = pill.dataset.billingPriceEstimated === "true";
+    const label = billingActionPriceLabel(pill.dataset.billingPriceSku, quantity, { estimated });
+    if (label) pill.textContent = label;
+  });
+}
+
 function billingCurrency(item = {}, root = {}) {
   return String(item.currency || root.currency || "TWD").toUpperCase();
 }
@@ -4942,6 +4985,7 @@ async function loadBilling({ force = false } = {}) {
   state.billing.errors = {};
   renderBilling();
   const requests = {
+    catalog: loadBillingCatalog({ force }),
     summary: api("/api/billing/summary"),
     orders: api("/api/billing/orders"),
     ledger: api("/api/billing/ledger"),
@@ -4956,6 +5000,22 @@ async function loadBilling({ force = false } = {}) {
   state.billing.loading = false;
   state.billing.loaded = true;
   renderBilling();
+}
+
+async function loadBillingCatalog({ force = false } = {}) {
+  if (state.billing.catalogPromise) return state.billing.catalogPromise;
+  if (state.billing.catalogLoaded && !force) return state.billing.catalog;
+  const request = api("/api/billing/catalog")
+    .then((catalog) => {
+      state.billing.catalog = catalog || {};
+      state.billing.catalogLoaded = true;
+      return state.billing.catalog;
+    })
+    .finally(() => {
+      if (state.billing.catalogPromise === request) state.billing.catalogPromise = null;
+    });
+  state.billing.catalogPromise = request;
+  return request;
 }
 
 async function cancelBillingOrder(orderId) {
@@ -6684,7 +6744,7 @@ function renderPersonaImagePanel(persona) {
         <span class="persona-panel-intro">${esc(imageIntro)}</span>
       </div>
       <div class="row-actions">
-        <button type="button" class="primary" data-persona-generate-image ${imageBusy ? "disabled" : ""}>${renderBusyButtonContent(generateLabel, imageBusy, imageBusyStartedAt)}</button>
+        <button type="button" class="primary" data-persona-generate-image ${imageBusy ? "disabled" : ""}>${renderBusyButtonContent(generateLabel, imageBusy, imageBusyStartedAt)}${renderBillingPricePill("ai_image")}</button>
         <input id="personaImageUploadFile" type="file" accept=".png,.jpg,.jpeg,.webp,.bmp,.gif,.tif,.tiff,.heic" data-persona-upload-image-file hidden />
       </div>
       <div class="persona-inline-panel persona-inline-panel--nested">
@@ -6812,7 +6872,7 @@ function renderPersonaSettingsPanelV2(persona, account, profile, step) {
             </label>
             <div class="row-actions">
               <button type="button" class="primary" data-persona-save-profile ${isProfileRegenEditing ? "disabled" : ""}>保存资料</button>
-              <button type="button" data-persona-regenerate-profile-content aria-busy="${state.personaCreateBusy?.profileContent ? "true" : "false"}" ${state.personaCreateBusy?.profileContent ? "disabled" : ""}>${state.personaCreateBusy?.profileContent ? "正在生成..." : (isProfileRegenEditing ? "确认生成" : "AI 重新生成")}</button>
+              <button type="button" data-persona-regenerate-profile-content aria-busy="${state.personaCreateBusy?.profileContent ? "true" : "false"}" ${state.personaCreateBusy?.profileContent ? "disabled" : ""}>${state.personaCreateBusy?.profileContent ? "正在生成..." : (isProfileRegenEditing ? "确认生成" : "AI 重新生成")}${renderBillingPricePill("basic_text_post")}</button>
             </div>
           </section>
           <aside class="persona-profile-image-side">
@@ -7415,7 +7475,7 @@ function renderUnifiedAutomationModule() {
         ` : ""}
         ${personaThreadsStrategyDetail(strategyGroup)}
         <div class="row-actions">
-          <button type="button" data-persona-run-threads="${currentStep === "reply_hot" ? "reply_hot" : "reply_comment"}" aria-busy="${replyBusy ? "true" : "false"}" ${selectedAccount && !replyBusy ? "" : "disabled"}>${replyBusy ? renderBusyButtonContent("自动回复执行中", true, replyBusyStartedAt) : "提交自动回复任务"}</button>
+          <button type="button" data-persona-run-threads="${currentStep === "reply_hot" ? "reply_hot" : "reply_comment"}" aria-busy="${replyBusy ? "true" : "false"}" ${selectedAccount && !replyBusy ? "" : "disabled"}>${replyBusy ? renderBusyButtonContent("自动回复执行中", true, replyBusyStartedAt) : "提交自动回复任务"}${renderBillingPricePill("threads_auto_reply_batch")}</button>
         </div>
       </div>`;
   } else {
@@ -7890,6 +7950,41 @@ function selectedPublishPosts(persona = selectedPersona(), source = state.publis
   const rows = publishSourceRows(persona, source);
   const selected = new Set(syncPublishSelectedPostIds(persona, source, rows));
   return rows.filter((post) => selected.has(String(post.id || "")));
+}
+
+function matrixPublishRequestedCount() {
+  const source = state.matrixPublish.source || "posts";
+  const perPersonaCount = Math.min(Math.max(Number(state.matrixPublish.perPersonaCount || 1), 1), 20);
+  return matrixPublishSelectedIds().reduce((total, personaId) => {
+    const persona = state.personas.find((item) => String(item.id || "") === String(personaId || ""));
+    if (!persona) return total;
+    const available = publishSourceRows(persona, source).filter((post) => (
+      String(post?.id || "").trim()
+      && !String(post?.publishedAt || post?.published_at || "").trim()
+      && (String(post?.content || "").trim() || (Array.isArray(post?.media_items) && post.media_items.length))
+    )).length;
+    return total + Math.min(available, perPersonaCount);
+  }, 0);
+}
+
+function publishExecutionQuantity(publishMode = normalizedPublishMode(state.simpleBranches.publishing)) {
+  if (publishMode === "matrix_start") return matrixPublishRequestedCount();
+  const source = normalizePublishContentSource();
+  if (source === "custom") return 1;
+  const persona = selectedPersona();
+  return persona ? selectedPublishPosts(persona, source).length : 0;
+}
+
+function publishBillingSku(accountOrPlatform = "") {
+  const platform = typeof accountOrPlatform === "object"
+    ? String(accountOrPlatform?.platform || "")
+    : String(accountOrPlatform || "");
+  return platform.trim().toLowerCase() === "instagram" ? "instagram_publish" : "threads_text_publish";
+}
+
+function publishExecutionSku(publishMode = normalizedPublishMode(state.simpleBranches.publishing)) {
+  if (publishMode === "matrix_start") return publishBillingSku(state.matrixPublish.platform || "threads");
+  return publishBillingSku(publishAccountForPersona(selectedPersona()));
 }
 
 function activePublishPreviewPost(posts = []) {
@@ -8666,7 +8761,11 @@ function renderSimpleFlowModule(moduleId) {
   const actionLabel = moduleId === "queue" ? "打开任务队列" : (moduleId === "publishing" && publishModeForAction === "matrix_start" ? "提交矩阵发布" : "确认执行");
   const actionBusy = Boolean(state.simpleFlowPending && state.simpleFlowPendingModule === moduleId);
   const actionBlocked = Boolean(state.simpleFlowPending && !actionBusy);
-  const actionHtml = moduleId === "automation" || publishModeForAction === "publish_history" ? "" : `<div class="command-actions ${moduleId === "publishing" ? "publish-command-actions" : ""}"><button id="executeSimpleFlow" type="button" class="primary" aria-busy="${actionBusy ? "true" : "false"}" ${moduleId === "publishing" ? dailyPublishActionAttrs() : ""} ${actionBusy || actionBlocked ? "disabled" : ""}>${actionBusy ? renderBusyButtonContent(`${actionLabel}中`, true, state.simpleFlowPendingStartedAt) : (actionBlocked ? "其他任务执行中" : (moduleId === "publishing" && dailyPublishIsLocked() ? "今日发布已锁定" : esc(actionLabel)))}</button></div>`;
+  const publishQuantity = moduleId === "publishing" ? publishExecutionQuantity(publishModeForAction) : 0;
+  const actionPrice = moduleId === "publishing"
+    ? renderBillingPricePill(publishExecutionSku(publishModeForAction), publishQuantity, { estimated: publishQuantity > 1 })
+    : "";
+  const actionHtml = moduleId === "automation" || publishModeForAction === "publish_history" ? "" : `<div class="command-actions ${moduleId === "publishing" ? "publish-command-actions" : ""}"><button id="executeSimpleFlow" type="button" class="primary" aria-busy="${actionBusy ? "true" : "false"}" ${moduleId === "publishing" ? dailyPublishActionAttrs() : ""} ${actionBusy || actionBlocked ? "disabled" : ""}>${actionBusy ? renderBusyButtonContent(`${actionLabel}中`, true, state.simpleFlowPendingStartedAt) : (actionBlocked ? "其他任务执行中" : (moduleId === "publishing" && dailyPublishIsLocked() ? "今日发布已锁定" : esc(actionLabel)))}${actionPrice}</button></div>`;
   $("moduleBody").innerHTML = `
     ${moduleId === "publishing" ? renderDailyPublishLimitBanner() : ""}
     ${body}
@@ -14714,7 +14813,7 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
               hint: mediaMeta.files || "拖动任务需要的素材到这里，或点击选择。",
             }) : ""}
             <div class="row-actions">
-              <button type="button" class="primary" data-persona-run-media-task ${mediaBusy ? "disabled" : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, mediaBusyStartedAt) : "生成预览"}</button>
+              <button type="button" class="primary" data-persona-run-media-task ${mediaBusy ? "disabled" : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, mediaBusyStartedAt) : "生成预览"}${renderBillingPricePill("ai_image", mediaForm.imageCount, { estimated: true, quantityInputId: "personaMediaImageCount" })}</button>
             </div>
             <div class="persona-inline-panel persona-inline-panel--nested">
               <strong>任务结果预览</strong>
@@ -14951,7 +15050,7 @@ function renderPersonaCreateWorkbench() {
         </label>
         ${createState.aiStep === "input" ? `
           <div class="row-actions">
-            <button type="button" class="primary" data-persona-create-ai-keywords aria-busy="${aiKeywordsBusy ? "true" : "false"}" ${anyCreateBusy ? "disabled" : ""}>${aiKeywordsBusy ? "正在提炼关键词..." : (anyCreateBusy ? `${busyLabel}中` : "下一步：提炼关键词")}</button>
+            <button type="button" class="primary" data-persona-create-ai-keywords aria-busy="${aiKeywordsBusy ? "true" : "false"}" ${anyCreateBusy ? "disabled" : ""}>${aiKeywordsBusy ? "正在提炼关键词..." : (anyCreateBusy ? `${busyLabel}中` : "下一步：提炼关键词")}${renderBillingPricePill("basic_text_post")}</button>
             ${aiKeywordsBusy ? `<button type="button" data-persona-create-ai-cancel-keywords>取消</button>` : ""}
           </div>
         ` : `
@@ -14969,7 +15068,7 @@ function renderPersonaCreateWorkbench() {
             <div class="persona-create-actions">
               <button type="button" data-persona-create-ai-back ${aiCreateBusy ? "disabled" : ""}>返回修改提示词</button>
               <button type="button" data-persona-create-ai-clear ${aiSelectedKeywords.length && !aiCreateBusy ? "" : "disabled"}>清空选择</button>
-              <button type="button" class="primary" data-persona-create-ai-submit aria-busy="${aiCreateBusy ? "true" : "false"}" ${anyCreateBusy ? "disabled" : ""}>${aiCreateBusy ? "正在生成人设..." : (anyCreateBusy ? `${busyLabel}中` : "确认并生成人设")}</button>
+              <button type="button" class="primary" data-persona-create-ai-submit aria-busy="${aiCreateBusy ? "true" : "false"}" ${anyCreateBusy ? "disabled" : ""}>${aiCreateBusy ? "正在生成人设..." : (anyCreateBusy ? `${busyLabel}中` : "确认并生成人设")}${renderBillingPricePill("basic_text_post")}</button>
             </div>
           </div>
           ${resultMarkup}
@@ -15652,7 +15751,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
           <label>可选人设记忆（已识别 ${esc(memoryRows.length)} 条）</label>
           ${renderPersonaMemoryOptions(persona, generateForm.selectedMemoryIds || [])}
           <div class="row-actions">
-            <button type="button" class="primary" data-persona-generate-posts ${preflight.ready && !generateBusy ? "" : "disabled"}>${generateBusy ? renderBusyButtonContent(isRewriteMode ? "正在重写推文" : "正在生成草稿", true, actionLockStartedAt("persona", persona.id, "generate_posts")) : (isRewriteMode ? "AI 重写推文" : "自动生成草稿")}</button>
+            <button type="button" class="primary" data-persona-generate-posts ${preflight.ready && !generateBusy ? "" : "disabled"}>${generateBusy ? renderBusyButtonContent(isRewriteMode ? "正在重写推文" : "正在生成草稿", true, actionLockStartedAt("persona", persona.id, "generate_posts")) : (isRewriteMode ? "AI 重写推文" : "自动生成草稿")}${renderBillingPricePill("basic_text_post", currentGenerateCount, { estimated: true, quantityInputId: "personaGenerateCount" })}</button>
             ${isRewriteMode ? "" : `<button type="button" data-persona-route-step="content:posts">查看草稿</button>`}
           </div>
         `}
@@ -15769,7 +15868,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
                   hint: mediaMeta.files || "拖动任务需要的素材到这里，或点击选择。",
                 }) : ""}
                 <div class="row-actions">
-                  <button type="button" class="primary" data-persona-run-media-task aria-busy="${mediaBusy ? "true" : "false"}" ${mediaBusy ? "disabled" : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, mediaBusyStartedAt) : "生成预览"}</button>
+                  <button type="button" class="primary" data-persona-run-media-task aria-busy="${mediaBusy ? "true" : "false"}" ${mediaBusy ? "disabled" : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, mediaBusyStartedAt) : "生成预览"}${renderBillingPricePill("ai_image", mediaForm.imageCount, { estimated: true, quantityInputId: "personaMediaImageCount" })}</button>
                 </div>
               </div>
               <div class="persona-inline-panel persona-inline-panel--nested">
@@ -15871,7 +15970,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
         ${personaPublishPreview(selectedPost)}
         ${renderUploadDropzone("personaPublishFiles", { label: "发布素材", hint: publishHint || "拖动图片或视频到这里，或点击选择。" })}
         <div class="row-actions">
-          <button type="button" class="primary" data-persona-publish-submit ${dailyPublishActionAttrs()} ${(publishCanSubmit && selectedPost && !publishBusy) ? "" : "disabled"}>${dailyPublishIsLocked() ? "今日发布已锁定" : (publishWaitsForManualLogin ? "等待人工验证" : (publishBusy ? renderBusyButtonContent("发布任务执行中", true, publishBusyStartedAt) : "发布内容"))}</button>
+          <button type="button" class="primary" data-persona-publish-submit ${dailyPublishActionAttrs()} ${(publishCanSubmit && selectedPost && !publishBusy) ? "" : "disabled"}>${dailyPublishIsLocked() ? "今日发布已锁定" : (publishWaitsForManualLogin ? "等待人工验证" : (publishBusy ? renderBusyButtonContent("发布任务执行中", true, publishBusyStartedAt) : "发布内容"))}${renderBillingPricePill(publishBillingSku(publishAccount))}</button>
         </div>
         <div id="personaPublishResult">${publishResult || `<div class="empty-state">提交后，这里会显示任务状态、截图和发布结果。</div>`}</div>
       </div>`;
@@ -16823,7 +16922,7 @@ function renderAccountPoolAutomationPanel(selectedAccount) {
           </label>
         ` : accountPoolStrategyParamSummary(strategyGroup)}
         <div class="row-actions">
-          <button type="button" data-account-pool-run-threads="${esc(mode)}" aria-busy="${busy ? "true" : "false"}" ${busy ? "disabled" : ""}>${busy ? "任务执行中" : "提交自动化任务"}</button>
+          <button type="button" data-account-pool-run-threads="${esc(mode)}" aria-busy="${busy ? "true" : "false"}" ${busy ? "disabled" : ""}>${busy ? "任务执行中" : "提交自动化任务"}${renderBillingPricePill("threads_auto_reply_batch")}</button>
         </div>
       </div>`;
   } else {
@@ -19744,16 +19843,7 @@ async function submitMatrixPublishTask(messageId = "commandMsg") {
     return null;
   }
   const scheduledAt = normalizeScheduleValueForApi($("simpleScheduleAt")?.value);
-  const requestedCount = personaIds.reduce((total, personaId) => {
-    const persona = state.personas.find((item) => String(item.id || "") === String(personaId || ""));
-    if (!persona) return total;
-    const available = publishSourceRows(persona, source).filter((post) => (
-      String(post?.id || "").trim()
-      && !String(post?.publishedAt || post?.published_at || "").trim()
-      && (String(post?.content || "").trim() || (Array.isArray(post?.media_items) && post.media_items.length))
-    )).length;
-    return total + Math.min(available, perPersonaCount);
-  }, 0);
+  const requestedCount = matrixPublishRequestedCount();
   if (requestedCount > 0 && !(await ensureDailyPublishCapacity(requestedCount, { scheduledAt }))) return null;
   setActionLocked(lockParts, true);
   renderSimpleFlowModule("publishing");
@@ -21487,6 +21577,12 @@ function bindEvents() {
     }
   });
   $("moduleBody").addEventListener("input", (event) => {
+    if (["personaGenerateCount", "personaMediaImageCount"].includes(event.target?.id || "")) {
+      snapshotPersonaCurrentForm();
+      updateBillingPricePills($("moduleBody"));
+      renderConfirmSummary();
+      return;
+    }
     if (event.target?.id === "personaPublishScheduleAt") {
       const personaId = String(selectedPersona()?.id || "").trim();
       if (personaId) state.personaPublishScheduleValues[personaId] = event.target.value || "";
@@ -22084,6 +22180,9 @@ async function init() {
   }
   consoleIdentityReady = true;
   bindIdentityRevalidationEvents();
+  await loadBillingCatalog().catch((error) => {
+    state.billing.errors.catalog = error || { detail: "计费目录加载失败" };
+  });
   const hasPersonaBootstrap = hydratePersonaOverviewFromBootstrap(me);
   bindEvents();
   setView(state.view);

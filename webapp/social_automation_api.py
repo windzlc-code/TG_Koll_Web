@@ -98,7 +98,22 @@ def mark_trusted_batch_task(
             "task_id": str(task_id),
             "reservation_id": str(reservation_id),
             "suppress_wake": bool(suppress_wake),
-        }
+}
+
+
+def social_task_billing_sku(platform: str, task_type: str) -> str:
+    clean_platform = str(platform or "").strip().lower()
+    clean_task_type = str(task_type or "").strip().lower()
+    if clean_task_type == "publish_post":
+        if clean_platform == "threads":
+            return "threads_text_publish"
+        if clean_platform == "instagram":
+            return "instagram_publish"
+    if clean_platform == "threads" and clean_task_type == "threads_auto_reply":
+        return "threads_auto_reply_batch"
+    if clean_task_type in {"comment_post", "reply_comment", "like_post", "share_post", "repost_post"}:
+        return "social_interaction"
+    return ""
 
 
 def clear_trusted_batch_task(payload: Any) -> None:
@@ -3827,11 +3842,7 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
             if not publish_policy["can_publish"]:
                 raise HTTPException(status_code=429, detail=publish_policy["message"] or DAILY_PUBLISH_LIMIT_MESSAGE)
         billing_reservation: dict[str, Any] | None = None
-        billing_sku = ""
-        if platform == "threads" and task_type == "publish_post":
-            billing_sku = "threads_text_publish"
-        elif platform == "threads" and task_type == "threads_auto_reply":
-            billing_sku = "threads_auto_reply_batch"
+        billing_sku = social_task_billing_sku(platform, task_type)
         if billing_sku and owner_user_id > 0:
             pre_reserved_id = str(batch_context.get("reservation_id") or "")
             if pre_reserved_id:
