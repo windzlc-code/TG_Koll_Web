@@ -19573,7 +19573,11 @@ def create_app() -> FastAPI:
     @app.get("/api/billing/summary")
     def api_billing_summary(user: dict[str, Any] = Depends(get_current_user)):
         with db() as conn:
-            return commercial_billing.billing_summary(conn, _workspace_user_id(user))
+            summary = commercial_billing.billing_summary(conn, _workspace_user_id(user))
+        admin_waived = bool(_is_admin(user) and not _is_admin_workspace(user))
+        summary["admin_waived"] = admin_waived
+        summary["effective_unlimited"] = bool(summary.get("unlimited_compute") or admin_waived)
+        return summary
 
     @app.get("/api/billing/orders")
     def api_billing_orders(limit: int = 100, user: dict[str, Any] = Depends(get_current_user)):
@@ -19772,6 +19776,7 @@ def create_app() -> FastAPI:
                     result["unlimited_compute"] = bool(payload.unlimited)
             if result is None:
                 raise HTTPException(status_code=400, detail="请选择无限算力或填写非零算力点")
+        _invalidate_admin_dashboard_cache()
         return {"ok": True, **result}
 
     @app.post("/api/admin/users/{target_user_id}/billing/subscriptions")
@@ -22611,6 +22616,7 @@ def create_app() -> FastAPI:
                     adjusted["unlimited_compute"] = bool(payload.unlimited)
             if adjusted is None:
                 raise HTTPException(status_code=400, detail="请选择无限算力或填写正整数算力点")
+        _invalidate_admin_dashboard_cache()
         return {
             "ok": True,
             "credit_units": int(adjusted["credit_units"]),

@@ -13,6 +13,7 @@ class BillingFrontendContractTests(unittest.TestCase):
         cls.admin_styles = (STATIC_ROOT / "assets" / "style.css").read_text(encoding="utf-8")
         cls.console_script = (STATIC_ROOT / "assets" / "console.js").read_text(encoding="utf-8")
         cls.console_styles = (STATIC_ROOT / "assets" / "console.css").read_text(encoding="utf-8")
+        cls.site_navigation_script = (STATIC_ROOT / "assets" / "opc" / "site-navigation.js").read_text(encoding="utf-8")
 
     def test_both_admin_adjustment_entries_submit_the_unlimited_contract(self):
         for control_id in ("billingAdjustmentUnlimited", "rechargeUnlimited"):
@@ -41,6 +42,37 @@ class BillingFrontendContractTests(unittest.TestCase):
         self.assertIn('createBillingSummaryItem("算力点余额", unlimited ? "∞"', self.admin_script)
         self.assertIn('? "无限"', self.admin_script)
         self.assertIn(".admin-billing-unlimited-option", self.admin_styles)
+
+    def test_admin_wallet_kpi_and_credit_unit_fallback_are_unambiguous(self):
+        self.assertIn(">客户算力余额总计<", self.admin_markup)
+        detail = self.admin_script[
+            self.admin_script.index("function renderUserBilling")
+            : self.admin_script.index("async function loadUserBilling")
+        ]
+        self.assertIn("Number(wallet.credit_units) / 100", detail)
+        self.assertIn("Number(summaryData.credit_units) / 100", detail)
+        self.assertNotIn("?? wallet.credit_units ?? summaryData.credit_units ?? 0", detail)
+
+    def test_personal_billing_menu_refreshes_and_renders_effective_unlimited(self):
+        summary = self.console_script[
+            self.console_script.index("function billingSummaryData")
+            : self.console_script.index("function renderBillingSummary")
+        ]
+        personal = self.console_script[
+            self.console_script.index("function renderPersonalBillingSummary")
+            : self.console_script.index("function renderBillingOrders")
+        ]
+        events = self.console_script[
+            self.console_script.index("function bindEvents")
+            : self.console_script.index('window.addEventListener("beforeunload"')
+        ]
+        for marker in ("effective_unlimited", "admin_waived", "unlimited_compute"):
+            self.assertIn(marker, summary)
+        self.assertIn('pointsNode.textContent = unlimited ? "不限"', personal)
+        self.assertIn('publishRemainingLabel.textContent = traditional ? "今日剩餘發布額度" : "今日剩余发布额度"', personal)
+        self.assertIn('loadBilling({ force: true }).catch(() => {})', events)
+        self.assertIn('publishRemaining: "今日剩余发布额度"', self.site_navigation_script)
+        self.assertIn('publishRemaining: "今日剩餘發布額度"', self.site_navigation_script)
 
     def test_console_initialization_loads_action_prices_from_the_catalog(self):
         loader = self.console_script[

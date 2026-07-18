@@ -3400,7 +3400,7 @@ function renderUserBilling(payload, userId) {
   const activeSubscriptions = Number.isFinite(Number(summaryData.active_subscription_count))
     ? Number(summaryData.active_subscription_count)
     : subscriptions.filter((item) => String(item.status || "active") === "active").length;
-  const creditPoints = Number(summaryData.points ?? wallet.points ?? wallet.credit_points ?? wallet.credit_units ?? summaryData.credit_units ?? 0);
+  const creditPoints = Number(summaryData.points ?? wallet.points ?? wallet.credit_points ?? (wallet.credit_units != null ? Number(wallet.credit_units) / 100 : (summaryData.credit_units != null ? Number(summaryData.credit_units) / 100 : 0)));
   const billingMode = String(wallet.billing_mode || summaryData.billing_mode || "legacy");
   const unlimited = billingUnlimitedFrom(summaryData, wallet, user, root);
 

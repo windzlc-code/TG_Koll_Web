@@ -146,6 +146,56 @@ class BillingApiClosedLoopTests(unittest.TestCase):
             {"unlimited_compute_enabled", "unlimited_compute_disabled"},
         )
 
+    def test_admin_summary_reports_effective_waiver_without_overriding_customer_workspace_wallet(self):
+        with db_module.db() as conn:
+            conn.execute(
+                "UPDATE billing_wallets SET credit_units = ?, unlimited_compute = 0 WHERE user_id = ?",
+                (321 * server.commercial_billing.POINT_SCALE, self.user_id),
+            )
+
+        admin_summary = self.admin.get("/api/billing/summary")
+        self.assertEqual(admin_summary.status_code, 200, admin_summary.text)
+        self.assertFalse(admin_summary.json()["unlimited_compute"])
+        self.assertTrue(admin_summary.json()["admin_waived"])
+        self.assertTrue(admin_summary.json()["effective_unlimited"])
+
+        workspace_summary = self.admin.get(
+            "/api/billing/summary",
+            headers={"X-Admin-Workspace-User-ID": str(self.user_id)},
+        )
+        self.assertEqual(workspace_summary.status_code, 200, workspace_summary.text)
+        self.assertEqual(workspace_summary.json()["points"], 321)
+        self.assertFalse(workspace_summary.json()["unlimited_compute"])
+        self.assertFalse(workspace_summary.json()["admin_waived"])
+        self.assertFalse(workspace_summary.json()["effective_unlimited"])
+
+    def test_admin_billing_mutations_invalidate_dashboard_cache(self):
+        mutations = (
+            (
+                f"/api/admin/users/{self.user_id}/recharge",
+                {"amount_cents": 1, "note": "recharge cache invalidation"},
+            ),
+            (
+                f"/api/admin/users/{self.user_id}/billing/adjustments",
+                {"delta_points": 1, "reason": "adjustment cache invalidation"},
+            ),
+            (
+                f"/api/admin/users/{self.user_id}/billing/adjustments",
+                {"unlimited": True, "reason": "unlimited cache invalidation"},
+            ),
+        )
+        for index, (path, payload) in enumerate(mutations):
+            with self.subTest(path=path, payload=payload):
+                with server._ADMIN_DASHBOARD_CACHE_LOCK:
+                    server._ADMIN_DASHBOARD_CACHE[f"sentinel-{index}"] = (
+                        0.0,
+                        {"summary": {"wallet_points": -1}},
+                    )
+                response = self.admin.post(path, json=payload)
+                self.assertEqual(response.status_code, 200, response.text)
+                with server._ADMIN_DASHBOARD_CACHE_LOCK:
+                    self.assertEqual(server._ADMIN_DASHBOARD_CACHE, {})
+
     def test_all_available_task_types_map_to_published_billing_skus(self):
         self.assertEqual(server._normal_task_billing_spec("get_gemini", {}), ("basic_text_post", 1, False))
         self.assertEqual(

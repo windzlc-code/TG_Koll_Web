@@ -4845,10 +4845,16 @@ function billingSummaryData() {
     ?? imageQuota.remaining
     ?? imageGrants.reduce((total, item) => total + Number(item?.remaining_count || item?.remaining || 0), 0);
   const creditPoints = summary.points ?? summary.credit_balance ?? wallet.points ?? wallet.amount ?? ((summary.credit_units ?? wallet.credit_units) != null ? Number(summary.credit_units ?? wallet.credit_units) / 100 : 0);
+  const unlimited = [source, summary, wallet, state.currentUser].some((item) => (
+    ["effective_unlimited", "admin_waived", "unlimited_compute", "unlimited"].some((key) => {
+      const value = item?.[key];
+      return value === true || value === 1 || ["1", "true", "yes", "unlimited", "waived"].includes(String(value ?? "").trim().toLowerCase());
+    })
+  ));
   const pendingOrders = summary.pending_orders_count
     ?? summary.pending_order_count
     ?? billingRows(state.billing.orders, ["orders", "items", "results"]).filter((item) => String(item?.status || "pending") === "pending").length;
-  return { summary, wallet, subscription, imageQuota, imageRemaining, creditPoints, pendingOrders };
+  return { summary, wallet, subscription, imageQuota, imageRemaining, creditPoints, unlimited, pendingOrders };
 }
 
 function renderBillingSummary() {
@@ -4893,6 +4899,8 @@ function renderPersonalBillingSummary() {
   const pendingNode = host.querySelector("[data-site-billing-pending]");
   const publishUsedNode = host.querySelector("[data-site-publish-used]");
   const publishRemainingNode = host.querySelector("[data-site-publish-remaining]");
+  const publishRemainingLabel = host.querySelector('[data-site-copy="publishRemaining"]');
+  if (publishRemainingLabel) publishRemainingLabel.textContent = traditional ? "今日剩餘發布額度" : "今日剩余发布额度";
   if (state.billing.loading && !state.billing.loaded) {
     if (statusNode) statusNode.textContent = billingCopy.loading;
     [pointsNode, subscriptionNode, imagesNode, pendingNode].forEach((node) => {
@@ -4902,14 +4910,14 @@ function renderPersonalBillingSummary() {
   if (!state.billing.loaded && !state.billing.loading) {
     if (statusNode) statusNode.textContent = billingCopy.click;
   } else if (state.billing.loaded) {
-    const { summary, wallet, subscription, imageRemaining, creditPoints, pendingOrders } = billingSummaryData();
+    const { summary, wallet, subscription, imageRemaining, creditPoints, unlimited, pendingOrders } = billingSummaryData();
     const billingMode = summary.billing_mode || wallet.billing_mode;
     const planName = subscription.plan_name
       || subscription.name
       || subscription.plan_sku
       || (billingMode === "legacy" ? "存量账号" : (summary.subscription_active ? "已启用" : "暂无订阅"));
     if (statusNode) statusNode.textContent = Object.keys(state.billing.errors || {}).length ? billingCopy.partial : billingCopy.ready;
-    if (pointsNode) pointsNode.textContent = `${numberText(creditPoints)} 点`;
+    if (pointsNode) pointsNode.textContent = unlimited ? "不限" : `${numberText(creditPoints)} 点`;
     if (subscriptionNode) subscriptionNode.textContent = planName;
     if (imagesNode) imagesNode.textContent = `${numberText(imageRemaining)} 张`;
     if (pendingNode) pendingNode.textContent = numberText(pendingOrders);
@@ -20079,7 +20087,7 @@ function bindEvents() {
   window.addEventListener("vecto:language-change", (event) => applyLanguage(event.detail?.language));
   window.addEventListener("vecto:account-menu-open", () => {
     renderPersonalBillingSummary();
-    loadBilling().catch(() => {});
+    loadBilling({ force: true }).catch(() => {});
   });
   window.addEventListener("vecto:account-billing-request", () => {
     openPersonalConsoleView("billing").catch(() => {});
