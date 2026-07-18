@@ -177,6 +177,14 @@ class AccountSettingsApiTests(unittest.TestCase):
         self.assertEqual(refreshed.json()["full_name"], "Updated Profile")
         self.assertEqual(refreshed.json()["profile_tags"], "AI, 营销, 品牌")
 
+        self.client.cookies.set("session_token", customer.cookies.get("session_token"))
+        dual_session_console = self.client.get("/console.html", follow_redirects=False)
+        self.assertEqual(dual_session_console.status_code, 302)
+        self.assertEqual(dual_session_console.headers["location"], "/admin-console.html")
+        dual_session_profile = self.client.get("/profile.html", follow_redirects=False)
+        self.assertEqual(dual_session_profile.status_code, 302)
+        self.assertEqual(dual_session_profile.headers["location"], "/admin-profile.html")
+
     def test_admin_can_change_username_with_current_password(self):
         login_resp = self.client.post(
             "/api/auth/admin-login",

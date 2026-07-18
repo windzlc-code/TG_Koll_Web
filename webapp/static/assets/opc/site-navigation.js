@@ -14,6 +14,15 @@
   let logoutPending = false;
   let logoutMessage = "";
   let proxyMarketBadgeRequest = 0;
+  let accountBillingRequest = 0;
+  const accountBillingState = {
+    identityKey: "",
+    loading: false,
+    loaded: false,
+    partial: false,
+    summary: {},
+    orders: {},
+  };
 
   const copy = {
     "zh-Hans": {
@@ -69,6 +78,10 @@
       billingReady: "已同步",
       billingPartial: "部分不可用",
       billingClick: "点击查看",
+      profileSignature: "个人简介",
+      profileSignatureEmpty: "暂未填写个人简介",
+      profileTags: "个人标签",
+      profileTagsEmpty: "暂未添加个人标签",
     },
     "zh-Hant": {
       brandLocal: "維拓 / 維圖",
@@ -123,6 +136,10 @@
       billingReady: "已同步",
       billingPartial: "部分不可用",
       billingClick: "點擊查看",
+      profileSignature: "個人簡介",
+      profileSignatureEmpty: "暫未填寫個人簡介",
+      profileTags: "個人標籤",
+      profileTagsEmpty: "暫未添加個人標籤",
     },
   };
 
@@ -181,6 +198,26 @@
     if (workspaceUserId) params.set("manage_user_id", workspaceUserId);
     const query = params.toString();
     return query ? `/admin-console.html?${query}` : "/admin-console.html";
+  }
+
+  function syncConsoleEntryTargets() {
+    const adminSessionMeta = document.querySelector('meta[name="admin-console-session"]')?.content === "1";
+    const adminContext = adminSessionMeta || currentSessionMode === "admin" || hasAdminConsoleContext();
+    const target = adminContext ? adminConsoleTarget() : "/console.html";
+    document.querySelectorAll("[data-console-entry]").forEach((link) => {
+      link.setAttribute("href", target);
+      if (link.dataset.siteConsoleBoundaryReady === "true") return;
+      link.dataset.siteConsoleBoundaryReady = "true";
+      link.addEventListener("click", () => {
+        const isAdminEntry = document.querySelector('meta[name="admin-console-session"]')?.content === "1"
+          || currentSessionMode === "admin"
+          || hasAdminConsoleContext();
+        if (!isAdminEntry) return;
+        removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
+        markAdminConsoleContext();
+        link.setAttribute("href", adminConsoleTarget());
+      });
+    });
   }
 
   function currentTheme() {
@@ -313,7 +350,16 @@
           <span class="site-account-status"><i aria-hidden="true"></i><span data-site-copy="accountStatus"></span></span>
         </div>
         <div class="site-account-detail"><span data-site-copy="accountId"></span><strong data-site-account-id>-</strong></div>
-        <div class="site-account-tags" data-site-account-tags hidden></div>
+        <div class="site-account-profile-fields">
+          <div class="site-account-profile-field">
+            <span class="site-account-profile-label" data-site-copy="profileSignature"></span>
+            <p data-site-account-signature data-site-copy="profileSignatureEmpty"></p>
+          </div>
+          <div class="site-account-profile-field">
+            <span class="site-account-profile-label" data-site-copy="profileTags"></span>
+            <div class="site-account-tags" data-site-account-tags><span class="site-account-placeholder" data-site-copy="profileTagsEmpty"></span></div>
+          </div>
+        </div>
         <section class="site-account-billing" data-site-account-billing aria-labelledby="siteAccountBillingTitle">
           <div class="site-account-section-head">
             <span id="siteAccountBillingTitle" data-site-copy="billing"></span>
@@ -409,6 +455,7 @@
   function syncAccount() {
     const labels = copy[currentLanguage()];
     const username = String(currentAccount?.full_name || currentAccount?.display_name || currentAccount?.username || "").trim() || labels.accountFallback;
+    const signature = String(currentAccount?.profile_signature || currentAccount?.profileSignature || "").trim();
     const tagText = String(currentAccount?.profile_tags || currentAccount?.profileTags || "").trim();
     const tags = tagText
       ? tagText.split(/[,，\n]+/).map((item) => item.trim()).filter(Boolean).slice(0, 8)
@@ -421,19 +468,161 @@
     document.querySelectorAll("[data-site-account-avatar]").forEach((node) => {
       renderAccountAvatar(node, node.classList.contains("site-user-avatar") ? "" : "");
     });
+    document.querySelectorAll("[data-site-account-signature]").forEach((node) => {
+      node.dataset.siteCopy = signature ? "" : "profileSignatureEmpty";
+      node.textContent = signature || labels.profileSignatureEmpty;
+      node.classList.toggle("is-placeholder", !signature);
+    });
     document.querySelectorAll("[data-site-account-tags]").forEach((node) => {
-      node.hidden = tags.length === 0;
+      if (!tags.length) {
+        const placeholder = document.createElement("span");
+        placeholder.className = "site-account-placeholder";
+        placeholder.dataset.siteCopy = "profileTagsEmpty";
+        placeholder.textContent = labels.profileTagsEmpty;
+        node.replaceChildren(placeholder);
+        return;
+      }
       node.replaceChildren(...tags.map((tag) => {
         const item = document.createElement("span");
         item.textContent = tag;
         return item;
       }));
     });
+    renderAccountBilling();
+    syncConsoleEntryTargets();
   }
 
   function setAccount(account) {
+    const previousIdentity = accountBillingState.identityKey;
     currentAccount = account && typeof account === "object" ? { ...account } : null;
+    const nextIdentity = accountBillingIdentityKey();
+    if (previousIdentity !== nextIdentity) {
+      accountBillingRequest += 1;
+      accountBillingState.identityKey = nextIdentity;
+      accountBillingState.loading = false;
+      accountBillingState.loaded = false;
+      accountBillingState.partial = false;
+      accountBillingState.summary = {};
+      accountBillingState.orders = {};
+    }
     syncAccount();
+    if (currentAccount && currentSessionMode !== "guest") void loadAccountBilling();
+  }
+
+  function accountBillingIdentityKey() {
+    if (!currentAccount?.id) return "";
+    const workspaceUserId = currentSessionMode === "admin" ? storedAdminWorkspaceUserId() : "";
+    return `${currentSessionMode}:${workspaceUserId || currentAccount.id}`;
+  }
+
+  function accountRequestHeaders() {
+    const headers = new Headers({ Accept: "application/json" });
+    if (currentSessionMode === "admin") {
+      headers.set("X-Admin-Console", "1");
+      const workspaceUserId = storedAdminWorkspaceUserId();
+      if (workspaceUserId) headers.set("X-Admin-Workspace-User-ID", workspaceUserId);
+    }
+    return headers;
+  }
+
+  async function fetchAccountJson(path) {
+    const response = await fetch(path, {
+      credentials: "include",
+      cache: "no-store",
+      headers: accountRequestHeaders(),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(String(payload?.detail || payload?.message || `HTTP ${response.status}`));
+      error.status = response.status;
+      throw error;
+    }
+    return payload;
+  }
+
+  function accountNumber(value) {
+    const number = Number(value || 0);
+    return new Intl.NumberFormat(currentLanguage() === "zh-Hant" ? "zh-Hant" : "zh-CN", {
+      maximumFractionDigits: 2,
+    }).format(Number.isFinite(number) ? number : 0);
+  }
+
+  function renderAccountBilling() {
+    const labels = copy[currentLanguage()];
+    const summary = accountBillingState.summary || {};
+    const orders = accountBillingState.orders || {};
+    const publishPolicy = currentAccount?.publish_policy || {};
+    const subscriptions = Array.isArray(summary.subscriptions) ? summary.subscriptions : [];
+    const activeSubscription = subscriptions.find((item) => String(item?.status || "").toLowerCase() === "active")
+      || subscriptions[0]
+      || {};
+    const billingMode = String(summary.billing_mode || "").toLowerCase();
+    const unlimited = Boolean(summary.effective_unlimited || summary.unlimited_compute || summary.admin_waived);
+    const planName = activeSubscription.plan_name
+      || activeSubscription.name
+      || activeSubscription.plan_sku
+      || (billingMode === "legacy" ? "存量账号" : (summary.subscription_active ? "已启用" : "暂无订阅"));
+    const imageRemaining = summary.free_images?.total_remaining ?? 0;
+    const pendingOrders = orders.pending_count ?? orders.pending_orders_count ?? 0;
+    const publishWaived = Boolean(publishPolicy.waived);
+    const publishUsed = Number(publishPolicy.used || 0);
+    const publishLimit = Number(publishPolicy.limit || 0);
+    const publishRemaining = Number(publishPolicy.remaining ?? Math.max(0, publishLimit - publishUsed));
+
+    document.querySelectorAll("[data-site-account-billing]").forEach((host) => {
+      const statusNode = host.querySelector("[data-site-billing-status]");
+      const pointsNode = host.querySelector("[data-site-billing-points]");
+      const subscriptionNode = host.querySelector("[data-site-billing-subscription]");
+      const imagesNode = host.querySelector("[data-site-billing-images]");
+      const pendingNode = host.querySelector("[data-site-billing-pending]");
+      const publishUsedNode = host.querySelector("[data-site-publish-used]");
+      const publishRemainingNode = host.querySelector("[data-site-publish-remaining]");
+      if (accountBillingState.loading && !accountBillingState.loaded) {
+        if (statusNode) statusNode.textContent = labels.billingLoading;
+        [pointsNode, subscriptionNode, imagesNode, pendingNode].forEach((node) => {
+          if (node) node.textContent = "…";
+        });
+      } else if (accountBillingState.loaded) {
+        if (statusNode) statusNode.textContent = accountBillingState.partial ? labels.billingPartial : labels.billingReady;
+        if (pointsNode) pointsNode.textContent = unlimited ? "不限" : `${accountNumber(summary.points)} 点`;
+        if (subscriptionNode) subscriptionNode.textContent = planName;
+        if (imagesNode) imagesNode.textContent = `${accountNumber(imageRemaining)} 张`;
+        if (pendingNode) pendingNode.textContent = accountNumber(pendingOrders);
+      } else if (statusNode) {
+        statusNode.textContent = labels.billingUnread;
+      }
+      if (publishUsedNode) publishUsedNode.textContent = publishWaived ? "不限" : `${accountNumber(publishUsed)} / ${accountNumber(publishLimit)}`;
+      if (publishRemainingNode) publishRemainingNode.textContent = publishWaived ? "不限" : `${accountNumber(publishRemaining)} 篇`;
+    });
+  }
+
+  async function loadAccountBilling({ force = false } = {}) {
+    const identityKey = accountBillingIdentityKey();
+    if (!identityKey || currentSessionMode === "guest") return;
+    if (accountBillingState.loading || (!force && accountBillingState.loaded && accountBillingState.identityKey === identityKey)) return;
+    const requestId = ++accountBillingRequest;
+    accountBillingState.identityKey = identityKey;
+    accountBillingState.loading = true;
+    accountBillingState.partial = false;
+    renderAccountBilling();
+    const requests = [
+      fetchAccountJson("/api/auth/me"),
+      fetchAccountJson("/api/billing/summary"),
+      fetchAccountJson("/api/billing/orders?limit=1"),
+    ];
+    const [accountResult, summaryResult, ordersResult] = await Promise.allSettled(requests);
+    if (requestId !== accountBillingRequest || identityKey !== accountBillingIdentityKey()) return;
+    accountBillingState.loading = false;
+    accountBillingState.loaded = true;
+    accountBillingState.partial = [accountResult, summaryResult, ordersResult].some((result) => result.status === "rejected");
+    if (accountResult.status === "fulfilled") {
+      currentAccount = { ...(currentAccount || {}), ...(accountResult.value || {}) };
+      syncAccount();
+      window.dispatchEvent(new CustomEvent("vecto:account-data-refresh", { detail: { account: currentAccount } }));
+    }
+    if (summaryResult.status === "fulfilled") accountBillingState.summary = summaryResult.value || {};
+    if (ordersResult.status === "fulfilled") accountBillingState.orders = ordersResult.value || {};
+    renderAccountBilling();
   }
 
   function setLogoutPending(pending, message = "") {
@@ -585,6 +774,7 @@
     const isAdminConsole = adminSessionMeta.content === "1";
     if (!isAdminConsole) {
       clearAdminConsoleContext();
+      currentSessionMode = "user";
       return;
     }
     markAdminConsoleContext();
@@ -848,6 +1038,7 @@
     if (event.key === "vecto-proxy-market-read") void syncProxyMarketBadge();
   });
   window.addEventListener("vecto:proxy-market-read", () => void syncProxyMarketBadge());
+  window.addEventListener(EVENT_ACCOUNT_MENU_OPEN, () => void loadAccountBilling({ force: true }));
 
   syncAdminWorkspaceContext();
   document.querySelectorAll("[data-site-header]").forEach(mount);

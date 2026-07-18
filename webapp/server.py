@@ -17416,6 +17416,18 @@ def create_app() -> FastAPI:
             },
         )
 
+    def _has_valid_admin_page_session(token: str | None) -> bool:
+        if not token:
+            return False
+        try:
+            admin_user = _get_session_user_allowing_password_change(
+                token,
+                expected_admin_session=True,
+            )
+        except HTTPException:
+            return False
+        return _is_admin(admin_user)
+
     @app.get("/profile.html", include_in_schema=False)
     @app.get("/admin-profile.html", include_in_schema=False)
     def page_profile(
@@ -17424,8 +17436,11 @@ def create_app() -> FastAPI:
         admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
     ) -> Response:
         admin_profile = request.url.path == "/admin-profile.html"
-        if not admin_profile and not session_token and admin_session_token:
-            return RedirectResponse(url="/admin-profile.html", status_code=302)
+        if not admin_profile and admin_session_token:
+            if _has_valid_admin_page_session(admin_session_token):
+                return RedirectResponse(url="/admin-profile.html", status_code=302)
+            if not session_token:
+                return RedirectResponse(url="/admin", status_code=302)
         selected_token = admin_session_token if admin_profile else session_token
         try:
             user = _get_session_user_allowing_password_change(
@@ -17461,8 +17476,11 @@ def create_app() -> FastAPI:
         admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
     ) -> Response:
         admin_console = request.url.path == "/admin-console.html"
-        if not admin_console and not session_token and admin_session_token:
-            return RedirectResponse(url="/admin-console.html", status_code=302)
+        if not admin_console and admin_session_token:
+            if _has_valid_admin_page_session(admin_session_token):
+                return RedirectResponse(url="/admin-console.html", status_code=302)
+            if not session_token:
+                return RedirectResponse(url="/admin", status_code=302)
         selected_token = admin_session_token if admin_console else session_token
         try:
             user = _get_session_user_allowing_password_change(

@@ -3,7 +3,7 @@
   const ADMIN_WORKSPACE_STORAGE_KEY = "vecto-admin-workspace-user-id";
   const ADMIN_CONTEXT_STORAGE_KEY = "vecto-admin-console-context";
   const AVATAR_MAX_BYTES = 512 * 1024;
-  const state = { account: null, avatarUrl: "", tags: [], saving: false };
+  const state = { account: null, avatarUrl: "", tags: [], saving: false, dirty: false };
   const $ = (id) => document.getElementById(id);
 
   function requestHeaders(extra = {}) {
@@ -111,6 +111,7 @@
       return;
     }
     state.tags = next;
+    state.dirty = true;
     if (input) input.value = "";
     renderTags();
     setStatus("");
@@ -158,6 +159,7 @@
   async function loadProfile() {
     try {
       renderAccount(await api("/api/me"));
+      state.dirty = false;
     } catch (error) {
       if (handleSessionBoundary(error)) return;
       setStatus(error.message || "个人资料读取失败。", "error");
@@ -177,6 +179,7 @@
     const reader = new FileReader();
     reader.onload = () => {
       state.avatarUrl = String(reader.result || "");
+      state.dirty = true;
       renderAvatar();
       setStatus("头像已载入，保存后生效。");
     };
@@ -213,6 +216,7 @@
           email,
         }),
       });
+      state.dirty = false;
       renderAccount({ ...(state.account || {}), ...(result.profile || result || {}) });
       setStatus("个人资料已保存。", "success");
     } catch (error) {
@@ -242,6 +246,7 @@
   });
   $("profileAvatarRemove")?.addEventListener("click", () => {
     state.avatarUrl = "";
+    state.dirty = true;
     renderAvatar();
     setStatus("头像将在保存后移除。");
   });
@@ -258,7 +263,11 @@
     const index = Number(button.dataset.profileTagRemove || -1);
     if (!Number.isInteger(index) || index < 0) return;
     state.tags.splice(index, 1);
+    state.dirty = true;
     renderTags();
+  });
+  $("profileForm")?.addEventListener("input", () => {
+    state.dirty = true;
   });
   $("profileForm")?.addEventListener("submit", saveProfile);
   if (isAdminSession) {
@@ -270,6 +279,12 @@
   window.addEventListener("vecto:logout-request", () => void logout());
   window.addEventListener("vecto:navigation-ready", () => {
     if (state.account) window.VectoSiteNavigation?.setAccount(state.account);
+  });
+  window.addEventListener("vecto:account-data-refresh", (event) => {
+    if (!state.saving && !state.dirty && event.detail?.account) renderAccount(event.detail.account);
+  });
+  window.addEventListener("pageshow", (event) => {
+    if (event.persisted && !state.saving && !state.dirty) void loadProfile();
   });
   void loadProfile();
 })();

@@ -106,6 +106,15 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn(".profile-page .site-account-popover", self.profile_styles)
         self.assertIn("background: #ffffff", self.site_nav_styles)
         self.assertIn("border: 1px solid #d4dfdd", self.site_nav_styles)
+        self.assertIn("data-site-account-signature", self.site_nav_source)
+        self.assertIn('data-site-copy="profileSignatureEmpty"', self.site_nav_source)
+        self.assertIn('data-site-copy="profileTagsEmpty"', self.site_nav_source)
+        self.assertIn(".site-account-profile-field", self.site_nav_styles)
+        self.assertIn("async function loadAccountBilling", self.site_nav_source)
+        self.assertIn('fetchAccountJson("/api/billing/summary")', self.site_nav_source)
+        self.assertIn('fetchAccountJson("/api/billing/orders?limit=1")', self.site_nav_source)
+        self.assertIn("function syncConsoleEntryTargets", self.site_nav_source)
+        self.assertIn('link.setAttribute("href", target)', self.site_nav_source)
 
         self.assertIn('id="profileAvatarButton"', self.profile_markup)
         self.assertIn('id="profileAvatarFile"', self.profile_markup)
@@ -1686,6 +1695,20 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("storedAdminWorkspaceUserId()", helper)
         self.assertNotIn("manage_user_id", helper)
         self.assertNotIn("/admin-console.html?view=", helper)
+
+    def test_authenticated_navigation_prioritizes_admin_console_and_regular_user_mode(self):
+        sync_source = self._javascript_function_source(
+            self.site_nav_source,
+            "syncAdminWorkspaceContext",
+        )
+        self.assertIn('currentSessionMode = "user"', sync_source)
+        target_source = self._javascript_function_source(
+            self.site_nav_source,
+            "syncConsoleEntryTargets",
+        )
+        self.assertIn("adminConsoleTarget()", target_source)
+        self.assertIn('"/console.html"', target_source)
+        self.assertIn("removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY)", target_source)
 
     def test_public_navigation_clears_stale_admin_workspace_but_keeps_admin_context(self):
         sync_source = self._javascript_function_source(
