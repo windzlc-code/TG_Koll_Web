@@ -26,6 +26,7 @@ class ProxyMarketFrontendTests(unittest.TestCase):
         self.assertIn("socks5://user:password@198.51.100.27:8022", html)
         self.assertIn("198.51.100.27:8022:user:password", html)
         self.assertIn("direct.provider.example:8001:user:password", html)
+        self.assertIn("国家/地区支持全球 ISO 代码及常用中外文名称", html)
         self.assertIn('rows="6"', html)
         self.assertIn("height: 136px", html)
         self.assertIn("min-height: 136px", html)
@@ -295,6 +296,40 @@ class ProxyMarketFrontendTests(unittest.TestCase):
               "不是有效地区",
             ].join("\\n"));
             assert.ok(unknown._errors.includes("第 4 行无法识别"));
+            """
+        )
+
+    def test_country_hint_supports_global_iso_codes_and_localized_names(self):
+        self._run_node(
+            """
+            const normalize = context.normalizeProxyMarketCountry;
+            const isoCodes = vm.runInContext("PROXY_MARKET_ISO_COUNTRY_CODES", context);
+            assert.equal(isoCodes.length, 249);
+            assert.equal(new Set(isoCodes).size, 249);
+            for (const code of isoCodes) {
+              assert.equal(normalize(code)?.code, code, code);
+            }
+
+            const expected = new Map([
+              ["GR", "GR"], ["希腊", "GR"], ["Greece", "GR"],
+              ["HU", "HU"], ["匈牙利", "HU"], ["Hungary", "HU"],
+              ["IL", "IL"], ["以色列", "IL"], ["Israel", "IL"],
+              ["EG", "EG"], ["埃及", "EG"], ["Egypt", "EG"],
+              ["NG", "NG"], ["尼日利亚", "NG"], ["Nigeria", "NG"],
+              ["KE", "KE"], ["肯尼亚", "KE"], ["Kenya", "KE"],
+              ["PK", "PK"], ["巴基斯坦", "PK"], ["Pakistan", "PK"],
+              ["KZ", "KZ"], ["哈萨克斯坦", "KZ"], ["Kazakhstan", "KZ"],
+              ["IS", "IS"], ["冰岛", "IS"], ["Iceland", "IS"],
+              ["PE", "PE"], ["秘鲁", "PE"], ["Peru", "PE"],
+            ]);
+            for (const [input, code] of expected) {
+              assert.equal(normalize(input)?.code, code, input);
+            }
+
+            assert.equal(normalize("国家 / 地区：希腊")?.code, "GR");
+            assert.equal(normalize("country: Côte d’Ivoire")?.code, "CI");
+            assert.equal(normalize("ZZ"), null);
+            assert.equal(normalize("不是国家"), null);
             """
         )
 

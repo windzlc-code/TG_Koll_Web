@@ -5418,9 +5418,38 @@ function proxyMarketCountryAliasKey(value) {
     .replace(/\p{M}/gu, "")
     .trim()
     .toLowerCase()
+    .replace(/[’‘`´]/g, "'")
     .replace(/[._-]+/g, " ")
     .replace(/\s+/g, " ");
 }
+
+const PROXY_MARKET_ISO_COUNTRY_CODES = `
+  AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ
+  BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ
+  CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ
+  DE DJ DK DM DO DZ
+  EC EE EG EH ER ES ET
+  FI FJ FK FM FO FR
+  GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY
+  HK HM HN HR HT HU
+  ID IE IL IM IN IO IQ IR IS IT
+  JE JM JO JP
+  KE KG KH KI KM KN KP KR KW KY KZ
+  LA LB LC LI LK LR LS LT LU LV LY
+  MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ
+  NA NC NE NF NG NI NL NO NP NR NU NZ
+  OM
+  PA PE PF PG PH PK PL PM PN PR PS PT PW PY
+  QA
+  RE RO RS RU RW
+  SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ
+  TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ
+  UA UG UM US UY UZ
+  VA VC VE VG VI VN VU
+  WF WS
+  YE YT
+  ZA ZM ZW
+`.trim().split(/\s+/);
 
 const PROXY_MARKET_COUNTRY_ALIASES = new Map([
   [["tw", "taiwan", "台湾", "台灣", "中国台湾", "中國台灣"], "TW", "台湾"],
@@ -5473,6 +5502,47 @@ const PROXY_MARKET_COUNTRY_ALIASES = new Map([
   aliases.map((alias) => [proxyMarketCountryAliasKey(alias), { code, label }])
 )));
 
+function buildProxyMarketIntlCountryAliases() {
+  const aliases = new Map();
+  const ambiguous = new Set();
+  const displayNames = [];
+  if (typeof Intl !== "undefined" && typeof Intl.DisplayNames === "function") {
+    ["zh-CN", "zh-TW", "en", "es", "pt", "fr", "de", "it", "ja", "ko", "ru"].forEach((locale) => {
+      try {
+        displayNames.push(new Intl.DisplayNames([locale], { type: "region" }));
+      } catch {
+        // Keep ISO-code recognition available when a locale is unavailable.
+      }
+    });
+  }
+  PROXY_MARKET_ISO_COUNTRY_CODES.forEach((code) => {
+    const localizedNames = displayNames
+      .map((formatter) => formatter.of(code))
+      .filter((name) => name && name.toUpperCase() !== code);
+    const entry = {
+      code,
+      label: localizedNames[0]
+        || [...PROXY_MARKET_COUNTRY_ALIASES.values()].find((country) => country.code === code)?.label
+        || code,
+    };
+    aliases.set(proxyMarketCountryAliasKey(code), entry);
+    localizedNames.forEach((name) => {
+      const key = proxyMarketCountryAliasKey(name);
+      if (!key || ambiguous.has(key)) return;
+      const existing = aliases.get(key);
+      if (existing && existing.code !== code) {
+        aliases.delete(key);
+        ambiguous.add(key);
+        return;
+      }
+      aliases.set(key, entry);
+    });
+  });
+  return aliases;
+}
+
+const PROXY_MARKET_INTL_COUNTRY_ALIASES = buildProxyMarketIntlCountryAliases();
+
 function normalizeProxyMarketCountry(value) {
   const clean = String(value || "")
     .normalize("NFKC")
@@ -5484,7 +5554,10 @@ function normalizeProxyMarketCountry(value) {
     )
     .replace(/\s*(?:国家|國家|地区|地區|country|region)\s*$/i, "")
     .trim();
-  return PROXY_MARKET_COUNTRY_ALIASES.get(proxyMarketCountryAliasKey(clean)) || null;
+  const key = proxyMarketCountryAliasKey(clean);
+  return PROXY_MARKET_COUNTRY_ALIASES.get(key)
+    || PROXY_MARKET_INTL_COUNTRY_ALIASES.get(key)
+    || null;
 }
 
 function inferProxyMarketProviderKey(hosts) {
