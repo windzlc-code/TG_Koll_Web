@@ -97,7 +97,15 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('"/profile.html"', self.site_nav_source)
         self.assertIn('"/admin-profile.html"', self.site_nav_source)
         self.assertIn('data-site-copy="personalProfile"', self.site_nav_source)
-        self.assertIn('page === "console" ? "" : " hidden"', self.site_nav_source)
+        self.assertNotIn('page === "console" ? "" : " hidden"', self.site_nav_source)
+        self.assertNotIn(
+            'header.dataset.sitePage !== "console"',
+            self.site_nav_source,
+        )
+        self.assertIn("function installUnifiedAccountMenu", self.site_nav_source)
+        self.assertNotIn(".profile-page .site-account-popover", self.profile_styles)
+        self.assertIn("background: #ffffff", self.site_nav_styles)
+        self.assertIn("border: 1px solid #d4dfdd", self.site_nav_styles)
 
         self.assertIn('id="profileAvatarButton"', self.profile_markup)
         self.assertIn('id="profileAvatarFile"', self.profile_markup)
@@ -1656,19 +1664,63 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
         self._run_node(harness)
 
-    def test_account_menu_preserves_admin_managed_workspace_context(self):
+    def test_account_menu_drops_admin_managed_workspace_context_outside_console(self):
         start = self.site_nav_source.index("function openAccountConsoleView")
         end = self.site_nav_source.index("function showAuthenticatedAccount", start)
         helper = self.site_nav_source[start:end]
         local_switch = helper.index('window.location.pathname === "/console.html"')
-        managed_redirect = helper.index("adminConsoleTarget(targetView, adminWorkspaceUserId)")
-        self.assertLess(local_switch, managed_redirect)
+        admin_redirect = helper.index('adminConsoleTarget(targetView, "")')
+        self.assertLess(local_switch, admin_redirect)
         self.assertIn("window.dispatchEvent(new CustomEvent", helper)
         self.assertIn("new URLSearchParams({ view: targetView })", helper)
-        self.assertIn("storedAdminWorkspaceUserId()", helper)
         self.assertIn('currentSessionMode === "admin"', helper)
         self.assertIn("hasAdminConsoleContext()", helper)
+        self.assertNotIn("storedAdminWorkspaceUserId()", helper)
+        self.assertNotIn("manage_user_id", helper)
         self.assertNotIn("/admin-console.html?view=", helper)
+
+    def test_public_navigation_clears_stale_admin_workspace_but_keeps_admin_context(self):
+        sync_source = self._javascript_function_source(
+            self.site_nav_source,
+            "syncAdminWorkspaceContext",
+        )
+        resolve_start = self.site_nav_source.index("async function resolvePublicSession()")
+        resolve_end = self.site_nav_source.index("async function openConsoleEntry", resolve_start)
+        resolve_source = self.site_nav_source[resolve_start:resolve_end]
+        self._run_node(
+            f"""
+            const assert = require("assert");
+            const ADMIN_WORKSPACE_STORAGE_KEY = "vecto-admin-workspace-user-id";
+            const removed = [];
+            const document = {{ querySelector() {{ return null; }} }};
+            function removeSessionValue(key) {{ removed.push(key); }}
+            function clearAdminConsoleContext() {{ throw new Error("admin context must be preserved"); }}
+            function markAdminConsoleContext() {{}}
+            function writeSessionValue() {{}}
+            let currentSessionMode = "admin";
+            {sync_source}
+            syncAdminWorkspaceContext();
+            assert.deepStrictEqual(removed, [ADMIN_WORKSPACE_STORAGE_KEY]);
+
+            let requestedWorkspace = "not-called";
+            function hasAdminConsoleContext() {{ return true; }}
+            function storedAdminWorkspaceUserId() {{ return "32"; }}
+            async function fetchSessionAccount(options = {{}}) {{
+              requestedWorkspace = options.workspaceUserId || "";
+              return {{
+                response: {{ ok: true, status: 200 }},
+                account: {{ id: 1, username: "admin", is_admin: true }},
+              }};
+            }}
+            {resolve_source}
+            (async () => {{
+              const session = await resolvePublicSession();
+              assert.strictEqual(requestedWorkspace, "");
+              assert.strictEqual(session.workspaceUserId, "");
+              assert.strictEqual(session.account.id, 1);
+            }})();
+            """
+        )
 
     def test_public_admin_context_fails_closed_when_admin_probe_errors(self):
         resolve_start = self.site_nav_source.index("async function resolvePublicSession()")
@@ -1678,6 +1730,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             f"""
             const assert = require("assert");
             let regularProbeCount = 0;
+            const ADMIN_WORKSPACE_STORAGE_KEY = "vecto-admin-workspace-user-id";
             function hasAdminConsoleContext() {{ return true; }}
             function storedAdminWorkspaceUserId() {{ return ""; }}
             function removeSessionValue() {{}}

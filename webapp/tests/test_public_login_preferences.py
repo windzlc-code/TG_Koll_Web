@@ -238,7 +238,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
             page = (self.static_dir / page_name).read_text(encoding="utf-8")
             with self.subTest(page=page_name):
                 self.assertIn(
-                    "/assets/opc/site-navigation.js?v=2026071801",
+                    "/assets/opc/site-navigation.js?v=__SITE_NAVIGATION_JS_VERSION__",
                     page,
                 )
 
@@ -251,7 +251,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn('header.dataset.siteAuthState = "guest"', self.site_nav_script)
         self.assertIn('[data-site-auth-state="pending"] .header-actions', self.site_nav_styles)
         self.assertIn("min-width: 274px", self.site_nav_styles)
-        self.assertIn('accountMenuMarkup(header.dataset.sitePage || "home")', self.site_nav_script)
+        self.assertIn('installUnifiedAccountMenu(header, header.dataset.sitePage || "home")', self.site_nav_script)
         self.assertIn("async function logoutPublicSession()", self.site_nav_script)
         self.assertIn('fetch("/api/auth/logout"', self.site_nav_script)
         self.assertIn("window.location.reload()", self.site_nav_script)
@@ -265,7 +265,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
             self.assertIn("data-site-language-toggle", markup)
         self.assertIn("function themeEnabled()", self.site_nav_script)
         self.assertIn('return page === "console" || document.body?.classList.contains("page-admin")', self.site_nav_script)
-        self.assertIn('accountMenuMarkup(header.dataset.sitePage || "home")', self.site_nav_script)
+        self.assertIn('installUnifiedAccountMenu(header, header.dataset.sitePage || "home")', self.site_nav_script)
         public_controls = self.site_nav_script.split("function renderActions", 1)[1].split("function fallbackMarkup", 1)[0]
         self.assertNotIn("data-site-theme-toggle", public_controls.split("const controls", 1)[1].split("const mobileMenu", 1)[0])
         self.assertIn("data-site-language-toggle", public_controls)
@@ -351,6 +351,10 @@ class PublicLoginUiSourceTests(unittest.TestCase):
             else:
                 self.assertNotIn("__OPC_SCRIPT_VERSION__", response.text)
                 self.assertRegex(response.text, r'/assets/opc/script\.js\?v=\d+-\d+')
+                self.assertNotIn("__SITE_NAVIGATION_CSS_VERSION__", response.text)
+                self.assertNotIn("__SITE_NAVIGATION_JS_VERSION__", response.text)
+                self.assertRegex(response.text, r'/assets/opc/site-navigation\.css\?v=\d+-\d+')
+                self.assertRegex(response.text, r'/assets/opc/site-navigation\.js\?v=\d+-\d+')
 
     def test_admin_runtime_form_exposes_cookie_policy(self):
         for field_id in (

@@ -475,11 +475,11 @@ html {
   padding: 10px;
   overflow-y: auto;
   overscroll-behavior: contain;
-  color: #eff8f5;
-  background: #0b1718;
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #1d2a2a;
+  background: #ffffff;
+  border: 1px solid #d4dfdd;
   border-radius: 8px;
-  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 22px 54px rgba(21, 45, 42, 0.18);
 }
 
 .site-account-popover::before {
@@ -501,7 +501,7 @@ html {
   align-items: center;
   gap: 10px;
   padding-bottom: 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  border-bottom: 1px solid #e1e8e6;
 }
 
 .site-account-avatar {
@@ -509,9 +509,9 @@ html {
   place-items: center;
   width: 40px;
   height: 40px;
-  color: #dffbf1;
-  background: rgba(119, 216, 195, 0.12);
-  border: 1px solid rgba(119, 216, 195, 0.32);
+  color: #087f72;
+  background: #eff9f6;
+  border: 1px solid #c9e9df;
   border-radius: 50%;
 }
 
@@ -529,12 +529,12 @@ html {
 }
 
 .site-account-identity strong {
-  color: #ffffff;
+  color: #142122;
   font-size: 14px;
 }
 
 .site-account-identity span {
-  color: rgba(239, 248, 245, 0.66);
+  color: #687877;
   font-size: 12px;
 }
 
@@ -542,7 +542,7 @@ html {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  color: #9fe9d4;
+  color: #14745e;
   font-size: 11px;
   font-weight: 800;
   white-space: nowrap;
@@ -561,12 +561,12 @@ html {
   justify-content: space-between;
   gap: 16px;
   min-height: 42px;
-  color: rgba(239, 248, 245, 0.68);
+  color: #687877;
   font-size: 12px;
 }
 
 .site-account-detail strong {
-  color: #ffffff;
+  color: #142122;
   font-size: 12px;
 }
 
@@ -585,9 +585,9 @@ html {
   max-width: 100%;
   padding: 4px 8px;
   overflow: hidden;
-  color: #a8f0df;
-  background: rgba(119, 216, 195, 0.12);
-  border: 1px solid rgba(119, 216, 195, 0.25);
+  color: #087f72;
+  background: #eff9f6;
+  border: 1px solid #c9e9df;
   border-radius: 999px;
   font-size: 11px;
   font-weight: 800;
@@ -599,7 +599,7 @@ html {
   display: grid;
   gap: 7px;
   padding: 9px 0 2px;
-  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  border-top: 1px solid #e1e8e6;
 }
 
 .site-account-section-head {
@@ -610,7 +610,7 @@ html {
 }
 
 .site-account-billing-state {
-  color: rgba(239, 248, 245, 0.48);
+  color: #687877;
   font-size: 10px;
 }
 
@@ -625,14 +625,14 @@ html {
   gap: 3px;
   min-width: 0;
   padding: 7px 8px;
-  background: rgba(255, 255, 255, 0.045);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: #f6faf9;
+  border: 1px solid #dfe8e6;
   border-radius: 6px;
 }
 
 .site-account-billing-card span {
   overflow: hidden;
-  color: rgba(239, 248, 245, 0.56);
+  color: #687877;
   font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -640,7 +640,7 @@ html {
 
 .site-account-billing-card strong {
   overflow: hidden;
-  color: #ffffff;
+  color: #142122;
   font-size: 13px;
   font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
@@ -656,9 +656,9 @@ html {
 .site-account-action-row button {
   min-height: 34px;
   padding: 0 8px;
-  color: #dffbf1;
-  background: rgba(119, 216, 195, 0.08);
-  border: 1px solid rgba(119, 216, 195, 0.28);
+  color: #087f72;
+  background: #f2fbf8;
+  border: 1px solid #c9e9df;
   border-radius: 6px;
   font: inherit;
   font-size: 11px;
@@ -679,12 +679,12 @@ html {
   justify-content: space-between;
   gap: 6px;
   padding: 10px 0 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  border-top: 1px solid #e1e8e6;
 }
 
 .site-account-section-label {
   margin-right: auto;
-  color: rgba(239, 248, 245, 0.58);
+  color: #687877;
   font-size: 11px;
   font-weight: 800;
 }
@@ -697,9 +697,9 @@ html {
   height: 38px;
   min-height: 38px;
   padding: 0;
-  color: #eff8f5;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #314140;
+  background: #f3f7f6;
+  border: 1px solid #dbe5e3;
   border-radius: 7px;
   font: inherit;
   font-size: 12px;
@@ -709,9 +709,9 @@ html {
 }
 
 .site-account-preference:hover {
-  color: #ffffff;
-  background: rgba(255, 255, 255, 0.1);
-  border-color: rgba(119, 216, 195, 0.46);
+  color: #087f72;
+  background: #eaf7f3;
+  border-color: #b7dfd5;
 }
 
 .site-account-preference-icon {
@@ -719,7 +719,7 @@ html {
   place-items: center;
   width: 20px;
   height: 20px;
-  color: #9fe9d4;
+  color: #087f72;
 }
 
 .site-account-preference-icon svg {
@@ -733,7 +733,7 @@ html {
 }
 
 .site-account-preference strong {
-  color: rgba(239, 248, 245, 0.64);
+  color: #687877;
   font-size: 11px;
   font-weight: 750;
   white-space: nowrap;
@@ -747,9 +747,9 @@ html {
   width: 100%;
   min-height: 40px;
   padding: 0 12px;
-  color: #ffd8d2;
-  background: rgba(231, 93, 79, 0.1);
-  border: 1px solid rgba(231, 93, 79, 0.38);
+  color: #a63535;
+  background: #fff7f7;
+  border: 1px solid #efcccc;
   border-radius: 7px;
   font: inherit;
   font-size: 13px;
@@ -758,9 +758,9 @@ html {
 }
 
 .site-account-logout:hover {
-  color: #ffffff;
-  background: rgba(231, 93, 79, 0.2);
-  border-color: rgba(231, 93, 79, 0.66);
+  color: #8f2d2d;
+  background: #fff0f0;
+  border-color: #e4bcbc;
 }
 
 .site-account-logout:disabled {
@@ -775,7 +775,7 @@ html {
 
 .site-account-message {
   min-height: 0;
-  color: #ffb5a7;
+  color: #a63535;
   font-size: 11px;
   line-height: 1.4;
 }

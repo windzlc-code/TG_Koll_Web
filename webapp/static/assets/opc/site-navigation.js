@@ -175,7 +175,7 @@
     return String(sessionValue(ADMIN_WORKSPACE_STORAGE_KEY) || "").trim();
   }
 
-  function adminConsoleTarget(view = "", workspaceUserId = storedAdminWorkspaceUserId()) {
+  function adminConsoleTarget(view = "", workspaceUserId = "") {
     const params = new URLSearchParams();
     if (view) params.set("view", view);
     if (workspaceUserId) params.set("manage_user_id", workspaceUserId);
@@ -314,7 +314,7 @@
         </div>
         <div class="site-account-detail"><span data-site-copy="accountId"></span><strong data-site-account-id>-</strong></div>
         <div class="site-account-tags" data-site-account-tags hidden></div>
-        <section class="site-account-billing" data-site-account-billing aria-labelledby="siteAccountBillingTitle"${page === "console" ? "" : " hidden"}>
+        <section class="site-account-billing" data-site-account-billing aria-labelledby="siteAccountBillingTitle">
           <div class="site-account-section-head">
             <span id="siteAccountBillingTitle" data-site-copy="billing"></span>
             <span class="site-account-billing-state" data-site-billing-status data-site-copy="billingUnread">尚未读取</span>
@@ -363,6 +363,19 @@
       </a>
       <nav class="site-nav" data-site-navigation>${navigationLinks(page, current)}</nav>
       <div class="header-actions">${renderActions(mode, page, current)}</div>`;
+  }
+
+  function installUnifiedAccountMenu(header, page = "console") {
+    const actions = header?.querySelector(".header-actions");
+    if (!actions) return null;
+    const template = document.createElement("template");
+    template.innerHTML = accountMenuMarkup(page).trim();
+    const nextMenu = template.content.firstElementChild;
+    if (!nextMenu) return null;
+    const existingMenu = actions.querySelector("[data-site-account-menu]");
+    if (existingMenu) existingMenu.replaceWith(nextMenu);
+    else actions.appendChild(nextMenu);
+    return nextMenu;
   }
 
   function syncMenuState(menu) {
@@ -478,6 +491,7 @@
       if (menu.dataset.siteAccountReady === "true") return;
       menu.dataset.siteAccountReady = "true";
       let hoverCloseTimer = 0;
+      let hoverOpened = false;
       const trigger = menu.querySelector("[data-site-account-trigger]");
       const popover = menu.querySelector("[data-site-account-popover]");
       const cancelHoverClose = () => {
@@ -494,15 +508,22 @@
       };
       trigger?.addEventListener("click", () => {
         cancelHoverClose();
+        if (hoverOpened) {
+          hoverOpened = false;
+          setAccountMenuOpen(menu, true);
+          return;
+        }
         setAccountMenuOpen(menu, trigger.getAttribute("aria-expanded") !== "true", { restoreFocus: true });
       });
       menu.addEventListener("pointerenter", (event) => {
         if (event.pointerType && event.pointerType !== "mouse") return;
         cancelHoverClose();
+        hoverOpened = trigger?.getAttribute("aria-expanded") !== "true";
         setAccountMenuOpen(menu, true);
       });
       menu.addEventListener("pointerleave", (event) => {
         if (event.pointerType && event.pointerType !== "mouse") return;
+        hoverOpened = false;
         scheduleHoverClose();
       });
       menu.addEventListener("focusin", (event) => {
@@ -536,15 +557,14 @@
 
   function openAccountConsoleView(view) {
     const targetView = "billing";
-    const pageWorkspaceUserId = String(document.querySelector('meta[name="admin-workspace-user-id"]')?.content || "").trim();
     const isAdminConsole = document.querySelector('meta[name="admin-console-session"]')?.content === "1";
-    const adminWorkspaceUserId = pageWorkspaceUserId || storedAdminWorkspaceUserId();
     if (window.location.pathname === "/console.html" || window.location.pathname === "/admin-console.html") {
       window.dispatchEvent(new CustomEvent(EVENT_BILLING_REQUEST));
       return;
     }
-    if (isAdminConsole || currentSessionMode === "admin" || hasAdminConsoleContext() || adminWorkspaceUserId) {
-      window.location.assign(adminConsoleTarget(targetView, adminWorkspaceUserId));
+    if (isAdminConsole || currentSessionMode === "admin" || hasAdminConsoleContext()) {
+      removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
+      window.location.assign(adminConsoleTarget(targetView, ""));
       return;
     }
     window.location.assign(`/console.html?${new URLSearchParams({ view: targetView }).toString()}`);
@@ -558,7 +578,10 @@
 
   function syncAdminWorkspaceContext() {
     const adminSessionMeta = document.querySelector('meta[name="admin-console-session"]');
-    if (!adminSessionMeta) return;
+    if (!adminSessionMeta) {
+      removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
+      return;
+    }
     const isAdminConsole = adminSessionMeta.content === "1";
     if (!isAdminConsole) {
       clearAdminConsoleContext();
@@ -578,13 +601,7 @@
     actions.querySelectorAll("[data-open-login], .site-guest-action").forEach((node) => node.remove());
     actions.querySelectorAll(":scope > .site-global-controls").forEach((node) => node.remove());
     actions.querySelectorAll(".site-mobile-menu-extra").forEach((node) => node.remove());
-    if (!actions.querySelector("[data-site-account-menu]")) {
-      actions.insertAdjacentHTML("beforeend", accountMenuMarkup(header.dataset.sitePage || "home"));
-    }
-    actions.querySelector("[data-site-account-billing]")?.toggleAttribute(
-      "hidden",
-      header.dataset.sitePage !== "console",
-    );
+    installUnifiedAccountMenu(header, header.dataset.sitePage || "home");
     header.dataset.siteAuthState = "authenticated";
     bindPreferenceControls(header);
     bindAccountMenus(header);
@@ -615,19 +632,14 @@
 
   async function resolvePublicSession() {
     if (hasAdminConsoleContext()) {
-      let workspaceUserId = storedAdminWorkspaceUserId();
-      let adminResult = await fetchSessionAccount({ admin: true, workspaceUserId });
-      if (workspaceUserId && [400, 404].includes(adminResult.response.status)) {
-        removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
-        workspaceUserId = "";
-        adminResult = await fetchSessionAccount({ admin: true });
-      }
+      removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
+      const adminResult = await fetchSessionAccount({ admin: true });
       if (adminResult.response.ok && adminResult.account) {
         markAdminConsoleContext();
         return {
           mode: "admin",
           account: adminResult.account,
-          workspaceUserId,
+          workspaceUserId: "",
           path: "/admin-console.html",
         };
       }
@@ -710,6 +722,7 @@
     if (!header.querySelector(".brand")) {
       header.innerHTML = fallbackMarkup(page, resolvedMode, current);
     }
+    if (mode === "authenticated") installUnifiedAccountMenu(header, page);
 
     header.dataset.siteReady = "true";
     header.dataset.i18nSkip = "true";

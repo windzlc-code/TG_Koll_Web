@@ -17339,6 +17339,8 @@ def create_app() -> FastAPI:
                 "__OPC_PRICING_CSS_VERSION__": _asset_version("assets", "opc", "pricing.css"),
                 "__OPC_SCRIPT_VERSION__": _asset_version("assets", "opc", "script.js"),
                 "__OPC_PRICING_JS_VERSION__": _asset_version("assets", "opc", "pricing.js"),
+                "__SITE_NAVIGATION_CSS_VERSION__": _asset_version("assets", "opc", "site-navigation.css"),
+                "__SITE_NAVIGATION_JS_VERSION__": _asset_version("assets", "opc", "site-navigation.js"),
             },
         )
 
@@ -17380,6 +17382,8 @@ def create_app() -> FastAPI:
                 "__OPC_PRICING_CSS_VERSION__": _asset_version("assets", "opc", "pricing.css"),
                 "__OPC_SCRIPT_VERSION__": _asset_version("assets", "opc", "script.js"),
                 "__OPC_PRICING_JS_VERSION__": _asset_version("assets", "opc", "pricing.js"),
+                "__SITE_NAVIGATION_CSS_VERSION__": _asset_version("assets", "opc", "site-navigation.css"),
+                "__SITE_NAVIGATION_JS_VERSION__": _asset_version("assets", "opc", "site-navigation.js"),
             },
         )
 
@@ -17393,6 +17397,8 @@ def create_app() -> FastAPI:
                 "__OPC_PRICING_CSS_VERSION__": _asset_version("assets", "opc", "pricing.css"),
                 "__OPC_SCRIPT_VERSION__": _asset_version("assets", "opc", "script.js"),
                 "__OPC_PRICING_JS_VERSION__": _asset_version("assets", "opc", "pricing.js"),
+                "__SITE_NAVIGATION_CSS_VERSION__": _asset_version("assets", "opc", "site-navigation.css"),
+                "__SITE_NAVIGATION_JS_VERSION__": _asset_version("assets", "opc", "site-navigation.js"),
             },
         )
 
@@ -17439,6 +17445,8 @@ def create_app() -> FastAPI:
             replacements={
                 "__PROFILE_CSS_VERSION__": _asset_version("assets", "profile.css"),
                 "__PROFILE_JS_VERSION__": _asset_version("assets", "profile.js"),
+                "__SITE_NAVIGATION_CSS_VERSION__": _asset_version("assets", "opc", "site-navigation.css"),
+                "__SITE_NAVIGATION_JS_VERSION__": _asset_version("assets", "opc", "site-navigation.js"),
                 "__ADMIN_CONSOLE_SESSION__": "1" if admin_profile else "0",
                 "__ADMIN_WORKSPACE_USER_ID__": "",
             },
@@ -17500,6 +17508,8 @@ def create_app() -> FastAPI:
                 "__CONSOLE_CSS_VERSION__": _asset_version("assets", "console.css"),
                 "__CONSOLE_JS_VERSION__": _asset_version("assets", "console.js"),
                 "__PERSONA_DASHBOARD_JS_VERSION__": _asset_version("assets", "persona-dashboard.js"),
+                "__SITE_NAVIGATION_CSS_VERSION__": _asset_version("assets", "opc", "site-navigation.css"),
+                "__SITE_NAVIGATION_JS_VERSION__": _asset_version("assets", "opc", "site-navigation.js"),
                 "__CONSOLE_BOOTSTRAP_JSON__": _json_script_payload(console_bootstrap),
                 "__ADMIN_WORKSPACE_USER_ID__": str(_workspace_user_id(user)) if _is_admin_workspace(user) else "",
                 "__ADMIN_CONSOLE_SESSION__": "1" if admin_console else "",
@@ -17527,6 +17537,7 @@ def create_app() -> FastAPI:
             replacements={
                 "__STYLE_VERSION__": _asset_version("assets", "style.css"),
                 "__ADMIN_JS_VERSION__": _asset_version("assets", "admin.js"),
+                "__SITE_NAVIGATION_JS_VERSION__": _asset_version("assets", "opc", "site-navigation.js"),
             },
         )
         return response
