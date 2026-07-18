@@ -23,6 +23,8 @@ class ProxyMarketFrontendTests(unittest.TestCase):
         self.assertIn(">发布<", "".join(html.split()))
         self.assertNotIn("检测并补全地区", html)
         self.assertNotIn("真实检测并发布", html)
+        source = ADMIN_JS.read_text(encoding="utf-8")
+        self.assertIn('String(item.pending_check_status || "") === "healthy"', source)
 
     def _run_node(self, body: str):
         node = shutil.which("node")
@@ -64,6 +66,11 @@ class ProxyMarketFrontendTests(unittest.TestCase):
               ["btnTestProxyMarketItem", ""],
               ["btnPublishProxyMarketItem", ""],
             ].forEach(([id, value]) => control(id, value));
+            controls.set("proxyMarketItemForm", {{
+              elements: [...controls.values()],
+              reportValidity: () => true,
+              reset: () => {{}},
+            }});
 
             let apiImpl = async () => ({{}});
             let apiCalls = 0;
@@ -187,9 +194,11 @@ class ProxyMarketFrontendTests(unittest.TestCase):
             assert.equal(controls.get("btnSaveProxyMarketItem").disabled, true);
             assert.equal(controls.get("btnTestProxyMarketItem").disabled, true);
             assert.equal(controls.get("btnPublishProxyMarketItem").disabled, true);
+            assert.equal(controls.get("proxyMarketHost").disabled, true);
 
             context.setProxyMarketEditorBusy(false);
             assert.equal(controls.get("btnPublishProxyMarketItem").disabled, false);
+            assert.equal(controls.get("proxyMarketHost").disabled, false);
             assert.equal(invalidate(), true);
             assert.equal(context.adminState.proxyMarketPendingCheckId, "");
             assert.equal(controls.get("btnPublishProxyMarketItem").disabled, true);

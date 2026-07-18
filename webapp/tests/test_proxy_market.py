@@ -425,16 +425,45 @@ class ProxyMarketTests(unittest.TestCase):
             published.json()["item"]["version"],
         )
         with db() as conn:
-            consumed = dict(
+            candidate_after_publish = conn.execute(
+                "SELECT * FROM proxy_market_item_checks WHERE item_id = ?",
+                (item["id"],),
+            ).fetchone()
+            receipt = dict(
                 conn.execute(
-                    "SELECT * FROM proxy_market_item_checks WHERE item_id = ?",
-                    (item["id"],),
+                    "SELECT * FROM proxy_market_publish_receipts WHERE check_id = ?",
+                    (tested.json()["check_id"],),
                 ).fetchone()
             )
-        self.assertGreater(int(consumed["consumed_at"]), 0)
-        self.assertEqual(consumed["username_ciphertext"], "")
-        self.assertEqual(consumed["password_ciphertext"], "")
-        self.assertNotIn("split-password", consumed["publish_result_json"])
+        self.assertIsNone(candidate_after_publish)
+        self.assertGreater(int(receipt["published_at"]), 0)
+        self.assertNotIn("split-password", receipt["result_json"])
+
+        with patch(
+            "webapp.proxy_market._run_proxy_connection_check",
+            return_value=check_result,
+        ):
+            next_test = self.admin.post(
+                f"/api/admin/proxy-market/items/{item['id']}/test",
+                headers=self.origin,
+                json={
+                    "proxy_type": "socks5",
+                    "host": "198.51.100.28",
+                    "port": 8022,
+                },
+            )
+        self.assertEqual(next_test.status_code, 200, next_test.text)
+        replayed_after_next_test = self.admin.post(
+            f"/api/admin/proxy-market/items/{item['id']}/publish",
+            headers=self.origin,
+            json={"check_id": tested.json()["check_id"]},
+        )
+        self.assertEqual(
+            replayed_after_next_test.status_code,
+            200,
+            replayed_after_next_test.text,
+        )
+        self.assertTrue(replayed_after_next_test.json()["replayed"])
 
     def test_tested_candidate_does_not_change_claimed_proxy_before_publish(self):
         item = self._market_item("TW-TPE-CANDIDATE")
@@ -582,6 +611,12 @@ class ProxyMarketTests(unittest.TestCase):
         )
         self.assertEqual(listed_item["pending_check_id"], "")
         self.assertEqual(listed_item["pending_check_status"], "")
+        with db() as conn:
+            stale_candidate = conn.execute(
+                "SELECT 1 FROM proxy_market_item_checks WHERE item_id = ?",
+                (item["id"],),
+            ).fetchone()
+        self.assertIsNone(stale_candidate)
 
         rejected = self.admin.post(
             f"/api/admin/proxy-market/items/{item['id']}/publish",

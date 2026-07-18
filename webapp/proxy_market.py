@@ -42,6 +42,7 @@ from .social_automation_api import (
 MARKET_SETTINGS_KEY = "proxy_market_settings"
 DEFAULT_CLAIM_LIMIT = 3
 DEFAULT_HEALTH_MAX_AGE_SECONDS = 24 * 60 * 60
+PUBLISH_RECEIPT_RETENTION_SECONDS = 30 * 24 * 60 * 60
 ITEM_STATUSES = {"draft", "active", "allocated", "maintenance", "disabled", "archived"}
 HEALTH_STATUSES = {"pending", "healthy", "failed"}
 PROXY_TYPES = {"http", "https", "socks5"}
@@ -294,6 +295,10 @@ def _prune_proxy_market_checks(
         WHERE consumed_at = 0 AND checked_at < ?
         """,
         (int(now) - int(max_age_seconds),),
+    )
+    conn.execute(
+        "DELETE FROM proxy_market_publish_receipts WHERE expires_at < ?",
+        (int(now),),
     )
 
 
@@ -713,6 +718,10 @@ def release_market_proxy(
                     "UPDATE proxy_market_items SET status = ?, updated_at = ?, version = version + 1 WHERE id = ?",
                     ("active" if can_return else "maintenance", now, item_id),
                 )
+                conn.execute(
+                    "DELETE FROM proxy_market_item_checks WHERE item_id = ?",
+                    (item_id,),
+                )
         if request is not None:
             _record_audit(
                 conn,
@@ -1011,6 +1020,10 @@ def register_proxy_market_routes(app: FastAPI) -> None:
                 ).rowcount
                 if not updated:
                     raise sqlite3.IntegrityError("market item already allocated")
+                conn.execute(
+                    "DELETE FROM proxy_market_item_checks WHERE item_id = ?",
+                    (str(item["id"]),),
+                )
             except sqlite3.IntegrityError as exc:
                 raise HTTPException(status_code=409, detail="该代理刚刚已被其他用户领取") from exc
             _record_audit(
@@ -1626,6 +1639,29 @@ def register_proxy_market_routes(app: FastAPI) -> None:
             check_id = str(payload.check_id if payload is not None else "").strip()
             if not check_id:
                 raise HTTPException(status_code=409, detail="请先完成真实检测后再发布")
+            receipt_row = conn.execute(
+                """
+                SELECT result_json
+                FROM proxy_market_publish_receipts
+                WHERE item_id = ? AND check_id = ? AND expires_at >= ?
+                """,
+                (str(item_id), check_id, now),
+            ).fetchone()
+            if receipt_row is not None:
+                try:
+                    receipt = json.loads(str(receipt_row["result_json"] or "{}"))
+                except json.JSONDecodeError:
+                    receipt = {}
+                if isinstance(receipt, dict) and isinstance(receipt.get("item"), dict):
+                    return {
+                        "ok": True,
+                        "replayed": True,
+                        "item": receipt["item"],
+                    }
+                raise HTTPException(
+                    status_code=409,
+                    detail="发布回执损坏，请刷新库存状态",
+                )
             check_row = conn.execute(
                 """
                 SELECT *
@@ -1638,21 +1674,6 @@ def register_proxy_market_routes(app: FastAPI) -> None:
                 raise HTTPException(status_code=409, detail="检测记录不存在或已被更新，请重新检测")
             candidate = dict(check_row)
             settings = _settings(conn)
-            if int(candidate.get("consumed_at") or 0) > 0:
-                try:
-                    receipt = json.loads(str(candidate.get("publish_result_json") or "{}"))
-                except json.JSONDecodeError:
-                    receipt = {}
-                if isinstance(receipt, dict) and isinstance(receipt.get("item"), dict):
-                    return {
-                        "ok": True,
-                        "replayed": True,
-                        "item": receipt["item"],
-                    }
-                raise HTTPException(
-                    status_code=409,
-                    detail="检测结果已使用且缺少发布回执，请刷新库存状态",
-                )
             if str(current.get("status") or "") in {"disabled", "archived"}:
                 raise HTTPException(status_code=409, detail="已停用或归档的商城代理不能发布")
             if (
@@ -1769,27 +1790,30 @@ def register_proxy_market_routes(app: FastAPI) -> None:
                 dict(updated),
                 health_max_age_seconds=int(settings["health_max_age_seconds"]),
             )
+            receipt_payload = json.dumps(
+                {"item": published_item},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
             conn.execute(
                 """
-                UPDATE proxy_market_item_checks
-                SET consumed_at = ?,
-                    username_ciphertext = '',
-                    password_ciphertext = '',
-                    published_item_version = ?,
-                    publish_result_json = ?
-                WHERE item_id = ? AND check_id = ? AND consumed_at = 0
+                INSERT INTO proxy_market_publish_receipts(
+                  check_id, item_id, published_item_version, result_json,
+                  published_at, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    now,
-                    int(published_item.get("version") or 0),
-                    json.dumps(
-                        {"item": published_item},
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    ),
-                    str(item_id),
                     check_id,
+                    str(item_id),
+                    int(published_item.get("version") or 0),
+                    receipt_payload,
+                    now,
+                    now + PUBLISH_RECEIPT_RETENTION_SECONDS,
                 ),
+            )
+            conn.execute(
+                "DELETE FROM proxy_market_item_checks WHERE item_id = ? AND check_id = ?",
+                (str(item_id), check_id),
             )
             _record_audit(
                 conn,
@@ -1974,6 +1998,10 @@ def register_proxy_market_routes(app: FastAPI) -> None:
                     WHERE id = ? AND status = 'allocated'
                     """,
                     ("active" if can_return else "maintenance", now, item_id),
+                )
+                conn.execute(
+                    "DELETE FROM proxy_market_item_checks WHERE item_id = ?",
+                    (item_id,),
                 )
             _record_audit(
                 conn,

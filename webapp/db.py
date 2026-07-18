@@ -741,6 +741,19 @@ def init_db() -> None:
             )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS proxy_market_publish_receipts (
+              check_id TEXT PRIMARY KEY,
+              item_id TEXT NOT NULL,
+              published_item_version INTEGER NOT NULL DEFAULT 0,
+              result_json TEXT NOT NULL DEFAULT '{}',
+              published_at INTEGER NOT NULL,
+              expires_at INTEGER NOT NULL,
+              FOREIGN KEY(item_id) REFERENCES proxy_market_items(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS proxy_market_user_state (
               user_id INTEGER PRIMARY KEY,
               last_catalog_seen_at INTEGER NOT NULL DEFAULT 0,
@@ -936,6 +949,10 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_proxy_market_item_checks_publishable "
             "ON proxy_market_item_checks(health_status, checked_at DESC, consumed_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_proxy_market_publish_receipts_expiry "
+            "ON proxy_market_publish_receipts(expires_at)"
         )
         account_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(social_accounts)").fetchall()}
         if "user_id" not in account_columns:

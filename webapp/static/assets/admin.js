@@ -5706,6 +5706,16 @@ function syncProxyMarketEditorActions() {
     && adminState.proxyMarketPendingCheckId
     && !busy
   );
+  const form = el("proxyMarketItemForm");
+  if (form?.elements) {
+    Array.from(form.elements).forEach((control) => {
+      if (!control || typeof control.disabled !== "boolean") return;
+      control.disabled = busy || (
+        control.id === "proxyMarketSku"
+        && Boolean(adminState.proxyMarketSelectedItemId)
+      );
+    });
+  }
   if (el("btnCancelProxyMarketEdit")) el("btnCancelProxyMarketEdit").disabled = busy;
   if (el("btnSaveProxyMarketItem")) el("btnSaveProxyMarketItem").disabled = busy;
   if (el("btnTestProxyMarketItem")) el("btnTestProxyMarketItem").disabled = busy;
@@ -6239,7 +6249,11 @@ function editProxyMarketItem(itemId, { focus = true } = {}) {
   if (!item) return;
   adminState.proxyMarketInspectRequestId += 1;
   adminState.proxyMarketSelectedItemId = String(item.id || "");
-  adminState.proxyMarketPendingCheckId = String(item.pending_check_id || "");
+  adminState.proxyMarketPendingCheckId = (
+    String(item.pending_check_status || "") === "healthy"
+      ? String(item.pending_check_id || "")
+      : ""
+  );
   if (el("btnInspectProxyMarketConnection")) el("btnInspectProxyMarketConnection").disabled = false;
   if (el("proxyMarketSmartInput")) el("proxyMarketSmartInput").value = "";
   setProxyMarketSmartResult("可粘贴新连接信息覆盖候选字段；已保存凭据不会回显。");
