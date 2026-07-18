@@ -801,6 +801,123 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
                 ).fetchone()
             )
 
+    def test_purge_removes_proxy_market_read_state_and_historical_allocation(self):
+        customer, user_id = self._create_customer("proxy_market_purge")
+        read = customer.post(
+            "/api/proxy-market/read",
+            json={"scope": "catalog"},
+            headers={"Origin": "http://testserver"},
+        )
+        self.assertEqual(read.status_code, 200, read.text)
+
+        created = self.admin.post(
+            "/api/admin/proxy-market/items",
+            headers={"Origin": "http://testserver"},
+            json={
+                "sku": "PURGE-HISTORY-001",
+                "display_name": "Purge history proxy",
+                "provider_key": "purge-regression",
+                "proxy_type": "socks5",
+                "host": "203.0.113.40",
+                "port": 1080,
+                "username": "proxy-user",
+                "password": "proxy-password",
+                "country": "Taiwan",
+                "region": "Taipei",
+                "city": "Taipei",
+                "isp": "Regression ISP",
+                "tags": ["purge"],
+                "use_cases": ["Threads"],
+            },
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        item_id = str(created.json()["item"]["id"])
+        now = server._now_ts()
+        with server.db() as conn:
+            conn.execute(
+                """
+                UPDATE proxy_market_items
+                SET status = 'active', health_status = 'healthy',
+                    last_check_at = ?, published_at = ?
+                WHERE id = ?
+                """,
+                (now, now, item_id),
+            )
+
+        claimed = customer.post(
+            f"/api/proxy-market/items/{item_id}/claim",
+            headers={"Origin": "http://testserver", "Idempotency-Key": "purge-history-claim"},
+        )
+        self.assertEqual(claimed.status_code, 200, claimed.text)
+        allocation_id = str(claimed.json()["allocation"]["id"])
+        proxy_id = str(claimed.json()["allocation"]["social_proxy_id"])
+        released = customer.post(
+            f"/api/proxy-market/allocations/{allocation_id}/release",
+            headers={"Origin": "http://testserver"},
+        )
+        self.assertEqual(released.status_code, 200, released.text)
+        reclaimed = customer.post(
+            f"/api/proxy-market/items/{item_id}/claim",
+            headers={"Origin": "http://testserver", "Idempotency-Key": "purge-active-claim"},
+        )
+        self.assertEqual(reclaimed.status_code, 200, reclaimed.text)
+        active_allocation_id = str(reclaimed.json()["allocation"]["id"])
+        active_proxy_id = str(reclaimed.json()["allocation"]["social_proxy_id"])
+
+        archived = self.admin.delete(f"/api/admin/users/{user_id}")
+        self.assertEqual(archived.status_code, 200, archived.text)
+        preview = self.admin.get(f"/api/admin/users/{user_id}/purge-preview")
+        self.assertEqual(preview.status_code, 200, preview.text)
+        self.assertEqual(preview.json()["resources"]["proxy_market_allocations"], 2)
+        self.assertEqual(preview.json()["resources"]["proxy_market_user_state"], 1)
+
+        purged = self.admin.request(
+            "DELETE",
+            f"/api/admin/users/{user_id}/purge",
+            json=self._purge_payload("proxy_market_purge"),
+            headers={"Origin": "http://testserver"},
+        )
+        self.assertEqual(purged.status_code, 200, purged.text)
+        self.assertTrue(purged.json()["ok"], purged.text)
+
+        with server.db() as conn:
+            self.assertIsNone(conn.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone())
+            self.assertIsNone(
+                conn.execute(
+                    "SELECT id FROM proxy_market_allocations WHERE id = ?",
+                    (allocation_id,),
+                ).fetchone()
+            )
+            self.assertIsNone(
+                conn.execute(
+                    "SELECT id FROM proxy_market_allocations WHERE id = ?",
+                    (active_allocation_id,),
+                ).fetchone()
+            )
+            self.assertIsNone(
+                conn.execute(
+                    "SELECT user_id FROM proxy_market_user_state WHERE user_id = ?",
+                    (user_id,),
+                ).fetchone()
+            )
+            self.assertIsNone(conn.execute("SELECT id FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone())
+            self.assertIsNone(conn.execute("SELECT id FROM social_proxies WHERE id = ?", (active_proxy_id,)).fetchone())
+            market_item = conn.execute(
+                "SELECT status FROM proxy_market_items WHERE id = ?",
+                (item_id,),
+            ).fetchone()
+            audit = conn.execute(
+                "SELECT after_json FROM audit_events WHERE action = 'user.purge' AND target_user_id = ?",
+                (user_id,),
+            ).fetchone()
+        self.assertIsNotNone(market_item)
+        self.assertEqual(str(market_item["status"]), "maintenance")
+        self.assertIsNotNone(audit)
+        audit_after = json.loads(str(audit["after_json"]))
+        self.assertEqual(int(audit_after["deleted_proxy_market_allocations"]), 2)
+        self.assertEqual(int(audit_after["deleted_proxy_market_user_state"]), 1)
+        self.assertEqual(int(audit_after["reclaimed_proxy_market_items"]), 1)
+
     def test_purge_cleanup_failure_preserves_account_persona_and_group(self):
         customer, user_id = self._create_customer("purge_cleanup_failure")
         resources = self._seed_workspace(customer, user_id, "purge-cleanup-failure")

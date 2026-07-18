@@ -843,7 +843,14 @@ def dashboard_snapshot(conn: sqlite3.Connection, *, days: int = 30, at: int | No
         "SELECT COUNT(*) AS count FROM billing_subscriptions WHERE status = 'active' AND current_period_end > ?",
         (current,),
     ).fetchone()
-    wallet = conn.execute("SELECT COALESCE(SUM(credit_units), 0) AS units FROM billing_wallets").fetchone()
+    wallet = conn.execute(
+        """
+        SELECT COALESCE(SUM(wallet.credit_units), 0) AS units
+        FROM billing_wallets AS wallet
+        JOIN users ON users.id = wallet.user_id
+        WHERE users.is_admin = 0 AND users.lifecycle_status != 'deleted'
+        """
+    ).fetchone()
     consumption = conn.execute(
         "SELECT COALESCE(SUM(CASE WHEN amount_units < 0 THEN -amount_units ELSE 0 END), 0) AS units FROM billing_ledger WHERE asset_type = 'credit' AND created_at >= ?",
         (start,),

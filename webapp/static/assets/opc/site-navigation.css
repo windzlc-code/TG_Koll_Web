@@ -72,6 +72,9 @@ html {
   display: inline-flex;
   align-items: center;
   gap: 10px;
+  justify-self: start;
+  width: fit-content;
+  max-width: 100%;
   min-width: max-content;
   padding: 0;
   color: inherit;
@@ -103,6 +106,7 @@ html {
 
 .site-header .brand-text {
   display: grid;
+  min-width: 0;
   gap: 1px;
 }
 
@@ -236,6 +240,7 @@ html {
 }
 
 .site-icon-button,
+.site-subscription-link,
 .site-mobile-console,
 .site-menu-toggle {
   position: relative;
@@ -252,6 +257,7 @@ html {
 }
 
 .site-icon-button:hover,
+.site-subscription-link:hover,
 .site-mobile-console:hover,
 .site-menu-toggle:hover {
   color: #ffffff;
@@ -259,6 +265,7 @@ html {
 }
 
 .site-icon-button svg,
+.site-subscription-link svg,
 .site-mobile-console svg,
 .site-menu-toggle svg,
 .site-user svg,
@@ -285,6 +292,17 @@ html {
   width: 46px;
   grid-template-columns: 18px auto;
   gap: 3px;
+}
+
+.site-subscription-link {
+  flex: 0 0 auto;
+  text-decoration: none;
+}
+
+.site-subscription-link[aria-current="page"] {
+  color: #77d8c3;
+  background: rgba(119, 216, 195, 0.18);
+  border-color: #77d8c3;
 }
 
 .site-language-state {
@@ -470,16 +488,17 @@ html {
   z-index: 155;
   display: grid;
   width: min(328px, calc(100vw - 20px));
+  height: auto;
   max-height: calc(100dvh - var(--site-header-height) - 16px);
   gap: 8px;
   padding: 10px;
   overflow-y: auto;
   overscroll-behavior: contain;
-  color: #eff8f5;
-  background: #0b1718;
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #1d2a2a;
+  background: #ffffff;
+  border: 1px solid #d4dfdd;
   border-radius: 8px;
-  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 22px 54px rgba(21, 45, 42, 0.18);
 }
 
 .site-account-popover::before {
@@ -501,7 +520,7 @@ html {
   align-items: center;
   gap: 10px;
   padding-bottom: 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  border-bottom: 1px solid #e1e8e6;
 }
 
 .site-account-avatar {
@@ -509,9 +528,9 @@ html {
   place-items: center;
   width: 40px;
   height: 40px;
-  color: #dffbf1;
-  background: rgba(119, 216, 195, 0.12);
-  border: 1px solid rgba(119, 216, 195, 0.32);
+  color: #087f72;
+  background: #eff9f6;
+  border: 1px solid #c9e9df;
   border-radius: 50%;
 }
 
@@ -529,12 +548,12 @@ html {
 }
 
 .site-account-identity strong {
-  color: #ffffff;
+  color: #142122;
   font-size: 14px;
 }
 
 .site-account-identity span {
-  color: rgba(239, 248, 245, 0.66);
+  color: #687877;
   font-size: 12px;
 }
 
@@ -542,7 +561,7 @@ html {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  color: #9fe9d4;
+  color: #14745e;
   font-size: 11px;
   font-weight: 800;
   white-space: nowrap;
@@ -561,20 +580,88 @@ html {
   justify-content: space-between;
   gap: 16px;
   min-height: 42px;
-  color: rgba(239, 248, 245, 0.68);
+  color: #687877;
   font-size: 12px;
 }
 
 .site-account-detail strong {
-  color: #ffffff;
+  color: #142122;
   font-size: 12px;
+}
+
+.site-account-profile-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding: 9px 0;
+  border-top: 1px solid #e1e8e6;
+}
+
+.site-account-profile-field {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  min-height: 68px;
+  padding: 8px;
+  background: #f6faf9;
+  border: 1px solid #dfe8e6;
+  border-radius: 6px;
+}
+
+.site-account-profile-label {
+  color: #687877;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.site-account-profile-field p {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: #314140;
+  font-size: 11px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.site-account-profile-field .is-placeholder,
+.site-account-placeholder {
+  color: #8a9897;
+  font-weight: 500;
+}
+
+.site-account-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.site-account-tags[hidden] {
+  display: none;
+}
+
+.site-account-tags span {
+  min-width: 0;
+  max-width: 100%;
+  padding: 4px 8px;
+  overflow: hidden;
+  color: #087f72;
+  background: #eff9f6;
+  border: 1px solid #c9e9df;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .site-account-billing {
   display: grid;
   gap: 7px;
   padding: 9px 0 2px;
-  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  border-top: 1px solid #e1e8e6;
 }
 
 .site-account-section-head {
@@ -585,7 +672,7 @@ html {
 }
 
 .site-account-billing-state {
-  color: rgba(239, 248, 245, 0.48);
+  color: #687877;
   font-size: 10px;
 }
 
@@ -600,14 +687,14 @@ html {
   gap: 3px;
   min-width: 0;
   padding: 7px 8px;
-  background: rgba(255, 255, 255, 0.045);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: #f6faf9;
+  border: 1px solid #dfe8e6;
   border-radius: 6px;
 }
 
 .site-account-billing-card span {
   overflow: hidden;
-  color: rgba(239, 248, 245, 0.56);
+  color: #687877;
   font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -615,7 +702,7 @@ html {
 
 .site-account-billing-card strong {
   overflow: hidden;
-  color: #ffffff;
+  color: #142122;
   font-size: 13px;
   font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
@@ -631,9 +718,9 @@ html {
 .site-account-action-row button {
   min-height: 34px;
   padding: 0 8px;
-  color: #dffbf1;
-  background: rgba(119, 216, 195, 0.08);
-  border: 1px solid rgba(119, 216, 195, 0.28);
+  color: #087f72;
+  background: #f2fbf8;
+  border: 1px solid #c9e9df;
   border-radius: 6px;
   font: inherit;
   font-size: 11px;
@@ -654,12 +741,12 @@ html {
   justify-content: space-between;
   gap: 6px;
   padding: 10px 0 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  border-top: 1px solid #e1e8e6;
 }
 
 .site-account-section-label {
   margin-right: auto;
-  color: rgba(239, 248, 245, 0.58);
+  color: #687877;
   font-size: 11px;
   font-weight: 800;
 }
@@ -672,9 +759,9 @@ html {
   height: 38px;
   min-height: 38px;
   padding: 0;
-  color: #eff8f5;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #314140;
+  background: #f3f7f6;
+  border: 1px solid #dbe5e3;
   border-radius: 7px;
   font: inherit;
   font-size: 12px;
@@ -684,9 +771,9 @@ html {
 }
 
 .site-account-preference:hover {
-  color: #ffffff;
-  background: rgba(255, 255, 255, 0.1);
-  border-color: rgba(119, 216, 195, 0.46);
+  color: #087f72;
+  background: #eaf7f3;
+  border-color: #b7dfd5;
 }
 
 .site-account-preference-icon {
@@ -694,7 +781,7 @@ html {
   place-items: center;
   width: 20px;
   height: 20px;
-  color: #9fe9d4;
+  color: #087f72;
 }
 
 .site-account-preference-icon svg {
@@ -708,7 +795,7 @@ html {
 }
 
 .site-account-preference strong {
-  color: rgba(239, 248, 245, 0.64);
+  color: #687877;
   font-size: 11px;
   font-weight: 750;
   white-space: nowrap;
@@ -722,9 +809,9 @@ html {
   width: 100%;
   min-height: 40px;
   padding: 0 12px;
-  color: #ffd8d2;
-  background: rgba(231, 93, 79, 0.1);
-  border: 1px solid rgba(231, 93, 79, 0.38);
+  color: #a63535;
+  background: #fff7f7;
+  border: 1px solid #efcccc;
   border-radius: 7px;
   font: inherit;
   font-size: 13px;
@@ -733,9 +820,9 @@ html {
 }
 
 .site-account-logout:hover {
-  color: #ffffff;
-  background: rgba(231, 93, 79, 0.2);
-  border-color: rgba(231, 93, 79, 0.66);
+  color: #8f2d2d;
+  background: #fff0f0;
+  border-color: #e4bcbc;
 }
 
 .site-account-logout:disabled {
@@ -750,7 +837,7 @@ html {
 
 .site-account-message {
   min-height: 0;
-  color: #ffb5a7;
+  color: #a63535;
   font-size: 11px;
   line-height: 1.4;
 }
@@ -785,6 +872,43 @@ html {
     padding-inline: 14px;
   }
 
+  .site-header .brand {
+    min-width: 0;
+  }
+
+  .site-header .brand-name,
+  .site-header .brand-local {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .site-header .header-actions {
+    min-width: 0;
+    justify-self: end;
+  }
+
+  .site-header .site-mobile-menu,
+  .site-header .site-account-menu {
+    flex: 0 0 auto;
+  }
+
+  .site-header .site-menu-toggle {
+    grid-template-columns: 18px;
+    width: 44px;
+    min-width: 44px;
+    padding-inline: 0;
+  }
+
+  .site-header .site-menu-toggle span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
   .site-header .site-guest-action,
   .site-header .header-action {
     display: none;
@@ -804,7 +928,10 @@ html {
   .site-account-popover {
     position: fixed;
     top: calc(var(--site-header-height) + 8px);
+    bottom: auto;
     right: 14px;
+    left: auto;
+    height: auto;
   }
 }
 
@@ -827,6 +954,7 @@ html {
 
   .site-header .brand-logo-frame,
   .site-icon-button,
+  .site-subscription-link,
   .site-mobile-console,
   .site-user {
     width: 38px;
@@ -892,6 +1020,7 @@ html {
     button,
     .brand,
     .site-icon-button,
+    .site-subscription-link,
     .site-menu-toggle,
     .site-mobile-console,
     .site-user,
@@ -908,6 +1037,7 @@ html {
 
   .site-header :is(
     .site-icon-button,
+    .site-subscription-link,
     .site-menu-toggle,
     .site-mobile-console,
     .site-user,
@@ -916,6 +1046,22 @@ html {
     width: 44px;
     min-width: 44px;
     height: 44px;
+  }
+
+  /* Mobile icon controls are square buttons; keep their SVGs on the true center axis. */
+  .site-header :is(.site-menu-toggle, .site-language-button) {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    padding-inline: 0;
+  }
+
+  .site-header .site-global-controls .site-language-state {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 
   .site-header :is(.header-actions, .site-global-controls) {
@@ -943,6 +1089,6 @@ html {
 
   .site-account-popover {
     right: max(10px, env(safe-area-inset-right));
-    bottom: max(10px, env(safe-area-inset-bottom));
+    bottom: auto;
   }
 }

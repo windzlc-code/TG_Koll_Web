@@ -56714,7 +56714,7 @@ describe("CRM sentiment monitor", () => {
     }));
   });
 
-  it("directly fetches Telegram public message URLs from evidence links", async () => {
+  it("keeps Telegram URL normalization but disables direct public message fetching", async () => {
     resetCrmData();
     expect(socialRealtimeTest.normalizeTelegramDirectUrls([
       "https://telegram.me/s/brand_alerts/101?utm_source=copy#comments",
@@ -56755,27 +56755,9 @@ describe("CRM sentiment monitor", () => {
       channels: [],
       directUrls: ["https://telegram.me/s/brand_alerts/101?utm_source=copy#comments"],
       budget: { maxPagesPerKeyword: 1, maxItemsPerKeyword: 2 },
-    })).toMatchObject({ inserted: 1, failures: [] });
-    expect(calledUrls).toContain("https://t.me/s/brand_alerts/101");
-
-    const row = getDb().prepare("SELECT * FROM crm_sentiment WHERE platform = 'telegram'").get();
-    expect(row).toEqual(expect.objectContaining({
-      url: "https://t.me/brand_alerts/101",
-      keyword: "DirectTelegramBrand",
-    }));
-    const evidence = listSentimentEvidence({ sentimentId: row.id });
-    expect(evidence[0].evidence_type).toBe("telegram_direct_message");
-    expect(evidence[0].metrics).toMatchObject({
-      source: "telegram_direct_url",
-      source_kind: "telegram_direct_message",
-      collection_mode: "telegram_direct_url",
-      deep_collector: "telegram-direct-url",
-      telegram_direct_url: "https://t.me/brand_alerts/101",
-      telegram_direct_channel: "brand_alerts",
-      telegram_direct_message_id: 101,
-      direct_original_source_recovery: 1,
-      social_realtime_matched_keyword: "DirectTelegramBrand Telegram comments",
-    });
+    })).toMatchObject({ inserted: 0, failures: [] });
+    expect(calledUrls).toEqual([]);
+    expect(getDb().prepare("SELECT * FROM crm_sentiment WHERE platform = 'telegram'").get()).toBeUndefined();
   });
 
   it("paginates Bluesky public search with cursor to deepen realtime discovery", async () => {
@@ -57089,7 +57071,7 @@ describe("CRM sentiment monitor", () => {
     });
   });
 
-  it("collects Telegram public channels without a paid API", async () => {
+  it("keeps Telegram public-channel parsing but disables network collection", async () => {
     expect(socialRealtimeTest.normalizeTelegramChannels([
       "https://t.me/s/brand_alerts",
       "https://t.me/brand_alerts/12",
@@ -57190,64 +57172,12 @@ describe("CRM sentiment monitor", () => {
         toSource: "telegramPublic",
         reason: "source recovery routed realtime social confirmation",
       }],
-    })).toMatchObject({ inserted: 1, failures: [] });
-    expect(calledUrls).toContain("https://t.me/s/brand_alerts");
-    const row = getDb().prepare("SELECT * FROM crm_sentiment WHERE platform = 'telegram'").get();
-    expect(row).toEqual(expect.objectContaining({
-      url: "https://t.me/brand_alerts/101",
-      keyword: "OpinX",
-      author: "Brand Alerts",
-    }));
-    const evidence = getDb().prepare("SELECT * FROM sentiment_evidence_documents WHERE sentiment_id = ?").get(row.id);
-    expect(JSON.parse(evidence.metrics_json)).toEqual(expect.objectContaining({
-      channel: "brand_alerts",
-      views: 1200,
-      replies: 34,
-      collection_mode: "public_channel_page",
-      outbound_link_count: 4,
-      external_outbound_link_count: 1,
-      telegram_internal_link_count: 3,
-      outbound_link_hosts: ["news.example.test"],
-      external_outbound_links: ["https://news.example.test/articles/opinx-refund"],
-      link_preview_url: "https://news.example.test/articles/opinx-refund",
-      link_preview_title: "OpinX退款投訴時間線",
-      link_preview_site_name: "News Example",
-      media_asset_count: 1,
-      forwarded_from_author: "Forwarded from Source Watch",
-      forwarded_from_url: "https://t.me/source_watch",
-      forwarded_context: 1,
-      social_realtime_risk_language_signal: 1,
-      social_realtime_evidence_language_signal: 1,
-      social_realtime_official_response_signal: 1,
-      social_realtime_propagation_language_signal: 1,
-      social_realtime_risk_terms: expect.arrayContaining(["投訴", "退款"]),
-      social_realtime_evidence_terms: expect.arrayContaining(["截圖"]),
-      social_realtime_official_response_terms: expect.arrayContaining(["官方", "回應"]),
-      social_realtime_propagation_terms: expect.arrayContaining(["擴散"]),
-      social_realtime_matched_keyword: "OpinX",
-      social_realtime_keyword_match_source: "title",
-      failover_from_sources: ["googleNews"],
-    }));
-    const comments = listSentimentComments({ sentimentId: row.id, limit: 5 });
-    expect(comments).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        author: "Forwarded from Source Watch",
-        metrics: expect.objectContaining({
-          source: "telegram_forwarded_from",
-          url: "https://t.me/source_watch",
-        }),
-      }),
-    ]));
-    const visualAssets = listSentimentVisualAssets({ sentimentId: row.id });
-    expect(visualAssets).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        image_url: "https://cdn.example.test/telegram/opinx-refund.jpg",
-        scene_tags: expect.arrayContaining(["telegram-public-message", "photo-preview"]),
-      }),
-    ]));
+    })).toMatchObject({ inserted: 0, failures: [] });
+    expect(calledUrls).toEqual([]);
+    expect(getDb().prepare("SELECT * FROM crm_sentiment WHERE platform = 'telegram'").get()).toBeUndefined();
   });
 
-  it("paginates Telegram public channel pages with before cursors", async () => {
+  it("does not paginate Telegram public channel pages while collection is disabled", async () => {
     resetCrmData();
     const firstPage = `
       <section>
@@ -57287,33 +57217,9 @@ describe("CRM sentiment monitor", () => {
     expect(await scrapeTelegramPublicChannels(["OpinX"], {
       channels: ["brand_alerts"],
       budget: { maxPagesPerKeyword: 2, maxItemsPerKeyword: 1 },
-    })).toMatchObject({ inserted: 1, failures: [] });
-    expect(calledUrls).toEqual([
-      "https://t.me/s/brand_alerts",
-      "https://t.me/s/brand_alerts?before=201",
-    ]);
-    const row = getDb().prepare("SELECT * FROM crm_sentiment WHERE platform = 'telegram'").get();
-    expect(row.title).toContain("OpinX refund complaint");
-    const evidence = listSentimentEvidence({ sentimentId: row.id });
-    expect(evidence[0].metrics).toMatchObject({
-      source: "telegram_public_channel",
-      source_family: "social",
-      source_kind: "public_realtime_social_post",
-      source_weight_tier: "realtime-social",
-      channel: "brand_alerts",
-      post_id: "brand_alerts/188",
-      message_id: 188,
-      source_url: "https://t.me/s/brand_alerts?before=201",
-      channel_url: "https://t.me/s/brand_alerts",
-      page_before: "201",
-      social_realtime_search_page: 2,
-      social_realtime_raw_result_count: 1,
-      social_realtime_matched_keyword: "OpinX",
-      social_realtime_keyword_match_source: "title",
-      views: 2500,
-      replies: 45,
-      social_realtime_scan_dedupe_key: "https://t.me/brand_alerts/188",
-    });
+    })).toMatchObject({ inserted: 0, failures: [] });
+    expect(calledUrls).toEqual([]);
+    expect(getDb().prepare("SELECT * FROM crm_sentiment WHERE platform = 'telegram'").get()).toBeUndefined();
   });
 
   it("collects Baidu public web and news search without a paid API", async () => {
@@ -62161,7 +62067,7 @@ describe("CRM sentiment monitor", () => {
     });
   });
 
-  it("routes evidence pivot directly to Telegram public message URLs", async () => {
+  it("records Telegram evidence pivots without fetching Telegram public message URLs", async () => {
     resetCrmData();
     const telegramUrl = "https://t.me/brand_alerts/333";
     listSentimentSources();
@@ -62249,22 +62155,12 @@ describe("CRM sentiment monitor", () => {
       keywords: ["TelegramPivotBrand"],
     });
     expect(result.googleNews).toBe(1);
-    expect(result.telegramPublic).toBe(1);
-    expect(result.total).toBe(2);
-    expect(calledUrls).toContain("https://t.me/s/brand_alerts/333");
+    expect(result.telegramPublic).toBe(0);
+    expect(result.total).toBe(1);
+    expect(calledUrls).not.toContain("https://t.me/s/brand_alerts/333");
     expect(result.evidencePivotExpansion.platform_sources).toEqual(expect.arrayContaining(["telegramPublic"]));
     expect(result.evidencePivotExpansion.direct_urls_by_source.telegramPublic).toEqual(expect.arrayContaining([telegramUrl]));
-
-    const telegramRow = getDb().prepare("SELECT * FROM crm_sentiment WHERE platform = 'telegram'").get();
-    const telegramEvidence = listSentimentEvidence({ sentimentId: telegramRow.id });
-    expect(telegramEvidence[0].metrics).toMatchObject({
-      source_kind: "telegram_direct_message",
-      collection_mode: "telegram_direct_url",
-      telegram_direct_url: telegramUrl,
-      telegram_direct_channel: "brand_alerts",
-      telegram_direct_message_id: 333,
-      direct_original_source_recovery: 1,
-    });
+    expect(getDb().prepare("SELECT * FROM crm_sentiment WHERE platform = 'telegram'").get()).toBeUndefined();
   });
 
   it("routes evidence pivot directly to Lemmy public post URLs", async () => {
@@ -65086,9 +64982,9 @@ describe("CRM sentiment monitor", () => {
     const result = await runSentimentScanNow({ reason: "manual", mode: "fast" });
     expect(result.mastodon).toBe(1);
     expect(result.bluesky).toBe(1);
-    expect(result.telegramPublic).toBe(1);
+    expect(result.telegramPublic).toBe(0);
     expect(result.bilibili).toBe(1);
-    expect(result.total).toBe(4);
+    expect(result.total).toBe(3);
   });
 
   it("applies collection budgets and public-source pagination without paid APIs", async () => {

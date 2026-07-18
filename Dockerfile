@@ -9,15 +9,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     XDG_CACHE_HOME=/data/webapp_data/cache \
     WEBAPP_DATA_DIR=/data/webapp_data \
     APP_RUNTIME_CONFIG_PATH=/data/webapp_data/runtime_config.json \
+    COMMERCIAL_BILLING_ENABLED=1 \
+    COMMERCIAL_BILLING_MIGRATE_LEGACY=1 \
     SESSION_COOKIE_SECURE=1 \
     TG_WORKBENCH_DB_PATH=/data/webapp_data/workbench.db \
     TOOL_R18_RUNTIME_DIR=/data/tool_r18_runtime \
-    AUTO_TWEET_RUNTIME_DIR=/data/tool_r18_runtime \
-    TOOL_R18_TELEGRAM_BOT_TOKEN_FILE=/data/tool_r18_runtime/telegram_bot_token.txt \
-    TOOL_R18_LOCAL_BOT_ENV_PATH=/data/tool_r18_runtime/local-bot.env \
-    TOOL_R18_INTERNAL_WEBAPP_BASE_URL=http://127.0.0.1:8001 \
-    TELEGRAM_WEBHOOK_PORT=8788 \
-    TELEGRAM_PROXY_URL=direct
+    AUTO_TWEET_RUNTIME_DIR=/data/tool_r18_runtime
 
 WORKDIR /app
 ARG KASMVNC_DEB_URL=https://github.com/kasmtech/KasmVNC/releases/download/v1.4.0/kasmvncserver_bookworm_1.4.0_amd64.deb
@@ -52,6 +49,5 @@ RUN chmod +x /app/docker/entrypoint.sh
 
 VOLUME ["/data"]
 EXPOSE 8001
-EXPOSE 8788
 
 ENTRYPOINT ["/app/docker/entrypoint.sh"]

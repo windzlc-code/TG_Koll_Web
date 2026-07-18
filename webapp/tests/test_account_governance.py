@@ -527,6 +527,34 @@ class AccountGovernanceTests(unittest.TestCase):
         self.assertGreater(int(mfa["locked_until"]), governance.now_ts())
         self.assertEqual(str(alert["severity"]), "high")
 
+    def test_dashboard_wallet_points_only_include_non_deleted_customers(self):
+        admin, identity = self._admin_client()
+        active_customer = self._create_customer(admin, "wallet-active-customer")
+        deleted_customer = self._create_customer(admin, "wallet-deleted-customer")
+        now = server._now_ts()
+        with db_module.db() as conn:
+            server.commercial_billing.ensure_wallet(conn, int(identity["id"]), now=now)
+            conn.execute(
+                "UPDATE billing_wallets SET credit_units = ? WHERE user_id = ?",
+                (9900, int(identity["id"])),
+            )
+            conn.execute(
+                "UPDATE billing_wallets SET credit_units = ? WHERE user_id = ?",
+                (1250, int(active_customer["id"])),
+            )
+            conn.execute(
+                "UPDATE billing_wallets SET credit_units = ? WHERE user_id = ?",
+                (8800, int(deleted_customer["id"])),
+            )
+            conn.execute(
+                "UPDATE users SET lifecycle_status = 'deleted', deleted_at = ? WHERE id = ?",
+                (now, int(deleted_customer["id"])),
+            )
+
+        dashboard = admin.get("/api/admin/dashboard?days=7")
+        self.assertEqual(dashboard.status_code, 200, dashboard.text)
+        self.assertEqual(dashboard.json()["summary"]["wallet_points"], 12.5)
+
     def test_dashboard_groups_tags_batches_audit_redaction_and_alerts(self):
         admin, identity = self._admin_client()
         customer = self._create_customer(admin, "governed-customer")

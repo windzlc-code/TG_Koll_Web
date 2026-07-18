@@ -5,6 +5,7 @@
 import crypto from "node:crypto";
 import { getDb } from "./db/db.js";
 import { enrichSearchResultSummary } from "./scrapers/content-summary.js";
+import { isTelegramPublicNetworkUrl } from "./scrapers/http.js";
 
 const SENTIMENTS = new Set(["positive", "negative", "neutral"]);
 const RISK_LEVELS = new Set(["low", "medium", "high", "critical"]);
@@ -30381,12 +30382,19 @@ function discoveryProbeKeywords(extra = []) {
   return uniqueCleanList([...extra, ...saved], 40);
 }
 
+function fetchDiscoveryPublicSource(url, init = {}) {
+  if (isTelegramPublicNetworkUrl(url)) {
+    throw new Error("Telegram public network collection is disabled");
+  }
+  return globalThis.fetch(url, init);
+}
+
 async function probeDiscoveryRssCandidate(candidate = {}, { keywords = [], timeoutMs = 8000 } = {}) {
   const url = normalizeDiscoveryFeedUrl(candidate.url || "");
   if (!url) return { ok: false, status: "invalid-url", url, item_count: 0, keyword_hit_count: 0, sample_titles: [] };
   const terms = discoveryProbeKeywords([...(keywords || []), ...(candidate.example_titles || [])]);
   try {
-    const res = await globalThis.fetch(url, {
+    const res = await fetchDiscoveryPublicSource(url, {
       headers: {
         "User-Agent": "Mozilla/5.0 (compatible; OpinXCraw/1.0)",
         "Accept": "application/feed+json, application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
@@ -30617,7 +30625,7 @@ async function probeDiscoverySitemapCandidate(candidate = {}, { keywords = [], t
   }
   const terms = discoveryProbeKeywords([...(keywords || []), ...(candidate.example_titles || [])]);
   try {
-    const res = await globalThis.fetch(url, {
+    const res = await fetchDiscoveryPublicSource(url, {
       headers: {
         "User-Agent": "Mozilla/5.0 (compatible; OpinXCraw/1.0)",
         "Accept": "application/xml,text/xml,application/rss+xml,application/atom+xml;q=0.9,*/*;q=0.8",
@@ -30645,7 +30653,7 @@ async function probeDiscoverySitemapCandidate(candidate = {}, { keywords = [], t
     const childTimeoutMs = Math.max(1000, Math.min(3500, Number(timeoutMs) || 8000));
     const childResults = await Promise.allSettled(childSitemapUrls.map(async (childUrl) => {
       try {
-        const childRes = await globalThis.fetch(childUrl, {
+        const childRes = await fetchDiscoveryPublicSource(childUrl, {
           headers: {
             "User-Agent": "Mozilla/5.0 (compatible; OpinXCraw/1.0)",
             "Accept": "application/xml,text/xml,application/rss+xml,application/atom+xml;q=0.9,*/*;q=0.8",
@@ -30712,7 +30720,7 @@ async function probeDiscoveryRobotsSitemapCandidate(candidate = {}, { keywords =
     };
   }
   try {
-    const res = await globalThis.fetch(url, {
+    const res = await fetchDiscoveryPublicSource(url, {
       headers: {
         "User-Agent": "Mozilla/5.0 (compatible; OpinXCraw/1.0)",
         "Accept": "text/plain,*/*;q=0.8",
@@ -30872,7 +30880,7 @@ async function probeDiscoverySiteSearchCandidate(candidate = {}, { keywords = []
     };
   }
   try {
-    const res = await globalThis.fetch(url, {
+    const res = await fetchDiscoveryPublicSource(url, {
       headers: {
         "User-Agent": "Mozilla/5.0 (compatible; OpinXCraw/1.0)",
         "Accept": "application/opensearchdescription+xml,application/xml,text/xml,*/*;q=0.8",
@@ -30965,7 +30973,7 @@ async function probeDiscoveryRelatedDomainCandidate(candidate = {}, { keywords =
   }
   const terms = discoveryProbeKeywords([...(keywords || []), ...(candidate.example_titles || [])]);
   try {
-    const res = await globalThis.fetch(url, {
+    const res = await fetchDiscoveryPublicSource(url, {
       headers: {
         "User-Agent": "Mozilla/5.0 (compatible; OpinXCraw/1.0)",
         "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
@@ -32163,7 +32171,7 @@ async function probeDiscoveryProfileCandidate(candidate = {}, { keywords = [], t
   }
   const terms = discoveryProbeKeywords([...(keywords || []), ...(candidate.example_titles || [])]);
   try {
-    const res = await globalThis.fetch(url, {
+    const res = await fetchDiscoveryPublicSource(url, {
       headers: {
         "User-Agent": "Mozilla/5.0 (compatible; OpinXCraw/1.0)",
         "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
@@ -32235,6 +32243,13 @@ async function probeDiscoveryProfileCandidate(candidate = {}, { keywords = [], t
 }
 
 async function runDiscoveryValidationProbe(candidate = {}, { keywords = [], timeoutMs = 8000 } = {}) {
+  if (isTelegramPublicNetworkUrl(candidate.url)) {
+    return {
+      ok: false,
+      status: "telegram-public-network-disabled",
+      url: candidate.url,
+    };
+  }
   if (realtimeExpansionDirectUrlDiscoveryCandidate(candidate)) {
     return {
       ok: true,
@@ -34633,6 +34648,17 @@ export async function executeSentimentSourceDiscoveryDeepCrawlPlan({
     };
   };
   const fetchDeepCrawlTarget = async (target, { followup = false, followupDepth = 0, searchPagination = false } = {}) => {
+    if (isTelegramPublicNetworkUrl(target.url)) {
+      results.push({
+        target,
+        status: "skipped",
+        reason: "telegram-public-network-disabled",
+        followup,
+        followup_depth: followupDepth,
+        search_pagination: searchPagination,
+      });
+      return;
+    }
     const domainDecision = evaluateSentimentDomainControls({ url: target.url }, deepCrawlDomainControls);
     if (!domainDecision.allowed) {
       recordSentimentSourceQualitySample({

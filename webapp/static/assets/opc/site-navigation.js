@@ -14,6 +14,15 @@
   let logoutPending = false;
   let logoutMessage = "";
   let proxyMarketBadgeRequest = 0;
+  let accountBillingRequest = 0;
+  const accountBillingState = {
+    identityKey: "",
+    loading: false,
+    loaded: false,
+    partial: false,
+    summary: {},
+    orders: {},
+  };
 
   const copy = {
     "zh-Hans": {
@@ -63,12 +72,16 @@
       billingImages: "图片额度",
       billingPending: "待审批",
       publishToday: "今日发布",
-      publishRemaining: "剩余额度",
+      publishRemaining: "今日剩余发布额度",
       billingUnread: "尚未读取",
       billingLoading: "读取中…",
       billingReady: "已同步",
       billingPartial: "部分不可用",
       billingClick: "点击查看",
+      profileSignature: "个人简介",
+      profileSignatureEmpty: "暂未填写个人简介",
+      profileTags: "个人标签",
+      profileTagsEmpty: "暂未添加个人标签",
     },
     "zh-Hant": {
       brandLocal: "維拓 / 維圖",
@@ -117,12 +130,16 @@
       billingImages: "圖片額度",
       billingPending: "待審批",
       publishToday: "今日發布",
-      publishRemaining: "剩餘額度",
+      publishRemaining: "今日剩餘發布額度",
       billingUnread: "尚未讀取",
       billingLoading: "讀取中…",
       billingReady: "已同步",
       billingPartial: "部分不可用",
       billingClick: "點擊查看",
+      profileSignature: "個人簡介",
+      profileSignatureEmpty: "暫未填寫個人簡介",
+      profileTags: "個人標籤",
+      profileTagsEmpty: "暫未添加個人標籤",
     },
   };
 
@@ -175,12 +192,32 @@
     return String(sessionValue(ADMIN_WORKSPACE_STORAGE_KEY) || "").trim();
   }
 
-  function adminConsoleTarget(view = "", workspaceUserId = storedAdminWorkspaceUserId()) {
+  function adminConsoleTarget(view = "", workspaceUserId = "") {
     const params = new URLSearchParams();
     if (view) params.set("view", view);
     if (workspaceUserId) params.set("manage_user_id", workspaceUserId);
     const query = params.toString();
     return query ? `/admin-console.html?${query}` : "/admin-console.html";
+  }
+
+  function syncConsoleEntryTargets() {
+    const adminSessionMeta = document.querySelector('meta[name="admin-console-session"]')?.content === "1";
+    const adminContext = adminSessionMeta || currentSessionMode === "admin" || hasAdminConsoleContext();
+    const target = adminContext ? adminConsoleTarget() : "/console.html";
+    document.querySelectorAll("[data-console-entry]").forEach((link) => {
+      link.setAttribute("href", target);
+      if (link.dataset.siteConsoleBoundaryReady === "true") return;
+      link.dataset.siteConsoleBoundaryReady = "true";
+      link.addEventListener("click", () => {
+        const isAdminEntry = document.querySelector('meta[name="admin-console-session"]')?.content === "1"
+          || currentSessionMode === "admin"
+          || hasAdminConsoleContext();
+        if (!isAdminEntry) return;
+        removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
+        markAdminConsoleContext();
+        link.setAttribute("href", adminConsoleTarget());
+      });
+    });
   }
 
   function currentTheme() {
@@ -241,7 +278,6 @@
       navLink({ key: "solution", href: navHref(page, "#solution"), current }),
       navLink({ key: "accounts", href: navHref(page, "#agents"), current }),
       navLink({ key: "scenarios", href: navHref(page, "#scenarios"), current }),
-      navLink({ key: "pricing", href: "/subscription.html", current }),
       navLink({ key: "proxyMarket", href: "/proxy-market.html", current }),
       navLink({ key: "difference", href: navHref(page, "#service-difference"), current }),
       navLink({ key: "console", href: "/console.html", current }),
@@ -254,6 +290,15 @@
 
   function languageIcon() {
     return `<svg class="site-language-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.4 2.5 3.6 5.5 3.6 9S14.4 18.5 12 21M12 3C9.6 5.5 8.4 8.5 8.4 12s1.2 6.5 3.6 9"></path></svg><span class="site-language-state" data-site-language-state></span>`;
+  }
+
+  function subscriptionIcon() {
+    return `<svg class="site-subscription-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5z"></path><path d="M4 9h16M8 14h3"></path><path d="m17.5 12.5.7 1.4 1.6.2-1.2 1.1.3 1.6-1.4-.8-1.4.8.3-1.6-1.2-1.1 1.6-.2z"></path></svg>`;
+  }
+
+  function subscriptionControl(page = "") {
+    const active = page === "pricing" ? ' aria-current="page"' : "";
+    return `<a class="site-icon-button site-subscription-link" href="/subscription.html"${active} data-site-subscription-entry aria-label="" title="">${subscriptionIcon()}</a>`;
   }
 
   function menuIcon() {
@@ -313,8 +358,17 @@
           <span class="site-account-status"><i aria-hidden="true"></i><span data-site-copy="accountStatus"></span></span>
         </div>
         <div class="site-account-detail"><span data-site-copy="accountId"></span><strong data-site-account-id>-</strong></div>
-        <div class="site-account-tags" data-site-account-tags hidden></div>
-        <section class="site-account-billing" data-site-account-billing aria-labelledby="siteAccountBillingTitle"${page === "console" ? "" : " hidden"}>
+        <div class="site-account-profile-fields">
+          <div class="site-account-profile-field">
+            <span class="site-account-profile-label" data-site-copy="profileSignature"></span>
+            <p data-site-account-signature data-site-copy="profileSignatureEmpty"></p>
+          </div>
+          <div class="site-account-profile-field">
+            <span class="site-account-profile-label" data-site-copy="profileTags"></span>
+            <div class="site-account-tags" data-site-account-tags><span class="site-account-placeholder" data-site-copy="profileTagsEmpty"></span></div>
+          </div>
+        </div>
+        <section class="site-account-billing" data-site-account-billing aria-labelledby="siteAccountBillingTitle">
           <div class="site-account-section-head">
             <span id="siteAccountBillingTitle" data-site-copy="billing"></span>
             <span class="site-account-billing-state" data-site-billing-status data-site-copy="billingUnread">尚未读取</span>
@@ -350,9 +404,9 @@
     const controls = `<div class="site-global-controls" data-site-global-controls><button id="languageToggle" class="site-icon-button site-language-button" type="button" data-site-language-toggle>${languageIcon()}</button></div>`;
     const mobileMenu = renderMobileMenu(page, current, mode);
     if (mode === "authenticated") {
-      return `${mobileMenu}${accountMenuMarkup(page)}`;
+      return `${mobileMenu}${subscriptionControl(page)}${accountMenuMarkup(page)}`;
     }
-    return `${mobileMenu}${controls}<button class="header-login" type="button" data-open-login><span data-site-copy="login"></span></button><a class="header-action site-guest-action" href="${page === "home" ? "#contact" : "/#contact"}"><span data-site-copy="guest"></span></a>`;
+    return `${mobileMenu}${subscriptionControl(page)}${controls}<button class="header-login" type="button" data-open-login><span data-site-copy="login"></span></button><a class="header-action site-guest-action" href="${page === "home" ? "#contact" : "/#contact"}"><span data-site-copy="guest"></span></a>`;
   }
 
   function fallbackMarkup(page, mode, current) {
@@ -363,6 +417,19 @@
       </a>
       <nav class="site-nav" data-site-navigation>${navigationLinks(page, current)}</nav>
       <div class="header-actions">${renderActions(mode, page, current)}</div>`;
+  }
+
+  function installUnifiedAccountMenu(header, page = "console") {
+    const actions = header?.querySelector(".header-actions");
+    if (!actions) return null;
+    const template = document.createElement("template");
+    template.innerHTML = accountMenuMarkup(page).trim();
+    const nextMenu = template.content.firstElementChild;
+    if (!nextMenu) return null;
+    const existingMenu = actions.querySelector("[data-site-account-menu]");
+    if (existingMenu) existingMenu.replaceWith(nextMenu);
+    else actions.appendChild(nextMenu);
+    return nextMenu;
   }
 
   function syncMenuState(menu) {
@@ -396,6 +463,7 @@
   function syncAccount() {
     const labels = copy[currentLanguage()];
     const username = String(currentAccount?.full_name || currentAccount?.display_name || currentAccount?.username || "").trim() || labels.accountFallback;
+    const signature = String(currentAccount?.profile_signature || currentAccount?.profileSignature || "").trim();
     const tagText = String(currentAccount?.profile_tags || currentAccount?.profileTags || "").trim();
     const tags = tagText
       ? tagText.split(/[,，\n]+/).map((item) => item.trim()).filter(Boolean).slice(0, 8)
@@ -408,19 +476,161 @@
     document.querySelectorAll("[data-site-account-avatar]").forEach((node) => {
       renderAccountAvatar(node, node.classList.contains("site-user-avatar") ? "" : "");
     });
+    document.querySelectorAll("[data-site-account-signature]").forEach((node) => {
+      node.dataset.siteCopy = signature ? "" : "profileSignatureEmpty";
+      node.textContent = signature || labels.profileSignatureEmpty;
+      node.classList.toggle("is-placeholder", !signature);
+    });
     document.querySelectorAll("[data-site-account-tags]").forEach((node) => {
-      node.hidden = tags.length === 0;
+      if (!tags.length) {
+        const placeholder = document.createElement("span");
+        placeholder.className = "site-account-placeholder";
+        placeholder.dataset.siteCopy = "profileTagsEmpty";
+        placeholder.textContent = labels.profileTagsEmpty;
+        node.replaceChildren(placeholder);
+        return;
+      }
       node.replaceChildren(...tags.map((tag) => {
         const item = document.createElement("span");
         item.textContent = tag;
         return item;
       }));
     });
+    renderAccountBilling();
+    syncConsoleEntryTargets();
   }
 
   function setAccount(account) {
+    const previousIdentity = accountBillingState.identityKey;
     currentAccount = account && typeof account === "object" ? { ...account } : null;
+    const nextIdentity = accountBillingIdentityKey();
+    if (previousIdentity !== nextIdentity) {
+      accountBillingRequest += 1;
+      accountBillingState.identityKey = nextIdentity;
+      accountBillingState.loading = false;
+      accountBillingState.loaded = false;
+      accountBillingState.partial = false;
+      accountBillingState.summary = {};
+      accountBillingState.orders = {};
+    }
     syncAccount();
+    if (currentAccount && currentSessionMode !== "guest") void loadAccountBilling();
+  }
+
+  function accountBillingIdentityKey() {
+    if (!currentAccount?.id) return "";
+    const workspaceUserId = currentSessionMode === "admin" ? storedAdminWorkspaceUserId() : "";
+    return `${currentSessionMode}:${workspaceUserId || currentAccount.id}`;
+  }
+
+  function accountRequestHeaders() {
+    const headers = new Headers({ Accept: "application/json" });
+    if (currentSessionMode === "admin") {
+      headers.set("X-Admin-Console", "1");
+      const workspaceUserId = storedAdminWorkspaceUserId();
+      if (workspaceUserId) headers.set("X-Admin-Workspace-User-ID", workspaceUserId);
+    }
+    return headers;
+  }
+
+  async function fetchAccountJson(path) {
+    const response = await fetch(path, {
+      credentials: "include",
+      cache: "no-store",
+      headers: accountRequestHeaders(),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(String(payload?.detail || payload?.message || `HTTP ${response.status}`));
+      error.status = response.status;
+      throw error;
+    }
+    return payload;
+  }
+
+  function accountNumber(value) {
+    const number = Number(value || 0);
+    return new Intl.NumberFormat(currentLanguage() === "zh-Hant" ? "zh-Hant" : "zh-CN", {
+      maximumFractionDigits: 2,
+    }).format(Number.isFinite(number) ? number : 0);
+  }
+
+  function renderAccountBilling() {
+    const labels = copy[currentLanguage()];
+    const summary = accountBillingState.summary || {};
+    const orders = accountBillingState.orders || {};
+    const publishPolicy = currentAccount?.publish_policy || {};
+    const subscriptions = Array.isArray(summary.subscriptions) ? summary.subscriptions : [];
+    const activeSubscription = subscriptions.find((item) => String(item?.status || "").toLowerCase() === "active")
+      || subscriptions[0]
+      || {};
+    const billingMode = String(summary.billing_mode || "").toLowerCase();
+    const unlimited = Boolean(summary.effective_unlimited || summary.unlimited_compute || summary.admin_waived);
+    const planName = activeSubscription.plan_name
+      || activeSubscription.name
+      || activeSubscription.plan_sku
+      || (billingMode === "legacy" ? "存量账号" : (summary.subscription_active ? "已启用" : "暂无订阅"));
+    const imageRemaining = summary.free_images?.total_remaining ?? 0;
+    const pendingOrders = orders.pending_count ?? orders.pending_orders_count ?? 0;
+    const publishWaived = Boolean(publishPolicy.waived);
+    const publishUsed = Number(publishPolicy.used || 0);
+    const publishLimit = Number(publishPolicy.limit || 0);
+    const publishRemaining = Number(publishPolicy.remaining ?? Math.max(0, publishLimit - publishUsed));
+
+    document.querySelectorAll("[data-site-account-billing]").forEach((host) => {
+      const statusNode = host.querySelector("[data-site-billing-status]");
+      const pointsNode = host.querySelector("[data-site-billing-points]");
+      const subscriptionNode = host.querySelector("[data-site-billing-subscription]");
+      const imagesNode = host.querySelector("[data-site-billing-images]");
+      const pendingNode = host.querySelector("[data-site-billing-pending]");
+      const publishUsedNode = host.querySelector("[data-site-publish-used]");
+      const publishRemainingNode = host.querySelector("[data-site-publish-remaining]");
+      if (accountBillingState.loading && !accountBillingState.loaded) {
+        if (statusNode) statusNode.textContent = labels.billingLoading;
+        [pointsNode, subscriptionNode, imagesNode, pendingNode].forEach((node) => {
+          if (node) node.textContent = "…";
+        });
+      } else if (accountBillingState.loaded) {
+        if (statusNode) statusNode.textContent = accountBillingState.partial ? labels.billingPartial : labels.billingReady;
+        if (pointsNode) pointsNode.textContent = unlimited ? "不限" : `${accountNumber(summary.points)} 点`;
+        if (subscriptionNode) subscriptionNode.textContent = planName;
+        if (imagesNode) imagesNode.textContent = `${accountNumber(imageRemaining)} 张`;
+        if (pendingNode) pendingNode.textContent = accountNumber(pendingOrders);
+      } else if (statusNode) {
+        statusNode.textContent = labels.billingUnread;
+      }
+      if (publishUsedNode) publishUsedNode.textContent = publishWaived ? "不限" : `${accountNumber(publishUsed)} / ${accountNumber(publishLimit)}`;
+      if (publishRemainingNode) publishRemainingNode.textContent = publishWaived ? "不限" : `${accountNumber(publishRemaining)} 篇`;
+    });
+  }
+
+  async function loadAccountBilling({ force = false } = {}) {
+    const identityKey = accountBillingIdentityKey();
+    if (!identityKey || currentSessionMode === "guest") return;
+    if (accountBillingState.loading || (!force && accountBillingState.loaded && accountBillingState.identityKey === identityKey)) return;
+    const requestId = ++accountBillingRequest;
+    accountBillingState.identityKey = identityKey;
+    accountBillingState.loading = true;
+    accountBillingState.partial = false;
+    renderAccountBilling();
+    const requests = [
+      fetchAccountJson("/api/auth/me"),
+      fetchAccountJson("/api/billing/summary"),
+      fetchAccountJson("/api/billing/orders?limit=1"),
+    ];
+    const [accountResult, summaryResult, ordersResult] = await Promise.allSettled(requests);
+    if (requestId !== accountBillingRequest || identityKey !== accountBillingIdentityKey()) return;
+    accountBillingState.loading = false;
+    accountBillingState.loaded = true;
+    accountBillingState.partial = [accountResult, summaryResult, ordersResult].some((result) => result.status === "rejected");
+    if (accountResult.status === "fulfilled") {
+      currentAccount = { ...(currentAccount || {}), ...(accountResult.value || {}) };
+      syncAccount();
+      window.dispatchEvent(new CustomEvent("vecto:account-data-refresh", { detail: { account: currentAccount } }));
+    }
+    if (summaryResult.status === "fulfilled") accountBillingState.summary = summaryResult.value || {};
+    if (ordersResult.status === "fulfilled") accountBillingState.orders = ordersResult.value || {};
+    renderAccountBilling();
   }
 
   function setLogoutPending(pending, message = "") {
@@ -478,6 +688,7 @@
       if (menu.dataset.siteAccountReady === "true") return;
       menu.dataset.siteAccountReady = "true";
       let hoverCloseTimer = 0;
+      let hoverOpened = false;
       const trigger = menu.querySelector("[data-site-account-trigger]");
       const popover = menu.querySelector("[data-site-account-popover]");
       const cancelHoverClose = () => {
@@ -494,15 +705,22 @@
       };
       trigger?.addEventListener("click", () => {
         cancelHoverClose();
+        if (hoverOpened) {
+          hoverOpened = false;
+          setAccountMenuOpen(menu, true);
+          return;
+        }
         setAccountMenuOpen(menu, trigger.getAttribute("aria-expanded") !== "true", { restoreFocus: true });
       });
       menu.addEventListener("pointerenter", (event) => {
         if (event.pointerType && event.pointerType !== "mouse") return;
         cancelHoverClose();
+        hoverOpened = trigger?.getAttribute("aria-expanded") !== "true";
         setAccountMenuOpen(menu, true);
       });
       menu.addEventListener("pointerleave", (event) => {
         if (event.pointerType && event.pointerType !== "mouse") return;
+        hoverOpened = false;
         scheduleHoverClose();
       });
       menu.addEventListener("focusin", (event) => {
@@ -536,15 +754,14 @@
 
   function openAccountConsoleView(view) {
     const targetView = "billing";
-    const pageWorkspaceUserId = String(document.querySelector('meta[name="admin-workspace-user-id"]')?.content || "").trim();
     const isAdminConsole = document.querySelector('meta[name="admin-console-session"]')?.content === "1";
-    const adminWorkspaceUserId = pageWorkspaceUserId || storedAdminWorkspaceUserId();
     if (window.location.pathname === "/console.html" || window.location.pathname === "/admin-console.html") {
       window.dispatchEvent(new CustomEvent(EVENT_BILLING_REQUEST));
       return;
     }
-    if (isAdminConsole || currentSessionMode === "admin" || hasAdminConsoleContext() || adminWorkspaceUserId) {
-      window.location.assign(adminConsoleTarget(targetView, adminWorkspaceUserId));
+    if (isAdminConsole || currentSessionMode === "admin" || hasAdminConsoleContext()) {
+      removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
+      window.location.assign(adminConsoleTarget(targetView, ""));
       return;
     }
     window.location.assign(`/console.html?${new URLSearchParams({ view: targetView }).toString()}`);
@@ -558,10 +775,14 @@
 
   function syncAdminWorkspaceContext() {
     const adminSessionMeta = document.querySelector('meta[name="admin-console-session"]');
-    if (!adminSessionMeta) return;
+    if (!adminSessionMeta) {
+      removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
+      return;
+    }
     const isAdminConsole = adminSessionMeta.content === "1";
     if (!isAdminConsole) {
       clearAdminConsoleContext();
+      currentSessionMode = "user";
       return;
     }
     markAdminConsoleContext();
@@ -578,13 +799,7 @@
     actions.querySelectorAll("[data-open-login], .site-guest-action").forEach((node) => node.remove());
     actions.querySelectorAll(":scope > .site-global-controls").forEach((node) => node.remove());
     actions.querySelectorAll(".site-mobile-menu-extra").forEach((node) => node.remove());
-    if (!actions.querySelector("[data-site-account-menu]")) {
-      actions.insertAdjacentHTML("beforeend", accountMenuMarkup(header.dataset.sitePage || "home"));
-    }
-    actions.querySelector("[data-site-account-billing]")?.toggleAttribute(
-      "hidden",
-      header.dataset.sitePage !== "console",
-    );
+    installUnifiedAccountMenu(header, header.dataset.sitePage || "home");
     header.dataset.siteAuthState = "authenticated";
     bindPreferenceControls(header);
     bindAccountMenus(header);
@@ -615,19 +830,14 @@
 
   async function resolvePublicSession() {
     if (hasAdminConsoleContext()) {
-      let workspaceUserId = storedAdminWorkspaceUserId();
-      let adminResult = await fetchSessionAccount({ admin: true, workspaceUserId });
-      if (workspaceUserId && [400, 404].includes(adminResult.response.status)) {
-        removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
-        workspaceUserId = "";
-        adminResult = await fetchSessionAccount({ admin: true });
-      }
+      removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
+      const adminResult = await fetchSessionAccount({ admin: true });
       if (adminResult.response.ok && adminResult.account) {
         markAdminConsoleContext();
         return {
           mode: "admin",
           account: adminResult.account,
-          workspaceUserId,
+          workspaceUserId: "",
           path: "/admin-console.html",
         };
       }
@@ -710,6 +920,7 @@
     if (!header.querySelector(".brand")) {
       header.innerHTML = fallbackMarkup(page, resolvedMode, current);
     }
+    if (mode === "authenticated") installUnifiedAccountMenu(header, page);
 
     header.dataset.siteReady = "true";
     header.dataset.i18nSkip = "true";
@@ -738,6 +949,10 @@
     document.querySelectorAll("[data-site-home-label]").forEach((node) => node.setAttribute("aria-label", labels.homeLabel));
     document.querySelectorAll("[data-site-navigation]").forEach((node) => node.setAttribute("aria-label", labels.navigationLabel));
     document.querySelectorAll("[data-site-global-controls]").forEach((node) => node.setAttribute("aria-label", labels.globalSettings));
+    document.querySelectorAll("[data-site-subscription-entry]").forEach((node) => {
+      node.title = labels.pricing;
+      node.setAttribute("aria-label", labels.pricing);
+    });
     document.querySelectorAll("[data-site-personal-controls]").forEach((node) => node.setAttribute("aria-label", labels.personalSettings));
     document.querySelectorAll("[data-site-account-popover]").forEach((node) => node.setAttribute("aria-label", labels.personalProfile));
     document.querySelectorAll("[data-site-console-label]").forEach((node) => node.setAttribute("aria-label", labels.console));
@@ -835,6 +1050,7 @@
     if (event.key === "vecto-proxy-market-read") void syncProxyMarketBadge();
   });
   window.addEventListener("vecto:proxy-market-read", () => void syncProxyMarketBadge());
+  window.addEventListener(EVENT_ACCOUNT_MENU_OPEN, () => void loadAccountBilling({ force: true }));
 
   syncAdminWorkspaceContext();
   document.querySelectorAll("[data-site-header]").forEach(mount);

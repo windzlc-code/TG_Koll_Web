@@ -2,11 +2,12 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
-from webapp import db as db_module, governance
+from webapp import db as db_module, governance, social_automation_api
 import webapp.server as server
 
 
@@ -102,6 +103,143 @@ class BillingApiClosedLoopTests(unittest.TestCase):
         )
         self.assertEqual(login.status_code, 200, login.text)
         return user_id, client
+
+    def test_admin_can_toggle_unlimited_compute_from_both_adjustment_endpoints(self):
+        enabled = self.admin.post(
+            f"/api/admin/users/{self.user_id}/billing/adjustments",
+            json={
+                "delta_points": 0,
+                "unlimited": True,
+                "reason": "enterprise unlimited account",
+            },
+        )
+        self.assertEqual(enabled.status_code, 200, enabled.text)
+        self.assertTrue(enabled.json()["unlimited_compute"])
+
+        summary = self.customer.get("/api/billing/summary")
+        self.assertEqual(summary.status_code, 200, summary.text)
+        self.assertTrue(summary.json()["unlimited_compute"])
+
+        disabled = self.admin.post(
+            f"/api/admin/users/{self.user_id}/recharge",
+            json={
+                "amount_cents": 0,
+                "unlimited": False,
+                "note": "restore metered billing",
+            },
+        )
+        self.assertEqual(disabled.status_code, 200, disabled.text)
+        self.assertFalse(disabled.json()["unlimited_compute"])
+
+        with db_module.db() as conn:
+            events = conn.execute(
+                """
+                SELECT event_type
+                FROM billing_ledger
+                WHERE user_id = ? AND event_type IN ('unlimited_compute_enabled', 'unlimited_compute_disabled')
+                ORDER BY created_at ASC
+                """,
+                (self.user_id,),
+            ).fetchall()
+        self.assertEqual(
+            {str(row["event_type"]) for row in events},
+            {"unlimited_compute_enabled", "unlimited_compute_disabled"},
+        )
+
+    def test_admin_summary_reports_effective_waiver_without_overriding_customer_workspace_wallet(self):
+        with db_module.db() as conn:
+            conn.execute(
+                "UPDATE billing_wallets SET credit_units = ?, unlimited_compute = 0 WHERE user_id = ?",
+                (321 * server.commercial_billing.POINT_SCALE, self.user_id),
+            )
+
+        admin_summary = self.admin.get("/api/billing/summary")
+        self.assertEqual(admin_summary.status_code, 200, admin_summary.text)
+        self.assertFalse(admin_summary.json()["unlimited_compute"])
+        self.assertTrue(admin_summary.json()["admin_waived"])
+        self.assertTrue(admin_summary.json()["effective_unlimited"])
+
+        workspace_summary = self.admin.get(
+            "/api/billing/summary",
+            headers={"X-Admin-Workspace-User-ID": str(self.user_id)},
+        )
+        self.assertEqual(workspace_summary.status_code, 200, workspace_summary.text)
+        self.assertEqual(workspace_summary.json()["points"], 321)
+        self.assertFalse(workspace_summary.json()["unlimited_compute"])
+        self.assertFalse(workspace_summary.json()["admin_waived"])
+        self.assertFalse(workspace_summary.json()["effective_unlimited"])
+
+    def test_admin_billing_mutations_invalidate_dashboard_cache(self):
+        mutations = (
+            (
+                f"/api/admin/users/{self.user_id}/recharge",
+                {"amount_cents": 1, "note": "recharge cache invalidation"},
+            ),
+            (
+                f"/api/admin/users/{self.user_id}/billing/adjustments",
+                {"delta_points": 1, "reason": "adjustment cache invalidation"},
+            ),
+            (
+                f"/api/admin/users/{self.user_id}/billing/adjustments",
+                {"unlimited": True, "reason": "unlimited cache invalidation"},
+            ),
+        )
+        for index, (path, payload) in enumerate(mutations):
+            with self.subTest(path=path, payload=payload):
+                with server._ADMIN_DASHBOARD_CACHE_LOCK:
+                    server._ADMIN_DASHBOARD_CACHE[f"sentinel-{index}"] = (
+                        0.0,
+                        {"summary": {"wallet_points": -1}},
+                    )
+                response = self.admin.post(path, json=payload)
+                self.assertEqual(response.status_code, 200, response.text)
+                with server._ADMIN_DASHBOARD_CACHE_LOCK:
+                    self.assertEqual(server._ADMIN_DASHBOARD_CACHE, {})
+
+    def test_all_available_task_types_map_to_published_billing_skus(self):
+        self.assertEqual(server._normal_task_billing_spec("get_gemini", {}), ("basic_text_post", 1, False))
+        self.assertEqual(
+            server._normal_task_billing_spec("video_i2v", {"resolution": "720p", "duration_seconds": 6}),
+            ("ad_video_720p_second", 6, False),
+        )
+        self.assertEqual(
+            server._normal_task_billing_spec("video_i2v", {"resolution": "1080p", "duration_seconds": 15}),
+            ("ad_video_1080p_second", 15, False),
+        )
+        self.assertEqual(social_automation_api.social_task_billing_sku("threads", "publish_post"), "threads_text_publish")
+        self.assertEqual(social_automation_api.social_task_billing_sku("instagram", "publish_post"), "instagram_publish")
+        self.assertEqual(social_automation_api.social_task_billing_sku("threads", "threads_auto_reply"), "threads_auto_reply_batch")
+        self.assertEqual(social_automation_api.social_task_billing_sku("instagram", "like_post"), "social_interaction")
+
+    def test_user_facing_ai_operation_deducts_catalog_price(self):
+        subscription = self.admin.post(
+            f"/api/admin/users/{self.user_id}/billing/subscriptions",
+            json={"quantity": 1, "renewal_subscription_ids": [], "note": "billing deduction test"},
+        )
+        self.assertEqual(subscription.status_code, 200, subscription.text)
+        credit = self.admin.post(
+            f"/api/admin/users/{self.user_id}/billing/adjustments",
+            json={"delta_points": 1, "reason": "billing deduction test"},
+        )
+        self.assertEqual(credit.status_code, 200, credit.text)
+
+        before = self.customer.get("/api/billing/summary").json()
+        with mock.patch.object(
+            server,
+            "_run_persona_create_cli",
+            return_value={"keywords": ["one", "two", "three", "four", "five"]},
+        ):
+            response = self.customer.post(
+                "/api/persona_dashboard/personas/ai_keywords",
+                json={"name": "Billing Persona", "prompt": "Create relevant keywords"},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["billing"]["status"], "settled")
+        self.assertEqual(response.json()["billing"]["charged_points"], 0.3)
+
+        after = self.customer.get("/api/billing/summary").json()
+        self.assertEqual(before["points"], 1)
+        self.assertEqual(after["points"], 0.7)
 
     def test_online_application_stays_pending_until_admin_approval(self):
         catalog = self.customer.get("/api/billing/catalog")

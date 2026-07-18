@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::InputEncoding = [System.Text.Encoding]::UTF8
 try { $Host.UI.RawUI.WindowTitle = "Workflow Delivery Package 便攜啟動器" } catch {}
@@ -6,11 +6,8 @@ try { $Host.UI.RawUI.WindowTitle = "Workflow Delivery Package 便攜啟動器" }
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $WebappDataDir = Join-Path $Root "webapp_data"
 $WebappRuntimeFile = Join-Path $WebappDataDir "runtime_config.json"
-$TokenDir = Join-Path $Root "tool_r18\.runtime\automatic-script"
-$TokenFile = Join-Path $TokenDir "telegram_bot_token.txt"
-$BotsFile = Join-Path $TokenDir "telegram_bots.local.json"
-$InfoFile = Join-Path $TokenDir "telegram_bot_info.json"
-$ToolApiConfigFile = Join-Path $TokenDir "api_config.json"
+$ToolRuntimeDir = Join-Path $Root "tool_r18\.runtime\automatic-script"
+$ToolApiConfigFile = Join-Path $ToolRuntimeDir "api_config.json"
 $LogDir = Join-Path $Root "portable_logs"
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $script:WebBackendBaseUrl = ""
@@ -108,21 +105,6 @@ function Find-WebBackendProcesses {
 
 function Find-WebBackendProcess {
   Find-WebBackendProcesses | Select-Object -First 1
-}
-
-function Find-ToolR18Processes {
-  $escapedRoot = [Regex]::Escape($Root)
-  Get-CimInstance Win32_Process |
-    Where-Object {
-      $_.CommandLine -and
-      $_.Name -eq "node.exe" -and
-      (Get-ProcessCommandLineText $_) -match $escapedRoot -and
-      (Get-ProcessCommandLineText $_) -match "src/daemon\.ts"
-    }
-}
-
-function Find-ToolR18Process {
-  Find-ToolR18Processes | Select-Object -First 1
 }
 
 function Get-PortFromCommandLine {
@@ -266,26 +248,6 @@ function Wait-HttpReady {
   throw "Web 後台未能在指定時間內啟動。最後錯誤：$lastError"
 }
 
-function Get-SavedBotInfoText {
-  if (Test-Path -LiteralPath $InfoFile) {
-    try {
-      $savedInfo = Get-Content -LiteralPath $InfoFile -Raw -Encoding UTF8 | ConvertFrom-Json
-      $parts = @()
-      if ($savedInfo.username) { $parts += ("@" + $savedInfo.username) }
-      if ($savedInfo.first_name) { $parts += ("名稱：" + $savedInfo.first_name) }
-      if ($savedInfo.id) { $parts += ("ID：" + $savedInfo.id) }
-      if ($parts.Count -gt 0) { return ($parts -join "，") }
-    } catch {
-      return "已保存 Token，但 Bot 資訊檔無法讀取"
-    }
-  }
-  if (Test-Path -LiteralPath $TokenFile) {
-    $existing = (Get-Content -LiteralPath $TokenFile -Raw -Encoding UTF8).Trim()
-    if ($existing) { return "已保存 Token" }
-  }
-  return "尚未設定"
-}
-
 function Get-SavedGrokInfoText {
   $cfg = Read-JsonObject -Path $WebappRuntimeFile
   $key = First-NonEmpty @($cfg.llm_api_key_gpt, $cfg.llm_api_key)
@@ -297,80 +259,10 @@ function Get-SavedGrokInfoText {
   return "模型：" + $models + "，Base URL：" + $baseUrl + "，Key：" + (Mask-Secret $key)
 }
 
-function Configure-TelegramBot {
-  param([bool]$Force = $false)
-  New-Item -ItemType Directory -Force -Path $TokenDir | Out-Null
-  New-Item -ItemType Directory -Force -Path $WebappDataDir | Out-Null
-
-  Write-Host ""
-  Write-Host "============================================================"
-  Write-Host "Telegram Bot 連線設定"
-  Write-Host "============================================================"
-  Write-Host "請貼上 BotFather 給你的 Telegram Bot Token。"
-  Write-Host "格式範例：1234567890:AAxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-  Write-Host "首次打開便攜包時必須重新輸入 Token；本工具會驗證並顯示 Bot 詳細資訊。"
-  Write-Host ""
-
-  if ((-not $Force) -and (Test-Path -LiteralPath $TokenFile)) {
-    $existing = (Get-Content -LiteralPath $TokenFile -Raw -Encoding UTF8).Trim()
-    if ($existing) {
-      Write-Host "已偵測到已保存的 Bot Token，本次自動沿用。"
-      Write-Host ("目前保存的 Bot：" + (Get-SavedBotInfoText))
-      Write-Host "如需更換 Token，請回到主選單選擇「更換 Telegram Bot Token」。"
-      return
-    }
-  }
-
-  if ($Force) {
-    Stop-ToolR18 -Quiet $true
-    foreach ($path in @($TokenFile, $BotsFile, $InfoFile)) {
-      if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
-    }
-    Write-Host "已清除舊 Token 設定，請輸入新的 Telegram Bot Token。"
-  }
-
-  $token = (Read-Host "請貼上 Telegram Bot Token 後按 Enter").Trim()
-  if (-not $token) { throw "未輸入 Telegram Bot Token。" }
-
-  Write-Host ""
-  Write-Host "正在驗證 Telegram Bot Token..."
-  $response = Invoke-RestMethod -Uri ("https://api.telegram.org/bot{0}/getMe" -f $token) -TimeoutSec 30
-  if (-not $response.ok) { throw "Telegram getMe 回傳 ok=false。" }
-
-  Write-Utf8NoBomFile -Path $TokenFile -Content ($token + "`r`n")
-  Save-JsonObject -Path $BotsFile -Object @{
-    bots = @(@{
-      token = $token
-      name = "primary"
-      defaultPublishPlatform = "threads"
-      defaultWarmupPlatform = "threads"
-    })
-  } -Depth 8
-  Save-JsonObject -Path $InfoFile -Object $response.result -Depth 8
-
-  $runtimeConfig = Read-JsonObject -Path $WebappRuntimeFile
-  Set-JsonProperty -Object $runtimeConfig -Name "telegram_bot_token" -Value $token
-  Save-JsonObject -Path $WebappRuntimeFile -Object $runtimeConfig
-
-  Write-Host ""
-  Write-Host "Telegram Bot 連線成功。"
-  Write-Host "------------------------------------------------------------"
-  Write-Host "Bot 詳細資訊"
-  Write-Host ("Bot ID：" + $response.result.id)
-  Write-Host ("使用者名稱：@" + $response.result.username)
-  Write-Host ("Bot 名稱：" + $response.result.first_name)
-  Write-Host ("是否 Bot：" + $response.result.is_bot)
-  if ($null -ne $response.result.can_join_groups) { Write-Host ("可加入群組：" + $response.result.can_join_groups) }
-  if ($null -ne $response.result.can_read_all_group_messages) { Write-Host ("可讀取群組所有訊息：" + $response.result.can_read_all_group_messages) }
-  if ($null -ne $response.result.supports_inline_queries) { Write-Host ("支援 Inline Query：" + $response.result.supports_inline_queries) }
-  Write-Host ("Token 掩碼：" + (Mask-Secret $token))
-  Write-Host "------------------------------------------------------------"
-}
-
 function Configure-GrokTextModel {
   param([bool]$Force = $false)
   New-Item -ItemType Directory -Force -Path $WebappDataDir | Out-Null
-  New-Item -ItemType Directory -Force -Path $TokenDir | Out-Null
+  New-Item -ItemType Directory -Force -Path $ToolRuntimeDir | Out-Null
 
   $runtimeConfig = Read-JsonObject -Path $WebappRuntimeFile
   $currentKey = First-NonEmpty @($runtimeConfig.llm_api_key_gpt, $runtimeConfig.llm_api_key)
@@ -446,11 +338,13 @@ function Configure-GrokTextModel {
 function Start-WebBackend {
   param([bool]$OpenBrowser = $false)
   $Python = Get-PortablePython
+  $Node = Get-PortableNode
   New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
   New-Item -ItemType Directory -Force -Path $WebappDataDir | Out-Null
 
   $pythonDir = Split-Path -Parent $Python
-  $env:PATH = $pythonDir + ";" + (Join-Path $pythonDir "Scripts") + ";" + $env:PATH
+  $nodeDir = Split-Path -Parent $Node
+  $env:PATH = $nodeDir + ";" + $pythonDir + ";" + (Join-Path $pythonDir "Scripts") + ";" + $env:PATH
   $env:WORKFLOW_DESKTOP_DATA_DIR = $Root
   $env:WEBAPP_DATA_DIR = $WebappDataDir
   $env:APP_DB_PATH = Join-Path $WebappDataDir "app.db"
@@ -474,6 +368,10 @@ function Start-WebBackend {
     Stop-WebBackend -Quiet $true
   }
 
+  $tsxCliPath = Join-Path $Root "tool_r18\node_modules\tsx\dist\cli.mjs"
+  if (-not (Test-Path -LiteralPath $tsxCliPath -PathType Leaf)) {
+    throw "Web backend dependency is incomplete: missing tool_r18\node_modules\tsx\dist\cli.mjs. Restore tool_r18 dependencies before starting the Web backend."
+  }
   $port = Get-FreePort -StartPort 18098 -EndPort 18130
   $outLog = Join-Path $LogDir "web_backend.out.log"
   $errLog = Join-Path $LogDir "web_backend.err.log"
@@ -495,69 +393,6 @@ function Open-WebBackendPage {
   Start-WebBackend -OpenBrowser $true
 }
 
-function Start-ToolR18 {
-  $Node = Get-PortableNode
-  $tsxPath = Join-Path $Root "tool_r18\node_modules\tsx\dist\cli.mjs"
-  if (-not (Test-Path -LiteralPath $tsxPath)) { throw "找不到 Tool_R18 node_modules：$tsxPath" }
-
-  Write-Host ""
-  $existing = Find-ToolR18Process
-  if ($existing) {
-    if (Test-ManagedProcess -Process $existing) {
-      Write-Host ("Tool_R18 Telegram Bot 已在本啟動器中運行，PID：" + $existing.ProcessId)
-      return
-    }
-    Write-Host "偵測到同目錄殘留的 Tool_R18 Bot 進程，正在清理後重新啟動。"
-    Stop-ToolR18 -Quiet $true
-  }
-
-  Write-Host "正在啟動 Tool_R18 Telegram Bot 後台..."
-  $toolRoot = Join-Path $Root "tool_r18"
-  $runtimeDir = Join-Path $toolRoot ".runtime\automatic-script"
-  $nodeDir = Split-Path -Parent $Node
-  $pythonPath = Get-PortablePython
-  $pythonDir = Split-Path -Parent $pythonPath
-
-  $env:PATH = $nodeDir + ";" + $pythonDir + ";" + (Join-Path $pythonDir "Scripts") + ";" + $env:PATH
-  $env:TOOL_R18_RUNTIME_DIR = $runtimeDir
-  $env:AUTO_TWEET_RUNTIME_DIR = $runtimeDir
-  $env:AUTO_TWEET_API_CONFIG_PATH = $ToolApiConfigFile
-  $webhookPort = Get-FreePort -StartPort 18788 -EndPort 18830
-  $env:TELEGRAM_WEBHOOK_PORT = [string]$webhookPort
-  $env:TELEGRAM_WEBHOOK_URL = "http://127.0.0.1:$webhookPort/telegram/webhook/auto-script-webhook-secret"
-  if ($script:WebBackendBaseUrl) {
-    $env:TOOL_R18_INTERNAL_WEBAPP_BASE_URL = $script:WebBackendBaseUrl
-    $env:TG_INTERNAL_WEBAPP_BASE_URL = $script:WebBackendBaseUrl
-  }
-
-  $outLog = Join-Path $LogDir "tool_r18_bot.out.log"
-  $errLog = Join-Path $LogDir "tool_r18_bot.err.log"
-  $process = Start-Process -FilePath $Node -ArgumentList @("--import", "tsx", "src/daemon.ts") -WorkingDirectory $toolRoot -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
-  Add-ManagedProcess -Process $process -Label "Tool_R18 Bot"
-  Start-Sleep -Seconds 8
-  if ($process.HasExited) {
-    $stdout = Get-LogTail -Path $outLog
-    $stderr = Get-LogTail -Path $errLog
-    throw "Tool_R18 Bot 啟動後已退出。PID=$($process.Id)`nstdout:`n$stdout`nstderr:`n$stderr"
-  }
-  Write-Host ("Tool_R18 Telegram Bot 後台已啟動，PID：" + $process.Id)
-  Write-Host ("Telegram Webhook 本機連接埠：" + $webhookPort)
-}
-
-function Stop-ToolR18 {
-  param([bool]$Quiet = $false)
-  $existing = @(Find-ToolR18Processes)
-  if ($existing.Count -gt 0) {
-    foreach ($process in $existing) {
-      try { Stop-Process -Id $process.ProcessId -Force } catch {}
-      $script:ManagedProcessIds.Remove([int]$process.ProcessId) | Out-Null
-      if (-not $Quiet) { Write-Host ("已停止 Tool_R18 Telegram Bot 後台，PID：" + $process.ProcessId) }
-    }
-  } elseif (-not $Quiet) {
-    Write-Host "Tool_R18 Telegram Bot 後台目前沒有運行。"
-  }
-}
-
 function Stop-WebBackend {
   param([bool]$Quiet = $false)
   $existing = @(Find-WebBackendProcesses)
@@ -573,19 +408,16 @@ function Stop-WebBackend {
 }
 
 function Stop-AllServices {
-  Stop-ToolR18
   Stop-WebBackend
 }
 
 function Start-AllServices {
-  Configure-TelegramBot
   Configure-GrokTextModel
   Start-WebBackend -OpenBrowser $false
-  Start-ToolR18
   Write-Host ""
   Write-Host "啟動完成。"
-  Write-Host "Web 後台與 Bot 會跟隨此啟動器視窗運行；關閉視窗或選擇退出時會停止。"
-  Write-Host "如需打開頁面，請回到主選單選擇「3. 開啟 Web 後台頁面」。"
+  Write-Host "Web 後台會跟隨此啟動器視窗運行；關閉視窗或選擇退出時會停止。"
+  Write-Host "如需打開頁面，請回到主選單選擇「2. 開啟 Web 後台頁面」。"
 }
 
 function Restart-AllServices {
@@ -593,30 +425,18 @@ function Restart-AllServices {
   Start-AllServices
 }
 
-function Switch-TelegramToken {
-  Configure-TelegramBot -Force $true
-  Start-WebBackend -OpenBrowser $false
-  Start-ToolR18
-  Write-Host ""
-  Write-Host "Token 已更換並已重新啟動 Bot。"
-}
-
 function Switch-GrokTextModel {
   Configure-GrokTextModel -Force $true
-  Stop-ToolR18
-  Start-ToolR18
   Write-Host ""
-  Write-Host "Grok 文字模型 API/Key 已更換，Tool_R18 Bot 已重啟並套用新設定。"
+  Write-Host "Grok 文字模型 API/Key 已更換並同步到 Web 後台。"
 }
 
 function Show-Status {
   $web = Find-WebBackendProcess
-  $bot = Find-ToolR18Process
   Write-Host ""
   Write-Host "============================================================"
   Write-Host "目前狀態"
   Write-Host "============================================================"
-  Write-Host ("Telegram Bot：" + (Get-SavedBotInfoText))
   Write-Host ("Grok 文字模型：" + (Get-SavedGrokInfoText))
   if ($web) {
     $port = Get-PortFromCommandLine -CommandLine (Get-ProcessCommandLineText $web)
@@ -624,30 +444,23 @@ function Show-Status {
   } else {
     Write-Host "Web 後台：未運行"
   }
-  if ($bot) {
-    Write-Host ("Tool_R18 Bot：運行中，PID " + $bot.ProcessId)
-  } else {
-    Write-Host "Tool_R18 Bot：未運行"
-  }
 }
 
 function Show-MainMenu {
   Write-Host "============================================================"
   Write-Host "Workflow Delivery Package 便攜啟動器"
   Write-Host "============================================================"
-  Write-Host ("目前 Bot 設定：" + (Get-SavedBotInfoText))
   Write-Host ("目前 Grok 設定：" + (Get-SavedGrokInfoText))
   Write-Host ""
   Write-Host "後台服務會跟隨此視窗運行；關閉此視窗會停止本工具啟動的服務。"
   Write-Host ""
   Write-Host "請選擇要執行的操作："
-  Write-Host "  1. 更換 Telegram Bot Token"
-  Write-Host "  2. 更換 Grok 文字模型 API/Key"
-  Write-Host "  3. 開啟 Web 後台頁面"
-  Write-Host "  4. 查看目前狀態"
-  Write-Host "  5. 重啟 Web 後台與 Telegram Bot"
-  Write-Host "  6. 停止本工具後台服務"
-  Write-Host "  7. 停止服務並關閉此視窗"
+  Write-Host "  1. 更換 Grok 文字模型 API/Key"
+  Write-Host "  2. 開啟 Web 後台頁面"
+  Write-Host "  3. 查看目前狀態"
+  Write-Host "  4. 重啟 Web 後台"
+  Write-Host "  5. 停止本工具後台服務"
+  Write-Host "  6. 停止服務並關閉此視窗"
   Write-Host ""
   return (Read-Host "請輸入選項數字後按 Enter")
 }
@@ -657,10 +470,8 @@ function Write-LauncherError {
   Write-Host ""
   Write-Host "啟動失敗："
   $message = [string]$ErrorRecord.Exception.Message
-  if ($message -match "\(404\)|404|Not Found|未找到|找不到") {
-    Write-Host "Telegram Bot Token 驗證失敗。請確認 Token 是否完整、正確。"
-  } elseif ($message -match "timed out|timeout|逾時|超时") {
-    Write-Host "連線逾時。請確認網路是否正常，並確認此電腦可以連接 Telegram/Grok API。"
+  if ($message -match "timed out|timeout|逾時|超时") {
+    Write-Host "連線逾時。請確認網路是否正常，並確認此電腦可以連接 Grok API。"
   } elseif ($message -match "getaddrinfo|NameResolution|DNS") {
     Write-Host "網路解析失敗。請確認網路或 DNS 設定。"
   } else {
@@ -678,7 +489,7 @@ try {
   Write-Host "============================================================"
   Write-Host "Workflow Delivery Package 便攜啟動器"
   Write-Host "============================================================"
-  Write-Host "正在自動檢查設定並啟動 Web 後台與 Telegram Bot..."
+  Write-Host "正在自動檢查設定並啟動 Web 後台..."
   Write-Host "此視窗開啟期間服務保持運行；關閉視窗時會停止服務。"
   Start-AllServices
   Wait-ReturnToMenu
@@ -688,13 +499,12 @@ try {
     $shouldExit = $false
     try {
       switch ($choice.Trim()) {
-        "1" { Switch-TelegramToken }
-        "2" { Switch-GrokTextModel }
-        "3" { Open-WebBackendPage }
-        "4" { Show-Status }
-        "5" { Restart-AllServices }
-        "6" { Stop-AllServices }
-        "7" {
+        "1" { Switch-GrokTextModel }
+        "2" { Open-WebBackendPage }
+        "3" { Show-Status }
+        "4" { Restart-AllServices }
+        "5" { Stop-AllServices }
+        "6" {
           Write-Host ""
           Write-Host "正在停止本工具後台服務..."
           Stop-AllServices

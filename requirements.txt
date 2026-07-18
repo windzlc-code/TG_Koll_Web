@@ -14,7 +14,6 @@ python-dotenv>=1.0.0
 cryptography==48.0.0
 playwright==1.58.0
 camoufox[geoip]>=0.4.11
-aiogram>=3.7,<4
 aiohttp-socks>=0.11.0
 imageio-ffmpeg>=0.6.0
 mutagen>=1.47.0

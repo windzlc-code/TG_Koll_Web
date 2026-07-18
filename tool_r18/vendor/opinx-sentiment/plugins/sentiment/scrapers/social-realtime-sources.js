@@ -9,6 +9,7 @@ const KEYWORD_CONCURRENCY = 3;
 const DEFAULT_MAX_ITEMS_PER_KEYWORD = 10;
 const DEFAULT_MAX_PAGES_PER_KEYWORD = 3;
 const DEFAULT_TELEGRAM_CHANNELS = [];
+const TELEGRAM_PUBLIC_NETWORK_COLLECTION_ENABLED = false;
 const DEFAULT_MASTODON_INSTANCES = [
   "https://mastodon.social",
   "https://mstdn.social",
@@ -1370,6 +1371,7 @@ async function scrapeTelegramDirectUrlsForKeyword(keyword, directUrls = [], {
 }
 
 export async function scrapeTelegramPublicChannels(keywords, { proxyUrl = "", budget = {}, since = "", channels = DEFAULT_TELEGRAM_CHANNELS, domainControls = {}, contentControls = {}, failoverAttribution = [], directUrls = [] } = {}) {
+  if (!TELEGRAM_PUBLIC_NETWORK_COLLECTION_ENABLED) return scraperResult(0);
   const normalizedKeywords = Array.isArray(keywords) ? keywords.filter(Boolean) : [];
   const telegramChannels = normalizeTelegramChannels(channels);
   const telegramDirectUrls = normalizeTelegramDirectUrls(directUrls);

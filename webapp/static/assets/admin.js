@@ -1617,6 +1617,7 @@ const adminState = {
   billingOrderLoading: false,
   billingSelectedUserId: null,
   billingWalletPoints: new Map(),
+  billingUnlimitedUsers: new Map(),
   billingLoaded: false,
   billingLoadingPromise: null,
   governanceLoadingPromise: null,
@@ -3370,6 +3371,23 @@ function createBillingSummaryItem(label, value, tone = "") {
   return item;
 }
 
+function normalizeBillingUnlimited(value) {
+  if (value === true || value === 1) return true;
+  return ["1", "true", "yes", "unlimited"].includes(String(value ?? "").trim().toLowerCase());
+}
+
+function billingUnlimitedFrom(...sources) {
+  for (const source of sources) {
+    if (!source || typeof source !== "object") continue;
+    for (const key of ["unlimited_compute", "unlimited"]) {
+      if (Object.prototype.hasOwnProperty.call(source, key)) {
+        return normalizeBillingUnlimited(source[key]);
+      }
+    }
+  }
+  return sources.some((source) => String(source?.billing_mode || "").trim().toLowerCase() === "unlimited");
+}
+
 function renderUserBilling(payload, userId) {
   const root = payload?.data && typeof payload.data === "object" ? payload.data : (payload || {});
   const summaryData = root.summary && typeof root.summary === "object" ? root.summary : root;
@@ -3385,15 +3403,17 @@ function renderUserBilling(payload, userId) {
   const activeSubscriptions = Number.isFinite(Number(summaryData.active_subscription_count))
     ? Number(summaryData.active_subscription_count)
     : subscriptions.filter((item) => String(item.status || "active") === "active").length;
-  const creditPoints = Number(summaryData.points ?? wallet.points ?? wallet.credit_points ?? wallet.credit_units ?? summaryData.credit_units ?? 0);
+  const creditPoints = Number(summaryData.points ?? wallet.points ?? wallet.credit_points ?? (wallet.credit_units != null ? Number(wallet.credit_units) / 100 : (summaryData.credit_units != null ? Number(summaryData.credit_units) / 100 : 0)));
   const billingMode = String(wallet.billing_mode || summaryData.billing_mode || "legacy");
+  const unlimited = billingUnlimitedFrom(summaryData, wallet, user, root);
 
   adminState.billingSelectedUserId = Number(user.id || root.user_id || userId);
+  adminState.billingUnlimitedUsers.set(String(adminState.billingSelectedUserId), unlimited);
   if (el("billingUserId")) el("billingUserId").value = String(adminState.billingSelectedUserId);
   const summary = el("billingUserSummary");
   summary.replaceChildren(
     createBillingSummaryItem("客户", `${user.username || root.username || `ID ${adminState.billingSelectedUserId}`}`),
-    createBillingSummaryItem("算力点余额", formatBillingPoints(creditPoints), creditPoints > 0 ? "positive" : "neutral"),
+    createBillingSummaryItem("算力点余额", unlimited ? "∞" : formatBillingPoints(creditPoints), unlimited || creditPoints > 0 ? "positive" : "neutral"),
     createBillingSummaryItem("可用图片", `${formatBillingUnits(availableImages)} 张`, availableImages > 0 ? "positive" : "neutral"),
     createBillingSummaryItem("有效订阅", `${activeSubscriptions} 个`),
     createBillingSummaryItem("计费模式", BILLING_STATUS_LABELS[billingMode] || billingMode),
@@ -3416,13 +3436,16 @@ function renderUserBilling(payload, userId) {
       row.appendChild(createBillingCell(entry.asset_type || "-"));
       row.appendChild(createBillingCell(entry.event_type || entry.type || "-"));
       row.appendChild(createBillingCell(`${amount > 0 ? "+" : ""}${amount.toLocaleString("zh-CN", { maximumFractionDigits: 6 })}`, amount > 0 ? "admin-billing-positive" : (amount < 0 ? "admin-billing-negative" : "")));
-      row.appendChild(createBillingCell(balanceAfter.toLocaleString("zh-CN", { maximumFractionDigits: 6 })));
+      row.appendChild(createBillingCell(unlimited ? "∞" : balanceAfter.toLocaleString("zh-CN", { maximumFractionDigits: 6 })));
       row.appendChild(createBillingCell(entry.order_id || entry.ref_id || entry.ref_type || "-", "admin-billing-reference"));
       body.appendChild(row);
     });
   }
   el("billingUserPlaceholder").hidden = true;
   el("billingUserWorkspace").hidden = false;
+  const unlimitedInput = el("billingAdjustmentUnlimited");
+  if (unlimitedInput) unlimitedInput.checked = unlimited;
+  syncBillingAdjustmentType();
 }
 
 async function loadUserBilling(userId = el("billingUserId")?.value) {
@@ -3443,6 +3466,7 @@ async function submitBillingAdjustment() {
   const userId = Math.floor(Number(adminState.billingSelectedUserId || el("billingUserId")?.value || 0));
   const adjustmentType = String(el("billingAdjustmentType")?.value || "credit");
   const amount = Number(el("billingAdjustmentAmount")?.value || 0);
+  const unlimited = adjustmentType === "credit" && Boolean(el("billingAdjustmentUnlimited")?.checked);
   const note = String(el("billingAdjustmentNote")?.value || "").trim();
   if (userId <= 0) throw new Error("请先查询客户计费详情");
   if (!note) throw new Error("请填写调整原因");
@@ -3456,13 +3480,24 @@ async function submitBillingAdjustment() {
       body: JSON.stringify({ quantity, renewal_subscription_ids: [], note }),
     });
   } else {
-    const deltaPoints = amount;
-    if (!Number.isFinite(deltaPoints) || deltaPoints === 0) throw new Error("调整算力点必须是非零数值");
-    if (!confirm(`确认将客户 ID ${userId} 的算力点调整 ${deltaPoints > 0 ? "+" : ""}${deltaPoints} 吗？`)) return;
+    const deltaPoints = unlimited ? 0 : amount;
+    const wasUnlimited = adminState.billingUnlimitedUsers.get(String(userId)) === true;
+    if (!Number.isFinite(deltaPoints) || (!unlimited && deltaPoints === 0 && !wasUnlimited)) {
+      throw new Error("调整算力点必须是非零数值");
+    }
+    const actionText = unlimited
+      ? "设为无限算力"
+      : (wasUnlimited && deltaPoints === 0
+        ? "关闭无限算力"
+        : `调整 ${deltaPoints > 0 ? "+" : ""}${deltaPoints} 点并使用普通算力`);
+    if (!confirm(`确认将客户 ID ${userId} ${actionText}吗？`)) return;
+    const adjustmentPayload = { delta_points: deltaPoints, reason: note };
+    if (unlimited) adjustmentPayload.unlimited = true;
+    else if (wasUnlimited) adjustmentPayload.unlimited = false;
     await api(`/api/admin/users/${userId}/billing/adjustments`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ delta_points: deltaPoints, reason: note }),
+      body: JSON.stringify(adjustmentPayload),
     });
   }
   el("billingAdjustmentAmount").value = "";
@@ -3474,14 +3509,22 @@ async function submitBillingAdjustment() {
 
 function syncBillingAdjustmentType() {
   const isSubscription = String(el("billingAdjustmentType")?.value || "credit") === "subscription";
+  const unlimitedInput = el("billingAdjustmentUnlimited");
+  if (isSubscription && unlimitedInput) unlimitedInput.checked = false;
+  if (unlimitedInput) unlimitedInput.disabled = isSubscription;
+  const unlimited = !isSubscription && Boolean(unlimitedInput?.checked);
   const amount = el("billingAdjustmentAmount");
+  const wasUnlimited = adminState.billingUnlimitedUsers.get(String(adminState.billingSelectedUserId || "")) === true;
   setText("billingAdjustmentAmountLabel", isSubscription ? "订阅套数" : "调整算力点");
   if (amount) {
-    amount.value = "";
+    amount.disabled = unlimited;
+    if (unlimited) amount.value = "";
     amount.step = isSubscription ? "1" : "0.000001";
     amount.min = isSubscription ? "1" : "";
     amount.max = isSubscription ? "50" : "";
-    amount.placeholder = isSubscription ? "1-50 个月" : "正数增加，负数扣减";
+    amount.placeholder = isSubscription
+      ? "1-50 个月"
+      : (unlimited ? "无限模式无需填写" : (wasUnlimited ? "填 0 仅关闭无限，正负数同时调整" : "正数增加，负数扣减"));
   }
 }
 
@@ -3780,14 +3823,20 @@ async function loadUsers(page = adminState.userListPage) {
 
     const balanceCell = document.createElement("td");
     balanceCell.className = "admin-user-balance-cell";
+    const unlimited = billingUnlimitedFrom(u, u.wallet, u.billing_wallet);
     const responsePoints = u.credit_units !== null && u.credit_units !== undefined
       ? Number(u.credit_units) / 100
       : (u.points ?? u.wallet?.points ?? u.billing_wallet?.points);
     if (!u.is_admin && responsePoints !== null && responsePoints !== undefined && Number.isFinite(Number(responsePoints))) {
       adminState.billingWalletPoints.set(String(u.id), Number(responsePoints));
     }
+    if (!u.is_admin) adminState.billingUnlimitedUsers.set(String(u.id), unlimited);
     const walletPoints = adminState.billingWalletPoints.get(String(u.id));
-    balanceCell.textContent = u.is_admin || walletPoints === undefined ? "-" : formatBillingPoints(walletPoints);
+    balanceCell.textContent = u.is_admin ? "-" : (unlimited ? "∞" : (walletPoints === undefined ? "-" : formatBillingPoints(walletPoints)));
+    if (unlimited) {
+      balanceCell.title = "无限算力";
+      balanceCell.setAttribute("aria-label", "无限算力");
+    }
     tr.appendChild(balanceCell);
 
     const actions = document.createElement("td");
@@ -3807,7 +3856,7 @@ async function loadUsers(page = adminState.userListPage) {
     addAction("查看详情", "user_detail", "detail");
     if (!u.is_admin) addAction("计费详情", "billing_detail", "billing", { name: u.username });
     if (!archived && lifecycle === "active") {
-      if (!u.is_admin) addAction("人工调整算力点", "recharge", "balance", { name: u.username });
+      if (!u.is_admin) addAction("人工调整算力点", "recharge", "balance", { name: u.username, unlimited: unlimited ? 1 : 0 });
       addAction(u.is_disabled ? "启用" : "禁用", "toggle", u.is_disabled ? "enable" : "disable", { disabled: u.is_disabled ? 1 : 0 });
     }
     if (!u.is_admin) {
@@ -4424,9 +4473,11 @@ async function openUserDetailModal(id) {
       "算力点余额",
       user.is_admin
         ? "-"
-        : (adminState.billingWalletPoints.has(String(user.id))
+        : (billingUnlimitedFrom(user, user.wallet, user.billing_wallet) || adminState.billingUnlimitedUsers.get(String(user.id)) === true
+          ? "无限"
+          : (adminState.billingWalletPoints.has(String(user.id))
           ? `${formatBillingPoints(adminState.billingWalletPoints.get(String(user.id)))} 算力点`
-          : "请在计费详情查看"),
+          : "请在计费详情查看")),
     ),
     detailRow("最后登录", user.last_login_at ? formatTime(user.last_login_at) : "尚未登录"),
     detailRow("创建时间", user.created_at ? formatTime(user.created_at) : "-"),
@@ -6891,11 +6942,28 @@ async function runTaskAction(act, id) {
   return false;
 }
 
-function openRechargeModal(id, name) {
-  adminState.rechargeTarget = { id: String(id || ""), name: String(name || id || "") };
+function syncRechargeUnlimitedMode() {
+  const target = adminState.rechargeTarget || {};
+  const unlimited = Boolean(el("rechargeUnlimited")?.checked);
+  const amount = el("rechargeAmount");
+  if (!amount) return;
+  amount.disabled = unlimited;
+  amount.min = target.unlimited ? "0" : "1";
+  amount.placeholder = unlimited ? "无限模式无需填写" : (target.unlimited ? "填 0 仅关闭无限" : "输入增加点数");
+  if (unlimited) amount.value = "";
+}
+
+function openRechargeModal(id, name, unlimited = false) {
+  adminState.rechargeTarget = {
+    id: String(id || ""),
+    name: String(name || id || ""),
+    unlimited: normalizeBillingUnlimited(unlimited),
+  };
   if (el("rechargeSub")) el("rechargeSub").textContent = `客户：${adminState.rechargeTarget.name} · 此入口为人工算力调整`;
-  if (el("rechargeAmount")) el("rechargeAmount").value = "1000";
+  if (el("rechargeUnlimited")) el("rechargeUnlimited").checked = adminState.rechargeTarget.unlimited;
+  if (el("rechargeAmount")) el("rechargeAmount").value = adminState.rechargeTarget.unlimited ? "0" : "1000";
   if (el("rechargeNote")) el("rechargeNote").value = "人工算力调整";
+  syncRechargeUnlimitedMode();
   setMsg("rechargeMsg", "");
   const modal = el("rechargeModal");
   if (modal) {
@@ -6917,23 +6985,35 @@ async function submitRecharge() {
   const target = adminState.rechargeTarget;
   if (!target || !target.id) return;
   const amount = Number(el("rechargeAmount").value || 0);
+  const unlimited = Boolean(el("rechargeUnlimited")?.checked);
   const note = String(el("rechargeNote").value || "").trim();
-  if (!Number.isInteger(amount) || amount <= 0) {
-    setMsg("rechargeMsg", "算力点必须为正整数", false);
+  if (!unlimited && (!Number.isInteger(amount) || amount < (target.unlimited ? 0 : 1))) {
+    setMsg("rechargeMsg", target.unlimited ? "算力点必须为 0 或正整数" : "算力点必须为正整数", false);
     return;
   }
+  const rechargePayload = { amount_cents: unlimited ? 0 : amount, note };
+  if (unlimited) rechargePayload.unlimited = true;
+  else if (target.unlimited) rechargePayload.unlimited = false;
   const response = await api(`/api/admin/users/${target.id}/recharge`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ amount_cents: amount, note }),
+    body: JSON.stringify(rechargePayload),
   });
+  const responseUnlimited = Object.prototype.hasOwnProperty.call(response || {}, "unlimited_compute")
+    ? normalizeBillingUnlimited(response.unlimited_compute)
+    : (Object.prototype.hasOwnProperty.call(response || {}, "unlimited")
+      ? normalizeBillingUnlimited(response.unlimited)
+      : unlimited);
+  adminState.billingUnlimitedUsers.set(String(target.id), responseUnlimited);
   const walletPoints = Number(response.points);
   if (Number.isFinite(walletPoints)) {
     adminState.billingWalletPoints.set(String(target.id), walletPoints);
   }
   setMsg(
     "rechargeMsg",
-    Number.isFinite(walletPoints)
+    responseUnlimited
+      ? "人工算力调整已完成，当前账户：无限算力"
+      : Number.isFinite(walletPoints)
       ? `人工算力调整已完成，当前钱包点数：${formatBillingPoints(walletPoints)} 算力点`
       : "人工算力调整已完成",
     true,
@@ -7043,6 +7123,7 @@ function bindBillingActions() {
     }
   });
   el("billingAdjustmentType")?.addEventListener("change", syncBillingAdjustmentType);
+  el("billingAdjustmentUnlimited")?.addEventListener("change", syncBillingAdjustmentType);
 }
 
 function bindActions() {
@@ -7614,6 +7695,7 @@ function bindActions() {
       }
     });
   }
+  el("rechargeUnlimited")?.addEventListener("change", syncRechargeUnlimitedMode);
   if (el("rechargeModal")) {
     el("rechargeModal").addEventListener("click", (e) => {
       if (e.target === e.currentTarget) closeRechargeModal();
@@ -7886,7 +7968,7 @@ function bindActions() {
       return;
     }
     if (act === "recharge") {
-      openRechargeModal(id, btn.dataset.name || id);
+      openRechargeModal(id, btn.dataset.name || id, btn.dataset.unlimited);
       return;
     }
     if (act === "billing_detail") {

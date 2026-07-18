@@ -97,7 +97,24 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('"/profile.html"', self.site_nav_source)
         self.assertIn('"/admin-profile.html"', self.site_nav_source)
         self.assertIn('data-site-copy="personalProfile"', self.site_nav_source)
-        self.assertIn('page === "console" ? "" : " hidden"', self.site_nav_source)
+        self.assertNotIn('page === "console" ? "" : " hidden"', self.site_nav_source)
+        self.assertNotIn(
+            'header.dataset.sitePage !== "console"',
+            self.site_nav_source,
+        )
+        self.assertIn("function installUnifiedAccountMenu", self.site_nav_source)
+        self.assertNotIn(".profile-page .site-account-popover", self.profile_styles)
+        self.assertIn("background: #ffffff", self.site_nav_styles)
+        self.assertIn("border: 1px solid #d4dfdd", self.site_nav_styles)
+        self.assertIn("data-site-account-signature", self.site_nav_source)
+        self.assertIn('data-site-copy="profileSignatureEmpty"', self.site_nav_source)
+        self.assertIn('data-site-copy="profileTagsEmpty"', self.site_nav_source)
+        self.assertIn(".site-account-profile-field", self.site_nav_styles)
+        self.assertIn("async function loadAccountBilling", self.site_nav_source)
+        self.assertIn('fetchAccountJson("/api/billing/summary")', self.site_nav_source)
+        self.assertIn('fetchAccountJson("/api/billing/orders?limit=1")', self.site_nav_source)
+        self.assertIn("function syncConsoleEntryTargets", self.site_nav_source)
+        self.assertIn('link.setAttribute("href", target)', self.site_nav_source)
 
         self.assertIn('id="profileAvatarButton"', self.profile_markup)
         self.assertIn('id="profileAvatarFile"', self.profile_markup)
@@ -112,7 +129,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("body.profile-page", self.profile_styles)
         self.assertIn("@media (max-width: 720px)", self.profile_styles)
         self.assertIn('$("profileAvatarFile")?.click()', self.profile_source)
-        self.assertIn("file.size > 140 * 1024", self.profile_source)
+        self.assertIn("const AVATAR_MAX_BYTES = 512 * 1024", self.profile_source)
+        self.assertIn("file.size > AVATAR_MAX_BYTES", self.profile_source)
         self.assertIn('api("/api/me/profile"', self.profile_source)
         self.assertIn('error?.code === "mfa_setup_required"', self.profile_source)
         self.assertIn('"/admin#account"', self.profile_source)
@@ -170,6 +188,14 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('pointerenter', self.site_nav_source)
         self.assertIn('if (event.target === trigger) return;', self.site_nav_source)
         self.assertIn('border-radius: 50%', self.site_nav_styles)
+        self.assertIn('height: auto;', self.site_nav_styles)
+        self.assertIn('bottom: auto;', self.site_nav_styles)
+        self.assertIn('.site-header .site-mobile-menu,', self.site_nav_styles)
+        self.assertIn('.site-header .site-account-menu {', self.site_nav_styles)
+        self.assertIn('.site-header .site-menu-toggle span {', self.site_nav_styles)
+        self.assertIn('grid-template-columns: 18px;', self.site_nav_styles)
+        self.assertIn('width: fit-content;', self.site_nav_styles)
+        self.assertIn('href="/" aria-label="Vecto 首页" data-site-home-label', self.markup)
 
     def test_console_actions_share_static_navigation_gradient_and_only_busy_buttons_animate(self):
         self.assertIn("--vecto-action-static-gradient", self.styles)
@@ -426,8 +452,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("updateAccountTotpBadgeViews(", account_status)
         self.assertIn("accountById.get(String(node.dataset.accountTotpFor", account_status)
         self.assertIn("updateAccountTotpBadgeNode(node, account)", account_status)
-        self.assertIn('document.querySelectorAll("[data-social-check-status]")', account_status)
-        self.assertIn('button.setAttribute("aria-busy"', account_status)
+        self.assertIn('document.querySelectorAll("[data-account-status-for]")', account_status)
+        self.assertNotIn("data-social-check-status", account_status)
         self.assertIn('loadAutomationTasksShared().catch', task_refresh)
         self.assertNotIn("loadAutomationTasksShared({ force: true })", task_refresh)
 
@@ -439,9 +465,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("data-account-status-for", card)
         self.assertNotIn("renderAccountHealthChip", card)
         self.assertNotIn("data-account-health-for", card)
-        self.assertIn("data-social-check-status", card)
-        self.assertIn('title="检测登录与平台状态"', card)
-        self.assertIn("data-account-status-check-label", card)
+        self.assertNotIn("data-social-check-status", card)
+        self.assertIn("accountStatusTitle(account)", card)
         self.assertIn("updateAccountStatusViews()", task_loader)
 
     def test_effective_account_status_has_deterministic_precedence(self):
@@ -1656,19 +1681,77 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
         self._run_node(harness)
 
-    def test_account_menu_preserves_admin_managed_workspace_context(self):
+    def test_account_menu_drops_admin_managed_workspace_context_outside_console(self):
         start = self.site_nav_source.index("function openAccountConsoleView")
         end = self.site_nav_source.index("function showAuthenticatedAccount", start)
         helper = self.site_nav_source[start:end]
         local_switch = helper.index('window.location.pathname === "/console.html"')
-        managed_redirect = helper.index("adminConsoleTarget(targetView, adminWorkspaceUserId)")
-        self.assertLess(local_switch, managed_redirect)
+        admin_redirect = helper.index('adminConsoleTarget(targetView, "")')
+        self.assertLess(local_switch, admin_redirect)
         self.assertIn("window.dispatchEvent(new CustomEvent", helper)
         self.assertIn("new URLSearchParams({ view: targetView })", helper)
-        self.assertIn("storedAdminWorkspaceUserId()", helper)
         self.assertIn('currentSessionMode === "admin"', helper)
         self.assertIn("hasAdminConsoleContext()", helper)
+        self.assertNotIn("storedAdminWorkspaceUserId()", helper)
+        self.assertNotIn("manage_user_id", helper)
         self.assertNotIn("/admin-console.html?view=", helper)
+
+    def test_authenticated_navigation_prioritizes_admin_console_and_regular_user_mode(self):
+        sync_source = self._javascript_function_source(
+            self.site_nav_source,
+            "syncAdminWorkspaceContext",
+        )
+        self.assertIn('currentSessionMode = "user"', sync_source)
+        target_source = self._javascript_function_source(
+            self.site_nav_source,
+            "syncConsoleEntryTargets",
+        )
+        self.assertIn("adminConsoleTarget()", target_source)
+        self.assertIn('"/console.html"', target_source)
+        self.assertIn("removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY)", target_source)
+
+    def test_public_navigation_clears_stale_admin_workspace_but_keeps_admin_context(self):
+        sync_source = self._javascript_function_source(
+            self.site_nav_source,
+            "syncAdminWorkspaceContext",
+        )
+        resolve_start = self.site_nav_source.index("async function resolvePublicSession()")
+        resolve_end = self.site_nav_source.index("async function openConsoleEntry", resolve_start)
+        resolve_source = self.site_nav_source[resolve_start:resolve_end]
+        self._run_node(
+            f"""
+            const assert = require("assert");
+            const ADMIN_WORKSPACE_STORAGE_KEY = "vecto-admin-workspace-user-id";
+            const removed = [];
+            const document = {{ querySelector() {{ return null; }} }};
+            function removeSessionValue(key) {{ removed.push(key); }}
+            function clearAdminConsoleContext() {{ throw new Error("admin context must be preserved"); }}
+            function markAdminConsoleContext() {{}}
+            function writeSessionValue() {{}}
+            let currentSessionMode = "admin";
+            {sync_source}
+            syncAdminWorkspaceContext();
+            assert.deepStrictEqual(removed, [ADMIN_WORKSPACE_STORAGE_KEY]);
+
+            let requestedWorkspace = "not-called";
+            function hasAdminConsoleContext() {{ return true; }}
+            function storedAdminWorkspaceUserId() {{ return "32"; }}
+            async function fetchSessionAccount(options = {{}}) {{
+              requestedWorkspace = options.workspaceUserId || "";
+              return {{
+                response: {{ ok: true, status: 200 }},
+                account: {{ id: 1, username: "admin", is_admin: true }},
+              }};
+            }}
+            {resolve_source}
+            (async () => {{
+              const session = await resolvePublicSession();
+              assert.strictEqual(requestedWorkspace, "");
+              assert.strictEqual(session.workspaceUserId, "");
+              assert.strictEqual(session.account.id, 1);
+            }})();
+            """
+        )
 
     def test_public_admin_context_fails_closed_when_admin_probe_errors(self):
         resolve_start = self.site_nav_source.index("async function resolvePublicSession()")
@@ -1678,6 +1761,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             f"""
             const assert = require("assert");
             let regularProbeCount = 0;
+            const ADMIN_WORKSPACE_STORAGE_KEY = "vecto-admin-workspace-user-id";
             function hasAdminConsoleContext() {{ return true; }}
             function storedAdminWorkspaceUserId() {{ return ""; }}
             function removeSessionValue() {{}}

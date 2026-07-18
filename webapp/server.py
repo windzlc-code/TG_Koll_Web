@@ -26,7 +26,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import requests
@@ -175,7 +175,8 @@ class BillingOrderReviewPayload(BaseModel):
 
 
 class BillingAdjustmentPayload(BaseModel):
-    delta_points: float
+    delta_points: float = 0
+    unlimited: bool | None = None
     reason: str = Field(min_length=2, max_length=1000)
 
 
@@ -185,7 +186,6 @@ class BillingManualSubscriptionPayload(BaseModel):
     note: str = Field(default="管理员人工开通", max_length=1000)
 
 DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
-    "telegram_bot_token": "",
     "upload_server_ip": "",
     "upload_file_api_key": "",
     "image_generate_mode_default": "closed_model_api",
@@ -3173,14 +3173,6 @@ def _get_tg_chat_id_from_payload(payload: dict[str, Any]) -> int | None:
     return chat_id if chat_id > 0 else None
 
 
-def _telegram_file_method(path: Path) -> str:
-    suffix = path.suffix.lower()
-    if suffix in IMAGE_EXTS:
-        return "sendPhoto"
-    if suffix in VIDEO_EXTS:
-        return "sendVideo"
-    return "sendDocument"
-
 
 def _tool_r18_runtime_dir() -> Path:
     return Path(
@@ -3191,333 +3183,8 @@ def _tool_r18_runtime_dir() -> Path:
     ).resolve()
 
 
-def _tool_r18_local_bot_env_path() -> Path:
-    return Path(
-        os.getenv(
-            "TOOL_R18_LOCAL_BOT_ENV_PATH",
-            str(ROOT_DIR / "tool_r18" / ".runtime" / "local-bot.env"),
-        )
-    ).resolve()
-
-
-def _tool_r18_bot_token_file() -> Path:
-    return Path(os.getenv("TOOL_R18_TELEGRAM_BOT_TOKEN_FILE", str(_tool_r18_runtime_dir() / "telegram_bot_token.txt"))).resolve()
-
-
 def _tool_r18_api_config_file() -> Path:
     return Path(os.getenv("AUTO_TWEET_API_CONFIG_PATH", str(_tool_r18_runtime_dir() / "api_config.json"))).resolve()
-
-
-def _tool_r18_process_control_file() -> Path:
-    return Path(os.getenv("TOOL_R18_PROCESS_CONTROL_FILE", str(_tool_r18_runtime_dir() / "process-control.json"))).resolve()
-
-
-def _tool_r18_process_status_file() -> Path:
-    return Path(os.getenv("TOOL_R18_PROCESS_STATUS_FILE", str(_tool_r18_runtime_dir() / "process-status.json"))).resolve()
-
-
-def _tool_r18_stop_responder_offset_file() -> Path:
-    return Path(os.getenv("TOOL_R18_STOP_RESPONDER_OFFSET_FILE", str(_tool_r18_runtime_dir() / "stop-responder-offset.json"))).resolve()
-
-
-def _tool_r18_daemon_heartbeat_file() -> Path:
-    return Path(os.getenv("TOOL_R18_DAEMON_HEARTBEAT_FILE", str(_tool_r18_runtime_dir() / "daemon.heartbeat.json"))).resolve()
-
-
-def _tool_r18_project_dir() -> Path:
-    return Path(os.getenv("TOOL_R18_PROJECT_DIR", str(ROOT_DIR / "tool_r18"))).resolve()
-
-
-def _runtime_config_tg_bot_token() -> str:
-    try:
-        with db() as conn:
-            runtime = _get_runtime_config(conn)
-        return str(runtime.get("telegram_bot_token") or "").strip()
-    except Exception:
-        return ""
-
-
-def _tg_bot_token() -> str:
-    return str(
-        _runtime_config_tg_bot_token()
-        or _read_secret_text_file(str(_tool_r18_bot_token_file()))
-        or os.getenv("TG_BOT_TOKEN")
-        or _read_dotenv_values().get("TG_BOT_TOKEN")
-        or ""
-    ).strip()
-
-
-def _read_secret_text_file(path_text: str) -> str:
-    path_text = str(path_text or "").strip()
-    if not path_text:
-        return ""
-    try:
-        path = Path(path_text).expanduser()
-        if path.exists() and path.is_file():
-            return path.read_text(encoding="utf-8", errors="ignore").strip()
-    except Exception:
-        return ""
-    return ""
-
-
-def _tg_source_bot_from_payload(payload: dict[str, Any]) -> str:
-    if not isinstance(payload, dict):
-        return ""
-    for key in ("tg_source_bot", "tg_origin_bot", "telegram_bot_source"):
-        value = str(payload.get(key) or "").strip().lower()
-        if value:
-            return value
-    return ""
-
-
-def _tg_bot_token_for_payload(payload: dict[str, Any]) -> str:
-    source_bot = _tg_source_bot_from_payload(payload)
-    if source_bot in {"automatic_script", "automatic-script", "automatic", "auto_tweet", "auto-tweet"}:
-        token = str(os.getenv("TG_AUTOMATIC_BOT_TOKEN") or os.getenv("AUTOMATIC_TELEGRAM_BOT_TOKEN") or "").strip()
-        if token:
-            return token
-        token_file = str(
-            os.getenv("TG_AUTOMATIC_BOT_TOKEN_FILE")
-            or os.getenv("AUTOMATIC_TELEGRAM_BOT_TOKEN_FILE")
-            or "/app/tool_r18/.runtime/automatic-script/telegram_bot_token.txt"
-        ).strip()
-        token = _read_secret_text_file(token_file)
-        if token:
-            return token
-        return _read_secret_text_file("/app/tool_r18/.runtime/automatic-script/telegram_bot_token.txt.bak-tool-r18-20260609000101")
-    return _tg_bot_token()
-
-
-def _send_telegram_reply_markup_for_finished_task(task_id: str, task_type: str) -> dict[str, Any] | None:
-    typ = str(task_type or "").strip()
-    if typ == "face_swap":
-        return {
-            "keyboard": [
-                [{"text": "\u589e\u52a0\u89e3\u6790\u5ea6 2 \u500d"}],
-                [{"text": "\u91cd\u65b0\u751f\u6210\u4eba\u7269\u63db\u81c9"}],
-                [{"text": "\u4eba\u7269\u63db\u81c9"}, {"text": "\u5716\u7247\u7de8\u8f2f"}],
-                [{"text": "\u8fd4\u56de\u4e3b\u9078\u55ae"}],
-            ],
-            "resize_keyboard": True,
-        }
-    if typ in {"single_image_edit", "get_nano_banana"}:
-        return {
-            "keyboard": [
-                [{"text": "\u7e7c\u7e8c\u7de8\u8f2f\u7d50\u679c\u5716"}],
-                [{"text": "\u91cd\u65b0\u751f\u6210\u5716\u7247\u7de8\u8f2f"}],
-                [{"text": "\u55ae\u5716\u7de8\u8f2f"}, {"text": "\u5716\u7247\u7de8\u8f2f"}],
-                [{"text": "\u8fd4\u56de\u4e3b\u9078\u55ae"}],
-            ],
-            "resize_keyboard": True,
-        }
-    if typ != "text_to_image":
-        return None
-    return {
-        "inline_keyboard": [
-            [{"text": "\u91cd\u65b0\u751f\u6210\u5716\u7247", "callback_data": "toolr18_task_r18_text_to_image_reroll"}],
-            [{"text": "\u7e7c\u7e8c\u751f\u6210\u5716\u7247", "callback_data": "toolr18_task_r18_text_to_image_continue"}],
-            [{"text": "\u8fd4\u56de\u4e3b\u9078\u55ae", "callback_data": "toolr18_entry"}],
-        ],
-    }
-
-def _text_to_image_qa_notice(output_data: dict[str, Any]) -> str:
-    if not isinstance(output_data, dict):
-        return ""
-    qa = output_data.get("image_qa") if isinstance(output_data.get("image_qa"), dict) else {}
-    if not qa or not _to_bool(qa.get("enabled"), False):
-        return ""
-    target_count = max(_to_int(qa.get("target_count"), 0), 0)
-    checked_count = max(_to_int(qa.get("checked_count"), 0), 0)
-    passed_count = max(_to_int(qa.get("passed_count"), 0), 0)
-    rejected_count = max(_to_int(qa.get("rejected_count"), 0), 0)
-    if target_count > 1:
-        if passed_count >= target_count:
-            return f"自動 QA：已檢查 {checked_count} 張候選圖，通過 {passed_count} 張。"
-        return f"自動 QA：已檢查 {checked_count} 張候選圖，通過 {passed_count} 張，攔截 {rejected_count} 張，未滿 {target_count} 張。"
-    attempts = max(_to_int(qa.get("attempts"), 1), 1)
-    rejected = max(_to_int(qa.get("rejected_rounds"), 0), 0)
-    if rejected <= 0:
-        return "自动 QA：第 1 轮通过筛选。"
-    return f"自动 QA：已筛选 {rejected} 轮候选图，第 {attempts} 轮通过。"
-
-
-def _send_telegram_message(chat_id: int, text: str, *, reply_markup: dict[str, Any] | None = None, bot_token: str = "") -> bool:
-    token = str(bot_token or _tg_bot_token()).strip()
-    if not token or int(chat_id or 0) <= 0:
-        return False
-    try:
-        data: dict[str, Any] = {"chat_id": int(chat_id), "text": str(text or "")[:3900]}
-        if reply_markup:
-            data["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
-        resp = requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            data=data,
-            timeout=30,
-        )
-        return resp.status_code < 400
-    except Exception:
-        return False
-
-
-def _send_telegram_file(chat_id: int, file_path: str, *, caption: str, reply_markup: dict[str, Any] | None = None, bot_token: str = "") -> bool:
-    token = str(bot_token or _tg_bot_token()).strip()
-    path = Path(str(file_path or "")).expanduser()
-    if not token or int(chat_id or 0) <= 0 or not path.exists() or not path.is_file():
-        return False
-    method = _telegram_file_method(path)
-    field = {"sendPhoto": "photo", "sendVideo": "video"}.get(method, "document")
-    try:
-        data: dict[str, Any] = {"chat_id": int(chat_id), "caption": str(caption or "")[:1000]}
-        if reply_markup:
-            data["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
-        with path.open("rb") as fh:
-            resp = requests.post(
-                f"https://api.telegram.org/bot{token}/{method}",
-                data=data,
-                files={field: (path.name, fh)},
-                timeout=120,
-            )
-        if resp.status_code < 400:
-            return True
-    except Exception:
-        pass
-    if method != "sendDocument":
-        try:
-            data = {"chat_id": int(chat_id), "caption": str(caption or "")[:1000]}
-            if reply_markup:
-                data["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
-            with path.open("rb") as fh:
-                resp = requests.post(
-                    f"https://api.telegram.org/bot{token}/sendDocument",
-                    data=data,
-                    files={"document": (path.name, fh)},
-                    timeout=120,
-                )
-            return resp.status_code < 400
-        except Exception:
-            return False
-    return False
-
-
-def _notify_tg_task_finished(
-    *,
-    task_id: str,
-    task_type: str,
-    payload: dict[str, Any],
-    status: str,
-    error: str,
-    output_data: dict[str, Any],
-) -> None:
-    chat_id = _get_tg_chat_id_from_payload(payload)
-    if chat_id is None:
-        return
-    if _to_bool(payload.get("tg_suppress_auto_notify"), False):
-        return
-    bot_token = _tg_bot_token_for_payload(payload)
-    download_path = _extract_download_path(output_data if isinstance(output_data, dict) else {})
-    public_base = str(os.getenv("PUBLIC_BASE_URL") or "").strip().rstrip("/")
-    task_url = f"{public_base}/console.html" if public_base else ""
-    if str(status or "").strip().lower() == "success":
-        reply_markup = _send_telegram_reply_markup_for_finished_task(task_id, task_type)
-        output_dict = output_data if isinstance(output_data, dict) else {}
-        is_text_to_image = str(task_type or "").strip() == "text_to_image"
-        if is_text_to_image and "image_paths" in output_dict:
-            download_paths = _extract_existing_file_paths(output_dict.get("image_paths"))
-        else:
-            if download_path:
-                download_paths = [download_path]
-            else:
-                all_download_paths = _extract_download_paths(output_dict)
-                download_paths = all_download_paths[:1]
-        qa = output_dict.get("image_qa") if isinstance(output_dict.get("image_qa"), dict) else {}
-        target_count = max(_to_int(qa.get("target_count"), 0), 0)
-        if is_text_to_image:
-            image_paths = [path for path in download_paths if Path(path).suffix.lower() in IMAGE_EXTS]
-            if image_paths:
-                download_paths = image_paths
-        returned_line = ""
-        if is_text_to_image and len(download_paths) > 0:
-            returned_line = (
-                f"返回通过 QA 图片: {len(download_paths)}/{target_count} 张"
-                if target_count > 1
-                else f"返回图片: {len(download_paths)} 张"
-            )
-        caption = "\n".join(
-            part
-            for part in [
-                "后台生成任务已完成。",
-                f"工作流: {task_type}",
-                f"任务编号: {task_id}",
-                returned_line,
-                _text_to_image_qa_notice(output_dict),
-            ]
-            if part
-        )
-        action_text = "\n".join(
-            part
-            for part in [
-                "\u751f\u6210\u7d50\u679c\u5df2\u56de\u50b3\u3002",
-                f"\u5de5\u4f5c\u6d41: {task_type}",
-                f"\u4efb\u52d9\u7de8\u865f: {task_id}",
-                "\u8acb\u4f7f\u7528\u4e0b\u65b9\u6309\u9215\u7e7c\u7e8c\u64cd\u4f5c\u3002" if reply_markup else "",
-            ]
-            if part
-        )
-        if len(download_paths) > 1:
-            sent_count = 0
-            for index, path in enumerate(download_paths, start=1):
-                item_caption = caption if index == 1 else "\n".join(
-                    [
-                        "\u5f8c\u81fa\u751f\u6210\u4efb\u52d9\u5df2\u5b8c\u6210\u3002",
-                        f"\u5de5\u4f5c\u6d41: {task_type}",
-                        f"\u4efb\u52d9\u7de8\u865f: {task_id}",
-                        f"\u7b2c {index}/{len(download_paths)} \u5f35",
-                    ]
-                )
-                if _send_telegram_file(chat_id, path, caption=item_caption, bot_token=bot_token):
-                    sent_count += 1
-            if sent_count == len(download_paths):
-                if reply_markup:
-                    _send_telegram_message(chat_id, action_text, reply_markup=reply_markup, bot_token=bot_token)
-                return
-        if download_path and _send_telegram_file(chat_id, download_path, caption=caption, bot_token=bot_token):
-            if reply_markup:
-                _send_telegram_message(chat_id, action_text, reply_markup=reply_markup, bot_token=bot_token)
-            return
-        parts = [caption]
-        if task_url and not (is_text_to_image and _to_bool(qa.get("insufficient_count"), False)):
-            parts.append(f"工作臺: {task_url}")
-        if download_path:
-            parts.append(f"結果文件: {download_path}")
-        _send_telegram_message(chat_id, "\n".join(parts), reply_markup=reply_markup, bot_token=bot_token)
-        return
-
-    request_text = str(
-        payload.get("tg_original_user_request")
-        or payload.get("tg_user_instruction")
-        or payload.get("message")
-        or ""
-    ).strip()
-    if len(request_text) > 180:
-        request_text = request_text[:180] + "..."
-    rerun_from = str(payload.get("tg_rerun_from_task_id") or "").strip()
-    unknown_error = "\u672a\u77e5\u932f\u8aa4"
-    formatted_error = _format_user_visible_task_error(
-        str(error or output_data.get("error") or output_data.get("message") or unknown_error).strip()
-    )
-    message = "\n".join(
-        part
-        for part in [
-            "\u5f8c\u81fa\u751f\u6210\u4efb\u52d9\u5931\u6557\u3002",
-            f"\u5de5\u4f5c\u6d41: {task_type}",
-            f"\u4efb\u52d9\u7de8\u865f: {task_id}",
-            f"\u9700\u6c42: {request_text}" if request_text else "",
-            f"\u91cd\u63d0\u4f86\u6e90: {rerun_from}" if rerun_from else "",
-            f"\u539f\u56e0: {formatted_error}",
-        ]
-        if part
-    )
-    _send_telegram_message(chat_id, message, bot_token=bot_token)
 
 
 def _format_user_visible_task_error(error: str) -> str:
@@ -4131,7 +3798,6 @@ def _normalize_runtime_config(raw: dict[str, Any] | None) -> dict[str, Any]:
     for k in list(merged.keys()):
         if k in current:
             merged[k] = current.get(k)
-    merged["telegram_bot_token"] = str(merged.get("telegram_bot_token") or "").strip()
     merged["image_generate_mode_default"] = "closed_model_api"
     merged["image_model_provider_base_url"] = str(merged.get("image_model_provider_base_url") or BUILTIN_IMAGE_MODEL_PROVIDER_BASE_URL).strip() or BUILTIN_IMAGE_MODEL_PROVIDER_BASE_URL
     merged["image_model_provider_api_key_gemini"] = str(merged.get("image_model_provider_api_key_gemini") or "").strip()
@@ -4236,34 +3902,6 @@ def _auth_login_policy(runtime: dict[str, Any] | None) -> dict[str, Any]:
         "remember_login_days": min(max(_to_int(source.get("auth_remember_login_days"), 30), 1), 90),
         "session_hours": min(max(_to_int(source.get("auth_session_hours"), 12), 1), 72),
     }
-
-
-def _write_tool_r18_bot_token_files(token: str) -> None:
-    value = str(token or "").strip()
-    if not value:
-        return
-    token_file = _tool_r18_bot_token_file()
-    token_file.parent.mkdir(parents=True, exist_ok=True)
-    token_file.write_text(value + "\n", encoding="utf-8")
-    try:
-        local_env = _tool_r18_local_bot_env_path()
-        local_env.parent.mkdir(parents=True, exist_ok=True)
-        lines: list[str] = []
-        if local_env.exists():
-            lines = local_env.read_text(encoding="utf-8", errors="ignore").splitlines()
-        replaced = False
-        next_lines: list[str] = []
-        for line in lines:
-            if line.strip().startswith("TELEGRAM_BOT_TOKEN="):
-                next_lines.append(f"TELEGRAM_BOT_TOKEN={value}")
-                replaced = True
-            else:
-                next_lines.append(line)
-        if not replaced:
-            next_lines.append(f"TELEGRAM_BOT_TOKEN={value}")
-        local_env.write_text("\n".join(next_lines).rstrip() + "\n", encoding="utf-8")
-    except Exception as exc:
-        logger.warning("Failed to update local bot env token file: %s", exc)
 
 
 def _read_tool_r18_api_config() -> dict[str, Any]:
@@ -4426,129 +4064,6 @@ def _sync_tool_r18_api_config_from_runtime(runtime: dict[str, Any], explicit: di
     api_config = _read_tool_r18_api_config()
     api_config.update(updates)
     _write_tool_r18_api_config(api_config)
-
-
-def _read_small_json_file(path: Path) -> dict[str, Any]:
-    try:
-        if not path.exists():
-            return {}
-        raw = json.loads(path.read_text(encoding="utf-8-sig"))
-        return raw if isinstance(raw, dict) else {}
-    except Exception:
-        return {}
-
-
-def _write_small_json_file(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(f"{path.name}.tmp")
-    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp_path, path)
-
-
-def _tool_r18_process_snapshot() -> dict[str, Any]:
-    control = _read_small_json_file(_tool_r18_process_control_file())
-    status = _read_small_json_file(_tool_r18_process_status_file())
-    heartbeat_path = _tool_r18_daemon_heartbeat_file()
-    desired = str(control.get("desired") or "running").strip().lower()
-    if desired not in {"running", "stopped"}:
-        desired = "running"
-    heartbeat_age_seconds: float | None = None
-    running = False
-    if heartbeat_path.exists():
-        try:
-            heartbeat_age_seconds = max(time.time() - heartbeat_path.stat().st_mtime, 0.0)
-            running = heartbeat_age_seconds <= 30
-        except Exception:
-            running = False
-    if desired == "stopped":
-        running = False
-    return {
-        "desired": desired,
-        "running": running,
-        "status": str(status.get("state") or ("running" if running else "stopped")),
-        "pid": status.get("pid"),
-        "updated_at": status.get("updated_at") or status.get("updatedAt") or "",
-        "heartbeat_age_seconds": heartbeat_age_seconds,
-    }
-
-
-def _admin_runtime_public_url() -> str:
-    public_base = str(os.getenv("PUBLIC_BASE_URL") or os.getenv("TOOL_R18_PUBLIC_URL") or "").strip().rstrip("/")
-    if public_base:
-        return f"{public_base}/admin.html#admin-runtime"
-    return "http://47.243.99.2/admin.html#admin-runtime"
-
-
-_TOOL_R18_STOP_RESPONDER_STARTED = False
-_TOOL_R18_STOP_RESPONDER_LOCK = threading.Lock()
-
-
-def _tool_r18_stop_responder_loop() -> None:
-    logger.info("Tool_R18 stop-state /start responder started")
-    while True:
-        try:
-            snapshot = _tool_r18_process_snapshot()
-            if snapshot.get("desired") != "stopped":
-                time.sleep(2)
-                continue
-            token = _tg_bot_token()
-            if not token:
-                time.sleep(5)
-                continue
-            offset_state = _read_small_json_file(_tool_r18_stop_responder_offset_file())
-            offset = int(offset_state.get("offset") or 0)
-            resp = requests.get(
-                f"https://api.telegram.org/bot{token}/getUpdates",
-                params={"timeout": 5, "offset": offset, "allowed_updates": json.dumps(["message", "callback_query"])},
-                timeout=10,
-            )
-            data = resp.json() if resp.ok else {}
-            if not data.get("ok"):
-                time.sleep(3)
-                continue
-            max_update_id = offset - 1
-            for update in data.get("result") or []:
-                try:
-                    update_id = int(update.get("update_id") or 0)
-                    max_update_id = max(max_update_id, update_id)
-                    message = update.get("message") or {}
-                    text = str(message.get("text") or "").strip()
-                    chat = message.get("chat") or {}
-                    chat_id = chat.get("id")
-                    if not chat_id or text.split(maxsplit=1)[0].lower() != "/start":
-                        continue
-                    admin_url = _admin_runtime_public_url()
-                    reply_text = (
-                        "Bot 目前处于停止状态，完整功能不会被调用。\n\n"
-                        "请前往后台系统配置检查运行参数。\n"
-                        f"{admin_url}"
-                    )
-                    requests.post(
-                        f"https://api.telegram.org/bot{token}/sendMessage",
-                        json={
-                            "chat_id": chat_id,
-                            "text": reply_text,
-                            "reply_markup": {"inline_keyboard": [[{"text": "打开系统配置", "url": admin_url}]]},
-                        },
-                        timeout=10,
-                    )
-                except Exception as exc:
-                    logger.warning("Tool_R18 stop responder update failed: %s", exc)
-            if max_update_id >= offset:
-                _write_small_json_file(_tool_r18_stop_responder_offset_file(), {"offset": max_update_id + 1})
-        except Exception as exc:
-            logger.warning("Tool_R18 stop responder loop error: %s", exc)
-            time.sleep(5)
-
-
-def _ensure_tool_r18_stop_responder_started() -> None:
-    global _TOOL_R18_STOP_RESPONDER_STARTED
-    with _TOOL_R18_STOP_RESPONDER_LOCK:
-        if _TOOL_R18_STOP_RESPONDER_STARTED:
-            return
-        thread = threading.Thread(target=_tool_r18_stop_responder_loop, name="tool-r18-stop-responder", daemon=True)
-        thread.start()
-        _TOOL_R18_STOP_RESPONDER_STARTED = True
 
 
 def _runtime_comfy_gpu_max_concurrency() -> int:
@@ -10231,6 +9746,17 @@ def _billing_actual_image_quantity(task_output: dict[str, Any]) -> int:
     )
 
 
+def _billing_actual_quantity(task_type: str, task_output: dict[str, Any], payload: dict[str, Any]) -> int:
+    typ = str(task_type or "").strip()
+    if typ in {"persona_image", "persona_post_image", "text_to_image", "image_generate", "get_nano_banana"}:
+        return _billing_actual_image_quantity(task_output)
+    if typ == "video_i2v":
+        return min(max(_to_int(payload.get("duration_seconds") or payload.get("mulerouter_wan_i2v_duration"), 2), 2), 15)
+    if typ == "get_gemini":
+        return 1
+    return 0
+
+
 TG_AGENT_PRODUCTION_TASK_TYPES = set(TASK_RUNNERS.keys())
 
 
@@ -10388,7 +9914,7 @@ def _task_worker_with_control(
             free_image_count = 0
             if reservation_id:
                 if status == "success":
-                    actual_quantity = _billing_actual_image_quantity(task_output)
+                    actual_quantity = _billing_actual_quantity(task_type, task_output, effective_payload)
                     billing_payload = commercial_billing.settle_reservation(
                         conn,
                         reservation_id,
@@ -10459,14 +9985,6 @@ def _task_worker_with_control(
     if discard_output:
         _delete_task_artifacts(task_id)
         return
-    _notify_tg_task_finished(
-        task_id=task_id,
-        task_type=task_type,
-        payload=effective_payload,
-        status=status,
-        error=task_error,
-        output_data=output_to_store if isinstance(output_to_store, dict) else {},
-    )
 
 
 async def _save_upload_file(username: str, task_id: str, field_name: str, upload: UploadFile | None, *, max_bytes: int | None = None) -> str:
@@ -10823,14 +10341,21 @@ def _emit_stage(
 
 def _normal_task_billing_spec(task_type: str, payload: dict[str, Any]) -> tuple[str, int, bool] | None:
     typ = str(task_type or "").strip()
-    if typ not in {"persona_image", "persona_post_image", "text_to_image", "image_generate", "get_nano_banana"}:
-        return None
-    raw_count = payload.get("image_count") or payload.get("imageCount") or payload.get("nano_images") or payload.get("count") or 1
-    try:
-        count = min(max(int(float(raw_count)), 1), 20)
-    except (TypeError, ValueError):
-        count = 1
-    return "ai_image", count, True
+    if typ in {"persona_image", "persona_post_image", "text_to_image", "image_generate", "get_nano_banana"}:
+        raw_count = payload.get("image_count") or payload.get("imageCount") or payload.get("nano_images") or payload.get("count") or 1
+        try:
+            count = min(max(int(float(raw_count)), 1), 20)
+        except (TypeError, ValueError):
+            count = 1
+        return "ai_image", count, True
+    if typ == "get_gemini":
+        return "basic_text_post", 1, False
+    if typ == "video_i2v":
+        resolution = str(payload.get("mulerouter_wan_i2v_resolution") or payload.get("resolution") or "720p").strip()
+        sku = "ad_video_1080p_second" if resolution == "1080p" else "ad_video_720p_second"
+        duration = min(max(_to_int(payload.get("duration_seconds") or payload.get("mulerouter_wan_i2v_duration"), 2), 2), 15)
+        return sku, duration, False
+    return None
 
 
 def _enqueue_task(
@@ -11292,7 +10817,11 @@ class ChangeUsernamePayload(BaseModel):
 
 class UserProfilePayload(BaseModel):
     full_name: str = Field(default="", max_length=80)
-    avatar_url: str = Field(default="", max_length=200000)
+    avatar_url: str = Field(default="", max_length=900000)
+    email: str = Field(default="", max_length=160)
+    phone: str = Field(default="", max_length=32)
+    profile_signature: str = Field(default="", max_length=280)
+    profile_tags: str = Field(default="", max_length=160)
 
 
 class SocialPublishPolicyPayload(BaseModel):
@@ -11308,7 +10837,6 @@ class PricingPayload(BaseModel):
 
 
 class RuntimeConfigPayload(BaseModel):
-    telegram_bot_token: str = ""
     upload_server_ip: str = ""
     upload_file_api_key: str = ""
     image_generate_mode_default: str = "closed_model_api"
@@ -11372,7 +10900,8 @@ class ModelLookupPayload(BaseModel):
 
 
 class RechargePayload(BaseModel):
-    amount_cents: int
+    amount_cents: int = 0
+    unlimited: bool | None = None
     note: str = ""
 
 
@@ -14612,6 +14141,45 @@ def _create_social_task_with_billing(
             clear_trusted_batch_task(payload)
 
 
+def _run_billable_operation(
+    user: dict[str, Any],
+    *,
+    ref_type: str,
+    sku: str,
+    quantity: int,
+    operation: Callable[[], dict[str, Any]],
+) -> dict[str, Any]:
+    operation_id = _new_id(ref_type)
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        reservation = commercial_billing.reserve_charge(
+            conn,
+            user_id=_workspace_user_id(user),
+            ref_type=ref_type,
+            ref_id=operation_id,
+            sku=sku,
+            quantity=max(int(quantity or 1), 1),
+            admin_waived=bool(_is_admin_workspace(user) or _is_admin(user)),
+        )
+    try:
+        result = operation()
+    except Exception:
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            commercial_billing.release_reservation(conn, str(reservation["id"]))
+        raise
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        billing = commercial_billing.settle_reservation(
+            conn,
+            str(reservation["id"]),
+            actual_quantity=max(int(quantity or 1), 1),
+            success=True,
+        )
+    result["billing"] = billing
+    return result
+
+
 def _publish_persona_archive_post(
     archive_id: str,
     post_id: str,
@@ -17565,7 +17133,6 @@ def create_app() -> FastAPI:
 
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI):
-        _ensure_tool_r18_stop_responder_started()
         _ensure_persona_dashboard_monitor_started()
         ensure_social_automation_worker_started()
         _start_persona_hot_pool_worker()
@@ -17772,6 +17339,8 @@ def create_app() -> FastAPI:
                 "__OPC_PRICING_CSS_VERSION__": _asset_version("assets", "opc", "pricing.css"),
                 "__OPC_SCRIPT_VERSION__": _asset_version("assets", "opc", "script.js"),
                 "__OPC_PRICING_JS_VERSION__": _asset_version("assets", "opc", "pricing.js"),
+                "__SITE_NAVIGATION_CSS_VERSION__": _asset_version("assets", "opc", "site-navigation.css"),
+                "__SITE_NAVIGATION_JS_VERSION__": _asset_version("assets", "opc", "site-navigation.js"),
             },
         )
 
@@ -17813,6 +17382,8 @@ def create_app() -> FastAPI:
                 "__OPC_PRICING_CSS_VERSION__": _asset_version("assets", "opc", "pricing.css"),
                 "__OPC_SCRIPT_VERSION__": _asset_version("assets", "opc", "script.js"),
                 "__OPC_PRICING_JS_VERSION__": _asset_version("assets", "opc", "pricing.js"),
+                "__SITE_NAVIGATION_CSS_VERSION__": _asset_version("assets", "opc", "site-navigation.css"),
+                "__SITE_NAVIGATION_JS_VERSION__": _asset_version("assets", "opc", "site-navigation.js"),
             },
         )
 
@@ -17826,6 +17397,8 @@ def create_app() -> FastAPI:
                 "__OPC_PRICING_CSS_VERSION__": _asset_version("assets", "opc", "pricing.css"),
                 "__OPC_SCRIPT_VERSION__": _asset_version("assets", "opc", "script.js"),
                 "__OPC_PRICING_JS_VERSION__": _asset_version("assets", "opc", "pricing.js"),
+                "__SITE_NAVIGATION_CSS_VERSION__": _asset_version("assets", "opc", "site-navigation.css"),
+                "__SITE_NAVIGATION_JS_VERSION__": _asset_version("assets", "opc", "site-navigation.js"),
             },
         )
 
@@ -17838,8 +17411,22 @@ def create_app() -> FastAPI:
                 "__PROXY_MARKET_CSS_VERSION__": _asset_version("assets", "opc", "proxy-market.css"),
                 "__OPC_SCRIPT_VERSION__": _asset_version("assets", "opc", "script.js"),
                 "__PROXY_MARKET_JS_VERSION__": _asset_version("assets", "opc", "proxy-market.js"),
+                "__SITE_NAVIGATION_CSS_VERSION__": _asset_version("assets", "opc", "site-navigation.css"),
+                "__SITE_NAVIGATION_JS_VERSION__": _asset_version("assets", "opc", "site-navigation.js"),
             },
         )
+
+    def _has_valid_admin_page_session(token: str | None) -> bool:
+        if not token:
+            return False
+        try:
+            admin_user = _get_session_user_allowing_password_change(
+                token,
+                expected_admin_session=True,
+            )
+        except HTTPException:
+            return False
+        return _is_admin(admin_user)
 
     @app.get("/profile.html", include_in_schema=False)
     @app.get("/admin-profile.html", include_in_schema=False)
@@ -17849,8 +17436,11 @@ def create_app() -> FastAPI:
         admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
     ) -> Response:
         admin_profile = request.url.path == "/admin-profile.html"
-        if not admin_profile and not session_token and admin_session_token:
-            return RedirectResponse(url="/admin-profile.html", status_code=302)
+        if not admin_profile and admin_session_token:
+            if _has_valid_admin_page_session(admin_session_token):
+                return RedirectResponse(url="/admin-profile.html", status_code=302)
+            if not session_token:
+                return RedirectResponse(url="/admin", status_code=302)
         selected_token = admin_session_token if admin_profile else session_token
         try:
             user = _get_session_user_allowing_password_change(
@@ -17870,7 +17460,10 @@ def create_app() -> FastAPI:
             replacements={
                 "__PROFILE_CSS_VERSION__": _asset_version("assets", "profile.css"),
                 "__PROFILE_JS_VERSION__": _asset_version("assets", "profile.js"),
+                "__SITE_NAVIGATION_CSS_VERSION__": _asset_version("assets", "opc", "site-navigation.css"),
+                "__SITE_NAVIGATION_JS_VERSION__": _asset_version("assets", "opc", "site-navigation.js"),
                 "__ADMIN_CONSOLE_SESSION__": "1" if admin_profile else "0",
+                "__ADMIN_WORKSPACE_USER_ID__": "",
             },
         )
 
@@ -17883,8 +17476,11 @@ def create_app() -> FastAPI:
         admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
     ) -> Response:
         admin_console = request.url.path == "/admin-console.html"
-        if not admin_console and not session_token and admin_session_token:
-            return RedirectResponse(url="/admin-console.html", status_code=302)
+        if not admin_console and admin_session_token:
+            if _has_valid_admin_page_session(admin_session_token):
+                return RedirectResponse(url="/admin-console.html", status_code=302)
+            if not session_token:
+                return RedirectResponse(url="/admin", status_code=302)
         selected_token = admin_session_token if admin_console else session_token
         try:
             user = _get_session_user_allowing_password_change(
@@ -17930,6 +17526,8 @@ def create_app() -> FastAPI:
                 "__CONSOLE_CSS_VERSION__": _asset_version("assets", "console.css"),
                 "__CONSOLE_JS_VERSION__": _asset_version("assets", "console.js"),
                 "__PERSONA_DASHBOARD_JS_VERSION__": _asset_version("assets", "persona-dashboard.js"),
+                "__SITE_NAVIGATION_CSS_VERSION__": _asset_version("assets", "opc", "site-navigation.css"),
+                "__SITE_NAVIGATION_JS_VERSION__": _asset_version("assets", "opc", "site-navigation.js"),
                 "__CONSOLE_BOOTSTRAP_JSON__": _json_script_payload(console_bootstrap),
                 "__ADMIN_WORKSPACE_USER_ID__": str(_workspace_user_id(user)) if _is_admin_workspace(user) else "",
                 "__ADMIN_CONSOLE_SESSION__": "1" if admin_console else "",
@@ -17957,6 +17555,7 @@ def create_app() -> FastAPI:
             replacements={
                 "__STYLE_VERSION__": _asset_version("assets", "style.css"),
                 "__ADMIN_JS_VERSION__": _asset_version("assets", "admin.js"),
+                "__SITE_NAVIGATION_JS_VERSION__": _asset_version("assets", "opc", "site-navigation.js"),
             },
         )
         return response
@@ -18446,7 +18045,7 @@ def create_app() -> FastAPI:
         clean = str(value or "").strip()
         if not clean:
             return ""
-        if len(clean) > 200000:
+        if len(clean) > 900000:
             raise HTTPException(status_code=400, detail="avatar image is too large")
         lower = clean.lower()
         if lower.startswith("data:image/"):
@@ -18454,13 +18053,35 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=400, detail="avatar data url must be base64 image")
             return clean
         if lower.startswith(("https://", "http://", "/assets/", "/uploads/")):
-            return clean[:200000]
+            return clean[:900000]
         raise HTTPException(status_code=400, detail="avatar must be an image url")
+
+    def _clean_profile_tags(value: str) -> str:
+        raw_items = re.split(r"[,，\n]+", str(value or ""))
+        tags: list[str] = []
+        seen: set[str] = set()
+        for item in raw_items:
+            tag = re.sub(r"\s+", " ", str(item or "").strip())
+            if not tag:
+                continue
+            tag = tag[:18]
+            key = tag.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            tags.append(tag)
+            if len(tags) >= 8:
+                break
+        return ", ".join(tags)
 
     def _user_profile_payload(row: dict[str, Any]) -> dict[str, Any]:
         return {
             "full_name": str(row.get("full_name") or ""),
             "avatar_url": str(row.get("avatar_url") or ""),
+            "email": str(row.get("email") or ""),
+            "phone": str(row.get("phone") or ""),
+            "profile_signature": str(row.get("profile_signature") or ""),
+            "profile_tags": str(row.get("profile_tags") or ""),
         }
 
     @app.patch("/api/me/profile")
@@ -18471,11 +18092,19 @@ def create_app() -> FastAPI:
         if full_name and (len(full_name) < 2 or len(full_name) > 80):
             raise HTTPException(status_code=400, detail="显示名称长度需在 2-80 个字符之间")
         avatar_url = _clean_user_avatar_url(payload.avatar_url)
+        email = str(payload.email or "").strip().lower()
+        phone = str(payload.phone or "").strip()
+        profile_signature = str(payload.profile_signature or "").strip()
+        profile_tags = _clean_profile_tags(payload.profile_tags)
+        if email and (len(email) > 160 or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email)):
+            raise HTTPException(status_code=400, detail="email format is invalid")
+        if phone and (len(phone) < 6 or len(phone) > 32):
+            raise HTTPException(status_code=400, detail="phone format is invalid")
         now = _now_ts()
         with db() as conn:
             conn.execute(
-                "UPDATE users SET full_name = ?, avatar_url = ?, updated_at = ? WHERE id = ?",
-                (full_name, avatar_url, now, int(user["id"])),
+                "UPDATE users SET full_name = ?, avatar_url = ?, email = ?, phone = ?, profile_signature = ?, profile_tags = ?, updated_at = ? WHERE id = ?",
+                (full_name, avatar_url, email, phone, profile_signature, profile_tags, now, int(user["id"])),
             )
             row = conn.execute("SELECT * FROM users WHERE id = ?", (int(user["id"]),)).fetchone()
         if row is None:
@@ -18500,6 +18129,10 @@ def create_app() -> FastAPI:
                 "balance_cents": int(target_user.get("balance_cents") or 0),
                 "full_name": str(target_user.get("full_name") or ""),
                 "avatar_url": str(target_user.get("avatar_url") or ""),
+                "email": str(target_user.get("email") or ""),
+                "phone": str(target_user.get("phone") or ""),
+                "profile_signature": str(target_user.get("profile_signature") or ""),
+                "profile_tags": str(target_user.get("profile_tags") or ""),
                 "created_at": int(target_user.get("created_at") or 0),
                 "must_change_password": False,
                 "acting_admin": True,
@@ -18514,6 +18147,10 @@ def create_app() -> FastAPI:
             "balance_cents": int(user.get("balance_cents") or 0),
             "full_name": str(user.get("full_name") or ""),
             "avatar_url": str(user.get("avatar_url") or ""),
+            "email": str(user.get("email") or ""),
+            "phone": str(user.get("phone") or ""),
+            "profile_signature": str(user.get("profile_signature") or ""),
+            "profile_tags": str(user.get("profile_tags") or ""),
             "created_at": int(user.get("created_at") or 0),
             "must_change_password": bool(int(user.get("must_change_password") or 0)),
             "password_expires_at": _password_expiry(user),
@@ -18755,19 +18392,40 @@ def create_app() -> FastAPI:
         return result
 
     @app.post("/api/persona_dashboard/personas/ai_keywords")
-    def api_persona_dashboard_persona_ai_keywords(payload: PersonaDashboardPersonaAiKeywordsPayload, _user: dict[str, Any] = Depends(get_current_user)):
-        return _persona_dashboard_suggest_keywords(payload)
+    def api_persona_dashboard_persona_ai_keywords(payload: PersonaDashboardPersonaAiKeywordsPayload, user: dict[str, Any] = Depends(get_current_user)):
+        return _run_billable_operation(
+            user,
+            ref_type="persona_ai_keywords",
+            sku="basic_text_post",
+            quantity=1,
+            operation=lambda: _persona_dashboard_suggest_keywords(payload),
+        )
 
     @app.post("/api/persona_dashboard/personas/ai_create")
     def api_persona_dashboard_persona_ai_create(payload: PersonaDashboardPersonaAiCreatePayload, user: dict[str, Any] = Depends(get_current_user)):
         with TENANT_RESOURCE_LIFECYCLE_LOCK:
             _require_active_workspace_user(user)
-            result = _create_persona_with_owner(user, lambda: _persona_dashboard_create_persona_with_ai(payload))
+            result = _run_billable_operation(
+                user,
+                ref_type="persona_ai_create",
+                sku="basic_text_post",
+                quantity=1,
+                operation=lambda: _create_persona_with_owner(
+                    user,
+                    lambda: _persona_dashboard_create_persona_with_ai(payload),
+                ),
+            )
         return result
 
     @app.post("/api/persona_dashboard/personas/ai_profile")
-    def api_persona_dashboard_persona_ai_profile(payload: PersonaDashboardPersonaAiProfilePayload, _user: dict[str, Any] = Depends(get_current_user)):
-        return _persona_dashboard_generate_profile_content(payload)
+    def api_persona_dashboard_persona_ai_profile(payload: PersonaDashboardPersonaAiProfilePayload, user: dict[str, Any] = Depends(get_current_user)):
+        return _run_billable_operation(
+            user,
+            ref_type="persona_ai_profile",
+            sku="basic_text_post",
+            quantity=1,
+            operation=lambda: _persona_dashboard_generate_profile_content(payload),
+        )
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/duplicate")
     def api_persona_dashboard_duplicate_persona(archive_id: str, user: dict[str, Any] = Depends(require_persona_owner)):
@@ -19944,7 +19602,11 @@ def create_app() -> FastAPI:
     @app.get("/api/billing/summary")
     def api_billing_summary(user: dict[str, Any] = Depends(get_current_user)):
         with db() as conn:
-            return commercial_billing.billing_summary(conn, _workspace_user_id(user))
+            summary = commercial_billing.billing_summary(conn, _workspace_user_id(user))
+        admin_waived = bool(_is_admin(user) and not _is_admin_workspace(user))
+        summary["admin_waived"] = admin_waived
+        summary["effective_unlimited"] = bool(summary.get("unlimited_compute") or admin_waived)
+        return summary
 
     @app.get("/api/billing/orders")
     def api_billing_orders(limit: int = 100, user: dict[str, Any] = Depends(get_current_user)):
@@ -20122,13 +19784,28 @@ def create_app() -> FastAPI:
     def api_admin_user_billing_adjustment(target_user_id: int, payload: BillingAdjustmentPayload, user: dict[str, Any] = Depends(require_admin)):
         with db() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            result = commercial_billing.adjust_credit(
-                conn,
-                user_id=int(target_user_id),
-                delta_units=int(round(float(payload.delta_points) * commercial_billing.POINT_SCALE)),
-                actor_user_id=_identity_user_id(user),
-                reason=payload.reason,
-            )
+            result: dict[str, Any] | None = None
+            if payload.unlimited is not None:
+                result = commercial_billing.set_unlimited_compute(
+                    conn,
+                    user_id=int(target_user_id),
+                    enabled=bool(payload.unlimited),
+                    actor_user_id=_identity_user_id(user),
+                    reason=payload.reason,
+                )
+            if float(payload.delta_points) != 0:
+                result = commercial_billing.adjust_credit(
+                    conn,
+                    user_id=int(target_user_id),
+                    delta_units=int(round(float(payload.delta_points) * commercial_billing.POINT_SCALE)),
+                    actor_user_id=_identity_user_id(user),
+                    reason=payload.reason,
+                )
+                if payload.unlimited is not None:
+                    result["unlimited_compute"] = bool(payload.unlimited)
+            if result is None:
+                raise HTTPException(status_code=400, detail="请选择无限算力或填写非零算力点")
+        _invalidate_admin_dashboard_cache()
         return {"ok": True, **result}
 
     @app.post("/api/admin/users/{target_user_id}/billing/subscriptions")
@@ -20458,7 +20135,6 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         explicit_data = payload.model_dump(exclude_unset=True)
         secret_preserve_keys = {
-            "telegram_bot_token",
             "upload_file_api_key",
             "llm_api_key",
             "llm_api_key_gemini",
@@ -20472,7 +20148,6 @@ def create_app() -> FastAPI:
             value = str(explicit_data.get(key) or "").strip()
             if key in explicit_data and (not value or "***" in value or "•" in value):
                 explicit_data.pop(key, None)
-        new_telegram_bot_token = str(explicit_data.get("telegram_bot_token") or "").strip()
         merged = dict(DEFAULT_RUNTIME_CONFIG)
         if isinstance(current_runtime, dict):
             merged.update(current_runtime)
@@ -20486,8 +20161,6 @@ def create_app() -> FastAPI:
             merged = _normalize_runtime_config(merged)
             with _RUNTIME_CONFIG_LOCK:
                 _write_runtime_config_file(merged)
-            if new_telegram_bot_token:
-                _write_tool_r18_bot_token_files(new_telegram_bot_token)
             _sync_tool_r18_api_config_from_runtime(merged, explicit_data)
         except RuntimeConfigFileError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -21856,6 +21529,7 @@ def create_app() -> FastAPI:
                         row_version,
                         COALESCE((SELECT credit_units FROM billing_wallets WHERE billing_wallets.user_id = users.id), 0) AS credit_units,
                         COALESCE((SELECT billing_mode FROM billing_wallets WHERE billing_wallets.user_id = users.id), '') AS billing_mode,
+                        COALESCE((SELECT unlimited_compute FROM billing_wallets WHERE billing_wallets.user_id = users.id), 0) AS unlimited_compute,
                         (SELECT COUNT(*) FROM sessions WHERE sessions.user_id = users.id AND revoked_at = 0 AND expires_at > {int(_now_ts())}) AS active_session_count,
                         (SELECT COUNT(*) FROM billing_subscriptions WHERE billing_subscriptions.user_id = users.id AND status = 'active' AND current_period_end > {int(_now_ts())}) AS active_subscription_count
                 FROM users
@@ -22582,6 +22256,8 @@ def create_app() -> FastAPI:
                 "persona_groups": int(conn.execute("SELECT COUNT(*) AS count FROM persona_group_owners WHERE user_id = ?", (target_id,)).fetchone()["count"]),
                 "social_accounts": int(conn.execute("SELECT COUNT(*) AS count FROM social_accounts WHERE user_id = ?", (target_id,)).fetchone()["count"]),
                 "social_proxies": int(conn.execute("SELECT COUNT(*) AS count FROM social_proxies WHERE user_id = ?", (target_id,)).fetchone()["count"]),
+                "proxy_market_allocations": int(conn.execute("SELECT COUNT(*) AS count FROM proxy_market_allocations WHERE user_id = ?", (target_id,)).fetchone()["count"]),
+                "proxy_market_user_state": int(conn.execute("SELECT COUNT(*) AS count FROM proxy_market_user_state WHERE user_id = ?", (target_id,)).fetchone()["count"]),
                 "social_tasks": int(conn.execute("SELECT COUNT(*) AS count FROM social_automation_tasks WHERE user_id = ?", (target_id,)).fetchone()["count"]),
                 "tasks": int(conn.execute("SELECT COUNT(*) AS count FROM tasks WHERE user_id = ?", (target_id,)).fetchone()["count"]),
                 "billing_ledger": int(conn.execute("SELECT COUNT(*) AS count FROM billing_ledger WHERE user_id = ?", (target_id,)).fetchone()["count"]),
@@ -22826,6 +22502,37 @@ def create_app() -> FastAPI:
                         placeholders = ",".join("?" for _ in social_task_ids)
                         conn.execute(f"DELETE FROM social_automation_logs WHERE task_id IN ({placeholders})", social_task_ids)
                         conn.execute(f"DELETE FROM social_automation_tasks WHERE id IN ({placeholders})", social_task_ids)
+                    active_market_item_ids = [
+                        str(item["item_id"])
+                        for item in conn.execute(
+                            """
+                            SELECT DISTINCT item_id
+                            FROM proxy_market_allocations
+                            WHERE user_id = ? AND status = 'active'
+                            """,
+                            (target_id,),
+                        ).fetchall()
+                        if str(item["item_id"] or "")
+                    ]
+                    reclaimed_market_items = 0
+                    if active_market_item_ids:
+                        placeholders = ",".join("?" for _ in active_market_item_ids)
+                        reclaimed_market_items = conn.execute(
+                            f"""
+                            UPDATE proxy_market_items
+                            SET status = 'maintenance', updated_at = ?, version = version + 1
+                            WHERE id IN ({placeholders}) AND status = 'allocated'
+                            """,
+                            (_now_ts(), *active_market_item_ids),
+                        ).rowcount
+                    deleted_market_allocations = conn.execute(
+                        "DELETE FROM proxy_market_allocations WHERE user_id = ?",
+                        (target_id,),
+                    ).rowcount
+                    deleted_market_user_state = conn.execute(
+                        "DELETE FROM proxy_market_user_state WHERE user_id = ?",
+                        (target_id,),
+                    ).rowcount
                     conn.execute("DELETE FROM social_accounts WHERE user_id = ?", (target_id,))
                     conn.execute("DELETE FROM social_proxies WHERE user_id = ?", (target_id,))
                     conn.execute("DELETE FROM persona_owners WHERE user_id = ?", (target_id,))
@@ -22858,6 +22565,9 @@ def create_app() -> FastAPI:
                             "deleted_groups": len(group_ids),
                             "deleted_tasks": len(task_ids),
                             "deleted_social_accounts": len(account_ids),
+                            "deleted_proxy_market_allocations": deleted_market_allocations,
+                            "deleted_proxy_market_user_state": deleted_market_user_state,
+                            "reclaimed_proxy_market_items": reclaimed_market_items,
                         },
                         risk_level="critical",
                         **governance.request_context(request),
@@ -22908,25 +22618,39 @@ def create_app() -> FastAPI:
         payload: RechargePayload,
         user: dict[str, Any] = Depends(require_admin),
     ):
-        points = int(payload.amount_cents)
-        if points <= 0:
-            raise HTTPException(status_code=400, detail="分配算力必须为正整数（点）")
         with db() as conn:
             conn.execute("BEGIN IMMEDIATE")
             target_row = conn.execute("SELECT * FROM users WHERE id = ?", (int(target_user_id),)).fetchone()
             if target_row is None:
                 raise HTTPException(status_code=404, detail="客户账号不存在")
-            adjusted = commercial_billing.adjust_credit(
-                conn,
-                user_id=int(target_user_id),
-                delta_units=points * commercial_billing.POINT_SCALE,
-                actor_user_id=_identity_user_id(user),
-                reason=str(payload.note or "管理员人工算力调整"),
-            )
+            adjusted: dict[str, Any] | None = None
+            if payload.unlimited is not None:
+                adjusted = commercial_billing.set_unlimited_compute(
+                    conn,
+                    user_id=int(target_user_id),
+                    enabled=bool(payload.unlimited),
+                    actor_user_id=_identity_user_id(user),
+                    reason=str(payload.note or "管理员人工调整无限算力"),
+                )
+            points = int(payload.amount_cents)
+            if points > 0:
+                adjusted = commercial_billing.adjust_credit(
+                    conn,
+                    user_id=int(target_user_id),
+                    delta_units=points * commercial_billing.POINT_SCALE,
+                    actor_user_id=_identity_user_id(user),
+                    reason=str(payload.note or "管理员人工算力调整"),
+                )
+                if payload.unlimited is not None:
+                    adjusted["unlimited_compute"] = bool(payload.unlimited)
+            if adjusted is None:
+                raise HTTPException(status_code=400, detail="请选择无限算力或填写正整数算力点")
+        _invalidate_admin_dashboard_cache()
         return {
             "ok": True,
             "credit_units": int(adjusted["credit_units"]),
             "points": adjusted["points"],
+            "unlimited_compute": bool(adjusted.get("unlimited_compute")),
         }
 
     @app.post("/api/admin/users/{target_user_id}/toggle")
