@@ -473,6 +473,20 @@ applicationForm?.addEventListener("submit", async (event) => {
   }
 });
 
+function safeLoginReturnUrl(value, fallback = "/console.html") {
+  const candidate = String(value || "").trim();
+  if (!candidate.startsWith("/") || candidate.startsWith("//") || candidate.includes("\\") || /[\u0000-\u001f]/.test(candidate)) {
+    return fallback;
+  }
+  try {
+    const target = new URL(candidate, window.location.origin);
+    if (target.origin !== window.location.origin) return fallback;
+    return `${target.pathname}${target.search}${target.hash}`;
+  } catch {
+    return fallback;
+  }
+}
+
 async function submitUserLogin(forceTakeover = false) {
   if (!loginForm || !loginStatus) return;
   loginStatus.textContent = "";
@@ -491,8 +505,9 @@ async function submitUserLogin(forceTakeover = false) {
       }),
     });
     const pageRedirect = String(document.body.dataset.loginRedirect || "/console.html");
-    const safeRedirect = pageRedirect.startsWith("/") && !pageRedirect.startsWith("//") ? pageRedirect : "/console.html";
-    window.location.assign(result?.must_change_password ? "/change-password.html" : safeRedirect);
+    const safeRedirect = safeLoginReturnUrl(pageRedirect);
+    const passwordTarget = `/change-password.html?return_url=${encodeURIComponent(safeRedirect)}`;
+    window.location.assign(result?.must_change_password ? passwordTarget : safeRedirect);
   } catch (error) {
     const detail = apiErrorDetail(error);
     loginStatus.textContent = detail.message || "登入失敗，請檢查帳號與密碼。";

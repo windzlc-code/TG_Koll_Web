@@ -13,6 +13,7 @@
   let currentSessionMode = "guest";
   let logoutPending = false;
   let logoutMessage = "";
+  let proxyMarketBadgeRequest = 0;
 
   const copy = {
     "zh-Hans": {
@@ -160,7 +161,10 @@
   function clearAdminConsoleContext() {
     removeSessionValue(ADMIN_CONTEXT_STORAGE_KEY);
     removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
-    if (currentSessionMode === "admin") currentSessionMode = "guest";
+    if (currentSessionMode === "admin") {
+      currentSessionMode = "guest";
+      proxyMarketBadgeRequest += 1;
+    }
   }
 
   function hasAdminConsoleContext() {
@@ -309,6 +313,7 @@
           <span class="site-account-status"><i aria-hidden="true"></i><span data-site-copy="accountStatus"></span></span>
         </div>
         <div class="site-account-detail"><span data-site-copy="accountId"></span><strong data-site-account-id>-</strong></div>
+        <div class="site-account-tags" data-site-account-tags hidden></div>
         <section class="site-account-billing" data-site-account-billing aria-labelledby="siteAccountBillingTitle"${page === "console" ? "" : " hidden"}>
           <div class="site-account-section-head">
             <span id="siteAccountBillingTitle" data-site-copy="billing"></span>
@@ -391,6 +396,10 @@
   function syncAccount() {
     const labels = copy[currentLanguage()];
     const username = String(currentAccount?.full_name || currentAccount?.display_name || currentAccount?.username || "").trim() || labels.accountFallback;
+    const tagText = String(currentAccount?.profile_tags || currentAccount?.profileTags || "").trim();
+    const tags = tagText
+      ? tagText.split(/[,，\n]+/).map((item) => item.trim()).filter(Boolean).slice(0, 8)
+      : [];
     document.querySelectorAll("[data-site-account-name]").forEach((node) => node.textContent = username);
     document.querySelectorAll("[data-site-account-role]").forEach((node) => node.textContent = accountRoleLabel(currentAccount, labels));
     document.querySelectorAll("[data-site-account-id]").forEach((node) => {
@@ -398,6 +407,14 @@
     });
     document.querySelectorAll("[data-site-account-avatar]").forEach((node) => {
       renderAccountAvatar(node, node.classList.contains("site-user-avatar") ? "" : "");
+    });
+    document.querySelectorAll("[data-site-account-tags]").forEach((node) => {
+      node.hidden = tags.length === 0;
+      node.replaceChildren(...tags.map((tag) => {
+        const item = document.createElement("span");
+        item.textContent = tag;
+        return item;
+      }));
     });
   }
 
@@ -579,6 +596,7 @@
     if (!header || header.dataset.siteMode !== "public") return;
     header.dataset.siteAuthState = "guest";
     currentSessionMode = "guest";
+    proxyMarketBadgeRequest += 1;
     sync();
   }
 
@@ -635,6 +653,10 @@
   async function openConsoleEntry(link, { onUnauthorized } = {}) {
     link?.setAttribute("aria-busy", "true");
     try {
+      if (window.location.pathname === "/admin-profile.html") {
+        removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
+        markAdminConsoleContext();
+      }
       const session = await resolvePublicSession();
       if (session.mode === "admin") {
         window.location.assign(adminConsoleTarget("", session.workspaceUserId));
@@ -749,6 +771,7 @@
   }
 
   async function syncProxyMarketBadge() {
+    const requestId = ++proxyMarketBadgeRequest;
     if (currentSessionMode === "guest") return;
     const headers = new Headers({ Accept: "application/json" });
     if (currentSessionMode === "admin") {
@@ -761,8 +784,10 @@
         credentials: "same-origin",
         headers,
       });
+      if (requestId !== proxyMarketBadgeRequest) return;
       if (!response.ok) return;
       const payload = await response.json();
+      if (requestId !== proxyMarketBadgeRequest) return;
       const count = Math.max(0, Number(payload?.unread_catalog_count || 0));
       document.querySelectorAll('[data-site-nav-key="proxyMarket"]').forEach((link) => {
         let badge = link.querySelector(".site-nav-badge");

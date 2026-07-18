@@ -1,7 +1,9 @@
 import os
 import tempfile
+import threading
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,7 +11,7 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 import webapp.server as server
-from webapp import social_automation_api
+from webapp import proxy_market, social_automation_api
 from webapp.db import db
 
 
@@ -213,6 +215,40 @@ class ProxyMarketTests(unittest.TestCase):
         self.assertEqual(catalog["total"], 1)
         self.assertTrue(catalog["items"][0]["available"])
 
+    def test_claim_is_exclusive_under_concurrent_requests(self):
+        item = self._market_item("TW-TPE-CONCURRENT")
+        first, _ = self._customer("concurrent_first")
+        second, _ = self._customer("concurrent_second")
+        barrier = threading.Barrier(2)
+
+        def claim(client: TestClient, key: str):
+            barrier.wait(timeout=5)
+            return client.post(
+                f"/api/proxy-market/items/{item['id']}/claim",
+                headers={**self.origin, "Idempotency-Key": key},
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [
+                pool.submit(claim, first, "concurrent-first"),
+                pool.submit(claim, second, "concurrent-second"),
+            ]
+            responses = [future.result(timeout=15) for future in futures]
+
+        self.assertEqual(sorted(response.status_code for response in responses), [200, 409])
+        with db() as conn:
+            active_count = int(
+                conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM proxy_market_allocations
+                    WHERE item_id = ? AND status = 'active'
+                    """,
+                    (item["id"],),
+                ).fetchone()[0]
+            )
+        self.assertEqual(active_count, 1)
+
     def test_claim_limit_and_server_backed_read_state(self):
         first = self._market_item("TW-TPE-101")
         second = self._market_item("TW-TPE-102")
@@ -411,6 +447,474 @@ class ProxyMarketTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual(account["proxy_id"], "")
         self.assertIsNone(proxy)
+
+    def test_market_credentials_stay_out_of_social_proxies_and_resolve_for_check(self):
+        item = self._market_item("TW-TPE-VAULT")
+        customer, _ = self._customer("vault_buyer")
+        claimed = customer.post(
+            f"/api/proxy-market/items/{item['id']}/claim",
+            headers={**self.origin, "Idempotency-Key": "vault-claim"},
+        )
+        self.assertEqual(claimed.status_code, 200, claimed.text)
+        proxy_id = claimed.json()["allocation"]["social_proxy_id"]
+        with db() as conn:
+            stored = conn.execute(
+                "SELECT username, password FROM social_proxies WHERE id = ?",
+                (proxy_id,),
+            ).fetchone()
+        self.assertEqual(stored["username"], "")
+        self.assertEqual(stored["password"], "")
+
+        check_result = {
+            "ok": True,
+            "latency_ms": 25,
+            "response": {
+                "country": "TW",
+                "region": "Taipei",
+                "city": "Taipei",
+                "connection": {"isp": "Vault ISP"},
+            },
+        }
+        with patch(
+            "webapp.social_automation_api._run_proxy_connection_check",
+            return_value=check_result,
+        ) as connection_check:
+            checked = customer.post(
+                f"/api/persona_dashboard/automation/proxies/{proxy_id}/check",
+                headers=self.origin,
+            )
+        self.assertEqual(checked.status_code, 200, checked.text)
+        runtime_proxy = connection_check.call_args.args[0]
+        self.assertEqual(runtime_proxy["username"], "proxy-user")
+        self.assertEqual(runtime_proxy["password"], "proxy-password")
+        with db() as conn:
+            stored_after = conn.execute(
+                "SELECT username, password FROM social_proxies WHERE id = ?",
+                (proxy_id,),
+            ).fetchone()
+        self.assertEqual(stored_after["username"], "")
+        self.assertEqual(stored_after["password"], "")
+        with db() as conn:
+            conn.execute(
+                """
+                UPDATE social_proxies
+                SET username = 'legacy-user', password = 'legacy-password'
+                WHERE id = ?
+                """,
+                (proxy_id,),
+            )
+        proxy_market._scrub_legacy_market_proxy_plaintext()
+        with db() as conn:
+            scrubbed = conn.execute(
+                "SELECT username, password FROM social_proxies WHERE id = ?",
+                (proxy_id,),
+            ).fetchone()
+        self.assertEqual(scrubbed["username"], "")
+        self.assertEqual(scrubbed["password"], "")
+
+    def test_market_proxy_test_ignores_request_endpoint_overrides(self):
+        item = self._market_item("TW-TPE-VAULT-ENDPOINT")
+        customer, _ = self._customer("vault_endpoint_buyer")
+        claimed = customer.post(
+            f"/api/proxy-market/items/{item['id']}/claim",
+            headers={**self.origin, "Idempotency-Key": "vault-endpoint-claim"},
+        )
+        self.assertEqual(claimed.status_code, 200, claimed.text)
+        proxy_id = claimed.json()["allocation"]["social_proxy_id"]
+
+        with patch(
+            "webapp.social_automation_api._run_proxy_connection_check",
+            return_value={"ok": True, "response": {}},
+        ) as connection_check:
+            checked = customer.post(
+                "/api/persona_dashboard/automation/proxies/test",
+                headers=self.origin,
+                json={
+                    "proxy_id": proxy_id,
+                    "proxy_type": "http",
+                    "host": "attacker.example",
+                    "port": 8080,
+                    "username": "attacker",
+                    "password": "attacker-password",
+                },
+            )
+        self.assertEqual(checked.status_code, 200, checked.text)
+        candidate = connection_check.call_args.args[0]
+        self.assertEqual(candidate["proxy_type"], "socks5")
+        self.assertEqual(candidate["host"], "203.0.113.10")
+        self.assertEqual(candidate["port"], 1080)
+        self.assertEqual(candidate["username"], "proxy-user")
+        self.assertEqual(candidate["password"], "proxy-password")
+
+    def test_claim_idempotency_key_is_bound_to_market_item(self):
+        first = self._market_item("TW-TPE-IDEM-1")
+        second = self._market_item("TW-TPE-IDEM-2")
+        customer, _ = self._customer("idempotency_buyer")
+        claimed = customer.post(
+            f"/api/proxy-market/items/{first['id']}/claim",
+            headers={**self.origin, "Idempotency-Key": "same-key"},
+        )
+        self.assertEqual(claimed.status_code, 200, claimed.text)
+        conflict = customer.post(
+            f"/api/proxy-market/items/{second['id']}/claim",
+            headers={**self.origin, "Idempotency-Key": "same-key"},
+        )
+        self.assertEqual(conflict.status_code, 409, conflict.text)
+
+    def test_market_state_machine_and_claimed_proxy_display_sync(self):
+        active = self._market_item("TW-TPE-STATE-ACTIVE")
+        forged = self.admin.patch(
+            f"/api/admin/proxy-market/items/{active['id']}",
+            headers=self.origin,
+            json={"status": "allocated"},
+        )
+        self.assertEqual(forged.status_code, 409, forged.text)
+
+        customer, _ = self._customer("state_buyer")
+        claimed = customer.post(
+            f"/api/proxy-market/items/{active['id']}/claim",
+            headers={**self.origin, "Idempotency-Key": "state-claim"},
+        )
+        self.assertEqual(claimed.status_code, 200, claimed.text)
+        proxy_id = claimed.json()["allocation"]["social_proxy_id"]
+        rejected_draft = self.admin.patch(
+            f"/api/admin/proxy-market/items/{active['id']}",
+            headers=self.origin,
+            json={"status": "draft"},
+        )
+        self.assertEqual(rejected_draft.status_code, 409, rejected_draft.text)
+
+        expires_at = int(time.time()) + 86400
+        synced = self.admin.patch(
+            f"/api/admin/proxy-market/items/{active['id']}",
+            headers=self.origin,
+            json={
+                "display_name": "Updated marketplace proxy",
+                "country": "TW",
+                "region": "New Taipei",
+                "city": "Banqiao",
+                "isp": "Updated ISP",
+                "expires_at": expires_at,
+            },
+        )
+        self.assertEqual(synced.status_code, 200, synced.text)
+        with db() as conn:
+            proxy = conn.execute(
+                """
+                SELECT name, country, region, city, isp, expires_at
+                FROM social_proxies
+                WHERE id = ?
+                """,
+                (proxy_id,),
+            ).fetchone()
+        self.assertEqual(proxy["name"], "Updated marketplace proxy")
+        self.assertEqual(proxy["country"], "TW")
+        self.assertEqual(proxy["region"], "New Taipei")
+        self.assertEqual(proxy["city"], "Banqiao")
+        self.assertEqual(proxy["isp"], "Updated ISP")
+        self.assertEqual(int(proxy["expires_at"]), expires_at)
+
+        expired = self.admin.patch(
+            f"/api/admin/proxy-market/items/{active['id']}",
+            headers=self.origin,
+            json={"expires_at": int(time.time()) - 1},
+        )
+        self.assertEqual(expired.status_code, 200, expired.text)
+        self.assertEqual(expired.json()["item"]["status"], "maintenance")
+        with db() as conn:
+            expired_proxy = conn.execute(
+                "SELECT status FROM social_proxies WHERE id = ?",
+                (proxy_id,),
+            ).fetchone()
+        self.assertEqual(expired_proxy["status"], "maintenance")
+
+    def test_disabled_and_archived_items_cannot_be_republished(self):
+        for status in ("disabled", "archived"):
+            item = self._market_item(f"TW-TPE-{status.upper()}")
+            changed = self.admin.patch(
+                f"/api/admin/proxy-market/items/{item['id']}",
+                headers=self.origin,
+                json={"status": status},
+            )
+            self.assertEqual(changed.status_code, 200, changed.text)
+            with patch(
+                "webapp.proxy_market._run_proxy_connection_check",
+                return_value={"ok": True, "latency_ms": 20, "response": {}},
+            ) as connection_check:
+                published = self.admin.post(
+                    f"/api/admin/proxy-market/items/{item['id']}/test-and-publish",
+                    headers=self.origin,
+                    json={"host": "198.51.100.44", "port": 1081},
+                )
+            self.assertEqual(published.status_code, 409, published.text)
+            connection_check.assert_not_called()
+
+    def test_publish_omitted_protocol_preserves_existing_protocol(self):
+        item = self._market_item("TW-TPE-PROTOCOL")
+        with db() as conn:
+            conn.execute(
+                "UPDATE proxy_market_items SET proxy_type = 'https' WHERE id = ?",
+                (item["id"],),
+            )
+        check_result = {
+            "ok": True,
+            "latency_ms": 20,
+            "response": {"connection": {}},
+        }
+        with patch(
+            "webapp.proxy_market._run_proxy_connection_check",
+            return_value=check_result,
+        ):
+            published = self.admin.post(
+                f"/api/admin/proxy-market/items/{item['id']}/test-and-publish",
+                headers=self.origin,
+                json={"host": "198.51.100.44", "port": 1081},
+            )
+        self.assertEqual(published.status_code, 200, published.text)
+        self.assertEqual(published.json()["item"]["proxy_type"], "https")
+
+    def test_publish_rejects_version_change_during_connection_check(self):
+        item = self._market_item("TW-TPE-VERSION")
+
+        def mutate_item(_candidate):
+            with db() as conn:
+                conn.execute(
+                    """
+                    UPDATE proxy_market_items
+                    SET display_name = 'Concurrent edit', version = version + 1
+                    WHERE id = ?
+                    """,
+                    (item["id"],),
+                )
+            return {"ok": True, "latency_ms": 20, "response": {"connection": {}}}
+
+        with patch(
+            "webapp.proxy_market._run_proxy_connection_check",
+            side_effect=mutate_item,
+        ):
+            published = self.admin.post(
+                f"/api/admin/proxy-market/items/{item['id']}/test-and-publish",
+                headers=self.origin,
+                json={"host": "198.51.100.55", "port": 1081},
+            )
+        self.assertEqual(published.status_code, 409, published.text)
+        with db() as conn:
+            stored = conn.execute(
+                "SELECT host FROM proxy_market_items WHERE id = ?",
+                (item["id"],),
+            ).fetchone()
+        self.assertEqual(stored["host"], "203.0.113.10")
+
+    def test_publish_rechecks_active_tasks_in_final_transaction(self):
+        item = self._market_item("TW-TPE-TASK-RACE")
+        customer, user_id = self._customer("task_race_buyer")
+        claimed = customer.post(
+            f"/api/proxy-market/items/{item['id']}/claim",
+            headers={**self.origin, "Idempotency-Key": "task-race-claim"},
+        )
+        self.assertEqual(claimed.status_code, 200, claimed.text)
+        proxy_id = claimed.json()["allocation"]["social_proxy_id"]
+
+        def create_task(_candidate):
+            now = int(time.time())
+            with db() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO social_accounts(
+                      id, user_id, persona_id, platform, username, profile_dir,
+                      proxy_id, status, created_at, updated_at
+                    ) VALUES ('account-task-race', ?, '', 'threads', 'task_race',
+                              'profiles/task-race', ?, 'ready', ?, ?)
+                    """,
+                    (user_id, proxy_id, now, now),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO social_automation_tasks(
+                      id, user_id, persona_id, account_id, platform, task_type,
+                      status, payload_json, created_at, updated_at
+                    ) VALUES ('task-race', ?, '', 'account-task-race', 'threads',
+                              'check_login', 'queued', '{}', ?, ?)
+                    """,
+                    (user_id, now, now),
+                )
+            return {"ok": True, "latency_ms": 20, "response": {"connection": {}}}
+
+        with patch(
+            "webapp.proxy_market._run_proxy_connection_check",
+            side_effect=create_task,
+        ):
+            published = self.admin.post(
+                f"/api/admin/proxy-market/items/{item['id']}/test-and-publish",
+                headers=self.origin,
+                json={"host": "198.51.100.66", "port": 1081},
+            )
+        self.assertEqual(published.status_code, 409, published.text)
+        with db() as conn:
+            stored = conn.execute(
+                "SELECT host FROM proxy_market_items WHERE id = ?",
+                (item["id"],),
+            ).fetchone()
+        self.assertEqual(stored["host"], "203.0.113.10")
+
+    def test_force_revoke_cancels_all_active_states_before_runtime_cleanup(self):
+        item = self._market_item("TW-TPE-FORCE-TX")
+        customer, user_id = self._customer("force_tx_buyer")
+        claimed = customer.post(
+            f"/api/proxy-market/items/{item['id']}/claim",
+            headers={**self.origin, "Idempotency-Key": "force-tx-claim"},
+        )
+        self.assertEqual(claimed.status_code, 200, claimed.text)
+        allocation = claimed.json()["allocation"]
+        proxy_id = allocation["social_proxy_id"]
+        now = int(time.time())
+        task_ids = [
+            "force-preparing",
+            "force-queued",
+            "force-running",
+            "force-manual",
+        ]
+        statuses = ["preparing", "queued", "running", "need_manual"]
+        with db() as conn:
+            conn.execute(
+                """
+                INSERT INTO social_accounts(
+                  id, user_id, persona_id, platform, username, profile_dir,
+                  proxy_id, status, created_at, updated_at
+                ) VALUES ('account-force-tx', ?, '', 'threads', 'force_tx',
+                          'profiles/force-tx', ?, 'ready', ?, ?)
+                """,
+                (user_id, proxy_id, now, now),
+            )
+            for task_id, status in zip(task_ids, statuses):
+                conn.execute(
+                    """
+                    INSERT INTO social_automation_tasks(
+                      id, user_id, persona_id, account_id, platform, task_type,
+                      status, payload_json, created_at, updated_at
+                    ) VALUES (?, ?, '', 'account-force-tx', 'threads',
+                              'check_login', ?, '{}', ?, ?)
+                    """,
+                    (task_id, user_id, status, now, now),
+                )
+
+        cleanup_observations = []
+
+        def observe_cleanup(cancelled_task_ids):
+            with db() as conn:
+                cleanup_observations.append(
+                    {
+                        "task_ids": list(cancelled_task_ids),
+                        "statuses": [
+                            row["status"]
+                            for row in conn.execute(
+                                """
+                                SELECT status
+                                FROM social_automation_tasks
+                                WHERE id IN (?, ?, ?, ?)
+                                ORDER BY id
+                                """,
+                                tuple(task_ids),
+                            ).fetchall()
+                        ],
+                        "proxy": conn.execute(
+                            "SELECT id FROM social_proxies WHERE id = ?",
+                            (proxy_id,),
+                        ).fetchone(),
+                        "allocation_status": conn.execute(
+                            "SELECT status FROM proxy_market_allocations WHERE id = ?",
+                            (allocation["id"],),
+                        ).fetchone()["status"],
+                    }
+                )
+
+        with patch(
+            "webapp.proxy_market.cleanup_cancelled_social_tasks_runtime",
+            side_effect=observe_cleanup,
+        ):
+            revoked = self.admin.post(
+                f"/api/admin/proxy-market/allocations/{allocation['id']}/revoke",
+                headers=self.origin,
+                json={"confirm_impact": True},
+            )
+        self.assertEqual(revoked.status_code, 200, revoked.text)
+        self.assertEqual(len(cleanup_observations), 1)
+        observation = cleanup_observations[0]
+        self.assertCountEqual(observation["task_ids"], task_ids)
+        self.assertEqual(observation["statuses"], ["cancelled"] * 4)
+        self.assertIsNone(observation["proxy"])
+        self.assertEqual(observation["allocation_status"], "revoked")
+
+    def test_force_revoke_rolls_back_all_database_changes_on_failure(self):
+        item = self._market_item("TW-TPE-FORCE-ROLLBACK")
+        customer, user_id = self._customer("force_rollback_buyer")
+        claimed = customer.post(
+            f"/api/proxy-market/items/{item['id']}/claim",
+            headers={**self.origin, "Idempotency-Key": "force-rollback-claim"},
+        )
+        self.assertEqual(claimed.status_code, 200, claimed.text)
+        allocation = claimed.json()["allocation"]
+        proxy_id = allocation["social_proxy_id"]
+        now = int(time.time())
+        with db() as conn:
+            conn.execute(
+                """
+                INSERT INTO social_accounts(
+                  id, user_id, persona_id, platform, username, profile_dir,
+                  proxy_id, status, created_at, updated_at
+                ) VALUES ('account-force-rollback', ?, '', 'threads',
+                          'force_rollback', 'profiles/force-rollback', ?,
+                          'ready', ?, ?)
+                """,
+                (user_id, proxy_id, now, now),
+            )
+            conn.execute(
+                """
+                INSERT INTO social_automation_tasks(
+                  id, user_id, persona_id, account_id, platform, task_type,
+                  status, payload_json, created_at, updated_at
+                ) VALUES ('task-force-rollback', ?, '',
+                          'account-force-rollback', 'threads', 'check_login',
+                          'queued', '{}', ?, ?)
+                """,
+                (user_id, now, now),
+            )
+
+        with patch(
+            "webapp.proxy_market._record_audit",
+            side_effect=RuntimeError("audit failure"),
+        ):
+            with self.assertRaises(RuntimeError):
+                self.admin.post(
+                    f"/api/admin/proxy-market/allocations/{allocation['id']}/revoke",
+                    headers=self.origin,
+                    json={"confirm_impact": True},
+                )
+
+        with db() as conn:
+            account = conn.execute(
+                "SELECT proxy_id FROM social_accounts WHERE id = 'account-force-rollback'"
+            ).fetchone()
+            task = conn.execute(
+                "SELECT status FROM social_automation_tasks WHERE id = 'task-force-rollback'"
+            ).fetchone()
+            proxy = conn.execute(
+                "SELECT id FROM social_proxies WHERE id = ?",
+                (proxy_id,),
+            ).fetchone()
+            allocation_status = conn.execute(
+                "SELECT status FROM proxy_market_allocations WHERE id = ?",
+                (allocation["id"],),
+            ).fetchone()
+            item_status = conn.execute(
+                "SELECT status FROM proxy_market_items WHERE id = ?",
+                (item["id"],),
+            ).fetchone()
+        self.assertEqual(account["proxy_id"], proxy_id)
+        self.assertEqual(task["status"], "queued")
+        self.assertIsNotNone(proxy)
+        self.assertEqual(allocation_status["status"], "active")
+        self.assertEqual(item_status["status"], "allocated")
 
 
 if __name__ == "__main__":

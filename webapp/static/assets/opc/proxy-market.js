@@ -49,6 +49,7 @@
     total: 0,
     totalPages: 1,
     catalogRequest: 0,
+    catalogRendered: false,
     catalogReadMarked: false,
     claimKeys: new Map(),
   };
@@ -117,6 +118,31 @@
       }
     } catch {}
     return headers;
+  }
+
+  function proxyPoolTarget(value) {
+    const fallback = "/console.html?view=accounts&browser_panel=proxies";
+    let target;
+    try {
+      target = new URL(String(value || fallback), window.location.origin);
+      if (
+        target.origin !== window.location.origin
+        || !["/console.html", "/admin-console.html"].includes(target.pathname)
+      ) {
+        target = new URL(fallback, window.location.origin);
+      }
+    } catch {
+      target = new URL(fallback, window.location.origin);
+    }
+    try {
+      const adminContext = sessionStorage.getItem("vecto-admin-console-context") === "1";
+      const workspaceUserId = String(sessionStorage.getItem("vecto-admin-workspace-user-id") || "").trim();
+      if (adminContext || workspaceUserId) {
+        target.pathname = "/admin-console.html";
+        if (workspaceUserId) target.searchParams.set("manage_user_id", workspaceUserId);
+      }
+    } catch {}
+    return `${target.pathname}${target.search}${target.hash}`;
   }
 
   function openLogin() {
@@ -460,8 +486,9 @@
     }
   }
 
-  async function loadCatalog({ scroll = false } = {}) {
+  async function loadCatalog({ scroll = false, preserveOnError = false, throwOnError = false } = {}) {
     const requestId = ++state.catalogRequest;
+    const requestedPage = state.page;
     setCatalogLoading();
     const params = catalogParams();
     syncUrl(params);
@@ -469,6 +496,10 @@
       const payload = await api(`/api/proxy-market/catalog?${params.toString()}`);
       if (requestId !== state.catalogRequest) return;
       const envelope = catalogEnvelope(payload);
+      if (requestedPage > envelope.totalPages) {
+        state.page = envelope.totalPages;
+        return loadCatalog({ scroll, preserveOnError, throwOnError });
+      }
       state.items = envelope.items.map(asObject);
       state.total = envelope.total;
       state.page = envelope.page;
@@ -477,10 +508,16 @@
       updateFacets(envelope.root, state.items);
       elements.regionCount.textContent = `${regionCount(envelope.root, state.items).toLocaleString()} 個`;
       renderCatalog();
+      state.catalogRendered = true;
       void markCatalogRead();
       if (scroll) document.querySelector("#catalog")?.scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (error) {
       if (requestId !== state.catalogRequest) return;
+      if (preserveOnError) {
+        renderCatalog();
+        if (throwOnError) throw error;
+        return;
+      }
       state.items = [];
       state.total = 0;
       elements.grid.replaceChildren();
@@ -491,6 +528,7 @@
       elements.resultSummary.textContent = "目錄讀取失敗";
       elements.catalogCount.textContent = "暫不可用";
       elements.regionCount.textContent = "暫不可用";
+      if (throwOnError) throw error;
     }
   }
 
@@ -525,7 +563,8 @@
     }
   }
 
-  async function loadMe() {
+  async function loadMe({ preserveOnError = false, throwOnError = false } = {}) {
+    let failure = null;
     try {
       const payload = await api("/api/proxy-market/me");
       const root = dataRoot(payload);
@@ -533,17 +572,21 @@
       state.authenticated = true;
       state.account = asObject(root.user || root.account || root.me || root);
       state.quota = quotaFromMe(root);
-      void markCatalogRead();
+      if (state.catalogRendered) void markCatalogRead();
     } catch (error) {
-      state.authenticated = false;
-      state.account = null;
-      state.quota = null;
+      failure = error;
+      if (!preserveOnError || [401, 403].includes(error.status)) {
+        state.authenticated = false;
+        state.account = null;
+        state.quota = null;
+      }
       if (![401, 403].includes(error.status)) {
         elements.accountMessage.textContent = "登入狀態暫時無法確認；目錄仍可正常瀏覽。";
         elements.quotaSummary.textContent = "暫不可用";
       }
     }
     renderAccount();
+    if (failure && throwOnError) throw failure;
   }
 
   function claimKey(id) {
@@ -559,10 +602,26 @@
     const root = dataRoot(payload);
     const target = String(firstValue(root, ["proxy_list_url", "proxy_pool_url"], "")).trim();
     const poolLink = elements.success.querySelector("[data-proxy-pool-link]");
-    if (poolLink && target.startsWith("/console.html") && !target.startsWith("//")) poolLink.href = target;
+    if (poolLink) poolLink.href = proxyPoolTarget(target);
     elements.successCopy.textContent = `${location}節點已安全加入；現在可以前往 Web 控制台進行綁定與連線檢查。`;
     elements.success.hidden = false;
     elements.success.querySelector("[data-close-success]")?.focus({ preventScroll: true });
+  }
+
+  function applyClaimLocally(id) {
+    const itemIndex = state.items.findIndex((item) => itemId(item) === id);
+    if (itemIndex >= 0) {
+      state.items.splice(itemIndex, 1);
+      state.total = Math.max(0, state.total - 1);
+    }
+    state.totalPages = Math.max(1, Math.ceil(state.total / state.pageSize));
+    state.page = Math.min(state.page, state.totalPages);
+    if (state.quota) {
+      if (state.quota.remaining !== null) state.quota.remaining = Math.max(0, state.quota.remaining - 1);
+      if (state.quota.used !== null) state.quota.used += 1;
+    }
+    renderCatalog();
+    renderAccount();
   }
 
   async function claimItem(index, button) {
@@ -578,8 +637,9 @@
     button.disabled = true;
     button.textContent = "正在添加";
     elements.status.textContent = "";
+    let payload;
     try {
-      const payload = await api(`/api/proxy-market/items/${encodeURIComponent(id)}/claim`, {
+      payload = await api(`/api/proxy-market/items/${encodeURIComponent(id)}/claim`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -587,14 +647,6 @@
         },
         body: JSON.stringify({ idempotency_key: claimKey(id) }),
       });
-      if ("BroadcastChannel" in window) {
-        const channel = new BroadcastChannel("vecto-proxy-market");
-        channel.postMessage({ scope: "proxy_pool", changedAt: Date.now() });
-        channel.close();
-      }
-      state.claimKeys.delete(id);
-      showSuccess(item, payload);
-      await Promise.all([loadMe(), loadCatalog()]);
     } catch (error) {
       if ([401, 403].includes(error.status)) {
         state.authenticated = false;
@@ -606,6 +658,25 @@
         button.disabled = false;
         button.textContent = original;
       }
+      return;
+    }
+
+    state.claimKeys.delete(id);
+    applyClaimLocally(id);
+    showSuccess(item, payload);
+    if ("BroadcastChannel" in window) {
+      try {
+        const channel = new BroadcastChannel("vecto-proxy-market");
+        channel.postMessage({ scope: "proxy_pool", changedAt: Date.now() });
+        channel.close();
+      } catch {}
+    }
+    const refreshResults = await Promise.allSettled([
+      loadMe({ preserveOnError: true, throwOnError: true }),
+      loadCatalog({ preserveOnError: true, throwOnError: true }),
+    ]);
+    if (refreshResults.some((result) => result.status === "rejected")) {
+      elements.status.textContent = "代理已成功添加，但最新状态刷新失败，请稍后手动刷新。";
     }
   }
 

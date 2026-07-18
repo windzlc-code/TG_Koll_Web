@@ -18728,8 +18728,15 @@ async function deleteProxy(proxyId = "") {
   );
   if (!ok) return;
   await api(`/api/persona_dashboard/automation/proxies/${encodeURIComponent(cleanId)}`, { method: "DELETE" });
-  await refreshProxyPool();
-  showMsg("socialMsg", isMarketplace ? "商城代理已释放并退回商城。" : "代理已删除。", true);
+  state.socialProxies = (state.socialProxies || []).filter((item) => String(item?.id || "") !== cleanId);
+  renderProxyPool();
+  const successMessage = isMarketplace ? "商城代理已释放并退回商城。" : "代理已删除。";
+  try {
+    await refreshProxyPool();
+    showMsg("socialMsg", successMessage, true);
+  } catch (error) {
+    showMsg("socialMsg", `${successMessage} 但代理池刷新失败：${error.detail || error.message || "请稍后手动刷新"}`, true);
+  }
 }
 
 function syncProxyMarketUnreadBadge() {

@@ -13,8 +13,16 @@ from pydantic import BaseModel, Field
 from . import governance
 from .auth import get_current_user, require_admin
 from .db import db, get_admin_config, set_admin_config
-from .password_vault import PasswordVaultError, decrypt_secret, encrypt_secret
-from .social_automation_api import _run_proxy_connection_check, cancel_social_task
+from .password_vault import PasswordVaultError
+from .proxy_market_credentials import (
+    decrypt_market_credentials,
+    encrypt_market_credentials,
+)
+from .social_automation_api import (
+    _run_proxy_connection_check,
+    cancel_social_tasks_in_transaction,
+    cleanup_cancelled_social_tasks_runtime,
+)
 
 
 MARKET_SETTINGS_KEY = "proxy_market_settings"
@@ -66,7 +74,7 @@ class ProxyMarketItemPatch(BaseModel):
 
 
 class ProxyMarketPublishPayload(BaseModel):
-    proxy_type: str = Field(default="socks5", max_length=20)
+    proxy_type: str | None = Field(default=None, max_length=20)
     host: str = Field(default="", max_length=255)
     port: int = Field(default=0, ge=1, le=65535)
     username: str | None = Field(default=None, max_length=255)
@@ -168,10 +176,6 @@ def _mask_host(host: str) -> str:
     return f"{value[:3]}***{value[-2:]}"
 
 
-def _secret_purpose(item_id: str, field: str) -> str:
-    return f"proxy-market:{item_id}:{field}"
-
-
 def _encrypt_credentials(
     item_id: str,
     actor_user_id: int,
@@ -179,42 +183,19 @@ def _encrypt_credentials(
     password: str,
 ) -> tuple[str, str]:
     try:
-        return (
-            encrypt_secret(actor_user_id, _secret_purpose(item_id, "username"), username)
-            if username
-            else "",
-            encrypt_secret(actor_user_id, _secret_purpose(item_id, "password"), password)
-            if password
-            else "",
+        return encrypt_market_credentials(
+            item_id,
+            actor_user_id,
+            username,
+            password,
         )
     except PasswordVaultError as exc:
         raise HTTPException(status_code=503, detail="凭据保险库暂时不可用") from exc
 
 
 def _decrypt_credentials(item: dict[str, Any]) -> tuple[str, str]:
-    owner_id = int(item.get("credential_owner_user_id") or 0)
-    if owner_id <= 0:
-        return "", ""
     try:
-        username = (
-            decrypt_secret(
-                owner_id,
-                _secret_purpose(str(item["id"]), "username"),
-                str(item.get("username_ciphertext") or ""),
-            )
-            if str(item.get("username_ciphertext") or "")
-            else ""
-        )
-        password = (
-            decrypt_secret(
-                owner_id,
-                _secret_purpose(str(item["id"]), "password"),
-                str(item.get("password_ciphertext") or ""),
-            )
-            if str(item.get("password_ciphertext") or "")
-            else ""
-        )
-        return username, password
+        return decrypt_market_credentials(item)
     except PasswordVaultError as exc:
         raise HTTPException(status_code=503, detail="商城代理凭据暂时不可用") from exc
 
@@ -454,7 +435,21 @@ def release_market_proxy(
     return {"released": True, "allocation_id": allocation_id, "item_id": item_id}
 
 
+def _scrub_legacy_market_proxy_plaintext() -> None:
+    with db() as conn:
+        conn.execute(
+            """
+            UPDATE social_proxies
+            SET username = '', password = ''
+            WHERE market_item_id != ''
+              AND (username != '' OR password != '')
+            """
+        )
+
+
 def register_proxy_market_routes(app: FastAPI) -> None:
+    _scrub_legacy_market_proxy_plaintext()
+
     @app.get("/api/proxy-market/catalog")
     def api_proxy_market_catalog(
         country: str = "",
@@ -633,6 +628,11 @@ def register_proxy_market_routes(app: FastAPI) -> None:
                     (owner_id, clean_key),
                 ).fetchone()
                 if replay is not None:
+                    if str(replay["item_id"] or "") != str(item_id):
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Idempotency-Key 已绑定到其他商城代理",
+                        )
                     return {"ok": True, "replayed": True, "allocation": dict(replay)}
             used = int(
                 conn.execute(
@@ -652,7 +652,6 @@ def register_proxy_market_routes(app: FastAPI) -> None:
             settings = _settings(conn)
             if not _fresh_and_healthy(item, now=now, max_age_seconds=settings["health_max_age_seconds"]):
                 raise HTTPException(status_code=409, detail="该代理需要管理员重新检测后才能领取")
-            username, password = _decrypt_credentials(item)
             proxy_id = _new_id("social_proxy")
             allocation_id = _new_id("proxy_alloc")
             conn.execute(
@@ -672,14 +671,15 @@ def register_proxy_market_routes(app: FastAPI) -> None:
                     str(item.get("proxy_type") or "socks5"),
                     str(item.get("host") or ""),
                     int(item.get("port") or 0),
-                    username,
-                    password,
+                    "",
+                    "",
                     str(item.get("country") or ""),
                     str(item.get("region") or ""),
                     str(item.get("city") or ""),
                     str(item.get("isp") or ""),
                     str(item.get("ip_type") or "static_residential"),
-                    f"商城 SKU：{str(item.get('sku') or '')}",
+                    str(item.get("description") or "").strip()
+                    or f"商城 SKU: {str(item.get('sku') or '')}",
                     int(item.get("expires_at") or 0),
                     int(item.get("last_check_at") or 0),
                     str(item.get("last_check_result_json") or "{}"),
@@ -946,10 +946,29 @@ def register_proxy_market_routes(app: FastAPI) -> None:
             if current is None:
                 raise HTTPException(status_code=404, detail="商城代理不存在")
             current_data = dict(current)
+            active_allocation = conn.execute(
+                """
+                SELECT 1
+                FROM proxy_market_allocations
+                WHERE item_id = ? AND status = 'active'
+                LIMIT 1
+                """,
+                (str(item_id),),
+            ).fetchone()
             if "status" in fields_set and payload.status is not None:
                 requested = str(payload.status).strip().lower()
                 if requested not in ITEM_STATUSES:
                     raise HTTPException(status_code=400, detail="未知的商城代理状态")
+                if requested == "allocated":
+                    raise HTTPException(
+                        status_code=409,
+                        detail="allocated 状态只能由有效领取记录产生",
+                    )
+                if requested == "draft" and active_allocation is not None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="已有有效领取的代理不能转为 draft",
+                    )
                 if requested == "active":
                     if not _fresh_and_healthy(
                         current_data,
@@ -960,17 +979,19 @@ def register_proxy_market_routes(app: FastAPI) -> None:
                             status_code=409,
                             detail="代理必须先通过有效的真实检测才能设为可领取",
                         )
-                    active_allocation = conn.execute(
-                        """
-                        SELECT 1
-                        FROM proxy_market_allocations
-                        WHERE item_id = ? AND status = 'active'
-                        LIMIT 1
-                        """,
-                        (str(item_id),),
-                    ).fetchone()
                     requested = "allocated" if active_allocation is not None else "active"
                 updates["status"] = requested
+            requested_expiry = int(
+                updates.get("expires_at", current_data.get("expires_at") or 0) or 0
+            )
+            if requested_expiry and requested_expiry <= now:
+                if updates.get("status") in {"active", "allocated"}:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="已过期的商城代理不能设为可领取",
+                    )
+                if str(current_data.get("status") or "") in {"active", "allocated"}:
+                    updates["status"] = "maintenance"
             if updates:
                 updates["updated_by"] = actor_id
                 updates["updated_at"] = now
@@ -978,6 +999,33 @@ def register_proxy_market_routes(app: FastAPI) -> None:
                 conn.execute(
                     f"UPDATE proxy_market_items SET {assignments}, version = version + 1 WHERE id = ?",
                     (*updates.values(), str(item_id)),
+                )
+            proxy_field_map = {
+                "display_name": "name",
+                "country": "country",
+                "region": "region",
+                "city": "city",
+                "isp": "isp",
+                "description": "note",
+                "expires_at": "expires_at",
+            }
+            proxy_updates = {
+                target: updates[source]
+                for source, target in proxy_field_map.items()
+                if source in updates
+            }
+            if proxy_updates:
+                proxy_updates["updated_at"] = now
+                proxy_assignments = ", ".join(
+                    f"{field} = ?" for field in proxy_updates
+                )
+                conn.execute(
+                    f"""
+                    UPDATE social_proxies
+                    SET {proxy_assignments}
+                    WHERE market_item_id = ?
+                    """,
+                    (*proxy_updates.values(), str(item_id)),
                 )
             if updates.get("status") in {"maintenance", "disabled", "archived"}:
                 conn.execute(
@@ -1015,6 +1063,12 @@ def register_proxy_market_routes(app: FastAPI) -> None:
             if row is None:
                 raise HTTPException(status_code=404, detail="商城代理不存在")
             current = dict(row)
+            if str(current.get("status") or "") in {"disabled", "archived"}:
+                raise HTTPException(
+                    status_code=409,
+                    detail="已停用或归档的商城代理不能直接检测发布",
+                )
+            expected_version = int(current.get("version") or 1)
             active_task = conn.execute(
                 """
                 SELECT task.id
@@ -1041,6 +1095,13 @@ def register_proxy_market_routes(app: FastAPI) -> None:
         }
         if candidate["proxy_type"] not in PROXY_TYPES or not candidate["host"]:
             raise HTTPException(status_code=400, detail="代理连接配置无效")
+        candidate_expires_at = (
+            int(current.get("expires_at") or 0)
+            if payload.expires_at is None
+            else int(payload.expires_at)
+        )
+        if candidate_expires_at and candidate_expires_at <= _now():
+            raise HTTPException(status_code=409, detail="已过期的商城代理不能检测发布")
         result = _run_proxy_connection_check(candidate)
         if not bool(result.get("ok")):
             with db() as conn:
@@ -1065,9 +1126,34 @@ def register_proxy_market_routes(app: FastAPI) -> None:
         response = result.get("response") if isinstance(result.get("response"), dict) else {}
         with db() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            status_row = conn.execute("SELECT status, published_at FROM proxy_market_items WHERE id = ?", (str(item_id),)).fetchone()
+            status_row = conn.execute(
+                "SELECT * FROM proxy_market_items WHERE id = ?",
+                (str(item_id),),
+            ).fetchone()
             if status_row is None:
                 raise HTTPException(status_code=404, detail="商城代理不存在")
+            if int(status_row["version"] or 1) != expected_version:
+                raise HTTPException(
+                    status_code=409,
+                    detail="商城代理已被其他管理员修改，请重新检测后发布",
+                )
+            active_task = conn.execute(
+                """
+                SELECT task.id
+                FROM social_automation_tasks task
+                JOIN social_accounts account ON account.id = task.account_id
+                JOIN social_proxies proxy ON proxy.id = account.proxy_id
+                WHERE proxy.market_item_id = ?
+                  AND task.status IN ('preparing', 'queued', 'running', 'need_manual')
+                LIMIT 1
+                """,
+                (str(item_id),),
+            ).fetchone()
+            if active_task is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="代理检测期间出现执行中任务，请停止任务后重新发布",
+                )
             active_allocation = conn.execute(
                 """
                 SELECT 1
@@ -1079,8 +1165,8 @@ def register_proxy_market_routes(app: FastAPI) -> None:
             ).fetchone()
             next_status = "allocated" if active_allocation is not None else "active"
             published_at = int(status_row["published_at"] or 0) or now
-            expires_at = int(current.get("expires_at") or 0) if payload.expires_at is None else int(payload.expires_at)
-            conn.execute(
+            expires_at = candidate_expires_at
+            updated_count = conn.execute(
                 """
                 UPDATE proxy_market_items
                 SET proxy_type = ?, host = ?, port = ?, credential_owner_user_id = ?,
@@ -1092,7 +1178,7 @@ def register_proxy_market_routes(app: FastAPI) -> None:
                     status = ?, health_status = 'healthy', latency_ms = ?,
                     last_check_at = ?, last_check_result_json = ?, expires_at = ?,
                     published_at = ?, updated_by = ?, updated_at = ?, version = version + 1
-                WHERE id = ?
+                WHERE id = ? AND version = ?
                 """,
                 (
                     candidate["proxy_type"],
@@ -1118,12 +1204,18 @@ def register_proxy_market_routes(app: FastAPI) -> None:
                     actor_id,
                     now,
                     str(item_id),
+                    expected_version,
                 ),
-            )
+            ).rowcount
+            if updated_count != 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="商城代理已被其他管理员修改，请重新检测后发布",
+                )
             conn.execute(
                 """
                 UPDATE social_proxies
-                SET proxy_type = ?, host = ?, port = ?, username = ?, password = ?,
+                SET proxy_type = ?, host = ?, port = ?, username = '', password = '',
                     country = ?, region = ?, city = ?, isp = ?, expires_at = ?,
                     status = 'active', last_check_at = ?, last_check_result = ?, updated_at = ?
                 WHERE market_item_id = ?
@@ -1132,8 +1224,6 @@ def register_proxy_market_routes(app: FastAPI) -> None:
                     candidate["proxy_type"],
                     candidate["host"],
                     candidate["port"],
-                    username,
-                    password,
                     str(response.get("country") or current.get("country") or ""),
                     str(response.get("region") or current.get("region") or ""),
                     str(response.get("city") or current.get("city") or ""),
@@ -1208,11 +1298,17 @@ def register_proxy_market_routes(app: FastAPI) -> None:
         payload: ProxyMarketRevokePayload | None = None,
         admin: dict[str, Any] = Depends(require_admin),
     ):
+        now = _now()
+        cancelled_task_ids: list[str] = []
         with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             allocation = conn.execute(
                 "SELECT * FROM proxy_market_allocations WHERE id = ? AND status = 'active'",
                 (str(allocation_id),),
             ).fetchone()
+            if allocation is None:
+                raise HTTPException(status_code=404, detail="有效领取记录不存在")
+            proxy_id = str(allocation["social_proxy_id"] or "")
             accounts = conn.execute(
                 """
                 SELECT id, username, platform
@@ -1220,52 +1316,116 @@ def register_proxy_market_routes(app: FastAPI) -> None:
                 WHERE proxy_id = ?
                 ORDER BY username
                 """,
-                (str(allocation["social_proxy_id"]),),
-            ).fetchall() if allocation is not None else []
+                (proxy_id,),
+            ).fetchall()
             tasks = conn.execute(
                 """
-                SELECT task.id, task.task_type, task.status, account.username
+                SELECT task.*, account.username
                 FROM social_automation_tasks task
                 JOIN social_accounts account ON account.id = task.account_id
                 WHERE account.proxy_id = ?
                   AND task.status IN ('preparing', 'queued', 'running', 'need_manual')
                 ORDER BY task.created_at
                 """,
-                (str(allocation["social_proxy_id"]),),
-            ).fetchall() if allocation is not None else []
-        if allocation is None:
-            raise HTTPException(status_code=404, detail="有效领取记录不存在")
-        impact = {
-            "bound_accounts": [dict(row) for row in accounts],
-            "running_tasks": [dict(row) for row in tasks],
-        }
-        if (accounts or tasks) and not bool(payload and payload.confirm_impact):
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "proxy_market_revoke_confirmation_required",
-                    "message": "该代理仍有关联账号或运行任务，确认影响后才能强制回收",
-                    "impact": impact,
-                },
-            )
-        for task in tasks:
-            cancel_social_task(str(task["id"]), reason="管理员强制回收商城代理")
-        if accounts:
-            now = _now()
-            with db() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                conn.execute(
-                    "UPDATE social_accounts SET proxy_id = '', updated_at = ? WHERE proxy_id = ?",
-                    (now, str(allocation["social_proxy_id"])),
+                (proxy_id,),
+            ).fetchall()
+            impact = {
+                "bound_accounts": [
+                    {
+                        "id": str(row["id"] or ""),
+                        "username": str(row["username"] or ""),
+                        "platform": str(row["platform"] or ""),
+                    }
+                    for row in accounts
+                ],
+                "running_tasks": [
+                    {
+                        "id": str(row["id"] or ""),
+                        "task_type": str(row["task_type"] or ""),
+                        "status": str(row["status"] or ""),
+                        "username": str(row["username"] or ""),
+                    }
+                    for row in tasks
+                ],
+            }
+            if (accounts or tasks) and not bool(payload and payload.confirm_impact):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "proxy_market_revoke_confirmation_required",
+                        "message": "该代理仍有关联账号或运行任务，确认影响后才能强制回收",
+                        "impact": impact,
+                    },
                 )
-        result = release_market_proxy(
-            str(allocation["social_proxy_id"]),
-            owner_user_id=int(allocation["user_id"]),
-            actor_user_id=_actor_user_id(admin),
-            request=request,
-            revoked=True,
-        )
-        return {"ok": True, "impact": impact, **result}
+            cancelled_task_ids = cancel_social_tasks_in_transaction(
+                conn,
+                list(tasks),
+                reason="管理员强制回收商城代理",
+                now=now,
+            )
+            conn.execute(
+                "UPDATE social_accounts SET proxy_id = '', updated_at = ? WHERE proxy_id = ?",
+                (now, proxy_id),
+            )
+            deleted = conn.execute(
+                "DELETE FROM social_proxies WHERE id = ? AND user_id = ?",
+                (proxy_id, int(allocation["user_id"] or 0)),
+            ).rowcount
+            if deleted != 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="商城代理运行记录已发生变化，请刷新后重试",
+                )
+            conn.execute(
+                """
+                UPDATE proxy_market_allocations
+                SET status = 'revoked', released_at = ?, updated_at = ?
+                WHERE id = ? AND status = 'active'
+                """,
+                (now, now, str(allocation_id)),
+            )
+            item_id = str(allocation["item_id"] or "")
+            item = conn.execute(
+                "SELECT * FROM proxy_market_items WHERE id = ?",
+                (item_id,),
+            ).fetchone()
+            if item is not None and str(item["status"] or "") == "allocated":
+                can_return = _fresh_and_healthy(
+                    dict(item),
+                    now=now,
+                    max_age_seconds=_settings(conn)["health_max_age_seconds"],
+                )
+                conn.execute(
+                    """
+                    UPDATE proxy_market_items
+                    SET status = ?, updated_at = ?, version = version + 1
+                    WHERE id = ? AND status = 'allocated'
+                    """,
+                    ("active" if can_return else "maintenance", now, item_id),
+                )
+            _record_audit(
+                conn,
+                request,
+                actor_user_id=_actor_user_id(admin),
+                target_user_id=int(allocation["user_id"] or 0),
+                action="proxy_market.allocation.revoke",
+                resource_type="proxy_market_allocation",
+                resource_id=str(allocation_id),
+                after={
+                    "item_id": item_id,
+                    "social_proxy_id": proxy_id,
+                    "status": "revoked",
+                },
+                risk_level="medium",
+            )
+        cleanup_cancelled_social_tasks_runtime(cancelled_task_ids)
+        return {
+            "ok": True,
+            "impact": impact,
+            "released": True,
+            "allocation_id": str(allocation_id),
+            "item_id": item_id,
+        }
 
     @app.get("/api/admin/proxy-market/settings")
     def api_admin_proxy_market_settings(_admin: dict[str, Any] = Depends(require_admin)):

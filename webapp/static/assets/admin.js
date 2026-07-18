@@ -5315,6 +5315,30 @@ function proxyMarketItemById(itemId) {
   return adminState.proxyMarketItemRows.find((item) => String(item.id || "") === String(itemId || "")) || null;
 }
 
+function applyProxyMarketItemLocally(item, fallback = {}) {
+  const candidate = { ...fallback, ...(item && typeof item === "object" ? item : {}) };
+  const itemId = String(candidate.id || "").trim();
+  if (!itemId) return null;
+  const rows = [...adminState.proxyMarketItemRows];
+  const index = rows.findIndex((row) => String(row.id || "") === itemId);
+  candidate.id = itemId;
+  if (index >= 0) rows[index] = { ...rows[index], ...candidate };
+  else rows.unshift(candidate);
+  renderProxyMarketItems({ items: rows });
+  return proxyMarketItemById(itemId);
+}
+
+async function refreshProxyMarketItemsAfterWrite(messageId, successMessage) {
+  try {
+    await loadProxyMarketItems();
+    setMsg(messageId, successMessage, true);
+    return true;
+  } catch (error) {
+    setMsg(messageId, `${successMessage}，但列表刷新失败：${getErrorMessage(error)}`, true);
+    return false;
+  }
+}
+
 function formatProxyMarketPrice(item) {
   const cents = Math.max(0, Number(item?.display_price_cents || 0));
   const amount = (cents / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -5726,6 +5750,8 @@ async function saveProxyMarketItem({ publish = false } = {}) {
   const payload = readProxyMarketItemForm();
   if (!payload) return null;
   const selectedId = adminState.proxyMarketSelectedItemId;
+  const createdDraft = !selectedId;
+  const existingItem = selectedId ? proxyMarketItemById(selectedId) : null;
   const saveButton = el("btnSaveProxyMarketItem");
   const publishButton = el("btnPublishProxyMarketItem");
   if (saveButton) saveButton.disabled = true;
@@ -5747,26 +5773,42 @@ async function saveProxyMarketItem({ publish = false } = {}) {
       });
     }
     const itemId = String(result?.item?.id || selectedId || "");
-    if (publish) {
-      result = await api(`/api/admin/proxy-market/items/${encodeURIComponent(itemId)}/test-and-publish`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(proxyMarketPublishPayload(payload)),
-      });
-    }
-    await loadProxyMarketItems();
-    const updated = result?.item || proxyMarketItemById(itemId);
-    if (updated && !proxyMarketItemById(itemId)) adminState.proxyMarketItemRows.unshift(updated);
+    if (!itemId) throw new Error("代理库存已保存，但响应缺少草稿 ID");
+    applyProxyMarketItemLocally(result?.item, {
+      ...(existingItem || {}),
+      id: itemId,
+      sku: payload.sku,
+      ...proxyMarketPatchPayload(payload),
+      proxy_type: payload.proxy_type,
+      host: payload.host,
+      port: payload.port,
+      ip_type: "static_residential",
+      status: existingItem?.status || "draft",
+      health_status: existingItem?.health_status || "pending",
+    });
+    adminState.proxyMarketSelectedItemId = itemId;
     editProxyMarketItem(itemId, { focus: false });
+    if (publish) {
+      try {
+        result = await api(`/api/admin/proxy-market/items/${encodeURIComponent(itemId)}/test-and-publish`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(proxyMarketPublishPayload(payload)),
+        });
+      } catch (error) {
+        error.proxyMarketDraftSaved = createdDraft;
+        error.proxyMarketChangesSaved = true;
+        throw error;
+      }
+      applyProxyMarketItemLocally(result?.item, { id: itemId });
+      editProxyMarketItem(itemId, { focus: false });
+    }
     if (el("proxyMarketUsername")) el("proxyMarketUsername").value = "";
     if (el("proxyMarketPassword")) el("proxyMarketPassword").value = "";
-    setMsg(
-      "proxyMarketItemMsg",
-      publish
-        ? `真实检测通过，代理已发布${Number(result?.item?.latency_ms || 0) ? `，延迟 ${Number(result.item.latency_ms)} ms` : ""}`
-        : "代理库存已保存",
-      true,
-    );
+    const successMessage = publish
+      ? `真实检测通过，代理已发布${Number(result?.item?.latency_ms || 0) ? `，延迟 ${Number(result.item.latency_ms)} ms` : ""}`
+      : "代理库存已保存";
+    await refreshProxyMarketItemsAfterWrite("proxyMarketItemMsg", successMessage);
     return result;
   } finally {
     if (saveButton) saveButton.disabled = false;
@@ -5791,8 +5833,15 @@ async function publishProxyMarketRow(itemId, button) {
         expires_at: Number(item.expires_at || 0),
       }),
     });
-    await loadProxyMarketItems();
-    setMsg("proxyMarketMsg", `真实检测通过，${item.sku || item.id} 已发布，延迟 ${Number(result?.item?.latency_ms || 0)} ms`, true);
+    applyProxyMarketItemLocally(result?.item, {
+      ...item,
+      status: "active",
+      health_status: "healthy",
+    });
+    await refreshProxyMarketItemsAfterWrite(
+      "proxyMarketMsg",
+      `真实检测通过，${item.sku || item.id} 已发布，延迟 ${Number(result?.item?.latency_ms || 0)} ms`,
+    );
   } finally {
     button.disabled = false;
   }
@@ -5803,16 +5852,23 @@ async function updateProxyMarketStatus(itemId, status, control) {
   if (!item || status === String(item.status || "")) return;
   control.disabled = true;
   try {
-    await api(`/api/admin/proxy-market/items/${encodeURIComponent(itemId)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status }),
-    });
-    await loadProxyMarketItems();
-    setMsg("proxyMarketMsg", `${item.sku || item.id} 已切换为${PROXY_MARKET_STATUS_LABELS[status] || status}`, true);
-  } catch (error) {
-    control.value = String(item.status || "");
-    throw error;
+    let result;
+    try {
+      result = await api(`/api/admin/proxy-market/items/${encodeURIComponent(itemId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+    } catch (error) {
+      control.value = String(item.status || "");
+      throw error;
+    }
+    const updated = applyProxyMarketItemLocally(result?.item, { ...item, status });
+    if (updated) control.value = String(updated.status || status);
+    await refreshProxyMarketItemsAfterWrite(
+      "proxyMarketMsg",
+      `${item.sku || item.id} 已切换为${PROXY_MARKET_STATUS_LABELS[updated?.status || status] || updated?.status || status}`,
+    );
   } finally {
     control.disabled = false;
   }
@@ -5824,10 +5880,10 @@ async function archiveProxyMarketItem(itemId, button) {
   if (!confirm(`确认归档 ${item.sku || item.id} 吗？商城将停止展示，关联代理也会被禁用。`)) return;
   button.disabled = true;
   try {
-    await api(`/api/admin/proxy-market/items/${encodeURIComponent(itemId)}/archive`, { method: "POST" });
+    const result = await api(`/api/admin/proxy-market/items/${encodeURIComponent(itemId)}/archive`, { method: "POST" });
+    applyProxyMarketItemLocally(result?.item, { ...item, status: "archived", available: false });
     if (String(adminState.proxyMarketSelectedItemId || "") === String(itemId)) resetProxyMarketEditor();
-    await loadProxyMarketItems();
-    setMsg("proxyMarketMsg", `${item.sku || item.id} 已归档`, true);
+    await refreshProxyMarketItemsAfterWrite("proxyMarketMsg", `${item.sku || item.id} 已归档`);
   } finally {
     button.disabled = false;
   }
@@ -6478,7 +6534,12 @@ function bindActions() {
     try {
       await saveProxyMarketItem({ publish: true });
     } catch (error) {
-      setMsg("proxyMarketItemMsg", `检测发布失败：${getErrorMessage(error)}`, false);
+      const prefix = error?.proxyMarketDraftSaved
+        ? "草稿已保存并保留在编辑器中；检测发布失败"
+        : error?.proxyMarketChangesSaved
+          ? "库存修改已保存；检测发布失败"
+          : "检测发布失败";
+      setMsg("proxyMarketItemMsg", `${prefix}：${getErrorMessage(error)}`, false);
     }
   });
   el("proxyMarketItemBody")?.addEventListener("click", async (event) => {

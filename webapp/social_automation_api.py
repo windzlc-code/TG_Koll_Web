@@ -43,6 +43,10 @@ from .password_vault import (
     decrypt_secret as decrypt_vault_secret,
     encrypt_secret as encrypt_vault_secret,
 )
+from .proxy_market_credentials import (
+    ProxyMarketCredentialAuthorizationError,
+    resolve_market_proxy_credentials,
+)
 
 
 SOCIAL_TASK_TYPES = {
@@ -3091,12 +3095,55 @@ def test_social_proxy(payload: SocialProxyCheckPayload, *, owner_user_id: int = 
                 "SELECT * FROM social_proxies WHERE id = ? AND user_id = ?",
                 (clean_proxy_id, max(0, int(owner_user_id or 0))),
             ).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="代理不存在")
-        current = dict(row)
-    proxy_type, host, port = _validate_proxy_endpoint(payload.proxy_type, payload.host, payload.port)
-    username = str(payload.username).strip() if payload.username is not None else str(current.get("username") or "").strip()
-    password = str(payload.password) if payload.password is not None else str(current.get("password") or "")
+            if not row:
+                raise HTTPException(status_code=404, detail="代理不存在")
+            try:
+                current = resolve_market_proxy_credentials(
+                    conn,
+                    row,
+                    owner_user_id=max(0, int(owner_user_id or 0)),
+                )
+            except ProxyMarketCredentialAuthorizationError as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail="商城代理领取授权已失效",
+                ) from exc
+            except PasswordVaultError as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail="商城代理凭据暂时不可用",
+                ) from exc
+    market_proxy = bool(str(current.get("market_item_id") or ""))
+    if market_proxy:
+        proxy_type, host, port = _validate_proxy_endpoint(
+            current.get("proxy_type"),
+            current.get("host"),
+            current.get("port"),
+        )
+    else:
+        proxy_type, host, port = _validate_proxy_endpoint(
+            payload.proxy_type,
+            payload.host,
+            payload.port,
+        )
+    username = (
+        str(current.get("username") or "").strip()
+        if market_proxy
+        else (
+            str(payload.username).strip()
+            if payload.username is not None
+            else str(current.get("username") or "").strip()
+        )
+    )
+    password = (
+        str(current.get("password") or "")
+        if market_proxy
+        else (
+            str(payload.password)
+            if payload.password is not None
+            else str(current.get("password") or "")
+        )
+    )
     _validate_proxy_credentials(username, password)
     candidate = {
         "proxy_type": proxy_type,
@@ -3111,9 +3158,25 @@ def test_social_proxy(payload: SocialProxyCheckPayload, *, owner_user_id: int = 
 def check_social_proxy(proxy_id: str) -> dict[str, Any]:
     with db() as conn:
         row = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="代理不存在")
-    proxy = dict(row)
+        if not row:
+            raise HTTPException(status_code=404, detail="代理不存在")
+        stored_proxy = dict(row)
+        try:
+            proxy = resolve_market_proxy_credentials(
+                conn,
+                stored_proxy,
+                owner_user_id=int(stored_proxy.get("user_id") or 0),
+            )
+        except ProxyMarketCredentialAuthorizationError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="商城代理领取授权已失效",
+            ) from exc
+        except PasswordVaultError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="商城代理凭据暂时不可用",
+            ) from exc
     safe_result = _run_proxy_connection_check(proxy, previous_exit_ip=_last_proxy_exit_ip(proxy))
     status = "active" if safe_result.get("ok") else "failed"
     response = safe_result.get("response") if isinstance(safe_result.get("response"), dict) else {}
@@ -3136,8 +3199,9 @@ def check_social_proxy(proxy_id: str) -> dict[str, Any]:
             (
                 status, detected_country, detected_region, detected_city, detected_isp,
                 checked_at, json.dumps(safe_result, ensure_ascii=False), checked_at,
-                proxy_id, proxy["proxy_type"], proxy["host"], proxy["port"], proxy["username"], proxy["password"],
-                proxy["updated_at"], proxy["status"],
+                proxy_id, stored_proxy["proxy_type"], stored_proxy["host"], stored_proxy["port"],
+                stored_proxy["username"], stored_proxy["password"],
+                stored_proxy["updated_at"], stored_proxy["status"],
             ),
         )
         if not cursor.rowcount:
@@ -4054,6 +4118,73 @@ def cancel_social_task(task_id: str, reason: str = "") -> dict[str, Any]:
     )
 
 
+def cancel_social_tasks_in_transaction(
+    conn: sqlite3.Connection,
+    tasks: list[Any],
+    *,
+    reason: str,
+    now: int | None = None,
+) -> list[str]:
+    current = int(now or _now())
+    clean_reason = str(reason or "proxy market allocation revoked")
+    active_statuses = {"preparing", "queued", "running", "need_manual"}
+    active_tasks = [
+        row
+        for row in tasks
+        if str(row["id"] or "").strip()
+        and str(row["status"] or "") in active_statuses
+    ]
+    task_ids = [str(row["id"] or "") for row in active_tasks]
+    if not task_ids:
+        return []
+    placeholders = ",".join("?" for _ in task_ids)
+    conn.execute(
+        f"""
+        UPDATE social_automation_tasks
+        SET status = 'cancelled', finished_at = ?, error = ?, updated_at = ?
+        WHERE id IN ({placeholders})
+          AND status IN ('preparing', 'queued', 'running', 'need_manual')
+        """,
+        (current, clean_reason, current, *task_ids),
+    )
+    for task in active_tasks:
+        task_id = str(task["id"] or "")
+        if str(task["task_type"] or "") == "publish_post":
+            _ensure_daily_publish_slot(conn, task, now=current)
+            _release_daily_publish_slot(
+                conn,
+                task_id,
+                clean_reason,
+                now=current,
+            )
+        _release_task_billing_reservation(conn, task, now=current)
+        _insert_log(
+            conn,
+            task_id,
+            "warn",
+            "cancel",
+            "Task cancelled because its marketplace proxy allocation was revoked.",
+            {"reason": clean_reason},
+        )
+    return task_ids
+
+
+def cleanup_cancelled_social_tasks_runtime(task_ids: list[str]) -> None:
+    clean_task_ids = list(
+        dict.fromkeys(
+            str(task_id or "").strip()
+            for task_id in task_ids
+            if str(task_id or "").strip()
+        )
+    )
+    if not clean_task_ids:
+        return
+    _discard_ephemeral_task_secrets(*clean_task_ids)
+    for task_id in clean_task_ids:
+        _force_stop_running_task(task_id)
+    wake_social_automation_worker()
+
+
 def cancel_all_social_tasks(
     reason: str = "",
     *,
@@ -4637,6 +4768,21 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
         proxy_row = None
         if proxy_id:
             proxy_row = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
+            if proxy_row is not None:
+                try:
+                    proxy_row = resolve_market_proxy_credentials(
+                        conn,
+                        proxy_row,
+                        owner_user_id=int(account_row["user_id"] or 0),
+                    )
+                except ProxyMarketCredentialAuthorizationError as exc:
+                    raise RuntimeError(
+                        "Marketplace proxy allocation authorization is invalid."
+                    ) from exc
+                except PasswordVaultError as exc:
+                    raise RuntimeError(
+                        "Marketplace proxy credentials are unavailable."
+                    ) from exc
     account = dict(account_row)
     proxy = dict(proxy_row) if proxy_row else None
     if proxy is not None and str(proxy.get("ip_type") or "").strip().lower() != "static_residential":
@@ -5835,7 +5981,19 @@ def _account_public_rows(conn: Any, rows: list[Any]) -> list[dict[str, Any]]:
     totp_rows: dict[str, Any] = {}
     if proxy_ids:
         placeholders = ",".join("?" for _ in proxy_ids)
-        proxy_rows = conn.execute(f"SELECT * FROM social_proxies WHERE id IN ({placeholders})", tuple(proxy_ids)).fetchall()
+        proxy_rows = conn.execute(
+            f"""
+            SELECT proxy.*,
+                   CASE WHEN item.username_ciphertext != '' THEN 1 ELSE 0 END
+                     AS market_username_configured,
+                   CASE WHEN item.password_ciphertext != '' THEN 1 ELSE 0 END
+                     AS market_password_configured
+            FROM social_proxies proxy
+            LEFT JOIN proxy_market_items item ON item.id = proxy.market_item_id
+            WHERE proxy.id IN ({placeholders})
+            """,
+            tuple(proxy_ids),
+        ).fetchall()
         proxies = {str(row["id"] or ""): row for row in proxy_rows}
     if account_ids:
         placeholders = ",".join("?" for _ in account_ids)
@@ -5878,7 +6036,11 @@ def _proxy_public_rows(conn: Any, rows: list[Any]) -> list[dict[str, Any]]:
             SELECT allocation.social_proxy_id, allocation.id AS allocation_id,
                    allocation.seen_at, allocation.claimed_at,
                    item.id AS market_item_id, item.sku, item.display_name,
-                   item.provider_key, item.health_status, item.published_at
+                   item.provider_key, item.health_status, item.published_at,
+                   CASE WHEN item.username_ciphertext != '' THEN 1 ELSE 0 END
+                     AS market_username_configured,
+                   CASE WHEN item.password_ciphertext != '' THEN 1 ELSE 0 END
+                     AS market_password_configured
             FROM proxy_market_allocations allocation
             JOIN proxy_market_items item ON item.id = allocation.item_id
             WHERE allocation.social_proxy_id IN ({placeholders})
@@ -5992,8 +6154,14 @@ def _residential_proxy_public(row: Any) -> dict[str, Any]:
         "connection_mode": "proxy",
         "host": str(item.get("host") or ""),
         "port": int(item.get("port") or 0),
-        "username_configured": bool(str(item.get("username") or "")),
-        "password_configured": bool(str(item.get("password") or "")),
+        "username_configured": bool(
+            str(item.get("username") or "")
+            or int(item.get("market_username_configured") or 0)
+        ),
+        "password_configured": bool(
+            str(item.get("password") or "")
+            or int(item.get("market_password_configured") or 0)
+        ),
         "country": str(item.get("country") or ""),
         "region": str(item.get("region") or ""),
         "city": str(item.get("city") or ""),
@@ -6132,8 +6300,22 @@ def _proxy_public(
         "connection_mode": "proxy",
         "host": str(item.get("host") or ""),
         "port": int(item.get("port") or 0),
-        "username_configured": bool(str(item.get("username") or "")),
-        "password_configured": bool(str(item.get("password") or "")),
+        "username_configured": bool(
+            str(item.get("username") or "")
+            or int(
+                (market_allocation or {}).get("market_username_configured")
+                or item.get("market_username_configured")
+                or 0
+            )
+        ),
+        "password_configured": bool(
+            str(item.get("password") or "")
+            or int(
+                (market_allocation or {}).get("market_password_configured")
+                or item.get("market_password_configured")
+                or 0
+            )
+        ),
         "country": str(item.get("country") or ""),
         "region": str(item.get("region") or ""),
         "city": str(item.get("city") or ""),

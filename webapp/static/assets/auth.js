@@ -32,6 +32,20 @@ function apiErrorDetail(error) {
   return { code: "", message: String(error || "").trim() };
 }
 
+function safeAuthReturnUrl(fallback = "/console.html") {
+  const value = String(new URLSearchParams(window.location.search).get("return_url") || "").trim();
+  if (!value || !value.startsWith("/") || value.startsWith("//") || value.includes("\\") || /[\u0000-\u001f]/.test(value)) {
+    return fallback;
+  }
+  try {
+    const target = new URL(value, window.location.origin);
+    if (target.origin !== window.location.origin) return fallback;
+    return `${target.pathname}${target.search}${target.hash}`;
+  } catch {
+    return fallback;
+  }
+}
+
 function browserDeviceId() {
   const key = "vecto-device-id";
   try {
@@ -62,10 +76,11 @@ async function submitLogin(form, forceTakeover = false) {
     body: JSON.stringify(payload),
   });
   if (loginRole === "user" && result?.must_change_password) {
-    location.href = "/change-password.html";
+    const returnUrl = safeAuthReturnUrl();
+    location.href = `/change-password.html?return_url=${encodeURIComponent(returnUrl)}`;
     return;
   }
-  location.href = loginRole === "admin" ? "/admin" : "/console.html";
+  location.href = loginRole === "admin" ? "/admin" : safeAuthReturnUrl();
 }
 
 function setPasswordVisibility(button, revealed) {
@@ -103,7 +118,7 @@ async function submitForcedPasswordChange(form) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ old_password: currentPassword, new_password: newPassword }),
   });
-  location.href = "/console.html";
+  location.href = safeAuthReturnUrl();
 }
 
 async function submitRegister(form) {
