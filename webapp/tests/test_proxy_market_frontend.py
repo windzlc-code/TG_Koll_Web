@@ -27,6 +27,7 @@ class ProxyMarketFrontendTests(unittest.TestCase):
         self.assertIn("198.51.100.27:8022:user:password", html)
         self.assertIn("direct.provider.example:8001:user:password", html)
         self.assertIn("国家/地区支持全球 ISO 代码及常用中外文名称", html)
+        self.assertIn("粘贴内容会保留，点击“识别并填充”后才会解析", html)
         self.assertIn('rows="6"', html)
         self.assertIn("height: 136px", html)
         self.assertIn("min-height: 136px", html)
@@ -37,6 +38,15 @@ class ProxyMarketFrontendTests(unittest.TestCase):
         source = ADMIN_JS.read_text(encoding="utf-8")
         self.assertIn('String(item.pending_check_status || "") === "healthy"', source)
         self.assertIn('actionRow.className = "proxy-market-table-actions"', source)
+        self.assertNotIn("proxyMarketSmartParseTimer", source)
+        self.assertNotIn('el("proxyMarketSmartInput")?.addEventListener("paste"', source)
+        self.assertNotIn('el("proxyMarketSmartInput")?.addEventListener("blur"', source)
+        self.assertNotIn('el("proxyMarketSmartInput")?.addEventListener("keydown"', source)
+        paste_handler = source[
+            source.index('el("btnPasteProxyMarketSmartInput")?.addEventListener')
+            :source.index('el("btnParseProxyMarketSmartInput")?.addEventListener')
+        ]
+        self.assertNotIn("applyProxyMarketSmartInput", paste_handler)
 
     def _run_node(self, body: str):
         node = shutil.which("node")
@@ -427,6 +437,13 @@ class ProxyMarketFrontendTests(unittest.TestCase):
             assert.equal(await inspect(), null);
             assert.equal(apiCalls, 0);
             assert.equal(controls.get("proxyMarketHost").value, "old.example");
+            assert.equal(
+              controls.get("proxyMarketSmartInput").value,
+              "host: invalid.example\\nport: 99999",
+            );
+            assert.ok(
+              controls.get("proxyMarketSmartResult").textContent.includes("识别并填充"),
+            );
 
             controls.get("proxyMarketSmartInput").value = "";
             let resolveRequest;

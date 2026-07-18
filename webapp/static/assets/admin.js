@@ -5390,8 +5390,6 @@ const PROXY_MARKET_SMART_FIELD_ALIASES = {
   description: "description", note: "description", 说明: "description", 公开说明: "description",
 };
 
-let proxyMarketSmartParseTimer = 0;
-
 function normalizeProxyMarketSmartKey(value) {
   return String(value || "").trim().toLowerCase().replace(/[\s_.\-/]+/g, "");
 }
@@ -5987,7 +5985,10 @@ function applyProxyMarketSmartInput({ quiet = false } = {}) {
 }
 
 async function inspectProxyMarketConnection() {
-  if (el("proxyMarketSmartInput")?.value?.trim() && !applyProxyMarketSmartInput()) return null;
+  if (el("proxyMarketSmartInput")?.value?.trim()) {
+    setProxyMarketSmartResult("请先点击“识别并填充”，确认字段后再执行检测。", "error");
+    return null;
+  }
   const host = el("proxyMarketHost")?.value?.trim() || "";
   const port = Number(el("proxyMarketPort")?.value || 0);
   if (!host || !Number.isInteger(port) || port < 1 || port > 65535) {
@@ -6368,7 +6369,6 @@ function resetProxyMarketEditor({ focus = false } = {}) {
   adminState.proxyMarketPendingCheckId = "";
   el("proxyMarketItemForm")?.reset();
   if (el("btnInspectProxyMarketConnection")) el("btnInspectProxyMarketConnection").disabled = false;
-  if (proxyMarketSmartParseTimer) window.clearTimeout(proxyMarketSmartParseTimer);
   if (el("proxyMarketSku")) el("proxyMarketSku").disabled = false;
   if (el("proxyMarketCurrency")) el("proxyMarketCurrency").value = "TWD";
   if (el("proxyMarketPriceCents")) el("proxyMarketPriceCents").value = "0";
@@ -6378,7 +6378,7 @@ function resetProxyMarketEditor({ focus = false } = {}) {
   setText("proxyMarketEditorHint", "先保存草稿，再依次执行真实检测和发布。");
   setText("proxyMarketEditorState", "当前为新建模式");
   setText("proxyMarketCredentialNote", "后台不会回显已保存凭据。编辑时空密码不会覆盖原密码。");
-  setProxyMarketSmartResult("粘贴后会即时识别；真实网络检测仅在点击检测按钮时执行。");
+  setProxyMarketSmartResult("粘贴内容会保留，请点击“识别并填充”开始解析。");
   setMsg("proxyMarketItemMsg", "");
   setProxyMarketEditorBusy(false);
   if (focus) {
@@ -7341,7 +7341,8 @@ function bindActions() {
         return;
       }
       if (el("proxyMarketSmartInput")) el("proxyMarketSmartInput").value = value;
-      applyProxyMarketSmartInput();
+      setProxyMarketSmartResult("内容已粘贴，请点击“识别并填充”开始解析。");
+      el("proxyMarketSmartInput")?.focus();
     } catch {
       el("proxyMarketSmartInput")?.focus();
       setProxyMarketSmartResult("浏览器未允许读取剪贴板，请手动粘贴后识别。", "error");
@@ -7352,19 +7353,6 @@ function bindActions() {
     try {
       await inspectProxyMarketConnection();
     } catch {}
-  });
-  el("proxyMarketSmartInput")?.addEventListener("paste", () => {
-    if (proxyMarketSmartParseTimer) window.clearTimeout(proxyMarketSmartParseTimer);
-    proxyMarketSmartParseTimer = window.setTimeout(() => applyProxyMarketSmartInput(), 0);
-  });
-  el("proxyMarketSmartInput")?.addEventListener("blur", () => {
-    if (el("proxyMarketSmartInput")?.value?.trim()) applyProxyMarketSmartInput({ quiet: true });
-  });
-  el("proxyMarketSmartInput")?.addEventListener("keydown", (event) => {
-    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-      event.preventDefault();
-      applyProxyMarketSmartInput();
-    }
   });
   el("proxyMarketItemForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
