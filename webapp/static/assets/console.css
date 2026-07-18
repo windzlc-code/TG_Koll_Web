@@ -14149,6 +14149,36 @@ body.console-page {
     padding-top: 4px;
   }
 
+  .persona-workspace-mobile-drawer .persona-list-actions:not(.persona-list-actions--bulk) {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 5px;
+  }
+
+  .persona-workspace-mobile-drawer .persona-list-actions button,
+  .persona-workspace-mobile-drawer .persona-list-toolbar button {
+    min-width: 0;
+    padding: 5px 4px;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .persona-workspace-mobile-drawer .persona-list-stack {
+    gap: 4px;
+  }
+
+  .persona-workspace-mobile-drawer .persona-list-card .persona-list-item {
+    padding: 4px 5px;
+  }
+
+  .persona-workspace-mobile-drawer .persona-list-item strong {
+    font-size: 13px;
+  }
+
+  .persona-workspace-mobile-drawer .persona-list-item span,
+  .persona-workspace-mobile-drawer .persona-list-item small {
+    font-size: 10px;
+  }
+
   .persona-mobile-drawer-backdrop {
     position: fixed;
     z-index: 5190;
@@ -14171,5 +14201,95 @@ body.console-page {
 
   .automation-section-head {
     align-items: center;
+  }
+}
+
+/* Keep the console usable on narrow screens without letting controls and cards dominate the viewport. */
+@media (max-width: 760px) {
+  .console-page {
+    --mobile-touch-target: 36px;
+    --mobile-control-gap: 6px;
+  }
+
+  .persona-mobile-drawer {
+    width: min(84vw, 304px);
+    padding: 8px;
+  }
+
+  .persona-mobile-drawer .persona-list-toolbar,
+  .persona-inline-panel,
+  .persona-step-shell,
+  .persona-workbench-shell {
+    gap: 6px;
+  }
+
+  .persona-mobile-drawer .persona-list-toolbar {
+    padding: 6px;
+  }
+
+  .persona-mobile-drawer .persona-list-head strong {
+    font-size: 14px;
+  }
+
+  .persona-console-layout .persona-workbench-shell,
+  .persona-console-layout .persona-detail,
+  .persona-console-layout .persona-detail > * {
+    min-width: 0;
+  }
+
+  .persona-summary-meta {
+    gap: 4px 7px;
+  }
+
+  .persona-summary-meta strong {
+    font-size: 15px;
+  }
+
+  .persona-quick-actions {
+    gap: 5px;
+  }
+
+  .persona-group-tabs,
+  .persona-step-tabs {
+    gap: 4px;
+  }
+
+  .persona-group-tabs button,
+  .persona-step-tabs button,
+  .persona-quick-actions button,
+  .persona-mobile-list-toggle {
+    min-height: 34px;
+    padding: 5px 8px;
+    font-size: 12px;
+  }
+
+  .persona-group-tabs button {
+    min-width: 0;
+  }
+
+  .persona-console-layout .persona-inline-panel,
+  .persona-console-layout .persona-step-shell,
+  .persona-console-layout .persona-detail {
+    gap: 6px;
+  }
+}
+
+@media (max-width: 480px) {
+  .console-page {
+    --mobile-touch-target: 34px;
+    --mobile-control-gap: 5px;
+  }
+
+  .persona-mobile-drawer {
+    width: min(88vw, 292px);
+  }
+
+  .persona-mobile-drawer .persona-list-head span {
+    font-size: 11px;
+  }
+
+  .persona-mobile-drawer .persona-list-actions button,
+  .persona-mobile-drawer .persona-list-toolbar button {
+    font-size: 10px;
   }
 }

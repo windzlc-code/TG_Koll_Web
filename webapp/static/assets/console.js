@@ -15205,14 +15205,19 @@ function renderPersonaModule() {
       <section class="persona-workbench-shell">
         <div class="persona-detail" id="personaDetail"></div>
       </section>
-      <aside class="persona-list-shell">
+      <aside id="personaWorkspaceSidebar" class="persona-list-shell persona-mobile-drawer persona-workspace-mobile-drawer" data-persona-mobile-sidebar aria-hidden="false">
         <div class="persona-inline-panel persona-list-toolbar">
           <div class="persona-list-head">
             <div class="persona-head-copy">
               <strong>人设列表</strong>
               <span>${state.personaBulkMode ? (groupBulkMode ? "选择要删除的分组" : "选择要删除的人设") : "集中查看、选择和管理"}</span>
             </div>
-            <span aria-live="polite">${esc(state.personaBulkMode ? `已选 ${bulkSelectedIds.size} / ${bulkTotal}` : `${state.personas.length} 个`)}</span>
+            <div class="persona-mobile-drawer-head-actions">
+              <span aria-live="polite">${esc(state.personaBulkMode ? `已选 ${bulkSelectedIds.size} / ${bulkTotal}` : `${state.personas.length} 个`)}</span>
+              <button type="button" class="persona-mobile-drawer-close" data-persona-mobile-list-close aria-label="关闭人设列表" title="关闭人设列表">
+                <svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 6 12 12"></path><path d="m18 6-12 12"></path></svg>
+              </button>
+            </div>
           </div>
           <div class="persona-list-actions ${state.personaBulkMode ? "persona-list-actions--bulk" : ""}" ${state.personaBulkDeleting ? `aria-busy="true"` : ""}>
             ${state.personaBulkMode ? `
@@ -15245,7 +15250,9 @@ function renderPersonaModule() {
         ` : `<div class="empty-state">${groupBulkMode ? "当前没有可管理的分组。" : "当前还没有人设，先点击“新建人设”。"}</div>`}
       </aside>
     </div>
+    <div class="persona-mobile-drawer-backdrop" data-persona-mobile-list-backdrop hidden></div>
   `;
+  setPersonaMobileSidebarOpen(false, "personaWorkspaceSidebar");
   if (state.personaCreateMode || !current) renderPersonaDetail();
   else renderPersonaDetail();
   renderPersonaCardEditorPortal();
@@ -15689,6 +15696,12 @@ function renderPersonaDetail() {
           <span>${esc(`收藏 ${favoriteCount} 条`)}</span>
         </div>
         <div class="persona-quick-actions">
+          <button type="button" class="persona-mobile-list-toggle" data-persona-mobile-list-toggle="personaWorkspaceSidebar" aria-controls="personaWorkspaceSidebar" aria-expanded="false">
+            <svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M4 5h16"></path><path d="M4 12h16"></path><path d="M4 19h16"></path>
+            </svg>
+            <span>人设列表</span>
+          </button>
           ${canDelete ? `<button type="button" class="danger" data-persona-delete>删除当前人设</button>` : ""}
         </div>
       </div>
@@ -21186,6 +21199,7 @@ function bindEvents() {
       if (nextPersonaId !== previousPersonaId) resetPersonaWorkspaceStateOnSwitch(nextPersonaId);
       else setSelectedPersonaPostId("");
       state.preferredAccountId = accountForPersona(selectedPersona())?.id || "";
+      setPersonaMobileSidebarOpen(false, "personaWorkspaceSidebar");
       renderPersonaModule();
       renderConfirmSummary();
       Promise.all([
