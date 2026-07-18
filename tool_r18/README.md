@@ -1,13 +1,11 @@
 # Tool R18
 
 Tool R18 is the local runtime for persona content generation, media generation,
-memory maintenance, queue management, and Telegram bot coordination.
+memory maintenance, and Web console queue management.
 
 ## Available scripts
 
 ```sh
-npm run dev
-npm run start
 npm run skill:generate-persona
 npm run skill:generate-persona-images
 npm run skill:memory

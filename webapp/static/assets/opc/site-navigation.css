@@ -570,6 +570,31 @@ html {
   font-size: 12px;
 }
 
+.site-account-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.site-account-tags[hidden] {
+  display: none;
+}
+
+.site-account-tags span {
+  min-width: 0;
+  max-width: 100%;
+  padding: 4px 8px;
+  overflow: hidden;
+  color: #a8f0df;
+  background: rgba(119, 216, 195, 0.12);
+  border: 1px solid rgba(119, 216, 195, 0.25);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .site-account-billing {
   display: grid;
   gap: 7px;

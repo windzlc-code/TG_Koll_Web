@@ -1,9 +1,10 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="admin-console-session" content="__ADMIN_CONSOLE_SESSION__" />
+  <meta name="admin-workspace-user-id" content="__ADMIN_WORKSPACE_USER_ID__" />
   <title>个人资料 - Vecto</title>
   <link rel="stylesheet" href="/assets/opc/site-navigation.css?v=2026071801" />
   <link rel="stylesheet" href="/assets/profile.css?v=__PROFILE_CSS_VERSION__" />
@@ -38,7 +39,7 @@
             </span>
           </button>
           <input id="profileAvatarFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
-          <p>点击头像右下角的加号上传，最大 140KB。</p>
+          <p>点击头像右下角的加号上传，最大 512KB。</p>
           <button id="profileAvatarRemove" class="profile-avatar-remove" type="button" hidden>移除头像</button>
         </div>
 
@@ -48,6 +49,38 @@
             <input id="profileFullName" name="full_name" type="text" maxlength="80" autocomplete="name" placeholder="请输入显示名称" />
             <small>显示在右上角账号信息中，不会修改登录用户名。</small>
           </label>
+
+
+          <label class="profile-field" for="profileSignature">
+            <span>个性签名</span>
+            <textarea id="profileSignature" name="profile_signature" maxlength="280" rows="3" placeholder="填写一句对外展示的个人签名"></textarea>
+            <small>最多 280 个字符，会显示在账号资料中。</small>
+          </label>
+
+          <div class="profile-contact-grid">
+            <label class="profile-field profile-field--wide" for="profileTagInput">
+              <span>个人标签</span>
+              <input id="profileTags" name="profile_tags" type="hidden" />
+              <div class="profile-tag-editor">
+                <div id="profileTagList" class="profile-tag-list" aria-label="已添加标签"></div>
+                <div class="profile-tag-entry">
+                  <input id="profileTagInput" type="text" maxlength="18" placeholder="输入标签" />
+                  <button id="profileTagAdd" type="button" aria-label="添加标签">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+                  </button>
+                </div>
+              </div>
+              <small>点击加号添加，最多展示 8 个标签。</small>
+            </label>
+            <label class="profile-field" for="profilePhone">
+              <span>手机号</span>
+              <input id="profilePhone" name="phone" type="tel" maxlength="32" autocomplete="tel" placeholder="填写联系电话" />
+            </label>
+            <label class="profile-field" for="profileEmail">
+              <span>邮箱</span>
+              <input id="profileEmail" name="email" type="email" maxlength="160" autocomplete="email" placeholder="name@example.com" />
+            </label>
+          </div>
 
           <div class="profile-account-grid" aria-label="只读账号信息">
             <div>

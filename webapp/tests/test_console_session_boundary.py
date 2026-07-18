@@ -112,7 +112,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("body.profile-page", self.profile_styles)
         self.assertIn("@media (max-width: 720px)", self.profile_styles)
         self.assertIn('$("profileAvatarFile")?.click()', self.profile_source)
-        self.assertIn("file.size > 140 * 1024", self.profile_source)
+        self.assertIn("const AVATAR_MAX_BYTES = 512 * 1024", self.profile_source)
+        self.assertIn("file.size > AVATAR_MAX_BYTES", self.profile_source)
         self.assertIn('api("/api/me/profile"', self.profile_source)
         self.assertIn('error?.code === "mfa_setup_required"', self.profile_source)
         self.assertIn('"/admin#account"', self.profile_source)
@@ -426,8 +427,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("updateAccountTotpBadgeViews(", account_status)
         self.assertIn("accountById.get(String(node.dataset.accountTotpFor", account_status)
         self.assertIn("updateAccountTotpBadgeNode(node, account)", account_status)
-        self.assertIn('document.querySelectorAll("[data-social-check-status]")', account_status)
-        self.assertIn('button.setAttribute("aria-busy"', account_status)
+        self.assertIn('document.querySelectorAll("[data-account-status-for]")', account_status)
+        self.assertNotIn("data-social-check-status", account_status)
         self.assertIn('loadAutomationTasksShared().catch', task_refresh)
         self.assertNotIn("loadAutomationTasksShared({ force: true })", task_refresh)
 
@@ -439,9 +440,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("data-account-status-for", card)
         self.assertNotIn("renderAccountHealthChip", card)
         self.assertNotIn("data-account-health-for", card)
-        self.assertIn("data-social-check-status", card)
-        self.assertIn('title="检测登录与平台状态"', card)
-        self.assertIn("data-account-status-check-label", card)
+        self.assertNotIn("data-social-check-status", card)
+        self.assertIn("accountStatusTitle(account)", card)
         self.assertIn("updateAccountStatusViews()", task_loader)
 
     def test_effective_account_status_has_deterministic_precedence(self):

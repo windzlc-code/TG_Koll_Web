@@ -1,5 +1,5 @@
 import { analyzeSentiment, assessRiskLevel, insertSentimentItem } from "../sentiment-store.js";
-import { scraperResult } from "./http.js";
+import { isTelegramPublicNetworkUrl, scraperResult } from "./http.js";
 
 const DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 const MAX_TEXT = 1200;
@@ -624,6 +624,15 @@ export async function scrapeBrowserFallback(keywords, {
       viewport: { width: 1365, height: 900 },
       locale: "zh-CN",
     });
+    if (typeof context.route === "function") {
+      await context.route("**/*", async (route) => {
+        if (isTelegramPublicNetworkUrl(route.request().url())) {
+          await route.abort("blockedbyclient");
+          return;
+        }
+        await route.continue();
+      });
+    }
     const cookies = profiles.flatMap(profile => profileCookieStates.get(profile)?.activeCookies || []);
     if (cookies.length) await context.addCookies(cookies);
     const page = await context.newPage();
@@ -648,6 +657,7 @@ export async function scrapeBrowserFallback(keywords, {
         const urls = resolveSearchUrls(profile, keyword);
         for (const url of urls) {
           if (remaining <= 0) break;
+          if (isTelegramPublicNetworkUrl(url)) continue;
           try {
             const pageTimeoutMs = Math.max(2500, Math.min(timeoutMs, Math.max(2500, deadlineAt - Date.now() - 1000)));
             await page.goto(url, { waitUntil: "domcontentloaded", timeout: pageTimeoutMs });
@@ -659,6 +669,7 @@ export async function scrapeBrowserFallback(keywords, {
               seenUrls.add(item.url);
               let detail = null;
               if (detailPage && detailRemaining > 0 && (deadlineAt - Date.now()) > 4000) {
+                if (isTelegramPublicNetworkUrl(item.url)) continue;
                 try {
                   const detailTimeoutMs = Math.max(2500, Math.min(timeoutMs, Math.max(2500, deadlineAt - Date.now() - 1000)));
                   await detailPage.goto(item.url, { waitUntil: "domcontentloaded", timeout: detailTimeoutMs });

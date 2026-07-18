@@ -4,6 +4,21 @@ function cleanProxyUrl(proxyUrl) {
   return String(proxyUrl || "").trim();
 }
 
+export function isTelegramPublicNetworkUrl(rawUrl) {
+  try {
+    const hostname = new URL(String(rawUrl || "").trim()).hostname
+      .replace(/^www\./i, "")
+      .toLowerCase();
+    return hostname === "t.me"
+      || hostname === "telegram.me"
+      || hostname.endsWith(".telegram.me")
+      || hostname === "telegram.org"
+      || hostname.endsWith(".telegram.org");
+  } catch {
+    return false;
+  }
+}
+
 function formatRawError(err) {
   const seen = new Set();
   const parts = [];
@@ -19,6 +34,9 @@ function formatRawError(err) {
 }
 
 export function fetchPublicSource(url, init = {}, proxyUrl = "") {
+  if (isTelegramPublicNetworkUrl(url)) {
+    throw new Error("Telegram public network collection is disabled");
+  }
   const effectiveProxy = cleanProxyUrl(proxyUrl);
   if (!effectiveProxy) return globalThis.fetch(url, init);
   return fetchWithProxy(url, init, effectiveProxy);

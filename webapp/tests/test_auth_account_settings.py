@@ -160,14 +160,22 @@ class AccountSettingsApiTests(unittest.TestCase):
 
         saved = customer.patch(
             "/api/me/profile",
-            json={"full_name": "Updated Profile", "avatar_url": ""},
+            json={
+                "full_name": "Updated Profile",
+                "avatar_url": "",
+                "profile_signature": "Profile signature",
+                "profile_tags": "AI，营销, 品牌",
+            },
         )
         self.assertEqual(saved.status_code, 200, saved.text)
         self.assertEqual(saved.json()["profile"]["full_name"], "Updated Profile")
+        self.assertEqual(saved.json()["profile"]["profile_signature"], "Profile signature")
+        self.assertEqual(saved.json()["profile"]["profile_tags"], "AI, 营销, 品牌")
 
         refreshed = customer.get("/api/me")
         self.assertEqual(refreshed.status_code, 200, refreshed.text)
         self.assertEqual(refreshed.json()["full_name"], "Updated Profile")
+        self.assertEqual(refreshed.json()["profile_tags"], "AI, 营销, 品牌")
 
     def test_admin_can_change_username_with_current_password(self):
         login_resp = self.client.post(

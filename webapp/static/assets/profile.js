@@ -1,6 +1,9 @@
 (() => {
   const isAdminSession = document.querySelector('meta[name="admin-console-session"]')?.content === "1";
-  const state = { account: null, avatarUrl: "", saving: false };
+  const ADMIN_WORKSPACE_STORAGE_KEY = "vecto-admin-workspace-user-id";
+  const ADMIN_CONTEXT_STORAGE_KEY = "vecto-admin-console-context";
+  const AVATAR_MAX_BYTES = 512 * 1024;
+  const state = { account: null, avatarUrl: "", tags: [], saving: false };
   const $ = (id) => document.getElementById(id);
 
   function requestHeaders(extra = {}) {
@@ -58,10 +61,69 @@
     $("profileAvatarRemove")?.toggleAttribute("hidden", !state.avatarUrl);
   }
 
+  function normalizeTags(value = "") {
+    const items = Array.isArray(value) ? value : String(value || "").split(/[,，\n]+/);
+    const tags = [];
+    const seen = new Set();
+    for (const item of items) {
+      const tag = String(item || "").replace(/\s+/g, " ").trim().slice(0, 18);
+      if (!tag) continue;
+      const key = tag.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      tags.push(tag);
+      if (tags.length >= 8) break;
+    }
+    return tags;
+  }
+
+  function renderTags() {
+    const list = $("profileTagList");
+    const hidden = $("profileTags");
+    if (hidden) hidden.value = state.tags.join(", ");
+    if (!list) return;
+    list.replaceChildren(...state.tags.map((tag, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "profile-tag-chip";
+      button.dataset.profileTagRemove = String(index);
+      button.title = `移除标签 ${tag}`;
+      const label = document.createElement("span");
+      label.textContent = tag;
+      const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      icon.setAttribute("viewBox", "0 0 24 24");
+      icon.setAttribute("aria-hidden", "true");
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", "M6 6l12 12M18 6 6 18");
+      icon.appendChild(path);
+      button.append(label, icon);
+      return button;
+    }));
+  }
+
+  function addTagFromInput() {
+    const input = $("profileTagInput");
+    const tag = String(input?.value || "").trim();
+    if (!tag) return;
+    const next = normalizeTags([...state.tags, tag]);
+    if (next.length === state.tags.length && next.some((item) => item.toLowerCase() === tag.toLowerCase())) {
+      setStatus("标签已存在。", "error");
+      return;
+    }
+    state.tags = next;
+    if (input) input.value = "";
+    renderTags();
+    setStatus("");
+  }
+
   function renderAccount(account) {
     state.account = account;
     state.avatarUrl = String(account?.avatar_url || "").trim();
+    state.tags = normalizeTags(account?.profile_tags || "");
     $("profileFullName").value = String(account?.full_name || "").trim();
+    if ($("profileSignature")) $("profileSignature").value = String(account?.profile_signature || "").trim();
+    if ($("profilePhone")) $("profilePhone").value = String(account?.phone || "").trim();
+    if ($("profileEmail")) $("profileEmail").value = String(account?.email || "").trim();
     $("profileFullName").placeholder = String(account?.username || "账户");
     $("profileUsername").textContent = String(account?.username || "-");
     $("profileAccountId").textContent = account?.id ? `#${account.id}` : "-";
@@ -69,6 +131,7 @@
     $("profileBackLink").href = isAdminSession ? "/admin-console.html" : "/console.html";
     window.VectoSiteNavigation?.setAccount(account);
     renderAvatar();
+    renderTags();
   }
 
   function redirectToLogin() {
@@ -107,8 +170,8 @@
       setStatus("请选择图片文件。", "error");
       return;
     }
-    if (file.size > 140 * 1024) {
-      setStatus("头像图片不能超过 140KB。", "error");
+    if (file.size > AVATAR_MAX_BYTES) {
+      setStatus("头像图片不能超过 512KB。", "error");
       return;
     }
     const reader = new FileReader();
@@ -125,6 +188,10 @@
     event.preventDefault();
     if (state.saving) return;
     const fullName = String($("profileFullName")?.value || "").trim();
+    const profileSignature = String($("profileSignature")?.value || "").trim();
+    const profileTags = state.tags.join(", ");
+    const phone = String($("profilePhone")?.value || "").trim();
+    const email = String($("profileEmail")?.value || "").trim();
     if (fullName && (fullName.length < 2 || fullName.length > 80)) {
       setStatus("显示名称需要 2 至 80 个字符。", "error");
       return;
@@ -137,7 +204,14 @@
       const result = await api("/api/me/profile", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ full_name: fullName, avatar_url: state.avatarUrl }),
+        body: JSON.stringify({
+          full_name: fullName,
+          avatar_url: state.avatarUrl,
+          profile_signature: profileSignature,
+          profile_tags: profileTags,
+          phone,
+          email,
+        }),
       });
       renderAccount({ ...(state.account || {}), ...(result.profile || result || {}) });
       setStatus("个人资料已保存。", "success");
@@ -171,7 +245,28 @@
     renderAvatar();
     setStatus("头像将在保存后移除。");
   });
+  $("profileTagAdd")?.addEventListener("click", addTagFromInput);
+  $("profileTagInput")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      addTagFromInput();
+    }
+  });
+  $("profileTagList")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-profile-tag-remove]");
+    if (!button) return;
+    const index = Number(button.dataset.profileTagRemove || -1);
+    if (!Number.isInteger(index) || index < 0) return;
+    state.tags.splice(index, 1);
+    renderTags();
+  });
   $("profileForm")?.addEventListener("submit", saveProfile);
+  if (isAdminSession) {
+    try {
+      sessionStorage.removeItem(ADMIN_WORKSPACE_STORAGE_KEY);
+      sessionStorage.setItem(ADMIN_CONTEXT_STORAGE_KEY, "1");
+    } catch (_) {}
+  }
   window.addEventListener("vecto:logout-request", () => void logout());
   window.addEventListener("vecto:navigation-ready", () => {
     if (state.account) window.VectoSiteNavigation?.setAccount(state.account);

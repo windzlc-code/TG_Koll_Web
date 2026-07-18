@@ -19123,7 +19123,10 @@ function liveBrowserLoginMode(session) {
 
 function renderLiveBrowserModeToggle(session) {
   const sessionId = liveBrowserSessionId(session);
-  if (!sessionId) return "";
+  if (
+    !sessionId
+    || String(session?.task_type || "").trim().toLowerCase() !== "open_login"
+  ) return "";
   const mode = liveBrowserLoginMode(session);
   const active = ["running", "need_manual"].includes(liveBrowserTaskStatus(session));
   const switching = mode === "switching";
