@@ -547,7 +547,7 @@ class BillingApiClosedLoopTests(unittest.TestCase):
         console_script = (static_dir / "assets" / "console.js").read_text(encoding="utf-8")
 
         self.assertIn("線上方案申請", pricing)
-        self.assertIn("管理員批准後才會生效", pricing)
+        self.assertNotIn('id="pricingAccountBar"', pricing)
         self.assertIn("提交申請", pricing)
         self.assertNotIn("線下付款申請", pricing)
         for field_name in ("payer_name", "payment_reference", "paid_at", "proof_path"):

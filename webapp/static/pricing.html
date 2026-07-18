@@ -78,21 +78,28 @@
         <div><span>算力單價</span><strong id="pricingFactPoint">1 點 = NT$10</strong></div>
       </section>
 
-      <section class="pricing-account-strip" id="pricingAccountBar" aria-live="polite">
-        <div>
-          <span>申請狀態</span>
-          <strong>登入後即可在線提交方案申請，管理員批准後才會生效</strong>
-        </div>
-        <button class="button button-primary" type="button" data-open-login>帳號登入</button>
-      </section>
-
       <nav class="pricing-section-nav" aria-label="訂閱頁章節導覽">
-        <a href="#plans"><span>01</span>訂閱方案</a>
-        <a href="#comparison"><span>02</span>版本權益</a>
-        <a href="#usage"><span>03</span>算力計價</a>
-        <a href="#packages"><span>04</span>儲值方案</a>
+        <a href="#packages"><span>01</span>儲值方案</a>
+        <a href="#plans"><span>02</span>訂閱方案</a>
+        <a href="#comparison"><span>03</span>版本權益</a>
+        <a href="#usage"><span>04</span>算力計價</a>
         <a href="#rules"><span>05</span>使用規則</a>
       </nav>
+
+      <section class="pricing-packages-band" id="packages" aria-labelledby="packages-title">
+        <div class="pricing-public-section">
+          <div class="pricing-public-heading">
+            <div>
+              <p class="eyebrow">算力儲值</p>
+              <h2 id="packages-title">獨立計價，永久累計</h2>
+            </div>
+            <p>多套 Vecto Vanguard OPC 共用同一算力池，企業方案另含永久有效的圖片額度。</p>
+          </div>
+          <div id="pricingPackages" class="pricing-package-grid" aria-live="polite">
+            <div class="pricing-public-loading">正在讀取儲值方案</div>
+          </div>
+        </div>
+      </section>
 
       <section class="pricing-public-section" id="plans" aria-labelledby="plans-title">
         <div class="pricing-public-heading">
@@ -218,21 +225,6 @@
         </div>
         <div id="pricingActions" class="pricing-action-table" aria-live="polite">
           <div class="pricing-public-loading">正在讀取算力標準</div>
-        </div>
-      </section>
-
-      <section class="pricing-packages-band" id="packages" aria-labelledby="packages-title">
-        <div class="pricing-public-section">
-          <div class="pricing-public-heading">
-            <div>
-              <p class="eyebrow">算力儲值</p>
-              <h2 id="packages-title">獨立計價，永久累計</h2>
-            </div>
-            <p>多套 Vecto Vanguard OPC 共用同一算力池，企業方案另含永久有效的圖片額度。</p>
-          </div>
-          <div id="pricingPackages" class="pricing-package-grid" aria-live="polite">
-            <div class="pricing-public-loading">正在讀取儲值方案</div>
-          </div>
         </div>
       </section>
 

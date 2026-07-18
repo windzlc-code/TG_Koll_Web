@@ -203,6 +203,15 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn("function subscriptionControl(page = \"\")", self.site_nav_script)
         self.assertIn(".site-subscription-link[aria-current=\"page\"]", self.site_nav_styles)
 
+    def test_subscription_prioritizes_packages_and_removes_account_strip(self):
+        pricing = (self.static_dir / "pricing.html").read_text(encoding="utf-8")
+        self.assertNotIn("pricing-account-strip", pricing)
+        self.assertNotIn('id="pricingAccountBar"', pricing)
+        self.assertLess(pricing.index('class="pricing-section-nav"'), pricing.index('id="packages"'))
+        self.assertIn(".pricing-packages-band .pricing-public-section", self.pricing_styles)
+        self.assertIn(".pricing-comparison-table td strong", self.pricing_styles)
+        self.assertIn(".pricing-action-row", self.pricing_styles)
+
     def test_home_navigation_opens_console_or_existing_login_dialog(self):
         page = (self.static_dir / "index.html").read_text(encoding="utf-8")
         pricing = (self.static_dir / "pricing.html").read_text(encoding="utf-8")
