@@ -836,6 +836,22 @@ html {
     flex: 0 0 auto;
   }
 
+  .site-header .site-menu-toggle {
+    grid-template-columns: 18px;
+    width: 44px;
+    min-width: 44px;
+    padding-inline: 0;
+  }
+
+  .site-header .site-menu-toggle span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
   .site-header .site-guest-action,
   .site-header .header-action {
     display: none;

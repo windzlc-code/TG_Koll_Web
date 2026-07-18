@@ -183,6 +183,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('bottom: auto;', self.site_nav_styles)
         self.assertIn('.site-header .site-mobile-menu,', self.site_nav_styles)
         self.assertIn('.site-header .site-account-menu {', self.site_nav_styles)
+        self.assertIn('.site-header .site-menu-toggle span {', self.site_nav_styles)
+        self.assertIn('grid-template-columns: 18px;', self.site_nav_styles)
         self.assertIn('width: fit-content;', self.site_nav_styles)
         self.assertIn('href="/" aria-label="Vecto 首页" data-site-home-label', self.markup)
 
