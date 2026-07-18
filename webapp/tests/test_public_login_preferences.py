@@ -171,6 +171,13 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn('[data-close-login]', self.script)
 
     def test_pricing_mobile_hero_clamps_intrinsic_grid_width(self):
+        self.assertIn(
+            "@media (max-width: 720px) {\n"
+            "  .pricing-page-hero {\n"
+            "    min-height: auto;\n"
+            "    display: block;",
+            self.pricing_styles,
+        )
         self.assertIn("grid-template-columns: minmax(0, 1fr);", self.pricing_styles)
         self.assertIn(".pricing-page-hero-copy {\n    min-width: 0;", self.pricing_styles)
         self.assertIn("max-width: 100%;", self.pricing_styles)

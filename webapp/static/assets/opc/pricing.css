@@ -814,8 +814,15 @@
 }
 
 @media (max-width: 720px) {
-  .pricing-page-hero { min-height: 620px; }
-  .pricing-page-hero-copy { width: min(100% - 28px, 1120px); padding-bottom: 48px; }
+  .pricing-page-hero {
+    min-height: auto;
+    display: block;
+  }
+  .pricing-page-hero-copy {
+    width: min(100% - 24px, 680px);
+    padding-top: max(96px, calc(76px + env(safe-area-inset-top)));
+    padding-bottom: 32px;
+  }
   .pricing-account-strip,
   .pricing-public-section,
   .pricing-section-nav { width: min(100% - 28px, 1120px); }
@@ -917,7 +924,6 @@
 /* Final mobile overrides: contain long account/order data inside the viewport. */
 @media (max-width: 560px) {
   .pricing-page-hero {
-    min-height: max(560px, 100svh);
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -925,8 +931,8 @@
     min-width: 0;
     width: calc(100% - 24px);
     max-width: 100%;
-    padding-top: max(128px, calc(104px + env(safe-area-inset-top)));
-    padding-bottom: 42px;
+    padding-top: max(96px, calc(76px + env(safe-area-inset-top)));
+    padding-bottom: 32px;
   }
 
   .pricing-page-hero-copy h1 {
