@@ -14293,3 +14293,172 @@ body.console-page {
     font-size: 10px;
   }
 }
+
+/* Final narrow-layout guard: keep single-column workspaces inside the viewport. */
+body.console-page {
+  overflow-x: hidden;
+}
+
+@media (max-width: 760px) {
+  .console-page .console-main,
+  .console-page .view,
+  .console-page .workbench-layout,
+  .console-page .module-panel,
+  .console-page #moduleBody,
+  .console-page .persona-console-layout,
+  .console-page .persona-workbench-shell,
+  .console-page .persona-detail,
+  .console-page .persona-step-shell,
+  .console-page .persona-step-shell > .persona-inline-panel,
+  .console-page .persona-inline-panel,
+  .console-page .persona-compose-workspace,
+  .console-page .persona-compose-post-side,
+  .console-page .persona-production-section,
+  .console-page .persona-memory-panel {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  .console-page .persona-step-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .console-page .persona-memory-toolbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 5px;
+  }
+
+  .console-page .persona-memory-search {
+    grid-column: 1 / -1;
+    min-width: 0;
+  }
+
+  .console-page .persona-memory-actions {
+    gap: 3px;
+  }
+
+  .console-page .persona-memory-actions button {
+    width: 30px;
+    min-width: 30px;
+    height: 30px;
+    min-height: 30px;
+  }
+
+  .console-page .persona-compose-toggle,
+  .console-page .persona-source-toggle,
+  .console-page .persona-media-operation-toggle {
+    display: grid;
+    width: 100%;
+    max-width: 100%;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    overflow: visible;
+  }
+
+  .console-page .persona-source-toggle,
+  .console-page .persona-media-operation-toggle {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .console-page .persona-compose-toggle button,
+  .console-page .persona-source-toggle button,
+  .console-page .persona-media-operation-toggle button {
+    min-width: 0;
+    padding: 5px 3px;
+    overflow: hidden;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.2;
+    font-size: 12px;
+  }
+
+  .console-page .persona-generate-current-settings {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .console-page .persona-generate-current-settings label,
+  .console-page .persona-generate-current-settings input {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .console-page .persona-subflow-tabs,
+  .console-page .persona-group-tabs,
+  .console-page .persona-step-tabs {
+    min-width: 0;
+    max-width: 100%;
+    flex-wrap: wrap;
+    overflow: visible;
+  }
+
+  .console-page .persona-group-tabs {
+    display: grid;
+    width: 100%;
+    grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  }
+
+  .console-page .persona-group-tabs button,
+  .console-page .persona-step-tabs button,
+  .console-page .persona-subflow-tabs button {
+    min-width: 0;
+    padding: 5px 6px;
+    font-size: 12px;
+  }
+
+  .console-page .persona-mobile-drawer {
+    width: min(80vw, 280px);
+  }
+
+  .console-page .console-sidebar {
+    width: min(78vw, 260px);
+    min-width: min(78vw, 260px);
+  }
+
+  .console-page .topbar-actions {
+    min-width: 0;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .console-page .topbar-actions::-webkit-scrollbar {
+    display: none;
+  }
+
+  .console-page .publish-source-tabs button {
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
+  }
+
+  .console-page .persona-draft-toolbar > label,
+  .console-page .persona-draft-toolbar > .row-actions {
+    flex: 1 1 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 480px) {
+  .console-page .persona-mobile-drawer {
+    width: min(82vw, 264px);
+  }
+
+  .console-page .console-sidebar {
+    width: min(80vw, 248px);
+    min-width: min(80vw, 248px);
+  }
+
+  .console-page .persona-compose-toggle button,
+  .console-page .persona-source-toggle button,
+  .console-page .persona-media-operation-toggle button,
+  .console-page .persona-group-tabs button,
+  .console-page .persona-step-tabs button,
+  .console-page .persona-subflow-tabs button {
+    font-size: 11px;
+  }
+}

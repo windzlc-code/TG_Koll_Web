@@ -1092,3 +1092,69 @@ html {
     bottom: auto;
   }
 }
+
+/* Keep the shared mobile navigation compact; the console owns the dense workspace below it. */
+@media (max-width: 820px) {
+  .site-header :is(
+    button,
+    .brand,
+    .site-icon-button,
+    .site-subscription-link,
+    .site-menu-toggle,
+    .site-mobile-console,
+    .site-user,
+    .site-language-button,
+    .header-login,
+    .header-action
+  ) {
+    min-height: 36px;
+  }
+
+  .site-header :is(
+    .site-icon-button,
+    .site-subscription-link,
+    .site-menu-toggle,
+    .site-mobile-console,
+    .site-user,
+    .site-language-button
+  ) {
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
+  }
+
+  .site-header .site-menu-toggle {
+    min-width: 36px;
+  }
+
+  .site-header :is(.header-actions, .site-global-controls) {
+    gap: 5px;
+  }
+}
+
+@media (max-width: 560px) {
+  :root {
+    --site-header-height: calc(56px + env(safe-area-inset-top));
+  }
+
+  .site-header {
+    min-height: var(--site-header-height);
+    padding-top: max(8px, env(safe-area-inset-top));
+    padding-bottom: 8px;
+  }
+
+  .site-header .brand-logo-frame,
+  .site-icon-button,
+  .site-subscription-link,
+  .site-mobile-console,
+  .site-user,
+  .site-menu-toggle {
+    width: 34px;
+    min-width: 34px;
+    height: 34px;
+  }
+
+  .site-header .site-menu-toggle {
+    min-width: 34px;
+  }
+}
