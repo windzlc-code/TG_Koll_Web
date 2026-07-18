@@ -72,6 +72,9 @@ html {
   display: inline-flex;
   align-items: center;
   gap: 10px;
+  justify-self: start;
+  width: fit-content;
+  max-width: 100%;
   min-width: max-content;
   padding: 0;
   color: inherit;
@@ -103,6 +106,7 @@ html {
 
 .site-header .brand-text {
   display: grid;
+  min-width: 0;
   gap: 1px;
 }
 
@@ -470,6 +474,7 @@ html {
   z-index: 155;
   display: grid;
   width: min(328px, calc(100vw - 20px));
+  height: auto;
   max-height: calc(100dvh - var(--site-header-height) - 16px);
   gap: 8px;
   padding: 10px;
@@ -810,6 +815,27 @@ html {
     padding-inline: 14px;
   }
 
+  .site-header .brand {
+    min-width: 0;
+  }
+
+  .site-header .brand-name,
+  .site-header .brand-local {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .site-header .header-actions {
+    min-width: 0;
+    justify-self: end;
+  }
+
+  .site-header .site-mobile-menu,
+  .site-header .site-account-menu {
+    flex: 0 0 auto;
+  }
+
   .site-header .site-guest-action,
   .site-header .header-action {
     display: none;
@@ -829,7 +855,10 @@ html {
   .site-account-popover {
     position: fixed;
     top: calc(var(--site-header-height) + 8px);
+    bottom: auto;
     right: 14px;
+    left: auto;
+    height: auto;
   }
 }
 
@@ -968,6 +997,6 @@ html {
 
   .site-account-popover {
     right: max(10px, env(safe-area-inset-right));
-    bottom: max(10px, env(safe-area-inset-bottom));
+    bottom: auto;
   }
 }

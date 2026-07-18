@@ -179,6 +179,12 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('pointerenter', self.site_nav_source)
         self.assertIn('if (event.target === trigger) return;', self.site_nav_source)
         self.assertIn('border-radius: 50%', self.site_nav_styles)
+        self.assertIn('height: auto;', self.site_nav_styles)
+        self.assertIn('bottom: auto;', self.site_nav_styles)
+        self.assertIn('.site-header .site-mobile-menu,', self.site_nav_styles)
+        self.assertIn('.site-header .site-account-menu {', self.site_nav_styles)
+        self.assertIn('width: fit-content;', self.site_nav_styles)
+        self.assertIn('href="/" aria-label="Vecto 首页" data-site-home-label', self.markup)
 
     def test_console_actions_share_static_navigation_gradient_and_only_busy_buttons_animate(self):
         self.assertIn("--vecto-action-static-gradient", self.styles)
