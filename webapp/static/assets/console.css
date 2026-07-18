@@ -1602,6 +1602,74 @@ textarea:focus {
   min-width: 0;
 }
 
+.publish-header-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.persona-mobile-list-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-solid);
+  color: var(--ink);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.persona-mobile-list-toggle .ui-action-icon,
+.persona-mobile-drawer-close .ui-action-icon {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.persona-mobile-drawer-head-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+
+.persona-mobile-drawer-close {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-solid);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.persona-mobile-drawer-backdrop {
+  display: none;
+}
+
+.automation-section-head-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
 .publish-inline-title {
   flex: 0 0 auto;
   color: var(--ink);
@@ -13969,5 +14037,139 @@ body.console-page {
     height: auto;
     max-height: min(52dvh, 480px);
     aspect-ratio: var(--live-browser-ratio, 16 / 9);
+  }
+}
+
+/* Mobile persona selector: keep the work area visible and move the long list into a drawer. */
+@media (max-width: 980px) {
+  body.persona-mobile-sidebar-open {
+    overflow: hidden;
+  }
+
+  .persona-mobile-list-toggle {
+    display: inline-flex;
+  }
+
+  .persona-mobile-drawer {
+    position: fixed;
+    z-index: 5200;
+    inset: max(8px, env(safe-area-inset-top)) 0 max(8px, env(safe-area-inset-bottom)) auto;
+    width: min(88vw, 336px);
+    height: calc(100dvh - max(16px, env(safe-area-inset-top) + env(safe-area-inset-bottom)));
+    max-height: none;
+    margin: 0;
+    padding: 10px;
+    overflow: hidden;
+    border: 1px solid var(--line-strong);
+    border-radius: 12px 0 0 12px;
+    background: var(--panel-solid);
+    box-shadow: -16px 0 34px rgba(15, 23, 42, .18);
+    grid-template-columns: minmax(0, 1fr);
+    transform: translateX(110%);
+    transition: transform var(--motion);
+  }
+
+  .persona-mobile-drawer.is-mobile-open {
+    transform: translateX(0);
+  }
+
+  .persona-mobile-drawer > * {
+    min-width: 0;
+  }
+
+  .persona-mobile-drawer .persona-list-toolbar {
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .persona-mobile-drawer .persona-list-head {
+    align-items: center;
+    gap: 6px;
+  }
+
+  .persona-mobile-drawer .persona-list-head strong {
+    font-size: 15px;
+  }
+
+  .persona-mobile-drawer-close {
+    display: inline-flex;
+  }
+
+  .persona-mobile-drawer .persona-list-scroll {
+    min-height: 0;
+    max-height: none;
+    margin: 0;
+    padding: 4px 0;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+  }
+
+  .persona-mobile-drawer .persona-list-stack {
+    gap: 5px;
+  }
+
+  .persona-mobile-drawer .persona-list-card {
+    gap: 4px;
+    padding: 3px;
+  }
+
+  .persona-mobile-drawer .persona-list-card .persona-list-item {
+    min-height: 0;
+    padding: 5px;
+  }
+
+  .persona-mobile-drawer .publish-persona-stats,
+  .persona-mobile-drawer .publish-persona-actions,
+  .persona-mobile-drawer .publish-persona-toolbar,
+  .persona-mobile-drawer .publish-persona-create-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+
+  .persona-mobile-drawer .publish-persona-stats span {
+    min-height: 20px;
+    padding: 1px 6px;
+  }
+
+  .persona-mobile-drawer .publish-persona-toolbar button,
+  .persona-mobile-drawer .publish-persona-create-actions button {
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
+  }
+
+  .persona-mobile-drawer .publish-persona-actions {
+    align-self: center;
+    min-width: 0;
+    padding: 0;
+  }
+
+  .persona-mobile-drawer .persona-list-pager {
+    padding-top: 4px;
+  }
+
+  .persona-mobile-drawer-backdrop {
+    position: fixed;
+    z-index: 5190;
+    inset: 0;
+    display: block;
+    background: rgba(15, 23, 42, .38);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--motion-fast) ease;
+  }
+
+  .persona-mobile-drawer-backdrop.is-visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .publish-header-actions {
+    flex-wrap: wrap;
+  }
+
+  .automation-section-head {
+    align-items: center;
   }
 }

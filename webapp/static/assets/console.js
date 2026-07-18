@@ -879,6 +879,41 @@ function bindMobileNavigation() {
   setMobileNavOpen(false);
 }
 
+function setPersonaMobileSidebarOpen(open, sidebarId = "") {
+  const sidebars = Array.from(document.querySelectorAll("[data-persona-mobile-sidebar]"));
+  const target = sidebarId ? document.getElementById(sidebarId) : sidebars[0];
+  const nextOpen = Boolean(open && target && isMobileNavMode());
+  sidebars.forEach((sidebar) => {
+    const active = nextOpen && sidebar === target;
+    sidebar.classList.toggle("is-mobile-open", active);
+    sidebar.setAttribute("aria-hidden", active ? "false" : (isMobileNavMode() ? "true" : "false"));
+    sidebar.inert = Boolean(isMobileNavMode() && !active);
+  });
+  document.querySelectorAll("[data-persona-mobile-list-toggle]").forEach((button) => {
+    const active = nextOpen && button.dataset.personaMobileListToggle === target?.id;
+    button.setAttribute("aria-expanded", active ? "true" : "false");
+  });
+  document.querySelectorAll("[data-persona-mobile-list-backdrop]").forEach((backdrop) => {
+    backdrop.classList.toggle("is-visible", nextOpen);
+    backdrop.hidden = !nextOpen;
+  });
+  document.body.classList.toggle("persona-mobile-sidebar-open", nextOpen);
+}
+
+function syncPersonaMobileSidebarMode() {
+  setPersonaMobileSidebarOpen(false);
+}
+
+function bindPersonaMobileSidebarMode() {
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && document.body.classList.contains("persona-mobile-sidebar-open")) {
+      setPersonaMobileSidebarOpen(false);
+    }
+  });
+  if (typeof mobileNavMedia?.addEventListener === "function") mobileNavMedia.addEventListener("change", syncPersonaMobileSidebarMode);
+  else mobileNavMedia?.addListener?.(syncPersonaMobileSidebarMode);
+}
+
 const zhHantPhraseMap = [
   ["Web 任务控制台", "Web 任務控制台"],
   ["头发", "頭髮"],
@@ -7522,8 +7557,16 @@ function renderUnifiedAutomationModule() {
       <section class="publish-config-panel automation-config-panel">
         <section class="automation-switch-panel">
           <div class="automation-section-head">
-            <strong>平台与账号</strong>
-            <span>${esc(persona ? `${accounts.length} 个当前平台账号` : "未选择人设")}</span>
+            <div class="automation-section-head-copy">
+              <strong>平台与账号</strong>
+              <span>${esc(persona ? `${accounts.length} 个当前平台账号` : "未选择人设")}</span>
+            </div>
+            <button type="button" class="persona-mobile-list-toggle" data-persona-mobile-list-toggle="automationPersonaSidebar" aria-controls="automationPersonaSidebar" aria-expanded="false">
+              <svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M4 5h16"></path><path d="M4 12h16"></path><path d="M4 19h16"></path>
+              </svg>
+              <span>选择人设</span>
+            </button>
           </div>
           <div class="automation-capsule-tabs automation-platform-tabs" aria-label="选择平台">
             <button type="button" class="${platform === "threads" ? "is-active" : ""}" data-automation-platform="threads">Threads</button>
@@ -7691,7 +7734,15 @@ function renderPublishHeaderRow(mode, account) {
         <strong class="publish-inline-title">发布</strong>
         ${renderPublishModeTabs(mode)}
       </div>
-      ${renderPublishAccountBadge(account)}
+      <div class="publish-header-actions">
+        <button type="button" class="persona-mobile-list-toggle" data-persona-mobile-list-toggle="publishPersonaSidebar" aria-controls="publishPersonaSidebar" aria-expanded="false">
+          <svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M4 5h16"></path><path d="M4 12h16"></path><path d="M4 19h16"></path>
+          </svg>
+          <span>选择人设</span>
+        </button>
+        ${renderPublishAccountBadge(account)}
+      </div>
     </div>`;
 }
 
@@ -8565,11 +8616,16 @@ function renderPublishPersonaSidebar(mode) {
   const selectedIds = isMatrix ? matrixPublishSelectedIds() : [String(state.selectedPersonaId || "")].filter(Boolean);
   ensurePublishingPersonaSidebarContent(current);
   return `
-    <aside class="persona-list-shell publish-persona-shell">
+    <aside id="publishPersonaSidebar" class="persona-list-shell publish-persona-shell persona-mobile-drawer" data-persona-mobile-sidebar aria-hidden="false">
       <div class="persona-inline-panel persona-list-toolbar">
         <div class="persona-list-head persona-list-head--queue">
           <strong>${isMatrix ? "矩阵人设" : "发布人设"}</strong>
-          <span>${isMatrix ? `${selectedIds.length} 个已选` : "单选当前发布对象"}</span>
+          <div class="persona-mobile-drawer-head-actions">
+            <span>${isMatrix ? `${selectedIds.length} 个已选` : "单选当前发布对象"}</span>
+            <button type="button" class="persona-mobile-drawer-close" data-persona-mobile-list-close title="关闭人设列表" aria-label="关闭人设列表">
+              <svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 6 12 12"></path><path d="m18 6-12 12"></path></svg>
+            </button>
+          </div>
         </div>
         <div class="persona-list-actions publish-persona-create-actions">
           <button type="button" data-persona-create-group>创建分组</button>
@@ -8582,20 +8638,27 @@ function renderPublishPersonaSidebar(mode) {
         ` : ""}
       </div>
       ${renderPublishPersonaCollectionList(current, selectedIds)}
-    </aside>`;
+    </aside>
+    <div class="persona-mobile-drawer-backdrop" data-persona-mobile-list-backdrop data-persona-mobile-list-close hidden></div>`;
 }
 
 function renderAutomationPersonaSidebar() {
   return `
-    <aside class="persona-list-shell publish-persona-shell automation-persona-shell">
+    <aside id="automationPersonaSidebar" class="persona-list-shell publish-persona-shell automation-persona-shell persona-mobile-drawer" data-persona-mobile-sidebar aria-hidden="false">
       <div class="persona-inline-panel persona-list-toolbar">
         <div class="persona-list-head persona-list-head--queue">
           <strong>自动化人设</strong>
-          <span>单选当前操作对象</span>
+          <div class="persona-mobile-drawer-head-actions">
+            <span>单选当前操作对象</span>
+            <button type="button" class="persona-mobile-drawer-close" data-persona-mobile-list-close title="关闭人设列表" aria-label="关闭人设列表">
+              <svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 6 12 12"></path><path d="m18 6-12 12"></path></svg>
+            </button>
+          </div>
         </div>
       </div>
       ${renderAutomationPersonaCollectionList()}
-    </aside>`;
+    </aside>
+    <div class="persona-mobile-drawer-backdrop" data-persona-mobile-list-backdrop data-persona-mobile-list-close hidden></div>`;
 }
 
 function selectPublishingPersona(personaId) {
@@ -8779,6 +8842,7 @@ function renderSimpleFlowModule(moduleId) {
     ${body}
     ${actionHtml}
   `;
+  if (moduleId === "publishing" || moduleId === "automation") setPersonaMobileSidebarOpen(false);
   if ($("simpleAccount") && accountId) $("simpleAccount").value = accountId;
   if ($("simplePublishMode")) {
     const modes = ["publish_now", "matrix_start", "publish_history"];
@@ -20096,6 +20160,7 @@ function bindEvents() {
   startLanguageObserver();
   applyLanguage(currentLanguage());
   bindMobileNavigation();
+  bindPersonaMobileSidebarMode();
   document.addEventListener("visibilitychange", () => {
     syncSocialTaskToastAutoRefresh();
     syncTaskQueueAutoRefresh();
@@ -20268,6 +20333,17 @@ function bindEvents() {
     if (Date.now() < Number(state.personaSuppressClickUntil || 0)) {
       event.preventDefault();
       event.stopPropagation();
+      return;
+    }
+    const personaMobileToggle = event.target.closest("[data-persona-mobile-list-toggle]");
+    if (personaMobileToggle) {
+      const sidebarId = personaMobileToggle.dataset.personaMobileListToggle || "";
+      const sidebar = document.getElementById(sidebarId);
+      setPersonaMobileSidebarOpen(!sidebar?.classList.contains("is-mobile-open"), sidebarId);
+      return;
+    }
+    if (event.target.closest("[data-persona-mobile-list-close], [data-persona-mobile-list-backdrop]")) {
+      setPersonaMobileSidebarOpen(false);
       return;
     }
     const startPersonaBulk = event.target.closest("[data-persona-bulk-start]");
@@ -21081,6 +21157,7 @@ function bindEvents() {
         const mode = normalizedPublishMode($("simplePublishMode")?.value || state.simpleBranches.publishing);
         if (mode === "matrix_start") toggleMatrixPersonaId(nextPersonaId);
         else selectPublishingPersona(nextPersonaId);
+        setPersonaMobileSidebarOpen(false);
         state.personaListEditorId = "";
         state.personaListEditorMode = "";
         withConsoleScrollPreserved(() => renderSimpleFlowModule("publishing"));
@@ -21096,6 +21173,7 @@ function bindEvents() {
           state.personaListEditorId = "";
           state.personaListEditorMode = "";
         }
+        setPersonaMobileSidebarOpen(false);
         withConsoleScrollPreserved(() => renderSimpleFlowModule("automation"));
         renderConfirmSummary();
         return;
