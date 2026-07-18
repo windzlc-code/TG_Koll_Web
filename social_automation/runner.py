@@ -3604,6 +3604,156 @@ def _threads_dialog_post_button(page):
     ], timeout_ms=800)
 
 
+def _threads_media_input(page):
+    try:
+        marked = page.evaluate(
+            r"""() => {
+                const marker = 'data-vecto-threads-media-input';
+                document.querySelectorAll(`[${marker}]`).forEach(node => node.removeAttribute(marker));
+                const isVisible = node => {
+                    const rect = node.getBoundingClientRect();
+                    const style = window.getComputedStyle(node);
+                    return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+                };
+                const dialogs = Array.from(document.querySelectorAll('[role="dialog"]')).filter(isVisible);
+                dialogs.sort((a, b) => {
+                    const ar = a.getBoundingClientRect();
+                    const br = b.getBoundingClientRect();
+                    const ac = Math.abs((ar.left + ar.right) / 2 - window.innerWidth / 2)
+                        + Math.abs((ar.top + ar.bottom) / 2 - window.innerHeight / 2);
+                    const bc = Math.abs((br.left + br.right) / 2 - window.innerWidth / 2)
+                        + Math.abs((br.top + br.bottom) / 2 - window.innerHeight / 2);
+                    return ac - bc;
+                });
+                const mediaInput = inputs => {
+                    const candidates = Array.from(inputs).filter(node => {
+                        const accept = String(node.getAttribute('accept') || '').toLowerCase();
+                        return !accept || accept.includes('image') || accept.includes('video');
+                    });
+                    return candidates[candidates.length - 1] || null;
+                };
+                let target = dialogs.length
+                    ? mediaInput(dialogs[0].querySelectorAll('input[type="file"]'))
+                    : null;
+                if (!target) {
+                    target = mediaInput(document.querySelectorAll('input[type="file"]'));
+                }
+                if (!target) return false;
+                target.setAttribute(marker, '1');
+                return true;
+            }"""
+        )
+    except Exception:
+        marked = False
+    if not marked:
+        return None
+    try:
+        locator = page.locator('[data-vecto-threads-media-input="1"]').last
+        return locator if locator.count() else None
+    except Exception:
+        return None
+
+
+def _threads_attachment_snapshot(page) -> dict[str, int]:
+    empty = {"preview_count": 0, "remove_control_count": 0, "selected_file_count": 0}
+    try:
+        result = page.evaluate(
+            r"""() => {
+                const isVisible = node => {
+                    const rect = node.getBoundingClientRect();
+                    const style = window.getComputedStyle(node);
+                    return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+                };
+                const dialogs = Array.from(document.querySelectorAll('[role="dialog"]')).filter(isVisible);
+                dialogs.sort((a, b) => {
+                    const ar = a.getBoundingClientRect();
+                    const br = b.getBoundingClientRect();
+                    const ac = Math.abs((ar.left + ar.right) / 2 - window.innerWidth / 2)
+                        + Math.abs((ar.top + ar.bottom) / 2 - window.innerHeight / 2);
+                    const bc = Math.abs((br.left + br.right) / 2 - window.innerWidth / 2)
+                        + Math.abs((br.top + br.bottom) / 2 - window.innerHeight / 2);
+                    return ac - bc;
+                });
+                const root = dialogs[0] || document.body;
+                const previews = Array.from(root.querySelectorAll('img, video')).filter(node => {
+                    if (!isVisible(node)) return false;
+                    const rect = node.getBoundingClientRect();
+                    const src = String(node.currentSrc || node.src || '').toLowerCase();
+                    if (node.tagName === 'VIDEO' || src.startsWith('blob:')) return rect.width >= 72 && rect.height >= 72;
+                    return rect.width >= 96 && rect.height >= 96;
+                });
+                const removePattern = /(remove|delete|discard).*(photo|image|video|media|attachment)|(photo|image|video|media|attachment).*(remove|delete|discard)/i;
+                const removeControls = Array.from(root.querySelectorAll('button, [role="button"]')).filter(node => {
+                    if (!isVisible(node)) return false;
+                    const label = [
+                        node.getAttribute('aria-label'),
+                        node.getAttribute('title'),
+                        node.innerText,
+                        node.textContent,
+                    ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+                    return removePattern.test(label);
+                });
+                const selectedFileCount = Array.from(root.querySelectorAll('input[type="file"]'))
+                    .reduce((total, node) => total + Number(node.files?.length || 0), 0);
+                return {
+                    preview_count: previews.length,
+                    remove_control_count: removeControls.length,
+                    selected_file_count: selectedFileCount,
+                };
+            }"""
+        )
+    except Exception:
+        return empty
+    if not isinstance(result, dict):
+        return empty
+    return {
+        "preview_count": max(0, _safe_int(result.get("preview_count"), 0)),
+        "remove_control_count": max(0, _safe_int(result.get("remove_control_count"), 0)),
+        "selected_file_count": max(0, _safe_int(result.get("selected_file_count"), 0)),
+    }
+
+
+def _wait_for_threads_media_ready(
+    page,
+    logger: AutomationLogger,
+    *,
+    expected_files: int,
+    baseline: dict[str, int] | None = None,
+    timeout_seconds: float = 30.0,
+) -> dict[str, int]:
+    before = baseline or {}
+    baseline_evidence = max(
+        _safe_int(before.get("preview_count"), 0),
+        _safe_int(before.get("remove_control_count"), 0),
+    )
+    deadline = time.monotonic() + max(1.0, float(timeout_seconds))
+    last_snapshot = _threads_attachment_snapshot(page)
+    while True:
+        rendered_evidence = max(
+            _safe_int(last_snapshot.get("preview_count"), 0),
+            _safe_int(last_snapshot.get("remove_control_count"), 0),
+        )
+        if rendered_evidence > baseline_evidence:
+            logger.log(
+                "info",
+                "threads_publish_upload_ready",
+                "Threads media attachment preview is ready.",
+                {"expected_files": expected_files, **last_snapshot},
+            )
+            return last_snapshot
+        if time.monotonic() >= deadline:
+            break
+        _sleep_between(0.35, 0.55)
+        last_snapshot = _threads_attachment_snapshot(page)
+    logger.log(
+        "error",
+        "threads_publish_upload_not_ready",
+        "Threads did not render the media attachment preview; publish was stopped before submit.",
+        {"expected_files": expected_files, **last_snapshot},
+    )
+    raise RuntimeError("Threads media attachment preview did not become ready; publish was stopped before submit.")
+
+
 def _dismiss_threads_compose_dialogs(page, logger: AutomationLogger) -> None:
     for attempt in range(5):
         try:
@@ -4172,27 +4322,38 @@ def _run_threads_publish_post(
         if caption not in dialog_text:
             raise RuntimeError("Threads 发帖内容没有写入当前弹窗。")
     if media_paths:
-        file_input = page.locator('input[type="file"]').first
-        if not file_input.count():
+        attachment_baseline = _threads_attachment_snapshot(page)
+        file_input = _threads_media_input(page)
+        if file_input is None:
             trigger = _visible_first(page, [
+                '[role="dialog"] [aria-label*="photo" i]',
+                '[role="dialog"] [aria-label*="video" i]',
+                '[role="dialog"] button:has-text("Add photo")',
+                '[role="dialog"] button:has-text("Add media")',
                 '[aria-label*="photo" i]',
                 '[aria-label*="video" i]',
-                'button:has-text("Add photo")',
-                'button:has-text("Add media")',
             ], timeout_ms=1500)
             if trigger is not None:
                 _human_click(page, trigger, logger, "threads_publish_media_picker")
                 _sleep_between(0.8, 1.4)
-                file_input = page.locator('input[type="file"]').first
+                file_input = _threads_media_input(page)
+        if file_input is None:
+            raise RuntimeError("Unable to locate the media input in the active Threads composer.")
         file_input.wait_for(state="attached", timeout=30000)
         logger.log("info", "threads_publish_upload", "正在上传 Threads 媒体文件。", {"count": len(media_paths)})
         file_input.set_input_files(media_paths)
-        _sleep_between(1.0, 2.2)
+        _wait_for_threads_media_ready(
+            page,
+            logger,
+            expected_files=len(media_paths),
+            baseline=attachment_baseline,
+        )
     confirmation_state = {
         "phase": "confirm_only",
         "profile_url": profile_url,
         "baseline_permalinks": sorted(previous_permalinks),
         "caption": caption,
+        "media_count": len(media_paths),
         "submitted_at": int(time.time()),
     }
     confirmation_persisted = False

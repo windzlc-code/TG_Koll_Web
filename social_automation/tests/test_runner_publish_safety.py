@@ -2405,6 +2405,69 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertEqual(events, ["persisted", "clicked"])
 
+    def test_threads_publish_never_submits_when_media_preview_is_not_ready(self):
+        page = _Page("https://www.threads.net/@alice")
+        media_input = mock.Mock()
+        media_input.count.return_value = 1
+        media_input.wait_for.return_value = None
+        media_path = Path(__file__).resolve()
+
+        with (
+            mock.patch.object(runner, "_dismiss_threads_compose_dialogs"),
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_ensure_threads_compose_ready", return_value=_Locator()),
+            mock.patch.object(runner, "_human_click"),
+            mock.patch.object(runner, "_clear_and_type"),
+            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner, "_threads_active_dialog_text", return_value="hello threads"),
+            mock.patch.object(runner, "_threads_media_input", return_value=media_input),
+            mock.patch.object(
+                runner,
+                "_threads_attachment_snapshot",
+                return_value={"preview_count": 0, "remove_control_count": 0, "selected_file_count": 0},
+            ),
+            mock.patch.object(
+                runner,
+                "_wait_for_threads_media_ready",
+                side_effect=RuntimeError("Threads media attachment preview did not become ready."),
+            ),
+            mock.patch.object(runner, "_click_threads_active_dialog_post") as submit,
+            mock.patch.object(runner, "_capture_threads_profile_baseline", return_value=set()),
+            mock.patch.object(runner, "_resolve_threads_profile_url", return_value="https://www.threads.net/@alice"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "media attachment preview"):
+                runner._run_threads_publish_post(
+                    page,
+                    {"id": "publish-task"},
+                    {"caption": "hello threads", "media_paths": [str(media_path)]},
+                    Path("."),
+                    _Logger(),
+                    {"username": "alice"},
+                )
+
+        media_input.set_input_files.assert_called_once_with([str(media_path)])
+        submit.assert_not_called()
+
+    def test_threads_media_waits_for_rendered_attachment_evidence(self):
+        logger = _RecordingLogger()
+        snapshots = [
+            {"preview_count": 0, "remove_control_count": 0, "selected_file_count": 1},
+            {"preview_count": 1, "remove_control_count": 1, "selected_file_count": 1},
+        ]
+        with (
+            mock.patch.object(runner, "_threads_attachment_snapshot", side_effect=snapshots),
+            mock.patch.object(runner, "_sleep_between"),
+        ):
+            result = runner._wait_for_threads_media_ready(
+                _Page(),
+                logger,
+                expected_files=1,
+                baseline={"preview_count": 0, "remove_control_count": 0, "selected_file_count": 0},
+            )
+
+        self.assertEqual(result["preview_count"], 1)
+        self.assertTrue(any(entry[0][1] == "threads_publish_upload_ready" for entry in logger.entries))
+
     def test_threads_confirmation_only_never_opens_or_submits_composer(self):
         page = _Page("https://www.threads.net/@alice")
         with (
