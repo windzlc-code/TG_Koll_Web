@@ -5412,20 +5412,79 @@ function decodeProxyMarketCredential(value) {
   }
 }
 
+function proxyMarketCountryAliasKey(value) {
+  return String(value || "")
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[._-]+/g, " ")
+    .replace(/\s+/g, " ");
+}
+
 const PROXY_MARKET_COUNTRY_ALIASES = new Map([
-  ["tw", { code: "TW", label: "台湾" }],
-  ["taiwan", { code: "TW", label: "台湾" }],
-  ["台湾", { code: "TW", label: "台湾" }],
-  ["台灣", { code: "TW", label: "台湾" }],
-  ["中国台湾", { code: "TW", label: "台湾" }],
-  ["中國台灣", { code: "TW", label: "台湾" }],
-]);
+  [["tw", "taiwan", "台湾", "台灣", "中国台湾", "中國台灣"], "TW", "台湾"],
+  [["cn", "china", "中国", "中國", "中国大陆", "中國大陸"], "CN", "中国"],
+  [["hk", "hong kong", "香港"], "HK", "香港"],
+  [["mo", "macau", "macao", "澳门", "澳門"], "MO", "澳门"],
+  [["jp", "japan", "日本"], "JP", "日本"],
+  [["kr", "south korea", "korea", "韩国", "韓國"], "KR", "韩国"],
+  [["sg", "singapore", "新加坡"], "SG", "新加坡"],
+  [["my", "malaysia", "马来西亚", "馬來西亞"], "MY", "马来西亚"],
+  [["th", "thailand", "泰国", "泰國"], "TH", "泰国"],
+  [["vn", "vietnam", "越南"], "VN", "越南"],
+  [["ph", "philippines", "菲律宾", "菲律賓"], "PH", "菲律宾"],
+  [["id", "indonesia", "印度尼西亚", "印度尼西亞", "印尼"], "ID", "印度尼西亚"],
+  [["in", "india", "印度"], "IN", "印度"],
+  [["us", "usa", "united states", "united states of america", "美国", "美國"], "US", "美国"],
+  [["ca", "canada", "加拿大"], "CA", "加拿大"],
+  [["mx", "mexico", "墨西哥"], "MX", "墨西哥"],
+  [["br", "brazil", "巴西"], "BR", "巴西"],
+  [["ar", "argentina", "阿根廷"], "AR", "阿根廷"],
+  [["cl", "chile", "智利"], "CL", "智利"],
+  [["co", "colombia", "哥伦比亚", "哥倫比亞"], "CO", "哥伦比亚"],
+  [["gb", "uk", "united kingdom", "great britain", "英国", "英國"], "GB", "英国"],
+  [["ie", "ireland", "爱尔兰", "愛爾蘭"], "IE", "爱尔兰"],
+  [["fr", "france", "法国", "法國"], "FR", "法国"],
+  [["de", "germany", "德国", "德國"], "DE", "德国"],
+  [["es", "esp", "spain", "espana", "españa", "西班牙"], "ES", "西班牙"],
+  [["pt", "portugal", "葡萄牙"], "PT", "葡萄牙"],
+  [["it", "italy", "意大利", "义大利", "義大利"], "IT", "意大利"],
+  [["nl", "netherlands", "holland", "荷兰", "荷蘭"], "NL", "荷兰"],
+  [["be", "belgium", "比利时", "比利時"], "BE", "比利时"],
+  [["ch", "switzerland", "瑞士"], "CH", "瑞士"],
+  [["at", "austria", "奥地利", "奧地利"], "AT", "奥地利"],
+  [["se", "sweden", "瑞典"], "SE", "瑞典"],
+  [["no", "norway", "挪威"], "NO", "挪威"],
+  [["dk", "denmark", "丹麦", "丹麥"], "DK", "丹麦"],
+  [["fi", "finland", "芬兰", "芬蘭"], "FI", "芬兰"],
+  [["pl", "poland", "波兰", "波蘭"], "PL", "波兰"],
+  [["cz", "czechia", "czech republic", "捷克"], "CZ", "捷克"],
+  [["ro", "romania", "罗马尼亚", "羅馬尼亞"], "RO", "罗马尼亚"],
+  [["ru", "russia", "俄罗斯", "俄羅斯"], "RU", "俄罗斯"],
+  [["ua", "ukraine", "乌克兰", "烏克蘭"], "UA", "乌克兰"],
+  [["tr", "turkey", "turkiye", "土耳其"], "TR", "土耳其"],
+  [["au", "australia", "澳大利亚", "澳大利亞", "澳洲"], "AU", "澳大利亚"],
+  [["nz", "new zealand", "新西兰", "紐西蘭"], "NZ", "新西兰"],
+  [["ae", "uae", "united arab emirates", "阿联酋", "阿聯酋"], "AE", "阿联酋"],
+  [["sa", "saudi arabia", "沙特阿拉伯", "沙烏地阿拉伯"], "SA", "沙特阿拉伯"],
+  [["za", "south africa", "南非"], "ZA", "南非"],
+].flatMap(([aliases, code, label]) => (
+  aliases.map((alias) => [proxyMarketCountryAliasKey(alias), { code, label }])
+)));
 
 function normalizeProxyMarketCountry(value) {
-  const clean = String(value || "").trim();
-  return PROXY_MARKET_COUNTRY_ALIASES.get(clean.toLowerCase())
-    || PROXY_MARKET_COUNTRY_ALIASES.get(clean)
-    || null;
+  const clean = String(value || "")
+    .normalize("NFKC")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .trim()
+    .replace(
+      /^(?:国家\s*(?:\/|或)?\s*地区|國家\s*(?:\/|或)?\s*地區|国家|國家|地区|地區|country(?:\s*\/\s*region)?|region)\s*[:=-]?\s*/i,
+      "",
+    )
+    .replace(/\s*(?:国家|國家|地区|地區|country|region)\s*$/i, "")
+    .trim();
+  return PROXY_MARKET_COUNTRY_ALIASES.get(proxyMarketCountryAliasKey(clean)) || null;
 }
 
 function inferProxyMarketProviderKey(hosts) {
@@ -5451,7 +5510,10 @@ function isProxyMarketLiteralHost(host) {
 }
 
 function parseProxyMarketEndpoint(value) {
-  const raw = String(value || "").trim();
+  const raw = String(value || "")
+    .normalize("NFKC")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .trim();
   if (!raw) return {};
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
     try {
@@ -5539,34 +5601,40 @@ function parseProxyMarketSmartInput(value) {
   } else {
     const hasPairSeparators = /\n/.test(raw);
     let matchedPair = false;
-    raw.split(/\n+/).forEach((segment) => {
+    const nonemptySegments = raw.split(/\r?\n/).filter((segment) => segment.trim());
+    let matchedPairCount = 0;
+    nonemptySegments.forEach((segment) => {
       const pair = segment.match(/^\s*([^:=：]+?)\s*([:=：])\s*(.*?)\s*$/);
       if (!pair) return;
       const mapped = PROXY_MARKET_SMART_FIELD_ALIASES[normalizeProxyMarketSmartKey(pair[1])];
       if (!mapped || (pair[2] === ":" && !hasPairSeparators)) return;
       matchedPair = true;
+      matchedPairCount += 1;
       if (pair[3] !== "" || mapped === "username" || mapped === "password") parsed[mapped] = pair[3];
     });
-    if (matchedPair) {
+    if (matchedPair && matchedPairCount === nonemptySegments.length) {
       inputMode = "structured";
     } else {
-      const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+      const lines = raw
+        .split(/\r?\n/)
+        .map((line, index) => ({ value: line.trim(), lineNumber: index + 1 }))
+        .filter((line) => line.value);
       if (lines.length > 1) {
         inputMode = "multi_endpoint";
         const endpoints = [];
         const countries = [];
-        lines.forEach((line, index) => {
-          const endpoint = parseProxyMarketEndpoint(line);
+        lines.forEach((line) => {
+          const endpoint = parseProxyMarketEndpoint(line.value);
           if (endpoint.host && endpoint.port) {
-            endpoints.push({ ...endpoint, _line: index + 1 });
+            endpoints.push({ ...endpoint, _line: line.lineNumber });
             return;
           }
-          const country = normalizeProxyMarketCountry(line);
+          const country = normalizeProxyMarketCountry(line.value);
           if (country) {
             countries.push(country);
             return;
           }
-          errors.push(`第 ${index + 1} 行无法识别`);
+          errors.push(`第 ${line.lineNumber} 行无法识别`);
         });
         if (endpoints.length) {
           const literalEndpoints = endpoints.filter((endpoint) => isProxyMarketLiteralHost(endpoint.host));

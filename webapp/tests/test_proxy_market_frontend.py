@@ -250,6 +250,54 @@ class ProxyMarketFrontendTests(unittest.TestCase):
             """
         )
 
+    def test_smart_parser_accepts_provider_endpoint_and_spanish_country_hint(self):
+        self._run_node(
+            """
+            const parse = context.parseProxyMarketSmartInput;
+            const apply = context.applyProxyMarketSmartInput;
+            const screenshotInput = [
+              "194.143.193.241:8022:qarqwsdxaw:oqymoyumoqymiyo",
+              "",
+              "direct.miyavip.vip:8001:qarqwsdxaw:oqymoyumoqymiyo",
+              "西班牙",
+            ].join("\\n");
+            const parsed = parse(screenshotInput);
+
+            assert.equal(parsed.host, "194.143.193.241");
+            assert.equal(parsed.port, 8022);
+            assert.equal(parsed.username, "qarqwsdxaw");
+            assert.equal(parsed.password, "oqymoyumoqymiyo");
+            assert.equal(parsed.provider_key, "miyavip");
+            assert.equal(parsed.country, "ES");
+            assert.equal(parsed._country_label, "西班牙");
+            assert.deepEqual(parsed._errors || [], []);
+
+            controls.get("proxyMarketSmartInput").value = screenshotInput;
+            assert.ok(apply());
+            assert.equal(controls.get("proxyMarketHost").value, "194.143.193.241");
+            assert.equal(controls.get("proxyMarketPort").value, "8022");
+            assert.equal(controls.get("proxyMarketProviderKey").value, "miyavip");
+            assert.equal(controls.get("proxyMarketCountry").value, "ES");
+            assert.equal(controls.get("proxyMarketSmartResult").dataset.state, "success");
+
+            const labeledCountry = parse([
+              "194.143.193.241：8022：qarqwsdxaw：oqymoyumoqymiyo",
+              "国家 / 地区： España ",
+            ].join("\\n"));
+            assert.equal(labeledCountry.host, "194.143.193.241");
+            assert.equal(labeledCountry.country, "ES");
+            assert.deepEqual(labeledCountry._errors || [], []);
+
+            const unknown = parse([
+              "194.143.193.241:8022:qarqwsdxaw:oqymoyumoqymiyo",
+              "",
+              "",
+              "不是有效地区",
+            ].join("\\n"));
+            assert.ok(unknown._errors.includes("第 4 行无法识别"));
+            """
+        )
+
     def test_original_proxy_input_formats_still_fill_editor_fields(self):
         self._run_node(
             """
