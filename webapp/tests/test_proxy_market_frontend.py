@@ -23,6 +23,12 @@ class ProxyMarketFrontendTests(unittest.TestCase):
         self.assertIn(">发布<", "".join(html.split()))
         self.assertNotIn("检测并补全地区", html)
         self.assertNotIn("真实检测并发布", html)
+        self.assertIn("socks5://user:password@198.51.100.27:8022", html)
+        self.assertIn("198.51.100.27:8022:user:password", html)
+        self.assertIn("direct.provider.example:8001:user:password", html)
+        self.assertIn('rows="6"', html)
+        self.assertIn("height: 136px", html)
+        self.assertIn("min-height: 136px", html)
         source = ADMIN_JS.read_text(encoding="utf-8")
         self.assertIn('String(item.pending_check_status || "") === "healthy"', source)
 
@@ -172,6 +178,125 @@ class ProxyMarketFrontendTests(unittest.TestCase):
             controls.get("proxyMarketSmartInput").value = "manual.example:9002";
             assert.ok(apply());
             assert.equal(controls.get("proxyMarketSku").value, "MANUAL-SKU");
+            """
+        )
+
+    def test_original_proxy_input_formats_remain_supported(self):
+        self._run_node(
+            """
+            const parse = context.parseProxyMarketSmartInput;
+
+            const url = parse("socks5://old-user:old-pass@198.51.100.10:1080");
+            assert.equal(url.proxy_type, "socks5");
+            assert.equal(url.host, "198.51.100.10");
+            assert.equal(url.port, 1080);
+            assert.equal(url.username, "old-user");
+            assert.equal(url.password, "old-pass");
+
+            const fourPart = parse("198.51.100.11:8080:old-user:old-pass");
+            assert.equal(fourPart.host, "198.51.100.11");
+            assert.equal(fourPart.port, 8080);
+            assert.equal(fourPart.username, "old-user");
+            assert.equal(fourPart.password, "old-pass");
+
+            const authFirst = parse("old-user:old-pass@proxy.example:9000");
+            assert.equal(authFirst.host, "proxy.example");
+            assert.equal(authFirst.port, 9000);
+            assert.equal(authFirst.username, "old-user");
+            assert.equal(authFirst.password, "old-pass");
+
+            const pipeSeparated = parse("proxy.example|9001|old-user|old-pass");
+            assert.equal(pipeSeparated.host, "proxy.example");
+            assert.equal(pipeSeparated.port, 9001);
+            assert.equal(pipeSeparated.username, "old-user");
+            assert.equal(pipeSeparated.password, "old-pass");
+
+            const noAuth = parse("proxy.example:9002");
+            assert.equal(noAuth.host, "proxy.example");
+            assert.equal(noAuth.port, 9002);
+            assert.equal(noAuth.username, "");
+            assert.equal(noAuth.password, "");
+
+            const jsonInput = parse(JSON.stringify({
+              protocol: "https",
+              host: "json.example",
+              port: 9443,
+              username: "json-user",
+              password: "json-pass",
+            }));
+            assert.equal(jsonInput.proxy_type, "https");
+            assert.equal(jsonInput.host, "json.example");
+            assert.equal(jsonInput.port, 9443);
+            assert.equal(jsonInput.username, "json-user");
+            assert.equal(jsonInput.password, "json-pass");
+
+            const keyValue = parse([
+              "协议: http",
+              "主机: key-value.example",
+              "端口: 8088",
+              "用户名: key-user",
+              "密码: key-pass",
+            ].join("\\n"));
+            assert.equal(keyValue.proxy_type, "http");
+            assert.equal(keyValue.host, "key-value.example");
+            assert.equal(keyValue.port, 8088);
+            assert.equal(keyValue.username, "key-user");
+            assert.equal(keyValue.password, "key-pass");
+            """
+        )
+
+    def test_original_proxy_input_formats_still_fill_editor_fields(self):
+        self._run_node(
+            """
+            const apply = context.applyProxyMarketSmartInput;
+            const cases = [
+              {
+                raw: "socks5://url-user:url-pass@198.51.100.20:1080",
+                type: "socks5", host: "198.51.100.20", port: "1080",
+                username: "url-user", password: "url-pass",
+              },
+              {
+                raw: "198.51.100.21:8080:four-user:four-pass",
+                type: "socks5", host: "198.51.100.21", port: "8080",
+                username: "four-user", password: "four-pass",
+              },
+              {
+                raw: "auth-user:auth-pass@proxy.example:9000",
+                type: "socks5", host: "proxy.example", port: "9000",
+                username: "auth-user", password: "auth-pass",
+              },
+              {
+                raw: "pipe.example|9001|pipe-user|pipe-pass",
+                type: "socks5", host: "pipe.example", port: "9001",
+                username: "pipe-user", password: "pipe-pass",
+              },
+              {
+                raw: JSON.stringify({
+                  protocol: "https",
+                  host: "json.example",
+                  port: 9443,
+                  username: "json-user",
+                  password: "json-pass",
+                }),
+                type: "https", host: "json.example", port: "9443",
+                username: "json-user", password: "json-pass",
+              },
+            ];
+
+            for (const item of cases) {
+              controls.get("proxyMarketSmartInput").value = item.raw;
+              controls.get("proxyMarketSmartResult").textContent = "";
+              context.adminState.proxyMarketPendingCheckId = "stale-check";
+              assert.ok(apply(), item.raw);
+              assert.equal(controls.get("proxyMarketProxyType").value, item.type);
+              assert.equal(controls.get("proxyMarketHost").value, item.host);
+              assert.equal(controls.get("proxyMarketPort").value, item.port);
+              assert.equal(controls.get("proxyMarketUsername").value, item.username);
+              assert.equal(controls.get("proxyMarketPassword").value, item.password);
+              assert.equal(controls.get("proxyMarketSmartInput").value, "");
+              assert.equal(context.adminState.proxyMarketPendingCheckId, "");
+              assert.ok(!controls.get("proxyMarketSmartResult").textContent.includes(item.password));
+            }
             """
         )
 

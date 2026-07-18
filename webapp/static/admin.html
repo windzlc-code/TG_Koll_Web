@@ -158,7 +158,8 @@
 
     .proxy-market-smart-import textarea {
       width: 100%;
-      min-height: 68px;
+      height: 136px;
+      min-height: 136px;
       font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
     }
 
@@ -985,7 +986,8 @@
                 aria-label="待识别的代理信息"
                 autocomplete="off"
                 spellcheck="false"
-                placeholder="例如 165.101.86.27:8022:user:password&#10;direct.provider.example:8001:user:password&#10;台湾&#10;也支持代理链接、JSON 或多行键值"
+                rows="6"
+                placeholder="代理链接：socks5://user:password@198.51.100.27:8022&#10;四段格式：198.51.100.27:8022:user:password&#10;新增供应商格式：198.51.100.27:8022:user:password&#10;direct.provider.example:8001:user:password&#10;台湾&#10;同时支持 JSON、user:password@host:port、竖线分隔和多行键值"
               ></textarea>
               <div class="proxy-market-smart-import-actions">
                 <span class="small proxy-market-smart-result" id="proxyMarketSmartResult" role="status" aria-live="polite">粘贴后会即时识别；真实网络检测仅在点击检测按钮时执行。</span>
