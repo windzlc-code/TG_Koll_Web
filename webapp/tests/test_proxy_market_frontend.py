@@ -440,6 +440,45 @@ class ProxyMarketFrontendTests(unittest.TestCase):
             """
         )
 
+    def test_smart_parser_prevents_silent_overwrite_of_selected_inventory(self):
+        self._run_node(
+            """
+            const apply = context.applyProxyMarketSmartInput;
+            context.adminState.proxyMarketSelectedItemId = "proxy-item-1";
+            context.adminState.proxyMarketItemRows = [{
+              id: "proxy-item-1",
+              sku: "EXISTING-SKU",
+              host: "old.example",
+              port: 8080,
+            }];
+            context.window.confirm = () => true;
+            context.resetProxyMarketEditor = () => {
+              context.adminState.proxyMarketSelectedItemId = null;
+              context.adminState.proxyMarketPendingCheckId = "";
+              for (const id of [
+                "proxyMarketSmartInput", "proxyMarketHost", "proxyMarketPort",
+                "proxyMarketSku", "proxyMarketDisplayName",
+              ]) controls.get(id).value = "";
+            };
+
+            controls.get("proxyMarketSmartInput").value = "new.example:9000:new-user:new-pass";
+            assert.ok(apply());
+            assert.equal(context.adminState.proxyMarketSelectedItemId, null);
+            assert.equal(controls.get("proxyMarketHost").value, "new.example");
+            assert.equal(controls.get("proxyMarketPort").value, "9000");
+            assert.match(controls.get("proxyMarketSku").value, /^IP-new-example-9000-/);
+            assert.ok(controls.get("proxyMarketSmartResult").textContent.includes("原记录未修改"));
+            """
+        )
+
+    def test_editor_publish_returns_to_new_inventory_mode(self):
+        source = ADMIN_JS.read_text(encoding="utf-8")
+        start = source.index("async function publishProxyMarketEditorItem()")
+        end = source.index("async function updateProxyMarketStatus", start)
+        publish_handler = source[start:end]
+        self.assertIn("resetProxyMarketEditor();", publish_handler)
+        self.assertIn("编辑器已切换为新建模式", publish_handler)
+
     def test_inspection_rejects_invalid_input_and_ignores_stale_response(self):
         self._run_node(
             """
