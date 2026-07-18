@@ -240,6 +240,7 @@ html {
 }
 
 .site-icon-button,
+.site-subscription-link,
 .site-mobile-console,
 .site-menu-toggle {
   position: relative;
@@ -256,6 +257,7 @@ html {
 }
 
 .site-icon-button:hover,
+.site-subscription-link:hover,
 .site-mobile-console:hover,
 .site-menu-toggle:hover {
   color: #ffffff;
@@ -263,6 +265,7 @@ html {
 }
 
 .site-icon-button svg,
+.site-subscription-link svg,
 .site-mobile-console svg,
 .site-menu-toggle svg,
 .site-user svg,
@@ -289,6 +292,17 @@ html {
   width: 46px;
   grid-template-columns: 18px auto;
   gap: 3px;
+}
+
+.site-subscription-link {
+  flex: 0 0 auto;
+  text-decoration: none;
+}
+
+.site-subscription-link[aria-current="page"] {
+  color: #77d8c3;
+  background: rgba(119, 216, 195, 0.18);
+  border-color: #77d8c3;
 }
 
 .site-language-state {
@@ -940,6 +954,7 @@ html {
 
   .site-header .brand-logo-frame,
   .site-icon-button,
+  .site-subscription-link,
   .site-mobile-console,
   .site-user {
     width: 38px;
@@ -1005,6 +1020,7 @@ html {
     button,
     .brand,
     .site-icon-button,
+    .site-subscription-link,
     .site-menu-toggle,
     .site-mobile-console,
     .site-user,
@@ -1021,6 +1037,7 @@ html {
 
   .site-header :is(
     .site-icon-button,
+    .site-subscription-link,
     .site-menu-toggle,
     .site-mobile-console,
     .site-user,

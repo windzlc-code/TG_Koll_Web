@@ -192,6 +192,17 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         )
         self.assertIn(".site-header .site-global-controls .site-language-state {", self.site_nav_styles)
 
+    def test_subscription_uses_a_shared_svg_control_outside_main_navigation(self):
+        self.assertNotIn('navLink({ key: "pricing"', self.site_nav_script)
+        for page_name in ("index.html", "pricing.html", "console.html", "proxy-market.html"):
+            markup = (self.static_dir / page_name).read_text(encoding="utf-8")
+            with self.subTest(page_name=page_name):
+                self.assertNotIn('data-site-nav-key="pricing"', markup)
+                self.assertIn('data-site-subscription-entry', markup)
+                self.assertIn('class="site-subscription-icon"', markup)
+        self.assertIn("function subscriptionControl(page = \"\")", self.site_nav_script)
+        self.assertIn(".site-subscription-link[aria-current=\"page\"]", self.site_nav_styles)
+
     def test_home_navigation_opens_console_or_existing_login_dialog(self):
         page = (self.static_dir / "index.html").read_text(encoding="utf-8")
         pricing = (self.static_dir / "pricing.html").read_text(encoding="utf-8")

@@ -278,7 +278,6 @@
       navLink({ key: "solution", href: navHref(page, "#solution"), current }),
       navLink({ key: "accounts", href: navHref(page, "#agents"), current }),
       navLink({ key: "scenarios", href: navHref(page, "#scenarios"), current }),
-      navLink({ key: "pricing", href: "/subscription.html", current }),
       navLink({ key: "proxyMarket", href: "/proxy-market.html", current }),
       navLink({ key: "difference", href: navHref(page, "#service-difference"), current }),
       navLink({ key: "console", href: "/console.html", current }),
@@ -291,6 +290,15 @@
 
   function languageIcon() {
     return `<svg class="site-language-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.4 2.5 3.6 5.5 3.6 9S14.4 18.5 12 21M12 3C9.6 5.5 8.4 8.5 8.4 12s1.2 6.5 3.6 9"></path></svg><span class="site-language-state" data-site-language-state></span>`;
+  }
+
+  function subscriptionIcon() {
+    return `<svg class="site-subscription-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5z"></path><path d="M4 9h16M8 14h3"></path><path d="m17.5 12.5.7 1.4 1.6.2-1.2 1.1.3 1.6-1.4-.8-1.4.8.3-1.6-1.2-1.1 1.6-.2z"></path></svg>`;
+  }
+
+  function subscriptionControl(page = "") {
+    const active = page === "pricing" ? ' aria-current="page"' : "";
+    return `<a class="site-icon-button site-subscription-link" href="/subscription.html"${active} data-site-subscription-entry aria-label="" title="">${subscriptionIcon()}</a>`;
   }
 
   function menuIcon() {
@@ -396,9 +404,9 @@
     const controls = `<div class="site-global-controls" data-site-global-controls><button id="languageToggle" class="site-icon-button site-language-button" type="button" data-site-language-toggle>${languageIcon()}</button></div>`;
     const mobileMenu = renderMobileMenu(page, current, mode);
     if (mode === "authenticated") {
-      return `${mobileMenu}${accountMenuMarkup(page)}`;
+      return `${mobileMenu}${subscriptionControl(page)}${accountMenuMarkup(page)}`;
     }
-    return `${mobileMenu}${controls}<button class="header-login" type="button" data-open-login><span data-site-copy="login"></span></button><a class="header-action site-guest-action" href="${page === "home" ? "#contact" : "/#contact"}"><span data-site-copy="guest"></span></a>`;
+    return `${mobileMenu}${subscriptionControl(page)}${controls}<button class="header-login" type="button" data-open-login><span data-site-copy="login"></span></button><a class="header-action site-guest-action" href="${page === "home" ? "#contact" : "/#contact"}"><span data-site-copy="guest"></span></a>`;
   }
 
   function fallbackMarkup(page, mode, current) {
@@ -941,6 +949,10 @@
     document.querySelectorAll("[data-site-home-label]").forEach((node) => node.setAttribute("aria-label", labels.homeLabel));
     document.querySelectorAll("[data-site-navigation]").forEach((node) => node.setAttribute("aria-label", labels.navigationLabel));
     document.querySelectorAll("[data-site-global-controls]").forEach((node) => node.setAttribute("aria-label", labels.globalSettings));
+    document.querySelectorAll("[data-site-subscription-entry]").forEach((node) => {
+      node.title = labels.pricing;
+      node.setAttribute("aria-label", labels.pricing);
+    });
     document.querySelectorAll("[data-site-personal-controls]").forEach((node) => node.setAttribute("aria-label", labels.personalSettings));
     document.querySelectorAll("[data-site-account-popover]").forEach((node) => node.setAttribute("aria-label", labels.personalProfile));
     document.querySelectorAll("[data-site-console-label]").forEach((node) => node.setAttribute("aria-label", labels.console));
