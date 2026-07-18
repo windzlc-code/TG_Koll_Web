@@ -4227,11 +4227,11 @@ body.persona-touch-dragging .persona-list-card:active {
   white-space: pre-wrap;
 }
 
-.persona-hot-freshness-control {
+.persona-hot-time-window {
   display: inline-flex;
   min-height: 38px;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   padding: 0 10px;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -4239,6 +4239,30 @@ body.persona-touch-dragging .persona-list-card:active {
   color: var(--muted);
   font-size: 13px;
   white-space: nowrap;
+}
+
+.persona-hot-time-window > span {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.persona-hot-freshness-tabs {
+  min-height: 30px;
+}
+
+.persona-hot-freshness-tabs button {
+  min-height: 28px;
+  padding: 0 12px;
+}
+
+.persona-hot-freshness-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.persona-hot-freshness-control[hidden] {
+  display: none;
 }
 
 .persona-hot-freshness-control input {
@@ -4249,7 +4273,7 @@ body.persona-touch-dragging .persona-list-card:active {
   text-align: center;
 }
 
-.persona-hot-freshness-control:focus-within {
+.persona-hot-time-window:focus-within {
   border-color: var(--ink);
 }
 
@@ -14477,8 +14501,8 @@ body.console-page {
   .console-page .persona-detail button,
   .console-page .persona-detail .row-actions a,
   .console-page .persona-detail .row-actions button {
-    min-height: 30px;
-    padding: 4px 7px;
+    min-height: 36px;
+    padding: 5px 8px;
     font-size: 12px;
     line-height: 1.25;
   }
@@ -14519,7 +14543,7 @@ body.console-page {
 
   .console-page .persona-detail label {
     gap: 4px;
-    margin-top: 8px;
+    margin-top: 0;
     font-size: 13px;
   }
 
@@ -14541,8 +14565,8 @@ body.console-page {
   .console-page .persona-detail .persona-compose-toggle button,
   .console-page .persona-detail .persona-source-toggle button,
   .console-page .persona-detail .persona-media-operation-toggle button {
-    min-height: 28px;
-    padding: 3px 3px;
+    min-height: 34px;
+    padding: 4px 5px;
     font-size: 11px;
   }
 
@@ -14589,8 +14613,8 @@ body.console-page {
   }
 
   .console-page .persona-detail .persona-hot-freshness-tabs button {
-    min-height: 26px;
-    padding: 2px 6px;
+    min-height: 30px;
+    padding: 3px 7px;
     font-size: 11px;
   }
 

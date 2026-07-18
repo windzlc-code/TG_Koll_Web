@@ -2780,7 +2780,7 @@ function personaFormState(personaId) {
   const key = String(personaId || "").trim();
   if (!key) {
     return {
-      generate: { mode: "ai", composeMode: "tweet", count: storedPersonaGenerateCount(), targetWords: storedPersonaGenerateTargetWords(), contentTimeSlot: "", prompt: "", selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotEditingCandidateId: "", hotPrompt: "", hotSearchMode: "strict", hotFreshnessDays: 7, hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {}, hotSelectedMediaIndexByCandidate: {}, hotReplacementFilesByCandidate: {}, hotReplacementPoolByCandidate: {}, hotSelectedReplacementPoolIdByCandidate: {} },
+      generate: { mode: "ai", composeMode: "tweet", count: storedPersonaGenerateCount(), targetWords: storedPersonaGenerateTargetWords(), contentTimeSlot: "", prompt: "", selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotEditingCandidateId: "", hotPrompt: "", hotSearchMode: "strict", hotFreshnessMode: "default", hotFreshnessDays: 7, hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {}, hotSelectedMediaIndexByCandidate: {}, hotReplacementFilesByCandidate: {}, hotReplacementPoolByCandidate: {}, hotSelectedReplacementPoolIdByCandidate: {} },
       draft: defaultPersonaDraftForm(),
       media: { taskType: "persona_post_image", contentMode: "draft", manualContent: "", prompt: "", imageCount: storedPersonaMediaImageCount(), aspectRatio: "1:1", resolution: "720p", duration: 2, replaceExisting: false },
       images: { prompt: "", aspectRatio: "1:1" },
@@ -2801,6 +2801,7 @@ function personaFormState(personaId) {
         hotEditingCandidateId: "",
         hotPrompt: "",
         hotSearchMode: "strict",
+        hotFreshnessMode: "default",
         hotFreshnessDays: 7,
         hotDeletedMediaByCandidate: {},
         hotEditedContentByCandidate: {},
@@ -14633,9 +14634,12 @@ function renderPersonaHotCandidatePicker(persona, form) {
   const hotBusy = isActionLocked("persona", persona?.id || "", "hot_candidates");
   const hotBusyStartedAt = actionLockStartedAt("persona", persona?.id || "", "hot_candidates");
   form.hotSearchMode = normalizePersonaHotSearchMode(form.hotSearchMode || hotState.search_mode);
-  form.hotFreshnessDays = normalizePersonaHotFreshnessDays(hotState.freshness_days ?? form.hotFreshnessDays);
+  const hasHotFreshnessMode = form.hotFreshnessMode === "custom" || form.hotFreshnessMode === "default";
+  form.hotFreshnessDays = normalizePersonaHotFreshnessDays(hasHotFreshnessMode ? form.hotFreshnessDays : (hotState.freshness_days ?? form.hotFreshnessDays));
   const hotMode = form.hotSearchMode;
   const hotFreshnessDays = form.hotFreshnessDays;
+  const hotFreshnessMode = form.hotFreshnessMode === "custom" || hotFreshnessDays !== 7 ? "custom" : "default";
+  form.hotFreshnessMode = hotFreshnessMode;
   return `
     <div class="persona-hot-filters">
       <div class="persona-head-copy">
@@ -14654,11 +14658,17 @@ function renderPersonaHotCandidatePicker(persona, form) {
         <small>${hotMode === "normal" ? "泛垂直：覆盖同领域宽泛热点" : "垂直：更贴合当前人设关键词"}</small>
       </div>
       <div class="row-actions">
-        <label class="persona-hot-freshness-control" title="输入 0 表示不限时间">
-          <span>新鲜度</span>
-          <input type="number" min="0" max="15" step="1" value="${esc(hotFreshnessDays)}" data-persona-hot-freshness-days ${hotBusy ? "disabled" : ""} aria-label="热点新鲜度天数">
-          <span data-persona-hot-freshness-unit>${hotFreshnessDays > 0 ? "天内" : "不限"}</span>
-        </label>
+        <div class="persona-hot-time-window">
+          <span>热点时限</span>
+          <div class="automation-capsule-tabs persona-hot-freshness-tabs" aria-label="热点时限模式">
+            <button type="button" data-persona-hot-freshness-mode="default" class="${hotFreshnessMode === "default" ? "is-active" : ""}" ${hotBusy ? "disabled" : ""}>保持默认</button>
+            <button type="button" data-persona-hot-freshness-mode="custom" class="${hotFreshnessMode === "custom" ? "is-active" : ""}" ${hotBusy ? "disabled" : ""}>自定义</button>
+          </div>
+          <label class="persona-hot-freshness-control" title="输入 0 表示不限时间" ${hotFreshnessMode === "custom" ? "" : "hidden"}>
+            <input type="number" min="0" max="15" step="1" value="${esc(hotFreshnessDays)}" data-persona-hot-freshness-days ${hotBusy ? "disabled" : ""} aria-label="热点时限天数">
+            <span data-persona-hot-freshness-unit>${hotFreshnessDays > 0 ? "天内" : "不限"}</span>
+          </label>
+        </div>
         <button type="button" class="primary" data-persona-fetch-hot ${hotBusy ? "disabled" : ""}>${hotBusy ? renderBusyButtonContent("正在抓取热点", true, hotBusyStartedAt) : "抓取热点"}</button>
         <button type="button" data-persona-fetch-hot-refresh ${!hotBusy ? "" : "disabled"}>${hotBusy ? "正在刷新..." : "刷新候选"}</button>
       </div>
@@ -14667,7 +14677,7 @@ function renderPersonaHotCandidatePicker(persona, form) {
       <div class="persona-inline-panel persona-inline-panel--nested">
         ${keywords.length ? `<div class="persona-hot-status-row"><strong>本次关键词</strong><span>${esc(keywords.join(" / "))}</span></div>` : ""}
         <div class="persona-hot-status-row"><strong>抓取方式</strong><span>${esc(personaHotSearchModeLabel(hotState.search_mode || hotMode))}</span></div>
-        <div class="persona-hot-status-row"><strong>新鲜度</strong><span>${esc(personaHotFreshnessLabel(hotState.freshness_days ?? hotFreshnessDays))}</span></div>
+        <div class="persona-hot-status-row"><strong>热点时限</strong><span>${esc(personaHotFreshnessLabel(hotState.freshness_days ?? hotFreshnessDays))}</span></div>
         ${cookieStatuses.length ? `<div class="persona-hot-status-row"><strong>Cookie 状态</strong><span>${esc(cookieStatuses.map((item) => `${item.label || item.platform || "-"}：${item.message || item.health || "-"}`).join(" / "))}</span></div>` : ""}
         ${warnings.length ? `<div class="persona-warning-inline">${warnings.map(esc).join(" / ")}</div>` : ""}
       </div>
@@ -20654,6 +20664,20 @@ function bindEvents() {
       }
       return;
     }
+    const hotFreshnessModeButton = event.target.closest("[data-persona-hot-freshness-mode]");
+    if (hotFreshnessModeButton) {
+      const persona = selectedPersona();
+      if (persona) {
+        snapshotPersonaCurrentForm();
+        const form = personaFormState(persona.id).generate;
+        form.hotFreshnessMode = hotFreshnessModeButton.dataset.personaHotFreshnessMode === "custom" ? "custom" : "default";
+        if (form.hotFreshnessMode === "default") form.hotFreshnessDays = 7;
+        else form.hotFreshnessDays = normalizePersonaHotFreshnessDays(form.hotFreshnessDays || 7);
+        renderPersonaDetail();
+        renderConfirmSummary();
+      }
+      return;
+    }
     if (event.target.closest("[data-persona-fetch-hot]")) {
       fetchPersonaHotCandidates(false).catch(() => {});
       return;
@@ -21566,7 +21590,9 @@ function bindEvents() {
       const persona = selectedPersona();
       if (!persona) return;
       const days = normalizePersonaHotFreshnessDays(event.target.value);
-      personaFormState(persona.id).generate.hotFreshnessDays = days;
+      const form = personaFormState(persona.id).generate;
+      form.hotFreshnessMode = "custom";
+      form.hotFreshnessDays = days;
       event.target.value = String(days);
       const unit = event.target.parentElement?.querySelector?.("[data-persona-hot-freshness-unit]");
       if (unit) unit.textContent = days > 0 ? "天内" : "不限";
