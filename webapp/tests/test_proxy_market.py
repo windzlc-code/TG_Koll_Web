@@ -300,6 +300,179 @@ class ProxyMarketTests(unittest.TestCase):
         )
         self.assertEqual(rejected.status_code, 409, rejected.text)
 
+    def test_inventory_capacity_is_admin_configurable_and_archive_releases_capacity(self):
+        saved = self.admin.patch(
+            "/api/admin/proxy-market/settings",
+            headers=self.origin,
+            json={
+                "default_claim_limit": 250,
+                "health_max_age_seconds": 86400,
+                "inventory_capacity": 1,
+            },
+        )
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(saved.json()["settings"]["default_claim_limit"], 250)
+        self.assertEqual(saved.json()["settings"]["inventory_capacity"], 1)
+        capacity_only_update = self.admin.patch(
+            "/api/admin/proxy-market/settings",
+            headers=self.origin,
+            json={"inventory_capacity": 1},
+        )
+        self.assertEqual(capacity_only_update.status_code, 200, capacity_only_update.text)
+        self.assertEqual(capacity_only_update.json()["settings"]["default_claim_limit"], 250)
+        self.assertEqual(capacity_only_update.json()["settings"]["health_max_age_seconds"], 86400)
+        legacy_update = self.admin.patch(
+            "/api/admin/proxy-market/settings",
+            headers=self.origin,
+            json={"default_claim_limit": 250, "health_max_age_seconds": 86400},
+        )
+        self.assertEqual(legacy_update.status_code, 200, legacy_update.text)
+        self.assertEqual(legacy_update.json()["settings"]["inventory_capacity"], 1)
+
+        first = self.admin.post(
+            "/api/admin/proxy-market/items",
+            headers=self.origin,
+            json={
+                "sku": "CAPACITY-001",
+                "display_name": "Capacity one",
+                "provider_key": "qa-provider",
+                "proxy_type": "socks5",
+                "host": "203.0.113.21",
+                "port": 1080,
+                "ip_type": "static_residential",
+            },
+        )
+        self.assertEqual(first.status_code, 200, first.text)
+        blocked = self.admin.post(
+            "/api/admin/proxy-market/items",
+            headers=self.origin,
+            json={
+                "sku": "CAPACITY-002",
+                "display_name": "Capacity two",
+                "provider_key": "qa-provider",
+                "proxy_type": "socks5",
+                "host": "203.0.113.22",
+                "port": 1080,
+                "ip_type": "static_residential",
+            },
+        )
+        self.assertEqual(blocked.status_code, 409, blocked.text)
+
+        archived = self.admin.post(
+            f"/api/admin/proxy-market/items/{first.json()['item']['id']}/archive",
+            headers=self.origin,
+        )
+        self.assertEqual(archived.status_code, 200, archived.text)
+        replacement = self.admin.post(
+            "/api/admin/proxy-market/items",
+            headers=self.origin,
+            json={
+                "sku": "CAPACITY-003",
+                "display_name": "Capacity replacement",
+                "provider_key": "qa-provider",
+                "proxy_type": "socks5",
+                "host": "203.0.113.23",
+                "port": 1080,
+                "ip_type": "static_residential",
+            },
+        )
+        self.assertEqual(replacement.status_code, 200, replacement.text)
+
+        listed = self.admin.get("/api/admin/proxy-market/items")
+        self.assertEqual(listed.status_code, 200, listed.text)
+        self.assertEqual(listed.json()["inventory"]["count"], 1)
+        self.assertEqual(listed.json()["inventory"]["capacity"], 1)
+
+    def test_zero_inventory_capacity_means_unlimited(self):
+        saved = self.admin.patch(
+            "/api/admin/proxy-market/settings",
+            headers=self.origin,
+            json={
+                "default_claim_limit": 3,
+                "health_max_age_seconds": 86400,
+                "inventory_capacity": 0,
+            },
+        )
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(saved.json()["settings"]["inventory_capacity"], 0)
+        self.assertEqual(self._market_item("UNLIMITED-001")["sku"], "UNLIMITED-001")
+        self.assertEqual(self._market_item("UNLIMITED-002")["sku"], "UNLIMITED-002")
+
+    def test_lowering_inventory_capacity_preserves_existing_items_and_blocks_new_items(self):
+        self._market_item("LOWER-CAPACITY-001")
+        self._market_item("LOWER-CAPACITY-002")
+        saved = self.admin.patch(
+            "/api/admin/proxy-market/settings",
+            headers=self.origin,
+            json={"inventory_capacity": 1},
+        )
+        self.assertEqual(saved.status_code, 200, saved.text)
+
+        listed = self.admin.get("/api/admin/proxy-market/items")
+        self.assertEqual(listed.status_code, 200, listed.text)
+        self.assertEqual(listed.json()["inventory"]["count"], 2)
+        self.assertEqual(listed.json()["inventory"]["capacity"], 1)
+        self.assertEqual(listed.json()["inventory"]["remaining"], 0)
+        blocked = self.admin.post(
+            "/api/admin/proxy-market/items",
+            headers=self.origin,
+            json={
+                "sku": "LOWER-CAPACITY-003",
+                "display_name": "Blocked by lower capacity",
+                "provider_key": "qa-provider",
+                "proxy_type": "socks5",
+                "host": "203.0.113.33",
+                "port": 1080,
+                "ip_type": "static_residential",
+            },
+        )
+        self.assertEqual(blocked.status_code, 409, blocked.text)
+        self.assertEqual(len(self.admin.get("/api/admin/proxy-market/items").json()["items"]), 2)
+
+    def test_inventory_capacity_serializes_concurrent_creates(self):
+        saved = self.admin.patch(
+            "/api/admin/proxy-market/settings",
+            headers=self.origin,
+            json={"inventory_capacity": 1},
+        )
+        self.assertEqual(saved.status_code, 200, saved.text)
+        clients = [TestClient(self.app), TestClient(self.app)]
+        for client in clients:
+            login = client.post(
+                "/api/auth/admin-login",
+                json={"username": "admin", "password": self.ADMIN_PASSWORD},
+            )
+            self.assertEqual(login.status_code, 200, login.text)
+            client.headers["X-Admin-Console"] = "1"
+        barrier = threading.Barrier(2)
+
+        def create_item(client: TestClient, suffix: int):
+            barrier.wait(timeout=5)
+            return client.post(
+                "/api/admin/proxy-market/items",
+                headers=self.origin,
+                json={
+                    "sku": f"CONCURRENT-CAPACITY-{suffix}",
+                    "display_name": f"Concurrent capacity {suffix}",
+                    "provider_key": "qa-provider",
+                    "proxy_type": "socks5",
+                    "host": f"203.0.113.{40 + suffix}",
+                    "port": 1080,
+                    "ip_type": "static_residential",
+                },
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [
+                pool.submit(create_item, clients[0], 1),
+                pool.submit(create_item, clients[1], 2),
+            ]
+            responses = [future.result(timeout=15) for future in futures]
+
+        self.assertEqual(sorted(response.status_code for response in responses), [200, 409])
+        listed = self.admin.get("/api/admin/proxy-market/items")
+        self.assertEqual(listed.json()["inventory"]["count"], 1)
+
     def test_admin_test_publish_syncs_claimed_proxy(self):
         item = self._market_item()
         customer, _ = self._customer("sync_buyer")

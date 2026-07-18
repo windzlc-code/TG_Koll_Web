@@ -112,6 +112,68 @@
       letter-spacing: 0;
     }
 
+    .proxy-market-records-head {
+      align-items: center;
+    }
+
+    .proxy-market-record-tabs {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      max-width: 100%;
+      padding: 3px;
+      overflow-x: auto;
+      border: 1px solid var(--line, #d9e0e8);
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--surface, #fff) 92%, var(--line, #d9e0e8));
+      scrollbar-width: none;
+    }
+
+    .proxy-market-record-tabs::-webkit-scrollbar {
+      display: none;
+    }
+
+    .page-admin .proxy-market-record-tab {
+      width: auto;
+      min-width: 112px;
+      min-height: 38px;
+      padding: 7px 14px;
+      border: 0;
+      border-radius: 999px;
+      color: var(--muted, #64748b);
+      background: transparent;
+      white-space: nowrap;
+    }
+
+    .page-admin .proxy-market-record-tab.is-active {
+      color: #fff;
+      background: var(--ink, #17202a);
+      box-shadow: none;
+    }
+
+    .proxy-market-record-tab-count {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 22px;
+      height: 22px;
+      margin-left: 5px;
+      padding: 0 6px;
+      border-radius: 999px;
+      color: inherit;
+      background: color-mix(in srgb, currentColor 13%, transparent);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .proxy-market-record-panel[hidden] {
+      display: none;
+    }
+
+    .proxy-market-record-panel .proxy-market-admin-filters {
+      margin-bottom: 16px;
+    }
+
     .proxy-market-admin-form {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -257,9 +319,18 @@
 
     .proxy-market-settings-form {
       display: grid;
-      grid-template-columns: minmax(160px, 220px) minmax(190px, 260px) auto;
+      grid-template-columns: minmax(160px, 220px) minmax(160px, 220px) minmax(190px, 260px) max-content;
       align-items: end;
       gap: 12px;
+    }
+
+    #proxyMarketUserLimitForm {
+      grid-template-columns: minmax(160px, 220px) minmax(190px, 260px) max-content;
+    }
+
+    .proxy-market-settings-form button {
+      width: auto;
+      justify-self: start;
     }
 
     .proxy-market-loading {
@@ -309,6 +380,14 @@
       .proxy-market-admin-form,
       .proxy-market-settings-form {
         grid-template-columns: 1fr;
+      }
+
+      #proxyMarketUserLimitForm {
+        grid-template-columns: 1fr;
+      }
+
+      .proxy-market-settings-form button {
+        width: 100%;
       }
 
       .proxy-market-admin-stat,
@@ -950,53 +1029,95 @@
           <div class="proxy-market-admin-stat"><span class="small">需处理</span><strong id="proxyMarketStatAttention">0</strong></div>
         </div>
 
-        <form id="proxyMarketFilterForm" class="proxy-market-admin-filters">
-          <label><span>搜索</span><input id="proxyMarketQuery" type="search" placeholder="SKU、名称、主机或 ISP"></label>
-          <label><span>库存状态</span>
-            <select id="proxyMarketStatusFilter">
-              <option value="">全部</option>
-              <option value="draft">草稿</option>
-              <option value="active">已发布</option>
-              <option value="allocated">已分配</option>
-              <option value="maintenance">维护中</option>
-              <option value="disabled">已禁用</option>
-              <option value="archived">已归档</option>
-            </select>
-          </label>
-          <label><span>健康状态</span>
-            <select id="proxyMarketHealthFilter">
-              <option value="">全部</option>
-              <option value="healthy">健康</option>
-              <option value="pending">待检测</option>
-              <option value="failed">检测失败</option>
-            </select>
-          </label>
-          <div class="proxy-market-admin-actions">
-            <button type="submit" class="primary">筛选</button>
-            <button id="btnResetProxyMarketFilters" type="button" class="ghost" title="重置筛选" aria-label="重置代理商城筛选">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4v6h6"></path><path d="M5.5 15a7 7 0 1 0 .6-7.7L4 10"></path></svg>
-            </button>
-          </div>
-        </form>
-
-        <div class="proxy-market-admin-band">
-          <div class="proxy-market-admin-band-head">
+        <div class="proxy-market-admin-band" id="proxyMarketRecordsBand">
+          <div class="proxy-market-admin-band-head proxy-market-records-head">
             <div>
-              <h3>库存</h3>
-              <div class="small" id="proxyMarketInventorySummary">尚未加载</div>
+              <h3>库存与分配</h3>
+              <div class="small">在同一区域切换查看商城库存和客户分配记录。</div>
             </div>
-            <button id="btnNewProxyMarketItem" type="button" class="primary">
-              <svg viewBox="0 0 24 24" aria-hidden="true" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round"><path d="M12 5v14M5 12h14"></path></svg>
-              新建代理
-            </button>
+            <div class="proxy-market-record-tabs" id="proxyMarketRecordsTabs" role="tablist" aria-label="代理商城记录视图">
+              <button id="proxyMarketInventoryTab" class="proxy-market-record-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="proxyMarketInventoryPanel" tabindex="0" data-proxy-market-records-view="inventory">
+                库存 <span class="proxy-market-record-tab-count" id="proxyMarketInventoryTabCount">0</span>
+              </button>
+              <button id="proxyMarketAllocationTab" class="proxy-market-record-tab" type="button" role="tab" aria-selected="false" aria-controls="proxyMarketAllocationPanel" tabindex="-1" data-proxy-market-records-view="allocations">
+                分配记录 <span class="proxy-market-record-tab-count" id="proxyMarketAllocationTabCount">0</span>
+              </button>
+            </div>
           </div>
-          <div class="table-wrap admin-table-shell admin-governance-table-shell">
-            <table class="table admin-governance-table proxy-market-admin-table">
-              <thead><tr><th>SKU / 名称</th><th>连接 / 地区</th><th>健康</th><th>库存状态</th><th>价格 / 到期</th><th>操作</th></tr></thead>
-              <tbody id="proxyMarketItemBody">
-                <tr><td colspan="6">进入页面后加载库存...</td></tr>
-              </tbody>
-            </table>
+
+          <div class="proxy-market-record-panel" id="proxyMarketInventoryPanel" role="tabpanel" aria-labelledby="proxyMarketInventoryTab">
+            <form id="proxyMarketFilterForm" class="proxy-market-admin-filters">
+              <label><span>搜索</span><input id="proxyMarketQuery" type="search" placeholder="SKU、名称、主机或 ISP"></label>
+              <label><span>库存状态</span>
+                <select id="proxyMarketStatusFilter">
+                  <option value="">全部</option>
+                  <option value="draft">草稿</option>
+                  <option value="active">已发布</option>
+                  <option value="allocated">已分配</option>
+                  <option value="maintenance">维护中</option>
+                  <option value="disabled">已禁用</option>
+                  <option value="archived">已归档</option>
+                </select>
+              </label>
+              <label><span>健康状态</span>
+                <select id="proxyMarketHealthFilter">
+                  <option value="">全部</option>
+                  <option value="healthy">健康</option>
+                  <option value="pending">待检测</option>
+                  <option value="failed">检测失败</option>
+                </select>
+              </label>
+              <div class="proxy-market-admin-actions">
+                <button type="submit" class="primary">筛选</button>
+                <button id="btnResetProxyMarketFilters" type="button" class="ghost" title="重置筛选" aria-label="重置代理商城筛选">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4v6h6"></path><path d="M5.5 15a7 7 0 1 0 .6-7.7L4 10"></path></svg>
+                </button>
+              </div>
+            </form>
+            <div class="proxy-market-admin-band-head">
+              <div>
+                <h3>库存</h3>
+                <div class="small" id="proxyMarketInventorySummary">尚未加载</div>
+              </div>
+              <button id="btnNewProxyMarketItem" type="button" class="primary">
+                <svg viewBox="0 0 24 24" aria-hidden="true" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round"><path d="M12 5v14M5 12h14"></path></svg>
+                新建代理
+              </button>
+            </div>
+            <div class="table-wrap admin-table-shell admin-governance-table-shell">
+              <table class="table admin-governance-table proxy-market-admin-table">
+                <thead><tr><th>SKU / 名称</th><th>连接 / 地区</th><th>健康</th><th>库存状态</th><th>价格 / 到期</th><th>操作</th></tr></thead>
+                <tbody id="proxyMarketItemBody">
+                  <tr><td colspan="6">进入页面后加载库存...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="proxy-market-record-panel" id="proxyMarketAllocationPanel" role="tabpanel" aria-labelledby="proxyMarketAllocationTab" hidden>
+            <div class="proxy-market-admin-band-head">
+              <div>
+                <h3>分配记录</h3>
+                <div class="small" id="proxyMarketAllocationSummary">尚未加载</div>
+              </div>
+              <label><span class="small">状态</span>
+                <select id="proxyMarketAllocationStatus">
+                  <option value="">全部</option>
+                  <option value="active">使用中</option>
+                  <option value="released">已释放</option>
+                  <option value="revoked">已回收</option>
+                </select>
+              </label>
+            </div>
+            <div class="table-wrap admin-table-shell admin-governance-table-shell">
+              <table class="table admin-governance-table proxy-market-admin-table">
+                <thead><tr><th>客户</th><th>代理</th><th>状态</th><th>绑定账号</th><th>领取 / 更新</th><th>操作</th></tr></thead>
+                <tbody id="proxyMarketAllocationBody">
+                  <tr><td colspan="6">进入页面后加载分配记录...</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div id="proxyMarketAllocationMsg" class="msg" role="status" aria-live="polite"></div>
           </div>
         </div>
 
@@ -1097,45 +1218,20 @@
         <div class="proxy-market-admin-band">
           <div class="proxy-market-admin-band-head">
             <div>
-              <h3>分配记录</h3>
-              <div class="small" id="proxyMarketAllocationSummary">尚未加载</div>
-            </div>
-            <label><span class="small">状态</span>
-              <select id="proxyMarketAllocationStatus">
-                <option value="">全部</option>
-                <option value="active">使用中</option>
-                <option value="released">已释放</option>
-                <option value="revoked">已回收</option>
-              </select>
-            </label>
-          </div>
-          <div class="table-wrap admin-table-shell admin-governance-table-shell">
-            <table class="table admin-governance-table proxy-market-admin-table">
-              <thead><tr><th>客户</th><th>代理</th><th>状态</th><th>绑定账号</th><th>领取 / 更新</th><th>操作</th></tr></thead>
-              <tbody id="proxyMarketAllocationBody">
-                <tr><td colspan="6">进入页面后加载分配记录...</td></tr>
-              </tbody>
-            </table>
-          </div>
-          <div id="proxyMarketAllocationMsg" class="msg" role="status" aria-live="polite"></div>
-        </div>
-
-        <div class="proxy-market-admin-band">
-          <div class="proxy-market-admin-band-head">
-            <div>
-              <h3>领取与健康策略</h3>
-              <div class="small">默认上限适用于未设置单独额度的客户；过期健康检测会阻止代理被领取。</div>
+              <h3>库存、领取与健康策略</h3>
+              <div class="small">库存容量与客户领取额度独立设置；库存容量为 0 时不限制，过期健康检测会阻止代理被领取。</div>
             </div>
           </div>
           <form id="proxyMarketSettingsForm" class="proxy-market-settings-form">
-            <label><span>默认领取上限</span><input id="proxyMarketDefaultClaimLimit" type="number" min="0" max="100" step="1" required></label>
+            <label><span>库存容量上限（0 为不限量）</span><input id="proxyMarketInventoryCapacity" type="number" min="0" step="1" required></label>
+            <label><span>每客户默认领取上限</span><input id="proxyMarketDefaultClaimLimit" type="number" min="0" step="1" required></label>
             <label><span>健康有效时长（小时）</span><input id="proxyMarketHealthMaxAgeHours" type="number" min="0.0834" max="168" step="0.5" required></label>
             <button type="submit" class="primary">保存设置</button>
           </form>
           <div id="proxyMarketSettingsMsg" class="msg" role="status" aria-live="polite"></div>
           <form id="proxyMarketUserLimitForm" class="proxy-market-settings-form proxy-market-admin-band">
             <label><span>客户 ID</span><input id="proxyMarketLimitUserId" type="number" min="1" step="1" placeholder="例如 12" required></label>
-            <label><span>客户单独上限</span><input id="proxyMarketUserClaimLimit" type="number" min="0" max="100" step="1" placeholder="留空恢复默认"></label>
+            <label><span>客户单独领取上限</span><input id="proxyMarketUserClaimLimit" type="number" min="0" step="1" placeholder="留空恢复默认"></label>
             <button type="submit" class="ghost">保存客户额度</button>
           </form>
           <div id="proxyMarketUserLimitMsg" class="msg" role="status" aria-live="polite"></div>

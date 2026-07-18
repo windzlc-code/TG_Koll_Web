@@ -1629,6 +1629,8 @@ const adminState = {
   serviceAccountRows: [],
   proxyMarketItemRows: [],
   proxyMarketAllocationRows: [],
+  proxyMarketInventory: { count: 0, capacity: 0, remaining: null },
+  proxyMarketRecordsView: "inventory",
   proxyMarketSelectedItemId: null,
   proxyMarketInspectRequestId: 0,
   proxyMarketPendingCheckId: "",
@@ -6116,9 +6118,29 @@ function renderProxyMarketItems(payload = {}) {
   const body = el("proxyMarketItemBody");
   if (!body) return;
   const rows = Array.isArray(payload.items) ? payload.items : [];
+  const inventory = payload.inventory && typeof payload.inventory === "object"
+    ? payload.inventory
+    : { count: rows.filter((item) => String(item.status) !== "archived").length, capacity: 0, remaining: null };
+  const inventoryCount = Math.max(0, Number(inventory.count || 0));
+  const inventoryCapacity = Math.max(0, Number(inventory.capacity || 0));
   adminState.proxyMarketItemRows = rows;
+  adminState.proxyMarketInventory = {
+    count: inventoryCount,
+    capacity: inventoryCapacity,
+    remaining: inventoryCapacity === 0 ? null : Math.max(0, inventoryCapacity - inventoryCount),
+  };
   renderProxyMarketStats(rows);
-  setText("proxyMarketInventorySummary", `显示 ${rows.length} 条库存`);
+  setText("proxyMarketInventoryTabCount", rows.length);
+  setText(
+    "proxyMarketInventorySummary",
+    `当前筛选 ${rows.length} 条 · 有效库存 ${inventoryCount} / ${inventoryCapacity === 0 ? "不限量" : `上限 ${inventoryCapacity}`}`,
+  );
+  const newButton = el("btnNewProxyMarketItem");
+  if (newButton) {
+    const atCapacity = inventoryCapacity > 0 && inventoryCount >= inventoryCapacity;
+    newButton.disabled = atCapacity;
+    newButton.title = atCapacity ? `库存已达到管理员设置的上限（${inventoryCapacity} 条）` : "";
+  }
   body.replaceChildren();
   if (!rows.length) {
     const row = document.createElement("tr");
@@ -6262,6 +6284,7 @@ function renderProxyMarketAllocations(payload = {}) {
   if (!body) return;
   const rows = Array.isArray(payload.items) ? payload.items : [];
   adminState.proxyMarketAllocationRows = rows;
+  setText("proxyMarketAllocationTabCount", rows.length);
   setText("proxyMarketAllocationSummary", `显示 ${rows.length} 条分配记录`);
   body.replaceChildren();
   if (!rows.length) {
@@ -6304,6 +6327,24 @@ function renderProxyMarketAllocations(payload = {}) {
   });
 }
 
+function setProxyMarketRecordsView(view) {
+  const normalized = view === "allocations" ? "allocations" : "inventory";
+  adminState.proxyMarketRecordsView = normalized;
+  const pairs = [
+    ["inventory", "proxyMarketInventoryTab", "proxyMarketInventoryPanel"],
+    ["allocations", "proxyMarketAllocationTab", "proxyMarketAllocationPanel"],
+  ];
+  pairs.forEach(([name, tabId, panelId]) => {
+    const active = normalized === name;
+    const tab = el(tabId);
+    const panel = el(panelId);
+    tab?.classList.toggle("is-active", active);
+    tab?.setAttribute("aria-selected", active ? "true" : "false");
+    tab?.setAttribute("tabindex", active ? "0" : "-1");
+    if (panel) panel.hidden = !active;
+  });
+}
+
 async function loadProxyMarketAllocations() {
   const body = el("proxyMarketAllocationBody");
   body?.setAttribute("aria-busy", "true");
@@ -6326,6 +6367,9 @@ async function loadProxyMarketAllocations() {
 function renderProxyMarketSettings(payload = {}) {
   const settings = payload.settings && typeof payload.settings === "object" ? payload.settings : payload;
   adminState.proxyMarketSettings = settings || {};
+  if (el("proxyMarketInventoryCapacity")) {
+    el("proxyMarketInventoryCapacity").value = String(Number(settings?.inventory_capacity ?? 0));
+  }
   if (el("proxyMarketDefaultClaimLimit")) {
     el("proxyMarketDefaultClaimLimit").value = String(Number(settings?.default_claim_limit ?? 3));
   }
@@ -6349,6 +6393,7 @@ async function loadProxyMarketSettings() {
 
 async function loadProxyMarketWorkspace() {
   if (adminState.proxyMarketLoadingPromise) return adminState.proxyMarketLoadingPromise;
+  setProxyMarketRecordsView(adminState.proxyMarketRecordsView);
   const section = el("secProxyMarket");
   section?.classList.add("proxy-market-loading");
   const request = Promise.allSettled([
@@ -6694,11 +6739,14 @@ async function revokeProxyMarketAllocation(allocationId, button) {
 }
 
 async function saveProxyMarketSettings() {
+  const inventoryCapacity = Math.round(Number(el("proxyMarketInventoryCapacity")?.value));
   const claimLimit = Math.round(Number(el("proxyMarketDefaultClaimLimit")?.value));
   const healthHours = Number(el("proxyMarketHealthMaxAgeHours")?.value);
-  if (!Number.isFinite(claimLimit) || claimLimit < 0 || claimLimit > 100) throw new Error("默认领取上限需在 0-100 之间");
+  if (!Number.isSafeInteger(inventoryCapacity) || inventoryCapacity < 0) throw new Error("库存容量上限需为非负整数，0 表示不限量");
+  if (!Number.isSafeInteger(claimLimit) || claimLimit < 0) throw new Error("每客户默认领取上限需为非负整数");
   if (!Number.isFinite(healthHours) || healthHours < (5 / 60) || healthHours > 168) throw new Error("健康有效时长需在 5 分钟至 168 小时之间");
   const payload = {
+    inventory_capacity: inventoryCapacity,
     default_claim_limit: claimLimit,
     health_max_age_seconds: Math.max(300, Math.min(604800, Math.round(healthHours * 3600))),
   };
@@ -6709,7 +6757,7 @@ async function saveProxyMarketSettings() {
   });
   renderProxyMarketSettings(result || {});
   await loadProxyMarketItems();
-  setMsg("proxyMarketSettingsMsg", "代理商城领取与健康策略已保存", true);
+  setMsg("proxyMarketSettingsMsg", "代理商城库存、领取与健康策略已保存", true);
   return result;
 }
 
@@ -6718,8 +6766,8 @@ async function saveProxyMarketUserLimit() {
   const rawLimit = String(el("proxyMarketUserClaimLimit")?.value || "").trim();
   const claimLimit = rawLimit === "" ? null : Math.round(Number(rawLimit));
   if (!Number.isInteger(userId) || userId <= 0) throw new Error("请输入有效的客户 ID");
-  if (claimLimit !== null && (!Number.isInteger(claimLimit) || claimLimit < 0 || claimLimit > 100)) {
-    throw new Error("客户单独上限需在 0-100 之间，留空可恢复默认");
+  if (claimLimit !== null && (!Number.isSafeInteger(claimLimit) || claimLimit < 0)) {
+    throw new Error("客户单独领取上限需为非负整数，留空可恢复默认");
   }
   const result = await api(`/api/admin/users/${encodeURIComponent(userId)}/proxy-market-limit`, {
     method: "PATCH",
@@ -7405,6 +7453,31 @@ function bindActions() {
     } catch (error) {
       setMsg("proxyMarketMsg", getErrorMessage(error), false);
     }
+  });
+  el("proxyMarketRecordsTabs")?.addEventListener("click", (event) => {
+    const tab = event.target instanceof Element
+      ? event.target.closest("button[data-proxy-market-records-view]")
+      : null;
+    if (!(tab instanceof HTMLButtonElement)) return;
+    setProxyMarketRecordsView(tab.dataset.proxyMarketRecordsView || "inventory");
+  });
+  el("proxyMarketRecordsTabs")?.addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    const tabs = [
+      el("proxyMarketInventoryTab"),
+      el("proxyMarketAllocationTab"),
+    ].filter((tab) => tab instanceof HTMLButtonElement);
+    if (!tabs.length) return;
+    const currentIndex = Math.max(0, tabs.indexOf(document.activeElement));
+    const nextIndex = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? tabs.length - 1
+        : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+    event.preventDefault();
+    const nextTab = tabs[nextIndex];
+    setProxyMarketRecordsView(nextTab.dataset.proxyMarketRecordsView || "inventory");
+    nextTab.focus();
   });
   el("proxyMarketAllocationStatus")?.addEventListener("change", async () => {
     try {

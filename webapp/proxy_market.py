@@ -115,16 +115,17 @@ class ProxyMarketReadPayload(BaseModel):
 
 
 class ProxyMarketSettingsPayload(BaseModel):
-    default_claim_limit: int = Field(default=DEFAULT_CLAIM_LIMIT, ge=0, le=100)
-    health_max_age_seconds: int = Field(
-        default=DEFAULT_HEALTH_MAX_AGE_SECONDS,
+    default_claim_limit: int | None = Field(default=None, ge=0)
+    inventory_capacity: int | None = Field(default=None, ge=0)
+    health_max_age_seconds: int | None = Field(
+        default=None,
         ge=300,
         le=7 * 24 * 60 * 60,
     )
 
 
 class ProxyMarketUserLimitPayload(BaseModel):
-    claim_limit_override: int | None = Field(default=None, ge=0, le=100)
+    claim_limit_override: int | None = Field(default=None, ge=0)
 
 
 class ProxyMarketRevokePayload(BaseModel):
@@ -154,11 +155,9 @@ def _settings(conn: sqlite3.Connection) -> dict[str, int]:
     return {
         "default_claim_limit": max(
             0,
-            min(
-                100,
-                int(DEFAULT_CLAIM_LIMIT if claim_limit_value is None else claim_limit_value),
-            ),
+            int(DEFAULT_CLAIM_LIMIT if claim_limit_value is None else claim_limit_value),
         ),
+        "inventory_capacity": max(0, int(source.get("inventory_capacity") or 0)),
         "health_max_age_seconds": max(
             300,
             min(
@@ -1131,7 +1130,8 @@ def register_proxy_market_routes(app: FastAPI) -> None:
             params.extend([like, like, like, like])
         now = _now()
         with db() as conn:
-            health_max_age_seconds = int(_settings(conn)["health_max_age_seconds"])
+            settings = _settings(conn)
+            health_max_age_seconds = int(settings["health_max_age_seconds"])
             _prune_proxy_market_checks(
                 conn,
                 now=now,
@@ -1154,7 +1154,21 @@ def register_proxy_market_routes(app: FastAPI) -> None:
                 """,
                 (now - health_max_age_seconds, *params),
             ).fetchall()
-        return {"ok": True, "items": [_admin_public(dict(row)) for row in rows]}
+            inventory_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM proxy_market_items WHERE status <> 'archived'"
+                ).fetchone()[0]
+            )
+        capacity = int(settings["inventory_capacity"])
+        return {
+            "ok": True,
+            "items": [_admin_public(dict(row)) for row in rows],
+            "inventory": {
+                "count": inventory_count,
+                "capacity": capacity,
+                "remaining": None if capacity == 0 else max(0, capacity - inventory_count),
+            },
+        }
 
     @app.post("/api/admin/proxy-market/items")
     def api_admin_proxy_market_create(
@@ -1180,6 +1194,18 @@ def register_proxy_market_routes(app: FastAPI) -> None:
         )
         now = _now()
         with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            inventory_capacity = int(_settings(conn)["inventory_capacity"])
+            inventory_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM proxy_market_items WHERE status <> 'archived'"
+                ).fetchone()[0]
+            )
+            if inventory_capacity > 0 and inventory_count >= inventory_capacity:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"代理库存已达到管理员设置的容量上限（{inventory_capacity} 条）",
+                )
             try:
                 conn.execute(
                     """
@@ -2052,9 +2078,14 @@ def register_proxy_market_routes(app: FastAPI) -> None:
         request: Request,
         admin: dict[str, Any] = Depends(require_admin),
     ):
-        data = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
+        updates = (
+            payload.model_dump(exclude_none=True)
+            if hasattr(payload, "model_dump")
+            else payload.dict(exclude_none=True)
+        )
         now = _now()
         with db() as conn:
+            data = {**_settings(conn), **updates}
             set_admin_config(conn, MARKET_SETTINGS_KEY, data, now)
             _record_audit(
                 conn,
