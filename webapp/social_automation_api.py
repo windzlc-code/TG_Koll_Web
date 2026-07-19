@@ -1631,12 +1631,15 @@ def _live_browser_task_input_allowed(row: Any) -> bool:
     status = str(task.get("status") or "").strip().lower()
     if status == "need_manual":
         return True
-    if status != "running" or str(task.get("task_type") or "").strip() != "open_login":
+    task_type = str(task.get("task_type") or "").strip()
+    if status != "running" or task_type not in {"open_login", "publish_post"}:
         return False
     running_mode = _running_task_login_mode(str(task.get("id") or ""))
     if running_mode == "manual":
         return True
     if running_mode in {"switching", "takeover_timeout"}:
+        return False
+    if task_type == "publish_post":
         return False
     payload = _load_task_payload_object(task.get("payload_json"))
     return bool(
@@ -1973,7 +1976,7 @@ def _live_browser_sessions(*, user_id: int | None = None, raise_on_error: bool =
         if status:
             session["task_status"] = status
         session["input_allowed"] = bool(session.get("browser_ready")) and _live_browser_task_input_allowed(row)
-        if str(row["task_type"] or "").strip() == "open_login":
+        if str(row["task_type"] or "").strip() in {"open_login", "publish_post"}:
             session["login_mode"] = _live_browser_open_login_mode(row)
         if str(row["error"] or "").strip():
             session["task_error"] = str(row["error"] or "")
@@ -2398,8 +2401,8 @@ def _persist_manual_takeover_ack(task_id: str, session_id: str) -> bool:
             task_id,
             "warn",
             "manual_takeover_requested",
-            "用户已切换为人工接管，自动登录操作已停止。",
-            {"session_id": session_id},
+            "用户已切换为人工接管，自动操作已停止。",
+            {"session_id": session_id, "task_type": task_type},
         )
     return True
 
@@ -2421,7 +2424,7 @@ def _persist_manual_takeover_resolved(task_id: str, session_id: str) -> bool:
                 task_id,
                 "info",
                 "manual_takeover_resolved",
-                "人工验证已完成，自动化任务继续执行。",
+                "系统已识别人工操作完成，任务继续结算。",
                 {"session_id": session_id},
             )
             return True
@@ -2472,8 +2475,9 @@ def request_live_browser_manual_takeover(session_id: str) -> dict[str, Any]:
             (task_id,),
         ).fetchone()
     status = str(row["status"] or "").strip().lower() if row else ""
-    if not row or status not in {"running", "need_manual"} or str(row["task_type"] or "") != "open_login":
-        raise HTTPException(status_code=409, detail="当前浏览器不是正在运行的登录任务")
+    task_type = str(row["task_type"] or "").strip() if row else ""
+    if not row or status not in {"running", "need_manual"} or task_type not in {"open_login", "publish_post"}:
+        raise HTTPException(status_code=409, detail="当前浏览器任务不支持人工接管")
     already_manual = status == "need_manual" or bool(getattr(ack_event, "is_set", lambda: False)())
     timeout_event.clear()
     event.set()

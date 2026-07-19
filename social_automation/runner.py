@@ -381,6 +381,7 @@ def run_social_task(
                 logger,
                 platform,
                 account=account,
+                cancel_event=cancel_event,
                 context_control=context_control,
             )
         if task_type == "comment_post":
@@ -4229,6 +4230,142 @@ def _threads_profile_is_stably_empty(page, profile_url: str) -> bool:
     return any(marker in body_text for marker in empty_markers)
 
 
+def _wait_for_manual_threads_publish_completion(
+    page,
+    task: dict[str, Any],
+    payload: dict[str, Any],
+    screenshot_dir: Path,
+    logger: AutomationLogger,
+    account: dict[str, Any] | None,
+    profile_url: str,
+    previous_permalinks: set[str],
+    cancel_event: Any | None,
+    context_control: dict[str, Any] | None,
+) -> dict[str, Any]:
+    timeout_seconds = _safe_int(
+        payload.get("manual_publish_timeout_seconds")
+        or os.getenv("SOCIAL_AUTOMATION_MANUAL_PUBLISH_TIMEOUT_SECONDS"),
+        DEFAULT_MANUAL_LOGIN_TIMEOUT_SECONDS,
+    )
+    timeout_seconds = max(
+        MIN_MANUAL_LOGIN_TIMEOUT_SECONDS,
+        min(timeout_seconds, MAX_MANUAL_LOGIN_TIMEOUT_SECONDS),
+    )
+    shot = _screenshot(page, screenshot_dir, task, "manual_publish_takeover", logger)
+    logger.log(
+        "warn",
+        "manual_publish_takeover",
+        "已停止自动发布操作，当前浏览器已切换为人工接管；系统会自动识别发布完成。",
+        {"profile_url": profile_url, "timeout_seconds": timeout_seconds},
+        shot,
+    )
+    detection_payload = dict(payload)
+    detection_payload["profile_confirm_seconds"] = 30
+    detection_payload["profile_confirm_refreshes"] = 1
+    deadline = time.monotonic() + timeout_seconds
+    last_reason = ""
+    while time.monotonic() < deadline:
+        _raise_if_cancelled(cancel_event)
+        with _temporary_background_page(page, logger, "threads_manual_publish_detection") as verification_page:
+            result = _wait_for_threads_own_post(
+                verification_page,
+                "",
+                logger,
+                account,
+                detection_payload,
+                profile_url=profile_url,
+                previous_permalinks=previous_permalinks,
+            )
+            permalink = (
+                _normalize_threads_post_permalink(result.get("url"))
+                if result.get("confirmed")
+                else ""
+            )
+            if permalink:
+                caption = str(
+                    payload.get("caption")
+                    or payload.get("content")
+                    or payload.get("text")
+                    or ""
+                ).strip()
+                final_shot = _capture_threads_publish_evidence(
+                    verification_page,
+                    permalink,
+                    caption,
+                    screenshot_dir,
+                    task,
+                    logger,
+                )
+                _resume_after_manual_takeover(context_control)
+                logger.log(
+                    "info",
+                    "manual_publish_complete",
+                    "已自动识别到人工发布完成。",
+                    {"url": permalink},
+                    final_shot,
+                )
+                return {
+                    "ok": True,
+                    "published": {
+                        **result,
+                        "confirmed": True,
+                        "submitted": True,
+                        "manual_completion": True,
+                        "url": permalink,
+                        "permalink": permalink,
+                        "profile_confirmed": True,
+                        "confirmation_source": "manual_profile_permalink",
+                    },
+                    "url": permalink,
+                    "screenshot_path": final_shot,
+                }
+            last_reason = str(result.get("reason") or "")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        wait_seconds = min(3.0, remaining)
+        wait = getattr(cancel_event, "wait", None) if cancel_event is not None else None
+        if callable(wait):
+            if wait(wait_seconds):
+                _raise_if_cancelled(cancel_event)
+        else:
+            time.sleep(wait_seconds)
+    timeout_shot = _screenshot(page, screenshot_dir, task, "manual_publish_timeout", logger)
+    message = (
+        f"人工发布接管已超过 {timeout_seconds // 60} 分钟，"
+        f"系统仍未识别到新的帖子链接。{last_reason}"
+    )
+    raise NeedManualError(message, "manual_publish_timeout", timeout_shot)
+
+
+def _pause_for_requested_threads_publish_takeover(
+    page,
+    task: dict[str, Any],
+    payload: dict[str, Any],
+    screenshot_dir: Path,
+    logger: AutomationLogger,
+    account: dict[str, Any] | None,
+    profile_url: str,
+    previous_permalinks: set[str],
+    cancel_event: Any | None,
+    context_control: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not _manual_takeover_requested(context_control):
+        return None
+    return _wait_for_manual_threads_publish_completion(
+        page,
+        task,
+        payload,
+        screenshot_dir,
+        logger,
+        account,
+        profile_url,
+        previous_permalinks,
+        cancel_event,
+        context_control,
+    )
+
+
 def _run_threads_publish_post(
     page,
     task,
@@ -4237,6 +4374,7 @@ def _run_threads_publish_post(
     logger,
     account: dict[str, Any] | None = None,
     context_control: dict[str, Any] | None = None,
+    cancel_event: Any | None = None,
 ) -> dict[str, Any]:
     confirmation_state = payload.get("_publish_confirmation")
     if isinstance(confirmation_state, dict) and confirmation_state.get("phase") == "confirm_only":
@@ -4303,10 +4441,22 @@ def _run_threads_publish_post(
     if baseline_used_primary_page:
         _goto(page, THREADS_HOME, logger, "threads_publish_open")
     _dismiss_threads_compose_dialogs(page, logger)
+    manual_result = _pause_for_requested_threads_publish_takeover(
+        page, task, payload, screenshot_dir, logger, account, profile_url,
+        previous_permalinks, cancel_event, context_control,
+    )
+    if manual_result is not None:
+        return manual_result
     try:
         compose = _ensure_threads_compose_ready(page, logger)
     except Exception:
         raise
+    manual_result = _pause_for_requested_threads_publish_takeover(
+        page, task, payload, screenshot_dir, logger, account, profile_url,
+        previous_permalinks, cancel_event, context_control,
+    )
+    if manual_result is not None:
+        return manual_result
     _human_click(page, compose, logger, "threads_publish_focus")
     if caption:
         text_input_mode = _normalize_text_input_mode(payload.get("text_input_mode") or os.getenv("SOCIAL_AUTOMATION_TEXT_INPUT_MODE", "paste"))
@@ -4321,6 +4471,12 @@ def _run_threads_publish_post(
             dialog_text = _threads_active_dialog_text(page)
         if caption not in dialog_text:
             raise RuntimeError("Threads 发帖内容没有写入当前弹窗。")
+    manual_result = _pause_for_requested_threads_publish_takeover(
+        page, task, payload, screenshot_dir, logger, account, profile_url,
+        previous_permalinks, cancel_event, context_control,
+    )
+    if manual_result is not None:
+        return manual_result
     if media_paths:
         attachment_baseline = _threads_attachment_snapshot(page)
         file_input = _threads_media_input(page)
@@ -4348,6 +4504,12 @@ def _run_threads_publish_post(
             expected_files=len(media_paths),
             baseline=attachment_baseline,
         )
+    manual_result = _pause_for_requested_threads_publish_takeover(
+        page, task, payload, screenshot_dir, logger, account, profile_url,
+        previous_permalinks, cancel_event, context_control,
+    )
+    if manual_result is not None:
+        return manual_result
     confirmation_state = {
         "phase": "confirm_only",
         "profile_url": profile_url,
@@ -4366,6 +4528,12 @@ def _run_threads_publish_post(
         confirmation_persisted = True
 
     click_uncertain = False
+    manual_result = _pause_for_requested_threads_publish_takeover(
+        page, task, payload, screenshot_dir, logger, account, profile_url,
+        previous_permalinks, cancel_event, context_control,
+    )
+    if manual_result is not None:
+        return manual_result
     try:
         post_clicked = _click_threads_active_dialog_post(page, logger, before_click=persist_confirmation_before_click)
     except PublishClickUncertainError:
@@ -4377,6 +4545,12 @@ def _run_threads_publish_post(
     if not post_clicked:
         persist_confirmation_before_click()
         _human_click(page, post_button, logger, "threads_publish_submit")
+    manual_result = _pause_for_requested_threads_publish_takeover(
+        page, task, payload, screenshot_dir, logger, account, profile_url,
+        previous_permalinks, cancel_event, context_control,
+    )
+    if manual_result is not None:
+        return manual_result
     success = _wait_for_threads_publish_success(
         page,
         logger,
@@ -4425,9 +4599,19 @@ def _run_publish_post(
     platform: str = "instagram",
     account: dict[str, Any] | None = None,
     context_control: dict[str, Any] | None = None,
+    cancel_event: Any | None = None,
 ) -> dict[str, Any]:
     if platform == "threads":
-        return _run_threads_publish_post(page, task, payload, screenshot_dir, logger, account, context_control)
+        return _run_threads_publish_post(
+            page,
+            task,
+            payload,
+            screenshot_dir,
+            logger,
+            account,
+            context_control,
+            cancel_event,
+        )
     media_paths = [str(p) for p in (payload.get("media_paths") or []) if str(p or "").strip()]
     caption = str(payload.get("caption") or "").strip()
     if not media_paths:

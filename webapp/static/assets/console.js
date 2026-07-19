@@ -19230,17 +19230,16 @@ function liveBrowserLoginMode(session) {
 
 function renderLiveBrowserModeToggle(session) {
   const sessionId = liveBrowserSessionId(session);
-  if (
-    !sessionId
-    || String(session?.task_type || "").trim().toLowerCase() !== "open_login"
-  ) return "";
+  const taskType = String(session?.task_type || "").trim().toLowerCase();
+  if (!sessionId || !["open_login", "publish_post"].includes(taskType)) return "";
   const mode = liveBrowserLoginMode(session);
   const active = ["running", "need_manual"].includes(liveBrowserTaskStatus(session));
   const switching = mode === "switching";
   const takeoverTimedOut = mode === "takeover_timeout";
+  const automaticLabel = taskType === "publish_post" ? "自动执行" : "自动登录";
   return `
-    <div class="live-browser-mode-toggle" role="group" aria-label="登录操作模式">
-      <button type="button" class="${mode === "automatic" ? "is-active" : ""}" aria-pressed="${mode === "automatic" ? "true" : "false"}" disabled>自动登录</button>
+    <div class="live-browser-mode-toggle" role="group" aria-label="浏览器操作模式">
+      <button type="button" class="${mode === "automatic" ? "is-active" : ""}" aria-pressed="${mode === "automatic" ? "true" : "false"}" disabled>${automaticLabel}</button>
       <button type="button" class="${mode === "manual" ? "is-active" : ""}${switching || takeoverTimedOut ? " is-pending" : ""}" data-live-browser-mode="manual" data-live-browser-mode-session="${esc(sessionId)}" aria-pressed="${mode === "manual" ? "true" : "false"}" ${active && sessionId ? "" : "disabled"}>${switching ? "再次强制接管" : (takeoverTimedOut ? "重试接管" : "人工接管")}</button>
     </div>`;
 }
@@ -19286,10 +19285,12 @@ function liveBrowserPanelHint(sessions = []) {
 function liveBrowserInteractionHint(session) {
   const taskStatus = liveBrowserTaskStatus(session);
   const sessionStatus = liveBrowserSessionStatus(session);
+  const isPublishTask = String(session?.task_type || "").trim().toLowerCase() === "publish_post";
+  const automaticAction = isPublishTask ? "自动发布操作" : "自动登录操作";
   if (sessionStatus === "standby") return "任务已完成，浏览器处于待机状态，可等待系统自动关闭。";
   if (isOpenLoginBrowserStarting(session)) return "Camoufox 指纹浏览器正在启动，窗口就绪后即可人工操作。";
-  if (liveBrowserLoginMode(session) === "switching") return "正在停止自动登录操作，确认后将开放人工输入。";
-  if (liveBrowserLoginMode(session) === "takeover_timeout") return "自动登录未能及时停止，人工输入仍保持锁定；可重试接管或停止进程。";
+  if (liveBrowserLoginMode(session) === "switching") return `正在停止${automaticAction}，确认后将开放人工输入。`;
+  if (liveBrowserLoginMode(session) === "takeover_timeout") return `${automaticAction}未能及时停止，人工输入仍保持锁定；可重试接管或停止进程。`;
   if (isManualOpenLoginSession(session)) return "当前处于人工登录，可以直接操作浏览器窗口。";
   if (taskStatus === "need_manual") return "当前需要人工处理，可以直接操作浏览器窗口。";
   return "自动化执行中，当前仅展示实时画面，暂不允许人工输入。";

@@ -1904,6 +1904,57 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertEqual(result, "")
         screenshot.assert_not_called()
 
+    def test_requested_threads_publish_takeover_stops_automation_and_waits_for_manual_completion(self):
+        event = threading.Event()
+        event.set()
+        context_control = {
+            "manual_takeover_event": event,
+            "manual_takeover_ack_event": threading.Event(),
+            "manual_takeover_callback": mock.Mock(return_value=True),
+        }
+        expected = {"ok": True, "url": "https://www.threads.net/@user/post/manual"}
+
+        with mock.patch.object(
+            runner,
+            "_wait_for_manual_threads_publish_completion",
+            return_value=expected,
+        ) as wait_manual:
+            result = runner._pause_for_requested_threads_publish_takeover(
+                mock.Mock(),
+                {"id": "publish-task", "payload": {}},
+                {},
+                Path("."),
+                _Logger(),
+                {},
+                "https://www.threads.net/@user",
+                {"https://www.threads.net/@user/post/old"},
+                threading.Event(),
+                context_control,
+            )
+
+        self.assertEqual(result, expected)
+        self.assertTrue(context_control["manual_takeover_ack_event"].is_set())
+        wait_manual.assert_called_once()
+
+    def test_threads_publish_takeover_helper_is_noop_without_request(self):
+        result = runner._pause_for_requested_threads_publish_takeover(
+            mock.Mock(),
+            {"id": "publish-task", "payload": {}},
+            {},
+            Path("."),
+            _Logger(),
+            {},
+            "https://www.threads.net/@user",
+            set(),
+            threading.Event(),
+            {
+                "manual_takeover_event": threading.Event(),
+                "manual_takeover_ack_event": threading.Event(),
+            },
+        )
+
+        self.assertIsNone(result)
+
     def test_login_credentials_never_use_clipboard(self):
         page = _Page("https://www.instagram.com/accounts/login/")
         username_input = _Locator()
