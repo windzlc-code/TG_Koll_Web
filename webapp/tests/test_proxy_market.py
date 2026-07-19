@@ -175,6 +175,31 @@ class ProxyMarketTests(unittest.TestCase):
         self.assertNotIn("username", item)
         self.assertNotIn("password", item)
 
+    def test_public_catalog_all_status_filter_includes_stale_active_items(self):
+        available = self._market_item("TW-TPE-AVAILABLE")
+        stale = self._market_item("TW-TPE-STALE")
+        now = int(time.time())
+        with db() as conn:
+            conn.execute(
+                "UPDATE proxy_market_items SET last_check_at = ? WHERE id = ?",
+                (now - proxy_market.DEFAULT_HEALTH_MAX_AGE_SECONDS - 1, stale["id"]),
+            )
+
+        default_catalog = TestClient(self.app).get("/api/proxy-market/catalog")
+        self.assertEqual(default_catalog.status_code, 200, default_catalog.text)
+        self.assertEqual(default_catalog.json()["total"], 1)
+        self.assertEqual(default_catalog.json()["items"][0]["id"], available["id"])
+
+        all_catalog = TestClient(self.app).get("/api/proxy-market/catalog?availability=")
+        self.assertEqual(all_catalog.status_code, 200, all_catalog.text)
+        self.assertEqual(all_catalog.json()["total"], 2)
+        self.assertEqual(
+            {item["id"] for item in all_catalog.json()["items"]},
+            {available["id"], stale["id"]},
+        )
+        stale_result = next(item for item in all_catalog.json()["items"] if item["id"] == stale["id"])
+        self.assertFalse(stale_result["available"])
+
     def test_claim_is_exclusive_idempotent_and_release_returns_inventory(self):
         item = self._market_item()
         customer, _ = self._customer("proxy_buyer")

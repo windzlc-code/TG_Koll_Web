@@ -506,7 +506,9 @@ def register_proxy_market_routes(app: FastAPI) -> None:
         if valid_for_days:
             filters.append("(expires_at = 0 OR expires_at >= ?)")
             params.append(now + int(valid_for_days) * 24 * 60 * 60)
-        availability_value = str(availability or "available").strip().lower()
+        # An omitted parameter keeps the public default of "available". An
+        # explicitly empty value means the user selected all inventory states.
+        availability_value = str(availability).strip().lower()
         if availability_value == "available":
             filters.append("status = 'active'")
             filters.append("health_status = 'healthy'")

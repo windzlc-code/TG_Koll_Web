@@ -209,7 +209,7 @@
     const params = new URLSearchParams();
     FILTER_KEYS.forEach((key) => {
       const value = String(elements.form?.elements?.[key]?.value || "").trim();
-      if (value) params.set(key, value);
+      if (value || key === "availability") params.set(key, value);
     });
     state.pageSize = [12, 24, 48].includes(Number(elements.form?.elements?.page_size?.value))
       ? Number(elements.form.elements.page_size.value)
