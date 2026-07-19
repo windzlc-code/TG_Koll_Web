@@ -361,11 +361,6 @@
   background: rgba(255, 255, 255, 0.06);
 }
 
-.pricing-tier-overview article.is-featured {
-  background: linear-gradient(150deg, rgba(12, 154, 154, 0.2), rgba(255, 255, 255, 0.045));
-  box-shadow: inset 0 4px 0 #58d4c8;
-}
-
 .pricing-tier-index {
   display: block;
   color: #58d4c8;
@@ -393,18 +388,6 @@
   margin: 8px 0 0;
   color: rgba(255, 255, 255, 0.6);
   font-size: 12px;
-}
-
-.pricing-tier-badge {
-  position: absolute;
-  top: 0;
-  right: 22px;
-  padding: 7px 12px;
-  color: #031011;
-  background: #58d4c8;
-  font-size: 11px;
-  font-weight: 900;
-  letter-spacing: 0.08em;
 }
 
 .pricing-comparison-note {
@@ -507,10 +490,6 @@
 
 .pricing-comparison-table tbody tr:hover > * {
   background-color: rgba(88, 212, 200, 0.08);
-}
-
-.pricing-comparison-table .is-featured {
-  background-color: rgba(12, 154, 154, 0.09);
 }
 
 .pricing-comparison-table td strong {
@@ -632,11 +611,6 @@
   gap: 6px;
   min-height: 188px;
   padding: 14px;
-}
-
-.pricing-package-card.is-featured {
-  border-color: #1b8f65;
-  box-shadow: inset 0 4px 0 #31b86f;
 }
 
 .pricing-package-card h3,

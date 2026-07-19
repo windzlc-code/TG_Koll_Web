@@ -1061,11 +1061,6 @@ body.modal-open {
   padding: 24px;
 }
 
-.package-grid article.featured {
-  background: rgba(49, 184, 111, 0.16);
-  border-color: rgba(128, 255, 185, 0.42);
-}
-
 .package-grid h3 {
   margin-bottom: 4px;
   font-size: 32px;

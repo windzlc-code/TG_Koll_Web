@@ -92,7 +92,7 @@
       <div class="unit-price"><span>1 點</span><strong>${money(catalog.point_unit_ntd || 10)}</strong></div>
       <div class="usage-grid">${actions.map((item) => `<span>${escapeHtml(item.name)}</span><strong>${escapeHtml(item.points)} 點 / ${escapeHtml(item.unit)}</strong>`).join("")}</div>
     </div>`;
-    packages.innerHTML = list(catalog.packages).map((item, index) => `<article class="${index === 1 ? "featured" : ""}">
+    packages.innerHTML = list(catalog.packages).map((item) => `<article>
       <span>${escapeHtml(item.name)}</span><h3>${Number(item.total_points || 0).toLocaleString("zh-TW")} 點</h3>
       <p>${money(item.price_ntd)}</p><small>${item.bonus_points ? `含 ${Number(item.bonus_points).toLocaleString("zh-TW")} 點加贈` : "算力點永久有效"}</small>
       <div class="catalog-purchase"><a class="button button-primary" href="/subscription.html?product=${encodeURIComponent(skuOf(item))}">查看方案</a></div>
@@ -126,7 +126,7 @@
 
     document.querySelector("#pricingPackages").innerHTML = list(catalog.packages).map((item, index) => {
       const bonuses = [item.bonus_points ? `加贈 ${Number(item.bonus_points).toLocaleString("zh-TW")} 點` : "", item.bonus_images ? `加贈 ${Number(item.bonus_images)} 張永久圖片` : ""].filter(Boolean);
-      return `<article class="pricing-package-card ${index === 1 ? "is-featured" : ""}">
+      return `<article class="pricing-package-card">
         <span class="pricing-label">${escapeHtml(item.name)}</span><h3>${escapeHtml(item.name)}</h3>
         <div class="pricing-package-points">${Number(item.total_points || 0).toLocaleString("zh-TW")} 點</div>
         <p class="pricing-package-price">${money(item.price_ntd)}</p><p class="pricing-package-copy">${escapeHtml(bonuses.join("，") || "無加贈，算力點永久有效")}</p>
