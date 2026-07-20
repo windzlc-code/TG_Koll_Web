@@ -101,6 +101,7 @@ STATIC_DIR = WEBAPP_DIR / "static"
 DATA_DIR = Path(os.getenv("WEBAPP_DATA_DIR", str(ROOT_DIR / "webapp_data"))).resolve()
 UPLOAD_ROOT = DATA_DIR / "uploads"
 OUTPUT_ROOT = DATA_DIR / "outputs"
+PERSONA_MEDIA_ROOT = DATA_DIR / "persona_media"
 TOOL_R18_UPLOAD_ROOT = Path(os.getenv("TOOL_R18_UPLOAD_HOST_DIR", str(DATA_DIR / "tool_r18_uploads"))).resolve()
 RUNTIME_CONFIG_PATH = Path(os.getenv("APP_RUNTIME_CONFIG_PATH", str(DATA_DIR / "runtime_config.json"))).resolve()
 TOOL_R18_RUNTIME_DIR = Path(os.getenv("TOOL_R18_RUNTIME_DIR", str(ROOT_DIR / "tool_r18" / ".runtime" / "automatic-script"))).resolve()
@@ -1232,11 +1233,73 @@ def _serve_dashboard_media_proxy(token: str) -> FileResponse:
     return FileResponse(str(path), filename=path.name)
 
 
+def _persona_archive_output_dirs() -> set[Path]:
+    """Return task directories still referenced by persona history."""
+    output_root = OUTPUT_ROOT.resolve()
+    protected: set[Path] = set()
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            for child in value.values():
+                visit(child)
+            return
+        if isinstance(value, list):
+            for child in value:
+                visit(child)
+            return
+        text = str(value or "").strip()
+        if not text or "://" in text or text.startswith("data:"):
+            return
+        try:
+            relative = Path(text).expanduser().resolve().relative_to(output_root)
+        except (OSError, ValueError):
+            return
+        if len(relative.parts) >= 3:
+            protected.add(output_root / relative.parts[0] / relative.parts[1])
+
+    for archive_path in (
+        TOOL_R18_RUNTIME_DIR / "persona_archives.json",
+        TOOL_R18_RUNTIME_DIR / "persona_archives_cache.json",
+    ):
+        try:
+            if archive_path.is_file():
+                visit(json.loads(archive_path.read_text(encoding="utf-8")))
+        except Exception:
+            logger.warning("failed to inspect persona archive media references: %s", archive_path, exc_info=True)
+    return protected
+
+
+def _task_output_dirs_with_history() -> set[Path]:
+    """Protect successful persona task output while archive sync catches up."""
+    output_root = OUTPUT_ROOT.resolve()
+    protected: set[Path] = set()
+    with db() as conn:
+        rows = conn.execute("SELECT status, type, output_json FROM tasks").fetchall()
+    for row in rows:
+        if str(row["type"] or "").strip() not in {"persona_image", "persona_post_image"}:
+            continue
+        if str(row["status"] or "").strip().lower() in {"failed", "cancelled"}:
+            continue
+        try:
+            output = json.loads(row["output_json"] or "{}")
+        except Exception:
+            continue
+        for raw_path in _extract_download_paths(output):
+            try:
+                relative = Path(raw_path).expanduser().resolve().relative_to(output_root)
+            except (OSError, ValueError):
+                continue
+            if len(relative.parts) >= 3:
+                protected.add(output_root / relative.parts[0] / relative.parts[1])
+    return protected
+
+
 def _cleanup_files_once(*, retention_days: int) -> dict[str, Any]:
     cutoff = time.time() - float(max(int(retention_days), 1) * 86400)
     with db() as conn:
         rows = conn.execute("SELECT id FROM tasks WHERE status IN ('queued','running')").fetchall()
     active = {str(r["id"]) for r in rows if r and str(r["id"] or "").strip()}
+    protected_output_dirs = _persona_archive_output_dirs() | _task_output_dirs_with_history()
 
     deleted: list[str] = []
     scanned = 0
@@ -1255,6 +1318,8 @@ def _cleanup_files_once(*, retention_days: int) -> dict[str, Any]:
                 tid = str(item_dir.name or "").strip()
                 if tid and tid in active:
                     continue
+                if root.resolve() == OUTPUT_ROOT.resolve() and item_dir.resolve() in protected_output_dirs:
+                    continue
                 try:
                     mtime = float(item_dir.stat().st_mtime)
                 except Exception:
@@ -1266,7 +1331,12 @@ def _cleanup_files_once(*, retention_days: int) -> dict[str, Any]:
 
     walk_root(UPLOAD_ROOT)
     walk_root(OUTPUT_ROOT)
-    return {"scanned": int(scanned), "deleted": int(len(deleted)), "deleted_paths": deleted[:50]}
+    return {
+        "scanned": int(scanned),
+        "deleted": int(len(deleted)),
+        "protected": int(len(protected_output_dirs)),
+        "deleted_paths": deleted[:50],
+    }
 
 
 def _cleanup_worker() -> None:
@@ -1400,6 +1470,7 @@ def _ensure_dirs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+    PERSONA_MEDIA_ROOT.mkdir(parents=True, exist_ok=True)
     TOOL_R18_UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
     RUNTIME_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
@@ -9586,6 +9657,72 @@ def _persist_generated_image_for_task(task_id: str, image_url: str, index: int =
     raise RuntimeError("未识别的图片结果地址。")
 
 
+def _persona_media_component(value: Any, fallback: str) -> str:
+    text = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value or "").strip()).strip("._")
+    return text[:120] or fallback
+
+
+def _persist_persona_media_asset(source: str, archive_id: str, asset_id: str) -> str:
+    """Copy a generated persona image out of temporary/provider storage."""
+    text = str(source or "").strip()
+    if not text:
+        raise RuntimeError("persona media source is empty")
+    archive_component = _persona_media_component(archive_id, "unknown-persona")
+    asset_component = _persona_media_component(asset_id, "persona-media")
+    media_dir = (PERSONA_MEDIA_ROOT / archive_component / asset_component).resolve()
+    media_root = PERSONA_MEDIA_ROOT.resolve()
+    if media_root not in media_dir.parents:
+        raise RuntimeError("invalid persona media path")
+
+    data: bytes | None = None
+    suffix = ""
+    if text.startswith("data:image/"):
+        header, _, encoded = text.partition(",")
+        mime = header[5:].split(";", 1)[0].strip().lower()
+        suffix = {
+            "image/png": ".png",
+            "image/jpeg": ".jpg",
+            "image/jpg": ".jpg",
+            "image/webp": ".webp",
+            "image/gif": ".gif",
+        }.get(mime, ".png")
+        data = base64.b64decode(encoded)
+    elif re.match(r"^https?://", text, re.I):
+        suffix = Path(urlsplit(text).path).suffix.lower()
+        if suffix not in IMAGE_EXTS:
+            suffix = ".jpg"
+    else:
+        source_path = Path(text).expanduser().resolve()
+        if not source_path.is_file():
+            raise RuntimeError("persona media source file is missing")
+        if media_root in source_path.parents:
+            return str(source_path)
+        suffix = source_path.suffix.lower() if source_path.suffix.lower() in IMAGE_EXTS else ".png"
+
+    target = (media_dir / f"asset{suffix}").resolve()
+    if media_root not in target.parents:
+        raise RuntimeError("invalid persona media path")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=".asset-", suffix=suffix, dir=str(target.parent))
+    os.close(fd)
+    temp_path = Path(temp_name)
+    try:
+        if data is not None:
+            temp_path.write_bytes(data)
+        elif re.match(r"^https?://", text, re.I):
+            _download_to_file(text, temp_path)
+        else:
+            shutil.copy2(Path(text).expanduser().resolve(), temp_path)
+        if temp_path.stat().st_size <= 0:
+            raise RuntimeError("persona media file is empty")
+        os.replace(str(temp_path), str(target))
+    except Exception:
+        with contextlib.suppress(FileNotFoundError):
+            temp_path.unlink()
+        raise
+    return str(target)
+
+
 def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     archive_id = str(payload.get("related_persona_id") or "").strip()
     post_id = str(payload.get("related_post_id") or "").strip()
@@ -14850,16 +14987,23 @@ def _persona_archive_persist_reference_image(archive_id: str, *, image_url: str,
     if not archive:
         raise HTTPException(status_code=404, detail="人设不存在。")
     now = _persona_dashboard_iso_now()
+    entry_id = _new_id("personaimg")
+    persisted_image_url = image_url
+    if str(source or "").strip() not in {"upload", "manual-upload"}:
+        try:
+            persisted_image_url = _persist_persona_media_asset(image_url, clean_id, entry_id)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"persona image persistence failed: {exc}") from exc
     setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
     next_setup = dict(setup)
     next_setup["personaImageSkipped"] = False
-    next_setup["personaImageReferenceUrl"] = image_url
+    next_setup["personaImageReferenceUrl"] = persisted_image_url
     archive["setup"] = next_setup
-    archive["personaReferenceSheet"] = image_url
+    archive["personaReferenceSheet"] = persisted_image_url
     library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
     entry = {
-        "id": _new_id("personaimg"),
-        "imageUrl": image_url,
+        "id": entry_id,
+        "imageUrl": persisted_image_url,
         "createdAt": now,
         "prompt": prompt,
         "mode": mode,

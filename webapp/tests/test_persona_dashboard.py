@@ -1625,6 +1625,46 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertTrue(saved_path.is_file())
         self.assertEqual(saved_path.read_bytes(), self.draft_media_path.read_bytes())
 
+    def test_persona_generated_reference_image_is_copied_to_durable_media(self):
+        self._write_archives()
+        old_media_root = server.PERSONA_MEDIA_ROOT
+        server.PERSONA_MEDIA_ROOT = self.data_dir / "persona_media"
+        try:
+            data_url = "data:image/png;base64," + base64.b64encode(self.draft_media_path.read_bytes()).decode("ascii")
+            response = server._persona_archive_persist_reference_image(
+                "persona-1",
+                image_url=data_url,
+                source="portrait",
+            )
+            self.assertEqual(response["saved_item_id"], response["items"][0]["id"])
+            image_path = Path(response["items"][0]["image_url"])
+            self.assertTrue(image_path.is_file())
+            self.assertTrue(image_path.is_relative_to(server.PERSONA_MEDIA_ROOT))
+            self.assertEqual(image_path.read_bytes(), self.draft_media_path.read_bytes())
+        finally:
+            server.PERSONA_MEDIA_ROOT = old_media_root
+
+    def test_cleanup_preserves_persona_history_output(self):
+        self._write_archives()
+        old_output_root = server.OUTPUT_ROOT
+        server.OUTPUT_ROOT = self.data_dir / "outputs"
+        try:
+            task_dir = server.OUTPUT_ROOT / "admin" / "task-history"
+            task_dir.mkdir(parents=True, exist_ok=True)
+            media_path = task_dir / "persona_post_preview.jpg"
+            media_path.write_bytes(self.draft_media_path.read_bytes())
+            archives_path = self.tool_runtime_dir / "persona_archives.json"
+            archives = json.loads(archives_path.read_text(encoding="utf-8"))
+            archives[0]["posts"][0]["mediaItems"] = [{"url": str(media_path), "type": "image"}]
+            archives_path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+            old_time = 1_600_000_000
+            os.utime(task_dir, (old_time, old_time))
+            result = server._cleanup_files_once(retention_days=1)
+            self.assertEqual(result["deleted"], 0)
+            self.assertTrue(media_path.is_file())
+        finally:
+            server.OUTPUT_ROOT = old_output_root
+
     def test_attach_persona_post_image_task_output_writes_back_to_post(self):
         self._write_archives()
         generated_path = self.tool_runtime_dir / "generated-preview.png"
