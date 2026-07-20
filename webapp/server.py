@@ -9681,7 +9681,7 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
         "customPrompt": prompt or None,
         "aspectRatio": aspect_ratio,
         "mode": "auto",
-        "referenceSheetUrl": _persona_reference_image_url_from_archive(archive) or None,
+        "referenceSheetUrl": _persona_reference_image_input_for_cli(archive) or None,
         "generateReferenceSheet": False,
         "dryRun": False,
     }
@@ -14780,6 +14780,20 @@ def _persona_reference_image_url_from_archive(archive: dict[str, Any]) -> str:
     return ""
 
 
+def _persona_reference_image_input_for_cli(archive: dict[str, Any]) -> str:
+    """Normalize an archived reference image for the Node image workflow."""
+    raw_url = _persona_reference_image_url_from_archive(archive)
+    if not raw_url or raw_url.startswith("data:") or re.match(r"^https?://", raw_url, re.I):
+        return raw_url
+    path = Path(raw_url).expanduser()
+    if path.is_file():
+        try:
+            return _local_file_to_data_uri(path)
+        except Exception:
+            pass
+    return raw_url
+
+
 def _persona_library_preview_url(archive_id: str, image_id: str, raw_url: str) -> str:
     text = str(raw_url or "").strip()
     if not text:
@@ -15145,7 +15159,7 @@ def _run_persona_image_cli_for_web(archive_id: str, *, prompt: str = "", aspect_
         "content": str(prompt or archive.get("content") or ""),
         "aspectRatio": str(aspect_ratio or "1:1").strip() or "1:1",
         "mode": str(mode or "person").strip() or "person",
-        "referenceSheetUrl": _persona_reference_image_url_from_archive(archive) or None,
+        "referenceSheetUrl": _persona_reference_image_input_for_cli(archive) or None,
         "generateReferenceSheet": bool(generate_reference_sheet),
         "dryRun": False,
     }
