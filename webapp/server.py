@@ -101,7 +101,6 @@ STATIC_DIR = WEBAPP_DIR / "static"
 DATA_DIR = Path(os.getenv("WEBAPP_DATA_DIR", str(ROOT_DIR / "webapp_data"))).resolve()
 UPLOAD_ROOT = DATA_DIR / "uploads"
 OUTPUT_ROOT = DATA_DIR / "outputs"
-PERSONA_MEDIA_ROOT = DATA_DIR / "persona_media"
 TOOL_R18_UPLOAD_ROOT = Path(os.getenv("TOOL_R18_UPLOAD_HOST_DIR", str(DATA_DIR / "tool_r18_uploads"))).resolve()
 RUNTIME_CONFIG_PATH = Path(os.getenv("APP_RUNTIME_CONFIG_PATH", str(DATA_DIR / "runtime_config.json"))).resolve()
 TOOL_R18_RUNTIME_DIR = Path(os.getenv("TOOL_R18_RUNTIME_DIR", str(ROOT_DIR / "tool_r18" / ".runtime" / "automatic-script"))).resolve()
@@ -1233,26 +1232,11 @@ def _serve_dashboard_media_proxy(token: str) -> FileResponse:
     return FileResponse(str(path), filename=path.name)
 
 
-def _persona_archive_text() -> str:
-    parts: list[str] = []
-    for path in (
-        TOOL_R18_RUNTIME_DIR / "persona_archives.json",
-        TOOL_R18_RUNTIME_DIR / "persona_archives_cache.json",
-    ):
-        try:
-            if path.is_file():
-                parts.append(path.read_text(encoding="utf-8"))
-        except OSError:
-            continue
-    return "\n".join(parts)
-
-
 def _cleanup_files_once(*, retention_days: int) -> dict[str, Any]:
     cutoff = time.time() - float(max(int(retention_days), 1) * 86400)
     with db() as conn:
         rows = conn.execute("SELECT id FROM tasks WHERE status IN ('queued','running')").fetchall()
     active = {str(r["id"]) for r in rows if r and str(r["id"] or "").strip()}
-    archive_text = _persona_archive_text()
 
     deleted: list[str] = []
     scanned = 0
@@ -1270,10 +1254,6 @@ def _cleanup_files_once(*, retention_days: int) -> dict[str, Any]:
                 scanned += 1
                 tid = str(item_dir.name or "").strip()
                 if tid and tid in active:
-                    continue
-                if root.resolve() == OUTPUT_ROOT.resolve() and (
-                    str(item_dir.resolve()) in archive_text or item_dir.resolve().as_posix() in archive_text
-                ):
                     continue
                 try:
                     mtime = float(item_dir.stat().st_mtime)
@@ -9606,51 +9586,6 @@ def _persist_generated_image_for_task(task_id: str, image_url: str, index: int =
     raise RuntimeError("未识别的图片结果地址。")
 
 
-def _persona_media_component(value: Any, fallback: str) -> str:
-    text = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value or "").strip()).strip("._")
-    return text[:120] or fallback
-
-
-def _persist_persona_media_asset(source: str, archive_id: str, asset_id: str) -> str:
-    """Copy a generated persona image out of temporary/provider storage."""
-    text = str(source or "").strip()
-    if not text:
-        raise RuntimeError("persona media source is empty")
-    media_dir = PERSONA_MEDIA_ROOT / _persona_media_component(archive_id, "persona") / _persona_media_component(asset_id, "image")
-    if text.startswith("data:image/"):
-        header, _, encoded = text.partition(",")
-        mime = header[5:].split(";", 1)[0].strip().lower()
-        suffix = {
-            "image/png": ".png",
-            "image/jpeg": ".jpg",
-            "image/jpg": ".jpg",
-            "image/webp": ".webp",
-            "image/gif": ".gif",
-        }.get(mime, ".png")
-        target = media_dir / f"image{suffix}"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(base64.b64decode(encoded))
-    elif re.match(r"^https?://", text, re.I):
-        suffix = Path(urlsplit(text).path).suffix.lower()
-        if suffix not in IMAGE_EXTS:
-            suffix = ".jpg"
-        target = media_dir / f"image{suffix}"
-        _download_to_file(text, target)
-    else:
-        source_path = Path(text).expanduser().resolve()
-        if not source_path.is_file():
-            raise RuntimeError("persona media source file is missing")
-        if PERSONA_MEDIA_ROOT.resolve() in source_path.parents:
-            return str(source_path)
-        suffix = source_path.suffix.lower() if source_path.suffix.lower() in IMAGE_EXTS else ".png"
-        target = media_dir / f"image{suffix}"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_path, target)
-    if not target.is_file() or target.stat().st_size <= 0:
-        raise RuntimeError("persona media file is empty")
-    return str(target)
-
-
 def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     archive_id = str(payload.get("related_persona_id") or "").strip()
     post_id = str(payload.get("related_post_id") or "").strip()
@@ -12909,7 +12844,16 @@ def _terminate_persona_hot_process(process: subprocess.Popen[str] | None) -> Non
     if isinstance(returncode, int):
         return
     if os.name == "nt":
-        process.terminate()
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                check=False,
+                capture_output=True,
+                timeout=5,
+            )
+        except Exception:
+            with contextlib.suppress(Exception):
+                process.terminate()
     else:
         with contextlib.suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGTERM)
@@ -12917,7 +12861,8 @@ def _terminate_persona_hot_process(process: subprocess.Popen[str] | None) -> Non
         process.wait(timeout=2)
     except subprocess.TimeoutExpired:
         if os.name == "nt":
-            process.kill()
+            with contextlib.suppress(Exception):
+                process.kill()
         else:
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
@@ -14926,23 +14871,16 @@ def _persona_archive_persist_reference_image(archive_id: str, *, image_url: str,
     if not archive:
         raise HTTPException(status_code=404, detail="人设不存在。")
     now = _persona_dashboard_iso_now()
-    entry_id = _new_id("personaimg")
-    persisted_image_url = image_url
-    if str(source or "").strip() not in {"upload", "manual-upload"}:
-        try:
-            persisted_image_url = _persist_persona_media_asset(image_url, clean_id, entry_id)
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"persona image persistence failed: {exc}") from exc
     setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
     next_setup = dict(setup)
     next_setup["personaImageSkipped"] = False
-    next_setup["personaImageReferenceUrl"] = persisted_image_url
+    next_setup["personaImageReferenceUrl"] = image_url
     archive["setup"] = next_setup
-    archive["personaReferenceSheet"] = persisted_image_url
+    archive["personaReferenceSheet"] = image_url
     library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
     entry = {
-        "id": entry_id,
-        "imageUrl": persisted_image_url,
+        "id": _new_id("personaimg"),
+        "imageUrl": image_url,
         "createdAt": now,
         "prompt": prompt,
         "mode": mode,
@@ -16391,6 +16329,10 @@ def _persona_dashboard_refresh_worker_v2(
     archive_ids: list[str] | None = None,
 ) -> None:
     started = time.time()
+    proc: subprocess.Popen[str] | None = None
+    tmpdir: tempfile.TemporaryDirectory[str] | None = None
+    stdout_file: Any | None = None
+    stderr_file: Any | None = None
     refresh_source = (source or os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "browser").strip().lower() or "browser"
     scope = "单个人设" if archive_id else (
         f"当前账号的 {len(archive_ids)} 个人设"
@@ -16437,12 +16379,12 @@ def _persona_dashboard_refresh_worker_v2(
             text=True,
             stdout=stdout_file,
             stderr=stderr_file,
+            start_new_session=os.name != "nt",
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
         )
         while proc.poll() is None:
             elapsed = int(time.time() - started)
             if elapsed > 900:
-                proc.kill()
-                proc.wait(timeout=10)
                 raise TimeoutError("刷新超时，已停止本次任务。")
             stdout_file.flush()
             stderr_file.flush()
@@ -16459,11 +16401,8 @@ def _persona_dashboard_refresh_worker_v2(
         proc.wait(timeout=10)
         stdout_file.flush()
         stderr_file.flush()
-        stdout_file.close()
-        stderr_file.close()
         stdout = _read_text_tail(stdout_path, 200000).strip()
         stderr = _read_text_tail(stderr_path, 200000).strip()
-        tmpdir.cleanup()
         with PERSONA_DASHBOARD_REFRESH_LOCK:
             PERSONA_DASHBOARD_REFRESH_TASKS[task_id].update({
                 "step": "解析结果",
@@ -16501,6 +16440,16 @@ def _persona_dashboard_refresh_worker_v2(
                 "elapsed_seconds": int(time.time() - started),
                 "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             })
+    finally:
+        if proc is not None and proc.poll() is None:
+            _terminate_persona_hot_process(proc)
+        for output_file in (stdout_file, stderr_file):
+            if output_file is not None:
+                with contextlib.suppress(Exception):
+                    output_file.close()
+        if tmpdir is not None:
+            with contextlib.suppress(Exception):
+                tmpdir.cleanup()
 
 
 def _persona_dashboard_refresh_is_running() -> bool:

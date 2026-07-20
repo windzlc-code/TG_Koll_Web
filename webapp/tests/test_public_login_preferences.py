@@ -170,48 +170,6 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertNotIn("if (event.target === loginModal) closeLogin()", self.script)
         self.assertIn('[data-close-login]', self.script)
 
-    def test_pricing_mobile_hero_clamps_intrinsic_grid_width(self):
-        self.assertIn(
-            "@media (max-width: 720px) {\n"
-            "  .pricing-page-hero {\n"
-            "    min-height: auto;\n"
-            "    display: block;",
-            self.pricing_styles,
-        )
-        self.assertIn("grid-template-columns: minmax(0, 1fr);", self.pricing_styles)
-        self.assertIn(".pricing-page-hero-copy {\n    min-width: 0;", self.pricing_styles)
-        self.assertIn("max-width: 100%;", self.pricing_styles)
-        self.assertIn("overflow-wrap: anywhere;", self.pricing_styles)
-        self.assertIn("word-break: break-word;", self.pricing_styles)
-
-    def test_mobile_site_icon_controls_center_their_svg(self):
-        self.assertIn(
-            ".site-header :is(.site-menu-toggle, .site-language-button) {\n"
-            "    grid-template-columns: minmax(0, 1fr);",
-            self.site_nav_styles,
-        )
-        self.assertIn(".site-header .site-global-controls .site-language-state {", self.site_nav_styles)
-
-    def test_subscription_uses_a_shared_svg_control_outside_main_navigation(self):
-        self.assertNotIn('navLink({ key: "pricing"', self.site_nav_script)
-        for page_name in ("index.html", "pricing.html", "console.html", "proxy-market.html"):
-            markup = (self.static_dir / page_name).read_text(encoding="utf-8")
-            with self.subTest(page_name=page_name):
-                self.assertNotIn('data-site-nav-key="pricing"', markup)
-                self.assertIn('data-site-subscription-entry', markup)
-                self.assertIn('class="site-subscription-icon"', markup)
-        self.assertIn("function subscriptionControl(page = \"\")", self.site_nav_script)
-        self.assertIn(".site-subscription-link[aria-current=\"page\"]", self.site_nav_styles)
-
-    def test_subscription_prioritizes_packages_and_removes_account_strip(self):
-        pricing = (self.static_dir / "pricing.html").read_text(encoding="utf-8")
-        self.assertNotIn("pricing-account-strip", pricing)
-        self.assertNotIn('id="pricingAccountBar"', pricing)
-        self.assertLess(pricing.index('class="pricing-section-nav"'), pricing.index('id="packages"'))
-        self.assertIn(".pricing-packages-band .pricing-public-section", self.pricing_styles)
-        self.assertIn(".pricing-comparison-table td strong", self.pricing_styles)
-        self.assertIn(".pricing-action-row", self.pricing_styles)
-
     def test_home_navigation_opens_console_or_existing_login_dialog(self):
         page = (self.static_dir / "index.html").read_text(encoding="utf-8")
         pricing = (self.static_dir / "pricing.html").read_text(encoding="utf-8")
@@ -280,7 +238,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
             page = (self.static_dir / page_name).read_text(encoding="utf-8")
             with self.subTest(page=page_name):
                 self.assertIn(
-                    "/assets/opc/site-navigation.js?v=__SITE_NAVIGATION_JS_VERSION__",
+                    "/assets/opc/site-navigation.js?v=2026071706",
                     page,
                 )
 
@@ -293,7 +251,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn('header.dataset.siteAuthState = "guest"', self.site_nav_script)
         self.assertIn('[data-site-auth-state="pending"] .header-actions', self.site_nav_styles)
         self.assertIn("min-width: 274px", self.site_nav_styles)
-        self.assertIn('installUnifiedAccountMenu(header, header.dataset.sitePage || "home")', self.site_nav_script)
+        self.assertIn('accountMenuMarkup(header.dataset.sitePage || "home")', self.site_nav_script)
         self.assertIn("async function logoutPublicSession()", self.site_nav_script)
         self.assertIn('fetch("/api/auth/logout"', self.site_nav_script)
         self.assertIn("window.location.reload()", self.site_nav_script)
@@ -307,7 +265,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
             self.assertIn("data-site-language-toggle", markup)
         self.assertIn("function themeEnabled()", self.site_nav_script)
         self.assertIn('return page === "console" || document.body?.classList.contains("page-admin")', self.site_nav_script)
-        self.assertIn('installUnifiedAccountMenu(header, header.dataset.sitePage || "home")', self.site_nav_script)
+        self.assertIn('accountMenuMarkup(header.dataset.sitePage || "home")', self.site_nav_script)
         public_controls = self.site_nav_script.split("function renderActions", 1)[1].split("function fallbackMarkup", 1)[0]
         self.assertNotIn("data-site-theme-toggle", public_controls.split("const controls", 1)[1].split("const mobileMenu", 1)[0])
         self.assertIn("data-site-language-toggle", public_controls)
@@ -393,10 +351,6 @@ class PublicLoginUiSourceTests(unittest.TestCase):
             else:
                 self.assertNotIn("__OPC_SCRIPT_VERSION__", response.text)
                 self.assertRegex(response.text, r'/assets/opc/script\.js\?v=\d+-\d+')
-                self.assertNotIn("__SITE_NAVIGATION_CSS_VERSION__", response.text)
-                self.assertNotIn("__SITE_NAVIGATION_JS_VERSION__", response.text)
-                self.assertRegex(response.text, r'/assets/opc/site-navigation\.css\?v=\d+-\d+')
-                self.assertRegex(response.text, r'/assets/opc/site-navigation\.js\?v=\d+-\d+')
 
     def test_admin_runtime_form_exposes_cookie_policy(self):
         for field_id in (

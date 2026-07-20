@@ -186,7 +186,13 @@ def _stop_standby_sessions_for_account(account_id: str, logger: Any | None = Non
         )
 
 
-def stop_live_browser_session(session_id: str, *, session: LiveBrowserSession | None = None) -> None:
+def stop_live_browser_session(
+    session_id: str,
+    *,
+    session: LiveBrowserSession | None = None,
+    timeout_seconds: float = 3.0,
+) -> None:
+    deadline = time.monotonic() + max(0.1, float(timeout_seconds))
     clean_id = str(session_id)
     with _LOCK:
         target = session or _SESSIONS.pop(clean_id, None)
@@ -201,17 +207,15 @@ def stop_live_browser_session(session_id: str, *, session: LiveBrowserSession | 
     if not target:
         _remove_session_registry(clean_id)
         return
-    for process in reversed(target.processes):
-        if process.poll() is not None:
-            continue
-        try:
-            process.terminate()
-            process.wait(timeout=3)
-        except Exception:
-            try:
-                process.kill()
-            except Exception:
-                pass
+    active_processes = [process for process in reversed(target.processes) if process.poll() is None]
+    for action in ("terminate", "wait", "kill", "wait"):
+        for process in active_processes:
+            if process.poll() is None:
+                with contextlib.suppress(Exception):
+                    if action == "wait":
+                        process.wait(timeout=max(0.0, deadline - time.monotonic()))
+                    else:
+                        getattr(process, action)()
     if not target.processes:
         _terminate_registry_session_processes(target)
     if target.temp_dir:
@@ -219,7 +223,7 @@ def stop_live_browser_session(session_id: str, *, session: LiveBrowserSession | 
     _remove_session_registry(target.id)
 
 
-def stop_live_browser_sessions_for_task(task_id: str) -> None:
+def stop_live_browser_sessions_for_task(task_id: str, *, timeout_seconds: float = 3.0) -> None:
     clean_task_id = str(task_id or "").strip()
     if not clean_task_id:
         return
@@ -229,8 +233,24 @@ def stop_live_browser_sessions_for_task(task_id: str) -> None:
         if str(row.get("task_id") or "") == clean_task_id:
             session_ids.add(str(session_id))
     session_ids.add(f"live_{clean_task_id}")
+    _stop_live_browser_session_ids(session_ids, timeout_seconds)
+
+
+def stop_all_live_browser_sessions(*, timeout_seconds: float = 5.0) -> None:
+    with _LOCK:
+        session_ids = set(_SESSIONS.keys())
+    session_ids.update(session.id for session in _load_registry_sessions())
+    _stop_live_browser_session_ids(session_ids, timeout_seconds)
+
+
+def _stop_live_browser_session_ids(session_ids: set[str], timeout_seconds: float) -> None:
+    deadline = time.monotonic() + max(0.1, float(timeout_seconds))
     for session_id in session_ids:
-        stop_live_browser_session(session_id)
+        with contextlib.suppress(Exception):
+            stop_live_browser_session(
+                session_id,
+                timeout_seconds=max(0.1, deadline - time.monotonic()),
+            )
 
 
 def mark_live_browser_session_standby(session_id: str, *, close_at: int = 0) -> None:
@@ -722,7 +742,4 @@ def _log(logger: Any | None, level: str, stage: str, message: str, data: dict[st
 
 @atexit.register
 def _cleanup_all_sessions() -> None:
-    with _LOCK:
-        ids = list(_SESSIONS.keys())
-    for session_id in ids:
-        stop_live_browser_session(session_id)
+    stop_all_live_browser_sessions()

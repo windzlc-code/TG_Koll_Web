@@ -5,6 +5,7 @@ import json
 import os
 import asyncio
 import ipaddress
+import logging
 import re
 import sqlite3
 import threading
@@ -150,6 +151,7 @@ SOCIAL_MEDIA_MAX_FILE_BYTES = 50 * 1024 * 1024
 SOCIAL_MEDIA_MAX_TOTAL_BYTES = 100 * 1024 * 1024
 
 _DATA_DIR = Path(os.getenv("WEBAPP_DATA_DIR", str(Path(__file__).resolve().parent.parent / "webapp_data"))).resolve()
+LOGGER = logging.getLogger(__name__)
 _NEW_ID: Callable[[str], str] = lambda prefix: f"{prefix}_{uuid.uuid4().hex[:20]}"
 _WORKER_THREAD: threading.Thread | None = None
 _WORKER_STOP = threading.Event()
@@ -1631,12 +1633,15 @@ def _live_browser_task_input_allowed(row: Any) -> bool:
     status = str(task.get("status") or "").strip().lower()
     if status == "need_manual":
         return True
-    if status != "running" or str(task.get("task_type") or "").strip() != "open_login":
+    task_type = str(task.get("task_type") or "").strip()
+    if status != "running" or task_type not in {"open_login", "publish_post"}:
         return False
     running_mode = _running_task_login_mode(str(task.get("id") or ""))
     if running_mode == "manual":
         return True
     if running_mode in {"switching", "takeover_timeout"}:
+        return False
+    if task_type == "publish_post":
         return False
     payload = _load_task_payload_object(task.get("payload_json"))
     return bool(
@@ -1842,13 +1847,43 @@ def ensure_social_automation_worker_started() -> None:
 
 def stop_social_automation_worker(*, timeout_seconds: float = 5.0) -> None:
     global _WORKER_THREAD
+    timeout = max(float(timeout_seconds), 0.0)
+    deadline = time.monotonic() + timeout
     _WORKER_STOP.set()
     _WORKER_WAKE.set()
+
+    with _RUNNING_TASK_CONTROLS_LOCK:
+        running_task_ids = list(_RUNNING_TASK_CONTROLS.keys())
+    _persist_shutdown_task_states(running_task_ids, deadline=deadline)
+    for task_id in running_task_ids:
+        _force_stop_running_task(
+            task_id,
+            deadline=deadline,
+        )
+
+    with contextlib.suppress(Exception):
+        from social_automation.live_browser import stop_all_live_browser_sessions
+
+        stop_all_live_browser_sessions(
+            timeout_seconds=max(0.1, deadline - time.monotonic()),
+        )
+
     worker = _WORKER_THREAD
     if worker and worker.is_alive() and worker is not threading.current_thread():
-        worker.join(timeout=max(float(timeout_seconds), 0.0))
+        worker.join(timeout=max(0.0, deadline - time.monotonic()))
     if worker is None or not worker.is_alive():
         _WORKER_THREAD = None
+
+    with _WORKER_TASK_THREADS_LOCK:
+        task_threads = dict(_WORKER_TASK_THREADS)
+    task_deadline = max(
+        deadline,
+        time.monotonic() + min(2.0, max(timeout, 0.1)),
+    )
+    for thread in task_threads.values():
+        if thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=max(0.0, task_deadline - time.monotonic()))
+    _cleanup_worker_task_threads()
     _WORKER_STATE["enabled"] = False
 
 
@@ -1973,7 +2008,7 @@ def _live_browser_sessions(*, user_id: int | None = None, raise_on_error: bool =
         if status:
             session["task_status"] = status
         session["input_allowed"] = bool(session.get("browser_ready")) and _live_browser_task_input_allowed(row)
-        if str(row["task_type"] or "").strip() == "open_login":
+        if str(row["task_type"] or "").strip() in {"open_login", "publish_post"}:
             session["login_mode"] = _live_browser_open_login_mode(row)
         if str(row["error"] or "").strip():
             session["task_error"] = str(row["error"] or "")
@@ -2398,8 +2433,8 @@ def _persist_manual_takeover_ack(task_id: str, session_id: str) -> bool:
             task_id,
             "warn",
             "manual_takeover_requested",
-            "用户已切换为人工接管，自动登录操作已停止。",
-            {"session_id": session_id},
+            "用户已切换为人工接管，自动操作已停止。",
+            {"session_id": session_id, "task_type": task_type},
         )
     return True
 
@@ -2421,7 +2456,7 @@ def _persist_manual_takeover_resolved(task_id: str, session_id: str) -> bool:
                 task_id,
                 "info",
                 "manual_takeover_resolved",
-                "人工验证已完成，自动化任务继续执行。",
+                "系统已识别人工操作完成，任务继续结算。",
                 {"session_id": session_id},
             )
             return True
@@ -2472,8 +2507,9 @@ def request_live_browser_manual_takeover(session_id: str) -> dict[str, Any]:
             (task_id,),
         ).fetchone()
     status = str(row["status"] or "").strip().lower() if row else ""
-    if not row or status not in {"running", "need_manual"} or str(row["task_type"] or "") != "open_login":
-        raise HTTPException(status_code=409, detail="当前浏览器不是正在运行的登录任务")
+    task_type = str(row["task_type"] or "").strip() if row else ""
+    if not row or status not in {"running", "need_manual"} or task_type not in {"open_login", "publish_post"}:
+        raise HTTPException(status_code=409, detail="当前浏览器任务不支持人工接管")
     already_manual = status == "need_manual" or bool(getattr(ack_event, "is_set", lambda: False)())
     timeout_event.clear()
     event.set()
@@ -4174,7 +4210,7 @@ def cancel_social_tasks_in_transaction(
             task_id,
             "warn",
             "cancel",
-            "Task cancelled because its marketplace proxy allocation was revoked.",
+            f"Task cancelled: {clean_reason}.",
             {"reason": clean_reason},
         )
     return task_ids
@@ -4298,6 +4334,8 @@ def retry_social_task(task_id: str, *, billing_admin_waived: bool = False) -> di
 
 
 def run_social_automation_once() -> dict[str, Any] | None:
+    if _WORKER_STOP.is_set():
+        return None
     with _WORKER_LOCK:
         _cleanup_worker_task_threads()
         if _active_worker_thread_count() >= _social_worker_max_concurrency():
@@ -4356,7 +4394,10 @@ def _refresh_worker_state() -> None:
 def _launch_available_social_tasks() -> int:
     launched = 0
     with _WORKER_LOCK:
-        while _active_worker_thread_count() < _social_worker_max_concurrency():
+        while (
+            not _WORKER_STOP.is_set()
+            and _active_worker_thread_count() < _social_worker_max_concurrency()
+        ):
             task = _claim_next_task()
             if not task:
                 break
@@ -4374,6 +4415,9 @@ def _start_claimed_task_thread(task: dict[str, Any]) -> None:
     def target() -> None:
         _WORKER_STATE.update({"last_tick_at": _now(), "last_task_id": task_id, "last_error": ""})
         try:
+            if _WORKER_STOP.is_set():
+                _force_stop_running_task(task_id, mark_cancelled=True)
+                return
             _execute_claimed_task(task)
         except Exception as exc:
             _WORKER_STATE["last_error"] = str(exc)
@@ -4557,6 +4601,38 @@ def _claim_next_task() -> dict[str, Any] | None:
     return public
 
 
+def _requeue_confirmation_only_task(
+    conn: sqlite3.Connection,
+    row: Any,
+    *,
+    now: int,
+    error: str,
+    log_stage: str,
+    log_message: str,
+) -> bool:
+    payload = _loads(row["payload_json"], {})
+    confirmation = payload.get("_publish_confirmation") if isinstance(payload, dict) else None
+    if (
+        str(row["task_type"] or "") != "publish_post"
+        or not isinstance(confirmation, dict)
+        or confirmation.get("phase") != "confirm_only"
+    ):
+        return False
+    task_id = str(row["id"] or "")
+    requeued = conn.execute(
+        """
+        UPDATE social_automation_tasks
+        SET status = 'queued', scheduled_at = ?, started_at = 0,
+            finished_at = 0, error = ?, updated_at = ?
+        WHERE id = ? AND status IN ('running', 'need_manual')
+        """,
+        (now, error, now, task_id),
+    ).rowcount
+    if requeued:
+        _insert_log(conn, task_id, "warn", log_stage, log_message, {})
+    return bool(requeued)
+
+
 def _recover_orphaned_publish_confirmation_tasks(now: int) -> None:
     with _RUNNING_TASK_CONTROLS_LOCK:
         running_ids = set(_RUNNING_TASK_CONTROLS.keys())
@@ -4575,23 +4651,14 @@ def _recover_orphaned_publish_confirmation_tasks(now: int) -> None:
             task_id = str(row["id"] or "")
             if not task_id or task_id in running_ids:
                 continue
-            payload = _loads(row["payload_json"], {})
-            confirmation = payload.get("_publish_confirmation") if isinstance(payload, dict) else None
-            if not isinstance(confirmation, dict) or confirmation.get("phase") != "confirm_only":
-                continue
-            recovered = conn.execute(
-                "UPDATE social_automation_tasks SET status = 'queued', scheduled_at = ?, started_at = 0, finished_at = 0, error = ?, updated_at = ? WHERE id = ? AND status = 'running'",
-                (now, "confirmation worker restarted; confirmation-only check requeued", now, task_id),
-            ).rowcount
-            if recovered:
-                _insert_log(
-                    conn,
-                    task_id,
-                    "warn",
-                    "threads_publish_confirmation_recovered",
-                    "确认进程中断，已恢复为仅检查发布结果的任务，不会重复发布。",
-                    {},
-                )
+            _requeue_confirmation_only_task(
+                conn,
+                row,
+                now=now,
+                error="confirmation worker restarted; confirmation-only check requeued",
+                log_stage="threads_publish_confirmation_recovered",
+                log_message="确认进程中断，已恢复为仅检查发布结果的任务，不会重复发布。",
+            )
 
 
 def _recover_orphaned_manual_task(now: int) -> None:
@@ -4670,6 +4737,9 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
     with _RUNNING_TASK_CONTROLS_LOCK:
         _RUNNING_TASK_CONTROLS[task_id] = control
     try:
+        if _WORKER_STOP.is_set():
+            _force_stop_running_task(task_id, mark_cancelled=True)
+            return
         _execute_claimed_task_with_control(task, control)
     finally:
         _discard_ephemeral_task_secrets(task_id)
@@ -4921,9 +4991,14 @@ def _run_social_task_in_clean_thread(
         except BaseException as exc:
             error_box["error"] = exc
 
-    thread = threading.Thread(target=target, name=f"social-task-runner-{str(task.get('id') or '')[:12]}", daemon=False)
+    thread = threading.Thread(target=target, name=f"social-task-runner-{str(task.get('id') or '')[:12]}", daemon=True)
     thread.start()
-    thread.join()
+    while thread.is_alive():
+        thread.join(timeout=0.25)
+        if control["cancel_event"].is_set():
+            thread.join(timeout=2)
+            if thread.is_alive():
+                raise RuntimeError("task runner did not stop after cancellation")
     if error_box:
         raise error_box["error"]
     result = result_box.get("result")
@@ -4945,12 +5020,83 @@ def _discard_ephemeral_task_secrets(*task_ids: str) -> None:
             _EPHEMERAL_TASK_SECRETS.pop(str(task_id), None)
 
 
-def _force_stop_running_task(task_id: str) -> None:
+def _persist_shutdown_task_states(
+    task_ids: list[str],
+    *,
+    deadline: float | None = None,
+) -> set[str]:
+    clean_task_ids = dict.fromkeys(str(task_id or "").strip() for task_id in task_ids)
+    return {
+        task_id
+        for task_id in clean_task_ids
+        if task_id and _persist_shutdown_task_state(task_id, deadline=deadline)
+    }
+
+
+def _persist_shutdown_task_state(task_id: str, *, deadline: float | None = None) -> bool:
+    last_error: Exception | None = None
+    for attempt in range(2):
+        try:
+            with db() as conn:
+                remaining_ms = 500
+                if deadline is not None:
+                    remaining_ms = max(1, min(500, int((deadline - time.monotonic()) * 1000)))
+                conn.execute(f"PRAGMA busy_timeout={remaining_ms}")
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    """
+                    SELECT * FROM social_automation_tasks
+                    WHERE id = ? AND status IN ('preparing', 'queued', 'running', 'need_manual')
+                    """,
+                    (task_id,),
+                ).fetchone()
+                if row is None:
+                    return False
+                now = _now()
+                if _requeue_confirmation_only_task(
+                    conn,
+                    row,
+                    now=now,
+                    error="service restarted; confirmation-only check requeued",
+                    log_stage="service_shutdown_confirmation_requeued",
+                    log_message="Publish was already submitted; only result confirmation will resume after restart.",
+                ):
+                    return True
+                return bool(
+                    cancel_social_tasks_in_transaction(
+                        conn, [row], reason="service shutdown", now=now
+                    )
+                )
+        except Exception as exc:
+            last_error = exc
+            if attempt == 0 and (deadline is None or time.monotonic() + 0.05 < deadline):
+                time.sleep(0.05)
+                continue
+            break
+    if last_error is not None:
+        _WORKER_STATE["last_error"] = f"failed to persist shutdown state for {task_id}: {last_error}"
+        LOGGER.error(
+            "Failed to persist shutdown state for task %s: %s",
+            task_id,
+            last_error,
+            exc_info=(type(last_error), last_error, last_error.__traceback__),
+        )
+    return False
+
+
+def _force_stop_running_task(
+    task_id: str,
+    *,
+    mark_cancelled: bool = False,
+    deadline: float | None = None,
+) -> bool:
+    cancellation_persisted = not mark_cancelled
+    if mark_cancelled:
+        cancellation_persisted = task_id in _persist_shutdown_task_states([task_id], deadline=deadline)
     with _RUNNING_TASK_CONTROLS_LOCK:
         control = _RUNNING_TASK_CONTROLS.get(str(task_id))
         cancel_event = control.get("cancel_event") if control else None
         context = control.get("context") if control else None
-        session_id = str(control.get("live_browser_session_id") or "") if control else ""
     if cancel_event is not None:
         with contextlib.suppress(Exception):
             cancel_event.set()
@@ -4958,14 +5104,16 @@ def _force_stop_running_task(task_id: str) -> None:
         with contextlib.suppress(Exception):
             context.close()
     with contextlib.suppress(Exception):
-        from social_automation.live_browser import stop_live_browser_session, stop_live_browser_sessions_for_task
+        from social_automation.live_browser import stop_live_browser_sessions_for_task
 
-        if session_id:
-            stop_live_browser_session(session_id)
-        stop_live_browser_sessions_for_task(task_id)
+        remaining = max(0.1, deadline - time.monotonic()) if deadline is not None else 3.0
+        stop_live_browser_sessions_for_task(task_id, timeout_seconds=remaining)
     with contextlib.suppress(Exception):
         with db() as conn:
             _insert_log(conn, task_id, "warn", "force_stop", "已发送强制停止信号并关闭浏览器上下文", {})
+
+
+    return cancellation_persisted
 
 
 def _persist_running_account_login_status(task_id: str, account_id: str, status: str) -> bool:

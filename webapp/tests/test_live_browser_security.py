@@ -472,7 +472,7 @@ def test_manual_takeover_remains_available_after_task_enters_need_manual():
     assert result["acknowledged"] is True
 
 
-def test_manual_takeover_endpoint_rejects_running_publish_task():
+def test_manual_takeover_endpoint_accepts_running_publish_task():
     event = mock.Mock()
     ack_event = mock.Mock()
     ack_event.is_set.return_value = False
@@ -495,12 +495,14 @@ def test_manual_takeover_endpoint_rejects_running_publish_task():
     with (
         mock.patch.dict(social_automation_api._RUNNING_TASK_CONTROLS, {"publish-task-1": control}, clear=True),
         mock.patch.object(social_automation_api, "db", database),
+        mock.patch.object(social_automation_api.threading, "Thread") as thread,
     ):
-        with pytest.raises(social_automation_api.HTTPException) as raised:
-            social_automation_api.request_live_browser_manual_takeover("live-publish-1")
+        result = social_automation_api.request_live_browser_manual_takeover("live-publish-1")
 
-    assert raised.value.status_code == 409
-    event.set.assert_not_called()
+    event.set.assert_called_once_with()
+    thread.return_value.start.assert_called_once_with()
+    assert result["mode"] == "switching"
+    assert result["acknowledged"] is False
 
 
 def test_need_manual_status_overrides_stale_running_control_mode():

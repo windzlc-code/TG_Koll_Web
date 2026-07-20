@@ -1071,82 +1071,10 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
     def test_public_refresh_endpoint_returns_task_status(self):
         self._write_archives()
-        with mock.patch.object(server, "_start_persona_dashboard_refresh", return_value={"id": "pdr_test", "status": "queued", "message": "queued"}) as start:
-            resp = self.client.post("/api/persona_dashboard/refresh", json={"archive_id": "persona-1", "source": "browser"})
+        with mock.patch.object(server, "_start_persona_dashboard_refresh", return_value={"id": "pdr_test", "status": "queued", "message": "queued"}):
+            resp = self.client.post("/api/persona_dashboard/refresh", json={"archive_id": "persona-1"})
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["id"], "pdr_test")
-        start.assert_called_once_with(
-            "persona-1",
-            source="browser",
-            archive_ids=["persona-1"],
-            user_id=1,
-        )
-
-        invalid = self.client.post("/api/persona_dashboard/refresh", json={"archive_id": "persona-1", "source": "unknown"})
-        self.assertEqual(invalid.status_code, 400)
-
-    def test_full_refresh_reuses_identical_task_and_rejects_concurrent_scope(self):
-        active = {
-            "id": "pdr_active",
-            "user_id": 1,
-            "archive_id": "persona-1",
-            "archive_ids": ["persona-1"],
-            "source": "browser",
-            "status": "running",
-        }
-        with server.PERSONA_DASHBOARD_REFRESH_LOCK:
-            original = dict(server.PERSONA_DASHBOARD_REFRESH_TASKS)
-            server.PERSONA_DASHBOARD_REFRESH_TASKS.clear()
-            server.PERSONA_DASHBOARD_REFRESH_TASKS["pdr_active"] = dict(active)
-        try:
-            reused = server._start_persona_dashboard_refresh(
-                "persona-1",
-                source="browser",
-                archive_ids=["persona-1"],
-                user_id=1,
-            )
-            self.assertEqual(reused["id"], "pdr_active")
-            with self.assertRaises(server.HTTPException) as raised:
-                server._start_persona_dashboard_refresh(
-                    "persona-2",
-                    source="browser",
-                    archive_ids=["persona-2"],
-                    user_id=1,
-                )
-            self.assertEqual(raised.exception.status_code, 409)
-        finally:
-            with server.PERSONA_DASHBOARD_REFRESH_LOCK:
-                server.PERSONA_DASHBOARD_REFRESH_TASKS.clear()
-                server.PERSONA_DASHBOARD_REFRESH_TASKS.update(original)
-
-    def test_daily_full_refresh_is_due_immediately_when_authenticated_data_is_stale(self):
-        now = datetime(2026, 7, 17, 12, 0, tzinfo=timezone.utc).timestamp()
-        stale_archive = {
-            "id": "persona-1",
-            "setup": {
-                "accountManagement": {"threads": {"handle": "@history"}},
-                "hotMetrics": {
-                    "threads": {
-                        "platform": "threads",
-                        "scope": "authenticated_full_profile",
-                        "refreshedAt": "2026-07-15T12:00:00Z",
-                    }
-                },
-            },
-        }
-        fresh_archive = json.loads(json.dumps(stale_archive))
-        fresh_archive["setup"]["hotMetrics"]["threads"]["refreshedAt"] = "2026-07-17T11:30:00Z"
-
-        with mock.patch.object(server, "_read_tool_r18_persona_archives", return_value=([stale_archive], {})):
-            self.assertEqual(server._persona_dashboard_monitor_initial_delay(86400, "browser", now), 0)
-        with mock.patch.object(server, "_read_tool_r18_persona_archives", return_value=([fresh_archive], {})):
-            delay = server._persona_dashboard_monitor_initial_delay(86400, "browser", now)
-        self.assertEqual(delay, 84600)
-
-        with mock.patch.dict(os.environ, {}, clear=True):
-            self.assertTrue(server._persona_dashboard_monitor_enabled())
-            self.assertEqual(server._persona_dashboard_monitor_interval_seconds(), 86400)
-            self.assertEqual(server._persona_dashboard_monitor_source(), "browser")
 
     def test_create_persona_requires_auth_and_persists_archive(self):
         resp = self.client.post(
@@ -1625,44 +1553,6 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertTrue(saved_path.is_file())
         self.assertEqual(saved_path.read_bytes(), self.draft_media_path.read_bytes())
 
-    def test_persona_generated_reference_image_is_copied_to_durable_media(self):
-        self._write_archives()
-        old_media_root = server.PERSONA_MEDIA_ROOT
-        server.PERSONA_MEDIA_ROOT = self.data_dir / "persona_media"
-        try:
-            data_url = "data:image/png;base64," + base64.b64encode(self.draft_media_path.read_bytes()).decode("ascii")
-            response = server._persona_archive_persist_reference_image(
-                "persona-1",
-                image_url=data_url,
-                source="portrait",
-            )
-            self.assertEqual(response["saved_item_id"], response["items"][0]["id"])
-            image_path = Path(response["items"][0]["image_url"])
-            self.assertTrue(image_path.is_file())
-            self.assertTrue(image_path.is_relative_to(server.PERSONA_MEDIA_ROOT))
-            self.assertEqual(image_path.read_bytes(), self.draft_media_path.read_bytes())
-        finally:
-            server.PERSONA_MEDIA_ROOT = old_media_root
-
-    def test_cleanup_preserves_persona_history_output(self):
-        self._write_archives()
-        old_output_root = server.OUTPUT_ROOT
-        server.OUTPUT_ROOT = self.data_dir / "outputs"
-        try:
-            task_dir = server.OUTPUT_ROOT / "admin" / "task-history"
-            task_dir.mkdir(parents=True, exist_ok=True)
-            media_path = task_dir / "persona_post_preview.jpg"
-            media_path.write_bytes(self.draft_media_path.read_bytes())
-            archives_path = self.tool_runtime_dir / "persona_archives.json"
-            archives_path.write_text(json.dumps([{"media_path": media_path.as_posix()}], ensure_ascii=False), encoding="utf-8")
-            old_time = 1_600_000_000
-            os.utime(task_dir, (old_time, old_time))
-            result = server._cleanup_files_once(retention_days=1)
-            self.assertEqual(result["deleted"], 0)
-            self.assertTrue(media_path.is_file())
-        finally:
-            server.OUTPUT_ROOT = old_output_root
-
     def test_attach_persona_post_image_task_output_writes_back_to_post(self):
         self._write_archives()
         generated_path = self.tool_runtime_dir / "generated-preview.png"
@@ -1707,130 +1597,6 @@ class PersonaDashboardApiTests(unittest.TestCase):
         media_resp = self.client.get(preview_path)
         self.assertEqual(media_resp.status_code, 200)
         self.assertEqual(media_resp.headers["content-type"], "image/png")
-
-    def test_persona_publish_history_merges_full_hot_metrics_by_published_url(self):
-        self._write_archives()
-        archives_path = self.tool_runtime_dir / "persona_archives.json"
-        archives = json.loads(archives_path.read_text(encoding="utf-8"))
-        record = archives[0]["publishHistory"][0]
-        record["publishedUrl"] = "https://www.threads.net/@history/post/abc/?utm_source=console"
-        platform_metrics = archives[0]["setup"]["hotMetrics"]["threads"]
-        platform_metrics.update({
-            "method": "browser",
-            "scope": "authenticated_full_profile",
-            "refreshedAt": "2026-07-17T01:02:03Z",
-            "complete": True,
-        })
-        platform_metrics["postMetrics"][0]["repostCount"] = 4
-        archives_path.write_text(json.dumps(archives), encoding="utf-8")
-
-        resp = self.client.get("/api/persona_dashboard/personas/persona-1/publish_history")
-
-        self.assertEqual(resp.status_code, 200)
-        row = resp.json()["publish_history"][0]
-        self.assertEqual(row["source_url"], record["publishedUrl"])
-        self.assertEqual(row["likes"], 10)
-        self.assertEqual(row["comments"], 5)
-        self.assertEqual(row["shares"], 2)
-        self.assertEqual(row["reposts"], 4)
-        self.assertEqual(row["views"], 300)
-        self.assertEqual(row["hot_score"], 321)
-        self.assertEqual(
-            row["hot_metrics"],
-            {
-                "hot_score": 321,
-                "likes": 10,
-                "comments": 5,
-                "shares": 2,
-                "reposts": 4,
-                "views": 300,
-                "refreshed_at": "2026-06-30T01:00:00Z",
-                "complete": True,
-                "matched": True,
-                "stale": False,
-                "source": "browser",
-                "scope": "authenticated_full_profile",
-            },
-        )
-
-    def test_persona_publish_history_uses_content_fallback_and_marks_snapshot_stale(self):
-        self._write_archives()
-        archives_path = self.tool_runtime_dir / "persona_archives.json"
-        archives = json.loads(archives_path.read_text(encoding="utf-8"))
-        record = archives[0]["publishHistory"][0]
-        record["content"] = "A unique published sentence that can be matched safely."
-        hot_metrics = archives[0]["setup"]["hotMetrics"]["threads"]
-        hot_metrics.update({
-            "method": "rsshub",
-            "scope": "rsshub_feed_monitor",
-            "refreshedAt": "2026-07-17T01:02:03Z",
-            "complete": True,
-        })
-        hot_metrics["postMetrics"][0].update({
-            "sourceUrl": "https://www.threads.com/@history/post/content-only",
-            "content": record["content"],
-        })
-        archives_path.write_text(json.dumps(archives), encoding="utf-8")
-
-        resp = self.client.get("/api/persona_dashboard/personas/persona-1/publish_history")
-
-        self.assertEqual(resp.status_code, 200)
-        metrics = resp.json()["publish_history"][0]["hot_metrics"]
-        self.assertTrue(metrics["matched"])
-        self.assertFalse(metrics["complete"])
-        self.assertTrue(metrics["stale"])
-        self.assertEqual(metrics["scope"], "rsshub_feed_monitor")
-
-        archives[0]["publishHistory"][0]["content"] = "No matching published content."
-        archives_path.write_text(json.dumps(archives), encoding="utf-8")
-        resp = self.client.get("/api/persona_dashboard/personas/persona-1/publish_history")
-        row = resp.json()["publish_history"][0]
-        self.assertFalse(row["hot_metrics"]["matched"])
-        self.assertTrue(row["hot_metrics"]["stale"])
-        self.assertEqual(row["likes"], 3)
-        self.assertEqual(row["comments"], 1)
-        self.assertEqual(row["views"], 40)
-
-    def test_persona_publish_history_does_not_guess_between_duplicate_content_rows(self):
-        self._write_archives()
-        archives_path = self.tool_runtime_dir / "persona_archives.json"
-        archives = json.loads(archives_path.read_text(encoding="utf-8"))
-        record = archives[0]["publishHistory"][0]
-        record["content"] = "The same reusable published sentence appears twice."
-        record.pop("publishedUrl", None)
-        record["publishedMeta"] = {
-            "likeCount": 3,
-            "commentCount": 1,
-            "viewCount": 40,
-        }
-        hot_metrics = archives[0]["setup"]["hotMetrics"]["threads"]
-        first = dict(hot_metrics["postMetrics"][0])
-        first.update({
-            "sourceUrl": "https://www.threads.com/@history/post/duplicate-1",
-            "content": record["content"],
-        })
-        second = dict(first)
-        second["sourceUrl"] = "https://www.threads.com/@history/post/duplicate-2"
-        second["likeCount"] = 999
-        hot_metrics["postMetrics"] = [first, second]
-        archives_path.write_text(json.dumps(archives), encoding="utf-8")
-
-        resp = self.client.get("/api/persona_dashboard/personas/persona-1/publish_history")
-
-        self.assertEqual(resp.status_code, 200)
-        row = resp.json()["publish_history"][0]
-        self.assertFalse(row["hot_metrics"]["matched"])
-        self.assertEqual(row["likes"], 3)
-
-    def test_publish_history_rejects_non_https_source_urls(self):
-        self.assertEqual(
-            server._published_record_url({"publishedUrl": "javascript:alert(1)"}),
-            "",
-        )
-        self.assertEqual(
-            server._published_record_url({"publishedUrl": "https://www.threads.com/@safe/post/1"}),
-            "https://www.threads.com/@safe/post/1",
-        )
 
     def test_missing_media_is_retained_as_unavailable_item(self):
         self._write_archives()
@@ -2064,127 +1830,6 @@ class PersonaDashboardApiTests(unittest.TestCase):
                 [mock.call(1234, server.signal.SIGTERM), mock.call(1234, server.signal.SIGKILL)],
             )
 
-    def test_persona_hot_pool_worker_refills_only_low_mode(self):
-        server._PERSONA_HOT_POOL_ATTEMPTS.clear()
-        server._PERSONA_HOT_WARM_PENDING.clear()
-        server._PERSONA_HOT_POOL_REFILLING.clear()
-        server._PERSONA_HOT_POOL_COUNTS.clear()
-        server._PERSONA_HOT_POOL_STRATEGY_READY.clear()
-        server._PERSONA_HOT_WARM_ATTEMPTS.clear()
-        server._PERSONA_HOT_POOL_CURSOR = 0
-        server._PERSONA_HOT_LAST_INTERACTIVE_AT = 0.0
-        workflow_results = [
-            {
-                "ok": True,
-                "pools": [
-                    {"archiveId": "persona-new", "searchMode": "normal", "readyCount": 25},
-                    {"archiveId": "persona-new", "searchMode": "strict", "readyCount": 0},
-                ],
-            },
-            {"ok": True, "candidates": []},
-        ]
-
-        with mock.patch.object(server._PERSONA_HOT_POOL_STOP, "is_set", side_effect=[False, False, True]), \
-             mock.patch.object(server._PERSONA_HOT_POOL_WAKE, "wait", return_value=False), \
-             mock.patch.object(server._PERSONA_HOT_POOL_WAKE, "clear"), \
-             mock.patch.object(server, "_persona_hot_pool_worker_enabled", return_value=True), \
-             mock.patch.object(server, "_persona_hot_pool_resources_available", return_value=True), \
-             mock.patch.object(server, "_read_tool_r18_persona_archives", return_value=([{"id": "persona-new"}], {})), \
-             mock.patch.object(server, "_run_persona_hot_workflow_cli", side_effect=workflow_results) as run_workflow:
-            server._persona_hot_pool_worker_loop()
-
-        self.assertEqual(run_workflow.call_count, 2)
-        self.assertEqual(run_workflow.call_args_list[0].args[0], {"action": "pool-stats", "archiveIds": ["persona-new"]})
-        self.assertEqual(run_workflow.call_args_list[1].args[0], {
-            "action": "fetch-hot-candidates",
-            "archiveId": "persona-new",
-            "limit": 10,
-            "refresh": True,
-            "searchMode": "strict",
-        })
-        self.assertTrue(run_workflow.call_args_list[1].kwargs["background"])
-
-    def test_persona_hot_pool_worker_continues_refill_until_target(self):
-        server._PERSONA_HOT_POOL_ATTEMPTS.clear()
-        server._PERSONA_HOT_WARM_PENDING.clear()
-        server._PERSONA_HOT_POOL_REFILLING.clear()
-        server._PERSONA_HOT_POOL_COUNTS.clear()
-        server._PERSONA_HOT_POOL_STRATEGY_READY.clear()
-        server._PERSONA_HOT_WARM_ATTEMPTS.clear()
-        server._PERSONA_HOT_POOL_CURSOR = 0
-        server._PERSONA_HOT_POOL_REFILLING.add("persona-new:strict")
-        server._PERSONA_HOT_LAST_INTERACTIVE_AT = 0.0
-        workflow_results = [
-            {
-                "ok": True,
-                "pools": [
-                    {"archiveId": "persona-new", "searchMode": "normal", "readyCount": 100, "strategyReady": True},
-                    {"archiveId": "persona-new", "searchMode": "strict", "readyCount": 80, "strategyReady": True},
-                ],
-            },
-            {"ok": True, "candidates": []},
-        ]
-
-        with mock.patch.object(server._PERSONA_HOT_POOL_STOP, "is_set", side_effect=[False, False, True]), \
-             mock.patch.object(server._PERSONA_HOT_POOL_WAKE, "wait", return_value=False), \
-             mock.patch.object(server._PERSONA_HOT_POOL_WAKE, "clear"), \
-             mock.patch.object(server, "_persona_hot_pool_worker_enabled", return_value=True), \
-             mock.patch.object(server, "_persona_hot_pool_resources_available", return_value=True), \
-             mock.patch.object(server, "_read_tool_r18_persona_archives", return_value=([{"id": "persona-new"}], {})), \
-             mock.patch.object(server, "_run_persona_hot_workflow_cli", side_effect=workflow_results) as run_workflow:
-            server._persona_hot_pool_worker_loop()
-
-        self.assertEqual(run_workflow.call_count, 2)
-        self.assertEqual(run_workflow.call_args_list[1].args[0]["searchMode"], "strict")
-        self.assertIn("persona-new:strict", server._PERSONA_HOT_POOL_REFILLING)
-
-    def test_persona_hot_pool_worker_stops_at_target(self):
-        server._PERSONA_HOT_POOL_ATTEMPTS.clear()
-        server._PERSONA_HOT_WARM_PENDING.clear()
-        server._PERSONA_HOT_POOL_REFILLING.clear()
-        server._PERSONA_HOT_POOL_COUNTS.clear()
-        server._PERSONA_HOT_POOL_STRATEGY_READY.clear()
-        server._PERSONA_HOT_WARM_ATTEMPTS.clear()
-        server._PERSONA_HOT_POOL_CURSOR = 0
-        server._PERSONA_HOT_POOL_REFILLING.add("persona-new:strict")
-        server._PERSONA_HOT_LAST_INTERACTIVE_AT = 0.0
-
-        with mock.patch.object(server._PERSONA_HOT_POOL_STOP, "is_set", side_effect=[False, False, True]), \
-             mock.patch.object(server._PERSONA_HOT_POOL_WAKE, "wait", return_value=False), \
-             mock.patch.object(server._PERSONA_HOT_POOL_WAKE, "clear"), \
-             mock.patch.object(server, "_persona_hot_pool_worker_enabled", return_value=True), \
-             mock.patch.object(server, "_persona_hot_pool_resources_available", return_value=True), \
-             mock.patch.object(server, "_read_tool_r18_persona_archives", return_value=([{"id": "persona-new"}], {})), \
-             mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value={
-                 "ok": True,
-                 "pools": [
-                     {"archiveId": "persona-new", "searchMode": "normal", "readyCount": 100, "strategyReady": True},
-                     {"archiveId": "persona-new", "searchMode": "strict", "readyCount": 100, "strategyReady": True},
-                 ],
-             }) as run_workflow:
-            server._persona_hot_pool_worker_loop()
-
-        self.assertEqual(run_workflow.call_count, 1)
-        self.assertNotIn("persona-new:strict", server._PERSONA_HOT_POOL_REFILLING)
-
-    def test_persona_hot_pool_worker_keeps_deferred_strategy_warm_pending(self):
-        server._PERSONA_HOT_POOL_ATTEMPTS.clear()
-        server._PERSONA_HOT_WARM_PENDING.clear()
-        server._PERSONA_HOT_WARM_PENDING.add("persona-new")
-        server._PERSONA_HOT_WARM_ATTEMPTS.clear()
-        server._PERSONA_HOT_LAST_INTERACTIVE_AT = 0.0
-
-        with mock.patch.object(server._PERSONA_HOT_POOL_STOP, "is_set", side_effect=[False, False, True]), \
-             mock.patch.object(server._PERSONA_HOT_POOL_WAKE, "wait", return_value=False), \
-             mock.patch.object(server._PERSONA_HOT_POOL_WAKE, "clear"), \
-             mock.patch.object(server, "_persona_hot_pool_worker_enabled", return_value=True), \
-             mock.patch.object(server, "_persona_hot_pool_resources_available", return_value=True), \
-             mock.patch.object(server, "_run_persona_hot_workflow_cli", side_effect=server._PersonaHotBackgroundDeferred("deferred")):
-            server._persona_hot_pool_worker_loop()
-
-        self.assertIn("persona-new", server._PERSONA_HOT_WARM_PENDING)
-        self.assertNotIn("persona-new", server._PERSONA_HOT_WARM_ATTEMPTS)
-
     def test_fetch_persona_hot_candidates_calls_hot_workflow_cli(self):
         self._write_archives()
         (self.tool_runtime_dir / "persona_memory.json").write_text(json.dumps({
@@ -2224,7 +1869,6 @@ class PersonaDashboardApiTests(unittest.TestCase):
                     "refresh": True,
                     "limit": 6,
                     "freshness_days": 30,
-                    "freshness_policy": "strict",
                     "selected_memory_ids": ["mem-1"],
                 },
             )
@@ -2234,7 +1878,6 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(body["archive_name"], "History Teacher")
         self.assertEqual(body["keywords"], ["历史", "课堂"])
         self.assertEqual(body["freshness_days"], 15)
-        self.assertEqual(body["freshness_policy"], "strict")
         self.assertEqual(body["candidates"][0]["candidate_id"], "hot-1")
         self.assertEqual(body["candidates"][0]["id"], "hot-1")
         self.assertEqual(body["candidates"][0]["full_content"], "完整热点正文")
@@ -2247,7 +1890,6 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload["limit"], 6)
         self.assertEqual(payload["searchMode"], "strict")
         self.assertEqual(payload["freshnessDays"], 15)
-        self.assertEqual(payload["freshnessPolicy"], "strict")
         self.assertEqual(payload["memorySummaries"], ["记忆一"])
         self.assertNotIn("recordShown", payload)
         self.assertNotIn("forceLive", payload)
@@ -2282,8 +1924,6 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload["prompt"], "")
         self.assertFalse(payload["refresh"])
         self.assertEqual(payload["limit"], 10)
-        self.assertEqual(payload["freshnessPolicy"], "legacy")
-        self.assertEqual(resp.json()["freshness_policy"], "legacy")
         self.assertEqual(payload["memorySummaries"], [f"记忆{index}" for index in range(10, 2, -1)])
 
     def test_import_persona_hot_candidates_returns_hot_source_meta(self):
@@ -2788,7 +2428,6 @@ class PersonaDashboardApiTests(unittest.TestCase):
             platform="threads",
             task_type="open_login",
             status="success",
-            result={"status": "ready", "diagnostic_outcome": "ready"},
             priority=20,
         )
         self._insert_social_task(

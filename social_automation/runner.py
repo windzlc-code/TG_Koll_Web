@@ -381,6 +381,7 @@ def run_social_task(
                 logger,
                 platform,
                 account=account,
+                cancel_event=cancel_event,
                 context_control=context_control,
             )
         if task_type == "comment_post":
@@ -3604,6 +3605,156 @@ def _threads_dialog_post_button(page):
     ], timeout_ms=800)
 
 
+def _threads_media_input(page):
+    try:
+        marked = page.evaluate(
+            r"""() => {
+                const marker = 'data-vecto-threads-media-input';
+                document.querySelectorAll(`[${marker}]`).forEach(node => node.removeAttribute(marker));
+                const isVisible = node => {
+                    const rect = node.getBoundingClientRect();
+                    const style = window.getComputedStyle(node);
+                    return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+                };
+                const dialogs = Array.from(document.querySelectorAll('[role="dialog"]')).filter(isVisible);
+                dialogs.sort((a, b) => {
+                    const ar = a.getBoundingClientRect();
+                    const br = b.getBoundingClientRect();
+                    const ac = Math.abs((ar.left + ar.right) / 2 - window.innerWidth / 2)
+                        + Math.abs((ar.top + ar.bottom) / 2 - window.innerHeight / 2);
+                    const bc = Math.abs((br.left + br.right) / 2 - window.innerWidth / 2)
+                        + Math.abs((br.top + br.bottom) / 2 - window.innerHeight / 2);
+                    return ac - bc;
+                });
+                const mediaInput = inputs => {
+                    const candidates = Array.from(inputs).filter(node => {
+                        const accept = String(node.getAttribute('accept') || '').toLowerCase();
+                        return !accept || accept.includes('image') || accept.includes('video');
+                    });
+                    return candidates[candidates.length - 1] || null;
+                };
+                let target = dialogs.length
+                    ? mediaInput(dialogs[0].querySelectorAll('input[type="file"]'))
+                    : null;
+                if (!target) {
+                    target = mediaInput(document.querySelectorAll('input[type="file"]'));
+                }
+                if (!target) return false;
+                target.setAttribute(marker, '1');
+                return true;
+            }"""
+        )
+    except Exception:
+        marked = False
+    if not marked:
+        return None
+    try:
+        locator = page.locator('[data-vecto-threads-media-input="1"]').last
+        return locator if locator.count() else None
+    except Exception:
+        return None
+
+
+def _threads_attachment_snapshot(page) -> dict[str, int]:
+    empty = {"preview_count": 0, "remove_control_count": 0, "selected_file_count": 0}
+    try:
+        result = page.evaluate(
+            r"""() => {
+                const isVisible = node => {
+                    const rect = node.getBoundingClientRect();
+                    const style = window.getComputedStyle(node);
+                    return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+                };
+                const dialogs = Array.from(document.querySelectorAll('[role="dialog"]')).filter(isVisible);
+                dialogs.sort((a, b) => {
+                    const ar = a.getBoundingClientRect();
+                    const br = b.getBoundingClientRect();
+                    const ac = Math.abs((ar.left + ar.right) / 2 - window.innerWidth / 2)
+                        + Math.abs((ar.top + ar.bottom) / 2 - window.innerHeight / 2);
+                    const bc = Math.abs((br.left + br.right) / 2 - window.innerWidth / 2)
+                        + Math.abs((br.top + br.bottom) / 2 - window.innerHeight / 2);
+                    return ac - bc;
+                });
+                const root = dialogs[0] || document.body;
+                const previews = Array.from(root.querySelectorAll('img, video')).filter(node => {
+                    if (!isVisible(node)) return false;
+                    const rect = node.getBoundingClientRect();
+                    const src = String(node.currentSrc || node.src || '').toLowerCase();
+                    if (node.tagName === 'VIDEO' || src.startsWith('blob:')) return rect.width >= 72 && rect.height >= 72;
+                    return rect.width >= 96 && rect.height >= 96;
+                });
+                const removePattern = /(remove|delete|discard).*(photo|image|video|media|attachment)|(photo|image|video|media|attachment).*(remove|delete|discard)/i;
+                const removeControls = Array.from(root.querySelectorAll('button, [role="button"]')).filter(node => {
+                    if (!isVisible(node)) return false;
+                    const label = [
+                        node.getAttribute('aria-label'),
+                        node.getAttribute('title'),
+                        node.innerText,
+                        node.textContent,
+                    ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+                    return removePattern.test(label);
+                });
+                const selectedFileCount = Array.from(root.querySelectorAll('input[type="file"]'))
+                    .reduce((total, node) => total + Number(node.files?.length || 0), 0);
+                return {
+                    preview_count: previews.length,
+                    remove_control_count: removeControls.length,
+                    selected_file_count: selectedFileCount,
+                };
+            }"""
+        )
+    except Exception:
+        return empty
+    if not isinstance(result, dict):
+        return empty
+    return {
+        "preview_count": max(0, _safe_int(result.get("preview_count"), 0)),
+        "remove_control_count": max(0, _safe_int(result.get("remove_control_count"), 0)),
+        "selected_file_count": max(0, _safe_int(result.get("selected_file_count"), 0)),
+    }
+
+
+def _wait_for_threads_media_ready(
+    page,
+    logger: AutomationLogger,
+    *,
+    expected_files: int,
+    baseline: dict[str, int] | None = None,
+    timeout_seconds: float = 30.0,
+) -> dict[str, int]:
+    before = baseline or {}
+    baseline_evidence = max(
+        _safe_int(before.get("preview_count"), 0),
+        _safe_int(before.get("remove_control_count"), 0),
+    )
+    deadline = time.monotonic() + max(1.0, float(timeout_seconds))
+    last_snapshot = _threads_attachment_snapshot(page)
+    while True:
+        rendered_evidence = max(
+            _safe_int(last_snapshot.get("preview_count"), 0),
+            _safe_int(last_snapshot.get("remove_control_count"), 0),
+        )
+        if rendered_evidence > baseline_evidence:
+            logger.log(
+                "info",
+                "threads_publish_upload_ready",
+                "Threads media attachment preview is ready.",
+                {"expected_files": expected_files, **last_snapshot},
+            )
+            return last_snapshot
+        if time.monotonic() >= deadline:
+            break
+        _sleep_between(0.35, 0.55)
+        last_snapshot = _threads_attachment_snapshot(page)
+    logger.log(
+        "error",
+        "threads_publish_upload_not_ready",
+        "Threads did not render the media attachment preview; publish was stopped before submit.",
+        {"expected_files": expected_files, **last_snapshot},
+    )
+    raise RuntimeError("Threads media attachment preview did not become ready; publish was stopped before submit.")
+
+
 def _dismiss_threads_compose_dialogs(page, logger: AutomationLogger) -> None:
     for attempt in range(5):
         try:
@@ -4079,6 +4230,142 @@ def _threads_profile_is_stably_empty(page, profile_url: str) -> bool:
     return any(marker in body_text for marker in empty_markers)
 
 
+def _wait_for_manual_threads_publish_completion(
+    page,
+    task: dict[str, Any],
+    payload: dict[str, Any],
+    screenshot_dir: Path,
+    logger: AutomationLogger,
+    account: dict[str, Any] | None,
+    profile_url: str,
+    previous_permalinks: set[str],
+    cancel_event: Any | None,
+    context_control: dict[str, Any] | None,
+) -> dict[str, Any]:
+    timeout_seconds = _safe_int(
+        payload.get("manual_publish_timeout_seconds")
+        or os.getenv("SOCIAL_AUTOMATION_MANUAL_PUBLISH_TIMEOUT_SECONDS"),
+        DEFAULT_MANUAL_LOGIN_TIMEOUT_SECONDS,
+    )
+    timeout_seconds = max(
+        MIN_MANUAL_LOGIN_TIMEOUT_SECONDS,
+        min(timeout_seconds, MAX_MANUAL_LOGIN_TIMEOUT_SECONDS),
+    )
+    shot = _screenshot(page, screenshot_dir, task, "manual_publish_takeover", logger)
+    logger.log(
+        "warn",
+        "manual_publish_takeover",
+        "已停止自动发布操作，当前浏览器已切换为人工接管；系统会自动识别发布完成。",
+        {"profile_url": profile_url, "timeout_seconds": timeout_seconds},
+        shot,
+    )
+    detection_payload = dict(payload)
+    detection_payload["profile_confirm_seconds"] = 30
+    detection_payload["profile_confirm_refreshes"] = 1
+    deadline = time.monotonic() + timeout_seconds
+    last_reason = ""
+    while time.monotonic() < deadline:
+        _raise_if_cancelled(cancel_event)
+        with _temporary_background_page(page, logger, "threads_manual_publish_detection") as verification_page:
+            result = _wait_for_threads_own_post(
+                verification_page,
+                "",
+                logger,
+                account,
+                detection_payload,
+                profile_url=profile_url,
+                previous_permalinks=previous_permalinks,
+            )
+            permalink = (
+                _normalize_threads_post_permalink(result.get("url"))
+                if result.get("confirmed")
+                else ""
+            )
+            if permalink:
+                caption = str(
+                    payload.get("caption")
+                    or payload.get("content")
+                    or payload.get("text")
+                    or ""
+                ).strip()
+                final_shot = _capture_threads_publish_evidence(
+                    verification_page,
+                    permalink,
+                    caption,
+                    screenshot_dir,
+                    task,
+                    logger,
+                )
+                _resume_after_manual_takeover(context_control)
+                logger.log(
+                    "info",
+                    "manual_publish_complete",
+                    "已自动识别到人工发布完成。",
+                    {"url": permalink},
+                    final_shot,
+                )
+                return {
+                    "ok": True,
+                    "published": {
+                        **result,
+                        "confirmed": True,
+                        "submitted": True,
+                        "manual_completion": True,
+                        "url": permalink,
+                        "permalink": permalink,
+                        "profile_confirmed": True,
+                        "confirmation_source": "manual_profile_permalink",
+                    },
+                    "url": permalink,
+                    "screenshot_path": final_shot,
+                }
+            last_reason = str(result.get("reason") or "")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        wait_seconds = min(3.0, remaining)
+        wait = getattr(cancel_event, "wait", None) if cancel_event is not None else None
+        if callable(wait):
+            if wait(wait_seconds):
+                _raise_if_cancelled(cancel_event)
+        else:
+            time.sleep(wait_seconds)
+    timeout_shot = _screenshot(page, screenshot_dir, task, "manual_publish_timeout", logger)
+    message = (
+        f"人工发布接管已超过 {timeout_seconds // 60} 分钟，"
+        f"系统仍未识别到新的帖子链接。{last_reason}"
+    )
+    raise NeedManualError(message, "manual_publish_timeout", timeout_shot)
+
+
+def _pause_for_requested_threads_publish_takeover(
+    page,
+    task: dict[str, Any],
+    payload: dict[str, Any],
+    screenshot_dir: Path,
+    logger: AutomationLogger,
+    account: dict[str, Any] | None,
+    profile_url: str,
+    previous_permalinks: set[str],
+    cancel_event: Any | None,
+    context_control: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not _manual_takeover_requested(context_control):
+        return None
+    return _wait_for_manual_threads_publish_completion(
+        page,
+        task,
+        payload,
+        screenshot_dir,
+        logger,
+        account,
+        profile_url,
+        previous_permalinks,
+        cancel_event,
+        context_control,
+    )
+
+
 def _run_threads_publish_post(
     page,
     task,
@@ -4087,6 +4374,7 @@ def _run_threads_publish_post(
     logger,
     account: dict[str, Any] | None = None,
     context_control: dict[str, Any] | None = None,
+    cancel_event: Any | None = None,
 ) -> dict[str, Any]:
     confirmation_state = payload.get("_publish_confirmation")
     if isinstance(confirmation_state, dict) and confirmation_state.get("phase") == "confirm_only":
@@ -4153,10 +4441,22 @@ def _run_threads_publish_post(
     if baseline_used_primary_page:
         _goto(page, THREADS_HOME, logger, "threads_publish_open")
     _dismiss_threads_compose_dialogs(page, logger)
+    manual_result = _pause_for_requested_threads_publish_takeover(
+        page, task, payload, screenshot_dir, logger, account, profile_url,
+        previous_permalinks, cancel_event, context_control,
+    )
+    if manual_result is not None:
+        return manual_result
     try:
         compose = _ensure_threads_compose_ready(page, logger)
     except Exception:
         raise
+    manual_result = _pause_for_requested_threads_publish_takeover(
+        page, task, payload, screenshot_dir, logger, account, profile_url,
+        previous_permalinks, cancel_event, context_control,
+    )
+    if manual_result is not None:
+        return manual_result
     _human_click(page, compose, logger, "threads_publish_focus")
     if caption:
         text_input_mode = _normalize_text_input_mode(payload.get("text_input_mode") or os.getenv("SOCIAL_AUTOMATION_TEXT_INPUT_MODE", "paste"))
@@ -4171,28 +4471,51 @@ def _run_threads_publish_post(
             dialog_text = _threads_active_dialog_text(page)
         if caption not in dialog_text:
             raise RuntimeError("Threads 发帖内容没有写入当前弹窗。")
+    manual_result = _pause_for_requested_threads_publish_takeover(
+        page, task, payload, screenshot_dir, logger, account, profile_url,
+        previous_permalinks, cancel_event, context_control,
+    )
+    if manual_result is not None:
+        return manual_result
     if media_paths:
-        file_input = page.locator('input[type="file"]').first
-        if not file_input.count():
+        attachment_baseline = _threads_attachment_snapshot(page)
+        file_input = _threads_media_input(page)
+        if file_input is None:
             trigger = _visible_first(page, [
+                '[role="dialog"] [aria-label*="photo" i]',
+                '[role="dialog"] [aria-label*="video" i]',
+                '[role="dialog"] button:has-text("Add photo")',
+                '[role="dialog"] button:has-text("Add media")',
                 '[aria-label*="photo" i]',
                 '[aria-label*="video" i]',
-                'button:has-text("Add photo")',
-                'button:has-text("Add media")',
             ], timeout_ms=1500)
             if trigger is not None:
                 _human_click(page, trigger, logger, "threads_publish_media_picker")
                 _sleep_between(0.8, 1.4)
-                file_input = page.locator('input[type="file"]').first
+                file_input = _threads_media_input(page)
+        if file_input is None:
+            raise RuntimeError("Unable to locate the media input in the active Threads composer.")
         file_input.wait_for(state="attached", timeout=30000)
         logger.log("info", "threads_publish_upload", "正在上传 Threads 媒体文件。", {"count": len(media_paths)})
         file_input.set_input_files(media_paths)
-        _sleep_between(1.0, 2.2)
+        _wait_for_threads_media_ready(
+            page,
+            logger,
+            expected_files=len(media_paths),
+            baseline=attachment_baseline,
+        )
+    manual_result = _pause_for_requested_threads_publish_takeover(
+        page, task, payload, screenshot_dir, logger, account, profile_url,
+        previous_permalinks, cancel_event, context_control,
+    )
+    if manual_result is not None:
+        return manual_result
     confirmation_state = {
         "phase": "confirm_only",
         "profile_url": profile_url,
         "baseline_permalinks": sorted(previous_permalinks),
         "caption": caption,
+        "media_count": len(media_paths),
         "submitted_at": int(time.time()),
     }
     confirmation_persisted = False
@@ -4205,6 +4528,12 @@ def _run_threads_publish_post(
         confirmation_persisted = True
 
     click_uncertain = False
+    manual_result = _pause_for_requested_threads_publish_takeover(
+        page, task, payload, screenshot_dir, logger, account, profile_url,
+        previous_permalinks, cancel_event, context_control,
+    )
+    if manual_result is not None:
+        return manual_result
     try:
         post_clicked = _click_threads_active_dialog_post(page, logger, before_click=persist_confirmation_before_click)
     except PublishClickUncertainError:
@@ -4216,6 +4545,12 @@ def _run_threads_publish_post(
     if not post_clicked:
         persist_confirmation_before_click()
         _human_click(page, post_button, logger, "threads_publish_submit")
+    manual_result = _pause_for_requested_threads_publish_takeover(
+        page, task, payload, screenshot_dir, logger, account, profile_url,
+        previous_permalinks, cancel_event, context_control,
+    )
+    if manual_result is not None:
+        return manual_result
     success = _wait_for_threads_publish_success(
         page,
         logger,
@@ -4264,9 +4599,19 @@ def _run_publish_post(
     platform: str = "instagram",
     account: dict[str, Any] | None = None,
     context_control: dict[str, Any] | None = None,
+    cancel_event: Any | None = None,
 ) -> dict[str, Any]:
     if platform == "threads":
-        return _run_threads_publish_post(page, task, payload, screenshot_dir, logger, account, context_control)
+        return _run_threads_publish_post(
+            page,
+            task,
+            payload,
+            screenshot_dir,
+            logger,
+            account,
+            context_control,
+            cancel_event,
+        )
     media_paths = [str(p) for p in (payload.get("media_paths") or []) if str(p or "").strip()]
     caption = str(payload.get("caption") or "").strip()
     if not media_paths:

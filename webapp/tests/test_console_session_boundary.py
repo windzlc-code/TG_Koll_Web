@@ -771,7 +771,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
         self._run_node(harness)
 
-    def test_manual_takeover_button_is_available_for_active_login_sessions_only(self):
+    def test_manual_takeover_button_is_available_for_active_login_and_publish_sessions(self):
         helpers = "\n".join([
             self._function_source("liveBrowserSessionId"),
             self._function_source("liveBrowserTaskStatus"),
@@ -797,7 +797,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
               login_mode: "automatic",
               input_allowed: false,
             }};
-            assert.strictEqual(renderLiveBrowserModeToggle(publishSession), "");
+            const publishToggle = renderLiveBrowserModeToggle(publishSession);
+            assert.ok(publishToggle.includes("自动执行"));
+            assert.ok(publishToggle.includes("人工接管"));
 
             const loginToggle = renderLiveBrowserModeToggle({{
               id: "login-session",
