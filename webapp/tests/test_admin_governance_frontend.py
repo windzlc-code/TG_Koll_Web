@@ -55,6 +55,26 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
             marker = self.html[self.html.index(f'id="{field_id}"') :]
             self.assertIn('inputmode="text"', marker.split(">", 1)[0])
 
+    def test_admin_login_uses_vecto_operations_layout_without_auth_contract_drift(self):
+        login_html = (ROOT / "static" / "admin-login.html").read_text(encoding="utf-8")
+        for marker in (
+            'class="auth-shell auth-admin-shell"',
+            'class="auth-stage auth-admin-stage"',
+            'class="auth-card auth-card-product auth-admin-card"',
+            'id="adminLoginForm"',
+            'data-login-role="admin"',
+            'name="username"',
+            'name="password"',
+            'name="mfa_code"',
+            'name="remember_me"',
+            'id="authMsg"',
+        ):
+            self.assertIn(marker, login_html)
+        self.assertIn('url("/assets/opc/vecto-ai-cockpit.png")', self.styles)
+        self.assertIn("body.page-admin,\nbody.page-admin-auth", self.styles)
+        self.assertIn(".page-admin-auth .auth-admin-card", self.styles)
+        self.assertIn("@media (max-width: 560px)", self.styles)
+
     def test_admin_creation_requires_and_submits_step_up_only_for_admins(self):
         for field_id in (
             "adminCreateStepUpPanel",

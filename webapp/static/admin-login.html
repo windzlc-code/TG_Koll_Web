@@ -8,36 +8,44 @@
   <link rel="stylesheet" href="/assets/style.css?v=__STYLE_VERSION__" />
 </head>
 <body class="page-auth-shell page-admin-auth">
-  <main class="auth-shell">
-    <section class="auth-stage">
-      <div class="auth-stage-head">
-        <div class="auth-kicker">Vecto OS · 运营管理</div>
-        <h1 class="auth-stage-title">管理员后台</h1>
-        <p class="auth-stage-copy">客户审核、任务记录、额度计费与运行配置统一在独立后台维护。</p>
+  <main class="auth-shell auth-admin-shell">
+    <section class="auth-stage auth-admin-stage" aria-labelledby="adminStageTitle">
+      <div class="auth-admin-brand">
+        <span class="auth-admin-brand-mark" aria-hidden="true">V</span>
+        <span class="auth-admin-brand-copy">
+          <strong>Vecto OS</strong>
+          <small>运营管理后台</small>
+        </span>
       </div>
-      <div class="auth-stage-grid">
-        <article class="auth-stage-card">
-          <div class="auth-stage-card-title">账号审核</div>
-          <div class="small">查看申请资料，授权或停用客户账号。</div>
-        </article>
-        <article class="auth-stage-card">
-          <div class="auth-stage-card-title">运营监控</div>
-          <div class="small">集中查看任务状态、失败记录与客户额度。</div>
-        </article>
-        <article class="auth-stage-card">
-          <div class="auth-stage-card-title">系统配置</div>
-          <div class="small">敏感运行参数仅对管理员账号开放。</div>
-        </article>
+
+      <div class="auth-stage-head">
+        <div class="auth-kicker">运营与配置中心</div>
+        <h1 id="adminStageTitle" class="auth-stage-title">管理员控制中心</h1>
+        <p class="auth-stage-copy">集中处理客户账号、自动化任务、计费额度与系统配置，保持运营链路清晰可控。</p>
+      </div>
+
+      <div class="auth-admin-capabilities" aria-label="管理范围">
+        <span>账号与权限</span>
+        <span>任务与运行状态</span>
+        <span>额度与系统配置</span>
+      </div>
+
+      <div class="auth-admin-channel">
+        <span class="auth-admin-channel-dot" aria-hidden="true"></span>
+        <span>管理员专用通道</span>
+        <span class="auth-admin-channel-separator" aria-hidden="true"></span>
+        <span>独立会话边界</span>
       </div>
     </section>
 
-    <section class="auth-card auth-card-product">
+    <section class="auth-card auth-card-product auth-admin-card" aria-labelledby="adminLoginTitle">
       <div class="auth-card-head">
-        <div class="auth-kicker">管理员专用入口</div>
-        <h2 class="auth-title">登录运营后台</h2>
-        <p class="auth-sub">此入口仅接受管理员账号</p>
+        <div class="auth-admin-card-eyebrow">管理员身份验证</div>
+        <h2 id="adminLoginTitle" class="auth-title">登录运营后台</h2>
+        <p class="auth-sub">此入口仅接受管理员账号，请使用已授权凭据登录。</p>
       </div>
-      <form id="adminLoginForm" class="auth-form" data-login-role="admin">
+
+      <form id="adminLoginForm" class="auth-form auth-admin-form" data-login-role="admin">
         <label for="adminUsername">管理员账号</label>
         <input id="adminUsername" name="username" autocomplete="username" required placeholder="请输入管理员账号" />
 
@@ -49,16 +57,28 @@
           </button>
         </span>
 
-        <label for="adminMfaCode">动态验证码或恢复码</label>
+        <span class="auth-admin-field-heading">
+          <label for="adminMfaCode">动态验证码或恢复码</label>
+          <small>按需填写</small>
+        </span>
         <input id="adminMfaCode" name="mfa_code" inputmode="text" autocomplete="one-time-code" autocapitalize="characters" maxlength="32" placeholder="已启用 MFA 时填写" />
-        <label class="auth-login-remember" data-auth-remember><input name="remember_me" type="checkbox"> <span>记住账号与登录状态</span></label>
+
+        <label class="auth-login-remember" data-auth-remember>
+          <input name="remember_me" type="checkbox" />
+          <span>记住账号与登录状态</span>
+        </label>
 
         <div class="auth-submit-row">
           <button class="primary" type="submit">进入运营后台</button>
         </div>
       </form>
+
       <div id="authMsg" class="msg" role="status" aria-live="polite"></div>
-      <p class="auth-switch"><a href="/">返回用户首页</a></p>
+
+      <div class="auth-admin-card-footer">
+        <a href="/"><span aria-hidden="true">←</span> 返回用户首页</a>
+        <span>Vecto OS 管理员专用入口</span>
+      </div>
     </section>
   </main>
   <script src="/assets/auth.js?v=__AUTH_JS_VERSION__"></script>

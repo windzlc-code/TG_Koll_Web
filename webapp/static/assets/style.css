@@ -6355,8 +6355,9 @@ body.page-admin {
   }
 }
 
-/* Vecto operations visual system: scoped so console and auth pages remain unchanged. */
-body.page-admin {
+/* Vecto operations visual system shared by admin surfaces. */
+body.page-admin,
+body.page-admin-auth {
   --admin-ink: #071314;
   --admin-ink-soft: #31464a;
   --admin-muted: #65787b;
@@ -10465,5 +10466,386 @@ html[data-theme="dark"] body.page-admin .admin-user-danger-section {
     display: inline-flex;
     min-height: 44px;
     align-items: center;
+  }
+}
+
+/* Admin login follows the same Vecto operations visual system as the backend. */
+body.page-admin-auth {
+  min-height: 100dvh;
+  overflow-x: hidden;
+  color: var(--admin-ink);
+  background:
+    linear-gradient(90deg, rgba(4, 18, 16, 0.94) 0%, rgba(4, 18, 16, 0.82) 46%, rgba(4, 18, 16, 0.68) 100%),
+    #071112 url("/assets/opc/vecto-ai-cockpit.png") center / cover fixed no-repeat;
+}
+
+.page-admin-auth .auth-admin-shell {
+  width: min(1180px, 100%);
+  min-height: 100dvh;
+  grid-template-columns: minmax(0, 1fr) minmax(390px, 440px);
+  gap: 88px;
+  align-items: center;
+  padding: 40px;
+}
+
+.page-admin-auth .auth-admin-stage {
+  max-width: 650px;
+  padding: 0;
+  color: #ffffff;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.page-admin-auth .auth-admin-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 64px;
+}
+
+.page-admin-auth .auth-admin-brand-mark {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  color: #ffffff;
+  background: var(--admin-teal);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 7px;
+  font-size: 22px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.page-admin-auth .auth-admin-brand-copy {
+  display: grid;
+  gap: 1px;
+  color: #ffffff;
+}
+
+.page-admin-auth .auth-admin-brand-copy strong {
+  font-size: 17px;
+  font-weight: 900;
+}
+
+.page-admin-auth .auth-admin-brand-copy small {
+  color: rgba(232, 255, 248, 0.68);
+  font-size: 12px;
+}
+
+.page-admin-auth .auth-kicker {
+  margin-bottom: 12px;
+  color: #72e0b0;
+  letter-spacing: 0;
+}
+
+.page-admin-auth .auth-stage-title {
+  max-width: 620px;
+  color: #ffffff;
+  font-size: 48px;
+  line-height: 1.12;
+  letter-spacing: 0;
+}
+
+.page-admin-auth .auth-stage-copy {
+  max-width: 580px;
+  margin-top: 18px;
+  color: rgba(239, 250, 247, 0.78);
+  font-size: 16px;
+  line-height: 1.75;
+}
+
+.page-admin-auth .auth-admin-capabilities {
+  display: grid;
+  gap: 12px;
+  margin-top: 34px;
+  color: rgba(246, 255, 252, 0.88);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.page-admin-auth .auth-admin-capabilities span {
+  position: relative;
+  padding-left: 20px;
+}
+
+.page-admin-auth .auth-admin-capabilities span::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 9px;
+  height: 2px;
+  background: #72e0b0;
+  transform: translateY(-50%);
+}
+
+.page-admin-auth .auth-admin-channel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+  margin-top: 42px;
+  color: rgba(232, 255, 248, 0.62);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.page-admin-auth .auth-admin-channel-dot {
+  width: 7px;
+  height: 7px;
+  background: var(--admin-green);
+  border-radius: 50%;
+  box-shadow: 0 0 0 4px rgba(49, 184, 111, 0.14);
+}
+
+.page-admin-auth .auth-admin-channel-separator {
+  width: 1px;
+  height: 14px;
+  margin-inline: 2px;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.page-admin-auth .auth-admin-card {
+  order: 0;
+  width: 100%;
+  margin: 0;
+  padding: 34px;
+  background: rgba(255, 255, 255, 0.98);
+  border: 1px solid rgba(215, 226, 223, 0.92);
+  border-radius: 8px;
+  box-shadow: 0 28px 72px rgba(0, 0, 0, 0.3);
+}
+
+.page-admin-auth .auth-card-head {
+  margin-bottom: 20px;
+}
+
+.page-admin-auth .auth-admin-card-eyebrow {
+  margin-bottom: 8px;
+  color: var(--admin-teal-dark);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.page-admin-auth .auth-title {
+  color: var(--admin-ink);
+  font-size: 30px;
+  line-height: 1.25;
+}
+
+.page-admin-auth .auth-sub {
+  color: var(--admin-muted);
+}
+
+.page-admin-auth .auth-admin-form {
+  gap: 0;
+}
+
+.page-admin-auth .auth-admin-form > label,
+.page-admin-auth .auth-admin-field-heading label {
+  margin: 11px 0 7px;
+  color: var(--admin-ink-soft);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.page-admin-auth input {
+  min-height: 46px;
+  padding: 11px 13px;
+  color: var(--admin-ink);
+  background: #ffffff;
+  border: 1px solid var(--admin-line);
+  border-radius: 7px;
+  box-shadow: none;
+}
+
+.page-admin-auth input:focus {
+  border-color: var(--admin-teal);
+  box-shadow: 0 0 0 3px rgba(12, 154, 154, 0.12);
+}
+
+.page-admin-auth input::placeholder {
+  color: #89979a;
+}
+
+.page-admin-auth .auth-login-password-toggle {
+  right: 5px;
+  color: var(--admin-muted);
+  border-radius: 6px;
+}
+
+.page-admin-auth .auth-login-password-toggle:hover,
+.page-admin-auth .auth-login-password-toggle:focus-visible {
+  color: var(--admin-teal-dark);
+  background: #edf7f4;
+}
+
+.page-admin-auth .auth-admin-field-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.page-admin-auth .auth-admin-field-heading small {
+  color: var(--admin-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.page-admin-auth .auth-login-remember {
+  margin-top: 14px;
+  color: var(--admin-ink-soft);
+}
+
+.page-admin-auth .auth-login-remember input {
+  min-height: 18px;
+  accent-color: var(--admin-teal);
+}
+
+.page-admin-auth .auth-submit-row {
+  margin-top: 18px;
+}
+
+.page-admin-auth .auth-submit-row button {
+  min-height: 48px;
+  background: var(--admin-teal);
+  border-color: var(--admin-teal);
+  border-radius: 7px;
+  box-shadow: none;
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.page-admin-auth .auth-submit-row button:hover {
+  background: var(--admin-teal-dark);
+  border-color: var(--admin-teal-dark);
+}
+
+.page-admin-auth .msg {
+  min-height: 20px;
+  margin-top: 10px;
+}
+
+.page-admin-auth .auth-admin-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 14px;
+  padding-top: 18px;
+  color: var(--admin-muted);
+  border-top: 1px solid var(--admin-line);
+  font-size: 12px;
+}
+
+.page-admin-auth .auth-admin-card-footer a {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  color: var(--admin-teal-dark);
+  font-weight: 900;
+}
+
+.page-admin-auth .auth-admin-card-footer a:hover {
+  color: var(--admin-ink);
+}
+
+@media (max-width: 920px) {
+  body.page-admin-auth {
+    background-position: 44% center;
+  }
+
+  .page-admin-auth .auth-admin-shell {
+    width: min(580px, 100%);
+    grid-template-columns: minmax(0, 1fr);
+    gap: 22px;
+    align-content: center;
+    padding: 28px 20px;
+  }
+
+  .page-admin-auth .auth-admin-stage {
+    max-width: none;
+  }
+
+  .page-admin-auth .auth-admin-brand {
+    margin-bottom: 24px;
+  }
+
+  .page-admin-auth .auth-stage-title {
+    font-size: 34px;
+  }
+
+  .page-admin-auth .auth-stage-copy {
+    margin-top: 10px;
+    font-size: 14px;
+  }
+
+  .page-admin-auth .auth-admin-capabilities,
+  .page-admin-auth .auth-admin-channel {
+    display: none;
+  }
+}
+
+@media (max-width: 560px) {
+  body.page-admin-auth {
+    background:
+      linear-gradient(rgba(4, 18, 16, 0.9), rgba(4, 18, 16, 0.82)),
+      #071112 url("/assets/opc/vecto-ai-cockpit.png") 42% center / cover fixed no-repeat;
+  }
+
+  .page-admin-auth .auth-admin-shell {
+    padding:
+      max(16px, env(safe-area-inset-top))
+      max(12px, env(safe-area-inset-right))
+      max(16px, env(safe-area-inset-bottom))
+      max(12px, env(safe-area-inset-left));
+  }
+
+  .page-admin-auth .auth-admin-brand {
+    margin-bottom: 16px;
+  }
+
+  .page-admin-auth .auth-admin-brand-mark {
+    width: 40px;
+    height: 40px;
+    font-size: 20px;
+  }
+
+  .page-admin-auth .auth-stage-copy {
+    display: none;
+  }
+
+  .page-admin-auth .auth-stage-title {
+    font-size: 28px;
+  }
+
+  .page-admin-auth .auth-admin-card {
+    padding: 24px 20px;
+    border-radius: 8px;
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.26);
+  }
+
+  .page-admin-auth .auth-title {
+    font-size: 26px;
+  }
+
+  .page-admin-auth input,
+  .page-admin-auth .auth-submit-row button {
+    min-height: 46px;
+  }
+
+  .page-admin-auth .auth-login-password-toggle {
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+    right: 1px;
+  }
+
+  .page-admin-auth .auth-admin-card-footer > span {
+    display: none;
   }
 }
