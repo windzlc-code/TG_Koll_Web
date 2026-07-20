@@ -579,27 +579,116 @@ function initHomeExperience() {
   }
 
   const hero = document.querySelector("[data-home-hero]");
+  const heroViewport = hero?.querySelector("[data-home-hero-viewport]");
   const heroScenes = [...(hero?.querySelectorAll("[data-home-hero-scene]") || [])];
   const heroTriggers = [...(hero?.querySelectorAll("[data-home-hero-trigger]") || [])];
-  if (heroScenes.length > 1 && heroScenes.length === heroTriggers.length) {
+  const heroPrev = hero?.querySelector("[data-home-hero-prev]");
+  const heroNext = hero?.querySelector("[data-home-hero-next]");
+  const heroMotion = hero?.querySelector("[data-home-hero-motion]");
+  if (heroViewport && heroScenes.length > 1 && heroScenes.length === heroTriggers.length) {
     let activeHeroScene = 0;
-    let heroPaused = false;
-    const showHeroScene = (index) => {
+    let heroInteractionPaused = false;
+    let heroUserPaused = false;
+    let heroInView = true;
+    let heroScrollTimer = 0;
+    let heroAdvanceTimer = 0;
+    const scheduleHeroAdvance = () => {
+      window.clearTimeout(heroAdvanceTimer);
+      if (reducedMotion || heroInteractionPaused || heroUserPaused || !heroInView) return;
+      heroAdvanceTimer = window.setTimeout(() => {
+        if (document.hidden) {
+          scheduleHeroAdvance();
+          return;
+        }
+        showHeroScene(activeHeroScene + 1, "smooth", false);
+        scheduleHeroAdvance();
+      }, 6400);
+    };
+    const updateHeroState = (index) => {
       activeHeroScene = (index + heroScenes.length) % heroScenes.length;
-      heroScenes.forEach((scene, sceneIndex) => scene.classList.toggle("is-active", sceneIndex === activeHeroScene));
+      heroScenes.forEach((scene, sceneIndex) => {
+        const isActive = sceneIndex === activeHeroScene;
+        scene.classList.toggle("is-active", isActive);
+        scene.setAttribute("aria-hidden", String(!isActive));
+        scene.inert = !isActive;
+        const video = scene.querySelector("[data-home-hero-video]");
+        if (!video) return;
+        const source = video.querySelector("source[data-src]");
+        if (isActive && source && !reducedMotion) {
+          source.src = source.dataset.src;
+          source.removeAttribute("data-src");
+          video.load();
+        }
+        if (isActive && heroInView && !heroUserPaused && !document.hidden && !reducedMotion) video.play().catch(() => {});
+        else video.pause();
+      });
       heroTriggers.forEach((trigger, triggerIndex) => {
         const isActive = triggerIndex === activeHeroScene;
         trigger.classList.toggle("is-active", isActive);
         trigger.setAttribute("aria-pressed", String(isActive));
       });
     };
+    const showHeroScene = (index, behavior = reducedMotion ? "auto" : "smooth", resetTimer = true) => {
+      const nextIndex = (index + heroScenes.length) % heroScenes.length;
+      updateHeroState(nextIndex);
+      heroViewport.scrollTo({ left: heroScenes[nextIndex].offsetLeft, behavior });
+      if (resetTimer) scheduleHeroAdvance();
+    };
+    const syncHeroFromScroll = () => {
+      window.clearTimeout(heroScrollTimer);
+      heroScrollTimer = window.setTimeout(() => {
+        const nearestIndex = heroScenes.reduce((bestIndex, scene, sceneIndex) => (
+          Math.abs(scene.offsetLeft - heroViewport.scrollLeft) < Math.abs(heroScenes[bestIndex].offsetLeft - heroViewport.scrollLeft)
+            ? sceneIndex
+            : bestIndex
+        ), 0);
+        if (nearestIndex !== activeHeroScene) {
+          updateHeroState(nearestIndex);
+          scheduleHeroAdvance();
+        }
+      }, 110);
+    };
     heroTriggers.forEach((trigger, index) => trigger.addEventListener("click", () => showHeroScene(index)));
+    heroPrev?.addEventListener("click", () => showHeroScene(activeHeroScene - 1));
+    heroNext?.addEventListener("click", () => showHeroScene(activeHeroScene + 1));
+    heroMotion?.addEventListener("click", () => {
+      heroUserPaused = !heroUserPaused;
+      heroMotion.classList.toggle("is-paused", heroUserPaused);
+      heroMotion.setAttribute("aria-pressed", String(heroUserPaused));
+      const label = heroUserPaused ? "繼續首屏輪播" : "暫停首屏輪播";
+      heroMotion.setAttribute("aria-label", label);
+      heroMotion.setAttribute("title", label);
+      updateHeroState(activeHeroScene);
+      if (heroUserPaused) window.clearTimeout(heroAdvanceTimer);
+      else scheduleHeroAdvance();
+    });
+    heroViewport.addEventListener("scroll", syncHeroFromScroll, { passive: true });
+    updateHeroState(0);
     if (!reducedMotion) {
-      ["pointerenter", "focusin", "touchstart"].forEach((eventName) => hero.addEventListener(eventName, () => { heroPaused = true; }, { passive: true }));
-      ["pointerleave", "focusout", "touchend"].forEach((eventName) => hero.addEventListener(eventName, () => { heroPaused = false; }, { passive: true }));
-      window.setInterval(() => {
-        if (!heroPaused && !document.hidden) showHeroScene(activeHeroScene + 1);
-      }, 5600);
+      const pauseHero = () => { heroInteractionPaused = true; window.clearTimeout(heroAdvanceTimer); };
+      const resumeHero = () => { heroInteractionPaused = false; scheduleHeroAdvance(); };
+      hero.addEventListener("pointerenter", pauseHero, { passive: true });
+      hero.addEventListener("pointerleave", resumeHero, { passive: true });
+      hero.addEventListener("touchstart", pauseHero, { passive: true });
+      hero.addEventListener("touchend", resumeHero, { passive: true });
+      hero.addEventListener("focusin", pauseHero);
+      hero.addEventListener("focusout", (event) => {
+        if (!hero.contains(event.relatedTarget)) resumeHero();
+      });
+      if ("IntersectionObserver" in window) {
+        const heroObserver = new IntersectionObserver(([entry]) => {
+          heroInView = entry.isIntersecting;
+          updateHeroState(activeHeroScene);
+          if (heroInView) scheduleHeroAdvance();
+          else window.clearTimeout(heroAdvanceTimer);
+        }, { threshold: 0.18 });
+        heroObserver.observe(hero);
+      }
+      document.addEventListener("visibilitychange", () => {
+        updateHeroState(activeHeroScene);
+        if (!document.hidden) scheduleHeroAdvance();
+      });
+      scheduleHeroAdvance();
     }
   }
 

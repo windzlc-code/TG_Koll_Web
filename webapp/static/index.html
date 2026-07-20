@@ -67,40 +67,78 @@
         </div>
       </div>
 
-      <section class="home-hero" aria-labelledby="hero-title" data-home-hero>
-        <div class="home-hero-grid">
-          <article class="home-hero-feature">
-            <div class="home-hero-scenes" aria-hidden="true">
-              <img class="home-hero-scene is-active" data-home-hero-scene src="/assets/opc/vecto-ai-cockpit.png" alt="" width="1536" height="864" fetchpriority="high" />
-              <img class="home-hero-scene" data-home-hero-scene src="/assets/opc/home/social-team.jpg" alt="" width="1600" height="1067" />
-              <img class="home-hero-scene" data-home-hero-scene src="/assets/opc/home/editing-workspace.jpg" alt="" width="1600" height="2400" />
-            </div>
-            <div class="home-hero-copy" data-home-reveal>
-              <p class="home-kicker">Vecto Vanguard · AI 社媒營運系統</p>
-              <h1 id="hero-title">Vecto AI<br />社媒營運駕駛艙</h1>
-              <p class="home-hero-lede">熱點、內容、人設、矩陣發布與瀏覽器接管，在一個可監控的工作流內完成。</p>
-              <div class="home-hero-actions" aria-label="主要操作">
-                <a class="button home-button-primary" href="#contact">申請使用</a>
-                <a class="button home-button-secondary" href="#solution">查看核心能力</a>
+      <section class="home-hero" aria-label="Vecto AI 社媒營運核心功能" aria-roledescription="carousel" data-home-hero>
+        <div class="home-hero-viewport" data-home-hero-viewport>
+          <div class="home-hero-track">
+            <article class="home-hero-slide is-active" role="group" aria-roledescription="slide" aria-label="第 1 張，共 4 張：營運駕駛艙" data-home-hero-scene aria-hidden="false">
+              <img class="home-hero-media" src="/assets/opc/vecto-ai-cockpit.png" alt="Vecto AI 社媒營運駕駛艙介面" width="1536" height="864" fetchpriority="high" />
+              <div class="home-hero-copy" data-home-reveal>
+                <p class="home-kicker">Vecto Vanguard · AI 社媒營運系統</p>
+                <h1 id="hero-title">Vecto AI<br />社媒營運駕駛艙</h1>
+                <p class="home-hero-lede">熱點、內容、人設、矩陣發布與瀏覽器接管，在一個可監控的工作流內完成。</p>
+                <div class="home-slide-metrics" aria-label="營運總覽優勢"><span>3 種代理角色</span><span>全鏈路狀態</span><span>人工可接管</span></div>
+                <div class="home-hero-actions" aria-label="主要操作">
+                  <a class="button home-button-primary" href="#contact">申請使用</a>
+                  <a class="button home-button-secondary" href="#solution">查看核心能力</a>
+                </div>
               </div>
-            </div>
-            <div class="home-hero-switcher" role="group" aria-label="首屏場景切換">
-              <button class="is-active" type="button" aria-pressed="true" data-home-hero-trigger="0"><span>01</span>營運總覽</button>
-              <button type="button" aria-pressed="false" data-home-hero-trigger="1"><span>02</span>矩陣協作</button>
-              <button type="button" aria-pressed="false" data-home-hero-trigger="2"><span>03</span>內容工作台</button>
-            </div>
-          </article>
+            </article>
 
-          <aside class="home-hero-side" aria-label="核心能力預覽">
-            <a class="home-hero-side-card" href="#scenarios">
-              <img src="/assets/opc/home/creator-studio.jpg" alt="創作者使用手機拍攝社媒內容" width="1600" height="1067" fetchpriority="high" />
-              <span>內容供應</span><strong>從人設記憶到日更素材</strong><small>生成、編輯、素材管理</small>
-            </a>
-            <a class="home-hero-side-card" href="#account-infrastructure">
-              <img src="/assets/opc/home/social-devices.jpg" alt="手機與電腦上的社交媒體內容" width="1600" height="1067" fetchpriority="high" />
-              <span>帳號基礎設施</span><strong>一個帳號，一個瀏覽器</strong><small>登入狀態與網路身份隔離</small>
-            </a>
-          </aside>
+            <article class="home-hero-slide" role="group" aria-roledescription="slide" aria-label="第 2 張，共 4 張：人設內容引擎" data-home-hero-scene aria-hidden="true">
+              <video class="home-hero-media" muted loop playsinline preload="none" poster="/assets/opc/home/social-workflow-poster.jpg" data-home-hero-video aria-hidden="true" tabindex="-1">
+                <source data-src="/assets/opc/home/social-workflow.mp4" type="video/mp4" />
+              </video>
+              <div class="home-hero-copy">
+                <p class="home-kicker">Persona content engine</p>
+                <h2>人設記憶，<br />持續供應日更</h2>
+                <p class="home-hero-lede">從熱點候選、語氣記憶到草稿素材，內容在同一條工作流內生成、審核與復用。</p>
+                <div class="home-slide-metrics" aria-label="內容供應優勢"><span>熱點數據保留</span><span>人設語氣約束</span><span>草稿即時刷新</span></div>
+                <div class="home-hero-actions"><a class="button home-button-primary" href="#scenarios">查看內容場景</a></div>
+              </div>
+            </article>
+
+            <article class="home-hero-slide" role="group" aria-roledescription="slide" aria-label="第 3 張，共 4 張：數據營運閉環" data-home-hero-scene aria-hidden="true">
+              <video class="home-hero-media" muted loop playsinline preload="none" poster="/assets/opc/home/analytics-review-poster.jpg" data-home-hero-video aria-hidden="true" tabindex="-1">
+                <source data-src="/assets/opc/home/analytics-review.mp4" type="video/mp4" />
+              </video>
+              <div class="home-hero-copy">
+                <p class="home-kicker">Closed-loop intelligence</p>
+                <h2>數據回流，<br />讓下一篇有依據</h2>
+                <p class="home-hero-lede">發布歷史、真實互動與熱點表現重新進入內容決策，不再靠人工散落記錄。</p>
+                <div class="home-slide-metrics" aria-label="數據閉環優勢"><span>真實互動刷新</span><span>發布歷史歸檔</span><span>重入隊可追蹤</span></div>
+                <div class="home-hero-actions"><a class="button home-button-primary" href="#workflow">查看營運閉環</a></div>
+              </div>
+            </article>
+
+            <article class="home-hero-slide" role="group" aria-roledescription="slide" aria-label="第 4 張，共 4 張：帳號基礎設施" data-home-hero-scene aria-hidden="true">
+              <img class="home-hero-media" src="/assets/opc/home/social-team.jpg" alt="團隊使用多台電腦協同管理社媒帳號" width="1600" height="1067" loading="lazy" />
+              <div class="home-hero-copy">
+                <p class="home-kicker">Account infrastructure</p>
+                <h2>一個帳號，<br />一個獨立環境</h2>
+                <p class="home-hero-lede">帳號、瀏覽器環境與靜態住宅代理分開保存；矩陣任務並行執行，超出並發上限自動排隊。</p>
+                <div class="home-slide-metrics" aria-label="帳號基礎設施優勢"><span>登入狀態隔離</span><span>代理 IP 可選</span><span>並發上限可控</span></div>
+                <div class="home-hero-actions"><a class="button home-button-primary" href="#account-infrastructure">查看帳號基礎設施</a></div>
+              </div>
+            </article>
+          </div>
+        </div>
+
+        <button class="home-hero-arrow home-hero-arrow-prev" type="button" data-home-hero-prev aria-label="上一個首屏場景">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
+        </button>
+        <button class="home-hero-arrow home-hero-arrow-next" type="button" data-home-hero-next aria-label="下一個首屏場景">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>
+        </button>
+        <button class="home-hero-motion" type="button" data-home-hero-motion aria-label="暫停首屏輪播" title="暫停首屏輪播" aria-pressed="false">
+          <svg class="home-hero-motion-pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5v14M15 5v14"></path></svg>
+          <svg class="home-hero-motion-play" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7Z"></path></svg>
+        </button>
+
+        <div class="home-hero-switcher" role="group" aria-label="首屏場景切換">
+          <button class="is-active" type="button" aria-pressed="true" data-home-hero-trigger="0"><span>01</span><strong>營運駕駛艙</strong><small>全鏈路監控與接管</small><i aria-hidden="true"></i></button>
+          <button type="button" aria-pressed="false" data-home-hero-trigger="1"><span>02</span><strong>人設內容引擎</strong><small>熱點到日更素材</small><i aria-hidden="true"></i></button>
+          <button type="button" aria-pressed="false" data-home-hero-trigger="2"><span>03</span><strong>數據營運閉環</strong><small>互動回流再決策</small><i aria-hidden="true"></i></button>
+          <button type="button" aria-pressed="false" data-home-hero-trigger="3"><span>04</span><strong>帳號基礎設施</strong><small>瀏覽器與網路隔離</small><i aria-hidden="true"></i></button>
         </div>
 
         <div class="home-hero-runner" aria-label="自動化任務狀態" data-home-runner>
