@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "$$" -eq 1 && "${CONTAINER_INIT_ACTIVE:-0}" != "1" ]]; then
+    for init_bin in "${CONTAINER_INIT_BIN:-}" /usr/bin/tini /data/bin/catatonit; do
+        if [[ -n "$init_bin" && -x "$init_bin" ]]; then
+            export CONTAINER_INIT_ACTIVE=1
+            exec "$init_bin" -- "$0" "$@"
+        fi
+    done
+    echo "Warning: no container init/reaper is available; browser child processes may become zombies." >&2
+fi
+
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${WEBAPP_DATA_DIR:-/data/webapp_data}/cache}"
 mkdir -p "${WEBAPP_DATA_DIR:-/data/webapp_data}" "${TOOL_R18_RUNTIME_DIR:-/data/tool_r18_runtime}" "$XDG_CACHE_HOME"
 export TOOL_R18_UPLOAD_HOST_DIR="${TOOL_R18_UPLOAD_HOST_DIR:-${WEBAPP_DATA_DIR:-/data/webapp_data}/tool_r18_uploads}"
