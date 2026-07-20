@@ -104,11 +104,8 @@
 
 用途:
 
-- 文生图
-- 图生图
-- 修图
-- 换脸
-- 图生视频
+- 生成人设图
+- 根据推文正文和人设参考图生成推文配图
 
 入口接口:
 
@@ -193,29 +190,22 @@ Web 控制台不能把这两条链混成一个“任务系统”。
 
 当前真正能走通的生成/编辑任务类型:
 
-- `text_to_image`
-- `image_generate`
-- `single_image_edit`
-- `get_nano_banana`
-- `face_swap`
-- `video_i2v`
+- `persona_image`
+- `persona_post_image`
 
 ### 当前前端来源
 
 定义在:
 
-- `webapp/static/assets/console.js` 的 `taskMeta`
+- `webapp/static/assets/console.js` 的 `taskMeta` 和人设图片生成入口
 
 ### 参数 -> 提交 -> 执行链
 
 1. 前端收集参数
    - prompt
-   - negative prompt
    - aspect ratio
-   - QA 开关
-   - 最终清晰度
-   - persona LoRA
-   - 某些任务还需要图片/音频文件
+   - 推文正文
+   - 当前人设和参考图
 
 2. 前端调用
    - `POST /api/tasks/submit`

@@ -10,6 +10,16 @@ from webapp import commercial_billing
 from webapp import db as db_module
 
 
+LEGACY_R18_ACTION_SKUS = {
+    "oral_video_second",
+    "ad_video_480p_second",
+    "ad_video_720p_second",
+    "ad_video_1080p_second",
+    "ad_video_2k_second",
+    "ad_video_4k_second",
+}
+
+
 class CommercialBillingTests(unittest.TestCase):
     def setUp(self):
         self.old_db_path = os.environ.get("APP_DB_PATH")
@@ -86,43 +96,49 @@ class CommercialBillingTests(unittest.TestCase):
             versions = commercial_billing.list_catalog_versions(conn)
         self.assertEqual(catalog["subscription"]["price_ntd"], 6000)
         self.assertEqual([item["total_points"] for item in catalog["packages"]], [100, 530, 1620])
-        self.assertEqual(len(catalog["actions"]), 12)
+        self.assertEqual(len(catalog["actions"]), 6)
         actions = {item["sku"]: item for item in catalog["actions"]}
-        self.assertTrue(actions["ad_video_720p_second"]["implemented"])
-        self.assertTrue(actions["ad_video_1080p_second"]["implemented"])
+        self.assertTrue(LEGACY_R18_ACTION_SKUS.isdisjoint(actions))
         self.assertEqual(actions["instagram_publish"]["points"], 0.1)
         self.assertEqual(actions["social_interaction"]["points"], 0.1)
         self.assertEqual(len([item for item in versions if item["status"] == "active"]), 1)
 
-    def test_existing_active_catalog_is_versioned_when_new_billable_actions_are_added(self):
+    def test_existing_active_catalog_adds_current_actions_and_removes_legacy_r18_actions(self):
         with db_module.db() as conn:
             active = conn.execute(
                 "SELECT id, version_number, catalog_json FROM billing_catalog_versions WHERE status = 'active'"
             ).fetchone()
             catalog = json.loads(str(active["catalog_json"]))
             catalog["actions"] = [
-                {
-                    **item,
-                    "implemented": False
-                    if item["sku"] in {"ad_video_720p_second", "ad_video_1080p_second"}
-                    else item["implemented"],
-                }
+                item
                 for item in catalog["actions"]
                 if item["sku"] not in {"instagram_publish", "social_interaction"}
             ]
+            catalog["actions"].extend(
+                [
+                    {
+                        "sku": sku,
+                        "name": f"legacy {sku}",
+                        "points": 1,
+                        "unit": "次",
+                        "implemented": True,
+                    }
+                    for sku in sorted(LEGACY_R18_ACTION_SKUS)
+                ]
+            )
             conn.execute(
                 "UPDATE billing_catalog_versions SET catalog_json = ? WHERE id = ?",
                 (json.dumps(catalog, ensure_ascii=False), str(active["id"])),
             )
             conn.execute("DELETE FROM admin_config WHERE key = 'commercial_billing_catalog_v2'")
+            conn.execute("DELETE FROM admin_config WHERE key = 'commercial_billing_catalog_v3'")
             commercial_billing.bootstrap_billing(conn, now=1_700_000_000)
             upgraded = commercial_billing.get_active_catalog(conn)
             versions = commercial_billing.list_catalog_versions(conn)
 
         actions = {item["sku"]: item for item in upgraded["actions"]}
-        self.assertEqual(int(upgraded["version"]), int(active["version_number"]) + 1)
-        self.assertTrue(actions["ad_video_720p_second"]["implemented"])
-        self.assertTrue(actions["ad_video_1080p_second"]["implemented"])
+        self.assertGreater(int(upgraded["version"]), int(active["version_number"]))
+        self.assertTrue(LEGACY_R18_ACTION_SKUS.isdisjoint(actions))
         self.assertIn("instagram_publish", actions)
         self.assertIn("social_interaction", actions)
         self.assertEqual(len([item for item in versions if item["status"] == "active"]), 1)

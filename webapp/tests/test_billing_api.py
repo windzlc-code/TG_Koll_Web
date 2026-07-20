@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest import mock
 
 from cryptography.fernet import Fernet
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from webapp import db as db_module, governance, social_automation_api
@@ -148,18 +149,107 @@ class BillingApiClosedLoopTests(unittest.TestCase):
 
     def test_all_available_task_types_map_to_published_billing_skus(self):
         self.assertEqual(server._normal_task_billing_spec("get_gemini", {}), ("basic_text_post", 1, False))
-        self.assertEqual(
-            server._normal_task_billing_spec("video_i2v", {"resolution": "720p", "duration_seconds": 6}),
-            ("ad_video_720p_second", 6, False),
-        )
-        self.assertEqual(
-            server._normal_task_billing_spec("video_i2v", {"resolution": "1080p", "duration_seconds": 15}),
-            ("ad_video_1080p_second", 15, False),
-        )
         self.assertEqual(social_automation_api.social_task_billing_sku("threads", "publish_post"), "threads_text_publish")
         self.assertEqual(social_automation_api.social_task_billing_sku("instagram", "publish_post"), "instagram_publish")
         self.assertEqual(social_automation_api.social_task_billing_sku("threads", "threads_auto_reply"), "threads_auto_reply_batch")
         self.assertEqual(social_automation_api.social_task_billing_sku("instagram", "like_post"), "social_interaction")
+
+    def test_removed_r18_task_types_cannot_be_submitted_or_retried(self):
+        removed_types = {
+            "single_image_edit",
+            "face_swap",
+            "video_i2v",
+            "text_to_image",
+            "get_nano_banana",
+        }
+        self.assertTrue(removed_types.isdisjoint(server.TASK_RUNNERS))
+
+        for task_type in sorted(removed_types):
+            with self.subTest(task_type=task_type):
+                with self.assertRaises(HTTPException) as raised:
+                    server._build_internal_tg_task_payload("removed-preview", task_type, {})
+                self.assertEqual(raised.exception.status_code, 400)
+                self.assertIn(task_type, str(raised.exception.detail))
+
+        with self.assertRaises(ValueError):
+            server._fetch_provider_model_ids(
+                model_type="video",
+                base_url="https://example.invalid",
+                api_key="unused",
+            )
+        video_model_lookup = self.admin.post(
+            "/api/admin/models",
+            json={
+                "type": "video",
+                "base_url": "https://example.invalid",
+                "api_key": "unused",
+            },
+        )
+        self.assertEqual(video_model_lookup.status_code, 400, video_model_lookup.text)
+
+        old_task_id = "removed-r18-retry"
+        with db_module.db() as conn:
+            server._insert_task_record_in_transaction(
+                conn,
+                old_task_id,
+                self.user_id,
+                "video_i2v",
+                {"prompt": "legacy"},
+            )
+            conn.execute(
+                "UPDATE tasks SET status = 'failed', error = 'legacy task' WHERE id = ?",
+                (old_task_id,),
+            )
+        response = self.customer.post(f"/api/tasks/{old_task_id}/retry")
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertIn("video_i2v", response.text)
+
+    def test_removed_r18_features_have_no_production_source_or_admin_config(self):
+        root = Path(__file__).resolve().parents[2]
+        production_files = (
+            root / "webapp" / "server.py",
+            root / "webapp" / "static" / "assets" / "admin.js",
+            root / "tool_r18" / "src" / "telegram-bot.ts",
+            root / "webapp" / "WEB_CORE_FUNCTIONS_AND_FLOW_REFERENCE.md",
+        )
+        removed_markers = (
+            "single_image_edit",
+            "face_swap",
+            "video_i2v",
+            "text_to_image",
+            "get_nano_banana",
+            "nano_banana",
+            "r18_image_replace",
+            "r18_multi_image",
+            "mulerouter",
+            "wan_i2v",
+        )
+
+        for source_path in production_files:
+            source = source_path.read_text(encoding="utf-8").lower()
+            for marker in removed_markers:
+                with self.subTest(source=str(source_path), marker=marker):
+                    self.assertNotIn(marker, source)
+
+    def test_supported_task_retry_still_enforces_subscription(self):
+        task_id = "supported-retry-billing-gate"
+        with db_module.db() as conn:
+            server._insert_task_record_in_transaction(
+                conn,
+                task_id,
+                self.user_id,
+                "get_gemini",
+                {"user_input": "retry billing gate"},
+            )
+            conn.execute(
+                "UPDATE tasks SET status = 'failed', error = 'retry fixture' WHERE id = ?",
+                (task_id,),
+            )
+
+        response = self.customer.post(f"/api/tasks/{task_id}/retry")
+
+        self.assertEqual(response.status_code, 402, response.text)
+        self.assertEqual(response.json()["code"], "SUBSCRIPTION_REQUIRED")
 
     def test_user_facing_ai_operation_deducts_catalog_price(self):
         subscription = self.admin.post(

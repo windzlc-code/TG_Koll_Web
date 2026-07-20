@@ -625,8 +625,12 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
                 "/api/tasks/submit",
                 headers=headers,
                 data={
-                    "task_type": "text_to_image",
-                    "params_json": json.dumps({"prompt": "administrator managed image", "image_count": 1}),
+                    "task_type": "persona_image",
+                    "params_json": json.dumps({
+                        "related_persona_id": resources["persona_id"],
+                        "prompt": "administrator managed image",
+                        "image_count": 1,
+                    }),
                 },
             )
             publish_task = self.admin.post(

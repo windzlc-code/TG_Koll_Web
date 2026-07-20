@@ -1465,6 +1465,58 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(captured["payload"]["content_source_mode"], "manual")
         self.assertEqual(captured["payload"]["image_count"], 3)
 
+    def test_internal_tg_persona_post_image_uses_persona_owner(self):
+        self._write_archives()
+        now = server._now_ts()
+        with server.db() as conn:
+            inserted = conn.execute(
+                """
+                INSERT INTO users(
+                  username, password_hash, is_admin, is_disabled, balance_cents,
+                  account_type, approval_status, created_at, updated_at
+                ) VALUES (?, ?, 0, 0, 0, 'managed', 'approved', ?, ?)
+                """,
+                ("tg-persona-owner", server.hash_password("test-password-123"), now, now),
+            )
+            owner_user_id = int(inserted.lastrowid)
+            conn.execute(
+                "UPDATE persona_owners SET user_id = ?, updated_at = ? WHERE archive_id = ?",
+                (owner_user_id, now, "persona-1"),
+            )
+        captured = {}
+
+        def fake_enqueue(task_id, user_id, task_type, payload):
+            captured.update(
+                task_id=task_id,
+                user_id=user_id,
+                task_type=task_type,
+                payload=payload,
+            )
+
+        with (
+            mock.patch.object(server, "_require_internal_tg_request"),
+            mock.patch.object(server, "_enqueue_task", side_effect=fake_enqueue),
+        ):
+            resp = self.unauth_client.post(
+                "/api/internal/tg/submit",
+                json={
+                    "task_type": "persona_post_image",
+                    "tg_chat_id": 12345,
+                    "params": {
+                        "related_persona_id": "persona-1",
+                        "related_post_id": "post-1",
+                        "custom_prompt": "生成一组当前推文配图",
+                        "image_count": 4,
+                    },
+                },
+            )
+
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(captured["user_id"], owner_user_id)
+        self.assertEqual(captured["task_type"], "persona_post_image")
+        self.assertEqual(captured["payload"]["related_persona_id"], "persona-1")
+        self.assertEqual(captured["payload"]["related_post_id"], "post-1")
+
     def test_persona_image_tasks_require_ownership_before_enqueue(self):
         self._write_archives()
         archives_path = self.tool_runtime_dir / "persona_archives.json"
@@ -2537,7 +2589,6 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(task["account_id"], "acct-threads")
         self.assertEqual(task["account_username"], "threads_user")
         self.assertEqual(task["account_display_name"], "threads_user")
-
 
 if __name__ == "__main__":
     unittest.main()

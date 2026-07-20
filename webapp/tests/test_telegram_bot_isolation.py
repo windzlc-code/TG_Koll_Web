@@ -48,6 +48,31 @@ class TelegramBotIsolationTests(unittest.TestCase):
             self.assertNotIn(forbidden, server_text)
         self.assertIn('/api/internal/tg/status', server_text)
 
+    def test_removed_image_tasks_have_no_telegram_entry_or_callback(self):
+        core_text = (ROOT / "tool_r18" / "src" / "telegram-bot.ts").read_text(encoding="utf-8")
+        for removed_marker in (
+            '"text_to_image"',
+            '"get_nano_banana"',
+            '"nano_banana"',
+            '"r18_image_replace"',
+            '"r18_multi_image"',
+            "r18_text_to_image",
+            "r18_image_edit",
+            "toolr18_t2i_",
+            "toolr18_imgedit_",
+        ):
+            self.assertNotIn(removed_marker, core_text)
+        self.assertIn('task_type: "persona_post_image"', core_text)
+        self.assertIn('type: "image_generate"', core_text)
+        self.assertIn('type: "get_gemini"', core_text)
+        self.assertNotIn("image_auto_qa", core_text)
+        self.assertNotIn("genpost_toggle_qa", core_text)
+        self.assertNotIn('if (taskType === "image_generate") return 2;', core_text)
+        self.assertIn(
+            "const NEW_PERSONA_POST_IMAGE_TIMEOUT_MS = 25 * 60 * 1000;",
+            core_text,
+        )
+
     def test_package_scripts_cannot_start_or_selftest_the_bot(self):
         package = json.loads((ROOT / "tool_r18" / "package.json").read_text(encoding="utf-8"))
         scripts = package.get("scripts") or {}

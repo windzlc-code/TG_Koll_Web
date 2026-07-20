@@ -613,21 +613,98 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn(".live-browser-card-actions", mobile_controls)
         self.assertIn("justify-content: flex-start;", mobile_controls)
 
-    def test_public_toast_uses_bottom_wide_layout(self):
+    def test_public_toast_uses_compact_bottom_layout(self):
         host = self._css_block(".toast-host {")
         message = self._css_block(".toast-message {")
+        message_text = self._css_block(".toast-message-text {")
         slide = self._css_block("@keyframes toastSlideIn")
 
         self.assertIn("left: auto;", host)
         self.assertIn("right: 16px;", host)
         self.assertIn("bottom: 22px;", host)
-        self.assertIn("width: min(560px, calc(100vw - 32px));", host)
+        self.assertIn("width: min(440px, calc(100vw - 24px));", host)
         self.assertNotIn("transform: translateX(-50%);", host)
         self.assertNotIn("top: 16px;", host)
-        self.assertIn("min-height: 64px;", message)
-        self.assertIn("padding: 18px 12px 18px 20px;", message)
+        self.assertIn("min-height: 52px;", message)
+        self.assertIn("padding: 12px 8px 12px 14px;", message)
         self.assertIn("border: 2px solid var(--line);", message)
+        self.assertIn("-webkit-line-clamp: 2;", message_text)
+        self.assertIn("max-height: 2.8em;", message_text)
+        self.assertIn("overflow: hidden;", message_text)
         self.assertIn("transform: translateY(18px);", slide)
+
+    def test_all_toasts_capture_a_clickable_destination_and_open_the_exact_surface(self):
+        target = self._section("function currentToastTarget", "function toastTargetForKind")
+        mapping = self._section("function toastTargetForKind", "function normalizeToastStatus")
+        opening = self._section("async function openToastTarget", "function createToast")
+        metadata = self._section("function applyToastMeta", "async function openToastTarget")
+        default_target = self._function_source("defaultToastTargetForMessage")
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            const state = {{
+              view: "workspace",
+              activeModule: "publishing",
+              selectedPersonaId: "persona-7",
+              personaGroup: "content",
+              personaPanels: {{ content: "posts" }},
+              simpleBranches: {{ publishing: "publish_history" }},
+              accountBrowserPanel: "accounts",
+              taskQueuePanel: "persona",
+            }};
+            function isPersonaWorkspaceModule(moduleId) {{
+              return ["personas", "tweet_generation"].includes(String(moduleId || ""));
+            }}
+            function personaModuleDefaultGroup(moduleId) {{
+              return moduleId === "tweet_generation" ? "content" : "settings";
+            }}
+            function normalizedPersonaGroupKey(groupKey) {{
+              return ["settings", "content"].includes(groupKey) ? groupKey : "settings";
+            }}
+            function normalizedPublishMode(mode) {{
+              return ["matrix_start", "publish_history"].includes(mode) ? mode : "publish_now";
+            }}
+            {target}
+            {mapping}
+
+            assert.deepStrictEqual(currentToastTarget(), {{
+              view: "workspace",
+              module: "publishing",
+              personaId: "persona-7",
+              publishMode: "publish_history",
+            }});
+            assert.deepStrictEqual(toastTargetForKind("need_manual", {{
+              taskId: "task-9",
+              personaId: "persona-7",
+            }}), {{
+              view: "accounts",
+              accountPanel: "browsers",
+              taskId: "task-9",
+              personaId: "persona-7",
+            }});
+            state.view = "accounts";
+            state.accountBrowserPanel = "proxies";
+            assert.strictEqual(currentToastTarget().accountPanel, "proxies");
+            """
+        )
+        self._run_node(harness)
+
+        self.assertIn('const moduleId = String(state.activeModule || "personas")', target)
+        self.assertIn("const target = { view, module: moduleId, ...personaTarget }", target)
+        self.assertIn("publishMode", target)
+        self.assertIn("personaGroup", target)
+        self.assertIn("accountPanel", target)
+        self.assertIn('normalized === "need_manual"', mapping)
+        self.assertIn('view: "accounts"', mapping)
+        self.assertIn('accountPanel: "browsers"', mapping)
+        self.assertIn("return currentToastTarget()", mapping)
+        self.assertNotIn('view: "social"', mapping)
+        self.assertIn("setAccountBrowserPanel(targetAccountPanel)", opening)
+        self.assertIn("refreshLiveBrowserSessionsSoon", opening)
+        self.assertIn("state.simpleBranches.publishing = targetPublishMode", opening)
+        self.assertIn('target.accountPanel === "browsers"', metadata)
+        self.assertIn("点击打开浏览器监控", metadata)
+        self.assertIn("return currentToastTarget()", default_target)
 
     def test_status_tone_covers_live_detection_and_recovery_states(self):
         harness = textwrap.dedent(

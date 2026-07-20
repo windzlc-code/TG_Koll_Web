@@ -434,14 +434,12 @@ function bindAdminProfileMenu() {
 const SENSITIVE_RUNTIME_INPUT_IDS = [
   "rtLlmApiKeyGpt",
   "rtImageGeminiApiKey",
-  "rtMuleRouterApiKey",
 ];
 
 const RUNTIME_SECRET_API_NAMES = {
   rtLlmApiKeyGpt: "llm_api_key_gpt",
   rtImageGeminiApiKey: "image_model_provider_api_key_gemini",
   rtNewPersonaRunningHubApiKey: "new_persona_runninghub_api_key",
-  rtMuleRouterApiKey: "mulerouter_api_key",
 };
 const SENSITIVE_EYE_ICON_SVG = `
   <svg class="sensitive-eye-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -1453,69 +1451,6 @@ async function toggleAvailableImageModels() {
   }
 }
 
-function setVideoModelPickerStatus(message, isError = false) {
-  const picker = el("rtVideoModelPicker");
-  if (!picker) return;
-  picker.hidden = false;
-  picker.innerHTML = `<div class="admin-model-picker-status${isError ? " error" : ""}">${escapeHtml(message)}</div>`;
-}
-
-function hideVideoModelPicker() {
-  const picker = el("rtVideoModelPicker");
-  if (picker) picker.hidden = true;
-}
-
-function renderAvailableVideoModels(models) {
-  const picker = el("rtVideoModelPicker");
-  if (!picker) return;
-  renderSearchableModelPicker(
-    picker,
-    uniqueItems(Array.isArray(models) ? models : []),
-    "video-model",
-    "没有查询到可用视频模型",
-    "搜索视频模型",
-  );
-}
-
-function applyVideoModel(model) {
-  const value = String(model || "").trim();
-  if (!value) return;
-  const input = el("rtMuleRouterWanI2vModelName");
-  if (input) input.value = value;
-  const endpointInput = el("rtMuleRouterWanI2vEndpoint");
-  if (endpointInput) {
-    const current = String(endpointInput.value || "").trim();
-    if (/\/vendors\/[^/]+\/v\d+\//i.test(current) && /\/generation(?:[/?#]|$)/i.test(current)) {
-      endpointInput.value = current.replace(/(\/vendors\/[^/]+\/v\d+\/)([^/?#]+)(\/generation.*)$/i, `$1${value}$3`);
-    }
-  }
-  hideVideoModelPicker();
-  setMsg("runtimeMsg", `已选择视频模型：${value}`, true);
-}
-
-async function toggleAvailableVideoModels() {
-  const picker = el("rtVideoModelPicker");
-  if (!picker) return;
-  if (!picker.hidden && picker.children.length > 0) {
-    hideVideoModelPicker();
-    return;
-  }
-  const baseUrl = el("rtMuleRouterBaseUrl").value.trim();
-  const apiKey = el("rtMuleRouterApiKey").value.trim();
-  const endpoint = el("rtMuleRouterWanI2vEndpoint").value.trim();
-  setVideoModelPickerStatus("正在识别当前 API 支持的视频模型...");
-  try {
-    const resp = await api("/api/admin/models", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "video", provider: "openai-compatible", base_url: baseUrl, api_key: apiKey, endpoint }),
-    });
-    renderAvailableVideoModels(resp.models || []);
-  } catch (err) {
-    setVideoModelPickerStatus(err.detail || err.message || String(err), true);
-  }
-}
-
 function bindModelTabs() {
   const tabs = Array.from(document.querySelectorAll("[data-model-tab]"));
   const panels = Array.from(document.querySelectorAll("[data-model-panel]"));
@@ -1550,7 +1485,6 @@ function closeModelPickersOnOutsideClick(target) {
   const pickerPairs = [
     ["rtLlmGrokModelPicker", "btnBrowseLlmGrokModels"],
     ["rtImageGeminiModelPicker", "btnBrowseImageGeminiModels"],
-    ["rtVideoModelPicker", "btnBrowseVideoModels"],
   ];
   pickerPairs.forEach(([pickerId, triggerId]) => {
     const picker = el(pickerId);
@@ -1645,10 +1579,9 @@ const adminState = {
   mfaSetup: null,
 };
 const REMOTE_COMFY_TASKS = [
-  ["text_to_image", "文字生成图片"],
   ["persona_post_image", "推文生成配图"],
 ];
-const TASK_TYPE_LABELS = { text_to_image: "文字生成图片", persona_post_image: "推文生成配图" };
+const TASK_TYPE_LABELS = { persona_post_image: "推文生成配图" };
 const ADMIN_PAGES = new Set(["overview", "users", "taxonomy", "tasks", "audit", "security", "serviceAccounts", "proxyMarket", "pricing", "runtime", "sentimentCookies", "account"]);
 const ADMIN_PAGE_ALIASES = {
   secOverview: "overview",
@@ -2529,12 +2462,6 @@ function runtimeFormToPayload() {
     new_persona_runninghub_persona_t2i_endpoint: el("rtNewPersonaPersonaT2iEndpoint") ? el("rtNewPersonaPersonaT2iEndpoint").value.trim() : "",
     new_persona_runninghub_tweet_i2i_detail_url: el("rtNewPersonaTweetI2iDetailUrl") ? el("rtNewPersonaTweetI2iDetailUrl").value.trim() : "",
     new_persona_runninghub_tweet_i2i_endpoint: el("rtNewPersonaTweetI2iEndpoint") ? el("rtNewPersonaTweetI2iEndpoint").value.trim() : "",
-    mulerouter_api_name: el("rtMuleRouterApiName") ? el("rtMuleRouterApiName").value.trim() : "",
-    mulerouter_api_key: runtimeSecretInputValue("rtMuleRouterApiKey"),
-    mulerouter_base_url: el("rtMuleRouterBaseUrl") ? el("rtMuleRouterBaseUrl").value.trim() : "",
-    mulerouter_wan_i2v_model: el("rtMuleRouterWanI2vModelName") ? el("rtMuleRouterWanI2vModelName").value.trim() : "",
-    mulerouter_wan_i2v_endpoint: el("rtMuleRouterWanI2vEndpoint") ? el("rtMuleRouterWanI2vEndpoint").value.trim() : "",
-    mulerouter_wan_i2v_negative_prompt: el("rtMuleRouterWanI2vNegativePrompt") ? el("rtMuleRouterWanI2vNegativePrompt").value.trim() : "",
     video_app_id: "",
     cleanup_enabled: !!el("rtCleanupEnabled").checked,
     cleanup_time: el("rtCleanupTime").value || "03:30",
@@ -2578,12 +2505,6 @@ function fillRuntimeForm(data) {
     ...parseModelList(v.image_model_default_model || ""),
   ]);
   adminState.imagePriorityModels = imageModelItems(v.image_model_priority_order ? parseModelList(v.image_model_priority_order) : adminState.imageGeminiModels);
-  if (el("rtMuleRouterApiName")) el("rtMuleRouterApiName").value = v.mulerouter_api_name || "";
-  setRuntimeSecretInputState("rtMuleRouterApiKey", v.mulerouter_api_key_configured, v.mulerouter_api_key_masked);
-  if (el("rtMuleRouterBaseUrl")) el("rtMuleRouterBaseUrl").value = v.mulerouter_base_url || "";
-  if (el("rtMuleRouterWanI2vModelName")) el("rtMuleRouterWanI2vModelName").value = v.mulerouter_wan_i2v_model || "";
-  if (el("rtMuleRouterWanI2vEndpoint")) el("rtMuleRouterWanI2vEndpoint").value = v.mulerouter_wan_i2v_endpoint || "";
-  if (el("rtMuleRouterWanI2vNegativePrompt")) el("rtMuleRouterWanI2vNegativePrompt").value = v.mulerouter_wan_i2v_negative_prompt || "";
   syncPriorityModelsFromCatalog("llm");
   const restoredModelDraft = mergeModelDraft();
   renderAllModelLists();
@@ -7621,9 +7542,6 @@ function bindActions() {
     });
     bindModelPickerFilters("rtImageGeminiModelPicker");
   }
-  if (el("btnBrowseVideoModels")) {
-    el("btnBrowseVideoModels").addEventListener("click", toggleAvailableVideoModels);
-  }
   bindRunningHubPresetSelect("persona");
   bindRunningHubPresetSelect("tweet");
   if (el("btnCheckRunningHubKey")) {
@@ -7637,18 +7555,6 @@ function bindActions() {
       toggleSensitiveInput(button);
     });
   });
-  if (el("btnApplyVideoModel")) {
-    el("btnApplyVideoModel").addEventListener("click", () => applyVideoModel(el("rtMuleRouterWanI2vModelName")?.value));
-  }
-  if (el("rtVideoModelPicker")) {
-    el("rtVideoModelPicker").addEventListener("click", (event) => {
-      const target = event.target;
-      if (!(target instanceof HTMLElement)) return;
-      const model = target.dataset.videoModel || "";
-      if (model) applyVideoModel(model);
-    });
-    bindModelPickerFilters("rtVideoModelPicker");
-  }
 
   [
     ["btnAddLlmPriorityModel", "llmPriorityModels"],

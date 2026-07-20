@@ -12,6 +12,14 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 POINT_SCALE = 100
+LEGACY_R18_ACTION_SKUS = {
+    "oral_video_second",
+    "ad_video_480p_second",
+    "ad_video_720p_second",
+    "ad_video_1080p_second",
+    "ad_video_2k_second",
+    "ad_video_4k_second",
+}
 try:
     TAIPEI = ZoneInfo("Asia/Taipei")
 except ZoneInfoNotFoundError:
@@ -39,12 +47,6 @@ DEFAULT_CATALOG: dict[str, Any] = {
         {"sku": "threads_text_publish", "name": "Threads 文字推文发布", "points": 0.1, "unit": "次", "implemented": True},
         {"sku": "basic_text_post", "name": "基础文字贴文", "points": 0.3, "unit": "篇", "implemented": True},
         {"sku": "ai_image", "name": "AI 图片素材", "points": 0.6, "unit": "张", "implemented": True},
-        {"sku": "oral_video_second", "name": "口播类短片", "points": 0.15, "unit": "秒", "implemented": False},
-        {"sku": "ad_video_480p_second", "name": "广告短片 480p", "points": 1.2, "unit": "秒", "implemented": False},
-        {"sku": "ad_video_720p_second", "name": "广告短片 720p", "points": 1.4, "unit": "秒", "implemented": True},
-        {"sku": "ad_video_1080p_second", "name": "广告短片 1080p", "points": 1.6, "unit": "秒", "implemented": True},
-        {"sku": "ad_video_2k_second", "name": "广告短片 2K", "points": 2.0, "unit": "秒", "implemented": False},
-        {"sku": "ad_video_4k_second", "name": "广告短片 4K", "points": 2.4, "unit": "秒", "implemented": False},
         {"sku": "threads_auto_reply_batch", "name": "批量评论互动任务", "points": 2.0, "unit": "批", "implemented": True},
         {"sku": "instagram_publish", "name": "Instagram 内容发布", "points": 0.1, "unit": "次", "implemented": True},
         {"sku": "social_interaction", "name": "社交互动操作", "points": 0.1, "unit": "次", "implemented": True},
@@ -173,9 +175,6 @@ def bootstrap_billing(conn: sqlite3.Connection, *, now: int | None = None) -> No
                 actions.append(dict(default_action))
                 action_by_sku[sku] = actions[-1]
                 changed = True
-            elif sku in {"ad_video_720p_second", "ad_video_1080p_second"} and not bool(current_action.get("implemented")):
-                current_action["implemented"] = True
-                changed = True
         if changed and active_row is not None:
             next_version = int(
                 conn.execute("SELECT COALESCE(MAX(version_number), 0) + 1 AS n FROM billing_catalog_versions").fetchone()["n"]
@@ -194,6 +193,43 @@ def bootstrap_billing(conn: sqlite3.Connection, *, now: int | None = None) -> No
             )
         conn.execute(
             "INSERT INTO admin_config(key, value_json, updated_at) VALUES ('commercial_billing_catalog_v2', ?, ?)",
+            (_dumps({"completed_at": current, "changed": changed}), current),
+        )
+
+    catalog_cleanup = conn.execute(
+        "SELECT value_json FROM admin_config WHERE key = 'commercial_billing_catalog_v3'"
+    ).fetchone()
+    if catalog_cleanup is None:
+        active_row = conn.execute(
+            "SELECT * FROM billing_catalog_versions WHERE status = 'active' ORDER BY version_number DESC LIMIT 1"
+        ).fetchone()
+        active_catalog = _loads(active_row["catalog_json"], {}) if active_row else {}
+        actions = list(active_catalog.get("actions") or []) if isinstance(active_catalog, dict) else []
+        cleaned_actions = [
+            item
+            for item in actions
+            if isinstance(item, dict)
+            and str(item.get("sku") or "") not in LEGACY_R18_ACTION_SKUS
+        ]
+        changed = len(cleaned_actions) != len(actions)
+        if changed and active_row is not None:
+            next_version = int(
+                conn.execute("SELECT COALESCE(MAX(version_number), 0) + 1 AS n FROM billing_catalog_versions").fetchone()["n"]
+            )
+            active_catalog["actions"] = cleaned_actions
+            validate_catalog(active_catalog)
+            conn.execute("UPDATE billing_catalog_versions SET status = 'retired' WHERE status = 'active'")
+            conn.execute(
+                """
+                INSERT INTO billing_catalog_versions(
+                  id, version_number, status, catalog_json, effective_at,
+                  created_by, created_at, published_at
+                ) VALUES (?, ?, 'active', ?, ?, 0, ?, ?)
+                """,
+                (_id("catalog"), next_version, _dumps(active_catalog), current, current, current),
+            )
+        conn.execute(
+            "INSERT INTO admin_config(key, value_json, updated_at) VALUES ('commercial_billing_catalog_v3', ?, ?)",
             (_dumps({"completed_at": current, "changed": changed}), current),
         )
 

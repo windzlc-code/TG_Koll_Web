@@ -1243,7 +1243,6 @@ const modules = [
 ];
 
 const taskMeta = {
-  text_to_image: { title: "文生图", minImages: 0, files: "无需文件，填写 Prompt 后直接生成图片。", callback: "后台自动提交" },
   persona_post_image: { title: "推文配图", minImages: 0, files: "基于当前草稿正文和人设参考图生成预览图片。", callback: "后台自动提交" },
 };
 
@@ -1561,9 +1560,54 @@ function dismissToastByKey(key, options = {}) {
     .forEach((toast) => dismissToast(toast, options));
 }
 
+function currentToastTarget() {
+  const view = ["workspace", "tasks", "accounts", "settings", "billing", "console_settings", "persona_dashboard"].includes(state.view)
+    ? state.view
+    : "workspace";
+  const personaId = String(state.selectedPersonaId || "").trim();
+  const personaTarget = personaId ? { personaId } : {};
+  if (view === "workspace") {
+    const moduleId = String(state.activeModule || "personas").trim() || "personas";
+    const target = { view, module: moduleId, ...personaTarget };
+    if (isPersonaWorkspaceModule(moduleId)) {
+      const personaGroup = normalizedPersonaGroupKey(state.personaGroup || personaModuleDefaultGroup(moduleId));
+      target.personaGroup = personaGroup;
+      target.personaStep = String(state.personaPanels?.[personaGroup] || "").trim();
+    }
+    if (moduleId === "publishing") {
+      target.publishMode = normalizedPublishMode(state.simpleBranches?.publishing);
+    }
+    return target;
+  }
+  if (view === "accounts") return {
+    view,
+    ...personaTarget,
+    accountPanel: ["accounts", "proxies", "browsers"].includes(state.accountBrowserPanel)
+      ? state.accountBrowserPanel
+      : "accounts",
+    ...(state.accountPoolAccountId ? { accountId: String(state.accountPoolAccountId) } : {}),
+  };
+  if (view === "tasks") {
+    return {
+      view,
+      ...personaTarget,
+      taskPanel: state.taskQueuePanel === "regular" ? "regular" : "persona",
+    };
+  }
+  return { view, ...(view === "persona_dashboard" ? personaTarget : {}) };
+}
+
 function toastTargetForKind(kind, options = {}) {
   const normalized = String(kind || "").trim();
   if (options.target && typeof options.target === "object") return options.target;
+  if (normalized === "browser" || (normalized === "need_manual" && options.taskId)) {
+    return {
+      view: "accounts",
+      accountPanel: "browsers",
+      taskId: String(options.taskId || "").trim(),
+      personaId: String(options.personaId || "").trim(),
+    };
+  }
   if (options.taskId) {
     return {
       view: "tasks",
@@ -1577,12 +1621,10 @@ function toastTargetForKind(kind, options = {}) {
     return { view: "tasks", taskPanel: options.taskPanel || "persona" };
   }
   if (["persona"].includes(normalized)) {
-    return { view: "workspace", module: "personas" };
+    const personaId = String(options.personaId || state.selectedPersonaId || "").trim();
+    return { view: "workspace", module: "personas", ...(personaId ? { personaId } : {}) };
   }
-  if (["browser"].includes(normalized)) {
-    return { view: "social" };
-  }
-  return null;
+  return currentToastTarget();
 }
 
 function normalizeToastStatus(status, ok = true, persistent = false) {
@@ -1636,7 +1678,9 @@ function applyToastMeta(toast, { key, ok, message, target, status, scheduled }) 
     toast.dataset.toastTarget = JSON.stringify(target);
     toast.setAttribute("role", "button");
     toast.tabIndex = 0;
-    toast.title = target.taskId ? "点击打开任务队列" : "点击跳转到相关页面";
+    toast.title = target.accountPanel === "browsers"
+      ? "点击打开浏览器监控"
+      : (target.taskId ? "点击打开任务队列" : "点击跳转到相关页面");
   } else {
     delete toast.dataset.toastTarget;
     toast.setAttribute("role", ok ? "status" : "alert");
@@ -1656,6 +1700,15 @@ async function openToastTarget(rawTarget) {
   const view = String(target.view || "").trim();
   const moduleId = String(target.module || "").trim();
   const targetPersonaId = String(target.personaId || "").trim();
+  const targetAccountId = String(target.accountId || "").trim();
+  const targetAccountPanel = ["accounts", "proxies", "browsers"].includes(String(target.accountPanel || "").trim())
+    ? String(target.accountPanel || "").trim()
+    : "";
+  const targetPublishMode = moduleId === "publishing" && target.publishMode
+    ? normalizedPublishMode(target.publishMode)
+    : "";
+  const targetPersonaGroup = String(target.personaGroup || "").trim();
+  const targetPersonaStep = String(target.personaStep || "").trim();
   const targetAction = String(target.action || "").trim();
   if (targetAction === "persona_image_generation" && targetPersonaId) {
     if (!(await confirmLeaveTransientWorkspaceState())) return;
@@ -1673,11 +1726,27 @@ async function openToastTarget(rawTarget) {
     }
     state.taskQueuePersonaPage = 1;
   }
+  if (targetAccountId) {
+    state.accountPoolAccountId = targetAccountId;
+    state.accountPoolSelectedAccountIds = [targetAccountId];
+  }
+  if (targetPublishMode) state.simpleBranches.publishing = targetPublishMode;
   if (view === "workspace" && moduleId) {
     if (moduleId !== state.activeModule && isPersonaWorkspaceModule() && !(await canLeaveCurrentPersonaDraftEdit("leave"))) return;
     if (moduleId !== state.activeModule && !(await confirmLeaveTransientWorkspaceState())) return;
     state.workspaceMenuOpen = true;
     setModule(moduleId);
+    if (isPersonaWorkspaceModule(moduleId) && targetPersonaGroup) {
+      state.personaGroup = normalizedPersonaGroupKey(targetPersonaGroup);
+      setPersonaGroupStep(state.personaGroup, targetPersonaStep, selectedPersonaProfile());
+      renderWorkspace(false);
+    }
+  }
+  if (view === "accounts" && targetAccountPanel) {
+    setAccountBrowserPanel(targetAccountPanel);
+    if (targetAccountPanel === "browsers" && target.taskId) {
+      refreshLiveBrowserSessionsSoon(String(target.taskId || "").trim());
+    }
   }
   if (moduleId === "queue" || view === "tasks") {
     if (target.taskPanel) state.taskQueuePanel = target.taskPanel === "regular" ? "regular" : "persona";
@@ -1798,10 +1867,17 @@ function defaultToastTargetForMessage(id) {
     return { view: "tasks", taskPanel: state.taskQueuePanel || "persona" };
   }
   if (cleanId === "commandMsg" && state.view === "workspace") {
-    return { view: "workspace", module: state.activeModule || "personas" };
+    return currentToastTarget();
   }
-  if (cleanId === "socialMsg") return { view: "accounts" };
-  return null;
+  if (cleanId === "socialMsg") {
+    return {
+      view: "accounts",
+      accountPanel: ["accounts", "proxies", "browsers"].includes(state.accountBrowserPanel)
+        ? state.accountBrowserPanel
+        : "accounts",
+    };
+  }
+  return currentToastTarget();
 }
 
 function showMsg(id, text, ok = true, options = {}) {
@@ -14819,7 +14895,7 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
   mediaForm.taskType = currentTaskType;
   mediaForm.contentMode = String(mediaForm.contentMode || "draft") === "manual" ? "manual" : "draft";
   mediaForm.imageCount = Math.min(Math.max(Number(mediaForm.imageCount || state.personaMediaImageCountDefault || 1), 1), 8);
-  const mediaMeta = taskMeta[currentTaskType] || taskMeta.persona_post_image || taskMeta.text_to_image;
+  const mediaMeta = taskMeta[currentTaskType] || taskMeta.persona_post_image;
   const showAspectRatio = currentTaskType === "persona_post_image";
   const showVideoOptions = false;
   const uploadAccept = "image/*";
@@ -15872,7 +15948,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
     mediaForm.taskType = currentTaskType;
     mediaForm.contentMode = String(mediaForm.contentMode || "draft") === "manual" ? "manual" : "draft";
     mediaForm.imageCount = Math.min(Math.max(Number(mediaForm.imageCount || state.personaMediaImageCountDefault || 1), 1), 8);
-    const mediaMeta = taskMeta[currentTaskType] || taskMeta.persona_post_image || taskMeta.text_to_image;
+    const mediaMeta = taskMeta[currentTaskType] || taskMeta.persona_post_image;
     const showAspectRatio = currentTaskType === "persona_post_image";
     const showVideoOptions = false;
     const uploadAccept = "image/*";

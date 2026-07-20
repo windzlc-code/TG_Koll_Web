@@ -1287,29 +1287,16 @@ function loadPendingGeneratePosts(): Map<number, PendingGeneratePostState> {
 const pendingGeneratePosts = loadPendingGeneratePosts();
 
 type ToolR18TaskType =
-  | "text_to_image"
   | "image_generate"
-  | "single_image_edit"
-  | "get_nano_banana"
-  | "face_swap"
-  | "video_i2v"
   | "get_gemini"
   | "r18_config"
   | "r18_set_script"
-  | "r18_rerun_latest"
-  | "r18_text_to_image_reroll"
-  | "r18_text_to_image_continue"
-  | "r18_image_edit_continue"
-  | "r18_image_edit_rerun"
-  | "r18_face_swap_upscale"
-  | "r18_face_swap_rerun"
-  | "r18_image_replace"
-  | "r18_multi_image";
+  | "r18_rerun_latest";
 
 type ToolR18PendingFile = { name: string; path: string; kind: string };
 
 type PendingToolR18TaskState = {
-  stage: "await_agent_input" | "await_task_input" | "await_prompt_review" | "await_prompt_adjustment" | "await_custom_prompt_submit" | "video_i2v_resolution" | "video_i2v_duration" | "video_i2v_image" | "video_i2v_audio" | "video_i2v_prompt_mode" | "video_i2v_prompt" | "image_edit_input" | "image_edit_reference" | "image_edit_prompt_mode" | "image_edit_prompt" | "face_swap_target" | "face_swap_source" | "face_swap_prompt_mode" | "face_swap_prompt";
+  stage: "await_agent_input" | "await_task_input";
   taskType?: ToolR18TaskType;
   taskLabel: string;
   text?: string;
@@ -2479,7 +2466,6 @@ const TELEGRAM_BOT_COMMANDS = [
   { command: "docx", description: "\u5efa\u7acb\u3001\u8b80\u53d6\u3001\u7de8\u8f2f\u6216\u8655\u7406 Word \u6587\u4ef6" },
   { command: "find_skills", description: "\u5354\u52a9\u641c\u5c0b\u8207\u5b89\u88dd\u4ee3\u7406\u6280\u80fd" },
   { command: "frontend_design", description: "\u5efa\u7acb\u9ad8\u54c1\u8cea\u524d\u7aef\u4ecb\u9762" },
-  { command: "nano_banana", description: "\u4f7f\u7528 Gemini \u539f\u751f\u5716\u50cf\u6a21\u578b\u751f\u6210\u5716\u7247" },
   { command: "pdf", description: "\u8b80\u53d6\u3001\u64f7\u53d6\u3001\u7de8\u8f2f\u6216\u8655\u7406 PDF \u6587\u4ef6" },
   { command: "pptx", description: "\u5efa\u7acb\u3001\u8b80\u53d6\u3001\u7de8\u8f2f\u6216\u8655\u7406\u7c21\u5831\u6a94" },
   { command: "remotion_best_practices", description: "Remotion \u5f71\u7247\u88fd\u4f5c\u6700\u4f73\u5be6\u52d9" },
@@ -6153,20 +6139,7 @@ const TOOL_R18_UPLOAD_HOST_DIR = process.env.TOOL_R18_UPLOAD_HOST_DIR || default
 const TOOL_R18_UPLOAD_CONTAINER_DIR = process.env.TOOL_R18_UPLOAD_CONTAINER_DIR || defaultToolR18UploadContainerDir(TOOL_R18_UPLOAD_HOST_DIR);
 
 const TOOL_R18_TASKS: Array<{ type: ToolR18TaskType; label: string; hint: string }> = [
-  { type: "text_to_image", label: "文生圖", hint: "發送圖片生成提示詞。" },
-  { type: "r18_text_to_image_reroll", label: "重新生成圖片", hint: "重跑最近一次文生圖/圖像結果；不需要新素材。" },
-  { type: "r18_text_to_image_continue", label: "繼續生成圖片", hint: "基於最近一次圖像任務繼續生成；可補充文字要求。" },
   { type: "image_generate", label: "圖像生成", hint: "發送參考圖，可繼續發送第二張參考圖，並寫生成要求。" },
-  { type: "r18_multi_image", label: "多圖生成", hint: "連續發送多張圖片和生成要求，準備好後點提交。" },
-  { type: "single_image_edit", label: "單圖編輯", hint: "發送一張原圖和編輯要求。" },
-  { type: "get_nano_banana", label: "圖片編輯", hint: "發送原圖、參考圖和編輯要求。" },
-  { type: "r18_image_edit_continue", label: "繼續編輯結果圖", hint: "基於最近一次圖片編輯結果繼續處理；可補充新要求。" },
-  { type: "r18_image_edit_rerun", label: "重新生成圖片編輯", hint: "重跑最近一次圖片編輯任務。" },
-  { type: "face_swap", label: "人物換臉", hint: "發送目標圖、人臉參考圖和要求。" },
-  { type: "r18_face_swap_upscale", label: "增加解析度 2 倍", hint: "對最近一次換臉結果提交放大/增強。" },
-  { type: "r18_face_swap_rerun", label: "重新生成人物換臉", hint: "重跑最近一次人物換臉任務。" },
-  { type: "r18_image_replace", label: "圖片替換", hint: "發送原圖、替換參考圖和替換要求。" },
-  { type: "video_i2v", label: "圖生視頻", hint: "發送參考圖和視頻動作要求，可附加音頻。" },
   { type: "get_gemini", label: "素材解析", hint: "發送圖片/視頻和需要解析的問題。" },
   { type: "r18_config", label: "查看後臺工作流配置", hint: "讀取 R18 後臺執行時工作流配置摘要。" },
   { type: "r18_set_script", label: "設定預設文案", hint: "測試入口：發送後會記錄到 Tool_R18 測試狀態，不改 R18 生產配置。" },
@@ -6211,7 +6184,7 @@ async function toolR18JsonRequest(method: "GET" | "POST", pathName: string, body
 
 function buildToolR18MenuKeyboard(chatId: number) {
   return [
-    [{ text: "圖像生成", callback_data: "toolr18_group_image" }, { text: "視頻生成", callback_data: "toolr18_group_video" }],
+    [{ text: "圖像生成", callback_data: "toolr18_group_image" }],
     [{ text: "工作臺狀態", callback_data: "toolr18_status" }],
     [{ text: "◀️ 返回", callback_data: getToolR18BackTarget(chatId) }],
   ];
@@ -6224,8 +6197,7 @@ function toolR18TaskButton(label: string) {
 
 function buildToolR18ImageKeyboard() {
   return [
-    [toolR18TaskButton("文生圖"), toolR18TaskButton("單圖編輯")],
-    [toolR18TaskButton("圖片編輯"), toolR18TaskButton("人物換臉")],
+    [toolR18TaskButton("圖像生成"), toolR18TaskButton("素材解析")],
     [{ text: "◀️ 返回", callback_data: "toolr18_entry" }],
   ];
 }
@@ -6270,361 +6242,6 @@ function buildToolR18ResubmittedKeyboard(chatId: number, taskId: string, params?
   const rows = [[{ text: "查看任務", callback_data: "toolr18_detail_" + taskId }]];
   rows.push([{ text: "最近任務", callback_data: "toolr18_tasks" }, { text: "繼續R18", callback_data: "toolr18_entry" }]);
   return rows;
-}
-
-function buildToolR18VideoKeyboard(chatId?: number) {
-  return [
-    [toolR18TaskButton("圖生視頻")],
-    [{ text: "◀️ 返回", callback_data: "toolr18_entry" }],
-  ];
-}
-
-
-async function toolR18VideoI2vDefaultParams() {
-  let negativePrompt = "low quality, blurry, distorted, watermark, text, logo";
-  let seed = "1024";
-  try {
-    const data = await toolR18JsonRequest("GET", "/api/internal/tg/runtime_config");
-    const cfg = data?.runtime_config || {};
-    negativePrompt = String(cfg.mulerouter_wan_i2v_negative_prompt || negativePrompt).trim() || negativePrompt;
-    const seedValue = String(cfg.mulerouter_wan_i2v_seed || seed).trim();
-    seed = /^\d+$/.test(seedValue) ? seedValue : seed;
-  } catch {}
-  return {
-    resolution: "720p",
-    duration_seconds: 2,
-    mulerouter_wan_i2v_resolution: "720p",
-    mulerouter_wan_i2v_duration: 2,
-    mulerouter_wan_i2v_prompt_extend: false,
-    mulerouter_wan_i2v_safety_filter: false,
-    mulerouter_wan_i2v_negative_prompt: negativePrompt,
-    negative_prompt: negativePrompt,
-    prompt_extend: false,
-    safety_filter: false,
-    seed: Number(seed),
-    mulerouter_wan_i2v_seed: Number(seed),
-    use_grok: true,
-    prompt_mode_label: "Grok 生成",
-    audio_selected: false,
-    image_selected: false,
-    prompt_mode_selected: false,
-  };
-}
-
-function toolR18VideoI2vParams(state?: PendingToolR18TaskState) {
-  const params = { ...(state?.params || {}) };
-  params.resolution = String(params.resolution || "720p") === "1080p" ? "1080p" : "720p";
-  const duration = Math.min(Math.max(Number(params.duration_seconds || params.mulerouter_wan_i2v_duration || 2) || 2, 2), 15);
-  params.duration_seconds = duration;
-  params.mulerouter_wan_i2v_duration = duration;
-  params.mulerouter_wan_i2v_resolution = params.resolution;
-  params.mulerouter_wan_i2v_prompt_extend = false;
-  params.mulerouter_wan_i2v_safety_filter = false;
-  params.prompt_extend = false;
-  params.safety_filter = false;
-  if (!params.negative_prompt) params.negative_prompt = String(params.mulerouter_wan_i2v_negative_prompt || "low quality, blurry, distorted, watermark, text, logo");
-  params.mulerouter_wan_i2v_negative_prompt = String(params.mulerouter_wan_i2v_negative_prompt || params.negative_prompt);
-  const seed = String(params.seed || params.mulerouter_wan_i2v_seed || "1024");
-  if (/^\d+$/.test(seed)) {
-    params.seed = Number(seed);
-    params.mulerouter_wan_i2v_seed = Number(seed);
-  }
-  params.use_grok = params.use_grok !== false;
-  params.prompt_mode_label = String(params.prompt_mode_label || (params.use_grok ? "Grok 生成" : "自定義提交"));
-  return params;
-}
-
-function toolR18VideoI2vStatusText(step: string, params: Record<string, any>) {
-  const lines = ["視頻生成設定", "目前步驟：" + step];
-  if (params.resolution_selected) lines.push("分辨率：" + params.resolution);
-  if (params.duration_selected) lines.push("時長：" + params.duration_seconds + "秒");
-  if (params.image_local_path) lines.push("參考圖：已上傳");
-  if (params.audio_selected) lines.push(params.audio_local_path ? "音頻：已上傳" : "音頻：跳過");
-  if (params.prompt_mode_selected) lines.push("提示詞方式：" + (params.prompt_mode_label || (params.use_grok ? "Grok 生成" : "自定義提交")));
-  return lines.join(String.fromCharCode(10));
-}
-
-function buildToolR18VideoI2vResolutionKeyboard(backCallback = "toolr18_group_video", backLabel = "◀️ 返回") {
-  return [
-    [{ text: "720p（最小資源）", callback_data: "toolr18_i2v_resolution_720p" }, { text: "1080p", callback_data: "toolr18_i2v_resolution_1080p" }],
-    [{ text: backLabel, callback_data: backCallback }],
-  ];
-}
-
-function buildToolR18VideoI2vDurationKeyboard() {
-  return [
-    [{ text: "2秒", callback_data: "toolr18_i2v_duration_2" }, { text: "5秒", callback_data: "toolr18_i2v_duration_5" }],
-    [{ text: "8秒", callback_data: "toolr18_i2v_duration_8" }, { text: "15秒", callback_data: "toolr18_i2v_duration_15" }],
-    [{ text: "◀️ 上一步", callback_data: "toolr18_i2v_back_resolution" }],
-  ];
-}
-
-function buildToolR18VideoI2vImageKeyboard(params: Record<string, any>) {
-  const rows: any[] = [];
-  if (params.image_local_path) rows.push([{ text: "沿用目前資源", callback_data: "toolr18_i2v_image_keep" }]);
-  rows.push([{ text: "◀️ 上一步", callback_data: "toolr18_i2v_back_duration" }]);
-  return rows;
-}
-
-function buildToolR18VideoI2vAudioKeyboard(params: Record<string, any>) {
-  const rows: any[] = [];
-  if (params.audio_local_path) rows.push([{ text: "沿用目前資源", callback_data: "toolr18_i2v_audio_keep" }]);
-  rows.push([{ text: "跳過音頻", callback_data: "toolr18_i2v_audio_skip" }]);
-  rows.push([{ text: "◀️ 上一步", callback_data: "toolr18_i2v_back_image" }]);
-  return rows;
-}
-
-function buildToolR18VideoI2vPromptModeKeyboard() {
-  return [
-    [{ text: "AI 自由發揮", callback_data: "toolr18_i2v_prompt_free" }],
-    [{ text: "讓 Grok 生成提示詞", callback_data: "toolr18_i2v_prompt_grok" }],
-    [{ text: "輸入自定義提示詞提交", callback_data: "toolr18_i2v_prompt_custom" }],
-    [{ text: "◀️ 上一步", callback_data: "toolr18_i2v_back_audio" }],
-  ];
-}
-
-async function sendToolR18VideoI2vResolutionStep(bot: TelegramBot, chatId: number, messageId?: number, seedParams?: Record<string, any>) {
-  const existing = pendingToolR18Tasks.get(chatId);
-  const params = { ...(await toolR18VideoI2vDefaultParams()), ...(existing?.params || {}), ...(seedParams || {}) };
-  pendingToolR18Tasks.set(chatId, { ...(existing || {}), stage: "video_i2v_resolution", taskType: "video_i2v", taskLabel: "圖生視頻", params, files: existing?.files || [] });
-  await safeEditOrSend(bot, chatId, messageId, toolR18VideoI2vStatusText("1/5 選擇分辨率", params), {
-    reply_markup: { inline_keyboard: buildToolR18VideoI2vResolutionKeyboard(toolR18FlowCancelCallback(params, "toolr18_group_video"), "◀️ 返回") },
-  });
-}
-
-async function sendToolR18VideoI2vDurationStep(bot: TelegramBot, chatId: number, messageId?: number, resolution?: string) {
-  const state = pendingToolR18Tasks.get(chatId) || { stage: "video_i2v_duration", taskType: "video_i2v", taskLabel: "圖生視頻", params: await toolR18VideoI2vDefaultParams(), files: [] } as PendingToolR18TaskState;
-  const params = toolR18VideoI2vParams(state);
-  if (resolution) {
-    params.resolution = resolution === "1080p" ? "1080p" : "720p";
-    params.mulerouter_wan_i2v_resolution = params.resolution;
-    params.resolution_selected = true;
-  }
-  params.duration_selected = false;
-  params.prompt_mode_selected = false;
-  pendingToolR18Tasks.set(chatId, { ...state, stage: "video_i2v_duration", taskType: "video_i2v", taskLabel: "圖生視頻", params });
-  await safeEditOrSend(bot, chatId, messageId, toolR18VideoI2vStatusText("2/5 輸入視頻時長", params) + String.fromCharCode(10) + String.fromCharCode(10) + "請選擇時長，或直接輸入 2 到 15 秒之間的整數，例如：5。", {
-    reply_markup: { inline_keyboard: buildToolR18VideoI2vDurationKeyboard() },
-  });
-}
-
-async function sendToolR18VideoI2vImageStep(bot: TelegramBot, chatId: number, messageId?: number, duration?: number) {
-  const state = pendingToolR18Tasks.get(chatId) || { stage: "video_i2v_image", taskType: "video_i2v", taskLabel: "圖生視頻", params: await toolR18VideoI2vDefaultParams(), files: [] } as PendingToolR18TaskState;
-  const params = toolR18VideoI2vParams(state);
-  if (duration) {
-    params.duration_seconds = duration;
-    params.mulerouter_wan_i2v_duration = duration;
-    params.duration_selected = true;
-  }
-  params.prompt_mode_selected = false;
-  pendingToolR18Tasks.set(chatId, { ...state, stage: "video_i2v_image", taskType: "video_i2v", taskLabel: "圖生視頻", params });
-  const suffix = params.image_local_path ? "已記錄目前參考圖。可以上傳新圖片替換，或點擊「沿用目前資源」繼續。" : "請上傳一張參考圖片。下一步再選擇是否上傳音頻。";
-  await safeEditOrSend(bot, chatId, messageId, toolR18VideoI2vStatusText("3/5 上傳參考圖", params) + String.fromCharCode(10) + String.fromCharCode(10) + suffix, {
-    reply_markup: { inline_keyboard: buildToolR18VideoI2vImageKeyboard(params) },
-  });
-}
-
-async function sendToolR18VideoI2vAudioStep(bot: TelegramBot, chatId: number, messageId?: number) {
-  const state = pendingToolR18Tasks.get(chatId);
-  const params = toolR18VideoI2vParams(state);
-  pendingToolR18Tasks.set(chatId, { ...(state || { taskType: "video_i2v", taskLabel: "圖生視頻" }), stage: "video_i2v_audio", taskType: "video_i2v", taskLabel: "圖生視頻", params });
-  const suffix = params.audio_local_path ? "已記錄目前音頻。可以上傳新音頻替換，點擊「沿用目前資源」繼續，或點擊「跳過音頻」讓本次不使用音頻。" : "可以上傳音頻檔案（mp3/wav/m4a/ogg 等），或點擊「跳過音頻」。";
-  await safeEditOrSend(bot, chatId, messageId, toolR18VideoI2vStatusText("4/5 上傳音頻（可選）", params) + String.fromCharCode(10) + String.fromCharCode(10) + suffix, {
-    reply_markup: { inline_keyboard: buildToolR18VideoI2vAudioKeyboard(params) },
-  });
-}
-
-async function sendToolR18VideoI2vPromptModeStep(bot: TelegramBot, chatId: number, messageId?: number) {
-  const state = pendingToolR18Tasks.get(chatId);
-  const params = toolR18VideoI2vParams(state);
-  pendingToolR18Tasks.set(chatId, { ...(state || { taskType: "video_i2v", taskLabel: "圖生視頻" }), stage: "video_i2v_prompt_mode", taskType: "video_i2v", taskLabel: "圖生視頻", params });
-  await safeEditOrSend(bot, chatId, messageId, toolR18VideoI2vStatusText("5/5 選擇提示詞方式", params) + String.fromCharCode(10) + String.fromCharCode(10) + "請選擇 AI 自由發揮、讓 Grok 生成提示詞，或輸入自定義提示詞提交。", {
-    reply_markup: { inline_keyboard: buildToolR18VideoI2vPromptModeKeyboard() },
-  });
-}
-
-async function sendToolR18VideoI2vPromptStep(bot: TelegramBot, chatId: number, messageId: number | undefined, useGrok: boolean) {
-  const state = pendingToolR18Tasks.get(chatId);
-  const params = toolR18VideoI2vParams(state);
-  params.use_grok = useGrok;
-  params.prompt_mode_selected = true;
-  params.prompt_mode_label = useGrok ? "Grok 生成" : "自定義提交";
-  params.tg_use_llm_prompt = useGrok;
-  params.tg_latest_prompt_only = useGrok;
-  pendingToolR18Tasks.set(chatId, { ...(state || { taskType: "video_i2v", taskLabel: "圖生視頻" }), stage: "video_i2v_prompt", taskType: "video_i2v", taskLabel: "圖生視頻", params });
-  await safeEditOrSend(bot, chatId, messageId, toolR18VideoI2vStatusText("已收到參考圖，請輸入視頻需求", params) + String.fromCharCode(10) + String.fromCharCode(10) + (useGrok ? "請輸入視頻需求。Grok 會生成完整提示詞，並在聊天中完整顯示，確認後才提交。" : "請輸入自定義最終提示詞。下一條訊息會跳過 Grok 直接提交。"), {
-    reply_markup: { inline_keyboard: [[{ text: "◀️ 上一步", callback_data: "toolr18_i2v_back_prompt_mode" }]] },
-  });
-}
-
-const TOOL_R18_FACE_SWAP_NATURAL_PROMPT = "自然換臉，保持原圖姿態、服裝、光線和背景，只替換人物臉部身份。";
-
-function toolR18ImageEditMeta(taskType?: ToolR18TaskType) {
-  const single = taskType === "single_image_edit";
-  return { single, taskType: single ? "single_image_edit" as ToolR18TaskType : "get_nano_banana" as ToolR18TaskType, label: single ? "單圖編輯" : "圖片編輯", totalSteps: single ? 3 : 4 };
-}
-
-function toolR18ImageEditParams(state?: PendingToolR18TaskState) {
-  return { ...(state?.params || {}) };
-}
-
-function toolR18ImageEditStatusText(label: string, step: string, params: Record<string, any>) {
-  const lines = ["R18 / " + label, "目前步驟：" + step];
-  if (params.input_image_local_path) lines.push("原圖：已上傳");
-  if (params.reference_image_local_path && label !== "單圖編輯") lines.push("參考圖：已上傳");
-  if (params.prompt_mode_selected) lines.push("提示詞方式：" + (params.prompt_mode_label || (params.tg_use_llm_prompt === false ? "自定義提交" : "Grok 生成")));
-  return lines.join(String.fromCharCode(10));
-}
-
-function buildToolR18ImageStepKeyboard(backCallback?: string, keepCurrent = false, cancelCallback = "toolr18_group_image") {
-  const rows: any[] = [];
-  if (keepCurrent) rows.push([{ text: "沿用目前資源", callback_data: backCallback === "toolr18_imgedit_back_input" ? "toolr18_imgedit_reference_keep" : "toolr18_imgedit_input_keep" }]);
-  if (backCallback) rows.push([{ text: "◀️ 上一步", callback_data: backCallback }]);
-  rows.push([{ text: "取消", callback_data: cancelCallback }]);
-  return rows;
-}
-
-function buildToolR18ImageEditPromptModeKeyboard() {
-  return [
-    [{ text: "讓 Grok 生成提示詞", callback_data: "toolr18_imgedit_prompt_grok" }],
-    [{ text: "AI 自由發揮", callback_data: "toolr18_imgedit_prompt_free" }],
-    [{ text: "輸入自定義提示詞提交", callback_data: "toolr18_imgedit_prompt_custom" }],
-    [{ text: "◀️ 上一步", callback_data: "toolr18_imgedit_back_before_prompt_mode" }],
-  ];
-}
-
-async function sendToolR18ImageEditInputStep(bot: TelegramBot, chatId: number, messageId?: number, taskType?: ToolR18TaskType, seedParams: Record<string, any> = {}) {
-  const existing = taskType ? undefined : pendingToolR18Tasks.get(chatId);
-  const meta = toolR18ImageEditMeta(taskType || existing?.taskType || "get_nano_banana");
-  const params = { ...toolR18ImageEditParams(existing), ...seedParams };
-  pendingToolR18Tasks.set(chatId, { stage: "image_edit_input", taskType: meta.taskType, taskLabel: meta.label, params, files: [] });
-  const suffix = params.input_image_local_path ? "已記錄目前原圖。可以上傳新圖片替換，或點擊「沿用目前資源」繼續。" : "請上傳需要編輯的原圖。";
-  await safeEditOrSend(bot, chatId, messageId, toolR18ImageEditStatusText(meta.label, "1/" + meta.totalSteps + " 上傳原圖", params) + String.fromCharCode(10) + String.fromCharCode(10) + suffix, {
-    reply_markup: { inline_keyboard: buildToolR18ImageStepKeyboard(undefined, Boolean(params.input_image_local_path), toolR18FlowCancelCallback(params, "toolr18_group_image")) },
-  });
-}
-
-async function sendToolR18ImageEditReferenceStep(bot: TelegramBot, chatId: number, messageId?: number) {
-  const state = pendingToolR18Tasks.get(chatId) || { taskType: "get_nano_banana", taskLabel: "圖片編輯", params: {} } as PendingToolR18TaskState;
-  const params = toolR18ImageEditParams(state);
-  pendingToolR18Tasks.set(chatId, { ...state, stage: "image_edit_reference", taskType: "get_nano_banana", taskLabel: "圖片編輯", params });
-  const suffix = params.reference_image_local_path ? "已記錄目前參考圖。可以上傳新參考圖替換，或點擊「沿用目前資源」繼續。" : "請上傳參考圖或素材圖。";
-  await safeEditOrSend(bot, chatId, messageId, toolR18ImageEditStatusText("圖片編輯", "2/4 上傳參考圖", params) + String.fromCharCode(10) + String.fromCharCode(10) + suffix, {
-    reply_markup: { inline_keyboard: buildToolR18ImageStepKeyboard("toolr18_imgedit_back_input", Boolean(params.reference_image_local_path), toolR18FlowCancelCallback(params, "toolr18_group_image")) },
-  });
-}
-
-async function sendToolR18ImageEditPromptModeStep(bot: TelegramBot, chatId: number, messageId?: number) {
-  const state = pendingToolR18Tasks.get(chatId) || { taskType: "get_nano_banana", taskLabel: "圖片編輯", params: {} } as PendingToolR18TaskState;
-  const meta = toolR18ImageEditMeta(state.taskType);
-  const params = toolR18ImageEditParams(state);
-  params.prompt_mode_selected = false;
-  const nextState: PendingToolR18TaskState = { ...state, stage: "image_edit_prompt_mode", taskType: meta.taskType, taskLabel: meta.label, params };
-  pendingToolR18Tasks.set(chatId, nextState);
-  await safeEditOrSend(bot, chatId, messageId, [
-    toolR18ImageEditStatusText(meta.label, (meta.totalSteps - 1) + "/" + meta.totalSteps + " 選擇提示詞方式", params),
-    "",
-    "可以讓 Grok 根據你的要求生成圖片編輯提示詞，也可以直接輸入自定義最終提示詞。",
-  ].filter(Boolean).join(String.fromCharCode(10)), {
-    reply_markup: { inline_keyboard: buildToolR18ImageEditPromptModeKeyboard() },
-  });
-}
-
-async function sendToolR18ImageEditPromptStep(bot: TelegramBot, chatId: number, messageId: number | undefined, useGrok: boolean) {
-  const state = pendingToolR18Tasks.get(chatId) || { taskType: "get_nano_banana", taskLabel: "圖片編輯", params: {} } as PendingToolR18TaskState;
-  const meta = toolR18ImageEditMeta(state.taskType);
-  const params = toolR18ImageEditParams(state);
-  params.tg_use_llm_prompt = useGrok;
-  params.tg_latest_prompt_only = useGrok;
-  params.prompt_mode_selected = true;
-  params.prompt_mode_label = useGrok ? "Grok 生成" : "自定義提交";
-  pendingToolR18Tasks.set(chatId, { ...state, stage: "image_edit_prompt", taskType: meta.taskType, taskLabel: meta.label, params });
-  await safeEditOrSend(bot, chatId, messageId, toolR18ImageEditStatusText(meta.label, meta.totalSteps + "/" + meta.totalSteps + " 輸入圖片編輯要求", params) + String.fromCharCode(10) + String.fromCharCode(10) + (useGrok ? "請輸入這次圖片編輯要求。Grok 會先生成提示詞供你確認，確認後才提交。" : "請輸入自定義最終圖片編輯提示詞。下一條訊息會跳過 Grok，直接提交編輯任務。"), {
-    reply_markup: { inline_keyboard: [[{ text: "◀️ 上一步", callback_data: "toolr18_imgedit_back_prompt_mode" }]] },
-  });
-}
-
-function toolR18FaceSwapParams(state?: PendingToolR18TaskState) {
-  const params = { ...(state?.params || {}) };
-  const seed = Number(params.face_swap_random_seed || params.seed || 0);
-  if (!seed || seed <= 0) {
-    const nextSeed = crypto.randomInt(1, 2147483647);
-    params.seed = nextSeed;
-    params.face_swap_random_seed = nextSeed;
-  } else {
-    params.seed = seed;
-    params.face_swap_random_seed = seed;
-  }
-  return params;
-}
-
-function toolR18FaceSwapStatusText(step: string, params: Record<string, any>) {
-  const lines = ["R18 / 人物換臉", "目前步驟：" + step];
-  if (params.target_image_local_path) lines.push("原圖：已上傳");
-  if (params.source_image_local_path) lines.push("人臉參考圖：已上傳");
-  return lines.join(String.fromCharCode(10));
-}
-
-function buildToolR18FaceSwapStepKeyboard(backCallback?: string, keepCurrent = false, cancelCallback = "toolr18_group_image") {
-  const rows: any[] = [];
-  if (keepCurrent) rows.push([{ text: "沿用目前資源", callback_data: backCallback === "toolr18_faceswap_back_target" ? "toolr18_faceswap_source_keep" : "toolr18_faceswap_target_keep" }]);
-  if (backCallback) rows.push([{ text: "◀️ 上一步", callback_data: backCallback }]);
-  rows.push([{ text: "取消", callback_data: cancelCallback }]);
-  return rows;
-}
-
-function buildToolR18FaceSwapPromptModeKeyboard() {
-  return [
-    [{ text: "自然換臉", callback_data: "toolr18_faceswap_prompt_natural" }],
-    [{ text: "AI 自由發揮", callback_data: "toolr18_faceswap_prompt_free" }],
-    [{ text: "輸入自定義換臉要求", callback_data: "toolr18_faceswap_prompt_custom" }],
-    [{ text: "◀️ 上一步", callback_data: "toolr18_faceswap_back_source" }],
-  ];
-}
-
-async function sendToolR18FaceSwapTargetStep(bot: TelegramBot, chatId: number, messageId?: number, seedParams: Record<string, any> = {}) {
-  const existing = pendingToolR18Tasks.get(chatId);
-  const params = { ...toolR18FaceSwapParams(existing), ...seedParams };
-  pendingToolR18Tasks.set(chatId, { stage: "face_swap_target", taskType: "face_swap", taskLabel: "人物換臉", params, files: [] });
-  const suffix = params.target_image_local_path ? "已記錄目前原圖。可以上傳新圖片替換，或點擊「沿用目前資源」繼續。" : "請上傳原圖，也就是需要被換臉的圖片。";
-  await safeEditOrSend(bot, chatId, messageId, toolR18FaceSwapStatusText("1/4 上傳原圖", params) + String.fromCharCode(10) + String.fromCharCode(10) + suffix, {
-    reply_markup: { inline_keyboard: buildToolR18FaceSwapStepKeyboard(undefined, Boolean(params.target_image_local_path), toolR18FlowCancelCallback(params, "toolr18_group_image")) },
-  });
-}
-
-async function sendToolR18FaceSwapSourceStep(bot: TelegramBot, chatId: number, messageId?: number) {
-  const state = pendingToolR18Tasks.get(chatId) || { taskType: "face_swap", taskLabel: "人物換臉", params: {} } as PendingToolR18TaskState;
-  const params = toolR18FaceSwapParams(state);
-  pendingToolR18Tasks.set(chatId, { ...state, stage: "face_swap_source", taskType: "face_swap", taskLabel: "人物換臉", params });
-  const suffix = params.source_image_local_path ? "已記錄目前人臉參考圖。可以上傳新參考圖替換，或點擊「沿用目前資源」繼續。" : "請上傳人臉參考圖。";
-  await safeEditOrSend(bot, chatId, messageId, toolR18FaceSwapStatusText("2/4 上傳人臉參考圖", params) + String.fromCharCode(10) + String.fromCharCode(10) + suffix, {
-    reply_markup: { inline_keyboard: buildToolR18FaceSwapStepKeyboard("toolr18_faceswap_back_target", Boolean(params.source_image_local_path), toolR18FlowCancelCallback(params, "toolr18_group_image")) },
-  });
-}
-
-async function sendToolR18FaceSwapPromptModeStep(bot: TelegramBot, chatId: number, messageId?: number) {
-  const state = pendingToolR18Tasks.get(chatId) || { taskType: "face_swap", taskLabel: "人物換臉", params: {} } as PendingToolR18TaskState;
-  const params = toolR18FaceSwapParams(state);
-  const nextState: PendingToolR18TaskState = { ...state, stage: "face_swap_prompt_mode", taskType: "face_swap", taskLabel: "人物換臉", params };
-  pendingToolR18Tasks.set(chatId, nextState);
-  await safeEditOrSend(bot, chatId, messageId, [
-    toolR18FaceSwapStatusText("3/4 選擇換臉要求", params),
-    "",
-    "請選擇默認自然換臉，或輸入自定義換臉要求。",
-  ].filter(Boolean).join(String.fromCharCode(10)), {
-    reply_markup: { inline_keyboard: buildToolR18FaceSwapPromptModeKeyboard() },
-  });
-}
-
-async function sendToolR18FaceSwapPromptStep(bot: TelegramBot, chatId: number, messageId?: number) {
-  const state = pendingToolR18Tasks.get(chatId) || { taskType: "face_swap", taskLabel: "人物換臉", params: {} } as PendingToolR18TaskState;
-  const params = toolR18FaceSwapParams(state);
-  params.tg_use_llm_prompt = true;
-  params.tg_latest_prompt_only = true;
-  pendingToolR18Tasks.set(chatId, { ...state, stage: "face_swap_prompt", taskType: "face_swap", taskLabel: "人物換臉", params });
-  await safeEditOrSend(bot, chatId, messageId, toolR18FaceSwapStatusText("4/4 輸入換臉要求", params) + String.fromCharCode(10) + String.fromCharCode(10) + "請直接輸入這次人物換臉要求。Grok 會先生成提示詞供你確認，確認後才提交。", {
-    reply_markup: { inline_keyboard: [[{ text: "◀️ 上一步", callback_data: "toolr18_faceswap_back_prompt_mode" }]] },
-  });
 }
 
 async function sendToolR18Menu(bot: TelegramBot, chatId: number, messageId?: number, backTarget?: string) {
@@ -6697,60 +6314,6 @@ async function sendToolR18TaskDetail(bot: TelegramBot, chatId: number, taskId: s
 }
 
 
-async function getLatestToolR18ImageTask(chatId: number) {
-  const data = await toolR18JsonRequest("GET", "/api/internal/tg/tasks", undefined, { chat_id: chatId, limit: 10 });
-  const tasks = Array.isArray(data?.tasks) ? data.tasks : [];
-  const latest = tasks.find((task: any) => String(task?.type || "") === "text_to_image" && ["success", "done", "completed", "failed"].includes(String(task?.status || "").toLowerCase()))
-    || tasks.find((task: any) => String(task?.type || "") === "text_to_image");
-  const taskId = String(latest?.id || "").trim();
-  if (!taskId) throw new Error("\u627e\u4e0d\u5230\u6700\u8fd1\u7684\u6587\u751f\u5716\u4efb\u52d9\uff0c\u8acb\u5148\u5b8c\u6210\u4e00\u6b21\u5716\u7247\u751f\u6210\u3002");
-  const detail = await toolR18JsonRequest("GET", "/api/internal/tg/tasks/" + encodeURIComponent(taskId), undefined, { chat_id: chatId });
-  const task = detail?.task || latest || {};
-  if (!task?.id) throw new Error("\u6700\u8fd1\u6587\u751f\u5716\u4efb\u52d9\u5df2\u5931\u6548\uff0c\u8acb\u91cd\u65b0\u751f\u6210\u4e00\u6b21\u5716\u7247\u3002");
-  return task;
-}
-
-async function submitToolR18ImageRerunOrContinue(bot: TelegramBot, chatId: number, state: PendingToolR18TaskState, messageId?: number) {
-  const latestTask = await getLatestToolR18ImageTask(chatId);
-  const latestInput = latestTask.input || {};
-  const text = String(state.text || "").trim();
-  if (state.taskType === "r18_text_to_image_continue" && !text) throw new Error("\u8acb\u5148\u767c\u9001\u7e7c\u7e8c\u751f\u6210\u5716\u7247\u7684\u65b0\u8981\u6c42\u3002");
-  const sourceBot = "tool_r18";
-  const basePrompt = String(latestInput.tg_original_user_request || latestInput.tg_user_instruction || latestInput.prompt_text || latestInput.prompt || latestInput.message || "").trim();
-  const nextPrompt = state.taskType === "r18_text_to_image_continue"
-    ? text
-    : (basePrompt || String(latestInput.prompt_text || latestInput.prompt || "").trim());
-  if (!nextPrompt) throw new Error("\u6700\u8fd1\u4efb\u52d9\u7f3a\u5c11\u53ef\u91cd\u7528\u63d0\u793a\u8a5e\uff0c\u8acb\u91cd\u65b0\u65b0\u5efa\u6587\u751f\u5716\u4efb\u52d9\u3002");
-  const generationContext = state.taskType === "r18_text_to_image_continue"
-    ? [
-        "Continue from the latest R18 text-to-image task.",
-        "Preserve the previous subject, visual style, camera framing, and scene continuity unless the new user request changes them.",
-        basePrompt ? "Previous user request: " + basePrompt : "",
-        "New user request: " + nextPrompt,
-      ].filter(Boolean).join(" ")
-    : String(latestInput.tg_generation_context || "").trim();
-  const params = {
-    ...latestInput,
-    prompt: nextPrompt,
-    prompt_text: nextPrompt,
-    message: nextPrompt,
-    tg_user_instruction: nextPrompt,
-    tg_original_user_request: nextPrompt,
-    tg_generation_context: generationContext,
-    tg_use_llm_prompt: state.taskType === "r18_text_to_image_continue",
-    tg_latest_prompt_only: state.taskType === "r18_text_to_image_continue",
-    tg_prompt_confirmed: state.taskType !== "r18_text_to_image_continue",
-    tg_rerun_from_task_id: String(latestTask.id || ""),
-    tg_source_bot: sourceBot,
-    source: state.taskType === "r18_text_to_image_continue" ? "telegram-r18-continue" : "telegram-rerun",
-  };
-  const result = await toolR18JsonRequest("POST", "/api/internal/tg/submit", { task_type: "text_to_image", tg_chat_id: chatId, params });
-  pendingToolR18Tasks.delete(chatId);
-  await safeEditOrSend(bot, chatId, messageId, ["\u2705 R18 \u4efb\u52d9\u5df2\u63d0\u4ea4", "\u985e\u578b\uff1a" + (state.taskType === "r18_text_to_image_continue" ? "\u7e7c\u7e8c\u751f\u6210\u5716\u7247" : "\u91cd\u65b0\u751f\u6210\u5716\u7247"), "ID\uff1a" + result.id].filter(Boolean).join(String.fromCharCode(10)), {
-    reply_markup: { inline_keyboard: buildToolR18SubmittedKeyboard(chatId, String(result.id || ""), params) },
-  });
-}
-
 async function resubmitToolR18Task(bot: TelegramBot, chatId: number, taskId: string, messageId?: number) {
   const data = await toolR18JsonRequest("GET", "/api/internal/tg/tasks/" + encodeURIComponent(taskId), undefined, { chat_id: chatId });
   const task = data?.task || {};
@@ -6760,75 +6323,6 @@ async function resubmitToolR18Task(bot: TelegramBot, chatId: number, taskId: str
   await safeEditOrSend(bot, chatId, messageId, ["\u2705 R18 \u4efb\u52d9\u5df2\u91cd\u65b0\u63d0\u4ea4", "\u985e\u578b\uff1a" + toolR18TaskLabel(result.task_type || task.type), "ID\uff1a" + result.id].filter(Boolean).join(String.fromCharCode(10)), {
     reply_markup: { inline_keyboard: buildToolR18ResubmittedKeyboard(chatId, String(result.id || ""), params) },
   });
-}
-
-const TOOL_R18_T2I_ZIT_RATIO_OPTIONS = [
-  { id: "2x3", ratio: "2:3", label: "2:3 豎圖", note: "基礎豎圖", width: 640, height: 960, final: "2176 x 3264" },
-  { id: "3x4", ratio: "3:4", label: "3:4 穩定豎圖", note: "穩定豎圖", width: 672, height: 896, final: "2285 x 3046" },
-  { id: "9x16", ratio: "9:16", label: "9:16 手機豎屏", note: "手機豎屏長圖", width: 576, height: 1024, final: "1958 x 3482" },
-  { id: "3x2", ratio: "3:2", label: "3:2 橫圖", note: "橫圖基準", width: 960, height: 640, final: "3264 x 2176" },
-  { id: "4x3", ratio: "4:3", label: "4:3 平衡橫圖", note: "平衡橫圖", width: 896, height: 672, final: "3046 x 2285" },
-  { id: "16x9", ratio: "16:9", label: "16:9 寬屏", note: "寬屏視頻", width: 1024, height: 576, final: "3482 x 1958" },
-  { id: "1x1", ratio: "1:1", label: "1:1 正方形", note: "正方形", width: 768, height: 768, final: "2611 x 2611" },
-];
-
-const TOOL_R18_T2I_PERSON_RATIO_OPTIONS = [
-  { id: "8x15", ratio: "8:15", label: "基本比例", note: "人設_t2i 基本比例", width: 1024, height: 1920, final: "關閉" },
-  { id: "2x3", ratio: "2:3", label: "2:3 基礎豎圖", note: "人設_t2i 基礎豎圖", width: 1024, height: 1536, final: "關閉" },
-  { id: "3x4", ratio: "3:4", label: "3:4 穩定豎圖", note: "人設_t2i 穩定豎圖", width: 1024, height: 1365, final: "關閉" },
-  { id: "9x16", ratio: "9:16", label: "9:16 手機豎屏長圖", note: "人設_t2i 手機豎屏長圖", width: 1024, height: 1820, final: "關閉" },
-  { id: "3x2", ratio: "3:2", label: "3:2 橫圖基準", note: "人設_t2i 橫圖基準", width: 1536, height: 1024, final: "關閉" },
-  { id: "4x3", ratio: "4:3", label: "4:3 平衡橫圖", note: "人設_t2i 平衡橫圖", width: 1365, height: 1024, final: "關閉" },
-  { id: "16x9", ratio: "16:9", label: "16:9 寬屏視頻", note: "人設_t2i 寬屏視頻", width: 1820, height: 1024, final: "關閉" },
-  { id: "1x1", ratio: "1:1", label: "1:1 正方形", note: "人設_t2i 正方形", width: 1024, height: 1024, final: "關閉" },
-];
-
-const TOOL_R18_T2I_PERSONA_OPTIONS = [
-  { id: "0", label: "人設1撈女1金君雅", path: "Character Setting\\人设1捞女1金君雅.safetensors", personaKey: "jinjunya" },
-];
-const TOOL_R18_PERSON_T2I_RETURN_COUNT = 4;
-
-function toolR18TextToImageProfileFromPath(value: any) {
-  const text = String(value || "").replace(/\\/g, "/").toLowerCase();
-  return text.includes("person_t2i") || text.includes("人设_t2i") || text.includes("人設_t2i") ? "person_t2i" : "zit_final";
-}
-
-async function toolR18CurrentTextToImageRuntime() {
-  return { profile: "zit_final", workflowPath: "" };
-}
-function toolR18TextToImageRatioOptions(profile: string) {
-  return profile === "person_t2i" ? TOOL_R18_T2I_PERSON_RATIO_OPTIONS : TOOL_R18_T2I_ZIT_RATIO_OPTIONS;
-}
-
-function toolR18TextToImagePersonaOptions(profile: string) {
-  return TOOL_R18_T2I_PERSONA_OPTIONS;
-}
-
-function normalizeToolR18PersonaKey(value: unknown) {
-  return String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
-}
-
-async function resolveToolR18AutoPersonaOption(state: PendingToolR18TaskState | undefined, profile: string) {
-  const context = (state?.params || {}).r18_generated_post_context || {};
-  const archiveId = String(context.archiveId || "").trim();
-  if (!archiveId) return null;
-  const archive = await loadPersonaArchive(archiveId).catch(() => null);
-  const setup: any = archive?.setup || {};
-  const personaKey = normalizeToolR18PersonaKey(setup.personaKey || archive?.id || archive?.name || setup.personaName);
-  const haystack = [
-    archive?.id,
-    archive?.name,
-    setup.personaName,
-  ].map((item) => normalizeToolR18PersonaKey(item)).filter(Boolean);
-  return toolR18TextToImagePersonaOptions(profile).find((option: any) => {
-    const optionKeys = [option.personaKey, option.id, option.label, option.path].map((item) => normalizeToolR18PersonaKey(item)).filter(Boolean);
-    return optionKeys.some((key) => key && (key === personaKey || haystack.includes(key) || haystack.some((item) => item.includes(key))));
-  }) || null;
-}
-
-function toolR18T2iRatioOption(profile: string, id: string) {
-  const options = toolR18TextToImageRatioOptions(profile);
-  return options.find((item) => item.id === id) || options[0];
 }
 
 const NEW_PERSONA_POST_IMAGE_RATIO_OPTIONS = [
@@ -6850,62 +6344,11 @@ function newPersonaPostImageRatioOption(profile: string, id: string) {
   return options.find((item) => item.id === id) || null;
 }
 
-function toolR18T2iCurrentOption(state?: PendingToolR18TaskState) {
-  const profile = String(state?.params?.text_to_image_workflow_profile || "zit_final");
-  const ratio = String(state?.params?.aspect_ratio || "");
-  const options = toolR18TextToImageRatioOptions(profile);
-  return options.find((item) => item.ratio === ratio) || options[0];
-}
-
-function toolR18TextToImageFinalResolutionAvailable(profile: string) {
-  return profile !== "person_t2i";
-}
-
-function toolR18TextToImageStepTotal(profile: string) {
-  return 1 + (toolR18TextToImageFinalResolutionAvailable(profile) ? 1 : 0) + (toolR18TextToImagePersonaOptions(profile).length ? 1 : 0) + 1;
-}
-
-function toolR18TextToImageQaEnabled(params?: Record<string, any>) {
-  const value = params?.text_to_image_auto_qa_enabled;
-  if (typeof value === "boolean") return value;
-  if (typeof value === "number") return value !== 0;
-  if (typeof value === "string") return ["1", "true", "yes", "on", "enabled"].includes(value.trim().toLowerCase());
-  return false;
-}
-
-async function toolR18GlobalTextToImageQaEnabled() {
-  try {
-    const data = await toolR18JsonRequest("GET", "/api/internal/tg/runtime_config");
-    return toolR18TextToImageQaEnabled(data?.runtime_config || {});
-  } catch {
-    return false;
-  }
-}
-
-async function toolR18SetGlobalTextToImageQaEnabled(enabled: boolean) {
-  const data = await toolR18JsonRequest("POST", "/api/internal/tg/runtime_config", {
-    text_to_image_auto_qa_enabled: enabled,
-  });
-  return toolR18TextToImageQaEnabled(data?.runtime_config || { text_to_image_auto_qa_enabled: enabled });
-}
-
-function buildToolR18TextToImageRatioKeyboard(profile: string, backCallback = "toolr18_group_image", qaEnabled = false) {
-  const options = toolR18TextToImageRatioOptions(profile);
-  const rows: any[] = [];
-  for (let i = 0; i < options.length; i += 2) {
-    rows.push(options.slice(i, i + 2).map((item) => ({ text: item.label, callback_data: "toolr18_t2i_ratio_" + item.id })));
-  }
-  rows.push([{ text: qaEnabled ? "✅ QA 審查：開啟" : "☑️ QA 審查：關閉", callback_data: "toolr18_t2i_toggle_qa" }]);
-  rows.push([{ text: "◀️ 返回", callback_data: backCallback }]);
-  return rows;
-}
-
 async function freeGeneratedPostImageRatioProfile() {
-  const runtime = await toolR18CurrentTextToImageRuntime();
-  return runtime.profile || "zit_final";
+  return "default";
 }
 
-function buildFreeGeneratedPostImageRatioKeyboard(profile: string, qaEnabled = false) {
+function buildFreeGeneratedPostImageRatioKeyboard(profile: string) {
   const options = newPersonaPostImageRatioOptions(profile);
   const rows: Array<Array<{ text: string; callback_data: string }>> = [];
   for (let i = 0; i < options.length; i += 2) {
@@ -6914,12 +6357,11 @@ function buildFreeGeneratedPostImageRatioKeyboard(profile: string, qaEnabled = f
       callback_data: "genpost_ratio_" + item.id,
     })));
   }
-  rows.push([{ text: qaEnabled ? "\u2705 QA \u5BE9\u67E5\uFF1A\u958B\u555F" : "\u2611\uFE0F QA \u5BE9\u67E5\uFF1A\u95DC\u9589", callback_data: "genpost_toggle_qa" }]);
   rows.push([{ text: "\u25C0\uFE0F \u8FD4\u56DE\u751F\u6210\u6578\u91CF", callback_data: "genpost_count_back" }]);
   return { inline_keyboard: rows };
 }
 
-function buildPostImageRatioKeyboard(profile: string, backCallback: string, qaEnabled = false) {
+function buildPostImageRatioKeyboard(profile: string, backCallback: string) {
   const options = newPersonaPostImageRatioOptions(profile);
   const rows: Array<Array<{ text: string; callback_data: string }>> = [];
   for (let i = 0; i < options.length; i += 2) {
@@ -6928,7 +6370,6 @@ function buildPostImageRatioKeyboard(profile: string, backCallback: string, qaEn
       callback_data: "post_img_ratio_" + item.id,
     })));
   }
-  rows.push([{ text: qaEnabled ? "\u2705 QA \u5BE9\u67E5\uFF1A\u958B\u555F" : "\u2611\uFE0F QA \u5BE9\u67E5\uFF1A\u95DC\u9589", callback_data: "genpost_toggle_qa" }]);
   rows.push([{ text: "\u25C0\uFE0F \u8FD4\u56DE\u63A8\u6587\u5217\u8868", callback_data: backCallback }]);
   return { inline_keyboard: rows };
 }
@@ -6936,7 +6377,6 @@ function buildPostImageRatioKeyboard(profile: string, backCallback: string, qaEn
 async function sendPostImageRatioPicker(bot: TelegramBot, chatId: number, msgId: number | undefined, action: PendingPostImageRatioAction) {
   pendingPostImageRatioActions.set(chatId, { ...action, createdAt: Date.now() });
   const profile = await freeGeneratedPostImageRatioProfile();
-  const qaEnabled = await toolR18GlobalTextToImageQaEnabled();
   const archive = await loadPersonaArchive(action.archiveId).catch(() => null);
   const post = archive?.posts.find((item) => item.id === action.postId);
   const displayIndex = action.displayIndex || (post ? (post.orderIndex ?? archive?.posts.findIndex((item) => item.id === post.id) ?? 0) + 1 : 1);
@@ -6946,7 +6386,7 @@ async function sendPostImageRatioPicker(bot: TelegramBot, chatId: number, msgId:
     `\u63A8\u6587\uFF1A\u7B2C ${displayIndex} \u7BC7`,
     `\u76EE\u6A19\uFF1A4 \u5F35\u5019\u9078\u5716`,
   ].join("\n"), {
-    reply_markup: buildPostImageRatioKeyboard(profile, buildStoredPostsPageCallback(action.archiveId, 0, action.groupContentType), qaEnabled),
+    reply_markup: buildPostImageRatioKeyboard(profile, buildStoredPostsPageCallback(action.archiveId, 0, action.groupContentType)),
   });
 }
 
@@ -6956,7 +6396,6 @@ function shouldSelectFreeGeneratedPostImageRatio(state: PendingGeneratePostState
 
 async function sendFreeGeneratedPostImageRatioPicker(bot: TelegramBot, chatId: number, msgId: number | undefined, state: PendingGeneratePostState) {
   const profile = await freeGeneratedPostImageRatioProfile();
-  const qaEnabled = await toolR18GlobalTextToImageQaEnabled();
   const nextState: PendingGeneratePostState = { ...state, stage: "await_ratio" };
   setPendingGeneratePost(chatId, nextState);
   await safeEditOrSend(bot, chatId, msgId, [
@@ -6970,7 +6409,7 @@ async function sendFreeGeneratedPostImageRatioPicker(bot: TelegramBot, chatId: n
     "\u9078\u5B8C\u5F8C\u518D\u767C\u9001\u672C\u6B21\u751F\u6210\u63D0\u793A\u8A5E\u3002",
   ].join(String.fromCharCode(10)), {
     parse_mode: "Markdown",
-    reply_markup: buildFreeGeneratedPostImageRatioKeyboard(profile, qaEnabled),
+    reply_markup: buildFreeGeneratedPostImageRatioKeyboard(profile),
   });
 }
 
@@ -6988,428 +6427,19 @@ async function sendGeneratePostPromptInputStep(bot: TelegramBot, chatId: number,
   });
 }
 
-function buildToolR18TextToImageResolutionKeyboard() {
-  return [
-    [{ text: "使用基礎分辨率", callback_data: "toolr18_t2i_final_off" }],
-    [{ text: "開啟最終分辨率", callback_data: "toolr18_t2i_final_on" }],
-    [{ text: "◀️ 返回", callback_data: "toolr18_task_text_to_image" }],
-  ];
-}
-
-function buildToolR18TextToImagePersonaKeyboard(profile: string) {
-  const rows = toolR18TextToImagePersonaOptions(profile).map((item) => [{ text: item.label, callback_data: "toolr18_t2i_persona_" + item.id }]);
-  rows.push([{ text: "不使用人設", callback_data: "toolr18_t2i_persona_off" }]);
-  rows.push([{ text: "◀️ 返回", callback_data: toolR18TextToImageFinalResolutionAvailable(profile) ? "toolr18_t2i_back_resolution" : "toolr18_task_text_to_image" }]);
-  return rows;
-}
-
-function buildToolR18TextToImagePromptModeKeyboard(backCallback = "toolr18_t2i_back_before_prompt") {
-  return [
-    [{ text: "AI 自由發揮", callback_data: "toolr18_t2i_prompt_free" }],
-    [{ text: "讓 Grok 生成提示詞", callback_data: "toolr18_t2i_prompt_grok" }],
-    [{ text: "輸入自定義提示詞提交", callback_data: "toolr18_t2i_prompt_custom" }],
-    [{ text: "◀️ 返回", callback_data: backCallback }],
-  ];
-}
-
-async function sendToolR18TextToImageRatioStep(bot: TelegramBot, chatId: number, messageId?: number, seedParams: Record<string, any> = {}) {
-  const runtime = await toolR18CurrentTextToImageRuntime();
-  const profile = runtime.profile;
-  const params = { ...seedParams, text_to_image_auto_qa_enabled: toolR18TextToImageQaEnabled(seedParams), text_to_image_workflow_profile: profile, text_to_image_workflow_path: runtime.workflowPath };
-  pendingToolR18Tasks.set(chatId, {
-    stage: "await_task_input",
-    taskType: "text_to_image",
-    taskLabel: "文生圖",
-    params,
-  });
-  await safeEditOrSend(bot, chatId, messageId, ["R18 / 文生圖設定", "目前步驟：1/" + toolR18TextToImageStepTotal(profile) + " 請選擇圖像比例"].join(String.fromCharCode(10)), {
-    reply_markup: { inline_keyboard: buildToolR18TextToImageRatioKeyboard(profile, toolR18FlowCancelCallback(params, "toolr18_group_image"), toolR18TextToImageQaEnabled(params)) },
-  });
-}
-
-async function sendToolR18TextToImageResolutionStep(bot: TelegramBot, chatId: number, messageId: number | undefined, optionId?: string) {
-  const previous = pendingToolR18Tasks.get(chatId);
-  const runtime = previous?.params?.text_to_image_workflow_profile ? { profile: String(previous.params.text_to_image_workflow_profile), workflowPath: String(previous.params.text_to_image_workflow_path || "") } : await toolR18CurrentTextToImageRuntime();
-  const profile = runtime.profile;
-  const option = optionId ? toolR18T2iRatioOption(profile, optionId) : toolR18T2iCurrentOption(previous);
-  const outputCount = profile === "person_t2i" ? TOOL_R18_PERSON_T2I_RETURN_COUNT : 1;
-  const baseParams = {
-    ...(previous?.params || {}),
-    aspect_ratio: option.ratio,
-    width: option.width,
-    height: option.height,
-    text_to_image_workflow_profile: profile,
-    text_to_image_workflow_path: runtime.workflowPath,
-    batch_size: outputCount,
-    telegram_return_count: outputCount,
-    text_to_image_return_count: outputCount,
-    text_to_image_qa_target_count: outputCount,
-    text_to_image_auto_qa_enabled: toolR18TextToImageQaEnabled(previous?.params),
-    text_to_image_auto_qa_max_attempts: outputCount,
-    target_count: outputCount,
-    final_resolution_available: toolR18TextToImageFinalResolutionAvailable(profile),
-  };
-  pendingToolR18Tasks.set(chatId, { stage: "await_task_input", taskType: "text_to_image", taskLabel: "文生圖", params: baseParams });
-  if (!toolR18TextToImageFinalResolutionAvailable(profile)) {
-    await sendToolR18TextToImagePersonaStep(bot, chatId, messageId);
-    return;
-  }
-  await safeEditOrSend(bot, chatId, messageId, ["R18 / 文生圖設定", "目前步驟：2/" + toolR18TextToImageStepTotal(profile) + " 請選擇最終分辨率", "畫面比例：" + option.ratio + "（" + option.note + "）", "基礎分辨率：" + option.width + " x " + option.height, "最終分辨率：" + option.final].join(String.fromCharCode(10)), {
-    reply_markup: { inline_keyboard: buildToolR18TextToImageResolutionKeyboard() },
-  });
-}
-
-async function sendToolR18TextToImagePersonaStep(bot: TelegramBot, chatId: number, messageId: number | undefined) {
-  const state = pendingToolR18Tasks.get(chatId);
-  const profile = String(state?.params?.text_to_image_workflow_profile || "zit_final");
-  const option = toolR18T2iCurrentOption(state);
-  const stepNo = 1 + (toolR18TextToImageFinalResolutionAvailable(profile) ? 1 : 0) + 1;
-  const personaOptions = toolR18TextToImagePersonaOptions(profile);
-  if (!personaOptions.length) {
-    await sendToolR18TextToImagePromptModeStep(bot, chatId, messageId);
-    return;
-  }
-  await safeEditOrSend(bot, chatId, messageId, ["R18 / 文生圖設定", "目前步驟：" + stepNo + "/" + toolR18TextToImageStepTotal(profile) + " 請選擇人設 LoRA", "畫面比例：" + option.ratio, "基礎分辨率：" + option.width + " x " + option.height].join(String.fromCharCode(10)), {
-    reply_markup: { inline_keyboard: buildToolR18TextToImagePersonaKeyboard(profile) },
-  });
-}
-
-async function sendToolR18TextToImagePromptModeStep(bot: TelegramBot, chatId: number, messageId: number | undefined, finalResolutionEnabled?: boolean) {
-  const state = pendingToolR18Tasks.get(chatId);
-  const profile = String(state?.params?.text_to_image_workflow_profile || "zit_final");
-  const option = toolR18T2iCurrentOption(state);
-  const nextParams = { ...(state?.params || {}) };
-  if (typeof finalResolutionEnabled === "boolean") nextParams.final_resolution_enabled = finalResolutionEnabled;
-  const nextState: PendingToolR18TaskState = {
-    ...(state || { stage: "await_task_input", taskType: "text_to_image", taskLabel: "文生圖" }),
-    stage: "await_task_input",
-    taskType: "text_to_image",
-    taskLabel: "文生圖",
-    params: nextParams,
-  };
-  pendingToolR18Tasks.set(chatId, nextState);
-  const stepNo = toolR18TextToImageStepTotal(profile);
-  await safeEditOrSend(bot, chatId, messageId, ["R18 / 文生圖設定", "目前步驟：" + stepNo + "/" + stepNo + " 請選擇提示詞方式", "畫面比例：" + option.ratio, "基礎分辨率：" + option.width + " x " + option.height, "最終分辨率：" + (nextParams.final_resolution_enabled ? "開啟，預計 " + option.final : "關閉/不可用")].filter(Boolean).join(String.fromCharCode(10)), {
-    reply_markup: { inline_keyboard: buildToolR18TextToImagePromptModeKeyboard("toolr18_t2i_back_before_prompt") },
-  });
-}
-
-async function sendToolR18TextToImagePromptStep(bot: TelegramBot, chatId: number, messageId: number | undefined, useGrok: boolean) {
-  const state = pendingToolR18Tasks.get(chatId) || { stage: "await_task_input", taskType: "text_to_image", taskLabel: "文生圖" } as PendingToolR18TaskState;
-  const params = { ...(state.params || {}), tg_use_llm_prompt: useGrok, tg_llm_prompt_enhanced: useGrok, tg_latest_prompt_only: useGrok };
-  pendingToolR18Tasks.set(chatId, { ...state, stage: "await_task_input", taskType: "text_to_image", taskLabel: "文生圖", params });
-  await safeEditOrSend(bot, chatId, messageId, ["R18 / 文生圖", "目前步驟：輸入圖片需求或上傳參考圖", "", useGrok ? "將由 Grok 生成最終提示詞。" : "將按你輸入的自定義提示詞提交。", "需要參考圖時，請把圖片作為下一條訊息發送，並在文字裡寫要求。"].join(String.fromCharCode(10)), {
-    reply_markup: { inline_keyboard: [[{ text: "取消", callback_data: "toolr18_t2i_back_before_prompt" }]] },
-  });
-}
-
-function buildToolR18PromptReviewKeyboard(taskType?: ToolR18TaskType, params?: Record<string, any>) {
-  let backCallback = "toolr18_t2i_back_before_prompt";
-  if (taskType === "video_i2v") backCallback = "toolr18_i2v_back_prompt_mode";
-  else if (taskType === "single_image_edit" || taskType === "get_nano_banana") backCallback = "toolr18_imgedit_back_prompt_mode";
-  else if (taskType === "face_swap") backCallback = "toolr18_faceswap_back_prompt_mode";
-  const submitText = taskType === "text_to_image" ? "使用這個提示詞生成" : "使用這個提示詞提交";
-  return [
-    [{ text: submitText, callback_data: "toolr18_prompt_submit" }],
-    [{ text: "輸入自定義提示詞提交", callback_data: "toolr18_prompt_custom" }],
-    [{ text: "繼續讓 Grok 調整", callback_data: "toolr18_prompt_adjust" }, { text: "重新生成提示詞", callback_data: "toolr18_prompt_regen" }],
-    [{ text: "◀️ 返回", callback_data: backCallback }],
-  ];
-}
-
-function toolR18PromptBackCallback(taskType?: ToolR18TaskType) {
-  if (taskType === "video_i2v") return "toolr18_i2v_back_prompt_mode";
-  if (taskType === "single_image_edit" || taskType === "get_nano_banana") return "toolr18_imgedit_back_prompt_mode";
-  if (taskType === "face_swap") return "toolr18_faceswap_back_prompt_mode";
-  return "toolr18_t2i_back_before_prompt";
-}
-
-function buildToolR18PromptFailureKeyboard(state: PendingToolR18TaskState) {
-  return [
-    [{ text: "🔁 重試生成提示詞", callback_data: "toolr18_prompt_regen" }],
-    [{ text: "◀️ 返回上一步", callback_data: toolR18PromptBackCallback(state.taskType) }],
-  ];
-}
-
-function toolR18TextToImageInputGuidance(state: PendingToolR18TaskState) {
-  const params = state.params || {};
-  const profile = String(params.text_to_image_workflow_profile || "zit_final");
-  if (!String(params.aspect_ratio || "").trim()) {
-    return {
-      text: "請先點擊按鈕選擇圖像比例，不要直接發送文字或數字。",
-      keyboard: buildToolR18TextToImageRatioKeyboard(profile, toolR18FlowCancelCallback(params, "toolr18_group_image"), toolR18TextToImageQaEnabled(params)),
-    };
-  }
-  if (params.final_resolution_available && typeof params.final_resolution_enabled !== "boolean") {
-    return {
-      text: "請先點擊按鈕選擇是否開啟最終分辨率。",
-      keyboard: buildToolR18TextToImageResolutionKeyboard(),
-    };
-  }
-  if (toolR18TextToImagePersonaOptions(profile).length && params.persona_selected !== true) {
-    return {
-      text: "請先點擊按鈕選擇人設 LoRA，或選擇「不使用人設」。",
-      keyboard: buildToolR18TextToImagePersonaKeyboard(profile),
-    };
-  }
-  if (typeof params.tg_use_llm_prompt !== "boolean") {
-    return {
-      text: "請先點擊按鈕選擇提示詞方式：AI 自由發揮、讓 Grok 生成提示詞，或輸入自定義提示詞提交。",
-      keyboard: buildToolR18TextToImagePromptModeKeyboard("toolr18_t2i_back_before_prompt"),
-    };
-  }
-  return null;
-}
-
-function toolR18PendingInputGuidance(state: PendingToolR18TaskState, hasMedia: boolean) {
-  if (state.taskType === "text_to_image" && state.stage === "await_task_input") {
-    return toolR18TextToImageInputGuidance(state);
-  }
-  if (state.stage === "video_i2v_resolution") {
-    return { text: "請先點擊按鈕選擇視頻分辨率。", keyboard: buildToolR18VideoI2vResolutionKeyboard() };
-  }
-  if (state.stage === "video_i2v_prompt_mode") {
-    return { text: "請先點擊按鈕選擇提示詞方式：AI 自由發揮、讓 Grok 生成提示詞，或輸入自定義提示詞提交。", keyboard: buildToolR18VideoI2vPromptModeKeyboard() };
-  }
-  if (state.stage === "image_edit_prompt_mode") {
-    const meta = toolR18ImageEditMeta(state.taskType);
-    return { text: "請先點擊按鈕選擇圖片編輯提示詞方式。", keyboard: buildToolR18ImageEditPromptModeKeyboard(meta) };
-  }
-  if (state.stage === "face_swap_prompt_mode") {
-    return { text: "請先點擊按鈕選擇人物換臉提示詞方式。", keyboard: buildToolR18FaceSwapPromptModeKeyboard() };
-  }
-  if (state.stage === "video_i2v_audio" && !hasMedia) {
-    return { text: "請上傳音頻檔案，或點擊「跳過音頻」。", keyboard: buildToolR18VideoI2vAudioKeyboard(toolR18VideoI2vParams(state)) };
-  }
-  return null;
-}
-
-function buildToolR18PreviewParams(state: PendingToolR18TaskState, requestText: string) {
-  const files = state.files || [];
-  const images = files.filter((item) => item.kind === "image").map((item) => item.path);
-  const base = { ...buildToolR18SubmitParams(state.taskType || "text_to_image", requestText, files), ...(state.params || {}) };
-  if (state.taskType === "text_to_image") {
-    const finalText = String(requestText || "").trim();
-    const referenceImage = images[0] || String(base.input_image_local_path || base.image_local_path || "");
-    const generatedPostContext = (state.params || {}).r18_generated_post_context || {};
-    const generatedPostContent = String(generatedPostContext.content || "").trim();
-    const combinedInstruction = [
-      generatedPostContent ? "Generated tweet content that the image must match: " + generatedPostContent : "",
-      finalText ? "User image request: " + finalText : "",
-    ].filter(Boolean).join(String.fromCharCode(10)) || finalText;
-    const generationContext = [
-      "Aspect ratio: " + String(base.aspect_ratio || ""),
-      "base resolution: " + String(base.width || "") + " x " + String(base.height || ""),
-      "final resolution: " + (base.final_resolution_enabled ? "enabled" : "disabled, use base resolution"),
-      "persona LoRA: " + (base.persona_enabled ? "enabled" : "disabled"),
-      generatedPostContent ? "The image is for an already generated tweet; preserve the tweet's topic, persona, mood, and publishing intent while applying the user's visual request." : "",
-    ].filter(Boolean).join("; ") + "." + (referenceImage ? " The user uploaded a reference image. First identify the subject, composition, scene, clothing, pose, style, and visible details, then combine them with the text request to write the final prompt." : "");
-    return {
-      ...base,
-      prompt: finalText,
-      prompt_text: finalText,
-      message: finalText,
-      tg_use_llm_prompt: true,
-      tg_latest_prompt_only: true,
-      tg_preserve_original_prompt: false,
-      tg_original_user_request: combinedInstruction,
-      tg_generation_context: generationContext,
-      tg_user_instruction: combinedInstruction,
-      ...(referenceImage ? { input_image_local_path: referenceImage, image_local_path: referenceImage } : {}),
-    };
-  }
-  if (state.taskType === "video_i2v") {
-    const finalText = String(requestText || "").trim();
-    const referenceImage = String((state.params || {}).image_local_path || base.image_local_path || "").trim();
-    const instruction = "User image-to-video request: " + finalText + ". Treat the reference image as the first frame and opening state; preserve its subject, pose, composition, scene, lighting, clothing/body state, and camera framing while animating the requested process.";
-    return {
-      ...base,
-      ...(state.params || {}),
-      image_local_path: referenceImage,
-      prompt: finalText,
-      prompt_text: finalText,
-      message: finalText,
-      tg_use_llm_prompt: true,
-      tg_latest_prompt_only: true,
-      tg_original_user_request: finalText,
-      tg_user_instruction: instruction,
-    };
-  }
-  return {
-    ...base,
-    tg_use_llm_prompt: true,
-    tg_original_user_request: String(requestText || state.originalRequest || ""),
-    tg_user_instruction: String(requestText || base.tg_user_instruction || ""),
-  };
-}
-
-async function sendToolR18PromptPreview(bot: TelegramBot, chatId: number, state: PendingToolR18TaskState, requestText: string) {
-  if (!state.taskType) throw new Error("R18 任務類型缺失");
-  const previewParams = { ...buildToolR18PreviewParams(state, requestText), tg_source_bot: "tool_r18" };
-  const waitMessage = await bot.sendMessage(chatId, "正在讓 Grok 生成提示詞...");
-  try {
-    const result = await toolR18JsonRequest("POST", "/api/internal/tg/prompt_preview", { task_type: state.taskType, tg_chat_id: chatId, params: previewParams });
-    const promptText = String(result?.prompt_text || "").trim();
-    if (!promptText) throw new Error("Grok 未返回可用提示詞，請重新生成。");
-    const nextState: PendingToolR18TaskState = {
-      ...state,
-      stage: "await_prompt_review",
-      text: requestText,
-      originalRequest: state.originalRequest || requestText,
-      promptText,
-      selectedModel: String(result?.selected_model || "").trim(),
-      params: {
-        ...previewParams,
-        ...(result?.payload || {}),
-        tg_prompt_confirmed: false,
-      },
-    };
-    pendingToolR18Tasks.set(chatId, nextState);
-    const lines = [
-      "R18 / " + state.taskLabel,
-      "Grok 已生成提示詞：",
-      "",
-      promptText,
-      nextState.selectedModel ? String.fromCharCode(10) + "模型：" + nextState.selectedModel : "",
-      "",
-      "請確認提示詞是否合適，確認後再提交 R18 任務。",
-    ].filter(Boolean);
-    await bot.sendMessage(chatId, lines.join(String.fromCharCode(10)), { reply_markup: { inline_keyboard: buildToolR18PromptReviewKeyboard(state.taskType, nextState.params) } });
-  } catch (error: any) {
-    const failedState: PendingToolR18TaskState = {
-      ...state,
-      stage: state.stage || "await_task_input",
-      text: requestText,
-      originalRequest: state.originalRequest || requestText,
-    };
-    pendingToolR18Tasks.set(chatId, failedState);
-    await bot.sendMessage(chatId, [
-      "❌ Grok 生成提示詞失敗。",
-      "原因：" + formatUserFacingError(error, "請稍後重試，或返回上一步改用自定義提示詞。"),
-      "",
-      "目前流程已保留，可以重試或返回上一步，不需要從頭開始。",
-    ].join(String.fromCharCode(10)), {
-      reply_markup: { inline_keyboard: buildToolR18PromptFailureKeyboard(failedState) },
-    });
-  } finally {
-    bot.deleteMessage(chatId, waitMessage.message_id).catch(() => undefined);
-  }
-}
-
-
-function scheduleToolR18GeneratedPostAttachment(bot: TelegramBot, chatId: number, taskId: string, params: Record<string, any>, finalPrompt: string) {
-  const context = (params || {}).r18_generated_post_context || {};
-  const archiveId = String(context.archiveId || "").trim();
-  const postId = String(context.postId || "").trim();
-  const content = String(context.content || "").trim();
-  if (!taskId || !archiveId || !content) return false;
-  void (async () => {
-    try {
-      const waited = await waitForToolR18GeneratedTaskDownloadPath(chatId, taskId);
-      const persisted = await attachGeneratedImageToArchivePost({
-        archiveId,
-        postId: postId || undefined,
-        content,
-        imageUrl: waited.downloadPath,
-        prompt: finalPrompt,
-      });
-      const lines = persisted
-        ? ["\u2705 R18 \u5716\u7247\u5DF2\u5B8C\u6210\u4E26\u5BEB\u5165\u63A8\u6587\u3002", "\u4EFB\u52D9ID\uFF1A" + taskId, "\u63A8\u6587\uFF1A" + content.slice(0, 500)]
-        : ["\u26A0\uFE0F R18 \u5716\u7247\u5DF2\u5B8C\u6210\uFF0C\u4F46\u5BEB\u5165\u63A8\u6587\u5931\u6557\u3002", "\u4EFB\u52D9ID\uFF1A" + taskId];
-      await bot.sendMessage(chatId, lines.join(String.fromCharCode(10)), {
-        reply_markup: { inline_keyboard: [[{ text: "\uD83D\uDCDD \u67E5\u770B\u63A8\u6587\u5217\u8868", callback_data: "posts_" + archiveId }], [{ text: "\u7E7C\u7E8CR18", callback_data: "toolr18_entry" }, { text: "\u5DE5\u4F5C\u81FA\u72C0\u614B", callback_data: "toolr18_status" }]] },
-      });
-    } catch (error: any) {
-      await bot.sendMessage(chatId, ["\u26A0\uFE0F R18 \u5716\u7247\u4EFB\u52D9\u5DF2\u63D0\u4EA4\uFF0C\u4F46\u5BEB\u5165\u63A8\u6587\u672A\u5B8C\u6210\u3002", "\u4EFB\u52D9ID\uFF1A" + taskId, "\u539F\u56E0\uFF1A" + formatUserFacingError(error, "\u8ACB\u7A0D\u5F8C\u5728\u4EFB\u52D9\u8A73\u60C5\u67E5\u770B\u7D50\u679C\u3002")].join(String.fromCharCode(10)), {
-        reply_markup: { inline_keyboard: [[{ text: "\u67E5\u770B\u4EFB\u52D9", callback_data: "toolr18_detail_" + taskId }], [{ text: "\uD83D\uDCDD \u67E5\u770B\u63A8\u6587\u5217\u8868", callback_data: "posts_" + archiveId }]] },
-      });
-    }
-  })();
-  return true;
-}
-
-async function submitToolR18PromptReview(bot: TelegramBot, chatId: number, state: PendingToolR18TaskState, promptText?: string) {
-  if (!state.taskType) throw new Error("R18 \u4EFB\u52D9\u985E\u578B\u7F3A\u5931");
-  const finalPrompt = String(promptText || state.promptText || state.text || "").trim();
-  if (!finalPrompt) throw new Error("\u9084\u6C92\u6709\u53EF\u63D0\u4EA4\u7684\u63D0\u793A\u8A5E\u3002");
-  const existingParams = state.params || {};
-  const params = {
-    ...existingParams,
-    prompt: finalPrompt,
-    prompt_text: finalPrompt,
-    message: finalPrompt,
-    tg_llm_rewritten_prompt: finalPrompt,
-    tg_prompt_confirmed: true,
-    tg_use_llm_prompt: false,
-    tg_original_user_request: String(existingParams.tg_original_user_request || state.originalRequest || state.text || finalPrompt),
-    tg_user_instruction: finalPrompt,
-    tg_submitted_prompt: finalPrompt,
-  };
-  const result = await toolR18JsonRequest("POST", "/api/internal/tg/submit", { task_type: state.taskType, tg_chat_id: chatId, params });
-  pendingToolR18Tasks.delete(chatId);
-  const taskId = String(result.id || "").trim();
-  const linkedToGeneratedPost = state.taskType === "text_to_image" && scheduleToolR18GeneratedPostAttachment(bot, chatId, taskId, params, finalPrompt);
-  const submittedKeyboard = buildToolR18SubmittedKeyboard(chatId, taskId, params);
-  await bot.sendMessage(chatId, ["\u2705 R18 \u4EFB\u52D9\u5DF2\u63D0\u4EA4", "\u985E\u578B\uFF1A" + state.taskLabel, "ID\uFF1A" + taskId, linkedToGeneratedPost ? "\u6B63\u5728\u7B49\u5F85\u5716\u7247\u5B8C\u6210\u4E26\u5BEB\u5165\u63A8\u6587\u3002" : ""].filter(Boolean).join(String.fromCharCode(10)), {
-    reply_markup: { inline_keyboard: submittedKeyboard },
-  });
-}
-
-function guessToolR18FileKind(fileName: string, mimeType?: string) {
-  const lower = (String(fileName || "") + " " + String(mimeType || "")).toLowerCase();
-  if (lower.includes("video/") || [".mp4", ".mov", ".webm", ".mkv", ".avi"].some((ext) => lower.includes(ext))) return "video";
-  if (lower.includes("audio/") || [".mp3", ".wav", ".m4a", ".aac", ".ogg"].some((ext) => lower.includes(ext))) return "audio";
-  return "image";
-}
-
-async function downloadToolR18TelegramMedia(bot: TelegramBot, msg: TelegramBot.Message, media: any) {
-  const chatId = msg.chat.id;
-  const fileId = String(media?.file_id || "");
-  if (!fileId) throw new Error("未找到 Telegram 檔案 ID");
-  const originalName = String(media?.file_name || fileId);
-  const ext = path.extname(originalName) || (media?.mime_type?.startsWith("video/") ? ".mp4" : media?.mime_type?.startsWith("audio/") ? ".mp3" : ".jpg");
-  const safeBase = String(Date.now()) + "_" + crypto.randomBytes(4).toString("hex") + ext;
-  const hostDir = path.join(TOOL_R18_UPLOAD_HOST_DIR, String(chatId));
-  fs.mkdirSync(hostDir, { recursive: true });
-  const hostPath = path.join(hostDir, safeBase);
-  const tmpDir = path.join(TOOL_R18_UPLOAD_HOST_DIR, ".telegram_tmp", String(chatId));
-  fs.mkdirSync(tmpDir, { recursive: true });
-  let downloadedPath = "";
-  try {
-    downloadedPath = await bot.downloadFile(fileId, tmpDir);
-    fs.copyFileSync(downloadedPath, hostPath);
-  } catch (error: any) {
-    const detail = String(error?.message || error || "").trim();
-    throw new Error("下載 Telegram 素材失敗，請確認本地 Bot 代理可用後重新上傳。原因：" + (detail || "Telegram 文件下載失敗"));
-  } finally {
-    if (downloadedPath) fs.rmSync(downloadedPath, { force: true });
-  }
-  const containerPath = path.posix.join(TOOL_R18_UPLOAD_CONTAINER_DIR, String(chatId), safeBase);
-  return { name: originalName || safeBase, path: containerPath, hostPath, kind: guessToolR18FileKind(originalName || safeBase, media?.mime_type) };
-}
-
 function buildToolR18SubmitParams(taskType: ToolR18TaskType, text: string, files: Array<{ path: string; kind: string }>) {
   const images = files.filter((item) => item.kind === "image").map((item) => item.path);
   const videos = files.filter((item) => item.kind === "video").map((item) => item.path);
-  const audios = files.filter((item) => item.kind === "audio").map((item) => item.path);
   const params: Record<string, any> = { message: text, prompt: text, prompt_text: text, tg_user_instruction: text, duration_seconds: 15 };
-  if (taskType === "text_to_image") return { prompt: text, prompt_text: text, message: text, tg_user_instruction: text, tg_original_user_request: text, ...(images[0] ? { input_image_local_path: images[0], image_local_path: images[0] } : {}) };
   if (taskType === "get_gemini") return { user_input: text, message: text, image_paths: images, video_paths: videos };
-  if (taskType === "r18_multi_image") return { user_input: text, message: text, image_paths: images, video_paths: videos };
-  if (taskType === "r18_image_replace") return { input_image_local_path: images[0], reference_image_local_path: images[1] || images[0], prompt: text, message: text, tg_user_instruction: text };
   if (taskType === "image_generate") { params.primary_image_local_path = images[0]; if (images[1]) params.secondary_image_local_path = images[1]; }
-  else if (taskType === "video_i2v") { params.image_local_path = images[0]; if (audios[0]) params.audio_local_path = audios[0]; }
-  else if (taskType === "single_image_edit") { params.input_image_local_path = images[0]; }
-  else if (taskType === "get_nano_banana") { params.input_image_local_path = images[0]; params.reference_image_local_path = images[1]; }
-  else if (taskType === "face_swap") { params.target_image_local_path = images[0]; params.source_image_local_path = images[1]; }
   return params;
 }
 
 function toolR18MinimumFileCount(taskType?: ToolR18TaskType) {
   if (!taskType) return 0;
-  if (["text_to_image", "r18_config", "r18_rerun_latest", "r18_text_to_image_reroll", "r18_text_to_image_continue", "r18_image_edit_continue", "r18_image_edit_rerun", "r18_face_swap_upscale", "r18_face_swap_rerun", "r18_set_script"].includes(taskType)) return 0;
-  if (["single_image_edit", "video_i2v", "get_gemini", "r18_image_replace", "r18_multi_image"].includes(taskType)) return 1;
-  if (["image_generate", "get_nano_banana", "face_swap"].includes(taskType)) return 2;
+  if (["r18_config", "r18_rerun_latest", "r18_set_script"].includes(taskType)) return 0;
+  if (taskType === "get_gemini") return 1;
   return 1;
 }
 
@@ -7439,15 +6469,7 @@ function buildToolR18PendingKeyboard(state: PendingToolR18TaskState) {
 }
 
 function buildToolR18SubmitFailureKeyboard(state: PendingToolR18TaskState) {
-  const rows = buildToolR18PendingKeyboard(state);
-  if (toolR18RequiresPromptPreview(state.taskType)) {
-    rows.unshift([{ text: "◀️ 返回上一步", callback_data: toolR18PromptBackCallback(state.taskType) }]);
-  }
-  return rows;
-}
-
-function toolR18RequiresPromptPreview(taskType?: ToolR18TaskType) {
-  return ["text_to_image", "single_image_edit", "get_nano_banana", "face_swap", "video_i2v"].includes(String(taskType || ""));
+  return buildToolR18PendingKeyboard(state);
 }
 
 async function submitPendingToolR18Task(bot: TelegramBot, chatId: number, state: PendingToolR18TaskState) {
@@ -7464,7 +6486,7 @@ async function submitPendingToolR18Task(bot: TelegramBot, chatId: number, state:
   if (state.taskType === "r18_config") {
     const data = await toolR18JsonRequest("GET", "/api/internal/tg/runtime_config");
     const cfg = data?.runtime_config || {};
-    const keys = ["image_generate_mode_default", "text_to_image_workflow_profile"];
+    const keys = ["image_generate_mode_default"];
     const lines = ["R18 後臺工作流配置摘要", ...keys.map((key) => key + ": " + String(cfg[key] ?? "").slice(0, 120))];
     pendingToolR18Tasks.delete(chatId);
     await bot.sendMessage(chatId, lines.join(String.fromCharCode(10)), { reply_markup: { inline_keyboard: [[toolR18ContextBackButton(chatId, state.params)]] } });
@@ -7475,13 +6497,6 @@ async function submitPendingToolR18Task(bot: TelegramBot, chatId: number, state:
     await sendToolR18Tasks(bot, chatId);
     return;
   }
-  if (["r18_text_to_image_reroll", "r18_text_to_image_continue"].includes(state.taskType)) {
-    await submitToolR18ImageRerunOrContinue(bot, chatId, state, undefined);
-    return;
-  }
-  if (["r18_image_edit_continue", "r18_image_edit_rerun", "r18_face_swap_upscale", "r18_face_swap_rerun"].includes(state.taskType)) {
-    throw new Error("這個入口尚未接上最近任務上下文，請先從最近任務重新提交或重新選擇功能。");
-  }
   if (state.taskType === "r18_set_script") {
     const text = String(state.text || "").trim();
     if (!text) throw new Error("請發送要保存的預設文案。");
@@ -7489,37 +6504,19 @@ async function submitPendingToolR18Task(bot: TelegramBot, chatId: number, state:
     await bot.sendMessage(chatId, "已收到測試預設文案。注意：Tool_R18 測試入口不會改寫 R18 生產容器配置。", { reply_markup: { inline_keyboard: [[{ text: "◀️ 返回", callback_data: "toolr18_entry" }]] } });
     return;
   }
-  if (state.stage === "await_prompt_review") {
-    await submitToolR18PromptReview(bot, chatId, state);
-    return;
-  }
   const minFiles = toolR18MinimumFileCount(state.taskType);
   if ((state.files || []).length < minFiles) throw new Error("該任務還需要更多素材。目前 " + (state.files || []).length + " 個，至少需要 " + minFiles + " 個。");
   const text = String(state.text || "").trim();
   if (!text && state.taskType !== "get_gemini") throw new Error("請先發送文字要求。");
-  if (toolR18RequiresPromptPreview(state.taskType) && state.params?.tg_prompt_confirmed !== true && state.params?.tg_use_llm_prompt !== false) {
-    await sendToolR18PromptPreview(bot, chatId, state, text);
-    return;
-  }
   const params = { ...buildToolR18SubmitParams(state.taskType, text, state.files || []), ...(state.params || {}) };
   const result = await toolR18JsonRequest("POST", "/api/internal/tg/submit", { task_type: state.taskType, tg_chat_id: chatId, params });
   pendingToolR18Tasks.delete(chatId);
   const taskId = String(result.id || "").trim();
-  const finalPrompt = String(params.prompt_text || params.prompt || params.message || text || "");
-  const linkedToGeneratedPost = state.taskType === "text_to_image" && scheduleToolR18GeneratedPostAttachment(bot, chatId, taskId, params, finalPrompt);
   const submittedKeyboard = buildToolR18SubmittedKeyboard(chatId, taskId, params);
-  await bot.sendMessage(chatId, ["\u2705 R18 \u4EFB\u52D9\u5DF2\u63D0\u4EA4", "\u985E\u578B\uFF1A" + state.taskLabel, "ID\uFF1A" + taskId, linkedToGeneratedPost ? "\u6B63\u5728\u7B49\u5F85\u5716\u7247\u5B8C\u6210\u4E26\u5BEB\u5165\u63A8\u6587\u3002" : ""].filter(Boolean).join(String.fromCharCode(10)), { reply_markup: { inline_keyboard: submittedKeyboard } });
+  await bot.sendMessage(chatId, ["\u2705 R18 \u4EFB\u52D9\u5DF2\u63D0\u4EA4", "\u985E\u578B\uFF1A" + state.taskLabel, "ID\uFF1A" + taskId].join(String.fromCharCode(10)), { reply_markup: { inline_keyboard: submittedKeyboard } });
 }
 async function handlePendingToolR18Input(bot: TelegramBot, msg: TelegramBot.Message, state: PendingToolR18TaskState, media: any, text: string) {
   const chatId = msg.chat.id;
-  const guidance = toolR18PendingInputGuidance(state, Boolean(media));
-  if (guidance) {
-    console.log(`[telegram][toolr18_input_guidance] chat=${chatId} stage=${state.stage} task=${state.taskType || ""}`);
-    await bot.sendMessage(chatId, guidance.text, {
-      reply_markup: { inline_keyboard: guidance.keyboard },
-    });
-    return;
-  }
   const nextState: PendingToolR18TaskState = {
     ...state,
     files: [...(state.files || [])],
@@ -7528,211 +6525,8 @@ async function handlePendingToolR18Input(bot: TelegramBot, msg: TelegramBot.Mess
   if (media) nextState.files = [...(nextState.files || []), await downloadToolR18TelegramMedia(bot, msg, media)];
   pendingToolR18Tasks.set(chatId, nextState);
 
-  if (nextState.stage === "video_i2v_duration") {
-    const value = String(text || "").trim();
-    const duration = Number(value);
-    if (!/^\d+$/.test(value) || duration < 2 || duration > 15) {
-      await bot.sendMessage(chatId, "請輸入 2 到 15 秒之間的整數，例如：5。", { reply_markup: { inline_keyboard: buildToolR18VideoI2vDurationKeyboard() } });
-      return;
-    }
-    await sendToolR18VideoI2vImageStep(bot, chatId, undefined, duration);
-    return;
-  }
-
-  if (nextState.stage === "video_i2v_image") {
-    const latestFile = (nextState.files || [])[nextState.files?.length ? (nextState.files.length - 1) : 0];
-    if (media && latestFile?.kind === "image") {
-      const params = toolR18VideoI2vParams(nextState);
-      params.image_local_path = latestFile.path;
-      params.image_selected = true;
-      if (text) params.video_i2v_initial_prompt = text;
-      pendingToolR18Tasks.set(chatId, { ...nextState, text: "", stage: "video_i2v_audio", params, files: [latestFile] });
-      await bot.sendMessage(chatId, "已更新參考圖。");
-      await sendToolR18VideoI2vAudioStep(bot, chatId);
-      return;
-    }
-    await bot.sendMessage(chatId, "請上傳一張參考圖片。", { reply_markup: { inline_keyboard: buildToolR18VideoI2vImageKeyboard(toolR18VideoI2vParams(nextState)) } });
-    return;
-  }
-
-  if (nextState.stage === "video_i2v_audio") {
-    const latestFile = (nextState.files || [])[nextState.files?.length ? (nextState.files.length - 1) : 0];
-    const params = toolR18VideoI2vParams(nextState);
-    if (media && latestFile?.kind === "audio") {
-      params.audio_selected = true;
-      params.audio_local_path = latestFile.path;
-      pendingToolR18Tasks.set(chatId, { ...nextState, text: "", stage: "video_i2v_prompt_mode", params });
-      await bot.sendMessage(chatId, "已更新音頻。");
-      await sendToolR18VideoI2vPromptModeStep(bot, chatId);
-      return;
-    }
-    await bot.sendMessage(chatId, "請上傳音頻檔案，或點擊「跳過音頻」。", { reply_markup: { inline_keyboard: buildToolR18VideoI2vAudioKeyboard(params) } });
-    return;
-  }
-
-  if (nextState.stage === "video_i2v_prompt") {
-    const prompt = String(text || "").trim();
-    if (!prompt) {
-      await bot.sendMessage(chatId, "請直接輸入這次圖生視頻的畫面和動作需求。", { reply_markup: { inline_keyboard: [[{ text: "◀️ 上一步", callback_data: "toolr18_i2v_back_prompt_mode" }]] } });
-      return;
-    }
-    const params = toolR18VideoI2vParams(nextState);
-    if (!String(params.image_local_path || "").trim()) {
-      await bot.sendMessage(chatId, "請先上傳一張參考圖。");
-      await sendToolR18VideoI2vImageStep(bot, chatId);
-      return;
-    }
-    const promptState: PendingToolR18TaskState = { ...nextState, stage: "await_task_input", taskType: "video_i2v", taskLabel: "圖生視頻", text: prompt, originalRequest: prompt, params };
-    if (params.use_grok === false) {
-      await submitToolR18PromptReview(bot, chatId, promptState, prompt);
-      return;
-    }
-    await sendToolR18PromptPreview(bot, chatId, promptState, prompt);
-    return;
-  }
-
-  if (nextState.stage === "image_edit_input") {
-    const latestFile = (nextState.files || [])[nextState.files?.length ? nextState.files.length - 1 : 0];
-    const meta = toolR18ImageEditMeta(nextState.taskType);
-    const params = toolR18ImageEditParams(nextState);
-    if (media && latestFile?.kind === "image") {
-      params.input_image_local_path = latestFile.path;
-      params.tg_prompt_confirmed = false;
-      if (meta.single) params.reference_image_local_path = latestFile.path;
-      pendingToolR18Tasks.set(chatId, { ...nextState, text: "", taskType: meta.taskType, taskLabel: meta.label, params, files: [latestFile] });
-      if (meta.single) await sendToolR18ImageEditPromptModeStep(bot, chatId);
-      else await sendToolR18ImageEditReferenceStep(bot, chatId);
-      return;
-    }
-    await bot.sendMessage(chatId, meta.label + String.fromCharCode(10) + "步驟 1/" + meta.totalSteps + "：請上傳需要編輯的原圖。", {
-      reply_markup: { inline_keyboard: buildToolR18ImageStepKeyboard(undefined, Boolean(params.input_image_local_path), toolR18FlowCancelCallback(params, "toolr18_group_image")) },
-    });
-    return;
-  }
-
-  if (nextState.stage === "image_edit_reference") {
-    const latestFile = (nextState.files || [])[nextState.files?.length ? nextState.files.length - 1 : 0];
-    const params = toolR18ImageEditParams(nextState);
-    if (media && latestFile?.kind === "image") {
-      params.reference_image_local_path = latestFile.path;
-      params.tg_prompt_confirmed = false;
-      const inputFile = params.input_image_local_path ? { name: "input_image", path: String(params.input_image_local_path), kind: "image" } : undefined;
-      pendingToolR18Tasks.set(chatId, { ...nextState, text: "", taskType: "get_nano_banana", taskLabel: "圖片編輯", params, files: inputFile ? [inputFile, latestFile] : [latestFile] });
-      await sendToolR18ImageEditPromptModeStep(bot, chatId);
-      return;
-    }
-    await bot.sendMessage(chatId, "圖片編輯" + String.fromCharCode(10) + "步驟 2/4：請上傳參考圖或素材圖。", {
-      reply_markup: { inline_keyboard: buildToolR18ImageStepKeyboard("toolr18_imgedit_back_input", Boolean(params.reference_image_local_path), toolR18FlowCancelCallback(params, "toolr18_group_image")) },
-    });
-    return;
-  }
-
-  if (nextState.stage === "image_edit_prompt") {
-    const prompt = String(text || "").trim();
-    const meta = toolR18ImageEditMeta(nextState.taskType);
-    const params = toolR18ImageEditParams(nextState);
-    if (!prompt) {
-      await bot.sendMessage(chatId, meta.label + String.fromCharCode(10) + "步驟 " + meta.totalSteps + "/" + meta.totalSteps + "：請輸入這次圖片編輯要求。", { reply_markup: { inline_keyboard: [[{ text: "◀️ 上一步", callback_data: "toolr18_imgedit_back_prompt_mode" }]] } });
-      return;
-    }
-    const promptState: PendingToolR18TaskState = { ...nextState, stage: "await_task_input", taskType: meta.taskType, taskLabel: meta.label, text: prompt, originalRequest: prompt, params };
-    if (params.tg_use_llm_prompt === false) {
-      await submitToolR18PromptReview(bot, chatId, promptState, prompt);
-      return;
-    }
-    await sendToolR18PromptPreview(bot, chatId, promptState, prompt);
-    return;
-  }
-
-  if (nextState.stage === "face_swap_target") {
-    const latestFile = (nextState.files || [])[nextState.files?.length ? nextState.files.length - 1 : 0];
-    const params = toolR18FaceSwapParams(nextState);
-    if (media && latestFile?.kind === "image") {
-      params.target_image_local_path = latestFile.path;
-      params.tg_prompt_confirmed = false;
-      pendingToolR18Tasks.set(chatId, { ...nextState, text: "", taskType: "face_swap", taskLabel: "人物換臉", params, files: [latestFile] });
-      await sendToolR18FaceSwapSourceStep(bot, chatId);
-      return;
-    }
-    await bot.sendMessage(chatId, "人物換臉" + String.fromCharCode(10) + "步驟 1/4：請上傳原圖，也就是需要被換臉的圖片。", {
-      reply_markup: { inline_keyboard: buildToolR18FaceSwapStepKeyboard(undefined, Boolean(params.target_image_local_path), toolR18FlowCancelCallback(params, "toolr18_group_image")) },
-    });
-    return;
-  }
-
-  if (nextState.stage === "face_swap_source") {
-    const latestFile = (nextState.files || [])[nextState.files?.length ? nextState.files.length - 1 : 0];
-    const params = toolR18FaceSwapParams(nextState);
-    if (media && latestFile?.kind === "image") {
-      params.source_image_local_path = latestFile.path;
-      params.tg_prompt_confirmed = false;
-      const targetFile = params.target_image_local_path ? { name: "target_image", path: String(params.target_image_local_path), kind: "image" } : undefined;
-      pendingToolR18Tasks.set(chatId, { ...nextState, text: "", taskType: "face_swap", taskLabel: "人物換臉", params, files: targetFile ? [targetFile, latestFile] : [latestFile] });
-      await sendToolR18FaceSwapPromptModeStep(bot, chatId);
-      return;
-    }
-    await bot.sendMessage(chatId, "人物換臉" + String.fromCharCode(10) + "步驟 2/4：請上傳人臉參考圖。", {
-      reply_markup: { inline_keyboard: buildToolR18FaceSwapStepKeyboard("toolr18_faceswap_back_target", Boolean(params.source_image_local_path), toolR18FlowCancelCallback(params, "toolr18_group_image")) },
-    });
-    return;
-  }
-
-  if (nextState.stage === "face_swap_prompt") {
-    const prompt = String(text || "").trim();
-    const params = toolR18FaceSwapParams(nextState);
-    if (!prompt) {
-      await bot.sendMessage(chatId, "人物換臉" + String.fromCharCode(10) + "步驟 4/4：請直接輸入這次人物換臉要求。", { reply_markup: { inline_keyboard: [[{ text: "◀️ 上一步", callback_data: "toolr18_faceswap_back_prompt_mode" }]] } });
-      return;
-    }
-    const promptState: PendingToolR18TaskState = { ...nextState, stage: "await_task_input", taskType: "face_swap", taskLabel: "人物換臉", text: prompt, originalRequest: prompt, params };
-    await sendToolR18PromptPreview(bot, chatId, promptState, prompt);
-    return;
-  }
-
-  if (nextState.stage === "await_prompt_adjustment") {
-    const base = String(nextState.originalRequest || nextState.text || "").trim();
-    const adjustment = String(text || "").trim();
-    if (!adjustment) {
-      await bot.sendMessage(chatId, "請直接輸入要讓 Grok 調整的要求。", { reply_markup: { inline_keyboard: buildToolR18PromptReviewKeyboard(state.taskType, state.params) } });
-      return;
-    }
-    await sendToolR18PromptPreview(bot, chatId, { ...nextState, stage: "await_task_input", originalRequest: base || adjustment }, base ? base + String.fromCharCode(10) + "調整要求：" + adjustment : adjustment);
-    return;
-  }
-
-  if (nextState.stage === "await_custom_prompt_submit") {
-    const customPrompt = String(text || "").trim();
-    if (!customPrompt) {
-      await bot.sendMessage(chatId, "請直接輸入自定義最終提示詞。", { reply_markup: { inline_keyboard: [[{ text: "◀️ 返回", callback_data: "toolr18_prompt_back_review" }]] } });
-      return;
-    }
-    await submitToolR18PromptReview(bot, chatId, nextState, customPrompt);
-    return;
-  }
-
-  if (nextState.taskType === "text_to_image" && nextState.params?.tg_use_llm_prompt === false) {
-    const customPrompt = String(text || "").trim();
-    if (!customPrompt) {
-      await bot.sendMessage(chatId, "請直接輸入自定義提示詞；需要參考圖時，請把圖片和文字要求一起發送。", {
-        reply_markup: { inline_keyboard: [[toolR18ContextBackButton(chatId, nextState.params, "toolr18_t2i_back_before_prompt")]] },
-      });
-      return;
-    }
-    await submitToolR18PromptReview(bot, chatId, {
-      ...nextState,
-      stage: "await_prompt_review",
-      text: customPrompt,
-      originalRequest: customPrompt,
-    }, customPrompt);
-    return;
-  }
-
   const minFiles = toolR18MinimumFileCount(nextState.taskType);
   const canSubmit = (nextState.files || []).length >= minFiles && (Boolean(String(nextState.text || "").trim()) || nextState.taskType === "get_gemini");
-  if (canSubmit && !media && text && nextState.taskType === "text_to_image" && nextState.params?.tg_use_llm_prompt) {
-    await sendToolR18PromptPreview(bot, chatId, nextState, text);
-    return;
-  }
   await bot.sendMessage(chatId, buildToolR18PendingSummary(nextState), {
     reply_markup: { inline_keyboard: buildToolR18PendingKeyboard(nextState) },
   });
@@ -8468,7 +7262,7 @@ async function rewritePersonaIntroWithCodex(archive: any, userText: string, mode
 
 const GENERATED_POST_IMAGE_TARGET_COUNT = 4;
 const GENERATED_POST_IMAGE_MAX_ATTEMPTS = 6;
-const NEW_PERSONA_POST_IMAGE_TIMEOUT_MS = 5 * 60 * 1000;
+const NEW_PERSONA_POST_IMAGE_TIMEOUT_MS = 25 * 60 * 1000;
 
 function buildArchivePersonaVisualIdentityCue(archive: PersonaArchive | null | undefined, fallbackName?: string, currentContent?: string) {
   if (!archive?.setup) return fallbackName ? `persona visual identity cue: persona name ${fallbackName}; infer a distinctive visual identity from the current generated copy, not a generic portrait` : "";
@@ -8907,64 +7701,19 @@ async function submitGeneratedPostImageCandidateTask(args: {
   imageRatioLabel?: string;
   hasPersonaReferenceImage?: boolean;
 }): Promise<{ ok: boolean; imageUrl?: string; imageUrls?: string[]; error?: string }> {
-  const archive = await loadPersonaArchive(args.archiveId).catch(() => null);
-  const personaVisualIdentity = buildArchivePersonaVisualIdentityCue(archive, args.archiveName, args.post.content);
-  const baseRequestText = [
-    "為這篇推文生成 4 張候選配圖，圖片必須服務推文內容，不要脫離人設和推文語境。",
-    args.hasPersonaReferenceImage
-      ? "保留同一個人設身份、臉部特徵、年齡感、身形比例、髮型和整體氣質。"
-      : "此人設尚未生成人設圖，不要使用舊推文圖片或歷史配圖作為人像參考；只根據文字人設、推文內容和本次要求生成。",
-    "需要先分析推文和使用者要求，再補齊服裝結構、顏色材質、場景、姿勢、情緒、鏡頭和光線。",
-    "人設：" + args.archiveName,
-    "推文內容：" + args.post.content,
-    "配圖要求：" + args.prompt,
-  ].filter(Boolean).join(String.fromCharCode(10));
-  const requestText = [
-    baseRequestText,
-    personaVisualIdentity ? "Persona visual identity cue: " + personaVisualIdentity : "",
-    "Make the outfit, styling, grooming, silhouette, accessory choices, props, environment, posture, and camera language visibly different from any other persona. A viewer should understand the persona's field, temperament, and role before reading the caption.",
-  ].filter(Boolean).join(String.fromCharCode(10));
-  const qaEnabled = await toolR18GlobalTextToImageQaEnabled();
-  const generationParams: Record<string, any> = {
-      prompt: requestText,
-      prompt_text: requestText,
-      message: requestText,
-      tg_user_instruction: requestText,
-      tg_original_user_request: requestText,
-      tg_generation_context: "Generated-post image candidates for archive " + args.archiveId + ", post " + (args.post.id || ""),
-      tg_generated_post_content: args.post.content,
-      tg_generated_post_visual_instruction: args.prompt,
-      tg_persona_visual_identity: personaVisualIdentity,
-      tg_persona_reference_available: Boolean(args.hasPersonaReferenceImage),
-      tg_no_persona_reference_image: !args.hasPersonaReferenceImage,
-      persona_reference_available: Boolean(args.hasPersonaReferenceImage),
-      tg_use_llm_prompt: true,
-      tg_latest_prompt_only: true,
-      tg_prompt_confirmed: false,
-      tg_content_branch: "nonr18",
-      tg_prompt_safety_profile: "nonr18_free",
-      tg_no_r18_exposure: true,
-      tg_suppress_auto_notify: true,
-      aspect_ratio: args.imageAspectRatio,
-      image_aspect_ratio: args.imageAspectRatio,
-      width: args.imageWidth,
-      height: args.imageHeight,
-      selected_ratio_label: args.imageRatioLabel,
-      telegram_return_count: GENERATED_POST_IMAGE_TARGET_COUNT,
-      text_to_image_return_count: GENERATED_POST_IMAGE_TARGET_COUNT,
-      text_to_image_auto_qa_enabled: qaEnabled,
-      batch_size: GENERATED_POST_IMAGE_TARGET_COUNT,
-      target_count: GENERATED_POST_IMAGE_TARGET_COUNT,
-      source: "telegram-generated-post-image-candidates",
-    };
-  if (qaEnabled) {
-    generationParams.text_to_image_qa_target_count = GENERATED_POST_IMAGE_TARGET_COUNT;
-    generationParams.text_to_image_auto_qa_max_attempts = GENERATED_POST_IMAGE_TARGET_COUNT;
-  }
   const submit = await toolR18JsonRequest("POST", "/api/internal/tg/submit", {
-    task_type: "text_to_image",
+    task_type: "persona_post_image",
     tg_chat_id: args.chatId,
-    params: generationParams,
+    params: {
+      related_persona_id: args.archiveId,
+      related_post_id: String(args.post.id || "").trim(),
+      generation_content: args.post.content,
+      custom_prompt: args.prompt,
+      aspect_ratio: args.imageAspectRatio || "1:1",
+      image_count: GENERATED_POST_IMAGE_TARGET_COUNT,
+      source: "telegram-generated-post-image-candidates",
+      tg_suppress_auto_notify: true,
+    },
   });
   const taskId = String(submit?.id || "").trim();
   if (!taskId) throw new Error("後端沒有返回配圖任務 ID");
@@ -8974,7 +7723,9 @@ async function submitGeneratedPostImageCandidateTask(args: {
     ok: imageUrls.length >= GENERATED_POST_IMAGE_TARGET_COUNT,
     imageUrl: imageUrls[0],
     imageUrls,
-    error: imageUrls.length >= GENERATED_POST_IMAGE_TARGET_COUNT ? undefined : `only ${imageUrls.length}/${GENERATED_POST_IMAGE_TARGET_COUNT} images generated by task ${taskId}`,
+    error: imageUrls.length >= GENERATED_POST_IMAGE_TARGET_COUNT
+      ? undefined
+      : `only ${imageUrls.length}/${GENERATED_POST_IMAGE_TARGET_COUNT} images generated by task ${taskId}`,
   };
 }
 
@@ -17480,11 +16231,6 @@ function sendMainMenu(chatId: number, msgId?: number) {
       return;
     }
 
-    if (data === "toolr18_group_video") {
-      await safeEditOrSend(bot, chatId, msgId, "R18 / 視頻生成", { reply_markup: { inline_keyboard: buildToolR18VideoKeyboard(chatId) } });
-      return;
-    }
-
     if (data === "toolr18_submit") {
       const pending = pendingToolR18Tasks.get(chatId);
       if (!pending) {
@@ -17516,367 +16262,12 @@ function sendMainMenu(chatId: number, msgId?: number) {
       return;
     }
 
-    if (data === "toolr18_prompt_submit") {
-      const pending = pendingToolR18Tasks.get(chatId);
-      if (!pending) { await sendToolR18ContextOrMenu(bot, chatId, msgId); return; }
-      try {
-        await submitToolR18PromptReview(bot, chatId, pending);
-      } catch (error: any) {
-        pendingToolR18Tasks.set(chatId, pending);
-        await safeEditOrSend(bot, chatId, msgId, "R18 提交失敗：" + formatUserFacingError(error, "請檢查素材和參數後重試。"), {
-          reply_markup: { inline_keyboard: buildToolR18SubmitFailureKeyboard(pending) },
-        });
-      }
-      return;
-    }
-
-    if (data === "toolr18_prompt_custom") {
-      const pending = pendingToolR18Tasks.get(chatId);
-      if (!pending) { await sendToolR18ContextOrMenu(bot, chatId, msgId); return; }
-      pendingToolR18Tasks.set(chatId, { ...pending, stage: "await_custom_prompt_submit" });
-      await safeEditOrSend(bot, chatId, msgId, [
-        "請發送自定義最終提示詞。",
-        "下一條訊息會提交生成任務。",
-      ].join(String.fromCharCode(10)), { reply_markup: { inline_keyboard: [[{ text: "◀️ 返回", callback_data: "toolr18_prompt_back_review" }]] } });
-      return;
-    }
-
-    if (data === "toolr18_prompt_adjust") {
-      const pending = pendingToolR18Tasks.get(chatId);
-      if (!pending) { await sendToolR18ContextOrMenu(bot, chatId, msgId); return; }
-      pendingToolR18Tasks.set(chatId, { ...pending, stage: "await_prompt_adjustment" });
-      await safeEditOrSend(bot, chatId, msgId, "請直接發送調整要求，Grok 會基於目前提示詞重新生成。", { reply_markup: { inline_keyboard: [[{ text: "◀️ 返回", callback_data: "toolr18_prompt_back_review" }]] } });
-      return;
-    }
-
-    if (data === "toolr18_prompt_regen") {
-      const pending = pendingToolR18Tasks.get(chatId);
-      if (!pending) { await sendToolR18ContextOrMenu(bot, chatId, msgId); return; }
-      await sendToolR18PromptPreview(bot, chatId, { ...pending, stage: "await_task_input" }, String(pending.originalRequest || pending.text || ""));
-      return;
-    }
-
-    if (data === "toolr18_prompt_back_review") {
-      const pending = pendingToolR18Tasks.get(chatId);
-      if (!pending) { await sendToolR18ContextOrMenu(bot, chatId, msgId); return; }
-      pendingToolR18Tasks.set(chatId, { ...pending, stage: "await_prompt_review" });
-      await safeEditOrSend(bot, chatId, msgId, ["R18 / " + pending.taskLabel, "Grok 已生成提示詞：", "", String(pending.promptText || ""), "", "請確認提示詞是否合適，確認後再提交 R18 任務。"].join(String.fromCharCode(10)), { reply_markup: { inline_keyboard: buildToolR18PromptReviewKeyboard(pending.taskType, pending.params) } });
-      return;
-    }
-
-    if (data === "toolr18_t2i_toggle_qa") {
-      const state = pendingToolR18Tasks.get(chatId);
-      const params = { ...(state?.params || {}) };
-      params.text_to_image_auto_qa_enabled = !toolR18TextToImageQaEnabled(params);
-      pendingToolR18Tasks.set(chatId, {
-        ...(state || { stage: "await_task_input", taskType: "text_to_image", taskLabel: "文生圖" } as PendingToolR18TaskState),
-        stage: "await_task_input",
-        taskType: "text_to_image",
-        taskLabel: state?.taskLabel || "文生圖",
-        params,
-      });
-      await sendToolR18TextToImageRatioStep(bot, chatId, msgId, params);
-      await callback.answer(params.text_to_image_auto_qa_enabled ? "QA 審查已開啟" : "QA 審查已關閉");
-      return;
-    }
-
-    if (data.startsWith("toolr18_t2i_ratio_")) {
-      await sendToolR18TextToImageResolutionStep(bot, chatId, msgId, data.slice("toolr18_t2i_ratio_".length));
-      return;
-    }
-
-    if (data === "toolr18_t2i_final_on" || data === "toolr18_t2i_final_off") {
-      const state = pendingToolR18Tasks.get(chatId);
-      pendingToolR18Tasks.set(chatId, { ...(state || { stage: "await_task_input", taskType: "text_to_image", taskLabel: "文生圖" }), params: { ...(state?.params || {}), final_resolution_enabled: data === "toolr18_t2i_final_on" } });
-      await sendToolR18TextToImagePersonaStep(bot, chatId, msgId);
-      return;
-    }
-
-    if (data === "toolr18_t2i_back_resolution") {
-      await sendToolR18TextToImageResolutionStep(bot, chatId, msgId);
-      return;
-    }
-
-    if (data.startsWith("toolr18_t2i_persona_") || data === "toolr18_t2i_persona_off") {
-      const state = pendingToolR18Tasks.get(chatId);
-      const profile = String(state?.params?.text_to_image_workflow_profile || "zit_final");
-      const personaId = data === "toolr18_t2i_persona_off" ? "" : data.slice("toolr18_t2i_persona_".length);
-      const persona = toolR18TextToImagePersonaOptions(profile).find((item) => item.id === personaId);
-      pendingToolR18Tasks.set(chatId, { ...(state || { stage: "await_task_input", taskType: "text_to_image", taskLabel: "文生圖" }), params: { ...(state?.params || {}), persona_selected: true, persona_enabled: Boolean(persona), persona_lora: persona?.path || "", persona_label: persona?.label || "" } });
-      await sendToolR18TextToImagePromptModeStep(bot, chatId, msgId);
-      return;
-    }
-
-    if (data === "toolr18_t2i_back_before_prompt") {
-      const state = pendingToolR18Tasks.get(chatId);
-      const profile = String(state?.params?.text_to_image_workflow_profile || "zit_final");
-      if (toolR18TextToImagePersonaOptions(profile).length) await sendToolR18TextToImagePersonaStep(bot, chatId, msgId);
-      else await sendToolR18TextToImageResolutionStep(bot, chatId, msgId);
-      return;
-    }
-
-    if (data === "toolr18_t2i_prompt_free") {
-      const state = pendingToolR18Tasks.get(chatId) || { stage: "await_task_input", taskType: "text_to_image", taskLabel: "文生圖" } as PendingToolR18TaskState;
-      const requestText = "AI 自由發揮：根據已選比例、人設 LoRA 和目前配置，生成一張適合推文配圖的 R18 人物圖片。";
-      const params = { ...(state.params || {}), tg_use_llm_prompt: true, tg_llm_prompt_enhanced: true, tg_latest_prompt_only: true };
-      await sendToolR18PromptPreview(bot, chatId, { ...state, stage: "await_task_input", taskType: "text_to_image", taskLabel: state.taskLabel || "文生圖", text: requestText, originalRequest: requestText, params }, requestText);
-      return;
-    }
-
-    if (data === "toolr18_t2i_prompt_grok" || data === "toolr18_t2i_prompt_custom") {
-      await sendToolR18TextToImagePromptStep(bot, chatId, msgId, data === "toolr18_t2i_prompt_grok");
-      return;
-    }
-
-    if (data.startsWith("toolr18_i2v_resolution_")) {
-      await sendToolR18VideoI2vDurationStep(bot, chatId, msgId, data.endsWith("1080p") ? "1080p" : "720p");
-      return;
-    }
-
-    if (data.startsWith("toolr18_i2v_duration_")) {
-      const duration = Number(data.slice("toolr18_i2v_duration_".length));
-      await sendToolR18VideoI2vImageStep(bot, chatId, msgId, duration);
-      return;
-    }
-
-    if (data === "toolr18_i2v_back_resolution") {
-      await sendToolR18VideoI2vResolutionStep(bot, chatId, msgId);
-      return;
-    }
-
-    if (data === "toolr18_i2v_back_duration") {
-      await sendToolR18VideoI2vDurationStep(bot, chatId, msgId);
-      return;
-    }
-
-    if (data === "toolr18_i2v_back_image") {
-      await sendToolR18VideoI2vImageStep(bot, chatId, msgId);
-      return;
-    }
-
-    if (data === "toolr18_i2v_back_audio") {
-      await sendToolR18VideoI2vAudioStep(bot, chatId, msgId);
-      return;
-    }
-
-    if (data === "toolr18_i2v_back_prompt_mode") {
-      await sendToolR18VideoI2vPromptModeStep(bot, chatId, msgId);
-      return;
-    }
-
-    if (data === "toolr18_i2v_image_keep") {
-      const state = pendingToolR18Tasks.get(chatId);
-      const params = toolR18VideoI2vParams(state);
-      if (!String(params.image_local_path || "").trim()) {
-        await sendToolR18VideoI2vImageStep(bot, chatId, msgId);
-        return;
-      }
-      await sendToolR18VideoI2vAudioStep(bot, chatId, msgId);
-      return;
-    }
-
-    if (data === "toolr18_i2v_audio_skip" || data === "toolr18_i2v_audio_keep") {
-      const state = pendingToolR18Tasks.get(chatId);
-      const params = toolR18VideoI2vParams(state);
-      params.audio_selected = true;
-      if (data === "toolr18_i2v_audio_skip") params.audio_local_path = "";
-      pendingToolR18Tasks.set(chatId, { ...(state || { taskType: "video_i2v", taskLabel: "圖生視頻" }), stage: "video_i2v_prompt_mode", taskType: "video_i2v", taskLabel: "圖生視頻", params });
-      await sendToolR18VideoI2vPromptModeStep(bot, chatId, msgId);
-      return;
-    }
-
-    if (data === "toolr18_i2v_prompt_free") {
-      const state = pendingToolR18Tasks.get(chatId);
-      const params = toolR18VideoI2vParams(state);
-      if (!String(params.image_local_path || "").trim()) {
-        await safeEditOrSend(bot, chatId, msgId, "請先上傳一張參考圖，再使用 AI 自由發揮生成圖生視頻提示詞。", {
-          reply_markup: { inline_keyboard: buildToolR18VideoI2vImageKeyboard(params) },
-        });
-        return;
-      }
-      params.use_grok = true;
-      params.prompt_mode_selected = true;
-      params.prompt_mode_label = "AI 自由發揮";
-      params.tg_use_llm_prompt = true;
-      params.tg_latest_prompt_only = true;
-      const requestText = [
-        "AI 自由發揮：根據已上傳的參考圖和圖生視頻規範生成完整視頻提示詞。",
-        "把參考圖作為第一幀，保持人物、構圖、場景、光線、服裝與鏡頭比例一致。",
-        "自行補齊合理的鏡頭運動、人物動作、表情變化、環境氛圍和轉場節奏。",
-        "分辨率：" + String(params.resolution || "720p") + "；時長：" + String(params.duration_seconds || params.mulerouter_wan_i2v_duration || 2) + "秒。",
-        params.audio_local_path ? "本次有音頻，動作節奏需要配合音頻。" : "本次無音頻，請以畫面動作節奏為主。",
-      ].join(String.fromCharCode(10));
-      const promptState: PendingToolR18TaskState = {
-        ...(state || { stage: "await_task_input", taskType: "video_i2v", taskLabel: "圖生視頻" }),
-        stage: "await_task_input",
-        taskType: "video_i2v",
-        taskLabel: state?.taskLabel || "圖生視頻",
-        text: requestText,
-        originalRequest: requestText,
-        params,
-      };
-      await sendToolR18PromptPreview(bot, chatId, promptState, requestText);
-      return;
-    }
-
-    if (data === "toolr18_i2v_prompt_grok" || data === "toolr18_i2v_prompt_custom") {
-      await sendToolR18VideoI2vPromptStep(bot, chatId, msgId, data === "toolr18_i2v_prompt_grok");
-      return;
-    }
-
-    if (data === "toolr18_imgedit_back_input") {
-      await sendToolR18ImageEditInputStep(bot, chatId, msgId);
-      return;
-    }
-
-    if (data === "toolr18_imgedit_back_before_prompt_mode") {
-      const state = pendingToolR18Tasks.get(chatId);
-      if (state?.taskType === "single_image_edit") await sendToolR18ImageEditInputStep(bot, chatId, msgId);
-      else await sendToolR18ImageEditReferenceStep(bot, chatId, msgId);
-      return;
-    }
-
-    if (data === "toolr18_imgedit_back_prompt_mode") {
-      await sendToolR18ImageEditPromptModeStep(bot, chatId, msgId);
-      return;
-    }
-
-    if (data === "toolr18_imgedit_input_keep") {
-      const state = pendingToolR18Tasks.get(chatId);
-      const meta = toolR18ImageEditMeta(state?.taskType);
-      const params = toolR18ImageEditParams(state);
-      if (!String(params.input_image_local_path || "").trim()) {
-        await sendToolR18ImageEditInputStep(bot, chatId, msgId, meta.taskType);
-        return;
-      }
-      if (meta.single) {
-        params.reference_image_local_path = params.input_image_local_path;
-        pendingToolR18Tasks.set(chatId, { ...(state || { taskType: meta.taskType, taskLabel: meta.label }), stage: "image_edit_prompt_mode", taskType: meta.taskType, taskLabel: meta.label, params });
-        await sendToolR18ImageEditPromptModeStep(bot, chatId, msgId);
-      } else {
-        await sendToolR18ImageEditReferenceStep(bot, chatId, msgId);
-      }
-      return;
-    }
-
-    if (data === "toolr18_imgedit_reference_keep") {
-      const state = pendingToolR18Tasks.get(chatId);
-      const params = toolR18ImageEditParams(state);
-      if (!String(params.reference_image_local_path || "").trim()) {
-        await sendToolR18ImageEditReferenceStep(bot, chatId, msgId);
-        return;
-      }
-      await sendToolR18ImageEditPromptModeStep(bot, chatId, msgId);
-      return;
-    }
-
-    if (data === "toolr18_imgedit_prompt_free") {
-      const state = pendingToolR18Tasks.get(chatId) || { taskType: "get_nano_banana", taskLabel: "圖片編輯", params: {} } as PendingToolR18TaskState;
-      const meta = toolR18ImageEditMeta(state.taskType);
-      const requestText = "AI 自由發揮：根據已上傳的原圖/參考圖和目前配置，生成一個合理的 R18 圖片編輯提示詞。";
-      const params = { ...toolR18ImageEditParams(state), tg_use_llm_prompt: true, tg_latest_prompt_only: true };
-      await sendToolR18PromptPreview(bot, chatId, { ...state, stage: "await_task_input", taskType: meta.taskType, taskLabel: meta.label, text: requestText, originalRequest: requestText, params }, requestText);
-      return;
-    }
-
-    if (data === "toolr18_imgedit_prompt_grok" || data === "toolr18_imgedit_prompt_custom") {
-      await sendToolR18ImageEditPromptStep(bot, chatId, msgId, data === "toolr18_imgedit_prompt_grok");
-      return;
-    }
-
-    if (data === "toolr18_faceswap_back_target") {
-      await sendToolR18FaceSwapTargetStep(bot, chatId, msgId);
-      return;
-    }
-
-    if (data === "toolr18_faceswap_back_source") {
-      await sendToolR18FaceSwapSourceStep(bot, chatId, msgId);
-      return;
-    }
-
-    if (data === "toolr18_faceswap_back_prompt_mode") {
-      await sendToolR18FaceSwapPromptModeStep(bot, chatId, msgId);
-      return;
-    }
-
-    if (data === "toolr18_faceswap_target_keep") {
-      const state = pendingToolR18Tasks.get(chatId);
-      const params = toolR18FaceSwapParams(state);
-      if (!String(params.target_image_local_path || "").trim()) {
-        await sendToolR18FaceSwapTargetStep(bot, chatId, msgId);
-        return;
-      }
-      await sendToolR18FaceSwapSourceStep(bot, chatId, msgId);
-      return;
-    }
-
-    if (data === "toolr18_faceswap_source_keep") {
-      const state = pendingToolR18Tasks.get(chatId);
-      const params = toolR18FaceSwapParams(state);
-      if (!String(params.source_image_local_path || "").trim()) {
-        await sendToolR18FaceSwapSourceStep(bot, chatId, msgId);
-        return;
-      }
-      await sendToolR18FaceSwapPromptModeStep(bot, chatId, msgId);
-      return;
-    }
-
-    if (data === "toolr18_faceswap_prompt_natural") {
-      const state = pendingToolR18Tasks.get(chatId);
-      const params = toolR18FaceSwapParams(state);
-      params.tg_use_llm_prompt = true;
-      params.tg_latest_prompt_only = true;
-      const promptState: PendingToolR18TaskState = { ...(state || { stage: "await_task_input", taskType: "face_swap", taskLabel: "人物換臉" }), stage: "await_task_input", taskType: "face_swap", taskLabel: "人物換臉", text: TOOL_R18_FACE_SWAP_NATURAL_PROMPT, originalRequest: TOOL_R18_FACE_SWAP_NATURAL_PROMPT, params };
-      await sendToolR18PromptPreview(bot, chatId, promptState, TOOL_R18_FACE_SWAP_NATURAL_PROMPT);
-      return;
-    }
-
-    if (data === "toolr18_faceswap_prompt_free") {
-      const state = pendingToolR18Tasks.get(chatId);
-      const params = toolR18FaceSwapParams(state);
-      params.tg_use_llm_prompt = true;
-      params.tg_latest_prompt_only = true;
-      const requestText = "AI 自由發揮：根據目標圖與人臉參考圖自然換臉，保持姿勢、服裝、光線和背景合理，生成適合推文配圖的最終換臉提示詞。";
-      const promptState: PendingToolR18TaskState = { ...(state || { stage: "await_task_input", taskType: "face_swap", taskLabel: "人物換臉" }), stage: "await_task_input", taskType: "face_swap", taskLabel: state?.taskLabel || "人物換臉", text: requestText, originalRequest: requestText, params };
-      await sendToolR18PromptPreview(bot, chatId, promptState, requestText);
-      return;
-    }
-
-    if (data === "toolr18_faceswap_prompt_custom") {
-      await sendToolR18FaceSwapPromptStep(bot, chatId, msgId);
-      return;
-    }
-
     if (data.startsWith("toolr18_task_")) {
       const taskType = data.slice("toolr18_task_".length) as ToolR18TaskType;
       const item = TOOL_R18_TASKS.find((entry) => entry.type === taskType);
       if (!item) { await sendToolR18ContextOrMenu(bot, chatId, msgId); return; }
-      if (taskType === "text_to_image") {
-        const pending = pendingToolR18Tasks.get(chatId);
-        await sendToolR18TextToImageRatioStep(bot, chatId, msgId, {});
-        return;
-      }
-      if (taskType === "video_i2v") {
-        await sendToolR18VideoI2vResolutionStep(bot, chatId, msgId);
-        return;
-      }
-      if (taskType === "single_image_edit" || taskType === "get_nano_banana") {
-        await sendToolR18ImageEditInputStep(bot, chatId, msgId, taskType);
-        return;
-      }
-      if (taskType === "face_swap") {
-        await sendToolR18FaceSwapTargetStep(bot, chatId, msgId);
-        return;
-      }
       const nextPending: PendingToolR18TaskState = { stage: "await_task_input", taskType, taskLabel: item.label };
-      if (taskType === "r18_text_to_image_continue") {
-        pendingToolR18Tasks.set(chatId, nextPending);
-        await safeEditOrSend(bot, chatId, msgId, ["R18 / 繼續生成圖片", "", "請發送新的生成要求。", "我會基於最近一次文生圖任務繼續生成，並保留上一輪的風格與場景連續性。"].join(String.fromCharCode(10)), {
-          reply_markup: { inline_keyboard: [[toolR18ContextCancelButton(chatId, nextPending.params)]] },
-        });
-        return;
-      }
-      if (["r18_config", "r18_rerun_latest", "r18_text_to_image_reroll", "r18_image_edit_continue", "r18_image_edit_rerun", "r18_face_swap_upscale", "r18_face_swap_rerun"].includes(taskType)) {
+      if (["r18_config", "r18_rerun_latest"].includes(taskType)) {
         try {
           await safeEditOrSend(bot, chatId, msgId, "⏳ 正在處理 R18 指令...");
           await submitPendingToolR18Task(bot, chatId, nextPending);
@@ -17932,23 +16323,6 @@ function sendMainMenu(chatId: number, msgId?: number) {
       } catch (error: any) {
         await safeEditOrSend(bot, chatId, msgId, "R18 強制停止失敗：" + formatUserFacingError(error, "請稍後重試。"), { reply_markup: { inline_keyboard: [[toolR18ContextBackButton(chatId)]] } });
       }
-      return;
-    }
-
-    if (data === "genpost_toggle_qa") {
-      const pending = pendingGeneratePosts.get(chatId);
-      if (!pending || !["await_ratio", "await_prompt"].includes(pending.stage)) {
-        await safeEditOrSend(bot, chatId, msgId, "\u751F\u6210\u914D\u7F6E\u5DF2\u5931\u6548\uFF0C\u8ACB\u91CD\u65B0\u9078\u64C7\u65B0\u5EFA\u63A8\u6587\u3002", {
-          reply_markup: { inline_keyboard: [[{ text: "\u25C0\uFE0F \u8FD4\u56DE\u4EBA\u8A2D\u5217\u8868", callback_data: "list_personas" }]] },
-        });
-        return;
-      }
-      const current = await toolR18GlobalTextToImageQaEnabled();
-      const enabled = await toolR18SetGlobalTextToImageQaEnabled(!current);
-      const ratioState = { ...pending, stage: "await_ratio" as const };
-      setPendingGeneratePost(chatId, ratioState);
-      await sendFreeGeneratedPostImageRatioPicker(bot, chatId, msgId, ratioState);
-      await bot.answerCallbackQuery(query.id, { text: enabled ? "QA \u5BE9\u67E5\u5DF2\u958B\u555F" : "QA \u5BE9\u67E5\u5DF2\u95DC\u9589" }).catch(() => undefined);
       return;
     }
 
@@ -23558,7 +21932,7 @@ function sendMainMenu(chatId: number, msgId?: number) {
       }
       if (generatePostState.stage === "await_ratio") {
         await bot.sendMessage(chatId, "請先點擊按鈕選擇免費群配圖畫面比例。", {
-          reply_markup: buildFreeGeneratedPostImageRatioKeyboard(await freeGeneratedPostImageRatioProfile(), await toolR18GlobalTextToImageQaEnabled()),
+          reply_markup: buildFreeGeneratedPostImageRatioKeyboard(await freeGeneratedPostImageRatioProfile()),
         });
         return;
       }
