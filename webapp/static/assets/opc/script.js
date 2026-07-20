@@ -578,6 +578,31 @@ function initHomeExperience() {
     }, 2400);
   }
 
+  const hero = document.querySelector("[data-home-hero]");
+  const heroScenes = [...(hero?.querySelectorAll("[data-home-hero-scene]") || [])];
+  const heroTriggers = [...(hero?.querySelectorAll("[data-home-hero-trigger]") || [])];
+  if (heroScenes.length > 1 && heroScenes.length === heroTriggers.length) {
+    let activeHeroScene = 0;
+    let heroPaused = false;
+    const showHeroScene = (index) => {
+      activeHeroScene = (index + heroScenes.length) % heroScenes.length;
+      heroScenes.forEach((scene, sceneIndex) => scene.classList.toggle("is-active", sceneIndex === activeHeroScene));
+      heroTriggers.forEach((trigger, triggerIndex) => {
+        const isActive = triggerIndex === activeHeroScene;
+        trigger.classList.toggle("is-active", isActive);
+        trigger.setAttribute("aria-pressed", String(isActive));
+      });
+    };
+    heroTriggers.forEach((trigger, index) => trigger.addEventListener("click", () => showHeroScene(index)));
+    if (!reducedMotion) {
+      ["pointerenter", "focusin", "touchstart"].forEach((eventName) => hero.addEventListener(eventName, () => { heroPaused = true; }, { passive: true }));
+      ["pointerleave", "focusout", "touchend"].forEach((eventName) => hero.addEventListener(eventName, () => { heroPaused = false; }, { passive: true }));
+      window.setInterval(() => {
+        if (!heroPaused && !document.hidden) showHeroScene(activeHeroScene + 1);
+      }, 5600);
+    }
+  }
+
   const flowBoard = document.querySelector("[data-home-flow]");
   if (flowBoard) {
     const flowSteps = [...flowBoard.querySelectorAll("li")];

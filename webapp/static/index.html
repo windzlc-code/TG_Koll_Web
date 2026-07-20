@@ -67,32 +67,50 @@
         </div>
       </div>
 
-      <section class="home-hero" aria-labelledby="hero-title">
-        <img class="home-hero-media" src="/assets/opc/vecto-ai-cockpit.png" alt="Vecto AI 社媒營運控制台的多任務畫面" width="1536" height="864" fetchpriority="high" />
-        <div class="home-hero-shade" aria-hidden="true"></div>
-        <div class="home-hero-inner">
-          <div class="home-hero-copy" data-home-reveal>
-            <p class="home-kicker">Vecto Vanguard · AI 社媒營運系統</p>
-            <h1 id="hero-title">讓三組 AI 代理人<br />持續替你經營社媒</h1>
-            <p class="home-hero-lede">從熱點抓取、內容生成到多帳號發布與人工接管，把分散操作收進一個可監控、可排隊、可追溯的營運流程。</p>
-            <div class="home-hero-actions" aria-label="主要操作">
-              <a class="button home-button-primary" href="#contact">申請使用</a>
-              <a class="button home-button-secondary" href="#solution">查看運作方式</a>
+      <section class="home-hero" aria-labelledby="hero-title" data-home-hero>
+        <div class="home-hero-grid">
+          <article class="home-hero-feature">
+            <div class="home-hero-scenes" aria-hidden="true">
+              <img class="home-hero-scene is-active" data-home-hero-scene src="/assets/opc/vecto-ai-cockpit.png" alt="" width="1536" height="864" fetchpriority="high" />
+              <img class="home-hero-scene" data-home-hero-scene src="/assets/opc/home/social-team.jpg" alt="" width="1600" height="1067" />
+              <img class="home-hero-scene" data-home-hero-scene src="/assets/opc/home/editing-workspace.jpg" alt="" width="1600" height="2400" />
             </div>
-          </div>
+            <div class="home-hero-copy" data-home-reveal>
+              <p class="home-kicker">Vecto Vanguard · AI 社媒營運系統</p>
+              <h1 id="hero-title">Vecto AI<br />社媒營運駕駛艙</h1>
+              <p class="home-hero-lede">熱點、內容、人設、矩陣發布與瀏覽器接管，在一個可監控的工作流內完成。</p>
+              <div class="home-hero-actions" aria-label="主要操作">
+                <a class="button home-button-primary" href="#contact">申請使用</a>
+                <a class="button home-button-secondary" href="#solution">查看核心能力</a>
+              </div>
+            </div>
+            <div class="home-hero-switcher" role="group" aria-label="首屏場景切換">
+              <button class="is-active" type="button" aria-pressed="true" data-home-hero-trigger="0"><span>01</span>營運總覽</button>
+              <button type="button" aria-pressed="false" data-home-hero-trigger="1"><span>02</span>矩陣協作</button>
+              <button type="button" aria-pressed="false" data-home-hero-trigger="2"><span>03</span>內容工作台</button>
+            </div>
+          </article>
 
-          <div class="home-hero-runner" aria-label="自動化任務狀態" data-home-runner>
-            <div class="home-runner-heading">
-              <span class="home-live-dot" aria-hidden="true"></span>
-              <span>一條任務，串起完整營運鏈路</span>
-            </div>
-            <ol>
-              <li class="is-active"><span>01</span><strong>發現熱點</strong><small>篩選可用素材</small></li>
-              <li><span>02</span><strong>生成推文</strong><small>套用人設語氣</small></li>
-              <li><span>03</span><strong>矩陣排程</strong><small>依帳號錯峰發布</small></li>
-              <li><span>04</span><strong>瀏覽器執行</strong><small>異常可人工接管</small></li>
-            </ol>
-          </div>
+          <aside class="home-hero-side" aria-label="核心能力預覽">
+            <a class="home-hero-side-card" href="#scenarios">
+              <img src="/assets/opc/home/creator-studio.jpg" alt="創作者使用手機拍攝社媒內容" width="1600" height="1067" fetchpriority="high" />
+              <span>內容供應</span><strong>從人設記憶到日更素材</strong><small>生成、編輯、素材管理</small>
+            </a>
+            <a class="home-hero-side-card" href="#account-infrastructure">
+              <img src="/assets/opc/home/social-devices.jpg" alt="手機與電腦上的社交媒體內容" width="1600" height="1067" fetchpriority="high" />
+              <span>帳號基礎設施</span><strong>一個帳號，一個瀏覽器</strong><small>登入狀態與網路身份隔離</small>
+            </a>
+          </aside>
+        </div>
+
+        <div class="home-hero-runner" aria-label="自動化任務狀態" data-home-runner>
+          <div class="home-runner-heading"><span class="home-live-dot" aria-hidden="true"></span><span>一條任務，串起完整營運鏈路</span></div>
+          <ol>
+            <li class="is-active"><span>01</span><strong>發現熱點</strong><small>篩選可用素材</small></li>
+            <li><span>02</span><strong>生成推文</strong><small>套用人設語氣</small></li>
+            <li><span>03</span><strong>矩陣排程</strong><small>依帳號錯峰發布</small></li>
+            <li><span>04</span><strong>瀏覽器執行</strong><small>異常可人工接管</small></li>
+          </ol>
         </div>
       </section>
 
@@ -172,30 +190,21 @@
         </div>
         <div class="home-agent-stage">
           <article data-home-reveal>
-            <span class="home-agent-number">01</span>
-            <p class="home-agent-role">Trust</p>
-            <h3>乾貨主帳</h3>
-            <p>以專業解析、產業觀點與長期內容建立可信度。</p>
-            <ul><li>深度內容</li><li>產業熱點</li><li>品牌人設</li></ul>
+            <img src="/assets/opc/home/content-studio.jpg" alt="專業內容創作者整理素材" width="1600" height="1067" loading="lazy" />
+            <div class="home-agent-body"><span class="home-agent-number">01</span><p class="home-agent-role">Trust</p><h3>乾貨主帳</h3><p>以專業解析、產業觀點與長期內容建立可信度。</p><ul><li>深度內容</li><li>產業熱點</li><li>品牌人設</li></ul></div>
           </article>
           <article data-home-reveal>
-            <span class="home-agent-number">02</span>
-            <p class="home-agent-role">Experience</p>
-            <h3>體驗副帳</h3>
-            <p>用生活化視角回應疑問，降低受眾理解與決策門檻。</p>
-            <ul><li>情境分享</li><li>評論回覆</li><li>自然互動</li></ul>
+            <img src="/assets/opc/home/creator-studio.jpg" alt="創作者拍攝生活化社媒內容" width="1600" height="1067" loading="lazy" />
+            <div class="home-agent-body"><span class="home-agent-number">02</span><p class="home-agent-role">Experience</p><h3>體驗副帳</h3><p>用生活化視角回應疑問，降低受眾理解與決策門檻。</p><ul><li>情境分享</li><li>評論回覆</li><li>自然互動</li></ul></div>
           </article>
           <article data-home-reveal>
-            <span class="home-agent-number">03</span>
-            <p class="home-agent-role">Reach</p>
-            <h3>投放擴散帳</h3>
-            <p>承接高時效素材與活動流量，放大有效內容的觸達。</p>
-            <ul><li>錯峰發布</li><li>活動素材</li><li>流量承接</li></ul>
+            <img src="/assets/opc/home/social-team.jpg" alt="團隊協作管理多個社媒帳號" width="1600" height="1067" loading="lazy" />
+            <div class="home-agent-body"><span class="home-agent-number">03</span><p class="home-agent-role">Reach</p><h3>投放擴散帳</h3><p>承接高時效素材與活動流量，放大有效內容的觸達。</p><ul><li>錯峰發布</li><li>活動素材</li><li>流量承接</li></ul></div>
           </article>
         </div>
       </section>
 
-      <section class="home-infra-section" aria-labelledby="infra-title">
+      <section class="home-infra-section" id="account-infrastructure" aria-labelledby="infra-title">
         <div class="home-section-head" data-home-reveal>
           <div><p class="home-kicker">Account infrastructure</p><h2 id="infra-title">自動化要快，<br />身份邊界更要清楚</h2></div>
           <p>每個社媒帳號對應自己的瀏覽器環境、登入狀態與可選代理配置，避免操作互相污染。</p>
@@ -233,12 +242,12 @@
         </div>
         <div class="home-scenario-mosaic">
           <article class="home-scenario-feature" data-home-reveal>
-            <img src="/assets/opc/home/content-studio.jpg" alt="團隊製作與編輯社媒內容" width="1600" height="1067" loading="lazy" />
+            <img src="/assets/opc/home/editing-workspace.jpg" alt="專業內容編輯工作台" width="1600" height="2400" loading="lazy" />
             <div><span>01</span><h3>品牌日常營運</h3><p>穩定供應符合人設的內容，降低重複編輯和切換帳號的時間。</p></div>
           </article>
-          <article data-home-reveal><span>02</span><h3>即時熱點跟進</h3><p>抓取、篩選、改寫、排程，在同一個處理流程中完成。</p></article>
-          <article data-home-reveal><span>03</span><h3>知識型個人品牌</h3><p>把專業觀點沉澱成人設記憶，持續產出一致內容。</p></article>
-          <article data-home-reveal><span>04</span><h3>多客戶代營運</h3><p>不同人設、帳號、瀏覽器和素材庫保持清楚邊界。</p></article>
+          <article data-home-reveal><img src="/assets/opc/home/analytics-screen.jpg" alt="熱點與互動數據分析畫面" width="1600" height="1067" loading="lazy" /><div><span>02</span><h3>即時熱點跟進</h3><p>抓取、篩選、改寫、排程，在同一個處理流程中完成。</p></div></article>
+          <article data-home-reveal><img src="/assets/opc/home/creator-studio.jpg" alt="個人創作者錄製社媒內容" width="1600" height="1067" loading="lazy" /><div><span>03</span><h3>知識型個人品牌</h3><p>把專業觀點沉澱成人設記憶，持續產出一致內容。</p></div></article>
+          <article data-home-reveal><img src="/assets/opc/home/social-team.jpg" alt="營運團隊協作管理社媒內容" width="1600" height="1067" loading="lazy" /><div><span>04</span><h3>多客戶代營運</h3><p>不同人設、帳號、瀏覽器和素材庫保持清楚邊界。</p></div></article>
         </div>
       </section>
 
