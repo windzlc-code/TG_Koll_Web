@@ -14787,10 +14787,7 @@ def _persona_reference_image_input_for_cli(archive: dict[str, Any]) -> str:
         return raw_url
     path = Path(raw_url).expanduser()
     if path.is_file():
-        try:
-            return _local_file_to_data_uri(path)
-        except Exception:
-            pass
+        return str(path)
     return raw_url
 
 

@@ -8,6 +8,7 @@ import {
   type RunningHubNodeInfo,
 } from "./runninghub-client";
 import { readRuntimeApiConfig, type RuntimeConfigOptions } from "./config";
+import { readFileSync } from "node:fs";
 
 type RunningHubApiPrompt = Record<string, {
   class_type?: string;
@@ -246,6 +247,11 @@ function buildImageUrlInput(source?: string, mimeType?: string): string | undefi
   if (!value) return undefined;
   if (/^https?:\/\//i.test(value) || /^data:image\//i.test(value)) return value;
   const type = String(mimeType || "image/jpeg").trim() || "image/jpeg";
+  try {
+    return `data:${type};base64,${readFileSync(value).toString("base64")}`;
+  } catch {
+    // Keep accepting raw base64 for callers that already provide encoded data.
+  }
   return `data:${type};base64,${value}`;
 }
 
