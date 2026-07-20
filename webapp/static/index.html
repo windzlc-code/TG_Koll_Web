@@ -3,10 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Vecto 維拓｜OPC超級個體 AI駕駛倉</title>
+    <title>Vecto 維拓｜AI 社媒營運駕駛艙</title>
     <meta
       name="description"
-      content="Vecto Vanguard OPC 超級個體 AI駕駛倉，透過 Vecto OS 多維 AI 向量技術，自動化社媒內容、互動、私域沉澱與轉化。"
+      content="Vecto 將熱點抓取、人設內容、矩陣發布、帳號隔離與瀏覽器自動化整合成一套可監控的 AI 社媒營運流程。"
     />
     <link rel="icon" type="image/png" href="/assets/opc/vecto-logo-ui-icon.png?v=20260711" />
     <link rel="preload" href="/assets/opc/vecto-ai-cockpit.png" as="image" />
@@ -15,7 +15,7 @@
     <link rel="stylesheet" href="/assets/opc/pricing.css?v=__OPC_PRICING_CSS_VERSION__" />
     <script defer src="/assets/opc/site-navigation.js?v=__SITE_NAVIGATION_JS_VERSION__"></script>
   </head>
-  <body>
+  <body class="home-canvas">
     <a class="site-skip-link" href="#top" data-site-copy="skip">跳至主要內容</a>
     <header class="site-header" data-header data-site-header data-site-page="home" data-site-mode="public" data-site-auth-state="pending" data-i18n-skip="true">
       <a class="brand" href="/" aria-label="Vecto 首頁" data-site-home-label>
@@ -60,417 +60,250 @@
     </header>
 
     <main id="top" tabindex="-1">
-      <section class="hero" aria-labelledby="hero-title">
-        <img
-          class="hero-media"
-          src="/assets/opc/vecto-ai-cockpit.png"
-          alt=""
-          width="1536"
-          height="864"
-          fetchpriority="high"
-        />
-        <div class="hero-shade" aria-hidden="true"></div>
-
-        <div class="hero-shell">
-          <div class="hero-copy">
-            <p class="eyebrow">Vecto Vanguard · 2026 正式版</p>
-            <h1 id="hero-title">OPC超級個體 AI駕駛倉</h1>
-            <p class="hero-lede">
-              以 Vecto OS 多維 AI 向量運算為底層，部署三組獨立社媒代理人帳號，自動完成內容產製、錯峰發布、熱點捕捉、互動答疑、私域沉澱與成交培育。
-            </p>
-
-            <div class="hero-actions" aria-label="主要操作">
-              <a class="button button-primary" href="#contact">申請使用</a>
-              <a class="button button-ghost" href="/subscription.html">查看訂閱方案</a>
-            </div>
-
-            <dl class="hero-metrics" aria-label="方案重點">
-              <div>
-                <dt>3 帳</dt>
-                <dd>乾貨、體驗、投放分工</dd>
-              </div>
-              <div>
-                <dt>1 點</dt>
-                <dd>等於新台幣 10 元</dd>
-              </div>
-              <div>
-                <dt>6,000</dt>
-                <dd>每月系統權限費</dd>
-              </div>
-            </dl>
-          </div>
-
-          <form class="lead-form" id="contact" novalidate>
-            <p class="form-kicker">遊客帳號申請</p>
-            <h2>提交資料，等待管理員授權</h2>
-
-            <div class="application-grid">
-              <label class="field" for="fullName">
-                <span>姓名</span>
-                <input id="fullName" name="fullName" autocomplete="name" placeholder="請輸入姓名" aria-describedby="fullNameError" required />
-                <small class="field-error" id="fullNameError"></small>
-              </label>
-
-              <label class="field" for="username">
-                <span>登入帳號</span>
-                <input id="username" name="username" autocomplete="username" placeholder="3-32 位英文或數字" aria-describedby="usernameError" required />
-                <small class="field-error" id="usernameError"></small>
-              </label>
-
-              <label class="field" for="applyPassword">
-                <span>登入密碼</span>
-                <input id="applyPassword" name="password" type="password" autocomplete="new-password" minlength="8" placeholder="至少 8 位" aria-describedby="applyPasswordError" required />
-                <small class="field-error" id="applyPasswordError"></small>
-              </label>
-
-              <label class="field" for="email">
-                <span>電子信箱</span>
-                <input id="email" name="email" type="email" autocomplete="email" placeholder="name@company.com" aria-describedby="emailError" />
-                <small class="field-error" id="emailError"></small>
-              </label>
-            </div>
-
-            <label class="field" for="company">
-              <span>公司 / 團隊</span>
-              <input
-                id="company"
-                name="company"
-                type="text"
-                autocomplete="organization"
-                placeholder="公司或團隊名稱（選填）"
-              />
-              <small class="field-error"></small>
-            </label>
-
-            <label class="field" for="phone">
-              <span>聯絡電話</span>
-              <input
-                id="phone"
-                name="phone"
-                type="tel"
-                inputmode="tel"
-                autocomplete="tel"
-                placeholder="請輸入可聯絡的電話"
-                aria-describedby="phoneError"
-                required
-              />
-              <small class="field-error" id="phoneError"></small>
-            </label>
-
-            <label class="field" for="interest">
-              <span>預計使用情境</span>
-              <select id="interest" name="useCase">
-                <option value="OPC導入">OPC 導入與三帳代營運</option>
-                <option value="算力計費">算力計費與預算規劃</option>
-                <option value="私域轉化">獨立站與私域轉化閉環</option>
-                <option value="企業多套">企業多套 OPC 批量部署</option>
-              </select>
-            </label>
-
-            <label class="consent" for="consent">
-              <input id="consent" name="consent" type="checkbox" required />
-              <span>我同意提交以上資料供管理員審核帳號使用權限。</span>
-            </label>
-
-            <button class="submit-button" type="submit">
-              <span>提交遊客申請</span>
-              <span aria-hidden="true">→</span>
-            </button>
-
-            <p class="form-note">送出後不會立即登入。管理員授權後，使用申請的帳號密碼進入 Web 控制台。</p>
-            <p class="form-status" id="formStatus" role="status" aria-live="polite"></p>
-          </form>
+      <div class="home-signal" aria-label="平台能力速覽">
+        <div class="home-signal-track">
+          <span>熱點抓取</span><span>人設記憶</span><span>草稿排序</span><span>矩陣發布</span><span>帳號隔離</span><span>瀏覽器接管</span><span>透明計費</span>
+          <span aria-hidden="true">熱點抓取</span><span aria-hidden="true">人設記憶</span><span aria-hidden="true">草稿排序</span><span aria-hidden="true">矩陣發布</span><span aria-hidden="true">帳號隔離</span><span aria-hidden="true">瀏覽器接管</span><span aria-hidden="true">透明計費</span>
         </div>
-      </section>
+      </div>
 
-      <section class="intro-band" id="solution" aria-labelledby="solution-title">
-        <div class="section-shell">
-          <div class="section-heading">
-            <p class="eyebrow">品牌介紹</p>
-            <h2 id="solution-title">重新繪製企業自動化營運版圖</h2>
-            <p>
-              Vecto 以多維 AI 向量技術作為底層，把社媒營運從單點人工發文，升級成可追蹤、可調度、可控成本的 AI 自動駕駛流程。
-            </p>
+      <section class="home-hero" aria-labelledby="hero-title">
+        <img class="home-hero-media" src="/assets/opc/vecto-ai-cockpit.png" alt="Vecto AI 社媒營運控制台的多任務畫面" width="1536" height="864" fetchpriority="high" />
+        <div class="home-hero-shade" aria-hidden="true"></div>
+        <div class="home-hero-inner">
+          <div class="home-hero-copy" data-home-reveal>
+            <p class="home-kicker">Vecto Vanguard · AI 社媒營運系統</p>
+            <h1 id="hero-title">讓三組 AI 代理人<br />持續替你經營社媒</h1>
+            <p class="home-hero-lede">從熱點抓取、內容生成到多帳號發布與人工接管，把分散操作收進一個可監控、可排隊、可追溯的營運流程。</p>
+            <div class="home-hero-actions" aria-label="主要操作">
+              <a class="button home-button-primary" href="#contact">申請使用</a>
+              <a class="button home-button-secondary" href="#solution">查看運作方式</a>
+            </div>
           </div>
 
-          <div class="system-grid">
-            <article class="system-card">
-              <span class="card-index">01</span>
-              <h3>Vecto OS</h3>
-              <p>核心 Agent 自動化底層平台，負責全域 AI 向量運算、多帳號智能調度、風控隔離、數據追蹤與算力計費。</p>
-            </article>
-            <article class="system-card accent">
-              <span class="card-index">02</span>
-              <h3>Vecto Vanguard 維拓先鋒</h3>
-              <p>前線落地執行服務品牌，面向企業與個體商家交付 OPC 超級業務個體與 AI 駕駛倉社媒營運方案。</p>
-            </article>
+          <div class="home-hero-runner" aria-label="自動化任務狀態" data-home-runner>
+            <div class="home-runner-heading">
+              <span class="home-live-dot" aria-hidden="true"></span>
+              <span>一條任務，串起完整營運鏈路</span>
+            </div>
+            <ol>
+              <li class="is-active"><span>01</span><strong>發現熱點</strong><small>篩選可用素材</small></li>
+              <li><span>02</span><strong>生成推文</strong><small>套用人設語氣</small></li>
+              <li><span>03</span><strong>矩陣排程</strong><small>依帳號錯峰發布</small></li>
+              <li><span>04</span><strong>瀏覽器執行</strong><small>異常可人工接管</small></li>
+            </ol>
           </div>
         </div>
       </section>
 
-      <section class="section-shell pain-section" aria-labelledby="pain-title">
-        <div class="split-heading">
+      <section class="home-proof" aria-label="系統核心指標">
+        <div>
+          <strong data-home-counter="3">3</strong><span>種代理人角色分工</span>
+        </div>
+        <div>
+          <strong>1 : 1</strong><span>每個帳號對應獨立瀏覽器</span>
+        </div>
+        <div>
+          <strong>24h</strong><span>排隊、執行與狀態追蹤</span>
+        </div>
+        <div>
+          <strong>可接管</strong><span>驗證碼與異常不再是黑盒</span>
+        </div>
+      </section>
+
+      <section class="home-capability-section" id="solution" aria-labelledby="solution-title">
+        <div class="home-section-head" data-home-reveal>
           <div>
-            <p class="eyebrow">產業痛點</p>
-            <h2 id="pain-title">硬廣越來越貴，單帳越來越脆弱</h2>
+            <p class="home-kicker">Core workflow</p>
+            <h2 id="solution-title">不是更多工具，<br />是更短的營運路徑</h2>
           </div>
-          <p>
-            OPC 以真實個體視角輸出乾貨、案例與軟內容，把一次性社媒曝光導入可反覆經營的私域資產。
-          </p>
+          <p>每個環節都能在同一個控制台查看狀態、修正內容與繼續執行。橫向瀏覽完整能力鏈路。</p>
         </div>
 
-        <div class="pain-grid">
-          <article>
-            <h3>信任感不足</h3>
-            <p>傳統硬廣容易被限流，用戶防禦心高，轉化成本持續攀升。</p>
+        <div class="home-media-rail" data-home-rail tabindex="0" aria-label="核心能力">
+          <article class="home-media-card home-media-card-wide">
+            <img src="/assets/opc/home/social-phone.jpg" alt="手機上的社交媒體內容介面" width="1600" height="1067" loading="lazy" />
+            <div><span>01 · Signal</span><h3>熱點不只抓回來，還能帶回互動數據</h3><p>保留來源、熱度與互動指標，進入草稿後仍可刷新與查看。</p></div>
           </article>
-          <article>
-            <h3>內容產能卡住</h3>
-            <p>手動產圖文、短片、互動回覆與活動素材，難以支撐日更與熱點節奏。</p>
+          <article class="home-media-card">
+            <img src="/assets/opc/home/content-studio.jpg" alt="內容創作者在工作室編輯素材" width="1600" height="1067" loading="lazy" />
+            <div><span>02 · Persona</span><h3>把內容寫成你的語氣</h3><p>人設記憶、推文風格與素材庫共同約束生成結果。</p></div>
           </article>
-          <article>
-            <h3>單帳風險過高</h3>
-            <p>帳號一旦限流或封鎖，投放、內容與私域入口會同步斷流。</p>
+          <article class="home-media-card home-media-card-accent">
+            <img src="/assets/opc/vecto-ai-cockpit.png" alt="Vecto 多帳號矩陣發布工作台" width="1536" height="864" loading="lazy" />
+            <div><span>03 · Matrix</span><h3>多帳號並行，超出並發就排隊</h3><p>每項任務都能看到執行、排隊、成功與人工處理狀態。</p></div>
           </article>
-          <article>
-            <h3>成本無法量化</h3>
-            <p>傳統代營運固定費僵化，淡旺季預算與素材產能不容易同步調整。</p>
+          <article class="home-media-card">
+            <img src="/assets/opc/home/analytics-screen.jpg" alt="筆記型電腦上的數據分析畫面" width="1600" height="1067" loading="lazy" />
+            <div><span>04 · Feedback</span><h3>發布之後，資料立即回到人設與草稿</h3><p>草稿順位、已發布數量與互動結果保持同步更新。</p></div>
+          </article>
+          <article class="home-media-card home-media-card-wide">
+            <img src="/assets/opc/home/server-rack.jpg" alt="資料中心伺服器機櫃" width="1600" height="1067" loading="lazy" />
+            <div><span>05 · Browser</span><h3>帳號、瀏覽器與網路身份各自隔離</h3><p>登入狀態、代理配置和人工接管都綁定到正確帳號。</p></div>
           </article>
         </div>
       </section>
 
-      <section class="flow-band" aria-labelledby="flow-title">
-        <div class="section-shell">
-          <div class="section-heading compact">
-            <p class="eyebrow">全鏈路閉環</p>
-            <h2 id="flow-title">從社媒曝光到私域成交沉澱</h2>
-          </div>
-
-          <ol class="flow-list">
-            <li>
-              <span>曝光</span>
-              <strong>三帳錯峰發布</strong>
-            </li>
-            <li>
-              <span>留資</span>
-              <strong>獨立站承接名單</strong>
-            </li>
-            <li>
-              <span>分類</span>
-              <strong>向量標籤需求</strong>
-            </li>
-            <li>
-              <span>培育</span>
-              <strong>私域內容跟進</strong>
-            </li>
-            <li>
-              <span>成交</span>
-              <strong>預約與轉化沉澱</strong>
-            </li>
+      <section class="home-flow-section" aria-labelledby="flow-title">
+        <div class="home-flow-copy" data-home-reveal>
+          <p class="home-kicker">One continuous loop</p>
+          <h2 id="flow-title">從發現，到發布，<br />再回到下一次決策</h2>
+          <p>流程不是一次性的按鈕串接。每一步產出的狀態與資料，都會成為下一步可使用的內容。</p>
+        </div>
+        <div class="home-flow-board" data-home-flow data-home-reveal>
+          <div class="home-flow-line" aria-hidden="true"><span></span></div>
+          <ol>
+            <li><span>01</span><div><strong>發現</strong><small>熱點與來源資料進庫</small></div></li>
+            <li><span>02</span><div><strong>整理</strong><small>人設語氣與素材編排</small></div></li>
+            <li><span>03</span><div><strong>審核</strong><small>草稿排序與批量選擇</small></div></li>
+            <li><span>04</span><div><strong>執行</strong><small>多帳號瀏覽器任務</small></div></li>
+            <li><span>05</span><div><strong>回流</strong><small>發布歷史與數據更新</small></div></li>
           </ol>
         </div>
       </section>
 
-      <section class="section-shell" id="agents" aria-labelledby="agents-title">
-        <div class="split-heading">
+      <section class="home-agents-section" id="agents" aria-labelledby="agents-title">
+        <div class="home-section-head home-section-head-light" data-home-reveal>
           <div>
-            <p class="eyebrow">標準配置</p>
-            <h2 id="agents-title">三組社媒代理人帳號獨立運行</h2>
+            <p class="home-kicker">Three-account architecture</p>
+            <h2 id="agents-title">三個角色，<br />不是三份重複內容</h2>
           </div>
-          <p>
-            每套 OPC 內建 3 組分工帳號，互相引流、內容互補、風險分擔，維持長期穩定的獲客通道。
-          </p>
+          <p>各帳號擁有獨立人設、瀏覽器與發布節奏，彼此協作但不混用身份。</p>
         </div>
-
-        <div class="agent-grid">
-          <article class="agent-card">
-            <span class="agent-role">信任核心</span>
+        <div class="home-agent-stage">
+          <article data-home-reveal>
+            <span class="home-agent-number">01</span>
+            <p class="home-agent-role">Trust</p>
             <h3>乾貨主帳</h3>
-            <p>以產業內行人設輸出市場解析、政策對比與專業乾貨，建立帳號權威基底。</p>
+            <p>以專業解析、產業觀點與長期內容建立可信度。</p>
+            <ul><li>深度內容</li><li>產業熱點</li><li>品牌人設</li></ul>
           </article>
-          <article class="agent-card">
-            <span class="agent-role">降低防備</span>
-            <h3>真實體驗帳</h3>
-            <p>以一般使用者視角分享經歷與場景，軟植入服務價值，降低平台廣告判定。</p>
+          <article data-home-reveal>
+            <span class="home-agent-number">02</span>
+            <p class="home-agent-role">Experience</p>
+            <h3>體驗副帳</h3>
+            <p>用生活化視角回應疑問，降低受眾理解與決策門檻。</p>
+            <ul><li>情境分享</li><li>評論回覆</li><li>自然互動</li></ul>
           </article>
-          <article class="agent-card">
-            <span class="agent-role">流量放大</span>
-            <h3>廣告投放帳</h3>
-            <p>負責熱點節點投放、素材擴散與活動流量承接，導流獨立站與私域。</p>
+          <article data-home-reveal>
+            <span class="home-agent-number">03</span>
+            <p class="home-agent-role">Reach</p>
+            <h3>投放擴散帳</h3>
+            <p>承接高時效素材與活動流量，放大有效內容的觸達。</p>
+            <ul><li>錯峰發布</li><li>活動素材</li><li>流量承接</li></ul>
           </article>
         </div>
       </section>
 
-      <section class="scenario-band" id="scenarios" aria-labelledby="scenarios-title">
+      <section class="home-infra-section" aria-labelledby="infra-title">
+        <div class="home-section-head" data-home-reveal>
+          <div><p class="home-kicker">Account infrastructure</p><h2 id="infra-title">自動化要快，<br />身份邊界更要清楚</h2></div>
+          <p>每個社媒帳號對應自己的瀏覽器環境、登入狀態與可選代理配置，避免操作互相污染。</p>
+        </div>
+        <div class="home-infra-grid">
+          <article class="home-infra-visual" data-home-reveal>
+            <img src="/assets/opc/home/server-rack.jpg" alt="獨立執行環境的伺服器基礎設施" width="1600" height="1067" loading="lazy" />
+            <div><span>Account isolation</span><strong>一個帳號，一個瀏覽器環境</strong></div>
+          </article>
+          <article class="home-infra-status" data-home-reveal>
+            <span class="home-status-label">執行狀態</span>
+            <h3>所有任務都有位置</h3>
+            <dl><div><dt>執行中</dt><dd>02</dd></div><div><dt>排隊中</dt><dd>04</dd></div><div><dt>人工處理</dt><dd>01</dd></div></dl>
+            <p>超出並發上限的任務自動排隊，不會搶占其他帳號的瀏覽器。</p>
+          </article>
+          <article class="home-infra-control" data-home-reveal>
+            <span class="home-status-label">Human takeover</span>
+            <h3>需要你時，畫面和工具都在原位</h3>
+            <p>輸入驗證碼、傳送文字、截圖或打開完整窗口，處理後交還自動化流程。</p>
+            <div class="home-control-row" aria-hidden="true"><span>輸入文字</span><span>截圖</span><span>繼續任務</span></div>
+          </article>
+          <article class="home-infra-network" data-home-reveal>
+            <span class="home-status-label">Network identity</span>
+            <h3>靜態住宅代理是可選項</h3>
+            <p>可按帳號設定 SOCKS5 / HTTP 代理；未配置時仍保留帳號資料，不強迫填寫。</p>
+            <a href="/proxy-market.html">瀏覽可用代理節點 <span aria-hidden="true">→</span></a>
+          </article>
+        </div>
+      </section>
+
+      <section class="home-scenarios-section" id="scenarios" aria-labelledby="scenarios-title">
+        <div class="home-section-head home-section-head-light" data-home-reveal>
+          <div><p class="home-kicker">Use cases</p><h2 id="scenarios-title">同一套流程，<br />適應不同內容節奏</h2></div>
+          <p>讓高頻日更、即時熱點、專業知識與活動內容都能進入可重複執行的工作流。</p>
+        </div>
+        <div class="home-scenario-mosaic">
+          <article class="home-scenario-feature" data-home-reveal>
+            <img src="/assets/opc/home/content-studio.jpg" alt="團隊製作與編輯社媒內容" width="1600" height="1067" loading="lazy" />
+            <div><span>01</span><h3>品牌日常營運</h3><p>穩定供應符合人設的內容，降低重複編輯和切換帳號的時間。</p></div>
+          </article>
+          <article data-home-reveal><span>02</span><h3>即時熱點跟進</h3><p>抓取、篩選、改寫、排程，在同一個處理流程中完成。</p></article>
+          <article data-home-reveal><span>03</span><h3>知識型個人品牌</h3><p>把專業觀點沉澱成人設記憶，持續產出一致內容。</p></article>
+          <article data-home-reveal><span>04</span><h3>多客戶代營運</h3><p>不同人設、帳號、瀏覽器和素材庫保持清楚邊界。</p></article>
+        </div>
+      </section>
+
+      <section class="pricing-band home-pricing-band" id="pricing" aria-labelledby="pricing-title">
         <div class="section-shell">
-          <div class="section-heading">
-            <p class="eyebrow">五大商業場景</p>
-            <h2 id="scenarios-title">常態鋪量、事件衝量、風控與成本一起被管理</h2>
+          <div class="home-section-head home-section-head-dark" data-home-reveal>
+            <div><p class="home-kicker">Plans & credits</p><h2 id="pricing-title">訂閱提供權限，<br />算力按實際執行使用</h2></div>
+            <p>月度訂閱與算力點分開管理。每個需要計費的操作，在控制台按鈕旁直接顯示價格。</p>
           </div>
-
-          <div class="scenario-grid">
-            <article>
-              <span>01</span>
-              <h3>常態乾貨鋪量</h3>
-              <p>AI 抓取產業熱點並生成乾貨圖文，三帳錯峰發布，長期累積高信任自然流量。</p>
-            </article>
-            <article>
-              <span>02</span>
-              <h3>事件營銷突擊</h3>
-              <p>短期政策、節慶、優惠窗口期內批量生成素材與短片，快速提高高意向諮詢。</p>
-            </article>
-            <article>
-              <span>03</span>
-              <h3>多帳風控隔離</h3>
-              <p>三帳內容屬性與環境獨立，AI 控制頻率、互動強度與素材合規，降低連鎖風險。</p>
-            </article>
-            <article>
-              <span>04</span>
-              <h3>獨立站與私域沉澱</h3>
-              <p>社媒流量導入資源領取頁，綁定 LINE 私域，依需求標籤推送內容與活動。</p>
-            </article>
-            <article>
-              <span>05</span>
-              <h3>算力彈性計費</h3>
-              <p>訂閱開權限，內容執行與素材產製按量扣點，淡旺季都能精準控預算。</p>
-            </article>
-          </div>
+          <div class="pricing-layout" id="homePricingLayout" aria-live="polite"><div class="catalog-loading">正在讀取目前方案</div></div>
+          <div class="package-grid" id="homePackageGrid" aria-label="算力儲值套餐" aria-live="polite"><div class="catalog-loading">正在讀取算力儲值方案</div></div>
         </div>
       </section>
 
-      <section class="section-shell modules-section" aria-labelledby="modules-title">
-        <div class="split-heading">
-          <div>
-            <p class="eyebrow">獨立站模組</p>
-            <h2 id="modules-title">五個入口承接社媒流量</h2>
-          </div>
-          <p>
-            從首頁留資、訂閱銷售、算力充值、乾貨下載到後台管理，讓流量與營運資料能被持續沉澱。
-          </p>
+      <section class="home-difference-section" id="service-difference" aria-labelledby="difference-title">
+        <div class="home-section-head" data-home-reveal>
+          <div><p class="home-kicker">Service difference</p><h2 id="difference-title">交付的不只是功能，<br />而是一條能持續運作的鏈路</h2></div>
+          <p>Vecto 將內容、帳號、瀏覽器和任務狀態放在同一套營運上下文中。</p>
         </div>
-
-        <ul class="module-list">
-          <li>流量落地首頁</li>
-          <li>OPC 訂閱銷售頁</li>
-          <li>算力充值商城</li>
-          <li>產業乾貨資源庫</li>
-          <li>Vecto OS 後台管理系統</li>
-        </ul>
-      </section>
-
-      <section class="pricing-band" id="pricing" aria-labelledby="pricing-title">
-        <div class="section-shell">
-          <div class="section-heading">
-            <p class="eyebrow">官方服務方案</p>
-            <h2 id="pricing-title">月度訂閱與算力儲值完全獨立</h2>
-            <p>
-              訂閱費為系統權限費；所有內容執行、素材產製、互動任務需額外使用算力點，不互相抵扣。
-            </p>
-          </div>
-
-          <div class="pricing-layout" id="homePricingLayout" aria-live="polite">
-            <div class="catalog-loading">正在讀取目前方案</div>
-          </div>
-
-          <div class="package-grid" id="homePackageGrid" aria-label="算力儲值套餐" aria-live="polite">
-            <div class="catalog-loading">正在讀取算力儲值方案</div>
-          </div>
+        <div class="home-compare" data-home-reveal>
+          <div class="home-compare-head"><span>傳統工具拼接</span><strong>Vecto 營運鏈路</strong></div>
+          <div><span>資料分散在不同工具，狀態靠人工同步</span><strong>草稿、發布、人設與任務狀態即時回流</strong></div>
+          <div><span>同一瀏覽器反覆切換多個帳號</span><strong>每個帳號擁有獨立瀏覽器與登入狀態</strong></div>
+          <div><span>異常時只看到失敗結果</span><strong>可預覽、輸入、截圖並人工接管當前流程</strong></div>
+          <div><span>費用散落在功能說明裡</span><strong>功能按鈕旁顯示價格，扣費紀錄可追溯</strong></div>
         </div>
       </section>
 
-      <section class="difference-band" id="service-difference" aria-labelledby="difference-title">
-        <div class="section-shell">
-          <div class="difference-heading">
-            <div>
-              <p class="eyebrow">核心定位差異</p>
-              <h2 id="difference-title">Vecto OPC 服務型平台完整差異化打造方案</h2>
-            </div>
-            <p class="difference-lead">
-              市面同類產品是需要你操作的第三方 SaaS 工具；Vecto 是人機一體服務體系。智能體是你的專屬僕人，你即是 OPC，平台只做後台支撐，不佔據主體。
-            </p>
-          </div>
-
-          <div class="difference-grid" aria-label="競品與 Vecto OPC 底層定位比較">
-            <article class="difference-panel competitor-panel">
-              <div class="difference-panel-title">
-                <span>傳統工具</span>
-                <h3>競品傳統工具邏輯</h3>
-              </div>
-              <ol class="difference-list">
-                <li>
-                  <span>產品屬性</span>
-                  <p>獨立第三方系統、外掛工具，使用者是「操作員」。</p>
-                </li>
-                <li>
-                  <span>人機關係</span>
-                  <p>人操控軟體，AI 只是附帶功能，系統與用戶割裂。</p>
-                </li>
-                <li>
-                  <span>價值交付</span>
-                  <p>只交付功能，你要自己寫文案、調參數、盯數據、處理風險。</p>
-                </li>
-                <li>
-                  <span>所有權</span>
-                  <p>帳號、流量數據寄存平台，平台是獨立第三方中介。</p>
-                </li>
-              </ol>
-            </article>
-
-            <article class="difference-panel vecto-panel">
-              <div class="difference-panel-title">
-                <span>Vecto OPC</span>
-                <h3>人機一體僕從式架構</h3>
-              </div>
-              <ol class="difference-list">
-                <li>
-                  <span>產品屬性</span>
-                  <p>Agent-as-a-Service 服務載體，不是獨立平台，而是用戶的數位延伸。</p>
-                </li>
-                <li>
-                  <span>人機關係</span>
-                  <p>你是主體，三組 AI 智能體是專屬僕人，完全繼承你的人設、語氣與營運目標；OPC 是「你＋智能體」的整體代稱。</p>
-                </li>
-                <li>
-                  <span>價值交付</span>
-                  <p>交付完整營運結果，而非零散功能；智能體自主完成全流程，你只做方向審核與策略決策。</p>
-                </li>
-                <li>
-                  <span>所有權</span>
-                  <p>所有社媒帳號、私域客戶、流量數據與獨立站資產 100% 歸屬客戶，平台僅提供技術算力與落地服務。</p>
-                </li>
-              </ol>
-            </article>
-          </div>
+      <section class="home-contact-section" aria-labelledby="contact-title">
+        <div class="home-contact-copy" data-home-reveal>
+          <p class="home-kicker">Start with your workflow</p>
+          <h2 id="contact-title">把你的內容營運，<br />交給一套看得見的流程</h2>
+          <p>提交資料後由管理員審核授權。已有帳號可直接登入 Web 控制台。</p>
+          <button class="button home-button-secondary" type="button" data-open-login>登入現有帳號</button>
         </div>
+
+        <form class="lead-form home-lead-form" id="contact" novalidate data-home-reveal>
+          <p class="form-kicker">遊客帳號申請</p>
+          <h2>提交資料，等待管理員授權</h2>
+          <div class="application-grid">
+            <label class="field" for="fullName"><span>姓名</span><input id="fullName" name="fullName" autocomplete="name" placeholder="請輸入姓名" aria-describedby="fullNameError" required /><small class="field-error" id="fullNameError"></small></label>
+            <label class="field" for="username"><span>登入帳號</span><input id="username" name="username" autocomplete="username" placeholder="3-32 位英文或數字" aria-describedby="usernameError" required /><small class="field-error" id="usernameError"></small></label>
+            <label class="field" for="applyPassword"><span>登入密碼</span><input id="applyPassword" name="password" type="password" autocomplete="new-password" minlength="8" placeholder="至少 8 位" aria-describedby="applyPasswordError" required /><small class="field-error" id="applyPasswordError"></small></label>
+            <label class="field" for="email"><span>電子信箱</span><input id="email" name="email" type="email" autocomplete="email" placeholder="name@company.com" aria-describedby="emailError" /><small class="field-error" id="emailError"></small></label>
+          </div>
+          <div class="application-grid">
+            <label class="field" for="company"><span>公司 / 團隊</span><input id="company" name="company" type="text" autocomplete="organization" placeholder="公司或團隊名稱（選填）" /><small class="field-error"></small></label>
+            <label class="field" for="phone"><span>聯絡電話</span><input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="請輸入可聯絡的電話" aria-describedby="phoneError" required /><small class="field-error" id="phoneError"></small></label>
+          </div>
+          <label class="field" for="interest"><span>預計使用情境</span><select id="interest" name="useCase"><option value="OPC導入">OPC 導入與三帳代營運</option><option value="算力計費">算力計費與預算規劃</option><option value="私域轉化">獨立站與私域轉化閉環</option><option value="企業多套">企業多套 OPC 批量部署</option></select></label>
+          <label class="consent" for="consent"><input id="consent" name="consent" type="checkbox" required /><span>我同意提交以上資料供管理員審核帳號使用權限。</span></label>
+          <button class="submit-button" type="submit"><span>提交遊客申請</span><span aria-hidden="true">→</span></button>
+          <p class="form-note">送出後不會立即登入。管理員授權後，使用申請的帳號密碼進入 Web 控制台。</p>
+          <p class="form-status" id="formStatus" role="status" aria-live="polite"></p>
+        </form>
       </section>
 
-      <section class="compliance-band" aria-labelledby="compliance-title">
-        <div class="section-shell compliance-layout">
-          <div>
-            <p class="eyebrow">合規與風控</p>
-            <h2 id="compliance-title">客觀內容、帳號隔離、AI 前置審查</h2>
-          </div>
-          <ul>
-            <li>所有內容客觀中立，不誇大效果、不做虛假承諾。</li>
-            <li>全站與貼文配置標準免責聲明，維持平台合規。</li>
-            <li>三帳號獨立向量隔離，避免單點封鎖造成全帳斷流。</li>
-            <li>AI 前置過濾違規詞彙，維持真實分享口吻。</li>
-          </ul>
-        </div>
+      <section class="home-trust-strip" aria-label="合規與風控">
+        <span>內容前置審查</span><span>帳號環境隔離</span><span>任務記錄可追溯</span><span>人工處理可接管</span><span>資料資產歸屬客戶</span>
       </section>
     </main>
 
-    <footer class="site-footer">
-      <div class="footer-brand">
-        <span class="footer-logo-frame" aria-hidden="true">
-          <img class="footer-logo" src="/assets/opc/vecto-logo-ui-icon.png?v=20260711" alt="" width="1024" height="1024" />
-        </span>
-        <div>
-          <strong>Vecto 維拓</strong>
-          <span>OPC超級個體 AI駕駛倉</span>
-        </div>
-      </div>
-      <a class="button button-primary" href="#contact">申請遊客帳號</a>
+    <footer class="site-footer home-footer">
+      <div class="footer-brand"><span class="footer-logo-frame" aria-hidden="true"><img class="footer-logo" src="/assets/opc/vecto-logo-ui-icon.png?v=20260711" alt="" width="1024" height="1024" /></span><div><strong>Vecto 維拓</strong><span>AI 社媒營運駕駛艙</span></div></div>
+      <div class="home-footer-links"><a href="#solution">解決方案</a><a href="/subscription.html">訂閱方案</a><a href="/proxy-market.html">代理商城</a><a href="#contact">申請使用</a></div>
     </footer>
 
     <div class="auth-overlay" id="loginModal" aria-hidden="true">
@@ -481,19 +314,7 @@
         <p class="auth-copy">此處僅供已授權用戶登入，成功後直接進入 Web 任務控制台。</p>
         <form id="homeLoginForm" novalidate>
           <label class="field" for="loginUsername"><span>帳號</span><input id="loginUsername" name="username" autocomplete="username" required /></label>
-          <label class="field" for="loginPassword">
-            <span>密碼</span>
-            <span class="auth-password-field">
-              <input id="loginPassword" name="password" type="password" autocomplete="current-password" required />
-              <button class="auth-password-toggle" type="button" data-login-password-toggle aria-label="顯示密碼" title="顯示密碼" aria-controls="loginPassword" aria-pressed="false">
-                <svg class="auth-eye-icon" viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path>
-                  <circle cx="12" cy="12" r="3"></circle>
-                  <path class="auth-eye-slash" d="M4 20L20 4"></path>
-                </svg>
-              </button>
-            </span>
-          </label>
+          <label class="field" for="loginPassword"><span>密碼</span><span class="auth-password-field"><input id="loginPassword" name="password" type="password" autocomplete="current-password" required /><button class="auth-password-toggle" type="button" data-login-password-toggle aria-label="顯示密碼" title="顯示密碼" aria-controls="loginPassword" aria-pressed="false"><svg class="auth-eye-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="3"></circle><path class="auth-eye-slash" d="M4 20L20 4"></path></svg></button></span></label>
           <label class="auth-remember" data-login-remember><input name="remember_me" type="checkbox" /> <span>記住帳號與登入狀態</span></label>
           <button class="submit-button" type="submit"><span>進入 Web 任務控制台</span><span aria-hidden="true">→</span></button>
           <p class="form-status" id="loginStatus" role="status" aria-live="polite"></p>

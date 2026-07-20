@@ -547,6 +547,74 @@ async function loadLoginPolicy() {
 applicationForm?.querySelectorAll("input").forEach((input) => {
   input.addEventListener("input", () => setFieldError(input, ""));
 });
+
+function initHomeExperience() {
+  if (!document.body.classList.contains("home-canvas")) return;
+
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const revealItems = [...document.querySelectorAll("[data-home-reveal]")];
+  if (reducedMotion || !("IntersectionObserver" in window)) {
+    revealItems.forEach((item) => item.classList.add("is-visible"));
+  } else {
+    const revealObserver = new IntersectionObserver((entries, observer) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        entry.target.classList.add("is-visible");
+        observer.unobserve(entry.target);
+      });
+    }, { threshold: 0.12, rootMargin: "0px 0px -5%" });
+    revealItems.forEach((item) => revealObserver.observe(item));
+  }
+
+  const runner = document.querySelector("[data-home-runner]");
+  const runnerSteps = [...(runner?.querySelectorAll("li") || [])];
+  if (!reducedMotion && runnerSteps.length > 1) {
+    let activeRunnerStep = 0;
+    window.setInterval(() => {
+      if (document.hidden) return;
+      runnerSteps[activeRunnerStep].classList.remove("is-active");
+      activeRunnerStep = (activeRunnerStep + 1) % runnerSteps.length;
+      runnerSteps[activeRunnerStep].classList.add("is-active");
+    }, 2400);
+  }
+
+  const flowBoard = document.querySelector("[data-home-flow]");
+  if (flowBoard) {
+    const flowSteps = [...flowBoard.querySelectorAll("li")];
+    const runFlow = () => {
+      flowBoard.classList.add("is-running");
+      flowSteps.forEach((step, index) => {
+        window.setTimeout(() => step.classList.add("is-active"), 180 + index * 220);
+      });
+    };
+    if (reducedMotion || !("IntersectionObserver" in window)) {
+      runFlow();
+    } else {
+      const flowObserver = new IntersectionObserver((entries, observer) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        runFlow();
+        observer.disconnect();
+      }, { threshold: 0.28 });
+      flowObserver.observe(flowBoard);
+    }
+  }
+
+  const rail = document.querySelector("[data-home-rail]");
+  if (!reducedMotion && rail) {
+    let railPaused = false;
+    const pauseRail = () => { railPaused = true; };
+    const resumeRail = () => { railPaused = false; };
+    ["pointerenter", "focusin", "touchstart"].forEach((eventName) => rail.addEventListener(eventName, pauseRail, { passive: true }));
+    ["pointerleave", "focusout", "touchend"].forEach((eventName) => rail.addEventListener(eventName, resumeRail, { passive: true }));
+    window.setInterval(() => {
+      if (railPaused || document.hidden || rail.scrollWidth <= rail.clientWidth) return;
+      const nextPosition = rail.scrollLeft + Math.min(430, rail.clientWidth * 0.72);
+      const reachedEnd = nextPosition >= rail.scrollWidth - rail.clientWidth - 12;
+      rail.scrollTo({ left: reachedEnd ? 0 : nextPosition, behavior: "smooth" });
+    }, 5200);
+  }
+}
+
 window.addEventListener("scroll", setHeaderState, { passive: true });
 window.addEventListener("vecto:language-change", (event) => applyPublicLanguage(event.detail?.language));
 markPublicStaticUi();
@@ -554,3 +622,4 @@ applyPublicLanguage(window.VectoSiteNavigation?.currentLanguage() || "zh-Hant");
 startPublicLanguageObserver();
 loadLoginPolicy();
 setHeaderState();
+initHomeExperience();
