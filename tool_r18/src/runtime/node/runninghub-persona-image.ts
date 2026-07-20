@@ -67,8 +67,11 @@ function extractOutputUrl(value: unknown): string | undefined {
 
 function classifyRunningHubError(errorText: string): { retryable: boolean; reasonCode: string } {
   if (/API Key|TOKEN|auth|unauthor/i.test(errorText)) return { retryable: false, reasonCode: "auth_missing" };
+  if (/1005|1017|service is upgrading|restarting|internal server error|服务正在升级|服务正在重启|内部服务器错误/i.test(errorText)) {
+    return { retryable: true, reasonCode: "upstream_error" };
+  }
   if (/timeout|超时|逾時/i.test(errorText)) return { retryable: true, reasonCode: "timeout" };
-  if (/RunningHub 任务失败|fail|error/i.test(errorText)) return { retryable: true, reasonCode: "upstream_error" };
+  if (/RunningHub 任务失败|调用失败|fail|error/i.test(errorText)) return { retryable: true, reasonCode: "upstream_error" };
   return { retryable: false, reasonCode: "unknown" };
 }
 

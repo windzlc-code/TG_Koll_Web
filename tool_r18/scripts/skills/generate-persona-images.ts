@@ -98,23 +98,36 @@ const unsupportedImageApi = {
   generate: async (payload: any) => {
     const startedAt = Date.now();
     if (payload?.runningHubNewPersonaMode) {
-      const result = await generateRunningHubNewPersonaStandardImage({
-        prompt: payload.prompt,
-        mode: payload.runningHubNewPersonaMode,
-        aspectRatio: payload.aspectRatio,
-        referenceImage: payload.avatarSource || payload.avatarBase64,
-        referenceImageMimeType: payload.avatarMimeType,
-        timeoutMs: payload.timeoutMs,
-      }, {
-        configPath: payload.configPath,
-        dataDir: payload.dataDir,
-      });
+      const attempts: Array<{ attempt: number; ok: boolean; reasonCode?: string; error?: string }> = [];
+      let result: any;
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        result = await generateRunningHubNewPersonaStandardImage({
+          prompt: payload.prompt,
+          mode: payload.runningHubNewPersonaMode,
+          aspectRatio: payload.aspectRatio,
+          referenceImage: payload.avatarSource || payload.avatarBase64,
+          referenceImageMimeType: payload.avatarMimeType,
+          timeoutMs: payload.timeoutMs,
+        }, {
+          configPath: payload.configPath,
+          dataDir: payload.dataDir,
+        });
+        attempts.push({
+          attempt,
+          ok: Boolean(result?.ok && result?.url),
+          reasonCode: result?.reasonCode,
+          error: result?.error ? String(result.error).slice(0, 240) : undefined,
+        });
+        if (result?.ok || !result?.retryable || attempt >= 3) break;
+        await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
+      }
       return {
         ...result,
         timings: {
           ...(result as any)?.timings,
           provider: "runninghub-standard-model",
           mode: payload.runningHubNewPersonaMode,
+          attempts,
           elapsedMs: Date.now() - startedAt,
           timeoutMs: payload.timeoutMs || 300_000,
         },
