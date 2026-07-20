@@ -12844,7 +12844,16 @@ def _terminate_persona_hot_process(process: subprocess.Popen[str] | None) -> Non
     if isinstance(returncode, int):
         return
     if os.name == "nt":
-        process.terminate()
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                check=False,
+                capture_output=True,
+                timeout=5,
+            )
+        except Exception:
+            with contextlib.suppress(Exception):
+                process.terminate()
     else:
         with contextlib.suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGTERM)
@@ -12852,7 +12861,8 @@ def _terminate_persona_hot_process(process: subprocess.Popen[str] | None) -> Non
         process.wait(timeout=2)
     except subprocess.TimeoutExpired:
         if os.name == "nt":
-            process.kill()
+            with contextlib.suppress(Exception):
+                process.kill()
         else:
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
@@ -16308,6 +16318,10 @@ def _persona_dashboard_refresh_worker_v2(
     archive_ids: list[str] | None = None,
 ) -> None:
     started = time.time()
+    proc: subprocess.Popen[str] | None = None
+    tmpdir: tempfile.TemporaryDirectory[str] | None = None
+    stdout_file: Any | None = None
+    stderr_file: Any | None = None
     refresh_source = (source or os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "browser").strip().lower() or "browser"
     scope = "单个人设" if archive_id else (
         f"当前账号的 {len(archive_ids)} 个人设"
@@ -16354,12 +16368,13 @@ def _persona_dashboard_refresh_worker_v2(
             text=True,
             stdout=stdout_file,
             stderr=stderr_file,
+            start_new_session=os.name != "nt",
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
         )
         while proc.poll() is None:
             elapsed = int(time.time() - started)
             if elapsed > 900:
-                proc.kill()
-                proc.wait(timeout=10)
+                _terminate_persona_hot_process(proc)
                 raise TimeoutError("刷新超时，已停止本次任务。")
             stdout_file.flush()
             stderr_file.flush()
@@ -16418,6 +16433,16 @@ def _persona_dashboard_refresh_worker_v2(
                 "elapsed_seconds": int(time.time() - started),
                 "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             })
+    finally:
+        if proc is not None and proc.poll() is None:
+            _terminate_persona_hot_process(proc)
+        for output_file in (stdout_file, stderr_file):
+            if output_file is not None:
+                with contextlib.suppress(Exception):
+                    output_file.close()
+        if tmpdir is not None:
+            with contextlib.suppress(Exception):
+                tmpdir.cleanup()
 
 
 def _persona_dashboard_refresh_is_running() -> bool:

@@ -432,6 +432,7 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
             self.assertIsNone(social_api._WORKER_THREAD)
         finally:
             social_api.stop_social_automation_worker(timeout_seconds=2)
+            social_api._WORKER_STOP.clear()
             if old_enabled is None:
                 os.environ.pop("SOCIAL_AUTOMATION_WORKER_ENABLED", None)
             else:

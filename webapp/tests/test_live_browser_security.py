@@ -1,5 +1,7 @@
 import asyncio
 import json
+import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -10,6 +12,15 @@ from fastapi.testclient import TestClient
 from social_automation import live_browser
 from webapp import social_automation_api
 from webapp.auth import get_current_user
+
+
+def test_container_entrypoint_refuses_to_run_without_process_reaper():
+    entrypoint = (Path(__file__).resolve().parents[2] / "docker" / "entrypoint.sh").read_text(encoding="utf-8")
+
+    assert "/usr/bin/tini" in entrypoint
+    assert "/data/bin/catatonit" in entrypoint
+    assert "refusing to start browser workloads without child-process reaping" in entrypoint
+    assert "exit 1" in entrypoint
 
 
 def _set_encodings(*encodings: int) -> bytes:
@@ -792,6 +803,183 @@ def test_stop_restored_registry_session_terminates_processes_before_removal():
     assert events == [("terminate", session.id), ("remove", session.id)]
 
 
+def test_stop_live_browser_waits_after_forced_process_kill(tmp_path):
+    process = mock.Mock()
+    process.poll.return_value = None
+    process.wait.side_effect = [subprocess.TimeoutExpired("Xvnc", 3), 0]
+    session = live_browser.LiveBrowserSession(
+        id="live_task-1",
+        task_id="task-1",
+        account_id="account-1",
+        account_username="user",
+        platform="threads",
+        task_type="open_login",
+        display=":91",
+        width=1600,
+        height=900,
+        vnc_port=5901,
+        web_port=6901,
+        started_at=1,
+        processes=[process],
+        temp_dir=str(tmp_path),
+    )
+
+    with mock.patch.object(live_browser, "_remove_session_registry"):
+        live_browser.stop_live_browser_session(session.id, session=session)
+
+    process.terminate.assert_called_once_with()
+    process.kill.assert_called_once_with()
+    assert len(process.wait.call_args_list) == 2
+    assert all(call.kwargs["timeout"] >= 0 for call in process.wait.call_args_list)
+
+
+def test_stop_all_live_browser_sessions_includes_memory_and_registry_sessions():
+    memory_session = live_browser.LiveBrowserSession(
+        id="live_memory",
+        task_id="task-memory",
+        account_id="account-1",
+        account_username="user",
+        platform="threads",
+        task_type="open_login",
+        display=":91",
+        width=1600,
+        height=900,
+        vnc_port=5901,
+        web_port=6901,
+        started_at=1,
+    )
+    registry_session = live_browser.LiveBrowserSession(
+        id="live_registry",
+        task_id="task-registry",
+        account_id="account-2",
+        account_username="user-2",
+        platform="threads",
+        task_type="publish_post",
+        display=":92",
+        width=1600,
+        height=900,
+        vnc_port=5902,
+        web_port=6902,
+        started_at=1,
+    )
+    live_browser._SESSIONS[memory_session.id] = memory_session
+    try:
+        with (
+            mock.patch.object(live_browser, "_load_registry_sessions", return_value=[registry_session]),
+            mock.patch.object(live_browser, "stop_live_browser_session") as stop_session,
+        ):
+            live_browser.stop_all_live_browser_sessions()
+    finally:
+        live_browser._SESSIONS.clear()
+
+    assert {call.args[0] for call in stop_session.call_args_list} == {"live_memory", "live_registry"}
+
+
+def test_worker_shutdown_forces_remaining_tasks_and_closes_browser_sessions():
+    task_thread = mock.Mock()
+    task_thread.is_alive.return_value = True
+    events = []
+    task_thread.join.side_effect = lambda **_kwargs: events.append("join")
+
+    try:
+        with (
+            mock.patch.object(social_automation_api, "_WORKER_THREAD", None),
+            mock.patch.object(social_automation_api, "_RUNNING_TASK_CONTROLS", {"task-1": {}}),
+            mock.patch.object(social_automation_api, "_WORKER_TASK_THREADS", {"task-1": task_thread}),
+            mock.patch.object(
+                social_automation_api,
+                "_force_stop_running_task",
+                side_effect=lambda *_args, **_kwargs: events.append("force_stop"),
+            ) as force_stop,
+            mock.patch.object(
+                live_browser,
+                "stop_all_live_browser_sessions",
+                side_effect=lambda **_kwargs: events.append("close_browsers"),
+            ) as stop_all_sessions,
+        ):
+            social_automation_api.stop_social_automation_worker(timeout_seconds=0.01)
+    finally:
+        social_automation_api._WORKER_STOP.clear()
+
+    force_stop.assert_called_once_with(
+        "task-1",
+        reason="service shutdown",
+        mark_cancelled=True,
+        deadline=mock.ANY,
+    )
+    assert stop_all_sessions.call_args.kwargs["timeout_seconds"] > 0
+    assert task_thread.join.called
+    assert events.index("force_stop") < events.index("join")
+    assert events.index("close_browsers") < events.index("join")
+
+
+def test_worker_launch_stops_claiming_when_shutdown_starts():
+    social_automation_api._WORKER_STOP.set()
+    try:
+        with mock.patch.object(social_automation_api, "_claim_next_task") as claim:
+            assert social_automation_api._launch_available_social_tasks() == 0
+            assert social_automation_api.run_social_automation_once() is None
+        claim.assert_not_called()
+    finally:
+        social_automation_api._WORKER_STOP.clear()
+
+
+def test_claimed_task_cannot_start_after_shutdown_signal():
+    social_automation_api._WORKER_STOP.set()
+    try:
+        with (
+            mock.patch.object(
+                social_automation_api,
+                "_force_stop_running_task",
+            ) as force_stop,
+            mock.patch.object(
+                social_automation_api,
+                "_execute_claimed_task_with_control",
+            ) as execute,
+        ):
+            social_automation_api._execute_claimed_task(
+                {"id": "task-race", "account_id": "account-1"}
+            )
+
+        force_stop.assert_called_once_with(
+            "task-race",
+            reason="service shutdown",
+            mark_cancelled=True,
+        )
+        execute.assert_not_called()
+        assert "task-race" not in social_automation_api._RUNNING_TASK_CONTROLS
+    finally:
+        social_automation_api._WORKER_STOP.clear()
+
+
+def test_cancelled_runner_has_bounded_daemon_thread_cleanup():
+    cancel_event = mock.Mock()
+    cancel_event.is_set.return_value = True
+    runner_thread = mock.Mock()
+    runner_thread.is_alive.return_value = True
+
+    with mock.patch.object(
+        social_automation_api.threading,
+        "Thread",
+        return_value=runner_thread,
+    ) as thread_factory:
+        with pytest.raises(RuntimeError, match="did not stop"):
+            social_automation_api._run_social_task_in_clean_thread(
+                mock.Mock(),
+                task={"id": "task-stuck"},
+                account={},
+                proxy=None,
+                logger=mock.Mock(),
+                control={"cancel_event": cancel_event},
+            )
+
+    assert thread_factory.call_args.kwargs["daemon"] is True
+    assert runner_thread.join.call_args_list == [
+        mock.call(timeout=0.25),
+        mock.call(timeout=2),
+    ]
+
+
 def test_same_account_standby_cleanup_stops_registry_sessions():
     rows = {
         "live_old": {"id": "live_old", "account_id": "account-1", "status": "standby"},
@@ -892,4 +1080,4 @@ def test_cancel_without_memory_control_reclaims_registry_session():
         database.return_value.__enter__.return_value = mock.Mock()
         social_automation_api._force_stop_running_task("task-1")
 
-    stop_for_task.assert_called_once_with("task-1")
+    stop_for_task.assert_called_once_with("task-1", timeout_seconds=3.0)

@@ -5,6 +5,7 @@ import json
 import os
 import asyncio
 import ipaddress
+import logging
 import re
 import sqlite3
 import threading
@@ -150,6 +151,7 @@ SOCIAL_MEDIA_MAX_FILE_BYTES = 50 * 1024 * 1024
 SOCIAL_MEDIA_MAX_TOTAL_BYTES = 100 * 1024 * 1024
 
 _DATA_DIR = Path(os.getenv("WEBAPP_DATA_DIR", str(Path(__file__).resolve().parent.parent / "webapp_data"))).resolve()
+LOGGER = logging.getLogger(__name__)
 _NEW_ID: Callable[[str], str] = lambda prefix: f"{prefix}_{uuid.uuid4().hex[:20]}"
 _WORKER_THREAD: threading.Thread | None = None
 _WORKER_STOP = threading.Event()
@@ -1845,13 +1847,45 @@ def ensure_social_automation_worker_started() -> None:
 
 def stop_social_automation_worker(*, timeout_seconds: float = 5.0) -> None:
     global _WORKER_THREAD
+    timeout = max(float(timeout_seconds), 0.0)
+    deadline = time.monotonic() + timeout
     _WORKER_STOP.set()
     _WORKER_WAKE.set()
+
+    with _RUNNING_TASK_CONTROLS_LOCK:
+        running_task_ids = list(_RUNNING_TASK_CONTROLS.keys())
+    for task_id in running_task_ids:
+        _force_stop_running_task(
+            task_id,
+            reason="service shutdown",
+            mark_cancelled=True,
+            deadline=deadline,
+        )
+
+    with contextlib.suppress(Exception):
+        from social_automation.live_browser import stop_all_live_browser_sessions
+
+        stop_all_live_browser_sessions(
+            timeout_seconds=max(0.1, deadline - time.monotonic()),
+        )
+
     worker = _WORKER_THREAD
     if worker and worker.is_alive() and worker is not threading.current_thread():
-        worker.join(timeout=max(float(timeout_seconds), 0.0))
+        worker.join(timeout=max(0.0, deadline - time.monotonic()))
     if worker is None or not worker.is_alive():
         _WORKER_THREAD = None
+
+    with _WORKER_TASK_THREADS_LOCK:
+        task_threads = dict(_WORKER_TASK_THREADS)
+    for thread in task_threads.values():
+        if thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
+
+    force_deadline = time.monotonic() + min(2.0, max(timeout, 0.1))
+    for thread in task_threads.values():
+        if thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=max(0.0, force_deadline - time.monotonic()))
+    _cleanup_worker_task_threads()
     _WORKER_STATE["enabled"] = False
 
 
@@ -4302,6 +4336,8 @@ def retry_social_task(task_id: str, *, billing_admin_waived: bool = False) -> di
 
 
 def run_social_automation_once() -> dict[str, Any] | None:
+    if _WORKER_STOP.is_set():
+        return None
     with _WORKER_LOCK:
         _cleanup_worker_task_threads()
         if _active_worker_thread_count() >= _social_worker_max_concurrency():
@@ -4360,7 +4396,10 @@ def _refresh_worker_state() -> None:
 def _launch_available_social_tasks() -> int:
     launched = 0
     with _WORKER_LOCK:
-        while _active_worker_thread_count() < _social_worker_max_concurrency():
+        while (
+            not _WORKER_STOP.is_set()
+            and _active_worker_thread_count() < _social_worker_max_concurrency()
+        ):
             task = _claim_next_task()
             if not task:
                 break
@@ -4378,6 +4417,9 @@ def _start_claimed_task_thread(task: dict[str, Any]) -> None:
     def target() -> None:
         _WORKER_STATE.update({"last_tick_at": _now(), "last_task_id": task_id, "last_error": ""})
         try:
+            if _WORKER_STOP.is_set():
+                _force_stop_running_task(task_id, reason="service shutdown", mark_cancelled=True)
+                return
             _execute_claimed_task(task)
         except Exception as exc:
             _WORKER_STATE["last_error"] = str(exc)
@@ -4440,6 +4482,7 @@ def _publish_login_dependency_blocks_claim(conn: sqlite3.Connection, row: Any, n
 def _claim_next_task() -> dict[str, Any] | None:
     now = _now()
     _recover_orphaned_publish_confirmation_tasks(now)
+    _recover_orphaned_running_tasks(now)
     _recover_orphaned_manual_task(now)
     global_concurrency = _social_worker_max_concurrency()
     with db() as conn:
@@ -4598,6 +4641,55 @@ def _recover_orphaned_publish_confirmation_tasks(now: int) -> None:
                 )
 
 
+def _recover_orphaned_running_tasks(now: int) -> None:
+    with _RUNNING_TASK_CONTROLS_LOCK:
+        running_ids = set(_RUNNING_TASK_CONTROLS.keys())
+    stale_cutoff = int(now) - 60
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        stale_rows = conn.execute(
+            """
+            SELECT *
+            FROM social_automation_tasks
+            WHERE status = 'running' AND updated_at < ?
+            ORDER BY updated_at ASC
+            LIMIT 50
+            """,
+            (stale_cutoff,),
+        ).fetchall()
+        for row in stale_rows:
+            task_id = str(row["id"] or "")
+            if not task_id or task_id in running_ids:
+                continue
+            payload = _loads(row["payload_json"], {})
+            confirmation = payload.get("_publish_confirmation") if isinstance(payload, dict) else None
+            if isinstance(confirmation, dict) and confirmation.get("phase") == "confirm_only":
+                continue
+            message = "worker process stopped before the task completed"
+            failed = conn.execute(
+                """
+                UPDATE social_automation_tasks
+                SET status = 'failed', finished_at = ?, error = ?, updated_at = ?
+                WHERE id = ? AND status = 'running'
+                """,
+                (now, message, now, task_id),
+            ).rowcount
+            if not failed:
+                continue
+            if str(row["task_type"] or "") == "publish_post":
+                _ensure_daily_publish_slot(conn, row, now=now)
+                _release_daily_publish_slot(conn, task_id, "worker_process_stopped", now=now)
+            _release_task_billing_reservation(conn, row, now=now)
+            _insert_log(
+                conn,
+                task_id,
+                "error",
+                "orphaned_running_task_recovered",
+                "The previous worker stopped before this task completed.",
+                {},
+            )
+
+
 def _recover_orphaned_manual_task(now: int) -> None:
     with _RUNNING_TASK_CONTROLS_LOCK:
         running_ids = set(_RUNNING_TASK_CONTROLS.keys())
@@ -4674,6 +4766,9 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
     with _RUNNING_TASK_CONTROLS_LOCK:
         _RUNNING_TASK_CONTROLS[task_id] = control
     try:
+        if _WORKER_STOP.is_set():
+            _force_stop_running_task(task_id, reason="service shutdown", mark_cancelled=True)
+            return
         _execute_claimed_task_with_control(task, control)
     finally:
         _discard_ephemeral_task_secrets(task_id)
@@ -4925,9 +5020,14 @@ def _run_social_task_in_clean_thread(
         except BaseException as exc:
             error_box["error"] = exc
 
-    thread = threading.Thread(target=target, name=f"social-task-runner-{str(task.get('id') or '')[:12]}", daemon=False)
+    thread = threading.Thread(target=target, name=f"social-task-runner-{str(task.get('id') or '')[:12]}", daemon=True)
     thread.start()
-    thread.join()
+    while thread.is_alive():
+        thread.join(timeout=0.25)
+        if control["cancel_event"].is_set():
+            thread.join(timeout=2)
+            if thread.is_alive():
+                raise RuntimeError("task runner did not stop after cancellation")
     if error_box:
         raise error_box["error"]
     result = result_box.get("result")
@@ -4949,7 +5049,109 @@ def _discard_ephemeral_task_secrets(*task_ids: str) -> None:
             _EPHEMERAL_TASK_SECRETS.pop(str(task_id), None)
 
 
-def _force_stop_running_task(task_id: str) -> None:
+def _persist_shutdown_task_cancellation(
+    task_id: str,
+    *,
+    reason: str,
+    deadline: float | None = None,
+) -> bool:
+    last_error: Exception | None = None
+    for attempt in range(2):
+        try:
+            with db() as conn:
+                remaining_ms = 500
+                if deadline is not None:
+                    remaining_ms = max(1, min(500, int((deadline - time.monotonic()) * 1000)))
+                conn.execute(f"PRAGMA busy_timeout={remaining_ms}")
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT * FROM social_automation_tasks WHERE id = ?",
+                    (str(task_id),),
+                ).fetchone()
+                if row is None or str(row["status"] or "") not in {"preparing", "queued", "running", "need_manual"}:
+                    return False
+                now = _now()
+                clean_reason = reason or "service shutdown"
+                payload = _loads(row["payload_json"], {})
+                confirmation = payload.get("_publish_confirmation") if isinstance(payload, dict) else None
+                if (
+                    str(row["task_type"] or "") == "publish_post"
+                    and isinstance(confirmation, dict)
+                    and confirmation.get("phase") == "confirm_only"
+                ):
+                    requeued = conn.execute(
+                        """
+                        UPDATE social_automation_tasks
+                        SET status = 'queued', scheduled_at = ?, started_at = 0,
+                            finished_at = 0, error = ?, updated_at = ?
+                        WHERE id = ? AND status IN ('running', 'need_manual')
+                        """,
+                        (now, "service restarted; confirmation-only check requeued", now, str(task_id)),
+                    ).rowcount
+                    if requeued:
+                        _insert_log(
+                            conn,
+                            str(task_id),
+                            "warn",
+                            "service_shutdown_confirmation_requeued",
+                            "Publish was already submitted; only result confirmation will resume after restart.",
+                            {},
+                        )
+                    return bool(requeued)
+                updated = conn.execute(
+                    """
+                    UPDATE social_automation_tasks
+                    SET status = 'cancelled', finished_at = ?, error = ?, updated_at = ?
+                    WHERE id = ? AND status IN ('preparing', 'queued', 'running', 'need_manual')
+                    """,
+                    (now, clean_reason, now, str(task_id)),
+                ).rowcount
+                if not updated:
+                    return False
+                if str(row["task_type"] or "") == "publish_post":
+                    _ensure_daily_publish_slot(conn, row, now=now)
+                    _release_daily_publish_slot(conn, str(task_id), clean_reason, now=now)
+                _release_task_billing_reservation(conn, row, now=now)
+                _insert_log(
+                    conn,
+                    str(task_id),
+                    "warn",
+                    "service_shutdown",
+                    "Task cancelled because the service is shutting down.",
+                    {"reason": clean_reason},
+                )
+                return True
+        except Exception as exc:
+            last_error = exc
+            if attempt == 0 and (deadline is None or time.monotonic() + 0.05 < deadline):
+                time.sleep(0.05)
+                continue
+            break
+    if last_error is not None:
+        _WORKER_STATE["last_error"] = f"failed to persist shutdown cancellation for {task_id}: {last_error}"
+        LOGGER.error(
+            "Failed to persist shutdown cancellation for task %s: %s",
+            task_id,
+            last_error,
+            exc_info=(type(last_error), last_error, last_error.__traceback__),
+        )
+    return False
+
+
+def _force_stop_running_task(
+    task_id: str,
+    *,
+    reason: str = "",
+    mark_cancelled: bool = False,
+    deadline: float | None = None,
+) -> bool:
+    cancellation_persisted = not mark_cancelled
+    if mark_cancelled:
+        cancellation_persisted = _persist_shutdown_task_cancellation(
+            task_id,
+            reason=reason or "service shutdown",
+            deadline=deadline,
+        )
     with _RUNNING_TASK_CONTROLS_LOCK:
         control = _RUNNING_TASK_CONTROLS.get(str(task_id))
         cancel_event = control.get("cancel_event") if control else None
@@ -4964,12 +5166,17 @@ def _force_stop_running_task(task_id: str) -> None:
     with contextlib.suppress(Exception):
         from social_automation.live_browser import stop_live_browser_session, stop_live_browser_sessions_for_task
 
+        remaining = max(0.1, deadline - time.monotonic()) if deadline is not None else 3.0
         if session_id:
-            stop_live_browser_session(session_id)
-        stop_live_browser_sessions_for_task(task_id)
+            stop_live_browser_session(session_id, timeout_seconds=remaining)
+        remaining = max(0.1, deadline - time.monotonic()) if deadline is not None else 3.0
+        stop_live_browser_sessions_for_task(task_id, timeout_seconds=remaining)
     with contextlib.suppress(Exception):
         with db() as conn:
             _insert_log(conn, task_id, "warn", "force_stop", "已发送强制停止信号并关闭浏览器上下文", {})
+
+
+    return cancellation_persisted
 
 
 def _persist_running_account_login_status(task_id: str, account_id: str, status: str) -> bool:

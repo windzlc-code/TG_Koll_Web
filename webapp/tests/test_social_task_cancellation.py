@@ -797,6 +797,97 @@ class SocialTaskCancellationTests(unittest.TestCase):
 
         self.assertFalse(self._has_secret("claimed-cancelled"))
 
+    def test_force_stop_during_shutdown_persists_cancelled_status(self):
+        self._insert_task("shutdown-running", "running")
+        control = {
+            "cancel_event": threading.Event(),
+            "context": None,
+            "live_browser_session_id": "",
+        }
+        with (
+            mock.patch.object(
+                social_automation_api,
+                "_RUNNING_TASK_CONTROLS",
+                {"shutdown-running": control},
+            ),
+            mock.patch(
+                "social_automation.live_browser.stop_live_browser_sessions_for_task"
+            ),
+        ):
+            stopped = social_automation_api._force_stop_running_task(
+                "shutdown-running",
+                reason="service shutdown",
+                mark_cancelled=True,
+            )
+
+        self.assertTrue(stopped)
+        self.assertTrue(control["cancel_event"].is_set())
+        self.assertEqual(self._status("shutdown-running"), "cancelled")
+
+    def test_shutdown_cancellation_does_not_refund_terminal_task(self):
+        self._insert_task("shutdown-finished", "success", task_type="check_login")
+
+        with (
+            mock.patch.object(
+                social_automation_api,
+                "_release_task_billing_reservation",
+            ) as release_billing,
+            mock.patch.object(
+                social_automation_api,
+                "_release_daily_publish_slot",
+            ) as release_publish_slot,
+        ):
+            cancelled = social_automation_api._persist_shutdown_task_cancellation(
+                "shutdown-finished",
+                reason="service shutdown",
+            )
+
+        self.assertFalse(cancelled)
+        release_billing.assert_not_called()
+        release_publish_slot.assert_not_called()
+        self.assertEqual(self._status("shutdown-finished"), "success")
+
+    def test_shutdown_requeues_submitted_publish_without_refund(self):
+        self._insert_task("shutdown-confirm-only", "running")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE social_automation_tasks SET payload_json = ? WHERE id = ?",
+                (
+                    json.dumps(
+                        {"_publish_confirmation": {"phase": "confirm_only"}},
+                        ensure_ascii=False,
+                    ),
+                    "shutdown-confirm-only",
+                ),
+            )
+
+        with (
+            mock.patch.object(
+                social_automation_api,
+                "_release_task_billing_reservation",
+            ) as release_billing,
+            mock.patch.object(
+                social_automation_api,
+                "_release_daily_publish_slot",
+            ) as release_publish_slot,
+        ):
+            persisted = social_automation_api._persist_shutdown_task_cancellation(
+                "shutdown-confirm-only",
+                reason="service shutdown",
+            )
+
+        self.assertTrue(persisted)
+        self.assertEqual(self._status("shutdown-confirm-only"), "queued")
+        release_billing.assert_not_called()
+        release_publish_slot.assert_not_called()
+
+    def test_recovery_fails_orphaned_running_task(self):
+        self._insert_task("orphaned-running", "running", task_type="check_login")
+
+        social_automation_api._recover_orphaned_running_tasks(100)
+
+        self.assertEqual(self._status("orphaned-running"), "failed")
+
     def test_concurrent_cancel_and_finish_have_one_consistent_winner(self):
         archived = set()
         archived_lock = threading.Lock()

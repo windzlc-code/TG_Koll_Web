@@ -8,7 +8,8 @@ if [[ "$$" -eq 1 && "${CONTAINER_INIT_ACTIVE:-0}" != "1" ]]; then
             exec "$init_bin" -- "$0" "$@"
         fi
     done
-    echo "Warning: no container init/reaper is available; browser child processes may become zombies." >&2
+    echo "Error: no container init/reaper is available; refusing to start browser workloads without child-process reaping." >&2
+    exit 1
 fi
 
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${WEBAPP_DATA_DIR:-/data/webapp_data}/cache}"

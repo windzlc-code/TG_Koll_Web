@@ -1,4 +1,5 @@
 ﻿import base64
+import inspect
 import json
 import os
 import sqlite3
@@ -2025,6 +2026,59 @@ class PersonaDashboardApiTests(unittest.TestCase):
                 killpg.call_args_list,
                 [mock.call(1234, server.signal.SIGTERM), mock.call(1234, server.signal.SIGKILL)],
             )
+
+    def test_dashboard_refresh_uses_process_group_cleanup(self):
+        source = inspect.getsource(server._persona_dashboard_refresh_worker_v2)
+
+        self.assertIn('start_new_session=os.name != "nt"', source)
+        self.assertIn("creationflags=subprocess.CREATE_NEW_PROCESS_GROUP", source)
+        self.assertIn("_terminate_persona_hot_process(proc)", source)
+        self.assertNotIn("proc.kill()", source)
+        self.assertIn("finally:", source)
+
+    def test_persona_hot_process_uses_windows_tree_kill(self):
+        process = mock.Mock(pid=4321)
+        process.poll.return_value = None
+        process.wait.return_value = 0
+
+        with mock.patch.object(server.os, "name", "nt"), mock.patch.object(
+            server.subprocess,
+            "run",
+        ) as run:
+            server._terminate_persona_hot_process(process)
+
+        run.assert_called_once_with(
+            ["taskkill", "/PID", "4321", "/T", "/F"],
+            check=False,
+            capture_output=True,
+            timeout=5,
+        )
+        process.wait.assert_called_once_with(timeout=2)
+
+    def test_dashboard_refresh_cleans_process_after_unexpected_exception(self):
+        task_id = "refresh-cleanup"
+        process = mock.Mock(pid=9876, returncode=None)
+        process.poll.return_value = None
+        server.PERSONA_DASHBOARD_REFRESH_TASKS[task_id] = {}
+        try:
+            with (
+                mock.patch.object(server.subprocess, "Popen", return_value=process),
+                mock.patch.object(
+                    server.time,
+                    "sleep",
+                    side_effect=RuntimeError("refresh interrupted"),
+                ),
+                mock.patch.object(server, "_terminate_persona_hot_process") as terminate,
+            ):
+                server._persona_dashboard_refresh_worker_v2(task_id)
+
+            terminate.assert_called_once_with(process)
+            self.assertEqual(
+                server.PERSONA_DASHBOARD_REFRESH_TASKS[task_id]["status"],
+                "failed",
+            )
+        finally:
+            server.PERSONA_DASHBOARD_REFRESH_TASKS.pop(task_id, None)
 
     def test_persona_hot_pool_worker_refills_only_low_mode(self):
         server._PERSONA_HOT_POOL_ATTEMPTS.clear()
