@@ -1654,9 +1654,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
             media_path = task_dir / "persona_post_preview.jpg"
             media_path.write_bytes(self.draft_media_path.read_bytes())
             archives_path = self.tool_runtime_dir / "persona_archives.json"
-            archives = json.loads(archives_path.read_text(encoding="utf-8"))
-            archives[0]["posts"][0]["mediaItems"] = [{"url": str(media_path), "type": "image"}]
-            archives_path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+            archives_path.write_text(json.dumps([{"media_path": media_path.as_posix()}], ensure_ascii=False), encoding="utf-8")
             old_time = 1_600_000_000
             os.utime(task_dir, (old_time, old_time))
             result = server._cleanup_files_once(retention_days=1)
