@@ -816,7 +816,6 @@ class SocialTaskCancellationTests(unittest.TestCase):
         ):
             stopped = social_automation_api._force_stop_running_task(
                 "shutdown-running",
-                reason="service shutdown",
                 mark_cancelled=True,
             )
 
@@ -837,12 +836,9 @@ class SocialTaskCancellationTests(unittest.TestCase):
                 "_release_daily_publish_slot",
             ) as release_publish_slot,
         ):
-            cancelled = social_automation_api._persist_shutdown_task_cancellation(
-                "shutdown-finished",
-                reason="service shutdown",
-            )
+            persisted = social_automation_api._persist_shutdown_task_states(["shutdown-finished"])
 
-        self.assertFalse(cancelled)
+        self.assertNotIn("shutdown-finished", persisted)
         release_billing.assert_not_called()
         release_publish_slot.assert_not_called()
         self.assertEqual(self._status("shutdown-finished"), "success")
@@ -871,22 +867,23 @@ class SocialTaskCancellationTests(unittest.TestCase):
                 "_release_daily_publish_slot",
             ) as release_publish_slot,
         ):
-            persisted = social_automation_api._persist_shutdown_task_cancellation(
-                "shutdown-confirm-only",
-                reason="service shutdown",
-            )
+            persisted = social_automation_api._persist_shutdown_task_states(["shutdown-confirm-only"])
 
-        self.assertTrue(persisted)
+        self.assertIn("shutdown-confirm-only", persisted)
         self.assertEqual(self._status("shutdown-confirm-only"), "queued")
         release_billing.assert_not_called()
         release_publish_slot.assert_not_called()
 
-    def test_recovery_fails_orphaned_running_task(self):
-        self._insert_task("orphaned-running", "running", task_type="check_login")
+    def test_shutdown_state_persistence_isolates_task_failures(self):
+        with mock.patch.object(
+            social_automation_api,
+            "_persist_shutdown_task_state",
+            side_effect=[False, True],
+        ) as persist:
+            persisted = social_automation_api._persist_shutdown_task_states(["failed-task", "saved-task"])
 
-        social_automation_api._recover_orphaned_running_tasks(100)
-
-        self.assertEqual(self._status("orphaned-running"), "failed")
+        self.assertEqual(persisted, {"saved-task"})
+        self.assertEqual(persist.call_count, 2)
 
     def test_concurrent_cancel_and_finish_have_one_consistent_winner(self):
         archived = set()

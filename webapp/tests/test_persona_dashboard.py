@@ -1,5 +1,4 @@
 ﻿import base64
-import inspect
 import json
 import os
 import sqlite3
@@ -2027,15 +2026,6 @@ class PersonaDashboardApiTests(unittest.TestCase):
                 [mock.call(1234, server.signal.SIGTERM), mock.call(1234, server.signal.SIGKILL)],
             )
 
-    def test_dashboard_refresh_uses_process_group_cleanup(self):
-        source = inspect.getsource(server._persona_dashboard_refresh_worker_v2)
-
-        self.assertIn('start_new_session=os.name != "nt"', source)
-        self.assertIn("creationflags=subprocess.CREATE_NEW_PROCESS_GROUP", source)
-        self.assertIn("_terminate_persona_hot_process(proc)", source)
-        self.assertNotIn("proc.kill()", source)
-        self.assertIn("finally:", source)
-
     def test_persona_hot_process_uses_windows_tree_kill(self):
         process = mock.Mock(pid=4321)
         process.poll.return_value = None
@@ -2062,7 +2052,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         server.PERSONA_DASHBOARD_REFRESH_TASKS[task_id] = {}
         try:
             with (
-                mock.patch.object(server.subprocess, "Popen", return_value=process),
+                mock.patch.object(server.subprocess, "Popen", return_value=process) as popen,
                 mock.patch.object(
                     server.time,
                     "sleep",
@@ -2072,6 +2062,12 @@ class PersonaDashboardApiTests(unittest.TestCase):
             ):
                 server._persona_dashboard_refresh_worker_v2(task_id)
 
+            popen_kwargs = popen.call_args.kwargs
+            self.assertEqual(popen_kwargs["start_new_session"], server.os.name != "nt")
+            self.assertEqual(
+                popen_kwargs["creationflags"],
+                server.subprocess.CREATE_NEW_PROCESS_GROUP if server.os.name == "nt" else 0,
+            )
             terminate.assert_called_once_with(process)
             self.assertEqual(
                 server.PERSONA_DASHBOARD_REFRESH_TASKS[task_id]["status"],

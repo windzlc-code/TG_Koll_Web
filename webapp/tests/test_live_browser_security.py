@@ -251,6 +251,25 @@ def _security_test_client() -> TestClient:
     return TestClient(app)
 
 
+def _live_browser_session(**overrides):
+    values = {
+        "id": "live_task-1",
+        "task_id": "task-1",
+        "account_id": "account-1",
+        "account_username": "user",
+        "platform": "threads",
+        "task_type": "open_login",
+        "display": ":91",
+        "width": 1600,
+        "height": 900,
+        "vnc_port": 5901,
+        "web_port": 6901,
+        "started_at": 1,
+    }
+    values.update(overrides)
+    return live_browser.LiveBrowserSession(**values)
+
+
 def test_browser_sessions_strict_lookup_reports_backend_failure():
     with mock.patch.object(live_browser, "list_live_browser_sessions", side_effect=OSError("registry unavailable")):
         with pytest.raises(social_automation_api.HTTPException) as raised:
@@ -776,21 +795,7 @@ def test_admin_workspace_websocket_control_is_audited_once():
 
 
 def test_stop_restored_registry_session_terminates_processes_before_removal():
-    session = live_browser.LiveBrowserSession(
-        id="live_task-1",
-        task_id="task-1",
-        account_id="account-1",
-        account_username="user",
-        platform="threads",
-        task_type="open_login",
-        display=":91",
-        width=1600,
-        height=900,
-        vnc_port=5901,
-        web_port=6901,
-        started_at=1,
-        process_pids=[4321],
-    )
+    session = _live_browser_session(process_pids=[4321])
     events = []
 
     with (
@@ -807,72 +812,43 @@ def test_stop_live_browser_waits_after_forced_process_kill(tmp_path):
     process = mock.Mock()
     process.poll.return_value = None
     process.wait.side_effect = [subprocess.TimeoutExpired("Xvnc", 3), 0]
-    session = live_browser.LiveBrowserSession(
-        id="live_task-1",
-        task_id="task-1",
-        account_id="account-1",
-        account_username="user",
-        platform="threads",
-        task_type="open_login",
-        display=":91",
-        width=1600,
-        height=900,
-        vnc_port=5901,
-        web_port=6901,
-        started_at=1,
-        processes=[process],
-        temp_dir=str(tmp_path),
-    )
+    session = _live_browser_session(processes=[process], temp_dir=str(tmp_path))
 
     with mock.patch.object(live_browser, "_remove_session_registry"):
         live_browser.stop_live_browser_session(session.id, session=session)
 
     process.terminate.assert_called_once_with()
     process.kill.assert_called_once_with()
-    assert len(process.wait.call_args_list) == 2
+    operations = [call[0] for call in process.method_calls if call[0] in {"terminate", "wait", "kill"}]
+    assert operations == ["terminate", "wait", "kill", "wait"]
     assert all(call.kwargs["timeout"] >= 0 for call in process.wait.call_args_list)
 
 
 def test_stop_all_live_browser_sessions_includes_memory_and_registry_sessions():
-    memory_session = live_browser.LiveBrowserSession(
-        id="live_memory",
-        task_id="task-memory",
-        account_id="account-1",
-        account_username="user",
-        platform="threads",
-        task_type="open_login",
-        display=":91",
-        width=1600,
-        height=900,
-        vnc_port=5901,
-        web_port=6901,
-        started_at=1,
-    )
-    registry_session = live_browser.LiveBrowserSession(
+    memory_session = _live_browser_session(id="live_memory", task_id="task-memory")
+    registry_session = _live_browser_session(
         id="live_registry",
         task_id="task-registry",
         account_id="account-2",
-        account_username="user-2",
-        platform="threads",
-        task_type="publish_post",
-        display=":92",
-        width=1600,
-        height=900,
-        vnc_port=5902,
-        web_port=6902,
-        started_at=1,
     )
+    stopped = []
+
+    def stop_session(session_id, **_kwargs):
+        stopped.append(session_id)
+        if session_id == memory_session.id:
+            raise RuntimeError("isolated cleanup failure")
+
     live_browser._SESSIONS[memory_session.id] = memory_session
     try:
         with (
             mock.patch.object(live_browser, "_load_registry_sessions", return_value=[registry_session]),
-            mock.patch.object(live_browser, "stop_live_browser_session") as stop_session,
+            mock.patch.object(live_browser, "stop_live_browser_session", side_effect=stop_session),
         ):
             live_browser.stop_all_live_browser_sessions()
     finally:
         live_browser._SESSIONS.clear()
 
-    assert {call.args[0] for call in stop_session.call_args_list} == {"live_memory", "live_registry"}
+    assert set(stopped) == {"live_memory", "live_registry"}
 
 
 def test_worker_shutdown_forces_remaining_tasks_and_closes_browser_sessions():
@@ -892,6 +868,11 @@ def test_worker_shutdown_forces_remaining_tasks_and_closes_browser_sessions():
                 side_effect=lambda *_args, **_kwargs: events.append("force_stop"),
             ) as force_stop,
             mock.patch.object(
+                social_automation_api,
+                "_persist_shutdown_task_states",
+                side_effect=lambda *_args, **_kwargs: events.append("persist"),
+            ) as persist,
+            mock.patch.object(
                 live_browser,
                 "stop_all_live_browser_sessions",
                 side_effect=lambda **_kwargs: events.append("close_browsers"),
@@ -901,15 +882,11 @@ def test_worker_shutdown_forces_remaining_tasks_and_closes_browser_sessions():
     finally:
         social_automation_api._WORKER_STOP.clear()
 
-    force_stop.assert_called_once_with(
-        "task-1",
-        reason="service shutdown",
-        mark_cancelled=True,
-        deadline=mock.ANY,
-    )
+    persist.assert_called_once_with(["task-1"], deadline=mock.ANY)
+    force_stop.assert_called_once_with("task-1", deadline=mock.ANY)
     assert stop_all_sessions.call_args.kwargs["timeout_seconds"] > 0
     assert task_thread.join.called
-    assert events.index("force_stop") < events.index("join")
+    assert events.index("persist") < events.index("force_stop") < events.index("join")
     assert events.index("close_browsers") < events.index("join")
 
 
@@ -943,7 +920,6 @@ def test_claimed_task_cannot_start_after_shutdown_signal():
 
         force_stop.assert_called_once_with(
             "task-race",
-            reason="service shutdown",
             mark_cancelled=True,
         )
         execute.assert_not_called()
@@ -996,19 +972,12 @@ def test_same_account_standby_cleanup_stops_registry_sessions():
 
 
 def test_expired_registry_session_uses_process_stopping_cleanup():
-    session = live_browser.LiveBrowserSession(
+    session = _live_browser_session(
         id="live_expired",
         task_id="expired",
-        account_id="account-1",
-        account_username="user",
-        platform="threads",
-        task_type="open_login",
         display=":92",
-        width=1600,
-        height=900,
         vnc_port=5902,
         web_port=6902,
-        started_at=1,
         status="standby",
         close_at=100,
     )

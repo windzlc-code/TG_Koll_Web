@@ -208,21 +208,14 @@ def stop_live_browser_session(
         _remove_session_registry(clean_id)
         return
     active_processes = [process for process in reversed(target.processes) if process.poll() is None]
-    for process in active_processes:
-        with contextlib.suppress(Exception):
-            process.terminate()
-    for process in active_processes:
-        if process.poll() is None:
-            with contextlib.suppress(Exception):
-                process.wait(timeout=max(0.0, deadline - time.monotonic()))
-    for process in active_processes:
-        if process.poll() is None:
-            with contextlib.suppress(Exception):
-                process.kill()
-    for process in active_processes:
-        if process.poll() is None:
-            with contextlib.suppress(Exception):
-                process.wait(timeout=max(0.0, deadline - time.monotonic()))
+    for action in ("terminate", "wait", "kill", "wait"):
+        for process in active_processes:
+            if process.poll() is None:
+                with contextlib.suppress(Exception):
+                    if action == "wait":
+                        process.wait(timeout=max(0.0, deadline - time.monotonic()))
+                    else:
+                        getattr(process, action)()
     if not target.processes:
         _terminate_registry_session_processes(target)
     if target.temp_dir:
@@ -240,19 +233,17 @@ def stop_live_browser_sessions_for_task(task_id: str, *, timeout_seconds: float 
         if str(row.get("task_id") or "") == clean_task_id:
             session_ids.add(str(session_id))
     session_ids.add(f"live_{clean_task_id}")
-    deadline = time.monotonic() + max(0.1, float(timeout_seconds))
-    for session_id in session_ids:
-        with contextlib.suppress(Exception):
-            stop_live_browser_session(
-                session_id,
-                timeout_seconds=max(0.1, deadline - time.monotonic()),
-            )
+    _stop_live_browser_session_ids(session_ids, timeout_seconds)
 
 
 def stop_all_live_browser_sessions(*, timeout_seconds: float = 5.0) -> None:
     with _LOCK:
         session_ids = set(_SESSIONS.keys())
     session_ids.update(session.id for session in _load_registry_sessions())
+    _stop_live_browser_session_ids(session_ids, timeout_seconds)
+
+
+def _stop_live_browser_session_ids(session_ids: set[str], timeout_seconds: float) -> None:
     deadline = time.monotonic() + max(0.1, float(timeout_seconds))
     for session_id in session_ids:
         with contextlib.suppress(Exception):

@@ -16374,7 +16374,6 @@ def _persona_dashboard_refresh_worker_v2(
         while proc.poll() is None:
             elapsed = int(time.time() - started)
             if elapsed > 900:
-                _terminate_persona_hot_process(proc)
                 raise TimeoutError("刷新超时，已停止本次任务。")
             stdout_file.flush()
             stderr_file.flush()
@@ -16391,11 +16390,8 @@ def _persona_dashboard_refresh_worker_v2(
         proc.wait(timeout=10)
         stdout_file.flush()
         stderr_file.flush()
-        stdout_file.close()
-        stderr_file.close()
         stdout = _read_text_tail(stdout_path, 200000).strip()
         stderr = _read_text_tail(stderr_path, 200000).strip()
-        tmpdir.cleanup()
         with PERSONA_DASHBOARD_REFRESH_LOCK:
             PERSONA_DASHBOARD_REFRESH_TASKS[task_id].update({
                 "step": "解析结果",
