@@ -5305,12 +5305,13 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-profile-overview-layout {
   display: grid;
-  grid-template-columns: minmax(300px, 1fr) minmax(280px, .82fr) minmax(380px, 1fr);
+  grid-template-columns: minmax(300px, 1.08fr) minmax(210px, .68fr) minmax(300px, 1.2fr);
   gap: 10px;
   align-items: start;
 }
 
-.persona-profile-generation-panel {
+.persona-profile-data-panel,
+.persona-profile-account-panel {
   display: grid;
   gap: 10px;
   min-width: 0;
@@ -5320,38 +5321,8 @@ body.persona-touch-dragging .persona-list-card:active {
   background: var(--panel-solid);
 }
 
-.persona-profile-generation-action {
-  display: grid;
-  gap: 8px;
-  padding: 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--soft);
-}
-
-.persona-profile-generation-action > div {
-  display: grid;
-  gap: 3px;
-}
-
-.persona-profile-generation-action span {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.persona-profile-generation-action button {
-  justify-self: start;
-}
-
-.persona-profile-data-panel {
-  display: grid;
-  gap: 10px;
-  min-width: 0;
-  padding: 14px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--panel-solid);
+.persona-profile-account-panel {
+  align-content: start;
 }
 
 .persona-profile-data-panel-head {
@@ -5383,18 +5354,6 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-profile-data-panel .persona-hot-summary-card--hot {
   padding-top: 10px;
   border-top: 1px solid var(--line);
-}
-
-.persona-profile-activity-grid {
-  gap: 6px;
-  padding-top: 10px;
-  border-top: 1px solid var(--line);
-}
-
-.persona-profile-activity-grid > .flow-box {
-  min-width: 0;
-  margin-top: 0;
-  box-shadow: none;
 }
 
 .persona-hot-summary-card {
@@ -5473,7 +5432,7 @@ body.persona-touch-dragging .persona-list-card:active {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .persona-profile-data-panel {
+  .persona-profile-account-panel {
     grid-column: 1 / -1;
   }
 }
@@ -5483,7 +5442,7 @@ body.persona-touch-dragging .persona-list-card:active {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .persona-profile-data-panel {
+  .persona-profile-account-panel {
     grid-column: auto;
   }
 }
@@ -5608,6 +5567,11 @@ body.persona-touch-dragging .persona-list-card:active {
   overflow-wrap: anywhere;
 }
 
+.persona-profile-name-block > input {
+  width: 100%;
+  min-height: 34px;
+}
+
 .persona-profile-inline-edit {
   display: grid;
   width: 30px;
@@ -5668,6 +5632,12 @@ body.persona-touch-dragging .persona-list-card:active {
   flex: 0 0 auto;
 }
 
+.persona-profile-config-modules button.is-inert,
+.persona-avatar-add-button.is-inert {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .persona-profile-section-head {
   display: flex;
   align-items: center;
@@ -5678,12 +5648,87 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-profile-identity-copy {
   display: grid;
   gap: 5px;
+  min-height: 346px;
+  align-content: start;
 }
 
 .persona-profile-identity-copy p {
   margin: 0;
+  height: 323px;
+  min-height: 323px;
+  overflow-y: auto;
   line-height: 1.65;
   white-space: pre-wrap;
+}
+
+.persona-profile-identity-copy > span,
+.persona-profile-generation-inline > div:first-child > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.persona-profile-identity-copy textarea {
+  width: 100%;
+  min-height: 323px;
+  resize: vertical;
+}
+
+.persona-profile-generation-inline {
+  display: flex;
+  min-height: 104px;
+  align-items: stretch;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.persona-profile-generation-inline.is-active {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.persona-profile-generation-inline > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.persona-profile-generation-inline small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.persona-profile-generation-inline .row-actions {
+  width: 100%;
+  flex: 0 0 auto;
+}
+
+.persona-profile-edit-actions {
+  display: grid;
+  min-height: 34px;
+}
+
+.persona-profile-edit-actions > .row-actions {
+  grid-area: 1 / 1;
+  margin: 0;
+  transition: opacity var(--motion-fast);
+}
+
+.persona-profile-edit-actions.is-viewing .persona-profile-save-actions,
+.persona-profile-edit-actions.is-editing .persona-profile-view-action {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .persona-avatar-editor {
@@ -5748,8 +5793,8 @@ body.persona-touch-dragging .persona-list-card:active {
   width: min(860px, calc(100vw - 32px));
 }
 
-.persona-link-settings-modal {
-  width: min(1120px, calc(100vw - 32px));
+.console-modal-dialog.persona-link-settings-modal {
+  width: min(1420px, calc(100vw - 32px));
 }
 
 .persona-profile-style-modal-content {
@@ -5842,13 +5887,13 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .persona-avatar-crop-toolbar button {
-  display: inline-grid;
-  place-items: center;
-  width: 32px;
-  min-width: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 54px;
   min-height: 32px;
-  padding: 0;
-  font-size: 18px;
+  padding: 4px 10px;
+  font-size: 13px;
 }
 
 .persona-avatar-crop-toolbar svg,
@@ -6222,7 +6267,7 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-link-layout {
   display: grid;
-  grid-template-columns: minmax(260px, 0.85fr) minmax(0, 1.45fr);
+  grid-template-columns: minmax(300px, 0.72fr) minmax(0, 1.68fr);
   gap: 12px;
   align-items: stretch;
   min-width: 0;
@@ -6244,8 +6289,8 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-link-list-panel {
   grid-template-rows: auto minmax(0, 1fr) auto;
   align-self: stretch;
-  height: 463px;
-  max-height: 463px;
+  height: 520px;
+  max-height: 520px;
 }
 
 .persona-link-editor label {
@@ -14530,6 +14575,59 @@ body.console-page {
   }
 }
 
+.persona-profile-account-panel .persona-account-pool-layout {
+  grid-template-columns: minmax(104px, 132px) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.persona-profile-account-panel .account-pool-platform-panel,
+.persona-profile-account-panel .account-pool-account-panel {
+  padding: 8px;
+}
+
+.persona-profile-account-panel .account-pool-platforms {
+  gap: 6px;
+}
+
+.persona-profile-account-panel .account-pool-platforms button {
+  min-height: 54px;
+  padding: 7px 9px;
+}
+
+.persona-profile-account-panel .persona-account-pool-card {
+  min-height: 0;
+  padding: 10px;
+  gap: 6px;
+}
+
+.persona-profile-account-panel .persona-account-pool-card--summary,
+.persona-profile-account-panel .persona-account-pool-card--inline-edit {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto;
+}
+
+.persona-profile-account-panel .persona-account-pool-card--summary .account-pool-card-main,
+.persona-profile-account-panel .persona-account-pool-card--summary .persona-account-summary-actions {
+  grid-column: 1;
+  grid-row: auto;
+}
+
+.persona-profile-account-panel .persona-account-summary-meta {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 5px;
+}
+
+.persona-profile-account-panel .persona-account-pool-card .account-card-meta {
+  grid-template-columns: 1fr;
+  gap: 3px;
+}
+
+.persona-profile-account-panel .persona-account-pool-card .row-actions button {
+  min-height: 30px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
 /* Mobile persona selector: keep the work area visible and move the long list into a drawer. */
 @media (max-width: 980px) {
   body.persona-mobile-sidebar-open {
@@ -14956,7 +15054,7 @@ body.console-page {
 /* Final mobile density pass: keep the workspace readable without oversized controls. */
 @media (max-width: 760px) {
   .persona-profile-data-panel,
-  .persona-profile-generation-panel {
+  .persona-profile-account-panel {
     gap: 6px;
     padding: 8px;
   }
@@ -15173,6 +15271,24 @@ body.console-page {
     padding: 8px;
   }
 
+  .console-page .persona-detail .persona-profile-generation-inline {
+    min-height: 104px;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .console-page .persona-detail .persona-profile-generation-inline .row-actions {
+    width: 100%;
+  }
+
+  .console-page .persona-detail .persona-profile-account-panel .persona-account-pool-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .console-page .persona-detail .persona-profile-account-panel .account-pool-platforms {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .console-page .persona-detail .persona-profile-config-modules article,
   .console-page .persona-detail .persona-profile-account-module {
     padding: 7px;
@@ -15243,6 +15359,15 @@ body.console-page {
     overflow-y: auto;
   }
 
+  .console-page .persona-detail .persona-profile-identity-copy {
+    min-height: 173px;
+  }
+
+  .console-page .persona-detail .persona-profile-identity-copy p {
+    height: 150px;
+    min-height: 150px;
+  }
+
   .console-page .persona-detail #personaProfileContent {
     height: 150px;
     min-height: 150px;
@@ -15281,7 +15406,7 @@ body.console-page {
 
   .console-page .persona-detail .persona-profile-config-modules button,
   .console-page .persona-detail .persona-profile-account-module button,
-  .console-page .persona-detail .persona-profile-generation-action button {
+  .console-page .persona-detail .persona-profile-generation-inline button {
     width: 100%;
   }
 }
