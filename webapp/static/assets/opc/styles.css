@@ -1928,7 +1928,7 @@ body.modal-open {
 }
 
 .home-canvas .home-hero-slide[data-home-hero-index="0"] .home-hero-media { object-position: 54% center; }
-.home-canvas .home-hero-slide[data-home-hero-index="6"] .home-hero-media { object-position: center 35%; }
+.home-canvas .home-hero-slide[data-home-hero-index="6"] .home-hero-media { object-position: 55% center; }
 .home-canvas .home-hero-slide.is-active .home-hero-media { transform: scale(1); }
 
 .home-canvas .home-hero-copy {
