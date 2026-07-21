@@ -14631,3 +14631,136 @@ body.console-page {
     font-size: 12px;
   }
 }
+
+/* Desktop console density: keep every workspace form and list action compact. */
+@media (min-width: 761px) {
+  .console-page .console-shell :is(
+    button,
+    .button,
+    .chip-button,
+    a[role="button"],
+    .row-actions a
+  ) {
+    min-height: 32px;
+    padding: 5px 9px;
+    font-size: 12px;
+    line-height: 1.25;
+  }
+
+  .console-page .console-shell :is(
+    input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="file"]),
+    select
+  ) {
+    min-height: 34px;
+    padding: 6px 8px;
+    font-size: 13px;
+    line-height: 1.3;
+  }
+
+  .console-page .console-shell textarea {
+    padding: 7px 8px;
+    font-size: 13px;
+    line-height: 1.4;
+  }
+
+  .console-page .console-shell label {
+    gap: 4px;
+    margin-top: 8px;
+  }
+
+  .console-page .console-shell :is(
+    .command-actions,
+    .row-actions,
+    .module-toolbar,
+    .panel-head-actions,
+    .persona-list-actions,
+    .persona-list-toolbar,
+    .persona-list-pager,
+    .task-queue-actionbar,
+    .task-queue-bulk-controls,
+    .task-queue-pager,
+    .proxy-pager,
+    .proxy-pool-head-actions,
+    .account-browser-toolbar,
+    .account-pool-edit-toolbar,
+    .live-browser-head-actions,
+    .console-modal-actions
+  ) {
+    gap: 6px;
+  }
+
+  .console-page .console-shell .module-toolbar {
+    padding: 8px;
+  }
+
+  .console-page .console-nav button,
+  .console-page .module-menu button,
+  .console-page .sidebar-bottom-actions button,
+  .console-page .sidebar-bottom-actions a,
+  .console-page .module-trigger {
+    min-height: 40px;
+    padding: 7px 9px;
+    font-size: 13px;
+  }
+
+  .console-page .console-shell :is(
+    .task-queue-delete-button,
+    .persona-hot-refresh-button,
+    .persona-hot-info,
+    .persona-favorite-star,
+    .persona-draft-more-trigger,
+    .account-pool-edit-toolbar > button:not(.account-pool-add-button),
+    .account-password-toggle,
+    .account-pool-bind-persona,
+    .proxy-table-actions button,
+    .persona-list-pager button,
+    .task-queue-pager button,
+    .proxy-pager button,
+    .live-browser-expand-button
+  ) {
+    display: inline-grid;
+    width: 30px;
+    min-width: 30px;
+    height: 30px;
+    min-height: 30px;
+    place-items: center;
+    padding: 0;
+  }
+
+  .console-page .account-pool-card .row-actions button,
+  .console-page .persona-account-pool-card .row-actions button,
+  .console-page .account-card .row-actions button,
+  .console-page .task-row .row-actions button,
+  .console-page .task-row .row-actions a,
+  .console-page .task-persona-queue-row .row-actions button,
+  .console-page .task-persona-queue-row .row-actions a,
+  .console-page .persona-dashboard-topbar-actions .persona-dashboard-action-buttons button {
+    min-height: 30px;
+    padding: 4px 8px;
+    font-size: 12px;
+  }
+}
+
+/* The console title card is intentionally removed; keep contextual actions with their own page. */
+.console-page .persona-dashboard-local-actions {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+  margin-bottom: 8px;
+}
+
+.console-page .persona-dashboard-local-actions .persona-dashboard-topbar-status {
+  text-align: left;
+}
+
+@media (max-width: 560px) {
+  .console-page .persona-dashboard-local-actions,
+  .console-page .persona-dashboard-local-actions .persona-dashboard-topbar-actions,
+  .console-page .persona-dashboard-local-actions .persona-dashboard-action-buttons {
+    width: 100%;
+  }
+
+  .console-page .persona-dashboard-local-actions .persona-dashboard-action-buttons button {
+    flex: 1 1 0;
+  }
+}

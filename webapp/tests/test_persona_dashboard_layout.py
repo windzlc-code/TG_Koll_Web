@@ -22,24 +22,32 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             STATIC_ROOT / "assets" / "opc" / "site-navigation.css"
         ).read_text(encoding="utf-8")
 
-    def test_refresh_controls_are_in_the_console_topbar(self):
-        topbar_start = self.markup.index('<header class="console-topbar">')
-        topbar_end = self.markup.index("</header>", topbar_start)
-        topbar = self.markup[topbar_start:topbar_end]
+    def test_refresh_controls_are_in_the_dashboard_view(self):
         dashboard_start = self.markup.index(
             '<section class="view persona-dashboard-view" data-panel="persona_dashboard">'
         )
         dashboard = self.markup[dashboard_start:]
 
-        self.assertIn('id="personaDashboardTopbarActions"', topbar)
-        self.assertIn('id="btnPersonaDashboardRefresh"', topbar)
-        self.assertIn('id="btnPersonaDashboardRefreshAll"', topbar)
-        self.assertNotIn('id="btnPersonaDashboardRefresh"', dashboard)
+        self.assertNotIn('<header class="console-topbar">', self.markup)
+        self.assertIn('id="viewTitle" class="sr-only"', self.markup)
+        self.assertIn('id="personaDashboardTopbarActions"', dashboard)
+        self.assertIn('id="btnPersonaDashboardRefresh"', dashboard)
+        self.assertIn('id="btnPersonaDashboardRefreshAll"', dashboard)
         self.assertNotIn('class="persona-dashboard-hero"', dashboard)
         self.assertIn(
             'personaTopbarActions.hidden = view !== "persona_dashboard";',
             self.console_script,
         )
+
+    def test_admin_entry_is_beside_subscription_and_keeps_permission_gate(self):
+        subscription = self.markup.index('class="site-icon-button site-subscription-link"')
+        admin_entry = self.markup.index('id="openAdmin"')
+        account_menu = self.markup.index('class="site-account-menu"')
+
+        self.assertLess(subscription, admin_entry)
+        self.assertLess(admin_entry, account_menu)
+        self.assertIn('class="site-icon-button site-admin-entry admin-only" hidden', self.markup)
+        self.assertIn('if (me.is_admin) $("openAdmin").hidden = false;', self.console_script)
 
     def test_refresh_actions_have_distinct_labels_and_behaviors(self):
         self.assertIn(">刷新显示</button>", self.markup)
