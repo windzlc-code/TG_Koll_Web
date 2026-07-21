@@ -566,32 +566,47 @@ function initHomeExperience() {
     revealItems.forEach((item) => revealObserver.observe(item));
   }
 
-  const runner = document.querySelector("[data-home-runner]");
-  const runnerSteps = [...(runner?.querySelectorAll("li") || [])];
-  if (!reducedMotion && runnerSteps.length > 1) {
-    let activeRunnerStep = 0;
-    window.setInterval(() => {
-      if (document.hidden) return;
-      runnerSteps[activeRunnerStep].classList.remove("is-active");
-      activeRunnerStep = (activeRunnerStep + 1) % runnerSteps.length;
-      runnerSteps[activeRunnerStep].classList.add("is-active");
-    }, 2400);
-  }
-
   const hero = document.querySelector("[data-home-hero]");
   const heroViewport = hero?.querySelector("[data-home-hero-viewport]");
-  const heroScenes = [...(hero?.querySelectorAll("[data-home-hero-scene]") || [])];
+  const heroTrack = hero?.querySelector(".home-hero-track");
+  const heroScenes = [...(heroTrack?.querySelectorAll("[data-home-hero-scene]") || [])];
   const heroTriggers = [...(hero?.querySelectorAll("[data-home-hero-trigger]") || [])];
   const heroPrev = hero?.querySelector("[data-home-hero-prev]");
   const heroNext = hero?.querySelector("[data-home-hero-next]");
   const heroMotion = hero?.querySelector("[data-home-hero-motion]");
-  if (heroViewport && heroScenes.length > 1 && heroScenes.length === heroTriggers.length) {
+  if (heroTrack && heroViewport && heroScenes.length > 1 && heroScenes.length === heroTriggers.length) {
+    const cloneCount = Math.min(3, heroScenes.length);
+    const createLoopClone = (scene) => {
+      const clone = scene.cloneNode(true);
+      clone.classList.remove("is-active");
+      clone.dataset.homeHeroClone = "true";
+      clone.setAttribute("aria-hidden", "true");
+      clone.inert = true;
+      clone.querySelectorAll("[id]").forEach((item) => item.removeAttribute("id"));
+      clone.querySelectorAll("a, button, input, select, textarea, video").forEach((item) => item.setAttribute("tabindex", "-1"));
+      return clone;
+    };
+    const leadingClones = document.createDocumentFragment();
+    heroScenes.slice(-cloneCount).forEach((scene) => leadingClones.append(createLoopClone(scene)));
+    heroTrack.insertBefore(leadingClones, heroTrack.firstChild);
+    const trailingClones = document.createDocumentFragment();
+    heroScenes.slice(0, cloneCount).forEach((scene) => trailingClones.append(createLoopClone(scene)));
+    heroTrack.append(trailingClones);
+    const physicalScenes = [...heroTrack.querySelectorAll("[data-home-hero-scene]")];
     let activeHeroScene = 0;
+    let activePhysicalScene = heroScenes[0];
     let heroInteractionPaused = false;
     let heroUserPaused = false;
     let heroInView = true;
     let heroScrollTimer = 0;
+    let heroLoopTimer = 0;
+    let heroLoopFallbackTimer = 0;
     let heroAdvanceTimer = 0;
+    let heroLoopJumping = false;
+    const logicalIndexOf = (scene) => Number.parseInt(scene.dataset.homeHeroIndex || "0", 10);
+    const nearestPhysicalScene = () => physicalScenes.reduce((nearest, scene) => (
+      Math.abs(scene.offsetLeft - heroViewport.scrollLeft) < Math.abs(nearest.offsetLeft - heroViewport.scrollLeft) ? scene : nearest
+    ), physicalScenes[0]);
     const scheduleHeroAdvance = () => {
       window.clearTimeout(heroAdvanceTimer);
       if (reducedMotion || heroInteractionPaused || heroUserPaused || !heroInView) return;
@@ -600,26 +615,28 @@ function initHomeExperience() {
           scheduleHeroAdvance();
           return;
         }
-        showHeroScene(activeHeroScene + 1, "smooth", false);
+        stepHero(1, false);
         scheduleHeroAdvance();
       }, 6400);
     };
-    const updateHeroState = (index) => {
-      activeHeroScene = (index + heroScenes.length) % heroScenes.length;
-      heroScenes.forEach((scene, sceneIndex) => {
-        const isActive = sceneIndex === activeHeroScene;
+    const updateHeroState = (physicalScene) => {
+      activePhysicalScene = physicalScene;
+      activeHeroScene = logicalIndexOf(physicalScene);
+      physicalScenes.forEach((scene) => {
+        const isClone = scene.dataset.homeHeroClone === "true";
+        const isActive = scene === activePhysicalScene;
         scene.classList.toggle("is-active", isActive);
-        scene.setAttribute("aria-hidden", String(!isActive));
-        scene.inert = !isActive;
+        scene.setAttribute("aria-hidden", String(isClone || !isActive));
+        scene.inert = isClone || !isActive;
         const video = scene.querySelector("[data-home-hero-video]");
         if (!video) return;
         const source = video.querySelector("source[data-src]");
-        if (isActive && source && !reducedMotion) {
+        if (isActive && !isClone && source && !reducedMotion) {
           source.src = source.dataset.src;
           source.removeAttribute("data-src");
           video.load();
         }
-        if (isActive && heroInView && !heroUserPaused && !document.hidden && !reducedMotion) video.play().catch(() => {});
+        if (isActive && !isClone && heroInView && !heroUserPaused && !document.hidden && !reducedMotion) video.play().catch(() => {});
         else video.pause();
       });
       heroTriggers.forEach((trigger, triggerIndex) => {
@@ -628,29 +645,58 @@ function initHomeExperience() {
         trigger.setAttribute("aria-pressed", String(isActive));
       });
     };
+    const jumpToOriginal = (physicalScene) => {
+      const original = heroScenes[logicalIndexOf(physicalScene)];
+      heroLoopJumping = true;
+      heroViewport.style.scrollBehavior = "auto";
+      heroViewport.style.scrollSnapType = "none";
+      heroViewport.scrollLeft = original.offsetLeft;
+      updateHeroState(original);
+      window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+        heroViewport.style.removeProperty("scroll-behavior");
+        heroViewport.style.removeProperty("scroll-snap-type");
+        heroLoopJumping = false;
+      }));
+    };
+    const settleLoopClone = (physicalScene) => {
+      window.clearTimeout(heroLoopTimer);
+      if (physicalScene.dataset.homeHeroClone !== "true") return;
+      heroLoopTimer = window.setTimeout(() => jumpToOriginal(physicalScene), reducedMotion ? 0 : 180);
+    };
     const showHeroScene = (index, behavior = reducedMotion ? "auto" : "smooth", resetTimer = true) => {
       const nextIndex = (index + heroScenes.length) % heroScenes.length;
-      updateHeroState(nextIndex);
-      heroViewport.scrollTo({ left: heroScenes[nextIndex].offsetLeft, behavior });
+      const target = heroScenes[nextIndex];
+      updateHeroState(target);
+      heroViewport.scrollTo({ left: target.offsetLeft, behavior });
+      if (resetTimer) scheduleHeroAdvance();
+    };
+    const stepHero = (direction, resetTimer = true) => {
+      const physicalIndex = physicalScenes.indexOf(activePhysicalScene);
+      const target = physicalScenes[Math.max(0, Math.min(physicalScenes.length - 1, physicalIndex + direction))];
+      updateHeroState(target);
+      heroViewport.scrollTo({ left: target.offsetLeft, behavior: reducedMotion ? "auto" : "smooth" });
+      window.clearTimeout(heroLoopFallbackTimer);
+      if (target.dataset.homeHeroClone === "true") {
+        heroLoopFallbackTimer = window.setTimeout(() => {
+          if (activePhysicalScene !== target) return;
+          jumpToOriginal(target);
+        }, reducedMotion ? 0 : 900);
+      }
       if (resetTimer) scheduleHeroAdvance();
     };
     const syncHeroFromScroll = () => {
       window.clearTimeout(heroScrollTimer);
       heroScrollTimer = window.setTimeout(() => {
-        const nearestIndex = heroScenes.reduce((bestIndex, scene, sceneIndex) => (
-          Math.abs(scene.offsetLeft - heroViewport.scrollLeft) < Math.abs(heroScenes[bestIndex].offsetLeft - heroViewport.scrollLeft)
-            ? sceneIndex
-            : bestIndex
-        ), 0);
-        if (nearestIndex !== activeHeroScene) {
-          updateHeroState(nearestIndex);
-          scheduleHeroAdvance();
-        }
+        if (heroLoopJumping) return;
+        const nearest = nearestPhysicalScene();
+        updateHeroState(nearest);
+        settleLoopClone(nearest);
+        scheduleHeroAdvance();
       }, 110);
     };
     heroTriggers.forEach((trigger, index) => trigger.addEventListener("click", () => showHeroScene(index)));
-    heroPrev?.addEventListener("click", () => showHeroScene(activeHeroScene - 1));
-    heroNext?.addEventListener("click", () => showHeroScene(activeHeroScene + 1));
+    heroPrev?.addEventListener("click", () => stepHero(-1));
+    heroNext?.addEventListener("click", () => stepHero(1));
     heroMotion?.addEventListener("click", () => {
       heroUserPaused = !heroUserPaused;
       heroMotion.classList.toggle("is-paused", heroUserPaused);
@@ -658,12 +704,13 @@ function initHomeExperience() {
       const label = heroUserPaused ? "繼續首屏輪播" : "暫停首屏輪播";
       heroMotion.setAttribute("aria-label", label);
       heroMotion.setAttribute("title", label);
-      updateHeroState(activeHeroScene);
+      updateHeroState(activePhysicalScene);
       if (heroUserPaused) window.clearTimeout(heroAdvanceTimer);
       else scheduleHeroAdvance();
     });
     heroViewport.addEventListener("scroll", syncHeroFromScroll, { passive: true });
-    updateHeroState(0);
+    updateHeroState(heroScenes[0]);
+    window.requestAnimationFrame(() => jumpToOriginal(heroScenes[0]));
     if (!reducedMotion) {
       const pauseHero = () => { heroInteractionPaused = true; window.clearTimeout(heroAdvanceTimer); };
       const resumeHero = () => { heroInteractionPaused = false; scheduleHeroAdvance(); };
@@ -678,14 +725,14 @@ function initHomeExperience() {
       if ("IntersectionObserver" in window) {
         const heroObserver = new IntersectionObserver(([entry]) => {
           heroInView = entry.isIntersecting;
-          updateHeroState(activeHeroScene);
+          updateHeroState(activePhysicalScene);
           if (heroInView) scheduleHeroAdvance();
           else window.clearTimeout(heroAdvanceTimer);
         }, { threshold: 0.18 });
         heroObserver.observe(hero);
       }
       document.addEventListener("visibilitychange", () => {
-        updateHeroState(activeHeroScene);
+        updateHeroState(activePhysicalScene);
         if (!document.hidden) scheduleHeroAdvance();
       });
       scheduleHeroAdvance();
