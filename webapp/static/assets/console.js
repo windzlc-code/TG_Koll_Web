@@ -389,7 +389,6 @@ const state = {
   personaHotImports: storedPersonaHotImports(),
   personaHotCandidateResults: {},
   personaForms: {},
-  personaProfileModes: {},
   personaProfileRegenDrafts: {},
   personaLinkPresetPages: {},
   personaDraftViewModes: {},
@@ -604,7 +603,6 @@ function clearTenantInMemoryState() {
   state.personaHotImports = {};
   state.personaHotCandidateResults = {};
   state.personaForms = {};
-  state.personaProfileModes = {};
   state.personaProfileRegenDrafts = {};
   state.personaLinkPresetPages = {};
   state.personaDraftViewModes = {};
@@ -6736,29 +6734,6 @@ function renderPersonaAccountPanel(persona, account, profile, step) {
     </div>`;
 }
 
-function personaProfileMode(personaId) {
-  const key = String(personaId || "").trim();
-  const mode = key ? state.personaProfileModes[key] : "";
-  return ["edit", "style"].includes(mode) ? mode : "overview";
-}
-
-function renderPersonaProfileModeTabs(mode) {
-  const activeMode = ["edit", "style"].includes(mode) ? mode : "overview";
-  return `<div class="persona-step-tabs persona-subflow-tabs persona-profile-mode-tabs automation-capsule-tabs" role="tablist" aria-label="基础资料视图">${[
-    ["overview", "内容概览"],
-    ["edit", "编辑资料"],
-    ["style", "推文风格"],
-  ].map(([value, label]) => `
-    <button
-      type="button"
-      class="${activeMode === value ? "is-active" : ""}"
-      data-persona-profile-mode="${esc(value)}"
-      role="tab"
-      aria-selected="${activeMode === value ? "true" : "false"}"
-    >${esc(label)}</button>
-  `).join("")}</div>`;
-}
-
 function renderPersonaHotSummaryCard(persona) {
   const hot = persona?.hot || {};
   const stats = [
@@ -6942,7 +6917,6 @@ function renderPersonaSettingsPanelV2(persona, account, profile, step) {
         </div>
       </div>`;
   }
-  const profileMode = personaProfileMode(persona.id);
   const regenState = state.personaProfileRegenDrafts[String(persona.id || "")];
   const isProfileRegenEditing = Boolean(regenState?.active);
   const profileEditName = isProfileRegenEditing
@@ -6955,51 +6929,56 @@ function renderPersonaSettingsPanelV2(persona, account, profile, step) {
     <div class="persona-inline-panel">
       <div class="persona-head-copy">
         <strong>基础资料</strong>
-        <span class="persona-panel-intro">集中查看人设内容概览，右侧同步展示热点概览，也可以切换到编辑资料。</span>
+        <span class="persona-panel-intro">概览、资料编辑、人设图和推文风格集中在同一页面，修改保存后会立即同步当前人设。</span>
       </div>
       <div class="persona-profile-overview-bar">
-        ${renderPersonaProfileModeTabs(profileMode)}
         ${renderPersonaHotSummaryCard(persona)}
       </div>
-      ${profileMode === "edit" ? `
-        <div class="persona-profile-edit-layout">
-          <section class="persona-profile-edit-main ${isProfileRegenEditing ? "is-regen-editing" : ""}">
-            ${isProfileRegenEditing ? `
-              <div class="persona-temp-edit-toolbar">
-                <span>临时编辑中：填写新的生成方向后确认生成。</span>
-                <div class="persona-temp-edit-actions">
-                  <button type="button" data-persona-clear-profile-regen>清空</button>
-                  <button type="button" data-persona-exit-profile-regen>退出编辑</button>
+      <div class="persona-profile-long-page">
+        ${renderPersonaContentOverview(persona, account, profile)}
+        <section class="persona-inline-panel persona-inline-panel--nested persona-profile-editor-section">
+          <div class="persona-head-copy">
+            <strong>资料编辑</strong>
+            <span class="persona-panel-intro">直接修改当前资料；保存后上方概览会立即更新。</span>
+          </div>
+          <div class="persona-profile-edit-layout">
+            <section class="persona-profile-edit-main ${isProfileRegenEditing ? "is-regen-editing" : ""}">
+              ${isProfileRegenEditing ? `
+                <div class="persona-temp-edit-toolbar">
+                  <span>临时编辑中：填写新的生成方向后确认生成。</span>
+                  <div class="persona-temp-edit-actions">
+                    <button type="button" data-persona-clear-profile-regen>清空</button>
+                    <button type="button" data-persona-exit-profile-regen>退出编辑</button>
+                  </div>
                 </div>
+              ` : ""}
+              <div class="form-grid">
+                <label>人设名称
+                  <input id="personaProfileName" value="${esc(profileEditName)}" />
+                </label>
               </div>
-            ` : ""}
-            <div class="form-grid">
-              <label>人设名称
-                <input id="personaProfileName" value="${esc(profileEditName)}" />
+              <label>
+                <span class="persona-profile-field-head">
+                  <span>人设简介</span>
+                </span>
+                <textarea
+                  id="personaProfileContent"
+                  class="${isProfileRegenEditing ? "persona-profile-regen-input" : ""}"
+                  rows="10"
+                  placeholder="${isProfileRegenEditing ? "输入新的方向、身份、语气和内容边界，用于重新生成人设简介。" : "编辑并保存当前人设简介。"}"
+                >${esc(profileEditContent)}</textarea>
               </label>
-            </div>
-            <label>
-              <span class="persona-profile-field-head">
-                <span>人设简介</span>
-              </span>
-              <textarea
-                id="personaProfileContent"
-                class="${isProfileRegenEditing ? "persona-profile-regen-input" : ""}"
-                rows="10"
-                placeholder="${isProfileRegenEditing ? "输入新的方向、身份、语气和内容边界，用于重新生成人设简介。" : "编辑并保存当前人设简介。"}"
-              >${esc(profileEditContent)}</textarea>
-            </label>
-            <div class="row-actions">
-              <button type="button" class="primary" data-persona-save-profile ${isProfileRegenEditing ? "disabled" : ""}>保存资料</button>
-              <button type="button" data-persona-regenerate-profile-content aria-busy="${state.personaCreateBusy?.profileContent ? "true" : "false"}" ${state.personaCreateBusy?.profileContent ? "disabled" : ""}>${state.personaCreateBusy?.profileContent ? "正在生成..." : (isProfileRegenEditing ? "确认生成" : "AI 重新生成")}${renderBillingPricePill("basic_text_post")}</button>
-            </div>
-          </section>
-          <aside class="persona-profile-image-side">
-            ${renderPersonaImagePanel(persona)}
-          </aside>
-        </div>
-      ` : profileMode === "style" ? `
-        <div class="persona-inline-panel persona-inline-panel--nested">
+              <div class="row-actions">
+                <button type="button" class="primary" data-persona-save-profile ${isProfileRegenEditing ? "disabled" : ""}>保存资料</button>
+                <button type="button" data-persona-regenerate-profile-content aria-busy="${state.personaCreateBusy?.profileContent ? "true" : "false"}" ${state.personaCreateBusy?.profileContent ? "disabled" : ""}>${state.personaCreateBusy?.profileContent ? "正在生成..." : (isProfileRegenEditing ? "确认生成" : "AI 重新生成")}${renderBillingPricePill("basic_text_post")}</button>
+              </div>
+            </section>
+            <aside class="persona-profile-image-side">
+              ${renderPersonaImagePanel(persona)}
+            </aside>
+          </div>
+        </section>
+        <section class="persona-inline-panel persona-inline-panel--nested persona-profile-style-section">
           <strong>推文风格</strong>
           <label>风格样例
             <textarea id="personaTweetStyleSample" rows="8" placeholder="粘贴一条代表性推文，保存后自动提取风格。">${esc(profile.tweet_style_sample || "")}</textarea>
@@ -7009,8 +6988,8 @@ function renderPersonaSettingsPanelV2(persona, account, profile, step) {
             <button type="button" data-persona-save-style>保存风格</button>
             <button type="button" data-persona-clear-style ${profile.tweet_style_sample ? "" : "disabled"}>清空风格</button>
           </div>
-        </div>
-      ` : renderPersonaContentOverview(persona, account, profile)}
+        </section>
+      </div>
     </div>`;
 }
 
@@ -8768,7 +8747,6 @@ function resetPersonaWorkspaceStateOnSwitch(personaId) {
   setSelectedPersonaPostId("");
   if (cleanId) {
     state.personaPostSources[cleanId] = "posts";
-    state.personaProfileModes[cleanId] = "overview";
     delete state.personaProfileRegenDrafts[cleanId];
     resetPersonaDraftEditor(cleanId);
   }
@@ -9638,7 +9616,11 @@ async function savePersonaProfileFields() {
     name: $("personaProfileName")?.value.trim() || "",
     content: $("personaProfileContent")?.value.trim() || "",
   });
-  if (result) showMsg("commandMsg", "人设资料已保存。", true);
+  if (result) {
+    renderPersonaDetail();
+    renderConfirmSummary();
+    showMsg("commandMsg", "人设资料已保存，内容概览已更新。", true);
+  }
 }
 
 function personaProfileRegenState(personaId) {
@@ -9745,12 +9727,18 @@ async function regeneratePersonaProfileContent() {
 
 async function savePersonaTweetStyle() {
   const result = await patchPersonaProfile({ tweet_style_sample: $("personaTweetStyleSample")?.value || "" });
-  if (result) showMsg("commandMsg", "推文风格已保存。", true);
+  if (result) {
+    renderPersonaDetail();
+    showMsg("commandMsg", "推文风格已保存，提取结果已更新。", true);
+  }
 }
 
 async function clearPersonaTweetStyle() {
   const result = await patchPersonaProfile({ tweet_style_sample: "" });
-  if (result) showMsg("commandMsg", "推文风格已清空。", true);
+  if (result) {
+    renderPersonaDetail();
+    showMsg("commandMsg", "推文风格已清空。", true);
+  }
 }
 
 function draftPersonaPresetList(profile, mutate) {
@@ -12415,20 +12403,17 @@ async function loadAutomationTasksShared({ force = false } = {}) {
   return request;
 }
 
-async function activateCreatedPersona(personaId, { group = "settings", step = "profile", profileMode = "" } = {}) {
+async function activateCreatedPersona(personaId, { group = "settings", step = "profile" } = {}) {
   state.selectedPersonaId = personaId || state.selectedPersonaId;
   setSelectedPersonaPostId("");
   state.personaGroup = group;
   if (group === "settings") state.personaPanels.settings = step;
   if (group === "content") state.personaPanels.content = step;
-  if (group === "settings" && step === "profile") {
-    state.personaProfileModes[String(state.selectedPersonaId || "")] = ["edit", "style"].includes(profileMode) ? profileMode : "overview";
-  }
   state.personaCreateMode = false;
   await loadPersonas();
   await loadPersonaProfile(state.selectedPersonaId, { force: true }).catch(() => {});
   await loadPersonaDraftPosts(state.selectedPersonaId, { force: true }).catch(() => {});
-  if (group === "settings" && step === "profile" && personaProfileMode(state.selectedPersonaId) === "edit") {
+  if (group === "settings" && step === "profile") {
     await loadPersonaImageLibrary(state.selectedPersonaId, { force: true }).catch(() => {});
   }
   renderConfirmSummary();
@@ -12450,7 +12435,7 @@ async function openPersonaImageGeneration(personaId) {
     return;
   }
   state.activeModule = "personas";
-  await activateCreatedPersona(cleanPersonaId, { group: "settings", step: "profile", profileMode: "edit" });
+  await activateCreatedPersona(cleanPersonaId, { group: "settings", step: "profile" });
   renderWorkspace();
   scrollToPersonaImageGeneration();
 }
@@ -15748,9 +15733,6 @@ function renderPersonaDetail() {
   const step = currentPersonaGroupStep(groupKey, profile);
   if (groupKey === "content" && step === "generate" && !Array.isArray(state.personaMemories[String(persona.id)])) {
     loadPersonaMemories(persona.id).catch(() => {});
-  }
-  if (groupKey === "settings" && step === "profile" && personaProfileMode(persona.id) === "edit" && !personaImageLibraryState(persona.id)) {
-    loadPersonaImageLibrary(persona.id).catch(() => {});
   }
   if (groupKey === "settings" && step === "profile") {
     if (!personaImageLibraryState(persona.id)) loadPersonaImageLibrary(persona.id).catch(() => {});
@@ -21407,17 +21389,6 @@ function bindEvents() {
       openPersonaImageGeneration(personaId)
         .catch((error) => showMsg("commandMsg", error.detail || error.message || "打开人设图设置失败", false));
       return;
-    }
-    const profileModeButton = event.target.closest("[data-persona-profile-mode]");
-    if (profileModeButton) {
-      const persona = selectedPersona();
-      if (persona) {
-        const mode = String(profileModeButton.dataset.personaProfileMode || "");
-        state.personaPanels.settings = "profile";
-        state.personaProfileModes[String(persona.id)] = ["edit", "style"].includes(mode) ? mode : "overview";
-        renderPersonaDetail();
-        renderConfirmSummary();
-      }
     }
     const mediaTaskButton = event.target.closest("[data-persona-media-task]");
     if (mediaTaskButton) {

@@ -5342,18 +5342,7 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .persona-profile-overview-bar {
-  display: flex;
-  flex-wrap: nowrap;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: center;
-}
-
-.persona-profile-overview-bar .persona-step-tabs {
-  margin-top: 0;
-  flex: 0 0 auto;
-  align-self: center;
-  align-items: center;
+  display: block;
 }
 
 .persona-hot-summary-card {
@@ -5361,10 +5350,10 @@ body.persona-touch-dragging .persona-list-card:active {
   align-items: center;
   justify-content: flex-start;
   flex: 0 0 auto;
-  width: fit-content;
+  width: 100%;
   min-width: 0;
   max-width: 100%;
-  margin-left: auto;
+  margin-left: 0;
   gap: 8px;
   padding: 6px 10px;
   border: 1px solid var(--line);
@@ -8296,6 +8285,16 @@ body.persona-touch-dragging .persona-list-card:active {
   overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.persona-profile-long-page {
+  display: grid;
+  gap: 12px;
+}
+
+.persona-profile-editor-section,
+.persona-profile-style-section {
+  gap: 10px;
 }
 
 .toast-message-body {
@@ -12386,11 +12385,6 @@ body.live-browser-modal-open {
     grid-template-columns: 1fr;
   }
 
-  .persona-profile-overview-bar {
-    display: grid;
-    grid-template-columns: 1fr;
-  }
-
   .persona-hot-summary-card {
     width: 100%;
     flex-basis: auto;
@@ -14623,14 +14617,6 @@ body.console-page {
     font-size: 12px;
   }
 
-  .console-page .persona-detail .persona-profile-overview-bar {
-    gap: 5px;
-  }
-
-  .console-page .persona-detail .persona-profile-mode-tabs {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
   .console-page .persona-detail .persona-hot-summary-card {
     display: grid;
     width: 100%;
@@ -14672,6 +14658,7 @@ body.console-page {
 
   .console-page .persona-detail .persona-profile-edit-layout,
   .console-page .persona-detail .persona-profile-edit-main,
+  .console-page .persona-detail .persona-profile-long-page,
   .console-page .persona-detail .form-grid,
   .console-page .persona-detail .row-actions {
     gap: 5px;
