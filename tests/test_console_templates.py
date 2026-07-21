@@ -19,7 +19,6 @@ class ConsoleTemplateMarkupTests(unittest.TestCase):
         self.assertNotIn("renderPersonaProfileModeTabs", source)
         self.assertNotIn('profileMode ===', panel)
         markers = (
-            "renderPersonaHotSummaryCard(persona)",
             "renderPersonaContentOverview(persona, account, profile)",
             "renderPersonaImagePanel(persona)",
             'id="personaTweetStyleSample"',
@@ -33,6 +32,9 @@ class ConsoleTemplateMarkupTests(unittest.TestCase):
         self.assertIn("if (!hasImages)", source)
         self.assertIn('if (profileEditing) return ""', source)
         self.assertIn("persona-profile-section--empty-images", source)
+        self.assertIn("renderPersonaDataPanel(persona, activityCardsHtml)", source)
+        self.assertIn("persona-profile-overview-layout", source)
+        self.assertIn("persona-profile-data-panel", source)
         self.assertIn("persona-hot-summary-card--profile", source)
         self.assertIn("persona-hot-summary-card--hot", source)
         self.assertNotIn('data-persona-avatar-crop="', source)

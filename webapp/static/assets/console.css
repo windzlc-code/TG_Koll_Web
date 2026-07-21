@@ -5303,18 +5303,64 @@ body.persona-touch-dragging .persona-list-card:active {
   .billing-ledger-row { align-items: flex-start; }
 }
 
-.persona-overview-grid {
+.persona-profile-overview-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.12fr) minmax(420px, .88fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.persona-profile-data-panel {
   display: grid;
   gap: 10px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-solid);
 }
 
-.persona-profile-overview-bar {
-  display: block;
+.persona-profile-data-panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
 }
 
-.persona-profile-summary-stack {
-  display: grid;
+.persona-profile-data-panel-head > strong {
+  font-size: 16px;
+}
+
+.persona-profile-data-panel-head > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.persona-profile-data-panel .persona-hot-summary-card {
+  grid-template-columns: 1fr;
+  align-items: start;
   gap: 6px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.persona-profile-data-panel .persona-hot-summary-card--hot {
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.persona-profile-activity-grid {
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.persona-profile-activity-grid > .flow-box {
+  min-width: 0;
+  margin-top: 0;
+  box-shadow: none;
 }
 
 .persona-hot-summary-card {
@@ -5386,6 +5432,12 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-hot-summary-metrics strong {
   font-size: 16px;
   line-height: 1;
+}
+
+@media (max-width: 1180px) {
+  .persona-profile-overview-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .persona-profile-identity {
@@ -14726,6 +14778,16 @@ body.console-page {
 
 /* Final mobile density pass: keep the workspace readable without oversized controls. */
 @media (max-width: 760px) {
+  .persona-profile-data-panel {
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .persona-profile-data-panel-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
   .console-page .persona-detail input:not([type="checkbox"]):not([type="radio"]),
   .console-page .persona-detail select,
   .console-page .persona-detail textarea {

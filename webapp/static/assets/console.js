@@ -7055,7 +7055,7 @@ async function openPersonaAvatarCropModal() {
   renderPersonaDetail();
 }
 
-function renderPersonaHotSummaryCard(persona) {
+function renderPersonaDataPanel(persona, activityCardsHtml) {
   const hot = persona?.hot || {};
   const personaId = String(persona?.id || "");
   const drafts = personaDraftPosts(persona);
@@ -7075,20 +7075,27 @@ function renderPersonaHotSummaryCard(persona) {
     ["转发", Number(hot.reposts || 0)],
   ];
   return `
-    <div class="persona-profile-summary-stack">
+    <section class="persona-profile-data-panel" aria-label="人设相关数据">
+      <div class="persona-profile-data-panel-head">
+        <strong>相关数据</strong>
+        <span>账号、内容与自动化状态集中展示</span>
+      </div>
       <aside class="persona-hot-summary-card persona-hot-summary-card--profile">
         <div class="persona-hot-summary-head"><span>人设数据</span><strong>基础统计</strong></div>
         <div class="persona-hot-summary-metrics persona-hot-summary-metrics--profile">
           ${profileStats.map(([label, value]) => `<div><span>${esc(label)}</span><strong>${esc(numberText(value))}</strong></div>`).join("")}
         </div>
       </aside>
+      <div class="form-grid persona-profile-activity-grid">
+        ${activityCardsHtml}
+      </div>
       <aside class="persona-hot-summary-card persona-hot-summary-card--hot">
         <div class="persona-hot-summary-head"><span>热点数据</span><strong>${persona?.hot ? "实时统计" : "暂无统计"}</strong></div>
         <div class="persona-hot-summary-metrics persona-hot-summary-metrics--hot">
           ${hotStats.map(([label, value]) => `<div><span>${esc(label)}</span><strong>${esc(numberText(value))}</strong></div>`).join("")}
         </div>
       </aside>
-    </div>`;
+    </section>`;
 }
 
 function renderPersonaContentOverview(persona, account, profile) {
@@ -7108,8 +7115,30 @@ function renderPersonaContentOverview(persona, account, profile) {
   const regenState = personaProfileRegenState(personaId);
   const isProfileRegenEditing = Boolean(regenState?.active);
   const displayAvatar = normalizePersonaAvatar(profile?.avatar);
+  const activityCardsHtml = `
+    <div class="flow-box">
+      <span>执行账号</span>
+      <strong>${esc(account ? `${account.username || account.id} · ${platformLabel(account.platform || "")}` : "未绑定")}</strong>
+      <span>${esc(account ? `${statusLabel(account.status || "")}${accounts.length > 1 ? ` · 共 ${accounts.length} 个账号` : ""}` : "到“账号管理自动化”绑定账号")}</span>
+      <span>${esc(publishAccount ? (isReadyPublishAccount(publishAccount) ? `可发布：${publishPlatformLabel(publishAccount)} · ${publishPlatformHint(publishAccount)}` : publishAccountBlockMessage(publishAccount)) : "还没有绑定发布账号")}</span>
+    </div>
+    <div class="flow-box">
+      <span>最近草稿</span>
+      <strong>${esc(latestDraft ? personaDraftDisplayTitleForPost(latestDraft, drafts) : "暂无草稿")}</strong>
+      <span>${esc(latestDraft ? formatTime(latestDraft.updated_at || latestDraft.created_at) : "先到推文生成里新建推文")}</span>
+    </div>
+    <div class="flow-box">
+      <span>最近发布</span>
+      <strong>${esc(latestHistory?.title || latestHistory?.content || "暂无发布记录")}</strong>
+      <span>${esc(latestHistory ? formatTime(latestHistory.published_at || latestHistory.created_at || latestHistory.captured_at) : "发布后会在这里显示")}</span>
+    </div>
+    <div class="flow-box">
+      <span>最近自动化</span>
+      <strong>${esc(latestTask ? statusLabel(latestTask.task_type || latestTask.status || "") : "暂无任务")}</strong>
+      <span>${esc(latestTask ? `${statusLabel(latestTask.status || "")} · ${formatTime(latestTask.updated_at || latestTask.created_at)}` : "登录、养号、回复任务会在这里汇总")}</span>
+    </div>`;
   return `
-    <div class="persona-overview-grid">
+    <div class="persona-profile-overview-layout">
       <section class="persona-profile-identity ${isEditing ? "is-editing" : ""}">
         ${isEditing ? `
           ${renderPersonaAvatarEditor(persona, profile, editDraft)}
@@ -7147,29 +7176,7 @@ function renderPersonaContentOverview(persona, account, profile) {
           </div>
         `}
       </section>
-      <div class="form-grid">
-        <div class="flow-box">
-          <span>执行账号</span>
-          <strong>${esc(account ? `${account.username || account.id} · ${platformLabel(account.platform || "")}` : "未绑定")}</strong>
-          <span>${esc(account ? `${statusLabel(account.status || "")}${accounts.length > 1 ? ` · 共 ${accounts.length} 个账号` : ""}` : "到“账号管理自动化”绑定账号")}</span>
-          <span>${esc(publishAccount ? (isReadyPublishAccount(publishAccount) ? `可发布：${publishPlatformLabel(publishAccount)} · ${publishPlatformHint(publishAccount)}` : publishAccountBlockMessage(publishAccount)) : "还没有绑定发布账号")}</span>
-        </div>
-        <div class="flow-box">
-          <span>最近草稿</span>
-          <strong>${esc(latestDraft ? personaDraftDisplayTitleForPost(latestDraft, drafts) : "暂无草稿")}</strong>
-          <span>${esc(latestDraft ? formatTime(latestDraft.updated_at || latestDraft.created_at) : "先到推文生成里新建推文")}</span>
-        </div>
-        <div class="flow-box">
-          <span>最近发布</span>
-          <strong>${esc(latestHistory?.title || latestHistory?.content || "暂无发布记录")}</strong>
-          <span>${esc(latestHistory ? formatTime(latestHistory.published_at || latestHistory.created_at || latestHistory.captured_at) : "发布后会在这里显示")}</span>
-        </div>
-        <div class="flow-box">
-          <span>最近自动化</span>
-          <strong>${esc(latestTask ? statusLabel(latestTask.task_type || latestTask.status || "") : "暂无任务")}</strong>
-          <span>${esc(latestTask ? `${statusLabel(latestTask.status || "")} · ${formatTime(latestTask.updated_at || latestTask.created_at)}` : "登录、养号、回复任务会在这里汇总")}</span>
-        </div>
-      </div>
+      ${renderPersonaDataPanel(persona, activityCardsHtml)}
     </div>`;
 }
 
@@ -7296,9 +7303,6 @@ function renderPersonaSettingsPanelV2(persona, account, profile, step) {
       <div class="persona-head-copy">
         <strong>基础资料</strong>
         <span class="persona-panel-intro">概览、资料编辑、人设图和推文风格集中在同一页面，修改保存后会立即同步当前人设。</span>
-      </div>
-      <div class="persona-profile-overview-bar">
-        ${renderPersonaHotSummaryCard(persona)}
       </div>
       <div class="persona-profile-long-page">
         ${renderPersonaContentOverview(persona, account, profile)}
