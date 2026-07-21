@@ -573,7 +573,6 @@ function initHomeExperience() {
   const heroTriggers = [...(hero?.querySelectorAll("[data-home-hero-trigger]") || [])];
   const heroPrev = hero?.querySelector("[data-home-hero-prev]");
   const heroNext = hero?.querySelector("[data-home-hero-next]");
-  const heroMotion = hero?.querySelector("[data-home-hero-motion]");
   const heroStatus = hero?.querySelector("[data-home-hero-status]");
   if (heroTrack && heroViewport && heroScenes.length > 1 && heroScenes.length === heroTriggers.length) {
     const cloneCount = Math.min(3, heroScenes.length);
@@ -597,7 +596,6 @@ function initHomeExperience() {
     let activeHeroScene = 0;
     let activePhysicalScene = heroScenes[0];
     let heroInteractionPaused = false;
-    let heroUserPaused = false;
     let heroInView = true;
     let heroScrollTimer = 0;
     let heroLoopTimer = 0;
@@ -610,7 +608,7 @@ function initHomeExperience() {
     ), physicalScenes[0]);
     const scheduleHeroAdvance = () => {
       window.clearTimeout(heroAdvanceTimer);
-      if (reducedMotion || heroInteractionPaused || heroUserPaused || !heroInView) return;
+      if (reducedMotion || heroInteractionPaused || !heroInView) return;
       heroAdvanceTimer = window.setTimeout(() => {
         if (document.hidden) {
           scheduleHeroAdvance();
@@ -637,7 +635,7 @@ function initHomeExperience() {
           source.removeAttribute("data-src");
           video.load();
         }
-        if (isActive && !isClone && heroInView && !heroUserPaused && !document.hidden && !reducedMotion) video.play().catch(() => {});
+        if (isActive && !isClone && heroInView && !document.hidden && !reducedMotion) video.play().catch(() => {});
         else video.pause();
       });
       heroTriggers.forEach((trigger, triggerIndex) => {
@@ -708,17 +706,6 @@ function initHomeExperience() {
     heroTriggers.forEach((trigger, index) => trigger.addEventListener("click", () => showHeroScene(index)));
     heroPrev?.addEventListener("click", () => stepHero(-1));
     heroNext?.addEventListener("click", () => stepHero(1));
-    heroMotion?.addEventListener("click", () => {
-      heroUserPaused = !heroUserPaused;
-      heroMotion.classList.toggle("is-paused", heroUserPaused);
-      heroMotion.setAttribute("aria-pressed", String(heroUserPaused));
-      const label = heroUserPaused ? "繼續首屏輪播" : "暫停首屏輪播";
-      heroMotion.setAttribute("aria-label", label);
-      heroMotion.setAttribute("title", label);
-      updateHeroState(activePhysicalScene);
-      if (heroUserPaused) window.clearTimeout(heroAdvanceTimer);
-      else scheduleHeroAdvance();
-    });
     heroViewport.addEventListener("scroll", syncHeroFromScroll, { passive: true });
     updateHeroState(heroScenes[0]);
     window.requestAnimationFrame(() => jumpToOriginal(heroScenes[0]));
