@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 class ConsoleTemplateMarkupTests(unittest.TestCase):
-    def test_persona_profile_is_a_single_long_page(self):
+    def test_persona_profile_uses_independent_editors_and_three_modules(self):
         source = (
             Path(__file__).resolve().parents[1]
             / "webapp"
@@ -18,25 +18,39 @@ class ConsoleTemplateMarkupTests(unittest.TestCase):
         self.assertNotIn("data-persona-profile-mode", source)
         self.assertNotIn("renderPersonaProfileModeTabs", source)
         self.assertNotIn('profileMode ===', panel)
+        overview_start = source.index("function renderPersonaContentOverview")
+        overview_end = source.index("function renderPersonaImagePanel", overview_start)
+        overview = source[overview_start:overview_end]
         markers = (
-            "renderPersonaContentOverview(persona, account, profile)",
-            "renderPersonaImagePanel(persona)",
-            'id="personaTweetStyleSample"',
+            "renderPersonaProfileIdentity(persona, account, profile)",
+            "renderPersonaGenerationPanel(persona)",
+            "renderPersonaDataPanel(persona, activityCardsHtml)",
         )
-        positions = [panel.index(marker) for marker in markers]
+        positions = [overview.index(marker) for marker in markers]
         self.assertEqual(positions, sorted(positions))
-        self.assertIn("data-persona-edit-profile", source)
+        self.assertNotIn("data-persona-edit-profile", source)
+        self.assertNotIn("personaProfileEditDrafts", source)
+        self.assertNotIn("personaProfileRegenDrafts", source)
+        self.assertIn("data-persona-edit-name", source)
+        self.assertIn("data-persona-edit-content", source)
+        self.assertIn("data-persona-open-links", source)
+        self.assertIn("data-persona-open-style", source)
         self.assertIn("data-persona-avatar-crop-open", source)
+        self.assertIn("persona-avatar-add-button", source)
+        self.assertIn("persona-avatar-placeholder", source)
         self.assertIn("data-persona-avatar-crop-stage", source)
         self.assertIn("data-persona-avatar-crop-option", source)
         self.assertIn("if (!hasImages)", source)
-        self.assertIn('if (profileEditing) return ""', source)
         self.assertIn("persona-profile-section--empty-images", source)
-        self.assertIn("renderPersonaDataPanel(persona, activityCardsHtml)", source)
+        self.assertIn('modalKey: "persona-link-settings"', source)
+        self.assertIn('modalKey: "persona-tweet-style"', source)
+        self.assertIn('modalKey: "persona-profile-generate"', source)
         self.assertIn("persona-profile-overview-layout", source)
+        self.assertIn("persona-profile-generation-panel", source)
         self.assertIn("persona-profile-data-panel", source)
         self.assertIn("persona-hot-summary-card--profile", source)
         self.assertIn("persona-hot-summary-card--hot", source)
+        self.assertNotIn('id="personaTweetStyleSample"', panel)
         self.assertNotIn('data-persona-avatar-crop="', source)
         self.assertNotIn('class="persona-profile-editor-section"', panel)
 

@@ -389,8 +389,6 @@ const state = {
   personaHotImports: storedPersonaHotImports(),
   personaHotCandidateResults: {},
   personaForms: {},
-  personaProfileEditDrafts: {},
-  personaProfileRegenDrafts: {},
   personaLinkPresetPages: {},
   personaDraftViewModes: {},
   personaSelectedMediaIndexes: {},
@@ -604,8 +602,6 @@ function clearTenantInMemoryState() {
   state.personaHotImports = {};
   state.personaHotCandidateResults = {};
   state.personaForms = {};
-  state.personaProfileEditDrafts = {};
-  state.personaProfileRegenDrafts = {};
   state.personaLinkPresetPages = {};
   state.personaDraftViewModes = {};
   state.personaSelectedMediaIndexes = {};
@@ -1958,7 +1954,7 @@ function openConsoleModal({ title = "确认操作", message = "", contentHtml = 
             ${fields.map((field) => `
               <label>${esc(field?.label || "")}
                 ${field?.multiline
-                  ? `<textarea data-console-modal-field="${esc(field?.name || "")}" rows="3" placeholder="${esc(field?.placeholder || "")}">${esc(field?.value || "")}</textarea>`
+                  ? `<textarea data-console-modal-field="${esc(field?.name || "")}" rows="3" placeholder="${esc(field?.placeholder || "")}" ${field?.required ? "required" : ""}>${esc(field?.value || "")}</textarea>`
                   : `<input data-console-modal-field="${esc(field?.name || "")}" type="${esc(field?.type || "text")}" value="${esc(field?.value || "")}" placeholder="${esc(field?.placeholder || "")}" ${field?.required ? "required" : ""} />`}
               </label>
             `).join("")}
@@ -6751,40 +6747,6 @@ function normalizePersonaAvatar(avatar) {
   };
 }
 
-function personaProfileEditState(personaId) {
-  return state.personaProfileEditDrafts[String(personaId || "").trim()] || null;
-}
-
-function syncPersonaProfileEditDraftFromDom(personaId = selectedPersona()?.id) {
-  const key = String(personaId || "").trim();
-  const draft = personaProfileEditState(key);
-  if (!draft?.active) return draft;
-  if ($("personaProfileName")) draft.name = String($("personaProfileName").value || "");
-  if ($("personaProfileContent")) draft.content = String($("personaProfileContent").value || "");
-  return draft;
-}
-
-function beginPersonaProfileEdit(persona, profile) {
-  const key = String(persona?.id || "").trim();
-  if (!key) return;
-  state.personaProfileEditDrafts[key] = {
-    active: true,
-    name: String(profile?.name || persona?.name || ""),
-    content: String(profile?.content || persona?.content || ""),
-    avatar: normalizePersonaAvatar(profile?.avatar),
-  };
-  renderPersonaDetail();
-  window.requestAnimationFrame(() => $("personaProfileName")?.focus());
-}
-
-function cancelPersonaProfileEdit(personaId = selectedPersona()?.id) {
-  const key = String(personaId || "").trim();
-  if (!key) return;
-  delete state.personaProfileEditDrafts[key];
-  delete state.personaProfileRegenDrafts[key];
-  renderPersonaDetail();
-}
-
 function personaAvatarLibraryItem(personaId, imageId) {
   const library = personaImageLibraryState(personaId);
   return (Array.isArray(library?.items) ? library.items : []).find((item) => String(item?.id || "") === String(imageId || "")) || null;
@@ -6816,41 +6778,12 @@ function personaAvatarLibraryImages(personaId) {
 function renderPersonaAvatar(persona, profile, avatar, { editor = false } = {}) {
   const name = String(profile?.name || persona?.name || "未命名人设").trim();
   const imageUrl = personaAvatarImageUrl(persona?.id, avatar);
-  const initials = Array.from(name).slice(0, 2).join("") || "人设";
   return `
     <div class="persona-avatar ${editor ? "persona-avatar--editor" : ""}">
       ${imageUrl
-        ? `<img src="${esc(imageUrl)}" alt="${esc(`${name}头像`)}" style="${personaAvatarImageStyle(avatar)}" onerror="this.hidden=true;this.nextElementSibling.hidden=false" /><span hidden>${esc(initials)}</span>`
-        : `<span>${esc(initials)}</span>`}
+        ? `<img src="${esc(imageUrl)}" alt="${esc(`${name}头像`)}" style="${personaAvatarImageStyle(avatar)}" onerror="this.hidden=true;this.nextElementSibling.hidden=false" /><span class="persona-avatar-placeholder" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"></circle><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"></path></svg></span>`
+        : `<span class="persona-avatar-placeholder"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"></circle><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"></path></svg></span>`}
     </div>`;
-}
-
-function renderPersonaAvatarEditor(persona, profile, draft) {
-  const images = personaAvatarLibraryImages(persona.id);
-  const avatar = draft.avatar;
-  if (!images.length) {
-    return `
-      <section class="persona-avatar-editor is-empty" data-persona-avatar-editor>
-        <div class="persona-avatar-empty-state">
-          <div>
-            <strong>暂无可用人设图</strong>
-            <span>请先重新生成人设图，生成完成后即可设置头像。</span>
-          </div>
-          <button type="button" class="primary" data-persona-generate-image>重新生成人设图${renderBillingPricePill("ai_image")}</button>
-        </div>
-      </section>`;
-  }
-  return `
-    <section class="persona-avatar-editor" data-persona-avatar-editor>
-      <div class="persona-avatar-editor-preview">
-        ${renderPersonaAvatar(persona, { ...profile, name: draft.name }, avatar, { editor: true })}
-        <div>
-          <strong>人设头像</strong>
-          <span>${avatar ? "当前头像已设置，可在圆形裁剪窗口中重新调整。" : "从现有人设图库中选择一张图片作为头像。"}</span>
-          <button type="button" class="persona-avatar-select-button" data-persona-avatar-crop-open>${avatar ? "调整头像" : "选择人设图"}</button>
-        </div>
-      </div>
-    </section>`;
 }
 
 function personaAvatarCropModalHtml(images, avatar) {
@@ -6928,19 +6861,19 @@ function applyPersonaAvatarCropModal(modal) {
 
 async function openPersonaAvatarCropModal() {
   const persona = selectedPersona();
-  const draft = syncPersonaProfileEditDraftFromDom(persona?.id);
+  const profile = selectedPersonaProfile() || (persona ? fallbackPersonaProfile(persona) : null);
   const images = personaAvatarLibraryImages(persona?.id);
-  if (!persona || !draft?.active) return;
+  if (!persona || !profile) return;
   if (!images.length) {
-    document.querySelector("[data-persona-generate-image]")?.click();
+    await submitPersonaImageGeneration();
     return;
   }
   const existing = normalizePersonaAvatar({
-    image_id: draft.avatar?.imageId,
-    preview_url: draft.avatar?.previewUrl,
-    crop_x: draft.avatar?.cropX,
-    crop_y: draft.avatar?.cropY,
-    zoom: draft.avatar?.zoom,
+    image_id: profile.avatar?.image_id,
+    preview_url: profile.avatar?.preview_url,
+    crop_x: profile.avatar?.crop_x,
+    crop_y: profile.avatar?.crop_y,
+    zoom: profile.avatar?.zoom,
   });
   const selected = images.find((item) => item.id === existing?.imageId) || images[0];
   let workingAvatar = {
@@ -7049,10 +6982,19 @@ async function openPersonaAvatarCropModal() {
   };
   const applied = await request;
   if (!applied) return;
-  const activeDraft = personaProfileEditState(persona.id);
-  if (!activeDraft?.active) return;
-  activeDraft.avatar = appliedAvatar;
-  renderPersonaDetail();
+  const result = await patchPersonaProfile({
+    avatar: appliedAvatar ? {
+      image_id: appliedAvatar.imageId,
+      crop_x: appliedAvatar.cropX,
+      crop_y: appliedAvatar.cropY,
+      zoom: appliedAvatar.zoom,
+    } : null,
+  });
+  if (result) {
+    renderPersonaDetail();
+    renderConfirmSummary();
+    showMsg("commandMsg", appliedAvatar ? "人设头像已保存。" : "人设头像已清除。", true);
+  }
 }
 
 function renderPersonaDataPanel(persona, activityCardsHtml) {
@@ -7098,6 +7040,68 @@ function renderPersonaDataPanel(persona, activityCardsHtml) {
     </section>`;
 }
 
+function renderPersonaProfileIdentity(persona, account, profile) {
+  const content = String(profile?.content || persona?.content || "").trim();
+  const displayAvatar = normalizePersonaAvatar(profile?.avatar);
+  const activePreset = personaPresetById(profile, profile?.active_link_preset_id) || selectedPersonaPreset(profile);
+  const styleSummary = String(profile?.tweet_style_profile || "").trim();
+  return `
+    <section class="persona-profile-identity">
+      <div class="persona-profile-identity-avatar-row">
+        <div class="persona-avatar-control">
+          ${renderPersonaAvatar(persona, profile, displayAvatar)}
+          <button type="button" class="persona-avatar-add-button" data-persona-avatar-crop-open title="${displayAvatar ? "编辑头像" : "添加头像"}" aria-label="${displayAvatar ? "编辑头像" : "添加头像"}">${renderPlusIcon()}</button>
+        </div>
+        <div class="persona-profile-name-block">
+          <span>人设名称</span>
+          <strong>${esc(profile?.name || persona?.name || "未命名人设")}</strong>
+          <button type="button" class="persona-profile-inline-edit" data-persona-edit-name title="编辑人设名称" aria-label="编辑人设名称">${renderEditIcon()}</button>
+        </div>
+      </div>
+      <div class="persona-profile-config-modules" aria-label="人设发布设置">
+        <article>
+          <div><span>链接设置</span><strong>${esc(activePreset?.name || "未设置")}</strong><small>${esc(activePreset?.link_url || activePreset?.ending_text || "尚未选择发布链接模板")}</small></div>
+          <button type="button" data-persona-open-links>${activePreset ? "重新编辑" : "设置链接"}</button>
+        </article>
+        <article>
+          <div><span>推文风格</span><strong>${esc(styleSummary ? "已提取风格" : "未设置")}</strong><small>${esc(styleSummary || "尚未保存代表性推文样例")}</small></div>
+          <button type="button" data-persona-open-style>${styleSummary ? "重新编辑" : "设置风格"}</button>
+        </article>
+      </div>
+      <div class="persona-profile-identity-copy">
+        <div class="persona-profile-section-head">
+          <span>人设简介</span>
+          <button type="button" class="persona-profile-inline-edit" data-persona-edit-content title="编辑人设简介" aria-label="编辑人设简介">${renderEditIcon()}</button>
+        </div>
+        <p>${esc(content || "当前还没有人设简介。")}</p>
+      </div>
+      <div class="persona-profile-account-module">
+        <div>
+          <span>账号设置</span>
+          <strong>${esc(account ? `${account.username || account.id} · ${platformLabel(account.platform || "")}` : "未绑定执行账号")}</strong>
+          <small>${esc(account ? statusLabel(account.status || "") : "账号绑定和登录状态统一在账号管理自动化中维护")}</small>
+        </div>
+        <button type="button" data-open-unified-automation>${account ? "管理账号" : "绑定账号"}</button>
+      </div>
+    </section>`;
+}
+
+function renderPersonaGenerationPanel(persona) {
+  const busy = Boolean(state.personaCreateBusy?.profileContent);
+  return `
+    <section class="persona-profile-generation-panel" aria-label="人设生成设置">
+      <div class="persona-profile-data-panel-head">
+        <strong>人设生成设置</strong>
+        <span>简介与人设图分别生成</span>
+      </div>
+      <div class="persona-profile-generation-action">
+        <div><strong>AI 生成人设简介</strong><span>填写新的生成方向，确认结果后再保存。</span></div>
+        <button type="button" data-persona-regenerate-profile-content aria-busy="${busy ? "true" : "false"}" ${busy ? "disabled" : ""}>${renderBusyButtonContent("重新生成简介", busy)}${renderBillingPricePill("basic_text_post")}</button>
+      </div>
+      ${renderPersonaImagePanel(persona, { embedded: true })}
+    </section>`;
+}
+
 function renderPersonaContentOverview(persona, account, profile) {
   const drafts = personaDraftPosts(persona);
   const historyRows = personaPublishHistoryRows(persona);
@@ -7109,12 +7113,6 @@ function renderPersonaContentOverview(persona, account, profile) {
   const latestTask = [...state.socialTasks]
     .filter((task) => String(task.persona_id || "") === personaId)
     .sort((left, right) => Math.max(timeValue(right.updated_at), timeValue(right.created_at)) - Math.max(timeValue(left.updated_at), timeValue(left.created_at)))[0] || null;
-  const content = String(profile?.content || persona?.content || "").trim();
-  const editDraft = personaProfileEditState(personaId);
-  const isEditing = Boolean(editDraft?.active);
-  const regenState = personaProfileRegenState(personaId);
-  const isProfileRegenEditing = Boolean(regenState?.active);
-  const displayAvatar = normalizePersonaAvatar(profile?.avatar);
   const activityCardsHtml = `
     <div class="flow-box">
       <span>执行账号</span>
@@ -7139,48 +7137,13 @@ function renderPersonaContentOverview(persona, account, profile) {
     </div>`;
   return `
     <div class="persona-profile-overview-layout">
-      <section class="persona-profile-identity ${isEditing ? "is-editing" : ""}">
-        ${isEditing ? `
-          ${renderPersonaAvatarEditor(persona, profile, editDraft)}
-          ${isProfileRegenEditing ? `
-            <div class="persona-temp-edit-toolbar">
-              <span>临时生成方向编辑中</span>
-              <div class="persona-temp-edit-actions">
-                <button type="button" data-persona-clear-profile-regen>清空</button>
-                <button type="button" data-persona-exit-profile-regen>退出生成</button>
-              </div>
-            </div>
-          ` : ""}
-          <label>人设名称
-            <input id="personaProfileName" value="${esc(isProfileRegenEditing ? regenState.name : editDraft.name)}" />
-          </label>
-          <label>人设简介
-            <textarea id="personaProfileContent" rows="7" placeholder="编辑当前人设简介。">${esc(isProfileRegenEditing ? regenState.content : editDraft.content)}</textarea>
-          </label>
-          <div class="persona-profile-identity-actions">
-            <button type="button" data-persona-regenerate-profile-content aria-busy="${state.personaCreateBusy?.profileContent ? "true" : "false"}" ${state.personaCreateBusy?.profileContent ? "disabled" : ""}>${state.personaCreateBusy?.profileContent ? "正在生成..." : (isProfileRegenEditing ? "确认生成" : "AI 重新生成")}${renderBillingPricePill("basic_text_post")}</button>
-            <div>
-              <button type="button" data-persona-cancel-profile-edit>取消编辑</button>
-              <button type="button" class="primary" data-persona-save-profile ${isProfileRegenEditing ? "disabled" : ""}>保存资料</button>
-            </div>
-          </div>
-        ` : `
-          <div class="persona-profile-identity-avatar-row">
-            ${renderPersonaAvatar(persona, profile, displayAvatar)}
-            <button type="button" class="persona-profile-edit-button" data-persona-edit-profile aria-label="编辑资料" title="编辑资料">${renderEditIcon()}<span>编辑资料</span></button>
-          </div>
-          <div class="persona-profile-identity-copy">
-            <span>人设简介</span>
-            <strong>${esc(profile?.name || persona?.name || "未命名人设")}</strong>
-            <p>${esc(content || "当前还没有人设简介。")}</p>
-          </div>
-        `}
-      </section>
+      ${renderPersonaProfileIdentity(persona, account, profile)}
+      ${renderPersonaGenerationPanel(persona)}
       ${renderPersonaDataPanel(persona, activityCardsHtml)}
     </div>`;
 }
 
-function renderPersonaImagePanel(persona) {
+function renderPersonaImagePanel(persona, { embedded = false } = {}) {
   const imageRunState = personaGenerateRunState(persona.id);
   const imageBusy = isActionLocked("persona", persona.id, "image_generate")
     || (String(imageRunState?.kind || "") === "persona_image" && String(imageRunState?.status || "") === "running");
@@ -7192,7 +7155,6 @@ function renderPersonaImagePanel(persona) {
     String(library?.current_reference_url || "").trim()
     || libraryItems.some((item) => item && (item.is_reference || item.isReference))
   );
-  const profileEditing = Boolean(personaProfileEditState(persona.id)?.active);
   const imageIntro = hasCurrentReference
     ? "当前已有可用人设图，重新生成会产出新图，原图库仍会保留。"
     : (hasImages ? "图库里已有历史图，可以先设为当前，也可以重新生成一张。" : "先生成一张人设图，生成后会进入图库。");
@@ -7200,9 +7162,8 @@ function renderPersonaImagePanel(persona) {
     ? "正在生成..."
     : (hasCurrentReference ? "重新生成人设图" : "生成人设图");
   if (!hasImages) {
-    if (profileEditing) return "";
     return `
-      <div class="persona-profile-section persona-profile-section--empty-images" id="personaImageGenerationSection" data-persona-image-generation-section>
+      <div class="persona-profile-image-panel persona-profile-section--empty-images ${embedded ? "is-embedded" : ""}" id="personaImageGenerationSection" data-persona-image-generation-section>
         <div class="persona-head-copy">
           <strong>人设图</strong>
           <span class="persona-panel-intro">当前没有可用人设图，请先重新生成。</span>
@@ -7213,7 +7174,7 @@ function renderPersonaImagePanel(persona) {
       </div>`;
   }
   return `
-    <div class="persona-profile-section" id="personaImageGenerationSection" data-persona-image-generation-section>
+    <div class="persona-profile-image-panel ${embedded ? "is-embedded" : ""}" id="personaImageGenerationSection" data-persona-image-generation-section>
       <div class="persona-head-copy">
         <strong>人设图</strong>
         <span class="persona-panel-intro">${esc(imageIntro)}</span>
@@ -7229,13 +7190,60 @@ function renderPersonaImagePanel(persona) {
     </div>`;
 }
 
+function renderPersonaLinkSettingsContent(profile) {
+  const presets = personaProfilePresets(profile);
+  const selectedPreset = selectedPersonaPreset(profile);
+  const selectedPresetId = String(selectedPreset?.id || "");
+  return `
+    <div class="persona-link-layout">
+      <section class="persona-link-editor">
+        <div class="persona-head-copy">
+          <strong>${selectedPreset ? "编辑模板" : "新增模板"}</strong>
+          <span class="persona-panel-intro">${selectedPreset ? "修改当前选中的链接模板。" : "填写后新增为链接模板。"}</span>
+        </div>
+        <label>模板名称
+          <input id="personaLinkPresetName" value="${esc(selectedPreset?.name || "")}" placeholder="例如：预约咨询" />
+        </label>
+        <label>链接地址
+          <input id="personaLinkPresetUrl" value="${esc(selectedPreset?.link_url || "")}" placeholder="https://example.com" />
+        </label>
+        <label>结尾文案
+          <textarea id="personaLinkPresetEnding" rows="5" placeholder="发布时附加在推文结尾。">${esc(selectedPreset?.ending_text || "")}</textarea>
+        </label>
+        <div class="row-actions persona-link-editor-actions">
+          <button type="button" class="primary" data-persona-add-preset>新增模板</button>
+          <button type="button" data-persona-save-preset ${selectedPreset ? "" : "disabled"}>保存当前</button>
+          <button type="button" data-persona-activate-preset ${selectedPreset ? "" : "disabled"}>设为启用</button>
+        </div>
+      </section>
+      <section class="persona-link-list-panel">
+        <div class="persona-link-list-head">
+          <div><strong>模板列表</strong><span>${esc(presets.length)} 个模板</span></div>
+          <span class="module-chip">${selectedPreset ? `正在编辑：${esc(selectedPreset.name || selectedPreset.id)}` : "未选择"}</span>
+        </div>
+        ${renderPersonaLinkPresetTable(profile, presets, selectedPresetId)}
+      </section>
+    </div>`;
+}
+
+function renderPersonaTweetStyleSettingsContent(profile) {
+  return `
+    <div class="persona-profile-style-modal-content">
+      <label>风格样例
+        <textarea id="personaTweetStyleSample" rows="8" placeholder="粘贴一条代表性推文，保存后自动提取风格。">${esc(profile?.tweet_style_sample || "")}</textarea>
+      </label>
+      <div class="flow-box"><span>当前提取结果</span><strong>${esc(profile?.tweet_style_profile || "尚未提取")}</strong></div>
+      <div class="row-actions">
+        <button type="button" class="primary" data-persona-save-style>保存风格</button>
+        <button type="button" data-persona-clear-style ${profile?.tweet_style_sample ? "" : "disabled"}>清空风格</button>
+      </div>
+    </div>`;
+}
+
 function renderPersonaSettingsPanelV2(persona, account, profile, step) {
   const effectiveProfile = profile || fallbackPersonaProfile(persona);
   if (!profile && persona?.id) loadPersonaProfile(persona.id).catch(() => {});
   profile = effectiveProfile;
-  const presets = personaProfilePresets(profile);
-  const selectedPreset = selectedPersonaPreset(profile);
-  const selectedPresetId = String(selectedPreset?.id || "");
   const currentStep = step || "profile";
   if (currentStep === "account") {
     return `
@@ -7254,38 +7262,7 @@ function renderPersonaSettingsPanelV2(persona, account, profile, step) {
           <strong>链接设置</strong>
           <span class="persona-panel-intro">左侧编辑模板参数，右侧查看和管理全部模板。</span>
         </div>
-        <div class="persona-link-layout">
-          <section class="persona-link-editor">
-            <div class="persona-head-copy">
-              <strong>${selectedPreset ? "编辑模板" : "新增模板"}</strong>
-              <span class="persona-panel-intro">${selectedPreset ? "修改当前选中的链接模板。" : "填写后新增为链接模板。"}</span>
-            </div>
-            <label>模板名称
-              <input id="personaLinkPresetName" value="${esc(selectedPreset?.name || "")}" placeholder="例如：预约咨询" />
-            </label>
-            <label>链接地址
-              <input id="personaLinkPresetUrl" value="${esc(selectedPreset?.link_url || "")}" placeholder="https://example.com" />
-            </label>
-            <label>结尾文案
-              <textarea id="personaLinkPresetEnding" rows="5" placeholder="发布时附加在推文结尾。">${esc(selectedPreset?.ending_text || "")}</textarea>
-            </label>
-            <div class="row-actions persona-link-editor-actions">
-              <button type="button" class="primary" data-persona-add-preset>新增模板</button>
-              <button type="button" data-persona-save-preset ${selectedPreset ? "" : "disabled"}>保存当前</button>
-              <button type="button" data-persona-activate-preset ${selectedPreset ? "" : "disabled"}>设为启用</button>
-            </div>
-          </section>
-          <section class="persona-link-list-panel">
-            <div class="persona-link-list-head">
-              <div>
-                <strong>模板列表</strong>
-                <span>${esc(presets.length)} 个模板</span>
-              </div>
-              <span class="module-chip">${selectedPreset ? `正在编辑：${selectedPreset.name || selectedPreset.id}` : "未选择"}</span>
-            </div>
-            ${renderPersonaLinkPresetTable(profile, presets, selectedPresetId)}
-          </section>
-        </div>
+        ${renderPersonaLinkSettingsContent(profile)}
       </div>`;
   }
   if (currentStep === "delete") {
@@ -7302,22 +7279,10 @@ function renderPersonaSettingsPanelV2(persona, account, profile, step) {
     <div class="persona-inline-panel">
       <div class="persona-head-copy">
         <strong>基础资料</strong>
-        <span class="persona-panel-intro">概览、资料编辑、人设图和推文风格集中在同一页面，修改保存后会立即同步当前人设。</span>
+        <span class="persona-panel-intro">名称、简介、头像、链接和推文风格分别设置，保存后会立即同步当前人设。</span>
       </div>
       <div class="persona-profile-long-page">
         ${renderPersonaContentOverview(persona, account, profile)}
-        ${renderPersonaImagePanel(persona)}
-        <section class="persona-inline-panel persona-inline-panel--nested persona-profile-style-section">
-          <strong>推文风格</strong>
-          <label>风格样例
-            <textarea id="personaTweetStyleSample" rows="8" placeholder="粘贴一条代表性推文，保存后自动提取风格。">${esc(profile.tweet_style_sample || "")}</textarea>
-          </label>
-          <div class="flow-box"><span>提取结果</span><strong>${esc(profile.tweet_style_profile || "尚未提取")}</strong></div>
-          <div class="row-actions">
-            <button type="button" data-persona-save-style>保存风格</button>
-            <button type="button" data-persona-clear-style ${profile.tweet_style_sample ? "" : "disabled"}>清空风格</button>
-          </div>
-        </section>
       </div>
     </div>`;
 }
@@ -9076,7 +9041,6 @@ function resetPersonaWorkspaceStateOnSwitch(personaId) {
   setSelectedPersonaPostId("");
   if (cleanId) {
     state.personaPostSources[cleanId] = "posts";
-    delete state.personaProfileRegenDrafts[cleanId];
     resetPersonaDraftEditor(cleanId);
   }
   state.personaListEditorId = "";
@@ -9940,88 +9904,116 @@ async function patchPersonaProfile(payload) {
   return result;
 }
 
-async function savePersonaProfileFields() {
+async function openPersonaProfileFieldEditor(field) {
   const persona = selectedPersona();
-  const draft = syncPersonaProfileEditDraftFromDom(persona?.id);
-  const avatar = draft?.avatar;
-  const result = await patchPersonaProfile({
-    name: $("personaProfileName")?.value.trim() || "",
-    content: $("personaProfileContent")?.value.trim() || "",
-    avatar: avatar ? {
-      image_id: avatar.imageId,
-      crop_x: avatar.cropX,
-      crop_y: avatar.cropY,
-      zoom: avatar.zoom,
-    } : null,
+  const profile = selectedPersonaProfile() || (persona ? fallbackPersonaProfile(persona) : null);
+  if (!persona || !profile) return;
+  const editingName = field === "name";
+  const result = await openConsoleModal({
+    title: editingName ? "编辑人设名称" : "编辑人设简介",
+    fields: [{
+      name: field,
+      label: editingName ? "人设名称" : "人设简介",
+      value: editingName ? String(profile.name || persona.name || "") : String(profile.content || persona.content || ""),
+      placeholder: editingName ? "输入人设名称" : "输入人设背景、内容方向和表达方式",
+      multiline: !editingName,
+      required: true,
+    }],
+    confirmText: "保存修改",
+    modalKey: `persona-profile-${field}`,
   });
-  if (result) {
-    delete state.personaProfileEditDrafts[String(persona?.id || "")];
-    delete state.personaProfileRegenDrafts[String(persona?.id || "")];
+  if (!result) return;
+  const value = String(result[field] || "").trim();
+  if (!value) return;
+  const saved = await patchPersonaProfile({ [field]: value });
+  if (saved) {
     renderPersonaDetail();
     renderConfirmSummary();
-    showMsg("commandMsg", "人设资料和头像已保存。", true);
+    showMsg("commandMsg", editingName ? "人设名称已保存。" : "人设简介已保存。", true);
   }
 }
 
-function personaProfileRegenState(personaId) {
-  return state.personaProfileRegenDrafts[String(personaId || "")] || null;
-}
-
-function enterPersonaProfileRegenEdit(persona) {
-  const key = String(persona?.id || "");
-  if (!key) return;
-  const profile = selectedPersonaProfile() || fallbackPersonaProfile(persona);
-  if (!personaProfileEditState(key)?.active) beginPersonaProfileEdit(persona, profile);
-  const draft = syncPersonaProfileEditDraftFromDom(key);
-  const name = String(draft?.name || persona.name || "").trim();
-  const content = String(draft?.content || persona.content || "").trim();
-  state.personaProfileRegenDrafts[key] = {
-    active: true,
-    originalName: name,
-    originalContent: content,
-    name,
-    content,
-  };
-  renderPersonaDetail();
-  window.requestAnimationFrame(() => {
-    $("personaProfileContent")?.focus();
+async function openPersonaTweetStyleModal() {
+  const profile = selectedPersonaProfile();
+  if (!profile) return;
+  const request = openConsoleModal({
+    title: "推文风格设置",
+    message: "保存代表性推文样例后，系统会提取并在基础资料中显示当前风格。",
+    contentHtml: renderPersonaTweetStyleSettingsContent(profile),
+    confirmText: "完成",
+    showCancel: false,
+    modalKey: "persona-tweet-style",
   });
-  showMsg("commandMsg", "已进入临时编辑状态，请填写新的生成方向后点击“确认生成”。", true);
-}
-
-function clearPersonaProfileRegenEdit(personaId) {
-  const key = String(personaId || selectedPersona()?.id || "");
-  const regenState = personaProfileRegenState(key);
-  if (!key || !regenState?.active) return;
-  state.personaProfileRegenDrafts[key] = {
-    ...regenState,
-    name: "",
-    content: "",
-  };
-  const draft = personaProfileEditState(key);
-  if (draft) {
-    draft.name = "";
-    draft.content = "";
-  }
-  renderPersonaDetail();
-  window.requestAnimationFrame(() => {
-    $("personaProfileName")?.focus();
+  const modal = $("consoleModal");
+  modal?.querySelector(".console-modal-dialog")?.classList.add("persona-settings-modal");
+  modal?.addEventListener("click", (event) => {
+    if (event.target.closest("[data-persona-save-style]")) {
+      savePersonaTweetStyle().catch((error) => showMsg("commandMsg", error.detail || error.message || "保存推文风格失败", false));
+    }
+    if (event.target.closest("[data-persona-clear-style]")) {
+      clearPersonaTweetStyle().catch((error) => showMsg("commandMsg", error.detail || error.message || "清空推文风格失败", false));
+    }
   });
-  showMsg("commandMsg", "已清空临时名称和简介，退出编辑可恢复原内容。", true);
+  await request;
 }
 
-function exitPersonaProfileRegenEdit(personaId) {
-  const key = String(personaId || selectedPersona()?.id || "");
-  if (!key) return;
-  const regenState = personaProfileRegenState(key);
-  const draft = personaProfileEditState(key);
-  if (draft && regenState) {
-    draft.name = String(regenState.originalName || draft.name || "");
-    draft.content = String(regenState.originalContent || draft.content || "");
-  }
-  delete state.personaProfileRegenDrafts[key];
-  renderPersonaDetail();
-  showMsg("commandMsg", "已退出临时编辑，原简介已恢复。", true);
+function refreshPersonaLinkSettingsModal() {
+  const modal = $("consoleModal");
+  if (modal?.dataset.modalKey !== "persona-link-settings") return false;
+  const content = modal.querySelector(".console-modal-content");
+  const profile = selectedPersonaProfile();
+  if (!content || !profile) return false;
+  content.innerHTML = renderPersonaLinkSettingsContent(profile);
+  content.querySelectorAll("strong, p, label, button, [title], [aria-label], [placeholder]").forEach(markConsoleUiElement);
+  translateConsoleLanguage(content, currentLanguage());
+  return true;
+}
+
+async function openPersonaLinkSettingsModal() {
+  const profile = selectedPersonaProfile();
+  if (!profile) return;
+  const request = openConsoleModal({
+    title: "链接设置",
+    message: "管理发布时使用的链接与结尾文案，当前启用模板会同步显示在基础资料中。",
+    contentHtml: renderPersonaLinkSettingsContent(profile),
+    confirmText: "完成",
+    showCancel: false,
+    modalKey: "persona-link-settings",
+  });
+  const modal = $("consoleModal");
+  modal?.querySelector(".console-modal-dialog")?.classList.add("persona-settings-modal", "persona-link-settings-modal");
+  modal?.addEventListener("click", (event) => {
+    const run = (action) => action.catch((error) => showMsg("commandMsg", error.detail || error.message || "链接设置操作失败", false));
+    const pageButton = event.target.closest("[data-persona-link-page]");
+    if (pageButton) {
+      const currentProfile = selectedPersonaProfile();
+      const pageInfo = personaLinkPresetPage(personaProfilePresets(currentProfile).length);
+      const action = String(pageButton.dataset.personaLinkPage || "");
+      if (action === "first") setPersonaLinkPresetPage(1);
+      if (action === "prev") setPersonaLinkPresetPage(pageInfo.page - 1);
+      if (action === "next") setPersonaLinkPresetPage(pageInfo.page + 1);
+      if (action === "last") setPersonaLinkPresetPage(pageInfo.totalPages);
+      refreshPersonaLinkSettingsModal();
+      return;
+    }
+    const select = event.target.closest("[data-persona-select-preset]");
+    if (select) {
+      state.personaLinkPresetId = select.dataset.personaSelectPreset || "";
+      refreshPersonaLinkSettingsModal();
+      return;
+    }
+    const view = event.target.closest("[data-persona-view-preset]");
+    if (view) return run(viewPersonaPreset(view.dataset.personaViewPreset || ""));
+    const activateRow = event.target.closest("[data-persona-activate-preset-id]");
+    if (activateRow) return run(activatePersonaPreset(activateRow.dataset.personaActivatePresetId || ""));
+    const deleteRow = event.target.closest("[data-persona-delete-preset-id]");
+    if (deleteRow) return run(deletePersonaPreset(deleteRow.dataset.personaDeletePresetId || ""));
+    if (event.target.closest("[data-persona-add-preset]")) return run(addPersonaPreset());
+    if (event.target.closest("[data-persona-save-preset]")) return run(savePersonaPreset());
+    if (event.target.closest("[data-persona-delete-preset]")) return run(deletePersonaPreset());
+    if (event.target.closest("[data-persona-activate-preset]")) return run(activatePersonaPreset());
+  });
+  await request;
 }
 
 async function regeneratePersonaProfileContent() {
@@ -10035,24 +10027,22 @@ async function regeneratePersonaProfileContent() {
     showMsg("commandMsg", "请先选择一个人设。", false);
     return;
   }
-  const regenState = personaProfileRegenState(persona.id);
-  if (!regenState?.active) {
-    enterPersonaProfileRegenEdit(persona);
-    return;
-  }
-  const name = String($("personaProfileName")?.value || persona.name || "").trim();
-  const currentContent = String($("personaProfileContent")?.value || "").trim();
-  if (!name) {
-    showMsg("commandMsg", "请先填写人设名称。", false);
-    return;
-  }
-  if (!currentContent) {
-    showMsg("commandMsg", "请先填写新的生成方向。", false);
-    $("personaProfileContent")?.focus();
-    return;
-  }
-  const prompt = currentContent;
+  const profile = selectedPersonaProfile() || fallbackPersonaProfile(persona);
+  const settings = await openConsoleModal({
+    title: "人设简介生成设置",
+    message: "当前资料只作为默认方向，生成结果不会直接覆盖，确认预览后才会保存。",
+    fields: [
+      { name: "name", label: "人设名称", value: String(profile.name || persona.name || ""), required: true },
+      { name: "prompt", label: "生成方向", value: String(profile.content || persona.content || ""), placeholder: "描述新的角色定位、内容方向和表达方式", multiline: true, required: true },
+    ],
+    confirmText: "开始生成",
+    modalKey: "persona-profile-generate",
+  });
+  if (!settings) return;
+  const name = String(settings.name || "").trim();
+  const prompt = String(settings.prompt || "").trim();
   state.personaCreateBusy.profileContent = true;
+  renderPersonaDetail();
   try {
     showMsg("commandMsg", "正在重新生成人设简介...", true);
     const result = await api("/api/persona_dashboard/personas/ai_profile", {
@@ -10065,14 +10055,26 @@ async function regeneratePersonaProfileContent() {
       showMsg("commandMsg", "AI 没有返回可用简介，请调整当前简介后再试。", false);
       return;
     }
-    const key = String(persona.id || "");
-    const draft = personaProfileEditState(key);
-    if (draft) {
-      draft.name = name;
-      draft.content = nextContent;
+    const review = await openConsoleModal({
+      title: "确认人设简介",
+      message: "可继续修改生成结果。点击保存后才会替换当前人设名称和简介。",
+      fields: [
+        { name: "name", label: "人设名称", value: name, required: true },
+        { name: "content", label: "生成结果", value: nextContent, multiline: true, required: true },
+      ],
+      confirmText: "保存生成结果",
+      modalKey: "persona-profile-generate-review",
+    });
+    if (!review) return;
+    const saved = await patchPersonaProfile({
+      name: String(review.name || "").trim(),
+      content: String(review.content || "").trim(),
+    });
+    if (saved) {
+      renderPersonaDetail();
+      renderConfirmSummary();
+      showMsg("commandMsg", "生成的人设简介已保存。", true);
     }
-    delete state.personaProfileRegenDrafts[key];
-    showMsg("commandMsg", "已重新生成并填入编辑框，确认无误后保存资料。", true);
   } finally {
     state.personaCreateBusy.profileContent = false;
     if (isPersonaWorkspaceModule()) renderPersonaDetail();
@@ -10082,7 +10084,9 @@ async function regeneratePersonaProfileContent() {
 async function savePersonaTweetStyle() {
   const result = await patchPersonaProfile({ tweet_style_sample: $("personaTweetStyleSample")?.value || "" });
   if (result) {
+    if ($("consoleModal")?.dataset.modalKey === "persona-tweet-style") closeConsoleModal(true);
     renderPersonaDetail();
+    renderConfirmSummary();
     showMsg("commandMsg", "推文风格已保存，提取结果已更新。", true);
   }
 }
@@ -10090,7 +10094,9 @@ async function savePersonaTweetStyle() {
 async function clearPersonaTweetStyle() {
   const result = await patchPersonaProfile({ tweet_style_sample: "" });
   if (result) {
+    if ($("consoleModal")?.dataset.modalKey === "persona-tweet-style") closeConsoleModal(true);
     renderPersonaDetail();
+    renderConfirmSummary();
     showMsg("commandMsg", "推文风格已清空。", true);
   }
 }
@@ -10121,6 +10127,8 @@ async function savePersonaPresetList(nextPresets, activeId = null) {
   const result = await patchPersonaProfile(payload);
   if (result) {
     state.personaLinkPresetId = String(result.active_link_preset_id || nextPresets[0]?.id || "");
+    if (!refreshPersonaLinkSettingsModal()) renderPersonaDetail();
+    renderConfirmSummary();
     showMsg("commandMsg", "链接模板已保存。", true);
   }
 }
@@ -13987,10 +13995,6 @@ async function deletePersonaLibraryImage(imageId) {
     method: "DELETE",
   });
   state.personaImageLibraries[String(persona.id)] = result;
-  const profileDraft = personaProfileEditState(persona.id);
-  if (String(profileDraft?.avatar?.imageId || "") === cleanImageId) {
-    profileDraft.avatar = null;
-  }
   await Promise.all([
     loadPersonas(),
     loadPersonaProfile(persona.id, { force: true }).catch(() => {}),
@@ -14870,18 +14874,7 @@ function renderPersonaStepTabs(groupKey, profile) {
   `).join("")}</div>`;
   }
   if (groupKey === "settings") {
-    const tabs = [
-      ["profile", "基础资料"],
-      ["links", "链接设置"],
-      ["account", "账号设置"],
-    ];
-    return `<div class="persona-step-tabs" id="personaStepTabs" aria-label="当前分组的二级页签">${tabs.map(([value, label]) => `
-      <button
-        type="button"
-        class="${value === step ? "is-active" : ""}"
-        data-persona-step="${esc(groupKey)}:${esc(value)}"
-      >${esc(label)}</button>
-    `).join("")}</div>`;
+    return "";
   }
   return `<div class="persona-step-tabs" id="personaStepTabs" aria-label="当前分组的二级页签">${personaGroupStepOptions(groupKey, profile).map(([value, label]) => `
     <button
@@ -15596,11 +15589,7 @@ function personaGroupStepOptions(groupKey, profile) {
     ];
   }
   if (groupKey === "settings") {
-    return [
-      ["profile", "基础资料"],
-      ["links", "链接设置"],
-      ["account", "账号设置"],
-    ];
+    return [["profile", "基础资料"]];
   }
   if (groupKey === "account") {
     return [
@@ -21793,26 +21782,24 @@ function bindEvents() {
       return;
     }
     if (event.target.closest("[data-persona-publish-submit]")) submitPersonaPublishTask().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
-    if (event.target.closest("[data-persona-edit-profile]")) {
-      const persona = selectedPersona();
-      if (persona) beginPersonaProfileEdit(persona, selectedPersonaProfile() || fallbackPersonaProfile(persona));
+    if (event.target.closest("[data-persona-edit-name]")) {
+      openPersonaProfileFieldEditor("name").catch((error) => showMsg("commandMsg", error.detail || error.message || "编辑名称失败", false));
       return;
     }
-    if (event.target.closest("[data-persona-cancel-profile-edit]")) {
-      cancelPersonaProfileEdit();
+    if (event.target.closest("[data-persona-edit-content]")) {
+      openPersonaProfileFieldEditor("content").catch((error) => showMsg("commandMsg", error.detail || error.message || "编辑简介失败", false));
+      return;
+    }
+    if (event.target.closest("[data-persona-open-links]")) {
+      openPersonaLinkSettingsModal().catch((error) => showMsg("commandMsg", error.detail || error.message || "打开链接设置失败", false));
+      return;
+    }
+    if (event.target.closest("[data-persona-open-style]")) {
+      openPersonaTweetStyleModal().catch((error) => showMsg("commandMsg", error.detail || error.message || "打开推文风格失败", false));
       return;
     }
     if (event.target.closest("[data-persona-avatar-crop-open]")) {
       openPersonaAvatarCropModal().catch((error) => showMsg("commandMsg", error.detail || error.message || "打开头像设置失败", false));
-      return;
-    }
-    if (event.target.closest("[data-persona-save-profile]")) savePersonaProfileFields().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
-    if (event.target.closest("[data-persona-exit-profile-regen]")) {
-      exitPersonaProfileRegenEdit(selectedPersona()?.id || "");
-      return;
-    }
-    if (event.target.closest("[data-persona-clear-profile-regen]")) {
-      clearPersonaProfileRegenEdit(selectedPersona()?.id || "");
       return;
     }
     if (event.target.closest("[data-persona-regenerate-profile-content]")) regeneratePersonaProfileContent().catch((error) => showMsg("commandMsg", error.detail || error.message || "AI 生成简介失败", false));
@@ -21864,7 +21851,7 @@ function bindEvents() {
       if (action === "prev") setPersonaLinkPresetPage(pageInfo.page - 1);
       if (action === "next") setPersonaLinkPresetPage(pageInfo.page + 1);
       if (action === "last") setPersonaLinkPresetPage(pageInfo.totalPages);
-      renderPersonaDetail();
+      if (!refreshPersonaLinkSettingsModal()) renderPersonaDetail();
       renderConfirmSummary();
       return;
     }
@@ -21886,7 +21873,7 @@ function bindEvents() {
     const selectPreset = event.target.closest("[data-persona-select-preset]");
     if (selectPreset) {
       state.personaLinkPresetId = selectPreset.dataset.personaSelectPreset || "";
-      renderPersonaDetail();
+      if (!refreshPersonaLinkSettingsModal()) renderPersonaDetail();
       renderConfirmSummary();
       return;
     }
@@ -22120,20 +22107,6 @@ function bindEvents() {
     }
   });
   $("moduleBody").addEventListener("input", (event) => {
-    if (event.target?.id === "personaProfileName" || event.target?.id === "personaProfileContent") {
-      const personaId = String(selectedPersona()?.id || "");
-      const draft = personaProfileEditState(personaId);
-      if (draft?.active) {
-        if (event.target.id === "personaProfileName") draft.name = event.target.value || "";
-        else draft.content = event.target.value || "";
-      }
-      const regenState = personaProfileRegenState(personaId);
-      if (regenState?.active) {
-        if (event.target.id === "personaProfileName") regenState.name = event.target.value || "";
-        else regenState.content = event.target.value || "";
-      }
-      return;
-    }
     if (["personaGenerateCount", "personaMediaImageCount"].includes(event.target?.id || "")) {
       snapshotPersonaCurrentForm();
       updateBillingPricePills($("moduleBody"));
