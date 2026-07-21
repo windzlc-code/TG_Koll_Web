@@ -7115,10 +7115,6 @@ function renderPersonaProfileIdentity(persona, profile) {
   const isNameEditing = editDraft?.field === "name";
   const isContentEditing = editDraft?.field === "content";
   const busy = Boolean(state.personaCreateBusy?.profileContent);
-  const imageRunState = personaGenerateRunState(persona.id);
-  const imageBusy = isActionLocked("persona", persona.id, "image_generate")
-    || (String(imageRunState?.kind || "") === "persona_image" && String(imageRunState?.status || "") === "running");
-  const imageBusyStartedAt = actionTaskStartedAt(imageRunState, "persona", persona.id, "image_generate");
   return `
     <section class="persona-profile-identity">
       <div class="persona-profile-data-panel-head">
@@ -7161,7 +7157,6 @@ function renderPersonaProfileIdentity(persona, profile) {
         <div class="row-actions persona-profile-intro-view"><button type="button" data-persona-edit-content>编辑简介</button></div>
         <div class="row-actions persona-profile-intro-edit">
           <button type="button" data-persona-regenerate-profile-content aria-busy="${busy ? "true" : "false"}" ${isContentEditing && !busy ? "" : "disabled"}>${renderBusyButtonContent("AI 重新生成", busy)}${renderBillingPricePill("basic_text_post")}</button>
-          <button type="button" data-persona-generate-image ${isContentEditing && !imageBusy ? "" : "disabled"}>${renderBusyButtonContent("生成人设图", imageBusy, imageBusyStartedAt)}${renderBillingPricePill("ai_image")}</button>
           <button type="button" class="primary" data-persona-save-profile>保存简介</button>
           <button type="button" data-persona-cancel-profile-edit>取消</button>
         </div>
@@ -7173,14 +7168,21 @@ function renderPersonaContentOverview(persona, account, profile) {
   return `
     <div class="persona-profile-overview-layout">
       ${renderPersonaProfileIdentity(persona, profile)}
-      ${renderPersonaDataPanel(persona)}
-      <section class="persona-profile-account-panel" aria-label="账号设置">
-        <div class="persona-profile-data-panel-head">
-          <strong>账号设置</strong>
-          <span>选择平台和执行账号</span>
+      <div class="persona-profile-overview-main">
+        ${renderPersonaDataPanel(persona)}
+        <div class="persona-profile-settings-grid">
+          <section class="persona-profile-image-settings-panel" aria-label="人设图设置">
+            ${renderPersonaImagePanel(persona)}
+          </section>
+          <section class="persona-profile-account-panel" aria-label="账号设置">
+            <div class="persona-profile-data-panel-head">
+              <strong>账号设置</strong>
+              <span>选择平台和执行账号</span>
+            </div>
+            ${renderPersonaAccountPanelV2(persona, account, profile, "binding")}
+          </section>
         </div>
-        ${renderPersonaAccountPanelV2(persona, account, profile, "binding")}
-      </section>
+      </div>
     </div>`;
 }
 

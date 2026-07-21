@@ -24,6 +24,7 @@ class ConsoleTemplateMarkupTests(unittest.TestCase):
         markers = (
             "renderPersonaProfileIdentity(persona, profile)",
             "renderPersonaDataPanel(persona)",
+            "renderPersonaImagePanel(persona)",
             "renderPersonaAccountPanelV2(persona, account, profile, \"binding\")",
         )
         positions = [overview.index(marker) for marker in markers]
@@ -51,6 +52,7 @@ class ConsoleTemplateMarkupTests(unittest.TestCase):
         self.assertIn("persona-profile-overview-layout", source)
         self.assertIn("persona-profile-intro-actions", source)
         self.assertIn("persona-profile-data-panel", source)
+        self.assertIn("persona-profile-image-settings-panel", source)
         self.assertIn("persona-profile-account-panel", source)
         self.assertIn("persona-hot-summary-card--profile", source)
         self.assertIn("persona-hot-summary-card--hot", source)
@@ -67,7 +69,10 @@ class ConsoleTemplateMarkupTests(unittest.TestCase):
             / "console.css"
         ).read_text(encoding="utf-8")
         self.assertIn(".console-modal-dialog.persona-link-settings-modal", styles)
-        self.assertIn(".persona-profile-data-panel .persona-hot-summary-metrics--hot", styles)
+        self.assertIn(".persona-profile-settings-grid", styles)
+        self.assertIn("@container persona-profile-main", styles)
+        self.assertIn("@container persona-account-panel", styles)
+        self.assertIn(".persona-avatar-add-button", styles)
 
     def test_persona_group_toggle_closes_aria_expanded_attribute(self):
         source = (
