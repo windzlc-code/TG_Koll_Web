@@ -42,7 +42,12 @@ class ConsoleTemplateMarkupTests(unittest.TestCase):
         self.assertIn("persona-avatar-add-button", source)
         self.assertIn("persona-avatar-placeholder", source)
         self.assertIn("data-persona-avatar-crop-stage", source)
+        self.assertIn("data-persona-avatar-crop-viewport", source)
+        self.assertIn("persona-avatar-crop-backdrop", source)
         self.assertIn("data-persona-avatar-crop-option", source)
+        self.assertNotIn("data-persona-avatar-zoom", source)
+        self.assertIn("failedMediaPreviewUrls", source)
+        self.assertIn("renderModalCloseButton", source)
         self.assertIn("directMediaPreviewUrl(item?.preview_url", source)
         self.assertIn("await loadPersonaImageLibrary(persona.id, { force: true })", source)
         self.assertIn("if (!hasImages)", source)
@@ -73,6 +78,9 @@ class ConsoleTemplateMarkupTests(unittest.TestCase):
         self.assertIn("@container persona-profile-main", styles)
         self.assertIn("@container persona-account-panel", styles)
         self.assertIn(".persona-avatar-add-button", styles)
+        self.assertIn(".console-modal-close", styles)
+        self.assertNotIn("width: min(1420px", styles)
+        self.assertNotIn("@container persona-account-panel (max-width: 520px)", styles)
 
     def test_persona_group_toggle_closes_aria_expanded_attribute(self):
         source = (

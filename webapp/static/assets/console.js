@@ -475,6 +475,7 @@ const state = {
   events: null,
   mediaPreviewGroups: {},
   mediaPreviewSeq: 0,
+  failedMediaPreviewUrls: new Set(),
   mediaLightbox: {
     groupId: "",
     index: 0,
@@ -1929,6 +1930,12 @@ function closeConsoleModal(result) {
   }
 }
 
+function renderModalCloseButton(cancelAttribute = "data-console-modal-cancel") {
+  return `<button type="button" class="console-modal-close" ${cancelAttribute} title="关闭" aria-label="关闭">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12"></path><path d="m18 6-12 12"></path></svg>
+  </button>`;
+}
+
 function openConsoleModal({ title = "确认操作", message = "", contentHtml = "", inputLabel = "", inputValue = "", fields = [], confirmText = "确定", cancelText = "取消", danger = false, showCancel = true, extraActions = [], modalKey = "" } = {}) {
   closeConsoleModal(null);
   return new Promise((resolve) => {
@@ -1942,6 +1949,7 @@ function openConsoleModal({ title = "确认操作", message = "", contentHtml = 
       <section class="console-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="consoleModalTitle">
         <div class="console-modal-head">
           <strong id="consoleModalTitle">${esc(title)}</strong>
+          ${renderModalCloseButton()}
         </div>
         ${message ? `<p>${esc(message)}</p>` : ""}
         ${contentHtml ? `<div class="console-modal-content">${contentHtml}</div>` : ""}
@@ -5706,17 +5714,21 @@ function renderMediaPreviewButton(item, groupId, index, {
   const type = String(item?.type || "image").trim() || "image";
   const text = caption || mediaKindLabel(type);
   const displayUrl = adminWorkspaceUrl(item?.thumbnailUrl || item?.thumbnail_url || item?.previewUrl);
+  const unavailable = Boolean(item?.unavailable || (displayUrl && state.failedMediaPreviewUrls.has(displayUrl)));
+  const canInteract = interactive && !unavailable;
   const rootTag = interactive ? "button" : "div";
   return `
     <${rootTag}
-      ${interactive ? "type=\"button\"" : ""}
-      class="${esc(className)}${interactive ? "" : " is-static"}"
-      ${interactive ? `data-media-preview-group="${esc(groupId)}" data-media-preview-index="${esc(index)}" data-media-preview-type="${esc(type)}" data-media-preview-label="${esc(label || text)}"` : ""}>
-      ${type === "video"
-        ? `<video class="${esc(frameClass)}" src="${esc(displayUrl)}" muted playsinline preload="metadata" onerror="handlePersonaMediaFrameError(this)"></video>`
+      ${interactive ? `type="button"${unavailable ? " disabled" : ""}` : ""}
+      class="${esc(className)}${canInteract ? "" : " is-static"}${unavailable ? " is-unavailable" : ""}"
+      ${canInteract ? `data-media-preview-group="${esc(groupId)}" data-media-preview-index="${esc(index)}" data-media-preview-type="${esc(type)}" data-media-preview-label="${esc(label || text)}"` : ""}>
+      ${unavailable
+        ? `<div class="${esc(frameClass)} persona-media-frame--empty"><strong>媒体已失效</strong><small>源文件无法加载</small></div>`
+        : type === "video"
+        ? `<video class="${esc(frameClass)}" src="${esc(displayUrl)}" data-media-source-url="${esc(displayUrl)}" muted playsinline preload="metadata" onerror="handlePersonaMediaFrameError(this)"></video>`
         : type === "audio"
           ? `<div class="${esc(frameClass)} ${esc(frameClass)}--audio"><strong>音频</strong><small>点击站内预览</small></div>`
-          : `<img class="${esc(frameClass)}" src="${esc(displayUrl)}" alt="${esc(label || "media")}" loading="lazy" onerror="handlePersonaMediaFrameError(this)" />`}
+          : `<img class="${esc(frameClass)}" src="${esc(displayUrl)}" data-media-source-url="${esc(displayUrl)}" alt="${esc(label || "media")}" loading="lazy" onerror="handlePersonaMediaFrameError(this)" />`}
       <span>${esc(text)}</span>
     </${rootTag}>
   `;
@@ -6155,17 +6167,26 @@ function movePersonaMediaLightbox(step) {
 
 function handlePersonaMediaFrameError(node) {
   if (!node) return;
+  const sourceUrl = String(node.dataset?.mediaSourceUrl || node.currentSrc || node.src || "").trim();
+  if (sourceUrl) {
+    state.failedMediaPreviewUrls.add(sourceUrl);
+    if (state.failedMediaPreviewUrls.size > 200) {
+      const oldest = state.failedMediaPreviewUrls.values().next().value;
+      if (oldest) state.failedMediaPreviewUrls.delete(oldest);
+    }
+  }
   const placeholder = document.createElement("div");
-  placeholder.className = "persona-media-frame persona-media-frame--empty";
+  placeholder.className = `${String(node.className || "persona-media-frame")} persona-media-frame--empty`;
   placeholder.innerHTML = "<strong>媒体已失效</strong><small>源文件无法加载</small>";
   node.replaceWith(placeholder);
-  const host = placeholder.closest(".persona-media-card");
+  const host = placeholder.closest("[data-media-preview-group], .persona-media-card, .persona-image-library-preview");
   if (host) {
     host.classList.add("is-unavailable");
     host.removeAttribute("data-media-preview-group");
     host.removeAttribute("data-media-preview-index");
     host.removeAttribute("data-media-preview-type");
     host.removeAttribute("data-media-preview-label");
+    if (host instanceof HTMLButtonElement) host.disabled = true;
   }
 }
 
@@ -6793,20 +6814,16 @@ function personaAvatarCropModalHtml(images, avatar) {
     <div class="persona-avatar-crop-workspace">
       <div class="persona-avatar-crop-preview-panel">
         <div class="persona-avatar-crop-stage" data-persona-avatar-crop-stage aria-label="拖动图片调整头像位置">
-          <img data-persona-avatar-crop-image alt="头像裁剪预览" draggable="false" />
+          <img class="persona-avatar-crop-backdrop" data-persona-avatar-crop-source alt="" draggable="false" />
+          <div class="persona-avatar-crop-viewport" data-persona-avatar-crop-viewport>
+            <img data-persona-avatar-crop-image data-persona-avatar-crop-source alt="头像裁剪预览" draggable="false" />
+          </div>
           <div class="persona-avatar-crop-unavailable" data-persona-avatar-crop-unavailable>
             <strong>人设图无法加载</strong>
             <span>请选择其他人设图，或重新生成后再设置头像。</span>
           </div>
         </div>
-        <div class="persona-avatar-crop-toolbar">
-          <span>在圆形区域内拖动图片，滚轮可缩放。</span>
-          <div>
-            <button type="button" data-persona-avatar-zoom="out">缩小</button>
-            <button type="button" data-persona-avatar-crop-reset>复位</button>
-            <button type="button" data-persona-avatar-zoom="in">放大</button>
-          </div>
-        </div>
+        <p class="persona-avatar-crop-hint">拖动图片调整位置，使用滚轮放大或缩小。</p>
       </div>
       <div class="persona-avatar-crop-library">
         <div class="persona-avatar-crop-library-head">
@@ -6830,26 +6847,36 @@ function applyPersonaAvatarCropModal(modal) {
   const avatar = modal?.__personaAvatarCrop || null;
   const stage = modal?.querySelector?.("[data-persona-avatar-crop-stage]");
   const image = modal?.querySelector?.("[data-persona-avatar-crop-image]");
+  const sourceImages = [...(modal?.querySelectorAll?.("[data-persona-avatar-crop-source]") || [])];
   if (!stage || !image) return;
   const imageUrl = String(avatar?.previewUrl || "").trim();
   stage.classList.toggle("is-empty", !avatar);
   stage.classList.remove("is-unavailable");
   if (avatar && imageUrl) {
-    image.hidden = false;
-    image.setAttribute("style", personaAvatarImageStyle(avatar));
+    sourceImages.forEach((sourceImage) => {
+      sourceImage.hidden = false;
+      sourceImage.setAttribute("style", personaAvatarImageStyle(avatar));
+    });
     if (image.dataset.source !== imageUrl) {
-      image.dataset.source = imageUrl;
-      image.onload = () => stage.classList.remove("is-unavailable");
+      image.onload = () => {
+        sourceImages.forEach((sourceImage) => { sourceImage.hidden = false; });
+        stage.classList.remove("is-unavailable");
+      };
       image.onerror = () => {
-        image.hidden = true;
+        sourceImages.forEach((sourceImage) => { sourceImage.hidden = true; });
         stage.classList.add("is-unavailable");
       };
-      image.src = imageUrl;
+      sourceImages.forEach((sourceImage) => {
+        sourceImage.dataset.source = imageUrl;
+        sourceImage.src = imageUrl;
+      });
     }
   } else {
-    image.hidden = true;
-    image.removeAttribute("src");
-    delete image.dataset.source;
+    sourceImages.forEach((sourceImage) => {
+      sourceImage.hidden = true;
+      sourceImage.removeAttribute("src");
+      delete sourceImage.dataset.source;
+    });
   }
   modal.querySelectorAll("[data-persona-avatar-crop-option]").forEach((button) => {
     const selected = String(button.dataset.personaAvatarCropOption || "") === String(avatar?.imageId || "");
@@ -6889,7 +6916,7 @@ async function openPersonaAvatarCropModal() {
   };
   const request = openConsoleModal({
     title: "设置人设头像",
-    message: "圆形区域就是最终头像范围。拖动图片调整位置，使用滚轮或加减按钮缩放。",
+    message: "圆形区域就是最终头像范围。直接拖动图片调整位置，使用滚轮放大或缩小。",
     contentHtml: personaAvatarCropModalHtml(images, workingAvatar),
     confirmText: "应用头像",
     cancelText: "取消",
@@ -6898,7 +6925,8 @@ async function openPersonaAvatarCropModal() {
   const modal = $("consoleModal");
   const dialog = modal?.querySelector(".console-modal-dialog");
   const stage = modal?.querySelector("[data-persona-avatar-crop-stage]");
-  if (!modal || !dialog || !stage) return;
+  const viewport = modal?.querySelector("[data-persona-avatar-crop-viewport]");
+  if (!modal || !dialog || !stage || !viewport) return;
   dialog.classList.add("persona-avatar-crop-modal");
   modal.__personaAvatarCrop = workingAvatar;
   applyPersonaAvatarCropModal(modal);
@@ -6914,17 +6942,6 @@ async function openPersonaAvatarCropModal() {
       const item = images.find((row) => row.id === String(option.dataset.personaAvatarCropOption || ""));
       if (!item || option.classList.contains("is-unavailable")) return;
       modal.__personaAvatarCrop = { imageId: item.id, previewUrl: item.url, cropX: 50, cropY: 50, zoom: 1 };
-      applyPersonaAvatarCropModal(modal);
-      return;
-    }
-    const zoomButton = event.target.closest("[data-persona-avatar-zoom]");
-    if (zoomButton) {
-      const direction = zoomButton.dataset.personaAvatarZoom === "in" ? 1 : -1;
-      setZoom(Number(modal.__personaAvatarCrop?.zoom || 1) + direction * 0.12);
-      return;
-    }
-    if (event.target.closest("[data-persona-avatar-crop-reset]") && modal.__personaAvatarCrop) {
-      modal.__personaAvatarCrop = { ...modal.__personaAvatarCrop, cropX: 50, cropY: 50, zoom: 1 };
       applyPersonaAvatarCropModal(modal);
       return;
     }
@@ -6955,15 +6972,15 @@ async function openPersonaAvatarCropModal() {
       pointerId: event.pointerId,
       x: event.clientX,
       y: event.clientY,
-      cropX: Number(modal.__personaAvatarCrop.cropX || 50),
-      cropY: Number(modal.__personaAvatarCrop.cropY || 50),
+      cropX: Number(modal.__personaAvatarCrop.cropX ?? 50),
+      cropY: Number(modal.__personaAvatarCrop.cropY ?? 50),
     };
     stage.classList.add("is-dragging");
   });
   stage.addEventListener("pointermove", (event) => {
     if (!dragState || dragState.pointerId !== event.pointerId || !modal.__personaAvatarCrop) return;
     event.preventDefault();
-    const rect = stage.getBoundingClientRect();
+    const rect = viewport.getBoundingClientRect();
     const zoom = Math.max(1, Number(modal.__personaAvatarCrop.zoom || 1));
     modal.__personaAvatarCrop.cropX = Math.min(100, Math.max(0, dragState.cropX - ((event.clientX - dragState.x) / Math.max(1, rect.width)) * 100 / zoom));
     modal.__personaAvatarCrop.cropY = Math.min(100, Math.max(0, dragState.cropY - ((event.clientY - dragState.y) / Math.max(1, rect.height)) * 100 / zoom));
@@ -17791,6 +17808,7 @@ function openAccountPoolCreateModal() {
     <section class="console-modal-dialog account-pool-create-modal" role="dialog" aria-modal="true" aria-labelledby="accountPoolCreateModalTitle">
       <div class="console-modal-head">
         <strong id="accountPoolCreateModalTitle">添加账号</strong>
+        ${renderModalCloseButton("data-account-pool-create-modal-cancel")}
       </div>
       <div class="console-modal-content">
         ${accountPoolCreateFormHtml()}
@@ -18225,10 +18243,11 @@ function openAccountProxyPickerModal(accountId = "") {
   modal.dataset.originalProxyId = String(account.proxy_id || "").trim();
   modal.dataset.accountProxyDirty = "false";
   modal.innerHTML = `
-    <div class="console-modal-backdrop"></div>
+    <div class="console-modal-backdrop" data-account-proxy-picker-cancel></div>
     <section class="console-modal-dialog account-proxy-picker-modal" role="dialog" aria-modal="true" aria-labelledby="accountProxyPickerTitle">
       <div class="console-modal-head">
         <div><strong id="accountProxyPickerTitle">选择代理 IP</strong><p>${esc(accountDisplayName(account))} · 一个账号同时只绑定一个代理</p></div>
+        ${renderModalCloseButton("data-account-proxy-picker-cancel")}
       </div>
       <div class="console-modal-content">
         <div class="account-proxy-picker-toolbar">
@@ -18745,6 +18764,7 @@ function openAccountPoolEditModal(accountId = "") {
     <section class="console-modal-dialog account-pool-create-modal" role="dialog" aria-modal="true" aria-labelledby="accountPoolEditModalTitle">
       <div class="console-modal-head">
         <strong id="accountPoolEditModalTitle">编辑账号</strong>
+        ${renderModalCloseButton("data-account-pool-edit-cancel")}
       </div>
       <div class="console-modal-content">
         <div class="account-pool-create-modal-body">
@@ -19222,7 +19242,7 @@ function openProxyModal(proxyId = "") {
   modal.innerHTML = `
     <div class="console-modal-backdrop" data-proxy-modal-cancel></div>
     <section class="console-modal-dialog proxy-edit-modal" role="dialog" aria-modal="true" aria-labelledby="proxyModalTitle">
-      <div class="console-modal-head"><strong id="proxyModalTitle">${proxy ? "编辑代理" : "新增代理"}</strong></div>
+      <div class="console-modal-head"><strong id="proxyModalTitle">${proxy ? "编辑代理" : "新增代理"}</strong>${renderModalCloseButton("data-proxy-modal-cancel")}</div>
       <div class="console-modal-content proxy-edit-modal-content">
         <div class="proxy-form-grid">
           ${sharedProxyFieldsHtml("proxyForm", proxy)}
