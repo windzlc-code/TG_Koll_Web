@@ -7095,8 +7095,8 @@ function renderPersonaDataPanel(persona) {
     ["已发布", Number(persona?.counts?.published || historyRows.length || 0)],
     ["账号", accountCount],
   ];
+  const totalHotScore = Number(hot.hot_score || 0);
   const hotStats = [
-    ["热度", Number(hot.hot_score || 0)],
     ["点赞", Number(hot.likes || 0)],
     ["评论", Number(hot.comments || 0)],
     ["分享", Number(hot.shares || 0)],
@@ -7117,6 +7117,7 @@ function renderPersonaDataPanel(persona) {
       <aside class="persona-hot-summary-card persona-hot-summary-card--hot">
         <div class="persona-hot-summary-head"><span>热点数据</span><strong>${persona?.hot ? "实时统计" : "暂无统计"}</strong></div>
         <div class="persona-hot-summary-metrics persona-hot-summary-metrics--hot">
+          <div class="persona-hot-total-metric"><span>总热点</span><strong>${esc(numberText(totalHotScore))}</strong></div>
           ${hotStats.map(([label, value]) => `<div><span>${esc(label)}</span><strong>${esc(numberText(value))}</strong></div>`).join("")}
         </div>
       </aside>
@@ -15405,6 +15406,24 @@ function updatePersonaEditableMediaSelectionDom(card, index) {
   });
 }
 
+function renderPersonaImageUploadPlaceholderCard() {
+  return `
+    <div class="persona-image-library-card persona-image-library-card--empty">
+      <button type="button" class="persona-image-upload-placeholder" data-persona-upload-image-dropzone data-persona-upload-image-trigger aria-label="上传自定义人设图">
+        <span class="persona-image-upload-placeholder-icon">${renderPlusIcon()}</span>
+        <strong>上传自定义人设图</strong>
+        <small>拖拽图片到这里，或点击选择</small>
+        <small class="persona-image-upload-placeholder-tip">建议优先使用三视图</small>
+      </button>
+      <small class="persona-image-library-meta-placeholder">原始人设图占位</small>
+      <div class="persona-image-library-actions persona-image-library-actions--placeholder" aria-hidden="true">
+        <span class="persona-image-library-action-placeholder persona-image-library-apply"></span>
+        <span class="persona-image-library-action-placeholder"></span>
+        <span class="persona-image-library-action-placeholder"></span>
+      </div>
+    </div>`;
+}
+
 function renderPersonaImageLibraryGrid(library) {
   const rows = Array.isArray(library?.items) ? library.items : [];
   const previewable = rows
@@ -15420,20 +15439,7 @@ function renderPersonaImageLibraryGrid(library) {
   if (!previewable.length) {
     return `
       <div class="persona-image-library-grid persona-image-library-grid--empty">
-        <div class="persona-image-library-card persona-image-library-card--empty">
-          <button type="button" class="persona-image-upload-placeholder" data-persona-upload-image-dropzone data-persona-upload-image-trigger aria-label="上传自定义人设图">
-            <span class="persona-image-upload-placeholder-icon">${renderPlusIcon()}</span>
-            <strong>上传自定义人设图</strong>
-            <small>拖拽图片到这里，或点击选择</small>
-            <small class="persona-image-upload-placeholder-tip">建议优先使用三视图</small>
-          </button>
-          <small class="persona-image-library-meta-placeholder">未上传人设图</small>
-          <div class="persona-image-library-actions persona-image-library-actions--placeholder" aria-hidden="true">
-            <span class="persona-image-library-action-placeholder persona-image-library-apply"></span>
-            <span class="persona-image-library-action-placeholder"></span>
-            <span class="persona-image-library-action-placeholder"></span>
-          </div>
-        </div>
+        ${renderPersonaImageUploadPlaceholderCard()}
       </div>`;
   }
   const groupId = registerMediaPreviewGroup(previewable);
@@ -15451,7 +15457,7 @@ function renderPersonaImageLibraryGrid(library) {
         <button type="button" class="danger" data-persona-delete-image="${esc(item.id)}" ${!item.id ? "disabled" : ""}>删除</button>
       </div>
     </div>
-  `).join("")}</div>`;
+  `).join("")}${renderPersonaImageUploadPlaceholderCard()}</div>`;
 }
 
 function renderPersonaMediaTaskResult(personaId, postId) {

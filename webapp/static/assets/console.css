@@ -5339,12 +5339,11 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .persona-profile-data-panel {
-  grid-template-columns: minmax(235px, 3fr) minmax(390px, 5fr);
-  align-items: center;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
   gap: 8px;
   padding: 10px;
-  overflow-x: auto;
-  scrollbar-width: thin;
+  overflow: hidden;
 }
 
 .persona-profile-data-panel > .persona-profile-data-panel-head {
@@ -5388,10 +5387,10 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .persona-profile-data-panel .persona-hot-summary-card--hot {
-  padding-top: 0;
-  padding-left: 8px;
-  border-top: 0;
-  border-left: 1px solid var(--line);
+  padding-top: 8px;
+  padding-left: 0;
+  border-top: 1px solid var(--line);
+  border-left: 0;
 }
 
 .persona-profile-data-panel .persona-hot-summary-metrics--profile {
@@ -5400,6 +5399,17 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-profile-data-panel .persona-hot-summary-metrics--hot {
   grid-template-columns: repeat(5, minmax(58px, 1fr));
+}
+
+.persona-profile-data-panel .persona-hot-total-metric {
+  color: var(--panel-solid);
+  border-color: var(--ink);
+  background: var(--ink);
+}
+
+.persona-profile-data-panel .persona-hot-total-metric span,
+.persona-profile-data-panel .persona-hot-total-metric strong {
+  color: inherit;
 }
 
 .persona-profile-data-panel .persona-hot-summary-metrics div {
@@ -8041,6 +8051,13 @@ body.persona-touch-dragging .persona-list-card:active {
   min-width: 168px;
   max-width: 168px;
   scroll-snap-align: start;
+}
+
+.persona-profile-image-settings-panel .persona-image-library-card {
+  flex-basis: calc((100% - 10px) / 2);
+  width: calc((100% - 10px) / 2);
+  min-width: calc((100% - 10px) / 2);
+  max-width: 168px;
 }
 
 .persona-image-library-preview,
@@ -14717,8 +14734,8 @@ body.console-page {
 
 .persona-profile-account-panel .persona-account-pool-card--summary,
 .persona-profile-account-panel .persona-account-pool-card--inline-edit {
-  grid-template-columns: minmax(104px, .72fr) minmax(0, 1.28fr);
-  grid-template-rows: auto auto;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto auto;
 }
 
 .persona-profile-account-panel .persona-account-pool-card--summary .account-pool-card-main {
@@ -14727,15 +14744,46 @@ body.console-page {
 }
 
 .persona-profile-account-panel .persona-account-pool-card--summary .persona-account-summary-actions {
-  grid-column: 1 / -1;
-  grid-row: 2;
+  grid-column: 1;
+  grid-row: 3;
 }
 
 .persona-profile-account-panel .persona-account-summary-meta {
-  grid-column: 2;
+  grid-column: 1;
+  grid-row: 2;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 5px;
+}
+
+.persona-profile-account-panel .persona-account-summary-meta > span {
+  display: grid;
+  grid-template-columns: minmax(74px, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.persona-profile-account-panel .persona-account-summary-meta strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.persona-profile-account-panel .persona-account-pool-card--inline-edit .account-pool-card-main,
+.persona-profile-account-panel .persona-account-pool-card--inline-edit .persona-account-inline-fields,
+.persona-profile-account-panel .persona-account-pool-card--inline-edit .persona-account-inline-actions {
+  grid-column: 1;
+}
+
+.persona-profile-account-panel .persona-account-pool-card--inline-edit .account-pool-card-main {
   grid-row: 1;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 5px 8px;
+}
+
+.persona-profile-account-panel .persona-account-pool-card--inline-edit .persona-account-inline-fields {
+  grid-row: 2;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.persona-profile-account-panel .persona-account-pool-card--inline-edit .persona-account-inline-actions {
+  grid-row: 3;
 }
 
 .persona-profile-account-panel .persona-account-pool-card .account-card-meta {
@@ -15719,17 +15767,17 @@ body.console-page {
   }
 }
 
-/* Persona statistics stay on one horizontal track; narrow screens scroll this panel only. */
+/* Persona statistics keep two clear rows and adapt each row without page overflow. */
 @media (max-width: 760px) {
   .console-page .persona-detail .persona-profile-data-panel {
     align-items: start;
   }
 
   .console-page .persona-detail .persona-profile-data-panel .persona-hot-summary-card {
-    grid-template-columns: auto minmax(0, 1fr);
-    align-items: center;
-    width: auto;
-    gap: 5px;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+    width: 100%;
+    gap: 7px;
   }
 
   .console-page .persona-detail .persona-profile-data-panel .persona-hot-summary-metrics--profile {
@@ -15737,13 +15785,24 @@ body.console-page {
   }
 
   .console-page .persona-detail .persona-profile-data-panel .persona-hot-summary-metrics--hot {
-    grid-template-columns: repeat(5, minmax(58px, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .console-page .persona-detail .persona-profile-data-panel .persona-hot-total-metric {
+    grid-column: 1 / -1;
   }
 
   .console-page .persona-detail .persona-profile-data-panel .persona-hot-summary-metrics div {
     min-height: 42px;
-    flex-direction: row;
+    flex-direction: column;
     gap: 4px;
     padding: 4px 5px;
   }
+}
+
+/* Account create/edit dialogs use a stable field list instead of squeezing fields side by side. */
+.account-pool-create-modal .account-create-form--modal,
+.account-pool-create-modal .account-proxy-grid,
+.account-pool-create-modal .proxy-form-grid {
+  grid-template-columns: minmax(0, 1fr);
 }

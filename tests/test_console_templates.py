@@ -61,6 +61,8 @@ class ConsoleTemplateMarkupTests(unittest.TestCase):
         self.assertIn("persona-profile-account-panel", source)
         self.assertIn("persona-hot-summary-card--profile", source)
         self.assertIn("persona-hot-summary-card--hot", source)
+        self.assertIn("persona-hot-total-metric", source)
+        self.assertIn("renderPersonaImageUploadPlaceholderCard", source)
         self.assertNotIn("persona-profile-activity-grid", overview)
         self.assertNotIn('id="personaTweetStyleSample"', panel)
         self.assertNotIn('data-persona-avatar-crop="', source)
