@@ -46,8 +46,13 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
 
         self.assertLess(subscription, admin_entry)
         self.assertLess(admin_entry, account_menu)
-        self.assertIn('class="site-icon-button site-admin-entry admin-only" hidden', self.markup)
+        self.assertIn('class="site-admin-entry admin-only" hidden>运营后台</button>', self.markup)
         self.assertIn('if (me.is_admin) $("openAdmin").hidden = false;', self.console_script)
+
+    def test_workspace_navigation_uses_titles_without_descriptions(self):
+        self.assertNotIn('<small>${esc(item.hint)}</small>', self.console_script)
+        self.assertNotIn('hint: "人设列表、详情、推文、账号"', self.console_script)
+        self.assertIn('<span>${esc(item.label)}</span>', self.console_script)
 
     def test_refresh_actions_have_distinct_labels_and_behaviors(self):
         self.assertIn(">刷新显示</button>", self.markup)

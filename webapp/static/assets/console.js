@@ -1235,11 +1235,11 @@ function ensureThemeToggle() {
 }
 
 const modules = [
-  { id: "personas", label: "我的人设", hint: "人设列表、详情、推文、账号", callback: "后台自动读取" },
-  { id: "tweet_generation", label: "推文生成", hint: "新建推文、草稿库、收藏", callback: "后台自动读取" },
-  { id: "publishing", label: "发布", hint: "草稿发布、批量发布、定时发布", callback: "后台自动排队" },
-  { id: "accounts", label: "账号管理自动化", hint: "账号池、自动回复、养号", view: "accounts", panels: ["accounts", "proxies"] },
-  { id: "browser_list", label: "浏览器列表", hint: "实时浏览器窗口、人工接管", view: "accounts", panel: "browsers" },
+  { id: "personas", label: "我的人设", callback: "后台自动读取" },
+  { id: "tweet_generation", label: "推文生成", callback: "后台自动读取" },
+  { id: "publishing", label: "发布", callback: "后台自动排队" },
+  { id: "accounts", label: "账号管理自动化", view: "accounts", panels: ["accounts", "proxies"] },
+  { id: "browser_list", label: "浏览器列表", view: "accounts", panel: "browsers" },
 ];
 
 const taskMeta = {
@@ -5442,7 +5442,6 @@ function renderModuleMenu() {
         <button type="button" class="module-trigger ${isActive ? "is-active" : ""}" ${item.view ? `data-workspace-view="${esc(item.view)}" data-workspace-module="${esc(item.id)}"${itemPanel ? ` data-workspace-panel="${esc(itemPanel)}"` : ""}` : `data-module="${esc(item.id)}"`}>
           <span class="module-trigger-text">
             <span>${esc(item.label)}</span>
-            <small>${esc(item.hint)}</small>
           </span>
         </button>
       </div>
