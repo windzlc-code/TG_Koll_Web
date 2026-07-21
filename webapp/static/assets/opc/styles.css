@@ -1341,6 +1341,7 @@ body.modal-open {
 .home-canvas .home-capability-section,
 .home-canvas .home-infra-section,
 .home-canvas .home-difference-section {
+  scroll-margin-top: 72px;
   padding: 104px 0;
   background: var(--home-white);
 }
@@ -1435,6 +1436,117 @@ body.modal-open {
 .home-canvas .home-media-card h3 { margin: 10px 0 10px; font-size: 25px; }
 .home-canvas .home-media-card p { margin: 0; color: rgba(255, 255, 255, 0.72); font-size: 14px; }
 .home-canvas .home-media-card-accent span { color: var(--home-lime); }
+
+.home-canvas .home-roadmap {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.72fr) minmax(0, 1.28fr);
+  gap: 42px;
+  width: min(1320px, calc(100% - 64px));
+  margin: 38px auto 0;
+  padding-top: 36px;
+  border-top: 1px solid #d8e3df;
+}
+
+.home-canvas .home-roadmap-intro h3 {
+  max-width: 480px;
+  margin: 8px 0 14px;
+  font-size: 29px;
+  line-height: 1.2;
+}
+
+.home-canvas .home-roadmap-intro {
+  display: flex;
+  min-height: 544px;
+  flex-direction: column;
+}
+
+.home-canvas .home-roadmap-intro > p:last-child {
+  max-width: 520px;
+  margin: 0;
+  color: #607071;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.home-canvas .home-roadmap-journey {
+  display: grid;
+  gap: 0;
+  margin: auto 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid #cfdcd8;
+}
+
+.home-canvas .home-roadmap-journey li {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 14px 0;
+  border-bottom: 1px solid #cfdcd8;
+}
+
+.home-canvas .home-roadmap-journey li > span {
+  color: #0c716c;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.home-canvas .home-roadmap-journey strong,
+.home-canvas .home-roadmap-journey small { display: block; }
+.home-canvas .home-roadmap-journey strong { font-size: 15px; }
+.home-canvas .home-roadmap-journey small { margin-top: 3px; color: #748382; font-size: 12px; }
+
+.home-canvas .home-roadmap-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-top: 1px solid #cfdcd8;
+  border-left: 1px solid #cfdcd8;
+}
+
+.home-canvas .home-roadmap-grid article {
+  min-width: 0;
+  min-height: 272px;
+  overflow: hidden;
+  background: #f4f8f6;
+  border-right: 1px solid #cfdcd8;
+  border-bottom: 1px solid #cfdcd8;
+}
+
+.home-canvas .home-roadmap-grid article > img {
+  display: block;
+  width: 100%;
+  height: 118px;
+  object-fit: cover;
+  filter: saturate(0.88) contrast(1.03);
+  transition: transform 420ms ease, filter 420ms ease;
+}
+
+.home-canvas .home-roadmap-grid article:hover > img {
+  transform: scale(1.025);
+  filter: saturate(1) contrast(1.06);
+}
+
+.home-canvas .home-roadmap-grid article > div { padding: 20px 22px 22px; }
+
+.home-canvas .home-roadmap-grid span {
+  display: inline-block;
+  color: #0c716c;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.home-canvas .home-roadmap-grid h4 {
+  margin: 12px 0 7px;
+  font-size: 18px;
+}
+
+.home-canvas .home-roadmap-grid p {
+  margin: 0;
+  color: #607071;
+  font-size: 13px;
+  line-height: 1.55;
+}
 
 .home-canvas .home-flow-section {
   display: grid;
@@ -1635,6 +1747,10 @@ body.modal-open {
   .home-canvas .home-media-rail { padding-inline: 18px; scroll-padding-inline: 18px; }
   .home-canvas .home-media-card { flex-basis: 320px; height: 450px; }
   .home-canvas .home-media-card-wide { flex-basis: 420px; }
+  .home-canvas .home-roadmap { grid-template-columns: 1fr; gap: 24px; width: min(100% - 36px, 680px); }
+  .home-canvas .home-roadmap-intro { min-height: 0; }
+  .home-canvas .home-roadmap-journey { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 22px; border-left: 1px solid #cfdcd8; }
+  .home-canvas .home-roadmap-journey li { padding: 13px; border-right: 1px solid #cfdcd8; }
   .home-canvas .home-flow-section { padding-inline: 24px; }
   .home-canvas .home-agent-stage { grid-template-columns: 1fr; width: min(100% - 36px, 680px); }
   .home-canvas .home-agent-stage article { min-height: 300px; border-right: 0; border-bottom: 1px solid rgba(255, 255, 255, 0.18); }
@@ -1671,6 +1787,13 @@ body.modal-open {
   .home-canvas .home-media-card-wide { flex-basis: calc(100vw - 44px); height: 430px; }
   .home-canvas .home-media-card > div { padding: 22px; }
   .home-canvas .home-media-card h3 { font-size: 22px; }
+  .home-canvas .home-roadmap { width: calc(100% - 28px); margin-top: 26px; padding-top: 26px; }
+  .home-canvas .home-roadmap-intro h3 { font-size: 24px; }
+  .home-canvas .home-roadmap-journey { grid-template-columns: 1fr; }
+  .home-canvas .home-roadmap-grid { grid-template-columns: 1fr; }
+  .home-canvas .home-roadmap-grid article { min-height: 0; padding: 0; }
+  .home-canvas .home-roadmap-grid article > img { height: 132px; }
+  .home-canvas .home-roadmap-grid article > div { padding: 18px; }
   .home-canvas .home-flow-section { padding: 72px 18px; }
   .home-canvas .home-flow-board li { grid-template-columns: 34px minmax(0, 1fr); gap: 10px; min-height: 70px; }
   .home-canvas .home-flow-board li div { display: grid; gap: 2px; }
@@ -2099,6 +2222,13 @@ body.modal-open {
 .home-canvas .home-scenario-mosaic article h3 { margin: 9px 0 8px; }
 .home-canvas .home-scenario-mosaic article p { color: rgba(255, 255, 255, 0.7); }
 .home-canvas .home-scenario-feature div { right: 32px; bottom: 32px; left: 32px; }
+.home-canvas .home-scenario-note {
+  width: min(1320px, calc(100% - 64px));
+  margin: 16px auto 0;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 12px;
+  line-height: 1.6;
+}
 
 @media (min-width: 821px) {
   .home-canvas .home-scenario-mosaic > article:nth-child(4) { grid-column: 2 / span 2; }
@@ -2125,6 +2255,7 @@ body.modal-open {
   .home-canvas .home-scenario-mosaic { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: 360px repeat(2, 300px); }
   .home-canvas .home-scenario-feature { grid-column: 1 / -1; grid-row: auto; }
   .home-canvas .home-scenario-mosaic > article:nth-child(4) { grid-column: 1 / -1; }
+  .home-canvas .home-scenario-note { width: min(100% - 36px, 680px); }
 }
 
 @media (max-width: 560px) {
@@ -2155,6 +2286,7 @@ body.modal-open {
   .home-canvas .home-scenario-mosaic > article:nth-child(4) { grid-column: auto; }
   .home-canvas .home-scenario-mosaic article,
   .home-canvas .home-scenario-feature { min-height: 330px !important; }
+  .home-canvas .home-scenario-note { width: calc(100% - 28px); }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -761,15 +761,42 @@ function initHomeExperience() {
   const rail = document.querySelector("[data-home-rail]");
   if (!reducedMotion && rail) {
     let railPaused = false;
+    let railCycleWidth = 0;
+    let railResetTimer = 0;
+    const railCards = Array.from(rail.children);
+    if (rail.scrollWidth > rail.clientWidth && railCards.length) {
+      railCards.forEach((card) => {
+        const clone = card.cloneNode(true);
+        clone.setAttribute("aria-hidden", "true");
+        clone.setAttribute("data-home-rail-clone", "");
+        clone.inert = true;
+        clone.querySelectorAll("a, button, input, select, textarea, [tabindex]").forEach((element) => element.setAttribute("tabindex", "-1"));
+        rail.appendChild(clone);
+      });
+    }
+    const updateRailCycle = () => {
+      const firstClone = rail.querySelector("[data-home-rail-clone]");
+      railCycleWidth = firstClone && railCards[0] ? firstClone.offsetLeft - railCards[0].offsetLeft : 0;
+    };
+    const normalizeRail = () => {
+      if (!railCycleWidth || rail.scrollLeft < railCycleWidth) return;
+      rail.scrollTo({ left: rail.scrollLeft - railCycleWidth, behavior: "auto" });
+    };
+    updateRailCycle();
     const pauseRail = () => { railPaused = true; };
     const resumeRail = () => { railPaused = false; };
     ["pointerenter", "focusin", "touchstart"].forEach((eventName) => rail.addEventListener(eventName, pauseRail, { passive: true }));
     ["pointerleave", "focusout", "touchend"].forEach((eventName) => rail.addEventListener(eventName, resumeRail, { passive: true }));
+    rail.addEventListener("scroll", () => {
+      window.clearTimeout(railResetTimer);
+      railResetTimer = window.setTimeout(normalizeRail, 180);
+    }, { passive: true });
+    window.addEventListener("resize", updateRailCycle, { passive: true });
     window.setInterval(() => {
-      if (railPaused || document.hidden || rail.scrollWidth <= rail.clientWidth) return;
-      const nextPosition = rail.scrollLeft + Math.min(430, rail.clientWidth * 0.72);
-      const reachedEnd = nextPosition >= rail.scrollWidth - rail.clientWidth - 12;
-      rail.scrollTo({ left: reachedEnd ? 0 : nextPosition, behavior: "smooth" });
+      if (railPaused || document.hidden || !railCycleWidth) return;
+      rail.scrollTo({ left: rail.scrollLeft + Math.min(430, rail.clientWidth * 0.72), behavior: "smooth" });
+      window.clearTimeout(railResetTimer);
+      railResetTimer = window.setTimeout(normalizeRail, 900);
     }, 5200);
   }
 }
