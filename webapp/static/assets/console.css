@@ -5356,6 +5356,11 @@ body.persona-touch-dragging .persona-list-card:active {
   border-top: 1px solid var(--line);
 }
 
+.persona-profile-data-panel .persona-hot-summary-metrics--profile,
+.persona-profile-data-panel .persona-hot-summary-metrics--hot {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .persona-hot-summary-card {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -5550,7 +5555,6 @@ body.persona-touch-dragging .persona-list-card:active {
   display: grid;
   min-width: 0;
   gap: 3px;
-  padding-right: 34px;
 }
 
 .persona-profile-name-block > span,
@@ -5648,21 +5652,16 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-profile-identity-copy {
   display: grid;
   gap: 5px;
-  min-height: 346px;
   align-content: start;
 }
 
 .persona-profile-identity-copy p {
   margin: 0;
-  height: 323px;
-  min-height: 323px;
-  overflow-y: auto;
   line-height: 1.65;
   white-space: pre-wrap;
 }
 
-.persona-profile-identity-copy > span,
-.persona-profile-generation-inline > div:first-child > span {
+.persona-profile-identity-copy > span {
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
@@ -5670,65 +5669,42 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-profile-identity-copy textarea {
   width: 100%;
-  min-height: 323px;
+  min-height: 220px;
   resize: vertical;
 }
 
-.persona-profile-generation-inline {
-  display: flex;
-  min-height: 104px;
-  align-items: stretch;
-  flex-direction: column;
-  justify-content: center;
-  gap: 10px;
-  padding: 9px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--soft);
-  visibility: hidden;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.persona-profile-generation-inline.is-active {
-  visibility: visible;
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.persona-profile-generation-inline > div:first-child {
+.persona-profile-field-actions,
+.persona-profile-intro-actions {
   display: grid;
-  gap: 3px;
-  min-width: 0;
 }
 
-.persona-profile-generation-inline small {
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.persona-profile-generation-inline .row-actions {
-  width: 100%;
-  flex: 0 0 auto;
-}
-
-.persona-profile-edit-actions {
-  display: grid;
+.persona-profile-field-actions {
   min-height: 34px;
 }
 
-.persona-profile-edit-actions > .row-actions {
+.persona-profile-intro-actions {
+  min-height: 38px;
+}
+
+.persona-profile-field-actions > .row-actions,
+.persona-profile-intro-actions > .row-actions {
   grid-area: 1 / 1;
+  align-self: start;
   margin: 0;
   transition: opacity var(--motion-fast);
 }
 
-.persona-profile-edit-actions.is-viewing .persona-profile-save-actions,
-.persona-profile-edit-actions.is-editing .persona-profile-view-action {
+.persona-profile-field-actions.is-viewing .persona-profile-field-save,
+.persona-profile-field-actions.is-editing .persona-profile-field-view,
+.persona-profile-intro-actions.is-viewing .persona-profile-intro-edit,
+.persona-profile-intro-actions.is-editing .persona-profile-intro-view {
   visibility: hidden;
   opacity: 0;
   pointer-events: none;
+}
+
+.persona-profile-intro-edit {
+  flex-wrap: wrap;
 }
 
 .persona-avatar-editor {
@@ -15271,13 +15247,7 @@ body.console-page {
     padding: 8px;
   }
 
-  .console-page .persona-detail .persona-profile-generation-inline {
-    min-height: 104px;
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .console-page .persona-detail .persona-profile-generation-inline .row-actions {
+  .console-page .persona-detail .persona-profile-intro-edit {
     width: 100%;
   }
 
@@ -15359,15 +15329,6 @@ body.console-page {
     overflow-y: auto;
   }
 
-  .console-page .persona-detail .persona-profile-identity-copy {
-    min-height: 173px;
-  }
-
-  .console-page .persona-detail .persona-profile-identity-copy p {
-    height: 150px;
-    min-height: 150px;
-  }
-
   .console-page .persona-detail #personaProfileContent {
     height: 150px;
     min-height: 150px;
@@ -15405,8 +15366,7 @@ body.console-page {
   }
 
   .console-page .persona-detail .persona-profile-config-modules button,
-  .console-page .persona-detail .persona-profile-account-module button,
-  .console-page .persona-detail .persona-profile-generation-inline button {
+  .console-page .persona-detail .persona-profile-account-module button {
     width: 100%;
   }
 }

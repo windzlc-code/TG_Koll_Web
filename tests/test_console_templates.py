@@ -28,7 +28,9 @@ class ConsoleTemplateMarkupTests(unittest.TestCase):
         )
         positions = [overview.index(marker) for marker in markers]
         self.assertEqual(positions, sorted(positions))
-        self.assertIn("data-persona-edit-profile", source)
+        self.assertNotIn("data-persona-edit-profile", source)
+        self.assertIn("data-persona-edit-name", source)
+        self.assertIn("data-persona-edit-content", source)
         self.assertIn("personaProfileEditDrafts", source)
         self.assertNotIn("personaProfileRegenDrafts", source)
         self.assertIn("data-persona-save-profile", source)
@@ -47,7 +49,7 @@ class ConsoleTemplateMarkupTests(unittest.TestCase):
         self.assertIn('modalKey: "persona-link-settings"', source)
         self.assertIn('modalKey: "persona-tweet-style"', source)
         self.assertIn("persona-profile-overview-layout", source)
-        self.assertIn("persona-profile-generation-inline", source)
+        self.assertIn("persona-profile-intro-actions", source)
         self.assertIn("persona-profile-data-panel", source)
         self.assertIn("persona-profile-account-panel", source)
         self.assertIn("persona-hot-summary-card--profile", source)
@@ -65,6 +67,7 @@ class ConsoleTemplateMarkupTests(unittest.TestCase):
             / "console.css"
         ).read_text(encoding="utf-8")
         self.assertIn(".console-modal-dialog.persona-link-settings-modal", styles)
+        self.assertIn(".persona-profile-data-panel .persona-hot-summary-metrics--hot", styles)
 
     def test_persona_group_toggle_closes_aria_expanded_attribute(self):
         source = (
