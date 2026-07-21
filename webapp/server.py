@@ -16183,6 +16183,60 @@ def _build_persona_dashboard_console_overview(
         setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
         posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
         deleted_post_keys = deleted_posts.get(archive_id, set())
+        persona_hot = {
+            "likes": 0,
+            "comments": 0,
+            "shares": 0,
+            "reposts": 0,
+            "recent_views": 0,
+            "post_views": 0,
+            "hot_score": 0,
+            "scanned_posts": 0,
+            "view_resolved_posts": 0,
+            "view_missing_posts": 0,
+        }
+        hot_metrics_raw = setup.get("hotMetrics") if isinstance(setup.get("hotMetrics"), dict) else {}
+        for metric_value in hot_metrics_raw.values():
+            if not isinstance(metric_value, dict):
+                continue
+            post_metrics = metric_value.get("postMetrics") if isinstance(metric_value.get("postMetrics"), list) else []
+            platform_likes = _number(metric_value.get("likes"), 0)
+            platform_comments = _number(metric_value.get("comments"), 0)
+            platform_shares = _number(metric_value.get("shares"), 0)
+            platform_reposts = _number(metric_value.get("reposts"), 0)
+            platform_post_views = _number(metric_value.get("views"), 0)
+            deleted_metric_rows = [
+                row for row in post_metrics
+                if isinstance(row, dict) and _persona_dashboard_post_key(archive_id, row) in deleted_post_keys
+            ]
+            if deleted_metric_rows:
+                platform_likes = max(0, platform_likes - sum(_metric_value(row, "likeCount", "like_count") for row in deleted_metric_rows))
+                platform_comments = max(0, platform_comments - sum(_metric_value(row, "commentCount", "comment_count") for row in deleted_metric_rows))
+                platform_shares = max(0, platform_shares - sum(_metric_value(row, "shareCount", "share_count", "send_count") for row in deleted_metric_rows))
+                platform_reposts = max(0, platform_reposts - sum(_metric_value(row, "repostCount", "repost_count") for row in deleted_metric_rows))
+                platform_post_views = max(0, platform_post_views - sum(_metric_value(row, "viewCount", "view_count") for row in deleted_metric_rows))
+            if not platform_post_views:
+                platform_post_views = sum(
+                    _metric_value(row, "viewCount", "view_count")
+                    for row in post_metrics
+                    if isinstance(row, dict) and _persona_dashboard_post_key(archive_id, row) not in deleted_post_keys
+                )
+            persona_hot["likes"] += platform_likes
+            persona_hot["comments"] += platform_comments
+            persona_hot["shares"] += platform_shares
+            persona_hot["reposts"] += platform_reposts
+            persona_hot["recent_views"] += _number(metric_value.get("recentViews"), 0)
+            persona_hot["post_views"] += platform_post_views
+            persona_hot["hot_score"] += _sum_numbers(
+                platform_likes,
+                platform_comments,
+                platform_shares,
+                platform_reposts,
+                platform_post_views,
+            )
+            persona_hot["scanned_posts"] += _number(metric_value.get("scannedPosts") or metric_value.get("posts"), 0)
+            persona_hot["view_resolved_posts"] += _number(metric_value.get("viewResolvedPosts"), 0)
+            persona_hot["view_missing_posts"] += _number(metric_value.get("viewMissingPosts"), 0)
         visible_posts = [
             post for post in posts
             if (
@@ -16232,7 +16286,7 @@ def _build_persona_dashboard_console_overview(
                 "images": image_count,
                 "platform_posts": {str(k): len(v) if isinstance(v, list) else 0 for k, v in platform_posts.items()},
             },
-            "hot": {"hot_score": 0},
+            "hot": persona_hot,
             "hot_platforms": [],
             "post_metrics": [],
             "publish_history": [],

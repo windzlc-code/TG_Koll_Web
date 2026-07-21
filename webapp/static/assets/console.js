@@ -6802,6 +6802,17 @@ function personaAvatarImageStyle(avatar) {
   return `object-position:${cropX}% ${cropY}%;transform:scale(${zoom});transform-origin:${cropX}% ${cropY}%`;
 }
 
+function personaAvatarLibraryImages(personaId) {
+  const library = personaImageLibraryState(personaId);
+  return (Array.isArray(library?.items) ? library.items : [])
+    .map((item, index) => ({
+      id: String(item?.id || "").trim(),
+      url: String(item?.preview_url || item?.image_url || "").trim(),
+      label: `人设图 ${index + 1}`,
+    }))
+    .filter((item) => item.id && item.url);
+}
+
 function renderPersonaAvatar(persona, profile, avatar, { editor = false } = {}) {
   const name = String(profile?.name || persona?.name || "未命名人设").trim();
   const imageUrl = personaAvatarImageUrl(persona?.id, avatar);
@@ -6809,56 +6820,239 @@ function renderPersonaAvatar(persona, profile, avatar, { editor = false } = {}) 
   return `
     <div class="persona-avatar ${editor ? "persona-avatar--editor" : ""}">
       ${imageUrl
-        ? `<img src="${esc(imageUrl)}" alt="${esc(`${name}头像`)}" style="${personaAvatarImageStyle(avatar)}" />`
+        ? `<img src="${esc(imageUrl)}" alt="${esc(`${name}头像`)}" style="${personaAvatarImageStyle(avatar)}" onerror="this.hidden=true;this.nextElementSibling.hidden=false" /><span hidden>${esc(initials)}</span>`
         : `<span>${esc(initials)}</span>`}
     </div>`;
 }
 
 function renderPersonaAvatarEditor(persona, profile, draft) {
-  const library = personaImageLibraryState(persona.id);
-  const images = (Array.isArray(library?.items) ? library.items : [])
-    .map((item) => ({
-      id: String(item?.id || "").trim(),
-      url: String(item?.preview_url || item?.image_url || "").trim(),
-    }))
-    .filter((item) => item.id && item.url);
+  const images = personaAvatarLibraryImages(persona.id);
   const avatar = draft.avatar;
+  if (!images.length) {
+    return `
+      <section class="persona-avatar-editor is-empty" data-persona-avatar-editor>
+        <div class="persona-avatar-empty-state">
+          <div>
+            <strong>暂无可用人设图</strong>
+            <span>请先重新生成人设图，生成完成后即可设置头像。</span>
+          </div>
+          <button type="button" class="primary" data-persona-generate-image>重新生成人设图${renderBillingPricePill("ai_image")}</button>
+        </div>
+      </section>`;
+  }
   return `
     <section class="persona-avatar-editor" data-persona-avatar-editor>
       <div class="persona-avatar-editor-preview">
         ${renderPersonaAvatar(persona, { ...profile, name: draft.name }, avatar, { editor: true })}
         <div>
           <strong>人设头像</strong>
-          <span>${avatar ? "调整下方位置与缩放参数完成裁剪，原人设图不会被修改。" : "从现有人设图库中选择一张图片作为头像。"}</span>
+          <span>${avatar ? "当前头像已设置，可在圆形裁剪窗口中重新调整。" : "从现有人设图库中选择一张图片作为头像。"}</span>
+          <button type="button" class="persona-avatar-select-button" data-persona-avatar-crop-open>${avatar ? "调整头像" : "选择人设图"}</button>
         </div>
       </div>
-      ${avatar ? `
-        <div class="persona-avatar-crop-controls">
-          <label>水平位置
-            <input type="range" min="0" max="100" step="1" value="${esc(avatar.cropX)}" data-persona-avatar-crop="cropX" />
-          </label>
-          <label>垂直位置
-            <input type="range" min="0" max="100" step="1" value="${esc(avatar.cropY)}" data-persona-avatar-crop="cropY" />
-          </label>
-          <label>缩放
-            <input type="range" min="1" max="3" step="0.05" value="${esc(avatar.zoom)}" data-persona-avatar-crop="zoom" />
-          </label>
+    </section>`;
+}
+
+function personaAvatarCropModalHtml(images, avatar) {
+  const selectedId = String(avatar?.imageId || images[0]?.id || "");
+  return `
+    <div class="persona-avatar-crop-workspace">
+      <div class="persona-avatar-crop-preview-panel">
+        <div class="persona-avatar-crop-stage" data-persona-avatar-crop-stage aria-label="拖动图片调整头像位置">
+          <img data-persona-avatar-crop-image alt="头像裁剪预览" draggable="false" />
+          <div class="persona-avatar-crop-unavailable" data-persona-avatar-crop-unavailable>
+            <strong>人设图无法加载</strong>
+            <span>请选择其他人设图，或重新生成后再设置头像。</span>
+          </div>
         </div>
-      ` : ""}
-      ${images.length ? `
-        <div class="persona-avatar-picker" aria-label="选择人设头像">
+        <div class="persona-avatar-crop-toolbar">
+          <span>在圆形区域内拖动图片，滚轮可缩放。</span>
+          <div>
+            <button type="button" data-persona-avatar-zoom="out" aria-label="缩小头像" title="缩小头像">−</button>
+            <button type="button" data-persona-avatar-crop-reset aria-label="复位头像" title="复位头像">${renderRefreshIcon()}</button>
+            <button type="button" data-persona-avatar-zoom="in" aria-label="放大头像" title="放大头像">+</button>
+          </div>
+        </div>
+      </div>
+      <div class="persona-avatar-crop-library">
+        <div class="persona-avatar-crop-library-head">
+          <strong>选择人设图</strong>
+          <button type="button" data-persona-avatar-crop-clear ${avatar ? "" : "disabled"}>移除头像</button>
+        </div>
+        <div class="persona-avatar-crop-options" role="listbox" aria-label="可选人设图">
           ${images.map((item) => `
-            <button type="button" class="persona-avatar-picker-item ${String(avatar?.imageId || "") === item.id ? "is-selected" : ""}" data-persona-avatar-image="${esc(item.id)}" aria-pressed="${String(avatar?.imageId || "") === item.id ? "true" : "false"}">
-              <img src="${esc(item.url)}" alt="可选人设图" />
+            <button type="button" class="persona-avatar-crop-option ${selectedId === item.id ? "is-selected" : ""}" data-persona-avatar-crop-option="${esc(item.id)}" role="option" aria-selected="${selectedId === item.id ? "true" : "false"}" aria-label="${esc(item.label)}">
+              <span class="persona-avatar-crop-option-image"><img src="${esc(item.url)}" alt="" /></span>
+              <span>${esc(item.label)}</span>
+              <span class="persona-avatar-crop-option-check" aria-hidden="true">${renderSelectAllIcon()}</span>
             </button>
           `).join("")}
         </div>
-      ` : `<div class="empty-state">图库中还没有人设图，请先生成或上传。</div>`}
-      <div class="row-actions persona-avatar-editor-actions">
-        <button type="button" data-persona-avatar-open-images>${images.length ? "管理人设图" : "生成人设图"}</button>
-        <button type="button" data-persona-avatar-clear ${avatar ? "" : "disabled"}>清除头像</button>
       </div>
-    </section>`;
+    </div>`;
+}
+
+function applyPersonaAvatarCropModal(modal) {
+  const avatar = modal?.__personaAvatarCrop || null;
+  const stage = modal?.querySelector?.("[data-persona-avatar-crop-stage]");
+  const image = modal?.querySelector?.("[data-persona-avatar-crop-image]");
+  if (!stage || !image) return;
+  const imageUrl = String(avatar?.previewUrl || "").trim();
+  stage.classList.toggle("is-empty", !avatar);
+  stage.classList.remove("is-unavailable");
+  if (avatar && imageUrl) {
+    image.hidden = false;
+    image.setAttribute("style", personaAvatarImageStyle(avatar));
+    if (image.dataset.source !== imageUrl) {
+      image.dataset.source = imageUrl;
+      image.onload = () => stage.classList.remove("is-unavailable");
+      image.onerror = () => {
+        image.hidden = true;
+        stage.classList.add("is-unavailable");
+      };
+      image.src = imageUrl;
+    }
+  } else {
+    image.hidden = true;
+    image.removeAttribute("src");
+    delete image.dataset.source;
+  }
+  modal.querySelectorAll("[data-persona-avatar-crop-option]").forEach((button) => {
+    const selected = String(button.dataset.personaAvatarCropOption || "") === String(avatar?.imageId || "");
+    button.classList.toggle("is-selected", selected);
+    button.setAttribute("aria-selected", selected ? "true" : "false");
+  });
+  const clearButton = modal.querySelector("[data-persona-avatar-crop-clear]");
+  if (clearButton) clearButton.disabled = !avatar;
+}
+
+async function openPersonaAvatarCropModal() {
+  const persona = selectedPersona();
+  const draft = syncPersonaProfileEditDraftFromDom(persona?.id);
+  const images = personaAvatarLibraryImages(persona?.id);
+  if (!persona || !draft?.active) return;
+  if (!images.length) {
+    document.querySelector("[data-persona-generate-image]")?.click();
+    return;
+  }
+  const existing = normalizePersonaAvatar({
+    image_id: draft.avatar?.imageId,
+    preview_url: draft.avatar?.previewUrl,
+    crop_x: draft.avatar?.cropX,
+    crop_y: draft.avatar?.cropY,
+    zoom: draft.avatar?.zoom,
+  });
+  const selected = images.find((item) => item.id === existing?.imageId) || images[0];
+  let workingAvatar = {
+    imageId: selected.id,
+    previewUrl: selected.url,
+    cropX: existing?.imageId === selected.id ? existing.cropX : 50,
+    cropY: existing?.imageId === selected.id ? existing.cropY : 50,
+    zoom: existing?.imageId === selected.id ? existing.zoom : 1,
+  };
+  const request = openConsoleModal({
+    title: "设置人设头像",
+    message: "圆形区域就是最终头像范围。拖动图片调整位置，使用滚轮或加减按钮缩放。",
+    contentHtml: personaAvatarCropModalHtml(images, workingAvatar),
+    confirmText: "应用头像",
+    cancelText: "取消",
+    modalKey: "persona-avatar-crop",
+  });
+  const modal = $("consoleModal");
+  const dialog = modal?.querySelector(".console-modal-dialog");
+  const stage = modal?.querySelector("[data-persona-avatar-crop-stage]");
+  if (!modal || !dialog || !stage) return;
+  dialog.classList.add("persona-avatar-crop-modal");
+  modal.__personaAvatarCrop = workingAvatar;
+  applyPersonaAvatarCropModal(modal);
+  let dragState = null;
+  const setZoom = (nextZoom) => {
+    if (!modal.__personaAvatarCrop) return;
+    modal.__personaAvatarCrop.zoom = Math.min(3, Math.max(1, Number(nextZoom || 1)));
+    applyPersonaAvatarCropModal(modal);
+  };
+  modal.addEventListener("click", (event) => {
+    const option = event.target.closest("[data-persona-avatar-crop-option]");
+    if (option) {
+      const item = images.find((row) => row.id === String(option.dataset.personaAvatarCropOption || ""));
+      if (!item || option.classList.contains("is-unavailable")) return;
+      modal.__personaAvatarCrop = { imageId: item.id, previewUrl: item.url, cropX: 50, cropY: 50, zoom: 1 };
+      applyPersonaAvatarCropModal(modal);
+      return;
+    }
+    const zoomButton = event.target.closest("[data-persona-avatar-zoom]");
+    if (zoomButton) {
+      const direction = zoomButton.dataset.personaAvatarZoom === "in" ? 1 : -1;
+      setZoom(Number(modal.__personaAvatarCrop?.zoom || 1) + direction * 0.12);
+      return;
+    }
+    if (event.target.closest("[data-persona-avatar-crop-reset]") && modal.__personaAvatarCrop) {
+      modal.__personaAvatarCrop = { ...modal.__personaAvatarCrop, cropX: 50, cropY: 50, zoom: 1 };
+      applyPersonaAvatarCropModal(modal);
+      return;
+    }
+    if (event.target.closest("[data-persona-avatar-crop-clear]")) {
+      modal.__personaAvatarCrop = null;
+      applyPersonaAvatarCropModal(modal);
+    }
+  });
+  modal.querySelectorAll(".persona-avatar-crop-option img").forEach((image) => {
+    image.addEventListener("error", () => {
+      const option = image.closest("[data-persona-avatar-crop-option]");
+      if (!option) return;
+      option.classList.add("is-unavailable");
+      option.disabled = true;
+    });
+  });
+  stage.addEventListener("wheel", (event) => {
+    if (!modal.__personaAvatarCrop) return;
+    event.preventDefault();
+    setZoom(Number(modal.__personaAvatarCrop.zoom || 1) * (event.deltaY < 0 ? 1.08 : 0.92));
+  }, { passive: false });
+  stage.addEventListener("pointerdown", (event) => {
+    if (!modal.__personaAvatarCrop || stage.classList.contains("is-unavailable")) return;
+    if (event.isPrimary === false || (event.pointerType === "mouse" && event.button !== 0)) return;
+    event.preventDefault();
+    stage.setPointerCapture?.(event.pointerId);
+    dragState = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      cropX: Number(modal.__personaAvatarCrop.cropX || 50),
+      cropY: Number(modal.__personaAvatarCrop.cropY || 50),
+    };
+    stage.classList.add("is-dragging");
+  });
+  stage.addEventListener("pointermove", (event) => {
+    if (!dragState || dragState.pointerId !== event.pointerId || !modal.__personaAvatarCrop) return;
+    event.preventDefault();
+    const rect = stage.getBoundingClientRect();
+    const zoom = Math.max(1, Number(modal.__personaAvatarCrop.zoom || 1));
+    modal.__personaAvatarCrop.cropX = Math.min(100, Math.max(0, dragState.cropX - ((event.clientX - dragState.x) / Math.max(1, rect.width)) * 100 / zoom));
+    modal.__personaAvatarCrop.cropY = Math.min(100, Math.max(0, dragState.cropY - ((event.clientY - dragState.y) / Math.max(1, rect.height)) * 100 / zoom));
+    applyPersonaAvatarCropModal(modal);
+  });
+  const stopDragging = (event) => {
+    if (!dragState || (event?.pointerId != null && dragState.pointerId !== event.pointerId)) return;
+    if (event?.pointerId != null && stage.hasPointerCapture?.(event.pointerId)) {
+      stage.releasePointerCapture?.(event.pointerId);
+    }
+    dragState = null;
+    stage.classList.remove("is-dragging");
+  };
+  stage.addEventListener("pointerup", stopDragging);
+  stage.addEventListener("pointercancel", stopDragging);
+  let appliedAvatar = null;
+  modal.__cleanup = () => {
+    appliedAvatar = modal.__personaAvatarCrop ? { ...modal.__personaAvatarCrop } : null;
+    dragState = null;
+  };
+  const applied = await request;
+  if (!applied) return;
+  const activeDraft = personaProfileEditState(persona.id);
+  if (!activeDraft?.active) return;
+  activeDraft.avatar = appliedAvatar;
+  renderPersonaDetail();
 }
 
 function renderPersonaHotSummaryCard(persona) {
@@ -6868,10 +7062,12 @@ function renderPersonaHotSummaryCard(persona) {
   const historyRows = personaPublishHistoryRows(persona);
   const draftCount = Array.isArray(state.personaDraftPosts[personaId]) ? drafts.length : personaOverviewDraftCount(persona);
   const accountCount = uniqueAccountOptions(personaAccounts(persona)).length || Math.max(0, Number(persona?.counts?.accounts || 0));
-  const stats = [
+  const profileStats = [
     ["草稿", draftCount],
     ["已发布", Number(persona?.counts?.published || historyRows.length || 0)],
     ["账号", accountCount],
+  ];
+  const hotStats = [
     ["热度", Number(hot.hot_score || 0)],
     ["点赞", Number(hot.likes || 0)],
     ["评论", Number(hot.comments || 0)],
@@ -6879,20 +7075,20 @@ function renderPersonaHotSummaryCard(persona) {
     ["转发", Number(hot.reposts || 0)],
   ];
   return `
-    <aside class="persona-hot-summary-card">
-      <div class="persona-hot-summary-head">
-        <span>人设数据</span>
-        <strong>实时概览</strong>
-      </div>
-      <div class="persona-hot-summary-metrics">
-        ${stats.map(([label, value]) => `
-          <div>
-            <span>${esc(label)}</span>
-            <strong>${esc(numberText(value))}</strong>
-          </div>
-        `).join("")}
-      </div>
-    </aside>`;
+    <div class="persona-profile-summary-stack">
+      <aside class="persona-hot-summary-card persona-hot-summary-card--profile">
+        <div class="persona-hot-summary-head"><span>人设数据</span><strong>基础统计</strong></div>
+        <div class="persona-hot-summary-metrics persona-hot-summary-metrics--profile">
+          ${profileStats.map(([label, value]) => `<div><span>${esc(label)}</span><strong>${esc(numberText(value))}</strong></div>`).join("")}
+        </div>
+      </aside>
+      <aside class="persona-hot-summary-card persona-hot-summary-card--hot">
+        <div class="persona-hot-summary-head"><span>热点数据</span><strong>${persona?.hot ? "实时统计" : "暂无统计"}</strong></div>
+        <div class="persona-hot-summary-metrics persona-hot-summary-metrics--hot">
+          ${hotStats.map(([label, value]) => `<div><span>${esc(label)}</span><strong>${esc(numberText(value))}</strong></div>`).join("")}
+        </div>
+      </aside>
+    </div>`;
 }
 
 function renderPersonaContentOverview(persona, account, profile) {
@@ -6932,10 +7128,12 @@ function renderPersonaContentOverview(persona, account, profile) {
           <label>人设简介
             <textarea id="personaProfileContent" rows="7" placeholder="编辑当前人设简介。">${esc(isProfileRegenEditing ? regenState.content : editDraft.content)}</textarea>
           </label>
-          <div class="row-actions persona-profile-identity-actions">
-            <button type="button" class="primary" data-persona-save-profile ${isProfileRegenEditing ? "disabled" : ""}>保存资料</button>
-            <button type="button" data-persona-cancel-profile-edit>取消</button>
+          <div class="persona-profile-identity-actions">
             <button type="button" data-persona-regenerate-profile-content aria-busy="${state.personaCreateBusy?.profileContent ? "true" : "false"}" ${state.personaCreateBusy?.profileContent ? "disabled" : ""}>${state.personaCreateBusy?.profileContent ? "正在生成..." : (isProfileRegenEditing ? "确认生成" : "AI 重新生成")}${renderBillingPricePill("basic_text_post")}</button>
+            <div>
+              <button type="button" data-persona-cancel-profile-edit>取消编辑</button>
+              <button type="button" class="primary" data-persona-save-profile ${isProfileRegenEditing ? "disabled" : ""}>保存资料</button>
+            </div>
           </div>
         ` : `
           <div class="persona-profile-identity-avatar-row">
@@ -6987,12 +7185,26 @@ function renderPersonaImagePanel(persona) {
     String(library?.current_reference_url || "").trim()
     || libraryItems.some((item) => item && (item.is_reference || item.isReference))
   );
+  const profileEditing = Boolean(personaProfileEditState(persona.id)?.active);
   const imageIntro = hasCurrentReference
     ? "当前已有可用人设图，重新生成会产出新图，原图库仍会保留。"
     : (hasImages ? "图库里已有历史图，可以先设为当前，也可以重新生成一张。" : "先生成一张人设图，生成后会进入图库。");
   const generateLabel = imageBusy
     ? "正在生成..."
     : (hasCurrentReference ? "重新生成人设图" : "生成人设图");
+  if (!hasImages) {
+    if (profileEditing) return "";
+    return `
+      <div class="persona-profile-section persona-profile-section--empty-images" id="personaImageGenerationSection" data-persona-image-generation-section>
+        <div class="persona-head-copy">
+          <strong>人设图</strong>
+          <span class="persona-panel-intro">当前没有可用人设图，请先重新生成。</span>
+        </div>
+        <div class="row-actions">
+          <button type="button" class="primary" data-persona-generate-image ${imageBusy ? "disabled" : ""}>${renderBusyButtonContent("重新生成人设图", imageBusy, imageBusyStartedAt)}${renderBillingPricePill("ai_image")}</button>
+        </div>
+      </div>`;
+  }
   return `
     <div class="persona-profile-section" id="personaImageGenerationSection" data-persona-image-generation-section>
       <div class="persona-head-copy">
@@ -21586,33 +21798,8 @@ function bindEvents() {
       cancelPersonaProfileEdit();
       return;
     }
-    const avatarImage = event.target.closest("[data-persona-avatar-image]");
-    if (avatarImage) {
-      const persona = selectedPersona();
-      const draft = syncPersonaProfileEditDraftFromDom(persona?.id);
-      const imageId = String(avatarImage.dataset.personaAvatarImage || "").trim();
-      const item = personaAvatarLibraryItem(persona?.id, imageId);
-      if (draft && item) {
-        draft.avatar = {
-          imageId,
-          previewUrl: String(item.preview_url || item.image_url || ""),
-          cropX: 50,
-          cropY: 50,
-          zoom: 1,
-        };
-        renderPersonaDetail();
-      }
-      return;
-    }
-    if (event.target.closest("[data-persona-avatar-clear]")) {
-      const draft = syncPersonaProfileEditDraftFromDom();
-      if (draft) draft.avatar = null;
-      renderPersonaDetail();
-      return;
-    }
-    if (event.target.closest("[data-persona-avatar-open-images]")) {
-      syncPersonaProfileEditDraftFromDom();
-      scrollToPersonaImageGeneration();
+    if (event.target.closest("[data-persona-avatar-crop-open]")) {
+      openPersonaAvatarCropModal().catch((error) => showMsg("commandMsg", error.detail || error.message || "打开头像设置失败", false));
       return;
     }
     if (event.target.closest("[data-persona-save-profile]")) savePersonaProfileFields().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
@@ -21941,17 +22128,6 @@ function bindEvents() {
         if (event.target.id === "personaProfileName") regenState.name = event.target.value || "";
         else regenState.content = event.target.value || "";
       }
-      return;
-    }
-    if (event.target?.matches?.("[data-persona-avatar-crop]")) {
-      const draft = personaProfileEditState(selectedPersona()?.id);
-      const key = String(event.target.dataset.personaAvatarCrop || "");
-      if (!draft?.avatar || !["cropX", "cropY", "zoom"].includes(key)) return;
-      const min = key === "zoom" ? 1 : 0;
-      const max = key === "zoom" ? 3 : 100;
-      draft.avatar[key] = Math.min(max, Math.max(min, Number(event.target.value || min)));
-      const preview = event.target.closest("[data-persona-avatar-editor]")?.querySelector(".persona-avatar img");
-      if (preview) preview.setAttribute("style", personaAvatarImageStyle(draft.avatar));
       return;
     }
     if (["personaGenerateCount", "personaMediaImageCount"].includes(event.target?.id || "")) {

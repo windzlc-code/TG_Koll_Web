@@ -27,8 +27,15 @@ class ConsoleTemplateMarkupTests(unittest.TestCase):
         positions = [panel.index(marker) for marker in markers]
         self.assertEqual(positions, sorted(positions))
         self.assertIn("data-persona-edit-profile", source)
-        self.assertIn("data-persona-avatar-image", source)
-        self.assertIn("data-persona-avatar-crop", source)
+        self.assertIn("data-persona-avatar-crop-open", source)
+        self.assertIn("data-persona-avatar-crop-stage", source)
+        self.assertIn("data-persona-avatar-crop-option", source)
+        self.assertIn("if (!hasImages)", source)
+        self.assertIn('if (profileEditing) return ""', source)
+        self.assertIn("persona-profile-section--empty-images", source)
+        self.assertIn("persona-hot-summary-card--profile", source)
+        self.assertIn("persona-hot-summary-card--hot", source)
+        self.assertNotIn('data-persona-avatar-crop="', source)
         self.assertNotIn('class="persona-profile-editor-section"', panel)
 
     def test_persona_group_toggle_closes_aria_expanded_attribute(self):

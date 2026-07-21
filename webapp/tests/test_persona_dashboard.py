@@ -530,6 +530,32 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(persona["post_metrics"][0]["media_items"][0]["url"], "data:image/png;base64,abc123")
         self.assertIn("浏览", persona["hot_score_formula"])
 
+    def test_console_overview_aggregates_hot_metrics_without_heavy_rows(self):
+        self._write_archives()
+
+        full_resp = self.client.get("/api/persona_dashboard/overview")
+        console_resp = self.client.get("/api/persona_dashboard/console_overview")
+
+        self.assertEqual(full_resp.status_code, 200)
+        self.assertEqual(console_resp.status_code, 200)
+        full_persona = full_resp.json()["personas"][0]
+        console_persona = console_resp.json()["personas"][0]
+        self.assertEqual(console_persona["hot"], full_persona["hot"])
+        self.assertGreater(console_persona["hot"]["hot_score"], 0)
+        self.assertEqual(console_persona["hot_platforms"], [])
+        self.assertEqual(console_persona["post_metrics"], [])
+
+        post_key = full_persona["post_metrics"][0]["post_key"]
+        (self.tool_runtime_dir / "persona_dashboard_deleted_posts.json").write_text(
+            json.dumps({"persona-1": [post_key]}),
+            encoding="utf-8",
+        )
+        filtered_full = self.client.get("/api/persona_dashboard/overview").json()["personas"][0]
+        filtered_console = self.client.get("/api/persona_dashboard/console_overview").json()["personas"][0]
+        self.assertEqual(filtered_console["hot"], filtered_full["hot"])
+        self.assertEqual(filtered_console["hot"]["hot_score"], 0)
+        self.assertEqual(filtered_console["hot"]["recent_views"], 1234)
+
     def test_sensitive_values_are_masked(self):
         self._write_archives()
         resp = self.client.get("/api/persona_dashboard/overview")
