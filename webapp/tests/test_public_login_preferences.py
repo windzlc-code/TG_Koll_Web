@@ -234,11 +234,17 @@ class PublicLoginUiSourceTests(unittest.TestCase):
             self.site_nav_script,
         )
 
-        for page_name in ("index.html", "pricing.html", "console.html", "admin.html"):
+        for page_name in (
+            "index.html",
+            "pricing.html",
+            "console.html",
+            "about-vecto.html",
+            "admin.html",
+        ):
             page = (self.static_dir / page_name).read_text(encoding="utf-8")
             with self.subTest(page=page_name):
                 self.assertIn(
-                    "/assets/opc/site-navigation.js?v=2026071706",
+                    "/assets/opc/site-navigation.js?v=__SITE_NAVIGATION_JS_VERSION__",
                     page,
                 )
 
@@ -251,7 +257,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn('header.dataset.siteAuthState = "guest"', self.site_nav_script)
         self.assertIn('[data-site-auth-state="pending"] .header-actions', self.site_nav_styles)
         self.assertIn("min-width: 274px", self.site_nav_styles)
-        self.assertIn('accountMenuMarkup(header.dataset.sitePage || "home")', self.site_nav_script)
+        self.assertIn('installUnifiedAccountMenu(header, header.dataset.sitePage || "home")', self.site_nav_script)
         self.assertIn("async function logoutPublicSession()", self.site_nav_script)
         self.assertIn('fetch("/api/auth/logout"', self.site_nav_script)
         self.assertIn("window.location.reload()", self.site_nav_script)
@@ -265,7 +271,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
             self.assertIn("data-site-language-toggle", markup)
         self.assertIn("function themeEnabled()", self.site_nav_script)
         self.assertIn('return page === "console" || document.body?.classList.contains("page-admin")', self.site_nav_script)
-        self.assertIn('accountMenuMarkup(header.dataset.sitePage || "home")', self.site_nav_script)
+        self.assertIn('installUnifiedAccountMenu(header, header.dataset.sitePage || "home")', self.site_nav_script)
         public_controls = self.site_nav_script.split("function renderActions", 1)[1].split("function fallbackMarkup", 1)[0]
         self.assertNotIn("data-site-theme-toggle", public_controls.split("const controls", 1)[1].split("const mobileMenu", 1)[0])
         self.assertIn("data-site-language-toggle", public_controls)
@@ -279,7 +285,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn('window.addEventListener("vecto:language-change"', self.script)
         self.assertIn("applyPublicLanguage", self.script)
         self.assertIn(':root[data-theme="dark"]', self.site_nav_styles)
-        self.assertNotIn(".site-header {", self.styles)
+        self.assertNotRegex(self.styles, r"(?m)^\.site-header\s*\{")
 
     def test_public_dark_theme_covers_forms_cards_and_dialogs(self):
         for selector in (

@@ -148,7 +148,11 @@ html {
 }
 
 .site-nav > a[data-site-nav-key="console"] {
-  flex-basis: 80px;
+  flex-basis: 70px;
+}
+
+.site-nav > a[data-site-nav-key="aboutVecto"] {
+  flex-basis: 88px;
 }
 
 .site-nav a:hover,

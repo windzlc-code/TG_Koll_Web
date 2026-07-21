@@ -37,7 +37,8 @@
       pricing: "订阅方案",
       proxyMarket: "代理商城",
       difference: "服务差异",
-      console: "Web 控制台",
+      console: "控制台",
+      aboutVecto: "了解 Vecto",
       login: "账号登录",
       guest: "游客申请",
       home: "返回首页",
@@ -95,7 +96,8 @@
       pricing: "訂閱方案",
       proxyMarket: "代理商城",
       difference: "服務差異",
-      console: "Web 控制台",
+      console: "控制台",
+      aboutVecto: "了解 Vecto",
       login: "帳號登入",
       guest: "遊客申請",
       home: "返回首頁",
@@ -276,11 +278,9 @@
   function navigationLinks(page, current) {
     return [
       navLink({ key: "solution", href: navHref(page, "#solution"), current }),
-      navLink({ key: "accounts", href: navHref(page, "#agents"), current }),
-      navLink({ key: "scenarios", href: navHref(page, "#scenarios"), current }),
       navLink({ key: "proxyMarket", href: "/proxy-market.html", current }),
-      navLink({ key: "difference", href: navHref(page, "#service-difference"), current }),
       navLink({ key: "console", href: "/console.html", current }),
+      navLink({ key: "aboutVecto", href: "/about-vecto.html", current }),
     ].join("");
   }
 
@@ -913,7 +913,7 @@
     const page = header.dataset.sitePage || "home";
     const mode = header.dataset.siteMode || (page === "console" ? "authenticated" : "public");
     const resolvedMode = mode === "public" ? page : mode;
-    const current = page === "pricing" || page === "console" || page === "proxyMarket" ? page : "";
+    const current = ["pricing", "console", "proxyMarket", "aboutVecto"].includes(page) ? page : "";
 
     if (mode === "public" && !header.dataset.siteAuthState) header.dataset.siteAuthState = "pending";
 

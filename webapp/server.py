@@ -16703,6 +16703,19 @@ def create_app() -> FastAPI:
             },
         )
 
+    @app.get("/about-vecto.html", include_in_schema=False)
+    def page_about_vecto() -> HTMLResponse:
+        return _html_response_with_versions(
+            "about-vecto.html",
+            replacements={
+                "__OPC_STYLES_VERSION__": _asset_version("assets", "opc", "styles.css"),
+                "__OPC_ABOUT_CSS_VERSION__": _asset_version("assets", "opc", "about.css"),
+                "__OPC_SCRIPT_VERSION__": _asset_version("assets", "opc", "script.js"),
+                "__SITE_NAVIGATION_CSS_VERSION__": _asset_version("assets", "opc", "site-navigation.css"),
+                "__SITE_NAVIGATION_JS_VERSION__": _asset_version("assets", "opc", "site-navigation.js"),
+            },
+        )
+
     @app.get("/proxy-market.html", include_in_schema=False)
     def page_proxy_market() -> HTMLResponse:
         return _html_response_with_versions(
