@@ -574,6 +574,7 @@ function initHomeExperience() {
   const heroPrev = hero?.querySelector("[data-home-hero-prev]");
   const heroNext = hero?.querySelector("[data-home-hero-next]");
   const heroMotion = hero?.querySelector("[data-home-hero-motion]");
+  const heroStatus = hero?.querySelector("[data-home-hero-status]");
   if (heroTrack && heroViewport && heroScenes.length > 1 && heroScenes.length === heroTriggers.length) {
     const cloneCount = Math.min(3, heroScenes.length);
     const createLoopClone = (scene) => {
@@ -661,21 +662,31 @@ function initHomeExperience() {
     const settleLoopClone = (physicalScene) => {
       window.clearTimeout(heroLoopTimer);
       if (physicalScene.dataset.homeHeroClone !== "true") return;
-      heroLoopTimer = window.setTimeout(() => jumpToOriginal(physicalScene), reducedMotion ? 0 : 180);
+      heroLoopTimer = window.setTimeout(() => {
+        if (activePhysicalScene === physicalScene) jumpToOriginal(physicalScene);
+      }, reducedMotion ? 0 : 180);
+    };
+    const announceHeroScene = (index) => {
+      if (heroStatus) heroStatus.textContent = heroTriggers[index]?.getAttribute("aria-label") || "";
     };
     const showHeroScene = (index, behavior = reducedMotion ? "auto" : "smooth", resetTimer = true) => {
+      window.clearTimeout(heroLoopTimer);
+      window.clearTimeout(heroLoopFallbackTimer);
       const nextIndex = (index + heroScenes.length) % heroScenes.length;
       const target = heroScenes[nextIndex];
       updateHeroState(target);
       heroViewport.scrollTo({ left: target.offsetLeft, behavior });
+      if (resetTimer) announceHeroScene(nextIndex);
       if (resetTimer) scheduleHeroAdvance();
     };
     const stepHero = (direction, resetTimer = true) => {
+      window.clearTimeout(heroLoopTimer);
+      window.clearTimeout(heroLoopFallbackTimer);
       const physicalIndex = physicalScenes.indexOf(activePhysicalScene);
       const target = physicalScenes[Math.max(0, Math.min(physicalScenes.length - 1, physicalIndex + direction))];
       updateHeroState(target);
       heroViewport.scrollTo({ left: target.offsetLeft, behavior: reducedMotion ? "auto" : "smooth" });
-      window.clearTimeout(heroLoopFallbackTimer);
+      if (resetTimer) announceHeroScene(logicalIndexOf(target));
       if (target.dataset.homeHeroClone === "true") {
         heroLoopFallbackTimer = window.setTimeout(() => {
           if (activePhysicalScene !== target) return;
