@@ -1936,7 +1936,7 @@ function renderModalCloseButton(cancelAttribute = "data-console-modal-cancel") {
   </button>`;
 }
 
-function openConsoleModal({ title = "确认操作", message = "", contentHtml = "", inputLabel = "", inputValue = "", fields = [], confirmText = "确定", cancelText = "取消", danger = false, showCancel = true, extraActions = [], modalKey = "" } = {}) {
+function openConsoleModal({ title = "确认操作", message = "", contentHtml = "", inputLabel = "", inputValue = "", fields = [], confirmText = "确定", cancelText = "取消", danger = false, showCancel = true, showConfirm = true, extraActions = [], modalKey = "" } = {}) {
   closeConsoleModal(null);
   return new Promise((resolve) => {
     const modal = document.createElement("div");
@@ -1969,11 +1969,12 @@ function openConsoleModal({ title = "确认操作", message = "", contentHtml = 
             `).join("")}
           </div>
         ` : ""}
-        <div class="console-modal-actions">
-          ${showCancel ? `<button type="button" data-console-modal-cancel>${esc(cancelText)}</button>` : ""}
-          ${Array.isArray(extraActions) ? extraActions.map((action) => `<button type="button" class="${action?.danger ? "danger" : ""}" data-console-modal-value="${esc(action?.value || "")}">${esc(action?.text || "")}</button>`).join("") : ""}
-          <button type="button" class="${danger ? "danger" : "primary"}" data-console-modal-confirm>${esc(confirmText)}</button>
-        </div>
+        ${(showCancel || showConfirm || (Array.isArray(extraActions) && extraActions.length)) ? `
+          <div class="console-modal-actions">
+            ${showCancel ? `<button type="button" data-console-modal-cancel>${esc(cancelText)}</button>` : ""}
+            ${Array.isArray(extraActions) ? extraActions.map((action) => `<button type="button" class="${action?.danger ? "danger" : ""}" data-console-modal-value="${esc(action?.value || "")}">${esc(action?.text || "")}</button>`).join("") : ""}
+            ${showConfirm ? `<button type="button" class="${danger ? "danger" : "primary"}" data-console-modal-confirm>${esc(confirmText)}</button>` : ""}
+          </div>` : ""}
       </section>
     `;
     document.body.appendChild(modal);
@@ -6814,10 +6815,8 @@ function personaAvatarCropModalHtml(images, avatar) {
     <div class="persona-avatar-crop-workspace">
       <div class="persona-avatar-crop-preview-panel">
         <div class="persona-avatar-crop-stage" data-persona-avatar-crop-stage aria-label="拖动图片调整头像位置">
-          <img class="persona-avatar-crop-backdrop" data-persona-avatar-crop-source alt="" draggable="false" />
-          <div class="persona-avatar-crop-viewport" data-persona-avatar-crop-viewport>
-            <img data-persona-avatar-crop-image data-persona-avatar-crop-source alt="头像裁剪预览" draggable="false" />
-          </div>
+          <img class="persona-avatar-crop-backdrop" data-persona-avatar-crop-image data-persona-avatar-crop-source alt="头像裁剪预览" draggable="false" />
+          <div class="persona-avatar-crop-viewport" data-persona-avatar-crop-viewport aria-hidden="true"></div>
           <div class="persona-avatar-crop-unavailable" data-persona-avatar-crop-unavailable>
             <strong>人设图无法加载</strong>
             <span>请选择其他人设图，或重新生成后再设置头像。</span>
@@ -6828,7 +6827,7 @@ function personaAvatarCropModalHtml(images, avatar) {
       <div class="persona-avatar-crop-library">
         <div class="persona-avatar-crop-library-head">
           <strong>选择人设图</strong>
-          <button type="button" data-persona-avatar-crop-clear ${avatar ? "" : "disabled"}>移除头像</button>
+          <button type="button" class="danger" data-persona-avatar-crop-clear ${avatar ? "" : "disabled"}>移除头像</button>
         </div>
         <div class="persona-avatar-crop-options" role="listbox" aria-label="可选人设图">
           ${images.map((item) => `
@@ -7108,17 +7107,17 @@ function renderPersonaDataPanel(persona) {
         <strong>相关数据</strong>
         <span>基础统计与热点统计</span>
       </div>
-      <aside class="persona-hot-summary-card persona-hot-summary-card--profile">
-        <div class="persona-hot-summary-head"><span>人设数据</span><strong>基础统计</strong></div>
-        <div class="persona-hot-summary-metrics persona-hot-summary-metrics--profile">
-          ${profileStats.map(([label, value]) => `<div><span>${esc(label)}</span><strong>${esc(numberText(value))}</strong></div>`).join("")}
-        </div>
-      </aside>
       <aside class="persona-hot-summary-card persona-hot-summary-card--hot">
         <div class="persona-hot-summary-head"><span>热点数据</span><strong>${persona?.hot ? "实时统计" : "暂无统计"}</strong></div>
         <div class="persona-hot-summary-metrics persona-hot-summary-metrics--hot">
           <div class="persona-hot-total-metric"><span>总热点</span><strong>${esc(numberText(totalHotScore))}</strong></div>
           ${hotStats.map(([label, value]) => `<div><span>${esc(label)}</span><strong>${esc(numberText(value))}</strong></div>`).join("")}
+        </div>
+      </aside>
+      <aside class="persona-hot-summary-card persona-hot-summary-card--profile">
+        <div class="persona-hot-summary-head"><span>人设数据</span><strong>基础统计</strong></div>
+        <div class="persona-hot-summary-metrics persona-hot-summary-metrics--profile">
+          ${profileStats.map(([label, value]) => `<div><span>${esc(label)}</span><strong>${esc(numberText(value))}</strong></div>`).join("")}
         </div>
       </aside>
     </section>`;
@@ -9975,6 +9974,7 @@ async function openPersonaTweetStyleModal() {
     contentHtml: renderPersonaTweetStyleSettingsContent(profile),
     confirmText: "完成",
     showCancel: false,
+    showConfirm: false,
     modalKey: "persona-tweet-style",
   });
   const modal = $("consoleModal");
@@ -10011,6 +10011,7 @@ async function openPersonaLinkSettingsModal() {
     contentHtml: renderPersonaLinkSettingsContent(profile),
     confirmText: "完成",
     showCancel: false,
+    showConfirm: false,
     modalKey: "persona-link-settings",
   });
   const modal = $("consoleModal");
