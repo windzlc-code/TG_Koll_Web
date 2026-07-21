@@ -4865,7 +4865,6 @@ body.persona-touch-dragging .persona-list-card:active {
   .status-grid,
   .form-grid,
   .persona-actions-grid,
-  .persona-overview-stats,
   .form-grid.persona-detail-controls.persona-media-generation-controls,
   .account-pool-body,
   .account-pool-platforms,
@@ -5309,53 +5308,18 @@ body.persona-touch-dragging .persona-list-card:active {
   gap: 10px;
 }
 
-.persona-overview-summary p {
-  margin: 6px 0 0;
-  line-height: 1.6;
-}
-
-.persona-overview-stats {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.persona-overview-stats div {
-  min-height: 64px;
-  padding: 9px 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--panel-solid);
-}
-
-.persona-overview-stats span {
-  display: block;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 850;
-}
-
-.persona-overview-stats strong {
-  display: block;
-  margin-top: 6px;
-  font-size: 20px;
-}
-
 .persona-profile-overview-bar {
   display: block;
 }
 
 .persona-hot-summary-card {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  justify-content: flex-start;
-  flex: 0 0 auto;
   width: 100%;
   min-width: 0;
-  max-width: 100%;
-  margin-left: 0;
-  gap: 8px;
-  padding: 6px 10px;
+  gap: 10px;
+  padding: 7px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--panel-solid);
@@ -5381,22 +5345,21 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .persona-hot-summary-metrics {
-  display: flex;
-  flex-wrap: nowrap;
-  gap: 6px;
-  flex: 0 0 auto;
-  justify-content: flex-start;
+  display: grid;
+  grid-template-columns: repeat(8, minmax(62px, 1fr));
+  gap: 5px;
+  min-width: 0;
 }
 
 .persona-hot-summary-metrics div {
-  flex: 0 0 auto;
-  min-width: 86px;
-  display: inline-flex;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  min-height: 0;
-  padding: 7px 10px;
+  gap: 3px;
+  min-height: 48px;
+  padding: 5px 4px;
   border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
   border-radius: 10px;
   background: var(--soft);
@@ -5409,8 +5372,157 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .persona-hot-summary-metrics strong {
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1;
+}
+
+.persona-profile-identity {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-solid);
+}
+
+.persona-profile-identity.is-editing {
+  background: var(--soft);
+}
+
+.persona-profile-identity-avatar-row,
+.persona-avatar-editor-preview {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.persona-profile-identity-avatar-row {
+  justify-content: space-between;
+}
+
+.persona-avatar {
+  position: relative;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 84px;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--soft);
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 900;
+}
+
+.persona-avatar img {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  object-fit: cover;
+  will-change: transform, object-position;
+}
+
+.persona-avatar--editor {
+  width: 112px;
+  border: 2px solid var(--accent);
+}
+
+.persona-profile-edit-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 32px;
+}
+
+.persona-profile-edit-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.persona-profile-identity-copy {
+  display: grid;
+  gap: 5px;
+}
+
+.persona-profile-identity-copy > span,
+.persona-avatar-editor-preview span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.persona-profile-identity-copy > strong {
+  font-size: 18px;
+}
+
+.persona-profile-identity-copy p {
+  margin: 0;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.persona-avatar-editor {
+  display: grid;
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.persona-avatar-editor-preview > div:last-child {
+  display: grid;
+  align-content: center;
+  gap: 4px;
+}
+
+.persona-avatar-crop-controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.persona-avatar-crop-controls label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.persona-avatar-crop-controls input[type="range"] {
+  width: 100%;
+  min-height: 24px;
+  padding: 0;
+}
+
+.persona-avatar-picker {
+  display: flex;
+  gap: 7px;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 2px 2px 6px;
+}
+
+.persona-avatar-picker-item {
+  flex: 0 0 auto;
+  width: 58px;
+  height: 58px;
+  min-height: 0;
+  padding: 2px;
+  overflow: hidden;
+  border-radius: 8px;
+}
+
+.persona-avatar-picker-item.is-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.persona-avatar-picker-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 5px;
 }
 
 .field-box {
@@ -5451,14 +5563,6 @@ body.persona-touch-dragging .persona-list-card:active {
   z-index: 5400;
 }
 
-.persona-profile-edit-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 12px;
-  align-items: stretch;
-}
-
-.persona-profile-edit-main,
 .persona-profile-image-side {
   min-width: 0;
   display: grid;
@@ -5466,11 +5570,6 @@ body.persona-touch-dragging .persona-list-card:active {
   gap: 10px;
 }
 
-.persona-profile-edit-main {
-  position: relative;
-}
-
-.persona-profile-edit-main.is-regen-editing,
 .persona-generate-panel.is-editing-draft,
 .persona-hot-preview.is-editing-draft {
   padding: 12px;
@@ -5482,7 +5581,6 @@ body.persona-touch-dragging .persona-list-card:active {
   animation: none;
 }
 
-.persona-profile-edit-main.is-regen-editing::before,
 .persona-generate-panel.is-editing-draft::before,
 .persona-hot-preview.is-editing-draft::before {
   content: "";
@@ -5499,7 +5597,6 @@ body.persona-touch-dragging .persona-list-card:active {
   animation: personaRegenDashMove 0.9s linear infinite;
 }
 
-.persona-profile-edit-main.is-regen-editing > *,
 .persona-generate-panel.is-editing-draft > *,
 .persona-hot-preview.is-editing-draft > * {
   position: relative;
@@ -7598,9 +7695,6 @@ body.persona-touch-dragging .persona-list-card:active {
     grid-template-columns: 1fr;
   }
 
-  .persona-profile-edit-layout {
-    grid-template-columns: 1fr;
-  }
 }
 
 @media (max-width: 720px) {
@@ -12530,7 +12624,6 @@ body.live-browser-modal-open {
   .status-grid,
   .form-grid,
   .persona-actions-grid,
-  .persona-overview-stats,
   .form-grid.persona-detail-controls.persona-media-generation-controls,
   .account-pool-body,
   .account-pool-platforms,
@@ -12933,7 +13026,6 @@ body.live-browser-modal-open {
 
   .status-grid,
   .billing-summary-grid,
-  .persona-overview-stats,
   .account-pool-platforms,
   .persona-account-platform-panel .account-pool-platforms,
   .persona-account-summary-metrics {
@@ -12942,16 +13034,14 @@ body.live-browser-modal-open {
   }
 
   .status-card,
-  .billing-summary-card,
-  .persona-overview-stats div {
+  .billing-summary-card {
     min-height: 58px;
     gap: 5px;
     padding: 8px;
   }
 
   .status-card strong,
-  .billing-summary-card strong,
-  .persona-overview-stats strong {
+  .billing-summary-card strong {
     margin-top: 2px;
     font-size: 18px;
   }
@@ -14619,6 +14709,7 @@ body.console-page {
 
   .console-page .persona-detail .persona-hot-summary-card {
     display: grid;
+    grid-template-columns: 1fr;
     width: 100%;
     gap: 4px;
     padding: 5px;
@@ -14636,7 +14727,7 @@ body.console-page {
   .console-page .persona-detail .persona-hot-summary-metrics {
     display: grid;
     width: 100%;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 3px;
   }
 
@@ -14656,12 +14747,34 @@ body.console-page {
     font-size: 13px;
   }
 
-  .console-page .persona-detail .persona-profile-edit-layout,
-  .console-page .persona-detail .persona-profile-edit-main,
   .console-page .persona-detail .persona-profile-long-page,
   .console-page .persona-detail .form-grid,
   .console-page .persona-detail .row-actions {
     gap: 5px;
+  }
+
+  .console-page .persona-detail .persona-profile-identity {
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .console-page .persona-detail .persona-avatar {
+    width: 64px;
+    font-size: 16px;
+  }
+
+  .console-page .persona-detail .persona-avatar--editor {
+    width: 86px;
+  }
+
+  .console-page .persona-detail .persona-avatar-crop-controls {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .console-page .persona-detail .persona-avatar-picker-item {
+    width: 50px;
+    height: 50px;
   }
 
   .console-page .persona-detail .persona-profile-field-head {
@@ -14684,6 +14797,21 @@ body.console-page {
     height: 120px;
     min-height: 120px;
     max-height: 180px;
+  }
+}
+
+@media (max-width: 480px) {
+  .console-page .persona-detail .persona-hot-summary-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .console-page .persona-detail .persona-profile-identity-avatar-row,
+  .console-page .persona-detail .persona-avatar-editor-preview {
+    align-items: center;
+  }
+
+  .console-page .persona-detail .persona-profile-edit-button span {
+    display: none;
   }
 }
 

@@ -19,13 +19,17 @@ class ConsoleTemplateMarkupTests(unittest.TestCase):
         self.assertNotIn("renderPersonaProfileModeTabs", source)
         self.assertNotIn('profileMode ===', panel)
         markers = (
+            "renderPersonaHotSummaryCard(persona)",
             "renderPersonaContentOverview(persona, account, profile)",
-            'class="persona-profile-edit-main',
             "renderPersonaImagePanel(persona)",
             'id="personaTweetStyleSample"',
         )
         positions = [panel.index(marker) for marker in markers]
         self.assertEqual(positions, sorted(positions))
+        self.assertIn("data-persona-edit-profile", source)
+        self.assertIn("data-persona-avatar-image", source)
+        self.assertIn("data-persona-avatar-crop", source)
+        self.assertNotIn('class="persona-profile-editor-section"', panel)
 
     def test_persona_group_toggle_closes_aria_expanded_attribute(self):
         source = (

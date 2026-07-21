@@ -861,6 +861,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(data["bound_pad_code"], "PAD-1")
         self.assertEqual(data["bound_pad_name"], "OP-TEST1")
         self.assertEqual(data["link_presets"], [])
+        self.assertIsNone(data["avatar"])
 
     def test_public_persona_profile_patch_updates_basic_fields(self):
         self._write_archives()
@@ -884,6 +885,49 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(archives[0]["content"], "Updated intro")
         self.assertEqual(archives[0]["boundPadCode"], "PAD-99")
         self.assertEqual(archives[0]["boundPadName"], "OP-TEST99")
+
+    def test_public_persona_profile_persists_avatar_crop_without_replacing_reference(self):
+        self._write_archives()
+        resp = self.client.patch(
+            "/api/persona_dashboard/personas/persona-1/profile",
+            json={
+                "avatar": {
+                    "image_id": "img-1",
+                    "crop_x": 18,
+                    "crop_y": 74,
+                    "zoom": 1.65,
+                }
+            },
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.text)
+        avatar = resp.json()["avatar"]
+        self.assertEqual(avatar["image_id"], "img-1")
+        self.assertEqual(avatar["crop_x"], 18)
+        self.assertEqual(avatar["crop_y"], 74)
+        self.assertEqual(avatar["zoom"], 1.65)
+        self.assertEqual(avatar["preview_url"], "/api/persona_dashboard/personas/persona-1/images/img-1")
+        archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
+        self.assertEqual(archives[0]["setup"]["personaProfileAvatar"]["imageId"], "img-1")
+        self.assertNotIn("personaImageReferenceUrl", archives[0]["setup"])
+
+    def test_public_persona_profile_rejects_unknown_avatar_and_delete_clears_avatar(self):
+        self._write_archives()
+        invalid = self.client.patch(
+            "/api/persona_dashboard/personas/persona-1/profile",
+            json={"avatar": {"image_id": "missing-image"}},
+        )
+        self.assertEqual(invalid.status_code, 400, invalid.text)
+
+        saved = self.client.patch(
+            "/api/persona_dashboard/personas/persona-1/profile",
+            json={"avatar": {"image_id": "img-1", "crop_x": 50, "crop_y": 50, "zoom": 1}},
+        )
+        self.assertEqual(saved.status_code, 200, saved.text)
+        deleted = self.client.delete("/api/persona_dashboard/personas/persona-1/images/img-1")
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+        profile = self.client.get("/api/persona_dashboard/personas/persona-1/profile").json()
+        self.assertIsNone(profile["avatar"])
 
     def test_public_persona_profile_patch_updates_tweet_style_and_link_presets(self):
         self._write_archives()
@@ -1122,6 +1166,15 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
     def test_duplicate_persona_copies_shell_without_content_data(self):
         self._write_archives()
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        seeded_archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        seeded_archives[0]["setup"]["personaProfileAvatar"] = {
+            "imageId": "img-1",
+            "cropX": 40,
+            "cropY": 60,
+            "zoom": 1.2,
+        }
+        archives_path.write_text(json.dumps(seeded_archives), encoding="utf-8")
         resp = self.client.post("/api/persona_dashboard/personas/persona-1/duplicate")
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
@@ -1140,6 +1193,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertNotIn("api_token", duplicate["setup"])
         self.assertEqual(duplicate["setup"]["accountManagement"], {"threads": {}})
         self.assertNotIn("hotMetrics", duplicate["setup"])
+        self.assertNotIn("personaProfileAvatar", duplicate["setup"])
         self.assertEqual(duplicate["posts"], [])
         self.assertEqual(duplicate["platformPosts"], {"threads": [], "instagram": [], "telegram": []})
         self.assertEqual(duplicate["publishHistory"], [])

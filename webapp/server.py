@@ -10240,6 +10240,13 @@ class PersonaDashboardLinkPresetPayload(BaseModel):
     enabled: bool = True
 
 
+class PersonaDashboardPersonaAvatarPayload(BaseModel):
+    image_id: str
+    crop_x: float = Field(default=50, ge=0, le=100)
+    crop_y: float = Field(default=50, ge=0, le=100)
+    zoom: float = Field(default=1, ge=1, le=3)
+
+
 class PersonaDashboardPersonaProfilePayload(BaseModel):
     name: str | None = None
     content: str | None = None
@@ -10248,6 +10255,7 @@ class PersonaDashboardPersonaProfilePayload(BaseModel):
     bound_pad_name: str | None = None
     active_link_preset_id: str | None = None
     link_presets: list[PersonaDashboardLinkPresetPayload] | None = None
+    avatar: PersonaDashboardPersonaAvatarPayload | None = None
 
 
 class PersonaDashboardMemoryCreatePayload(BaseModel):
@@ -12758,6 +12766,7 @@ def _duplicate_persona_archive(archive_id: str) -> dict[str, Any]:
     setup["accountManagement"] = {"threads": {}}
     setup.pop("api_token", None)
     setup.pop("hotMetrics", None)
+    setup.pop("personaProfileAvatar", None)
     duplicate = {
         "id": _new_persona_archive_id(),
         "name": duplicate_name,
@@ -13851,6 +13860,7 @@ def _build_persona_dashboard_profile(archive: dict[str, Any]) -> dict[str, Any]:
         ],
         "image_count": len(archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []),
         "has_reference_images": bool(archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []),
+        "avatar": _build_persona_dashboard_avatar(archive),
         "updated_at": str(archive.get("updatedAt") or "").strip(),
     }
 
@@ -13891,6 +13901,39 @@ def _persona_library_preview_url(archive_id: str, image_id: str, raw_url: str) -
     if text.startswith("data:") or re.match(r"^https?://", text, re.I):
         return text
     return f"/api/persona_dashboard/personas/{quote(str(archive_id).strip(), safe='')}/images/{quote(str(image_id).strip(), safe='')}"
+
+
+def _persona_avatar_float(value: Any, fallback: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _build_persona_dashboard_avatar(archive: dict[str, Any]) -> dict[str, Any] | None:
+    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+    avatar = setup.get("personaProfileAvatar") if isinstance(setup.get("personaProfileAvatar"), dict) else {}
+    image_id = str(avatar.get("imageId") or "").strip()
+    if not image_id:
+        return None
+    library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
+    image = next(
+        (
+            item for item in library
+            if isinstance(item, dict) and str(item.get("id") or "").strip() == image_id
+        ),
+        None,
+    )
+    raw_url = str(image.get("imageUrl") or "").strip() if image else ""
+    if not raw_url:
+        return None
+    return {
+        "image_id": image_id,
+        "preview_url": _persona_library_preview_url(str(archive.get("id") or ""), image_id, raw_url),
+        "crop_x": min(100.0, max(0.0, _persona_avatar_float(avatar.get("cropX"), 50))),
+        "crop_y": min(100.0, max(0.0, _persona_avatar_float(avatar.get("cropY"), 50))),
+        "zoom": min(3.0, max(1.0, _persona_avatar_float(avatar.get("zoom"), 1))),
+    }
 
 
 def _compact_persona_image_library_item(archive_id: str, item: dict[str, Any]) -> dict[str, Any] | None:
@@ -14071,14 +14114,17 @@ def _delete_persona_archive_image(archive_id: str, image_id: str) -> dict[str, A
     ]
     current_reference_url = _persona_reference_image_url_from_archive(archive)
     archive["personaImageLibrary"] = remaining
+    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+    next_setup = dict(setup)
+    avatar = next_setup.get("personaProfileAvatar") if isinstance(next_setup.get("personaProfileAvatar"), dict) else {}
+    if str(avatar.get("imageId") or "").strip() == clean_image_id:
+        next_setup.pop("personaProfileAvatar", None)
     if deleted_url and deleted_url == current_reference_url:
         replacement = max(
             (row for row in remaining if isinstance(row, dict) and str(row.get("imageUrl") or "").strip()),
             key=lambda row: str(row.get("createdAt") or ""),
             default=None,
         )
-        setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
-        next_setup = dict(setup)
         if replacement:
             replacement_url = str(replacement.get("imageUrl") or "").strip()
             next_setup["personaImageSkipped"] = False
@@ -14088,7 +14134,7 @@ def _delete_persona_archive_image(archive_id: str, image_id: str) -> dict[str, A
             next_setup.pop("personaImageReferenceUrl", None)
             next_setup["personaImageSkipped"] = False
             archive.pop("personaReferenceSheet", None)
-        archive["setup"] = next_setup
+    archive["setup"] = next_setup
     archive["updatedAt"] = _persona_dashboard_iso_now()
     _write_persona_archives_preserving_shape(path, raw, archives)
 
@@ -14333,6 +14379,26 @@ def _update_persona_dashboard_profile(archive_id: str, payload: PersonaDashboard
             next_setup["personaDescription"] = next_content
             next_setup["contentTheme"] = next_content
             next_setup["customTopic"] = next_content
+        if "avatar" in explicit:
+            avatar = explicit.get("avatar")
+            if avatar is None:
+                next_setup.pop("personaProfileAvatar", None)
+            else:
+                image_id = str(avatar.get("image_id") or "").strip()
+                library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
+                if not image_id or not any(
+                    isinstance(item, dict)
+                    and str(item.get("id") or "").strip() == image_id
+                    and str(item.get("imageUrl") or "").strip()
+                    for item in library
+                ):
+                    raise HTTPException(status_code=400, detail="所选头像不在当前人设图库中。")
+                next_setup["personaProfileAvatar"] = {
+                    "imageId": image_id,
+                    "cropX": float(avatar.get("crop_x") if avatar.get("crop_x") is not None else 50),
+                    "cropY": float(avatar.get("crop_y") if avatar.get("crop_y") is not None else 50),
+                    "zoom": float(avatar.get("zoom") if avatar.get("zoom") is not None else 1),
+                }
         if "bound_pad_code" in explicit:
             archive["boundPadCode"] = str(explicit.get("bound_pad_code") or "").strip()
         if "bound_pad_name" in explicit:

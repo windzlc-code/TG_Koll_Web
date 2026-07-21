@@ -389,6 +389,7 @@ const state = {
   personaHotImports: storedPersonaHotImports(),
   personaHotCandidateResults: {},
   personaForms: {},
+  personaProfileEditDrafts: {},
   personaProfileRegenDrafts: {},
   personaLinkPresetPages: {},
   personaDraftViewModes: {},
@@ -603,6 +604,7 @@ function clearTenantInMemoryState() {
   state.personaHotImports = {};
   state.personaHotCandidateResults = {};
   state.personaForms = {};
+  state.personaProfileEditDrafts = {};
   state.personaProfileRegenDrafts = {};
   state.personaLinkPresetPages = {};
   state.personaDraftViewModes = {};
@@ -3858,6 +3860,7 @@ function fallbackPersonaProfile(persona) {
     link_presets: [],
     image_count: Number(persona?.counts?.images || 0),
     has_reference_images: Number(persona?.counts?.images || 0) > 0,
+    avatar: null,
     _fallback: true,
   };
 }
@@ -6734,21 +6737,152 @@ function renderPersonaAccountPanel(persona, account, profile, step) {
     </div>`;
 }
 
+function normalizePersonaAvatar(avatar) {
+  if (!avatar || typeof avatar !== "object") return null;
+  const imageId = String(avatar.image_id || "").trim();
+  const previewUrl = String(avatar.preview_url || "").trim();
+  if (!imageId) return null;
+  return {
+    imageId,
+    previewUrl,
+    cropX: Math.min(100, Math.max(0, Number(avatar.crop_x ?? 50))),
+    cropY: Math.min(100, Math.max(0, Number(avatar.crop_y ?? 50))),
+    zoom: Math.min(3, Math.max(1, Number(avatar.zoom ?? 1))),
+  };
+}
+
+function personaProfileEditState(personaId) {
+  return state.personaProfileEditDrafts[String(personaId || "").trim()] || null;
+}
+
+function syncPersonaProfileEditDraftFromDom(personaId = selectedPersona()?.id) {
+  const key = String(personaId || "").trim();
+  const draft = personaProfileEditState(key);
+  if (!draft?.active) return draft;
+  if ($("personaProfileName")) draft.name = String($("personaProfileName").value || "");
+  if ($("personaProfileContent")) draft.content = String($("personaProfileContent").value || "");
+  return draft;
+}
+
+function beginPersonaProfileEdit(persona, profile) {
+  const key = String(persona?.id || "").trim();
+  if (!key) return;
+  state.personaProfileEditDrafts[key] = {
+    active: true,
+    name: String(profile?.name || persona?.name || ""),
+    content: String(profile?.content || persona?.content || ""),
+    avatar: normalizePersonaAvatar(profile?.avatar),
+  };
+  renderPersonaDetail();
+  window.requestAnimationFrame(() => $("personaProfileName")?.focus());
+}
+
+function cancelPersonaProfileEdit(personaId = selectedPersona()?.id) {
+  const key = String(personaId || "").trim();
+  if (!key) return;
+  delete state.personaProfileEditDrafts[key];
+  delete state.personaProfileRegenDrafts[key];
+  renderPersonaDetail();
+}
+
+function personaAvatarLibraryItem(personaId, imageId) {
+  const library = personaImageLibraryState(personaId);
+  return (Array.isArray(library?.items) ? library.items : []).find((item) => String(item?.id || "") === String(imageId || "")) || null;
+}
+
+function personaAvatarImageUrl(personaId, avatar) {
+  const item = personaAvatarLibraryItem(personaId, avatar?.imageId);
+  return String(item?.preview_url || item?.image_url || avatar?.previewUrl || "").trim();
+}
+
+function personaAvatarImageStyle(avatar) {
+  const cropX = Math.min(100, Math.max(0, Number(avatar?.cropX ?? 50)));
+  const cropY = Math.min(100, Math.max(0, Number(avatar?.cropY ?? 50)));
+  const zoom = Math.min(3, Math.max(1, Number(avatar?.zoom ?? 1)));
+  return `object-position:${cropX}% ${cropY}%;transform:scale(${zoom});transform-origin:${cropX}% ${cropY}%`;
+}
+
+function renderPersonaAvatar(persona, profile, avatar, { editor = false } = {}) {
+  const name = String(profile?.name || persona?.name || "未命名人设").trim();
+  const imageUrl = personaAvatarImageUrl(persona?.id, avatar);
+  const initials = Array.from(name).slice(0, 2).join("") || "人设";
+  return `
+    <div class="persona-avatar ${editor ? "persona-avatar--editor" : ""}">
+      ${imageUrl
+        ? `<img src="${esc(imageUrl)}" alt="${esc(`${name}头像`)}" style="${personaAvatarImageStyle(avatar)}" />`
+        : `<span>${esc(initials)}</span>`}
+    </div>`;
+}
+
+function renderPersonaAvatarEditor(persona, profile, draft) {
+  const library = personaImageLibraryState(persona.id);
+  const images = (Array.isArray(library?.items) ? library.items : [])
+    .map((item) => ({
+      id: String(item?.id || "").trim(),
+      url: String(item?.preview_url || item?.image_url || "").trim(),
+    }))
+    .filter((item) => item.id && item.url);
+  const avatar = draft.avatar;
+  return `
+    <section class="persona-avatar-editor" data-persona-avatar-editor>
+      <div class="persona-avatar-editor-preview">
+        ${renderPersonaAvatar(persona, { ...profile, name: draft.name }, avatar, { editor: true })}
+        <div>
+          <strong>人设头像</strong>
+          <span>${avatar ? "调整下方位置与缩放参数完成裁剪，原人设图不会被修改。" : "从现有人设图库中选择一张图片作为头像。"}</span>
+        </div>
+      </div>
+      ${avatar ? `
+        <div class="persona-avatar-crop-controls">
+          <label>水平位置
+            <input type="range" min="0" max="100" step="1" value="${esc(avatar.cropX)}" data-persona-avatar-crop="cropX" />
+          </label>
+          <label>垂直位置
+            <input type="range" min="0" max="100" step="1" value="${esc(avatar.cropY)}" data-persona-avatar-crop="cropY" />
+          </label>
+          <label>缩放
+            <input type="range" min="1" max="3" step="0.05" value="${esc(avatar.zoom)}" data-persona-avatar-crop="zoom" />
+          </label>
+        </div>
+      ` : ""}
+      ${images.length ? `
+        <div class="persona-avatar-picker" aria-label="选择人设头像">
+          ${images.map((item) => `
+            <button type="button" class="persona-avatar-picker-item ${String(avatar?.imageId || "") === item.id ? "is-selected" : ""}" data-persona-avatar-image="${esc(item.id)}" aria-pressed="${String(avatar?.imageId || "") === item.id ? "true" : "false"}">
+              <img src="${esc(item.url)}" alt="可选人设图" />
+            </button>
+          `).join("")}
+        </div>
+      ` : `<div class="empty-state">图库中还没有人设图，请先生成或上传。</div>`}
+      <div class="row-actions persona-avatar-editor-actions">
+        <button type="button" data-persona-avatar-open-images>${images.length ? "管理人设图" : "生成人设图"}</button>
+        <button type="button" data-persona-avatar-clear ${avatar ? "" : "disabled"}>清除头像</button>
+      </div>
+    </section>`;
+}
+
 function renderPersonaHotSummaryCard(persona) {
   const hot = persona?.hot || {};
+  const personaId = String(persona?.id || "");
+  const drafts = personaDraftPosts(persona);
+  const historyRows = personaPublishHistoryRows(persona);
+  const draftCount = Array.isArray(state.personaDraftPosts[personaId]) ? drafts.length : personaOverviewDraftCount(persona);
+  const accountCount = uniqueAccountOptions(personaAccounts(persona)).length || Math.max(0, Number(persona?.counts?.accounts || 0));
   const stats = [
+    ["草稿", draftCount],
+    ["已发布", Number(persona?.counts?.published || historyRows.length || 0)],
+    ["账号", accountCount],
     ["热度", Number(hot.hot_score || 0)],
     ["点赞", Number(hot.likes || 0)],
     ["评论", Number(hot.comments || 0)],
     ["分享", Number(hot.shares || 0)],
     ["转发", Number(hot.reposts || 0)],
   ];
-  const hasHotData = stats.some(([, value]) => Number(value || 0) > 0);
   return `
     <aside class="persona-hot-summary-card">
       <div class="persona-hot-summary-head">
-        <span>热点数据</span>
-        <strong>${hasHotData ? "已同步" : "暂无热点统计"}</strong>
+        <span>人设数据</span>
+        <strong>实时概览</strong>
       </div>
       <div class="persona-hot-summary-metrics">
         ${stats.map(([label, value]) => `
@@ -6767,26 +6901,54 @@ function renderPersonaContentOverview(persona, account, profile) {
   const accounts = uniqueAccountOptions(personaAccounts(persona));
   const publishAccount = publishAccountForPersona(persona);
   const personaId = String(persona?.id || "");
-  const draftCount = Array.isArray(state.personaDraftPosts[personaId]) ? drafts.length : personaOverviewDraftCount(persona);
-  const accountCount = accounts.length || Math.max(0, Number(persona?.counts?.accounts || 0));
   const latestDraft = sortPersonaDraftPosts(drafts)[0] || null;
   const latestHistory = historyRows[0] || null;
   const latestTask = [...state.socialTasks]
     .filter((task) => String(task.persona_id || "") === personaId)
     .sort((left, right) => Math.max(timeValue(right.updated_at), timeValue(right.created_at)) - Math.max(timeValue(left.updated_at), timeValue(left.created_at)))[0] || null;
   const content = String(profile?.content || persona?.content || "").trim();
+  const editDraft = personaProfileEditState(personaId);
+  const isEditing = Boolean(editDraft?.active);
+  const regenState = personaProfileRegenState(personaId);
+  const isProfileRegenEditing = Boolean(regenState?.active);
+  const displayAvatar = normalizePersonaAvatar(profile?.avatar);
   return `
     <div class="persona-overview-grid">
-      <div class="flow-box persona-overview-summary">
-        <span>人设简介</span>
-        <strong>${esc(profile?.name || persona?.name || "未命名人设")}</strong>
-        <p>${esc(content || "当前还没有人设简介。")}</p>
-      </div>
-      <div class="persona-overview-stats">
-        <div><span>草稿</span><strong>${esc(draftCount)}</strong></div>
-        <div><span>已发布</span><strong>${esc(Number(persona?.counts?.published || historyRows.length || 0))}</strong></div>
-        <div><span>账号</span><strong>${esc(accountCount)}</strong></div>
-      </div>
+      <section class="persona-profile-identity ${isEditing ? "is-editing" : ""}">
+        ${isEditing ? `
+          ${renderPersonaAvatarEditor(persona, profile, editDraft)}
+          ${isProfileRegenEditing ? `
+            <div class="persona-temp-edit-toolbar">
+              <span>临时生成方向编辑中</span>
+              <div class="persona-temp-edit-actions">
+                <button type="button" data-persona-clear-profile-regen>清空</button>
+                <button type="button" data-persona-exit-profile-regen>退出生成</button>
+              </div>
+            </div>
+          ` : ""}
+          <label>人设名称
+            <input id="personaProfileName" value="${esc(isProfileRegenEditing ? regenState.name : editDraft.name)}" />
+          </label>
+          <label>人设简介
+            <textarea id="personaProfileContent" rows="7" placeholder="编辑当前人设简介。">${esc(isProfileRegenEditing ? regenState.content : editDraft.content)}</textarea>
+          </label>
+          <div class="row-actions persona-profile-identity-actions">
+            <button type="button" class="primary" data-persona-save-profile ${isProfileRegenEditing ? "disabled" : ""}>保存资料</button>
+            <button type="button" data-persona-cancel-profile-edit>取消</button>
+            <button type="button" data-persona-regenerate-profile-content aria-busy="${state.personaCreateBusy?.profileContent ? "true" : "false"}" ${state.personaCreateBusy?.profileContent ? "disabled" : ""}>${state.personaCreateBusy?.profileContent ? "正在生成..." : (isProfileRegenEditing ? "确认生成" : "AI 重新生成")}${renderBillingPricePill("basic_text_post")}</button>
+          </div>
+        ` : `
+          <div class="persona-profile-identity-avatar-row">
+            ${renderPersonaAvatar(persona, profile, displayAvatar)}
+            <button type="button" class="persona-profile-edit-button" data-persona-edit-profile aria-label="编辑资料" title="编辑资料">${renderEditIcon()}<span>编辑资料</span></button>
+          </div>
+          <div class="persona-profile-identity-copy">
+            <span>人设简介</span>
+            <strong>${esc(profile?.name || persona?.name || "未命名人设")}</strong>
+            <p>${esc(content || "当前还没有人设简介。")}</p>
+          </div>
+        `}
+      </section>
       <div class="form-grid">
         <div class="flow-box">
           <span>执行账号</span>
@@ -6917,14 +7079,6 @@ function renderPersonaSettingsPanelV2(persona, account, profile, step) {
         </div>
       </div>`;
   }
-  const regenState = state.personaProfileRegenDrafts[String(persona.id || "")];
-  const isProfileRegenEditing = Boolean(regenState?.active);
-  const profileEditName = isProfileRegenEditing
-    ? String(regenState.name || "")
-    : String(profile.name || persona.name || persona.id);
-  const profileEditContent = isProfileRegenEditing
-    ? String(regenState.content || "")
-    : String(profile.content || persona.content || "");
   return `
     <div class="persona-inline-panel">
       <div class="persona-head-copy">
@@ -6936,48 +7090,7 @@ function renderPersonaSettingsPanelV2(persona, account, profile, step) {
       </div>
       <div class="persona-profile-long-page">
         ${renderPersonaContentOverview(persona, account, profile)}
-        <section class="persona-inline-panel persona-inline-panel--nested persona-profile-editor-section">
-          <div class="persona-head-copy">
-            <strong>资料编辑</strong>
-            <span class="persona-panel-intro">直接修改当前资料；保存后上方概览会立即更新。</span>
-          </div>
-          <div class="persona-profile-edit-layout">
-            <section class="persona-profile-edit-main ${isProfileRegenEditing ? "is-regen-editing" : ""}">
-              ${isProfileRegenEditing ? `
-                <div class="persona-temp-edit-toolbar">
-                  <span>临时编辑中：填写新的生成方向后确认生成。</span>
-                  <div class="persona-temp-edit-actions">
-                    <button type="button" data-persona-clear-profile-regen>清空</button>
-                    <button type="button" data-persona-exit-profile-regen>退出编辑</button>
-                  </div>
-                </div>
-              ` : ""}
-              <div class="form-grid">
-                <label>人设名称
-                  <input id="personaProfileName" value="${esc(profileEditName)}" />
-                </label>
-              </div>
-              <label>
-                <span class="persona-profile-field-head">
-                  <span>人设简介</span>
-                </span>
-                <textarea
-                  id="personaProfileContent"
-                  class="${isProfileRegenEditing ? "persona-profile-regen-input" : ""}"
-                  rows="10"
-                  placeholder="${isProfileRegenEditing ? "输入新的方向、身份、语气和内容边界，用于重新生成人设简介。" : "编辑并保存当前人设简介。"}"
-                >${esc(profileEditContent)}</textarea>
-              </label>
-              <div class="row-actions">
-                <button type="button" class="primary" data-persona-save-profile ${isProfileRegenEditing ? "disabled" : ""}>保存资料</button>
-                <button type="button" data-persona-regenerate-profile-content aria-busy="${state.personaCreateBusy?.profileContent ? "true" : "false"}" ${state.personaCreateBusy?.profileContent ? "disabled" : ""}>${state.personaCreateBusy?.profileContent ? "正在生成..." : (isProfileRegenEditing ? "确认生成" : "AI 重新生成")}${renderBillingPricePill("basic_text_post")}</button>
-              </div>
-            </section>
-            <aside class="persona-profile-image-side">
-              ${renderPersonaImagePanel(persona)}
-            </aside>
-          </div>
-        </section>
+        ${renderPersonaImagePanel(persona)}
         <section class="persona-inline-panel persona-inline-panel--nested persona-profile-style-section">
           <strong>推文风格</strong>
           <label>风格样例
@@ -9612,14 +9725,25 @@ async function patchPersonaProfile(payload) {
 }
 
 async function savePersonaProfileFields() {
+  const persona = selectedPersona();
+  const draft = syncPersonaProfileEditDraftFromDom(persona?.id);
+  const avatar = draft?.avatar;
   const result = await patchPersonaProfile({
     name: $("personaProfileName")?.value.trim() || "",
     content: $("personaProfileContent")?.value.trim() || "",
+    avatar: avatar ? {
+      image_id: avatar.imageId,
+      crop_x: avatar.cropX,
+      crop_y: avatar.cropY,
+      zoom: avatar.zoom,
+    } : null,
   });
   if (result) {
+    delete state.personaProfileEditDrafts[String(persona?.id || "")];
+    delete state.personaProfileRegenDrafts[String(persona?.id || "")];
     renderPersonaDetail();
     renderConfirmSummary();
-    showMsg("commandMsg", "人设资料已保存，内容概览已更新。", true);
+    showMsg("commandMsg", "人设资料和头像已保存。", true);
   }
 }
 
@@ -9630,8 +9754,11 @@ function personaProfileRegenState(personaId) {
 function enterPersonaProfileRegenEdit(persona) {
   const key = String(persona?.id || "");
   if (!key) return;
-  const name = String($("personaProfileName")?.value || persona.name || "").trim();
-  const content = String($("personaProfileContent")?.value || persona.content || "").trim();
+  const profile = selectedPersonaProfile() || fallbackPersonaProfile(persona);
+  if (!personaProfileEditState(key)?.active) beginPersonaProfileEdit(persona, profile);
+  const draft = syncPersonaProfileEditDraftFromDom(key);
+  const name = String(draft?.name || persona.name || "").trim();
+  const content = String(draft?.content || persona.content || "").trim();
   state.personaProfileRegenDrafts[key] = {
     active: true,
     originalName: name,
@@ -9655,6 +9782,11 @@ function clearPersonaProfileRegenEdit(personaId) {
     name: "",
     content: "",
   };
+  const draft = personaProfileEditState(key);
+  if (draft) {
+    draft.name = "";
+    draft.content = "";
+  }
   renderPersonaDetail();
   window.requestAnimationFrame(() => {
     $("personaProfileName")?.focus();
@@ -9665,6 +9797,12 @@ function clearPersonaProfileRegenEdit(personaId) {
 function exitPersonaProfileRegenEdit(personaId) {
   const key = String(personaId || selectedPersona()?.id || "");
   if (!key) return;
+  const regenState = personaProfileRegenState(key);
+  const draft = personaProfileEditState(key);
+  if (draft && regenState) {
+    draft.name = String(regenState.originalName || draft.name || "");
+    draft.content = String(regenState.originalContent || draft.content || "");
+  }
   delete state.personaProfileRegenDrafts[key];
   renderPersonaDetail();
   showMsg("commandMsg", "已退出临时编辑，原简介已恢复。", true);
@@ -9711,13 +9849,13 @@ async function regeneratePersonaProfileContent() {
       showMsg("commandMsg", "AI 没有返回可用简介，请调整当前简介后再试。", false);
       return;
     }
-    delete state.personaProfileRegenDrafts[String(persona.id || "")];
-    const field = $("personaProfileContent");
-    if (field) field.value = nextContent;
     const key = String(persona.id || "");
-    if (state.personaProfiles[key]) {
-      state.personaProfiles[key] = { ...state.personaProfiles[key], name, content: nextContent };
+    const draft = personaProfileEditState(key);
+    if (draft) {
+      draft.name = name;
+      draft.content = nextContent;
     }
+    delete state.personaProfileRegenDrafts[key];
     showMsg("commandMsg", "已重新生成并填入编辑框，确认无误后保存资料。", true);
   } finally {
     state.personaCreateBusy.profileContent = false;
@@ -13633,6 +13771,10 @@ async function deletePersonaLibraryImage(imageId) {
     method: "DELETE",
   });
   state.personaImageLibraries[String(persona.id)] = result;
+  const profileDraft = personaProfileEditState(persona.id);
+  if (String(profileDraft?.avatar?.imageId || "") === cleanImageId) {
+    profileDraft.avatar = null;
+  }
   await Promise.all([
     loadPersonas(),
     loadPersonaProfile(persona.id, { force: true }).catch(() => {}),
@@ -21435,6 +21577,44 @@ function bindEvents() {
       return;
     }
     if (event.target.closest("[data-persona-publish-submit]")) submitPersonaPublishTask().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
+    if (event.target.closest("[data-persona-edit-profile]")) {
+      const persona = selectedPersona();
+      if (persona) beginPersonaProfileEdit(persona, selectedPersonaProfile() || fallbackPersonaProfile(persona));
+      return;
+    }
+    if (event.target.closest("[data-persona-cancel-profile-edit]")) {
+      cancelPersonaProfileEdit();
+      return;
+    }
+    const avatarImage = event.target.closest("[data-persona-avatar-image]");
+    if (avatarImage) {
+      const persona = selectedPersona();
+      const draft = syncPersonaProfileEditDraftFromDom(persona?.id);
+      const imageId = String(avatarImage.dataset.personaAvatarImage || "").trim();
+      const item = personaAvatarLibraryItem(persona?.id, imageId);
+      if (draft && item) {
+        draft.avatar = {
+          imageId,
+          previewUrl: String(item.preview_url || item.image_url || ""),
+          cropX: 50,
+          cropY: 50,
+          zoom: 1,
+        };
+        renderPersonaDetail();
+      }
+      return;
+    }
+    if (event.target.closest("[data-persona-avatar-clear]")) {
+      const draft = syncPersonaProfileEditDraftFromDom();
+      if (draft) draft.avatar = null;
+      renderPersonaDetail();
+      return;
+    }
+    if (event.target.closest("[data-persona-avatar-open-images]")) {
+      syncPersonaProfileEditDraftFromDom();
+      scrollToPersonaImageGeneration();
+      return;
+    }
     if (event.target.closest("[data-persona-save-profile]")) savePersonaProfileFields().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
     if (event.target.closest("[data-persona-exit-profile-regen]")) {
       exitPersonaProfileRegenEdit(selectedPersona()?.id || "");
@@ -21749,6 +21929,31 @@ function bindEvents() {
     }
   });
   $("moduleBody").addEventListener("input", (event) => {
+    if (event.target?.id === "personaProfileName" || event.target?.id === "personaProfileContent") {
+      const personaId = String(selectedPersona()?.id || "");
+      const draft = personaProfileEditState(personaId);
+      if (draft?.active) {
+        if (event.target.id === "personaProfileName") draft.name = event.target.value || "";
+        else draft.content = event.target.value || "";
+      }
+      const regenState = personaProfileRegenState(personaId);
+      if (regenState?.active) {
+        if (event.target.id === "personaProfileName") regenState.name = event.target.value || "";
+        else regenState.content = event.target.value || "";
+      }
+      return;
+    }
+    if (event.target?.matches?.("[data-persona-avatar-crop]")) {
+      const draft = personaProfileEditState(selectedPersona()?.id);
+      const key = String(event.target.dataset.personaAvatarCrop || "");
+      if (!draft?.avatar || !["cropX", "cropY", "zoom"].includes(key)) return;
+      const min = key === "zoom" ? 1 : 0;
+      const max = key === "zoom" ? 3 : 100;
+      draft.avatar[key] = Math.min(max, Math.max(min, Number(event.target.value || min)));
+      const preview = event.target.closest("[data-persona-avatar-editor]")?.querySelector(".persona-avatar img");
+      if (preview) preview.setAttribute("style", personaAvatarImageStyle(draft.avatar));
+      return;
+    }
     if (["personaGenerateCount", "personaMediaImageCount"].includes(event.target?.id || "")) {
       snapshotPersonaCurrentForm();
       updateBillingPricePills($("moduleBody"));
