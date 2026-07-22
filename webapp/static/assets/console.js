@@ -907,6 +907,11 @@ function setPersonaMobileSidebarOpen(open, sidebarId = "") {
   const sidebars = Array.from(document.querySelectorAll("[data-persona-mobile-sidebar]"));
   const target = sidebarId ? document.getElementById(sidebarId) : sidebars[0];
   const nextOpen = Boolean(open && target && isMobileNavMode());
+  if (!nextOpen && isMobileNavMode()) {
+    state.personaListEditorId = "";
+    state.personaListEditorMode = "";
+    removePersonaCardEditorPortal();
+  }
   sidebars.forEach((sidebar) => {
     const active = nextOpen && sidebar === target;
     sidebar.classList.toggle("is-mobile-open", active);
@@ -5489,7 +5494,7 @@ function renderMobileTaskDock() {
     return `
       <button type="button" class="mobile-task-dock-button ${isActive ? "is-active" : ""}" ${moduleNavigationAttributes(item)} aria-label="${esc(item.label)}" ${isActive ? 'aria-current="page"' : ""}>
         ${renderMobileTaskIcon(item.id)}
-        <span>${esc(item.label === "账号管理自动化" ? "账号" : item.label.replace("列表", ""))}</span>
+        <span>${esc(item.label === "账号管理自动化" ? "账号池" : item.label.replace("列表", ""))}</span>
       </button>`;
   }).join("");
 }
@@ -15670,6 +15675,7 @@ function renderPersonaModule() {
     $("moduleBody").innerHTML = renderWorkspaceBootstrapLoading();
     return;
   }
+  const reopenPersonaWorkspaceSidebar = Boolean(document.getElementById("personaWorkspaceSidebar")?.classList.contains("is-mobile-open"));
   const current = selectedPersona();
   const bulkGroups = personaCollectionGroups();
   const groupBulkMode = state.personaBulkMode && personaBulkScope() === "groups";
@@ -15733,7 +15739,7 @@ function renderPersonaModule() {
     </div>
     <div class="persona-mobile-drawer-backdrop" data-persona-mobile-list-backdrop hidden></div>
   `;
-  setPersonaMobileSidebarOpen(false, "personaWorkspaceSidebar");
+  setPersonaMobileSidebarOpen(reopenPersonaWorkspaceSidebar, "personaWorkspaceSidebar");
   if (state.personaCreateMode || !current) renderPersonaDetail();
   else renderPersonaDetail();
   renderPersonaCardEditorPortal();

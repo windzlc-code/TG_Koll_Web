@@ -73,6 +73,31 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             with self.subTest(module_id=module_id):
                 self.assertIn(f'{module_id}:', self.console_script)
 
+        self.assertIn(
+            'item.label === "账号管理自动化" ? "账号池"',
+            self.console_script,
+        )
+
+    def test_mobile_persona_editor_keeps_its_drawer_anchor_and_clears_on_close(self):
+        module_start = self.console_script.index("function renderPersonaModule()")
+        module_end = self.console_script.index("\nfunction personaGeneratedPreviewPosts", module_start)
+        module = self.console_script[module_start:module_end]
+        sidebar_start = self.console_script.index("function setPersonaMobileSidebarOpen")
+        sidebar_end = self.console_script.index("\nfunction syncPersonaMobileSidebarMode", sidebar_start)
+        sidebar = self.console_script[sidebar_start:sidebar_end]
+
+        self.assertIn(
+            'document.getElementById("personaWorkspaceSidebar")?.classList.contains("is-mobile-open")',
+            module,
+        )
+        self.assertIn(
+            'setPersonaMobileSidebarOpen(reopenPersonaWorkspaceSidebar, "personaWorkspaceSidebar")',
+            module,
+        )
+        self.assertIn('if (!nextOpen && isMobileNavMode())', sidebar)
+        self.assertIn('state.personaListEditorId = ""', sidebar)
+        self.assertIn('removePersonaCardEditorPortal()', sidebar)
+
     def test_mobile_publish_content_expands_without_inner_scroll(self):
         self.assertIn(".mobile-task-dock {", self.styles)
         self.assertIn("grid-template-columns: repeat(5, minmax(0, 1fr));", self.styles)
