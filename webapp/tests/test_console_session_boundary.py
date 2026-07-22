@@ -154,7 +154,20 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("grid-template-rows: auto 18px auto", self.styles)
         self.assertIn("persona-image-library-meta-placeholder", self.source)
         self.assertIn("persona-image-library-actions--placeholder", self.source)
+        self.assertNotIn("原始人设图占位", self.source)
         self.assertNotIn("data-persona-upload-image-trigger", self._function_source("renderPersonaImagePanel"))
+
+    def test_mobile_workspace_controls_keep_distinct_icons_and_stable_layout(self):
+        self.assertIn('<svg class="mobile-nav-toggle-icon"', self.markup)
+        self.assertIn('<path d="M9 3v18"></path>', self.markup)
+        self.assertIn("const consoleLayoutLockStates = new WeakMap();", self.source)
+        self.assertIn("activeLock?.previous ?? node.style.minHeight", self.source)
+        self.assertIn("activeLock.token !== token", self.source)
+        self.assertIn("persona-compose-mode-slot", self.source)
+        self.assertIn(".persona-compose-mode-slot.is-reserved", self.styles)
+        self.assertIn("persona-panel-intro--reserved", self.source)
+        self.assertIn(".persona-panel-intro--reserved", self.styles)
+        self.assertIn(".persona-settings-modal .row-actions button", self.styles)
 
     def test_console_account_menu_uses_current_identity_and_supports_logout(self):
         for marker in (

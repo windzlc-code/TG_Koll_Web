@@ -5342,15 +5342,20 @@ function snapshotConsoleScrollState() {
   };
 }
 
+const consoleLayoutLockStates = new WeakMap();
+
 function captureConsoleLayoutLocks() {
   return [$('moduleBody'), $('personaDetail')]
     .filter(Boolean)
     .map((node) => {
       const height = Math.ceil(node.getBoundingClientRect().height || 0);
       if (height <= 0) return null;
-      const previous = node.style.minHeight;
+      const activeLock = consoleLayoutLockStates.get(node);
+      const previous = activeLock?.previous ?? node.style.minHeight;
+      const token = Symbol("console-layout-lock");
       node.style.minHeight = `${Math.max(height, node.offsetHeight || 0)}px`;
-      return { node, previous };
+      consoleLayoutLockStates.set(node, { token, previous });
+      return { node, token };
     })
     .filter(Boolean);
 }
@@ -5358,8 +5363,11 @@ function captureConsoleLayoutLocks() {
 function releaseConsoleLayoutLocks(locks = []) {
   if (!locks.length) return;
   const release = () => {
-    locks.forEach(({ node, previous }) => {
-      if (node?.isConnected) node.style.minHeight = previous;
+    locks.forEach(({ node, token }) => {
+      const activeLock = node ? consoleLayoutLockStates.get(node) : null;
+      if (!activeLock || activeLock.token !== token) return;
+      if (node.isConnected) node.style.minHeight = activeLock.previous;
+      consoleLayoutLockStates.delete(node);
     });
   };
   window.requestAnimationFrame(() => window.requestAnimationFrame(release));
@@ -15416,7 +15424,7 @@ function renderPersonaImageUploadPlaceholderCard() {
         <small>拖拽图片到这里，或点击选择</small>
         <small class="persona-image-upload-placeholder-tip">建议优先使用三视图</small>
       </button>
-      <small class="persona-image-library-meta-placeholder">原始人设图占位</small>
+      <small class="persona-image-library-meta-placeholder" aria-hidden="true"></small>
       <div class="persona-image-library-actions persona-image-library-actions--placeholder" aria-hidden="true">
         <span class="persona-image-library-action-placeholder persona-image-library-apply"></span>
         <span class="persona-image-library-action-placeholder"></span>
@@ -16213,7 +16221,9 @@ function renderPersonaContentPanel(persona, account, profile, step) {
         <div class="persona-head-copy persona-head-copy--split">
           <div class="persona-head-copy-main">
             <strong>${esc(generateTitle)}</strong>
-            ${generateIntro ? `<span class="persona-panel-intro">${esc(generateIntro)}</span>` : ""}
+            ${generateIntro
+              ? `<span class="persona-panel-intro">${esc(generateIntro)}</span>`
+              : `<span class="persona-panel-intro persona-panel-intro--reserved" aria-hidden="true">&nbsp;</span>`}
           </div>
         </div>
         <div class="persona-compose-workspace ${canComposeMedia ? "has-media" : ""}">
@@ -16231,7 +16241,9 @@ function renderPersonaContentPanel(persona, account, profile, step) {
               </div>
               <p>先生成或录入推文正文，保存后可进入右侧配图步骤。</p>
             </div>
-            ${canComposeMedia ? renderPersonaGenerateComposeTabs(composeMode) : ""}
+            <div class="persona-compose-mode-slot ${canComposeMedia ? "" : "is-reserved"}" ${canComposeMedia ? "" : "aria-hidden=\"true\""}>
+              ${renderPersonaGenerateComposeTabs(composeMode)}
+            </div>
             ${composeMode === "custom" ? "" : renderPersonaGenerateModeTabs(generateMode, { isEditingDraft })}
             ${composeMode !== "custom" && generateMode === "ai" ? `
               <div class="persona-generate-current-settings">
