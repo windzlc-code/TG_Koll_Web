@@ -73,6 +73,25 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             with self.subTest(module_id=module_id):
                 self.assertIn(f'{module_id}:', self.console_script)
 
+    def test_mobile_task_queue_uses_compact_persona_and_task_rows(self):
+        marker = "/* Mobile task queue density: align queue cards with the compact persona list. */"
+        self.assertIn(marker, self.styles)
+        mobile_styles = self.styles[self.styles.index(marker):]
+
+        self.assertIn(".task-queue-panel-tabs button", mobile_styles)
+        self.assertIn("min-height: 32px;", mobile_styles)
+        self.assertIn(".task-queue-persona-shell .persona-list-stack", mobile_styles)
+        self.assertIn("gap: 4px;", mobile_styles)
+        self.assertIn(".task-persona-card .persona-list-item", mobile_styles)
+        self.assertIn("min-height: 0;", mobile_styles)
+        self.assertIn(".task-persona-queue-row", mobile_styles)
+        self.assertIn('"check type status"', mobile_styles)
+        self.assertIn('"empty platform account"', mobile_styles)
+        self.assertIn('"empty time actions"', mobile_styles)
+        self.assertIn(".task-table-inner--regular .task-row", mobile_styles)
+        self.assertIn('"check task status"', mobile_styles)
+        self.assertIn('"empty time actions"', mobile_styles)
+
         self.assertIn(
             'item.label === "账号管理自动化" ? "账号池"',
             self.console_script,
@@ -208,11 +227,12 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn('.slice(0, 86) || "当前内容为空。"', self.console_script)
         self.assertNotIn('.slice(0, 170))}</p>', self.console_script)
 
-    def test_mobile_publish_persona_button_stays_below_site_header(self):
-        selector = ".module-panel.is-publishing-module .publish-header-actions > .persona-mobile-list-toggle"
+    def test_mobile_persona_buttons_share_persistent_style(self):
+        selector = ".persona-mobile-list-toggle[data-persona-mobile-list-toggle]"
         start = self.styles.index(selector)
         rule = self.styles[start:self.styles.index("\n  }", start) + 4]
 
+        self.assertGreaterEqual(self.console_script.count('class="persona-mobile-list-toggle"'), 4)
         self.assertIn("position: fixed;", rule)
         self.assertIn("top: calc(var(--site-header-height) + 8px);", rule)
         self.assertIn("right: max(18px, env(safe-area-inset-right, 0px));", rule)

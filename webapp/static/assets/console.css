@@ -15007,7 +15007,7 @@ body.console-page {
     display: inline-flex;
   }
 
-  .module-panel.is-publishing-module .publish-header-actions > .persona-mobile-list-toggle {
+  .persona-mobile-list-toggle[data-persona-mobile-list-toggle] {
     position: fixed;
     z-index: 130;
     top: calc(var(--site-header-height) + 8px);
@@ -16539,6 +16539,287 @@ body.console-page {
     overflow: visible;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+  }
+}
+
+/* Mobile task queue density: align queue cards with the compact persona list. */
+@media (max-width: 760px) {
+  .task-queue-layout,
+  .task-queue-shell,
+  .task-queue-persona-shell {
+    gap: 5px;
+  }
+
+  .task-queue-panel-tabs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: min(100%, 220px);
+    gap: 2px;
+  }
+
+  .console-page .task-queue-panel-tabs button {
+    min-height: 32px;
+    padding: 4px 9px;
+    font-size: 12px;
+    line-height: 1.2;
+  }
+
+  .task-queue-persona-shell .persona-list-toolbar,
+  .task-queue-persona-shell .task-queue-persona-meta {
+    gap: 4px;
+    padding: 6px 7px;
+  }
+
+  .task-queue-persona-shell .persona-list-head--queue {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px;
+  }
+
+  .task-queue-persona-shell .persona-head-copy {
+    min-width: 0;
+  }
+
+  .task-queue-persona-shell .persona-head-copy strong {
+    font-size: 14px;
+  }
+
+  .task-queue-persona-shell .persona-head-copy span,
+  .task-queue-persona-shell .task-queue-persona-meta span {
+    overflow: hidden;
+    font-size: 10px;
+    line-height: 1.3;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .task-queue-persona-shell .task-queue-sidebar-tools {
+    gap: 5px;
+    flex-wrap: nowrap;
+  }
+
+  .console-page .task-queue-persona-shell .task-queue-sidebar-tools button {
+    min-height: 32px;
+    padding: 4px 7px;
+    font-size: 11px;
+  }
+
+  .task-queue-persona-shell .persona-list-scroll {
+    padding: 0;
+  }
+
+  .task-queue-persona-shell .persona-list-stack {
+    gap: 4px;
+  }
+
+  .task-queue-persona-shell .task-persona-card {
+    gap: 3px;
+    padding: 3px;
+  }
+
+  .task-queue-persona-shell .task-persona-card .persona-list-item {
+    min-height: 0;
+    gap: 2px;
+    padding: 5px 6px;
+  }
+
+  .task-queue-persona-shell .task-persona-card .persona-card-title {
+    gap: 4px;
+  }
+
+  .task-queue-persona-shell .task-persona-card .persona-card-title strong {
+    font-size: 13px;
+  }
+
+  .task-queue-persona-shell .task-persona-card :is(.persona-kind-badge, small) {
+    font-size: 10px;
+    line-height: 1.2;
+  }
+
+  .task-panel-section {
+    gap: 6px;
+    padding: 7px;
+  }
+
+  .task-panel-section-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 5px;
+  }
+
+  .task-panel-section-head strong {
+    font-size: 14px;
+  }
+
+  .task-panel-section-head p {
+    display: -webkit-box;
+    margin-top: 2px;
+    overflow: hidden;
+    font-size: 11px;
+    line-height: 1.35;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+  }
+
+  .task-panel-section-controls,
+  .task-queue-actionbar,
+  .task-queue-bulk-controls {
+    width: 100%;
+    gap: 5px;
+  }
+
+  .task-queue-actionbar,
+  .task-queue-bulk-controls {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .console-page .task-queue-actionbar > button,
+  .console-page .task-queue-bulk-controls button,
+  .task-queue-bulk-controls,
+  .task-queue-selection-count {
+    min-height: 32px;
+    padding: 4px 7px;
+    font-size: 12px;
+    line-height: 1.2;
+  }
+
+  .task-queue-bulk-controls {
+    width: auto;
+    padding: 0;
+  }
+
+  .task-persona-queue-list,
+  .task-table-inner--regular {
+    gap: 5px;
+  }
+
+  .task-persona-queue-row {
+    display: grid;
+    grid-template-columns: 22px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "check type status"
+      "empty platform account"
+      "empty time actions";
+    align-items: center;
+    gap: 4px 7px;
+    min-height: 0;
+    padding: 7px;
+  }
+
+  .task-persona-queue-row > :nth-child(1) { grid-area: check; }
+  .task-persona-queue-row > :nth-child(2) { grid-area: type; }
+  .task-persona-queue-row > :nth-child(3) { grid-area: platform; }
+  .task-persona-queue-row > :nth-child(4) { grid-area: account; }
+  .task-persona-queue-row > :nth-child(5) { grid-area: time; }
+  .task-persona-queue-row > :nth-child(6) {
+    grid-area: status;
+    justify-self: end;
+  }
+  .task-persona-queue-row > :nth-child(7) { grid-area: actions; }
+
+  .task-table-inner--regular .task-row {
+    display: grid;
+    grid-template-columns: 22px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "check task status"
+      "empty time actions";
+    align-items: center;
+    gap: 4px 7px;
+    min-height: 0;
+    padding: 7px;
+  }
+
+  .task-table-inner--regular .task-row > :nth-child(1) { grid-area: check; }
+  .task-table-inner--regular .task-row > :nth-child(2) {
+    grid-area: task;
+    min-width: 0;
+  }
+  .task-table-inner--regular .task-row > :nth-child(3) { grid-area: time; }
+  .task-table-inner--regular .task-row > :nth-child(4) {
+    grid-area: status;
+    justify-self: end;
+  }
+  .task-table-inner--regular .task-row > :nth-child(5) { grid-area: actions; }
+
+  .task-persona-queue-row > [data-mobile-label]::before,
+  .task-table-inner--regular .task-row > [data-mobile-label]::before {
+    display: inline;
+    margin: 0 4px 0 0;
+    font-size: 10px;
+    line-height: 1.2;
+    letter-spacing: 0;
+  }
+
+  .task-persona-queue-row > :is(.task-persona-queue-type, :nth-child(6), .row-actions)::before,
+  .task-table-inner--regular .task-row > :is(:nth-child(2), :nth-child(4), .row-actions)::before {
+    display: none;
+  }
+
+  .task-persona-queue-platform,
+  .task-persona-queue-account,
+  .task-persona-queue-time,
+  .task-table-inner--regular .task-row > :nth-child(3) {
+    font-size: 11px;
+    line-height: 1.25;
+  }
+
+  .task-persona-queue-type strong,
+  .task-table-inner--regular .task-row > :nth-child(2) strong {
+    overflow: hidden;
+    font-size: 13px;
+    line-height: 1.25;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .task-table-inner--regular .task-row > :nth-child(2) span {
+    display: block;
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 10px;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .task-persona-queue-row .row-actions,
+  .task-table-inner--regular .task-row .row-actions {
+    width: auto;
+    max-width: 126px;
+    gap: 4px;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+
+  .console-page .task-persona-queue-row .row-actions :is(button, a),
+  .console-page .task-table-inner--regular .task-row .row-actions :is(button, a) {
+    min-height: 30px;
+    padding: 3px 7px;
+    font-size: 11px;
+  }
+
+  .console-page .task-persona-queue-row .row-actions .task-queue-delete-button,
+  .console-page .task-table-inner--regular .task-row .row-actions .task-queue-delete-button {
+    width: 30px;
+    min-width: 30px;
+    height: 30px;
+    min-height: 30px;
+    padding: 0;
+  }
+
+  .task-queue-pager {
+    gap: 5px;
+    padding-top: 0;
+  }
+
+  .console-page .task-queue-pager button {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    min-height: 32px;
+    flex-basis: 32px;
   }
 }
 
