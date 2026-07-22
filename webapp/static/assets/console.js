@@ -702,7 +702,8 @@ function clearStoredAdminWorkspaceContext() {
 }
 
 function handleSessionBoundary(status) {
-  const normalizedStatus = Number(status || 0);
+  const normalizedStatus = Number(typeof status === "object" ? status?.status : status || 0);
+  const boundaryCode = String(typeof status === "object" ? status?.code || "" : "").trim();
   if (![401, 428].includes(normalizedStatus)) return false;
   if (consoleBoundaryNavigationActive) return true;
   consoleBoundaryNavigationActive = true;
@@ -716,7 +717,10 @@ function handleSessionBoundary(status) {
   const loginTarget = isAdminConsole
     ? `/admin?return_url=${encodeURIComponent(returnUrl)}`
     : `/?login=1&return_url=${encodeURIComponent(returnUrl)}`;
-  window.location.replace(normalizedStatus === 428 ? passwordTarget : loginTarget);
+  const boundaryTarget = normalizedStatus === 428
+    ? (isAdminConsole && boundaryCode === "mfa_setup_required" ? "/admin.html#admin-account" : passwordTarget)
+    : loginTarget;
+  window.location.replace(boundaryTarget);
   return true;
 }
 
@@ -1341,7 +1345,12 @@ async function api(path, options = {}) {
   let data = {};
   try { data = text ? JSON.parse(text) : {}; } catch { data = { detail: text }; }
   if (!response.ok) {
-    handleSessionBoundary(response.status);
+    const boundaryCode = String(data?.detail?.code || data?.code || "").trim();
+    if (response.status === 428 && boundaryCode === "mfa_setup_required") {
+      handleSessionBoundary({ status: response.status, code: boundaryCode });
+    } else {
+      handleSessionBoundary(response.status);
+    }
     const detail = localizeConsoleMessage(data?.detail || data?.message || text || "", response.status);
     if (response.status === 429 && isDailyPublishLimitMessage(detail)) {
       let scheduledRequest = false;
