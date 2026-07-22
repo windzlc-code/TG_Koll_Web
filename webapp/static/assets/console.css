@@ -179,6 +179,19 @@ body {
 button, input, select, textarea { font: inherit; }
 button, a, input, select, textarea { border-radius: var(--radius); }
 
+.ui-action-icon,
+.ui-trash-icon,
+.ui-eye-icon,
+.ui-expand-icon,
+.ui-link-icon,
+.ui-replace-icon,
+.ui-undo-icon,
+.mobile-task-dock-icon {
+  display: block;
+  flex: 0 0 auto;
+  margin: 0;
+}
+
 .console-shell {
   display: grid;
   grid-template-columns: 304px minmax(0, 1fr);
@@ -16439,4 +16452,26 @@ body.console-page {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
+}
+
+/* Density rules above add text-button padding. Keep icon-only controls
+   centered at every breakpoint. */
+.console-page .console-shell :is(
+  .persona-memory-actions > button,
+  .persona-memory-delete,
+  .persona-hot-media-action
+) {
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  line-height: 0;
+}
+
+.console-page .console-shell :is(
+  .persona-memory-actions > button,
+  .persona-memory-delete,
+  .persona-hot-media-action
+) svg {
+  display: block;
+  margin: 0;
 }

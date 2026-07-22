@@ -274,6 +274,9 @@ html {
 .site-menu-toggle svg,
 .site-user svg,
 .site-account-popover svg {
+  display: block;
+  flex: 0 0 auto;
+  margin: 0;
   width: 18px;
   height: 18px;
   fill: none;

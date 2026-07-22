@@ -330,6 +330,25 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
                     markup,
                 )
 
+    def test_shared_svg_icons_keep_their_visual_center(self):
+        self.assertIn(
+            ".ui-action-icon,\n.ui-trash-icon,\n.ui-eye-icon,\n.ui-expand-icon,",
+            self.styles,
+        )
+        for declaration in ("display: block;", "flex: 0 0 auto;", "margin: 0;"):
+            with self.subTest(declaration=declaration):
+                self.assertIn(declaration, self.styles)
+                self.assertIn(declaration, self.navigation_styles)
+        self.assertIn('<path d="M6 6l1 14h10l1-14"></path>', self.console_script)
+        self.assertNotIn('<path d="M6 6l1 15h10l1-15"></path>', self.console_script)
+        self.assertIn(
+            ".persona-memory-actions > button,\n"
+            "  .persona-memory-delete,\n"
+            "  .persona-hot-media-action",
+            self.styles,
+        )
+        self.assertIn("place-items: center;\n  padding: 0;\n  line-height: 0;", self.styles)
+
     def test_full_refresh_scope_is_limited_to_visible_personas(self):
         user = {"id": 7}
         with mock.patch.object(
