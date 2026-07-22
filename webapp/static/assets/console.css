@@ -9006,6 +9006,17 @@ body.persona-touch-dragging .persona-list-card:active {
   }
 }
 
+@keyframes toastSlideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 @keyframes toastStateIn {
   from {
     opacity: 0;
@@ -9047,14 +9058,24 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .task-button-spinner {
-  width: 14px;
-  height: 14px;
-  flex: 0 0 14px;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
   fill: none;
   stroke: currentColor;
   stroke-width: 2;
   stroke-linecap: round;
   animation: task-button-spin .8s linear infinite;
+}
+
+.task-button-spinner circle {
+  stroke-opacity: .28;
+}
+
+.task-button-spinner path {
+  stroke: #79eed8;
+  stroke-width: 3;
+  filter: drop-shadow(0 0 2px rgba(121, 238, 216, .48));
 }
 
 .task-button-busy time {
@@ -14624,7 +14645,12 @@ body.console-page {
 
   .toast-host {
     right: max(12px, env(safe-area-inset-right));
-    bottom: max(12px, env(safe-area-inset-bottom));
+    top: calc(var(--site-header-height) + 12px);
+    bottom: auto;
+  }
+
+  .toast-message {
+    animation: toastSlideDown 180ms ease-out;
   }
 }
 
