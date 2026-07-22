@@ -8730,29 +8730,32 @@ function publishMobileSelectionItems(persona = selectedPersona(), source = state
   const rows = publishSourceRows(persona, cleanSource);
   const selectedIds = new Set(syncPublishSelectedPostIds(persona, cleanSource, rows));
   return rows
-    .map((post, index) => ({
-      id: String(post?.id || ""),
-      number: index + 1,
-      title: personaDraftDisplayTitleForPost(post, rows, index),
-    }))
-    .filter((item) => item.id && selectedIds.has(item.id));
+    .map((post, index) => ({ post, index, id: String(post?.id || "") }))
+    .filter((item) => item.id && selectedIds.has(item.id))
+    .map((item, publishIndex) => ({
+      id: item.id,
+      number: publishIndex + 1,
+      title: personaDraftDisplayTitleForPost(item.post, rows, item.index),
+    }));
 }
 
 function renderPublishMobileSelectionStrip(persona = selectedPersona(), mode = "publish_now") {
   if (normalizedPublishMode(mode) !== "publish_now") return "";
   const selectedItems = publishMobileSelectionItems(persona);
-  if (selectedItems.length < 2) return "";
+  if (!selectedItems.length) return "";
+  const activeId = String(state.publishPreviewPostId || selectedItems[0]?.id || "");
   return `
     <div class="publish-mobile-selection-strip" aria-label="已选发布内容">
       ${selectedItems.map((item) => `
-        <div class="publish-mobile-selection-chip">
+        <div class="publish-mobile-selection-chip ${item.id === activeId ? "is-active" : ""}">
           <button
             type="button"
             class="publish-mobile-selection-jump"
             data-publish-mobile-jump="${esc(item.id)}"
             title="${esc(`定位到第 ${item.number} 篇：${item.title}`)}"
             aria-label="${esc(`定位到第 ${item.number} 篇`)}"
-          ><span>${esc(item.number)}</span></button>
+            aria-pressed="${item.id === activeId ? "true" : "false"}"
+          ><span class="publish-mobile-selection-number">${esc(item.number)}</span></button>
           <button
             type="button"
             class="publish-mobile-selection-remove"
@@ -11309,6 +11312,11 @@ function syncPublishPreviewSelectionDom() {
   document.querySelectorAll("[data-publish-preview-post]").forEach((node) => {
     const active = String(node.dataset.publishPreviewPost || "") === String(activePost?.id || "");
     node.classList.toggle("is-active", active);
+    node.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+  document.querySelectorAll("[data-publish-mobile-jump]").forEach((node) => {
+    const active = String(node.dataset.publishMobileJump || "") === String(activePost?.id || "");
+    node.closest(".publish-mobile-selection-chip")?.classList.toggle("is-active", active);
     node.setAttribute("aria-pressed", active ? "true" : "false");
   });
   const card = document.querySelector(".publish-preview-card");

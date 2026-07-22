@@ -14,19 +14,21 @@ class MobilePublishActionDockTests(unittest.TestCase):
         self.assertIn('id="executeSimpleFlow"', SCRIPT)
         self.assertIn('renderPublishMobileSelectionStrip(selectedPersona(), publishModeForAction)', SCRIPT)
 
-    def test_multi_selection_renders_stable_source_numbers_and_remove_controls(self):
+    def test_selection_renders_publish_order_numbers_and_remove_controls(self):
         self.assertIn("function publishMobileSelectionItems", SCRIPT)
-        self.assertIn("number: index + 1", SCRIPT)
+        self.assertIn("number: publishIndex + 1", SCRIPT)
         self.assertIn('data-publish-mobile-jump="${esc(item.id)}"', SCRIPT)
         self.assertIn('data-publish-mobile-remove="${esc(item.id)}"', SCRIPT)
         self.assertIn('class="publish-mobile-selection-remove-icon"', SCRIPT)
-        self.assertIn("if (selectedItems.length < 2) return \"\"", SCRIPT)
+        self.assertIn("if (!selectedItems.length) return \"\"", SCRIPT)
+        self.assertIn('publish-mobile-selection-chip ${item.id === activeId ? "is-active" : ""}', SCRIPT)
 
     def test_sequence_actions_jump_and_remove_from_the_shared_selection(self):
         self.assertIn('document.querySelectorAll("[data-publish-mobile-jump]")', SCRIPT)
         self.assertIn("scrollIntoView({", SCRIPT)
         self.assertIn('document.querySelectorAll("[data-publish-mobile-remove]")', SCRIPT)
         self.assertIn("setPublishSelectedPostIds(persona, source, selected)", SCRIPT)
+        self.assertIn('node.closest(".publish-mobile-selection-chip")?.classList.toggle("is-active", active)', SCRIPT)
 
     def test_mobile_dock_is_fixed_above_the_existing_bottom_navigation(self):
         media = STYLES.split("@media (max-width: 760px)", 1)[1]
@@ -48,9 +50,23 @@ class MobilePublishActionDockTests(unittest.TestCase):
         remove_rule = re.search(r"\.publish-mobile-selection-remove\s*\{([^}]+)\}", STYLES)
         self.assertIsNotNone(remove_rule)
         self.assertIn("position: absolute", remove_rule.group(1))
-        self.assertIn("top: 3px", remove_rule.group(1))
-        self.assertIn("right: 3px", remove_rule.group(1))
+        self.assertIn("top: 2px", remove_rule.group(1))
+        self.assertIn("right: 2px", remove_rule.group(1))
         self.assertIn("stroke: currentColor", STYLES)
+
+    def test_sequence_strip_has_no_outer_card_and_active_chip_is_fully_highlighted(self):
+        mobile_strip = re.search(
+            r"\.module-panel\.is-publishing-module \.publish-mobile-selection-strip\s*\{([^}]+)\}",
+            STYLES,
+        )
+        self.assertIsNotNone(mobile_strip)
+        rule = mobile_strip.group(1)
+        self.assertIn("border: 0", rule)
+        self.assertIn("background: transparent", rule)
+        self.assertIn("box-shadow: none", rule)
+        active = re.search(r"\.publish-mobile-selection-chip\.is-active\s*\{([^}]+)\}", STYLES)
+        self.assertIsNotNone(active)
+        self.assertIn("background: var(--accent)", active.group(1))
 
     def test_sequence_strip_scrolls_horizontally_without_wrapping(self):
         self.assertRegex(
