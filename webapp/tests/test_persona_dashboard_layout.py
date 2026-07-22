@@ -208,6 +208,16 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn('.slice(0, 86) || "当前内容为空。"', self.console_script)
         self.assertNotIn('.slice(0, 170))}</p>', self.console_script)
 
+    def test_mobile_publish_persona_button_stays_below_site_header(self):
+        selector = ".module-panel.is-publishing-module .publish-header-actions > .persona-mobile-list-toggle"
+        start = self.styles.index(selector)
+        rule = self.styles[start:self.styles.index("\n  }", start) + 4]
+
+        self.assertIn("position: fixed;", rule)
+        self.assertIn("top: calc(var(--site-header-height) + 8px);", rule)
+        self.assertIn("right: max(18px, env(safe-area-inset-right, 0px));", rule)
+        self.assertIn("z-index: 130;", rule)
+
     def test_mobile_publish_preview_uses_number_only_square_tabs_without_body(self):
         self.assertIn(
             'class="publish-content-preview publish-content-preview--selection"',

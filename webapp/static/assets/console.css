@@ -15007,6 +15007,15 @@ body.console-page {
     display: inline-flex;
   }
 
+  .module-panel.is-publishing-module .publish-header-actions > .persona-mobile-list-toggle {
+    position: fixed;
+    z-index: 130;
+    top: calc(var(--site-header-height) + 8px);
+    right: max(18px, env(safe-area-inset-right, 0px));
+    margin: 0;
+    box-shadow: 0 6px 18px rgba(7, 17, 18, 0.12);
+  }
+
   .persona-mobile-drawer {
     position: fixed;
     z-index: 5200;
