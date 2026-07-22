@@ -730,32 +730,6 @@ button.primary,
   flex-wrap: wrap;
 }
 
-.billing-price-pill {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  min-height: auto;
-  margin-left: 8px;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: inherit;
-  font-size: 14px;
-  font-weight: 900;
-  line-height: 1.2;
-  white-space: nowrap;
-}
-
-button.primary .billing-price-pill {
-  background: transparent;
-}
-
-button:disabled .billing-price-pill {
-  opacity: 1;
-}
-
 .panel-head-actions {
   display: flex;
   align-items: center;
@@ -13561,21 +13535,6 @@ body.live-browser-modal-open {
     min-height: 34px;
     padding: 5px 9px;
     font-size: 13px;
-  }
-
-  .command-actions button:has(.billing-price-pill),
-  .row-actions button:has(.billing-price-pill) {
-    max-width: 100%;
-    flex-wrap: wrap;
-    justify-content: center;
-    column-gap: 5px;
-    row-gap: 3px;
-    line-height: 1.25;
-    white-space: normal;
-  }
-
-  .billing-price-pill {
-    margin-left: 2px;
   }
 
   .persona-list-actions:not(.persona-list-actions--bulk) {

@@ -74,77 +74,69 @@ class BillingFrontendContractTests(unittest.TestCase):
         self.assertIn('publishRemaining: "今日剩余发布额度"', self.site_navigation_script)
         self.assertIn('publishRemaining: "今日剩餘發布額度"', self.site_navigation_script)
 
-    def test_console_initialization_loads_action_prices_from_the_catalog(self):
-        loader = self.console_script[
-            self.console_script.index("async function loadBillingCatalog")
-            : self.console_script.index("function syncPersonaDashboardStyles")
-        ]
-        helper = self.console_script[
-            self.console_script.index("function billingCatalogAction")
-            : self.console_script.index("function billingCurrency")
-        ]
-        init = self.console_script[self.console_script.index("async function init()") :]
-        self.assertIn('api("/api/billing/catalog")', loader)
-        self.assertIn("await loadBillingCatalog()", init)
-        self.assertIn('billingRows(state.billing.catalog, ["actions"])', helper)
-        self.assertIn("Number(action?.points)", helper)
-        self.assertIn("unitPoints * normalizedQuantity", helper)
+    def test_charge_buttons_do_not_render_catalog_prices(self):
+        self.assertNotIn("renderBillingPricePill", self.console_script)
+        self.assertNotIn("billing-price-pill", self.console_script)
+        self.assertNotIn(".billing-price-pill", self.console_styles)
 
-    def test_price_pills_are_inside_charge_buttons_only(self):
-        required_pairs = (
-            ('data-persona-generate-image', 'renderBillingPricePill("ai_image")'),
-            ('data-persona-run-media-task', 'renderBillingPricePill("ai_image", mediaForm.imageCount'),
-            ('data-persona-generate-posts', 'renderBillingPricePill("basic_text_post", currentGenerateCount'),
-            ('data-persona-publish-submit', 'renderBillingPricePill(publishBillingSku(publishAccount))'),
-            ('data-persona-run-threads=', 'renderBillingPricePill("threads_auto_reply_batch")'),
-        )
-        for button_marker, price_marker in required_pairs:
-            with self.subTest(button=button_marker):
-                button_start = self.console_script.index(button_marker)
-                button_end = self.console_script.index("</button>", button_start)
-                self.assertIn(price_marker, self.console_script[button_start:button_end])
-
-        panel_start = self.console_script.rindex(
-            "function renderAccountPoolAutomationPanel"
-        )
-        account_button_start = self.console_script.index(
-            "data-account-pool-run-threads=",
-            panel_start,
-        )
-        account_button_end = self.console_script.index("</button>", account_button_start)
-        self.assertIn(
-            'renderBillingPricePill("threads_auto_reply_batch")',
-            self.console_script[account_button_start:account_button_end],
-        )
-
-        navigation_start = self.console_script.index('data-persona-generated-media="${esc(post.id)}"')
-        navigation_end = self.console_script.index("</button>", navigation_start)
-        self.assertNotIn("renderBillingPricePill", self.console_script[navigation_start:navigation_end])
-
-    def test_quantity_actions_show_estimated_totals_and_responsive_pills(self):
-        for input_id in ("personaGenerateCount", "personaMediaImageCount"):
-            self.assertIn(f'quantityInputId: "{input_id}"', self.console_script)
-        self.assertIn("matrixPublishRequestedCount()", self.console_script)
-        self.assertIn("publishBillingSku", self.console_script)
-        self.assertIn('"instagram_publish"', self.console_script)
-        self.assertIn("renderBillingPricePill(publishExecutionSku(publishModeForAction), publishQuantity", self.console_script)
-        self.assertIn('estimated ? "预计 " : ""', self.console_script)
-        self.assertIn(".billing-price-pill", self.console_styles)
-        self.assertIn("button:has(.billing-price-pill)", self.console_styles)
-        self.assertIn("@media (max-width: 720px)", self.console_styles)
-
-    def test_ai_keyword_create_and_profile_actions_show_catalog_price(self):
+    def test_charge_button_markup_has_no_price_text(self):
         for button_marker in (
+            "data-persona-regenerate-profile-content",
+            "data-persona-generate-image",
+            "data-persona-run-media-task",
+            "data-persona-generate-posts",
+            "data-persona-publish-submit",
+            "data-persona-run-threads=",
+            "data-account-pool-run-threads=",
             "data-persona-create-ai-keywords",
             "data-persona-create-ai-submit",
-            "data-persona-regenerate-profile-content",
+            'id="executeSimpleFlow"',
         ):
             with self.subTest(button=button_marker):
                 button_start = self.console_script.index(button_marker)
                 button_end = self.console_script.index("</button>", button_start)
+                button_markup = self.console_script[button_start:button_end]
+                self.assertNotIn(" 点", button_markup)
+                self.assertNotIn("预计", button_markup)
+
+    def test_completed_billing_receipts_use_the_shared_message_path(self):
+        helper = self.console_script[
+            self.console_script.index("function billingChargeMessage")
+            : self.console_script.index("function billingCurrency")
+        ]
+        self.assertIn("charged_points", helper)
+        self.assertIn("free_images_used", helper)
+        self.assertIn("withBillingChargeMessage", helper)
+        self.assertIn("已扣除", helper)
+        self.assertIn("已使用", helper)
+
+        social = self.console_script[
+            self.console_script.index("function socialTaskToastMessage")
+            : self.console_script.index("function syncSocialTaskToast")
+        ]
+        self.assertIn("withBillingChargeMessage", social)
+        self.assertIn('status === "success"', social)
+
+        watcher = self.console_script[
+            self.console_script.index("function watchTask")
+            : self.console_script.index("async function submitPersonaPublishTask")
+        ]
+        self.assertIn("syncTaskBillingToast", watcher)
+        self.assertIn("withBillingChargeMessage", watcher)
+
+    def test_direct_billable_actions_append_actual_charge_to_success_message(self):
+        for endpoint in (
+            "/api/persona_dashboard/personas/ai_profile",
+            "/api/persona_dashboard/personas/ai_keywords",
+            "/api/persona_dashboard/personas/ai_create",
+            "/generate_posts",
+        ):
+            with self.subTest(endpoint=endpoint):
+                endpoint_start = self.console_script.index(endpoint)
+                endpoint_end = min(len(self.console_script), endpoint_start + 2400)
                 self.assertIn(
-                    'renderBillingPricePill("basic_text_post")',
-                    self.console_script[button_start:button_end],
+                    "withBillingChargeMessage",
+                    self.console_script[endpoint_start:endpoint_end],
                 )
 
 

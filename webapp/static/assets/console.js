@@ -1,4 +1,4 @@
-﻿const $ = (id) => document.getElementById(id);
+const $ = (id) => document.getElementById(id);
 const THEME_STORAGE_KEY = "wk-console-theme";
 const LANGUAGE_STORAGE_KEY = "wk-console-language";
 const PERSONA_LIST_PAGE_SIZE_KEY = "wk-persona-list-page-size";
@@ -4294,7 +4294,7 @@ function socialTaskToastMessage(task) {
   const suffix = accountLabel ? ` · ${accountLabel}` : "";
   const status = socialTaskPresentationStatus(task);
   if (isFutureScheduledSocialTask(task)) return `${typeLabel}定时等待${suffix} · 计划 ${formatScheduledTime(task.scheduled_at)}`;
-  if (status === "success") return `${typeLabel}已完成${suffix}`;
+  if (status === "success") return withBillingChargeMessage(`${typeLabel}已完成${suffix}`, task);
   if (status === "failed") return `${typeLabel}执行失败${suffix}`;
   if (status === "cancelled") return `${typeLabel}已取消${suffix}`;
   if (status === "need_manual") return `${typeLabel}需要人工处理${suffix}`;
@@ -4911,44 +4911,27 @@ function billingRows(payload, keys = []) {
   return [];
 }
 
-function billingCatalogAction(sku) {
-  const cleanSku = String(sku || "").trim();
-  if (!cleanSku) return null;
-  return billingRows(state.billing.catalog, ["actions"]).find((item) => String(item?.sku || "").trim() === cleanSku) || null;
+function billingChargeMessage(payload = {}) {
+  const source = billingObject(payload);
+  const receipt = billingObject(source.billing || source.data?.billing || source.task?.billing);
+  const status = String(receipt.status || "").trim().toLowerCase();
+  if (status && status !== "settled") return "";
+  const chargedPoints = Number(receipt.charged_points || 0);
+  const freeImagesUsed = Number(receipt.free_images_used || 0);
+  const details = [];
+  if (Number.isFinite(chargedPoints) && chargedPoints > 0) {
+    details.push(`已扣除 ${chargedPoints.toLocaleString("zh-CN", { maximumFractionDigits: 6 })} 点算力`);
+  }
+  if (Number.isFinite(freeImagesUsed) && freeImagesUsed > 0) {
+    details.push(`已使用 ${freeImagesUsed.toLocaleString("zh-CN")} 张图片额度`);
+  }
+  return details.join("，");
 }
 
-function billingActionPriceLabel(sku, quantity = 1, { estimated = false } = {}) {
-  const action = billingCatalogAction(sku);
-  const unitPoints = Number(action?.points);
-  const normalizedQuantity = Math.max(0, Number(quantity || 0));
-  if (!action || !Number.isFinite(unitPoints) || normalizedQuantity <= 0) return "";
-  const total = unitPoints * normalizedQuantity;
-  const formatted = total.toLocaleString("zh-CN", { maximumFractionDigits: 6 });
-  return `${estimated ? "预计 " : ""}${formatted} 点`;
-}
-
-function renderBillingPricePill(sku, quantity = 1, { estimated = false, quantityInputId = "" } = {}) {
-  const label = billingActionPriceLabel(sku, quantity, { estimated });
-  if (!label) return "";
-  const action = billingCatalogAction(sku);
-  const normalizedQuantity = Math.max(0, Number(quantity || 0));
-  const unitPoints = Number(action?.points || 0);
-  const title = estimated
-    ? `${action?.name || sku}：${normalizedQuantity} × ${unitPoints.toLocaleString("zh-CN", { maximumFractionDigits: 6 })} 点`
-    : `${action?.name || sku}：${label}`;
-  return `<span class="billing-price-pill" data-billing-price-sku="${esc(sku)}" data-billing-price-quantity="${esc(normalizedQuantity)}" data-billing-price-estimated="${estimated ? "true" : "false"}"${quantityInputId ? ` data-billing-price-quantity-input="${esc(quantityInputId)}"` : ""} title="${esc(title)}">${esc(label)}</span>`;
-}
-
-function updateBillingPricePills(root = document) {
-  root?.querySelectorAll?.("[data-billing-price-sku]").forEach((pill) => {
-    const quantityInputId = String(pill.dataset.billingPriceQuantityInput || "").trim();
-    const quantity = quantityInputId
-      ? Number($(quantityInputId)?.value || 0)
-      : Number(pill.dataset.billingPriceQuantity || 0);
-    const estimated = pill.dataset.billingPriceEstimated === "true";
-    const label = billingActionPriceLabel(pill.dataset.billingPriceSku, quantity, { estimated });
-    if (label) pill.textContent = label;
-  });
+function withBillingChargeMessage(message, payload = {}) {
+  const base = String(message || "").trim();
+  const charge = billingChargeMessage(payload);
+  return charge ? `${base} · ${charge}` : base;
 }
 
 function billingCurrency(item = {}, root = {}) {
@@ -7258,7 +7241,7 @@ function renderPersonaProfileIdentity(persona, profile) {
       <div class="persona-profile-intro-actions ${isContentEditing ? "is-editing" : "is-viewing"}">
         <div class="row-actions persona-profile-intro-view"><button type="button" data-persona-edit-content>编辑简介</button></div>
         <div class="row-actions persona-profile-intro-edit">
-          <button type="button" data-persona-regenerate-profile-content aria-busy="${busy ? "true" : "false"}" ${isContentEditing && !busy ? "" : "disabled"}>${renderBusyButtonContent("AI 重新生成", busy)}${renderBillingPricePill("basic_text_post")}</button>
+          <button type="button" data-persona-regenerate-profile-content aria-busy="${busy ? "true" : "false"}" ${isContentEditing && !busy ? "" : "disabled"}>${renderBusyButtonContent("AI 重新生成", busy)}</button>
           <button type="button" class="primary" data-persona-save-profile>保存简介</button>
           <button type="button" data-persona-cancel-profile-edit>取消</button>
         </div>
@@ -7314,7 +7297,7 @@ function renderPersonaImagePanel(persona, { embedded = false } = {}) {
           <span class="persona-panel-intro">当前没有可用人设图，请先重新生成。</span>
         </div>
         <div class="row-actions">
-          <button type="button" class="primary" data-persona-generate-image ${imageBusy ? "disabled" : ""}>${renderBusyButtonContent("重新生成人设图", imageBusy, imageBusyStartedAt)}${renderBillingPricePill("ai_image")}</button>
+          <button type="button" class="primary" data-persona-generate-image ${imageBusy ? "disabled" : ""}>${renderBusyButtonContent("重新生成人设图", imageBusy, imageBusyStartedAt)}</button>
         </div>
       </div>`;
   }
@@ -7325,7 +7308,7 @@ function renderPersonaImagePanel(persona, { embedded = false } = {}) {
         <span class="persona-panel-intro">${esc(imageIntro)}</span>
       </div>
       <div class="row-actions">
-        <button type="button" class="primary" data-persona-generate-image ${imageBusy ? "disabled" : ""}>${renderBusyButtonContent(generateLabel, imageBusy, imageBusyStartedAt)}${renderBillingPricePill("ai_image")}</button>
+        <button type="button" class="primary" data-persona-generate-image ${imageBusy ? "disabled" : ""}>${renderBusyButtonContent(generateLabel, imageBusy, imageBusyStartedAt)}</button>
         <input id="personaImageUploadFile" type="file" accept=".png,.jpg,.jpeg,.webp,.bmp,.gif,.tif,.tiff,.heic" data-persona-upload-image-file hidden />
       </div>
       <div class="persona-inline-panel persona-inline-panel--nested">
@@ -8002,7 +7985,7 @@ function renderUnifiedAutomationModule() {
         ` : ""}
         ${personaThreadsStrategyDetail(strategyGroup)}
         <div class="row-actions">
-          <button type="button" data-persona-run-threads="${currentStep === "reply_hot" ? "reply_hot" : "reply_comment"}" aria-busy="${replyBusy ? "true" : "false"}" ${selectedAccount && !replyBusy ? "" : "disabled"}>${replyBusy ? renderBusyButtonContent("自动回复执行中", true, replyBusyStartedAt) : "提交自动回复任务"}${renderBillingPricePill("threads_auto_reply_batch")}</button>
+          <button type="button" data-persona-run-threads="${currentStep === "reply_hot" ? "reply_hot" : "reply_comment"}" aria-busy="${replyBusy ? "true" : "false"}" ${selectedAccount && !replyBusy ? "" : "disabled"}>${replyBusy ? renderBusyButtonContent("自动回复执行中", true, replyBusyStartedAt) : "提交自动回复任务"}</button>
         </div>
       </div>`;
   } else {
@@ -8493,41 +8476,6 @@ function selectedPublishPosts(persona = selectedPersona(), source = state.publis
   const rows = publishSourceRows(persona, source);
   const selected = new Set(syncPublishSelectedPostIds(persona, source, rows));
   return rows.filter((post) => selected.has(String(post.id || "")));
-}
-
-function matrixPublishRequestedCount() {
-  const source = state.matrixPublish.source || "posts";
-  const perPersonaCount = Math.min(Math.max(Number(state.matrixPublish.perPersonaCount || 1), 1), 20);
-  return matrixPublishSelectedIds().reduce((total, personaId) => {
-    const persona = state.personas.find((item) => String(item.id || "") === String(personaId || ""));
-    if (!persona) return total;
-    const available = publishSourceRows(persona, source).filter((post) => (
-      String(post?.id || "").trim()
-      && !String(post?.publishedAt || post?.published_at || "").trim()
-      && (String(post?.content || "").trim() || (Array.isArray(post?.media_items) && post.media_items.length))
-    )).length;
-    return total + Math.min(available, perPersonaCount);
-  }, 0);
-}
-
-function publishExecutionQuantity(publishMode = normalizedPublishMode(state.simpleBranches.publishing)) {
-  if (publishMode === "matrix_start") return matrixPublishRequestedCount();
-  const source = normalizePublishContentSource();
-  if (source === "custom") return 1;
-  const persona = selectedPersona();
-  return persona ? selectedPublishPosts(persona, source).length : 0;
-}
-
-function publishBillingSku(accountOrPlatform = "") {
-  const platform = typeof accountOrPlatform === "object"
-    ? String(accountOrPlatform?.platform || "")
-    : String(accountOrPlatform || "");
-  return platform.trim().toLowerCase() === "instagram" ? "instagram_publish" : "threads_text_publish";
-}
-
-function publishExecutionSku(publishMode = normalizedPublishMode(state.simpleBranches.publishing)) {
-  if (publishMode === "matrix_start") return publishBillingSku(state.matrixPublish.platform || "threads");
-  return publishBillingSku(publishAccountForPersona(selectedPersona()));
 }
 
 function activePublishPreviewPost(posts = []) {
@@ -9318,11 +9266,7 @@ function renderSimpleFlowModule(moduleId) {
   const actionLabel = moduleId === "queue" ? "打开任务队列" : (moduleId === "publishing" && publishModeForAction === "matrix_start" ? "提交矩阵发布" : "确认执行");
   const actionBusy = Boolean(state.simpleFlowPending && state.simpleFlowPendingModule === moduleId);
   const actionBlocked = Boolean(state.simpleFlowPending && !actionBusy);
-  const publishQuantity = moduleId === "publishing" ? publishExecutionQuantity(publishModeForAction) : 0;
-  const actionPrice = moduleId === "publishing"
-    ? renderBillingPricePill(publishExecutionSku(publishModeForAction), publishQuantity, { estimated: publishQuantity > 1 })
-    : "";
-  const actionHtml = moduleId === "automation" || publishModeForAction === "publish_history" ? "" : `<div class="command-actions ${moduleId === "publishing" ? "publish-command-actions" : ""}"><button id="executeSimpleFlow" type="button" class="primary" aria-busy="${actionBusy ? "true" : "false"}" ${moduleId === "publishing" ? dailyPublishActionAttrs() : ""} ${actionBusy || actionBlocked ? "disabled" : ""}>${actionBusy ? renderBusyButtonContent(`${actionLabel}中`, true, state.simpleFlowPendingStartedAt) : (actionBlocked ? "其他任务执行中" : (moduleId === "publishing" && dailyPublishIsLocked() ? "今日发布已锁定" : esc(actionLabel)))}${actionPrice}</button></div>`;
+  const actionHtml = moduleId === "automation" || publishModeForAction === "publish_history" ? "" : `<div class="command-actions ${moduleId === "publishing" ? "publish-command-actions" : ""}"><button id="executeSimpleFlow" type="button" class="primary" aria-busy="${actionBusy ? "true" : "false"}" ${moduleId === "publishing" ? dailyPublishActionAttrs() : ""} ${actionBusy || actionBlocked ? "disabled" : ""}>${actionBusy ? renderBusyButtonContent(`${actionLabel}中`, true, state.simpleFlowPendingStartedAt) : (actionBlocked ? "其他任务执行中" : (moduleId === "publishing" && dailyPublishIsLocked() ? "今日发布已锁定" : esc(actionLabel)))}</button></div>`;
   $("moduleBody").innerHTML = `
     ${moduleId === "publishing" ? renderDailyPublishLimitBanner() : ""}
     ${body}
@@ -9732,6 +9676,19 @@ function syncWatchingTaskChip(taskId = "") {
   chip.hidden = false;
 }
 
+async function syncTaskBillingToast(taskId, message, options = {}, payload = {}) {
+  let detail = payload;
+  try {
+    detail = await api(`/api/tasks/${encodeURIComponent(taskId)}`);
+  } catch {}
+  appendEvent("success", withBillingChargeMessage(message, detail), {
+    key: `task:${taskId}`,
+    taskId,
+    taskPanel: options.taskPanel || "regular",
+  });
+  return detail;
+}
+
 function watchTask(taskId, options = {}) {
   if (state.events) state.events.close();
   const suppressDisconnectWarning = Boolean(options.suppressDisconnectWarning);
@@ -9764,11 +9721,19 @@ function watchTask(taskId, options = {}) {
     const taskError = eventKind === "failed"
       ? String(payload?.data?.error || payload?.error || "").trim()
       : "";
-    appendEvent(eventKind, taskError || payload.message || payload.detail || eventKind, {
+    const eventMessage = taskError || payload.message || payload.detail || eventKind;
+    const toastOptions = {
       key: `task:${taskId}`,
       taskId,
       taskPanel: options.taskPanel || "regular",
-    });
+    };
+    if (eventKind === "success") {
+      syncTaskBillingToast(taskId, eventMessage, options, payload).catch(() => {
+        appendEvent("success", eventMessage, toastOptions);
+      });
+    } else {
+      appendEvent(eventKind, eventMessage, toastOptions);
+    }
     if (["success", "failed", "cancelled"].includes(eventKind)) {
       settleTask(payload, eventKind);
     }
@@ -9788,7 +9753,8 @@ function watchTask(taskId, options = {}) {
       const taskStatus = String(task?.status || "").trim();
       if (["success", "failed", "cancelled"].includes(taskStatus)) {
         const taskError = taskStatus === "failed" ? String(task?.error || task?.detail || "").trim() : "";
-        appendEvent(taskStatus, taskError || task?.message || `任务已${taskStatus === "success" ? "完成" : "结束"}。`, {
+        const terminalMessage = taskError || task?.message || `任务已${taskStatus === "success" ? "完成" : "结束"}。`;
+        appendEvent(taskStatus, taskStatus === "success" ? withBillingChargeMessage(terminalMessage, task) : terminalMessage, {
           key: `task:${taskId}`,
           taskId,
           taskPanel: options.taskPanel || "regular",
@@ -10165,7 +10131,7 @@ async function regeneratePersonaProfileContent() {
       return;
     }
     state.personaProfileEditDrafts[String(persona.id)] = { field: "content", name, content: nextContent };
-    showMsg("commandMsg", "简介已重新生成并回填，请确认后保存。", true);
+    showMsg("commandMsg", withBillingChargeMessage("简介已重新生成并回填，请确认后保存。", result), true);
   } finally {
     state.personaCreateBusy.profileContent = false;
     if (isPersonaWorkspaceModule()) renderPersonaDetail();
@@ -12968,7 +12934,7 @@ async function suggestPersonaCreateKeywords() {
     createState.aiSelectedKeywords = [];
     createState.aiResult = null;
     renderPersonaDetail();
-    showMsg("commandMsg", "已提炼出人设方向关键词。", true);
+    showMsg("commandMsg", withBillingChargeMessage("已提炼出人设方向关键词。", result), true);
   } catch (error) {
     if (error?.name === "AbortError" || error?.status === 499) {
       showMsg("commandMsg", "已取消关键词提炼。", true);
@@ -13037,7 +13003,7 @@ async function createPersonaArchiveWithAi() {
       await loadPersonaProfile(createState.aiResult.id, { force: true }).catch(() => {});
     }
     renderPersonaDetail();
-    showMsg("commandMsg", `AI 人设已创建：${createState.aiResult.name || "-"}`, true);
+    showMsg("commandMsg", withBillingChargeMessage(`AI 人设已创建：${createState.aiResult.name || "-"}`, result), true);
   } finally {
     state.personaCreateBusy.aiCreate = false;
     if (state.personaCreateMode) renderPersonaDetail();
@@ -13203,9 +13169,12 @@ async function generatePersonaDraftPosts() {
     setPersonaGenerateRunState(persona.id, {
       kind: isRewriteRun ? "rewrite" : "draft",
       status: "success",
-      message: isRewriteRun
-        ? `已重写生成 ${result.generated_count || generatedPosts.length || 0} 条推文候选`
-        : `已生成 ${result.generated_count || generatedPosts.length || 0} 条图文草稿`,
+      message: withBillingChargeMessage(
+        isRewriteRun
+          ? `已重写生成 ${result.generated_count || generatedPosts.length || 0} 条推文候选`
+          : `已生成 ${result.generated_count || generatedPosts.length || 0} 条图文草稿`,
+        result,
+      ),
       generatedCount: result.generated_count || generatedPosts.length || 0,
       posts: generatedPosts,
       postIds: Array.from(generatedIds),
@@ -15396,7 +15365,7 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
               hint: mediaMeta.files || "拖动任务需要的素材到这里，或点击选择。",
             }) : ""}
             <div class="row-actions">
-              <button type="button" class="primary" data-persona-run-media-task ${mediaBusy ? "disabled" : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, mediaBusyStartedAt) : "生成预览"}${renderBillingPricePill("ai_image", mediaForm.imageCount, { estimated: true, quantityInputId: "personaMediaImageCount" })}</button>
+              <button type="button" class="primary" data-persona-run-media-task ${mediaBusy ? "disabled" : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, mediaBusyStartedAt) : "生成预览"}</button>
             </div>
             <div class="persona-inline-panel persona-inline-panel--nested">
               <strong>任务结果预览</strong>
@@ -15638,7 +15607,7 @@ function renderPersonaCreateWorkbench() {
         </label>
         ${createState.aiStep === "input" ? `
           <div class="row-actions">
-            <button type="button" class="primary" data-persona-create-ai-keywords aria-busy="${aiKeywordsBusy ? "true" : "false"}" ${anyCreateBusy ? "disabled" : ""}>${aiKeywordsBusy ? "正在提炼关键词..." : (anyCreateBusy ? `${busyLabel}中` : "下一步：提炼关键词")}${renderBillingPricePill("basic_text_post")}</button>
+            <button type="button" class="primary" data-persona-create-ai-keywords aria-busy="${aiKeywordsBusy ? "true" : "false"}" ${anyCreateBusy ? "disabled" : ""}>${aiKeywordsBusy ? "正在提炼关键词..." : (anyCreateBusy ? `${busyLabel}中` : "下一步：提炼关键词")}</button>
             ${aiKeywordsBusy ? `<button type="button" data-persona-create-ai-cancel-keywords>取消</button>` : ""}
           </div>
         ` : `
@@ -15656,7 +15625,7 @@ function renderPersonaCreateWorkbench() {
             <div class="persona-create-actions">
               <button type="button" data-persona-create-ai-back ${aiCreateBusy ? "disabled" : ""}>返回修改提示词</button>
               <button type="button" data-persona-create-ai-clear ${aiSelectedKeywords.length && !aiCreateBusy ? "" : "disabled"}>清空选择</button>
-              <button type="button" class="primary" data-persona-create-ai-submit aria-busy="${aiCreateBusy ? "true" : "false"}" ${anyCreateBusy ? "disabled" : ""}>${aiCreateBusy ? "正在生成人设..." : (anyCreateBusy ? `${busyLabel}中` : "确认并生成人设")}${renderBillingPricePill("basic_text_post")}</button>
+              <button type="button" class="primary" data-persona-create-ai-submit aria-busy="${aiCreateBusy ? "true" : "false"}" ${anyCreateBusy ? "disabled" : ""}>${aiCreateBusy ? "正在生成人设..." : (anyCreateBusy ? `${busyLabel}中` : "确认并生成人设")}</button>
             </div>
           </div>
           ${resultMarkup}
@@ -16341,7 +16310,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
           <label>可选人设记忆（已识别 ${esc(memoryRows.length)} 条）</label>
           ${renderPersonaMemoryOptions(persona, generateForm.selectedMemoryIds || [])}
           <div class="row-actions">
-            <button type="button" class="primary" data-persona-generate-posts ${preflight.ready && !generateBusy ? "" : "disabled"}>${generateBusy ? renderBusyButtonContent(isRewriteMode ? "正在重写推文" : "正在生成草稿", true, actionLockStartedAt("persona", persona.id, "generate_posts")) : (isRewriteMode ? "AI 重写推文" : "自动生成草稿")}${renderBillingPricePill("basic_text_post", currentGenerateCount, { estimated: true, quantityInputId: "personaGenerateCount" })}</button>
+            <button type="button" class="primary" data-persona-generate-posts ${preflight.ready && !generateBusy ? "" : "disabled"}>${generateBusy ? renderBusyButtonContent(isRewriteMode ? "正在重写推文" : "正在生成草稿", true, actionLockStartedAt("persona", persona.id, "generate_posts")) : (isRewriteMode ? "AI 重写推文" : "自动生成草稿")}</button>
             ${isRewriteMode ? "" : `<button type="button" data-persona-route-step="content:posts">查看草稿</button>`}
           </div>
         `}
@@ -16458,7 +16427,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
                   hint: mediaMeta.files || "拖动任务需要的素材到这里，或点击选择。",
                 }) : ""}
                 <div class="row-actions">
-                  <button type="button" class="primary" data-persona-run-media-task aria-busy="${mediaBusy ? "true" : "false"}" ${mediaBusy ? "disabled" : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, mediaBusyStartedAt) : "生成预览"}${renderBillingPricePill("ai_image", mediaForm.imageCount, { estimated: true, quantityInputId: "personaMediaImageCount" })}</button>
+                  <button type="button" class="primary" data-persona-run-media-task aria-busy="${mediaBusy ? "true" : "false"}" ${mediaBusy ? "disabled" : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, mediaBusyStartedAt) : "生成预览"}</button>
                 </div>
               </div>
               <div class="persona-inline-panel persona-inline-panel--nested">
@@ -16555,7 +16524,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
         ${personaPublishPreview(selectedPost)}
         ${renderUploadDropzone("personaPublishFiles", { label: "发布素材", hint: publishHint || "拖动图片或视频到这里，或点击选择。" })}
         <div class="row-actions">
-          <button type="button" class="primary" data-persona-publish-submit ${dailyPublishActionAttrs()} ${(publishCanSubmit && selectedPost && !publishBusy) ? "" : "disabled"}>${dailyPublishIsLocked() ? "今日发布已锁定" : (publishWaitsForManualLogin ? "等待人工验证" : (publishBusy ? renderBusyButtonContent("发布任务执行中", true, publishBusyStartedAt) : "发布内容"))}${renderBillingPricePill(publishBillingSku(publishAccount))}</button>
+          <button type="button" class="primary" data-persona-publish-submit ${dailyPublishActionAttrs()} ${(publishCanSubmit && selectedPost && !publishBusy) ? "" : "disabled"}>${dailyPublishIsLocked() ? "今日发布已锁定" : (publishWaitsForManualLogin ? "等待人工验证" : (publishBusy ? renderBusyButtonContent("发布任务执行中", true, publishBusyStartedAt) : "发布内容"))}</button>
         </div>
         <div id="personaPublishResult">${publishResult || `<div class="empty-state">提交后，这里会显示任务状态、截图和发布结果。</div>`}</div>
       </div>`;
@@ -17519,7 +17488,7 @@ function renderAccountPoolAutomationPanel(selectedAccount) {
           </label>
         ` : accountPoolStrategyParamSummary(strategyGroup)}
         <div class="row-actions">
-          <button type="button" data-account-pool-run-threads="${esc(mode)}" aria-busy="${busy ? "true" : "false"}" ${busy ? "disabled" : ""}>${busy ? "任务执行中" : "提交自动化任务"}${renderBillingPricePill("threads_auto_reply_batch")}</button>
+          <button type="button" data-account-pool-run-threads="${esc(mode)}" aria-busy="${busy ? "true" : "false"}" ${busy ? "disabled" : ""}>${busy ? "任务执行中" : "提交自动化任务"}</button>
         </div>
       </div>`;
   } else {
@@ -22260,7 +22229,6 @@ function bindEvents() {
   $("moduleBody").addEventListener("input", (event) => {
     if (["personaGenerateCount", "personaMediaImageCount"].includes(event.target?.id || "")) {
       snapshotPersonaCurrentForm();
-      updateBillingPricePills($("moduleBody"));
       renderConfirmSummary();
       return;
     }
