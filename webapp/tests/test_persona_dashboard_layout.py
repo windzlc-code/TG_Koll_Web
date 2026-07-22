@@ -210,6 +210,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('content_override: publishContentForPost(post, persona)', self.console_script)
         self.assertIn('if (state.activeModule === "publishing") renderSimpleFlowModule("publishing");', self.console_script)
         self.assertIn(".publish-link-settings {", self.styles)
+        self.assertIn('<span class="publish-link-settings-label">链接模板</span>', self.console_script)
+        self.assertNotIn('<span class="publish-link-settings-label">临时链接</span>', self.console_script)
 
     def test_link_settings_support_real_enable_disable_and_keep_mobile_header_visible(self):
         self.assertIn('data-persona-activate-preset-id="${esc(presetId)}"', self.console_script)
@@ -231,6 +233,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             ".console-modal-dialog.persona-link-settings-modal {\n  width: min(860px, calc(100vw - 32px));\n  grid-template-rows: auto auto minmax(0, 1fr);",
             self.styles,
         )
+        self.assertIn("grid-template-areas:\n      \"index name status actions\"\n      \"url url ending ending\";", self.styles)
+        self.assertIn(".persona-link-list-panel {\n    height: auto;\n    max-height: none;", self.styles)
 
     def test_mobile_task_dock_is_flush_with_the_viewport(self):
         self.assertIn('content="width=device-width, initial-scale=1.0, viewport-fit=cover"', self.markup)

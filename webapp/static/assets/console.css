@@ -13173,11 +13173,71 @@ body.live-browser-modal-open {
   }
 
   .persona-link-row {
-    grid-template-columns: 1fr;
+    grid-template-columns: 24px minmax(64px, 1fr) auto auto;
+    grid-template-areas:
+      "index name status actions"
+      "url url ending ending";
+    gap: 5px 7px;
+    padding: 8px;
   }
 
   .persona-link-actions {
-    grid-template-columns: repeat(2, 54px);
+    grid-area: actions;
+    display: flex;
+    gap: 4px;
+  }
+
+  .persona-link-list-panel {
+    height: auto;
+    max-height: none;
+    padding: 10px;
+    gap: 8px;
+  }
+
+  .persona-link-table {
+    gap: 6px;
+    max-height: none;
+    overflow: visible;
+    padding: 0;
+  }
+
+  .persona-link-index {
+    grid-area: index;
+  }
+
+  .persona-link-name {
+    grid-area: name;
+  }
+
+  .persona-link-url {
+    grid-area: url;
+  }
+
+  .persona-link-ending {
+    grid-area: ending;
+  }
+
+  .persona-link-status {
+    grid-area: status;
+  }
+
+  .persona-link-ending,
+  .persona-link-url {
+    font-size: 12px;
+  }
+
+  .persona-link-status .module-chip {
+    padding: 3px 7px;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .persona-link-actions button {
+    width: auto;
+    min-width: 44px;
+    min-height: 30px;
+    padding: 4px 7px;
+    font-size: 12px;
   }
 
   .persona-draft-table-head,

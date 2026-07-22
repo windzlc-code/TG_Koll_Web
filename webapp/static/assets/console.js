@@ -6746,7 +6746,7 @@ function renderPublishLinkSettings(persona = selectedPersona()) {
     : "当前未启用发布链接";
   return `
     <div class="publish-link-settings">
-      <span class="publish-link-settings-label">临时链接</span>
+      <span class="publish-link-settings-label">链接模板</span>
       <span class="publish-link-settings-copy">
         <strong>${esc(preset?.name || "不添加链接")}</strong>
         <small title="${esc(summary)}">${esc(summary)}</small>
@@ -6823,9 +6823,9 @@ function renderPersonaLinkPresetTable(profile, presets, selectedPresetId) {
               <div class="persona-link-cell persona-link-name" role="cell">
                 <strong>${esc(item.name || presetId || "链接模板")}</strong>
               </div>
-              <div class="persona-link-cell" role="cell">${item.link_url ? `<a href="${esc(item.link_url)}" target="_blank" rel="noreferrer">${esc(item.link_url)}</a>` : `<span class="muted">未填写</span>`}</div>
+              <div class="persona-link-cell persona-link-url" role="cell">${item.link_url ? `<a href="${esc(item.link_url)}" target="_blank" rel="noreferrer">${esc(item.link_url)}</a>` : `<span class="muted">未填写</span>`}</div>
               <div class="persona-link-cell persona-link-ending" role="cell">${esc(item.ending_text || "未填写")}</div>
-              <div class="persona-link-cell" role="cell">
+              <div class="persona-link-cell persona-link-status" role="cell">
                 <span class="module-chip ${isActive ? "is-dark" : ""}">${statusLabel}</span>
               </div>
               <div class="persona-link-actions" role="cell">
