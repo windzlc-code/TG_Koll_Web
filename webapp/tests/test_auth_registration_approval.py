@@ -334,7 +334,7 @@ class RegistrationApprovalTests(unittest.TestCase):
     def test_console_requires_login(self):
         response = TestClient(self.app).get("/console.html", follow_redirects=False)
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.headers["location"], "/login.html")
+        self.assertEqual(response.headers["location"], "/login.html?return_url=%2Fconsole.html")
 
     def test_admin_can_reset_user_password_and_revoke_existing_sessions(self):
         admin = TestClient(self.app)
@@ -430,7 +430,10 @@ class RegistrationApprovalTests(unittest.TestCase):
         self.assertTrue(temporary_client.get("/api/me").json()["must_change_password"])
         restricted_console = temporary_client.get("/console.html", follow_redirects=False)
         self.assertEqual(restricted_console.status_code, 302)
-        self.assertEqual(restricted_console.headers["location"], "/change-password.html")
+        self.assertEqual(
+            restricted_console.headers["location"],
+            "/change-password.html?return_url=%2Fconsole.html",
+        )
         self.assertEqual(temporary_client.get("/change-password.html").status_code, 200)
         blocked = temporary_client.get("/api/persona_dashboard/overview")
         self.assertEqual(blocked.status_code, 428, blocked.text)
@@ -863,6 +866,18 @@ class RegistrationApprovalTests(unittest.TestCase):
         self.assertEqual(admin_logout.status_code, 200, admin_logout.text)
         self.assertEqual(browser.get("/api/me").json()["username"], "guest001")
         self.assertEqual(browser.get("/api/me", headers={"X-Admin-Console": "1"}).status_code, 401)
+        explicit_admin_console = browser.get("/console.html?admin_console=1", follow_redirects=False)
+        explicit_admin_profile = browser.get("/profile.html?admin_console=1", follow_redirects=False)
+        self.assertEqual(explicit_admin_console.status_code, 302, explicit_admin_console.text)
+        self.assertEqual(
+            explicit_admin_console.headers["location"],
+            "/admin?return_url=%2Fconsole.html%3Fadmin_console%3D1",
+        )
+        self.assertEqual(explicit_admin_profile.status_code, 302, explicit_admin_profile.text)
+        self.assertEqual(
+            explicit_admin_profile.headers["location"],
+            "/admin?return_url=%2Fprofile.html%3Fadmin_console%3D1",
+        )
 
     def test_session_cookie_kind_must_match_persisted_session_kind(self):
         applicant = TestClient(self.app)
@@ -1063,7 +1078,7 @@ class RegistrationApprovalTests(unittest.TestCase):
         stale_browser = TestClient(self.app, cookies={"session_token": admin_token})
         page = stale_browser.get("/admin-console.html", follow_redirects=False)
         self.assertEqual(page.status_code, 302, page.text)
-        self.assertEqual(page.headers["location"], "/admin")
+        self.assertEqual(page.headers["location"], "/admin?return_url=%2Fadmin-console.html")
         self.assertNotIn("admin_session_token", page.headers.get("set-cookie", ""))
 
         admin_api = stale_browser.get("/api/me", headers={"X-Admin-Console": "1"})
@@ -1117,7 +1132,7 @@ class RegistrationApprovalTests(unittest.TestCase):
         self.assertEqual(user_admin_page.headers["location"], "/admin")
         user_admin_console = user.get("/admin-console.html", follow_redirects=False)
         self.assertEqual(user_admin_console.status_code, 302)
-        self.assertEqual(user_admin_console.headers["location"], "/admin")
+        self.assertEqual(user_admin_console.headers["location"], "/admin?return_url=%2Fadmin-console.html")
         self.assertEqual(user.get("/quick-setup.html", follow_redirects=False).status_code, 404)
         self.assertEqual(user.get("/api/quick_setup/status").status_code, 404)
 
@@ -1145,7 +1160,8 @@ class RegistrationApprovalTests(unittest.TestCase):
         self.assertEqual(rendered_admin.status_code, 200)
         admin_console = admin.get("/console.html", follow_redirects=False)
         self.assertEqual(admin_console.status_code, 302)
-        self.assertEqual(admin_console.headers["location"], "/admin-console.html")
+        self.assertEqual(admin_console.headers["location"], "/login.html?return_url=%2Fconsole.html")
+        self.assertEqual(admin.get("/admin-console.html", follow_redirects=False).status_code, 200)
         self.assertNotIn('href="/console.html"', rendered_admin.text)
         self.assertNotIn("快速配置", rendered_admin.text)
         self.assertNotIn("人设数据看板", rendered_admin.text)

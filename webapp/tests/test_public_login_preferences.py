@@ -238,7 +238,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
             self.site_nav_script,
         )
         self.assertIn("async function openConsoleEntry", self.site_nav_script)
-        self.assertIn('path: "/admin-console.html"', self.site_nav_script)
+        self.assertIn('path: adminConsoleTarget("", workspaceUserId)', self.site_nav_script)
         self.assertIn('path: "/console.html"', self.site_nav_script)
         self.assertIn("openConsoleEntry,", self.site_nav_script)
 
@@ -286,6 +286,32 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn("function seedAdminConsoleContext()", self.proxy_market_js)
         self.assertIn('headers.set("X-Admin-Console", "1")', self.proxy_market_js)
         self.assertIn("seedAdminConsoleContext();", self.proxy_market_js)
+        self.assertIn("function captureSessionContext()", self.proxy_market_js)
+        self.assertIn("captureSessionContext();", self.proxy_market_js)
+        self.assertIn('headers.set("X-Admin-Workspace-User-ID", state.workspaceUserId)', self.proxy_market_js)
+        self.assertIn('params.get("admin_workspace_user_id")', self.proxy_market_js)
+        self.assertIn("function seedExplicitAdminContext()", self.site_nav_script)
+        self.assertIn(
+            "const preserveWorkspace = publicPagePreservesAdminWorkspace()",
+            self.site_nav_script,
+        )
+        self.assertIn(
+            "fetchSessionAccount({ admin: true, workspaceUserId })",
+            self.site_nav_script,
+        )
+        self.assertIn("function syncOperationalPublicTargets()", self.site_nav_script)
+        self.assertIn('url.searchParams.set("admin_console", "1")', self.site_nav_script)
+        self.assertIn('url.searchParams.set("admin_workspace_user_id", workspaceUserId)', self.site_nav_script)
+        self.assertIn("function adminWorkspacePageUrl(value)", self.console_js)
+        self.assertIn('adminWorkspacePageUrl("/proxy-market.html")', self.console_js)
+
+    def test_admin_direct_download_and_forced_password_routes_keep_admin_context(self):
+        self.assertIn(
+            "`/api/tasks/${id}/download?admin_console=1`",
+            self.admin_js,
+        )
+        self.assertIn("function forcedPasswordChangeTarget", self.auth_js)
+        self.assertIn('headers.set("X-Admin-Console", "1")', self.auth_js)
 
     def test_public_navigation_preserves_authenticated_account_state(self):
         self.assertIn("async function hydratePublicSession(header)", self.site_nav_script)

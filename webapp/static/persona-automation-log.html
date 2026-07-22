@@ -76,7 +76,7 @@
         <p id="logSubtitle">正在加载...</p>
       </div>
       <div class="log-actions">
-        <a class="btn ghost" href="/console.html">进入 Web 控制台</a>
+        <a id="returnConsole" class="btn ghost" href="/console.html">进入 Web 控制台</a>
         <button class="ghost" type="button" id="refreshBtn">刷新</button>
         <button class="ghost" type="button" id="toggleAutoBtn">暂停自动刷新</button>
         <button class="ghost" type="button" onclick="window.close()">关闭窗口</button>
@@ -100,8 +100,29 @@
   <script>
     const params = new URLSearchParams(location.search);
     const taskId = params.get("task_id") || "";
+    const adminConsole = params.get("admin_console") === "1";
+    const adminWorkspaceUserId = String(
+      params.get("admin_workspace_user_id") || params.get("manage_user_id") || "",
+    ).trim();
     let autoRefresh = true;
     let timer = 0;
+
+    function contextualUrl(value) {
+      const text = String(value || "").trim();
+      if (!adminConsole || !text.startsWith("/")) return text;
+      const url = new URL(text, location.origin);
+      url.searchParams.set("admin_console", "1");
+      if (adminWorkspaceUserId) {
+        url.searchParams.set("admin_workspace_user_id", adminWorkspaceUserId);
+      }
+      return `${url.pathname}${url.search}${url.hash}`;
+    }
+
+    if (adminConsole) {
+      const returnParams = new URLSearchParams();
+      if (adminWorkspaceUserId) returnParams.set("manage_user_id", adminWorkspaceUserId);
+      document.getElementById("returnConsole").href = `/admin-console.html${returnParams.size ? `?${returnParams}` : ""}`;
+    }
 
     function esc(value) {
       return String(value == null ? "" : value).replace(/[&<>"']/g, (ch) => ({
@@ -114,7 +135,12 @@
       return new Date(n * 1000).toLocaleString();
     }
     async function api(path) {
-      const res = await fetch(path, { cache: "no-store" });
+      const headers = new Headers();
+      if (adminConsole) {
+        headers.set("X-Admin-Console", "1");
+        if (adminWorkspaceUserId) headers.set("X-Admin-Workspace-User-ID", adminWorkspaceUserId);
+      }
+      const res = await fetch(path, { cache: "no-store", credentials: "include", headers });
       const text = await res.text();
       let data = null;
       try { data = text ? JSON.parse(text) : null; } catch { data = { detail: text }; }
@@ -123,7 +149,7 @@
     }
     function screenshotUrl(path) {
       const name = String(path || "").split(/[\\/]/).pop();
-      return name ? `/api/persona_dashboard/automation/screenshots/${encodeURIComponent(name)}` : "";
+      return name ? contextualUrl(`/api/persona_dashboard/automation/screenshots/${encodeURIComponent(name)}`) : "";
     }
     function mediaType(path) {
       const text = String(path || "").toLowerCase();
@@ -164,13 +190,13 @@
       const result = task.result || {};
       const items = [];
       (payload.media_paths || []).forEach((path, index) => {
-        items.push({ label: `任务媒体 ${index + 1}`, path, url: `/api/persona_dashboard/automation/tasks/${encodeURIComponent(task.id)}/media/${index}` });
+        items.push({ label: `任务媒体 ${index + 1}`, path, url: contextualUrl(`/api/persona_dashboard/automation/tasks/${encodeURIComponent(task.id)}/media/${index}`) });
       });
       [result.screenshot_path, ...(result.replyScreenshots || [])].filter(Boolean).forEach((path, index) => {
         items.push({ label: `结果截图 ${index + 1}`, path, url: screenshotUrl(path) });
       });
       logs.forEach((row) => {
-        if (row.screenshot_url && isCheckpointScreenshot(row)) items.push({ label: `${row.stage} 截图`, path: row.screenshot_path, url: row.screenshot_url });
+        if (row.screenshot_url && isCheckpointScreenshot(row)) items.push({ label: `${row.stage} 截图`, path: row.screenshot_path, url: contextualUrl(row.screenshot_url) });
       });
       const seen = new Set();
       const html = items.filter((item) => {
@@ -212,7 +238,7 @@
           <div class="log-item-top"><span>${esc(fmtTime(row.created_at))}</span><span>${esc(row.level)} / ${esc(row.stage)}</span></div>
           <div class="log-message">${esc(row.message || "")}</div>
           ${row.data && Object.keys(row.data).length ? `<div class="log-pre" style="margin-top:8px">${esc(JSON.stringify(row.data, null, 2))}</div>` : ""}
-          ${row.screenshot_url && isCheckpointScreenshot(row) ? `<p><a href="${esc(row.screenshot_url)}" target="_blank" rel="noopener">打开截图</a></p>` : ""}
+          ${row.screenshot_url && isCheckpointScreenshot(row) ? `<p><a href="${esc(contextualUrl(row.screenshot_url))}" target="_blank" rel="noopener">打开截图</a></p>` : ""}
         </div>
       `).join("") || "<div class='small'>暂无日志</div>";
       logList.scrollTop = wasNearBottom ? logList.scrollHeight : previousTop;

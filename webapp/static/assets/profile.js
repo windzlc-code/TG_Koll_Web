@@ -136,7 +136,9 @@
   }
 
   function redirectToLogin() {
-    window.location.replace(isAdminSession ? "/admin" : "/login.html");
+    const returnUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const entry = isAdminSession ? "/admin" : "/login.html";
+    window.location.replace(`${entry}?return_url=${encodeURIComponent(returnUrl)}`);
   }
 
   function handleSessionBoundary(error) {
@@ -146,10 +148,13 @@
       return true;
     }
     if (status === 428) {
+      const returnUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
       window.location.replace(
         error?.code === "mfa_setup_required" && isAdminSession
-          ? "/admin#account"
-          : "/change-password.html",
+          ? "/admin.html#admin-account"
+          : isAdminSession
+            ? `/change-password.html?admin_console=1&return_url=${encodeURIComponent(returnUrl)}`
+            : `/change-password.html?return_url=${encodeURIComponent(returnUrl)}`,
       );
       return true;
     }

@@ -29,8 +29,10 @@ from PIL import Image
 from pydantic import BaseModel, Field
 
 from .auth import (
+    ADMIN_CONSOLE_HEADER,
     ADMIN_CONSOLE_QUERY,
     ADMIN_SESSION_COOKIE,
+    ADMIN_WORKSPACE_HEADER,
     ADMIN_WORKSPACE_QUERY,
     SESSION_COOKIE,
     get_current_user,
@@ -1420,33 +1422,23 @@ def register_social_automation_routes(app: FastAPI) -> None:
 
 
 def _authenticate_live_browser_websocket(websocket: WebSocket, session_id: str = "") -> dict[str, Any] | None:
-    query_params = getattr(websocket, "query_params", None)
-    workspace_user_id = query_params.get(ADMIN_WORKSPACE_QUERY) if query_params is not None else None
-    admin_console = query_params.get(ADMIN_CONSOLE_QUERY) if query_params is not None else None
-    use_admin_session = bool(workspace_user_id) or str(admin_console or "").strip().lower() in {"1", "true", "yes", "on"}
-    tokens = _live_browser_auth_tokens(
-        session_token=websocket.cookies.get(SESSION_COOKIE),
-        admin_session_token=websocket.cookies.get(ADMIN_SESSION_COOKIE),
+    try:
+        token, use_admin_session, workspace_user_id = _live_browser_auth_selection(websocket)
+    except HTTPException:
+        return None
+    return _authenticate_selected_live_browser_user(
+        token,
         use_admin_session=use_admin_session,
-    )
-    return _first_live_browser_user_for_tokens(
-        tokens,
         admin_workspace_user_id=workspace_user_id,
         session_id=session_id,
     )
 
 
 def _authenticate_live_browser_http_request(request: Request, session_id: str = "") -> dict[str, Any]:
-    workspace_user_id = request.query_params.get(ADMIN_WORKSPACE_QUERY)
-    admin_console = request.query_params.get(ADMIN_CONSOLE_QUERY)
-    use_admin_session = bool(workspace_user_id) or str(admin_console or "").strip().lower() in {"1", "true", "yes", "on"}
-    tokens = _live_browser_auth_tokens(
-        session_token=request.cookies.get(SESSION_COOKIE),
-        admin_session_token=request.cookies.get(ADMIN_SESSION_COOKIE),
+    token, use_admin_session, workspace_user_id = _live_browser_auth_selection(request)
+    user = _authenticate_selected_live_browser_user(
+        token,
         use_admin_session=use_admin_session,
-    )
-    user = _first_live_browser_user_for_tokens(
-        tokens,
         admin_workspace_user_id=workspace_user_id,
         request=request,
         session_id=session_id,
@@ -1456,44 +1448,49 @@ def _authenticate_live_browser_http_request(request: Request, session_id: str = 
     return user
 
 
-def _live_browser_auth_tokens(
+def _live_browser_auth_selection(connection: Any) -> tuple[str, bool, str | None]:
+    query_params = getattr(connection, "query_params", None)
+    headers = getattr(connection, "headers", None)
+    query_workspace = str((query_params.get(ADMIN_WORKSPACE_QUERY) if query_params is not None else "") or "").strip()
+    header_workspace = str((headers.get(ADMIN_WORKSPACE_HEADER) if headers is not None else "") or "").strip()
+    if query_workspace and header_workspace and query_workspace != header_workspace:
+        raise HTTPException(status_code=400, detail="conflicting admin workspace user ids")
+    workspace_user_id = header_workspace or query_workspace or None
+    query_admin = query_params.get(ADMIN_CONSOLE_QUERY) if query_params is not None else None
+    header_admin = headers.get(ADMIN_CONSOLE_HEADER) if headers is not None else None
+    use_admin_session = bool(workspace_user_id) or any(
+        str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+        for value in (query_admin, header_admin)
+    )
+    cookies = getattr(connection, "cookies", {})
+    cookie_name = ADMIN_SESSION_COOKIE if use_admin_session else SESSION_COOKIE
+    return str(cookies.get(cookie_name) or "").strip(), use_admin_session, workspace_user_id
+
+
+def _authenticate_selected_live_browser_user(
+    token: str,
     *,
-    session_token: str | None,
-    admin_session_token: str | None,
     use_admin_session: bool,
-) -> list[str]:
-    session = str(session_token or "").strip()
-    admin = str(admin_session_token or "").strip()
-    ordered = [admin, session] if use_admin_session else [session, admin]
-    tokens: list[str] = []
-    for token in ordered:
-        if token and token not in tokens:
-            tokens.append(token)
-    return tokens
-
-
-def _first_live_browser_user_for_tokens(
-    tokens: list[str],
-    *,
     admin_workspace_user_id: Any = None,
     request: Request | None = None,
     session_id: str = "",
 ) -> dict[str, Any] | None:
-    first_user: dict[str, Any] | None = None
-    for token in tokens:
-        try:
-            user = get_current_user_for_session(token, admin_workspace_user_id=admin_workspace_user_id, request=request)
-        except Exception:
-            continue
-        if not first_user:
-            first_user = user
-        if session_id and _live_browser_session_accessible(session_id, user):
-            return user
-        if not session_id:
-            return user
-    if session_id and first_user is not None:
-        raise HTTPException(status_code=404, detail="浏览器会话不存在")
-    return None
+    if not token:
+        return None
+    try:
+        user = get_current_user_for_session(
+            token,
+            expected_admin_session=use_admin_session,
+            admin_workspace_user_id=admin_workspace_user_id,
+            request=request,
+        )
+    except Exception:
+        return None
+    if session_id and not _live_browser_session_accessible(session_id, user):
+        if request is not None:
+            raise HTTPException(status_code=404, detail="浏览器会话不存在")
+        return None
+    return user
 
 
 def _live_browser_session_accessible(session_id: str, user: dict[str, Any]) -> bool:

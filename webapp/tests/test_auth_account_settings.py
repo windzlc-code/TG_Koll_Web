@@ -75,9 +75,9 @@ class AccountSettingsApiTests(unittest.TestCase):
         regular_redirect = anonymous.get("/profile.html", follow_redirects=False)
         admin_redirect = anonymous.get("/admin-profile.html", follow_redirects=False)
         self.assertEqual(regular_redirect.status_code, 302)
-        self.assertEqual(regular_redirect.headers["location"], "/login.html")
+        self.assertEqual(regular_redirect.headers["location"], "/login.html?return_url=%2Fprofile.html")
         self.assertEqual(admin_redirect.status_code, 302)
-        self.assertEqual(admin_redirect.headers["location"], "/admin")
+        self.assertEqual(admin_redirect.headers["location"], "/admin?return_url=%2Fadmin-profile.html")
 
         login_resp = self.client.post(
             "/api/auth/admin-login",
@@ -87,7 +87,7 @@ class AccountSettingsApiTests(unittest.TestCase):
 
         regular_profile = self.client.get("/profile.html", follow_redirects=False)
         self.assertEqual(regular_profile.status_code, 302)
-        self.assertEqual(regular_profile.headers["location"], "/admin-profile.html")
+        self.assertEqual(regular_profile.headers["location"], "/login.html?return_url=%2Fprofile.html")
 
         admin_profile = self.client.get("/admin-profile.html")
         self.assertEqual(admin_profile.status_code, 200, admin_profile.text)
@@ -179,11 +179,11 @@ class AccountSettingsApiTests(unittest.TestCase):
 
         self.client.cookies.set("session_token", customer.cookies.get("session_token"))
         dual_session_console = self.client.get("/console.html", follow_redirects=False)
-        self.assertEqual(dual_session_console.status_code, 302)
-        self.assertEqual(dual_session_console.headers["location"], "/admin-console.html")
+        self.assertEqual(dual_session_console.status_code, 200, dual_session_console.text)
+        self.assertIn('meta name="admin-console-session" content=""', dual_session_console.text)
         dual_session_profile = self.client.get("/profile.html", follow_redirects=False)
-        self.assertEqual(dual_session_profile.status_code, 302)
-        self.assertEqual(dual_session_profile.headers["location"], "/admin-profile.html")
+        self.assertEqual(dual_session_profile.status_code, 200, dual_session_profile.text)
+        self.assertIn('meta name="admin-console-session" content="0"', dual_session_profile.text)
 
     def test_admin_can_change_username_with_current_password(self):
         login_resp = self.client.post(
@@ -349,6 +349,81 @@ class AccountSettingsApiTests(unittest.TestCase):
         items = list_resp.json()["items"]
         task = next(item for item in items if item["id"] == "task_downloadable")
         self.assertEqual(task["has_download"], True)
+
+        unmarked_download = self.client.get("/api/tasks/task_downloadable/download")
+        self.assertEqual(unmarked_download.status_code, 401, unmarked_download.text)
+        marked_download = self.client.get("/api/tasks/task_downloadable/download?admin_console=1")
+        self.assertEqual(marked_download.status_code, 200, marked_download.text)
+        self.assertEqual(marked_download.content, b"demo-video")
+
+    def test_admin_forced_password_change_keeps_admin_session_selected(self):
+        expires_at = server._now_ts() + 3600
+        with db_module.db() as conn:
+            conn.execute(
+                "UPDATE users SET must_change_password = 1, password_expires_at = ? WHERE id = 1",
+                (expires_at,),
+            )
+
+        login = self.client.post(
+            "/api/auth/admin-login",
+            json={"username": "admin", "password": "admin123secure"},
+        )
+        self.assertEqual(login.status_code, 200, login.text)
+        self.assertTrue(login.json()["must_change_password"])
+        self.client.cookies.set("session_token", "unrelated-customer-session")
+
+        admin_entry = self.client.get("/admin", follow_redirects=False)
+        self.assertEqual(admin_entry.status_code, 302, admin_entry.text)
+        self.assertEqual(
+            admin_entry.headers["location"],
+            "/change-password.html?admin_console=1&return_url=%2Fadmin",
+        )
+        change_page = self.client.get(
+            "/change-password.html?admin_console=1&return_url=%2Fadmin",
+            follow_redirects=False,
+        )
+        self.assertEqual(change_page.status_code, 200, change_page.text)
+        self.assertNotIn("__AUTH_JS_VERSION__", change_page.text)
+        self.assertNotIn("__STYLE_VERSION__", change_page.text)
+
+        changed = self.client.post(
+            "/api/auth/change_password?admin_console=1",
+            json={"old_password": "admin123secure", "new_password": "admin456secure"},
+        )
+        self.assertEqual(changed.status_code, 200, changed.text)
+        self.assertEqual(
+            self.client.get("/change-password.html?admin_console=1", follow_redirects=False).headers["location"],
+            "/admin",
+        )
+
+    def test_authenticated_admin_entry_honors_only_safe_local_return_url(self):
+        login = self.client.post(
+            "/api/auth/admin-login",
+            json={"username": "admin", "password": "admin123secure"},
+        )
+        self.assertEqual(login.status_code, 200, login.text)
+
+        returned = self.client.get(
+            "/admin?return_url=%2Fproxy-market.html%3Fadmin_console%3D1",
+            follow_redirects=False,
+        )
+        self.assertEqual(returned.status_code, 302, returned.text)
+        self.assertEqual(returned.headers["location"], "/proxy-market.html?admin_console=1")
+
+        rejected = self.client.get(
+            "/admin?return_url=https%3A%2F%2Fevil.example%2Fsteal",
+            follow_redirects=False,
+        )
+        self.assertEqual(rejected.status_code, 302, rejected.text)
+        self.assertEqual(rejected.headers["location"], "/admin.html#admin-overview")
+
+        normalized_attack = self.client.get(
+            "/admin",
+            params={"return_url": r"/\evil.example/steal"},
+            follow_redirects=False,
+        )
+        self.assertEqual(normalized_attack.status_code, 302, normalized_attack.text)
+        self.assertEqual(normalized_attack.headers["location"], "/admin.html#admin-overview")
 
 
 if __name__ == "__main__":
