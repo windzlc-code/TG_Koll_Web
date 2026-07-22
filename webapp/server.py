@@ -17188,11 +17188,7 @@ def create_app() -> FastAPI:
                 (int(user["id"]),),
             ).fetchone()
             if mfa_row is None:
-                migration = conn.execute(
-                    "SELECT applied_at FROM schema_migrations WHERE version = 'governance_v1'"
-                ).fetchone()
-                governance_started_at = int(migration["applied_at"] or _now_ts()) if migration else _now_ts()
-                required_after = governance_started_at + (7 * 86400 if is_admin else 0)
+                required_after = 0
                 conn.execute(
                     "INSERT INTO user_mfa(user_id, required_after, updated_at) VALUES (?, ?, ?)",
                     (int(user["id"]), required_after, _now_ts()),
@@ -17202,7 +17198,12 @@ def create_app() -> FastAPI:
                     (int(user["id"]),),
                 ).fetchone()
             mfa_enabled = bool(mfa_row and int(mfa_row["enabled_at"] or 0) > 0)
-            mfa_required = bool(is_admin and mfa_row and int(mfa_row["required_after"] or 0) <= _now_ts())
+            mfa_required = bool(
+                is_admin
+                and mfa_row
+                and int(mfa_row["required_after"] or 0) > 0
+                and int(mfa_row["required_after"] or 0) <= _now_ts()
+            )
             if mfa_enabled:
                 if not _verify_mfa_code_atomic(int(user["id"]), payload.mfa_code):
                     raise HTTPException(status_code=401, detail={"code": "mfa_code_invalid", "message": "动态验证码或恢复码错误。"})
@@ -17595,10 +17596,7 @@ def create_app() -> FastAPI:
                 (user_id,),
             ).fetchone()
             if row is None:
-                migration = conn.execute(
-                    "SELECT applied_at FROM schema_migrations WHERE version = 'governance_v1'"
-                ).fetchone()
-                required_after = (int(migration["applied_at"] or _now_ts()) + 7 * 86400) if _is_admin(user) else 0
+                required_after = 0
                 conn.execute(
                     "INSERT INTO user_mfa(user_id, required_after, updated_at) VALUES (?, ?, ?)",
                     (user_id, required_after, _now_ts()),
@@ -17614,7 +17612,7 @@ def create_app() -> FastAPI:
         return {
             "enabled": bool(row and int(row["enabled_at"] or 0) > 0),
             "enabled_at": int(row["enabled_at"] or 0) if row else 0,
-            "required": bool(_is_admin(user)),
+            "required": bool(row and int(row["required_after"] or 0) > 0),
             "required_after": int(row["required_after"] or 0) if row else 0,
             "setup_pending": bool(row and str(row["pending_secret_ciphertext"] or "")),
             "recovery_codes_remaining": recovery_count,
@@ -17646,7 +17644,7 @@ def create_app() -> FastAPI:
             existing = conn.execute("SELECT enabled_at FROM user_mfa WHERE user_id = ?", (user_id,)).fetchone()
             if existing is not None and int(existing["enabled_at"] or 0) > 0:
                 raise HTTPException(status_code=409, detail={"code": "mfa_already_enabled", "message": "MFA 已启用，如需更换请由管理员执行恢复流程。"})
-            required_after = _now_ts() if _is_admin(user) else 0
+            required_after = 0
             conn.execute(
                 """
                 INSERT INTO user_mfa(user_id, pending_secret_ciphertext, recovery_codes_json, required_after, updated_at)

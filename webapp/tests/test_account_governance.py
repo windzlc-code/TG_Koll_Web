@@ -411,7 +411,7 @@ class AccountGovernanceTests(unittest.TestCase):
         status = admin.get("/api/auth/mfa")
         self.assertEqual(status.status_code, 200, status.text)
         self.assertFalse(status.json()["enabled"])
-        self.assertTrue(status.json()["required"])
+        self.assertFalse(status.json()["required"])
 
         setup = admin.post("/api/auth/mfa/setup", headers=self.ORIGIN_HEADERS, json={"current_password": self.ADMIN_PASSWORD})
         self.assertEqual(setup.status_code, 200, setup.text)
