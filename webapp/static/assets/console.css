@@ -2036,6 +2036,10 @@ textarea:focus {
   margin-top: 2px;
 }
 
+.publish-post-card-media {
+  display: none;
+}
+
 .publish-preview-tabs-layout {
   display: grid;
   grid-template-columns: 132px minmax(0, 1fr);
@@ -16077,6 +16081,7 @@ body.console-page {
   }
 
   .publish-post-card-media {
+    display: block;
     padding: 0 8px 8px 42px;
   }
 

@@ -12154,7 +12154,7 @@ function renderSocialTaskResult(task, logs = [], emptyText = "提交后，这里
   const result = task.result || {};
   const presentationStatus = socialTaskPresentationStatus(task);
   const waitsForManualLogin = socialTaskWaitsForManualLogin(task);
-  const screenshotUrl = latestSocialTaskScreenshot(task, logs);
+  const screenshotUrl = presentationStatus === "cancelled" ? "" : latestSocialTaskScreenshot(task, logs);
   const publishedUrl = String(result.published_url || result.publishedUrl || result.url || result.post_url || "").trim();
   const recentLogs = (logs || []).slice(-4).reverse();
   const terminal = ["success", "failed", "cancelled", "need_manual"].includes(presentationStatus);
@@ -12222,6 +12222,7 @@ function taskScreenshotFromValue(value) {
 }
 
 function collectTaskScreenshots(task = {}, logs = []) {
+  if (["cancelled", "canceled"].includes(String(task?.status || "").trim().toLowerCase())) return [];
   const rows = [];
   const seen = new Set();
   const push = (value, label = "任务截图", time = "", meta = {}) => {
@@ -12389,7 +12390,8 @@ function renderTaskDetailLayout(task = {}, logs = [], {
         </section>` : ""}
       ${renderTaskDetailLogs(logs, {
         limit: kind === "social" ? 30 : 12,
-        hideScreenshots: String(task?.task_type || "") === "publish_post" && String(task?.status || "") === "success",
+        hideScreenshots: presentationStatus === "cancelled"
+          || (String(task?.task_type || "") === "publish_post" && String(task?.status || "") === "success"),
       })}
     </div>`;
 }

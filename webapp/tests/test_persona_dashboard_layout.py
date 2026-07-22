@@ -120,6 +120,9 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.console_script,
         )
         self.assertIn(".publish-post-card-media {", self.styles)
+        desktop_rule = self.styles.index(".publish-post-card-media {\n  display: none;")
+        mobile_rule = self.styles.index(".publish-post-card-media {\n    display: block;")
+        self.assertLess(desktop_rule, mobile_rule)
 
     def test_mobile_task_dock_is_flush_with_the_viewport(self):
         self.assertIn('content="width=device-width, initial-scale=1.0, viewport-fit=cover"', self.markup)

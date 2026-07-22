@@ -1808,7 +1808,46 @@ def _proxy_live_browser_http(session_id: str, path: str, request: Request) -> Re
     cache_control = upstream.headers.get("cache-control")
     if cache_control:
         headers["cache-control"] = cache_control
-    return Response(content=upstream.content, status_code=upstream.status_code, headers=headers)
+    content = upstream.content
+    if clean_path in {"vnc.html", "index.html"} and "text/html" in str(content_type or "").lower():
+        content = _brand_live_browser_html(content)
+        headers["cache-control"] = "no-store"
+    return Response(content=content, status_code=upstream.status_code, headers=headers)
+
+
+def _brand_live_browser_html(content: bytes) -> bytes:
+    try:
+        html = content.decode("utf-8")
+    except UnicodeDecodeError:
+        return content
+    if 'id="vecto-live-browser-brand"' in html:
+        return content
+    branding = """<style id="vecto-live-browser-brand">
+#noVNC_transition {
+  color: #67e5bf !important;
+  background-color: #071411 !important;
+  background-image: url("/assets/opc/vecto-logo-ui-icon.png?v=20260711") !important;
+  background-repeat: no-repeat !important;
+  background-position: center calc(50% - 28px) !important;
+  background-size: 110px 110px !important;
+}
+#noVNC_transition_text {
+  margin-top: 154px !important;
+  color: #67e5bf !important;
+}
+.noVNC_logo {
+  background: #071411 !important;
+}
+.noVNC_logo img {
+  content: url("/assets/opc/vecto-logo-ui-icon.png?v=20260711");
+  width: 56px !important;
+  height: 56px !important;
+  object-fit: contain;
+}
+</style>"""
+    html = html.replace("<title>KasmVNC</title>", "<title>Vecto 实时浏览器</title>", 1)
+    html = html.replace("</head>", f"{branding}</head>", 1)
+    return html.encode("utf-8")
 
 
 def _local_kasm_static_response(clean_path: str) -> FileResponse | None:
