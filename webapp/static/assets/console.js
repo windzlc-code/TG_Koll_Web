@@ -8750,7 +8750,9 @@ function renderPublishMobileSelectionStrip(persona = selectedPersona(), mode = "
             data-publish-mobile-remove="${esc(item.id)}"
             title="${esc(`移除第 ${item.number} 篇`)}"
             aria-label="${esc(`从发布中移除第 ${item.number} 篇`)}"
-          >${renderClearSelectionIcon()}</button>
+          ><svg class="publish-mobile-selection-remove-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="m6 6 12 12"></path><path d="m18 6-12 12"></path>
+          </svg></button>
         </div>
       `).join("")}
     </div>`;
