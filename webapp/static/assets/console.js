@@ -409,6 +409,7 @@ const state = {
   proxyPoolPageSize: 10,
   personaMediaTasks: {},
   personaGenerateRuns: {},
+  personaHotFetchControllers: {},
   personaDetailRenderTimer: 0,
   personaHotImports: storedPersonaHotImports(),
   personaHotCandidateResults: {},
@@ -560,6 +561,9 @@ function clearTenantInMemoryState() {
   if (state.personaCreateKeywordController) {
     state.personaCreateKeywordController.abort?.(new DOMException("Session boundary", "AbortError"));
   }
+  Object.values(state.personaHotFetchControllers || {}).forEach((controller) => {
+    controller?.abort?.(new DOMException("Session boundary", "AbortError"));
+  });
   if (state.workspaceBootstrapTimer) window.clearTimeout(state.workspaceBootstrapTimer);
   if (state.personaDetailRenderTimer) window.clearTimeout(state.personaDetailRenderTimer);
   if (state.taskQueueRefreshTimer) window.clearInterval(state.taskQueueRefreshTimer);
@@ -624,6 +628,7 @@ function clearTenantInMemoryState() {
   state.accountPoolCreateDraft = {};
   state.personaMediaTasks = {};
   state.personaGenerateRuns = {};
+  state.personaHotFetchControllers = {};
   state.personaHotImports = {};
   state.personaHotCandidateResults = {};
   state.personaForms = {};
@@ -13465,6 +13470,10 @@ async function fetchPersonaHotCandidates(refresh = false) {
     showMsg("commandMsg", "热点候选正在抓取，请等待当前抓取完成。", false);
     return;
   }
+  const personaKey = String(persona.id || "").trim();
+  const controller = new AbortController();
+  state.personaHotFetchControllers[personaKey]?.abort?.(new DOMException("Request replaced", "AbortError"));
+  state.personaHotFetchControllers[personaKey] = controller;
   snapshotPersonaCurrentForm();
   const form = personaFormState(persona.id).generate;
   const previousCandidates = personaHotCandidates(persona);
@@ -13480,9 +13489,10 @@ async function fetchPersonaHotCandidates(refresh = false) {
   setActionLocked(lockParts, true);
   renderPersonaDetail();
   try {
-    const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/hot_candidates`, {
+    const result = await apiWithTimeout(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/hot_candidates`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
       body: JSON.stringify({
         refresh: Boolean(refresh),
         limit: 10,
@@ -13493,7 +13503,7 @@ async function fetchPersonaHotCandidates(refresh = false) {
         // (unbounded freshness), which is also how older callers behaved.
         freshness_policy: form.hotFreshnessDays > 0 ? "strict" : "legacy",
       }),
-    });
+    }, 125000);
     state.personaHotCandidateResults[String(persona.id)] = {
       candidates: Array.isArray(result.candidates) ? result.candidates : [],
       keywords: Array.isArray(result.keywords) ? result.keywords : [],
@@ -13529,6 +13539,15 @@ async function fetchPersonaHotCandidates(refresh = false) {
       error: "",
     });
   } catch (error) {
+    if (Number(error?.status || 0) === 499) {
+      setPersonaGenerateRunState(persona.id, {
+        kind: "hot",
+        status: "idle",
+        message: "热点抓取已取消",
+        error: "",
+      });
+      return;
+    }
     setPersonaGenerateRunState(persona.id, {
       kind: "hot",
       status: "error",
@@ -13537,12 +13556,27 @@ async function fetchPersonaHotCandidates(refresh = false) {
     });
     throw error;
   } finally {
+    if (state.personaHotFetchControllers[personaKey] === controller) {
+      delete state.personaHotFetchControllers[personaKey];
+    }
     setActionLocked(lockParts, false);
     if (isPersonaWorkspaceModule()) {
       renderPersonaDetail();
       renderConfirmSummary();
     }
   }
+}
+
+async function cancelPersonaHotCandidates() {
+  const persona = selectedPersona();
+  if (!persona) return;
+  const personaKey = String(persona.id || "").trim();
+  const controller = state.personaHotFetchControllers[personaKey];
+  const cancellation = apiWithTimeout(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/hot_candidates/cancel`, {
+    method: "POST",
+  }, 10000);
+  controller?.abort?.(new DOMException("Request cancelled", "AbortError"));
+  await cancellation;
 }
 
 async function submitPersonaHotDraftImport(persona, selected, { replacementOpsByCandidate = {} } = {}) {
@@ -15348,7 +15382,9 @@ function renderPersonaHotCandidatePicker(persona, form) {
           </label>
         </div>
         <button type="button" class="primary" data-persona-fetch-hot ${hotBusy ? "disabled" : ""}>${hotBusy ? renderBusyButtonContent("正在抓取热点", true, hotBusyStartedAt) : "抓取热点"}</button>
-        <button type="button" data-persona-fetch-hot-refresh ${!hotBusy ? "" : "disabled"}>${hotBusy ? "正在刷新..." : "刷新候选"}</button>
+        ${hotBusy
+          ? `<button type="button" data-persona-cancel-hot>取消抓取</button>`
+          : `<button type="button" data-persona-fetch-hot-refresh>刷新候选</button>`}
       </div>
     </div>
     ${(keywords.length || warnings.length || cookieStatuses.length) ? `
@@ -21382,6 +21418,10 @@ function bindEvents() {
     }
     if (event.target.closest("[data-persona-fetch-hot-refresh]")) {
       fetchPersonaHotCandidates(true).catch(() => {});
+      return;
+    }
+    if (event.target.closest("[data-persona-cancel-hot]")) {
+      cancelPersonaHotCandidates().catch((error) => showMsg("commandMsg", error.detail || error.message || "取消热点抓取失败。", false));
       return;
     }
     if (event.target.closest("[data-persona-import-hot-drafts]")) {

@@ -1974,7 +1974,9 @@ class PersonaDashboardApiTests(unittest.TestCase):
             result = server._run_persona_hot_workflow_cli({"action": "fetch-hot-candidates"}, timeout_seconds=45)
 
         self.assertEqual(result, {"ok": True, "candidates": []})
-        process.communicate.assert_called_once_with(timeout=45)
+        communicate_timeout = process.communicate.call_args.kwargs["timeout"]
+        self.assertGreater(communicate_timeout, 44)
+        self.assertLessEqual(communicate_timeout, 45)
 
     def test_run_persona_hot_workflow_cli_cleans_up_after_timeout(self):
         process = mock.Mock(pid=1234)
@@ -1989,7 +1991,9 @@ class PersonaDashboardApiTests(unittest.TestCase):
                 server._run_persona_hot_workflow_cli({"action": "fetch-hot-candidates"}, timeout_seconds=10)
 
         self.assertEqual(raised.exception.status_code, 504)
-        process.communicate.assert_called_once_with(timeout=30)
+        communicate_timeout = process.communicate.call_args.kwargs["timeout"]
+        self.assertGreater(communicate_timeout, 29)
+        self.assertLessEqual(communicate_timeout, 30)
         process.wait.assert_has_calls([mock.call(timeout=2), mock.call(timeout=2)])
         if server.os.name == "nt":
             process.terminate.assert_called_once_with()
@@ -2000,6 +2004,51 @@ class PersonaDashboardApiTests(unittest.TestCase):
                 killpg.call_args_list,
                 [mock.call(1234, server.signal.SIGTERM), mock.call(1234, server.signal.SIGKILL)],
             )
+
+    def test_run_persona_hot_workflow_cli_limits_queue_wait(self):
+        run_lock = mock.Mock()
+        run_lock.acquire.return_value = False
+
+        with mock.patch.object(server, "_sync_tool_r18_api_config_for_persona_workflow"), \
+             mock.patch.object(server, "_tool_r18_node_command", return_value=["node", "persona-hot-workflow.ts"]), \
+             mock.patch.object(server, "_PERSONA_HOT_RUN_LOCK", run_lock), \
+             mock.patch.object(server.subprocess, "Popen") as popen:
+            with self.assertRaises(server.HTTPException) as raised:
+                server._run_persona_hot_workflow_cli(
+                    {"action": "fetch-hot-candidates", "archiveId": "persona-1"},
+                    timeout_seconds=120,
+                )
+
+        self.assertEqual(raised.exception.status_code, 504)
+        self.assertIn("排队超过 5 秒", raised.exception.detail)
+        run_lock.acquire.assert_called_once()
+        self.assertLessEqual(run_lock.acquire.call_args.kwargs["timeout"], 5)
+        popen.assert_not_called()
+
+    def test_cancel_persona_hot_workflow_terminates_matching_process(self):
+        process = mock.Mock()
+        process.poll.return_value = None
+        previous_process = server._PERSONA_HOT_INTERACTIVE_PROCESS
+        previous_archive_id = server._PERSONA_HOT_INTERACTIVE_ARCHIVE_ID
+        try:
+            server._PERSONA_HOT_INTERACTIVE_PROCESS = process
+            server._PERSONA_HOT_INTERACTIVE_ARCHIVE_ID = "persona-1"
+            with mock.patch.object(server, "_terminate_persona_hot_process") as terminate:
+                self.assertTrue(server._cancel_persona_hot_workflow("persona-1"))
+                self.assertFalse(server._cancel_persona_hot_workflow("persona-2"))
+            terminate.assert_called_once_with(process)
+        finally:
+            server._PERSONA_HOT_INTERACTIVE_PROCESS = previous_process
+            server._PERSONA_HOT_INTERACTIVE_ARCHIVE_ID = previous_archive_id
+
+    def test_cancel_persona_hot_candidates_endpoint(self):
+        self._write_archives()
+        with mock.patch.object(server, "_cancel_persona_hot_workflow", return_value=True) as cancel:
+            response = self.client.post("/api/persona_dashboard/personas/persona-1/hot_candidates/cancel")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True, "cancelled": True})
+        cancel.assert_called_once_with("persona-1")
 
     def test_fetch_persona_hot_candidates_calls_hot_workflow_cli(self):
         self._write_archives()

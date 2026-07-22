@@ -12037,6 +12037,8 @@ _PERSONA_HOT_RUN_LOCK = threading.Lock()
 _PERSONA_HOT_PROCESS_LOCK = threading.Lock()
 _PERSONA_HOT_INTERACTIVE_REQUESTED = threading.Event()
 _PERSONA_HOT_BACKGROUND_PROCESS: subprocess.Popen[str] | None = None
+_PERSONA_HOT_INTERACTIVE_PROCESS: subprocess.Popen[str] | None = None
+_PERSONA_HOT_INTERACTIVE_ARCHIVE_ID = ""
 _PERSONA_HOT_LAST_INTERACTIVE_AT = 0.0
 
 
@@ -12078,10 +12080,11 @@ def _terminate_persona_hot_process(process: subprocess.Popen[str] | None) -> Non
 
 
 def _run_persona_hot_workflow_cli(payload: dict[str, Any], timeout_seconds: int = 180, *, background: bool = False) -> dict[str, Any]:
-    global _PERSONA_HOT_BACKGROUND_PROCESS, _PERSONA_HOT_LAST_INTERACTIVE_AT
+    global _PERSONA_HOT_BACKGROUND_PROCESS, _PERSONA_HOT_INTERACTIVE_PROCESS, _PERSONA_HOT_INTERACTIVE_ARCHIVE_ID, _PERSONA_HOT_LAST_INTERACTIVE_AT
     _sync_tool_r18_api_config_for_persona_workflow()
     command = [*_tool_r18_node_command("scripts/skills/persona-hot-workflow.ts"), json.dumps(payload, ensure_ascii=True)]
     timeout = min(max(30, int(timeout_seconds)), 120)
+    deadline = time.monotonic() + timeout
     process: subprocess.Popen[str] | None = None
     acquired = False
     if background:
@@ -12097,7 +12100,10 @@ def _run_persona_hot_workflow_cli(payload: dict[str, Any], timeout_seconds: int 
         with _PERSONA_HOT_PROCESS_LOCK:
             background_process = _PERSONA_HOT_BACKGROUND_PROCESS
         _terminate_persona_hot_process(background_process)
-        _PERSONA_HOT_RUN_LOCK.acquire()
+        queue_timeout = max(0.1, min(5.0, deadline - time.monotonic()))
+        if not _PERSONA_HOT_RUN_LOCK.acquire(timeout=queue_timeout):
+            _PERSONA_HOT_INTERACTIVE_REQUESTED.clear()
+            raise HTTPException(status_code=504, detail="热点抓取排队超过 5 秒，已取消本次任务，请稍后重试。")
         acquired = True
         _PERSONA_HOT_INTERACTIVE_REQUESTED.clear()
     try:
@@ -12114,7 +12120,12 @@ def _run_persona_hot_workflow_cli(payload: dict[str, Any], timeout_seconds: int 
         if background:
             with _PERSONA_HOT_PROCESS_LOCK:
                 _PERSONA_HOT_BACKGROUND_PROCESS = process
-        stdout, stderr = process.communicate(timeout=timeout)
+        else:
+            with _PERSONA_HOT_PROCESS_LOCK:
+                _PERSONA_HOT_INTERACTIVE_PROCESS = process
+                _PERSONA_HOT_INTERACTIVE_ARCHIVE_ID = str(payload.get("archiveId") or "").strip()
+        remaining_timeout = max(0.1, deadline - time.monotonic())
+        stdout, stderr = process.communicate(timeout=remaining_timeout)
     except subprocess.TimeoutExpired as exc:
         _terminate_persona_hot_process(process)
         raise HTTPException(status_code=504, detail=f"热点抓取超过 {timeout} 秒，已终止本次任务。") from exc
@@ -12125,6 +12136,11 @@ def _run_persona_hot_workflow_cli(payload: dict[str, Any], timeout_seconds: int 
             with _PERSONA_HOT_PROCESS_LOCK:
                 if _PERSONA_HOT_BACKGROUND_PROCESS is process:
                     _PERSONA_HOT_BACKGROUND_PROCESS = None
+        else:
+            with _PERSONA_HOT_PROCESS_LOCK:
+                if _PERSONA_HOT_INTERACTIVE_PROCESS is process:
+                    _PERSONA_HOT_INTERACTIVE_PROCESS = None
+                    _PERSONA_HOT_INTERACTIVE_ARCHIVE_ID = ""
         if acquired:
             _PERSONA_HOT_RUN_LOCK.release()
     stdout = str(stdout or "").strip()
@@ -12138,6 +12154,20 @@ def _run_persona_hot_workflow_cli(payload: dict[str, Any], timeout_seconds: int 
     if data.get("ok") is False:
         raise HTTPException(status_code=500, detail=str(data.get("error") or "热点抓取失败。").strip())
     return data
+
+
+def _cancel_persona_hot_workflow(archive_id: str) -> bool:
+    clean_id = str(archive_id or "").strip()
+    with _PERSONA_HOT_PROCESS_LOCK:
+        process = (
+            _PERSONA_HOT_INTERACTIVE_PROCESS
+            if clean_id and _PERSONA_HOT_INTERACTIVE_ARCHIVE_ID == clean_id
+            else None
+        )
+    if process is None or isinstance(process.poll(), int):
+        return False
+    _terminate_persona_hot_process(process)
+    return True
 
 
 def _warm_persona_hot_strategy_async(archive_id: str) -> None:
@@ -18077,6 +18107,10 @@ def create_app() -> FastAPI:
     @app.post("/api/persona_dashboard/personas/{archive_id}/hot_candidates")
     def api_persona_dashboard_fetch_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _fetch_persona_hot_candidates(archive_id, payload)
+
+    @app.post("/api/persona_dashboard/personas/{archive_id}/hot_candidates/cancel")
+    def api_persona_dashboard_cancel_hot_candidates(archive_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
+        return {"ok": True, "cancelled": _cancel_persona_hot_workflow(archive_id)}
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/hot_candidates/import")
     def api_persona_dashboard_import_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesImportPayload, _user: dict[str, Any] = Depends(require_persona_owner)):
