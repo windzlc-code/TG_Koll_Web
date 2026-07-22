@@ -47,11 +47,18 @@ class MobilePublishActionDockTests(unittest.TestCase):
         self.assertIn("z-index: 1450", media)
 
     def test_remove_icon_is_positioned_in_the_chip_top_right(self):
-        remove_rule = re.search(r"\.publish-mobile-selection-remove\s*\{([^}]+)\}", STYLES)
+        remove_rule = re.search(r"button\.publish-mobile-selection-remove\s*\{([^}]+)\}", STYLES)
         self.assertIsNotNone(remove_rule)
         self.assertIn("position: absolute", remove_rule.group(1))
-        self.assertIn("top: 2px", remove_rule.group(1))
-        self.assertIn("right: 2px", remove_rule.group(1))
+        self.assertIn("top: -6px", remove_rule.group(1))
+        self.assertIn("right: -7px", remove_rule.group(1))
+        self.assertIn("width: 20px", remove_rule.group(1))
+        self.assertIn("height: 20px", remove_rule.group(1))
+        self.assertIn("padding: 0", remove_rule.group(1))
+        self.assertIn("border-radius: 999px", remove_rule.group(1))
+        self.assertIn("background: var(--ink)", remove_rule.group(1))
+        self.assertIn("width: 11px", STYLES)
+        self.assertIn("height: 11px", STYLES)
         self.assertIn("stroke: currentColor", STYLES)
 
     def test_sequence_strip_has_no_outer_card_and_active_chip_is_fully_highlighted(self):
@@ -82,6 +89,16 @@ class MobilePublishActionDockTests(unittest.TestCase):
         self.assertIn("display: flex", rule)
         self.assertIn("overflow-x: auto", rule)
         self.assertIn("touch-action: pan-x", rule)
+
+    def test_sequence_jump_fills_the_chip_so_its_number_is_centered(self):
+        jump_rules = re.findall(
+            r"\.console-page \.module-panel\.is-publishing-module \.publish-mobile-selection-jump\s*\{([^}]+)\}",
+            STYLES,
+        )
+        self.assertTrue(jump_rules)
+        centered_rule = next((rule for rule in jump_rules if "width: 100%" in rule), "")
+        self.assertIn("width: 100%", centered_rule)
+        self.assertIn("height: 100%", centered_rule)
 
 
 if __name__ == "__main__":
