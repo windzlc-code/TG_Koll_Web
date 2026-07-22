@@ -1485,6 +1485,32 @@ class ProxyMarketTests(unittest.TestCase):
         self.assertTrue(published.json()["item"]["available"])
         connection_check.assert_called_once()
 
+    def test_stale_active_item_can_be_retested_and_republished(self):
+        item = self._market_item("TW-TPE-ACTIVE-RETEST")
+        with db() as conn:
+            conn.execute(
+                "UPDATE proxy_market_items SET last_check_at = ? WHERE id = ?",
+                (int(time.time()) - 8 * 24 * 60 * 60, item["id"]),
+            )
+        with patch(
+            "webapp.proxy_market._run_proxy_connection_check",
+            return_value={"ok": True, "latency_ms": 18, "response": {}},
+        ) as connection_check:
+            published = self.admin.post(
+                f"/api/admin/proxy-market/items/{item['id']}/test-and-publish",
+                headers=self.origin,
+                json={
+                    "proxy_type": item["proxy_type"],
+                    "host": item["host"],
+                    "port": item["port"],
+                    "expires_at": item["expires_at"],
+                },
+            )
+        self.assertEqual(published.status_code, 200, published.text)
+        self.assertEqual(published.json()["item"]["status"], "active")
+        self.assertTrue(published.json()["item"]["available"])
+        connection_check.assert_called_once()
+
     def test_publish_omitted_protocol_preserves_existing_protocol(self):
         item = self._market_item("TW-TPE-PROTOCOL")
         with db() as conn:

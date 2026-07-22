@@ -6224,18 +6224,15 @@ function renderProxyMarketItems(payload = {}) {
       item.id,
       '<path d="M4 20h4l11-11-4-4L4 16v4Z"></path><path d="m13.5 6.5 4 4"></path>',
     );
-    const publish = createProxyMarketIconButton(
-      `发布 ${item.sku || item.id}`,
-      "publish",
-      item.id,
-      '<circle cx="12" cy="12" r="9"></circle><path d="m8 12 2.5 2.5L16 9"></path>',
-      "primary",
-    );
-    publish.disabled = (
-      String(item.status) === "archived"
-      || String(item.pending_check_status || "") !== "healthy"
-      || !String(item.pending_check_id || "")
-    );
+    const republish = document.createElement("button");
+    republish.type = "button";
+    republish.className = "primary proxy-market-republish-button";
+    republish.dataset.proxyMarketAction = "republish";
+    republish.dataset.id = String(item.id || "");
+    republish.title = `重新检测并发布 ${item.sku || item.id}`;
+    republish.setAttribute("aria-label", republish.title);
+    republish.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0 2 5.3"></path><path d="M20 4v7h-7"></path></svg><span>重新发布</span>';
+    republish.disabled = String(item.status) === "archived";
     const status = document.createElement("select");
     status.dataset.proxyMarketStatus = String(item.id || "");
     status.setAttribute("aria-label", `${item.sku || item.id} 库存状态`);
@@ -6269,7 +6266,7 @@ function renderProxyMarketItems(payload = {}) {
       "danger",
     );
     archive.disabled = String(item.status) === "archived";
-    actionRow.append(edit, publish, status, archive);
+    actionRow.append(edit, republish, status, archive);
     actionCell.appendChild(actionRow);
     row.appendChild(actionCell);
     body.appendChild(row);
@@ -6646,19 +6643,29 @@ async function saveProxyMarketItem({ test = false } = {}) {
   }
 }
 
-async function publishProxyMarketRow(itemId, button) {
+async function republishProxyMarketRow(itemId, control, { confirmAction = true } = {}) {
   const item = proxyMarketItemById(itemId);
-  if (!item) return;
-  const checkId = String(item.pending_check_id || "");
-  if (!checkId) throw new Error("请先编辑该代理并完成真实检测");
-  if (!confirm(`将发布 ${item.sku || item.id} 最近一次通过真实检测的配置，确认继续吗？`)) return;
-  button.disabled = true;
-  setMsg("proxyMarketMsg", `正在发布 ${item.sku || item.id}...`);
+  if (!item) return null;
+  if (String(item.status || "") === "archived") {
+    throw new Error("已归档的代理不能重新发布");
+  }
+  if (
+    confirmAction
+    && !confirm(`将重新检测 ${item.sku || item.id}，检测通过后立即发布到代理商城，确认继续吗？`)
+  ) return null;
+  control.disabled = true;
+  setMsg("proxyMarketMsg", `正在检测并重新发布 ${item.sku || item.id}...`);
   try {
-    const result = await api(`/api/admin/proxy-market/items/${encodeURIComponent(item.id)}/publish`, {
+    const payload = {
+      proxy_type: item.proxy_type || "socks5",
+      host: item.host || "",
+      port: Number(item.port || 0),
+      expires_at: Number(item.expires_at || 0),
+    };
+    const result = await api(`/api/admin/proxy-market/items/${encodeURIComponent(item.id)}/test-and-publish`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ check_id: checkId }),
+      body: JSON.stringify(payload),
     });
     applyProxyMarketItemLocally(result?.item, {
       ...item,
@@ -6667,12 +6674,17 @@ async function publishProxyMarketRow(itemId, button) {
       pending_check_id: "",
       pending_check_status: "",
     });
+    if (String(adminState.proxyMarketSelectedItemId || "") === String(item.id || "")) {
+      adminState.proxyMarketPendingCheckId = "";
+      editProxyMarketItem(item.id, { focus: false });
+    }
     await refreshProxyMarketItemsAfterWrite(
       "proxyMarketMsg",
-      `${item.sku || item.id} 已发布`,
+      `${item.sku || item.id} 已通过检测并重新发布到代理商城`,
     );
+    return result;
   } finally {
-    button.disabled = false;
+    control.disabled = false;
   }
 }
 
@@ -6705,6 +6717,15 @@ async function publishProxyMarketEditorItem() {
 async function updateProxyMarketStatus(itemId, status, control) {
   const item = proxyMarketItemById(itemId);
   if (!item || status === String(item.status || "")) return;
+  if (status === "active") {
+    try {
+      await republishProxyMarketRow(itemId, control, { confirmAction: false });
+    } catch (error) {
+      control.value = String(item.status || "");
+      throw error;
+    }
+    return;
+  }
   control.disabled = true;
   try {
     let result;
@@ -7468,7 +7489,7 @@ function bindActions() {
     const itemId = button.dataset.id || "";
     try {
       if (button.dataset.proxyMarketAction === "edit") editProxyMarketItem(itemId);
-      if (button.dataset.proxyMarketAction === "publish") await publishProxyMarketRow(itemId, button);
+      if (button.dataset.proxyMarketAction === "republish") await republishProxyMarketRow(itemId, button);
       if (button.dataset.proxyMarketAction === "archive") await archiveProxyMarketItem(itemId, button);
     } catch (error) {
       setMsg("proxyMarketMsg", getErrorMessage(error), false);
