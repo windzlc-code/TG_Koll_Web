@@ -7333,16 +7333,6 @@ function renderPersonaSettingsPanelV2(persona, account, profile, step) {
         ${renderPersonaLinkSettingsContent(profile)}
       </div>`;
   }
-  if (currentStep === "delete") {
-    return `
-      <div class="persona-inline-panel">
-        <strong>删除人设</strong>
-        <p>这里只保留真实可用的删除接口。删除后不可恢复。</p>
-        <div class="row-actions">
-          <button type="button" class="danger" data-persona-delete>删除当前人设</button>
-        </div>
-      </div>`;
-  }
   return `
     <div class="persona-inline-panel">
       <div class="persona-head-copy">
@@ -9599,7 +9589,6 @@ function renderConfirmSummary() {
       reply_comment: "提交 Threads 评论回复任务",
       reply_hot: "提交 Threads 热点回复任务",
       warmup: "提交 Threads 养号任务",
-      delete: "删除当前人设",
     }[step] || "显示当前步骤的参数面板";
     rows = rows.concat([
       ["当前人设", persona ? persona.name : "未选择"],
@@ -15223,17 +15212,10 @@ function renderPersonaMediaComposerPlaceholder() {
 }
 
 function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaForm, post, postMediaItems, sourceLabel, isFavoriteMedia) {
-  const stepHead = `
-    <div class="persona-production-step-head">
-      <span>第2步</span>
-      <strong>生成配图</strong>
-      <p>选择草稿后生成配图，也可以上传、追加或替换当前草稿媒体。</p>
-    </div>`;
   if (!post) {
     const isCustomCompose = String(generateForm.composeMode || "").trim() === "custom";
     return `
       <section class="persona-compose-media-side persona-production-section">
-        ${stepHead}
         <div class="persona-inline-panel persona-inline-panel--nested">
           <strong>${isCustomCompose ? "上传媒体" : "推文配图"}</strong>
           ${isCustomCompose ? `
@@ -15265,7 +15247,6 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
   const operationMode = isFavoriteMedia ? "replace" : (mediaForm.operationMode === "generate" ? "generate" : "replace");
   return `
     <section class="persona-compose-media-side persona-production-section">
-      ${stepHead}
       <div class="persona-inline-panel persona-inline-panel--nested">
         <strong>当前${esc(sourceLabel)}正文</strong>
         ${renderPersonaHotOrigin(personaHotImportMeta(persona.id, post.id), { compact: true })}
@@ -16129,7 +16110,6 @@ function renderPersonaDetail() {
   const draftCount = Array.isArray(state.personaDraftPosts[personaId]) ? drafts.length : personaOverviewDraftCount(persona);
   const favoriteCount = Array.isArray(state.personaFavoritePosts[personaId]) ? favorites.length : personaOverviewFavoriteCount(persona);
   const groupPanel = renderPersonaGroupPanel(groupKey, step, persona, account, profile);
-  const canDelete = Boolean(profile);
   $("personaDetail").innerHTML = `
     <div class="persona-inline-panel is-flat">
       <div class="persona-workbench-head">
@@ -16147,7 +16127,6 @@ function renderPersonaDetail() {
             </svg>
             <span>人设列表</span>
           </button>
-          ${canDelete ? `<button type="button" class="danger" data-persona-delete>删除当前人设</button>` : ""}
         </div>
       </div>
       ${showPersonaGroupTabs() ? renderPersonaGroupTabs(profile) : ""}
@@ -16228,19 +16207,12 @@ function renderPersonaContentPanel(persona, account, profile, step) {
         </div>
         <div class="persona-compose-workspace ${canComposeMedia ? "has-media" : ""}">
           <section class="persona-compose-post-side persona-production-section ${isEditingDraft ? "is-editing-draft" : ""} ${editingDirty ? "is-dirty" : ""}">
-            <div class="persona-production-step-head">
-              <span>第1步</span>
-              <div class="persona-production-step-title">
-                <strong>生成推文</strong>
-                ${isEditingDraft ? `
-                  <div class="persona-temp-edit-actions persona-temp-edit-actions--inline">
-                    <button type="button" data-persona-clear-draft-edit>清空</button>
-                    <button type="button" data-persona-exit-draft-edit>退出编辑</button>
-                  </div>
-                ` : ""}
+            ${isEditingDraft ? `
+              <div class="persona-temp-edit-actions persona-temp-edit-actions--inline">
+                <button type="button" data-persona-clear-draft-edit>清空</button>
+                <button type="button" data-persona-exit-draft-edit>退出编辑</button>
               </div>
-              <p>先生成或录入推文正文，保存后可进入右侧配图步骤。</p>
-            </div>
+            ` : ""}
             <div class="persona-compose-mode-slot ${canComposeMedia ? "" : "is-reserved"}" ${canComposeMedia ? "" : "aria-hidden=\"true\""}>
               ${renderPersonaGenerateComposeTabs(composeMode)}
             </div>
