@@ -46,6 +46,7 @@ PUBLISH_RECEIPT_RETENTION_SECONDS = 30 * 24 * 60 * 60
 ITEM_STATUSES = {"draft", "active", "allocated", "maintenance", "disabled", "archived"}
 HEALTH_STATUSES = {"pending", "healthy", "failed"}
 PROXY_TYPES = {"http", "https", "socks5"}
+MARKET_IP_TYPES = {"static_residential", "datacenter"}
 
 
 class ProxyMarketItemPayload(BaseModel):
@@ -388,11 +389,60 @@ def _safe_check_result(value: Any) -> dict[str, Any]:
     return governance.redact(data)
 
 
+def _proxy_market_ip_classification(result: dict[str, Any]) -> tuple[str, bool]:
+    reputation = result.get("reputation") if isinstance(result.get("reputation"), dict) else {}
+    if bool(reputation.get("bogon")):
+        return "invalid", False
+    if bool(reputation.get("tor")):
+        return "tor", False
+    if bool(reputation.get("vpn")):
+        return "vpn", False
+    if (
+        bool(reputation.get("datacenter"))
+        and str(result.get("residential_status") or "").strip() == "rejected"
+    ):
+        network_ok = bool(
+            result.get("route_verified")
+            and result.get("static_consistent")
+            and result.get("ip_consistent", True)
+        )
+        return "datacenter", network_ok
+    if str(result.get("residential_status") or "").strip() == "verified":
+        return "static_residential", bool(result.get("ok"))
+    if bool(result.get("ok")):
+        # Compatibility for trusted detectors that predate reputation metadata.
+        return "static_residential", True
+    return "unknown", False
+
+
+def _proxy_market_display_name(name: str, *, ip_type: str) -> str:
+    clean_name = str(name or "").strip()
+    if ip_type == "datacenter":
+        return (
+            clean_name
+            .replace("静态住宅代理", "机房代理")
+            .replace("靜態住宅代理", "機房代理")
+            .replace("静态住宅 IP", "机房 IP")
+            .replace("靜態住宅 IP", "機房 IP")
+        )
+    if ip_type == "static_residential":
+        return (
+            clean_name
+            .replace("机房代理", "静态住宅代理")
+            .replace("機房代理", "靜態住宅代理")
+            .replace("机房 IP", "静态住宅 IP")
+            .replace("機房 IP", "靜態住宅 IP")
+        )
+    return clean_name
+
+
 def _proxy_inspection_response(result: dict[str, Any]) -> dict[str, Any]:
     response = result.get("response") if isinstance(result.get("response"), dict) else {}
     connection = response.get("connection") if isinstance(response.get("connection"), dict) else {}
+    detected_ip_type, marketplace_ok = _proxy_market_ip_classification(result)
+    reputation = result.get("reputation") if isinstance(result.get("reputation"), dict) else {}
     return {
-        "ok": bool(result.get("ok")),
+        "ok": marketplace_ok,
         "checked_at": int(result.get("checked_at") or _now()),
         "exit_ip": str(result.get("exit_ip") or response.get("ip") or "").strip(),
         "latency_ms": max(0, int(result.get("latency_ms") or 0)),
@@ -401,13 +451,20 @@ def _proxy_inspection_response(result: dict[str, Any]) -> dict[str, Any]:
         "residential_status": str(result.get("residential_status") or "").strip(),
         "residential_reason": str(result.get("residential_reason") or "").strip(),
         "error_code": str(result.get("error_code") or "").strip(),
-        "error": str(result.get("error") or "").strip(),
+        "error": "" if marketplace_ok else str(result.get("error") or "").strip(),
+        "reputation": {
+            "bogon": bool(reputation.get("bogon")),
+            "datacenter": bool(reputation.get("datacenter")),
+            "tor": bool(reputation.get("tor")),
+            "vpn": bool(reputation.get("vpn")),
+        },
         "detected": {
             "country": str(response.get("country_code") or response.get("country") or "").strip(),
             "country_name": str(response.get("country") or "").strip(),
             "region": str(response.get("region") or "").strip(),
             "city": str(response.get("city") or "").strip(),
             "isp": str(connection.get("isp") or connection.get("org") or "").strip(),
+            "ip_type": detected_ip_type,
         },
     }
 
@@ -1760,18 +1817,45 @@ def register_proxy_market_routes(app: FastAPI) -> None:
             ).fetchone()
             next_status = "allocated" if active_allocation is not None else "active"
             published_at = int(current.get("published_at") or 0) or now
+            try:
+                candidate_result = json.loads(str(candidate.get("result_json") or "{}"))
+            except json.JSONDecodeError:
+                candidate_result = {}
+            candidate_detected = (
+                candidate_result.get("detected")
+                if isinstance(candidate_result, dict)
+                and isinstance(candidate_result.get("detected"), dict)
+                else {}
+            )
+            detected_ip_type, classification_publishable = _proxy_market_ip_classification(
+                candidate_result if isinstance(candidate_result, dict) else {}
+            )
+            if (
+                not classification_publishable
+                or detected_ip_type not in MARKET_IP_TYPES
+                or detected_ip_type != str(candidate_detected.get("ip_type") or "").strip()
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="代理类型识别结果无效或已损坏，请重新执行真实检测",
+                )
+            detected_display_name = _proxy_market_display_name(
+                str(current.get("display_name") or ""),
+                ip_type=detected_ip_type,
+            )
             updated_count = conn.execute(
                 """
                 UPDATE proxy_market_items
-                SET proxy_type = ?, host = ?, port = ?, credential_owner_user_id = ?,
+                SET display_name = ?, proxy_type = ?, host = ?, port = ?, credential_owner_user_id = ?,
                     username_ciphertext = ?, password_ciphertext = ?,
-                    country = ?, region = ?, city = ?, isp = ?, expires_at = ?,
+                    country = ?, region = ?, city = ?, isp = ?, ip_type = ?, expires_at = ?,
                     status = ?, health_status = 'healthy', latency_ms = ?,
                     last_check_at = ?, last_check_result_json = ?, published_at = ?,
                     updated_by = ?, updated_at = ?, version = version + 1
                 WHERE id = ? AND version = ?
                 """,
                 (
+                    detected_display_name,
                     str(candidate.get("proxy_type") or "socks5"),
                     str(candidate.get("host") or ""),
                     int(candidate.get("port") or 0),
@@ -1782,6 +1866,7 @@ def register_proxy_market_routes(app: FastAPI) -> None:
                     str(candidate.get("region") or ""),
                     str(candidate.get("city") or ""),
                     str(candidate.get("isp") or ""),
+                    detected_ip_type,
                     int(candidate.get("expires_at") or 0),
                     next_status,
                     int(candidate.get("latency_ms") or 0),
@@ -1802,12 +1887,13 @@ def register_proxy_market_routes(app: FastAPI) -> None:
             conn.execute(
                 """
                 UPDATE social_proxies
-                SET proxy_type = ?, host = ?, port = ?, username = '', password = '',
-                    country = ?, region = ?, city = ?, isp = ?, expires_at = ?,
+                SET name = ?, proxy_type = ?, host = ?, port = ?, username = '', password = '',
+                    country = ?, region = ?, city = ?, isp = ?, ip_type = ?, expires_at = ?,
                     status = 'active', last_check_at = ?, last_check_result = ?, updated_at = ?
                 WHERE market_item_id = ?
                 """,
                 (
+                    detected_display_name,
                     str(candidate.get("proxy_type") or "socks5"),
                     str(candidate.get("host") or ""),
                     int(candidate.get("port") or 0),
@@ -1815,6 +1901,7 @@ def register_proxy_market_routes(app: FastAPI) -> None:
                     str(candidate.get("region") or ""),
                     str(candidate.get("city") or ""),
                     str(candidate.get("isp") or ""),
+                    detected_ip_type,
                     int(candidate.get("expires_at") or 0),
                     int(candidate.get("checked_at") or 0),
                     str(candidate.get("result_json") or "{}"),

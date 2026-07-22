@@ -319,8 +319,8 @@
     const ipType = humanize(firstValue(item, ["ip_type", "network_type"], ""), {
       static_residential: "靜態住宅",
       residential: "住宅",
+      datacenter: "機房代理",
       mobile: "行動網路",
-      datacenter: "資料中心",
     });
     headingCopy.append(
       textElement("span", "proxy-card-kicker", ipType),

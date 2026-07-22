@@ -5348,6 +5348,35 @@ const PROXY_MARKET_STATUS_LABELS = {
   revoked: "已回收",
 };
 
+const PROXY_MARKET_IP_TYPE_LABELS = {
+  static_residential: "静态住宅",
+  datacenter: "机房代理",
+  unknown: "待识别",
+};
+
+function proxyMarketIpTypeLabel(value) {
+  return PROXY_MARKET_IP_TYPE_LABELS[String(value || "").toLowerCase()] || String(value || "待识别");
+}
+
+function proxyMarketDisplayNameForType(name, ipType) {
+  const value = String(name || "").trim();
+  if (ipType === "datacenter") {
+    return value
+      .replace("静态住宅代理", "机房代理")
+      .replace("靜態住宅代理", "機房代理")
+      .replace("静态住宅 IP", "机房 IP")
+      .replace("靜態住宅 IP", "機房 IP");
+  }
+  if (ipType === "static_residential") {
+    return value
+      .replace("机房代理", "静态住宅代理")
+      .replace("機房代理", "靜態住宅代理")
+      .replace("机房 IP", "静态住宅 IP")
+      .replace("機房 IP", "靜態住宅 IP");
+  }
+  return value;
+}
+
 function proxyMarketTone(value) {
   const status = String(value || "").toLowerCase();
   if (["healthy", "active"].includes(status)) return "success";
@@ -6065,10 +6094,15 @@ async function inspectProxyMarketConnection() {
     ].forEach(([id, value]) => {
       if (el(id) && String(value || "").trim()) el(id).value = String(value).trim();
     });
+    if (el("proxyMarketIpType")) {
+      el("proxyMarketIpType").value = proxyMarketIpTypeLabel(detected.ip_type);
+    }
+    const displayName = el("proxyMarketDisplayName");
+    if (displayName) displayName.value = proxyMarketDisplayNameForType(displayName.value, detected.ip_type);
     invalidateProxyMarketPendingCheck("检测已自动填写地区字段，请重新执行真实检测后再发布。");
     const location = [detected.country_name || detected.country, detected.region, detected.city].filter(Boolean).join(" / ");
     setProxyMarketSmartResult(
-      `检测通过${location ? `：${location}` : ""}${detected.isp ? ` · ${detected.isp}` : ""}${Number(check.latency_ms || 0) ? ` · ${Number(check.latency_ms)} ms` : ""}`,
+      `检测通过 · ${proxyMarketIpTypeLabel(detected.ip_type)}${location ? `：${location}` : ""}${detected.isp ? ` · ${detected.isp}` : ""}${Number(check.latency_ms || 0) ? ` · ${Number(check.latency_ms)} ms` : ""}`,
       "success",
     );
     return result;
@@ -6443,6 +6477,7 @@ function resetProxyMarketEditor({ focus = false } = {}) {
   if (el("proxyMarketPriceCents")) el("proxyMarketPriceCents").value = "0";
   if (el("proxyMarketProxyType")) el("proxyMarketProxyType").value = "socks5";
   if (el("proxyMarketBillingCycle")) el("proxyMarketBillingCycle").value = "month";
+  if (el("proxyMarketIpType")) el("proxyMarketIpType").value = "待检测";
   setText("proxyMarketEditorTitle", "新建代理");
   setText("proxyMarketEditorHint", "先保存草稿，再依次执行真实检测和发布。");
   setText("proxyMarketEditorState", "当前为新建模式");
@@ -6483,6 +6518,7 @@ function editProxyMarketItem(itemId, { focus = true } = {}) {
     proxyMarketRegion: item.region,
     proxyMarketCity: item.city,
     proxyMarketIsp: item.isp,
+    proxyMarketIpType: proxyMarketIpTypeLabel(item.ip_type),
     proxyMarketPriceCents: item.display_price_cents,
     proxyMarketCurrency: item.currency || "TWD",
     proxyMarketBillingCycle: item.billing_cycle || "month",

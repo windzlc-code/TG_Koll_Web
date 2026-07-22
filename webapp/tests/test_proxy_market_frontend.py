@@ -10,6 +10,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ADMIN_JS = ROOT / "static" / "assets" / "admin.js"
 ADMIN_HTML = ROOT / "static" / "admin.html"
+MARKET_HTML = ROOT / "static" / "proxy-market.html"
+MARKET_JS = ROOT / "static" / "assets" / "opc" / "proxy-market.js"
 
 
 class ProxyMarketFrontendTests(unittest.TestCase):
@@ -43,6 +45,7 @@ class ProxyMarketFrontendTests(unittest.TestCase):
         self.assertIn('id="proxyMarketAllocationPanel"', html)
         self.assertIn('role="tablist"', html)
         self.assertIn('id="proxyMarketInventoryCapacity"', html)
+        self.assertIn('id="proxyMarketIpType"', html)
         self.assertNotIn('id="proxyMarketInventoryCapacity" type="number" min="0" max=', html)
         self.assertNotIn('id="proxyMarketDefaultClaimLimit" type="number" min="0" max=', html)
         source = ADMIN_JS.read_text(encoding="utf-8")
@@ -55,6 +58,10 @@ class ProxyMarketFrontendTests(unittest.TestCase):
         self.assertIn('button.dataset.proxyMarketAction === "republish"', source)
         self.assertIn('if (status === "active")', source)
         self.assertIn('await republishProxyMarketRow(itemId, control, { confirmAction: false })', source)
+        self.assertIn('datacenter: "机房代理"', source)
+        self.assertIn('function proxyMarketDisplayNameForType(name, ipType)', source)
+        self.assertIn('proxyMarketDisplayNameForType(displayName.value, detected.ip_type)', source)
+        self.assertIn('proxyMarketIpType: proxyMarketIpTypeLabel(item.ip_type)', source)
         self.assertIn("function setProxyMarketRecordsView(view)", source)
         self.assertIn('inventory_capacity: inventoryCapacity', source)
         self.assertNotIn("claimLimit > 100", source)
@@ -67,13 +74,17 @@ class ProxyMarketFrontendTests(unittest.TestCase):
             :source.index('el("btnParseProxyMarketSmartInput")?.addEventListener')
         ]
         self.assertNotIn("applyProxyMarketSmartInput", paste_handler)
+        market_html = MARKET_HTML.read_text(encoding="utf-8")
+        market_js = MARKET_JS.read_text(encoding="utf-8")
+        self.assertIn('value="datacenter">機房代理', market_html)
+        self.assertIn('datacenter: "機房代理"', market_js)
 
     def _run_node(self, body: str):
         node = shutil.which("node")
         if not node:
             self.skipTest("node is not installed")
         source = ADMIN_JS.read_text(encoding="utf-8")
-        start = source.index("const PROXY_MARKET_SMART_FIELD_ALIASES")
+        start = source.index("const PROXY_MARKET_IP_TYPE_LABELS")
         end = source.index("function proxyMarketItemById", start)
         smart_source = source[start:end]
         harness = textwrap.dedent(

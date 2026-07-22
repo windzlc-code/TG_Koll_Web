@@ -1020,7 +1020,7 @@
         <div class="section-head admin-governance-head">
           <div>
             <h2>代理商城管理</h2>
-            <div class="meta">维护静态住宅代理库存。连接配置只有通过真实检测后才会发布到公共商城。</div>
+            <div class="meta">维护代理库存。系统会根据真实检测自动识别网络类型，检测通过后才会发布到公共商城。</div>
           </div>
           <div class="proxy-market-admin-head-actions">
             <a class="btn ghost" href="/proxy-market.html" target="_blank" rel="noopener">
@@ -1197,7 +1197,7 @@
             <label><span>售价（分）</span><input id="proxyMarketPriceCents" type="number" min="0" step="1" value="0"></label>
             <label><span>币种</span><input id="proxyMarketCurrency" maxlength="10" value="TWD"></label>
             <label><span>计费周期</span><select id="proxyMarketBillingCycle"><option value="month">每月</option><option value="week">每周</option><option value="day">每日</option><option value="once">一次性</option></select></label>
-            <label><span>IP 类型</span><input value="静态住宅" disabled></label>
+            <label><span>IP 类型</span><input id="proxyMarketIpType" value="待检测" disabled></label>
 
             <label class="span-2"><span>标签</span><input id="proxyMarketTags" placeholder="逗号分隔，例如 台湾, 低延迟"></label>
             <label class="span-2"><span>适用场景</span><input id="proxyMarketUseCases" placeholder="逗号分隔，例如 社媒运营, 本地化测试"></label>

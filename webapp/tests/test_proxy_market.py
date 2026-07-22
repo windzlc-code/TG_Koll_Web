@@ -1511,6 +1511,123 @@ class ProxyMarketTests(unittest.TestCase):
         self.assertTrue(published.json()["item"]["available"])
         connection_check.assert_called_once()
 
+    def test_datacenter_proxy_is_auto_classified_and_published(self):
+        item = self._market_item("US-LAX-AUTO-CLASSIFY")
+        with db() as conn:
+            conn.execute(
+                """
+                UPDATE proxy_market_items
+                SET display_name = '美国静态住宅代理', status = 'maintenance'
+                WHERE id = ?
+                """,
+                (item["id"],),
+            )
+        check_result = {
+            "ok": False,
+            "checked_at": int(time.time()),
+            "exit_ip": "206.14.121.45",
+            "latency_ms": 960,
+            "route_verified": True,
+            "ip_consistent": True,
+            "static_consistent": True,
+            "residential_status": "rejected",
+            "residential_reason": "IP reputation marks this address as datacenter",
+            "error": "IP reputation marks this address as datacenter",
+            "response": {
+                "ip": "206.14.121.45",
+                "country": "United States",
+                "country_code": "US",
+                "region": "California",
+                "city": "Los Angeles",
+                "connection": {"isp": "NTT America, Inc."},
+            },
+            "reputation": {
+                "bogon": False,
+                "datacenter": True,
+                "tor": False,
+                "vpn": False,
+            },
+        }
+        with patch(
+            "webapp.proxy_market._run_proxy_connection_check",
+            return_value=check_result,
+        ):
+            published = self.admin.post(
+                f"/api/admin/proxy-market/items/{item['id']}/test-and-publish",
+                headers=self.origin,
+                json={"host": "206.14.121.45", "port": 8022},
+            )
+        self.assertEqual(published.status_code, 200, published.text)
+        result = published.json()
+        self.assertEqual(result["item"]["status"], "active")
+        self.assertEqual(result["item"]["ip_type"], "datacenter")
+        self.assertEqual(result["item"]["display_name"], "美国机房代理")
+        self.assertEqual(result["item"]["country"], "US")
+        self.assertEqual(result["item"]["isp"], "NTT America, Inc.")
+        self.assertTrue(result["item"]["available"])
+        self.assertTrue(result["check"]["ok"])
+        self.assertEqual(result["check"]["detected"]["ip_type"], "datacenter")
+
+    def test_vpn_proxy_remains_blocked_from_marketplace(self):
+        item = self._market_item("US-VPN-BLOCKED")
+        check_result = {
+            "ok": False,
+            "checked_at": int(time.time()),
+            "exit_ip": "198.51.100.88",
+            "latency_ms": 25,
+            "route_verified": True,
+            "ip_consistent": True,
+            "static_consistent": True,
+            "residential_status": "rejected",
+            "error": "VPN address",
+            "response": {"country_code": "US", "connection": {"isp": "VPN ISP"}},
+            "reputation": {
+                "bogon": False,
+                "datacenter": True,
+                "tor": False,
+                "vpn": True,
+            },
+        }
+        with patch(
+            "webapp.proxy_market._run_proxy_connection_check",
+            return_value=check_result,
+        ):
+            published = self.admin.post(
+                f"/api/admin/proxy-market/items/{item['id']}/test-and-publish",
+                headers=self.origin,
+                json={"host": "198.51.100.88", "port": 1080},
+            )
+        self.assertEqual(published.status_code, 409, published.text)
+        with db() as conn:
+            stored = conn.execute(
+                "SELECT status, ip_type FROM proxy_market_items WHERE id = ?",
+                (item["id"],),
+            ).fetchone()
+        self.assertEqual(stored["status"], "active")
+        self.assertEqual(stored["ip_type"], "static_residential")
+
+    def test_only_marketplace_datacenter_proxy_is_allowed_for_accounts(self):
+        self.assertTrue(
+            social_automation_api._account_proxy_type_allowed(
+                {"ip_type": "static_residential", "market_item_id": ""}
+            )
+        )
+        self.assertTrue(
+            social_automation_api._account_proxy_type_allowed(
+                {"ip_type": "datacenter", "market_item_id": "market-item-1"}
+            )
+        )
+        self.assertFalse(
+            social_automation_api._account_proxy_type_allowed(
+                {"ip_type": "datacenter", "market_item_id": ""}
+            )
+        )
+        self.assertFalse(
+            social_automation_api._account_proxy_type_allowed(
+                {"ip_type": "vpn", "market_item_id": "market-item-1"}
+            )
+        )
+
     def test_publish_omitted_protocol_preserves_existing_protocol(self):
         item = self._market_item("TW-TPE-PROTOCOL")
         with db() as conn:
