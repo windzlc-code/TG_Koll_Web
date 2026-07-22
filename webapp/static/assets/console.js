@@ -5350,6 +5350,7 @@ function snapshotConsoleScrollState() {
   const personaList = moduleBody?.querySelector(".persona-list-scroll");
   const publishPreviewTabs = moduleBody?.querySelector(".publish-preview-tabs");
   const publishPostList = moduleBody?.querySelector(".publish-post-list");
+  const publishMobileSelectionStrip = moduleBody?.querySelector(".publish-mobile-selection-strip");
   const personaHotGrid = moduleBody?.querySelector(".persona-hot-grid");
   const personaHotPreview = moduleBody?.querySelector(".persona-hot-preview-card");
   const personaHotLayout = moduleBody?.querySelector(".persona-hot-layout");
@@ -5361,6 +5362,7 @@ function snapshotConsoleScrollState() {
     personaListTop: personaList?.scrollTop || 0,
     publishPreviewTabsTop: publishPreviewTabs?.scrollTop || 0,
     publishPostListTop: publishPostList?.scrollTop || 0,
+    publishMobileSelectionLeft: publishMobileSelectionStrip?.scrollLeft || 0,
     personaHotGridTop: personaHotGrid?.scrollTop || 0,
     personaHotPreviewTop: personaHotPreview?.scrollTop || 0,
     personaHotPreviewKey: String(personaHotPreview?.dataset?.personaHotPreviewKey || ""),
@@ -5408,6 +5410,7 @@ function restoreConsoleScrollState(snapshot) {
     const personaList = moduleBody?.querySelector(".persona-list-scroll");
     const publishPreviewTabs = moduleBody?.querySelector(".publish-preview-tabs");
     const publishPostList = moduleBody?.querySelector(".publish-post-list");
+    const publishMobileSelectionStrip = moduleBody?.querySelector(".publish-mobile-selection-strip");
     const personaHotGrid = moduleBody?.querySelector(".persona-hot-grid");
     const personaHotPreview = moduleBody?.querySelector(".persona-hot-preview-card");
     const personaHotLayout = moduleBody?.querySelector(".persona-hot-layout");
@@ -5416,6 +5419,7 @@ function restoreConsoleScrollState(snapshot) {
     if (personaList) personaList.scrollTop = snapshot.personaListTop || 0;
     if (publishPreviewTabs) publishPreviewTabs.scrollTop = snapshot.publishPreviewTabsTop || 0;
     if (publishPostList) publishPostList.scrollTop = snapshot.publishPostListTop || 0;
+    if (publishMobileSelectionStrip) publishMobileSelectionStrip.scrollLeft = snapshot.publishMobileSelectionLeft || 0;
     if (personaHotGrid) personaHotGrid.scrollTop = snapshot.personaHotGridTop || 0;
     if (
       personaHotPreview
@@ -8711,6 +8715,47 @@ function renderPublishContentPanel(persona = selectedPersona()) {
     </div>`;
 }
 
+function publishMobileSelectionItems(persona = selectedPersona(), source = state.publishContentSource) {
+  const cleanSource = normalizePublishContentSource(source);
+  if (!persona || cleanSource === "custom") return [];
+  const rows = publishSourceRows(persona, cleanSource);
+  const selectedIds = new Set(syncPublishSelectedPostIds(persona, cleanSource, rows));
+  return rows
+    .map((post, index) => ({
+      id: String(post?.id || ""),
+      number: index + 1,
+      title: personaDraftDisplayTitleForPost(post, rows, index),
+    }))
+    .filter((item) => item.id && selectedIds.has(item.id));
+}
+
+function renderPublishMobileSelectionStrip(persona = selectedPersona(), mode = "publish_now") {
+  if (normalizedPublishMode(mode) !== "publish_now") return "";
+  const selectedItems = publishMobileSelectionItems(persona);
+  if (selectedItems.length < 2) return "";
+  return `
+    <div class="publish-mobile-selection-strip" aria-label="已选发布内容">
+      ${selectedItems.map((item) => `
+        <div class="publish-mobile-selection-chip">
+          <button
+            type="button"
+            class="publish-mobile-selection-jump"
+            data-publish-mobile-jump="${esc(item.id)}"
+            title="${esc(`定位到第 ${item.number} 篇：${item.title}`)}"
+            aria-label="${esc(`定位到第 ${item.number} 篇`)}"
+          ><span>${esc(item.number)}</span></button>
+          <button
+            type="button"
+            class="publish-mobile-selection-remove"
+            data-publish-mobile-remove="${esc(item.id)}"
+            title="${esc(`移除第 ${item.number} 篇`)}"
+            aria-label="${esc(`从发布中移除第 ${item.number} 篇`)}"
+          >${renderClearSelectionIcon()}</button>
+        </div>
+      `).join("")}
+    </div>`;
+}
+
 function publishHistoryRecordTitle(record, index = 0) {
   return String(
     record?.title
@@ -9340,7 +9385,13 @@ function renderSimpleFlowModule(moduleId) {
   const actionLabel = moduleId === "queue" ? "打开任务队列" : (moduleId === "publishing" && publishModeForAction === "matrix_start" ? "提交矩阵发布" : "确认执行");
   const actionBusy = Boolean(state.simpleFlowPending && state.simpleFlowPendingModule === moduleId);
   const actionBlocked = Boolean(state.simpleFlowPending && !actionBusy);
-  const actionHtml = moduleId === "automation" || publishModeForAction === "publish_history" ? "" : `<div class="command-actions ${moduleId === "publishing" ? "publish-command-actions" : ""}"><button id="executeSimpleFlow" type="button" class="primary" aria-busy="${actionBusy ? "true" : "false"}" ${moduleId === "publishing" ? dailyPublishActionAttrs() : ""} ${actionBusy || actionBlocked ? "disabled" : ""}>${actionBusy ? renderBusyButtonContent(`${actionLabel}中`, true, state.simpleFlowPendingStartedAt) : (actionBlocked ? "其他任务执行中" : (moduleId === "publishing" && dailyPublishIsLocked() ? "今日发布已锁定" : esc(actionLabel)))}</button></div>`;
+  const publishSelectionItems = moduleId === "publishing" && publishModeForAction === "publish_now"
+    ? publishMobileSelectionItems(selectedPersona())
+    : [];
+  const publishSelectionBadge = publishSelectionItems.length > 1
+    ? `<span class="publish-mobile-selection-count" aria-label="已选 ${esc(publishSelectionItems.length)} 篇">${esc(publishSelectionItems.length)}</span>`
+    : "";
+  const actionHtml = moduleId === "automation" || publishModeForAction === "publish_history" ? "" : `<div class="command-actions ${moduleId === "publishing" ? "publish-command-actions" : ""}">${moduleId === "publishing" ? renderPublishMobileSelectionStrip(selectedPersona(), publishModeForAction) : ""}<button id="executeSimpleFlow" type="button" class="primary" aria-busy="${actionBusy ? "true" : "false"}" ${moduleId === "publishing" ? dailyPublishActionAttrs() : ""} ${actionBusy || actionBlocked ? "disabled" : ""}>${actionBusy ? renderBusyButtonContent(`${actionLabel}中`, true, state.simpleFlowPendingStartedAt) : (actionBlocked ? "其他任务执行中" : (moduleId === "publishing" && dailyPublishIsLocked() ? "今日发布已锁定" : esc(actionLabel)))}${publishSelectionBadge}</button></div>`;
   $("moduleBody").innerHTML = `
     ${moduleId === "publishing" ? renderDailyPublishLimitBanner() : ""}
     ${body}
@@ -9511,6 +9562,29 @@ function bindSimpleFlowInputs(moduleId) {
         const rows = publishSourceRows(persona, source);
         const action = String(node.dataset.publishSourceSelect || "");
         setPublishSelectedPostIds(persona, source, action === "all" ? rows.map((post) => String(post.id || "")).filter(Boolean) : []);
+        renderSimpleFlowModule("publishing");
+      });
+    });
+    document.querySelectorAll("[data-publish-mobile-jump]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const postId = String(node.dataset.publishMobileJump || "").trim();
+        if (!postId) return;
+        state.publishPreviewPostId = postId;
+        syncPublishPreviewSelectionDom();
+        document.querySelector(`[data-publish-post-card="${CSS.escape(postId)}"]`)?.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+          inline: "nearest",
+        });
+      });
+    });
+    document.querySelectorAll("[data-publish-mobile-remove]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const persona = selectedPersona();
+        const source = normalizePublishContentSource();
+        const postId = String(node.dataset.publishMobileRemove || "").trim();
+        const selected = syncPublishSelectedPostIds(persona, source).filter((id) => id !== postId);
+        setPublishSelectedPostIds(persona, source, selected);
         renderSimpleFlowModule("publishing");
       });
     });

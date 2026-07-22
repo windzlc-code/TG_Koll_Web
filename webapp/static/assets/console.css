@@ -2286,11 +2286,17 @@ textarea:focus {
 }
 
 .publish-command-actions #executeSimpleFlow {
+  position: relative;
   min-height: 52px;
   padding: 12px 20px;
   font-size: 16px;
   font-weight: 900;
   border-radius: var(--radius);
+}
+
+.publish-mobile-selection-strip,
+.publish-mobile-selection-count {
+  display: none;
 }
 
 .publish-persona-shell {
@@ -16012,6 +16018,114 @@ body.console-page {
 @media (max-width: 760px) {
   .console-page .console-shell {
     padding-bottom: calc(68px + env(safe-area-inset-bottom));
+  }
+
+  .module-panel.is-publishing-module:has(.publish-command-actions) #moduleBody {
+    padding-bottom: 126px;
+  }
+
+  .module-panel.is-publishing-module .publish-command-actions {
+    position: fixed;
+    z-index: 1400;
+    right: max(10px, env(safe-area-inset-right, 0px));
+    bottom: calc(68px + env(safe-area-inset-bottom, 0px));
+    left: max(10px, env(safe-area-inset-left, 0px));
+    display: grid;
+    gap: 6px;
+    width: auto;
+    max-width: none;
+    margin: 0;
+    pointer-events: none;
+  }
+
+  .module-panel.is-publishing-module .publish-command-actions #executeSimpleFlow {
+    width: 100%;
+    min-height: 50px;
+    padding: 9px 42px 9px 16px;
+    border-radius: 7px;
+    box-shadow: 0 8px 22px rgba(7, 17, 18, 0.22);
+    pointer-events: auto;
+  }
+
+  .module-panel.is-publishing-module .publish-mobile-selection-strip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    max-width: 100%;
+    padding: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--panel-solid) 94%, transparent);
+    box-shadow: 0 6px 18px rgba(7, 17, 18, 0.14);
+    backdrop-filter: blur(12px);
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    touch-action: pan-x;
+    pointer-events: auto;
+  }
+
+  .module-panel.is-publishing-module .publish-mobile-selection-strip::-webkit-scrollbar {
+    display: none;
+  }
+
+  .publish-mobile-selection-chip {
+    display: inline-grid;
+    grid-template-columns: 38px 30px;
+    flex: 0 0 auto;
+    min-height: 38px;
+    overflow: hidden;
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    background: var(--panel-solid);
+  }
+
+  .publish-mobile-selection-chip button {
+    min-width: 0;
+    min-height: 38px;
+    height: 38px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .publish-mobile-selection-jump {
+    color: var(--ink);
+    font-size: 14px;
+    font-weight: 900;
+  }
+
+  .publish-mobile-selection-remove {
+    color: var(--muted);
+    border-left: 1px solid var(--line) !important;
+  }
+
+  .publish-mobile-selection-remove .ui-action-icon {
+    width: 16px;
+    height: 16px;
+    margin: auto;
+  }
+
+  .module-panel.is-publishing-module .publish-mobile-selection-count {
+    position: absolute;
+    top: -7px;
+    right: -6px;
+    display: inline-grid;
+    width: 23px;
+    min-width: 23px;
+    height: 23px;
+    place-items: center;
+    border: 2px solid var(--panel-solid);
+    border-radius: 999px;
+    color: var(--accent-ink);
+    background: var(--accent);
+    font-size: 11px;
+    font-weight: 900;
+    line-height: 1;
   }
 
   .mobile-task-dock {
