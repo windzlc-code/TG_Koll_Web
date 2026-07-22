@@ -83,7 +83,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn('.slice(0, 86) || "当前内容为空。"', self.console_script)
         self.assertNotIn('.slice(0, 170))}</p>', self.console_script)
 
-    def test_mobile_publish_preview_is_number_tabs_only(self):
+    def test_mobile_publish_preview_keeps_original_tabs_without_body(self):
         self.assertIn(
             'class="publish-content-preview publish-content-preview--selection"',
             self.console_script,
@@ -92,7 +92,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             ".publish-content-preview--selection .publish-preview-card",
             self.styles,
         )
-        self.assertIn(
+        self.assertNotIn(
             ".publish-content-preview--selection .publish-preview-tab-copy",
             self.styles,
         )
@@ -108,6 +108,16 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('content="width=device-width, initial-scale=1.0, viewport-fit=cover"', self.markup)
         self.assertIn("right: 0;\n    bottom: 0;\n    left: 0;", self.styles)
         self.assertIn("border-width: 1px 0 0;", self.styles)
+
+    def test_mobile_publish_history_is_compact(self):
+        self.assertIn('class="publish-post-picker publish-history-picker"', self.console_script)
+        self.assertIn(
+            ".publish-history-preview .publish-history-metrics",
+            self.styles,
+        )
+        self.assertIn("grid-template-columns: repeat(6, minmax(0, 1fr));", self.styles)
+        self.assertIn(".publish-history-card .publish-post-card-snippet", self.styles)
+        self.assertIn("-webkit-line-clamp: 2;", self.styles)
 
     def test_refresh_actions_have_distinct_labels_and_behaviors(self):
         self.assertIn(">刷新显示</button>", self.markup)

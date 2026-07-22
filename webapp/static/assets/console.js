@@ -8784,7 +8784,7 @@ function renderPublishHistoryPanel(persona = selectedPersona()) {
   return `
     <div class="publish-content-layout">
       ${renderPublishHistoryPreview(persona)}
-      <section class="publish-post-picker">
+      <section class="publish-post-picker publish-history-picker">
         <div class="publish-panel-head">
           <div><strong>发布历史</strong><span>${esc(persona?.name || "当前人设")}</span></div>
           <button type="button" data-publish-history-refresh class="primary" aria-busy="${refreshing ? "true" : "false"}" ${refreshing || !persona?.id ? "disabled" : ""}>${refreshing ? `刷新中 ${esc(Number(refreshStatus?.progress || 0))}%` : "刷新热点数据"}</button>

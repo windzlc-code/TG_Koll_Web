@@ -16015,42 +16015,9 @@ body.console-page {
     scrollbar-gutter: auto;
   }
 
-  .publish-content-preview--selection {
-    display: block;
-    min-height: 0;
-  }
-
   .publish-content-preview--selection > .publish-panel-head,
   .publish-content-preview--selection .publish-preview-card {
     display: none;
-  }
-
-  .publish-content-preview--selection .publish-preview-tabs-layout {
-    display: block;
-  }
-
-  .publish-content-preview--selection .publish-preview-tabs {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    padding: 0;
-  }
-
-  .publish-content-preview--selection .publish-preview-tabs button {
-    display: grid;
-    grid-template-columns: 1fr;
-    width: 38px;
-    min-height: 38px;
-    padding: 4px;
-  }
-
-  .publish-content-preview--selection .publish-preview-tab-copy {
-    display: none;
-  }
-
-  .publish-content-preview--selection .publish-preview-tab-index {
-    width: 28px;
-    height: 28px;
   }
 
   .publish-post-card-main {
@@ -16067,6 +16034,101 @@ body.console-page {
 
   .publish-post-card-media {
     padding: 0 8px 8px 42px;
+  }
+
+  .publish-history-preview .publish-preview-card {
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .publish-history-preview .publish-preview-card > p {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+  }
+
+  .publish-history-preview .publish-history-meta,
+  .publish-history-preview .publish-history-actions {
+    flex-wrap: nowrap;
+  }
+
+  .publish-history-preview .publish-history-metrics {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 4px;
+  }
+
+  .publish-history-preview .publish-history-metrics span {
+    min-height: 38px;
+    padding: 4px 3px;
+    text-align: center;
+  }
+
+  .publish-history-preview .publish-history-metrics small {
+    font-size: 9px;
+  }
+
+  .publish-history-preview .publish-history-metrics strong {
+    overflow: hidden;
+    font-size: 12px;
+    text-overflow: ellipsis;
+  }
+
+  .publish-history-preview .publish-history-hot-status {
+    padding: 5px 7px;
+    font-size: 10px;
+  }
+
+  .publish-history-preview .publish-preview-media-empty {
+    min-height: 42px;
+    padding: 5px;
+    font-size: 11px;
+  }
+
+  .publish-history-picker > .publish-panel-head {
+    align-items: center;
+    flex-direction: row;
+    gap: 8px;
+  }
+
+  .publish-history-picker > .publish-panel-head > div {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+  }
+
+  .publish-history-picker > .publish-panel-head > button {
+    width: auto;
+    min-height: 30px;
+    margin-left: auto;
+    padding: 4px 8px;
+  }
+
+  .publish-history-picker .publish-history-note {
+    font-size: 11px;
+    line-height: 1.35;
+  }
+
+  .publish-history-card-main {
+    align-items: start;
+    padding: 5px 7px;
+  }
+
+  .publish-history-card .publish-post-card-meta {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .publish-history-card .publish-post-card-snippet {
+    display: -webkit-box;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
   }
 
   .persona-draft-card p {
