@@ -161,7 +161,7 @@ class BillingFrontendContractTests(unittest.TestCase):
         self.assertIn("stroke: #79eed8;", self.console_styles)
         self.assertIn("stroke-width: 3;", self.console_styles)
 
-    def test_running_button_animates_only_its_border(self):
+    def test_running_button_uses_static_border_without_sweep(self):
         running_start = self.console_styles.index(
             '.console-page .console-shell button[aria-busy="true"]:not(.danger)'
         )
@@ -169,17 +169,14 @@ class BillingFrontendContractTests(unittest.TestCase):
             "@media (prefers-reduced-motion: reduce)", running_start
         )
         running_styles = self.console_styles[running_start:running_end]
-        self.assertIn("linear-gradient(#071112, #071112)", running_styles)
         self.assertIn(
-            "background-clip: padding-box, border-box", running_styles
-        )
-        self.assertIn("border-color: transparent !important;", running_styles)
-        self.assertIn(
-            "animation: vecto-action-running-border-sweep", running_styles
-        )
-        self.assertNotIn(
             "background-image: var(--vecto-action-running-gradient)", running_styles
         )
+        self.assertIn("border-color: var(--vecto-action-border) !important;", running_styles)
+        self.assertIn("box-shadow: none !important;", running_styles)
+        self.assertIn("animation: none !important;", running_styles)
+        self.assertNotIn("background-clip: padding-box, border-box", running_styles)
+        self.assertNotIn("vecto-action-running-border-sweep", running_styles)
         self.assertNotIn("vecto-action-running-sheen", running_styles)
 
 

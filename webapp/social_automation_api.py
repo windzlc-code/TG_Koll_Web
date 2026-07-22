@@ -1900,10 +1900,15 @@ def _brand_live_browser_html(content: bytes) -> bytes:
         return content
     branding = """<style id="vecto-live-browser-brand">
 #noVNC_transition {
+  --vecto-brand-logo-size: 110px;
+  --vecto-brand-orbit-size: 146px;
+  --vecto-brand-logo-y: calc(50% - 42px);
+  --vecto-brand-status-y: calc(50% + 42px);
+  --vecto-brand-signal-y: calc(50% + 105px);
   position: fixed !important;
   inset: 0 !important;
   overflow: hidden !important;
-  color: #bdf9e8 !important;
+  color: #ffffff !important;
   background-color: #06110f !important;
   background-image:
     linear-gradient(rgba(108, 236, 201, 0.035) 1px, transparent 1px),
@@ -1917,19 +1922,18 @@ def _brand_live_browser_html(content: bytes) -> bytes:
 #noVNC_transition::after {
   position: absolute;
   left: 50%;
-  top: calc(50% - 48px);
+  top: var(--vecto-brand-logo-y);
   content: "";
   pointer-events: none;
 }
 #noVNC_transition::before {
   z-index: 2;
-  width: 110px;
-  height: 110px;
-  background: linear-gradient(120deg, #effffb 0%, #79f2cf 34%, #55cce9 62%, #d8fff5 100%);
-  background-size: 240% 240%;
+  width: var(--vecto-brand-logo-size);
+  height: var(--vecto-brand-logo-size);
+  background: #ffffff;
   -webkit-mask: url("/assets/opc/vecto-logo-ui-icon.png?v=20260711") center / contain no-repeat;
   mask: url("/assets/opc/vecto-logo-ui-icon.png?v=20260711") center / contain no-repeat;
-  filter: drop-shadow(0 0 12px rgba(91, 230, 196, 0.34));
+  filter: drop-shadow(0 0 12px rgba(255, 255, 255, 0.28));
   transform: translate(-50%, -50%);
   animation:
     vecto-browser-brand-reveal 820ms cubic-bezier(0.16, 1, 0.3, 1) both,
@@ -1937,15 +1941,15 @@ def _brand_live_browser_html(content: bytes) -> bytes:
 }
 #noVNC_transition::after {
   z-index: 1;
-  width: 146px;
-  height: 146px;
+  width: var(--vecto-brand-orbit-size);
+  height: var(--vecto-brand-orbit-size);
   border-radius: 50%;
   background: conic-gradient(
     from 210deg,
     transparent 0 58%,
-    rgba(92, 231, 197, 0.2) 66%,
-    rgba(116, 238, 212, 0.92) 72%,
-    rgba(85, 204, 233, 0.28) 78%,
+    rgba(255, 255, 255, 0.12) 66%,
+    rgba(255, 255, 255, 0.82) 72%,
+    rgba(255, 255, 255, 0.2) 78%,
     transparent 86% 100%
   );
   -webkit-mask: radial-gradient(circle, transparent 65%, #000 66% 67%, transparent 68%);
@@ -1956,31 +1960,48 @@ def _brand_live_browser_html(content: bytes) -> bytes:
     vecto-browser-orbit 4.6s linear 820ms infinite;
 }
 #noVNC_transition_text {
-  position: relative;
+  position: absolute;
   z-index: 3;
-  margin-top: 158px !important;
-  color: #9cf5dc !important;
+  top: var(--vecto-brand-status-y);
+  left: 50%;
+  width: min(320px, 82vw);
+  margin: 0 !important;
+  color: #ffffff !important;
   font-weight: 600 !important;
   letter-spacing: 0 !important;
-  text-shadow: 0 0 18px rgba(91, 230, 196, 0.28);
+  text-align: center;
+  text-shadow: 0 0 16px rgba(255, 255, 255, 0.18);
+  transform: translateX(-50%);
   animation: vecto-browser-status-reveal 680ms ease-out 280ms both;
 }
+#noVNC_transition_text::before {
+  display: block;
+  margin-bottom: 5px;
+  color: rgba(255, 255, 255, 0.72);
+  content: "VECTO OS";
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.2;
+}
 #noVNC_transition .noVNC_spinner {
-  position: relative !important;
+  position: absolute !important;
   z-index: 3;
+  top: var(--vecto-brand-signal-y);
+  left: 50%;
   display: block !important;
   width: 72px !important;
   height: 4px !important;
-  margin: 18px auto 0 !important;
+  margin: 0 !important;
   border: 0 !important;
   border-radius: 2px !important;
   background: repeating-linear-gradient(
     90deg,
-    rgba(170, 211, 201, 0.22) 0 20px,
+    rgba(255, 255, 255, 0.22) 0 20px,
     transparent 20px 26px
   ) !important;
   box-shadow: none !important;
-  transform: none !important;
+  transform: translateX(-50%) !important;
   animation: none !important;
 }
 #noVNC_transition .noVNC_spinner::before {
@@ -1989,8 +2010,8 @@ def _brand_live_browser_html(content: bytes) -> bytes:
   width: 20px;
   border-radius: 2px;
   content: "";
-  background: linear-gradient(90deg, #6ce8c5, #65d8ef);
-  box-shadow: 0 0 12px rgba(92, 231, 197, 0.52);
+  background: #ffffff;
+  box-shadow: 0 0 12px rgba(255, 255, 255, 0.42);
   animation: vecto-browser-signal 1.35s cubic-bezier(0.45, 0, 0.2, 1) infinite alternate;
 }
 #noVNC_transition .noVNC_spinner::after {
@@ -2011,7 +2032,7 @@ def _brand_live_browser_html(content: bytes) -> bytes:
 @keyframes vecto-browser-brand-reveal {
   0% {
     opacity: 0;
-    filter: blur(8px) drop-shadow(0 0 0 rgba(91, 230, 196, 0));
+    filter: blur(8px) drop-shadow(0 0 0 rgba(255, 255, 255, 0));
     transform: translate(-50%, -42%) scale(0.84);
   }
   58% {
@@ -2019,13 +2040,13 @@ def _brand_live_browser_html(content: bytes) -> bytes:
   }
   100% {
     opacity: 1;
-    filter: blur(0) drop-shadow(0 0 12px rgba(91, 230, 196, 0.34));
+    filter: blur(0) drop-shadow(0 0 12px rgba(255, 255, 255, 0.28));
     transform: translate(-50%, -50%) scale(1);
   }
 }
 @keyframes vecto-browser-brand-flow {
-  from { background-position: 0% 50%; }
-  to { background-position: 100% 50%; }
+  from { filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.18)); }
+  to { filter: drop-shadow(0 0 16px rgba(255, 255, 255, 0.34)); }
 }
 @keyframes vecto-browser-orbit-reveal {
   from { opacity: 0; transform: translate(-50%, -50%) scale(0.72) rotate(-32deg); }
@@ -2036,8 +2057,8 @@ def _brand_live_browser_html(content: bytes) -> bytes:
   to { transform: translate(-50%, -50%) rotate(360deg); }
 }
 @keyframes vecto-browser-status-reveal {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; transform: translate(-50%, 8px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
 }
 @keyframes vecto-browser-signal {
   from { transform: translateX(0); }
@@ -2052,19 +2073,15 @@ def _brand_live_browser_html(content: bytes) -> bytes:
   }
 }
 @media (max-height: 520px), (max-width: 680px) {
-  #noVNC_transition::before {
-    width: 82px;
-    height: 82px;
-  }
-  #noVNC_transition::after {
-    width: 112px;
-    height: 112px;
+  #noVNC_transition {
+    --vecto-brand-logo-size: 82px;
+    --vecto-brand-orbit-size: 112px;
+    --vecto-brand-logo-y: calc(50% - 38px);
+    --vecto-brand-status-y: calc(50% + 30px);
+    --vecto-brand-signal-y: calc(50% + 88px);
   }
   #noVNC_transition_text {
-    margin-top: 126px !important;
-  }
-  #noVNC_transition .noVNC_spinner {
-    margin-top: 14px !important;
+    width: min(280px, 84vw);
   }
 }
 </style>"""

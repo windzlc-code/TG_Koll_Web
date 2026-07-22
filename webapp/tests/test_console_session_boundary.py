@@ -58,7 +58,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn(".console-page .console-shell", self.styles)
         self.assertIn("body.console-page", self.styles)
         self.assertIn("padding-top: var(--site-header-height)", self.styles)
-        self.assertIn("grid-template-columns: 288px minmax(0, 1fr)", self.styles)
+        self.assertIn("grid-template-columns: 304px minmax(0, 1fr)", self.styles)
         self.assertIn("top: calc(var(--site-header-height) + 16px)", self.styles)
         self.assertIn('.site-header[data-site-page="console"] .header-actions', self.site_nav_styles)
         self.assertIn("min-width: 274px", self.site_nav_styles)
@@ -213,11 +213,11 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('width: fit-content;', self.site_nav_styles)
         self.assertIn('href="/" aria-label="Vecto 首页" data-site-home-label', self.markup)
 
-    def test_console_actions_share_static_navigation_gradient_and_only_busy_buttons_animate(self):
+    def test_console_actions_and_busy_button_borders_remain_static(self):
         self.assertIn("--vecto-action-static-gradient", self.styles)
         self.assertNotIn("--vecto-action-sheen-gradient", self.styles)
         self.assertIn("--vecto-action-running-gradient", self.styles)
-        self.assertIn("@keyframes vecto-action-running-border-sweep", self.styles)
+        self.assertNotIn("@keyframes vecto-action-running-border-sweep", self.styles)
         self.assertIn('button[aria-busy="true"]', self.styles)
         self.assertIn("background-repeat: no-repeat", self.styles)
         self.assertIn("background-size: 100% 100%", self.styles)
@@ -228,6 +228,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('--vecto-action-border: #4f817a;', self.styles)
         self.assertNotIn("#43e4c7 50%", self.styles)
         self.assertIn("button:has(> .task-button-busy)", self.styles)
+        self.assertIn("animation: none !important", self.styles)
         self.assertNotIn("vecto-publish-button-sheen", self.styles)
         active_rule = self.styles.split(".publish-mode-tabs button.is-active {", 1)[1].split("}", 1)[0]
         self.assertIn("#071112", active_rule)
@@ -774,6 +775,10 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
               taskId: "task-9",
               personaId: "persona-7",
             }});
+            assert.deepStrictEqual(toastTargetForKind("queued"), {{
+              view: "tasks",
+              taskPanel: "persona",
+            }});
             state.view = "accounts";
             state.accountBrowserPanel = "proxies";
             assert.strictEqual(currentToastTarget().accountPanel, "proxies");
@@ -794,6 +799,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("setAccountBrowserPanel(targetAccountPanel)", opening)
         self.assertIn("refreshLiveBrowserSessionsSoon", opening)
         self.assertIn("state.simpleBranches.publishing = targetPublishMode", opening)
+        self.assertIn("taskQueuePageForTarget(state.taskQueuePanel, target.taskId)", opening)
+        self.assertIn("focusTaskQueueTarget(target.taskId)", opening)
         self.assertIn('target.accountPanel === "browsers"', metadata)
         self.assertIn("点击打开浏览器监控", metadata)
         self.assertIn("return currentToastTarget()", default_target)
@@ -875,6 +882,35 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("clearToastRemovalTimer", toast[refresh_start:refresh_end])
         self.assertNotIn("applyToastMeta(existingToast", toast[refresh_start:refresh_end])
         self.assertIn("keep the existing DOM and class", toast[refresh_start:refresh_end])
+        self.assertIn("updateToastInPlace(existingToast, request)", toast[refresh_start:refresh_end])
+        self.assertIn("previousTarget !== nextTarget", toast[refresh_start:refresh_end])
+
+    def test_task_toasts_keep_task_routing_and_rows_have_exact_targets(self):
+        show_msg = self._section("function showMsg", "function showMsgHtml")
+        persona_rows = self._function_source("renderPersonaQueueRows")
+        task_view = self._function_source("renderTaskQueueView")
+
+        self.assertIn("const hasTaskRoute = Boolean(options.target || options.taskId || options.kind)", show_msg)
+        self.assertIn("hasTaskRoute ? options", show_msg)
+        self.assertIn('data-task-queue-row-id="${esc(task.id)}"', persona_rows)
+        self.assertIn('data-task-queue-row-id="${esc(task.id)}"', task_view)
+        self.assertIn('tabindex="-1"', persona_rows)
+
+        page_harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            const state = {{ taskQueuePersonaPageSize: 2, taskQueueRegularPageSize: 20 }};
+            function taskQueueRowsForKind(kind) {{
+              return kind === "persona"
+                ? [{{ id: "task-1" }}, {{ id: "task-2" }}, {{ id: "task-3" }}]
+                : [];
+            }}
+            {self._function_source("taskQueuePageForTarget")}
+            assert.strictEqual(taskQueuePageForTarget("persona", "task-3"), 2);
+            assert.strictEqual(taskQueuePageForTarget("persona", "missing"), 1);
+            """
+        )
+        self._run_node(page_harness)
 
     def test_manual_takeover_waits_for_backend_ack_and_keeps_task_refresh_active(self):
         set_mode = self._section("async function setLiveBrowserMode", "function liveBrowserToolInput")

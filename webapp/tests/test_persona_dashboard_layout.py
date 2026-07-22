@@ -78,6 +78,52 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.console_script,
         )
 
+    def test_mobile_draft_hot_metrics_stay_in_one_horizontal_row(self):
+        mobile_rule = self.styles.index(
+            ".persona-hot-metric-strip {\n    align-items: center;"
+        )
+        mobile_start = self.styles.rfind("@media (max-width: 760px)", 0, mobile_rule)
+        mobile_end = self.styles.index("@media (max-width: 1180px)", mobile_start)
+        mobile_styles = self.styles[mobile_start:mobile_end]
+
+        self.assertIn(".persona-hot-metric-strip {\n    align-items: center;", mobile_styles)
+        self.assertIn("grid-template-columns: repeat(6, minmax(0, 1fr));", mobile_styles)
+        self.assertIn(".persona-hot-metric-values > span {", mobile_styles)
+        self.assertIn("flex-direction: column;", mobile_styles)
+
+    def test_second_mobile_dock_click_scrolls_active_view_to_top(self):
+        handler_start = self.console_script.index(
+            "const handleWorkspaceModuleNavigation = async (event) => {"
+        )
+        handler_end = self.console_script.index(
+            '\n  $("moduleMenu").addEventListener', handler_start
+        )
+        handler = self.console_script[handler_start:handler_end]
+
+        self.assertIn("function isCurrentMobileTaskDockTarget(button)", self.console_script)
+        self.assertIn("function scrollConsolePageToTop()", self.console_script)
+        self.assertIn('event.target.closest(".mobile-task-dock-button")', handler)
+        self.assertIn("isCurrentMobileTaskDockTarget(dockButton)", handler)
+        self.assertIn("scrollConsolePageToTop();", handler)
+        self.assertLess(
+            handler.index("scrollConsolePageToTop();"),
+            handler.index('event.target.closest("[data-workspace-view]")'),
+        )
+
+    def test_mobile_dock_repeat_click_checks_exact_account_panel(self):
+        helper_start = self.console_script.index(
+            "function isCurrentMobileTaskDockTarget(button)"
+        )
+        helper_end = self.console_script.index(
+            "\nfunction scrollConsolePageToTop()", helper_start
+        )
+        helper = self.console_script[helper_start:helper_end]
+
+        self.assertIn('state.view === "workspace"', helper)
+        self.assertIn("moduleId === state.activeModule", helper)
+        self.assertIn('button.dataset.workspacePanel || "accounts"', helper)
+        self.assertIn("nextPanel === state.accountBrowserPanel", helper)
+
     def test_mobile_persona_editor_keeps_its_drawer_anchor_and_clears_on_close(self):
         module_start = self.console_script.index("function renderPersonaModule()")
         module_end = self.console_script.index("\nfunction personaGeneratedPreviewPosts", module_start)

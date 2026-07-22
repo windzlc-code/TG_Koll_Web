@@ -991,4 +991,4 @@ def test_cancel_without_memory_control_reclaims_registry_session():
         database.return_value.__enter__.return_value = mock.Mock()
         social_automation_api._force_stop_running_task("task-1")
 
-    stop_for_task.assert_called_once_with("task-1")
+    stop_for_task.assert_called_once_with("task-1", timeout_seconds=3.0)

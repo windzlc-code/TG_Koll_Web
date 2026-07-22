@@ -1721,6 +1721,13 @@ function applyToastMeta(toast, { key, ok, message, target, status, scheduled }) 
   } else {
     delete toast.dataset.toastScheduled;
   }
+  applyToastTargetMeta(toast, target, ok);
+  const messageNode = toast.querySelector(".toast-message-text");
+  if (messageNode) messageNode.textContent = message;
+}
+
+function applyToastTargetMeta(toast, target, ok = true) {
+  if (!toast) return;
   if (target) {
     toast.dataset.toastTarget = JSON.stringify(target);
     toast.setAttribute("role", "button");
@@ -1734,8 +1741,36 @@ function applyToastMeta(toast, { key, ok, message, target, status, scheduled }) 
     toast.removeAttribute("tabindex");
     toast.removeAttribute("title");
   }
-  const messageNode = toast.querySelector(".toast-message-text");
-  if (messageNode) messageNode.textContent = message;
+}
+
+function updateToastInPlace(toast, request) {
+  if (!toast) return;
+  applyToastMeta(toast, request);
+  toast.classList.add("is-state-settled");
+}
+
+function taskQueuePageForTarget(taskPanel, taskId) {
+  const kind = taskPanel === "regular" ? "regular" : "persona";
+  const rows = taskQueueRowsForKind(kind);
+  const index = rows.findIndex((task) => String(task?.id || "") === String(taskId || ""));
+  const pageSize = kind === "regular"
+    ? Math.min(Math.max(Number(state.taskQueueRegularPageSize || 20), 1), 100)
+    : Math.min(Math.max(Number(state.taskQueuePersonaPageSize || 12), 1), 100);
+  return index < 0 ? 1 : Math.floor(index / pageSize) + 1;
+}
+
+function focusTaskQueueTarget(taskId) {
+  const cleanTaskId = String(taskId || "").trim();
+  if (!cleanTaskId) return;
+  window.requestAnimationFrame(() => {
+    const selector = `[data-task-queue-row-id="${CSS.escape(cleanTaskId)}"]`;
+    const row = document.querySelector(selector);
+    if (!row) return;
+    row.classList.add("is-toast-target");
+    row.scrollIntoView({ block: "center", behavior: "smooth" });
+    row.focus({ preventScroll: true });
+    window.setTimeout(() => row.classList.remove("is-toast-target"), 1800);
+  });
 }
 
 async function openToastTarget(rawTarget) {
@@ -1798,6 +1833,14 @@ async function openToastTarget(rawTarget) {
   if (moduleId === "queue" || view === "tasks") {
     if (target.taskPanel) state.taskQueuePanel = target.taskPanel === "regular" ? "regular" : "persona";
     await loadTasks().catch(() => {});
+    if (target.taskId) {
+      const page = taskQueuePageForTarget(state.taskQueuePanel, target.taskId);
+      if (state.taskQueuePanel === "regular") state.taskQueueRegularPage = page;
+      else state.taskQueuePersonaPage = page;
+      const host = $("taskTable");
+      if (host) host.innerHTML = renderTaskQueueView();
+      focusTaskQueueTarget(target.taskId);
+    }
     if (target.taskId && (target.openDetail || target.taskPanel === "regular")) {
       await showTaskDetail(String(target.taskId || "")).catch((error) => {
         showToast(error?.detail || error?.message || "任务详情查询失败。", false, {
@@ -1890,15 +1933,19 @@ function showToast(text, ok = true, options = {}) {
     const activeTaskStatuses = new Set(["queued", "running", "progress"]);
     const isActiveTaskRefresh = Boolean(options.taskId) && activeTaskStatuses.has(status);
     const isTaskRefresh = (!presentationChanged && Boolean(options.taskId)) || isActiveTaskRefresh;
-    if (isTaskRefresh) {
+      if (isTaskRefresh) {
       // A polling refresh must not revive a toast that has reached its
       // five-second expiry; otherwise the three-second task poll keeps it on
       // screen forever.
-      if (existingToast.classList.contains("is-leaving")) return existingToast;
-      // keep the existing DOM and class list intact. Re-applying meta here
-      // restarts the CSS entry animation on every browser-task poll, which
-      // looks like the toast is repeatedly disappearing and reappearing.
-      return existingToast;
+        if (existingToast.classList.contains("is-leaving")) return existingToast;
+        const previousTarget = String(existingToast.dataset.toastTarget || "");
+        const nextTarget = target ? JSON.stringify(target) : "";
+        if (presentationChanged || previousTarget !== nextTarget) {
+          updateToastInPlace(existingToast, request);
+        }
+        // keep the existing DOM and class list settled so polling cannot
+        // restart the entry animation while its status and destination update.
+        return existingToast;
     }
   }
 
@@ -1933,9 +1980,10 @@ function showMsg(id, text, ok = true, options = {}) {
     node.textContent = "";
     node.className = "notice";
   }
-  showToast(text, ok, {
+  const hasTaskRoute = Boolean(options.target || options.taskId || options.kind);
+  showToast(text, ok, hasTaskRoute ? options : {
     ...options,
-    target: options.target || defaultToastTargetForMessage(id),
+    target: defaultToastTargetForMessage(id),
   });
 }
 
@@ -5523,6 +5571,23 @@ function renderMobileTaskDock() {
   }).join("");
 }
 
+function isCurrentMobileTaskDockTarget(button) {
+  if (!button?.classList.contains("mobile-task-dock-button")) return false;
+  const moduleId = String(button.dataset.module || "");
+  if (moduleId) return state.view === "workspace" && moduleId === state.activeModule;
+
+  const nextView = String(button.dataset.workspaceView || "workspace");
+  if (nextView !== state.view) return false;
+  if (nextView !== "accounts") return true;
+  const nextPanel = String(button.dataset.workspacePanel || "accounts");
+  return nextPanel === state.accountBrowserPanel;
+}
+
+function scrollConsolePageToTop() {
+  const behavior = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+  window.scrollTo({ top: 0, left: 0, behavior });
+}
+
 function renderModuleMenu() {
   updateWorkspaceFlow();
   $("moduleMenu").innerHTML = `<div class="module-accordion">${modules.map((item) => {
@@ -7722,7 +7787,7 @@ function socialQueueTaskTime(task) {
 
 function renderPersonaQueueRows(rows) {
   return rows.map((task) => `
-    <article class="compact-row task-persona-queue-row">
+    <article class="compact-row task-persona-queue-row" data-task-queue-row-id="${esc(task.id)}" tabindex="-1">
       <label class="task-queue-check-label task-queue-row-check">
         <input type="checkbox" data-task-queue-select="persona:${esc(task.id)}" ${state.taskQueueSelectedPersonaIds.has(String(task.id || "")) ? "checked" : ""} />
         <span class="sr-only">选择</span>
@@ -7808,7 +7873,7 @@ function renderTaskQueueView() {
   );
   state.taskQueueRegularPage = regularPageInfo.page;
   const regularTasksHtml = regularPageInfo.totalItems ? regularPageInfo.items.map((task) => `
-    <article class="compact-row task-row">
+    <article class="compact-row task-row" data-task-queue-row-id="${esc(task.id)}" tabindex="-1">
       <label class="task-queue-check-label task-queue-row-check">
         <input type="checkbox" data-task-queue-select="regular:${esc(task.id)}" ${state.taskQueueSelectedRegularIds.has(String(task.id || "")) ? "checked" : ""} />
         <span class="sr-only">选择</span>
@@ -20944,6 +21009,12 @@ function bindEvents() {
     if (button) cancelBillingOrder(button.dataset.billingCancelOrder || "");
   });
   const handleWorkspaceModuleNavigation = async (event) => {
+    const dockButton = event.target.closest(".mobile-task-dock-button");
+    if (isCurrentMobileTaskDockTarget(dockButton)) {
+      event.preventDefault();
+      scrollConsolePageToTop();
+      return;
+    }
     const viewButton = event.target.closest("[data-workspace-view]");
     if (viewButton) {
       const nextView = viewButton.dataset.workspaceView || "workspace";

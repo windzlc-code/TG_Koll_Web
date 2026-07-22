@@ -13,6 +13,14 @@ def test_live_browser_html_uses_vecto_branding():
     assert "vecto-browser-signal" in branded
     assert "prefers-reduced-motion: reduce" in branded
     assert "mask: url(\"/assets/opc/vecto-logo-ui-icon.png" in branded
+    assert 'content: "VECTO OS"' in branded
+    assert "background: #ffffff;" in branded
+    assert "color: #ffffff !important;" in branded
+    assert "--vecto-brand-logo-y:" in branded
+    assert "top: var(--vecto-brand-status-y);" in branded
+    assert "transform: translate(-50%, 0);" in branded
+    assert "margin-top: 158px" not in branded
+    assert "margin-top: 126px" not in branded
 
 
 def test_live_browser_branding_is_idempotent():

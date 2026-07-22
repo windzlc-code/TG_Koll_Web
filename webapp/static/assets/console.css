@@ -9009,6 +9009,13 @@ body.persona-touch-dragging .persona-list-card:active {
   animation: none;
 }
 
+.task-row.is-toast-target,
+.task-persona-queue-row.is-toast-target {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--accent-soft) 52%, var(--panel-solid));
+}
+
 .toast-message.is-leaving {
   opacity: 0;
   transform: translateY(16px);
@@ -13318,16 +13325,36 @@ body.live-browser-modal-open {
   }
 
   .persona-hot-metric-strip {
-    align-items: end;
+    align-items: center;
+    gap: 6px;
   }
 
   .persona-hot-metric-values {
     display: grid;
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 4px;
   }
 
   .persona-hot-metric-values > span {
-    justify-content: space-between;
+    min-width: 0;
+    min-height: 40px;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
+    padding: 3px 2px;
+    border-radius: 6px;
+  }
+
+  .persona-hot-metric-values small {
+    font-size: 10px;
+  }
+
+  .persona-hot-metric-values strong {
+    max-width: 100%;
+    overflow: hidden;
+    font-size: 11px;
+    text-overflow: ellipsis;
   }
 
   .account-browser-toolbar {
@@ -14465,50 +14492,25 @@ body.console-page {
   filter: saturate(0.62);
 }
 
-/* Long-running actions keep a static fill; only the border carries motion. */
+/* Long-running actions stay visually stable; the inline spinner carries progress. */
 .console-page .console-shell button[aria-busy="true"]:not(.danger),
 .console-page .console-shell button:has(> .task-button-busy):not(.danger) {
   color: #ffffff !important;
   background-color: #071112 !important;
-  background-image:
-    linear-gradient(#071112, #071112),
-    linear-gradient(110deg, #2aa994 0%, #2aa994 38%, #a4fff0 50%, #2aa994 62%, #2aa994 100%) !important;
-  background-clip: padding-box, border-box !important;
-  background-origin: padding-box, border-box !important;
-  background-size: 100% 100%, 240% 100% !important;
-  background-position: 0 0, 100% 0;
+  background-image: var(--vecto-action-running-gradient) !important;
+  background-size: 100% 100% !important;
+  background-position: 50% 0 !important;
   background-repeat: no-repeat !important;
-  border-color: transparent !important;
-  box-shadow: 0 0 0 1px rgba(67, 228, 199, 0.14);
+  border-color: var(--vecto-action-border) !important;
+  box-shadow: none !important;
   opacity: 1 !important;
   cursor: progress;
-  animation: vecto-action-running-border-sweep 1.8s linear infinite !important;
-}
-
-@keyframes vecto-action-running-border-sweep {
-  0% {
-    background-position: 0 0, 100% 0;
-    box-shadow: 0 0 0 1px rgba(67, 228, 199, 0.12);
-  }
-  50% {
-    box-shadow: 0 0 0 3px rgba(67, 228, 199, 0.22);
-  }
-  100% {
-    background-position: 0 0, -100% 0;
-    box-shadow: 0 0 0 1px rgba(67, 228, 199, 0.12);
-  }
+  animation: none !important;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .console-page .view.is-active {
     animation: none;
-  }
-
-  .console-page .console-shell button[aria-busy="true"]:not(.danger),
-  .console-page .console-shell button:has(> .task-button-busy):not(.danger) {
-    animation: none !important;
-    background-position: 0 0, 50% 0 !important;
-    box-shadow: 0 0 0 2px rgba(67, 228, 199, 0.18) !important;
   }
 
 }
