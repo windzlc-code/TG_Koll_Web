@@ -10339,6 +10339,7 @@ class PersonaDashboardGeneratePostsPayload(BaseModel):
 class PersonaDashboardDraftPublishPayload(BaseModel):
     account_id: str = ""
     platform: str = ""
+    content_override: str | None = None
     scheduled_at: int | str | None = 0
     priority: int = 50
     max_retries: int = 2
@@ -13423,7 +13424,7 @@ def _publish_persona_archive_post(
     post = next((item for item in posts if isinstance(item, dict) and str(item.get("id") or "").strip() == clean_post_id), None)
     if not post or (source_name == "posts" and _is_published_persona_draft(post)):
         raise HTTPException(status_code=404, detail="推文草稿不存在。")
-    content = str(post.get("content") or "").strip()
+    content = str(payload.content_override if payload.content_override is not None else post.get("content") or "").strip()
     if not media_paths:
         media_paths = _post_media_paths_for_publish(post)
     if not content and not media_paths:

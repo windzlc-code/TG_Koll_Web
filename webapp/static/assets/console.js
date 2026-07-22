@@ -6710,6 +6710,49 @@ function selectedPersonaPreset(profile) {
   return presets[0] || null;
 }
 
+function activePersonaLinkPreset(profile = selectedPersonaProfile()) {
+  const presets = personaProfilePresets(profile).filter((item) => item?.enabled !== false);
+  const activeId = String(profile?.active_link_preset_id || "").trim();
+  return presets.find((item) => String(item.id || "") === activeId) || presets[0] || null;
+}
+
+function applyPersonaLinkPresetToContent(content, preset) {
+  let next = String(content || "").trim();
+  const endingText = String(preset?.ending_text || "").trim();
+  const linkUrl = String(preset?.link_url || "").trim();
+  if (endingText) {
+    next = next.split(endingText).join("").replace(/\n{3,}/g, "\n\n").trim();
+    next = `${next}\n${endingText}`.trim();
+  }
+  if (linkUrl) {
+    next = next.split(linkUrl).join("").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+    next = `${next}\n${linkUrl}`.trim();
+  }
+  return next;
+}
+
+function publishContentForPost(post, persona = selectedPersona()) {
+  const profile = persona ? state.personaProfiles[String(persona.id || "")] : null;
+  return applyPersonaLinkPresetToContent(post?.content || "", activePersonaLinkPreset(profile));
+}
+
+function renderPublishLinkSettings(persona = selectedPersona()) {
+  const profile = persona ? state.personaProfiles[String(persona.id || "")] : null;
+  const preset = activePersonaLinkPreset(profile);
+  const summary = preset
+    ? [preset.ending_text, preset.link_url].map((value) => String(value || "").trim()).filter(Boolean).join(" · ")
+    : "当前未启用发布链接";
+  return `
+    <div class="publish-link-settings">
+      <span class="publish-link-settings-label">临时链接</span>
+      <span class="publish-link-settings-copy">
+        <strong>${esc(preset?.name || "不添加链接")}</strong>
+        <small title="${esc(summary)}">${esc(summary)}</small>
+      </span>
+      <button type="button" data-persona-open-links ${persona ? "" : "disabled"}>链接设置</button>
+    </div>`;
+}
+
 function personaPresetById(profile, presetId) {
   const target = String(presetId || "").trim();
   if (!target) return null;
@@ -8538,13 +8581,14 @@ function renderPublishPreviewCard(activePost, sourceRows = [], persona = selecte
   const activeMediaItems = activePost
     ? personaPublishPostMediaItems(String(persona?.id || ""), activePost)
     : [];
+  const previewContent = publishContentForPost(activePost, persona);
   return `
     <article class="publish-preview-card">
       <div class="publish-preview-card-head">
         <strong>${esc(activePost ? personaDraftDisplayTitleForPost(activePost, sourceRows) : "待发布内容")}</strong>
         ${renderMediaTypeBadge(activeMediaItems)}
       </div>
-      <p>${esc(String(activePost?.content || "").trim() || "当前内容为空。")}</p>
+      <p>${esc(previewContent || "当前内容为空。")}</p>
       ${renderPublishPreviewMedia(activeMediaItems)}
     </article>`;
 }
@@ -8595,6 +8639,7 @@ function renderPublishContentPreview(persona = selectedPersona(), source = state
           <strong>发布内容展示</strong>
           <span>自定义输入</span>
         </div>
+        ${renderPublishLinkSettings(persona)}
         <textarea id="simpleContent" rows="8" placeholder="直接输入本次要发布的正文。">${esc(state.publishCustomContent || "")}</textarea>
         ${renderUploadDropzone("simpleMediaFiles", { label: "上传素材", hint: "拖动图片或视频到这里，或点击选择。发布内容会读取这里的文件。" })}
       </section>`;
@@ -8608,6 +8653,7 @@ function renderPublishContentPreview(persona = selectedPersona(), source = state
         <strong>发布内容展示</strong>
         <span>${esc(publishContentSourceLabel(cleanSource))} · 已选 ${selectedPosts.length} 条</span>
       </div>
+      ${renderPublishLinkSettings(persona)}
       ${selectedPosts.length ? `
         <div class="publish-preview-tabs-layout">
           <div class="publish-preview-tabs" aria-label="发布内容标签页">
@@ -8634,7 +8680,7 @@ function renderPublishContentPreview(persona = selectedPersona(), source = state
           ${renderPublishPreviewCard(activePost, sourceRows, persona)}
         </div>
       ` : `<div class="empty-state">请先在左侧选择要发布的内容。</div>`}
-      <input id="simpleContent" type="hidden" value="${esc(activePost?.content || "")}" />
+      <input id="simpleContent" type="hidden" value="${esc(publishContentForPost(activePost, persona))}" />
     </section>`;
 }
 
@@ -9205,6 +9251,11 @@ function renderSimpleFlowModule(moduleId) {
   let body = "";
   if (moduleId === "publishing") {
     const selectedPersonaForPublish = state.personas.find((item) => String(item.id) === String($("simplePersona")?.value || state.selectedPersonaId || "")) || selectedPersona();
+    if (selectedPersonaForPublish && !state.personaProfiles[String(selectedPersonaForPublish.id)]) {
+      loadPersonaProfile(selectedPersonaForPublish.id).then(() => {
+        if (state.activeModule === "publishing") renderSimpleFlowModule("publishing");
+      }).catch(() => {});
+    }
     if (selectedPersonaForPublish && !state.personaDraftPosts[String(selectedPersonaForPublish.id)]) {
       loadPersonaDraftPosts(selectedPersonaForPublish.id).then(() => {
         if (state.activeModule === "publishing") renderSimpleFlowModule("publishing");
@@ -9933,6 +9984,7 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
         body: JSON.stringify({
           account_id: cleanAccountId,
           platform,
+          content_override: publishContentForPost(post, persona),
           scheduled_at: scheduledAt || undefined,
           media_paths: mediaPaths,
           priority: 50,
@@ -10065,7 +10117,8 @@ function refreshPersonaLinkSettingsModal() {
 }
 
 async function openPersonaLinkSettingsModal() {
-  const profile = selectedPersonaProfile();
+  const persona = selectedPersona();
+  const profile = selectedPersonaProfile() || (persona ? await loadPersonaProfile(persona.id) : null);
   if (!profile) return;
   const request = openConsoleModal({
     title: "链接设置",
@@ -10203,7 +10256,9 @@ async function savePersonaPresetList(nextPresets, activeId = null) {
   const result = await patchPersonaProfile(payload);
   if (result) {
     state.personaLinkPresetId = String(result.active_link_preset_id || nextPresets[0]?.id || "");
-    if (!refreshPersonaLinkSettingsModal()) renderPersonaDetail();
+    const refreshedModal = refreshPersonaLinkSettingsModal();
+    if (state.activeModule === "publishing") renderSimpleFlowModule("publishing");
+    else if (!refreshedModal) renderPersonaDetail();
     renderConfirmSummary();
     showMsg("commandMsg", "链接模板已保存。", true);
   }
@@ -20554,7 +20609,11 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
     showMsg(messageId, `该账号已有「${statusLabel(taskType)}」任务在队列或执行中，请等待完成。`, false);
     return;
   }
-  const content = $("socialContent")?.value.trim() || $("simpleContent")?.value.trim() || "";
+  const rawContent = $("socialContent")?.value.trim() || $("simpleContent")?.value.trim() || "";
+  const taskPersona = cleanPersonaId ? state.personas.find((item) => String(item.id || "") === cleanPersonaId) : null;
+  const content = taskType === "publish_post"
+    ? applyPersonaLinkPresetToContent(rawContent, activePersonaLinkPreset(taskPersona ? state.personaProfiles[cleanPersonaId] : null))
+    : rawContent;
   const targetUrl = $("socialTargetUrl")?.value.trim() || $("simpleTargetUrl")?.value.trim() || "";
   const targetUrls = $("simpleTargetUrls")?.value || $("socialTargetUrls")?.value || "";
   const scheduledAt = normalizeScheduleValueForApi($("simpleScheduleAt")?.value);

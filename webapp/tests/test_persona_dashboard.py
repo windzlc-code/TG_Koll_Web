@@ -2260,6 +2260,33 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload_obj.payload["caption"], "Publish me")
         self.assertEqual(payload_obj.payload["media_paths"], [str(media_path.resolve())])
 
+    def test_publish_persona_post_uses_content_override_without_mutating_draft(self):
+        self._write_archives()
+        self._insert_social_account(account_id="acct-threads", platform="threads", username="threads_user")
+        create_resp = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/posts",
+            json={"title": "Draft publish", "content": "Original draft"},
+        )
+        self.assertEqual(create_resp.status_code, 200)
+        post = create_resp.json()
+
+        with mock.patch.object(server, "create_social_task", return_value={"id": "sat-link", "task_type": "publish_post", "status": "queued"}) as mocked:
+            publish_resp = self.client.post(
+                f"/api/persona_dashboard/personas/persona-1/posts/{post['id']}/publish",
+                json={
+                    "account_id": "acct-threads",
+                    "platform": "threads",
+                    "content_override": "Original draft\nRead more\nhttps://example.com/post",
+                },
+            )
+
+        self.assertEqual(publish_resp.status_code, 200, publish_resp.text)
+        payload_obj = mocked.call_args.args[0]
+        self.assertEqual(payload_obj.payload["caption"], "Original draft\nRead more\nhttps://example.com/post")
+        posts = self.client.get("/api/persona_dashboard/personas/persona-1/posts").json()["posts"]
+        saved = next(item for item in posts if item["id"] == post["id"])
+        self.assertEqual(saved["content"], "Original draft")
+
     def test_publish_persona_post_supports_threads_without_media(self):
         self._write_archives()
         self._insert_social_account(account_id="acct-threads", platform="threads", username="threads_user")

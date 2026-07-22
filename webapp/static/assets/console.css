@@ -1797,6 +1797,54 @@ textarea:focus {
   min-width: 0;
 }
 
+.publish-link-settings {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.publish-link-settings-label {
+  color: var(--text);
+  font-weight: 800;
+}
+
+.publish-link-settings-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.publish-link-settings-copy strong,
+.publish-link-settings-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.publish-link-settings-copy small {
+  color: var(--muted);
+}
+
+@media (max-width: 680px) {
+  .publish-link-settings {
+    gap: 7px;
+    padding: 7px 0;
+  }
+
+  .publish-link-settings-copy small {
+    max-width: 34vw;
+  }
+
+  .publish-link-settings button {
+    min-height: 34px;
+    padding: 6px 10px;
+  }
+}
+
 .publish-post-picker,
 .publish-content-preview {
   display: grid;

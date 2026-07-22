@@ -203,6 +203,14 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         mobile_rule = self.styles.index(".publish-post-card-media {\n    display: block;")
         self.assertLess(desktop_rule, mobile_rule)
 
+    def test_publish_reuses_shared_link_settings_and_refreshes_preview(self):
+        self.assertIn("function applyPersonaLinkPresetToContent", self.console_script)
+        self.assertIn("function renderPublishLinkSettings", self.console_script)
+        self.assertIn('data-persona-open-links', self.console_script)
+        self.assertIn('content_override: publishContentForPost(post, persona)', self.console_script)
+        self.assertIn('if (state.activeModule === "publishing") renderSimpleFlowModule("publishing");', self.console_script)
+        self.assertIn(".publish-link-settings {", self.styles)
+
     def test_mobile_task_dock_is_flush_with_the_viewport(self):
         self.assertIn('content="width=device-width, initial-scale=1.0, viewport-fit=cover"', self.markup)
         self.assertIn("right: 0;\n    bottom: 0;\n    left: 0;", self.styles)
