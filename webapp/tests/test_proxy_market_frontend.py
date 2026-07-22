@@ -1,4 +1,5 @@
 import json
+import re
 import shutil
 import subprocess
 import tempfile
@@ -15,6 +16,21 @@ MARKET_JS = ROOT / "static" / "assets" / "opc" / "proxy-market.js"
 
 
 class ProxyMarketFrontendTests(unittest.TestCase):
+    def test_proxy_market_uses_current_public_navigation_contract(self):
+        html = MARKET_HTML.read_text(encoding="utf-8")
+        desktop = html.split('<nav class="site-nav"', 1)[1].split("</nav>", 1)[0]
+        mobile = html.split('<nav class="site-mobile-menu-panel"', 1)[1].split("</nav>", 1)[0]
+
+        self.assertEqual(
+            re.findall(r'data-site-nav-key="([^"]+)"', desktop),
+            ["solution", "proxyMarket", "console", "aboutVecto"],
+        )
+        for key in ("solution", "proxyMarket", "console", "aboutVecto"):
+            self.assertIn(f'data-site-copy="{key}"', mobile)
+        for stale_key in ("accounts", "scenarios", "difference"):
+            self.assertNotIn(f'data-site-copy="{stale_key}"', desktop)
+            self.assertNotIn(f'data-site-copy="{stale_key}"', mobile)
+
     def test_admin_proxy_market_actions_are_split_and_labels_are_clear(self):
         html = ADMIN_HTML.read_text(encoding="utf-8")
         self.assertIn('id="btnInspectProxyMarketConnection"', html)
