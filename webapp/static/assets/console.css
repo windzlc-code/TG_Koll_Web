@@ -5345,6 +5345,8 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-profile-account-panel {
   container-name: persona-account-panel;
   container-type: inline-size;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-self: stretch;
   align-content: start;
 }
 
@@ -14734,6 +14736,7 @@ body.console-page {
 .persona-profile-account-panel .persona-account-pool-layout {
   grid-template-columns: minmax(104px, 132px) minmax(0, 1fr);
   gap: 8px;
+  align-items: stretch;
 }
 
 .persona-profile-account-panel .account-pool-platform-panel,

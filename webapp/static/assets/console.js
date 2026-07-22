@@ -16965,6 +16965,27 @@ async function clearPersonaAccountLogin(accountId = "", button = null) {
   }
 }
 
+function renderAccountPoolCardActions(account, { context = "pool" } = {}) {
+  const accountId = String(account?.id || "");
+  const proxyLabel = account?.proxy_id ? "切换代理" : "选择代理";
+  if (context === "persona-settings") {
+    return `<div class="row-actions persona-account-summary-actions">
+      <button type="button" class="primary" data-persona-account-open-login="${esc(accountId)}">打开登录</button>
+      <button type="button" data-persona-account-proxy="${esc(accountId)}">${proxyLabel}</button>
+      <button type="button" data-persona-account-edit="${esc(accountId)}">编辑</button>
+      <button type="button" data-persona-account-unbind="${esc(accountId)}" ${account.persona_id ? "" : "disabled"}>解绑</button>
+      <button type="button" class="danger account-pool-delete-icon" data-persona-account-delete="${esc(accountId)}" title="删除账号" aria-label="删除账号">${renderTrashIcon()}</button>
+    </div>`;
+  }
+  return `<div class="row-actions">
+    <button type="button" class="primary" data-social-open-login="${esc(accountId)}">打开登录</button>
+    <button type="button" data-account-proxy-picker="${esc(accountId)}">${proxyLabel}</button>
+    <button type="button" data-account-pool-edit="${esc(accountId)}">编辑</button>
+    <button type="button" data-account-pool-unbind="${esc(accountId)}" ${account.persona_id ? "" : "disabled"}>解绑</button>
+    <button type="button" class="danger account-pool-delete-icon" data-social-delete-account="${esc(accountId)}" title="删除账号" aria-label="删除账号">${renderTrashIcon()}</button>
+  </div>`;
+}
+
 function renderAccountPoolCard(account, { variant = "pool", active = false, checked = false, persona = null } = {}) {
   const accountId = String(account?.id || "");
   if (variant === "persona-settings") {
@@ -16981,10 +17002,7 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
           <span><small>浏览器环境</small><strong>${esc(account.profile_dir ? "已配置" : "未配置")}</strong></span>
           <span><small>代理 IP</small><strong data-account-proxy-for="${esc(accountId)}">${esc(accountResidentialProxyLabel(account))}</strong></span>
         </div>
-        <div class="row-actions persona-account-summary-actions">
-          <button type="button" class="primary" data-persona-account-open-login="${esc(accountId)}">打开登录</button>
-          <button type="button" data-persona-account-start-edit="${esc(accountId)}">编辑</button>
-        </div>
+        ${renderAccountPoolCardActions(account, { context: "persona-settings" })}
       </article>`;
     }
     return `<article class="account-card account-pool-card persona-account-pool-card persona-account-pool-card--inline-edit ${active ? "is-active" : ""}" data-persona-account-card="${esc(accountId)}" role="button" tabindex="0" aria-pressed="${active ? "true" : "false"}">
@@ -17028,13 +17046,7 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
       <span>${esc(account.profile_dir ? "已配置浏览器环境" : "未配置浏览器环境")}</span>
       <span data-account-proxy-for="${esc(accountId)}">${esc(accountResidentialProxyLabel(account))}</span>
     </div>
-    <div class="row-actions">
-      <button type="button" class="primary" data-social-open-login="${esc(accountId)}">打开登录</button>
-      <button type="button" data-account-proxy-picker="${esc(accountId)}">${account?.proxy_id ? "切换代理" : "选择代理"}</button>
-      <button type="button" data-account-pool-edit="${esc(accountId)}">编辑</button>
-      <button type="button" data-account-pool-unbind="${esc(accountId)}" ${account.persona_id ? "" : "disabled"}>解绑</button>
-      <button type="button" class="danger account-pool-delete-icon" data-social-delete-account="${esc(accountId)}" title="删除账号" aria-label="删除账号">${renderTrashIcon()}</button>
-    </div>
+    ${renderAccountPoolCardActions(account)}
   </article>`;
 }
 
@@ -21960,6 +21972,29 @@ function bindEvents() {
     const personaAccountEdit = event.target.closest("[data-persona-account-edit]");
     if (personaAccountEdit) {
       openAccountPoolEditModal(personaAccountEdit.dataset.personaAccountEdit || "");
+      return;
+    }
+    const personaAccountProxy = event.target.closest("[data-persona-account-proxy]");
+    if (personaAccountProxy) {
+      openAccountProxyPickerModal(personaAccountProxy.dataset.personaAccountProxy || "");
+      return;
+    }
+    const personaAccountUnbind = event.target.closest("[data-persona-account-unbind]");
+    if (personaAccountUnbind) {
+      unbindAccountPoolAccount(personaAccountUnbind.dataset.personaAccountUnbind || "")
+        .catch((error) => showMsg("commandMsg", error.detail || error.message || "解绑账号失败", false));
+      return;
+    }
+    const personaAccountDelete = event.target.closest("[data-persona-account-delete]");
+    if (personaAccountDelete) {
+      confirmDangerAction("确定删除这个执行账号吗？相关历史自动化记录也会一起删除。", {
+        title: "删除执行账号",
+        confirmText: "删除账号",
+      }).then((ok) => {
+        if (!ok) return;
+        deleteSocialAccountRecord(personaAccountDelete.dataset.personaAccountDelete || "", "commandMsg")
+          .catch((error) => showMsg("commandMsg", error.detail || error.message || "删除账号失败", false));
+      });
       return;
     }
     const personaAccountPlatform = event.target.closest("[data-persona-account-platform]");
