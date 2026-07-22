@@ -9892,6 +9892,16 @@ body.persona-touch-dragging .persona-list-card:active {
   font-size: 16px;
 }
 
+.account-pool-title-mobile {
+  display: none;
+}
+
+.account-pool-head .account-pool-title-desktop,
+.account-pool-head .account-pool-title-mobile {
+  color: inherit;
+  font-size: inherit;
+}
+
 .account-pool-head span {
   color: var(--muted);
   font-size: 12px;
@@ -15019,6 +15029,14 @@ body.console-page {
   .console-page {
     --mobile-touch-target: 36px;
     --mobile-control-gap: 6px;
+  }
+
+  .account-pool-title-desktop {
+    display: none;
+  }
+
+  .account-pool-title-mobile {
+    display: inline;
   }
 
   .persona-mobile-drawer {

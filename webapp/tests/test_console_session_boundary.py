@@ -1024,6 +1024,11 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
     def test_account_pool_reuses_the_mobile_persona_drawer(self):
         sidebar = self._function_source("renderAccountPoolPersonaSidebar")
         pool = self._function_source("renderAccountPool")
+        bind_events = self._function_source("bindEvents")
+        account_events = bind_events[
+            bind_events.index('if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("click"'):
+            bind_events.index('if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("keydown"')
+        ]
 
         self.assertIn('id="accountPoolPersonaSidebar"', sidebar)
         self.assertIn("persona-mobile-drawer", sidebar)
@@ -1031,6 +1036,13 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("data-persona-mobile-list-close", sidebar)
         self.assertIn("data-persona-mobile-list-backdrop", sidebar)
         self.assertIn('data-persona-mobile-list-toggle="accountPoolPersonaSidebar"', pool)
+        self.assertIn('class="account-pool-title-desktop">账号池</span>', pool)
+        self.assertIn('class="account-pool-title-mobile">账号值</span>', pool)
+        self.assertIn('[data-persona-mobile-list-toggle]', account_events)
+        self.assertIn('[data-persona-mobile-list-close], [data-persona-mobile-list-backdrop]', account_events)
+        self.assertIn("setPersonaMobileSidebarOpen", account_events)
+        self.assertIn(".account-pool-title-mobile", self.styles)
+        self.assertIn(".account-pool-title-desktop", self.styles)
 
     def test_account_proxy_picker_replaces_legacy_edit_checkbox_and_keeps_single_binding(self):
         card = self._section("function renderAccountPoolCard", "function renderAccountPoolCards")

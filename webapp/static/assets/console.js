@@ -19082,7 +19082,10 @@ function renderAccountPool() {
       <section class="account-pool-main">
         <div class="account-pool-head">
           <div>
-            <strong>账号池</strong>
+            <strong class="account-pool-title">
+              <span class="account-pool-title-desktop">账号池</span>
+              <span class="account-pool-title-mobile">账号值</span>
+            </strong>
             <span>平台和账号分开选择，再到右侧人设列表绑定。</span>
           </div>
           <button type="button" class="persona-mobile-list-toggle" data-persona-mobile-list-toggle="accountPoolPersonaSidebar" aria-controls="accountPoolPersonaSidebar" aria-expanded="false">
@@ -22457,6 +22460,17 @@ function bindEvents() {
   if ($("socialPlatform")) $("socialPlatform").addEventListener("change", syncStandaloneSocialForm);
   if ($("runSocialOnce")) $("runSocialOnce").addEventListener("click", () => api("/api/persona_dashboard/automation/worker/run_once", { method: "POST" }).then(loadSocial).catch((error) => showMsg("socialMsg", error.detail || error.message || "执行失败", false)));
   if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("click", (event) => {
+    const personaMobileToggle = event.target.closest("[data-persona-mobile-list-toggle]");
+    if (personaMobileToggle) {
+      const sidebarId = personaMobileToggle.dataset.personaMobileListToggle || "";
+      const sidebar = document.getElementById(sidebarId);
+      setPersonaMobileSidebarOpen(!sidebar?.classList.contains("is-mobile-open"), sidebarId);
+      return;
+    }
+    if (event.target.closest("[data-persona-mobile-list-close], [data-persona-mobile-list-backdrop]")) {
+      setPersonaMobileSidebarOpen(false);
+      return;
+    }
     if (event.target.closest("[data-live-browser-modal-close]")) {
       closeLiveBrowserLargeModal();
       return;
