@@ -24,6 +24,19 @@ class OnlineApplicationFrontendContractTests(unittest.TestCase):
             'state.summary = summaryResult.status === "fulfilled" ? summaryResult.value : null;',
             self.pricing_script,
         )
+
+    def test_pricing_requests_preserve_explicit_admin_console_identity(self):
+        self.assertIn(
+            'const ADMIN_CONTEXT_STORAGE_KEY = "vecto-admin-console-context"',
+            self.pricing_script,
+        )
+        self.assertIn("function adminConsoleContextActive()", self.pricing_script)
+        self.assertIn('headers.set("X-Admin-Console", "1")', self.pricing_script)
+        self.assertIn('headers.set("X-Admin-Workspace-User-ID", billingSessionContext.workspaceUserId)', self.pricing_script)
+        self.assertIn('const explicitAdminContext = pricingParams.get("admin_console") === "1"', self.pricing_script)
+        self.assertIn("function billingAccountUrl()", self.pricing_script)
+        self.assertIn('return `/admin-console.html?${params.toString()}`', self.pricing_script)
+        self.assertIn("redirectToSelectedLogin(publicPricingUrl(sku))", self.pricing_script)
         self.assertNotIn(
             'state.orders = ordersResult.status === "fulfilled" ? list(ordersResult.value?.items) : [];',
             self.pricing_script,

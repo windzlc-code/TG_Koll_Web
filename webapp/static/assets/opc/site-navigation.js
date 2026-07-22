@@ -190,6 +190,18 @@
     return sessionValue(ADMIN_CONTEXT_STORAGE_KEY) === "1";
   }
 
+  function seedExplicitAdminContext() {
+    const params = new URLSearchParams(window.location.search || "");
+    if (params.get("admin_console") !== "1") return;
+    markAdminConsoleContext();
+    const workspaceUserId = String(
+      params.get("admin_workspace_user_id") || params.get("manage_user_id") || "",
+    ).trim();
+    if (workspaceUserId && publicPagePreservesAdminWorkspace()) {
+      writeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY, workspaceUserId);
+    }
+  }
+
   function storedAdminWorkspaceUserId() {
     return String(sessionValue(ADMIN_WORKSPACE_STORAGE_KEY) || "").trim();
   }
@@ -202,10 +214,44 @@
     return query ? `/admin-console.html?${query}` : "/admin-console.html";
   }
 
+  function adminOperationalPublicTarget(value) {
+    const text = String(value || "").trim();
+    if (!text.startsWith("/")) return text;
+    const adminContext = currentSessionMode === "admin" || hasAdminConsoleContext()
+      || document.querySelector('meta[name="admin-console-session"]')?.content === "1";
+    if (!adminContext) return text;
+    const url = new URL(text, window.location.origin);
+    url.searchParams.set("admin_console", "1");
+    const workspaceUserId = storedAdminWorkspaceUserId();
+    if (workspaceUserId) url.searchParams.set("admin_workspace_user_id", workspaceUserId);
+    return `${url.pathname}${url.search}${url.hash}`;
+  }
+
+  function syncOperationalPublicTargets() {
+    document.querySelectorAll(
+      '[data-site-nav-key="proxyMarket"], a[href^="/proxy-market.html"]',
+    ).forEach((link) => {
+      link.setAttribute("href", adminOperationalPublicTarget(link.getAttribute("href") || "/proxy-market.html"));
+    });
+    document.querySelectorAll(
+      '[data-site-nav-key="pricing"], [data-site-subscription-entry], a[href^="/subscription.html"], a[href^="/pricing.html"]',
+    ).forEach((link) => {
+      link.setAttribute("href", adminOperationalPublicTarget(link.getAttribute("href") || "/subscription.html"));
+    });
+  }
+
+  function publicPagePreservesAdminWorkspace() {
+    const page = document.querySelector("[data-site-header]")?.dataset.sitePage || "";
+    return page === "proxyMarket" || page === "pricing";
+  }
+
   function syncConsoleEntryTargets() {
     const adminSessionMeta = document.querySelector('meta[name="admin-console-session"]')?.content === "1";
     const adminContext = adminSessionMeta || currentSessionMode === "admin" || hasAdminConsoleContext();
-    const target = adminContext ? adminConsoleTarget() : "/console.html";
+    const workspaceUserId = adminContext && publicPagePreservesAdminWorkspace()
+      ? storedAdminWorkspaceUserId()
+      : "";
+    const target = adminContext ? adminConsoleTarget("", workspaceUserId) : "/console.html";
     document.querySelectorAll("[data-console-entry]").forEach((link) => {
       link.setAttribute("href", target);
       if (link.dataset.siteConsoleBoundaryReady === "true") return;
@@ -215,9 +261,9 @@
           || currentSessionMode === "admin"
           || hasAdminConsoleContext();
         if (!isAdminEntry) return;
-        removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
+        if (!publicPagePreservesAdminWorkspace()) removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
         markAdminConsoleContext();
-        link.setAttribute("href", adminConsoleTarget());
+        link.setAttribute("href", adminConsoleTarget("", workspaceUserId));
       });
     });
   }
@@ -760,8 +806,9 @@
       return;
     }
     if (isAdminConsole || currentSessionMode === "admin" || hasAdminConsoleContext()) {
-      removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
-      window.location.assign(adminConsoleTarget(targetView, ""));
+      const workspaceUserId = publicPagePreservesAdminWorkspace() ? storedAdminWorkspaceUserId() : "";
+      if (!workspaceUserId) removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
+      window.location.assign(adminConsoleTarget(targetView, workspaceUserId));
       return;
     }
     window.location.assign(`/console.html?${new URLSearchParams({ view: targetView }).toString()}`);
@@ -776,7 +823,9 @@
   function syncAdminWorkspaceContext() {
     const adminSessionMeta = document.querySelector('meta[name="admin-console-session"]');
     if (!adminSessionMeta) {
-      removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
+      if (!publicPagePreservesAdminWorkspace() || !hasAdminConsoleContext()) {
+        removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
+      }
       return;
     }
     const isAdminConsole = adminSessionMeta.content === "1";
@@ -830,22 +879,20 @@
 
   async function resolvePublicSession() {
     if (hasAdminConsoleContext()) {
-      removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
-      const adminResult = await fetchSessionAccount({ admin: true });
+      const preserveWorkspace = publicPagePreservesAdminWorkspace();
+      const workspaceUserId = preserveWorkspace ? storedAdminWorkspaceUserId() : "";
+      if (!preserveWorkspace) removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
+      const adminResult = await fetchSessionAccount({ admin: true, workspaceUserId });
       if (adminResult.response.ok && adminResult.account) {
         markAdminConsoleContext();
         return {
           mode: "admin",
           account: adminResult.account,
-          workspaceUserId: "",
-          path: "/admin-console.html",
+          workspaceUserId,
+          path: adminConsoleTarget("", workspaceUserId),
         };
       }
-      if ([401, 403].includes(adminResult.response.status)) {
-        clearAdminConsoleContext();
-      } else {
-        throw new Error(`Admin session validation failed: HTTP ${adminResult.response.status}`);
-      }
+      throw new Error(`Admin session validation failed: HTTP ${adminResult.response.status}`);
     }
 
     const userResult = await fetchSessionAccount();
@@ -880,7 +927,8 @@
       return session;
     } catch {
       if (hasAdminConsoleContext()) {
-        window.location.assign(adminConsoleTarget());
+        const returnUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+        window.location.assign(`/admin?return_url=${encodeURIComponent(returnUrl)}`);
         return null;
       }
       if (typeof onUnauthorized === "function") onUnauthorized();
@@ -903,6 +951,11 @@
       void syncProxyMarketBadge();
       return session.account;
     } catch {
+      if (hasAdminConsoleContext()) {
+        const returnUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+        window.location.assign(`/admin?return_url=${encodeURIComponent(returnUrl)}`);
+        return null;
+      }
       showGuestAccount(header);
       return null;
     }
@@ -939,6 +992,8 @@
     return header;
   }
 
+  seedExplicitAdminContext();
+
   function sync() {
     const language = currentLanguage();
     const labels = copy[language];
@@ -963,6 +1018,7 @@
         node.textContent = labels.accountFallback;
       }
     });
+    syncOperationalPublicTargets();
     document.querySelectorAll("[data-site-theme-toggle]").forEach((button) => {
       const label = currentTheme() === "dark" ? labels.themeLight : labels.themeDark;
       button.title = label;

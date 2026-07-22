@@ -506,7 +506,11 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
 
         page = self.admin.get(f"/admin-console.html?manage_user_id={user_id}", follow_redirects=False)
         me = self.admin.get("/api/me", headers=self._target_headers(user_id))
-        normal_admin_console = self.admin.get("/console.html", follow_redirects=False)
+        normal_admin_console = self.admin.get(
+            "/console.html",
+            headers={"X-Admin-Console": "0"},
+            follow_redirects=False,
+        )
         personal_admin_console = self.admin.get("/admin-console.html", follow_redirects=False)
         admin_me = self.admin.get("/api/me", headers={"X-Admin-Console": "1"})
 
@@ -519,7 +523,10 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
         self.assertTrue(me.json()["acting_admin"])
         self.assertFalse(me.json()["is_admin"])
         self.assertEqual(normal_admin_console.status_code, 302, normal_admin_console.text)
-        self.assertEqual(normal_admin_console.headers["location"], "/admin-console.html")
+        self.assertEqual(
+            normal_admin_console.headers["location"],
+            "/login.html?return_url=%2Fconsole.html",
+        )
         self.assertEqual(personal_admin_console.status_code, 200, personal_admin_console.text)
         self.assertIn('name="admin-workspace-user-id" content=""', personal_admin_console.text)
         self.assertIn('name="admin-console-session" content="1"', personal_admin_console.text)

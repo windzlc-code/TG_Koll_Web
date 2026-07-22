@@ -34,6 +34,18 @@ function adminWorkspaceUrl(value) {
   return `${url.pathname}${url.search}${url.hash}`;
 }
 
+function adminWorkspacePageUrl(value) {
+  const text = String(value || "").trim();
+  if ((!ADMIN_WORKSPACE_USER_ID && !ADMIN_CONSOLE_SESSION) || !text || !text.startsWith("/")) return text;
+  const url = new URL(text, location.origin);
+  if (url.origin !== location.origin) return text;
+  url.searchParams.set("admin_console", "1");
+  if (ADMIN_WORKSPACE_USER_ID) {
+    url.searchParams.set("admin_workspace_user_id", ADMIN_WORKSPACE_USER_ID);
+  }
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
 function adminWorkspaceLiveBrowserUrl(value) {
   const decorated = adminWorkspaceUrl(value);
   if ((!ADMIN_WORKSPACE_USER_ID && !ADMIN_CONSOLE_SESSION) || !decorated || !decorated.startsWith("/api/")) return decorated;
@@ -686,7 +698,14 @@ function handleSessionBoundary(status) {
   clearTenantInMemoryState();
   const isAdminConsole = typeof ADMIN_CONSOLE_SESSION !== "undefined" && ADMIN_CONSOLE_SESSION;
   if (isAdminConsole) clearStoredAdminWorkspaceContext();
-  window.location.replace(normalizedStatus === 428 ? "/change-password.html" : (isAdminConsole ? "/admin" : "/?login=1&return_url=%2Fconsole.html"));
+  const returnUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  const passwordTarget = isAdminConsole
+    ? `/change-password.html?admin_console=1&return_url=${encodeURIComponent(returnUrl)}`
+    : `/change-password.html?return_url=${encodeURIComponent(returnUrl)}`;
+  const loginTarget = isAdminConsole
+    ? `/admin?return_url=${encodeURIComponent(returnUrl)}`
+    : `/?login=1&return_url=${encodeURIComponent(returnUrl)}`;
+  window.location.replace(normalizedStatus === 428 ? passwordTarget : loginTarget);
   return true;
 }
 
@@ -19222,7 +19241,7 @@ function renderProxyPool() {
       <div class="proxy-pool-head">
         <div><strong>代理 IP</strong><span>独立维护代理信息并查看账号绑定情况。</span></div>
         <div class="proxy-pool-head-actions">
-          <a class="proxy-market-link" href="/proxy-market.html">${renderNetworkIcon()}<span>代理商城</span></a>
+          <a class="proxy-market-link" href="${adminWorkspacePageUrl("/proxy-market.html")}">${renderNetworkIcon()}<span>代理商城</span></a>
           <button type="button" class="primary proxy-pool-add" data-proxy-add>${renderPlusIcon()}<span>自定义代理</span></button>
         </div>
       </div>

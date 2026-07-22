@@ -1,5 +1,7 @@
 async function api(path, opts = {}) {
-  const res = await fetch(path, { credentials: "include", ...opts });
+  const headers = new Headers(opts.headers || {});
+  if (adminConsolePasswordChangeActive()) headers.set("X-Admin-Console", "1");
+  const res = await fetch(path, { credentials: "include", ...opts, headers });
   const text = await res.text();
   let data = null;
   try {
@@ -46,6 +48,20 @@ function safeAuthReturnUrl(fallback = "/console.html") {
   }
 }
 
+function adminConsolePasswordChangeActive() {
+  try {
+    return new URLSearchParams(window.location.search).get("admin_console") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function forcedPasswordChangeTarget(returnUrl, admin = false) {
+  const params = new URLSearchParams({ return_url: returnUrl });
+  if (admin) params.set("admin_console", "1");
+  return `/change-password.html?${params.toString()}`;
+}
+
 function browserDeviceId() {
   const key = "vecto-device-id";
   try {
@@ -75,12 +91,13 @@ async function submitLogin(form, forceTakeover = false) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (loginRole === "user" && result?.must_change_password) {
-    const returnUrl = safeAuthReturnUrl();
-    location.href = `/change-password.html?return_url=${encodeURIComponent(returnUrl)}`;
+  if (result?.must_change_password) {
+    const admin = loginRole === "admin";
+    const returnUrl = safeAuthReturnUrl(admin ? "/admin" : "/console.html");
+    location.href = forcedPasswordChangeTarget(returnUrl, admin);
     return;
   }
-  location.href = loginRole === "admin" ? "/admin" : safeAuthReturnUrl();
+  location.href = safeAuthReturnUrl(loginRole === "admin" ? "/admin" : "/console.html");
 }
 
 function setPasswordVisibility(button, revealed) {
@@ -111,14 +128,16 @@ async function submitForcedPasswordChange(form) {
   const currentPassword = form.old_password.value;
   const newPassword = form.new_password.value;
   const confirmation = form.confirm_password.value;
-  if (newPassword.length < 8) throw { detail: "新密码至少 8 位" };
+  const admin = adminConsolePasswordChangeActive();
+  const minimumLength = admin ? 12 : 8;
+  if (newPassword.length < minimumLength) throw { detail: `新密码至少 ${minimumLength} 位` };
   if (newPassword !== confirmation) throw { detail: "两次输入的新密码不一致" };
   await api("/api/auth/change_password", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ old_password: currentPassword, new_password: newPassword }),
   });
-  location.href = safeAuthReturnUrl();
+  location.href = safeAuthReturnUrl(admin ? "/admin" : "/console.html");
 }
 
 async function submitRegister(form) {
@@ -201,6 +220,11 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   if (forcePasswordForm) {
+    if (adminConsolePasswordChangeActive()) {
+      forcePasswordForm.new_password.minLength = 12;
+      forcePasswordForm.confirm_password.minLength = 12;
+      document.querySelector(".auth-quick-setup-link")?.setAttribute("href", "/admin");
+    }
     forcePasswordForm.addEventListener("submit", async (e) => {
       e.preventDefault();
       setMsg("", true);

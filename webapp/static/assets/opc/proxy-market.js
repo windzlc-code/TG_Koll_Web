@@ -60,6 +60,9 @@
     catalogRendered: false,
     catalogReadMarked: false,
     claimKeys: new Map(),
+    sessionContextCaptured: false,
+    adminContext: false,
+    workspaceUserId: "",
   };
 
   function asObject(value) {
@@ -113,12 +116,34 @@
   }
 
   function adminConsoleContextActive() {
+    if (state.sessionContextCaptured) return state.adminContext;
     if (ADMIN_ENTRY_REQUESTED) return true;
     try {
       return sessionStorage.getItem(ADMIN_CONTEXT_STORAGE_KEY) === "1";
     } catch {
       return false;
     }
+  }
+
+  function captureSessionContext() {
+    state.adminContext = adminConsoleContextActive();
+    try {
+      const params = new URLSearchParams(window.location.search || "");
+      state.workspaceUserId = state.adminContext
+        ? String(
+          params.get("admin_workspace_user_id")
+          || params.get("manage_user_id")
+          || sessionStorage.getItem("vecto-admin-workspace-user-id")
+          || "",
+        ).trim()
+        : "";
+      if (state.adminContext && state.workspaceUserId) {
+        sessionStorage.setItem("vecto-admin-workspace-user-id", state.workspaceUserId);
+      }
+    } catch {
+      state.workspaceUserId = "";
+    }
+    state.sessionContextCaptured = true;
   }
 
   function seedAdminConsoleContext() {
@@ -137,8 +162,7 @@
     try {
       if (adminConsoleContextActive()) {
         headers.set("X-Admin-Console", "1");
-        const workspaceUserId = String(sessionStorage.getItem("vecto-admin-workspace-user-id") || "").trim();
-        if (workspaceUserId) headers.set("X-Admin-Workspace-User-ID", workspaceUserId);
+        if (state.workspaceUserId) headers.set("X-Admin-Workspace-User-ID", state.workspaceUserId);
       }
     } catch {}
     return headers;
@@ -160,7 +184,7 @@
     }
     try {
       const adminContext = adminConsoleContextActive();
-      const workspaceUserId = String(sessionStorage.getItem("vecto-admin-workspace-user-id") || "").trim();
+      const workspaceUserId = state.workspaceUserId;
       if (adminContext || workspaceUserId) {
         target.pathname = "/admin-console.html";
         if (workspaceUserId) target.searchParams.set("manage_user_id", workspaceUserId);
@@ -171,7 +195,7 @@
 
   function openLogin() {
     if (adminConsoleContextActive()) {
-      window.location.assign("/admin");
+      window.location.assign(`/admin?return_url=${encodeURIComponent(safeReturnUrl())}`);
       return;
     }
     prepareLoginReturn();
@@ -752,6 +776,7 @@
   });
 
   seedAdminConsoleContext();
+  captureSessionContext();
   readFiltersFromUrl();
   prepareLoginReturn();
   void Promise.all([loadMe(), loadCatalog()]);

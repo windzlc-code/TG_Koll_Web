@@ -2,6 +2,28 @@
   const page = document.querySelector("#pricingSubscription");
   const preview = document.querySelector("#homePricingLayout");
   if (!page && !preview) return;
+  const ADMIN_CONTEXT_STORAGE_KEY = "vecto-admin-console-context";
+  const ADMIN_WORKSPACE_STORAGE_KEY = "vecto-admin-workspace-user-id";
+  const pricingParams = new URLSearchParams(window.location.search || "");
+  const explicitAdminContext = pricingParams.get("admin_console") === "1";
+  const billingSessionContext = (() => {
+    try {
+      if (explicitAdminContext) sessionStorage.setItem(ADMIN_CONTEXT_STORAGE_KEY, "1");
+      const admin = explicitAdminContext || sessionStorage.getItem(ADMIN_CONTEXT_STORAGE_KEY) === "1";
+      const requestedWorkspace = String(
+        pricingParams.get("admin_workspace_user_id") || pricingParams.get("manage_user_id") || "",
+      ).trim();
+      if (admin && requestedWorkspace) sessionStorage.setItem(ADMIN_WORKSPACE_STORAGE_KEY, requestedWorkspace);
+      return {
+        admin,
+        workspaceUserId: admin
+          ? requestedWorkspace || String(sessionStorage.getItem(ADMIN_WORKSPACE_STORAGE_KEY) || "").trim()
+          : "",
+      };
+    } catch {
+      return { admin: false, workspaceUserId: "" };
+    }
+  })();
 
   const state = {
     catalog: null,
@@ -65,8 +87,49 @@
     return "";
   }
 
+  function adminConsoleContextActive() {
+    return billingSessionContext.admin;
+  }
+
+  function publicPricingUrl(sku = "") {
+    const url = new URL("/subscription.html", window.location.origin);
+    if (sku) url.searchParams.set("product", sku);
+    if (adminConsoleContextActive()) {
+      url.searchParams.set("admin_console", "1");
+      if (billingSessionContext.workspaceUserId) {
+        url.searchParams.set("admin_workspace_user_id", billingSessionContext.workspaceUserId);
+      }
+    }
+    return `${url.pathname}${url.search}`;
+  }
+
+  function billingAccountUrl() {
+    if (!adminConsoleContextActive()) return "/console.html?view=billing";
+    const params = new URLSearchParams({ view: "billing" });
+    if (billingSessionContext.workspaceUserId) {
+      params.set("manage_user_id", billingSessionContext.workspaceUserId);
+    }
+    return `/admin-console.html?${params.toString()}`;
+  }
+
+  function redirectToSelectedLogin(returnUrl) {
+    if (adminConsoleContextActive()) {
+      window.location.assign(`/admin?return_url=${encodeURIComponent(returnUrl)}`);
+      return;
+    }
+    document.body.dataset.loginRedirect = returnUrl;
+    document.querySelector(".header-login")?.click();
+  }
+
   async function request(path, options = {}) {
-    const response = await fetch(path, { credentials: "include", ...options });
+    const headers = new Headers(options.headers || {});
+    if (adminConsoleContextActive()) {
+      headers.set("X-Admin-Console", "1");
+      if (billingSessionContext.workspaceUserId) {
+        headers.set("X-Admin-Workspace-User-ID", billingSessionContext.workspaceUserId);
+      }
+    }
+    const response = await fetch(path, { credentials: "include", ...options, headers });
     const text = await response.text();
     let payload = {};
     try { payload = text ? JSON.parse(text) : {}; } catch { payload = { detail: text || `HTTP ${response.status}` }; }
@@ -85,7 +148,7 @@
       <h3>${escapeHtml(subscription.name || "月度訂閱方案")}</h3>
       <p class="price"><span>NT$</span>${Number(subscription.price_ntd || 0).toLocaleString("zh-TW")}<small>/ 月</small></p>
       <ul>${list(subscription.features).map((feature) => `<li>${escapeHtml(feature)}</li>`).join("")}</ul>
-      <div class="catalog-purchase"><a class="button button-primary" href="/subscription.html">查看完整方案</a></div>
+      <div class="catalog-purchase"><a class="button button-primary" href="${publicPricingUrl()}">查看完整方案</a></div>
     </article>
     <div class="credit-panel" aria-label="算力計價標準">
       <h3>算力點官方計價</h3>
@@ -95,7 +158,7 @@
     packages.innerHTML = list(catalog.packages).map((item) => `<article>
       <span>${escapeHtml(item.name)}</span><h3>${Number(item.total_points || 0).toLocaleString("zh-TW")} 點</h3>
       <p>${money(item.price_ntd)}</p><small>${item.bonus_points ? `含 ${Number(item.bonus_points).toLocaleString("zh-TW")} 點加贈` : "算力點永久有效"}</small>
-      <div class="catalog-purchase"><a class="button button-primary" href="/subscription.html?product=${encodeURIComponent(skuOf(item))}">查看方案</a></div>
+      <div class="catalog-purchase"><a class="button button-primary" href="${publicPricingUrl(skuOf(item))}">查看方案</a></div>
     </article>`).join("");
   }
 
@@ -155,7 +218,7 @@
       : state.pendingCount
         ? `待管理員批准 ${state.pendingCount} 項 · ${points}`
         : `${points} · 可在線提交方案申請`;
-    host.innerHTML = `<div><span>目前帳號</span><strong>${escapeHtml(state.user.username || "已登入")} · ${escapeHtml(applicationState)}</strong></div><a class="button button-primary" href="/console.html?view=billing">查看申請與帳戶明細</a>`;
+    host.innerHTML = `<div><span>目前帳號</span><strong>${escapeHtml(state.user.username || "已登入")} · ${escapeHtml(applicationState)}</strong></div><a class="button button-primary" href="${billingAccountUrl()}">查看申請與帳戶明細</a>`;
   }
 
   function closeOrder() {
@@ -166,9 +229,7 @@
   }
 
   function openLoginForProduct(sku) {
-    const target = `/subscription.html?product=${encodeURIComponent(sku)}`;
-    document.body.dataset.loginRedirect = target;
-    document.querySelector(".header-login")?.click();
+    redirectToSelectedLogin(publicPricingUrl(sku));
   }
 
   function openOrder(sku) {

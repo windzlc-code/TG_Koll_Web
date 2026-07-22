@@ -665,7 +665,8 @@ def test_websocket_rfb_input_is_blocked_when_task_permission_is_denied():
 
 def test_websocket_auth_resolves_admin_workspace_query():
     websocket = SimpleNamespace(
-        cookies={"session_token": "admin-session"},
+        cookies={"admin_session_token": "admin-session"},
+        headers={},
         query_params={"admin_workspace_user_id": "42"},
     )
     resolved = {"id": 1, "is_admin": 1, "_workspace_user_id": 42}
@@ -678,7 +679,67 @@ def test_websocket_auth_resolves_admin_workspace_query():
         user = social_automation_api._authenticate_live_browser_websocket(websocket)
 
     assert user == resolved
-    authenticate.assert_called_once_with("admin-session", admin_workspace_user_id="42", request=None)
+    authenticate.assert_called_once_with(
+        "admin-session",
+        expected_admin_session=True,
+        admin_workspace_user_id="42",
+        request=None,
+    )
+
+
+def test_websocket_auth_never_falls_back_from_customer_to_admin_cookie():
+    websocket = SimpleNamespace(
+        cookies={"session_token": "customer-session", "admin_session_token": "admin-session"},
+        headers={},
+        query_params={},
+    )
+    customer = {"id": 20, "is_admin": 0}
+    admin = {"id": 1, "is_admin": 1}
+
+    with (
+        mock.patch.object(
+            social_automation_api,
+            "get_current_user_for_session",
+            side_effect=[customer, admin],
+        ) as authenticate,
+        mock.patch.object(
+            social_automation_api,
+            "_live_browser_session_accessible",
+            side_effect=lambda _session_id, user: int(user.get("is_admin") or 0) == 1,
+        ),
+    ):
+        user = social_automation_api._authenticate_live_browser_websocket(websocket, "other-customer-session")
+
+    assert user is None
+    authenticate.assert_called_once_with(
+        "customer-session",
+        expected_admin_session=False,
+        admin_workspace_user_id=None,
+        request=None,
+    )
+
+
+def test_websocket_explicit_admin_context_never_falls_back_to_customer_cookie():
+    websocket = SimpleNamespace(
+        cookies={"session_token": "customer-session", "admin_session_token": "expired-admin-session"},
+        headers={},
+        query_params={"admin_console": "1"},
+    )
+
+    with mock.patch.object(
+        social_automation_api,
+        "get_current_user_for_session",
+        side_effect=RuntimeError("expired admin session"),
+    ) as authenticate:
+        user = social_automation_api._authenticate_live_browser_websocket(websocket, "target-session")
+
+    assert user is None
+    authenticate.assert_called_once_with(
+        "expired-admin-session",
+        expected_admin_session=True,
+        admin_workspace_user_id=None,
+        request=None,
+    )
 
 
 def test_admin_workspace_websocket_audit_uses_actor_and_target_ids():

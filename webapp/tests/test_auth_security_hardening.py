@@ -277,9 +277,13 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         admin, _identity = self._admin_client()
         self.assertEqual(admin.get("/api/persona_dashboard/automation/accounts").json()["accounts"], [])
         self.assertEqual(admin.get(f"/api/persona_dashboard/personas/{owner_persona_id}/profile").status_code, 404)
-        admin_console = admin.get("/console.html", follow_redirects=False)
+        admin_console = admin.get(
+            "/console.html",
+            headers={"X-Admin-Console": "0"},
+            follow_redirects=False,
+        )
         self.assertEqual(admin_console.status_code, 302)
-        self.assertEqual(admin_console.headers["location"], "/admin-console.html")
+        self.assertEqual(admin_console.headers["location"], "/login.html?return_url=%2Fconsole.html")
         owner_detail = admin.get(f"/api/admin/users/{owner_id}")
         self.assertEqual(owner_detail.status_code, 200, owner_detail.text)
         self.assertEqual(owner_detail.json()["resource_counts"]["personas"], 1)

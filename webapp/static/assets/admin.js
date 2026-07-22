@@ -7045,7 +7045,7 @@ async function runTaskAction(act, id) {
     return true;
   }
   if (act === "download") {
-    window.open(`/api/tasks/${id}/download`, "_blank");
+    window.open(`/api/tasks/${id}/download?admin_console=1`, "_blank");
     return true;
   }
   if (act === "analyze_error") {

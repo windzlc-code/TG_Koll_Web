@@ -395,6 +395,29 @@ def _origin_parts(value: str) -> tuple[str, str, int] | None:
         return None
 
 
+def _safe_local_return_url(value: Any, fallback: str) -> str:
+    clean_fallback = str(fallback or "/").strip() or "/"
+    text = str(value or "").strip()
+    if (
+        not text
+        or not text.startswith("/")
+        or text.startswith("//")
+        or "\\" in text
+        or any(ord(character) < 32 for character in text)
+    ):
+        return clean_fallback
+    try:
+        parsed = urlsplit(text)
+    except ValueError:
+        return clean_fallback
+    if parsed.scheme or parsed.netloc or not str(parsed.path or "").startswith("/"):
+        return clean_fallback
+    safe_path = urlunsplit(("", "", parsed.path or "/", parsed.query, parsed.fragment))
+    if str(parsed.path or "") in {"/admin", "/admin-login.html"}:
+        return clean_fallback
+    return safe_path
+
+
 def _require_same_origin(request: Request) -> None:
     supplied = str(request.headers.get("origin") or "").strip()
     if not supplied:
@@ -16672,18 +16695,33 @@ def create_app() -> FastAPI:
         return RedirectResponse(url=_public_login_location(return_url), status_code=302)
 
     @app.get("/change-password.html", include_in_schema=False)
-    def page_change_password(session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE)) -> Response:
+    def page_change_password(
+        request: Request,
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+        admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
+    ) -> Response:
+        admin_password_change = request_uses_admin_session(request)
+        selected_token = session_token_for_request(request, session_token, admin_session_token)
         try:
             user = _get_session_user_allowing_password_change(
-                session_token,
-                expected_admin_session=False,
+                selected_token,
+                expected_admin_session=admin_password_change,
             )
         except HTTPException:
-            return RedirectResponse(url=_public_login_location(), status_code=302)
+            return RedirectResponse(
+                url="/admin" if admin_password_change else _public_login_location("/change-password.html"),
+                status_code=302,
+            )
         if int(user.get("must_change_password") or 0) != 1:
             target = "/admin" if _is_admin(user) else "/console.html"
             return RedirectResponse(url=target, status_code=302)
-        return FileResponse(str(STATIC_DIR / "change-password.html"))
+        return _html_response_with_versions(
+            "change-password.html",
+            replacements={
+                "__STYLE_VERSION__": _asset_version("assets", "style.css"),
+                "__AUTH_JS_VERSION__": _asset_version("assets", "auth.js"),
+            },
+        )
 
     @app.get("/favicon.ico", include_in_schema=False)
     def favicon() -> FileResponse:
@@ -16749,18 +16787,6 @@ def create_app() -> FastAPI:
             },
         )
 
-    def _has_valid_admin_page_session(token: str | None) -> bool:
-        if not token:
-            return False
-        try:
-            admin_user = _get_session_user_allowing_password_change(
-                token,
-                expected_admin_session=True,
-            )
-        except HTTPException:
-            return False
-        return _is_admin(admin_user)
-
     @app.get("/profile.html", include_in_schema=False)
     @app.get("/admin-profile.html", include_in_schema=False)
     def page_profile(
@@ -16768,12 +16794,7 @@ def create_app() -> FastAPI:
         session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
         admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
     ) -> Response:
-        admin_profile = request.url.path == "/admin-profile.html"
-        if not admin_profile and admin_session_token:
-            if _has_valid_admin_page_session(admin_session_token):
-                return RedirectResponse(url="/admin-profile.html", status_code=302)
-            if not session_token:
-                return RedirectResponse(url="/admin", status_code=302)
+        admin_profile = request.url.path == "/admin-profile.html" or request_uses_admin_session(request)
         selected_token = admin_session_token if admin_profile else session_token
         try:
             user = _get_session_user_allowing_password_change(
@@ -16781,12 +16802,22 @@ def create_app() -> FastAPI:
                 expected_admin_session=admin_profile,
             )
         except HTTPException:
+            return_url = str(request.url.path or "/")
+            if request.url.query:
+                return_url = f"{return_url}?{request.url.query}"
+            location = (
+                f"/admin?return_url={quote(return_url, safe='')}"
+                if admin_profile
+                else _public_login_location(return_url)
+            )
+            return RedirectResponse(url=location, status_code=302)
+        if int(user.get("must_change_password") or 0) == 1:
+            target = "/admin-profile.html" if admin_profile else "/profile.html"
+            marker = "admin_console=1&" if admin_profile else ""
             return RedirectResponse(
-                url="/admin" if admin_profile else _public_login_location("/profile.html"),
+                url=f"/change-password.html?{marker}return_url={quote(target, safe='')}",
                 status_code=302,
             )
-        if int(user.get("must_change_password") or 0) == 1:
-            return RedirectResponse(url="/change-password.html", status_code=302)
         if admin_profile and not _is_admin(user):
             return RedirectResponse(url="/admin", status_code=302)
         if not admin_profile and _is_admin(user):
@@ -16811,12 +16842,7 @@ def create_app() -> FastAPI:
         session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
         admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
     ) -> Response:
-        admin_console = request.url.path == "/admin-console.html"
-        if not admin_console and admin_session_token:
-            if _has_valid_admin_page_session(admin_session_token):
-                return RedirectResponse(url="/admin-console.html", status_code=302)
-            if not session_token:
-                return RedirectResponse(url="/admin", status_code=302)
+        admin_console = request.url.path == "/admin-console.html" or request_uses_admin_session(request)
         selected_token = admin_session_token if admin_console else session_token
         try:
             user = _get_session_user_allowing_password_change(
@@ -16824,12 +16850,22 @@ def create_app() -> FastAPI:
                 expected_admin_session=admin_console,
             )
         except HTTPException:
+            return_url = str(request.url.path or "/")
+            if request.url.query:
+                return_url = f"{return_url}?{request.url.query}"
+            location = (
+                f"/admin?return_url={quote(return_url, safe='')}"
+                if admin_console
+                else _public_login_location(return_url)
+            )
+            return RedirectResponse(url=location, status_code=302)
+        if int(user.get("must_change_password") or 0) == 1:
+            target = "/admin-console.html" if admin_console else "/console.html"
+            marker = "admin_console=1&" if admin_console else ""
             return RedirectResponse(
-                url="/admin" if admin_console else _public_login_location("/console.html"),
+                url=f"/change-password.html?{marker}return_url={quote(target, safe='')}",
                 status_code=302,
             )
-        if int(user.get("must_change_password") or 0) == 1:
-            return RedirectResponse(url="/change-password.html", status_code=302)
         if admin_console:
             if not _is_admin(user):
                 return RedirectResponse(url="/admin", status_code=302)
@@ -16837,7 +16873,7 @@ def create_app() -> FastAPI:
                 try:
                     user = resolve_admin_workspace_user(user, int(manage_user_id))
                 except HTTPException:
-                    return RedirectResponse(url="/admin#users", status_code=302)
+                    return RedirectResponse(url="/admin.html#admin-users", status_code=302)
         elif _is_admin(user):
             return RedirectResponse(url="/admin-console.html", status_code=302)
         elif int(manage_user_id or 0) > 0:
@@ -16881,7 +16917,7 @@ def create_app() -> FastAPI:
         admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
     ) -> Response:
         try:
-            user = _get_session_user_for_token(
+            user = _get_session_user_allowing_password_change(
                 admin_session_token,
                 expected_admin_session=True,
             )
@@ -16889,6 +16925,11 @@ def create_app() -> FastAPI:
             return RedirectResponse(url="/admin", status_code=302)
         if not _is_admin(user):
             return RedirectResponse(url="/admin", status_code=302)
+        if int(user.get("must_change_password") or 0) == 1:
+            return RedirectResponse(
+                url="/change-password.html?admin_console=1&return_url=%2Fadmin",
+                status_code=302,
+            )
         response = _html_response_with_versions(
             "admin.html",
             replacements={
@@ -16915,7 +16956,7 @@ def create_app() -> FastAPI:
         admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
     ) -> Response:
         try:
-            user = _get_session_user_for_token(
+            user = _get_session_user_allowing_password_change(
                 admin_session_token,
                 expected_admin_session=True,
             )
@@ -16923,7 +16964,21 @@ def create_app() -> FastAPI:
             return _admin_login_page()
         if not _is_admin(user):
             return _admin_login_page()
-        response = RedirectResponse(url="/admin.html#admin-overview", status_code=302)
+        requested_return_url = request.query_params.get("return_url")
+        return_target = _safe_local_return_url(
+            requested_return_url,
+            "/admin.html#admin-overview",
+        )
+        if int(user.get("must_change_password") or 0) == 1:
+            password_return_target = _safe_local_return_url(requested_return_url, "/admin")
+            return RedirectResponse(
+                url=(
+                    "/change-password.html?admin_console=1&return_url="
+                    f"{quote(password_return_target, safe='')}"
+                ),
+                status_code=302,
+            )
+        response = RedirectResponse(url=return_target, status_code=302)
         return response
 
     @app.get("/admin-login.html", include_in_schema=False)
