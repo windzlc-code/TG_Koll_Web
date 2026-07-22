@@ -8629,16 +8629,18 @@ function renderPublishContentPreview(persona = selectedPersona(), source = state
             ${selectedPosts.map((post, index) => {
               const postId = String(post.id || "");
               const active = postId === String(activePost?.id || "");
+              const previewTitle = personaDraftDisplayTitleForPost(post, sourceRows, index);
               return `
                 <button
                   type="button"
                   class="${active ? "is-active" : ""}"
                   data-publish-preview-post="${esc(postId)}"
+                  aria-label="${esc(`第${index + 1}篇：${previewTitle}`)}"
                   aria-pressed="${active ? "true" : "false"}"
                 >
                   <span class="publish-preview-tab-index">${esc(index + 1)}</span>
                   <span class="publish-preview-tab-copy">
-                    <strong>${esc(personaDraftDisplayTitleForPost(post, sourceRows, index))}</strong>
+                    <strong>${esc(previewTitle)}</strong>
                     <span>${esc(`第${index + 1}篇`)}</span>
                   </span>
                 </button>`;
@@ -19790,17 +19792,19 @@ function liveBrowserLoginMode(session) {
 
 function renderLiveBrowserModeToggle(session) {
   const sessionId = liveBrowserSessionId(session);
+  const taskType = String(session?.task_type || "").trim().toLowerCase();
   if (
     !sessionId
-    || String(session?.task_type || "").trim().toLowerCase() !== "open_login"
+    || !["open_login", "publish_post"].includes(taskType)
   ) return "";
   const mode = liveBrowserLoginMode(session);
   const active = ["running", "need_manual"].includes(liveBrowserTaskStatus(session));
   const switching = mode === "switching";
   const takeoverTimedOut = mode === "takeover_timeout";
+  const automaticLabel = taskType === "publish_post" ? "自动执行" : "自动登录";
   return `
-    <div class="live-browser-mode-toggle" role="group" aria-label="登录操作模式">
-      <button type="button" class="${mode === "automatic" ? "is-active" : ""}" aria-pressed="${mode === "automatic" ? "true" : "false"}" disabled>自动登录</button>
+    <div class="live-browser-mode-toggle" role="group" aria-label="浏览器操作模式">
+      <button type="button" class="${mode === "automatic" ? "is-active" : ""}" aria-pressed="${mode === "automatic" ? "true" : "false"}" disabled>${automaticLabel}</button>
       <button type="button" class="${mode === "manual" ? "is-active" : ""}${switching || takeoverTimedOut ? " is-pending" : ""}" data-live-browser-mode="manual" data-live-browser-mode-session="${esc(sessionId)}" aria-pressed="${mode === "manual" ? "true" : "false"}" ${active && sessionId ? "" : "disabled"}>${switching ? "再次强制接管" : (takeoverTimedOut ? "重试接管" : "人工接管")}</button>
     </div>`;
 }

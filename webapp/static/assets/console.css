@@ -16020,6 +16020,50 @@ body.console-page {
     display: none;
   }
 
+  .console-page .view:has(.publish-content-preview--selection),
+  .module-panel.is-publishing-module:has(.publish-content-preview--selection),
+  .publish-content-preview--selection {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .publish-content-preview--selection .publish-preview-tabs-layout {
+    display: block;
+  }
+
+  .publish-content-preview--selection .publish-preview-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .publish-content-preview--selection .publish-preview-tabs button {
+    display: inline-grid;
+    grid-template-columns: 1fr;
+    width: 42px;
+    min-width: 42px;
+    min-height: 38px;
+    padding: 0;
+    place-items: center;
+    border-radius: 4px;
+    box-shadow: none;
+  }
+
+  .publish-content-preview--selection .publish-preview-tab-index {
+    width: auto;
+    height: auto;
+    border: 0;
+    border-radius: 0;
+    color: inherit;
+    background: transparent;
+  }
+
+  .publish-content-preview--selection .publish-preview-tab-copy {
+    display: none;
+  }
+
   .publish-post-card-main {
     align-items: start;
   }

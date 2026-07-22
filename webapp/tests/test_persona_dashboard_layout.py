@@ -83,7 +83,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn('.slice(0, 86) || "当前内容为空。"', self.console_script)
         self.assertNotIn('.slice(0, 170))}</p>', self.console_script)
 
-    def test_mobile_publish_preview_keeps_original_tabs_without_body(self):
+    def test_mobile_publish_preview_uses_number_only_square_tabs_without_body(self):
         self.assertIn(
             'class="publish-content-preview publish-content-preview--selection"',
             self.console_script,
@@ -92,9 +92,26 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             ".publish-content-preview--selection .publish-preview-card",
             self.styles,
         )
-        self.assertNotIn(
+        self.assertIn(
             ".publish-content-preview--selection .publish-preview-tab-copy",
             self.styles,
+        )
+        self.assertIn(
+            ".publish-content-preview--selection .publish-preview-tab-index",
+            self.styles,
+        )
+        self.assertIn("border-radius: 0;", self.styles)
+        self.assertIn(
+            ".console-page .view:has(.publish-content-preview--selection)",
+            self.styles,
+        )
+        self.assertIn(
+            ".module-panel.is-publishing-module:has(.publish-content-preview--selection)",
+            self.styles,
+        )
+        self.assertIn(
+            'aria-label="${esc(`第${index + 1}篇：${previewTitle}`)}"',
+            self.console_script,
         )
 
     def test_publish_source_cards_render_complete_media(self):
