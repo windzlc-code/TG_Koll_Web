@@ -15867,3 +15867,172 @@ body.console-page {
 .account-pool-create-modal .proxy-form-grid {
   grid-template-columns: minmax(0, 1fr);
 }
+
+/* Mobile app dock and full-flow publishing layout. */
+.mobile-task-dock {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .console-page .console-shell {
+    padding-bottom: calc(68px + env(safe-area-inset-bottom));
+  }
+
+  .mobile-task-dock {
+    position: fixed;
+    z-index: 1450;
+    right: max(6px, env(safe-area-inset-right));
+    bottom: max(6px, env(safe-area-inset-bottom));
+    left: max(6px, env(safe-area-inset-left));
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 3px;
+    min-height: 56px;
+    padding: 5px;
+    border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--panel-solid) 94%, transparent);
+    box-shadow: 0 8px 22px rgba(7, 17, 18, 0.16);
+    backdrop-filter: blur(14px);
+  }
+
+  .mobile-task-dock-button {
+    display: grid;
+    grid-template-rows: 22px auto;
+    place-items: center;
+    gap: 1px;
+    min-width: 0;
+    min-height: 46px;
+    padding: 3px 2px;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    color: var(--muted);
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .mobile-task-dock-button > span {
+    width: 100%;
+    overflow: hidden;
+    font-size: 9px;
+    font-weight: 800;
+    line-height: 1.1;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-task-dock-icon {
+    width: 20px;
+    height: 20px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .mobile-task-dock-button.is-active {
+    color: #ffffff;
+    border-color: #174f49;
+    background: #0b3532;
+  }
+
+  .publish-header-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 7px;
+  }
+
+  .publish-header-main,
+  .publish-header-actions {
+    display: contents;
+  }
+
+  .publish-inline-title {
+    grid-column: 1;
+    grid-row: 1;
+    font-size: 18px;
+  }
+
+  .publish-header-actions > .persona-mobile-list-toggle {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+  }
+
+  .publish-header-main > .publish-mode-tabs {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .publish-header-actions > .publish-account-badge {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    width: 100%;
+    max-width: none;
+  }
+
+  .publish-schedule-title {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    width: 100%;
+    max-width: none;
+    gap: 8px;
+  }
+
+  .publish-time-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .publish-post-picker,
+  .publish-content-preview {
+    grid-template-rows: auto auto auto;
+    height: auto;
+    min-height: 0;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .publish-post-list,
+  .publish-preview-tabs-layout,
+  .publish-preview-tabs,
+  .publish-preview-card {
+    height: auto;
+    min-height: 0;
+    max-height: none;
+    overflow: visible;
+    overscroll-behavior: auto;
+    scrollbar-gutter: auto;
+  }
+
+  .publish-post-card-main {
+    align-items: start;
+  }
+
+  .publish-post-card-meta,
+  .publish-post-card-snippet {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .persona-draft-card p {
+    display: block;
+    overflow: visible;
+    -webkit-line-clamp: unset;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .persona-draft-table-content {
+    overflow: visible;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+}

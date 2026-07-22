@@ -54,6 +54,35 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn('hint: "人设列表、详情、推文、账号"', self.console_script)
         self.assertIn('<span>${esc(item.label)}</span>', self.console_script)
 
+    def test_mobile_task_dock_reuses_the_five_workspace_modules(self):
+        self.assertIn('id="mobileTaskDock"', self.markup)
+        self.assertIn("function renderMobileTaskDock()", self.console_script)
+        self.assertIn("modules.map((item) =>", self.console_script)
+        self.assertIn("renderMobileTaskIcon(item.id)", self.console_script)
+        self.assertIn(
+            '$("mobileTaskDock")?.addEventListener("click", handleWorkspaceModuleNavigation);',
+            self.console_script,
+        )
+        for module_id in (
+            "personas",
+            "tweet_generation",
+            "publishing",
+            "accounts",
+            "browser_list",
+        ):
+            with self.subTest(module_id=module_id):
+                self.assertIn(f'{module_id}:', self.console_script)
+
+    def test_mobile_publish_content_expands_without_inner_scroll(self):
+        self.assertIn(".mobile-task-dock {", self.styles)
+        self.assertIn("grid-template-columns: repeat(5, minmax(0, 1fr));", self.styles)
+        self.assertIn(".publish-header-main > .publish-mode-tabs", self.styles)
+        self.assertIn(".publish-time-tabs {", self.styles)
+        self.assertIn(".publish-post-card-snippet {", self.styles)
+        self.assertIn("white-space: pre-wrap;", self.styles)
+        self.assertNotIn('.slice(0, 86) || "当前内容为空。"', self.console_script)
+        self.assertNotIn('.slice(0, 170))}</p>', self.console_script)
+
     def test_refresh_actions_have_distinct_labels_and_behaviors(self):
         self.assertIn(">刷新显示</button>", self.markup)
         self.assertIn(">同步全部数据</button>", self.markup)

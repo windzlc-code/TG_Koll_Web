@@ -5451,6 +5451,40 @@ function updateWorkspaceFlow() {
   button.setAttribute("aria-expanded", open ? "true" : "false");
 }
 
+function moduleNavigationAttributes(item) {
+  const itemPanel = String(item.panel || "");
+  if (!item.view) return `data-module="${esc(item.id)}"`;
+  return `data-workspace-view="${esc(item.view)}" data-workspace-module="${esc(item.id)}"${itemPanel ? ` data-workspace-panel="${esc(itemPanel)}"` : ""}`;
+}
+
+function renderMobileTaskIcon(moduleId) {
+  const paths = {
+    personas: '<circle cx="9" cy="8" r="3"></circle><path d="M3.5 19v-1.5A4.5 4.5 0 0 1 8 13h2a4.5 4.5 0 0 1 4.5 4.5V19"></path><path d="M15 6.5a3 3 0 0 1 0 5.5M16.5 13.5a4.5 4.5 0 0 1 4 4.5v1"></path>',
+    tweet_generation: '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-5 4v-4.5A2.5 2.5 0 0 1 4 13.5z"></path><path d="m13.5 7.5 3 3M9 15l1-3.5 5-5 2.5 2.5-5 5z"></path>',
+    publishing: '<path d="m21 3-7.5 18-4.2-7.8L2 9z"></path><path d="M9.3 13.2 21 3"></path>',
+    accounts: '<circle cx="8" cy="8" r="3"></circle><path d="M2.5 19v-1.5A4.5 4.5 0 0 1 7 13h2a4.5 4.5 0 0 1 4.5 4.5V19"></path><circle cx="17.5" cy="10.5" r="2.5"></circle><path d="M14.5 19v-1a3.5 3.5 0 0 1 7 0v1"></path>',
+    browser_list: '<rect x="3" y="4" width="18" height="14" rx="2"></rect><path d="M3 8h18M9 21h6M12 18v3"></path>',
+  };
+  return `<svg class="mobile-task-dock-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${paths[moduleId] || paths.personas}</svg>`;
+}
+
+function renderMobileTaskDock() {
+  const dock = $("mobileTaskDock");
+  if (!dock) return;
+  dock.innerHTML = modules.map((item) => {
+    const itemPanel = String(item.panel || "");
+    const itemPanels = Array.isArray(item.panels) ? item.panels.map((panel) => String(panel || "")) : [];
+    const isActive = item.view
+      ? (item.view === state.view && (itemPanel ? itemPanel === state.accountBrowserPanel : (!itemPanels.length || itemPanels.includes(state.accountBrowserPanel))))
+      : (state.view === "workspace" && item.id === state.activeModule);
+    return `
+      <button type="button" class="mobile-task-dock-button ${isActive ? "is-active" : ""}" ${moduleNavigationAttributes(item)} aria-label="${esc(item.label)}" ${isActive ? 'aria-current="page"' : ""}>
+        ${renderMobileTaskIcon(item.id)}
+        <span>${esc(item.label === "账号管理自动化" ? "账号" : item.label.replace("列表", ""))}</span>
+      </button>`;
+  }).join("");
+}
+
 function renderModuleMenu() {
   updateWorkspaceFlow();
   $("moduleMenu").innerHTML = `<div class="module-accordion">${modules.map((item) => {
@@ -5461,7 +5495,7 @@ function renderModuleMenu() {
       : (state.view === "workspace" && item.id === state.activeModule);
     return `
       <div class="module-accordion-item">
-        <button type="button" class="module-trigger ${isActive ? "is-active" : ""}" ${item.view ? `data-workspace-view="${esc(item.view)}" data-workspace-module="${esc(item.id)}"${itemPanel ? ` data-workspace-panel="${esc(itemPanel)}"` : ""}` : `data-module="${esc(item.id)}"`}>
+        <button type="button" class="module-trigger ${isActive ? "is-active" : ""}" ${moduleNavigationAttributes(item)}>
           <span class="module-trigger-text">
             <span>${esc(item.label)}</span>
           </span>
@@ -5469,6 +5503,7 @@ function renderModuleMenu() {
       </div>
     `;
   }).join("")}</div>`;
+  renderMobileTaskDock();
 }
 
 function syncModuleMenuState() {
@@ -5477,13 +5512,22 @@ function syncModuleMenuState() {
     const moduleId = button.dataset.module;
     const isActive = state.view === "workspace" && moduleId === state.activeModule;
     button.classList.toggle("is-active", isActive);
+    if (button.classList.contains("mobile-task-dock-button")) {
+      if (isActive) button.setAttribute("aria-current", "page");
+      else button.removeAttribute("aria-current");
+    }
   });
   document.querySelectorAll("[data-workspace-view]").forEach((button) => {
     const itemPanel = String(button.dataset.workspacePanel || "");
     const itemId = String(button.dataset.workspaceModule || "");
     const item = modules.find((entry) => String(entry.id || "") === itemId);
     const itemPanels = Array.isArray(item?.panels) ? item.panels.map((panel) => String(panel || "")) : [];
-    button.classList.toggle("is-active", button.dataset.workspaceView === state.view && (itemPanel ? itemPanel === state.accountBrowserPanel : (!itemPanels.length || itemPanels.includes(state.accountBrowserPanel))));
+    const isActive = button.dataset.workspaceView === state.view && (itemPanel ? itemPanel === state.accountBrowserPanel : (!itemPanels.length || itemPanels.includes(state.accountBrowserPanel)));
+    button.classList.toggle("is-active", isActive);
+    if (button.classList.contains("mobile-task-dock-button")) {
+      if (isActive) button.setAttribute("aria-current", "page");
+      else button.removeAttribute("aria-current");
+    }
   });
 }
 
@@ -6266,7 +6310,7 @@ function renderPersonaDraftRows(posts, source = personaPostSource(), allRows = p
       <div class="persona-draft-card-body">
         ${renderPersonaDraftCardMediaSlot(mediaItems)}
         <div class="persona-draft-card-copy">
-          <p>${esc(String(post.content || "").slice(0, 170))}</p>
+          <p>${esc(String(post.content || ""))}</p>
           ${hotMeta ? renderPersonaHotMetricStrip(hotMeta, post.id) : ""}
         </div>
       </div>
@@ -6442,7 +6486,7 @@ function renderPersonaDraftTableRows(posts, personaId, allRows = posts) {
               ${hotMeta ? renderPersonaHotInfo(hotMeta, post.id) : ""}
             </div>
             <div class="persona-draft-table-cell persona-draft-table-time" role="cell" data-mobile-label="更新时间">${esc(formatTime(post.published_at || post.updated_at || post.created_at))}</div>
-            <div class="persona-draft-table-cell persona-draft-table-content" role="cell" data-mobile-label="内容">${esc(String(post.content || "").slice(0, 48))}</div>
+            <div class="persona-draft-table-cell persona-draft-table-content" role="cell" data-mobile-label="内容">${esc(String(post.content || ""))}</div>
             <div class="persona-draft-table-cell" role="cell" data-mobile-label="状态"><span class="module-chip ${isSelected ? "is-dark" : ""}">${isSelected ? "当前选中" : "待选择"}</span></div>
             <div class="persona-draft-table-actions" role="cell" data-mobile-label="操作">
               ${renderPersonaDraftPostActions(post, { source, isSelected })}
@@ -8548,7 +8592,7 @@ function renderPublishPostSelectionList(persona = selectedPersona(), source = st
                   ${renderMediaTypeBadge(mediaItems)}
                 </span>
                 <span class="publish-post-card-meta">${esc(formatTime(post.published_at || post.updated_at || post.created_at))}${hotMeta ? " · 热点导入" : ""}</span>
-                <span class="publish-post-card-snippet">${esc(String(post.content || "").replace(/\s+/g, " ").slice(0, 86) || "当前内容为空。")}</span>
+                <span class="publish-post-card-snippet">${esc(String(post.content || "").trim() || "当前内容为空。")}</span>
               </span>
             </label>
           </article>`;
@@ -8672,7 +8716,7 @@ function renderPublishHistorySelectionList(persona = selectedPersona()) {
                   ${renderMediaTypeBadge(mediaItems)}
                 </span>
                 <span class="publish-post-card-meta">${esc(meta || "发布记录")}</span>
-                <span class="publish-post-card-snippet">${esc(String(record.content || record.caption || record.text || record.source_url || "").replace(/\s+/g, " ").slice(0, 86) || "该记录没有正文摘要。")}</span>
+                <span class="publish-post-card-snippet">${esc(String(record.content || record.caption || record.text || record.source_url || "").trim() || "该记录没有正文摘要。")}</span>
               </span>
             </div>
           </article>`;
@@ -20639,7 +20683,7 @@ function bindEvents() {
     const button = event.target.closest("[data-billing-cancel-order]");
     if (button) cancelBillingOrder(button.dataset.billingCancelOrder || "");
   });
-  $("moduleMenu").addEventListener("click", async (event) => {
+  const handleWorkspaceModuleNavigation = async (event) => {
     const viewButton = event.target.closest("[data-workspace-view]");
     if (viewButton) {
       const nextView = viewButton.dataset.workspaceView || "workspace";
@@ -20664,7 +20708,9 @@ function bindEvents() {
       }
       setModule(button.dataset.module);
     }
-  });
+  };
+  $("moduleMenu").addEventListener("click", handleWorkspaceModuleNavigation);
+  $("mobileTaskDock")?.addEventListener("click", handleWorkspaceModuleNavigation);
   document.addEventListener("click", (event) => {
     const modalPreviewButton = event.target.closest?.("[data-media-preview-group]");
     if (modalPreviewButton && !$("moduleBody")?.contains(modalPreviewButton)) {
