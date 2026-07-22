@@ -22,6 +22,19 @@ function pdAdminWorkspaceUrl(value) {
   }
 }
 
+function pdSafeLinkUrl(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  try {
+    const url = new URL(text, window.location.origin);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return "";
+    if (url.origin !== window.location.origin) return url.href;
+    return pdAdminWorkspaceUrl(`${url.pathname}${url.search}${url.hash}`);
+  } catch {
+    return "";
+  }
+}
+
 async function pdApi(path, opts = {}) {
   const headers = { ...(opts.headers || {}) };
   if (PD_ADMIN_WORKSPACE_USER_ID) headers["X-Admin-Workspace-User-ID"] = PD_ADMIN_WORKSPACE_USER_ID;
@@ -690,7 +703,7 @@ function pdRenderPublishHistory(persona) {
       <td class="persona-post-time">${pdEscape(pdDate(row.published_at))}</td>
       <td>${pdEscape(row.status || "success")}</td>
       <td class="persona-post-actions">
-        ${row.published_url ? `<a class="ghost" href="${pdEscape(pdAdminWorkspaceUrl(row.published_url))}" target="_blank" rel="noopener">打开</a>` : `<span class="small">-</span>`}
+        ${pdSafeLinkUrl(row.published_url) ? `<a class="ghost" href="${pdEscape(pdSafeLinkUrl(row.published_url))}" target="_blank" rel="noopener">打开</a>` : `<span class="small">-</span>`}
       </td>
     </tr>
   `).join("");
@@ -728,7 +741,7 @@ function pdRenderAutomationRecordRows(persona) {
         <td>${pdEscape(pdDate(row.published_at || row.captured_at))}</td>
         <td><span class="persona-auto-status persona-auto-status-${pdEscape(row.status || "success")}">${pdEscape(row.status || "success")}</span></td>
         <td><div class="persona-auto-row-actions">
-          ${taskId.startsWith("social_task_") ? `<button class="ghost" type="button" data-auto-logs="${pdEscape(taskId)}">日志</button>` : (row.published_url ? `<a class="ghost" href="${pdEscape(pdAdminWorkspaceUrl(row.published_url))}" target="_blank" rel="noopener">打开</a>` : `<span class="small">-</span>`)}
+          ${taskId.startsWith("social_task_") ? `<button class="ghost" type="button" data-auto-logs="${pdEscape(taskId)}">日志</button>` : (pdSafeLinkUrl(row.published_url) ? `<a class="ghost" href="${pdEscape(pdSafeLinkUrl(row.published_url))}" target="_blank" rel="noopener">打开</a>` : `<span class="small">-</span>`)}
         </div></td>
       </tr>
     `;
@@ -1507,7 +1520,7 @@ function pdRenderAutomationLogMedia(task, logs) {
     const galleryIndex = pdAutomationLogImages(task, logs).findIndex((image) => image.url === item.url);
     const imageButton = galleryIndex >= 0;
     return `
-    <${imageButton ? "button" : "a"} class="persona-auto-log-media-item" ${imageButton ? `type="button" data-auto-gallery-index="${pdEscape(String(galleryIndex))}"` : `href="${pdEscape(pdAdminWorkspaceUrl(item.url))}" target="_blank" rel="noopener"`}>
+    <${imageButton ? "button" : "a"} class="persona-auto-log-media-item" ${imageButton ? `type="button" data-auto-gallery-index="${pdEscape(String(galleryIndex))}"` : `href="${pdEscape(pdSafeLinkUrl(item.url))}" target="_blank" rel="noopener"`}>
       ${imageButton ? `<img src="${pdEscape(pdAutomationScreenshotThumbnailUrl(item.url))}" alt="${pdEscape(item.label)}" loading="lazy" />` : ""}
       <strong>${pdEscape(item.label)}</strong>
       <span>点击预览</span>
@@ -1626,7 +1639,7 @@ function pdRenderPostInfo(row) {
       ${items.map(([label, value]) => `
         <div>
           <span>${pdEscape(label)}</span>
-          ${label === "原始链接" ? `<a href="${pdEscape(pdAdminWorkspaceUrl(value))}" target="_blank" rel="noreferrer">${pdEscape(value)}</a>` : `<strong>${pdEscape(value)}</strong>`}
+          ${label === "原始链接" && pdSafeLinkUrl(value) ? `<a href="${pdEscape(pdSafeLinkUrl(value))}" target="_blank" rel="noreferrer">${pdEscape(value)}</a>` : `<strong>${pdEscape(value)}</strong>`}
         </div>
       `).join("")}
     </div>

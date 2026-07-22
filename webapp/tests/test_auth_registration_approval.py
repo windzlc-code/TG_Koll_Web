@@ -1163,7 +1163,7 @@ class RegistrationApprovalTests(unittest.TestCase):
         self.assertEqual(rendered_admin.status_code, 200)
         admin_console = admin.get("/console.html", follow_redirects=False)
         self.assertEqual(admin_console.status_code, 302)
-        self.assertEqual(admin_console.headers["location"], "/login.html?return_url=%2Fconsole.html")
+        self.assertEqual(admin_console.headers["location"], "/?login=1&return_url=%2Fconsole.html")
         self.assertEqual(admin.get("/admin-console.html", follow_redirects=False).status_code, 200)
         self.assertNotIn('href="/console.html"', rendered_admin.text)
         self.assertNotIn("快速配置", rendered_admin.text)

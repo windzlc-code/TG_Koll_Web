@@ -34,7 +34,7 @@ function apiErrorDetail(error) {
   return { code: "", message: String(error || "").trim() };
 }
 
-function safeAuthReturnUrl(fallback = "/console.html") {
+function safeAuthReturnUrl(fallback = "/console.html", role = adminConsolePasswordChangeActive() ? "admin" : "user") {
   const value = String(new URLSearchParams(window.location.search).get("return_url") || "").trim();
   if (!value || !value.startsWith("/") || value.startsWith("//") || value.includes("\\") || /[\u0000-\u001f]/.test(value)) {
     return fallback;
@@ -42,6 +42,18 @@ function safeAuthReturnUrl(fallback = "/console.html") {
   try {
     const target = new URL(value, window.location.origin);
     if (target.origin !== window.location.origin) return fallback;
+    const adminParameters = ["admin_console", "admin_workspace_user_id", "manage_user_id", "return_manage_user_id"];
+    if (role !== "admin") {
+      if (target.pathname.startsWith("/admin") || target.pathname === "/api/admin" || target.pathname.startsWith("/api/admin/") || adminParameters.some((key) => target.searchParams.has(key))) {
+        return fallback;
+      }
+    } else {
+      if (target.pathname === "/console.html") target.pathname = "/admin-console.html";
+      if (target.pathname === "/profile.html") target.pathname = "/admin-profile.html";
+      if (!(target.pathname.startsWith("/admin") || target.pathname === "/api/admin" || target.pathname.startsWith("/api/admin/"))) {
+        target.searchParams.set("admin_console", "1");
+      }
+    }
     return `${target.pathname}${target.search}${target.hash}`;
   } catch {
     return fallback;
@@ -76,6 +88,13 @@ function browserDeviceId() {
   }
 }
 
+function clearAdminBrowserContext() {
+  try {
+    sessionStorage.removeItem("vecto-admin-console-context");
+    sessionStorage.removeItem("vecto-admin-workspace-user-id");
+  } catch {}
+}
+
 async function submitLogin(form, forceTakeover = false) {
   const loginRole = form.dataset.loginRole === "admin" ? "admin" : "user";
   const payload = {
@@ -91,13 +110,14 @@ async function submitLogin(form, forceTakeover = false) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+  if (loginRole === "user") clearAdminBrowserContext();
   if (result?.must_change_password) {
     const admin = loginRole === "admin";
-    const returnUrl = safeAuthReturnUrl(admin ? "/admin" : "/console.html");
+    const returnUrl = safeAuthReturnUrl(admin ? "/admin" : "/console.html", loginRole);
     location.href = forcedPasswordChangeTarget(returnUrl, admin);
     return;
   }
-  location.href = safeAuthReturnUrl(loginRole === "admin" ? "/admin" : "/console.html");
+  location.href = safeAuthReturnUrl(loginRole === "admin" ? "/admin" : "/console.html", loginRole);
 }
 
 function setPasswordVisibility(button, revealed) {
@@ -137,7 +157,7 @@ async function submitForcedPasswordChange(form) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ old_password: currentPassword, new_password: newPassword }),
   });
-  location.href = safeAuthReturnUrl(admin ? "/admin" : "/console.html");
+  location.href = safeAuthReturnUrl(admin ? "/admin" : "/console.html", admin ? "admin" : "user");
 }
 
 async function submitRegister(form) {

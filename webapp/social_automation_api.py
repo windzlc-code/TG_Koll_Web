@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import binascii
+import base64
+import hashlib
+import hmac
 import json
 import os
 import asyncio
@@ -199,6 +202,8 @@ _WORKER_STATE: dict[str, Any] = {
 }
 _RUNNING_TASK_CONTROLS: dict[str, dict[str, Any]] = {}
 _RUNNING_TASK_CONTROLS_LOCK = threading.Lock()
+_LIVE_BROWSER_ACCESS_COOKIE = "vecto_live_browser_access"
+_LIVE_BROWSER_ACCESS_TTL_SECONDS = 300
 
 
 def _screenshot_thumbnail_bytes(path: Path) -> bytes:
@@ -968,12 +973,18 @@ def register_social_automation_routes(app: FastAPI) -> None:
     @app.get("/api/persona_dashboard/automation/browser_sessions/{session_id}/kasm")
     def api_social_browser_session_kasm_root(session_id: str, request: Request):
         _authenticate_live_browser_http_request(request, session_id)
-        return _proxy_live_browser_http(session_id, "vnc.html", request)
+        response = _proxy_live_browser_http(session_id, "vnc.html", request)
+        _set_live_browser_access_cookie(response, request, session_id)
+        return response
 
     @app.get("/api/persona_dashboard/automation/browser_sessions/{session_id}/kasm/{path:path}")
     def api_social_browser_session_kasm_path(session_id: str, path: str, request: Request):
         _authenticate_live_browser_http_request(request, session_id)
-        return _proxy_live_browser_http(session_id, path or "vnc.html", request)
+        clean_path = path or "vnc.html"
+        response = _proxy_live_browser_http(session_id, clean_path, request)
+        if clean_path in {"vnc.html", "index.html"}:
+            _set_live_browser_access_cookie(response, request, session_id)
+        return response
 
     @app.get("/api/persona_dashboard/automation/accounts")
     def api_social_accounts(user: dict[str, Any] = Depends(get_current_user)):
@@ -1423,7 +1434,7 @@ def register_social_automation_routes(app: FastAPI) -> None:
 
 def _authenticate_live_browser_websocket(websocket: WebSocket, session_id: str = "") -> dict[str, Any] | None:
     try:
-        token, use_admin_session, workspace_user_id = _live_browser_auth_selection(websocket)
+        token, use_admin_session, workspace_user_id = _live_browser_auth_selection(websocket, session_id)
     except HTTPException:
         return None
     return _authenticate_selected_live_browser_user(
@@ -1435,7 +1446,9 @@ def _authenticate_live_browser_websocket(websocket: WebSocket, session_id: str =
 
 
 def _authenticate_live_browser_http_request(request: Request, session_id: str = "") -> dict[str, Any]:
-    token, use_admin_session, workspace_user_id = _live_browser_auth_selection(request)
+    token, use_admin_session, workspace_user_id = _live_browser_auth_selection(request, session_id)
+    request.state.live_browser_use_admin_session = use_admin_session
+    request.state.live_browser_workspace_user_id = workspace_user_id or ""
     user = _authenticate_selected_live_browser_user(
         token,
         use_admin_session=use_admin_session,
@@ -1448,7 +1461,7 @@ def _authenticate_live_browser_http_request(request: Request, session_id: str = 
     return user
 
 
-def _live_browser_auth_selection(connection: Any) -> tuple[str, bool, str | None]:
+def _live_browser_auth_selection(connection: Any, session_id: str = "") -> tuple[str, bool, str | None]:
     query_params = getattr(connection, "query_params", None)
     headers = getattr(connection, "headers", None)
     query_workspace = str((query_params.get(ADMIN_WORKSPACE_QUERY) if query_params is not None else "") or "").strip()
@@ -1463,8 +1476,71 @@ def _live_browser_auth_selection(connection: Any) -> tuple[str, bool, str | None
         for value in (query_admin, header_admin)
     )
     cookies = getattr(connection, "cookies", {})
+    if not use_admin_session and session_id:
+        ticket = _valid_live_browser_access_ticket(connection, session_id)
+        if ticket is not None:
+            use_admin_session = True
+            workspace_user_id = str(ticket.get("workspace_user_id") or "").strip() or None
     cookie_name = ADMIN_SESSION_COOKIE if use_admin_session else SESSION_COOKIE
     return str(cookies.get(cookie_name) or "").strip(), use_admin_session, workspace_user_id
+
+
+def _valid_live_browser_access_ticket(connection: Any, session_id: str) -> dict[str, Any] | None:
+    cookies = getattr(connection, "cookies", {})
+    access_token = str(cookies.get(_LIVE_BROWSER_ACCESS_COOKIE) or "").strip()
+    admin_session_token = str(cookies.get(ADMIN_SESSION_COOKIE) or "").strip()
+    if not access_token or not admin_session_token:
+        return None
+    try:
+        encoded_payload, supplied_signature = access_token.rsplit(".", 1)
+        padding = "=" * (-len(encoded_payload) % 4)
+        payload = base64.urlsafe_b64decode(f"{encoded_payload}{padding}").decode("utf-8")
+        ticket_session_id, workspace_user_id, expires_at_text = payload.split("\n", 2)
+        expected_signature = hmac.new(
+            admin_session_token.encode("utf-8"),
+            payload.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        expires_at = int(expires_at_text)
+    except (ValueError, UnicodeDecodeError, binascii.Error):
+        return None
+    if not hmac.compare_digest(supplied_signature, expected_signature):
+        return None
+    if ticket_session_id != str(session_id or "") or expires_at <= int(time.time()):
+        return None
+    return {"workspace_user_id": workspace_user_id, "expires_at": expires_at}
+
+
+def _set_live_browser_access_cookie(response: Response, request: Request, session_id: str) -> None:
+    if not bool(getattr(request.state, "live_browser_use_admin_session", False)):
+        return
+    admin_session_token = str(request.cookies.get(ADMIN_SESSION_COOKIE) or "").strip()
+    if not admin_session_token:
+        return
+    expires_at = int(time.time()) + _LIVE_BROWSER_ACCESS_TTL_SECONDS
+    payload = "\n".join((
+        str(session_id or ""),
+        str(getattr(request.state, "live_browser_workspace_user_id", "") or ""),
+        str(expires_at),
+    ))
+    encoded_payload = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii").rstrip("=")
+    signature = hmac.new(
+        admin_session_token.encode("utf-8"),
+        payload.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    access_token = f"{encoded_payload}.{signature}"
+    forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip().lower()
+    secure = forwarded_proto == "https" or str(request.url.scheme or "").lower() == "https"
+    response.set_cookie(
+        _LIVE_BROWSER_ACCESS_COOKIE,
+        access_token,
+        max_age=_LIVE_BROWSER_ACCESS_TTL_SECONDS,
+        path=f"/api/persona_dashboard/automation/browser_sessions/{session_id}",
+        httponly=True,
+        secure=secure,
+        samesite="lax",
+    )
 
 
 def _authenticate_selected_live_browser_user(

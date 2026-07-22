@@ -36,14 +36,21 @@ function adminWorkspaceUrl(value) {
 
 function adminWorkspacePageUrl(value) {
   const text = String(value || "").trim();
-  if ((!ADMIN_WORKSPACE_USER_ID && !ADMIN_CONSOLE_SESSION) || !text || !text.startsWith("/")) return text;
-  const url = new URL(text, location.origin);
-  if (url.origin !== location.origin) return text;
-  url.searchParams.set("admin_console", "1");
-  if (ADMIN_WORKSPACE_USER_ID) {
-    url.searchParams.set("admin_workspace_user_id", ADMIN_WORKSPACE_USER_ID);
+  if (!text) return "";
+  try {
+    const url = new URL(text, location.origin);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return "";
+    if (url.origin !== location.origin) return url.href;
+    if (ADMIN_WORKSPACE_USER_ID || ADMIN_CONSOLE_SESSION) {
+      url.searchParams.set("admin_console", "1");
+      if (ADMIN_WORKSPACE_USER_ID) {
+        url.searchParams.set("admin_workspace_user_id", ADMIN_WORKSPACE_USER_ID);
+      }
+    }
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return "";
   }
-  return `${url.pathname}${url.search}${url.hash}`;
 }
 
 function adminWorkspaceLiveBrowserUrl(value) {
@@ -12156,6 +12163,7 @@ function renderSocialTaskResult(task, logs = [], emptyText = "提交后，这里
   const waitsForManualLogin = socialTaskWaitsForManualLogin(task);
   const screenshotUrl = presentationStatus === "cancelled" ? "" : latestSocialTaskScreenshot(task, logs);
   const publishedUrl = String(result.published_url || result.publishedUrl || result.url || result.post_url || "").trim();
+  const publishedHref = adminWorkspacePageUrl(publishedUrl);
   const recentLogs = (logs || []).slice(-4).reverse();
   const terminal = ["success", "failed", "cancelled", "need_manual"].includes(presentationStatus);
   const canCancel = activeTaskStatus(task.status);
@@ -12175,8 +12183,8 @@ function renderSocialTaskResult(task, logs = [], emptyText = "提交后，这里
       </div>
       ${waitsForManualLogin ? `<div class="persona-warning-inline">发布任务正在等待账号人工验证，请在浏览器窗口完成验证后继续。</div>` : ""}
       ${task.error ? `<div class="persona-warning-inline">${esc(task.error)}</div>` : ""}
-      ${publishedUrl || canCancel ? `<div class="row-actions">
-        ${publishedUrl ? `<a href="${esc(publishedUrl)}" target="_blank" rel="noopener">查看任务结果</a>` : ""}
+      ${publishedHref || canCancel ? `<div class="row-actions">
+        ${publishedHref ? `<a href="${esc(publishedHref)}" target="_blank" rel="noopener">查看任务结果</a>` : ""}
         ${canCancel ? `<button type="button" class="danger" data-persona-cancel-social-task="${esc(task.id)}">停止任务</button>` : ""}
       </div>` : ""}
       ${screenshotUrl
@@ -12345,6 +12353,7 @@ function renderTaskDetailLayout(task = {}, logs = [], {
   downloadUrl = "",
 } = {}) {
   const resultUrl = taskResultUrl(task);
+  const resultHref = adminWorkspacePageUrl(resultUrl);
   const presentationStatus = kind === "social" ? socialTaskPresentationStatus(task) : String(task.status || "");
   const screenshots = collectTaskScreenshots(task, logs);
   const previewCountLabel = kind === "regular" ? `${screenshots.length} 张图片` : `${screenshots.length} 张截图`;
@@ -12376,7 +12385,7 @@ function renderTaskDetailLayout(task = {}, logs = [], {
       <section class="task-detail-field-grid">
         ${fields}
       </section>
-      ${(downloadUrl || resultUrl || screenshots.length) ? `
+      ${(downloadUrl || resultHref || screenshots.length) ? `
         <section class="task-detail-result-panel">
           <div class="task-detail-section-head">
             <strong>结果预览</strong>
@@ -12384,7 +12393,7 @@ function renderTaskDetailLayout(task = {}, logs = [], {
           </div>
           <div class="row-actions">
             ${downloadUrl ? `<a href="${esc(adminWorkspaceUrl(downloadUrl))}">下载结果文件</a>` : ""}
-            ${resultUrl ? `<a href="${esc(resultUrl)}" target="_blank" rel="noopener">查看任务结果</a>` : ""}
+            ${resultHref ? `<a href="${esc(resultHref)}" target="_blank" rel="noopener">查看任务结果</a>` : ""}
           </div>
           ${renderTaskScreenshotGallery(screenshots)}
         </section>` : ""}

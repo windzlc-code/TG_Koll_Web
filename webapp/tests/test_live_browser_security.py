@@ -1,15 +1,53 @@
 import asyncio
 import json
+from http.cookies import SimpleCookie
 from types import SimpleNamespace
 from unittest import mock
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.requests import Request
+from starlette.responses import Response
 
 from social_automation import live_browser
 from webapp import social_automation_api
 from webapp.auth import get_current_user
+
+
+def test_live_browser_admin_ticket_preserves_subresource_auth_for_only_one_session():
+    request = Request({
+        "type": "http",
+        "method": "GET",
+        "scheme": "https",
+        "path": "/api/persona_dashboard/automation/browser_sessions/session-a/kasm",
+        "query_string": b"admin_console=1&admin_workspace_user_id=42",
+        "headers": [(b"cookie", b"admin_session_token=admin-token")],
+        "server": ("testserver", 443),
+        "client": ("127.0.0.1", 1234),
+    })
+    request.state.live_browser_use_admin_session = True
+    request.state.live_browser_workspace_user_id = "42"
+    response = Response()
+    social_automation_api._set_live_browser_access_cookie(response, request, "session-a")
+    cookie = SimpleCookie()
+    cookie.load(response.headers["set-cookie"])
+    access_token = cookie[social_automation_api._LIVE_BROWSER_ACCESS_COOKIE].value
+
+    subresource = SimpleNamespace(
+        query_params={},
+        headers={},
+        cookies={
+            "admin_session_token": "admin-token",
+            social_automation_api._LIVE_BROWSER_ACCESS_COOKIE: access_token,
+        },
+    )
+    assert social_automation_api._live_browser_auth_selection(subresource, "session-a") == (
+        "admin-token",
+        True,
+        "42",
+    )
+    assert social_automation_api._live_browser_auth_selection(subresource, "session-b") == ("", False, None)
 
 
 def _set_encodings(*encodings: int) -> bytes:

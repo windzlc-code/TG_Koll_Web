@@ -20,9 +20,15 @@
   const UNAVAILABLE_VALUES = new Set(["unavailable", "sold_out", "out_of_stock", "exhausted", "disabled", "inactive"]);
   const LIMITED_VALUES = new Set(["limited", "low", "low_stock"]);
   const ADMIN_CONTEXT_STORAGE_KEY = "vecto-admin-console-context";
+  const ADMIN_WORKSPACE_STORAGE_KEY = "vecto-admin-workspace-user-id";
+  const MARKET_PARAMS = new URLSearchParams(window.location.search || "");
+  const EXPLICIT_ADMIN_MARKER = MARKET_PARAMS.get("admin_console") === "1";
+  const REQUESTED_WORKSPACE_USER_ID = String(
+    MARKET_PARAMS.get("admin_workspace_user_id") || MARKET_PARAMS.get("manage_user_id") || "",
+  ).trim();
   const ADMIN_ENTRY_REQUESTED = (() => {
     try {
-      return new URLSearchParams(window.location.search).get("admin_console") === "1";
+      return EXPLICIT_ADMIN_MARKER || Boolean(REQUESTED_WORKSPACE_USER_ID);
     } catch {
       return false;
     }
@@ -128,17 +134,14 @@
   function captureSessionContext() {
     state.adminContext = adminConsoleContextActive();
     try {
-      const params = new URLSearchParams(window.location.search || "");
       state.workspaceUserId = state.adminContext
-        ? String(
-          params.get("admin_workspace_user_id")
-          || params.get("manage_user_id")
-          || sessionStorage.getItem("vecto-admin-workspace-user-id")
-          || "",
-        ).trim()
+        ? REQUESTED_WORKSPACE_USER_ID
+          || (EXPLICIT_ADMIN_MARKER ? "" : String(sessionStorage.getItem(ADMIN_WORKSPACE_STORAGE_KEY) || "").trim())
         : "";
       if (state.adminContext && state.workspaceUserId) {
-        sessionStorage.setItem("vecto-admin-workspace-user-id", state.workspaceUserId);
+        sessionStorage.setItem(ADMIN_WORKSPACE_STORAGE_KEY, state.workspaceUserId);
+      } else if (EXPLICIT_ADMIN_MARKER) {
+        sessionStorage.removeItem(ADMIN_WORKSPACE_STORAGE_KEY);
       }
     } catch {
       state.workspaceUserId = "";
@@ -150,6 +153,8 @@
     if (!ADMIN_ENTRY_REQUESTED) return;
     try {
       sessionStorage.setItem(ADMIN_CONTEXT_STORAGE_KEY, "1");
+      if (REQUESTED_WORKSPACE_USER_ID) sessionStorage.setItem(ADMIN_WORKSPACE_STORAGE_KEY, REQUESTED_WORKSPACE_USER_ID);
+      else if (EXPLICIT_ADMIN_MARKER) sessionStorage.removeItem(ADMIN_WORKSPACE_STORAGE_KEY);
     } catch {}
   }
 

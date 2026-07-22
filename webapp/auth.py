@@ -292,13 +292,15 @@ def get_current_user(
 ) -> dict[str, Any]:
     workspace_target = admin_workspace_target_from_request(request, admin_workspace_user_id)
     uses_admin_session = request_uses_admin_session(request, workspace_target)
+    selected_token = session_token_for_request(
+        request,
+        session_token,
+        admin_session_token,
+        admin_workspace_user_id=workspace_target,
+    )
+    request.state.auth_session_fingerprint = token_digest(selected_token)[:16] if selected_token else ""
     return get_current_user_for_session(
-        session_token_for_request(
-            request,
-            session_token,
-            admin_session_token,
-            admin_workspace_user_id=workspace_target,
-        ),
+        selected_token,
         expected_admin_session=uses_admin_session,
         admin_workspace_user_id=workspace_target,
         request=request,

@@ -90,7 +90,7 @@ class AccountSettingsApiTests(unittest.TestCase):
 
         regular_profile = self.client.get("/profile.html", follow_redirects=False)
         self.assertEqual(regular_profile.status_code, 302)
-        self.assertEqual(regular_profile.headers["location"], "/login.html?return_url=%2Fprofile.html")
+        self.assertEqual(regular_profile.headers["location"], "/?login=1&return_url=%2Fprofile.html")
 
         admin_profile = self.client.get("/admin-profile.html")
         self.assertEqual(admin_profile.status_code, 200, admin_profile.text)
@@ -381,6 +381,15 @@ class AccountSettingsApiTests(unittest.TestCase):
             admin_entry.headers["location"],
             "/change-password.html?admin_console=1&return_url=%2Fadmin",
         )
+        console_entry = self.client.get(
+            "/admin-console.html?view=accounts",
+            follow_redirects=False,
+        )
+        self.assertEqual(console_entry.status_code, 302, console_entry.text)
+        self.assertEqual(
+            console_entry.headers["location"],
+            "/change-password.html?admin_console=1&return_url=%2Fadmin-console.html%3Fview%3Daccounts",
+        )
         change_page = self.client.get(
             "/change-password.html?admin_console=1&return_url=%2Fadmin",
             follow_redirects=False,
@@ -427,6 +436,36 @@ class AccountSettingsApiTests(unittest.TestCase):
         )
         self.assertEqual(normalized_attack.status_code, 302, normalized_attack.text)
         self.assertEqual(normalized_attack.headers["location"], "/admin.html#admin-overview")
+
+        mapped_console = self.client.get(
+            "/admin?return_url=%2Fconsole.html%3Fview%3Daccounts",
+            follow_redirects=False,
+        )
+        self.assertEqual(mapped_console.status_code, 302, mapped_console.text)
+        self.assertEqual(mapped_console.headers["location"], "/admin-console.html?view=accounts")
+
+    def test_return_urls_are_role_scoped_and_workspace_aliases_cannot_conflict(self):
+        self.assertEqual(
+            server._role_safe_return_url("/admin.html", "/console.html", admin=False),
+            "/console.html",
+        )
+        self.assertEqual(
+            server._role_safe_return_url("/api/admin/users", "/console.html", admin=False),
+            "/console.html",
+        )
+        self.assertEqual(
+            server._role_safe_return_url(
+                "/proxy-market.html?admin_workspace_user_id=42",
+                "/admin.html",
+                admin=True,
+            ),
+            "/proxy-market.html?admin_workspace_user_id=42&admin_console=1",
+        )
+        conflict = self.client.get(
+            "/console.html?manage_user_id=41&admin_workspace_user_id=42",
+            follow_redirects=False,
+        )
+        self.assertEqual(conflict.status_code, 400, conflict.text)
 
 
 if __name__ == "__main__":

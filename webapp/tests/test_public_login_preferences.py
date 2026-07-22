@@ -151,6 +151,22 @@ class PublicLoginPreferenceTests(unittest.TestCase):
         self.assertNotIn("Max-Age=", response.headers.get("set-cookie", ""))
         self.assertAlmostEqual(self._latest_session_ttl(), 3 * 3600, delta=2)
 
+    def test_customer_login_return_url_cannot_select_admin_surfaces(self):
+        client = TestClient(self.app)
+        direct_admin = client.get(
+            "/login.html?return_url=%2Fadmin.html",
+            follow_redirects=False,
+        )
+        self.assertEqual(direct_admin.status_code, 302, direct_admin.text)
+        self.assertEqual(direct_admin.headers["location"], "/?login=1&return_url=%2Fconsole.html")
+
+        admin_query = client.get(
+            "/login.html?return_url=%2Fproxy-market.html%3Fadmin_console%3D1",
+            follow_redirects=False,
+        )
+        self.assertEqual(admin_query.status_code, 302, admin_query.text)
+        self.assertEqual(admin_query.headers["location"], "/?login=1&return_url=%2Fconsole.html")
+
 
 class PublicLoginUiSourceTests(unittest.TestCase):
     @classmethod
@@ -166,6 +182,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         cls.console_js = (cls.static_dir / "assets" / "console.js").read_text(encoding="utf-8")
         cls.admin_html = (cls.static_dir / "admin.html").read_text(encoding="utf-8")
         cls.auth_js = (cls.static_dir / "assets" / "auth.js").read_text(encoding="utf-8")
+        cls.automation_log_html = (cls.static_dir / "persona-automation-log.html").read_text(encoding="utf-8")
         cls.server_source = Path(server.__file__).read_text(encoding="utf-8")
 
     def test_backdrop_click_does_not_close_login(self):
@@ -263,7 +280,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn("function captureSessionContext()", self.proxy_market_js)
         self.assertIn("captureSessionContext();", self.proxy_market_js)
         self.assertIn('headers.set("X-Admin-Workspace-User-ID", state.workspaceUserId)', self.proxy_market_js)
-        self.assertIn('params.get("admin_workspace_user_id")', self.proxy_market_js)
+        self.assertIn('MARKET_PARAMS.get("admin_workspace_user_id")', self.proxy_market_js)
         self.assertIn("function seedExplicitAdminContext()", self.site_nav_script)
         self.assertIn(
             "const preserveWorkspace = publicPagePreservesAdminWorkspace()",
@@ -276,8 +293,17 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn("function syncOperationalPublicTargets()", self.site_nav_script)
         self.assertIn('url.searchParams.set("admin_console", "1")', self.site_nav_script)
         self.assertIn('url.searchParams.set("admin_workspace_user_id", workspaceUserId)', self.site_nav_script)
+        self.assertIn('[data-site-home-label]', self.site_nav_script)
+        self.assertIn('[data-site-nav-key="aboutVecto"]', self.site_nav_script)
+        self.assertIn('"/about-vecto.html",', self.site_nav_script)
+        self.assertIn('["home", "aboutVecto", "proxyMarket", "pricing"].includes(page)', self.site_nav_script)
+        self.assertIn('url.searchParams.delete("admin_workspace_user_id")', self.site_nav_script)
         self.assertIn("function adminWorkspacePageUrl(value)", self.console_js)
         self.assertIn('adminWorkspacePageUrl("/proxy-market.html")', self.console_js)
+        self.assertIn('adminWorkspacePageUrl(publishedUrl)', self.console_js)
+        self.assertIn('adminWorkspacePageUrl(resultUrl)', self.console_js)
+        self.assertIn('sessionStorage.getItem("vecto-admin-console-context") === "1"', self.automation_log_html)
+        self.assertIn('sessionStorage.getItem("vecto-admin-workspace-user-id")', self.automation_log_html)
 
     def test_admin_direct_download_and_forced_password_routes_keep_admin_context(self):
         self.assertIn(

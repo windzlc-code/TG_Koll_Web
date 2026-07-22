@@ -135,6 +135,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('error?.code === "mfa_setup_required"', self.profile_source)
         self.assertIn('"/admin.html#admin-account"', self.profile_source)
         self.assertIn("/change-password.html?admin_console=1&return_url=", self.profile_source)
+        self.assertIn('return_manage_user_id', self.profile_source)
+        self.assertIn('?manage_user_id=', self.profile_source)
+        self.assertIn('params.set("return_manage_user_id", workspaceUserId)', self.site_nav_source)
 
     def test_persona_image_empty_state_supports_custom_upload_and_drop_placeholder(self):
         for marker in (
@@ -361,6 +364,82 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertLess(me_index, init.index("loadSocial("))
         self.assertNotIn("hydratePersonaOverviewFromCache", init)
         self.assertNotIn("hydrateSocialAccountsFromCache", init)
+
+    def test_result_links_reject_unsafe_protocols_and_preserve_admin_context(self):
+        console_link_source = self._function_source("adminWorkspacePageUrl")
+        dashboard_workspace_source = self._persona_dashboard_function_source("pdAdminWorkspaceUrl")
+        dashboard_link_source = self._persona_dashboard_function_source("pdSafeLinkUrl")
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("node:assert/strict");
+            const location = {{ origin: "https://vecto.test" }};
+            const window = {{ location: {{ origin: location.origin, href: `${{location.origin}}/admin-console.html` }} }};
+            const ADMIN_WORKSPACE_USER_ID = "42";
+            const ADMIN_CONSOLE_SESSION = true;
+            const PD_ADMIN_WORKSPACE_USER_ID = "42";
+            const PD_ADMIN_CONSOLE_SESSION = true;
+            {console_link_source}
+            {dashboard_workspace_source}
+            {dashboard_link_source}
+
+            for (const unsafe of [
+              "javascript:alert(1)",
+              "data:text/html,owned",
+              "https://user:pass@example.test/path",
+            ]) {{
+              assert.equal(adminWorkspacePageUrl(unsafe), "");
+              assert.equal(pdSafeLinkUrl(unsafe), "");
+            }}
+
+            assert.equal(
+              adminWorkspacePageUrl("/proxy-market.html#inventory"),
+              "/proxy-market.html?admin_console=1&admin_workspace_user_id=42#inventory",
+            );
+            assert.equal(
+              pdSafeLinkUrl("/persona-automation-log.html?task_id=7"),
+              "/persona-automation-log.html?task_id=7&admin_workspace_user_id=42&admin_console=1",
+            );
+            assert.equal(
+              adminWorkspacePageUrl("https://docs.example.test/result"),
+              "https://docs.example.test/result",
+            );
+            """
+        )
+        self._run_node(harness)
+
+    def test_public_navigation_decorates_every_admin_operational_destination(self):
+        target_source = self._javascript_function_source(
+            self.site_nav_source,
+            "adminOperationalPublicTarget",
+        )
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("node:assert/strict");
+            const window = {{ location: {{ origin: "https://vecto.test" }} }};
+            const document = {{ querySelector() {{ return null; }} }};
+            const currentSessionMode = "admin";
+            function hasAdminConsoleContext() {{ return true; }}
+            function storedAdminWorkspaceUserId() {{ return "42"; }}
+            {target_source}
+
+            const expected = new Map([
+              ["/", "/?admin_console=1&admin_workspace_user_id=42"],
+              ["/#solution", "/?admin_console=1&admin_workspace_user_id=42#solution"],
+              ["/about-vecto.html", "/about-vecto.html?admin_console=1&admin_workspace_user_id=42"],
+              ["/proxy-market.html", "/proxy-market.html?admin_console=1&admin_workspace_user_id=42"],
+              ["/subscription.html", "/subscription.html?admin_console=1&admin_workspace_user_id=42"],
+              ["/pricing.html", "/pricing.html?admin_console=1&admin_workspace_user_id=42"],
+            ]);
+            for (const [source, destination] of expected) {{
+              assert.equal(adminOperationalPublicTarget(source), destination);
+            }}
+            assert.equal(
+              adminOperationalPublicTarget("/profile.html?manage_user_id=99"),
+              "/profile.html?admin_console=1",
+            );
+            """
+        )
+        self._run_node(harness)
 
     def test_bootstrap_requires_matching_server_user_id(self):
         harness = textwrap.dedent(
@@ -1787,7 +1866,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
 
     def test_account_menu_preserves_admin_managed_workspace_on_operational_public_pages(self):
         start = self.site_nav_source.index("function openAccountConsoleView")
-        end = self.site_nav_source.index("function showAuthenticatedAccount", start)
+        end = self.site_nav_source.index("function openProfilePage", start)
         helper = self.site_nav_source[start:end]
         local_switch = helper.index('window.location.pathname === "/console.html"')
         admin_redirect = helper.index("adminConsoleTarget(targetView, workspaceUserId)")
@@ -1814,7 +1893,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('"/console.html"', target_source)
         self.assertIn("removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY)", target_source)
 
-    def test_public_navigation_clears_stale_admin_workspace_but_keeps_admin_context(self):
+    def test_public_navigation_preserves_admin_workspace_and_admin_context(self):
         sync_source = self._javascript_function_source(
             self.site_nav_source,
             "syncAdminWorkspaceContext",
@@ -1832,7 +1911,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             function clearAdminConsoleContext() {{ throw new Error("admin context must be preserved"); }}
             function markAdminConsoleContext() {{}}
             function writeSessionValue() {{}}
-            function publicPagePreservesAdminWorkspace() {{ return false; }}
+            function publicPagePreservesAdminWorkspace() {{ return true; }}
             function hasAdminConsoleContext() {{ return true; }}
             function adminConsoleTarget(view, workspaceUserId) {{
               return workspaceUserId ? `/admin-console.html?manage_user_id=${{workspaceUserId}}` : "/admin-console.html";
@@ -1840,7 +1919,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             let currentSessionMode = "admin";
             {sync_source}
             syncAdminWorkspaceContext();
-            assert.deepStrictEqual(removed, [ADMIN_WORKSPACE_STORAGE_KEY]);
+            assert.deepStrictEqual(removed, []);
 
             let requestedWorkspace = "not-called";
             function storedAdminWorkspaceUserId() {{ return "32"; }}
@@ -1854,8 +1933,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             {resolve_source}
             (async () => {{
               const session = await resolvePublicSession();
-              assert.strictEqual(requestedWorkspace, "");
-              assert.strictEqual(session.workspaceUserId, "");
+            assert.strictEqual(requestedWorkspace, "32");
+            assert.strictEqual(session.workspaceUserId, "32");
               assert.strictEqual(session.account.id, 1);
             }})();
             """

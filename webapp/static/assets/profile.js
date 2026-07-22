@@ -2,6 +2,11 @@
   const isAdminSession = document.querySelector('meta[name="admin-console-session"]')?.content === "1";
   const ADMIN_WORKSPACE_STORAGE_KEY = "vecto-admin-workspace-user-id";
   const ADMIN_CONTEXT_STORAGE_KEY = "vecto-admin-console-context";
+  const returnManageUserId = (() => {
+    if (!isAdminSession) return "";
+    const value = String(new URLSearchParams(window.location.search).get("return_manage_user_id") || "").trim();
+    return /^\d+$/.test(value) && Number(value) > 0 ? value : "";
+  })();
   const AVATAR_MAX_BYTES = 512 * 1024;
   const state = { account: null, avatarUrl: "", tags: [], saving: false, dirty: false };
   const $ = (id) => document.getElementById(id);
@@ -129,7 +134,9 @@
     $("profileUsername").textContent = String(account?.username || "-");
     $("profileAccountId").textContent = account?.id ? `#${account.id}` : "-";
     $("profileAccountRole").textContent = Number(account?.is_admin || 0) === 1 ? "管理员" : "普通账号";
-    $("profileBackLink").href = isAdminSession ? "/admin-console.html" : "/console.html";
+    $("profileBackLink").href = isAdminSession
+      ? `/admin-console.html${returnManageUserId ? `?manage_user_id=${encodeURIComponent(returnManageUserId)}` : ""}`
+      : "/console.html";
     window.VectoSiteNavigation?.setAccount(account);
     renderAvatar();
     renderTags();
@@ -278,7 +285,8 @@
   $("profileForm")?.addEventListener("submit", saveProfile);
   if (isAdminSession) {
     try {
-      sessionStorage.removeItem(ADMIN_WORKSPACE_STORAGE_KEY);
+      if (returnManageUserId) sessionStorage.setItem(ADMIN_WORKSPACE_STORAGE_KEY, returnManageUserId);
+      else sessionStorage.removeItem(ADMIN_WORKSPACE_STORAGE_KEY);
       sessionStorage.setItem(ADMIN_CONTEXT_STORAGE_KEY, "1");
     } catch (_) {}
   }

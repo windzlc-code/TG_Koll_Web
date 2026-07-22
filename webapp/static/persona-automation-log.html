@@ -100,10 +100,23 @@
   <script>
     const params = new URLSearchParams(location.search);
     const taskId = params.get("task_id") || "";
-    const adminConsole = params.get("admin_console") === "1";
-    const adminWorkspaceUserId = String(
+    const storedAdminConsole = (() => {
+      try { return sessionStorage.getItem("vecto-admin-console-context") === "1"; } catch { return false; }
+    })();
+    const explicitAdminMarker = params.get("admin_console") === "1";
+    const requestedWorkspaceUserId = String(
       params.get("admin_workspace_user_id") || params.get("manage_user_id") || "",
     ).trim();
+    const adminConsole = explicitAdminMarker || Boolean(requestedWorkspaceUserId) || storedAdminConsole;
+    const adminWorkspaceUserId = requestedWorkspaceUserId
+      || (!explicitAdminMarker && adminConsole ? String((() => {
+        try { return sessionStorage.getItem("vecto-admin-workspace-user-id") || ""; } catch { return ""; }
+      })()).trim() : "");
+    try {
+      if (adminConsole) sessionStorage.setItem("vecto-admin-console-context", "1");
+      if (requestedWorkspaceUserId) sessionStorage.setItem("vecto-admin-workspace-user-id", requestedWorkspaceUserId);
+      else if (explicitAdminMarker) sessionStorage.removeItem("vecto-admin-workspace-user-id");
+    } catch {}
     let autoRefresh = true;
     let timer = 0;
 

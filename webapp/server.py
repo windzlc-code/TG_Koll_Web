@@ -27,7 +27,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import requests
 from fastapi import Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
@@ -413,9 +413,32 @@ def _safe_local_return_url(value: Any, fallback: str) -> str:
     if parsed.scheme or parsed.netloc or not str(parsed.path or "").startswith("/"):
         return clean_fallback
     safe_path = urlunsplit(("", "", parsed.path or "/", parsed.query, parsed.fragment))
-    if str(parsed.path or "") in {"/admin", "/admin-login.html"}:
-        return clean_fallback
     return safe_path
+
+
+def _role_safe_return_url(value: Any, fallback: str, *, admin: bool) -> str:
+    safe_value = _safe_local_return_url(value, fallback)
+    try:
+        parsed = urlsplit(safe_value)
+    except ValueError:
+        return str(fallback or "/").strip() or "/"
+    path = str(parsed.path or "/")
+    params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    admin_parameters = {"admin_console", "admin_workspace_user_id", "manage_user_id", "return_manage_user_id"}
+    if not admin:
+        if path.startswith("/admin") or path == "/api/admin" or path.startswith("/api/admin/") or admin_parameters.intersection(params):
+            return str(fallback or "/console.html").strip() or "/console.html"
+        return safe_value
+
+    if path == "/console.html":
+        path = "/admin-console.html"
+    elif path == "/profile.html":
+        path = "/admin-profile.html"
+    elif path in {"/admin-login.html"}:
+        path = "/admin"
+    if not (path.startswith("/admin") or path == "/api/admin" or path.startswith("/api/admin/")):
+        params["admin_console"] = "1"
+    return urlunsplit(("", "", path, urlencode(params), parsed.fragment))
 
 
 def _require_same_origin(request: Request) -> None:
@@ -2200,22 +2223,22 @@ def _sentiment_browser_auth_config_access(request: Request) -> tuple[dict[str, A
     config = _read_sentiment_config_file()
     expected_token = _sentiment_browser_auth_token(config, create=False)
     provided_token = str(request.headers.get("x-sentiment-browser-auth") or "").strip()
-    with contextlib.suppress(HTTPException):
-        uses_admin_session = bool(request.cookies.get(ADMIN_SESSION_COOKIE))
-        user = _get_session_user_for_token(
-            request.cookies.get(ADMIN_SESSION_COOKIE) or request.cookies.get(SESSION_COOKIE),
-            expected_admin_session=uses_admin_session,
-        )
-        require_admin(user)
-        return config, True
     if expected_token and provided_token and hmac.compare_digest(provided_token, expected_token):
         return config, False
+    with contextlib.suppress(HTTPException):
+        user = _sentiment_browser_auth_admin_from_cookie(request)
+        return config, True
     raise HTTPException(status_code=403, detail="invalid browser auth token")
 
 
 def _sentiment_browser_auth_admin_from_cookie(request: Request) -> dict[str, Any]:
-    uses_admin_session = bool(request.cookies.get(ADMIN_SESSION_COOKIE))
-    token = str(request.cookies.get(ADMIN_SESSION_COOKIE) or request.cookies.get(SESSION_COOKIE) or "").strip()
+    _require_same_origin(request)
+    uses_admin_session = request_uses_admin_session(request)
+    token = session_token_for_request(
+        request,
+        request.cookies.get(SESSION_COOKIE),
+        request.cookies.get(ADMIN_SESSION_COOKIE),
+    )
     user = _get_session_user_for_token(
         token,
         expected_admin_session=uses_admin_session,
@@ -2233,7 +2256,6 @@ def _sentiment_browser_auth_cors_headers(request: Request) -> dict[str, str]:
         "Access-Control-Max-Age": "86400",
     }
     if origin:
-        headers["Access-Control-Allow-Credentials"] = "true"
         headers["Vary"] = "Origin"
     return headers
 
@@ -4089,22 +4111,7 @@ def _html_response_with_versions(filename: str, replacements: dict[str, str] | N
 
 
 def _public_login_location(return_url: str = "/console.html") -> str:
-    candidate = str(return_url or "").strip()
-    if (
-        not candidate.startswith("/")
-        or candidate.startswith("//")
-        or "\\" in candidate
-        or re.search(r"[\x00-\x1f]", candidate)
-    ):
-        candidate = "/console.html"
-    try:
-        parsed = urlsplit(candidate)
-        if parsed.scheme or parsed.netloc:
-            candidate = "/console.html"
-        else:
-            candidate = urlunsplit(("", "", parsed.path or "/console.html", parsed.query, parsed.fragment))
-    except ValueError:
-        candidate = "/console.html"
+    candidate = _role_safe_return_url(return_url, "/console.html", admin=False)
     return f"/?login=1&return_url={quote(candidate, safe='')}"
 
 
@@ -16812,7 +16819,14 @@ def create_app() -> FastAPI:
             )
             return RedirectResponse(url=location, status_code=302)
         if int(user.get("must_change_password") or 0) == 1:
-            target = "/admin-profile.html" if admin_profile else "/profile.html"
+            target = str(request.url.path or ("/admin-profile.html" if admin_profile else "/profile.html"))
+            if request.url.query:
+                target = f"{target}?{request.url.query}"
+            target = _role_safe_return_url(
+                target,
+                "/admin-profile.html" if admin_profile else "/profile.html",
+                admin=admin_profile,
+            )
             marker = "admin_console=1&" if admin_profile else ""
             return RedirectResponse(
                 url=f"/change-password.html?{marker}return_url={quote(target, safe='')}",
@@ -16839,10 +16853,17 @@ def create_app() -> FastAPI:
     def page_console(
         request: Request,
         manage_user_id: int = 0,
+        admin_workspace_user_id: int = 0,
         session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
         admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
     ) -> Response:
-        admin_console = request.url.path == "/admin-console.html" or request_uses_admin_session(request)
+        if manage_user_id > 0 and admin_workspace_user_id > 0 and manage_user_id != admin_workspace_user_id:
+            raise HTTPException(status_code=400, detail="conflicting admin workspace user ids")
+        workspace_user_id = int(manage_user_id or admin_workspace_user_id or 0)
+        admin_console = request.url.path == "/admin-console.html" or request_uses_admin_session(
+            request,
+            workspace_user_id or None,
+        )
         selected_token = admin_session_token if admin_console else session_token
         try:
             user = _get_session_user_allowing_password_change(
@@ -16860,7 +16881,14 @@ def create_app() -> FastAPI:
             )
             return RedirectResponse(url=location, status_code=302)
         if int(user.get("must_change_password") or 0) == 1:
-            target = "/admin-console.html" if admin_console else "/console.html"
+            target = str(request.url.path or ("/admin-console.html" if admin_console else "/console.html"))
+            if request.url.query:
+                target = f"{target}?{request.url.query}"
+            target = _role_safe_return_url(
+                target,
+                "/admin-console.html" if admin_console else "/console.html",
+                admin=admin_console,
+            )
             marker = "admin_console=1&" if admin_console else ""
             return RedirectResponse(
                 url=f"/change-password.html?{marker}return_url={quote(target, safe='')}",
@@ -16869,14 +16897,14 @@ def create_app() -> FastAPI:
         if admin_console:
             if not _is_admin(user):
                 return RedirectResponse(url="/admin", status_code=302)
-            if int(manage_user_id or 0) > 0:
+            if workspace_user_id > 0:
                 try:
-                    user = resolve_admin_workspace_user(user, int(manage_user_id))
+                    user = resolve_admin_workspace_user(user, workspace_user_id)
                 except HTTPException:
                     return RedirectResponse(url="/admin.html#admin-users", status_code=302)
         elif _is_admin(user):
             return RedirectResponse(url="/admin-console.html", status_code=302)
-        elif int(manage_user_id or 0) > 0:
+        elif workspace_user_id > 0:
             raise HTTPException(status_code=403, detail="administrator workspace access required")
         try:
             console_bootstrap = _build_persona_dashboard_console_overview(
@@ -16965,12 +16993,13 @@ def create_app() -> FastAPI:
         if not _is_admin(user):
             return _admin_login_page()
         requested_return_url = request.query_params.get("return_url")
-        return_target = _safe_local_return_url(
+        return_target = _role_safe_return_url(
             requested_return_url,
             "/admin.html#admin-overview",
+            admin=True,
         )
         if int(user.get("must_change_password") or 0) == 1:
-            password_return_target = _safe_local_return_url(requested_return_url, "/admin")
+            password_return_target = _role_safe_return_url(requested_return_url, "/admin", admin=True)
             return RedirectResponse(
                 url=(
                     "/change-password.html?admin_console=1&return_url="

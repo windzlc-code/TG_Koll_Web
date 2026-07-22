@@ -192,18 +192,25 @@
 
   function seedExplicitAdminContext() {
     const params = new URLSearchParams(window.location.search || "");
-    if (params.get("admin_console") !== "1") return;
-    markAdminConsoleContext();
+    const explicitAdmin = params.get("admin_console") === "1";
     const workspaceUserId = String(
       params.get("admin_workspace_user_id") || params.get("manage_user_id") || "",
     ).trim();
+    if (!explicitAdmin && !workspaceUserId) return;
+    markAdminConsoleContext();
     if (workspaceUserId && publicPagePreservesAdminWorkspace()) {
       writeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY, workspaceUserId);
+    } else if (explicitAdmin) {
+      removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
     }
   }
 
   function storedAdminWorkspaceUserId() {
-    return String(sessionValue(ADMIN_WORKSPACE_STORAGE_KEY) || "").trim();
+    const stored = String(sessionValue(ADMIN_WORKSPACE_STORAGE_KEY) || "").trim();
+    if (stored) return stored;
+    if (window.location.pathname !== "/admin-profile.html") return "";
+    const value = String(new URLSearchParams(window.location.search).get("return_manage_user_id") || "").trim();
+    return /^\d+$/.test(value) && Number(value) > 0 ? value : "";
   }
 
   function adminConsoleTarget(view = "", workspaceUserId = "") {
@@ -223,26 +230,46 @@
     const url = new URL(text, window.location.origin);
     url.searchParams.set("admin_console", "1");
     const workspaceUserId = storedAdminWorkspaceUserId();
-    if (workspaceUserId) url.searchParams.set("admin_workspace_user_id", workspaceUserId);
+    const preservesWorkspace = [
+      "/",
+      "/index.html",
+      "/about-vecto.html",
+      "/proxy-market.html",
+      "/subscription.html",
+      "/pricing.html",
+    ].includes(url.pathname);
+    if (workspaceUserId && preservesWorkspace) {
+      url.searchParams.set("admin_workspace_user_id", workspaceUserId);
+    } else {
+      url.searchParams.delete("admin_workspace_user_id");
+      url.searchParams.delete("manage_user_id");
+    }
     return `${url.pathname}${url.search}${url.hash}`;
   }
 
   function syncOperationalPublicTargets() {
     document.querySelectorAll(
-      '[data-site-nav-key="proxyMarket"], a[href^="/proxy-market.html"]',
+      [
+        '[data-site-home-label]',
+        '[data-site-nav-key="solution"]',
+        '[data-site-nav-key="aboutVecto"]',
+        '[data-site-nav-key="proxyMarket"]',
+        '[data-site-nav-key="pricing"]',
+        '[data-site-subscription-entry]',
+        'a[href^="/about-vecto.html"]',
+        'a[href^="/proxy-market.html"]',
+        'a[href^="/subscription.html"]',
+        'a[href^="/pricing.html"]',
+      ].join(", "),
     ).forEach((link) => {
-      link.setAttribute("href", adminOperationalPublicTarget(link.getAttribute("href") || "/proxy-market.html"));
-    });
-    document.querySelectorAll(
-      '[data-site-nav-key="pricing"], [data-site-subscription-entry], a[href^="/subscription.html"], a[href^="/pricing.html"]',
-    ).forEach((link) => {
-      link.setAttribute("href", adminOperationalPublicTarget(link.getAttribute("href") || "/subscription.html"));
+      link.setAttribute("href", adminOperationalPublicTarget(link.getAttribute("href") || "/"));
     });
   }
 
   function publicPagePreservesAdminWorkspace() {
     const page = document.querySelector("[data-site-header]")?.dataset.sitePage || "";
-    return page === "proxyMarket" || page === "pricing";
+    return ["home", "aboutVecto", "proxyMarket", "pricing"].includes(page)
+      || (window.location.pathname === "/admin-profile.html" && Boolean(storedAdminWorkspaceUserId()));
   }
 
   function syncConsoleEntryTargets() {
@@ -817,7 +844,14 @@
   function openProfilePage() {
     const isAdminConsole = document.querySelector('meta[name="admin-console-session"]')?.content === "1";
     const adminContext = isAdminConsole || currentSessionMode === "admin" || hasAdminConsoleContext();
-    window.location.assign(adminContext ? "/admin-profile.html" : "/profile.html");
+    if (!adminContext) {
+      window.location.assign("/profile.html");
+      return;
+    }
+    const workspaceUserId = storedAdminWorkspaceUserId();
+    const params = new URLSearchParams();
+    if (workspaceUserId) params.set("return_manage_user_id", workspaceUserId);
+    window.location.assign(`/admin-profile.html${params.size ? `?${params}` : ""}`);
   }
 
   function syncAdminWorkspaceContext() {
@@ -836,7 +870,8 @@
     }
     markAdminConsoleContext();
     currentSessionMode = "admin";
-    const workspaceUserId = String(document.querySelector('meta[name="admin-workspace-user-id"]')?.content || "").trim();
+    const workspaceUserId = String(document.querySelector('meta[name="admin-workspace-user-id"]')?.content || "").trim()
+      || (window.location.pathname === "/admin-profile.html" ? storedAdminWorkspaceUserId() : "");
     if (workspaceUserId) writeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY, workspaceUserId);
     else removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
   }

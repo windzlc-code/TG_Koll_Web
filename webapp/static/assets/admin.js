@@ -2788,6 +2788,7 @@ async function downloadSentimentCookieHelper() {
   const response = await fetch("/browser-auth-extension/download", {
     credentials: "include",
     cache: "no-store",
+    headers: { "X-Admin-Console": "1" },
   });
   if (!response.ok) {
     if (response.status === 401) throw new Error("登录已过期，请重新登录后台后再下载授权助手。");

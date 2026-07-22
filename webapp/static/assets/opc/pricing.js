@@ -5,19 +5,21 @@
   const ADMIN_CONTEXT_STORAGE_KEY = "vecto-admin-console-context";
   const ADMIN_WORKSPACE_STORAGE_KEY = "vecto-admin-workspace-user-id";
   const pricingParams = new URLSearchParams(window.location.search || "");
+  const requestedWorkspace = String(
+    pricingParams.get("admin_workspace_user_id") || pricingParams.get("manage_user_id") || "",
+  ).trim();
   const explicitAdminContext = pricingParams.get("admin_console") === "1";
+  const requestedAdminContext = explicitAdminContext || Boolean(requestedWorkspace);
   const billingSessionContext = (() => {
     try {
-      if (explicitAdminContext) sessionStorage.setItem(ADMIN_CONTEXT_STORAGE_KEY, "1");
-      const admin = explicitAdminContext || sessionStorage.getItem(ADMIN_CONTEXT_STORAGE_KEY) === "1";
-      const requestedWorkspace = String(
-        pricingParams.get("admin_workspace_user_id") || pricingParams.get("manage_user_id") || "",
-      ).trim();
+      if (requestedAdminContext) sessionStorage.setItem(ADMIN_CONTEXT_STORAGE_KEY, "1");
+      const admin = requestedAdminContext || sessionStorage.getItem(ADMIN_CONTEXT_STORAGE_KEY) === "1";
       if (admin && requestedWorkspace) sessionStorage.setItem(ADMIN_WORKSPACE_STORAGE_KEY, requestedWorkspace);
+      else if (explicitAdminContext) sessionStorage.removeItem(ADMIN_WORKSPACE_STORAGE_KEY);
       return {
         admin,
         workspaceUserId: admin
-          ? requestedWorkspace || String(sessionStorage.getItem(ADMIN_WORKSPACE_STORAGE_KEY) || "").trim()
+          ? requestedWorkspace || (explicitAdminContext ? "" : String(sessionStorage.getItem(ADMIN_WORKSPACE_STORAGE_KEY) || "").trim())
           : "",
       };
     } catch {

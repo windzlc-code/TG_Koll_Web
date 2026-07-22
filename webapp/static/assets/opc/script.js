@@ -496,6 +496,10 @@ function safeLoginReturnUrl(value, fallback = "/console.html") {
   try {
     const target = new URL(candidate, window.location.origin);
     if (target.origin !== window.location.origin) return fallback;
+    const adminParameters = ["admin_console", "admin_workspace_user_id", "manage_user_id", "return_manage_user_id"];
+    if (target.pathname.startsWith("/admin") || target.pathname === "/api/admin" || target.pathname.startsWith("/api/admin/") || adminParameters.some((key) => target.searchParams.has(key))) {
+      return fallback;
+    }
     return `${target.pathname}${target.search}${target.hash}`;
   } catch {
     return fallback;
@@ -519,6 +523,10 @@ async function submitUserLogin(forceTakeover = false) {
         force_takeover: Boolean(forceTakeover),
       }),
     });
+    try {
+      sessionStorage.removeItem("vecto-admin-console-context");
+      sessionStorage.removeItem("vecto-admin-workspace-user-id");
+    } catch {}
     const pageRedirect = String(document.body.dataset.loginRedirect || "/console.html");
     const safeRedirect = safeLoginReturnUrl(pageRedirect);
     const passwordTarget = `/change-password.html?return_url=${encodeURIComponent(safeRedirect)}`;

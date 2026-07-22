@@ -157,7 +157,14 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         self.assertNotIn("authToken", denied.text)
 
         admin, _identity = self._admin_client()
-        admin_config = admin.get("/browser-auth-extension/config.json")
+        plain_admin = TestClient(self.app)
+        plain_admin.cookies.set("admin_session_token", admin.cookies.get("admin_session_token"))
+        unmarked_admin_config = plain_admin.get("/browser-auth-extension/config.json")
+        self.assertEqual(unmarked_admin_config.status_code, 403, unmarked_admin_config.text)
+        admin_config = admin.get(
+            "/browser-auth-extension/config.json?admin_console=1",
+            headers={"Origin": "http://testserver"},
+        )
         self.assertEqual(admin_config.status_code, 200, admin_config.text)
         token = str(admin_config.json().get("authToken") or "")
         self.assertGreater(len(token), 32)
@@ -168,6 +175,22 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         )
         self.assertEqual(extension_config.status_code, 200, extension_config.text)
         self.assertNotIn("authToken", extension_config.json())
+
+        customer, _user_id = self._approved_client("extension-customer")
+        customer.cookies.set("admin_session_token", admin.cookies.get("admin_session_token"))
+        unmarked_dual_cookie = customer.get("/browser-auth-extension/config.json")
+        self.assertEqual(unmarked_dual_cookie.status_code, 403, unmarked_dual_cookie.text)
+        marked_dual_cookie = customer.get(
+            "/browser-auth-extension/config.json?admin_console=1",
+            headers={"Origin": "http://testserver"},
+        )
+        self.assertEqual(marked_dual_cookie.status_code, 200, marked_dual_cookie.text)
+
+        cross_origin_cookie = customer.get(
+            "/browser-auth-extension/config.json?admin_console=1",
+            headers={"Origin": "https://attacker.example"},
+        )
+        self.assertEqual(cross_origin_cookie.status_code, 403, cross_origin_cookie.text)
 
     def test_saved_social_password_is_only_returned_by_owner_credentials_api(self):
         admin, _identity = self._admin_client()
@@ -283,7 +306,7 @@ class AuthSecurityHardeningTests(unittest.TestCase):
             follow_redirects=False,
         )
         self.assertEqual(admin_console.status_code, 302)
-        self.assertEqual(admin_console.headers["location"], "/login.html?return_url=%2Fconsole.html")
+        self.assertEqual(admin_console.headers["location"], "/?login=1&return_url=%2Fconsole.html")
         owner_detail = admin.get(f"/api/admin/users/{owner_id}")
         self.assertEqual(owner_detail.status_code, 200, owner_detail.text)
         self.assertEqual(owner_detail.json()["resource_counts"]["personas"], 1)
