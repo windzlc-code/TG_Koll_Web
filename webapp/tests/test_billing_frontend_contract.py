@@ -106,6 +106,9 @@ class BillingFrontendContractTests(unittest.TestCase):
         ]
         self.assertIn("charged_points", helper)
         self.assertIn("free_images_used", helper)
+        self.assertIn('status === "waived"', helper)
+        self.assertIn("unlimited_compute", helper)
+        self.assertIn("本次未扣费", helper)
         self.assertIn("withBillingChargeMessage", helper)
         self.assertIn("已扣除", helper)
         self.assertIn("已使用", helper)

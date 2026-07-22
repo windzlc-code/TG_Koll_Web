@@ -4920,6 +4920,7 @@ function billingChargeMessage(payload = {}) {
   const source = billingObject(payload);
   const receipt = billingObject(source.billing || source.data?.billing || source.task?.billing);
   const status = String(receipt.status || "").trim().toLowerCase();
+  if (status === "waived") return "本次未扣费（当前操作已免计费）";
   if (status && status !== "settled") return "";
   const chargedPoints = Number(receipt.charged_points || 0);
   const freeImagesUsed = Number(receipt.free_images_used || 0);
@@ -4930,6 +4931,7 @@ function billingChargeMessage(payload = {}) {
   if (Number.isFinite(freeImagesUsed) && freeImagesUsed > 0) {
     details.push(`已使用 ${freeImagesUsed.toLocaleString("zh-CN")} 张图片额度`);
   }
+  if (!details.length && receipt.unlimited_compute) return "本次未扣费（无限算力）";
   return details.join("，");
 }
 
