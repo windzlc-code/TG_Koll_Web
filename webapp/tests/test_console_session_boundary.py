@@ -217,7 +217,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("--vecto-action-static-gradient", self.styles)
         self.assertNotIn("--vecto-action-sheen-gradient", self.styles)
         self.assertIn("--vecto-action-running-gradient", self.styles)
-        self.assertIn("@keyframes vecto-action-running-sheen", self.styles)
+        self.assertIn("@keyframes vecto-action-running-border-sweep", self.styles)
         self.assertIn('button[aria-busy="true"]', self.styles)
         self.assertIn("background-repeat: no-repeat", self.styles)
         self.assertIn("background-size: 100% 100%", self.styles)
