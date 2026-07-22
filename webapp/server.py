@@ -4065,6 +4065,26 @@ def _html_response_with_versions(filename: str, replacements: dict[str, str] | N
     )
 
 
+def _public_login_location(return_url: str = "/console.html") -> str:
+    candidate = str(return_url or "").strip()
+    if (
+        not candidate.startswith("/")
+        or candidate.startswith("//")
+        or "\\" in candidate
+        or re.search(r"[\x00-\x1f]", candidate)
+    ):
+        candidate = "/console.html"
+    try:
+        parsed = urlsplit(candidate)
+        if parsed.scheme or parsed.netloc:
+            candidate = "/console.html"
+        else:
+            candidate = urlunsplit(("", "", parsed.path or "/console.html", parsed.query, parsed.fragment))
+    except ValueError:
+        candidate = "/console.html"
+    return f"/?login=1&return_url={quote(candidate, safe='')}"
+
+
 def _json_script_payload(value: Any) -> str:
     try:
         payload = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
@@ -16646,11 +16666,8 @@ def create_app() -> FastAPI:
         )
 
     @app.get("/login.html", include_in_schema=False)
-    def page_login() -> HTMLResponse:
-        return _html_response_with_versions(
-            "login.html",
-            replacements={"__AUTH_JS_VERSION__": _asset_version("assets", "auth.js")},
-        )
+    def page_login(return_url: str = "/console.html") -> RedirectResponse:
+        return RedirectResponse(url=_public_login_location(return_url), status_code=302)
 
     @app.get("/change-password.html", include_in_schema=False)
     def page_change_password(session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE)) -> Response:
@@ -16660,7 +16677,7 @@ def create_app() -> FastAPI:
                 expected_admin_session=False,
             )
         except HTTPException:
-            return RedirectResponse(url="/login.html", status_code=302)
+            return RedirectResponse(url=_public_login_location(), status_code=302)
         if int(user.get("must_change_password") or 0) != 1:
             target = "/admin" if _is_admin(user) else "/console.html"
             return RedirectResponse(url=target, status_code=302)
@@ -16762,7 +16779,10 @@ def create_app() -> FastAPI:
                 expected_admin_session=admin_profile,
             )
         except HTTPException:
-            return RedirectResponse(url="/admin" if admin_profile else "/login.html", status_code=302)
+            return RedirectResponse(
+                url="/admin" if admin_profile else _public_login_location("/profile.html"),
+                status_code=302,
+            )
         if int(user.get("must_change_password") or 0) == 1:
             return RedirectResponse(url="/change-password.html", status_code=302)
         if admin_profile and not _is_admin(user):
@@ -16802,7 +16822,10 @@ def create_app() -> FastAPI:
                 expected_admin_session=admin_console,
             )
         except HTTPException:
-            return RedirectResponse(url="/admin" if admin_console else "/login.html", status_code=302)
+            return RedirectResponse(
+                url="/admin" if admin_console else _public_login_location("/console.html"),
+                status_code=302,
+            )
         if int(user.get("must_change_password") or 0) == 1:
             return RedirectResponse(url="/change-password.html", status_code=302)
         if admin_console:

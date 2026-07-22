@@ -136,7 +136,7 @@
   }
 
   function redirectToLogin() {
-    window.location.replace(isAdminSession ? "/admin" : "/login.html");
+    window.location.replace(isAdminSession ? "/admin" : "/?login=1&return_url=%2Fprofile.html");
   }
 
   function handleSessionBoundary(error) {
@@ -233,7 +233,7 @@
     window.VectoSiteNavigation?.setLogoutPending(true);
     try {
       await api("/api/auth/logout", { method: "POST" });
-      window.location.replace(isAdminSession ? "/admin" : "/login.html");
+      window.location.replace(isAdminSession ? "/admin" : "/?login=1&return_url=%2Fprofile.html");
     } catch (error) {
       window.VectoSiteNavigation?.setLogoutPending(false, error.message || "退出失败，请重试。");
     }

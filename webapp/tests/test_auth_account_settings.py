@@ -75,7 +75,10 @@ class AccountSettingsApiTests(unittest.TestCase):
         regular_redirect = anonymous.get("/profile.html", follow_redirects=False)
         admin_redirect = anonymous.get("/admin-profile.html", follow_redirects=False)
         self.assertEqual(regular_redirect.status_code, 302)
-        self.assertEqual(regular_redirect.headers["location"], "/login.html")
+        self.assertEqual(
+            regular_redirect.headers["location"],
+            "/?login=1&return_url=%2Fprofile.html",
+        )
         self.assertEqual(admin_redirect.status_code, 302)
         self.assertEqual(admin_redirect.headers["location"], "/admin")
 

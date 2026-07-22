@@ -334,7 +334,10 @@ class RegistrationApprovalTests(unittest.TestCase):
     def test_console_requires_login(self):
         response = TestClient(self.app).get("/console.html", follow_redirects=False)
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.headers["location"], "/login.html")
+        self.assertEqual(
+            response.headers["location"],
+            "/?login=1&return_url=%2Fconsole.html",
+        )
 
     def test_admin_can_reset_user_password_and_revoke_existing_sessions(self):
         admin = TestClient(self.app)

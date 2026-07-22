@@ -25,7 +25,7 @@ uvicorn webapp.server:app --host 0.0.0.0 --port 8000
 
 Open:
 
-- `https://<server-ip-or-domain>/login.html`
+- `https://<server-ip-or-domain>/?login=1` (shared public login dialog)
 - User page: `https://<server-ip-or-domain>/console.html`
 - Admin page: `https://<server-ip-or-domain>/admin`
 

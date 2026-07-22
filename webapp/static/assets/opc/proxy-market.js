@@ -152,7 +152,7 @@
       opener.click();
       return;
     }
-    window.location.assign(`/login.html?return_url=${encodeURIComponent(safeReturnUrl())}`);
+    window.location.assign(`/?login=1&return_url=${encodeURIComponent(safeReturnUrl())}`);
   }
 
   async function api(path, options = {}) {

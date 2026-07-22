@@ -408,6 +408,21 @@ function closeLogin() {
   if (returnFocus?.isConnected) returnFocus.focus();
 }
 
+function openRequestedLogin() {
+  if (!loginModal) return;
+  const currentUrl = new URL(window.location.href);
+  if (currentUrl.searchParams.get("login") !== "1") return;
+  const fallback = String(document.body.dataset.loginRedirect || "/console.html");
+  document.body.dataset.loginRedirect = safeLoginReturnUrl(
+    currentUrl.searchParams.get("return_url"),
+    fallback,
+  );
+  currentUrl.searchParams.delete("login");
+  currentUrl.searchParams.delete("return_url");
+  window.history.replaceState({}, "", `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`);
+  openLogin();
+}
+
 document.querySelectorAll("[data-open-login]").forEach((button) => button.addEventListener("click", openLogin));
 document.querySelectorAll("[data-console-entry]").forEach((link) => link.addEventListener("click", async (event) => {
   event.preventDefault();
@@ -529,6 +544,8 @@ loginTakeover?.addEventListener("click", async () => {
 loginForm?.addEventListener("input", () => {
   if (loginTakeover) loginTakeover.hidden = true;
 });
+
+openRequestedLogin();
 
 async function loadLoginPolicy() {
   if (!loginForm || !loginRemember) return;

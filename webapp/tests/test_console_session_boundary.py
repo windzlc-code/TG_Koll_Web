@@ -404,7 +404,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
 
             assert.strictEqual(handleSessionBoundary(401), true);
             assert.strictEqual(cleared, 1);
-            assert.strictEqual(target, "/login.html");
+            assert.strictEqual(target, "/?login=1&return_url=%2Fconsole.html");
 
             consoleBoundaryNavigationActive = false;
             target = "";

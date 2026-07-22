@@ -226,7 +226,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const toLogin = document.getElementById("toLogin");
   if (toLogin) {
     toLogin.addEventListener("click", () => {
-      location.href = "/login.html";
+      location.href = "/?login=1&return_url=%2Fconsole.html";
     });
   }
 });

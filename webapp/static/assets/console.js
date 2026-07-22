@@ -686,7 +686,7 @@ function handleSessionBoundary(status) {
   clearTenantInMemoryState();
   const isAdminConsole = typeof ADMIN_CONSOLE_SESSION !== "undefined" && ADMIN_CONSOLE_SESSION;
   if (isAdminConsole) clearStoredAdminWorkspaceContext();
-  window.location.replace(normalizedStatus === 428 ? "/change-password.html" : (isAdminConsole ? "/admin" : "/login.html"));
+  window.location.replace(normalizedStatus === 428 ? "/change-password.html" : (isAdminConsole ? "/admin" : "/?login=1&return_url=%2Fconsole.html"));
   return true;
 }
 

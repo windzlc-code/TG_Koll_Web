@@ -37,7 +37,7 @@ uvicorn webapp.server:app --host 0.0.0.0 --port 8000
 
 - 用户端：`/console.html`
 - 管理端：`/admin.html`
-- 登录页：`/login.html`
+- 登录入口：`/?login=1`（首页公共登录窗口）
 
 ## 数据目录
 

@@ -165,6 +165,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         cls.console_js = (cls.static_dir / "assets" / "console.js").read_text(encoding="utf-8")
         cls.admin_html = (cls.static_dir / "admin.html").read_text(encoding="utf-8")
         cls.auth_js = (cls.static_dir / "assets" / "auth.js").read_text(encoding="utf-8")
+        cls.server_source = Path(server.__file__).read_text(encoding="utf-8")
 
     def test_backdrop_click_does_not_close_login(self):
         self.assertNotIn("if (event.target === loginModal) closeLogin()", self.script)
@@ -312,7 +313,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertNotIn("localStorage.setItem", self.script)
         self.assertNotIn("PasswordCredential", self.script)
 
-        for page_name in ("login.html", "admin-login.html"):
+        for page_name in ("admin-login.html",):
             page = (self.static_dir / page_name).read_text(encoding="utf-8")
             self.assertIn("data-auth-password-toggle", page)
             self.assertIn('name="remember_me"', page)
@@ -339,24 +340,45 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn('apiErrorDetail(error)', self.script)
         self.assertNotIn('loginStatus.textContent = error.detail ||', self.script)
 
-        login_page = (self.static_dir / "login.html").read_text(encoding="utf-8")
-        self.assertIn('data-auth-login-takeover', login_page)
         self.assertIn('force_takeover: loginRole === "user" && Boolean(forceTakeover)', self.auth_js)
         self.assertIn('detail.code !== "SESSION_CONFLICT"', self.auth_js)
         self.assertIn('apiErrorDetail(err)', self.auth_js)
 
     def test_public_pages_use_runtime_asset_versions_and_disable_html_cache(self):
         client = TestClient(server.create_app())
-        for path in ("/", "/index.html", "/pricing.html", "/login.html"):
+        for path in ("/", "/index.html", "/pricing.html"):
             response = client.get(path)
             self.assertEqual(response.status_code, 200, response.text)
             self.assertIn("no-store", response.headers.get("cache-control", ""))
-            if path == "/login.html":
-                self.assertNotIn("__AUTH_JS_VERSION__", response.text)
-                self.assertRegex(response.text, r'/assets/auth\.js\?v=\d+-\d+')
-            else:
-                self.assertNotIn("__OPC_SCRIPT_VERSION__", response.text)
-                self.assertRegex(response.text, r'/assets/opc/script\.js\?v=\d+-\d+')
+            self.assertNotIn("__OPC_SCRIPT_VERSION__", response.text)
+            self.assertRegex(response.text, r'/assets/opc/script\.js\?v=\d+-\d+')
+
+    def test_retired_user_login_page_redirects_to_shared_home_dialog(self):
+        self.assertFalse((self.static_dir / "login.html").exists())
+        self.assertNotIn('"login.html",', self.server_source)
+        self.assertIn("function openRequestedLogin()", self.script)
+        self.assertIn('searchParams.get("login") !== "1"', self.script)
+        self.assertIn('document.body.dataset.loginRedirect = safeLoginReturnUrl(', self.script)
+
+        client = TestClient(server.create_app())
+        response = client.get(
+            "/login.html?return_url=%2Fprofile.html",
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            response.headers["location"],
+            "/?login=1&return_url=%2Fprofile.html",
+        )
+
+        unsafe = client.get(
+            "/login.html?return_url=https%3A%2F%2Fexample.com%2Fsteal",
+            follow_redirects=False,
+        )
+        self.assertEqual(
+            unsafe.headers["location"],
+            "/?login=1&return_url=%2Fconsole.html",
+        )
 
     def test_admin_runtime_form_exposes_cookie_policy(self):
         for field_id in (
