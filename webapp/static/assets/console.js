@@ -6711,9 +6711,11 @@ function selectedPersonaPreset(profile) {
 }
 
 function activePersonaLinkPreset(profile = selectedPersonaProfile()) {
-  const presets = personaProfilePresets(profile).filter((item) => item?.enabled !== false);
   const activeId = String(profile?.active_link_preset_id || "").trim();
-  return presets.find((item) => String(item.id || "") === activeId) || presets[0] || null;
+  if (!activeId) return null;
+  return personaProfilePresets(profile).find((item) => (
+    item?.enabled !== false && String(item.id || "") === activeId
+  )) || null;
 }
 
 function applyPersonaLinkPresetToContent(content, preset) {
@@ -6812,7 +6814,8 @@ function renderPersonaLinkPresetTable(profile, presets, selectedPresetId) {
         ${pagePresets.map((item, index) => {
           const presetId = String(item.id || "").trim();
           const isSelected = presetId === String(selectedPresetId || "");
-          const isActive = presetId === activeId;
+          const isActive = presetId === activeId && item?.enabled !== false;
+          const statusLabel = isActive ? "当前启用" : (item?.enabled === false ? "已停用" : "未启用");
           const displayIndex = (pageInfo.page - 1) * pageInfo.pageSize + index + 1;
           return `
             <article class="persona-link-row ${isSelected ? "is-selected" : ""}" role="row" data-persona-select-preset="${esc(presetId)}">
@@ -6823,10 +6826,10 @@ function renderPersonaLinkPresetTable(profile, presets, selectedPresetId) {
               <div class="persona-link-cell" role="cell">${item.link_url ? `<a href="${esc(item.link_url)}" target="_blank" rel="noreferrer">${esc(item.link_url)}</a>` : `<span class="muted">未填写</span>`}</div>
               <div class="persona-link-cell persona-link-ending" role="cell">${esc(item.ending_text || "未填写")}</div>
               <div class="persona-link-cell" role="cell">
-                <span class="module-chip ${isActive ? "is-dark" : ""}">${isActive ? "当前启用" : "未启用"}</span>
+                <span class="module-chip ${isActive ? "is-dark" : ""}">${statusLabel}</span>
               </div>
               <div class="persona-link-actions" role="cell">
-                <button type="button" data-persona-view-preset="${esc(presetId)}">查看</button>
+                <button type="button" data-persona-activate-preset-id="${esc(presetId)}">${isActive ? "关闭启用" : "启用"}</button>
                 <button type="button" class="danger" data-persona-delete-preset-id="${esc(presetId)}">删除</button>
               </div>
             </article>`;
@@ -7248,7 +7251,7 @@ function renderPersonaDataPanel(persona) {
 function renderPersonaProfileIdentity(persona, profile) {
   const content = String(profile?.content || persona?.content || "").trim();
   const displayAvatar = normalizePersonaAvatar(profile?.avatar);
-  const activePreset = personaPresetById(profile, profile?.active_link_preset_id) || selectedPersonaPreset(profile);
+  const activePreset = activePersonaLinkPreset(profile);
   const styleSummary = String(profile?.tweet_style_profile || "").trim();
   const editDraft = personaProfileEditDraft(persona, profile);
   const isNameEditing = editDraft?.field === "name";
@@ -7376,6 +7379,11 @@ function renderPersonaLinkSettingsContent(profile) {
   const presets = personaProfilePresets(profile);
   const selectedPreset = selectedPersonaPreset(profile);
   const selectedPresetId = String(selectedPreset?.id || "");
+  const selectedIsActive = Boolean(
+    selectedPreset
+    && selectedPreset?.enabled !== false
+    && selectedPresetId === String(profile?.active_link_preset_id || "").trim()
+  );
   return `
     <div class="persona-link-layout">
       <section class="persona-link-editor">
@@ -7395,7 +7403,7 @@ function renderPersonaLinkSettingsContent(profile) {
         <div class="row-actions persona-link-editor-actions">
           <button type="button" class="primary" data-persona-add-preset>新增模板</button>
           <button type="button" data-persona-save-preset ${selectedPreset ? "" : "disabled"}>保存当前</button>
-          <button type="button" data-persona-activate-preset ${selectedPreset ? "" : "disabled"}>设为启用</button>
+          <button type="button" data-persona-activate-preset ${selectedPreset ? "" : "disabled"}>${selectedIsActive ? "关闭启用" : "设为启用"}</button>
         </div>
       </section>
       <section class="persona-link-list-panel">
@@ -10145,18 +10153,16 @@ async function openPersonaLinkSettingsModal() {
       refreshPersonaLinkSettingsModal();
       return;
     }
+    const activateRow = event.target.closest("[data-persona-activate-preset-id]");
+    if (activateRow) return run(activatePersonaPreset(activateRow.dataset.personaActivatePresetId || ""));
+    const deleteRow = event.target.closest("[data-persona-delete-preset-id]");
+    if (deleteRow) return run(deletePersonaPreset(deleteRow.dataset.personaDeletePresetId || ""));
     const select = event.target.closest("[data-persona-select-preset]");
     if (select) {
       state.personaLinkPresetId = select.dataset.personaSelectPreset || "";
       refreshPersonaLinkSettingsModal();
       return;
     }
-    const view = event.target.closest("[data-persona-view-preset]");
-    if (view) return run(viewPersonaPreset(view.dataset.personaViewPreset || ""));
-    const activateRow = event.target.closest("[data-persona-activate-preset-id]");
-    if (activateRow) return run(activatePersonaPreset(activateRow.dataset.personaActivatePresetId || ""));
-    const deleteRow = event.target.closest("[data-persona-delete-preset-id]");
-    if (deleteRow) return run(deletePersonaPreset(deleteRow.dataset.personaDeletePresetId || ""));
     if (event.target.closest("[data-persona-add-preset]")) return run(addPersonaPreset());
     if (event.target.closest("[data-persona-save-preset]")) return run(savePersonaPreset());
     if (event.target.closest("[data-persona-delete-preset]")) return run(deletePersonaPreset());
@@ -10255,7 +10261,10 @@ async function savePersonaPresetList(nextPresets, activeId = null) {
   if (activeId !== null) payload.active_link_preset_id = activeId;
   const result = await patchPersonaProfile(payload);
   if (result) {
-    state.personaLinkPresetId = String(result.active_link_preset_id || nextPresets[0]?.id || "");
+    const selectedId = String(state.personaLinkPresetId || "");
+    state.personaLinkPresetId = nextPresets.some((item) => String(item.id || "") === selectedId)
+      ? selectedId
+      : String(result.active_link_preset_id || nextPresets[0]?.id || "");
     const refreshedModal = refreshPersonaLinkSettingsModal();
     if (state.activeModule === "publishing") renderSimpleFlowModule("publishing");
     else if (!refreshedModal) renderPersonaDetail();
@@ -10284,7 +10293,7 @@ async function addPersonaPreset() {
   });
   state.personaLinkPresetId = nextId;
   setPersonaLinkPresetPage(Math.ceil(nextPresets.length / 20));
-  await savePersonaPresetList(nextPresets, String(profile.active_link_preset_id || nextId));
+  await savePersonaPresetList(nextPresets, String(profile.active_link_preset_id || ""));
 }
 
 async function savePersonaPreset() {
@@ -10307,7 +10316,7 @@ async function savePersonaPreset() {
       };
     }
   });
-  await savePersonaPresetList(nextPresets, String(profile.active_link_preset_id || preset.id));
+  await savePersonaPresetList(nextPresets, String(profile.active_link_preset_id || ""));
 }
 
 async function deletePersonaPreset(presetId = "") {
@@ -10320,8 +10329,8 @@ async function deletePersonaPreset(presetId = "") {
   });
   const nextActive = nextPresets.some((item) => String(item.id) === String(profile.active_link_preset_id || ""))
     ? String(profile.active_link_preset_id || "")
-    : (nextPresets[0]?.id || "");
-  state.personaLinkPresetId = nextActive;
+    : "";
+  state.personaLinkPresetId = nextPresets[0]?.id || "";
   await savePersonaPresetList(nextPresets, nextActive);
 }
 
@@ -10329,28 +10338,18 @@ async function activatePersonaPreset(presetId = "") {
   const profile = selectedPersonaProfile();
   const preset = personaPresetById(profile, presetId) || selectedPersonaPreset(profile);
   if (!profile || !preset) return;
-  state.personaLinkPresetId = String(preset.id || "");
-  await savePersonaPresetList(draftPersonaPresetList(profile, () => {}), String(preset.id));
-}
-
-async function viewPersonaPreset(presetId = "") {
-  const profile = selectedPersonaProfile();
-  const preset = personaPresetById(profile, presetId) || selectedPersonaPreset(profile);
-  if (!profile || !preset) return;
-  const isActive = String(profile.active_link_preset_id || "") === String(preset.id || "");
-  await openConsoleModal({
-    title: "链接模板详情",
-    contentHtml: `
-      <div class="console-modal-detail">
-        <div><span>模板名称</span><strong>${esc(preset.name || "链接模板")}</strong></div>
-        <div><span>状态</span><strong>${esc(isActive ? "当前启用" : "未启用")}</strong></div>
-        <div><span>链接地址</span><strong>${preset.link_url ? `<a href="${esc(preset.link_url)}" target="_blank" rel="noreferrer">${esc(preset.link_url)}</a>` : "未填写"}</strong></div>
-        <div><span>结尾文案</span><p>${esc(preset.ending_text || "未填写")}</p></div>
-      </div>
-    `,
-    confirmText: "关闭",
-    showCancel: false,
+  const isActive = (
+    preset?.enabled !== false
+    && String(profile.active_link_preset_id || "") === String(preset.id || "")
+  );
+  const nextPresets = draftPersonaPresetList(profile, (presets) => {
+    if (!isActive) {
+      const target = presets.find((item) => String(item.id || "") === String(preset.id || ""));
+      if (target) target.enabled = true;
+    }
   });
+  state.personaLinkPresetId = String(preset.id || "");
+  await savePersonaPresetList(nextPresets, isActive ? "" : String(preset.id));
 }
 
 async function deleteSelectedPersona(personaId = "") {
@@ -22061,11 +22060,6 @@ function bindEvents() {
       if (action === "last") setPersonaLinkPresetPage(pageInfo.totalPages);
       if (!refreshPersonaLinkSettingsModal()) renderPersonaDetail();
       renderConfirmSummary();
-      return;
-    }
-    const viewPreset = event.target.closest("[data-persona-view-preset]");
-    if (viewPreset) {
-      viewPersonaPreset(viewPreset.dataset.personaViewPreset || "").catch((error) => showMsg("commandMsg", error.detail || error.message || "查看失败", false));
       return;
     }
     const activatePresetId = event.target.closest("[data-persona-activate-preset-id]");

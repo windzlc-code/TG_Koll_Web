@@ -211,6 +211,27 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('if (state.activeModule === "publishing") renderSimpleFlowModule("publishing");', self.console_script)
         self.assertIn(".publish-link-settings {", self.styles)
 
+    def test_link_settings_support_real_enable_disable_and_keep_mobile_header_visible(self):
+        self.assertIn('data-persona-activate-preset-id="${esc(presetId)}"', self.console_script)
+        self.assertIn('isActive ? "关闭启用" : "启用"', self.console_script)
+        self.assertNotIn("data-persona-view-preset", self.console_script)
+        self.assertIn('modal?.addEventListener("click", (event) => {', self.console_script)
+        self.assertIn('const activatePresetId = event.target.closest("[data-persona-activate-preset-id]");', self.console_script)
+        self.assertLess(
+            self.console_script.index('const activatePresetId = event.target.closest("[data-persona-activate-preset-id]");'),
+            self.console_script.index('const selectPreset = event.target.closest("[data-persona-select-preset]");'),
+        )
+        self.assertIn('await savePersonaPresetList(nextPresets, isActive ? "" : String(preset.id));', self.console_script)
+        self.assertIn("const activePreset = activePersonaLinkPreset(profile);", self.console_script)
+        self.assertNotIn(
+            "const activePreset = personaPresetById(profile, profile?.active_link_preset_id) || selectedPersonaPreset(profile);",
+            self.console_script,
+        )
+        self.assertIn(
+            ".console-modal-dialog.persona-link-settings-modal {\n  width: min(860px, calc(100vw - 32px));\n  grid-template-rows: auto auto minmax(0, 1fr);",
+            self.styles,
+        )
+
     def test_mobile_task_dock_is_flush_with_the_viewport(self):
         self.assertIn('content="width=device-width, initial-scale=1.0, viewport-fit=cover"', self.markup)
         self.assertIn("right: 0;\n    bottom: 0;\n    left: 0;", self.styles)

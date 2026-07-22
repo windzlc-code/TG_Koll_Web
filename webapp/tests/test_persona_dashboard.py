@@ -986,6 +986,36 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(setup["activeLinkEndingPresetId"], "preset-main")
         self.assertEqual(setup["linkEndingPresets"][0]["linkUrl"], "https://example.com/main")
 
+    def test_public_persona_profile_allows_clearing_active_link_preset(self):
+        self._write_archives()
+        enabled = self.client.patch(
+            "/api/persona_dashboard/personas/persona-1/profile",
+            json={
+                "link_presets": [
+                    {
+                        "id": "preset-main",
+                        "name": "main preset",
+                        "link_url": "https://example.com/main",
+                        "ending_text": "see more",
+                        "enabled": True,
+                    }
+                ],
+                "active_link_preset_id": "preset-main",
+            },
+        )
+        self.assertEqual(enabled.status_code, 200, enabled.text)
+        self.assertEqual(enabled.json()["active_link_preset_id"], "preset-main")
+
+        disabled = self.client.patch(
+            "/api/persona_dashboard/personas/persona-1/profile",
+            json={"active_link_preset_id": ""},
+        )
+
+        self.assertEqual(disabled.status_code, 200, disabled.text)
+        self.assertEqual(disabled.json()["active_link_preset_id"], "")
+        persisted = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
+        self.assertEqual(persisted[0]["setup"]["activeLinkEndingPresetId"], "")
+
     def test_public_delete_persona_removes_non_workflow_archive(self):
         self._write_archives()
         resp = self.client.delete("/api/persona_dashboard/personas/persona-1")

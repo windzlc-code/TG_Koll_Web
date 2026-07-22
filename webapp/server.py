@@ -13879,10 +13879,11 @@ def _build_persona_dashboard_profile(archive: dict[str, Any]) -> dict[str, Any]:
     account_management = setup.get("accountManagement") if isinstance(setup.get("accountManagement"), dict) else {}
     threads = account_management.get("threads") if isinstance(account_management.get("threads"), dict) else {}
     link_presets = _get_link_ending_presets(setup)
+    has_explicit_active_link_preset = "activeLinkEndingPresetId" in setup
     active_link_preset_id = _normalize_link_preset_id(setup.get("activeLinkEndingPresetId"))
     if active_link_preset_id and not any(item["id"] == active_link_preset_id and item.get("enabled", True) for item in link_presets):
         active_link_preset_id = ""
-    if not active_link_preset_id:
+    if not active_link_preset_id and not has_explicit_active_link_preset:
         active = next((item for item in link_presets if item.get("enabled", True)), None)
         active_link_preset_id = str(active.get("id") or "") if active else ""
     return {

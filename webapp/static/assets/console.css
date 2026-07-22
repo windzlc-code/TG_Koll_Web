@@ -5882,6 +5882,7 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .console-modal-dialog.persona-link-settings-modal {
   width: min(860px, calc(100vw - 32px));
+  grid-template-rows: auto auto minmax(0, 1fr);
 }
 
 .persona-profile-style-modal-content {
