@@ -473,6 +473,15 @@ class ProxyMarketTests(unittest.TestCase):
         listed = self.admin.get("/api/admin/proxy-market/items")
         self.assertEqual(listed.json()["inventory"]["count"], 1)
 
+    def test_admin_session_can_open_market_without_customer_session(self):
+        self.assertIsNotNone(self.admin.cookies.get("admin_session_token"))
+        self.assertIsNone(self.admin.cookies.get("session_token"))
+
+        summary = self.admin.get("/api/proxy-market/me")
+
+        self.assertEqual(summary.status_code, 200, summary.text)
+        self.assertTrue(summary.json()["user"]["is_admin"])
+
     def test_admin_test_publish_syncs_claimed_proxy(self):
         item = self._market_item()
         customer, _ = self._customer("sync_buyer")

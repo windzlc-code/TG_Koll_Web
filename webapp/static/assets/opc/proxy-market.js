@@ -19,6 +19,14 @@
   ];
   const UNAVAILABLE_VALUES = new Set(["unavailable", "sold_out", "out_of_stock", "exhausted", "disabled", "inactive"]);
   const LIMITED_VALUES = new Set(["limited", "low", "low_stock"]);
+  const ADMIN_CONTEXT_STORAGE_KEY = "vecto-admin-console-context";
+  const ADMIN_ENTRY_REQUESTED = (() => {
+    try {
+      return new URLSearchParams(window.location.search).get("admin_console") === "1";
+    } catch {
+      return false;
+    }
+  })();
   const elements = {
     form: document.querySelector("#marketFilterForm"),
     reset: document.querySelector("#marketFilterReset"),
@@ -104,6 +112,22 @@
     return path.startsWith("/") && !path.startsWith("//") ? path : "/proxy-market.html";
   }
 
+  function adminConsoleContextActive() {
+    if (ADMIN_ENTRY_REQUESTED) return true;
+    try {
+      return sessionStorage.getItem(ADMIN_CONTEXT_STORAGE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  function seedAdminConsoleContext() {
+    if (!ADMIN_ENTRY_REQUESTED) return;
+    try {
+      sessionStorage.setItem(ADMIN_CONTEXT_STORAGE_KEY, "1");
+    } catch {}
+  }
+
   function prepareLoginReturn() {
     document.body.dataset.loginRedirect = safeReturnUrl();
   }
@@ -111,7 +135,7 @@
   function publicSessionHeaders() {
     const headers = new Headers();
     try {
-      if (sessionStorage.getItem("vecto-admin-console-context") === "1") {
+      if (adminConsoleContextActive()) {
         headers.set("X-Admin-Console", "1");
         const workspaceUserId = String(sessionStorage.getItem("vecto-admin-workspace-user-id") || "").trim();
         if (workspaceUserId) headers.set("X-Admin-Workspace-User-ID", workspaceUserId);
@@ -135,7 +159,7 @@
       target = new URL(fallback, window.location.origin);
     }
     try {
-      const adminContext = sessionStorage.getItem("vecto-admin-console-context") === "1";
+      const adminContext = adminConsoleContextActive();
       const workspaceUserId = String(sessionStorage.getItem("vecto-admin-workspace-user-id") || "").trim();
       if (adminContext || workspaceUserId) {
         target.pathname = "/admin-console.html";
@@ -146,6 +170,10 @@
   }
 
   function openLogin() {
+    if (adminConsoleContextActive()) {
+      window.location.assign("/admin");
+      return;
+    }
     prepareLoginReturn();
     const opener = document.querySelector("[data-open-login]");
     if (opener instanceof HTMLElement) {
@@ -723,6 +751,7 @@
     void loadCatalog();
   });
 
+  seedAdminConsoleContext();
   readFiltersFromUrl();
   prepareLoginReturn();
   void Promise.all([loadMe(), loadCatalog()]);
