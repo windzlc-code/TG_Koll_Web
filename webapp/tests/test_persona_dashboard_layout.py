@@ -98,6 +98,43 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('state.personaListEditorId = ""', sidebar)
         self.assertIn('removePersonaCardEditorPortal()', sidebar)
 
+    def test_mobile_publish_group_editor_keeps_the_publish_drawer_open(self):
+        module_start = self.console_script.index("function renderSimpleFlowModule(moduleId)")
+        module_end = self.console_script.index("\nfunction bindSimpleFlowInputs", module_start)
+        module = self.console_script[module_start:module_end]
+
+        self.assertIn(
+            'document.getElementById("publishPersonaSidebar")?.classList.contains("is-mobile-open")',
+            module,
+        )
+        self.assertIn(
+            'setPersonaMobileSidebarOpen(reopenPublishPersonaSidebar, "publishPersonaSidebar")',
+            module,
+        )
+        self.assertNotIn(
+            'if (moduleId === "publishing" || moduleId === "automation") setPersonaMobileSidebarOpen(false);',
+            module,
+        )
+
+    def test_mobile_account_pool_persona_drawer_reserves_header_and_status_space(self):
+        account_sidebar_start = self.console_script.index("function renderAccountPoolPersonaSidebar")
+        account_sidebar_end = self.console_script.index("\nfunction renderAccountPool", account_sidebar_start)
+        account_sidebar = self.console_script[account_sidebar_start:account_sidebar_end]
+
+        self.assertIn(
+            'class="persona-head-copy account-pool-persona-head-copy"',
+            account_sidebar,
+        )
+        self.assertIn(
+            ".account-pool-persona-shell .persona-list-head--queue",
+            self.styles,
+        )
+        self.assertIn(
+            ".persona-mobile-drawer.account-pool-persona-shell .publish-persona-card",
+            self.styles,
+        )
+        self.assertIn("padding-right: 56px;", self.styles)
+
     def test_avatar_add_button_keeps_the_desktop_icon_size_on_mobile(self):
         self.assertIn(
             'class="persona-avatar-add-button" data-persona-avatar-crop-open',

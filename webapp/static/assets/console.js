@@ -9171,6 +9171,10 @@ function toggleMatrixGroupId(groupId) {
 
 function renderSimpleFlowModule(moduleId) {
   return withConsoleScrollPreserved(() => {
+  const reopenPublishPersonaSidebar = Boolean(
+    moduleId === "publishing"
+    && document.getElementById("publishPersonaSidebar")?.classList.contains("is-mobile-open")
+  );
   if (moduleId === "publishing") removePersonaCardEditorPortal();
   const branch = currentBranch(moduleId);
   const personaAccount = accountForPersona(selectedPersona());
@@ -9279,7 +9283,11 @@ function renderSimpleFlowModule(moduleId) {
     ${body}
     ${actionHtml}
   `;
-  if (moduleId === "publishing" || moduleId === "automation") setPersonaMobileSidebarOpen(false);
+  if (moduleId === "publishing") {
+    setPersonaMobileSidebarOpen(reopenPublishPersonaSidebar, "publishPersonaSidebar");
+  } else if (moduleId === "automation") {
+    setPersonaMobileSidebarOpen(false);
+  }
   if ($("simpleAccount") && accountId) $("simpleAccount").value = accountId;
   if ($("simplePublishMode")) {
     const modes = ["publish_now", "matrix_start", "publish_history"];
@@ -19027,7 +19035,7 @@ function renderAccountPoolPersonaSidebar(selectedAccount) {
     <aside id="accountPoolPersonaSidebar" class="persona-list-shell account-pool-persona-shell persona-mobile-drawer" data-persona-mobile-sidebar aria-hidden="false">
       <div class="persona-inline-panel persona-list-toolbar">
         <div class="persona-list-head persona-list-head--queue">
-          <div>
+          <div class="persona-head-copy account-pool-persona-head-copy">
             <strong>人设列表</strong>
             <span>${esc(selectedCount === 1 ? "已选 1 个账号，点击绑定" : selectedCount > 1 ? "同一平台只能选择 1 个账号绑定" : "先选择一个账号，再点绑定")}</span>
           </div>

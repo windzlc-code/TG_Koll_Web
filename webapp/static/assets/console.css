@@ -12136,6 +12136,22 @@ body.persona-touch-dragging .persona-list-card:active {
   min-height: 46px;
 }
 
+.account-pool-persona-shell .persona-list-head--queue {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.account-pool-persona-head-copy {
+  min-width: 0;
+}
+
+.account-pool-persona-head-copy > span {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
 .account-pool-persona-shell .account-pool-bind-persona {
   z-index: 3;
   pointer-events: auto;
@@ -14924,6 +14940,10 @@ body.console-page {
   .persona-mobile-drawer .persona-list-card {
     gap: 4px;
     padding: 3px;
+  }
+
+  .persona-mobile-drawer.account-pool-persona-shell .publish-persona-card {
+    padding-right: 56px;
   }
 
   .persona-mobile-drawer .persona-list-card .persona-list-item {
