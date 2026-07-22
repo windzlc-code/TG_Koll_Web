@@ -3807,14 +3807,14 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
         proxy_id = str(account["proxy_id"] or "").strip()
         if proxy_id:
             proxy = conn.execute(
-                "SELECT status, ip_type, expires_at, last_check_at, last_check_result FROM social_proxies WHERE id = ? AND user_id = ?",
+                "SELECT status, ip_type, market_item_id, expires_at, last_check_at, last_check_result FROM social_proxies WHERE id = ? AND user_id = ?",
                 (proxy_id, int(account["user_id"] or 0)),
             ).fetchone()
             if not proxy:
                 raise HTTPException(status_code=409, detail="账号绑定的住宅代理不存在，不能创建任务")
             proxy_status = str(proxy["status"] or "").strip().lower()
-            if str(proxy["ip_type"] or "").strip().lower() != "static_residential":
-                raise HTTPException(status_code=409, detail="账号仅允许使用静态住宅 IP")
+            if not _account_proxy_type_allowed(proxy):
+                raise HTTPException(status_code=409, detail="账号仅允许使用静态住宅 IP 或商城认证的机房代理")
             if _proxy_is_expired(proxy):
                 raise HTTPException(status_code=409, detail="账号绑定的静态住宅代理已过期，请续费或更换后再执行任务")
             if proxy_status != "active":
@@ -4863,8 +4863,8 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
                     ) from exc
     account = dict(account_row)
     proxy = dict(proxy_row) if proxy_row else None
-    if proxy is not None and str(proxy.get("ip_type") or "").strip().lower() != "static_residential":
-        raise RuntimeError("账号代理不是静态住宅 IP，已阻止浏览器启动")
+    if proxy is not None and not _account_proxy_type_allowed(proxy):
+        raise RuntimeError("账号代理不是静态住宅 IP 或商城认证的机房代理，已阻止浏览器启动")
     if proxy_id and proxy is None:
         raise RuntimeError("账号绑定的住宅代理不存在，已阻止浏览器启动")
     if proxy is not None and _proxy_is_expired(proxy):
@@ -6597,6 +6597,21 @@ def _log_public(row: Any) -> dict[str, Any]:
     }
 
 
+def _account_proxy_type_allowed(proxy: Any) -> bool:
+    if not proxy:
+        return False
+    try:
+        ip_type = str(proxy["ip_type"] or "").strip().lower()
+        market_item_id = str(proxy["market_item_id"] or "").strip()
+    except (KeyError, TypeError, IndexError):
+        ip_type = str(proxy.get("ip_type") or "").strip().lower()
+        market_item_id = str(proxy.get("market_item_id") or "").strip()
+    return bool(
+        ip_type == "static_residential"
+        or (ip_type == "datacenter" and market_item_id)
+    )
+
+
 def _require_proxy(conn, proxy_id: str, *, owner_user_id: int | None = None) -> Any:
     if owner_user_id is None:
         row = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
@@ -6605,8 +6620,8 @@ def _require_proxy(conn, proxy_id: str, *, owner_user_id: int | None = None) -> 
             "SELECT * FROM social_proxies WHERE id = ? AND user_id = ?",
             (proxy_id, int(owner_user_id)),
         ).fetchone()
-    if row and str(row["ip_type"] or "").strip().lower() != "static_residential":
-        raise HTTPException(status_code=400, detail="账号仅允许绑定静态住宅 IP")
+    if row and not _account_proxy_type_allowed(row):
+        raise HTTPException(status_code=400, detail="账号仅允许绑定静态住宅 IP 或商城认证的机房代理")
     if not row:
         raise HTTPException(status_code=404, detail="绑定代理不存在")
     return row

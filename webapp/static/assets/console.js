@@ -18052,8 +18052,10 @@ async function deleteSelectedAccountPoolAccounts() {
 
 function accountProxyEligibility(proxy = null, nowSeconds = Math.floor(Date.now() / 1000)) {
   if (!proxy) return { eligible: true, reason: "" };
-  if (String(proxy.ip_type || "").trim().toLowerCase() !== "static_residential") {
-    return { eligible: false, reason: "仅支持静态住宅 IP" };
+  const ipType = String(proxy.ip_type || "").trim().toLowerCase();
+  const marketItemId = String(proxy.market_item_id || "").trim();
+  if (ipType !== "static_residential" && !(ipType === "datacenter" && marketItemId)) {
+    return { eligible: false, reason: "仅支持静态住宅 IP 或商城认证的机房代理" };
   }
   const expiresAt = Number(proxy.expires_at || 0);
   if (expiresAt > 0 && expiresAt <= Number(nowSeconds || 0)) {
@@ -19034,14 +19036,19 @@ function renderAccountPoolPersonaSidebar(selectedAccount) {
   const targetPersonaId = String(state.accountPoolPersonaId || boundPersonaId || "").trim();
   const selectedCount = accountPoolSelectedIds().length;
   return `
-    <aside class="persona-list-shell account-pool-persona-shell">
+    <aside id="accountPoolPersonaSidebar" class="persona-list-shell account-pool-persona-shell persona-mobile-drawer" data-persona-mobile-sidebar aria-hidden="false">
       <div class="persona-inline-panel persona-list-toolbar">
         <div class="persona-list-head persona-list-head--queue">
           <div>
             <strong>人设列表</strong>
             <span>${esc(selectedCount === 1 ? "已选 1 个账号，点击绑定" : selectedCount > 1 ? "同一平台只能选择 1 个账号绑定" : "先选择一个账号，再点绑定")}</span>
           </div>
-          <span>${esc(`${state.personas.length} 个`)}</span>
+          <div class="persona-mobile-drawer-head-actions">
+            <span>${esc(`${state.personas.length} 个`)}</span>
+            <button type="button" class="persona-mobile-drawer-close" data-persona-mobile-list-close title="关闭人设列表" aria-label="关闭人设列表">
+              <svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 6 12 12"></path><path d="m18 6-12 12"></path></svg>
+            </button>
+          </div>
         </div>
       </div>
       ${renderPersonaCollectionList({
@@ -19051,7 +19058,8 @@ function renderAccountPoolPersonaSidebar(selectedAccount) {
         allowGroupEdit: false,
         allowReorder: true,
       })}
-    </aside>`;
+    </aside>
+    <div class="persona-mobile-drawer-backdrop" data-persona-mobile-list-backdrop data-persona-mobile-list-close hidden></div>`;
 }
 
 function renderAccountPool() {
@@ -19066,6 +19074,10 @@ function renderAccountPool() {
             <strong>账号池</strong>
             <span>平台和账号分开选择，再到右侧人设列表绑定。</span>
           </div>
+          <button type="button" class="persona-mobile-list-toggle" data-persona-mobile-list-toggle="accountPoolPersonaSidebar" aria-controls="accountPoolPersonaSidebar" aria-expanded="false">
+            <svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16"></path><path d="M4 12h16"></path><path d="M4 19h16"></path></svg>
+            <span>人设列表</span>
+          </button>
         </div>
         <div class="account-pool-body">
           ${renderAccountPoolPlatformTabs()}
@@ -19097,6 +19109,7 @@ async function bindAccountPoolAccountToPersona(personaId = "") {
     && String(item.persona_id || "").trim() === cleanPersonaId
     && String(item.platform || "").trim().toLowerCase() === String(account.platform || "").trim().toLowerCase()
   ));
+  setPersonaMobileSidebarOpen(false);
   state.accountPoolBinding = true;
   renderSocialAccounts();
   try {
@@ -19500,7 +19513,9 @@ function renderSocialAccounts() {
   }
   if (state.accountBrowserPanel === "browsers") renderLiveBrowserSessions();
   if (!grid) return;
+  const reopenAccountPersonaSidebar = Boolean(document.getElementById("accountPoolPersonaSidebar")?.classList.contains("is-mobile-open"));
   grid.innerHTML = renderAccountPool();
+  setPersonaMobileSidebarOpen(reopenAccountPersonaSidebar, "accountPoolPersonaSidebar");
   });
 }
 

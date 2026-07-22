@@ -942,6 +942,17 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("event.preventDefault()", account_events)
         self.assertIn(".account-pool-card-check", account_events)
 
+    def test_account_pool_reuses_the_mobile_persona_drawer(self):
+        sidebar = self._function_source("renderAccountPoolPersonaSidebar")
+        pool = self._function_source("renderAccountPool")
+
+        self.assertIn('id="accountPoolPersonaSidebar"', sidebar)
+        self.assertIn("persona-mobile-drawer", sidebar)
+        self.assertIn("data-persona-mobile-sidebar", sidebar)
+        self.assertIn("data-persona-mobile-list-close", sidebar)
+        self.assertIn("data-persona-mobile-list-backdrop", sidebar)
+        self.assertIn('data-persona-mobile-list-toggle="accountPoolPersonaSidebar"', pool)
+
     def test_account_proxy_picker_replaces_legacy_edit_checkbox_and_keeps_single_binding(self):
         card = self._section("function renderAccountPoolCard", "function renderAccountPoolCards")
         picker = self._function_source("openAccountProxyPickerModal")
@@ -985,7 +996,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             const valid = {{ ip_type: "static_residential", expires_at: 3000, status: "active", last_check_at: 1900, last_check_result: {{ ok: true }} }};
             assert.deepStrictEqual(accountProxyEligibility(null, now), {{ eligible: true, reason: "" }});
             assert.strictEqual(accountProxyEligibility(valid, now).eligible, true);
-            assert.strictEqual(accountProxyEligibility({{ ...valid, ip_type: "datacenter" }}, now).reason, "仅支持静态住宅 IP");
+            assert.strictEqual(accountProxyEligibility({{ ...valid, ip_type: "datacenter", market_item_id: "market-1" }}, now).eligible, true);
+            assert.strictEqual(accountProxyEligibility({{ ...valid, ip_type: "datacenter", market_item_id: "" }}, now).reason, "仅支持静态住宅 IP 或商城认证的机房代理");
             assert.strictEqual(accountProxyEligibility({{ ...valid, expires_at: now }}, now).reason, "已过期");
             assert.strictEqual(accountProxyEligibility({{ ...valid, status: "inactive" }}, now).eligible, false);
             assert.strictEqual(accountProxyEligibility({{ ...valid, last_check_at: 0 }}, now).reason, "未通过网络检测");

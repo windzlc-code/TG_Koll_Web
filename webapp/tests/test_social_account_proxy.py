@@ -733,6 +733,28 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
         )
         self.assertEqual(updated["proxy_id"], valid["id"])
 
+    def test_proxy_binding_accepts_verified_marketplace_datacenter_proxy(self):
+        account = self._account("marketplace-datacenter-binding")
+        proxy = social_api.create_social_proxy(
+            social_api.SocialProxyPayload(host="marketplace-datacenter.example", port=8080)
+        )
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE social_proxies
+                SET ip_type = 'datacenter', status = 'active', last_check_at = 100,
+                    last_check_result = ?, market_item_id = 'market-1'
+                WHERE id = ?
+                """,
+                (json.dumps({"ok": True, "exit_ip": "8.8.8.8"}), proxy["id"]),
+            )
+
+        updated = social_api.update_social_account(
+            account["id"],
+            social_api.SocialAccountPatchPayload(proxy_id=proxy["id"], expected_proxy_id=""),
+        )
+        self.assertEqual(updated["proxy_id"], proxy["id"])
+
     def test_invalid_legacy_binding_remains_readable_editable_and_clearable(self):
         proxy = social_api.create_social_proxy(
             social_api.SocialProxyPayload(host="legacy-invalid.example", port=8080)
