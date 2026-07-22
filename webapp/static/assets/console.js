@@ -357,6 +357,10 @@ const state = {
     currentX: 0,
     currentY: 0,
     lockX: 0,
+    grabOffsetX: 0,
+    grabOffsetY: 0,
+    sourceHeight: 0,
+    hasDropTarget: false,
     targetGroupId: "",
     beforeId: "",
     source: null,
@@ -11785,6 +11789,11 @@ function movePersonaDropPlaceholder(zone, beforeId) {
   list.classList.add("is-drag-over");
   const placeholder = previous.placeholder || document.createElement("div");
   if (!placeholder.className) placeholder.className = "persona-drop-placeholder";
+  const sourceHeight = Number(state.personaPointerDrag?.sourceHeight || 0);
+  if (sourceHeight > 0) {
+    placeholder.style.height = `${Math.round(sourceHeight)}px`;
+    placeholder.style.minHeight = `${Math.round(sourceHeight)}px`;
+  }
   const beforeNode = beforeId ? Array.from(list.querySelectorAll(".persona-list-card[data-persona-card]")).find((node) => String(node.dataset.personaCard || "") === String(beforeId)) : null;
   if (placeholder.parentNode !== list || placeholder.nextSibling !== (beforeNode || null)) {
     list.insertBefore(placeholder, beforeNode || null);
@@ -11872,6 +11881,10 @@ function defaultPersonaPointerDrag() {
     currentX: 0,
     currentY: 0,
     lockX: 0,
+    grabOffsetX: 0,
+    grabOffsetY: 0,
+    sourceHeight: 0,
+    hasDropTarget: false,
     targetGroupId: "",
     beforeId: "",
     source: null,
@@ -11904,22 +11917,23 @@ function personaPointerDragCardFromTarget(target) {
   return card;
 }
 
-function createPersonaPointerGhost(card, x, y) {
+function createPersonaPointerGhost(card, x, y, grabOffsetX, grabOffsetY) {
   const rect = card.getBoundingClientRect();
   const ghost = card.cloneNode(true);
   ghost.classList.add("persona-pointer-ghost");
   ghost.classList.remove("is-active", "is-editing", "is-dragging", "is-pointer-dragging", "is-drag-source-hidden");
   ghost.style.width = `${rect.width}px`;
+  ghost.style.height = `${rect.height}px`;
   ghost.style.left = "0";
   ghost.style.top = "0";
   document.body.appendChild(ghost);
-  updatePersonaPointerGhost(ghost, x, y);
+  updatePersonaPointerGhost(ghost, x, y, grabOffsetX, grabOffsetY);
   return ghost;
 }
 
-function updatePersonaPointerGhost(ghost, x, y) {
+function updatePersonaPointerGhost(ghost, x, y, grabOffsetX = 0, grabOffsetY = 0) {
   if (!ghost) return;
-  ghost.style.transform = `translate3d(${Math.round(x)}px, ${Math.round(y)}px, 0) translate(-50%, -50%) scale(1.02)`;
+  ghost.style.transform = `translate3d(${Math.round(x - grabOffsetX)}px, ${Math.round(y - grabOffsetY)}px, 0)`;
 }
 
 function scrollPersonaListDuringPointerDrag(y) {
@@ -11940,7 +11954,14 @@ function updatePersonaPointerDropTarget(x, y) {
   scrollPersonaListDuringPointerDrag(y);
   const target = document.elementFromPoint(x, y);
   const zone = personaDropZoneAtPoint(x, y) || personaDropZoneFromTarget(target);
-  if (!zone) return;
+  if (!zone) {
+    drag.hasDropTarget = false;
+    drag.targetGroupId = "";
+    drag.beforeId = "";
+    clearPersonaDropVisuals();
+    return;
+  }
+  drag.hasDropTarget = true;
   const beforeId = personaDropBeforeId(zone, y, drag.id);
   drag.targetGroupId = personaDropZoneId(zone);
   drag.beforeId = beforeId;
@@ -11954,7 +11975,7 @@ function schedulePersonaPointerDragFrame() {
     const drag = state.personaPointerDrag || {};
     if (!drag.active) return;
     const x = drag.currentX || drag.lockX || drag.startX;
-    updatePersonaPointerGhost(drag.ghost, x, drag.currentY);
+    updatePersonaPointerGhost(drag.ghost, x, drag.currentY, drag.grabOffsetX, drag.grabOffsetY);
     updatePersonaPointerDropTarget(x, drag.currentY);
   });
 }
@@ -11967,7 +11988,13 @@ function startPersonaPointerDrag(event) {
   drag.currentY = event.clientY;
   drag.targetGroupId = drag.fromGroupId;
   drag.beforeId = "";
-  drag.ghost = createPersonaPointerGhost(drag.source, event.clientX, event.clientY);
+  drag.ghost = createPersonaPointerGhost(
+    drag.source,
+    event.clientX,
+    event.clientY,
+    drag.grabOffsetX,
+    drag.grabOffsetY,
+  );
   drag.source.classList.add("is-pointer-dragging", "is-dragging", "is-drag-source-hidden");
   document.body.classList.add("persona-touch-dragging");
   schedulePersonaPointerDragFrame();
@@ -11985,6 +12012,10 @@ function finishPersonaPointerDrag() {
     state.personaPointerRaf = 0;
   }
   updatePersonaPointerDropTarget(drag.currentX || drag.lockX || drag.startX, drag.currentY);
+  if (!drag.hasDropTarget) {
+    cleanupPersonaPointerDrag();
+    return;
+  }
   const nextModel = movePersonaInCollectionModel(personaCollectionModel(), drag.id, drag.targetGroupId, drag.beforeId);
   const targetGroupId = drag.targetGroupId;
   cleanupPersonaPointerDrag();
@@ -12016,6 +12047,9 @@ function handlePersonaPointerDown(event) {
     currentX: event.clientX,
     currentY: event.clientY,
     lockX: Math.round(rect.left + rect.width / 2),
+    grabOffsetX: event.clientX - rect.left,
+    grabOffsetY: event.clientY - rect.top,
+    sourceHeight: rect.height,
     source: card,
   };
   try {
@@ -14637,6 +14671,8 @@ function positionPersonaCardEditorMenu() {
 }
 
 function renderActivePersonaListSurface() {
+  const pointerDrag = state.personaPointerDrag || {};
+  if (pointerDrag.pending || pointerDrag.active) cleanupPersonaPointerDrag();
   return withConsoleScrollPreserved(() => {
     if (state.view === "accounts") {
       renderSocialAccounts();
