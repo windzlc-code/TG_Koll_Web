@@ -83,6 +83,32 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn('.slice(0, 86) || "当前内容为空。"', self.console_script)
         self.assertNotIn('.slice(0, 170))}</p>', self.console_script)
 
+    def test_mobile_publish_preview_is_number_tabs_only(self):
+        self.assertIn(
+            'class="publish-content-preview publish-content-preview--selection"',
+            self.console_script,
+        )
+        self.assertIn(
+            ".publish-content-preview--selection .publish-preview-card",
+            self.styles,
+        )
+        self.assertIn(
+            ".publish-content-preview--selection .publish-preview-tab-copy",
+            self.styles,
+        )
+
+    def test_publish_source_cards_render_complete_media(self):
+        self.assertIn(
+            'class="publish-post-card-media">${renderPublishPreviewMedia(mediaItems)}',
+            self.console_script,
+        )
+        self.assertIn(".publish-post-card-media {", self.styles)
+
+    def test_mobile_task_dock_is_flush_with_the_viewport(self):
+        self.assertIn('content="width=device-width, initial-scale=1.0, viewport-fit=cover"', self.markup)
+        self.assertIn("right: 0;\n    bottom: 0;\n    left: 0;", self.styles)
+        self.assertIn("border-width: 1px 0 0;", self.styles)
+
     def test_refresh_actions_have_distinct_labels_and_behaviors(self):
         self.assertIn(">刷新显示</button>", self.markup)
         self.assertIn(">同步全部数据</button>", self.markup)

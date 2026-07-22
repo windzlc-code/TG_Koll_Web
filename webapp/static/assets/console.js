@@ -8595,6 +8595,7 @@ function renderPublishPostSelectionList(persona = selectedPersona(), source = st
                 <span class="publish-post-card-snippet">${esc(String(post.content || "").trim() || "当前内容为空。")}</span>
               </span>
             </label>
+            ${mediaItems.length ? `<div class="publish-post-card-media">${renderPublishPreviewMedia(mediaItems)}</div>` : ""}
           </article>`;
       }).join("")}
     </div>`;
@@ -8617,7 +8618,7 @@ function renderPublishContentPreview(persona = selectedPersona(), source = state
   const selectedPosts = selectedPublishPosts(persona, cleanSource);
   const activePost = activePublishPreviewPost(selectedPosts);
   return `
-    <section class="publish-content-preview">
+    <section class="publish-content-preview publish-content-preview--selection">
       <div class="publish-panel-head">
         <strong>发布内容展示</strong>
         <span>${esc(publishContentSourceLabel(cleanSource))} · 已选 ${selectedPosts.length} 条</span>

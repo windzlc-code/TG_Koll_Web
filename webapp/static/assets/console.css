@@ -15881,16 +15881,21 @@ body.console-page {
   .mobile-task-dock {
     position: fixed;
     z-index: 1450;
-    right: max(6px, env(safe-area-inset-right));
-    bottom: max(6px, env(safe-area-inset-bottom));
-    left: max(6px, env(safe-area-inset-left));
+    right: 0;
+    bottom: 0;
+    left: 0;
     display: grid;
     grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 3px;
     min-height: 56px;
-    padding: 5px;
+    padding:
+      5px
+      max(5px, env(safe-area-inset-right, 0px))
+      max(5px, env(safe-area-inset-bottom, 0px))
+      max(5px, env(safe-area-inset-left, 0px));
     border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
-    border-radius: 10px;
+    border-width: 1px 0 0;
+    border-radius: 0;
     background: color-mix(in srgb, var(--panel-solid) 94%, transparent);
     box-shadow: 0 8px 22px rgba(7, 17, 18, 0.16);
     backdrop-filter: blur(14px);
@@ -16010,6 +16015,44 @@ body.console-page {
     scrollbar-gutter: auto;
   }
 
+  .publish-content-preview--selection {
+    display: block;
+    min-height: 0;
+  }
+
+  .publish-content-preview--selection > .publish-panel-head,
+  .publish-content-preview--selection .publish-preview-card {
+    display: none;
+  }
+
+  .publish-content-preview--selection .publish-preview-tabs-layout {
+    display: block;
+  }
+
+  .publish-content-preview--selection .publish-preview-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 0;
+  }
+
+  .publish-content-preview--selection .publish-preview-tabs button {
+    display: grid;
+    grid-template-columns: 1fr;
+    width: 38px;
+    min-height: 38px;
+    padding: 4px;
+  }
+
+  .publish-content-preview--selection .publish-preview-tab-copy {
+    display: none;
+  }
+
+  .publish-content-preview--selection .publish-preview-tab-index {
+    width: 28px;
+    height: 28px;
+  }
+
   .publish-post-card-main {
     align-items: start;
   }
@@ -16020,6 +16063,10 @@ body.console-page {
     text-overflow: clip;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+  }
+
+  .publish-post-card-media {
+    padding: 0 8px 8px 42px;
   }
 
   .persona-draft-card p {
