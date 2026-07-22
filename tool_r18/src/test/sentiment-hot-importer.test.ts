@@ -1021,6 +1021,11 @@ tea\u8336\u6587\u5316\u65e5\u5e38\u5206\u4eab\u8207\u6162\u751f\u6d3b\u9ad4\u9a5
                     caption: {
                       text: "急診醫生分享醫療現場，今天醫院候診區真的塞滿人，病人等待和醫療流程都被拿出來討論。",
                     },
+                    image_versions2: {
+                      candidates: [{
+                        url: "https://scontent.example.com/v/t51.82787-19/profile.jpg",
+                      }],
+                    },
                     like_count: 954,
                     text_post_app_info: {
                       direct_reply_count: 68,
@@ -1038,6 +1043,7 @@ tea\u8336\u6587\u5316\u65e5\u5e38\u5206\u4eab\u8207\u6162\u751f\u6d3b\u9ad4\u9a5
     });
 
     expect(candidates).toHaveLength(1);
+    expect(candidates[0].media).toEqual([]);
     expect(candidates[0].publishedAt).toBe("2026-07-17T09:00:00.000Z");
     expect(candidates[0]).toMatchObject({
       platform: "threads",

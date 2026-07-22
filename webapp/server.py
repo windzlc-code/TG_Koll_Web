@@ -15064,6 +15064,8 @@ def _compact_dashboard_media_items(*sources: Any) -> list[dict[str, str]]:
         text = str(url or "").strip()
         if not text or text in seen:
             return
+        if re.search(r"(?:profile_pic|s150x150|/v/t51\.\d+-19/)", text, re.I):
+            return
         trusted_media_field = bool(re.search(r"(?:media|image|photo|video|thumb|attachment)", str(label or typ or ""), re.I))
         if not (_looks_like_media_url(text) or trusted_media_field):
             return

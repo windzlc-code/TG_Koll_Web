@@ -90,6 +90,15 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.styles,
         )
 
+    def test_draft_source_controls_are_wide_without_quick_select(self):
+        self.assertNotIn("草稿快速选择", self.console_script)
+        self.assertNotIn("收藏快速选择", self.console_script)
+        self.assertIn(".persona-source-toggle {\n  width: min(100%, 280px);", self.styles)
+
+    def test_hot_card_metrics_use_compact_thousands(self):
+        self.assertIn("function hotMetricText(value)", self.console_script)
+        self.assertIn("${esc(hotMetricText(value))}", self.console_script)
+
     def test_shared_navigation_isolated_from_legacy_brand_styles(self):
         header_rule = re.search(
             r"\.site-header\s*\{(?P<body>.*?)\}",

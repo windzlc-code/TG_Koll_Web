@@ -1749,6 +1749,15 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(post["media_items"][0]["reason"], "原始媒体文件不存在")
         self.assertEqual(post["media_items"][0]["preview_url"], "")
 
+    def test_profile_photo_url_is_not_treated_as_post_media(self):
+        from webapp import server
+
+        rows = server._compact_dashboard_media_items({
+            "mediaUrl": "https://scontent.example.com/v/t51.82787-19/profile.jpg",
+            "mediaType": "image",
+        })
+        self.assertEqual(rows, [])
+
     def test_publish_history_excludes_automation_screenshots(self):
         from webapp import server
 

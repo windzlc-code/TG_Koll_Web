@@ -5763,6 +5763,7 @@ export async function lookupThreadsPublishedPostFromBrowserProfile(args: {
 
 function isNonPostThreadsMediaUrl(url: string): boolean {
   if (/profile_pic|profile|s150x150/i.test(url)) return true;
+  if (/\/v\/t51\.\d+-19\//i.test(url)) return true;
   if (/\/favicon(?:[-_.]|\d|$)|favicon[_-]?\d*/i.test(url)) return true;
   if (/external-[^/]+\.xx\.fbcdn\.net\/emg1\/v\/t13\//i.test(url)) return true;
   return false;
@@ -5792,7 +5793,7 @@ function mergeCandidateMedia(base: SentimentHotMedia[], extra: SentimentHotMedia
   const out: SentimentHotMedia[] = [];
   for (const item of [...base, ...extra]) {
     const url = String(item?.url || item?.localPath || "").trim();
-    if (!url) continue;
+    if (!url || isNonPostThreadsMediaUrl(url)) continue;
     if (out.some((existing) => existing.url === item.url || (item.localPath && existing.localPath === item.localPath))) continue;
     out.push(item);
     if (out.length >= 12) break;

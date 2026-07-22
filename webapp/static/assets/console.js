@@ -2176,6 +2176,13 @@ function numberText(value) {
   return Number.isFinite(n) ? n.toLocaleString() : "0";
 }
 
+function hotMetricText(value) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n) || n < 1000) return numberText(n);
+  const compact = Math.round((n / 1000) * 10) / 10;
+  return `${Number.isInteger(compact) ? compact.toFixed(0) : compact.toFixed(1)}k`;
+}
+
 function formatTime(value) {
   if (!value) return "-";
   const number = Number(value);
@@ -3749,7 +3756,7 @@ function renderPersonaHotMetricStrip(meta, postId = "") {
   return `
     <div class="persona-hot-metric-strip">
       <div class="persona-hot-metric-values">
-        ${metrics.map(([label, value]) => `<span><small>${esc(label)}</small><strong>${esc(numberText(value ?? 0))}</strong></span>`).join("")}
+        ${metrics.map(([label, value]) => `<span><small>${esc(label)}</small><strong>${esc(hotMetricText(value))}</strong></span>`).join("")}
       </div>
       <button type="button" class="persona-hot-refresh-button" data-persona-refresh-hot-post="${esc(postId)}" title="刷新热点数据" aria-label="刷新热点数据">
         ${renderRefreshIcon()}
@@ -16403,11 +16410,6 @@ function renderPersonaContentPanel(persona, account, profile, step) {
           <button type="button" class="${postSource === "favorites" ? "is-active" : ""}" data-persona-post-source="favorites">收藏</button>
         </div>
         <div class="persona-draft-toolbar">
-          <label>${postSource === "favorites" ? "收藏快速选择" : "草稿快速选择"}
-            <select id="personaDraftPostSelect">
-              ${sourceRows.length ? sourceRows.map((post, index) => `<option value="${esc(post.id)}" ${String(post.id) === String(state.selectedPersonaPostId || sourceRows[0]?.id || "") ? "selected" : ""}>${esc(personaDraftOptionLabel(post, index))}</option>`).join("") : `<option value="">${postSource === "favorites" ? "当前还没有收藏" : "当前还没有草稿"}</option>`}
-            </select>
-          </label>
           ${sourceRows.length ? renderPersonaPostBulkActions(persona, postSource, sourceRows) : ""}
           <div class="row-actions">
             <button type="button" data-persona-open-new-draft ${personaDraftEditState(persona.id).editing ? "disabled" : ""}>新建草稿</button>

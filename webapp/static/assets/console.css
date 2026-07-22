@@ -7208,6 +7208,15 @@ body.persona-touch-dragging .persona-list-card:active {
   background: var(--soft);
 }
 
+.persona-source-toggle {
+  width: min(100%, 280px);
+}
+
+.persona-source-toggle button {
+  flex: 1 1 0;
+  min-width: 120px;
+}
+
 .persona-source-toggle button,
 .persona-media-operation-toggle button {
   min-height: 34px;
@@ -7218,6 +7227,10 @@ body.persona-touch-dragging .persona-list-card:active {
   color: var(--muted);
   font-weight: 900;
   white-space: nowrap;
+}
+
+.persona-source-toggle button {
+  padding-inline: 24px;
 }
 
 .persona-source-toggle button.is-active,
