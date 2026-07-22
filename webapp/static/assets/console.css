@@ -5573,8 +5573,10 @@ body.persona-touch-dragging .persona-list-card:active {
   bottom: -2px;
   display: grid;
   width: 28px;
+  height: 28px;
   min-width: 28px;
   min-height: 28px;
+  flex: 0 0 28px;
   padding: 0;
   place-items: center;
   border: 2px solid var(--panel-solid);
@@ -15495,11 +15497,13 @@ body.console-page {
     padding: 7px;
   }
 
-  .console-page .persona-detail .persona-avatar-add-button {
-    width: 32px;
-    min-width: 32px;
-    min-height: 32px;
+  .console-page .console-shell .persona-detail button.persona-avatar-add-button {
+    width: 28px;
+    height: 28px;
+    min-width: 28px;
+    min-height: 28px;
     padding: 0;
+    border-radius: 50%;
   }
 
   .console-page .persona-detail .persona-profile-inline-edit {

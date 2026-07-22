@@ -98,6 +98,23 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('state.personaListEditorId = ""', sidebar)
         self.assertIn('removePersonaCardEditorPortal()', sidebar)
 
+    def test_avatar_add_button_keeps_the_desktop_icon_size_on_mobile(self):
+        self.assertIn(
+            'class="persona-avatar-add-button" data-persona-avatar-crop-open',
+            self.console_script,
+        )
+        mobile_start = self.styles.index(
+            "  .console-page .console-shell .persona-detail button.persona-avatar-add-button {",
+            self.styles.index("/* Final mobile density pass:"),
+        )
+        mobile_rule = self.styles[mobile_start:self.styles.index("\n  }", mobile_start) + 4]
+        self.assertIn("width: 28px;", mobile_rule)
+        self.assertIn("height: 28px;", mobile_rule)
+        self.assertIn("min-width: 28px;", mobile_rule)
+        self.assertIn("min-height: 28px;", mobile_rule)
+        self.assertIn("border-radius: 50%;", mobile_rule)
+        self.assertNotIn("32px", mobile_rule)
+
     def test_mobile_publish_content_expands_without_inner_scroll(self):
         self.assertIn(".mobile-task-dock {", self.styles)
         self.assertIn("grid-template-columns: repeat(5, minmax(0, 1fr));", self.styles)
