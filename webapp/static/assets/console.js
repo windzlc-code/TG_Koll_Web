@@ -19082,10 +19082,7 @@ function renderAccountPool() {
       <section class="account-pool-main">
         <div class="account-pool-head">
           <div>
-            <strong class="account-pool-title">
-              <span class="account-pool-title-desktop">账号池</span>
-              <span class="account-pool-title-mobile">账号值</span>
-            </strong>
+            <strong>账号池</strong>
             <span>平台和账号分开选择，再到右侧人设列表绑定。</span>
           </div>
           <button type="button" class="persona-mobile-list-toggle" data-persona-mobile-list-toggle="accountPoolPersonaSidebar" aria-controls="accountPoolPersonaSidebar" aria-expanded="false">
