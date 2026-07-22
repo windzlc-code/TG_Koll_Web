@@ -5802,6 +5802,7 @@ function renderMediaPreviewButton(item, groupId, index, {
   frameClass = "persona-media-frame",
   caption = "",
   interactive = true,
+  lowPriority = false,
 } = {}) {
   const label = String(item?.label || "").trim();
   const type = String(item?.type || "image").trim() || "image";
@@ -5821,7 +5822,7 @@ function renderMediaPreviewButton(item, groupId, index, {
         ? `<video class="${esc(frameClass)}" src="${esc(displayUrl)}" data-media-source-url="${esc(displayUrl)}" muted playsinline preload="metadata" onerror="handlePersonaMediaFrameError(this)"></video>`
         : type === "audio"
           ? `<div class="${esc(frameClass)} ${esc(frameClass)}--audio"><strong>音频</strong><small>点击站内预览</small></div>`
-          : `<img class="${esc(frameClass)}" src="${esc(displayUrl)}" data-media-source-url="${esc(displayUrl)}" alt="${esc(label || "media")}" loading="lazy" onerror="handlePersonaMediaFrameError(this)" />`}
+          : `<img class="${esc(frameClass)}" src="${esc(displayUrl)}" data-media-source-url="${esc(displayUrl)}" alt="${esc(label || "media")}" loading="lazy" decoding="async"${lowPriority ? ' fetchpriority="low"' : ""} onerror="handlePersonaMediaFrameError(this)" />`}
       <span>${esc(text)}</span>
     </${rootTag}>
   `;
@@ -6084,6 +6085,7 @@ function renderPublishPreviewMedia(items = []) {
             ${renderMediaPreviewButton(item, groupId, previewIndex, {
               className: "publish-preview-media-button",
               frameClass: "publish-preview-media-frame",
+              lowPriority: true,
             })}
             <span class="publish-preview-media-badge">第 ${esc(index + 1)} 个 · ${esc(mediaKindLabel(item.type))}</span>
           </div>`;

@@ -16029,8 +16029,12 @@ body.console-page {
 }
 
 @media (max-width: 760px) {
+  .console-page {
+    --mobile-task-dock-height: calc(51px + max(5px, env(safe-area-inset-bottom, 0px)));
+  }
+
   .console-page .console-shell {
-    padding-bottom: calc(68px + env(safe-area-inset-bottom));
+    padding-bottom: var(--mobile-task-dock-height);
   }
 
   .module-panel.is-publishing-module:has(.publish-command-actions) #moduleBody {
@@ -16041,7 +16045,7 @@ body.console-page {
     position: fixed;
     z-index: 1400;
     right: max(22px, env(safe-area-inset-right, 0px));
-    bottom: calc(68px + env(safe-area-inset-bottom, 0px));
+    bottom: var(--mobile-task-dock-height);
     left: max(22px, env(safe-area-inset-left, 0px));
     display: grid;
     grid-template-columns: minmax(0, 1fr);
@@ -16056,9 +16060,11 @@ body.console-page {
   }
 
   .module-panel.is-publishing-module .publish-command-actions #executeSimpleFlow {
+    display: grid;
     width: 100%;
     min-height: 50px;
-    padding: 9px 42px 9px 16px;
+    padding: 9px 42px;
+    place-items: center;
     border-radius: 0 0 7px 7px;
     box-shadow: 0 8px 22px rgba(7, 17, 18, 0.22);
     text-align: center;
@@ -16215,7 +16221,8 @@ body.console-page {
     display: grid;
     grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 3px;
-    min-height: 56px;
+    height: var(--mobile-task-dock-height);
+    min-height: var(--mobile-task-dock-height);
     padding:
       5px
       max(5px, env(safe-area-inset-right, 0px))
@@ -16407,6 +16414,11 @@ body.console-page {
   .publish-post-card-media {
     display: block;
     padding: 0 8px 8px 42px;
+  }
+
+  .module-panel.is-publishing-module .publish-preview-media-single {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 420px;
   }
 
   .publish-history-preview .publish-preview-card {

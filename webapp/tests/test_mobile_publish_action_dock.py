@@ -39,12 +39,38 @@ class MobilePublishActionDockTests(unittest.TestCase):
         self.assertIsNotNone(dock)
         rule = dock.group(1)
         self.assertIn("position: fixed", rule)
-        self.assertIn("bottom: calc(68px + env(safe-area-inset-bottom, 0px))", rule)
+        self.assertIn("bottom: var(--mobile-task-dock-height)", rule)
         self.assertIn("z-index: 1400", rule)
         self.assertIn("justify-content: stretch", rule)
         self.assertIn("justify-items: stretch", rule)
         self.assertIn("grid-template-columns: minmax(0, 1fr)", rule)
         self.assertIn("z-index: 1450", media)
+
+    def test_mobile_publish_action_and_navigation_share_one_height(self):
+        media = STYLES.split("@media (max-width: 760px)", 1)[1]
+        self.assertIn("--mobile-task-dock-height:", media)
+        self.assertIn("padding-bottom: var(--mobile-task-dock-height)", media)
+        self.assertIn("bottom: var(--mobile-task-dock-height)", media)
+        self.assertIn("height: var(--mobile-task-dock-height)", media)
+        self.assertIn("min-height: var(--mobile-task-dock-height)", media)
+
+    def test_mobile_publish_action_text_is_centered(self):
+        media = STYLES.split("@media (max-width: 760px)", 1)[1]
+        action = re.search(
+            r"\.module-panel\.is-publishing-module \.publish-command-actions #executeSimpleFlow\s*\{([^}]+)\}",
+            media,
+        )
+        self.assertIsNotNone(action)
+        self.assertIn("display: grid", action.group(1))
+        self.assertIn("padding: 9px 42px", action.group(1))
+        self.assertIn("place-items: center", action.group(1))
+
+    def test_mobile_publish_media_defers_decode_and_offscreen_paint(self):
+        self.assertIn('loading="lazy" decoding="async"', SCRIPT)
+        self.assertIn("lowPriority: true", SCRIPT)
+        self.assertIn("fetchpriority=\"low\"", SCRIPT)
+        self.assertIn("content-visibility: auto", STYLES)
+        self.assertIn("contain-intrinsic-size: auto 420px", STYLES)
 
     def test_remove_icon_is_positioned_in_the_chip_top_right(self):
         remove_rule = re.search(r"button\.publish-mobile-selection-remove\s*\{([^}]+)\}", STYLES)
