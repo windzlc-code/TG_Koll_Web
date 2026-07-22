@@ -161,6 +161,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         cls.pricing_styles = (cls.static_dir / "assets" / "opc" / "pricing.css").read_text(encoding="utf-8")
         cls.site_nav_script = (cls.static_dir / "assets" / "opc" / "site-navigation.js").read_text(encoding="utf-8")
         cls.site_nav_styles = (cls.static_dir / "assets" / "opc" / "site-navigation.css").read_text(encoding="utf-8")
+        cls.proxy_market_js = (cls.static_dir / "assets" / "opc" / "proxy-market.js").read_text(encoding="utf-8")
         cls.admin_js = (cls.static_dir / "assets" / "admin.js").read_text(encoding="utf-8")
         cls.console_js = (cls.static_dir / "assets" / "console.js").read_text(encoding="utf-8")
         cls.admin_html = (cls.static_dir / "admin.html").read_text(encoding="utf-8")
@@ -248,6 +249,17 @@ class PublicLoginUiSourceTests(unittest.TestCase):
                     "/assets/opc/site-navigation.js?v=__SITE_NAVIGATION_JS_VERSION__",
                     page,
                 )
+
+    def test_admin_proxy_market_entry_preserves_separate_admin_session(self):
+        self.assertIn('href="/proxy-market.html?admin_console=1"', self.admin_html)
+        self.assertIn(
+            'const ADMIN_CONTEXT_STORAGE_KEY = "vecto-admin-console-context"',
+            self.proxy_market_js,
+        )
+        self.assertIn("function adminConsoleContextActive()", self.proxy_market_js)
+        self.assertIn("function seedAdminConsoleContext()", self.proxy_market_js)
+        self.assertIn('headers.set("X-Admin-Console", "1")', self.proxy_market_js)
+        self.assertIn("seedAdminConsoleContext();", self.proxy_market_js)
 
     def test_public_navigation_preserves_authenticated_account_state(self):
         self.assertIn("async function hydratePublicSession(header)", self.site_nav_script)
