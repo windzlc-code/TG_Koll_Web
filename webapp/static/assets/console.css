@@ -14034,7 +14034,7 @@ body.console-page {
 }
 
 .console-page .console-shell {
-  grid-template-columns: 288px minmax(0, 1fr);
+  grid-template-columns: 264px minmax(0, 1fr);
   min-height: calc(100vh - var(--site-header-height));
   gap: 16px;
   padding: 16px;
@@ -15764,10 +15764,11 @@ body.console-page {
 }
 
 /* Keep the simplified workspace navigation legible after compact control sizing. */
-.console-page .module-trigger-text > span,
-.console-page .console-nav > button,
-.console-page .sidebar-bottom-actions > button,
-.console-page .sidebar-bottom-actions > a {
+.console-page .console-shell .module-trigger,
+.console-page .console-shell .module-trigger-text > span,
+.console-page .console-shell .console-nav > button,
+.console-page .console-shell .sidebar-bottom-actions > button,
+.console-page .console-shell .sidebar-bottom-actions > a {
   font-size: 15px;
   line-height: 1.25;
 }
