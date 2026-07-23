@@ -827,6 +827,60 @@ describe("sentiment hot importer", () => {
     expect(candidateMatchesSentimentHotStrategyAnchors(candidate, strategy, "strict")).toBe(false);
   });
 
+  it("does not let a persona role name bypass normal domain anchors", () => {
+    const candidate = {
+      id: "generic-secretary-normal-story",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@demo/post/generic-secretary-normal-story",
+      author: "demo",
+      content: "\u8fd9\u7bc7\u6587\u7ae0\u53ea\u662f\u56de\u987e\u4e00\u4f4d\u79d8\u4e66\u4ece\u5165\u804c\u5230\u5347\u4efb\u4e3b\u4efb\u7684\u804c\u573a\u7ecf\u5386\uff0c\u5305\u542b\u65e5\u7a0b\u5b89\u6392\u3001\u4f1a\u8bae\u7eaa\u8981\u3001\u6587\u4ef6\u5f52\u6863\u3001\u5ba2\u6237\u63a5\u5f85\u548c\u56e2\u961f\u6c9f\u901a\uff0c\u6574\u7bc7\u5185\u5bb9\u90fd\u662f\u884c\u653f\u5de5\u4f5c\u4e0e\u4e2a\u4eba\u6210\u957f\u6545\u4e8b\u3002",
+      media: [],
+      hotScore: 9000,
+      metrics: { query: "\u79d8\u4e66" },
+    } as any;
+    const strategy = {
+      primaryQueries: ["\u80a1\u7968\u6295\u8d44"],
+      broadQueries: ["\u91d1\u878d\u5e02\u573a"],
+      ecosystemQueries: ["\u7406\u8d22\u65b0\u624b"],
+      requiredAnchorTerms: ["\u80a1\u7968", "\u8d37\u6b3e", "\u7406\u8d22", "\u878d\u8d44"],
+      normalAnchorTerms: ["\u79d8\u4e66", "\u91d1\u878d", "\u8bc1\u5238", "\u94f6\u884c"],
+      rejectTerms: [],
+      strictAcceptTerms: ["\u79d8\u4e66", "\u80a1\u7968", "\u8d37\u6b3e", "\u7406\u8d22", "\u878d\u8d44"],
+      normalAcceptTerms: ["\u79d8\u4e66", "\u91d1\u878d", "\u8bc1\u5238", "\u94f6\u884c"],
+      personaGuardTerms: ["\u79d8\u4e66"],
+      domainSummary: "\u91d1\u878d\u7406\u8d22\u4e0e\u6295\u8d44\u8d37\u6b3e\u89c4\u5212",
+    } as any;
+
+    expect(candidateMatchesSentimentHotStrategyAnchors(candidate, strategy, "normal")).toBe(false);
+  });
+
+  it("accepts a direct parent-domain anchor in normal mode", () => {
+    const candidate = {
+      id: "fresh-bank-analysis",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@finance/post/fresh-bank-analysis",
+      author: "finance",
+      content: "\u4eca\u5929\u6574\u7406\u94f6\u884c\u623f\u8d37\u5229\u7387\u3001\u8fd8\u6b3e\u671f\u9650\u548c\u4fe1\u7528\u8bc4\u5206\u7684\u5f71\u54cd\uff0c\u6bd4\u8f83\u4e0d\u540c\u8d37\u6b3e\u65b9\u6848\u7684\u603b\u6210\u672c\u3001\u63d0\u524d\u8fd8\u6b3e\u6761\u4ef6\u548c\u8d44\u91d1\u8c03\u5ea6\u98ce\u9669\uff0c\u63d0\u9192\u7533\u8bf7\u4eba\u6839\u636e\u5b9e\u9645\u73b0\u91d1\u6d41\u505a\u51b3\u5b9a\u3002",
+      media: [],
+      hotScore: 12000,
+      metrics: { query: "\u94f6\u884c" },
+    } as any;
+    const strategy = {
+      primaryQueries: ["\u80a1\u7968\u6295\u8d44"],
+      broadQueries: ["\u91d1\u878d\u5e02\u573a"],
+      ecosystemQueries: ["\u7406\u8d22\u65b0\u624b"],
+      requiredAnchorTerms: ["\u80a1\u7968", "\u8d37\u6b3e", "\u7406\u8d22", "\u878d\u8d44"],
+      normalAnchorTerms: ["\u79d8\u4e66", "\u91d1\u878d", "\u8bc1\u5238", "\u94f6\u884c"],
+      rejectTerms: [],
+      strictAcceptTerms: ["\u79d8\u4e66", "\u80a1\u7968", "\u8d37\u6b3e", "\u7406\u8d22", "\u878d\u8d44"],
+      normalAcceptTerms: ["\u79d8\u4e66", "\u91d1\u878d", "\u8bc1\u5238", "\u94f6\u884c"],
+      personaGuardTerms: ["\u79d8\u4e66"],
+      domainSummary: "\u91d1\u878d\u7406\u8d22\u4e0e\u6295\u8d44\u8d37\u6b3e\u89c4\u5212",
+    } as any;
+
+    expect(candidateMatchesSentimentHotStrategyAnchors(candidate, strategy, "normal")).toBe(true);
+  });
+
   it("accepts one direct domain anchor in strict mode", () => {
     const candidate = {
       id: "fresh-stock-analysis",
