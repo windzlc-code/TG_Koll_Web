@@ -162,7 +162,10 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
 
     def test_mobile_workspace_controls_keep_distinct_icons_and_stable_layout(self):
         self.assertIn('<svg class="mobile-nav-toggle-icon"', self.markup)
+        self.assertIn('<rect x="3" y="3" width="18" height="18" rx="2"></rect>', self.markup)
         self.assertIn('<path d="M9 3v18"></path>', self.markup)
+        self.assertNotIn('<rect x="4" y="4" width="6" height="6" rx="1"></rect>', self.markup)
+        self.assertNotIn('.mobile-nav-toggle[aria-expanded="true"] .mobile-nav-toggle-icon', self.styles)
         self.assertIn("const consoleLayoutLockStates = new WeakMap();", self.source)
         self.assertIn("activeLock?.previous ?? node.style.minHeight", self.source)
         self.assertIn("activeLock.token !== token", self.source)
@@ -251,6 +254,22 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('state.simpleFlowPendingModule = moduleId', self.source)
         self.assertIn('state.simpleFlowPendingModule = ""', self.source)
         self.assertIn('if (!isPersonaWorkspaceModule(state.activeModule)) renderSimpleFlowModule(state.activeModule);', self.source)
+
+    def test_public_console_modals_reuse_the_shared_page_button_component(self):
+        self.assertIn(".console-modal-actions button,", self.styles)
+        self.assertIn(
+            ".console-page :is(.console-shell, .console-modal) :is(",
+            self.styles,
+        )
+        self.assertIn(
+            ".row-actions button.danger,\n.console-modal-actions button.danger",
+            self.styles,
+        )
+        self.assertNotIn(
+            ".console-page .console-modal-actions button.primary:not(.danger)",
+            self.styles,
+        )
+        self.assertNotIn(".console-modal-actions .danger {", self.styles)
 
     def test_social_task_snapshots_files_and_schedule_before_busy_rerender(self):
         task_source = self.source.split("async function createSocialTask(", 1)[1].split("async function ", 1)[0]
@@ -603,6 +622,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("openLiveBrowserTaskView(taskId)", self._function_source("submitPersonaPublishTask"))
         self.assertIn("openLiveBrowserTaskView(immediateTaskId)", self._function_source("executeSimpleFlow"))
         self.assertIn("openLiveBrowserTaskView(firstImmediateTaskId)", self._function_source("submitMatrixPublishTask"))
+        persona_events = self._persona_dashboard_function_source("pdBindAutomationEvents")
+        self.assertIn("const created = await pdApi", persona_events)
+        self.assertIn("window.VectoConsoleNavigation?.openLiveBrowserTaskView?.(createdTaskId)", persona_events)
 
     def test_live_browser_polling_preserves_unchanged_placeholder_nodes(self):
         browser_render = self._function_source("renderLiveBrowserSessions")
@@ -709,6 +731,70 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn(".live-browser-card-actions", mobile_controls)
         self.assertIn("justify-content: flex-start;", mobile_controls)
 
+    def test_mobile_live_browser_placeholders_and_expanded_window_keep_landscape_ratio(self):
+        mobile_density_start = self.styles.index(
+            "@media (max-width: 760px)",
+            self.styles.index(".live-browser-placeholder {"),
+        )
+        mobile_placeholder_start = self.styles.index(
+            ".live-browser-placeholder {",
+            mobile_density_start,
+        )
+        mobile_placeholder = self._css_block(
+            ".live-browser-placeholder {",
+            mobile_placeholder_start,
+        )
+        landscape_media = self._css_block(
+            "@media (max-width: 760px) and (orientation: portrait)",
+        )
+        landscape_card_start = self.styles.index(
+            ".live-browser-card.is-live-browser-modal {",
+            self.styles.index("@media (max-width: 760px) and (orientation: portrait)"),
+        )
+        landscape_card = self._css_block(
+            ".live-browser-card.is-live-browser-modal {",
+            landscape_card_start,
+        )
+        landscape_frame_start = self.styles.index(
+            ".live-browser-card.is-live-browser-modal .live-browser-frame",
+            landscape_card_start,
+        )
+        landscape_frame = self._css_block(
+            ".live-browser-card.is-live-browser-modal .live-browser-frame",
+            landscape_frame_start,
+        )
+        landscape_tools_start = self.styles.index(
+            ".live-browser-card.is-live-browser-modal .live-browser-tools",
+            landscape_frame_start,
+        )
+        landscape_tools = self._css_block(
+            ".live-browser-card.is-live-browser-modal .live-browser-tools",
+            landscape_tools_start,
+        )
+        landscape_input_start = self.styles.index(
+            ".live-browser-card.is-live-browser-modal .live-browser-tools input",
+            landscape_tools_start,
+        )
+        landscape_input = self._css_block(
+            ".live-browser-card.is-live-browser-modal .live-browser-tools input",
+            landscape_input_start,
+        )
+
+        self.assertIn("aspect-ratio: 16 / 9;", mobile_placeholder)
+        self.assertIn("min-height: 0;", mobile_placeholder)
+        self.assertNotIn("aspect-ratio: auto;", mobile_placeholder)
+        self.assertIn(landscape_card, landscape_media)
+        self.assertIn("width: calc(100dvh - 12px);", landscape_card)
+        self.assertIn("height: calc(100dvw - 12px);", landscape_card)
+        self.assertIn("transform: translate(-50%, -50%) rotate(90deg);", landscape_card)
+        self.assertIn("grid-template-rows: auto minmax(0, 1fr) auto auto;", landscape_card)
+        self.assertIn(landscape_frame, landscape_media)
+        self.assertIn("height: 100%;", landscape_frame)
+        self.assertIn("max-height: none;", landscape_frame)
+        self.assertIn("aspect-ratio: auto;", landscape_frame)
+        self.assertIn("grid-template-columns: minmax(0, 1fr) repeat(3, auto);", landscape_tools)
+        self.assertIn("grid-column: auto;", landscape_input)
+
     def test_public_toast_uses_compact_bottom_layout(self):
         host = self._css_block(".toast-host {")
         message = self._css_block(".toast-message {")
@@ -807,6 +893,57 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('target.accountPanel === "browsers"', metadata)
         self.assertIn("点击打开浏览器监控", metadata)
         self.assertIn("return currentToastTarget()", default_target)
+
+    def test_active_social_task_toasts_open_the_browser_surface(self):
+        target = self._function_source("socialTaskToastTarget")
+        sync_toast = self._section("function syncSocialTaskToast(", "\nfunction syncSocialTaskToasts(")
+        create_task = self._function_source("createSocialTask")
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            function isFutureScheduledSocialTask(task) {{
+              return Boolean(task?.scheduled);
+            }}
+            function socialTaskPresentationStatus(task) {{
+              return String(task?.presentation_status || task?.status || "");
+            }}
+            {target}
+
+            const active = {{
+              id: "task-live",
+              status: "queued",
+              persona_id: "persona-7",
+            }};
+            assert.deepStrictEqual(socialTaskToastTarget(active), {{
+              view: "accounts",
+              accountPanel: "browsers",
+              taskId: "task-live",
+              personaId: "persona-7",
+            }});
+            assert.strictEqual(socialTaskToastTarget({{ ...active, status: "running" }}).accountPanel, "browsers");
+            assert.strictEqual(socialTaskToastTarget({{ ...active, presentation_status: "need_manual" }}).accountPanel, "browsers");
+            assert.deepStrictEqual(socialTaskToastTarget({{ ...active, scheduled: true }}), {{
+              view: "tasks",
+              taskPanel: "persona",
+              taskId: "task-live",
+              personaId: "persona-7",
+            }});
+            assert.deepStrictEqual(socialTaskToastTarget({{ ...active, status: "success" }}), {{
+              view: "tasks",
+              taskPanel: "persona",
+              taskId: "task-live",
+              personaId: "persona-7",
+            }});
+            assert.strictEqual(socialTaskToastTarget({{ status: "queued" }}), null);
+            """
+        )
+        self._run_node(harness)
+
+        self.assertIn("target: socialTaskToastTarget(task, status)", sync_toast)
+        self.assertGreaterEqual(
+            create_task.count('target: socialTaskToastTarget(result.task, "queued")'),
+            2,
+        )
 
     def test_status_tone_covers_live_detection_and_recovery_states(self):
         harness = textwrap.dedent(

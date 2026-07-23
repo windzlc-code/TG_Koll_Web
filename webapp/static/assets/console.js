@@ -314,6 +314,7 @@ const state = {
   simpleFlowPending: false,
   simpleFlowPendingModule: "",
   simpleFlowPendingStartedAt: 0,
+  publishMobileSelectionExpanded: false,
   publishFiles: [],
   socialFiles: [],
   tasks: [],
@@ -998,6 +999,7 @@ const zhHantPhraseMap = [
   ["回复", "回覆"],
   ["系统状态", "系統狀態"],
   ["我的人设", "我的人設"],
+  ["选择人设", "選擇人設"],
   ["人设列表", "人設列表"],
   ["详情", "詳情"],
   ["类型", "類型"],
@@ -2257,6 +2259,7 @@ window.VectoPublishRiskGuard = {
 
 function handleDailyPublishActionGate(event) {
   const action = event.target?.closest?.("[data-daily-publish-action]");
+  if (action?.dataset?.publishSelectionLongPress === "true") return false;
   if (!action || !dailyPublishIsLocked()) return false;
   event.preventDefault();
   event.stopImmediatePropagation();
@@ -4254,6 +4257,30 @@ function toastKindForTaskStatus(status) {
   return "progress";
 }
 
+function socialTaskToastTarget(task, status = socialTaskPresentationStatus(task)) {
+  const taskId = String(task?.id || "").trim();
+  if (!taskId) return null;
+  const personaId = String(task?.persona_id || "").trim();
+  const normalizedStatus = String(status || "").trim();
+  if (
+    !isFutureScheduledSocialTask(task)
+    && ["queued", "running", "progress", "need_manual"].includes(normalizedStatus)
+  ) {
+    return {
+      view: "accounts",
+      accountPanel: "browsers",
+      taskId,
+      personaId,
+    };
+  }
+  return {
+    view: "tasks",
+    taskPanel: personaId ? "persona" : "regular",
+    taskId,
+    personaId,
+  };
+}
+
 function socialTaskToastLaneKey(task) {
   if (String(task?.task_type || "").trim() !== "publish_post") return "";
   const personaId = String(task?.persona_id || "").trim();
@@ -4404,6 +4431,7 @@ function syncSocialTaskToast(task, { force = false } = {}) {
     taskPanel: task?.persona_id ? "persona" : "regular",
     personaId: task?.persona_id || "",
     scheduled: waitingForSchedule,
+    target: socialTaskToastTarget(task, status),
   });
   if (resolved.transition && resolved.nextTask) {
     if (activeTransition?.timer) window.clearTimeout(activeTransition.timer);
@@ -5297,6 +5325,7 @@ function setView(view) {
     persona_dashboard: "人设看板",
   };
   $("viewTitle").textContent = titles[view] || "控制台";
+  syncMobilePageToolbar();
   const personaTopbarActions = $("personaDashboardTopbarActions");
   if (personaTopbarActions) personaTopbarActions.hidden = view !== "persona_dashboard";
   updateWorkspaceFlow();
@@ -5550,8 +5579,69 @@ function renderMobileTaskIcon(moduleId) {
     publishing: '<path d="m21 3-7.5 18-4.2-7.8L2 9z"></path><path d="M9.3 13.2 21 3"></path>',
     accounts: '<circle cx="8" cy="8" r="3"></circle><path d="M2.5 19v-1.5A4.5 4.5 0 0 1 7 13h2a4.5 4.5 0 0 1 4.5 4.5V19"></path><circle cx="17.5" cy="10.5" r="2.5"></circle><path d="M14.5 19v-1a3.5 3.5 0 0 1 7 0v1"></path>',
     browser_list: '<rect x="3" y="4" width="18" height="14" rx="2"></rect><path d="M3 8h18M9 21h6M12 18v3"></path>',
+    proxies: '<path d="M4 7h16M6 12h12M9 17h6"></path><circle cx="4" cy="7" r="1"></circle><circle cx="20" cy="7" r="1"></circle><circle cx="6" cy="12" r="1"></circle><circle cx="18" cy="12" r="1"></circle>',
+    tasks: '<path d="M9 5h11M9 12h11M9 19h11"></path><path d="m3.5 5 1.5 1.5L7.5 4M3.5 12l1.5 1.5L7.5 11M3.5 19l1.5 1.5L7.5 18"></path>',
+    social: '<path d="M5 5h14v10H9l-4 4z"></path><path d="M8 9h8M8 12h5"></path>',
+    settings: '<path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6"></path>',
+    billing: '<rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M3 9h18M7 14h4"></path>',
+    console_settings: '<circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1z"></path>',
+    persona_dashboard: '<path d="M4 19V9M10 19V5M16 19v-7M22 19V3"></path><path d="M2 19h21"></path>',
   };
   return `<svg class="mobile-task-dock-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${paths[moduleId] || paths.personas}</svg>`;
+}
+
+function mobilePageToolbarDescriptor() {
+  if (state.view === "workspace") {
+    const module = currentModule();
+    return { icon: module.id, title: module.label };
+  }
+  if (state.view === "accounts") {
+    const panel = ["accounts", "proxies", "browsers"].includes(state.accountBrowserPanel)
+      ? state.accountBrowserPanel
+      : "accounts";
+    if (panel === "proxies") return { icon: "proxies", title: "代理 IP" };
+    if (panel === "browsers") return { icon: "browser_list", title: "浏览器列表" };
+    return { icon: "accounts", title: "账号管理" };
+  }
+  return {
+    tasks: { icon: "tasks", title: "任务队列" },
+    social: { icon: "social", title: "浏览器发布" },
+    settings: { icon: "settings", title: "系统状态" },
+    billing: { icon: "billing", title: "订阅与算力" },
+    console_settings: { icon: "console_settings", title: "设置" },
+    persona_dashboard: { icon: "persona_dashboard", title: "人设看板" },
+  }[state.view] || { icon: "personas", title: "控制台" };
+}
+
+function syncMobilePageToolbar() {
+  const title = $("mobilePageToolbarTitle");
+  const icon = $("mobilePageToolbarIcon");
+  const action = $("mobilePageContextAction");
+  if (!title || !icon || !action) return;
+
+  const descriptor = mobilePageToolbarDescriptor();
+  title.textContent = descriptor.title;
+  icon.innerHTML = renderMobileTaskIcon(descriptor.icon);
+
+  const activePanel = document.querySelector(".view.is-active");
+  const sourceAction = Array.from(activePanel?.querySelectorAll("[data-persona-mobile-list-toggle]") || [])
+    .find((button) => !button.closest("[hidden]"));
+  const sidebarId = String(sourceAction?.dataset.personaMobileListToggle || "");
+  const sidebar = sidebarId ? document.getElementById(sidebarId) : null;
+  if (!sourceAction || !sidebar) {
+    action.hidden = true;
+    action.removeAttribute("data-persona-mobile-list-toggle");
+    action.removeAttribute("aria-controls");
+    action.setAttribute("aria-expanded", "false");
+    return;
+  }
+
+  const label = sourceAction.querySelector("span")?.textContent?.trim() || "选择人设";
+  action.hidden = false;
+  action.dataset.personaMobileListToggle = sidebarId;
+  action.setAttribute("aria-controls", sidebarId);
+  action.setAttribute("aria-expanded", sidebar.classList.contains("is-mobile-open") ? "true" : "false");
+  $("mobilePageContextLabel").textContent = label;
 }
 
 function renderMobileTaskDock() {
@@ -5683,6 +5773,7 @@ function renderWorkspace(renderMenu = true) {
   if (isPersonaWorkspaceModule(module.id)) renderPersonaModule();
   else renderSimpleFlowModule(module.id);
   renderConfirmSummary();
+  syncMobilePageToolbar();
   });
 }
 
@@ -6831,7 +6922,6 @@ function renderPublishLinkSettings(persona = selectedPersona()) {
     : "当前未启用发布链接";
   return `
     <div class="publish-link-settings">
-      <span class="publish-link-settings-label">链接模板</span>
       <span class="publish-link-settings-copy">
         <strong>${esc(preset?.name || "不添加链接")}</strong>
         <small title="${esc(summary)}">${esc(summary)}</small>
@@ -7915,7 +8005,7 @@ function renderTaskQueueView() {
           <svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path d="M4 5h16"></path><path d="M4 12h16"></path><path d="M4 19h16"></path>
           </svg>
-          <span>人设列表</span>
+          <span>选择人设</span>
         </button>`,
       actions: `
         <div class="task-queue-actionbar">
@@ -8698,9 +8788,7 @@ function renderPublishPreviewCard(activePost, sourceRows = [], persona = selecte
 
 function renderPublishPostSelectionList(persona = selectedPersona(), source = state.publishContentSource) {
   const cleanSource = normalizePublishContentSource(source);
-  if (cleanSource === "custom") {
-    return `<div class="empty-state">自定义模式不需要选择草稿，右侧直接输入发布内容。</div>`;
-  }
+  if (cleanSource === "custom") return "";
   const rows = publishSourceRows(persona, cleanSource);
   const selectedIds = new Set(syncPublishSelectedPostIds(persona, cleanSource, rows));
   if (!rows.length) return `<div class="empty-state">当前还没有${cleanSource === "favorites" ? "收藏内容" : "草稿"}。</div>`;
@@ -8782,7 +8870,7 @@ function renderPublishContentPreview(persona = selectedPersona(), source = state
           </div>
           ${renderPublishPreviewCard(activePost, sourceRows, persona)}
         </div>
-      ` : `<div class="empty-state">请先在左侧选择要发布的内容。</div>`}
+      ` : ""}
       <input id="simpleContent" type="hidden" value="${esc(publishContentForPost(activePost, persona))}" />
     </section>`;
 }
@@ -8791,6 +8879,7 @@ function renderPublishContentPanel(persona = selectedPersona()) {
   const source = normalizePublishContentSource();
   return `
     <div class="publish-content-layout">
+      ${source === "custom" ? `<div class="publish-mobile-custom-link-settings">${renderPublishLinkSettings(persona)}</div>` : ""}
       ${renderPublishContentPreview(persona, source)}
       <section class="publish-post-picker">
         <div class="publish-panel-head">
@@ -8821,13 +8910,13 @@ function publishMobileSelectionItems(persona = selectedPersona(), source = state
     }));
 }
 
-function renderPublishMobileSelectionStrip(persona = selectedPersona(), mode = "publish_now") {
+function renderPublishMobileSelectionStrip(persona = selectedPersona(), mode = "publish_now", expanded = false) {
   if (normalizedPublishMode(mode) !== "publish_now") return "";
   const selectedItems = publishMobileSelectionItems(persona);
   if (!selectedItems.length) return "";
   const activeId = String(state.publishPreviewPostId || selectedItems[0]?.id || "");
   return `
-    <div class="publish-mobile-selection-strip" aria-label="已选发布内容">
+    <div id="publishMobileSelectionStrip" class="publish-mobile-selection-strip" aria-label="已选发布内容" aria-hidden="${expanded ? "false" : "true"}">
       ${selectedItems.map((item) => `
         <div class="publish-mobile-selection-chip ${item.id === activeId ? "is-active" : ""}">
           <button
@@ -8850,6 +8939,88 @@ function renderPublishMobileSelectionStrip(persona = selectedPersona(), mode = "
         </div>
       `).join("")}
     </div>`;
+}
+
+const PUBLISH_SELECTION_LONG_PRESS_MS = 520;
+
+function setPublishMobileSelectionExpanded(dock, expanded) {
+  if (!dock) return;
+  const nextExpanded = Boolean(expanded && isMobileNavMode());
+  const trigger = dock.querySelector("#executeSimpleFlow");
+  const strip = dock.querySelector(".publish-mobile-selection-strip");
+  const clear = dock.querySelector("#clearPublishMobileSelectionEdit");
+  const cancel = dock.querySelector("#cancelPublishMobileSelectionEdit");
+  state.publishMobileSelectionExpanded = nextExpanded;
+  dock.classList.toggle("is-selection-expanded", nextExpanded);
+  trigger?.setAttribute("aria-expanded", nextExpanded ? "true" : "false");
+  strip?.setAttribute("aria-hidden", nextExpanded ? "false" : "true");
+  clear?.setAttribute("aria-hidden", nextExpanded ? "false" : "true");
+  cancel?.setAttribute("aria-hidden", nextExpanded ? "false" : "true");
+}
+
+async function preflightSimpleFlowExecution(moduleId = state.activeModule) {
+  if (moduleId !== "publishing") return true;
+  const publishMode = normalizedPublishMode($("simplePublishMode")?.value || state.simpleBranches.publishing);
+  if (publishMode !== "publish_now") return true;
+  const persona = selectedPersona();
+  if (!persona) {
+    showMsg("commandMsg", "请先选择一个人设。", false);
+    return false;
+  }
+  const account = publishAccountForPersona(persona);
+  if (!account) {
+    await promptPersonaAccountBinding(persona);
+    return false;
+  }
+  if (!canSubmitPublishWithAccount(account)) {
+    showMsg("commandMsg", publishAccountBlockMessage(account), false);
+    return false;
+  }
+  return true;
+}
+
+function bindPublishMobileSelectionLongPress() {
+  const trigger = $("executeSimpleFlow");
+  const dock = trigger?.closest(".publish-command-actions");
+  const strip = dock?.querySelector(".publish-mobile-selection-strip");
+  if (!trigger || !dock || !strip) return;
+  let timer = 0;
+  let startX = 0;
+  let startY = 0;
+  const cancelPending = () => {
+    if (timer) window.clearTimeout(timer);
+    timer = 0;
+  };
+  trigger.addEventListener("pointerdown", (event) => {
+    if (!isMobileNavMode() || trigger.disabled || event.isPrimary === false) return;
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    cancelPending();
+    startX = Number(event.clientX || 0);
+    startY = Number(event.clientY || 0);
+    timer = window.setTimeout(() => {
+      timer = 0;
+      trigger.dataset.publishSelectionLongPress = "true";
+      setPublishMobileSelectionExpanded(dock, true);
+    }, PUBLISH_SELECTION_LONG_PRESS_MS);
+  });
+  trigger.addEventListener("pointermove", (event) => {
+    if (!timer) return;
+    const distance = Math.hypot(Number(event.clientX || 0) - startX, Number(event.clientY || 0) - startY);
+    if (distance > 10) cancelPending();
+  });
+  trigger.addEventListener("pointerup", () => {
+    cancelPending();
+    if (trigger.dataset.publishSelectionLongPress === "true") {
+      window.setTimeout(() => delete trigger.dataset.publishSelectionLongPress, 700);
+    }
+  });
+  trigger.addEventListener("pointercancel", () => {
+    cancelPending();
+    delete trigger.dataset.publishSelectionLongPress;
+  });
+  trigger.addEventListener("contextmenu", (event) => {
+    if (isMobileNavMode()) event.preventDefault();
+  });
 }
 
 function publishHistoryRecordTitle(record, index = 0) {
@@ -9484,10 +9655,21 @@ function renderSimpleFlowModule(moduleId) {
   const publishSelectionItems = moduleId === "publishing" && publishModeForAction === "publish_now"
     ? publishMobileSelectionItems(selectedPersona())
     : [];
+  if (!publishSelectionItems.length || moduleId !== "publishing" || publishModeForAction !== "publish_now") {
+    state.publishMobileSelectionExpanded = false;
+  }
+  const publishSelectionExpanded = Boolean(
+    state.publishMobileSelectionExpanded
+    && publishSelectionItems.length
+    && isMobileNavMode()
+  );
   const publishSelectionBadge = publishSelectionItems.length > 1
     ? `<span class="publish-mobile-selection-count" aria-label="已选 ${esc(publishSelectionItems.length)} 篇">${esc(publishSelectionItems.length)}</span>`
     : "";
-  const actionHtml = moduleId === "automation" || publishModeForAction === "publish_history" ? "" : `<div class="command-actions ${moduleId === "publishing" ? "publish-command-actions" : ""}">${moduleId === "publishing" ? renderPublishMobileSelectionStrip(selectedPersona(), publishModeForAction) : ""}<button id="executeSimpleFlow" type="button" class="primary" aria-busy="${actionBusy ? "true" : "false"}" ${moduleId === "publishing" ? dailyPublishActionAttrs() : ""} ${actionBusy || actionBlocked ? "disabled" : ""}>${actionBusy ? renderBusyButtonContent(`${actionLabel}中`, true, state.simpleFlowPendingStartedAt) : (actionBlocked ? "其他任务执行中" : (moduleId === "publishing" && dailyPublishIsLocked() ? "今日发布已锁定" : esc(actionLabel)))}${publishSelectionBadge}</button></div>`;
+  const publishSelectionA11yAttrs = publishSelectionItems.length
+    ? `aria-controls="publishMobileSelectionStrip" aria-expanded="${publishSelectionExpanded ? "true" : "false"}"`
+    : "";
+  const actionHtml = moduleId === "automation" || publishModeForAction === "publish_history" ? "" : `<div class="command-actions ${moduleId === "publishing" ? `publish-command-actions${publishSelectionExpanded ? " is-selection-expanded" : ""}` : ""}">${moduleId === "publishing" ? renderPublishMobileSelectionStrip(selectedPersona(), publishModeForAction, publishSelectionExpanded) : ""}${moduleId === "publishing" && publishSelectionItems.length ? `<button id="clearPublishMobileSelectionEdit" type="button" class="publish-mobile-selection-clear" aria-hidden="${publishSelectionExpanded ? "false" : "true"}">清空</button>` : ""}<button id="executeSimpleFlow" type="button" class="primary" aria-busy="${actionBusy ? "true" : "false"}" ${publishSelectionA11yAttrs} ${moduleId === "publishing" ? dailyPublishActionAttrs() : ""} ${actionBusy || actionBlocked ? "disabled" : ""}>${actionBusy ? renderBusyButtonContent(`${actionLabel}中`, true, state.simpleFlowPendingStartedAt) : (actionBlocked ? "其他任务执行中" : (moduleId === "publishing" && dailyPublishIsLocked() ? "今日发布已锁定" : esc(actionLabel)))}${publishSelectionBadge}</button>${moduleId === "publishing" && publishSelectionItems.length ? `<button id="cancelPublishMobileSelectionEdit" type="button" class="publish-mobile-selection-cancel" aria-hidden="${publishSelectionExpanded ? "false" : "true"}">取消</button>` : ""}</div>`;
   $("moduleBody").innerHTML = `
     ${moduleId === "publishing" ? renderDailyPublishLimitBanner() : ""}
     ${body}
@@ -9505,6 +9687,18 @@ function renderSimpleFlowModule(moduleId) {
   }
   bindSimpleFlowInputs(moduleId);
   applyDailyPublishButtonLocks($("moduleBody"));
+  if (moduleId === "publishing") bindPublishMobileSelectionLongPress();
+  $("clearPublishMobileSelectionEdit")?.addEventListener("click", () => {
+    const persona = selectedPersona();
+    const source = normalizePublishContentSource();
+    setPublishSelectedPostIds(persona, source, []);
+    state.publishMobileSelectionExpanded = false;
+    renderSimpleFlowModule("publishing");
+  });
+  $("cancelPublishMobileSelectionEdit")?.addEventListener("click", () => {
+    const dock = $("cancelPublishMobileSelectionEdit")?.closest(".publish-command-actions");
+    setPublishMobileSelectionExpanded(dock, false);
+  });
   if (moduleId === "publishing" && normalizedPublishMode(branch) === "matrix_start") {
     document.querySelector("[data-matrix-select-all]")?.addEventListener("click", () => {
       state.matrixPublish.personaIds = publishOrderedPersonaIds();
@@ -9517,12 +9711,19 @@ function renderSimpleFlowModule(moduleId) {
       renderSimpleFlowModule("publishing");
     });
   }
-  if ($("executeSimpleFlow")) $("executeSimpleFlow").addEventListener("click", async () => {
+  if ($("executeSimpleFlow")) $("executeSimpleFlow").addEventListener("click", async (event) => {
+    const trigger = $("executeSimpleFlow");
+    if (trigger?.dataset.publishSelectionLongPress === "true") {
+      event.preventDefault();
+      event.stopPropagation();
+      delete trigger.dataset.publishSelectionLongPress;
+      return;
+    }
     if (state.simpleFlowPending) return;
+    if (!(await preflightSimpleFlowExecution(moduleId))) return;
     state.simpleFlowPending = true;
     state.simpleFlowPendingModule = moduleId;
     state.simpleFlowPendingStartedAt = Date.now();
-    const trigger = $("executeSimpleFlow");
     if (trigger) {
       trigger.disabled = true;
       trigger.setAttribute("aria-busy", "true");
@@ -16491,7 +16692,7 @@ function renderPersonaDetail() {
             <svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
               <path d="M4 5h16"></path><path d="M4 12h16"></path><path d="M4 19h16"></path>
             </svg>
-            <span>人设列表</span>
+            <span>选择人设</span>
           </button>
         </div>
       </div>
@@ -16868,6 +17069,7 @@ async function loadTasks() {
   const host = $("taskTable");
   host.innerHTML = renderTaskQueueView();
   setPersonaMobileSidebarOpen(reopenTaskQueuePersonaSidebar, "taskQueuePersonaSidebar");
+  syncMobilePageToolbar();
 }
 
 async function showTaskDetail(id) {
@@ -17031,6 +17233,11 @@ function openLiveBrowserTaskView(taskId = "") {
   setAccountBrowserPanel("browsers");
   refreshLiveBrowserSessionsSoon(cleanTaskId);
 }
+
+window.VectoConsoleNavigation = {
+  ...(window.VectoConsoleNavigation || {}),
+  openLiveBrowserTaskView,
+};
 
 function updateAccountStatusViews() {
   const accountById = new Map((state.socialAccounts || []).map((account) => [String(account.id || ""), account]));
@@ -19373,7 +19580,7 @@ function renderAccountPool() {
           </div>
           <button type="button" class="persona-mobile-list-toggle" data-persona-mobile-list-toggle="accountPoolPersonaSidebar" aria-controls="accountPoolPersonaSidebar" aria-expanded="false">
             <svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16"></path><path d="M4 12h16"></path><path d="M4 19h16"></path></svg>
-            <span>人设列表</span>
+            <span>选择人设</span>
           </button>
         </div>
         <div class="account-pool-body">
@@ -19813,6 +20020,7 @@ function renderSocialAccounts() {
   const reopenAccountPersonaSidebar = Boolean(document.getElementById("accountPoolPersonaSidebar")?.classList.contains("is-mobile-open"));
   grid.innerHTML = renderAccountPool();
   setPersonaMobileSidebarOpen(reopenAccountPersonaSidebar, "accountPoolPersonaSidebar");
+  syncMobilePageToolbar();
   });
 }
 
@@ -19859,6 +20067,7 @@ function syncAccountBrowserPanel() {
     page.hidden = !selected;
   });
   syncProxyMarketUnreadBadge();
+  syncMobilePageToolbar();
 }
 
 function renderLiveBrowserSessions() {
@@ -20769,7 +20978,12 @@ async function submitMatrixPublishTask(messageId = "commandMsg") {
     const skipped = Array.isArray(result.skipped) ? result.skipped : [];
     const errors = Array.isArray(result.errors) ? result.errors : [];
     created.forEach((item) => mergeSocialTaskState(item?.login_task, item?.task || item));
-    const matrixToastTarget = { view: "tasks", taskPanel: "persona" };
+    const immediateCreated = created.filter((item) => !isFutureScheduledSocialTask(item?.task || item));
+    const firstImmediateTask = immediateCreated[0]?.task || immediateCreated[0] || null;
+    const firstImmediateTaskId = String(firstImmediateTask?.id || "").trim();
+    const matrixToastTarget = firstImmediateTaskId
+      ? socialTaskToastTarget(firstImmediateTask, "queued")
+      : { view: "tasks", taskPanel: "persona" };
     const matrixToastKey = `matrix-publish:${result.batch_id || Date.now()}`;
     showMsg(messageId, `矩阵发布已提交 ${created.length} 条任务，跳过 ${skipped.length} 条，失败 ${errors.length} 条。`, created.length > 0, {
       kind: created.length > 0 ? "queued" : "failed",
@@ -20780,7 +20994,6 @@ async function submitMatrixPublishTask(messageId = "commandMsg") {
       target: matrixToastTarget,
       key: matrixToastKey,
     });
-    const immediateCreated = created.filter((item) => !isFutureScheduledSocialTask(item?.task || item));
     const taskIdsByPersona = new Map();
     immediateCreated.forEach((item) => {
       const taskId = String(item?.task?.id || item?.id || "").trim();
@@ -20794,7 +21007,6 @@ async function submitMatrixPublishTask(messageId = "commandMsg") {
       });
     });
     await loadSocial();
-    const firstImmediateTaskId = String(immediateCreated[0]?.task?.id || immediateCreated[0]?.id || "").trim();
     if (firstImmediateTaskId) openLiveBrowserTaskView(firstImmediateTaskId);
     return result;
   } finally {
@@ -20891,6 +21103,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
         taskId: result.task?.id || "",
         taskPanel: cleanPersonaId ? "persona" : "regular",
         personaId: cleanPersonaId,
+        target: socialTaskToastTarget(result.task, "queued"),
       });
       if (!waitingForSchedule) refreshLiveBrowserSessionsSoon(String(result.task?.id || ""));
       await loadSocial();
@@ -20947,6 +21160,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
       taskId: result.task?.id || "",
       taskPanel: cleanPersonaId ? "persona" : "regular",
       personaId: cleanPersonaId,
+      target: socialTaskToastTarget(result.task, "queued"),
     });
     if (!waitingForSchedule) refreshLiveBrowserSessionsSoon(String(result.task?.id || ""), 60, 500);
     await loadSocial();
@@ -20998,6 +21212,13 @@ function bindEvents() {
   applyLanguage(currentLanguage());
   bindMobileNavigation();
   bindPersonaMobileSidebarMode();
+  $("mobilePageContextAction")?.addEventListener("click", () => {
+    const action = $("mobilePageContextAction");
+    const sidebarId = String(action?.dataset.personaMobileListToggle || "");
+    const sidebar = sidebarId ? document.getElementById(sidebarId) : null;
+    if (!sidebar) return;
+    setPersonaMobileSidebarOpen(!sidebar.classList.contains("is-mobile-open"), sidebarId);
+  });
   document.addEventListener("visibilitychange", () => {
     syncSocialTaskToastAutoRefresh();
     syncTaskQueueAutoRefresh();

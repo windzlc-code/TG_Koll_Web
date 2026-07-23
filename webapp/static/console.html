@@ -26,21 +26,6 @@
         <a data-site-nav-key="aboutVecto" href="/about-vecto.html"><span data-site-copy="aboutVecto">了解 Vecto</span></a>
       </nav>
       <div class="header-actions">
-        <button
-          id="mobileNavToggle"
-          class="site-icon-button mobile-nav-toggle"
-          type="button"
-          aria-label="打开控制台导航"
-          title="打开控制台导航"
-          aria-controls="consoleSidebar"
-          aria-expanded="false"
-        >
-          <svg class="mobile-nav-toggle-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <rect x="3" y="3" width="18" height="18" rx="2"></rect>
-            <path d="M9 3v18"></path>
-            <path d="m14 9 3 3-3 3"></path>
-          </svg>
-        </button>
         <details class="site-mobile-menu" data-site-mobile-menu>
           <summary class="site-menu-toggle" data-site-menu-toggle aria-expanded="false">
             <svg class="site-menu-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h14"></path></svg>
@@ -151,6 +136,39 @@
       tabindex="-1"
       hidden
     ></button>
+
+    <div id="mobilePageToolbar" class="mobile-page-toolbar" aria-label="当前页面导航">
+      <button
+        id="mobileNavToggle"
+        class="mobile-nav-toggle"
+        type="button"
+        aria-label="打开控制台导航"
+        title="打开控制台导航"
+        aria-controls="consoleSidebar"
+        aria-expanded="false"
+      >
+        <svg class="mobile-nav-toggle-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+          <path d="M9 3v18"></path>
+        </svg>
+      </button>
+      <div class="mobile-page-toolbar-title" aria-live="polite">
+        <span id="mobilePageToolbarIcon" class="mobile-page-toolbar-icon" aria-hidden="true"></span>
+        <strong id="mobilePageToolbarTitle">我的人设</strong>
+      </div>
+      <button
+        id="mobilePageContextAction"
+        class="mobile-page-context-action"
+        type="button"
+        aria-expanded="false"
+        hidden
+      >
+        <svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M4 5h16"></path><path d="M4 12h16"></path><path d="M4 19h16"></path>
+        </svg>
+        <span id="mobilePageContextLabel">选择人设</span>
+      </button>
+    </div>
 
     <main id="main-content" class="console-main" tabindex="-1">
       <h2 id="viewTitle" class="sr-only">任务工作台</h2>

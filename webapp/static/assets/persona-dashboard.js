@@ -2618,13 +2618,17 @@ function pdBindAutomationEvents(persona, root) {
       }
       try {
         pdSetMsg(payload.strategy_label ? `正在创建任务：${payload.strategy_label}...` : "正在创建社媒自动化任务...", "ok");
-        await pdApi("/api/persona_dashboard/automation/tasks", {
+        const created = await pdApi("/api/persona_dashboard/automation/tasks", {
           method: "POST",
           body: { persona_id: persona.id, account_id: accountId, platform, task_type: taskType, payload },
         });
+        const createdTaskId = String((created && created.task && created.task.id) || (created && created.id) || "").trim();
         await pdLoadAutomationOverview();
         pdSetMsg("任务已进入自动化队列。", "ok");
         pdRenderDashboard();
+        if (taskType === "publish_post" && createdTaskId) {
+          window.VectoConsoleNavigation?.openLiveBrowserTaskView?.(createdTaskId);
+        }
       } catch (err) {
         pdSetMsg(String((err && (err.detail || err.message)) || err || "创建任务失败"), "err");
       }

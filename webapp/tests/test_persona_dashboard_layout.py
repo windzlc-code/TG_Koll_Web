@@ -140,6 +140,21 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn(".persona-hot-metric-values > span {", mobile_styles)
         self.assertIn("flex-direction: column;", mobile_styles)
 
+    def test_mobile_persona_hot_detail_metrics_stay_in_one_row(self):
+        marker = "/* Persona statistics keep two clear rows and adapt each row without page overflow. */"
+        mobile_styles = self.styles[self.styles.index(marker):]
+
+        self.assertIn(
+            ".persona-profile-data-panel .persona-hot-summary-metrics--hot {\n"
+            "    grid-template-columns: repeat(4, minmax(0, 1fr));",
+            mobile_styles,
+        )
+        self.assertIn(
+            ".persona-profile-data-panel .persona-hot-total-metric {\n"
+            "    grid-column: 1 / -1;",
+            mobile_styles,
+        )
+
     def test_second_mobile_dock_click_scrolls_active_view_to_top(self):
         handler_start = self.console_script.index(
             "const handleWorkspaceModuleNavigation = async (event) => {"
@@ -257,16 +272,52 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn('.slice(0, 86) || "当前内容为空。"', self.console_script)
         self.assertNotIn('.slice(0, 170))}</p>', self.console_script)
 
-    def test_mobile_persona_buttons_share_persistent_style(self):
-        selector = ".persona-mobile-list-toggle[data-persona-mobile-list-toggle]"
-        start = self.styles.index(selector)
-        rule = self.styles[start:self.styles.index("\n  }", start) + 4]
+    def test_mobile_page_toolbar_is_shared_and_keeps_publish_header_compact(self):
+        header_start = self.console_script.index("function renderPublishHeaderRow(mode, account)")
+        header_end = self.console_script.index("\nfunction padSchedulePart", header_start)
+        header = self.console_script[header_start:header_end]
+        toolbar_start = self.markup.index('id="mobilePageToolbar"')
+        toolbar_end = self.markup.index('<main id="main-content"', toolbar_start)
+        toolbar = self.markup[toolbar_start:toolbar_end]
+        header_end = self.markup.index("</header>")
+        site_header = self.markup[:header_end]
 
+        self.assertNotIn('id="mobileNavToggle"', site_header)
+        self.assertIn('id="mobileNavToggle"', toolbar)
+        self.assertIn('id="mobilePageToolbarTitle"', toolbar)
+        self.assertIn('id="mobilePageContextAction"', toolbar)
+        self.assertIn('id="mobilePageContextLabel"', toolbar)
+        self.assertIn("function mobilePageToolbarDescriptor()", self.console_script)
+        self.assertIn("function syncMobilePageToolbar()", self.console_script)
+        self.assertIn('grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);', self.styles)
+        self.assertIn("height: 52px;", self.styles)
+        self.assertIn("min-height: 52px;", self.styles)
+        self.assertIn(".mobile-page-toolbar > .mobile-nav-toggle", self.styles)
+        self.assertIn(".mobile-page-context-action", self.styles)
+        self.assertIn("grid-column: 3;", self.styles)
+        self.assertIn("justify-self: end;", self.styles)
+        self.assertIn('class="publish-inline-title">发布</strong>', header)
+        self.assertNotIn('${renderMobileTaskIcon("publishing")}', header)
+        self.assertNotIn('class="publish-header-end-slot"', header)
+        self.assertIn('data-persona-mobile-list-toggle="publishPersonaSidebar"', header)
+
+    def test_mobile_persona_buttons_share_persistent_style(self):
         self.assertGreaterEqual(self.console_script.count('class="persona-mobile-list-toggle"'), 4)
-        self.assertIn("position: fixed;", rule)
-        self.assertIn("top: calc(var(--site-header-height) + 8px);", rule)
-        self.assertIn("right: max(18px, env(safe-area-inset-right, 0px));", rule)
-        self.assertIn("z-index: 130;", rule)
+        self.assertNotIn('<span>人设列表</span>', self.console_script)
+        self.assertGreaterEqual(self.console_script.count("<span>选择人设</span>"), 5)
+        self.assertIn(
+            ".console-main .persona-mobile-list-toggle[data-persona-mobile-list-toggle]",
+            self.styles,
+        )
+        self.assertIn(
+            'Array.from(activePanel?.querySelectorAll("[data-persona-mobile-list-toggle]") || [])',
+            self.console_script,
+        )
+        self.assertIn('.find((button) => !button.closest("[hidden]"));', self.console_script)
+        self.assertIn(
+            "setPersonaMobileSidebarOpen(!sidebar.classList.contains(\"is-mobile-open\"), sidebarId);",
+            self.console_script,
+        )
 
     def test_mobile_publish_preview_uses_number_only_square_tabs_without_body(self):
         self.assertIn(
@@ -286,11 +337,11 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.styles,
         )
         self.assertIn("border-radius: 0;", self.styles)
-        self.assertIn(
+        self.assertNotIn(
             ".console-page .view:has(.publish-content-preview--selection)",
             self.styles,
         )
-        self.assertIn(
+        self.assertNotIn(
             ".module-panel.is-publishing-module:has(.publish-content-preview--selection)",
             self.styles,
         )
@@ -316,8 +367,41 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('content_override: publishContentForPost(post, persona)', self.console_script)
         self.assertIn('if (state.activeModule === "publishing") renderSimpleFlowModule("publishing");', self.console_script)
         self.assertIn(".publish-link-settings {", self.styles)
-        self.assertIn('<span class="publish-link-settings-label">链接模板</span>', self.console_script)
+        self.assertNotIn('<span class="publish-link-settings-label">', self.console_script)
+        self.assertNotIn("publish-link-settings-label", self.styles)
         self.assertNotIn('<span class="publish-link-settings-label">临时链接</span>', self.console_script)
+
+    def test_mobile_publish_source_stays_above_content_and_link_panel_is_stable(self):
+        responsive_start = self.styles.index("@media (max-width: 1180px)")
+        responsive_styles = self.styles[responsive_start:]
+
+        self.assertIn(
+            ".publish-post-picker {\n"
+            "    order: -1;",
+            responsive_styles,
+        )
+        self.assertIn(
+            ".console-page .publish-source-tabs {\n"
+            "    width: 100%;\n"
+            "    min-width: 0;",
+            responsive_styles,
+        )
+        self.assertIn(
+            ".publish-content-preview .publish-link-settings {\n"
+            "    padding: 9px 12px;\n"
+            "    border: 1px solid var(--line);\n"
+            "    border-radius: var(--radius);\n"
+            "    background: var(--panel-solid);",
+            responsive_styles,
+        )
+        self.assertNotIn(
+            ".module-panel.is-publishing-module:has(.publish-content-preview--selection)",
+            responsive_styles,
+        )
+        self.assertNotIn(
+            ".console-page .view:has(.publish-content-preview--selection)",
+            responsive_styles,
+        )
 
     def test_link_settings_support_real_enable_disable_and_keep_mobile_header_visible(self):
         self.assertIn('data-persona-activate-preset-id="${esc(presetId)}"', self.console_script)
