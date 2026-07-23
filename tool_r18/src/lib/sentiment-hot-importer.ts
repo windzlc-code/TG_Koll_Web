@@ -1289,7 +1289,7 @@ export function applyPersonaGuardToSentimentHotStrategy(args: {
     || segmentPersonaWords(cleanText(args.archiveName))[0]
     || args.strategy.normalAnchorTerms.flatMap((term) => segmentPersonaWords(term))[0];
   args.strategy.personaGuardTerms = personaIdentityAnchor ? [personaIdentityAnchor] : personaGuardTerms.slice(0, 1);
-  args.strategy.primaryQueries = [...new Set([...personaGuardTerms, ...args.strategy.primaryQueries])];
+  args.strategy.primaryQueries = [...new Set([...personaGuardTerms, ...ruleDomainAnchors, ...args.strategy.primaryQueries])];
   args.strategy.requiredAnchorTerms = [...new Set([...ruleDomainAnchors, ...args.strategy.requiredAnchorTerms])];
   args.strategy.strictAcceptTerms = [...new Set([...personaGuardTerms, ...args.strategy.strictAcceptTerms])];
   args.strategy.normalAcceptTerms = [...new Set([...personaGuardTerms, ...args.strategy.normalAcceptTerms])];

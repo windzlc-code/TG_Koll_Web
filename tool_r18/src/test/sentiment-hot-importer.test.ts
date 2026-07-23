@@ -854,6 +854,12 @@ describe("sentiment hot importer", () => {
       "\u8db3\u7403\u8d5b\u4e8b",
       "\u6295\u8d44\u7406\u8d22",
     ]));
+    expect(strategy.primaryQueries).toEqual(expect.arrayContaining([
+      "\u523a\u9752Coser",
+      "\u7535\u7ade\u6e38\u620f",
+      "\u8db3\u7403\u8d5b\u4e8b",
+      "\u6295\u8d44\u7406\u8d22",
+    ]));
   });
 
   it("does not let a persona role name bypass normal domain anchors", () => {
