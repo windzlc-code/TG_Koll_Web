@@ -17236,7 +17236,7 @@ body.console-page {
 }
 
 /* Keep live browser sessions visually compact without rebuilding the noVNC iframe. */
-.console-page .live-browser-card {
+.console-page [data-live-browser-card].live-browser-card {
   gap: 4px;
   padding: 5px;
   overflow: visible;
@@ -17248,7 +17248,7 @@ body.console-page {
   animation: none;
 }
 
-.console-page .live-browser-card:is(
+.console-page [data-live-browser-card].live-browser-card:is(
   .is-queued,
   .is-running,
   .is-manual,
@@ -17435,7 +17435,7 @@ body.console-page {
 }
 
 @media (max-width: 760px) {
-  .console-page .live-browser-card {
+  .console-page [data-live-browser-card].live-browser-card {
     gap: 3px;
     padding: 4px;
   }
