@@ -14836,7 +14836,7 @@ async function attachPersonaTaskMediaToPost(replaceExisting = false) {
   delete state.personaMediaTasks[personaMediaTaskKey(persona.id, post.id)];
   renderPersonaDetail();
   renderConfirmSummary();
-  showMsg("commandMsg", replaceExisting ? "任务结果已替换草稿媒体。" : "任务结果已添加至草稿。", true);
+  showMsg("commandMsg", replaceExisting ? "任务结果已覆盖草稿全部媒体。" : "任务结果已添加至草稿。", true);
 }
 
 async function savePersonaPostMediaFiles({
@@ -16046,8 +16046,8 @@ function renderPersonaImageLibraryGrid(library) {
 }
 
 function renderPersonaMediaTaskResult(personaId, postId, { mediaBusy = false, mediaBusyStartedAt = 0 } = {}) {
-  const runButton = `<button type="button" class="primary" data-persona-run-media-task aria-busy="${mediaBusy ? "true" : "false"}" ${mediaBusy ? "disabled" : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, mediaBusyStartedAt) : "生成预览"}</button>`;
   const taskState = personaMediaTaskState(personaId, postId);
+  const runButton = `<button type="button" class="primary" data-persona-run-media-task aria-busy="${mediaBusy ? "true" : "false"}" ${mediaBusy ? "disabled" : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, mediaBusyStartedAt) : (taskState?.taskId ? "重新生成" : "生成预览")}</button>`;
   if (!taskState?.taskId) return `
     <div class="empty-state">提交生成任务后，这里会显示结果预览，并可直接添加至草稿。</div>
     <div class="row-actions persona-media-task-actions">
@@ -16073,7 +16073,7 @@ function renderPersonaMediaTaskResult(personaId, postId, { mediaBusy = false, me
       ${runButton}
       ${missingPersonaImage ? `<button type="button" class="primary" data-persona-open-image-settings="${esc(personaId)}">去生成人设图</button>` : ""}
       <button type="button" class="primary" data-persona-attach-task-media="append" ${items.length ? "" : "disabled"}>添加至草稿</button>
-      <button type="button" data-persona-attach-task-media="replace" ${items.length ? "" : "disabled"}>替换草稿媒体</button>
+      <button type="button" data-persona-attach-task-media="replace" ${items.length ? "" : "disabled"}>覆盖全部媒体</button>
       ${canCancel ? `<button type="button" class="danger" data-persona-cancel-media-task="${esc(taskState.taskId)}">停止任务</button>` : ""}
     </div>
   `;

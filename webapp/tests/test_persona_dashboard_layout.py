@@ -68,6 +68,24 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             preview_position,
         )
         self.assertLess(preview_position, media_position)
+
+    def test_generation_and_media_result_actions_use_clear_compact_labels(self):
+        self.assertIn('(isRewriteMode ? "AI 重写推文" : "开始生成")', self.console_script)
+        self.assertNotIn('"自动生成草稿"', self.console_script)
+        self.assertIn('taskState?.taskId ? "重新生成" : "生成预览"', self.console_script)
+        self.assertIn(">添加至草稿</button>", self.console_script)
+        self.assertIn(">覆盖全部媒体</button>", self.console_script)
+        self.assertIn("persona-media-task-actions", self.console_script)
+        self.assertIn(
+            "renderPersonaMediaTaskResult(persona.id, post.id, { mediaBusy, mediaBusyStartedAt })",
+            self.console_script,
+        )
+        self.assertIn(
+            ".persona-media-task-actions {\n"
+            "  display: grid;\n"
+            "  grid-template-columns: repeat(3, minmax(0, 1fr));",
+            self.styles,
+        )
         self.assertIn(".persona-compose-media-stack", self.styles)
         self.assertIn("min-height: 60px;", self.styles)
 
