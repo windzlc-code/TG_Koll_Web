@@ -6283,6 +6283,15 @@ body.persona-touch-dragging .persona-list-card:active {
   margin: 0;
 }
 
+.persona-task-media-select .ui-action-icon rect,
+.persona-task-media-select .ui-action-icon path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .persona-task-media-select[aria-pressed="false"] .ui-action-icon path {
   opacity: 0;
 }
