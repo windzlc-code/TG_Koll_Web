@@ -63,7 +63,7 @@ const SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS = 35_000;
 const SENTIMENT_HOT_TOTAL_TIMEOUT_MS = 90_000;
 const SENTIMENT_HOT_REFRESH_STRATEGY_TIMEOUT_MS = 18_000;
 const SENTIMENT_HOT_SUPPLEMENT_MIN_REMAINING_MS = 12_000;
-const SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT = 2;
+const SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT = 8;
 const SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS = 72 * 60 * 60 * 1000;
 const SENTIMENT_HOT_MAX_PUBLISHED_AGE_MS = 730 * 24 * 60 * 60 * 1000;
 const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 19;
@@ -79,7 +79,6 @@ const SENTIMENT_HOT_SEMANTIC_RELEVANCE_VERSION = 4;
 // item back-to-back while still allowing a small persona pool to reach ten.
 const SENTIMENT_HOT_REPEAT_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 const SENTIMENT_HOT_REPEAT_ROTATION_BUCKET_MS = 10 * 60 * 1000;
-const SENTIMENT_HOT_RECENT_CACHE_REUSE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 export function resolveSentimentHotStrategyTimeoutMs(refresh: boolean, remainingMs: number): number {
   const availableMs = Number.isFinite(remainingMs) ? Math.max(1_000, remainingMs) : 1_000;
@@ -1024,16 +1023,7 @@ export function candidateMatchesRequestedFreshness(candidate: SentimentHotCandid
 
 function candidateMatchesOperationalFreshness(candidate: SentimentHotCandidate, value: unknown): boolean {
   const freshnessDays = normalizeSentimentHotFreshnessDays(value);
-  if (freshnessDays <= 0 || candidateMatchesRequestedFreshness(candidate, freshnessDays)) return true;
-  // A same-persona fallback row may have an older original publication date,
-  // but it is still eligible for the shortage rotation when it was captured
-  // recently. This is intentionally narrower than a generic stale backfill:
-  // missing capture times and old fallback rows remain rejected.
-  if (!isHistoricalSupplementCandidate(candidate)) return false;
-  const capturedAt = Date.parse(String(candidate.capturedAt || ""));
-  if (!Number.isFinite(capturedAt)) return false;
-  const age = Date.now() - capturedAt;
-  return age >= -24 * 60 * 60 * 1000 && age <= SENTIMENT_HOT_RECENT_CACHE_REUSE_MAX_AGE_MS;
+  return freshnessDays <= 0 || candidateMatchesRequestedFreshness(candidate, freshnessDays);
 }
 
 function sentimentHotKeywordTargetForMode(mode: SentimentHotSearchMode): number {
