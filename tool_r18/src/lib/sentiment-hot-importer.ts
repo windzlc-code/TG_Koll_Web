@@ -52,6 +52,9 @@ const THREADS_BROWSER_BOOTSTRAP_QUERY_LIMIT = 3;
 // request before falling back to DOM-only parsing.
 const THREADS_BROWSER_TEMPLATE_WAIT_ATTEMPTS = 12;
 const THREADS_BROWSER_REQUEST_TIMEOUT_MS = 5_000;
+const THREADS_BROWSER_DETAIL_RESCUE_LIMIT = 30;
+const THREADS_BROWSER_DETAIL_RESCUE_BATCH_SIZE = 10;
+const THREADS_BROWSER_DETAIL_RESCUE_MIN_REMAINING_MS = 5_000;
 const SENTIMENT_MODEL_KEYWORD_TARGET = 20;
 const SENTIMENT_HOT_KEYWORD_MODEL = "xai/grok-4.3";
 const THREADS_READER_INITIAL_QUERY_LIMIT = 24;
@@ -66,7 +69,7 @@ const SENTIMENT_HOT_SUPPLEMENT_MIN_REMAINING_MS = 12_000;
 const SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT = 8;
 const SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS = 72 * 60 * 60 * 1000;
 const SENTIMENT_HOT_MAX_PUBLISHED_AGE_MS = 730 * 24 * 60 * 60 * 1000;
-const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 19;
+const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 20;
 const SENTIMENT_HOT_TIMEOUT_WARNING = "\u71b1\u9ede\u6293\u53d6\u5df2\u8d85\u6642\uff0c\u5df2\u505c\u6b62\u5f8c\u7e8c\u8017\u6642\u6b65\u9a5f\uff1b\u8acb\u7a0d\u5f8c\u5237\u65b0\u6216\u6aa2\u67e5 Cookie / sessionid\u3002";
 const THREADS_SEARCH_CACHE_WARNING = "当前 Threads 搜索被限流，已使用 24 小时内缓存热点。";
 const SENTIMENT_HOT_NORMAL_KEYWORD_TARGET = 48;
@@ -729,6 +732,28 @@ const GENERIC_SENTIMENT_KEYWORDS = new Set([
   "實用",
   "推文",
   "文案",
+  "文化",
+  "體驗",
+  "体验",
+  "使用",
+]);
+
+const GENERIC_PERSONA_ROLE_TERMS = new Set([
+  "師傅",
+  "师傅",
+  "老師",
+  "老师",
+  "教師",
+  "教师",
+  "達人",
+  "达人",
+  "博主",
+  "店長",
+  "店长",
+  "先生",
+  "小姐",
+  "秘書",
+  "秘书",
 ]);
 
 const WEAK_RELEVANCE_STOPWORDS = new Set([
@@ -831,6 +856,10 @@ const PRIORITY_DOMAIN_KEYWORDS = new Set([
 function isGenericSentimentKeyword(value: string): boolean {
   const key = cleanText(value).toLowerCase();
   return GENERIC_SENTIMENT_KEYWORDS.has(key) && !DOMAIN_RELEVANCE_KEYWORDS.has(key);
+}
+
+function isGenericPersonaRoleTerm(value: unknown): boolean {
+  return GENERIC_PERSONA_ROLE_TERMS.has(cleanText(value));
 }
 
 function isWeakRelevanceKeyword(value: string): boolean {
@@ -1283,11 +1312,19 @@ export function applyPersonaGuardToSentimentHotStrategy(args: {
   const personaGuardTerms = prepareSentimentHotKeywordsForMode(args.personaSeedKeywords, "strict", {
     sourceText: args.sourceText,
     useRuleDomainFallback: true,
-  }).slice(0, 10);
+  }).filter((term) => !isGenericPersonaRoleTerm(term)).slice(0, 10);
   const ruleDomainAnchors = buildStrictPersonaDomainKeywords(args.sourceText);
+  const removeGenericRoles = (terms: string[]) => terms.filter((term) => !isGenericPersonaRoleTerm(term));
+  args.strategy.primaryQueries = removeGenericRoles(args.strategy.primaryQueries);
+  args.strategy.broadQueries = removeGenericRoles(args.strategy.broadQueries);
+  args.strategy.ecosystemQueries = removeGenericRoles(args.strategy.ecosystemQueries);
+  args.strategy.requiredAnchorTerms = removeGenericRoles(args.strategy.requiredAnchorTerms);
+  args.strategy.normalAnchorTerms = removeGenericRoles(args.strategy.normalAnchorTerms);
+  args.strategy.strictAcceptTerms = removeGenericRoles(args.strategy.strictAcceptTerms);
+  args.strategy.normalAcceptTerms = removeGenericRoles(args.strategy.normalAcceptTerms);
   const personaIdentityAnchor = personaGuardTerms[0]
-    || segmentPersonaWords(cleanText(args.archiveName))[0]
-    || args.strategy.normalAnchorTerms.flatMap((term) => segmentPersonaWords(term))[0];
+    || segmentPersonaWords(cleanText(args.archiveName)).find((term) => !isGenericPersonaRoleTerm(term))
+    || args.strategy.normalAnchorTerms.flatMap((term) => segmentPersonaWords(term)).find((term) => !isGenericPersonaRoleTerm(term));
   args.strategy.personaGuardTerms = personaIdentityAnchor ? [personaIdentityAnchor] : personaGuardTerms.slice(0, 1);
   args.strategy.primaryQueries = [...new Set([...personaGuardTerms, ...ruleDomainAnchors, ...args.strategy.primaryQueries])];
   args.strategy.requiredAnchorTerms = [...new Set([...ruleDomainAnchors, ...args.strategy.requiredAnchorTerms])];
@@ -2487,7 +2524,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   let parentSupplementCount = 0;
   if (hasModelStrategy && strategyResult) {
     const strategyCandidatePool = candidates;
-    modelParentCandidatePool = strategyCandidatePool.filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, "normal"));
+    modelParentCandidatePool = strategyCandidatePool.filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode));
     // Normal mode is the broad vertical search path. Its keyword quality
     // filter has already removed off-topic results; applying model anchors a
     // second time here can collapse a healthy live pool (for example 29
@@ -2554,7 +2591,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
         archiveId,
         keywords,
         excludeShown: false,
-        searchMode: "normal",
+        searchMode,
         freshnessDays: operationalFreshnessDays,
       }),
       archiveId,
@@ -2579,17 +2616,17 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   if (!liveOnlyRefresh && candidates.length < limit && hasModelStrategy && strategyResult) {
     const globalParentPool = readGlobalThreadsCandidateBackfill(
       archiveId,
-      sentimentHotStrategyTermsForMode(strategyResult, "normal"),
+      sentimentHotStrategyTermsForMode(strategyResult, searchMode),
       Math.max(limit * 4, 40),
-      "normal",
-    ).filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, "normal"));
+      searchMode,
+    ).filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode));
     const selectedKeys = new Set(candidates.flatMap((candidate) => getSentimentHotCandidateHistoryKeys(candidate)));
     const orderedGlobalSupplements = orderSentimentHotCandidatesForLegacyFallback(
       finalizeSentimentHotCandidatesForDisplay(globalParentPool, poolLimit, {
         archiveId,
         keywords,
         excludeShown: false,
-        searchMode: "normal",
+        searchMode,
         freshnessDays: operationalFreshnessDays,
       }),
       archiveId,
@@ -3130,10 +3167,21 @@ function compareSentimentHotFreshness(a: SentimentHotCandidate, b: SentimentHotC
   return (sentimentHotPublishedAtMs(b) || 0) - (sentimentHotPublishedAtMs(a) || 0);
 }
 
-function candidateMeetsDisplayQuality(candidate: SentimentHotCandidate, keywords: string[] = [], searchMode: SentimentHotSearchMode = "normal", freshnessDays = 0): SentimentHotCandidate | null {
+function candidateMeetsDisplayQuality(
+  candidate: SentimentHotCandidate,
+  keywords: string[] = [],
+  searchMode: SentimentHotSearchMode = "normal",
+  freshnessDays = 0,
+  rejectionStats?: Record<string, number>,
+  skipHeatGate = false,
+): SentimentHotCandidate | null {
+  const reject = (reason: string) => {
+    if (rejectionStats) rejectionStats[reason] = (rejectionStats[reason] || 0) + 1;
+    return null;
+  };
   const content = cleanSentimentCandidateContent(candidate.content || "");
-  if (!candidate?.id || !content) return null;
-  if (isLowQualitySentimentContent(content) || !isChineseSentimentCandidate(content)) return null;
+  if (!candidate?.id || !content) return reject("missing_content");
+  if (isLowQualitySentimentContent(content) || !isChineseSentimentCandidate(content)) return reject("low_quality_or_language");
   const normalized: SentimentHotCandidate = {
     ...candidate,
     content,
@@ -3142,15 +3190,18 @@ function candidateMeetsDisplayQuality(candidate: SentimentHotCandidate, keywords
       sourceTier: sentimentCandidateSourceTier(candidate),
     },
   };
-  if ((normalized.metrics as any)?.semanticRelevant === false) return null;
-  if (!candidateMatchesOperationalFreshness(normalized, freshnessDays)) return null;
-  if (!isUsefulHotCandidate(normalized)) return null;
-  if (sentimentHotHanCount(content) < minimumSentimentHotHanCountForCandidate(normalized)) return null;
-  if (isNoisyReaderCandidateContent(normalized, content)) return null;
+  if ((normalized.metrics as any)?.semanticRelevant === false) return reject("semantic");
+  if (!candidateMatchesOperationalFreshness(normalized, freshnessDays)) return reject("freshness");
+  if (!skipHeatGate && !isUsefulHotCandidate(normalized)) {
+    const viewCount = Number(normalized.engagement?.viewCount ?? (normalized.metrics as any)?.view_count ?? 0);
+    return reject(viewCount >= MIN_SENTIMENT_HOT_SCORE ? "heat_interactions_only" : "heat");
+  }
+  if (sentimentHotHanCount(content) < minimumSentimentHotHanCountForCandidate(normalized)) return reject("content_length");
+  if (isNoisyReaderCandidateContent(normalized, content)) return reject("reader_noise");
   const relevanceKeywords = keywords;
-  if (relevanceKeywords.length > 0 && candidateLooksOffTopicForKeywords(content, relevanceKeywords)) return null;
-  if (searchMode === "strict" && candidateLooksOffTopicForStrictMode(content, relevanceKeywords)) return null;
-  if (relevanceKeywords.length > 0 && !candidateMatchesCurrentKeywords(normalized, relevanceKeywords, searchMode)) return null;
+  if (relevanceKeywords.length > 0 && candidateLooksOffTopicForKeywords(content, relevanceKeywords)) return reject("keyword_off_topic");
+  if (searchMode === "strict" && candidateLooksOffTopicForStrictMode(content, relevanceKeywords)) return reject("strict_off_topic");
+  if (relevanceKeywords.length > 0 && !candidateMatchesCurrentKeywords(normalized, relevanceKeywords, searchMode)) return reject("keyword_mismatch");
   return normalized;
 }
 
@@ -3766,7 +3817,35 @@ async function fetchThreadsBrowserSearchCandidates(args: {
   const excludedHistoryKeys = args.ignoreHistory ? new Set<string>() : getSentimentHotShownHistoryKeys(args.archiveId);
   const results: SentimentHotCandidate[] = [];
   const resultKeys = new Set<string>();
-  const stats = { pages: 1, queries: 0, graphql: 0, hydration: 0, accepted: 0 };
+  const detailRescueCandidates = new Map<string, SentimentHotCandidate>();
+  let detailRescueCursor = 0;
+  const stats = { pages: 1, queries: 0, graphql: 0, hydration: 0, accepted: 0, rejected: {} as Record<string, number> };
+  const considerCandidate = (candidate: SentimentHotCandidate, countRejection = true) => {
+    const normalized = candidateMeetsDisplayQuality(
+      candidate,
+      args.keywords,
+      args.searchMode,
+      args.freshnessDays,
+      countRejection ? stats.rejected : undefined,
+    );
+    if (!normalized) {
+      if (
+        !isUsefulHotCandidate(candidate)
+        && detailRescueCandidates.size < THREADS_BROWSER_DETAIL_RESCUE_LIMIT
+        && candidateMeetsDisplayQuality(candidate, args.keywords, args.searchMode, args.freshnessDays, undefined, true)
+      ) {
+        const dedupeKey = sentimentCandidateDedupeKey(candidate);
+        if (!detailRescueCandidates.has(dedupeKey)) detailRescueCandidates.set(dedupeKey, candidate);
+      }
+      return false;
+    }
+    const dedupeKey = sentimentCandidateDedupeKey(normalized);
+    if (resultKeys.has(dedupeKey) || results.some((entry) => entry.id === normalized.id)) return false;
+    results.push(normalized);
+    resultKeys.add(dedupeKey);
+    stats.accepted += 1;
+    return true;
+  };
   try {
     const { chromium } = await import("playwright");
     const browser = await chromium.launch(buildLocalChromiumLaunchOptions());
@@ -3778,6 +3857,28 @@ async function fetchThreadsBrowserSearchCandidates(args: {
       });
       await addCookiesBestEffort(context, cookies as any[]);
       const page = await context.newPage();
+      const rescueDetailCandidates = async () => {
+        const pending = [...detailRescueCandidates.values()];
+        while (detailRescueCursor < pending.length && results.length < args.limit) {
+          const remainingMs = remainingSentimentDeadlineMs(args.deadlineAt, 15_000);
+          if (remainingMs < THREADS_BROWSER_DETAIL_RESCUE_MIN_REMAINING_MS) break;
+          const batch = pending.slice(
+            detailRescueCursor,
+            detailRescueCursor + THREADS_BROWSER_DETAIL_RESCUE_BATCH_SIZE,
+          );
+          detailRescueCursor += batch.length;
+          const enriched = await withSentimentTimeout(
+            enrichThreadsCandidateDetails(batch, {
+              force: true,
+              browserContext: context,
+              browserConcurrency: batch.length,
+            }),
+            Math.max(THREADS_BROWSER_DETAIL_RESCUE_MIN_REMAINING_MS, Math.min(15_000, remainingMs - 500)),
+            batch,
+          );
+          for (const candidate of enriched) considerCandidate(candidate, false);
+        }
+      };
       const cachedTemplate = recentThreadsSearchTemplate
         && Date.now() - recentThreadsSearchTemplate.capturedAt <= THREADS_BROWSER_TEMPLATE_CACHE_TTL_MS
         ? recentThreadsSearchTemplate.template
@@ -3842,13 +3943,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           for (const candidate of hydrated) {
             if (excluded.has(candidate.id)) continue;
             if (getSentimentHotCandidateHistoryKeys(candidate).some((historyKey) => excludedHistoryKeys.has(historyKey))) continue;
-            const normalized = candidateMeetsDisplayQuality(candidate, args.keywords, args.searchMode, args.freshnessDays);
-            if (!normalized) continue;
-            const dedupeKey = sentimentCandidateDedupeKey(normalized);
-            if (resultKeys.has(dedupeKey) || results.some((entry) => entry.id === normalized.id)) continue;
-            results.push(normalized);
-            resultKeys.add(dedupeKey);
-            stats.accepted += 1;
+            considerCandidate(candidate);
             if (results.length >= args.limit) break;
           }
           return hydrated.length;
@@ -3875,12 +3970,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
         });
         for (const candidate of domCandidates) {
           if (excluded.has(candidate.id)) continue;
-          const normalized = candidateMeetsDisplayQuality(candidate, args.keywords, args.searchMode, args.freshnessDays);
-          if (!normalized) continue;
-          const dedupeKey = sentimentCandidateDedupeKey(normalized);
-          if (resultKeys.has(dedupeKey) || results.some((entry) => entry.id === normalized.id)) continue;
-          results.push(normalized);
-          resultKeys.add(dedupeKey);
+          considerCandidate(candidate);
           if (results.length >= args.limit) break;
         }
       };
@@ -3894,6 +3984,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           if (template || (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 3_000)) break;
           await collectDomCandidates(page, bootstrapQuery, THREADS_BROWSER_TEMPLATE_WAIT_ATTEMPTS);
         }
+        if (!template && results.length < args.limit) await rescueDetailCandidates();
       }
       if (!cachedTemplate) page.off("request", captureTemplate);
 
@@ -3977,14 +4068,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
               for (const candidate of parsed) {
                 if (excluded.has(candidate.id)) continue;
                 if (getSentimentHotCandidateHistoryKeys(candidate).some((historyKey) => excludedHistoryKeys.has(historyKey))) continue;
-                const normalized = candidateMeetsDisplayQuality(candidate, args.keywords, args.searchMode, args.freshnessDays);
-                if (!normalized) continue;
-                const dedupeKey = sentimentCandidateDedupeKey(normalized);
-                if (resultKeys.has(dedupeKey) || results.some((entry) => entry.id === normalized.id)) continue;
-                results.push(normalized);
-                resultKeys.add(dedupeKey);
-                accepted += 1;
-                stats.accepted += 1;
+                if (considerCandidate(candidate)) accepted += 1;
                 if (results.length >= args.limit) break;
               }
               console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} page=${pageIndex + 1} query=${JSON.stringify(item.query)} graphql=${parsed.length} accepted=${accepted} total=${results.length}`);
@@ -4000,14 +4084,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
                 for (const candidate of nextParsed) {
                   if (excluded.has(candidate.id)) continue;
                   if (getSentimentHotCandidateHistoryKeys(candidate).some((historyKey) => excludedHistoryKeys.has(historyKey))) continue;
-                  const normalized = candidateMeetsDisplayQuality(candidate, args.keywords, args.searchMode, args.freshnessDays);
-                  if (!normalized) continue;
-                  const dedupeKey = sentimentCandidateDedupeKey(normalized);
-                  if (resultKeys.has(dedupeKey) || results.some((entry) => entry.id === normalized.id)) continue;
-                  results.push(normalized);
-                  resultKeys.add(dedupeKey);
-                  nextAccepted += 1;
-                  stats.accepted += 1;
+                  if (considerCandidate(candidate)) nextAccepted += 1;
                   if (results.length >= args.limit) break;
                 }
                 console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} page=${pageIndex + 1} query=${JSON.stringify(item.query)} page=2 graphql=${nextParsed.length} accepted=${nextAccepted} total=${results.length}`);
@@ -4024,6 +4101,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
       } else {
         console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} status=no_graphql_template`);
       }
+      if (results.length < args.limit) await rescueDetailCandidates();
       await context.close();
     } finally {
       await browser.close().catch(() => undefined);
@@ -4032,7 +4110,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
     console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} status=error message=${JSON.stringify(error instanceof Error ? error.message : String(error))}`);
     // Playwright is optional; reader/cache/database paths still keep the Telegram flow alive.
   }
-  console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} status=done total=${results.length} pages=${stats.pages} queries=${stats.queries} graphql=${stats.graphql} hydration=${stats.hydration} accepted=${stats.accepted}`);
+  console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} status=done total=${results.length} pages=${stats.pages} queries=${stats.queries} graphql=${stats.graphql} hydration=${stats.hydration} accepted=${stats.accepted} rejected=${JSON.stringify(stats.rejected)}`);
   return sortSentimentHotCandidatePool(results, args.keywords, args.limit, args.searchMode);
 }
 
@@ -5705,23 +5783,25 @@ async function readThreadsBrowserDetailMetricsFromPage(page: any, sourceUrl: str
   return parseThreadsBrowserPostDetailMetrics({ text: detailText, actionTexts });
 }
 
-async function fetchThreadsBrowserDetailMetricsBatch(sourceUrls: string[], concurrency = 3) {
+async function fetchThreadsBrowserDetailMetricsBatch(sourceUrls: string[], concurrency = 3, existingContext?: any) {
   if (process.env.VITEST_WORKER_ID) return null;
   const normalizedUrls = [...new Set(sourceUrls.map(normalizeThreadsPostUrl).filter(Boolean))];
   const results = new Map<string, Pick<ThreadsBrowserProfilePublishedPostSnapshot, "hotScore" | "engagement" | "metrics">>();
   if (!normalizedUrls.length) return results;
-  const cookies = readSentimentBrowserAuthCookies("threads");
-  if (!cookies.length) return results;
+  const cookies = existingContext ? [] : readSentimentBrowserAuthCookies("threads");
+  if (!existingContext && !cookies.length) return results;
   let browser: any = null;
-  let context: any = null;
+  let context: any = existingContext || null;
   try {
-    const playwright = await import("playwright");
-    browser = await playwright.chromium.launch(buildLocalChromiumLaunchOptions());
-    context = await browser.newContext({
-      viewport: { width: 900, height: 1400 },
-      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
-    });
-    await context.addCookies(cookies as any);
+    if (!context) {
+      const playwright = await import("playwright");
+      browser = await playwright.chromium.launch(buildLocalChromiumLaunchOptions());
+      context = await browser.newContext({
+        viewport: { width: 900, height: 1400 },
+        userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+      });
+      await context.addCookies(cookies as any);
+    }
     let cursor = 0;
     const workerCount = Math.min(Math.max(1, concurrency), normalizedUrls.length);
     await Promise.all(Array.from({ length: workerCount }, async () => {
@@ -5741,7 +5821,7 @@ async function fetchThreadsBrowserDetailMetricsBatch(sourceUrls: string[], concu
   } catch {
     return results;
   } finally {
-    await context?.close?.().catch?.(() => null);
+    if (!existingContext) await context?.close?.().catch?.(() => null);
     await browser?.close?.().catch?.(() => null);
   }
 }
@@ -5942,7 +6022,10 @@ export async function refreshSentimentSourceMetrics(args: {
   };
 }
 
-export async function enrichThreadsCandidateDetails(candidates: SentimentHotCandidate[], options: { force?: boolean } = {}): Promise<SentimentHotCandidate[]> {
+export async function enrichThreadsCandidateDetails(
+  candidates: SentimentHotCandidate[],
+  options: { force?: boolean; browserContext?: any; browserConcurrency?: number } = {},
+): Promise<SentimentHotCandidate[]> {
   const targets = candidates
     .map((candidate, index) => ({ candidate, index }))
     .filter(({ candidate }) => (
@@ -5963,7 +6046,8 @@ export async function enrichThreadsCandidateDetails(candidates: SentimentHotCand
   const enriched = [...candidates];
   const browserMetricsPromise = fetchThreadsBrowserDetailMetricsBatch(
     targets.map(({ candidate }) => candidate.sourceUrl),
-    3,
+    options.browserConcurrency || 3,
+    options.browserContext,
   );
   await Promise.all(targets.map(async ({ candidate, index }) => {
     const detail = await fetchThreadsDetailData(candidate.sourceUrl);

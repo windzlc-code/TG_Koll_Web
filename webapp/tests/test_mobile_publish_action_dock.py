@@ -13,6 +13,7 @@ class MobilePublishActionDockTests(unittest.TestCase):
         self.assertIn('class="command-actions ${moduleId === "publishing" ? `publish-command-actions${publishSelectionExpanded ? " is-selection-expanded" : ""}` : ""}"', SCRIPT)
         self.assertIn('id="executeSimpleFlow"', SCRIPT)
         self.assertIn('renderPublishMobileSelectionStrip(selectedPersona(), publishModeForAction, publishSelectionExpanded)', SCRIPT)
+        self.assertIn('moduleId === "publishing" ? "发布" : "确认执行"', SCRIPT)
 
     def test_selection_strip_only_opens_after_a_long_press(self):
         self.assertIn("const PUBLISH_SELECTION_LONG_PRESS_MS = 520;", SCRIPT)

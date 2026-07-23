@@ -180,6 +180,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             'data-site-account-menu',
             'data-site-account-trigger',
             'data-site-account-popover',
+            'data-site-account-close',
             'data-site-theme-toggle',
             'data-site-language-toggle',
             'data-site-account-logout',
@@ -206,6 +207,11 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('EVENT_ACCOUNT_MENU_OPEN', self.site_nav_source)
         self.assertIn('pointerenter', self.site_nav_source)
         self.assertIn('if (event.target === trigger) return;', self.site_nav_source)
+        self.assertIn('setAccountMenuOpen(menu, false, { restoreFocus: true });', self.site_nav_source)
+        self.assertIn('classList.toggle("site-account-menu-open", nextOpen)', self.site_nav_source)
+        self.assertIn('.site-header.site-account-menu-open {', self.site_nav_styles)
+        self.assertIn('z-index: 5000;', self.site_nav_styles)
+        self.assertIn('.site-account-close svg {', self.site_nav_styles)
         self.assertIn('border-radius: 50%', self.site_nav_styles)
         self.assertIn('height: auto;', self.site_nav_styles)
         self.assertIn('bottom: auto;', self.site_nav_styles)

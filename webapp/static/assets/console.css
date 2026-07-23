@@ -2866,33 +2866,6 @@ textarea:focus {
   white-space: nowrap;
 }
 
-.persona-bulk-scope {
-  grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 3px;
-  padding: 3px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--panel-soft);
-}
-
-.persona-list-actions--bulk .persona-bulk-scope button {
-  min-height: 32px;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-}
-
-.persona-list-actions--bulk .persona-bulk-scope button.is-active {
-  background: var(--ink);
-  color: var(--panel-solid);
-}
-
-.persona-list-actions--bulk .persona-bulk-scope button:hover:not(:disabled):not(.is-active) {
-  background: var(--panel-solid);
-}
-
 .persona-list-actions button.danger {
   border-color: color-mix(in srgb, var(--danger) 65%, var(--line));
   color: var(--danger);
@@ -3306,22 +3279,21 @@ body.persona-touch-dragging .persona-list-card:active {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  align-self: stretch;
   width: 36px;
   min-width: 36px;
-  min-height: 42px;
+  min-height: 0;
+  margin: 0;
   cursor: pointer;
 }
 
 .persona-bulk-check input {
+  display: block;
   width: 18px;
   height: 18px;
   margin: 0;
   accent-color: var(--accent);
   cursor: pointer;
-}
-
-.persona-bulk-check--group {
-  align-self: stretch;
 }
 
 .persona-list-item--status {
@@ -14476,7 +14448,6 @@ body.console-page {
   .account-pool-platforms button.is-active,
   .automation-capsule-tabs button.is-active,
   .live-browser-mode-toggle button.is-active:not(.is-pending),
-  .persona-list-actions--bulk .persona-bulk-scope button.is-active,
   .account-pool-create-actions button,
   button[data-persona-run-threads],
   button[data-account-pool-run-threads],
@@ -14523,7 +14494,6 @@ body.console-page {
   .account-pool-platforms button.is-active,
   .automation-capsule-tabs button.is-active,
   .live-browser-mode-toggle button.is-active:not(.is-pending),
-  .persona-list-actions--bulk .persona-bulk-scope button.is-active,
   .account-pool-create-actions button,
   button[data-persona-run-threads],
   button[data-account-pool-run-threads],
@@ -15631,6 +15601,14 @@ body.console-page {
     border-radius: 6px;
   }
 
+  .console-page .persona-detail :is(
+    .persona-compose-toggle,
+    .persona-source-toggle,
+    .persona-media-operation-toggle
+  ) button[type="button"] {
+    border-radius: 999px;
+  }
+
   .console-page .persona-detail h3,
   .console-page .persona-step-shell > .persona-inline-panel h3 {
     font-size: 15px;
@@ -16557,6 +16535,28 @@ body.console-page {
     width: 100%;
   }
 
+  .publish-schedule-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .publish-schedule-grid label:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .publish-schedule-grid label {
+    gap: 4px;
+    min-width: 0;
+    font-size: 13px;
+  }
+
+  .publish-schedule-grid input,
+  .publish-schedule-grid select {
+    min-width: 0;
+    min-height: 40px;
+    padding: 7px 9px;
+  }
+
   .publish-post-picker,
   .publish-content-preview {
     grid-template-rows: auto auto auto;
@@ -16934,6 +16934,7 @@ body.console-page {
   .task-persona-queue-list,
   .task-table-inner--regular {
     gap: 5px;
+    grid-auto-rows: max-content;
   }
 
   .task-persona-queue-row {
@@ -16945,7 +16946,7 @@ body.console-page {
       "empty time actions";
     align-items: center;
     gap: 4px 7px;
-    min-height: 0;
+    min-height: min-content;
     padding: 7px;
   }
 
@@ -16968,7 +16969,7 @@ body.console-page {
       "empty time actions";
     align-items: center;
     gap: 4px 7px;
-    min-height: 0;
+    min-height: min-content;
     padding: 7px;
   }
 

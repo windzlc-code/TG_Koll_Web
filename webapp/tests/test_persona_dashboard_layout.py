@@ -96,6 +96,28 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn(".task-table-inner--regular .task-row", mobile_styles)
         self.assertIn('"check task status"', mobile_styles)
         self.assertIn('"empty time actions"', mobile_styles)
+        self.assertIn("grid-auto-rows: max-content;", mobile_styles)
+        self.assertIn("min-height: min-content;", mobile_styles)
+
+    def test_task_queue_removes_open_current_persona_action(self):
+        self.assertNotIn("data-task-open-persona", self.console_script)
+        self.assertNotIn("打开当前人设", self.console_script)
+
+    def test_persona_generation_modes_use_short_labels_and_mobile_capsules(self):
+        self.assertIn('["tweet", "生成推文"]', self.console_script)
+        self.assertIn('["tweet_media", "推文加配图"]', self.console_script)
+        self.assertNotIn("只生成推文", self.console_script)
+        self.assertNotIn("根据推文生成配图", self.console_script)
+
+        mobile_rule = (
+            ".console-page .persona-detail :is(\n"
+            "    .persona-compose-toggle,\n"
+            "    .persona-source-toggle,\n"
+            "    .persona-media-operation-toggle\n"
+            '  ) button[type="button"] {\n'
+            "    border-radius: 999px;"
+        )
+        self.assertIn(mobile_rule, self.styles)
 
     def test_mobile_task_queue_persona_list_reuses_shared_drawer(self):
         selector_start = self.console_script.index("function renderTaskQueuePersonaSelector()")
@@ -207,6 +229,48 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('if (!nextOpen && isMobileNavMode())', sidebar)
         self.assertIn('state.personaListEditorId = ""', sidebar)
         self.assertIn('removePersonaCardEditorPortal()', sidebar)
+
+    def test_persona_bulk_management_unifies_personas_and_groups(self):
+        module_start = self.console_script.index("function renderPersonaModule()")
+        module_end = self.console_script.index("\nfunction personaGeneratedPreviewPosts", module_start)
+        module = self.console_script[module_start:module_end]
+        folder_start = self.console_script.index("function renderPersonaFolder(")
+        folder_end = self.console_script.index("\nfunction renderPersonaCollectionList", folder_start)
+        folder = self.console_script[folder_start:folder_end]
+        handler_start = self.console_script.index(
+            'const startPersonaBulk = event.target.closest("[data-persona-bulk-start]");'
+        )
+        handler_end = self.console_script.index(
+            'const editableMediaCard = event.target.closest', handler_start
+        )
+        handler = self.console_script[handler_start:handler_end]
+        delete_start = self.console_script.index(
+            "async function deleteBulkSelectedPersonaEntries()"
+        )
+        delete_end = self.console_script.index(
+            "\nasync function duplicatePersonaArchive", delete_start
+        )
+        delete_flow = self.console_script[delete_start:delete_end]
+
+        self.assertNotIn("personaBulkScope", self.console_script)
+        self.assertNotIn("data-persona-bulk-scope", self.console_script)
+        self.assertNotIn(".persona-bulk-scope", self.styles)
+        self.assertIn("bulkSelectedPersonaIds.size + bulkSelectedGroupIds.size", module)
+        self.assertIn("currentPagePersonaIds.every", module)
+        self.assertIn("currentPageGroupIds.every", module)
+        self.assertIn('data-persona-bulk-group-check="${esc(group.id)}"', folder)
+        self.assertIn('data-persona-bulk-check="${esc(persona.id)}"', self.console_script)
+        self.assertIn("const collapsed = Boolean(group.collapsed);", folder)
+        self.assertIn('data-persona-toggle-folder="${esc(group.id)}"', folder)
+        self.assertEqual(folder.count('data-persona-bulk-group-toggle="${esc(group.id)}"'), 1)
+        self.assertIn('button.closest(".persona-folder-card.is-bulk-selecting")', self.console_script)
+        self.assertIn("state.personaBulkSelectedIds = new Set();", handler)
+        self.assertIn("state.personaBulkSelectedGroupIds = new Set();", handler)
+        self.assertIn("setPersonaBulkSelection(personaIds, !allSelected);", handler)
+        self.assertIn("setPersonaBulkGroupSelection(groupIds, !allSelected);", handler)
+        self.assertEqual(delete_flow.count("openConsoleModal({"), 1)
+        self.assertEqual(delete_flow.count("/api/persona_dashboard/selection/batch-delete"), 1)
+        self.assertIn("JSON.stringify({ persona_ids: personaIds, group_ids: groupIds })", delete_flow)
 
     def test_mobile_publish_group_editor_keeps_the_publish_drawer_open(self):
         module_start = self.console_script.index("function renderSimpleFlowModule(moduleId)")

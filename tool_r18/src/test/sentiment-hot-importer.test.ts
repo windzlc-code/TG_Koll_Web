@@ -863,6 +863,42 @@ describe("sentiment hot importer", () => {
     ]));
   });
 
+  it("removes generic persona roles from model search and acceptance terms", () => {
+    const strategy = {
+      primaryQueries: ["\u5e2b\u5085", "\u8336\u6587\u5316"],
+      broadQueries: ["\u4f7f\u7528", "\u54c1\u8336"],
+      ecosystemQueries: ["\u9ad4\u9a57", "\u8336\u9053"],
+      requiredAnchorTerms: ["\u5e2b\u5085", "\u8336\u6587\u5316"],
+      normalAnchorTerms: ["\u5e2b\u5085", "\u54c1\u8336"],
+      rejectTerms: [],
+      strictAcceptTerms: ["\u5e2b\u5085", "\u8336\u5177"],
+      normalAcceptTerms: ["\u5e2b\u5085", "\u8336\u9053"],
+      domainSummary: "\u8336\u6587\u5316\u3001\u54c1\u8336\u8207\u8336\u5177\u4f7f\u7528",
+    } as any;
+
+    applyPersonaGuardToSentimentHotStrategy({
+      strategy,
+      archiveName: "\u8336\u6587\u5316\u5e2b\u5085",
+      personaSeedKeywords: ["\u5e2b\u5085", "\u8336\u6587\u5316", "\u54c1\u8336", "\u8336\u5177\u4f7f\u7528"],
+      sourceText: "\u5c08\u6ce8\u8336\u6587\u5316\u3001\u54c1\u8336\u3001\u8336\u5177\u4f7f\u7528\u8207\u8336\u8449\u4fdd\u5b58\u3002",
+    });
+
+    for (const terms of [
+      strategy.primaryQueries,
+      strategy.broadQueries,
+      strategy.ecosystemQueries,
+      strategy.requiredAnchorTerms,
+      strategy.normalAnchorTerms,
+      strategy.strictAcceptTerms,
+      strategy.normalAcceptTerms,
+      strategy.personaGuardTerms,
+    ]) {
+      expect(terms).not.toContain("\u5e2b\u5085");
+    }
+    expect(strategy.primaryQueries).toContain("\u8336\u6587\u5316");
+    expect(strategy.strictAcceptTerms).toContain("\u8336\u5177");
+  });
+
   it("does not let a persona role name bypass normal domain anchors", () => {
     const candidate = {
       id: "generic-secretary-normal-story",
@@ -1319,6 +1355,38 @@ Demo post body
     expect(candidate.engagement?.viewCount).toBe(186_000);
     expect(candidate.metrics).toMatchObject({ view_count: 186_000 });
     expect(candidate.hotScore).toBe(186_000);
+  });
+
+  it("rescues a relevant low-interaction search result when post details prove 1000 views", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      text: async () => "## [Thread 12K views](https://www.threads.com/@tea/post/detail-rescue)",
+    })));
+    const source = {
+      id: "detail-rescue",
+      platform: "threads",
+      sourceUrl: "https://www.threads.com/@tea/post/detail-rescue",
+      author: "tea",
+      content: "\u8336\u6587\u5316\u9928\u5206\u4eab\u54c1\u8336\u3001\u8336\u5177\u4f7f\u7528\u8207\u8336\u9053\u9ad4\u9a57\uff0c\u4e26\u6574\u7406\u8336\u8449\u4fdd\u5b58\u3001\u6c96\u6ce1\u6eab\u5ea6\u3001\u98a8\u5473\u8a18\u9304\u8207\u65e5\u5e38\u6162\u751f\u6d3b\u5be6\u8e10\u65b9\u6cd5\u3002",
+      media: [],
+      hotScore: 191,
+      metrics: { source: "threads-account-search" },
+      engagement: { likeCount: 150, commentCount: 21, shareCount: 20 },
+      publishedAt: new Date().toISOString(),
+      capturedAt: new Date().toISOString(),
+    } as any;
+
+    expect(finalizeSentimentHotCandidatesForDisplay([source], 10, {
+      keywords: ["\u8336\u6587\u5316", "\u54c1\u8336", "\u8336\u9053\u9ad4\u9a57"],
+      searchMode: "strict",
+    })).toHaveLength(0);
+
+    const enriched = await enrichThreadsCandidateDetails([source], { force: true });
+    expect(finalizeSentimentHotCandidatesForDisplay(enriched, 10, {
+      keywords: ["\u8336\u6587\u5316", "\u54c1\u8336", "\u8336\u9053\u9ad4\u9a57"],
+      searchMode: "strict",
+    })).toHaveLength(1);
+    expect(enriched[0].hotScore).toBe(12_000);
   });
 
   it("forces a fresh detail read when a cached candidate already has views", async () => {

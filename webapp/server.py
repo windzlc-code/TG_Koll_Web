@@ -10235,6 +10235,11 @@ class PersonaDashboardPersonaBatchDeletePayload(BaseModel):
     persona_ids: list[str] = Field(default_factory=list)
 
 
+class PersonaDashboardSelectionBatchDeletePayload(BaseModel):
+    persona_ids: list[str] = Field(default_factory=list)
+    group_ids: list[str] = Field(default_factory=list)
+
+
 class PersonaDashboardPersonaAiKeywordsPayload(BaseModel):
     name: str = ""
     prompt: str = ""
@@ -14727,6 +14732,89 @@ def _delete_persona_dashboard_persona(archive_id: str) -> dict[str, Any]:
     }
 
 
+def _delete_persona_dashboard_selection(persona_ids: list[str], group_ids: list[str]) -> dict[str, Any]:
+    clean_persona_ids = list(dict.fromkeys(
+        str(persona_id or "").strip()
+        for persona_id in persona_ids
+        if str(persona_id or "").strip()
+    ))
+    clean_group_ids = list(dict.fromkeys(
+        str(group_id or "").strip()
+        for group_id in group_ids
+        if str(group_id or "").strip()
+    ))
+    if not clean_persona_ids and not clean_group_ids:
+        raise HTTPException(status_code=400, detail="请至少选择一个人设或分组。")
+    if len(clean_persona_ids) > 100 or len(clean_group_ids) > 100:
+        raise HTTPException(status_code=400, detail="单次最多删除 100 个人设和 100 个分组。")
+
+    archives, _ = _read_tool_r18_persona_archives()
+    existing_persona_ids = {
+        str(archive.get("id") or "").strip()
+        for archive in archives
+        if isinstance(archive, dict)
+    }
+    if any(persona_id not in existing_persona_ids for persona_id in clean_persona_ids):
+        raise HTTPException(status_code=404, detail="人设不存在。")
+
+    groups_config = _read_persona_groups_config()
+    existing_group_ids = {
+        str(group.get("id") or "").strip()
+        for group in groups_config.get("groups", [])
+        if isinstance(group, dict)
+    }
+    if any(group_id not in existing_group_ids for group_id in clean_group_ids):
+        raise HTTPException(status_code=404, detail="分组不存在。")
+
+    snapshots: dict[Path, bytes | None] = {}
+    for path in _account_purge_workspace_paths():
+        if path.exists() and not path.is_file():
+            raise RuntimeError(f"persona workspace path is not a file: {path}")
+        snapshots[path] = path.read_bytes() if path.is_file() else None
+
+    try:
+        persona_result = (
+            _delete_persona_dashboard_personas(clean_persona_ids)
+            if clean_persona_ids
+            else {"deleted_ids": [], "deleted_count": 0}
+        )
+        group_result = (
+            _delete_persona_groups(clean_group_ids)
+            if clean_group_ids
+            else {"deleted_ids": [], "deleted_count": 0, "released_persona_ids": []}
+        )
+        with db() as conn:
+            if clean_persona_ids:
+                placeholders = ", ".join("?" for _ in clean_persona_ids)
+                conn.execute(
+                    f"DELETE FROM persona_owners WHERE archive_id IN ({placeholders})",
+                    clean_persona_ids,
+                )
+            if clean_group_ids:
+                placeholders = ", ".join("?" for _ in clean_group_ids)
+                conn.execute(
+                    f"DELETE FROM persona_group_owners WHERE group_id IN ({placeholders})",
+                    clean_group_ids,
+                )
+    except Exception:
+        for path, content in snapshots.items():
+            if content is None:
+                with contextlib.suppress(FileNotFoundError):
+                    path.unlink()
+            else:
+                _atomic_write_bytes(path, content)
+        raise
+
+    return {
+        "ok": True,
+        "deleted_persona_ids": persona_result["deleted_ids"],
+        "deleted_persona_count": persona_result["deleted_count"],
+        "deleted_group_ids": group_result["deleted_ids"],
+        "deleted_group_count": group_result["deleted_count"],
+        "released_persona_ids": group_result.get("released_persona_ids", []),
+    }
+
+
 def _read_tool_r18_persona_archives() -> tuple[list[dict[str, Any]], dict[str, Any]]:
     primary = TOOL_R18_RUNTIME_DIR / "persona_archives.json"
     fallback = TOOL_R18_RUNTIME_DIR / "persona_archives_cache.json"
@@ -18303,6 +18391,28 @@ def create_app() -> FastAPI:
         result = _delete_persona_dashboard_personas(clean_ids)
         _delete_persona_owners(clean_ids)
         return result
+
+    @app.post("/api/persona_dashboard/selection/batch-delete")
+    def api_persona_dashboard_batch_delete_selection(
+        payload: PersonaDashboardSelectionBatchDeletePayload,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        clean_persona_ids = list(dict.fromkeys(
+            str(persona_id or "").strip()
+            for persona_id in payload.persona_ids
+            if str(persona_id or "").strip()
+        ))
+        clean_group_ids = list(dict.fromkeys(
+            str(group_id or "").strip()
+            for group_id in payload.group_ids
+            if str(group_id or "").strip()
+        ))
+        with TENANT_RESOURCE_LIFECYCLE_LOCK:
+            for persona_id in clean_persona_ids:
+                _require_persona_access(persona_id, user)
+            for group_id in clean_group_ids:
+                _require_persona_group_access(group_id, user)
+            return _delete_persona_dashboard_selection(clean_persona_ids, clean_group_ids)
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/threads_binding")
     def api_persona_dashboard_bind_threads(archive_id: str, payload: PersonaDashboardThreadsBindingPayload, _user: dict[str, Any] = Depends(require_persona_owner)):

@@ -429,6 +429,9 @@
           <span class="site-account-avatar" aria-hidden="true" data-site-account-avatar>${accountIcon()}</span>
           <span class="site-account-identity"><strong data-site-account-name></strong><span data-site-account-role></span></span>
           <span class="site-account-status"><i aria-hidden="true"></i><span data-site-copy="accountStatus"></span></span>
+          <button class="site-account-close" type="button" aria-label="关闭个人信息" title="关闭个人信息" data-site-account-close>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
+          </button>
         </div>
         <div class="site-account-detail"><span data-site-copy="accountId"></span><strong data-site-account-id>-</strong></div>
         <div class="site-account-profile-fields">
@@ -517,6 +520,7 @@
     if (!trigger || !popover) return;
     const nextOpen = Boolean(open);
     const shouldRestoreFocus = !nextOpen && restoreFocus && popover.contains(document.activeElement);
+    menu.closest(".site-header")?.classList.toggle("site-account-menu-open", nextOpen);
     trigger.setAttribute("aria-expanded", nextOpen ? "true" : "false");
     popover.hidden = !nextOpen;
     menu.classList.toggle("is-open", nextOpen);
@@ -784,6 +788,13 @@
           return;
         }
         setAccountMenuOpen(menu, trigger.getAttribute("aria-expanded") !== "true", { restoreFocus: true });
+      });
+      menu.querySelector("[data-site-account-close]")?.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        cancelHoverClose();
+        hoverOpened = false;
+        setAccountMenuOpen(menu, false, { restoreFocus: true });
       });
       menu.addEventListener("pointerenter", (event) => {
         if (event.pointerType && event.pointerType !== "mouse") return;

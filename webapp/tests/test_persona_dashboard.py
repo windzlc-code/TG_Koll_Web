@@ -679,6 +679,77 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(resp.json()["deleted_count"], 1)
         self.assertEqual(resp.json()["released_persona_ids"], [])
 
+    def test_batch_delete_selection_removes_personas_and_groups_together(self):
+        self._write_archives()
+        group = self.client.post("/api/persona_dashboard/groups", json={"name": "Combined"}).json()["group"]
+        self.client.post(
+            f"/api/persona_dashboard/groups/{group['id']}/personas",
+            json={"persona_id": "persona-1"},
+        )
+
+        resp = self.client.post(
+            "/api/persona_dashboard/selection/batch-delete",
+            json={"persona_ids": ["persona-1"], "group_ids": [group["id"]]},
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(resp.json()["deleted_persona_ids"], ["persona-1"])
+        self.assertEqual(resp.json()["deleted_group_ids"], [group["id"]])
+        self.assertEqual(
+            json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8")),
+            [],
+        )
+        groups = json.loads((self.tool_runtime_dir / "persona_groups.json").read_text(encoding="utf-8"))
+        self.assertEqual(groups["groups"], [])
+        conn = sqlite3.connect(str(self.data_dir / "app.db"))
+        try:
+            persona_owner_count = conn.execute(
+                "SELECT COUNT(*) FROM persona_owners WHERE archive_id = 'persona-1'"
+            ).fetchone()[0]
+            group_owner_count = conn.execute(
+                "SELECT COUNT(*) FROM persona_group_owners WHERE group_id = ?",
+                (group["id"],),
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(persona_owner_count, 0)
+        self.assertEqual(group_owner_count, 0)
+
+    def test_batch_delete_selection_restores_files_when_second_mutation_fails(self):
+        self._write_archives()
+        group = self.client.post("/api/persona_dashboard/groups", json={"name": "Rollback"}).json()["group"]
+        self.client.post(
+            f"/api/persona_dashboard/groups/{group['id']}/personas",
+            json={"persona_id": "persona-1"},
+        )
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        groups_path = self.tool_runtime_dir / "persona_groups.json"
+        archives_before = archives_path.read_bytes()
+        groups_before = groups_path.read_bytes()
+
+        with mock.patch.object(server, "_delete_persona_groups", side_effect=RuntimeError("write failed")):
+            with self.assertRaisesRegex(RuntimeError, "write failed"):
+                self.client.post(
+                    "/api/persona_dashboard/selection/batch-delete",
+                    json={"persona_ids": ["persona-1"], "group_ids": [group["id"]]},
+                )
+
+        self.assertEqual(archives_path.read_bytes(), archives_before)
+        self.assertEqual(groups_path.read_bytes(), groups_before)
+        conn = sqlite3.connect(str(self.data_dir / "app.db"))
+        try:
+            persona_owner_count = conn.execute(
+                "SELECT COUNT(*) FROM persona_owners WHERE archive_id = 'persona-1'"
+            ).fetchone()[0]
+            group_owner_count = conn.execute(
+                "SELECT COUNT(*) FROM persona_group_owners WHERE group_id = ?",
+                (group["id"],),
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(persona_owner_count, 1)
+        self.assertEqual(group_owner_count, 1)
+
     def test_batch_delete_group_does_not_release_persona_kept_in_another_group(self):
         groups_path = self.tool_runtime_dir / "persona_groups.json"
         groups_path.write_text(json.dumps({
