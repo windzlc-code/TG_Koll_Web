@@ -26,6 +26,7 @@ type FetchHotCandidatesInput = {
   searchMode?: "normal" | "strict";
   freshnessDays?: number;
   freshnessPolicy?: "legacy" | "strict";
+  recordShown?: boolean;
   /** Test-only mode: count only candidates returned by this live search run. */
   liveOnly?: boolean;
   memorySummaries?: string[];
@@ -121,6 +122,7 @@ async function fetchHotCandidates(input: FetchHotCandidatesInput) {
     searchMode: input.searchMode === "normal" ? "normal" : "strict",
     freshnessDays: input.freshnessDays,
     freshnessPolicy: input.freshnessPolicy === "strict" ? "strict" : "legacy",
+    recordShown: input.recordShown !== false,
     liveOnly: input.liveOnly === true,
   });
   return {

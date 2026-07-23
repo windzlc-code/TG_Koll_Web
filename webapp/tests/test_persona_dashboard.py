@@ -2005,13 +2005,14 @@ class PersonaDashboardApiTests(unittest.TestCase):
                 [mock.call(1234, server.signal.SIGTERM), mock.call(1234, server.signal.SIGKILL)],
             )
 
-    def test_run_persona_hot_workflow_cli_limits_queue_wait(self):
+    def test_run_persona_hot_workflow_cli_limits_total_queue_wait_without_five_second_cutoff(self):
         run_lock = mock.Mock()
         run_lock.acquire.return_value = False
 
         with mock.patch.object(server, "_sync_tool_r18_api_config_for_persona_workflow"), \
              mock.patch.object(server, "_tool_r18_node_command", return_value=["node", "persona-hot-workflow.ts"]), \
              mock.patch.object(server, "_PERSONA_HOT_RUN_LOCK", run_lock), \
+             mock.patch.object(server.time, "monotonic", side_effect=[0, 0, 0, 0, 1, 1, 31]), \
              mock.patch.object(server.subprocess, "Popen") as popen:
             with self.assertRaises(server.HTTPException) as raised:
                 server._run_persona_hot_workflow_cli(
@@ -2020,10 +2021,45 @@ class PersonaDashboardApiTests(unittest.TestCase):
                 )
 
         self.assertEqual(raised.exception.status_code, 504)
-        self.assertIn("排队超过 5 秒", raised.exception.detail)
-        run_lock.acquire.assert_called_once()
-        self.assertLessEqual(run_lock.acquire.call_args.kwargs["timeout"], 5)
+        self.assertIn("排队超过 30 秒", raised.exception.detail)
+        self.assertGreater(run_lock.acquire.call_count, 1)
+        self.assertTrue(all(
+            0 < call.kwargs["timeout"] <= 0.25
+            for call in run_lock.acquire.call_args_list
+        ))
         popen.assert_not_called()
+
+    def test_run_persona_hot_workflow_cli_rechecks_late_background_process(self):
+        run_lock = mock.Mock()
+        background_process = mock.Mock()
+        workflow_process = mock.Mock()
+        workflow_process.communicate.return_value = ('{"ok": true, "candidates": []}', "")
+        workflow_process.returncode = 0
+        previous_background = server._PERSONA_HOT_BACKGROUND_PROCESS
+
+        def acquire_once_background_is_registered(*, timeout):
+            if run_lock.acquire.call_count == 1:
+                server._PERSONA_HOT_BACKGROUND_PROCESS = background_process
+                return False
+            return True
+
+        run_lock.acquire.side_effect = acquire_once_background_is_registered
+        try:
+            with mock.patch.object(server, "_sync_tool_r18_api_config_for_persona_workflow"), \
+                 mock.patch.object(server, "_tool_r18_node_command", return_value=["node", "persona-hot-workflow.ts"]), \
+                 mock.patch.object(server, "_PERSONA_HOT_RUN_LOCK", run_lock), \
+                 mock.patch.object(server, "_terminate_persona_hot_process") as terminate, \
+                 mock.patch.object(server.subprocess, "Popen", return_value=workflow_process):
+                result = server._run_persona_hot_workflow_cli(
+                    {"action": "fetch-hot-candidates", "archiveId": "persona-1"},
+                    timeout_seconds=120,
+                )
+        finally:
+            server._PERSONA_HOT_BACKGROUND_PROCESS = previous_background
+
+        self.assertEqual(result, {"ok": True, "candidates": []})
+        terminate.assert_any_call(background_process)
+        self.assertEqual(run_lock.acquire.call_count, 2)
 
     def test_cancel_persona_hot_workflow_terminates_matching_process(self):
         process = mock.Mock()

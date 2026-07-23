@@ -1953,6 +1953,8 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   searchMode?: SentimentHotSearchMode;
   freshnessDays?: number;
   freshnessPolicy?: SentimentHotFreshnessPolicy;
+  /** Set false for background pool refills that were never shown to a user. */
+  recordShown?: boolean;
   /** Test-only mode: exclude cache/database/history backfills and do not write shown history. */
   liveOnly?: boolean;
 }): Promise<FetchSentimentHotCandidatesResult> {
@@ -2610,10 +2612,9 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   }
   if (!liveOnlyRefresh && strictFreshOnly && candidates.length < limit) {
     // The live/15-day pool can be smaller than the requested display count
-    // even after both search rounds. As a last resort, rotate compliant
-    // same-persona history so the UI remains usable; freshness, heat, Chinese
-    // content, relevance and final dedupe still apply. This path is explicit
-    // in the channel warning and never runs while a fresh pool is complete.
+    // even after both search rounds. As a last resort, rotate compliant recent
+    // same-persona history. Never cross the bounded freshness window just to
+    // fill the requested count.
     const emergencyKeywords = hasModelStrategy && strategyResult
       ? sentimentHotStrategyTermsForMode(strategyResult, "normal")
       : keywords;
@@ -2640,20 +2641,20 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       keywords: emergencyKeywords,
       excludeShown: false,
       searchMode: "normal",
-      freshnessDays: 0,
+      freshnessDays: operationalFreshnessDays,
     });
     const emergencySupplements = collectSentimentHotSupplementCandidates({
       ordered: orderSentimentHotCandidatesForLegacyFallback(emergencyPool, archiveId, { allowShownRepeat: true }),
       archiveId,
       selectedKeys: new Set(candidates.flatMap((candidate) => getSentimentHotCandidateHistoryKeys(candidate))),
       limit: limit - candidates.length,
-      strictFreshOnly: false,
-      freshnessDays: 0,
+      strictFreshOnly: true,
+      freshnessDays: operationalFreshnessDays,
     });
     if (emergencySupplements.length > 0) {
       candidates = [...candidates, ...emergencySupplements];
-      channelStats.push(`新鲜池不足，合规同人设轮换补充 ${emergencySupplements.length}`);
-      warnings.push(`近 ${freshnessDays || 15} 天新候选不足，已按同人设合规候选轮换补足，避免重复集中出现。`);
+      channelStats.push(`近 ${operationalFreshnessDays} 天候选轮换补充 ${emergencySupplements.length}`);
+      warnings.push(`近 ${freshnessDays || operationalFreshnessDays} 天新候选不足，已在近 ${operationalFreshnessDays} 天范围内按同人设合规候选轮换补足。`);
     }
   }
   const forceDetailRefresh = false;
@@ -2699,7 +2700,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   } else if (candidates.length < limit) {
     warnings.push(`\u672c\u6b21\u53ea\u627e\u5230\u0020${candidates.length}/${limit}\u0020\u7bc7\u9ad8\u71b1\u5ea6\u4e2d\u6587\u71b1\u9ede\uff0c\u5df2\u904e\u6ffe\u91cd\u8907\u3001\u975e\u4e2d\u6587\u6216\u4f4e\u71b1\u5ea6\u5167\u5bb9\u3002`);
   }
-  if (candidates.length > 0 && !liveOnlyRefresh) {
+  if (candidates.length > 0 && !liveOnlyRefresh && args.recordShown !== false) {
     try {
       rememberSentimentHotShown(archiveId, candidates);
     } catch (error) {
@@ -2719,6 +2720,7 @@ export async function fetchSentimentHotCandidates(args: {
   searchMode?: SentimentHotSearchMode;
   freshnessDays?: number;
   freshnessPolicy?: SentimentHotFreshnessPolicy;
+  recordShown?: boolean;
   liveOnly?: boolean;
 }): Promise<FetchSentimentHotCandidatesResult> {
   const archiveId = cleanText(args.archive?.id) || "default";

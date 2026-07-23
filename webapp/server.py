@@ -12097,14 +12097,18 @@ def _run_persona_hot_workflow_cli(payload: dict[str, Any], timeout_seconds: int 
     else:
         _PERSONA_HOT_INTERACTIVE_REQUESTED.set()
         _PERSONA_HOT_LAST_INTERACTIVE_AT = time.time()
-        with _PERSONA_HOT_PROCESS_LOCK:
-            background_process = _PERSONA_HOT_BACKGROUND_PROCESS
-        _terminate_persona_hot_process(background_process)
-        queue_timeout = max(0.1, min(5.0, deadline - time.monotonic()))
-        if not _PERSONA_HOT_RUN_LOCK.acquire(timeout=queue_timeout):
+        queue_deadline = min(deadline, time.monotonic() + 30.0)
+        while time.monotonic() < queue_deadline:
+            with _PERSONA_HOT_PROCESS_LOCK:
+                background_process = _PERSONA_HOT_BACKGROUND_PROCESS
+            _terminate_persona_hot_process(background_process)
+            queue_slice = min(0.25, max(0.01, queue_deadline - time.monotonic()))
+            if _PERSONA_HOT_RUN_LOCK.acquire(timeout=queue_slice):
+                acquired = True
+                break
+        if not acquired:
             _PERSONA_HOT_INTERACTIVE_REQUESTED.clear()
-            raise HTTPException(status_code=504, detail="热点抓取排队超过 5 秒，已取消本次任务，请稍后重试。")
-        acquired = True
+            raise HTTPException(status_code=504, detail="热点抓取排队超过 30 秒，已取消本次任务，请稍后重试。")
         _PERSONA_HOT_INTERACTIVE_REQUESTED.clear()
     try:
         process = subprocess.Popen(
@@ -12311,6 +12315,9 @@ def _persona_hot_pool_worker_loop() -> None:
                 "limit": 10,
                 "refresh": True,
                 "searchMode": search_mode,
+                "freshnessDays": 15,
+                "freshnessPolicy": "strict",
+                "recordShown": False,
             }, timeout_seconds=120, background=True)
         except _PersonaHotBackgroundDeferred:
             continue
