@@ -27,6 +27,7 @@ import {
   parseThreadsBrowserPostDetailMetrics,
   parseThreadsBrowserProfilePublishedPosts,
   parseThreadsGraphqlSearchPayload,
+  parseThreadsSearchHydrationPayloads,
   parseThreadsGraphqlSearchPageInfo,
   parseThreadsGraphqlProfilePagePayload,
   normalizeThreadsRelativeTime,
@@ -1210,6 +1211,49 @@ tea\u8336\u6587\u5316\u65e5\u5e38\u5206\u4eab\u8207\u6162\u751f\u6d3b\u9ad4\u9a5
         shareCount: 58,
         viewCount: 4321,
         rawSignals: [954, 68, 92, 58],
+      },
+    });
+  });
+
+  it("parses current Threads search hydration scripts with real engagement totals", () => {
+    const scripts = [JSON.stringify({
+      require: [["ScheduledServerJS", "handle", null, [{
+        payload: {
+          thread_items: [{
+            post: {
+              code: "HYDRATION123",
+              user: { username: "storage_demo" },
+              caption: {
+                text: "\u6536\u7d0d\u6574\u7406\u5e2b\u5206\u4eab\u8863\u6ac3\u5206\u985e\u3001\u5eda\u623f\u6536\u7d0d\u8207\u65b7\u6368\u96e2\u6d41\u7a0b\uff0c\u4e26\u6574\u7406\u5c45\u5bb6\u52d5\u7dda\u8207\u65e5\u5e38\u7dad\u6301\u65b9\u6cd5\u3002",
+              },
+              taken_at: 1784764800,
+              like_count: 820,
+              text_post_app_info: {
+                direct_reply_count: 90,
+                repost_count: 60,
+                reshare_count: 45,
+                view_count: 12000,
+              },
+            },
+          }],
+        },
+      }]]],
+    })];
+
+    const candidates = parseThreadsSearchHydrationPayloads({
+      scripts,
+      query: "\u6536\u7d0d\u6574\u7406",
+      keywords: ["\u6536\u7d0d\u6574\u7406", "\u65b7\u6368\u96e2"],
+    });
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({
+      sourceUrl: "https://www.threads.com/@storage_demo/post/HYDRATION123",
+      hotScore: 1015,
+      metrics: {
+        source: "threads-account-search",
+        view_count: 12000,
+        realEngagementTotal: 1015,
       },
     });
   });

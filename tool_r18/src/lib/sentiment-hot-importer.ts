@@ -2617,10 +2617,10 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     // same-persona history. Never cross the bounded freshness window just to
     // fill the requested count.
     const emergencyKeywords = hasModelStrategy && strategyResult
-      ? sentimentHotStrategyTermsForMode(strategyResult, "normal")
+      ? sentimentHotStrategyTermsForMode(strategyResult, searchMode)
       : keywords;
     const emergencyHistory = [
-      ...readThreadsSearchCandidateCache(archiveId, emergencyKeywords, poolLimit, false, "normal"),
+      ...readThreadsSearchCandidateCache(archiveId, emergencyKeywords, poolLimit, false, searchMode),
       ...readThreadsSearchCandidateCache(archiveId, keywords, poolLimit, false, searchMode),
       ...(await readCandidatesFromDatabase({
         archiveId,
@@ -2633,15 +2633,18 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
           archiveId,
           [...emergencyKeywords, ...keywords],
           poolLimit,
-          "normal",
+          searchMode,
         )
         : []),
     ];
-    const emergencyPool = finalizeSentimentHotCandidatesForDisplay(emergencyHistory, poolLimit, {
+    const scopedEmergencyHistory = hasModelStrategy && strategyResult
+      ? emergencyHistory.filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode))
+      : emergencyHistory;
+    const emergencyPool = finalizeSentimentHotCandidatesForDisplay(scopedEmergencyHistory, poolLimit, {
       archiveId,
       keywords: emergencyKeywords,
       excludeShown: false,
-      searchMode: "normal",
+      searchMode,
       freshnessDays: operationalFreshnessDays,
     });
     const emergencySupplements = collectSentimentHotSupplementCandidates({
@@ -3669,6 +3672,24 @@ export function parseThreadsGraphqlSearchPayload(args: {
   return out;
 }
 
+export function parseThreadsSearchHydrationPayloads(args: {
+  scripts: string[];
+  query: string;
+  keywords?: string[];
+  freshnessFallbackAt?: string;
+}): SentimentHotCandidate[] {
+  const byId = new Map<string, SentimentHotCandidate>();
+  for (const raw of args.scripts || []) {
+    if (!raw || (!raw.includes("text_post_app_info") && !raw.includes("\"like_count\""))) continue;
+    const payload = safeJson(raw);
+    if (!payload) continue;
+    for (const candidate of parseThreadsGraphqlSearchPayload({ ...args, payload })) {
+      if (!byId.has(candidate.id)) byId.set(candidate.id, candidate);
+    }
+  }
+  return [...byId.values()];
+}
+
 export function parseThreadsGraphqlSearchPageInfo(payload: any): { endCursor: string; hasNextPage: boolean } | null {
   const stack: any[] = [payload];
   const visited = new Set<any>();
@@ -3745,7 +3766,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
   const excludedHistoryKeys = args.ignoreHistory ? new Set<string>() : getSentimentHotShownHistoryKeys(args.archiveId);
   const results: SentimentHotCandidate[] = [];
   const resultKeys = new Set<string>();
-  const stats = { pages: 1, queries: 0, graphql: 0, accepted: 0 };
+  const stats = { pages: 1, queries: 0, graphql: 0, hydration: 0, accepted: 0 };
   try {
     const { chromium } = await import("playwright");
     const browser = await chromium.launch(buildLocalChromiumLaunchOptions());
@@ -3805,11 +3826,41 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           waitUntil: "domcontentloaded",
           timeout: Math.min(12_000, remainingSentimentDeadlineMs(args.deadlineAt, 12_000)),
         }).catch(() => undefined);
-        for (let attempt = 0; !template && attempt < scrollAttempts; attempt += 1) {
+        await searchPage.waitForTimeout(Math.min(350, remainingSentimentDeadlineMs(args.deadlineAt, 350))).catch(() => undefined);
+        const collectHydrationCandidates = async () => {
+          const scripts = await searchPage.$$eval('script[type="application/json"]', (items: any[]) => items
+            .map((item: any) => String(item.textContent || ""))
+            .filter((text: string) => text.includes("text_post_app_info") || text.includes("\"like_count\"")))
+            .catch(() => []);
+          const hydrated = parseThreadsSearchHydrationPayloads({
+            scripts,
+            query,
+            keywords: args.keywords,
+            freshnessFallbackAt: recentSearch ? new Date().toISOString() : undefined,
+          });
+          stats.hydration += hydrated.length;
+          for (const candidate of hydrated) {
+            if (excluded.has(candidate.id)) continue;
+            if (getSentimentHotCandidateHistoryKeys(candidate).some((historyKey) => excludedHistoryKeys.has(historyKey))) continue;
+            const normalized = candidateMeetsDisplayQuality(candidate, args.keywords, args.searchMode, args.freshnessDays);
+            if (!normalized) continue;
+            const dedupeKey = sentimentCandidateDedupeKey(normalized);
+            if (resultKeys.has(dedupeKey) || results.some((entry) => entry.id === normalized.id)) continue;
+            results.push(normalized);
+            resultKeys.add(dedupeKey);
+            stats.accepted += 1;
+            if (results.length >= args.limit) break;
+          }
+          return hydrated.length;
+        };
+        const initialHydrationCount = await collectHydrationCandidates();
+        const effectiveScrollAttempts = initialHydrationCount > 0 ? Math.min(scrollAttempts, 2) : scrollAttempts;
+        for (let attempt = 0; !template && attempt < effectiveScrollAttempts; attempt += 1) {
           if (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 2_000) break;
           await searchPage.mouse.wheel(0, 2200).catch(() => undefined);
           await searchPage.waitForTimeout(Math.min(600, remainingSentimentDeadlineMs(args.deadlineAt, 600))).catch(() => undefined);
         }
+        if (initialHydrationCount === 0) await collectHydrationCandidates();
         const bodyText = await searchPage.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
         const postUrls = await searchPage.$$eval('a[href*="/post/"]', (anchors: any[]) => anchors
           .map((anchor) => String(anchor.href || anchor.getAttribute?.("href") || "").trim())
@@ -3981,7 +4032,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
     console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} status=error message=${JSON.stringify(error instanceof Error ? error.message : String(error))}`);
     // Playwright is optional; reader/cache/database paths still keep the Telegram flow alive.
   }
-  console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} status=done total=${results.length} pages=${stats.pages} queries=${stats.queries} graphql=${stats.graphql} accepted=${stats.accepted}`);
+  console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} status=done total=${results.length} pages=${stats.pages} queries=${stats.queries} graphql=${stats.graphql} hydration=${stats.hydration} accepted=${stats.accepted}`);
   return sortSentimentHotCandidatePool(results, args.keywords, args.limit, args.searchMode);
 }
 
