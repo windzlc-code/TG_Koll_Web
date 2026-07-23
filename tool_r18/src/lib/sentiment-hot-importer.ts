@@ -1987,7 +1987,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     memorySummaries: args.memorySummaries,
   });
   const personaGuardSeedKeywords = buildSentimentHotKeywords({ archive: { name: archive?.name } });
-  const personaGuardSourceText = cleanText(archive?.name);
+  const personaGuardSourceText = [archive?.name, archive?.content].map(cleanText).filter(Boolean).join(" ");
   const sourceText = [archive?.name, archive?.content, args.prompt, ...(args.memorySummaries || [])].map(cleanText).filter(Boolean).join(" ");
   const runtimePromise = ensureSentimentRuntime().catch((error: any) => ({
     ok: false,
