@@ -1280,7 +1280,7 @@ const modules = [
   { id: "personas", label: "我的人设", callback: "后台自动读取" },
   { id: "tweet_generation", label: "推文生成", callback: "后台自动读取" },
   { id: "publishing", label: "发布", callback: "后台自动排队" },
-  { id: "accounts", label: "账号管理自动化", view: "accounts", panels: ["accounts", "proxies"] },
+  { id: "accounts", label: "账号管理", view: "accounts", panels: ["accounts", "proxies"] },
   { id: "browser_list", label: "浏览器列表", view: "accounts", panel: "browsers" },
 ];
 
@@ -4076,7 +4076,7 @@ function publishAccountBlockMessage(account) {
   if (status === "pending_login") return "当前发布账号还未完成登录，提交发布后系统会自动打开浏览器执行登录流程。";
   if (status === "account_confirmation_required") return "当前发布账号已识别登录资料，但仍需确认关联账号后才能继续。";
   if (status === "need_verification") return "当前发布账号需要验证，提交发布后系统会自动打开浏览器并等待处理。";
-  if (status === "disabled") return "当前发布账号已停用，请到账号管理自动化启用或更换账号后再发布。";
+  if (status === "disabled") return "当前发布账号已停用，请到账号管理启用或更换账号后再发布。";
   return "当前发布账号将由系统在发布流程中自动检测登录状态。";
 }
 
@@ -5290,7 +5290,7 @@ function setView(view) {
     workspace: "任务工作台",
     tasks: "任务队列",
     social: "浏览器发布",
-    accounts: state.accountBrowserPanel === "browsers" ? "浏览器列表" : "账号管理自动化",
+    accounts: state.accountBrowserPanel === "browsers" ? "浏览器列表" : "账号管理",
     settings: "系统状态",
     billing: "订阅与算力",
     console_settings: "设置",
@@ -5566,7 +5566,7 @@ function renderMobileTaskDock() {
     return `
       <button type="button" class="mobile-task-dock-button ${isActive ? "is-active" : ""}" ${moduleNavigationAttributes(item)} aria-label="${esc(item.label)}" ${isActive ? 'aria-current="page"' : ""}>
         ${renderMobileTaskIcon(item.id)}
-        <span>${esc(item.label === "账号管理自动化" ? "账号池" : item.label.replace("列表", ""))}</span>
+        <span>${esc(item.label === "账号管理" ? "账号池" : item.label.replace("列表", ""))}</span>
       </button>`;
   }).join("");
 }
@@ -6945,7 +6945,7 @@ function renderPersonaAccountPanel(persona, account, profile, step) {
   return `
     <div class="persona-inline-panel persona-account-summary-panel">
       <strong>账号设置已统一管理</strong>
-      <p>登录状态、养号、自动回复等操作已集中到“账号管理自动化”。这里仅保留当前人设的账号状态概览。</p>
+      <p>登录状态、养号、自动回复等操作已集中到“账号管理”。这里仅保留当前人设的账号状态概览。</p>
       <div class="persona-metrics persona-account-summary-metrics">
         <div><span>执行账号</span><strong>${esc(`${accounts.length} 个`)}</strong></div>
         <div><span>可发布账号</span><strong>${esc(`${publishAccountsForPersona(persona).length} 个`)}</strong></div>
@@ -6961,7 +6961,7 @@ function renderPersonaAccountPanel(persona, account, profile, step) {
         </div>
       ` : `<div class="empty-state">当前人设还没有绑定浏览器执行账号。</div>`}
       <div class="row-actions">
-        <button type="button" class="primary" data-open-unified-automation>进入账号管理自动化</button>
+        <button type="button" class="primary" data-open-unified-automation>进入账号管理</button>
       </div>
     </div>`;
 }
@@ -7525,7 +7525,7 @@ function renderPersonaSettingsPanelV2(persona, account, profile, step) {
       <div class="persona-inline-panel">
         <div class="persona-head-copy">
           <strong>账号设置</strong>
-          <span class="persona-panel-intro">集中查看和编辑当前人设可用账号；账号绑定统一在账号管理自动化中维护。</span>
+          <span class="persona-panel-intro">集中查看和编辑当前人设可用账号；账号绑定统一在账号管理中维护。</span>
         </div>
         ${renderPersonaAccountPanelV2(persona, account, profile, "binding")}
       </div>`;
@@ -7584,7 +7584,7 @@ function renderPersonaAccountPanelV2(persona, account, profile, step) {
           ${accounts.length ? accounts.map((item) => renderAccountPoolCard(item, {
             variant: "persona-settings",
             active: String(item.id || "") === String(selectedAccount?.id || ""),
-          })).join("") : `<div class="empty-state">当前平台没有可用账号。请到账号管理自动化的账号池中添加或绑定账号。</div>`}
+          })).join("") : `<div class="empty-state">当前平台没有可用账号。请到账号管理的账号池中添加或绑定账号。</div>`}
         </div>
       </section>
     </div>
@@ -7830,16 +7830,19 @@ function renderTaskQueuePersonaSelectorCard(persona) {
 function renderTaskQueuePersonaSelector() {
   const current = selectedPersona();
   return `
-    <aside class="persona-list-shell task-queue-persona-shell">
+    <aside id="taskQueuePersonaSidebar" class="persona-list-shell task-queue-persona-shell persona-mobile-drawer" data-persona-mobile-sidebar aria-hidden="false">
       <div class="persona-inline-panel persona-list-toolbar">
         <div class="persona-list-head persona-list-head--queue">
           <div class="persona-head-copy">
             <strong>人设队列</strong>
             <span>点击切换右侧人设自动化队列</span>
           </div>
-          <div class="task-queue-sidebar-tools">
+          <div class="task-queue-sidebar-tools persona-mobile-drawer-head-actions">
             <button type="button" data-task-refresh>刷新队列</button>
             <span>${esc(`${state.personas.length} 个`)}</span>
+            <button type="button" class="persona-mobile-drawer-close" data-persona-mobile-list-close title="关闭人设列表" aria-label="关闭人设列表">
+              <svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 6 12 12"></path><path d="m18 6-12 12"></path></svg>
+            </button>
           </div>
         </div>
       </div>
@@ -7852,7 +7855,8 @@ function renderTaskQueuePersonaSelector() {
         <strong>${esc(current?.name || "未选择人设")}</strong>
         <span>${esc(current ? `当前查看 ${personaAutomationTasksFor(current.id).length} 条自动化任务` : "选中一张人设卡后查看对应队列")}</span>
       </div>
-    </aside>`;
+    </aside>
+    <div class="persona-mobile-drawer-backdrop" data-persona-mobile-list-backdrop data-persona-mobile-list-close hidden></div>`;
 }
 
 function renderTaskQueueView() {
@@ -7906,13 +7910,19 @@ function renderTaskQueueView() {
     : {
       title: "当前人设自动化队列",
       description: persona ? `这里统一查看「${persona.name || persona.id}」的浏览器自动化任务，不再单独放在人设页签里。` : "先在右侧点选一个人设，这里会同步显示对应自动化队列。",
+      extraActions: `
+        <button type="button" class="persona-mobile-list-toggle" data-persona-mobile-list-toggle="taskQueuePersonaSidebar" aria-controls="taskQueuePersonaSidebar" aria-expanded="false">
+          <svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M4 5h16"></path><path d="M4 12h16"></path><path d="M4 19h16"></path>
+          </svg>
+          <span>人设列表</span>
+        </button>`,
       actions: `
         <div class="task-queue-actionbar">
           <button type="button" data-task-open-persona>${persona ? "打开当前人设" : "去选择人设"}</button>
           ${renderTaskQueueBulkControls("persona")}
           ${persona ? `<button type="button" class="danger" data-task-clear-persona-queue="${esc(persona.id)}">删除全部记录</button>` : ""}
         </div>`,
-      extraActions: "",
       body: persona
         ? (
           personaTasks.length
@@ -7935,7 +7945,7 @@ function renderTaskQueueView() {
               <strong>${panel.title}</strong>
               <p>${esc(panel.description)}</p>
             </div>
-            ${panel.actions ? `<div class="task-panel-section-controls">${panel.actions}</div>` : ""}
+            ${panel.actions || panel.extraActions ? `<div class="task-panel-section-controls">${panel.extraActions || ""}${panel.actions || ""}</div>` : ""}
           </div>
           ${panel.body}
           <div class="task-panel-section-foot">${panel.pager}</div>
@@ -8330,7 +8340,7 @@ function renderPublishModeTabs(mode) {
 
 function renderPublishAccountBadge(account) {
   if (!account) {
-    return `<div class="publish-account-badge is-empty"><span>发布账号</span><strong>未绑定</strong><em>到账号管理自动化绑定</em></div>`;
+    return `<div class="publish-account-badge is-empty"><span>发布账号</span><strong>未绑定</strong><em>到账号管理绑定</em></div>`;
   }
   const ready = isReadyPublishAccount(account);
   return `
@@ -10077,6 +10087,7 @@ async function submitPersonaPublishTask() {
       updatePersonaPublishResultView(persona.id);
     });
     await loadSocial();
+    if (taskId && !waitingForSchedule) openLiveBrowserTaskView(taskId);
   } finally {
     setActionLocked(lockParts, false);
     if (isPersonaWorkspaceModule()) renderPersonaDetail();
@@ -10856,7 +10867,7 @@ async function promptPersonaAccountBinding(persona = selectedPersona()) {
   const account = publishAccountForPersona(persona);
   const confirmed = await openConsoleModal({
     title: account ? "管理发布账号" : "绑定发布账号",
-    message: account ? publishAccountBlockMessage(account) : "当前人设还没有绑定 Threads 或 Instagram 执行账号。请到账号管理自动化绑定账号后再发布。",
+    message: account ? publishAccountBlockMessage(account) : "当前人设还没有绑定 Threads 或 Instagram 执行账号。请到账号管理绑定账号后再发布。",
     confirmText: account ? "继续处理" : "绑定账号",
     cancelText: "取消",
   });
@@ -10894,10 +10905,9 @@ async function executeSimpleFlow() {
         const resultItems = Array.isArray(result) ? result : (result ? [result] : []);
         const resultTasks = resultItems.map((item) => item?.task).filter((task) => task?.id);
         const createdTasks = Array.isArray(result?.created) ? result.created : [];
-        const taskIds = [
-          ...resultTasks.map((task) => String(task.id || "").trim()),
-          ...createdTasks.map((task) => String(task?.id || "").trim()),
-        ].filter(Boolean);
+        const immediateTask = [...resultTasks, ...createdTasks].find((task) => task?.id && !isFutureScheduledSocialTask(task));
+        const immediateTaskId = String(immediateTask?.id || "").trim();
+        if (immediateTaskId) openLiveBrowserTaskView(immediateTaskId);
         return;
       }
     }
@@ -10920,6 +10930,7 @@ async function executeSimpleFlow() {
         taskPanel: personaId ? "persona" : "regular",
         personaId,
       });
+      if (taskType === "publish_post" && !isFutureScheduledSocialTask(result?.task)) openLiveBrowserTaskView(taskId);
     }
     return;
   }
@@ -16804,7 +16815,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
       <div class="persona-inline-panel persona-publish-panel">
         <div class="persona-head-copy">
           <strong>发布前检查</strong>
-          <span class="persona-panel-intro">${esc(publishAccount ? (isReadyPublishAccount(publishAccount) ? `${publishPlatformLabel(publishAccount)} · ${publishHint}` : publishAccountBlockMessage(publishAccount)) : "当前人设还没有绑定 Threads 或 Instagram 执行账号。请到账号管理自动化绑定账号后再发布。")}</span>
+          <span class="persona-panel-intro">${esc(publishAccount ? (isReadyPublishAccount(publishAccount) ? `${publishPlatformLabel(publishAccount)} · ${publishHint}` : publishAccountBlockMessage(publishAccount)) : "当前人设还没有绑定 Threads 或 Instagram 执行账号。请到账号管理绑定账号后再发布。")}</span>
         </div>
         ${renderPersonaPublishPreflight(publishAccount)}
         <div class="form-grid persona-detail-controls">
@@ -16851,8 +16862,12 @@ async function loadTasks() {
   ]);
   state.tasks = Array.isArray(data.items) ? data.items : (Array.isArray(data.tasks) ? data.tasks : []);
   state.socialTasks = Array.isArray(socialTasksData.tasks) ? socialTasksData.tasks : (Array.isArray(state.socialTasks) ? state.socialTasks : []);
+  const reopenTaskQueuePersonaSidebar = Boolean(
+    document.getElementById("taskQueuePersonaSidebar")?.classList.contains("is-mobile-open")
+  );
   const host = $("taskTable");
   host.innerHTML = renderTaskQueueView();
+  setPersonaMobileSidebarOpen(reopenTaskQueuePersonaSidebar, "taskQueuePersonaSidebar");
 }
 
 async function showTaskDetail(id) {
@@ -19825,7 +19840,7 @@ function syncAccountBrowserPanel() {
   const shell = $("accountBrowserShell");
   if (shell) shell.dataset.accountBrowserPanel = active;
   if (state.view === "accounts" && $("viewTitle")) {
-    $("viewTitle").textContent = active === "browsers" ? "浏览器列表" : "账号管理自动化";
+    $("viewTitle").textContent = active === "browsers" ? "浏览器列表" : "账号管理";
   }
   const refreshButton = $("refreshAccounts");
   if (refreshButton) {
@@ -20779,6 +20794,8 @@ async function submitMatrixPublishTask(messageId = "commandMsg") {
       });
     });
     await loadSocial();
+    const firstImmediateTaskId = String(immediateCreated[0]?.task?.id || immediateCreated[0]?.id || "").trim();
+    if (firstImmediateTaskId) openLiveBrowserTaskView(firstImmediateTaskId);
     return result;
   } finally {
     setActionLocked(lockParts, false);
@@ -22584,6 +22601,17 @@ function bindEvents() {
   if ($("refreshSocialTasks")) $("refreshSocialTasks").addEventListener("click", () => loadSocial().then(renderWorkspace));
   if ($("refreshAccounts")) $("refreshAccounts").addEventListener("click", () => loadSocial().then(renderWorkspace));
   $("taskTable").addEventListener("click", (event) => {
+    const personaMobileToggle = event.target.closest("[data-persona-mobile-list-toggle]");
+    if (personaMobileToggle) {
+      const sidebarId = personaMobileToggle.dataset.personaMobileListToggle || "";
+      const sidebar = document.getElementById(sidebarId);
+      setPersonaMobileSidebarOpen(!sidebar?.classList.contains("is-mobile-open"), sidebarId);
+      return;
+    }
+    if (event.target.closest("[data-persona-mobile-list-close], [data-persona-mobile-list-backdrop]")) {
+      setPersonaMobileSidebarOpen(false);
+      return;
+    }
     const selectionInput = event.target.closest("[data-task-queue-select]");
     if (selectionInput) {
       const [kind, id] = String(selectionInput.dataset.taskQueueSelect || "").split(":");
@@ -22645,6 +22673,7 @@ function bindEvents() {
       setSelectedPersonaPostId("");
       state.taskQueuePersonaPage = 1;
       $("taskTable").innerHTML = renderTaskQueueView();
+      setPersonaMobileSidebarOpen(false, "taskQueuePersonaSidebar");
       return;
     }
     const openPersona = event.target.closest("[data-task-open-persona]");

@@ -600,6 +600,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("syncLiveBrowserAutoRefresh()", panel_switch)
         self.assertIn("refreshLiveBrowserSessionsSoon(taskId, 40, 500)", self._function_source("submitPersonaPublishTask"))
         self.assertIn("refreshLiveBrowserSessionsSoon(String(task.id), 40, 500)", self._function_source("submitPublishContentTasks"))
+        self.assertIn("openLiveBrowserTaskView(taskId)", self._function_source("submitPersonaPublishTask"))
+        self.assertIn("openLiveBrowserTaskView(immediateTaskId)", self._function_source("executeSimpleFlow"))
+        self.assertIn("openLiveBrowserTaskView(firstImmediateTaskId)", self._function_source("submitMatrixPublishTask"))
 
     def test_live_browser_polling_preserves_unchanged_placeholder_nodes(self):
         browser_render = self._function_source("renderLiveBrowserSessions")

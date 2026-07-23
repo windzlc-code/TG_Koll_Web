@@ -16697,7 +16697,7 @@ body.console-page {
 
   .task-persona-queue-row {
     display: grid;
-    grid-template-columns: 22px minmax(0, 1fr) auto;
+    grid-template-columns: 22px minmax(0, 1fr) minmax(88px, 42%);
     grid-template-areas:
       "check type status"
       "empty platform account"
@@ -16721,7 +16721,7 @@ body.console-page {
 
   .task-table-inner--regular .task-row {
     display: grid;
-    grid-template-columns: 22px minmax(0, 1fr) auto;
+    grid-template-columns: 22px minmax(0, 1fr) minmax(88px, 42%);
     grid-template-areas:
       "check task status"
       "empty time actions";
@@ -16787,7 +16787,7 @@ body.console-page {
   .task-persona-queue-row .row-actions,
   .task-table-inner--regular .task-row .row-actions {
     width: auto;
-    max-width: 126px;
+    max-width: 100%;
     gap: 4px;
     justify-content: flex-end;
     flex-wrap: wrap;
@@ -16795,17 +16795,17 @@ body.console-page {
 
   .console-page .task-persona-queue-row .row-actions :is(button, a),
   .console-page .task-table-inner--regular .task-row .row-actions :is(button, a) {
-    min-height: 30px;
-    padding: 3px 7px;
-    font-size: 11px;
+    min-height: 28px;
+    padding: 2px 5px;
+    font-size: 10px;
   }
 
   .console-page .task-persona-queue-row .row-actions .task-queue-delete-button,
   .console-page .task-table-inner--regular .task-row .row-actions .task-queue-delete-button {
-    width: 30px;
-    min-width: 30px;
-    height: 30px;
-    min-height: 30px;
+    width: 28px;
+    min-width: 28px;
+    height: 28px;
+    min-height: 28px;
     padding: 0;
   }
 

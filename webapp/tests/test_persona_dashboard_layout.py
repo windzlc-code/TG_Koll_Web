@@ -73,6 +73,11 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             with self.subTest(module_id=module_id):
                 self.assertIn(f'{module_id}:', self.console_script)
 
+        self.assertIn(
+            'item.label === "账号管理" ? "账号池"',
+            self.console_script,
+        )
+
     def test_mobile_task_queue_uses_compact_persona_and_task_rows(self):
         marker = "/* Mobile task queue density: align queue cards with the compact persona list. */"
         self.assertIn(marker, self.styles)
@@ -92,8 +97,33 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('"check task status"', mobile_styles)
         self.assertIn('"empty time actions"', mobile_styles)
 
+    def test_mobile_task_queue_persona_list_reuses_shared_drawer(self):
+        selector_start = self.console_script.index("function renderTaskQueuePersonaSelector()")
+        selector_end = self.console_script.index("\nfunction renderTaskQueueView()", selector_start)
+        selector = self.console_script[selector_start:selector_end]
+        view_start = selector_end
+        view_end = self.console_script.index("\nfunction currentBranch", view_start)
+        view = self.console_script[view_start:view_end]
+        handler_start = self.console_script.index('  $("taskTable").addEventListener("click", (event) => {')
+        handler_end = self.console_script.index("\n  });", handler_start)
+        handler = self.console_script[handler_start:handler_end]
+
+        self.assertIn('id="taskQueuePersonaSidebar"', selector)
+        self.assertIn("persona-mobile-drawer", selector)
+        self.assertIn("data-persona-mobile-sidebar", selector)
+        self.assertIn("data-persona-mobile-list-close", selector)
+        self.assertIn("data-persona-mobile-list-backdrop", selector)
+        self.assertIn('data-persona-mobile-list-toggle="taskQueuePersonaSidebar"', view)
+        persona_panel = view[view.index('title: "当前人设自动化队列"'):]
+        self.assertEqual(persona_panel.count("extraActions:"), 1)
+        select_start = handler.index('const taskPersonaSelect = event.target.closest("[data-task-persona-select]");')
+        select_handler = handler[select_start:]
+        self.assertLess(
+            select_handler.index('$("taskTable").innerHTML = renderTaskQueueView();'),
+            select_handler.index('setPersonaMobileSidebarOpen(false, "taskQueuePersonaSidebar");'),
+        )
         self.assertIn(
-            'item.label === "账号管理自动化" ? "账号池"',
+            'setPersonaMobileSidebarOpen(reopenTaskQueuePersonaSidebar, "taskQueuePersonaSidebar");',
             self.console_script,
         )
 
