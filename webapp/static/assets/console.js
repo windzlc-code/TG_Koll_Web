@@ -20461,6 +20461,11 @@ function updateLiveBrowserSessionCard(card, session) {
   }
   const metaNode = card.querySelector("[data-live-browser-meta]");
   if (metaNode) metaNode.textContent = meta;
+  const taskSummary = liveBrowserTaskSummary(session);
+  const taskCountNode = card.querySelector("[data-live-browser-task-count]");
+  const taskTargetNode = card.querySelector("[data-live-browser-task-target]");
+  if (taskCountNode) taskCountNode.textContent = String(taskSummary.count);
+  if (taskTargetNode) taskTargetNode.textContent = taskSummary.target;
   const iframe = card.querySelector("iframe");
   if (iframe) iframe.title = title;
   const statusNode = card.querySelector("[data-live-browser-status]");
@@ -20480,6 +20485,15 @@ function updateLiveBrowserSessionCard(card, session) {
   card.querySelector("[data-live-browser-text]")?.toggleAttribute("disabled", !interactionAllowed);
   card.querySelector("[data-live-browser-type]")?.toggleAttribute("disabled", !interactionAllowed);
   card.querySelector("[data-live-browser-key]")?.toggleAttribute("disabled", !interactionAllowed);
+  const manualInput = card.querySelector("[data-live-browser-manual-input]");
+  const inputToggle = card.querySelector("[data-live-browser-input-toggle]");
+  const tools = card.querySelector("[data-live-browser-tools]");
+  if (manualInput) manualInput.hidden = !interactionAllowed;
+  if (inputToggle) inputToggle.disabled = !interactionAllowed;
+  if (!interactionAllowed) {
+    if (tools) tools.hidden = true;
+    if (inputToggle) inputToggle.setAttribute("aria-expanded", "false");
+  }
   const closeButton = card.querySelector("[data-live-browser-close]");
   if (closeButton) {
     closeButton.hidden = !canCloseWindow;
@@ -20604,6 +20618,35 @@ function renderLiveBrowserModeToggle(session) {
     </div>`;
 }
 
+function liveBrowserTaskSummary(session) {
+  const taskId = String(session?.task_id || "").trim();
+  const task = (state.socialTasks || []).find((item) => String(item?.id || "").trim() === taskId) || {};
+  const payload = socialTaskPayload(task);
+  const count = taskId ? 1 : 0;
+  const taskType = String(session?.task_type || task?.task_type || "").trim().toLowerCase();
+  const target = String(
+    payload.archive_post_title
+    || payload.target_title
+    || payload.target_url
+    || payload.username
+    || (taskType === "publish_post" ? "发布内容" : (taskType === "open_login" ? "账号登录" : statusLabel(taskType || "浏览器任务"))),
+  ).trim();
+  return { count, target };
+}
+
+function renderLiveBrowserActionMenu(session, { canStopTask = false, canCloseWindow = false } = {}) {
+  const sessionId = liveBrowserSessionId(session);
+  return `
+    <details class="live-browser-action-menu">
+      <summary title="任务操作" aria-label="任务操作">${renderEditIcon()}</summary>
+      <div class="live-browser-action-menu-panel">
+        ${renderLiveBrowserModeToggle(session)}
+        <button type="button" class="danger" data-social-cancel="${esc(session.task_id || "")}" ${canStopTask ? "" : "hidden disabled"}>停止进程</button>
+        <button type="button" data-live-browser-close="${esc(sessionId)}" ${canCloseWindow ? "" : "hidden disabled"}>关闭窗口</button>
+      </div>
+    </details>`;
+}
+
 function liveBrowserIsReady(session) {
   if (Object.prototype.hasOwnProperty.call(session || {}, "browser_ready")) {
     return Boolean(session?.browser_ready);
@@ -20683,18 +20726,21 @@ function renderLiveBrowserSession(session) {
   const interactionClass = interactionAllowed ? " is-interaction-enabled" : " is-interaction-locked";
   const interactionHint = liveBrowserInteractionHint(session);
   const canCloseWindow = sessionId && sessionStatus === "standby";
+  const taskSummary = liveBrowserTaskSummary(session);
   return `
     <article class="live-browser-card${orientationClass}${interactionClass}${statusClass}" data-live-browser-card="${esc(sessionId)}" style="--live-browser-width: ${width}; --live-browser-height: ${height}; --live-browser-ratio: ${width} / ${height};">
       <div class="live-browser-card-head">
-        <div>
+        <div class="live-browser-card-identity">
           <strong id="${esc(liveBrowserDialogTitleId(sessionId))}" data-live-browser-title>${esc(title)}</strong>
           <span data-live-browser-meta>${esc(`${session.platform || "-"} · ${session.display || "-"} · ${session.width || 720}x${session.height || 1280}`)}</span>
         </div>
+        <div class="live-browser-task-summary" aria-label="任务信息">
+          <span>任务数 <b data-live-browser-task-count>${esc(taskSummary.count)}</b></span>
+          <span title="${esc(taskSummary.target)}">任务目标 <b data-live-browser-task-target>${esc(taskSummary.target)}</b></span>
+        </div>
         <div class="live-browser-card-actions">
-          ${renderLiveBrowserModeToggle(session)}
           <button type="button" class="live-browser-expand-button" data-live-browser-fullscreen="${esc(sessionId)}" title="放大窗口" aria-label="放大窗口" aria-pressed="false">${renderExpandIcon()}</button>
-          <button type="button" data-live-browser-close="${esc(sessionId)}" ${canCloseWindow ? "" : "hidden disabled"}>关闭窗口</button>
-          <button type="button" class="danger" data-social-cancel="${esc(session.task_id || "")}" ${canStopTask ? "" : "hidden disabled"}>停止进程</button>
+          ${renderLiveBrowserActionMenu(session, { canStopTask, canCloseWindow })}
           <span class="status ${esc(presentationStatus)}" data-live-browser-status>${esc(liveBrowserPresentationLabel(session))}</span>
         </div>
       </div>
@@ -20709,17 +20755,21 @@ function renderLiveBrowserSession(session) {
         ></iframe>
         <div class="live-browser-lock" aria-hidden="true"><span>自动化执行中，等待进入人工处理状态后再操作。</span></div>
       </div>
-      <div class="live-browser-tools" data-live-browser-tools="${esc(sessionId)}">
-        <input
-          type="text"
-          data-live-browser-text="${esc(sessionId)}"
-          placeholder="输入验证码或文本"
-          autocomplete="off"
-          ${interactionAllowed ? "" : "disabled"}
-        />
-        <button type="button" data-live-browser-type="${esc(sessionId)}" ${interactionAllowed ? "" : "disabled"}>发送</button>
-        <button type="button" data-live-browser-key="${esc(sessionId)}" data-live-browser-key-value="Enter" ${interactionAllowed ? "" : "disabled"}>回车</button>
-        <button type="button" data-live-browser-screenshot="${esc(sessionId)}" ${sessionId ? "" : "disabled"}>截图</button>
+      <div class="live-browser-manual-input" data-live-browser-manual-input ${interactionAllowed ? "" : "hidden"}>
+        <button type="button" class="live-browser-input-toggle" data-live-browser-input-toggle="${esc(sessionId)}" aria-expanded="false">
+          ${renderEditIcon()}<span>输入验证码或文本</span>
+        </button>
+        <div class="live-browser-tools" data-live-browser-tools="${esc(sessionId)}" hidden>
+          <input
+            type="text"
+            data-live-browser-text="${esc(sessionId)}"
+            placeholder="输入验证码或文本"
+            autocomplete="off"
+            ${interactionAllowed ? "" : "disabled"}
+          />
+          <button type="button" data-live-browser-type="${esc(sessionId)}" ${interactionAllowed ? "" : "disabled"}>发送</button>
+          <button type="button" data-live-browser-key="${esc(sessionId)}" data-live-browser-key-value="Enter" ${interactionAllowed ? "" : "disabled"}>回车</button>
+        </div>
       </div>
       <div class="live-browser-interaction-note">${esc(interactionHint)}</div>
     </article>
@@ -20929,21 +20979,6 @@ async function pressLiveBrowserKey(sessionId = "", key = "Enter") {
     body: JSON.stringify({ key }),
   });
   showMsg("socialMsg", "已发送按键。", true);
-}
-
-async function captureLiveBrowserScreenshot(sessionId = "") {
-  const cleanSessionId = String(sessionId || "").trim();
-  if (!cleanSessionId) return;
-  const result = await api(`/api/persona_dashboard/automation/browser_sessions/${encodeURIComponent(cleanSessionId)}/screenshot`, {
-    method: "POST",
-  });
-  showMsg("socialMsg", "已完成浏览器截图。", true);
-  const screenshotUrl = directMediaPreviewUrl(result.screenshot_url || result.screenshotUrl);
-  if (screenshotUrl) {
-    const groupId = registerMediaPreviewGroup([{ previewUrl: screenshotUrl, type: "image", label: "浏览器截图" }]);
-    openPersonaMediaLightbox(groupId, 0);
-  }
-  await loadSocial().catch(() => {});
 }
 
 function liveBrowserSessionUrl(session) {
@@ -23485,6 +23520,17 @@ function bindEvents() {
       requestLiveBrowserFullscreen(fullscreen.dataset.liveBrowserFullscreen || "", fullscreen);
       return;
     }
+    const liveBrowserInputToggle = event.target.closest("[data-live-browser-input-toggle]");
+    if (liveBrowserInputToggle) {
+      const card = liveBrowserInputToggle.closest("[data-live-browser-card]");
+      const tools = card?.querySelector("[data-live-browser-tools]");
+      if (!tools) return;
+      const opening = tools.hidden;
+      tools.hidden = !opening;
+      liveBrowserInputToggle.setAttribute("aria-expanded", opening ? "true" : "false");
+      if (opening) card.querySelector("[data-live-browser-text]")?.focus();
+      return;
+    }
     const closeLiveBrowser = event.target.closest("[data-live-browser-close]");
     if (closeLiveBrowser) {
       closeLiveBrowserSession(closeLiveBrowser.dataset.liveBrowserClose || "")
@@ -23501,12 +23547,6 @@ function bindEvents() {
     if (liveBrowserKey) {
       pressLiveBrowserKey(liveBrowserKey.dataset.liveBrowserKey || "", liveBrowserKey.dataset.liveBrowserKeyValue || "Enter")
         .catch((error) => showMsg("socialMsg", error.detail || error.message || "发送按键失败", false));
-      return;
-    }
-    const liveBrowserScreenshot = event.target.closest("[data-live-browser-screenshot]");
-    if (liveBrowserScreenshot) {
-      captureLiveBrowserScreenshot(liveBrowserScreenshot.dataset.liveBrowserScreenshot || "")
-        .catch((error) => showMsg("socialMsg", error.detail || error.message || "浏览器截图失败", false));
       return;
     }
     const cancel = event.target.closest("[data-social-cancel]");
