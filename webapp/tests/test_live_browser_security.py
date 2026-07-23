@@ -3,6 +3,7 @@ import json
 from http.cookies import SimpleCookie
 from types import SimpleNamespace
 from unittest import mock
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fastapi import FastAPI
@@ -13,6 +14,30 @@ from starlette.responses import Response
 from social_automation import live_browser
 from webapp import social_automation_api
 from webapp.auth import get_current_user
+
+
+def test_live_browser_view_uses_stable_non_threaded_decoder():
+    session = live_browser.LiveBrowserSession(
+        id="live-task-1",
+        task_id="task-1",
+        account_id="account-1",
+        account_username="account",
+        platform="threads",
+        task_type="publish_post",
+        display=":90",
+        width=1600,
+        height=900,
+        vnc_port=5900,
+        web_port=6900,
+        started_at=1,
+    )
+
+    public = live_browser._session_public(session)
+    query = parse_qs(urlsplit(public["view_path"]).query)
+
+    assert query["enable_threading"] == ["0"]
+    assert query["enable_webp"] == ["1"]
+    assert query["video_quality"] == ["1"]
 
 
 def test_live_browser_admin_ticket_preserves_subresource_auth_for_only_one_session():

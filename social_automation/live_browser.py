@@ -363,7 +363,12 @@ def _session_public(session: LiveBrowserSession) -> dict[str, Any]:
             "compression": 2,
             "enable_webp": 1,
             "enable_webrtc": 0,
-            "enable_threading": 1,
+            # KasmVNC's bundled noVNC client uses the browser ImageDecoder API
+            # when threading is enabled. Chrome can reject JPEG/WebP rectangles
+            # with "Failed to decode frame at index 0", leaving the viewer on
+            # its fatal error overlay. The non-threaded createImageBitmap path
+            # avoids that decoder failure and keeps the session connected.
+            "enable_threading": 0,
             "path": ws_path,
         }
     )

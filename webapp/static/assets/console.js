@@ -20715,7 +20715,7 @@ function liveBrowserSessionUrl(session) {
     compression: "2",
     enable_webp: "1",
     enable_webrtc: "0",
-    enable_threading: "1",
+    enable_threading: "0",
   });
   if (session.password) params.set("password", String(session.password));
   return `${base.replace(/\/+$/, "")}/vnc.html?${params.toString()}`;
