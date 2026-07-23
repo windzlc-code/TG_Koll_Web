@@ -63,7 +63,7 @@ const SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS = 35_000;
 const SENTIMENT_HOT_TOTAL_TIMEOUT_MS = 90_000;
 const SENTIMENT_HOT_REFRESH_STRATEGY_TIMEOUT_MS = 18_000;
 const SENTIMENT_HOT_SUPPLEMENT_MIN_REMAINING_MS = 12_000;
-const SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT = 8;
+const SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT = 2;
 const SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS = 72 * 60 * 60 * 1000;
 const SENTIMENT_HOT_MAX_PUBLISHED_AGE_MS = 730 * 24 * 60 * 60 * 1000;
 const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 19;
@@ -1324,8 +1324,11 @@ export function candidateMatchesSentimentHotStrategyAnchors(candidate: Sentiment
     return [...new Set([...requiredAnchors, ...normalAnchors, ...normalAcceptTerms])]
       .filter(matchesLeadingAnchor).length >= 2;
   }
-  if (personaGuardTerms.some(matchesLeadingAnchor)) return true;
-  return requiredAnchors.filter(matchesExactAnchor).length >= 2;
+  // A role-like persona name (for example "secretary") is not evidence that
+  // the post belongs to the persona's actual domain. One model-selected direct
+  // domain anchor is stronger and keeps niche searches from requiring two
+  // different topic words in every valid post.
+  return requiredAnchors.some((anchor) => matchesExactAnchor(anchor));
 }
 
 function parseSentimentHotSemanticAcceptedIds(value: unknown): string[] | null {

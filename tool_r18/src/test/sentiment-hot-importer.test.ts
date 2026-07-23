@@ -800,6 +800,60 @@ describe("sentiment hot importer", () => {
     expect(candidateMatchesSentimentHotStrategyAnchors(candidate, strategy, "strict")).toBe(false);
   });
 
+  it("does not let a persona role name bypass strict domain anchors", () => {
+    const candidate = {
+      id: "generic-secretary-story",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@demo/post/generic-secretary-story",
+      author: "demo",
+      content: "\u8fd9\u7bc7\u6587\u7ae0\u53ea\u662f\u56de\u987e\u4e00\u4f4d\u79d8\u4e66\u4ece\u5165\u804c\u5230\u5347\u4efb\u4e3b\u4efb\u7684\u804c\u573a\u7ecf\u5386\uff0c\u5305\u542b\u65e5\u7a0b\u5b89\u6392\u3001\u4f1a\u8bae\u7eaa\u8981\u3001\u6587\u4ef6\u5f52\u6863\u3001\u5ba2\u6237\u63a5\u5f85\u548c\u56e2\u961f\u6c9f\u901a\uff0c\u6574\u7bc7\u5185\u5bb9\u90fd\u662f\u884c\u653f\u5de5\u4f5c\u4e0e\u4e2a\u4eba\u6210\u957f\u6545\u4e8b\u3002",
+      media: [],
+      hotScore: 9000,
+      metrics: { query: "\u79d8\u4e66" },
+    } as any;
+    const strategy = {
+      primaryQueries: ["\u80a1\u7968\u6295\u8d44"],
+      broadQueries: ["\u91d1\u878d\u5e02\u573a"],
+      ecosystemQueries: ["\u7406\u8d22\u65b0\u624b"],
+      requiredAnchorTerms: ["\u80a1\u7968", "\u8d37\u6b3e", "\u7406\u8d22", "\u878d\u8d44"],
+      normalAnchorTerms: ["\u91d1\u878d", "\u8bc1\u5238", "\u94f6\u884c"],
+      rejectTerms: [],
+      strictAcceptTerms: ["\u80a1\u7968", "\u8d37\u6b3e", "\u7406\u8d22", "\u878d\u8d44"],
+      normalAcceptTerms: ["\u91d1\u878d", "\u8bc1\u5238", "\u94f6\u884c"],
+      personaGuardTerms: ["\u79d8\u4e66"],
+      domainSummary: "\u91d1\u878d\u7406\u8d22\u4e0e\u6295\u8d44\u8d37\u6b3e\u89c4\u5212",
+    } as any;
+
+    expect(candidateMatchesSentimentHotStrategyAnchors(candidate, strategy, "strict")).toBe(false);
+  });
+
+  it("accepts one direct domain anchor in strict mode", () => {
+    const candidate = {
+      id: "fresh-stock-analysis",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@finance/post/fresh-stock-analysis",
+      author: "finance",
+      content: "\u4eca\u5929\u6574\u7406\u80a1\u7968\u5e02\u573a\u7684\u91cf\u4ef7\u53d8\u5316\u4e0e\u98ce\u9669\u63a7\u5236\u601d\u8def\uff0c\u8ba8\u8bba\u516c\u53f8\u57fa\u672c\u9762\u3001\u73b0\u91d1\u6d41\u3001\u4f30\u503c\u533a\u95f4\u548c\u4ed3\u4f4d\u7ba1\u7406\uff0c\u63d0\u9192\u6295\u8d44\u4eba\u4e0d\u8981\u56e0\u4e3a\u77ed\u671f\u6ce2\u52a8\u76f2\u76ee\u8ffd\u9ad8\u6740\u4f4e\u3002",
+      media: [],
+      hotScore: 12000,
+      metrics: { query: "\u80a1\u7968" },
+    } as any;
+    const strategy = {
+      primaryQueries: ["\u80a1\u7968\u6295\u8d44"],
+      broadQueries: ["\u91d1\u878d\u5e02\u573a"],
+      ecosystemQueries: ["\u7406\u8d22\u65b0\u624b"],
+      requiredAnchorTerms: ["\u80a1\u7968", "\u8d37\u6b3e", "\u7406\u8d22", "\u878d\u8d44"],
+      normalAnchorTerms: ["\u91d1\u878d", "\u8bc1\u5238", "\u94f6\u884c"],
+      rejectTerms: [],
+      strictAcceptTerms: ["\u80a1\u7968", "\u8d37\u6b3e", "\u7406\u8d22", "\u878d\u8d44"],
+      normalAcceptTerms: ["\u91d1\u878d", "\u8bc1\u5238", "\u94f6\u884c"],
+      personaGuardTerms: ["\u79d8\u4e66"],
+      domainSummary: "\u91d1\u878d\u7406\u8d22\u4e0e\u6295\u8d44\u8d37\u6b3e\u89c4\u5212",
+    } as any;
+
+    expect(candidateMatchesSentimentHotStrategyAnchors(candidate, strategy, "strict")).toBe(true);
+  });
+
   it("does not display hot candidates shorter than 60 Chinese characters", () => {
     const candidates = finalizeSentimentHotCandidatesForDisplay([
       {
