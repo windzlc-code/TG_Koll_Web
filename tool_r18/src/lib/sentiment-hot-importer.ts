@@ -301,121 +301,7 @@ function expandSentimentSearchKeywordVariants(value: string): string[] {
 
   const text = cleanText(value);
   add(text);
-  const replacements: Array<[RegExp, string]> = [
-    [/信貸/g, "信贷"],
-    [/信贷/g, "信貸"],
-    [/貸款/g, "贷款"],
-    [/贷款/g, "貸款"],
-    [/銀行/g, "银行"],
-    [/银行/g, "銀行"],
-    [/理財/g, "理财"],
-    [/理财/g, "理財"],
-    [/債務/g, "债务"],
-    [/债务/g, "債務"],
-    [/風控/g, "风控"],
-    [/风控/g, "風控"],
-  ];
-  for (const [pattern, replacement] of replacements) add(text.replace(pattern, replacement));
-
-  if (/(?:金融|信貸|信贷|貸款|贷款|信用卡|銀行|银行|理財|理财|債務|债务|風控|风控)/u.test(text)) {
-    [
-      "海外金融",
-      "信用卡",
-      "貸款",
-      "贷款",
-      "信貸",
-      "信贷",
-      "銀行貸款",
-      "银行贷款",
-      "貸款利率",
-      "贷款利率",
-      "理財",
-      "理财",
-      "債務",
-      "债务",
-      "信用分",
-      "銀行審核",
-      "银行审核",
-      "借錢",
-      "借钱",
-      "債務整合",
-      "债务整合",
-      "房貸",
-      "房贷",
-      "車貸",
-      "车贷",
-      "信用貸款",
-      "信用贷款",
-      "小額貸款",
-      "小额贷款",
-      "貸款申請",
-      "贷款申请",
-      "信用評分",
-      "信用评分",
-    ].forEach(add);
-  }
-
-  if (/(?:汽車|汽车|修車|修车|維修|维修|保養|保养|客車|客车|大巴|底盤|底盘|煞車|刹车|傳動軸|传动轴|引擎|機油|机油)/u.test(text)) {
-    [
-      "汽車維修",
-      "汽车维修",
-      "修車",
-      "修车",
-      "汽車保養",
-      "汽车保养",
-      "引擎維修",
-      "引擎维修",
-      "底盤維修",
-      "底盘维修",
-      "煞車系統",
-      "刹车系统",
-      "機油保養",
-      "机油保养",
-      "輪胎保養",
-      "轮胎保养",
-      "車廠維修",
-      "汽修廠",
-      "二手車保養",
-      "商用車維修",
-      "大客車保養",
-      "大巴維修",
-    ].forEach(add);
-  }
-
-  if (/(?:刺青|紋身|纹身)/u.test(text)) {
-    [
-      "刺青",
-      "紋身",
-      "纹身",
-      "刺青保養",
-      "刺青圖案",
-    ].forEach(add);
-  }
-
-  if (/(?:角色扮演|cosplay|Cosplay|二次元|動漫|动漫)/u.test(text)) {
-    [
-      "角色扮演",
-      "Cosplay",
-      "二次元",
-      "動漫",
-      "动漫",
-      "動漫展",
-      "同人展",
-    ].forEach(add);
-  }
-
-  if (/(?:遊戲|游戏|手遊|手游|電競|电竞)/u.test(text)) {
-    [
-      "遊戲角色",
-      "游戏角色",
-      "手遊",
-      "手游",
-      "電競",
-      "电竞",
-    ].forEach(add);
-  }
-
-  return out.slice(0, 32);
+  return out;
 }
 
 function readSentimentBrowserFallbackConfig() {
@@ -746,6 +632,8 @@ const GENERIC_PERSONA_ROLE_TERMS = new Set([
   "老师",
   "教師",
   "教师",
+  "醫生",
+  "医生",
   "達人",
   "达人",
   "博主",
@@ -979,6 +867,37 @@ function extractDynamicPersonaKeywords(args: { archiveName: string; pieces: stri
   return out.slice(0, 8);
 }
 
+function extractSegmentedPersonaKeywords(args: { archiveName: string; pieces: string[] }): string[] {
+  const Segmenter = (Intl as any).Segmenter;
+  if (typeof Segmenter !== "function") return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const sourceText = args.pieces.join(" ");
+  const add = (value: string) => {
+    const keyword = normalizeSentimentSearchKeyword(value, {
+      archiveName: args.archiveName,
+      sourceText,
+    });
+    const key = keyword.toLowerCase();
+    if (!keyword || seen.has(key) || isGenericPersonaRoleTerm(keyword) || !isConcreteSearchKeyword(keyword)) return;
+    seen.add(key);
+    out.push(keyword);
+  };
+  const segmenter = new Segmenter("zh", { granularity: "word" });
+  for (const piece of args.pieces) {
+    const words = [...segmenter.segment(piece)]
+      .filter((item: any) => item?.isWordLike)
+      .map((item: any) => cleanText(item.segment))
+      .filter((item: string) => item.length >= 2 && item.length <= 8);
+    for (let index = 0; index < words.length; index += 1) {
+      add(words[index]);
+      const phrase = `${words[index]}${words[index + 1] || ""}`;
+      if (phrase.length <= 8) add(phrase);
+    }
+  }
+  return out.slice(0, SENTIMENT_MODEL_KEYWORD_TARGET);
+}
+
 function buildSearchKeywordCandidates(args: {
   archiveName: string;
   pieces: string[];
@@ -986,6 +905,7 @@ function buildSearchKeywordCandidates(args: {
   const joined = args.pieces.join(" ");
   const out: string[] = [];
   out.push(...extractDynamicPersonaKeywords(args));
+  out.push(...extractSegmentedPersonaKeywords(args));
   for (const item of splitKeywords(joined)) {
     const keyword = normalizeSentimentSearchKeyword(item, { archiveName: args.archiveName, sourceText: joined });
     if (keyword) out.push(keyword);
@@ -994,20 +914,12 @@ function buildSearchKeywordCandidates(args: {
     out.push(...expandSentimentSearchKeywordVariants(item));
   }
   return rankSearchKeywords(filterConflictingSearchKeywords([...new Set(out)])
-    .filter((item) => isConcreteSearchKeyword(item))
+    .filter((item) => isConcreteSearchKeyword(item) && !isGenericPersonaRoleTerm(item))
   ).slice(0, SENTIMENT_MODEL_KEYWORD_TARGET);
 }
 
 function filterConflictingSearchKeywords(keywords: string[]): string[] {
-  const hasStockDomain = keywords.some((keyword) => /(?:股市|股票|台股|美股|K線|k線|投資策略|投資心得|股票投資|股市分析)/u.test(cleanText(keyword)));
-  if (!hasStockDomain) return keywords;
-  const secondaryPattern = /(?:二次元|動漫|遊戲|游戏|宅文化|Cosplay|手辦|手办|美少女|女角色|角色扮演)/iu;
-  const primary: string[] = [];
-  const secondary: string[] = [];
-  for (const keyword of keywords) {
-    (secondaryPattern.test(cleanText(keyword)) ? secondary : primary).push(keyword);
-  }
-  return [...primary, ...secondary];
+  return keywords;
 }
 
 function rankSearchKeywords(keywords: string[]): string[] {
@@ -1066,59 +978,11 @@ function isStandalonePersonaVisualKeyword(value: unknown): boolean {
 
 function buildStrictPersonaDomainKeywords(sourceText: string): string[] {
   const text = cleanText(sourceText);
-  const out: string[] = [];
-  const add = (value: string) => {
-    const keyword = normalizeSentimentSearchKeyword(value, { sourceText: text });
-    if (keyword && isConcreteSearchKeyword(keyword)) out.push(keyword);
-  };
-  const hasTattooVisual = /(?:刺青|紋身|纹身|滿背刺青|满背刺青|鎖骨刺青|锁骨刺青)/u.test(text);
-  const hasCosplayDomain = /(?:Cosplay|cosplay|Coser|coser|角色扮演|動漫Cosplay|动漫Cosplay|動漫展|动漫展|漫展|同人展|二次元|動漫|动漫)/u.test(text);
-  const hasGamingDomain = /(?:電競|电竞|遊戲|游戏|MOBA|射擊|射击|手遊|手游|開黑|开黑|實況|实况)/u.test(text);
-  const hasFootballDomain = /(?:足球|球賽|球赛|球星|聯賽|联赛|賽事|赛事|運動系|运动系)/u.test(text);
-  const hasFinanceDomain = /(?:投資|投资|理財|理财|基金|存錢|存钱|搞錢|搞钱|低門檻|低门槛)/u.test(text);
-  const hasCreditDomain = /(?:信貸|信贷|貸款|贷款|信用分|信用卡|薪資|薪资|週轉|周转|債務|债务|卡債|卡债|銀行|银行)/u.test(text);
-  const hasRealEstateDomain = /(?:不動產|不动产|房產|房产|房貸|房贷|置產|置产|豪宅|建案|融資|融资|東京|东京|大阪|日本高端|跨境資產|跨境资产|資產避險|资产避险)/u.test(text);
-  const hasEducationDomain = /(?:教師|教师|老師|老师|校園|校园|學生|学生|師生|师生|教室|教研|成長|成长|勵志|励志|治癒|治愈)/u.test(text);
-  const hasBeautyDomain = /(?:美妝|美妆|保養|保养|穿搭|護膚|护肤|彩妝|彩妆|娛樂話題|娱乐话题)/u.test(text);
-  const hasYogaDomain = /(?:瑜伽|伸展|體態|体态|飲食|饮食|晨間|晨间|健身|自律|療癒|疗愈)/u.test(text);
-  const hasTechDomain = /(?:工程師|工程师|程式|程序|科技|加班|理工|遊戲|游戏|社群觀察|社群观察)/u.test(text);
-  const hasAutoDomain = /(?:汽車|汽车|修車|修车|維修|维修|保養|保养|客車|客车|底盤|底盘|煞車|刹车)/u.test(text);
-
-  if (hasCosplayDomain) {
-    ["動漫Cosplay", "动漫Cosplay", "二次元Cosplay", "精緻Cosplay", "精致Cosplay", "漫展Cosplay", "動漫展Cosplay", "动漫展Cosplay", "同人展Cosplay", "動漫展", "动漫展", "漫展", "同人展", "Coser穿搭", "女Coser"].forEach(add);
-    if (hasTattooVisual) ["刺青Coser", "刺青Cosplay", "紋身Coser", "纹身Coser", "刺青穿搭", "刺青辣妹", "刺青角色扮演"].forEach(add);
-  }
-  if (hasGamingDomain) {
-    ["電競遊戲", "电竞游戏", "遊戲實況", "游戏实况", "MOBA手遊", "MOBA手游", "射擊手遊", "射击手游", "組隊開黑", "组队开黑", "遊戲女玩家", "游戏女玩家"].forEach(add);
-  }
-  if (hasFootballDomain) {
-    ["足球賽事", "足球赛事", "足球少女", "球星", "聯賽", "联赛", "賽事講評", "赛事讲评", "懂球"].forEach(add);
-  }
-  if (hasFinanceDomain && !hasCreditDomain && !hasRealEstateDomain) {
-    ["投資理財", "投资理财", "理財心法", "理财心法", "低門檻理財", "低门槛理财", "基金存錢", "基金存钱", "清醒搞錢", "清醒搞钱"].forEach(add);
-  }
-  if (hasCreditDomain) {
-    ["低息信貸", "低息信贷", "信用分養護", "信用分养护", "工薪信貸", "工薪信贷", "薪資規劃", "薪资规划", "小額週轉", "小额周转", "卡債整理", "卡债整理", "銀行貸款", "银行贷款", "貸款利率", "贷款利率"].forEach(add);
-  }
-  if (hasRealEstateDomain) {
-    ["日本不動產", "日本不动产", "日本房產", "日本房产", "東京豪宅", "东京豪宅", "大阪豪宅", "海外置產", "海外置产", "跨境理財", "跨境理财", "台籍融資", "台籍融资", "日本房貸", "日本房贷", "高端建案", "資產避險", "资产避险"].forEach(add);
-  }
-  if (hasEducationDomain) {
-    ["校園治癒", "校园治愈", "教師故事", "教师故事", "師生互動", "师生互动", "學生成長", "学生成长", "勵志教育", "励志教育", "教室日常", "溫暖教師", "温暖教师"].forEach(add);
-  }
-  if (hasBeautyDomain) {
-    ["美妝保養", "美妆保养", "護膚心得", "护肤心得", "彩妝分享", "彩妆分享", "穿搭日常", "娛樂話題", "娱乐话题"].forEach(add);
-  }
-  if (hasYogaDomain) {
-    ["瑜伽伸展", "體態管理", "体态管理", "晨間瑜伽", "晨间瑜伽", "飲食管理", "饮食管理", "療癒瑜伽", "疗愈瑜伽"].forEach(add);
-  }
-  if (hasTechDomain && !hasAutoDomain && !hasCosplayDomain && !hasGamingDomain) {
-    ["工程師日常", "工程师日常", "程式開發", "程序开发", "科技觀察", "科技观察", "加班日常", "理工生活"].forEach(add);
-  }
-  if (hasAutoDomain) {
-    ["汽車維修", "汽车维修", "修車", "修车", "汽車保養", "汽车保养", "底盤維修", "底盘维修", "煞車系統", "刹车系统", "引擎維修", "引擎维修"].forEach(add);
-  }
-  return rankSearchKeywords([...new Set(out)]).slice(0, SENTIMENT_HOT_STRICT_KEYWORD_TARGET);
+  if (!text) return [];
+  return buildSearchKeywordCandidates({
+    archiveName: "",
+    pieces: [text],
+  }).slice(0, SENTIMENT_HOT_STRICT_KEYWORD_TARGET);
 }
 
 function prepareSentimentHotKeywordsForMode(keywords: string[], mode: SentimentHotSearchMode, options?: { sourceText?: string; useRuleDomainFallback?: boolean }): string[] {
@@ -1132,8 +996,8 @@ function prepareSentimentHotKeywordsForMode(keywords: string[], mode: SentimentH
     }
     return [...new Set(expanded.filter((item) => isConcreteSearchKeyword(item)))].slice(0, sentimentHotKeywordTargetForMode(mode));
   }
-  const domainKeywords = options?.useRuleDomainFallback ? buildStrictPersonaDomainKeywords(options?.sourceText || "") : [];
-  const merged = [...normalized, ...domainKeywords];
+  const domainKeywords = buildStrictPersonaDomainKeywords(options?.sourceText || "");
+  const merged = [...domainKeywords, ...normalized];
   return [...new Set(merged.filter((item) => isConcreteSearchKeyword(item)))].slice(0, sentimentHotKeywordTargetForMode(mode));
 }
 
@@ -1169,7 +1033,9 @@ export function buildSentimentHotKeywords(args: {
     ...buildSearchKeywordCandidates({ archiveName: personaName, pieces }),
     ...extractDirectHanKeywords({ archiveName: personaName, text: joined }),
   ];
-  return rankSearchKeywords([...new Set(extracted.filter(Boolean))]).slice(0, SENTIMENT_MODEL_KEYWORD_TARGET);
+  return rankSearchKeywords(
+    [...new Set(extracted.filter((item) => Boolean(item) && !isGenericPersonaRoleTerm(item)))],
+  ).slice(0, SENTIMENT_MODEL_KEYWORD_TARGET);
 }
 
 function parseModelKeywordList(text: string): string[] {
@@ -1314,6 +1180,9 @@ export function applyPersonaGuardToSentimentHotStrategy(args: {
     sourceText: args.sourceText,
     useRuleDomainFallback: true,
   }).filter((term) => !isGenericPersonaRoleTerm(term)).slice(0, 10);
+  const explicitPersonaAnchors = args.personaSeedKeywords
+    .map((term) => normalizeSentimentSearchKeyword(term, { sourceText: args.sourceText }))
+    .filter((term) => isConcreteSearchKeyword(term) && !isGenericPersonaRoleTerm(term));
   const ruleDomainAnchors = buildStrictPersonaDomainKeywords(args.sourceText);
   const removeGenericRoles = (terms: string[]) => terms.filter((term) => !isGenericPersonaRoleTerm(term));
   args.strategy.primaryQueries = removeGenericRoles(args.strategy.primaryQueries);
@@ -1327,8 +1196,8 @@ export function applyPersonaGuardToSentimentHotStrategy(args: {
     || segmentPersonaWords(cleanText(args.archiveName)).find((term) => !isGenericPersonaRoleTerm(term))
     || args.strategy.normalAnchorTerms.flatMap((term) => segmentPersonaWords(term)).find((term) => !isGenericPersonaRoleTerm(term));
   args.strategy.personaGuardTerms = personaIdentityAnchor ? [personaIdentityAnchor] : personaGuardTerms.slice(0, 1);
-  args.strategy.primaryQueries = [...new Set([...personaGuardTerms, ...ruleDomainAnchors, ...args.strategy.primaryQueries])];
-  args.strategy.requiredAnchorTerms = [...new Set([...ruleDomainAnchors, ...args.strategy.requiredAnchorTerms])];
+  args.strategy.primaryQueries = [...new Set([...explicitPersonaAnchors, ...personaGuardTerms, ...ruleDomainAnchors, ...args.strategy.primaryQueries])];
+  args.strategy.requiredAnchorTerms = [...new Set([...explicitPersonaAnchors, ...ruleDomainAnchors, ...args.strategy.requiredAnchorTerms])];
   args.strategy.strictAcceptTerms = [...new Set([...personaGuardTerms, ...args.strategy.strictAcceptTerms])];
   args.strategy.normalAcceptTerms = [...new Set([...personaGuardTerms, ...args.strategy.normalAcceptTerms])];
   if (personaIdentityAnchor) {
@@ -1377,6 +1246,15 @@ export function candidateMatchesSentimentHotStrategyAnchors(candidate: Sentiment
     .filter((term) => term.length >= 3 && isConcreteSearchKeyword(term));
   return [...new Set([...requiredAnchors, ...directPrimaryAnchors])]
     .some((anchor) => matchesExactAnchor(anchor));
+}
+
+function candidateMatchesStrategyOrVerifiedFreshFallback(
+  candidate: SentimentHotCandidate,
+  strategy: SentimentHotSearchStrategy,
+  mode: SentimentHotSearchMode,
+): boolean {
+  return (candidate.metrics as any)?.freshRelevantFallback === true
+    || candidateMatchesSentimentHotStrategyAnchors(candidate, strategy, mode);
 }
 
 function parseSentimentHotSemanticAcceptedIds(value: unknown): string[] | null {
@@ -1528,6 +1406,7 @@ function buildSentimentHotSearchStrategyCacheKey(args: {
     content: cleanText(archive.content),
     setup: archive.setup || {},
     prompt: cleanText(args.prompt),
+    memorySummaries: (args.memorySummaries || []).map(cleanText).filter(Boolean),
   };
   return crypto.createHash("sha1").update(JSON.stringify(payload)).digest("hex");
 }
@@ -1776,7 +1655,7 @@ export function isChineseSentimentCandidate(value: unknown): boolean {
   const hanCount = (text.match(/[\u3400-\u9fff]/gu) || []).length;
   if (hanCount < 6) return false;
   const kanaCount = (text.match(/[\u3040-\u30ff]/gu) || []).length;
-  if (kanaCount > 0 && kanaCount >= hanCount * 0.25) return false;
+  if (kanaCount >= 3 && kanaCount >= hanCount * 0.08) return false;
   const latinCount = (text.match(/[A-Za-z]/g) || []).length;
   return hanCount >= 12 || hanCount >= latinCount * 0.3;
 }
@@ -2028,9 +1907,9 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     prompt: args.prompt,
     memorySummaries: args.memorySummaries,
   });
-  const personaGuardSeedKeywords = buildSentimentHotKeywords({ archive: { name: archive?.name } });
-  const personaGuardSourceText = [archive?.name, archive?.content].map(cleanText).filter(Boolean).join(" ");
   const sourceText = [archive?.name, archive?.content, args.prompt, ...(args.memorySummaries || [])].map(cleanText).filter(Boolean).join(" ");
+  const personaGuardSeedKeywords = personaSeedKeywords;
+  const personaGuardSourceText = sourceText;
   const runtimePromise = ensureSentimentRuntime().catch((error: any) => ({
     ok: false,
     url: resolveSentimentBackendUrl(),
@@ -2078,7 +1957,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
         Math.max(limit * 4, 40),
         searchMode,
       ).filter((candidate) => candidateMatchesOperationalFreshness(candidate, operationalFreshnessDays)
-        && candidateMatchesSentimentHotStrategyAnchors(candidate, prefetchedStrategy, searchMode))
+        && candidateMatchesStrategyOrVerifiedFreshFallback(candidate, prefetchedStrategy, searchMode))
     : [];
   console.info(`[sentiment_hot_stage] label=provisional-global durationMs=${Date.now() - provisionalGlobalStartedAt}`);
   const provisionalCandidateMap = new Map<string, SentimentHotCandidate>();
@@ -2088,7 +1967,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   }
   const provisionalCandidatesForReadiness = [...provisionalCandidateMap.values()];
   const provisionalReadyCount = prefetchedStrategy
-    ? provisionalCandidatesForReadiness.filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, prefetchedStrategy, searchMode)).length
+    ? provisionalCandidatesForReadiness.filter((candidate) => candidateMatchesStrategyOrVerifiedFreshFallback(candidate, prefetchedStrategy, searchMode)).length
     : sortRelevantHotCandidates(provisionalCandidatesForReadiness, provisionalKeywords, Math.max(limit * 4, 40), searchMode).length;
   // A refresh must use one live search after the final model strategy is ready.
   // Starting a provisional browser search here can race the final search and
@@ -2212,7 +2091,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       [...strategyResult.requiredAnchorTerms, ...keywords],
       semanticSourceTarget,
       searchMode,
-    ).filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode));
+    ).filter((candidate) => candidateMatchesStrategyOrVerifiedFreshFallback(candidate, strategyResult, searchMode));
     const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
     const byKey = new Set(candidates.map((candidate) => sentimentCandidateDedupeKey(candidate)));
     let added = 0;
@@ -2246,7 +2125,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
 
   const cachedReadyCount = hasSearchKeywords
     ? (hasModelStrategy && strategyResult
-      ? candidates.filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode)).length
+      ? candidates.filter((candidate) => candidateMatchesStrategyOrVerifiedFreshFallback(candidate, strategyResult, searchMode)).length
       : sortRelevantHotCandidates(candidates, keywords, poolLimit, searchMode).length)
     : 0;
   const shouldFetchLiveCandidates = hasSearchKeywords
@@ -2305,7 +2184,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     // round only while the result is still short; queryRound rotates the
     // search window so this is not a duplicate burst of the first round.
     const liveReadyPool = hasModelStrategy && strategyResult
-      ? candidates.filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode))
+      ? candidates.filter((candidate) => candidateMatchesStrategyOrVerifiedFreshFallback(candidate, strategyResult, searchMode))
       : candidates;
     const liveReadyCount = finalizeSentimentHotCandidatesForDisplay(
       strictFreshOnly
@@ -2376,7 +2255,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   const hasFastReturnCandidates = cachedReadyCount >= semanticSourceTarget;
 
   const preInstagramReadyPool = hasModelStrategy && strategyResult
-    ? candidates.filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode))
+    ? candidates.filter((candidate) => candidateMatchesStrategyOrVerifiedFreshFallback(candidate, strategyResult, searchMode))
     : candidates;
   const preInstagramReadyCount = hasSearchKeywords
     ? finalizeSentimentHotCandidatesForDisplay(
@@ -2426,7 +2305,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     }
     channelStats.push(`Instagram 原始 ${instagramCandidates.length}，新增 ${instagramAddedCount}，補充前 ${beforeInstagramCount}`);
   } else if (strictFreshOnly && shouldFetchLiveCandidates) {
-    channelStats.push("Instagram 已跳過，嚴格新鮮度要求原帖發布時間");
+    channelStats.push("Instagram Reader 已跳過，嚴格新鮮度要求原帖發布時間；登入態掃描仍按 Cookie 狀態執行");
   } else if (shouldFetchLiveCandidates && hasFastReturnCandidates) {
     channelStats.push(`Instagram 已跳過，已有 ${candidates.length}/${limit} 篇候選，使用快速返回`);
   } else if (shouldFetchLiveCandidates && preInstagramReadyCount < limit) {
@@ -2529,13 +2408,13 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   let parentSupplementCount = 0;
   if (hasModelStrategy && strategyResult) {
     const strategyCandidatePool = candidates;
-    modelParentCandidatePool = strategyCandidatePool.filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode));
+    modelParentCandidatePool = strategyCandidatePool.filter((candidate) => candidateMatchesStrategyOrVerifiedFreshFallback(candidate, strategyResult, searchMode));
     // Normal mode is the broad vertical search path. Its keyword quality
     // filter has already removed off-topic results; applying model anchors a
     // second time here can collapse a healthy live pool (for example 29
     // browser results down to 3). Keep anchor narrowing for strict mode only.
     candidates = searchMode === "strict"
-      ? strategyCandidatePool.filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode))
+      ? strategyCandidatePool.filter((candidate) => candidateMatchesStrategyOrVerifiedFreshFallback(candidate, strategyResult, searchMode))
       : strategyCandidatePool;
   }
   const displayCandidatePool = strictFreshOnly
@@ -2561,7 +2440,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
        limit: poolLimit,
        excludeShown: false,
      }).catch(() => [])),
-    ].filter((candidate) => !hasModelStrategy || !strategyResult || candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode));
+    ].filter((candidate) => !hasModelStrategy || !strategyResult || candidateMatchesStrategyOrVerifiedFreshFallback(candidate, strategyResult, searchMode));
     const orderedSupplements = orderSentimentHotCandidatesForLegacyFallback(
       finalizeSentimentHotCandidatesForDisplay([...displayCandidatePool, ...archiveHistory], poolLimit, {
         archiveId,
@@ -2624,7 +2503,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       sentimentHotStrategyTermsForMode(strategyResult, searchMode),
       Math.max(limit * 4, 40),
       searchMode,
-    ).filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode));
+    ).filter((candidate) => candidateMatchesStrategyOrVerifiedFreshFallback(candidate, strategyResult, searchMode));
     const selectedKeys = new Set(candidates.flatMap((candidate) => getSentimentHotCandidateHistoryKeys(candidate)));
     const orderedGlobalSupplements = orderSentimentHotCandidatesForLegacyFallback(
       finalizeSentimentHotCandidatesForDisplay(globalParentPool, poolLimit, {
@@ -2680,7 +2559,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
         : []),
     ];
     const scopedEmergencyHistory = hasModelStrategy && strategyResult
-      ? emergencyHistory.filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategyResult, searchMode))
+      ? emergencyHistory.filter((candidate) => candidateMatchesStrategyOrVerifiedFreshFallback(candidate, strategyResult, searchMode))
       : emergencyHistory;
     const emergencyPool = finalizeSentimentHotCandidatesForDisplay(scopedEmergencyHistory, poolLimit, {
       archiveId,
@@ -2733,6 +2612,9 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       warnings.push(`已从原帖详情获取 ${resolvedViewCount}/${candidates.length} 条真实浏览量；其余原帖暂未公开或详情读取失败。`);
     }
   }
+  const finalThreadsCount = candidates.filter((candidate) => candidate.platform === "threads").length;
+  const finalInstagramCount = candidates.filter((candidate) => candidate.platform === "instagram").length;
+  channelStats.push(`最終來源 Threads ${finalThreadsCount}，Instagram ${finalInstagramCount}`);
   const channelSummary = [
     `快取初始 ${initialCacheCount}`,
     ...channelStats,
@@ -2741,6 +2623,12 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   console.info(`[sentiment_hot_channels] archiveId=${archiveId} ${channelSummary}`);
   warnings.push(`渠道統計：${channelSummary}`);
 
+  const freshRelevantFallbackCount = candidates.filter(
+    (candidate) => (candidate.metrics as any)?.freshRelevantFallback === true,
+  ).length;
+  if (freshRelevantFallbackCount > 0) {
+    warnings.push(`高熱候選不足，已補充 ${freshRelevantFallbackCount} 篇近 ${operationalFreshnessDays || freshnessDays} 天內、強相關且已核驗原帖詳情的近期候選。`);
+  }
   if (candidates.length === 0) {
     warnings.push("\u672a\u627e\u5230\u7b26\u5408\u689d\u4ef6\u7684\u9ad8\u71b1\u5ea6\u4e2d\u6587\u71b1\u9ede\uff1b\u8acb\u5237\u65b0\u6216\u63db\u66f4\u4eba\u8a2d\u95dc\u9375\u8a5e\u3002");
   } else if (candidates.length < limit) {
@@ -3197,7 +3085,8 @@ function candidateMeetsDisplayQuality(
   };
   if ((normalized.metrics as any)?.semanticRelevant === false) return reject("semantic");
   if (!candidateMatchesOperationalFreshness(normalized, freshnessDays)) return reject("freshness");
-  if (!skipHeatGate && !isUsefulHotCandidate(normalized)) {
+  const isFreshRelevantFallback = (normalized.metrics as any)?.freshRelevantFallback === true;
+  if (!skipHeatGate && !isFreshRelevantFallback && !isUsefulHotCandidate(normalized)) {
     const viewCount = Number(normalized.engagement?.viewCount ?? (normalized.metrics as any)?.view_count ?? 0);
     return reject(viewCount >= MIN_SENTIMENT_HOT_SCORE ? "heat_interactions_only" : "heat");
   }
@@ -3235,6 +3124,9 @@ function sortSentimentHotCandidatePool(candidates: SentimentHotCandidate[], keyw
     .map((candidate) => candidateMeetsDisplayQuality(candidate, keywords, searchMode))
     .filter((candidate): candidate is SentimentHotCandidate => Boolean(candidate))
     .sort((a, b) => {
+      const fallbackDelta = Number((a.metrics as any)?.freshRelevantFallback === true)
+        - Number((b.metrics as any)?.freshRelevantFallback === true);
+      if (fallbackDelta !== 0) return fallbackDelta;
       if (searchMode === "strict" && relevanceNeedles.length > 0) {
         const relevanceDelta = countMatchedNeedles(b, relevanceNeedles) - countMatchedNeedles(a, relevanceNeedles);
         if (relevanceDelta !== 0) return relevanceDelta;
@@ -3266,6 +3158,9 @@ export function finalizeSentimentHotCandidatesForDisplay(candidates: SentimentHo
     .map((candidate) => candidateMeetsDisplayQuality(candidate, keywords, searchMode, options?.freshnessDays))
     .filter((candidate): candidate is SentimentHotCandidate => Boolean(candidate))
     .sort((a, b) => {
+      const fallbackDelta = Number((a.metrics as any)?.freshRelevantFallback === true)
+        - Number((b.metrics as any)?.freshRelevantFallback === true);
+      if (fallbackDelta !== 0) return fallbackDelta;
       if (searchMode === "strict" && relevanceNeedles.length > 0) {
         const relevanceDelta = countMatchedNeedles(b, relevanceNeedles) - countMatchedNeedles(a, relevanceNeedles);
         if (relevanceDelta !== 0) return relevanceDelta;
@@ -3889,7 +3784,33 @@ async function fetchThreadsBrowserSearchCandidates(args: {
             Math.max(THREADS_BROWSER_DETAIL_RESCUE_MIN_REMAINING_MS, Math.min(15_000, remainingMs - 500)),
             batch.map(([, candidate]) => candidate),
           );
-          for (const candidate of enriched) considerCandidate(candidate, false);
+          for (const candidate of enriched) {
+            const hasVerifiedViewCount = [
+              candidate.engagement?.viewCount,
+              (candidate.metrics as any)?.view_count,
+              (candidate.metrics as any)?.viewCount,
+              (candidate.metrics as any)?.views,
+            ].some((value) => typeof value === "number" && Number.isFinite(value));
+            const canUseFreshRelevantFallback = normalizeSentimentHotSearchMode(args.searchMode) === "strict"
+              && args.freshnessDays > 0
+              && hasVerifiedViewCount
+              && !isUsefulHotCandidate(candidate)
+              && Boolean(candidateMeetsDisplayQuality(
+                candidate,
+                args.keywords,
+                args.searchMode,
+                args.freshnessDays,
+                undefined,
+                true,
+              ));
+            considerCandidate(canUseFreshRelevantFallback ? {
+              ...candidate,
+              metrics: {
+                ...(candidate.metrics || {}),
+                freshRelevantFallback: true,
+              },
+            } : candidate, false);
+          }
         }
       };
       const cachedTemplate = recentThreadsSearchTemplate
@@ -4218,6 +4139,11 @@ async function fetchInstagramReaderSearchCandidates(args: {
   const excluded = args.excludeIds || (args.refresh ? getSentimentHotRefreshExcludedIds(args.archiveId) : getSentimentHotExcludedIds(args.archiveId));
   const all: SentimentHotCandidate[] = [];
   const allKeys = new Set<string>();
+  let plannedRequests = 0;
+  let successfulResponses = 0;
+  let failedResponses = 0;
+  let loginWallResponses = 0;
+  let postLinkResponses = 0;
   const searches = await Promise.all(
     args.queries.map(async (query) => {
       const normalizedQuery = cleanText(query).replace(/^#/, "");
@@ -4225,6 +4151,7 @@ async function fetchInstagramReaderSearchCandidates(args: {
         `https://www.instagram.com/explore/search/keyword/?q=${encodeURIComponent(normalizedQuery)}`,
         hasHan(normalizedQuery) ? `https://www.instagram.com/explore/tags/${encodeURIComponent(normalizedQuery)}/` : "",
       ].filter(Boolean);
+      plannedRequests += targets.length;
       const texts: Array<{ query: string; targetUrl: string; text: string }> = [];
       for (const targetUrl of targets) {
         try {
@@ -4236,8 +4163,21 @@ async function fetchInstagramReaderSearchCandidates(args: {
             },
             signal: AbortSignal.timeout(8_000),
           });
-          if (response.ok) texts.push({ query, targetUrl, text: await response.text() });
+          if (!response.ok) {
+            failedResponses += 1;
+            continue;
+          }
+          successfulResponses += 1;
+          const text = await response.text();
+          if (/Log into Instagram|登入 Instagram|登录 Instagram|Continue to Instagram/i.test(text)) {
+            loginWallResponses += 1;
+          }
+          if (/https?:\/\/(?:www\.)?instagram\.com\/(?:p|reel)\/[\w-]+/i.test(text)) {
+            postLinkResponses += 1;
+          }
+          texts.push({ query, targetUrl, text });
         } catch {
+          failedResponses += 1;
           // Instagram reader is an opportunistic extra source.
         }
       }
@@ -4263,6 +4203,11 @@ async function fetchInstagramReaderSearchCandidates(args: {
     }
     if (all.length >= args.limit) break;
   }
+  console.info(
+    `[sentiment_hot_instagram_reader] archiveId=${args.archiveId}`
+    + ` requests=${plannedRequests} ok=${successfulResponses} failed=${failedResponses}`
+    + ` loginWalls=${loginWallResponses} postPayloads=${postLinkResponses} parsed=${all.length}`,
+  );
   return sortUsefulHotCandidates(all, args.limit);
 }
 
@@ -6705,7 +6650,7 @@ export function listSentimentHotCandidatePoolStats(archives: PersonaArchive[] = 
           )
         : [];
       const anchoredCandidates = strategy
-        ? cachedCandidates.filter((candidate) => candidateMatchesSentimentHotStrategyAnchors(candidate, strategy, searchMode))
+        ? cachedCandidates.filter((candidate) => candidateMatchesStrategyOrVerifiedFreshFallback(candidate, strategy, searchMode))
         : cachedCandidates;
       const readyCandidates = finalizeSentimentHotCandidatesForDisplay(
         anchoredCandidates,

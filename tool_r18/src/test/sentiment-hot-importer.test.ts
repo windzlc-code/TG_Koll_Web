@@ -202,7 +202,6 @@ describe("sentiment hot importer", () => {
 
     expect(keywords).not.toContain("李无");
     expect(keywords).toEqual(expect.arrayContaining(["医疗黑暗", "邪恶医生故事", "邪恶实验"]));
-    expect(keywords).not.toContain("醫療");
     expect(keywords).not.toContain("医生");
   });
 
@@ -372,7 +371,7 @@ describe("sentiment hot importer", () => {
     expect(candidateMatchesCurrentKeywords(gameLive as any, ["直播", "游戏直播"], "strict")).toBe(true);
   });
 
-  it("matches Traditional Chinese posts against Simplified Chinese model terms in strict mode", () => {
+  it("does not invent hard-coded script variants for search terms", () => {
     const candidate = {
       id: "traditional-auto-repair",
       platform: "threads",
@@ -384,7 +383,8 @@ describe("sentiment hot importer", () => {
       capturedAt: new Date().toISOString(),
     };
 
-    expect(candidateMatchesCurrentKeywords(candidate as any, ["汽车维修", "车辆保养"], "strict")).toBe(true);
+    expect(candidateMatchesCurrentKeywords(candidate as any, ["汽车维修", "车辆保养"], "strict")).toBe(false);
+    expect(candidateMatchesCurrentKeywords(candidate as any, ["汽車維修", "車輛保養"], "strict")).toBe(true);
   });
 
   it("keeps daily-life posts only when they still match persona keywords", () => {
@@ -829,7 +829,7 @@ describe("sentiment hot importer", () => {
     expect(candidateMatchesSentimentHotStrategyAnchors(candidate, strategy, "strict")).toBe(false);
   });
 
-  it("preserves explicit secondary domains for a composite niche persona", () => {
+  it("preserves explicit source phrases for an unknown composite niche persona", () => {
     const strategy = {
       primaryQueries: ["\u52a8\u6f2b\u65b0\u756a"],
       broadQueries: ["\u5b85\u6587\u5316"],
@@ -850,14 +850,14 @@ describe("sentiment hot importer", () => {
     });
 
     expect(strategy.requiredAnchorTerms).toEqual(expect.arrayContaining([
-      "\u523a\u9752Coser",
-      "\u7535\u7ade\u6e38\u620f",
+      "\u523a\u9752",
+      "\u7535\u7ade",
       "\u8db3\u7403\u8d5b\u4e8b",
       "\u6295\u8d44\u7406\u8d22",
     ]));
     expect(strategy.primaryQueries).toEqual(expect.arrayContaining([
-      "\u523a\u9752Coser",
-      "\u7535\u7ade\u6e38\u620f",
+      "\u523a\u9752",
+      "\u7535\u7ade",
       "\u8db3\u7403\u8d5b\u4e8b",
       "\u6295\u8d44\u7406\u8d22",
     ]));
@@ -1063,6 +1063,66 @@ describe("sentiment hot importer", () => {
     expect(candidates.map((candidate) => candidate.id)).toEqual(["long-hot"]);
   });
 
+  it("keeps marked fresh relevant fallbacks behind qualified hot candidates", () => {
+    const content = "茶文化活動分享茶葉保存、茶具選擇、茶席布置、沖泡水溫與品茶禮儀，也整理在家練習茶道時容易忽略的細節和實際經驗，並說明不同季節如何調整水溫、浸泡時間與茶葉用量。";
+    const candidates = finalizeSentimentHotCandidatesForDisplay([
+      {
+        id: "fresh-fallback",
+        platform: "threads",
+        sourceUrl: "https://www.threads.net/@tea/post/fresh-fallback",
+        author: "tea",
+        content,
+        media: [],
+        hotScore: 80,
+        publishedAt: new Date().toISOString(),
+        metrics: { freshRelevantFallback: true, viewCount: 80 },
+      },
+      {
+        id: "qualified-hot",
+        platform: "threads",
+        sourceUrl: "https://www.threads.net/@tea/post/qualified-hot",
+        author: "tea",
+        content: `${content} 這篇近期獲得大量讀者互動與分享。`,
+        media: [],
+        hotScore: 5000,
+        publishedAt: new Date().toISOString(),
+        metrics: { viewCount: 5000 },
+      },
+    ] as any, 10, {
+      keywords: ["茶文化", "茶葉", "茶具"],
+      searchMode: "strict",
+      freshnessDays: 15,
+    });
+
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["qualified-hot", "fresh-fallback"]);
+  });
+
+  it("still rejects unmarked low-heat candidates", () => {
+    const candidates = finalizeSentimentHotCandidatesForDisplay([{
+      id: "low-heat-unmarked",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@tea/post/low-heat-unmarked",
+      author: "tea",
+      content: "茶文化活動分享茶葉保存、茶具選擇、茶席布置、沖泡水溫與品茶禮儀，也整理在家練習茶道時容易忽略的細節和實際經驗。",
+      media: [],
+      hotScore: 80,
+      publishedAt: new Date().toISOString(),
+      metrics: { viewCount: 80 },
+    }] as any, 10, {
+      keywords: ["茶文化", "茶葉", "茶具"],
+      searchMode: "strict",
+      freshnessDays: 15,
+    });
+
+    expect(candidates).toHaveLength(0);
+  });
+
+  it("rejects Japanese copy even when it contains many Han characters", () => {
+    expect(isChineseSentimentCandidate(
+      "茶文化について詳しく紹介します。茶葉の保存方法や茶具の選び方、茶席でのおもてなしを学びながら楽しめる内容です。",
+    )).toBe(false);
+  });
+
   it("keeps heat ordering in final candidates", () => {
     const base = {
       platform: "threads",
@@ -1144,7 +1204,7 @@ describe("sentiment hot importer", () => {
     expect(candidates.map((candidate) => candidate.id)).toEqual(["same-post-high", "same-media-high", "unique"]);
   });
 
-  it("matches finance hot candidates through clean search keyword variants", () => {
+  it("matches explicit content keywords without hard-coded industry expansion", () => {
     const candidate = {
       id: "finance-candidate",
       platform: "threads",
@@ -1162,6 +1222,11 @@ describe("sentiment hot importer", () => {
       "工薪信貸",
       "理財規劃",
       "銀行審核",
+    ])).toBe(false);
+    expect(candidateMatchesCurrentKeywords(candidate as any, [
+      "银行贷款",
+      "信用卡债务",
+      "贷款利率",
     ])).toBe(true);
     expect(candidateMatchesCurrentKeywords(candidate as any, [
       "說話直白犀利",
@@ -1174,7 +1239,7 @@ describe("sentiment hot importer", () => {
     } as any, [
       "海外信貸",
       "理財規劃",
-    ])).toBe(true);
+    ])).toBe(false);
   });
 
   it("keeps engagement signals from Threads reader candidates", () => {
