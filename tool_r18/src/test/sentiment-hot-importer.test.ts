@@ -980,6 +980,60 @@ describe("sentiment hot importer", () => {
     expect(candidateMatchesSentimentHotStrategyAnchors(candidate, strategy, "strict")).toBe(true);
   });
 
+  it("accepts a concrete primary domain phrase in strict mode", () => {
+    const candidate = {
+      id: "fresh-tea-culture",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@tea/post/fresh-tea-culture",
+      author: "tea",
+      content: "台灣客家茶文化館最近整理新的茶席展覽，介紹不同茶葉的保存方式、沖泡水溫、茶具選擇與品茶禮儀，也分享在家建立日常茶席的實際經驗。",
+      media: [],
+      hotScore: 5000,
+      metrics: { query: "茶文化" },
+    } as any;
+    const strategy = {
+      primaryQueries: ["茶文化", "品茶心得"],
+      broadQueries: ["退休生活"],
+      ecosystemQueries: ["文化活動"],
+      requiredAnchorTerms: ["茶葉", "茶具", "品茶", "茶道", "茶席"],
+      normalAnchorTerms: ["茶飲", "茶器", "茶室"],
+      rejectTerms: [],
+      strictAcceptTerms: ["茶葉", "茶具", "品茶", "茶道", "茶席"],
+      normalAcceptTerms: ["茶飲", "茶器", "茶室"],
+      personaGuardTerms: ["茶文化"],
+      domainSummary: "茶文化、品茶與茶具使用",
+    } as any;
+
+    expect(candidateMatchesSentimentHotStrategyAnchors(candidate, strategy, "strict")).toBe(true);
+  });
+
+  it("does not accept unrelated content through a broad strict strategy phrase", () => {
+    const candidate = {
+      id: "unrelated-retirement",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@life/post/unrelated-retirement",
+      author: "life",
+      content: "退休生活規劃需要先整理醫療保障、現金流、家庭支出與長期照護安排，這篇內容只討論財務準備、居家安全、運動習慣和規律作息。",
+      media: [],
+      hotScore: 5000,
+      metrics: { query: "退休生活" },
+    } as any;
+    const strategy = {
+      primaryQueries: ["茶文化", "品茶心得"],
+      broadQueries: ["退休生活"],
+      ecosystemQueries: ["文化活動"],
+      requiredAnchorTerms: ["茶葉", "茶具", "品茶", "茶道", "茶席"],
+      normalAnchorTerms: ["茶飲", "茶器", "茶室"],
+      rejectTerms: [],
+      strictAcceptTerms: ["茶葉", "茶具", "品茶", "茶道", "茶席"],
+      normalAcceptTerms: ["茶飲", "茶器", "茶室"],
+      personaGuardTerms: ["茶文化"],
+      domainSummary: "茶文化、品茶與茶具使用",
+    } as any;
+
+    expect(candidateMatchesSentimentHotStrategyAnchors(candidate, strategy, "strict")).toBe(false);
+  });
+
   it("does not display hot candidates shorter than 60 Chinese characters", () => {
     const candidates = finalizeSentimentHotCandidatesForDisplay([
       {

@@ -54,6 +54,23 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn('hint: "人设列表、详情、推文、账号"', self.console_script)
         self.assertIn('<span>${esc(item.label)}</span>', self.console_script)
 
+    def test_memory_and_generated_preview_share_compact_cards_and_common_modal(self):
+        self.assertIn('data-persona-view-memory="${esc(row.id)}">查看</button>', self.console_script)
+        self.assertIn("async function viewPersonaMemoryEntry(memoryId = \"\")", self.console_script)
+        self.assertIn('title: "人设记忆"', self.console_script)
+        self.assertIn(
+            'class="persona-memory-card persona-generated-preview-card ${selected ? "is-selected" : ""}"',
+            self.console_script,
+        )
+        preview_position = self.console_script.index("${generatePreviewDock}")
+        media_position = self.console_script.index(
+            "? renderPersonaInlineMediaComposer",
+            preview_position,
+        )
+        self.assertLess(preview_position, media_position)
+        self.assertIn(".persona-compose-media-stack", self.styles)
+        self.assertIn("min-height: 60px;", self.styles)
+
     def test_mobile_task_dock_reuses_the_five_workspace_modules(self):
         self.assertIn('id="mobileTaskDock"', self.markup)
         self.assertIn("function renderMobileTaskDock()", self.console_script)
@@ -365,6 +382,38 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn('class="publish-header-end-slot"', header)
         self.assertIn('data-persona-mobile-list-toggle="publishPersonaSidebar"', header)
 
+    def test_current_persona_summary_is_shared_only_across_mobile_console_views(self):
+        summary_start = self.markup.index('id="persistentPersonaSummary"')
+        workspace_start = self.markup.index('<section class="view is-active" data-panel="workspace">')
+        self.assertLess(summary_start, workspace_start)
+        self.assertIn("function renderPersistentPersonaSummary()", self.console_script)
+        self.assertIn("function personaSummaryCounts(persona)", self.console_script)
+        toolbar = self.console_script[
+            self.console_script.index("function syncMobilePageToolbar()"):
+            self.console_script.index("\nfunction renderMobileTaskDock()")
+        ]
+        self.assertIn("renderPersistentPersonaSummary();", toolbar)
+        overview = self.console_script[
+            self.console_script.index("function applyPersonaOverviewData"):
+            self.console_script.index("\nfunction hydratePersonaOverviewFromCache")
+        ]
+        self.assertIn("renderPersistentPersonaSummary();", overview)
+        detail = self.console_script[
+            self.console_script.index("function renderPersonaDetail()"):
+            self.console_script.index("\nfunction renderPersonaContentPanel")
+        ]
+        self.assertIn("renderPersistentPersonaSummary();", detail)
+        self.assertIn('class="persona-workbench-head"', detail)
+        self.assertIn("persona-detail-summary-panel", detail)
+        self.assertIn(".persistent-persona-summary {", self.styles)
+        self.assertIn("display: none;", self.styles[self.styles.index(".persistent-persona-summary {"):])
+        mobile_summary = self.styles.index("  .persistent-persona-summary {")
+        self.assertIn("display: flex;", self.styles[mobile_summary:mobile_summary + 220])
+        self.assertIn(
+            ".persona-detail-summary-panel .persona-workbench-head",
+            self.styles,
+        )
+
     def test_mobile_persona_buttons_share_persistent_style(self):
         self.assertGreaterEqual(self.console_script.count('class="persona-mobile-list-toggle"'), 4)
         self.assertNotIn('<span>人设列表</span>', self.console_script)
@@ -383,36 +432,26 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.console_script,
         )
 
-    def test_mobile_publish_preview_uses_number_only_square_tabs_without_body(self):
+    def test_publish_preview_number_tabs_are_hidden_only_on_mobile(self):
+        preview = self.console_script[
+            self.console_script.index("function renderPublishContentPreview"):
+            self.console_script.index("\nfunction renderPublishContentPanel")
+        ]
         self.assertIn(
             'class="publish-content-preview publish-content-preview--selection"',
-            self.console_script,
-        )
-        self.assertIn(
-            ".publish-content-preview--selection .publish-preview-card",
-            self.styles,
-        )
-        self.assertIn(
-            ".publish-content-preview--selection .publish-preview-tab-copy",
-            self.styles,
-        )
-        self.assertIn(
-            ".publish-content-preview--selection .publish-preview-tab-index",
-            self.styles,
-        )
-        self.assertIn("border-radius: 0;", self.styles)
-        self.assertNotIn(
-            ".console-page .view:has(.publish-content-preview--selection)",
-            self.styles,
-        )
-        self.assertNotIn(
-            ".module-panel.is-publishing-module:has(.publish-content-preview--selection)",
-            self.styles,
+            preview,
         )
         self.assertIn(
             'aria-label="${esc(`第${index + 1}篇：${previewTitle}`)}"',
-            self.console_script,
+            preview,
         )
+        self.assertIn("publish-preview-tabs-layout", preview)
+        self.assertIn("data-publish-preview-post", preview)
+        self.assertIn("publish-preview-tab-index", preview)
+        mobile_tabs = self.styles.index(
+            "  .publish-content-preview--selection .publish-preview-tabs-layout {"
+        )
+        self.assertIn("display: none;", self.styles[mobile_tabs:mobile_tabs + 140])
 
     def test_publish_source_cards_render_complete_media(self):
         self.assertIn(

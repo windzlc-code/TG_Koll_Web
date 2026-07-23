@@ -53,6 +53,7 @@ const THREADS_BROWSER_BOOTSTRAP_QUERY_LIMIT = 3;
 const THREADS_BROWSER_TEMPLATE_WAIT_ATTEMPTS = 12;
 const THREADS_BROWSER_REQUEST_TIMEOUT_MS = 5_000;
 const THREADS_BROWSER_DETAIL_RESCUE_LIMIT = 30;
+const THREADS_BROWSER_DETAIL_RESCUE_POOL_LIMIT = 120;
 const THREADS_BROWSER_DETAIL_RESCUE_BATCH_SIZE = 10;
 const THREADS_BROWSER_DETAIL_RESCUE_MIN_REMAINING_MS = 5_000;
 const SENTIMENT_MODEL_KEYWORD_TARGET = 20;
@@ -1371,7 +1372,11 @@ export function candidateMatchesSentimentHotStrategyAnchors(candidate: Sentiment
   // the post belongs to the persona's actual domain. One model-selected direct
   // domain anchor is stronger and keeps niche searches from requiring two
   // different topic words in every valid post.
-  return requiredAnchors.some((anchor) => matchesExactAnchor(anchor));
+  const directPrimaryAnchors = [...strategy.primaryQueries, ...strategy.strictAcceptTerms]
+    .map(cleanText)
+    .filter((term) => term.length >= 3 && isConcreteSearchKeyword(term));
+  return [...new Set([...requiredAnchors, ...directPrimaryAnchors])]
+    .some((anchor) => matchesExactAnchor(anchor));
 }
 
 function parseSentimentHotSemanticAcceptedIds(value: unknown): string[] | null {
@@ -3482,8 +3487,8 @@ async function fetchThreadsSearchPageCandidates(args: {
     ? buildModelOrderedThreadsSearchQueries(args.queryKeywords)
     : buildThreadsSearchQueries(args.keywords);
   const shownIds = args.ignoreHistory ? new Set<string>() : getSentimentHotShownIds(args.archiveId);
-  const excluded = args.ignoreHistory ? new Set<string>() : getSentimentHotRefreshExcludedIds(args.archiveId);
-  const excludedHistoryKeys = args.ignoreHistory ? new Set<string>() : getSentimentHotShownHistoryKeys(args.archiveId);
+  const excluded = args.ignoreHistory ? new Set<string>() : getSentimentHotExcludedIds(args.archiveId);
+  const excludedHistoryKeys = new Set<string>();
   const queryRound = Math.max(0, Math.floor(Number(args.queryRound) || 0));
   const baseSeed = shownIds.size + (args.refresh ? Math.floor(shownIds.size / Math.max(1, args.limit)) : 0);
   const roundSeed = baseSeed + queryRound * Math.max(1, Math.floor(baseQueries.length / 3));
@@ -3814,11 +3819,11 @@ async function fetchThreadsBrowserSearchCandidates(args: {
   }
   console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} sessionid=${sessionCookieCount} cookies=${cookies.length} queries=${args.queries.length} status=start`);
   const excluded = args.excludeIds || getSentimentHotRefreshExcludedIds(args.archiveId);
-  const excludedHistoryKeys = args.ignoreHistory ? new Set<string>() : getSentimentHotShownHistoryKeys(args.archiveId);
+  const excludedHistoryKeys = new Set<string>();
   const results: SentimentHotCandidate[] = [];
   const resultKeys = new Set<string>();
   const detailRescueCandidates = new Map<string, SentimentHotCandidate>();
-  let detailRescueCursor = 0;
+  const attemptedDetailRescueKeys = new Set<string>();
   const stats = { pages: 1, queries: 0, graphql: 0, hydration: 0, accepted: 0, rejected: {} as Record<string, number> };
   const considerCandidate = (candidate: SentimentHotCandidate, countRejection = true) => {
     const normalized = candidateMeetsDisplayQuality(
@@ -3831,7 +3836,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
     if (!normalized) {
       if (
         !isUsefulHotCandidate(candidate)
-        && detailRescueCandidates.size < THREADS_BROWSER_DETAIL_RESCUE_LIMIT
+        && detailRescueCandidates.size < THREADS_BROWSER_DETAIL_RESCUE_POOL_LIMIT
         && candidateMeetsDisplayQuality(candidate, args.keywords, args.searchMode, args.freshnessDays, undefined, true)
       ) {
         const dedupeKey = sentimentCandidateDedupeKey(candidate);
@@ -3858,23 +3863,31 @@ async function fetchThreadsBrowserSearchCandidates(args: {
       await addCookiesBestEffort(context, cookies as any[]);
       const page = await context.newPage();
       const rescueDetailCandidates = async () => {
-        const pending = [...detailRescueCandidates.values()];
-        while (detailRescueCursor < pending.length && results.length < args.limit) {
+        const relevanceNeedles = buildRelevanceNeedlesForMode(args.keywords, normalizeSentimentHotSearchMode(args.searchMode));
+        while (attemptedDetailRescueKeys.size < THREADS_BROWSER_DETAIL_RESCUE_LIMIT && results.length < args.limit) {
           const remainingMs = remainingSentimentDeadlineMs(args.deadlineAt, 15_000);
           if (remainingMs < THREADS_BROWSER_DETAIL_RESCUE_MIN_REMAINING_MS) break;
-          const batch = pending.slice(
-            detailRescueCursor,
-            detailRescueCursor + THREADS_BROWSER_DETAIL_RESCUE_BATCH_SIZE,
-          );
-          detailRescueCursor += batch.length;
+          const batch = [...detailRescueCandidates.entries()]
+            .filter(([key]) => !attemptedDetailRescueKeys.has(key))
+            .sort(([, a], [, b]) => {
+              const relevanceDelta = countMatchedNeedles(b, relevanceNeedles) - countMatchedNeedles(a, relevanceNeedles);
+              if (relevanceDelta !== 0) return relevanceDelta;
+              return compareSentimentHotFreshness(a, b) || Number(b.hotScore || 0) - Number(a.hotScore || 0);
+            })
+            .slice(0, Math.min(
+              THREADS_BROWSER_DETAIL_RESCUE_BATCH_SIZE,
+              THREADS_BROWSER_DETAIL_RESCUE_LIMIT - attemptedDetailRescueKeys.size,
+            ));
+          if (batch.length === 0) break;
+          batch.forEach(([key]) => attemptedDetailRescueKeys.add(key));
           const enriched = await withSentimentTimeout(
-            enrichThreadsCandidateDetails(batch, {
+            enrichThreadsCandidateDetails(batch.map(([, candidate]) => candidate), {
               force: true,
               browserContext: context,
               browserConcurrency: batch.length,
             }),
             Math.max(THREADS_BROWSER_DETAIL_RESCUE_MIN_REMAINING_MS, Math.min(15_000, remainingMs - 500)),
-            batch,
+            batch.map(([, candidate]) => candidate),
           );
           for (const candidate of enriched) considerCandidate(candidate, false);
         }
@@ -3927,6 +3940,8 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           waitUntil: "domcontentloaded",
           timeout: Math.min(12_000, remainingSentimentDeadlineMs(args.deadlineAt, 12_000)),
         }).catch(() => undefined);
+        const cookieConsentButtons = searchPage.locator("button").filter({ hasText: /Cookie/i });
+        if (await cookieConsentButtons.count().catch(() => 0)) await cookieConsentButtons.last().click().catch(() => undefined);
         await searchPage.waitForTimeout(Math.min(350, remainingSentimentDeadlineMs(args.deadlineAt, 350))).catch(() => undefined);
         const collectHydrationCandidates = async () => {
           const scripts = await searchPage.$$eval('script[type="application/json"]', (items: any[]) => items
