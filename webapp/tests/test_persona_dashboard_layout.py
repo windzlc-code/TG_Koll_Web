@@ -18,6 +18,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         cls.console_script = (STATIC_ROOT / "assets" / "console.js").read_text(encoding="utf-8")
         cls.dashboard_script = (STATIC_ROOT / "assets" / "persona-dashboard.js").read_text(encoding="utf-8")
         cls.styles = (STATIC_ROOT / "assets" / "console.css").read_text(encoding="utf-8")
+        cls.dashboard_styles = (STATIC_ROOT / "assets" / "style.css").read_text(encoding="utf-8")
         cls.navigation_styles = (
             STATIC_ROOT / "assets" / "opc" / "site-navigation.css"
         ).read_text(encoding="utf-8")
@@ -69,12 +70,36 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         )
         self.assertLess(preview_position, media_position)
 
+    def test_common_media_viewers_center_media_on_dark_stages(self):
+        self.assertIn('node.className = "persona-media-lightbox";', self.console_script)
+        self.assertNotIn("openMediaLightbox(groupId, 0);", self.console_script)
+        self.assertIn("openPersonaMediaLightbox(groupId, 0);", self.console_script)
+        self.assertIn(
+            ".persona-media-lightbox {\n"
+            "  position: fixed;\n"
+            "  inset: 0;\n"
+            "  z-index: 7000;\n"
+            "  display: grid;\n"
+            "  place-items: center;",
+            self.styles,
+        )
+        self.assertIn("background: #111817;", self.styles)
+        self.assertIn("background: #050b0a;", self.styles)
+        self.assertIn("object-fit: contain;", self.styles)
+        self.assertIn("object-position: center;", self.styles)
+        self.assertIn(".persona-post-gallery-card", self.dashboard_styles)
+        self.assertIn("background: #111817;", self.dashboard_styles)
+        self.assertIn(".persona-post-gallery-stage", self.dashboard_styles)
+        self.assertIn("background: #050b0a;", self.dashboard_styles)
+        self.assertIn("object-position: center;", self.dashboard_styles)
+
     def test_generation_and_media_result_actions_use_clear_compact_labels(self):
         self.assertIn('(isRewriteMode ? "AI 重写推文" : "开始生成")', self.console_script)
         self.assertNotIn('"自动生成草稿"', self.console_script)
         self.assertIn('taskState?.taskId ? "重新生成" : "生成预览"', self.console_script)
         self.assertIn(">添加至草稿</button>", self.console_script)
-        self.assertIn(">覆盖全部媒体</button>", self.console_script)
+        self.assertIn(">替换</button>", self.console_script)
+        self.assertNotIn(">覆盖全部媒体</button>", self.console_script)
         self.assertIn("persona-media-task-actions", self.console_script)
         self.assertIn(
             "renderPersonaMediaTaskResult(persona.id, post.id, { mediaBusy, mediaBusyStartedAt })",
@@ -88,6 +113,23 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         )
         self.assertIn(".persona-compose-media-stack", self.styles)
         self.assertIn("min-height: 60px;", self.styles)
+
+    def test_generated_preview_queue_survives_media_generation_and_supports_media_selection(self):
+        self.assertIn("personaGeneratedPreviews: {}", self.console_script)
+        self.assertIn("function consumePersonaGeneratedPreviewPost(persona, postId)", self.console_script)
+        self.assertIn("function renderPersonaTaskMediaPreview(taskState, items = [])", self.console_script)
+        self.assertIn('data-persona-task-media-select="${esc(sourceIndex)}"', self.console_script)
+        self.assertIn("media_indexes: selectedMediaIndexes", self.console_script)
+        self.assertNotIn("data-persona-generated-media", self.console_script)
+        self.assertIn(
+            '${items.length && status === "success" ? `',
+            self.console_script,
+        )
+        self.assertIn(".persona-task-media-card.is-selected", self.styles)
+        self.assertIn(
+            ".console-page .persona-media-task-actions > [data-persona-run-media-task]",
+            self.styles,
+        )
 
     def test_mobile_task_dock_reuses_the_five_workspace_modules(self):
         self.assertIn('id="mobileTaskDock"', self.markup)
@@ -360,6 +402,38 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("min-height: 28px;", mobile_rule)
         self.assertIn("border-radius: 50%;", mobile_rule)
         self.assertNotIn("32px", mobile_rule)
+
+    def test_avatar_without_persona_images_requires_confirmation_before_generation(self):
+        start = self.console_script.index("async function openPersonaAvatarCropModal()")
+        end = self.console_script.index("\nfunction personaProfileEditDraft", start)
+        module = self.console_script[start:end]
+
+        self.assertIn('title: "还没有可用的人设图"', module)
+        self.assertIn('confirmText: "生成人设图"', module)
+        self.assertIn('cancelText: "暂不生成"', module)
+        self.assertIn("if (goToGeneration) await submitPersonaImageGeneration();", module)
+        self.assertIn(
+            "await loadPersonaImageLibrary(persona.id, { force: true, throwOnError: true });",
+            module,
+        )
+
+    def test_avatar_crop_supports_touch_pinch_and_device_neutral_guidance(self):
+        start = self.console_script.index("function personaAvatarCropModalHtml")
+        end = self.console_script.index("\nfunction personaProfileEditDraft", start)
+        module = self.console_script[start:end]
+
+        self.assertIn(
+            "圆形区域为最终头像范围。拖动图片调整位置，缩放图片调整大小。",
+            module,
+        )
+        self.assertIn("调整完成后点击“应用头像”保存。", module)
+        self.assertNotIn("使用滚轮放大或缩小", module)
+        self.assertIn("const activePointers = new Map();", module)
+        self.assertIn("Math.hypot(", module)
+        self.assertIn("pinchState.zoom * (pointerDistance() / pinchState.distance)", module)
+        self.assertIn('stage.addEventListener("pointercancel", stopDragging);', module)
+        self.assertIn('stage.addEventListener("lostpointercapture", stopDragging);', module)
+        self.assertNotIn("event.isPrimary === false", module)
 
     def test_mobile_publish_content_expands_without_inner_scroll(self):
         self.assertIn(".mobile-task-dock {", self.styles)
@@ -659,6 +733,26 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.styles,
         )
         self.assertIn("place-items: center;\n  padding: 0;\n  line-height: 0;", self.styles)
+
+    def test_media_generation_requires_a_loadable_persona_reference_image(self):
+        self.assertIn(
+            "async function ensurePersonaReferenceImageForMediaTask(persona)",
+            self.console_script,
+        )
+        self.assertIn('title: "请先生成人设图"', self.console_script)
+        self.assertIn('confirmText: "去生成人设图"', self.console_script)
+        self.assertIn("await openPersonaImageGeneration(personaId)", self.console_script)
+        submit = re.search(
+            r"async function submitPersonaMediaTask\(\) \{(?P<body>.*?)\n\}",
+            self.console_script,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(submit)
+        body = submit.group("body")
+        guard = "if (!(await ensurePersonaReferenceImageForMediaTask(persona))) return;"
+        self.assertIn(guard, body)
+        self.assertLess(body.index(guard), body.index("snapshotPersonaCurrentForm();"))
+        self.assertLess(body.index(guard), body.index('api("/api/tasks/submit"'))
 
     def test_full_refresh_scope_is_limited_to_visible_personas(self):
         user = {"id": 7}

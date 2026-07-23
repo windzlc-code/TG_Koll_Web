@@ -1814,6 +1814,41 @@ class PersonaDashboardApiTests(unittest.TestCase):
         post = next(item for item in archives[0]["posts"] if item["id"] == "post-1")
         self.assertEqual(post["mediaItems"][0]["url"], str(generated_path))
 
+    def test_attach_persona_post_image_task_only_writes_selected_outputs(self):
+        self._write_archives()
+        first_path = self.tool_runtime_dir / "generated-first.png"
+        second_path = self.tool_runtime_dir / "generated-second.png"
+        first_path.write_bytes(self.draft_media_path.read_bytes())
+        second_path.write_bytes(self.draft_media_path.read_bytes())
+        task_id = "task-persona-post-image-selected-attach"
+        server._create_task_record(
+            task_id,
+            self._admin_user_id(),
+            "persona_post_image",
+            {"related_persona_id": "persona-1", "related_post_id": "post-1"},
+        )
+        conn = sqlite3.connect(str(self.data_dir / "app.db"))
+        conn.execute(
+            "UPDATE tasks SET status = ?, output_json = ?, updated_at = ? WHERE id = ?",
+            (
+                "success",
+                json.dumps({"image_paths": [str(first_path), str(second_path)]}, ensure_ascii=False),
+                1_720_000_101,
+                task_id,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        resp = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/posts/post-1/media/from_task",
+            json={"task_id": task_id, "replace_existing": True, "media_indexes": [1]},
+        )
+        self.assertEqual(resp.status_code, 200)
+        archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
+        post = next(item for item in archives[0]["posts"] if item["id"] == "post-1")
+        self.assertEqual([item["url"] for item in post["mediaItems"]], [str(second_path)])
+
     def test_persona_publish_history_lists_visible_records(self):
         self._write_archives()
         resp = self.client.get("/api/persona_dashboard/personas/persona-1/publish_history")

@@ -5129,7 +5129,7 @@ body.persona-touch-dragging .persona-list-card:active {
   .persona-media-lightbox-dialog {
     width: 100%;
     max-height: calc(100dvh - max(16px, env(safe-area-inset-top)) - max(16px, env(safe-area-inset-bottom)));
-    margin: 0 auto;
+    margin: auto;
     padding: 10px;
   }
 
@@ -6244,6 +6244,47 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-media-task-actions > button {
   width: 100%;
   min-width: 0;
+}
+
+.persona-task-media-card {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-solid);
+}
+
+.persona-task-media-card.is-selected {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.persona-task-media-card .persona-media-card {
+  min-width: 0;
+}
+
+.persona-task-media-select {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 34px;
+  gap: 6px;
+  padding: 4px 8px;
+}
+
+.persona-task-media-select .ui-action-icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.persona-task-media-select[aria-pressed="false"] .ui-action-icon path {
+  opacity: 0;
 }
 
 .persona-inline-panel.is-menu-open {
@@ -8950,6 +8991,12 @@ body.persona-touch-dragging .persona-list-card:active {
   position: fixed;
   inset: 0;
   z-index: 7000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  overflow: auto;
+  box-sizing: border-box;
+  color: #f3f8f6;
 }
 
 .persona-media-lightbox[hidden] {
@@ -8968,11 +9015,11 @@ body.persona-touch-dragging .persona-list-card:active {
   z-index: 1;
   width: min(1100px, calc(100vw - 48px));
   max-height: calc(100vh - 48px);
-  margin: 24px auto;
+  margin: 0 auto;
   border-radius: 14px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  box-shadow: var(--shadow);
+  background: #111817;
+  border: 1px solid #344441;
+  box-shadow: 0 24px 72px rgba(0, 0, 0, .48);
   display: grid;
   gap: 12px;
   padding: 14px;
@@ -8988,14 +9035,21 @@ body.persona-touch-dragging .persona-list-card:active {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  color: #f3f8f6;
 }
 
 .persona-media-lightbox-body {
   display: grid;
   place-items: center;
+  width: 100%;
   min-height: min(68vh, 720px);
+  padding: clamp(12px, 2vw, 24px);
   overflow: hidden;
   touch-action: none;
+  box-sizing: border-box;
+  border: 1px solid #283633;
+  border-radius: 10px;
+  background: #050b0a;
 }
 
 .persona-media-lightbox-actions {
@@ -9006,10 +9060,15 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-media-lightbox-frame {
   display: block;
+  width: auto;
+  height: auto;
   max-width: 100%;
   max-height: min(68vh, 720px);
-  border-radius: 12px;
-  background: #0f1218;
+  margin: auto;
+  border-radius: 8px;
+  object-fit: contain;
+  object-position: center;
+  background: #050b0a;
 }
 
 .persona-media-lightbox-frame.is-zoomable {
@@ -9026,14 +9085,15 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-media-lightbox-audio {
   width: min(720px, 100%);
+  margin: auto;
 }
 
 .persona-media-lightbox-empty {
-  border: 1px solid var(--line);
-  border-radius: 12px;
+  border: 1px solid #344441;
+  border-radius: 8px;
   padding: 20px 24px;
-  background: var(--soft);
-  color: var(--muted);
+  background: #111817;
+  color: #bdcac6;
   font-weight: 700;
 }
 
@@ -14210,10 +14270,20 @@ body.live-browser-modal-open {
     padding: 5px 9px;
   }
 
+  .persona-media-lightbox {
+    padding:
+      max(6px, env(safe-area-inset-top))
+      max(6px, env(safe-area-inset-right))
+      max(6px, env(safe-area-inset-bottom))
+      max(6px, env(safe-area-inset-left));
+    overscroll-behavior: contain;
+  }
+
   .persona-media-lightbox-dialog {
-    width: calc(100vw - 12px);
+    width: 100%;
+    max-width: 100%;
     max-height: calc(100dvh - 12px);
-    margin: 6px auto;
+    margin: auto;
     gap: 8px;
     padding: 8px;
     border-radius: 10px;
@@ -14221,6 +14291,7 @@ body.live-browser-modal-open {
 
   .persona-media-lightbox-body {
     min-height: min(52dvh, 480px);
+    padding: 8px;
   }
 
   .persona-media-lightbox-frame {
@@ -17127,4 +17198,30 @@ body.console-page {
 ) svg {
   display: block;
   margin: 0;
+}
+
+@media (max-width: 760px) {
+  .console-page .persona-media-task-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .console-page .persona-media-task-actions > [data-persona-run-media-task] {
+    grid-column: 1 / -1;
+  }
+
+  .console-page .persona-task-media-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .console-page .persona-task-media-card {
+    padding: 5px;
+  }
+}
+
+@media (max-width: 360px) {
+  .console-page .persona-media-task-actions,
+  .console-page .persona-task-media-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

@@ -5198,8 +5198,10 @@ body.page-admin {
   max-height: 94vh;
   padding: 14px;
   border-radius: 14px;
-  background: #fff;
-  box-shadow: 0 26px 70px rgba(15, 23, 42, 0.34);
+  color: #f3f8f6;
+  background: #111817;
+  border: 1px solid #344441;
+  box-shadow: 0 26px 70px rgba(0, 0, 0, 0.48);
 }
 
 .persona-post-gallery-head {
@@ -5217,7 +5219,7 @@ body.page-admin {
 
 .persona-post-gallery-head span {
   overflow: hidden;
-  color: #64748b;
+  color: #bdcac6;
   font-size: 12px;
   font-weight: 800;
   text-overflow: ellipsis;
@@ -5228,9 +5230,12 @@ body.page-admin {
   display: grid;
   place-items: center;
   min-height: 240px;
+  padding: clamp(12px, 2vw, 24px);
   overflow: hidden;
-  border-radius: 12px;
-  background: #0f172a;
+  box-sizing: border-box;
+  border: 1px solid #283633;
+  border-radius: 10px;
+  background: #050b0a;
 }
 
 .persona-post-gallery-stage img,
@@ -5240,7 +5245,9 @@ body.page-admin {
   height: auto;
   max-width: 100%;
   max-height: min(78vh, 760px);
+  margin: auto;
   object-fit: contain;
+  object-position: center;
 }
 
 .persona-post-gallery-fallback {
@@ -5270,16 +5277,16 @@ body.page-admin {
   padding: 4px 8px;
   border-radius: 999px;
   border: 1px solid rgba(148, 163, 184, 0.35);
-  background: #fff;
-  color: #475569;
+  background: #18211f;
+  color: #dce7e3;
   font-size: 12px;
   font-weight: 900;
 }
 
 .persona-post-gallery-dots button.is-active {
-  border-color: rgba(37, 99, 235, 0.42);
-  background: rgba(37, 99, 235, 0.1);
-  color: #1d4ed8;
+  border-color: #8bb8ad;
+  background: #dcece7;
+  color: #10211e;
 }
 
 .persona-post-info-list {

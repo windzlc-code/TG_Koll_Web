@@ -10371,6 +10371,7 @@ class PersonaDashboardPersonaImageGeneratePayload(BaseModel):
 class PersonaDashboardPostMediaTaskAttachPayload(BaseModel):
     task_id: str
     replace_existing: bool = False
+    media_indexes: list[int] = Field(default_factory=list)
 
 
 class PersonaDashboardPostMediaUploadPayload(BaseModel):
@@ -13275,7 +13276,15 @@ def _delete_persona_archive_post_media_item(archive_id: str, post_id: str, index
     return {"ok": True, "post": compact}
 
 
-def _attach_task_output_to_persona_post(archive_id: str, post_id: str, task_id: str, *, replace_existing: bool = False, user: dict[str, Any]) -> dict[str, Any]:
+def _attach_task_output_to_persona_post(
+    archive_id: str,
+    post_id: str,
+    task_id: str,
+    *,
+    replace_existing: bool = False,
+    media_indexes: list[int] | None = None,
+    user: dict[str, Any],
+) -> dict[str, Any]:
     with db() as conn:
         row = conn.execute("SELECT * FROM tasks WHERE id = ?", (str(task_id or "").strip(),)).fetchone()
     if row is None:
@@ -13286,6 +13295,18 @@ def _attach_task_output_to_persona_post(archive_id: str, post_id: str, task_id: 
         raise HTTPException(status_code=409, detail="任务尚未成功完成，暂时不能回写到草稿。")
     output_data = _json_loads(task.get("output_json"), {})
     media_paths = _extract_download_paths(output_data)
+    selected_indexes = list(dict.fromkeys(
+        int(index)
+        for index in (media_indexes or [])
+        if isinstance(index, int) and not isinstance(index, bool)
+    ))
+    if selected_indexes:
+        invalid_indexes = [index for index in selected_indexes if index < 0 or index >= len(media_paths)]
+        if invalid_indexes:
+            raise HTTPException(status_code=400, detail="选择的任务媒体不存在，请刷新结果后重试。")
+        media_paths = [media_paths[index] for index in selected_indexes]
+    if not media_paths:
+        raise HTTPException(status_code=400, detail="当前任务没有可添加到草稿的媒体。")
     return _update_persona_archive_post_media(archive_id, post_id, media_paths=media_paths, replace_existing=replace_existing)
 
 
@@ -18232,6 +18253,7 @@ def create_app() -> FastAPI:
             post_id,
             str(payload.task_id or "").strip(),
             replace_existing=bool(payload.replace_existing),
+            media_indexes=payload.media_indexes,
             user=user,
         )
 

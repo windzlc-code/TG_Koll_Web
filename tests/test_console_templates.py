@@ -50,7 +50,10 @@ class ConsoleTemplateMarkupTests(unittest.TestCase):
         self.assertIn("failedMediaPreviewUrls", source)
         self.assertIn("renderModalCloseButton", source)
         self.assertIn("directMediaPreviewUrl(item?.preview_url", source)
-        self.assertIn("await loadPersonaImageLibrary(persona.id, { force: true })", source)
+        self.assertIn(
+            "await loadPersonaImageLibrary(persona.id, { force: true, throwOnError: true })",
+            source,
+        )
         self.assertIn("if (!hasImages)", source)
         self.assertIn("persona-profile-section--empty-images", source)
         self.assertIn('modalKey: "persona-link-settings"', source)
