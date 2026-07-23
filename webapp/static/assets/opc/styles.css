@@ -2257,7 +2257,7 @@ body.modal-open {
   .home-canvas .home-hero {
     --home-hero-slide-width: calc(100vw - 54px);
     min-height: 0;
-    padding: calc(var(--site-header-height, 68px) + 10px) 12px 10px;
+    padding: var(--site-header-height, 68px) 12px 10px;
   }
   .home-canvas .home-hero-track { gap: 10px; }
   .home-canvas .home-hero-slide { height: 345px; grid-template-rows: minmax(0, 1fr) 126px; }
@@ -2267,7 +2267,7 @@ body.modal-open {
   .home-canvas .home-hero h2 { margin-bottom: 6px; font-size: 22px; line-height: 1.14; }
   .home-canvas .home-hero-lede { font-size: 12px; line-height: 1.35; }
   .home-canvas .home-hero-card-link { margin-top: 3px; padding: 4px 0; font-size: 12px; }
-  .home-canvas .home-hero-arrow { top: calc(var(--site-header-height, 68px) + 100px); width: 40px; height: 40px; }
+  .home-canvas .home-hero-arrow { top: calc(var(--site-header-height, 68px) + 90px); width: 40px; height: 40px; }
   .home-canvas .home-hero-arrow-prev { left: 8px; }
   .home-canvas .home-hero-arrow-next { right: 8px; }
   .home-canvas .home-hero-switcher { gap: 0; margin-top: 8px; }
