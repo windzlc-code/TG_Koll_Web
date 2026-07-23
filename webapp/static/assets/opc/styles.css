@@ -1766,11 +1766,6 @@ body.modal-open {
 }
 
 @media (max-width: 560px) {
-  .home-canvas .site-header :is(.site-menu-toggle, .site-icon-button, .header-login) {
-    min-height: 44px;
-    height: 44px;
-  }
-
   .home-canvas .home-proof > div { min-height: 100px; padding: 18px; }
   .home-canvas .home-proof strong { font-size: 22px; }
   .home-canvas .home-capability-section,
