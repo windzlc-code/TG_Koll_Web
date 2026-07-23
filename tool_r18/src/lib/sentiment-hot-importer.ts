@@ -2336,7 +2336,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       { archiveId: liveOnlyRefresh ? undefined : archiveId, keywords, excludeShown: !liveOnlyRefresh, searchMode, freshnessDays: operationalFreshnessDays },
     ).length
     : 0;
-  if (shouldFetchLiveCandidates && preInstagramReadyCount < limit && hasSentimentHotTotalBudget(startedAt, SENTIMENT_HOT_SUPPLEMENT_MIN_REMAINING_MS)) {
+  if (!strictFreshOnly && shouldFetchLiveCandidates && preInstagramReadyCount < limit && hasSentimentHotTotalBudget(startedAt, SENTIMENT_HOT_SUPPLEMENT_MIN_REMAINING_MS)) {
     const beforeInstagramCount = candidates.length;
     const instagramCandidates = await measureSentimentStage(
       warnings,
@@ -2374,6 +2374,8 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       warnings.push(args.refresh ? `已即時刷新 Instagram reader 候選 ${instagramCandidates.length} 篇。` : `已加入 Instagram reader 候選 ${instagramCandidates.length} 篇。`);
     }
     channelStats.push(`Instagram 原始 ${instagramCandidates.length}，新增 ${instagramAddedCount}，補充前 ${beforeInstagramCount}`);
+  } else if (strictFreshOnly && shouldFetchLiveCandidates) {
+    channelStats.push("Instagram 已跳過，嚴格新鮮度要求原帖發布時間");
   } else if (shouldFetchLiveCandidates && hasFastReturnCandidates) {
     channelStats.push(`Instagram 已跳過，已有 ${candidates.length}/${limit} 篇候選，使用快速返回`);
   } else if (shouldFetchLiveCandidates && preInstagramReadyCount < limit) {
