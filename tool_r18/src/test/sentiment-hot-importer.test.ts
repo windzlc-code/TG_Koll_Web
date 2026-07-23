@@ -133,9 +133,9 @@ describe("sentiment hot importer", () => {
   });
 
   it("keeps a live refresh from consuming the browser stage with model strategy time", () => {
-    expect(resolveSentimentHotStrategyTimeoutMs(true, 50_000)).toBe(18_000);
+    expect(resolveSentimentHotStrategyTimeoutMs(true, 50_000)).toBe(3_000);
     expect(resolveSentimentHotStrategyTimeoutMs(false, 50_000)).toBe(30_000);
-    expect(resolveSentimentHotStrategyTimeoutMs(true, 5_000)).toBe(5_000);
+    expect(resolveSentimentHotStrategyTimeoutMs(true, 5_000)).toBe(3_000);
   });
 
   it("does not change the source pipeline when custom freshness is disabled", () => {
@@ -1032,6 +1032,34 @@ describe("sentiment hot importer", () => {
     } as any;
 
     expect(candidateMatchesSentimentHotStrategyAnchors(candidate, strategy, "strict")).toBe(false);
+  });
+
+  it("requires a specific topic phrase instead of a shared short action word in strict mode", () => {
+    const keywords = [
+      "\u8001\u94a2\u7b14\u4fee\u590d",
+      "\u7b14\u5c16\u6253\u78e8",
+      "\u58a8\u56ca\u6e05\u7406",
+    ];
+    const unrelated = {
+      id: "generic-repair",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@demo/post/generic-repair",
+      author: "demo",
+      content: "\u8fd9\u5f20\u7167\u7247\u5148\u505a\u753b\u8d28\u4fee\u590d\uff0c\u518d\u6e05\u7406\u624b\u673a\u76f8\u518c\u548c\u6700\u8fd1\u5220\u9664\u7684\u6863\u6848\uff0c\u6574\u7406\u5b8c\u540e\u753b\u9762\u6e05\u6670\u5f88\u591a\u3002",
+      media: [],
+      hotScore: 9000,
+      metrics: {},
+      capturedAt: new Date().toISOString(),
+    } as const;
+    const relevant = {
+      ...unrelated,
+      id: "pen-repair",
+      sourceUrl: "https://www.threads.net/@demo/post/pen-repair",
+      content: "\u8fd9\u6b21\u8001\u94a2\u7b14\u4fee\u590d\u5148\u62c6\u6d3b\u585e\u4e0a\u58a8\u7cfb\u7edf\uff0c\u518d\u505a\u7b14\u5c16\u6253\u78e8\u548c\u58a8\u56ca\u6e05\u7406\uff0c\u6700\u540e\u6d4b\u8bd5\u51fa\u58a8\u662f\u5426\u7a33\u5b9a\u3002",
+    } as const;
+
+    expect(candidateMatchesCurrentKeywords(unrelated, keywords, "strict")).toBe(false);
+    expect(candidateMatchesCurrentKeywords(relevant, keywords, "strict")).toBe(true);
   });
 
   it("does not display hot candidates shorter than 60 Chinese characters", () => {
