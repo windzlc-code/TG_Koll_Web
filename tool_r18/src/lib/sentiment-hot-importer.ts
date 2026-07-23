@@ -1274,7 +1274,7 @@ function buildSegmentedSentimentHotQueryTerms(strategy: SentimentHotSearchStrate
   return out;
 }
 
-function applyPersonaGuardToSentimentHotStrategy(args: {
+export function applyPersonaGuardToSentimentHotStrategy(args: {
   strategy: SentimentHotSearchStrategy;
   archiveName?: string;
   personaSeedKeywords: string[];
@@ -1284,11 +1284,13 @@ function applyPersonaGuardToSentimentHotStrategy(args: {
     sourceText: args.sourceText,
     useRuleDomainFallback: true,
   }).slice(0, 10);
+  const ruleDomainAnchors = buildStrictPersonaDomainKeywords(args.sourceText);
   const personaIdentityAnchor = personaGuardTerms[0]
     || segmentPersonaWords(cleanText(args.archiveName))[0]
     || args.strategy.normalAnchorTerms.flatMap((term) => segmentPersonaWords(term))[0];
   args.strategy.personaGuardTerms = personaIdentityAnchor ? [personaIdentityAnchor] : personaGuardTerms.slice(0, 1);
   args.strategy.primaryQueries = [...new Set([...personaGuardTerms, ...args.strategy.primaryQueries])];
+  args.strategy.requiredAnchorTerms = [...new Set([...ruleDomainAnchors, ...args.strategy.requiredAnchorTerms])];
   args.strategy.strictAcceptTerms = [...new Set([...personaGuardTerms, ...args.strategy.strictAcceptTerms])];
   args.strategy.normalAcceptTerms = [...new Set([...personaGuardTerms, ...args.strategy.normalAcceptTerms])];
   if (personaIdentityAnchor) {

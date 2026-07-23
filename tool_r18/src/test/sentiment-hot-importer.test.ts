@@ -10,6 +10,7 @@ import {
 } from "@/lib/sentiment-candidate-store";
 import {
   analyzeThreadsProfileVisibleSignals,
+  applyPersonaGuardToSentimentHotStrategy,
   buildSentimentHotKeywords,
   buildJinaReaderUrl,
   buildThreadsSearchUrl,
@@ -825,6 +826,34 @@ describe("sentiment hot importer", () => {
     } as any;
 
     expect(candidateMatchesSentimentHotStrategyAnchors(candidate, strategy, "strict")).toBe(false);
+  });
+
+  it("preserves explicit secondary domains for a composite niche persona", () => {
+    const strategy = {
+      primaryQueries: ["\u52a8\u6f2b\u65b0\u756a"],
+      broadQueries: ["\u5b85\u6587\u5316"],
+      ecosystemQueries: ["\u4e8c\u6b21\u5143"],
+      requiredAnchorTerms: ["\u52a8\u6f2b", "\u4e8c\u6b21\u5143"],
+      normalAnchorTerms: ["\u52a8\u6f2b\u6587\u5316"],
+      rejectTerms: [],
+      strictAcceptTerms: ["\u52a8\u6f2b", "\u4e8c\u6b21\u5143"],
+      normalAcceptTerms: ["\u52a8\u6f2b\u6587\u5316"],
+      domainSummary: "\u52a8\u6f2b\u548c\u4e8c\u6b21\u5143",
+    } as any;
+
+    applyPersonaGuardToSentimentHotStrategy({
+      strategy,
+      archiveName: "\u89d2\u8272\u626e\u6f14\u4eba\u8bbe",
+      personaSeedKeywords: ["\u89d2\u8272\u626e\u6f14", "\u523a\u9752", "\u7535\u7ade", "\u8db3\u7403", "\u6295\u8d44\u7406\u8d22"],
+      sourceText: "\u559c\u6b22 Cosplay \u548c\u523a\u9752\uff0c\u5173\u6ce8\u7535\u7ade\u6e38\u620f\u3001\u8db3\u7403\u8d5b\u4e8b\u4e0e\u6295\u8d44\u7406\u8d22\u3002",
+    });
+
+    expect(strategy.requiredAnchorTerms).toEqual(expect.arrayContaining([
+      "\u523a\u9752Coser",
+      "\u7535\u7ade\u6e38\u620f",
+      "\u8db3\u7403\u8d5b\u4e8b",
+      "\u6295\u8d44\u7406\u8d22",
+    ]));
   });
 
   it("does not let a persona role name bypass normal domain anchors", () => {
