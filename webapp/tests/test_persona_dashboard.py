@@ -1973,6 +1973,38 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(media_resp.status_code, 200)
         self.assertEqual(media_resp.headers["content-type"], "image/png")
 
+    def test_publish_history_requeue_persists_media_in_both_archive_sources_and_platform_queues(self):
+        self._write_archives()
+        primary_path = self.tool_runtime_dir / "persona_archives.json"
+        cache_path = self.tool_runtime_dir / "persona_archives_cache.json"
+        cache_path.write_text(primary_path.read_text(encoding="utf-8"), encoding="utf-8")
+
+        resp = self.client.post("/api/persona_dashboard/personas/persona-1/publish_history/pub-1/requeue")
+
+        self.assertEqual(resp.status_code, 200)
+        requeued = resp.json()["post"]
+        self.assertEqual(requeued["content"], "post")
+        requeued_media_urls = [item["url"] for item in requeued["media_items"]]
+        self.assertEqual(requeued_media_urls[0], "https://example.com/publish-image.png")
+        self.assertIn(str(self.draft_media_path), requeued_media_urls)
+
+        for path in (primary_path, cache_path):
+            archives = json.loads(path.read_text(encoding="utf-8"))
+            archive = archives[0]
+            stored = next(item for item in archive["posts"] if item["id"] == requeued["id"])
+            stored_media_urls = [item["url"] for item in stored["mediaItems"]]
+            self.assertEqual(stored_media_urls, requeued_media_urls)
+            self.assertEqual(stored["mediaUrl"], "https://example.com/publish-image.png")
+            self.assertEqual(stored["mediaType"], "image")
+            self.assertEqual(stored["imageUrl"], "https://example.com/publish-image.png")
+            for platform in ("threads", "telegram"):
+                self.assertIn(requeued["id"], [item["id"] for item in archive["platformPosts"][platform]])
+
+        refreshed = self.client.get("/api/persona_dashboard/personas/persona-1/posts")
+        self.assertEqual(refreshed.status_code, 200)
+        refreshed_post = next(item for item in refreshed.json()["posts"] if item["id"] == requeued["id"])
+        self.assertEqual([item["url"] for item in refreshed_post["media_items"]], requeued_media_urls)
+
     def test_missing_media_is_retained_as_unavailable_item(self):
         self._write_archives()
         archives_path = self.tool_runtime_dir / "persona_archives.json"
@@ -3127,6 +3159,20 @@ class PersonaDashboardApiTests(unittest.TestCase):
             },
             created_at=1_720_000_300,
         )
+        self._insert_social_task(
+            task_id="publish-same-batch-other-persona",
+            account_id="acct-publish-batch",
+            persona_id="persona-2",
+            platform="threads",
+            task_type="publish_post",
+            status="failed",
+            payload={
+                "publish_batch_id": batch_id,
+                "publish_sequence_index": 3,
+                "publish_sequence_total": 3,
+            },
+            created_at=1_720_000_250,
+        )
         conn = sqlite3.connect(str(self.data_dir / "app.db"))
         conn.executemany(
             """
@@ -3137,6 +3183,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
             [
                 ("publish-batch-1", "first", 1_720_000_111),
                 ("publish-batch-2", "second", 1_720_000_222),
+                ("publish-same-batch-other-persona", "wrong persona", 1_720_000_250),
                 ("publish-other-batch", "other", 1_720_000_333),
             ],
         )

@@ -12874,7 +12874,7 @@ def _requeue_persona_publish_record(archive_id: str, history_id: str) -> dict[st
     clean_history_id = str(history_id or "").strip()
     if not clean_id or not clean_history_id:
         raise HTTPException(status_code=400, detail="missing archive_id or history_id")
-    path, raw, archives = _persona_archive_source_for_write(clean_id)
+    _, _, archives = _persona_archive_source_for_write(clean_id)
     archive = _find_persona_archive(archives, clean_id)
     if not archive:
         raise HTTPException(status_code=404, detail="persona not found")
@@ -12885,16 +12885,34 @@ def _requeue_persona_publish_record(archive_id: str, history_id: str) -> dict[st
     ), None)
     if not record or not _is_persona_publish_history_record(record):
         raise HTTPException(status_code=404, detail="publish history record not found")
-    content = str(record.get("content") or record.get("caption") or "").strip()
+    published_meta = record.get("publishedMeta") if isinstance(record.get("publishedMeta"), dict) else {}
+    source_meta = record.get("sourceMeta") if isinstance(record.get("sourceMeta"), dict) else {}
+    published_targets = record.get("publishedTargets") if isinstance(record.get("publishedTargets"), list) else []
+    content = next((
+        str(value).strip()
+        for value in (
+            record.get("content"),
+            record.get("text"),
+            record.get("caption"),
+            record.get("replyText"),
+            record.get("reply_text"),
+            published_meta.get("originalContent"),
+            source_meta.get("originalContent"),
+            published_meta.get("content"),
+            source_meta.get("content"),
+            published_meta.get("text"),
+            source_meta.get("text"),
+            published_meta.get("caption"),
+            source_meta.get("caption"),
+        )
+        if str(value or "").strip()
+    ), "")
     if not content:
         raise HTTPException(status_code=400, detail="publish history content is empty")
     posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
     next_order = max((int(_number(post.get("orderIndex"), -1)) for post in posts if isinstance(post, dict)), default=-1) + 1
     now = _persona_dashboard_iso_now()
-    source_meta = copy.deepcopy(record.get("sourceMeta")) if isinstance(record.get("sourceMeta"), dict) else {}
-    media_items = copy.deepcopy(record.get("mediaItems")) if isinstance(record.get("mediaItems"), list) else None
-    if media_items is None and isinstance(record.get("media_items"), list):
-        media_items = copy.deepcopy(record.get("media_items"))
+    media_items = _compact_dashboard_media_items(record, published_meta, source_meta, published_targets)
     post = {
         "id": _new_persona_post_id(),
         "title": str(record.get("title") or f"重入队推文 #{len(posts) + 1}").strip(),
@@ -12903,17 +12921,39 @@ def _requeue_persona_publish_record(archive_id: str, history_id: str) -> dict[st
         "orderIndex": next_order,
         "createdAt": now,
         "updatedAt": now,
-        "sourceMeta": source_meta,
+        "sourceMeta": copy.deepcopy(source_meta),
     }
-    for key in ("imageUrl", "mediaUrl", "mediaType", "telegramGroupContentType"):
-        value = record.get(key)
-        if value:
-            post[key] = value
     if media_items:
-        post["mediaItems"] = media_items
-    archive["posts"] = [*posts, post]
-    archive["updatedAt"] = now
-    _write_persona_archives_preserving_shape(path, raw, archives)
+        first_media = media_items[0]
+        post["mediaItems"] = copy.deepcopy(media_items)
+        post["mediaUrl"] = first_media["url"]
+        post["mediaType"] = first_media["type"]
+        post["videoUrl" if first_media["type"] == "video" else "imageUrl"] = first_media["url"]
+    if record.get("telegramGroupContentType"):
+        post["telegramGroupContentType"] = record["telegramGroupContentType"]
+
+    for storage_path in (
+        TOOL_R18_RUNTIME_DIR / "persona_archives.json",
+        TOOL_R18_RUNTIME_DIR / "persona_archives_cache.json",
+    ):
+        storage_raw = _read_json_file(storage_path)
+        storage_archives = _filter_active_persona_archives(_extract_persona_archive_list(storage_raw))
+        storage_archive = _find_persona_archive(storage_archives, clean_id)
+        if not storage_archive:
+            continue
+        storage_posts = storage_archive.get("posts") if isinstance(storage_archive.get("posts"), list) else []
+        storage_archive["posts"] = [*storage_posts, copy.deepcopy(post)]
+        platform_posts = storage_archive.get("platformPosts")
+        if isinstance(platform_posts, dict):
+            next_platform_posts = dict(platform_posts)
+            for platform in ("threads", "telegram"):
+                platform_rows = next_platform_posts.get(platform)
+                if not isinstance(platform_rows, list):
+                    platform_rows = storage_posts
+                next_platform_posts[platform] = [*platform_rows, copy.deepcopy(post)]
+            storage_archive["platformPosts"] = next_platform_posts
+        storage_archive["updatedAt"] = now
+        _write_persona_archives_preserving_shape_unlocked(storage_path, storage_raw, storage_archives)
     compact = _compact_persona_archive_post(post)
     compact["media_items"] = _previewable_persona_media_items(
         compact.get("media_items") if isinstance(compact.get("media_items"), list) else [],
