@@ -16064,13 +16064,18 @@ body.console-page {
 
 @media (max-width: 760px) and (orientation: portrait) {
   .live-browser-card.is-live-browser-modal {
-    inset: 6px;
-    width: auto;
-    height: auto;
+    /* Keep the remote browser, its native frame, and this card in one
+       landscape coordinate space before rotating the complete preview. */
+    inset: auto;
+    top: 50%;
+    left: 50%;
+    width: calc(100dvh - 12px);
+    height: calc(100dvw - 12px);
     grid-template-rows: minmax(0, 1fr);
     align-content: stretch;
     overflow: hidden;
-    transform: none;
+    transform: translate(-50%, -50%) rotate(90deg);
+    transform-origin: center;
   }
 
   .account-browser-page[data-account-browser-page="browsers"] .live-browser-panel .live-browser-card.is-live-browser-modal .live-browser-card-head {
