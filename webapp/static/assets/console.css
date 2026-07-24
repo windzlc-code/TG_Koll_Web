@@ -19040,12 +19040,14 @@ body.console-page {
   }
 
   .console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-mobile-summary {
+    position: absolute;
+    top: 3px;
+    left: 50%;
     display: grid;
-    grid-column: 1 / -1;
-    grid-row: 2;
     grid-template-columns: repeat(2, max-content);
     gap: 1px 5px;
     justify-content: center;
+    transform: translateX(-50%);
     font-size: 7px;
     line-height: 1.05;
   }
