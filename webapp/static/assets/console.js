@@ -21560,10 +21560,16 @@ function updateLiveBrowserSessionCard(card, session) {
   const manualInput = card.querySelector("[data-live-browser-manual-input]");
   const inputToggle = card.querySelector("[data-live-browser-input-toggle]");
   const tools = card.querySelector("[data-live-browser-tools]");
-  if (manualInput) manualInput.hidden = !interactionAllowed;
+  if (manualInput) {
+    manualInput.hidden = !interactionAllowed;
+    if (!interactionAllowed) manualInput.dataset.expanded = "false";
+  }
   if (inputToggle) inputToggle.disabled = !interactionAllowed;
   if (!interactionAllowed) {
-    if (tools) tools.hidden = true;
+    if (tools) {
+      tools.setAttribute("aria-hidden", "true");
+      tools.setAttribute("inert", "");
+    }
     if (inputToggle) inputToggle.setAttribute("aria-expanded", "false");
   }
   const closeButton = card.querySelector("[data-live-browser-close]");
@@ -21932,11 +21938,11 @@ function renderLiveBrowserSession(session) {
           allowfullscreen
         ></iframe>
         <div class="live-browser-lock" aria-hidden="true"><span>自动化执行中，等待进入人工处理状态后再操作。</span></div>
-        <div class="live-browser-manual-input" data-live-browser-manual-input ${interactionAllowed ? "" : "hidden"}>
+        <div class="live-browser-manual-input" data-live-browser-manual-input data-expanded="false" ${interactionAllowed ? "" : "hidden"}>
           <button type="button" class="live-browser-input-toggle" data-live-browser-input-toggle="${esc(sessionId)}" aria-expanded="false" title="输入验证码或文本" aria-label="输入验证码或文本">
-            ${renderEditIcon()}
+            ${renderEditIcon()}<span>输入</span>
           </button>
-          <div class="live-browser-tools" data-live-browser-tools="${esc(sessionId)}" hidden>
+          <div class="live-browser-tools" data-live-browser-tools="${esc(sessionId)}" aria-hidden="true" inert>
             <input
               type="text"
               data-live-browser-text="${esc(sessionId)}"
@@ -24830,12 +24836,15 @@ function bindEvents() {
     const liveBrowserInputToggle = event.target.closest("[data-live-browser-input-toggle]");
     if (liveBrowserInputToggle) {
       const card = liveBrowserInputToggle.closest("[data-live-browser-card]");
+      const manualInput = card?.querySelector("[data-live-browser-manual-input]");
       const tools = card?.querySelector("[data-live-browser-tools]");
-      if (!tools) return;
-      const opening = tools.hidden;
-      tools.hidden = !opening;
+      if (!manualInput || !tools) return;
+      const opening = manualInput.dataset.expanded !== "true";
+      manualInput.dataset.expanded = opening ? "true" : "false";
+      tools.setAttribute("aria-hidden", opening ? "false" : "true");
+      tools.toggleAttribute("inert", !opening);
       liveBrowserInputToggle.setAttribute("aria-expanded", opening ? "true" : "false");
-      if (opening) card.querySelector("[data-live-browser-text]")?.focus();
+      if (opening) window.requestAnimationFrame(() => card.querySelector("[data-live-browser-text]")?.focus());
       return;
     }
     const closeLiveBrowser = event.target.closest("[data-live-browser-close]");

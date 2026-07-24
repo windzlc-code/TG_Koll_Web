@@ -1431,6 +1431,10 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('data-live-browser-manual-input', frame_markup)
         self.assertIn('title="输入验证码或文本"', frame_markup)
         self.assertNotIn('<span>输入验证码或文本</span>', frame_markup)
+        self.assertIn("<span>\u8f93\u5165</span>", frame_markup)
+        self.assertIn("<input", frame_markup)
+        self.assertIn('type="text"', frame_markup)
+        self.assertIn('aria-hidden="true" inert', frame_markup)
         self.assertLess(
             frame_markup.index('class="live-browser-lock"'),
             frame_markup.index('data-live-browser-manual-input'),
@@ -1439,11 +1443,17 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("left: 10px;", overlay)
         self.assertIn("right: 10px;", overlay)
         self.assertIn("pointer-events: none;", overlay)
-        self.assertIn("position: absolute;", tools)
-        self.assertIn("width: min(420px, 100%);", tools)
-        self.assertIn("backdrop-filter: blur(10px);", tools)
-        self.assertIn("width: 34px;", toggle)
-        self.assertIn(".console-page .live-browser-tools input {\n    grid-column: auto;", self.styles)
+        self.assertIn("width: 0;", tools)
+        self.assertIn("visibility: hidden;", tools)
+        self.assertIn("transition: width 240ms ease", tools)
+        self.assertIn('data-expanded="true"', self.styles)
+        self.assertIn("width: min(520px, calc(100% - 130px));", self.styles)
+        self.assertIn("display: inline-flex;", toggle)
+        self.assertIn("min-height: 56px;", toggle)
+        self.assertIn(".console-page .live-browser-tools input {", self.styles)
+        self.assertIn('manualInput.dataset.expanded = opening ? "true" : "false";', self.source)
+        self.assertIn('tools.toggleAttribute("inert", !opening);', self.source)
+        self.assertNotIn("tools.hidden = !opening;", self.source)
 
     def test_multi_publish_submission_sends_one_batch_and_sequence_metadata(self):
         submit_publish = f"async {self._function_source('submitPublishContentTasks')}"
