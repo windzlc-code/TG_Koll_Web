@@ -1355,9 +1355,95 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             }});
             assert.equal(legacyBatch.count, 2);
             assert.equal(legacyBatch.target, "发布第1/2篇");
+
             """
         )
         self._run_node(harness)
+
+    def test_publish_toast_lane_rollover_does_not_merge_cancelled_batch(self):
+        lane_key = self._function_source("socialTaskToastLaneKey")
+        terminal = self._function_source("socialTaskToastTerminal")
+        clear_delivered = self._function_source("clearDeliveredToastStates")
+        register_batch = self._function_source("registerSocialTaskToastBatch")
+        register_lanes = self._function_source("registerSocialTaskToastLanes")
+        task_summary = self._function_source("liveBrowserTaskSummary")
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("node:assert/strict");
+            const deliveredToastStateKeys = new Set();
+            const state = {{
+              socialTaskToastKeys: {{}},
+              socialTaskToastBatches: {{}},
+              socialTaskToastLabels: {{}},
+              socialTasks: [],
+            }};
+            function socialTaskPresentationStatus(task) {{ return String(task?.status || ""); }}
+            function activeSocialAutomationTask(task) {{ return ["queued", "running", "need_manual"].includes(String(task?.status || "")); }}
+            function toastTimestampMs(task) {{ return Number(task?.created_at || 0); }}
+            function socialTaskPayload(task) {{ return task?.payload || {{}}; }}
+            function accountById() {{ return {{}}; }}
+            function statusLabel(value) {{ return value; }}
+            {lane_key}
+            {terminal}
+            {clear_delivered}
+            {register_batch}
+            {register_lanes}
+            {task_summary}
+
+            const oldTasks = [
+              {{ id: "cancelled-1", task_type: "publish_post", persona_id: "p1", account_id: "a1", status: "cancelled", created_at: 1 }},
+              {{ id: "cancelled-2", task_type: "publish_post", persona_id: "p1", account_id: "a1", status: "cancelled", created_at: 2 }},
+            ];
+            const nextTasks = [
+              {{ id: "restart-1", task_type: "publish_post", persona_id: "p1", account_id: "a1", status: "running", created_at: 3, payload: {{ publish_sequence_index: 1, publish_sequence_total: 2, publish_sequence_targets: ["发布第1篇", "发布第2篇"] }} }},
+              {{ id: "restart-2", task_type: "publish_post", persona_id: "p1", account_id: "a1", status: "queued", created_at: 4, payload: {{ publish_sequence_index: 2, publish_sequence_total: 2, publish_sequence_targets: ["发布第1篇", "发布第2篇"] }} }},
+            ];
+            const lane = socialTaskToastLaneKey(oldTasks[0]);
+            registerSocialTaskToastBatch(lane, oldTasks);
+            registerSocialTaskToastBatch(lane, nextTasks);
+            registerSocialTaskToastLanes([...oldTasks, ...nextTasks]);
+            assert.deepEqual(state.socialTaskToastBatches[lane].taskIds, ["restart-1", "restart-2"]);
+            assert.equal(state.socialTaskToastKeys["cancelled-1"], undefined);
+            state.socialTasks = nextTasks;
+            const summary = liveBrowserTaskSummary({{ task_id: "restart-1", task_type: "publish_post" }});
+            assert.equal(summary.count, 2);
+            assert.equal(summary.target, "发布第1/2篇");
+            """
+        )
+        self._run_node(harness)
+
+    def test_live_browser_manual_input_is_an_overlay_with_compact_trigger(self):
+        render_start = self.source.index("function renderLiveBrowserSession(session)")
+        render_end = self.source.index("let liveBrowserModalTrigger", render_start)
+        render = self.source[render_start:render_end]
+        frame_start = render.index('<div class="live-browser-frame">')
+        frame_end = render.index('<div class="live-browser-interaction-note">')
+        frame_markup = render[frame_start:frame_end]
+
+        overlay_anchor = self.styles.index(".console-page .live-browser-manual-input[hidden]")
+        overlay_start = self.styles.index(".console-page .live-browser-manual-input {", overlay_anchor)
+        overlay = self._css_block(".console-page .live-browser-manual-input {", overlay_start)
+        tools_start = self.styles.index(".console-page .live-browser-tools {", overlay_anchor)
+        tools = self._css_block(".console-page .live-browser-tools {", tools_start)
+        toggle_start = self.styles.index(".console-page .live-browser-input-toggle {", overlay_anchor)
+        toggle = self._css_block(".console-page .live-browser-input-toggle {", toggle_start)
+
+        self.assertIn('data-live-browser-manual-input', frame_markup)
+        self.assertIn('title="输入验证码或文本"', frame_markup)
+        self.assertNotIn('<span>输入验证码或文本</span>', frame_markup)
+        self.assertLess(
+            frame_markup.index('class="live-browser-lock"'),
+            frame_markup.index('data-live-browser-manual-input'),
+        )
+        self.assertIn("position: absolute;", overlay)
+        self.assertIn("left: 10px;", overlay)
+        self.assertIn("right: 10px;", overlay)
+        self.assertIn("pointer-events: none;", overlay)
+        self.assertIn("position: absolute;", tools)
+        self.assertIn("width: min(420px, 100%);", tools)
+        self.assertIn("backdrop-filter: blur(10px);", tools)
+        self.assertIn("width: 34px;", toggle)
+        self.assertIn(".console-page .live-browser-tools input {\n    grid-column: auto;", self.styles)
 
     def test_multi_publish_submission_sends_one_batch_and_sequence_metadata(self):
         submit_publish = f"async {self._function_source('submitPublishContentTasks')}"

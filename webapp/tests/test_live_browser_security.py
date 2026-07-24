@@ -971,11 +971,12 @@ def test_stop_restored_registry_session_terminates_processes_before_removal():
     with (
         mock.patch.object(live_browser, "_load_registry_session", return_value=session),
         mock.patch.object(live_browser, "_terminate_registry_session_processes", side_effect=lambda target: events.append(("terminate", target.id))),
+        mock.patch.object(live_browser, "_terminate_display_processes", side_effect=lambda target: events.append(("display", target.id))),
         mock.patch.object(live_browser, "_remove_session_registry", side_effect=lambda session_id: events.append(("remove", session_id))),
     ):
         live_browser.stop_live_browser_session(session.id)
 
-    assert events == [("terminate", session.id), ("remove", session.id)]
+    assert events == [("display", session.id), ("terminate", session.id), ("remove", session.id)]
 
 
 def test_same_account_standby_cleanup_stops_registry_sessions():

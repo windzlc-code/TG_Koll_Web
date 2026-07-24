@@ -169,6 +169,36 @@ class _RecordingLogger:
 
 
 class RunnerPublishSafetyTests(unittest.TestCase):
+    def test_publish_submit_guard_blocks_cancelled_action(self):
+        cancelled = threading.Event()
+        cancelled.set()
+        action = mock.Mock()
+        guard = mock.Mock()
+
+        with self.assertRaisesRegex(RuntimeError, "已取消"):
+            runner._run_publish_submit_action(
+                {"publish_submit_callback": guard},
+                cancelled,
+                action,
+            )
+
+        guard.assert_not_called()
+        action.assert_not_called()
+
+    def test_publish_submit_guard_wraps_final_action(self):
+        action = mock.Mock(return_value="clicked")
+        guard = mock.Mock(side_effect=lambda callback: callback())
+
+        result = runner._run_publish_submit_action(
+            {"publish_submit_callback": guard},
+            threading.Event(),
+            action,
+        )
+
+        self.assertEqual(result, "clicked")
+        guard.assert_called_once()
+        action.assert_called_once()
+
     @staticmethod
     def _totp_verification_page(text):
         page = mock.Mock()

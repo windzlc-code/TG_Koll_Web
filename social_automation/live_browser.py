@@ -216,6 +216,7 @@ def stop_live_browser_session(
                         process.wait(timeout=max(0.0, deadline - time.monotonic()))
                     else:
                         getattr(process, action)()
+    _terminate_display_processes(target)
     if not target.processes:
         _terminate_registry_session_processes(target)
     if target.temp_dir:
@@ -535,6 +536,38 @@ def _terminate_registry_session_processes(session: LiveBrowserSession) -> int:
     return terminated
 
 
+def _terminate_display_processes(session: LiveBrowserSession) -> int:
+    """Stop browser descendants that share this task's private X display."""
+    if os.name == "nt" or not session.display:
+        return 0
+    own_pid = os.getpid()
+    targets: list[int] = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        pid = _safe_int(entry.name, 0)
+        if pid <= 1 or pid == own_pid:
+            continue
+        try:
+            args = [part.decode("utf-8", errors="replace") for part in (entry / "cmdline").read_bytes().split(b"\0") if part]
+            environment = (entry / "environ").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        uses_display = any(item == f"DISPLAY={session.display}".encode() for item in environment)
+        is_session_xvnc = bool(args and Path(args[0]).name.lower() == "xvnc" and session.display in args)
+        if uses_display or is_session_xvnc:
+            targets.append(pid)
+    for pid in targets:
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGTERM)
+    if targets:
+        time.sleep(0.2)
+    for pid in targets:
+        with contextlib.suppress(OSError):
+            os.kill(pid, _SIGKILL)
+    return len(targets)
+
+
 def _capture_session_process_identities(session: LiveBrowserSession) -> None:
     process_pids: list[int] = []
     identities: list[dict[str, Any]] = []
@@ -685,6 +718,7 @@ def _cleanup_orphaned_live_browser_processes(logger: Any | None = None) -> None:
     stopped = 0
     for session in _load_registry_sessions():
         stopped += _terminate_registry_session_processes(session)
+        stopped += _terminate_display_processes(session)
         _remove_session_registry(session.id)
     if stopped:
         _log(logger, "info", "live_browser_orphan_cleanup", "已清理上次遗留的实时浏览器进程", {"count": stopped})

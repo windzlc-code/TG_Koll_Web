@@ -909,6 +909,19 @@ def _raise_if_cancelled(cancel_event: Any | None) -> None:
         raise RuntimeError("社交自动化任务已取消。")
 
 
+def _run_publish_submit_action(
+    context_control: dict[str, Any] | None,
+    cancel_event: Any | None,
+    action: Callable[[], Any],
+) -> Any:
+    """Run the irreversible publish click under the server-owned cancellation guard."""
+    _raise_if_cancelled(cancel_event)
+    callback = context_control.get("publish_submit_callback") if isinstance(context_control, dict) else None
+    if callable(callback):
+        return callback(action)
+    return action()
+
+
 def _manual_takeover_event(context_control: dict[str, Any] | None) -> Any | None:
     if not isinstance(context_control, dict):
         return None
@@ -4753,7 +4766,15 @@ def _run_threads_publish_post(
     if manual_result is not None:
         return manual_result
     try:
-        post_clicked = _click_threads_active_dialog_post(page, logger, before_click=persist_confirmation_before_click)
+        post_clicked = _run_publish_submit_action(
+            context_control,
+            cancel_event,
+            lambda: _click_threads_active_dialog_post(
+                page,
+                logger,
+                before_click=persist_confirmation_before_click,
+            ),
+        )
     except PublishClickUncertainError:
         post_clicked = True
         click_uncertain = True
@@ -4761,8 +4782,11 @@ def _run_threads_publish_post(
     if not post_clicked and post_button is None:
         raise RuntimeError("未找到 Threads 发布按钮。")
     if not post_clicked:
-        persist_confirmation_before_click()
-        _human_click(page, post_button, logger, "threads_publish_submit")
+        def submit_fallback() -> None:
+            persist_confirmation_before_click()
+            _human_click(page, post_button, logger, "threads_publish_submit")
+
+        _run_publish_submit_action(context_control, cancel_event, submit_fallback)
     _set_manual_takeover_waiting_for(context_control, "threads_after_submit")
     manual_result = _pause_for_requested_threads_publish_takeover(
         page, task, payload, screenshot_dir, logger, account, profile_url,
@@ -4859,8 +4883,11 @@ def _run_publish_post(
         text_input_mode = _normalize_text_input_mode(payload.get("text_input_mode") or os.getenv("SOCIAL_AUTOMATION_TEXT_INPUT_MODE", "paste"))
         logger.log("info", "publish_text_input", "正在填写 Instagram 帖子正文。", {"mode": text_input_mode, "chars": len(caption)})
         _type_text(page, caption, mode=text_input_mode, logger=logger, stage="publish_text_input")
-    if not _click_text_button(page, logger, ["Share"], "publish_share"):
-        raise RuntimeError("未找到 Instagram 分享按钮。")
+    def submit_instagram() -> None:
+        if not _click_text_button(page, logger, ["Share"], "publish_share"):
+            raise RuntimeError("未找到 Instagram 分享按钮。")
+
+    _run_publish_submit_action(context_control, cancel_event, submit_instagram)
     success = _wait_for_publish_success(page, logger)
     time.sleep(5)
     shot = _screenshot(page, screenshot_dir, task, "publish_done", logger)

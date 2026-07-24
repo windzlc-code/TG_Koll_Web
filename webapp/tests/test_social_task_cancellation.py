@@ -947,6 +947,50 @@ class SocialTaskCancellationTests(unittest.TestCase):
             self.assertEqual(task_id in archived, final_status == "success")
             self.assertFalse(self._has_secret(task_id))
 
+    def test_cancel_waits_for_the_final_publish_submit_guard(self):
+        task_id = "submit-lock-task"
+        self._insert_task(task_id, "running")
+        action_entered = threading.Event()
+        release_action = threading.Event()
+        action_completed = threading.Event()
+        control = {
+            "cancel_event": threading.Event(),
+            "current_task_id": task_id,
+            "publish_submit_lock": threading.RLock(),
+        }
+
+        def action():
+            action_entered.set()
+            self.assertTrue(release_action.wait(timeout=3))
+            action_completed.set()
+
+        submit_thread = threading.Thread(
+            target=lambda: social_automation_api._run_publish_submit_guard(control, action)
+        )
+        with mock.patch.dict(
+            social_automation_api._RUNNING_TASK_CONTROLS,
+            {task_id: control},
+            clear=True,
+        ), mock.patch.object(social_automation_api, "_force_stop_running_task"), mock.patch.object(
+            social_automation_api, "wake_social_automation_worker"
+        ):
+            submit_thread.start()
+            self.assertTrue(action_entered.wait(timeout=3))
+            cancel_thread = threading.Thread(
+                target=lambda: social_automation_api.cancel_social_task(task_id, "race cancel")
+            )
+            cancel_thread.start()
+            self.assertTrue(cancel_thread.is_alive())
+            release_action.set()
+            submit_thread.join(timeout=3)
+            cancel_thread.join(timeout=3)
+
+        self.assertFalse(submit_thread.is_alive())
+        self.assertFalse(cancel_thread.is_alive())
+        self.assertTrue(action_completed.is_set())
+        self.assertTrue(control["cancel_event"].is_set())
+        self.assertEqual(self._status(task_id), "cancelled")
+
 
 if __name__ == "__main__":
     unittest.main()

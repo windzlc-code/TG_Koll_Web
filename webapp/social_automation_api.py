@@ -4542,6 +4542,7 @@ def cancel_social_task(task_id: str, reason: str = "") -> dict[str, Any]:
             for item in ((control or {}).get("completed_batch_task_ids") or [])
             if str(item or "")
         }
+    _signal_publish_cancellation(control)
     batch_task_ids = list(dict.fromkeys([*batch_task_ids, *persisted_batch_task_ids]))
     if len(batch_task_ids) > 1:
         cancellable_ids = [
@@ -5357,6 +5358,7 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
         "batch_tasks": batch_tasks,
         "completed_batch_task_ids": [],
         "live_browser_session_id": "",
+        "publish_submit_lock": threading.RLock(),
     }
     control["account_login_status_callback"] = lambda status: _persist_running_account_login_status(
         str(control.get("current_task_id") or task_id),
@@ -5367,6 +5369,7 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
         str(control.get("current_task_id") or task_id),
         confirmation,
     )
+    control["publish_submit_callback"] = lambda action: _run_publish_submit_guard(control, action)
     control["manual_takeover_callback"] = lambda: _persist_manual_takeover_ack(
         str(control.get("current_task_id") or task_id),
         str(control.get("live_browser_session_id") or ""),
@@ -5820,6 +5823,32 @@ def _is_task_cancelled(task_id: str) -> bool:
         return row is None or str(row["status"] or "") == "cancelled"
     except Exception:
         return True
+
+
+def _run_publish_submit_guard(control: dict[str, Any], action: Callable[[], Any]) -> Any:
+    lock = control.get("publish_submit_lock")
+    if lock is None:
+        return action()
+    with lock:
+        event = control.get("cancel_event")
+        task_id = str(control.get("current_task_id") or "")
+        if (event is not None and event.is_set()) or _is_task_cancelled(task_id):
+            raise RuntimeError("社交自动化任务已取消。")
+        return action()
+
+
+def _signal_publish_cancellation(control: dict[str, Any] | None) -> None:
+    if not isinstance(control, dict):
+        return
+    event = control.get("cancel_event")
+    if event is None:
+        return
+    lock = control.get("publish_submit_lock")
+    if lock is None:
+        event.set()
+        return
+    with lock:
+        event.set()
 
 
 def _discard_ephemeral_task_secrets(*task_ids: str) -> None:

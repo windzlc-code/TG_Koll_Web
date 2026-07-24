@@ -4396,7 +4396,13 @@ function registerSocialTaskToastBatch(batchKey, tasks = []) {
   const hasNewTask = taskIds.some((taskId) => !previous.taskIds.includes(taskId));
   const previousBatchFinished = previous.taskIds.length > 0
     && previous.taskIds.every((taskId) => socialTaskToastTerminal(previous.tasks?.[taskId]));
-  if (hasNewTask && previousBatchFinished) clearDeliveredToastStates(cleanKey);
+  if (hasNewTask && previousBatchFinished) {
+    clearDeliveredToastStates(cleanKey);
+    const nextTaskIds = new Set(taskIds);
+    previous.taskIds.forEach((taskId) => {
+      if (!nextTaskIds.has(taskId)) delete state.socialTaskToastKeys[taskId];
+    });
+  }
   state.socialTaskToastBatches[cleanKey] = {
     taskIds,
     tasks: {
@@ -21926,21 +21932,21 @@ function renderLiveBrowserSession(session) {
           allowfullscreen
         ></iframe>
         <div class="live-browser-lock" aria-hidden="true"><span>自动化执行中，等待进入人工处理状态后再操作。</span></div>
-      </div>
-      <div class="live-browser-manual-input" data-live-browser-manual-input ${interactionAllowed ? "" : "hidden"}>
-        <button type="button" class="live-browser-input-toggle" data-live-browser-input-toggle="${esc(sessionId)}" aria-expanded="false">
-          ${renderEditIcon()}<span>输入验证码或文本</span>
-        </button>
-        <div class="live-browser-tools" data-live-browser-tools="${esc(sessionId)}" hidden>
-          <input
-            type="text"
-            data-live-browser-text="${esc(sessionId)}"
-            placeholder="输入验证码或文本"
-            autocomplete="off"
-            ${interactionAllowed ? "" : "disabled"}
-          />
-          <button type="button" data-live-browser-type="${esc(sessionId)}" ${interactionAllowed ? "" : "disabled"}>发送</button>
-          <button type="button" data-live-browser-key="${esc(sessionId)}" data-live-browser-key-value="Enter" ${interactionAllowed ? "" : "disabled"}>回车</button>
+        <div class="live-browser-manual-input" data-live-browser-manual-input ${interactionAllowed ? "" : "hidden"}>
+          <button type="button" class="live-browser-input-toggle" data-live-browser-input-toggle="${esc(sessionId)}" aria-expanded="false" title="输入验证码或文本" aria-label="输入验证码或文本">
+            ${renderEditIcon()}
+          </button>
+          <div class="live-browser-tools" data-live-browser-tools="${esc(sessionId)}" hidden>
+            <input
+              type="text"
+              data-live-browser-text="${esc(sessionId)}"
+              placeholder="输入验证码或文本"
+              autocomplete="off"
+              ${interactionAllowed ? "" : "disabled"}
+            />
+            <button type="button" data-live-browser-type="${esc(sessionId)}" title="发送文本" aria-label="发送文本" ${interactionAllowed ? "" : "disabled"}>发送</button>
+            <button type="button" data-live-browser-key="${esc(sessionId)}" data-live-browser-key-value="Enter" title="发送回车" aria-label="发送回车" ${interactionAllowed ? "" : "disabled"}>回车</button>
+          </div>
         </div>
       </div>
       <div class="live-browser-interaction-note">
