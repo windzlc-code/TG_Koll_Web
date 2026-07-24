@@ -21763,7 +21763,7 @@ function liveBrowserTaskSummary(session) {
   const count = taskId ? (taskType === "publish_post" ? sequenceTotal : 1) : 0;
   const target = String(
     taskType === "publish_post"
-      ? `${currentSequenceIndex}/${sequenceTotal}`
+      ? `发布第${currentSequenceIndex}/${sequenceTotal}篇`
       : (
         payload.target_title
         || payload.target_url
