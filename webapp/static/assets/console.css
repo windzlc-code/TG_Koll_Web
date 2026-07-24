@@ -16066,18 +16066,15 @@ body.console-page {
 
 @media (max-width: 760px) and (orientation: portrait) {
   .live-browser-card.is-live-browser-modal {
-    /* Keep the remote browser, its native frame, and this card in one
-       landscape coordinate space before rotating the complete preview. */
-    inset: auto;
-    top: 50%;
-    left: 50%;
-    width: calc(100dvh - 12px);
-    height: calc(100dvw - 12px);
+    /* Keep the host controls upright. Only the remote browser needs the
+       landscape transform in a portrait viewport. */
+    inset: 6px;
+    width: auto;
+    height: auto;
     grid-template-rows: minmax(0, 1fr);
     align-content: stretch;
     overflow: hidden;
-    transform: translate(-50%, -50%) rotate(90deg);
-    transform-origin: center;
+    transform: none;
   }
 
   .account-browser-page[data-account-browser-page="browsers"] .live-browser-panel .live-browser-card.is-live-browser-modal .live-browser-card-head {
@@ -16113,12 +16110,14 @@ body.console-page {
 
   .live-browser-card.is-live-browser-modal .live-browser-frame > iframe {
     position: absolute;
-    inset: 0;
-    width: 100%;
+    top: 50%;
+    left: 50%;
+    width: 100dvh;
     max-width: none;
-    height: 100%;
+    height: 100dvw;
     max-height: none;
-    transform: none;
+    transform: translate(-50%, -50%) rotate(90deg);
+    transform-origin: center;
   }
 
   .live-browser-card.is-live-browser-modal .live-browser-tools {
@@ -19043,14 +19042,14 @@ body.console-page {
   }
 
   .console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-mobile-summary {
-    position: absolute;
-    top: 0;
-    left: 50%;
+    position: static;
+    top: auto;
+    left: auto;
     display: grid;
     grid-template-columns: repeat(2, max-content);
     gap: 1px 5px;
     justify-content: center;
-    transform: translate(-50%, -24px);
+    transform: none;
     font-size: 7px;
     line-height: 1.05;
   }
