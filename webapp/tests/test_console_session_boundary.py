@@ -920,6 +920,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         mobile_window = self._css_block(
             ".console-page .persona-detail .persona-hot-time-window {"
         )
+        mobile_freshness_tabs = self._css_block(
+            ".console-page .persona-detail .persona-hot-freshness-tabs {"
+        )
 
         self.assertIn('class="row-actions persona-hot-fetch-toolbar"', self.source)
         self.assertNotIn(".persona-hot-fetch-toolbar > button", self.styles)
@@ -929,6 +932,10 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
         self.assertIn("grid-column: 1 / -1;", mobile_window)
         self.assertIn("grid-template-columns: auto minmax(0, 1fr) auto;", mobile_window)
+        self.assertIn(
+            "grid-template-columns: repeat(2, minmax(0, 1fr));",
+            mobile_freshness_tabs,
+        )
 
     def test_expanded_mobile_browser_uses_one_compact_translucent_summary(self):
         portrait_start = self.styles.rfind("@media (max-width: 760px) and (orientation: portrait)")
