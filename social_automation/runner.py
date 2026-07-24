@@ -452,22 +452,29 @@ def run_social_publish_batch(
         _sync_live_browser_viewport(page, context_control, loggers[0])
         page.set_default_timeout(int(os.getenv("SOCIAL_AUTOMATION_DEFAULT_TIMEOUT_MS", "30000")))
         for index, (task, logger) in enumerate(zip(tasks, loggers)):
-            if isinstance(context_control, dict):
-                context_control["task"] = dict(task)
-                context_control["current_task_id"] = str(task.get("id") or "")
             payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
-            logger.log(
-                "info",
-                "prepare",
-                "Publish batch task started.",
-                {
-                    "task_type": "publish_post",
-                    "platform": platform,
-                    "publish_sequence_index": index + 1,
-                    "publish_sequence_total": len(tasks),
-                },
-            )
             try:
+                started_callback = (
+                    context_control.get("batch_item_started_callback")
+                    if isinstance(context_control, dict)
+                    else None
+                )
+                if callable(started_callback):
+                    started_callback(task, index + 1, len(tasks))
+                if isinstance(context_control, dict):
+                    context_control["task"] = dict(task)
+                    context_control["current_task_id"] = str(task.get("id") or "")
+                logger.log(
+                    "info",
+                    "prepare",
+                    "Publish batch task started.",
+                    {
+                        "task_type": "publish_post",
+                        "platform": platform,
+                        "publish_sequence_index": index + 1,
+                        "publish_sequence_total": len(tasks),
+                    },
+                )
                 _raise_if_cancelled(cancel_event)
                 result = _run_publish_task_in_context(
                     page,
@@ -481,6 +488,15 @@ def run_social_publish_batch(
                     context_control,
                     verify_login=index == 0,
                 )
+                completed_callback = (
+                    context_control.get("batch_item_completed_callback")
+                    if isinstance(context_control, dict)
+                    else None
+                )
+                if callable(completed_callback):
+                    completion_persisted = completed_callback(task, result, index + 1, len(tasks))
+                    if completion_persisted is False:
+                        raise RuntimeError("The completed publish item could not be persisted; the batch was stopped.")
             except BaseException as exc:
                 setattr(exc, "completed_batch_results", list(results))
                 setattr(exc, "failed_batch_task_id", str(task.get("id") or ""))
@@ -4510,12 +4526,18 @@ def _wait_for_manual_threads_publish_completion(
     detection_payload["profile_confirm_refreshes"] = 1
     deadline = time.monotonic() + timeout_seconds
     last_reason = ""
+    caption = str(
+        payload.get("caption")
+        or payload.get("content")
+        or payload.get("text")
+        or ""
+    ).strip()
     while time.monotonic() < deadline:
         _raise_if_cancelled(cancel_event)
         with _temporary_background_page(page, logger, "threads_manual_publish_detection") as verification_page:
             result = _wait_for_threads_own_post(
                 verification_page,
-                "",
+                caption,
                 logger,
                 account,
                 detection_payload,
@@ -4528,12 +4550,6 @@ def _wait_for_manual_threads_publish_completion(
                 else ""
             )
             if permalink:
-                caption = str(
-                    payload.get("caption")
-                    or payload.get("content")
-                    or payload.get("text")
-                    or ""
-                ).strip()
                 final_shot = _capture_threads_publish_evidence(
                     verification_page,
                     permalink,

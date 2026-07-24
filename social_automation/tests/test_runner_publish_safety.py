@@ -413,7 +413,16 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         context = mock.Mock()
         manager = mock.MagicMock()
         manager.__enter__.return_value = context
-        control = {"account_login_status_callback": mock.Mock()}
+        lifecycle = []
+        control = {
+            "account_login_status_callback": mock.Mock(),
+            "batch_item_started_callback": lambda task, index, total: lifecycle.append(
+                ("started", task["id"], index, total)
+            ),
+            "batch_item_completed_callback": lambda task, result, index, total: lifecycle.append(
+                ("completed", task["id"], result["post"], index, total)
+            ),
+        }
         tasks = [
             {"id": "publish-1", "task_type": "publish_post", "platform": "threads", "payload": {}},
             {"id": "publish-2", "task_type": "publish_post", "platform": "threads", "payload": {}},
@@ -447,6 +456,52 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertEqual(login.call_count, 1)
         self.assertEqual(publish.call_count, 2)
         self.assertEqual(control["current_task_id"], "publish-2")
+        self.assertEqual(
+            lifecycle,
+            [
+                ("started", "publish-1", 1, 2),
+                ("completed", "publish-1", 1, 1, 2),
+                ("started", "publish-2", 2, 2),
+                ("completed", "publish-2", 2, 2, 2),
+            ],
+        )
+
+    def test_publish_batch_stops_before_next_item_when_completion_is_not_persisted(self):
+        page = mock.Mock()
+        context = mock.Mock()
+        manager = mock.MagicMock()
+        manager.__enter__.return_value = context
+        control = {
+            "account_login_status_callback": mock.Mock(),
+            "batch_item_started_callback": mock.Mock(),
+            "batch_item_completed_callback": mock.Mock(return_value=False),
+        }
+        tasks = [
+            {"id": "publish-1", "task_type": "publish_post", "platform": "threads", "payload": {}},
+            {"id": "publish-2", "task_type": "publish_post", "platform": "threads", "payload": {}},
+        ]
+
+        with (
+            mock.patch.object(runner, "_open_camoufox_context", return_value=manager),
+            mock.patch.object(runner, "_import_initial_cookies"),
+            mock.patch.object(runner, "_first_page", return_value=page),
+            mock.patch.object(runner, "_sync_live_browser_viewport"),
+            mock.patch.object(runner, "_check_platform_login_without_disrupting", return_value={"status": "ready"}),
+            mock.patch.object(runner, "_run_publish_post", return_value={"ok": True}) as publish,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "could not be persisted"):
+                runner.run_social_publish_batch(
+                    tasks=tasks,
+                    account={"platform": "threads"},
+                    proxy=None,
+                    data_dir=Path("."),
+                    loggers=[_Logger(), _Logger()],
+                    context_control=control,
+                )
+
+        publish.assert_called_once()
+        control["batch_item_started_callback"].assert_called_once_with(tasks[0], 1, 2)
+        control["batch_item_completed_callback"].assert_called_once()
 
     def test_publish_verification_keeps_browser_open_until_manual_login_completes(self):
         page = mock.Mock()
@@ -2110,6 +2165,44 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertEqual(result, expected)
         self.assertTrue(context_control["manual_takeover_ack_event"].is_set())
         wait_manual.assert_called_once()
+
+    def test_manual_publish_completion_matches_the_current_caption_before_advancing_batch(self):
+        expected_caption = "current batch post body"
+        expected_url = "https://www.threads.net/@user/post/current"
+        page = _PageWithBackground()
+        logger = _Logger()
+
+        def confirm_current_caption(_page, caption, *_args, **_kwargs):
+            self.assertEqual(caption, expected_caption)
+            return {"confirmed": True, "url": expected_url}
+
+        with (
+            mock.patch.object(runner, "_screenshot", return_value=""),
+            mock.patch.object(
+                runner,
+                "_wait_for_threads_own_post",
+                side_effect=confirm_current_caption,
+            ),
+            mock.patch.object(
+                runner,
+                "_capture_threads_publish_evidence",
+                return_value="/tmp/current.png",
+            ),
+        ):
+            result = runner._wait_for_manual_threads_publish_completion(
+                page,
+                {"id": "publish-1"},
+                {"caption": expected_caption},
+                Path("."),
+                logger,
+                {"username": "user"},
+                "https://www.threads.net/@user",
+                {"https://www.threads.net/@user/post/old"},
+                threading.Event(),
+                {},
+            )
+
+        self.assertEqual(result["url"], expected_url)
 
     def test_threads_publish_takeover_helper_is_noop_without_request(self):
         result = runner._pause_for_requested_threads_publish_takeover(

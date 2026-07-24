@@ -1331,9 +1331,11 @@ def register_social_automation_routes(app: FastAPI) -> None:
     def api_social_task_logs(task_id: str, user: dict[str, Any] = Depends(get_current_user)):
         _require_task_access(task_id, user)
         with db() as conn:
+            task_ids = _publish_batch_log_task_ids(conn, task_id)
+            placeholders = ",".join("?" for _ in task_ids)
             logs = conn.execute(
-                "SELECT * FROM social_automation_logs WHERE task_id = ? ORDER BY created_at ASC, id ASC",
-                (task_id,),
+                f"SELECT * FROM social_automation_logs WHERE task_id IN ({placeholders}) ORDER BY created_at ASC, id ASC",
+                tuple(task_ids),
             ).fetchall()
         return {"ok": True, "logs": [_log_public(row) for row in logs]}
 
@@ -5183,9 +5185,9 @@ def _claim_publish_batch_tail(first_task: dict[str, Any]) -> list[dict[str, Any]
         candidates.sort(key=lambda item: (item[0], int(item[1]["created_at"] or 0), str(item[1]["id"] or "")))
 
         expected_index = first_index + 1
-        claimed_rows: list[Any] = []
+        tail_rows: list[Any] = []
         for index, row, _payload in candidates:
-            if index != expected_index or 1 + len(claimed_rows) >= total:
+            if index != expected_index or 1 + len(tail_rows) >= total:
                 break
             if _publish_login_dependency_blocks_claim(conn, row, now):
                 break
@@ -5200,34 +5202,11 @@ def _claim_publish_batch_tail(first_task: dict[str, Any]) -> list[dict[str, Any]
                         now=now,
                         quota_day=_daily_publish_day(now),
                     )
-            claimed = conn.execute(
-                """
-                UPDATE social_automation_tasks
-                SET status = 'running', started_at = ?, updated_at = ?
-                WHERE id = ? AND status = 'queued'
-                """,
-                (now, now, str(row["id"] or "")),
-            ).rowcount
-            if not claimed:
-                break
-            _insert_log(
-                conn,
-                str(row["id"] or ""),
-                "info",
-                "running",
-                "同批次发布任务已由当前浏览器连续执行。",
-                {"publish_batch_id": batch_id, "publish_sequence_index": index},
-            )
-            claimed_rows.append(
-                conn.execute(
-                    "SELECT * FROM social_automation_tasks WHERE id = ?",
-                    (str(row["id"] or ""),),
-                ).fetchone()
-            )
+            tail_rows.append(row)
             expected_index += 1
 
-        billing_statuses = _billing_reservation_statuses(conn, claimed_rows)
-        for row in claimed_rows:
+        billing_statuses = _billing_reservation_statuses(conn, tail_rows)
+        for row in tail_rows:
             public = _task_public(
                 row,
                 billing_reservation_status=billing_statuses.get(str(row["billing_reservation_id"] or ""), ""),
@@ -5235,6 +5214,115 @@ def _claim_publish_batch_tail(first_task: dict[str, Any]) -> list[dict[str, Any]
             public["payload"] = _loads(row["payload_json"], {})
             claimed_tasks.append(public)
     return claimed_tasks
+
+
+def _publish_batch_log_task_ids(conn: sqlite3.Connection, task_id: str) -> list[str]:
+    row = conn.execute(
+        "SELECT id, account_id, task_type, payload_json FROM social_automation_tasks WHERE id = ?",
+        (task_id,),
+    ).fetchone()
+    if row is None or str(row["task_type"] or "") != "publish_post":
+        return [task_id]
+    payload = _loads(row["payload_json"], {})
+    batch_id = str(payload.get("publish_batch_id") or "").strip()
+    if not batch_id:
+        return [task_id]
+    batch_rows = conn.execute(
+        """
+        SELECT id, created_at, payload_json
+        FROM social_automation_tasks
+        WHERE account_id = ? AND task_type = 'publish_post'
+        ORDER BY created_at ASC, id ASC
+        """,
+        (str(row["account_id"] or ""),),
+    ).fetchall()
+    matched: list[tuple[int, int, str]] = []
+    for item in batch_rows:
+        item_payload = _loads(item["payload_json"], {})
+        if str(item_payload.get("publish_batch_id") or "").strip() != batch_id:
+            continue
+        matched.append(
+            (
+                max(1, int(item_payload.get("publish_sequence_index") or 1)),
+                int(item["created_at"] or 0),
+                str(item["id"] or ""),
+            )
+        )
+    matched.sort()
+    return [item[2] for item in matched if item[2]] or [task_id]
+
+
+def _mark_publish_batch_item_running(task: dict[str, Any], index: int, total: int) -> bool:
+    task_id = str(task.get("id") or "").strip()
+    if not task_id:
+        return False
+    now = _now()
+    with db() as conn:
+        row = conn.execute(
+            "SELECT status FROM social_automation_tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        batch_task_ids = _publish_batch_log_task_ids(conn, task_id)
+        try:
+            batch_position = batch_task_ids.index(task_id)
+        except ValueError:
+            return False
+        if batch_position:
+            placeholders = ",".join("?" for _ in batch_task_ids[:batch_position])
+            previous_rows = conn.execute(
+                f"SELECT status FROM social_automation_tasks WHERE id IN ({placeholders})",
+                tuple(batch_task_ids[:batch_position]),
+            ).fetchall()
+            terminal_statuses = {"success", "failed", "cancelled"}
+            if len(previous_rows) != batch_position or any(
+                str(item["status"] or "") not in terminal_statuses
+                for item in previous_rows
+            ):
+                return False
+        status = str(row["status"] or "")
+        if status == "queued":
+            changed = conn.execute(
+                """
+                UPDATE social_automation_tasks
+                SET status = 'running', started_at = ?, updated_at = ?
+                WHERE id = ? AND status = 'queued'
+                """,
+                (now, now, task_id),
+            ).rowcount
+            if not changed:
+                return False
+        elif status not in {"running", "need_manual"}:
+            return False
+        _insert_log(
+            conn,
+            task_id,
+            "info",
+            "publish_batch_item_started",
+            f"开始串行执行发布任务 {index}/{total}。",
+            {"publish_sequence_index": index, "publish_sequence_total": total},
+        )
+    return True
+
+
+def _finish_publish_batch_item(
+    task: dict[str, Any],
+    result: dict[str, Any],
+    index: int,
+    total: int,
+) -> bool:
+    task_id = str(task.get("id") or "")
+    if not task_id or _is_task_cancelled(task_id):
+        return False
+    status = "success" if result.get("ok") else "failed"
+    return _finish_task(
+        task_id,
+        status,
+        result,
+        "" if status == "success" else str(result.get("error") or "执行失败"),
+        account_status="ready" if status == "success" else "",
+    )
 
 
 def _requeue_confirmation_only_task(
@@ -5378,6 +5466,13 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
         str(control.get("current_task_id") or task_id),
         str(control.get("live_browser_session_id") or ""),
     )
+
+    def start_batch_item(item: dict[str, Any], index: int, total: int) -> None:
+        if not _mark_publish_batch_item_running(item, index, total):
+            raise RuntimeError("批次任务状态已变化，已停止继续发布。")
+
+    control["batch_item_started_callback"] = start_batch_item
+    control["batch_item_completed_callback"] = _finish_publish_batch_item
     with _RUNNING_TASK_CONTROLS_LOCK:
         for current_task_id in batch_task_ids:
             _RUNNING_TASK_CONTROLS[current_task_id] = control
