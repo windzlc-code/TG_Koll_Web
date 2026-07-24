@@ -884,25 +884,18 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         expanded_head = self._css_block(
             ".live-browser-card.is-live-browser-modal .live-browser-card-head {"
         )
-        expanded_controls = self._css_block(
-            ".live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-card-head {"
-        )
-        expanded_metadata = self._css_block(
-            ".live-browser-card.is-live-browser-modal .live-browser-card-identity,"
-        )
         self.assertIn("gap: 0;", expanded_modal)
         self.assertIn("padding: 0;", expanded_modal)
         self.assertIn("border: 0;", expanded_modal)
         self.assertIn("position: absolute;", expanded_head)
         self.assertIn("background: rgb(5 12 13 / 62%);", expanded_head)
         self.assertIn("pointer-events: none;", expanded_head)
-        self.assertIn("display: flex;", expanded_controls)
-        self.assertIn("background: transparent;", expanded_controls)
-        self.assertIn("display: none !important;", expanded_metadata)
         self.assertIn(".is-live-browser-controls-visible .live-browser-card-head", self.styles)
         self.assertIn(".is-live-browser-controls-visible .live-browser-interaction-note", self.styles)
+        self.assertIn(".is-live-browser-controls-visible .live-browser-card-actions > .status", self.styles)
         self.assertIn("vecto-live-browser-modal-enter", self.styles)
         self.assertNotIn("vecto-live-browser-modal-exit", self.styles)
+        self.assertIn(".is-live-browser-controls-visible .live-browser-task-summary span:last-child", landscape_media)
         self.assertIn(".live-browser-card-identity", self.styles)
         self.assertIn(".live-browser-interaction-note", self.styles)
 
@@ -920,23 +913,35 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("live-browser-card-identity > [data-live-browser-meta]", mobile_styles)
         self.assertIn("live-browser-mobile-summary", self.source)
 
-    def test_expanded_mobile_browser_hides_host_metadata_during_control_exit(self):
+    def test_expanded_mobile_browser_uses_one_compact_translucent_summary(self):
         portrait_start = self.styles.rfind("@media (max-width: 760px) and (orientation: portrait)")
         portrait_styles = self.styles[portrait_start:]
         expanded_head = self._css_block(
-            ".live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-card-head {",
+            ".console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-card-head {",
+            portrait_start,
         )
-        hidden_metadata = self._css_block(
-            ".live-browser-card.is-live-browser-modal .live-browser-card-identity,"
+        task_summary = self._css_block(
+            ".console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-task-summary {",
+            portrait_start,
+        )
+        mobile_summary = self._css_block(
+            ".console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-mobile-summary {",
+            portrait_start,
         )
 
-        self.assertIn("right: 10px;", expanded_head)
-        self.assertIn("left: auto;", expanded_head)
-        self.assertIn("display: flex;", expanded_head)
-        self.assertIn("background: transparent;", expanded_head)
-        self.assertIn("display: none !important;", hidden_metadata)
-        self.assertNotIn("is-live-browser-controls-visible .live-browser-card-identity", portrait_styles)
-        self.assertNotIn("is-live-browser-controls-visible .live-browser-mobile-summary", portrait_styles)
+        self.assertIn("padding: 3px 6px;", expanded_head)
+        self.assertIn("background: rgb(5 12 13 / 37%);", expanded_head)
+        self.assertIn("display: none;", task_summary)
+        self.assertIn("display: grid;", mobile_summary)
+        self.assertIn("position: absolute;", mobile_summary)
+        self.assertIn("top: 0;", mobile_summary)
+        self.assertIn("left: 50%;", mobile_summary)
+        self.assertIn("transform: translate(-50%, -24px);", mobile_summary)
+        self.assertIn("grid-template-columns: repeat(2, max-content);", mobile_summary)
+        self.assertIn("justify-content: center;", mobile_summary)
+        self.assertIn("live-browser-mobile-summary > span:first-child", portrait_styles)
+        self.assertIn("live-browser-mobile-summary > span:nth-child(2)", portrait_styles)
+        self.assertIn("live-browser-mobile-summary > span:nth-child(3)", portrait_styles)
         self.assertIn("background: rgb(13 18 19 / 42%);", portrait_styles)
 
     def test_expanded_live_browser_does_not_bind_native_frame_clicks_to_console_controls(self):
@@ -948,6 +953,95 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("is-live-browser-controls-visible", toggle)
         self.assertNotIn("vecto-live-browser-toggle-console-frame", self.source)
         self.assertIn("card.classList.remove(\"is-live-browser-controls-visible\");", opening)
+
+    def test_live_browser_controls_keep_visible_layout_until_exit_fade_finishes(self):
+        cancel_controls_exit = self._function_source("cancelLiveBrowserControlsExit")
+        set_controls_visible = self._function_source("setLiveBrowserModalControlsVisible")
+        self.assertIn("const LIVE_BROWSER_CONTROLS_EXIT_MS = 220;", self.source)
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("node:assert/strict");
+            const LIVE_BROWSER_CONTROLS_EXIT_MS = 30;
+            const liveBrowserControlsExitTimers = new WeakMap();
+
+            class FakeClassList {{
+              constructor(names) {{ this.names = new Set(names); }}
+              add(...names) {{ names.forEach((name) => this.names.add(name)); }}
+              contains(name) {{ return this.names.has(name); }}
+              remove(...names) {{ names.forEach((name) => this.names.delete(name)); }}
+              toggle(name, force) {{
+                if (force === undefined) force = !this.names.has(name);
+                if (force) this.names.add(name);
+                else this.names.delete(name);
+                return force;
+              }}
+            }}
+
+            function createCard(classNames) {{
+              const attributes = new Set();
+              return {{
+                classList: new FakeClassList(classNames),
+                dataset: {{}},
+                attributes,
+                hasAttribute: (name) => attributes.has(name),
+                querySelector: () => null,
+                querySelectorAll: () => [],
+                removeAttribute: (name) => attributes.delete(name),
+                toggleAttribute: (name, force) => {{
+                  if (force) attributes.add(name);
+                  else attributes.delete(name);
+                }},
+              }};
+            }}
+
+            {cancel_controls_exit}
+            {set_controls_visible}
+            (async () => {{
+
+            const card = createCard([
+              "is-live-browser-modal",
+              "is-live-browser-controls-visible",
+            ]);
+            card.toggleAttribute("data-live-browser-controls-visible", true);
+
+            setLiveBrowserModalControlsVisible(card, false);
+            assert.equal(card.classList.contains("is-live-browser-controls-visible"), true);
+            assert.equal(card.classList.contains("is-live-browser-controls-exiting"), true);
+            assert.equal(card.hasAttribute("data-live-browser-controls-visible"), true);
+
+            setLiveBrowserModalControlsVisible(card, true);
+            assert.equal(card.classList.contains("is-live-browser-controls-exiting"), false);
+            await new Promise((resolve) => setTimeout(resolve, 45));
+            assert.equal(card.classList.contains("is-live-browser-controls-visible"), true);
+
+            setLiveBrowserModalControlsVisible(card, false);
+            await new Promise((resolve) => setTimeout(resolve, 45));
+            assert.equal(card.classList.contains("is-live-browser-controls-visible"), false);
+            assert.equal(card.classList.contains("is-live-browser-controls-exiting"), false);
+            assert.equal(card.hasAttribute("data-live-browser-controls-visible"), false);
+            }})().catch((error) => {{
+              console.error(error);
+              process.exitCode = 1;
+            }});
+            """
+        )
+        self._run_node(harness)
+
+    def test_live_browser_controls_exit_fades_without_changing_visible_layout(self):
+        exit_head = self._css_block(
+            ".live-browser-card.is-live-browser-modal.is-live-browser-controls-visible.is-live-browser-controls-exiting .live-browser-card-head {"
+        )
+        exit_note = self._css_block(
+            ".live-browser-card.is-live-browser-modal.is-live-browser-controls-visible.is-live-browser-controls-exiting .live-browser-interaction-note {"
+        )
+
+        self.assertIn("opacity: 0;", exit_head)
+        self.assertIn("pointer-events: none;", exit_head)
+        self.assertNotIn("display:", exit_head)
+        self.assertNotIn("width:", exit_head)
+        self.assertNotIn("height:", exit_head)
+        self.assertNotIn("grid-template", exit_head)
+        self.assertIn("opacity: 0;", exit_note)
 
     def test_public_toast_uses_compact_bottom_layout(self):
         host = self._css_block(".toast-host {")

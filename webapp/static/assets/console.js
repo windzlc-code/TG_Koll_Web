@@ -21990,6 +21990,8 @@ function renderLiveBrowserSession(session) {
 
 let liveBrowserModalTrigger = null;
 let liveBrowserModalInertNodes = [];
+const LIVE_BROWSER_CONTROLS_EXIT_MS = 220;
+const liveBrowserControlsExitTimers = new WeakMap();
 
 function liveBrowserDialogTitleId(sessionId = "") {
   const safeId = String(sessionId || "active").replace(/[^a-zA-Z0-9_-]/g, "-");
@@ -22015,6 +22017,15 @@ function isolateLiveBrowserModalBackground(card, backdrop) {
       liveBrowserModalInertNodes.push(sibling);
     });
     branch = parent;
+  }
+}
+
+function cancelLiveBrowserControlsExit(card) {
+  const timer = card ? liveBrowserControlsExitTimers.get(card) : null;
+  if (timer) clearTimeout(timer);
+  if (card) {
+    liveBrowserControlsExitTimers.delete(card);
+    card.classList.remove("is-live-browser-controls-exiting");
   }
 }
 
@@ -22044,6 +22055,7 @@ function closeLiveBrowserLargeModal({ restoreFocus = true } = {}) {
     ? document.querySelector(`[data-live-browser-card="${CSS.escape(expandedId)}"]`)
     : document.querySelector(".live-browser-card.is-live-browser-modal");
   const finish = () => {
+    cancelLiveBrowserControlsExit(card);
     card?.classList.remove("is-live-browser-modal", "is-live-browser-controls-visible");
     card?.removeAttribute("data-live-browser-controls-visible");
     card?.removeAttribute("role");
@@ -22072,14 +22084,34 @@ function closeLiveBrowserLargeModal({ restoreFocus = true } = {}) {
 
 function setLiveBrowserModalControlsVisible(card, visible) {
   if (!card?.classList.contains("is-live-browser-modal")) return;
-  card.classList.toggle("is-live-browser-controls-visible", Boolean(visible));
-  card.toggleAttribute("data-live-browser-controls-visible", Boolean(visible));
+  cancelLiveBrowserControlsExit(card);
+  if (visible) {
+    card.classList.add("is-live-browser-controls-visible");
+    card.toggleAttribute("data-live-browser-controls-visible", true);
+    return;
+  }
+  if (!card.classList.contains("is-live-browser-controls-visible")) {
+    card.removeAttribute("data-live-browser-controls-visible");
+    return;
+  }
+  card.classList.add("is-live-browser-controls-exiting");
+  const timer = setTimeout(() => {
+    if (liveBrowserControlsExitTimers.get(card) !== timer) return;
+    liveBrowserControlsExitTimers.delete(card);
+    card.classList.remove(
+      "is-live-browser-controls-visible",
+      "is-live-browser-controls-exiting",
+    );
+    card.removeAttribute("data-live-browser-controls-visible");
+  }, LIVE_BROWSER_CONTROLS_EXIT_MS);
+  liveBrowserControlsExitTimers.set(card, timer);
 }
 
 function toggleLiveBrowserModalControls(card) {
   setLiveBrowserModalControlsVisible(
     card,
-    !card?.classList.contains("is-live-browser-controls-visible"),
+    !card?.classList.contains("is-live-browser-controls-visible")
+      || card?.classList.contains("is-live-browser-controls-exiting"),
   );
 }
 
@@ -22101,6 +22133,7 @@ function requestLiveBrowserFullscreen(sessionId = "", trigger = null) {
   shell.appendChild(backdrop);
   liveBrowserModalTrigger = trigger instanceof HTMLElement ? trigger : null;
   state.liveBrowserExpandedSessionId = String(sessionId || "");
+  cancelLiveBrowserControlsExit(card);
   card.classList.add("is-live-browser-modal");
   card.classList.remove("is-live-browser-controls-visible");
   card.removeAttribute("data-live-browser-controls-visible");
