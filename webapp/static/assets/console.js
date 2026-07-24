@@ -22054,29 +22054,12 @@ function closeLiveBrowserLargeModal({ restoreFocus = true } = {}) {
   liveBrowserModalTrigger = null;
 }
 
-function setLiveBrowserModalControlsVisible(card, visible) {
-  if (!card?.classList.contains("is-live-browser-modal")) return;
-  const nextVisible = Boolean(visible);
-  card.classList.toggle("is-live-browser-controls-visible", nextVisible);
-  card.dataset.liveBrowserControlsVisible = nextVisible ? "true" : "false";
-  if (nextVisible) return;
-
-  closeLiveBrowserActionMenus();
-  const manualInput = card.querySelector("[data-live-browser-manual-input]");
-  const inputToggle = card.querySelector("[data-live-browser-input-toggle]");
-  const tools = card.querySelector("[data-live-browser-tools]");
-  if (manualInput) manualInput.dataset.expanded = "false";
-  if (inputToggle) inputToggle.setAttribute("aria-expanded", "false");
-  if (tools) {
-    tools.setAttribute("aria-hidden", "true");
-    tools.setAttribute("inert", "");
-  }
-}
-
-function toggleLiveBrowserModalControls(card) {
-  setLiveBrowserModalControlsVisible(
-    card,
-    !card?.classList.contains("is-live-browser-controls-visible"),
+function toggleLiveBrowserNativeFrame(card) {
+  const frame = card?.querySelector("iframe");
+  if (!frame?.contentWindow) return;
+  frame.contentWindow.postMessage(
+    { type: "vecto-live-browser-toggle-native-frame" },
+    window.location.origin,
   );
 }
 
@@ -22099,7 +22082,8 @@ function requestLiveBrowserFullscreen(sessionId = "", trigger = null) {
   liveBrowserModalTrigger = trigger instanceof HTMLElement ? trigger : null;
   state.liveBrowserExpandedSessionId = String(sessionId || "");
   card.classList.add("is-live-browser-modal");
-  setLiveBrowserModalControlsVisible(card, false);
+  card.classList.remove("is-live-browser-controls-visible");
+  card.removeAttribute("data-live-browser-controls-visible");
   card.setAttribute("role", "dialog");
   card.setAttribute("aria-modal", "true");
   card.setAttribute("aria-labelledby", liveBrowserDialogTitleId(sessionId));
@@ -24635,7 +24619,10 @@ function bindEvents() {
       return;
     }
     if (event.target.closest("[data-live-browser-modal-overlay-toggle], [data-live-browser-controls-toggle]")) {
-      toggleLiveBrowserModalControls(document.querySelector(".live-browser-card.is-live-browser-modal"));
+      toggleLiveBrowserNativeFrame(
+        event.target.closest("[data-live-browser-card]")
+          || document.querySelector(".live-browser-card.is-live-browser-modal"),
+      );
       return;
     }
     const tab = event.target.closest("[data-account-browser-tab]");

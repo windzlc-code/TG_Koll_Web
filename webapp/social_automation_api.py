@@ -202,6 +202,9 @@ _WORKER_STATE: dict[str, Any] = {
 }
 _RUNNING_TASK_CONTROLS: dict[str, dict[str, Any]] = {}
 _RUNNING_TASK_CONTROLS_LOCK = threading.Lock()
+_WORKER_INSTANCE_ID = f"{os.getpid()}:{uuid.uuid4().hex}"
+_TASK_WORKER_LEASE_KEY = "_worker_lease"
+_PUBLISH_BATCH_RESERVATION_KEY = "_publish_batch_reservation"
 _LIVE_BROWSER_ACCESS_COOKIE = "vecto_live_browser_access"
 _LIVE_BROWSER_ACCESS_TTL_SECONDS = 300
 
@@ -2128,7 +2131,22 @@ def _brand_live_browser_html(content: bytes) -> bytes:
   33% { transform: translateX(12px) scale(1); }
   66% { transform: translateX(24px) scale(0.82); }
 }
-</style>"""
+</style>
+<script id="vecto-live-browser-native-frame-toggle">
+(() => {
+  const messageType = "vecto-live-browser-toggle-native-frame";
+  const toggleNativeFrame = () => document.getElementById("noVNC_control_bar_handle")?.click();
+  const toggleFromBlankFrameArea = (event) => {
+    const container = document.getElementById("noVNC_container");
+    if (event.button === 0 && container && event.target === container) toggleNativeFrame();
+  };
+  window.addEventListener("message", (event) => {
+    if (event.origin !== window.location.origin || event.data?.type !== messageType) return;
+    toggleNativeFrame();
+  });
+  document.addEventListener("pointerup", toggleFromBlankFrameArea);
+})();
+</script>"""
     html = html.replace("<title>KasmVNC</title>", "<title>Vecto 实时浏览器</title>", 1)
     html = html.replace("</head>", f"{branding}</head>", 1)
     return html.encode("utf-8")
@@ -4986,32 +5004,217 @@ def _cancel_stale_incomplete_publish_batches(conn: sqlite3.Connection, now: int)
         )
 
 
-def _publish_batch_ready_for_claim(conn: sqlite3.Connection, row: Any) -> bool:
+def _task_worker_lease_seconds() -> int:
+    try:
+        configured = int(os.getenv("SOCIAL_AUTOMATION_WORKER_LEASE_SECONDS", "120") or 120)
+    except (TypeError, ValueError):
+        configured = 120
+    return max(30, min(configured, 3600))
+
+
+def _task_runtime_claim(payload: Any, key: str) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    value = payload.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def _runtime_claim_owner(payload: Any, key: str) -> str:
+    return str(_task_runtime_claim(payload, key).get("owner") or "").strip()
+
+
+def _runtime_claim_is_active(payload: Any, key: str, now: int) -> bool:
+    claim = _task_runtime_claim(payload, key)
+    try:
+        expires_at = int(claim.get("expires_at") or 0)
+    except (TypeError, ValueError):
+        expires_at = 0
+    return bool(str(claim.get("owner") or "").strip() and expires_at > now)
+
+
+def _set_runtime_claim(
+    payload: dict[str, Any],
+    key: str,
+    *,
+    owner: str,
+    now: int,
+) -> dict[str, Any]:
+    updated = dict(payload)
+    updated[key] = {
+        "owner": str(owner),
+        "expires_at": now + _task_worker_lease_seconds(),
+    }
+    return updated
+
+
+def _clear_runtime_claims(payload: Any) -> dict[str, Any]:
+    updated = dict(payload) if isinstance(payload, dict) else {}
+    updated.pop(_TASK_WORKER_LEASE_KEY, None)
+    updated.pop(_PUBLISH_BATCH_RESERVATION_KEY, None)
+    return updated
+
+
+def _terminate_publish_batch_tail_in_transaction(
+    conn: sqlite3.Connection,
+    predecessor: Any,
+    *,
+    terminal_status: str,
+    reason: str,
+    now: int,
+) -> list[str]:
+    if str(predecessor["task_type"] or "") != "publish_post":
+        return []
+    predecessor_payload = _loads(predecessor["payload_json"], {})
+    batch_id = str(predecessor_payload.get("publish_batch_id") or "").strip()
+    predecessor_index = max(1, int(predecessor_payload.get("publish_sequence_index") or 1))
+    if not batch_id:
+        return []
+    tail_status = "cancelled" if terminal_status == "cancelled" else "failed"
+    message = (
+        f"previous publish batch item cancelled: {reason}"
+        if tail_status == "cancelled"
+        else f"previous publish batch item failed: {reason}"
+    )
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM social_automation_tasks
+        WHERE account_id = ?
+          AND task_type = 'publish_post'
+          AND status IN ('preparing', 'queued', 'running', 'need_manual')
+        """,
+        (str(predecessor["account_id"] or ""),),
+    ).fetchall()
+    terminated: list[str] = []
+    for row in rows:
+        payload = _loads(row["payload_json"], {})
+        if str(payload.get("publish_batch_id") or "").strip() != batch_id:
+            continue
+        index = max(1, int(payload.get("publish_sequence_index") or 1))
+        if index <= predecessor_index:
+            continue
+        task_id = str(row["id"] or "")
+        changed = conn.execute(
+            """
+            UPDATE social_automation_tasks
+            SET status = ?, finished_at = ?, error = ?, payload_json = ?, updated_at = ?
+            WHERE id = ? AND status IN ('preparing', 'queued', 'running', 'need_manual')
+            """,
+            (
+                tail_status,
+                now,
+                message,
+                json.dumps(_clear_runtime_claims(payload), ensure_ascii=False),
+                now,
+                task_id,
+            ),
+        ).rowcount
+        if not changed:
+            continue
+        _ensure_daily_publish_slot(conn, row, now=now)
+        _release_daily_publish_slot(conn, task_id, "publish_batch_predecessor_terminal", now=now)
+        _release_task_billing_reservation(conn, row, now=now)
+        _insert_log(
+            conn,
+            task_id,
+            "warn" if tail_status == "cancelled" else "error",
+            "publish_batch_predecessor_terminal",
+            message,
+            {
+                "publish_batch_id": batch_id,
+                "predecessor_task_id": str(predecessor["id"] or ""),
+                "predecessor_status": terminal_status,
+            },
+        )
+        terminated.append(task_id)
+    return terminated
+
+
+def _clear_publish_batch_reservations_in_transaction(
+    conn: sqlite3.Connection,
+    task: Any,
+    *,
+    now: int,
+) -> None:
+    payload = _loads(task["payload_json"], {})
+    batch_id = str(payload.get("publish_batch_id") or "").strip()
+    if str(task["task_type"] or "") != "publish_post" or not batch_id:
+        return
+    rows = conn.execute(
+        """
+        SELECT id, payload_json
+        FROM social_automation_tasks
+        WHERE account_id = ? AND task_type = 'publish_post'
+        """,
+        (str(task["account_id"] or ""),),
+    ).fetchall()
+    for row in rows:
+        item_payload = _loads(row["payload_json"], {})
+        if str(item_payload.get("publish_batch_id") or "").strip() != batch_id:
+            continue
+        if _PUBLISH_BATCH_RESERVATION_KEY not in item_payload:
+            continue
+        item_payload = dict(item_payload)
+        item_payload.pop(_PUBLISH_BATCH_RESERVATION_KEY, None)
+        conn.execute(
+            "UPDATE social_automation_tasks SET payload_json = ?, updated_at = ? WHERE id = ?",
+            (
+                json.dumps(item_payload, ensure_ascii=False),
+                now,
+                str(row["id"] or ""),
+            ),
+        )
+
+
+def _publish_batch_ready_for_claim(conn: sqlite3.Connection, row: Any, now: int) -> bool:
     if str(row["task_type"] or "") != "publish_post":
         return True
     payload = _loads(row["payload_json"], {})
+    if _runtime_claim_is_active(payload, _PUBLISH_BATCH_RESERVATION_KEY, now):
+        return False
     batch_id = str(payload.get("publish_batch_id") or "").strip()
     total = max(1, int(payload.get("publish_sequence_total") or 1))
     if not batch_id or total <= 1:
         return True
     batch_rows = conn.execute(
         """
-        SELECT status, payload_json
+        SELECT *
         FROM social_automation_tasks
         WHERE account_id = ? AND task_type = 'publish_post'
         """,
         (str(row["account_id"] or ""),),
     ).fetchall()
     statuses_by_index: dict[int, set[str]] = {}
+    rows_by_index: dict[int, list[Any]] = {}
     for item in batch_rows:
         item_payload = _loads(item["payload_json"], {})
         if str(item_payload.get("publish_batch_id") or "").strip() != batch_id:
             continue
         index = max(1, int(item_payload.get("publish_sequence_index") or 1))
         statuses_by_index.setdefault(index, set()).add(str(item["status"] or ""))
+        rows_by_index.setdefault(index, []).append(item)
     if not all(index in statuses_by_index for index in range(1, total + 1)):
         return False
     current_index = max(1, int(payload.get("publish_sequence_index") or 1))
+    for index in range(1, current_index):
+        terminal_row = next(
+            (
+                item
+                for item in rows_by_index.get(index, [])
+                if str(item["status"] or "") in {"failed", "cancelled"}
+            ),
+            None,
+        )
+        if terminal_row is not None:
+            terminal_status = str(terminal_row["status"] or "")
+            _terminate_publish_batch_tail_in_transaction(
+                conn,
+                terminal_row,
+                terminal_status=terminal_status,
+                reason=str(terminal_row["error"] or terminal_status),
+                now=now,
+            )
+            return False
     return all("success" in statuses_by_index.get(index, set()) for index in range(1, current_index))
 
 
@@ -5019,6 +5222,7 @@ def _claim_next_task() -> dict[str, Any] | None:
     now = _now()
     _recover_orphaned_publish_confirmation_tasks(now)
     _recover_orphaned_manual_task(now)
+    _recover_orphaned_running_tasks(now)
     global_concurrency = _social_worker_max_concurrency()
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -5093,7 +5297,7 @@ def _claim_next_task() -> dict[str, Any] | None:
             if not rows:
                 break
             for candidate in rows:
-                if not _publish_batch_ready_for_claim(conn, candidate):
+                if not _publish_batch_ready_for_claim(conn, candidate, now):
                     continue
                 if str(candidate["account_id"] or "") in active_account_ids:
                     continue
@@ -5132,9 +5336,19 @@ def _claim_next_task() -> dict[str, Any] | None:
         if not row:
             return None
         task_id = str(row["id"])
+        claimed_payload = _set_runtime_claim(
+            _loads(row["payload_json"], {}),
+            _TASK_WORKER_LEASE_KEY,
+            owner=_WORKER_INSTANCE_ID,
+            now=now,
+        )
         claimed = conn.execute(
-            "UPDATE social_automation_tasks SET status = 'running', started_at = ?, updated_at = ? WHERE id = ? AND status = 'queued'",
-            (now, now, task_id),
+            """
+            UPDATE social_automation_tasks
+            SET status = 'running', started_at = ?, payload_json = ?, updated_at = ?
+            WHERE id = ? AND status = 'queued'
+            """,
+            (now, json.dumps(claimed_payload, ensure_ascii=False), now, task_id),
         ).rowcount
         if not claimed:
             return None
@@ -5159,9 +5373,42 @@ def _claim_publish_batch_tail(first_task: dict[str, Any]) -> list[dict[str, Any]
     now = _now()
     account_id = str(first_task.get("account_id") or "")
     first_index = max(1, int(first_payload.get("publish_sequence_index") or 1))
+    reservation_owner = (
+        _runtime_claim_owner(first_payload, _TASK_WORKER_LEASE_KEY)
+        or _WORKER_INSTANCE_ID
+    )
     claimed_tasks: list[dict[str, Any]] = [first_task]
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        persisted_first = conn.execute(
+            "SELECT status, payload_json FROM social_automation_tasks WHERE id = ?",
+            (str(first_task.get("id") or ""),),
+        ).fetchone()
+        if persisted_first is None or str(persisted_first["status"] or "") not in {"running", "need_manual"}:
+            return claimed_tasks
+        persisted_first_payload = _loads(persisted_first["payload_json"], {})
+        persisted_owner = _runtime_claim_owner(
+            persisted_first_payload,
+            _TASK_WORKER_LEASE_KEY,
+        )
+        if persisted_owner and persisted_owner != reservation_owner:
+            return claimed_tasks
+        if not persisted_owner:
+            persisted_first_payload = _set_runtime_claim(
+                persisted_first_payload,
+                _TASK_WORKER_LEASE_KEY,
+                owner=reservation_owner,
+                now=now,
+            )
+            conn.execute(
+                "UPDATE social_automation_tasks SET payload_json = ?, updated_at = ? WHERE id = ?",
+                (
+                    json.dumps(persisted_first_payload, ensure_ascii=False),
+                    now,
+                    str(first_task.get("id") or ""),
+                ),
+            )
+            first_task["payload"] = persisted_first_payload
         rows = conn.execute(
             """
             SELECT *
@@ -5186,8 +5433,21 @@ def _claim_publish_batch_tail(first_task: dict[str, Any]) -> list[dict[str, Any]
 
         expected_index = first_index + 1
         tail_rows: list[Any] = []
-        for index, row, _payload in candidates:
+        for index, row, payload in candidates:
             if index != expected_index or 1 + len(tail_rows) >= total:
+                break
+            existing_owner = _runtime_claim_owner(
+                payload,
+                _PUBLISH_BATCH_RESERVATION_KEY,
+            )
+            if (
+                _runtime_claim_is_active(
+                    payload,
+                    _PUBLISH_BATCH_RESERVATION_KEY,
+                    now,
+                )
+                and existing_owner != reservation_owner
+            ):
                 break
             if _publish_login_dependency_blocks_claim(conn, row, now):
                 break
@@ -5202,7 +5462,32 @@ def _claim_publish_batch_tail(first_task: dict[str, Any]) -> list[dict[str, Any]
                         now=now,
                         quota_day=_daily_publish_day(now),
                     )
-            tail_rows.append(row)
+            reserved_payload = _set_runtime_claim(
+                payload,
+                _PUBLISH_BATCH_RESERVATION_KEY,
+                owner=reservation_owner,
+                now=now,
+            )
+            reserved = conn.execute(
+                """
+                UPDATE social_automation_tasks
+                SET payload_json = ?, updated_at = ?
+                WHERE id = ? AND status = 'queued'
+                """,
+                (
+                    json.dumps(reserved_payload, ensure_ascii=False),
+                    now,
+                    str(row["id"] or ""),
+                ),
+            ).rowcount
+            if not reserved:
+                break
+            tail_rows.append(
+                conn.execute(
+                    "SELECT * FROM social_automation_tasks WHERE id = ?",
+                    (str(row["id"] or ""),),
+                ).fetchone()
+            )
             expected_index += 1
 
         billing_statuses = _billing_reservation_statuses(conn, tail_rows)
@@ -5258,8 +5543,9 @@ def _mark_publish_batch_item_running(task: dict[str, Any], index: int, total: in
         return False
     now = _now()
     with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT status FROM social_automation_tasks WHERE id = ?",
+            "SELECT status, payload_json FROM social_automation_tasks WHERE id = ?",
             (task_id,),
         ).fetchone()
         if row is None:
@@ -5275,25 +5561,63 @@ def _mark_publish_batch_item_running(task: dict[str, Any], index: int, total: in
                 f"SELECT status FROM social_automation_tasks WHERE id IN ({placeholders})",
                 tuple(batch_task_ids[:batch_position]),
             ).fetchall()
-            terminal_statuses = {"success", "failed", "cancelled"}
             if len(previous_rows) != batch_position or any(
-                str(item["status"] or "") not in terminal_statuses
+                str(item["status"] or "") != "success"
                 for item in previous_rows
             ):
                 return False
         status = str(row["status"] or "")
         if status == "queued":
+            persisted_payload = _loads(row["payload_json"], {})
+            expected_owner = (
+                _runtime_claim_owner(
+                    task.get("payload") if isinstance(task.get("payload"), dict) else {},
+                    _PUBLISH_BATCH_RESERVATION_KEY,
+                )
+                or _WORKER_INSTANCE_ID
+            )
+            persisted_owner = _runtime_claim_owner(
+                persisted_payload,
+                _PUBLISH_BATCH_RESERVATION_KEY,
+            )
+            if (
+                persisted_owner != expected_owner
+                or not _runtime_claim_is_active(
+                    persisted_payload,
+                    _PUBLISH_BATCH_RESERVATION_KEY,
+                    now,
+                )
+            ):
+                return False
+            running_payload = _set_runtime_claim(
+                persisted_payload,
+                _TASK_WORKER_LEASE_KEY,
+                owner=expected_owner,
+                now=now,
+            )
             changed = conn.execute(
                 """
                 UPDATE social_automation_tasks
-                SET status = 'running', started_at = ?, updated_at = ?
+                SET status = 'running', started_at = ?, payload_json = ?, updated_at = ?
                 WHERE id = ? AND status = 'queued'
                 """,
-                (now, now, task_id),
+                (
+                    now,
+                    json.dumps(running_payload, ensure_ascii=False),
+                    now,
+                    task_id,
+                ),
             ).rowcount
             if not changed:
                 return False
-        elif status not in {"running", "need_manual"}:
+        elif status in {"running", "need_manual"}:
+            persisted_payload = _loads(row["payload_json"], {})
+            if _runtime_claim_owner(
+                persisted_payload,
+                _TASK_WORKER_LEASE_KEY,
+            ) != _WORKER_INSTANCE_ID:
+                return False
+        else:
             return False
         _insert_log(
             conn,
@@ -5316,13 +5640,14 @@ def _finish_publish_batch_item(
     if not task_id or _is_task_cancelled(task_id):
         return False
     status = "success" if result.get("ok") else "failed"
-    return _finish_task(
+    finished = _finish_task(
         task_id,
         status,
         result,
         "" if status == "success" else str(result.get("error") or "执行失败"),
         account_status="ready" if status == "success" else "",
     )
+    return bool(finished and status == "success")
 
 
 def _requeue_confirmation_only_task(
@@ -5347,12 +5672,19 @@ def _requeue_confirmation_only_task(
         """
         UPDATE social_automation_tasks
         SET status = 'queued', scheduled_at = ?, started_at = 0,
-            finished_at = 0, error = ?, updated_at = ?
+            finished_at = 0, error = ?, payload_json = ?, updated_at = ?
         WHERE id = ? AND status IN ('running', 'need_manual')
         """,
-        (now, error, now, task_id),
+        (
+            now,
+            error,
+            json.dumps(_clear_runtime_claims(payload), ensure_ascii=False),
+            now,
+            task_id,
+        ),
     ).rowcount
     if requeued:
+        _clear_publish_batch_reservations_in_transaction(conn, row, now=now)
         _insert_log(conn, task_id, "warn", log_stage, log_message, {})
     return bool(requeued)
 
@@ -5396,7 +5728,10 @@ def _recover_orphaned_manual_task(now: int) -> None:
             SELECT *
             FROM social_automation_tasks
             WHERE status = 'need_manual'
-              AND updated_at < ?
+              AND (
+                updated_at < ?
+                OR json_type(payload_json, '$._worker_lease') = 'object'
+              )
             ORDER BY updated_at ASC
             LIMIT 50
             """,
@@ -5405,6 +5740,13 @@ def _recover_orphaned_manual_task(now: int) -> None:
         for row in stale_rows:
             task_id = str(row["id"] or "")
             if not task_id or task_id in running_ids:
+                continue
+            payload = _loads(row["payload_json"], {})
+            lease = _task_runtime_claim(payload, _TASK_WORKER_LEASE_KEY)
+            if lease:
+                if _runtime_claim_is_active(payload, _TASK_WORKER_LEASE_KEY, now):
+                    continue
+            elif int(row["updated_at"] or 0) >= recent_cutoff:
                 continue
             task_type = str(row["task_type"] or "")
             message = (
@@ -5426,6 +5768,190 @@ def _recover_orphaned_manual_task(now: int) -> None:
                     _release_daily_publish_slot(conn, task_id, "manual_recovery_expired", now=now)
                 _release_task_billing_reservation(conn, row, now=now)
                 _insert_log(conn, task_id, "error", "manual_recovery_expired", message, {"task_type": task_type})
+
+
+def _recover_orphaned_running_tasks(now: int) -> None:
+    with _RUNNING_TASK_CONTROLS_LOCK:
+        local_running_ids = set(_RUNNING_TASK_CONTROLS.keys())
+    legacy_cutoff = now - _task_worker_lease_seconds()
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM social_automation_tasks
+            WHERE status = 'running'
+            ORDER BY updated_at ASC
+            LIMIT 100
+            """
+        ).fetchall()
+        for row in rows:
+            task_id = str(row["id"] or "")
+            if not task_id or task_id in local_running_ids:
+                continue
+            payload = _loads(row["payload_json"], {})
+            lease = _task_runtime_claim(payload, _TASK_WORKER_LEASE_KEY)
+            if lease:
+                if _runtime_claim_is_active(payload, _TASK_WORKER_LEASE_KEY, now):
+                    continue
+            elif int(row["updated_at"] or 0) >= legacy_cutoff:
+                continue
+            if _requeue_confirmation_only_task(
+                conn,
+                row,
+                now=now,
+                error="confirmation worker lease expired; confirmation-only check requeued",
+                log_stage="threads_publish_confirmation_lease_recovered",
+                log_message="Confirmation worker lease expired; result-only verification was requeued.",
+            ):
+                continue
+            publish_committed = bool(int(row["daily_publish_committed"] or 0))
+            result = {
+                "worker_lease_expired": True,
+                "retryable": False,
+            }
+            if str(row["task_type"] or "") == "publish_post" and publish_committed:
+                result.update({
+                    "publish_submitted": True,
+                    "publish_outcome_unknown": True,
+                })
+            message = "worker process lease expired before the task reached a terminal state"
+            failed = conn.execute(
+                """
+                UPDATE social_automation_tasks
+                SET status = 'failed', finished_at = ?, result_json = ?, error = ?,
+                    payload_json = ?, updated_at = ?
+                WHERE id = ? AND status = 'running'
+                """,
+                (
+                    now,
+                    json.dumps(result, ensure_ascii=False),
+                    message,
+                    json.dumps(_clear_runtime_claims(payload), ensure_ascii=False),
+                    now,
+                    task_id,
+                ),
+            ).rowcount
+            if not failed:
+                continue
+            if str(row["task_type"] or "") == "publish_post":
+                _ensure_daily_publish_slot(conn, row, now=now)
+                if publish_committed:
+                    _set_daily_publish_slot_state(conn, task_id, "unknown", now=now)
+                else:
+                    _release_daily_publish_slot(conn, task_id, "worker_lease_expired", now=now)
+            _release_task_billing_reservation(conn, row, now=now)
+            conn.execute(
+                """
+                UPDATE social_accounts
+                SET last_run_at = ?, last_error = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (now, message, now, str(row["account_id"] or "")),
+            )
+            _insert_log(
+                conn,
+                task_id,
+                "error",
+                "worker_lease_expired",
+                message,
+                {"lease_owner": str(lease.get("owner") or "")},
+            )
+            _terminate_publish_batch_tail_in_transaction(
+                conn,
+                row,
+                terminal_status="failed",
+                reason=message,
+                now=now,
+            )
+
+
+def _renew_task_leases(task_ids: list[str], *, now: int | None = None) -> None:
+    clean_ids = list(
+        dict.fromkeys(
+            str(task_id or "").strip()
+            for task_id in task_ids
+            if str(task_id or "").strip()
+        )
+    )
+    if not clean_ids:
+        return
+    current = int(now if now is not None else _now())
+    placeholders = ",".join("?" for _ in clean_ids)
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            f"""
+            SELECT id, status, payload_json
+            FROM social_automation_tasks
+            WHERE id IN ({placeholders})
+              AND status IN ('queued', 'running', 'need_manual')
+            """,
+            tuple(clean_ids),
+        ).fetchall()
+        for row in rows:
+            payload = _loads(row["payload_json"], {})
+            changed = False
+            status = str(row["status"] or "")
+            if (
+                status in {"running", "need_manual"}
+                and _runtime_claim_owner(payload, _TASK_WORKER_LEASE_KEY)
+                == _WORKER_INSTANCE_ID
+            ):
+                payload = _set_runtime_claim(
+                    payload,
+                    _TASK_WORKER_LEASE_KEY,
+                    owner=_WORKER_INSTANCE_ID,
+                    now=current,
+                )
+                changed = True
+            if (
+                _runtime_claim_owner(payload, _PUBLISH_BATCH_RESERVATION_KEY)
+                == _WORKER_INSTANCE_ID
+            ):
+                payload = _set_runtime_claim(
+                    payload,
+                    _PUBLISH_BATCH_RESERVATION_KEY,
+                    owner=_WORKER_INSTANCE_ID,
+                    now=current,
+                )
+                changed = True
+            if changed:
+                conn.execute(
+                    "UPDATE social_automation_tasks SET payload_json = ?, updated_at = ? WHERE id = ?",
+                    (
+                        json.dumps(payload, ensure_ascii=False),
+                        current,
+                        str(row["id"] or ""),
+                    ),
+                )
+
+
+def _finalize_detached_manual_tasks(task_ids: list[str]) -> None:
+    clean_ids = [
+        str(task_id or "").strip()
+        for task_id in task_ids
+        if str(task_id or "").strip()
+    ]
+    if not clean_ids:
+        return
+    placeholders = ",".join("?" for _ in clean_ids)
+    with db() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT id
+            FROM social_automation_tasks
+            WHERE id IN ({placeholders}) AND status = 'need_manual'
+            """,
+            tuple(clean_ids),
+        ).fetchall()
+    for row in rows:
+        _finish_task(
+            str(row["id"] or ""),
+            "failed",
+            {"manual_session_lost": True, "retryable": False},
+            "manual browser session ended before the task completed",
+        )
 
 
 def _execute_claimed_task(task: dict[str, Any]) -> None:
@@ -5483,6 +6009,7 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
             return
         _execute_claimed_task_with_control(task, control)
     finally:
+        _finalize_detached_manual_tasks(batch_task_ids)
         _discard_ephemeral_task_secrets(*batch_task_ids)
         with _RUNNING_TASK_CONTROLS_LOCK:
             for current_task_id in batch_task_ids:
@@ -5531,6 +6058,7 @@ def _requeue_publish_confirmation(task_id: str, exc: BaseException) -> bool:
             return False
         delay_seconds = min(300, 30 * (3 ** max(0, attempt - 1)))
         payload["_publish_confirmation"] = confirmation
+        payload = _clear_runtime_claims(payload)
         pending_result = {
             "publish_submitted": True,
             "confirmation_pending": True,
@@ -5560,6 +6088,7 @@ def _requeue_publish_confirmation(task_id: str, exc: BaseException) -> bool:
             ),
         ).rowcount
         if updated:
+            _clear_publish_batch_reservations_in_transaction(conn, row, now=now)
             _set_daily_publish_slot_state(conn, task_id, "submitted", now=now)
             conn.execute(
                 "UPDATE social_accounts SET status = 'ready', last_login_check_at = ?, last_run_at = ?, last_error = '', updated_at = ? WHERE id = ?",
@@ -5664,11 +6193,6 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
                 )
             except BaseException as exc:
                 completed = getattr(exc, "completed_batch_results", [])
-                completed_ids = {
-                    str(item.get("task_id") or "")
-                    for item in completed
-                    if isinstance(item, dict)
-                }
                 for item in completed:
                     if not isinstance(item, dict):
                         continue
@@ -5690,18 +6214,21 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
                     (item for item in prepared_batch if str(item.get("id") or "") == failed_task_id),
                     task,
                 )
-                _requeue_unstarted_publish_batch_tasks(
-                    [
-                        str(item.get("id") or "")
-                        for item in prepared_batch
-                        if str(item.get("id") or "") not in completed_ids
-                        and str(item.get("id") or "") != failed_task_id
-                    ]
-                )
                 task = failed_task
                 task_id = failed_task_id
                 control["task"] = dict(task)
                 control["current_task_id"] = task_id
+                if not isinstance(
+                    exc,
+                    (
+                        NeedManualError,
+                        AutoLoginFailedError,
+                        PublishConfirmationPendingError,
+                        UnsupportedActionError,
+                    ),
+                ):
+                    _fail_task_safely(task_id, exc)
+                    return
                 raise
             for item in batch_results:
                 if not isinstance(item, dict):
@@ -5747,7 +6274,33 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
         return
     except AutoLoginFailedError as exc:
         if not _is_task_cancelled(str(task["id"])):
-            _finish_task(task["id"], "failed", {"auto_login_failed": True, "screenshot_path": str(getattr(exc, "screenshot_path", "") or "")}, str(exc), account_status=str(getattr(exc, "status", "") or "cookie_expired"))
+            publish_outcome_unknown = bool(getattr(exc, "publish_outcome_unknown", False))
+            failure_result = {
+                "auto_login_failed": not publish_outcome_unknown,
+                "screenshot_path": str(getattr(exc, "screenshot_path", "") or ""),
+            }
+            timeout_kind = str(getattr(exc, "timeout_kind", "") or "").strip()
+            if timeout_kind:
+                failure_result.update({
+                    "manual_timeout": True,
+                    "timeout_kind": timeout_kind,
+                    "browser_available": bool(getattr(exc, "browser_available", False)),
+                    "retryable": bool(getattr(exc, "retryable", True)),
+                })
+            if publish_outcome_unknown:
+                failure_result.update({
+                    "publish_submitted": bool(getattr(exc, "publish_submitted", True)),
+                    "publish_outcome_unknown": True,
+                    "browser_available": bool(getattr(exc, "browser_available", False)),
+                    "retryable": bool(getattr(exc, "retryable", False)),
+                })
+            _finish_task(
+                task["id"],
+                "failed",
+                failure_result,
+                str(exc),
+                account_status=str(getattr(exc, "status", "") or "cookie_expired"),
+            )
         return
     except PublishConfirmationPendingError as exc:
         if not _is_task_cancelled(str(task["id"])):
@@ -5787,45 +6340,6 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
     _finish_task(task["id"], status, result, "" if status == "success" else str(result.get("error") or "执行失败"), account_status=account_status)
 
 
-def _requeue_unstarted_publish_batch_tasks(task_ids: list[str]) -> None:
-    clean_ids = [str(task_id or "").strip() for task_id in task_ids if str(task_id or "").strip()]
-    if not clean_ids:
-        return
-    now = _now()
-    placeholders = ",".join("?" for _ in clean_ids)
-    with db() as conn:
-        rows = conn.execute(
-            f"SELECT * FROM social_automation_tasks WHERE id IN ({placeholders})",
-            tuple(clean_ids),
-        ).fetchall()
-        conn.execute(
-            f"""
-            UPDATE social_automation_tasks
-            SET status = 'queued', started_at = 0, finished_at = 0, updated_at = ?
-            WHERE id IN ({placeholders}) AND status = 'running'
-            """,
-            (now, *clean_ids),
-        )
-        for row in rows:
-            if str(row["task_type"] or "") == "publish_post":
-                _set_daily_publish_slot_state(
-                    conn,
-                    str(row["id"] or ""),
-                    "reserved",
-                    now=now,
-                    quota_day=_daily_publish_day(now),
-                )
-            _insert_log(
-                conn,
-                str(row["id"] or ""),
-                "info",
-                "publish_batch_paused",
-                "前序发布任务未完成，当前任务已返回队列等待后续执行。",
-                {},
-            )
-    wake_social_automation_worker()
-
-
 def _run_social_publish_batch_in_clean_thread(
     runner: Callable[..., list[dict[str, Any]]],
     *,
@@ -5858,9 +6372,22 @@ def _run_social_publish_batch_in_clean_thread(
         name=f"social-publish-batch-{first_task_id[:12]}",
         daemon=True,
     )
+    lease_task_ids = [
+        str(item.get("id") or "")
+        for item in tasks
+        if str(item.get("id") or "")
+    ]
+    with contextlib.suppress(Exception):
+        _renew_task_leases(lease_task_ids)
+    last_lease_renewed_at = _now()
     thread.start()
     while thread.is_alive():
         thread.join(timeout=0.25)
+        current = _now()
+        if current - last_lease_renewed_at >= max(5, _task_worker_lease_seconds() // 3):
+            with contextlib.suppress(Exception):
+                _renew_task_leases(lease_task_ids, now=current)
+            last_lease_renewed_at = current
         if control["cancel_event"].is_set():
             thread.join(timeout=2)
             if thread.is_alive():
@@ -5897,10 +6424,19 @@ def _run_social_task_in_clean_thread(
         except BaseException as exc:
             error_box["error"] = exc
 
-    thread = threading.Thread(target=target, name=f"social-task-runner-{str(task.get('id') or '')[:12]}", daemon=True)
+    task_id = str(task.get("id") or "")
+    thread = threading.Thread(target=target, name=f"social-task-runner-{task_id[:12]}", daemon=True)
+    with contextlib.suppress(Exception):
+        _renew_task_leases([task_id])
+    last_lease_renewed_at = _now()
     thread.start()
     while thread.is_alive():
         thread.join(timeout=0.25)
+        current = _now()
+        if current - last_lease_renewed_at >= max(5, _task_worker_lease_seconds() // 3):
+            with contextlib.suppress(Exception):
+                _renew_task_leases([task_id], now=current)
+            last_lease_renewed_at = current
         if control["cancel_event"].is_set():
             thread.join(timeout=2)
             if thread.is_alive():
@@ -6205,13 +6741,18 @@ def _finish_task(
                 _release_daily_publish_slot(conn, task_id, error or status, now=now)
             elif status == "need_manual":
                 _set_daily_publish_slot_state(conn, task_id, "reserved", now=now)
+        clean_payload = _loads(task["payload_json"], {})
+        original_payload = dict(clean_payload) if isinstance(clean_payload, dict) else {}
+        clean_payload = dict(original_payload)
         if status == "success":
-            clean_payload = _loads(task["payload_json"], {})
-            if isinstance(clean_payload, dict) and clean_payload.pop("_publish_confirmation", None) is not None:
-                conn.execute(
-                    "UPDATE social_automation_tasks SET payload_json = ? WHERE id = ?",
-                    (json.dumps(clean_payload, ensure_ascii=False), task_id),
-                )
+            clean_payload.pop("_publish_confirmation", None)
+        if status != "need_manual":
+            clean_payload = _clear_runtime_claims(clean_payload)
+        if clean_payload != original_payload:
+            conn.execute(
+                "UPDATE social_automation_tasks SET payload_json = ? WHERE id = ?",
+                (json.dumps(clean_payload, ensure_ascii=False), task_id),
+            )
         reservation_id = str(task["billing_reservation_id"] or "") if "billing_reservation_id" in task.keys() else ""
         credit_cost_units = 0
         free_image_count = 0
@@ -6232,6 +6773,14 @@ def _finish_task(
                 (credit_cost_units, free_image_count, task_id),
             )
         _insert_log(conn, task_id, "info" if status == "success" else "error", status, "任务执行完成" if status == "success" else error, result)
+        if status in {"failed", "cancelled"}:
+            _terminate_publish_batch_tail_in_transaction(
+                conn,
+                task,
+                terminal_status=status,
+                reason=error or status,
+                now=now,
+            )
         normalized_account_status = str(account_status or "").strip().lower()
         if normalized_account_status in SOCIAL_ACCOUNT_STATUSES:
             account_error = "" if status == "success" else str(error or "")
@@ -7004,15 +7553,35 @@ def _fail_task_safely(task_id: str, exc: Exception) -> None:
         if retry_count < max_retries:
             now = _now()
             with db() as conn:
+                persisted = conn.execute(
+                    "SELECT * FROM social_automation_tasks WHERE id = ?",
+                    (task_id,),
+                ).fetchone()
+                retry_payload = _clear_runtime_claims(
+                    _loads(persisted["payload_json"], {}) if persisted is not None else {}
+                )
                 requeued = conn.execute(
                     """
                     UPDATE social_automation_tasks
-                    SET status = 'queued', retry_count = ?, error = ?, updated_at = ?
+                    SET status = 'queued', retry_count = ?, error = ?,
+                        payload_json = ?, updated_at = ?
                     WHERE id = ? AND status = 'running'
                     """,
-                    (retry_count + 1, str(exc), now, task_id),
+                    (
+                        retry_count + 1,
+                        str(exc),
+                        json.dumps(retry_payload, ensure_ascii=False),
+                        now,
+                        task_id,
+                    ),
                 ).rowcount
                 if requeued:
+                    if persisted is not None:
+                        _clear_publish_batch_reservations_in_transaction(
+                            conn,
+                            persisted,
+                            now=now,
+                        )
                     _insert_log(conn, task_id, "warn", "retry", "任务失败，已重新排队", {"error": str(exc), "retry_count": retry_count + 1})
             if requeued:
                 return
@@ -7475,6 +8044,11 @@ def _task_public(row: Any, *, billing_reservation_status: str = "") -> dict[str,
         account_display_name = account_display_name or str(account.get("display_name") or "").strip()
     reservation_id = str(item.get("billing_reservation_id") or "")
     task_result = _loads(item.get("result_json"), {})
+    public_payload = _loads(item.get("payload_json"), {})
+    if isinstance(public_payload, dict):
+        public_payload = dict(public_payload)
+        public_payload.pop(_TASK_WORKER_LEASE_KEY, None)
+        public_payload.pop(_PUBLISH_BATCH_RESERVATION_KEY, None)
     billing_status = "unbilled"
     if reservation_id:
         exact_status = str(billing_reservation_status or item.get("billing_reservation_status") or "").strip().lower()
@@ -7499,7 +8073,7 @@ def _task_public(row: Any, *, billing_reservation_status: str = "") -> dict[str,
         "scheduled_at": int(item.get("scheduled_at") or 0),
         "started_at": int(item.get("started_at") or 0),
         "finished_at": int(item.get("finished_at") or 0),
-        "payload": _redact_sensitive(_loads(item.get("payload_json"), {})),
+        "payload": _redact_sensitive(public_payload),
         "result": _redact_sensitive(task_result),
         "error": str(item.get("error") or ""),
         "retry_count": int(item.get("retry_count") or 0),

@@ -27,6 +27,18 @@ def test_live_browser_html_uses_vecto_branding():
     assert "margin-top: 126px" not in branded
 
 
+def test_live_browser_html_toggles_the_native_kasm_frame_from_blank_space():
+    source = b"<html><head><title>KasmVNC</title></head><body></body></html>"
+
+    branded = social_automation_api._brand_live_browser_html(source).decode("utf-8")
+
+    assert 'id="vecto-live-browser-native-frame-toggle"' in branded
+    assert '"vecto-live-browser-toggle-native-frame"' in branded
+    assert 'getElementById("noVNC_control_bar_handle")?.click()' in branded
+    assert "event.target === container" in branded
+    assert 'document.addEventListener("pointerup", toggleFromBlankFrameArea)' in branded
+
+
 def test_live_browser_branding_is_idempotent():
     source = b"<html><head><title>KasmVNC</title></head><body></body></html>"
 

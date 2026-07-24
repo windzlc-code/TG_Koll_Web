@@ -15942,15 +15942,6 @@ body.console-page {
   visibility: hidden;
 }
 
-.live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-card-head,
-.live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-manual-input {
-  opacity: .82;
-  pointer-events: auto;
-  transform: translateY(0);
-  transition-delay: 0s;
-  visibility: visible;
-}
-
 .live-browser-card.is-live-browser-modal .live-browser-card-actions > .status {
   display: none;
 }
