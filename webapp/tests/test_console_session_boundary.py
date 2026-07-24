@@ -930,18 +930,19 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
 
         self.assertIn("padding: 3px 6px;", expanded_head)
-        self.assertIn("background: rgb(5 12 13 / 37%);", expanded_head)
+        self.assertIn("background: rgb(5 12 13 / 18%);", expanded_head)
         self.assertIn("display: none;", task_summary)
         self.assertIn("display: grid;", mobile_summary)
         self.assertIn("position: absolute;", mobile_summary)
         self.assertIn("top: 0;", mobile_summary)
         self.assertIn("left: 50%;", mobile_summary)
-        self.assertIn("transform: translate(-50%, -24px);", mobile_summary)
-        self.assertIn("grid-template-columns: repeat(2, max-content);", mobile_summary)
+        self.assertIn("transform: translate(-50%, -32px);", mobile_summary)
+        self.assertIn("grid-template-columns: max-content;", mobile_summary)
         self.assertIn("justify-content: center;", mobile_summary)
         self.assertIn("live-browser-mobile-summary > span:first-child", portrait_styles)
         self.assertIn("live-browser-mobile-summary > span:nth-child(2)", portrait_styles)
         self.assertIn("live-browser-mobile-summary > span:nth-child(3)", portrait_styles)
+        self.assertIn("display: none;", portrait_styles)
         self.assertIn("background: rgb(13 18 19 / 42%);", portrait_styles)
 
     def test_expanded_live_browser_does_not_bind_native_frame_clicks_to_console_controls(self):
