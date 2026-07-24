@@ -960,7 +960,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("position: absolute;", mobile_summary)
         self.assertIn("top: 0;", mobile_summary)
         self.assertIn("left: 50%;", mobile_summary)
-        self.assertIn("transform: translate(-50%, -24px);", mobile_summary)
+        self.assertIn("transform: translate(-50%, -22px);", mobile_summary)
         self.assertIn("grid-template-columns: repeat(2, max-content);", mobile_summary)
         self.assertIn("justify-content: center;", mobile_summary)
         self.assertIn("live-browser-mobile-summary > span:first-child", portrait_styles)

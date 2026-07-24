@@ -19087,7 +19087,7 @@ body.console-page {
     grid-template-columns: repeat(2, max-content);
     gap: 1px 5px;
     justify-content: center;
-    transform: translate(-50%, -24px);
+    transform: translate(-50%, -22px);
     font-size: 7px;
     line-height: 1.05;
   }
