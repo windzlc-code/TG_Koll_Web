@@ -18030,7 +18030,14 @@ body.console-page {
 }
 
 .console-page .live-browser-interaction-note [data-live-browser-hint] {
+  flex: 1 0 100%;
   color: #aab5b3;
+}
+
+.console-page .live-browser-card.is-live-browser-modal .live-browser-interaction-note {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .console-page .live-browser-interaction-note span + span::before {

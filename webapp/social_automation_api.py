@@ -2286,6 +2286,7 @@ def _live_browser_sessions(*, user_id: int | None = None, raise_on_error: bool =
         session["input_allowed"] = bool(session.get("browser_ready")) and _live_browser_task_input_allowed(row)
         if str(row["task_type"] or "").strip() in {"open_login", "publish_post"}:
             session["login_mode"] = _live_browser_open_login_mode(row)
+            session["takeover_waiting_for"] = _running_task_takeover_waiting_for(str(row["id"] or ""))
         if str(row["error"] or "").strip():
             session["task_error"] = str(row["error"] or "")
         session["task_finished_at"] = int(row["finished_at"] or 0)
@@ -2668,6 +2669,15 @@ def _running_task_login_mode(task_id: str) -> str:
     return "automatic"
 
 
+def _running_task_takeover_waiting_for(task_id: str) -> str:
+    clean_task_id = str(task_id or "").strip()
+    if not clean_task_id:
+        return ""
+    with _RUNNING_TASK_CONTROLS_LOCK:
+        control = _RUNNING_TASK_CONTROLS.get(clean_task_id)
+        return str(control.get("takeover_waiting_for") or "").strip() if control else ""
+
+
 def _live_browser_open_login_mode(row: Any) -> str:
     if str(row["status"] or "").strip().lower() == "need_manual":
         return "manual"
@@ -2813,6 +2823,9 @@ def request_live_browser_manual_takeover(session_id: str) -> dict[str, Any]:
         "mode": "manual" if acknowledged else "switching",
         "acknowledged": acknowledged,
         "already_manual": already_manual,
+        "takeover_waiting_for": str(
+            matched_control.get("takeover_waiting_for") if matched_control else ""
+        ).strip() or "next_safe_checkpoint",
     }
 
 
@@ -4988,6 +5001,7 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
         "manual_takeover_event": threading.Event(),
         "manual_takeover_ack_event": threading.Event(),
         "manual_takeover_timeout_event": threading.Event(),
+        "takeover_waiting_for": "next_safe_checkpoint",
         "context": None,
         "manager": None,
         "task": dict(task),

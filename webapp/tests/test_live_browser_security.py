@@ -475,6 +475,7 @@ def test_manual_takeover_request_does_not_block_waiting_for_runner_ack():
         "manual_takeover_event": event,
         "manual_takeover_ack_event": ack_event,
         "manual_takeover_timeout_event": timeout_event,
+        "takeover_waiting_for": "threads_before_submit",
     }
     connection = mock.Mock()
     connection.execute.return_value.fetchone.return_value = {
@@ -499,6 +500,7 @@ def test_manual_takeover_request_does_not_block_waiting_for_runner_ack():
     thread.return_value.start.assert_called_once_with()
     assert result["mode"] == "switching"
     assert result["acknowledged"] is False
+    assert result["takeover_waiting_for"] == "threads_before_submit"
 
 
 def test_manual_takeover_remains_available_after_task_enters_need_manual():

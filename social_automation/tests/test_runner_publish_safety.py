@@ -1679,15 +1679,18 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         event = threading.Event()
         ack_event = threading.Event()
         callback = mock.Mock()
-
-        runner._request_manual_takeover({
+        control = {
             "manual_takeover_event": event,
             "manual_takeover_ack_event": ack_event,
             "manual_takeover_callback": callback,
-        })
+            "takeover_waiting_for": "threads_before_submit",
+        }
+
+        runner._request_manual_takeover(control)
 
         self.assertTrue(event.is_set())
         self.assertTrue(ack_event.is_set())
+        self.assertEqual(control["takeover_waiting_for"], "manual_ready")
         callback.assert_called_once_with()
 
     def test_late_user_takeover_ack_always_notifies_persistence_callback(self):

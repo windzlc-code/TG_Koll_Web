@@ -21671,13 +21671,37 @@ function liveBrowserPanelHint(sessions = []) {
   return `${sessions.length} 个浏览器正在运行，当前仅展示实时画面；进入人工处理状态后才可操作。`;
 }
 
+const LIVE_BROWSER_TAKEOVER_NODE_LABELS = Object.freeze({
+  next_safe_checkpoint: "下一个安全停止节点",
+  threads_home_ready: "Threads 主页准备完成",
+  threads_composer_ready: "发布编辑框打开",
+  threads_text_ready: "推文内容填写完成",
+  threads_media_ready: "媒体文件上传完成",
+  threads_before_submit: "点击发布前",
+  threads_after_submit: "发布提交完成",
+  manual_ready: "人工接管",
+});
+
+function liveBrowserTakeoverNodeLabel(session) {
+  const checkpoint = String(session?.takeover_waiting_for || "").trim().toLowerCase();
+  if (LIVE_BROWSER_TAKEOVER_NODE_LABELS[checkpoint]) {
+    return LIVE_BROWSER_TAKEOVER_NODE_LABELS[checkpoint];
+  }
+  return String(session?.task_type || "").trim().toLowerCase() === "publish_post"
+    ? "下一个发布安全节点"
+    : "下一个自动登录安全节点";
+}
+
 function liveBrowserInteractionHint(session) {
   const taskStatus = liveBrowserTaskStatus(session);
   const sessionStatus = liveBrowserSessionStatus(session);
+  const loginMode = liveBrowserLoginMode(session);
+  const takeoverNode = liveBrowserTakeoverNodeLabel(session);
   if (sessionStatus === "standby") return "任务已完成，浏览器处于待机状态，可等待系统自动关闭。";
   if (isOpenLoginBrowserStarting(session)) return "Camoufox 指纹浏览器正在启动，窗口就绪后即可人工操作。";
-  if (liveBrowserLoginMode(session) === "switching") return "正在停止自动登录操作，确认后将开放人工输入。";
-  if (liveBrowserLoginMode(session) === "takeover_timeout") return "自动登录未能及时停止，人工输入仍保持锁定；可重试接管或停止进程。";
+  if (loginMode === "switching") return `人工接管请求已提交，正在等待“${takeoverNode}”；到达后将自动开放操作。`;
+  if (loginMode === "takeover_timeout") return `等待“${takeoverNode}”超时，人工操作仍保持锁定；可重试接管或停止进程。`;
+  if (loginMode === "manual" && canInteractWithLiveBrowser(session)) return "已到达人工接管节点，当前可以直接操作浏览器窗口。";
   if (isManualOpenLoginSession(session)) return "当前处于人工登录，可以直接操作浏览器窗口。";
   if (taskStatus === "need_manual") return "当前需要人工处理，可以直接操作浏览器窗口。";
   return "自动化执行中，当前仅展示实时画面，暂不允许人工输入。";
@@ -21930,6 +21954,9 @@ async function setLiveBrowserMode(sessionId = "", mode = "manual") {
   if (session) {
     session.login_mode = result?.acknowledged ? "manual" : "switching";
     session.input_allowed = Boolean(result?.acknowledged) && liveBrowserIsReady(session);
+    session.takeover_waiting_for = String(
+      result?.takeover_waiting_for || session.takeover_waiting_for || "next_safe_checkpoint",
+    ).trim();
   }
   renderLiveBrowserSessions();
   if (taskId) refreshLiveBrowserSessionsSoon(taskId, 40, 500);

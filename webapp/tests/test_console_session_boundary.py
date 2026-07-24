@@ -1108,11 +1108,13 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
 
     def test_manual_takeover_waits_for_backend_ack_and_keeps_task_refresh_active(self):
         set_mode = self._section("async function setLiveBrowserMode", "function liveBrowserToolInput")
+        interaction_hint = self._function_source("liveBrowserInteractionHint")
         prompt_suppression = self._function_source("socialTaskPromptSuppressed")
         active_refresh = self._function_source("hasActiveSocialTaskToast")
 
         self.assertIn('result?.acknowledged ? "manual" : "switching"', set_mode)
         self.assertIn("Boolean(result?.acknowledged)", set_mode)
+        self.assertIn("result?.takeover_waiting_for", set_mode)
         self.assertIn("refreshLiveBrowserSessionsSoon(taskId, 40, 500)", set_mode)
         self.assertIn("definitelyRejected", set_mode)
         self.assertLess(set_mode.index("suppressedSocialTaskPromptIds.add"), set_mode.index("await api("))
@@ -1128,6 +1130,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('matched.login_mode = "takeover_timeout"', browser_refresh)
         self.assertIn("observedTarget || taskFinished", browser_refresh)
         self.assertIn('["success", "failed", "cancelled"]', prompt_suppression)
+        self.assertIn("人工接管请求已提交", interaction_hint)
+        self.assertIn("到达后将自动开放操作", interaction_hint)
+        self.assertIn("当前可以直接操作浏览器窗口", interaction_hint)
 
     def test_browser_session_refreshes_are_isolated_and_timeout_safely(self):
         harness = textwrap.dedent(

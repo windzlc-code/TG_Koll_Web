@@ -733,6 +733,14 @@ def _manual_takeover_event(context_control: dict[str, Any] | None) -> Any | None
     return context_control.get("manual_takeover_event")
 
 
+def _set_manual_takeover_waiting_for(
+    context_control: dict[str, Any] | None,
+    checkpoint: str,
+) -> None:
+    if isinstance(context_control, dict):
+        context_control["takeover_waiting_for"] = str(checkpoint or "").strip()
+
+
 def _request_manual_takeover(context_control: dict[str, Any] | None) -> None:
     event = _manual_takeover_event(context_control)
     if event is not None:
@@ -760,6 +768,7 @@ def _run_manual_transition_callback(context_control: dict[str, Any], key: str, a
 def _acknowledge_manual_takeover(context_control: dict[str, Any] | None) -> None:
     if isinstance(context_control, dict):
         _run_manual_transition_callback(context_control, "manual_takeover_callback", "人工接管状态持久化")
+        _set_manual_takeover_waiting_for(context_control, "manual_ready")
         ack_event = context_control.get("manual_takeover_ack_event")
         if ack_event is not None:
             ack_event.set()
@@ -777,6 +786,7 @@ def _resume_after_manual_takeover(context_control: dict[str, Any] | None) -> Non
     if not isinstance(context_control, dict):
         return
     _run_manual_transition_callback(context_control, "manual_takeover_resolved_callback", "人工验证恢复状态持久化")
+    _set_manual_takeover_waiting_for(context_control, "next_safe_checkpoint")
     for key in ("manual_takeover_event", "manual_takeover_ack_event", "manual_takeover_timeout_event"):
         event = context_control.get(key)
         if event is not None:
@@ -4376,6 +4386,7 @@ def _run_threads_publish_post(
     context_control: dict[str, Any] | None = None,
     cancel_event: Any | None = None,
 ) -> dict[str, Any]:
+    _set_manual_takeover_waiting_for(context_control, "threads_home_ready")
     confirmation_state = payload.get("_publish_confirmation")
     if isinstance(confirmation_state, dict) and confirmation_state.get("phase") == "confirm_only":
         caption = str(confirmation_state.get("caption") or payload.get("caption") or payload.get("content") or payload.get("text") or "").strip()
@@ -4447,6 +4458,7 @@ def _run_threads_publish_post(
     )
     if manual_result is not None:
         return manual_result
+    _set_manual_takeover_waiting_for(context_control, "threads_composer_ready")
     try:
         compose = _ensure_threads_compose_ready(page, logger)
     except Exception:
@@ -4457,6 +4469,7 @@ def _run_threads_publish_post(
     )
     if manual_result is not None:
         return manual_result
+    _set_manual_takeover_waiting_for(context_control, "threads_text_ready")
     _human_click(page, compose, logger, "threads_publish_focus")
     if caption:
         text_input_mode = _normalize_text_input_mode(payload.get("text_input_mode") or os.getenv("SOCIAL_AUTOMATION_TEXT_INPUT_MODE", "paste"))
@@ -4477,6 +4490,7 @@ def _run_threads_publish_post(
     )
     if manual_result is not None:
         return manual_result
+    _set_manual_takeover_waiting_for(context_control, "threads_media_ready")
     if media_paths:
         attachment_baseline = _threads_attachment_snapshot(page)
         file_input = _threads_media_input(page)
@@ -4510,6 +4524,7 @@ def _run_threads_publish_post(
     )
     if manual_result is not None:
         return manual_result
+    _set_manual_takeover_waiting_for(context_control, "threads_before_submit")
     confirmation_state = {
         "phase": "confirm_only",
         "profile_url": profile_url,
@@ -4545,6 +4560,7 @@ def _run_threads_publish_post(
     if not post_clicked:
         persist_confirmation_before_click()
         _human_click(page, post_button, logger, "threads_publish_submit")
+    _set_manual_takeover_waiting_for(context_control, "threads_after_submit")
     manual_result = _pause_for_requested_threads_publish_takeover(
         page, task, payload, screenshot_dir, logger, account, profile_url,
         previous_permalinks, cancel_event, context_control,
