@@ -19076,7 +19076,7 @@ body.console-page {
 
   .console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-card-identity > strong {
     position: relative;
-    top: 2px;
+    top: 0;
   }
 
   .console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-card-identity > [data-live-browser-meta] {
@@ -19095,7 +19095,7 @@ body.console-page {
     grid-template-columns: repeat(2, max-content);
     gap: 1px 5px;
     justify-content: center;
-    transform: translate(-50%, -25px);
+    transform: translate(-50%, -27px);
     font-size: 7px;
     line-height: 1.05;
   }
