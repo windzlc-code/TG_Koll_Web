@@ -16106,14 +16106,12 @@ body.console-page {
 
   .live-browser-card.is-live-browser-modal .live-browser-frame > iframe {
     position: absolute;
-    top: 50%;
-    left: 50%;
-    width: calc(100dvh - 12px);
+    inset: 0;
+    width: 100%;
     max-width: none;
-    height: calc(100dvw - 12px);
+    height: 100%;
     max-height: none;
-    transform: translate(-50%, -50%) rotate(90deg);
-    transform-origin: center;
+    transform: none;
   }
 
   .live-browser-card.is-live-browser-modal .live-browser-tools {

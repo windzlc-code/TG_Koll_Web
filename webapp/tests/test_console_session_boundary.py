@@ -853,9 +853,10 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("max-height: none;", landscape_frame)
         self.assertIn("aspect-ratio: auto;", landscape_frame)
         self.assertIn(".live-browser-frame > iframe", landscape_media)
-        self.assertIn("width: calc(100dvh - 12px);", landscape_media)
-        self.assertIn("height: calc(100dvw - 12px);", landscape_media)
-        self.assertIn("transform: translate(-50%, -50%) rotate(90deg);", landscape_media)
+        self.assertIn("inset: 0;", landscape_media)
+        self.assertIn("width: 100%;", landscape_media)
+        self.assertIn("height: 100%;", landscape_media)
+        self.assertIn("transform: none;", landscape_media)
         self.assertIn("grid-template-columns: minmax(0, 1fr) repeat(3, auto);", landscape_tools)
         self.assertIn("grid-column: auto;", landscape_input)
         expanded_modal = self._css_block(
