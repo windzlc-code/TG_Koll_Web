@@ -15896,6 +15896,17 @@ body.console-page {
   right: 10px;
   display: block;
   min-height: 0;
+  padding: 4px;
+  border: 1px solid rgb(153 189 184 / 42%);
+  border-radius: 8px;
+  background: rgb(5 12 13 / 62%);
+  box-shadow: 0 8px 20px rgb(0 0 0 / 24%);
+  backdrop-filter: blur(8px);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-8px);
+  transition: opacity 180ms ease, transform 220ms ease, visibility 0s linear 220ms;
+  visibility: hidden;
 }
 
 .live-browser-card.is-live-browser-modal :is(
@@ -15910,6 +15921,23 @@ body.console-page {
   display: flex;
   width: auto;
   gap: 6px;
+}
+
+.live-browser-card.is-live-browser-modal .live-browser-manual-input {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px);
+  transition: opacity 180ms ease, transform 220ms ease, visibility 0s linear 220ms;
+  visibility: hidden;
+}
+
+.live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-card-head,
+.live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-manual-input {
+  opacity: .82;
+  pointer-events: auto;
+  transform: translateY(0);
+  transition-delay: 0s;
+  visibility: visible;
 }
 
 .live-browser-card.is-live-browser-modal .live-browser-card-actions > .status {

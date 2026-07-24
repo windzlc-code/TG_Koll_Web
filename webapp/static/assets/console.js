@@ -21937,7 +21937,7 @@ function renderLiveBrowserSession(session) {
           allow="clipboard-read; clipboard-write"
           allowfullscreen
         ></iframe>
-        <div class="live-browser-lock" aria-hidden="true"><span>自动化执行中，等待进入人工处理状态后再操作。</span></div>
+        <div class="live-browser-lock" data-live-browser-controls-toggle aria-hidden="true"><span>自动化执行中，等待进入人工处理状态后再操作。</span></div>
         <div class="live-browser-manual-input" data-live-browser-manual-input data-expanded="false" ${interactionAllowed ? "" : "hidden"}>
           <button type="button" class="live-browser-input-toggle" data-live-browser-input-toggle="${esc(sessionId)}" aria-expanded="false" title="输入验证码或文本" aria-label="输入验证码或文本">
             ${renderEditIcon()}<span>输入</span>
@@ -22022,6 +22022,8 @@ function closeLiveBrowserLargeModal({ restoreFocus = true } = {}) {
     ? document.querySelector(`[data-live-browser-card="${CSS.escape(expandedId)}"]`)
     : document.querySelector(".live-browser-card.is-live-browser-modal");
   card?.classList.remove("is-live-browser-modal");
+  card?.classList.remove("is-live-browser-controls-visible");
+  card?.removeAttribute("data-live-browser-controls-visible");
   card?.removeAttribute("role");
   card?.removeAttribute("aria-modal");
   card?.removeAttribute("aria-labelledby");
@@ -22044,6 +22046,32 @@ function closeLiveBrowserLargeModal({ restoreFocus = true } = {}) {
   liveBrowserModalTrigger = null;
 }
 
+function setLiveBrowserModalControlsVisible(card, visible) {
+  if (!card?.classList.contains("is-live-browser-modal")) return;
+  const nextVisible = Boolean(visible);
+  card.classList.toggle("is-live-browser-controls-visible", nextVisible);
+  card.dataset.liveBrowserControlsVisible = nextVisible ? "true" : "false";
+  if (nextVisible) return;
+
+  closeLiveBrowserActionMenus();
+  const manualInput = card.querySelector("[data-live-browser-manual-input]");
+  const inputToggle = card.querySelector("[data-live-browser-input-toggle]");
+  const tools = card.querySelector("[data-live-browser-tools]");
+  if (manualInput) manualInput.dataset.expanded = "false";
+  if (inputToggle) inputToggle.setAttribute("aria-expanded", "false");
+  if (tools) {
+    tools.setAttribute("aria-hidden", "true");
+    tools.setAttribute("inert", "");
+  }
+}
+
+function toggleLiveBrowserModalControls(card) {
+  setLiveBrowserModalControlsVisible(
+    card,
+    !card?.classList.contains("is-live-browser-controls-visible"),
+  );
+}
+
 function requestLiveBrowserFullscreen(sessionId = "", trigger = null) {
   const cards = Array.from(document.querySelectorAll("[data-live-browser-card]"));
   const card = cards.find((node) => String(node.dataset.liveBrowserCard || "") === String(sessionId || ""));
@@ -22058,11 +22086,12 @@ function requestLiveBrowserFullscreen(sessionId = "", trigger = null) {
   const backdrop = document.createElement("div");
   backdrop.className = "live-browser-modal-backdrop";
   backdrop.dataset.liveBrowserModalBackdrop = "";
-  backdrop.dataset.liveBrowserModalClose = "";
+  backdrop.dataset.liveBrowserModalOverlayToggle = "";
   shell.appendChild(backdrop);
   liveBrowserModalTrigger = trigger instanceof HTMLElement ? trigger : null;
   state.liveBrowserExpandedSessionId = String(sessionId || "");
   card.classList.add("is-live-browser-modal");
+  setLiveBrowserModalControlsVisible(card, false);
   card.setAttribute("role", "dialog");
   card.setAttribute("aria-modal", "true");
   card.setAttribute("aria-labelledby", liveBrowserDialogTitleId(sessionId));
@@ -24597,8 +24626,8 @@ function bindEvents() {
       setPersonaMobileSidebarOpen(false);
       return;
     }
-    if (event.target.closest("[data-live-browser-modal-close]")) {
-      closeLiveBrowserLargeModal();
+    if (event.target.closest("[data-live-browser-modal-overlay-toggle], [data-live-browser-controls-toggle]")) {
+      toggleLiveBrowserModalControls(document.querySelector(".live-browser-card.is-live-browser-modal"));
       return;
     }
     const tab = event.target.closest("[data-account-browser-tab]");

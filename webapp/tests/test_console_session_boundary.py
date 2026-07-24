@@ -865,8 +865,22 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("padding: 0;", expanded_modal)
         self.assertIn("border: 0;", expanded_modal)
         self.assertIn("position: absolute;", expanded_head)
+        self.assertIn("background: rgb(5 12 13 / 62%);", expanded_head)
+        self.assertIn("pointer-events: none;", expanded_head)
+        self.assertIn(".is-live-browser-controls-visible", self.styles)
         self.assertIn(".live-browser-card-identity", self.styles)
         self.assertIn(".live-browser-interaction-note", self.styles)
+
+    def test_expanded_live_browser_controls_toggle_from_the_blank_backdrop(self):
+        toggle = self._function_source("toggleLiveBrowserModalControls")
+        opening = self._function_source("requestLiveBrowserFullscreen")
+
+        self.assertIn("is-live-browser-controls-visible", self.source)
+        self.assertIn('[data-live-browser-modal-overlay-toggle], [data-live-browser-controls-toggle]', self.source)
+        self.assertIn('class="live-browser-lock" data-live-browser-controls-toggle', self.source)
+        self.assertIn("toggleLiveBrowserModalControls", self.source)
+        self.assertIn("setLiveBrowserModalControlsVisible(card, false);", opening)
+        self.assertIn("setLiveBrowserModalControlsVisible(", toggle)
 
     def test_public_toast_uses_compact_bottom_layout(self):
         host = self._css_block(".toast-host {")
