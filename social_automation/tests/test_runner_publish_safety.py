@@ -1920,6 +1920,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         with (
             mock.patch.object(runner, "_goto") as goto,
+            mock.patch.object(runner, "_dismiss_threads_cookie_consent", return_value=True) as dismiss_cookie,
             mock.patch.object(runner, "_sleep_between"),
             mock.patch.object(runner, "_screenshot", return_value="final.png") as screenshot,
         ):
@@ -1929,8 +1930,45 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertEqual(result, "final.png")
         goto.assert_called_once()
+        dismiss_cookie.assert_called_once()
         caption_locator.wait_for.assert_called_once_with(state="visible", timeout=15000)
         screenshot.assert_called_once()
+
+    def test_threads_cookie_consent_is_dismissed_before_evidence(self):
+        page = mock.Mock()
+        with (
+            mock.patch.object(
+                runner,
+                "_page_body_text_lower",
+                side_effect=["allow the use of cookies from threads", ""],
+            ),
+            mock.patch.object(runner, "_click_text_button", return_value=True) as click,
+            mock.patch.object(runner, "_sleep_between"),
+        ):
+            result = runner._dismiss_threads_cookie_consent(page, _Logger())
+
+        self.assertTrue(result)
+        click.assert_called_once_with(
+            page,
+            mock.ANY,
+            ["Decline optional cookies", "Allow all cookies"],
+            "threads_cookie_consent",
+        )
+
+    def test_threads_final_screenshot_skips_cookie_dialog(self):
+        page = mock.Mock()
+
+        with (
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_dismiss_threads_cookie_consent", return_value=False),
+            mock.patch.object(runner, "_screenshot") as screenshot,
+        ):
+            result = runner._capture_threads_publish_evidence(
+                page, "https://www.threads.com/@user/post/ABC", "published body", Path("."), {"id": "task"}, _Logger()
+            )
+
+        self.assertEqual(result, "")
+        screenshot.assert_not_called()
 
     def test_threads_final_screenshot_skips_loading_page(self):
         page = mock.Mock()
@@ -1938,6 +1976,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         with (
             mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_dismiss_threads_cookie_consent", return_value=True),
             mock.patch.object(runner, "_screenshot") as screenshot,
         ):
             result = runner._capture_threads_publish_evidence(

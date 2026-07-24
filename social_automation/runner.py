@@ -4346,9 +4346,30 @@ def _wait_for_threads_own_post(page, caption: str, logger: AutomationLogger, acc
     return {"confirmed": False, "reason": "发布已提交，但账号主页未看到本次发布内容。", "url": str(page.url or target_url)}
 
 
+def _dismiss_threads_cookie_consent(page, logger: AutomationLogger) -> bool:
+    marker = "allow the use of cookies from threads"
+    if marker not in _page_body_text_lower(page, timeout_ms=1500):
+        return True
+    for _attempt in range(2):
+        clicked = _click_text_button(
+            page,
+            logger,
+            ["Decline optional cookies", "Allow all cookies"],
+            "threads_cookie_consent",
+        )
+        if not clicked:
+            break
+        _sleep_between(0.5, 0.9)
+        if marker not in _page_body_text_lower(page, timeout_ms=1500):
+            return True
+    return marker not in _page_body_text_lower(page, timeout_ms=1500)
+
+
 def _capture_threads_publish_evidence(page, permalink: str, caption: str, screenshot_dir: Path, task: dict[str, Any], logger: AutomationLogger) -> str:
     try:
         _goto(page, permalink, logger, "threads_publish_result", timeout_ms=20000, networkidle_ms=3500)
+        if not _dismiss_threads_cookie_consent(page, logger):
+            raise RuntimeError("Threads cookie consent dialog is still covering the published post.")
         if caption:
             page.get_by_text(caption, exact=False).first.wait_for(state="visible", timeout=15000)
         else:
