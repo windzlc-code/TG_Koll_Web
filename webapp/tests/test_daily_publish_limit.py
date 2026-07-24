@@ -421,7 +421,10 @@ class DailyPublishLimitTests(unittest.TestCase):
         )
         with (
             mock.patch.object(social_automation_api, "_now", return_value=self.now),
-            mock.patch.object(social_automation_api, "_sync_successful_task_to_persona_archive"),
+            mock.patch.object(
+                social_automation_api,
+                "_sync_successful_task_to_persona_archive",
+            ) as sync_archive,
         ):
             self.assertTrue(
                 social_automation_api._finish_publish_batch_item(
@@ -438,6 +441,7 @@ class DailyPublishLimitTests(unittest.TestCase):
                     2,
                 )
             )
+            sync_archive.assert_not_called()
         with sqlite3.connect(self.db_path) as conn:
             statuses = conn.execute(
                 """

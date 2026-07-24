@@ -9608,6 +9608,18 @@ body.persona-media-sorting {
   gap: 10px;
 }
 
+.task-detail-log-sequence {
+  margin-left: auto;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-solid);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
 .task-detail-log-item p {
   margin: 0;
   line-height: 1.5;

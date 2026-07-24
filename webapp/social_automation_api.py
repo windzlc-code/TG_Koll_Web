@@ -1336,11 +1336,27 @@ def register_social_automation_routes(app: FastAPI) -> None:
         with db() as conn:
             task_ids = _publish_batch_log_task_ids(conn, task_id)
             placeholders = ",".join("?" for _ in task_ids)
+            task_rows = conn.execute(
+                f"SELECT id, payload_json FROM social_automation_tasks WHERE id IN ({placeholders})",
+                tuple(task_ids),
+            ).fetchall()
             logs = conn.execute(
                 f"SELECT * FROM social_automation_logs WHERE task_id IN ({placeholders}) ORDER BY created_at ASC, id ASC",
                 tuple(task_ids),
             ).fetchall()
-        return {"ok": True, "logs": [_log_public(row) for row in logs]}
+        task_meta_by_id = {}
+        for row in task_rows:
+            item_payload = _loads(row["payload_json"], {})
+            task_meta_by_id[str(row["id"] or "")] = {
+                "id": str(row["id"] or ""),
+                "publish_sequence_index": max(1, int(item_payload.get("publish_sequence_index") or 1)),
+                "publish_sequence_total": max(1, int(item_payload.get("publish_sequence_total") or 1)),
+            }
+        return {
+            "ok": True,
+            "logs": [_log_public(row) for row in logs],
+            "batch_tasks": [task_meta_by_id[item_id] for item_id in task_ids if item_id in task_meta_by_id],
+        }
 
     @app.get("/api/persona_dashboard/automation/tasks/{task_id}/media/{index}")
     def api_social_task_media(task_id: str, index: int, user: dict[str, Any] = Depends(get_current_user)):
@@ -4451,30 +4467,51 @@ def list_social_tasks(*, status: str = "", account_id: str = "", limit: int = 60
 
 
 def clear_social_task(task_id: str) -> int:
+    task_ids = [str(task_id or "").strip()]
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="任务不存在")
-        status = str(row["status"] or "")
+        if str(row["task_type"] or "") == "publish_post":
+            task_ids = _publish_batch_log_task_ids(conn, task_id)
+        placeholders = ",".join("?" for _ in task_ids)
+        rows = conn.execute(
+            f"SELECT * FROM social_automation_tasks WHERE id IN ({placeholders})",
+            tuple(task_ids),
+        ).fetchall()
         now = _now()
         conn.execute(
-            "UPDATE social_automation_tasks SET status = 'cancelled', finished_at = ?, error = ?, updated_at = ? WHERE id = ? AND status IN ('preparing', 'queued', 'running', 'need_manual')",
-            (now, "task cleared", now, task_id),
+            f"""
+            UPDATE social_automation_tasks
+            SET status = 'cancelled', finished_at = ?, error = ?, updated_at = ?
+            WHERE id IN ({placeholders}) AND status IN ('preparing', 'queued', 'running', 'need_manual')
+            """,
+            (now, "task cleared", now, *task_ids),
         )
-        if str(row["task_type"] or "") == "publish_post":
-            _ensure_daily_publish_slot(conn, row, now=now)
-            _release_daily_publish_slot(conn, task_id, "task_cleared", now=now)
-    if status in {"running", "need_manual"}:
-        _force_stop_running_task(task_id)
+        for item in rows:
+            if str(item["task_type"] or "") == "publish_post":
+                _ensure_daily_publish_slot(conn, item, now=now)
+                _release_daily_publish_slot(conn, str(item["id"] or ""), "task_cleared", now=now)
+    for item in rows:
+        if str(item["status"] or "") in {"running", "need_manual"}:
+            _force_stop_running_task(str(item["id"] or ""))
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        current = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
-        if not current:
-            return 0
-        _release_task_billing_reservation(conn, current)
-        conn.execute("DELETE FROM social_automation_logs WHERE task_id = ?", (task_id,))
-        deleted = conn.execute("DELETE FROM social_automation_tasks WHERE id = ?", (task_id,)).rowcount
+        current_rows = conn.execute(
+            f"SELECT * FROM social_automation_tasks WHERE id IN ({placeholders})",
+            tuple(task_ids),
+        ).fetchall()
+        for current in current_rows:
+            _release_task_billing_reservation(conn, current)
+        conn.execute(
+            f"DELETE FROM social_automation_logs WHERE task_id IN ({placeholders})",
+            tuple(task_ids),
+        )
+        deleted = conn.execute(
+            f"DELETE FROM social_automation_tasks WHERE id IN ({placeholders})",
+            tuple(task_ids),
+        ).rowcount
     wake_social_automation_worker()
     return int(deleted or 0)
 
@@ -5651,6 +5688,7 @@ def _finish_publish_batch_item(
         result,
         "" if status == "success" else str(result.get("error") or "执行失败"),
         account_status="ready" if status == "success" else "",
+        sync_persona_archive=False,
     )
     return bool(finished and status == "success")
 
@@ -6024,6 +6062,16 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
             return
         _execute_claimed_task_with_control(task, control)
     finally:
+        for completed_task_id in control.get("completed_batch_task_ids") or []:
+            try:
+                completed_task = get_social_task(str(completed_task_id or ""))
+            except HTTPException:
+                continue
+            if str(completed_task.get("status") or "") == "success":
+                _sync_successful_task_to_persona_archive(
+                    str(completed_task_id or ""),
+                    completed_task.get("result") if isinstance(completed_task.get("result"), dict) else {},
+                )
         _finalize_detached_manual_tasks(batch_task_ids)
         _discard_ephemeral_task_secrets(*batch_task_ids)
         with _RUNNING_TASK_CONTROLS_LOCK:
@@ -6744,6 +6792,8 @@ def _finish_task(
     result: dict[str, Any],
     error: str,
     account_status: str = "",
+    *,
+    sync_persona_archive: bool = True,
 ) -> bool:
     now = _now()
     with db() as conn:
@@ -6917,7 +6967,7 @@ def _finish_task(
                     str(task["account_id"]),
                 ),
             )
-    if completed and status == "success":
+    if completed and status == "success" and sync_persona_archive:
         _sync_successful_task_to_persona_archive(task_id, result)
     return True
 

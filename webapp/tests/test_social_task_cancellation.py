@@ -956,6 +956,75 @@ class SocialTaskCancellationTests(unittest.TestCase):
         )
         stop.assert_called_once_with("queued-batch-1")
 
+    def test_clear_publish_batch_deletes_every_item_and_log(self):
+        batch_id = "clear-publish-batch"
+        for index in range(1, 4):
+            task_id = f"clear-batch-{index}"
+            self._insert_task(
+                task_id,
+                "queued",
+                payload={
+                    "publish_batch_id": batch_id,
+                    "publish_sequence_index": index,
+                    "publish_sequence_total": 3,
+                },
+            )
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO social_automation_logs(
+                      task_id, level, stage, message, data_json, screenshot_path, created_at
+                    ) VALUES (?, 'info', 'queued', 'queued', '{}', '', 1)
+                    """,
+                    (task_id,),
+                )
+
+        with (
+            mock.patch.object(social_automation_api, "_force_stop_running_task") as stop,
+            mock.patch.object(social_automation_api, "wake_social_automation_worker"),
+        ):
+            deleted = social_automation_api.clear_social_task("clear-batch-2")
+
+        with sqlite3.connect(self.db_path) as conn:
+            task_count = conn.execute(
+                "SELECT COUNT(*) FROM social_automation_tasks WHERE id LIKE 'clear-batch-%'"
+            ).fetchone()[0]
+            log_count = conn.execute(
+                "SELECT COUNT(*) FROM social_automation_logs WHERE task_id LIKE 'clear-batch-%'"
+            ).fetchone()[0]
+        self.assertEqual(deleted, 3)
+        self.assertEqual(task_count, 0)
+        self.assertEqual(log_count, 0)
+        stop.assert_not_called()
+
+    def test_completed_batch_archive_sync_runs_after_runner_returns(self):
+        self._insert_task("batch-archive-sync", "success")
+        task = social_automation_api.get_social_task("batch-archive-sync")
+
+        def complete_batch(_task, control):
+            control["completed_batch_task_ids"] = ["batch-archive-sync", "missing-task"]
+
+        with (
+            mock.patch.object(
+                social_automation_api,
+                "_claim_publish_batch_tail",
+                return_value=[task],
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_execute_claimed_task_with_control",
+                side_effect=complete_batch,
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_sync_successful_task_to_persona_archive",
+            ) as sync_archive,
+            mock.patch.object(social_automation_api, "_discard_ephemeral_task_secrets"),
+        ):
+            social_automation_api._execute_claimed_task(task)
+
+        sync_archive.assert_called_once_with("batch-archive-sync", {})
+
     def test_worker_failure_uses_actual_failed_batch_task_id(self):
         task = {"id": "batch-first", "account_id": "account-1"}
         failure = RuntimeError("second item failed")

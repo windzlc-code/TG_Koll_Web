@@ -13596,8 +13596,15 @@ function renderTaskDetailStatusField(status, label = "") {
     </div>`;
 }
 
-function renderTaskDetailLogs(logs = [], { limit = 30, hideScreenshots = false } = {}) {
+function renderTaskDetailLogs(logs = [], { limit = 200, hideScreenshots = false, batchTasks = [] } = {}) {
   const rows = (Array.isArray(logs) ? logs : []).slice(-limit).reverse();
+  const batchTaskMap = new Map((Array.isArray(batchTasks) ? batchTasks : []).map((item) => [
+    String(item?.id || ""),
+    {
+      index: Math.max(1, Number(item?.publish_sequence_index || 1)),
+      total: Math.max(1, Number(item?.publish_sequence_total || 1)),
+    },
+  ]));
   return `
     <section class="task-detail-log-list">
       <div class="task-detail-section-head">
@@ -13605,6 +13612,7 @@ function renderTaskDetailLogs(logs = [], { limit = 30, hideScreenshots = false }
         <span>${esc(`${rows.length} 条`)}</span>
       </div>
       ${rows.length ? rows.map((log) => {
+        const sequence = batchTaskMap.get(String(log?.task_id || ""));
         const screenshotUrl = hideScreenshots ? "" : taskScreenshotFromValue(log.screenshot_url || log.screenshot_path || "");
         const screenshotItem = screenshotUrl ? { previewUrl: screenshotUrl, originalUrl: screenshotUrl, thumbnailUrl: automationScreenshotThumbnailUrl(screenshotUrl), url: screenshotUrl, type: "image", label: logStageLabel(log.stage, log.level) } : null;
         const screenshotGroupId = screenshotItem ? registerMediaPreviewGroup([screenshotItem]) : "";
@@ -13612,6 +13620,7 @@ function renderTaskDetailLogs(logs = [], { limit = 30, hideScreenshots = false }
           <article class="task-detail-log-item">
             <div>
               <strong>${esc(logStageLabel(log.stage, log.level))}</strong>
+              ${sequence && sequence.total > 1 ? `<span class="task-detail-log-sequence">${esc(`第 ${sequence.index}/${sequence.total} 篇`)}</span>` : ""}
               <span>${esc(formatTime(log.created_at || log.ts || ""))}</span>
             </div>
             <p>${esc(taskLogMessage(log))}</p>
@@ -13629,6 +13638,7 @@ function renderTaskDetailLayout(task = {}, logs = [], {
   kind = "regular",
   title = "任务",
   downloadUrl = "",
+  batchTasks = [],
 } = {}) {
   const resultUrl = taskResultUrl(task);
   const resultHref = adminWorkspacePageUrl(resultUrl);
@@ -13676,7 +13686,8 @@ function renderTaskDetailLayout(task = {}, logs = [], {
           ${renderTaskScreenshotGallery(screenshots)}
         </section>` : ""}
       ${renderTaskDetailLogs(logs, {
-        limit: kind === "social" ? 30 : 12,
+        limit: kind === "social" ? 200 : 12,
+        batchTasks,
         hideScreenshots: presentationStatus === "cancelled"
           || (String(task?.task_type || "") === "publish_post" && String(task?.status || "") === "success"),
       })}
@@ -22813,6 +22824,7 @@ async function showSocialLog(id) {
     contentHtml: renderTaskDetailLayout(task, logs, {
       kind: "social",
       title: statusLabel(task.task_type || task.type || "自动化任务"),
+      batchTasks: data.batch_tasks || [],
     }),
     confirmText: "关闭",
     showCancel: false,
