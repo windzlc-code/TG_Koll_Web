@@ -202,20 +202,27 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("grid-auto-rows: max-content;", mobile_styles)
         self.assertIn("min-height: min-content;", mobile_styles)
 
-    def test_regular_task_queue_keeps_delete_before_conditional_actions(self):
+    def test_regular_task_queue_keeps_delete_as_the_rightmost_action(self):
         regular_tasks_start = self.console_script.index("const regularTasksHtml")
         regular_tasks_template = self.console_script[
             regular_tasks_start:self.console_script.index("const currentPanel", regular_tasks_start)
         ]
 
         self.assertLess(
-            regular_tasks_template.index("data-delete-task"),
             regular_tasks_template.index("data-retry"),
+            regular_tasks_template.index("data-delete-task"),
         )
         self.assertLess(
-            regular_tasks_template.index("data-delete-task"),
             regular_tasks_template.index("data-cancel-task"),
+            regular_tasks_template.index("data-delete-task"),
         )
+
+        mobile_styles = self.styles[self.styles.index("/* Mobile task queue density: align queue cards with the compact persona list. */"):]
+        self.assertIn(
+            ".console-page .task-table-inner--regular .task-row .row-actions .task-queue-delete-button {",
+            mobile_styles,
+        )
+        self.assertIn("margin-left: auto;", mobile_styles)
 
     def test_task_queue_removes_open_current_persona_action(self):
         self.assertNotIn("data-task-open-persona", self.console_script)

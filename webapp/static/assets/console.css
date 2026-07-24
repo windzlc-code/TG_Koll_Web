@@ -18209,6 +18209,12 @@ body.console-page {
     flex-wrap: wrap;
   }
 
+  .task-table-inner--regular .task-row .row-actions {
+    width: 100%;
+    align-items: center;
+    justify-content: flex-start;
+  }
+
   .console-page .task-persona-queue-row .row-actions :is(button, a),
   .console-page .task-table-inner--regular .task-row .row-actions :is(button, a) {
     min-height: 28px;
@@ -18223,6 +18229,10 @@ body.console-page {
     height: 28px;
     min-height: 28px;
     padding: 0;
+  }
+
+  .console-page .task-table-inner--regular .task-row .row-actions .task-queue-delete-button {
+    margin-left: auto;
   }
 
   .task-queue-pager {

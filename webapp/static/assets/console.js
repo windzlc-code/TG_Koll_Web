@@ -8236,9 +8236,9 @@ function renderTaskQueueView() {
       <div class="row-actions" data-mobile-label="操作">
         <button type="button" data-detail="${esc(task.id)}">详情</button>
         ${task.has_download ? `<a href="${esc(adminWorkspaceUrl(`/api/tasks/${encodeURIComponent(task.id)}/download`))}">下载</a>` : ""}
-        <button type="button" class="danger task-queue-delete-button" data-delete-task="${esc(task.id)}" title="删除" aria-label="删除">${renderTrashIcon()}</button>
         ${task.status === "failed" ? `<button type="button" data-retry="${esc(task.id)}">重试</button>` : ""}
         ${activeSocialAutomationTask(task) ? `<button type="button" class="danger" data-cancel-task="${esc(task.id)}">停止</button>` : ""}
+        <button type="button" class="danger task-queue-delete-button" data-delete-task="${esc(task.id)}" title="删除" aria-label="删除">${renderTrashIcon()}</button>
       </div>
     </article>
   `).join("") : `<div class="empty-state">当前还没有通用任务。</div>`;
