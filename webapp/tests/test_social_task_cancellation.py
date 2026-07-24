@@ -899,6 +899,46 @@ class SocialTaskCancellationTests(unittest.TestCase):
             self.assertFalse(self._has_secret(task_id))
             stop.assert_not_called()
 
+    def test_cancel_preparing_task_transitions_to_cancelled(self):
+        self._insert_task("preparing-task", "preparing")
+
+        with (
+            mock.patch.object(social_automation_api, "_force_stop_running_task") as stop,
+            mock.patch.object(social_automation_api, "wake_social_automation_worker"),
+        ):
+            task = social_automation_api.cancel_social_task("preparing-task", "stop")
+
+        self.assertEqual(task["status"], "cancelled")
+        self.assertEqual(self._status("preparing-task"), "cancelled")
+        stop.assert_called_once_with("preparing-task")
+
+    def test_retry_publish_task_detaches_from_failed_batch(self):
+        self._insert_task(
+            "failed-batch-item",
+            "failed",
+            payload={
+                "caption": "retry this",
+                "publish_batch_id": "failed-batch",
+                "publish_sequence_index": 2,
+                "publish_sequence_total": 2,
+            },
+        )
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO persona_owners(archive_id, user_id, created_at, updated_at) VALUES ('persona-1', ?, 1, 1)",
+                (self.user_id,),
+            )
+
+        retried = social_automation_api.retry_social_task(
+            "failed-batch-item",
+            billing_admin_waived=True,
+        )
+
+        self.assertEqual(retried["payload"]["caption"], "retry this")
+        self.assertNotIn("publish_batch_id", retried["payload"])
+        self.assertNotIn("publish_sequence_index", retried["payload"])
+        self.assertNotIn("publish_sequence_total", retried["payload"])
+
     def test_batch_cancel_keeps_completed_items_and_cancels_remaining_items(self):
         batch_tasks = []
         for index in range(1, 4):
@@ -941,6 +981,19 @@ class SocialTaskCancellationTests(unittest.TestCase):
                     "publish_sequence_total": 3,
                 },
             )
+        self._insert_task(
+            "queued-batch-other-persona",
+            "queued",
+            payload={
+                "publish_batch_id": batch_id,
+                "publish_sequence_index": 4,
+                "publish_sequence_total": 4,
+            },
+        )
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE social_automation_tasks SET persona_id = 'persona-2' WHERE id = 'queued-batch-other-persona'"
+            )
 
         with (
             mock.patch.dict(social_automation_api._RUNNING_TASK_CONTROLS, {}, clear=True),
@@ -954,6 +1007,7 @@ class SocialTaskCancellationTests(unittest.TestCase):
             [self._status(f"queued-batch-{index}") for index in range(1, 4)],
             ["cancelled", "cancelled", "cancelled"],
         )
+        self.assertEqual(self._status("queued-batch-other-persona"), "queued")
         stop.assert_called_once_with("queued-batch-1")
 
     def test_clear_publish_batch_deletes_every_item_and_log(self):
@@ -1106,7 +1160,7 @@ class SocialTaskCancellationTests(unittest.TestCase):
     def test_cancel_all_only_changes_active_states_and_scrubs_their_secrets(self):
         active_ids = []
         terminal_ids = []
-        for status in ("queued", "running", "need_manual"):
+        for status in ("preparing", "queued", "running", "need_manual"):
             task_id = f"active-{status}"
             active_ids.append(task_id)
             self._insert_task(task_id, status)

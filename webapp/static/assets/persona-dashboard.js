@@ -941,10 +941,14 @@ function pdAutomationTaskPresentationRows(tasks) {
 }
 
 function pdAutomationTasksForPersona(persona) {
+  const personaId = String(persona?.id || "");
   const accountIds = new Set(pdAutomationAccountsForPersona(persona).map((account) => String(account.id || "")));
   const rows = pdAutomationTaskPresentationRows(
     (personaDashboardAutomation.tasks || [])
-      .filter((task) => accountIds.has(String(task.account_id || ""))),
+      .filter((task) => {
+        const taskPersonaId = String(task.persona_id || "");
+        return taskPersonaId ? taskPersonaId === personaId : accountIds.has(String(task.account_id || ""));
+      }),
   );
   const manualRows = rows.filter((task) => pdAutomationTaskNeedsManualVerification(task));
   const manualIds = new Set(manualRows.map((task) => String(task.id || "")));

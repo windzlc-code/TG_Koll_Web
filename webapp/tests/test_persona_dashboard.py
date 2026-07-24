@@ -3173,6 +3173,20 @@ class PersonaDashboardApiTests(unittest.TestCase):
             },
             created_at=1_720_000_250,
         )
+        self._insert_social_task(
+            task_id="publish-malformed-sequence",
+            account_id="acct-publish-batch",
+            persona_id="persona-1",
+            platform="threads",
+            task_type="publish_post",
+            status="failed",
+            payload={
+                "publish_batch_id": "publish-malformed-batch",
+                "publish_sequence_index": "bad",
+                "publish_sequence_total": "bad",
+            },
+            created_at=1_720_000_275,
+        )
         conn = sqlite3.connect(str(self.data_dir / "app.db"))
         conn.executemany(
             """
@@ -3192,10 +3206,22 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
         resp = self.client.get("/api/persona_dashboard/automation/tasks/publish-batch-1/logs")
         second_resp = self.client.get("/api/persona_dashboard/automation/tasks/publish-batch-2/logs")
+        malformed_resp = self.client.get(
+            "/api/persona_dashboard/automation/tasks/publish-malformed-sequence/logs"
+        )
 
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertEqual(second_resp.status_code, 200)
+        self.assertEqual(malformed_resp.status_code, 200)
+        self.assertEqual(
+            malformed_resp.json()["batch_tasks"][0]["publish_sequence_index"],
+            1,
+        )
+        self.assertEqual(
+            malformed_resp.json()["batch_tasks"][0]["publish_sequence_total"],
+            1,
+        )
         second_data = second_resp.json()
         self.assertEqual([item["id"] for item in data["batch_tasks"]], ["publish-batch-1", "publish-batch-2"])
         self.assertEqual([item["status"] for item in data["batch_tasks"]], ["success", "running"])
@@ -3210,6 +3236,33 @@ class PersonaDashboardApiTests(unittest.TestCase):
         )
         self.assertEqual(second_data["task"], data["task"])
         self.assertEqual(second_data["logs"], data["logs"])
+
+    def test_publish_batch_aggregate_uses_status_representative_result(self):
+        aggregate = social_automation_api._aggregate_publish_batch_task([
+            {
+                "id": "publish-1",
+                "status": "success",
+                "created_at": 10,
+                "updated_at": 20,
+                "finished_at": 20,
+                "result": {"published_url": "https://example.com/first"},
+                "error": "",
+            },
+            {
+                "id": "publish-2",
+                "status": "failed",
+                "created_at": 30,
+                "updated_at": 40,
+                "finished_at": 40,
+                "result": {},
+                "error": "second failed",
+            },
+        ])
+
+        self.assertEqual(aggregate["id"], "publish-1")
+        self.assertEqual(aggregate["status"], "failed")
+        self.assertEqual(aggregate["result"], {})
+        self.assertEqual(aggregate["error"], "second failed")
 
 if __name__ == "__main__":
     unittest.main()

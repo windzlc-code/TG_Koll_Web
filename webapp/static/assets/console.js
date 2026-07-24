@@ -1852,21 +1852,30 @@ function updateToastInPlace(toast, request) {
   toast.classList.add("is-state-settled");
 }
 
+function taskQueueRowMatchesTarget(task, taskId) {
+  const cleanTaskId = String(taskId || "");
+  return String(task?.id || "") === cleanTaskId
+    || (Array.isArray(task?.batch_task_ids) && task.batch_task_ids.some((id) => String(id || "") === cleanTaskId));
+}
+
 function taskQueuePageForTarget(taskPanel, taskId) {
   const kind = taskPanel === "regular" ? "regular" : "persona";
   const rows = taskQueueRowsForKind(kind);
-  const index = rows.findIndex((task) => String(task?.id || "") === String(taskId || ""));
+  const index = rows.findIndex((task) => taskQueueRowMatchesTarget(task, taskId));
   const pageSize = kind === "regular"
     ? Math.min(Math.max(Number(state.taskQueueRegularPageSize || 20), 1), 100)
     : Math.min(Math.max(Number(state.taskQueuePersonaPageSize || 12), 1), 100);
   return index < 0 ? 1 : Math.floor(index / pageSize) + 1;
 }
 
-function focusTaskQueueTarget(taskId) {
+function focusTaskQueueTarget(taskId, taskPanel = state.taskQueuePanel) {
   const cleanTaskId = String(taskId || "").trim();
   if (!cleanTaskId) return;
+  const kind = taskPanel === "regular" ? "regular" : "persona";
+  const presentationTask = taskQueueRowsForKind(kind).find((task) => taskQueueRowMatchesTarget(task, cleanTaskId));
+  const presentationTaskId = String(presentationTask?.id || cleanTaskId);
   window.requestAnimationFrame(() => {
-    const selector = `[data-task-queue-row-id="${CSS.escape(cleanTaskId)}"]`;
+    const selector = `[data-task-queue-row-id="${CSS.escape(presentationTaskId)}"]`;
     const row = document.querySelector(selector);
     if (!row) return;
     row.classList.add("is-toast-target");
@@ -1942,7 +1951,7 @@ async function openToastTarget(rawTarget) {
       else state.taskQueuePersonaPage = page;
       const host = $("taskTable");
       if (host) host.innerHTML = renderTaskQueueView();
-      focusTaskQueueTarget(target.taskId);
+      focusTaskQueueTarget(target.taskId, state.taskQueuePanel);
     }
     if (target.taskId && (target.openDetail || target.taskPanel === "regular")) {
       await showTaskDetail(String(target.taskId || "")).catch((error) => {

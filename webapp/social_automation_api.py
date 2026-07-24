@@ -1353,8 +1353,8 @@ def register_social_automation_routes(app: FastAPI) -> None:
                 billing_reservation_status=billing_statuses.get(str(row["billing_reservation_id"] or ""), ""),
             )
             item_payload = public_task.get("payload") if isinstance(public_task.get("payload"), dict) else {}
-            public_task["publish_sequence_index"] = max(1, int(item_payload.get("publish_sequence_index") or 1))
-            public_task["publish_sequence_total"] = max(1, int(item_payload.get("publish_sequence_total") or 1))
+            public_task["publish_sequence_index"] = _publish_sequence_value(item_payload.get("publish_sequence_index"))
+            public_task["publish_sequence_total"] = _publish_sequence_value(item_payload.get("publish_sequence_total"))
             task_by_id[item_id] = public_task
         batch_tasks = [task_by_id[item_id] for item_id in task_ids if item_id in task_by_id]
         return {
@@ -4560,24 +4560,11 @@ def cancel_social_task(task_id: str, reason: str = "") -> dict[str, Any]:
         ).fetchone()
         if not original:
             raise HTTPException(status_code=404, detail="任务不存在")
-        original_payload = _loads(original["payload_json"], {})
-        batch_id = str(original_payload.get("publish_batch_id") or "").strip()
-        if str(original["task_type"] or "") == "publish_post" and batch_id:
-            account_rows = conn.execute(
-                """
-                SELECT *
-                FROM social_automation_tasks
-                WHERE account_id = ? AND task_type = 'publish_post'
-                """,
-                (str(original["account_id"] or ""),),
-            ).fetchall()
-            persisted_batch_task_ids = [
-                str(row["id"] or "")
-                for row in account_rows
-                if str(_loads(row["payload_json"], {}).get("publish_batch_id") or "").strip() == batch_id
-            ]
-        else:
-            persisted_batch_task_ids = []
+        persisted_batch_task_ids = (
+            _publish_batch_log_task_ids(conn, task_id)
+            if str(original["task_type"] or "") == "publish_post"
+            else []
+        )
     with _RUNNING_TASK_CONTROLS_LOCK:
         control = _RUNNING_TASK_CONTROLS.get(str(task_id))
         batch_task_ids = [
@@ -4638,7 +4625,7 @@ def cancel_social_task(task_id: str, reason: str = "") -> dict[str, Any]:
             """
             UPDATE social_automation_tasks
             SET status = 'cancelled', finished_at = ?, error = ?, updated_at = ?
-            WHERE id = ? AND status IN ('queued', 'running', 'need_manual')
+            WHERE id = ? AND status IN ('preparing', 'queued', 'running', 'need_manual')
             """,
             (now, clean_reason, now, task_id),
         ).rowcount
@@ -4754,13 +4741,13 @@ def cancel_all_social_tasks(
         account_placeholders = ", ".join("?" for _ in clean_account_ids)
         scope_clauses.append(f"account_id IN ({account_placeholders})")
         scope_params.extend(clean_account_ids)
-    scope_clause = f" AND ({' OR '.join(scope_clauses)})" if scope_clauses else ""
+    scope_clause = f" AND ({' AND '.join(scope_clauses)})" if scope_clauses else ""
     with db() as conn:
         cancelled_rows = conn.execute(
             f"""
             UPDATE social_automation_tasks
             SET status = 'cancelled', finished_at = ?, error = ?, updated_at = ?
-            WHERE status IN ('queued', 'running', 'need_manual'){scope_clause}
+            WHERE status IN ('preparing', 'queued', 'running', 'need_manual'){scope_clause}
             RETURNING id
             """,
             (now, clean_reason, now, *scope_params),
@@ -4817,13 +4804,19 @@ def retry_social_task(task_id: str, *, billing_admin_waived: bool = False) -> di
     previous_result = _loads(row["result_json"], {})
     if isinstance(previous_result, dict) and previous_result.get("retryable") is False:
         raise HTTPException(status_code=409, detail="该任务的发布结果无法安全确认，为避免重复发布，禁止自动重试。")
+    retry_payload = _loads(row["payload_json"], {})
+    if str(row["task_type"] or "") == "publish_post":
+        retry_payload = dict(retry_payload)
+        retry_payload.pop("publish_batch_id", None)
+        retry_payload.pop("publish_sequence_index", None)
+        retry_payload.pop("publish_sequence_total", None)
     payload = SocialTaskPayload(
             persona_id=str(row["persona_id"] or ""),
             account_id=str(row["account_id"] or ""),
             platform=str(row["platform"] or "instagram"),
             task_type=str(row["task_type"] or ""),
             priority=int(row["priority"] or 50),
-            payload=_loads(row["payload_json"], {}),
+            payload=retry_payload,
             max_retries=int(row["max_retries"] or 0),
     )
     if billing_admin_waived:
@@ -4998,7 +4991,7 @@ def _cancel_stale_incomplete_publish_batches(conn: sqlite3.Connection, now: int)
     for stale in stale_rows:
         stale_payload = _loads(stale["payload_json"], {})
         batch_id = str(stale_payload.get("publish_batch_id") or "").strip()
-        total = max(1, int(stale_payload.get("publish_sequence_total") or 1))
+        total = _publish_sequence_value(stale_payload.get("publish_sequence_total"))
         account_id = str(stale["account_id"] or "")
         key = (account_id, batch_id)
         if not batch_id or total <= 1 or key in checked:
@@ -5019,7 +5012,7 @@ def _cancel_stale_incomplete_publish_batches(conn: sqlite3.Connection, now: int)
             if str(payload.get("publish_batch_id") or "").strip() != batch_id:
                 continue
             batch_rows.append(item)
-            indices.add(max(1, int(payload.get("publish_sequence_index") or 1)))
+            indices.add(_publish_sequence_value(payload.get("publish_sequence_index")))
         if len(indices) >= total or any(
             str(item["status"] or "") in {"running", "need_manual"} for item in batch_rows
         ):
@@ -5094,7 +5087,7 @@ def _terminate_publish_batch_tail_in_transaction(
         return []
     predecessor_payload = _loads(predecessor["payload_json"], {})
     batch_id = str(predecessor_payload.get("publish_batch_id") or "").strip()
-    predecessor_index = max(1, int(predecessor_payload.get("publish_sequence_index") or 1))
+    predecessor_index = _publish_sequence_value(predecessor_payload.get("publish_sequence_index"))
     if not batch_id:
         return []
     tail_status = "cancelled" if terminal_status == "cancelled" else "failed"
@@ -5118,7 +5111,7 @@ def _terminate_publish_batch_tail_in_transaction(
         payload = _loads(row["payload_json"], {})
         if str(payload.get("publish_batch_id") or "").strip() != batch_id:
             continue
-        index = max(1, int(payload.get("publish_sequence_index") or 1))
+        index = _publish_sequence_value(payload.get("publish_sequence_index"))
         if index <= predecessor_index:
             continue
         task_id = str(row["id"] or "")
@@ -5201,7 +5194,7 @@ def _publish_batch_ready_for_claim(conn: sqlite3.Connection, row: Any, now: int)
     if _runtime_claim_is_active(payload, _PUBLISH_BATCH_RESERVATION_KEY, now):
         return False
     batch_id = str(payload.get("publish_batch_id") or "").strip()
-    total = max(1, int(payload.get("publish_sequence_total") or 1))
+    total = _publish_sequence_value(payload.get("publish_sequence_total"))
     if not batch_id or total <= 1:
         return True
     batch_rows = conn.execute(
@@ -5218,12 +5211,12 @@ def _publish_batch_ready_for_claim(conn: sqlite3.Connection, row: Any, now: int)
         item_payload = _loads(item["payload_json"], {})
         if str(item_payload.get("publish_batch_id") or "").strip() != batch_id:
             continue
-        index = max(1, int(item_payload.get("publish_sequence_index") or 1))
+        index = _publish_sequence_value(item_payload.get("publish_sequence_index"))
         statuses_by_index.setdefault(index, set()).add(str(item["status"] or ""))
         rows_by_index.setdefault(index, []).append(item)
     if not all(index in statuses_by_index for index in range(1, total + 1)):
         return False
-    current_index = max(1, int(payload.get("publish_sequence_index") or 1))
+    current_index = _publish_sequence_value(payload.get("publish_sequence_index"))
     for index in range(1, current_index):
         terminal_row = next(
             (
@@ -5394,13 +5387,13 @@ def _claim_next_task() -> dict[str, Any] | None:
 def _claim_publish_batch_tail(first_task: dict[str, Any]) -> list[dict[str, Any]]:
     first_payload = first_task.get("payload") if isinstance(first_task.get("payload"), dict) else {}
     batch_id = str(first_payload.get("publish_batch_id") or "").strip()
-    total = max(1, int(first_payload.get("publish_sequence_total") or 1))
+    total = _publish_sequence_value(first_payload.get("publish_sequence_total"))
     if str(first_task.get("task_type") or "") != "publish_post" or not batch_id or total <= 1:
         return [first_task]
 
     now = _now()
     account_id = str(first_task.get("account_id") or "")
-    first_index = max(1, int(first_payload.get("publish_sequence_index") or 1))
+    first_index = _publish_sequence_value(first_payload.get("publish_sequence_index"))
     reservation_owner = (
         _runtime_claim_owner(first_payload, _TASK_WORKER_LEASE_KEY)
         or _WORKER_INSTANCE_ID
@@ -5454,7 +5447,7 @@ def _claim_publish_batch_tail(first_task: dict[str, Any]) -> list[dict[str, Any]
             payload = _loads(row["payload_json"], {})
             if str(payload.get("publish_batch_id") or "").strip() != batch_id:
                 continue
-            index = max(1, int(payload.get("publish_sequence_index") or 1))
+            index = _publish_sequence_value(payload.get("publish_sequence_index"))
             if index > first_index:
                 candidates.append((index, row, payload))
         candidates.sort(key=lambda item: (item[0], int(item[1]["created_at"] or 0), str(item[1]["id"] or "")))
@@ -5529,9 +5522,20 @@ def _claim_publish_batch_tail(first_task: dict[str, Any]) -> list[dict[str, Any]
     return claimed_tasks
 
 
+def _publish_sequence_value(value: Any) -> int:
+    try:
+        return max(1, int(value or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
 def _publish_batch_log_task_ids(conn: sqlite3.Connection, task_id: str) -> list[str]:
     row = conn.execute(
-        "SELECT id, account_id, task_type, payload_json FROM social_automation_tasks WHERE id = ?",
+        """
+        SELECT id, user_id, persona_id, account_id, platform, task_type, payload_json
+        FROM social_automation_tasks
+        WHERE id = ?
+        """,
         (task_id,),
     ).fetchone()
     if row is None or str(row["task_type"] or "") != "publish_post":
@@ -5544,10 +5548,19 @@ def _publish_batch_log_task_ids(conn: sqlite3.Connection, task_id: str) -> list[
         """
         SELECT id, created_at, payload_json
         FROM social_automation_tasks
-        WHERE account_id = ? AND task_type = 'publish_post'
+        WHERE user_id = ?
+          AND persona_id = ?
+          AND account_id = ?
+          AND platform = ?
+          AND task_type = 'publish_post'
         ORDER BY created_at ASC, id ASC
         """,
-        (str(row["account_id"] or ""),),
+        (
+            int(row["user_id"] or 0),
+            str(row["persona_id"] or ""),
+            str(row["account_id"] or ""),
+            str(row["platform"] or ""),
+        ),
     ).fetchall()
     matched: list[tuple[int, int, str]] = []
     for item in batch_rows:
@@ -5556,7 +5569,7 @@ def _publish_batch_log_task_ids(conn: sqlite3.Connection, task_id: str) -> list[
             continue
         matched.append(
             (
-                max(1, int(item_payload.get("publish_sequence_index") or 1)),
+                _publish_sequence_value(item_payload.get("publish_sequence_index")),
                 int(item["created_at"] or 0),
                 str(item["id"] or ""),
             )
@@ -5579,13 +5592,18 @@ def _aggregate_publish_batch_task(tasks: list[dict[str, Any]]) -> dict[str, Any]
         or ("success" if all(item == "success" for item in statuses) else "")
         or ("cancelled" if "cancelled" in statuses else statuses[-1])
     )
-    task = dict(tasks[0])
+    representative = (
+        next((item for item in tasks if str(item.get("status") or "") == status), None)
+        or tasks[-1]
+    )
+    task = dict(representative)
     task.update(
+        id=str(tasks[0].get("id") or ""),
         status=status,
         created_at=min(int(item.get("created_at") or 0) for item in tasks),
         updated_at=max(int(item.get("updated_at") or item.get("created_at") or 0) for item in tasks),
         finished_at=0 if active_status else max(int(item.get("finished_at") or 0) for item in tasks),
-        error=next((str(item.get("error") or "") for item in tasks if item.get("error")), ""),
+        error=str(representative.get("error") or ""),
         batch_task_count=len(tasks),
         batch_task_ids=[str(item.get("id") or "") for item in tasks],
     )

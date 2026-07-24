@@ -1166,7 +1166,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("refreshLiveBrowserSessionsSoon", opening)
         self.assertIn("state.simpleBranches.publishing = targetPublishMode", opening)
         self.assertIn("taskQueuePageForTarget(state.taskQueuePanel, target.taskId)", opening)
-        self.assertIn("focusTaskQueueTarget(target.taskId)", opening)
+        self.assertIn("focusTaskQueueTarget(target.taskId, state.taskQueuePanel)", opening)
         self.assertIn('target.accountPanel === "browsers"', metadata)
         self.assertIn("点击打开浏览器监控", metadata)
         self.assertIn("return currentToastTarget()", default_target)
@@ -1332,6 +1332,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
                 ? [{{ id: "task-1" }}, {{ id: "task-2" }}, {{ id: "task-3" }}]
                 : [];
             }}
+            {self._function_source("taskQueueRowMatchesTarget")}
             {self._function_source("taskQueuePageForTarget")}
             assert.strictEqual(taskQueuePageForTarget("persona", "task-3"), 2);
             assert.strictEqual(taskQueuePageForTarget("persona", "missing"), 1);
@@ -2466,6 +2467,50 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             self.persona_dashboard_source,
         )
 
+    def test_publish_batch_child_notification_targets_aggregate_queue_row(self):
+        helpers = "\n".join([
+            self._function_source("taskQueueRowMatchesTarget"),
+            self._function_source("taskQueuePageForTarget"),
+            self._function_source("focusTaskQueueTarget"),
+        ])
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            const aggregate = {{
+              id: "publish-1",
+              batch_task_ids: ["publish-1", "publish-2"],
+            }};
+            const state = {{
+              taskQueuePanel: "persona",
+              taskQueuePersonaPageSize: 12,
+            }};
+            let selectedSelector = "";
+            const selectedRow = {{
+              classList: {{ add() {{}}, remove() {{}} }},
+              scrollIntoView() {{}},
+              focus() {{}},
+            }};
+            const document = {{
+              querySelector(selector) {{
+                selectedSelector = selector;
+                return selectedRow;
+              }},
+            }};
+            const window = {{
+              requestAnimationFrame(callback) {{ callback(); }},
+              setTimeout(callback) {{ callback(); }},
+            }};
+            const CSS = {{ escape(value) {{ return String(value); }} }};
+            function taskQueueRowsForKind() {{ return [aggregate]; }}
+            {helpers}
+
+            assert.strictEqual(taskQueuePageForTarget("persona", "publish-2"), 1);
+            focusTaskQueueTarget("publish-2", "persona");
+            assert.strictEqual(selectedSelector, '[data-task-queue-row-id="publish-1"]');
+            """
+        )
+        self._run_node(harness)
+
     def test_persona_dashboard_publish_batch_is_one_log_row(self):
         helpers = "\n".join([
             self._persona_dashboard_function_source("pdAutomationAccountsForPersona"),
@@ -2480,7 +2525,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             const assert = require("assert");
             const personaDashboardAutomation = {{
               accounts: [
-                {{ id: "account-1", persona_id: "persona-1" }},
+                {{ id: "account-new", persona_id: "persona-1" }},
               ],
               tasks: [
                 {{
@@ -2504,10 +2549,27 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
                 {{
                   id: "login-1",
                   persona_id: "persona-1",
-                  account_id: "account-1",
+                  account_id: "account-moved",
                   task_type: "check_login",
                   status: "success",
                   created_at: 5,
+                  payload: {{}},
+                }},
+                {{
+                  id: "wrong-persona",
+                  persona_id: "persona-2",
+                  account_id: "account-new",
+                  task_type: "check_login",
+                  status: "success",
+                  created_at: 4,
+                  payload: {{}},
+                }},
+                {{
+                  id: "legacy-task",
+                  account_id: "account-new",
+                  task_type: "check_login",
+                  status: "success",
+                  created_at: 3,
                   payload: {{}},
                 }},
               ],
@@ -2515,12 +2577,15 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             {helpers}
 
             const rows = pdAutomationTasksForPersona({{ id: "persona-1" }});
-            assert.strictEqual(rows.length, 2);
+            assert.strictEqual(rows.length, 3);
             const batch = rows.find((item) => item.batch_task_count === 2);
             assert.ok(batch);
             assert.strictEqual(batch.id, "publish-1");
             assert.strictEqual(batch.status, "running");
             assert.deepStrictEqual(batch.batch_task_ids, ["publish-1", "publish-2"]);
+            assert.ok(rows.some((item) => item.id === "login-1"));
+            assert.ok(rows.some((item) => item.id === "legacy-task"));
+            assert.ok(!rows.some((item) => item.id === "wrong-persona"));
             """
         )
         self._run_node(harness)
@@ -2530,6 +2595,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             self._persona_dashboard_function_source("pdAutomationAccountsForPersona"),
             self._persona_dashboard_function_source("pdAutomationTaskPayload"),
             self._persona_dashboard_function_source("pdAutomationTaskNeedsManualVerification"),
+            self._persona_dashboard_function_source("pdAggregateAutomationTaskBatch"),
+            self._persona_dashboard_function_source("pdAutomationTaskPresentationRows"),
             self._persona_dashboard_function_source("pdAutomationTasksForPersona"),
             self._persona_dashboard_function_source("pdBuildAutomaticLoginTaskBody"),
         ])
@@ -2623,6 +2690,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             self._persona_dashboard_function_source("pdAutomationAccountsForPersona"),
             self._persona_dashboard_function_source("pdAutomationTaskPayload"),
             self._persona_dashboard_function_source("pdAutomationTaskNeedsManualVerification"),
+            self._persona_dashboard_function_source("pdAggregateAutomationTaskBatch"),
+            self._persona_dashboard_function_source("pdAutomationTaskPresentationRows"),
             self._persona_dashboard_function_source("pdAutomationTasksForPersona"),
         ])
         harness = textwrap.dedent(
