@@ -202,6 +202,21 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("grid-auto-rows: max-content;", mobile_styles)
         self.assertIn("min-height: min-content;", mobile_styles)
 
+    def test_regular_task_queue_keeps_delete_before_conditional_actions(self):
+        regular_tasks_start = self.console_script.index("const regularTasksHtml")
+        regular_tasks_template = self.console_script[
+            regular_tasks_start:self.console_script.index("const currentPanel", regular_tasks_start)
+        ]
+
+        self.assertLess(
+            regular_tasks_template.index("data-delete-task"),
+            regular_tasks_template.index("data-retry"),
+        )
+        self.assertLess(
+            regular_tasks_template.index("data-delete-task"),
+            regular_tasks_template.index("data-cancel-task"),
+        )
+
     def test_task_queue_removes_open_current_persona_action(self):
         self.assertNotIn("data-task-open-persona", self.console_script)
         self.assertNotIn("打开当前人设", self.console_script)
