@@ -2016,6 +2016,69 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertEqual(result, "")
         screenshot.assert_not_called()
 
+    def test_threads_final_screenshot_reopens_permalink_after_cookie_failure(self):
+        page = mock.Mock()
+        caption_locator = mock.Mock()
+        page.get_by_text.return_value.first = caption_locator
+        logger = _RecordingLogger()
+
+        with (
+            mock.patch.object(runner, "_goto") as goto,
+            mock.patch.object(runner, "_dismiss_threads_cookie_consent", side_effect=[False, True]) as dismiss_cookie,
+            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner, "_screenshot", return_value="final.png") as screenshot,
+        ):
+            result = runner._capture_threads_publish_evidence(
+                page, "https://www.threads.com/@user/post/ABC", "published body", Path("."), {"id": "task"}, logger
+            )
+
+        self.assertEqual(result, "final.png")
+        self.assertEqual(goto.call_count, 2)
+        self.assertEqual(dismiss_cookie.call_count, 2)
+        caption_locator.wait_for.assert_called_once_with(state="visible", timeout=15000)
+        screenshot.assert_called_once()
+        self.assertTrue(any(args[1] == "publish_evidence_retry" for args, _kwargs in logger.entries))
+
+    def test_threads_final_screenshot_retries_when_saving_fails(self):
+        page = mock.Mock()
+
+        with (
+            mock.patch.object(runner, "_goto") as goto,
+            mock.patch.object(runner, "_dismiss_threads_cookie_consent", return_value=True),
+            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner, "_screenshot", side_effect=["", "final.png"]) as screenshot,
+        ):
+            result = runner._capture_threads_publish_evidence(
+                page, "https://www.threads.com/@user/post/ABC", "published body", Path("."), {"id": "task"}, _Logger()
+            )
+
+        self.assertEqual(result, "final.png")
+        self.assertEqual(goto.call_count, 2)
+        self.assertEqual(screenshot.call_count, 2)
+
+    def test_threads_final_screenshot_stops_after_retry_limit(self):
+        page = mock.Mock()
+        logger = _RecordingLogger()
+
+        with (
+            mock.patch.object(runner, "_goto") as goto,
+            mock.patch.object(runner, "_dismiss_threads_cookie_consent", return_value=False) as dismiss_cookie,
+            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner, "_screenshot") as screenshot,
+        ):
+            result = runner._capture_threads_publish_evidence(
+                page, "https://www.threads.com/@user/post/ABC", "published body", Path("."), {"id": "task"}, logger
+            )
+
+        self.assertEqual(result, "")
+        self.assertEqual(goto.call_count, 3)
+        self.assertEqual(dismiss_cookie.call_count, 3)
+        screenshot.assert_not_called()
+        retry_entries = [args for args, _kwargs in logger.entries if args[1] == "publish_evidence_retry"]
+        final_entries = [args for args, _kwargs in logger.entries if args[1] == "publish_evidence_not_ready"]
+        self.assertEqual(len(retry_entries), 2)
+        self.assertEqual(len(final_entries), 1)
+
     def test_requested_threads_publish_takeover_stops_automation_and_waits_for_manual_completion(self):
         event = threading.Event()
         event.set()

@@ -4379,19 +4379,39 @@ def _dismiss_threads_cookie_consent(page, logger: AutomationLogger) -> bool:
 
 
 def _capture_threads_publish_evidence(page, permalink: str, caption: str, screenshot_dir: Path, task: dict[str, Any], logger: AutomationLogger) -> str:
-    try:
-        _goto(page, permalink, logger, "threads_publish_result", timeout_ms=20000, networkidle_ms=3500)
-        if not _dismiss_threads_cookie_consent(page, logger):
-            raise RuntimeError("Threads cookie consent dialog is still covering the published post.")
-        if caption:
-            page.get_by_text(caption, exact=False).first.wait_for(state="visible", timeout=15000)
-        else:
-            page.locator('a[href*="/post/"]').first.wait_for(state="visible", timeout=15000)
-        _sleep_between(1.0, 1.6)
-    except Exception as exc:
-        logger.log("warn", "publish_evidence_not_ready", "发布已确认，但最终帖子页面尚未稳定，未保存异常加载页截图。", {"url": permalink, "error": str(exc)[:500]})
-        return ""
-    return _screenshot(page, screenshot_dir, task, "publish_done", logger)
+    max_attempts = 3
+    last_error = ""
+    for attempt in range(1, max_attempts + 1):
+        try:
+            _goto(page, permalink, logger, "threads_publish_result", timeout_ms=20000, networkidle_ms=3500)
+            if not _dismiss_threads_cookie_consent(page, logger):
+                raise RuntimeError("Threads cookie consent dialog is still covering the published post.")
+            if caption:
+                page.get_by_text(caption, exact=False).first.wait_for(state="visible", timeout=15000)
+            else:
+                page.locator('a[href*="/post/"]').first.wait_for(state="visible", timeout=15000)
+            _sleep_between(1.0, 1.6)
+            screenshot = _screenshot(page, screenshot_dir, task, "publish_done", logger)
+            if not screenshot:
+                raise RuntimeError("The validated Threads publish evidence screenshot could not be saved.")
+            return screenshot
+        except Exception as exc:
+            last_error = str(exc)
+            if attempt < max_attempts:
+                logger.log(
+                    "warn",
+                    "publish_evidence_retry",
+                    "发布凭证页面尚未稳定，正在重新打开帖子页面后重试。",
+                    {"url": permalink, "attempt": attempt, "max_attempts": max_attempts, "error": last_error[:500]},
+                )
+                _sleep_between(0.8, 1.2)
+    logger.log(
+        "warn",
+        "publish_evidence_not_ready",
+        "发布已确认，但最终帖子页面连续重试后仍未稳定，未保存异常加载页截图。",
+        {"url": permalink, "attempts": max_attempts, "error": last_error[:500]},
+    )
+    return ""
 
 
 def _capture_threads_profile_baseline(page, profile_url: str, logger: AutomationLogger) -> set[str] | None:
