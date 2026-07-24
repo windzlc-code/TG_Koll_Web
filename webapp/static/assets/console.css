@@ -17952,8 +17952,18 @@ body.console-page {
 }
 
 .console-page .live-browser-action-menu-panel .live-browser-mode-toggle {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 100%;
   background: #161d1e;
   border-color: #394344;
+}
+
+.console-page .live-browser-action-menu-panel .live-browser-mode-toggle button {
+  width: 100%;
+  min-width: 0;
+  padding-inline: 6px;
+  white-space: nowrap;
 }
 
 .console-page .live-browser-action-menu-panel :is(button, .live-browser-mode-toggle button) {
@@ -18007,18 +18017,24 @@ body.console-page {
 }
 
 .console-page .live-browser-interaction-note {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   min-height: 0;
-  gap: 7px;
+  gap: 12px;
   align-items: center;
-  justify-content: center;
-  flex-wrap: wrap;
   padding: 0 2px 1px;
   color: #aab5b3 !important;
   font-size: 11px;
   font-weight: 600;
   line-height: 1.25;
-  text-align: center;
+}
+
+.console-page .live-browser-interaction-context {
+  display: flex;
+  min-width: 0;
+  gap: 7px;
+  align-items: center;
+  white-space: nowrap;
 }
 
 .console-page .live-browser-interaction-note [data-live-browser-mode-summary] {
@@ -18030,17 +18046,19 @@ body.console-page {
 }
 
 .console-page .live-browser-interaction-note [data-live-browser-hint] {
-  flex: 1 0 100%;
+  min-width: 0;
+  overflow: hidden;
   color: #aab5b3;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .console-page .live-browser-card.is-live-browser-modal .live-browser-interaction-note {
-  overflow: visible;
-  text-overflow: clip;
-  white-space: normal;
+  overflow: hidden;
 }
 
-.console-page .live-browser-interaction-note span + span::before {
+.console-page .live-browser-interaction-context span + span::before {
   margin-right: 7px;
   color: #65716f;
   content: "·";
@@ -18054,7 +18072,7 @@ body.console-page {
 
   .console-page .live-browser-card-head {
     display: grid;
-    grid-template-columns: minmax(72px, 1fr) minmax(92px, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
     gap: 4px;
     align-items: center;
   }
@@ -18083,6 +18101,7 @@ body.console-page {
   .console-page .live-browser-card-actions {
     grid-column: 3;
     grid-row: 1;
+    justify-self: end;
   }
 
   .console-page .live-browser-card-actions > .status {

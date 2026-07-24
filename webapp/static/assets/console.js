@@ -21746,8 +21746,8 @@ function renderLiveBrowserSession(session) {
           <span data-live-browser-meta>${esc(`平台：${identity.platform} · 人设：${identity.persona}`)}</span>
         </div>
         <div class="live-browser-task-summary" aria-label="任务信息">
-          <span>任务数 <b data-live-browser-task-count>${esc(taskSummary.count)}</b></span>
-          <span title="${esc(taskSummary.target)}">任务目标 <b data-live-browser-task-target>${esc(taskSummary.target)}</b></span>
+          <span>任务数：<b data-live-browser-task-count>${esc(taskSummary.count)}</b></span>
+          <span title="${esc(taskSummary.target)}">任务目标：<b data-live-browser-task-target>${esc(taskSummary.target)}</b></span>
         </div>
         <div class="live-browser-card-actions">
           <button type="button" class="live-browser-expand-button" data-live-browser-fullscreen="${esc(sessionId)}" title="放大窗口" aria-label="放大窗口" aria-pressed="false">${renderExpandIcon()}</button>
@@ -21783,8 +21783,10 @@ function renderLiveBrowserSession(session) {
         </div>
       </div>
       <div class="live-browser-interaction-note">
-        <span data-live-browser-mode-summary>当前模式：${esc(liveBrowserModeLabel(session))}</span>
-        <span data-live-browser-ip-summary>当前 IP：${esc(liveBrowserCurrentIp(session))}</span>
+        <div class="live-browser-interaction-context">
+          <span data-live-browser-mode-summary>当前模式：${esc(liveBrowserModeLabel(session))}</span>
+          <span data-live-browser-ip-summary>当前 IP：${esc(liveBrowserCurrentIp(session))}</span>
+        </div>
         <span data-live-browser-hint>${esc(interactionHint)}</span>
       </div>
     </article>

@@ -1234,6 +1234,43 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         set_mode = self._function_source("setLiveBrowserMode")
         self.assertIn('liveBrowserLoginMode(session) === "manual" && Boolean(session.input_allowed)', set_mode)
 
+    def test_live_browser_running_card_status_bar_and_action_menu_are_balanced(self):
+        render_session = self._function_source("renderLiveBrowserSession")
+        mode_toggle = self._css_block(
+            ".console-page .live-browser-action-menu-panel .live-browser-mode-toggle {"
+        )
+        mode_buttons = self._css_block(
+            ".console-page .live-browser-action-menu-panel .live-browser-mode-toggle button {"
+        )
+        status_bar = self._css_block(
+            ".console-page .live-browser-interaction-note {"
+        )
+        status_context = self._css_block(
+            ".console-page .live-browser-interaction-context {"
+        )
+        status_hint = self._css_block(
+            ".console-page .live-browser-interaction-note [data-live-browser-hint] {"
+        )
+        mobile_density_start = self.styles.rindex("@media (max-width: 760px)")
+        mobile_density = self._css_block("@media (max-width: 760px)", mobile_density_start)
+
+        self.assertIn("任务数：<b data-live-browser-task-count>", render_session)
+        self.assertIn("任务目标：<b data-live-browser-task-target>", render_session)
+        self.assertIn('class="live-browser-interaction-context"', render_session)
+        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", mode_toggle)
+        self.assertIn("width: 100%;", mode_toggle)
+        self.assertIn("width: 100%;", mode_buttons)
+        self.assertIn("min-width: 0;", mode_buttons)
+        self.assertIn("grid-template-columns: auto minmax(0, 1fr);", status_bar)
+        self.assertIn("white-space: nowrap;", status_context)
+        self.assertIn("text-align: right;", status_hint)
+        self.assertIn("text-overflow: ellipsis;", status_hint)
+        self.assertIn(
+            "grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);",
+            mobile_density,
+        )
+        self.assertIn("justify-self: end;", mobile_density)
+
     def test_account_browser_actions_bind_to_the_owning_shell(self):
         bind_events = self._function_source("bindEvents")
 
