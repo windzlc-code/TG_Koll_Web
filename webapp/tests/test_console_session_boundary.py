@@ -2032,6 +2032,10 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_task_screenshot_gallery_deduplicates_result_and_log_in_admin_workspace(self):
+        collect_task_screenshots = self._section(
+            "function collectTaskScreenshots",
+            "\nfunction renderTaskScreenshotGallery",
+        )
         harness = textwrap.dedent(f"""
             const assert = require("node:assert/strict");
             const ADMIN_WORKSPACE_USER_ID = "42";
@@ -2043,7 +2047,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             {self._function_source("automationScreenshotThumbnailUrl")}
             {self._function_source("taskScreenshotFromValue")}
             function logStageLabel(stage) {{ return stage || "日志截图"; }}
-            {self._section("function collectTaskScreenshots", "\nfunction renderTaskScreenshotGallery")}
+            {collect_task_screenshots}
 
             const filename = "task-1_publish_done_123.png";
             const rows = collectTaskScreenshots({{
