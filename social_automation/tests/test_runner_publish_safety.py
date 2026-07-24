@@ -2051,14 +2051,55 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertEqual(page.screenshot.call_count, 2)
         self.assertFalse(page.screenshot.call_args.kwargs["full_page"])
 
-    def test_threads_final_screenshot_waits_for_published_caption(self):
+    def test_threads_publish_evidence_accepts_confirmed_permalink_with_split_body_text(self):
         page = mock.Mock()
-        caption_locator = mock.Mock()
-        page.get_by_text.return_value.first = caption_locator
+        page.url = "https://www.threads.net/@user/post/ABC?xmt=AQG"
+        page.locator.return_value.inner_text.return_value = (
+            "Published headline\n"
+            "with split whitespace and the rest of the post rendered separately."
+        )
+
+        self.assertTrue(
+            runner._threads_publish_evidence_page_ready(
+                page,
+                "https://www.threads.com/@user/post/ABC",
+            )
+        )
+        page.locator.assert_called_once_with("body")
+
+    def test_threads_publish_evidence_rejects_wrong_permalink(self):
+        page = mock.Mock()
+        page.url = "https://www.threads.net/@user/post/OTHER"
+        page.locator.return_value.inner_text.return_value = "Published headline"
+
+        self.assertFalse(
+            runner._threads_publish_evidence_page_ready(
+                page,
+                "https://www.threads.net/@user/post/ABC",
+            )
+        )
+        page.locator.assert_not_called()
+
+    def test_threads_publish_evidence_rejects_login_redirect_shell(self):
+        page = mock.Mock()
+        page.url = "https://www.threads.net/@user/post/ABC"
+        page.locator.return_value.inner_text.return_value = "Log in or sign up for Threads"
+
+        self.assertFalse(
+            runner._threads_publish_evidence_page_ready(
+                page,
+                "https://www.threads.net/@user/post/ABC",
+            )
+        )
+
+    def test_threads_final_screenshot_validates_confirmed_permalink_content(self):
+        page = mock.Mock()
+        page.url = "https://www.threads.net/@user/post/ABC"
 
         with (
             mock.patch.object(runner, "_goto") as goto,
             mock.patch.object(runner, "_dismiss_threads_cookie_consent", return_value=True) as dismiss_cookie,
+            mock.patch.object(runner, "_threads_publish_evidence_page_ready", return_value=True) as evidence_ready,
             mock.patch.object(runner, "_sleep_between"),
             mock.patch.object(runner, "_screenshot", return_value="final.png") as screenshot,
         ):
@@ -2069,7 +2110,10 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertEqual(result, "final.png")
         goto.assert_called_once()
         dismiss_cookie.assert_called_once()
-        caption_locator.wait_for.assert_called_once_with(state="visible", timeout=15000)
+        evidence_ready.assert_called_once_with(
+            page,
+            "https://www.threads.com/@user/post/ABC",
+        )
         screenshot.assert_called_once()
 
     def test_threads_cookie_consent_is_dismissed_before_evidence(self):
@@ -2110,11 +2154,11 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
     def test_threads_final_screenshot_skips_loading_page(self):
         page = mock.Mock()
-        page.get_by_text.return_value.first.wait_for.side_effect = TimeoutError("still loading")
 
         with (
             mock.patch.object(runner, "_goto"),
             mock.patch.object(runner, "_dismiss_threads_cookie_consent", return_value=True),
+            mock.patch.object(runner, "_threads_publish_evidence_page_ready", return_value=False),
             mock.patch.object(runner, "_screenshot") as screenshot,
         ):
             result = runner._capture_threads_publish_evidence(
@@ -2126,13 +2170,12 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
     def test_threads_final_screenshot_reopens_permalink_after_cookie_failure(self):
         page = mock.Mock()
-        caption_locator = mock.Mock()
-        page.get_by_text.return_value.first = caption_locator
         logger = _RecordingLogger()
 
         with (
             mock.patch.object(runner, "_goto") as goto,
             mock.patch.object(runner, "_dismiss_threads_cookie_consent", side_effect=[False, True]) as dismiss_cookie,
+            mock.patch.object(runner, "_threads_publish_evidence_page_ready", return_value=True),
             mock.patch.object(runner, "_sleep_between"),
             mock.patch.object(runner, "_screenshot", return_value="final.png") as screenshot,
         ):
@@ -2143,7 +2186,6 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertEqual(result, "final.png")
         self.assertEqual(goto.call_count, 2)
         self.assertEqual(dismiss_cookie.call_count, 2)
-        caption_locator.wait_for.assert_called_once_with(state="visible", timeout=15000)
         screenshot.assert_called_once()
         self.assertTrue(any(args[1] == "publish_evidence_retry" for args, _kwargs in logger.entries))
 
@@ -2153,6 +2195,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         with (
             mock.patch.object(runner, "_goto") as goto,
             mock.patch.object(runner, "_dismiss_threads_cookie_consent", return_value=True),
+            mock.patch.object(runner, "_threads_publish_evidence_page_ready", return_value=True),
             mock.patch.object(runner, "_sleep_between"),
             mock.patch.object(runner, "_screenshot", side_effect=["", "final.png"]) as screenshot,
         ):

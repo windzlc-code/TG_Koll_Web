@@ -4473,6 +4473,27 @@ def _dismiss_threads_cookie_consent(page, logger: AutomationLogger) -> bool:
     return marker not in _page_body_text_lower(page, timeout_ms=1500)
 
 
+def _threads_publish_evidence_page_ready(page, permalink: str) -> bool:
+    expected_url = _normalize_threads_post_permalink(permalink)
+    current_url = _normalize_threads_post_permalink(getattr(page, "url", ""))
+    if not expected_url or current_url != expected_url:
+        return False
+    try:
+        body_text = " ".join(str(page.locator("body").inner_text(timeout=3500) or "").lower().split())
+    except Exception:
+        return False
+    if not body_text:
+        return False
+    blocked_markers = (
+        "allow the use of cookies from threads",
+        "log in or sign up for threads",
+        "continue with instagram",
+        "page isn't available",
+        "this content isn't available",
+    )
+    return not any(marker in body_text for marker in blocked_markers)
+
+
 def _capture_threads_publish_evidence(page, permalink: str, caption: str, screenshot_dir: Path, task: dict[str, Any], logger: AutomationLogger) -> str:
     max_attempts = 3
     last_error = ""
@@ -4481,10 +4502,8 @@ def _capture_threads_publish_evidence(page, permalink: str, caption: str, screen
             _goto(page, permalink, logger, "threads_publish_result", timeout_ms=20000, networkidle_ms=3500)
             if not _dismiss_threads_cookie_consent(page, logger):
                 raise RuntimeError("Threads cookie consent dialog is still covering the published post.")
-            if caption:
-                page.get_by_text(caption, exact=False).first.wait_for(state="visible", timeout=15000)
-            else:
-                page.locator('a[href*="/post/"]').first.wait_for(state="visible", timeout=15000)
+            if not _threads_publish_evidence_page_ready(page, permalink):
+                raise RuntimeError("Threads did not remain on the confirmed published-post page.")
             _sleep_between(1.0, 1.6)
             screenshot = _screenshot(page, screenshot_dir, task, "publish_done", logger)
             if not screenshot:
