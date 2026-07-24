@@ -15903,19 +15903,9 @@ body.console-page {
   animation: vecto-live-browser-modal-enter 220ms ease-out both;
 }
 
-.live-browser-card.is-live-browser-modal.is-live-browser-modal-closing {
-  pointer-events: none;
-  animation: vecto-live-browser-modal-exit 180ms ease-in both;
-}
-
 @keyframes vecto-live-browser-modal-enter {
   from { opacity: 0; }
   to { opacity: 1; }
-}
-
-@keyframes vecto-live-browser-modal-exit {
-  from { opacity: 1; }
-  to { opacity: 0; }
 }
 
 .live-browser-card.is-live-browser-modal .live-browser-frame,

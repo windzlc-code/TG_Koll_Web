@@ -753,6 +753,20 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
         self._run_node(harness)
 
+    def test_removed_live_browser_session_removes_expanded_preview_without_exit_layer(self):
+        browser_render = self._function_source("renderLiveBrowserSessions")
+        close_session = self._function_source("closeLiveBrowserSession")
+        close_modal = self._function_source("closeLiveBrowserLargeModal")
+
+        self.assertIn(
+            "closeLiveBrowserLargeModal({ restoreFocus: false });",
+            browser_render,
+        )
+        self.assertIn("String(state.liveBrowserExpandedSessionId || \"\") === cleanSessionId", close_session)
+        self.assertIn("closeLiveBrowserLargeModal({ restoreFocus: false });", close_session)
+        self.assertNotIn("is-live-browser-modal-closing", close_modal)
+        self.assertNotIn("setTimeout", close_modal)
+
     def test_live_browser_grid_uses_container_width_and_mobile_fallback(self):
         desktop_selector = (
             '.account-browser-page[data-account-browser-page="browsers"] '
@@ -880,7 +894,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn(".is-live-browser-controls-visible .live-browser-interaction-note", self.styles)
         self.assertIn(".is-live-browser-controls-visible .live-browser-card-actions > .status", self.styles)
         self.assertIn("vecto-live-browser-modal-enter", self.styles)
-        self.assertIn("vecto-live-browser-modal-exit", self.styles)
+        self.assertNotIn("vecto-live-browser-modal-exit", self.styles)
         self.assertIn(".is-live-browser-controls-visible .live-browser-task-summary span:last-child", landscape_media)
         self.assertIn(".live-browser-card-identity", self.styles)
         self.assertIn(".live-browser-interaction-note", self.styles)
@@ -930,14 +944,14 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("live-browser-mobile-summary > span:nth-child(3)", portrait_styles)
         self.assertIn("background: rgb(13 18 19 / 42%);", portrait_styles)
 
-    def test_expanded_live_browser_toggles_its_console_frame_from_blank_areas(self):
+    def test_expanded_live_browser_does_not_bind_native_frame_clicks_to_console_controls(self):
         toggle = self._function_source("toggleLiveBrowserModalControls")
         opening = self._function_source("requestLiveBrowserFullscreen")
 
         self.assertIn('[data-live-browser-modal-overlay-toggle], [data-live-browser-controls-toggle]', self.source)
         self.assertIn('class="live-browser-lock" data-live-browser-controls-toggle', self.source)
         self.assertIn("is-live-browser-controls-visible", toggle)
-        self.assertIn("vecto-live-browser-toggle-console-frame", self.source)
+        self.assertNotIn("vecto-live-browser-toggle-console-frame", self.source)
         self.assertIn("card.classList.remove(\"is-live-browser-controls-visible\");", opening)
 
     def test_public_toast_uses_compact_bottom_layout(self):

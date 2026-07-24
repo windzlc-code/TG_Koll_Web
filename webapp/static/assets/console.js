@@ -21990,7 +21990,6 @@ function renderLiveBrowserSession(session) {
 
 let liveBrowserModalTrigger = null;
 let liveBrowserModalInertNodes = [];
-let liveBrowserModalCloseTimer = null;
 
 function liveBrowserDialogTitleId(sessionId = "") {
   const safeId = String(sessionId || "active").replace(/[^a-zA-Z0-9_-]/g, "-");
@@ -22039,15 +22038,13 @@ function trapLiveBrowserModalFocus(event) {
   }
 }
 
-function closeLiveBrowserLargeModal({ restoreFocus = true, immediate = false } = {}) {
+function closeLiveBrowserLargeModal({ restoreFocus = true } = {}) {
   const expandedId = String(state.liveBrowserExpandedSessionId || "");
   const card = expandedId
     ? document.querySelector(`[data-live-browser-card="${CSS.escape(expandedId)}"]`)
     : document.querySelector(".live-browser-card.is-live-browser-modal");
   const finish = () => {
-    window.clearTimeout(liveBrowserModalCloseTimer);
-    liveBrowserModalCloseTimer = null;
-    card?.classList.remove("is-live-browser-modal", "is-live-browser-modal-closing", "is-live-browser-controls-visible");
+    card?.classList.remove("is-live-browser-modal", "is-live-browser-controls-visible");
     card?.removeAttribute("data-live-browser-controls-visible");
     card?.removeAttribute("role");
     card?.removeAttribute("aria-modal");
@@ -22070,14 +22067,7 @@ function closeLiveBrowserLargeModal({ restoreFocus = true, immediate = false } =
     if (restoreFocus && focusTarget?.isConnected) focusTarget.focus();
     liveBrowserModalTrigger = null;
   };
-  if (!card || immediate) {
-    finish();
-    return;
-  }
-  if (card.classList.contains("is-live-browser-modal-closing")) return;
-  card.classList.remove("is-live-browser-controls-visible");
-  card.classList.add("is-live-browser-modal-closing");
-  liveBrowserModalCloseTimer = window.setTimeout(finish, 180);
+  finish();
 }
 
 function setLiveBrowserModalControlsVisible(card, visible) {
@@ -22093,14 +22083,6 @@ function toggleLiveBrowserModalControls(card) {
   );
 }
 
-window.addEventListener("message", (event) => {
-  if (event.origin !== window.location.origin || event.data?.type !== "vecto-live-browser-toggle-console-frame") return;
-  const frame = event.source;
-  const card = Array.from(document.querySelectorAll("[data-live-browser-card].is-live-browser-modal"))
-    .find((node) => node.querySelector("iframe")?.contentWindow === frame);
-  toggleLiveBrowserModalControls(card);
-});
-
 function requestLiveBrowserFullscreen(sessionId = "", trigger = null) {
   const cards = Array.from(document.querySelectorAll("[data-live-browser-card]"));
   const card = cards.find((node) => String(node.dataset.liveBrowserCard || "") === String(sessionId || ""));
@@ -22110,7 +22092,7 @@ function requestLiveBrowserFullscreen(sessionId = "", trigger = null) {
     closeLiveBrowserLargeModal();
     return;
   }
-  closeLiveBrowserLargeModal({ restoreFocus: false, immediate: true });
+  closeLiveBrowserLargeModal({ restoreFocus: false });
   const shell = $("accountBrowserShell") || document.body;
   const backdrop = document.createElement("div");
   backdrop.className = "live-browser-modal-backdrop";
@@ -22137,6 +22119,9 @@ async function closeLiveBrowserSession(sessionId = "") {
   const cleanSessionId = String(sessionId || "").trim();
   if (!cleanSessionId) return;
   await api(`/api/persona_dashboard/automation/browser_sessions/${encodeURIComponent(cleanSessionId)}/close`, { method: "POST" });
+  if (String(state.liveBrowserExpandedSessionId || "") === cleanSessionId) {
+    closeLiveBrowserLargeModal({ restoreFocus: false });
+  }
   state.socialBrowserSessions = (Array.isArray(state.socialBrowserSessions) ? state.socialBrowserSessions : [])
     .filter((session) => String(session?.id || session?.session_id || "") !== cleanSessionId);
   renderLiveBrowserSessions();
