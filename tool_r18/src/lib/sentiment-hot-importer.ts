@@ -6,6 +6,9 @@ import type { PersonaArchive } from "@/core/archives/persona-archive-domain";
 import { resolveRuntimeFile } from "@/runtime/node/data-dir";
 import { withExclusiveJsonFileLock } from "@/runtime/node/json-file-lock";
 import { withSentimentHotExecutionLock } from "@/lib/sentiment-hot-execution-lock";
+import {
+  AdaptiveHotRateLimiter,
+} from "@/lib/adaptive-hot-rate-limiter";
 import { readRuntimeApiConfig } from "@/runtime/node/config";
 import { callTextUnderstandingModelWithFallback, extractText, getTextUnderstandingModelFallbacks, isTextModelFallbackError } from "@/lib/gemini-client";
 import {
@@ -68,7 +71,6 @@ const DEFAULT_REFRESH_FRESHNESS_DAYS = 7;
 const SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS = 42_000;
 const SENTIMENT_HOT_TOTAL_TIMEOUT_MS = 58_000;
 const SENTIMENT_HOT_REFRESH_STRATEGY_TIMEOUT_MS = 3_000;
-const SENTIMENT_HOT_SUPPLEMENT_MIN_REMAINING_MS = 12_000;
 const SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT = 8;
 const SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS = 72 * 60 * 60 * 1000;
 const SENTIMENT_HOT_MAX_PUBLISHED_AGE_MS = 730 * 24 * 60 * 60 * 1000;
@@ -85,6 +87,33 @@ const SENTIMENT_HOT_SEMANTIC_RELEVANCE_VERSION = 4;
 // item back-to-back while still allowing a small persona pool to reach ten.
 const SENTIMENT_HOT_REPEAT_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 const SENTIMENT_HOT_REPEAT_ROTATION_BUCKET_MS = 10 * 60 * 1000;
+const THREADS_GRAPHQL_UPSTREAM_KEY = "threads.com:graphql";
+const INSTAGRAM_AUTH_UPSTREAM_KEY = "instagram.com:authenticated";
+const SHARED_READER_UPSTREAM_KEY = "r.jina.ai:reader";
+const threadsGraphqlRateLimiter = new AdaptiveHotRateLimiter({
+  maxConcurrency: 12,
+  initialConcurrency: 12,
+  minConcurrency: 1,
+  baseBackoffMs: 750,
+  maxBackoffMs: 30_000,
+  recoverySuccessThreshold: 8,
+});
+const instagramAuthenticatedRateLimiter = new AdaptiveHotRateLimiter({
+  maxConcurrency: INSTAGRAM_AUTHENTICATED_QUERY_BATCH_SIZE,
+  initialConcurrency: INSTAGRAM_AUTHENTICATED_QUERY_BATCH_SIZE,
+  minConcurrency: 1,
+  baseBackoffMs: 1_000,
+  maxBackoffMs: 60_000,
+  recoverySuccessThreshold: 8,
+});
+const sharedReaderRateLimiter = new AdaptiveHotRateLimiter({
+  maxConcurrency: 16,
+  initialConcurrency: 16,
+  minConcurrency: 1,
+  baseBackoffMs: 750,
+  maxBackoffMs: 30_000,
+  recoverySuccessThreshold: 12,
+});
 
 export function resolveSentimentHotStrategyTimeoutMs(refresh: boolean, remainingMs: number): number {
   const availableMs = Number.isFinite(remainingMs) ? Math.max(1_000, remainingMs) : 1_000;
@@ -2107,19 +2136,20 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   if (hasSearchKeywords && args.refresh === true && candidates.length >= limit && cachedReadyCount < semanticSourceTarget) {
     warnings.push(`當前相關候選不足，已繼續補充實時來源。`);
   }
-  let strictInstagramCandidatesPromise: Promise<SentimentHotCandidate[]> | null = null;
-  if (strictFreshOnly && shouldFetchLiveCandidates) {
+  let instagramAuthenticatedCandidatesPromise: Promise<SentimentHotCandidate[]> | null = null;
+  let instagramReaderCandidatesPromise: Promise<SentimentHotCandidate[]> | null = null;
+  if (shouldFetchLiveCandidates) {
     const instagramTimeoutMs = Math.min(SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS, remainingSentimentHotTotalBudgetMs(startedAt, 18_000));
     const instagramQueries = buildOrderedSentimentQueries(
       buildThreadsSearchQueries(queryKeywords),
       args.refresh ? Date.now() + candidates.length : candidates.length,
       args.refresh === true,
-    ).slice(0, INSTAGRAM_AUTHENTICATED_QUERY_LIMIT);
-    strictInstagramCandidatesPromise = withSentimentTimeout(
+    );
+    instagramAuthenticatedCandidatesPromise = withSentimentTimeout(
       fetchInstagramAuthenticatedSearchCandidates({
         archiveId,
         keywords,
-        queries: instagramQueries,
+        queries: instagramQueries.slice(0, INSTAGRAM_AUTHENTICATED_QUERY_LIMIT),
         limit: poolLimit,
         freshnessDays: operationalFreshnessDays,
         searchMode,
@@ -2129,6 +2159,22 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       [],
     ).catch((error) => {
       warnings.push("Instagram 登入態抓取失敗：" + (error instanceof Error ? error.message : String(error)));
+      return [];
+    });
+    instagramReaderCandidatesPromise = withSentimentTimeout(
+      fetchInstagramReaderSearchCandidates({
+        archiveId,
+        keywords,
+        queries: instagramQueries.slice(0, INSTAGRAM_READER_QUERY_LIMIT),
+        limit: poolLimit,
+        refresh: args.refresh === true,
+        freshnessDays: strictFreshOnly ? operationalFreshnessDays : undefined,
+        searchMode: strictFreshOnly ? searchMode : undefined,
+      }),
+      Math.min(20_000, remainingSentimentHotTotalBudgetMs(startedAt, 8_000)),
+      [],
+    ).catch((error) => {
+      warnings.push("Instagram reader 抓取失敗：" + (error instanceof Error ? error.message : String(error)));
       return [];
     });
   }
@@ -2255,27 +2301,18 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   }
 
   const hasFastReturnCandidates = cachedReadyCount >= semanticSourceTarget;
-
-  const preInstagramReadyPool = hasModelStrategy && strategyResult
-    ? candidates.filter((candidate) => candidateMatchesStrategyOrVerifiedFreshFallback(candidate, strategyResult, searchMode))
-    : candidates;
-  const preInstagramReadyCount = hasSearchKeywords
-    ? finalizeSentimentHotCandidatesForDisplay(
-      strictFreshOnly
-        ? preInstagramReadyPool.filter((candidate) => candidateMatchesOperationalFreshness(candidate, operationalFreshnessDays))
-        : preInstagramReadyPool,
-      limit,
-      { archiveId: liveOnlyRefresh ? undefined : archiveId, keywords, excludeShown: !liveOnlyRefresh, searchMode, freshnessDays: operationalFreshnessDays },
-    ).length
-    : 0;
-  if (strictFreshOnly && shouldFetchLiveCandidates && strictInstagramCandidatesPromise) {
+  if (shouldFetchLiveCandidates && (instagramAuthenticatedCandidatesPromise || instagramReaderCandidatesPromise)) {
     const beforeInstagramCount = candidates.length;
-    const instagramCandidates = await measureSentimentStage(
+    const [authenticatedCandidates, readerCandidates] = await measureSentimentStage(
       warnings,
-      "instagram-account-search",
-      () => strictInstagramCandidatesPromise!,
+      "instagram-parallel-search",
+      () => Promise.all([
+        instagramAuthenticatedCandidatesPromise || Promise.resolve([]),
+        instagramReaderCandidatesPromise || Promise.resolve([]),
+      ]),
     );
     let instagramAddedCount = 0;
+    const instagramCandidates = [...authenticatedCandidates, ...readerCandidates];
     if (instagramCandidates.length > 0) {
       const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
       const byKey = new Set(candidates.map((candidate) => sentimentCandidateDedupeKey(candidate)));
@@ -2290,54 +2327,13 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
         if (byId.size >= poolLimit) break;
       }
       candidates = sortSentimentHotCandidatePool([...byId.values()], keywords, poolLimit, searchMode);
-      warnings.push(`已從 Instagram 登入態加入 ${instagramAddedCount} 篇具真實發布時間的候選。`);
+      warnings.push(`已並行檢查 Instagram 登入態與 Reader，加入 ${instagramAddedCount} 篇候選。`);
     }
-    channelStats.push(`Instagram 登入態原始 ${instagramCandidates.length}，新增 ${instagramAddedCount}，補充前 ${beforeInstagramCount}`);
-  } else if (!strictFreshOnly && shouldFetchLiveCandidates && preInstagramReadyCount < limit && hasSentimentHotTotalBudget(startedAt, SENTIMENT_HOT_SUPPLEMENT_MIN_REMAINING_MS)) {
-    const beforeInstagramCount = candidates.length;
-    const instagramCandidates = await measureSentimentStage(
-      warnings,
-      "instagram-reader",
-      () => withSentimentTimeout(
-        fetchInstagramReaderSearchCandidates({
-          archiveId,
-          keywords,
-          queries: buildOrderedSentimentQueries(buildThreadsSearchQueries(queryKeywords), args.refresh ? Date.now() + candidates.length : candidates.length, args.refresh === true).slice(0, INSTAGRAM_READER_QUERY_LIMIT),
-          limit: poolLimit,
-          refresh: args.refresh === true,
-        }),
-        Math.min(20_000, remainingSentimentHotTotalBudgetMs(startedAt, 8_000)),
-        [],
-      ),
-    ).catch((error) => {
-      warnings.push("Instagram reader 抓取失敗：" + (error instanceof Error ? error.message : String(error)));
-      return [];
-    });
-    let instagramAddedCount = 0;
-    if (instagramCandidates.length > 0) {
-      const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
-      const byKey = new Set(candidates.map((candidate) => sentimentCandidateDedupeKey(candidate)));
-      for (const candidate of instagramCandidates) {
-        if (!candidateMatchesOperationalFreshness(candidate, operationalFreshnessDays)) continue;
-        const dedupeKey = sentimentCandidateDedupeKey(candidate);
-        if (!byId.has(candidate.id) && !byKey.has(dedupeKey)) {
-          byId.set(candidate.id, candidate);
-          byKey.add(dedupeKey);
-          instagramAddedCount += 1;
-        }
-        if (byId.size >= poolLimit) break;
-      }
-      candidates = sortSentimentHotCandidatePool([...byId.values()], keywords, poolLimit, searchMode);
-      warnings.push(args.refresh ? `已即時刷新 Instagram reader 候選 ${instagramCandidates.length} 篇。` : `已加入 Instagram reader 候選 ${instagramCandidates.length} 篇。`);
-    }
-    channelStats.push(`Instagram 原始 ${instagramCandidates.length}，新增 ${instagramAddedCount}，補充前 ${beforeInstagramCount}`);
-  } else if (shouldFetchLiveCandidates && hasFastReturnCandidates) {
-    channelStats.push(`Instagram 已跳過，已有 ${candidates.length}/${limit} 篇候選，使用快速返回`);
-  } else if (shouldFetchLiveCandidates && preInstagramReadyCount < limit) {
-    pushSentimentHotWarning(warnings, SENTIMENT_HOT_TIMEOUT_WARNING);
-    channelStats.push("Instagram 已跳過，剩餘時間不足");
-  } else if (shouldFetchLiveCandidates) {
-    channelStats.push(`Instagram 已跳過，預篩 ${preInstagramReadyCount}/${limit}`);
+    channelStats.push(
+      `Instagram 登入態原始 ${authenticatedCandidates.length}`
+      + `，Reader 原始 ${readerCandidates.length}`
+      + `，新增 ${instagramAddedCount}，補充前 ${beforeInstagramCount}`,
+    );
   }
 
   const runtime = await measureSentimentStage(warnings, "runtime", () => withSentimentTimeout(
@@ -3744,25 +3740,45 @@ async function requestThreadsGraphqlSearchPayload(args: {
     : args.template.endpoint;
   const timeoutMs = Math.min(THREADS_BROWSER_REQUEST_TIMEOUT_MS, remainingSentimentDeadlineMs(args.deadlineAt, THREADS_BROWSER_REQUEST_TIMEOUT_MS));
   if (timeoutMs < 1_000) return null;
-  const response = await args.page.evaluate(async ({ endpoint, method, body, headers, timeoutMs }: any) => {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const result = await fetch(endpoint || "/graphql/query", {
-        method,
-        credentials: "include",
-        headers,
-        body: method === "GET" ? undefined : body,
-        signal: controller.signal,
-      });
-      return result.ok ? await result.text() : "";
-    } catch {
-      return "";
-    } finally {
-      clearTimeout(timeoutId);
-    }
-  }, { endpoint, method, body: params.toString(), headers: args.template.headers, timeoutMs });
-  return safeJson(response);
+  try {
+    const response = await threadsGraphqlRateLimiter.run(
+      THREADS_GRAPHQL_UPSTREAM_KEY,
+      async ({ signal }) => {
+        if (signal.aborted) throw signal.reason;
+        const result = await args.page.evaluate(async ({ endpoint, method, body, headers, timeoutMs }: any) => {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+          try {
+            const response = await fetch(endpoint || "/graphql/query", {
+              method,
+              credentials: "include",
+              headers,
+              body: method === "GET" ? undefined : body,
+              signal: controller.signal,
+            });
+            return {
+              ok: response.ok,
+              status: response.status,
+              retryAfter: response.headers.get("retry-after") || "",
+              text: response.ok ? await response.text() : "",
+            };
+          } catch {
+            return { ok: false, status: 0, retryAfter: "", text: "" };
+          } finally {
+            clearTimeout(timeoutId);
+          }
+        }, { endpoint, method, body: params.toString(), headers: args.template.headers, timeoutMs });
+        return {
+          ...result,
+          headers: { "retry-after": result.retryAfter },
+        };
+      },
+      { timeoutMs },
+    );
+    return response.ok ? safeJson(response.text) : null;
+  } catch {
+    return null;
+  }
 }
 
 async function fetchThreadsBrowserSearchCandidates(args: {
@@ -4177,6 +4193,18 @@ export function buildJinaReaderUrl(targetUrl: string): string {
   return `${JINA_READER_PREFIX}${String(targetUrl || "").replace(/^https?:\/\//i, "")}`;
 }
 
+async function fetchWithSharedReaderLimit(
+  targetUrl: string,
+  init: Omit<RequestInit, "signal">,
+  timeoutMs: number,
+): Promise<Response> {
+  return sharedReaderRateLimiter.run(
+    SHARED_READER_UPSTREAM_KEY,
+    ({ signal }) => fetch(buildJinaReaderUrl(targetUrl), { ...init, signal }),
+    { timeoutMs },
+  );
+}
+
 async function fetchThreadsReaderSearchCandidates(args: {
   archiveId: string;
   keywords: string[];
@@ -4222,14 +4250,14 @@ async function fetchThreadsReaderSearchCandidates(args: {
       args.queries.slice(offset, offset + THREADS_READER_QUERY_BATCH_SIZE).map(async (query) => {
         const targetUrl = buildThreadsSearchUrl(query, Number(args.freshnessDays || 0) > 0);
         try {
-          const response = await fetch(buildJinaReaderUrl(targetUrl), {
+          const timeoutMs = Math.min(6_000, remainingSentimentDeadlineMs(args.deadlineAt, 6_000));
+          const response = await fetchWithSharedReaderLimit(targetUrl, {
             headers: {
               "user-agent": "Mozilla/5.0",
               accept: "text/plain, text/markdown, */*",
               "cache-control": "max-age=300",
             },
-            signal: AbortSignal.timeout(Math.min(6_000, remainingSentimentDeadlineMs(args.deadlineAt, 6_000))),
-          });
+          }, timeoutMs);
           if (!response.ok) return { query, targetUrl, text: "" };
           return { query, targetUrl, text: await response.text() };
         } catch {
@@ -4415,21 +4443,50 @@ async function fetchInstagramAuthenticatedSearchCandidates(args: {
       if (remainingSentimentDeadlineMs(args.deadlineAt, 0) < 2_000) break;
       const batch = queries.slice(offset, offset + INSTAGRAM_AUTHENTICATED_QUERY_BATCH_SIZE);
       stats.requests += batch.length;
-      const responses = await page.evaluate(async (tags: string[]) => Promise.all(tags.map(async (tag) => {
+      const requestTimeoutMs = Math.min(8_000, remainingSentimentDeadlineMs(args.deadlineAt, 8_000));
+      const responses = await Promise.all(batch.map(async (tag) => {
         try {
-          const response = await fetch(`/api/v1/tags/web_info/?tag_name=${encodeURIComponent(tag)}`, {
-            credentials: "include",
-            headers: {
-              accept: "*/*",
-              "x-ig-app-id": "936619743392459",
-              "x-requested-with": "XMLHttpRequest",
+          return await instagramAuthenticatedRateLimiter.run(
+            INSTAGRAM_AUTH_UPSTREAM_KEY,
+            async ({ signal }) => {
+              if (signal.aborted) throw signal.reason;
+              const result = await page.evaluate(async ({ tag, timeoutMs }: { tag: string; timeoutMs: number }) => {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+                try {
+                  const response = await fetch(`/api/v1/tags/web_info/?tag_name=${encodeURIComponent(tag)}`, {
+                    credentials: "include",
+                    headers: {
+                      accept: "*/*",
+                      "x-ig-app-id": "936619743392459",
+                      "x-requested-with": "XMLHttpRequest",
+                    },
+                    signal: controller.signal,
+                  });
+                  return {
+                    tag,
+                    ok: response.ok,
+                    status: response.status,
+                    retryAfter: response.headers.get("retry-after") || "",
+                    text: response.ok ? await response.text() : "",
+                  };
+                } catch {
+                  return { tag, ok: false, status: 0, retryAfter: "", text: "" };
+                } finally {
+                  clearTimeout(timeoutId);
+                }
+              }, { tag, timeoutMs: requestTimeoutMs });
+              return {
+                ...result,
+                headers: { "retry-after": result.retryAfter },
+              };
             },
-          });
-          return { tag, ok: response.ok, status: response.status, text: response.ok ? await response.text() : "" };
+            { timeoutMs: requestTimeoutMs },
+          );
         } catch {
-          return { tag, ok: false, status: 0, text: "" };
+          return { tag, ok: false, status: 0, retryAfter: "", text: "" };
         }
-      })), batch);
+      }));
       for (const response of responses) {
         if (!response.ok) {
           stats.failed += 1;
@@ -4443,9 +4500,6 @@ async function fetchInstagramAuthenticatedSearchCandidates(args: {
         });
         stats.parsed += parsed.length;
         parsed.forEach(considerCandidate);
-      }
-      if (offset + INSTAGRAM_AUTHENTICATED_QUERY_BATCH_SIZE < queries.length) {
-        await page.waitForTimeout(250);
       }
     }
     await context.close().catch(() => undefined);
@@ -4470,6 +4524,8 @@ async function fetchInstagramReaderSearchCandidates(args: {
   limit: number;
   refresh?: boolean;
   excludeIds?: Set<string>;
+  freshnessDays?: number;
+  searchMode?: SentimentHotSearchMode;
 }): Promise<SentimentHotCandidate[]> {
   const excluded = args.excludeIds || (args.refresh ? getSentimentHotRefreshExcludedIds(args.archiveId) : getSentimentHotExcludedIds(args.archiveId));
   const all: SentimentHotCandidate[] = [];
@@ -4490,14 +4546,13 @@ async function fetchInstagramReaderSearchCandidates(args: {
       const texts: Array<{ query: string; targetUrl: string; text: string }> = [];
       for (const targetUrl of targets) {
         try {
-          const response = await fetch(buildJinaReaderUrl(targetUrl), {
+          const response = await fetchWithSharedReaderLimit(targetUrl, {
             headers: {
               "user-agent": "Mozilla/5.0",
               accept: "text/plain, text/markdown, */*",
               "cache-control": "max-age=300",
             },
-            signal: AbortSignal.timeout(8_000),
-          });
+          }, 8_000);
           if (!response.ok) {
             failedResponses += 1;
             continue;
@@ -4530,10 +4585,14 @@ async function fetchInstagramReaderSearchCandidates(args: {
     for (const candidate of parsed) {
       if (excluded.has(candidate.id)) continue;
       if (!candidateTouchesCurrentKeywords(candidate, args.keywords)) continue;
-      const dedupeKey = sentimentCandidateDedupeKey(candidate);
-      if (all.some((item) => item.id === candidate.id) || allKeys.has(dedupeKey)) continue;
+      const normalized = args.searchMode && args.freshnessDays
+        ? candidateMeetsDisplayQuality(candidate, args.keywords, args.searchMode, args.freshnessDays)
+        : candidate;
+      if (!normalized) continue;
+      const dedupeKey = sentimentCandidateDedupeKey(normalized);
+      if (all.some((item) => item.id === normalized.id) || allKeys.has(dedupeKey)) continue;
       allKeys.add(dedupeKey);
-      all.push(candidate);
+      all.push(normalized);
       if (all.length >= args.limit) break;
     }
     if (all.length >= args.limit) break;
@@ -4896,18 +4955,42 @@ async function requestThreadsGraphqlProfilePage(args: {
     ...args.template.variables,
     after: args.after,
   }));
-  const text = await args.page.evaluate(async ({ body }) => {
-    const response = await fetch("https://www.threads.com/graphql/query", {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
-      },
-      body,
-    });
-    return await response.text();
-  }, { body: params.toString() });
-  return safeJson(text);
+  const timeoutMs = 15_000;
+  const result = await threadsGraphqlRateLimiter.run(
+    THREADS_GRAPHQL_UPSTREAM_KEY,
+    async ({ signal }) => {
+      if (signal.aborted) throw signal.reason;
+      const response = await args.page.evaluate(async ({ body, timeoutMs }: { body: string; timeoutMs: number }) => {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const result = await fetch("https://www.threads.com/graphql/query", {
+            method: "POST",
+            credentials: "include",
+            headers: {
+              "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+            },
+            body,
+            signal: controller.signal,
+          });
+          return {
+            ok: result.ok,
+            status: result.status,
+            retryAfter: result.headers.get("retry-after") || "",
+            text: result.ok ? await result.text() : "",
+          };
+        } finally {
+          clearTimeout(timeoutId);
+        }
+      }, { body: params.toString(), timeoutMs });
+      return {
+        ...response,
+        headers: { "retry-after": response.retryAfter },
+      };
+    },
+    { timeoutMs },
+  );
+  return result.ok ? safeJson(result.text) : null;
 }
 
 async function collectThreadsGraphqlProfilePosts(args: {
@@ -5624,15 +5707,14 @@ export async function fetchThreadsProfileHotMetrics(usernameInput: string): Prom
   if (process.env.THREADS_PROFILE_ALLOW_PARTIAL_READER === "1") {
   try {
     const readerTargetUrl = `${profileUrl}?__r=${Date.now().toString(36)}`;
-    const response = await fetch(`${JINA_READER_PREFIX}${readerTargetUrl}`, {
+    const response = await fetchWithSharedReaderLimit(readerTargetUrl, {
       headers: {
         "user-agent": "Mozilla/5.0",
         accept: "text/plain, text/markdown, */*",
         "cache-control": "no-cache",
         pragma: "no-cache",
       },
-      signal: buildAbortSignalTimeout(15_000),
-    });
+    }, 15_000);
     const text = response.ok ? await response.text() : "";
     const links = Array.from(text.matchAll(/https?:\/\/(?:www\.)?threads\.(?:net|com)\/@[^)\]\s]+\/post\/[^)\]\s]+/gi))
       .map((match) => match[0]);
@@ -6243,15 +6325,14 @@ async function fetchThreadsDetailData(sourceUrl: string): Promise<{
   try {
     const cacheBuster = `__r=${Date.now().toString(36)}`;
     const readerTargetUrl = `${normalizedSourceUrl}${normalizedSourceUrl.includes("?") ? "&" : "?"}${cacheBuster}`;
-    const response = await fetch(`${JINA_READER_PREFIX}${readerTargetUrl}`, {
+    const response = await fetchWithSharedReaderLimit(readerTargetUrl, {
       headers: {
         "user-agent": "Mozilla/5.0",
         accept: "text/plain, text/markdown, */*",
         "cache-control": "no-cache",
         pragma: "no-cache",
       },
-      signal: buildAbortSignalTimeout(12_000),
-    });
+    }, 12_000);
     if (!response.ok) return { engagement: {}, media: [] };
     const text = await response.text();
     return {
