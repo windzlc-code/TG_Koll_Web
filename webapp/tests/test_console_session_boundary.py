@@ -1449,7 +1449,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('data-expanded="true"', self.styles)
         self.assertIn("width: min(520px, calc(100% - 130px));", self.styles)
         self.assertIn("display: inline-flex;", toggle)
-        self.assertIn("min-height: 56px;", toggle)
+        self.assertIn("min-height: 44px;", toggle)
         self.assertIn(".console-page .live-browser-tools input {", self.styles)
         self.assertIn('manualInput.dataset.expanded = opening ? "true" : "false";', self.source)
         self.assertIn('tools.toggleAttribute("inert", !opening);', self.source)
