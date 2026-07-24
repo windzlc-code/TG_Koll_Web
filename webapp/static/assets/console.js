@@ -21976,6 +21976,7 @@ function renderLiveBrowserSession(session) {
 
 let liveBrowserModalTrigger = null;
 let liveBrowserModalInertNodes = [];
+let liveBrowserModalCloseTimer = null;
 
 function liveBrowserDialogTitleId(sessionId = "") {
   const safeId = String(sessionId || "active").replace(/[^a-zA-Z0-9_-]/g, "-");
@@ -22024,34 +22025,45 @@ function trapLiveBrowserModalFocus(event) {
   }
 }
 
-function closeLiveBrowserLargeModal({ restoreFocus = true } = {}) {
+function closeLiveBrowserLargeModal({ restoreFocus = true, immediate = false } = {}) {
   const expandedId = String(state.liveBrowserExpandedSessionId || "");
   const card = expandedId
     ? document.querySelector(`[data-live-browser-card="${CSS.escape(expandedId)}"]`)
     : document.querySelector(".live-browser-card.is-live-browser-modal");
-  card?.classList.remove("is-live-browser-modal");
-  card?.classList.remove("is-live-browser-controls-visible");
-  card?.removeAttribute("data-live-browser-controls-visible");
-  card?.removeAttribute("role");
-  card?.removeAttribute("aria-modal");
-  card?.removeAttribute("aria-labelledby");
-  card?.removeAttribute("tabindex");
-  document.querySelector("[data-live-browser-modal-backdrop]")?.remove();
-  releaseLiveBrowserModalBackground();
-  document.body.classList.remove("live-browser-modal-open");
-  state.liveBrowserExpandedSessionId = "";
-  const expandButton = card?.querySelector("[data-live-browser-fullscreen]");
-  if (expandButton) {
-    expandButton.setAttribute("aria-label", "放大窗口");
-    expandButton.setAttribute("title", "放大窗口");
-    expandButton.setAttribute("aria-pressed", "false");
-    expandButton.innerHTML = renderExpandIcon(false);
+  const finish = () => {
+    window.clearTimeout(liveBrowserModalCloseTimer);
+    liveBrowserModalCloseTimer = null;
+    card?.classList.remove("is-live-browser-modal", "is-live-browser-modal-closing", "is-live-browser-controls-visible");
+    card?.removeAttribute("data-live-browser-controls-visible");
+    card?.removeAttribute("role");
+    card?.removeAttribute("aria-modal");
+    card?.removeAttribute("aria-labelledby");
+    card?.removeAttribute("tabindex");
+    document.querySelector("[data-live-browser-modal-backdrop]")?.remove();
+    releaseLiveBrowserModalBackground();
+    document.body.classList.remove("live-browser-modal-open");
+    state.liveBrowserExpandedSessionId = "";
+    const expandButton = card?.querySelector("[data-live-browser-fullscreen]");
+    if (expandButton) {
+      expandButton.setAttribute("aria-label", "放大窗口");
+      expandButton.setAttribute("title", "放大窗口");
+      expandButton.setAttribute("aria-pressed", "false");
+      expandButton.innerHTML = renderExpandIcon(false);
+    }
+    const focusTarget = liveBrowserModalTrigger?.isConnected
+      ? liveBrowserModalTrigger
+      : card?.querySelector("[data-live-browser-fullscreen]");
+    if (restoreFocus && focusTarget?.isConnected) focusTarget.focus();
+    liveBrowserModalTrigger = null;
+  };
+  if (!card || immediate) {
+    finish();
+    return;
   }
-  const focusTarget = liveBrowserModalTrigger?.isConnected
-    ? liveBrowserModalTrigger
-    : card?.querySelector("[data-live-browser-fullscreen]");
-  if (restoreFocus && focusTarget?.isConnected) focusTarget.focus();
-  liveBrowserModalTrigger = null;
+  if (card.classList.contains("is-live-browser-modal-closing")) return;
+  card.classList.remove("is-live-browser-controls-visible");
+  card.classList.add("is-live-browser-modal-closing");
+  liveBrowserModalCloseTimer = window.setTimeout(finish, 180);
 }
 
 function setLiveBrowserModalControlsVisible(card, visible) {
@@ -22084,7 +22096,7 @@ function requestLiveBrowserFullscreen(sessionId = "", trigger = null) {
     closeLiveBrowserLargeModal();
     return;
   }
-  closeLiveBrowserLargeModal({ restoreFocus: false });
+  closeLiveBrowserLargeModal({ restoreFocus: false, immediate: true });
   const shell = $("accountBrowserShell") || document.body;
   const backdrop = document.createElement("div");
   backdrop.className = "live-browser-modal-backdrop";

@@ -15888,6 +15888,22 @@ body.console-page {
   border-radius: 0;
   background: #050607;
   box-shadow: none;
+  animation: vecto-live-browser-modal-enter 220ms ease-out both;
+}
+
+.live-browser-card.is-live-browser-modal.is-live-browser-modal-closing {
+  pointer-events: none;
+  animation: vecto-live-browser-modal-exit 180ms ease-in both;
+}
+
+@keyframes vecto-live-browser-modal-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes vecto-live-browser-modal-exit {
+  from { opacity: 1; }
+  to { opacity: 0; }
 }
 
 .live-browser-card.is-live-browser-modal .live-browser-frame,
@@ -15944,7 +15960,10 @@ body.console-page {
   .live-browser-task-summary,
   .live-browser-interaction-note
 ) {
-  display: flex;
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+  visibility: visible;
 }
 
 .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-card-identity,
@@ -15991,10 +16010,28 @@ body.console-page {
 
 .live-browser-card.is-live-browser-modal :is(
   .live-browser-card-identity,
-  .live-browser-task-summary,
-  .live-browser-interaction-note
+  .live-browser-task-summary
 ) {
-  display: none;
+  display: flex;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-6px);
+  transition: opacity 180ms ease, transform 220ms ease, visibility 0s linear 220ms;
+  visibility: hidden;
+}
+
+.live-browser-card.is-live-browser-modal .live-browser-interaction-note {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 20;
+  display: grid;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(6px);
+  transition: opacity 180ms ease, transform 220ms ease, visibility 0s linear 220ms;
+  visibility: hidden;
 }
 
 .live-browser-card.is-live-browser-modal .live-browser-card-actions {
@@ -16027,16 +16064,13 @@ body.console-page {
 
 @media (max-width: 760px) and (orientation: portrait) {
   .live-browser-card.is-live-browser-modal {
-    inset: auto;
-    top: 50%;
-    left: 50%;
-    width: calc(100dvh - 12px);
-    height: calc(100dvw - 12px);
+    inset: 6px;
+    width: auto;
+    height: auto;
     grid-template-rows: minmax(0, 1fr);
     align-content: stretch;
     overflow: hidden;
-    transform: translate(-50%, -50%) rotate(90deg);
-    transform-origin: center;
+    transform: none;
   }
 
   .account-browser-page[data-account-browser-page="browsers"] .live-browser-panel .live-browser-card.is-live-browser-modal .live-browser-card-head {
@@ -16064,9 +16098,22 @@ body.console-page {
 
   .live-browser-card.is-live-browser-modal .live-browser-frame,
   .live-browser-card.is-live-browser-modal.is-portrait .live-browser-frame {
+    position: relative;
     height: 100%;
     max-height: none;
     aspect-ratio: auto;
+  }
+
+  .live-browser-card.is-live-browser-modal .live-browser-frame > iframe {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: calc(100dvh - 12px);
+    max-width: none;
+    height: calc(100dvw - 12px);
+    max-height: none;
+    transform: translate(-50%, -50%) rotate(90deg);
+    transform-origin: center;
   }
 
   .live-browser-card.is-live-browser-modal .live-browser-tools {
@@ -16094,6 +16141,12 @@ body.console-page {
     grid-column: 1 / -1;
     justify-content: flex-start;
     font-size: 11px;
+  }
+
+  .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-task-summary span:last-child {
+    max-width: none;
+    overflow: visible;
+    text-overflow: clip;
   }
 
   .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-interaction-note {
