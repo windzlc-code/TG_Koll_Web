@@ -159,7 +159,7 @@
       const returnUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
       window.location.replace(
         error?.code === "mfa_setup_required" && isAdminSession
-          ? "/admin.html#admin-account"
+          ? "/admin#account"
           : isAdminSession
             ? `/change-password.html?admin_console=1&return_url=${encodeURIComponent(returnUrl)}`
             : `/change-password.html?return_url=${encodeURIComponent(returnUrl)}`,

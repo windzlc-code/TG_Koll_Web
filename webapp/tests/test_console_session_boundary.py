@@ -181,7 +181,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("file.size > AVATAR_MAX_BYTES", self.profile_source)
         self.assertIn('api("/api/me/profile"', self.profile_source)
         self.assertIn('error?.code === "mfa_setup_required"', self.profile_source)
-        self.assertIn('"/admin.html#admin-account"', self.profile_source)
+        self.assertIn('"/admin#account"', self.profile_source)
         self.assertIn("/change-password.html?admin_console=1&return_url=", self.profile_source)
         self.assertIn('return_manage_user_id', self.profile_source)
         self.assertIn('?manage_user_id=', self.profile_source)
