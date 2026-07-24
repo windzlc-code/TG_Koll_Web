@@ -19020,6 +19020,7 @@ body.console-page {
    create a second task label over the remote browser frame. */
 @media (max-width: 760px) and (orientation: portrait) {
   .console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-card-head {
+    top: 0;
     gap: 1px 3px;
     min-height: 0;
     padding: 3px 6px;
@@ -19041,13 +19042,13 @@ body.console-page {
 
   .console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-mobile-summary {
     position: absolute;
-    top: 3px;
+    top: 0;
     left: 50%;
     display: grid;
     grid-template-columns: repeat(2, max-content);
     gap: 1px 5px;
     justify-content: center;
-    transform: translateX(-50%);
+    transform: translate(-50%, -24px);
     font-size: 7px;
     line-height: 1.05;
   }
