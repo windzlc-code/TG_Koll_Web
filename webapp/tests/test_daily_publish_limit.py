@@ -405,6 +405,37 @@ class DailyPublishLimitTests(unittest.TestCase):
             ).fetchall()
         self.assertEqual([item[0] for item in statuses], ["running", "running"])
 
+    def test_incomplete_publish_batch_is_cancelled_after_prepare_timeout(self):
+        batch_id = "publish-batch-incomplete"
+        first = self._payload(account_id="account-admin", persona_id="persona-admin")
+        first.payload.update({
+            "publish_batch_id": batch_id,
+            "publish_sequence_index": 1,
+            "publish_sequence_total": 2,
+            "publish_sequence_targets": ["发布第1篇", "发布第2篇"],
+        })
+        task = self._create(first)
+
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"SOCIAL_AUTOMATION_BATCH_PREPARE_TIMEOUT_SECONDS": "30"},
+            ),
+            social_automation_api.db() as conn,
+        ):
+            conn.execute("BEGIN IMMEDIATE")
+            social_automation_api._cancel_stale_incomplete_publish_batches(
+                conn,
+                self.now + 31,
+            )
+
+        with sqlite3.connect(self.db_path) as conn:
+            status = conn.execute(
+                "SELECT status FROM social_automation_tasks WHERE id = ?",
+                (task["id"],),
+            ).fetchone()[0]
+        self.assertEqual(status, "cancelled")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -13614,6 +13614,11 @@ def _publish_persona_archive_post(
         post_id=clean_post_id,
     )
     if active_task:
+        requested_batch_id = str(payload.publish_batch_id or "").strip()
+        active_payload = _json_loads(active_task.get("payload_json"), {})
+        active_batch_id = str(active_payload.get("publish_batch_id") or "").strip()
+        if requested_batch_id and active_batch_id != requested_batch_id:
+            raise HTTPException(status_code=409, detail="该推文已属于另一批发布任务，请等待当前任务完成")
         return {
             "ok": True,
             "persona_id": clean_archive_id,

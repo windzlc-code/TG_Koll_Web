@@ -11238,15 +11238,15 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
       key: batchToastKey,
       kind: "queued",
     });
-    const results = [];
-    for (const [index, post] of posts.entries()) {
+    const submissions = posts.map((post, index) => {
       const sequenceMetadata = {
         publish_batch_id: publishBatchId,
         publish_sequence_index: index + 1,
         publish_sequence_total: posts.length,
         publish_sequence_targets: publishSequenceTargets,
       };
-      const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/${postSourcePath}/${encodeURIComponent(post.id)}/publish`, {
+      const publishPath = `/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/${postSourcePath}/${encodeURIComponent(post.id)}/publish`;
+      const publishOptions = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -11259,7 +11259,27 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
           max_retries: 2,
           ...sequenceMetadata,
         }),
-      });
+      };
+      return api(publishPath, publishOptions)
+        .catch(() => api(publishPath, publishOptions))
+        .then((result) => ({ index, result, sequenceMetadata }));
+    });
+    const settledSubmissions = await Promise.allSettled(submissions);
+    const failedSubmission = settledSubmissions.find((item) => item.status === "rejected");
+    if (failedSubmission) {
+      const createdTaskIds = settledSubmissions
+        .filter((item) => item.status === "fulfilled")
+        .map((item) => String(item.value?.result?.task?.id || "").trim())
+        .filter(Boolean);
+      await Promise.allSettled(createdTaskIds.map((taskId) => api(
+        `/api/persona_dashboard/automation/tasks/${encodeURIComponent(taskId)}/cancel`,
+        { method: "POST" },
+      )));
+      throw failedSubmission.reason;
+    }
+    const results = [];
+    for (const submission of settledSubmissions) {
+      const { index, result, sequenceMetadata } = submission.value;
       results.push(result);
       const task = result?.task;
       if (task?.id) {

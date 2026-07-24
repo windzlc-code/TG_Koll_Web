@@ -2779,7 +2779,7 @@ def request_live_browser_manual_takeover(session_id: str) -> dict[str, Any]:
         for candidate_task_id, control in _RUNNING_TASK_CONTROLS.items():
             if str(control.get("live_browser_session_id") or "") != clean_id:
                 continue
-            task_id = str(candidate_task_id or "")
+            task_id = str(control.get("current_task_id") or candidate_task_id or "")
             event = control.get("manual_takeover_event")
             ack_event = control.get("manual_takeover_ack_event")
             timeout_event = control.get("manual_takeover_timeout_event")
@@ -2837,7 +2837,7 @@ def _require_live_browser_manual_session(session_id: str) -> str:
     with _RUNNING_TASK_CONTROLS_LOCK:
         for candidate_task_id, control in _RUNNING_TASK_CONTROLS.items():
             if str(control.get("live_browser_session_id") or "") == clean_id:
-                task_id = str(candidate_task_id or "")
+                task_id = str(control.get("current_task_id") or candidate_task_id or "")
                 break
     if not task_id:
         raise HTTPException(status_code=409, detail="当前浏览器会话未处于可人工操作状态")
@@ -4424,7 +4424,85 @@ def cancel_social_task(task_id: str, reason: str = "") -> dict[str, Any]:
     now = _now()
     clean_reason = reason or "用户取消"
     with db() as conn:
-        original = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
+        original = conn.execute(
+            "SELECT * FROM social_automation_tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        if not original:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        original_payload = _loads(original["payload_json"], {})
+        batch_id = str(original_payload.get("publish_batch_id") or "").strip()
+        if str(original["task_type"] or "") == "publish_post" and batch_id:
+            account_rows = conn.execute(
+                """
+                SELECT *
+                FROM social_automation_tasks
+                WHERE account_id = ? AND task_type = 'publish_post'
+                """,
+                (str(original["account_id"] or ""),),
+            ).fetchall()
+            persisted_batch_task_ids = [
+                str(row["id"] or "")
+                for row in account_rows
+                if str(_loads(row["payload_json"], {}).get("publish_batch_id") or "").strip() == batch_id
+            ]
+        else:
+            persisted_batch_task_ids = []
+    with _RUNNING_TASK_CONTROLS_LOCK:
+        control = _RUNNING_TASK_CONTROLS.get(str(task_id))
+        batch_task_ids = [
+            str(item.get("id") or "")
+            for item in ((control or {}).get("batch_tasks") or [])
+            if str(item.get("id") or "")
+        ]
+        completed_batch_task_ids = {
+            str(item or "")
+            for item in ((control or {}).get("completed_batch_task_ids") or [])
+            if str(item or "")
+        }
+    batch_task_ids = list(dict.fromkeys([*batch_task_ids, *persisted_batch_task_ids]))
+    if len(batch_task_ids) > 1:
+        cancellable_ids = [
+            item
+            for item in batch_task_ids
+            if item not in completed_batch_task_ids
+        ]
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            placeholders = ",".join("?" for _ in cancellable_ids)
+            rows = (
+                conn.execute(
+                    f"SELECT * FROM social_automation_tasks WHERE id IN ({placeholders})",
+                    tuple(cancellable_ids),
+                ).fetchall()
+                if cancellable_ids
+                else []
+            )
+            cancelled_ids = cancel_social_tasks_in_transaction(
+                conn,
+                rows,
+                reason=clean_reason,
+                now=now,
+            )
+            row = conn.execute(
+                "SELECT * FROM social_automation_tasks WHERE id = ?",
+                (task_id,),
+            ).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="任务不存在")
+            billing_statuses = _billing_reservation_statuses(conn, [row])
+        _discard_ephemeral_task_secrets(*cancellable_ids)
+        if cancelled_ids:
+            _force_stop_running_task(batch_task_ids[0])
+            wake_social_automation_worker()
+        return _task_public(
+            row,
+            billing_reservation_status=billing_statuses.get(
+                str(row["billing_reservation_id"] or ""),
+                "",
+            ),
+        )
+    with db() as conn:
         cancelled = conn.execute(
             """
             UPDATE social_automation_tasks
@@ -4710,7 +4788,8 @@ def _start_claimed_task_thread(task: dict[str, Any]) -> None:
             _execute_claimed_task(task)
         except Exception as exc:
             _WORKER_STATE["last_error"] = str(exc)
-            _fail_task_safely(task_id, exc)
+            failed_task_id = str(getattr(exc, "failed_batch_task_id", "") or task_id)
+            _fail_task_safely(failed_task_id, exc)
         finally:
             with _WORKER_TASK_THREADS_LOCK:
                 _WORKER_TASK_THREADS.pop(task_id, None)
@@ -4766,6 +4845,62 @@ def _publish_login_dependency_blocks_claim(conn: sqlite3.Connection, row: Any, n
     return True
 
 
+def _cancel_stale_incomplete_publish_batches(conn: sqlite3.Connection, now: int) -> None:
+    try:
+        timeout_seconds = int(os.getenv("SOCIAL_AUTOMATION_BATCH_PREPARE_TIMEOUT_SECONDS", "120") or 120)
+    except (TypeError, ValueError):
+        timeout_seconds = 120
+    cutoff = now - max(30, min(timeout_seconds, 900))
+    stale_rows = conn.execute(
+        """
+        SELECT *
+        FROM social_automation_tasks
+        WHERE task_type = 'publish_post'
+          AND status IN ('preparing', 'queued')
+          AND created_at < ?
+        ORDER BY created_at ASC
+        LIMIT 100
+        """,
+        (cutoff,),
+    ).fetchall()
+    checked: set[tuple[str, str]] = set()
+    for stale in stale_rows:
+        stale_payload = _loads(stale["payload_json"], {})
+        batch_id = str(stale_payload.get("publish_batch_id") or "").strip()
+        total = max(1, int(stale_payload.get("publish_sequence_total") or 1))
+        account_id = str(stale["account_id"] or "")
+        key = (account_id, batch_id)
+        if not batch_id or total <= 1 or key in checked:
+            continue
+        checked.add(key)
+        account_rows = conn.execute(
+            """
+            SELECT *
+            FROM social_automation_tasks
+            WHERE account_id = ? AND task_type = 'publish_post'
+            """,
+            (account_id,),
+        ).fetchall()
+        batch_rows = []
+        indices: set[int] = set()
+        for item in account_rows:
+            payload = _loads(item["payload_json"], {})
+            if str(payload.get("publish_batch_id") or "").strip() != batch_id:
+                continue
+            batch_rows.append(item)
+            indices.add(max(1, int(payload.get("publish_sequence_index") or 1)))
+        if len(indices) >= total or any(
+            str(item["status"] or "") in {"running", "need_manual"} for item in batch_rows
+        ):
+            continue
+        cancel_social_tasks_in_transaction(
+            conn,
+            batch_rows,
+            reason="publish batch creation timed out before all items were queued",
+            now=now,
+        )
+
+
 def _publish_batch_ready_for_claim(conn: sqlite3.Connection, row: Any) -> bool:
     if str(row["task_type"] or "") != "publish_post":
         return True
@@ -4803,6 +4938,7 @@ def _claim_next_task() -> dict[str, Any] | None:
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         _release_terminal_task_billing_reservations(conn, now)
+        _cancel_stale_incomplete_publish_batches(conn, now)
         with _RUNNING_TASK_CONTROLS_LOCK:
             active_account_ids = {
                 str((control.get("task") or {}).get("account_id") or "")
@@ -5137,6 +5273,7 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
         "task": dict(task),
         "current_task_id": task_id,
         "batch_tasks": batch_tasks,
+        "completed_batch_task_ids": [],
         "live_browser_session_id": "",
     }
     control["account_login_status_callback"] = lambda status: _persist_running_account_login_status(
@@ -5366,6 +5503,8 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
                             "" if completed_status == "success" else str(completed_result.get("error") or "执行失败"),
                             account_status="ready" if completed_status == "success" else "",
                         )
+                if control["cancel_event"].is_set():
+                    return
                 failed_task_id = str(getattr(exc, "failed_batch_task_id", "") or task_id)
                 failed_task = next(
                     (item for item in prepared_batch if str(item.get("id") or "") == failed_task_id),

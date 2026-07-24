@@ -1441,6 +1441,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
                 assert.ok(!request.body.publish_sequence_targets.join("").includes("threads"));
                 assert.ok(!request.body.publish_sequence_targets.join("").includes("publisher"));
               }}
+              assert.ok(submitPublishContentTasks.toString().includes("Promise.allSettled(submissions)"));
+              assert.ok(submitPublishContentTasks.toString().includes("/cancel"));
+              assert.ok(submitPublishContentTasks.toString().includes(".catch(() => api(publishPath, publishOptions))"));
             }})().catch((error) => {{
               console.error(error);
               process.exitCode = 1;

@@ -486,6 +486,12 @@ def run_social_publish_batch(
                 setattr(exc, "failed_batch_task_id", str(task.get("id") or ""))
                 raise
             results.append({"task_id": str(task.get("id") or ""), "result": result})
+            if isinstance(context_control, dict):
+                context_control["completed_batch_task_ids"] = [
+                    str(item.get("task_id") or "")
+                    for item in results
+                    if str(item.get("task_id") or "")
+                ]
     return results
 
 

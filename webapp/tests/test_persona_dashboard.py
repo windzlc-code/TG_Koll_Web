@@ -2687,6 +2687,47 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(publish_resp.json()["task"]["id"], "publish-existing")
         mocked.assert_not_called()
 
+    def test_publish_persona_post_only_reuses_active_task_from_same_batch(self):
+        self._write_archives()
+        self._insert_social_account(account_id="acct-batch", platform="threads", username="threads_user")
+        create_resp = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/posts",
+            json={"title": "Batch task", "content": "Do not cross batches"},
+        )
+        post = create_resp.json()
+        self._insert_social_task(
+            task_id="publish-old-batch",
+            account_id="acct-batch",
+            platform="threads",
+            task_type="publish_post",
+            status="queued",
+            payload={
+                "archive_post_id": post["id"],
+                "publish_batch_id": "batch-old",
+            },
+        )
+
+        same_batch = self.client.post(
+            f"/api/persona_dashboard/personas/persona-1/posts/{post['id']}/publish",
+            json={
+                "account_id": "acct-batch",
+                "platform": "threads",
+                "publish_batch_id": "batch-old",
+            },
+        )
+        different_batch = self.client.post(
+            f"/api/persona_dashboard/personas/persona-1/posts/{post['id']}/publish",
+            json={
+                "account_id": "acct-batch",
+                "platform": "threads",
+                "publish_batch_id": "batch-new",
+            },
+        )
+
+        self.assertEqual(same_batch.status_code, 200)
+        self.assertTrue(same_batch.json()["reused"])
+        self.assertEqual(different_batch.status_code, 409)
+
     def test_publish_persona_post_supports_media_without_text(self):
         self._write_archives()
         self._insert_social_account(account_id="acct-media", platform="threads", username="media_user")

@@ -39,7 +39,14 @@ class SocialTaskCancellationTests(unittest.TestCase):
             os.environ["APP_DB_PATH"] = self._old_db_path
         self._tmpdir.cleanup()
 
-    def _insert_task(self, task_id: str, status: str, *, task_type: str = "publish_post") -> None:
+    def _insert_task(
+        self,
+        task_id: str,
+        status: str,
+        *,
+        task_type: str = "publish_post",
+        payload: dict | None = None,
+    ) -> None:
         self._insert_account()
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
@@ -49,9 +56,9 @@ class SocialTaskCancellationTests(unittest.TestCase):
                   scheduled_at, started_at, finished_at, payload_json, result_json,
                   error, retry_count, max_retries, created_by, created_at, updated_at
                 ) VALUES (?, ?, 'persona-1', 'account-1', 'threads', ?, 50, ?, 0, 1, 0,
-                          '{}', '{}', '', 0, 1, 'web', 1, 1)
+                          ?, '{}', '', 0, 1, 'web', 1, 1)
                 """,
-                (task_id, self.user_id, task_type, status),
+                (task_id, self.user_id, task_type, status, json.dumps(payload or {})),
             )
 
     def _insert_account(self, status: str = "ready") -> None:
@@ -758,6 +765,89 @@ class SocialTaskCancellationTests(unittest.TestCase):
             self.assertEqual(self._status(task_id), status)
             self.assertFalse(self._has_secret(task_id))
             stop.assert_not_called()
+
+    def test_batch_cancel_keeps_completed_items_and_cancels_remaining_items(self):
+        batch_tasks = []
+        for index in range(1, 4):
+            task_id = f"batch-cancel-{index}"
+            self._insert_task(task_id, "running")
+            batch_tasks.append({"id": task_id})
+        control = {
+            "cancel_event": threading.Event(),
+            "batch_tasks": batch_tasks,
+            "completed_batch_task_ids": ["batch-cancel-1"],
+            "current_task_id": "batch-cancel-2",
+        }
+
+        with (
+            mock.patch.dict(
+                social_automation_api._RUNNING_TASK_CONTROLS,
+                {item["id"]: control for item in batch_tasks},
+                clear=True,
+            ),
+            mock.patch.object(social_automation_api, "_force_stop_running_task") as stop,
+            mock.patch.object(social_automation_api, "wake_social_automation_worker"),
+        ):
+            result = social_automation_api.cancel_social_task("batch-cancel-2", "stop batch")
+
+        self.assertEqual(result["status"], "cancelled")
+        self.assertEqual(self._status("batch-cancel-1"), "running")
+        self.assertEqual(self._status("batch-cancel-2"), "cancelled")
+        self.assertEqual(self._status("batch-cancel-3"), "cancelled")
+        stop.assert_called_once_with("batch-cancel-1")
+
+    def test_queued_batch_cancel_cancels_every_item_without_running_control(self):
+        batch_id = "queued-batch-cancel"
+        for index in range(1, 4):
+            self._insert_task(
+                f"queued-batch-{index}",
+                "queued",
+                payload={
+                    "publish_batch_id": batch_id,
+                    "publish_sequence_index": index,
+                    "publish_sequence_total": 3,
+                },
+            )
+
+        with (
+            mock.patch.dict(social_automation_api._RUNNING_TASK_CONTROLS, {}, clear=True),
+            mock.patch.object(social_automation_api, "_force_stop_running_task") as stop,
+            mock.patch.object(social_automation_api, "wake_social_automation_worker"),
+        ):
+            result = social_automation_api.cancel_social_task("queued-batch-1", "stop queued batch")
+
+        self.assertEqual(result["status"], "cancelled")
+        self.assertEqual(
+            [self._status(f"queued-batch-{index}") for index in range(1, 4)],
+            ["cancelled", "cancelled", "cancelled"],
+        )
+        stop.assert_called_once_with("queued-batch-1")
+
+    def test_worker_failure_uses_actual_failed_batch_task_id(self):
+        task = {"id": "batch-first", "account_id": "account-1"}
+        failure = RuntimeError("second item failed")
+        failure.failed_batch_task_id = "batch-second"
+        failed_ids = []
+
+        with (
+            mock.patch.object(
+                social_automation_api,
+                "_execute_claimed_task",
+                side_effect=failure,
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_fail_task_safely",
+                side_effect=lambda task_id, _exc: failed_ids.append(task_id),
+            ),
+        ):
+            social_automation_api._start_claimed_task_thread(task)
+            with social_automation_api._WORKER_TASK_THREADS_LOCK:
+                thread = social_automation_api._WORKER_TASK_THREADS.get("batch-first")
+            if thread is not None:
+                thread.join(timeout=5)
+
+        self.assertEqual(failed_ids, ["batch-second"])
 
     def test_cancel_all_only_changes_active_states_and_scrubs_their_secrets(self):
         active_ids = []
