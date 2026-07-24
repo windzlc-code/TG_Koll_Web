@@ -20,7 +20,7 @@ def test_live_browser_html_uses_vecto_branding():
     assert "--vecto-brand-logo-y:" in branded
     assert "top: var(--vecto-brand-status-y);" in branded
     assert "transform: translate(-50%, 0);" in branded
-    assert "#noVNC_transition_text button," in branded
+    assert "#noVNC_cancel_reconnect_button," in branded
     assert "#noVNC_transition .noVNC_logo" in branded
     assert "display: none !important;" in branded
     assert "margin-top: 158px" not in branded

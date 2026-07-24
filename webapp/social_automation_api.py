@@ -1998,7 +1998,7 @@ def _brand_live_browser_html(content: bytes) -> bytes:
   letter-spacing: 0;
   line-height: 1.2;
 }
-#noVNC_transition_text button,
+#noVNC_cancel_reconnect_button,
 #noVNC_transition .noVNC_logo {
   display: none !important;
 }
