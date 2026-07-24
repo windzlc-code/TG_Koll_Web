@@ -14,8 +14,9 @@ export interface AdaptiveHotRateLimiterOptions {
 export interface AdaptiveHotRateLimitRunOptions {
   signal?: AbortSignal;
   /**
-   * Covers queue wait and execution time. The task receives an aborted signal
-   * when the deadline is reached.
+   * Covers execution time after the task acquires a concurrency slot. Queue
+   * wait is controlled by the upstream backoff and does not consume this
+   * budget.
    */
   timeoutMs?: number;
 }
@@ -269,11 +270,7 @@ export class AdaptiveHotRateLimiter {
       }
 
       if (options.timeoutMs !== undefined) {
-        const timeoutMs = Math.max(0, Math.floor(options.timeoutMs));
-        pending.timeoutMs = timeoutMs;
-        pending.timeoutId = setTimeout(() => {
-          this.cancelTask(state, pending, new AdaptiveHotRateLimitTimeoutError(timeoutMs));
-        }, timeoutMs);
+        pending.timeoutMs = Math.max(0, Math.floor(options.timeoutMs));
       }
 
       state.queue.push(pending as PendingTask<unknown>);
@@ -367,6 +364,12 @@ export class AdaptiveHotRateLimiter {
   private startTask(state: UpstreamState, pending: PendingTask<unknown>): void {
     pending.executionStarted = true;
     state.inFlight += 1;
+    if (pending.timeoutMs !== undefined) {
+      const timeoutMs = pending.timeoutMs;
+      pending.timeoutId = setTimeout(() => {
+        this.cancelTask(state, pending, new AdaptiveHotRateLimitTimeoutError(timeoutMs));
+      }, timeoutMs);
+    }
 
     const context: AdaptiveHotRateLimitContext = {
       signal: pending.controller.signal,
@@ -415,6 +418,18 @@ export class AdaptiveHotRateLimiter {
   }
 
   private recordRateLimit(state: UpstreamState, retryAfterMs?: number): void {
+    const now = state.options.now();
+    if (state.blockedUntil > now) {
+      state.blockedUntil = Math.max(
+        state.blockedUntil,
+        now + Math.max(0, retryAfterMs || 0),
+      );
+      if (state.wakeTimer) clearTimeout(state.wakeTimer);
+      state.wakeTimer = undefined;
+      this.scheduleWake(state);
+      return;
+    }
+
     const exponentialDelay = Math.min(
       state.options.maxBackoffMs,
       state.options.baseBackoffMs * (2 ** state.rateLimitStreak),
@@ -430,7 +445,7 @@ export class AdaptiveHotRateLimiter {
     state.currentConcurrency = Math.max(state.options.minConcurrency, reducedConcurrency);
     state.consecutiveSuccesses = 0;
     state.rateLimitStreak += 1;
-    state.blockedUntil = Math.max(state.blockedUntil, state.options.now() + delayMs);
+    state.blockedUntil = now + delayMs;
     if (state.wakeTimer) clearTimeout(state.wakeTimer);
     state.wakeTimer = undefined;
     this.scheduleWake(state);
@@ -506,4 +521,3 @@ export function runWithAdaptiveHotRateLimit<T>(
 ): Promise<T> {
   return adaptiveHotRateLimiter.run(upstreamKey, task, options);
 }
-

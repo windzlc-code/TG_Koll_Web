@@ -128,6 +128,29 @@ describe("adaptive hot rate limiter", () => {
     });
   });
 
+  it("coalesces concurrent rate limits into one backoff step", async () => {
+    vi.useFakeTimers();
+    const limiter = new AdaptiveHotRateLimiter({
+      maxConcurrency: 4,
+      initialConcurrency: 4,
+      baseBackoffMs: 100,
+      maxBackoffMs: 1_000,
+      jitterRatio: 0,
+      concurrencyDecreaseFactor: 0.5,
+    });
+    const key = "threads:concurrent-rate-limit";
+
+    await Promise.all(
+      Array.from({ length: 4 }, () => limiter.run(key, async () => ({ status: 429 }))),
+    );
+
+    expect(limiter.getSnapshot(key)).toMatchObject({
+      currentConcurrency: 2,
+      rateLimitStreak: 1,
+      retryInMs: 100,
+    });
+  });
+
   it("recovers concurrency one slot at a time after consecutive successes", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-24T00:00:00.000Z"));
@@ -193,7 +216,7 @@ describe("adaptive hot rate limiter", () => {
     await first;
   });
 
-  it("aborts an executing task when its total timeout expires", async () => {
+  it("aborts an executing task when its execution timeout expires", async () => {
     vi.useFakeTimers();
     const limiter = new AdaptiveHotRateLimiter({ maxConcurrency: 1 });
     let taskSignal: AbortSignal | undefined;
@@ -215,6 +238,28 @@ describe("adaptive hot rate limiter", () => {
       inFlight: 0,
       queued: 0,
     });
+  });
+
+  it("starts the timeout after a queued task acquires a slot", async () => {
+    vi.useFakeTimers();
+    const limiter = new AdaptiveHotRateLimiter({ maxConcurrency: 1 });
+    let releaseFirst: (() => void) | undefined;
+    let queuedStarted = false;
+    const first = limiter.run("threads:queued-timeout", () => new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    }));
+    const queued = limiter.run("threads:queued-timeout", async () => {
+      queuedStarted = true;
+      return "ok";
+    }, { timeoutMs: 100 });
+
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(queuedStarted).toBe(false);
+
+    releaseFirst?.();
+    await first;
+    await expect(queued).resolves.toBe("ok");
   });
 
   it("parses both Retry-After header formats", () => {

@@ -92,27 +92,27 @@ const INSTAGRAM_AUTH_UPSTREAM_KEY = "instagram.com:authenticated";
 const SHARED_READER_UPSTREAM_KEY = "r.jina.ai:reader";
 const threadsGraphqlRateLimiter = new AdaptiveHotRateLimiter({
   maxConcurrency: 12,
-  initialConcurrency: 12,
+  initialConcurrency: 2,
   minConcurrency: 1,
   baseBackoffMs: 750,
   maxBackoffMs: 30_000,
-  recoverySuccessThreshold: 8,
+  recoverySuccessThreshold: 3,
 });
 const instagramAuthenticatedRateLimiter = new AdaptiveHotRateLimiter({
   maxConcurrency: INSTAGRAM_AUTHENTICATED_QUERY_BATCH_SIZE,
-  initialConcurrency: INSTAGRAM_AUTHENTICATED_QUERY_BATCH_SIZE,
+  initialConcurrency: Math.min(2, INSTAGRAM_AUTHENTICATED_QUERY_BATCH_SIZE),
   minConcurrency: 1,
   baseBackoffMs: 1_000,
   maxBackoffMs: 60_000,
-  recoverySuccessThreshold: 8,
+  recoverySuccessThreshold: 3,
 });
 const sharedReaderRateLimiter = new AdaptiveHotRateLimiter({
   maxConcurrency: 16,
-  initialConcurrency: 16,
+  initialConcurrency: 4,
   minConcurrency: 1,
   baseBackoffMs: 750,
   maxBackoffMs: 30_000,
-  recoverySuccessThreshold: 12,
+  recoverySuccessThreshold: 4,
 });
 
 export function resolveSentimentHotStrategyTimeoutMs(refresh: boolean, remainingMs: number): number {
@@ -4197,10 +4197,24 @@ async function fetchWithSharedReaderLimit(
   targetUrl: string,
   init: Omit<RequestInit, "signal">,
   timeoutMs: number,
-): Promise<Response> {
+): Promise<{
+  ok: boolean;
+  status: number;
+  headers: Headers;
+  text: () => Promise<string>;
+}> {
   return sharedReaderRateLimiter.run(
     SHARED_READER_UPSTREAM_KEY,
-    ({ signal }) => fetch(buildJinaReaderUrl(targetUrl), { ...init, signal }),
+    async ({ signal }) => {
+      const response = await fetch(buildJinaReaderUrl(targetUrl), { ...init, signal });
+      const body = await response.text();
+      return {
+        ok: response.ok,
+        status: response.status,
+        headers: response.headers,
+        text: async () => body,
+      };
+    },
     { timeoutMs },
   );
 }
