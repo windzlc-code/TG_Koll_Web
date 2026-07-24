@@ -14733,7 +14733,7 @@ async function fetchPersonaHotCandidates(refresh = false) {
         // (unbounded freshness), which is also how older callers behaved.
         freshness_policy: form.hotFreshnessDays > 0 ? "strict" : "legacy",
       }),
-    }, 125000);
+    }, 165000);
     state.personaHotCandidateResults[String(persona.id)] = {
       candidates: Array.isArray(result.candidates) ? result.candidates : [],
       keywords: Array.isArray(result.keywords) ? result.keywords : [],

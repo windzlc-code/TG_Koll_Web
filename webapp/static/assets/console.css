@@ -4615,18 +4615,6 @@ body.persona-touch-dragging .persona-list-card:active {
   line-height: 1.4;
 }
 
-.persona-hot-fetch-toolbar {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: stretch;
-  gap: 8px;
-}
-
-.persona-hot-fetch-toolbar > button {
-  min-width: 96px;
-  min-height: 44px;
-}
-
 .persona-hot-mode-tabs button:disabled {
   cursor: not-allowed;
   opacity: 0.64;
@@ -4756,10 +4744,8 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .persona-hot-time-window {
-  display: grid;
-  grid-template-columns: auto minmax(180px, 1fr) auto;
-  min-width: 0;
-  min-height: 44px;
+  display: inline-flex;
+  min-height: 38px;
   align-items: center;
   gap: 8px;
   padding: 0 10px;
@@ -4777,7 +4763,6 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .persona-hot-freshness-tabs {
-  width: 100%;
   min-height: 30px;
 }
 
@@ -16933,30 +16918,27 @@ body.console-page {
 
   .console-page .persona-detail .persona-hot-time-window {
     grid-column: 1 / -1;
-    grid-template-columns: minmax(0, 1fr);
-    align-items: stretch;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
     min-width: 0;
     max-width: 100%;
     min-height: 30px;
     gap: 6px;
-    padding: 8px;
+    padding: 6px;
     font-size: 12px;
     white-space: normal;
   }
 
   .console-page .persona-detail .persona-hot-fetch-toolbar {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    display: grid;
+    grid-template-columns: max-content max-content minmax(0, 1fr);
+    align-items: center;
+    justify-content: start;
     gap: 8px;
   }
 
-  .console-page .persona-detail .persona-hot-fetch-toolbar > button {
-    width: 100%;
-    min-width: 0;
-    min-height: 38px;
-  }
-
   .console-page .persona-detail .persona-hot-freshness-tabs {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
     width: 100%;
     min-width: 0;
     min-height: 26px;
@@ -16966,11 +16948,6 @@ body.console-page {
     min-height: 30px;
     padding: 3px 7px;
     font-size: 11px;
-  }
-
-  .console-page .persona-detail .persona-hot-freshness-control {
-    justify-content: center;
-    min-height: 32px;
   }
 
   .console-page .persona-detail .persona-step-tabs button,

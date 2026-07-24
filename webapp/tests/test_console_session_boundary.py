@@ -914,7 +914,6 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("live-browser-mobile-summary", self.source)
 
     def test_mobile_persona_hot_fetch_controls_use_two_clean_rows(self):
-        toolbar = self._css_block(".persona-hot-fetch-toolbar {")
         mobile_toolbar = self._css_block(
             ".console-page .persona-detail .persona-hot-fetch-toolbar {"
         )
@@ -923,10 +922,13 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
 
         self.assertIn('class="row-actions persona-hot-fetch-toolbar"', self.source)
-        self.assertIn("grid-template-columns: minmax(0, 1fr) auto auto;", toolbar)
-        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", mobile_toolbar)
+        self.assertNotIn(".persona-hot-fetch-toolbar > button", self.styles)
+        self.assertIn(
+            "grid-template-columns: max-content max-content minmax(0, 1fr);",
+            mobile_toolbar,
+        )
         self.assertIn("grid-column: 1 / -1;", mobile_window)
-        self.assertIn("grid-template-columns: minmax(0, 1fr);", mobile_window)
+        self.assertIn("grid-template-columns: auto minmax(0, 1fr) auto;", mobile_window)
 
     def test_expanded_mobile_browser_uses_one_compact_translucent_summary(self):
         portrait_start = self.styles.rfind("@media (max-width: 760px) and (orientation: portrait)")
