@@ -504,7 +504,7 @@ class SocialTaskCancellationTests(unittest.TestCase):
             ).fetchone()[0]
         self.assertEqual(status, "released")
 
-    def test_publish_confirmation_exhaustion_fails_and_releases_reservation(self):
+    def test_publish_confirmation_exhaustion_fails_and_settles_submitted_reservation(self):
         self._insert_account(status="ready")
         self._insert_task("publish-exhausted", "running")
         confirmation = {
@@ -555,8 +555,67 @@ class SocialTaskCancellationTests(unittest.TestCase):
         self.assertEqual(result["confirmation_attempt"], 3)
         self.assertFalse(result["retryable"])
         self.assertEqual(json.loads(task_row[2])["_publish_confirmation"]["attempt"], 3)
-        self.assertEqual(reservation_status, "released")
-        self.assertEqual(social_automation_api.get_social_task("publish-exhausted")["billing"]["status"], "released")
+        self.assertEqual(reservation_status, "settled")
+        self.assertEqual(social_automation_api.get_social_task("publish-exhausted")["billing"]["status"], "settled")
+
+    def test_runner_failure_metadata_is_preserved_in_task_result(self):
+        from social_automation.runner import ManualTimeoutError, PublishOutcomeUnknownError
+
+        self._insert_account(status="ready")
+        cases = (
+            (
+                "manual-timeout",
+                ManualTimeoutError(
+                    "manual publish timed out",
+                    "manual_publish_timeout",
+                    "manual.png",
+                    account_status="ready",
+                ),
+                {
+                    "manual_timeout": True,
+                    "timeout_kind": "manual_publish_timeout",
+                    "browser_available": False,
+                    "retryable": True,
+                },
+            ),
+            (
+                "instagram-unknown",
+                PublishOutcomeUnknownError("Instagram outcome unknown", "unknown.png"),
+                {
+                    "auto_login_failed": False,
+                    "publish_submitted": True,
+                    "publish_outcome_unknown": True,
+                    "browser_available": False,
+                    "retryable": False,
+                },
+            ),
+        )
+        for task_id, failure, expected in cases:
+            with self.subTest(task_id=task_id):
+                self._insert_task(task_id, "running")
+                task = {
+                    "id": task_id,
+                    "account_id": "account-1",
+                    "platform": "threads",
+                    "task_type": "publish_post",
+                    "payload": {},
+                }
+                control = {
+                    "cancel_event": threading.Event(),
+                    "task": dict(task),
+                    "live_browser_session_id": "",
+                }
+                with mock.patch.object(
+                    social_automation_api,
+                    "_run_social_task_in_clean_thread",
+                    side_effect=failure,
+                ):
+                    social_automation_api._execute_claimed_task_with_control(task, control)
+
+                persisted = social_automation_api.get_social_task(task_id)
+                self.assertEqual(persisted["status"], "failed")
+                for key, value in expected.items():
+                    self.assertEqual(persisted["result"].get(key), value)
 
     def test_task_public_uses_actual_waived_reservation_status(self):
         self._insert_task("publish-waived", "queued")
@@ -719,6 +778,80 @@ class SocialTaskCancellationTests(unittest.TestCase):
         release.assert_called_once()
         self.assertEqual(str(release.call_args.args[1]["id"]), "orphaned-publish")
 
+    def test_runner_exit_cannot_leave_need_manual_without_browser_control(self):
+        self._insert_account(status="cookie_expired")
+        self._insert_task("manual-runner-exit", "running", task_type="open_login")
+        task = social_automation_api.get_social_task("manual-runner-exit")
+
+        def fail_after_manual(_task, _control):
+            logger = social_automation_api._DbTaskLogger("manual-runner-exit")
+            logger.log("warn", "need_manual", "manual takeover timed out")
+            raise RuntimeError("runner exited")
+
+        with (
+            mock.patch.object(
+                social_automation_api,
+                "_claim_publish_batch_tail",
+                return_value=[task],
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_execute_claimed_task_with_control",
+                side_effect=fail_after_manual,
+            ),
+            self.assertRaises(RuntimeError),
+        ):
+            social_automation_api._execute_claimed_task(task)
+
+        self.assertEqual(self._status("manual-runner-exit"), "failed")
+        self.assertNotIn(
+            "manual-runner-exit",
+            social_automation_api._RUNNING_TASK_CONTROLS,
+        )
+
+    def test_expired_running_lease_fails_task_and_unlocks_account(self):
+        self._insert_task(
+            "orphaned-running",
+            "running",
+            task_type="browse_feed",
+            payload={
+                "_worker_lease": {
+                    "owner": "dead-worker",
+                    "expires_at": 100,
+                }
+            },
+        )
+        self._insert_task("next-task", "queued", task_type="browse_feed")
+
+        social_automation_api._recover_orphaned_running_tasks(1_000)
+
+        self.assertEqual(self._status("orphaned-running"), "failed")
+        with mock.patch.object(social_automation_api, "_now", return_value=1_000):
+            claimed = social_automation_api._claim_next_task()
+        self.assertIsNotNone(claimed)
+        self.assertEqual(claimed["id"], "next-task")
+
+    def test_expired_manual_lease_recovers_without_waiting_for_legacy_window(self):
+        self._insert_task(
+            "orphaned-manual-lease",
+            "need_manual",
+            task_type="open_login",
+            payload={
+                "_worker_lease": {
+                    "owner": "dead-worker",
+                    "expires_at": 100,
+                }
+            },
+        )
+
+        with mock.patch.dict(
+            os.environ,
+            {"SOCIAL_AUTOMATION_MANUAL_RECOVERY_SECONDS": "7200"},
+        ):
+            social_automation_api._recover_orphaned_manual_task(1_000)
+
+        self.assertEqual(self._status("orphaned-manual-lease"), "failed")
+
     def test_already_manual_open_login_still_transitions_out_of_running(self):
         self._insert_account(status="cookie_expired")
         self._insert_task("login-already-manual", "running", task_type="open_login")
@@ -848,6 +981,58 @@ class SocialTaskCancellationTests(unittest.TestCase):
                 thread.join(timeout=5)
 
         self.assertEqual(failed_ids, ["batch-second"])
+
+    def test_batch_runner_exception_fails_current_item_and_queued_tail(self):
+        batch_id = "batch-runner-exception"
+        self._insert_task(
+            "batch-exception-1",
+            "running",
+            payload={
+                "publish_batch_id": batch_id,
+                "publish_sequence_index": 1,
+                "publish_sequence_total": 2,
+            },
+        )
+        self._insert_task(
+            "batch-exception-2",
+            "queued",
+            payload={
+                "publish_batch_id": batch_id,
+                "publish_sequence_index": 2,
+                "publish_sequence_total": 2,
+            },
+        )
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE social_automation_tasks SET max_retries = 0 WHERE id = 'batch-exception-1'"
+            )
+        tasks = [
+            social_automation_api.get_social_task("batch-exception-1"),
+            social_automation_api.get_social_task("batch-exception-2"),
+        ]
+        control = {
+            "cancel_event": threading.Event(),
+            "task": dict(tasks[0]),
+            "batch_tasks": tasks,
+            "current_task_id": tasks[0]["id"],
+            "live_browser_session_id": "",
+        }
+        failure = RuntimeError("batch browser failed")
+        failure.failed_batch_task_id = tasks[0]["id"]
+        failure.completed_batch_results = []
+
+        with mock.patch.object(
+            social_automation_api,
+            "_run_social_publish_batch_in_clean_thread",
+            side_effect=failure,
+        ):
+            social_automation_api._execute_claimed_task_with_control(
+                tasks[0],
+                control,
+            )
+
+        self.assertEqual(self._status("batch-exception-1"), "failed")
+        self.assertEqual(self._status("batch-exception-2"), "failed")
 
     def test_cancel_all_only_changes_active_states_and_scrubs_their_secrets(self):
         active_ids = []
@@ -990,6 +1175,82 @@ class SocialTaskCancellationTests(unittest.TestCase):
         self.assertTrue(action_completed.is_set())
         self.assertTrue(control["cancel_event"].is_set())
         self.assertEqual(self._status(task_id), "cancelled")
+
+    def test_publish_submit_guard_persists_submission_before_action(self):
+        task_id = "submit-armed-task"
+        self._insert_task(task_id, "running")
+        observed = {}
+        control = {
+            "cancel_event": threading.Event(),
+            "current_task_id": task_id,
+            "publish_submit_lock": threading.RLock(),
+        }
+
+        def action():
+            with sqlite3.connect(self.db_path) as conn:
+                row = conn.execute(
+                    "SELECT daily_publish_committed FROM social_automation_tasks WHERE id = ?",
+                    (task_id,),
+                ).fetchone()
+                slot = conn.execute(
+                    "SELECT state FROM social_daily_publish_slots WHERE task_id = ?",
+                    (task_id,),
+                ).fetchone()
+            observed["committed"] = int(row[0])
+            observed["slot_state"] = str(slot[0])
+            return "clicked"
+
+        result = social_automation_api._run_publish_submit_guard(control, action)
+
+        self.assertEqual(result, "clicked")
+        self.assertEqual(observed, {"committed": 1, "slot_state": "armed"})
+
+    def test_failed_task_after_submission_arm_settles_instead_of_releasing_billing(self):
+        task_id = "submit-unknown-billing"
+        self._insert_task(task_id, "running")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE social_automation_tasks
+                SET daily_publish_committed = 1, daily_publish_committed_at = 10,
+                    billing_reservation_id = 'submit-unknown-hold'
+                WHERE id = ?
+                """,
+                (task_id,),
+            )
+            conn.execute(
+                """
+                INSERT INTO billing_reservations(
+                  id, user_id, ref_type, ref_id, sku, status,
+                  idempotency_key, created_at, updated_at
+                ) VALUES (
+                  'submit-unknown-hold', ?, 'social_task', ?,
+                  'threads_text_publish', 'held', 'submit-unknown-test', 1, 1
+                )
+                """,
+                (self.user_id, task_id),
+            )
+
+        with (
+            mock.patch.object(
+                social_automation_api.commercial_billing,
+                "settle_reservation",
+            ) as settle,
+            mock.patch.object(
+                social_automation_api,
+                "_release_task_billing_reservation",
+            ) as release,
+        ):
+            completed = social_automation_api._finish_task(
+                task_id,
+                "failed",
+                {"publish_outcome_unknown": True},
+                "outcome unknown",
+            )
+
+        self.assertTrue(completed)
+        settle.assert_called_once()
+        release.assert_not_called()
 
 
 if __name__ == "__main__":

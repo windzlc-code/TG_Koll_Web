@@ -5845,7 +5845,17 @@ def _recover_orphaned_running_tasks(now: int) -> None:
                     _set_daily_publish_slot_state(conn, task_id, "unknown", now=now)
                 else:
                     _release_daily_publish_slot(conn, task_id, "worker_lease_expired", now=now)
-            _release_task_billing_reservation(conn, row, now=now)
+            reservation_id = str(row["billing_reservation_id"] or "")
+            if reservation_id and publish_committed:
+                commercial_billing.settle_reservation(
+                    conn,
+                    reservation_id,
+                    actual_quantity=1,
+                    success=True,
+                    now=now,
+                )
+            else:
+                _release_task_billing_reservation(conn, row, now=now)
             conn.execute(
                 """
                 UPDATE social_accounts
@@ -6470,7 +6480,56 @@ def _run_publish_submit_guard(control: dict[str, Any], action: Callable[[], Any]
         task_id = str(control.get("current_task_id") or "")
         if (event is not None and event.is_set()) or _is_task_cancelled(task_id):
             raise RuntimeError("社交自动化任务已取消。")
+        if not _arm_publish_submission(task_id):
+            raise RuntimeError("发布提交状态无法持久化，已停止执行。")
         return action()
+
+
+def _arm_publish_submission(task_id: str) -> bool:
+    clean_task_id = str(task_id or "").strip()
+    if not clean_task_id:
+        return False
+    now = _now()
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        task = conn.execute(
+            "SELECT * FROM social_automation_tasks WHERE id = ? AND status IN ('running', 'need_manual')",
+            (clean_task_id,),
+        ).fetchone()
+        if task is None:
+            return False
+        updated = conn.execute(
+            """
+            UPDATE social_automation_tasks
+            SET daily_publish_committed = 1,
+                daily_publish_committed_at = CASE
+                  WHEN daily_publish_committed_at > 0 THEN daily_publish_committed_at
+                  ELSE ?
+                END,
+                updated_at = ?
+            WHERE id = ? AND status IN ('running', 'need_manual')
+            """,
+            (now, now, clean_task_id),
+        ).rowcount
+        if not updated:
+            return False
+        _ensure_daily_publish_slot(conn, task, now=now)
+        _set_daily_publish_slot_state(
+            conn,
+            clean_task_id,
+            "armed",
+            now=now,
+            quota_day=_daily_publish_day(now),
+        )
+        _insert_log(
+            conn,
+            clean_task_id,
+            "info",
+            "publish_submission_armed",
+            "不可逆发布动作执行前已持久化提交状态。",
+            {},
+        )
+    return True
 
 
 def _signal_publish_cancellation(control: dict[str, Any] | None) -> None:
@@ -6762,7 +6821,7 @@ def _finish_task(
         credit_cost_units = 0
         free_image_count = 0
         if reservation_id and status != "need_manual":
-            if status == "success":
+            if status == "success" or existing_committed:
                 commercial_billing.settle_reservation(conn, reservation_id, actual_quantity=1, success=True, now=now)
             else:
                 _release_task_billing_reservation(conn, task, now=now)

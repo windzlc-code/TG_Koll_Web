@@ -466,6 +466,59 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             ],
         )
 
+    def test_publish_batch_clears_takeover_requested_during_completion_before_next_item(self):
+        page = mock.Mock()
+        context = mock.Mock()
+        manager = mock.MagicMock()
+        manager.__enter__.return_value = context
+        takeover_event = threading.Event()
+        takeover_ack_event = threading.Event()
+        resolved = mock.Mock(return_value=True)
+        event_state_at_publish = []
+        tasks = [
+            {"id": "publish-1", "task_type": "publish_post", "platform": "threads", "payload": {}},
+            {"id": "publish-2", "task_type": "publish_post", "platform": "threads", "payload": {}},
+        ]
+
+        def complete(_task, _result, index, _total):
+            if index == 1:
+                takeover_event.set()
+            return True
+
+        def publish(*_args, **_kwargs):
+            event_state_at_publish.append(takeover_event.is_set())
+            return {"ok": True}
+
+        control = {
+            "account_login_status_callback": mock.Mock(),
+            "manual_takeover_event": takeover_event,
+            "manual_takeover_ack_event": takeover_ack_event,
+            "manual_takeover_callback": mock.Mock(return_value=True),
+            "manual_takeover_resolved_callback": resolved,
+            "batch_item_completed_callback": complete,
+        }
+
+        with (
+            mock.patch.object(runner, "_open_camoufox_context", return_value=manager),
+            mock.patch.object(runner, "_import_initial_cookies"),
+            mock.patch.object(runner, "_first_page", return_value=page),
+            mock.patch.object(runner, "_sync_live_browser_viewport"),
+            mock.patch.object(runner, "_check_platform_login_without_disrupting", return_value={"status": "ready"}),
+            mock.patch.object(runner, "_run_publish_post", side_effect=publish),
+        ):
+            runner.run_social_publish_batch(
+                tasks=tasks,
+                account={"platform": "threads"},
+                proxy=None,
+                data_dir=Path("."),
+                loggers=[_Logger(), _Logger()],
+                context_control=control,
+            )
+
+        self.assertEqual(event_state_at_publish, [False, False])
+        self.assertFalse(takeover_event.is_set())
+        resolved.assert_called_once()
+
     def test_publish_batch_stops_before_next_item_when_completion_is_not_persisted(self):
         page = mock.Mock()
         context = mock.Mock()
@@ -2866,6 +2919,254 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertEqual(confirm_profile.call_args.kwargs["profile_url"], resolved_profile)
         screenshot.assert_called_once_with(page.context.pages[2], permalink, "hello threads", Path("."), {"id": "publish-task"}, mock.ANY)
         self.assertTrue(all(background.closed for background in page.context.pages))
+
+    def test_instagram_home_is_not_publish_confirmation(self):
+        page = mock.Mock()
+        page.url = runner.INSTAGRAM_HOME
+        body = mock.Mock()
+        body.inner_text.return_value = "Home"
+        page.locator.return_value = body
+
+        with (
+            mock.patch.object(runner.time, "time", side_effect=[0.0, 1.0, 91.0]),
+            mock.patch.object(runner.time, "sleep"),
+        ):
+            result = runner._wait_for_publish_success(page, _Logger())
+
+        self.assertFalse(result["confirmed"])
+
+    def test_instagram_publish_confirmation_stops_immediately_when_cancelled(self):
+        page = mock.Mock()
+        page.url = runner.INSTAGRAM_HOME
+        cancel_event = threading.Event()
+        cancel_event.set()
+
+        with self.assertRaises(RuntimeError):
+            runner._wait_for_publish_success(
+                page,
+                _Logger(),
+                cancel_event=cancel_event,
+            )
+        page.locator.assert_not_called()
+
+    def test_instagram_unconfirmed_publish_raises_unknown_outcome(self):
+        page = mock.Mock()
+        page.url = runner.INSTAGRAM_HOME
+        media_path = Path(__file__).resolve()
+
+        with (
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_warmup_scroll"),
+            mock.patch.object(runner, "_click_text_button", return_value=True),
+            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner, "_run_publish_submit_action", side_effect=lambda _control, _cancel, action: action()),
+            mock.patch.object(
+                runner,
+                "_wait_for_publish_success",
+                return_value={"confirmed": False, "reason": "confirmation timed out"},
+            ),
+            mock.patch.object(runner, "_screenshot", return_value="instagram-unknown.png"),
+        ):
+            with self.assertRaises(runner.PublishOutcomeUnknownError) as raised:
+                runner._run_publish_post(
+                    page,
+                    {"id": "instagram-publish"},
+                    {"media_paths": [str(media_path)], "warmup": False},
+                    Path("."),
+                    _Logger(),
+                    "instagram",
+                )
+
+        self.assertTrue(raised.exception.publish_submitted)
+        self.assertTrue(raised.exception.publish_outcome_unknown)
+        self.assertFalse(raised.exception.retryable)
+        self.assertEqual(raised.exception.status, "ready")
+        self.assertEqual(raised.exception.screenshot_path, "instagram-unknown.png")
+
+    def test_manual_publish_timeout_is_failed_not_need_manual(self):
+        page = _PageWithBackground()
+        logger = _RecordingLogger()
+
+        with (
+            mock.patch.object(runner.time, "monotonic", side_effect=[0.0, 300.0]),
+            mock.patch.object(runner, "_screenshot", side_effect=["takeover.png", "timeout.png"]),
+        ):
+            with self.assertRaises(runner.ManualTimeoutError) as raised:
+                runner._wait_for_manual_threads_publish_completion(
+                    page,
+                    {"id": "manual-publish-timeout"},
+                    {"caption": "post", "manual_publish_timeout_seconds": 300},
+                    Path("."),
+                    logger,
+                    {"username": "alice"},
+                    "https://www.threads.net/@alice",
+                    set(),
+                    threading.Event(),
+                    {},
+                )
+
+        self.assertIsInstance(raised.exception, runner.AutoLoginFailedError)
+        self.assertNotIsInstance(raised.exception, runner.NeedManualError)
+        self.assertEqual(raised.exception.timeout_kind, "manual_publish_timeout")
+        self.assertFalse(raised.exception.browser_available)
+        self.assertEqual(raised.exception.status, "ready")
+
+    def test_manual_login_timeout_exposes_explicit_timeout_semantics(self):
+        page = mock.Mock()
+
+        with (
+            mock.patch.object(runner.time, "monotonic", side_effect=[0.0, 300.0]),
+            mock.patch.object(runner, "_screenshot", return_value="timeout.png"),
+        ):
+            with self.assertRaises(runner.ManualTimeoutError) as raised:
+                runner._wait_for_manual_login_completion(
+                    page,
+                    {"id": "manual-login-timeout", "payload": {"manual_login_timeout_seconds": 300}},
+                    Path("."),
+                    _Logger(),
+                    "instagram",
+                    None,
+                    "manual login required",
+                )
+
+        self.assertEqual(raised.exception.timeout_kind, "manual_login_timeout")
+        self.assertFalse(raised.exception.browser_available)
+        self.assertEqual(raised.exception.status, "cookie_expired")
+
+    def test_threads_confirmation_cancel_closes_background_page_and_worker(self):
+        page = _PageWithBackground()
+        cancel_event = threading.Event()
+        confirmation_started = threading.Event()
+        outcome = {}
+
+        def no_post_yet(_page):
+            confirmation_started.set()
+            return []
+
+        def target():
+            try:
+                runner._wait_for_manual_threads_publish_completion(
+                    page,
+                    {"id": "cancel-confirmation"},
+                    {"caption": "post", "manual_publish_timeout_seconds": 300},
+                    Path("."),
+                    _Logger(),
+                    {"username": "alice"},
+                    "https://www.threads.net/@alice",
+                    set(),
+                    cancel_event,
+                    {},
+                )
+            except BaseException as exc:
+                outcome["error"] = exc
+
+        with (
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_dismiss_threads_compose_dialogs"),
+            mock.patch.object(runner, "_find_threads_post_permalinks", side_effect=no_post_yet),
+            mock.patch.object(runner, "_screenshot", return_value=""),
+        ):
+            worker = threading.Thread(target=target)
+            worker.start()
+            self.assertTrue(confirmation_started.wait(1.0))
+            cancel_event.set()
+            worker.join(1.0)
+
+        self.assertFalse(worker.is_alive())
+        self.assertIsInstance(outcome.get("error"), RuntimeError)
+        self.assertTrue(page.context.pages)
+        self.assertTrue(all(background.closed for background in page.context.pages))
+
+    def test_threads_confirm_only_resolves_manual_takeover_before_success(self):
+        page = _PageWithBackground("https://www.threads.net/@alice")
+        takeover_event = threading.Event()
+        takeover_event.set()
+        acknowledged = mock.Mock(return_value=True)
+        resolved = mock.Mock(return_value=True)
+        control = {
+            "manual_takeover_event": takeover_event,
+            "manual_takeover_ack_event": threading.Event(),
+            "manual_takeover_timeout_event": threading.Event(),
+            "manual_takeover_callback": acknowledged,
+            "manual_takeover_resolved_callback": resolved,
+        }
+
+        with (
+            mock.patch.object(
+                runner,
+                "_wait_for_threads_own_post",
+                return_value={"confirmed": True, "url": "https://www.threads.net/@alice/post/NEW"},
+            ),
+            mock.patch.object(runner, "_capture_threads_publish_evidence", return_value="evidence.png"),
+        ):
+            result = runner._run_threads_publish_post(
+                page,
+                {"id": "confirm-only"},
+                {
+                    "_publish_confirmation": {
+                        "phase": "confirm_only",
+                        "profile_url": "https://www.threads.net/@alice",
+                        "baseline_permalinks": [],
+                        "caption": "post",
+                    },
+                },
+                Path("."),
+                _Logger(),
+                {"username": "alice"},
+                control,
+                threading.Event(),
+            )
+
+        self.assertTrue(result["ok"])
+        acknowledged.assert_called()
+        resolved.assert_called_once()
+        self.assertFalse(takeover_event.is_set())
+        self.assertFalse(control["manual_takeover_ack_event"].is_set())
+
+    def test_publish_batch_clears_completed_item_takeover_before_next_item(self):
+        page = mock.Mock()
+        context = mock.Mock()
+        manager = mock.MagicMock()
+        manager.__enter__.return_value = context
+        takeover_event = threading.Event()
+        observed_events = []
+        control = {
+            "manual_takeover_event": takeover_event,
+            "manual_takeover_ack_event": threading.Event(),
+            "manual_takeover_timeout_event": threading.Event(),
+            "manual_takeover_callback": mock.Mock(return_value=True),
+            "manual_takeover_resolved_callback": mock.Mock(return_value=True),
+        }
+        tasks = [
+            {"id": "publish-1", "task_type": "publish_post", "platform": "threads", "payload": {}},
+            {"id": "publish-2", "task_type": "publish_post", "platform": "threads", "payload": {}},
+        ]
+
+        def publish_item(*_args, **_kwargs):
+            observed_events.append(takeover_event.is_set())
+            if len(observed_events) == 1:
+                takeover_event.set()
+            return {"ok": True}
+
+        with (
+            mock.patch.object(runner, "_open_camoufox_context", return_value=manager),
+            mock.patch.object(runner, "_import_initial_cookies"),
+            mock.patch.object(runner, "_first_page", return_value=page),
+            mock.patch.object(runner, "_sync_live_browser_viewport"),
+            mock.patch.object(runner, "_run_publish_task_in_context", side_effect=publish_item),
+        ):
+            results = runner.run_social_publish_batch(
+                tasks=tasks,
+                account={"platform": "threads"},
+                proxy=None,
+                data_dir=Path("."),
+                loggers=[_Logger(), _Logger()],
+                context_control=control,
+            )
+
+        self.assertEqual(len(results), 2)
+        self.assertEqual(observed_events, [False, False])
+        control["manual_takeover_resolved_callback"].assert_called_once()
 
 
 if __name__ == "__main__":

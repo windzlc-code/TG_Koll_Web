@@ -1365,6 +1365,10 @@ def _start_cleanup_worker() -> None:
 
 
 def _resume_pending_tasks() -> None:
+    orphan_hold_cutoff = _now_ts() - max(
+        60,
+        int(os.getenv("BILLING_ORPHAN_RESERVATION_GRACE_SECONDS", "300") or 300),
+    )
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         orphan_holds = conn.execute(
@@ -1373,12 +1377,21 @@ def _resume_pending_tasks() -> None:
             FROM billing_reservations AS reservation
             LEFT JOIN tasks AS task
               ON reservation.ref_type = 'normal_task' AND reservation.ref_id = task.id
+            LEFT JOIN social_automation_tasks AS social_task
+              ON reservation.ref_type = 'social_task' AND reservation.ref_id = social_task.id
             WHERE reservation.status = 'held'
               AND (
                 reservation.ref_type IN ('persona_post_generation', 'persona_image_generation')
                 OR (reservation.ref_type = 'normal_task' AND task.id IS NULL)
+                OR (
+                  reservation.ref_type = 'social_task'
+                  AND social_task.id IS NULL
+                  AND reservation.created_at < ?
+                )
               )
             """
+            ,
+            (orphan_hold_cutoff,),
         ).fetchall()
         for hold in orphan_holds:
             commercial_billing.release_reservation(conn, str(hold["id"]))

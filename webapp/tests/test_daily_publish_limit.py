@@ -459,6 +459,102 @@ class DailyPublishLimitTests(unittest.TestCase):
                 [first_task["id"], second_task["id"]],
             )
 
+    def test_publish_batch_tail_is_reserved_across_workers_while_ui_stays_queued(self):
+        batch_id = "publish-batch-multi-worker"
+        tasks = []
+        for index in range(1, 3):
+            payload = self._payload(account_id="account-admin", persona_id="persona-admin")
+            payload.payload.update({
+                "publish_batch_id": batch_id,
+                "publish_sequence_index": index,
+                "publish_sequence_total": 2,
+            })
+            tasks.append(self._create(payload))
+
+        with mock.patch.object(social_automation_api, "_now", return_value=self.now):
+            first = social_automation_api._claim_next_task()
+            batch = social_automation_api._claim_publish_batch_tail(first)
+
+        self.assertEqual([item["id"] for item in batch], [item["id"] for item in tasks])
+        with sqlite3.connect(self.db_path) as conn:
+            statuses = conn.execute(
+                """
+                SELECT status
+                FROM social_automation_tasks
+                WHERE json_extract(payload_json, '$.publish_batch_id') = ?
+                ORDER BY CAST(json_extract(payload_json, '$.publish_sequence_index') AS INTEGER)
+                """,
+                (batch_id,),
+            ).fetchall()
+        self.assertEqual([row[0] for row in statuses], ["running", "queued"])
+        self.assertNotIn(
+            "_publish_batch_reservation",
+            social_automation_api.get_social_task(tasks[1]["id"])["payload"],
+        )
+
+        with (
+            mock.patch.object(social_automation_api, "_now", return_value=self.now),
+            mock.patch.object(social_automation_api, "_sync_successful_task_to_persona_archive"),
+        ):
+            self.assertTrue(
+                social_automation_api._finish_publish_batch_item(
+                    tasks[0],
+                    {"ok": True},
+                    1,
+                    2,
+                )
+            )
+        with (
+            mock.patch.object(social_automation_api, "_WORKER_INSTANCE_ID", "other-worker"),
+            mock.patch.object(social_automation_api, "_now", return_value=self.now),
+        ):
+            self.assertIsNone(social_automation_api._claim_next_task())
+        with mock.patch.object(social_automation_api, "_now", return_value=self.now):
+            self.assertTrue(
+                social_automation_api._mark_publish_batch_item_running(
+                    batch[1],
+                    2,
+                    2,
+                )
+            )
+
+    def test_failed_publish_batch_item_deterministically_fails_queued_tail(self):
+        batch_id = "publish-batch-failed-tail"
+        tasks = []
+        for index in range(1, 4):
+            payload = self._payload(account_id="account-admin", persona_id="persona-admin")
+            payload.payload.update({
+                "publish_batch_id": batch_id,
+                "publish_sequence_index": index,
+                "publish_sequence_total": 3,
+            })
+            tasks.append(self._create(payload))
+
+        with mock.patch.object(social_automation_api, "_now", return_value=self.now):
+            first = social_automation_api._claim_next_task()
+            social_automation_api._claim_publish_batch_tail(first)
+            self.assertFalse(
+                social_automation_api._finish_publish_batch_item(
+                    tasks[0],
+                    {"ok": False, "error": "runner failed"},
+                    1,
+                    3,
+                )
+            )
+
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT status, error
+                FROM social_automation_tasks
+                WHERE json_extract(payload_json, '$.publish_batch_id') = ?
+                ORDER BY CAST(json_extract(payload_json, '$.publish_sequence_index') AS INTEGER)
+                """,
+                (batch_id,),
+            ).fetchall()
+        self.assertEqual([row[0] for row in rows], ["failed", "failed", "failed"])
+        self.assertTrue(all("previous publish batch item failed" in row[1] for row in rows[1:]))
+
     def test_incomplete_publish_batch_is_cancelled_after_prepare_timeout(self):
         batch_id = "publish-batch-incomplete"
         first = self._payload(account_id="account-admin", persona_id="persona-admin")
