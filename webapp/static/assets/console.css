@@ -19074,6 +19074,11 @@ body.console-page {
     grid-row: 1;
   }
 
+  .console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-card-identity > strong {
+    position: relative;
+    top: 2px;
+  }
+
   .console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-card-identity > [data-live-browser-meta] {
     display: block;
   }

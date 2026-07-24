@@ -944,6 +944,10 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             ".console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-card-head {",
             portrait_start,
         )
+        account_title = self._css_block(
+            ".console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-card-identity > strong {",
+            portrait_start,
+        )
         task_summary = self._css_block(
             ".console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-task-summary {",
             portrait_start,
@@ -955,6 +959,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
 
         self.assertIn("padding: 3px 6px;", expanded_head)
         self.assertIn("background: rgb(5 12 13 / 37%);", expanded_head)
+        self.assertIn("top: 2px;", account_title)
         self.assertIn("display: none;", task_summary)
         self.assertIn("display: grid;", mobile_summary)
         self.assertIn("position: absolute;", mobile_summary)
