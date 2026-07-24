@@ -222,7 +222,9 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             ".console-page .task-table-inner--regular .task-row .row-actions .task-queue-delete-button {",
             mobile_styles,
         )
-        self.assertIn("margin-left: auto;", mobile_styles)
+        self.assertIn("flex-wrap: nowrap;", mobile_styles)
+        self.assertIn("justify-content: flex-end;", mobile_styles)
+        self.assertIn("margin-left: 0;", mobile_styles)
 
     def test_task_queue_removes_open_current_persona_action(self):
         self.assertNotIn("data-task-open-persona", self.console_script)

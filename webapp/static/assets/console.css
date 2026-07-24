@@ -18206,13 +18206,13 @@ body.console-page {
     max-width: 100%;
     gap: 4px;
     justify-content: flex-end;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
   }
 
   .task-table-inner--regular .task-row .row-actions {
     width: 100%;
     align-items: center;
-    justify-content: flex-start;
+    justify-content: flex-end;
   }
 
   .console-page .task-persona-queue-row .row-actions :is(button, a),
@@ -18232,7 +18232,9 @@ body.console-page {
   }
 
   .console-page .task-table-inner--regular .task-row .row-actions .task-queue-delete-button {
-    margin-left: auto;
+    /* Keep the action group compact: the delete control remains the last item. */
+    margin-left: 0;
+    flex: 0 0 28px;
   }
 
   .task-queue-pager {
