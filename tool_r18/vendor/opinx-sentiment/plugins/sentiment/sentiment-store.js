@@ -1023,7 +1023,7 @@ export const DEFAULT_SENTIMENT_SEARCH_SETTINGS = {
         authUrl: "https://www.threads.com/",
         authUrls: ["https://www.threads.com/", "https://www.threads.net/", "https://www.instagram.com/accounts/login/"],
         cookieDomains: ["threads.com", "threads.net", "instagram.com", "facebook.com"],
-        matchDomains: ["threads.com", "threads.net", "instagram.com", "facebook.com"],
+        matchDomains: ["threads.com", "threads.net"],
         urlTemplate: "https://www.threads.com/search?q={query}",
         linkPattern: "threads.com/",
         cookies: [],

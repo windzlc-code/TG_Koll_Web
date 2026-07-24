@@ -1228,7 +1228,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self._run_node(harness)
 
         update_card = self._function_source("updateLiveBrowserSessionCard")
-        self.assertIn('button.disabled = !sessionId || !["running", "need_manual"].includes(status)', update_card)
+        self.assertIn('button.disabled = loginMode === "switching" || !sessionId || !["running", "need_manual"].includes(status)', update_card)
         self.assertNotIn('status !== "running"', update_card)
 
         set_mode = self._function_source("setLiveBrowserMode")
@@ -1270,6 +1270,81 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             mobile_density,
         )
         self.assertIn("justify-self: end;", mobile_density)
+
+    def test_live_browser_takeover_wait_and_publish_target_are_not_post_titles(self):
+        render_toggle = self._function_source("renderLiveBrowserModeToggle")
+        update_card = self._function_source("updateLiveBrowserSessionCard")
+        task_summary = self._function_source("liveBrowserTaskSummary")
+
+        self.assertIn('switching ? "等待中"', render_toggle)
+        self.assertNotIn("再次强制接管", render_toggle)
+        self.assertIn('loginMode === "switching" ? "等待中"', update_card)
+        self.assertNotIn("再次强制接管", update_card)
+        self.assertIn('button.disabled = loginMode === "switching"', update_card)
+
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("node:assert/strict");
+            const state = {{
+              socialTasks: [{{
+                id: "task-1",
+                task_type: "publish_post",
+                account_id: "account-1",
+                account_username: "Peacock83628",
+                platform: "threads",
+                payload: {{ archive_post_title: "第11篇" }},
+              }}],
+            }};
+            function socialTaskPayload(task) {{ return task?.payload || {{}}; }}
+            function accountById() {{ return {{ username: "fallback-account" }}; }}
+            function platformLabel(value) {{ return value === "threads" ? "Threads" : value; }}
+            function statusLabel(value) {{ return value; }}
+            {task_summary}
+
+            const summary = liveBrowserTaskSummary({{
+              task_id: "task-1",
+              task_type: "publish_post",
+              account_id: "account-1",
+              account_username: "Peacock83628",
+              platform: "threads",
+            }});
+            assert.equal(summary.count, 1);
+            assert.equal(summary.target, "Threads · Peacock83628");
+            assert.ok(!summary.target.includes("第11篇"));
+            """
+        )
+        self._run_node(harness)
+
+    def test_live_browser_action_menu_closes_on_outside_and_guards_iframe(self):
+        close_menus = self._function_source("closeLiveBrowserActionMenus")
+        bind_events = self._function_source("bindEvents")
+        open_menu_guard = self._css_block(
+            ".console-page .live-browser-panel:has(.live-browser-action-menu[open]) iframe {"
+        )
+
+        self.assertIn('document.querySelectorAll(".live-browser-action-menu[open]")', close_menus)
+        self.assertIn('document.addEventListener("click", (event) => {', bind_events)
+        self.assertIn('event.target.closest(".live-browser-action-menu")', bind_events)
+        self.assertIn("pointer-events: none;", open_menu_guard)
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("node:assert/strict");
+            const first = {{ removed: false, removeAttribute() {{ this.removed = true; }} }};
+            const second = {{ removed: false, removeAttribute() {{ this.removed = true; }} }};
+            const document = {{
+              querySelectorAll(selector) {{
+                assert.equal(selector, ".live-browser-action-menu[open]");
+                return [first, second];
+              }},
+            }};
+            {close_menus}
+
+            closeLiveBrowserActionMenus(second);
+            assert.equal(first.removed, true);
+            assert.equal(second.removed, false);
+            """
+        )
+        self._run_node(harness)
 
     def test_account_browser_actions_bind_to_the_owning_shell(self):
         bind_events = self._function_source("bindEvents")

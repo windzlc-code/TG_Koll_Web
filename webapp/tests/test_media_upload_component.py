@@ -159,13 +159,35 @@ class MediaUploadComponentContractTests(unittest.TestCase):
             self.styles,
         )
 
-    def test_persona_media_editor_uses_direct_add_and_card_edit_actions(self):
-        self.assertIn('data-persona-upload-post-media="add">添加媒体</button>', self.script)
+    def test_persona_media_editor_uses_one_wysiwyg_grid_and_card_actions(self):
+        self.assertIn("data-persona-unified-media-editor", self.script)
+        self.assertIn("data-persona-direct-media-input", self.script)
+        self.assertIn("acceptPersonaDirectMediaFiles(input, files);", self.script)
+        self.assertNotIn("data-persona-upload-post-media", self.script)
+        self.assertNotIn("<strong>当前媒体</strong>", self.script)
         self.assertIn('data-persona-edit-post-media="${esc(index)}"', self.script)
         self.assertIn('title="编辑媒体"', self.script)
-        self.assertNotIn('data-persona-upload-post-media="append">追加</button>', self.script)
         self.assertNotIn('data-persona-attach-task-media="replace"', self.script)
         self.assertIn('["replace", "媒体编辑"]', self.script)
+        self.assertIn("function renderMediaCardViewIcon()", self.script)
+        self.assertIn("function renderMediaCardEditIcon()", self.script)
+        self.assertIn("function renderMediaCardDeleteIcon()", self.script)
+        self.assertIn("${renderMediaCardViewIcon()}</button>", self.script)
+        self.assertIn("${renderMediaCardEditIcon()}</button>", self.script)
+        self.assertIn("${renderMediaCardDeleteIcon()}</button>", self.script)
+        self.assertIn(".ui-media-card-view-icon", self.styles)
+        self.assertIn(".ui-media-card-edit-icon", self.styles)
+        self.assertIn(".ui-media-card-delete-icon", self.styles)
+
+    def test_persona_media_bulk_selection_only_renders_delete_when_selected(self):
+        self.assertIn("data-persona-media-select-index", self.script)
+        self.assertIn("data-persona-media-select-all", self.script)
+        self.assertIn("function togglePersonaMediaBulkSelection", self.script)
+        self.assertIn("function deleteSelectedPersonaPostMedia", self.script)
+        self.assertIn('selectedIndexes.size ? `<button type="button" class="upload-delete-selected"', self.script)
+        self.assertIn("if (!selected.size) {", self.script)
+        self.assertIn("deleteSelected?.remove();", self.script)
+        self.assertIn(".upload-selection-toolbar [hidden] {", self.styles)
 
     def test_persona_media_cards_have_order_badges_and_pointer_reordering(self):
         self.assertIn("data-persona-media-sort-grid", self.script)
@@ -175,6 +197,7 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("function handlePersonaMediaPointerDown(event)", self.script)
         self.assertIn("function handlePersonaMediaPointerMove(event)", self.script)
         self.assertIn("function handlePersonaMediaPointerUp(event)", self.script)
+        self.assertIn("if (wasActive) updatePersonaMediaPointerDragTarget(event.clientX, event.clientY);", self.script)
         self.assertIn("function handlePersonaMediaSortKeydown(event)", self.script)
         self.assertIn('drag.captureTarget?.setPointerCapture?.(event.pointerId);', self.script)
         self.assertIn("personaMediaMoveLocks.has(moveKey)", self.script)
@@ -185,6 +208,34 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn(".persona-edit-media-order {", self.styles)
         self.assertIn("touch-action: none;", self.styles)
         self.assertIn(".persona-media-drag-ghost {", self.styles)
+        self.assertIn(
+            ".persona-unified-media-editor .persona-edit-media-grid {\n  width: 100%;\n  grid-template-columns: repeat(3, minmax(0, 1fr));",
+            self.styles,
+        )
+        self.assertIn(
+            ".persona-unified-media-editor .persona-edit-media-grid {\n    grid-template-columns: repeat(2, minmax(0, 1fr));",
+            self.styles,
+        )
+        self.assertIn("const items = personaDraftMediaPreviewItems(persona, source, post);", self.script)
+        self.assertIn("return Math.min(Math.max(hitIndex, 0), cards.length - 1);", self.script)
+        self.assertNotIn("const adjustedSlot = insertSlot > fromIndex ? insertSlot - 1 : insertSlot;", self.script)
+
+    def test_persona_media_card_controls_use_scoped_icons_and_single_selection_ring(self):
+        self.assertNotIn("function renderPersonaMediaSelectionIcon(selected)", self.script)
+        self.assertIn("${renderUploadSelectionIcon(isSelected)}", self.script)
+        self.assertIn("function renderMediaCardViewIcon()", self.script)
+        self.assertIn('<circle cx="12" cy="12" r="2.5"></circle>', self.script)
+        self.assertIn("function renderMediaCardEditIcon()", self.script)
+        self.assertIn('class="ui-media-card-edit-icon"', self.script)
+        self.assertIn("function renderMediaCardDeleteIcon()", self.script)
+        self.assertIn("button.persona-media-card-select .upload-selection-icon", self.styles)
+        self.assertIn("width: 17px;\n  height: 17px;", self.styles)
+        self.assertIn("background: color-mix(in srgb, var(--panel-solid) 96%, transparent);", self.styles)
+
+    def test_persona_media_card_surface_selects_and_only_eye_opens_preview(self):
+        self.assertIn('interactive: false,', self.script)
+        self.assertIn('data-media-preview-group="${esc(groupId)}"', self.script)
+        self.assertIn('const personaMediaCard = event.target.closest(".persona-edit-media-card', self.script)
 
     def test_new_upload_media_cards_support_edit_and_cross_device_reordering(self):
         self.assertIn('data-upload-sort-card="${esc(index)}"', self.script)
@@ -233,6 +284,14 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn('const selectUploadCard = event.target.closest("[data-upload-sort-card]");', self.script)
         self.assertIn('event.target.closest("button, a, input, label, [role=\\"button\\"]")', self.script)
         self.assertIn('event.target.closest(".file-chip-actions, [data-upload-sort-handle]")', self.script)
+        persona_select_styles = self.styles.split(".persona-media-card-select {", 1)[1].split("}", 1)[0]
+        self.assertIn("top: 8px;", persona_select_styles)
+        self.assertIn("left: 8px;", persona_select_styles)
+        self.assertIn("width: 28px;", persona_select_styles)
+        self.assertIn("height: 28px;", persona_select_styles)
+        self.assertIn("place-items: center;", persona_select_styles)
+        self.assertIn("border-radius: 50%;", persona_select_styles)
+        self.assertIn('const personaMediaCard = event.target.closest(".persona-edit-media-card', self.script)
 
     def test_upload_sorting_blocks_native_card_drag_and_keeps_actions_out_of_drag_gesture(self):
         drag_start = self.script.split("function handleUploadPreviewDragStart(event)", 1)[1].split(
@@ -240,6 +299,9 @@ class MediaUploadComponentContractTests(unittest.TestCase):
             1,
         )[0]
         self.assertIn('[data-upload-sort-card]', drag_start)
+        self.assertIn('[data-persona-media-sort-grid] .persona-edit-media-card', drag_start)
+        self.assertIn('draggable="false"', self.script)
+        self.assertIn(".persona-edit-media-card :is(img, video)", self.styles)
         pointer_down = self.script.split("function handleUploadSortPointerDown(event)", 1)[1].split(
             "function handleUploadSortPointerMove",
             1,
@@ -255,6 +317,14 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("if (explicitHandle) event.preventDefault();", pointer_down)
         self.assertIn("function handleUploadSortKeydown(event)", self.script)
         self.assertIn('document.addEventListener("keydown", handleUploadSortKeydown, true);', self.script)
+
+        persona_pointer_down = self.script.split("function handlePersonaMediaPointerDown(event)", 1)[1].split(
+            "function handlePersonaMediaPointerMove",
+            1,
+        )[0]
+        self.assertIn('event.target.closest?.(".persona-edit-media-card[data-persona-media-card-index]")', persona_pointer_down)
+        self.assertIn(".persona-media-card-select, .persona-edit-media-actions, input, label, a", persona_pointer_down)
+        self.assertIn('event.pointerType !== "mouse" || blockedInteractive', persona_pointer_down)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 const DEFAULT_API_BASE = "";
 const DEFAULT_AUTH_TOKEN = "";
-const DEFAULT_EXTENSION_VERSION = "1.0.13";
+const DEFAULT_EXTENSION_VERSION = "1.0.14";
 const AUTO_SYNC_ALARM = "opinx-browser-auth-auto-sync";
 const AUTO_SYNC_INTERVAL_MINUTES = 10;
 const MIN_PROFILE_SYNC_GAP_MS = 2 * 60 * 1000;
@@ -38,7 +38,7 @@ const PROFILES = [
     sourceKey: "threads",
     domain: "threads.com",
     cookieDomains: ["threads.com", "threads.net", "instagram.com", "facebook.com"],
-    matchDomains: ["threads.com", "threads.net", "instagram.com", "facebook.com"],
+    matchDomains: ["threads.com", "threads.net"],
     authUrl: "https://www.threads.com/",
     authUrls: ["https://www.threads.com/", "https://www.instagram.com/accounts/login/"],
   },
@@ -345,11 +345,14 @@ function profilesForUrlFromList(url = "", profiles = PROFILES) {
   try {
     const host = new URL(url).hostname.replace(/^www\./, "");
     const normalizeDomain = (domain = "") => String(domain || "").replace(/^\.+/, "").replace(/^www\./, "");
+    const matchesDomain = domain => host === domain || host.endsWith(`.${domain}`);
+    const exactProfiles = profiles.filter(profile => matchesDomain(normalizeDomain(profile.domain)));
+    if (exactProfiles.length) return exactProfiles;
     return profiles.filter(profile => {
-      const domains = [profile.domain, ...(profile.matchDomains || []), ...(profile.cookieDomains || [])]
+      const domains = [...(profile.matchDomains || [])]
         .map(normalizeDomain)
         .filter(Boolean);
-      return [...new Set(domains)].some(domain => host === domain || host.endsWith(`.${domain}`));
+      return [...new Set(domains)].some(matchesDomain);
     });
   } catch {
     return [];
@@ -504,6 +507,18 @@ async function syncProfileCookies(profile, options = {}) {
   return result;
 }
 
+async function syncProfilesSequentially(profiles, options = {}) {
+  const results = [];
+  for (const profile of profiles) {
+    try {
+      results.push({ status: "fulfilled", value: await syncProfileCookies(profile, options) });
+    } catch (reason) {
+      results.push({ status: "rejected", reason });
+    }
+  }
+  return results;
+}
+
 async function openAuthorizationPages() {
   await refreshExtensionConfig({ force: true }).catch(() => undefined);
   const profiles = await activeProfiles();
@@ -524,7 +539,7 @@ async function syncAllProfiles(options = {}) {
     await storageSet({ lastAutoStatus: "missing auth token" });
     return [];
   }
-  const results = await Promise.allSettled(profiles.map(profile => syncProfileCookies(profile, { ...options, silentStatus: true })));
+  const results = await syncProfilesSequentially(profiles, { ...options, silentStatus: true });
   const okCount = results.filter(result => result.status === "fulfilled" && result.value?.ok).length;
   const failed = results
     .map((result, index) => ({ result, profile: profiles[index] }))
@@ -599,7 +614,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== "complete" || !tab?.url) return;
   profilesForUrl(tab.url).then(profiles => {
     if (!profiles.length) return null;
-    return Promise.allSettled(profiles.map(profile => syncProfileCookies(profile, { silentStatus: true }))).then(async results => {
+    return syncProfilesSequentially(profiles, { silentStatus: true }).then(async results => {
       await storageSet({ lastStatus: summarizeSyncSettledResults(profiles, results, "自动同步") });
     });
   });
@@ -622,7 +637,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         sendResponse({ ok: false, error: `当前标签未匹配授权站点：${tabHost || tabUrl || "unknown"}` });
         return;
       }
-      const results = await Promise.allSettled(profiles.map(profile => syncProfileCookies(profile, { force: true })));
+      const results = await syncProfilesSequentially(profiles, { force: true });
       const failures = results
         .map((result, index) => ({ result, profile: profiles[index] }))
         .filter(item => item.result.status === "rejected" || !item.result.value?.ok);

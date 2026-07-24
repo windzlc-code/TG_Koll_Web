@@ -662,6 +662,15 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.styles,
         )
         self.assertIn("grid-template-columns: repeat(6, minmax(0, 1fr));", self.styles)
+        self.assertIn('data-publish-history-view="${esc(recordId)}"', self.console_script)
+        self.assertIn('data-publish-history-requeue="${esc(recordId)}"', self.console_script)
+        self.assertIn("function openPublishHistoryRecordModal", self.console_script)
+        self.assertIn('extraActions: [{ value: "requeue", text: "重入队" }]', self.console_script)
+        self.assertIn(
+            ".publish-history-preview {\n    display: none;",
+            self.styles,
+        )
+        self.assertIn(".publish-history-card-actions {", self.styles)
         self.assertIn(".publish-history-card .publish-post-card-snippet", self.styles)
         self.assertIn("-webkit-line-clamp: 2;", self.styles)
 

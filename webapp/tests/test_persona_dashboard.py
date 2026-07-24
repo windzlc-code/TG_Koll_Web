@@ -245,6 +245,25 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertTrue(state["sessionidSaved"])
         self.assertTrue(state["hasRequiredSessionCookie"])
 
+    def test_instagram_without_sessionid_is_reported_as_incomplete(self):
+        state = server._sentiment_auth_state(
+            [
+                {
+                    "name": "ds_user_id",
+                    "value": "12345",
+                    "domain": ".instagram.com",
+                    "path": "/",
+                    "expires": 1893456000,
+                }
+            ],
+            platform="instagram",
+        )
+
+        self.assertFalse(state["sessionidSaved"])
+        self.assertFalse(state["hasRequiredSessionCookie"])
+        self.assertEqual(state["authHealth"], "degraded")
+        self.assertEqual(state["authStatus"], "incomplete")
+
     def _admin_user_id(self) -> int:
         conn = sqlite3.connect(str(self.data_dir / "app.db"))
         row = conn.execute("SELECT id FROM users WHERE username = ?", ("admin",)).fetchone()

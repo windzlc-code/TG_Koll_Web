@@ -435,6 +435,7 @@ const state = {
   personaLinkPresetPages: {},
   personaDraftViewModes: {},
   personaSelectedMediaIndexes: {},
+  personaMediaBulkSelections: {},
   matrixPublish: {
     personaIds: [],
     source: "posts",
@@ -655,6 +656,7 @@ function clearTenantInMemoryState() {
   state.personaLinkPresetPages = {};
   state.personaDraftViewModes = {};
   state.personaSelectedMediaIndexes = {};
+  state.personaMediaBulkSelections = {};
   state.personaPublishScheduleValues = {};
   state.personaCreate = null;
   state.personaCreateKeywordController = null;
@@ -2941,6 +2943,30 @@ function setSelectedPersonaMediaIndex(personaId, source, postId, index = 0) {
   const next = Math.max(0, Number.parseInt(String(index || 0), 10) || 0);
   state.personaSelectedMediaIndexes[key] = next;
   return next;
+}
+
+function personaMediaBulkSelection(personaId, source, postId, total = 0) {
+  const key = personaMediaSelectionKey(personaId, source, postId);
+  const count = Math.max(0, Number(total || 0));
+  const selected = new Set(
+    Array.from(state.personaMediaBulkSelections[key] || [])
+      .map((index) => Number(index))
+      .filter((index) => Number.isInteger(index) && index >= 0 && index < count),
+  );
+  state.personaMediaBulkSelections[key] = selected;
+  return selected;
+}
+
+function setPersonaMediaBulkSelection(personaId, source, postId, indexes = []) {
+  const key = personaMediaSelectionKey(personaId, source, postId);
+  const selected = new Set(
+    Array.from(indexes || [])
+      .map((index) => Number(index))
+      .filter((index) => Number.isInteger(index) && index >= 0),
+  );
+  if (selected.size) state.personaMediaBulkSelections[key] = selected;
+  else delete state.personaMediaBulkSelections[key];
+  return selected;
 }
 
 function sortPersonaDraftPosts(posts) {
@@ -6083,10 +6109,10 @@ function renderMediaPreviewButton(item, groupId, index, {
       ${unavailable
         ? `<div class="${esc(frameClass)} persona-media-frame--empty"><strong>媒体已失效</strong><small>源文件无法加载</small></div>`
         : type === "video"
-        ? `<video class="${esc(frameClass)}" src="${esc(displayUrl)}" data-media-source-url="${esc(displayUrl)}" muted playsinline preload="metadata" onerror="handlePersonaMediaFrameError(this)"></video>`
+        ? `<video class="${esc(frameClass)}" src="${esc(displayUrl)}" data-media-source-url="${esc(displayUrl)}" muted playsinline preload="metadata" draggable="false" onerror="handlePersonaMediaFrameError(this)"></video>`
         : type === "audio"
           ? `<div class="${esc(frameClass)} ${esc(frameClass)}--audio"><strong>音频</strong><small>点击站内预览</small></div>`
-          : `<img class="${esc(frameClass)}" src="${esc(displayUrl)}" data-media-source-url="${esc(displayUrl)}" alt="${esc(label || "media")}" loading="lazy" decoding="async"${lowPriority ? ' fetchpriority="low"' : ""} onerror="handlePersonaMediaFrameError(this)" />`}
+          : `<img class="${esc(frameClass)}" src="${esc(displayUrl)}" data-media-source-url="${esc(displayUrl)}" alt="${esc(label || "media")}" loading="lazy" decoding="async" draggable="false"${lowPriority ? ' fetchpriority="low"' : ""} onerror="handlePersonaMediaFrameError(this)" />`}
       <span>${esc(text)}</span>
     </${rootTag}>
   `;
@@ -7993,6 +8019,13 @@ function renderRefreshIcon() {
   </svg>`;
 }
 
+function renderRequeueIcon() {
+  return `<svg class="ui-action-icon ui-requeue-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M20 7v5h-5"></path>
+    <path d="M19.2 12a7.5 7.5 0 1 1-2.3-5.3L20 9"></path>
+  </svg>`;
+}
+
 function renderNetworkIcon() {
   return `<svg class="ui-action-icon ui-network-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none">
     <circle cx="12" cy="12" r="9"></circle>
@@ -8043,6 +8076,32 @@ function renderReplaceIcon() {
     <path d="m17 4 3 3-3 3"></path>
     <path d="M4 17h8a5 5 0 0 0 5-5"></path>
     <path d="m7 20-3-3 3-3"></path>
+  </svg>`;
+}
+
+function renderMediaCardViewIcon() {
+  return `<svg class="ui-media-card-view-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M2.8 12s3.4-5.2 9.2-5.2 9.2 5.2 9.2 5.2-3.4 5.2-9.2 5.2S2.8 12 2.8 12Z"></path>
+    <circle cx="12" cy="12" r="2.5"></circle>
+  </svg>`;
+}
+
+function renderMediaCardEditIcon() {
+  return `<svg class="ui-media-card-edit-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M19.5 7.5A8 8 0 0 0 6.2 5.2L4 7.5"></path>
+    <path d="M4 3.5v4h4"></path>
+    <path d="M4.5 16.5a8 8 0 0 0 13.3 2.3l2.2-2.3"></path>
+    <path d="M20 20.5v-4h-4"></path>
+  </svg>`;
+}
+
+function renderMediaCardDeleteIcon() {
+  return `<svg class="ui-media-card-delete-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M6 8h12"></path>
+    <path d="m8 8 .7 11h6.6L16 8"></path>
+    <path d="M9.5 8V5.5h5V8"></path>
+    <path d="M10.5 11v5"></path>
+    <path d="M13.5 11v5"></path>
   </svg>`;
 }
 
@@ -8994,11 +9053,21 @@ function handleUploadDrop(event) {
   zone.classList.remove("dragging");
   const files = uploadFilesFromDataTransfer(event.dataTransfer);
   if (!files.length) return;
+  const input = zone.querySelector(".upload-zone-input");
+  if (input?.matches("[data-persona-direct-media-input]")) {
+    acceptPersonaDirectMediaFiles(input, files);
+    return;
+  }
   setUploadDropzoneFiles(zone, files);
 }
 
 function handleUploadPreviewDragStart(event) {
-  if (event.target?.closest?.("[data-upload-sort-card]")) event.preventDefault();
+  if (
+    event.target?.closest?.("[data-upload-sort-card]")
+    || event.target?.closest?.("[data-persona-media-sort-grid] .persona-edit-media-card")
+  ) {
+    event.preventDefault();
+  }
 }
 
 function uploadSortTargetIndex(zone, clientX, clientY, fallbackIndex) {
@@ -9818,6 +9887,10 @@ function renderPublishHistorySelectionList(persona = selectedPersona()) {
                 <span class="publish-post-card-meta">${esc(meta || "发布记录")}</span>
                 <span class="publish-post-card-snippet">${esc(String(record.content || record.caption || record.text || record.source_url || "").trim() || "该记录没有正文摘要。")}</span>
               </span>
+              <span class="publish-history-card-actions" aria-label="发布历史操作">
+                <button type="button" class="publish-history-card-action" data-publish-history-view="${esc(recordId)}" title="查看发布历史" aria-label="查看发布历史">${renderEyeIcon()}</button>
+                <button type="button" class="publish-history-card-action" data-publish-history-requeue="${esc(recordId)}" title="重入队" aria-label="重入队">${renderRequeueIcon()}</button>
+              </span>
             </div>
           </article>`;
       }).join("")}
@@ -9911,6 +9984,48 @@ function syncPublishHistoryRefreshDom(persona = selectedPersona()) {
     status.hidden = !refreshStatus?.message;
     status.textContent = refreshStatus?.message || "";
   }
+}
+
+async function openPublishHistoryRecordModal(historyId = "", persona = selectedPersona()) {
+  const cleanHistoryId = String(historyId || "").trim();
+  const record = personaPublishHistoryRows(persona)
+    .find((item) => String(item?.id || "").trim() === cleanHistoryId);
+  if (!record) return;
+  const mediaItems = personaHistoryMediaItems(record);
+  const publishedUrl = safeExternalHttpUrl(record.source_url || record.published_url || record.url || record.post_url);
+  const metricsSource = record.hot_metrics || record || {};
+  const metrics = [
+    ["热度", metricsSource.hot_score],
+    ["浏览", metricsSource.views],
+    ["点赞", metricsSource.likes],
+    ["评论", metricsSource.comments],
+    ["分享", metricsSource.shares],
+    ["转发", metricsSource.reposts],
+  ];
+  const action = await openConsoleModal({
+    title: "发布历史详情",
+    contentHtml: `
+      <article class="publish-preview-card publish-history-modal-card">
+        <div class="publish-preview-card-head">
+          <strong>${esc(publishHistoryRecordTitle(record) || "发布记录")}</strong>
+          ${renderMediaTypeBadge(mediaItems)}
+        </div>
+        <div class="publish-history-meta">
+          <span>${esc(String(record.platform || "平台未知"))}</span>
+          <span>${esc(formatTime(publishHistoryRecordTime(record)) || "时间未知")}</span>
+          ${record.status ? `<span>${esc(statusLabel(record.status))}</span>` : ""}
+        </div>
+        <p>${esc(String(record.content || record.caption || record.text || record.source_url || "").trim() || "该记录没有正文或链接摘要。")}</p>
+        <div class="publish-history-metrics">${metrics.map(([label, value]) => `<span><small>${esc(label)}</small><strong>${esc(Number(value || 0).toLocaleString("zh-CN"))}</strong></span>`).join("")}</div>
+        ${publishedUrl ? `<a class="publish-history-modal-source" href="${esc(publishedUrl)}" target="_blank" rel="noopener">查看来源</a>` : ""}
+        ${renderPublishPreviewMedia(mediaItems)}
+      </article>`,
+    cancelText: "关闭",
+    showConfirm: false,
+    extraActions: [{ value: "requeue", text: "重入队" }],
+    modalKey: "publish-history-detail",
+  });
+  if (action === "requeue") await requeuePublishHistoryRecord(cleanHistoryId, persona);
 }
 
 async function requeuePublishHistoryRecord(historyId = "", persona = selectedPersona()) {
@@ -10655,13 +10770,21 @@ function bindSimpleFlowInputs(moduleId) {
       });
     });
     document.querySelectorAll("[data-publish-history-card]").forEach((node) => {
-      node.addEventListener("click", () => {
+      node.addEventListener("click", (event) => {
+        if (event.target.closest("[data-publish-history-view], [data-publish-history-requeue]")) return;
         state.publishHistoryPreviewId = String(node.dataset.publishHistoryCard || "").trim();
         renderSimpleFlowModule("publishing");
       });
     });
+    document.querySelectorAll("[data-publish-history-view]").forEach((node) => {
+      node.addEventListener("click", (event) => {
+        event.stopPropagation();
+        openPublishHistoryRecordModal(node.dataset.publishHistoryView || "").catch(() => {});
+      });
+    });
     document.querySelectorAll("[data-publish-history-requeue]").forEach((node) => {
-      node.addEventListener("click", () => {
+      node.addEventListener("click", (event) => {
+        event.stopPropagation();
         requeuePublishHistoryRecord(node.dataset.publishHistoryRequeue || "").catch(() => {});
       });
     });
@@ -10718,6 +10841,20 @@ function bindSimpleFlowInputs(moduleId) {
         state.matrixPublish.initialized = true;
         renderSimpleFlowModule("publishing");
       });
+    });
+    document.querySelectorAll("[data-matrix-remove-persona]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const personaId = String(node.dataset.matrixRemovePersona || "").trim();
+        if (!personaId) return;
+        state.matrixPublish.personaIds = matrixPublishSelectedIds().filter((id) => id !== personaId);
+        state.matrixPublish.initialized = true;
+        renderSimpleFlowModule("publishing");
+      });
+    });
+    document.querySelector("[data-matrix-remove-all]")?.addEventListener("click", () => {
+      state.matrixPublish.personaIds = [];
+      state.matrixPublish.initialized = true;
+      renderSimpleFlowModule("publishing");
     });
   }
   ["matrixPublishSource", "matrixPublishPlatform", "matrixPublishCount", "simpleScheduleAt"].forEach((id) => {
@@ -15759,6 +15896,9 @@ function queuePersonaDraftMediaChange(action, {
     draft.mediaOps.push({ type: "move", fromIndex: safeFromIndex, toIndex: safeToIndex });
     showMsg("commandMsg", `媒体顺序已调整，保存修改后生效。`, true);
   }
+  if (action === "delete" || action === "move") {
+    setPersonaMediaBulkSelection(persona.id, source, post.id, []);
+  }
   syncPersonaDraftDirty(draft);
   clearUploadDropzoneState("personaPostMediaUploadFiles");
   renderPersonaDetail();
@@ -15820,6 +15960,16 @@ async function uploadPersonaPostMedia(replaceIndex = null, filesOverride = null)
   showMsg("commandMsg", replacingSingle ? `第 ${Number(replaceIndex) + 1} 个${sourceLabel}媒体已更新。` : `${sourceLabel}媒体已添加。`, true);
 }
 
+function acceptPersonaDirectMediaFiles(input, files) {
+  const mediaFiles = Array.from(files || []).filter(Boolean);
+  if (!input?.matches?.("[data-persona-direct-media-input]") || !mediaFiles.length) return false;
+  input.value = "";
+  uploadPersonaPostMedia(null, mediaFiles).catch((error) => {
+    showMsg("commandMsg", error.detail || error.message || "添加媒体失败", false);
+  });
+  return true;
+}
+
 function editPersonaPostMedia(index) {
   const picker = document.createElement("input");
   picker.type = "file";
@@ -15839,7 +15989,7 @@ async function movePersonaPostMedia(fromIndex, toIndex) {
   const persona = selectedPersona();
   const { source, post } = personaMediaTargetPost(persona);
   if (!persona || !post) return;
-  const items = personaEditablePostMediaItems(persona.id, post);
+  const items = personaDraftMediaPreviewItems(persona, source, post);
   const safeFromIndex = Number.parseInt(String(fromIndex ?? ""), 10);
   const safeToIndex = Number.parseInt(String(toIndex ?? ""), 10);
   if (
@@ -15854,6 +16004,7 @@ async function movePersonaPostMedia(fromIndex, toIndex) {
     return;
   }
   if (queuePersonaDraftMediaChange("move", { fromIndex: safeFromIndex, toIndex: safeToIndex })) return;
+  setPersonaMediaBulkSelection(persona.id, source, post.id, []);
   const moveKey = `${persona.id}:${source}:${post.id}`;
   if (personaMediaMoveLocks.has(moveKey)) return;
   personaMediaMoveLocks.add(moveKey);
@@ -15932,10 +16083,7 @@ function personaMediaDropIndexAtPoint(grid, clientX, clientY, fromIndex) {
   if (!hit) return fromIndex;
   const hitIndex = Number.parseInt(String(hit.dataset.personaMediaCardIndex || ""), 10);
   if (!Number.isInteger(hitIndex)) return fromIndex;
-  const rect = hit.getBoundingClientRect();
-  const insertSlot = hitIndex + (clientX >= rect.left + rect.width / 2 ? 1 : 0);
-  const adjustedSlot = insertSlot > fromIndex ? insertSlot - 1 : insertSlot;
-  return Math.min(Math.max(adjustedSlot, 0), cards.length - 1);
+  return Math.min(Math.max(hitIndex, 0), cards.length - 1);
 }
 
 function updatePersonaMediaPointerDragTarget(clientX, clientY) {
@@ -15983,9 +16131,13 @@ function startPersonaMediaPointerDrag(event) {
 
 function handlePersonaMediaPointerDown(event) {
   if (!event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
-  const handle = event.target.closest?.("[data-persona-media-drag-handle]");
-  const source = handle?.closest?.(".persona-edit-media-card[data-persona-media-card-index]");
-  if (!handle || !source) return;
+  const explicitHandle = event.target.closest?.("[data-persona-media-drag-handle]");
+  const source = explicitHandle?.closest?.(".persona-edit-media-card[data-persona-media-card-index]")
+    || event.target.closest?.(".persona-edit-media-card[data-persona-media-card-index]");
+  const blockedInteractive = event.target.closest?.(
+    ".persona-media-card-select, .persona-edit-media-actions, input, label, a",
+  );
+  if (!source || (!explicitHandle && (event.pointerType !== "mouse" || blockedInteractive))) return;
   const fromIndex = Number.parseInt(String(source.dataset.personaMediaCardIndex || ""), 10);
   if (!Number.isInteger(fromIndex)) return;
   const sourceRect = source.getBoundingClientRect();
@@ -16002,8 +16154,8 @@ function handlePersonaMediaPointerDown(event) {
     fromIndex,
     toIndex: fromIndex,
     source,
-    handle,
-    captureTarget: handle,
+    handle: explicitHandle,
+    captureTarget: source,
   };
 }
 
@@ -16027,6 +16179,7 @@ function handlePersonaMediaPointerUp(event) {
   const drag = state.personaMediaPointerDrag || {};
   if (!drag.pending || drag.pointerId !== event.pointerId) return;
   const wasActive = drag.active;
+  if (wasActive) updatePersonaMediaPointerDragTarget(event.clientX, event.clientY);
   const fromIndex = drag.fromIndex;
   const toIndex = drag.toIndex;
   if (wasActive) {
@@ -16087,6 +16240,7 @@ async function deletePersonaPostMedia(index) {
     return;
   }
   if (queuePersonaDraftMediaChange("delete", { index })) return;
+  setPersonaMediaBulkSelection(persona.id, source, post.id, []);
   const sourceLabel = source === "favorites" ? "收藏" : "草稿";
   showMsg("commandMsg", `正在删除${sourceLabel}媒体...`, true);
   await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/${source === "favorites" ? "favorites" : "posts"}/${encodeURIComponent(post.id)}/media/${encodeURIComponent(index)}`, {
@@ -16097,6 +16251,121 @@ async function deletePersonaPostMedia(index) {
   renderPersonaDetail();
   renderConfirmSummary();
   showMsg("commandMsg", `${sourceLabel}媒体已删除。`, true);
+}
+
+function personaMediaEditorContext(node) {
+  const editor = node?.closest?.("[data-persona-unified-media-editor]");
+  if (!editor) return null;
+  return {
+    editor,
+    personaId: String(editor.dataset.personaId || "").trim(),
+    source: editor.dataset.personaMediaSource === "favorites" ? "favorites" : "posts",
+    postId: String(editor.dataset.personaPostId || "").trim(),
+    cards: Array.from(editor.querySelectorAll(".persona-edit-media-card[data-persona-media-card-index]")),
+  };
+}
+
+function syncPersonaMediaBulkSelectionState(editor) {
+  const context = personaMediaEditorContext(editor);
+  if (!context) return;
+  const selected = personaMediaBulkSelection(context.personaId, context.source, context.postId, context.cards.length);
+  const allSelected = context.cards.length > 0 && selected.size === context.cards.length;
+  context.cards.forEach((card) => {
+    const index = Number(card.dataset.personaMediaCardIndex);
+    const isSelected = selected.has(index);
+    card.classList.toggle("is-selected", isSelected);
+    const button = card.querySelector("[data-persona-media-select-index]");
+    if (!button) return;
+    button.setAttribute("aria-pressed", isSelected ? "true" : "false");
+    button.setAttribute("aria-label", `${isSelected ? "取消选择" : "选择"}第 ${index + 1} 个媒体`);
+    button.innerHTML = renderUploadSelectionIcon(isSelected);
+  });
+  const toolbar = context.editor.querySelector(".persona-media-selection-toolbar");
+  if (!toolbar) return;
+  const selectAll = toolbar.querySelector("[data-persona-media-select-all]");
+  if (selectAll) {
+    selectAll.innerHTML = `${renderUploadSelectionIcon(allSelected)}<span>${allSelected ? "取消全选" : "全选"}</span>`;
+  }
+  const count = toolbar.querySelector(".upload-selection-count");
+  if (count) count.textContent = `已选 ${selected.size} / ${context.cards.length}`;
+  let deleteSelected = toolbar.querySelector("[data-persona-media-delete-selected]");
+  if (!selected.size) {
+    deleteSelected?.remove();
+    return;
+  }
+  if (!deleteSelected) {
+    deleteSelected = document.createElement("button");
+    deleteSelected.type = "button";
+    deleteSelected.className = "upload-delete-selected";
+    deleteSelected.dataset.personaMediaDeleteSelected = "";
+    deleteSelected.innerHTML = `${renderTrashIcon()}<span>删除所选</span>`;
+    toolbar.appendChild(deleteSelected);
+  }
+}
+
+function togglePersonaMediaBulkSelection(trigger, rawIndex) {
+  const context = personaMediaEditorContext(trigger);
+  const index = Number(rawIndex);
+  if (!context || !Number.isInteger(index) || index < 0 || index >= context.cards.length) return false;
+  const selected = personaMediaBulkSelection(context.personaId, context.source, context.postId, context.cards.length);
+  if (selected.has(index)) selected.delete(index);
+  else selected.add(index);
+  setPersonaMediaBulkSelection(context.personaId, context.source, context.postId, selected);
+  syncPersonaMediaBulkSelectionState(context.editor);
+  return true;
+}
+
+async function deleteSelectedPersonaPostMedia(trigger) {
+  const context = personaMediaEditorContext(trigger);
+  const persona = selectedPersona();
+  if (!context || !persona || String(persona.id) !== context.personaId) return;
+  const { source, post } = personaMediaTargetPost(persona);
+  if (!post || source !== context.source || String(post.id) !== context.postId) return;
+  const selected = Array.from(
+    personaMediaBulkSelection(context.personaId, context.source, context.postId, context.cards.length),
+  ).sort((left, right) => right - left);
+  if (!selected.length) return;
+  const draft = personaFormState(persona.id).draft;
+  const isEditingTarget = String(draft.editingPostId || "").trim() === String(post.id || "").trim()
+    && (draft.editingSource === "favorites" ? "favorites" : "posts") === source;
+  setPersonaMediaBulkSelection(context.personaId, context.source, context.postId, []);
+  if (isEditingTarget) {
+    if (!Array.isArray(draft.mediaItems)) {
+      draft.mediaItems = personaEditablePostMediaItems(persona.id, post).map(clonePersonaDraftMediaItem);
+    }
+    if (!Array.isArray(draft.mediaOps)) draft.mediaOps = [];
+    selected.forEach((index) => {
+      if (index < 0 || index >= draft.mediaItems.length) return;
+      draft.mediaItems.splice(index, 1);
+      draft.mediaOps.push({ type: "delete", index });
+    });
+    syncPersonaDraftDirty(draft);
+    renderPersonaDetail();
+    renderConfirmSummary();
+    showMsg("commandMsg", `已临时删除 ${selected.length} 个媒体，保存修改后生效。`, true);
+    return;
+  }
+  const sourceLabel = source === "favorites" ? "收藏" : "草稿";
+  showMsg("commandMsg", `正在删除 ${selected.length} 个${sourceLabel}媒体...`, true);
+  await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/${source === "favorites" ? "favorites" : "posts"}/${encodeURIComponent(post.id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: String(post.title || ""),
+      content: String(post.content || ""),
+      media_paths: [],
+      media_ops: selected.map((index) => ({
+        type: "delete",
+        index,
+        media_paths: [],
+      })),
+    }),
+  });
+  if (source === "favorites") await loadPersonaFavoritePosts(persona.id, { force: true });
+  else await loadPersonaDraftPosts(persona.id, { force: true });
+  renderPersonaDetail();
+  renderConfirmSummary();
+  showMsg("commandMsg", `已删除 ${selected.length} 个${sourceLabel}媒体。`, true);
 }
 
 function personaIsWorkflow(persona, profile = null) {
@@ -16960,18 +17229,12 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
           <div class="persona-media-operation-pane">
             <strong>媒体编辑</strong>
             ${isFavoriteMedia ? `<span class="persona-panel-intro">收藏内容支持添加、编辑和删除媒体；生成新的配图请先复制为草稿后处理。</span>` : ""}
-            <div class="persona-media-edit-split">
-              <div class="persona-media-edit-pane persona-media-edit-pane--list">
-                <strong>当前媒体</strong>
-                ${renderPersonaEditableMediaGrid(postMediaItems, { personaId: persona.id, source: isFavoriteMedia ? "favorites" : "posts", postId: post.id })}
-              </div>
-              <div class="persona-media-edit-pane persona-media-edit-pane--upload">
-                ${renderUploadDropzone("personaPostMediaUploadFiles", { label: "添加媒体", hint: `拖动图片或视频到这里，或点击选择。媒体会按当前顺序添加到${sourceLabel}。` })}
-                <div class="row-actions persona-media-upload-actions">
-                  <button type="button" class="primary" data-persona-upload-post-media="add">添加媒体</button>
-                </div>
-              </div>
-            </div>
+            ${renderPersonaEditableMediaGrid(postMediaItems, {
+              personaId: persona.id,
+              source: isFavoriteMedia ? "favorites" : "posts",
+              postId: post.id,
+              sourceLabel,
+            })}
           </div>
         ` : `
           <div class="persona-media-operation-pane">
@@ -17079,24 +17342,61 @@ function renderPersonaTaskMediaPreview(taskState, items = []) {
 
 function renderPersonaEditableMediaGrid(items, options = {}) {
   const rows = Array.isArray(items) ? items : [];
-  if (!rows.length) return `<div class="empty-state">当前草稿还没有媒体。</div>`;
   const groupId = registerMediaPreviewGroup(rows.filter((item) => item && item.previewUrl && !item.unavailable));
   let previewIndex = 0;
   const personaId = String(options.personaId || selectedPersona()?.id || "").trim();
   const source = options.source === "favorites" ? "favorites" : "posts";
   const postId = String(options.postId || personaMediaTargetPost(selectedPersona()).post?.id || "").trim();
+  const sourceLabel = String(options.sourceLabel || (source === "favorites" ? "收藏" : "草稿")).trim();
+  const selectedIndexes = personaMediaBulkSelection(personaId, source, postId, rows.length);
+  const allSelected = rows.length > 0 && selectedIndexes.size === rows.length;
+  const inputId = "personaPostMediaUploadFiles";
   return `<div
-    class="persona-edit-media-grid"
-    data-persona-media-sort-grid
+    class="persona-unified-media-editor upload-zone ${rows.length ? "has-files" : ""}"
+    data-upload-dropzone
+    data-persona-unified-media-editor
     data-persona-id="${esc(personaId)}"
     data-persona-media-source="${esc(source)}"
     data-persona-post-id="${esc(postId)}"
-    role="list"
-    aria-label="当前媒体缩略图列表，可拖动序号调整顺序"
-  >${rows.map((item, index) => {
+  >
+    <input
+      class="upload-zone-input"
+      id="${esc(inputId)}"
+      type="file"
+      multiple
+      accept="image/*,video/*"
+      data-persona-direct-media-input
+    />
+    ${rows.length ? `<div class="upload-selection-toolbar persona-media-selection-toolbar">
+      <button type="button" class="upload-select-all" data-persona-media-select-all>
+        ${renderUploadSelectionIcon(allSelected)}
+        <span>${allSelected ? "取消全选" : "全选"}</span>
+      </button>
+      <span class="upload-selection-count">已选 ${esc(selectedIndexes.size)} / ${esc(rows.length)}</span>
+      ${selectedIndexes.size ? `<button type="button" class="upload-delete-selected" data-persona-media-delete-selected>
+        ${renderTrashIcon()}
+        <span>删除所选</span>
+      </button>` : ""}
+    </div>` : ""}
+    <div
+      class="persona-edit-media-grid"
+      data-persona-media-sort-grid
+      role="list"
+      aria-label="媒体缩略图列表，可拖动序号调整顺序"
+    >${rows.map((item, index) => {
     const itemPreviewIndex = item?.previewUrl && !item?.unavailable ? previewIndex++ : -1;
+    const isSelected = selectedIndexes.has(index);
     return `
-    <div class="persona-edit-media-card" data-persona-media-card-index="${esc(index)}" role="listitem" draggable="false">
+    <div class="persona-edit-media-card ${isSelected ? "is-selected" : ""}" data-persona-media-card-index="${esc(index)}" role="listitem" draggable="false">
+      <button
+        type="button"
+        class="persona-media-card-select"
+        data-persona-media-select-index="${esc(index)}"
+        aria-pressed="${isSelected ? "true" : "false"}"
+        aria-label="${isSelected ? "取消选择" : "选择"}第 ${index + 1} 个媒体"
+      >
+        ${renderUploadSelectionIcon(isSelected)}
+      </button>
       ${renderMediaOrderHandle(index, "persona")}
       ${item.unavailable || !item.previewUrl ? `
         <div class="persona-media-frame persona-media-frame--empty">
@@ -17108,6 +17408,7 @@ function renderPersonaEditableMediaGrid(items, options = {}) {
           className: "persona-edit-media-preview",
           frameClass: "persona-media-frame",
           caption: mediaKindLabel(item.type),
+          interactive: false,
         })}
       `}
       <div class="persona-edit-media-actions">
@@ -17118,24 +17419,33 @@ function renderPersonaEditableMediaGrid(items, options = {}) {
           data-media-preview-index="${esc(itemPreviewIndex)}"
           title="查看媒体"
           aria-label="查看第 ${index + 1} 个媒体"
-        >${renderEyeIcon()}</button>` : ""}
+        >${renderMediaCardViewIcon()}</button>` : ""}
         <button
           type="button"
           class="persona-hot-media-action is-replace"
           data-persona-edit-post-media="${esc(index)}"
           title="编辑媒体"
           aria-label="编辑第 ${index + 1} 个媒体"
-        >${renderReplaceIcon()}</button>
+        >${renderMediaCardEditIcon()}</button>
         <button
           type="button"
           class="persona-hot-media-action is-remove"
           data-persona-delete-post-media="${esc(index)}"
           title="删除媒体"
           aria-label="删除第 ${index + 1} 个媒体"
-        >${renderTrashIcon()}</button>
+        >${renderMediaCardDeleteIcon()}</button>
       </div>
     </div>
-  `;}).join("")}</div>`;
+  `;}).join("")}
+      <label class="upload-add-media persona-media-add-tile" for="${esc(inputId)}" title="选择媒体" aria-label="选择媒体">
+        ${renderPlusIcon()}
+      </label>
+    </div>
+    ${rows.length ? "" : `<label class="persona-media-empty-picker" for="${esc(inputId)}">
+      <strong>拖动图片或视频到这里，或点击选择</strong>
+      <span>媒体会直接加入当前${esc(sourceLabel)}并在这里编辑。</span>
+    </label>`}
+  </div>`;
 }
 
 function renderPersonaImageUploadPlaceholderCard() {
@@ -18091,18 +18401,12 @@ function renderPersonaContentPanel(persona, account, profile, step) {
               </div>
               <div class="persona-inline-panel persona-inline-panel--nested">
                 <strong>媒体编辑</strong>
-                <div class="persona-media-edit-split">
-                  <div class="persona-media-edit-pane persona-media-edit-pane--list">
-                    <strong>当前媒体</strong>
-                    ${renderPersonaEditableMediaGrid(postMediaItems, { personaId: persona.id, source: isFavoriteMedia ? "favorites" : "posts", postId: post.id })}
-                  </div>
-                  <div class="persona-media-edit-pane persona-media-edit-pane--upload">
-                    ${renderUploadDropzone("personaPostMediaUploadFiles", { label: "添加媒体", hint: `拖动图片或视频到这里，或点击选择。媒体会按当前顺序添加到${sourceLabel}。` })}
-                    <div class="row-actions persona-media-upload-actions">
-                      <button type="button" class="primary" data-persona-upload-post-media="add">添加媒体</button>
-                    </div>
-                  </div>
-                </div>
+                ${renderPersonaEditableMediaGrid(postMediaItems, {
+                  personaId: persona.id,
+                  source: isFavoriteMedia ? "favorites" : "posts",
+                  postId: post.id,
+                  sourceLabel,
+                })}
               </div>
             </section>
             <section class="persona-media-column">
@@ -21462,8 +21766,8 @@ function updateLiveBrowserSessionCard(card, session) {
     button.setAttribute("aria-pressed", active ? "true" : "false");
     if (buttonMode === "manual") {
       button.dataset.liveBrowserModeSession = sessionId;
-      button.textContent = loginMode === "switching" ? "再次强制接管" : (loginMode === "takeover_timeout" ? "重试接管" : "人工接管");
-      button.disabled = !sessionId || !["running", "need_manual"].includes(status);
+      button.textContent = loginMode === "switching" ? "等待中" : (loginMode === "takeover_timeout" ? "重试接管" : "人工接管");
+      button.disabled = loginMode === "switching" || !sessionId || !["running", "need_manual"].includes(status);
     } else {
       button.disabled = true;
     }
@@ -21600,7 +21904,7 @@ function renderLiveBrowserModeToggle(session) {
   return `
     <div class="live-browser-mode-toggle" role="group" aria-label="浏览器操作模式">
       <button type="button" class="${mode === "automatic" ? "is-active" : ""}" aria-pressed="${mode === "automatic" ? "true" : "false"}" disabled>${automaticLabel}</button>
-      <button type="button" class="${mode === "manual" ? "is-active" : ""}${switching || takeoverTimedOut ? " is-pending" : ""}" data-live-browser-mode="manual" data-live-browser-mode-session="${esc(sessionId)}" aria-pressed="${mode === "manual" ? "true" : "false"}" ${active && sessionId ? "" : "disabled"}>${switching ? "再次强制接管" : (takeoverTimedOut ? "重试接管" : "人工接管")}</button>
+      <button type="button" class="${mode === "manual" ? "is-active" : ""}${switching || takeoverTimedOut ? " is-pending" : ""}" data-live-browser-mode="manual" data-live-browser-mode-session="${esc(sessionId)}" aria-pressed="${mode === "manual" ? "true" : "false"}" ${active && sessionId && !switching ? "" : "disabled"}>${switching ? "等待中" : (takeoverTimedOut ? "重试接管" : "人工接管")}</button>
     </div>`;
 }
 
@@ -21610,12 +21914,30 @@ function liveBrowserTaskSummary(session) {
   const payload = socialTaskPayload(task);
   const count = taskId ? 1 : 0;
   const taskType = String(session?.task_type || task?.task_type || "").trim().toLowerCase();
+  const accountId = String(session?.account_id || task?.account_id || "").trim();
+  const account = accountById(accountId);
+  const accountTarget = String(
+    session?.account_username
+    || task?.account_username
+    || task?.account_display_name
+    || account?.username
+    || account?.account_username
+    || accountId,
+  ).trim();
+  const platform = String(session?.platform || task?.platform || payload.platform || "").trim();
+  const publishTarget = [platform ? platformLabel(platform) : "", accountTarget]
+    .filter(Boolean)
+    .join(" · ");
   const target = String(
-    payload.archive_post_title
-    || payload.target_title
-    || payload.target_url
-    || payload.username
-    || (taskType === "publish_post" ? "发布内容" : (taskType === "open_login" ? "账号登录" : statusLabel(taskType || "浏览器任务"))),
+    taskType === "publish_post"
+      ? (publishTarget || "发布内容")
+      : (
+        payload.target_title
+        || payload.target_url
+        || payload.username
+        || accountTarget
+        || (taskType === "open_login" ? "账号登录" : statusLabel(taskType || "浏览器任务"))
+      ),
   ).trim();
   return { count, target };
 }
@@ -21631,6 +21953,12 @@ function renderLiveBrowserActionMenu(session, { canStopTask = false, canCloseWin
         <button type="button" data-live-browser-close="${esc(sessionId)}" ${canCloseWindow ? "" : "hidden disabled"}>关闭窗口</button>
       </div>
     </details>`;
+}
+
+function closeLiveBrowserActionMenus(exceptMenu = null) {
+  document.querySelectorAll(".live-browser-action-menu[open]").forEach((menu) => {
+    if (menu !== exceptMenu) menu.removeAttribute("open");
+  });
 }
 
 function liveBrowserIsReady(session) {
@@ -22152,12 +22480,15 @@ function matrixPublishSelectedIds() {
 
 function updateMatrixPublishStateFromForm() {
   const selectedIds = Array.from(document.querySelectorAll("[data-matrix-persona]:checked")).map((node) => String(node.value || "").trim()).filter(Boolean);
+  const source = $("matrixPublishSource")?.value || state.matrixPublish.source || "posts";
+  const platform = $("matrixPublishPlatform")?.value || state.matrixPublish.platform || "threads";
+  const requestedCount = Math.min(Math.max(Number($("matrixPublishCount")?.value || state.matrixPublish.perPersonaCount || 1), 1), 20);
   state.matrixPublish = {
     ...state.matrixPublish,
     personaIds: sortPersonaIdsByPublishOrder(selectedIds),
-    source: $("matrixPublishSource")?.value || state.matrixPublish.source || "posts",
-    perPersonaCount: Math.min(Math.max(Number($("matrixPublishCount")?.value || state.matrixPublish.perPersonaCount || 1), 1), 20),
-    platform: $("matrixPublishPlatform")?.value || state.matrixPublish.platform || "threads",
+    source,
+    perPersonaCount: requestedCount,
+    platform,
     scheduledAt: $("simpleScheduleAt")?.value ?? state.matrixPublish.scheduledAt ?? "",
     initialized: true,
   };
@@ -22187,6 +22518,62 @@ function ensureMatrixFavoriteLoads(personaIds) {
   });
 }
 
+function matrixPublishCandidatePosts(persona, source, platform) {
+  const personaId = String(persona?.id || "").trim();
+  const normalizedSource = source === "favorites" ? "favorites" : "posts";
+  const normalizedPlatform = platform === "instagram" ? "instagram" : "threads";
+  const rows = normalizedSource === "favorites" ? personaFavoritePosts(persona) : personaDraftPosts(persona);
+  const account = publishPlatformAccountsForPersona(persona).find((item) =>
+    String(item?.platform || "").trim().toLowerCase() === normalizedPlatform
+  ) || null;
+  const contentPosts = rows.filter((post) => {
+    if (String(post?.published_at || post?.publishedAt || "").trim()) return false;
+    const mediaItems = personaPublishPostMediaItems(personaId, post);
+    const hasContent = Boolean(String(post?.content || post?.full_content || "").trim() || mediaItems.length);
+    if (!hasContent) return false;
+    return normalizedPlatform !== "instagram" || mediaItems.length > 0;
+  });
+  // Draft availability is independent from account binding. The account only
+  // controls whether a draft can be submitted as a task.
+  const availablePosts = contentPosts.filter((post) => !account || !activeSocialTaskFor({
+    accountId: account.id,
+    personaId,
+    taskType: "publish_post",
+    postId: post.id,
+    postSource: normalizedSource,
+  }));
+  const submitPosts = account && canSubmitPublishWithAccount(account) ? availablePosts : [];
+  let reason = "";
+  if (!contentPosts.length) reason = normalizedPlatform === "instagram" ? "暂无包含媒体的可发布内容" : "暂无可发布内容";
+  else if (!account) reason = `未绑定 ${normalizedPlatform === "instagram" ? "Instagram" : "Threads"} 执行账号`;
+  else if (!canSubmitPublishWithAccount(account)) reason = "执行账号已停用";
+  else if (!availablePosts.length) reason = "可用内容已有发布任务";
+  return { persona, account, contentPosts, availablePosts, submitPosts, reason };
+}
+
+function matrixPublishAvailabilityRows(personaIds = matrixPublishSelectedIds(), source = state.matrixPublish.source, platform = state.matrixPublish.platform) {
+  return (personaIds || []).map((personaId) => {
+    const persona = state.personas.find((item) => String(item?.id || "") === String(personaId || ""));
+    const detail = matrixPublishCandidatePosts(persona, source, platform);
+    return {
+      personaId: String(personaId || ""),
+      ...detail,
+      availableCount: detail.availablePosts.length,
+      submitCount: detail.submitPosts.length,
+    };
+  });
+}
+
+function matrixPublishCommonLimit(rows = []) {
+  const counts = (rows || []).map((row) => Number(row?.submitCount || 0)).filter((count) => count > 0);
+  return counts.length ? Math.min(...counts) : 0;
+}
+
+function matrixPublishRequestedCount(rows = matrixPublishAvailabilityRows()) {
+  const perPersonaCount = Math.min(Math.max(Number(state.matrixPublish.perPersonaCount || 1), 1), 20);
+  return (rows || []).reduce((total, row) => total + Math.min(perPersonaCount, Number(row?.submitCount || 0)), 0);
+}
+
 function renderMatrixPublishPanel() {
   const selectedIds = matrixPublishSelectedIds();
   if (!state.matrixPublish.initialized && selectedIds.length) {
@@ -22196,22 +22583,28 @@ function renderMatrixPublishPanel() {
   const source = state.matrixPublish.source || "posts";
   if (source === "favorites") ensureMatrixFavoriteLoads(selectedIds);
   else ensureMatrixDraftLoads(selectedIds);
-  const perCount = Math.min(Math.max(Number(state.matrixPublish.perPersonaCount || 1), 1), 20);
   const platform = state.matrixPublish.platform || "threads";
-  const scheduledAt = String(state.matrixPublish.scheduledAt || "");
-  const rows = selectedIds.map((personaId) => {
-    const persona = state.personas.find((item) => String(item.id) === String(personaId));
-    const account = publishAccountsForPersona(persona).find((item) => String(item.platform || "").toLowerCase() === platform) || null;
-    const posts = source === "favorites"
-      ? personaFavoritePosts(persona)
-      : personaDraftPosts(persona).filter((post) => !String(post.published_at || post.publishedAt || "").trim());
-    const previewPosts = posts.slice(0, perCount);
+  const availability = matrixPublishAvailabilityRows(selectedIds, source, platform);
+  const perCount = Math.min(Math.max(Number(state.matrixPublish.perPersonaCount || 1), 1), 20);
+  if (state.matrixPublish.perPersonaCount !== perCount) state.matrixPublish.perPersonaCount = perCount;
+  const participatingRows = availability.filter((row) => row.submitCount > 0);
+  const rows = availability.map((row) => {
+    const unavailable = !row.availableCount;
+    const personaName = String(row.persona?.name || row.personaId || "未命名人设");
+    const currentPublish = `${Math.min(perCount, row.availableCount)} 篇`;
     return `
-      <tr>
-        <td>${esc(persona?.name || personaId)}</td>
-        <td>${account ? esc(account.username || account.id) : "<span class=\"muted\">无可用账号</span>"}</td>
-        <td>${posts.length} 条</td>
-        <td>${previewPosts.length ? previewPosts.map((post, index) => esc(personaDraftDisplayTitleForPost(post, posts, index) || post.content || post.id).slice(0, 34)).join("<br>") : "<span class=\"muted\">暂无可用内容</span>"}</td>
+      <tr class="${unavailable ? "is-unavailable" : ""}"${row.reason ? ` title="${esc(row.reason)}"` : ""}>
+        <td>${esc(personaName)}</td>
+        <td>${row.account ? esc(row.account.username || row.account.id) : "<span class=\"muted\">未绑定</span>"}</td>
+        <td>${row.availableCount ? `${esc(row.availableCount)} 篇` : "<span class=\"matrix-unavailable-copy\">0 篇</span>"}</td>
+        <td>
+          <div class="matrix-current-publish">
+            <span>${currentPublish}</span>
+            <button type="button" class="matrix-persona-remove" data-matrix-remove-persona="${esc(row.personaId)}" title="移除 ${esc(personaName)}" aria-label="移除 ${esc(personaName)}">
+              <svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M6 6l1 14h10l1-14"></path><path d="M10 10v6"></path><path d="M14 10v6"></path></svg>
+            </button>
+          </div>
+        </td>
       </tr>
     `;
   }).join("");
@@ -22232,15 +22625,22 @@ function renderMatrixPublishPanel() {
         </label>
         <label>每个人设发布数量
           <input id="matrixPublishCount" type="number" min="1" max="20" value="${esc(perCount)}" />
-        </label>
-        <label>发布时间
-          <input id="simpleScheduleAt" value="${esc(scheduledAt)}" placeholder="留空立即执行 / 2026-07-04 21:30" />
+          <small>每人本次数量，最多 20 篇</small>
         </label>
       </div>
+      ${renderPublishScheduleControls()}
       <div class="matrix-preview">
-        <div class="matrix-toolbar"><strong>提交预览</strong><span class="muted">将创建 ${selectedIds.length * perCount} 条以内的发布任务</span></div>
+        <div class="matrix-toolbar">
+          <strong>提交预览</strong>
+          <div class="matrix-toolbar-meta">
+            <span class="muted">${esc(selectedIds.length)} 人设 · ${esc(participatingRows.length)} 可参与 · ${matrixPublishRequestedCount(availability)} 任务</span>
+            <button type="button" class="danger matrix-remove-all" data-matrix-remove-all ${selectedIds.length ? "" : "disabled"} title="移除全部已选人设" aria-label="移除全部已选人设">
+              <svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M6 6l1 14h10l1-14"></path><path d="M10 10v6"></path><path d="M14 10v6"></path></svg>
+            </button>
+          </div>
+        </div>
         <table class="mini-table">
-          <thead><tr><th>人设</th><th>账号</th><th>可发布</th><th>预览内容</th></tr></thead>
+          <thead><tr><th>人设</th><th>账号</th><th>可发布</th><th>当前发布</th></tr></thead>
           <tbody>${rows || `<tr><td colspan="4">请选择人设。</td></tr>`}</tbody>
         </table>
       </div>
@@ -22251,21 +22651,47 @@ function renderMatrixPublishPanel() {
 
 async function submitMatrixPublishTask(messageId = "commandMsg") {
   updateMatrixPublishStateFromForm();
-  const personaIds = matrixPublishSelectedIds();
-  if (!personaIds.length) {
+  const selectedPersonaIds = matrixPublishSelectedIds();
+  if (!selectedPersonaIds.length) {
     showMsg(messageId, "请至少选择一个人设。", false);
     return null;
   }
   const source = state.matrixPublish.source || "posts";
   const platform = state.matrixPublish.platform || "threads";
-  const perPersonaCount = Math.min(Math.max(Number(state.matrixPublish.perPersonaCount || 1), 1), 20);
+  const availability = matrixPublishAvailabilityRows(selectedPersonaIds, source, platform);
+  const eligible = availability.filter((row) => row.submitCount > 0);
+  const unavailable = availability.filter((row) => !row.submitCount);
+  if (!eligible.length) {
+    await openConsoleModal({
+      title: "没有可发布的人设",
+      message: "当前所选人设均没有可参与发布的内容或账号，请补充后再提交。",
+      confirmText: "我知道了",
+      showCancel: false,
+    });
+    return null;
+  }
+  if (unavailable.length) {
+    const names = unavailable.map((row) => row.persona?.name || row.personaId).join("、");
+    const confirmed = await openConsoleModal({
+      title: "部分人设不参与发布",
+      message: `${names} 当前不满足发布条件，将自动跳过。其余 ${eligible.length} 个人设仍可继续发布。`,
+      confirmText: "继续发布",
+      cancelText: "返回调整",
+      modalKey: "matrix-publish-unavailable",
+    });
+    if (!confirmed) return null;
+  }
+  const personaIds = eligible.map((row) => row.personaId);
+  const commonLimit = matrixPublishCommonLimit(eligible);
+  const perPersonaCount = Math.min(Math.max(Number(state.matrixPublish.perPersonaCount || 1), 1), Math.max(commonLimit, 1), 20);
+  state.matrixPublish.perPersonaCount = perPersonaCount;
   const lockParts = ["matrix_publish", source, platform, personaIds.join("_")];
   if (isActionLocked(...lockParts)) {
     showMsg(messageId, "矩阵发布正在提交，请等待当前操作完成。", false);
     return null;
   }
   const scheduledAt = normalizeScheduleValueForApi($("simpleScheduleAt")?.value);
-  const requestedCount = matrixPublishRequestedCount();
+  const requestedCount = matrixPublishRequestedCount(eligible);
   if (requestedCount > 0 && !(await ensureDailyPublishCapacity(requestedCount, { scheduledAt }))) return null;
   setActionLocked(lockParts, true);
   renderSimpleFlowModule("publishing");
@@ -22625,6 +23051,10 @@ function bindEvents() {
     }
     const input = event.target?.closest?.(".upload-zone-input");
     if (input) {
+      if (input.matches("[data-persona-direct-media-input]")) {
+        acceptPersonaDirectMediaFiles(input, input.files);
+        return;
+      }
       if (uploadSyntheticChangeInputs.has(input)) return;
       uploadSelectedIndexes.set(input, new Set());
       appendUploadDropzoneFiles(input, input.files);
@@ -23280,14 +23710,44 @@ function bindEvents() {
       attachPersonaTaskMediaToPost().catch((error) => showMsg("commandMsg", error.detail || error.message || "保存媒体失败", false));
       return;
     }
+    const personaMediaSelect = event.target.closest("[data-persona-media-select-index]");
+    if (personaMediaSelect) {
+      togglePersonaMediaBulkSelection(personaMediaSelect, personaMediaSelect.dataset.personaMediaSelectIndex);
+      return;
+    }
+    const personaMediaCard = event.target.closest(".persona-edit-media-card[data-persona-media-card-index]");
+    if (
+      personaMediaCard
+      && !event.target.closest("button, a, input, label, [role=\"button\"]")
+      && !event.target.closest(".persona-edit-media-actions, [data-persona-media-drag-handle]")
+    ) {
+      togglePersonaMediaBulkSelection(personaMediaCard, personaMediaCard.dataset.personaMediaCardIndex);
+      return;
+    }
+    const personaMediaSelectAll = event.target.closest("[data-persona-media-select-all]");
+    if (personaMediaSelectAll) {
+      const context = personaMediaEditorContext(personaMediaSelectAll);
+      if (!context) return;
+      const selected = personaMediaBulkSelection(context.personaId, context.source, context.postId, context.cards.length);
+      setPersonaMediaBulkSelection(
+        context.personaId,
+        context.source,
+        context.postId,
+        selected.size === context.cards.length ? [] : context.cards.map((_, index) => index),
+      );
+      syncPersonaMediaBulkSelectionState(context.editor);
+      return;
+    }
+    const personaMediaDeleteSelected = event.target.closest("[data-persona-media-delete-selected]");
+    if (personaMediaDeleteSelected) {
+      deleteSelectedPersonaPostMedia(personaMediaDeleteSelected).catch((error) => {
+        showMsg("commandMsg", error.detail || error.message || "删除所选媒体失败", false);
+      });
+      return;
+    }
     const editPostMedia = event.target.closest("[data-persona-edit-post-media]");
     if (editPostMedia) {
       editPersonaPostMedia(editPostMedia.dataset.personaEditPostMedia || "0");
-      return;
-    }
-    const uploadPostMedia = event.target.closest("[data-persona-upload-post-media]");
-    if (uploadPostMedia) {
-      uploadPersonaPostMedia().catch((error) => showMsg("commandMsg", error.detail || error.message || "上传媒体失败", false));
       return;
     }
     const deletePostMedia = event.target.closest("[data-persona-delete-post-media]");
@@ -23536,7 +23996,9 @@ function bindEvents() {
         const mode = normalizedPublishMode($("simplePublishMode")?.value || state.simpleBranches.publishing);
         if (mode === "matrix_start") toggleMatrixPersonaId(nextPersonaId);
         else selectPublishingPersona(nextPersonaId);
-        setPersonaMobileSidebarOpen(false);
+        // Matrix selection is additive. Keep the drawer open until the user
+        // explicitly closes it so multiple personas can be selected in one pass.
+        if (mode !== "matrix_start") setPersonaMobileSidebarOpen(false);
         state.personaListEditorId = "";
         state.personaListEditorMode = "";
         withConsoleScrollPreserved(() => renderSimpleFlowModule("publishing"));
@@ -24598,6 +25060,9 @@ function bindEvents() {
       event.preventDefault();
       closeLiveBrowserLargeModal();
     }
+  });
+  document.addEventListener("click", (event) => {
+    closeLiveBrowserActionMenus(event.target.closest(".live-browser-action-menu"));
   });
   if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("input", (event) => {
     if (event.target.closest(".account-pool-create-panel")) syncAccountPoolCreateDraftFromForm();

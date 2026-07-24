@@ -367,7 +367,7 @@ function normalizeSentimentBrowserAuthProfile(profile: any): any {
     authUrl: "https://www.threads.com/",
     authUrls: ["https://www.threads.com/", "https://www.threads.net/", "https://www.instagram.com/accounts/login/"],
     cookieDomains: ["threads.com", "threads.net", "instagram.com", "facebook.com"],
-    matchDomains: ["threads.com", "threads.net", "instagram.com", "facebook.com"],
+    matchDomains: ["threads.com", "threads.net"],
     urlTemplate: "https://www.threads.com/search?q={query}",
     linkPattern: "threads.com/",
   };
@@ -411,6 +411,17 @@ function hasValidThreadsSessionCookie(cookies: any[]) {
   });
 }
 
+function hasValidInstagramSessionCookie(cookies: any[]) {
+  const nowSeconds = Date.now() / 1000;
+  return (cookies || []).some((cookie: any) => {
+    const expires = Number(cookie?.expires);
+    return String(cookie?.name || "").toLowerCase() === "sessionid"
+      && String(cookie?.value || "").trim().length > 0
+      && cookieDomainMatchesAny(cookie, ["instagram.com"])
+      && (!Number.isFinite(expires) || expires <= 0 || expires > nowSeconds);
+  });
+}
+
 function hasValidThreadsSessionCookieForDomain(cookies: any[], domain: "threads.com" | "threads.net") {
   const nowSeconds = Date.now() / 1000;
   return (cookies || []).some((cookie: any) => {
@@ -444,12 +455,15 @@ function buildSentimentCookieStatusFromProfile(platform: SentimentHotPlatform, p
       if (expires <= nowSeconds + 7 * 24 * 60 * 60) expiringSoon += 1;
     }
   }
-  const missingThreadsLoginSession = platform === "threads" && valid > 0 && !hasLoginSession;
+  const hasRequiredSessionCookie = platform === "threads"
+    ? hasValidThreadsSessionCookie(cookies)
+    : hasValidInstagramSessionCookie(cookies);
+  const missingLoginSession = valid > 0 && !hasRequiredSessionCookie;
   const health: SentimentCookieHealth = cookies.length === 0
     ? "missing"
     : valid <= 0
       ? "expired"
-      : missingThreadsLoginSession || expired > 0
+      : missingLoginSession || expired > 0
         ? "degraded"
         : expiringSoon > 0
           ? "watch"
@@ -472,7 +486,7 @@ function buildSentimentCookieStatusFromProfile(platform: SentimentHotPlatform, p
     expiredCookieCount: expired,
     sessionCookieCount: session,
     expiringSoonCookieCount: expiringSoon,
-    hasRequiredSessionCookie: platform !== "threads" || hasValidThreadsSessionCookie(cookies),
+    hasRequiredSessionCookie,
     authorizationNeedsRefresh: recommendedAction !== "keep",
     recommendedAction,
     lastAuthorizedAt: profile?.lastAuthorizedAt || null,
@@ -1607,7 +1621,7 @@ export async function fetchSentimentCookieStatuses(): Promise<SentimentCookieSta
 }
 
 function sentimentCookieStatusHasUsableCookies(status: SentimentCookieStatus): boolean {
-  if (status.platform === "threads" && status.hasRequiredSessionCookie === false) return false;
+  if (status.hasRequiredSessionCookie === false) return false;
   if (status.health === "healthy" || status.health === "watch" || status.health === "degraded") return true;
   const match = status.message.match(/有效 Cookie\s*(\d+)/);
   return Boolean(match && Number(match[1]) > 0);

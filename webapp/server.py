@@ -116,6 +116,7 @@ def _resolve_sentiment_config_path() -> Path:
 
 
 SENTIMENT_CONFIG_PATH = _resolve_sentiment_config_path()
+_SENTIMENT_CONFIG_LOCK = threading.RLock()
 SENTIMENT_BROWSER_AUTH_EXTENSION_NAME = "TG Koll Web 舆情授权助手"
 SENTIMENT_BROWSER_AUTH_EXTENSION_DIR_NAME = "tg-koll-web-browser-auth-helper"
 SENTIMENT_BROWSER_AUTH_EXTENSION_ZIP_NAME = f"{SENTIMENT_BROWSER_AUTH_EXTENSION_DIR_NAME}.zip"
@@ -1819,8 +1820,15 @@ def _sentiment_auth_state(cookies: list[dict[str, Any]], last_authorized_at: str
                 if name and name not in expiring_soon_names:
                     expiring_soon_names.append(name)
     platform_key = str(platform or "").strip().lower()
-    has_required_session = platform_key != "threads" or _sentiment_cookies_have_threads_sessionid(valid_cookies)
-    missing_required_session = platform_key == "threads" and valid > 0 and not has_required_session
+    requires_sessionid = platform_key in {"threads", "instagram"}
+    has_required_session = (
+        _sentiment_cookies_have_threads_sessionid(valid_cookies)
+        if platform_key == "threads"
+        else _sentiment_cookies_have_instagram_sessionid(valid_cookies)
+        if platform_key == "instagram"
+        else True
+    )
+    missing_required_session = requires_sessionid and valid > 0 and not has_required_session
     if not cookies:
         health = "missing"
         action = "authorize-profile"
@@ -1881,7 +1889,22 @@ def _sentiment_auth_state(cookies: list[dict[str, Any]], last_authorized_at: str
 
 def _sentiment_profile_requires_sessionid(profile: dict[str, Any], profile_key: str = "") -> bool:
     platform_key = str(profile.get("platform") or profile.get("key") or profile.get("sourceKey") or profile_key or "").strip().lower()
-    return platform_key == "threads"
+    return platform_key in {"threads", "instagram"}
+
+
+def _sentiment_cookies_have_required_sessionid(
+    profile: dict[str, Any],
+    profile_key: str,
+    cookies: list[dict[str, Any]],
+) -> bool:
+    platform_key = str(
+        profile.get("platform") or profile.get("key") or profile.get("sourceKey") or profile_key or ""
+    ).strip().lower()
+    if platform_key == "threads":
+        return _sentiment_cookies_have_threads_sessionid(cookies)
+    if platform_key == "instagram":
+        return _sentiment_cookies_have_instagram_sessionid(cookies)
+    return True
 
 
 def _sentiment_cookies_have_valid_name(cookies: list[dict[str, Any]], name: str) -> bool:
@@ -2012,6 +2035,27 @@ def _sentiment_profiles_container(config: dict[str, Any]) -> list[dict[str, Any]
     return profiles
 
 
+def _save_sentiment_browser_auth_profile(
+    profile_key: str,
+    cookies: list[dict[str, Any]],
+    *,
+    authorized_by: str,
+    note: str,
+) -> dict[str, Any]:
+    with _SENTIMENT_CONFIG_LOCK:
+        config = _read_sentiment_config_file()
+        profiles = _sentiment_profiles_container(config)
+        profile = _find_sentiment_profile(profiles, profile_key)
+        if not profile or not _sentiment_browser_auth_profile_allowed(profile):
+            raise HTTPException(status_code=404, detail="sentiment cookie profile not found")
+        profile["cookies"] = cookies
+        profile["lastAuthorizedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        profile["lastAuthorizedBy"] = authorized_by
+        profile["lastAuthorizationNote"] = note[:240]
+        _write_sentiment_config_file(config)
+        return profile
+
+
 SENTIMENT_BROWSER_AUTH_ALLOWED_PROFILE_KEYS = {
     "threads",
     "instagram",
@@ -2066,7 +2110,7 @@ def _normalize_threads_sentiment_profile(profile: dict[str, Any]) -> None:
     profile["authUrl"] = "https://www.threads.com/"
     profile["authUrls"] = ["https://www.threads.com/", "https://www.threads.net/", "https://www.instagram.com/accounts/login/"]
     profile["cookieDomains"] = ["threads.com", "threads.net", "instagram.com", "facebook.com"]
-    profile["matchDomains"] = ["threads.com", "threads.net", "instagram.com", "facebook.com"]
+    profile["matchDomains"] = ["threads.com", "threads.net"]
     profile["urlTemplate"] = "https://www.threads.com/search?q={query}"
     profile["linkPattern"] = "threads.com/"
 
@@ -2190,7 +2234,7 @@ def _sentiment_browser_auth_extension_config(request: Request, config: dict[str,
         config = _read_sentiment_config_file()
     payload: dict[str, Any] = {
         "ok": True,
-        "version": "1.0.13",
+        "version": "1.0.14",
         "apiBase": _request_public_origin(request),
         "profiles": _sentiment_browser_auth_profiles_for_extension(),
         "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -13691,14 +13735,20 @@ def _publish_persona_matrix(
                     continue
                 if str(post.get("publishedAt") or post.get("published_at") or "").strip():
                     continue
-                candidates.append(post)
-            if not candidates:
-                skipped.append({"persona_id": persona_id, "persona_name": persona_name, "reason": "没有可发布内容"})
-                continue
-            selected_posts = candidates[:per_count]
-            for post in selected_posts:
-                post_id = str(post.get("id") or "").strip()
-                active = _active_publish_task_for_post(persona_id=persona_id, account_id=str(account.get("id") or ""), post_id=post_id)
+                if platform == "instagram" and not media_paths:
+                    skipped.append({
+                        "persona_id": persona_id,
+                        "persona_name": persona_name,
+                        "post_id": post_id,
+                        "post_title": str(post.get("title") or ""),
+                        "reason": "Instagram 发布需要先给草稿添加媒体",
+                    })
+                    continue
+                active = _active_publish_task_for_post(
+                    persona_id=persona_id,
+                    account_id=str(account.get("id") or ""),
+                    post_id=post_id,
+                )
                 if active and payload.skip_active:
                     skipped.append({
                         "persona_id": persona_id,
@@ -13708,16 +13758,14 @@ def _publish_persona_matrix(
                         "reason": "已有发布任务在队列或执行中",
                     })
                     continue
+                candidates.append(post)
+            if not candidates:
+                skipped.append({"persona_id": persona_id, "persona_name": persona_name, "reason": "没有可发布内容"})
+                continue
+            selected_posts = candidates[:per_count]
+            for post in selected_posts:
+                post_id = str(post.get("id") or "").strip()
                 media_paths = _post_media_paths_for_publish(post)
-                if platform == "instagram" and not media_paths:
-                    errors.append({
-                        "persona_id": persona_id,
-                        "persona_name": persona_name,
-                        "post_id": post_id,
-                        "post_title": str(post.get("title") or ""),
-                        "reason": "Instagram 发布需要先给草稿添加媒体",
-                    })
-                    continue
                 content = str(post.get("content") or "").strip()
                 task_payload = SocialTaskPayload(
                         persona_id=persona_id,
@@ -13751,7 +13799,9 @@ def _publish_persona_matrix(
                     "task_payload": task_payload,
                 })
         except HTTPException as exc:
-            errors.append({"persona_id": persona_id, "persona_name": persona_name, "reason": str(exc.detail)})
+            # A missing or disabled account only affects this persona. Keep the
+            # rest of the matrix batch publishable instead of aborting it.
+            skipped.append({"persona_id": persona_id, "persona_name": persona_name, "reason": str(exc.detail)})
         except Exception as exc:
             logger.exception("matrix publish item failed: persona_id=%s", persona_id)
             errors.append({"persona_id": persona_id, "persona_name": persona_name, "reason": str(exc)})
@@ -19871,22 +19921,25 @@ def create_app() -> FastAPI:
                 break
         if not cookies:
             return JSONResponse({"ok": False, "error": "no valid cookies"}, status_code=400, headers=cors_headers)
-        if _sentiment_profile_requires_sessionid(profile, profile_key) and not _sentiment_cookies_have_threads_sessionid(cookies):
+        if _sentiment_profile_requires_sessionid(profile, profile_key) and not _sentiment_cookies_have_required_sessionid(profile, profile_key, cookies):
+            platform_label = str(profile.get("label") or profile.get("platform") or profile_key or "当前平台").strip()
             return JSONResponse(
                 {
                     "ok": False,
-                    "error": "Threads Cookie 已读取，但缺少 threads.net/threads.com 的有效 sessionid；请先在后台浏览器打开 Threads 并完成登录，再重新同步授权。",
+                    "error": f"{platform_label} Cookie 已读取，但缺少有效 sessionid；请确认已登录后重新同步授权。",
                     "requiresCookie": "sessionid",
                 },
                 status_code=400,
                 headers=cors_headers,
             )
-        profile["cookies"] = cookies
-        profile["lastAuthorizedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        profile["lastAuthorizedBy"] = "browser-auth-helper"
-        profile["lastAuthorizationNote"] = f"synced by browser auth helper for {fallback_domain}"[:240]
-        _write_sentiment_config_file(config)
-        if _sentiment_profile_requires_sessionid(profile, profile_key):
+        profile = _save_sentiment_browser_auth_profile(
+            profile_key,
+            cookies,
+            authorized_by="browser-auth-helper",
+            note=f"synced by browser auth helper for {fallback_domain}",
+        )
+        platform_key = str(profile.get("platform") or profile.get("key") or profile_key).strip().lower()
+        if platform_key == "threads":
             live_auth = _sentiment_threads_live_auth_state(profile, cookies)
             return JSONResponse(
                 {
@@ -19962,29 +20015,31 @@ def create_app() -> FastAPI:
         cookies = _parse_manual_cookie_payload(payload.cookies_text, fallback_domain)
         if not cookies:
             raise HTTPException(status_code=400, detail="没有解析到有效 Cookie。请粘贴 JSON Cookie 数组，或 name=value; name2=value2 格式。")
-        if _sentiment_profile_requires_sessionid(profile, profile_key) and not _sentiment_cookies_have_threads_sessionid(cookies):
-            raise HTTPException(status_code=400, detail="Threads Cookie 已读取，但缺少 threads.net/threads.com 的有效 sessionid；请先在后台浏览器打开 Threads 并完成登录，再重新同步授权。")
-        profile["cookies"] = cookies
-        profile["lastAuthorizedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        if _sentiment_profile_requires_sessionid(profile, profile_key) and not _sentiment_cookies_have_required_sessionid(profile, profile_key, cookies):
+            platform_label = str(profile.get("label") or profile.get("platform") or profile_key or "当前平台").strip()
+            raise HTTPException(status_code=400, detail=f"{platform_label} Cookie 已读取，但缺少有效 sessionid；请确认已登录后重新同步授权。")
         note = str(payload.note or "").strip()
-        if note:
-            profile["lastAuthorizationNote"] = note[:240]
-        profile["lastAuthorizedBy"] = str(user.get("username") or "")
-        _write_sentiment_config_file(config)
+        profile = _save_sentiment_browser_auth_profile(
+            profile_key,
+            cookies,
+            authorized_by=str(user.get("username") or ""),
+            note=note or "saved from admin page",
+        )
         return {"ok": True, "profile": _sentiment_profile_for_client(profile), "savedCookieCount": len(cookies)}
 
     @app.delete("/api/admin/sentiment/browser_auth/profiles/{profile_key}/cookies")
     def api_admin_sentiment_browser_auth_clear_cookies(profile_key: str, user: dict[str, Any] = Depends(require_admin)):
-        config = _read_sentiment_config_file()
-        profiles = _sentiment_profiles_container(config)
-        profile = _find_sentiment_profile(profiles, profile_key)
-        if not profile or not _sentiment_browser_auth_profile_allowed(profile):
-            raise HTTPException(status_code=404, detail="舆情 Cookie profile 不存在。")
-        profile["cookies"] = []
-        profile["lastAuthorizedAt"] = ""
-        profile["lastAuthorizedBy"] = str(user.get("username") or "")
-        profile["lastAuthorizationNote"] = "cleared from admin page"
-        _write_sentiment_config_file(config)
+        with _SENTIMENT_CONFIG_LOCK:
+            config = _read_sentiment_config_file()
+            profiles = _sentiment_profiles_container(config)
+            profile = _find_sentiment_profile(profiles, profile_key)
+            if not profile or not _sentiment_browser_auth_profile_allowed(profile):
+                raise HTTPException(status_code=404, detail="舆情 Cookie profile 不存在。")
+            profile["cookies"] = []
+            profile["lastAuthorizedAt"] = ""
+            profile["lastAuthorizedBy"] = str(user.get("username") or "")
+            profile["lastAuthorizationNote"] = "cleared from admin page"
+            _write_sentiment_config_file(config)
         return {"ok": True, "profile": _sentiment_profile_for_client(profile)}
 
     @app.post("/api/admin/llm_models")
