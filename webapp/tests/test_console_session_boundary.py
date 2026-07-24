@@ -792,7 +792,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn(".live-browser-card-actions", mobile_controls)
         self.assertIn("justify-content: flex-start;", mobile_controls)
 
-    def test_mobile_live_browser_placeholders_and_expanded_window_keep_landscape_ratio(self):
+    def test_mobile_live_browser_placeholders_and_expanded_window_prioritizes_media(self):
         mobile_density_start = self.styles.index(
             "@media (max-width: 760px)",
             self.styles.index(".live-browser-placeholder {"),
@@ -848,13 +848,25 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("width: calc(100dvh - 12px);", landscape_card)
         self.assertIn("height: calc(100dvw - 12px);", landscape_card)
         self.assertIn("transform: translate(-50%, -50%) rotate(90deg);", landscape_card)
-        self.assertIn("grid-template-rows: auto minmax(0, 1fr) auto auto;", landscape_card)
+        self.assertIn("grid-template-rows: minmax(0, 1fr);", landscape_card)
         self.assertIn(landscape_frame, landscape_media)
         self.assertIn("height: 100%;", landscape_frame)
         self.assertIn("max-height: none;", landscape_frame)
         self.assertIn("aspect-ratio: auto;", landscape_frame)
         self.assertIn("grid-template-columns: minmax(0, 1fr) repeat(3, auto);", landscape_tools)
         self.assertIn("grid-column: auto;", landscape_input)
+        expanded_modal = self._css_block(
+            ".console-page [data-live-browser-card].live-browser-card.is-live-browser-modal,"
+        )
+        expanded_head = self._css_block(
+            ".live-browser-card.is-live-browser-modal .live-browser-card-head {"
+        )
+        self.assertIn("gap: 0;", expanded_modal)
+        self.assertIn("padding: 0;", expanded_modal)
+        self.assertIn("border: 0;", expanded_modal)
+        self.assertIn("position: absolute;", expanded_head)
+        self.assertIn(".live-browser-card-identity", self.styles)
+        self.assertIn(".live-browser-interaction-note", self.styles)
 
     def test_public_toast_uses_compact_bottom_layout(self):
         host = self._css_block(".toast-host {")
@@ -1057,6 +1069,16 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         ]
         self.assertIn("background: var(--status-running-bg)", task_rows)
         self.assertIn("color: var(--status-running-ink)", task_rows)
+
+    def test_compact_live_browser_cards_preserve_status_border_colors(self):
+        for selector, color in (
+            (".console-page [data-live-browser-card].live-browser-card.is-status-active {", "#2f9baa"),
+            (".console-page [data-live-browser-card].live-browser-card.is-status-queued {", "#4c7fc2"),
+            (".console-page [data-live-browser-card].live-browser-card.is-status-manual {", "#d28a45"),
+            (".console-page [data-live-browser-card].live-browser-card.is-status-success {", "#3f9f68"),
+            (".console-page [data-live-browser-card].live-browser-card.is-status-error {", "#ce5e68"),
+        ):
+            self.assertIn(f"border-color: {color}", self._css_block(selector))
 
     def test_account_pool_bind_replaces_existing_persona_binding_in_one_action(self):
         bind_account = self._function_source("bindAccountPoolAccountToPersona")

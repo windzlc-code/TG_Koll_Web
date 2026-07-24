@@ -15866,6 +15866,66 @@ body.console-page {
   }
 }
 
+/* Expanded preview is media-first: metadata and actions float over the iframe. */
+.console-page [data-live-browser-card].live-browser-card.is-live-browser-modal,
+.live-browser-card.is-live-browser-modal {
+  grid-template-rows: minmax(0, 1fr);
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: #050607;
+  box-shadow: none;
+}
+
+.live-browser-card.is-live-browser-modal .live-browser-frame,
+.live-browser-card.is-live-browser-modal.is-portrait .live-browser-frame {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  aspect-ratio: auto;
+}
+
+.live-browser-card.is-live-browser-modal .live-browser-card-head {
+  position: absolute;
+  z-index: 20;
+  top: 10px;
+  right: 10px;
+  display: block;
+  min-height: 0;
+}
+
+.live-browser-card.is-live-browser-modal :is(
+  .live-browser-card-identity,
+  .live-browser-task-summary,
+  .live-browser-interaction-note
+) {
+  display: none;
+}
+
+.live-browser-card.is-live-browser-modal .live-browser-card-actions {
+  display: flex;
+  width: auto;
+  gap: 6px;
+}
+
+.live-browser-card.is-live-browser-modal .live-browser-card-actions > .status {
+  display: none;
+}
+
+.live-browser-card.is-live-browser-modal :is(
+  .live-browser-expand-button,
+  .live-browser-action-menu > summary
+) {
+  background: rgb(5 12 13 / 74%);
+  border-color: rgb(153 189 184 / 52%);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 34%);
+  backdrop-filter: blur(8px);
+}
+
 @media (max-width: 760px) and (orientation: portrait) {
   .live-browser-card.is-live-browser-modal {
     inset: auto;
@@ -15873,7 +15933,7 @@ body.console-page {
     left: 50%;
     width: calc(100dvh - 12px);
     height: calc(100dvw - 12px);
-    grid-template-rows: auto minmax(0, 1fr) auto auto;
+    grid-template-rows: minmax(0, 1fr);
     align-content: stretch;
     overflow: hidden;
     transform: translate(-50%, -50%) rotate(90deg);
@@ -18246,6 +18306,36 @@ body.console-page {
   animation: none;
 }
 
+/* Keep the state visible against the compact dark browser surface. */
+.console-page [data-live-browser-card].live-browser-card.is-status-active {
+  border-color: #2f9baa !important;
+  box-shadow: 0 0 0 1px rgb(47 155 170 / 26%);
+}
+
+.console-page [data-live-browser-card].live-browser-card.is-status-queued {
+  border-color: #4c7fc2;
+  box-shadow: 0 0 0 1px rgb(76 127 194 / 26%);
+}
+
+.console-page [data-live-browser-card].live-browser-card.is-status-manual {
+  border-color: #d28a45;
+  box-shadow: 0 0 0 1px rgb(210 138 69 / 28%);
+}
+
+.console-page [data-live-browser-card].live-browser-card.is-status-success {
+  border-color: #3f9f68;
+  box-shadow: 0 0 0 1px rgb(63 159 104 / 26%);
+}
+
+.console-page [data-live-browser-card].live-browser-card.is-status-error {
+  border-color: #ce5e68;
+  box-shadow: 0 0 0 1px rgb(206 94 104 / 28%);
+}
+
+.console-page [data-live-browser-card].live-browser-card.is-status-muted {
+  border-color: #394344;
+}
+
 .console-page .live-browser-card-head {
   position: relative;
   display: grid;
@@ -18645,6 +18735,17 @@ body.console-page {
     grid-template-rows: auto auto;
     gap: 4px;
     align-items: center;
+    min-height: 30px;
+  }
+
+  .console-page .live-browser-card-head strong {
+    font-size: 14px;
+    line-height: 1.15;
+  }
+
+  .console-page .live-browser-card-head span:not(.status) {
+    font-size: 10px;
+    line-height: 1.15;
   }
 
   .console-page .live-browser-card-identity {
@@ -18664,7 +18765,8 @@ body.console-page {
     width: 100%;
     overflow: hidden;
     transform: none;
-    font-size: 11px;
+    font-size: 10px;
+    line-height: 1.15;
   }
 
   .console-page .live-browser-task-summary span:last-child {
@@ -18686,12 +18788,24 @@ body.console-page {
   }
 
   .console-page .live-browser-interaction-note {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 2px;
-    align-items: start;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 4px;
+    align-items: center;
+    font-size: 10px;
+    line-height: 1.15;
+  }
+
+  .console-page .live-browser-interaction-context {
+    gap: 4px;
+    overflow: hidden;
+  }
+
+  .console-page .live-browser-interaction-context span {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .console-page .live-browser-interaction-note [data-live-browser-hint] {
-    text-align: left;
+    text-align: right;
   }
 }
