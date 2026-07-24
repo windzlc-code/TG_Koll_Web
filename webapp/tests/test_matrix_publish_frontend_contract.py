@@ -58,8 +58,12 @@ class MatrixPublishFrontendContractTests(unittest.TestCase):
         self.assertIn("const personaIds = eligible.map", submit)
 
     def test_matrix_persona_selection_keeps_the_mobile_drawer_open(self):
-        self.assertIn('if (mode !== "matrix_start") setPersonaMobileSidebarOpen(false);', CONSOLE_JS)
-        self.assertIn("Matrix selection is additive", CONSOLE_JS)
+        select_start = CONSOLE_JS.index('const personaSelectButton = event.target.closest("[data-persona-select]")')
+        select_end = CONSOLE_JS.index('if (event.target.closest("[data-persona-open-create]"))', select_start)
+        selection_handler = CONSOLE_JS[select_start:select_end]
+
+        self.assertIn('if (mode === "matrix_start") toggleMatrixPersonaId(nextPersonaId);', selection_handler)
+        self.assertNotIn('setPersonaMobileSidebarOpen(false)', selection_handler)
 
     def test_backend_skips_invalid_matrix_items_without_aborting_the_batch(self):
         matrix_start = SERVER_PY.index("def _publish_persona_matrix(")

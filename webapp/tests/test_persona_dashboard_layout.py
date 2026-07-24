@@ -273,10 +273,12 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertEqual(persona_panel.count("extraActions:"), 1)
         select_start = handler.index('const taskPersonaSelect = event.target.closest("[data-task-persona-select]");')
         select_handler = handler[select_start:]
-        self.assertLess(
-            select_handler.index('$("taskTable").innerHTML = renderTaskQueueView();'),
-            select_handler.index('setPersonaMobileSidebarOpen(false, "taskQueuePersonaSidebar");'),
+        self.assertIn('const reopenTaskQueuePersonaSidebar = Boolean(', select_handler)
+        self.assertIn(
+            'setPersonaMobileSidebarOpen(reopenTaskQueuePersonaSidebar, "taskQueuePersonaSidebar");',
+            select_handler,
         )
+        self.assertNotIn('setPersonaMobileSidebarOpen(false, "taskQueuePersonaSidebar");', select_handler)
         self.assertIn(
             'setPersonaMobileSidebarOpen(reopenTaskQueuePersonaSidebar, "taskQueuePersonaSidebar");',
             self.console_script,
@@ -423,6 +425,39 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             'if (moduleId === "publishing" || moduleId === "automation") setPersonaMobileSidebarOpen(false);',
             module,
         )
+
+    def test_mobile_persona_selection_preserves_every_open_drawer(self):
+        module_start = self.console_script.index("function renderSimpleFlowModule(moduleId)")
+        module_end = self.console_script.index("\nfunction bindSimpleFlowInputs", module_start)
+        module = self.console_script[module_start:module_end]
+        selection_start = self.console_script.index(
+            'const personaSelectButton = event.target.closest("[data-persona-select]")'
+        )
+        selection_end = self.console_script.index(
+            'if (event.target.closest("[data-persona-open-create]"))',
+            selection_start,
+        )
+        selection = self.console_script[selection_start:selection_end]
+        binding_start = self.console_script.index("async function bindAccountPoolAccountToPersona")
+        binding_end = self.console_script.index("\nasync function runAccountPoolThreadsTask", binding_start)
+        binding = self.console_script[binding_start:binding_end]
+
+        self.assertIn(
+            'document.getElementById("automationPersonaSidebar")?.classList.contains("is-mobile-open")',
+            module,
+        )
+        self.assertIn(
+            'setPersonaMobileSidebarOpen(reopenAutomationPersonaSidebar, "automationPersonaSidebar")',
+            module,
+        )
+        self.assertNotIn('setPersonaMobileSidebarOpen(false)', selection)
+        self.assertNotIn('setPersonaMobileSidebarOpen(false)', binding)
+
+        close_start = self.console_script.index(
+            'if (event.target.closest("[data-persona-mobile-list-close], [data-persona-mobile-list-backdrop]"))'
+        )
+        close_end = self.console_script.index("\n    const startPersonaBulk", close_start)
+        self.assertIn("setPersonaMobileSidebarOpen(false);", self.console_script[close_start:close_end])
 
     def test_mobile_account_pool_persona_drawer_reserves_header_and_status_space(self):
         account_sidebar_start = self.console_script.index("function renderAccountPoolPersonaSidebar")

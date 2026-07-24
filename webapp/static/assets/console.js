@@ -10387,6 +10387,10 @@ function renderSimpleFlowModule(moduleId) {
     moduleId === "publishing"
     && document.getElementById("publishPersonaSidebar")?.classList.contains("is-mobile-open")
   );
+  const reopenAutomationPersonaSidebar = Boolean(
+    moduleId === "automation"
+    && document.getElementById("automationPersonaSidebar")?.classList.contains("is-mobile-open")
+  );
   if (moduleId === "publishing") removePersonaCardEditorPortal();
   const branch = currentBranch(moduleId);
   const personaAccount = accountForPersona(selectedPersona());
@@ -10519,7 +10523,7 @@ function renderSimpleFlowModule(moduleId) {
   if (moduleId === "publishing") {
     setPersonaMobileSidebarOpen(reopenPublishPersonaSidebar, "publishPersonaSidebar");
   } else if (moduleId === "automation") {
-    setPersonaMobileSidebarOpen(false);
+    setPersonaMobileSidebarOpen(reopenAutomationPersonaSidebar, "automationPersonaSidebar");
   }
   if ($("simpleAccount") && accountId) $("simpleAccount").value = accountId;
   if ($("simplePublishMode")) {
@@ -20946,7 +20950,6 @@ async function bindAccountPoolAccountToPersona(personaId = "") {
     && String(item.persona_id || "").trim() === cleanPersonaId
     && String(item.platform || "").trim().toLowerCase() === String(account.platform || "").trim().toLowerCase()
   ));
-  setPersonaMobileSidebarOpen(false);
   state.accountPoolBinding = true;
   renderSocialAccounts();
   try {
@@ -23904,9 +23907,6 @@ function bindEvents() {
         const mode = normalizedPublishMode($("simplePublishMode")?.value || state.simpleBranches.publishing);
         if (mode === "matrix_start") toggleMatrixPersonaId(nextPersonaId);
         else selectPublishingPersona(nextPersonaId);
-        // Matrix selection is additive. Keep the drawer open until the user
-        // explicitly closes it so multiple personas can be selected in one pass.
-        if (mode !== "matrix_start") setPersonaMobileSidebarOpen(false);
         state.personaListEditorId = "";
         state.personaListEditorMode = "";
         withConsoleScrollPreserved(() => renderSimpleFlowModule("publishing"));
@@ -23922,7 +23922,6 @@ function bindEvents() {
           state.personaListEditorId = "";
           state.personaListEditorMode = "";
         }
-        setPersonaMobileSidebarOpen(false);
         withConsoleScrollPreserved(() => renderSimpleFlowModule("automation"));
         renderConfirmSummary();
         return;
@@ -23935,7 +23934,6 @@ function bindEvents() {
       if (nextPersonaId !== previousPersonaId) resetPersonaWorkspaceStateOnSwitch(nextPersonaId);
       else setSelectedPersonaPostId("");
       state.preferredAccountId = accountForPersona(selectedPersona())?.id || "";
-      setPersonaMobileSidebarOpen(false, "personaWorkspaceSidebar");
       renderPersonaModule();
       renderConfirmSummary();
       Promise.all([
@@ -24542,11 +24540,14 @@ function bindEvents() {
     }
     const taskPersonaSelect = event.target.closest("[data-task-persona-select]");
     if (taskPersonaSelect) {
+      const reopenTaskQueuePersonaSidebar = Boolean(
+        document.getElementById("taskQueuePersonaSidebar")?.classList.contains("is-mobile-open")
+      );
       state.selectedPersonaId = taskPersonaSelect.dataset.taskPersonaSelect || "";
       setSelectedPersonaPostId("");
       state.taskQueuePersonaPage = 1;
       $("taskTable").innerHTML = renderTaskQueueView();
-      setPersonaMobileSidebarOpen(false, "taskQueuePersonaSidebar");
+      setPersonaMobileSidebarOpen(reopenTaskQueuePersonaSidebar, "taskQueuePersonaSidebar");
       return;
     }
     const clearPersonaQueue = event.target.closest("[data-task-clear-persona-queue]");
