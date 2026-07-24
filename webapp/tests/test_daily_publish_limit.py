@@ -404,6 +404,14 @@ class DailyPublishLimitTests(unittest.TestCase):
                 (batch_id,),
             ).fetchall()
         self.assertEqual([item[0] for item in statuses], ["running", "queued"])
+        self.assertTrue(
+            social_automation_api._finish_task(
+                first_task["id"],
+                "need_manual",
+                {},
+                "waiting for manual takeover",
+            )
+        )
         self.assertFalse(
             social_automation_api._mark_publish_batch_item_running(
                 second_task,
