@@ -17034,7 +17034,7 @@ function renderPersonaHotCandidatePicker(persona, form) {
         </div>
         <small>${hotMode === "normal" ? "泛垂直：覆盖同领域宽泛热点" : "垂直：更贴合当前人设关键词"}</small>
       </div>
-      <div class="row-actions">
+      <div class="row-actions persona-hot-fetch-toolbar">
         <div class="persona-hot-time-window">
           <span>热点时限</span>
           <div class="automation-capsule-tabs persona-hot-freshness-tabs" aria-label="热点时限模式">
