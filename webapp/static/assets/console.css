@@ -10576,6 +10576,17 @@ body.persona-media-sorting {
   white-space: nowrap;
 }
 
+/* Download is a link while the adjacent task actions are buttons. Make their
+   text share the same vertical centering instead of relying on inline layout. */
+.task-row .row-actions a,
+.task-persona-queue-row .row-actions a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  text-decoration: none;
+}
+
 .task-row .row-actions button.muted,
 .task-persona-queue-row .row-actions button.muted {
   border-color: #cbd5e1;

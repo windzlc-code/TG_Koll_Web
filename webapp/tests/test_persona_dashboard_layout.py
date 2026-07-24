@@ -225,6 +225,12 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("flex-wrap: nowrap;", mobile_styles)
         self.assertIn("justify-content: flex-end;", mobile_styles)
         self.assertIn("margin-left: 0;", mobile_styles)
+        self.assertIn(
+            ".task-row .row-actions a,\n.task-persona-queue-row .row-actions a {",
+            self.styles,
+        )
+        self.assertIn("align-items: center;", self.styles)
+        self.assertIn("justify-content: center;", self.styles)
 
     def test_task_queue_removes_open_current_persona_action(self):
         self.assertNotIn("data-task-open-persona", self.console_script)
