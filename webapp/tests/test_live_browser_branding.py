@@ -27,14 +27,16 @@ def test_live_browser_html_uses_vecto_branding():
     assert "margin-top: 126px" not in branded
 
 
-def test_live_browser_html_does_not_inject_console_frame_toggle_into_kasmvnc():
+def test_live_browser_html_toggles_the_native_kasm_frame_from_blank_space():
     source = b"<html><head><title>KasmVNC</title></head><body></body></html>"
 
     branded = social_automation_api._brand_live_browser_html(source).decode("utf-8")
 
-    assert 'id="vecto-live-browser-console-frame-toggle"' not in branded
-    assert '"vecto-live-browser-toggle-console-frame"' not in branded
-    assert "window.parent.postMessage" not in branded
+    assert 'id="vecto-live-browser-console-frame-toggle"' in branded
+    assert '"vecto-live-browser-toggle-console-frame"' in branded
+    assert "const edgeSize = 40;" in branded
+    assert "window.parent.postMessage({ type: messageType }, window.location.origin);" in branded
+    assert 'window.addEventListener("pointerup"' in branded
 
 
 def test_live_browser_branding_is_idempotent():

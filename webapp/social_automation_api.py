@@ -2147,7 +2147,27 @@ def _brand_live_browser_html(content: bytes) -> bytes:
   33% { transform: translateX(12px) scale(1); }
   66% { transform: translateX(24px) scale(0.82); }
 }
-</style>"""
+</style>
+<script id="vecto-live-browser-console-frame-toggle">
+(() => {
+  const messageType = "vecto-live-browser-toggle-console-frame";
+  const edgeSize = 40;
+  const notifyConsoleFrame = () => {
+    if (window.parent !== window) {
+      window.parent.postMessage({ type: messageType }, window.location.origin);
+    }
+  };
+  const isFrameEdge = (event) => (
+    event.clientX <= edgeSize
+    || event.clientY <= edgeSize
+    || event.clientX >= window.innerWidth - edgeSize
+    || event.clientY >= window.innerHeight - edgeSize
+  );
+  window.addEventListener("pointerup", (event) => {
+    if (event.button === 0 && isFrameEdge(event)) notifyConsoleFrame();
+  });
+})();
+</script>"""
     html = html.replace("<title>KasmVNC</title>", "<title>Vecto 实时浏览器</title>", 1)
     html = html.replace("</head>", f"{branding}</head>", 1)
     return html.encode("utf-8")

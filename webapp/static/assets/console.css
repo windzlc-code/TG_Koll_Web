@@ -15938,7 +15938,48 @@ body.console-page {
   visibility: hidden;
 }
 
-.live-browser-card.is-live-browser-modal.is-interaction-enabled .live-browser-manual-input {
+.live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-card-head {
+  right: 10px;
+  left: auto;
+  display: flex;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+  visibility: visible;
+}
+
+.live-browser-card.is-live-browser-modal :is(
+  .live-browser-card-identity,
+  .live-browser-task-summary,
+  .live-browser-mobile-summary
+) {
+  display: none !important;
+}
+
+.live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-interaction-note {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 20;
+  min-height: 32px;
+  padding: 6px 12px;
+  background: rgb(5 12 13 / 74%);
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+  transition: opacity 180ms ease, transform 220ms ease, visibility 0s linear 220ms;
+  visibility: visible;
+}
+
+.live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-manual-input {
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0);
@@ -16070,12 +16111,29 @@ body.console-page {
     white-space: nowrap;
   }
 
+  .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-interaction-note {
+    min-height: 26px;
+    padding: 4px 8px;
+    font-size: 11px;
+  }
+
 }
 
 .persona-profile-account-panel .persona-account-pool-layout {
   grid-template-columns: minmax(104px, 132px) minmax(0, 1fr);
   gap: 8px;
   align-items: stretch;
+}
+
+@media (max-width: 760px) and (orientation: portrait) {
+  .console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-interaction-note {
+    background: rgb(5 12 13 / 37%);
+  }
+
+  .console-page .live-browser-card.is-live-browser-modal .live-browser-action-menu-panel {
+    background: rgb(13 18 19 / 42%);
+    backdrop-filter: blur(8px);
+  }
 }
 
 .persona-profile-account-panel .account-pool-platform-panel,

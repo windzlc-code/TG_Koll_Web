@@ -890,10 +890,12 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("position: absolute;", expanded_head)
         self.assertIn("background: rgb(5 12 13 / 62%);", expanded_head)
         self.assertIn("pointer-events: none;", expanded_head)
-        self.assertNotIn("is-live-browser-controls-visible", self.styles)
+        self.assertIn(".is-live-browser-controls-visible .live-browser-card-head", self.styles)
+        self.assertIn(".is-live-browser-controls-visible .live-browser-interaction-note", self.styles)
+        self.assertIn(".live-browser-card.is-live-browser-modal :is(", self.styles)
         self.assertIn("vecto-live-browser-modal-enter", self.styles)
         self.assertNotIn("vecto-live-browser-modal-exit", self.styles)
-        self.assertNotIn("is-live-browser-controls-visible", landscape_media)
+        self.assertIn(".is-live-browser-controls-visible .live-browser-interaction-note", landscape_media)
         self.assertIn(".live-browser-card-identity", self.styles)
         self.assertIn(".live-browser-interaction-note", self.styles)
 
@@ -911,21 +913,21 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("live-browser-card-identity > [data-live-browser-meta]", mobile_styles)
         self.assertIn("live-browser-mobile-summary", self.source)
 
-    def test_expanded_mobile_browser_keeps_host_metadata_hidden(self):
+    def test_expanded_mobile_browser_keeps_header_hidden_but_restores_controls(self):
         portrait_start = self.styles.rfind("@media (max-width: 760px) and (orientation: portrait)")
         portrait_styles = self.styles[portrait_start:]
-        self.assertNotIn("is-live-browser-controls-visible", portrait_styles)
+        self.assertIn(".live-browser-card.is-live-browser-modal :is(", self.styles)
+        self.assertIn("is-live-browser-controls-visible .live-browser-interaction-note", portrait_styles)
 
-    def test_expanded_live_browser_removes_host_overlay_toggle_path(self):
+    def test_expanded_live_browser_keeps_controls_without_restoring_header_panel(self):
+        toggle = self._function_source("toggleLiveBrowserModalControls")
         opening = self._function_source("requestLiveBrowserFullscreen")
 
-        self.assertNotIn("data-live-browser-modal-overlay-toggle", self.source)
-        self.assertNotIn("data-live-browser-controls-toggle", self.source)
-        self.assertNotIn("setLiveBrowserModalControlsVisible", self.source)
-        self.assertNotIn("toggleLiveBrowserModalControls", self.source)
-        self.assertNotIn("is-live-browser-controls-visible", self.source)
-        self.assertNotIn("vecto-live-browser-toggle-console-frame", self.source)
-        self.assertNotIn("is-live-browser-controls-visible", opening)
+        self.assertIn('[data-live-browser-modal-overlay-toggle], [data-live-browser-controls-toggle]', self.source)
+        self.assertIn('class="live-browser-lock" data-live-browser-controls-toggle', self.source)
+        self.assertIn("is-live-browser-controls-visible", toggle)
+        self.assertIn("vecto-live-browser-toggle-console-frame", self.source)
+        self.assertIn("card.classList.remove(\"is-live-browser-controls-visible\");", opening)
 
     def test_public_toast_uses_compact_bottom_layout(self):
         host = self._css_block(".toast-host {")
@@ -2005,6 +2007,10 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_task_screenshot_gallery_deduplicates_result_and_log_in_admin_workspace(self):
+        collect_task_screenshots = self._section(
+            "function collectTaskScreenshots",
+            "\nfunction renderTaskScreenshotGallery",
+        )
         harness = textwrap.dedent(f"""
             const assert = require("node:assert/strict");
             const ADMIN_WORKSPACE_USER_ID = "42";
@@ -2016,7 +2022,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             {self._function_source("automationScreenshotThumbnailUrl")}
             {self._function_source("taskScreenshotFromValue")}
             function logStageLabel(stage) {{ return stage || "日志截图"; }}
-            {self._section("function collectTaskScreenshots", "\nfunction renderTaskScreenshotGallery")}
+            {collect_task_screenshots}
 
             const filename = "task-1_publish_done_123.png";
             const rows = collectTaskScreenshots({{
