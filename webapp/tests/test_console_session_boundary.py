@@ -884,18 +884,25 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         expanded_head = self._css_block(
             ".live-browser-card.is-live-browser-modal .live-browser-card-head {"
         )
+        expanded_controls = self._css_block(
+            ".live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-card-head {"
+        )
+        expanded_metadata = self._css_block(
+            ".live-browser-card.is-live-browser-modal .live-browser-card-identity,"
+        )
         self.assertIn("gap: 0;", expanded_modal)
         self.assertIn("padding: 0;", expanded_modal)
         self.assertIn("border: 0;", expanded_modal)
         self.assertIn("position: absolute;", expanded_head)
         self.assertIn("background: rgb(5 12 13 / 62%);", expanded_head)
         self.assertIn("pointer-events: none;", expanded_head)
+        self.assertIn("display: flex;", expanded_controls)
+        self.assertIn("background: transparent;", expanded_controls)
+        self.assertIn("display: none !important;", expanded_metadata)
         self.assertIn(".is-live-browser-controls-visible .live-browser-card-head", self.styles)
         self.assertIn(".is-live-browser-controls-visible .live-browser-interaction-note", self.styles)
-        self.assertIn(".is-live-browser-controls-visible .live-browser-card-actions > .status", self.styles)
         self.assertIn("vecto-live-browser-modal-enter", self.styles)
         self.assertNotIn("vecto-live-browser-modal-exit", self.styles)
-        self.assertIn(".is-live-browser-controls-visible .live-browser-task-summary span:last-child", landscape_media)
         self.assertIn(".live-browser-card-identity", self.styles)
         self.assertIn(".live-browser-interaction-note", self.styles)
 
@@ -913,35 +920,23 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("live-browser-card-identity > [data-live-browser-meta]", mobile_styles)
         self.assertIn("live-browser-mobile-summary", self.source)
 
-    def test_expanded_mobile_browser_uses_one_compact_translucent_summary(self):
+    def test_expanded_mobile_browser_hides_host_metadata_during_control_exit(self):
         portrait_start = self.styles.rfind("@media (max-width: 760px) and (orientation: portrait)")
         portrait_styles = self.styles[portrait_start:]
         expanded_head = self._css_block(
-            ".console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-card-head {",
-            portrait_start,
+            ".live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-card-head {",
         )
-        task_summary = self._css_block(
-            ".console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-task-summary {",
-            portrait_start,
-        )
-        mobile_summary = self._css_block(
-            ".console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-mobile-summary {",
-            portrait_start,
+        hidden_metadata = self._css_block(
+            ".live-browser-card.is-live-browser-modal .live-browser-card-identity,"
         )
 
-        self.assertIn("padding: 3px 6px;", expanded_head)
-        self.assertIn("background: rgb(5 12 13 / 37%);", expanded_head)
-        self.assertIn("display: none;", task_summary)
-        self.assertIn("display: grid;", mobile_summary)
-        self.assertIn("position: absolute;", mobile_summary)
-        self.assertIn("top: 0;", mobile_summary)
-        self.assertIn("left: 50%;", mobile_summary)
-        self.assertIn("transform: translate(-50%, -24px);", mobile_summary)
-        self.assertIn("grid-template-columns: repeat(2, max-content);", mobile_summary)
-        self.assertIn("justify-content: center;", mobile_summary)
-        self.assertIn("live-browser-mobile-summary > span:first-child", portrait_styles)
-        self.assertIn("live-browser-mobile-summary > span:nth-child(2)", portrait_styles)
-        self.assertIn("live-browser-mobile-summary > span:nth-child(3)", portrait_styles)
+        self.assertIn("right: 10px;", expanded_head)
+        self.assertIn("left: auto;", expanded_head)
+        self.assertIn("display: flex;", expanded_head)
+        self.assertIn("background: transparent;", expanded_head)
+        self.assertIn("display: none !important;", hidden_metadata)
+        self.assertNotIn("is-live-browser-controls-visible .live-browser-card-identity", portrait_styles)
+        self.assertNotIn("is-live-browser-controls-visible .live-browser-mobile-summary", portrait_styles)
         self.assertIn("background: rgb(13 18 19 / 42%);", portrait_styles)
 
     def test_expanded_live_browser_does_not_bind_native_frame_clicks_to_console_controls(self):
@@ -953,87 +948,6 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("is-live-browser-controls-visible", toggle)
         self.assertNotIn("vecto-live-browser-toggle-console-frame", self.source)
         self.assertIn("card.classList.remove(\"is-live-browser-controls-visible\");", opening)
-
-    def test_live_browser_takeover_clears_controls_left_open_while_interaction_was_locked(self):
-        update_card = self._function_source("updateLiveBrowserSessionCard")
-        set_controls_visible = self._function_source("setLiveBrowserModalControlsVisible")
-        toggle_controls = self._function_source("toggleLiveBrowserModalControls")
-        harness = textwrap.dedent(
-            f"""
-            const assert = require("node:assert/strict");
-            const state = {{ liveBrowserExpandedSessionId: "session-1" }};
-            const liveBrowserSessionId = (session) => session.id;
-            const liveBrowserTaskStatus = () => "need_manual";
-            const liveBrowserPresentationStatus = () => "need_manual";
-            const liveBrowserSessionStatus = () => "active";
-            const statusTone = () => "manual";
-            const canInteractWithLiveBrowser = (session) => Boolean(session.input_allowed);
-            const liveBrowserIdentity = () => ({{ account: "account", platform: "Threads", persona: "persona" }});
-            const liveBrowserDialogTitleId = () => "dialog-title";
-            const liveBrowserTaskSummary = () => ({{ count: 1, target: "target" }});
-            const liveBrowserPresentationLabel = () => "人工接管";
-            const renderExpandIcon = () => "";
-            const liveBrowserLoginMode = () => "manual";
-            const liveBrowserInteractionHint = () => "";
-            const liveBrowserModeLabel = () => "人工接管";
-            const liveBrowserCurrentIp = () => "未使用代理 IP";
-
-            class FakeClassList {{
-              constructor(names) {{ this.names = new Set(names); }}
-              contains(name) {{ return this.names.has(name); }}
-              remove(...names) {{ names.forEach((name) => this.names.delete(name)); }}
-              toggle(name, force) {{
-                if (force === undefined) force = !this.names.has(name);
-                if (force) this.names.add(name);
-                else this.names.delete(name);
-                return force;
-              }}
-            }}
-
-            function createCard(classNames) {{
-              const attributes = new Set();
-              return {{
-                classList: new FakeClassList(classNames),
-                dataset: {{}},
-                attributes,
-                hasAttribute: (name) => attributes.has(name),
-                querySelector: () => null,
-                querySelectorAll: () => [],
-                removeAttribute: (name) => attributes.delete(name),
-                toggleAttribute: (name, force) => {{
-                  if (force) attributes.add(name);
-                  else attributes.delete(name);
-                }},
-              }};
-            }}
-
-            {set_controls_visible}
-            {toggle_controls}
-            {update_card}
-
-            const transitioned = createCard([
-              "is-live-browser-modal",
-              "is-interaction-locked",
-            ]);
-            toggleLiveBrowserModalControls(transitioned);
-            assert.equal(transitioned.classList.contains("is-live-browser-controls-visible"), true);
-            assert.equal(transitioned.hasAttribute("data-live-browser-controls-visible"), true);
-            updateLiveBrowserSessionCard(transitioned, {{ id: "session-1", input_allowed: true }});
-            assert.equal(transitioned.classList.contains("is-interaction-enabled"), true);
-            assert.equal(transitioned.classList.contains("is-interaction-locked"), false);
-            assert.equal(transitioned.classList.contains("is-live-browser-controls-visible"), false);
-            assert.equal(transitioned.hasAttribute("data-live-browser-controls-visible"), false);
-
-            const alreadyInteractive = createCard([
-              "is-live-browser-modal",
-              "is-interaction-enabled",
-            ]);
-            toggleLiveBrowserModalControls(alreadyInteractive);
-            updateLiveBrowserSessionCard(alreadyInteractive, {{ id: "session-1", input_allowed: true }});
-            assert.equal(alreadyInteractive.classList.contains("is-live-browser-controls-visible"), true);
-            """
-        )
-        self._run_node(harness)
 
     def test_public_toast_uses_compact_bottom_layout(self):
         host = self._css_block(".toast-host {")

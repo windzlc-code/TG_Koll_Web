@@ -21521,7 +21521,6 @@ function syncSocialCancelAllButtons() {
 
 function updateLiveBrowserSessionCard(card, session) {
   if (!card) return;
-  const interactionWasLocked = card.classList.contains("is-interaction-locked");
   const sessionId = liveBrowserSessionId(session);
   const status = liveBrowserTaskStatus(session);
   const presentationStatus = liveBrowserPresentationStatus(session);
@@ -21541,9 +21540,6 @@ function updateLiveBrowserSessionCard(card, session) {
   });
   card.classList.toggle("is-interaction-enabled", interactionAllowed);
   card.classList.toggle("is-interaction-locked", !interactionAllowed);
-  if (interactionWasLocked && interactionAllowed) {
-    setLiveBrowserModalControlsVisible(card, false);
-  }
   const titleNode = card.querySelector("[data-live-browser-title]");
   if (titleNode) {
     titleNode.id = liveBrowserDialogTitleId(sessionId);
