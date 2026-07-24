@@ -46,8 +46,8 @@ export class JsonConfigStore {
     this.loaded = false;
   }
 
-  load() {
-    if (this.loaded) return;
+  load(force = false) {
+    if (this.loaded && !force) return;
     this.loaded = true;
     try {
       const raw = fs.readFileSync(this.filePath, "utf8");
@@ -64,24 +64,34 @@ export class JsonConfigStore {
 
   save() {
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    const tmpPath = `${this.filePath}.tmp`;
-    fs.writeFileSync(tmpPath, `${JSON.stringify(this.data, null, 2)}\n`, "utf8");
-    fs.renameSync(tmpPath, this.filePath);
+    const tmpPath = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
+    try {
+      fs.writeFileSync(tmpPath, `${JSON.stringify(this.data, null, 2)}\n`, "utf8");
+      fs.renameSync(tmpPath, this.filePath);
+    } finally {
+      try {
+        fs.rmSync(tmpPath, { force: true });
+      } catch {
+        // The rename already removed the temporary file on the normal path.
+      }
+    }
   }
 
   get(key) {
-    this.load();
+    this.load(true);
     return this.data[key];
   }
 
   set(key, value) {
-    this.load();
+    // Python and the browser-auth endpoint also update this file. Always merge
+    // into the latest on-disk document instead of restoring the startup cache.
+    this.load(true);
     this.data[key] = value;
     this.save();
   }
 
   all() {
-    this.load();
+    this.load(true);
     return { ...this.data };
   }
 }

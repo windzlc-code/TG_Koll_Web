@@ -27,6 +27,11 @@ export function resolveSentimentDataDir(): string {
   return dataDir;
 }
 
+export function resolveSentimentConfigPath(): string {
+  const configured = String(process.env.TOOL_R18_SENTIMENT_CONFIG_PATH || "").trim();
+  return configured ? path.resolve(configured) : path.join(resolveSentimentDataDir(), "sentiment-config.json");
+}
+
 export function resolveSentimentBackendUrl(): string {
   const configured = String(process.env.TOOL_R18_SENTIMENT_BACKEND_URL || "").trim();
   return configured || `http://127.0.0.1:${DEFAULT_PORT}`;
@@ -77,6 +82,7 @@ export async function ensureSentimentRuntime(): Promise<{ ok: boolean; url: stri
         HOST: "127.0.0.1",
         PORT: String(DEFAULT_PORT),
         SENTIMENT_DATA_DIR: resolveSentimentDataDir(),
+        SENTIMENT_CONFIG_PATH: resolveSentimentConfigPath(),
         SENTIMENT_SCHEDULER: "0",
       },
     });

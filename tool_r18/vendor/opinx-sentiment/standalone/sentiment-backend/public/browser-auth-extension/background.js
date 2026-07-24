@@ -1,6 +1,6 @@
 const DEFAULT_API_BASE = "";
 const DEFAULT_AUTH_TOKEN = "";
-const DEFAULT_EXTENSION_VERSION = "1.0.14";
+const DEFAULT_EXTENSION_VERSION = "1.0.15";
 const AUTO_SYNC_ALARM = "opinx-browser-auth-auto-sync";
 const AUTO_SYNC_INTERVAL_MINUTES = 10;
 const MIN_PROFILE_SYNC_GAP_MS = 2 * 60 * 1000;
@@ -377,13 +377,24 @@ function cookieKey(cookie = {}) {
   ].join("|");
 }
 
-async function getCookiesForDomain(domain = "") {
+async function cookieStoreIdForTab(tabId) {
+  if (!Number.isInteger(tabId)) return "";
+  try {
+    const stores = await chrome.cookies.getAllCookieStores();
+    return String(stores.find(store => Array.isArray(store.tabIds) && store.tabIds.includes(tabId))?.id || "");
+  } catch {
+    return "";
+  }
+}
+
+async function getCookiesForDomain(domain = "", storeId = "") {
   const normalized = String(domain || "").replace(/^\.+/, "").replace(/^www\./, "");
   if (!normalized) return [];
+  const query = filter => storeId ? { ...filter, storeId } : filter;
   const results = await Promise.allSettled([
-    chrome.cookies.getAll({ domain: normalized }),
-    chrome.cookies.getAll({ url: `https://${normalized}/` }),
-    chrome.cookies.getAll({ url: `https://www.${normalized}/` }),
+    chrome.cookies.getAll(query({ domain: normalized })),
+    chrome.cookies.getAll(query({ url: `https://${normalized}/` })),
+    chrome.cookies.getAll(query({ url: `https://www.${normalized}/` })),
   ]);
   const seen = new Set();
   return results
@@ -411,7 +422,7 @@ async function syncProfileCookies(profile, options = {}) {
   const uniqueDomains = [...new Set(domains)];
   const cookieGroups = await Promise.all(uniqueDomains.map(async domain => ({
     domain,
-    cookies: await getCookiesForDomain(domain),
+    cookies: await getCookiesForDomain(domain, options.storeId),
   })));
   const cookies = cookieGroups.flatMap(group => group.cookies);
   const domainSummary = cookieGroups.map(group => `${group.domain} ${group.cookies.length}`).join("，");
@@ -427,6 +438,22 @@ async function syncProfileCookies(profile, options = {}) {
       sameSite: cookie.sameSite === "strict" ? "Strict" : cookie.sameSite === "no_restriction" ? "None" : "Lax",
       expires: cookie.expirationDate,
     }));
+  if (["instagram", "threads"].includes(String(profile.key || "").toLowerCase())) {
+    const hasSessionId = usefulCookies.some(cookie => (
+      String(cookie.name || "").toLowerCase() === "sessionid"
+      && String(cookie.value || "").trim()
+      && String(cookie.domain || "").toLowerCase().includes("instagram.com")
+      && (!Number.isFinite(Number(cookie.expires)) || Number(cookie.expires) <= 0 || Number(cookie.expires) * 1000 > Date.now())
+    ));
+    if (!hasSessionId) {
+      return {
+        ok: false,
+        savedCookieCount: 0,
+        error: "Instagram sessionid was not found in the current tab cookie store. Keep the logged-in Instagram tab active and sync again.",
+        reason: domainSummary,
+      };
+    }
+  }
   if (!usefulCookies.length) {
     if (options.silentStatus) {
       return { ok: false, savedCookieCount: 0, error: "no cookies", reason: domainSummary };
@@ -612,9 +639,9 @@ chrome.alarms?.onAlarm?.addListener((alarm) => {
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== "complete" || !tab?.url) return;
-  profilesForUrl(tab.url).then(profiles => {
+  Promise.all([profilesForUrl(tab.url), cookieStoreIdForTab(tabId)]).then(([profiles, storeId]) => {
     if (!profiles.length) return null;
-    return syncProfilesSequentially(profiles, { silentStatus: true }).then(async results => {
+    return syncProfilesSequentially(profiles, { silentStatus: true, storeId }).then(async results => {
       await storageSet({ lastStatus: summarizeSyncSettledResults(profiles, results, "自动同步") });
     });
   });
@@ -637,7 +664,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         sendResponse({ ok: false, error: `当前标签未匹配授权站点：${tabHost || tabUrl || "unknown"}` });
         return;
       }
-      const results = await syncProfilesSequentially(profiles, { force: true });
+      const storeId = await cookieStoreIdForTab(tab?.id);
+      const results = await syncProfilesSequentially(profiles, { force: true, storeId });
       const failures = results
         .map((result, index) => ({ result, profile: profiles[index] }))
         .filter(item => item.result.status === "rejected" || !item.result.value?.ok);

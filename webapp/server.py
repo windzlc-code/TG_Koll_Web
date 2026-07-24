@@ -1999,9 +1999,15 @@ def _read_sentiment_config_file() -> dict[str, Any]:
         except json.JSONDecodeError:
             parsed, end = json.JSONDecoder().raw_decode(raw)
             if raw[end:].strip():
-                tmp_path = SENTIMENT_CONFIG_PATH.with_suffix(SENTIMENT_CONFIG_PATH.suffix + ".tmp")
-                tmp_path.write_text(json.dumps(parsed, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-                tmp_path.replace(SENTIMENT_CONFIG_PATH)
+                tmp_path = SENTIMENT_CONFIG_PATH.with_name(
+                    f"{SENTIMENT_CONFIG_PATH.name}.{os.getpid()}.{time.time_ns()}.tmp"
+                )
+                try:
+                    tmp_path.write_text(json.dumps(parsed, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                    tmp_path.replace(SENTIMENT_CONFIG_PATH)
+                finally:
+                    with contextlib.suppress(OSError):
+                        tmp_path.unlink()
         if not isinstance(parsed, dict):
             raise ValueError("舆情 Cookie 配置根节点必须是对象。")
         return parsed
@@ -2016,9 +2022,15 @@ def _read_sentiment_config_file() -> dict[str, Any]:
 def _write_sentiment_config_file(config: dict[str, Any]) -> None:
     try:
         SENTIMENT_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = SENTIMENT_CONFIG_PATH.with_suffix(SENTIMENT_CONFIG_PATH.suffix + ".tmp")
-        tmp_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        tmp_path.replace(SENTIMENT_CONFIG_PATH)
+        tmp_path = SENTIMENT_CONFIG_PATH.with_name(
+            f"{SENTIMENT_CONFIG_PATH.name}.{os.getpid()}.{time.time_ns()}.tmp"
+        )
+        try:
+            tmp_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            tmp_path.replace(SENTIMENT_CONFIG_PATH)
+        finally:
+            with contextlib.suppress(OSError):
+                tmp_path.unlink()
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"舆情 Cookie 配置写入失败：{exc}") from exc
 
@@ -2234,7 +2246,7 @@ def _sentiment_browser_auth_extension_config(request: Request, config: dict[str,
         config = _read_sentiment_config_file()
     payload: dict[str, Any] = {
         "ok": True,
-        "version": "1.0.14",
+        "version": "1.0.15",
         "apiBase": _request_public_origin(request),
         "profiles": _sentiment_browser_auth_profiles_for_extension(),
         "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

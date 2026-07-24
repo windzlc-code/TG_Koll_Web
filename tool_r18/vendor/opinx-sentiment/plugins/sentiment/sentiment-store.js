@@ -4470,11 +4470,42 @@ export function readSentimentSearchSettings(config) {
   return normalizeSentimentSearchSettings(raw || DEFAULT_SENTIMENT_SEARCH_SETTINGS);
 }
 
+function preserveBrowserAuthProfiles(settings = {}, previous = {}) {
+  const incomingFallback = settings?.browserFallback || settings?.browser_fallback;
+  const previousFallback = previous?.browserFallback || previous?.browser_fallback;
+  if (!incomingFallback || !previousFallback) return settings;
+  const incomingProfiles = Array.isArray(incomingFallback.profiles) ? incomingFallback.profiles : [];
+  const previousProfiles = Array.isArray(previousFallback.profiles) ? previousFallback.profiles : [];
+  if (!incomingProfiles.length || !previousProfiles.length) return settings;
+  const previousByKey = new Map(previousProfiles.map((profile) => [
+    String(profile?.key || profile?.sourceKey || "").trim().toLowerCase(),
+    profile,
+  ]).filter(([key]) => key));
+  const profiles = incomingProfiles.map((profile) => {
+    const key = String(profile?.key || profile?.sourceKey || "").trim().toLowerCase();
+    const latest = previousByKey.get(key);
+    if (!latest) return profile;
+    return {
+      ...profile,
+      cookies: Array.isArray(latest.cookies) ? latest.cookies : [],
+      lastAuthorizedAt: latest.lastAuthorizedAt,
+    };
+  });
+  return {
+    ...settings,
+    browserFallback: {
+      ...incomingFallback,
+      profiles,
+    },
+  };
+}
+
 export function writeSentimentSearchSettings(config, settings = {}) {
   const previous = readSentimentSearchSettings(config);
+  const nextSettings = preserveBrowserAuthProfiles(settings, previous);
   const normalized = normalizeSentimentSearchSettings({
-    ...settings,
-    openSearch: normalizeSentimentOpenSearchSettings(settings?.openSearch || settings?.open_search || settings?.opensearch || {}, previous.openSearch || {}),
+    ...nextSettings,
+    openSearch: normalizeSentimentOpenSearchSettings(nextSettings?.openSearch || nextSettings?.open_search || nextSettings?.opensearch || {}, previous.openSearch || {}),
   });
   if (typeof config?.set === "function") {
     config.set("sentimentSearch", normalized);

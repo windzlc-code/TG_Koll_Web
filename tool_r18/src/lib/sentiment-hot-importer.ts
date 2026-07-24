@@ -25,6 +25,7 @@ import {
 import {
   ensureSentimentRuntime,
   resolveSentimentBackendUrl,
+  resolveSentimentConfigPath,
   resolveSentimentDataDir,
   scheduleSentimentRuntimeShutdown,
 } from "@/lib/sentiment-runtime-manager";
@@ -304,7 +305,7 @@ function expandSentimentSearchKeywordVariants(value: string): string[] {
 }
 
 function readSentimentBrowserFallbackConfig() {
-  const configPath = path.join(resolveSentimentDataDir(), "sentiment-config.json");
+  const configPath = resolveSentimentConfigPath();
   if (!fs.existsSync(configPath)) return {};
   try {
     const config = parseSentimentConfigJson(fs.readFileSync(configPath, "utf8"));
@@ -1656,7 +1657,7 @@ function normalizeCookieForBrowserAuth(cookie: any, fallbackDomain: string) {
 }
 
 export async function refreshSentimentBrowserCookiesForPlatform(platform: SentimentHotPlatform): Promise<{ ok: boolean; message: string }> {
-  const configPath = path.join(resolveSentimentDataDir(), "sentiment-config.json");
+  const configPath = resolveSentimentConfigPath();
   if (!fs.existsSync(configPath)) return { ok: false, message: `${sentimentCookiePlatformLabel(platform)} Cookie 配置不存在。` };
   const profile = readSentimentBrowserAuthProfilesConfig().find((item: any) => sentimentProfileMatchesPlatform(item, platform));
   if (!profile) return { ok: false, message: `${sentimentCookiePlatformLabel(platform)} Cookie 配置不存在。` };
