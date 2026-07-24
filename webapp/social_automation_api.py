@@ -4732,17 +4732,32 @@ def cancel_all_social_tasks(
             if str(account_id or "").strip()
         )
     )
-    scope_clauses: list[str] = []
-    scope_params: list[Any] = []
-    if user_id is not None:
-        scope_clauses.append("user_id = ?")
-        scope_params.append(int(user_id))
-    if clean_account_ids:
-        account_placeholders = ", ".join("?" for _ in clean_account_ids)
-        scope_clauses.append(f"account_id IN ({account_placeholders})")
-        scope_params.extend(clean_account_ids)
-    scope_clause = f" AND ({' AND '.join(scope_clauses)})" if scope_clauses else ""
     with db() as conn:
+        scope_clause = ""
+        scope_params: list[Any] = []
+        if user_id is not None:
+            clean_user_id = int(user_id)
+            owned_account_ids: list[str] = []
+            if clean_account_ids:
+                account_placeholders = ", ".join("?" for _ in clean_account_ids)
+                owned_rows = conn.execute(
+                    f"SELECT id FROM social_accounts WHERE user_id = ? AND id IN ({account_placeholders})",
+                    (clean_user_id, *clean_account_ids),
+                ).fetchall()
+                owned_account_ids = [str(row["id"] or "") for row in owned_rows if str(row["id"] or "")]
+            if owned_account_ids:
+                owned_placeholders = ", ".join("?" for _ in owned_account_ids)
+                scope_clause = (
+                    f" AND (user_id = ? OR (user_id = 0 AND account_id IN ({owned_placeholders})))"
+                )
+                scope_params = [clean_user_id, *owned_account_ids]
+            else:
+                scope_clause = " AND user_id = ?"
+                scope_params = [clean_user_id]
+        elif clean_account_ids:
+            account_placeholders = ", ".join("?" for _ in clean_account_ids)
+            scope_clause = f" AND account_id IN ({account_placeholders})"
+            scope_params = list(clean_account_ids)
         cancelled_rows = conn.execute(
             f"""
             UPDATE social_automation_tasks
@@ -4987,13 +5002,16 @@ def _cancel_stale_incomplete_publish_batches(conn: sqlite3.Connection, now: int)
         """,
         (cutoff,),
     ).fetchall()
-    checked: set[tuple[str, str]] = set()
+    checked: set[tuple[int, str, str, str, str]] = set()
     for stale in stale_rows:
         stale_payload = _loads(stale["payload_json"], {})
         batch_id = str(stale_payload.get("publish_batch_id") or "").strip()
         total = _publish_sequence_value(stale_payload.get("publish_sequence_total"))
+        user_id = int(stale["user_id"] or 0)
+        persona_id = str(stale["persona_id"] or "")
         account_id = str(stale["account_id"] or "")
-        key = (account_id, batch_id)
+        platform = str(stale["platform"] or "")
+        key = (user_id, persona_id, account_id, platform, batch_id)
         if not batch_id or total <= 1 or key in checked:
             continue
         checked.add(key)
@@ -5001,9 +5019,13 @@ def _cancel_stale_incomplete_publish_batches(conn: sqlite3.Connection, now: int)
             """
             SELECT *
             FROM social_automation_tasks
-            WHERE account_id = ? AND task_type = 'publish_post'
+            WHERE user_id = ?
+              AND persona_id = ?
+              AND account_id = ?
+              AND platform = ?
+              AND task_type = 'publish_post'
             """,
-            (account_id,),
+            (user_id, persona_id, account_id, platform),
         ).fetchall()
         batch_rows = []
         indices: set[int] = set()
@@ -5100,11 +5122,19 @@ def _terminate_publish_batch_tail_in_transaction(
         """
         SELECT *
         FROM social_automation_tasks
-        WHERE account_id = ?
+        WHERE user_id = ?
+          AND persona_id = ?
+          AND account_id = ?
+          AND platform = ?
           AND task_type = 'publish_post'
           AND status IN ('preparing', 'queued', 'running', 'need_manual')
         """,
-        (str(predecessor["account_id"] or ""),),
+        (
+            int(predecessor["user_id"] or 0),
+            str(predecessor["persona_id"] or ""),
+            str(predecessor["account_id"] or ""),
+            str(predecessor["platform"] or ""),
+        ),
     ).fetchall()
     terminated: list[str] = []
     for row in rows:
@@ -5165,9 +5195,18 @@ def _clear_publish_batch_reservations_in_transaction(
         """
         SELECT id, payload_json
         FROM social_automation_tasks
-        WHERE account_id = ? AND task_type = 'publish_post'
+        WHERE user_id = ?
+          AND persona_id = ?
+          AND account_id = ?
+          AND platform = ?
+          AND task_type = 'publish_post'
         """,
-        (str(task["account_id"] or ""),),
+        (
+            int(task["user_id"] or 0),
+            str(task["persona_id"] or ""),
+            str(task["account_id"] or ""),
+            str(task["platform"] or ""),
+        ),
     ).fetchall()
     for row in rows:
         item_payload = _loads(row["payload_json"], {})
@@ -5201,9 +5240,18 @@ def _publish_batch_ready_for_claim(conn: sqlite3.Connection, row: Any, now: int)
         """
         SELECT *
         FROM social_automation_tasks
-        WHERE account_id = ? AND task_type = 'publish_post'
+        WHERE user_id = ?
+          AND persona_id = ?
+          AND account_id = ?
+          AND platform = ?
+          AND task_type = 'publish_post'
         """,
-        (str(row["account_id"] or ""),),
+        (
+            int(row["user_id"] or 0),
+            str(row["persona_id"] or ""),
+            str(row["account_id"] or ""),
+            str(row["platform"] or ""),
+        ),
     ).fetchall()
     statuses_by_index: dict[int, set[str]] = {}
     rows_by_index: dict[int, list[Any]] = {}
@@ -5392,7 +5440,6 @@ def _claim_publish_batch_tail(first_task: dict[str, Any]) -> list[dict[str, Any]
         return [first_task]
 
     now = _now()
-    account_id = str(first_task.get("account_id") or "")
     first_index = _publish_sequence_value(first_payload.get("publish_sequence_index"))
     reservation_owner = (
         _runtime_claim_owner(first_payload, _TASK_WORKER_LEASE_KEY)
@@ -5402,11 +5449,15 @@ def _claim_publish_batch_tail(first_task: dict[str, Any]) -> list[dict[str, Any]
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         persisted_first = conn.execute(
-            "SELECT status, payload_json FROM social_automation_tasks WHERE id = ?",
+            "SELECT * FROM social_automation_tasks WHERE id = ?",
             (str(first_task.get("id") or ""),),
         ).fetchone()
         if persisted_first is None or str(persisted_first["status"] or "") not in {"running", "need_manual"}:
             return claimed_tasks
+        user_id = int(persisted_first["user_id"] or 0)
+        persona_id = str(persisted_first["persona_id"] or "")
+        account_id = str(persisted_first["account_id"] or "")
+        platform = str(persisted_first["platform"] or "")
         persisted_first_payload = _loads(persisted_first["payload_json"], {})
         persisted_owner = _runtime_claim_owner(
             persisted_first_payload,
@@ -5434,13 +5485,16 @@ def _claim_publish_batch_tail(first_task: dict[str, Any]) -> list[dict[str, Any]
             """
             SELECT *
             FROM social_automation_tasks
-            WHERE account_id = ?
+            WHERE user_id = ?
+              AND persona_id = ?
+              AND account_id = ?
+              AND platform = ?
               AND task_type = 'publish_post'
               AND status = 'queued'
               AND (scheduled_at = 0 OR scheduled_at <= ?)
             ORDER BY created_at ASC, id ASC
             """,
-            (account_id, now),
+            (user_id, persona_id, account_id, platform, now),
         ).fetchall()
         candidates: list[tuple[int, Any, dict[str, Any]]] = []
         for row in rows:
@@ -5525,7 +5579,7 @@ def _claim_publish_batch_tail(first_task: dict[str, Any]) -> list[dict[str, Any]
 def _publish_sequence_value(value: Any) -> int:
     try:
         return max(1, int(value or 1))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 1
 
 

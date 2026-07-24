@@ -1010,6 +1010,110 @@ class SocialTaskCancellationTests(unittest.TestCase):
         self.assertEqual(self._status("queued-batch-other-persona"), "queued")
         stop.assert_called_once_with("queued-batch-1")
 
+    def test_publish_batch_worker_paths_keep_persona_identity_isolated(self):
+        batch_id = "isolated-worker-batch"
+        self._insert_task(
+            "isolated-first",
+            "running",
+            payload={
+                "publish_batch_id": batch_id,
+                "publish_sequence_index": 1,
+                "publish_sequence_total": 2,
+            },
+        )
+        self._insert_task(
+            "isolated-tail",
+            "queued",
+            payload={
+                "publish_batch_id": batch_id,
+                "publish_sequence_index": 2,
+                "publish_sequence_total": 2,
+            },
+        )
+        self._insert_task(
+            "isolated-other-persona",
+            "queued",
+            payload={
+                "publish_batch_id": batch_id,
+                "publish_sequence_index": 2,
+                "publish_sequence_total": 2,
+            },
+        )
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE social_automation_tasks SET persona_id = 'persona-2' WHERE id = 'isolated-other-persona'"
+            )
+
+        first_task = social_automation_api.get_social_task("isolated-first")
+        with (
+            mock.patch.object(
+                social_automation_api,
+                "_publish_login_dependency_blocks_claim",
+                return_value=False,
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_ensure_daily_publish_slot",
+                return_value=None,
+            ),
+        ):
+            claimed = social_automation_api._claim_publish_batch_tail(first_task)
+
+        self.assertEqual([task["id"] for task in claimed], ["isolated-first", "isolated-tail"])
+        self.assertEqual(self._status("isolated-other-persona"), "queued")
+
+        with social_automation_api.db() as conn:
+            predecessor = conn.execute(
+                "SELECT * FROM social_automation_tasks WHERE id = 'isolated-first'"
+            ).fetchone()
+            terminated = social_automation_api._terminate_publish_batch_tail_in_transaction(
+                conn,
+                predecessor,
+                terminal_status="failed",
+                reason="failed first item",
+                now=10,
+            )
+        self.assertEqual(terminated, ["isolated-tail"])
+        self.assertEqual(self._status("isolated-other-persona"), "queued")
+
+    def test_stale_batch_cleanup_does_not_merge_same_batch_id_across_personas(self):
+        batch_id = "shared-stale-batch"
+        for index in (1, 2):
+            self._insert_task(
+                f"complete-persona-{index}",
+                "queued",
+                payload={
+                    "publish_batch_id": batch_id,
+                    "publish_sequence_index": index,
+                    "publish_sequence_total": 2,
+                },
+            )
+        self._insert_task(
+            "incomplete-other-persona",
+            "queued",
+            payload={
+                "publish_batch_id": batch_id,
+                "publish_sequence_index": 1,
+                "publish_sequence_total": 2,
+            },
+        )
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE social_automation_tasks SET persona_id = 'persona-2' WHERE id = 'incomplete-other-persona'"
+            )
+
+        with social_automation_api.db() as conn:
+            social_automation_api._cancel_stale_incomplete_publish_batches(conn, 1_000)
+
+        self.assertEqual(self._status("complete-persona-1"), "queued")
+        self.assertEqual(self._status("complete-persona-2"), "queued")
+        self.assertEqual(self._status("incomplete-other-persona"), "cancelled")
+
+    def test_publish_sequence_value_rejects_non_finite_numbers(self):
+        self.assertEqual(social_automation_api._publish_sequence_value(float("inf")), 1)
+        self.assertEqual(social_automation_api._publish_sequence_value(float("-inf")), 1)
+        self.assertEqual(social_automation_api._publish_sequence_value(float("nan")), 1)
+
     def test_clear_publish_batch_deletes_every_item_and_log(self):
         batch_id = "clear-publish-batch"
         for index in range(1, 4):

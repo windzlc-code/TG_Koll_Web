@@ -382,14 +382,15 @@ class SocialTaskLifecycleIsolationTests(unittest.TestCase):
         with social_api._RUNNING_TASK_CONTROLS_LOCK:
             self.assertNotIn("control-task", social_api._RUNNING_TASK_CONTROLS)
 
-    def test_cancel_all_tasks_intersects_user_and_account_scopes_and_force_stops_controls(self):
+    def test_cancel_all_tasks_limits_account_fallback_to_users_owned_accounts(self):
         owner_id = self._insert_user("cancel-owner")
+        account_owner_id = self._insert_user("cancel-account-owner")
         untouched_owner_id = self._insert_user("cancel-untouched-owner")
         self._insert_account("owner-account", owner_id)
-        self._insert_account("selected-account", owner_id)
+        self._insert_account("selected-account", account_owner_id)
         self._insert_account("untouched-account", untouched_owner_id)
         self._insert_task("owner-task", "owner-account", owner_id, status="queued")
-        self._insert_task("selected-account-task", "selected-account", owner_id)
+        self._insert_task("selected-account-task", "selected-account", account_owner_id)
         self._insert_task("untouched-task", "untouched-account", untouched_owner_id)
 
         owner_cancel = threading.Event()
@@ -410,10 +411,10 @@ class SocialTaskLifecycleIsolationTests(unittest.TestCase):
             account_ids=[" selected-account ", "", "selected-account"],
         )
 
-        self.assertEqual(result["task_ids"], ["selected-account-task"])
+        self.assertEqual(result["task_ids"], ["owner-task"])
         self.assertEqual(result["cancelled_count"], 1)
-        self.assertFalse(owner_cancel.is_set())
-        self.assertTrue(selected_cancel.is_set())
+        self.assertTrue(owner_cancel.is_set())
+        self.assertFalse(selected_cancel.is_set())
         self.assertFalse(untouched_cancel.is_set())
         with db() as conn:
             statuses = {
@@ -422,8 +423,8 @@ class SocialTaskLifecycleIsolationTests(unittest.TestCase):
                     "SELECT id, status FROM social_automation_tasks ORDER BY id"
                 ).fetchall()
             }
-        self.assertEqual(statuses["owner-task"], "queued")
-        self.assertEqual(statuses["selected-account-task"], "cancelled")
+        self.assertEqual(statuses["owner-task"], "cancelled")
+        self.assertEqual(statuses["selected-account-task"], "running")
         self.assertEqual(statuses["untouched-task"], "running")
 
 
