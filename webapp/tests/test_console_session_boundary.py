@@ -869,6 +869,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("pointer-events: none;", expanded_head)
         self.assertIn(".is-live-browser-controls-visible .live-browser-card-head", self.styles)
         self.assertIn(".is-live-browser-controls-visible .live-browser-interaction-note", self.styles)
+        self.assertIn(".is-live-browser-controls-visible .live-browser-card-actions > .status", self.styles)
         self.assertIn(".live-browser-card-identity", self.styles)
         self.assertIn(".live-browser-interaction-note", self.styles)
 

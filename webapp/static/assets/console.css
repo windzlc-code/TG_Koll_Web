@@ -15950,11 +15950,20 @@ body.console-page {
 .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-card-identity,
 .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-task-summary {
   min-width: 0;
+  max-width: none;
   gap: 4px 8px;
 }
 
 .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-task-summary {
+  position: static;
+  top: auto;
+  left: auto;
+  transform: none;
   justify-content: center;
+}
+
+.live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-card-actions > .status {
+  display: inline-flex;
 }
 
 .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-interaction-note {
