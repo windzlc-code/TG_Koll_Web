@@ -32,11 +32,11 @@ def test_live_browser_html_toggles_the_native_kasm_frame_from_blank_space():
 
     branded = social_automation_api._brand_live_browser_html(source).decode("utf-8")
 
-    assert 'id="vecto-live-browser-native-frame-toggle"' in branded
-    assert '"vecto-live-browser-toggle-native-frame"' in branded
-    assert 'getElementById("noVNC_control_bar_handle")?.click()' in branded
-    assert "event.target === container" in branded
-    assert 'document.addEventListener("pointerup", toggleFromBlankFrameArea)' in branded
+    assert 'id="vecto-live-browser-console-frame-toggle"' in branded
+    assert '"vecto-live-browser-toggle-console-frame"' in branded
+    assert "const edgeSize = 40;" in branded
+    assert "window.parent.postMessage({ type: messageType }, window.location.origin);" in branded
+    assert 'window.addEventListener("pointerup"' in branded
 
 
 def test_live_browser_branding_is_idempotent():

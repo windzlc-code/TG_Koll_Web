@@ -2132,19 +2132,24 @@ def _brand_live_browser_html(content: bytes) -> bytes:
   66% { transform: translateX(24px) scale(0.82); }
 }
 </style>
-<script id="vecto-live-browser-native-frame-toggle">
+<script id="vecto-live-browser-console-frame-toggle">
 (() => {
-  const messageType = "vecto-live-browser-toggle-native-frame";
-  const toggleNativeFrame = () => document.getElementById("noVNC_control_bar_handle")?.click();
-  const toggleFromBlankFrameArea = (event) => {
-    const container = document.getElementById("noVNC_container");
-    if (event.button === 0 && container && event.target === container) toggleNativeFrame();
+  const messageType = "vecto-live-browser-toggle-console-frame";
+  const edgeSize = 40;
+  const notifyConsoleFrame = () => {
+    if (window.parent !== window) {
+      window.parent.postMessage({ type: messageType }, window.location.origin);
+    }
   };
-  window.addEventListener("message", (event) => {
-    if (event.origin !== window.location.origin || event.data?.type !== messageType) return;
-    toggleNativeFrame();
+  const isFrameEdge = (event) => (
+    event.clientX <= edgeSize
+    || event.clientY <= edgeSize
+    || event.clientX >= window.innerWidth - edgeSize
+    || event.clientY >= window.innerHeight - edgeSize
+  );
+  window.addEventListener("pointerup", (event) => {
+    if (event.button === 0 && isFrameEdge(event)) notifyConsoleFrame();
   });
-  document.addEventListener("pointerup", toggleFromBlankFrameArea);
 })();
 </script>"""
     html = html.replace("<title>KasmVNC</title>", "<title>Vecto 实时浏览器</title>", 1)

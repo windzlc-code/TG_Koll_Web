@@ -867,7 +867,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("position: absolute;", expanded_head)
         self.assertIn("background: rgb(5 12 13 / 62%);", expanded_head)
         self.assertIn("pointer-events: none;", expanded_head)
-        self.assertNotIn(".is-live-browser-controls-visible", self.styles)
+        self.assertIn(".is-live-browser-controls-visible .live-browser-card-head", self.styles)
+        self.assertIn(".is-live-browser-controls-visible .live-browser-interaction-note", self.styles)
         self.assertIn(".live-browser-card-identity", self.styles)
         self.assertIn(".live-browser-interaction-note", self.styles)
 
@@ -885,14 +886,14 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("live-browser-card-identity > [data-live-browser-meta]", mobile_styles)
         self.assertIn("live-browser-mobile-summary", self.source)
 
-    def test_expanded_live_browser_toggles_the_native_frame_from_blank_areas(self):
-        toggle = self._function_source("toggleLiveBrowserNativeFrame")
+    def test_expanded_live_browser_toggles_its_console_frame_from_blank_areas(self):
+        toggle = self._function_source("toggleLiveBrowserModalControls")
         opening = self._function_source("requestLiveBrowserFullscreen")
 
         self.assertIn('[data-live-browser-modal-overlay-toggle], [data-live-browser-controls-toggle]', self.source)
         self.assertIn('class="live-browser-lock" data-live-browser-controls-toggle', self.source)
-        self.assertIn("vecto-live-browser-toggle-native-frame", toggle)
-        self.assertIn("frame.contentWindow.postMessage", toggle)
+        self.assertIn("is-live-browser-controls-visible", toggle)
+        self.assertIn("vecto-live-browser-toggle-console-frame", self.source)
         self.assertIn("card.classList.remove(\"is-live-browser-controls-visible\");", opening)
 
     def test_public_toast_uses_compact_bottom_layout(self):

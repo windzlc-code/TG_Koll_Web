@@ -15920,6 +15920,66 @@ body.console-page {
   visibility: hidden;
 }
 
+/* The expanded session keeps its frame metadata outside the remote canvas.
+   It only becomes interactive after the KasmVNC edge trigger asks for it. */
+.live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-card-head {
+  right: 0;
+  left: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: 48px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 0;
+  background: rgb(5 12 13 / 74%);
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+  visibility: visible;
+}
+
+.live-browser-card.is-live-browser-modal.is-live-browser-controls-visible :is(
+  .live-browser-card-identity,
+  .live-browser-task-summary,
+  .live-browser-interaction-note
+) {
+  display: flex;
+}
+
+.live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-card-identity,
+.live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-task-summary {
+  min-width: 0;
+  gap: 4px 8px;
+}
+
+.live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-task-summary {
+  justify-content: center;
+}
+
+.live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-interaction-note {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 20;
+  min-height: 32px;
+  padding: 6px 12px;
+  background: rgb(5 12 13 / 74%);
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+  transition: opacity 180ms ease, transform 220ms ease, visibility 0s linear 220ms;
+  visibility: visible;
+}
+
+.live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-manual-input {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+  visibility: visible;
+}
+
 .live-browser-card.is-live-browser-modal :is(
   .live-browser-card-identity,
   .live-browser-task-summary,
@@ -16012,6 +16072,25 @@ body.console-page {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-card-head {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto;
+    min-height: 0;
+    padding: 5px 8px;
+  }
+
+  .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-task-summary {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+    font-size: 11px;
+  }
+
+  .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-interaction-note {
+    min-height: 26px;
+    padding: 4px 8px;
+    font-size: 11px;
   }
 }
 

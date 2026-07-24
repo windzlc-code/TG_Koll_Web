@@ -22054,14 +22054,26 @@ function closeLiveBrowserLargeModal({ restoreFocus = true } = {}) {
   liveBrowserModalTrigger = null;
 }
 
-function toggleLiveBrowserNativeFrame(card) {
-  const frame = card?.querySelector("iframe");
-  if (!frame?.contentWindow) return;
-  frame.contentWindow.postMessage(
-    { type: "vecto-live-browser-toggle-native-frame" },
-    window.location.origin,
+function setLiveBrowserModalControlsVisible(card, visible) {
+  if (!card?.classList.contains("is-live-browser-modal")) return;
+  card.classList.toggle("is-live-browser-controls-visible", Boolean(visible));
+  card.toggleAttribute("data-live-browser-controls-visible", Boolean(visible));
+}
+
+function toggleLiveBrowserModalControls(card) {
+  setLiveBrowserModalControlsVisible(
+    card,
+    !card?.classList.contains("is-live-browser-controls-visible"),
   );
 }
+
+window.addEventListener("message", (event) => {
+  if (event.origin !== window.location.origin || event.data?.type !== "vecto-live-browser-toggle-console-frame") return;
+  const frame = event.source;
+  const card = Array.from(document.querySelectorAll("[data-live-browser-card].is-live-browser-modal"))
+    .find((node) => node.querySelector("iframe")?.contentWindow === frame);
+  toggleLiveBrowserModalControls(card);
+});
 
 function requestLiveBrowserFullscreen(sessionId = "", trigger = null) {
   const cards = Array.from(document.querySelectorAll("[data-live-browser-card]"));
@@ -24619,7 +24631,7 @@ function bindEvents() {
       return;
     }
     if (event.target.closest("[data-live-browser-modal-overlay-toggle], [data-live-browser-controls-toggle]")) {
-      toggleLiveBrowserNativeFrame(
+      toggleLiveBrowserModalControls(
         event.target.closest("[data-live-browser-card]")
           || document.querySelector(".live-browser-card.is-live-browser-modal"),
       );
