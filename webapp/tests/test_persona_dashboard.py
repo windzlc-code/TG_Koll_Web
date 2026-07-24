@@ -3076,5 +3076,93 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(task["account_username"], "threads_user")
         self.assertEqual(task["account_display_name"], "threads_user")
 
+    def test_publish_batch_logs_return_aggregate_task_and_full_members(self):
+        self._insert_social_account(
+            account_id="acct-publish-batch",
+            persona_id="persona-1",
+            platform="threads",
+            username="batch_user",
+            status="ready",
+        )
+        batch_id = "publish-batch-logs"
+        self._insert_social_task(
+            task_id="publish-batch-1",
+            account_id="acct-publish-batch",
+            persona_id="persona-1",
+            platform="threads",
+            task_type="publish_post",
+            status="success",
+            payload={
+                "publish_batch_id": batch_id,
+                "publish_sequence_index": 1,
+                "publish_sequence_total": 2,
+            },
+            created_at=1_720_000_100,
+        )
+        self._insert_social_task(
+            task_id="publish-batch-2",
+            account_id="acct-publish-batch",
+            persona_id="persona-1",
+            platform="threads",
+            task_type="publish_post",
+            status="running",
+            payload={
+                "publish_batch_id": batch_id,
+                "publish_sequence_index": 2,
+                "publish_sequence_total": 2,
+            },
+            created_at=1_720_000_200,
+        )
+        self._insert_social_task(
+            task_id="publish-other-batch",
+            account_id="acct-publish-batch",
+            persona_id="persona-1",
+            platform="threads",
+            task_type="publish_post",
+            status="failed",
+            payload={
+                "publish_batch_id": "publish-batch-other",
+                "publish_sequence_index": 1,
+                "publish_sequence_total": 1,
+            },
+            created_at=1_720_000_300,
+        )
+        conn = sqlite3.connect(str(self.data_dir / "app.db"))
+        conn.executemany(
+            """
+            INSERT INTO social_automation_logs(
+              task_id, level, stage, message, data_json, screenshot_path, created_at
+            ) VALUES (?, 'info', 'publish', ?, '{}', '', ?)
+            """,
+            [
+                ("publish-batch-1", "first", 1_720_000_111),
+                ("publish-batch-2", "second", 1_720_000_222),
+                ("publish-other-batch", "other", 1_720_000_333),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+        resp = self.client.get("/api/persona_dashboard/automation/tasks/publish-batch-1/logs")
+        second_resp = self.client.get("/api/persona_dashboard/automation/tasks/publish-batch-2/logs")
+
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(second_resp.status_code, 200)
+        second_data = second_resp.json()
+        self.assertEqual([item["id"] for item in data["batch_tasks"]], ["publish-batch-1", "publish-batch-2"])
+        self.assertEqual([item["status"] for item in data["batch_tasks"]], ["success", "running"])
+        self.assertEqual([item["message"] for item in data["logs"]], ["first", "second"])
+        self.assertEqual(data["task"]["id"], "publish-batch-1")
+        self.assertEqual(data["task"]["status"], "running")
+        self.assertEqual(data["task"]["batch_task_count"], 2)
+        self.assertEqual(data["task"]["batch_task_ids"], ["publish-batch-1", "publish-batch-2"])
+        self.assertEqual(
+            [(item["publish_sequence_index"], item["publish_sequence_total"]) for item in data["batch_tasks"]],
+            [(1, 2), (2, 2)],
+        )
+        self.assertEqual(second_data["task"], data["task"])
+        self.assertEqual(second_data["logs"], data["logs"])
+
 if __name__ == "__main__":
     unittest.main()

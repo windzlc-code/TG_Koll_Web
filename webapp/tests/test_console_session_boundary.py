@@ -2334,6 +2334,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             self._function_source("socialTaskLoginDependency"),
             self._function_source("socialTaskWaitsForManualLogin"),
             self._function_source("socialTaskPresentationStatus"),
+            self._function_source("aggregateSocialTaskBatch"),
+            self._function_source("socialTaskPresentationRows"),
             self._function_source("isFutureScheduledSocialTask"),
             self._function_source("renderSocialQueueTaskStatus"),
             self._function_source("socialTaskDisplayStatus"),
@@ -2376,6 +2378,88 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             """
         )
         self._run_node(harness)
+
+    def test_publish_batch_is_one_queue_row_with_aggregate_status(self):
+        helpers = "\n".join([
+            self._function_source("socialTaskPayload"),
+            self._function_source("socialTaskLoginDependency"),
+            self._function_source("socialTaskWaitsForManualLogin"),
+            self._function_source("socialTaskPresentationStatus"),
+            self._function_source("aggregateSocialTaskBatch"),
+            self._function_source("socialTaskPresentationRows"),
+            self._function_source("personaAutomationTasksFor"),
+            self._function_source("renderSocialTasks"),
+        ])
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            const host = {{ innerHTML: "" }};
+            const batchId = "publish-batch-1";
+            const state = {{
+              socialTasks: [
+                {{
+                  id: "publish-2",
+                  persona_id: "persona-1",
+                  account_id: "account-1",
+                  account_username: "publisher",
+                  task_type: "publish_post",
+                  platform: "threads",
+                  status: "running",
+                  created_at: 20,
+                  updated_at: 30,
+                  payload: {{ publish_batch_id: batchId, publish_sequence_index: 2, publish_sequence_total: 2 }},
+                }},
+                {{
+                  id: "publish-1",
+                  persona_id: "persona-1",
+                  account_id: "account-1",
+                  account_username: "publisher",
+                  task_type: "publish_post",
+                  platform: "threads",
+                  status: "success",
+                  created_at: 10,
+                  updated_at: 20,
+                  payload: {{ publish_batch_id: batchId, publish_sequence_index: 1, publish_sequence_total: 2 }},
+                }},
+                {{
+                  id: "login-1",
+                  persona_id: "persona-1",
+                  account_id: "account-1",
+                  task_type: "check_login",
+                  platform: "threads",
+                  status: "success",
+                  created_at: 5,
+                  updated_at: 6,
+                  payload: {{}},
+                }},
+              ],
+            }};
+            function $(id) {{ return id === "socialTaskList" ? host : null; }}
+            function esc(value) {{ return String(value ?? ""); }}
+            function statusLabel(value) {{ return String(value || ""); }}
+            function timeValue(value) {{ return Number(value || 0); }}
+            function activeSocialAutomationTask(task) {{ return ["queued", "running", "need_manual"].includes(task.status); }}
+            {helpers}
+
+            const rows = personaAutomationTasksFor("persona-1");
+            assert.strictEqual(rows.length, 2);
+            const batch = rows.find((item) => item.batch_task_count === 2);
+            assert.ok(batch);
+            assert.deepStrictEqual(batch.batch_task_ids, ["publish-1", "publish-2"]);
+            assert.strictEqual(batch.status, "running");
+            assert.strictEqual(batch.id, "publish-1");
+
+            renderSocialTasks();
+            assert.strictEqual((host.innerHTML.match(/data-social-log=/g) || []).length, 2);
+            assert.strictEqual((host.innerHTML.match(/data-social-log="publish-1"/g) || []).length, 1);
+            assert.ok(host.innerHTML.includes("2 篇"));
+            """
+        )
+        self._run_node(harness)
+        self.assertIn(
+            "const task = logData.task || taskData.task || null;",
+            self.persona_dashboard_source,
+        )
 
     def test_persona_dashboard_keeps_all_login_tasks_and_uses_automatic_login_body(self):
         helpers = "\n".join([

@@ -1337,25 +1337,31 @@ def register_social_automation_routes(app: FastAPI) -> None:
             task_ids = _publish_batch_log_task_ids(conn, task_id)
             placeholders = ",".join("?" for _ in task_ids)
             task_rows = conn.execute(
-                f"SELECT id, payload_json FROM social_automation_tasks WHERE id IN ({placeholders})",
+                f"SELECT * FROM social_automation_tasks WHERE id IN ({placeholders})",
                 tuple(task_ids),
             ).fetchall()
+            billing_statuses = _billing_reservation_statuses(conn, list(task_rows))
             logs = conn.execute(
                 f"SELECT * FROM social_automation_logs WHERE task_id IN ({placeholders}) ORDER BY created_at ASC, id ASC",
                 tuple(task_ids),
             ).fetchall()
-        task_meta_by_id = {}
+        task_by_id = {}
         for row in task_rows:
-            item_payload = _loads(row["payload_json"], {})
-            task_meta_by_id[str(row["id"] or "")] = {
-                "id": str(row["id"] or ""),
-                "publish_sequence_index": max(1, int(item_payload.get("publish_sequence_index") or 1)),
-                "publish_sequence_total": max(1, int(item_payload.get("publish_sequence_total") or 1)),
-            }
+            item_id = str(row["id"] or "")
+            public_task = _task_public(
+                row,
+                billing_reservation_status=billing_statuses.get(str(row["billing_reservation_id"] or ""), ""),
+            )
+            item_payload = public_task.get("payload") if isinstance(public_task.get("payload"), dict) else {}
+            public_task["publish_sequence_index"] = max(1, int(item_payload.get("publish_sequence_index") or 1))
+            public_task["publish_sequence_total"] = max(1, int(item_payload.get("publish_sequence_total") or 1))
+            task_by_id[item_id] = public_task
+        batch_tasks = [task_by_id[item_id] for item_id in task_ids if item_id in task_by_id]
         return {
             "ok": True,
             "logs": [_log_public(row) for row in logs],
-            "batch_tasks": [task_meta_by_id[item_id] for item_id in task_ids if item_id in task_meta_by_id],
+            "task": _aggregate_publish_batch_task(batch_tasks),
+            "batch_tasks": batch_tasks,
         }
 
     @app.get("/api/persona_dashboard/automation/tasks/{task_id}/media/{index}")
@@ -5557,6 +5563,33 @@ def _publish_batch_log_task_ids(conn: sqlite3.Connection, task_id: str) -> list[
         )
     matched.sort()
     return [item[2] for item in matched if item[2]] or [task_id]
+
+
+def _aggregate_publish_batch_task(tasks: list[dict[str, Any]]) -> dict[str, Any]:
+    if len(tasks) <= 1:
+        return dict(tasks[0]) if tasks else {}
+    statuses = [str(task.get("status") or "") for task in tasks]
+    active_status = next(
+        (status for status in ("need_manual", "running", "preparing", "queued") if status in statuses),
+        "",
+    )
+    status = (
+        active_status
+        or ("failed" if "failed" in statuses else "")
+        or ("success" if all(item == "success" for item in statuses) else "")
+        or ("cancelled" if "cancelled" in statuses else statuses[-1])
+    )
+    task = dict(tasks[0])
+    task.update(
+        status=status,
+        created_at=min(int(item.get("created_at") or 0) for item in tasks),
+        updated_at=max(int(item.get("updated_at") or item.get("created_at") or 0) for item in tasks),
+        finished_at=0 if active_status else max(int(item.get("finished_at") or 0) for item in tasks),
+        error=next((str(item.get("error") or "") for item in tasks if item.get("error")), ""),
+        batch_task_count=len(tasks),
+        batch_task_ids=[str(item.get("id") or "") for item in tasks],
+    )
+    return task
 
 
 def _mark_publish_batch_item_running(task: dict[str, Any], index: int, total: int) -> bool:

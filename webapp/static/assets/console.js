@@ -7895,10 +7895,61 @@ function renderPersonaAccountPanelV2(persona, account, profile, step) {
 }
 
 function personaAutomationTasksFor(personaId, limit = 0) {
-  const rows = state.socialTasks
+  const rows = socialTaskPresentationRows(state.socialTasks)
     .filter((item) => String(item.persona_id || "") === String(personaId || ""))
     .sort((left, right) => timeValue(right.updated_at || right.created_at || 0) - timeValue(left.updated_at || left.created_at || 0));
   return limit > 0 ? rows.slice(0, limit) : rows;
+}
+
+function aggregateSocialTaskBatch(tasks = []) {
+  const rows = (Array.isArray(tasks) ? tasks : []).slice().sort((left, right) => {
+    const leftPayload = socialTaskPayload(left);
+    const rightPayload = socialTaskPayload(right);
+    return Number(leftPayload.publish_sequence_index || 1) - Number(rightPayload.publish_sequence_index || 1)
+      || timeValue(left.created_at || 0) - timeValue(right.created_at || 0);
+  });
+  if (rows.length <= 1) return rows[0] || {};
+  const statuses = rows.map((task) => socialTaskPresentationStatus(task));
+  const activeStatus = ["need_manual", "running", "preparing", "queued"]
+    .find((status) => statuses.includes(status));
+  const status = activeStatus
+    || (statuses.includes("failed") ? "failed" : "")
+    || (statuses.every((item) => item === "success") ? "success" : "")
+    || (statuses.includes("cancelled") ? "cancelled" : statuses[statuses.length - 1]);
+  const source = rows[0];
+  const createdTimes = rows.map((task) => Number(task.created_at || 0)).filter(Boolean);
+  return {
+    ...source,
+    status,
+    created_at: createdTimes.length ? Math.min(...createdTimes) : Number(source.created_at || 0),
+    updated_at: Math.max(...rows.map((task) => Number(task.updated_at || task.created_at || 0))),
+    finished_at: activeStatus ? 0 : Math.max(...rows.map((task) => Number(task.finished_at || 0))),
+    error: rows.find((task) => task.error)?.error || "",
+    batch_task_count: rows.length,
+    batch_task_ids: rows.map((task) => String(task.id || "")),
+    batch_tasks: rows,
+  };
+}
+
+function socialTaskPresentationRows(tasks = []) {
+  const slots = [];
+  const batches = new Map();
+  (Array.isArray(tasks) ? tasks : []).forEach((task) => {
+    const payload = socialTaskPayload(task);
+    const batchId = String(payload.publish_batch_id || "").trim();
+    if (String(task?.task_type || "").trim() !== "publish_post" || !batchId) {
+      slots.push(task);
+      return;
+    }
+    const key = `${String(task.persona_id || "")}:${String(task.account_id || "")}:${batchId}`;
+    if (!batches.has(key)) {
+      const batch = [];
+      batches.set(key, batch);
+      slots.push(batch);
+    }
+    batches.get(key).push(task);
+  });
+  return slots.map((item) => Array.isArray(item) ? aggregateSocialTaskBatch(item) : item);
 }
 
 function paginateTaskQueueRows(rows, page = 1, pageSize = 1) {
@@ -8141,7 +8192,7 @@ function renderPersonaQueueRows(rows) {
         <span class="sr-only">选择</span>
       </label>
       <div class="task-persona-queue-type" data-mobile-label="任务">
-        <strong>${esc(statusLabel(task.task_type || ""))}</strong>
+        <strong>${esc(`${statusLabel(task.task_type || "")}${Number(task.batch_task_count || 0) > 1 ? ` · ${task.batch_task_count} 篇` : ""}`)}</strong>
       </div>
       <div class="task-persona-queue-platform" data-mobile-label="平台">${esc(queuePlatformLabel(task.platform || ""))}</div>
       <div class="task-persona-queue-account" data-mobile-label="账号">${esc(task.account_username || task.account_id || "-")}</div>
@@ -8149,7 +8200,7 @@ function renderPersonaQueueRows(rows) {
       <div data-mobile-label="状态">${renderSocialQueueTaskStatus(task)}</div>
       <div class="row-actions" data-mobile-label="操作">
         <button type="button" data-social-log="${esc(task.id)}">日志</button>
-        ${task.status === "failed" && task?.result?.retryable !== false ? `<button type="button" data-social-retry="${esc(task.id)}">重试</button>` : ""}
+        ${task.status === "failed" && !task.batch_task_count && task?.result?.retryable !== false ? `<button type="button" data-social-retry="${esc(task.id)}">重试</button>` : ""}
         ${activeSocialAutomationTask(task) ? `<button type="button" class="muted" data-social-cancel="${esc(task.id)}">取消</button>` : ""}
         <button type="button" class="danger task-queue-delete-button" data-social-delete="${esc(task.id)}" title="删除" aria-label="删除">${renderTrashIcon()}</button>
       </div>
@@ -22284,14 +22335,15 @@ function liveBrowserSessionUrl(session) {
 function renderSocialTasks() {
   const host = $("socialTaskList");
   if (!host) return;
-  host.innerHTML = state.socialTasks.length ? state.socialTasks.map((task) => `
+  const tasks = socialTaskPresentationRows(state.socialTasks);
+  host.innerHTML = tasks.length ? tasks.map((task) => `
     <article class="social-task">
-      <div><strong>${esc(statusLabel(task.task_type))}</strong><span>${esc(task.platform)} · ${esc(task.account_username || task.account_id || "")}</span></div>
+      <div><strong>${esc(`${statusLabel(task.task_type)}${Number(task.batch_task_count || 0) > 1 ? ` · ${task.batch_task_count} 篇` : ""}`)}</strong><span>${esc(task.platform)} · ${esc(task.account_username || task.account_id || "")}</span></div>
       <span class="status ${esc(socialTaskPresentationStatus(task))}">${esc(statusLabel(socialTaskPresentationStatus(task)))}</span>
       <div class="row-actions">
         <button type="button" data-social-preview="${esc(task.id)}">预览</button>
         <button type="button" data-social-log="${esc(task.id)}">日志</button>
-        ${task.status === "failed" && task?.result?.retryable !== false ? `<button type="button" data-social-retry="${esc(task.id)}">重试</button>` : ""}
+        ${task.status === "failed" && !task.batch_task_count && task?.result?.retryable !== false ? `<button type="button" data-social-retry="${esc(task.id)}">重试</button>` : ""}
         ${activeSocialAutomationTask(task) ? `<button type="button" data-social-cancel="${esc(task.id)}">取消</button>` : ""}
       </div>
     </article>

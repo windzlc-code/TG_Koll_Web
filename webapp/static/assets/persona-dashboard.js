@@ -2004,7 +2004,7 @@ async function pdRefreshAutomationLogModal(taskId) {
       pdApi(`/api/persona_dashboard/automation/tasks/${encodeURIComponent(id)}`),
       pdApi(`/api/persona_dashboard/automation/tasks/${encodeURIComponent(id)}/logs`),
     ]);
-    const task = taskData.task || null;
+    const task = logData.task || taskData.task || null;
     const status = String((task && task.status) || "");
     pdMergeAutomationTask(task);
     if (["success", "failed", "cancelled"].includes(status)) {
