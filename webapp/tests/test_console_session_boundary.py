@@ -337,6 +337,13 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('const scheduledAt = normalizeScheduleValueForApi($("simpleScheduleAt")?.value);', task_source)
         self.assertIn('target_urls: splitLines(targetUrls)', task_source)
 
+    def test_open_login_task_opens_the_live_browser_view_after_creation(self):
+        task_source = self.source.split("async function createSocialTask(", 1)[1].split("async function ", 1)[0]
+        self.assertIn(
+            'if (taskType === "open_login" && !waitingForSchedule) openLiveBrowserTaskView(String(result.task?.id || ""));',
+            task_source,
+        )
+
     def test_console_header_boundary_has_no_drop_shadow(self):
         start = self.site_nav_styles.index('.site-header.is-scrolled,')
         end = self.site_nav_styles.index('}', start)

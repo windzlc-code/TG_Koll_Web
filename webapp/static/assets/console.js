@@ -22747,6 +22747,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
     });
     if (!waitingForSchedule) refreshLiveBrowserSessionsSoon(String(result.task?.id || ""), 60, 500);
     await loadSocial();
+    if (taskType === "open_login" && !waitingForSchedule) openLiveBrowserTaskView(String(result.task?.id || ""));
     return result;
   } finally {
     setActionLocked(lockParts, false);

@@ -2240,6 +2240,8 @@ function pdBindAutomationEvents(persona, root) {
           body: pdBuildAutomaticLoginTaskBody(persona, accountId, platform, loginUsername, ""),
         });
         await pdLoadAutomationOverview();
+        const createdTaskId = String(created?.task?.id || "").trim();
+        if (createdTaskId) window.VectoConsoleNavigation?.openLiveBrowserTaskView?.(createdTaskId);
         pdSetMsg("自动登录任务已创建。普通账号密码会自动输入；验证码/安全验证时请在打开的窗口里人工处理。", "ok");
         pdRenderDashboard();
       } catch (err) {
