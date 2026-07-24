@@ -12,6 +12,7 @@ import webapp.social_automation_api as social_api
 
 class SocialTaskLifecycleIsolationTests(unittest.TestCase):
     def setUp(self):
+        social_api._WORKER_STOP.clear()
         self._old_db_path = os.environ.get("APP_DB_PATH")
         self._tmpdir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db_path = Path(self._tmpdir.name) / "app.db"
@@ -23,6 +24,7 @@ class SocialTaskLifecycleIsolationTests(unittest.TestCase):
             social_api._EPHEMERAL_TASK_SECRETS.clear()
 
     def tearDown(self):
+        social_api._WORKER_STOP.clear()
         with social_api._RUNNING_TASK_CONTROLS_LOCK:
             social_api._RUNNING_TASK_CONTROLS.clear()
         with social_api._EPHEMERAL_TASK_SECRETS_LOCK:

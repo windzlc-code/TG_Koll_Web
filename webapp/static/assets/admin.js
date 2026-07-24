@@ -2568,29 +2568,42 @@ function sentimentCookieActionLabel(action) {
 function sentimentCookieStatusDetails(profile) {
   const savedCookieCount = Number(profile?.cookieCount || 0);
   const validCookieCount = Number(profile?.validCookieCount || 0);
-  const key = String(profile?.key || profile?.platform || "").trim().toLowerCase();
-  const requiresSessionid = key === "threads";
+  const key = sentimentCookieProfileCanonicalKey(profile)
+    || String(profile?.key || profile?.platform || "").trim().toLowerCase();
   const ordinaryCookieSaved = savedCookieCount > 0;
   const ordinaryCookieReady = validCookieCount > 0;
-  const cookieNames = Array.isArray(profile?.cookieNames) ? profile.cookieNames : [];
-  const sessionidSaved = requiresSessionid && (
-    typeof profile?.sessionidSaved === "boolean"
-      ? profile.sessionidSaved
-      : cookieNames.some((name) => String(name || "").trim().toLowerCase() === "sessionid")
+  const cookieNames = new Set(
+    (Array.isArray(profile?.cookieNames) ? profile.cookieNames : [])
+      .map((name) => String(name || "").trim().toLowerCase())
+      .filter(Boolean),
   );
-  const items = [{
-    label: "Cookie",
-    value: ordinaryCookieSaved ? `已保存 ${savedCookieCount}` : "未保存",
-    state: ordinaryCookieSaved ? "ready" : "missing",
-  }];
-  if (!requiresSessionid) {
-    return { items, hint: sentimentCookieActionLabel(profile?.recommendedAction), checkedAt: "" };
-  }
+  const validCookieNames = new Set(
+    (Array.isArray(profile?.validCookieNames) ? profile.validCookieNames : [])
+      .map((name) => String(name || "").trim().toLowerCase())
+      .filter(Boolean),
+  );
+  const credentialByPlatform = {
+    threads: { label: "sessionid", names: ["sessionid"] },
+    instagram: { label: "sessionid", names: ["sessionid"] },
+    xiaohongshusearch: { label: "web_session", names: ["web_session"] },
+    facebooksearch: { label: "c_user", names: ["c_user"] },
+    xsearch: { label: "auth_token", names: ["auth_token"] },
+  };
+  const credential = credentialByPlatform[key] || { label: "登录凭证", names: [] };
+  const credentialSaved = (
+    credential.names.some((name) => cookieNames.has(name))
+  );
+  const credentialReady = (
+    (credential.label === "sessionid" && profile?.sessionidSaved === true)
+    || credential.names.some((name) => validCookieNames.has(name))
+  );
   const liveStatus = String(profile?.liveAuthStatus || "").trim();
-  const checkedAt = profile?.liveAuthCheckedAt ? formatAdminDate(profile.liveAuthCheckedAt) : "";
-  items.push({ label: "sessionid", value: sessionidSaved ? "已保存" : "未保存", state: sessionidSaved ? "ready" : "missing" });
-  if (sessionidSaved) {
-    const liveState = liveStatus === "verified"
+  const checkedAt = key === "threads" && profile?.liveAuthCheckedAt
+    ? formatAdminDate(profile.liveAuthCheckedAt)
+    : "";
+  let loginState;
+  if (key === "threads") {
+    loginState = liveStatus === "verified"
       ? { value: "可用", state: "ready" }
       : liveStatus === "invalid" || liveStatus === "missing_sessionid"
         ? { value: "需重新登录", state: "missing" }
@@ -2598,12 +2611,36 @@ function sentimentCookieStatusDetails(profile) {
           ? { value: "自动重试中", state: "warning" }
           : liveStatus
             ? { value: "状态未知", state: "warning" }
-            : { value: ordinaryCookieReady ? "等待检测" : "需重新登录", state: ordinaryCookieReady ? "warning" : "missing" };
-    items.push({ label: "登录状态", ...liveState });
+            : credentialReady
+              ? { value: ordinaryCookieReady ? "等待检测" : "需重新登录", state: ordinaryCookieReady ? "warning" : "missing" }
+              : { value: "未获取", state: "inactive" };
+  } else if (credentialReady && ordinaryCookieReady) {
+    loginState = { value: "可用", state: "ready" };
+  } else if (ordinaryCookieSaved && !ordinaryCookieReady) {
+    loginState = { value: "已过期", state: "missing" };
+  } else {
+    loginState = { value: "未获取", state: "inactive" };
   }
+  const items = [
+    {
+      label: "Cookie",
+      value: ordinaryCookieSaved ? `已保存 ${savedCookieCount}` : "未获取",
+      state: ordinaryCookieSaved ? "ready" : "inactive",
+    },
+    {
+      label: credential.label,
+      value: credentialReady ? "已保存" : credentialSaved ? "已过期" : "未获取",
+      state: credentialReady ? "ready" : credentialSaved ? "missing" : "inactive",
+    },
+    { label: "登录状态", ...loginState },
+  ];
   return {
     items,
-    hint: sentimentCookieActionLabel(sessionidSaved ? profile?.liveAuthAction : "authorize-profile"),
+    hint: sentimentCookieActionLabel(
+      credentialReady
+        ? (key === "threads" ? profile?.liveAuthAction : profile?.recommendedAction)
+        : "authorize-profile",
+    ),
     checkedAt,
   };
 }

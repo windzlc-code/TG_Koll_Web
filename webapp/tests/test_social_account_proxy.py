@@ -15,6 +15,7 @@ import webapp.social_automation_api as social_api
 
 class SocialAccountResidentialProxyTests(unittest.TestCase):
     def setUp(self):
+        social_api._WORKER_STOP.clear()
         self._old_db_path = os.environ.get("APP_DB_PATH")
         self._tmpdir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.root = Path(self._tmpdir.name)
@@ -23,6 +24,7 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
         init_db()
 
     def tearDown(self):
+        social_api._WORKER_STOP.clear()
         if self._old_db_path is None:
             os.environ.pop("APP_DB_PATH", None)
         else:

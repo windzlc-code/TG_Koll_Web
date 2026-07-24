@@ -163,7 +163,7 @@ class BillingFrontendContractTests(unittest.TestCase):
 
     def test_running_button_uses_static_border_without_sweep(self):
         running_start = self.console_styles.index(
-            '.console-page .console-shell button[aria-busy="true"]:not(.danger)'
+            '.console-page :is(.console-shell, .console-modal) button[aria-busy="true"]:not(.danger)'
         )
         running_end = self.console_styles.index(
             "@media (prefers-reduced-motion: reduce)", running_start

@@ -190,7 +190,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertNotIn(technical_error, state["liveAuthMessage"])
         self.assertEqual(state["liveAuthMessage"], "sessionid 已保存，系统正在重新检测。")
 
-    def test_expired_threads_sessionid_is_still_reported_as_saved(self):
+    def test_expired_threads_sessionid_is_not_reported_as_usable(self):
         state = server._sentiment_auth_state(
             [
                 {
@@ -204,10 +204,46 @@ class PersonaDashboardApiTests(unittest.TestCase):
             platform="threads",
         )
 
-        self.assertTrue(state["sessionidSaved"])
+        self.assertFalse(state["sessionidSaved"])
         self.assertFalse(state["hasRequiredSessionCookie"])
         self.assertEqual(state["cookieCount"], 1)
         self.assertEqual(state["validCookieCount"], 0)
+
+    def test_empty_cookie_value_is_not_reported_as_usable(self):
+        state = server._sentiment_auth_state(
+            [
+                {
+                    "name": "sessionid",
+                    "value": "",
+                    "domain": ".threads.net",
+                    "path": "/",
+                    "expires": 1893456000,
+                }
+            ],
+            platform="threads",
+        )
+
+        self.assertFalse(state["sessionidSaved"])
+        self.assertFalse(state["hasRequiredSessionCookie"])
+        self.assertEqual(state["validCookieCount"], 0)
+        self.assertEqual(state["validCookieNames"], [])
+
+    def test_instagram_sessionid_is_reported_as_saved(self):
+        state = server._sentiment_auth_state(
+            [
+                {
+                    "name": "sessionid",
+                    "value": "instagram-session",
+                    "domain": ".instagram.com",
+                    "path": "/",
+                    "expires": 1893456000,
+                }
+            ],
+            platform="instagram",
+        )
+
+        self.assertTrue(state["sessionidSaved"])
+        self.assertTrue(state["hasRequiredSessionCookie"])
 
     def _admin_user_id(self) -> int:
         conn = sqlite3.connect(str(self.data_dir / "app.db"))
@@ -1534,6 +1570,58 @@ class PersonaDashboardApiTests(unittest.TestCase):
         post = next(item for item in list_resp.json()["posts"] if item["id"] == "post-1")
         self.assertTrue(post["media_items"])
 
+    def test_persona_draft_media_move_persists_order_and_primary_media(self):
+        self._write_archives()
+        second_path = self.draft_media_path.parent / "ordered-second.png"
+        third_path = self.draft_media_path.parent / "ordered-third.mp4"
+        second_path.write_bytes(self.draft_media_path.read_bytes())
+        third_path.write_bytes(b"video")
+
+        append_resp = self.client.patch(
+            "/api/persona_dashboard/personas/persona-1/posts/post-1",
+            json={
+                "title": "A",
+                "content": "post",
+                "media_ops": [{
+                    "type": "append",
+                    "index": -1,
+                    "media_paths": [str(second_path), str(third_path)],
+                }],
+            },
+        )
+        self.assertEqual(append_resp.status_code, 200, append_resp.text)
+
+        move_resp = self.client.patch(
+            "/api/persona_dashboard/personas/persona-1/posts/post-1",
+            json={
+                "title": "A",
+                "content": "post",
+                "media_ops": [{
+                    "type": "move",
+                    "from_index": 2,
+                    "to_index": 0,
+                    "media_paths": [],
+                }],
+            },
+        )
+        self.assertEqual(move_resp.status_code, 200, move_resp.text)
+        moved = move_resp.json()
+        self.assertEqual(
+            [item["url"] for item in moved["media_items"]],
+            [str(third_path), str(self.draft_media_path), str(second_path)],
+        )
+
+        archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
+        persisted = next(item for item in archives[0]["posts"] if item["id"] == "post-1")
+        self.assertEqual([item["url"] for item in persisted["mediaItems"]], [
+            str(third_path),
+            str(self.draft_media_path),
+            str(second_path),
+        ])
+        self.assertEqual(persisted["mediaUrl"], str(third_path))
+        self.assertEqual(persisted["mediaType"], "video")
+        self.assertNotIn("imageUrl", persisted)
+
     def test_persona_draft_media_ops_reject_paths_outside_current_user_directory(self):
         self._write_archives()
         other_user_dir = self.tool_runtime_dir / "other_user"
@@ -2818,6 +2906,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
             task_type="open_login",
             status="success",
             priority=20,
+            result={"status": "ready", "diagnostic_outcome": "ready"},
         )
         self._insert_social_task(
             task_id="publish-ready",

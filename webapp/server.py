@@ -1062,10 +1062,11 @@ def _record_persona_owner(archive_id: str, user: dict[str, Any]) -> None:
     if not clean_id:
         raise HTTPException(status_code=500, detail="人设创建结果缺少 ID")
     now = _now_ts()
+    user_id = _workspace_user_id(user)
     with db() as conn:
         active = conn.execute(
             "SELECT is_admin, is_disabled, approval_status FROM users WHERE id = ?",
-            (_workspace_user_id(user),),
+            (user_id,),
         ).fetchone()
         if (
             not active
@@ -1073,10 +1074,16 @@ def _record_persona_owner(archive_id: str, user: dict[str, Any]) -> None:
             or (int(active["is_admin"] or 0) != 1 and str(active["approval_status"] or "") != "approved")
         ):
             raise HTTPException(status_code=403, detail="账号已停用或不存在")
+        owner = conn.execute(
+            "SELECT user_id FROM persona_owners WHERE archive_id = ?",
+            (clean_id,),
+        ).fetchone()
+        if owner and int(owner["user_id"]) != user_id:
+            raise HTTPException(status_code=409, detail="人设 ID 已归属其他账号，禁止覆盖归属")
         conn.execute(
             "INSERT INTO persona_owners(archive_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(archive_id) DO UPDATE SET user_id = excluded.user_id, updated_at = excluded.updated_at",
-            (clean_id, _workspace_user_id(user), now, now),
+            "ON CONFLICT(archive_id) DO UPDATE SET updated_at = excluded.updated_at",
+            (clean_id, user_id, now, now),
         )
 
 
@@ -1207,10 +1214,11 @@ def _record_persona_group_owner(group_id: str, user: dict[str, Any]) -> None:
     if not clean_id:
         raise HTTPException(status_code=500, detail="分组创建结果缺少 ID")
     now = _now_ts()
+    user_id = _workspace_user_id(user)
     with db() as conn:
         active = conn.execute(
             "SELECT is_admin, is_disabled, approval_status FROM users WHERE id = ?",
-            (_workspace_user_id(user),),
+            (user_id,),
         ).fetchone()
         if (
             not active
@@ -1218,10 +1226,16 @@ def _record_persona_group_owner(group_id: str, user: dict[str, Any]) -> None:
             or (int(active["is_admin"] or 0) != 1 and str(active["approval_status"] or "") != "approved")
         ):
             raise HTTPException(status_code=403, detail="账号已停用或不存在")
+        owner = conn.execute(
+            "SELECT user_id FROM persona_group_owners WHERE group_id = ?",
+            (clean_id,),
+        ).fetchone()
+        if owner and int(owner["user_id"]) != user_id:
+            raise HTTPException(status_code=409, detail="分组 ID 已归属其他账号，禁止覆盖归属")
         conn.execute(
             "INSERT INTO persona_group_owners(group_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(group_id) DO UPDATE SET user_id = excluded.user_id, updated_at = excluded.updated_at",
-            (clean_id, _workspace_user_id(user), now, now),
+            "ON CONFLICT(group_id) DO UPDATE SET updated_at = excluded.updated_at",
+            (clean_id, user_id, now, now),
         )
 
 
@@ -1778,12 +1792,15 @@ def _sentiment_auth_state(cookies: list[dict[str, Any]], last_authorized_at: str
     expiring_soon_names: list[str] = []
     valid_cookies: list[dict[str, Any]] = []
     for cookie in cookies:
+        name = str(cookie.get("name") or "").strip()
+        value = str(cookie.get("value") or "").strip()
+        if not name or not value:
+            continue
         expires_raw = cookie.get("expires")
         try:
             expires = float(expires_raw)
         except Exception:
             expires = -1
-        name = str(cookie.get("name") or "").strip()
         if expires <= 0:
             session += 1
             valid += 1
@@ -1836,6 +1853,11 @@ def _sentiment_auth_state(cookies: list[dict[str, Any]], last_authorized_at: str
     return {
         "cookieCount": len(cookies),
         "validCookieCount": valid,
+        "validCookieNames": [
+            str(cookie.get("name") or "")
+            for cookie in valid_cookies
+            if str(cookie.get("name") or "").strip()
+        ][:80],
         "expiredCookieCount": expired,
         "sessionCookieCount": session,
         "persistentCookieCount": persistent,
@@ -1844,7 +1866,10 @@ def _sentiment_auth_state(cookies: list[dict[str, Any]], last_authorized_at: str
         "authStatus": "incomplete" if missing_required_session else ("authorized" if valid > 0 else ("expired" if cookies else "missing")),
         "authHealth": health,
         "hasRequiredSessionCookie": has_required_session,
-        "sessionidSaved": platform_key == "threads" and _sentiment_cookies_store_threads_sessionid(cookies),
+        "sessionidSaved": (
+            (platform_key == "threads" and _sentiment_cookies_have_threads_sessionid(valid_cookies))
+            or (platform_key == "instagram" and _sentiment_cookies_have_instagram_sessionid(valid_cookies))
+        ),
         "authorizationNeedsRefresh": action != "keep",
         "recommendedAction": action,
         "statusReasons": reasons,
@@ -1895,6 +1920,16 @@ def _sentiment_cookies_store_threads_sessionid(cookies: list[dict[str, Any]]) ->
     )
 
 
+def _sentiment_cookies_store_instagram_sessionid(cookies: list[dict[str, Any]]) -> bool:
+    return any(
+        str(cookie.get("name") or "").strip().lower() == "sessionid"
+        and bool(str(cookie.get("value") or "").strip())
+        and _sentiment_cookie_domain_matches(cookie, ["instagram.com"])
+        for cookie in cookies
+        if isinstance(cookie, dict)
+    )
+
+
 def _sentiment_cookies_have_threads_sessionid(cookies: list[dict[str, Any]]) -> bool:
     now = _sentiment_now_seconds()
     for cookie in cookies:
@@ -1903,6 +1938,24 @@ def _sentiment_cookies_have_threads_sessionid(cookies: list[dict[str, Any]]) -> 
         if not str(cookie.get("value") or "").strip():
             continue
         if not _sentiment_cookie_domain_matches(cookie, ["threads.net", "threads.com"]):
+            continue
+        try:
+            expires = float(cookie.get("expires"))
+        except Exception:
+            expires = -1
+        if expires <= 0 or expires > now:
+            return True
+    return False
+
+
+def _sentiment_cookies_have_instagram_sessionid(cookies: list[dict[str, Any]]) -> bool:
+    now = _sentiment_now_seconds()
+    for cookie in cookies:
+        if str(cookie.get("name") or "").strip().lower() != "sessionid":
+            continue
+        if not str(cookie.get("value") or "").strip():
+            continue
+        if not _sentiment_cookie_domain_matches(cookie, ["instagram.com"]):
             continue
         try:
             expires = float(cookie.get("expires"))
@@ -2385,7 +2438,7 @@ def _sentiment_profile_for_client(profile: dict[str, Any]) -> dict[str, Any]:
         platform_key,
     ))
     if platform_key == "threads":
-        safe["sessionidSaved"] = _sentiment_cookies_store_threads_sessionid(cookies)
+        safe["sessionidSaved"] = _sentiment_cookies_have_threads_sessionid(cookies)
         live_state = _sentiment_threads_live_auth_state(profile, [cookie for cookie in cookies if isinstance(cookie, dict)])
         safe.update(live_state)
         if live_state.get("liveAuthUsable") is False:
@@ -13130,6 +13183,12 @@ def _update_persona_archive_post(archive_id: str, post_id: str, payload: Persona
             next_media[raw_index:raw_index + 1] = op_paths
         elif op_type == "delete" and 0 <= raw_index < len(next_media):
             next_media.pop(raw_index)
+        elif op_type == "move":
+            from_index = int(_number(op.get("from_index"), -1))
+            to_index = int(_number(op.get("to_index"), -1))
+            if 0 <= from_index < len(next_media) and 0 <= to_index < len(next_media) and from_index != to_index:
+                moved_path = next_media.pop(from_index)
+                next_media.insert(to_index, moved_path)
     if not content and not next_media:
         raise HTTPException(status_code=400, detail="推文正文和媒体不能同时为空。")
     now = _persona_dashboard_iso_now()
@@ -13142,9 +13201,14 @@ def _update_persona_archive_post(archive_id: str, post_id: str, payload: Persona
         if media_items:
             target["mediaUrl"] = media_items[0]["url"]
             target["mediaType"] = media_items[0]["type"]
+            if media_items[0]["type"] == "image":
+                target["imageUrl"] = media_items[0]["url"]
+            else:
+                target.pop("imageUrl", None)
         else:
             target.pop("mediaUrl", None)
             target.pop("mediaType", None)
+            target.pop("imageUrl", None)
     target["updatedAt"] = now
     archive["updatedAt"] = now
     _write_persona_archives_preserving_shape(path, raw, archives)
@@ -15238,6 +15302,27 @@ def _compact_dashboard_media_items(*sources: Any) -> list[dict[str, str]]:
     media: list[dict[str, str]] = []
     seen: set[str] = set()
 
+    def display_label(value: Any, fallback: Any = "") -> str:
+        raw = str(value or "").strip()
+        key = re.sub(r"[^a-z0-9]+", "", raw.lower())
+        translated = {
+            "media": "媒体",
+            "mediaitem": "媒体",
+            "mediaitems": "媒体",
+            "attachment": "附件",
+            "attachments": "附件",
+            "image": "图片",
+            "images": "图片",
+            "imageurl": "图片",
+            "imageurls": "图片",
+            "video": "视频",
+            "videos": "视频",
+            "screenshot": "截图",
+            "originalmediaurl": "原始媒体",
+            "originalmediaurls": "原始媒体",
+        }.get(key, "")
+        return translated or raw or str(fallback or "").strip()
+
     def add(url: Any, typ: Any = "", label: Any = "") -> None:
         text = str(url or "").strip()
         if not text or text in seen:
@@ -15251,7 +15336,7 @@ def _compact_dashboard_media_items(*sources: Any) -> list[dict[str, str]]:
         media.append({
             "url": text,
             "type": _guess_media_type(text, typ),
-            "label": str(label or typ or "").strip()[:80],
+            "label": display_label(label, typ)[:80],
         })
 
     def walk(value: Any, label: str = "") -> None:
@@ -16595,6 +16680,14 @@ def _create_persona_with_owner(user: dict[str, Any], operation: Any) -> dict[str
     archive_id = _created_persona_id(result)
     try:
         _record_persona_owner(archive_id, user)
+    except HTTPException as exc:
+        if exc.status_code == 409:
+            raise
+        try:
+            _delete_persona_dashboard_personas([archive_id])
+        except Exception:
+            logger.exception("Failed to roll back persona after owner recording failure: %s", archive_id)
+        raise
     except Exception:
         try:
             _delete_persona_dashboard_personas([archive_id])
@@ -16610,6 +16703,14 @@ def _create_persona_group_with_owner(user: dict[str, Any], operation: Any) -> di
     group_id = str(group.get("id") or "").strip()
     try:
         _record_persona_group_owner(group_id, user)
+    except HTTPException as exc:
+        if exc.status_code == 409:
+            raise
+        try:
+            _delete_persona_groups([group_id])
+        except Exception:
+            logger.exception("Failed to roll back persona group after owner recording failure: %s", group_id)
+        raise
     except Exception:
         try:
             _delete_persona_groups([group_id])

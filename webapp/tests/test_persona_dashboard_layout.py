@@ -70,10 +70,30 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         )
         self.assertLess(preview_position, media_position)
 
+    def test_mobile_draft_list_is_compact_and_grid_refresh_moves_beside_view(self):
+        marker = "/* Responsive draft list density: keep rows as compact records instead of labeled field stacks. */"
+        self.assertIn(marker, self.styles)
+        mobile_styles = self.styles[self.styles.index(marker):]
+
+        self.assertIn('"check index title actions"', mobile_styles)
+        self.assertIn('"check index time actions"', mobile_styles)
+        self.assertIn('"check index content actions"', mobile_styles)
+        self.assertIn('.persona-draft-table-row > [data-mobile-label]::before', mobile_styles)
+        self.assertIn('[data-mobile-label="状态"]', mobile_styles)
+        self.assertIn(".persona-draft-action-hot-refresh", mobile_styles)
+        self.assertIn("includeHotRefresh: Boolean(hotMeta)", self.console_script)
+        self.assertLess(
+            self.console_script.index('class="persona-hot-refresh-button persona-draft-action-hot-refresh"'),
+            self.console_script.index('data-persona-view-post="${esc(post.id)}"'),
+        )
+
     def test_common_media_viewers_center_media_on_dark_stages(self):
         self.assertIn('node.className = "persona-media-lightbox";', self.console_script)
         self.assertNotIn("openMediaLightbox(groupId, 0);", self.console_script)
-        self.assertIn("openPersonaMediaLightbox(groupId, 0);", self.console_script)
+        self.assertIn(
+            'Number(previewButton.dataset.mediaPreviewIndex || 0),',
+            self.console_script,
+        )
         self.assertIn(
             ".persona-media-lightbox {\n"
             "  position: fixed;\n"
@@ -126,6 +146,12 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.console_script,
         )
         self.assertIn(".persona-task-media-card.is-selected", self.styles)
+        self.assertIn(
+            ".persona-task-media-select .ui-action-icon rect,\n"
+            ".persona-task-media-select .ui-action-icon path",
+            self.styles,
+        )
+        self.assertIn("stroke: currentColor;", self.styles)
         self.assertIn(
             ".console-page .persona-media-task-actions > [data-persona-run-media-task]",
             self.styles,
@@ -318,7 +344,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             'const startPersonaBulk = event.target.closest("[data-persona-bulk-start]");'
         )
         handler_end = self.console_script.index(
-            'const editableMediaCard = event.target.closest', handler_start
+            'const previewButton = event.target.closest("[data-media-preview-group]");',
+            handler_start,
         )
         handler = self.console_script[handler_start:handler_end]
         delete_start = self.console_script.index(
@@ -473,6 +500,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn('${renderMobileTaskIcon("publishing")}', header)
         self.assertNotIn('class="publish-header-end-slot"', header)
         self.assertIn('data-persona-mobile-list-toggle="publishPersonaSidebar"', header)
+        self.assertNotIn("publish-account-badge", header)
+        self.assertNotIn("到账号管理绑定", header)
 
     def test_current_persona_summary_is_shared_only_across_mobile_console_views(self):
         summary_start = self.markup.index('id="persistentPersonaSummary"')
@@ -676,6 +705,26 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn("草稿快速选择", self.console_script)
         self.assertNotIn("收藏快速选择", self.console_script)
         self.assertIn(".persona-source-toggle {\n  width: min(100%, 280px);", self.styles)
+
+    def test_draft_toolbar_uses_icon_bulk_actions_and_aligned_controls(self):
+        bulk_actions = self.console_script[
+            self.console_script.index("function renderPersonaPostBulkActions"):
+            self.console_script.index("async function viewPersonaDraftPost")
+        ]
+        self.assertIn('title="全选" aria-label="全选"', bulk_actions)
+        self.assertIn("${renderSelectAllIcon()}", bulk_actions)
+        self.assertIn('title="清空选择" aria-label="清空选择"', bulk_actions)
+        self.assertIn("${renderClearSelectionIcon()}", bulk_actions)
+        self.assertIn("${renderTrashIcon()}", bulk_actions)
+        self.assertNotIn(">全选</button>", bulk_actions)
+        self.assertNotIn(">清空</button>", bulk_actions)
+        self.assertIn(
+            ".console-page .persona-detail .persona-draft-toolbar > .row-actions > button {\n"
+            "  height: 40px;\n"
+            "  min-height: 40px;",
+            self.styles,
+        )
+        self.assertIn(".persona-post-bulk-actions .persona-post-bulk-icon-button {", self.styles)
 
     def test_hot_card_metrics_use_compact_thousands(self):
         self.assertIn("function hotMetricText(value)", self.console_script)

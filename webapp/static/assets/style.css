@@ -356,6 +356,12 @@ a {
   font-weight: 800;
 }
 
+.sentiment-cookie-state-pill.inactive {
+  border-color: #e2e8f0;
+  background: #f8fafc;
+  color: #94a3b8;
+}
+
 .sentiment-cookie-state-pill.ready {
   border-color: #a7e3c2;
   background: #ecfdf3;

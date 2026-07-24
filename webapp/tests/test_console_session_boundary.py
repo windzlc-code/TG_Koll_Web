@@ -84,6 +84,54 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("document.createElement", ensure_theme)
         self.assertNotIn("document.createElement", ensure_language)
 
+    def test_cookie_status_keeps_credentials_and_login_placeholders_visible(self):
+        status_source = self._javascript_function_source(
+            self.admin_source,
+            "sentimentCookieStatusDetails",
+        )
+        for credential_name in ("sessionid", "web_session", "c_user", "auth_token"):
+            self.assertIn(f'"{credential_name}"', status_source)
+        self.assertIn('label: "登录状态"', status_source)
+        self.assertIn('value: "未获取"', status_source)
+        self.assertIn('state: "inactive"', status_source)
+        self.assertNotIn("if (!reportsSessionid)", status_source)
+        self.assertNotIn("if (sessionidSaved)", status_source)
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("node:assert/strict");
+            function sentimentCookieProfileCanonicalKey(profile) {{ return profile.key; }}
+            function sentimentCookieActionLabel() {{ return ""; }}
+            function formatAdminDate(value) {{ return value || ""; }}
+            {status_source}
+
+            const instagram = sentimentCookieStatusDetails({{
+              key: "instagram",
+              cookieCount: 16,
+              validCookieCount: 16,
+              cookieNames: ["datr", "sessionid"],
+              validCookieNames: ["datr", "sessionid"],
+            }});
+            assert.deepEqual(instagram.items.map((item) => [item.label, item.value, item.state]), [
+              ["Cookie", "已保存 16", "ready"],
+              ["sessionid", "已保存", "ready"],
+              ["登录状态", "可用", "ready"],
+            ]);
+
+            const facebook = sentimentCookieStatusDetails({{
+              key: "facebooksearch",
+              cookieCount: 5,
+              validCookieCount: 5,
+              cookieNames: ["datr", "fr"],
+            }});
+            assert.deepEqual(facebook.items.map((item) => [item.label, item.value, item.state]), [
+              ["Cookie", "已保存 5", "ready"],
+              ["c_user", "未获取", "inactive"],
+              ["登录状态", "未获取", "inactive"],
+            ]);
+            """
+        )
+        self._run_node(harness)
+
     def test_personal_profile_is_a_separate_bright_page_with_svg_upload(self):
         for removed_console_profile_marker in (
             "settingsProfileFullName",
@@ -1933,7 +1981,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
     def test_every_publish_entry_uses_the_shared_daily_limit_guard(self):
         capacity_guard = self._section(
             "async function ensureDailyPublishCapacity",
-            "function renderDailyPublishLimitBanner",
+            "window.VectoPublishRiskGuard",
         )
         self.assertIn("/automation/publish_policy?", capacity_guard)
         self.assertIn("showDailyPublishLimitWarning", capacity_guard)
@@ -1983,7 +2031,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
         ensure_capacity = self._section(
             "async function ensureDailyPublishCapacity",
-            "function renderDailyPublishLimitBanner",
+            "window.VectoPublishRiskGuard",
         )
         action_gate = self._function_source("handleDailyPublishActionGate")
         harness = textwrap.dedent(
