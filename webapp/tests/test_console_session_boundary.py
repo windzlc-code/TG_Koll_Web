@@ -2461,6 +2461,65 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             self.persona_dashboard_source,
         )
 
+    def test_persona_dashboard_publish_batch_is_one_log_row(self):
+        helpers = "\n".join([
+            self._persona_dashboard_function_source("pdAutomationAccountsForPersona"),
+            self._persona_dashboard_function_source("pdAutomationTaskPayload"),
+            self._persona_dashboard_function_source("pdAutomationTaskNeedsManualVerification"),
+            self._persona_dashboard_function_source("pdAggregateAutomationTaskBatch"),
+            self._persona_dashboard_function_source("pdAutomationTaskPresentationRows"),
+            self._persona_dashboard_function_source("pdAutomationTasksForPersona"),
+        ])
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            const personaDashboardAutomation = {{
+              accounts: [
+                {{ id: "account-1", persona_id: "persona-1" }},
+              ],
+              tasks: [
+                {{
+                  id: "publish-2",
+                  persona_id: "persona-1",
+                  account_id: "account-1",
+                  task_type: "publish_post",
+                  status: "running",
+                  created_at: 20,
+                  payload: {{ publish_batch_id: "batch-1", publish_sequence_index: 2 }},
+                }},
+                {{
+                  id: "publish-1",
+                  persona_id: "persona-1",
+                  account_id: "account-1",
+                  task_type: "publish_post",
+                  status: "success",
+                  created_at: 10,
+                  payload: {{ publish_batch_id: "batch-1", publish_sequence_index: 1 }},
+                }},
+                {{
+                  id: "login-1",
+                  persona_id: "persona-1",
+                  account_id: "account-1",
+                  task_type: "check_login",
+                  status: "success",
+                  created_at: 5,
+                  payload: {{}},
+                }},
+              ],
+            }};
+            {helpers}
+
+            const rows = pdAutomationTasksForPersona({{ id: "persona-1" }});
+            assert.strictEqual(rows.length, 2);
+            const batch = rows.find((item) => item.batch_task_count === 2);
+            assert.ok(batch);
+            assert.strictEqual(batch.id, "publish-1");
+            assert.strictEqual(batch.status, "running");
+            assert.deepStrictEqual(batch.batch_task_ids, ["publish-1", "publish-2"]);
+            """
+        )
+        self._run_node(harness)
+
     def test_persona_dashboard_keeps_all_login_tasks_and_uses_automatic_login_body(self):
         helpers = "\n".join([
             self._persona_dashboard_function_source("pdAutomationAccountsForPersona"),

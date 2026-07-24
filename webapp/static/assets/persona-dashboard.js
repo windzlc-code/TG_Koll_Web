@@ -893,10 +893,59 @@ function pdAutomationAccountsForPlatform(persona, platform) {
   return pdAutomationAccountsForPersona(persona).filter((account) => String(account.platform || "").toLowerCase() === current);
 }
 
+function pdAggregateAutomationTaskBatch(tasks) {
+  const rows = (Array.isArray(tasks) ? tasks : []).slice().sort((left, right) => {
+    const leftPayload = pdAutomationTaskPayload(left);
+    const rightPayload = pdAutomationTaskPayload(right);
+    return Number(leftPayload.publish_sequence_index || 1) - Number(rightPayload.publish_sequence_index || 1)
+      || Number(left.created_at || 0) - Number(right.created_at || 0);
+  });
+  if (rows.length <= 1) return rows[0] || {};
+  const statuses = rows.map((task) => String(task.status || ""));
+  const activeStatus = ["need_manual", "running", "preparing", "queued"]
+    .find((status) => statuses.includes(status));
+  const source = rows[0];
+  return {
+    ...source,
+    status: activeStatus
+      || (statuses.includes("failed") ? "failed" : "")
+      || (statuses.every((status) => status === "success") ? "success" : "")
+      || (statuses.includes("cancelled") ? "cancelled" : statuses[statuses.length - 1]),
+    updated_at: Math.max(...rows.map((task) => Number(task.updated_at || task.created_at || 0))),
+    finished_at: activeStatus ? 0 : Math.max(...rows.map((task) => Number(task.finished_at || 0))),
+    error: rows.find((task) => task.error)?.error || "",
+    batch_task_count: rows.length,
+    batch_task_ids: rows.map((task) => String(task.id || "")),
+  };
+}
+
+function pdAutomationTaskPresentationRows(tasks) {
+  const slots = [];
+  const batches = new Map();
+  (Array.isArray(tasks) ? tasks : []).forEach((task) => {
+    const payload = pdAutomationTaskPayload(task);
+    const batchId = String(payload.publish_batch_id || "").trim();
+    if (String(task.task_type || "") !== "publish_post" || !batchId) {
+      slots.push(task);
+      return;
+    }
+    const key = `${String(task.persona_id || "")}:${String(task.account_id || "")}:${batchId}`;
+    if (!batches.has(key)) {
+      const batch = [];
+      batches.set(key, batch);
+      slots.push(batch);
+    }
+    batches.get(key).push(task);
+  });
+  return slots.map((item) => Array.isArray(item) ? pdAggregateAutomationTaskBatch(item) : item);
+}
+
 function pdAutomationTasksForPersona(persona) {
   const accountIds = new Set(pdAutomationAccountsForPersona(persona).map((account) => String(account.id || "")));
-  const rows = (personaDashboardAutomation.tasks || [])
-    .filter((task) => accountIds.has(String(task.account_id || "")));
+  const rows = pdAutomationTaskPresentationRows(
+    (personaDashboardAutomation.tasks || [])
+      .filter((task) => accountIds.has(String(task.account_id || ""))),
+  );
   const manualRows = rows.filter((task) => pdAutomationTaskNeedsManualVerification(task));
   const manualIds = new Set(manualRows.map((task) => String(task.id || "")));
   const historyRows = rows.filter((task) => !manualIds.has(String(task.id || "")));
@@ -1022,7 +1071,7 @@ function pdRenderAutomationPanel(persona) {
   const taskRows = tasks.map((task) => `
     <tr>
       <td><input class="persona-auto-log-check" type="checkbox" value="${pdEscape(task.id)}" data-auto-select-log="${pdEscape(task.id)}" /></td>
-      <td>${pdEscape(pdAutomationStatusLabel(task.task_type))}</td>
+      <td>${pdEscape(`${pdAutomationStatusLabel(task.task_type)}${Number(task.batch_task_count || 0) > 1 ? ` · ${task.batch_task_count} 篇` : ""}`)}</td>
       <td><span class="persona-auto-status persona-auto-status-${pdEscape(task.status)}">${pdEscape(pdAutomationStatusLabel(task.status))}</span></td>
       <td>${pdEscape(pdDate((task.updated_at || task.created_at || 0) * 1000))}</td>
       <td><div class="persona-auto-result" title="${pdEscape(task.error || (task.result && (task.result.url || task.result.screenshot_path)) || "-")}">${pdEscape(task.error || (task.result && (task.result.url || task.result.screenshot_path)) || "-")}</div></td>
