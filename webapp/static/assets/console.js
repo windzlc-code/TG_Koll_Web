@@ -8754,6 +8754,13 @@ function renderUploadSelectionIcon(selected) {
   </svg>`;
 }
 
+function renderPersonaMediaSelectionIcon(selected) {
+  if (!selected) return "";
+  return `<svg class="persona-media-selection-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+    <path d="m5.6 10 2.8 2.9 6-6.1"></path>
+  </svg>`;
+}
+
 function renderMediaOrderHandle(index, kind = "upload") {
   const order = Math.max(0, Number(index) || 0) + 1;
   const persona = kind === "persona";
@@ -16278,7 +16285,7 @@ function syncPersonaMediaBulkSelectionState(editor) {
     if (!button) return;
     button.setAttribute("aria-pressed", isSelected ? "true" : "false");
     button.setAttribute("aria-label", `${isSelected ? "取消选择" : "选择"}第 ${index + 1} 个媒体`);
-    button.innerHTML = renderUploadSelectionIcon(isSelected);
+    button.innerHTML = renderPersonaMediaSelectionIcon(isSelected);
   });
   const toolbar = context.editor.querySelector(".persona-media-selection-toolbar");
   if (!toolbar) return;
@@ -17395,7 +17402,7 @@ function renderPersonaEditableMediaGrid(items, options = {}) {
         aria-pressed="${isSelected ? "true" : "false"}"
         aria-label="${isSelected ? "取消选择" : "选择"}第 ${index + 1} 个媒体"
       >
-        ${renderUploadSelectionIcon(isSelected)}
+        ${renderPersonaMediaSelectionIcon(isSelected)}
       </button>
       ${renderMediaOrderHandle(index, "persona")}
       ${item.unavailable || !item.previewUrl ? `

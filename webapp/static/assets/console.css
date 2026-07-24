@@ -8881,10 +8881,17 @@ body.persona-touch-dragging .persona-list-card:active {
   appearance: none;
 }
 
-.console-page .console-shell .persona-detail button.persona-media-card-select .upload-selection-icon,
-.persona-media-card-select .upload-selection-icon {
+.console-page .console-shell .persona-detail button.persona-media-card-select .persona-media-selection-icon,
+.persona-media-card-select .persona-media-selection-icon {
   display: block;
+  width: 16px;
+  height: 16px;
   margin: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .console-page .console-shell .persona-detail button.persona-media-card-select[aria-pressed="true"],
@@ -18164,6 +18171,27 @@ body.console-page {
 ) svg {
   display: block;
   margin: 0;
+}
+
+/* Media-card controls use one geometry on desktop and mobile. Keep this
+   after density rules so responsive button defaults cannot change shape. */
+.console-page .console-shell .persona-detail button.persona-media-card-select,
+.console-page .console-shell .persona-detail button.persona-edit-media-order {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border-radius: 50%;
+}
+
+.console-page .console-shell .persona-detail .persona-edit-media-actions button.persona-hot-media-action {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border-radius: 6px;
 }
 
 @media (max-width: 760px) {

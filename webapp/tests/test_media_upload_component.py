@@ -221,16 +221,18 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertNotIn("const adjustedSlot = insertSlot > fromIndex ? insertSlot - 1 : insertSlot;", self.script)
 
     def test_persona_media_card_controls_use_scoped_icons_and_single_selection_ring(self):
-        self.assertNotIn("function renderPersonaMediaSelectionIcon(selected)", self.script)
-        self.assertIn("${renderUploadSelectionIcon(isSelected)}", self.script)
+        self.assertIn("function renderPersonaMediaSelectionIcon(selected)", self.script)
+        self.assertIn('if (!selected) return "";', self.script)
         self.assertIn("function renderMediaCardViewIcon()", self.script)
         self.assertIn('<circle cx="12" cy="12" r="2.5"></circle>', self.script)
         self.assertIn("function renderMediaCardEditIcon()", self.script)
         self.assertIn('class="ui-media-card-edit-icon"', self.script)
         self.assertIn("function renderMediaCardDeleteIcon()", self.script)
-        self.assertIn("button.persona-media-card-select .upload-selection-icon", self.styles)
+        self.assertIn("button.persona-media-card-select .persona-media-selection-icon", self.styles)
         self.assertIn("width: 17px;\n  height: 17px;", self.styles)
         self.assertIn("background: color-mix(in srgb, var(--panel-solid) 96%, transparent);", self.styles)
+        self.assertIn("button.persona-media-card-select,\n.console-page .console-shell .persona-detail button.persona-edit-media-order", self.styles)
+        self.assertIn("border-radius: 50%;", self.styles)
 
     def test_persona_media_card_surface_selects_and_only_eye_opens_preview(self):
         self.assertIn('interactive: false,', self.script)
