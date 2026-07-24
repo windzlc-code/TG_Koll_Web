@@ -21392,8 +21392,9 @@ function updateLiveBrowserSessionCard(card, session) {
   const interactionAllowed = canInteractWithLiveBrowser(session);
   const canCloseWindow = Boolean(sessionId) && sessionStatus === "standby";
   const canStopTask = Boolean(session.task_id) && ["queued", "running", "need_manual"].includes(status);
-  const title = `${session.account_username || session.account_id || "执行账号"} · ${statusLabel(session.task_type || "浏览器任务")}`;
-  const meta = `${session.platform || "-"} · ${session.display || "-"} · ${session.width || 720}x${session.height || 1280}`;
+  const identity = liveBrowserIdentity(session);
+  const title = `账号：${identity.account}`;
+  const meta = `平台：${identity.platform} · 人设：${identity.persona}`;
 
   card.dataset.liveBrowserCard = sessionId;
   ["active", "queued", "manual", "success", "error", "muted"].forEach((name) => {
@@ -21467,8 +21468,12 @@ function updateLiveBrowserSessionCard(card, session) {
       button.disabled = true;
     }
   });
-  const note = card.querySelector(".live-browser-interaction-note");
-  if (note) note.textContent = liveBrowserInteractionHint(session);
+  const modeSummary = card.querySelector("[data-live-browser-mode-summary]");
+  const ipSummary = card.querySelector("[data-live-browser-ip-summary]");
+  const interactionHint = card.querySelector("[data-live-browser-hint]");
+  if (modeSummary) modeSummary.textContent = `当前模式：${liveBrowserModeLabel(session)}`;
+  if (ipSummary) ipSummary.textContent = `当前 IP：${liveBrowserCurrentIp(session)}`;
+  if (interactionHint) interactionHint.textContent = liveBrowserInteractionHint(session);
 }
 
 function renderLiveBrowserLayoutToggle(layout = state.liveBrowserLayout) {
@@ -21544,6 +21549,40 @@ function liveBrowserLoginMode(session) {
   if (mode === "takeover_timeout") return "takeover_timeout";
   if (mode === "manual") return "manual";
   return isManualOpenLoginSession(session) || liveBrowserTaskStatus(session) === "need_manual" ? "manual" : "automatic";
+}
+
+function liveBrowserIdentity(session) {
+  const account = accountById(session?.account_id);
+  const taskId = String(session?.task_id || "").trim();
+  const task = (state.socialTasks || []).find((item) => String(item?.id || "").trim() === taskId) || null;
+  const payload = socialTaskPayload(task);
+  const personaId = String(task?.persona_id || payload.persona_id || payload.archive_id || "").trim();
+  const persona = state.personas.find((item) => String(item?.id || "") === personaId) || null;
+  return {
+    account: String(session?.account_username || account?.username || account?.account_username || session?.account_id || "未获取").trim(),
+    platform: platformLabel(session?.platform || "-"),
+    persona: String(persona?.name || persona?.title || "未绑定人设").trim(),
+  };
+}
+
+function liveBrowserCurrentIp(session) {
+  const account = accountById(session?.account_id);
+  const proxy = accountResidentialProxy(account);
+  const detectedIp = String(
+    proxy?.exit_ip
+    || proxy?.last_check_result?.response?.ip
+    || proxy?.last_check_result?.ip
+    || "",
+  ).trim();
+  if (detectedIp) return detectedIp;
+  return proxy ? "出口 IP 未检测" : "未使用代理 IP";
+}
+
+function liveBrowserModeLabel(session) {
+  const mode = liveBrowserLoginMode(session);
+  if (mode === "switching") return "切换人工接管中";
+  if (mode === "takeover_timeout") return "人工接管待重试";
+  return mode === "manual" ? "人工接管" : "自动化执行";
 }
 
 function renderLiveBrowserModeToggle(session) {
@@ -21655,7 +21694,8 @@ function liveBrowserIframeLoadingMode() {
 
 function renderLiveBrowserSession(session) {
   const url = liveBrowserSessionUrl(session);
-  const title = `${session.account_username || session.account_id || "执行账号"} · ${statusLabel(session.task_type || "浏览器任务")}`;
+  const identity = liveBrowserIdentity(session);
+  const title = `账号：${identity.account}`;
   const sessionId = liveBrowserSessionId(session);
   const width = Math.max(1, Number(session.width || 1280));
   const height = Math.max(1, Number(session.height || 720));
@@ -21679,7 +21719,7 @@ function renderLiveBrowserSession(session) {
       <div class="live-browser-card-head">
         <div class="live-browser-card-identity">
           <strong id="${esc(liveBrowserDialogTitleId(sessionId))}" data-live-browser-title>${esc(title)}</strong>
-          <span data-live-browser-meta>${esc(`${session.platform || "-"} · ${session.display || "-"} · ${session.width || 720}x${session.height || 1280}`)}</span>
+          <span data-live-browser-meta>${esc(`平台：${identity.platform} · 人设：${identity.persona}`)}</span>
         </div>
         <div class="live-browser-task-summary" aria-label="任务信息">
           <span>任务数 <b data-live-browser-task-count>${esc(taskSummary.count)}</b></span>
@@ -21718,7 +21758,11 @@ function renderLiveBrowserSession(session) {
           <button type="button" data-live-browser-key="${esc(sessionId)}" data-live-browser-key-value="Enter" ${interactionAllowed ? "" : "disabled"}>回车</button>
         </div>
       </div>
-      <div class="live-browser-interaction-note">${esc(interactionHint)}</div>
+      <div class="live-browser-interaction-note">
+        <span data-live-browser-mode-summary>当前模式：${esc(liveBrowserModeLabel(session))}</span>
+        <span data-live-browser-ip-summary>当前 IP：${esc(liveBrowserCurrentIp(session))}</span>
+        <span data-live-browser-hint>${esc(interactionHint)}</span>
+      </div>
     </article>
   `;
 }
