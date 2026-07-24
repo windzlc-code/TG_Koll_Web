@@ -886,7 +886,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn(".live-browser-interaction-note", self.styles)
 
     def test_mobile_live_browser_header_keeps_status_and_compact_two_line_summary(self):
-        mobile_start = self.styles.rfind("@media (max-width: 760px)")
+        mobile_start = self.styles.rfind("@media (max-width: 760px) {")
         mobile_styles = self.styles[mobile_start:]
         mobile_header = self._css_block(".console-page .live-browser-card-head {", mobile_start)
         mobile_summary = self._css_block(".console-page .live-browser-mobile-summary {", mobile_start)
@@ -898,6 +898,33 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("display: inline-flex;", mobile_status)
         self.assertIn("live-browser-card-identity > [data-live-browser-meta]", mobile_styles)
         self.assertIn("live-browser-mobile-summary", self.source)
+
+    def test_expanded_mobile_browser_uses_one_compact_translucent_summary(self):
+        portrait_start = self.styles.rfind("@media (max-width: 760px) and (orientation: portrait)")
+        portrait_styles = self.styles[portrait_start:]
+        expanded_head = self._css_block(
+            ".console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-card-head {",
+            portrait_start,
+        )
+        task_summary = self._css_block(
+            ".console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-task-summary {",
+            portrait_start,
+        )
+        mobile_summary = self._css_block(
+            ".console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-mobile-summary {",
+            portrait_start,
+        )
+
+        self.assertIn("padding: 3px 6px;", expanded_head)
+        self.assertIn("background: rgb(5 12 13 / 37%);", expanded_head)
+        self.assertIn("display: none;", task_summary)
+        self.assertIn("display: grid;", mobile_summary)
+        self.assertIn("grid-template-columns: repeat(2, max-content);", mobile_summary)
+        self.assertIn("justify-content: center;", mobile_summary)
+        self.assertIn("live-browser-mobile-summary > span:first-child", portrait_styles)
+        self.assertIn("live-browser-mobile-summary > span:nth-child(2)", portrait_styles)
+        self.assertIn("live-browser-mobile-summary > span:nth-child(3)", portrait_styles)
+        self.assertIn("background: rgb(13 18 19 / 42%);", portrait_styles)
 
     def test_expanded_live_browser_toggles_its_console_frame_from_blank_areas(self):
         toggle = self._function_source("toggleLiveBrowserModalControls")
@@ -1321,7 +1348,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         status_hint = self._css_block(
             ".console-page .live-browser-interaction-note [data-live-browser-hint] {"
         )
-        mobile_density_start = self.styles.rindex("@media (max-width: 760px)")
+        mobile_density_start = self.styles.rindex("@media (max-width: 760px) {")
         mobile_density = self._css_block("@media (max-width: 760px)", mobile_density_start)
 
         self.assertIn("任务数：<b data-live-browser-task-count>", render_session)
