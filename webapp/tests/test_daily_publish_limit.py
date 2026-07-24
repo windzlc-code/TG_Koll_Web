@@ -362,6 +362,49 @@ class DailyPublishLimitTests(unittest.TestCase):
         self.assertEqual(slot_state, "unknown")
         self.assertEqual(policy["used"], 1)
 
+    def test_publish_batch_waits_until_complete_and_claims_in_sequence(self):
+        batch_id = "publish-batch-test"
+        first = self._payload(account_id="account-admin", persona_id="persona-admin")
+        first.payload.update({
+            "publish_batch_id": batch_id,
+            "publish_sequence_index": 1,
+            "publish_sequence_total": 2,
+            "publish_sequence_targets": ["发布第1篇", "发布第2篇"],
+        })
+        second = self._payload(account_id="account-admin", persona_id="persona-admin")
+        second.payload.update({
+            "publish_batch_id": batch_id,
+            "publish_sequence_index": 2,
+            "publish_sequence_total": 2,
+            "publish_sequence_targets": ["发布第1篇", "发布第2篇"],
+        })
+
+        self._create(first)
+        with mock.patch.object(social_automation_api, "_now", return_value=self.now):
+            self.assertIsNone(social_automation_api._claim_next_task())
+
+        self._create(second)
+        with mock.patch.object(social_automation_api, "_now", return_value=self.now):
+            claimed = social_automation_api._claim_next_task()
+            self.assertEqual(claimed["payload"]["publish_sequence_index"], 1)
+            batch = social_automation_api._claim_publish_batch_tail(claimed)
+
+        self.assertEqual(
+            [item["payload"]["publish_sequence_index"] for item in batch],
+            [1, 2],
+        )
+        with sqlite3.connect(self.db_path) as conn:
+            statuses = conn.execute(
+                """
+                SELECT status
+                FROM social_automation_tasks
+                WHERE json_extract(payload_json, '$.publish_batch_id') = ?
+                ORDER BY CAST(json_extract(payload_json, '$.publish_sequence_index') AS INTEGER)
+                """,
+                (batch_id,),
+            ).fetchall()
+        self.assertEqual([item[0] for item in statuses], ["running", "running"])
+
 
 if __name__ == "__main__":
     unittest.main()

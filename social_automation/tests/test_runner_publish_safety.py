@@ -378,6 +378,46 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         callback.assert_called_once_with("ready")
 
+    def test_publish_batch_reuses_one_browser_context_for_all_posts(self):
+        page = mock.Mock()
+        context = mock.Mock()
+        manager = mock.MagicMock()
+        manager.__enter__.return_value = context
+        control = {"account_login_status_callback": mock.Mock()}
+        tasks = [
+            {"id": "publish-1", "task_type": "publish_post", "platform": "threads", "payload": {}},
+            {"id": "publish-2", "task_type": "publish_post", "platform": "threads", "payload": {}},
+        ]
+
+        with (
+            mock.patch.object(runner, "_open_camoufox_context", return_value=manager) as open_context,
+            mock.patch.object(runner, "_import_initial_cookies"),
+            mock.patch.object(runner, "_first_page", return_value=page),
+            mock.patch.object(runner, "_sync_live_browser_viewport"),
+            mock.patch.object(runner, "_check_platform_login_without_disrupting", return_value={"status": "ready"}) as login,
+            mock.patch.object(
+                runner,
+                "_run_publish_post",
+                side_effect=[{"ok": True, "post": 1}, {"ok": True, "post": 2}],
+            ) as publish,
+        ):
+            results = runner.run_social_publish_batch(
+                tasks=tasks,
+                account={"platform": "threads"},
+                proxy=None,
+                data_dir=Path("."),
+                loggers=[_Logger(), _Logger()],
+                context_control=control,
+            )
+
+        self.assertEqual([item["task_id"] for item in results], ["publish-1", "publish-2"])
+        self.assertEqual(open_context.call_count, 1)
+        self.assertEqual(manager.__enter__.call_count, 1)
+        self.assertEqual(manager.__exit__.call_count, 1)
+        self.assertEqual(login.call_count, 1)
+        self.assertEqual(publish.call_count, 2)
+        self.assertEqual(control["current_task_id"], "publish-2")
+
     def test_publish_verification_keeps_browser_open_until_manual_login_completes(self):
         page = mock.Mock()
         context = mock.Mock()

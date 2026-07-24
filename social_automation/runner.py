@@ -281,6 +281,19 @@ def run_social_task(
             return _run_open_login(page, task, account, payload, screenshot_dir, logger, platform, cancel_event, context_control)
         if task_type == "check_login":
             return _run_check_login(page, task, account, payload, screenshot_dir, logger, platform)
+        if task_type == "publish_post":
+            return _run_publish_task_in_context(
+                page,
+                task,
+                account,
+                payload,
+                screenshot_dir,
+                logger,
+                platform,
+                cancel_event,
+                context_control,
+                verify_login=True,
+            )
 
         _raise_if_cancelled(cancel_event)
         if task_type == "publish_post":
@@ -397,6 +410,169 @@ def run_social_task(
             _raise_if_cancelled(cancel_event)
             return _run_share_post(page, task, payload, screenshot_dir, logger)
     raise UnsupportedActionError(f"未处理的社交自动化任务类型：{task_type}")
+
+
+def run_social_publish_batch(
+    *,
+    tasks: list[dict[str, Any]],
+    account: dict[str, Any],
+    proxy: dict[str, Any] | None,
+    data_dir: str | Path,
+    loggers: list[AutomationLogger],
+    cancel_event: Any | None = None,
+    context_control: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    if not tasks:
+        return []
+    if len(tasks) != len(loggers):
+        raise ValueError("Publish batch tasks and loggers must have the same length.")
+    platform = str(tasks[0].get("platform") or account.get("platform") or "").strip().lower()
+    if platform not in {"instagram", "threads"}:
+        raise UnsupportedActionError(f"Unsupported platform: {platform}")
+    for task in tasks:
+        if str(task.get("task_type") or "").strip() != "publish_post":
+            raise UnsupportedActionError("Only publish_post tasks can share a publish browser batch.")
+        task_platform = str(task.get("platform") or account.get("platform") or "").strip().lower()
+        if task_platform != platform:
+            raise UnsupportedActionError("Publish batch tasks must use one platform.")
+
+    data_root = Path(data_dir).resolve()
+    screenshot_dir = data_root / "social_automation" / "screenshots"
+    screenshot_dir.mkdir(parents=True, exist_ok=True)
+    first_payload = tasks[0].get("payload") if isinstance(tasks[0].get("payload"), dict) else {}
+    results: list[dict[str, Any]] = []
+    with _open_camoufox_context(
+        account=account,
+        proxy=proxy,
+        logger=loggers[0],
+        context_control=context_control,
+    ) as context:
+        _import_initial_cookies(context, first_payload.get("initial_cookies"), platform, loggers[0])
+        page = _first_page(context)
+        _sync_live_browser_viewport(page, context_control, loggers[0])
+        page.set_default_timeout(int(os.getenv("SOCIAL_AUTOMATION_DEFAULT_TIMEOUT_MS", "30000")))
+        for index, (task, logger) in enumerate(zip(tasks, loggers)):
+            if isinstance(context_control, dict):
+                context_control["task"] = dict(task)
+                context_control["current_task_id"] = str(task.get("id") or "")
+            payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+            logger.log(
+                "info",
+                "prepare",
+                "Publish batch task started.",
+                {
+                    "task_type": "publish_post",
+                    "platform": platform,
+                    "publish_sequence_index": index + 1,
+                    "publish_sequence_total": len(tasks),
+                },
+            )
+            try:
+                _raise_if_cancelled(cancel_event)
+                result = _run_publish_task_in_context(
+                    page,
+                    task,
+                    account,
+                    payload,
+                    screenshot_dir,
+                    logger,
+                    platform,
+                    cancel_event,
+                    context_control,
+                    verify_login=index == 0,
+                )
+            except BaseException as exc:
+                setattr(exc, "completed_batch_results", list(results))
+                setattr(exc, "failed_batch_task_id", str(task.get("id") or ""))
+                raise
+            results.append({"task_id": str(task.get("id") or ""), "result": result})
+    return results
+
+
+def _run_publish_task_in_context(
+    page: Any,
+    task: dict[str, Any],
+    account: dict[str, Any],
+    payload: dict[str, Any],
+    screenshot_dir: Path,
+    logger: AutomationLogger,
+    platform: str,
+    cancel_event: Any | None,
+    context_control: dict[str, Any] | None,
+    *,
+    verify_login: bool,
+) -> dict[str, Any]:
+    if verify_login:
+        login = _check_platform_login_without_disrupting(page, platform, logger)
+        if login.get("status") != "ready":
+            login = _check_platform_login(page, platform, logger)
+        if login.get("status") != "ready":
+            login = _attempt_publish_login_repair(
+                page,
+                task,
+                account,
+                payload,
+                screenshot_dir,
+                logger,
+                platform,
+                cancel_event,
+                login,
+                context_control,
+            )
+        if login.get("status") in {"totp_submitted", "account_confirmation_required"}:
+            login = _wait_for_publish_login_transition(
+                page,
+                task,
+                payload,
+                screenshot_dir,
+                logger,
+                platform,
+                cancel_event,
+                login,
+                context_control,
+            )
+        if login.get("status") in {"need_verification", "invalid_credentials"}:
+            detected_status = str(login.get("status") or "need_verification")
+            account_status = "need_verification" if detected_status == "need_verification" else "cookie_expired"
+            _report_account_login_status(context_control, account_status, logger)
+            _request_manual_takeover(context_control)
+            shot = _screenshot(page, screenshot_dir, task, "login_verification_required", logger)
+            login = _wait_for_manual_login_completion(
+                page,
+                task,
+                screenshot_dir,
+                logger,
+                platform,
+                cancel_event,
+                str(login.get("reason") or f"{_platform_name(platform)} requires login verification before publishing."),
+                detected_status,
+                shot,
+                login,
+                context_control,
+            )
+            if login.get("status") == "ready":
+                _resume_after_manual_takeover(context_control)
+        if login.get("status") != "ready":
+            shot = _screenshot(page, screenshot_dir, task, "login_not_ready", logger)
+            raise NeedManualError(
+                str(login.get("reason") or f"{_platform_name(platform)} requires login verification."),
+                str(login.get("status") or "need_verification"),
+                shot,
+            )
+        _report_account_login_status(context_control, "ready", logger)
+
+    _raise_if_cancelled(cancel_event)
+    return _run_publish_post(
+        page,
+        task,
+        payload,
+        screenshot_dir,
+        logger,
+        platform,
+        account=account,
+        cancel_event=cancel_event,
+        context_control=context_control,
+    )
 
 
 def _report_account_login_status(

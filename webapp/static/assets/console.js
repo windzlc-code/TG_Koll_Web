@@ -11232,12 +11232,20 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
       }
     }
     const postSourcePath = source === "favorites" ? "favorites" : "posts";
+    const publishBatchId = `publish_batch_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+    const publishSequenceTargets = posts.map((_, index) => `发布第${index + 1}篇`);
     showMsg(messageId, `正在提交 ${posts.length} 条${publishContentSourceLabel(source)}发布任务...`, true, {
       key: batchToastKey,
       kind: "queued",
     });
     const results = [];
     for (const [index, post] of posts.entries()) {
+      const sequenceMetadata = {
+        publish_batch_id: publishBatchId,
+        publish_sequence_index: index + 1,
+        publish_sequence_total: posts.length,
+        publish_sequence_targets: publishSequenceTargets,
+      };
       const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/${postSourcePath}/${encodeURIComponent(post.id)}/publish`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -11249,11 +11257,16 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
           media_paths: mediaPaths,
           priority: 50,
           max_retries: 2,
+          ...sequenceMetadata,
         }),
       });
       results.push(result);
       const task = result?.task;
       if (task?.id) {
+        task.payload = {
+          ...socialTaskPayload(task),
+          ...sequenceMetadata,
+        };
         mergeSocialTaskState(result?.login_task, task);
         state.socialTaskToastLabels[String(task.id)] = `${index + 1}/${posts.length} 篇 · ${account.username || account.display_name || ""}`;
         registerSocialTaskToastBatch(batchToastKey, results.map((item) => item?.task).filter(Boolean));
@@ -21919,7 +21932,6 @@ function liveBrowserTaskSummary(session) {
   const taskId = String(session?.task_id || "").trim();
   const task = (state.socialTasks || []).find((item) => String(item?.id || "").trim() === taskId) || {};
   const payload = socialTaskPayload(task);
-  const count = taskId ? 1 : 0;
   const taskType = String(session?.task_type || task?.task_type || "").trim().toLowerCase();
   const accountId = String(session?.account_id || task?.account_id || "").trim();
   const account = accountById(accountId);
@@ -21931,13 +21943,37 @@ function liveBrowserTaskSummary(session) {
     || account?.account_username
     || accountId,
   ).trim();
-  const platform = String(session?.platform || task?.platform || payload.platform || "").trim();
-  const publishTarget = [platform ? platformLabel(platform) : "", accountTarget]
-    .filter(Boolean)
-    .join(" · ");
+  const batchKey = String(state.socialTaskToastKeys?.[taskId] || "").trim();
+  const batch = batchKey ? state.socialTaskToastBatches?.[batchKey] : null;
+  const batchPayload = socialTaskPayload(batch?.tasks?.[taskId] || {});
+  const sequencePayload = (
+    Array.isArray(payload.publish_sequence_targets)
+    || Number(payload.publish_sequence_total) > 0
+    || Number(payload.publish_sequence_index) > 0
+  ) ? payload : batchPayload;
+  const rawTargets = Array.isArray(sequencePayload.publish_sequence_targets)
+    ? sequencePayload.publish_sequence_targets
+      .map((item) => String(item || "").trim())
+      .filter(Boolean)
+    : [];
+  const sequenceIndex = Math.max(1, Math.floor(Number(sequencePayload.publish_sequence_index) || 1));
+  const batchTaskCount = Array.isArray(batch?.taskIds) ? batch.taskIds.length : 0;
+  const sequenceTotal = Math.max(
+    1,
+    Math.floor(Number(sequencePayload.publish_sequence_total) || 0),
+    rawTargets.length,
+    batchTaskCount,
+    sequenceIndex,
+  );
+  const publishTargets = Array.from({ length: sequenceTotal }, (_, index) => {
+    const fallback = `发布第${index + 1}篇`;
+    const candidate = rawTargets[index] || "";
+    return /^发布第\d+篇(?:[：:].{1,24})?$/.test(candidate) ? candidate : fallback;
+  });
+  const count = taskId ? (taskType === "publish_post" ? sequenceTotal : 1) : 0;
   const target = String(
     taskType === "publish_post"
-      ? (publishTarget || "发布内容")
+      ? publishTargets.join("、")
       : (
         payload.target_title
         || payload.target_url

@@ -10446,6 +10446,10 @@ class PersonaDashboardDraftPublishPayload(BaseModel):
     priority: int = 50
     max_retries: int = 2
     media_paths: list[str] = Field(default_factory=list)
+    publish_batch_id: str = ""
+    publish_sequence_index: int = 1
+    publish_sequence_total: int = 1
+    publish_sequence_targets: list[str] = Field(default_factory=list)
 
 
 class PersonaDashboardMatrixPublishPayload(BaseModel):
@@ -13636,6 +13640,14 @@ def _publish_persona_archive_post(
                 "archive_post_id": clean_post_id,
                 "archive_post_title": str(post.get("title") or ""),
                 "archive_post_source": source_name,
+                "publish_batch_id": str(payload.publish_batch_id or "").strip(),
+                "publish_sequence_index": max(1, int(payload.publish_sequence_index or 1)),
+                "publish_sequence_total": max(1, int(payload.publish_sequence_total or 1)),
+                "publish_sequence_targets": [
+                    str(item or "").strip()
+                    for item in (payload.publish_sequence_targets or [])
+                    if str(item or "").strip()
+                ],
             },
             max_retries=max(0, min(int(payload.max_retries), 5)),
         ),
@@ -13807,6 +13819,22 @@ def _publish_persona_matrix(
             errors.append({"persona_id": persona_id, "persona_name": persona_name, "reason": str(exc)})
     if errors:
         return {"ok": False, "batch_id": batch_id, "created": [], "skipped": skipped, "errors": errors}
+
+    pending_by_account: dict[str, list[dict[str, Any]]] = {}
+    for item in pending:
+        pending_by_account.setdefault(str(item.get("account_id") or ""), []).append(item)
+    for account_id, account_items in pending_by_account.items():
+        targets = [f"发布第{index + 1}篇" for index, _item in enumerate(account_items)]
+        for index, item in enumerate(account_items):
+            task_payload = item.get("task_payload")
+            if not isinstance(task_payload, SocialTaskPayload):
+                continue
+            task_payload.payload.update({
+                "publish_batch_id": f"{batch_id}:{account_id}",
+                "publish_sequence_index": index + 1,
+                "publish_sequence_total": len(account_items),
+                "publish_sequence_targets": targets,
+            })
 
     if pending:
         require_daily_publish_capacity(

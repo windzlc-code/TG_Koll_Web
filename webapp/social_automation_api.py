@@ -4766,6 +4766,35 @@ def _publish_login_dependency_blocks_claim(conn: sqlite3.Connection, row: Any, n
     return True
 
 
+def _publish_batch_ready_for_claim(conn: sqlite3.Connection, row: Any) -> bool:
+    if str(row["task_type"] or "") != "publish_post":
+        return True
+    payload = _loads(row["payload_json"], {})
+    batch_id = str(payload.get("publish_batch_id") or "").strip()
+    total = max(1, int(payload.get("publish_sequence_total") or 1))
+    if not batch_id or total <= 1:
+        return True
+    batch_rows = conn.execute(
+        """
+        SELECT status, payload_json
+        FROM social_automation_tasks
+        WHERE account_id = ? AND task_type = 'publish_post'
+        """,
+        (str(row["account_id"] or ""),),
+    ).fetchall()
+    statuses_by_index: dict[int, set[str]] = {}
+    for item in batch_rows:
+        item_payload = _loads(item["payload_json"], {})
+        if str(item_payload.get("publish_batch_id") or "").strip() != batch_id:
+            continue
+        index = max(1, int(item_payload.get("publish_sequence_index") or 1))
+        statuses_by_index.setdefault(index, set()).add(str(item["status"] or ""))
+    if not all(index in statuses_by_index for index in range(1, total + 1)):
+        return False
+    current_index = max(1, int(payload.get("publish_sequence_index") or 1))
+    return all("success" in statuses_by_index.get(index, set()) for index in range(1, current_index))
+
+
 def _claim_next_task() -> dict[str, Any] | None:
     now = _now()
     _recover_orphaned_publish_confirmation_tasks(now)
@@ -4828,7 +4857,14 @@ def _claim_next_task() -> dict[str, Any] | None:
                       AND r.status IN ('running', 'need_manual')
                   )
                   {cursor_clause}
-                ORDER BY t.priority ASC, t.created_at ASC, t.id ASC
+                ORDER BY
+                    t.priority ASC,
+                    t.created_at ASC,
+                    COALESCE(
+                        CAST(json_extract(t.payload_json, '$.publish_sequence_index') AS INTEGER),
+                        1
+                    ) ASC,
+                    t.id ASC
                 LIMIT 50
                 """,
                 tuple(query_params),
@@ -4836,6 +4872,8 @@ def _claim_next_task() -> dict[str, Any] | None:
             if not rows:
                 break
             for candidate in rows:
+                if not _publish_batch_ready_for_claim(conn, candidate):
+                    continue
                 if str(candidate["account_id"] or "") in active_account_ids:
                     continue
                 candidate_user_id = int(candidate["user_id"] or 0)
@@ -4888,6 +4926,96 @@ def _claim_next_task() -> dict[str, Any] | None:
     )
     public["payload"] = _loads(updated["payload_json"], {})
     return public
+
+
+def _claim_publish_batch_tail(first_task: dict[str, Any]) -> list[dict[str, Any]]:
+    first_payload = first_task.get("payload") if isinstance(first_task.get("payload"), dict) else {}
+    batch_id = str(first_payload.get("publish_batch_id") or "").strip()
+    total = max(1, int(first_payload.get("publish_sequence_total") or 1))
+    if str(first_task.get("task_type") or "") != "publish_post" or not batch_id or total <= 1:
+        return [first_task]
+
+    now = _now()
+    account_id = str(first_task.get("account_id") or "")
+    first_index = max(1, int(first_payload.get("publish_sequence_index") or 1))
+    claimed_tasks: list[dict[str, Any]] = [first_task]
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM social_automation_tasks
+            WHERE account_id = ?
+              AND task_type = 'publish_post'
+              AND status = 'queued'
+              AND (scheduled_at = 0 OR scheduled_at <= ?)
+            ORDER BY created_at ASC, id ASC
+            """,
+            (account_id, now),
+        ).fetchall()
+        candidates: list[tuple[int, Any, dict[str, Any]]] = []
+        for row in rows:
+            payload = _loads(row["payload_json"], {})
+            if str(payload.get("publish_batch_id") or "").strip() != batch_id:
+                continue
+            index = max(1, int(payload.get("publish_sequence_index") or 1))
+            if index > first_index:
+                candidates.append((index, row, payload))
+        candidates.sort(key=lambda item: (item[0], int(item[1]["created_at"] or 0), str(item[1]["id"] or "")))
+
+        expected_index = first_index + 1
+        claimed_rows: list[Any] = []
+        for index, row, _payload in candidates:
+            if index != expected_index or 1 + len(claimed_rows) >= total:
+                break
+            if _publish_login_dependency_blocks_claim(conn, row, now):
+                break
+            slot = _ensure_daily_publish_slot(conn, row, now=now)
+            if slot is not None and not bool(int(slot["waived"] or 0)):
+                slot_state = str(slot["state"] or "")
+                if slot_state not in {"armed", "submitted", "confirmed", "unknown"}:
+                    _set_daily_publish_slot_state(
+                        conn,
+                        str(row["id"] or ""),
+                        "reserved",
+                        now=now,
+                        quota_day=_daily_publish_day(now),
+                    )
+            claimed = conn.execute(
+                """
+                UPDATE social_automation_tasks
+                SET status = 'running', started_at = ?, updated_at = ?
+                WHERE id = ? AND status = 'queued'
+                """,
+                (now, now, str(row["id"] or "")),
+            ).rowcount
+            if not claimed:
+                break
+            _insert_log(
+                conn,
+                str(row["id"] or ""),
+                "info",
+                "running",
+                "同批次发布任务已由当前浏览器连续执行。",
+                {"publish_batch_id": batch_id, "publish_sequence_index": index},
+            )
+            claimed_rows.append(
+                conn.execute(
+                    "SELECT * FROM social_automation_tasks WHERE id = ?",
+                    (str(row["id"] or ""),),
+                ).fetchone()
+            )
+            expected_index += 1
+
+        billing_statuses = _billing_reservation_statuses(conn, claimed_rows)
+        for row in claimed_rows:
+            public = _task_public(
+                row,
+                billing_reservation_status=billing_statuses.get(str(row["billing_reservation_id"] or ""), ""),
+            )
+            public["payload"] = _loads(row["payload_json"], {})
+            claimed_tasks.append(public)
+    return claimed_tasks
 
 
 def _requeue_confirmation_only_task(
@@ -4996,6 +5124,8 @@ def _recover_orphaned_manual_task(now: int) -> None:
 def _execute_claimed_task(task: dict[str, Any]) -> None:
     task_id = str(task.get("id") or "")
     task = dict(task)
+    batch_tasks = _claim_publish_batch_tail(task)
+    batch_task_ids = [str(item.get("id") or "") for item in batch_tasks if str(item.get("id") or "")]
     control = {
         "cancel_event": threading.Event(),
         "manual_takeover_event": threading.Event(),
@@ -5005,36 +5135,41 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
         "context": None,
         "manager": None,
         "task": dict(task),
+        "current_task_id": task_id,
+        "batch_tasks": batch_tasks,
         "live_browser_session_id": "",
     }
     control["account_login_status_callback"] = lambda status: _persist_running_account_login_status(
-        task_id,
+        str(control.get("current_task_id") or task_id),
         str(task.get("account_id") or ""),
         status,
     )
     control["publish_confirmation_callback"] = lambda confirmation: _persist_publish_confirmation_context(
-        task_id,
+        str(control.get("current_task_id") or task_id),
         confirmation,
     )
     control["manual_takeover_callback"] = lambda: _persist_manual_takeover_ack(
-        task_id,
+        str(control.get("current_task_id") or task_id),
         str(control.get("live_browser_session_id") or ""),
     )
     control["manual_takeover_resolved_callback"] = lambda: _persist_manual_takeover_resolved(
-        task_id,
+        str(control.get("current_task_id") or task_id),
         str(control.get("live_browser_session_id") or ""),
     )
     with _RUNNING_TASK_CONTROLS_LOCK:
-        _RUNNING_TASK_CONTROLS[task_id] = control
+        for current_task_id in batch_task_ids:
+            _RUNNING_TASK_CONTROLS[current_task_id] = control
     try:
         if _WORKER_STOP.is_set():
-            _force_stop_running_task(task_id, mark_cancelled=True)
+            for current_task_id in batch_task_ids:
+                _force_stop_running_task(current_task_id, mark_cancelled=True)
             return
         _execute_claimed_task_with_control(task, control)
     finally:
-        _discard_ephemeral_task_secrets(task_id)
+        _discard_ephemeral_task_secrets(*batch_task_ids)
         with _RUNNING_TASK_CONTROLS_LOCK:
-            _RUNNING_TASK_CONTROLS.pop(task_id, None)
+            for current_task_id in batch_task_ids:
+                _RUNNING_TASK_CONTROLS.pop(current_task_id, None)
 
 
 def _requeue_publish_confirmation(task_id: str, exc: BaseException) -> bool:
@@ -5181,11 +5316,89 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
         str(outcome or ""),
     )
     task = _apply_runtime_task_preferences(task, account, control)
-    from social_automation.runner import AutoLoginFailedError, NeedManualError, PublishConfirmationPendingError, UnsupportedActionError, run_social_task
+    from social_automation.runner import (
+        AutoLoginFailedError,
+        NeedManualError,
+        PublishConfirmationPendingError,
+        UnsupportedActionError,
+        run_social_publish_batch,
+        run_social_task,
+    )
 
     logger = _DbTaskLogger(task["id"])
     try:
         if _is_task_cancelled(task_id):
+            return
+        batch_tasks = control.get("batch_tasks") if isinstance(control.get("batch_tasks"), list) else [task]
+        if len(batch_tasks) > 1:
+            prepared_batch = [
+                _apply_runtime_task_preferences(dict(item), account, control)
+                for item in batch_tasks
+            ]
+            batch_loggers = [_DbTaskLogger(str(item.get("id") or "")) for item in prepared_batch]
+            try:
+                batch_results = _run_social_publish_batch_in_clean_thread(
+                    run_social_publish_batch,
+                    tasks=prepared_batch,
+                    account=account,
+                    proxy=proxy,
+                    loggers=batch_loggers,
+                    control=control,
+                )
+            except BaseException as exc:
+                completed = getattr(exc, "completed_batch_results", [])
+                completed_ids = {
+                    str(item.get("task_id") or "")
+                    for item in completed
+                    if isinstance(item, dict)
+                }
+                for item in completed:
+                    if not isinstance(item, dict):
+                        continue
+                    completed_task_id = str(item.get("task_id") or "")
+                    completed_result = item.get("result") if isinstance(item.get("result"), dict) else {}
+                    if completed_task_id and not _is_task_cancelled(completed_task_id):
+                        completed_status = "success" if completed_result.get("ok") else "failed"
+                        _finish_task(
+                            completed_task_id,
+                            completed_status,
+                            completed_result,
+                            "" if completed_status == "success" else str(completed_result.get("error") or "执行失败"),
+                            account_status="ready" if completed_status == "success" else "",
+                        )
+                failed_task_id = str(getattr(exc, "failed_batch_task_id", "") or task_id)
+                failed_task = next(
+                    (item for item in prepared_batch if str(item.get("id") or "") == failed_task_id),
+                    task,
+                )
+                _requeue_unstarted_publish_batch_tasks(
+                    [
+                        str(item.get("id") or "")
+                        for item in prepared_batch
+                        if str(item.get("id") or "") not in completed_ids
+                        and str(item.get("id") or "") != failed_task_id
+                    ]
+                )
+                task = failed_task
+                task_id = failed_task_id
+                control["task"] = dict(task)
+                control["current_task_id"] = task_id
+                raise
+            for item in batch_results:
+                if not isinstance(item, dict):
+                    continue
+                completed_task_id = str(item.get("task_id") or "")
+                completed_result = item.get("result") if isinstance(item.get("result"), dict) else {}
+                if not completed_task_id or _is_task_cancelled(completed_task_id):
+                    continue
+                completed_status = "success" if completed_result.get("ok") else "failed"
+                _finish_task(
+                    completed_task_id,
+                    completed_status,
+                    completed_result,
+                    "" if completed_status == "success" else str(completed_result.get("error") or "执行失败"),
+                    account_status="ready" if completed_status == "success" else "",
+                )
             return
         result = _run_social_task_in_clean_thread(
             run_social_task,
@@ -5253,6 +5466,90 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
     else:
         account_status = "ready" if status == "success" else ""
     _finish_task(task["id"], status, result, "" if status == "success" else str(result.get("error") or "执行失败"), account_status=account_status)
+
+
+def _requeue_unstarted_publish_batch_tasks(task_ids: list[str]) -> None:
+    clean_ids = [str(task_id or "").strip() for task_id in task_ids if str(task_id or "").strip()]
+    if not clean_ids:
+        return
+    now = _now()
+    placeholders = ",".join("?" for _ in clean_ids)
+    with db() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM social_automation_tasks WHERE id IN ({placeholders})",
+            tuple(clean_ids),
+        ).fetchall()
+        conn.execute(
+            f"""
+            UPDATE social_automation_tasks
+            SET status = 'queued', started_at = 0, finished_at = 0, updated_at = ?
+            WHERE id IN ({placeholders}) AND status = 'running'
+            """,
+            (now, *clean_ids),
+        )
+        for row in rows:
+            if str(row["task_type"] or "") == "publish_post":
+                _set_daily_publish_slot_state(
+                    conn,
+                    str(row["id"] or ""),
+                    "reserved",
+                    now=now,
+                    quota_day=_daily_publish_day(now),
+                )
+            _insert_log(
+                conn,
+                str(row["id"] or ""),
+                "info",
+                "publish_batch_paused",
+                "前序发布任务未完成，当前任务已返回队列等待后续执行。",
+                {},
+            )
+    wake_social_automation_worker()
+
+
+def _run_social_publish_batch_in_clean_thread(
+    runner: Callable[..., list[dict[str, Any]]],
+    *,
+    tasks: list[dict[str, Any]],
+    account: dict[str, Any],
+    proxy: dict[str, Any] | None,
+    loggers: list[Any],
+    control: dict[str, Any],
+) -> list[dict[str, Any]]:
+    result_box: dict[str, Any] = {}
+    error_box: dict[str, BaseException] = {}
+
+    def target() -> None:
+        try:
+            result_box["result"] = runner(
+                tasks=tasks,
+                account=account,
+                proxy=proxy,
+                data_dir=_DATA_DIR,
+                loggers=loggers,
+                cancel_event=control["cancel_event"],
+                context_control=control,
+            )
+        except BaseException as exc:
+            error_box["error"] = exc
+
+    first_task_id = str((tasks[0] if tasks else {}).get("id") or "")
+    thread = threading.Thread(
+        target=target,
+        name=f"social-publish-batch-{first_task_id[:12]}",
+        daemon=True,
+    )
+    thread.start()
+    while thread.is_alive():
+        thread.join(timeout=0.25)
+        if control["cancel_event"].is_set():
+            thread.join(timeout=2)
+            if thread.is_alive():
+                raise RuntimeError("publish batch runner did not stop after cancellation")
+    if error_box:
+        raise error_box["error"]
+    result = result_box.get("result")
+    return result if isinstance(result, list) else []
 
 
 def _run_social_task_in_clean_thread(

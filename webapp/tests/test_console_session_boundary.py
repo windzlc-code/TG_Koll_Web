@@ -1271,7 +1271,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
         self.assertIn("justify-self: end;", mobile_density)
 
-    def test_live_browser_takeover_wait_and_publish_target_are_not_post_titles(self):
+    def test_live_browser_takeover_wait_and_publish_target_uses_batch_actions(self):
         render_toggle = self._function_source("renderLiveBrowserModeToggle")
         update_card = self._function_source("updateLiveBrowserSessionCard")
         task_summary = self._function_source("liveBrowserTaskSummary")
@@ -1292,12 +1292,19 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
                 account_id: "account-1",
                 account_username: "Peacock83628",
                 platform: "threads",
-                payload: {{ archive_post_title: "第11篇" }},
+                payload: {{
+                  archive_post_title: "第11篇",
+                  publish_batch_id: "publish_batch_demo",
+                  publish_sequence_index: 2,
+                  publish_sequence_total: 3,
+                  publish_sequence_targets: ["发布第1篇", "发布第2篇", "发布第3篇"],
+                }},
               }}],
+              socialTaskToastKeys: {{}},
+              socialTaskToastBatches: {{}},
             }};
             function socialTaskPayload(task) {{ return task?.payload || {{}}; }}
             function accountById() {{ return {{ username: "fallback-account" }}; }}
-            function platformLabel(value) {{ return value === "threads" ? "Threads" : value; }}
             function statusLabel(value) {{ return value; }}
             {task_summary}
 
@@ -1308,9 +1315,136 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
               account_username: "Peacock83628",
               platform: "threads",
             }});
-            assert.equal(summary.count, 1);
-            assert.equal(summary.target, "Threads · Peacock83628");
+            assert.equal(summary.count, 3);
+            assert.equal(summary.target, "发布第1篇、发布第2篇、发布第3篇");
             assert.ok(!summary.target.includes("第11篇"));
+            assert.ok(!summary.target.includes("Threads"));
+            assert.ok(!summary.target.includes("Peacock83628"));
+
+            state.socialTasks = [{{
+              id: "legacy-task",
+              task_type: "publish_post",
+              payload: {{ archive_post_title: "旧标题" }},
+            }}];
+            const legacy = liveBrowserTaskSummary({{
+              task_id: "legacy-task",
+              task_type: "publish_post",
+            }});
+            assert.equal(legacy.count, 1);
+            assert.equal(legacy.target, "发布第1篇");
+
+            state.socialTasks = [{{
+              id: "legacy-batch-task-2",
+              task_type: "publish_post",
+              payload: {{}},
+            }}];
+            state.socialTaskToastKeys = {{ "legacy-batch-task-2": "legacy-batch" }};
+            state.socialTaskToastBatches = {{
+              "legacy-batch": {{
+                taskIds: ["legacy-batch-task-1", "legacy-batch-task-2"],
+                tasks: {{}},
+              }},
+            }};
+            const legacyBatch = liveBrowserTaskSummary({{
+              task_id: "legacy-batch-task-2",
+              task_type: "publish_post",
+            }});
+            assert.equal(legacyBatch.count, 2);
+            assert.equal(legacyBatch.target, "发布第1篇、发布第2篇");
+            """
+        )
+        self._run_node(harness)
+
+    def test_multi_publish_submission_sends_one_batch_and_sequence_metadata(self):
+        submit_publish = f"async {self._function_source('submitPublishContentTasks')}"
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("node:assert/strict");
+            const requests = [];
+            const state = {{
+              socialTaskToastLabels: {{}},
+              socialTaskToastBatches: {{}},
+              socialTaskToastKeys: {{}},
+            }};
+            function selectedPersona() {{ return {{ id: "persona-1" }}; }}
+            function normalizePublishContentSource() {{ return "posts"; }}
+            function publishAccountForPersona() {{
+              return {{ id: "account-1", platform: "threads", username: "publisher" }};
+            }}
+            async function promptPersonaAccountBinding() {{}}
+            function canSubmitPublishWithAccount() {{ return true; }}
+            function publishAccountBlockMessage() {{ return ""; }}
+            function publishSourceRows() {{
+              return [
+                {{ id: "post-1", content: "one" }},
+                {{ id: "post-2", content: "two" }},
+                {{ id: "post-3", content: "three" }},
+              ];
+            }}
+            function syncPublishSelectedPostIds() {{ return ["post-1", "post-2", "post-3"]; }}
+            function publishContentSourceLabel() {{ return "草稿"; }}
+            function normalizeScheduleValueForApi() {{ return ""; }}
+            function $() {{ return null; }}
+            async function ensureDailyPublishCapacity() {{ return true; }}
+            function socialTaskToastLaneKey() {{ return "batch-toast"; }}
+            function isActionLocked() {{ return false; }}
+            function activeSocialTaskFor() {{ return null; }}
+            function setActionLocked() {{}}
+            async function uploadAutomationMedia() {{ return []; }}
+            function filesFromInput() {{ return []; }}
+            function showMsg() {{}}
+            function publishContentForPost(post) {{ return post.content; }}
+            async function api(url, options) {{
+              const body = JSON.parse(options.body);
+              requests.push({{ url, body }});
+              return {{
+                task: {{
+                  id: `task-${{requests.length}}`,
+                  task_type: "publish_post",
+                  payload: {{ archive_post_id: `post-${{requests.length}}` }},
+                }},
+              }};
+            }}
+            function socialTaskPayload(task) {{ return task?.payload || {{}}; }}
+            function mergeSocialTaskState() {{}}
+            function registerSocialTaskToastBatch() {{}}
+            function syncSocialTaskToast() {{}}
+            function isFutureScheduledSocialTask() {{ return false; }}
+            function refreshLiveBrowserSessionsSoon() {{}}
+            async function watchPersonaPublishTaskSequence() {{}}
+            async function loadSocial() {{}}
+            async function loadPersonaDraftPosts() {{}}
+            async function loadPersonaFavoritePosts() {{}}
+            function clearUploadDropzoneState() {{}}
+            {submit_publish}
+
+            (async () => {{
+              const results = await submitPublishContentTasks("account-1", {{ id: "persona-1" }});
+              assert.equal(results.length, 3);
+              assert.equal(requests.length, 3);
+              const batchIds = new Set(requests.map((item) => item.body.publish_batch_id));
+              assert.equal(batchIds.size, 1);
+              assert.ok([...batchIds][0].startsWith("publish_batch_"));
+              assert.deepEqual(
+                requests.map((item) => item.body.publish_sequence_index),
+                [1, 2, 3],
+              );
+              assert.deepEqual(
+                requests.map((item) => item.body.publish_sequence_total),
+                [3, 3, 3],
+              );
+              for (const request of requests) {{
+                assert.deepEqual(
+                  request.body.publish_sequence_targets,
+                  ["发布第1篇", "发布第2篇", "发布第3篇"],
+                );
+                assert.ok(!request.body.publish_sequence_targets.join("").includes("threads"));
+                assert.ok(!request.body.publish_sequence_targets.join("").includes("publisher"));
+              }}
+            }})().catch((error) => {{
+              console.error(error);
+              process.exitCode = 1;
+            }});
             """
         )
         self._run_node(harness)
@@ -1415,6 +1549,22 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("payload.expected_proxy_id = originalProxyId", save)
         self.assertIn("payload.proxy_id = selectedProxyId", save)
         self.assertIn("payload.clear_residential_proxy = true", save)
+        self.assertNotIn("payload.residential_proxy", save)
+
+    def test_account_create_uses_the_full_editor_instead_of_the_legacy_form(self):
+        form = self._function_source("accountPoolCreateFormHtml")
+        modal = self._function_source("openAccountPoolCreateModal")
+        save = self._function_source("saveAccountPoolCreateForm")
+
+        self.assertIn("renderAccountCreatePasswordField()", form)
+        self.assertIn("renderAccountCreateTotpSection()", form)
+        self.assertIn("renderAccountProxyPickerPanel(null)", form)
+        self.assertNotIn('accountResidentialProxyFormHtml("accountPool")', form)
+        self.assertIn('modal.dataset.selectedProxyId = ""', modal)
+        self.assertIn('event.target.closest("[data-account-proxy-choice]")', modal)
+        self.assertIn("saveAccountInlineCustomProxy", modal)
+        self.assertIn('payload.proxy_id = selectedProxyId', save)
+        self.assertIn('payload.totp_secret_or_uri = totpSecret', save)
         self.assertNotIn("payload.residential_proxy", save)
 
     def test_account_proxy_picker_matches_backend_eligibility_and_tracks_real_changes(self):
