@@ -216,6 +216,34 @@ class SocialAccountTotpApiTests(unittest.TestCase):
         self.assertNotIn("current_code", account)
         self._assert_no_totp_material(account)
 
+    def test_account_creation_can_atomically_store_totp_without_exposing_the_secret(self):
+        created = self.owner.post(
+            "/api/persona_dashboard/automation/accounts",
+            json={
+                "platform": "threads",
+                "username": "created_with_totp",
+                "login_username": "created_with_totp@example.com",
+                "login_password": "created-account-password",
+                "totp_secret_or_uri": self.TOTP_SECRET,
+            },
+        )
+
+        self.assertEqual(created.status_code, 200, created.text)
+        account = created.json()["account"]
+        self.assertTrue(account["totp_configured"])
+        self.assertEqual(account["totp_status"], "pending")
+        self._assert_no_totp_material(created.json())
+        self._assert_plaintext_absent_from_database(self.TOTP_SECRET)
+
+        current = self.owner.get(self._totp_path(account["id"]) + "/code")
+        self.assertEqual(current.status_code, 200, current.text)
+        self.assertTrue(
+            governance.verify_totp(
+                self.TOTP_SECRET,
+                str(current.json()["current_code"]["code"]),
+            )
+        )
+
     def test_current_code_is_valid_no_store_and_delete_clears_configuration(self):
         configured = self._configure_totp()
         self.assertEqual(configured.status_code, 200, configured.text)

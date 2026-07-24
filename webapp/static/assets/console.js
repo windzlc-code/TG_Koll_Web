@@ -402,8 +402,6 @@ const state = {
   accountPoolBinding: false,
   accountPasswordValues: {},
   accountPasswordVisible: {},
-  personaAccountEditingIds: {},
-  accountPoolCreateOpen: false,
   accountPoolCreateDraft: {},
   proxyPoolPage: 1,
   proxyPoolPageSize: 10,
@@ -644,7 +642,6 @@ function clearTenantInMemoryState() {
   state.accountPoolBinding = false;
   state.accountPasswordValues = {};
   state.accountPasswordVisible = {};
-  state.personaAccountEditingIds = {};
   state.accountPoolCreateDraft = {};
   state.personaMediaTasks = {};
   state.personaGenerateRuns = {};
@@ -5404,7 +5401,6 @@ function setView(view) {
   try {
   if (state.liveBrowserExpandedSessionId) closeLiveBrowserLargeModal({ restoreFocus: false });
   clearAccountPasswordRevealState();
-  state.personaAccountEditingIds = {};
   clearConsoleNotices();
   state.view = view;
   syncPersonaDashboardStyles(view);
@@ -8415,7 +8411,6 @@ function renderUnifiedAutomationModule() {
   const warmupBusy = Boolean(selectedAccountId) && (isActionLocked("social", selectedAccountId, "threads_warmup") || warmupTask);
   const replyBusyStartedAt = actionTaskStartedAt(replyTask, "social", selectedAccountId, "threads_auto_reply");
   const warmupBusyStartedAt = actionTaskStartedAt(warmupTask, "social", selectedAccountId, "threads_warmup");
-  const credentialsMask = selectedAccount?.login_password_configured ? "已保存密码，留空则沿用" : "登录密码";
   const threadsOnlyNotice = platform !== "threads" && ["reply_comment", "reply_hot", "warmup"].includes(currentStep)
     ? `<div class="empty-state">当前操作只支持 Threads。请先切换到 Threads 平台。</div>`
     : "";
@@ -8434,24 +8429,9 @@ function renderUnifiedAutomationModule() {
     operationPanel = `
       <div class="automation-operation-card">
         <strong>浏览器执行账号</strong>
-        <p>用于登录、发布、养号和自动回复。绑定后会出现在上方账号切换里。</p>
-        <label>${esc(platformLabel(platform))} 执行账号
-          <input id="personaAutoUsername" value="" placeholder="${platform === "threads" ? "Threads 用户名 / handle" : "Instagram 用户名"}" />
-        </label>
+        <p>用于登录、发布、养号和自动回复。添加账号时统一配置登录资料、2FA 和代理 IP。</p>
         <div class="row-actions automation-capsule-actions">
-          <button type="button" data-persona-create-account>绑定账号</button>
-        </div>
-        <div class="form-grid">
-          <label>登录账号
-            <input id="personaAutoLoginUsername" value="${esc(selectedAccount?.login_username || selectedAccount?.username || "")}" placeholder="账号 / 邮箱 / 手机号" />
-          </label>
-          <label>登录密码
-            <input id="personaAutoLoginPassword" type="password" value="" placeholder="${esc(credentialsMask)}" />
-          </label>
-        </div>
-        <div class="row-actions">
-          <button type="button" data-persona-save-login ${selectedAccount ? "" : "disabled"}>保存登录资料</button>
-          <button type="button" data-persona-clear-login ${selectedAccount?.login_password_configured ? "" : "disabled"}>删除登录资料</button>
+          <button type="button" data-persona-manage-account="${esc(selectedAccountId)}">${selectedAccount ? "编辑账号" : "添加账号"}</button>
         </div>
       </div>`;
   } else if (currentStep === "reply_comment" || currentStep === "reply_hot") {
@@ -11772,65 +11752,7 @@ async function createPersonaAutomationAccount() {
     return;
   }
   const platform = selectedPersonaAutomationPlatform();
-  const username = String($("personaAutoUsername")?.value || "").trim().replace(/^@+/, "");
-  if (!username) {
-    showMsg("commandMsg", `请先填写 ${platform === "threads" ? "Threads" : "Instagram"} 用户名。`, false);
-    return;
-  }
-  const result = await api("/api/persona_dashboard/automation/accounts", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ persona_id: persona.id, platform, username }),
-  });
-  state.preferredAccountId = result.account?.id || "";
-  showMsg("commandMsg", "浏览器执行账号已创建并绑定。", true);
-  await loadSocial();
-}
-
-async function savePersonaAutomationLogin() {
-  const persona = selectedPersona();
-  const account = selectedPersonaAutomationAccount(persona);
-  if (!account) {
-    showMsg("commandMsg", "请先选择执行账号。", false);
-    return;
-  }
-  const loginUsername = String($("personaAutoLoginUsername")?.value || account.username || "").trim();
-  const loginPassword = String($("personaAutoLoginPassword")?.value || "");
-  if (!loginUsername) {
-    showMsg("commandMsg", "请先填写登录账号。", false);
-    return;
-  }
-  if (!loginPassword && !account.login_password_configured) {
-    showMsg("commandMsg", "请填写登录账号和密码，或先保存长期登录资料。", false);
-    return;
-  }
-  const payload = { login_username: loginUsername };
-  if (loginPassword) payload.login_password = loginPassword;
-  await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(account.id)}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if ($("personaAutoLoginPassword")) $("personaAutoLoginPassword").value = "";
-  showMsg("commandMsg", "登录资料已保存。", true);
-  await loadSocial();
-}
-
-async function clearPersonaAutomationLogin() {
-  const persona = selectedPersona();
-  const account = selectedPersonaAutomationAccount(persona);
-  if (!account) {
-    showMsg("commandMsg", "请先选择执行账号。", false);
-    return;
-  }
-  await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(account.id)}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ clear_login_credentials: true }),
-  });
-  if ($("personaAutoLoginPassword")) $("personaAutoLoginPassword").value = "";
-  showMsg("commandMsg", "登录资料已删除。", true);
-  await loadSocial();
+  openAccountPoolCreateModal({ platform, personaId: persona.id });
 }
 
 function buildPersonaThreadsTaskPayload(kind) {
@@ -18957,29 +18879,21 @@ function clearAccountPasswordReveal(accountId = "", scope = "pool") {
   delete state.accountPasswordVisible[accountPasswordStateKey(cleanId, scope)];
 }
 
-function isPersonaAccountEditing(accountId = "") {
-  return Boolean(state.personaAccountEditingIds[String(accountId || "").trim()]);
-}
-
-function setPersonaAccountEditing(accountId = "", editing = false) {
-  const cleanId = String(accountId || "").trim();
-  if (!cleanId) return;
-  if (editing) state.personaAccountEditingIds[cleanId] = true;
-  else delete state.personaAccountEditingIds[cleanId];
-}
-
 function renderAccountPasswordField(account, { scope = "persona", inputId = "" } = {}) {
   const accountId = String(account?.id || "");
   const passwordScope = scope || "persona";
   const visibilityKey = accountPasswordStateKey(accountId, passwordScope);
   const revealed = Boolean(state.accountPasswordVisible[visibilityKey]);
-  const password = String(state.accountPasswordValues[accountId] || "");
+  const creating = passwordScope === "pool-create";
+  const password = creating
+    ? accountPoolDraftValue("login_password")
+    : String(state.accountPasswordValues[accountId] || "");
   const buttonLabel = revealed ? "隐藏登录密码" : "显示登录密码";
-  const modalClass = passwordScope === "pool-edit" ? " account-password-field--modal" : "";
+  const modalClass = ["pool-create", "pool-edit"].includes(passwordScope) ? " account-password-field--modal" : "";
   return `<label class="persona-account-inline-field persona-account-inline-field--password${modalClass}">
     <span>登录密码</span>
     <span class="account-password-display account-password-display--input" data-account-password-display="${esc(accountId)}" data-account-password-scope="${passwordScope}" data-password-visible="${revealed ? "true" : "false"}">
-      <input class="account-inline-password-input" ${inputId ? `id="${esc(inputId)}"` : ""} data-account-password-input ${passwordScope === "persona" ? "data-persona-account-password" : ""} ${passwordScope === "pool-edit" ? "data-account-pool-edit-password" : ""} type="${revealed ? "text" : "password"}" value="${esc(revealed ? password : "")}" placeholder="${esc(accountPasswordMask(account))}" autocomplete="new-password" />
+      <input class="account-inline-password-input" ${inputId ? `id="${esc(inputId)}"` : ""} data-account-password-input ${passwordScope === "persona" ? "data-persona-account-password" : ""} ${passwordScope === "pool-edit" ? "data-account-pool-edit-password" : ""} type="${revealed ? "text" : "password"}" value="${esc(creating ? password : (revealed ? password : ""))}" placeholder="${esc(creating ? "用于自动登录，可稍后再填" : accountPasswordMask(account))}" autocomplete="new-password" />
       <button type="button" class="account-password-toggle" data-account-password-toggle="${esc(accountId)}" aria-label="${buttonLabel}" title="${buttonLabel}" aria-pressed="${revealed ? "true" : "false"}">${renderEyeIcon()}</button>
     </span>
   </label>`;
@@ -18987,14 +18901,24 @@ function renderAccountPasswordField(account, { scope = "persona", inputId = "" }
 
 async function toggleAccountPasswordVisibility(button) {
   const accountId = String(button?.dataset.accountPasswordToggle || "").trim();
-  const account = accountById(accountId);
-  if (!account) throw new Error("账号不存在，请刷新后重试。");
   const wrapper = button.closest("[data-account-password-display]");
   const input = wrapper?.querySelector("[data-account-password-input]") || null;
   const scope = String(wrapper?.dataset.accountPasswordScope || (input ? "persona" : "pool"));
   const visibilityKey = accountPasswordStateKey(accountId, scope);
   const wasVisible = button.dataset.passwordVisible === "true" || wrapper?.dataset.passwordVisible === "true";
   const nextVisible = !wasVisible;
+  if (scope === "pool-create") {
+    state.accountPasswordVisible[visibilityKey] = nextVisible;
+    button.dataset.passwordVisible = nextVisible ? "true" : "false";
+    button.setAttribute("aria-pressed", nextVisible ? "true" : "false");
+    button.setAttribute("aria-label", nextVisible ? "隐藏登录密码" : "显示登录密码");
+    button.setAttribute("title", nextVisible ? "隐藏登录密码" : "显示登录密码");
+    if (wrapper) wrapper.dataset.passwordVisible = nextVisible ? "true" : "false";
+    if (input) input.type = nextVisible ? "text" : "password";
+    return;
+  }
+  const account = accountById(accountId);
+  if (!account) throw new Error("账号不存在，请刷新后重试。");
   let password = input?.value || String(state.accountPasswordValues[accountId] || "");
   if (nextVisible && !password && account.login_password_configured) {
     const result = await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(accountId)}/credentials`, {
@@ -19027,61 +18951,6 @@ async function toggleAccountPasswordVisibility(button) {
   if (!nextVisible) delete state.accountPasswordValues[accountId];
 }
 
-async function savePersonaAccountCard(accountId = "", button = null) {
-  const cleanId = String(accountId || "").trim();
-  const card = button?.closest("[data-persona-account-card]");
-  if (!cleanId || !card) return false;
-  const value = (field) => String(card.querySelector(`[data-persona-account-field="${field}"]`)?.value || "").trim();
-  const account = accountById(cleanId);
-  const username = String(account?.username || "").trim().replace(/^@+/, "");
-  if (!username) throw new Error("请填写账号用户名。");
-  const passwordInput = card.querySelector("[data-persona-account-password]");
-  const loginPassword = passwordInput?.dataset.passwordDirty === "true" ? String(passwordInput.value || "") : "";
-  const payload = {
-    login_username: value("login_username") || username,
-  };
-  if (loginPassword) payload.login_password = loginPassword;
-  if (button) button.disabled = true;
-  try {
-    const result = await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(cleanId)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    state.accountPasswordVisible[accountPasswordStateKey(cleanId, "persona")] = false;
-    setPersonaAccountEditing(cleanId, false);
-    state.preferredAccountId = String(result?.account?.id || cleanId);
-    await loadSocial({ force: true });
-    renderSocialAccounts();
-    if (isPersonaWorkspaceModule()) renderPersonaDetail();
-    showMsg("commandMsg", "账号已保存。", true);
-    return true;
-  } finally {
-    if (button?.isConnected) button.disabled = false;
-  }
-}
-
-async function clearPersonaAccountLogin(accountId = "", button = null) {
-  const cleanId = String(accountId || "").trim();
-  if (!cleanId) return false;
-  if (button) button.disabled = true;
-  try {
-    await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(cleanId)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ clear_login_credentials: true }),
-    });
-    clearAccountPasswordRevealState();
-    await loadSocial({ force: true });
-    renderSocialAccounts();
-    if (isPersonaWorkspaceModule()) renderPersonaDetail();
-    showMsg("commandMsg", "登录资料已清除。", true);
-    return true;
-  } finally {
-    if (button?.isConnected) button.disabled = false;
-  }
-}
-
 function renderAccountPoolCardActions(account, { context = "pool" } = {}) {
   const accountId = String(account?.id || "");
   const proxyLabel = account?.proxy_id ? "切换代理" : "选择代理";
@@ -19106,41 +18975,19 @@ function renderAccountPoolCardActions(account, { context = "pool" } = {}) {
 function renderAccountPoolCard(account, { variant = "pool", active = false, checked = false, persona = null } = {}) {
   const accountId = String(account?.id || "");
   if (variant === "persona-settings") {
-    if (!isPersonaAccountEditing(accountId)) {
-      return `<article class="account-card account-pool-card persona-account-pool-card persona-account-pool-card--summary ${active ? "is-active" : ""}" data-persona-account-card="${esc(accountId)}" role="button" tabindex="0" aria-pressed="${active ? "true" : "false"}">
-        <div class="account-pool-card-main">
-          <span class="account-pool-card-copy">
-            <strong>${esc(accountDisplayName(account))}</strong>
-            <span class="account-pool-card-subline"><small>${esc(platformLabel(account.platform || "threads"))}</small><span class="status ${esc(accountStatusClassNames(accountDisplayedStatus(account)))}" data-account-status-for="${esc(accountId)}" title="${esc(accountStatusTitle(account))}">${esc(accountLastLoginCheckLabel(account))}</span>${renderAccountTotpBadge(account)}</span>
-          </span>
-        </div>
-        <div class="persona-account-summary-meta" aria-label="账号重要信息">
-          ${String(account.login_username || "").trim() && String(account.login_username || "").trim() !== String(account.username || "").trim() ? `<span><small>登录账号</small><strong>${esc(account.login_username)}</strong></span>` : ""}
-          <span><small>浏览器环境</small><strong>${esc(account.profile_dir ? "已配置" : "未配置")}</strong></span>
-          <span><small>代理 IP</small><strong data-account-proxy-for="${esc(accountId)}">${esc(accountResidentialProxyLabel(account))}</strong></span>
-        </div>
-        ${renderAccountPoolCardActions(account, { context: "persona-settings" })}
-      </article>`;
-    }
-    return `<article class="account-card account-pool-card persona-account-pool-card persona-account-pool-card--inline-edit ${active ? "is-active" : ""}" data-persona-account-card="${esc(accountId)}" role="button" tabindex="0" aria-pressed="${active ? "true" : "false"}">
+    return `<article class="account-card account-pool-card persona-account-pool-card persona-account-pool-card--summary ${active ? "is-active" : ""}" data-persona-account-card="${esc(accountId)}" role="button" tabindex="0" aria-pressed="${active ? "true" : "false"}">
       <div class="account-pool-card-main">
         <span class="account-pool-card-copy">
           <strong>${esc(accountDisplayName(account))}</strong>
           <span class="account-pool-card-subline"><small>${esc(platformLabel(account.platform || "threads"))}</small><span class="status ${esc(accountStatusClassNames(accountDisplayedStatus(account)))}" data-account-status-for="${esc(accountId)}" title="${esc(accountStatusTitle(account))}">${esc(accountLastLoginCheckLabel(account))}</span>${renderAccountTotpBadge(account)}</span>
         </span>
       </div>
-      <div class="persona-account-inline-fields" aria-label="账号资料">
-        <label class="persona-account-inline-field">
-          <span>登录账号</span>
-          <input data-persona-account-field="login_username" value="${esc(account.login_username || account.username || "")}" placeholder="登录账号" autocomplete="off" />
-        </label>
-        ${renderAccountPasswordField(account)}
+      <div class="persona-account-summary-meta" aria-label="账号重要信息">
+        ${String(account.login_username || "").trim() && String(account.login_username || "").trim() !== String(account.username || "").trim() ? `<span><small>登录账号</small><strong>${esc(account.login_username)}</strong></span>` : ""}
+        <span><small>浏览器环境</small><strong>${esc(account.profile_dir ? "已配置" : "未配置")}</strong></span>
+        <span><small>代理 IP</small><strong data-account-proxy-for="${esc(accountId)}">${esc(accountResidentialProxyLabel(account))}</strong></span>
       </div>
-      <div class="row-actions persona-account-inline-actions">
-        <button type="button" data-persona-account-save="${esc(accountId)}">保存账号</button>
-        <button type="button" data-persona-account-cancel-edit="${esc(accountId)}">取消编辑</button>
-        <button type="button" class="danger" data-persona-account-clear-login="${esc(accountId)}" ${account.login_password_configured ? "" : "disabled"}>清除登录资料</button>
-      </div>
+      ${renderAccountPoolCardActions(account, { context: "persona-settings" })}
     </article>`;
   }
   return `<article class="account-card account-pool-card ${active ? "is-active" : ""} ${checked ? "is-checked" : ""}" data-account-pool-account="${esc(accountId)}" role="button" tabindex="0" aria-pressed="${active ? "true" : "false"}">
@@ -19823,170 +19670,64 @@ async function testProxyForm(prefix = "", proxy = null) {
   return result;
 }
 
-function accountResidentialProxyFormHtml(prefix, proxy = null) {
-  const enabled = Boolean(proxy);
-  return `
-    <section class="account-residential-proxy">
-      <div class="account-residential-proxy-head">
-        <label class="account-proxy-enable">
-          <input id="${esc(prefix)}ProxyEnabled" type="checkbox" data-account-proxy-enabled="${esc(prefix)}" ${enabled ? "checked" : ""} />
-          <span>使用静态住宅代理</span>
-        </label>
-        <span class="status">可选</span>
-      </div>
-      <fieldset id="${esc(prefix)}ProxyFields" class="account-proxy-grid" ${enabled ? "" : "hidden disabled"}>
-        ${sharedProxyFieldsHtml(`${prefix}Proxy`, proxy)}
-      </fieldset>
-    </section>`;
-}
-
-function accountResidentialProxyPayload(prefix, accountName = "", proxy = null) {
-  if (!$(`${prefix}ProxyEnabled`)?.checked) return undefined;
-  const payload = sharedProxyPayload(`${prefix}Proxy`, proxy);
-  if (!payload) return null;
-  payload.protocol = payload.proxy_type;
-  delete payload.proxy_type;
-  if (!payload.name) payload.name = `[静态住宅] ${String(accountName || payload.host).trim()}`;
-  return payload;
-}
-
-function syncAccountResidentialProxyFields(prefix) {
-  const enabled = Boolean($(`${prefix}ProxyEnabled`)?.checked);
-  const fields = $(`${prefix}ProxyFields`);
-  if (!fields) return;
-  fields.hidden = !enabled;
-  fields.disabled = !enabled;
-}
-
-async function verifyAccountResidentialProxy(proxyId = "") {
-  const cleanId = String(proxyId || "").trim();
-  if (!cleanId) return false;
-  const result = await api(`/api/persona_dashboard/automation/proxies/${encodeURIComponent(cleanId)}/check`, { method: "POST" });
-  return Boolean(result?.proxy?.last_check_result?.ok);
-}
-
 function syncAccountPoolCreateDraftFromForm() {
   state.accountPoolCreateDraft = {
     username: accountPoolFieldValue("Username"),
     login_username: accountPoolFieldValue("LoginUsername"),
     login_password: String($("accountPoolLoginPassword")?.value || ""),
     display_name: accountPoolFieldValue("DisplayName"),
-    profile_dir: accountPoolFieldValue("ProfileDir"),
-    proxy_type: accountPoolFieldValue("ProxyType"),
-    proxy_host: accountPoolFieldValue("ProxyHost"),
-    proxy_port: accountPoolFieldValue("ProxyPort"),
-    proxy_username: accountPoolFieldValue("ProxyUsername"),
-    proxy_password: String($("accountPoolProxyPassword")?.value || ""),
-    proxy_confirmed: Boolean($("accountPoolProxyConfirmed")?.checked),
-    proxy_enabled: Boolean($("accountPoolProxyEnabled")?.checked),
+    totp_secret_or_uri: String($("accountPoolTotpSecret")?.value || "").trim(),
   };
 }
 
 function resetAccountPoolCreateForm() {
-  state.accountPoolCreateOpen = false;
   state.accountPoolCreateDraft = {};
+  delete state.accountPasswordVisible[accountPasswordStateKey("", "pool-create")];
 }
 
-function renderAccountPoolCreatePanel() {
-  return "";
+function renderAccountIdentityFields(account = null, mode = "create") {
+  const editing = mode === "edit";
+  const prefix = editing ? "accountPoolEdit" : "accountPool";
+  const username = editing ? String(account?.username || "") : accountPoolDraftValue("username");
+  const loginUsername = editing
+    ? String(account?.login_username || account?.username || "")
+    : accountPoolDraftValue("login_username");
+  const displayName = editing ? String(account?.display_name || "") : accountPoolDraftValue("display_name");
+  return `<div class="account-create-form account-create-form--modal">
+    <label>
+      <span>账号用户名</span>
+      <input id="${prefix}Username" value="${esc(username)}" placeholder="例如：liliacvuiy575" autocomplete="off" />
+    </label>
+    <label>
+      <span>登录账号（可选）</span>
+      <input id="${prefix}LoginUsername" value="${esc(loginUsername)}" placeholder="默认同账号用户名" autocomplete="off" />
+    </label>
+    ${renderAccountPasswordField(account, {
+      scope: editing ? "pool-edit" : "pool-create",
+      inputId: editing ? "accountPoolEditLoginPassword" : "accountPoolLoginPassword",
+    })}
+    <label>
+      <span>显示名称（可选）</span>
+      <input id="${prefix}DisplayName" value="${esc(displayName)}" placeholder="用于区分账号，可留空" autocomplete="off" />
+    </label>
+  </div>`;
 }
 
-function accountPoolCreateFormHtml() {
-  const platform = normalizeAccountPoolPlatform();
-  const platformLabel = accountPoolPlatforms.find(([value]) => value === platform)?.[1] || platform;
-  return `
-    <div class="account-pool-create-modal-body">
-      <p>当前平台：${esc(platformLabel)}</p>
-      <div class="account-create-form account-create-form--modal">
-          <label>
-            <span>账号用户名</span>
-            <input id="accountPoolUsername" value="${esc(accountPoolDraftValue("username"))}" placeholder="例如：liliacvuiy575" autocomplete="off" />
-          </label>
-          <label>
-            <span>登录账号（可选）</span>
-            <input id="accountPoolLoginUsername" value="${esc(accountPoolDraftValue("login_username"))}" placeholder="默认同账号用户名" autocomplete="off" />
-          </label>
-          <label>
-            <span>登录密码（可选）</span>
-            <input id="accountPoolLoginPassword" type="password" value="${esc(accountPoolDraftValue("login_password"))}" placeholder="用于自动登录，可稍后再填" autocomplete="new-password" />
-          </label>
-          <label>
-            <span>显示名称（可选）</span>
-            <input id="accountPoolDisplayName" value="${esc(accountPoolDraftValue("display_name"))}" placeholder="用于区分账号，可留空" autocomplete="off" />
-          </label>
-      </div>
-      ${accountResidentialProxyFormHtml("accountPool")}
-    </div>`;
+function renderAccountEditorForm(account = null, mode = "create") {
+  const editing = mode === "edit";
+  const platform = account?.platform || normalizeAccountPoolPlatform();
+  return `<div class="account-pool-create-modal-body">
+    <p>平台：${esc(platformLabel(platform))}</p>
+    ${renderAccountIdentityFields(account, mode)}
+    ${renderAccountTotpSection(account, mode)}
+    ${renderAccountProxyPickerPanel(account)}
+  </div>`;
 }
 
-function openAccountPoolCreateModal({ platform = "", personaId = "" } = {}) {
-  if (platform) state.accountPoolPlatform = normalizeAccountPoolPlatform(platform);
-  const bindPersonaId = String(personaId || "").trim();
-  resetAccountPoolCreateForm();
-  closeConsoleModal(null);
-  const modal = document.createElement("div");
-  modal.id = "consoleModal";
-  modal.className = "console-modal";
-  modal.innerHTML = `
-    <div class="console-modal-backdrop" data-account-pool-create-modal-cancel></div>
-    <section class="console-modal-dialog account-pool-create-modal" role="dialog" aria-modal="true" aria-labelledby="accountPoolCreateModalTitle">
-      <div class="console-modal-head">
-        <strong id="accountPoolCreateModalTitle">添加账号</strong>
-        ${renderModalCloseButton("data-account-pool-create-modal-cancel")}
-      </div>
-      <div class="console-modal-content">
-        ${accountPoolCreateFormHtml()}
-      </div>
-      <div class="console-modal-actions">
-        <button type="button" data-account-pool-create-modal-cancel>取消</button>
-        <button type="button" class="primary" data-account-pool-create-modal-save>保存账号</button>
-      </div>
-    </section>`;
-  document.body.appendChild(modal);
-  syncAccountResidentialProxyFields("accountPool");
-  $("accountPoolUsername")?.focus();
-
-  const close = () => {
-    modal.remove();
-    resetAccountPoolCreateForm();
-  };
-
-  modal.addEventListener("click", (event) => {
-    if (event.target.closest("[data-account-pool-create-modal-cancel]")) {
-      close();
-      return;
-    }
-    const testButton = event.target.closest("[data-proxy-inline-test]");
-    if (testButton) {
-      testButton.disabled = true;
-      testProxyForm("accountPoolProxy")
-        .catch((error) => showMsg("socialMsg", error.detail || error.message || "代理检测失败", false))
-        .finally(() => { testButton.disabled = false; });
-      return;
-    }
-    const saveButton = event.target.closest("[data-account-pool-create-modal-save]");
-    if (saveButton) {
-      saveButton.disabled = true;
-      saveAccountPoolCreateForm({ personaId: bindPersonaId })
-        .then((saved) => {
-          if (saved !== false) close();
-          else saveButton.disabled = false;
-        })
-        .catch((error) => {
-          saveButton.disabled = false;
-          showMsg("socialMsg", error.detail || error.message || "添加账号失败", false);
-        });
-    }
-  });
-  modal.addEventListener("change", (event) => {
-    if (event.target.closest('[data-account-proxy-enabled="accountPool"]')) syncAccountResidentialProxyFields("accountPool");
-  });
-  modal.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") close();
-  });
-}
-
-async function saveAccountPoolCreateForm({ personaId = "" } = {}) {
+async function saveAccountPoolCreateForm(options) {
+  options = options || {};
+  const personaId = String(options.personaId || "");
+  const proxyId = String(options.proxyId || "");
   syncAccountPoolCreateDraftFromForm();
   const platform = normalizeAccountPoolPlatform();
   const payload = {
@@ -19994,23 +19735,16 @@ async function saveAccountPoolCreateForm({ personaId = "" } = {}) {
     persona_id: String(personaId || "").trim(),
     username: accountPoolDraftValue("username").trim().replace(/^@+/, ""),
     display_name: accountPoolDraftValue("display_name").trim(),
-    profile_dir: accountPoolDraftValue("profile_dir").trim(),
     login_username: accountPoolDraftValue("login_username").trim(),
     login_password: accountPoolDraftValue("login_password"),
   };
+  const selectedProxyId = String(proxyId || "").trim();
+  if (selectedProxyId) payload.proxy_id = selectedProxyId;
+  const totpSecret = accountPoolDraftValue("totp_secret_or_uri").trim();
+  if (totpSecret) payload.totp_secret_or_uri = totpSecret;
   if (!payload.username) {
     showMsg("socialMsg", "请填写账号用户名。", false);
     return false;
-  }
-  const residentialProxy = accountResidentialProxyPayload("accountPool", payload.username);
-  if ($("accountPoolProxyEnabled")?.checked && !residentialProxy) return false;
-  if (residentialProxy) {
-    const preflight = await testProxyConfiguration(residentialProxy, "", "accountPoolProxyCheckResult", "accountPoolProxy");
-    if (!preflight.ok) {
-      showMsg("socialMsg", preflight.error || "静态住宅代理检测未通过，账号尚未保存。", false);
-      return false;
-    }
-    payload.residential_proxy = residentialProxy;
   }
   const result = await api("/api/persona_dashboard/automation/accounts", {
     method: "POST",
@@ -20018,26 +19752,15 @@ async function saveAccountPoolCreateForm({ personaId = "" } = {}) {
     body: JSON.stringify(payload),
   });
   const account = result?.account || {};
-  let proxyOk = true;
-  if (residentialProxy) {
-    try {
-      proxyOk = await verifyAccountResidentialProxy(account.proxy_id);
-    } catch (_error) {
-      proxyOk = false;
-    }
-  }
   state.accountPoolPlatform = normalizeAccountPoolPlatform(account.platform || payload.platform);
   state.accountPoolAccountId = String(account.id || "");
   state.accountPoolSelectedAccountIds = account.id ? [String(account.id)] : [];
+  state.preferredAccountId = String(account.id || "");
   resetAccountPoolCreateForm();
   await loadSocial();
-  if (!proxyOk) {
-    showMsg("socialMsg", "账号已保存，但住宅代理检测失败；修复代理前不会执行自动化任务。", false);
-    return true;
-  }
   showMsg("socialMsg", payload.persona_id
-    ? (residentialProxy ? "账号和静态住宅代理已保存，并已绑定当前人设。" : "账号已保存，并已绑定当前人设。")
-    : (residentialProxy ? "账号和静态住宅代理已保存。" : "账号已保存。"), true);
+    ? "账号已保存，并已绑定当前人设。"
+    : "账号已保存。", true);
   return true;
 }
 
@@ -20495,16 +20218,28 @@ function renderAccountProxyPickerPanel(account = null) {
   </section>`;
 }
 
-function renderAccountTotpSection(account = null) {
+function renderAccountTotpSection(account = null, mode = "edit") {
+  const creating = mode === "create";
   return `<section class="account-totp-section" data-account-totp-section>
     <div class="account-totp-head">
       <div>
         <strong>两步验证 (2FA)</strong>
         <span>支持 Base32 密钥或 otpauth URI</span>
       </div>
-      <span class="account-totp-state" data-account-totp-state></span>
+      <span class="account-totp-state" data-account-totp-state>${creating ? "2FA 未配置" : ""}</span>
     </div>
-    <div class="account-totp-body" data-account-totp-body></div>
+    <div class="account-totp-body" data-account-totp-body>
+      ${creating ? `<div class="account-totp-entry">
+        <label for="accountPoolTotpSecret">
+          <span>2FA 密钥</span>
+          <input id="accountPoolTotpSecret" value="${esc(accountPoolDraftValue("totp_secret_or_uri"))}" placeholder="输入 Base32 或 otpauth://..." autocomplete="off" autocapitalize="off" spellcheck="false" />
+        </label>
+        <div class="account-totp-entry-actions">
+          <button type="button" class="primary account-inline-action" data-account-totp-create-stage>${renderPlusIcon()}<span>添加 2FA</span></button>
+        </div>
+      </div>
+      <p class="account-totp-message" data-account-totp-message hidden></p>` : ""}
+    </div>
   </section>`;
 }
 
@@ -20874,60 +20609,51 @@ function createAccountTotpController(modal, account) {
   };
 }
 
-function openAccountPoolEditModal(accountId = "") {
-  const account = accountPoolAccounts().find((item) => String(item.id || "") === String(accountId || ""))
-    || state.socialAccounts.find((item) => String(item.id || "") === String(accountId || ""));
-  if (!account) {
-    showMsg("socialMsg", "账号不存在，请刷新后重试。", false);
-    return;
+function openAccountPoolEditorModal(options) {
+  options = options || {};
+  const {
+    account = null,
+    platform = "",
+    personaId = "",
+  } = options;
+  const editing = Boolean(account?.id);
+  if (!editing) {
+    if (platform) state.accountPoolPlatform = normalizeAccountPoolPlatform(platform);
+    resetAccountPoolCreateForm();
   }
+  const mode = editing ? "edit" : "create";
+  const bindPersonaId = String(personaId || "").trim();
+  const accountId = String(account?.id || "").trim();
+  const selectedProxyId = String(account?.proxy_id || "").trim();
   closeConsoleModal(null);
   const modal = document.createElement("div");
   modal.id = "consoleModal";
   modal.className = "console-modal";
-  modal.dataset.selectedProxyId = String(account.proxy_id || "").trim();
-  modal.dataset.originalProxyId = String(account.proxy_id || "").trim();
+  modal.dataset.selectedProxyId = selectedProxyId;
+  modal.dataset.originalProxyId = selectedProxyId;
   modal.dataset.accountProxyDirty = "false";
   modal.innerHTML = `
-    <div class="console-modal-backdrop" data-account-pool-edit-cancel></div>
-    <section class="console-modal-dialog account-pool-create-modal" role="dialog" aria-modal="true" aria-labelledby="accountPoolEditModalTitle">
+    <div class="console-modal-backdrop" data-account-pool-editor-cancel></div>
+    <section class="console-modal-dialog account-pool-create-modal" role="dialog" aria-modal="true" aria-labelledby="accountPoolEditorModalTitle">
       <div class="console-modal-head">
-        <strong id="accountPoolEditModalTitle">编辑账号</strong>
-        ${renderModalCloseButton("data-account-pool-edit-cancel")}
+        <strong id="accountPoolEditorModalTitle">${editing ? "编辑账号" : "添加账号"}</strong>
+        ${renderModalCloseButton("data-account-pool-editor-cancel")}
       </div>
       <div class="console-modal-content">
-        <div class="account-pool-create-modal-body">
-          <p>平台：${esc(platformLabel(account.platform || normalizeAccountPoolPlatform()))}</p>
-          <div class="account-create-form account-create-form--modal">
-            <label>
-              <span>账号用户名</span>
-              <input id="accountPoolEditUsername" value="${esc(account.username || "")}" placeholder="例如：liliacvuiy575" autocomplete="off" />
-            </label>
-            <label>
-              <span>登录账号（可选）</span>
-              <input id="accountPoolEditLoginUsername" value="${esc(account.login_username || account.username || "")}" placeholder="默认同账号用户名" autocomplete="off" />
-            </label>
-            ${renderAccountPasswordField(account, { scope: "pool-edit", inputId: "accountPoolEditLoginPassword" })}
-            <label>
-              <span>显示名称（可选）</span>
-              <input id="accountPoolEditDisplayName" value="${esc(account.display_name || "")}" placeholder="用于区分账号，可留空" autocomplete="off" />
-            </label>
-          </div>
-          ${renderAccountTotpSection(account)}
-          ${renderAccountProxyPickerPanel(account)}
-        </div>
+        ${renderAccountEditorForm(account, mode)}
       </div>
       <div class="console-modal-actions">
-        <button type="button" data-account-pool-edit-cancel>取消</button>
-        <button type="button" class="primary" data-account-pool-edit-save="${esc(account.id)}">保存修改</button>
+        <button type="button" data-account-pool-editor-cancel>取消</button>
+        <button type="button" class="primary" data-account-pool-editor-save>${editing ? "保存修改" : "保存账号"}</button>
       </div>
     </section>`;
   document.body.appendChild(modal);
-  const totpController = createAccountTotpController(modal, account);
-  $("accountPoolEditUsername")?.focus();
+  const totpController = editing ? createAccountTotpController(modal, account) : null;
+  $(`${editing ? "accountPoolEdit" : "accountPool"}Username`)?.focus();
   modal.__cleanup = () => {
-    totpController.close();
-    clearAccountPasswordReveal(account.id, "pool-edit");
+    totpController?.close();
+    if (editing) clearAccountPasswordReveal(accountId, "pool-edit");
+    else resetAccountPoolCreateForm();
   };
   const close = () => {
     if (accountProxyCustomIsBusy(modal)) {
@@ -20939,27 +20665,52 @@ function openAccountPoolEditModal(accountId = "") {
     return true;
   };
   modal.addEventListener("click", (event) => {
+    const totpCreateStage = event.target.closest("[data-account-totp-create-stage]");
+    if (totpCreateStage) {
+      syncAccountPoolCreateDraftFromForm();
+      const secret = accountPoolDraftValue("totp_secret_or_uri").trim();
+      const stateNode = modal.querySelector("[data-account-totp-state]");
+      const message = modal.querySelector("[data-account-totp-message]");
+      if (!secret) {
+        if (message) {
+          message.textContent = "请先输入 2FA 密钥。";
+          message.dataset.tone = "error";
+          message.hidden = false;
+        }
+        return;
+      }
+      if (stateNode) {
+        stateNode.textContent = "保存后启用";
+        stateNode.dataset.totpStatus = "pending";
+      }
+      if (message) {
+        message.textContent = "2FA 密钥已填写，保存账号后启用。";
+        message.dataset.tone = "success";
+        message.hidden = false;
+      }
+      return;
+    }
     const totpCopy = event.target.closest("[data-account-totp-copy]");
     if (totpCopy) {
-      void totpController.copyCode(totpCopy);
+      void totpController?.copyCode(totpCopy);
       return;
     }
     const totpSubmit = event.target.closest("[data-account-totp-submit]");
     if (totpSubmit) {
-      void totpController.submit(totpSubmit);
+      void totpController?.submit(totpSubmit);
       return;
     }
     if (event.target.closest("[data-account-totp-update]")) {
-      totpController.showUpdate();
+      totpController?.showUpdate();
       return;
     }
     if (event.target.closest("[data-account-totp-update-cancel]")) {
-      totpController.cancelUpdate();
+      totpController?.cancelUpdate();
       return;
     }
     const totpDelete = event.target.closest("[data-account-totp-delete]");
     if (totpDelete) {
-      void totpController.remove(totpDelete);
+      void totpController?.remove(totpDelete);
       return;
     }
     const passwordToggle = event.target.closest("[data-account-password-toggle]");
@@ -20968,7 +20719,7 @@ function openAccountPoolEditModal(accountId = "") {
         .catch((error) => showMsg("socialMsg", error.detail || error.message || "读取登录密码失败", false));
       return;
     }
-    if (event.target.closest("[data-account-pool-edit-cancel]")) {
+    if (event.target.closest("[data-account-pool-editor-cancel]")) {
       close();
       return;
     }
@@ -21022,31 +20773,56 @@ function openAccountPoolEditModal(accountId = "") {
       updateAccountProxyChoice(modal, choice.dataset.accountProxyChoice || "");
       return;
     }
-    const saveButton = event.target.closest("[data-account-pool-edit-save]");
+    const saveButton = event.target.closest("[data-account-pool-editor-save]");
     if (!saveButton) return;
     if (accountProxyCustomIsOpen(modal)) {
       showMsg("socialMsg", "请先完成自定义代理添加，或点击取消收起该表单。", false);
       return;
     }
     saveButton.disabled = true;
-    saveAccountPoolEditForm(saveButton.dataset.accountPoolEditSave || "")
+    const saveRequest = editing
+      ? saveAccountPoolEditForm(accountId)
+      : saveAccountPoolCreateForm({
+        personaId: bindPersonaId,
+        proxyId: modal.dataset.selectedProxyId || "",
+      });
+    saveRequest
       .then((saved) => {
         if (saved !== false) close();
         else saveButton.disabled = false;
       })
       .catch(async (error) => {
         saveButton.disabled = false;
-        const reconciled = await reconcileAccountProxyBindingConflict(modal, saveButton.dataset.accountPoolEditSave || "", error);
-        showMsg("socialMsg", reconciled ? "代理绑定已更新，其他编辑内容仍保留，请确认后重新保存。" : (error.detail || error.message || "保存账号失败"), false);
+        const reconciled = editing
+          ? await reconcileAccountProxyBindingConflict(modal, accountId, error)
+          : false;
+        showMsg("socialMsg", reconciled
+          ? "代理绑定已更新，其他编辑内容仍保留，请确认后重新保存。"
+          : (error.detail || error.message || (editing ? "保存账号失败" : "添加账号失败")), false);
       });
   });
   modal.addEventListener("input", (event) => {
+    if (!editing) syncAccountPoolCreateDraftFromForm();
     const passwordInput = event.target.closest?.("[data-account-password-input]");
-    if (passwordInput) passwordInput.dataset.passwordDirty = "true";
+    if (editing && passwordInput) passwordInput.dataset.passwordDirty = "true";
   });
   modal.addEventListener("keydown", (event) => {
     if (event.key === "Escape") close();
   });
+}
+
+function openAccountPoolCreateModal(options) {
+  openAccountPoolEditorModal(options);
+}
+
+function openAccountPoolEditModal(accountId = "") {
+  const account = accountPoolAccounts().find((item) => String(item.id || "") === String(accountId || ""))
+    || state.socialAccounts.find((item) => String(item.id || "") === String(accountId || ""));
+  if (!account) {
+    showMsg("socialMsg", "账号不存在，请刷新后重试。", false);
+    return;
+  }
+  openAccountPoolEditorModal({ account });
 }
 
 async function saveAccountPoolEditForm(accountId = "") {
@@ -21139,7 +20915,6 @@ function renderAccountPool() {
           ${renderAccountPoolPlatformTabs()}
           ${renderAccountPoolCards(accounts, selectedAccount)}
           ${renderAccountPoolAutomationPanel(selectedAccount)}
-          ${renderAccountPoolCreatePanel()}
         </div>
       </section>
       ${renderAccountPoolPersonaSidebar(selectedAccount)}
@@ -21596,7 +21371,6 @@ function setAccountBrowserPanel(panel = "accounts") {
 
 function syncAccountBrowserPanel() {
   const active = ["accounts", "proxies", "browsers"].includes(state.accountBrowserPanel) ? state.accountBrowserPanel : "accounts";
-  if (active !== "accounts" && state.accountPoolCreateOpen) resetAccountPoolCreateForm();
   const shell = $("accountBrowserShell");
   if (shell) shell.dataset.accountBrowserPanel = active;
   if (state.view === "accounts" && $("viewTitle")) {
@@ -22997,6 +22771,23 @@ function bindEvents() {
   ensureLanguageToggle();
   window.addEventListener("vecto:theme-change", (event) => applyTheme(event.detail?.theme));
   window.addEventListener("vecto:language-change", (event) => applyLanguage(event.detail?.language));
+  window.addEventListener("vecto:open-account-editor", (event) => {
+    const detail = event.detail || {};
+    if (detail.mode === "edit") {
+      const accountId = String(detail.account?.id || detail.accountId || "").trim();
+      const account = accountById(accountId) || detail.account || null;
+      if (!account) {
+        showMsg("commandMsg", "未找到要编辑的账号，请刷新后重试。", false);
+        return;
+      }
+      openAccountPoolEditorModal({ account });
+      return;
+    }
+    openAccountPoolCreateModal({
+      platform: String(detail.platform || "threads").trim().toLowerCase(),
+      personaId: String(detail.personaId || "").trim(),
+    });
+  });
   window.addEventListener("vecto:account-menu-open", () => {
     renderPersonalBillingSummary();
     loadBilling({ force: true }).catch(() => {});
@@ -24343,9 +24134,13 @@ function bindEvents() {
     if (event.target.closest("[data-persona-save-preset]")) savePersonaPreset().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
     if (event.target.closest("[data-persona-delete-preset]")) deletePersonaPreset().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
     if (event.target.closest("[data-persona-activate-preset]")) activatePersonaPreset().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
-    if (event.target.closest("[data-persona-create-account]")) createPersonaAutomationAccount().catch((error) => showMsg("commandMsg", error.detail || error.message || "绑定账号失败", false));
-    if (event.target.closest("[data-persona-save-login]")) savePersonaAutomationLogin().catch((error) => showMsg("commandMsg", error.detail || error.message || "保存登录资料失败", false));
-    if (event.target.closest("[data-persona-clear-login]")) clearPersonaAutomationLogin().catch((error) => showMsg("commandMsg", error.detail || error.message || "删除登录资料失败", false));
+    const personaManageAccount = event.target.closest("[data-persona-manage-account]");
+    if (personaManageAccount) {
+      const accountId = String(personaManageAccount.dataset.personaManageAccount || "").trim();
+      if (accountId) openAccountPoolEditModal(accountId);
+      else createPersonaAutomationAccount().catch((error) => showMsg("commandMsg", error.detail || error.message || "添加账号失败", false));
+      return;
+    }
     const personaOpenLogin = event.target.closest("[data-persona-open-login]");
     if (personaOpenLogin) {
       const persona = selectedPersona();
@@ -24370,33 +24165,6 @@ function bindEvents() {
       event.stopPropagation();
       toggleAccountPasswordVisibility(accountPasswordToggle)
         .catch((error) => showMsg(accountPasswordToggle.closest("[data-account-pool-account]") ? "socialMsg" : "commandMsg", error.detail || error.message || "读取登录密码失败", false));
-      return;
-    }
-    const personaAccountSave = event.target.closest("[data-persona-account-save]");
-    if (personaAccountSave) {
-      savePersonaAccountCard(personaAccountSave.dataset.personaAccountSave || "", personaAccountSave)
-        .catch((error) => showMsg("commandMsg", error.detail || error.message || "保存账号失败", false));
-      return;
-    }
-    const personaAccountStartEdit = event.target.closest("[data-persona-account-start-edit]");
-    if (personaAccountStartEdit) {
-      setPersonaAccountEditing(personaAccountStartEdit.dataset.personaAccountStartEdit || "", true);
-      renderPersonaDetail();
-      renderConfirmSummary();
-      return;
-    }
-    const personaAccountCancelEdit = event.target.closest("[data-persona-account-cancel-edit]");
-    if (personaAccountCancelEdit) {
-      clearAccountPasswordRevealState();
-      setPersonaAccountEditing(personaAccountCancelEdit.dataset.personaAccountCancelEdit || "", false);
-      renderPersonaDetail();
-      renderConfirmSummary();
-      return;
-    }
-    const personaAccountClearLogin = event.target.closest("[data-persona-account-clear-login]");
-    if (personaAccountClearLogin) {
-      clearPersonaAccountLogin(personaAccountClearLogin.dataset.personaAccountClearLogin || "", personaAccountClearLogin)
-        .catch((error) => showMsg("commandMsg", error.detail || error.message || "清除登录资料失败", false));
       return;
     }
     const personaAccountEdit = event.target.closest("[data-persona-account-edit]");
@@ -24442,7 +24210,6 @@ function bindEvents() {
     const personaAccountPlatform = event.target.closest("[data-persona-account-platform]");
     if (personaAccountPlatform) {
       clearAccountPasswordRevealState();
-      state.personaAccountEditingIds = {};
       state.personaAutomationPlatform = String(personaAccountPlatform.dataset.personaAccountPlatform || "").trim().toLowerCase() === "instagram" ? "instagram" : "threads";
       state.preferredAccountId = "";
       renderPersonaDetail();
@@ -24968,17 +24735,6 @@ function bindEvents() {
       openAccountPoolCreateModal();
       return;
     }
-    const accountCreateCancel = event.target.closest("[data-account-pool-create-cancel]");
-    if (accountCreateCancel) {
-      resetAccountPoolCreateForm();
-      renderSocialAccounts();
-      return;
-    }
-    const accountCreateSave = event.target.closest("[data-account-pool-create-save]");
-    if (accountCreateSave) {
-      saveAccountPoolCreateForm().catch((error) => showMsg("socialMsg", error.detail || error.message || "添加账号失败", false));
-      return;
-    }
     const accountCheckTarget = event.target.closest(".account-pool-card-check");
     if (accountCheckTarget) {
       event.preventDefault();
@@ -25122,9 +24878,6 @@ function bindEvents() {
   });
   document.addEventListener("click", (event) => {
     closeLiveBrowserActionMenus(event.target.closest(".live-browser-action-menu"));
-  });
-  if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("input", (event) => {
-    if (event.target.closest(".account-pool-create-panel")) syncAccountPoolCreateDraftFromForm();
   });
   if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("change", (event) => {
     const proxyPageSize = event.target.closest("[data-proxy-page-size]");

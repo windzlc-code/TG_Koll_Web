@@ -308,6 +308,7 @@ class SocialAccountPayload(BaseModel):
     status: str = "pending_login"
     login_username: str = ""
     login_password: str = ""
+    totp_secret_or_uri: str = Field(default="", max_length=2048)
     residential_proxy: ResidentialProxyPayload | None = None
 
 
@@ -1997,35 +1998,39 @@ def _brand_live_browser_html(content: bytes) -> bytes:
   letter-spacing: 0;
   line-height: 1.2;
 }
+#noVNC_transition_text button,
+#noVNC_transition .noVNC_logo {
+  display: none !important;
+}
 #noVNC_transition .noVNC_spinner {
   position: absolute !important;
   z-index: 3;
   top: var(--vecto-brand-signal-y);
   left: 50%;
   display: block !important;
-  width: 72px !important;
-  height: 4px !important;
+  width: 40px !important;
+  height: 8px !important;
   margin: 0 !important;
   border: 0 !important;
-  border-radius: 2px !important;
-  background: repeating-linear-gradient(
-    90deg,
-    rgba(255, 255, 255, 0.22) 0 20px,
-    transparent 20px 26px
-  ) !important;
+  border-radius: 999px !important;
+  background:
+    radial-gradient(circle at 4px 4px, rgba(255, 255, 255, 0.26) 0 3px, transparent 3.5px),
+    radial-gradient(circle at 20px 4px, rgba(255, 255, 255, 0.26) 0 3px, transparent 3.5px),
+    radial-gradient(circle at 36px 4px, rgba(255, 255, 255, 0.26) 0 3px, transparent 3.5px) !important;
   box-shadow: none !important;
   transform: translateX(-50%) !important;
   animation: none !important;
 }
 #noVNC_transition .noVNC_spinner::before {
   position: absolute;
-  inset: 0 auto 0 0;
-  width: 20px;
-  border-radius: 2px;
+  inset: 0 auto auto 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
   content: "";
   background: #ffffff;
   box-shadow: 0 0 12px rgba(255, 255, 255, 0.42);
-  animation: vecto-browser-signal 1.35s cubic-bezier(0.45, 0, 0.2, 1) infinite alternate;
+  animation: vecto-browser-dot-hop 1.15s ease-in-out infinite;
 }
 #noVNC_transition .noVNC_spinner::after {
   display: none !important;
@@ -2073,9 +2078,10 @@ def _brand_live_browser_html(content: bytes) -> bytes:
   from { opacity: 0; transform: translate(-50%, 8px); }
   to { opacity: 1; transform: translate(-50%, 0); }
 }
-@keyframes vecto-browser-signal {
-  from { transform: translateX(0); }
-  to { transform: translateX(52px); }
+@keyframes vecto-browser-dot-hop {
+  0%, 100% { transform: translateX(0) scale(0.82); }
+  33% { transform: translateX(16px) scale(1); }
+  66% { transform: translateX(32px) scale(0.82); }
 }
 @media (prefers-reduced-motion: reduce) {
   #noVNC_transition::before,
@@ -2087,15 +2093,38 @@ def _brand_live_browser_html(content: bytes) -> bytes:
 }
 @media (max-height: 520px), (max-width: 680px) {
   #noVNC_transition {
-    --vecto-brand-logo-size: 82px;
-    --vecto-brand-orbit-size: 112px;
-    --vecto-brand-logo-y: calc(50% - 38px);
-    --vecto-brand-status-y: calc(50% + 30px);
-    --vecto-brand-signal-y: calc(50% + 88px);
+    --vecto-brand-logo-size: 60px;
+    --vecto-brand-orbit-size: 82px;
+    --vecto-brand-logo-y: calc(50% - 28px);
+    --vecto-brand-status-y: calc(50% + 24px);
+    --vecto-brand-signal-y: calc(50% + 66px);
   }
   #noVNC_transition_text {
     width: min(280px, 84vw);
+    font-size: 13px !important;
   }
+  #noVNC_transition_text::before {
+    margin-bottom: 3px;
+    font-size: 10px;
+  }
+  #noVNC_transition .noVNC_spinner {
+    width: 30px !important;
+    height: 6px !important;
+    background:
+      radial-gradient(circle at 3px 3px, rgba(255, 255, 255, 0.26) 0 2px, transparent 2.5px),
+      radial-gradient(circle at 15px 3px, rgba(255, 255, 255, 0.26) 0 2px, transparent 2.5px),
+      radial-gradient(circle at 27px 3px, rgba(255, 255, 255, 0.26) 0 2px, transparent 2.5px) !important;
+  }
+  #noVNC_transition .noVNC_spinner::before {
+    width: 6px;
+    height: 6px;
+    animation-name: vecto-browser-dot-hop-compact;
+  }
+}
+@keyframes vecto-browser-dot-hop-compact {
+  0%, 100% { transform: translateX(0) scale(0.82); }
+  33% { transform: translateX(12px) scale(1); }
+  66% { transform: translateX(24px) scale(0.82); }
 }
 </style>"""
     html = html.replace("<title>KasmVNC</title>", "<title>Vecto 实时浏览器</title>", 1)
@@ -3587,6 +3616,11 @@ def create_social_account(
     login_password = str(payload.login_password or "")
     if login_password and _looks_like_non_password_text(login_password):
         raise HTTPException(status_code=400, detail="登录密码内容看起来像说明文字，请填写真实密码")
+    totp_secret = (
+        _normalize_social_account_totp_secret(payload.totp_secret_or_uri)
+        if str(payload.totp_secret_or_uri or "").strip()
+        else ""
+    )
     persona_id = str(payload.persona_id or "").strip()
     status = str(payload.status or "pending_login").strip()
     if status not in SOCIAL_ACCOUNT_STATUSES:
@@ -3643,6 +3677,19 @@ def create_social_account(
         if existing:
             raise HTTPException(status_code=409, detail="同平台账号用户名已存在")
         account_id = _NEW_ID("social_account")
+        totp_ciphertext = ""
+        if totp_secret:
+            try:
+                totp_ciphertext = encrypt_vault_secret(
+                    int(owner_user_id),
+                    _social_account_totp_purpose(account_id),
+                    totp_secret,
+                )
+            except PasswordVaultError as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail="密码保险库不可用，暂时无法保存 2FA 密钥",
+                ) from exc
         profile_dir = str(payload.profile_dir or "").strip()
         if not profile_dir:
             profile_dir = str((_DATA_DIR / "social_automation" / "profiles" / platform / account_id).resolve())
@@ -3682,6 +3729,18 @@ def create_social_account(
                 now,
             ),
         )
+        if totp_ciphertext:
+            conn.execute(
+                """
+                INSERT INTO social_account_totp_secrets(
+                  account_id, user_id, secret_ciphertext, status,
+                  last_used_counter, last_attempt_at, last_verified_at,
+                  last_error, created_at, updated_at
+                )
+                VALUES (?, ?, ?, 'pending', -1, 0, 0, '', ?, ?)
+                """,
+                (account_id, int(owner_user_id), totp_ciphertext, now, now),
+            )
         row = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (account_id,)).fetchone()
         if proxy_row is None and proxy_id:
             proxy_row = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()

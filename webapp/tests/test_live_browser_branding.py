@@ -10,7 +10,8 @@ def test_live_browser_html_uses_vecto_branding():
     assert 'id="vecto-live-browser-brand"' in branded
     assert "/assets/opc/vecto-logo-ui-icon.png" in branded
     assert "vecto-browser-brand-reveal" in branded
-    assert "vecto-browser-signal" in branded
+    assert "vecto-browser-dot-hop" in branded
+    assert "radial-gradient(circle at 4px 4px" in branded
     assert "prefers-reduced-motion: reduce" in branded
     assert "mask: url(\"/assets/opc/vecto-logo-ui-icon.png" in branded
     assert 'content: "VECTO OS"' in branded
@@ -19,6 +20,9 @@ def test_live_browser_html_uses_vecto_branding():
     assert "--vecto-brand-logo-y:" in branded
     assert "top: var(--vecto-brand-status-y);" in branded
     assert "transform: translate(-50%, 0);" in branded
+    assert "#noVNC_transition_text button," in branded
+    assert "#noVNC_transition .noVNC_logo" in branded
+    assert "display: none !important;" in branded
     assert "margin-top: 158px" not in branded
     assert "margin-top: 126px" not in branded
 

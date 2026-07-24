@@ -1266,9 +1266,13 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("text-align: right;", status_hint)
         self.assertIn("text-overflow: ellipsis;", status_hint)
         self.assertIn(
-            "grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);",
+            "grid-template-columns: minmax(0, 1fr) auto;",
             mobile_density,
         )
+        self.assertIn("grid-column: 1 / -1;", mobile_density)
+        self.assertIn("grid-row: 2;", mobile_density)
+        self.assertIn("justify-content: flex-start;", mobile_density)
+        self.assertIn("max-width: none;", mobile_density)
         self.assertIn("justify-self: end;", mobile_density)
 
     def test_live_browser_takeover_wait_and_publish_target_uses_batch_actions(self):
@@ -1486,11 +1490,12 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
     def test_account_browser_actions_bind_to_the_owning_shell(self):
         bind_events = self._function_source("bindEvents")
 
-        for event_name in ("click", "keydown", "input", "change"):
+        for event_name in ("click", "keydown", "change"):
             self.assertIn(
                 f'if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("{event_name}", (event) => {{',
                 bind_events,
             )
+        self.assertNotIn('event.target.closest(".account-pool-create-panel")', bind_events)
         self.assertIn('const liveBrowserMode = event.target.closest("[data-live-browser-mode]")', bind_events)
 
     def test_account_pool_visible_checkbox_uses_the_multi_select_path(self):
@@ -1528,7 +1533,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
     def test_account_proxy_picker_replaces_legacy_edit_checkbox_and_keeps_single_binding(self):
         card = self._section("function renderAccountPoolCard", "function renderAccountPoolCards")
         picker = self._function_source("openAccountProxyPickerModal")
-        modal = self._function_source("openAccountPoolEditModal")
+        modal = self._function_source("openAccountPoolEditorModal")
+        edit_entry = self._function_source("openAccountPoolEditModal")
+        editor = self._function_source("renderAccountEditorForm")
         save = self._function_source("saveAccountPoolEditForm")
         clear_password = self._function_source("clearAccountPasswordReveal")
 
@@ -1539,12 +1546,15 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('modal.dataset.accountProxyDirty = "false"', picker)
         self.assertIn('if (modal.dataset.accountProxyDirty !== "true")', picker)
         self.assertIn("reconcileAccountProxyBindingConflict", picker)
-        self.assertIn('modal.dataset.selectedProxyId = String(account.proxy_id || "").trim()', modal)
-        self.assertIn('modal.dataset.originalProxyId = String(account.proxy_id || "").trim()', modal)
-        self.assertIn("renderAccountProxyPickerPanel(account)", modal)
+        self.assertIn('const selectedProxyId = String(account?.proxy_id || "").trim()', modal)
+        self.assertIn("modal.dataset.selectedProxyId = selectedProxyId", modal)
+        self.assertIn("modal.dataset.originalProxyId = selectedProxyId", modal)
+        self.assertIn("renderAccountEditorForm(account, mode)", modal)
+        self.assertIn("renderAccountProxyPickerPanel(account)", editor)
         self.assertIn('event.target.closest("[data-account-proxy-choice]")', modal)
         self.assertNotIn('accountResidentialProxyFormHtml("accountPoolEdit"', modal)
-        self.assertIn('clearAccountPasswordReveal(account.id, "pool-edit")', modal)
+        self.assertIn('clearAccountPasswordReveal(accountId, "pool-edit")', modal)
+        self.assertIn("openAccountPoolEditorModal({ account })", edit_entry)
         self.assertIn("delete state.accountPasswordValues[cleanId]", clear_password)
         self.assertIn("delete state.accountPasswordVisible[accountPasswordStateKey(cleanId, scope)]", clear_password)
         self.assertIn('const selectedProxyId = String(editModal?.dataset.selectedProxyId || "").trim()', save)
@@ -1555,15 +1565,47 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("payload.residential_proxy", save)
 
     def test_account_create_uses_the_full_editor_instead_of_the_legacy_form(self):
-        form = self._function_source("accountPoolCreateFormHtml")
-        modal = self._function_source("openAccountPoolCreateModal")
+        editor = self._function_source("renderAccountEditorForm")
+        identity = self._function_source("renderAccountIdentityFields")
+        automation_create = self._function_source("createPersonaAutomationAccount")
+        automation_module = self._function_source("renderUnifiedAutomationModule")
+        modal = self._function_source("openAccountPoolEditorModal")
+        create_entry = self._function_source("openAccountPoolCreateModal")
+        edit_modal = self._function_source("openAccountPoolEditModal")
         save = self._function_source("saveAccountPoolCreateForm")
 
-        self.assertIn("renderAccountCreatePasswordField()", form)
-        self.assertIn("renderAccountCreateTotpSection()", form)
-        self.assertIn("renderAccountProxyPickerPanel(null)", form)
-        self.assertNotIn('accountResidentialProxyFormHtml("accountPool")', form)
-        self.assertIn('modal.dataset.selectedProxyId = ""', modal)
+        self.assertIn("renderAccountIdentityFields(account, mode)", editor)
+        self.assertIn("renderAccountTotpSection(account, mode)", editor)
+        self.assertIn("renderAccountProxyPickerPanel(account)", editor)
+        self.assertIn("data-account-totp-create-stage", self._function_source("renderAccountTotpSection"))
+        self.assertIn("<span>2FA 密钥</span>", self._function_source("renderAccountTotpSection"))
+        self.assertIn("2FA 未配置", self._function_source("renderAccountTotpSection"))
+        self.assertIn("renderAccountEditorForm(account, mode)", modal)
+        self.assertIn('event.target.closest("[data-account-totp-create-stage]")', modal)
+        self.assertIn("openAccountPoolEditorModal(options)", create_entry)
+        self.assertIn("openAccountPoolEditorModal({ account })", edit_modal)
+        self.assertNotIn("renderAccountCreatePasswordField", self.source)
+        self.assertNotIn("renderAccountCreateTotpSection", self.source)
+        self.assertIn('scope: editing ? "pool-edit" : "pool-create"', identity)
+        self.assertIn("renderAccountPasswordField(account", identity)
+        self.assertNotIn("accountPoolCreateFormHtml", self.source)
+        self.assertNotIn("accountResidentialProxyFormHtml", self.source)
+        self.assertIn("openAccountPoolCreateModal", automation_create)
+        self.assertNotIn('api("/api/persona_dashboard/automation/accounts"', automation_create)
+        self.assertIn("data-persona-manage-account", automation_module)
+        self.assertNotIn("personaAutoLoginUsername", automation_module)
+        self.assertNotIn("personaAutoLoginPassword", automation_module)
+        self.assertNotIn("data-persona-save-login", self.source)
+        self.assertNotIn("data-persona-clear-login", self.source)
+        self.assertNotIn("data-persona-account-save", self.source)
+        self.assertNotIn("data-persona-account-cancel-edit", self.source)
+        self.assertNotIn("persona-account-pool-card--inline-edit", self.source)
+        self.assertIn('"vecto:open-account-editor"', self.source)
+        self.assertIn('"vecto:open-account-editor"', self.persona_dashboard_source)
+        self.assertNotIn("personaAutoLoginUsername", self.persona_dashboard_source)
+        self.assertNotIn("personaAutoLoginPassword", self.persona_dashboard_source)
+        self.assertNotIn("personaAutoCreateAccount", self.persona_dashboard_source)
+        self.assertIn("modal.dataset.selectedProxyId = selectedProxyId", modal)
         self.assertIn('event.target.closest("[data-account-proxy-choice]")', modal)
         self.assertIn("saveAccountInlineCustomProxy", modal)
         self.assertIn('payload.proxy_id = selectedProxyId', save)
@@ -1615,7 +1657,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
 
     def test_account_proxy_picker_can_create_and_select_a_custom_proxy(self):
         picker = self._function_source("openAccountProxyPickerModal")
-        edit_modal = self._function_source("openAccountPoolEditModal")
+        editor_modal = self._function_source("openAccountPoolEditorModal")
         picker_panel = self._function_source("renderAccountProxyPickerPanel")
         inline_save = self._function_source("saveAccountInlineCustomProxy")
         proxy_modal = self._section("function openProxyModal", "async function refreshProxyPool")
@@ -1624,9 +1666,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("accountProxyInlineCustomFormHtml", picker)
         self.assertIn("saveAccountInlineCustomProxy", picker)
         self.assertNotIn("openProxyModal", picker)
-        self.assertIn("data-account-proxy-custom-add", edit_modal)
-        self.assertIn("saveAccountInlineCustomProxy", edit_modal)
-        self.assertNotIn("openProxyModal", edit_modal)
+        self.assertIn("data-account-proxy-custom-add", editor_modal)
+        self.assertIn("saveAccountInlineCustomProxy", editor_modal)
+        self.assertNotIn("openProxyModal", editor_modal)
         self.assertIn('accountProxyCustomAddButtonHtml("edit")', picker_panel)
         self.assertIn('accountProxyInlineCustomFormHtml("edit")', picker_panel)
         self.assertIn('testProxyConfiguration(payload, "", "accountProxyCustomCheckResult"', inline_save)
