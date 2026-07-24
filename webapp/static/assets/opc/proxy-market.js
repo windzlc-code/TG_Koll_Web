@@ -600,7 +600,7 @@
   function renderAccount() {
     elements.accountBar.classList.toggle("is-authenticated", state.authenticated);
     if (!state.authenticated) {
-      elements.accountLabel.textContent = "游客瀏覽";
+      elements.accountLabel.textContent = "遊客瀏覽";
       elements.accountMessage.textContent = "目錄可直接查看；登入後可領取可用節點。";
       elements.quotaSummary.textContent = "登入後查看";
       return;

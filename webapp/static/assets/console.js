@@ -1130,46 +1130,78 @@ const i18nAttrOriginals = new WeakMap();
 let languageObserver = null;
 
 const CONSOLE_I18N_MARKER = "data-i18n-ui";
+const CONSOLE_I18N_ATTRIBUTES_ONLY_MARKER = "data-i18n-attributes-only";
 const CONSOLE_I18N_SKIP_SELECTOR = "[data-i18n-skip], [data-site-header], script, style, textarea";
 const CONSOLE_I18N_ATTRIBUTES = ["title", "aria-label", "placeholder", "data-mobile-label"];
-const CONSOLE_DYNAMIC_UI_IDS = new Set([
-  "mobileNavClose",
-  "mobileNavToggle",
-  "viewTitle",
-  "moduleEyebrow",
-  "moduleTitle",
-  "refreshAll",
-  "openAdmin",
-  "accountBrowserAccountsTab",
-  "accountBrowserProxiesTab",
-  "workerState",
-  "refreshBilling",
-  "btnPersonaDashboardRefresh",
-  "btnPersonaDashboardRefreshAll",
-]);
+const CONSOLE_DYNAMIC_TEXT_I18N_SELECTOR = [
+  `[${CONSOLE_I18N_MARKER}]`,
+  "button",
+  "label",
+  "option",
+  "legend",
+  "[role='button']",
+  "[role='tab']",
+].join(", ");
+const CONSOLE_DYNAMIC_ATTRIBUTE_I18N_SELECTOR = [
+  "[title]",
+  "[aria-label]",
+  "[placeholder]",
+  "[data-mobile-label]",
+].join(", ");
 
 function currentLanguage() {
   return document.documentElement.dataset.language === "zh-Hant" ? "zh-Hant" : "zh-Hans";
 }
 
-function markConsoleUiElement(node) {
+function markConsoleUiElement(node, { attributesOnly = false } = {}) {
   if (!node || node.nodeType !== Node.ELEMENT_NODE || node.closest(CONSOLE_I18N_SKIP_SELECTOR)) return;
   node.setAttribute(CONSOLE_I18N_MARKER, "true");
+  if (attributesOnly) node.setAttribute(CONSOLE_I18N_ATTRIBUTES_ONLY_MARKER, "true");
+  else node.removeAttribute(CONSOLE_I18N_ATTRIBUTES_ONLY_MARKER);
 }
 
 function markConsoleStaticUi(root = document.body) {
   if (!root) return;
+  if (root.nodeType === Node.TEXT_NODE) {
+    if (root.nodeValue?.trim() && !root.parentElement?.closest(CONSOLE_I18N_SKIP_SELECTOR)) {
+      markConsoleUiElement(root.parentElement);
+    }
+    return;
+  }
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
       const parent = node.parentElement;
       if (!node.nodeValue?.trim() || parent?.closest(CONSOLE_I18N_SKIP_SELECTOR)) return NodeFilter.FILTER_REJECT;
-      if (parent?.id && !CONSOLE_DYNAMIC_UI_IDS.has(parent.id)) return NodeFilter.FILTER_REJECT;
       return NodeFilter.FILTER_ACCEPT;
     },
   });
   while (walker.nextNode()) markConsoleUiElement(walker.currentNode.parentElement);
   root.querySelectorAll("[title], [aria-label], [placeholder], [data-mobile-label]")
     .forEach((node) => markConsoleUiElement(node));
+}
+
+function markConsoleDynamicUi(root) {
+  if (!root) return;
+  if (root.nodeType === Node.TEXT_NODE) {
+    const parent = root.parentElement;
+    if (root.nodeValue?.trim() && parent?.matches(CONSOLE_DYNAMIC_TEXT_I18N_SELECTOR)) {
+      markConsoleUiElement(parent);
+    }
+    return;
+  }
+  if (root.nodeType !== Node.ELEMENT_NODE) return;
+  if (root.matches(CONSOLE_DYNAMIC_TEXT_I18N_SELECTOR)) markConsoleUiElement(root);
+  else if (root.matches(CONSOLE_DYNAMIC_ATTRIBUTE_I18N_SELECTOR)) {
+    markConsoleUiElement(root, { attributesOnly: true });
+  }
+  root.querySelectorAll(CONSOLE_DYNAMIC_TEXT_I18N_SELECTOR)
+    .forEach((node) => markConsoleUiElement(node));
+  root.querySelectorAll(CONSOLE_DYNAMIC_ATTRIBUTE_I18N_SELECTOR)
+    .forEach((node) => {
+      if (!node.matches(CONSOLE_DYNAMIC_TEXT_I18N_SELECTOR)) {
+        markConsoleUiElement(node, { attributesOnly: true });
+      }
+    });
 }
 
 function consoleUiElements(root) {
@@ -1205,7 +1237,11 @@ function toTraditionalChinese(value) {
 }
 
 function translateTextNode(node, language) {
-  if (!node?.nodeValue?.trim() || !node.parentElement?.matches(`[${CONSOLE_I18N_MARKER}]`)) return;
+  if (
+    !node?.nodeValue?.trim()
+    || !node.parentElement?.matches(`[${CONSOLE_I18N_MARKER}]`)
+    || node.parentElement?.hasAttribute(CONSOLE_I18N_ATTRIBUTES_ONLY_MARKER)
+  ) return;
   if (!i18nTextOriginals.has(node)) i18nTextOriginals.set(node, node.nodeValue);
   const original = i18nTextOriginals.get(node);
   node.nodeValue = language === "zh-Hant" ? toTraditionalChinese(original) : original;
@@ -1326,7 +1362,10 @@ function startLanguageObserver() {
         refreshConsoleUiTextSource(mutation.target, language);
         return;
       }
-      mutation.addedNodes.forEach((node) => translateConsoleLanguage(node, language));
+      mutation.addedNodes.forEach((node) => {
+        markConsoleDynamicUi(node);
+        translateConsoleLanguage(node, language);
+      });
     });
   });
   languageObserver.observe(document.body, {

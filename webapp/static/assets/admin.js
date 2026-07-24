@@ -35,15 +35,24 @@ const ADMIN_I18N_SKIP_SELECTOR = [
   "#userDetailSub",
 ].join(", ");
 const ADMIN_ZH_HANT_PHRASES = [
+  ["连接与查询", "連線與查詢"],
+  ["加密密钥检查", "加密金鑰檢查"],
+  ["数据库", "資料庫"],
+  ["未启用", "未啟用"],
+  ["已启用", "已啟用"],
   ["账号", "帳號"],
   ["账户", "帳戶"],
   ["运营", "營運"],
   ["后台", "後台"],
   ["信息", "資訊"],
   ["配置", "設定"],
+  ["设置", "設定"],
   ["默认", "預設"],
   ["创建", "建立"],
   ["日志", "日誌"],
+  ["密钥", "金鑰"],
+  ["备注", "備註"],
+  ["用户", "使用者"],
   ["动态验证码", "動態驗證碼"],
   ["二维码", "QR Code"],
 ].sort((left, right) => right[0].length - left[0].length);
@@ -95,6 +104,19 @@ function adminTranslatedValue(value, language = currentAdminLanguage()) {
 function markAdminUiElement(node) {
   if (!node || node.nodeType !== Node.ELEMENT_NODE || node.closest(ADMIN_I18N_SKIP_SELECTOR)) return;
   node.setAttribute(ADMIN_I18N_MARKER, "true");
+}
+
+function markAdminDynamicUiElement(node) {
+  if (!node || node.nodeType !== Node.ELEMENT_NODE) return node;
+  node.setAttribute(ADMIN_I18N_MARKER, "true");
+  translateAdminLanguage(node, currentAdminLanguage());
+  return node;
+}
+
+function createAdminDynamicUiText(value, tagName = "span") {
+  const node = document.createElement(tagName);
+  node.textContent = String(value == null ? "" : value);
+  return markAdminDynamicUiElement(node);
 }
 
 function markAdminStaticUi(root = document.body) {
@@ -3524,7 +3546,7 @@ function createAdminUserBadge(text, tone) {
   const badge = document.createElement("span");
   badge.className = `admin-user-badge admin-user-badge-${tone}`;
   badge.textContent = text;
-  return badge;
+  return markAdminDynamicUiElement(badge);
 }
 
 function syncUserRoleView() {
@@ -3732,6 +3754,7 @@ async function loadUsers(page = adminState.userListPage) {
     emptyCell.className = "admin-user-empty";
     emptyCell.colSpan = 10;
     emptyCell.textContent = role === "admin" ? "暂无管理员账号" : "暂无客户账号";
+    markAdminDynamicUiElement(emptyCell);
     emptyRow.appendChild(emptyCell);
     body.appendChild(emptyRow);
     return;
@@ -3756,6 +3779,7 @@ async function loadUsers(page = adminState.userListPage) {
     const accountCell = document.createElement("td");
     accountCell.className = "admin-user-account-cell";
     const accountName = document.createElement("strong");
+    accountName.id = `admin-user-name-${u.id}`;
     accountName.textContent = String(u.username || "-");
     const accountId = document.createElement("span");
     accountId.textContent = `ID ${u.id}`;
@@ -3797,6 +3821,7 @@ async function loadUsers(page = adminState.userListPage) {
     if (unlimited) {
       balanceCell.title = "无限算力";
       balanceCell.setAttribute("aria-label", "无限算力");
+      markAdminDynamicUiElement(balanceCell);
     }
     tr.appendChild(balanceCell);
 
@@ -3807,11 +3832,16 @@ async function loadUsers(page = adminState.userListPage) {
       button.type = "button";
       button.className = `ghost admin-user-icon-button${act === "archive_user" ? " is-danger" : ""}`;
       button.innerHTML = ADMIN_USER_ICONS[icon] || ADMIN_USER_ICONS.detail;
-      button.setAttribute("aria-label", `${label}：${u.username}`);
+      const actionLabel = createAdminDynamicUiText(label);
+      actionLabel.id = `admin-user-action-${u.id}-${act}`;
+      actionLabel.className = "sr-only";
+      button.appendChild(actionLabel);
+      button.setAttribute("aria-labelledby", `${actionLabel.id} ${accountName.id}`);
       button.title = label;
       button.dataset.act = act;
       button.dataset.id = String(u.id);
       Object.entries(extra).forEach(([key, value]) => { button.dataset[key] = String(value); });
+      markAdminDynamicUiElement(button);
       actions.appendChild(button);
     };
     addAction("查看详情", "user_detail", "detail");
@@ -4212,7 +4242,7 @@ function renderUserSessions(payload = {}) {
   const items = Array.isArray(payload.items) ? payload.items : [];
   container.replaceChildren();
   if (!items.length) {
-    container.appendChild(createEmptyState("该账号没有登录会话"));
+    container.appendChild(markAdminDynamicUiElement(createEmptyState("该账号没有登录会话")));
     return;
   }
   const now = Math.floor(Date.now() / 1000);
@@ -4222,10 +4252,24 @@ function renderUserSessions(payload = {}) {
     row.className = "admin-session-item";
     const copy = document.createElement("div");
     const title = document.createElement("strong");
-    title.textContent = `${item.device_id || "未知设备"} · ${item.ip_address || "未知 IP"}`;
+    title.append(
+      item.device_id ? String(item.device_id) : createAdminDynamicUiText("未知设备"),
+      " · ",
+      item.ip_address ? String(item.ip_address) : createAdminDynamicUiText("未知 IP"),
+    );
     const detail = document.createElement("span");
-    const ended = item.revoked_at ? `撤销于 ${formatTime(item.revoked_at)}${item.revoke_reason ? ` · ${item.revoke_reason}` : ""}` : `到期 ${formatTime(item.expires_at)}`;
-    detail.textContent = `${oneLine(item.user_agent || "未知客户端")} · 最近活动 ${formatTime(item.last_seen_at || item.created_at)} · ${ended}`;
+    detail.append(
+      item.user_agent ? oneLine(item.user_agent) : createAdminDynamicUiText("未知客户端"),
+      " · ",
+      createAdminDynamicUiText("最近活动"),
+      ` ${formatTime(item.last_seen_at || item.created_at)} · `,
+    );
+    if (item.revoked_at) {
+      detail.append(createAdminDynamicUiText("撤销于"), ` ${formatTime(item.revoked_at)}`);
+      if (item.revoke_reason) detail.append(" · ", String(item.revoke_reason));
+    } else {
+      detail.append(createAdminDynamicUiText("到期"), ` ${formatTime(item.expires_at)}`);
+    }
     copy.append(title, detail);
     row.append(copy, createGovernanceBadge(active ? "active" : (item.revoked_at ? "revoked" : "expired"), active ? "success" : "neutral"));
     container.appendChild(row);
@@ -4274,7 +4318,7 @@ function renderPasswordHistory(payload = {}) {
   const items = Array.isArray(payload.items) ? payload.items : [];
   container.replaceChildren();
   if (!items.length) {
-    container.appendChild(createEmptyState("没有可恢复的密码历史"));
+    container.appendChild(markAdminDynamicUiElement(createEmptyState("没有可恢复的密码历史")));
     return;
   }
   const now = Math.floor(Date.now() / 1000);
@@ -4286,9 +4330,21 @@ function renderPasswordHistory(payload = {}) {
     const title = document.createElement("strong");
     title.textContent = `${formatTime(item.created_at)} · ${item.source || "password_change"}`;
     const detail = document.createElement("span");
-    detail.textContent = Number(item.restored_at || 0)
-      ? `已于 ${formatTime(item.restored_at)} 恢复`
-      : `有效至 ${formatTime(item.expires_at)} · 操作者 ${item.actor_user_id || "用户本人"}`;
+    if (Number(item.restored_at || 0)) {
+      detail.append(
+        createAdminDynamicUiText("已于"),
+        ` ${formatTime(item.restored_at)} `,
+        createAdminDynamicUiText("恢复"),
+      );
+    } else {
+      detail.append(
+        createAdminDynamicUiText("有效至"),
+        ` ${formatTime(item.expires_at)} · `,
+        createAdminDynamicUiText("操作者"),
+        " ",
+        item.actor_user_id ? String(item.actor_user_id) : createAdminDynamicUiText("用户本人"),
+      );
+    }
     copy.append(title, detail);
     const button = document.createElement("button");
     button.type = "button";
@@ -4296,6 +4352,7 @@ function renderPasswordHistory(payload = {}) {
     button.textContent = available ? "恢复此密码" : "不可恢复";
     button.disabled = !available;
     button.dataset.passwordRestore = String(item.id || "");
+    markAdminDynamicUiElement(button);
     row.append(copy, button);
     container.appendChild(row);
   });
@@ -4590,7 +4647,7 @@ function createGovernanceBadge(value, tone = governanceTone(value)) {
   const badge = document.createElement("span");
   badge.className = `admin-semantic-badge is-${tone}`;
   badge.textContent = governanceLabel(value);
-  return badge;
+  return markAdminDynamicUiElement(badge);
 }
 
 function createEmptyState(message) {
@@ -4698,19 +4755,30 @@ function renderGovernanceHealth(health = {}) {
   if (!container) return;
   const vault = health.password_vault || {};
   const rows = [
-    ["数据库", health.database || "unknown", "连接与查询"],
-    ["密码保险库", vault.healthy ? "healthy" : "degraded", vault.error || vault.status || "加密密钥检查"],
-    ["计费执行", health.billing_enforcement ? "active" : "disabled", health.billing_enforcement ? "已启用" : "未启用"],
+    ["数据库", health.database || "unknown", "连接与查询", true],
+    [
+      "密码保险库",
+      vault.healthy ? "healthy" : "degraded",
+      vault.error || vault.status || "加密密钥检查",
+      !vault.error && !vault.status,
+    ],
+    [
+      "计费执行",
+      health.billing_enforcement ? "active" : "disabled",
+      health.billing_enforcement ? "已启用" : "未启用",
+      true,
+    ],
   ];
   container.replaceChildren();
-  rows.forEach(([name, status, detail]) => {
+  rows.forEach(([name, status, detail, detailIsUi]) => {
     const row = document.createElement("div");
     row.className = "admin-health-row";
     const copy = document.createElement("div");
     const title = document.createElement("strong");
-    title.textContent = name;
+    title.appendChild(createAdminDynamicUiText(name));
     const description = document.createElement("span");
-    description.textContent = String(detail || "-");
+    if (detailIsUi) description.appendChild(createAdminDynamicUiText(detail));
+    else description.textContent = String(detail || "-");
     copy.append(title, description);
     row.append(copy, createGovernanceBadge(status));
     container.appendChild(row);
@@ -4993,7 +5061,7 @@ function renderSecurityAlerts(payload = {}) {
   adminState.securityRows = rows;
   container.replaceChildren();
   if (!rows.length) {
-    container.appendChild(createEmptyState("当前筛选条件下没有安全告警"));
+    container.appendChild(markAdminDynamicUiElement(createEmptyState("当前筛选条件下没有安全告警")));
     return;
   }
   rows.forEach((item) => {
@@ -5002,15 +5070,23 @@ function renderSecurityAlerts(payload = {}) {
     const copy = document.createElement("div");
     copy.className = "admin-security-alert-copy";
     const title = document.createElement("strong");
-    title.textContent = String(item.title || item.alert_type || "安全告警");
+    if (item.title || item.alert_type) title.textContent = String(item.title || item.alert_type);
+    else title.appendChild(createAdminDynamicUiText("安全告警"));
     const summary = document.createElement("span");
-    summary.textContent = oneLine(item.summary || "无摘要");
+    if (item.summary) summary.textContent = oneLine(item.summary);
+    else summary.appendChild(createAdminDynamicUiText("无摘要"));
     copy.append(title, summary);
     const meta = document.createElement("div");
     meta.className = "admin-security-alert-meta";
     meta.append(createGovernanceBadge(item.severity), createGovernanceBadge(item.status));
     const seen = document.createElement("span");
-    seen.textContent = `最近：${formatTime(item.last_seen_at || item.updated_at)} · 用户 ${item.target_user_id || "-"}`;
+    seen.append(
+      createAdminDynamicUiText("最近："),
+      formatTime(item.last_seen_at || item.updated_at),
+      " · ",
+      createAdminDynamicUiText("用户"),
+      ` ${item.target_user_id || "-"}`,
+    );
     meta.appendChild(seen);
     const actions = document.createElement("div");
     actions.className = "admin-security-alert-actions";
@@ -5021,18 +5097,21 @@ function renderSecurityAlerts(payload = {}) {
       option.value = value;
       option.textContent = governanceLabel(value);
       option.selected = String(item.status) === value;
+      markAdminDynamicUiElement(option);
       status.appendChild(option);
     });
     const note = document.createElement("input");
     note.maxLength = 2000;
     note.placeholder = "处置备注";
-    note.setAttribute("aria-label", `${title.textContent} 处置备注`);
+    note.setAttribute("aria-label", `处置备注 ${item.id}`);
+    markAdminDynamicUiElement(note);
     const save = document.createElement("button");
     save.type = "button";
     save.className = "primary";
     save.textContent = "保存";
     save.dataset.securitySave = String(item.id || "");
     save.dataset.statusControl = "";
+    markAdminDynamicUiElement(save);
     actions.append(status, note, save);
     article.append(copy, meta, actions);
     container.appendChild(article);
@@ -5108,7 +5187,7 @@ function renderServiceAccounts(payload = {}) {
     const row = document.createElement("tr");
     const cell = document.createElement("td");
     cell.colSpan = 6;
-    cell.appendChild(createEmptyState("尚未创建服务账号"));
+    cell.appendChild(markAdminDynamicUiElement(createEmptyState("尚未创建服务账号")));
     row.appendChild(cell);
     body.appendChild(row);
     return;
@@ -5120,22 +5199,27 @@ function renderServiceAccounts(payload = {}) {
     const purpose = document.createElement("input");
     purpose.value = String(item.purpose || "");
     purpose.maxLength = 500;
-    purpose.setAttribute("aria-label", `${item.name} 用途`);
+    purpose.setAttribute("aria-label", `用途 ${item.id}`);
+    markAdminDynamicUiElement(purpose);
     purposeCell.appendChild(purpose);
     row.appendChild(purposeCell);
     const scopeCell = document.createElement("td");
     const scopes = document.createElement("input");
     scopes.value = (item.allowed_scopes || []).join(", ");
-    scopes.setAttribute("aria-label", `${item.name} 权限范围`);
+    scopes.setAttribute("aria-label", `权限范围 ${item.id}`);
+    markAdminDynamicUiElement(scopes);
     scopeCell.appendChild(scopes);
     row.appendChild(scopeCell);
     const statusCell = document.createElement("td");
     const status = document.createElement("select");
+    status.setAttribute("aria-label", `服务账号状态 ${item.id}`);
+    markAdminDynamicUiElement(status);
     ["active", "disabled", "revoked"].forEach((value) => {
       const option = document.createElement("option");
       option.value = value;
       option.textContent = governanceLabel(value);
       option.selected = String(item.status) === value;
+      markAdminDynamicUiElement(option);
       status.appendChild(option);
     });
     statusCell.appendChild(status);
@@ -5144,9 +5228,17 @@ function renderServiceAccounts(payload = {}) {
     const expires = document.createElement("input");
     expires.type = "datetime-local";
     expires.value = localInputFromTimestamp(item.expires_at);
-    expires.setAttribute("aria-label", `${item.name} 到期时间`);
+    expires.setAttribute("aria-label", `到期时间 ${item.id}`);
+    markAdminDynamicUiElement(expires);
     const lastUsed = document.createElement("span");
-    lastUsed.textContent = item.last_used_at ? `最近使用 ${formatTime(item.last_used_at)} · ${item.last_used_ip || "-"}` : "尚未使用";
+    if (item.last_used_at) {
+      lastUsed.append(
+        createAdminDynamicUiText("最近使用"),
+        ` ${formatTime(item.last_used_at)} · ${item.last_used_ip || "-"}`,
+      );
+    } else {
+      lastUsed.appendChild(createAdminDynamicUiText("尚未使用"));
+    }
     timeCell.append(expires, lastUsed);
     row.appendChild(timeCell);
     const actionCell = document.createElement("td");
@@ -5156,12 +5248,14 @@ function renderServiceAccounts(payload = {}) {
     save.className = "primary";
     save.textContent = "保存";
     save.dataset.serviceSave = String(item.id || "");
+    markAdminDynamicUiElement(save);
     const rotate = document.createElement("button");
     rotate.type = "button";
     rotate.className = "ghost";
     rotate.textContent = "轮换";
     rotate.dataset.serviceRotate = String(item.id || "");
     rotate.disabled = String(item.status || "") === "revoked";
+    markAdminDynamicUiElement(rotate);
     actionCell.append(save, rotate);
     row.appendChild(actionCell);
     body.appendChild(row);
@@ -6080,9 +6174,9 @@ function createProxyMarketIconButton(label, action, itemId, icon, className = "g
   button.dataset.proxyMarketAction = action;
   button.dataset.id = String(itemId || "");
   button.title = label;
-  button.setAttribute("aria-label", label);
+  button.setAttribute("aria-label", `${label} ${String(itemId || "")}`);
   button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${icon}</svg>`;
-  return button;
+  return markAdminDynamicUiElement(button);
 }
 
 function renderProxyMarketStats(rows) {
@@ -6132,7 +6226,7 @@ function renderProxyMarketItems(payload = {}) {
     const row = document.createElement("tr");
     const cell = document.createElement("td");
     cell.colSpan = 6;
-    cell.appendChild(createEmptyState("当前筛选条件下没有代理库存"));
+    cell.appendChild(markAdminDynamicUiElement(createEmptyState("当前筛选条件下没有代理库存")));
     row.appendChild(cell);
     body.appendChild(row);
     return;
@@ -6146,23 +6240,27 @@ function renderProxyMarketItems(payload = {}) {
     endpoint.className = "proxy-market-endpoint";
     endpoint.textContent = `${String(item.proxy_type || "").toUpperCase()} ${item.host || "-"}:${Number(item.port || 0) || "-"}`;
     const location = document.createElement("span");
-    location.textContent = [item.country, item.region, item.city, item.isp].filter(Boolean).join(" · ") || "未标注地区";
+    const locationText = [item.country, item.region, item.city, item.isp].filter(Boolean).join(" · ");
+    if (locationText) location.textContent = locationText;
+    else location.appendChild(createAdminDynamicUiText("未标注地区"));
     endpointCell.append(endpoint, location);
     row.appendChild(endpointCell);
 
     const healthCell = document.createElement("td");
     healthCell.appendChild(createProxyMarketBadge(item.health_status));
     const healthMeta = document.createElement("span");
-    healthMeta.textContent = item.last_check_at
-      ? `${Number(item.latency_ms || 0)} ms · ${formatTime(item.last_check_at)}`
-      : "尚未检测";
+    if (item.last_check_at) {
+      healthMeta.textContent = `${Number(item.latency_ms || 0)} ms · ${formatTime(item.last_check_at)}`;
+    } else {
+      healthMeta.appendChild(createAdminDynamicUiText("尚未检测"));
+    }
     healthCell.appendChild(healthMeta);
     row.appendChild(healthCell);
 
     const statusCell = document.createElement("td");
     statusCell.appendChild(createProxyMarketBadge(item.status));
     const statusMeta = document.createElement("span");
-    statusMeta.textContent = item.available ? "公共商城可领取" : "当前不可领取";
+    statusMeta.appendChild(createAdminDynamicUiText(item.available ? "公共商城可领取" : "当前不可领取"));
     statusCell.appendChild(statusMeta);
     row.appendChild(statusCell);
 
@@ -6170,7 +6268,11 @@ function renderProxyMarketItems(payload = {}) {
     const price = document.createElement("strong");
     price.textContent = `${formatProxyMarketPrice(item)} / ${item.billing_cycle || "month"}`;
     const expiry = document.createElement("span");
-    expiry.textContent = item.expires_at ? `到期 ${formatTime(item.expires_at)}` : "未设置到期时间";
+    if (item.expires_at) {
+      expiry.append(createAdminDynamicUiText("到期"), ` ${formatTime(item.expires_at)}`);
+    } else {
+      expiry.appendChild(createAdminDynamicUiText("未设置到期时间"));
+    }
     priceCell.append(price, expiry);
     row.appendChild(priceCell);
 
@@ -6178,13 +6280,13 @@ function renderProxyMarketItems(payload = {}) {
     const actionRow = document.createElement("div");
     actionRow.className = "proxy-market-table-actions";
     const edit = createProxyMarketIconButton(
-      `编辑 ${item.sku || item.id}`,
+      "编辑代理",
       "edit",
       item.id,
       '<path d="M4 20h4l11-11-4-4L4 16v4Z"></path><path d="m13.5 6.5 4 4"></path>',
     );
     const publish = createProxyMarketIconButton(
-      `发布 ${item.sku || item.id}`,
+      "发布代理",
       "publish",
       item.id,
       '<circle cx="12" cy="12" r="9"></circle><path d="m8 12 2.5 2.5L16 9"></path>',
@@ -6197,7 +6299,8 @@ function renderProxyMarketItems(payload = {}) {
     );
     const status = document.createElement("select");
     status.dataset.proxyMarketStatus = String(item.id || "");
-    status.setAttribute("aria-label", `${item.sku || item.id} 库存状态`);
+    status.setAttribute("aria-label", `库存状态 ${item.id}`);
+    markAdminDynamicUiElement(status);
     const currentStatus = String(item.status || "draft");
     const statusOptions = currentStatus === "draft" || !Number(item.published_at || 0)
       ? ["draft", "disabled"]
@@ -6210,6 +6313,7 @@ function renderProxyMarketItems(payload = {}) {
       option.textContent = PROXY_MARKET_STATUS_LABELS[value];
       option.selected = currentStatus === value;
       option.disabled = value === "allocated";
+      markAdminDynamicUiElement(option);
       status.appendChild(option);
     });
     if (currentStatus === "archived") {
@@ -6217,11 +6321,12 @@ function renderProxyMarketItems(payload = {}) {
       option.value = "archived";
       option.textContent = PROXY_MARKET_STATUS_LABELS.archived;
       option.selected = true;
+      markAdminDynamicUiElement(option);
       status.prepend(option);
       status.disabled = true;
     }
     const archive = createProxyMarketIconButton(
-      `归档 ${item.sku || item.id}`,
+      "归档代理",
       "archive",
       item.id,
       '<path d="M4 7h16v13H4Z"></path><path d="M3 4h18v3H3ZM9 11h6"></path>',
@@ -6277,7 +6382,7 @@ function renderProxyMarketAllocations(payload = {}) {
     const row = document.createElement("tr");
     const cell = document.createElement("td");
     cell.colSpan = 6;
-    cell.appendChild(createEmptyState("当前筛选条件下没有分配记录"));
+    cell.appendChild(markAdminDynamicUiElement(createEmptyState("当前筛选条件下没有分配记录")));
     row.appendChild(cell);
     body.appendChild(row);
     return;
@@ -6289,16 +6394,31 @@ function renderProxyMarketAllocations(payload = {}) {
     const statusCell = document.createElement("td");
     statusCell.appendChild(createProxyMarketBadge(item.status));
     row.appendChild(statusCell);
-    appendCell(
-      row,
-      `${Number(item.bound_account_count || 0)} 个绑定账号`,
-      `${Number(item.running_task_count || 0)} 个运行任务 · ${item.social_proxy_id || ""}`,
+    const usageCell = document.createElement("td");
+    usageCell.append(
+      String(Number(item.bound_account_count || 0)),
+      " ",
+      createAdminDynamicUiText("个绑定账号"),
     );
-    appendCell(row, formatTime(item.claimed_at), `更新 ${formatTime(item.updated_at || item.claimed_at)}`);
+    const usageMeta = document.createElement("span");
+    usageMeta.append(
+      String(Number(item.running_task_count || 0)),
+      " ",
+      createAdminDynamicUiText("个运行任务"),
+      ` · ${item.social_proxy_id || ""}`,
+    );
+    usageCell.appendChild(usageMeta);
+    row.appendChild(usageCell);
+    const timeCell = document.createElement("td");
+    timeCell.append(String(formatTime(item.claimed_at)));
+    const timeMeta = document.createElement("span");
+    timeMeta.append(createAdminDynamicUiText("更新"), ` ${formatTime(item.updated_at || item.claimed_at)}`);
+    timeCell.appendChild(timeMeta);
+    row.appendChild(timeCell);
     const actionCell = document.createElement("td");
     if (String(item.status) === "active") {
       const revoke = createProxyMarketIconButton(
-        `回收 ${item.display_name || item.sku || item.id}`,
+        "回收代理",
         "revoke",
         item.id,
         '<path d="M4 4v6h6"></path><path d="M5.5 15a7 7 0 1 0 .6-7.7L4 10"></path>',
@@ -6777,7 +6897,9 @@ function renderTaxonomyList(containerId, items, kind) {
   if (!container) return;
   container.replaceChildren();
   if (!items.length) {
-    container.appendChild(createEmptyState(kind === "group" ? "尚未创建客户分组" : "尚未创建客户标签"));
+    container.appendChild(markAdminDynamicUiElement(
+      createEmptyState(kind === "group" ? "尚未创建客户分组" : "尚未创建客户标签"),
+    ));
     return;
   }
   items.forEach((item) => {
@@ -6799,17 +6921,23 @@ function renderTaxonomyList(containerId, items, kind) {
       option.value = value;
       option.textContent = ({ neutral: "中性", blue: "蓝色", green: "绿色", amber: "橙色", red: "红色" })[value];
       option.selected = String(item.color || "neutral") === value;
+      markAdminDynamicUiElement(option);
       color.appendChild(option);
     });
     const count = document.createElement("span");
     count.className = "admin-taxonomy-count";
-    count.textContent = `${Number(item.member_count || 0)} 位客户`;
+    count.append(
+      String(Number(item.member_count || 0)),
+      " ",
+      createAdminDynamicUiText("位客户"),
+    );
     const save = document.createElement("button");
     save.type = "button";
     save.className = "ghost";
     save.textContent = "保存";
     save.dataset.taxonomySave = String(item.id || "");
     save.dataset.taxonomyKind = kind;
+    markAdminDynamicUiElement(save);
     row.append(color, count, save);
     container.appendChild(row);
   });

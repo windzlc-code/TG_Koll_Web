@@ -4745,6 +4745,12 @@ def cancel_all_social_tasks(
                     (clean_user_id, *clean_account_ids),
                 ).fetchall()
                 owned_account_ids = [str(row["id"] or "") for row in owned_rows if str(row["id"] or "")]
+            else:
+                owned_rows = conn.execute(
+                    "SELECT id FROM social_accounts WHERE user_id = ?",
+                    (clean_user_id,),
+                ).fetchall()
+                owned_account_ids = [str(row["id"] or "") for row in owned_rows if str(row["id"] or "")]
             if owned_account_ids:
                 owned_placeholders = ", ".join("?" for _ in owned_account_ids)
                 scope_clause = (

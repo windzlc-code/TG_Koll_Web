@@ -84,6 +84,21 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("document.createElement", ensure_theme)
         self.assertNotIn("document.createElement", ensure_language)
 
+    def test_console_marks_dynamic_ui_before_translating_it(self):
+        marker_source = self._function_source("markConsoleStaticUi")
+        dynamic_marker_source = self._function_source("markConsoleDynamicUi")
+        observer_source = self._function_source("startLanguageObserver")
+        self.assertNotIn("parent?.id", marker_source)
+        self.assertIn("CONSOLE_DYNAMIC_TEXT_I18N_SELECTOR", dynamic_marker_source)
+        self.assertIn("CONSOLE_DYNAMIC_ATTRIBUTE_I18N_SELECTOR", dynamic_marker_source)
+        self.assertIn("attributesOnly: true", dynamic_marker_source)
+        self.assertNotIn("markConsoleStaticUi(mutation.target)", observer_source)
+        self.assertIn("markConsoleDynamicUi(node)", observer_source)
+        self.assertLess(
+            observer_source.index("markConsoleDynamicUi(node)"),
+            observer_source.index("translateConsoleLanguage(node, language)"),
+        )
+
     def test_cookie_status_keeps_credentials_and_login_placeholders_visible(self):
         status_source = self._javascript_function_source(
             self.admin_source,

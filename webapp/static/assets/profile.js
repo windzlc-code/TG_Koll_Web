@@ -2,14 +2,262 @@
   const isAdminSession = document.querySelector('meta[name="admin-console-session"]')?.content === "1";
   const ADMIN_WORKSPACE_STORAGE_KEY = "vecto-admin-workspace-user-id";
   const ADMIN_CONTEXT_STORAGE_KEY = "vecto-admin-console-context";
+  const PROFILE_LANGUAGE_STORAGE_KEY = "wk-console-language";
+  const PROFILE_COPY = {
+    "zh-Hans": {
+      pageTitle: "个人资料 - Vecto",
+      skipToMain: "跳至主要内容",
+      accountProfile: "账号资料",
+      personalProfile: "个人资料",
+      profileDescription: "设置显示名称和头像。登录用户名及账号权限不会因此改变。",
+      backToConsole: "返回控制台",
+      profileSettings: "个人资料设置",
+      avatar: "头像",
+      uploadAvatar: "上传新头像",
+      avatarHelp: "点击头像右下角的加号上传，最大 512KB。",
+      removeAvatar: "移除头像",
+      displayName: "显示名称",
+      displayNamePlaceholder: "请输入显示名称",
+      displayNameHelp: "显示在右上角账号信息中，不会修改登录用户名。",
+      signature: "个性签名",
+      signaturePlaceholder: "填写一句对外展示的个人签名",
+      signatureHelp: "最多 280 个字符，会显示在账号资料中。",
+      personalTags: "个人标签",
+      addedTags: "已添加标签",
+      tagsPlaceholder: "输入标签",
+      addTag: "添加标签",
+      tagsHelp: "点击加号添加，最多展示 8 个标签。",
+      phone: "手机号",
+      phonePlaceholder: "填写联系电话",
+      email: "邮箱",
+      readonlyAccountInfo: "只读账号信息",
+      loginUsername: "登录用户名",
+      accountId: "账号 ID",
+      accountType: "账号类型",
+      saveProfile: "保存个人资料",
+      requestFailed: "请求失败（{status}）",
+      removeTag: "移除标签 {tag}",
+      tagAlreadyExists: "标签已存在。",
+      accountFallback: "账户",
+      adminRole: "管理员",
+      customerRole: "普通账号",
+      profileLoadFailed: "个人资料读取失败。",
+      selectImageFile: "请选择图片文件。",
+      avatarTooLarge: "头像图片不能超过 512KB。",
+      avatarLoaded: "头像已载入，保存后生效。",
+      avatarReadFailed: "头像读取失败，请重新选择。",
+      displayNameLength: "显示名称需要 2 至 80 个字符。",
+      savingProfile: "保存中…",
+      profileSaved: "个人资料已保存。",
+      profileSaveFailed: "个人资料保存失败。",
+      logoutFailed: "退出失败，请重试。",
+      avatarWillBeRemoved: "头像将在保存后移除。",
+    },
+    "zh-Hant": {
+      pageTitle: "個人資料 - Vecto",
+      skipToMain: "跳至主要內容",
+      accountProfile: "帳號資料",
+      personalProfile: "個人資料",
+      profileDescription: "設定顯示名稱和頭像。登入使用者名稱及帳號權限不會因此改變。",
+      backToConsole: "返回控制台",
+      profileSettings: "個人資料設定",
+      avatar: "頭像",
+      uploadAvatar: "上傳新頭像",
+      avatarHelp: "點擊頭像右下角的加號上傳，最大 512KB。",
+      removeAvatar: "移除頭像",
+      displayName: "顯示名稱",
+      displayNamePlaceholder: "請輸入顯示名稱",
+      displayNameHelp: "顯示在右上角帳號資訊中，不會修改登入使用者名稱。",
+      signature: "個性簽名",
+      signaturePlaceholder: "填寫一句對外展示的個人簽名",
+      signatureHelp: "最多 280 個字元，會顯示在帳號資料中。",
+      personalTags: "個人標籤",
+      addedTags: "已新增標籤",
+      tagsPlaceholder: "輸入標籤",
+      addTag: "新增標籤",
+      tagsHelp: "點擊加號新增，最多顯示 8 個標籤。",
+      phone: "手機號碼",
+      phonePlaceholder: "填寫聯絡電話",
+      email: "電子郵件",
+      readonlyAccountInfo: "唯讀帳號資訊",
+      loginUsername: "登入使用者名稱",
+      accountId: "帳號 ID",
+      accountType: "帳號類型",
+      saveProfile: "儲存個人資料",
+      requestFailed: "請求失敗（{status}）",
+      removeTag: "移除標籤 {tag}",
+      tagAlreadyExists: "標籤已存在。",
+      accountFallback: "帳號",
+      adminRole: "管理員",
+      customerRole: "一般帳號",
+      profileLoadFailed: "個人資料讀取失敗。",
+      selectImageFile: "請選擇圖片檔案。",
+      avatarTooLarge: "頭像圖片不能超過 512KB。",
+      avatarLoaded: "頭像已載入，儲存後生效。",
+      avatarReadFailed: "頭像讀取失敗，請重新選擇。",
+      displayNameLength: "顯示名稱需要 2 至 80 個字元。",
+      savingProfile: "儲存中…",
+      profileSaved: "個人資料已儲存。",
+      profileSaveFailed: "個人資料儲存失敗。",
+      logoutFailed: "登出失敗，請重試。",
+      avatarWillBeRemoved: "頭像將在儲存後移除。",
+    },
+  };
+  const PROFILE_I18N_ATTRIBUTES = {
+    "data-profile-i18n-aria-label": "aria-label",
+    "data-profile-i18n-placeholder": "placeholder",
+    "data-profile-i18n-title": "title",
+  };
+  let profileStCharacters = null;
+  let profileTsCharacters = null;
+  let profileTsPhrases = null;
   const returnManageUserId = (() => {
     if (!isAdminSession) return "";
     const value = String(new URLSearchParams(window.location.search).get("return_manage_user_id") || "").trim();
     return /^\d+$/.test(value) && Number(value) > 0 ? value : "";
   })();
   const AVATAR_MAX_BYTES = 512 * 1024;
-  const state = { account: null, avatarUrl: "", tags: [], saving: false, dirty: false };
+  const state = {
+    account: null,
+    avatarUrl: "",
+    tags: [],
+    saving: false,
+    dirty: false,
+    status: null,
+  };
   const $ = (id) => document.getElementById(id);
+
+  function currentProfileLanguage() {
+    const navigationLanguage = window.VectoSiteNavigation?.currentLanguage?.();
+    if (navigationLanguage === "zh-Hant") return "zh-Hant";
+    if (navigationLanguage === "zh-Hans") return "zh-Hans";
+    if (document.documentElement.dataset.language === "zh-Hant") return "zh-Hant";
+    try {
+      return localStorage.getItem(PROFILE_LANGUAGE_STORAGE_KEY) === "zh-Hant" ? "zh-Hant" : "zh-Hans";
+    } catch (_) {
+      return "zh-Hans";
+    }
+  }
+
+  function profileText(key, variables = {}, language = currentProfileLanguage()) {
+    const labels = PROFILE_COPY[language] || PROFILE_COPY["zh-Hans"];
+    const template = String(labels[key] ?? PROFILE_COPY["zh-Hans"][key] ?? key);
+    return template.replace(/\{(\w+)\}/g, (_, name) => String(variables[name] ?? ""));
+  }
+
+  function parseOpenCcDictionary(dictionary) {
+    if (typeof dictionary !== "string") return [];
+    return dictionary.split("|").flatMap((entry) => {
+      const separator = entry.indexOf(" ");
+      if (separator <= 0) return [];
+      return [[entry.slice(0, separator), entry.slice(separator + 1)]];
+    });
+  }
+
+  function convertProfileUiText(value, language = currentProfileLanguage()) {
+    let text = String(value || "");
+    if (!text) return "";
+    if (language === "zh-Hant") {
+      if (!profileStCharacters) {
+        profileStCharacters = new Map(parseOpenCcDictionary(window.VectoOpenCcStCharacters));
+      }
+      return Array.from(text).map((character) => profileStCharacters.get(character) || character).join("");
+    }
+    if (!profileTsCharacters) {
+      profileTsCharacters = new Map(parseOpenCcDictionary(window.VectoOpenCcTsCharacters));
+    }
+    if (!profileTsPhrases) {
+      profileTsPhrases = parseOpenCcDictionary(window.VectoOpenCcTsPhrases)
+        .sort((left, right) => right[0].length - left[0].length);
+    }
+    const protectedPhrases = [];
+    profileTsPhrases.forEach(([traditional, simplified], index) => {
+      if (!text.includes(traditional)) return;
+      const token = `\uE300${index}\uE3FF`;
+      text = text.split(traditional).join(token);
+      protectedPhrases.push([token, simplified]);
+    });
+    text = Array.from(text).map((character) => profileTsCharacters.get(character) || character).join("");
+    protectedPhrases.forEach(([token, simplified]) => {
+      text = text.split(token).join(simplified);
+    });
+    return text;
+  }
+
+  function setProfileCopy(
+    node,
+    key,
+    attribute = "textContent",
+    variables = {},
+    language = currentProfileLanguage(),
+  ) {
+    if (!node) return;
+    const value = profileText(key, variables, language);
+    if (attribute === "textContent") node.textContent = value;
+    else node.setAttribute(attribute, value);
+  }
+
+  function renderStatus(language = currentProfileLanguage()) {
+    const node = $("profileStatus");
+    if (!node) return;
+    const status = state.status;
+    node.textContent = !status
+      ? ""
+      : status.key
+        ? profileText(status.key, status.variables, language)
+        : convertProfileUiText(status.message, language);
+    node.classList.toggle("is-success", status?.type === "success");
+    node.classList.toggle("is-error", status?.type === "error");
+  }
+
+  function setStatus(message = "", type = "") {
+    state.status = message ? { message: String(message), type } : null;
+    renderStatus();
+  }
+
+  function setStatusKey(key = "", type = "", variables = {}) {
+    state.status = key ? { key, type, variables } : null;
+    renderStatus();
+  }
+
+  function renderAccountLanguage(language = currentProfileLanguage()) {
+    const username = String(state.account?.username || "").trim();
+    const fullNameInput = $("profileFullName");
+    if (fullNameInput) {
+      fullNameInput.placeholder = username || profileText("accountFallback", {}, language);
+    }
+    const role = $("profileAccountRole");
+    if (role && state.account) {
+      role.textContent = profileText(
+        Number(state.account.is_admin || 0) === 1 ? "adminRole" : "customerRole",
+        {},
+        language,
+      );
+    }
+    renderTags(language);
+  }
+
+  function applyProfileLanguage(language = currentProfileLanguage()) {
+    const nextLanguage = language === "zh-Hant" ? "zh-Hant" : "zh-Hans";
+    document.querySelectorAll("[data-profile-i18n]").forEach((node) => {
+      setProfileCopy(node, node.dataset.profileI18n, "textContent", {}, nextLanguage);
+    });
+    Object.entries(PROFILE_I18N_ATTRIBUTES).forEach(([marker, attribute]) => {
+      document.querySelectorAll(`[${marker}]`).forEach((node) => {
+        setProfileCopy(node, node.getAttribute(marker), attribute, {}, nextLanguage);
+      });
+    });
+    if (state.account) renderAccountLanguage(nextLanguage);
+    setProfileCopy(
+      $("profileSave"),
+      state.saving ? "savingProfile" : "saveProfile",
+      "textContent",
+      {},
+      nextLanguage,
+    );
+    renderStatus(nextLanguage);
+    document.documentElement.lang = nextLanguage === "zh-Hant" ? "zh-Hant" : "zh-CN";
+  }
 
   function requestHeaders(extra = {}) {
     const headers = new Headers(extra);
@@ -30,21 +278,13 @@
       const detail = payload?.detail;
       const message = typeof detail === "string"
         ? detail
-        : String(detail?.message || payload?.message || `请求失败（${response.status}）`);
+        : String(detail?.message || payload?.message || profileText("requestFailed", { status: response.status }));
       const error = new Error(message);
       error.status = response.status;
       error.code = typeof detail === "object" ? String(detail?.code || "") : "";
       throw error;
     }
     return payload;
-  }
-
-  function setStatus(message = "", type = "") {
-    const node = $("profileStatus");
-    if (!node) return;
-    node.textContent = message;
-    node.classList.toggle("is-success", type === "success");
-    node.classList.toggle("is-error", type === "error");
   }
 
   function accountInitial() {
@@ -82,7 +322,7 @@
     return tags;
   }
 
-  function renderTags() {
+  function renderTags(language = currentProfileLanguage()) {
     const list = $("profileTagList");
     const hidden = $("profileTags");
     if (hidden) hidden.value = state.tags.join(", ");
@@ -92,7 +332,7 @@
       button.type = "button";
       button.className = "profile-tag-chip";
       button.dataset.profileTagRemove = String(index);
-      button.title = `移除标签 ${tag}`;
+      button.title = profileText("removeTag", { tag }, language);
       const label = document.createElement("span");
       label.textContent = tag;
       const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -112,7 +352,7 @@
     if (!tag) return;
     const next = normalizeTags([...state.tags, tag]);
     if (next.length === state.tags.length && next.some((item) => item.toLowerCase() === tag.toLowerCase())) {
-      setStatus("标签已存在。", "error");
+      setStatusKey("tagAlreadyExists", "error");
       return;
     }
     state.tags = next;
@@ -130,16 +370,14 @@
     if ($("profileSignature")) $("profileSignature").value = String(account?.profile_signature || "").trim();
     if ($("profilePhone")) $("profilePhone").value = String(account?.phone || "").trim();
     if ($("profileEmail")) $("profileEmail").value = String(account?.email || "").trim();
-    $("profileFullName").placeholder = String(account?.username || "账户");
     $("profileUsername").textContent = String(account?.username || "-");
     $("profileAccountId").textContent = account?.id ? `#${account.id}` : "-";
-    $("profileAccountRole").textContent = Number(account?.is_admin || 0) === 1 ? "管理员" : "普通账号";
     $("profileBackLink").href = isAdminSession
       ? `/admin-console.html${returnManageUserId ? `?manage_user_id=${encodeURIComponent(returnManageUserId)}` : ""}`
       : "/console.html";
     window.VectoSiteNavigation?.setAccount(account);
     renderAvatar();
-    renderTags();
+    renderAccountLanguage();
   }
 
   function redirectToLogin() {
@@ -175,18 +413,19 @@
       state.dirty = false;
     } catch (error) {
       if (handleSessionBoundary(error)) return;
-      setStatus(error.message || "个人资料读取失败。", "error");
+      if (error.message) setStatus(error.message, "error");
+      else setStatusKey("profileLoadFailed", "error");
     }
   }
 
   function readAvatarFile(file) {
     if (!file) return;
     if (!String(file.type || "").startsWith("image/")) {
-      setStatus("请选择图片文件。", "error");
+      setStatusKey("selectImageFile", "error");
       return;
     }
     if (file.size > AVATAR_MAX_BYTES) {
-      setStatus("头像图片不能超过 512KB。", "error");
+      setStatusKey("avatarTooLarge", "error");
       return;
     }
     const reader = new FileReader();
@@ -194,9 +433,9 @@
       state.avatarUrl = String(reader.result || "");
       state.dirty = true;
       renderAvatar();
-      setStatus("头像已载入，保存后生效。");
+      setStatusKey("avatarLoaded");
     };
-    reader.onerror = () => setStatus("头像读取失败，请重新选择。", "error");
+    reader.onerror = () => setStatusKey("avatarReadFailed", "error");
     reader.readAsDataURL(file);
   }
 
@@ -209,12 +448,12 @@
     const phone = String($("profilePhone")?.value || "").trim();
     const email = String($("profileEmail")?.value || "").trim();
     if (fullName && (fullName.length < 2 || fullName.length > 80)) {
-      setStatus("显示名称需要 2 至 80 个字符。", "error");
+      setStatusKey("displayNameLength", "error");
       return;
     }
     state.saving = true;
     $("profileSave").disabled = true;
-    $("profileSave").textContent = "保存中…";
+    setProfileCopy($("profileSave"), "savingProfile");
     setStatus("");
     try {
       const result = await api("/api/me/profile", {
@@ -231,14 +470,15 @@
       });
       state.dirty = false;
       renderAccount({ ...(state.account || {}), ...(result.profile || result || {}) });
-      setStatus("个人资料已保存。", "success");
+      setStatusKey("profileSaved", "success");
     } catch (error) {
       if (handleSessionBoundary(error)) return;
-      setStatus(error.message || "个人资料保存失败。", "error");
+      if (error.message) setStatus(error.message, "error");
+      else setStatusKey("profileSaveFailed", "error");
     } finally {
       state.saving = false;
       $("profileSave").disabled = false;
-      $("profileSave").textContent = "保存个人资料";
+      setProfileCopy($("profileSave"), "saveProfile");
     }
   }
 
@@ -248,7 +488,10 @@
       await api("/api/auth/logout", { method: "POST" });
       window.location.replace(isAdminSession ? "/admin" : "/?login=1&return_url=%2Fprofile.html");
     } catch (error) {
-      window.VectoSiteNavigation?.setLogoutPending(false, error.message || "退出失败，请重试。");
+      window.VectoSiteNavigation?.setLogoutPending(
+        false,
+        error.message ? convertProfileUiText(error.message) : profileText("logoutFailed"),
+      );
     }
   }
 
@@ -261,7 +504,7 @@
     state.avatarUrl = "";
     state.dirty = true;
     renderAvatar();
-    setStatus("头像将在保存后移除。");
+    setStatusKey("avatarWillBeRemoved");
   });
   $("profileTagAdd")?.addEventListener("click", addTagFromInput);
   $("profileTagInput")?.addEventListener("keydown", (event) => {
@@ -297,8 +540,22 @@
   window.addEventListener("vecto:account-data-refresh", (event) => {
     if (!state.saving && !state.dirty && event.detail?.account) renderAccount(event.detail.account);
   });
+  window.addEventListener("vecto:language-change", (event) => {
+    applyProfileLanguage(event.detail?.language);
+  });
+  window.addEventListener("storage", (event) => {
+    if (event.key === PROFILE_LANGUAGE_STORAGE_KEY) {
+      applyProfileLanguage(event.newValue);
+    }
+  });
   window.addEventListener("pageshow", (event) => {
     if (event.persisted && !state.saving && !state.dirty) void loadProfile();
   });
+  window.VectoProfileI18n = {
+    applyLanguage: applyProfileLanguage,
+    currentLanguage: currentProfileLanguage,
+    text: profileText,
+  };
+  applyProfileLanguage();
   void loadProfile();
 })();

@@ -170,6 +170,91 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
             self.assertIn(f'"{excluded_data_surface}"', self.script)
         self.assertIn('window.addEventListener("vecto:language-change"', self.script)
 
+    def test_dynamic_governance_ui_is_marked_without_translating_business_data(self):
+        self.assertIn("function markAdminDynamicUiElement", self.script)
+        self.assertIn("function createAdminDynamicUiText", self.script)
+        for source, target in (
+            ("数据库", "資料庫"),
+            ("连接与查询", "連線與查詢"),
+            ("加密密钥检查", "加密金鑰檢查"),
+            ("未启用", "未啟用"),
+            ("备注", "備註"),
+        ):
+            self.assertIn(f'["{source}", "{target}"]', self.script)
+
+        user_rows = self.script[
+            self.script.index("async function loadUsers")
+            : self.script.index("function detailRow")
+        ]
+        self.assertIn("markAdminDynamicUiElement(emptyCell)", user_rows)
+        self.assertIn("markAdminDynamicUiElement(button)", user_rows)
+        self.assertIn('button.setAttribute("aria-labelledby"', user_rows)
+        self.assertNotIn("markAdminDynamicUiElement(accountName)", user_rows)
+        self.assertNotIn("markAdminDynamicUiElement(companyCell)", user_rows)
+
+        sessions = self.script[
+            self.script.index("function renderUserSessions")
+            : self.script.index("async function loadSelectedUserSessions")
+        ]
+        self.assertIn('createAdminDynamicUiText("最近活动")', sessions)
+        self.assertIn('createAdminDynamicUiText("撤销于")', sessions)
+        self.assertNotIn("markAdminDynamicUiElement(title)", sessions)
+
+        password_history = self.script[
+            self.script.index("function renderPasswordHistory")
+            : self.script.index("async function loadSelectedPasswordHistory")
+        ]
+        self.assertIn('createAdminDynamicUiText("有效至")', password_history)
+        self.assertIn("markAdminDynamicUiElement(button)", password_history)
+        self.assertNotIn("markAdminDynamicUiElement(title)", password_history)
+
+        security = self.script[
+            self.script.index("function renderSecurityAlerts")
+            : self.script.index("async function loadSecurityAlerts")
+        ]
+        self.assertIn('createAdminDynamicUiText("最近：")', security)
+        self.assertIn("markAdminDynamicUiElement(option)", security)
+        self.assertIn("markAdminDynamicUiElement(note)", security)
+        self.assertNotIn("markAdminDynamicUiElement(title)", security)
+        self.assertNotIn("markAdminDynamicUiElement(summary)", security)
+
+        service_accounts = self.script[
+            self.script.index("function renderServiceAccounts")
+            : self.script.index("async function loadServiceAccounts")
+        ]
+        self.assertIn("markAdminDynamicUiElement(option)", service_accounts)
+        self.assertIn("markAdminDynamicUiElement(save)", service_accounts)
+        self.assertIn("markAdminDynamicUiElement(rotate)", service_accounts)
+        self.assertIn('purpose.value = String(item.purpose || "")', service_accounts)
+        self.assertIn('scopes.value = (item.allowed_scopes || []).join(", ")', service_accounts)
+
+        proxy_market = self.script[
+            self.script.index("function renderProxyMarketItems")
+            : self.script.index("function proxyMarketItemQuery")
+        ]
+        self.assertIn('createAdminDynamicUiText(item.available ? "公共商城可领取" : "当前不可领取")', proxy_market)
+        self.assertIn('createAdminDynamicUiText("尚未检测")', proxy_market)
+        self.assertNotIn("markAdminDynamicUiElement(endpoint)", proxy_market)
+
+        health = self.script[
+            self.script.index("function renderGovernanceHealth")
+            : self.script.index("function renderGovernanceQueue")
+        ]
+        for label in ("数据库", "连接与查询", "密码保险库", "加密密钥检查", "计费执行", "未启用"):
+            self.assertIn(label, health)
+        self.assertIn("createAdminDynamicUiText(name)", health)
+        self.assertIn("createAdminDynamicUiText(detail)", health)
+        self.assertIn("description.textContent = String(detail ||", health)
+        self.assertNotIn("createAdminDynamicUiText(vault.error)", health)
+
+        taxonomy = self.script[
+            self.script.index("function renderTaxonomyList")
+            : self.script.index("async function loadTaxonomyWorkspace")
+        ]
+        self.assertIn("markAdminDynamicUiElement(option)", taxonomy)
+        self.assertIn('createAdminDynamicUiText("位客户")', taxonomy)
+        self.assertNotIn("markAdminDynamicUiElement(name)", taxonomy)
+
     def test_admin_preference_icons_are_centered_and_dark_theme_is_readable(self):
         self.assertIn('.page-admin .admin-preference-button', self.styles)
         for declaration in ('display: grid;', 'place-items: center;', 'padding: 0;', 'line-height: 0;'):

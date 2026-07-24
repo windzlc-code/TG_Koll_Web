@@ -38,6 +38,7 @@
       proxyMarket: "代理商城",
       difference: "服务差异",
       console: "控制台",
+      adminConsole: "运营后台",
       aboutVecto: "了解 Vecto",
       login: "账号登录",
       guest: "游客申请",
@@ -49,6 +50,7 @@
       accountAdminRole: "管理员",
       accountManagedRole: "管理员代管",
       accountId: "账号 ID",
+      accountClose: "关闭个人信息",
       logout: "退出登录",
       logoutPending: "正在退出...",
       logoutFailed: "退出失败，请重试。",
@@ -79,6 +81,13 @@
       billingReady: "已同步",
       billingPartial: "部分不可用",
       billingClick: "点击查看",
+      billingLegacyPlan: "存量账号",
+      billingActivePlan: "已启用",
+      billingNoPlan: "暂无订阅",
+      billingUnlimited: "不限",
+      billingPointUnit: "点",
+      billingImageUnit: "张",
+      billingPostUnit: "篇",
       profileSignature: "个人简介",
       profileSignatureEmpty: "暂未填写个人简介",
       profileTags: "个人标签",
@@ -97,6 +106,7 @@
       proxyMarket: "代理商城",
       difference: "服務差異",
       console: "控制台",
+      adminConsole: "營運後台",
       aboutVecto: "了解 Vecto",
       login: "帳號登入",
       guest: "遊客申請",
@@ -108,6 +118,7 @@
       accountAdminRole: "管理員",
       accountManagedRole: "管理員代管",
       accountId: "帳號 ID",
+      accountClose: "關閉個人資訊",
       logout: "退出登入",
       logoutPending: "正在退出...",
       logoutFailed: "退出失敗，請重試。",
@@ -138,6 +149,13 @@
       billingReady: "已同步",
       billingPartial: "部分不可用",
       billingClick: "點擊查看",
+      billingLegacyPlan: "存量帳號",
+      billingActivePlan: "已啟用",
+      billingNoPlan: "暫無訂閱",
+      billingUnlimited: "不限",
+      billingPointUnit: "點",
+      billingImageUnit: "張",
+      billingPostUnit: "篇",
       profileSignature: "個人簡介",
       profileSignatureEmpty: "暫未填寫個人簡介",
       profileTags: "個人標籤",
@@ -429,7 +447,7 @@
           <span class="site-account-avatar" aria-hidden="true" data-site-account-avatar>${accountIcon()}</span>
           <span class="site-account-identity"><strong data-site-account-name></strong><span data-site-account-role></span></span>
           <span class="site-account-status"><i aria-hidden="true"></i><span data-site-copy="accountStatus"></span></span>
-          <button class="site-account-close" type="button" aria-label="关闭个人信息" title="关闭个人信息" data-site-account-close>
+          <button class="site-account-close" type="button" aria-label="" title="" data-site-account-close>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
           </button>
         </div>
@@ -646,7 +664,9 @@
     const planName = activeSubscription.plan_name
       || activeSubscription.name
       || activeSubscription.plan_sku
-      || (billingMode === "legacy" ? "存量账号" : (summary.subscription_active ? "已启用" : "暂无订阅"));
+      || (billingMode === "legacy"
+        ? labels.billingLegacyPlan
+        : (summary.subscription_active ? labels.billingActivePlan : labels.billingNoPlan));
     const imageRemaining = summary.free_images?.total_remaining ?? 0;
     const pendingOrders = orders.pending_count ?? orders.pending_orders_count ?? 0;
     const publishWaived = Boolean(publishPolicy.waived);
@@ -669,15 +689,21 @@
         });
       } else if (accountBillingState.loaded) {
         if (statusNode) statusNode.textContent = accountBillingState.partial ? labels.billingPartial : labels.billingReady;
-        if (pointsNode) pointsNode.textContent = unlimited ? "不限" : `${accountNumber(summary.points)} 点`;
+        if (pointsNode) pointsNode.textContent = unlimited
+          ? labels.billingUnlimited
+          : `${accountNumber(summary.points)} ${labels.billingPointUnit}`;
         if (subscriptionNode) subscriptionNode.textContent = planName;
-        if (imagesNode) imagesNode.textContent = `${accountNumber(imageRemaining)} 张`;
+        if (imagesNode) imagesNode.textContent = `${accountNumber(imageRemaining)} ${labels.billingImageUnit}`;
         if (pendingNode) pendingNode.textContent = accountNumber(pendingOrders);
       } else if (statusNode) {
         statusNode.textContent = labels.billingUnread;
       }
-      if (publishUsedNode) publishUsedNode.textContent = publishWaived ? "不限" : `${accountNumber(publishUsed)} / ${accountNumber(publishLimit)}`;
-      if (publishRemainingNode) publishRemainingNode.textContent = publishWaived ? "不限" : `${accountNumber(publishRemaining)} 篇`;
+      if (publishUsedNode) publishUsedNode.textContent = publishWaived
+        ? labels.billingUnlimited
+        : `${accountNumber(publishUsed)} / ${accountNumber(publishLimit)}`;
+      if (publishRemainingNode) publishRemainingNode.textContent = publishWaived
+        ? labels.billingUnlimited
+        : `${accountNumber(publishRemaining)} ${labels.billingPostUnit}`;
     });
   }
 
@@ -1056,6 +1082,10 @@
     });
     document.querySelectorAll("[data-site-personal-controls]").forEach((node) => node.setAttribute("aria-label", labels.personalSettings));
     document.querySelectorAll("[data-site-account-popover]").forEach((node) => node.setAttribute("aria-label", labels.personalProfile));
+    document.querySelectorAll("[data-site-account-close]").forEach((node) => {
+      node.title = labels.accountClose;
+      node.setAttribute("aria-label", labels.accountClose);
+    });
     document.querySelectorAll("[data-site-console-label]").forEach((node) => node.setAttribute("aria-label", labels.console));
     document.querySelectorAll("[data-site-user-title]").forEach((node) => node.title = labels.currentAccount);
     document.querySelectorAll("[data-site-account-name]").forEach((node) => {

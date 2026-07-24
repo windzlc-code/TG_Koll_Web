@@ -166,16 +166,29 @@ function markPublicUiElement(node, { dynamic = false } = {}) {
   if (dynamic) node.setAttribute(PUBLIC_I18N_DYNAMIC_MARKER, "true");
 }
 
-function markPublicStaticUi(root = document.body) {
+function markPublicStaticUi(root = document.body, { dynamic = false } = {}) {
   if (!root) return;
+  if (root.nodeType === Node.TEXT_NODE) {
+    if (root.nodeValue?.trim() && !root.parentElement?.closest(PUBLIC_I18N_SKIP_SELECTOR)) {
+      markPublicUiElement(root.parentElement, { dynamic });
+    }
+    return;
+  }
+  if (root.nodeType !== Node.ELEMENT_NODE && root.nodeType !== Node.DOCUMENT_NODE) return;
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
       if (!node.nodeValue?.trim() || node.parentElement?.closest(PUBLIC_I18N_SKIP_SELECTOR)) return NodeFilter.FILTER_REJECT;
       return NodeFilter.FILTER_ACCEPT;
     },
   });
-  while (walker.nextNode()) markPublicUiElement(walker.currentNode.parentElement);
-  root.querySelectorAll("[title], [aria-label], [placeholder], [data-mobile-label]").forEach((node) => markPublicUiElement(node));
+  while (walker.nextNode()) markPublicUiElement(walker.currentNode.parentElement, { dynamic });
+  const attributeNodes = [];
+  if (root.nodeType === Node.ELEMENT_NODE && root.matches("[title], [aria-label], [placeholder], [data-mobile-label]")) {
+    attributeNodes.push(root);
+  }
+  root.querySelectorAll?.("[title], [aria-label], [placeholder], [data-mobile-label]")
+    .forEach((node) => attributeNodes.push(node));
+  attributeNodes.forEach((node) => markPublicUiElement(node, { dynamic }));
   [applicationStatus, loginStatus, loginPasswordToggle, ...document.querySelectorAll(".field-error")]
     .forEach((node) => markPublicUiElement(node, { dynamic: true }));
 }
@@ -292,7 +305,10 @@ function startPublicLanguageObserver() {
         refreshPublicUiTextSource(mutation.target, language);
         return;
       }
-      mutation.addedNodes.forEach((node) => translatePublicLanguage(node, language));
+      mutation.addedNodes.forEach((node) => {
+        markPublicStaticUi(node, { dynamic: true });
+        translatePublicLanguage(node, language);
+      });
     });
   });
   publicLanguageObserver.observe(document.body, {

@@ -427,6 +427,32 @@ class SocialTaskLifecycleIsolationTests(unittest.TestCase):
         self.assertEqual(statuses["selected-account-task"], "running")
         self.assertEqual(statuses["untouched-task"], "running")
 
+    def test_cancel_all_user_scope_includes_legacy_zero_owner_tasks_on_owned_accounts(self):
+        owner_id = self._insert_user("legacy-cancel-owner")
+        self._insert_account("legacy-owned-account", owner_id)
+        with db() as conn:
+            conn.execute("DROP TRIGGER trg_social_tasks_integrity_insert")
+            conn.execute(
+                """
+                INSERT INTO social_automation_tasks(
+                  id, user_id, persona_id, account_id, platform, task_type,
+                  priority, status, payload_json, result_json, created_at, updated_at
+                ) VALUES (
+                  'legacy-zero-owner-task', 0, '', 'legacy-owned-account', 'threads',
+                  'check_login', 50, 'queued', '{}', '{}', 1, 1
+                )
+                """
+            )
+
+        result = social_api.cancel_all_social_tasks("stop legacy", user_id=owner_id)
+
+        self.assertEqual(result["task_ids"], ["legacy-zero-owner-task"])
+        with db() as conn:
+            status = conn.execute(
+                "SELECT status FROM social_automation_tasks WHERE id = 'legacy-zero-owner-task'"
+            ).fetchone()
+        self.assertEqual(str(status["status"]), "cancelled")
+
 
 if __name__ == "__main__":
     unittest.main()

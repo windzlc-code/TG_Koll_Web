@@ -47,7 +47,10 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
 
         self.assertLess(subscription, admin_entry)
         self.assertLess(admin_entry, account_menu)
-        self.assertIn('class="site-admin-entry admin-only" hidden>运营后台</button>', self.markup)
+        self.assertIn(
+            'class="site-admin-entry admin-only" data-site-copy="adminConsole" hidden>运营后台</button>',
+            self.markup,
+        )
         self.assertIn('if (me.is_admin) $("openAdmin").hidden = false;', self.console_script)
 
     def test_workspace_navigation_uses_titles_without_descriptions(self):
