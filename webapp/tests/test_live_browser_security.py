@@ -311,6 +311,66 @@ def test_browser_sessions_strict_lookup_reports_backend_failure():
     assert raised.value.status_code == 503
 
 
+def test_live_browser_html_proxy_failure_returns_reconnect_page_instead_of_json_error():
+    request = Request({
+        "type": "http",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/api/persona_dashboard/automation/browser_sessions/live-task-1/kasm/vnc.html",
+        "query_string": b"",
+        "headers": [],
+        "server": ("testserver", 80),
+        "client": ("127.0.0.1", 1234),
+    })
+    session = SimpleNamespace(web_port=6900)
+
+    with (
+        mock.patch.object(live_browser, "get_live_browser_session", return_value=session),
+        mock.patch.object(social_automation_api.requests, "get", side_effect=ConnectionError("refused")),
+    ):
+        response = social_automation_api._proxy_live_browser_http("live-task-1", "vnc.html", request)
+
+    assert response.status_code == 503
+    assert response.media_type == "text/html"
+    assert response.headers["cache-control"] == "no-store"
+    assert "浏览器连接中" in response.body.decode("utf-8")
+    assert "KasmVNC 页面代理失败" not in response.body.decode("utf-8")
+
+
+def test_live_browser_sessions_follow_current_publish_batch_task():
+    sessions = [{"id": "live-task-1", "task_id": "publish-task-1", "browser_ready": True}]
+    row = {
+        "id": "publish-task-2",
+        "status": "running",
+        "task_type": "publish_post",
+        "payload_json": '{"publish_sequence_index": 2, "publish_sequence_total": 2}',
+        "error": "",
+        "finished_at": 0,
+    }
+    connection = mock.Mock()
+    connection.execute.return_value.fetchall.return_value = [row]
+    database = mock.MagicMock()
+    database.return_value.__enter__.return_value = connection
+    control = {
+        "live_browser_session_id": "live-task-1",
+        "current_task_id": "publish-task-2",
+    }
+
+    with (
+        mock.patch.object(live_browser, "list_live_browser_sessions", return_value=sessions),
+        mock.patch.object(social_automation_api, "db", database),
+        mock.patch.dict(
+            social_automation_api._RUNNING_TASK_CONTROLS,
+            {"publish-task-1": control, "publish-task-2": control},
+            clear=True,
+        ),
+    ):
+        result = social_automation_api._live_browser_sessions()
+
+    assert result[0]["task_id"] == "publish-task-2"
+    assert result[0]["task_status"] == "running"
+
+
 @pytest.mark.parametrize("auto_submit", [1, "true", "false", None])
 def test_open_login_http_rejects_non_boolean_auto_submit(auto_submit):
     client = _security_test_client()

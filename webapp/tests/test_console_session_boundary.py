@@ -1316,7 +1316,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
               platform: "threads",
             }});
             assert.equal(summary.count, 3);
-            assert.equal(summary.target, "发布第1篇、发布第2篇、发布第3篇");
+            assert.equal(summary.target, "2/3");
             assert.ok(!summary.target.includes("第11篇"));
             assert.ok(!summary.target.includes("Threads"));
             assert.ok(!summary.target.includes("Peacock83628"));
@@ -1331,7 +1331,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
               task_type: "publish_post",
             }});
             assert.equal(legacy.count, 1);
-            assert.equal(legacy.target, "发布第1篇");
+            assert.equal(legacy.target, "1/1");
 
             state.socialTasks = [{{
               id: "legacy-batch-task-2",
@@ -1350,7 +1350,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
               task_type: "publish_post",
             }});
             assert.equal(legacyBatch.count, 2);
-            assert.equal(legacyBatch.target, "发布第1篇、发布第2篇");
+            assert.equal(legacyBatch.target, "1/2");
             """
         )
         self._run_node(harness)

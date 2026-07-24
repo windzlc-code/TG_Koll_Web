@@ -21985,15 +21985,11 @@ function liveBrowserTaskSummary(session) {
     batchTaskCount,
     sequenceIndex,
   );
-  const publishTargets = Array.from({ length: sequenceTotal }, (_, index) => {
-    const fallback = `发布第${index + 1}篇`;
-    const candidate = rawTargets[index] || "";
-    return /^发布第\d+篇(?:[：:].{1,24})?$/.test(candidate) ? candidate : fallback;
-  });
+  const currentSequenceIndex = Math.min(sequenceIndex, sequenceTotal);
   const count = taskId ? (taskType === "publish_post" ? sequenceTotal : 1) : 0;
   const target = String(
     taskType === "publish_post"
-      ? publishTargets.join("、")
+      ? `${currentSequenceIndex}/${sequenceTotal}`
       : (
         payload.target_title
         || payload.target_url

@@ -1872,6 +1872,19 @@ def _proxy_live_browser_http(session_id: str, path: str, request: Request) -> Re
     try:
         upstream = requests.get(url, params=dict(request.query_params), timeout=8)
     except Exception as exc:
+        if clean_path in {"vnc.html", "index.html"}:
+            return Response(
+                content=(
+                    '<!doctype html><meta charset="utf-8">'
+                    '<meta http-equiv="refresh" content="2">'
+                    '<body style="margin:0;display:grid;place-items:center;min-height:100vh;'
+                    'background:#080c0c;color:#dce7e5;font:16px sans-serif">'
+                    "浏览器连接中，正在自动重连…</body>"
+                ),
+                status_code=503,
+                media_type="text/html",
+                headers={"cache-control": "no-store"},
+            )
         raise HTTPException(status_code=502, detail=f"KasmVNC 页面代理失败: {exc}") from exc
     if upstream.status_code == 404 and clean_path.startswith("assets/"):
         static_response = _local_kasm_static_response(clean_path)
@@ -2257,6 +2270,16 @@ def _live_browser_sessions(*, user_id: int | None = None, raise_on_error: bool =
         if raise_on_error:
             raise HTTPException(status_code=503, detail="实时浏览器会话暂时不可用") from exc
         return []
+    with _RUNNING_TASK_CONTROLS_LOCK:
+        current_tasks_by_session = {
+            str(control.get("live_browser_session_id") or ""): str(control.get("current_task_id") or task_id or "")
+            for task_id, control in _RUNNING_TASK_CONTROLS.items()
+            if str(control.get("live_browser_session_id") or "")
+        }
+    for session in sessions:
+        current_task_id = current_tasks_by_session.get(str(session.get("id") or session.get("session_id") or ""))
+        if current_task_id:
+            session["task_id"] = current_task_id
     task_ids = [str(session.get("task_id") or "").strip() for session in sessions if str(session.get("task_id") or "").strip()]
     if not task_ids:
         return sessions if user_id is None else []
