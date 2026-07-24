@@ -62,6 +62,8 @@ const THREADS_READER_INITIAL_QUERY_LIMIT = 24;
 const THREADS_READER_TOTAL_QUERY_LIMIT = 48;
 const THREADS_READER_QUERY_BATCH_SIZE = 8;
 const INSTAGRAM_READER_QUERY_LIMIT = 48;
+const INSTAGRAM_AUTHENTICATED_QUERY_LIMIT = 10;
+const INSTAGRAM_AUTHENTICATED_QUERY_BATCH_SIZE = 4;
 const DEFAULT_REFRESH_FRESHNESS_DAYS = 7;
 const SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS = 42_000;
 const SENTIMENT_HOT_TOTAL_TIMEOUT_MS = 58_000;
@@ -2105,6 +2107,31 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   if (hasSearchKeywords && args.refresh === true && candidates.length >= limit && cachedReadyCount < semanticSourceTarget) {
     warnings.push(`當前相關候選不足，已繼續補充實時來源。`);
   }
+  let strictInstagramCandidatesPromise: Promise<SentimentHotCandidate[]> | null = null;
+  if (strictFreshOnly && shouldFetchLiveCandidates) {
+    const instagramTimeoutMs = Math.min(SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS, remainingSentimentHotTotalBudgetMs(startedAt, 18_000));
+    const instagramQueries = buildOrderedSentimentQueries(
+      buildThreadsSearchQueries(queryKeywords),
+      args.refresh ? Date.now() + candidates.length : candidates.length,
+      args.refresh === true,
+    ).slice(0, INSTAGRAM_AUTHENTICATED_QUERY_LIMIT);
+    strictInstagramCandidatesPromise = withSentimentTimeout(
+      fetchInstagramAuthenticatedSearchCandidates({
+        archiveId,
+        keywords,
+        queries: instagramQueries,
+        limit: poolLimit,
+        freshnessDays: operationalFreshnessDays,
+        searchMode,
+        deadlineAt: Date.now() + instagramTimeoutMs - 3_000,
+      }),
+      instagramTimeoutMs,
+      [],
+    ).catch((error) => {
+      warnings.push("Instagram 登入態抓取失敗：" + (error instanceof Error ? error.message : String(error)));
+      return [];
+    });
+  }
   let liveThreadsCandidateCount = 0;
   if (shouldFetchLiveCandidates) {
     const beforeThreadsCount = candidates.length;
@@ -2241,7 +2268,32 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       { archiveId: liveOnlyRefresh ? undefined : archiveId, keywords, excludeShown: !liveOnlyRefresh, searchMode, freshnessDays: operationalFreshnessDays },
     ).length
     : 0;
-  if (!strictFreshOnly && shouldFetchLiveCandidates && preInstagramReadyCount < limit && hasSentimentHotTotalBudget(startedAt, SENTIMENT_HOT_SUPPLEMENT_MIN_REMAINING_MS)) {
+  if (strictFreshOnly && shouldFetchLiveCandidates && strictInstagramCandidatesPromise) {
+    const beforeInstagramCount = candidates.length;
+    const instagramCandidates = await measureSentimentStage(
+      warnings,
+      "instagram-account-search",
+      () => strictInstagramCandidatesPromise!,
+    );
+    let instagramAddedCount = 0;
+    if (instagramCandidates.length > 0) {
+      const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+      const byKey = new Set(candidates.map((candidate) => sentimentCandidateDedupeKey(candidate)));
+      for (const candidate of instagramCandidates) {
+        if (!candidateMatchesOperationalFreshness(candidate, operationalFreshnessDays)) continue;
+        const dedupeKey = sentimentCandidateDedupeKey(candidate);
+        if (!byId.has(candidate.id) && !byKey.has(dedupeKey)) {
+          byId.set(candidate.id, candidate);
+          byKey.add(dedupeKey);
+          instagramAddedCount += 1;
+        }
+        if (byId.size >= poolLimit) break;
+      }
+      candidates = sortSentimentHotCandidatePool([...byId.values()], keywords, poolLimit, searchMode);
+      warnings.push(`已從 Instagram 登入態加入 ${instagramAddedCount} 篇具真實發布時間的候選。`);
+    }
+    channelStats.push(`Instagram 登入態原始 ${instagramCandidates.length}，新增 ${instagramAddedCount}，補充前 ${beforeInstagramCount}`);
+  } else if (!strictFreshOnly && shouldFetchLiveCandidates && preInstagramReadyCount < limit && hasSentimentHotTotalBudget(startedAt, SENTIMENT_HOT_SUPPLEMENT_MIN_REMAINING_MS)) {
     const beforeInstagramCount = candidates.length;
     const instagramCandidates = await measureSentimentStage(
       warnings,
@@ -2279,8 +2331,6 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       warnings.push(args.refresh ? `已即時刷新 Instagram reader 候選 ${instagramCandidates.length} 篇。` : `已加入 Instagram reader 候選 ${instagramCandidates.length} 篇。`);
     }
     channelStats.push(`Instagram 原始 ${instagramCandidates.length}，新增 ${instagramAddedCount}，補充前 ${beforeInstagramCount}`);
-  } else if (strictFreshOnly && shouldFetchLiveCandidates) {
-    channelStats.push("Instagram Reader 已跳過，嚴格新鮮度要求原帖發布時間；登入態掃描仍按 Cookie 狀態執行");
   } else if (shouldFetchLiveCandidates && hasFastReturnCandidates) {
     channelStats.push(`Instagram 已跳過，已有 ${candidates.length}/${limit} 篇候選，使用快速返回`);
   } else if (shouldFetchLiveCandidates && preInstagramReadyCount < limit) {
@@ -2399,6 +2449,15 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     ))
     : candidates;
   candidates = finalizeSentimentHotCandidatesForDisplay(displayCandidatePool, limit, { archiveId: liveOnlyRefresh ? undefined : archiveId, keywords, excludeShown: !liveOnlyRefresh, searchMode, freshnessDays: operationalFreshnessDays });
+  if (strictFreshOnly && shouldFetchLiveCandidates) {
+    candidates = ensureSentimentHotPlatformContributions(candidates, displayCandidatePool, limit, {
+      archiveId: liveOnlyRefresh ? undefined : archiveId,
+      keywords,
+      excludeShown: !liveOnlyRefresh,
+      searchMode,
+      freshnessDays: operationalFreshnessDays,
+    });
+  }
   const shownHistoryKeys = liveOnlyRefresh ? new Set<string>() : getSentimentHotShownHistoryKeys(archiveId);
   if (!liveOnlyRefresh && candidates.length < limit) {
     const selectedKeys = new Set(candidates.flatMap((candidate) => getSentimentHotCandidateHistoryKeys(candidate)));
@@ -2963,7 +3022,7 @@ function sentimentCandidateSourceTier(candidate: SentimentHotCandidate): string 
   if (isArchiveScopedFallbackCandidate(candidate)) return "fallback_history";
   const source = sentimentCandidateSource(candidate);
   if (source === "threads-account-search" || source === "threads-reader-search" || source === "threads-search-page") return "primary_threads_search";
-  if (source === "instagram-reader-search") return "supplement_instagram_search";
+  if (source === "instagram-reader-search" || source === "instagram-account-search") return "supplement_instagram_search";
   return "primary_hot";
 }
 
@@ -2985,7 +3044,7 @@ function minimumSentimentHotHanCountForCandidate(candidate: SentimentHotCandidat
 
 function isNoisyReaderCandidateContent(candidate: SentimentHotCandidate, content: string): boolean {
   const source = sentimentCandidateSource(candidate);
-  if (source !== "threads-account-search" && source !== "threads-reader-search" && source !== "threads-search-page" && source !== "instagram-reader-search") return false;
+  if (source !== "threads-account-search" && source !== "threads-reader-search" && source !== "threads-search-page" && source !== "instagram-reader-search" && source !== "instagram-account-search") return false;
   const raw = String(candidate.content || "");
   const text = [raw, content].join(" ");
   const hanCount = sentimentHotHanCount(content);
@@ -3165,6 +3224,48 @@ export function finalizeSentimentHotCandidatesForDisplay(candidates: SentimentHo
     keys.forEach((key) => seenKeys.add(key));
     out.push({ ...candidate, content });
     if (out.length >= limit) break;
+  }
+  return out;
+}
+
+export function ensureSentimentHotPlatformContributions(
+  selected: SentimentHotCandidate[],
+  pool: SentimentHotCandidate[],
+  limit: number,
+  options?: { archiveId?: string; keywords?: string[]; excludeShown?: boolean; searchMode?: SentimentHotSearchMode; freshnessDays?: number },
+): SentimentHotCandidate[] {
+  if (limit < 2 || selected.length === 0) return selected.slice(0, limit);
+  const out = selected.slice(0, limit);
+  for (const platform of ["threads", "instagram"] as SentimentHotPlatform[]) {
+    if (out.some((candidate) => candidate.platform === platform)) continue;
+    const platformCandidates = finalizeSentimentHotCandidatesForDisplay(
+      pool.filter((candidate) => candidate.platform === platform),
+      limit,
+      options,
+    );
+    const existingKeys = new Set(out.flatMap((candidate) => sentimentCandidateFinalDedupeKeys(
+      candidate,
+      cleanSentimentCandidateContent(candidate.content || ""),
+    )));
+    const replacement = platformCandidates.find((candidate) => sentimentCandidateFinalDedupeKeys(
+      candidate,
+      cleanSentimentCandidateContent(candidate.content || ""),
+    ).every((key) => !existingKeys.has(key)));
+    if (!replacement) continue;
+    if (out.length < limit) {
+      out.push(replacement);
+      continue;
+    }
+    const platformCounts = new Map<SentimentHotPlatform, number>();
+    out.forEach((candidate) => platformCounts.set(candidate.platform, (platformCounts.get(candidate.platform) || 0) + 1));
+    let replaceIndex = -1;
+    for (let index = out.length - 1; index >= 0; index -= 1) {
+      if ((platformCounts.get(out[index].platform) || 0) > 1) {
+        replaceIndex = index;
+        break;
+      }
+    }
+    if (replaceIndex >= 0) out.splice(replaceIndex, 1, replacement);
   }
   return out;
 }
@@ -4140,6 +4241,226 @@ async function fetchThreadsReaderSearchCandidates(args: {
     if (all.length >= args.limit) break;
   }
   return sortSentimentHotCandidatePool(all, args.keywords, args.limit, args.searchMode);
+}
+
+export function parseInstagramAuthenticatedSearchPayload(args: {
+  payload: any;
+  query: string;
+  keywords?: string[];
+}): SentimentHotCandidate[] {
+  const out: SentimentHotCandidate[] = [];
+  const seenIds = new Set<string>();
+  const stack: any[] = [args.payload];
+  const visited = new Set<any>();
+  const needles = buildRelevanceNeedles([args.query, ...(args.keywords || [])]);
+  while (stack.length > 0) {
+    const value = stack.pop();
+    if (!value || typeof value !== "object" || visited.has(value)) continue;
+    visited.add(value);
+    if (!Array.isArray(value)) {
+      const username = cleanText(value?.user?.username || value?.owner?.username).replace(/^@+/, "");
+      const code = cleanText(value?.code || value?.shortcode);
+      const content = cleanSentimentCandidateContent(value?.caption?.text || "");
+      const publishedAt = normalizeThreadsTimestamp(value?.taken_at ?? value?.taken_at_timestamp);
+      if (username && code && content && publishedAt) {
+        const likeCount = Math.max(0, Number(value?.like_count) || 0);
+        const commentCount = Math.max(0, Number(value?.comment_count) || 0);
+        const rawViewCount = [
+          value?.play_count,
+          value?.view_count,
+          value?.video_view_count,
+        ].find((item) => item !== null && item !== undefined && item !== "");
+        const viewCount = rawViewCount === undefined ? undefined : Math.max(0, Number(rawViewCount) || 0);
+        const hotScore = likeCount + commentCount;
+        const sourceUrl = `https://www.instagram.com/p/${encodeURIComponent(code)}/`;
+        const id = buildSentimentCandidateId({ platform: "instagram", sourceUrl, content });
+        if (!seenIds.has(id)) {
+          seenIds.add(id);
+          const haystack = [content, username].join(" ").toLowerCase();
+          const matchedKeywords = needles.filter((needle) => haystack.includes(needle.toLowerCase()));
+          const engagement: NonNullable<SentimentHotCandidate["engagement"]> = {
+            likeCount,
+            commentCount,
+            rawSignals: [likeCount, commentCount],
+          };
+          if (typeof viewCount === "number") engagement.viewCount = viewCount;
+          out.push({
+            id,
+            platform: "instagram",
+            sourceUrl,
+            author: username,
+            content,
+            media: extractThreadsGraphqlPostMedia(value),
+            hotScore,
+            metrics: {
+              source: "instagram-account-search",
+              query: args.query,
+              matchedKeywords,
+              like_count: likeCount,
+              comment_count: commentCount,
+              ...(typeof viewCount === "number" ? { view_count: viewCount } : {}),
+              realEngagementTotal: hotScore,
+            },
+            engagement,
+            publishedAt,
+            capturedAt: new Date().toISOString(),
+            warnings: [],
+          });
+        }
+      }
+    }
+    for (const child of Object.values(value)) {
+      if (child && typeof child === "object") stack.push(child);
+    }
+  }
+  return out;
+}
+
+function normalizeInstagramAuthenticatedTagQuery(value: unknown): string {
+  return cleanText(value)
+    .replace(/^#+/, "")
+    .replace(/[\s#，、。.!！？?;；:：/\\|()[\]{}]+/g, "")
+    .slice(0, 24);
+}
+
+async function fetchInstagramAuthenticatedSearchCandidates(args: {
+  archiveId: string;
+  keywords: string[];
+  queries: string[];
+  limit: number;
+  freshnessDays: number;
+  searchMode: SentimentHotSearchMode;
+  excludeIds?: Set<string>;
+  deadlineAt?: number;
+}): Promise<SentimentHotCandidate[]> {
+  const cookies = readSentimentBrowserAuthCookies("instagram")
+    .map((cookie: any) => normalizeCookieForBrowserAuth(cookie, "instagram.com"))
+    .filter(Boolean);
+  if (!hasValidInstagramSessionCookie(cookies)) {
+    console.info(`[sentiment_hot_instagram_account_search] archiveId=${args.archiveId} status=skip_no_session cookies=${cookies.length}`);
+    return [];
+  }
+  const queries = [...new Set(args.queries
+    .map(normalizeInstagramAuthenticatedTagQuery)
+    .filter((query) => query.length >= 2 && hasHan(query)))]
+    .slice(0, INSTAGRAM_AUTHENTICATED_QUERY_LIMIT);
+  if (!queries.length) return [];
+
+  const excluded = args.excludeIds || getSentimentHotRefreshExcludedIds(args.archiveId);
+  const results: SentimentHotCandidate[] = [];
+  const resultKeys = new Set<string>();
+  const stats = { requests: 0, ok: 0, failed: 0, parsed: 0, accepted: 0, rejected: {} as Record<string, number> };
+  const considerCandidate = (candidate: SentimentHotCandidate) => {
+    if (excluded.has(candidate.id)) return;
+    let normalized = candidateMeetsDisplayQuality(
+      candidate,
+      args.keywords,
+      args.searchMode,
+      args.freshnessDays,
+      stats.rejected,
+    );
+    if (!normalized) {
+      const hasVerifiedEngagement = [
+        candidate.engagement?.likeCount,
+        candidate.engagement?.commentCount,
+        candidate.engagement?.viewCount,
+        (candidate.metrics as any)?.like_count,
+        (candidate.metrics as any)?.comment_count,
+        (candidate.metrics as any)?.view_count,
+      ].some((value) => typeof value === "number" && Number.isFinite(value));
+      const canUseFreshRelevantFallback = normalizeSentimentHotSearchMode(args.searchMode) === "strict"
+        && args.freshnessDays > 0
+        && hasVerifiedEngagement
+        && Boolean(candidateMeetsDisplayQuality(
+          candidate,
+          args.keywords,
+          args.searchMode,
+          args.freshnessDays,
+          undefined,
+          true,
+        ));
+      if (canUseFreshRelevantFallback) {
+        normalized = candidateMeetsDisplayQuality({
+          ...candidate,
+          metrics: {
+            ...(candidate.metrics || {}),
+            freshRelevantFallback: true,
+          },
+        }, args.keywords, args.searchMode, args.freshnessDays);
+      }
+    }
+    if (!normalized) return;
+    const dedupeKey = sentimentCandidateDedupeKey(normalized);
+    if (resultKeys.has(dedupeKey) || results.some((entry) => entry.id === normalized!.id)) return;
+    resultKeys.add(dedupeKey);
+    results.push(normalized);
+    stats.accepted += 1;
+  };
+
+  let browser: any = null;
+  try {
+    const { chromium } = await import("playwright");
+    browser = await chromium.launch(buildLocalChromiumLaunchOptions());
+    const context = await browser.newContext({
+      locale: "zh-TW",
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+    });
+    await addCookiesBestEffort(context, cookies as any[]);
+    const page = await context.newPage();
+    await page.goto("https://www.instagram.com/", {
+      waitUntil: "domcontentloaded",
+      timeout: Math.min(15_000, remainingSentimentDeadlineMs(args.deadlineAt, 15_000)),
+    }).catch(() => null);
+    for (let offset = 0; offset < queries.length && results.length < args.limit; offset += INSTAGRAM_AUTHENTICATED_QUERY_BATCH_SIZE) {
+      if (remainingSentimentDeadlineMs(args.deadlineAt, 0) < 2_000) break;
+      const batch = queries.slice(offset, offset + INSTAGRAM_AUTHENTICATED_QUERY_BATCH_SIZE);
+      stats.requests += batch.length;
+      const responses = await page.evaluate(async (tags: string[]) => Promise.all(tags.map(async (tag) => {
+        try {
+          const response = await fetch(`/api/v1/tags/web_info/?tag_name=${encodeURIComponent(tag)}`, {
+            credentials: "include",
+            headers: {
+              accept: "*/*",
+              "x-ig-app-id": "936619743392459",
+              "x-requested-with": "XMLHttpRequest",
+            },
+          });
+          return { tag, ok: response.ok, status: response.status, text: response.ok ? await response.text() : "" };
+        } catch {
+          return { tag, ok: false, status: 0, text: "" };
+        }
+      })), batch);
+      for (const response of responses) {
+        if (!response.ok) {
+          stats.failed += 1;
+          continue;
+        }
+        stats.ok += 1;
+        const parsed = parseInstagramAuthenticatedSearchPayload({
+          payload: safeJson(response.text),
+          query: response.tag,
+          keywords: args.keywords,
+        });
+        stats.parsed += parsed.length;
+        parsed.forEach(considerCandidate);
+      }
+      if (offset + INSTAGRAM_AUTHENTICATED_QUERY_BATCH_SIZE < queries.length) {
+        await page.waitForTimeout(250);
+      }
+    }
+    await context.close().catch(() => undefined);
+  } catch (error) {
+    console.info(`[sentiment_hot_instagram_account_search] archiveId=${args.archiveId} status=error error=${JSON.stringify(error instanceof Error ? error.message : String(error))}`);
+  } finally {
+    await browser?.close?.().catch(() => undefined);
+  }
+  console.info(
+    `[sentiment_hot_instagram_account_search] archiveId=${args.archiveId}`
+    + ` sessionid=1 queries=${queries.length} requests=${stats.requests} ok=${stats.ok}`
+    + ` failed=${stats.failed} parsed=${stats.parsed} accepted=${stats.accepted}`
+    + ` rejected=${JSON.stringify(stats.rejected)}`,
+  );
+  return sortSentimentHotCandidatePool(results, args.keywords, args.limit, args.searchMode);
 }
 
 async function fetchInstagramReaderSearchCandidates(args: {

@@ -19,9 +19,11 @@ import {
   candidateMatchesCurrentKeywords,
   cleanSentimentCandidateContent,
   enrichThreadsCandidateDetails,
+  ensureSentimentHotPlatformContributions,
   finalizeSentimentHotCandidatesForDisplay,
   isObviouslyLowQualitySentimentHotCandidate,
   isChineseSentimentCandidate,
+  parseInstagramAuthenticatedSearchPayload,
   parseInstagramReaderSearchMarkdownCandidates,
   matchThreadsBrowserProfilePublishedPost,
   parseThreadsBrowserPostDetailMetrics,
@@ -1614,6 +1616,90 @@ Title: Instagram
     expect(candidates[0].engagement?.likeCount).toBe(1100);
     expect(candidates[0].engagement?.commentCount).toBe(82);
     expect(candidates[0].media.map((item) => item.url)).toEqual(["https://cdn.example.com/ig-a.jpg"]);
+  });
+
+  it("parses authenticated Instagram posts with their original published time", () => {
+    const takenAt = Math.floor((Date.now() - 60 * 60 * 1000) / 1000);
+    const candidates = parseInstagramAuthenticatedSearchPayload({
+      query: "\u53f0\u5317\u7f8e\u98df",
+      keywords: ["\u53f0\u5317\u7f8e\u98df", "\u591c\u5e02\u5c0f\u5403"],
+      payload: {
+        data: {
+          medias: [{
+            media: {
+              code: "FreshIgPost",
+              taken_at: takenAt,
+              user: { username: "food.demo" },
+              caption: {
+                text: "\u53f0\u5317\u7f8e\u98df\u65b0\u958b\u5e55\u7684\u591c\u5e02\u5c0f\u5403\u5e97\uff0c\u4eca\u5929\u5be6\u969b\u6392\u968a\u5f8c\u5206\u4eab\u9910\u9ede\u53e3\u5473\u3001\u50f9\u683c\u8207\u73fe\u5834\u6c23\u6c1b\uff0c\u9019\u662f\u8fd1\u671f\u771f\u5be6\u7528\u9910\u7d00\u9304\u3002",
+              },
+              like_count: 120,
+              comment_count: 14,
+              image_versions2: { candidates: [{ url: "https://example.com/food.jpg" }] },
+            },
+          }],
+        },
+      },
+    });
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({
+      platform: "instagram",
+      sourceUrl: "https://www.instagram.com/p/FreshIgPost/",
+      author: "food.demo",
+      hotScore: 134,
+    });
+    expect(candidates[0].publishedAt).toBe(new Date(takenAt * 1000).toISOString());
+    expect((candidates[0].metrics as any).source).toBe("instagram-account-search");
+  });
+
+  it("does not synthesize Instagram freshness when the original timestamp is missing", () => {
+    const candidates = parseInstagramAuthenticatedSearchPayload({
+      query: "\u53f0\u5317\u7f8e\u98df",
+      keywords: ["\u53f0\u5317\u7f8e\u98df"],
+      payload: {
+        items: [{
+          code: "MissingTime",
+          user: { username: "food.demo" },
+          caption: {
+            text: "\u53f0\u5317\u7f8e\u98df\u5be6\u6e2c\u5167\u5bb9\u5f88\u5b8c\u6574\uff0c\u4f46\u9019\u7b46\u8cc7\u6599\u6c92\u6709\u539f\u59cb\u767c\u5e03\u6642\u9593\uff0c\u56e0\u6b64\u4e0d\u80fd\u9032\u5165\u56b4\u683c\u65b0\u9bae\u5ea6\u5019\u9078\u3002",
+          },
+          like_count: 200,
+          comment_count: 20,
+        }],
+      },
+    });
+    expect(candidates).toEqual([]);
+  });
+
+  it("keeps both qualified live platforms in the final result", () => {
+    const now = new Date().toISOString();
+    const content = "\u53f0\u5317\u7f8e\u98df\u591c\u5e02\u5c0f\u5403\u5be6\u6e2c\u5206\u4eab\uff0c\u5305\u542b\u65b0\u958b\u9910\u5ef3\u3001\u6392\u968a\u72c0\u6cc1\u3001\u9910\u9ede\u50f9\u683c\u8207\u73fe\u5834\u771f\u5be6\u7528\u9910\u5fc3\u5f97\u3002";
+    const threads = {
+      id: "threads-qualified",
+      platform: "threads",
+      sourceUrl: "https://www.threads.com/@food/post/qualified",
+      author: "food",
+      content,
+      media: [],
+      hotScore: 100,
+      metrics: { source: "threads-account-search", freshRelevantFallback: true },
+      publishedAt: now,
+      capturedAt: now,
+    } as any;
+    const instagram = {
+      ...threads,
+      id: "instagram-qualified",
+      platform: "instagram",
+      sourceUrl: "https://www.instagram.com/p/qualified/",
+      metrics: { source: "instagram-account-search", freshRelevantFallback: true },
+    } as any;
+    const result = ensureSentimentHotPlatformContributions(
+      [threads, { ...threads, id: "threads-qualified-2", sourceUrl: "https://www.threads.com/@food/post/qualified-2", content: `${content}\u7b2c\u4e8c\u7bc7\u3002` }],
+      [threads, instagram],
+      2,
+      { keywords: ["\u53f0\u5317\u7f8e\u98df"], searchMode: "strict", freshnessDays: 7 },
+    );
+    expect(result.map((candidate) => candidate.platform).sort()).toEqual(["instagram", "threads"]);
   });
 
   it("parses Threads detail metrics from reader markdown", () => {
