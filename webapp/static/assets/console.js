@@ -21531,13 +21531,16 @@ function updateLiveBrowserSessionCard(card, session) {
     titleNode.id = liveBrowserDialogTitleId(sessionId);
     titleNode.textContent = title;
   }
-  const metaNode = card.querySelector("[data-live-browser-meta]");
-  if (metaNode) metaNode.textContent = meta;
+  card.querySelectorAll("[data-live-browser-meta], [data-live-browser-mobile-meta]").forEach((node) => {
+    node.textContent = meta;
+  });
   const taskSummary = liveBrowserTaskSummary(session);
-  const taskCountNode = card.querySelector("[data-live-browser-task-count]");
-  const taskTargetNode = card.querySelector("[data-live-browser-task-target]");
-  if (taskCountNode) taskCountNode.textContent = String(taskSummary.count);
-  if (taskTargetNode) taskTargetNode.textContent = taskSummary.target;
+  card.querySelectorAll("[data-live-browser-task-count], [data-live-browser-mobile-task-count]").forEach((node) => {
+    node.textContent = String(taskSummary.count);
+  });
+  card.querySelectorAll("[data-live-browser-task-target], [data-live-browser-mobile-task-target]").forEach((node) => {
+    node.textContent = taskSummary.target;
+  });
   const iframe = card.querySelector("iframe");
   if (iframe) iframe.title = title;
   const statusNode = card.querySelector("[data-live-browser-status]");
@@ -21921,6 +21924,11 @@ function renderLiveBrowserSession(session) {
         <div class="live-browser-task-summary" aria-label="任务信息">
           <span>任务数：<b data-live-browser-task-count>${esc(taskSummary.count)}</b></span>
           <span title="${esc(taskSummary.target)}">任务目标：<b data-live-browser-task-target>${esc(taskSummary.target)}</b></span>
+        </div>
+        <div class="live-browser-mobile-summary" aria-label="任务信息">
+          <span data-live-browser-mobile-meta>${esc(`平台：${identity.platform} · 人设：${identity.persona}`)}</span>
+          <span>任务数：<b data-live-browser-mobile-task-count>${esc(taskSummary.count)}</b></span>
+          <span title="${esc(taskSummary.target)}">目标：<b data-live-browser-mobile-task-target>${esc(taskSummary.target)}</b></span>
         </div>
         <div class="live-browser-card-actions">
           <button type="button" class="live-browser-expand-button" data-live-browser-fullscreen="${esc(sessionId)}" title="放大窗口" aria-label="放大窗口" aria-pressed="false">${renderExpandIcon()}</button>

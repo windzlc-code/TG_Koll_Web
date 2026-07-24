@@ -871,6 +871,20 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn(".live-browser-card-identity", self.styles)
         self.assertIn(".live-browser-interaction-note", self.styles)
 
+    def test_mobile_live_browser_header_keeps_status_and_compact_two_line_summary(self):
+        mobile_start = self.styles.rfind("@media (max-width: 760px)")
+        mobile_styles = self.styles[mobile_start:]
+        mobile_header = self._css_block(".console-page .live-browser-card-head {", mobile_start)
+        mobile_summary = self._css_block(".console-page .live-browser-mobile-summary {", mobile_start)
+        mobile_status = self._css_block(".console-page .live-browser-card-actions > .status {", mobile_start)
+
+        self.assertIn("grid-template-rows: auto auto;", mobile_header)
+        self.assertIn("font-size: 7.5px;", mobile_summary)
+        self.assertIn("justify-content: center;", mobile_summary)
+        self.assertIn("display: inline-flex;", mobile_status)
+        self.assertIn("live-browser-card-identity > [data-live-browser-meta]", mobile_styles)
+        self.assertIn("live-browser-mobile-summary", self.source)
+
     def test_expanded_live_browser_controls_toggle_from_the_blank_backdrop(self):
         toggle = self._function_source("toggleLiveBrowserModalControls")
         opening = self._function_source("requestLiveBrowserFullscreen")
@@ -1314,7 +1328,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
         self.assertIn("grid-column: 1 / -1;", mobile_density)
         self.assertIn("grid-row: 2;", mobile_density)
-        self.assertIn("justify-content: flex-start;", mobile_density)
+        self.assertIn("justify-content: center;", mobile_density)
         self.assertIn("max-width: none;", mobile_density)
         self.assertIn("justify-self: end;", mobile_density)
 

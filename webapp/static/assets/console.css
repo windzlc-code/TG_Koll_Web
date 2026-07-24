@@ -18378,6 +18378,10 @@ body.console-page {
   max-width: 40%;
 }
 
+.console-page .live-browser-mobile-summary {
+  display: none;
+}
+
 .console-page .live-browser-card-head strong {
   display: block;
   overflow: hidden;
@@ -18761,19 +18765,16 @@ body.console-page {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-rows: auto auto;
-    gap: 4px;
+    gap: 2px 4px;
     align-items: center;
-    min-height: 30px;
+    min-height: 0;
   }
 
   .console-page .live-browser-card-head strong {
-    font-size: 14px;
+    overflow: visible;
+    font-size: 12px;
     line-height: 1.15;
-  }
-
-  .console-page .live-browser-card-head span:not(.status) {
-    font-size: 10px;
-    line-height: 1.15;
+    text-overflow: clip;
   }
 
   .console-page .live-browser-card-identity {
@@ -18782,23 +18783,36 @@ body.console-page {
     max-width: none;
   }
 
-  .console-page .live-browser-task-summary {
-    position: static;
-    grid-column: 1 / -1;
-    grid-row: 2;
-    min-width: 0;
-    max-width: none;
-    gap: 8px;
-    justify-content: flex-start;
-    width: 100%;
-    overflow: hidden;
-    transform: none;
-    font-size: 10px;
-    line-height: 1.15;
+  .console-page .live-browser-card-identity > strong {
+    white-space: nowrap;
   }
 
-  .console-page .live-browser-task-summary span:last-child {
-    max-width: min(58vw, 220px);
+  .console-page .live-browser-card-identity > [data-live-browser-meta] {
+    display: none;
+  }
+
+  .console-page .live-browser-task-summary {
+    display: none;
+  }
+
+  .console-page .live-browser-mobile-summary {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    display: flex;
+    min-width: 0;
+    gap: 2px;
+    align-items: center;
+    justify-content: center;
+    overflow: visible;
+    color: #aab5b3;
+    font-size: 7.5px;
+    line-height: 1.1;
+    white-space: nowrap;
+  }
+
+  .console-page .live-browser-mobile-summary > span:last-child {
+    overflow: visible;
+    text-overflow: clip;
   }
 
   .console-page .live-browser-card-actions {
@@ -18808,7 +18822,12 @@ body.console-page {
   }
 
   .console-page .live-browser-card-actions > .status {
-    display: none;
+    display: inline-flex;
+    min-height: 22px;
+    padding: 3px 5px;
+    font-size: 9px;
+    line-height: 1.1;
+    white-space: nowrap;
   }
 
   .console-page .live-browser-action-menu-panel {
